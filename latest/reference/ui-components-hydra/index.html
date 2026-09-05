@@ -873,6 +873,69 @@
   
   
     <li class="md-nav__item">
+      <a href="../../runbooks/detectkit-headless-training/" class="md-nav__link">
+        
+  
+  <span class="md-ellipsis">
+    DetectKit Headless Training
+  </span>
+  
+
+      </a>
+    </li>
+  
+
+              
+            
+              
+                
+  
+  
+  
+  
+    <li class="md-nav__item">
+      <a href="../../user-guide/detectkit-semantic-escalation/" class="md-nav__link">
+        
+  
+  <span class="md-ellipsis">
+    DetectKit: Semantic Escalation (SAM3)
+  </span>
+  
+
+      </a>
+    </li>
+  
+
+              
+            
+              
+                
+  
+  
+  
+  
+    <li class="md-nav__item">
+      <a href="../../user-guide/detectkit-sahi-calibration/" class="md-nav__link">
+        
+  
+  <span class="md-ellipsis">
+    DetectKit: SAHI Calibration Profiles
+  </span>
+  
+
+      </a>
+    </li>
+  
+
+              
+            
+              
+                
+  
+  
+  
+  
+    <li class="md-nav__item">
       <a href="../../user-guide/filterkit/" class="md-nav__link">
         
   
@@ -1132,6 +1195,48 @@
   
   
     <li class="md-nav__item">
+      <a href="../../developer-guide/resource-containment/" class="md-nav__link">
+        
+  
+  <span class="md-ellipsis">
+    Resource Containment
+  </span>
+  
+
+      </a>
+    </li>
+  
+
+              
+            
+              
+                
+  
+  
+  
+  
+    <li class="md-nav__item">
+      <a href="../../developer-guide/profiling/" class="md-nav__link">
+        
+  
+  <span class="md-ellipsis">
+    Profiling
+  </span>
+  
+
+      </a>
+    </li>
+  
+
+              
+            
+              
+                
+  
+  
+  
+  
+    <li class="md-nav__item">
       <a href="../../developer-guide/dependency-cuda-updates/" class="md-nav__link">
         
   
@@ -1158,6 +1263,27 @@
   
   <span class="md-ellipsis">
     Performance Tuning
+  </span>
+  
+
+      </a>
+    </li>
+  
+
+              
+            
+              
+                
+  
+  
+  
+  
+    <li class="md-nav__item">
+      <a href="../../developer-guide/inference-fast-mode/" class="md-nav__link">
+        
+  
+  <span class="md-ellipsis">
+    Inference Fast Mode
   </span>
   
 
@@ -1441,6 +1567,24 @@
   <a href="#video-roi-panel" class="md-nav__link">
     <span class="md-ellipsis">
       Video / ROI Panel
+    </span>
+  </a>
+  
+</li>
+        
+          <li class="md-nav__item">
+  <a href="#arena-and-roi-setup" class="md-nav__link">
+    <span class="md-ellipsis">
+      Arena and ROI Setup
+    </span>
+  </a>
+  
+</li>
+        
+          <li class="md-nav__item">
+  <a href="#grid-builder-add-grid-of-arenas" class="md-nav__link">
+    <span class="md-ellipsis">
+      Grid Builder ("+ Add Grid of Arenas")
     </span>
   </a>
   
@@ -1990,6 +2134,24 @@
 </li>
         
           <li class="md-nav__item">
+  <a href="#arena-and-roi-setup" class="md-nav__link">
+    <span class="md-ellipsis">
+      Arena and ROI Setup
+    </span>
+  </a>
+  
+</li>
+        
+          <li class="md-nav__item">
+  <a href="#grid-builder-add-grid-of-arenas" class="md-nav__link">
+    <span class="md-ellipsis">
+      Grid Builder ("+ Add Grid of Arenas")
+    </span>
+  </a>
+  
+</li>
+        
+          <li class="md-nav__item">
   <a href="#action-panel" class="md-nav__link">
     <span class="md-ellipsis">
       Action Panel
@@ -2253,14 +2415,14 @@
 </thead>
 <tbody>
 <tr>
-<td>ROI mode and zone type</td>
-<td>Define where tracking is valid (include) and invalid (exclude).</td>
-<td>Draw include zones first, then subtract problematic zones.</td>
+<td>Arena bar</td>
+<td>Arena-centric replacement for the old ROI toolbar; empty by default, switches to editing mode once a shape exists.</td>
+<td>See "Arena and ROI Setup" below.</td>
 </tr>
 <tr>
-<td>ROI shape controls</td>
-<td>Add, confirm, undo, clear ROI geometry.</td>
-<td>Confirm each shape before adding the next one.</td>
+<td><code>+</code>/<code>-</code> zone buttons (Circle / Polygon)</td>
+<td>Draw an inclusion or exclusion zone directly, with no separate mode switch first.</td>
+<td>Press "+ Circle"/"+ Polygon" to add area, "- Circle"/"- Polygon" to subtract from the current arena.</td>
 </tr>
 <tr>
 <td>Crop Video to ROI</td>
@@ -2280,10 +2442,89 @@
 <tr>
 <td>Zoom and pan tools</td>
 <td>Pixel-level inspection for ROI and detection checks.</td>
-<td>Use before setting body size and threshold parameters.</td>
+<td>Drawing works correctly at any zoom level, so zoom in for precise placement before or during shape entry.</td>
 </tr>
 </tbody>
 </table>
+<h3 id="arena-and-roi-setup">Arena and ROI Setup<a class="headerlink" href="#arena-and-roi-setup" title="Permanent link">&para;</a></h3>
+<p>The arena bar replaces the old ROI toolbar's include/exclude dropdown with an
+arena-centric workflow. It has two states:</p>
+<p><strong>Empty state.</strong> Before any shape is drawn, the bar shows only "By default,
+the whole video is used." next to two buttons: <strong>+ Add Single Arena</strong> and
+<strong>+ Add Grid of Arenas</strong>. A video with no ROI at all is a valid, common case
+-- tracking runs across the full frame.</p>
+<p><strong>Editing state.</strong> Once at least one shape exists (or a new arena has been
+started), the bar switches to show:</p>
+<ul>
+<li><strong>Arena navigation</strong> -- "Currently labelling: Arena N", with <strong>&lt; Previous</strong>
+  and <strong>Next &gt;</strong> to step between existing arenas, and <strong>+ Add new arena</strong> to
+  start a fresh, empty arena (it holds no shapes until you draw one).</li>
+<li><strong>Zone tools</strong> -- <strong>+ Circle</strong>, <strong>- Circle</strong>, <strong>+ Polygon</strong>, <strong>- Polygon</strong>.
+  There is no longer a separate include/exclude mode to set before drawing:
+  the <code>+</code> buttons draw an inclusion zone, the <code>-</code> buttons draw an exclusion
+  zone (subtracted from the current arena), both for the arena you are
+  currently labelling. Left-click places points; right-click removes the
+  last point. <strong>Finish Shape</strong> commits the shape once it is valid; <strong>Undo</strong>
+  removes the most recent point or shape; <strong>Clear Arena</strong> removes every
+  shape belonging to the current arena while keeping its arena number
+  reserved (numbers are never renumbered, since they appear in the exported
+  <code>arena_id</code> column).</li>
+<li><strong>Overflow menu (<code>...</code>)</strong> -- <strong>Add Grid of Arenas</strong>, <strong>Clear All</strong>, and
+  <strong>Crop Video to ROI</strong>.</li>
+</ul>
+<p>Drawing works correctly at any zoom level: clicks map back to image
+coordinates through the current zoom transform, so you can zoom in for
+precision without breaking shape placement.</p>
+<p><strong>One arena is exactly a plain ROI.</strong> If you only ever draw a single arena
+(with any number of include/exclude zones inside it), the exported tracking
+CSV carries no <code>arena_id</code> column at all -- it behaves exactly like the ROI
+masking of previous versions. The <code>arena_id</code> column only appears once a
+second arena exists.</p>
+<p><strong>Overlap warning.</strong> Arenas must not overlap, because an animal in a shared
+region cannot be assigned to a single arena. When arenas overlap:</p>
+<ul>
+<li>If the arena you are <em>currently labelling</em> is one of the overlapping
+  pair, the warning banner names the conflicting arena(s), and <strong>Previous</strong>,
+  <strong>Next</strong>, and <strong>Add new arena</strong> are disabled until you resolve it -- you
+  cannot navigate away from an overlapping arena.</li>
+<li>If any other pair of arenas overlaps (not involving the one you're
+  currently on), navigation stays enabled and the banner still explains
+  which arenas conflict, but you can keep working elsewhere.</li>
+<li>Regardless of which arena you're on, <strong>tracking itself is blocked</strong> if
+  <em>any</em> pair of arenas overlaps anywhere in the shape list -- the overlap
+  must be resolved everywhere before you can start a run, not just for the
+  arena you happen to be viewing.</li>
+</ul>
+<h3 id="grid-builder-add-grid-of-arenas">Grid Builder ("+ Add Grid of Arenas")<a class="headerlink" href="#grid-builder-add-grid-of-arenas" title="Permanent link">&para;</a></h3>
+<p>For layouts with many identical arenas (multi-well plates, arrayed dishes),
+the grid builder generates a rectangular grid of arenas in one step instead
+of hand-drawing each one. The generated shapes are ordinary <code>roi_shapes</code>
+entries with sequential arena ids, individually editable afterwards like any
+other arena -- the grid builder is a bulk-entry convenience, not a separate
+persistent mode.</p>
+<p>Controls:</p>
+<ul>
+<li><strong>Shape</strong> -- Circle or Rectangle. Circle exposes a <strong>Radius</strong> field;
+  Rectangle exposes <strong>Width</strong> and <strong>Height</strong> fields.</li>
+<li><strong>Arena 1 Centre X/Y</strong> -- the centre of arena 1 in image pixels.</li>
+<li><strong>Rows</strong> / <strong>Columns</strong> -- grid dimensions. Their maximum is capped so that
+  every generated arena's centre stays inside the frame given the current
+  origin, spacing, and rotation.</li>
+<li><strong>X spacing</strong> / <strong>Y spacing</strong> -- centre-to-centre pitch between columns
+  and rows. Each has a floor: the tightest spacing that still guarantees
+  adjacent arenas cannot touch or overlap for the chosen shape and size.
+  Spacing controls are hidden entirely when there is only one row or one
+  column, since spacing is meaningless in that case.</li>
+<li><strong>Rotation (about arena 1)</strong> -- rotates the whole grid layout, in half
+  degree steps from -45 deg to +45 deg, via either the slider or the spin
+  box.</li>
+</ul>
+<p>A live preview (drawn with the same renderer used for the main canvas, so it
+cannot visually diverge from the real overlay) shows the resulting arenas
+over the current reference frame as you adjust the controls, along with a
+summary line ("N arena(s), ids first..last"). Accepting the dialog appends
+the generated shapes to the existing <code>roi_shapes</code> list; it does not replace
+arenas you already drew.</p>
 <h3 id="action-panel">Action Panel<a class="headerlink" href="#action-panel" title="Permanent link">&para;</a></h3>
 <table>
 <thead>

@@ -16,7 +16,7 @@
         <link rel="prev" href="../gpu-backends/">
       
       
-        <link rel="next" href="../dependency-cuda-updates/">
+        <link rel="next" href="../resource-containment/">
       
       
       <link rel="icon" href="../../assets/images/favicon.png">
@@ -873,6 +873,69 @@
   
   
     <li class="md-nav__item">
+      <a href="../../runbooks/detectkit-headless-training/" class="md-nav__link">
+        
+  
+  <span class="md-ellipsis">
+    DetectKit Headless Training
+  </span>
+  
+
+      </a>
+    </li>
+  
+
+              
+            
+              
+                
+  
+  
+  
+  
+    <li class="md-nav__item">
+      <a href="../../user-guide/detectkit-semantic-escalation/" class="md-nav__link">
+        
+  
+  <span class="md-ellipsis">
+    DetectKit: Semantic Escalation (SAM3)
+  </span>
+  
+
+      </a>
+    </li>
+  
+
+              
+            
+              
+                
+  
+  
+  
+  
+    <li class="md-nav__item">
+      <a href="../../user-guide/detectkit-sahi-calibration/" class="md-nav__link">
+        
+  
+  <span class="md-ellipsis">
+    DetectKit: SAHI Calibration Profiles
+  </span>
+  
+
+      </a>
+    </li>
+  
+
+              
+            
+              
+                
+  
+  
+  
+  
+    <li class="md-nav__item">
       <a href="../../user-guide/filterkit/" class="md-nav__link">
         
   
@@ -1301,6 +1364,48 @@
 </li>
       
         <li class="md-nav__item">
+  <a href="#sliced-inference-sahi" class="md-nav__link">
+    <span class="md-ellipsis">
+      Sliced Inference (SAHI)
+    </span>
+  </a>
+  
+    <nav class="md-nav" aria-label="Sliced Inference (SAHI)">
+      <ul class="md-nav__list">
+        
+          <li class="md-nav__item">
+  <a href="#gpu-merge-backend-performance" class="md-nav__link">
+    <span class="md-ellipsis">
+      gpu merge-backend performance
+    </span>
+  </a>
+  
+</li>
+        
+      </ul>
+    </nav>
+  
+</li>
+      
+        <li class="md-nav__item">
+  <a href="#vitpose-training-cli" class="md-nav__link">
+    <span class="md-ellipsis">
+      ViTPose Training CLI
+    </span>
+  </a>
+  
+</li>
+      
+        <li class="md-nav__item">
+  <a href="#sam2-escalation" class="md-nav__link">
+    <span class="md-ellipsis">
+      SAM2 Escalation
+    </span>
+  </a>
+  
+</li>
+      
+        <li class="md-nav__item">
   <a href="#related-docs" class="md-nav__link">
     <span class="md-ellipsis">
       Related Docs
@@ -1313,6 +1418,48 @@
   
 </nav>
       
+    </li>
+  
+
+              
+            
+              
+                
+  
+  
+  
+  
+    <li class="md-nav__item">
+      <a href="../resource-containment/" class="md-nav__link">
+        
+  
+  <span class="md-ellipsis">
+    Resource Containment
+  </span>
+  
+
+      </a>
+    </li>
+  
+
+              
+            
+              
+                
+  
+  
+  
+  
+    <li class="md-nav__item">
+      <a href="../profiling/" class="md-nav__link">
+        
+  
+  <span class="md-ellipsis">
+    Profiling
+  </span>
+  
+
+      </a>
     </li>
   
 
@@ -1351,6 +1498,27 @@
   
   <span class="md-ellipsis">
     Performance Tuning
+  </span>
+  
+
+      </a>
+    </li>
+  
+
+              
+            
+              
+                
+  
+  
+  
+  
+    <li class="md-nav__item">
+      <a href="../inference-fast-mode/" class="md-nav__link">
+        
+  
+  <span class="md-ellipsis">
+    Inference Fast Mode
   </span>
   
 
@@ -2004,6 +2172,48 @@
 </li>
       
         <li class="md-nav__item">
+  <a href="#sliced-inference-sahi" class="md-nav__link">
+    <span class="md-ellipsis">
+      Sliced Inference (SAHI)
+    </span>
+  </a>
+  
+    <nav class="md-nav" aria-label="Sliced Inference (SAHI)">
+      <ul class="md-nav__list">
+        
+          <li class="md-nav__item">
+  <a href="#gpu-merge-backend-performance" class="md-nav__link">
+    <span class="md-ellipsis">
+      gpu merge-backend performance
+    </span>
+  </a>
+  
+</li>
+        
+      </ul>
+    </nav>
+  
+</li>
+      
+        <li class="md-nav__item">
+  <a href="#vitpose-training-cli" class="md-nav__link">
+    <span class="md-ellipsis">
+      ViTPose Training CLI
+    </span>
+  </a>
+  
+</li>
+      
+        <li class="md-nav__item">
+  <a href="#sam2-escalation" class="md-nav__link">
+    <span class="md-ellipsis">
+      SAM2 Escalation
+    </span>
+  </a>
+  
+</li>
+      
+        <li class="md-nav__item">
   <a href="#related-docs" class="md-nav__link">
     <span class="md-ellipsis">
       Related Docs
@@ -2080,6 +2290,7 @@
 <li><code>yolo_obb_detection</code></li>
 <li><code>yolo_pose</code></li>
 <li><code>sleap_pose</code></li>
+<li><code>vitpose_pose</code></li>
 <li><code>cnn_identity</code></li>
 <li><code>head_tail</code></li>
 </ul>
@@ -2164,6 +2375,276 @@
 <li>Feature-specific runtime dropdowns when global runtime is available.</li>
 <li>Manual exported-model-path requirements for standard workflows.</li>
 <li>Runtime checks scattered across GUI/business logic without shared resolver usage.</li>
+</ul>
+<h2 id="sliced-inference-sahi">Sliced Inference (SAHI)<a class="headerlink" href="#sliced-inference-sahi" title="Permanent link">&para;</a></h2>
+<p>Direct-mode OBB detection supports optional SAHI-style sliced inference
+(<code>SliceConfig</code>, off by default). <code>run_obb</code> dispatches to
+<code>stages/slicing.py:run_direct_sliced</code> when <code>config.obb.direct.slice.enabled</code>.</p>
+<ul>
+<li><strong>Geometry:</strong> <code>auto_model</code> (tile = model imgsz, no resample — the fast path),
+  <code>auto_object</code> (tile from expected object size), <code>custom</code> (explicit size).</li>
+<li><strong>Merge:</strong> <code>merge_policy</code> (nms/nmm/greedy_nmm) × <code>merge_metric</code> (iou/ios) ×
+  <code>merge_backend</code> (cv2 default; gpu = native-cuda only, cv2-validated). Default
+  <code>greedy_nmm</code> + <code>ios</code> + <code>0.5</code>.</li>
+<li><strong>Merge gate is tile geometry, never the configured ratio:</strong> the merge step
+  is gated on <code>tiles_overlap(plan.tiles)</code> — whether the <em>actual</em> planned tiles
+  overlap — not on whether <code>overlap_height_ratio</code>/<code>overlap_width_ratio</code> is
+  nonzero. <code>get_slice_bboxes</code> flushes the last tile on each axis to the frame
+  edge, so tiles genuinely overlap even at a configured ratio of <code>0.0</code> (e.g. a
+  300px frame with 256px tiles yields <code>[0,256)</code> and <code>[44,300)</code> — 212px of real
+  overlap). Using the configured ratio to decide whether to merge was a real
+  bug: it skipped merging in exactly the cases where cross-tile duplicates
+  occur. Always derive the decision from tile geometry, never from the
+  config ratio.</li>
+<li><strong>Cost:</strong> tiles flatten into a predict batch that is chunked to at most
+  tiles-per-frame images (<code>slicing.MAX_TILE_CHUNK</code>), so peak activation memory
+  is bounded rather than <code>frames × tiles</code>; the overlap-band pre-filter caps the
+  O(n²) merge; native-cuda preserves <code>_RawOBBTensors</code> (whole when the planned
+  tiles do not overlap, band-only sync when merging). TRT engine batch is sized
+  from the same tile-chunk bound, not window depth.</li>
+<li><strong>Tile-count ceiling:</strong> <code>plan_slices</code> raises <code>ValueError</code> above
+  <code>slicing.MAX_TILES_PER_FRAME</code> (4096). A reachable <code>advanced_config.json</code>
+  combination (<code>SLICE_HEIGHT=SLICE_WIDTH=64</code>, <code>SLICE_OVERLAP=0.9</code>) would
+  otherwise plan ~53k tiles per 1080p frame.</li>
+<li><strong>ROI gating is implemented but NOT wired:</strong> <code>plan_slices</code> accepts a
+  <code>roi_mask</code> and drops tiles that do not intersect it (falling back to the full
+  grid if the mask would drop everything), and that behaviour is unit-tested —
+  but every production call site currently passes <code>roi_mask=None</code>, so no tile
+  is ROI-dropped in the shipped pipeline. Threading the mask through <code>run_obb</code>
+  is a follow-up. ROI correctness does not depend on it: the filtering stage
+  re-applies the mask per detection, so tile gating is purely a compute
+  optimization.</li>
+<li><strong>Cache:</strong> slice params fold into <code>detection_cache_key</code> only when enabled, so
+  existing non-sliced caches stay valid.</li>
+</ul>
+<h3 id="gpu-merge-backend-performance"><code>gpu</code> merge-backend performance<a class="headerlink" href="#gpu-merge-backend-performance" title="Permanent link">&para;</a></h3>
+<p>The <code>gpu</code> merge backend (native CUDA kernel) exists only where it measurably
+beats the <code>cv2</code> oracle. Measured on an RTX 6000 Ada, torch 2.11+cu130, cv2 as
+the correctness oracle:</p>
+<table>
+<thead>
+<tr>
+<th>N</th>
+<th>cuda kernel</th>
+<th>cv2</th>
+<th>speedup</th>
+</tr>
+</thead>
+<tbody>
+<tr>
+<td>50</td>
+<td>1.31 ms</td>
+<td>1.21 ms</td>
+<td>0.93x</td>
+</tr>
+<tr>
+<td>100</td>
+<td>1.28 ms</td>
+<td>4.72 ms</td>
+<td>3.68x</td>
+</tr>
+<tr>
+<td>200</td>
+<td>1.41 ms</td>
+<td>17.83 ms</td>
+<td>12.62x</td>
+</tr>
+<tr>
+<td>400</td>
+<td>3.51 ms</td>
+<td>71.33 ms</td>
+<td>20.33x</td>
+</tr>
+</tbody>
+</table>
+<p>The CUDA crossover is around N=50 detections per merge call; below that, <code>cv2</code>
+is faster or comparable. <code>cv2</code> remains the default <code>merge_backend</code> and the
+correctness oracle everywhere — <code>gpu</code> is an opt-in, CUDA-only acceleration for
+high-detection-count scenes.</p>
+<h2 id="vitpose-training-cli">ViTPose Training CLI<a class="headerlink" href="#vitpose-training-cli" title="Permanent link">&para;</a></h2>
+<p>ViTPose has a standalone training entry point (invoked by PoseKit's Training Runner
+dialog, or directly for scripted/headless runs):</p>
+<div class="language-bash highlight"><pre><span></span><code><span id="__span-0-1"><a id="__codelineno-0-1" name="__codelineno-0-1" href="#__codelineno-0-1"></a>python<span class="w"> </span>-m<span class="w"> </span>hydra_suite.core.individual.pose.vitpose.training<span class="w"> </span>--config<span class="w"> </span>run.json
+</span></code></pre></div>
+<p><code>run.json</code> is validated against the <code>RunConfig</code> schema in
+<code>src/hydra_suite/core/individual/pose/vitpose/training/config.py</code>
+(<code>validate_run_config</code> rejects unknown keys and bad ranges before training starts).
+Fields:</p>
+<table>
+<thead>
+<tr>
+<th>Field</th>
+<th>Type</th>
+<th>Default</th>
+<th>Notes</th>
+</tr>
+</thead>
+<tbody>
+<tr>
+<td><code>init_checkpoint</code></td>
+<td><code>str</code></td>
+<td>required</td>
+<td>Path to a pretrained ViTPose checkpoint (COCO catalog download or Browse-selected animal/local checkpoint).</td>
+</tr>
+<tr>
+<td><code>variant</code></td>
+<td><code>str</code></td>
+<td>required</td>
+<td>One of the uppercase <code>VARIANTS</code> keys (<code>S</code>, <code>B</code>, <code>L</code>, <code>H</code>) from <code>vitpose/config.py</code>.</td>
+</tr>
+<tr>
+<td><code>num_keypoints</code></td>
+<td><code>int</code></td>
+<td>required</td>
+<td>Must be positive; must match the project's keypoint schema.</td>
+</tr>
+<tr>
+<td><code>dataset_dir</code></td>
+<td><code>str</code></td>
+<td>required</td>
+<td>YOLO-pose dataset root (images + label files).</td>
+</tr>
+<tr>
+<td><code>output_dir</code></td>
+<td><code>str</code></td>
+<td>required</td>
+<td>Destination for checkpoints, logs, and the loss-curve plot.</td>
+</tr>
+<tr>
+<td><code>device</code></td>
+<td><code>str</code></td>
+<td><code>"cpu"</code></td>
+<td>Torch device string (<code>cpu</code>, <code>mps</code>, <code>cuda</code>).</td>
+</tr>
+<tr>
+<td><code>epochs</code></td>
+<td><code>int</code></td>
+<td><code>40</code></td>
+<td>Must be positive.</td>
+</tr>
+<tr>
+<td><code>batch_size</code></td>
+<td><code>int</code></td>
+<td><code>16</code></td>
+<td></td>
+</tr>
+<tr>
+<td><code>lr</code></td>
+<td><code>float</code></td>
+<td><code>5e-4</code></td>
+<td></td>
+</tr>
+<tr>
+<td><code>weight_decay</code></td>
+<td><code>float</code></td>
+<td><code>0.1</code></td>
+<td></td>
+</tr>
+<tr>
+<td><code>drop_path</code></td>
+<td><code>float</code></td>
+<td><code>0.1</code></td>
+<td>Stochastic depth rate.</td>
+</tr>
+<tr>
+<td><code>sigma</code></td>
+<td><code>float</code></td>
+<td><code>2.0</code></td>
+<td>Heatmap target Gaussian sigma.</td>
+</tr>
+<tr>
+<td><code>grad_clip</code></td>
+<td><code>float</code></td>
+<td><code>1.0</code></td>
+<td></td>
+</tr>
+<tr>
+<td><code>val_fraction</code></td>
+<td><code>float</code></td>
+<td><code>0.2</code></td>
+<td>Must be strictly between 0 and 1.</td>
+</tr>
+<tr>
+<td><code>seed</code></td>
+<td><code>int</code></td>
+<td><code>0</code></td>
+<td></td>
+</tr>
+<tr>
+<td><code>resume_from</code></td>
+<td><code>str \| None</code></td>
+<td><code>None</code></td>
+<td>Optional checkpoint to resume training from.</td>
+</tr>
+</tbody>
+</table>
+<p>The CLI prints <code>DONE best_pck=&lt;value&gt; best_epoch=&lt;n&gt;</code> on completion and exits non-zero
+on validation/training failure.</p>
+<h2 id="sam2-escalation">SAM2 Escalation<a class="headerlink" href="#sam2-escalation" title="Permanent link">&para;</a></h2>
+<p>DetectKit's segmentation escalation uses a standalone <code>Sam2SegmentExecutor</code> (pipeline key: <code>sam2_segment</code>)
+that intentionally sits <strong>outside</strong> the tier/<code>InferenceRunner</code> system. Prompt-based models (SAM2 takes
+point/box prompts and returns segmentation masks) do not fit the <code>predict(frame)</code> contract, which assumes
+static inference over a frame's detections; SAM2 is interactive and iterative.</p>
+<p>The shipped feature is an offline <strong>batch "escalate-all"</strong>, not an interactive per-detection tool: it
+reads the existing <code>obb</code>/<code>aabb</code> labels for one or more selected sources and auto-primes a segmentation
+mask for every detection, staging the result for the user to accept or reject in place on the same
+source (see Workflow below) — it does not create a new source.</p>
+<p><strong>Workflow:</strong></p>
+<ol>
+<li>User picks one or more eligible sources (level <code>obb</code>/<code>aabb</code>; already-<code>polygon</code> sources are shown
+   disabled) and a SAM2 variant in the "Escalate to Segment" dialog (<code>escalate_sam2_dialog.py</code>).</li>
+<li><code>run_escalation()</code> (<code>detectkit/jobs/sam2_escalation.py</code>) runs in a <code>Sam2EscalationWorker(BaseWorker)</code>
+   <strong>background <code>QThread</code></strong> — it does not run on the GUI thread. For each source, for every image: the
+   existing box label is read (<code>read_boxes_from_label</code>), a prompt is auto-built from it
+   (<code>build_prompts</code> — the box itself plus its center as a positive point, with other detections' centers
+   as negative points), and <code>Sam2SegmentExecutor.set_image()</code> / <code>segment(box, points, negative_points)</code>
+   returns a mask + IoU confidence. No user-drawn prompts are involved.</li>
+<li><code>Sam2SegmentExecutor.from_variant(variant)</code> loads the SAM2 model (torch-only, auto-downloads weights
+   from the HF hub via <code>checkpoints.py</code>).</li>
+<li>Each mask is converted to a polygon (<code>mask_to_contour</code>); an empty/low-quality mask falls back to the
+   original box's rectangle as the polygon so no detection is ever dropped.</li>
+<li>Results are written to a <strong>per-source staging directory</strong> under
+   <code>artifacts/pending_escalations/&lt;source&gt;-&lt;variant&gt;-&lt;hash&gt;/</code> (<code>run_escalation()</code>,
+   <code>detectkit/jobs/sam2_escalation.py</code>) and recorded on <code>OBBSource.staged_review</code>
+   (<code>StagedReview</code>: <code>staged_path</code>, <code>target_level</code>, <code>sam2_variant</code>, <code>created_at</code> — the field was renamed
+   from <code>pending_escalation</code>/<code>PendingEscalation</code> because it now holds the staged output of any producer,
+   not just SAM2/SAM3 escalations; old project files with the old key/names still load, see
+   <code>docs/superpowers/specs/done/2026-08-31-detectkit-frame-granular-review-design.md</code>). The source's own
+   canonical <code>labels/</code>/<code>classes.txt</code> are never touched during staging, and no new source is registered
+   — the source list still shows exactly one entry for that source. Re-running escalation over a source
+   that already has a staged review is skipped by default (recorded in <code>EscalationResult.skipped</code>);
+   passing <code>overwrite=True</code> replaces the staged directory in place.</li>
+<li>The user reviews the staged result <strong>frame by frame</strong>, via the review bar shown above the canvas
+   whenever the current source has a staged review (<code>detectkit/gui/panels/review_bar.py</code>), backed by
+   <code>detectkit/jobs/staged_review.py</code>. Per frame: <strong>Replace</strong> (<code>accept_frame(..., mode=MergeMode.OVERWRITE)</code>)
+   overwrites the frame's label with the staged one; <strong>Add New</strong>
+   (<code>accept_frame(..., mode=MergeMode.ADD_NEW)</code>) keeps the frame's existing labels and appends only
+   non-overlapping staged instances via <code>merge_records</code>; <strong>Reject</strong> discards the staged frame. <strong>Accept
+   All</strong>/<strong>Reject All</strong> apply the same over every undecided frame; <strong>Next Undecided</strong> jumps between them;
+   a <code>decided</code>/<code>total</code> counter tracks progress. Every accept applies <strong>immediately</strong> to the source's
+   canonical <code>labels/</code>/<code>classes.txt</code> — there is no separate "commit" step — and the first accept in a
+   review snapshots the source's pre-review state so <strong>Revert Review</strong> can restore it (available only
+   while the review is open; finishing the review deletes the staging directory and the snapshot with
+   it). If the staged geometry level is above the source's, the accept promotes the source (existing
+   labels lifted, never re-derived down); see the design spec's §3 for the promotion/lift distinction.
+   Finishing a review (every frame decided) removes the staging directory and clears <code>staged_review</code>.</li>
+<li>This flow is driven from the GUI by the "Review escalations…" button in the Tools panel
+   (<code>ToolsPanel.review_escalations_requested</code> → <code>MainWindow._on_go_to_staged_review</code>), which switches to
+   the first source with an unfinished <code>staged_review</code> and shows its review bar — there is no longer a
+   separate review dialog (<code>ReviewEscalationsDialog</code> was retired; re-thresholding a staged run, previously
+   a dialog action, is now a review-bar button). A source with an unresolved staged review is still found
+   this way after the project is closed and reopened, since the state lives on <code>OBBSource.staged_review</code>,
+   not in transient UI.</li>
+</ol>
+<p><strong>Key properties:</strong></p>
+<ul>
+<li>Runs in a background <code>QThread</code> (<code>Sam2EscalationWorker</code>, a <code>BaseWorker</code>), keeping the GUI responsive
+  during a run; progress/status are reported via the standard <code>BaseWorker</code> signals.</li>
+<li>Model weights are auto-managed (variant catalog via <code>checkpoints.py</code>); weights download on first use.</li>
+<li>No caching, no ONNX/TensorRT export (SAM2 is torch-only).</li>
+<li>No per-tier gating; runs on whatever torch device is available.</li>
+<li><code>sam2</code> is imported lazily, only inside <code>Sam2SegmentExecutor.from_variant</code> — importing the executor
+  module (or <code>sam2_escalation.py</code>) does not require <code>sam2</code> to be installed.</li>
 </ul>
 <h2 id="related-docs">Related Docs<a class="headerlink" href="#related-docs" title="Permanent link">&para;</a></h2>
 <ul>

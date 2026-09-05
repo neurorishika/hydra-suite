@@ -1,0 +1,2398 @@
+
+<!doctype html>
+<html lang="en" class="no-js">
+  <head>
+    
+      <meta charset="utf-8">
+      <meta name="viewport" content="width=device-width,initial-scale=1">
+      
+        <meta name="description" content="User and developer documentation for HYDRA Suite">
+      
+      
+      
+        <link rel="canonical" href="https://neurorishika.github.io/hydra-suite/latest/superpowers/plans/done/2026-08-10-identity-phase6-provenance-columns-ui/">
+      
+      
+      
+      
+      <link rel="icon" href="../../../../assets/images/favicon.png">
+      <meta name="generator" content="mkdocs-1.6.1, mkdocs-material-9.5.43">
+    
+    
+      
+        <title>Identity Phase 6 — Provenance Columns + Honest UI Reorg Implementation Plan - HYDRA Suite Docs</title>
+      
+    
+    
+      <link rel="stylesheet" href="../../../../assets/stylesheets/main.0253249f.min.css">
+      
+        
+        <link rel="stylesheet" href="../../../../assets/stylesheets/palette.06af60db.min.css">
+      
+      
+
+
+    
+    
+      
+    
+    
+      
+        
+        
+        <link rel="preconnect" href="https://fonts.gstatic.com" crossorigin>
+        <link rel="stylesheet" href="https://fonts.googleapis.com/css?family=Roboto:300,300i,400,400i,700,700i%7CRoboto+Mono:400,400i,700,700i&display=fallback">
+        <style>:root{--md-text-font:"Roboto";--md-code-font:"Roboto Mono"}</style>
+      
+    
+    
+      <link rel="stylesheet" href="../../../../assets/_mkdocstrings.css">
+    
+    <script>__md_scope=new URL("../../../..",location),__md_hash=e=>[...e].reduce(((e,_)=>(e<<5)-e+_.charCodeAt(0)),0),__md_get=(e,_=localStorage,t=__md_scope)=>JSON.parse(_.getItem(t.pathname+"."+e)),__md_set=(e,_,t=localStorage,a=__md_scope)=>{try{t.setItem(a.pathname+"."+e,JSON.stringify(_))}catch(e){}}</script>
+    
+      
+
+    
+    
+    
+  </head>
+  
+  
+    
+    
+      
+    
+    
+    
+    
+    <body dir="ltr" data-md-color-scheme="default" data-md-color-primary="blue" data-md-color-accent="light-blue">
+  
+    
+    <input class="md-toggle" data-md-toggle="drawer" type="checkbox" id="__drawer" autocomplete="off">
+    <input class="md-toggle" data-md-toggle="search" type="checkbox" id="__search" autocomplete="off">
+    <label class="md-overlay" for="__drawer"></label>
+    <div data-md-component="skip">
+      
+        
+        <a href="#identity-phase-6-provenance-columns-honest-ui-reorg-implementation-plan" class="md-skip">
+          Skip to content
+        </a>
+      
+    </div>
+    <div data-md-component="announce">
+      
+    </div>
+    
+      <div data-md-color-scheme="default" data-md-component="outdated" hidden>
+        
+      </div>
+    
+    
+      
+
+<header class="md-header" data-md-component="header">
+  <nav class="md-header__inner md-grid" aria-label="Header">
+    <a href="../../../.." title="HYDRA Suite Docs" class="md-header__button md-logo" aria-label="HYDRA Suite Docs" data-md-component="logo">
+      
+  
+  <svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 24 24"><path d="M12 8a3 3 0 0 0 3-3 3 3 0 0 0-3-3 3 3 0 0 0-3 3 3 3 0 0 0 3 3m0 3.54C9.64 9.35 6.5 8 3 8v11c3.5 0 6.64 1.35 9 3.54 2.36-2.19 5.5-3.54 9-3.54V8c-3.5 0-6.64 1.35-9 3.54"/></svg>
+
+    </a>
+    <label class="md-header__button md-icon" for="__drawer">
+      
+      <svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 24 24"><path d="M3 6h18v2H3zm0 5h18v2H3zm0 5h18v2H3z"/></svg>
+    </label>
+    <div class="md-header__title" data-md-component="header-title">
+      <div class="md-header__ellipsis">
+        <div class="md-header__topic">
+          <span class="md-ellipsis">
+            HYDRA Suite Docs
+          </span>
+        </div>
+        <div class="md-header__topic" data-md-component="header-topic">
+          <span class="md-ellipsis">
+            
+              Identity Phase 6 — Provenance Columns + Honest UI Reorg Implementation Plan
+            
+          </span>
+        </div>
+      </div>
+    </div>
+    
+      
+        <form class="md-header__option" data-md-component="palette">
+  
+    
+    
+    
+    <input class="md-option" data-md-color-media="(prefers-color-scheme: light)" data-md-color-scheme="default" data-md-color-primary="blue" data-md-color-accent="light-blue"  aria-label="Switch to dark mode"  type="radio" name="__palette" id="__palette_0">
+    
+      <label class="md-header__button md-icon" title="Switch to dark mode" for="__palette_1" hidden>
+        <svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 24 24"><path d="m17.75 4.09-2.53 1.94.91 3.06-2.63-1.81-2.63 1.81.91-3.06-2.53-1.94L12.44 4l1.06-3 1.06 3zm3.5 6.91-1.64 1.25.59 1.98-1.7-1.17-1.7 1.17.59-1.98L15.75 11l2.06-.05L18.5 9l.69 1.95zm-2.28 4.95c.83-.08 1.72 1.1 1.19 1.85-.32.45-.66.87-1.08 1.27C15.17 23 8.84 23 4.94 19.07c-3.91-3.9-3.91-10.24 0-14.14.4-.4.82-.76 1.27-1.08.75-.53 1.93.36 1.85 1.19-.27 2.86.69 5.83 2.89 8.02a9.96 9.96 0 0 0 8.02 2.89m-1.64 2.02a12.08 12.08 0 0 1-7.8-3.47c-2.17-2.19-3.33-5-3.49-7.82-2.81 3.14-2.7 7.96.31 10.98 3.02 3.01 7.84 3.12 10.98.31"/></svg>
+      </label>
+    
+  
+    
+    
+    
+    <input class="md-option" data-md-color-media="(prefers-color-scheme: dark)" data-md-color-scheme="slate" data-md-color-primary="blue" data-md-color-accent="light-blue"  aria-label="Switch to light mode"  type="radio" name="__palette" id="__palette_1">
+    
+      <label class="md-header__button md-icon" title="Switch to light mode" for="__palette_0" hidden>
+        <svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 24 24"><path d="M12 7a5 5 0 0 1 5 5 5 5 0 0 1-5 5 5 5 0 0 1-5-5 5 5 0 0 1 5-5m0 2a3 3 0 0 0-3 3 3 3 0 0 0 3 3 3 3 0 0 0 3-3 3 3 0 0 0-3-3m0-7 2.39 3.42C13.65 5.15 12.84 5 12 5s-1.65.15-2.39.42zM3.34 7l4.16-.35A7.2 7.2 0 0 0 5.94 8.5c-.44.74-.69 1.5-.83 2.29zm.02 10 1.76-3.77a7.131 7.131 0 0 0 2.38 4.14zM20.65 7l-1.77 3.79a7.02 7.02 0 0 0-2.38-4.15zm-.01 10-4.14.36c.59-.51 1.12-1.14 1.54-1.86.42-.73.69-1.5.83-2.29zM12 22l-2.41-3.44c.74.27 1.55.44 2.41.44.82 0 1.63-.17 2.37-.44z"/></svg>
+      </label>
+    
+  
+</form>
+      
+    
+    
+      <script>var palette=__md_get("__palette");if(palette&&palette.color){if("(prefers-color-scheme)"===palette.color.media){var media=matchMedia("(prefers-color-scheme: light)"),input=document.querySelector(media.matches?"[data-md-color-media='(prefers-color-scheme: light)']":"[data-md-color-media='(prefers-color-scheme: dark)']");palette.color.media=input.getAttribute("data-md-color-media"),palette.color.scheme=input.getAttribute("data-md-color-scheme"),palette.color.primary=input.getAttribute("data-md-color-primary"),palette.color.accent=input.getAttribute("data-md-color-accent")}for(var[key,value]of Object.entries(palette.color))document.body.setAttribute("data-md-color-"+key,value)}</script>
+    
+    
+    
+      <label class="md-header__button md-icon" for="__search">
+        
+        <svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 24 24"><path d="M9.5 3A6.5 6.5 0 0 1 16 9.5c0 1.61-.59 3.09-1.56 4.23l.27.27h.79l5 5-1.5 1.5-5-5v-.79l-.27-.27A6.52 6.52 0 0 1 9.5 16 6.5 6.5 0 0 1 3 9.5 6.5 6.5 0 0 1 9.5 3m0 2C7 5 5 7 5 9.5S7 14 9.5 14 14 12 14 9.5 12 5 9.5 5"/></svg>
+      </label>
+      <div class="md-search" data-md-component="search" role="dialog">
+  <label class="md-search__overlay" for="__search"></label>
+  <div class="md-search__inner" role="search">
+    <form class="md-search__form" name="search">
+      <input type="text" class="md-search__input" name="query" aria-label="Search" placeholder="Search" autocapitalize="off" autocorrect="off" autocomplete="off" spellcheck="false" data-md-component="search-query" required>
+      <label class="md-search__icon md-icon" for="__search">
+        
+        <svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 24 24"><path d="M9.5 3A6.5 6.5 0 0 1 16 9.5c0 1.61-.59 3.09-1.56 4.23l.27.27h.79l5 5-1.5 1.5-5-5v-.79l-.27-.27A6.52 6.52 0 0 1 9.5 16 6.5 6.5 0 0 1 3 9.5 6.5 6.5 0 0 1 9.5 3m0 2C7 5 5 7 5 9.5S7 14 9.5 14 14 12 14 9.5 12 5 9.5 5"/></svg>
+        
+        <svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 24 24"><path d="M20 11v2H8l5.5 5.5-1.42 1.42L4.16 12l7.92-7.92L13.5 5.5 8 11z"/></svg>
+      </label>
+      <nav class="md-search__options" aria-label="Search">
+        
+        <button type="reset" class="md-search__icon md-icon" title="Clear" aria-label="Clear" tabindex="-1">
+          
+          <svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 24 24"><path d="M19 6.41 17.59 5 12 10.59 6.41 5 5 6.41 10.59 12 5 17.59 6.41 19 12 13.41 17.59 19 19 17.59 13.41 12z"/></svg>
+        </button>
+      </nav>
+      
+        <div class="md-search__suggest" data-md-component="search-suggest"></div>
+      
+    </form>
+    <div class="md-search__output">
+      <div class="md-search__scrollwrap" tabindex="0" data-md-scrollfix>
+        <div class="md-search-result" data-md-component="search-result">
+          <div class="md-search-result__meta">
+            Initializing search
+          </div>
+          <ol class="md-search-result__list" role="presentation"></ol>
+        </div>
+      </div>
+    </div>
+  </div>
+</div>
+    
+    
+      <div class="md-header__source">
+        <a href="https://github.com/neurorishika/hydra-suite" title="Go to repository" class="md-source" data-md-component="source">
+  <div class="md-source__icon md-icon">
+    
+    <svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 448 512"><!--! Font Awesome Free 6.6.0 by @fontawesome - https://fontawesome.com License - https://fontawesome.com/license/free (Icons: CC BY 4.0, Fonts: SIL OFL 1.1, Code: MIT License) Copyright 2024 Fonticons, Inc.--><path d="M439.55 236.05 244 40.45a28.87 28.87 0 0 0-40.81 0l-40.66 40.63 51.52 51.52c27.06-9.14 52.68 16.77 43.39 43.68l49.66 49.66c34.23-11.8 61.18 31 35.47 56.69-26.49 26.49-70.21-2.87-56-37.34L240.22 199v121.85c25.3 12.54 22.26 41.85 9.08 55a34.34 34.34 0 0 1-48.55 0c-17.57-17.6-11.07-46.91 11.25-56v-123c-20.8-8.51-24.6-30.74-18.64-45L142.57 101 8.45 235.14a28.86 28.86 0 0 0 0 40.81l195.61 195.6a28.86 28.86 0 0 0 40.8 0l194.69-194.69a28.86 28.86 0 0 0 0-40.81"/></svg>
+  </div>
+  <div class="md-source__repository">
+    neurorishika/hydra-suite
+  </div>
+</a>
+      </div>
+    
+  </nav>
+  
+</header>
+    
+    <div class="md-container" data-md-component="container">
+      
+      
+        
+          
+            
+<nav class="md-tabs" aria-label="Tabs" data-md-component="tabs">
+  <div class="md-grid">
+    <ul class="md-tabs__list">
+      
+        
+  
+  
+  
+    <li class="md-tabs__item">
+      <a href="../../../.." class="md-tabs__link">
+        
+  
+    
+  
+  Home
+
+      </a>
+    </li>
+  
+
+      
+        
+  
+  
+  
+    
+    
+      <li class="md-tabs__item">
+        <a href="../../../../getting-started/installation/" class="md-tabs__link">
+          
+  
+  Getting Started
+
+        </a>
+      </li>
+    
+  
+
+      
+        
+  
+  
+  
+    
+    
+      <li class="md-tabs__item">
+        <a href="../../../../user-guide/overview/" class="md-tabs__link">
+          
+  
+  User Guide
+
+        </a>
+      </li>
+    
+  
+
+      
+        
+  
+  
+  
+    
+    
+      <li class="md-tabs__item">
+        <a href="../../../../developer-guide/architecture/" class="md-tabs__link">
+          
+  
+  Developer Guide
+
+        </a>
+      </li>
+    
+  
+
+      
+        
+  
+  
+  
+    
+    
+      <li class="md-tabs__item">
+        <a href="../../../../reference/api-index/" class="md-tabs__link">
+          
+  
+  Reference
+
+        </a>
+      </li>
+    
+  
+
+      
+    </ul>
+  </div>
+</nav>
+          
+        
+      
+      <main class="md-main" data-md-component="main">
+        <div class="md-main__inner md-grid">
+          
+            
+              
+              <div class="md-sidebar md-sidebar--primary" data-md-component="sidebar" data-md-type="navigation" >
+                <div class="md-sidebar__scrollwrap">
+                  <div class="md-sidebar__inner">
+                    
+
+
+  
+
+
+<nav class="md-nav md-nav--primary md-nav--lifted" aria-label="Navigation" data-md-level="0">
+  <label class="md-nav__title" for="__drawer">
+    <a href="../../../.." title="HYDRA Suite Docs" class="md-nav__button md-logo" aria-label="HYDRA Suite Docs" data-md-component="logo">
+      
+  
+  <svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 24 24"><path d="M12 8a3 3 0 0 0 3-3 3 3 0 0 0-3-3 3 3 0 0 0-3 3 3 3 0 0 0 3 3m0 3.54C9.64 9.35 6.5 8 3 8v11c3.5 0 6.64 1.35 9 3.54 2.36-2.19 5.5-3.54 9-3.54V8c-3.5 0-6.64 1.35-9 3.54"/></svg>
+
+    </a>
+    HYDRA Suite Docs
+  </label>
+  
+    <div class="md-nav__source">
+      <a href="https://github.com/neurorishika/hydra-suite" title="Go to repository" class="md-source" data-md-component="source">
+  <div class="md-source__icon md-icon">
+    
+    <svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 448 512"><!--! Font Awesome Free 6.6.0 by @fontawesome - https://fontawesome.com License - https://fontawesome.com/license/free (Icons: CC BY 4.0, Fonts: SIL OFL 1.1, Code: MIT License) Copyright 2024 Fonticons, Inc.--><path d="M439.55 236.05 244 40.45a28.87 28.87 0 0 0-40.81 0l-40.66 40.63 51.52 51.52c27.06-9.14 52.68 16.77 43.39 43.68l49.66 49.66c34.23-11.8 61.18 31 35.47 56.69-26.49 26.49-70.21-2.87-56-37.34L240.22 199v121.85c25.3 12.54 22.26 41.85 9.08 55a34.34 34.34 0 0 1-48.55 0c-17.57-17.6-11.07-46.91 11.25-56v-123c-20.8-8.51-24.6-30.74-18.64-45L142.57 101 8.45 235.14a28.86 28.86 0 0 0 0 40.81l195.61 195.6a28.86 28.86 0 0 0 40.8 0l194.69-194.69a28.86 28.86 0 0 0 0-40.81"/></svg>
+  </div>
+  <div class="md-source__repository">
+    neurorishika/hydra-suite
+  </div>
+</a>
+    </div>
+  
+  <ul class="md-nav__list" data-md-scrollfix>
+    
+      
+      
+  
+  
+  
+  
+    <li class="md-nav__item">
+      <a href="../../../.." class="md-nav__link">
+        
+  
+  <span class="md-ellipsis">
+    Home
+  </span>
+  
+
+      </a>
+    </li>
+  
+
+    
+      
+      
+  
+  
+  
+  
+    
+    
+    
+      
+      
+        
+      
+    
+    
+    <li class="md-nav__item md-nav__item--nested">
+      
+        
+        
+          
+        
+        <input class="md-nav__toggle md-toggle md-toggle--indeterminate" type="checkbox" id="__nav_2" >
+        
+          
+          <label class="md-nav__link" for="__nav_2" id="__nav_2_label" tabindex="0">
+            
+  
+  <span class="md-ellipsis">
+    Getting Started
+  </span>
+  
+
+            <span class="md-nav__icon md-icon"></span>
+          </label>
+        
+        <nav class="md-nav" data-md-level="1" aria-labelledby="__nav_2_label" aria-expanded="false">
+          <label class="md-nav__title" for="__nav_2">
+            <span class="md-nav__icon md-icon"></span>
+            Getting Started
+          </label>
+          <ul class="md-nav__list" data-md-scrollfix>
+            
+              
+                
+  
+  
+  
+  
+    <li class="md-nav__item">
+      <a href="../../../../getting-started/installation/" class="md-nav__link">
+        
+  
+  <span class="md-ellipsis">
+    Installation
+  </span>
+  
+
+      </a>
+    </li>
+  
+
+              
+            
+              
+                
+  
+  
+  
+  
+    <li class="md-nav__item">
+      <a href="../../../../getting-started/environments/" class="md-nav__link">
+        
+  
+  <span class="md-ellipsis">
+    Environments and Makefile
+  </span>
+  
+
+      </a>
+    </li>
+  
+
+              
+            
+              
+                
+  
+  
+  
+  
+    <li class="md-nav__item">
+      <a href="../../../../getting-started/integrations/" class="md-nav__link">
+        
+  
+  <span class="md-ellipsis">
+    Integrations
+  </span>
+  
+
+      </a>
+    </li>
+  
+
+              
+            
+              
+                
+  
+  
+  
+  
+    <li class="md-nav__item">
+      <a href="../../../../getting-started/quickstart-hydra/" class="md-nav__link">
+        
+  
+  <span class="md-ellipsis">
+    Quickstart (TrackerKit)
+  </span>
+  
+
+      </a>
+    </li>
+  
+
+              
+            
+              
+                
+  
+  
+  
+  
+    <li class="md-nav__item">
+      <a href="../../../../getting-started/quickstart-posekit/" class="md-nav__link">
+        
+  
+  <span class="md-ellipsis">
+    Quickstart (PoseKit)
+  </span>
+  
+
+      </a>
+    </li>
+  
+
+              
+            
+              
+                
+  
+  
+  
+  
+    <li class="md-nav__item">
+      <a href="../../../../getting-started/platforms/" class="md-nav__link">
+        
+  
+  <span class="md-ellipsis">
+    Platform Notes
+  </span>
+  
+
+      </a>
+    </li>
+  
+
+              
+            
+          </ul>
+        </nav>
+      
+    </li>
+  
+
+    
+      
+      
+  
+  
+  
+  
+    
+    
+    
+      
+      
+        
+      
+    
+    
+    <li class="md-nav__item md-nav__item--nested">
+      
+        
+        
+          
+        
+        <input class="md-nav__toggle md-toggle md-toggle--indeterminate" type="checkbox" id="__nav_3" >
+        
+          
+          <label class="md-nav__link" for="__nav_3" id="__nav_3_label" tabindex="0">
+            
+  
+  <span class="md-ellipsis">
+    User Guide
+  </span>
+  
+
+            <span class="md-nav__icon md-icon"></span>
+          </label>
+        
+        <nav class="md-nav" data-md-level="1" aria-labelledby="__nav_3_label" aria-expanded="false">
+          <label class="md-nav__title" for="__nav_3">
+            <span class="md-nav__icon md-icon"></span>
+            User Guide
+          </label>
+          <ul class="md-nav__list" data-md-scrollfix>
+            
+              
+                
+  
+  
+  
+  
+    <li class="md-nav__item">
+      <a href="../../../../user-guide/overview/" class="md-nav__link">
+        
+  
+  <span class="md-ellipsis">
+    Overview
+  </span>
+  
+
+      </a>
+    </li>
+  
+
+              
+            
+              
+                
+  
+  
+  
+  
+    <li class="md-nav__item">
+      <a href="../../../../user-guide/workflow/" class="md-nav__link">
+        
+  
+  <span class="md-ellipsis">
+    End-to-End Workflow
+  </span>
+  
+
+      </a>
+    </li>
+  
+
+              
+            
+              
+                
+  
+  
+  
+  
+    <li class="md-nav__item">
+      <a href="../../../../user-guide/detection-modes/" class="md-nav__link">
+        
+  
+  <span class="md-ellipsis">
+    Detection Modes
+  </span>
+  
+
+      </a>
+    </li>
+  
+
+              
+            
+              
+                
+  
+  
+  
+  
+    <li class="md-nav__item">
+      <a href="../../../../user-guide/tracking-and-merging/" class="md-nav__link">
+        
+  
+  <span class="md-ellipsis">
+    Tracking and Merging
+  </span>
+  
+
+      </a>
+    </li>
+  
+
+              
+            
+              
+                
+  
+  
+  
+  
+    <li class="md-nav__item">
+      <a href="../../../../user-guide/post-processing/" class="md-nav__link">
+        
+  
+  <span class="md-ellipsis">
+    Post-processing
+  </span>
+  
+
+      </a>
+    </li>
+  
+
+              
+            
+              
+                
+  
+  
+  
+  
+    <li class="md-nav__item">
+      <a href="../../../../user-guide/configuration-reference/" class="md-nav__link">
+        
+  
+  <span class="md-ellipsis">
+    Configuration Reference
+  </span>
+  
+
+      </a>
+    </li>
+  
+
+              
+            
+              
+                
+  
+  
+  
+  
+    <li class="md-nav__item">
+      <a href="../../../../user-guide/compute-runtimes/" class="md-nav__link">
+        
+  
+  <span class="md-ellipsis">
+    Compute Runtimes
+  </span>
+  
+
+      </a>
+    </li>
+  
+
+              
+            
+              
+                
+  
+  
+  
+  
+    <li class="md-nav__item">
+      <a href="../../../../user-guide/outputs-and-csv-schema/" class="md-nav__link">
+        
+  
+  <span class="md-ellipsis">
+    Outputs and CSV Schema
+  </span>
+  
+
+      </a>
+    </li>
+  
+
+              
+            
+              
+                
+  
+  
+  
+  
+    <li class="md-nav__item">
+      <a href="../../../../user-guide/dataset-generation/" class="md-nav__link">
+        
+  
+  <span class="md-ellipsis">
+    Dataset Generation
+  </span>
+  
+
+      </a>
+    </li>
+  
+
+              
+            
+              
+                
+  
+  
+  
+  
+    <li class="md-nav__item">
+      <a href="../../../../user-guide/individual-analysis/" class="md-nav__link">
+        
+  
+  <span class="md-ellipsis">
+    Individual Analysis
+  </span>
+  
+
+      </a>
+    </li>
+  
+
+              
+            
+              
+                
+  
+  
+  
+  
+    <li class="md-nav__item">
+      <a href="../../../../user-guide/posekit/" class="md-nav__link">
+        
+  
+  <span class="md-ellipsis">
+    PoseKit
+  </span>
+  
+
+      </a>
+    </li>
+  
+
+              
+            
+              
+                
+  
+  
+  
+  
+    <li class="md-nav__item">
+      <a href="../../../../user-guide/classkit/" class="md-nav__link">
+        
+  
+  <span class="md-ellipsis">
+    ClassKit
+  </span>
+  
+
+      </a>
+    </li>
+  
+
+              
+            
+              
+                
+  
+  
+  
+  
+    <li class="md-nav__item">
+      <a href="../../../../user-guide/detectkit/" class="md-nav__link">
+        
+  
+  <span class="md-ellipsis">
+    DetectKit
+  </span>
+  
+
+      </a>
+    </li>
+  
+
+              
+            
+              
+                
+  
+  
+  
+  
+    <li class="md-nav__item">
+      <a href="../../../../runbooks/detectkit-headless-training/" class="md-nav__link">
+        
+  
+  <span class="md-ellipsis">
+    DetectKit Headless Training
+  </span>
+  
+
+      </a>
+    </li>
+  
+
+              
+            
+              
+                
+  
+  
+  
+  
+    <li class="md-nav__item">
+      <a href="../../../../user-guide/detectkit-semantic-escalation/" class="md-nav__link">
+        
+  
+  <span class="md-ellipsis">
+    DetectKit: Semantic Escalation (SAM3)
+  </span>
+  
+
+      </a>
+    </li>
+  
+
+              
+            
+              
+                
+  
+  
+  
+  
+    <li class="md-nav__item">
+      <a href="../../../../user-guide/detectkit-sahi-calibration/" class="md-nav__link">
+        
+  
+  <span class="md-ellipsis">
+    DetectKit: SAHI Calibration Profiles
+  </span>
+  
+
+      </a>
+    </li>
+  
+
+              
+            
+              
+                
+  
+  
+  
+  
+    <li class="md-nav__item">
+      <a href="../../../../user-guide/filterkit/" class="md-nav__link">
+        
+  
+  <span class="md-ellipsis">
+    FilterKit
+  </span>
+  
+
+      </a>
+    </li>
+  
+
+              
+            
+              
+                
+  
+  
+  
+  
+    <li class="md-nav__item">
+      <a href="../../../../user-guide/refinekit/" class="md-nav__link">
+        
+  
+  <span class="md-ellipsis">
+    RefineKit
+  </span>
+  
+
+      </a>
+    </li>
+  
+
+              
+            
+              
+                
+  
+  
+  
+  
+    <li class="md-nav__item">
+      <a href="../../../../user-guide/troubleshooting/" class="md-nav__link">
+        
+  
+  <span class="md-ellipsis">
+    Troubleshooting
+  </span>
+  
+
+      </a>
+    </li>
+  
+
+              
+            
+          </ul>
+        </nav>
+      
+    </li>
+  
+
+    
+      
+      
+  
+  
+  
+  
+    
+    
+    
+      
+      
+        
+      
+    
+    
+    <li class="md-nav__item md-nav__item--nested">
+      
+        
+        
+          
+        
+        <input class="md-nav__toggle md-toggle md-toggle--indeterminate" type="checkbox" id="__nav_4" >
+        
+          
+          <label class="md-nav__link" for="__nav_4" id="__nav_4_label" tabindex="0">
+            
+  
+  <span class="md-ellipsis">
+    Developer Guide
+  </span>
+  
+
+            <span class="md-nav__icon md-icon"></span>
+          </label>
+        
+        <nav class="md-nav" data-md-level="1" aria-labelledby="__nav_4_label" aria-expanded="false">
+          <label class="md-nav__title" for="__nav_4">
+            <span class="md-nav__icon md-icon"></span>
+            Developer Guide
+          </label>
+          <ul class="md-nav__list" data-md-scrollfix>
+            
+              
+                
+  
+  
+  
+  
+    <li class="md-nav__item">
+      <a href="../../../../developer-guide/architecture/" class="md-nav__link">
+        
+  
+  <span class="md-ellipsis">
+    Architecture
+  </span>
+  
+
+      </a>
+    </li>
+  
+
+              
+            
+              
+                
+  
+  
+  
+  
+    <li class="md-nav__item">
+      <a href="../../../../developer-guide/module-map/" class="md-nav__link">
+        
+  
+  <span class="md-ellipsis">
+    Module Map
+  </span>
+  
+
+      </a>
+    </li>
+  
+
+              
+            
+              
+                
+  
+  
+  
+  
+    <li class="md-nav__item">
+      <a href="../../../../developer-guide/data-flow/" class="md-nav__link">
+        
+  
+  <span class="md-ellipsis">
+    Data Flow
+  </span>
+  
+
+      </a>
+    </li>
+  
+
+              
+            
+              
+                
+  
+  
+  
+  
+    <li class="md-nav__item">
+      <a href="../../../../developer-guide/tracking-algorithm-deep-dive/" class="md-nav__link">
+        
+  
+  <span class="md-ellipsis">
+    Tracking Algorithm Deep Dive
+  </span>
+  
+
+      </a>
+    </li>
+  
+
+              
+            
+              
+                
+  
+  
+  
+  
+    <li class="md-nav__item">
+      <a href="../../../../developer-guide/tracking-optimization/" class="md-nav__link">
+        
+  
+  <span class="md-ellipsis">
+    Tracking Optimization
+  </span>
+  
+
+      </a>
+    </li>
+  
+
+              
+            
+              
+                
+  
+  
+  
+  
+    <li class="md-nav__item">
+      <a href="../../../../developer-guide/gpu-backends/" class="md-nav__link">
+        
+  
+  <span class="md-ellipsis">
+    GPU Backends
+  </span>
+  
+
+      </a>
+    </li>
+  
+
+              
+            
+              
+                
+  
+  
+  
+  
+    <li class="md-nav__item">
+      <a href="../../../../developer-guide/runtime-integration/" class="md-nav__link">
+        
+  
+  <span class="md-ellipsis">
+    Runtime Integration
+  </span>
+  
+
+      </a>
+    </li>
+  
+
+              
+            
+              
+                
+  
+  
+  
+  
+    <li class="md-nav__item">
+      <a href="../../../../developer-guide/resource-containment/" class="md-nav__link">
+        
+  
+  <span class="md-ellipsis">
+    Resource Containment
+  </span>
+  
+
+      </a>
+    </li>
+  
+
+              
+            
+              
+                
+  
+  
+  
+  
+    <li class="md-nav__item">
+      <a href="../../../../developer-guide/profiling/" class="md-nav__link">
+        
+  
+  <span class="md-ellipsis">
+    Profiling
+  </span>
+  
+
+      </a>
+    </li>
+  
+
+              
+            
+              
+                
+  
+  
+  
+  
+    <li class="md-nav__item">
+      <a href="../../../../developer-guide/dependency-cuda-updates/" class="md-nav__link">
+        
+  
+  <span class="md-ellipsis">
+    CUDA Dependency Updates
+  </span>
+  
+
+      </a>
+    </li>
+  
+
+              
+            
+              
+                
+  
+  
+  
+  
+    <li class="md-nav__item">
+      <a href="../../../../developer-guide/performance-tuning/" class="md-nav__link">
+        
+  
+  <span class="md-ellipsis">
+    Performance Tuning
+  </span>
+  
+
+      </a>
+    </li>
+  
+
+              
+            
+              
+                
+  
+  
+  
+  
+    <li class="md-nav__item">
+      <a href="../../../../developer-guide/inference-fast-mode/" class="md-nav__link">
+        
+  
+  <span class="md-ellipsis">
+    Inference Fast Mode
+  </span>
+  
+
+      </a>
+    </li>
+  
+
+              
+            
+              
+                
+  
+  
+  
+  
+    <li class="md-nav__item">
+      <a href="../../../../developer-guide/confidence-metrics/" class="md-nav__link">
+        
+  
+  <span class="md-ellipsis">
+    Confidence Metrics
+  </span>
+  
+
+      </a>
+    </li>
+  
+
+              
+            
+              
+                
+  
+  
+  
+  
+    <li class="md-nav__item">
+      <a href="../../../../developer-guide/extending-detection/" class="md-nav__link">
+        
+  
+  <span class="md-ellipsis">
+    Extending Detection
+  </span>
+  
+
+      </a>
+    </li>
+  
+
+              
+            
+              
+                
+  
+  
+  
+  
+    <li class="md-nav__item">
+      <a href="../../../../developer-guide/extending-identity/" class="md-nav__link">
+        
+  
+  <span class="md-ellipsis">
+    Extending Identity
+  </span>
+  
+
+      </a>
+    </li>
+  
+
+              
+            
+              
+                
+  
+  
+  
+  
+    <li class="md-nav__item">
+      <a href="../../../../developer-guide/code-health/" class="md-nav__link">
+        
+  
+  <span class="md-ellipsis">
+    Code Health & Auditing
+  </span>
+  
+
+      </a>
+    </li>
+  
+
+              
+            
+              
+                
+  
+  
+  
+  
+    <li class="md-nav__item">
+      <a href="../../../../developer-guide/publishing/" class="md-nav__link">
+        
+  
+  <span class="md-ellipsis">
+    Publishing
+  </span>
+  
+
+      </a>
+    </li>
+  
+
+              
+            
+              
+                
+  
+  
+  
+  
+    <li class="md-nav__item">
+      <a href="../../../../developer-guide/contributing/" class="md-nav__link">
+        
+  
+  <span class="md-ellipsis">
+    Contributing
+  </span>
+  
+
+      </a>
+    </li>
+  
+
+              
+            
+          </ul>
+        </nav>
+      
+    </li>
+  
+
+    
+      
+      
+  
+  
+  
+  
+    
+    
+    
+      
+      
+        
+      
+    
+    
+    <li class="md-nav__item md-nav__item--nested">
+      
+        
+        
+          
+        
+        <input class="md-nav__toggle md-toggle md-toggle--indeterminate" type="checkbox" id="__nav_5" >
+        
+          
+          <label class="md-nav__link" for="__nav_5" id="__nav_5_label" tabindex="0">
+            
+  
+  <span class="md-ellipsis">
+    Reference
+  </span>
+  
+
+            <span class="md-nav__icon md-icon"></span>
+          </label>
+        
+        <nav class="md-nav" data-md-level="1" aria-labelledby="__nav_5_label" aria-expanded="false">
+          <label class="md-nav__title" for="__nav_5">
+            <span class="md-nav__icon md-icon"></span>
+            Reference
+          </label>
+          <ul class="md-nav__list" data-md-scrollfix>
+            
+              
+                
+  
+  
+  
+  
+    <li class="md-nav__item">
+      <a href="../../../../reference/api-index/" class="md-nav__link">
+        
+  
+  <span class="md-ellipsis">
+    API Index
+  </span>
+  
+
+      </a>
+    </li>
+  
+
+              
+            
+              
+                
+  
+  
+  
+  
+    <li class="md-nav__item">
+      <a href="../../../../reference/ui-components-hydra/" class="md-nav__link">
+        
+  
+  <span class="md-ellipsis">
+    UI Components (TrackerKit)
+  </span>
+  
+
+      </a>
+    </li>
+  
+
+              
+            
+              
+                
+  
+  
+  
+  
+    <li class="md-nav__item">
+      <a href="../../../../reference/ui-components-posekit/" class="md-nav__link">
+        
+  
+  <span class="md-ellipsis">
+    UI Components (PoseKit)
+  </span>
+  
+
+      </a>
+    </li>
+  
+
+              
+            
+              
+                
+  
+  
+  
+  
+    <li class="md-nav__item">
+      <a href="../../../../reference/api-app/" class="md-nav__link">
+        
+  
+  <span class="md-ellipsis">
+    API (Launcher)
+  </span>
+  
+
+      </a>
+    </li>
+  
+
+              
+            
+              
+                
+  
+  
+  
+  
+    <li class="md-nav__item">
+      <a href="../../../../reference/api-core/" class="md-nav__link">
+        
+  
+  <span class="md-ellipsis">
+    API (Core)
+  </span>
+  
+
+      </a>
+    </li>
+  
+
+              
+            
+              
+                
+  
+  
+  
+  
+    <li class="md-nav__item">
+      <a href="../../../../reference/api-data/" class="md-nav__link">
+        
+  
+  <span class="md-ellipsis">
+    API (Data)
+  </span>
+  
+
+      </a>
+    </li>
+  
+
+              
+            
+              
+                
+  
+  
+  
+  
+    <li class="md-nav__item">
+      <a href="../../../../reference/api-gui/" class="md-nav__link">
+        
+  
+  <span class="md-ellipsis">
+    API (TrackerKit GUI)
+  </span>
+  
+
+      </a>
+    </li>
+  
+
+              
+            
+              
+                
+  
+  
+  
+  
+    <li class="md-nav__item">
+      <a href="../../../../reference/api-widgets/" class="md-nav__link">
+        
+  
+  <span class="md-ellipsis">
+    API (Widgets)
+  </span>
+  
+
+      </a>
+    </li>
+  
+
+              
+            
+              
+                
+  
+  
+  
+  
+    <li class="md-nav__item">
+      <a href="../../../../reference/api-posekit/" class="md-nav__link">
+        
+  
+  <span class="md-ellipsis">
+    API (PoseKit)
+  </span>
+  
+
+      </a>
+    </li>
+  
+
+              
+            
+              
+                
+  
+  
+  
+  
+    <li class="md-nav__item">
+      <a href="../../../../reference/api-utils/" class="md-nav__link">
+        
+  
+  <span class="md-ellipsis">
+    API (Utils)
+  </span>
+  
+
+      </a>
+    </li>
+  
+
+              
+            
+              
+                
+  
+  
+  
+  
+    <li class="md-nav__item">
+      <a href="../../../../reference/cli-reference/" class="md-nav__link">
+        
+  
+  <span class="md-ellipsis">
+    CLI Reference
+  </span>
+  
+
+      </a>
+    </li>
+  
+
+              
+            
+              
+                
+  
+  
+  
+  
+    <li class="md-nav__item">
+      <a href="../../../../reference/technical-reference/" class="md-nav__link">
+        
+  
+  <span class="md-ellipsis">
+    Technical Reference (LaTeX)
+  </span>
+  
+
+      </a>
+    </li>
+  
+
+              
+            
+              
+                
+  
+  
+  
+  
+    <li class="md-nav__item">
+      <a href="../../../../reference/changelog/" class="md-nav__link">
+        
+  
+  <span class="md-ellipsis">
+    Changelog
+  </span>
+  
+
+      </a>
+    </li>
+  
+
+              
+            
+              
+                
+  
+  
+  
+  
+    <li class="md-nav__item">
+      <a href="../../../../reference/faq/" class="md-nav__link">
+        
+  
+  <span class="md-ellipsis">
+    FAQ
+  </span>
+  
+
+      </a>
+    </li>
+  
+
+              
+            
+          </ul>
+        </nav>
+      
+    </li>
+  
+
+    
+  </ul>
+</nav>
+                  </div>
+                </div>
+              </div>
+            
+            
+              
+              <div class="md-sidebar md-sidebar--secondary" data-md-component="sidebar" data-md-type="toc" >
+                <div class="md-sidebar__scrollwrap">
+                  <div class="md-sidebar__inner">
+                    
+
+<nav class="md-nav md-nav--secondary" aria-label="Table of contents">
+  
+  
+  
+    
+  
+  
+    <label class="md-nav__title" for="__toc">
+      <span class="md-nav__icon md-icon"></span>
+      Table of contents
+    </label>
+    <ul class="md-nav__list" data-md-component="toc" data-md-scrollfix>
+      
+        <li class="md-nav__item">
+  <a href="#global-constraints" class="md-nav__link">
+    <span class="md-ellipsis">
+      Global Constraints
+    </span>
+  </a>
+  
+</li>
+      
+        <li class="md-nav__item">
+  <a href="#canonical-column-mapping-old-new" class="md-nav__link">
+    <span class="md-ellipsis">
+      Canonical column mapping (old → new)
+    </span>
+  </a>
+  
+</li>
+      
+        <li class="md-nav__item">
+  <a href="#file-structure" class="md-nav__link">
+    <span class="md-ellipsis">
+      File Structure
+    </span>
+  </a>
+  
+    <nav class="md-nav" aria-label="File Structure">
+      <ul class="md-nav__list">
+        
+          <li class="md-nav__item">
+  <a href="#task-1-canonical-identity-column-vocabulary-single-source-of-truth" class="md-nav__link">
+    <span class="md-ellipsis">
+      Task 1: Canonical identity-column vocabulary (single source of truth)
+    </span>
+  </a>
+  
+</li>
+        
+          <li class="md-nav__item">
+  <a href="#task-2-route-both-csv-headers-the-worker-row-writer-through-columnspy-realtime-family-rename" class="md-nav__link">
+    <span class="md-ellipsis">
+      Task 2: Route both CSV headers + the worker row writer through columns.py (realtime family rename)
+    </span>
+  </a>
+  
+</li>
+        
+          <li class="md-nav__item">
+  <a href="#task-3-offline-solver-writes-the-final-family-stop-clobbering-realtime" class="md-nav__link">
+    <span class="md-ellipsis">
+      Task 3: Offline solver writes the Final family (stop clobbering realtime)
+    </span>
+  </a>
+  
+</li>
+        
+          <li class="md-nav__item">
+  <a href="#task-4-rich-export-evidence-summary-writes-the-evidence-family-single-owner" class="md-nav__link">
+    <span class="md-ellipsis">
+      Task 4: Rich-export evidence summary writes the Evidence family (single owner)
+    </span>
+  </a>
+  
+</li>
+        
+          <li class="md-nav__item">
+  <a href="#task-5-post-hoc-consumers-overlay-migrate-to-final-derive-uniqueidentitykey-realtime-mirror" class="md-nav__link">
+    <span class="md-ellipsis">
+      Task 5: Post-hoc consumers + overlay migrate to Final; derive UniqueIdentityKey; realtime mirror
+    </span>
+  </a>
+  
+</li>
+        
+          <li class="md-nav__item">
+  <a href="#task-6-honest-ui-identity-models-panel" class="md-nav__link">
+    <span class="md-ellipsis">
+      Task 6: Honest UI — Identity Models panel
+    </span>
+  </a>
+  
+</li>
+        
+          <li class="md-nav__item">
+  <a href="#task-7-honest-ui-realtime-identity-tracking-panel-post-hoc-identity-post-process-panel" class="md-nav__link">
+    <span class="md-ellipsis">
+      Task 7: Honest UI — Realtime Identity (tracking panel) + Post-hoc Identity (post-process panel)
+    </span>
+  </a>
+  
+</li>
+        
+          <li class="md-nav__item">
+  <a href="#task-8-sweep-for-stragglers-full-suite-green" class="md-nav__link">
+    <span class="md-ellipsis">
+      Task 8: Sweep for stragglers + full-suite green
+    </span>
+  </a>
+  
+</li>
+        
+      </ul>
+    </nav>
+  
+</li>
+      
+        <li class="md-nav__item">
+  <a href="#phase-end-gate-controller-after-task-8" class="md-nav__link">
+    <span class="md-ellipsis">
+      Phase-end gate (controller, after Task 8)
+    </span>
+  </a>
+  
+</li>
+      
+        <li class="md-nav__item">
+  <a href="#self-review-notes-author" class="md-nav__link">
+    <span class="md-ellipsis">
+      Self-Review notes (author)
+    </span>
+  </a>
+  
+</li>
+      
+    </ul>
+  
+</nav>
+                  </div>
+                </div>
+              </div>
+            
+          
+          
+            <div class="md-content" data-md-component="content">
+              <article class="md-content__inner md-typeset">
+                
+                  
+
+  
+    <a href="https://github.com/neurorishika/hydra-suite/edit/main/docs/superpowers/plans/done/2026-08-10-identity-phase6-provenance-columns-ui.md" title="Edit this page" class="md-content__button md-icon">
+      
+      <svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 24 24"><path d="M10 20H6V4h7v5h5v3.1l2-2V8l-6-6H6c-1.1 0-2 .9-2 2v16c0 1.1.9 2 2 2h4zm10.2-7c.1 0 .3.1.4.2l1.3 1.3c.2.2.2.6 0 .8l-1 1-2.1-2.1 1-1c.1-.1.2-.2.4-.2m0 3.9L14.1 23H12v-2.1l6.1-6.1z"/></svg>
+    </a>
+  
+  
+
+
+<h1 id="identity-phase-6-provenance-columns-honest-ui-reorg-implementation-plan">Identity Phase 6 — Provenance Columns + Honest UI Reorg Implementation Plan<a class="headerlink" href="#identity-phase-6-provenance-columns-honest-ui-reorg-implementation-plan" title="Permanent link">&para;</a></h1>
+<blockquote>
+<p><strong>For agentic workers:</strong> REQUIRED SUB-SKILL: Use superpowers:subagent-driven-development to implement this plan task-by-task. Steps use checkbox (<code>- [ ]</code>) syntax for tracking.</p>
+</blockquote>
+<p><strong>Goal:</strong> Replace the single, clobbered <code>IdentityAssigned*</code> output column with three provenance-explicit column families (<code>IdentityEvidence*</code>, <code>IdentityRealtime*</code>, <code>IdentityFinal*</code>) that no stage overwrites, and re-scope the three identity UI panels so each control is honest about what it does and when it is available.</p>
+<p><strong>Architecture:</strong> One shared identity-column vocabulary (a new <code>core/individual/identity/columns.py</code> constants + ordered-header module) is the single source of truth for the CSV contract, consumed by both header builders and the worker's positional row writer (killing today's triple-coupling). Each pipeline stage writes only its own family: the online decoder writes <code>IdentityRealtime*</code>; the rich-export evidence summary writes <code>IdentityEvidence*</code>; the offline solver + post-hoc resolution write <code>IdentityFinal*</code> (with <code>IdentityFinalSource ∈ {realtime, offline, tag}</code>). When post-hoc did not run, <code>IdentityFinal*</code> mirrors the realtime decision once, non-destructively. <code>UniqueIdentityKey</code> remains a derived compatibility column.</p>
+<p><strong>Tech Stack:</strong> Python 3.13, pandas ≥3, PySide6 (Qt), pytest. Core/Training must not import app-layer packages.</p>
+<h2 id="global-constraints">Global Constraints<a class="headerlink" href="#global-constraints" title="Permanent link">&para;</a></h2>
+<ul>
+<li><strong>Clean rename (user decision, 2026-08-10):</strong> the legacy names <code>IdentityAssignedID/Label/Confidence</code>, <code>IdentityPosteriorMargin</code>, <code>IdentityEntropy</code>, <code>IdentityCommitted</code>, <code>IdentitySlotLockLabel</code>, <code>IdentityEvidenceSources</code>, <code>IdentityConflictFlag</code>, <code>IdentityOfflineLabel/Confidence</code>, <code>IdentitySmoothedLabel/Confidence</code>, <code>IdentityFragmentScore</code>, <code>IdentityConflictResolved</code> are REMOVED from output. No back-compat aliases for these (only <code>UniqueIdentityKey</code> is retained). Every in-repo reader migrates in lockstep.</li>
+<li><strong>Provenance over mutation:</strong> no stage may overwrite a column another stage owns. The offline solver must NOT write into any <code>IdentityRealtime*</code> column. The rich-export evidence summary must NOT overwrite a realtime column.</li>
+<li><strong>Positions byte-identical:</strong> identity columns are additive/renamed post-processing only. Nothing in this phase may touch Kalman / assignment / detection geometry. The equivalence harness (positions p99 = 0, θ within the documented head/tail π-flip noise floor, unmatched = 0) must stay green on MPS + CUDA. Baseline for attribution = branch commit at phase start <code>0a0a0091</code>.</li>
+<li><strong>Two duplicated CSV headers must converge:</strong> <code>trackerkit/headless_tracking.py:build_tracking_csv_header</code> and the inline copy in <code>trackerkit/gui/orchestrators/tracking.py</code> (~:1410-1462) must both route through the new shared header helper; the positional writer in <code>core/tracking/worker.py</code> (<code>_online_identity_row_values</code>, ~:1924-1979) must derive its order from the same source.</li>
+<li><strong>One typed source of truth:</strong> UI panels round-trip through the flat cfg dict → <code>IdentityConfig</code> (<code>trackerkit/config/identity_schema.py</code>) → engine <code>IDENTITY_*</code> params. No new widget-attribute state.</li>
+<li><strong><code>IdentityFinalSource</code> vocabulary:</strong> exactly <code>realtime</code> | <code>offline</code> | <code>tag</code> (lowercase), or empty string when no identity was resolved for that row.</li>
+</ul>
+<hr />
+<h2 id="canonical-column-mapping-old-new">Canonical column mapping (old → new)<a class="headerlink" href="#canonical-column-mapping-old-new" title="Permanent link">&para;</a></h2>
+<p>Implementers: this table is the authoritative rename map. Apply it everywhere.</p>
+<p><strong>Naming convention (user decision, 2026-08-10): PascalCase, no underscores</strong> — matches the rest of the CSV (<code>TrajectoryID</code>, <code>DetectionConfidence</code>, …). Family prefixes are <code>IdentityEvidence</code>, <code>IdentityRealtime</code>, <code>IdentityFinal</code>. Prefix-filter with <code>df.filter(regex="^IdentityFinal")</code>.</p>
+<table>
+<thead>
+<tr>
+<th>Old column</th>
+<th>New column</th>
+<th>Family / owner</th>
+</tr>
+</thead>
+<tbody>
+<tr>
+<td><code>IdentityAssignedID</code></td>
+<td><code>IdentityRealtimeID</code></td>
+<td>Realtime (online decoder)</td>
+</tr>
+<tr>
+<td><code>IdentityAssignedLabel</code></td>
+<td><code>IdentityRealtimeLabel</code></td>
+<td>Realtime</td>
+</tr>
+<tr>
+<td><code>IdentityAssignedConfidence</code></td>
+<td><code>IdentityRealtimeConfidence</code></td>
+<td>Realtime</td>
+</tr>
+<tr>
+<td><code>IdentityPosteriorMargin</code></td>
+<td><code>IdentityRealtimeMargin</code></td>
+<td>Realtime</td>
+</tr>
+<tr>
+<td><code>IdentityEntropy</code></td>
+<td><code>IdentityRealtimeEntropy</code></td>
+<td>Realtime</td>
+</tr>
+<tr>
+<td><code>IdentityCommitted</code></td>
+<td><code>IdentityRealtimeCommitted</code></td>
+<td>Realtime</td>
+</tr>
+<tr>
+<td><code>IdentitySlotLockLabel</code></td>
+<td><code>IdentityRealtimeSlotLock</code></td>
+<td>Realtime</td>
+</tr>
+<tr>
+<td><code>IdentityEvidenceSources</code></td>
+<td><code>IdentityEvidenceSources</code> (unchanged name, now Evidence-owned)</td>
+<td>Evidence (rich-export summary)</td>
+</tr>
+<tr>
+<td><em>(new)</em></td>
+<td><code>IdentityEvidenceTopLabel</code></td>
+<td>Evidence</td>
+</tr>
+<tr>
+<td><em>(new)</em></td>
+<td><code>IdentityEvidenceConfidence</code></td>
+<td>Evidence</td>
+</tr>
+<tr>
+<td><code>IdentityConflictFlag</code></td>
+<td><code>IdentityEvidenceConflictFlag</code></td>
+<td>Evidence (it flags conflicting <em>evidence</em>)</td>
+</tr>
+<tr>
+<td><code>IdentityOfflineLabel</code></td>
+<td><code>IdentityFinalLabel</code></td>
+<td>Final (offline solver / resolved)</td>
+</tr>
+<tr>
+<td><code>IdentityOfflineConfidence</code></td>
+<td><code>IdentityFinalConfidence</code></td>
+<td>Final</td>
+</tr>
+<tr>
+<td><code>IdentityFragmentScore</code></td>
+<td><code>IdentityFinalFragmentScore</code></td>
+<td>Final</td>
+</tr>
+<tr>
+<td><em>(new)</em></td>
+<td><code>IdentityFinalID</code></td>
+<td>Final (catalog index of the resolved label)</td>
+</tr>
+<tr>
+<td><em>(new)</em></td>
+<td><code>IdentityFinalSource</code></td>
+<td>Final (<code>realtime</code>|<code>offline</code>|<code>tag</code>|"")</td>
+</tr>
+<tr>
+<td><code>IdentitySmoothedLabel</code></td>
+<td><code>IdentityFinalSmoothedLabel</code></td>
+<td>Final (per-frame smoothed diagnostic)</td>
+</tr>
+<tr>
+<td><code>IdentitySmoothedConfidence</code></td>
+<td><code>IdentityFinalSmoothedConfidence</code></td>
+<td>Final</td>
+</tr>
+<tr>
+<td><code>IdentityConflictResolved</code></td>
+<td><code>IdentityFinalConflictResolved</code></td>
+<td>Final (post-hoc resolution marker)</td>
+</tr>
+<tr>
+<td><code>UniqueIdentityKey</code></td>
+<td><code>UniqueIdentityKey</code> (retained)</td>
+<td>Derived compat, from <code>IdentityFinal*</code></td>
+</tr>
+</tbody>
+</table>
+<p><strong>Resolution semantics for the Final family (single writer):</strong> after the offline stage,
+for every trajectory/row:
+- If the offline fragment solver produced a label → <code>IdentityFinal{Label,ID,Confidence,FragmentScore}</code> = offline result, <code>IdentityFinalSource = "offline"</code>.
+- Else if a tag observation resolved it → tag label, <code>IdentityFinalSource = "tag"</code>.
+- Else if the realtime decoder ran and committed a label → mirror <code>IdentityRealtime{Label,ID,Confidence}</code> into <code>IdentityFinal*</code>, <code>IdentityFinalSource = "realtime"</code> (a one-time non-destructive copy — the realtime columns are left intact).
+- Else → <code>IdentityFinal*</code> empty, <code>IdentityFinalSource = ""</code>.</p>
+<hr />
+<h2 id="file-structure">File Structure<a class="headerlink" href="#file-structure" title="Permanent link">&para;</a></h2>
+<p><strong>Create:</strong>
+- <code>src/hydra_suite/core/individual/identity/columns.py</code> — canonical identity-column name constants (the three families + <code>UniqueIdentityKey</code>), the ordered <code>identity_tracking_columns(identity_method, save_confidence_metrics)</code> helper (returns the realtime + evidence-source columns appended to the raw tracking header, in writer order), and <code>IdentityFinalSource</code> value constants. Pure, no imports from app layers.
+- <code>tests/identity/test_identity_columns.py</code> — locks the constant names + ordered-header contract.
+- <code>tests/identity/test_provenance_no_clobber.py</code> — the phase's headline invariant test (offline never mutates a <code>IdentityRealtime*</code> column; Final mirrors realtime when post-hoc is off).</p>
+<p><strong>Modify (core writers):</strong>
+- <code>src/hydra_suite/core/tracking/worker.py</code> — <code>_online_identity_row_values</code> (~:1924-1979) writes realtime-family values in the shared order.
+- <code>src/hydra_suite/trackerkit/headless_tracking.py</code> — <code>build_tracking_csv_header</code> (:32-88) routes through <code>columns.py</code>.
+- <code>src/hydra_suite/trackerkit/gui/orchestrators/tracking.py</code> — inline header (~:1410-1462) routes through <code>columns.py</code>.
+- <code>src/hydra_suite/core/individual/identity/offline.py</code> — <code>_LABEL_COL</code>/<code>_CONF_COL</code> constants (:35-36), <code>solve_global_assignment</code> write block (:1537-1586), <code>_annotate_smoothed_labels</code> (:1591-1638): write the Final family + <code>IdentityFinalSource</code>; never touch realtime columns.
+- <code>src/hydra_suite/core/individual/postprocess_df.py</code> — <code>_annotate_identity_summary_columns</code> (:57-127): write <code>IdentityEvidenceSources</code>/<code>IdentityEvidenceConflictFlag</code>/<code>IdentityEvidenceTopLabel</code>/<code>IdentityEvidenceConfidence</code>; read Final for the summary.
+- <code>src/hydra_suite/core/post/identity_postprocess.py</code> — consensus fill (:131-230) operates on <code>IdentityFinal*</code>; derive <code>UniqueIdentityKey</code> from Final.
+- <code>src/hydra_suite/core/post/processing.py</code> — relink/conflict (<code>_IDENTITY_LABEL_COL</code> etc. :1311-1400, :402-416, :1547-1559, :2657-2678, :3660-3664): operate on <code>IdentityFinal*</code>; set <code>IdentityFinalConflictResolved</code>.
+- <code>src/hydra_suite/core/post/media_export.py</code> — overlay priority list (:193-224): <code>["UniqueIdentityKey", "IdentityFinalLabel", "IdentityFinalSmoothedLabel"]</code>.</p>
+<p><strong>Modify (UI):</strong>
+- <code>src/hydra_suite/trackerkit/gui/panels/identity_panel.py</code> — "Identity Models" scope: status line, calibration affordance, corrected tooltips.
+- <code>src/hydra_suite/trackerkit/gui/panels/tracking_panel.py</code> — "Realtime Identity" scope: labels/tooltips scoped strictly to realtime association.
+- <code>src/hydra_suite/trackerkit/gui/panels/postprocess_panel.py</code> — "Post-hoc Identity" scope: first-class independent toggle + smoothing control; corrected tooltip.
+- <code>src/hydra_suite/trackerkit/config/identity_schema.py</code> — emit the reserved <code>PostHocIdentityConfig.smoothing_enabled</code>/<code>changepoint_enabled</code> to engine params.
+- <code>src/hydra_suite/trackerkit/engine_params.py</code> — thread the new post-hoc engine keys.</p>
+<p><strong>Migrate tests (in the task that renames the columns they cover):</strong>
+- <code>tests/test_fragment_solver.py</code>, <code>tests/identity/test_honesty_fix.py</code>, <code>tests/test_identity_postprocess.py</code>, <code>tests/test_identity_conflict_resolution.py</code>, <code>tests/test_postproc_invariants.py</code>, <code>tests/test_core_identity_postprocess_df.py</code>, <code>tests/test_post_tracklet_relinking.py</code>, <code>tests/test_media_export.py</code>, <code>tests/test_postproc_identity_gating.py</code>, <code>tests/test_core_qtfree_slice2.py</code>, <code>tests/identity/test_evidence_sidecar_consumption.py</code>, <code>tests/test_trackerkit_tracking_orchestrator_dialogs.py</code>.</p>
+<hr />
+<h3 id="task-1-canonical-identity-column-vocabulary-single-source-of-truth">Task 1: Canonical identity-column vocabulary (single source of truth)<a class="headerlink" href="#task-1-canonical-identity-column-vocabulary-single-source-of-truth" title="Permanent link">&para;</a></h3>
+<p><strong>Files:</strong>
+- Create: <code>src/hydra_suite/core/individual/identity/columns.py</code>
+- Create: <code>tests/identity/test_identity_columns.py</code></p>
+<p><strong>Interfaces:</strong>
+- Produces:
+  - Name constants (module-level <code>str</code>): <code>REALTIME_ID, REALTIME_LABEL, REALTIME_CONFIDENCE, REALTIME_MARGIN, REALTIME_ENTROPY, REALTIME_COMMITTED, REALTIME_SLOTLOCK</code>; <code>EVIDENCE_TOPLABEL, EVIDENCE_CONF, EVIDENCE_SOURCES, EVIDENCE_CONFLICT_FLAG</code>; <code>FINAL_LABEL, FINAL_ID, FINAL_CONFIDENCE, FINAL_SOURCE, FINAL_FRAGMENT_SCORE, FINAL_SMOOTHED_LABEL, FINAL_SMOOTHED_CONFIDENCE, FINAL_CONFLICT_RESOLVED</code>; <code>UNIQUE_IDENTITY_KEY = "UniqueIdentityKey"</code>.
+  - <code>class IdentityFinalSource: REALTIME="realtime"; OFFLINE="offline"; TAG="tag"; NONE=""</code>.
+  - <code>def identity_realtime_columns() -&gt; list[str]</code> — the 7 realtime columns + <code>EVIDENCE_SOURCES</code> + <code>EVIDENCE_CONFLICT_FLAG</code> + <code>REALTIME_SLOTLOCK</code>, in the exact order the worker positional writer emits (<code>[REALTIME_ID, REALTIME_LABEL, REALTIME_CONFIDENCE, REALTIME_MARGIN, REALTIME_ENTROPY, REALTIME_COMMITTED, EVIDENCE_SOURCES, EVIDENCE_CONFLICT_FLAG, REALTIME_SLOTLOCK]</code>). This is the block appended to each raw tracking row.</p>
+<ul class="task-list">
+<li class="task-list-item"><label class="task-list-control"><input type="checkbox" disabled/><span class="task-list-indicator"></span></label> <strong>Step 1: Write the failing test</strong> (<code>tests/identity/test_identity_columns.py</code>)</li>
+</ul>
+<div class="language-python highlight"><pre><span></span><code><span id="__span-0-1"><a id="__codelineno-0-1" name="__codelineno-0-1" href="#__codelineno-0-1"></a><span class="kn">from</span><span class="w"> </span><span class="nn">hydra_suite.core.individual.identity</span><span class="w"> </span><span class="kn">import</span> <span class="n">columns</span> <span class="k">as</span> <span class="n">C</span>
+</span><span id="__span-0-2"><a id="__codelineno-0-2" name="__codelineno-0-2" href="#__codelineno-0-2"></a>
+</span><span id="__span-0-3"><a id="__codelineno-0-3" name="__codelineno-0-3" href="#__codelineno-0-3"></a>
+</span><span id="__span-0-4"><a id="__codelineno-0-4" name="__codelineno-0-4" href="#__codelineno-0-4"></a><span class="k">def</span><span class="w"> </span><span class="nf">test_family_prefixes_are_provenance_explicit</span><span class="p">():</span>
+</span><span id="__span-0-5"><a id="__codelineno-0-5" name="__codelineno-0-5" href="#__codelineno-0-5"></a>    <span class="k">assert</span> <span class="n">C</span><span class="o">.</span><span class="n">REALTIME_LABEL</span> <span class="o">==</span> <span class="s2">"IdentityRealtimeLabel"</span>
+</span><span id="__span-0-6"><a id="__codelineno-0-6" name="__codelineno-0-6" href="#__codelineno-0-6"></a>    <span class="k">assert</span> <span class="n">C</span><span class="o">.</span><span class="n">FINAL_LABEL</span> <span class="o">==</span> <span class="s2">"IdentityFinalLabel"</span>
+</span><span id="__span-0-7"><a id="__codelineno-0-7" name="__codelineno-0-7" href="#__codelineno-0-7"></a>    <span class="k">assert</span> <span class="n">C</span><span class="o">.</span><span class="n">FINAL_SOURCE</span> <span class="o">==</span> <span class="s2">"IdentityFinalSource"</span>
+</span><span id="__span-0-8"><a id="__codelineno-0-8" name="__codelineno-0-8" href="#__codelineno-0-8"></a>    <span class="k">assert</span> <span class="n">C</span><span class="o">.</span><span class="n">EVIDENCE_SOURCES</span> <span class="o">==</span> <span class="s2">"IdentityEvidenceSources"</span>
+</span><span id="__span-0-9"><a id="__codelineno-0-9" name="__codelineno-0-9" href="#__codelineno-0-9"></a>    <span class="k">assert</span> <span class="n">C</span><span class="o">.</span><span class="n">UNIQUE_IDENTITY_KEY</span> <span class="o">==</span> <span class="s2">"UniqueIdentityKey"</span>
+</span><span id="__span-0-10"><a id="__codelineno-0-10" name="__codelineno-0-10" href="#__codelineno-0-10"></a>    <span class="c1"># PascalCase house style: no underscores inside a column name.</span>
+</span><span id="__span-0-11"><a id="__codelineno-0-11" name="__codelineno-0-11" href="#__codelineno-0-11"></a>    <span class="k">for</span> <span class="n">k</span><span class="p">,</span> <span class="n">v</span> <span class="ow">in</span> <span class="nb">vars</span><span class="p">(</span><span class="n">C</span><span class="p">)</span><span class="o">.</span><span class="n">items</span><span class="p">():</span>
+</span><span id="__span-0-12"><a id="__codelineno-0-12" name="__codelineno-0-12" href="#__codelineno-0-12"></a>        <span class="k">if</span> <span class="n">k</span><span class="o">.</span><span class="n">isupper</span><span class="p">()</span> <span class="ow">and</span> <span class="nb">isinstance</span><span class="p">(</span><span class="n">v</span><span class="p">,</span> <span class="nb">str</span><span class="p">)</span> <span class="ow">and</span> <span class="n">v</span><span class="o">.</span><span class="n">startswith</span><span class="p">(</span><span class="s2">"Identity"</span><span class="p">):</span>
+</span><span id="__span-0-13"><a id="__codelineno-0-13" name="__codelineno-0-13" href="#__codelineno-0-13"></a>            <span class="k">assert</span> <span class="s2">"_"</span> <span class="ow">not</span> <span class="ow">in</span> <span class="n">v</span><span class="p">,</span> <span class="n">v</span>
+</span><span id="__span-0-14"><a id="__codelineno-0-14" name="__codelineno-0-14" href="#__codelineno-0-14"></a>
+</span><span id="__span-0-15"><a id="__codelineno-0-15" name="__codelineno-0-15" href="#__codelineno-0-15"></a>
+</span><span id="__span-0-16"><a id="__codelineno-0-16" name="__codelineno-0-16" href="#__codelineno-0-16"></a><span class="k">def</span><span class="w"> </span><span class="nf">test_no_legacy_names_leak</span><span class="p">():</span>
+</span><span id="__span-0-17"><a id="__codelineno-0-17" name="__codelineno-0-17" href="#__codelineno-0-17"></a>    <span class="n">legacy</span> <span class="o">=</span> <span class="p">{</span><span class="s2">"IdentityAssignedLabel"</span><span class="p">,</span> <span class="s2">"IdentityAssignedConfidence"</span><span class="p">,</span>
+</span><span id="__span-0-18"><a id="__codelineno-0-18" name="__codelineno-0-18" href="#__codelineno-0-18"></a>              <span class="s2">"IdentityOfflineLabel"</span><span class="p">,</span> <span class="s2">"IdentityPosteriorMargin"</span><span class="p">}</span>
+</span><span id="__span-0-19"><a id="__codelineno-0-19" name="__codelineno-0-19" href="#__codelineno-0-19"></a>    <span class="n">allnames</span> <span class="o">=</span> <span class="p">{</span><span class="n">v</span> <span class="k">for</span> <span class="n">k</span><span class="p">,</span> <span class="n">v</span> <span class="ow">in</span> <span class="nb">vars</span><span class="p">(</span><span class="n">C</span><span class="p">)</span><span class="o">.</span><span class="n">items</span><span class="p">()</span> <span class="k">if</span> <span class="nb">isinstance</span><span class="p">(</span><span class="n">v</span><span class="p">,</span> <span class="nb">str</span><span class="p">)</span> <span class="ow">and</span> <span class="n">k</span><span class="o">.</span><span class="n">isupper</span><span class="p">()}</span>
+</span><span id="__span-0-20"><a id="__codelineno-0-20" name="__codelineno-0-20" href="#__codelineno-0-20"></a>    <span class="k">assert</span> <span class="n">allnames</span><span class="o">.</span><span class="n">isdisjoint</span><span class="p">(</span><span class="n">legacy</span><span class="p">)</span>
+</span><span id="__span-0-21"><a id="__codelineno-0-21" name="__codelineno-0-21" href="#__codelineno-0-21"></a>
+</span><span id="__span-0-22"><a id="__codelineno-0-22" name="__codelineno-0-22" href="#__codelineno-0-22"></a>
+</span><span id="__span-0-23"><a id="__codelineno-0-23" name="__codelineno-0-23" href="#__codelineno-0-23"></a><span class="k">def</span><span class="w"> </span><span class="nf">test_realtime_row_order_is_the_worker_contract</span><span class="p">():</span>
+</span><span id="__span-0-24"><a id="__codelineno-0-24" name="__codelineno-0-24" href="#__codelineno-0-24"></a>    <span class="n">order</span> <span class="o">=</span> <span class="n">C</span><span class="o">.</span><span class="n">identity_realtime_columns</span><span class="p">()</span>
+</span><span id="__span-0-25"><a id="__codelineno-0-25" name="__codelineno-0-25" href="#__codelineno-0-25"></a>    <span class="k">assert</span> <span class="n">order</span> <span class="o">==</span> <span class="p">[</span>
+</span><span id="__span-0-26"><a id="__codelineno-0-26" name="__codelineno-0-26" href="#__codelineno-0-26"></a>        <span class="n">C</span><span class="o">.</span><span class="n">REALTIME_ID</span><span class="p">,</span> <span class="n">C</span><span class="o">.</span><span class="n">REALTIME_LABEL</span><span class="p">,</span> <span class="n">C</span><span class="o">.</span><span class="n">REALTIME_CONFIDENCE</span><span class="p">,</span>
+</span><span id="__span-0-27"><a id="__codelineno-0-27" name="__codelineno-0-27" href="#__codelineno-0-27"></a>        <span class="n">C</span><span class="o">.</span><span class="n">REALTIME_MARGIN</span><span class="p">,</span> <span class="n">C</span><span class="o">.</span><span class="n">REALTIME_ENTROPY</span><span class="p">,</span> <span class="n">C</span><span class="o">.</span><span class="n">REALTIME_COMMITTED</span><span class="p">,</span>
+</span><span id="__span-0-28"><a id="__codelineno-0-28" name="__codelineno-0-28" href="#__codelineno-0-28"></a>        <span class="n">C</span><span class="o">.</span><span class="n">EVIDENCE_SOURCES</span><span class="p">,</span> <span class="n">C</span><span class="o">.</span><span class="n">EVIDENCE_CONFLICT_FLAG</span><span class="p">,</span> <span class="n">C</span><span class="o">.</span><span class="n">REALTIME_SLOTLOCK</span><span class="p">,</span>
+</span><span id="__span-0-29"><a id="__codelineno-0-29" name="__codelineno-0-29" href="#__codelineno-0-29"></a>    <span class="p">]</span>
+</span><span id="__span-0-30"><a id="__codelineno-0-30" name="__codelineno-0-30" href="#__codelineno-0-30"></a>
+</span><span id="__span-0-31"><a id="__codelineno-0-31" name="__codelineno-0-31" href="#__codelineno-0-31"></a>
+</span><span id="__span-0-32"><a id="__codelineno-0-32" name="__codelineno-0-32" href="#__codelineno-0-32"></a><span class="k">def</span><span class="w"> </span><span class="nf">test_final_source_vocabulary</span><span class="p">():</span>
+</span><span id="__span-0-33"><a id="__codelineno-0-33" name="__codelineno-0-33" href="#__codelineno-0-33"></a>    <span class="k">assert</span> <span class="n">C</span><span class="o">.</span><span class="n">IdentityFinalSource</span><span class="o">.</span><span class="n">OFFLINE</span> <span class="o">==</span> <span class="s2">"offline"</span>
+</span><span id="__span-0-34"><a id="__codelineno-0-34" name="__codelineno-0-34" href="#__codelineno-0-34"></a>    <span class="k">assert</span> <span class="n">C</span><span class="o">.</span><span class="n">IdentityFinalSource</span><span class="o">.</span><span class="n">REALTIME</span> <span class="o">==</span> <span class="s2">"realtime"</span>
+</span><span id="__span-0-35"><a id="__codelineno-0-35" name="__codelineno-0-35" href="#__codelineno-0-35"></a>    <span class="k">assert</span> <span class="n">C</span><span class="o">.</span><span class="n">IdentityFinalSource</span><span class="o">.</span><span class="n">TAG</span> <span class="o">==</span> <span class="s2">"tag"</span>
+</span><span id="__span-0-36"><a id="__codelineno-0-36" name="__codelineno-0-36" href="#__codelineno-0-36"></a>    <span class="k">assert</span> <span class="n">C</span><span class="o">.</span><span class="n">IdentityFinalSource</span><span class="o">.</span><span class="n">NONE</span> <span class="o">==</span> <span class="s2">""</span>
+</span></code></pre></div>
+<ul class="task-list">
+<li class="task-list-item"><label class="task-list-control"><input type="checkbox" disabled/><span class="task-list-indicator"></span></label> <strong>Step 2: Run to verify it fails</strong></li>
+</ul>
+<p>Run: <code>PYTHONPATH=$PWD/src python -m pytest tests/identity/test_identity_columns.py -q</code>
+Expected: FAIL (module not found).</p>
+<ul class="task-list">
+<li class="task-list-item">
+<p><label class="task-list-control"><input type="checkbox" disabled/><span class="task-list-indicator"></span></label> <strong>Step 3: Implement <code>columns.py</code></strong> with the constants, <code>IdentityFinalSource</code>, and <code>identity_realtime_columns()</code> exactly as the test asserts. Pure module; no imports from <code>trackerkit</code>/<code>classkit</code>/other app layers.</p>
+</li>
+<li class="task-list-item">
+<p><label class="task-list-control"><input type="checkbox" disabled/><span class="task-list-indicator"></span></label> <strong>Step 4: Run to verify it passes.</strong> Run the same command; expected PASS.</p>
+</li>
+<li class="task-list-item">
+<p><label class="task-list-control"><input type="checkbox" disabled/><span class="task-list-indicator"></span></label> <strong>Step 5: Commit</strong> — <code>git add</code> the two files; <code>git commit -m "feat(identity): canonical provenance-explicit column vocabulary (Phase 6 Task 1)"</code>.</p>
+</li>
+</ul>
+<hr />
+<h3 id="task-2-route-both-csv-headers-the-worker-row-writer-through-columnspy-realtime-family-rename">Task 2: Route both CSV headers + the worker row writer through <code>columns.py</code> (realtime family rename)<a class="headerlink" href="#task-2-route-both-csv-headers-the-worker-row-writer-through-columnspy-realtime-family-rename" title="Permanent link">&para;</a></h3>
+<p><strong>Files:</strong>
+- Modify: <code>src/hydra_suite/trackerkit/headless_tracking.py</code> (:32-88)
+- Modify: <code>src/hydra_suite/trackerkit/gui/orchestrators/tracking.py</code> (~:1410-1462)
+- Modify: <code>src/hydra_suite/core/tracking/worker.py</code> (<code>_online_identity_row_values</code> ~:1924-1979; and the header/positional coupling)
+- Test: <code>tests/test_core_qtfree_slice2.py</code>, <code>tests/test_trackerkit_tracking_orchestrator_dialogs.py</code> (update header expectations)</p>
+<p><strong>Interfaces:</strong>
+- Consumes: <code>identity_realtime_columns()</code> from Task 1.
+- Produces: both <code>build_tracking_csv_header(...)</code> and the GUI inline header emit the raw columns followed by <code>identity_realtime_columns()</code> (then the apriltag <code>DetectedTag*</code> block iff <code>identity_method == "apriltags"</code>). The worker's <code>_online_identity_row_values</code> returns values positionally matching <code>identity_realtime_columns()</code>.</p>
+<ul class="task-list">
+<li class="task-list-item"><label class="task-list-control"><input type="checkbox" disabled/><span class="task-list-indicator"></span></label> <strong>Step 1: Write/adjust the failing test.</strong> In <code>tests/test_core_qtfree_slice2.py</code> (or a focused new assertion), assert <code>build_tracking_csv_header(save_confidence_metrics=True, identity_method="cnn_classifier")</code> contains <code>IdentityRealtimeLabel</code> and <code>IdentityEvidenceSources</code> and does NOT contain <code>IdentityAssignedLabel</code>. Also assert the GUI orchestrator header equals <code>build_tracking_csv_header(...)</code> for the same args (kills the duplication drift).</li>
+</ul>
+<div class="language-python highlight"><pre><span></span><code><span id="__span-1-1"><a id="__codelineno-1-1" name="__codelineno-1-1" href="#__codelineno-1-1"></a><span class="kn">from</span><span class="w"> </span><span class="nn">hydra_suite.trackerkit.headless_tracking</span><span class="w"> </span><span class="kn">import</span> <span class="n">build_tracking_csv_header</span>
+</span><span id="__span-1-2"><a id="__codelineno-1-2" name="__codelineno-1-2" href="#__codelineno-1-2"></a><span class="kn">from</span><span class="w"> </span><span class="nn">hydra_suite.core.individual.identity</span><span class="w"> </span><span class="kn">import</span> <span class="n">columns</span> <span class="k">as</span> <span class="n">C</span>
+</span><span id="__span-1-3"><a id="__codelineno-1-3" name="__codelineno-1-3" href="#__codelineno-1-3"></a>
+</span><span id="__span-1-4"><a id="__codelineno-1-4" name="__codelineno-1-4" href="#__codelineno-1-4"></a><span class="k">def</span><span class="w"> </span><span class="nf">test_header_uses_realtime_family_and_no_legacy</span><span class="p">():</span>
+</span><span id="__span-1-5"><a id="__codelineno-1-5" name="__codelineno-1-5" href="#__codelineno-1-5"></a>    <span class="n">hdr</span> <span class="o">=</span> <span class="n">build_tracking_csv_header</span><span class="p">(</span><span class="kc">True</span><span class="p">,</span> <span class="n">identity_method</span><span class="o">=</span><span class="s2">"cnn_classifier"</span><span class="p">)</span>
+</span><span id="__span-1-6"><a id="__codelineno-1-6" name="__codelineno-1-6" href="#__codelineno-1-6"></a>    <span class="k">assert</span> <span class="n">C</span><span class="o">.</span><span class="n">REALTIME_LABEL</span> <span class="ow">in</span> <span class="n">hdr</span> <span class="ow">and</span> <span class="n">C</span><span class="o">.</span><span class="n">EVIDENCE_SOURCES</span> <span class="ow">in</span> <span class="n">hdr</span>  <span class="c1"># IdentityRealtimeLabel, IdentityEvidenceSources</span>
+</span><span id="__span-1-7"><a id="__codelineno-1-7" name="__codelineno-1-7" href="#__codelineno-1-7"></a>    <span class="k">assert</span> <span class="s2">"IdentityAssignedLabel"</span> <span class="ow">not</span> <span class="ow">in</span> <span class="n">hdr</span>
+</span><span id="__span-1-8"><a id="__codelineno-1-8" name="__codelineno-1-8" href="#__codelineno-1-8"></a>    <span class="c1"># positional block appears contiguously in writer order</span>
+</span><span id="__span-1-9"><a id="__codelineno-1-9" name="__codelineno-1-9" href="#__codelineno-1-9"></a>    <span class="n">i</span> <span class="o">=</span> <span class="n">hdr</span><span class="o">.</span><span class="n">index</span><span class="p">(</span><span class="n">C</span><span class="o">.</span><span class="n">REALTIME_ID</span><span class="p">)</span>
+</span><span id="__span-1-10"><a id="__codelineno-1-10" name="__codelineno-1-10" href="#__codelineno-1-10"></a>    <span class="k">assert</span> <span class="n">hdr</span><span class="p">[</span><span class="n">i</span><span class="p">:</span><span class="n">i</span> <span class="o">+</span> <span class="nb">len</span><span class="p">(</span><span class="n">C</span><span class="o">.</span><span class="n">identity_realtime_columns</span><span class="p">())]</span> <span class="o">==</span> <span class="n">C</span><span class="o">.</span><span class="n">identity_realtime_columns</span><span class="p">()</span>
+</span></code></pre></div>
+<ul class="task-list">
+<li class="task-list-item">
+<p><label class="task-list-control"><input type="checkbox" disabled/><span class="task-list-indicator"></span></label> <strong>Step 2: Run to verify it fails.</strong> Expected FAIL (legacy names still present).</p>
+</li>
+<li class="task-list-item">
+<p><label class="task-list-control"><input type="checkbox" disabled/><span class="task-list-indicator"></span></label> <strong>Step 3: Implement.</strong> Replace the hard-coded identity block in <code>build_tracking_csv_header</code> with <code>list(base_cols) + C.identity_realtime_columns()</code> (+ apriltag block). Make the GUI orchestrator inline header call <code>build_tracking_csv_header(...)</code> instead of re-listing (import it; it is Qt-free). Leave the <code>DetectedTag*</code> apriltag append exactly as today. In <code>worker.py</code>, keep <code>_online_identity_row_values</code> returning the same 9 values in the same order (they now correspond to the renamed columns — no value-logic change).</p>
+</li>
+<li class="task-list-item">
+<p><label class="task-list-control"><input type="checkbox" disabled/><span class="task-list-indicator"></span></label> <strong>Step 4: Run the header tests + a fast equivalence smoke</strong> (<code>fly_obb</code>) to confirm the raw CSV still parses and positions are byte-identical. Expected: header tests PASS; <code>fly_obb</code> EQUIVALENT.</p>
+</li>
+<li class="task-list-item">
+<p><label class="task-list-control"><input type="checkbox" disabled/><span class="task-list-indicator"></span></label> <strong>Step 5: Commit</strong> — <code>feat(identity): route CSV headers + row writer through shared realtime-family columns (Phase 6 Task 2)</code>.</p>
+</li>
+</ul>
+<hr />
+<h3 id="task-3-offline-solver-writes-the-final-family-stop-clobbering-realtime">Task 3: Offline solver writes the Final family (stop clobbering realtime)<a class="headerlink" href="#task-3-offline-solver-writes-the-final-family-stop-clobbering-realtime" title="Permanent link">&para;</a></h3>
+<p><strong>Files:</strong>
+- Modify: <code>src/hydra_suite/core/individual/identity/offline.py</code> (:35-36 constants; :1537-1586 write block; :1591-1638 <code>_annotate_smoothed_labels</code>; <code>run_fragment_solver</code> :1643+)
+- Test: <code>tests/test_fragment_solver.py</code>, <code>tests/identity/test_honesty_fix.py</code>, <code>tests/identity/test_provenance_no_clobber.py</code> (new)</p>
+<p><strong>Interfaces:</strong>
+- Consumes: <code>columns.py</code> constants; <code>IdentityFinalSource</code>.
+- Produces: <code>solve_global_assignment</code> writes <code>IdentityFinalLabel/ID/Confidence/FragmentScore</code> + <code>IdentityFinalSource</code> (= <code>offline</code> for solver-assigned rows, <code>""</code> for solver-<code>unknown</code> rows), and NEVER writes any <code>IdentityRealtime*</code>. <code>_annotate_smoothed_labels</code> writes <code>IdentityFinalSmoothedLabel/Confidence</code>. All Final label columns initialized as <strong>object dtype</strong> (carry forward the Phase-5 <code>LossySetitemError</code> fix).</p>
+<ul class="task-list">
+<li class="task-list-item"><label class="task-list-control"><input type="checkbox" disabled/><span class="task-list-indicator"></span></label> <strong>Step 1: Write the failing invariant test</strong> (<code>tests/identity/test_provenance_no_clobber.py</code>)</li>
+</ul>
+<div class="language-python highlight"><pre><span></span><code><span id="__span-2-1"><a id="__codelineno-2-1" name="__codelineno-2-1" href="#__codelineno-2-1"></a><span class="kn">import</span><span class="w"> </span><span class="nn">numpy</span><span class="w"> </span><span class="k">as</span><span class="w"> </span><span class="nn">np</span><span class="o">,</span><span class="w"> </span><span class="nn">pandas</span><span class="w"> </span><span class="k">as</span><span class="w"> </span><span class="nn">pd</span>
+</span><span id="__span-2-2"><a id="__codelineno-2-2" name="__codelineno-2-2" href="#__codelineno-2-2"></a><span class="kn">from</span><span class="w"> </span><span class="nn">hydra_suite.core.individual.identity</span><span class="w"> </span><span class="kn">import</span> <span class="n">columns</span> <span class="k">as</span> <span class="n">C</span>
+</span><span id="__span-2-3"><a id="__codelineno-2-3" name="__codelineno-2-3" href="#__codelineno-2-3"></a><span class="c1"># (build a small trajectories df with populated IdentityRealtime* + a real</span>
+</span><span id="__span-2-4"><a id="__codelineno-2-4" name="__codelineno-2-4" href="#__codelineno-2-4"></a><span class="c1">#  evidence cache, run run_fragment_solver, then:)</span>
+</span><span id="__span-2-5"><a id="__codelineno-2-5" name="__codelineno-2-5" href="#__codelineno-2-5"></a>
+</span><span id="__span-2-6"><a id="__codelineno-2-6" name="__codelineno-2-6" href="#__codelineno-2-6"></a><span class="k">def</span><span class="w"> </span><span class="nf">test_offline_never_mutates_realtime_columns</span><span class="p">(</span><span class="n">fragment_df_with_realtime</span><span class="p">,</span> <span class="n">catalog</span><span class="p">,</span> <span class="n">cache</span><span class="p">,</span> <span class="n">params</span><span class="p">):</span>
+</span><span id="__span-2-7"><a id="__codelineno-2-7" name="__codelineno-2-7" href="#__codelineno-2-7"></a>    <span class="n">before</span> <span class="o">=</span> <span class="n">fragment_df_with_realtime</span><span class="p">[</span><span class="n">C</span><span class="o">.</span><span class="n">REALTIME_LABEL</span><span class="p">]</span><span class="o">.</span><span class="n">copy</span><span class="p">()</span>
+</span><span id="__span-2-8"><a id="__codelineno-2-8" name="__codelineno-2-8" href="#__codelineno-2-8"></a>    <span class="n">out</span> <span class="o">=</span> <span class="n">run_fragment_solver</span><span class="p">(</span><span class="n">fragment_df_with_realtime</span><span class="p">,</span> <span class="n">catalog</span><span class="p">,</span> <span class="n">params</span><span class="p">,</span> <span class="n">cache</span><span class="o">=</span><span class="n">cache</span><span class="p">)</span>
+</span><span id="__span-2-9"><a id="__codelineno-2-9" name="__codelineno-2-9" href="#__codelineno-2-9"></a>    <span class="n">pd</span><span class="o">.</span><span class="n">testing</span><span class="o">.</span><span class="n">assert_series_equal</span><span class="p">(</span><span class="n">out</span><span class="p">[</span><span class="n">C</span><span class="o">.</span><span class="n">REALTIME_LABEL</span><span class="p">],</span> <span class="n">before</span><span class="p">,</span> <span class="n">check_names</span><span class="o">=</span><span class="kc">False</span><span class="p">)</span>
+</span><span id="__span-2-10"><a id="__codelineno-2-10" name="__codelineno-2-10" href="#__codelineno-2-10"></a>    <span class="k">assert</span> <span class="p">(</span><span class="n">out</span><span class="p">[</span><span class="n">C</span><span class="o">.</span><span class="n">FINAL_SOURCE</span><span class="p">]</span><span class="o">.</span><span class="n">isin</span><span class="p">([</span><span class="s2">"offline"</span><span class="p">,</span> <span class="s2">""</span><span class="p">]))</span><span class="o">.</span><span class="n">all</span><span class="p">()</span>
+</span><span id="__span-2-11"><a id="__codelineno-2-11" name="__codelineno-2-11" href="#__codelineno-2-11"></a>    <span class="k">assert</span> <span class="n">out</span><span class="o">.</span><span class="n">loc</span><span class="p">[</span><span class="n">out</span><span class="p">[</span><span class="n">C</span><span class="o">.</span><span class="n">FINAL_LABEL</span><span class="p">]</span><span class="o">.</span><span class="n">notna</span><span class="p">()</span> <span class="o">&amp;</span> <span class="p">(</span><span class="n">out</span><span class="p">[</span><span class="n">C</span><span class="o">.</span><span class="n">FINAL_LABEL</span><span class="p">]</span> <span class="o">!=</span> <span class="s2">"unknown"</span><span class="p">),</span>
+</span><span id="__span-2-12"><a id="__codelineno-2-12" name="__codelineno-2-12" href="#__codelineno-2-12"></a>                   <span class="n">C</span><span class="o">.</span><span class="n">FINAL_SOURCE</span><span class="p">]</span><span class="o">.</span><span class="n">eq</span><span class="p">(</span><span class="s2">"offline"</span><span class="p">)</span><span class="o">.</span><span class="n">all</span><span class="p">()</span>
+</span></code></pre></div>
+<p>(Provide the fixtures inline in the test module, mirroring <code>tests/identity/test_honesty_fix.py</code>'s <code>_build_realtime_off_df</code>/<code>_write_cache</code>, but with the realtime columns populated to prove non-clobber.)</p>
+<ul class="task-list">
+<li class="task-list-item">
+<p><label class="task-list-control"><input type="checkbox" disabled/><span class="task-list-indicator"></span></label> <strong>Step 2: Run to verify it fails.</strong> Expected FAIL (offline still writes <code>IdentityAssignedLabel</code>).</p>
+</li>
+<li class="task-list-item">
+<p><label class="task-list-control"><input type="checkbox" disabled/><span class="task-list-indicator"></span></label> <strong>Step 3: Implement.</strong> Set <code>_LABEL_COL = C.FINAL_LABEL</code>, <code>_CONF_COL = C.FINAL_CONFIDENCE</code>; rename the offline-mirror writes to <code>C.FINAL_*</code>; add <code>out[C.FINAL_SOURCE]</code> assignment (<code>offline</code> when a label is committed, <code>""</code> on <code>unknown</code>); rename smoothed columns to <code>C.FINAL_SMOOTHED_*</code>. Keep the object-dtype init (Phase-5 fix) on every Final label column. Remove all references to the legacy names in this file. Migrate <code>test_fragment_solver.py</code> + <code>test_honesty_fix.py</code> assertions to the new names.</p>
+</li>
+<li class="task-list-item">
+<p><label class="task-list-control"><input type="checkbox" disabled/><span class="task-list-indicator"></span></label> <strong>Step 4: Run</strong> <code>tests/test_fragment_solver.py tests/identity/ -q</code>. Expected PASS.</p>
+</li>
+<li class="task-list-item">
+<p><label class="task-list-control"><input type="checkbox" disabled/><span class="task-list-indicator"></span></label> <strong>Step 5: Commit</strong> — <code>feat(identity): offline solver writes IdentityFinal* (provenance, no realtime clobber) (Phase 6 Task 3)</code>.</p>
+</li>
+</ul>
+<hr />
+<h3 id="task-4-rich-export-evidence-summary-writes-the-evidence-family-single-owner">Task 4: Rich-export evidence summary writes the Evidence family (single owner)<a class="headerlink" href="#task-4-rich-export-evidence-summary-writes-the-evidence-family-single-owner" title="Permanent link">&para;</a></h3>
+<p><strong>Files:</strong>
+- Modify: <code>src/hydra_suite/core/individual/postprocess_df.py</code> (<code>_annotate_identity_summary_columns</code> :57-127)
+- Test: <code>tests/test_core_identity_postprocess_df.py</code></p>
+<p><strong>Interfaces:</strong>
+- Consumes: <code>columns.py</code>; the Final family (Task 3); <code>CNN_*_Class</code>, <code>DetectedTag*</code> inputs; the <code>IdentityEvidenceCache</code> top-label/conf if available.
+- Produces: <code>IdentityEvidenceSources</code> (<code>,</code>-joined among <code>apriltag</code>/<code>cnn</code>/<code>offline</code>/<code>realtime</code>), <code>IdentityEvidenceConflictFlag</code> (int), and the two new <code>IdentityEvidenceTopLabel</code>/<code>IdentityEvidenceConfidence</code> (per-row top calibrated evidence summary; source from the evidence cache when threaded, else the max <code>CNN_*_Prob</code>). Reads <code>IdentityFinalLabel</code> (not the legacy assigned) for the <code>offline</code> source signal. Does NOT write any realtime column.</p>
+<ul class="task-list">
+<li class="task-list-item"><label class="task-list-control"><input type="checkbox" disabled/><span class="task-list-indicator"></span></label> <strong>Step 1: Write the failing test.</strong> Assert the summary produces <code>IdentityEvidenceSources</code>/<code>IdentityEvidenceConflictFlag</code> (+ <code>TopLabel</code>/<code>Conf</code> when CNN cols present) and no legacy <code>IdentityEvidenceSources</code>/<code>IdentityConflictFlag</code>.</li>
+<li class="task-list-item"><label class="task-list-control"><input type="checkbox" disabled/><span class="task-list-indicator"></span></label> <strong>Step 2: Run — fails.</strong></li>
+<li class="task-list-item"><label class="task-list-control"><input type="checkbox" disabled/><span class="task-list-indicator"></span></label> <strong>Step 3: Implement</strong> the rename + the two new evidence columns; drop the double-ownership (the online decoder no longer needs to pre-seed evidence-source columns — they are computed once here).</li>
+<li class="task-list-item"><label class="task-list-control"><input type="checkbox" disabled/><span class="task-list-indicator"></span></label> <strong>Step 4: Run</strong> <code>tests/test_core_identity_postprocess_df.py -q</code>. PASS.</li>
+<li class="task-list-item"><label class="task-list-control"><input type="checkbox" disabled/><span class="task-list-indicator"></span></label> <strong>Step 5: Commit</strong> — <code>feat(identity): rich-export writes IdentityEvidence* summary (single owner) (Phase 6 Task 4)</code>.</li>
+</ul>
+<hr />
+<h3 id="task-5-post-hoc-consumers-overlay-migrate-to-final-derive-uniqueidentitykey-realtime-mirror">Task 5: Post-hoc consumers + overlay migrate to Final; derive UniqueIdentityKey; realtime mirror<a class="headerlink" href="#task-5-post-hoc-consumers-overlay-migrate-to-final-derive-uniqueidentitykey-realtime-mirror" title="Permanent link">&para;</a></h3>
+<p><strong>Files:</strong>
+- Modify: <code>src/hydra_suite/core/post/identity_postprocess.py</code> (:131-230)
+- Modify: <code>src/hydra_suite/core/post/processing.py</code> (:402-416, :1311-1400, :1547-1559, :2657-2678, :3660-3664)
+- Modify: <code>src/hydra_suite/core/post/media_export.py</code> (:193-224)
+- Test: <code>tests/test_identity_postprocess.py</code>, <code>tests/test_identity_conflict_resolution.py</code>, <code>tests/test_postproc_invariants.py</code>, <code>tests/test_post_tracklet_relinking.py</code>, <code>tests/test_media_export.py</code>, <code>tests/test_postproc_identity_gating.py</code></p>
+<p><strong>Interfaces:</strong>
+- Consumes: Final family (Task 3), Evidence family (Task 4), Realtime family (Task 2).
+- Produces:
+  - Consensus fill + conflict resolution + tracklet relinking operate on <code>IdentityFinal*</code> and set <code>IdentityFinalConflictResolved</code>. The conflict resolver's per-label pairwise-overlap dominance (Phase 5) is preserved — only the column names change.
+  - <code>UniqueIdentityKey</code> derived from <code>IdentityFinalLabel</code> (+ source), computed once at the end of post-processing.
+  - <strong>Realtime→Final mirror:</strong> a single non-destructive step (best placed at the entry of <code>apply_identity_postprocessing_to_df</code> when the fragment solver did NOT run, or after it for rows the solver left empty) copies <code>IdentityRealtime{Label,ID,Confidence}</code> into <code>IdentityFinal*</code> with <code>IdentityFinalSource = "realtime"</code>, leaving realtime columns intact. Tag-resolved rows get <code>IdentityFinalSource = "tag"</code>.
+  - Video overlay priority list → <code>[UNIQUE_IDENTITY_KEY, FINAL_LABEL, FINAL_SMOOTHED_LABEL]</code> (i.e. <code>["UniqueIdentityKey", "IdentityFinalLabel", "IdentityFinalSmoothedLabel"]</code>).</p>
+<ul class="task-list">
+<li class="task-list-item"><label class="task-list-control"><input type="checkbox" disabled/><span class="task-list-indicator"></span></label> <strong>Step 1: Write/adjust the failing tests</strong> across the listed files to the new names + add an assertion that with post-hoc OFF, <code>IdentityFinalLabel</code> equals <code>IdentityRealtimeLabel</code> and <code>IdentityFinalSource == "realtime"</code>.</li>
+<li class="task-list-item"><label class="task-list-control"><input type="checkbox" disabled/><span class="task-list-indicator"></span></label> <strong>Step 2: Run — fails.</strong></li>
+<li class="task-list-item"><label class="task-list-control"><input type="checkbox" disabled/><span class="task-list-indicator"></span></label> <strong>Step 3: Implement</strong> the renames + the realtime→Final mirror + <code>UniqueIdentityKey</code> derivation. Update <code>_IDENTITY_LABEL_COL</code>/<code>_IDENTITY_CONFLICT_COL</code> etc. constants in <code>processing.py</code> to the Final names. Ensure no path writes a realtime column.</li>
+<li class="task-list-item"><label class="task-list-control"><input type="checkbox" disabled/><span class="task-list-indicator"></span></label> <strong>Step 4: Run</strong> the full listed test set. PASS.</li>
+<li class="task-list-item"><label class="task-list-control"><input type="checkbox" disabled/><span class="task-list-indicator"></span></label> <strong>Step 5: Commit</strong> — <code>feat(identity): post-hoc + overlay on IdentityFinal*; realtime→Final mirror; derive UniqueIdentityKey (Phase 6 Task 5)</code>.</li>
+</ul>
+<hr />
+<h3 id="task-6-honest-ui-identity-models-panel">Task 6: Honest UI — Identity Models panel<a class="headerlink" href="#task-6-honest-ui-identity-models-panel" title="Permanent link">&para;</a></h3>
+<p><strong>Files:</strong>
+- Modify: <code>src/hydra_suite/trackerkit/gui/panels/identity_panel.py</code> (:46, :64, :87-394, CNN row :759-984)
+- Test: <code>tests/test_trackerkit_tracking_orchestrator_dialogs.py</code> (extend the existing panel round-trip test) or a focused new panel test.</p>
+<p><strong>Interfaces:</strong>
+- Consumes: <code>IdentityConfig</code> via the cfg-dict round-trip (<code>gui/orchestrators/config.py</code>).
+- Produces: a status line under the master toggle stating verbatim: <em>"Identity evidence is computed during inference and cached — available to both realtime and post-hoc."</em>; a per-<code>unique_identifier</code> CNN-row calibration status/affordance (fitted / not fitted + a fit action hook); corrected tooltips (no claims about realtime/post-hoc coupling). No config-key changes here — labels/tooltips/status only.</p>
+<ul class="task-list">
+<li class="task-list-item"><label class="task-list-control"><input type="checkbox" disabled/><span class="task-list-indicator"></span></label> <strong>Step 1: Write the failing test</strong> asserting the status-line text exists and the calibration status widget is present for a <code>unique_identifier</code> CNN row.</li>
+<li class="task-list-item"><label class="task-list-control"><input type="checkbox" disabled/><span class="task-list-indicator"></span></label> <strong>Step 2: Run — fails.</strong></li>
+<li class="task-list-item"><label class="task-list-control"><input type="checkbox" disabled/><span class="task-list-indicator"></span></label> <strong>Step 3: Implement</strong> the status line + calibration affordance + tooltip corrections.</li>
+<li class="task-list-item"><label class="task-list-control"><input type="checkbox" disabled/><span class="task-list-indicator"></span></label> <strong>Step 4: Run</strong> the panel test (headless Qt via <code>QT_QPA_PLATFORM=offscreen</code>). PASS.</li>
+<li class="task-list-item"><label class="task-list-control"><input type="checkbox" disabled/><span class="task-list-indicator"></span></label> <strong>Step 5: Commit</strong> — <code>feat(trackerkit): Identity Models panel — honest status + calibration affordance (Phase 6 Task 6)</code>.</li>
+</ul>
+<hr />
+<h3 id="task-7-honest-ui-realtime-identity-tracking-panel-post-hoc-identity-post-process-panel">Task 7: Honest UI — Realtime Identity (tracking panel) + Post-hoc Identity (post-process panel)<a class="headerlink" href="#task-7-honest-ui-realtime-identity-tracking-panel-post-hoc-identity-post-process-panel" title="Permanent link">&para;</a></h3>
+<p><strong>Files:</strong>
+- Modify: <code>src/hydra_suite/trackerkit/gui/panels/tracking_panel.py</code> (:516-707)
+- Modify: <code>src/hydra_suite/trackerkit/gui/panels/postprocess_panel.py</code> (:573-830)
+- Modify: <code>src/hydra_suite/trackerkit/config/identity_schema.py</code> (:52-55 emit reserved fields)
+- Modify: <code>src/hydra_suite/trackerkit/engine_params.py</code> (:604-635, :710 thread post-hoc keys)
+- Test: <code>tests/test_postproc_identity_gating.py</code>, panel round-trip test.</p>
+<p><strong>Interfaces:</strong>
+- Consumes: <code>IdentityConfig</code> (realtime + posthoc).
+- Produces:
+  - Tracking panel: the realtime group title/labels/tooltips scoped strictly to <em>association influence</em>; the ~:538 tooltip states plainly it affects realtime only and says nothing about post-hoc.
+  - Post-process panel: "Assign identities from final trajectories" as a first-class independent toggle (already decoupled in Phase 5 — surface it as the group's own enable, never gated on the realtime flag); add a forward-backward <strong>smoothing</strong> enable that maps to <code>PostHocIdentityConfig.smoothing_enabled</code> → a new <code>IDENTITY_ENABLE_SMOOTHING</code> engine key consumed by <code>run_fragment_solver</code> (the smoother currently always runs when cache present; make it honor the flag, default True). Corrected tooltip (no false "still works with realtime off" claim — it is now literally true, so state it correctly).
+  - <code>identity_schema.py</code> emits <code>smoothing_enabled</code>/<code>changepoint_enabled</code>; <code>engine_params.py</code> threads them.</p>
+<ul class="task-list">
+<li class="task-list-item"><label class="task-list-control"><input type="checkbox" disabled/><span class="task-list-indicator"></span></label> <strong>Step 1: Write the failing test</strong> asserting: post-hoc toggle enable-state is independent of <code>enable_identity_in_tracking</code>; the smoothing checkbox round-trips to <code>IDENTITY_ENABLE_SMOOTHING</code>; the tracking tooltip no longer contains any post-hoc claim.</li>
+<li class="task-list-item"><label class="task-list-control"><input type="checkbox" disabled/><span class="task-list-indicator"></span></label> <strong>Step 2: Run — fails.</strong></li>
+<li class="task-list-item"><label class="task-list-control"><input type="checkbox" disabled/><span class="task-list-indicator"></span></label> <strong>Step 3: Implement</strong> the label/tooltip re-scope + the smoothing control + the engine-key threading + honor the flag in <code>run_fragment_solver</code>.</li>
+<li class="task-list-item"><label class="task-list-control"><input type="checkbox" disabled/><span class="task-list-indicator"></span></label> <strong>Step 4: Run</strong> the gating + panel tests. PASS.</li>
+<li class="task-list-item"><label class="task-list-control"><input type="checkbox" disabled/><span class="task-list-indicator"></span></label> <strong>Step 5: Commit</strong> — <code>feat(trackerkit): realtime vs post-hoc panels honest + independent; wire smoothing toggle (Phase 6 Task 7)</code>.</li>
+</ul>
+<hr />
+<h3 id="task-8-sweep-for-stragglers-full-suite-green">Task 8: Sweep for stragglers + full-suite green<a class="headerlink" href="#task-8-sweep-for-stragglers-full-suite-green" title="Permanent link">&para;</a></h3>
+<p><strong>Files:</strong>
+- Modify: any remaining legacy-name references surfaced by grep (<code>tests/identity/test_evidence_sidecar_consumption.py</code>, tooltips in <code>postprocess_panel.py:780</code>/<code>identity_panel.py:806-809</code>, docstrings).</p>
+<ul class="task-list">
+<li class="task-list-item"><label class="task-list-control"><input type="checkbox" disabled/><span class="task-list-indicator"></span></label> <strong>Step 1:</strong> <code>grep -rnE "IdentityAssigned|IdentityOffline|IdentitySmoothed|IdentityPosteriorMargin|IdentityEntropy(?!)|IdentityCommitted|IdentitySlotLockLabel|IdentityEvidenceSources|IdentityConflictFlag|IdentityConflictResolved|IdentityFragmentScore" src/ tests/</code> — expect only intentional retirements (none in output columns). Fix each straggler.</li>
+<li class="task-list-item"><label class="task-list-control"><input type="checkbox" disabled/><span class="task-list-indicator"></span></label> <strong>Step 2:</strong> Run the identity-focused suites + the headless suite: <code>tests/identity/ tests/test_fragment_solver.py tests/test_identity_postprocess.py tests/test_identity_conflict_resolution.py tests/test_postproc_invariants.py tests/test_post_tracklet_relinking.py tests/test_media_export.py tests/test_core_identity_postprocess_df.py tests/test_postproc_identity_gating.py tests/test_core_qtfree_slice2.py tests/test_trackerkit_headless_tracking.py tests/test_trackerkit_tracking_orchestrator_dialogs.py</code>. All PASS.</li>
+<li class="task-list-item"><label class="task-list-control"><input type="checkbox" disabled/><span class="task-list-indicator"></span></label> <strong>Step 3:</strong> <code>make format-check</code> + <code>make lint-moderate</code> on changed files.</li>
+<li class="task-list-item"><label class="task-list-control"><input type="checkbox" disabled/><span class="task-list-indicator"></span></label> <strong>Step 4: Commit</strong> — <code>chore(identity): retire last legacy identity-column names; Phase 6 sweep green (Phase 6 Task 8)</code>.</li>
+</ul>
+<hr />
+<h2 id="phase-end-gate-controller-after-task-8">Phase-end gate (controller, after Task 8)<a class="headerlink" href="#phase-end-gate-controller-after-task-8" title="Permanent link">&para;</a></h2>
+<ol>
+<li><strong>Provenance invariant:</strong> <code>tests/identity/test_provenance_no_clobber.py</code> green; grep confirms no legacy output-column names remain.</li>
+<li><strong>Positions equivalence (MPS + CUDA):</strong> baseline <code>0a0a0091</code> vs Phase-6 HEAD — positions p99 = 0, θ within head/tail π-flip noise floor, unmatched = 0, on all 7 clips. Identity columns are renamed/additive and NOT gated.</li>
+<li><strong>Real-clip provenance check:</strong> on <code>ant_cnn_identity</code> realtime-ON and realtime-OFF, confirm <code>IdentityRealtime*</code> present iff realtime ran, <code>IdentityFinalSource</code> ∈ {offline (post-hoc on), realtime (post-hoc off + realtime on)}, realtime columns never clobbered, <code>UniqueIdentityKey</code> derived.</li>
+<li><strong>Whole-branch review</strong> (opus) over the Phase-6 commit range.</li>
+<li>Bring the result to the user (checkpoint) before checkpointing Phase 6 on the branch. No merge (Phase 7 pending).</li>
+</ol>
+<h2 id="self-review-notes-author">Self-Review notes (author)<a class="headerlink" href="#self-review-notes-author" title="Permanent link">&para;</a></h2>
+<ul>
+<li>Spec coverage: Layer 5 three families ✔ (Tasks 1-5), UI reorg three panels ✔ (Tasks 6-7), tooltip correction ✔, <code>UniqueIdentityKey</code> retained ✔, "no stage overwrites" invariant ✔ (Task 3 + <code>test_provenance_no_clobber</code>).</li>
+<li>The <code>IdentityEvidenceTopLabel</code>/<code>Conf</code> are genuinely new (no legacy source) — Task 4 sources them from the evidence cache when threaded, else max <code>CNN_*_Prob</code>; acceptable summary.</li>
+<li><code>IdentitySmoothed*</code> is not in the spec's Layer-5 list; retained as <code>IdentityFinalSmoothed*</code> diagnostics rather than dropped, to avoid losing the Phase-5 per-frame smoothed decode. Flag for user if they'd rather drop it.</li>
+<li>Risk: the two-header duplication + positional writer (Task 2) is the byte-alignment landmine; the <code>fly_obb</code> smoke in Task 2 Step 4 catches misalignment early.</li>
+</ul>
+
+
+
+
+
+
+
+
+
+
+
+
+                
+              </article>
+            </div>
+          
+          
+<script>var target=document.getElementById(location.hash.slice(1));target&&target.name&&(target.checked=target.name.startsWith("__tabbed_"))</script>
+        </div>
+        
+          <button type="button" class="md-top md-icon" data-md-component="top" hidden>
+  
+  <svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 24 24"><path d="M13 20h-2V8l-5.5 5.5-1.42-1.42L12 4.16l7.92 7.92-1.42 1.42L13 8z"/></svg>
+  Back to top
+</button>
+        
+      </main>
+      
+        <footer class="md-footer">
+  
+  <div class="md-footer-meta md-typeset">
+    <div class="md-footer-meta__inner md-grid">
+      <div class="md-copyright">
+  
+  
+    Made with
+    <a href="https://squidfunk.github.io/mkdocs-material/" target="_blank" rel="noopener">
+      Material for MkDocs
+    </a>
+  
+</div>
+      
+    </div>
+  </div>
+</footer>
+      
+    </div>
+    <div class="md-dialog" data-md-component="dialog">
+      <div class="md-dialog__inner md-typeset"></div>
+    </div>
+    
+    
+    <script id="__config" type="application/json">{"base": "../../../..", "features": ["navigation.tabs", "navigation.sections", "navigation.expand", "navigation.top", "content.code.copy", "content.action.edit", "search.suggest", "search.highlight"], "search": "../../../../assets/javascripts/workers/search.6ce7567c.min.js", "translations": {"clipboard.copied": "Copied to clipboard", "clipboard.copy": "Copy to clipboard", "search.result.more.one": "1 more on this page", "search.result.more.other": "# more on this page", "search.result.none": "No matching documents", "search.result.one": "1 matching document", "search.result.other": "# matching documents", "search.result.placeholder": "Type to start searching", "search.result.term.missing": "Missing", "select.version": "Select version"}, "version": {"default": "latest", "provider": "mike"}}</script>
+    
+    
+      <script src="../../../../assets/javascripts/bundle.83f73b43.min.js"></script>
+      
+    
+  </body>
+</html>

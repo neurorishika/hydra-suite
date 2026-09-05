@@ -865,6 +865,24 @@
 </li>
       
         <li class="md-nav__item">
+  <a href="#identity-classifiers-and-non-identifying-classes" class="md-nav__link">
+    <span class="md-ellipsis">
+      Identity Classifiers and Non-Identifying Classes
+    </span>
+  </a>
+  
+</li>
+      
+        <li class="md-nav__item">
+  <a href="#final-output-vocabulary" class="md-nav__link">
+    <span class="md-ellipsis">
+      Final-Output Vocabulary
+    </span>
+  </a>
+  
+</li>
+      
+        <li class="md-nav__item">
   <a href="#typical-uses" class="md-nav__link">
     <span class="md-ellipsis">
       Typical Uses
@@ -936,6 +954,69 @@
   
   <span class="md-ellipsis">
     DetectKit
+  </span>
+  
+
+      </a>
+    </li>
+  
+
+              
+            
+              
+                
+  
+  
+  
+  
+    <li class="md-nav__item">
+      <a href="../../runbooks/detectkit-headless-training/" class="md-nav__link">
+        
+  
+  <span class="md-ellipsis">
+    DetectKit Headless Training
+  </span>
+  
+
+      </a>
+    </li>
+  
+
+              
+            
+              
+                
+  
+  
+  
+  
+    <li class="md-nav__item">
+      <a href="../detectkit-semantic-escalation/" class="md-nav__link">
+        
+  
+  <span class="md-ellipsis">
+    DetectKit: Semantic Escalation (SAM3)
+  </span>
+  
+
+      </a>
+    </li>
+  
+
+              
+            
+              
+                
+  
+  
+  
+  
+    <li class="md-nav__item">
+      <a href="../detectkit-sahi-calibration/" class="md-nav__link">
+        
+  
+  <span class="md-ellipsis">
+    DetectKit: SAHI Calibration Profiles
   </span>
   
 
@@ -1211,6 +1292,48 @@
   
   
     <li class="md-nav__item">
+      <a href="../../developer-guide/resource-containment/" class="md-nav__link">
+        
+  
+  <span class="md-ellipsis">
+    Resource Containment
+  </span>
+  
+
+      </a>
+    </li>
+  
+
+              
+            
+              
+                
+  
+  
+  
+  
+    <li class="md-nav__item">
+      <a href="../../developer-guide/profiling/" class="md-nav__link">
+        
+  
+  <span class="md-ellipsis">
+    Profiling
+  </span>
+  
+
+      </a>
+    </li>
+  
+
+              
+            
+              
+                
+  
+  
+  
+  
+    <li class="md-nav__item">
       <a href="../../developer-guide/dependency-cuda-updates/" class="md-nav__link">
         
   
@@ -1237,6 +1360,27 @@
   
   <span class="md-ellipsis">
     Performance Tuning
+  </span>
+  
+
+      </a>
+    </li>
+  
+
+              
+            
+              
+                
+  
+  
+  
+  
+    <li class="md-nav__item">
+      <a href="../../developer-guide/inference-fast-mode/" class="md-nav__link">
+        
+  
+  <span class="md-ellipsis">
+    Inference Fast Mode
   </span>
   
 
@@ -1776,6 +1920,24 @@
 </li>
       
         <li class="md-nav__item">
+  <a href="#identity-classifiers-and-non-identifying-classes" class="md-nav__link">
+    <span class="md-ellipsis">
+      Identity Classifiers and Non-Identifying Classes
+    </span>
+  </a>
+  
+</li>
+      
+        <li class="md-nav__item">
+  <a href="#final-output-vocabulary" class="md-nav__link">
+    <span class="md-ellipsis">
+      Final-Output Vocabulary
+    </span>
+  </a>
+  
+</li>
+      
+        <li class="md-nav__item">
   <a href="#typical-uses" class="md-nav__link">
     <span class="md-ellipsis">
       Typical Uses
@@ -1819,15 +1981,149 @@
 <ul>
 <li><code>ENABLE_IDENTITY_ANALYSIS</code></li>
 <li><code>IDENTITY_METHOD</code></li>
-<li>Crop size/padding constraints</li>
+<li>Crop framing (<code>canonical_margin</code>, <code>apriltag_crop_padding</code> for AprilTag)</li>
 <li>Output format and destination options</li>
 </ul>
 <h2 id="feature-meaning">Feature Meaning<a class="headerlink" href="#feature-meaning" title="Permanent link">&para;</a></h2>
 <ul>
-<li>Larger crop padding improves context but increases storage and may include neighbors.</li>
-<li>Smaller crops are efficient but risk truncation near boundaries.</li>
+<li>Crop framing for every model- and dataset-facing crop is driven by one dial,
+  <code>canonical_margin</code> (in <code>ADVANCED_CONFIG</code>, default <code>1.3</code>), together with
+  <code>REFERENCE_BODY_SIZE</code> and <code>reference_aspect_ratio</code>, which define a fixed canonical
+  canvas. A larger margin improves context but increases storage and may include
+  neighbors; a smaller margin is efficient but risks truncation near boundaries.</li>
+<li>AprilTag crops are the one exception: they are plain axis-aligned patches (a tag is
+  a rigid printed square that any rotation or rescale degrades), controlled by
+  <code>apriltag_crop_padding</code> (default <code>0.0</code> = the detection's exact axis-aligned extent;
+  range <code>-0.5</code> to <code>2.0</code>). Sufficiently negative values can shrink the padded box to
+  zero area and empty the crop entirely -- this now logs a one-time warning telling
+  you to raise the value.</li>
 <li>Method choice should reflect your marker protocol (none/color/apriltag/custom).</li>
 </ul>
+<h2 id="identity-classifiers-and-non-identifying-classes">Identity Classifiers and Non-Identifying Classes<a class="headerlink" href="#identity-classifiers-and-non-identifying-classes" title="Permanent link">&para;</a></h2>
+<p>Not every CNN classifier configured for individual analysis feeds identity
+resolution. Only classifiers marked <strong>Unique identifier</strong> in the identity
+panel contribute to the identity catalog, the Hungarian assignment that keeps
+identities unique, and the relink veto that stitches fragments across
+occlusions. Every other classifier (behavior, sex, caste, ...) is exported as
+ordinary columns and influences nothing about identity. In the clean
+<code>&lt;video&gt;_tracks.csv</code> those appear as <code>&lt;label&gt;_class</code> / <code>&lt;label&gt;_conf</code> (one
+pair per factor for a multi-factor model); identity classifiers do not, since
+their result is the <code>identity</code> / <code>identity_id</code> block.</p>
+<p>When more than one classifier is marked as a unique identifier, they
+<strong>combine</strong>: thorax colour x abdomen shape produces one composite identity
+per combination (<code>red_notch</code>, <code>blue_plain</code>, ...), not two catalogs competing
+for the same track.</p>
+<p>Some class values are not identity information at all -- an untagged animal
+classified <code>notag</code>, a smudged or ambiguous tag read. Declaring such a value
+as <strong>non-identifying</strong> (per classifier, in the identity panel) removes every
+composite it produces from the catalog entirely, so any number of tracks can
+carry that label at once without displacing a genuinely identified animal.
+Marks can be declared at three granularities, and the choice matters more
+than it looks:</p>
+<table>
+<thead>
+<tr>
+<th>Mark</th>
+<th>Matches</th>
+<th>Use when</th>
+</tr>
+</thead>
+<tbody>
+<tr>
+<td><code>notag</code></td>
+<td>that value on <strong>any</strong> axis of that model</td>
+<td>the class carries no identity wherever it appears</td>
+</tr>
+<tr>
+<td><code>front:notag</code></td>
+<td>that value on the named factor only</td>
+<td>only one tag position is unreadable</td>
+</tr>
+<tr>
+<td><code>notag_notag</code></td>
+<td>that whole composite label</td>
+<td>only the <em>fully</em> unmarked animal is non-identifying</td>
+</tr>
+</tbody>
+</table>
+<p>A bare mark is the aggressive form: marking <code>notag</code> on a two-tag scheme drops
+<code>red_notag</code> and <code>notag_blue</code> from the catalog too, so an animal with <strong>one</strong>
+readable tag also stops resolving to an identity. If a half-readable animal
+should still be identified, mark the whole composite (<code>notag_notag</code>) instead,
+which removes only the fully unmarked combination. (Per-axis evidence from the
+readable tag is retained for the relink veto either way -- it is catalog
+membership, not evidence, that the mark removes.)</p>
+<p>Tracks whose every axis reads a declared non-identifying value get a
+descriptive label instead of "unknown": <code>IdentityFinalLabel</code> is set to the
+observed composite (e.g. <code>notag_notag</code>), <code>IdentityFinalSource</code> is
+<code>nonidentifying</code>, and <code>IdentityFinalID</code> stays <code>0</code> -- the unknown slot -- so no
+downstream consumer keying on a resolved identity slot can mistake the shared
+label for a real identity.</p>
+<p>The slot travels with the label into the plain <code>&lt;video&gt;_tracks.csv</code> as
+<code>identity_id</code> (alongside <code>identity</code>, <code>identity_confidence</code>, and
+<code>identity_source</code>). <strong>Group by <code>identity_id</code>, not by <code>identity</code></strong>: five rows
+labelled <code>notag_notag</code> all carry <code>identity_id == 0</code> and are five different
+animals, distinguished by <code>id</code> (the trajectory), not one animal seen five
+times.</p>
+<p>The honest limitation: these animals get no
+identity resolution or identity-based fragment stitching across occlusions;
+relinking for them falls back to spatial and motion gates alone.</p>
+<p>See the <a href="../../schematics/trackerkit_pipeline/">per-detection processing schematic</a>
+for how this fits into the wider detection-to-identity pipeline.</p>
+<h2 id="final-output-vocabulary">Final-Output Vocabulary<a class="headerlink" href="#final-output-vocabulary" title="Permanent link">&para;</a></h2>
+<p>The debug <code>*_tracking_final_with_individual.csv</code> export carries a fixed,
+explicit vocabulary for identity provenance -- no blank/NaN values:</p>
+<ul>
+<li><strong><code>IdentityFinalSource</code></strong> is never blank. A row that carries no identity
+  provenance (no classifier ran, no cache evidence, no relink veto) reads the
+  literal string <code>"none"</code>, not an empty cell -- readers should treat blank as
+  legacy data from before this vocabulary shipped, never as a valid current
+  value.</li>
+<li><strong><code>IdentityFinalSmoothedLabel</code> / <code>IdentityFinalSmoothedConfidence</code></strong> are an
+  ungated <em>record</em> of the cache's forward-backward smoothed evidence for
+  every row that has any (its argmax label and posterior), not a
+  display value -- they are no longer threshold-gated by
+  <code>IDENTITY_DISPLAY_THRESHOLD</code>. A row with no cache evidence (no
+  <code>DetectionID</code>, e.g. a filled/interpolated row) reads
+  <code>IdentityFinalSmoothedLabel="unknown"</code> with confidence <code>0.0</code>, which is a
+  fact about that row lacking evidence, not a low-confidence classification.</li>
+<li><strong><code>IdentityFinalConflictResolved</code></strong> is always boolean (<code>True</code>/<code>False</code>),
+  never NaN.</li>
+<li><strong>Trajectories are dense.</strong> A written trajectory has no interior NaN
+  position/orientation and no gap in its frame sequence -- interior gaps are
+  interpolated and filled (kept as <code>State="occluded"</code> rows with empty
+  <code>DetectionID</code> so a consumer can still exclude them from evidence). A
+  trajectory's leading and trailing runs that carry no detection and no
+  position are dropped outright rather than left as dangling NaN rows, so
+  every trajectory's first and last row has a real position.</li>
+</ul>
+<p>Rendered/exported video overlays label each track by its resolved
+<code>IdentityFinalLabel</code> (falling back to <code>IdentityFinalSmoothedLabel</code>, then
+<code>UniqueIdentityKey</code>) using this priority chain, tier by tier:</p>
+<ol>
+<li><code>IdentityFinalLabel</code>, if the row has one and it is not the literal string
+   <code>"unknown"</code>.</li>
+<li>Otherwise <code>IdentityFinalSmoothedLabel</code>, under the same rule.</li>
+<li>Otherwise <code>UniqueIdentityKey</code> -- the raw per-frame classifier/tag
+   evidence -- but <strong>only</strong> when neither of the first two tiers had <em>any</em>
+   value, informative or not.</li>
+</ol>
+<p>A blank/missing value at a tier defers to the next tier, but the literal
+value <code>"unknown"</code> does <strong>not</strong> -- it is treated as the resolved answer for
+that track (this trajectory genuinely has no identity, not "we don't know
+yet"), so the overlay stops there and falls back to a plain <code>TrajectoryID</code>
+label/color instead of continuing down the chain to raw evidence. This
+matters because <code>"unknown"</code> is a common, expected value: any trajectory the
+fragment solver could not confidently resolve is written with
+<code>IdentityFinalLabel="unknown"</code> (see above), and a real run's unresolved
+fraction can be substantial. Without this rule, an unresolved track's video
+label/color would silently come from raw, un-smoothed per-frame evidence --
+the exact frame-to-frame flicker this priority chain exists to eliminate --
+rather than from a stable value. The on-video label matches what the CSV
+reports for that track whenever a tier resolved with an informative value;
+for a genuinely unresolved track, both the CSV (<code>"unknown"</code>) and the video
+(plain <code>TrajectoryID</code>) consistently signal "not identified," just with
+different literal tokens.</p>
 <h2 id="typical-uses">Typical Uses<a class="headerlink" href="#typical-uses" title="Permanent link">&para;</a></h2>
 <ul>
 <li>Build identity classifier training sets.</li>

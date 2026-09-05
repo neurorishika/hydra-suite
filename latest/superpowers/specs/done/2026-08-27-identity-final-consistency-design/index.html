@@ -1,0 +1,2283 @@
+
+<!doctype html>
+<html lang="en" class="no-js">
+  <head>
+    
+      <meta charset="utf-8">
+      <meta name="viewport" content="width=device-width,initial-scale=1">
+      
+        <meta name="description" content="User and developer documentation for HYDRA Suite">
+      
+      
+      
+        <link rel="canonical" href="https://neurorishika.github.io/hydra-suite/latest/superpowers/specs/done/2026-08-27-identity-final-consistency-design/">
+      
+      
+      
+      
+      <link rel="icon" href="../../../../assets/images/favicon.png">
+      <meta name="generator" content="mkdocs-1.6.1, mkdocs-material-9.5.43">
+    
+    
+      
+        <title>Identity Final-Output Consistency — Design - HYDRA Suite Docs</title>
+      
+    
+    
+      <link rel="stylesheet" href="../../../../assets/stylesheets/main.0253249f.min.css">
+      
+        
+        <link rel="stylesheet" href="../../../../assets/stylesheets/palette.06af60db.min.css">
+      
+      
+
+
+    
+    
+      
+    
+    
+      
+        
+        
+        <link rel="preconnect" href="https://fonts.gstatic.com" crossorigin>
+        <link rel="stylesheet" href="https://fonts.googleapis.com/css?family=Roboto:300,300i,400,400i,700,700i%7CRoboto+Mono:400,400i,700,700i&display=fallback">
+        <style>:root{--md-text-font:"Roboto";--md-code-font:"Roboto Mono"}</style>
+      
+    
+    
+      <link rel="stylesheet" href="../../../../assets/_mkdocstrings.css">
+    
+    <script>__md_scope=new URL("../../../..",location),__md_hash=e=>[...e].reduce(((e,_)=>(e<<5)-e+_.charCodeAt(0)),0),__md_get=(e,_=localStorage,t=__md_scope)=>JSON.parse(_.getItem(t.pathname+"."+e)),__md_set=(e,_,t=localStorage,a=__md_scope)=>{try{t.setItem(a.pathname+"."+e,JSON.stringify(_))}catch(e){}}</script>
+    
+      
+
+    
+    
+    
+  </head>
+  
+  
+    
+    
+      
+    
+    
+    
+    
+    <body dir="ltr" data-md-color-scheme="default" data-md-color-primary="blue" data-md-color-accent="light-blue">
+  
+    
+    <input class="md-toggle" data-md-toggle="drawer" type="checkbox" id="__drawer" autocomplete="off">
+    <input class="md-toggle" data-md-toggle="search" type="checkbox" id="__search" autocomplete="off">
+    <label class="md-overlay" for="__drawer"></label>
+    <div data-md-component="skip">
+      
+        
+        <a href="#identity-final-output-consistency-design" class="md-skip">
+          Skip to content
+        </a>
+      
+    </div>
+    <div data-md-component="announce">
+      
+    </div>
+    
+      <div data-md-color-scheme="default" data-md-component="outdated" hidden>
+        
+      </div>
+    
+    
+      
+
+<header class="md-header" data-md-component="header">
+  <nav class="md-header__inner md-grid" aria-label="Header">
+    <a href="../../../.." title="HYDRA Suite Docs" class="md-header__button md-logo" aria-label="HYDRA Suite Docs" data-md-component="logo">
+      
+  
+  <svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 24 24"><path d="M12 8a3 3 0 0 0 3-3 3 3 0 0 0-3-3 3 3 0 0 0-3 3 3 3 0 0 0 3 3m0 3.54C9.64 9.35 6.5 8 3 8v11c3.5 0 6.64 1.35 9 3.54 2.36-2.19 5.5-3.54 9-3.54V8c-3.5 0-6.64 1.35-9 3.54"/></svg>
+
+    </a>
+    <label class="md-header__button md-icon" for="__drawer">
+      
+      <svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 24 24"><path d="M3 6h18v2H3zm0 5h18v2H3zm0 5h18v2H3z"/></svg>
+    </label>
+    <div class="md-header__title" data-md-component="header-title">
+      <div class="md-header__ellipsis">
+        <div class="md-header__topic">
+          <span class="md-ellipsis">
+            HYDRA Suite Docs
+          </span>
+        </div>
+        <div class="md-header__topic" data-md-component="header-topic">
+          <span class="md-ellipsis">
+            
+              Identity Final-Output Consistency — Design
+            
+          </span>
+        </div>
+      </div>
+    </div>
+    
+      
+        <form class="md-header__option" data-md-component="palette">
+  
+    
+    
+    
+    <input class="md-option" data-md-color-media="(prefers-color-scheme: light)" data-md-color-scheme="default" data-md-color-primary="blue" data-md-color-accent="light-blue"  aria-label="Switch to dark mode"  type="radio" name="__palette" id="__palette_0">
+    
+      <label class="md-header__button md-icon" title="Switch to dark mode" for="__palette_1" hidden>
+        <svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 24 24"><path d="m17.75 4.09-2.53 1.94.91 3.06-2.63-1.81-2.63 1.81.91-3.06-2.53-1.94L12.44 4l1.06-3 1.06 3zm3.5 6.91-1.64 1.25.59 1.98-1.7-1.17-1.7 1.17.59-1.98L15.75 11l2.06-.05L18.5 9l.69 1.95zm-2.28 4.95c.83-.08 1.72 1.1 1.19 1.85-.32.45-.66.87-1.08 1.27C15.17 23 8.84 23 4.94 19.07c-3.91-3.9-3.91-10.24 0-14.14.4-.4.82-.76 1.27-1.08.75-.53 1.93.36 1.85 1.19-.27 2.86.69 5.83 2.89 8.02a9.96 9.96 0 0 0 8.02 2.89m-1.64 2.02a12.08 12.08 0 0 1-7.8-3.47c-2.17-2.19-3.33-5-3.49-7.82-2.81 3.14-2.7 7.96.31 10.98 3.02 3.01 7.84 3.12 10.98.31"/></svg>
+      </label>
+    
+  
+    
+    
+    
+    <input class="md-option" data-md-color-media="(prefers-color-scheme: dark)" data-md-color-scheme="slate" data-md-color-primary="blue" data-md-color-accent="light-blue"  aria-label="Switch to light mode"  type="radio" name="__palette" id="__palette_1">
+    
+      <label class="md-header__button md-icon" title="Switch to light mode" for="__palette_0" hidden>
+        <svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 24 24"><path d="M12 7a5 5 0 0 1 5 5 5 5 0 0 1-5 5 5 5 0 0 1-5-5 5 5 0 0 1 5-5m0 2a3 3 0 0 0-3 3 3 3 0 0 0 3 3 3 3 0 0 0 3-3 3 3 0 0 0-3-3m0-7 2.39 3.42C13.65 5.15 12.84 5 12 5s-1.65.15-2.39.42zM3.34 7l4.16-.35A7.2 7.2 0 0 0 5.94 8.5c-.44.74-.69 1.5-.83 2.29zm.02 10 1.76-3.77a7.131 7.131 0 0 0 2.38 4.14zM20.65 7l-1.77 3.79a7.02 7.02 0 0 0-2.38-4.15zm-.01 10-4.14.36c.59-.51 1.12-1.14 1.54-1.86.42-.73.69-1.5.83-2.29zM12 22l-2.41-3.44c.74.27 1.55.44 2.41.44.82 0 1.63-.17 2.37-.44z"/></svg>
+      </label>
+    
+  
+</form>
+      
+    
+    
+      <script>var palette=__md_get("__palette");if(palette&&palette.color){if("(prefers-color-scheme)"===palette.color.media){var media=matchMedia("(prefers-color-scheme: light)"),input=document.querySelector(media.matches?"[data-md-color-media='(prefers-color-scheme: light)']":"[data-md-color-media='(prefers-color-scheme: dark)']");palette.color.media=input.getAttribute("data-md-color-media"),palette.color.scheme=input.getAttribute("data-md-color-scheme"),palette.color.primary=input.getAttribute("data-md-color-primary"),palette.color.accent=input.getAttribute("data-md-color-accent")}for(var[key,value]of Object.entries(palette.color))document.body.setAttribute("data-md-color-"+key,value)}</script>
+    
+    
+    
+      <label class="md-header__button md-icon" for="__search">
+        
+        <svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 24 24"><path d="M9.5 3A6.5 6.5 0 0 1 16 9.5c0 1.61-.59 3.09-1.56 4.23l.27.27h.79l5 5-1.5 1.5-5-5v-.79l-.27-.27A6.52 6.52 0 0 1 9.5 16 6.5 6.5 0 0 1 3 9.5 6.5 6.5 0 0 1 9.5 3m0 2C7 5 5 7 5 9.5S7 14 9.5 14 14 12 14 9.5 12 5 9.5 5"/></svg>
+      </label>
+      <div class="md-search" data-md-component="search" role="dialog">
+  <label class="md-search__overlay" for="__search"></label>
+  <div class="md-search__inner" role="search">
+    <form class="md-search__form" name="search">
+      <input type="text" class="md-search__input" name="query" aria-label="Search" placeholder="Search" autocapitalize="off" autocorrect="off" autocomplete="off" spellcheck="false" data-md-component="search-query" required>
+      <label class="md-search__icon md-icon" for="__search">
+        
+        <svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 24 24"><path d="M9.5 3A6.5 6.5 0 0 1 16 9.5c0 1.61-.59 3.09-1.56 4.23l.27.27h.79l5 5-1.5 1.5-5-5v-.79l-.27-.27A6.52 6.52 0 0 1 9.5 16 6.5 6.5 0 0 1 3 9.5 6.5 6.5 0 0 1 9.5 3m0 2C7 5 5 7 5 9.5S7 14 9.5 14 14 12 14 9.5 12 5 9.5 5"/></svg>
+        
+        <svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 24 24"><path d="M20 11v2H8l5.5 5.5-1.42 1.42L4.16 12l7.92-7.92L13.5 5.5 8 11z"/></svg>
+      </label>
+      <nav class="md-search__options" aria-label="Search">
+        
+        <button type="reset" class="md-search__icon md-icon" title="Clear" aria-label="Clear" tabindex="-1">
+          
+          <svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 24 24"><path d="M19 6.41 17.59 5 12 10.59 6.41 5 5 6.41 10.59 12 5 17.59 6.41 19 12 13.41 17.59 19 19 17.59 13.41 12z"/></svg>
+        </button>
+      </nav>
+      
+        <div class="md-search__suggest" data-md-component="search-suggest"></div>
+      
+    </form>
+    <div class="md-search__output">
+      <div class="md-search__scrollwrap" tabindex="0" data-md-scrollfix>
+        <div class="md-search-result" data-md-component="search-result">
+          <div class="md-search-result__meta">
+            Initializing search
+          </div>
+          <ol class="md-search-result__list" role="presentation"></ol>
+        </div>
+      </div>
+    </div>
+  </div>
+</div>
+    
+    
+      <div class="md-header__source">
+        <a href="https://github.com/neurorishika/hydra-suite" title="Go to repository" class="md-source" data-md-component="source">
+  <div class="md-source__icon md-icon">
+    
+    <svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 448 512"><!--! Font Awesome Free 6.6.0 by @fontawesome - https://fontawesome.com License - https://fontawesome.com/license/free (Icons: CC BY 4.0, Fonts: SIL OFL 1.1, Code: MIT License) Copyright 2024 Fonticons, Inc.--><path d="M439.55 236.05 244 40.45a28.87 28.87 0 0 0-40.81 0l-40.66 40.63 51.52 51.52c27.06-9.14 52.68 16.77 43.39 43.68l49.66 49.66c34.23-11.8 61.18 31 35.47 56.69-26.49 26.49-70.21-2.87-56-37.34L240.22 199v121.85c25.3 12.54 22.26 41.85 9.08 55a34.34 34.34 0 0 1-48.55 0c-17.57-17.6-11.07-46.91 11.25-56v-123c-20.8-8.51-24.6-30.74-18.64-45L142.57 101 8.45 235.14a28.86 28.86 0 0 0 0 40.81l195.61 195.6a28.86 28.86 0 0 0 40.8 0l194.69-194.69a28.86 28.86 0 0 0 0-40.81"/></svg>
+  </div>
+  <div class="md-source__repository">
+    neurorishika/hydra-suite
+  </div>
+</a>
+      </div>
+    
+  </nav>
+  
+</header>
+    
+    <div class="md-container" data-md-component="container">
+      
+      
+        
+          
+            
+<nav class="md-tabs" aria-label="Tabs" data-md-component="tabs">
+  <div class="md-grid">
+    <ul class="md-tabs__list">
+      
+        
+  
+  
+  
+    <li class="md-tabs__item">
+      <a href="../../../.." class="md-tabs__link">
+        
+  
+    
+  
+  Home
+
+      </a>
+    </li>
+  
+
+      
+        
+  
+  
+  
+    
+    
+      <li class="md-tabs__item">
+        <a href="../../../../getting-started/installation/" class="md-tabs__link">
+          
+  
+  Getting Started
+
+        </a>
+      </li>
+    
+  
+
+      
+        
+  
+  
+  
+    
+    
+      <li class="md-tabs__item">
+        <a href="../../../../user-guide/overview/" class="md-tabs__link">
+          
+  
+  User Guide
+
+        </a>
+      </li>
+    
+  
+
+      
+        
+  
+  
+  
+    
+    
+      <li class="md-tabs__item">
+        <a href="../../../../developer-guide/architecture/" class="md-tabs__link">
+          
+  
+  Developer Guide
+
+        </a>
+      </li>
+    
+  
+
+      
+        
+  
+  
+  
+    
+    
+      <li class="md-tabs__item">
+        <a href="../../../../reference/api-index/" class="md-tabs__link">
+          
+  
+  Reference
+
+        </a>
+      </li>
+    
+  
+
+      
+    </ul>
+  </div>
+</nav>
+          
+        
+      
+      <main class="md-main" data-md-component="main">
+        <div class="md-main__inner md-grid">
+          
+            
+              
+              <div class="md-sidebar md-sidebar--primary" data-md-component="sidebar" data-md-type="navigation" >
+                <div class="md-sidebar__scrollwrap">
+                  <div class="md-sidebar__inner">
+                    
+
+
+  
+
+
+<nav class="md-nav md-nav--primary md-nav--lifted" aria-label="Navigation" data-md-level="0">
+  <label class="md-nav__title" for="__drawer">
+    <a href="../../../.." title="HYDRA Suite Docs" class="md-nav__button md-logo" aria-label="HYDRA Suite Docs" data-md-component="logo">
+      
+  
+  <svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 24 24"><path d="M12 8a3 3 0 0 0 3-3 3 3 0 0 0-3-3 3 3 0 0 0-3 3 3 3 0 0 0 3 3m0 3.54C9.64 9.35 6.5 8 3 8v11c3.5 0 6.64 1.35 9 3.54 2.36-2.19 5.5-3.54 9-3.54V8c-3.5 0-6.64 1.35-9 3.54"/></svg>
+
+    </a>
+    HYDRA Suite Docs
+  </label>
+  
+    <div class="md-nav__source">
+      <a href="https://github.com/neurorishika/hydra-suite" title="Go to repository" class="md-source" data-md-component="source">
+  <div class="md-source__icon md-icon">
+    
+    <svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 448 512"><!--! Font Awesome Free 6.6.0 by @fontawesome - https://fontawesome.com License - https://fontawesome.com/license/free (Icons: CC BY 4.0, Fonts: SIL OFL 1.1, Code: MIT License) Copyright 2024 Fonticons, Inc.--><path d="M439.55 236.05 244 40.45a28.87 28.87 0 0 0-40.81 0l-40.66 40.63 51.52 51.52c27.06-9.14 52.68 16.77 43.39 43.68l49.66 49.66c34.23-11.8 61.18 31 35.47 56.69-26.49 26.49-70.21-2.87-56-37.34L240.22 199v121.85c25.3 12.54 22.26 41.85 9.08 55a34.34 34.34 0 0 1-48.55 0c-17.57-17.6-11.07-46.91 11.25-56v-123c-20.8-8.51-24.6-30.74-18.64-45L142.57 101 8.45 235.14a28.86 28.86 0 0 0 0 40.81l195.61 195.6a28.86 28.86 0 0 0 40.8 0l194.69-194.69a28.86 28.86 0 0 0 0-40.81"/></svg>
+  </div>
+  <div class="md-source__repository">
+    neurorishika/hydra-suite
+  </div>
+</a>
+    </div>
+  
+  <ul class="md-nav__list" data-md-scrollfix>
+    
+      
+      
+  
+  
+  
+  
+    <li class="md-nav__item">
+      <a href="../../../.." class="md-nav__link">
+        
+  
+  <span class="md-ellipsis">
+    Home
+  </span>
+  
+
+      </a>
+    </li>
+  
+
+    
+      
+      
+  
+  
+  
+  
+    
+    
+    
+      
+      
+        
+      
+    
+    
+    <li class="md-nav__item md-nav__item--nested">
+      
+        
+        
+          
+        
+        <input class="md-nav__toggle md-toggle md-toggle--indeterminate" type="checkbox" id="__nav_2" >
+        
+          
+          <label class="md-nav__link" for="__nav_2" id="__nav_2_label" tabindex="0">
+            
+  
+  <span class="md-ellipsis">
+    Getting Started
+  </span>
+  
+
+            <span class="md-nav__icon md-icon"></span>
+          </label>
+        
+        <nav class="md-nav" data-md-level="1" aria-labelledby="__nav_2_label" aria-expanded="false">
+          <label class="md-nav__title" for="__nav_2">
+            <span class="md-nav__icon md-icon"></span>
+            Getting Started
+          </label>
+          <ul class="md-nav__list" data-md-scrollfix>
+            
+              
+                
+  
+  
+  
+  
+    <li class="md-nav__item">
+      <a href="../../../../getting-started/installation/" class="md-nav__link">
+        
+  
+  <span class="md-ellipsis">
+    Installation
+  </span>
+  
+
+      </a>
+    </li>
+  
+
+              
+            
+              
+                
+  
+  
+  
+  
+    <li class="md-nav__item">
+      <a href="../../../../getting-started/environments/" class="md-nav__link">
+        
+  
+  <span class="md-ellipsis">
+    Environments and Makefile
+  </span>
+  
+
+      </a>
+    </li>
+  
+
+              
+            
+              
+                
+  
+  
+  
+  
+    <li class="md-nav__item">
+      <a href="../../../../getting-started/integrations/" class="md-nav__link">
+        
+  
+  <span class="md-ellipsis">
+    Integrations
+  </span>
+  
+
+      </a>
+    </li>
+  
+
+              
+            
+              
+                
+  
+  
+  
+  
+    <li class="md-nav__item">
+      <a href="../../../../getting-started/quickstart-hydra/" class="md-nav__link">
+        
+  
+  <span class="md-ellipsis">
+    Quickstart (TrackerKit)
+  </span>
+  
+
+      </a>
+    </li>
+  
+
+              
+            
+              
+                
+  
+  
+  
+  
+    <li class="md-nav__item">
+      <a href="../../../../getting-started/quickstart-posekit/" class="md-nav__link">
+        
+  
+  <span class="md-ellipsis">
+    Quickstart (PoseKit)
+  </span>
+  
+
+      </a>
+    </li>
+  
+
+              
+            
+              
+                
+  
+  
+  
+  
+    <li class="md-nav__item">
+      <a href="../../../../getting-started/platforms/" class="md-nav__link">
+        
+  
+  <span class="md-ellipsis">
+    Platform Notes
+  </span>
+  
+
+      </a>
+    </li>
+  
+
+              
+            
+          </ul>
+        </nav>
+      
+    </li>
+  
+
+    
+      
+      
+  
+  
+  
+  
+    
+    
+    
+      
+      
+        
+      
+    
+    
+    <li class="md-nav__item md-nav__item--nested">
+      
+        
+        
+          
+        
+        <input class="md-nav__toggle md-toggle md-toggle--indeterminate" type="checkbox" id="__nav_3" >
+        
+          
+          <label class="md-nav__link" for="__nav_3" id="__nav_3_label" tabindex="0">
+            
+  
+  <span class="md-ellipsis">
+    User Guide
+  </span>
+  
+
+            <span class="md-nav__icon md-icon"></span>
+          </label>
+        
+        <nav class="md-nav" data-md-level="1" aria-labelledby="__nav_3_label" aria-expanded="false">
+          <label class="md-nav__title" for="__nav_3">
+            <span class="md-nav__icon md-icon"></span>
+            User Guide
+          </label>
+          <ul class="md-nav__list" data-md-scrollfix>
+            
+              
+                
+  
+  
+  
+  
+    <li class="md-nav__item">
+      <a href="../../../../user-guide/overview/" class="md-nav__link">
+        
+  
+  <span class="md-ellipsis">
+    Overview
+  </span>
+  
+
+      </a>
+    </li>
+  
+
+              
+            
+              
+                
+  
+  
+  
+  
+    <li class="md-nav__item">
+      <a href="../../../../user-guide/workflow/" class="md-nav__link">
+        
+  
+  <span class="md-ellipsis">
+    End-to-End Workflow
+  </span>
+  
+
+      </a>
+    </li>
+  
+
+              
+            
+              
+                
+  
+  
+  
+  
+    <li class="md-nav__item">
+      <a href="../../../../user-guide/detection-modes/" class="md-nav__link">
+        
+  
+  <span class="md-ellipsis">
+    Detection Modes
+  </span>
+  
+
+      </a>
+    </li>
+  
+
+              
+            
+              
+                
+  
+  
+  
+  
+    <li class="md-nav__item">
+      <a href="../../../../user-guide/tracking-and-merging/" class="md-nav__link">
+        
+  
+  <span class="md-ellipsis">
+    Tracking and Merging
+  </span>
+  
+
+      </a>
+    </li>
+  
+
+              
+            
+              
+                
+  
+  
+  
+  
+    <li class="md-nav__item">
+      <a href="../../../../user-guide/post-processing/" class="md-nav__link">
+        
+  
+  <span class="md-ellipsis">
+    Post-processing
+  </span>
+  
+
+      </a>
+    </li>
+  
+
+              
+            
+              
+                
+  
+  
+  
+  
+    <li class="md-nav__item">
+      <a href="../../../../user-guide/configuration-reference/" class="md-nav__link">
+        
+  
+  <span class="md-ellipsis">
+    Configuration Reference
+  </span>
+  
+
+      </a>
+    </li>
+  
+
+              
+            
+              
+                
+  
+  
+  
+  
+    <li class="md-nav__item">
+      <a href="../../../../user-guide/compute-runtimes/" class="md-nav__link">
+        
+  
+  <span class="md-ellipsis">
+    Compute Runtimes
+  </span>
+  
+
+      </a>
+    </li>
+  
+
+              
+            
+              
+                
+  
+  
+  
+  
+    <li class="md-nav__item">
+      <a href="../../../../user-guide/outputs-and-csv-schema/" class="md-nav__link">
+        
+  
+  <span class="md-ellipsis">
+    Outputs and CSV Schema
+  </span>
+  
+
+      </a>
+    </li>
+  
+
+              
+            
+              
+                
+  
+  
+  
+  
+    <li class="md-nav__item">
+      <a href="../../../../user-guide/dataset-generation/" class="md-nav__link">
+        
+  
+  <span class="md-ellipsis">
+    Dataset Generation
+  </span>
+  
+
+      </a>
+    </li>
+  
+
+              
+            
+              
+                
+  
+  
+  
+  
+    <li class="md-nav__item">
+      <a href="../../../../user-guide/individual-analysis/" class="md-nav__link">
+        
+  
+  <span class="md-ellipsis">
+    Individual Analysis
+  </span>
+  
+
+      </a>
+    </li>
+  
+
+              
+            
+              
+                
+  
+  
+  
+  
+    <li class="md-nav__item">
+      <a href="../../../../user-guide/posekit/" class="md-nav__link">
+        
+  
+  <span class="md-ellipsis">
+    PoseKit
+  </span>
+  
+
+      </a>
+    </li>
+  
+
+              
+            
+              
+                
+  
+  
+  
+  
+    <li class="md-nav__item">
+      <a href="../../../../user-guide/classkit/" class="md-nav__link">
+        
+  
+  <span class="md-ellipsis">
+    ClassKit
+  </span>
+  
+
+      </a>
+    </li>
+  
+
+              
+            
+              
+                
+  
+  
+  
+  
+    <li class="md-nav__item">
+      <a href="../../../../user-guide/detectkit/" class="md-nav__link">
+        
+  
+  <span class="md-ellipsis">
+    DetectKit
+  </span>
+  
+
+      </a>
+    </li>
+  
+
+              
+            
+              
+                
+  
+  
+  
+  
+    <li class="md-nav__item">
+      <a href="../../../../runbooks/detectkit-headless-training/" class="md-nav__link">
+        
+  
+  <span class="md-ellipsis">
+    DetectKit Headless Training
+  </span>
+  
+
+      </a>
+    </li>
+  
+
+              
+            
+              
+                
+  
+  
+  
+  
+    <li class="md-nav__item">
+      <a href="../../../../user-guide/detectkit-semantic-escalation/" class="md-nav__link">
+        
+  
+  <span class="md-ellipsis">
+    DetectKit: Semantic Escalation (SAM3)
+  </span>
+  
+
+      </a>
+    </li>
+  
+
+              
+            
+              
+                
+  
+  
+  
+  
+    <li class="md-nav__item">
+      <a href="../../../../user-guide/detectkit-sahi-calibration/" class="md-nav__link">
+        
+  
+  <span class="md-ellipsis">
+    DetectKit: SAHI Calibration Profiles
+  </span>
+  
+
+      </a>
+    </li>
+  
+
+              
+            
+              
+                
+  
+  
+  
+  
+    <li class="md-nav__item">
+      <a href="../../../../user-guide/filterkit/" class="md-nav__link">
+        
+  
+  <span class="md-ellipsis">
+    FilterKit
+  </span>
+  
+
+      </a>
+    </li>
+  
+
+              
+            
+              
+                
+  
+  
+  
+  
+    <li class="md-nav__item">
+      <a href="../../../../user-guide/refinekit/" class="md-nav__link">
+        
+  
+  <span class="md-ellipsis">
+    RefineKit
+  </span>
+  
+
+      </a>
+    </li>
+  
+
+              
+            
+              
+                
+  
+  
+  
+  
+    <li class="md-nav__item">
+      <a href="../../../../user-guide/troubleshooting/" class="md-nav__link">
+        
+  
+  <span class="md-ellipsis">
+    Troubleshooting
+  </span>
+  
+
+      </a>
+    </li>
+  
+
+              
+            
+          </ul>
+        </nav>
+      
+    </li>
+  
+
+    
+      
+      
+  
+  
+  
+  
+    
+    
+    
+      
+      
+        
+      
+    
+    
+    <li class="md-nav__item md-nav__item--nested">
+      
+        
+        
+          
+        
+        <input class="md-nav__toggle md-toggle md-toggle--indeterminate" type="checkbox" id="__nav_4" >
+        
+          
+          <label class="md-nav__link" for="__nav_4" id="__nav_4_label" tabindex="0">
+            
+  
+  <span class="md-ellipsis">
+    Developer Guide
+  </span>
+  
+
+            <span class="md-nav__icon md-icon"></span>
+          </label>
+        
+        <nav class="md-nav" data-md-level="1" aria-labelledby="__nav_4_label" aria-expanded="false">
+          <label class="md-nav__title" for="__nav_4">
+            <span class="md-nav__icon md-icon"></span>
+            Developer Guide
+          </label>
+          <ul class="md-nav__list" data-md-scrollfix>
+            
+              
+                
+  
+  
+  
+  
+    <li class="md-nav__item">
+      <a href="../../../../developer-guide/architecture/" class="md-nav__link">
+        
+  
+  <span class="md-ellipsis">
+    Architecture
+  </span>
+  
+
+      </a>
+    </li>
+  
+
+              
+            
+              
+                
+  
+  
+  
+  
+    <li class="md-nav__item">
+      <a href="../../../../developer-guide/module-map/" class="md-nav__link">
+        
+  
+  <span class="md-ellipsis">
+    Module Map
+  </span>
+  
+
+      </a>
+    </li>
+  
+
+              
+            
+              
+                
+  
+  
+  
+  
+    <li class="md-nav__item">
+      <a href="../../../../developer-guide/data-flow/" class="md-nav__link">
+        
+  
+  <span class="md-ellipsis">
+    Data Flow
+  </span>
+  
+
+      </a>
+    </li>
+  
+
+              
+            
+              
+                
+  
+  
+  
+  
+    <li class="md-nav__item">
+      <a href="../../../../developer-guide/tracking-algorithm-deep-dive/" class="md-nav__link">
+        
+  
+  <span class="md-ellipsis">
+    Tracking Algorithm Deep Dive
+  </span>
+  
+
+      </a>
+    </li>
+  
+
+              
+            
+              
+                
+  
+  
+  
+  
+    <li class="md-nav__item">
+      <a href="../../../../developer-guide/tracking-optimization/" class="md-nav__link">
+        
+  
+  <span class="md-ellipsis">
+    Tracking Optimization
+  </span>
+  
+
+      </a>
+    </li>
+  
+
+              
+            
+              
+                
+  
+  
+  
+  
+    <li class="md-nav__item">
+      <a href="../../../../developer-guide/gpu-backends/" class="md-nav__link">
+        
+  
+  <span class="md-ellipsis">
+    GPU Backends
+  </span>
+  
+
+      </a>
+    </li>
+  
+
+              
+            
+              
+                
+  
+  
+  
+  
+    <li class="md-nav__item">
+      <a href="../../../../developer-guide/runtime-integration/" class="md-nav__link">
+        
+  
+  <span class="md-ellipsis">
+    Runtime Integration
+  </span>
+  
+
+      </a>
+    </li>
+  
+
+              
+            
+              
+                
+  
+  
+  
+  
+    <li class="md-nav__item">
+      <a href="../../../../developer-guide/resource-containment/" class="md-nav__link">
+        
+  
+  <span class="md-ellipsis">
+    Resource Containment
+  </span>
+  
+
+      </a>
+    </li>
+  
+
+              
+            
+              
+                
+  
+  
+  
+  
+    <li class="md-nav__item">
+      <a href="../../../../developer-guide/profiling/" class="md-nav__link">
+        
+  
+  <span class="md-ellipsis">
+    Profiling
+  </span>
+  
+
+      </a>
+    </li>
+  
+
+              
+            
+              
+                
+  
+  
+  
+  
+    <li class="md-nav__item">
+      <a href="../../../../developer-guide/dependency-cuda-updates/" class="md-nav__link">
+        
+  
+  <span class="md-ellipsis">
+    CUDA Dependency Updates
+  </span>
+  
+
+      </a>
+    </li>
+  
+
+              
+            
+              
+                
+  
+  
+  
+  
+    <li class="md-nav__item">
+      <a href="../../../../developer-guide/performance-tuning/" class="md-nav__link">
+        
+  
+  <span class="md-ellipsis">
+    Performance Tuning
+  </span>
+  
+
+      </a>
+    </li>
+  
+
+              
+            
+              
+                
+  
+  
+  
+  
+    <li class="md-nav__item">
+      <a href="../../../../developer-guide/inference-fast-mode/" class="md-nav__link">
+        
+  
+  <span class="md-ellipsis">
+    Inference Fast Mode
+  </span>
+  
+
+      </a>
+    </li>
+  
+
+              
+            
+              
+                
+  
+  
+  
+  
+    <li class="md-nav__item">
+      <a href="../../../../developer-guide/confidence-metrics/" class="md-nav__link">
+        
+  
+  <span class="md-ellipsis">
+    Confidence Metrics
+  </span>
+  
+
+      </a>
+    </li>
+  
+
+              
+            
+              
+                
+  
+  
+  
+  
+    <li class="md-nav__item">
+      <a href="../../../../developer-guide/extending-detection/" class="md-nav__link">
+        
+  
+  <span class="md-ellipsis">
+    Extending Detection
+  </span>
+  
+
+      </a>
+    </li>
+  
+
+              
+            
+              
+                
+  
+  
+  
+  
+    <li class="md-nav__item">
+      <a href="../../../../developer-guide/extending-identity/" class="md-nav__link">
+        
+  
+  <span class="md-ellipsis">
+    Extending Identity
+  </span>
+  
+
+      </a>
+    </li>
+  
+
+              
+            
+              
+                
+  
+  
+  
+  
+    <li class="md-nav__item">
+      <a href="../../../../developer-guide/code-health/" class="md-nav__link">
+        
+  
+  <span class="md-ellipsis">
+    Code Health & Auditing
+  </span>
+  
+
+      </a>
+    </li>
+  
+
+              
+            
+              
+                
+  
+  
+  
+  
+    <li class="md-nav__item">
+      <a href="../../../../developer-guide/publishing/" class="md-nav__link">
+        
+  
+  <span class="md-ellipsis">
+    Publishing
+  </span>
+  
+
+      </a>
+    </li>
+  
+
+              
+            
+              
+                
+  
+  
+  
+  
+    <li class="md-nav__item">
+      <a href="../../../../developer-guide/contributing/" class="md-nav__link">
+        
+  
+  <span class="md-ellipsis">
+    Contributing
+  </span>
+  
+
+      </a>
+    </li>
+  
+
+              
+            
+          </ul>
+        </nav>
+      
+    </li>
+  
+
+    
+      
+      
+  
+  
+  
+  
+    
+    
+    
+      
+      
+        
+      
+    
+    
+    <li class="md-nav__item md-nav__item--nested">
+      
+        
+        
+          
+        
+        <input class="md-nav__toggle md-toggle md-toggle--indeterminate" type="checkbox" id="__nav_5" >
+        
+          
+          <label class="md-nav__link" for="__nav_5" id="__nav_5_label" tabindex="0">
+            
+  
+  <span class="md-ellipsis">
+    Reference
+  </span>
+  
+
+            <span class="md-nav__icon md-icon"></span>
+          </label>
+        
+        <nav class="md-nav" data-md-level="1" aria-labelledby="__nav_5_label" aria-expanded="false">
+          <label class="md-nav__title" for="__nav_5">
+            <span class="md-nav__icon md-icon"></span>
+            Reference
+          </label>
+          <ul class="md-nav__list" data-md-scrollfix>
+            
+              
+                
+  
+  
+  
+  
+    <li class="md-nav__item">
+      <a href="../../../../reference/api-index/" class="md-nav__link">
+        
+  
+  <span class="md-ellipsis">
+    API Index
+  </span>
+  
+
+      </a>
+    </li>
+  
+
+              
+            
+              
+                
+  
+  
+  
+  
+    <li class="md-nav__item">
+      <a href="../../../../reference/ui-components-hydra/" class="md-nav__link">
+        
+  
+  <span class="md-ellipsis">
+    UI Components (TrackerKit)
+  </span>
+  
+
+      </a>
+    </li>
+  
+
+              
+            
+              
+                
+  
+  
+  
+  
+    <li class="md-nav__item">
+      <a href="../../../../reference/ui-components-posekit/" class="md-nav__link">
+        
+  
+  <span class="md-ellipsis">
+    UI Components (PoseKit)
+  </span>
+  
+
+      </a>
+    </li>
+  
+
+              
+            
+              
+                
+  
+  
+  
+  
+    <li class="md-nav__item">
+      <a href="../../../../reference/api-app/" class="md-nav__link">
+        
+  
+  <span class="md-ellipsis">
+    API (Launcher)
+  </span>
+  
+
+      </a>
+    </li>
+  
+
+              
+            
+              
+                
+  
+  
+  
+  
+    <li class="md-nav__item">
+      <a href="../../../../reference/api-core/" class="md-nav__link">
+        
+  
+  <span class="md-ellipsis">
+    API (Core)
+  </span>
+  
+
+      </a>
+    </li>
+  
+
+              
+            
+              
+                
+  
+  
+  
+  
+    <li class="md-nav__item">
+      <a href="../../../../reference/api-data/" class="md-nav__link">
+        
+  
+  <span class="md-ellipsis">
+    API (Data)
+  </span>
+  
+
+      </a>
+    </li>
+  
+
+              
+            
+              
+                
+  
+  
+  
+  
+    <li class="md-nav__item">
+      <a href="../../../../reference/api-gui/" class="md-nav__link">
+        
+  
+  <span class="md-ellipsis">
+    API (TrackerKit GUI)
+  </span>
+  
+
+      </a>
+    </li>
+  
+
+              
+            
+              
+                
+  
+  
+  
+  
+    <li class="md-nav__item">
+      <a href="../../../../reference/api-widgets/" class="md-nav__link">
+        
+  
+  <span class="md-ellipsis">
+    API (Widgets)
+  </span>
+  
+
+      </a>
+    </li>
+  
+
+              
+            
+              
+                
+  
+  
+  
+  
+    <li class="md-nav__item">
+      <a href="../../../../reference/api-posekit/" class="md-nav__link">
+        
+  
+  <span class="md-ellipsis">
+    API (PoseKit)
+  </span>
+  
+
+      </a>
+    </li>
+  
+
+              
+            
+              
+                
+  
+  
+  
+  
+    <li class="md-nav__item">
+      <a href="../../../../reference/api-utils/" class="md-nav__link">
+        
+  
+  <span class="md-ellipsis">
+    API (Utils)
+  </span>
+  
+
+      </a>
+    </li>
+  
+
+              
+            
+              
+                
+  
+  
+  
+  
+    <li class="md-nav__item">
+      <a href="../../../../reference/cli-reference/" class="md-nav__link">
+        
+  
+  <span class="md-ellipsis">
+    CLI Reference
+  </span>
+  
+
+      </a>
+    </li>
+  
+
+              
+            
+              
+                
+  
+  
+  
+  
+    <li class="md-nav__item">
+      <a href="../../../../reference/technical-reference/" class="md-nav__link">
+        
+  
+  <span class="md-ellipsis">
+    Technical Reference (LaTeX)
+  </span>
+  
+
+      </a>
+    </li>
+  
+
+              
+            
+              
+                
+  
+  
+  
+  
+    <li class="md-nav__item">
+      <a href="../../../../reference/changelog/" class="md-nav__link">
+        
+  
+  <span class="md-ellipsis">
+    Changelog
+  </span>
+  
+
+      </a>
+    </li>
+  
+
+              
+            
+              
+                
+  
+  
+  
+  
+    <li class="md-nav__item">
+      <a href="../../../../reference/faq/" class="md-nav__link">
+        
+  
+  <span class="md-ellipsis">
+    FAQ
+  </span>
+  
+
+      </a>
+    </li>
+  
+
+              
+            
+          </ul>
+        </nav>
+      
+    </li>
+  
+
+    
+  </ul>
+</nav>
+                  </div>
+                </div>
+              </div>
+            
+            
+              
+              <div class="md-sidebar md-sidebar--secondary" data-md-component="sidebar" data-md-type="toc" >
+                <div class="md-sidebar__scrollwrap">
+                  <div class="md-sidebar__inner">
+                    
+
+<nav class="md-nav md-nav--secondary" aria-label="Table of contents">
+  
+  
+  
+    
+  
+  
+    <label class="md-nav__title" for="__toc">
+      <span class="md-nav__icon md-icon"></span>
+      Table of contents
+    </label>
+    <ul class="md-nav__list" data-md-component="toc" data-md-scrollfix>
+      
+        <li class="md-nav__item">
+  <a href="#1-problem-audited-on-demoidonline-run-2026-08-27-1509" class="md-nav__link">
+    <span class="md-ellipsis">
+      1. Problem (audited on DEMO/ID/ONLINE, run 2026-08-27 15:09)
+    </span>
+  </a>
+  
+    <nav class="md-nav" aria-label="1. Problem (audited on DEMO/ID/ONLINE, run 2026-08-27 15:09)">
+      <ul class="md-nav__list">
+        
+          <li class="md-nav__item">
+  <a href="#11-why-the-solver-assigns-labels-to-the-wrong-fragments-s6s7" class="md-nav__link">
+    <span class="md-ellipsis">
+      1.1 Why the solver assigns labels to the wrong fragments (S6/S7)
+    </span>
+  </a>
+  
+</li>
+        
+          <li class="md-nav__item">
+  <a href="#12-adversarial-review-corrections-folded-in" class="md-nav__link">
+    <span class="md-ellipsis">
+      1.2 Adversarial-review corrections folded in
+    </span>
+  </a>
+  
+</li>
+        
+      </ul>
+    </nav>
+  
+</li>
+      
+        <li class="md-nav__item">
+  <a href="#2-goals-non-goals" class="md-nav__link">
+    <span class="md-ellipsis">
+      2. Goals / non-goals
+    </span>
+  </a>
+  
+</li>
+      
+        <li class="md-nav__item">
+  <a href="#3-design" class="md-nav__link">
+    <span class="md-ellipsis">
+      3. Design
+    </span>
+  </a>
+  
+    <nav class="md-nav" aria-label="3. Design">
+      <ul class="md-nav__list">
+        
+          <li class="md-nav__item">
+  <a href="#31-pipeline-order-relink-first-resolve-identity-once-s5-s9" class="md-nav__link">
+    <span class="md-ellipsis">
+      3.1 Pipeline order: relink first, resolve identity once (S5, S9)
+    </span>
+  </a>
+  
+</li>
+        
+          <li class="md-nav__item">
+  <a href="#32-written-csv-invariant-s5" class="md-nav__link">
+    <span class="md-ellipsis">
+      3.2 Written-CSV invariant (S5)
+    </span>
+  </a>
+  
+</li>
+        
+          <li class="md-nav__item">
+  <a href="#33-solver-evidence-faithful-assignment-s6-s7" class="md-nav__link">
+    <span class="md-ellipsis">
+      3.3 Solver: evidence-faithful assignment (S6, S7)
+    </span>
+  </a>
+  
+</li>
+        
+          <li class="md-nav__item">
+  <a href="#34-explicit-values-s1-s2-s3-s4-s10" class="md-nav__link">
+    <span class="md-ellipsis">
+      3.4 Explicit values (S1, S2, S3, S4, S10)
+    </span>
+  </a>
+  
+</li>
+        
+          <li class="md-nav__item">
+  <a href="#35-media-s8" class="md-nav__link">
+    <span class="md-ellipsis">
+      3.5 Media (S8)
+    </span>
+  </a>
+  
+</li>
+        
+          <li class="md-nav__item">
+  <a href="#36-gate-coverage-review-o1" class="md-nav__link">
+    <span class="md-ellipsis">
+      3.6 Gate coverage (review O1)
+    </span>
+  </a>
+  
+</li>
+        
+      </ul>
+    </nav>
+  
+</li>
+      
+        <li class="md-nav__item">
+  <a href="#4-verification" class="md-nav__link">
+    <span class="md-ellipsis">
+      4. Verification
+    </span>
+  </a>
+  
+</li>
+      
+    </ul>
+  
+</nav>
+                  </div>
+                </div>
+              </div>
+            
+          
+          
+            <div class="md-content" data-md-component="content">
+              <article class="md-content__inner md-typeset">
+                
+                  
+
+  
+    <a href="https://github.com/neurorishika/hydra-suite/edit/main/docs/superpowers/specs/done/2026-08-27-identity-final-consistency-design.md" title="Edit this page" class="md-content__button md-icon">
+      
+      <svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 24 24"><path d="M10 20H6V4h7v5h5v3.1l2-2V8l-6-6H6c-1.1 0-2 .9-2 2v16c0 1.1.9 2 2 2h4zm10.2-7c.1 0 .3.1.4.2l1.3 1.3c.2.2.2.6 0 .8l-1 1-2.1-2.1 1-1c.1-.1.2-.2.4-.2m0 3.9L14.1 23H12v-2.1l6.1-6.1z"/></svg>
+    </a>
+  
+  
+
+
+<h1 id="identity-final-output-consistency-design">Identity Final-Output Consistency — Design<a class="headerlink" href="#identity-final-output-consistency-design" title="Permanent link">&para;</a></h1>
+<p><strong>Status:</strong> Shipped — merged to main (14 task commits + 5-commit final fix wave,
+scoped re-review ALL_FINDINGS_ADDRESSED, 2026-08-27). Follows
+<code>2026-08-27-identity-subsystem-repair-design.md</code> (merged <code>f2d4ca36</code>). Plan:
+<code>docs/superpowers/plans/done/2026-08-27-identity-final-consistency.md</code>.</p>
+<h2 id="1-problem-audited-on-demoidonline-run-2026-08-27-1509">1. Problem (audited on <code>DEMO/ID/ONLINE</code>, run 2026-08-27 15:09)<a class="headerlink" href="#1-problem-audited-on-demoidonline-run-2026-08-27-1509" title="Permanent link">&para;</a></h2>
+<p>Run: 25 colour-tagged <em>O. biroi</em>, frames 9300–10000 @10 fps, online identity on
+(<code>identity_weight=0.0</code>), fragment solver on, PELT on, relink on. Output
+<code>ant_tracking_final_with_individual.csv</code>: 15 849 rows, 171 trajectories. The user
+reports empty X/Y, empty identities, tracks carrying several identities, and
+labels flickering in the video. Every one of those is real and has a mechanical
+cause. Numbers below were computed from the CSV and independently recomputed by
+the adversarial reviewer; the solver mechanisms were reproduced by re-running
+<code>run_fragment_solver</code> offline on the run's own evidence cache and params (the
+re-run reproduces the <em>phenomena</em> — dead base assignment, long tracks unknown,
+labels against evidence — not the byte-exact shipped output, because the shipped
+solve ran on the 129-trajectory pre-relink frame).</p>
+<table>
+<thead>
+<tr>
+<th>#</th>
+<th>Symptom in the CSV</th>
+<th>Count</th>
+<th>Root cause (verified)</th>
+</tr>
+</thead>
+<tbody>
+<tr>
+<td>S1</td>
+<td><code>X/Y/Theta</code> NaN</td>
+<td>222 rows, all <code>State=occluded</code>, in runs of 6–11 frames; 221 mid-track + one <strong>leading</strong> 7-frame run (t85)</td>
+<td><code>interpolate_trajectories</code> caps at <code>interpolation_max_gap_seconds</code>=0.5 s → 5 frames, but the tracker coasts occluded slots up to <code>max_occlusion_gap_seconds</code>=1.0 s → 10 frames (+1). Runs of 1–5 are filled (258 rows), 6–11 are left NaN. The interpolated-crops pass then <em>does</em> linearly fill those same rows to cut crops (<code>interpolated_crops.py:322-346</code>, "NaN-triggered, not max_gap-triggered"), so <strong>all 222</strong> carry a <code>CNN_colortag_*_Class</code> (<code>CNN_colortag_Source="interp"</code>) and a <code>HeadTailAngleRad</code> while having no position — evidence with no geometry. A leading run can never be interpolated.</td>
+</tr>
+<tr>
+<td>S2</td>
+<td>Frames missing entirely inside tracks</td>
+<td>15 gaps / 36 rows (sizes 1–10)</td>
+<td>Relink joins fragments across a gap of 1–<code>MAX_OCCLUSION_GAP</code> frames (<code>_score_relink_candidate</code> gap gate) and <code>_assemble_relinked_chains</code> concatenates; nothing re-indexes or fills. Stitching (<code>STITCH_MAX_GAP_FRAMES</code>) and overlap-merge can create gaps the same way. Relink also rewrites the base <code>_final.csv</code>, so this is not rich-CSV-only.</td>
+</tr>
+<tr>
+<td>S3</td>
+<td><code>IdentityFinalSource</code> empty</td>
+<td>5 683 rows = exactly the <code>unknown</code> rows</td>
+<td><code>IdentityFinalSource.NONE = ""</code> (<code>columns.py:60</code>) — "no source" is serialised as an empty cell, indistinguishable from "never written".</td>
+</tr>
+<tr>
+<td>S4</td>
+<td><code>IdentityFinalSmoothedLabel</code> empty, confidence 0.0</td>
+<td>1 776 rows = 1 296 active (all with a DetectionID) + 480 occluded (none with a DetectionID)</td>
+<td><strong>Two causes.</strong> (a) 1 296: <code>_annotate_smoothed_labels</code> blanks the label and zeroes the confidence whenever the smoothed max-posterior &lt; <code>IDENTITY_DISPLAY_THRESHOLD</code> (config <code>identity_display_threshold</code>=0.95) — a realtime <em>display</em> knob applied to a <em>record</em> column, destroying the confidence that exists to gate it. (b) 480: rows with no <code>DetectionID</code> never join the evidence cache (<code>load_trajectory_evidence</code> joins on <code>(FrameID, DetectionID)</code>), so they have no smoothed posterior at all, although the crop pass wrote a per-row classifier output on them.</td>
+</tr>
+<tr>
+<td>S5</td>
+<td>One track, several identities</td>
+<td>8 tracks (t39, t52, t57, t60, t76, t77, t82, t140), all with &gt;1 <code>OriginalTrajectoryID</code>; e.g. t60 <code>green_orange</code>(87)→<code>blue_orange</code>(17)</td>
+<td>Post-solver relink (<code>relink_and_export_rich_csv</code>: solver → relink → write) gates on the <em>dominant raw per-row CNN key</em> (<code>_fragment_unique_identity_sources</code> on <code>UniqueIdentityKey</code>, <code>identity_sources_conflict</code>), never on <code>IdentityFinalLabel</code>, and <code>_assemble_relinked_chains</code> concatenates rows without reconciling identity columns.</td>
+</tr>
+<tr>
+<td>S6</td>
+<td>Long, evidence-consistent tracks are <code>unknown</code>; the label sits on short fragments</td>
+<td>21 fully-unknown tracks = 5 436 rows, incl. <strong>t111 (701 fr, <code>orange_yellow</code> mean-posterior 0.99999, stability 1.0)</strong>, t110 (701 fr), t115 (589 fr, <code>blue_blue</code> 1.0); <code>blue_blue</code> is held by t0–t4 (69/15/26/1/15 fr), <code>orange_yellow</code> by t88 whose own evidence is <code>pink_yellow</code> at 0.99999. In the offline re-run 9 of the 14 fragments ≥300 frames are unknown.</td>
+<td>Three compounding solver defects, §1.1.</td>
+</tr>
+<tr>
+<td>S7</td>
+<td>Labelled tracks that contradict their own evidence</td>
+<td>33 of 150 labelled tracks have a label ≠ the mode of their own smoothed label (a further 44 have no smoothed label to compare); 67/185 fragments in the re-run contradict their <code>MeanCNNProbs</code> argmax — e.g. a 452-frame fragment with <code>blue_green</code> at 0.99998 assigned <code>green_green</code></td>
+<td>Same as S6: with support flattened, top-3 candidates are near-ties and spatial term + length factor pick among them.</td>
+</tr>
+<tr>
+<td>S8</td>
+<td>Labels switch on/off in the video; CSV disagrees with the video</td>
+<td>realtime label present on a median 1.7 % of a track's rows; 41 on/off runs on t110; <code>IdentityRealtimeLabel == IdentityFinalLabel</code> on 28.8 % of rows where both exist</td>
+<td><code>ant_tracking.mp4</code> is rendered post-hoc by <code>media_export.render_annotated_video</code> (log 15:13:03, <code>session._run_annotated_video</code>) from the <strong>rich CSV</strong>, and <code>build_video_track_label_array</code> / <code>build_video_track_color_key_array</code> (<code>media_export.py:135-186</code>) prefer <strong><code>UniqueIdentityKey</code></strong> (raw per-frame classifier evidence) over <code>IdentityFinalLabel</code>. The flicker is the classifier's per-frame output, not the solver's decision. (The live in-GUI overlay separately draws the realtime decoder's commits, <code>worker.py:4035</code>; not what the user watched.)</td>
+</tr>
+<tr>
+<td>S9</td>
+<td>Solver runs twice per run (identical output, 42.8 s wasted)</td>
+<td>log 15:12:18 and 15:13:00</td>
+<td><code>run_post_tracking</code> → <code>_export_rich</code> (solver #1) → <code>_run_interp_crops</code> → <code>_relink_export_rich</code> (<code>build_rich_export_dataframe</code> = solver #2, then relink). Pass 1's rich CSV is overwritten by pass 2.</td>
+</tr>
+<tr>
+<td>S10</td>
+<td><code>IdentityFinalConflictResolved</code> empty</td>
+<td>12 113 NaN / 3 736 True / 0 False</td>
+<td>Single writer <code>processing.py:1642</code> (merge-time <em>realtime</em>-label arbitration, despite the <code>IdentityFinal*</code> name) writes only <code>True</code>; nothing initialises <code>False</code>.</td>
+</tr>
+</tbody>
+</table>
+<h3 id="11-why-the-solver-assigns-labels-to-the-wrong-fragments-s6s7">1.1 Why the solver assigns labels to the wrong fragments (S6/S7)<a class="headerlink" href="#11-why-the-solver-assigns-labels-to-the-wrong-fragments-s6s7" title="Permanent link">&para;</a></h3>
+<p><code>_iterative_assign</code> (<code>offline.py:481</code>) in the shipped configuration
+(<code>FRAGMENT_CNN_WEIGHT=0.1</code>, <code>FRAGMENT_TAG_WEIGHT=0</code>, <code>ONLINE_PRIOR_WEIGHT=0</code>,
+<code>ASSIGNMENT_MARGIN_THRESHOLD=0</code>, <code>IDENTITY_DISPLAY_THRESHOLD=0.95</code>, 25 labels):</p>
+<ol>
+<li><strong><code>FRAGMENT_CNN_WEIGHT</code> acts as a softmax temperature, not a weight.</strong> Support =
+   <code>normalize(exp(cnn_w · mean log p))</code>. A track with mean-posterior 0.99999 on one
+   label (log p ≈ 0 vs ≈ −12 on the rest) becomes <code>exp(−1.2)=0.30</code> per wrong label,
+   i.e. a median top support of <strong>0.21</strong> (max 0.40) with 25 labels. The solver
+   never sees the evidence it was given. The default 0.4 gives 0.95 median top
+   support but only 0.45 after the length factor. With defaults, an <em>uninformative</em>
+   online prior (all-zeros dict from <code>_build_prior_log_scores</code> when the online label
+   is not in the catalog) still counts in the denominator, so even a convex
+   combination would leave a 0.615 temperature unless "present" means "informative".</li>
+<li><strong>The base assignment is dead.</strong> <code>_base_assignment_via_substrate</code> builds
+   temporal-overlap connected components <em>transitively</em>; on a 25-animal clip every
+   fragment overlaps something, so the component is <strong>all fragments</strong> (214/214 in the
+   re-run), competing for 25 labels as if simultaneously visible (hard cap: ≤25 of
+   214 could ever be assigned). It then gates each slot at <code>display_threshold=0.95</code>
+   on <code>support × length_factor</code>. Measured: <strong>0/214 assigned</strong> at the shipped weight
+   (21/214 at cnn_w=0.4, threshold 0.5). Everything falls through with <code>current=None</code>.</li>
+<li><strong>The rescue is greedy in the wrong order and the swap move is effectively
+   dead.</strong> Passes walk fragments by descending doubt = `(1−stability)(1−length_scale)</li>
+<li>0.5·[unknown]<code>— **short, unstable fragments first** (a 701-frame stable track
+   scores 0.5, a 3-frame one ≈1.4). Each takes the best non-colliding label among its
+   top-3. A long track then finds its label held by several short fragments across its
+   span:</code>_find_blocker<code>returns only the first, and the swap additionally requires</code>alt_score_j ≥ cur_score_j<code>for the displaced blocker (</code>offline.py:800-802<code>) — a
+   displaced fragment is almost always worse off under its alternative, so the swap is
+   essentially never taken. The final "Unknown-rescue" pass iterates in plain index
+   order and cannot displace anything. Net effect: labels go to the fragments with the
+   *least* evidence mass, and long tracks go</code>unknown`.</li>
+</ol>
+<p>Independent of the solver, the classifier evidence itself is still confused on
+this catalog (23 of 25 labels appear as a track argmax; <code>blue_orange</code> is the
+argmax of 2 380 track-frames ≈ 3.4 animals' worth, <code>pink_green</code> of 15). That is the
+residual-accuracy follow-up from the previous spec and is <strong>out of scope</strong> here;
+this design makes the solver faithful to whatever evidence it is given and makes
+the output honest about what it does not know.</p>
+<p>Not defects: no two tracks share a known label at the same frame (0 collisions
+in 10 166 labelled rows); positions are untouched by identity (<code>identity_weight=0</code>).</p>
+<h3 id="12-adversarial-review-corrections-folded-in">1.2 Adversarial-review corrections folded in<a class="headerlink" href="#12-adversarial-review-corrections-folded-in" title="Permanent link">&para;</a></h3>
+<p>Leading NaN run (S1); S4 has two causes; S7 counts; S8 root cause is
+<code>media_export</code>'s column preference, not the live overlay; reorder in §3.1 must
+keep the mirror/consensus/sort chain <em>after</em> the solve or AprilTag/realtime-sourced
+Final labels get overwritten and identity-adjacent ID numbering is lost;
+<code>NONE="none"</code> breaks <code>postprocess_df.py:146-151</code>'s <code>fillna("") == NONE</code> gate;
+<code>IdentityFinalConflictResolved</code> is written <code>True</code> at merge time so a blanket
+<code>False</code> init would clobber it; all nine equivalence fixtures have
+<code>enable_tracklet_relinking=false</code>; the final-pass interpolation must never fill
+<em>less</em> than the user's knob; the multi-blocker move needs a real termination
+argument.</p>
+<h2 id="2-goals-non-goals">2. Goals / non-goals<a class="headerlink" href="#2-goals-non-goals" title="Permanent link">&para;</a></h2>
+<p><strong>Goals</strong>
+1. <strong>One identity per trajectory in the written CSV, by construction</strong>: a
+   post-write-time invariant, checked and logged, not a hope.
+2. <strong>Every cell is a value or an explicit denial</strong>: no NaN position inside a
+   trajectory, no position-less leading/trailing rows; <code>IdentityFinalSource="none"</code>
+   (never empty) for unresolved rows; <code>IdentityFinalSmoothedLabel</code> always carries
+   the argmax with its real confidence where a smoothed posterior exists and an
+   explicit <code>unknown</code>/0.0 where none does; <code>IdentityFinalConflictResolved</code> is
+   <code>True</code>/<code>False</code>.
+3. <strong>The solver honours evidence mass</strong>: a long, consistent track beats short
+   fragments for its label; a label is only ever given to a fragment whose own
+   evidence supports it above a stated floor; otherwise the fragment is <code>unknown</code>
+   with source <code>none</code>.
+4. <strong>What the user watches matches what the CSV says</strong>: rendered video and
+   exported media label and colour by <code>IdentityFinalLabel</code>.</p>
+<p><strong>Non-goals</strong>: classifier retraining / accuracy; the realtime online decoder's
+commit policy (it does not affect tracking with <code>identity_weight=0</code>); PELT
+tuning; GUI knobs; the relink duplicate-FrameID drop (<code>processing.py:4083</code>, logged,
+left as is).</p>
+<h2 id="3-design">3. Design<a class="headerlink" href="#3-design" title="Permanent link">&para;</a></h2>
+<h3 id="31-pipeline-order-relink-first-resolve-identity-once-s5-s9">3.1 Pipeline order: relink first, resolve identity once (S5, S9)<a class="headerlink" href="#31-pipeline-order-relink-first-resolve-identity-once-s5-s9" title="Permanent link">&para;</a></h3>
+<p><code>apply_identity_postprocessing_to_df</code> is split into two pure functions:
+- <code>derive_identity_keys(df, params)</code> — the <code>IdentityEvidence*</code> summary and
+  <code>UniqueIdentityKey</code> derivation only (today's tail of the function). Relink needs
+  these and nothing else.
+- <code>resolve_identity(df, params, identity_evidence_cache_path)</code> — the fragment
+  solver, <code>_stamp_non_identifying_labels</code>, <code>_mirror_realtime_and_tag_into_final</code>,
+  <code>fill_identity_nans_with_consensus</code>, <code>sort_trajectories_by_identity</code>, then the
+  summary/key derivation again — <strong>in today's order</strong>, so rows with
+  <code>IdentityFinalSource ∈ {tag, realtime, nonidentifying}</code> are filled exactly as
+  today and never overwritten by the solver, and identity-adjacent ID numbering is
+  produced after the final structure is known.</p>
+<p><code>build_rich_export_dataframe(..., resolve=True)</code> calls <code>derive_identity_keys</code> and,
+when <code>resolve</code>, <code>resolve_identity</code>. <code>relink_and_export_rich_csv</code> builds with
+<code>resolve=False</code>, relinks, densifies chains (§3.4), calls <code>resolve_identity</code>, runs
+the §3.2 check, writes. <code>export_rich_csv</code> (pass 1) passes
+<code>resolve = not postpass_will_run</code> (<code>session.py</code> computes it from
+<code>should_run_interpolated_postpass</code>), so every run gets exactly one solve. PELT
+may still cut a chain the relinker joined across an identity switch; with PELT
+off the solver labels whole chains (as today for un-split trajectories).</p>
+<h3 id="32-written-csv-invariant-s5">3.2 Written-CSV invariant (S5)<a class="headerlink" href="#32-written-csv-invariant-s5" title="Permanent link">&para;</a></h3>
+<p><code>assert_one_identity_per_trajectory(df) -&gt; list[int]</code> (in <code>identity_postprocess.py</code>)
+returns trajectory ids whose <code>IdentityFinalLabel</code>/<code>IdentityFinalID</code>/<code>IdentityFinalSource</code>
+are not constant. <code>relink_and_export_rich_csv</code> and <code>export_rich_csv</code> run it on the
+frame they are about to write (after the whole <code>resolve_identity</code> chain); offenders
+are logged at ERROR and collapsed to their majority label/id/source with confidence
+set to the row minimum — never silently. A test feeds a hand-built two-label chain.</p>
+<h3 id="33-solver-evidence-faithful-assignment-s6-s7">3.3 Solver: evidence-faithful assignment (S6, S7)<a class="headerlink" href="#33-solver-evidence-faithful-assignment-s6-s7" title="Permanent link">&para;</a></h3>
+<ul>
+<li><strong>Weights are convex over <em>informative</em> sources.</strong> <code>combined_log = Σ_s w_s·log_s /
+  Σ_s w_s</code> over sources present <em>and informative</em> for the fragment: <code>cnn</code> when the
+  fragment has cache evidence; <code>tag</code> when <code>TagLogEvidence</code> is non-empty; <code>prior</code> when
+  the online label is in the catalog with finite confidence. With one informative
+  source the support is that source's geometric-mean posterior itself. The
+  <code>FRAGMENT_*_WEIGHT</code>/<code>ONLINE_PRIOR_WEIGHT</code> knobs keep their meaning as relative source
+  weights; their absolute scale no longer sharpens or flattens evidence.</li>
+<li><strong>Support floor.</strong> New <code>FRAGMENT_MIN_SUPPORT</code> (engine param from config
+  <code>fragment_min_support</code>, default <strong>0.5</strong>): a label whose normalised support is below
+  the floor is not a candidate for that fragment. A fragment with no candidate above
+  the floor is <code>unknown</code>/<code>none</code>. Documented as an absolute posterior floor (on a
+  2-label catalog it is satisfied by any argmax; on 25 labels it is a real gate —
+  that is the intent: "more likely than all alternatives combined").</li>
+<li><strong>Mass-first seeding replaces the dead component-Hungarian.</strong> Initial assignment
+  visits fragments in descending <em>evidence mass</em> = <code>duration × top_support</code>; each
+  gets its top candidate above the floor if no time collision with an already-seeded
+  same-label fragment and the spatial veto passes. <code>_base_assignment_via_substrate</code>
+  is deleted from this path (<code>substrate.solve_unique_assignment</code> remains the
+  realtime substrate's solver); <code>IDENTITY_DISPLAY_THRESHOLD</code> is no longer read by
+  the offline solver.</li>
+<li><strong>Multi-blocker displacement with an exact, monotone objective.</strong> Global objective
+  <code>J = Σ_i score_i(current_i)</code> (score 0 for unknown). When label <code>c</code> for fragment <code>i</code>
+  collides with blockers <code>B</code> (all overlapping same-label fragments, capped at
+  <code>FRAGMENT_MAX_BLOCKERS=4</code>, else the move is skipped), tentatively apply: <code>i←c</code>,
+  each <code>b∈B</code> ← its best non-colliding alternative above the floor or <code>unknown</code>;
+  recompute <code>J</code> on the actual post-move schedule (spatial terms re-evaluated for
+  every fragment under <code>c</code> and under each displaced blocker's new label); accept iff
+  <code>J_after − J_before ≥ ε</code> with <code>ε = max(ASSIGNMENT_MARGIN_THRESHOLD, 1e-3)</code>, else
+  revert. <code>J</code> is bounded (each score ≤ 1) and every accepted move raises it by ≥ ε, so
+  the passes terminate; <code>FRAGMENT_MAX_PASSES</code> stays as a belt. With <code>|B|=1</code> this is a
+  strict generalisation of today's move (today additionally required the displaced
+  fragment to be no worse off, which is exactly the guard that made the move dead).</li>
+<li><strong>Refinement order</strong> stays doubt-descending (it is a refinement now, not the
+  seeding); the final unknown-rescue pass visits unknowns by descending mass and may
+  use the displacement move.</li>
+<li><strong>Regression fixtures</strong>: (a) synthetic 3-animal case — one 701-frame fragment with
+  0.999 evidence overlaps four 10-frame fragments with 0.6 evidence on the same
+  label: the long one must win, the short ones go to their own labels or unknown;
+  (b) a fragment whose top support is 0.3 stays unknown; (c) the DEMO/ID numbers as
+  a gate-record acceptance (§4).</li>
+</ul>
+<h3 id="34-explicit-values-s1-s2-s3-s4-s10">3.4 Explicit values (S1, S2, S3, S4, S10)<a class="headerlink" href="#34-explicit-values-s1-s2-s3-s4-s10" title="Permanent link">&para;</a></h3>
+<ul>
+<li><strong>Positions.</strong> Final-pass interpolation uses
+  <code>max_gap = max(round(interpolation_max_gap_seconds × FPS), MAX_OCCLUSION_GAP + 1)</code>
+  — never less than today's fill. Applied in <code>_interpolate_and_scale</code> /
+  <code>merge_trajectories</code> (final frame) <em>and</em> after relink, where chains are first
+  re-indexed to a dense frame range (missing frames become <code>State="occluded"</code> rows
+  with empty <code>DetectionID</code>, <code>DetectionConfidence=0.0</code>), so S2's rows exist and are
+  filled. <strong>Leading/trailing occluded runs are dropped</strong> (<code>trim_positionless_ends</code>):
+  they carry no position and no detection and cannot be interpolated. Interior gaps
+  longer than <code>max_gap</code> (possible via stitching/merge) are still filled — a gap the
+  tracker asserted continuity across is filled or the row is dropped, never left NaN;
+  the gap length is logged. Filled rows keep <code>State="occluded"</code> so a consumer can
+  exclude them.</li>
+<li><strong><code>IdentityFinalSource.NONE = "none"</code>.</strong> In the same commit: <code>postprocess_df.py</code>
+  and every <code>fillna("")</code> on the source column become <code>fillna(NONE)</code>; readers of
+  existing CSVs (<code>identity_postprocess</code>, <code>trajectory_writer</code>) normalise <code>""</code>/NaN to
+  <code>none</code>. <code>tests/identity/test_identity_columns.py</code> pins the vocabulary.</li>
+<li><strong>Smoothed columns are a record, not a display.</strong> <code>_annotate_smoothed_labels</code>
+  writes the argmax known label and its posterior for every row that has cache
+  evidence; <code>IDENTITY_DISPLAY_THRESHOLD</code> no longer touches them. Rows with no cache
+  evidence (no <code>DetectionID</code> — the crop-pass rows) get <code>IdentityFinalSmoothedLabel=
+  "unknown"</code>, confidence <code>0.0</code>: the column is <em>defined</em> as the cache-evidence
+  forward-backward posterior, and those rows have none; their own per-row
+  <code>CNN_*_Class/_Conf</code> (<code>CNN_*_Source="interp"</code>) stay as the per-row record, and the
+  Final family (per-fragment) covers them.</li>
+<li><strong><code>IdentityFinalConflictResolved</code></strong>: <code>_ensure_final_columns</code> creates it as <code>False</code>
+  only when absent; the writer (<code>write_final_trajectories</code>) fills NaN → <code>False</code>, so
+  merge-time <code>True</code>s are preserved and every row is boolean.</li>
+</ul>
+<h3 id="35-media-s8">3.5 Media (S8)<a class="headerlink" href="#35-media-s8" title="Permanent link">&para;</a></h3>
+<p><code>build_video_track_label_array</code> / <code>build_video_track_color_key_array</code> prefer
+<code>IdentityFinalLabel</code>, then <code>IdentityFinalSmoothedLabel</code>, then <code>UniqueIdentityKey</code>
+(update <code>test_overlay_priority_is_unique_key_then_final_then_final_smoothed</code>). No
+user-guide claim about the live overlay.</p>
+<h3 id="36-gate-coverage-review-o1">3.6 Gate coverage (review O1)<a class="headerlink" href="#36-gate-coverage-review-o1" title="Permanent link">&para;</a></h3>
+<p>Add one relink-enabled equivalence fixture config
+(<code>tools/equivalence/fixtures/configs/ant_cnn_identity_relink.json</code>, a copy of
+<code>ant_cnn_identity.json</code> with <code>enable_tracklet_relinking=true</code>) so §3.1/3.2/3.4's
+relink path has matrix coverage; its baseline row is recorded on first run.</p>
+<h2 id="4-verification">4. Verification<a class="headerlink" href="#4-verification" title="Permanent link">&para;</a></h2>
+<ul>
+<li>Unit tests per task (plan).</li>
+<li>Equivalence matrix (MPS here, CUDA on mehek), current vs <code>main</code> @ <code>f2d4ca36</code>:
+  <code>fly_obb</code>/<code>worm_bgsub</code> byte-identical (no postpass, no gaps &gt; their max_gap);
+  ant/emi clips: detection-row positions byte-identical, <strong>expected divergence</strong> =
+  additional interpolated rows for occluded runs 6–11 frames and dropped
+  leading/trailing occluded rows (§3.4), plus identity columns on the identity
+  clips; each recorded per clip in the gate note, not papered over.</li>
+<li><code>DEMO/ID/ONLINE</code> acceptance, rerun of post-processing on the same caches:
+  0 NaN <code>X/Y/Theta</code>; 0 leading/trailing occluded rows; 0 missing frames inside a
+  trajectory; 0 rows with empty <code>IdentityFinalSource</code>; 0 NaN
+  <code>IdentityFinalConflictResolved</code>; 0 trajectories with &gt;1 <code>IdentityFinalLabel</code>;
+  every labelled trajectory's label equals the argmax of its own mean smoothed
+  posterior; t111/t110/t115 labelled; labelled/unknown track counts reported with
+  the honest residual (classifier confusion) called out; rendered video labels ==
+  CSV <code>IdentityFinalLabel</code>.</li>
+</ul>
+
+
+
+
+
+
+
+
+
+
+
+
+                
+              </article>
+            </div>
+          
+          
+<script>var target=document.getElementById(location.hash.slice(1));target&&target.name&&(target.checked=target.name.startsWith("__tabbed_"))</script>
+        </div>
+        
+          <button type="button" class="md-top md-icon" data-md-component="top" hidden>
+  
+  <svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 24 24"><path d="M13 20h-2V8l-5.5 5.5-1.42-1.42L12 4.16l7.92 7.92-1.42 1.42L13 8z"/></svg>
+  Back to top
+</button>
+        
+      </main>
+      
+        <footer class="md-footer">
+  
+  <div class="md-footer-meta md-typeset">
+    <div class="md-footer-meta__inner md-grid">
+      <div class="md-copyright">
+  
+  
+    Made with
+    <a href="https://squidfunk.github.io/mkdocs-material/" target="_blank" rel="noopener">
+      Material for MkDocs
+    </a>
+  
+</div>
+      
+    </div>
+  </div>
+</footer>
+      
+    </div>
+    <div class="md-dialog" data-md-component="dialog">
+      <div class="md-dialog__inner md-typeset"></div>
+    </div>
+    
+    
+    <script id="__config" type="application/json">{"base": "../../../..", "features": ["navigation.tabs", "navigation.sections", "navigation.expand", "navigation.top", "content.code.copy", "content.action.edit", "search.suggest", "search.highlight"], "search": "../../../../assets/javascripts/workers/search.6ce7567c.min.js", "translations": {"clipboard.copied": "Copied to clipboard", "clipboard.copy": "Copy to clipboard", "search.result.more.one": "1 more on this page", "search.result.more.other": "# more on this page", "search.result.none": "No matching documents", "search.result.one": "1 matching document", "search.result.other": "# matching documents", "search.result.placeholder": "Type to start searching", "search.result.term.missing": "Missing", "select.version": "Select version"}, "version": {"default": "latest", "provider": "mike"}}</script>
+    
+    
+      <script src="../../../../assets/javascripts/bundle.83f73b43.min.js"></script>
+      
+    
+  </body>
+</html>

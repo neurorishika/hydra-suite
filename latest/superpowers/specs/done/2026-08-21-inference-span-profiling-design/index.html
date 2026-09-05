@@ -1,0 +1,2898 @@
+
+<!doctype html>
+<html lang="en" class="no-js">
+  <head>
+    
+      <meta charset="utf-8">
+      <meta name="viewport" content="width=device-width,initial-scale=1">
+      
+        <meta name="description" content="User and developer documentation for HYDRA Suite">
+      
+      
+      
+        <link rel="canonical" href="https://neurorishika.github.io/hydra-suite/latest/superpowers/specs/done/2026-08-21-inference-span-profiling-design/">
+      
+      
+      
+      
+      <link rel="icon" href="../../../../assets/images/favicon.png">
+      <meta name="generator" content="mkdocs-1.6.1, mkdocs-material-9.5.43">
+    
+    
+      
+        <title>Extreme-Detail Inference Profiling (Span Profiler) - HYDRA Suite Docs</title>
+      
+    
+    
+      <link rel="stylesheet" href="../../../../assets/stylesheets/main.0253249f.min.css">
+      
+        
+        <link rel="stylesheet" href="../../../../assets/stylesheets/palette.06af60db.min.css">
+      
+      
+
+
+    
+    
+      
+    
+    
+      
+        
+        
+        <link rel="preconnect" href="https://fonts.gstatic.com" crossorigin>
+        <link rel="stylesheet" href="https://fonts.googleapis.com/css?family=Roboto:300,300i,400,400i,700,700i%7CRoboto+Mono:400,400i,700,700i&display=fallback">
+        <style>:root{--md-text-font:"Roboto";--md-code-font:"Roboto Mono"}</style>
+      
+    
+    
+      <link rel="stylesheet" href="../../../../assets/_mkdocstrings.css">
+    
+    <script>__md_scope=new URL("../../../..",location),__md_hash=e=>[...e].reduce(((e,_)=>(e<<5)-e+_.charCodeAt(0)),0),__md_get=(e,_=localStorage,t=__md_scope)=>JSON.parse(_.getItem(t.pathname+"."+e)),__md_set=(e,_,t=localStorage,a=__md_scope)=>{try{t.setItem(a.pathname+"."+e,JSON.stringify(_))}catch(e){}}</script>
+    
+      
+
+    
+    
+    
+  </head>
+  
+  
+    
+    
+      
+    
+    
+    
+    
+    <body dir="ltr" data-md-color-scheme="default" data-md-color-primary="blue" data-md-color-accent="light-blue">
+  
+    
+    <input class="md-toggle" data-md-toggle="drawer" type="checkbox" id="__drawer" autocomplete="off">
+    <input class="md-toggle" data-md-toggle="search" type="checkbox" id="__search" autocomplete="off">
+    <label class="md-overlay" for="__drawer"></label>
+    <div data-md-component="skip">
+      
+        
+        <a href="#extreme-detail-inference-profiling-span-profiler" class="md-skip">
+          Skip to content
+        </a>
+      
+    </div>
+    <div data-md-component="announce">
+      
+    </div>
+    
+      <div data-md-color-scheme="default" data-md-component="outdated" hidden>
+        
+      </div>
+    
+    
+      
+
+<header class="md-header" data-md-component="header">
+  <nav class="md-header__inner md-grid" aria-label="Header">
+    <a href="../../../.." title="HYDRA Suite Docs" class="md-header__button md-logo" aria-label="HYDRA Suite Docs" data-md-component="logo">
+      
+  
+  <svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 24 24"><path d="M12 8a3 3 0 0 0 3-3 3 3 0 0 0-3-3 3 3 0 0 0-3 3 3 3 0 0 0 3 3m0 3.54C9.64 9.35 6.5 8 3 8v11c3.5 0 6.64 1.35 9 3.54 2.36-2.19 5.5-3.54 9-3.54V8c-3.5 0-6.64 1.35-9 3.54"/></svg>
+
+    </a>
+    <label class="md-header__button md-icon" for="__drawer">
+      
+      <svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 24 24"><path d="M3 6h18v2H3zm0 5h18v2H3zm0 5h18v2H3z"/></svg>
+    </label>
+    <div class="md-header__title" data-md-component="header-title">
+      <div class="md-header__ellipsis">
+        <div class="md-header__topic">
+          <span class="md-ellipsis">
+            HYDRA Suite Docs
+          </span>
+        </div>
+        <div class="md-header__topic" data-md-component="header-topic">
+          <span class="md-ellipsis">
+            
+              Extreme-Detail Inference Profiling (Span Profiler)
+            
+          </span>
+        </div>
+      </div>
+    </div>
+    
+      
+        <form class="md-header__option" data-md-component="palette">
+  
+    
+    
+    
+    <input class="md-option" data-md-color-media="(prefers-color-scheme: light)" data-md-color-scheme="default" data-md-color-primary="blue" data-md-color-accent="light-blue"  aria-label="Switch to dark mode"  type="radio" name="__palette" id="__palette_0">
+    
+      <label class="md-header__button md-icon" title="Switch to dark mode" for="__palette_1" hidden>
+        <svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 24 24"><path d="m17.75 4.09-2.53 1.94.91 3.06-2.63-1.81-2.63 1.81.91-3.06-2.53-1.94L12.44 4l1.06-3 1.06 3zm3.5 6.91-1.64 1.25.59 1.98-1.7-1.17-1.7 1.17.59-1.98L15.75 11l2.06-.05L18.5 9l.69 1.95zm-2.28 4.95c.83-.08 1.72 1.1 1.19 1.85-.32.45-.66.87-1.08 1.27C15.17 23 8.84 23 4.94 19.07c-3.91-3.9-3.91-10.24 0-14.14.4-.4.82-.76 1.27-1.08.75-.53 1.93.36 1.85 1.19-.27 2.86.69 5.83 2.89 8.02a9.96 9.96 0 0 0 8.02 2.89m-1.64 2.02a12.08 12.08 0 0 1-7.8-3.47c-2.17-2.19-3.33-5-3.49-7.82-2.81 3.14-2.7 7.96.31 10.98 3.02 3.01 7.84 3.12 10.98.31"/></svg>
+      </label>
+    
+  
+    
+    
+    
+    <input class="md-option" data-md-color-media="(prefers-color-scheme: dark)" data-md-color-scheme="slate" data-md-color-primary="blue" data-md-color-accent="light-blue"  aria-label="Switch to light mode"  type="radio" name="__palette" id="__palette_1">
+    
+      <label class="md-header__button md-icon" title="Switch to light mode" for="__palette_0" hidden>
+        <svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 24 24"><path d="M12 7a5 5 0 0 1 5 5 5 5 0 0 1-5 5 5 5 0 0 1-5-5 5 5 0 0 1 5-5m0 2a3 3 0 0 0-3 3 3 3 0 0 0 3 3 3 3 0 0 0 3-3 3 3 0 0 0-3-3m0-7 2.39 3.42C13.65 5.15 12.84 5 12 5s-1.65.15-2.39.42zM3.34 7l4.16-.35A7.2 7.2 0 0 0 5.94 8.5c-.44.74-.69 1.5-.83 2.29zm.02 10 1.76-3.77a7.131 7.131 0 0 0 2.38 4.14zM20.65 7l-1.77 3.79a7.02 7.02 0 0 0-2.38-4.15zm-.01 10-4.14.36c.59-.51 1.12-1.14 1.54-1.86.42-.73.69-1.5.83-2.29zM12 22l-2.41-3.44c.74.27 1.55.44 2.41.44.82 0 1.63-.17 2.37-.44z"/></svg>
+      </label>
+    
+  
+</form>
+      
+    
+    
+      <script>var palette=__md_get("__palette");if(palette&&palette.color){if("(prefers-color-scheme)"===palette.color.media){var media=matchMedia("(prefers-color-scheme: light)"),input=document.querySelector(media.matches?"[data-md-color-media='(prefers-color-scheme: light)']":"[data-md-color-media='(prefers-color-scheme: dark)']");palette.color.media=input.getAttribute("data-md-color-media"),palette.color.scheme=input.getAttribute("data-md-color-scheme"),palette.color.primary=input.getAttribute("data-md-color-primary"),palette.color.accent=input.getAttribute("data-md-color-accent")}for(var[key,value]of Object.entries(palette.color))document.body.setAttribute("data-md-color-"+key,value)}</script>
+    
+    
+    
+      <label class="md-header__button md-icon" for="__search">
+        
+        <svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 24 24"><path d="M9.5 3A6.5 6.5 0 0 1 16 9.5c0 1.61-.59 3.09-1.56 4.23l.27.27h.79l5 5-1.5 1.5-5-5v-.79l-.27-.27A6.52 6.52 0 0 1 9.5 16 6.5 6.5 0 0 1 3 9.5 6.5 6.5 0 0 1 9.5 3m0 2C7 5 5 7 5 9.5S7 14 9.5 14 14 12 14 9.5 12 5 9.5 5"/></svg>
+      </label>
+      <div class="md-search" data-md-component="search" role="dialog">
+  <label class="md-search__overlay" for="__search"></label>
+  <div class="md-search__inner" role="search">
+    <form class="md-search__form" name="search">
+      <input type="text" class="md-search__input" name="query" aria-label="Search" placeholder="Search" autocapitalize="off" autocorrect="off" autocomplete="off" spellcheck="false" data-md-component="search-query" required>
+      <label class="md-search__icon md-icon" for="__search">
+        
+        <svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 24 24"><path d="M9.5 3A6.5 6.5 0 0 1 16 9.5c0 1.61-.59 3.09-1.56 4.23l.27.27h.79l5 5-1.5 1.5-5-5v-.79l-.27-.27A6.52 6.52 0 0 1 9.5 16 6.5 6.5 0 0 1 3 9.5 6.5 6.5 0 0 1 9.5 3m0 2C7 5 5 7 5 9.5S7 14 9.5 14 14 12 14 9.5 12 5 9.5 5"/></svg>
+        
+        <svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 24 24"><path d="M20 11v2H8l5.5 5.5-1.42 1.42L4.16 12l7.92-7.92L13.5 5.5 8 11z"/></svg>
+      </label>
+      <nav class="md-search__options" aria-label="Search">
+        
+        <button type="reset" class="md-search__icon md-icon" title="Clear" aria-label="Clear" tabindex="-1">
+          
+          <svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 24 24"><path d="M19 6.41 17.59 5 12 10.59 6.41 5 5 6.41 10.59 12 5 17.59 6.41 19 12 13.41 17.59 19 19 17.59 13.41 12z"/></svg>
+        </button>
+      </nav>
+      
+        <div class="md-search__suggest" data-md-component="search-suggest"></div>
+      
+    </form>
+    <div class="md-search__output">
+      <div class="md-search__scrollwrap" tabindex="0" data-md-scrollfix>
+        <div class="md-search-result" data-md-component="search-result">
+          <div class="md-search-result__meta">
+            Initializing search
+          </div>
+          <ol class="md-search-result__list" role="presentation"></ol>
+        </div>
+      </div>
+    </div>
+  </div>
+</div>
+    
+    
+      <div class="md-header__source">
+        <a href="https://github.com/neurorishika/hydra-suite" title="Go to repository" class="md-source" data-md-component="source">
+  <div class="md-source__icon md-icon">
+    
+    <svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 448 512"><!--! Font Awesome Free 6.6.0 by @fontawesome - https://fontawesome.com License - https://fontawesome.com/license/free (Icons: CC BY 4.0, Fonts: SIL OFL 1.1, Code: MIT License) Copyright 2024 Fonticons, Inc.--><path d="M439.55 236.05 244 40.45a28.87 28.87 0 0 0-40.81 0l-40.66 40.63 51.52 51.52c27.06-9.14 52.68 16.77 43.39 43.68l49.66 49.66c34.23-11.8 61.18 31 35.47 56.69-26.49 26.49-70.21-2.87-56-37.34L240.22 199v121.85c25.3 12.54 22.26 41.85 9.08 55a34.34 34.34 0 0 1-48.55 0c-17.57-17.6-11.07-46.91 11.25-56v-123c-20.8-8.51-24.6-30.74-18.64-45L142.57 101 8.45 235.14a28.86 28.86 0 0 0 0 40.81l195.61 195.6a28.86 28.86 0 0 0 40.8 0l194.69-194.69a28.86 28.86 0 0 0 0-40.81"/></svg>
+  </div>
+  <div class="md-source__repository">
+    neurorishika/hydra-suite
+  </div>
+</a>
+      </div>
+    
+  </nav>
+  
+</header>
+    
+    <div class="md-container" data-md-component="container">
+      
+      
+        
+          
+            
+<nav class="md-tabs" aria-label="Tabs" data-md-component="tabs">
+  <div class="md-grid">
+    <ul class="md-tabs__list">
+      
+        
+  
+  
+  
+    <li class="md-tabs__item">
+      <a href="../../../.." class="md-tabs__link">
+        
+  
+    
+  
+  Home
+
+      </a>
+    </li>
+  
+
+      
+        
+  
+  
+  
+    
+    
+      <li class="md-tabs__item">
+        <a href="../../../../getting-started/installation/" class="md-tabs__link">
+          
+  
+  Getting Started
+
+        </a>
+      </li>
+    
+  
+
+      
+        
+  
+  
+  
+    
+    
+      <li class="md-tabs__item">
+        <a href="../../../../user-guide/overview/" class="md-tabs__link">
+          
+  
+  User Guide
+
+        </a>
+      </li>
+    
+  
+
+      
+        
+  
+  
+  
+    
+    
+      <li class="md-tabs__item">
+        <a href="../../../../developer-guide/architecture/" class="md-tabs__link">
+          
+  
+  Developer Guide
+
+        </a>
+      </li>
+    
+  
+
+      
+        
+  
+  
+  
+    
+    
+      <li class="md-tabs__item">
+        <a href="../../../../reference/api-index/" class="md-tabs__link">
+          
+  
+  Reference
+
+        </a>
+      </li>
+    
+  
+
+      
+    </ul>
+  </div>
+</nav>
+          
+        
+      
+      <main class="md-main" data-md-component="main">
+        <div class="md-main__inner md-grid">
+          
+            
+              
+              <div class="md-sidebar md-sidebar--primary" data-md-component="sidebar" data-md-type="navigation" >
+                <div class="md-sidebar__scrollwrap">
+                  <div class="md-sidebar__inner">
+                    
+
+
+  
+
+
+<nav class="md-nav md-nav--primary md-nav--lifted" aria-label="Navigation" data-md-level="0">
+  <label class="md-nav__title" for="__drawer">
+    <a href="../../../.." title="HYDRA Suite Docs" class="md-nav__button md-logo" aria-label="HYDRA Suite Docs" data-md-component="logo">
+      
+  
+  <svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 24 24"><path d="M12 8a3 3 0 0 0 3-3 3 3 0 0 0-3-3 3 3 0 0 0-3 3 3 3 0 0 0 3 3m0 3.54C9.64 9.35 6.5 8 3 8v11c3.5 0 6.64 1.35 9 3.54 2.36-2.19 5.5-3.54 9-3.54V8c-3.5 0-6.64 1.35-9 3.54"/></svg>
+
+    </a>
+    HYDRA Suite Docs
+  </label>
+  
+    <div class="md-nav__source">
+      <a href="https://github.com/neurorishika/hydra-suite" title="Go to repository" class="md-source" data-md-component="source">
+  <div class="md-source__icon md-icon">
+    
+    <svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 448 512"><!--! Font Awesome Free 6.6.0 by @fontawesome - https://fontawesome.com License - https://fontawesome.com/license/free (Icons: CC BY 4.0, Fonts: SIL OFL 1.1, Code: MIT License) Copyright 2024 Fonticons, Inc.--><path d="M439.55 236.05 244 40.45a28.87 28.87 0 0 0-40.81 0l-40.66 40.63 51.52 51.52c27.06-9.14 52.68 16.77 43.39 43.68l49.66 49.66c34.23-11.8 61.18 31 35.47 56.69-26.49 26.49-70.21-2.87-56-37.34L240.22 199v121.85c25.3 12.54 22.26 41.85 9.08 55a34.34 34.34 0 0 1-48.55 0c-17.57-17.6-11.07-46.91 11.25-56v-123c-20.8-8.51-24.6-30.74-18.64-45L142.57 101 8.45 235.14a28.86 28.86 0 0 0 0 40.81l195.61 195.6a28.86 28.86 0 0 0 40.8 0l194.69-194.69a28.86 28.86 0 0 0 0-40.81"/></svg>
+  </div>
+  <div class="md-source__repository">
+    neurorishika/hydra-suite
+  </div>
+</a>
+    </div>
+  
+  <ul class="md-nav__list" data-md-scrollfix>
+    
+      
+      
+  
+  
+  
+  
+    <li class="md-nav__item">
+      <a href="../../../.." class="md-nav__link">
+        
+  
+  <span class="md-ellipsis">
+    Home
+  </span>
+  
+
+      </a>
+    </li>
+  
+
+    
+      
+      
+  
+  
+  
+  
+    
+    
+    
+      
+      
+        
+      
+    
+    
+    <li class="md-nav__item md-nav__item--nested">
+      
+        
+        
+          
+        
+        <input class="md-nav__toggle md-toggle md-toggle--indeterminate" type="checkbox" id="__nav_2" >
+        
+          
+          <label class="md-nav__link" for="__nav_2" id="__nav_2_label" tabindex="0">
+            
+  
+  <span class="md-ellipsis">
+    Getting Started
+  </span>
+  
+
+            <span class="md-nav__icon md-icon"></span>
+          </label>
+        
+        <nav class="md-nav" data-md-level="1" aria-labelledby="__nav_2_label" aria-expanded="false">
+          <label class="md-nav__title" for="__nav_2">
+            <span class="md-nav__icon md-icon"></span>
+            Getting Started
+          </label>
+          <ul class="md-nav__list" data-md-scrollfix>
+            
+              
+                
+  
+  
+  
+  
+    <li class="md-nav__item">
+      <a href="../../../../getting-started/installation/" class="md-nav__link">
+        
+  
+  <span class="md-ellipsis">
+    Installation
+  </span>
+  
+
+      </a>
+    </li>
+  
+
+              
+            
+              
+                
+  
+  
+  
+  
+    <li class="md-nav__item">
+      <a href="../../../../getting-started/environments/" class="md-nav__link">
+        
+  
+  <span class="md-ellipsis">
+    Environments and Makefile
+  </span>
+  
+
+      </a>
+    </li>
+  
+
+              
+            
+              
+                
+  
+  
+  
+  
+    <li class="md-nav__item">
+      <a href="../../../../getting-started/integrations/" class="md-nav__link">
+        
+  
+  <span class="md-ellipsis">
+    Integrations
+  </span>
+  
+
+      </a>
+    </li>
+  
+
+              
+            
+              
+                
+  
+  
+  
+  
+    <li class="md-nav__item">
+      <a href="../../../../getting-started/quickstart-hydra/" class="md-nav__link">
+        
+  
+  <span class="md-ellipsis">
+    Quickstart (TrackerKit)
+  </span>
+  
+
+      </a>
+    </li>
+  
+
+              
+            
+              
+                
+  
+  
+  
+  
+    <li class="md-nav__item">
+      <a href="../../../../getting-started/quickstart-posekit/" class="md-nav__link">
+        
+  
+  <span class="md-ellipsis">
+    Quickstart (PoseKit)
+  </span>
+  
+
+      </a>
+    </li>
+  
+
+              
+            
+              
+                
+  
+  
+  
+  
+    <li class="md-nav__item">
+      <a href="../../../../getting-started/platforms/" class="md-nav__link">
+        
+  
+  <span class="md-ellipsis">
+    Platform Notes
+  </span>
+  
+
+      </a>
+    </li>
+  
+
+              
+            
+          </ul>
+        </nav>
+      
+    </li>
+  
+
+    
+      
+      
+  
+  
+  
+  
+    
+    
+    
+      
+      
+        
+      
+    
+    
+    <li class="md-nav__item md-nav__item--nested">
+      
+        
+        
+          
+        
+        <input class="md-nav__toggle md-toggle md-toggle--indeterminate" type="checkbox" id="__nav_3" >
+        
+          
+          <label class="md-nav__link" for="__nav_3" id="__nav_3_label" tabindex="0">
+            
+  
+  <span class="md-ellipsis">
+    User Guide
+  </span>
+  
+
+            <span class="md-nav__icon md-icon"></span>
+          </label>
+        
+        <nav class="md-nav" data-md-level="1" aria-labelledby="__nav_3_label" aria-expanded="false">
+          <label class="md-nav__title" for="__nav_3">
+            <span class="md-nav__icon md-icon"></span>
+            User Guide
+          </label>
+          <ul class="md-nav__list" data-md-scrollfix>
+            
+              
+                
+  
+  
+  
+  
+    <li class="md-nav__item">
+      <a href="../../../../user-guide/overview/" class="md-nav__link">
+        
+  
+  <span class="md-ellipsis">
+    Overview
+  </span>
+  
+
+      </a>
+    </li>
+  
+
+              
+            
+              
+                
+  
+  
+  
+  
+    <li class="md-nav__item">
+      <a href="../../../../user-guide/workflow/" class="md-nav__link">
+        
+  
+  <span class="md-ellipsis">
+    End-to-End Workflow
+  </span>
+  
+
+      </a>
+    </li>
+  
+
+              
+            
+              
+                
+  
+  
+  
+  
+    <li class="md-nav__item">
+      <a href="../../../../user-guide/detection-modes/" class="md-nav__link">
+        
+  
+  <span class="md-ellipsis">
+    Detection Modes
+  </span>
+  
+
+      </a>
+    </li>
+  
+
+              
+            
+              
+                
+  
+  
+  
+  
+    <li class="md-nav__item">
+      <a href="../../../../user-guide/tracking-and-merging/" class="md-nav__link">
+        
+  
+  <span class="md-ellipsis">
+    Tracking and Merging
+  </span>
+  
+
+      </a>
+    </li>
+  
+
+              
+            
+              
+                
+  
+  
+  
+  
+    <li class="md-nav__item">
+      <a href="../../../../user-guide/post-processing/" class="md-nav__link">
+        
+  
+  <span class="md-ellipsis">
+    Post-processing
+  </span>
+  
+
+      </a>
+    </li>
+  
+
+              
+            
+              
+                
+  
+  
+  
+  
+    <li class="md-nav__item">
+      <a href="../../../../user-guide/configuration-reference/" class="md-nav__link">
+        
+  
+  <span class="md-ellipsis">
+    Configuration Reference
+  </span>
+  
+
+      </a>
+    </li>
+  
+
+              
+            
+              
+                
+  
+  
+  
+  
+    <li class="md-nav__item">
+      <a href="../../../../user-guide/compute-runtimes/" class="md-nav__link">
+        
+  
+  <span class="md-ellipsis">
+    Compute Runtimes
+  </span>
+  
+
+      </a>
+    </li>
+  
+
+              
+            
+              
+                
+  
+  
+  
+  
+    <li class="md-nav__item">
+      <a href="../../../../user-guide/outputs-and-csv-schema/" class="md-nav__link">
+        
+  
+  <span class="md-ellipsis">
+    Outputs and CSV Schema
+  </span>
+  
+
+      </a>
+    </li>
+  
+
+              
+            
+              
+                
+  
+  
+  
+  
+    <li class="md-nav__item">
+      <a href="../../../../user-guide/dataset-generation/" class="md-nav__link">
+        
+  
+  <span class="md-ellipsis">
+    Dataset Generation
+  </span>
+  
+
+      </a>
+    </li>
+  
+
+              
+            
+              
+                
+  
+  
+  
+  
+    <li class="md-nav__item">
+      <a href="../../../../user-guide/individual-analysis/" class="md-nav__link">
+        
+  
+  <span class="md-ellipsis">
+    Individual Analysis
+  </span>
+  
+
+      </a>
+    </li>
+  
+
+              
+            
+              
+                
+  
+  
+  
+  
+    <li class="md-nav__item">
+      <a href="../../../../user-guide/posekit/" class="md-nav__link">
+        
+  
+  <span class="md-ellipsis">
+    PoseKit
+  </span>
+  
+
+      </a>
+    </li>
+  
+
+              
+            
+              
+                
+  
+  
+  
+  
+    <li class="md-nav__item">
+      <a href="../../../../user-guide/classkit/" class="md-nav__link">
+        
+  
+  <span class="md-ellipsis">
+    ClassKit
+  </span>
+  
+
+      </a>
+    </li>
+  
+
+              
+            
+              
+                
+  
+  
+  
+  
+    <li class="md-nav__item">
+      <a href="../../../../user-guide/detectkit/" class="md-nav__link">
+        
+  
+  <span class="md-ellipsis">
+    DetectKit
+  </span>
+  
+
+      </a>
+    </li>
+  
+
+              
+            
+              
+                
+  
+  
+  
+  
+    <li class="md-nav__item">
+      <a href="../../../../runbooks/detectkit-headless-training/" class="md-nav__link">
+        
+  
+  <span class="md-ellipsis">
+    DetectKit Headless Training
+  </span>
+  
+
+      </a>
+    </li>
+  
+
+              
+            
+              
+                
+  
+  
+  
+  
+    <li class="md-nav__item">
+      <a href="../../../../user-guide/detectkit-semantic-escalation/" class="md-nav__link">
+        
+  
+  <span class="md-ellipsis">
+    DetectKit: Semantic Escalation (SAM3)
+  </span>
+  
+
+      </a>
+    </li>
+  
+
+              
+            
+              
+                
+  
+  
+  
+  
+    <li class="md-nav__item">
+      <a href="../../../../user-guide/detectkit-sahi-calibration/" class="md-nav__link">
+        
+  
+  <span class="md-ellipsis">
+    DetectKit: SAHI Calibration Profiles
+  </span>
+  
+
+      </a>
+    </li>
+  
+
+              
+            
+              
+                
+  
+  
+  
+  
+    <li class="md-nav__item">
+      <a href="../../../../user-guide/filterkit/" class="md-nav__link">
+        
+  
+  <span class="md-ellipsis">
+    FilterKit
+  </span>
+  
+
+      </a>
+    </li>
+  
+
+              
+            
+              
+                
+  
+  
+  
+  
+    <li class="md-nav__item">
+      <a href="../../../../user-guide/refinekit/" class="md-nav__link">
+        
+  
+  <span class="md-ellipsis">
+    RefineKit
+  </span>
+  
+
+      </a>
+    </li>
+  
+
+              
+            
+              
+                
+  
+  
+  
+  
+    <li class="md-nav__item">
+      <a href="../../../../user-guide/troubleshooting/" class="md-nav__link">
+        
+  
+  <span class="md-ellipsis">
+    Troubleshooting
+  </span>
+  
+
+      </a>
+    </li>
+  
+
+              
+            
+          </ul>
+        </nav>
+      
+    </li>
+  
+
+    
+      
+      
+  
+  
+  
+  
+    
+    
+    
+      
+      
+        
+      
+    
+    
+    <li class="md-nav__item md-nav__item--nested">
+      
+        
+        
+          
+        
+        <input class="md-nav__toggle md-toggle md-toggle--indeterminate" type="checkbox" id="__nav_4" >
+        
+          
+          <label class="md-nav__link" for="__nav_4" id="__nav_4_label" tabindex="0">
+            
+  
+  <span class="md-ellipsis">
+    Developer Guide
+  </span>
+  
+
+            <span class="md-nav__icon md-icon"></span>
+          </label>
+        
+        <nav class="md-nav" data-md-level="1" aria-labelledby="__nav_4_label" aria-expanded="false">
+          <label class="md-nav__title" for="__nav_4">
+            <span class="md-nav__icon md-icon"></span>
+            Developer Guide
+          </label>
+          <ul class="md-nav__list" data-md-scrollfix>
+            
+              
+                
+  
+  
+  
+  
+    <li class="md-nav__item">
+      <a href="../../../../developer-guide/architecture/" class="md-nav__link">
+        
+  
+  <span class="md-ellipsis">
+    Architecture
+  </span>
+  
+
+      </a>
+    </li>
+  
+
+              
+            
+              
+                
+  
+  
+  
+  
+    <li class="md-nav__item">
+      <a href="../../../../developer-guide/module-map/" class="md-nav__link">
+        
+  
+  <span class="md-ellipsis">
+    Module Map
+  </span>
+  
+
+      </a>
+    </li>
+  
+
+              
+            
+              
+                
+  
+  
+  
+  
+    <li class="md-nav__item">
+      <a href="../../../../developer-guide/data-flow/" class="md-nav__link">
+        
+  
+  <span class="md-ellipsis">
+    Data Flow
+  </span>
+  
+
+      </a>
+    </li>
+  
+
+              
+            
+              
+                
+  
+  
+  
+  
+    <li class="md-nav__item">
+      <a href="../../../../developer-guide/tracking-algorithm-deep-dive/" class="md-nav__link">
+        
+  
+  <span class="md-ellipsis">
+    Tracking Algorithm Deep Dive
+  </span>
+  
+
+      </a>
+    </li>
+  
+
+              
+            
+              
+                
+  
+  
+  
+  
+    <li class="md-nav__item">
+      <a href="../../../../developer-guide/tracking-optimization/" class="md-nav__link">
+        
+  
+  <span class="md-ellipsis">
+    Tracking Optimization
+  </span>
+  
+
+      </a>
+    </li>
+  
+
+              
+            
+              
+                
+  
+  
+  
+  
+    <li class="md-nav__item">
+      <a href="../../../../developer-guide/gpu-backends/" class="md-nav__link">
+        
+  
+  <span class="md-ellipsis">
+    GPU Backends
+  </span>
+  
+
+      </a>
+    </li>
+  
+
+              
+            
+              
+                
+  
+  
+  
+  
+    <li class="md-nav__item">
+      <a href="../../../../developer-guide/runtime-integration/" class="md-nav__link">
+        
+  
+  <span class="md-ellipsis">
+    Runtime Integration
+  </span>
+  
+
+      </a>
+    </li>
+  
+
+              
+            
+              
+                
+  
+  
+  
+  
+    <li class="md-nav__item">
+      <a href="../../../../developer-guide/resource-containment/" class="md-nav__link">
+        
+  
+  <span class="md-ellipsis">
+    Resource Containment
+  </span>
+  
+
+      </a>
+    </li>
+  
+
+              
+            
+              
+                
+  
+  
+  
+  
+    <li class="md-nav__item">
+      <a href="../../../../developer-guide/profiling/" class="md-nav__link">
+        
+  
+  <span class="md-ellipsis">
+    Profiling
+  </span>
+  
+
+      </a>
+    </li>
+  
+
+              
+            
+              
+                
+  
+  
+  
+  
+    <li class="md-nav__item">
+      <a href="../../../../developer-guide/dependency-cuda-updates/" class="md-nav__link">
+        
+  
+  <span class="md-ellipsis">
+    CUDA Dependency Updates
+  </span>
+  
+
+      </a>
+    </li>
+  
+
+              
+            
+              
+                
+  
+  
+  
+  
+    <li class="md-nav__item">
+      <a href="../../../../developer-guide/performance-tuning/" class="md-nav__link">
+        
+  
+  <span class="md-ellipsis">
+    Performance Tuning
+  </span>
+  
+
+      </a>
+    </li>
+  
+
+              
+            
+              
+                
+  
+  
+  
+  
+    <li class="md-nav__item">
+      <a href="../../../../developer-guide/inference-fast-mode/" class="md-nav__link">
+        
+  
+  <span class="md-ellipsis">
+    Inference Fast Mode
+  </span>
+  
+
+      </a>
+    </li>
+  
+
+              
+            
+              
+                
+  
+  
+  
+  
+    <li class="md-nav__item">
+      <a href="../../../../developer-guide/confidence-metrics/" class="md-nav__link">
+        
+  
+  <span class="md-ellipsis">
+    Confidence Metrics
+  </span>
+  
+
+      </a>
+    </li>
+  
+
+              
+            
+              
+                
+  
+  
+  
+  
+    <li class="md-nav__item">
+      <a href="../../../../developer-guide/extending-detection/" class="md-nav__link">
+        
+  
+  <span class="md-ellipsis">
+    Extending Detection
+  </span>
+  
+
+      </a>
+    </li>
+  
+
+              
+            
+              
+                
+  
+  
+  
+  
+    <li class="md-nav__item">
+      <a href="../../../../developer-guide/extending-identity/" class="md-nav__link">
+        
+  
+  <span class="md-ellipsis">
+    Extending Identity
+  </span>
+  
+
+      </a>
+    </li>
+  
+
+              
+            
+              
+                
+  
+  
+  
+  
+    <li class="md-nav__item">
+      <a href="../../../../developer-guide/code-health/" class="md-nav__link">
+        
+  
+  <span class="md-ellipsis">
+    Code Health & Auditing
+  </span>
+  
+
+      </a>
+    </li>
+  
+
+              
+            
+              
+                
+  
+  
+  
+  
+    <li class="md-nav__item">
+      <a href="../../../../developer-guide/publishing/" class="md-nav__link">
+        
+  
+  <span class="md-ellipsis">
+    Publishing
+  </span>
+  
+
+      </a>
+    </li>
+  
+
+              
+            
+              
+                
+  
+  
+  
+  
+    <li class="md-nav__item">
+      <a href="../../../../developer-guide/contributing/" class="md-nav__link">
+        
+  
+  <span class="md-ellipsis">
+    Contributing
+  </span>
+  
+
+      </a>
+    </li>
+  
+
+              
+            
+          </ul>
+        </nav>
+      
+    </li>
+  
+
+    
+      
+      
+  
+  
+  
+  
+    
+    
+    
+      
+      
+        
+      
+    
+    
+    <li class="md-nav__item md-nav__item--nested">
+      
+        
+        
+          
+        
+        <input class="md-nav__toggle md-toggle md-toggle--indeterminate" type="checkbox" id="__nav_5" >
+        
+          
+          <label class="md-nav__link" for="__nav_5" id="__nav_5_label" tabindex="0">
+            
+  
+  <span class="md-ellipsis">
+    Reference
+  </span>
+  
+
+            <span class="md-nav__icon md-icon"></span>
+          </label>
+        
+        <nav class="md-nav" data-md-level="1" aria-labelledby="__nav_5_label" aria-expanded="false">
+          <label class="md-nav__title" for="__nav_5">
+            <span class="md-nav__icon md-icon"></span>
+            Reference
+          </label>
+          <ul class="md-nav__list" data-md-scrollfix>
+            
+              
+                
+  
+  
+  
+  
+    <li class="md-nav__item">
+      <a href="../../../../reference/api-index/" class="md-nav__link">
+        
+  
+  <span class="md-ellipsis">
+    API Index
+  </span>
+  
+
+      </a>
+    </li>
+  
+
+              
+            
+              
+                
+  
+  
+  
+  
+    <li class="md-nav__item">
+      <a href="../../../../reference/ui-components-hydra/" class="md-nav__link">
+        
+  
+  <span class="md-ellipsis">
+    UI Components (TrackerKit)
+  </span>
+  
+
+      </a>
+    </li>
+  
+
+              
+            
+              
+                
+  
+  
+  
+  
+    <li class="md-nav__item">
+      <a href="../../../../reference/ui-components-posekit/" class="md-nav__link">
+        
+  
+  <span class="md-ellipsis">
+    UI Components (PoseKit)
+  </span>
+  
+
+      </a>
+    </li>
+  
+
+              
+            
+              
+                
+  
+  
+  
+  
+    <li class="md-nav__item">
+      <a href="../../../../reference/api-app/" class="md-nav__link">
+        
+  
+  <span class="md-ellipsis">
+    API (Launcher)
+  </span>
+  
+
+      </a>
+    </li>
+  
+
+              
+            
+              
+                
+  
+  
+  
+  
+    <li class="md-nav__item">
+      <a href="../../../../reference/api-core/" class="md-nav__link">
+        
+  
+  <span class="md-ellipsis">
+    API (Core)
+  </span>
+  
+
+      </a>
+    </li>
+  
+
+              
+            
+              
+                
+  
+  
+  
+  
+    <li class="md-nav__item">
+      <a href="../../../../reference/api-data/" class="md-nav__link">
+        
+  
+  <span class="md-ellipsis">
+    API (Data)
+  </span>
+  
+
+      </a>
+    </li>
+  
+
+              
+            
+              
+                
+  
+  
+  
+  
+    <li class="md-nav__item">
+      <a href="../../../../reference/api-gui/" class="md-nav__link">
+        
+  
+  <span class="md-ellipsis">
+    API (TrackerKit GUI)
+  </span>
+  
+
+      </a>
+    </li>
+  
+
+              
+            
+              
+                
+  
+  
+  
+  
+    <li class="md-nav__item">
+      <a href="../../../../reference/api-widgets/" class="md-nav__link">
+        
+  
+  <span class="md-ellipsis">
+    API (Widgets)
+  </span>
+  
+
+      </a>
+    </li>
+  
+
+              
+            
+              
+                
+  
+  
+  
+  
+    <li class="md-nav__item">
+      <a href="../../../../reference/api-posekit/" class="md-nav__link">
+        
+  
+  <span class="md-ellipsis">
+    API (PoseKit)
+  </span>
+  
+
+      </a>
+    </li>
+  
+
+              
+            
+              
+                
+  
+  
+  
+  
+    <li class="md-nav__item">
+      <a href="../../../../reference/api-utils/" class="md-nav__link">
+        
+  
+  <span class="md-ellipsis">
+    API (Utils)
+  </span>
+  
+
+      </a>
+    </li>
+  
+
+              
+            
+              
+                
+  
+  
+  
+  
+    <li class="md-nav__item">
+      <a href="../../../../reference/cli-reference/" class="md-nav__link">
+        
+  
+  <span class="md-ellipsis">
+    CLI Reference
+  </span>
+  
+
+      </a>
+    </li>
+  
+
+              
+            
+              
+                
+  
+  
+  
+  
+    <li class="md-nav__item">
+      <a href="../../../../reference/technical-reference/" class="md-nav__link">
+        
+  
+  <span class="md-ellipsis">
+    Technical Reference (LaTeX)
+  </span>
+  
+
+      </a>
+    </li>
+  
+
+              
+            
+              
+                
+  
+  
+  
+  
+    <li class="md-nav__item">
+      <a href="../../../../reference/changelog/" class="md-nav__link">
+        
+  
+  <span class="md-ellipsis">
+    Changelog
+  </span>
+  
+
+      </a>
+    </li>
+  
+
+              
+            
+              
+                
+  
+  
+  
+  
+    <li class="md-nav__item">
+      <a href="../../../../reference/faq/" class="md-nav__link">
+        
+  
+  <span class="md-ellipsis">
+    FAQ
+  </span>
+  
+
+      </a>
+    </li>
+  
+
+              
+            
+          </ul>
+        </nav>
+      
+    </li>
+  
+
+    
+  </ul>
+</nav>
+                  </div>
+                </div>
+              </div>
+            
+            
+              
+              <div class="md-sidebar md-sidebar--secondary" data-md-component="sidebar" data-md-type="toc" >
+                <div class="md-sidebar__scrollwrap">
+                  <div class="md-sidebar__inner">
+                    
+
+<nav class="md-nav md-nav--secondary" aria-label="Table of contents">
+  
+  
+  
+    
+  
+  
+    <label class="md-nav__title" for="__toc">
+      <span class="md-nav__icon md-icon"></span>
+      Table of contents
+    </label>
+    <ul class="md-nav__list" data-md-component="toc" data-md-scrollfix>
+      
+        <li class="md-nav__item">
+  <a href="#problem" class="md-nav__link">
+    <span class="md-ellipsis">
+      Problem
+    </span>
+  </a>
+  
+</li>
+      
+        <li class="md-nav__item">
+  <a href="#goal" class="md-nav__link">
+    <span class="md-ellipsis">
+      Goal
+    </span>
+  </a>
+  
+</li>
+      
+        <li class="md-nav__item">
+  <a href="#constraints" class="md-nav__link">
+    <span class="md-ellipsis">
+      Constraints
+    </span>
+  </a>
+  
+</li>
+      
+        <li class="md-nav__item">
+  <a href="#gate" class="md-nav__link">
+    <span class="md-ellipsis">
+      Gate
+    </span>
+  </a>
+  
+</li>
+      
+        <li class="md-nav__item">
+  <a href="#architecture" class="md-nav__link">
+    <span class="md-ellipsis">
+      Architecture
+    </span>
+  </a>
+  
+    <nav class="md-nav" aria-label="Architecture">
+      <ul class="md-nav__list">
+        
+          <li class="md-nav__item">
+  <a href="#new-module-srchydra_suiteutilsprofilingpy" class="md-nav__link">
+    <span class="md-ellipsis">
+      New module: src/hydra_suite/utils/profiling.py
+    </span>
+  </a>
+  
+</li>
+        
+          <li class="md-nav__item">
+  <a href="#gpu-timing-opt-in-deep-gpu-mode" class="md-nav__link">
+    <span class="md-ellipsis">
+      GPU timing: opt-in deep-GPU mode
+    </span>
+  </a>
+  
+</li>
+        
+          <li class="md-nav__item">
+  <a href="#threading" class="md-nav__link">
+    <span class="md-ellipsis">
+      Threading
+    </span>
+  </a>
+  
+</li>
+        
+          <li class="md-nav__item">
+  <a href="#span-map" class="md-nav__link">
+    <span class="md-ellipsis">
+      Span map
+    </span>
+  </a>
+  
+</li>
+        
+          <li class="md-nav__item">
+  <a href="#trackingprofiler-integration" class="md-nav__link">
+    <span class="md-ellipsis">
+      TrackingProfiler integration
+    </span>
+  </a>
+  
+</li>
+        
+          <li class="md-nav__item">
+  <a href="#re-entrancy-and-lifecycle" class="md-nav__link">
+    <span class="md-ellipsis">
+      Re-entrancy and lifecycle
+    </span>
+  </a>
+  
+</li>
+        
+          <li class="md-nav__item">
+  <a href="#hydra_profile1-and-the-user-mode-path" class="md-nav__link">
+    <span class="md-ellipsis">
+      HYDRA_PROFILE=1 and the User-mode path
+    </span>
+  </a>
+  
+</li>
+        
+      </ul>
+    </nav>
+  
+</li>
+      
+        <li class="md-nav__item">
+  <a href="#verification" class="md-nav__link">
+    <span class="md-ellipsis">
+      Verification
+    </span>
+  </a>
+  
+    <nav class="md-nav" aria-label="Verification">
+      <ul class="md-nav__list">
+        
+          <li class="md-nav__item">
+  <a href="#correctness" class="md-nav__link">
+    <span class="md-ellipsis">
+      Correctness
+    </span>
+  </a>
+  
+</li>
+        
+          <li class="md-nav__item">
+  <a href="#overhead" class="md-nav__link">
+    <span class="md-ellipsis">
+      Overhead
+    </span>
+  </a>
+  
+</li>
+        
+          <li class="md-nav__item">
+  <a href="#self-proving-run" class="md-nav__link">
+    <span class="md-ellipsis">
+      Self-proving run
+    </span>
+  </a>
+  
+</li>
+        
+          <li class="md-nav__item">
+  <a href="#unit-tests" class="md-nav__link">
+    <span class="md-ellipsis">
+      Unit tests
+    </span>
+  </a>
+  
+</li>
+        
+      </ul>
+    </nav>
+  
+</li>
+      
+        <li class="md-nav__item">
+  <a href="#implementation-rules" class="md-nav__link">
+    <span class="md-ellipsis">
+      Implementation rules
+    </span>
+  </a>
+  
+</li>
+      
+        <li class="md-nav__item">
+  <a href="#risks" class="md-nav__link">
+    <span class="md-ellipsis">
+      Risks
+    </span>
+  </a>
+  
+</li>
+      
+        <li class="md-nav__item">
+  <a href="#review-corrections-revision-1-2" class="md-nav__link">
+    <span class="md-ellipsis">
+      Review Corrections (revision 1 → 2)
+    </span>
+  </a>
+  
+</li>
+      
+        <li class="md-nav__item">
+  <a href="#gate-results-task-14-mps" class="md-nav__link">
+    <span class="md-ellipsis">
+      Gate results (Task 14, MPS)
+    </span>
+  </a>
+  
+    <nav class="md-nav" aria-label="Gate results (Task 14, MPS)">
+      <ul class="md-nav__list">
+        
+          <li class="md-nav__item">
+  <a href="#1-profiling-on-equivalence-enable_profiling-true-the-fixture-default" class="md-nav__link">
+    <span class="md-ellipsis">
+      1. Profiling-ON equivalence (enable_profiling: true, the fixture default)
+    </span>
+  </a>
+  
+</li>
+        
+          <li class="md-nav__item">
+  <a href="#2-profiling-off-equivalence-enable_profiling-false-injected-in-place-debug_mode-left-absent" class="md-nav__link">
+    <span class="md-ellipsis">
+      2. Profiling-OFF equivalence (enable_profiling: false injected in place, debug_mode left absent)
+    </span>
+  </a>
+  
+</li>
+        
+          <li class="md-nav__item">
+  <a href="#3-the-actual-gate-debug-on-vs-debug-off-byte-identical" class="md-nav__link">
+    <span class="md-ellipsis">
+      3. The actual gate: Debug-ON vs Debug-OFF byte-identical
+    </span>
+  </a>
+  
+</li>
+        
+          <li class="md-nav__item">
+  <a href="#4-overhead-fly_obb-n5-alternating-current-src-vs-current-src" class="md-nav__link">
+    <span class="md-ellipsis">
+      4. Overhead (fly_obb, N=5 alternating, current-src vs current-src)
+    </span>
+  </a>
+  
+</li>
+        
+          <li class="md-nav__item">
+  <a href="#5-self-proving-run-ant_cnn_identity-detection_batch_size-1-vs-25" class="md-nav__link">
+    <span class="md-ellipsis">
+      5. Self-proving run (ant_cnn_identity, detection_batch_size 1 vs 25)
+    </span>
+  </a>
+  
+</li>
+        
+          <li class="md-nav__item">
+  <a href="#verdict" class="md-nav__link">
+    <span class="md-ellipsis">
+      Verdict
+    </span>
+  </a>
+  
+</li>
+        
+      </ul>
+    </nav>
+  
+</li>
+      
+        <li class="md-nav__item">
+  <a href="#gate-results-task-15-cuda-mehek" class="md-nav__link">
+    <span class="md-ellipsis">
+      Gate results (Task 15, CUDA — mehek)
+    </span>
+  </a>
+  
+    <nav class="md-nav" aria-label="Gate results (Task 15, CUDA — mehek)">
+      <ul class="md-nav__list">
+        
+          <li class="md-nav__item">
+  <a href="#1-equivalence-matrix-runtimecuda" class="md-nav__link">
+    <span class="md-ellipsis">
+      1. Equivalence matrix (RUNTIME=cuda)
+    </span>
+  </a>
+  
+</li>
+        
+          <li class="md-nav__item">
+  <a href="#2-deep-gpu-mode-crash-check-hydra_profile_gpu1-fly_obb-cuda" class="md-nav__link">
+    <span class="md-ellipsis">
+      2. Deep-GPU mode crash check (HYDRA_PROFILE_GPU=1, fly_obb, CUDA)
+    </span>
+  </a>
+  
+</li>
+        
+          <li class="md-nav__item">
+  <a href="#verdict_1" class="md-nav__link">
+    <span class="md-ellipsis">
+      Verdict
+    </span>
+  </a>
+  
+</li>
+        
+      </ul>
+    </nav>
+  
+</li>
+      
+    </ul>
+  
+</nav>
+                  </div>
+                </div>
+              </div>
+            
+          
+          
+            <div class="md-content" data-md-component="content">
+              <article class="md-content__inner md-typeset">
+                
+                  
+
+  
+    <a href="https://github.com/neurorishika/hydra-suite/edit/main/docs/superpowers/specs/done/2026-08-21-inference-span-profiling-design.md" title="Edit this page" class="md-content__button md-icon">
+      
+      <svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 24 24"><path d="M10 20H6V4h7v5h5v3.1l2-2V8l-6-6H6c-1.1 0-2 .9-2 2v16c0 1.1.9 2 2 2h4zm10.2-7c.1 0 .3.1.4.2l1.3 1.3c.2.2.2.6 0 .8l-1 1-2.1-2.1 1-1c.1-.1.2-.2.4-.2m0 3.9L14.1 23H12v-2.1l6.1-6.1z"/></svg>
+    </a>
+  
+  
+
+
+<h1 id="extreme-detail-inference-profiling-span-profiler">Extreme-Detail Inference Profiling (Span Profiler)<a class="headerlink" href="#extreme-detail-inference-profiling-span-profiler" title="Permanent link">&para;</a></h1>
+<p><strong>Status:</strong> Shipped — merged to main (bb665956)
+<strong>Date:</strong> 2026-08-21
+<strong>Branch:</strong> <code>feat/inference-span-profiling</code>
+<strong>Revision:</strong> 3 — plan-stage adversarial review corrected the self-proving
+fixture (revision 2 had it inverted) and the Debug-OFF gate mechanism</p>
+<h2 id="problem">Problem<a class="headerlink" href="#problem" title="Permanent link">&para;</a></h2>
+<p>A 1.7–2.1x tracking regression took hours to root-cause because
+<code>batched_detection</code> is a single opaque bucket in <code>core/tracking/profiler.py</code>'s
+<code>PHASE_ORDER</code>. The legacy profiler broke out <code>yolo_obb_inference</code>,
+<code>pose_inference</code>, <code>precompute_cnn_identity</code> and <code>headtail_*</code> separately; the
+Pipeline/InferenceRunner architecture that replaced it does not. The actual
+defect — the whole frame converted to a float32 CHW tensor once per crop
+consumer per frame — was invisible to every existing instrument and was found
+only with ad-hoc timers (see <code>project_pose_cnn_batched_detection_slowdown</code>).</p>
+<p>There are currently three unrelated timing systems:</p>
+<ol>
+<li><code>TrackingProfiler</code> — coarse phases + per-frame categories, JSON export.</li>
+<li><code>HYDRA_RT_PROFILE</code> (<code>runner.py:64-87</code>, seven <code>_rt_prof_*</code> call sites at
+   <code>:777, :833, :840, :841, :914, :972, :1053</code>) — env-gated, realtime path only,
+   logs <code>ms/f</code> every 100 frames, undocumented.</li>
+<li>Ad-hoc timers added and deleted per investigation.</li>
+</ol>
+<h2 id="goal">Goal<a class="headerlink" href="#goal" title="Permanent link">&para;</a></h2>
+<p>When Debug Mode is on, a tracking run emits a profile detailed enough to
+localize a <strong>constant-cost</strong> performance defect to a single function in one run.
+When it is off, behavior and output are exactly as today.</p>
+<p><strong>Explicitly out of reach</strong> (stated because the Goal above would otherwise
+overclaim): <em>diffuse self-time</em> defects — a cross-cutting tax executed inside
+many small operations, such as the grad-mode toggling measured at 26.5s over 20k
+calls in <code>project_sleap_roundtrip_audit</code>. That cost smears as slightly-elevated
+<code>self_s</code> across dozens of spans and never aggregates into one line. No span
+layout can catch it; <code>cProfile</code> is the right instrument and the docs say so.</p>
+<p><strong>Other non-goals:</strong> GUI surface for span depth, cross-run diff tooling,
+flamegraph export, per-detection spans.</p>
+<h2 id="constraints">Constraints<a class="headerlink" href="#constraints" title="Permanent link">&para;</a></h2>
+<ul>
+<li>Tracking output byte-identical with Debug Mode <strong>on and off</strong>.</li>
+<li>No measurable cost when Debug Mode is off (quantified in Verification).</li>
+<li><code>core/</code> must not import from any app layer; the gate arrives as a param.</li>
+<li>CLAUDE.md design principles: no god objects, no copy-pasted boilerplate.</li>
+</ul>
+<h2 id="gate">Gate<a class="headerlink" href="#gate" title="Permanent link">&para;</a></h2>
+<p><strong><code>ENABLE_PROFILING</code> is reused unchanged.</strong> It is already the Debug Mode gate:
+<code>trackerkit/engine_params.py:1471-1475</code> derives it from <code>debug_mode</code> when that
+key is present (<code>_debug_present</code>/<code>_debug_mode</code> at <code>:856-857</code>) and falls back to
+the stored <code>enable_profiling</code> otherwise. It is Qt-free and already threaded to
+<code>core</code> (<code>session.py:243,:319</code>; <code>worker.py:698</code>). No new knob.</p>
+<p>All nine fixture configs in <code>tools/equivalence/fixtures/configs/</code> set
+<code>"enable_profiling": true</code> and none set <code>debug_mode</code>; the default matrix runs
+<strong>eight</strong> of them (<code>ant_cnn_identity_marked</code> is excluded from the <code>VIDEOS</code> array
+at <code>run_matrix.sh:56-75</code>). So the instrumented path is hot in the default gate.
+That is free coverage, and it makes the instrumentation's own overhead a gated
+property — which is why the default profiled path must not synchronize (see
+GPU timing).</p>
+<h2 id="architecture">Architecture<a class="headerlink" href="#architecture" title="Permanent link">&para;</a></h2>
+<h3 id="new-module-srchydra_suiteutilsprofilingpy">New module: <code>src/hydra_suite/utils/profiling.py</code><a class="headerlink" href="#new-module-srchydra_suiteutilsprofilingpy" title="Permanent link">&para;</a></h3>
+<p><strong>Placement.</strong> The timing primitive is a leaf with no dependencies, consumed by
+Core (<code>inference</code>, <code>tracking</code>, <code>post</code>), Data (<code>dataset_generation.py</code>, which
+already imports Core at <code>:332</code>), Integrations, and potentially every kit.
+<code>utils/</code> is the bottom layer in CLAUDE.md's dependency table and is importable
+by all of them; putting the primitive there avoids a second profiling home
+<em>inside</em> <code>core/</code>. <code>TrackingProfiler</code> stays at <code>core/tracking/profiler.py</code> and
+remains the lifecycle owner and renderer. One primitive, one host.</p>
+<div class="language-text highlight"><pre><span></span><code><span id="__span-0-1"><a id="__codelineno-0-1" name="__codelineno-0-1" href="#__codelineno-0-1"></a>SpanRecorder
+</span><span id="__span-0-2"><a id="__codelineno-0-2" name="__codelineno-0-2" href="#__codelineno-0-2"></a>  .span(name, units=None, gpu=False) -&gt; _Span   # context manager
+</span><span id="__span-0-3"><a id="__codelineno-0-3" name="__codelineno-0-3" href="#__codelineno-0-3"></a>  .snapshot() -&gt; dict                           # nested tree
+</span><span id="__span-0-4"><a id="__codelineno-0-4" name="__codelineno-0-4" href="#__codelineno-0-4"></a>  .armed()                                      # ctx manager: arm/disarm, try/finally
+</span><span id="__span-0-5"><a id="__codelineno-0-5" name="__codelineno-0-5" href="#__codelineno-0-5"></a>  .bind_thread()                                # ctx manager: per-thread stack rooted here
+</span><span id="__span-0-6"><a id="__codelineno-0-6" name="__codelineno-0-6" href="#__codelineno-0-6"></a>
+</span><span id="__span-0-7"><a id="__codelineno-0-7" name="__codelineno-0-7" href="#__codelineno-0-7"></a>module level:
+</span><span id="__span-0-8"><a id="__codelineno-0-8" name="__codelineno-0-8" href="#__codelineno-0-8"></a>  span(name, units=None, gpu=False)             # what call sites use
+</span><span id="__span-0-9"><a id="__codelineno-0-9" name="__codelineno-0-9" href="#__codelineno-0-9"></a>  current() -&gt; SpanRecorder | None
+</span></code></pre></div>
+<p><strong>Off-path cost.</strong> <code>span()</code> reads one <code>ContextVar</code>; when unarmed it returns a
+shared frozen <code>_NullSpan</code> singleton with empty <code>__slots__</code> methods. Measured on
+the deployment interpreter (3.13.12): <code>ContextVar.get()</code> 17.3 ns, <code>with
+_NullSpan:</code> 117 ns, full <code>with span('x'):</code> <strong>152 ns</strong> against a 7.7 ns
+unwrapped baseline. At ~30 span-enters per frame that is ~4.6 µs/frame — 0.02%
+of a 25 ms frame. The claim is "not measurable at frame scale", not literally
+zero, and it holds <strong>only while implementation rule 3 (no spans in loop bodies)
+is enforced</strong>.</p>
+<p><strong>Tree, not flat dict.</strong> Each node records <code>total_s</code> (inclusive), <code>self_s</code>
+(inclusive minus direct children), <code>n_calls</code>, summed <code>units</code>, <code>max_s</code>,
+<code>first_call_s</code>, and its thread name. Children are keyed by name <em>within their
+parent</em>, so <code>crop_extract</code> under <code>cnn</code> and under <code>headtail</code> stay distinct
+without callers hand-prefixing strings. <code>self_s</code> localizes a defect: high
+inclusive with near-zero self time exonerates a stage and indicts its child.</p>
+<p><strong><code>max_s</code> and <code>first_call_s</code> are not optional.</strong> The adjacent <code>TrackingProfiler</code>
+reports p50/p95/p99 from per-frame samples (<code>profiler.py:328, 466-468,
+579-594</code>); a mean-only tree would be a regression beside it. A 5 s TensorRT
+engine build or MPS shader compile inside <code>backend_forward</code> (n=500) inflates the
+mean by 10 ms/call and is <strong>indistinguishable from a uniform 10 ms slowdown</strong> —
+it would indict the wrong function. Two floats per node catch it at O(paths).
+Full percentiles are still declined: they cost O(calls).</p>
+<p><strong>Aggregate-only otherwise.</strong> Totals per distinct span <em>path</em>, no sample lists.
+Memory is O(distinct paths) — the map is static at ~60 names, enforced by the
+registry below — regardless of a 100k-frame run.</p>
+<p><strong><code>units</code> answers the batch-size question.</strong> Every span may carry a work-unit
+count (frames in window, detections, crops). With <code>n_calls</code> and <code>units</code> both
+recorded the report prints <code>ms/call</code> <em>and</em> <code>ms/unit</code>. At the default
+<code>detection_batch_size=1</code> (<code>config.py:439</code>) each window is one frame; at 25 the
+same total work arrives in 1/25th the calls. Per-call overhead falls out of the
+comparison directly. <code>units</code> at a parent is supplied independently, never summed
+from children (<code>window/</code> counts frames, <code>pose/</code> counts crops — one level apart,
+different quantities).</p>
+<p><strong>Span-name registry.</strong> Names are module-level constants in
+<code>utils/profiling_names.py</code>, not bare string literals duplicated across 10+
+modules — that would be the copy-pasted boilerplate CLAUDE.md forbids, in string
+form, and a refactor that moved a function would silently drop its row with
+nothing failing. Function-boundary spans use a <code>@spanned(NAME, units=...)</code>
+decorator; <code>with span(...)</code> is reserved for sub-function regions
+(<code>frame_to_chw</code>, <code>affine_loop</code>). Dynamic/label-keyed span names are prohibited —
+they would make memory O(labels).</p>
+<h3 id="gpu-timing-opt-in-deep-gpu-mode">GPU timing: opt-in deep-GPU mode<a class="headerlink" href="#gpu-timing-opt-in-deep-gpu-mode" title="Permanent link">&para;</a></h3>
+<p><strong>The default profiled path does not synchronize.</strong> Spans are host wall-clock.</p>
+<p><code>torch.cuda.synchronize()</code> and <code>torch.mps.synchronize()</code> are <strong>device-wide</strong>,
+not stream- or thread-scoped, and <code>pipeline_depth</code> defaults to 2
+(<code>config.py:440</code>), so <code>_run_double_buffer</code> is the normal path. A sync taken on
+the consumer thread therefore drains the <em>producer's</em> in-flight OBB kernels:
+<code>cnn/backend_forward</code> would bill OBB's device time to CNN — cross-stage
+misattribution, the exact failure this design exists to prevent. The codebase
+already made this call deliberately: <code>runtime.py:75-105</code> uses per-tensor
+<code>torch.cuda.Event</code> handoffs via <code>_HANDOFF_EVENTS</code> specifically to avoid a global
+drain.</p>
+<p>Measured cost on <code>hydra-mps</code> (torch 2.11.0): <code>torch.mps.synchronize()</code> is 0.1 µs
+against an idle queue but <strong>318 µs with one pending op</strong>, versus 8.5 µs for the
+same op unsynced — a ~37x penalty. At ~6 <code>gpu=True</code> spans per frame at
+<code>detection_batch_size=1</code> that is ~1.8 ms/frame, which alone breaks the ≤2%
+target on the fast clips and would ride in every future equivalence perf ratio
+on every branch, since the fixtures profile hot.</p>
+<p><strong><code>HYDRA_PROFILE_GPU=1</code> opts into a deep-GPU diagnostic pass</strong> which:</p>
+<ol>
+<li>enables <code>synchronize()</code> on <code>gpu=True</code> span exit, and</li>
+<li><strong>forces <code>pipeline_depth=1</code></strong>, so there is no producer thread to contaminate
+   and the serialization is deliberate and known.</li>
+</ol>
+<p>The run is explicitly not the production schedule; that is the price of device
+attribution, paid only when asked for. The JSON stamps
+<code>"gpu_mode": "off" | "deep"</code> so no one compares trees across the two.</p>
+<p>An honest statement of what each mode yields, replacing the "dual timestamps
+give you both" claim from revision 1 (which was wrong — a sync's effect is not
+local: once span N drains the device, span N+1 starts from an empty queue and
+its <code>total_s</code> describes a schedule production never runs):</p>
+<table>
+<thead>
+<tr>
+<th>Mode</th>
+<th><code>total_s</code> means</th>
+<th>GPU attribution</th>
+</tr>
+</thead>
+<tbody>
+<tr>
+<td>default</td>
+<td>host cost under the production schedule</td>
+<td>device work smears into whichever span later blocks</td>
+</tr>
+<tr>
+<td>deep (<code>HYDRA_PROFILE_GPU=1</code>)</td>
+<td>host cost under a serialized depth=1 schedule</td>
+<td>per-span device time, uncontaminated</td>
+</tr>
+</tbody>
+</table>
+<p>Per-span CUDA events — true device time without serializing — are recorded as a
+<strong>named future slice</strong>, not silently omitted. They are CUDA-only (no MPS
+equivalent) and would let the deep pass keep depth=2.</p>
+<h3 id="threading">Threading<a class="headerlink" href="#threading" title="Permanent link">&para;</a></h3>
+<p>Spans taken on a thread that never armed the recorder read the <code>ContextVar</code>'s
+default and <strong>vanish silently</strong> — the report would confidently show that work
+costing zero. (Verified semantics: each thread gets its own top-level context;
+<code>threading.Thread</code> targets and <code>ThreadPoolExecutor</code> workers do <strong>not</strong> inherit
+the spawning thread's context, unlike asyncio tasks.) Every off-thread site must
+therefore be bound explicitly:</p>
+<table>
+<thead>
+<tr>
+<th>Site</th>
+<th>Binding</th>
+</tr>
+</thead>
+<tbody>
+<tr>
+<td><code>pipeline.py:502,541-543</code> <code>pipeline-obb-producer</code></td>
+<td>wrap the producer target</td>
+</tr>
+<tr>
+<td><code>cache/writer.py:63</code> async CacheWriter worker</td>
+<td>wrap the worker loop</td>
+</tr>
+<tr>
+<td><code>crops.py:164</code> <code>_get_warp_pool</code> ThreadPoolExecutor</td>
+<td>pool <code>initializer=</code></td>
+</tr>
+<tr>
+<td><code>interpolated_crops.py:925-928</code> Sequential/SparseFramePrefetcher (<code>utils/frame_prefetcher.py:88-98</code>)</td>
+<td>bind inside the prefetcher's decode thread</td>
+</tr>
+<tr>
+<td><code>media_export.py:605</code> writer thread</td>
+<td>wrap the writer loop</td>
+</tr>
+<tr>
+<td><code>worker.py:448-452</code> realtime FramePrefetcher</td>
+<td>bind inside the decode thread</td>
+</tr>
+</tbody>
+</table>
+<p>The last three were missed in revision 1. The prefetcher one is the most
+dangerous: <code>interp_crops/crop_extraction/read</code> sits directly over it, so an
+unbound version would report near-zero frame-read cost in interpolation —
+against ~12s of video seek measured in <code>project_sleap_roundtrip_audit</code>. A span
+wrapped around <code>.read()</code> instead of the decode measures <strong>queue-wait, not
+decode</strong>, which is a different lie; the span goes inside the prefetcher thread.</p>
+<p><strong>Stacks are thread-local; only the aggregated node table is shared.</strong> The stack
+lives in the <code>ContextVar</code> value, rooted at each <code>bind_thread()</code>; a single shared
+stack would interleave pushes from concurrent threads and corrupt parentage, and
+the lock protects counters, not stack coherence. Node-table updates take a
+<code>threading.Lock</code> (39 ns uncontended; producer + CacheWriter + warp pool can
+contend, so the contended case is measured in Verification, not assumed).</p>
+<p>Each node is stamped with its thread. <strong>Percentages are computed within a
+thread, never across</strong>; the top-level denominator is the pass's own wall-clock.
+At depth≥2 summed span time legitimately exceeds wall-clock, and a subtree that
+is 43% of its thread but 4% of the pass renders visibly as both. This is the
+distortion behind the refuted SLEAP-batching premise (pose measured 4.6% of
+wall, batching returned ~0 end-to-end gain) and must not be reintroduced.</p>
+<h3 id="span-map">Span map<a class="headerlink" href="#span-map" title="Permanent link">&para;</a></h3>
+<p>~60 spans across four trees. Parents supply the prefix.</p>
+<div class="language-text highlight"><pre><span></span><code><span id="__span-1-1"><a id="__codelineno-1-1" name="__codelineno-1-1" href="#__codelineno-1-1"></a>session/                        &lt;- armed at SessionRunner.run (session.py:530+)
+</span><span id="__span-1-2"><a id="__codelineno-1-2" name="__codelineno-1-2" href="#__codelineno-1-2"></a>  track_forward  track_backward
+</span><span id="__span-1-3"><a id="__codelineno-1-3" name="__codelineno-1-3" href="#__codelineno-1-3"></a>  postprocess/ pose_quality  temporal_pose  trajectory_postproc
+</span><span id="__span-1-4"><a id="__codelineno-1-4" name="__codelineno-1-4" href="#__codelineno-1-4"></a>  merge
+</span><span id="__span-1-5"><a id="__codelineno-1-5" name="__codelineno-1-5" href="#__codelineno-1-5"></a>  rich_export/ build_dataframe  relink  write
+</span><span id="__span-1-6"><a id="__codelineno-1-6" name="__codelineno-1-6" href="#__codelineno-1-6"></a>  interpolated_crops -&gt; interp_crops tree
+</span><span id="__span-1-7"><a id="__codelineno-1-7" name="__codelineno-1-7" href="#__codelineno-1-7"></a>  dataset_generation/ seek  read  crop  write
+</span><span id="__span-1-8"><a id="__codelineno-1-8" name="__codelineno-1-8" href="#__codelineno-1-8"></a>  media_export  annotated_video
+</span><span id="__span-1-9"><a id="__codelineno-1-9" name="__codelineno-1-9" href="#__codelineno-1-9"></a>
+</span><span id="__span-1-10"><a id="__codelineno-1-10" name="__codelineno-1-10" href="#__codelineno-1-10"></a>inference/                      (armed for the runner pass)
+</span><span id="__span-1-11"><a id="__codelineno-1-11" name="__codelineno-1-11" href="#__codelineno-1-11"></a>  batch_pass/
+</span><span id="__span-1-12"><a id="__codelineno-1-12" name="__codelineno-1-12" href="#__codelineno-1-12"></a>    open_caches
+</span><span id="__span-1-13"><a id="__codelineno-1-13" name="__codelineno-1-13" href="#__codelineno-1-13"></a>    window/                     units=frames
+</span><span id="__span-1-14"><a id="__codelineno-1-14" name="__codelineno-1-14" href="#__codelineno-1-14"></a>      decode                             &lt;- producer thread at depth&gt;=2
+</span><span id="__span-1-15"><a id="__codelineno-1-15" name="__codelineno-1-15" href="#__codelineno-1-15"></a>      detect/
+</span><span id="__span-1-16"><a id="__codelineno-1-16" name="__codelineno-1-16" href="#__codelineno-1-16"></a>        run_obb/  model_execute[gpu]  extract_raw
+</span><span id="__span-1-17"><a id="__codelineno-1-17" name="__codelineno-1-17" href="#__codelineno-1-17"></a>        run_bgsub_batch
+</span><span id="__span-1-18"><a id="__codelineno-1-18" name="__codelineno-1-18" href="#__codelineno-1-18"></a>      materialize[gpu]                    &lt;- window/ level, sibling of detect/, not nested under run_obb/
+</span><span id="__span-1-19"><a id="__codelineno-1-19" name="__codelineno-1-19" href="#__codelineno-1-19"></a>      filter
+</span><span id="__span-1-20"><a id="__codelineno-1-20" name="__codelineno-1-20" href="#__codelineno-1-20"></a>      headtail/  crop_extract/ affine_loop  warp_batch[gpu]/ frame_to_chw
+</span><span id="__span-1-21"><a id="__codelineno-1-21" name="__codelineno-1-21" href="#__codelineno-1-21"></a>                 apply_fit  backend_forward[gpu]              units=dets
+</span><span id="__span-1-22"><a id="__codelineno-1-22" name="__codelineno-1-22" href="#__codelineno-1-22"></a>      cnn/       crop_extract/ affine_loop  warp_batch[gpu]/ frame_to_chw
+</span><span id="__span-1-23"><a id="__codelineno-1-23" name="__codelineno-1-23" href="#__codelineno-1-23"></a>                 apply_fit  backend_forward[gpu]              units=dets
+</span><span id="__span-1-24"><a id="__codelineno-1-24" name="__codelineno-1-24" href="#__codelineno-1-24"></a>      pose/      crop_extract/ affine_loop  warp_batch[gpu]/ frame_to_chw
+</span><span id="__span-1-25"><a id="__codelineno-1-25" name="__codelineno-1-25" href="#__codelineno-1-25"></a>                               foreign_mask
+</span><span id="__span-1-26"><a id="__codelineno-1-26" name="__codelineno-1-26" href="#__codelineno-1-26"></a>                 prep_loop  transport  backend_forward[gpu]   units=crops
+</span><span id="__span-1-27"><a id="__codelineno-1-27" name="__codelineno-1-27" href="#__codelineno-1-27"></a>      apriltag
+</span><span id="__span-1-28"><a id="__codelineno-1-28" name="__codelineno-1-28" href="#__codelineno-1-28"></a>      cache_write/ enqueue  flush                             &lt;- writer thread
+</span><span id="__span-1-29"><a id="__codelineno-1-29" name="__codelineno-1-29" href="#__codelineno-1-29"></a>      assemble_scatter
+</span><span id="__span-1-30"><a id="__codelineno-1-30" name="__codelineno-1-30" href="#__codelineno-1-30"></a>  realtime/     obb/  crops/  individual/  cache/   (mirrors runner.py:760-1273
+</span><span id="__span-1-31"><a id="__codelineno-1-31" name="__codelineno-1-31" href="#__codelineno-1-31"></a>                structure, NOT the batch child names)
+</span><span id="__span-1-32"><a id="__codelineno-1-32" name="__codelineno-1-32" href="#__codelineno-1-32"></a>
+</span><span id="__span-1-33"><a id="__codelineno-1-33" name="__codelineno-1-33" href="#__codelineno-1-33"></a>post/
+</span><span id="__span-1-34"><a id="__codelineno-1-34" name="__codelineno-1-34" href="#__codelineno-1-34"></a>  prepare  resolve/ merge_candidates  enrich_identity  apply_merges  renumber
+</span><span id="__span-1-35"><a id="__codelineno-1-35" name="__codelineno-1-35" href="#__codelineno-1-35"></a>  interpolate  tag_identity  rescale
+</span><span id="__span-1-36"><a id="__codelineno-1-36" name="__codelineno-1-36" href="#__codelineno-1-36"></a>
+</span><span id="__span-1-37"><a id="__codelineno-1-37" name="__codelineno-1-37" href="#__codelineno-1-37"></a>interp_crops/
+</span><span id="__span-1-38"><a id="__codelineno-1-38" name="__codelineno-1-38" href="#__codelineno-1-38"></a>  setup  gap_detection  crop_extraction/ read  warp  pose_inference  cnn_inference
+</span><span id="__span-1-39"><a id="__codelineno-1-39" name="__codelineno-1-39" href="#__codelineno-1-39"></a>  finalize
+</span></code></pre></div>
+<p><strong>Head-tail and CNN get the same <code>crop_extract</code> children as pose.</strong> Revision 1
+decomposed only pose and claimed that was "exactly where the last defect lived".
+It was not: of the 34.4s defect, <strong>24.0s was in the head-tail + CNN consumers</strong>
+(n=300 via <code>extract_classifier_crops</code>) and 10.4s in pose (n=150). Both paths
+route through the same seam — <code>crops.py:103-104</code> and <code>crops.py:218-219</code> both
+call <code>canonical_warp_batch_from_frame(frame, m_aligns, geometry, lambda sub:
+_frame_to_chw_float(sub, device))</code>. The smoking gun is that conversion cost is
+O(frame area) and independent of detection count while the warp scales with
+<code>units</code>; that signature is only visible when the two are separate spans. Under
+revision 1's map, the <em>larger share</em> of the defect stayed opaque.</p>
+<p><strong>The <code>session/</code> tree closes the second acid test.</strong> Revision 1 covered only the
+pipeline it had just finished debugging. <code>SessionRunner</code> (<code>session.py:541-584</code>)
+runs <code>postprocess</code>, <code>rich_export</code>, <code>interpolated_crops</code>, <code>dataset_generation</code>,
+<code>media_export</code> and <code>annotated_video</code> as stages that no armed consumer wrapped —
+~28% of wall in pandas code plus the dataset-generation seeks, all invisible.
+Arming at <code>SessionRunner.run</code> and adding the <code>session/</code> tree is what stops this
+design from reproducing, at session scope, the "one opaque bucket" failure the
+Problem section opens with.</p>
+<p><strong>Placement rule: spans wrap loops, never loop bodies.</strong> Inside a per-detection
+body at 50 detections x 100k frames that is 5M calls measuring what the
+aggregate already reports. Per-detection cost comes from <code>units</code> (<code>ms/unit</code>).</p>
+<h3 id="trackingprofiler-integration">TrackingProfiler integration<a class="headerlink" href="#trackingprofiler-integration" title="Permanent link">&para;</a></h3>
+<p><code>TrackingProfiler.__init__</code> constructs a <code>SpanRecorder</code> when <code>enabled</code>, exposes
+it as <code>.spans</code>, and gains <code>armed()</code> — the context manager the consumers wrap
+their work in (<code>SessionRunner.run</code>, <code>worker.py</code> around the runner pass,
+<code>post/merge.py</code>, <code>post/interpolated_crops.py</code>).</p>
+<p><code>PHASE_ORDER</code>, <code>CATEGORY_ORDER</code>, and the existing <code>phases</code> / <code>categories</code> JSON
+sections are <strong>untouched</strong>. The tree lands in a new sibling key of
+<code>&lt;video&gt;_logs/tracking_profile_{forward,backward}.json</code>. Verified safe: the only
+consumers of that file are <code>tests/test_tracking_profiler.py</code> (no strict key-set
+assertions) and the path-only tests in
+<code>tests/core/tracking/test_profile_output_path.py</code>; nothing in <code>tools/</code> or
+<code>scripts/</code> parses it.</p>
+<div class="language-json highlight"><pre><span></span><code><span id="__span-2-1"><a id="__codelineno-2-1" name="__codelineno-2-1" href="#__codelineno-2-1"></a><span class="nt">"gpu_mode"</span><span class="p">:</span><span class="w"> </span><span class="s2">"off"</span><span class="p">,</span>
+</span><span id="__span-2-2"><a id="__codelineno-2-2" name="__codelineno-2-2" href="#__codelineno-2-2"></a><span class="nt">"spans"</span><span class="p">:</span><span class="w"> </span><span class="p">{</span><span class="nt">"name"</span><span class="p">:</span><span class="w"> </span><span class="s2">"session"</span><span class="p">,</span><span class="w"> </span><span class="nt">"total_s"</span><span class="p">:</span><span class="w"> </span><span class="mf">41.2</span><span class="p">,</span><span class="w"> </span><span class="nt">"self_s"</span><span class="p">:</span><span class="w"> </span><span class="mf">0.3</span><span class="p">,</span><span class="w"> </span><span class="nt">"n_calls"</span><span class="p">:</span><span class="w"> </span><span class="mi">1</span><span class="p">,</span>
+</span><span id="__span-2-3"><a id="__codelineno-2-3" name="__codelineno-2-3" href="#__codelineno-2-3"></a><span class="w">          </span><span class="nt">"max_s"</span><span class="p">:</span><span class="w"> </span><span class="mf">41.2</span><span class="p">,</span><span class="w"> </span><span class="nt">"first_call_s"</span><span class="p">:</span><span class="w"> </span><span class="mf">41.2</span><span class="p">,</span><span class="w"> </span><span class="nt">"thread"</span><span class="p">:</span><span class="w"> </span><span class="s2">"MainThread"</span><span class="p">,</span>
+</span><span id="__span-2-4"><a id="__codelineno-2-4" name="__codelineno-2-4" href="#__codelineno-2-4"></a><span class="w">          </span><span class="nt">"children"</span><span class="p">:</span><span class="w"> </span><span class="p">[</span><span class="err">...</span><span class="p">]}</span>
+</span></code></pre></div>
+<p><code>log_final_summary</code> gains a <code>SPAN TREE</code> block after the existing phase table:
+indented by depth, each line <code>name  total_s  (% of parent)  n=calls  ms/call
+ms/unit  max</code>, sorted by <code>total_s</code> descending within each level, with a
+<code>concurrent</code> marker on off-thread subtrees.</p>
+<p><strong>Debug-off behavior is unchanged in every respect</strong>: <code>enabled=False</code> builds no
+recorder, <code>arm()</code> is never called, <code>span()</code> returns the null singleton, and the
+JSON is not written.</p>
+<h3 id="re-entrancy-and-lifecycle">Re-entrancy and lifecycle<a class="headerlink" href="#re-entrancy-and-lifecycle" title="Permanent link">&para;</a></h3>
+<ul>
+<li>No public bare <code>arm()</code>. <code>armed()</code> is a context manager with <code>try/finally</code>, so
+  a leaked arm is unrepresentable.</li>
+<li><code>ContextVar.set()</code> / <code>.reset()</code> with the token saved: nesting is a proper
+  stack, so <code>SessionRunner</code>, forward/backward passes and <code>MergeWorker</code> coexist
+  in one process, the inner arm restoring the outer on exit.</li>
+<li><code>_Span.__exit__</code> pops by object identity, never by name, and never swallows
+  (returns <code>False</code>). An exception mid-span unwinds correctly instead of nesting
+  every later span under a phantom parent. The recorder warns on an unbalanced
+  stack at disarm.</li>
+</ul>
+<h3 id="hydra_profile1-and-the-user-mode-path"><code>HYDRA_PROFILE=1</code> and the User-mode path<a class="headerlink" href="#hydra_profile1-and-the-user-mode-path" title="Permanent link">&para;</a></h3>
+<p><code>runner.py:64-87</code> and its seven <code>_rt_prof_*</code> call sites are deleted. Naive
+deletion would be a capability regression: <code>core/inference</code> is also driven by
+DetectKit and PoseKit, which have no <code>TrackingProfiler</code>, and the env var was the
+only way to profile those paths.</p>
+<p><code>HYDRA_PROFILE=1</code> arms a <strong>process-level recorder</strong> dumping the same tree at
+exit — same recorder, same renderer, no <code>TrackingProfiler</code> required.
+<code>HYDRA_RT_PROFILE</code> is kept as a one-line alias. Specified precisely, because
+revision 1 left all three of these open:</p>
+<ul>
+<li><strong>Precedence:</strong> a <code>TrackingProfiler</code> recorder wins while armed (its <code>armed()</code>
+  nests over the process recorder via the token stack); the process recorder
+  resumes outside. Spans go to exactly one recorder, never both.</li>
+<li><strong>Dump location:</strong> <code>&lt;video&gt;_logs/</code> when a session supplies one, else
+  <code>$HYDRA_DATA_DIR/profiles/span_profile_&lt;pid&gt;.json</code> plus a logged tree.</li>
+<li><strong>User mode:</strong> this is the supported route to profile <strong>without changing what
+  the run does</strong>. Debug Mode is not observation-only — it changes intermediate
+  cleanup and CSV outputs (<code>session.py:614-621</code>) — so "turn on Debug and re-run"
+  profiles a different run than the one that was slow. <code>HYDRA_PROFILE=1</code> is
+  documented as the answer for a User-mode user hitting a performance problem.</li>
+</ul>
+<h2 id="verification">Verification<a class="headerlink" href="#verification" title="Permanent link">&para;</a></h2>
+<h3 id="correctness">Correctness<a class="headerlink" href="#correctness" title="Permanent link">&para;</a></h3>
+<p>Byte-identical tracking output, Debug on <strong>and</strong> off, via
+<code>tools/equivalence/run_matrix.sh</code> — MPS on this box, CUDA on mehek. Baseline
+<code>legacy/main</code>. The matrix is run <strong>before</strong> the change with the same baseline so
+the slice's effect is attributable. Fixtures already profile hot; one additional
+run with <strong><code>enable_profiling: false</code></strong> injected proves the off-path is
+identical. It must <strong>not</strong> be done by setting <code>debug_mode: false</code>: that
+derives <code>DEBUG_MODE=False</code>, which triggers the User-mode cleanup at
+<code>session.py:619-637</code> and <strong>deletes <code>_forward.csv</code> and <code>_tracking_final.csv</code></strong> —
+the two files the acceptance criterion compares. The code says so itself
+("NO-OP in debug mode (and thus a no-op for the equivalence gate)"). Clearing
+<code>enable_profiling</code> while leaving <code>debug_mode</code> absent keeps DEBUG_MODE at its
+<code>True</code> default, so the debug CSVs are still written, and disarms every span —
+which isolates exactly the variable under test. Row
+counts verified <code>&gt; 1</code>; conda active throughout. Known baseline noise: bistable
+head/tail pi-flips on head/tail clips.</p>
+<h3 id="overhead">Overhead<a class="headerlink" href="#overhead" title="Permanent link">&para;</a></h3>
+<p><strong>Primary measurement: current-src vs current-src, <code>enable_profiling</code> true vs
+false</strong> — same tree, same models, one variable.</p>
+<p>Revision 1 specified a single on/off pair, which cannot resolve the ≤2% target:
+this box has a <strong>measured ~30% wall-clock swing under load</strong> that once produced
+a bogus <code>1.65x SLOWER</code> verdict. The protocol is therefore <strong>N=5 alternating
+runs per condition on an otherwise-quiet box, reporting median and IQR</strong>, with
+the pass criterion being that the on/off median delta is ≤2% <em>and</em> smaller than
+the within-condition IQR. If the noise floor exceeds the effect, the result is
+reported as "below noise floor", not as a pass.</p>
+<p>Host-side armed cost is already bounded by measurement: ~594 ns/span (2x
+<code>perf_counter</code> @31.3 ns, <code>Lock</code> @39 ns, dict updates, stack push/pop) — at ~30
+spans/frame, ~18 µs/frame. Contended lock cost is measured during this pass
+rather than assumed. The legacy-vs-current <code>PERF_TOLERANCE=1.25</code> ratio remains
+only as the secondary regression gate; it cannot attribute overhead.</p>
+<p><code>HYDRA_PROFILE_GPU=1</code> is <strong>not</strong> exercised by the gate — it is a diagnostic mode
+that deliberately changes the schedule.</p>
+<h3 id="self-proving-run">Self-proving run<a class="headerlink" href="#self-proving-run" title="Permanent link">&para;</a></h3>
+<p>Revision 2 moved this run to <code>ant_obb_sleap</code> on the claim that
+<code>ant_cnn_identity</code> "has no pose model". <strong>That was backwards and is corrected
+here.</strong> Verified against the fixture configs:</p>
+<table>
+<thead>
+<tr>
+<th>fixture</th>
+<th><code>enable_pose_extractor</code></th>
+<th><code>pose_model_dir</code></th>
+<th><code>cnn_classifiers</code></th>
+<th>headtail</th>
+</tr>
+</thead>
+<tbody>
+<tr>
+<td><code>ant_obb_sleap</code></td>
+<td><code>false</code></td>
+<td>—</td>
+<td><code>[]</code></td>
+<td>yes</td>
+</tr>
+<tr>
+<td><code>ant_cnn_identity</code></td>
+<td><code>true</code></td>
+<td>SLEAP unet</td>
+<td>1 model</td>
+<td>yes</td>
+</tr>
+</tbody>
+</table>
+<p><code>is_pose_inference_enabled</code> (<code>session_policy.py:29</code>) requires both
+<code>enable_pose_extractor</code> and a non-empty <code>pose_model_dir</code>, so <strong><code>ant_obb_sleap</code>
+runs neither pose nor CNN</strong> — two of the three <code>backend_forward</code> nodes the
+criterion compares do not exist there. <code>ant_cnn_identity</code> is the only fixture
+carrying all three consumers. Revision 1's clip was right; revision 2 broke it.</p>
+<p><code>ant_cnn_identity</code> at stock <code>detection_batch_size=1</code> versus the same
+clip at 25 via <code>tools/equivalence/runner.py --detection-batch-size</code>
+(<code>:143,156-157,240</code>, flowing to <code>window_size</code> at <code>pipeline.py:178-189</code>),
+comparing <code>n_calls</code> and <code>ms/unit</code> on <code>pose/backend_forward</code>,
+<code>cnn/backend_forward</code> and <code>headtail/backend_forward</code>. The batch-25 run is a
+<strong>profiling experiment, not a byte-identity gate</strong>: changing the window size
+changes decode and crop batching, so a tracking diff there is expected and is
+not evidence of a profiler bug.</p>
+<p>If the per-call overhead of a 1-frame window against 25-frame windows is not
+readable from those two JSON files alone, the profiler has not earned its keep
+and that is reported as a failure.</p>
+<h3 id="unit-tests">Unit tests<a class="headerlink" href="#unit-tests" title="Permanent link">&para;</a></h3>
+<ul>
+<li>nesting and <code>self_s</code> arithmetic; <code>max_s</code> / <code>first_call_s</code> correctness</li>
+<li><code>units</code> aggregation; <code>ms/unit</code> derivation; parent <code>units</code> not summed from
+  children</li>
+<li>disarmed <code>span()</code> allocates nothing</li>
+<li><strong>thread propagation through <code>bind_thread</code></strong> — fails if OBB spans go missing
+  at depth≥2. The single most likely silent bug in the design.</li>
+<li><strong>two-thread concurrent nesting</strong> produces correctly-parented, uncorrupted
+  trees (guards the thread-local-stack requirement, which is the part two
+  implementers would otherwise build differently)</li>
+<li>percentages never computed across threads</li>
+<li>exception mid-span leaves a balanced stack</li>
+<li>nested <code>armed()</code> restores the outer recorder; <code>HYDRA_PROFILE</code> precedence</li>
+<li><strong>golden span-path set</strong>: a tiny synthetic pipeline run armed, asserting the
+  snapshot's span-path set against a checked-in expected set. This is the only
+  test that catches "a span silently disappeared in a refactor" — the failure
+  mode the whole feature exists to prevent — and revision 1 had no test of the
+  instrumentation at all, only of the recorder.</li>
+<li><code>HYDRA_PROFILE=1</code> exercised for DetectKit and PoseKit, so Risk 4's mitigation
+  does not ship untested.</li>
+</ul>
+<h2 id="implementation-rules">Implementation rules<a class="headerlink" href="#implementation-rules" title="Permanent link">&para;</a></h2>
+<ol>
+<li><strong>Take the timers from <code>instrumentation.patch</code>, take none of the
+   memoization.</strong> The shim also introduces <code>_CHW_MEMO</code> / <code>reset_chw_memo()</code> /
+   <code>HYDRA_CHW_MEMO</code> (patch lines 238-253) and wires <code>reset_chw_memo()</code> into
+   <code>Pipeline._process_obb_results</code> (patch lines 82-84, 190) — a <em>functional</em>
+   change riding in the same diff. Porting it wholesale would smuggle a caching
+   change into a pure-observation commit: the one thing that could break
+   byte-identity, and the hardest kind to attribute because the diff reads as
+   "just profiling". The real fix for that cost already shipped in <code>4db4e93a</code> /
+   <code>542ce736</code>.</li>
+<li>Every hunk in the final diff against <code>main</code> is a <code>with span(...)</code> / <code>@spanned</code>
+   wrapper, an import, or the new module. No logic edits. Verified by reading
+   the diff before the gate is run. Sanctioned exception: a fix round on
+   <code>pipeline.py</code>'s <code>_stream_windows</code> was a genuine, disclosed,
+   output-equivalent restructure (needed to place the <code>DECODE</code> span
+   correctly), not a wrapper insertion.</li>
+<li>Spans wrap loops, never loop bodies. Checked during diff review — the
+   "no measurable cost when off" claim depends on it. Sanctioned per-frame
+   exception: <code>READ</code> (<code>frame_prefetcher.py</code>, all three prefetcher classes) and
+   <code>FLUSH</code> (<code>cache/writer.py</code>) deliberately open one span per frame inside a
+   loop body — wrapping from outside the loop would measure queue-wait
+   instead of decode/flush cost.</li>
+</ol>
+<h2 id="risks">Risks<a class="headerlink" href="#risks" title="Permanent link">&para;</a></h2>
+<table>
+<thead>
+<tr>
+<th>#</th>
+<th>Risk</th>
+<th>Mitigation</th>
+</tr>
+</thead>
+<tbody>
+<tr>
+<td>1</td>
+<td>Concurrent spans double-count; an overlapped stage looks expensive but returns nothing when optimized</td>
+<td>Thread stamping; percentages within a thread; pass wall-clock as top-level denominator; <code>concurrent</code> marker</td>
+</tr>
+<tr>
+<td>2</td>
+<td>Device-wide sync drains the producer's queue and misattributes across stages</td>
+<td>No sync on the default path; <code>HYDRA_PROFILE_GPU=1</code> syncs <strong>and</strong> forces depth=1; <code>gpu_mode</code> stamped in JSON; CUDA events as a named future slice</td>
+</tr>
+<tr>
+<td>3</td>
+<td>Ambient global state: leaked arm, nested arm, stack corruption, growth</td>
+<td><code>armed()</code> ctx manager only; ContextVar token stack; thread-local stacks; identity-based pop that never swallows; aggregate-only storage</td>
+</tr>
+<tr>
+<td>4</td>
+<td>Retiring <code>HYDRA_RT_PROFILE</code> blinds DetectKit/PoseKit</td>
+<td><code>HYDRA_PROFILE=1</code> process-level recorder with specified precedence + dump location; alias kept; both kits tested</td>
+</tr>
+<tr>
+<td>5</td>
+<td>Perf gate cannot attribute span overhead; 30% noise floor swamps a 2% effect</td>
+<td>Profiling-on-vs-off on current src, N=5 alternating runs, median + IQR, "below noise floor" is a valid outcome</td>
+</tr>
+<tr>
+<td>6</td>
+<td>Porting the shim's memoization along with its timers</td>
+<td>Implementation rules 1 and 2</td>
+</tr>
+<tr>
+<td>7</td>
+<td>Span cost inside hot loops</td>
+<td>Implementation rule 3, checked in diff review</td>
+</tr>
+<tr>
+<td>8</td>
+<td>Span names rot silently after a refactor</td>
+<td>Name registry + golden span-path test</td>
+</tr>
+<tr>
+<td>9</td>
+<td>Warmup/tail costs folded into a mean</td>
+<td><code>max_s</code> + <code>first_call_s</code> per node</td>
+</tr>
+<tr>
+<td>10</td>
+<td>Diffuse self-time defects (grad-mode toggling) are undetectable</td>
+<td>Stated as out of reach in the Goal; <code>cProfile</code> documented as the escape</td>
+</tr>
+</tbody>
+</table>
+<h2 id="review-corrections-revision-1-2">Review Corrections (revision 1 → 2)<a class="headerlink" href="#review-corrections-revision-1-2" title="Permanent link">&para;</a></h2>
+<p>Three adversarial reviews ran against revision 1. Substantive corrections:</p>
+<ul>
+<li><strong>GPU sync reversed.</strong> Revision 1 synced on <code>gpu=True</code> spans and claimed dual
+  timestamps yielded both a production-faithful and a device-truth number. Both
+  wrong: sync is device-wide and drains the producer at the default
+  <code>pipeline_depth=2</code>, and a sync's effect contaminates every downstream span.</li>
+<li><strong>Acid test 1 was failed.</strong> Only pose's <code>crop_extract</code> was decomposed; the
+  head-tail + CNN share was the larger part of the defect (24.0s vs 10.4s).</li>
+<li><strong>Acid test 2 exposed a session-scope void</strong> — ~28% of wall in <code>SessionRunner</code>
+  stages that no armed consumer wrapped. Added the <code>session/</code> tree.</li>
+<li><strong>Three off-thread sites were missed</strong>, including the prefetcher directly
+  under <code>interp_crops/crop_extraction/read</code>.</li>
+<li><strong><code>run_bgsub</code> → <code>run_bgsub_batch</code></strong> in the batch tree (<code>pipeline.py:227</code>).</li>
+<li><strong>Self-proving fixture</strong> was moved to <code>ant_obb_sleap</code> on an inverted reading
+  of the configs; <strong>revision 3 moves it back to <code>ant_cnn_identity</code></strong>, the only
+  fixture with pose + CNN + head-tail all enabled.</li>
+<li><strong>Overhead protocol</strong> strengthened from one pair to N=5 median/IQR.</li>
+<li><strong>Added:</strong> <code>max_s</code>/<code>first_call_s</code>, name registry + golden test, thread-local
+  stacks made explicit, <code>HYDRA_PROFILE</code> precedence/dump/User-mode specified,
+  diffuse-self-time limitation stated, module moved to <code>utils/</code>.</li>
+</ul>
+<p>One reviewer claim was <strong>rejected</strong>: that the module must live in <code>utils/</code>
+because Data has no Core imports. <code>data/dataset_generation.py:332</code> already does
+<code>from ..core.inference.runner import InferenceRunner</code>, so that argument is
+false. The module is in <code>utils/</code> on the independent grounds above (leaf
+primitive, avoids two profiling homes inside <code>core/</code>).</p>
+<h2 id="gate-results-task-14-mps">Gate results (Task 14, MPS)<a class="headerlink" href="#gate-results-task-14-mps" title="Permanent link">&para;</a></h2>
+<p>Run on <code>hydra-mps</code>, <code>conda activate hydra-mps</code>, all 8 default equivalence
+clips, baseline <code>legacy/main</code> (<code>157e1ae3</code>), current branch <code>378ff2d9</code>.</p>
+<h3 id="1-profiling-on-equivalence-enable_profiling-true-the-fixture-default">1. Profiling-ON equivalence (<code>enable_profiling: true</code>, the fixture default)<a class="headerlink" href="#1-profiling-on-equivalence-enable_profiling-true-the-fixture-default" title="Permanent link">&para;</a></h3>
+<p>Every clip's <code>DETERMINISM (new_a vs new_b)</code> — this branch run twice — is
+<code>EQUIVALENT ✅</code> with zero unmatched rows and zero position/theta deltas on
+every clip's forward/final/final_with_individual CSV. The branch's own output
+is fully reproducible.</p>
+<p>The <code>EQUIVALENCE (legacy vs new_a)</code> comparison shows 7 of 8 clips as
+"UNTRUSTWORTHY" per <code>run_matrix.sh</code>'s own guard. Diagnosed directly from the
+log, not assumed: legacy CSVs carry <code>IdentityAssigned*</code> columns, current-branch
+CSVs carry <code>IdentityRealtime*</code> columns — an already-merged, separately-verified
+Identity overhaul (see memory <code>project_identity_overhaul_phase1_done</code>) renamed
+these columns on <code>main</code> <strong>after</strong> the <code>legacy/main</code> tag was cut, so the tag is
+stale relative to <em>any</em> current branch, not specific to span profiling. The
+resulting positional-match theta deltas (mean up to ~0.8 rad, max exactly
+3.142 ≈ π) are the already-documented "bistable head/tail π-flip" baseline
+noise this spec's Verification section names. Neither is a span-profiler
+regression: both patterns are identical between the profiling-ON and
+profiling-OFF runs (below), which they could not be if either originated from
+this branch's change.</p>
+<h3 id="2-profiling-off-equivalence-enable_profiling-false-injected-in-place-debug_mode-left-absent">2. Profiling-OFF equivalence (<code>enable_profiling: false</code> injected in place, <code>debug_mode</code> left absent)<a class="headerlink" href="#2-profiling-off-equivalence-enable_profiling-false-injected-in-place-debug_mode-left-absent" title="Permanent link">&para;</a></h3>
+<p>Same 8-clip matrix, same baseline, only <code>enable_profiling</code> cleared. Shows the
+identical vs-legacy pattern (same 7 clips, same reason) and the identical
+clean <code>DETERMINISM</code> verdicts. No new divergence introduced by turning
+profiling off.</p>
+<h3 id="3-the-actual-gate-debug-on-vs-debug-off-byte-identical">3. The actual gate: Debug-ON vs Debug-OFF byte-identical<a class="headerlink" href="#3-the-actual-gate-debug-on-vs-debug-off-byte-identical" title="Permanent link">&para;</a></h3>
+<p>Since <code>run_matrix.sh</code> only ever compares against the (stale) legacy baseline,
+the binding constraint — <em>this branch's own output does not change based on
+<code>enable_profiling</code></em> — was checked directly: every tracking CSV from the
+profiling-ON run's <code>new_a</code> tree was diffed byte-for-byte (<code>cmp -s</code>) against
+the same file from the profiling-OFF run's <code>new_a</code> tree, across all 8 clips
+(<code>_tracking_forward.csv</code>, <code>_tracking_backward.csv</code>, <code>_tracking_final.csv</code>,
+<code>_tracking_final_with_individual.csv</code>).</p>
+<p><strong>Result: 32/32 files byte-identical. Zero differences, zero missing files.</strong>
+This is the constraint the whole feature depends on, confirmed directly
+rather than inferred from the noisy vs-legacy comparison.</p>
+<h3 id="4-overhead-fly_obb-n5-alternating-current-src-vs-current-src">4. Overhead (<code>fly_obb</code>, N=5 alternating, current-src vs current-src)<a class="headerlink" href="#4-overhead-fly_obb-n5-alternating-current-src-vs-current-src" title="Permanent link">&para;</a></h3>
+<table>
+<thead>
+<tr>
+<th>condition</th>
+<th>run times (s)</th>
+<th>median</th>
+<th>IQR</th>
+</tr>
+</thead>
+<tbody>
+<tr>
+<td>profiling ON</td>
+<td>21.855, 21.947, 22.161, 22.360, 24.764</td>
+<td>22.161s</td>
+<td>1.661s</td>
+</tr>
+<tr>
+<td>profiling OFF</td>
+<td>21.824, 22.159, 22.190, 24.601, 24.672</td>
+<td>22.190s</td>
+<td>2.645s</td>
+</tr>
+</tbody>
+</table>
+<p>Median delta = 0.029s (<strong>0.13%</strong>) — well under the ≤2% target and well
+under either condition's own IQR (1.66s / 2.65s). <strong>Pass</strong>, clearly inside
+the noise floor rather than merely under a threshold.</p>
+<h3 id="5-self-proving-run-ant_cnn_identity-detection_batch_size-1-vs-25">5. Self-proving run (<code>ant_cnn_identity</code>, <code>detection_batch_size</code> 1 vs 25)<a class="headerlink" href="#5-self-proving-run-ant_cnn_identity-detection_batch_size-1-vs-25" title="Permanent link">&para;</a></h3>
+<p>Non-vacuousness confirmed first: <code>headtail/backend_forward</code>, <code>cnn/backend_forward</code>,
+<code>pose/backend_forward</code> all have <code>n_calls &gt; 0</code> in both runs (this is the
+fixture the spec's Review Corrections section fixed after revision 2 named
+the wrong clip — <code>ant_cnn_identity</code> is the only fixture with pose + CNN +
+head-tail all enabled, confirmed again here by these three nodes actually
+existing with real call counts).</p>
+<table>
+<thead>
+<tr>
+<th>span</th>
+<th>batch=1: n_calls / ms\/call / ms\/unit</th>
+<th>batch=25: n_calls / ms\/call / ms\/unit</th>
+</tr>
+</thead>
+<tbody>
+<tr>
+<td><code>headtail/backend_forward</code></td>
+<td>500 / 61.09ms / 3.91ms</td>
+<td>20 / 1814.39ms / 4.64ms</td>
+</tr>
+<tr>
+<td><code>cnn/backend_forward</code></td>
+<td>500 / 30.91ms / 1.98ms</td>
+<td>20 / 706.86ms / 1.81ms</td>
+</tr>
+<tr>
+<td><code>pose/backend_forward</code></td>
+<td>500 / 42.54ms / 2.72ms</td>
+<td>20 / 984.21ms / 2.52ms</td>
+</tr>
+</tbody>
+</table>
+<p>(<code>units</code> = total detections across the run, 7819, identical in both — same
+video, same detections, only the window size differs.)</p>
+<p><code>n_calls</code> scales with window count (500 windows at batch=1 → 20 windows at
+batch=25, matching 500/25); <code>ms/call</code> scales up 23-30x with it (fixed
+per-call overhead amortized over more work per call). <code>ms/unit</code> — the actual
+per-detection cost — is far more stable than <code>ms/call</code>: cnn and pose drift
+7-9% (1.98→1.81, 2.72→2.52), while headtail drifts 19% (3.91→4.64), a real
+divergence worth a closer look in a follow-up but small next to <code>ms/call</code>'s
+23-30x swing. That contrast is the readable signal: the profiler shows
+batching amortizes
+<em>fixed per-call overhead</em>, not per-detection compute, which is exactly the
+<code>detection_batch_size=1</code> defect class this feature was built to make visible.
+<strong>Pass</strong> — the per-call overhead is directly readable from these two JSON
+files alone, per the spec's stated bar for this check.</p>
+<h3 id="verdict">Verdict<a class="headerlink" href="#verdict" title="Permanent link">&para;</a></h3>
+<p>All four checks pass. The CUDA gate (Task 15, mehek) remains outstanding.</p>
+<h2 id="gate-results-task-15-cuda-mehek">Gate results (Task 15, CUDA — mehek)<a class="headerlink" href="#gate-results-task-15-cuda-mehek" title="Permanent link">&para;</a></h2>
+<p>Run on <code>mehek.taild08eb9.ts.net</code>, <code>conda activate hydra-cuda</code>, branch
+<code>feat/inference-span-profiling</code> @ <code>29c7f7b9</code> transferred via <code>git bundle</code>
+(no network access to this box's git remotes from the branch worktree), same
+8-clip fixture set, baseline <code>legacy/main</code> @ <code>157e1ae3</code> (an existing
+<code>.worktrees/equiv-legacy</code> on the shared box, already at the correct SHA —
+reused rather than recreated; several other in-progress worktrees on this
+box belong to other work and were left untouched).</p>
+<h3 id="1-equivalence-matrix-runtimecuda">1. Equivalence matrix (<code>RUNTIME=cuda</code>)<a class="headerlink" href="#1-equivalence-matrix-runtimecuda" title="Permanent link">&para;</a></h3>
+<p>Every clip's <code>DETERMINISM (new_a vs new_b)</code> verdict is <code>EQUIVALENT ✅</code> — 24/24
+checks (positional + final + final_with_individual per clip), zero unmatched,
+zero deltas. Identical shape to the MPS run's own-branch reproducibility.</p>
+<p>The <code>EQUIVALENCE (legacy vs new_a)</code> comparison shows the same
+"UNTRUSTWORTHY" pattern as MPS — 7 of 8 clips, same reason (<code>IdentityAssigned*</code>
+→ <code>IdentityRealtime*</code> column rename predating the <code>legacy/main</code> tag, per the
+diagnosis in the MPS Gate results section above), 17/17 <code>EQUIVALENCE</code>
+sub-verdicts reading <code>DIFFERENCES</code> for that same, pre-existing, cross-platform
+reason. That the exact same clips fail for the exact same diagnosed reason on
+a second, independent device confirms the cause is the stale baseline tag,
+not anything platform- or profiler-specific.</p>
+<p>All CSV row counts verified <code>&gt; 1</code> (minimum observed: 1048 rows) before
+trusting any verdict.</p>
+<h3 id="2-deep-gpu-mode-crash-check-hydra_profile_gpu1-fly_obb-cuda">2. Deep-GPU mode crash check (<code>HYDRA_PROFILE_GPU=1</code>, <code>fly_obb</code>, CUDA)<a class="headerlink" href="#2-deep-gpu-mode-crash-check-hydra_profile_gpu1-fly_obb-cuda" title="Permanent link">&para;</a></h3>
+<p>Not a byte-identity gate — deliberately runs a different (<code>pipeline_depth=1</code>,
+synchronized) schedule. Ran to completion, exit code 0, produced all four
+tracking CSVs. Exported <code>tracking_profile_forward.json</code> has <code>"gpu_mode":
+"deep"</code>, confirming the CUDA sync path (<code>torch.cuda.synchronize()</code>) executes
+without error — the MPS gate could only exercise the MPS branch of
+<code>_synchronize()</code>; this is the first real exercise of the CUDA branch.</p>
+<p>(Gotcha hit and resolved: invoking <code>runner.py</code> directly, outside
+<code>run_matrix.sh</code>, requires <code>PYTHONPATH=&lt;repo&gt;/src</code> set explicitly — an
+unset <code>PYTHONPATH</code> silently imports whatever <code>hydra_suite</code> is on the
+environment's default path rather than this branch's <code>src/</code>, and without it
+the run fails outright with <code>ModuleNotFoundError</code> rather than silently using
+the wrong tree. Documented here per the project's existing PYTHONPATH gotcha
+memory.)</p>
+<h3 id="verdict_1">Verdict<a class="headerlink" href="#verdict_1" title="Permanent link">&para;</a></h3>
+<p>Both gates pass. MPS and CUDA together: the plan's binding constraint
+(Debug-ON vs Debug-OFF byte-identical) is confirmed on MPS by direct CSV
+diff; DETERMINISM is clean <code>EQUIVALENT</code> on both MPS and CUDA; the vs-legacy
+noise is diagnosed, pre-existing, and now confirmed cross-platform (same
+clips, same reason, both devices) rather than device- or profiler-specific;
+the CUDA-only deep-GPU sync path runs without error. Span profiler
+verification is complete.</p>
+
+
+
+
+
+
+
+
+
+
+
+
+                
+              </article>
+            </div>
+          
+          
+<script>var target=document.getElementById(location.hash.slice(1));target&&target.name&&(target.checked=target.name.startsWith("__tabbed_"))</script>
+        </div>
+        
+          <button type="button" class="md-top md-icon" data-md-component="top" hidden>
+  
+  <svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 24 24"><path d="M13 20h-2V8l-5.5 5.5-1.42-1.42L12 4.16l7.92 7.92-1.42 1.42L13 8z"/></svg>
+  Back to top
+</button>
+        
+      </main>
+      
+        <footer class="md-footer">
+  
+  <div class="md-footer-meta md-typeset">
+    <div class="md-footer-meta__inner md-grid">
+      <div class="md-copyright">
+  
+  
+    Made with
+    <a href="https://squidfunk.github.io/mkdocs-material/" target="_blank" rel="noopener">
+      Material for MkDocs
+    </a>
+  
+</div>
+      
+    </div>
+  </div>
+</footer>
+      
+    </div>
+    <div class="md-dialog" data-md-component="dialog">
+      <div class="md-dialog__inner md-typeset"></div>
+    </div>
+    
+    
+    <script id="__config" type="application/json">{"base": "../../../..", "features": ["navigation.tabs", "navigation.sections", "navigation.expand", "navigation.top", "content.code.copy", "content.action.edit", "search.suggest", "search.highlight"], "search": "../../../../assets/javascripts/workers/search.6ce7567c.min.js", "translations": {"clipboard.copied": "Copied to clipboard", "clipboard.copy": "Copy to clipboard", "search.result.more.one": "1 more on this page", "search.result.more.other": "# more on this page", "search.result.none": "No matching documents", "search.result.one": "1 matching document", "search.result.other": "# matching documents", "search.result.placeholder": "Type to start searching", "search.result.term.missing": "Missing", "select.version": "Select version"}, "version": {"default": "latest", "provider": "mike"}}</script>
+    
+    
+      <script src="../../../../assets/javascripts/bundle.83f73b43.min.js"></script>
+      
+    
+  </body>
+</html>

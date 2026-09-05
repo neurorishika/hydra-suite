@@ -1,0 +1,2483 @@
+
+<!doctype html>
+<html lang="en" class="no-js">
+  <head>
+    
+      <meta charset="utf-8">
+      <meta name="viewport" content="width=device-width,initial-scale=1">
+      
+        <meta name="description" content="User and developer documentation for HYDRA Suite">
+      
+      
+      
+        <link rel="canonical" href="https://neurorishika.github.io/hydra-suite/latest/superpowers/plans/done/2026-07-19-trackingworker-qt-in-core-split/">
+      
+      
+      
+      
+      <link rel="icon" href="../../../../assets/images/favicon.png">
+      <meta name="generator" content="mkdocs-1.6.1, mkdocs-material-9.5.43">
+    
+    
+      
+        <title>TrackingWorker Qt-in-Core Split Implementation Plan - HYDRA Suite Docs</title>
+      
+    
+    
+      <link rel="stylesheet" href="../../../../assets/stylesheets/main.0253249f.min.css">
+      
+        
+        <link rel="stylesheet" href="../../../../assets/stylesheets/palette.06af60db.min.css">
+      
+      
+
+
+    
+    
+      
+    
+    
+      
+        
+        
+        <link rel="preconnect" href="https://fonts.gstatic.com" crossorigin>
+        <link rel="stylesheet" href="https://fonts.googleapis.com/css?family=Roboto:300,300i,400,400i,700,700i%7CRoboto+Mono:400,400i,700,700i&display=fallback">
+        <style>:root{--md-text-font:"Roboto";--md-code-font:"Roboto Mono"}</style>
+      
+    
+    
+      <link rel="stylesheet" href="../../../../assets/_mkdocstrings.css">
+    
+    <script>__md_scope=new URL("../../../..",location),__md_hash=e=>[...e].reduce(((e,_)=>(e<<5)-e+_.charCodeAt(0)),0),__md_get=(e,_=localStorage,t=__md_scope)=>JSON.parse(_.getItem(t.pathname+"."+e)),__md_set=(e,_,t=localStorage,a=__md_scope)=>{try{t.setItem(a.pathname+"."+e,JSON.stringify(_))}catch(e){}}</script>
+    
+      
+
+    
+    
+    
+  </head>
+  
+  
+    
+    
+      
+    
+    
+    
+    
+    <body dir="ltr" data-md-color-scheme="default" data-md-color-primary="blue" data-md-color-accent="light-blue">
+  
+    
+    <input class="md-toggle" data-md-toggle="drawer" type="checkbox" id="__drawer" autocomplete="off">
+    <input class="md-toggle" data-md-toggle="search" type="checkbox" id="__search" autocomplete="off">
+    <label class="md-overlay" for="__drawer"></label>
+    <div data-md-component="skip">
+      
+        
+        <a href="#trackingworker-qt-in-core-split-implementation-plan" class="md-skip">
+          Skip to content
+        </a>
+      
+    </div>
+    <div data-md-component="announce">
+      
+    </div>
+    
+      <div data-md-color-scheme="default" data-md-component="outdated" hidden>
+        
+      </div>
+    
+    
+      
+
+<header class="md-header" data-md-component="header">
+  <nav class="md-header__inner md-grid" aria-label="Header">
+    <a href="../../../.." title="HYDRA Suite Docs" class="md-header__button md-logo" aria-label="HYDRA Suite Docs" data-md-component="logo">
+      
+  
+  <svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 24 24"><path d="M12 8a3 3 0 0 0 3-3 3 3 0 0 0-3-3 3 3 0 0 0-3 3 3 3 0 0 0 3 3m0 3.54C9.64 9.35 6.5 8 3 8v11c3.5 0 6.64 1.35 9 3.54 2.36-2.19 5.5-3.54 9-3.54V8c-3.5 0-6.64 1.35-9 3.54"/></svg>
+
+    </a>
+    <label class="md-header__button md-icon" for="__drawer">
+      
+      <svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 24 24"><path d="M3 6h18v2H3zm0 5h18v2H3zm0 5h18v2H3z"/></svg>
+    </label>
+    <div class="md-header__title" data-md-component="header-title">
+      <div class="md-header__ellipsis">
+        <div class="md-header__topic">
+          <span class="md-ellipsis">
+            HYDRA Suite Docs
+          </span>
+        </div>
+        <div class="md-header__topic" data-md-component="header-topic">
+          <span class="md-ellipsis">
+            
+              TrackingWorker Qt-in-Core Split Implementation Plan
+            
+          </span>
+        </div>
+      </div>
+    </div>
+    
+      
+        <form class="md-header__option" data-md-component="palette">
+  
+    
+    
+    
+    <input class="md-option" data-md-color-media="(prefers-color-scheme: light)" data-md-color-scheme="default" data-md-color-primary="blue" data-md-color-accent="light-blue"  aria-label="Switch to dark mode"  type="radio" name="__palette" id="__palette_0">
+    
+      <label class="md-header__button md-icon" title="Switch to dark mode" for="__palette_1" hidden>
+        <svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 24 24"><path d="m17.75 4.09-2.53 1.94.91 3.06-2.63-1.81-2.63 1.81.91-3.06-2.53-1.94L12.44 4l1.06-3 1.06 3zm3.5 6.91-1.64 1.25.59 1.98-1.7-1.17-1.7 1.17.59-1.98L15.75 11l2.06-.05L18.5 9l.69 1.95zm-2.28 4.95c.83-.08 1.72 1.1 1.19 1.85-.32.45-.66.87-1.08 1.27C15.17 23 8.84 23 4.94 19.07c-3.91-3.9-3.91-10.24 0-14.14.4-.4.82-.76 1.27-1.08.75-.53 1.93.36 1.85 1.19-.27 2.86.69 5.83 2.89 8.02a9.96 9.96 0 0 0 8.02 2.89m-1.64 2.02a12.08 12.08 0 0 1-7.8-3.47c-2.17-2.19-3.33-5-3.49-7.82-2.81 3.14-2.7 7.96.31 10.98 3.02 3.01 7.84 3.12 10.98.31"/></svg>
+      </label>
+    
+  
+    
+    
+    
+    <input class="md-option" data-md-color-media="(prefers-color-scheme: dark)" data-md-color-scheme="slate" data-md-color-primary="blue" data-md-color-accent="light-blue"  aria-label="Switch to light mode"  type="radio" name="__palette" id="__palette_1">
+    
+      <label class="md-header__button md-icon" title="Switch to light mode" for="__palette_0" hidden>
+        <svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 24 24"><path d="M12 7a5 5 0 0 1 5 5 5 5 0 0 1-5 5 5 5 0 0 1-5-5 5 5 0 0 1 5-5m0 2a3 3 0 0 0-3 3 3 3 0 0 0 3 3 3 3 0 0 0 3-3 3 3 0 0 0-3-3m0-7 2.39 3.42C13.65 5.15 12.84 5 12 5s-1.65.15-2.39.42zM3.34 7l4.16-.35A7.2 7.2 0 0 0 5.94 8.5c-.44.74-.69 1.5-.83 2.29zm.02 10 1.76-3.77a7.131 7.131 0 0 0 2.38 4.14zM20.65 7l-1.77 3.79a7.02 7.02 0 0 0-2.38-4.15zm-.01 10-4.14.36c.59-.51 1.12-1.14 1.54-1.86.42-.73.69-1.5.83-2.29zM12 22l-2.41-3.44c.74.27 1.55.44 2.41.44.82 0 1.63-.17 2.37-.44z"/></svg>
+      </label>
+    
+  
+</form>
+      
+    
+    
+      <script>var palette=__md_get("__palette");if(palette&&palette.color){if("(prefers-color-scheme)"===palette.color.media){var media=matchMedia("(prefers-color-scheme: light)"),input=document.querySelector(media.matches?"[data-md-color-media='(prefers-color-scheme: light)']":"[data-md-color-media='(prefers-color-scheme: dark)']");palette.color.media=input.getAttribute("data-md-color-media"),palette.color.scheme=input.getAttribute("data-md-color-scheme"),palette.color.primary=input.getAttribute("data-md-color-primary"),palette.color.accent=input.getAttribute("data-md-color-accent")}for(var[key,value]of Object.entries(palette.color))document.body.setAttribute("data-md-color-"+key,value)}</script>
+    
+    
+    
+      <label class="md-header__button md-icon" for="__search">
+        
+        <svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 24 24"><path d="M9.5 3A6.5 6.5 0 0 1 16 9.5c0 1.61-.59 3.09-1.56 4.23l.27.27h.79l5 5-1.5 1.5-5-5v-.79l-.27-.27A6.52 6.52 0 0 1 9.5 16 6.5 6.5 0 0 1 3 9.5 6.5 6.5 0 0 1 9.5 3m0 2C7 5 5 7 5 9.5S7 14 9.5 14 14 12 14 9.5 12 5 9.5 5"/></svg>
+      </label>
+      <div class="md-search" data-md-component="search" role="dialog">
+  <label class="md-search__overlay" for="__search"></label>
+  <div class="md-search__inner" role="search">
+    <form class="md-search__form" name="search">
+      <input type="text" class="md-search__input" name="query" aria-label="Search" placeholder="Search" autocapitalize="off" autocorrect="off" autocomplete="off" spellcheck="false" data-md-component="search-query" required>
+      <label class="md-search__icon md-icon" for="__search">
+        
+        <svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 24 24"><path d="M9.5 3A6.5 6.5 0 0 1 16 9.5c0 1.61-.59 3.09-1.56 4.23l.27.27h.79l5 5-1.5 1.5-5-5v-.79l-.27-.27A6.52 6.52 0 0 1 9.5 16 6.5 6.5 0 0 1 3 9.5 6.5 6.5 0 0 1 9.5 3m0 2C7 5 5 7 5 9.5S7 14 9.5 14 14 12 14 9.5 12 5 9.5 5"/></svg>
+        
+        <svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 24 24"><path d="M20 11v2H8l5.5 5.5-1.42 1.42L4.16 12l7.92-7.92L13.5 5.5 8 11z"/></svg>
+      </label>
+      <nav class="md-search__options" aria-label="Search">
+        
+        <button type="reset" class="md-search__icon md-icon" title="Clear" aria-label="Clear" tabindex="-1">
+          
+          <svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 24 24"><path d="M19 6.41 17.59 5 12 10.59 6.41 5 5 6.41 10.59 12 5 17.59 6.41 19 12 13.41 17.59 19 19 17.59 13.41 12z"/></svg>
+        </button>
+      </nav>
+      
+        <div class="md-search__suggest" data-md-component="search-suggest"></div>
+      
+    </form>
+    <div class="md-search__output">
+      <div class="md-search__scrollwrap" tabindex="0" data-md-scrollfix>
+        <div class="md-search-result" data-md-component="search-result">
+          <div class="md-search-result__meta">
+            Initializing search
+          </div>
+          <ol class="md-search-result__list" role="presentation"></ol>
+        </div>
+      </div>
+    </div>
+  </div>
+</div>
+    
+    
+      <div class="md-header__source">
+        <a href="https://github.com/neurorishika/hydra-suite" title="Go to repository" class="md-source" data-md-component="source">
+  <div class="md-source__icon md-icon">
+    
+    <svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 448 512"><!--! Font Awesome Free 6.6.0 by @fontawesome - https://fontawesome.com License - https://fontawesome.com/license/free (Icons: CC BY 4.0, Fonts: SIL OFL 1.1, Code: MIT License) Copyright 2024 Fonticons, Inc.--><path d="M439.55 236.05 244 40.45a28.87 28.87 0 0 0-40.81 0l-40.66 40.63 51.52 51.52c27.06-9.14 52.68 16.77 43.39 43.68l49.66 49.66c34.23-11.8 61.18 31 35.47 56.69-26.49 26.49-70.21-2.87-56-37.34L240.22 199v121.85c25.3 12.54 22.26 41.85 9.08 55a34.34 34.34 0 0 1-48.55 0c-17.57-17.6-11.07-46.91 11.25-56v-123c-20.8-8.51-24.6-30.74-18.64-45L142.57 101 8.45 235.14a28.86 28.86 0 0 0 0 40.81l195.61 195.6a28.86 28.86 0 0 0 40.8 0l194.69-194.69a28.86 28.86 0 0 0 0-40.81"/></svg>
+  </div>
+  <div class="md-source__repository">
+    neurorishika/hydra-suite
+  </div>
+</a>
+      </div>
+    
+  </nav>
+  
+</header>
+    
+    <div class="md-container" data-md-component="container">
+      
+      
+        
+          
+            
+<nav class="md-tabs" aria-label="Tabs" data-md-component="tabs">
+  <div class="md-grid">
+    <ul class="md-tabs__list">
+      
+        
+  
+  
+  
+    <li class="md-tabs__item">
+      <a href="../../../.." class="md-tabs__link">
+        
+  
+    
+  
+  Home
+
+      </a>
+    </li>
+  
+
+      
+        
+  
+  
+  
+    
+    
+      <li class="md-tabs__item">
+        <a href="../../../../getting-started/installation/" class="md-tabs__link">
+          
+  
+  Getting Started
+
+        </a>
+      </li>
+    
+  
+
+      
+        
+  
+  
+  
+    
+    
+      <li class="md-tabs__item">
+        <a href="../../../../user-guide/overview/" class="md-tabs__link">
+          
+  
+  User Guide
+
+        </a>
+      </li>
+    
+  
+
+      
+        
+  
+  
+  
+    
+    
+      <li class="md-tabs__item">
+        <a href="../../../../developer-guide/architecture/" class="md-tabs__link">
+          
+  
+  Developer Guide
+
+        </a>
+      </li>
+    
+  
+
+      
+        
+  
+  
+  
+    
+    
+      <li class="md-tabs__item">
+        <a href="../../../../reference/api-index/" class="md-tabs__link">
+          
+  
+  Reference
+
+        </a>
+      </li>
+    
+  
+
+      
+    </ul>
+  </div>
+</nav>
+          
+        
+      
+      <main class="md-main" data-md-component="main">
+        <div class="md-main__inner md-grid">
+          
+            
+              
+              <div class="md-sidebar md-sidebar--primary" data-md-component="sidebar" data-md-type="navigation" >
+                <div class="md-sidebar__scrollwrap">
+                  <div class="md-sidebar__inner">
+                    
+
+
+  
+
+
+<nav class="md-nav md-nav--primary md-nav--lifted" aria-label="Navigation" data-md-level="0">
+  <label class="md-nav__title" for="__drawer">
+    <a href="../../../.." title="HYDRA Suite Docs" class="md-nav__button md-logo" aria-label="HYDRA Suite Docs" data-md-component="logo">
+      
+  
+  <svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 24 24"><path d="M12 8a3 3 0 0 0 3-3 3 3 0 0 0-3-3 3 3 0 0 0-3 3 3 3 0 0 0 3 3m0 3.54C9.64 9.35 6.5 8 3 8v11c3.5 0 6.64 1.35 9 3.54 2.36-2.19 5.5-3.54 9-3.54V8c-3.5 0-6.64 1.35-9 3.54"/></svg>
+
+    </a>
+    HYDRA Suite Docs
+  </label>
+  
+    <div class="md-nav__source">
+      <a href="https://github.com/neurorishika/hydra-suite" title="Go to repository" class="md-source" data-md-component="source">
+  <div class="md-source__icon md-icon">
+    
+    <svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 448 512"><!--! Font Awesome Free 6.6.0 by @fontawesome - https://fontawesome.com License - https://fontawesome.com/license/free (Icons: CC BY 4.0, Fonts: SIL OFL 1.1, Code: MIT License) Copyright 2024 Fonticons, Inc.--><path d="M439.55 236.05 244 40.45a28.87 28.87 0 0 0-40.81 0l-40.66 40.63 51.52 51.52c27.06-9.14 52.68 16.77 43.39 43.68l49.66 49.66c34.23-11.8 61.18 31 35.47 56.69-26.49 26.49-70.21-2.87-56-37.34L240.22 199v121.85c25.3 12.54 22.26 41.85 9.08 55a34.34 34.34 0 0 1-48.55 0c-17.57-17.6-11.07-46.91 11.25-56v-123c-20.8-8.51-24.6-30.74-18.64-45L142.57 101 8.45 235.14a28.86 28.86 0 0 0 0 40.81l195.61 195.6a28.86 28.86 0 0 0 40.8 0l194.69-194.69a28.86 28.86 0 0 0 0-40.81"/></svg>
+  </div>
+  <div class="md-source__repository">
+    neurorishika/hydra-suite
+  </div>
+</a>
+    </div>
+  
+  <ul class="md-nav__list" data-md-scrollfix>
+    
+      
+      
+  
+  
+  
+  
+    <li class="md-nav__item">
+      <a href="../../../.." class="md-nav__link">
+        
+  
+  <span class="md-ellipsis">
+    Home
+  </span>
+  
+
+      </a>
+    </li>
+  
+
+    
+      
+      
+  
+  
+  
+  
+    
+    
+    
+      
+      
+        
+      
+    
+    
+    <li class="md-nav__item md-nav__item--nested">
+      
+        
+        
+          
+        
+        <input class="md-nav__toggle md-toggle md-toggle--indeterminate" type="checkbox" id="__nav_2" >
+        
+          
+          <label class="md-nav__link" for="__nav_2" id="__nav_2_label" tabindex="0">
+            
+  
+  <span class="md-ellipsis">
+    Getting Started
+  </span>
+  
+
+            <span class="md-nav__icon md-icon"></span>
+          </label>
+        
+        <nav class="md-nav" data-md-level="1" aria-labelledby="__nav_2_label" aria-expanded="false">
+          <label class="md-nav__title" for="__nav_2">
+            <span class="md-nav__icon md-icon"></span>
+            Getting Started
+          </label>
+          <ul class="md-nav__list" data-md-scrollfix>
+            
+              
+                
+  
+  
+  
+  
+    <li class="md-nav__item">
+      <a href="../../../../getting-started/installation/" class="md-nav__link">
+        
+  
+  <span class="md-ellipsis">
+    Installation
+  </span>
+  
+
+      </a>
+    </li>
+  
+
+              
+            
+              
+                
+  
+  
+  
+  
+    <li class="md-nav__item">
+      <a href="../../../../getting-started/environments/" class="md-nav__link">
+        
+  
+  <span class="md-ellipsis">
+    Environments and Makefile
+  </span>
+  
+
+      </a>
+    </li>
+  
+
+              
+            
+              
+                
+  
+  
+  
+  
+    <li class="md-nav__item">
+      <a href="../../../../getting-started/integrations/" class="md-nav__link">
+        
+  
+  <span class="md-ellipsis">
+    Integrations
+  </span>
+  
+
+      </a>
+    </li>
+  
+
+              
+            
+              
+                
+  
+  
+  
+  
+    <li class="md-nav__item">
+      <a href="../../../../getting-started/quickstart-hydra/" class="md-nav__link">
+        
+  
+  <span class="md-ellipsis">
+    Quickstart (TrackerKit)
+  </span>
+  
+
+      </a>
+    </li>
+  
+
+              
+            
+              
+                
+  
+  
+  
+  
+    <li class="md-nav__item">
+      <a href="../../../../getting-started/quickstart-posekit/" class="md-nav__link">
+        
+  
+  <span class="md-ellipsis">
+    Quickstart (PoseKit)
+  </span>
+  
+
+      </a>
+    </li>
+  
+
+              
+            
+              
+                
+  
+  
+  
+  
+    <li class="md-nav__item">
+      <a href="../../../../getting-started/platforms/" class="md-nav__link">
+        
+  
+  <span class="md-ellipsis">
+    Platform Notes
+  </span>
+  
+
+      </a>
+    </li>
+  
+
+              
+            
+          </ul>
+        </nav>
+      
+    </li>
+  
+
+    
+      
+      
+  
+  
+  
+  
+    
+    
+    
+      
+      
+        
+      
+    
+    
+    <li class="md-nav__item md-nav__item--nested">
+      
+        
+        
+          
+        
+        <input class="md-nav__toggle md-toggle md-toggle--indeterminate" type="checkbox" id="__nav_3" >
+        
+          
+          <label class="md-nav__link" for="__nav_3" id="__nav_3_label" tabindex="0">
+            
+  
+  <span class="md-ellipsis">
+    User Guide
+  </span>
+  
+
+            <span class="md-nav__icon md-icon"></span>
+          </label>
+        
+        <nav class="md-nav" data-md-level="1" aria-labelledby="__nav_3_label" aria-expanded="false">
+          <label class="md-nav__title" for="__nav_3">
+            <span class="md-nav__icon md-icon"></span>
+            User Guide
+          </label>
+          <ul class="md-nav__list" data-md-scrollfix>
+            
+              
+                
+  
+  
+  
+  
+    <li class="md-nav__item">
+      <a href="../../../../user-guide/overview/" class="md-nav__link">
+        
+  
+  <span class="md-ellipsis">
+    Overview
+  </span>
+  
+
+      </a>
+    </li>
+  
+
+              
+            
+              
+                
+  
+  
+  
+  
+    <li class="md-nav__item">
+      <a href="../../../../user-guide/workflow/" class="md-nav__link">
+        
+  
+  <span class="md-ellipsis">
+    End-to-End Workflow
+  </span>
+  
+
+      </a>
+    </li>
+  
+
+              
+            
+              
+                
+  
+  
+  
+  
+    <li class="md-nav__item">
+      <a href="../../../../user-guide/detection-modes/" class="md-nav__link">
+        
+  
+  <span class="md-ellipsis">
+    Detection Modes
+  </span>
+  
+
+      </a>
+    </li>
+  
+
+              
+            
+              
+                
+  
+  
+  
+  
+    <li class="md-nav__item">
+      <a href="../../../../user-guide/tracking-and-merging/" class="md-nav__link">
+        
+  
+  <span class="md-ellipsis">
+    Tracking and Merging
+  </span>
+  
+
+      </a>
+    </li>
+  
+
+              
+            
+              
+                
+  
+  
+  
+  
+    <li class="md-nav__item">
+      <a href="../../../../user-guide/post-processing/" class="md-nav__link">
+        
+  
+  <span class="md-ellipsis">
+    Post-processing
+  </span>
+  
+
+      </a>
+    </li>
+  
+
+              
+            
+              
+                
+  
+  
+  
+  
+    <li class="md-nav__item">
+      <a href="../../../../user-guide/configuration-reference/" class="md-nav__link">
+        
+  
+  <span class="md-ellipsis">
+    Configuration Reference
+  </span>
+  
+
+      </a>
+    </li>
+  
+
+              
+            
+              
+                
+  
+  
+  
+  
+    <li class="md-nav__item">
+      <a href="../../../../user-guide/compute-runtimes/" class="md-nav__link">
+        
+  
+  <span class="md-ellipsis">
+    Compute Runtimes
+  </span>
+  
+
+      </a>
+    </li>
+  
+
+              
+            
+              
+                
+  
+  
+  
+  
+    <li class="md-nav__item">
+      <a href="../../../../user-guide/outputs-and-csv-schema/" class="md-nav__link">
+        
+  
+  <span class="md-ellipsis">
+    Outputs and CSV Schema
+  </span>
+  
+
+      </a>
+    </li>
+  
+
+              
+            
+              
+                
+  
+  
+  
+  
+    <li class="md-nav__item">
+      <a href="../../../../user-guide/dataset-generation/" class="md-nav__link">
+        
+  
+  <span class="md-ellipsis">
+    Dataset Generation
+  </span>
+  
+
+      </a>
+    </li>
+  
+
+              
+            
+              
+                
+  
+  
+  
+  
+    <li class="md-nav__item">
+      <a href="../../../../user-guide/individual-analysis/" class="md-nav__link">
+        
+  
+  <span class="md-ellipsis">
+    Individual Analysis
+  </span>
+  
+
+      </a>
+    </li>
+  
+
+              
+            
+              
+                
+  
+  
+  
+  
+    <li class="md-nav__item">
+      <a href="../../../../user-guide/posekit/" class="md-nav__link">
+        
+  
+  <span class="md-ellipsis">
+    PoseKit
+  </span>
+  
+
+      </a>
+    </li>
+  
+
+              
+            
+              
+                
+  
+  
+  
+  
+    <li class="md-nav__item">
+      <a href="../../../../user-guide/classkit/" class="md-nav__link">
+        
+  
+  <span class="md-ellipsis">
+    ClassKit
+  </span>
+  
+
+      </a>
+    </li>
+  
+
+              
+            
+              
+                
+  
+  
+  
+  
+    <li class="md-nav__item">
+      <a href="../../../../user-guide/detectkit/" class="md-nav__link">
+        
+  
+  <span class="md-ellipsis">
+    DetectKit
+  </span>
+  
+
+      </a>
+    </li>
+  
+
+              
+            
+              
+                
+  
+  
+  
+  
+    <li class="md-nav__item">
+      <a href="../../../../runbooks/detectkit-headless-training/" class="md-nav__link">
+        
+  
+  <span class="md-ellipsis">
+    DetectKit Headless Training
+  </span>
+  
+
+      </a>
+    </li>
+  
+
+              
+            
+              
+                
+  
+  
+  
+  
+    <li class="md-nav__item">
+      <a href="../../../../user-guide/detectkit-semantic-escalation/" class="md-nav__link">
+        
+  
+  <span class="md-ellipsis">
+    DetectKit: Semantic Escalation (SAM3)
+  </span>
+  
+
+      </a>
+    </li>
+  
+
+              
+            
+              
+                
+  
+  
+  
+  
+    <li class="md-nav__item">
+      <a href="../../../../user-guide/detectkit-sahi-calibration/" class="md-nav__link">
+        
+  
+  <span class="md-ellipsis">
+    DetectKit: SAHI Calibration Profiles
+  </span>
+  
+
+      </a>
+    </li>
+  
+
+              
+            
+              
+                
+  
+  
+  
+  
+    <li class="md-nav__item">
+      <a href="../../../../user-guide/filterkit/" class="md-nav__link">
+        
+  
+  <span class="md-ellipsis">
+    FilterKit
+  </span>
+  
+
+      </a>
+    </li>
+  
+
+              
+            
+              
+                
+  
+  
+  
+  
+    <li class="md-nav__item">
+      <a href="../../../../user-guide/refinekit/" class="md-nav__link">
+        
+  
+  <span class="md-ellipsis">
+    RefineKit
+  </span>
+  
+
+      </a>
+    </li>
+  
+
+              
+            
+              
+                
+  
+  
+  
+  
+    <li class="md-nav__item">
+      <a href="../../../../user-guide/troubleshooting/" class="md-nav__link">
+        
+  
+  <span class="md-ellipsis">
+    Troubleshooting
+  </span>
+  
+
+      </a>
+    </li>
+  
+
+              
+            
+          </ul>
+        </nav>
+      
+    </li>
+  
+
+    
+      
+      
+  
+  
+  
+  
+    
+    
+    
+      
+      
+        
+      
+    
+    
+    <li class="md-nav__item md-nav__item--nested">
+      
+        
+        
+          
+        
+        <input class="md-nav__toggle md-toggle md-toggle--indeterminate" type="checkbox" id="__nav_4" >
+        
+          
+          <label class="md-nav__link" for="__nav_4" id="__nav_4_label" tabindex="0">
+            
+  
+  <span class="md-ellipsis">
+    Developer Guide
+  </span>
+  
+
+            <span class="md-nav__icon md-icon"></span>
+          </label>
+        
+        <nav class="md-nav" data-md-level="1" aria-labelledby="__nav_4_label" aria-expanded="false">
+          <label class="md-nav__title" for="__nav_4">
+            <span class="md-nav__icon md-icon"></span>
+            Developer Guide
+          </label>
+          <ul class="md-nav__list" data-md-scrollfix>
+            
+              
+                
+  
+  
+  
+  
+    <li class="md-nav__item">
+      <a href="../../../../developer-guide/architecture/" class="md-nav__link">
+        
+  
+  <span class="md-ellipsis">
+    Architecture
+  </span>
+  
+
+      </a>
+    </li>
+  
+
+              
+            
+              
+                
+  
+  
+  
+  
+    <li class="md-nav__item">
+      <a href="../../../../developer-guide/module-map/" class="md-nav__link">
+        
+  
+  <span class="md-ellipsis">
+    Module Map
+  </span>
+  
+
+      </a>
+    </li>
+  
+
+              
+            
+              
+                
+  
+  
+  
+  
+    <li class="md-nav__item">
+      <a href="../../../../developer-guide/data-flow/" class="md-nav__link">
+        
+  
+  <span class="md-ellipsis">
+    Data Flow
+  </span>
+  
+
+      </a>
+    </li>
+  
+
+              
+            
+              
+                
+  
+  
+  
+  
+    <li class="md-nav__item">
+      <a href="../../../../developer-guide/tracking-algorithm-deep-dive/" class="md-nav__link">
+        
+  
+  <span class="md-ellipsis">
+    Tracking Algorithm Deep Dive
+  </span>
+  
+
+      </a>
+    </li>
+  
+
+              
+            
+              
+                
+  
+  
+  
+  
+    <li class="md-nav__item">
+      <a href="../../../../developer-guide/tracking-optimization/" class="md-nav__link">
+        
+  
+  <span class="md-ellipsis">
+    Tracking Optimization
+  </span>
+  
+
+      </a>
+    </li>
+  
+
+              
+            
+              
+                
+  
+  
+  
+  
+    <li class="md-nav__item">
+      <a href="../../../../developer-guide/gpu-backends/" class="md-nav__link">
+        
+  
+  <span class="md-ellipsis">
+    GPU Backends
+  </span>
+  
+
+      </a>
+    </li>
+  
+
+              
+            
+              
+                
+  
+  
+  
+  
+    <li class="md-nav__item">
+      <a href="../../../../developer-guide/runtime-integration/" class="md-nav__link">
+        
+  
+  <span class="md-ellipsis">
+    Runtime Integration
+  </span>
+  
+
+      </a>
+    </li>
+  
+
+              
+            
+              
+                
+  
+  
+  
+  
+    <li class="md-nav__item">
+      <a href="../../../../developer-guide/resource-containment/" class="md-nav__link">
+        
+  
+  <span class="md-ellipsis">
+    Resource Containment
+  </span>
+  
+
+      </a>
+    </li>
+  
+
+              
+            
+              
+                
+  
+  
+  
+  
+    <li class="md-nav__item">
+      <a href="../../../../developer-guide/profiling/" class="md-nav__link">
+        
+  
+  <span class="md-ellipsis">
+    Profiling
+  </span>
+  
+
+      </a>
+    </li>
+  
+
+              
+            
+              
+                
+  
+  
+  
+  
+    <li class="md-nav__item">
+      <a href="../../../../developer-guide/dependency-cuda-updates/" class="md-nav__link">
+        
+  
+  <span class="md-ellipsis">
+    CUDA Dependency Updates
+  </span>
+  
+
+      </a>
+    </li>
+  
+
+              
+            
+              
+                
+  
+  
+  
+  
+    <li class="md-nav__item">
+      <a href="../../../../developer-guide/performance-tuning/" class="md-nav__link">
+        
+  
+  <span class="md-ellipsis">
+    Performance Tuning
+  </span>
+  
+
+      </a>
+    </li>
+  
+
+              
+            
+              
+                
+  
+  
+  
+  
+    <li class="md-nav__item">
+      <a href="../../../../developer-guide/inference-fast-mode/" class="md-nav__link">
+        
+  
+  <span class="md-ellipsis">
+    Inference Fast Mode
+  </span>
+  
+
+      </a>
+    </li>
+  
+
+              
+            
+              
+                
+  
+  
+  
+  
+    <li class="md-nav__item">
+      <a href="../../../../developer-guide/confidence-metrics/" class="md-nav__link">
+        
+  
+  <span class="md-ellipsis">
+    Confidence Metrics
+  </span>
+  
+
+      </a>
+    </li>
+  
+
+              
+            
+              
+                
+  
+  
+  
+  
+    <li class="md-nav__item">
+      <a href="../../../../developer-guide/extending-detection/" class="md-nav__link">
+        
+  
+  <span class="md-ellipsis">
+    Extending Detection
+  </span>
+  
+
+      </a>
+    </li>
+  
+
+              
+            
+              
+                
+  
+  
+  
+  
+    <li class="md-nav__item">
+      <a href="../../../../developer-guide/extending-identity/" class="md-nav__link">
+        
+  
+  <span class="md-ellipsis">
+    Extending Identity
+  </span>
+  
+
+      </a>
+    </li>
+  
+
+              
+            
+              
+                
+  
+  
+  
+  
+    <li class="md-nav__item">
+      <a href="../../../../developer-guide/code-health/" class="md-nav__link">
+        
+  
+  <span class="md-ellipsis">
+    Code Health & Auditing
+  </span>
+  
+
+      </a>
+    </li>
+  
+
+              
+            
+              
+                
+  
+  
+  
+  
+    <li class="md-nav__item">
+      <a href="../../../../developer-guide/publishing/" class="md-nav__link">
+        
+  
+  <span class="md-ellipsis">
+    Publishing
+  </span>
+  
+
+      </a>
+    </li>
+  
+
+              
+            
+              
+                
+  
+  
+  
+  
+    <li class="md-nav__item">
+      <a href="../../../../developer-guide/contributing/" class="md-nav__link">
+        
+  
+  <span class="md-ellipsis">
+    Contributing
+  </span>
+  
+
+      </a>
+    </li>
+  
+
+              
+            
+          </ul>
+        </nav>
+      
+    </li>
+  
+
+    
+      
+      
+  
+  
+  
+  
+    
+    
+    
+      
+      
+        
+      
+    
+    
+    <li class="md-nav__item md-nav__item--nested">
+      
+        
+        
+          
+        
+        <input class="md-nav__toggle md-toggle md-toggle--indeterminate" type="checkbox" id="__nav_5" >
+        
+          
+          <label class="md-nav__link" for="__nav_5" id="__nav_5_label" tabindex="0">
+            
+  
+  <span class="md-ellipsis">
+    Reference
+  </span>
+  
+
+            <span class="md-nav__icon md-icon"></span>
+          </label>
+        
+        <nav class="md-nav" data-md-level="1" aria-labelledby="__nav_5_label" aria-expanded="false">
+          <label class="md-nav__title" for="__nav_5">
+            <span class="md-nav__icon md-icon"></span>
+            Reference
+          </label>
+          <ul class="md-nav__list" data-md-scrollfix>
+            
+              
+                
+  
+  
+  
+  
+    <li class="md-nav__item">
+      <a href="../../../../reference/api-index/" class="md-nav__link">
+        
+  
+  <span class="md-ellipsis">
+    API Index
+  </span>
+  
+
+      </a>
+    </li>
+  
+
+              
+            
+              
+                
+  
+  
+  
+  
+    <li class="md-nav__item">
+      <a href="../../../../reference/ui-components-hydra/" class="md-nav__link">
+        
+  
+  <span class="md-ellipsis">
+    UI Components (TrackerKit)
+  </span>
+  
+
+      </a>
+    </li>
+  
+
+              
+            
+              
+                
+  
+  
+  
+  
+    <li class="md-nav__item">
+      <a href="../../../../reference/ui-components-posekit/" class="md-nav__link">
+        
+  
+  <span class="md-ellipsis">
+    UI Components (PoseKit)
+  </span>
+  
+
+      </a>
+    </li>
+  
+
+              
+            
+              
+                
+  
+  
+  
+  
+    <li class="md-nav__item">
+      <a href="../../../../reference/api-app/" class="md-nav__link">
+        
+  
+  <span class="md-ellipsis">
+    API (Launcher)
+  </span>
+  
+
+      </a>
+    </li>
+  
+
+              
+            
+              
+                
+  
+  
+  
+  
+    <li class="md-nav__item">
+      <a href="../../../../reference/api-core/" class="md-nav__link">
+        
+  
+  <span class="md-ellipsis">
+    API (Core)
+  </span>
+  
+
+      </a>
+    </li>
+  
+
+              
+            
+              
+                
+  
+  
+  
+  
+    <li class="md-nav__item">
+      <a href="../../../../reference/api-data/" class="md-nav__link">
+        
+  
+  <span class="md-ellipsis">
+    API (Data)
+  </span>
+  
+
+      </a>
+    </li>
+  
+
+              
+            
+              
+                
+  
+  
+  
+  
+    <li class="md-nav__item">
+      <a href="../../../../reference/api-gui/" class="md-nav__link">
+        
+  
+  <span class="md-ellipsis">
+    API (TrackerKit GUI)
+  </span>
+  
+
+      </a>
+    </li>
+  
+
+              
+            
+              
+                
+  
+  
+  
+  
+    <li class="md-nav__item">
+      <a href="../../../../reference/api-widgets/" class="md-nav__link">
+        
+  
+  <span class="md-ellipsis">
+    API (Widgets)
+  </span>
+  
+
+      </a>
+    </li>
+  
+
+              
+            
+              
+                
+  
+  
+  
+  
+    <li class="md-nav__item">
+      <a href="../../../../reference/api-posekit/" class="md-nav__link">
+        
+  
+  <span class="md-ellipsis">
+    API (PoseKit)
+  </span>
+  
+
+      </a>
+    </li>
+  
+
+              
+            
+              
+                
+  
+  
+  
+  
+    <li class="md-nav__item">
+      <a href="../../../../reference/api-utils/" class="md-nav__link">
+        
+  
+  <span class="md-ellipsis">
+    API (Utils)
+  </span>
+  
+
+      </a>
+    </li>
+  
+
+              
+            
+              
+                
+  
+  
+  
+  
+    <li class="md-nav__item">
+      <a href="../../../../reference/cli-reference/" class="md-nav__link">
+        
+  
+  <span class="md-ellipsis">
+    CLI Reference
+  </span>
+  
+
+      </a>
+    </li>
+  
+
+              
+            
+              
+                
+  
+  
+  
+  
+    <li class="md-nav__item">
+      <a href="../../../../reference/technical-reference/" class="md-nav__link">
+        
+  
+  <span class="md-ellipsis">
+    Technical Reference (LaTeX)
+  </span>
+  
+
+      </a>
+    </li>
+  
+
+              
+            
+              
+                
+  
+  
+  
+  
+    <li class="md-nav__item">
+      <a href="../../../../reference/changelog/" class="md-nav__link">
+        
+  
+  <span class="md-ellipsis">
+    Changelog
+  </span>
+  
+
+      </a>
+    </li>
+  
+
+              
+            
+              
+                
+  
+  
+  
+  
+    <li class="md-nav__item">
+      <a href="../../../../reference/faq/" class="md-nav__link">
+        
+  
+  <span class="md-ellipsis">
+    FAQ
+  </span>
+  
+
+      </a>
+    </li>
+  
+
+              
+            
+          </ul>
+        </nav>
+      
+    </li>
+  
+
+    
+  </ul>
+</nav>
+                  </div>
+                </div>
+              </div>
+            
+            
+              
+              <div class="md-sidebar md-sidebar--secondary" data-md-component="sidebar" data-md-type="toc" >
+                <div class="md-sidebar__scrollwrap">
+                  <div class="md-sidebar__inner">
+                    
+
+<nav class="md-nav md-nav--secondary" aria-label="Table of contents">
+  
+  
+  
+    
+  
+  
+    <label class="md-nav__title" for="__toc">
+      <span class="md-nav__icon md-icon"></span>
+      Table of contents
+    </label>
+    <ul class="md-nav__list" data-md-component="toc" data-md-scrollfix>
+      
+        <li class="md-nav__item">
+  <a href="#global-constraints" class="md-nav__link">
+    <span class="md-ellipsis">
+      Global Constraints
+    </span>
+  </a>
+  
+</li>
+      
+        <li class="md-nav__item">
+  <a href="#open-questions-resolved-user-2026-07-19" class="md-nav__link">
+    <span class="md-ellipsis">
+      Open Questions — RESOLVED (user, 2026-07-19)
+    </span>
+  </a>
+  
+</li>
+      
+        <li class="md-nav__item">
+  <a href="#file-structure" class="md-nav__link">
+    <span class="md-ellipsis">
+      File Structure
+    </span>
+  </a>
+  
+    <nav class="md-nav" aria-label="File Structure">
+      <ul class="md-nav__list">
+        
+          <li class="md-nav__item">
+  <a href="#qt-surface-inventory-re-derived-against-current-workerpy-4e70d2c-4391-lines-use-these-exact-sites" class="md-nav__link">
+    <span class="md-ellipsis">
+      Qt surface inventory (re-derived against current worker.py @ 4e70d2c — 4391 lines; use these exact sites)
+    </span>
+  </a>
+  
+</li>
+        
+      </ul>
+    </nav>
+  
+</li>
+      
+        <li class="md-nav__item">
+  <a href="#task-1-convert-the-core-class-to-a-qt-free-trackingenginecore" class="md-nav__link">
+    <span class="md-ellipsis">
+      Task 1: Convert the core class to a Qt-free TrackingEngineCore
+    </span>
+  </a>
+  
+</li>
+      
+        <li class="md-nav__item">
+  <a href="#task-2-create-the-trackingworkerqthread-wrapper-in-trackerkit" class="md-nav__link">
+    <span class="md-ellipsis">
+      Task 2: Create the TrackingWorker(QThread) wrapper in trackerkit
+    </span>
+  </a>
+  
+</li>
+      
+        <li class="md-nav__item">
+  <a href="#task-3-repoint-all-consumers-re-exports" class="md-nav__link">
+    <span class="md-ellipsis">
+      Task 3: Repoint all consumers + re-exports
+    </span>
+  </a>
+  
+</li>
+      
+        <li class="md-nav__item">
+  <a href="#task-4-widen-the-qt-free-guard-to-the-whole-core-tree" class="md-nav__link">
+    <span class="md-ellipsis">
+      Task 4: Widen the Qt-free guard to the whole core/ tree
+    </span>
+  </a>
+  
+</li>
+      
+        <li class="md-nav__item">
+  <a href="#task-5-equivalence-parity-gate-acceptance-byte-identical-both-platforms" class="md-nav__link">
+    <span class="md-ellipsis">
+      Task 5: Equivalence parity gate (acceptance — byte-identical, both platforms)
+    </span>
+  </a>
+  
+</li>
+      
+        <li class="md-nav__item">
+  <a href="#final-verification-whole-plan" class="md-nav__link">
+    <span class="md-ellipsis">
+      Final verification (whole plan)
+    </span>
+  </a>
+  
+</li>
+      
+        <li class="md-nav__item">
+  <a href="#self-review-notes" class="md-nav__link">
+    <span class="md-ellipsis">
+      Self-Review notes
+    </span>
+  </a>
+  
+</li>
+      
+    </ul>
+  
+</nav>
+                  </div>
+                </div>
+              </div>
+            
+          
+          
+            <div class="md-content" data-md-component="content">
+              <article class="md-content__inner md-typeset">
+                
+                  
+
+  
+    <a href="https://github.com/neurorishika/hydra-suite/edit/main/docs/superpowers/plans/done/2026-07-19-trackingworker-qt-in-core-split.md" title="Edit this page" class="md-content__button md-icon">
+      
+      <svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 24 24"><path d="M10 20H6V4h7v5h5v3.1l2-2V8l-6-6H6c-1.1 0-2 .9-2 2v16c0 1.1.9 2 2 2h4zm10.2-7c.1 0 .3.1.4.2l1.3 1.3c.2.2.2.6 0 .8l-1 1-2.1-2.1 1-1c.1-.1.2-.2.4-.2m0 3.9L14.1 23H12v-2.1l6.1-6.1z"/></svg>
+    </a>
+  
+  
+
+
+<h1 id="trackingworker-qt-in-core-split-implementation-plan">TrackingWorker Qt-in-Core Split Implementation Plan<a class="headerlink" href="#trackingworker-qt-in-core-split-implementation-plan" title="Permanent link">&para;</a></h1>
+<blockquote>
+<p><strong>For agentic workers:</strong> REQUIRED SUB-SKILL: Use superpowers:subagent-driven-development (recommended) or superpowers:executing-plans to implement this plan task-by-task. Steps use checkbox (<code>- [ ]</code>) syntax for tracking.</p>
+</blockquote>
+<p><strong>Goal:</strong> Remove the last <code>core</code>→PySide6 dependency-direction violation by splitting <code>src/hydra_suite/core/tracking/worker.py::TrackingWorker(QThread)</code> (the ~4391-line main tracking orchestrator) into a Qt-free plain <code>TrackingEngineCore</code> in core plus a thin <code>TrackingWorker(QThread)</code> wrapper in <code>trackerkit/gui/workers/</code>, leaving the <strong>entire <code>core/</code> tree Qt-free</strong>.</p>
+<blockquote>
+<p><strong>⚠️ Plan re-synced 2026-07-20 to <code>main</code> @ <code>4e70d2c</code> (after the Runtime Gen-2 retirement).</strong> The runtime retirement edited <code>worker.py</code> (added a <strong>module-level, Qt-free</strong> helper <code>_classify_cache_runtime_string</code> @106 + a few local <code>hydra_suite.runtime.resolver</code> / <code>core.inference.runtime</code> imports and a <code>migrate_runtime_to_tier</code> bgsub fallback @~1200). <strong>None of this is Qt</strong> — the Qt surface is structurally identical — but every line number below shifted by ~+26. The inventory + substitution steps here are re-derived against current <code>worker.py</code> (4391 lines). The equivalence-gate base (<code>git merge-base main HEAD</code>) is now <code>4e70d2c</code>, which already contains the runtime retirement, so Task 5 correctly isolates <em>this split's</em> effect. When you begin, re-run the <code>grep -nE</code> commands in the inventory to confirm the numbers haven't drifted again from other merges.</p>
+</blockquote>
+<p><strong>Architecture:</strong> <code>TrackingWorker</code> is a method-coupled QThread (dozens of methods sharing <code>self</code> state: <code>frame_count</code>, <code>trajectories_full</code>, <code>_density_regions</code>, caches, <code>frame_prefetcher</code>, <code>parameters</code>). It is too coupled for module-function extraction (the bg-optimizer approach); instead we follow the <strong><code>TrackingOptimizerCore</code> precedent</strong> (Part C of the completed <code>done/2026-07-19-qt-in-core-bg-optimizer-split.md</code>): rename the class to a plain <code>TrackingEngineCore</code>, keep every method in place, replace the 6 Qt <code>Signal.emit(...)</code> calls with 6 constructor-injected callbacks, swap <code>QMutex</code>→<code>threading.Lock</code>, drop <code>@Slot</code>, and rename the QThread entry <code>run()</code>→<code>run_tracking()</code>. A thin <code>TrackingWorker(QThread)</code> wrapper owns the 6 <code>Signal</code>s + the <code>@Slot</code>, constructs a <code>TrackingEngineCore</code> wired to <code>self.*_signal.emit</code>, and delegates <code>set_parameters</code>/<code>update_parameters</code>/<code>stop</code>/<code>run</code>. The transform is <strong>behavior-preserving by construction</strong> — signals are UI observation, not tracking logic, so the CSV trajectory output is provably unaffected. This is gated by the same byte-identical equivalence harness used to verify the whole migration.</p>
+<p><strong>Tech Stack:</strong> Python 3, PySide6 (QtCore), numpy/opencv, pytest, the <code>tools/equivalence/</code> harness.</p>
+<h2 id="global-constraints">Global Constraints<a class="headerlink" href="#global-constraints" title="Permanent link">&para;</a></h2>
+<ul>
+<li>After this change, <code>grep -rnE "PySide6|QtCore|QThread|Signal|Slot|QMutex" src/hydra_suite/core/</code> → <strong>EMPTY</strong>. The whole <code>core/</code> tree is Qt-free (this fixes the final offender; <code>core/background</code> and <code>core/tracking/optimization</code> were fixed in the prior plan). This is the whole point.</li>
+<li><strong>Behavior-preserving by construction.</strong> No change to tracking logic, math, control flow, emit ordering, or emit payloads. The transform is mechanical: <code>emit</code>→callback, <code>QMutex</code>→<code>threading.Lock</code>, class rename. Every existing emit call site maps 1:1 to a callback call at the same point with the same arguments.</li>
+<li><strong>Preserve the exact wrapper interface</strong> the consumers depend on: the 8-arg <code>__init__</code> signature, the 6 signals (<code>frame_signal(np.ndarray)</code>, <code>finished_signal(bool, list, list)</code>, <code>progress_signal(int, str)</code>, <code>stats_signal(dict)</code>, <code>warning_signal(str, str)</code>, <code>pose_exported_model_resolved_signal(str)</code>), <code>set_parameters(dict)</code>, <code>update_parameters(dict)</code> as a <code>@Slot</code>, <code>stop()</code>, and the inherited QThread API (<code>start</code>, <code>wait</code>, <code>wait(ms)</code>, <code>isRunning</code>, <code>terminate</code>).</li>
+<li><strong>Acceptance gate (mandatory):</strong> the <code>tools/equivalence/</code> harness must show <strong>byte-identical</strong> output (pos Δ=0.000, θ Δ=0.000, identical row counts, 0 unmatched) between the pre-split branch base and the post-split branch tip, on <strong>both</strong> the MPS box (<code>hydra-mps</code>) and the CUDA box (mehek, <code>hydra-cuda</code>), across all 7 fixture clips. This is the attribution methodology already proven for the whole migration (memory <code>project-migration-verification</code>).</li>
+<li>Run <code>make format</code> before each commit. Tests via <code>conda run -n hydra-mps python -m pytest ... -q --ignore=tests/test_identity_postprocess.py</code> (the ignored file has a pre-existing collection error). <code>make format</code> may be broken in the base env (corrupted pathspec) — run <code>black</code>/<code>isort</code> directly inside <code>hydra-mps</code> if so.</li>
+</ul>
+<h2 id="open-questions-resolved-user-2026-07-19">Open Questions — RESOLVED (user, 2026-07-19)<a class="headerlink" href="#open-questions-resolved-user-2026-07-19" title="Permanent link">&para;</a></h2>
+<ol>
+<li><strong>Wrapper location.</strong> ✅ RESOLVED: <code>src/hydra_suite/trackerkit/gui/workers/tracking_worker.py</code> (matches the <code>bg_optimizer_worker.py</code> / <code>param_optimizer_worker.py</code> precedent). The headless-CLI import from a <code>gui/</code> path is accepted for consistency with the prior splits.</li>
+<li><strong>Core class name.</strong> ✅ RESOLVED: <code>TrackingEngineCore</code> (mirrors <code>TrackingOptimizerCore</code>). The name <code>TrackingWorker</code> is retained for the Qt wrapper, so GUI/CLI consumers change only their import path.</li>
+<li><strong>Internal API rename.</strong> ✅ RESOLVED: repoint in-repo consumers only — <strong>no back-compat shim</strong>. After the split, <code>from hydra_suite.core.tracking import TrackingWorker</code> no longer resolves (core exports <code>TrackingEngineCore</code>; the Qt <code>TrackingWorker</code> lives in trackerkit). The top-level convenience import <code>hydra_suite.TrackingWorker</code> is preserved (repointed to the wrapper). The user confirmed no out-of-repo script imports <code>TrackingWorker</code> from <code>core</code>.</li>
+</ol>
+<hr />
+<h2 id="file-structure">File Structure<a class="headerlink" href="#file-structure" title="Permanent link">&para;</a></h2>
+<ul>
+<li><code>src/hydra_suite/core/tracking/worker.py</code> — <strong>modify</strong>: rename <code>class TrackingWorker(QThread)</code> → <code>class TrackingEngineCore:</code> (plain); remove the PySide6 import; add <code>import threading</code>; 6 <code>Signal</code> attrs → 6 <code>__init__</code> callback params + <code>_emit_*</code> guarded helpers; <code>QMutex</code>→<code>threading.Lock</code>; drop <code>@Slot</code>; <code>run()</code>→<code>run_tracking()</code> (the outer exception guard moves to the wrapper). Every method body stays byte-for-byte except emit/mutex/self-ref substitutions.</li>
+<li><code>src/hydra_suite/trackerkit/gui/workers/tracking_worker.py</code> — <strong>create</strong>: <code>class TrackingWorker(QThread)</code> — the 6 Signals, <code>@Slot(dict) update_parameters</code>, 8-arg <code>__init__</code> that builds a <code>TrackingEngineCore</code> wired to emits, delegating methods, and <code>run()</code> with the QThread exception-safety fallback.</li>
+<li><code>src/hydra_suite/core/tracking/__init__.py</code> — <strong>modify</strong>: export <code>TrackingEngineCore</code> (drop <code>TrackingWorker</code>).</li>
+<li><code>src/hydra_suite/core/__init__.py</code> — <strong>modify</strong>: export <code>TrackingEngineCore</code> (drop <code>TrackingWorker</code>).</li>
+<li><code>src/hydra_suite/__init__.py</code> — <strong>modify</strong>: repoint the lazy <code>TrackingWorker</code> re-export (lines ~40, 62-63) to the trackerkit wrapper.</li>
+<li><code>src/hydra_suite/trackerkit/headless_tracking.py</code> — <strong>modify</strong>: import <code>TrackingWorker</code> from the wrapper module (line ~12).</li>
+<li><code>src/hydra_suite/trackerkit/gui/orchestrators/tracking.py</code> — <strong>modify</strong>: repoint the two <code>from hydra_suite.core.tracking import TrackingWorker</code> imports (lines ~3800, ~4260) to the wrapper module.</li>
+<li>Tests — <strong>modify</strong>: <code>tests/test_tracking_worker_helpers.py</code>, <code>tests/test_tracking_worker_realtime_live_features.py</code>, <code>tests/test_worker_real_inference_integration.py</code>, <code>tests/test_trackerkit_workers_smoke.py</code> (repoint to <code>TrackingEngineCore</code>); <code>tests/test_trackerkit_tracking_orchestrator_dialogs.py</code> (repoint the 3 monkeypatch targets to the wrapper path). <strong>Create</strong>: <code>tests/test_tracking_engine_core_qtfree.py</code> (guard + wrapper smoke).</li>
+</ul>
+<h3 id="qt-surface-inventory-re-derived-against-current-workerpy-4e70d2c-4391-lines-use-these-exact-sites">Qt surface inventory (re-derived against current <code>worker.py</code> @ <code>4e70d2c</code> — 4391 lines; use these exact sites)<a class="headerlink" href="#qt-surface-inventory-re-derived-against-current-workerpy-4e70d2c-4391-lines-use-these-exact-sites" title="Permanent link">&para;</a></h3>
+<ul>
+<li><strong>Class decl:</strong> <code>class TrackingWorker(QThread):</code> @132. <strong>Import:</strong> <code>from PySide6.QtCore import QMutex, QThread, Signal, Slot</code> @16.</li>
+<li><strong>6 Signals:</strong> <code>frame_signal</code> @138, <code>finished_signal</code> @139, <code>progress_signal</code> @140, <code>stats_signal</code> @141, <code>warning_signal</code> @142, <code>pose_exported_model_resolved_signal</code> @143.</li>
+<li><strong>QMutex:</strong> <code>self.params_mutex = QMutex()</code> @165; lock/unlock in <code>set_parameters</code> @188/@190, <code>update_parameters</code> @195/@197, <code>get_current_params</code> @202/@204.</li>
+<li><strong><code>@Slot(dict)</code>:</strong> on <code>update_parameters</code> @192.</li>
+<li><strong>methods:</strong> <code>set_parameters</code> @186, <code>update_parameters</code> @193, <code>get_current_params</code> @200, <code>stop</code> @414.</li>
+<li><strong>emit sites (map each to <code>self._emit_&lt;name&gt;(...)</code>):</strong></li>
+<li><code>frame_signal.emit</code>: @487</li>
+<li><code>finished_signal.emit</code>: @722, @744, @899, @1010, @1020, @1044, @1062, @1153, @1238, @4199 (10 sites)</li>
+<li><code>progress_signal.emit</code>: @1310, @1313, @1367, @1394, @3892, @4391 (6 sites)</li>
+<li><code>stats_signal.emit</code>: @4010</li>
+<li><code>warning_signal.emit</code>: @836, @1230, @4059, and the lambda <code>warning_cb=lambda title, msg: self.warning_signal.emit(title, msg)</code> @4051</li>
+<li><code>pose_exported_model_resolved_signal.emit</code>: <strong>none</strong> (declared + connected by orchestrator @3884/@4286, never emitted — preserve as a no-op wire).</li>
+<li><strong><code>_stop_requested</code> (plain bool — STAYS a plain attr, no change):</strong> init @173, set in <code>stop()</code> @416, read @438/@449/@474/@480/@728/@4042/@4200, and <code>should_stop=lambda: self._stop_requested</code> @1223.</li>
+<li><strong><code>run()</code>/<code>_run_impl()</code> seam:</strong> <code>run()</code> @698 (try/except → <code>finished_signal.emit(False,[],[])</code> fallback @722) delegates to <code>_run_impl()</code> @724 (<code>self._stop_requested = False</code> reset @728). The core makes <strong>zero</strong> QThread-instance calls on <code>self</code> (verified: only <code>self.start_time</code> matches, no <code>msleep</code>/<code>isInterruptionRequested</code>/<code>wait</code>/<code>currentThread</code>), so the plain-class rename is safe.</li>
+<li><strong>Runtime-retirement additions (Qt-FREE, do NOT touch — context only):</strong> module-level <code>_classify_cache_runtime_string(params, stage)</code> @106 (used at @1574/@4347 for cache keys); local runtime imports <code>from hydra_suite.runtime.resolver import RuntimeResolver, detect_platform</code> @119 and <code>from hydra_suite.core.inference.runtime import ResolvedBackend</code> @4303; <code>migrate_runtime_to_tier</code> bgsub tier fallback @~1200. These stay exactly as-is through the split (module functions + local imports are unaffected by the class rename).</li>
+<li><strong>Duck-typed collaborators (no Qt, keep as-is):</strong> <code>csv_writer_thread.enqueue(...)</code> @3482/@3522/@3679; <code>frame_prefetcher</code> (<code>FramePrefetcher</code> from utils) <code>.start()/.read()/.stop()</code> @409-420, @4020-4022.</li>
+</ul>
+<hr />
+<h2 id="task-1-convert-the-core-class-to-a-qt-free-trackingenginecore">Task 1: Convert the core class to a Qt-free <code>TrackingEngineCore</code><a class="headerlink" href="#task-1-convert-the-core-class-to-a-qt-free-trackingenginecore" title="Permanent link">&para;</a></h2>
+<p>Rename <code>TrackingWorker(QThread)</code> → plain <code>TrackingEngineCore</code>, remove all Qt, inject the 6 emits as callbacks, swap the mutex. Behavior-preserving.</p>
+<p><strong>Files:</strong>
+- Modify: <code>src/hydra_suite/core/tracking/worker.py</code>
+- Test: <code>tests/test_tracking_engine_core_qtfree.py</code> (new), and repoint <code>tests/test_tracking_worker_helpers.py</code> + <code>tests/test_trackerkit_workers_smoke.py</code>.</p>
+<p><strong>Interfaces:</strong>
+- Consumes: nothing new (all existing core helpers stay).
+- Produces:
+  <div class="language-python highlight"><pre><span></span><code><span id="__span-0-1"><a id="__codelineno-0-1" name="__codelineno-0-1" href="#__codelineno-0-1"></a><span class="k">class</span><span class="w"> </span><span class="nc">TrackingEngineCore</span><span class="p">:</span>
+</span><span id="__span-0-2"><a id="__codelineno-0-2" name="__codelineno-0-2" href="#__codelineno-0-2"></a>    <span class="k">def</span><span class="w"> </span><span class="fm">__init__</span><span class="p">(</span>
+</span><span id="__span-0-3"><a id="__codelineno-0-3" name="__codelineno-0-3" href="#__codelineno-0-3"></a>        <span class="bp">self</span><span class="p">,</span>
+</span><span id="__span-0-4"><a id="__codelineno-0-4" name="__codelineno-0-4" href="#__codelineno-0-4"></a>        <span class="n">video_path</span><span class="p">,</span>
+</span><span id="__span-0-5"><a id="__codelineno-0-5" name="__codelineno-0-5" href="#__codelineno-0-5"></a>        <span class="n">csv_writer_thread</span><span class="o">=</span><span class="kc">None</span><span class="p">,</span>
+</span><span id="__span-0-6"><a id="__codelineno-0-6" name="__codelineno-0-6" href="#__codelineno-0-6"></a>        <span class="n">video_output_path</span><span class="o">=</span><span class="kc">None</span><span class="p">,</span>
+</span><span id="__span-0-7"><a id="__codelineno-0-7" name="__codelineno-0-7" href="#__codelineno-0-7"></a>        <span class="n">backward_mode</span><span class="o">=</span><span class="kc">False</span><span class="p">,</span>
+</span><span id="__span-0-8"><a id="__codelineno-0-8" name="__codelineno-0-8" href="#__codelineno-0-8"></a>        <span class="n">detection_cache_path</span><span class="o">=</span><span class="kc">None</span><span class="p">,</span>
+</span><span id="__span-0-9"><a id="__codelineno-0-9" name="__codelineno-0-9" href="#__codelineno-0-9"></a>        <span class="n">preview_mode</span><span class="o">=</span><span class="kc">False</span><span class="p">,</span>
+</span><span id="__span-0-10"><a id="__codelineno-0-10" name="__codelineno-0-10" href="#__codelineno-0-10"></a>        <span class="n">use_cached_detections</span><span class="o">=</span><span class="kc">False</span><span class="p">,</span>
+</span><span id="__span-0-11"><a id="__codelineno-0-11" name="__codelineno-0-11" href="#__codelineno-0-11"></a>        <span class="o">*</span><span class="p">,</span>
+</span><span id="__span-0-12"><a id="__codelineno-0-12" name="__codelineno-0-12" href="#__codelineno-0-12"></a>        <span class="n">on_frame</span><span class="o">=</span><span class="kc">None</span><span class="p">,</span>                 <span class="c1"># Callable[[np.ndarray], None]</span>
+</span><span id="__span-0-13"><a id="__codelineno-0-13" name="__codelineno-0-13" href="#__codelineno-0-13"></a>        <span class="n">on_finished</span><span class="o">=</span><span class="kc">None</span><span class="p">,</span>              <span class="c1"># Callable[[bool, list, list], None]</span>
+</span><span id="__span-0-14"><a id="__codelineno-0-14" name="__codelineno-0-14" href="#__codelineno-0-14"></a>        <span class="n">on_progress</span><span class="o">=</span><span class="kc">None</span><span class="p">,</span>              <span class="c1"># Callable[[int, str], None]</span>
+</span><span id="__span-0-15"><a id="__codelineno-0-15" name="__codelineno-0-15" href="#__codelineno-0-15"></a>        <span class="n">on_stats</span><span class="o">=</span><span class="kc">None</span><span class="p">,</span>                 <span class="c1"># Callable[[dict], None]</span>
+</span><span id="__span-0-16"><a id="__codelineno-0-16" name="__codelineno-0-16" href="#__codelineno-0-16"></a>        <span class="n">on_warning</span><span class="o">=</span><span class="kc">None</span><span class="p">,</span>               <span class="c1"># Callable[[str, str], None]</span>
+</span><span id="__span-0-17"><a id="__codelineno-0-17" name="__codelineno-0-17" href="#__codelineno-0-17"></a>        <span class="n">on_pose_model_resolved</span><span class="o">=</span><span class="kc">None</span><span class="p">,</span>   <span class="c1"># Callable[[str], None]  (currently never called)</span>
+</span><span id="__span-0-18"><a id="__codelineno-0-18" name="__codelineno-0-18" href="#__codelineno-0-18"></a>    <span class="p">):</span> <span class="o">...</span>
+</span><span id="__span-0-19"><a id="__codelineno-0-19" name="__codelineno-0-19" href="#__codelineno-0-19"></a>    <span class="k">def</span><span class="w"> </span><span class="nf">set_parameters</span><span class="p">(</span><span class="bp">self</span><span class="p">,</span> <span class="n">p</span><span class="p">:</span> <span class="nb">dict</span><span class="p">)</span> <span class="o">-&gt;</span> <span class="kc">None</span><span class="p">:</span> <span class="o">...</span>
+</span><span id="__span-0-20"><a id="__codelineno-0-20" name="__codelineno-0-20" href="#__codelineno-0-20"></a>    <span class="k">def</span><span class="w"> </span><span class="nf">update_parameters</span><span class="p">(</span><span class="bp">self</span><span class="p">,</span> <span class="n">new_params</span><span class="p">:</span> <span class="nb">dict</span><span class="p">)</span> <span class="o">-&gt;</span> <span class="kc">None</span><span class="p">:</span> <span class="o">...</span>   <span class="c1"># plain method, no @Slot</span>
+</span><span id="__span-0-21"><a id="__codelineno-0-21" name="__codelineno-0-21" href="#__codelineno-0-21"></a>    <span class="k">def</span><span class="w"> </span><span class="nf">get_current_params</span><span class="p">(</span><span class="bp">self</span><span class="p">)</span> <span class="o">-&gt;</span> <span class="nb">dict</span><span class="p">:</span> <span class="o">...</span>
+</span><span id="__span-0-22"><a id="__codelineno-0-22" name="__codelineno-0-22" href="#__codelineno-0-22"></a>    <span class="k">def</span><span class="w"> </span><span class="nf">stop</span><span class="p">(</span><span class="bp">self</span><span class="p">)</span> <span class="o">-&gt;</span> <span class="kc">None</span><span class="p">:</span> <span class="o">...</span>
+</span><span id="__span-0-23"><a id="__codelineno-0-23" name="__codelineno-0-23" href="#__codelineno-0-23"></a>    <span class="k">def</span><span class="w"> </span><span class="nf">run_tracking</span><span class="p">(</span><span class="bp">self</span><span class="p">)</span> <span class="o">-&gt;</span> <span class="kc">None</span><span class="p">:</span> <span class="o">...</span>   <span class="c1"># was _run_impl(); the pipeline</span>
+</span></code></pre></div>
+  Guarded emit helpers: <code>_emit_frame/_emit_finished/_emit_progress/_emit_stats/_emit_warning/_emit_pose_model_resolved</code>, each <code>if self._on_X is not None: self._on_X(...)</code>.</p>
+<ul class="task-list">
+<li class="task-list-item"><label class="task-list-control"><input type="checkbox" disabled/><span class="task-list-indicator"></span></label> <strong>Step 1: Write the failing guard + helper test</strong></li>
+</ul>
+<div class="language-python highlight"><pre><span></span><code><span id="__span-1-1"><a id="__codelineno-1-1" name="__codelineno-1-1" href="#__codelineno-1-1"></a><span class="c1"># tests/test_tracking_engine_core_qtfree.py</span>
+</span><span id="__span-1-2"><a id="__codelineno-1-2" name="__codelineno-1-2" href="#__codelineno-1-2"></a><span class="sd">"""core/tracking is Qt-free; TrackingEngineCore is a plain, callback-driven engine."""</span>
+</span><span id="__span-1-3"><a id="__codelineno-1-3" name="__codelineno-1-3" href="#__codelineno-1-3"></a><span class="kn">import</span><span class="w"> </span><span class="nn">ast</span>
+</span><span id="__span-1-4"><a id="__codelineno-1-4" name="__codelineno-1-4" href="#__codelineno-1-4"></a><span class="kn">from</span><span class="w"> </span><span class="nn">pathlib</span><span class="w"> </span><span class="kn">import</span> <span class="n">Path</span>
+</span><span id="__span-1-5"><a id="__codelineno-1-5" name="__codelineno-1-5" href="#__codelineno-1-5"></a>
+</span><span id="__span-1-6"><a id="__codelineno-1-6" name="__codelineno-1-6" href="#__codelineno-1-6"></a>
+</span><span id="__span-1-7"><a id="__codelineno-1-7" name="__codelineno-1-7" href="#__codelineno-1-7"></a><span class="k">def</span><span class="w"> </span><span class="nf">test_core_tracking_imports_no_qt</span><span class="p">():</span>
+</span><span id="__span-1-8"><a id="__codelineno-1-8" name="__codelineno-1-8" href="#__codelineno-1-8"></a>    <span class="kn">import</span><span class="w"> </span><span class="nn">hydra_suite.core.tracking</span><span class="w"> </span><span class="k">as</span><span class="w"> </span><span class="nn">pkg</span>
+</span><span id="__span-1-9"><a id="__codelineno-1-9" name="__codelineno-1-9" href="#__codelineno-1-9"></a>
+</span><span id="__span-1-10"><a id="__codelineno-1-10" name="__codelineno-1-10" href="#__codelineno-1-10"></a>    <span class="n">pkg_dir</span> <span class="o">=</span> <span class="n">Path</span><span class="p">(</span><span class="n">pkg</span><span class="o">.</span><span class="vm">__file__</span><span class="p">)</span><span class="o">.</span><span class="n">parent</span>
+</span><span id="__span-1-11"><a id="__codelineno-1-11" name="__codelineno-1-11" href="#__codelineno-1-11"></a>    <span class="n">offenders</span> <span class="o">=</span> <span class="p">[]</span>
+</span><span id="__span-1-12"><a id="__codelineno-1-12" name="__codelineno-1-12" href="#__codelineno-1-12"></a>    <span class="k">for</span> <span class="n">py</span> <span class="ow">in</span> <span class="n">pkg_dir</span><span class="o">.</span><span class="n">rglob</span><span class="p">(</span><span class="s2">"*.py"</span><span class="p">):</span>
+</span><span id="__span-1-13"><a id="__codelineno-1-13" name="__codelineno-1-13" href="#__codelineno-1-13"></a>        <span class="n">tree</span> <span class="o">=</span> <span class="n">ast</span><span class="o">.</span><span class="n">parse</span><span class="p">(</span><span class="n">py</span><span class="o">.</span><span class="n">read_text</span><span class="p">(),</span> <span class="n">filename</span><span class="o">=</span><span class="nb">str</span><span class="p">(</span><span class="n">py</span><span class="p">))</span>
+</span><span id="__span-1-14"><a id="__codelineno-1-14" name="__codelineno-1-14" href="#__codelineno-1-14"></a>        <span class="k">for</span> <span class="n">node</span> <span class="ow">in</span> <span class="n">ast</span><span class="o">.</span><span class="n">walk</span><span class="p">(</span><span class="n">tree</span><span class="p">):</span>
+</span><span id="__span-1-15"><a id="__codelineno-1-15" name="__codelineno-1-15" href="#__codelineno-1-15"></a>            <span class="n">mod</span> <span class="o">=</span> <span class="kc">None</span>
+</span><span id="__span-1-16"><a id="__codelineno-1-16" name="__codelineno-1-16" href="#__codelineno-1-16"></a>            <span class="k">if</span> <span class="nb">isinstance</span><span class="p">(</span><span class="n">node</span><span class="p">,</span> <span class="n">ast</span><span class="o">.</span><span class="n">ImportFrom</span><span class="p">):</span>
+</span><span id="__span-1-17"><a id="__codelineno-1-17" name="__codelineno-1-17" href="#__codelineno-1-17"></a>                <span class="n">mod</span> <span class="o">=</span> <span class="n">node</span><span class="o">.</span><span class="n">module</span>
+</span><span id="__span-1-18"><a id="__codelineno-1-18" name="__codelineno-1-18" href="#__codelineno-1-18"></a>            <span class="k">elif</span> <span class="nb">isinstance</span><span class="p">(</span><span class="n">node</span><span class="p">,</span> <span class="n">ast</span><span class="o">.</span><span class="n">Import</span><span class="p">):</span>
+</span><span id="__span-1-19"><a id="__codelineno-1-19" name="__codelineno-1-19" href="#__codelineno-1-19"></a>                <span class="n">mod</span> <span class="o">=</span> <span class="s2">","</span><span class="o">.</span><span class="n">join</span><span class="p">(</span><span class="n">a</span><span class="o">.</span><span class="n">name</span> <span class="k">for</span> <span class="n">a</span> <span class="ow">in</span> <span class="n">node</span><span class="o">.</span><span class="n">names</span><span class="p">)</span>
+</span><span id="__span-1-20"><a id="__codelineno-1-20" name="__codelineno-1-20" href="#__codelineno-1-20"></a>            <span class="k">if</span> <span class="n">mod</span> <span class="ow">and</span> <span class="nb">any</span><span class="p">(</span><span class="n">q</span> <span class="ow">in</span> <span class="n">mod</span> <span class="k">for</span> <span class="n">q</span> <span class="ow">in</span> <span class="p">(</span><span class="s2">"PySide6"</span><span class="p">,</span> <span class="s2">"QtCore"</span><span class="p">)):</span>
+</span><span id="__span-1-21"><a id="__codelineno-1-21" name="__codelineno-1-21" href="#__codelineno-1-21"></a>                <span class="n">offenders</span><span class="o">.</span><span class="n">append</span><span class="p">(</span><span class="sa">f</span><span class="s2">"</span><span class="si">{</span><span class="n">py</span><span class="o">.</span><span class="n">relative_to</span><span class="p">(</span><span class="n">pkg_dir</span><span class="p">)</span><span class="si">}</span><span class="s2">:</span><span class="si">{</span><span class="n">node</span><span class="o">.</span><span class="n">lineno</span><span class="si">}</span><span class="s2">"</span><span class="p">)</span>
+</span><span id="__span-1-22"><a id="__codelineno-1-22" name="__codelineno-1-22" href="#__codelineno-1-22"></a>    <span class="k">assert</span> <span class="ow">not</span> <span class="n">offenders</span><span class="p">,</span> <span class="s2">"core/tracking must not import Qt: "</span> <span class="o">+</span> <span class="s2">"; "</span><span class="o">.</span><span class="n">join</span><span class="p">(</span><span class="n">offenders</span><span class="p">)</span>
+</span><span id="__span-1-23"><a id="__codelineno-1-23" name="__codelineno-1-23" href="#__codelineno-1-23"></a>
+</span><span id="__span-1-24"><a id="__codelineno-1-24" name="__codelineno-1-24" href="#__codelineno-1-24"></a>
+</span><span id="__span-1-25"><a id="__codelineno-1-25" name="__codelineno-1-25" href="#__codelineno-1-25"></a><span class="k">def</span><span class="w"> </span><span class="nf">test_engine_core_is_plain_and_callback_driven</span><span class="p">():</span>
+</span><span id="__span-1-26"><a id="__codelineno-1-26" name="__codelineno-1-26" href="#__codelineno-1-26"></a>    <span class="kn">from</span><span class="w"> </span><span class="nn">hydra_suite.core.tracking.worker</span><span class="w"> </span><span class="kn">import</span> <span class="n">TrackingEngineCore</span>
+</span><span id="__span-1-27"><a id="__codelineno-1-27" name="__codelineno-1-27" href="#__codelineno-1-27"></a>
+</span><span id="__span-1-28"><a id="__codelineno-1-28" name="__codelineno-1-28" href="#__codelineno-1-28"></a>    <span class="n">seen</span> <span class="o">=</span> <span class="p">[]</span>
+</span><span id="__span-1-29"><a id="__codelineno-1-29" name="__codelineno-1-29" href="#__codelineno-1-29"></a>    <span class="n">core</span> <span class="o">=</span> <span class="n">TrackingEngineCore</span><span class="p">(</span><span class="s2">"dummy.mp4"</span><span class="p">,</span> <span class="n">on_progress</span><span class="o">=</span><span class="k">lambda</span> <span class="n">pct</span><span class="p">,</span> <span class="n">msg</span><span class="p">:</span> <span class="n">seen</span><span class="o">.</span><span class="n">append</span><span class="p">((</span><span class="n">pct</span><span class="p">,</span> <span class="n">msg</span><span class="p">)))</span>
+</span><span id="__span-1-30"><a id="__codelineno-1-30" name="__codelineno-1-30" href="#__codelineno-1-30"></a>    <span class="c1"># Not a QThread — instantiable with no Qt event loop.</span>
+</span><span id="__span-1-31"><a id="__codelineno-1-31" name="__codelineno-1-31" href="#__codelineno-1-31"></a>    <span class="k">assert</span> <span class="ow">not</span> <span class="nb">hasattr</span><span class="p">(</span><span class="nb">type</span><span class="p">(</span><span class="n">core</span><span class="p">),</span> <span class="s2">"start"</span><span class="p">)</span>
+</span><span id="__span-1-32"><a id="__codelineno-1-32" name="__codelineno-1-32" href="#__codelineno-1-32"></a>    <span class="c1"># Guarded emit helper routes to the injected callback.</span>
+</span><span id="__span-1-33"><a id="__codelineno-1-33" name="__codelineno-1-33" href="#__codelineno-1-33"></a>    <span class="n">core</span><span class="o">.</span><span class="n">_emit_progress</span><span class="p">(</span><span class="mi">42</span><span class="p">,</span> <span class="s2">"hi"</span><span class="p">)</span>
+</span><span id="__span-1-34"><a id="__codelineno-1-34" name="__codelineno-1-34" href="#__codelineno-1-34"></a>    <span class="k">assert</span> <span class="n">seen</span> <span class="o">==</span> <span class="p">[(</span><span class="mi">42</span><span class="p">,</span> <span class="s2">"hi"</span><span class="p">)]</span>
+</span><span id="__span-1-35"><a id="__codelineno-1-35" name="__codelineno-1-35" href="#__codelineno-1-35"></a>    <span class="c1"># stop() sets the plain flag and stops an active prefetcher.</span>
+</span><span id="__span-1-36"><a id="__codelineno-1-36" name="__codelineno-1-36" href="#__codelineno-1-36"></a>    <span class="k">class</span><span class="w"> </span><span class="nc">_FakePref</span><span class="p">:</span>
+</span><span id="__span-1-37"><a id="__codelineno-1-37" name="__codelineno-1-37" href="#__codelineno-1-37"></a>        <span class="n">stopped</span> <span class="o">=</span> <span class="kc">False</span>
+</span><span id="__span-1-38"><a id="__codelineno-1-38" name="__codelineno-1-38" href="#__codelineno-1-38"></a>        <span class="k">def</span><span class="w"> </span><span class="nf">stop</span><span class="p">(</span><span class="bp">self</span><span class="p">):</span>
+</span><span id="__span-1-39"><a id="__codelineno-1-39" name="__codelineno-1-39" href="#__codelineno-1-39"></a>            <span class="bp">self</span><span class="o">.</span><span class="n">stopped</span> <span class="o">=</span> <span class="kc">True</span>
+</span><span id="__span-1-40"><a id="__codelineno-1-40" name="__codelineno-1-40" href="#__codelineno-1-40"></a>    <span class="n">core</span><span class="o">.</span><span class="n">frame_prefetcher</span> <span class="o">=</span> <span class="n">_FakePref</span><span class="p">()</span>
+</span><span id="__span-1-41"><a id="__codelineno-1-41" name="__codelineno-1-41" href="#__codelineno-1-41"></a>    <span class="n">core</span><span class="o">.</span><span class="n">stop</span><span class="p">()</span>
+</span><span id="__span-1-42"><a id="__codelineno-1-42" name="__codelineno-1-42" href="#__codelineno-1-42"></a>    <span class="k">assert</span> <span class="n">core</span><span class="o">.</span><span class="n">_stop_requested</span> <span class="ow">is</span> <span class="kc">True</span>
+</span><span id="__span-1-43"><a id="__codelineno-1-43" name="__codelineno-1-43" href="#__codelineno-1-43"></a>    <span class="k">assert</span> <span class="n">core</span><span class="o">.</span><span class="n">frame_prefetcher</span><span class="o">.</span><span class="n">stopped</span> <span class="ow">is</span> <span class="kc">True</span>
+</span><span id="__span-1-44"><a id="__codelineno-1-44" name="__codelineno-1-44" href="#__codelineno-1-44"></a>
+</span><span id="__span-1-45"><a id="__codelineno-1-45" name="__codelineno-1-45" href="#__codelineno-1-45"></a>
+</span><span id="__span-1-46"><a id="__codelineno-1-46" name="__codelineno-1-46" href="#__codelineno-1-46"></a><span class="k">def</span><span class="w"> </span><span class="nf">test_engine_core_param_lock_roundtrip</span><span class="p">():</span>
+</span><span id="__span-1-47"><a id="__codelineno-1-47" name="__codelineno-1-47" href="#__codelineno-1-47"></a>    <span class="kn">from</span><span class="w"> </span><span class="nn">hydra_suite.core.tracking.worker</span><span class="w"> </span><span class="kn">import</span> <span class="n">TrackingEngineCore</span>
+</span><span id="__span-1-48"><a id="__codelineno-1-48" name="__codelineno-1-48" href="#__codelineno-1-48"></a>
+</span><span id="__span-1-49"><a id="__codelineno-1-49" name="__codelineno-1-49" href="#__codelineno-1-49"></a>    <span class="n">core</span> <span class="o">=</span> <span class="n">TrackingEngineCore</span><span class="p">(</span><span class="s2">"dummy.mp4"</span><span class="p">)</span>
+</span><span id="__span-1-50"><a id="__codelineno-1-50" name="__codelineno-1-50" href="#__codelineno-1-50"></a>    <span class="n">core</span><span class="o">.</span><span class="n">set_parameters</span><span class="p">({</span><span class="s2">"A"</span><span class="p">:</span> <span class="mi">1</span><span class="p">})</span>
+</span><span id="__span-1-51"><a id="__codelineno-1-51" name="__codelineno-1-51" href="#__codelineno-1-51"></a>    <span class="n">core</span><span class="o">.</span><span class="n">update_parameters</span><span class="p">({</span><span class="s2">"A"</span><span class="p">:</span> <span class="mi">2</span><span class="p">,</span> <span class="s2">"B"</span><span class="p">:</span> <span class="mi">3</span><span class="p">})</span>
+</span><span id="__span-1-52"><a id="__codelineno-1-52" name="__codelineno-1-52" href="#__codelineno-1-52"></a>    <span class="k">assert</span> <span class="n">core</span><span class="o">.</span><span class="n">get_current_params</span><span class="p">()</span> <span class="o">==</span> <span class="p">{</span><span class="s2">"A"</span><span class="p">:</span> <span class="mi">2</span><span class="p">,</span> <span class="s2">"B"</span><span class="p">:</span> <span class="mi">3</span><span class="p">}</span>
+</span></code></pre></div>
+<ul class="task-list">
+<li class="task-list-item"><label class="task-list-control"><input type="checkbox" disabled/><span class="task-list-indicator"></span></label> <strong>Step 2: Run to verify it fails</strong></li>
+</ul>
+<p>Run: <code>conda run -n hydra-mps python -m pytest tests/test_tracking_engine_core_qtfree.py -q</code>
+Expected: FAIL — <code>TrackingEngineCore</code> doesn't exist yet / module still imports Qt.</p>
+<ul class="task-list">
+<li class="task-list-item"><label class="task-list-control"><input type="checkbox" disabled/><span class="task-list-indicator"></span></label> <strong>Step 3: Apply the mechanical transform to <code>worker.py</code></strong></li>
+</ul>
+<p>Using the Qt surface inventory above, apply ONLY these substitutions — do not touch any tracking logic, math, loop, or helper body:</p>
+<ol class="task-list">
+<li>Line 16: delete <code>from PySide6.QtCore import QMutex, QThread, Signal, Slot</code>. Add <code>import threading</code> near the other stdlib imports.</li>
+<li>Line 132: <code>class TrackingWorker(QThread):</code> → <code>class TrackingEngineCore:</code>.</li>
+<li>Lines 138-143: delete the 6 <code>Signal(...)</code> class attributes.</li>
+<li><code>__init__</code> (starts ~@145, body through ~@184): drop the <code>parent=None</code> param and <code>super().__init__(parent)</code>; add the 6 keyword-only callback params (<code>on_frame=None, ... on_pose_model_resolved=None</code>) and store them as <code>self._on_frame = on_frame</code>, etc. Change <code>self.params_mutex = QMutex()</code> (@165) → <code>self._params_lock = threading.Lock()</code>.</li>
+<li>Add 6 guarded emit helpers (place right after <code>__init__</code>):
+   <div class="language-python highlight"><pre><span></span><code><span id="__span-2-1"><a id="__codelineno-2-1" name="__codelineno-2-1" href="#__codelineno-2-1"></a><span class="k">def</span><span class="w"> </span><span class="nf">_emit_frame</span><span class="p">(</span><span class="bp">self</span><span class="p">,</span> <span class="n">rgb</span><span class="p">):</span>
+</span><span id="__span-2-2"><a id="__codelineno-2-2" name="__codelineno-2-2" href="#__codelineno-2-2"></a>    <span class="k">if</span> <span class="bp">self</span><span class="o">.</span><span class="n">_on_frame</span> <span class="ow">is</span> <span class="ow">not</span> <span class="kc">None</span><span class="p">:</span>
+</span><span id="__span-2-3"><a id="__codelineno-2-3" name="__codelineno-2-3" href="#__codelineno-2-3"></a>        <span class="bp">self</span><span class="o">.</span><span class="n">_on_frame</span><span class="p">(</span><span class="n">rgb</span><span class="p">)</span>
+</span><span id="__span-2-4"><a id="__codelineno-2-4" name="__codelineno-2-4" href="#__codelineno-2-4"></a><span class="k">def</span><span class="w"> </span><span class="nf">_emit_finished</span><span class="p">(</span><span class="bp">self</span><span class="p">,</span> <span class="n">success</span><span class="p">,</span> <span class="n">fps_list</span><span class="p">,</span> <span class="n">full_traj</span><span class="p">):</span>
+</span><span id="__span-2-5"><a id="__codelineno-2-5" name="__codelineno-2-5" href="#__codelineno-2-5"></a>    <span class="k">if</span> <span class="bp">self</span><span class="o">.</span><span class="n">_on_finished</span> <span class="ow">is</span> <span class="ow">not</span> <span class="kc">None</span><span class="p">:</span>
+</span><span id="__span-2-6"><a id="__codelineno-2-6" name="__codelineno-2-6" href="#__codelineno-2-6"></a>        <span class="bp">self</span><span class="o">.</span><span class="n">_on_finished</span><span class="p">(</span><span class="n">success</span><span class="p">,</span> <span class="n">fps_list</span><span class="p">,</span> <span class="n">full_traj</span><span class="p">)</span>
+</span><span id="__span-2-7"><a id="__codelineno-2-7" name="__codelineno-2-7" href="#__codelineno-2-7"></a><span class="k">def</span><span class="w"> </span><span class="nf">_emit_progress</span><span class="p">(</span><span class="bp">self</span><span class="p">,</span> <span class="n">pct</span><span class="p">,</span> <span class="n">msg</span><span class="p">):</span>
+</span><span id="__span-2-8"><a id="__codelineno-2-8" name="__codelineno-2-8" href="#__codelineno-2-8"></a>    <span class="k">if</span> <span class="bp">self</span><span class="o">.</span><span class="n">_on_progress</span> <span class="ow">is</span> <span class="ow">not</span> <span class="kc">None</span><span class="p">:</span>
+</span><span id="__span-2-9"><a id="__codelineno-2-9" name="__codelineno-2-9" href="#__codelineno-2-9"></a>        <span class="bp">self</span><span class="o">.</span><span class="n">_on_progress</span><span class="p">(</span><span class="n">pct</span><span class="p">,</span> <span class="n">msg</span><span class="p">)</span>
+</span><span id="__span-2-10"><a id="__codelineno-2-10" name="__codelineno-2-10" href="#__codelineno-2-10"></a><span class="k">def</span><span class="w"> </span><span class="nf">_emit_stats</span><span class="p">(</span><span class="bp">self</span><span class="p">,</span> <span class="n">stats</span><span class="p">):</span>
+</span><span id="__span-2-11"><a id="__codelineno-2-11" name="__codelineno-2-11" href="#__codelineno-2-11"></a>    <span class="k">if</span> <span class="bp">self</span><span class="o">.</span><span class="n">_on_stats</span> <span class="ow">is</span> <span class="ow">not</span> <span class="kc">None</span><span class="p">:</span>
+</span><span id="__span-2-12"><a id="__codelineno-2-12" name="__codelineno-2-12" href="#__codelineno-2-12"></a>        <span class="bp">self</span><span class="o">.</span><span class="n">_on_stats</span><span class="p">(</span><span class="n">stats</span><span class="p">)</span>
+</span><span id="__span-2-13"><a id="__codelineno-2-13" name="__codelineno-2-13" href="#__codelineno-2-13"></a><span class="k">def</span><span class="w"> </span><span class="nf">_emit_warning</span><span class="p">(</span><span class="bp">self</span><span class="p">,</span> <span class="n">title</span><span class="p">,</span> <span class="n">msg</span><span class="p">):</span>
+</span><span id="__span-2-14"><a id="__codelineno-2-14" name="__codelineno-2-14" href="#__codelineno-2-14"></a>    <span class="k">if</span> <span class="bp">self</span><span class="o">.</span><span class="n">_on_warning</span> <span class="ow">is</span> <span class="ow">not</span> <span class="kc">None</span><span class="p">:</span>
+</span><span id="__span-2-15"><a id="__codelineno-2-15" name="__codelineno-2-15" href="#__codelineno-2-15"></a>        <span class="bp">self</span><span class="o">.</span><span class="n">_on_warning</span><span class="p">(</span><span class="n">title</span><span class="p">,</span> <span class="n">msg</span><span class="p">)</span>
+</span><span id="__span-2-16"><a id="__codelineno-2-16" name="__codelineno-2-16" href="#__codelineno-2-16"></a><span class="k">def</span><span class="w"> </span><span class="nf">_emit_pose_model_resolved</span><span class="p">(</span><span class="bp">self</span><span class="p">,</span> <span class="n">path</span><span class="p">):</span>
+</span><span id="__span-2-17"><a id="__codelineno-2-17" name="__codelineno-2-17" href="#__codelineno-2-17"></a>    <span class="k">if</span> <span class="bp">self</span><span class="o">.</span><span class="n">_on_pose_model_resolved</span> <span class="ow">is</span> <span class="ow">not</span> <span class="kc">None</span><span class="p">:</span>
+</span><span id="__span-2-18"><a id="__codelineno-2-18" name="__codelineno-2-18" href="#__codelineno-2-18"></a>        <span class="bp">self</span><span class="o">.</span><span class="n">_on_pose_model_resolved</span><span class="p">(</span><span class="n">path</span><span class="p">)</span>
+</span></code></pre></div></li>
+<li><code>set_parameters</code> (@186), <code>update_parameters</code> (@193), <code>get_current_params</code> (@200): remove the <code>@Slot(dict)</code> decorator (@192); replace <code>self.params_mutex.lock()</code> / <code>self.params_mutex.unlock()</code> pairs (@188/@190, @195/@197, @202/@204) with <code>with self._params_lock:</code> blocks (guard the same statements). Keep the <code>logger.info</code> in <code>update_parameters</code>.</li>
+<li>Replace every emit call site (exact lines in the inventory) <code>self.&lt;name&gt;_signal.emit(&lt;args&gt;)</code> → <code>self._emit_&lt;name&gt;(&lt;args&gt;)</code>. Including the lambda @4051: <code>warning_cb=lambda title, msg: self._emit_warning(title, msg)</code>.</li>
+<li><code>run()</code>/<code>_run_impl()</code> seam: <strong>delete the old <code>run()</code> method</strong> (the try/except fallback wrapper @698 — it moves to the Qt wrapper in Task 2) and <strong>rename <code>_run_impl</code> → <code>run_tracking</code></strong> (@724, keep <code># noqa: C901</code>). The internal <code>self._stop_requested = False</code> reset at the top of the old <code>_run_impl</code> (@728) stays. Do NOT wrap <code>run_tracking</code> in a try/except here — an exception propagates to the wrapper, which owns the QThread exception-safety guard.</li>
+<li>
+<p>Leave <code>_stop_requested</code>, <code>stop()</code>, <code>csv_writer_thread</code>, <code>frame_prefetcher</code>, and every other method unchanged.</p>
+</li>
+<li class="task-list-item">
+<p><label class="task-list-control"><input type="checkbox" disabled/><span class="task-list-indicator"></span></label> <strong>Step 4: Repoint the two existing tests that instantiate the class directly</strong></p>
+</li>
+<li>
+<p><code>tests/test_tracking_worker_helpers.py</code>: it loads the module via <code>load_src_module</code> and uses <code>mod.TrackingWorker(...)</code> (lines 274, 304, 314, 332, 354, 386, 407, 424) and <code>mod.TrackingWorker._should_emit_visualization_frame</code> / <code>_realtime_yolo_micro_batch_size</code> (447-475). Replace <code>mod.TrackingWorker</code> → <code>mod.TrackingEngineCore</code> throughout. (These test core helpers, which now live on the core class; the plain class instantiates without Qt, so the cv2 stub is still sufficient.)</p>
+</li>
+<li><code>tests/test_trackerkit_workers_smoke.py</code>: <code>test_tracking_worker_stop_stops_active_prefetcher</code> imports <code>from hydra_suite.core.tracking.worker import TrackingWorker</code> (line 5) and instantiates it (14). Replace with <code>TrackingEngineCore</code> (the <code>stop()</code>+prefetcher logic lives in core). Keep the assertions.</li>
+<li>
+<p><code>tests/test_worker_real_inference_integration.py:275,283</code>: <code>from hydra_suite.core.tracking.worker import TrackingWorker</code> + <code>TrackingWorker.__new__(TrackingWorker)</code> → <code>TrackingEngineCore</code>.</p>
+</li>
+<li class="task-list-item">
+<p><label class="task-list-control"><input type="checkbox" disabled/><span class="task-list-indicator"></span></label> <strong>Step 5: Run tests + Qt-free grep</strong></p>
+</li>
+</ol>
+<p>Run:
+<div class="language-bash highlight"><pre><span></span><code><span id="__span-3-1"><a id="__codelineno-3-1" name="__codelineno-3-1" href="#__codelineno-3-1"></a>conda<span class="w"> </span>run<span class="w"> </span>-n<span class="w"> </span>hydra-mps<span class="w"> </span>python<span class="w"> </span>-m<span class="w"> </span>pytest<span class="w"> </span>tests/test_tracking_engine_core_qtfree.py<span class="w"> </span>tests/test_tracking_worker_helpers.py<span class="w"> </span>tests/test_trackerkit_workers_smoke.py<span class="w"> </span>tests/test_worker_real_inference_integration.py<span class="w"> </span>-q<span class="w"> </span>--ignore<span class="o">=</span>tests/test_identity_postprocess.py
+</span><span id="__span-3-2"><a id="__codelineno-3-2" name="__codelineno-3-2" href="#__codelineno-3-2"></a>conda<span class="w"> </span>run<span class="w"> </span>-n<span class="w"> </span>hydra-mps<span class="w"> </span>python<span class="w"> </span>-c<span class="w"> </span><span class="s2">"import hydra_suite.core.tracking.worker as w; assert hasattr(w,'TrackingEngineCore') and not hasattr(w,'TrackingWorker'); print('core engine OK, no Qt name')"</span>
+</span><span id="__span-3-3"><a id="__codelineno-3-3" name="__codelineno-3-3" href="#__codelineno-3-3"></a>grep<span class="w"> </span>-rnE<span class="w"> </span><span class="s2">"PySide6|QtCore|QThread|Signal|Slot|QMutex"</span><span class="w"> </span>src/hydra_suite/core/tracking/worker.py
+</span></code></pre></div>
+Expected: tests pass; grep prints nothing. (Consumers importing <code>TrackingWorker</code> from core break until Tasks 2-3 — expected mid-refactor. <code>core/tracking/__init__.py</code> still says <code>from .worker import TrackingWorker</code>; that import now fails — fixed in Task 3. To keep this step's import check green, it targets <code>worker.py</code> directly, not the package.)</p>
+<ul class="task-list">
+<li class="task-list-item"><label class="task-list-control"><input type="checkbox" disabled/><span class="task-list-indicator"></span></label> <strong>Step 6: Commit</strong></li>
+</ul>
+<div class="language-bash highlight"><pre><span></span><code><span id="__span-4-1"><a id="__codelineno-4-1" name="__codelineno-4-1" href="#__codelineno-4-1"></a>make<span class="w"> </span>format
+</span><span id="__span-4-2"><a id="__codelineno-4-2" name="__codelineno-4-2" href="#__codelineno-4-2"></a>git<span class="w"> </span>add<span class="w"> </span>src/hydra_suite/core/tracking/worker.py<span class="w"> </span>tests/test_tracking_engine_core_qtfree.py<span class="w"> </span>tests/test_tracking_worker_helpers.py<span class="w"> </span>tests/test_trackerkit_workers_smoke.py<span class="w"> </span>tests/test_worker_real_inference_integration.py
+</span><span id="__span-4-3"><a id="__codelineno-4-3" name="__codelineno-4-3" href="#__codelineno-4-3"></a>git<span class="w"> </span>commit<span class="w"> </span>-m<span class="w"> </span><span class="s2">"refactor(core): extract Qt-free TrackingEngineCore from TrackingWorker(QThread)"</span>
+</span></code></pre></div>
+<hr />
+<h2 id="task-2-create-the-trackingworkerqthread-wrapper-in-trackerkit">Task 2: Create the <code>TrackingWorker(QThread)</code> wrapper in trackerkit<a class="headerlink" href="#task-2-create-the-trackingworkerqthread-wrapper-in-trackerkit" title="Permanent link">&para;</a></h2>
+<p><strong>Files:</strong>
+- Create: <code>src/hydra_suite/trackerkit/gui/workers/tracking_worker.py</code>
+- Test: <code>tests/test_tracking_engine_core_qtfree.py</code> (extend with a wrapper smoke test).</p>
+<p><strong>Interfaces:</strong>
+- Consumes: <code>TrackingEngineCore</code> from <code>hydra_suite.core.tracking.worker</code>.
+- Produces: <code>class TrackingWorker(QThread)</code> with the exact public surface the orchestrator + headless CLI use (see Global Constraints).</p>
+<ul class="task-list">
+<li class="task-list-item"><label class="task-list-control"><input type="checkbox" disabled/><span class="task-list-indicator"></span></label> <strong>Step 1: Write the wrapper</strong></li>
+</ul>
+<div class="language-python highlight"><pre><span></span><code><span id="__span-5-1"><a id="__codelineno-5-1" name="__codelineno-5-1" href="#__codelineno-5-1"></a><span class="c1"># src/hydra_suite/trackerkit/gui/workers/tracking_worker.py</span>
+</span><span id="__span-5-2"><a id="__codelineno-5-2" name="__codelineno-5-2" href="#__codelineno-5-2"></a><span class="sd">"""Qt wrapper for the Qt-free TrackingEngineCore (core/tracking/worker.py).</span>
+</span><span id="__span-5-3"><a id="__codelineno-5-3" name="__codelineno-5-3" href="#__codelineno-5-3"></a>
+</span><span id="__span-5-4"><a id="__codelineno-5-4" name="__codelineno-5-4" href="#__codelineno-5-4"></a><span class="sd">Owns the QThread + the 6 Signals + the update_parameters Slot, and forwards the</span>
+</span><span id="__span-5-5"><a id="__codelineno-5-5" name="__codelineno-5-5" href="#__codelineno-5-5"></a><span class="sd">engine's callbacks to those signals. Keeps the exact interface the tracking</span>
+</span><span id="__span-5-6"><a id="__codelineno-5-6" name="__codelineno-5-6" href="#__codelineno-5-6"></a><span class="sd">orchestrator and the headless CLI depend on."""</span>
+</span><span id="__span-5-7"><a id="__codelineno-5-7" name="__codelineno-5-7" href="#__codelineno-5-7"></a><span class="kn">from</span><span class="w"> </span><span class="nn">__future__</span><span class="w"> </span><span class="kn">import</span> <span class="n">annotations</span>
+</span><span id="__span-5-8"><a id="__codelineno-5-8" name="__codelineno-5-8" href="#__codelineno-5-8"></a>
+</span><span id="__span-5-9"><a id="__codelineno-5-9" name="__codelineno-5-9" href="#__codelineno-5-9"></a><span class="kn">import</span><span class="w"> </span><span class="nn">logging</span>
+</span><span id="__span-5-10"><a id="__codelineno-5-10" name="__codelineno-5-10" href="#__codelineno-5-10"></a>
+</span><span id="__span-5-11"><a id="__codelineno-5-11" name="__codelineno-5-11" href="#__codelineno-5-11"></a><span class="kn">import</span><span class="w"> </span><span class="nn">numpy</span><span class="w"> </span><span class="k">as</span><span class="w"> </span><span class="nn">np</span>
+</span><span id="__span-5-12"><a id="__codelineno-5-12" name="__codelineno-5-12" href="#__codelineno-5-12"></a><span class="kn">from</span><span class="w"> </span><span class="nn">PySide6.QtCore</span><span class="w"> </span><span class="kn">import</span> <span class="n">QThread</span><span class="p">,</span> <span class="n">Signal</span><span class="p">,</span> <span class="n">Slot</span>
+</span><span id="__span-5-13"><a id="__codelineno-5-13" name="__codelineno-5-13" href="#__codelineno-5-13"></a>
+</span><span id="__span-5-14"><a id="__codelineno-5-14" name="__codelineno-5-14" href="#__codelineno-5-14"></a><span class="kn">from</span><span class="w"> </span><span class="nn">hydra_suite.core.tracking.worker</span><span class="w"> </span><span class="kn">import</span> <span class="n">TrackingEngineCore</span>
+</span><span id="__span-5-15"><a id="__codelineno-5-15" name="__codelineno-5-15" href="#__codelineno-5-15"></a>
+</span><span id="__span-5-16"><a id="__codelineno-5-16" name="__codelineno-5-16" href="#__codelineno-5-16"></a><span class="n">logger</span> <span class="o">=</span> <span class="n">logging</span><span class="o">.</span><span class="n">getLogger</span><span class="p">(</span><span class="vm">__name__</span><span class="p">)</span>
+</span><span id="__span-5-17"><a id="__codelineno-5-17" name="__codelineno-5-17" href="#__codelineno-5-17"></a>
+</span><span id="__span-5-18"><a id="__codelineno-5-18" name="__codelineno-5-18" href="#__codelineno-5-18"></a>
+</span><span id="__span-5-19"><a id="__codelineno-5-19" name="__codelineno-5-19" href="#__codelineno-5-19"></a><span class="k">class</span><span class="w"> </span><span class="nc">TrackingWorker</span><span class="p">(</span><span class="n">QThread</span><span class="p">):</span>
+</span><span id="__span-5-20"><a id="__codelineno-5-20" name="__codelineno-5-20" href="#__codelineno-5-20"></a>    <span class="n">frame_signal</span> <span class="o">=</span> <span class="n">Signal</span><span class="p">(</span><span class="n">np</span><span class="o">.</span><span class="n">ndarray</span><span class="p">)</span>
+</span><span id="__span-5-21"><a id="__codelineno-5-21" name="__codelineno-5-21" href="#__codelineno-5-21"></a>    <span class="n">finished_signal</span> <span class="o">=</span> <span class="n">Signal</span><span class="p">(</span><span class="nb">bool</span><span class="p">,</span> <span class="nb">list</span><span class="p">,</span> <span class="nb">list</span><span class="p">)</span>
+</span><span id="__span-5-22"><a id="__codelineno-5-22" name="__codelineno-5-22" href="#__codelineno-5-22"></a>    <span class="n">progress_signal</span> <span class="o">=</span> <span class="n">Signal</span><span class="p">(</span><span class="nb">int</span><span class="p">,</span> <span class="nb">str</span><span class="p">)</span>
+</span><span id="__span-5-23"><a id="__codelineno-5-23" name="__codelineno-5-23" href="#__codelineno-5-23"></a>    <span class="n">stats_signal</span> <span class="o">=</span> <span class="n">Signal</span><span class="p">(</span><span class="nb">dict</span><span class="p">)</span>
+</span><span id="__span-5-24"><a id="__codelineno-5-24" name="__codelineno-5-24" href="#__codelineno-5-24"></a>    <span class="n">warning_signal</span> <span class="o">=</span> <span class="n">Signal</span><span class="p">(</span><span class="nb">str</span><span class="p">,</span> <span class="nb">str</span><span class="p">)</span>
+</span><span id="__span-5-25"><a id="__codelineno-5-25" name="__codelineno-5-25" href="#__codelineno-5-25"></a>    <span class="n">pose_exported_model_resolved_signal</span> <span class="o">=</span> <span class="n">Signal</span><span class="p">(</span><span class="nb">str</span><span class="p">)</span>
+</span><span id="__span-5-26"><a id="__codelineno-5-26" name="__codelineno-5-26" href="#__codelineno-5-26"></a>
+</span><span id="__span-5-27"><a id="__codelineno-5-27" name="__codelineno-5-27" href="#__codelineno-5-27"></a>    <span class="k">def</span><span class="w"> </span><span class="fm">__init__</span><span class="p">(</span>
+</span><span id="__span-5-28"><a id="__codelineno-5-28" name="__codelineno-5-28" href="#__codelineno-5-28"></a>        <span class="bp">self</span><span class="p">,</span>
+</span><span id="__span-5-29"><a id="__codelineno-5-29" name="__codelineno-5-29" href="#__codelineno-5-29"></a>        <span class="n">video_path</span><span class="p">,</span>
+</span><span id="__span-5-30"><a id="__codelineno-5-30" name="__codelineno-5-30" href="#__codelineno-5-30"></a>        <span class="n">csv_writer_thread</span><span class="o">=</span><span class="kc">None</span><span class="p">,</span>
+</span><span id="__span-5-31"><a id="__codelineno-5-31" name="__codelineno-5-31" href="#__codelineno-5-31"></a>        <span class="n">video_output_path</span><span class="o">=</span><span class="kc">None</span><span class="p">,</span>
+</span><span id="__span-5-32"><a id="__codelineno-5-32" name="__codelineno-5-32" href="#__codelineno-5-32"></a>        <span class="n">backward_mode</span><span class="o">=</span><span class="kc">False</span><span class="p">,</span>
+</span><span id="__span-5-33"><a id="__codelineno-5-33" name="__codelineno-5-33" href="#__codelineno-5-33"></a>        <span class="n">detection_cache_path</span><span class="o">=</span><span class="kc">None</span><span class="p">,</span>
+</span><span id="__span-5-34"><a id="__codelineno-5-34" name="__codelineno-5-34" href="#__codelineno-5-34"></a>        <span class="n">preview_mode</span><span class="o">=</span><span class="kc">False</span><span class="p">,</span>
+</span><span id="__span-5-35"><a id="__codelineno-5-35" name="__codelineno-5-35" href="#__codelineno-5-35"></a>        <span class="n">use_cached_detections</span><span class="o">=</span><span class="kc">False</span><span class="p">,</span>
+</span><span id="__span-5-36"><a id="__codelineno-5-36" name="__codelineno-5-36" href="#__codelineno-5-36"></a>        <span class="n">parent</span><span class="o">=</span><span class="kc">None</span><span class="p">,</span>
+</span><span id="__span-5-37"><a id="__codelineno-5-37" name="__codelineno-5-37" href="#__codelineno-5-37"></a>    <span class="p">):</span>
+</span><span id="__span-5-38"><a id="__codelineno-5-38" name="__codelineno-5-38" href="#__codelineno-5-38"></a>        <span class="nb">super</span><span class="p">()</span><span class="o">.</span><span class="fm">__init__</span><span class="p">(</span><span class="n">parent</span><span class="p">)</span>
+</span><span id="__span-5-39"><a id="__codelineno-5-39" name="__codelineno-5-39" href="#__codelineno-5-39"></a>        <span class="bp">self</span><span class="o">.</span><span class="n">_core</span> <span class="o">=</span> <span class="n">TrackingEngineCore</span><span class="p">(</span>
+</span><span id="__span-5-40"><a id="__codelineno-5-40" name="__codelineno-5-40" href="#__codelineno-5-40"></a>            <span class="n">video_path</span><span class="p">,</span>
+</span><span id="__span-5-41"><a id="__codelineno-5-41" name="__codelineno-5-41" href="#__codelineno-5-41"></a>            <span class="n">csv_writer_thread</span><span class="o">=</span><span class="n">csv_writer_thread</span><span class="p">,</span>
+</span><span id="__span-5-42"><a id="__codelineno-5-42" name="__codelineno-5-42" href="#__codelineno-5-42"></a>            <span class="n">video_output_path</span><span class="o">=</span><span class="n">video_output_path</span><span class="p">,</span>
+</span><span id="__span-5-43"><a id="__codelineno-5-43" name="__codelineno-5-43" href="#__codelineno-5-43"></a>            <span class="n">backward_mode</span><span class="o">=</span><span class="n">backward_mode</span><span class="p">,</span>
+</span><span id="__span-5-44"><a id="__codelineno-5-44" name="__codelineno-5-44" href="#__codelineno-5-44"></a>            <span class="n">detection_cache_path</span><span class="o">=</span><span class="n">detection_cache_path</span><span class="p">,</span>
+</span><span id="__span-5-45"><a id="__codelineno-5-45" name="__codelineno-5-45" href="#__codelineno-5-45"></a>            <span class="n">preview_mode</span><span class="o">=</span><span class="n">preview_mode</span><span class="p">,</span>
+</span><span id="__span-5-46"><a id="__codelineno-5-46" name="__codelineno-5-46" href="#__codelineno-5-46"></a>            <span class="n">use_cached_detections</span><span class="o">=</span><span class="n">use_cached_detections</span><span class="p">,</span>
+</span><span id="__span-5-47"><a id="__codelineno-5-47" name="__codelineno-5-47" href="#__codelineno-5-47"></a>            <span class="n">on_frame</span><span class="o">=</span><span class="k">lambda</span> <span class="n">rgb</span><span class="p">:</span> <span class="bp">self</span><span class="o">.</span><span class="n">frame_signal</span><span class="o">.</span><span class="n">emit</span><span class="p">(</span><span class="n">rgb</span><span class="p">),</span>
+</span><span id="__span-5-48"><a id="__codelineno-5-48" name="__codelineno-5-48" href="#__codelineno-5-48"></a>            <span class="n">on_finished</span><span class="o">=</span><span class="k">lambda</span> <span class="n">ok</span><span class="p">,</span> <span class="n">fps</span><span class="p">,</span> <span class="n">traj</span><span class="p">:</span> <span class="bp">self</span><span class="o">.</span><span class="n">finished_signal</span><span class="o">.</span><span class="n">emit</span><span class="p">(</span><span class="n">ok</span><span class="p">,</span> <span class="n">fps</span><span class="p">,</span> <span class="n">traj</span><span class="p">),</span>
+</span><span id="__span-5-49"><a id="__codelineno-5-49" name="__codelineno-5-49" href="#__codelineno-5-49"></a>            <span class="n">on_progress</span><span class="o">=</span><span class="k">lambda</span> <span class="n">pct</span><span class="p">,</span> <span class="n">msg</span><span class="p">:</span> <span class="bp">self</span><span class="o">.</span><span class="n">progress_signal</span><span class="o">.</span><span class="n">emit</span><span class="p">(</span><span class="nb">int</span><span class="p">(</span><span class="n">pct</span><span class="p">),</span> <span class="n">msg</span><span class="p">),</span>
+</span><span id="__span-5-50"><a id="__codelineno-5-50" name="__codelineno-5-50" href="#__codelineno-5-50"></a>            <span class="n">on_stats</span><span class="o">=</span><span class="k">lambda</span> <span class="n">stats</span><span class="p">:</span> <span class="bp">self</span><span class="o">.</span><span class="n">stats_signal</span><span class="o">.</span><span class="n">emit</span><span class="p">(</span><span class="n">stats</span><span class="p">),</span>
+</span><span id="__span-5-51"><a id="__codelineno-5-51" name="__codelineno-5-51" href="#__codelineno-5-51"></a>            <span class="n">on_warning</span><span class="o">=</span><span class="k">lambda</span> <span class="n">title</span><span class="p">,</span> <span class="n">msg</span><span class="p">:</span> <span class="bp">self</span><span class="o">.</span><span class="n">warning_signal</span><span class="o">.</span><span class="n">emit</span><span class="p">(</span><span class="n">title</span><span class="p">,</span> <span class="n">msg</span><span class="p">),</span>
+</span><span id="__span-5-52"><a id="__codelineno-5-52" name="__codelineno-5-52" href="#__codelineno-5-52"></a>            <span class="n">on_pose_model_resolved</span><span class="o">=</span><span class="k">lambda</span> <span class="n">p</span><span class="p">:</span> <span class="bp">self</span><span class="o">.</span><span class="n">pose_exported_model_resolved_signal</span><span class="o">.</span><span class="n">emit</span><span class="p">(</span><span class="n">p</span><span class="p">),</span>
+</span><span id="__span-5-53"><a id="__codelineno-5-53" name="__codelineno-5-53" href="#__codelineno-5-53"></a>        <span class="p">)</span>
+</span><span id="__span-5-54"><a id="__codelineno-5-54" name="__codelineno-5-54" href="#__codelineno-5-54"></a>
+</span><span id="__span-5-55"><a id="__codelineno-5-55" name="__codelineno-5-55" href="#__codelineno-5-55"></a>    <span class="c1"># --- delegation: keep the exact public surface consumers use ---</span>
+</span><span id="__span-5-56"><a id="__codelineno-5-56" name="__codelineno-5-56" href="#__codelineno-5-56"></a>    <span class="k">def</span><span class="w"> </span><span class="nf">set_parameters</span><span class="p">(</span><span class="bp">self</span><span class="p">,</span> <span class="n">p</span><span class="p">:</span> <span class="nb">dict</span><span class="p">)</span> <span class="o">-&gt;</span> <span class="kc">None</span><span class="p">:</span>
+</span><span id="__span-5-57"><a id="__codelineno-5-57" name="__codelineno-5-57" href="#__codelineno-5-57"></a>        <span class="bp">self</span><span class="o">.</span><span class="n">_core</span><span class="o">.</span><span class="n">set_parameters</span><span class="p">(</span><span class="n">p</span><span class="p">)</span>
+</span><span id="__span-5-58"><a id="__codelineno-5-58" name="__codelineno-5-58" href="#__codelineno-5-58"></a>
+</span><span id="__span-5-59"><a id="__codelineno-5-59" name="__codelineno-5-59" href="#__codelineno-5-59"></a>    <span class="nd">@Slot</span><span class="p">(</span><span class="nb">dict</span><span class="p">)</span>
+</span><span id="__span-5-60"><a id="__codelineno-5-60" name="__codelineno-5-60" href="#__codelineno-5-60"></a>    <span class="k">def</span><span class="w"> </span><span class="nf">update_parameters</span><span class="p">(</span><span class="bp">self</span><span class="p">,</span> <span class="n">new_params</span><span class="p">:</span> <span class="nb">dict</span><span class="p">)</span> <span class="o">-&gt;</span> <span class="kc">None</span><span class="p">:</span>
+</span><span id="__span-5-61"><a id="__codelineno-5-61" name="__codelineno-5-61" href="#__codelineno-5-61"></a>        <span class="bp">self</span><span class="o">.</span><span class="n">_core</span><span class="o">.</span><span class="n">update_parameters</span><span class="p">(</span><span class="n">new_params</span><span class="p">)</span>
+</span><span id="__span-5-62"><a id="__codelineno-5-62" name="__codelineno-5-62" href="#__codelineno-5-62"></a>
+</span><span id="__span-5-63"><a id="__codelineno-5-63" name="__codelineno-5-63" href="#__codelineno-5-63"></a>    <span class="k">def</span><span class="w"> </span><span class="nf">get_current_params</span><span class="p">(</span><span class="bp">self</span><span class="p">)</span> <span class="o">-&gt;</span> <span class="nb">dict</span><span class="p">:</span>
+</span><span id="__span-5-64"><a id="__codelineno-5-64" name="__codelineno-5-64" href="#__codelineno-5-64"></a>        <span class="k">return</span> <span class="bp">self</span><span class="o">.</span><span class="n">_core</span><span class="o">.</span><span class="n">get_current_params</span><span class="p">()</span>
+</span><span id="__span-5-65"><a id="__codelineno-5-65" name="__codelineno-5-65" href="#__codelineno-5-65"></a>
+</span><span id="__span-5-66"><a id="__codelineno-5-66" name="__codelineno-5-66" href="#__codelineno-5-66"></a>    <span class="k">def</span><span class="w"> </span><span class="nf">stop</span><span class="p">(</span><span class="bp">self</span><span class="p">)</span> <span class="o">-&gt;</span> <span class="kc">None</span><span class="p">:</span>
+</span><span id="__span-5-67"><a id="__codelineno-5-67" name="__codelineno-5-67" href="#__codelineno-5-67"></a>        <span class="bp">self</span><span class="o">.</span><span class="n">_core</span><span class="o">.</span><span class="n">stop</span><span class="p">()</span>
+</span><span id="__span-5-68"><a id="__codelineno-5-68" name="__codelineno-5-68" href="#__codelineno-5-68"></a>
+</span><span id="__span-5-69"><a id="__codelineno-5-69" name="__codelineno-5-69" href="#__codelineno-5-69"></a>    <span class="nd">@property</span>
+</span><span id="__span-5-70"><a id="__codelineno-5-70" name="__codelineno-5-70" href="#__codelineno-5-70"></a>    <span class="k">def</span><span class="w"> </span><span class="nf">_stop_requested</span><span class="p">(</span><span class="bp">self</span><span class="p">)</span> <span class="o">-&gt;</span> <span class="nb">bool</span><span class="p">:</span>  <span class="c1"># some call sites / tests read this</span>
+</span><span id="__span-5-71"><a id="__codelineno-5-71" name="__codelineno-5-71" href="#__codelineno-5-71"></a>        <span class="k">return</span> <span class="bp">self</span><span class="o">.</span><span class="n">_core</span><span class="o">.</span><span class="n">_stop_requested</span>
+</span><span id="__span-5-72"><a id="__codelineno-5-72" name="__codelineno-5-72" href="#__codelineno-5-72"></a>
+</span><span id="__span-5-73"><a id="__codelineno-5-73" name="__codelineno-5-73" href="#__codelineno-5-73"></a>    <span class="k">def</span><span class="w"> </span><span class="nf">run</span><span class="p">(</span><span class="bp">self</span><span class="p">)</span> <span class="o">-&gt;</span> <span class="kc">None</span><span class="p">:</span>
+</span><span id="__span-5-74"><a id="__codelineno-5-74" name="__codelineno-5-74" href="#__codelineno-5-74"></a><span class="w">        </span><span class="sd">"""QThread entry point. PySide6 silently swallows exceptions that escape</span>
+</span><span id="__span-5-75"><a id="__codelineno-5-75" name="__codelineno-5-75" href="#__codelineno-5-75"></a><span class="sd">        a QThread.run() override, which would leave finished_signal unemitted and</span>
+</span><span id="__span-5-76"><a id="__codelineno-5-76" name="__codelineno-5-76" href="#__codelineno-5-76"></a><span class="sd">        hang callers blocked on it (headless CLI's QEventLoop). Guard exactly as</span>
+</span><span id="__span-5-77"><a id="__codelineno-5-77" name="__codelineno-5-77" href="#__codelineno-5-77"></a><span class="sd">        the old TrackingWorker.run() did."""</span>
+</span><span id="__span-5-78"><a id="__codelineno-5-78" name="__codelineno-5-78" href="#__codelineno-5-78"></a>        <span class="k">try</span><span class="p">:</span>
+</span><span id="__span-5-79"><a id="__codelineno-5-79" name="__codelineno-5-79" href="#__codelineno-5-79"></a>            <span class="bp">self</span><span class="o">.</span><span class="n">_core</span><span class="o">.</span><span class="n">run_tracking</span><span class="p">()</span>
+</span><span id="__span-5-80"><a id="__codelineno-5-80" name="__codelineno-5-80" href="#__codelineno-5-80"></a>        <span class="k">except</span> <span class="ne">Exception</span><span class="p">:</span>
+</span><span id="__span-5-81"><a id="__codelineno-5-81" name="__codelineno-5-81" href="#__codelineno-5-81"></a>            <span class="n">logger</span><span class="o">.</span><span class="n">exception</span><span class="p">(</span>
+</span><span id="__span-5-82"><a id="__codelineno-5-82" name="__codelineno-5-82" href="#__codelineno-5-82"></a>                <span class="s2">"Unhandled exception in TrackingWorker.run(); emitting "</span>
+</span><span id="__span-5-83"><a id="__codelineno-5-83" name="__codelineno-5-83" href="#__codelineno-5-83"></a>                <span class="s2">"finished_signal(False, ...) so callers waiting on it "</span>
+</span><span id="__span-5-84"><a id="__codelineno-5-84" name="__codelineno-5-84" href="#__codelineno-5-84"></a>                <span class="s2">"(e.g. the headless CLI's QEventLoop) don't hang forever."</span>
+</span><span id="__span-5-85"><a id="__codelineno-5-85" name="__codelineno-5-85" href="#__codelineno-5-85"></a>            <span class="p">)</span>
+</span><span id="__span-5-86"><a id="__codelineno-5-86" name="__codelineno-5-86" href="#__codelineno-5-86"></a>            <span class="bp">self</span><span class="o">.</span><span class="n">finished_signal</span><span class="o">.</span><span class="n">emit</span><span class="p">(</span><span class="kc">False</span><span class="p">,</span> <span class="p">[],</span> <span class="p">[])</span>
+</span></code></pre></div>
+<p>Notes for the implementer:
+- Some consumers/tests set/read attributes that were previously plain worker fields (e.g. <code>worker.frame_prefetcher</code>, <code>worker.individual_properties_cache_path</code>, <code>worker.detection_cache_path</code>). These now live on <code>self._core</code>. Grep for <code>tracking_worker.</code> attribute access in <code>trackerkit/</code> and <code>tests/</code>; for any field read/written directly on the worker OTHER than the delegated methods/signals above, forward it (add a <code>@property</code>/setter that proxies <code>self._core.&lt;field&gt;</code>, or repoint the caller to <code>worker._core.&lt;field&gt;</code>). The confirmed public surface used by orchestrator + headless is <code>__init__</code>, the 6 signals, <code>set_parameters</code>, <code>update_parameters</code>, <code>stop</code>, <code>start</code>, <code>wait</code>, <code>isRunning</code>, <code>terminate</code> — those are all covered. Verify the smoke test in Step 2 and the orchestrator import in Task 3 flush out any stragglers.</p>
+<ul class="task-list">
+<li class="task-list-item"><label class="task-list-control"><input type="checkbox" disabled/><span class="task-list-indicator"></span></label> <strong>Step 2: Extend the test with a wrapper smoke test</strong></li>
+</ul>
+<div class="language-python highlight"><pre><span></span><code><span id="__span-6-1"><a id="__codelineno-6-1" name="__codelineno-6-1" href="#__codelineno-6-1"></a><span class="k">def</span><span class="w"> </span><span class="nf">test_wrapper_delegates_and_exposes_signals</span><span class="p">(</span><span class="n">qtbot</span><span class="o">=</span><span class="kc">None</span><span class="p">):</span>
+</span><span id="__span-6-2"><a id="__codelineno-6-2" name="__codelineno-6-2" href="#__codelineno-6-2"></a>    <span class="kn">import</span><span class="w"> </span><span class="nn">os</span>
+</span><span id="__span-6-3"><a id="__codelineno-6-3" name="__codelineno-6-3" href="#__codelineno-6-3"></a>    <span class="n">os</span><span class="o">.</span><span class="n">environ</span><span class="o">.</span><span class="n">setdefault</span><span class="p">(</span><span class="s2">"QT_QPA_PLATFORM"</span><span class="p">,</span> <span class="s2">"offscreen"</span><span class="p">)</span>
+</span><span id="__span-6-4"><a id="__codelineno-6-4" name="__codelineno-6-4" href="#__codelineno-6-4"></a>    <span class="kn">from</span><span class="w"> </span><span class="nn">hydra_suite.trackerkit.gui.workers.tracking_worker</span><span class="w"> </span><span class="kn">import</span> <span class="n">TrackingWorker</span>
+</span><span id="__span-6-5"><a id="__codelineno-6-5" name="__codelineno-6-5" href="#__codelineno-6-5"></a>
+</span><span id="__span-6-6"><a id="__codelineno-6-6" name="__codelineno-6-6" href="#__codelineno-6-6"></a>    <span class="n">w</span> <span class="o">=</span> <span class="n">TrackingWorker</span><span class="p">(</span><span class="s2">"dummy.mp4"</span><span class="p">,</span> <span class="n">preview_mode</span><span class="o">=</span><span class="kc">True</span><span class="p">)</span>
+</span><span id="__span-6-7"><a id="__codelineno-6-7" name="__codelineno-6-7" href="#__codelineno-6-7"></a>    <span class="c1"># QThread + all 6 signals present.</span>
+</span><span id="__span-6-8"><a id="__codelineno-6-8" name="__codelineno-6-8" href="#__codelineno-6-8"></a>    <span class="k">assert</span> <span class="nb">hasattr</span><span class="p">(</span><span class="n">w</span><span class="p">,</span> <span class="s2">"start"</span><span class="p">)</span> <span class="ow">and</span> <span class="nb">hasattr</span><span class="p">(</span><span class="n">w</span><span class="p">,</span> <span class="s2">"wait"</span><span class="p">)</span> <span class="ow">and</span> <span class="nb">hasattr</span><span class="p">(</span><span class="n">w</span><span class="p">,</span> <span class="s2">"isRunning"</span><span class="p">)</span>
+</span><span id="__span-6-9"><a id="__codelineno-6-9" name="__codelineno-6-9" href="#__codelineno-6-9"></a>    <span class="k">for</span> <span class="n">sig</span> <span class="ow">in</span> <span class="p">(</span><span class="s2">"frame_signal"</span><span class="p">,</span> <span class="s2">"finished_signal"</span><span class="p">,</span> <span class="s2">"progress_signal"</span><span class="p">,</span>
+</span><span id="__span-6-10"><a id="__codelineno-6-10" name="__codelineno-6-10" href="#__codelineno-6-10"></a>                <span class="s2">"stats_signal"</span><span class="p">,</span> <span class="s2">"warning_signal"</span><span class="p">,</span> <span class="s2">"pose_exported_model_resolved_signal"</span><span class="p">):</span>
+</span><span id="__span-6-11"><a id="__codelineno-6-11" name="__codelineno-6-11" href="#__codelineno-6-11"></a>        <span class="k">assert</span> <span class="nb">hasattr</span><span class="p">(</span><span class="n">w</span><span class="p">,</span> <span class="n">sig</span><span class="p">)</span>
+</span><span id="__span-6-12"><a id="__codelineno-6-12" name="__codelineno-6-12" href="#__codelineno-6-12"></a>    <span class="c1"># Delegation reaches the core.</span>
+</span><span id="__span-6-13"><a id="__codelineno-6-13" name="__codelineno-6-13" href="#__codelineno-6-13"></a>    <span class="n">w</span><span class="o">.</span><span class="n">set_parameters</span><span class="p">({</span><span class="s2">"X"</span><span class="p">:</span> <span class="mi">1</span><span class="p">})</span>
+</span><span id="__span-6-14"><a id="__codelineno-6-14" name="__codelineno-6-14" href="#__codelineno-6-14"></a>    <span class="k">assert</span> <span class="n">w</span><span class="o">.</span><span class="n">get_current_params</span><span class="p">()</span> <span class="o">==</span> <span class="p">{</span><span class="s2">"X"</span><span class="p">:</span> <span class="mi">1</span><span class="p">}</span>
+</span><span id="__span-6-15"><a id="__codelineno-6-15" name="__codelineno-6-15" href="#__codelineno-6-15"></a>    <span class="n">w</span><span class="o">.</span><span class="n">stop</span><span class="p">()</span>
+</span><span id="__span-6-16"><a id="__codelineno-6-16" name="__codelineno-6-16" href="#__codelineno-6-16"></a>    <span class="k">assert</span> <span class="n">w</span><span class="o">.</span><span class="n">_stop_requested</span> <span class="ow">is</span> <span class="kc">True</span>
+</span></code></pre></div>
+<ul class="task-list">
+<li class="task-list-item"><label class="task-list-control"><input type="checkbox" disabled/><span class="task-list-indicator"></span></label> <strong>Step 3: Run + import check</strong></li>
+</ul>
+<p>Run:
+<div class="language-bash highlight"><pre><span></span><code><span id="__span-7-1"><a id="__codelineno-7-1" name="__codelineno-7-1" href="#__codelineno-7-1"></a><span class="nv">QT_QPA_PLATFORM</span><span class="o">=</span>offscreen<span class="w"> </span>conda<span class="w"> </span>run<span class="w"> </span>-n<span class="w"> </span>hydra-mps<span class="w"> </span>python<span class="w"> </span>-m<span class="w"> </span>pytest<span class="w"> </span>tests/test_tracking_engine_core_qtfree.py<span class="w"> </span>-q
+</span><span id="__span-7-2"><a id="__codelineno-7-2" name="__codelineno-7-2" href="#__codelineno-7-2"></a><span class="nv">QT_QPA_PLATFORM</span><span class="o">=</span>offscreen<span class="w"> </span>conda<span class="w"> </span>run<span class="w"> </span>-n<span class="w"> </span>hydra-mps<span class="w"> </span>python<span class="w"> </span>-c<span class="w"> </span><span class="s2">"from hydra_suite.trackerkit.gui.workers.tracking_worker import TrackingWorker; print('wrapper OK')"</span>
+</span></code></pre></div>
+Expected: pass.</p>
+<ul class="task-list">
+<li class="task-list-item"><label class="task-list-control"><input type="checkbox" disabled/><span class="task-list-indicator"></span></label> <strong>Step 4: Commit</strong></li>
+</ul>
+<div class="language-bash highlight"><pre><span></span><code><span id="__span-8-1"><a id="__codelineno-8-1" name="__codelineno-8-1" href="#__codelineno-8-1"></a>make<span class="w"> </span>format
+</span><span id="__span-8-2"><a id="__codelineno-8-2" name="__codelineno-8-2" href="#__codelineno-8-2"></a>git<span class="w"> </span>add<span class="w"> </span>src/hydra_suite/trackerkit/gui/workers/tracking_worker.py<span class="w"> </span>tests/test_tracking_engine_core_qtfree.py
+</span><span id="__span-8-3"><a id="__codelineno-8-3" name="__codelineno-8-3" href="#__codelineno-8-3"></a>git<span class="w"> </span>commit<span class="w"> </span>-m<span class="w"> </span><span class="s2">"feat(trackerkit): Qt wrapper for the Qt-free TrackingEngineCore"</span>
+</span></code></pre></div>
+<hr />
+<h2 id="task-3-repoint-all-consumers-re-exports">Task 3: Repoint all consumers + re-exports<a class="headerlink" href="#task-3-repoint-all-consumers-re-exports" title="Permanent link">&para;</a></h2>
+<p><strong>Files:</strong>
+- Modify: <code>src/hydra_suite/core/tracking/__init__.py</code>, <code>src/hydra_suite/core/__init__.py</code>, <code>src/hydra_suite/__init__.py</code>, <code>src/hydra_suite/trackerkit/headless_tracking.py</code>, <code>src/hydra_suite/trackerkit/gui/orchestrators/tracking.py</code>, <code>tests/test_trackerkit_tracking_orchestrator_dialogs.py</code>.</p>
+<ul class="task-list">
+<li class="task-list-item">
+<p><label class="task-list-control"><input type="checkbox" disabled/><span class="task-list-indicator"></span></label> <strong>Step 1: Core re-exports → <code>TrackingEngineCore</code></strong></p>
+</li>
+<li>
+<p><code>src/hydra_suite/core/tracking/__init__.py</code>: <code>from .worker import TrackingWorker</code> → <code>from .worker import TrackingEngineCore</code>; <code>__all__ = ["TrackingWorker"]</code> → <code>["TrackingEngineCore"]</code>.</p>
+</li>
+<li>
+<p><code>src/hydra_suite/core/__init__.py</code>: line 19 <code>from .tracking.worker import TrackingWorker</code> → <code>from .tracking.worker import TrackingEngineCore</code>; update the <code>__all__</code> entry (line ~22) <code>"TrackingWorker"</code> → <code>"TrackingEngineCore"</code>.</p>
+</li>
+<li class="task-list-item">
+<p><label class="task-list-control"><input type="checkbox" disabled/><span class="task-list-indicator"></span></label> <strong>Step 2: Top-level lazy re-export → the wrapper</strong></p>
+</li>
+</ul>
+<p><code>src/hydra_suite/__init__.py</code>: keep <code>"TrackingWorker"</code> in <code>__all__</code> (line ~40), but repoint the lazy loader (lines ~62-63):
+<div class="language-python highlight"><pre><span></span><code><span id="__span-9-1"><a id="__codelineno-9-1" name="__codelineno-9-1" href="#__codelineno-9-1"></a>    <span class="k">if</span> <span class="n">name</span> <span class="o">==</span> <span class="s2">"TrackingWorker"</span><span class="p">:</span>
+</span><span id="__span-9-2"><a id="__codelineno-9-2" name="__codelineno-9-2" href="#__codelineno-9-2"></a>        <span class="k">return</span> <span class="n">import_module</span><span class="p">(</span><span class="s2">"hydra_suite.trackerkit.gui.workers.tracking_worker"</span><span class="p">)</span><span class="o">.</span><span class="n">TrackingWorker</span>
+</span></code></pre></div>
+(So <code>hydra_suite.TrackingWorker</code> still works and returns the Qt wrapper.)</p>
+<ul class="task-list">
+<li class="task-list-item">
+<p><label class="task-list-control"><input type="checkbox" disabled/><span class="task-list-indicator"></span></label> <strong>Step 3: Repoint the app-layer consumers</strong></p>
+</li>
+<li>
+<p><code>src/hydra_suite/trackerkit/headless_tracking.py:12</code>: <code>from hydra_suite.core.tracking import TrackingWorker</code> → <code>from hydra_suite.trackerkit.gui.workers.tracking_worker import TrackingWorker</code>.</p>
+</li>
+<li>
+<p><code>src/hydra_suite/trackerkit/gui/orchestrators/tracking.py</code>: the two local imports at ~3800 and ~4260, <code>from hydra_suite.core.tracking import TrackingWorker</code> → <code>from hydra_suite.trackerkit.gui.workers.tracking_worker import TrackingWorker</code>. (The construction sites @3867/@4262, <code>set_parameters</code>, all 6 signal <code>.connect(...)</code> incl. <code>pose_exported_model_resolved_signal</code> @3882/@4278, <code>parameters_changed.connect(worker.update_parameters)</code> @4272, and <code>start()/wait()/isRunning()/terminate()/stop()</code> are UNCHANGED — the wrapper preserves them.)</p>
+</li>
+<li class="task-list-item">
+<p><label class="task-list-control"><input type="checkbox" disabled/><span class="task-list-indicator"></span></label> <strong>Step 4: Repoint the orchestrator-dialog test monkeypatches</strong></p>
+</li>
+</ul>
+<p><code>tests/test_trackerkit_tracking_orchestrator_dialogs.py</code> patches <code>"hydra_suite.core.tracking.TrackingWorker"</code> with a <code>FakeTrackingWorker</code> (lines ~656, ~773, ~879). The orchestrator now imports <code>TrackingWorker</code> from <code>hydra_suite.trackerkit.gui.workers.tracking_worker</code>, so change all three monkeypatch targets to <code>"hydra_suite.trackerkit.gui.workers.tracking_worker.TrackingWorker"</code>. The <code>FakeTrackingWorker</code> classes (which declare the 6 signals incl. <code>pose_exported_model_resolved_signal</code>) are unchanged.</p>
+<ul class="task-list">
+<li class="task-list-item"><label class="task-list-control"><input type="checkbox" disabled/><span class="task-list-indicator"></span></label> <strong>Step 5: Verify — whole <code>core/</code> Qt-free + no stale importers + suites green</strong></li>
+</ul>
+<p>Run:
+<div class="language-bash highlight"><pre><span></span><code><span id="__span-10-1"><a id="__codelineno-10-1" name="__codelineno-10-1" href="#__codelineno-10-1"></a>grep<span class="w"> </span>-rnE<span class="w"> </span><span class="s2">"PySide6|QtCore|QThread|Signal|Slot|QMutex"</span><span class="w"> </span>src/hydra_suite/core/<span class="w"> </span><span class="p">;</span><span class="w"> </span><span class="nb">echo</span><span class="w"> </span><span class="s2">"exit=</span><span class="nv">$?</span><span class="s2">"</span>
+</span><span id="__span-10-2"><a id="__codelineno-10-2" name="__codelineno-10-2" href="#__codelineno-10-2"></a>grep<span class="w"> </span>-rn<span class="w"> </span><span class="s2">"from hydra_suite.core.tracking import TrackingWorker"</span><span class="w"> </span>src/<span class="w"> </span>tests/
+</span><span id="__span-10-3"><a id="__codelineno-10-3" name="__codelineno-10-3" href="#__codelineno-10-3"></a>grep<span class="w"> </span>-rn<span class="w"> </span><span class="s2">"hydra_suite.core.tracking.TrackingWorker"</span><span class="w"> </span>src/<span class="w"> </span>tests/
+</span><span id="__span-10-4"><a id="__codelineno-10-4" name="__codelineno-10-4" href="#__codelineno-10-4"></a><span class="nv">QT_QPA_PLATFORM</span><span class="o">=</span>offscreen<span class="w"> </span>conda<span class="w"> </span>run<span class="w"> </span>-n<span class="w"> </span>hydra-mps<span class="w"> </span>python<span class="w"> </span>-m<span class="w"> </span>pytest<span class="w"> </span>tests/test_trackerkit_tracking_orchestrator_dialogs.py<span class="w"> </span>tests/test_tracking_engine_core_qtfree.py<span class="w"> </span>tests/test_tracking_worker_helpers.py<span class="w"> </span>tests/test_tracking_worker_realtime_live_features.py<span class="w"> </span>tests/test_trackerkit_workers_smoke.py<span class="w"> </span>-q<span class="w"> </span>--ignore<span class="o">=</span>tests/test_identity_postprocess.py
+</span><span id="__span-10-5"><a id="__codelineno-10-5" name="__codelineno-10-5" href="#__codelineno-10-5"></a><span class="nv">QT_QPA_PLATFORM</span><span class="o">=</span>offscreen<span class="w"> </span>conda<span class="w"> </span>run<span class="w"> </span>-n<span class="w"> </span>hydra-mps<span class="w"> </span>python<span class="w"> </span>-c<span class="w"> </span><span class="s2">"import hydra_suite; hydra_suite.TrackingWorker; import hydra_suite.trackerkit.headless_tracking, hydra_suite.trackerkit.gui.orchestrators.tracking; print('all consumers import OK')"</span>
+</span></code></pre></div>
+Expected: first grep EMPTY (whole <code>core/</code> tree Qt-free — the milestone); the two stale-importer greps EMPTY; all suites pass; imports OK. Also repoint <code>tests/test_tracking_worker_realtime_live_features.py:311</code> (<code>worker_mod.TrackingWorker(...)</code>) if <code>worker_mod</code> is the core module — point it at the core class or the wrapper depending on what it exercises (helpers → <code>TrackingEngineCore</code>; a real QThread run → wrapper). Inspect and choose; keep the test meaningful.</p>
+<ul class="task-list">
+<li class="task-list-item"><label class="task-list-control"><input type="checkbox" disabled/><span class="task-list-indicator"></span></label> <strong>Step 6: Commit</strong></li>
+</ul>
+<div class="language-bash highlight"><pre><span></span><code><span id="__span-11-1"><a id="__codelineno-11-1" name="__codelineno-11-1" href="#__codelineno-11-1"></a>make<span class="w"> </span>format
+</span><span id="__span-11-2"><a id="__codelineno-11-2" name="__codelineno-11-2" href="#__codelineno-11-2"></a>git<span class="w"> </span>add<span class="w"> </span>-A
+</span><span id="__span-11-3"><a id="__codelineno-11-3" name="__codelineno-11-3" href="#__codelineno-11-3"></a>git<span class="w"> </span>commit<span class="w"> </span>-m<span class="w"> </span><span class="s2">"refactor(trackerkit): repoint TrackingWorker consumers at the relocated Qt wrapper; core/ is now Qt-free"</span>
+</span></code></pre></div>
+<hr />
+<h2 id="task-4-widen-the-qt-free-guard-to-the-whole-core-tree">Task 4: Widen the Qt-free guard to the whole <code>core/</code> tree<a class="headerlink" href="#task-4-widen-the-qt-free-guard-to-the-whole-core-tree" title="Permanent link">&para;</a></h2>
+<p>Lock in the invariant so a future edit can't reintroduce Qt into any part of <code>core/</code>.</p>
+<p><strong>Files:</strong>
+- Test: <code>tests/test_tracking_engine_core_qtfree.py</code> (add a whole-<code>core</code> guard), or extend the existing <code>tests/test_optimizer_workers_core.py::test_core_tracking_optimization_imports_no_qt</code>.</p>
+<ul class="task-list">
+<li class="task-list-item"><label class="task-list-control"><input type="checkbox" disabled/><span class="task-list-indicator"></span></label> <strong>Step 1: Add the whole-<code>core</code> guard test</strong></li>
+</ul>
+<div class="language-python highlight"><pre><span></span><code><span id="__span-12-1"><a id="__codelineno-12-1" name="__codelineno-12-1" href="#__codelineno-12-1"></a><span class="k">def</span><span class="w"> </span><span class="nf">test_entire_core_tree_imports_no_qt</span><span class="p">():</span>
+</span><span id="__span-12-2"><a id="__codelineno-12-2" name="__codelineno-12-2" href="#__codelineno-12-2"></a>    <span class="kn">import</span><span class="w"> </span><span class="nn">ast</span>
+</span><span id="__span-12-3"><a id="__codelineno-12-3" name="__codelineno-12-3" href="#__codelineno-12-3"></a>    <span class="kn">from</span><span class="w"> </span><span class="nn">pathlib</span><span class="w"> </span><span class="kn">import</span> <span class="n">Path</span>
+</span><span id="__span-12-4"><a id="__codelineno-12-4" name="__codelineno-12-4" href="#__codelineno-12-4"></a>    <span class="kn">import</span><span class="w"> </span><span class="nn">hydra_suite.core</span><span class="w"> </span><span class="k">as</span><span class="w"> </span><span class="nn">core_pkg</span>
+</span><span id="__span-12-5"><a id="__codelineno-12-5" name="__codelineno-12-5" href="#__codelineno-12-5"></a>
+</span><span id="__span-12-6"><a id="__codelineno-12-6" name="__codelineno-12-6" href="#__codelineno-12-6"></a>    <span class="n">root</span> <span class="o">=</span> <span class="n">Path</span><span class="p">(</span><span class="n">core_pkg</span><span class="o">.</span><span class="vm">__file__</span><span class="p">)</span><span class="o">.</span><span class="n">parent</span>
+</span><span id="__span-12-7"><a id="__codelineno-12-7" name="__codelineno-12-7" href="#__codelineno-12-7"></a>    <span class="n">offenders</span> <span class="o">=</span> <span class="p">[]</span>
+</span><span id="__span-12-8"><a id="__codelineno-12-8" name="__codelineno-12-8" href="#__codelineno-12-8"></a>    <span class="k">for</span> <span class="n">py</span> <span class="ow">in</span> <span class="n">root</span><span class="o">.</span><span class="n">rglob</span><span class="p">(</span><span class="s2">"*.py"</span><span class="p">):</span>
+</span><span id="__span-12-9"><a id="__codelineno-12-9" name="__codelineno-12-9" href="#__codelineno-12-9"></a>        <span class="n">tree</span> <span class="o">=</span> <span class="n">ast</span><span class="o">.</span><span class="n">parse</span><span class="p">(</span><span class="n">py</span><span class="o">.</span><span class="n">read_text</span><span class="p">(),</span> <span class="n">filename</span><span class="o">=</span><span class="nb">str</span><span class="p">(</span><span class="n">py</span><span class="p">))</span>
+</span><span id="__span-12-10"><a id="__codelineno-12-10" name="__codelineno-12-10" href="#__codelineno-12-10"></a>        <span class="k">for</span> <span class="n">node</span> <span class="ow">in</span> <span class="n">ast</span><span class="o">.</span><span class="n">walk</span><span class="p">(</span><span class="n">tree</span><span class="p">):</span>
+</span><span id="__span-12-11"><a id="__codelineno-12-11" name="__codelineno-12-11" href="#__codelineno-12-11"></a>            <span class="n">mod</span> <span class="o">=</span> <span class="kc">None</span>
+</span><span id="__span-12-12"><a id="__codelineno-12-12" name="__codelineno-12-12" href="#__codelineno-12-12"></a>            <span class="k">if</span> <span class="nb">isinstance</span><span class="p">(</span><span class="n">node</span><span class="p">,</span> <span class="n">ast</span><span class="o">.</span><span class="n">ImportFrom</span><span class="p">):</span>
+</span><span id="__span-12-13"><a id="__codelineno-12-13" name="__codelineno-12-13" href="#__codelineno-12-13"></a>                <span class="n">mod</span> <span class="o">=</span> <span class="n">node</span><span class="o">.</span><span class="n">module</span>
+</span><span id="__span-12-14"><a id="__codelineno-12-14" name="__codelineno-12-14" href="#__codelineno-12-14"></a>            <span class="k">elif</span> <span class="nb">isinstance</span><span class="p">(</span><span class="n">node</span><span class="p">,</span> <span class="n">ast</span><span class="o">.</span><span class="n">Import</span><span class="p">):</span>
+</span><span id="__span-12-15"><a id="__codelineno-12-15" name="__codelineno-12-15" href="#__codelineno-12-15"></a>                <span class="n">mod</span> <span class="o">=</span> <span class="s2">","</span><span class="o">.</span><span class="n">join</span><span class="p">(</span><span class="n">a</span><span class="o">.</span><span class="n">name</span> <span class="k">for</span> <span class="n">a</span> <span class="ow">in</span> <span class="n">node</span><span class="o">.</span><span class="n">names</span><span class="p">)</span>
+</span><span id="__span-12-16"><a id="__codelineno-12-16" name="__codelineno-12-16" href="#__codelineno-12-16"></a>            <span class="k">if</span> <span class="n">mod</span> <span class="ow">and</span> <span class="nb">any</span><span class="p">(</span><span class="n">q</span> <span class="ow">in</span> <span class="n">mod</span> <span class="k">for</span> <span class="n">q</span> <span class="ow">in</span> <span class="p">(</span><span class="s2">"PySide6"</span><span class="p">,</span> <span class="s2">"QtCore"</span><span class="p">,</span> <span class="s2">"QtGui"</span><span class="p">,</span> <span class="s2">"QtWidgets"</span><span class="p">)):</span>
+</span><span id="__span-12-17"><a id="__codelineno-12-17" name="__codelineno-12-17" href="#__codelineno-12-17"></a>                <span class="n">offenders</span><span class="o">.</span><span class="n">append</span><span class="p">(</span><span class="sa">f</span><span class="s2">"</span><span class="si">{</span><span class="n">py</span><span class="o">.</span><span class="n">relative_to</span><span class="p">(</span><span class="n">root</span><span class="p">)</span><span class="si">}</span><span class="s2">:</span><span class="si">{</span><span class="n">node</span><span class="o">.</span><span class="n">lineno</span><span class="si">}</span><span class="s2">"</span><span class="p">)</span>
+</span><span id="__span-12-18"><a id="__codelineno-12-18" name="__codelineno-12-18" href="#__codelineno-12-18"></a>    <span class="k">assert</span> <span class="ow">not</span> <span class="n">offenders</span><span class="p">,</span> <span class="s2">"core/ must be Qt-free: "</span> <span class="o">+</span> <span class="s2">"; "</span><span class="o">.</span><span class="n">join</span><span class="p">(</span><span class="n">offenders</span><span class="p">)</span>
+</span></code></pre></div>
+<ul class="task-list">
+<li class="task-list-item"><label class="task-list-control"><input type="checkbox" disabled/><span class="task-list-indicator"></span></label> <strong>Step 2: Run — passes</strong> (both prior offenders + this one fixed).</li>
+</ul>
+<p>Run: <code>conda run -n hydra-mps python -m pytest tests/test_tracking_engine_core_qtfree.py -q</code>
+Expected: PASS.</p>
+<ul class="task-list">
+<li class="task-list-item"><label class="task-list-control"><input type="checkbox" disabled/><span class="task-list-indicator"></span></label> <strong>Step 3: Commit</strong></li>
+</ul>
+<div class="language-bash highlight"><pre><span></span><code><span id="__span-13-1"><a id="__codelineno-13-1" name="__codelineno-13-1" href="#__codelineno-13-1"></a>make<span class="w"> </span>format
+</span><span id="__span-13-2"><a id="__codelineno-13-2" name="__codelineno-13-2" href="#__codelineno-13-2"></a>git<span class="w"> </span>add<span class="w"> </span>tests/test_tracking_engine_core_qtfree.py
+</span><span id="__span-13-3"><a id="__codelineno-13-3" name="__codelineno-13-3" href="#__codelineno-13-3"></a>git<span class="w"> </span>commit<span class="w"> </span>-m<span class="w"> </span><span class="s2">"test(core): guard the entire core/ tree against Qt imports"</span>
+</span></code></pre></div>
+<hr />
+<h2 id="task-5-equivalence-parity-gate-acceptance-byte-identical-both-platforms">Task 5: Equivalence parity gate (acceptance — byte-identical, both platforms)<a class="headerlink" href="#task-5-equivalence-parity-gate-acceptance-byte-identical-both-platforms" title="Permanent link">&para;</a></h2>
+<p>This is the point of the whole exercise: prove the split changed nothing. Reuse the exact attribution methodology from the migration verification. <strong>Do not skip and do not accept &lt; byte-identical.</strong></p>
+<p><strong>Method:</strong> run the <code>tools/equivalence/</code> harness with the branch base (<code>git merge-base main HEAD</code>, pre-split) as <code>MAIN_SRC</code> and the branch tip (post-split) as <code>WT_SRC</code>; assert <code>compare.py</code> reports pos Δ=0.000, θ Δ=0.000, identical rows, 0 unmatched for every clip. This is an attribution run (our-change vs baseline), not a legacy-vs-migration run.</p>
+<ul class="task-list">
+<li class="task-list-item"><label class="task-list-control"><input type="checkbox" disabled/><span class="task-list-indicator"></span></label> <strong>Step 1: Prepare two worktrees (base vs tip)</strong></li>
+</ul>
+<div class="language-bash highlight"><pre><span></span><code><span id="__span-14-1"><a id="__codelineno-14-1" name="__codelineno-14-1" href="#__codelineno-14-1"></a><span class="nv">BASE</span><span class="o">=</span><span class="k">$(</span>git<span class="w"> </span>merge-base<span class="w"> </span>main<span class="w"> </span>HEAD<span class="k">)</span>
+</span><span id="__span-14-2"><a id="__codelineno-14-2" name="__codelineno-14-2" href="#__codelineno-14-2"></a>git<span class="w"> </span>worktree<span class="w"> </span>add<span class="w"> </span>--detach<span class="w"> </span>.worktrees/pretty-base<span class="w"> </span><span class="s2">"</span><span class="nv">$BASE</span><span class="s2">"</span>
+</span><span id="__span-14-3"><a id="__codelineno-14-3" name="__codelineno-14-3" href="#__codelineno-14-3"></a>git<span class="w"> </span>worktree<span class="w"> </span>add<span class="w"> </span>--detach<span class="w"> </span>.worktrees/pretty-tip<span class="w">  </span>HEAD
+</span></code></pre></div>
+<ul class="task-list">
+<li class="task-list-item"><label class="task-list-control"><input type="checkbox" disabled/><span class="task-list-indicator"></span></label> <strong>Step 2: MPS run (this box)</strong> — <strong>conda MUST be active</strong> (the SLEAP service spawns <code>conda run -n sleap</code>; a bare shell yields EMPTY CSVs that falsely compare "θ=0 EQUIVALENT" — see memory <code>project-migration-verification</code>).</li>
+</ul>
+<p><div class="language-bash highlight"><pre><span></span><code><span id="__span-15-1"><a id="__codelineno-15-1" name="__codelineno-15-1" href="#__codelineno-15-1"></a><span class="nb">source</span><span class="w"> </span><span class="s2">"</span><span class="k">$(</span>conda<span class="w"> </span>info<span class="w"> </span>--base<span class="k">)</span><span class="s2">/etc/profile.d/conda.sh"</span><span class="p">;</span><span class="w"> </span>conda<span class="w"> </span>activate<span class="w"> </span>hydra-mps
+</span><span id="__span-15-2"><a id="__codelineno-15-2" name="__codelineno-15-2" href="#__codelineno-15-2"></a><span class="nv">REPO</span><span class="o">=</span><span class="nv">$PWD</span><span class="w"> </span><span class="nv">MAIN_SRC</span><span class="o">=</span><span class="nv">$PWD</span>/.worktrees/pretty-base/src<span class="w"> </span><span class="nv">WT_SRC</span><span class="o">=</span><span class="nv">$PWD</span>/.worktrees/pretty-tip/src<span class="w"> </span><span class="se">\</span>
+</span><span id="__span-15-3"><a id="__codelineno-15-3" name="__codelineno-15-3" href="#__codelineno-15-3"></a><span class="w">  </span><span class="nv">WT</span><span class="o">=</span><span class="nv">$PWD</span><span class="w"> </span><span class="nv">OUT</span><span class="o">=</span>/tmp/equiv_ttw_mps<span class="w"> </span><span class="nv">RUNTIME</span><span class="o">=</span>mps<span class="w"> </span><span class="se">\</span>
+</span><span id="__span-15-4"><a id="__codelineno-15-4" name="__codelineno-15-4" href="#__codelineno-15-4"></a><span class="w">  </span>bash<span class="w"> </span>tools/equivalence/run_matrix.sh
+</span></code></pre></div>
+For each of the 7 clips, run <code>tools/equivalence/compare.py</code> on <code>legacy</code> (base) vs <code>new_a</code> (tip) <code>_tracking_final.csv</code> (and <code>_forward.csv</code> for forward-only clips). <strong>Every clip must be <code>EQUIVALENT ✅</code> with θ max=0.000, pos p99=0.000, 0 unmatched.</strong> (Determinism <code>new_a</code> vs <code>new_b</code> is a secondary sanity check, already known to be 0.)</p>
+<ul class="task-list">
+<li class="task-list-item"><label class="task-list-control"><input type="checkbox" disabled/><span class="task-list-indicator"></span></label> <strong>Step 3: CUDA run (mehek)</strong> — replicate on the CUDA box, conda active:</li>
+</ul>
+<p><div class="language-bash highlight"><pre><span></span><code><span id="__span-16-1"><a id="__codelineno-16-1" name="__codelineno-16-1" href="#__codelineno-16-1"></a>ssh<span class="w"> </span>rutalab@mehek.taild08eb9.ts.net<span class="w">  </span><span class="c1"># then, in a script sourced with conda:</span>
+</span><span id="__span-16-2"><a id="__codelineno-16-2" name="__codelineno-16-2" href="#__codelineno-16-2"></a><span class="c1">#   source /home/rutalab/mambaforge/etc/profile.d/conda.sh; conda activate hydra-cuda</span>
+</span><span id="__span-16-3"><a id="__codelineno-16-3" name="__codelineno-16-3" href="#__codelineno-16-3"></a><span class="c1">#   create base+tip worktrees under /home/rutalab/hydra-suite/.wt/, then:</span>
+</span><span id="__span-16-4"><a id="__codelineno-16-4" name="__codelineno-16-4" href="#__codelineno-16-4"></a><span class="c1">#   REPO=... MAIN_SRC=.wt/base/src WT_SRC=.wt/tip/src WT=... OUT=... RUNTIME=cuda bash tools/equivalence/run_matrix.sh</span>
+</span></code></pre></div>
+Same acceptance: every clip byte-identical. Note pose/cnn clips REQUIRE the <code>sleap</code> env on the box + conda on PATH; verify the <code>_forward.csv</code> row counts are non-zero (an empty file silently "passes"). Cross-check row counts &gt; 0 before trusting an <code>EQUIVALENT</code>.</p>
+<ul class="task-list">
+<li class="task-list-item"><label class="task-list-control"><input type="checkbox" disabled/><span class="task-list-indicator"></span></label> <strong>Step 4: Record the result + clean up worktrees</strong></li>
+</ul>
+<p>Append the verdict table (per clip, per platform) to the PR/commit description. Then:
+<div class="language-bash highlight"><pre><span></span><code><span id="__span-17-1"><a id="__codelineno-17-1" name="__codelineno-17-1" href="#__codelineno-17-1"></a>git<span class="w"> </span>worktree<span class="w"> </span>remove<span class="w"> </span>.worktrees/pretty-base<span class="w"> </span>--force
+</span><span id="__span-17-2"><a id="__codelineno-17-2" name="__codelineno-17-2" href="#__codelineno-17-2"></a>git<span class="w"> </span>worktree<span class="w"> </span>remove<span class="w"> </span>.worktrees/pretty-tip<span class="w">  </span>--force
+</span><span id="__span-17-3"><a id="__codelineno-17-3" name="__codelineno-17-3" href="#__codelineno-17-3"></a>git<span class="w"> </span>worktree<span class="w"> </span>prune
+</span><span id="__span-17-4"><a id="__codelineno-17-4" name="__codelineno-17-4" href="#__codelineno-17-4"></a><span class="c1"># and the equivalent on mehek; rm the /tmp/equiv_ttw_* output dirs on both boxes</span>
+</span></code></pre></div></p>
+<ul class="task-list">
+<li class="task-list-item"><label class="task-list-control"><input type="checkbox" disabled/><span class="task-list-indicator"></span></label> <strong>Step 5: If any clip is NOT byte-identical, STOP.</strong> A non-zero diff means the transform was not behavior-preserving — bisect the emit/mutex substitution (most likely a mis-mapped emit site, a dropped guard, or a <code>with self._params_lock:</code> block that changed which statements it covers). Do not merge until byte-identical on both platforms.</li>
+</ul>
+<hr />
+<h2 id="final-verification-whole-plan">Final verification (whole plan)<a class="headerlink" href="#final-verification-whole-plan" title="Permanent link">&para;</a></h2>
+<ul class="task-list">
+<li class="task-list-item"><label class="task-list-control"><input type="checkbox" disabled/><span class="task-list-indicator"></span></label> <code>grep -rnE "PySide6|QtCore|QtGui|QtWidgets|QThread|Signal|Slot|QMutex" src/hydra_suite/core/</code> → <strong>EMPTY</strong> (whole <code>core/</code> Qt-free).</li>
+<li class="task-list-item"><label class="task-list-control"><input type="checkbox" disabled/><span class="task-list-indicator"></span></label> <code>conda run -n hydra-mps python -m pytest tests/ -q --ignore=tests/test_identity_postprocess.py</code> (full suite green; at minimum every test touching the worker/orchestrator/headless path).</li>
+<li class="task-list-item"><label class="task-list-control"><input type="checkbox" disabled/><span class="task-list-indicator"></span></label> <code>hydra_suite.TrackingWorker</code>, <code>hydra_suite.trackerkit.headless_tracking</code>, and <code>hydra_suite.trackerkit.gui.orchestrators.tracking</code> all import.</li>
+<li class="task-list-item"><label class="task-list-control"><input type="checkbox" disabled/><span class="task-list-indicator"></span></label> Task 5 parity gate: byte-identical on MPS <strong>and</strong> CUDA, all 7 clips, row counts &gt; 0.</li>
+<li class="task-list-item"><label class="task-list-control"><input type="checkbox" disabled/><span class="task-list-indicator"></span></label> <code>make format-check</code>.</li>
+<li class="task-list-item"><label class="task-list-control"><input type="checkbox" disabled/><span class="task-list-indicator"></span></label> Update memory <code>project-detector-retirement-done</code> (the deferred <code>TrackingWorker</code> split is now DONE) and <code>project-migration-verification</code>.</li>
+</ul>
+<hr />
+<h2 id="self-review-notes">Self-Review notes<a class="headerlink" href="#self-review-notes" title="Permanent link">&para;</a></h2>
+<ul>
+<li><strong>Goal check:</strong> the Task 4 whole-<code>core</code> guard + the Task 3 final grep enforce "core/ imports no Qt". The violation is removed by relocating ONLY the Qt (QThread base, Signals, Slot, QMutex, emits) to a thin wrapper; every tracking method stays in core.</li>
+<li><strong>Behavior preservation:</strong> the transform is mechanical (emit→callback at identical sites/args; <code>QMutex</code>→<code>threading.Lock</code> over identical critical sections; <code>@Slot</code> removed from core but re-declared on the wrapper; <code>run()</code> exception guard preserved on the wrapper). Signals are UI observation, not tracking logic — the trajectory/CSV output cannot change. The byte-identical equivalence gate (Task 5) is the empirical proof, matching the methodology that verified the whole migration.</li>
+<li><strong>Concurrency:</strong> <code>update_parameters</code> is connected cross-thread (<code>parameters_changed.connect(worker.update_parameters)</code> @4272) and runs on the object's owning (GUI) thread while <code>run_tracking</code> reads params on the worker thread — genuine concurrency. <code>threading.Lock</code> provides the same mutual exclusion as <code>QMutex</code> over the same tiny dict swaps. The wrapper keeps <code>@Slot(dict)</code> so queued Qt connections still marshal correctly.</li>
+<li><strong><code>pose_exported_model_resolved_signal</code>:</strong> declared + connected by the orchestrator but never emitted today. Preserved as a no-op: the wrapper declares it, the core exposes an unused <code>on_pose_model_resolved</code> hook. Byte-identical (never fires, same as now).</li>
+<li><strong>Attribute stragglers:</strong> the one residual risk is a consumer/test reading a plain field directly off the worker (now on <code>self._core</code>). Task 2 Step 1's note + Task 3's import/test sweep flush these out; add proxy <code>@property</code>s as needed.</li>
+<li><strong>Type/name consistency:</strong> core class <code>TrackingEngineCore</code> (8 ctor args + 6 keyword callbacks + <code>run_tracking</code>); wrapper <code>TrackingWorker(QThread)</code> (8 ctor args incl. <code>parent</code>, 6 Signals, <code>@Slot update_parameters</code>, delegating <code>set_parameters</code>/<code>get_current_params</code>/<code>stop</code>/<code>_stop_requested</code> property/<code>run</code>). Re-exports: <code>core.tracking.TrackingEngineCore</code>, <code>trackerkit.gui.workers.tracking_worker.TrackingWorker</code>, <code>hydra_suite.TrackingWorker</code> (→ wrapper).</li>
+<li><strong>Scope:</strong> does NOT migrate onto <code>widgets/workers.BaseWorker</code> (keeps plain QThread to preserve the exact 6-signal set and minimize risk — optional future follow-up), and does NOT touch tracking logic.</li>
+</ul>
+
+
+
+
+
+
+
+
+
+
+
+
+                
+              </article>
+            </div>
+          
+          
+<script>var target=document.getElementById(location.hash.slice(1));target&&target.name&&(target.checked=target.name.startsWith("__tabbed_"))</script>
+        </div>
+        
+          <button type="button" class="md-top md-icon" data-md-component="top" hidden>
+  
+  <svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 24 24"><path d="M13 20h-2V8l-5.5 5.5-1.42-1.42L12 4.16l7.92 7.92-1.42 1.42L13 8z"/></svg>
+  Back to top
+</button>
+        
+      </main>
+      
+        <footer class="md-footer">
+  
+  <div class="md-footer-meta md-typeset">
+    <div class="md-footer-meta__inner md-grid">
+      <div class="md-copyright">
+  
+  
+    Made with
+    <a href="https://squidfunk.github.io/mkdocs-material/" target="_blank" rel="noopener">
+      Material for MkDocs
+    </a>
+  
+</div>
+      
+    </div>
+  </div>
+</footer>
+      
+    </div>
+    <div class="md-dialog" data-md-component="dialog">
+      <div class="md-dialog__inner md-typeset"></div>
+    </div>
+    
+    
+    <script id="__config" type="application/json">{"base": "../../../..", "features": ["navigation.tabs", "navigation.sections", "navigation.expand", "navigation.top", "content.code.copy", "content.action.edit", "search.suggest", "search.highlight"], "search": "../../../../assets/javascripts/workers/search.6ce7567c.min.js", "translations": {"clipboard.copied": "Copied to clipboard", "clipboard.copy": "Copy to clipboard", "search.result.more.one": "1 more on this page", "search.result.more.other": "# more on this page", "search.result.none": "No matching documents", "search.result.one": "1 matching document", "search.result.other": "# matching documents", "search.result.placeholder": "Type to start searching", "search.result.term.missing": "Missing", "select.version": "Select version"}, "version": {"default": "latest", "provider": "mike"}}</script>
+    
+    
+      <script src="../../../../assets/javascripts/bundle.83f73b43.min.js"></script>
+      
+    
+  </body>
+</html>

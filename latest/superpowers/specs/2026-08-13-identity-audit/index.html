@@ -1,0 +1,2895 @@
+
+<!doctype html>
+<html lang="en" class="no-js">
+  <head>
+    
+      <meta charset="utf-8">
+      <meta name="viewport" content="width=device-width,initial-scale=1">
+      
+        <meta name="description" content="User and developer documentation for HYDRA Suite">
+      
+      
+      
+        <link rel="canonical" href="https://neurorishika.github.io/hydra-suite/latest/superpowers/specs/2026-08-13-identity-audit/">
+      
+      
+      
+      
+      <link rel="icon" href="../../../assets/images/favicon.png">
+      <meta name="generator" content="mkdocs-1.6.1, mkdocs-material-9.5.43">
+    
+    
+      
+        <title>Identity Subsystem — Scientific-Logic Audit - HYDRA Suite Docs</title>
+      
+    
+    
+      <link rel="stylesheet" href="../../../assets/stylesheets/main.0253249f.min.css">
+      
+        
+        <link rel="stylesheet" href="../../../assets/stylesheets/palette.06af60db.min.css">
+      
+      
+
+
+    
+    
+      
+    
+    
+      
+        
+        
+        <link rel="preconnect" href="https://fonts.gstatic.com" crossorigin>
+        <link rel="stylesheet" href="https://fonts.googleapis.com/css?family=Roboto:300,300i,400,400i,700,700i%7CRoboto+Mono:400,400i,700,700i&display=fallback">
+        <style>:root{--md-text-font:"Roboto";--md-code-font:"Roboto Mono"}</style>
+      
+    
+    
+      <link rel="stylesheet" href="../../../assets/_mkdocstrings.css">
+    
+    <script>__md_scope=new URL("../../..",location),__md_hash=e=>[...e].reduce(((e,_)=>(e<<5)-e+_.charCodeAt(0)),0),__md_get=(e,_=localStorage,t=__md_scope)=>JSON.parse(_.getItem(t.pathname+"."+e)),__md_set=(e,_,t=localStorage,a=__md_scope)=>{try{t.setItem(a.pathname+"."+e,JSON.stringify(_))}catch(e){}}</script>
+    
+      
+
+    
+    
+    
+  </head>
+  
+  
+    
+    
+      
+    
+    
+    
+    
+    <body dir="ltr" data-md-color-scheme="default" data-md-color-primary="blue" data-md-color-accent="light-blue">
+  
+    
+    <input class="md-toggle" data-md-toggle="drawer" type="checkbox" id="__drawer" autocomplete="off">
+    <input class="md-toggle" data-md-toggle="search" type="checkbox" id="__search" autocomplete="off">
+    <label class="md-overlay" for="__drawer"></label>
+    <div data-md-component="skip">
+      
+        
+        <a href="#identity-subsystem-scientific-logic-audit" class="md-skip">
+          Skip to content
+        </a>
+      
+    </div>
+    <div data-md-component="announce">
+      
+    </div>
+    
+      <div data-md-color-scheme="default" data-md-component="outdated" hidden>
+        
+      </div>
+    
+    
+      
+
+<header class="md-header" data-md-component="header">
+  <nav class="md-header__inner md-grid" aria-label="Header">
+    <a href="../../.." title="HYDRA Suite Docs" class="md-header__button md-logo" aria-label="HYDRA Suite Docs" data-md-component="logo">
+      
+  
+  <svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 24 24"><path d="M12 8a3 3 0 0 0 3-3 3 3 0 0 0-3-3 3 3 0 0 0-3 3 3 3 0 0 0 3 3m0 3.54C9.64 9.35 6.5 8 3 8v11c3.5 0 6.64 1.35 9 3.54 2.36-2.19 5.5-3.54 9-3.54V8c-3.5 0-6.64 1.35-9 3.54"/></svg>
+
+    </a>
+    <label class="md-header__button md-icon" for="__drawer">
+      
+      <svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 24 24"><path d="M3 6h18v2H3zm0 5h18v2H3zm0 5h18v2H3z"/></svg>
+    </label>
+    <div class="md-header__title" data-md-component="header-title">
+      <div class="md-header__ellipsis">
+        <div class="md-header__topic">
+          <span class="md-ellipsis">
+            HYDRA Suite Docs
+          </span>
+        </div>
+        <div class="md-header__topic" data-md-component="header-topic">
+          <span class="md-ellipsis">
+            
+              Identity Subsystem — Scientific-Logic Audit
+            
+          </span>
+        </div>
+      </div>
+    </div>
+    
+      
+        <form class="md-header__option" data-md-component="palette">
+  
+    
+    
+    
+    <input class="md-option" data-md-color-media="(prefers-color-scheme: light)" data-md-color-scheme="default" data-md-color-primary="blue" data-md-color-accent="light-blue"  aria-label="Switch to dark mode"  type="radio" name="__palette" id="__palette_0">
+    
+      <label class="md-header__button md-icon" title="Switch to dark mode" for="__palette_1" hidden>
+        <svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 24 24"><path d="m17.75 4.09-2.53 1.94.91 3.06-2.63-1.81-2.63 1.81.91-3.06-2.53-1.94L12.44 4l1.06-3 1.06 3zm3.5 6.91-1.64 1.25.59 1.98-1.7-1.17-1.7 1.17.59-1.98L15.75 11l2.06-.05L18.5 9l.69 1.95zm-2.28 4.95c.83-.08 1.72 1.1 1.19 1.85-.32.45-.66.87-1.08 1.27C15.17 23 8.84 23 4.94 19.07c-3.91-3.9-3.91-10.24 0-14.14.4-.4.82-.76 1.27-1.08.75-.53 1.93.36 1.85 1.19-.27 2.86.69 5.83 2.89 8.02a9.96 9.96 0 0 0 8.02 2.89m-1.64 2.02a12.08 12.08 0 0 1-7.8-3.47c-2.17-2.19-3.33-5-3.49-7.82-2.81 3.14-2.7 7.96.31 10.98 3.02 3.01 7.84 3.12 10.98.31"/></svg>
+      </label>
+    
+  
+    
+    
+    
+    <input class="md-option" data-md-color-media="(prefers-color-scheme: dark)" data-md-color-scheme="slate" data-md-color-primary="blue" data-md-color-accent="light-blue"  aria-label="Switch to light mode"  type="radio" name="__palette" id="__palette_1">
+    
+      <label class="md-header__button md-icon" title="Switch to light mode" for="__palette_0" hidden>
+        <svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 24 24"><path d="M12 7a5 5 0 0 1 5 5 5 5 0 0 1-5 5 5 5 0 0 1-5-5 5 5 0 0 1 5-5m0 2a3 3 0 0 0-3 3 3 3 0 0 0 3 3 3 3 0 0 0 3-3 3 3 0 0 0-3-3m0-7 2.39 3.42C13.65 5.15 12.84 5 12 5s-1.65.15-2.39.42zM3.34 7l4.16-.35A7.2 7.2 0 0 0 5.94 8.5c-.44.74-.69 1.5-.83 2.29zm.02 10 1.76-3.77a7.131 7.131 0 0 0 2.38 4.14zM20.65 7l-1.77 3.79a7.02 7.02 0 0 0-2.38-4.15zm-.01 10-4.14.36c.59-.51 1.12-1.14 1.54-1.86.42-.73.69-1.5.83-2.29zM12 22l-2.41-3.44c.74.27 1.55.44 2.41.44.82 0 1.63-.17 2.37-.44z"/></svg>
+      </label>
+    
+  
+</form>
+      
+    
+    
+      <script>var palette=__md_get("__palette");if(palette&&palette.color){if("(prefers-color-scheme)"===palette.color.media){var media=matchMedia("(prefers-color-scheme: light)"),input=document.querySelector(media.matches?"[data-md-color-media='(prefers-color-scheme: light)']":"[data-md-color-media='(prefers-color-scheme: dark)']");palette.color.media=input.getAttribute("data-md-color-media"),palette.color.scheme=input.getAttribute("data-md-color-scheme"),palette.color.primary=input.getAttribute("data-md-color-primary"),palette.color.accent=input.getAttribute("data-md-color-accent")}for(var[key,value]of Object.entries(palette.color))document.body.setAttribute("data-md-color-"+key,value)}</script>
+    
+    
+    
+      <label class="md-header__button md-icon" for="__search">
+        
+        <svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 24 24"><path d="M9.5 3A6.5 6.5 0 0 1 16 9.5c0 1.61-.59 3.09-1.56 4.23l.27.27h.79l5 5-1.5 1.5-5-5v-.79l-.27-.27A6.52 6.52 0 0 1 9.5 16 6.5 6.5 0 0 1 3 9.5 6.5 6.5 0 0 1 9.5 3m0 2C7 5 5 7 5 9.5S7 14 9.5 14 14 12 14 9.5 12 5 9.5 5"/></svg>
+      </label>
+      <div class="md-search" data-md-component="search" role="dialog">
+  <label class="md-search__overlay" for="__search"></label>
+  <div class="md-search__inner" role="search">
+    <form class="md-search__form" name="search">
+      <input type="text" class="md-search__input" name="query" aria-label="Search" placeholder="Search" autocapitalize="off" autocorrect="off" autocomplete="off" spellcheck="false" data-md-component="search-query" required>
+      <label class="md-search__icon md-icon" for="__search">
+        
+        <svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 24 24"><path d="M9.5 3A6.5 6.5 0 0 1 16 9.5c0 1.61-.59 3.09-1.56 4.23l.27.27h.79l5 5-1.5 1.5-5-5v-.79l-.27-.27A6.52 6.52 0 0 1 9.5 16 6.5 6.5 0 0 1 3 9.5 6.5 6.5 0 0 1 9.5 3m0 2C7 5 5 7 5 9.5S7 14 9.5 14 14 12 14 9.5 12 5 9.5 5"/></svg>
+        
+        <svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 24 24"><path d="M20 11v2H8l5.5 5.5-1.42 1.42L4.16 12l7.92-7.92L13.5 5.5 8 11z"/></svg>
+      </label>
+      <nav class="md-search__options" aria-label="Search">
+        
+        <button type="reset" class="md-search__icon md-icon" title="Clear" aria-label="Clear" tabindex="-1">
+          
+          <svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 24 24"><path d="M19 6.41 17.59 5 12 10.59 6.41 5 5 6.41 10.59 12 5 17.59 6.41 19 12 13.41 17.59 19 19 17.59 13.41 12z"/></svg>
+        </button>
+      </nav>
+      
+        <div class="md-search__suggest" data-md-component="search-suggest"></div>
+      
+    </form>
+    <div class="md-search__output">
+      <div class="md-search__scrollwrap" tabindex="0" data-md-scrollfix>
+        <div class="md-search-result" data-md-component="search-result">
+          <div class="md-search-result__meta">
+            Initializing search
+          </div>
+          <ol class="md-search-result__list" role="presentation"></ol>
+        </div>
+      </div>
+    </div>
+  </div>
+</div>
+    
+    
+      <div class="md-header__source">
+        <a href="https://github.com/neurorishika/hydra-suite" title="Go to repository" class="md-source" data-md-component="source">
+  <div class="md-source__icon md-icon">
+    
+    <svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 448 512"><!--! Font Awesome Free 6.6.0 by @fontawesome - https://fontawesome.com License - https://fontawesome.com/license/free (Icons: CC BY 4.0, Fonts: SIL OFL 1.1, Code: MIT License) Copyright 2024 Fonticons, Inc.--><path d="M439.55 236.05 244 40.45a28.87 28.87 0 0 0-40.81 0l-40.66 40.63 51.52 51.52c27.06-9.14 52.68 16.77 43.39 43.68l49.66 49.66c34.23-11.8 61.18 31 35.47 56.69-26.49 26.49-70.21-2.87-56-37.34L240.22 199v121.85c25.3 12.54 22.26 41.85 9.08 55a34.34 34.34 0 0 1-48.55 0c-17.57-17.6-11.07-46.91 11.25-56v-123c-20.8-8.51-24.6-30.74-18.64-45L142.57 101 8.45 235.14a28.86 28.86 0 0 0 0 40.81l195.61 195.6a28.86 28.86 0 0 0 40.8 0l194.69-194.69a28.86 28.86 0 0 0 0-40.81"/></svg>
+  </div>
+  <div class="md-source__repository">
+    neurorishika/hydra-suite
+  </div>
+</a>
+      </div>
+    
+  </nav>
+  
+</header>
+    
+    <div class="md-container" data-md-component="container">
+      
+      
+        
+          
+            
+<nav class="md-tabs" aria-label="Tabs" data-md-component="tabs">
+  <div class="md-grid">
+    <ul class="md-tabs__list">
+      
+        
+  
+  
+  
+    <li class="md-tabs__item">
+      <a href="../../.." class="md-tabs__link">
+        
+  
+    
+  
+  Home
+
+      </a>
+    </li>
+  
+
+      
+        
+  
+  
+  
+    
+    
+      <li class="md-tabs__item">
+        <a href="../../../getting-started/installation/" class="md-tabs__link">
+          
+  
+  Getting Started
+
+        </a>
+      </li>
+    
+  
+
+      
+        
+  
+  
+  
+    
+    
+      <li class="md-tabs__item">
+        <a href="../../../user-guide/overview/" class="md-tabs__link">
+          
+  
+  User Guide
+
+        </a>
+      </li>
+    
+  
+
+      
+        
+  
+  
+  
+    
+    
+      <li class="md-tabs__item">
+        <a href="../../../developer-guide/architecture/" class="md-tabs__link">
+          
+  
+  Developer Guide
+
+        </a>
+      </li>
+    
+  
+
+      
+        
+  
+  
+  
+    
+    
+      <li class="md-tabs__item">
+        <a href="../../../reference/api-index/" class="md-tabs__link">
+          
+  
+  Reference
+
+        </a>
+      </li>
+    
+  
+
+      
+    </ul>
+  </div>
+</nav>
+          
+        
+      
+      <main class="md-main" data-md-component="main">
+        <div class="md-main__inner md-grid">
+          
+            
+              
+              <div class="md-sidebar md-sidebar--primary" data-md-component="sidebar" data-md-type="navigation" >
+                <div class="md-sidebar__scrollwrap">
+                  <div class="md-sidebar__inner">
+                    
+
+
+  
+
+
+<nav class="md-nav md-nav--primary md-nav--lifted" aria-label="Navigation" data-md-level="0">
+  <label class="md-nav__title" for="__drawer">
+    <a href="../../.." title="HYDRA Suite Docs" class="md-nav__button md-logo" aria-label="HYDRA Suite Docs" data-md-component="logo">
+      
+  
+  <svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 24 24"><path d="M12 8a3 3 0 0 0 3-3 3 3 0 0 0-3-3 3 3 0 0 0-3 3 3 3 0 0 0 3 3m0 3.54C9.64 9.35 6.5 8 3 8v11c3.5 0 6.64 1.35 9 3.54 2.36-2.19 5.5-3.54 9-3.54V8c-3.5 0-6.64 1.35-9 3.54"/></svg>
+
+    </a>
+    HYDRA Suite Docs
+  </label>
+  
+    <div class="md-nav__source">
+      <a href="https://github.com/neurorishika/hydra-suite" title="Go to repository" class="md-source" data-md-component="source">
+  <div class="md-source__icon md-icon">
+    
+    <svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 448 512"><!--! Font Awesome Free 6.6.0 by @fontawesome - https://fontawesome.com License - https://fontawesome.com/license/free (Icons: CC BY 4.0, Fonts: SIL OFL 1.1, Code: MIT License) Copyright 2024 Fonticons, Inc.--><path d="M439.55 236.05 244 40.45a28.87 28.87 0 0 0-40.81 0l-40.66 40.63 51.52 51.52c27.06-9.14 52.68 16.77 43.39 43.68l49.66 49.66c34.23-11.8 61.18 31 35.47 56.69-26.49 26.49-70.21-2.87-56-37.34L240.22 199v121.85c25.3 12.54 22.26 41.85 9.08 55a34.34 34.34 0 0 1-48.55 0c-17.57-17.6-11.07-46.91 11.25-56v-123c-20.8-8.51-24.6-30.74-18.64-45L142.57 101 8.45 235.14a28.86 28.86 0 0 0 0 40.81l195.61 195.6a28.86 28.86 0 0 0 40.8 0l194.69-194.69a28.86 28.86 0 0 0 0-40.81"/></svg>
+  </div>
+  <div class="md-source__repository">
+    neurorishika/hydra-suite
+  </div>
+</a>
+    </div>
+  
+  <ul class="md-nav__list" data-md-scrollfix>
+    
+      
+      
+  
+  
+  
+  
+    <li class="md-nav__item">
+      <a href="../../.." class="md-nav__link">
+        
+  
+  <span class="md-ellipsis">
+    Home
+  </span>
+  
+
+      </a>
+    </li>
+  
+
+    
+      
+      
+  
+  
+  
+  
+    
+    
+    
+      
+      
+        
+      
+    
+    
+    <li class="md-nav__item md-nav__item--nested">
+      
+        
+        
+          
+        
+        <input class="md-nav__toggle md-toggle md-toggle--indeterminate" type="checkbox" id="__nav_2" >
+        
+          
+          <label class="md-nav__link" for="__nav_2" id="__nav_2_label" tabindex="0">
+            
+  
+  <span class="md-ellipsis">
+    Getting Started
+  </span>
+  
+
+            <span class="md-nav__icon md-icon"></span>
+          </label>
+        
+        <nav class="md-nav" data-md-level="1" aria-labelledby="__nav_2_label" aria-expanded="false">
+          <label class="md-nav__title" for="__nav_2">
+            <span class="md-nav__icon md-icon"></span>
+            Getting Started
+          </label>
+          <ul class="md-nav__list" data-md-scrollfix>
+            
+              
+                
+  
+  
+  
+  
+    <li class="md-nav__item">
+      <a href="../../../getting-started/installation/" class="md-nav__link">
+        
+  
+  <span class="md-ellipsis">
+    Installation
+  </span>
+  
+
+      </a>
+    </li>
+  
+
+              
+            
+              
+                
+  
+  
+  
+  
+    <li class="md-nav__item">
+      <a href="../../../getting-started/environments/" class="md-nav__link">
+        
+  
+  <span class="md-ellipsis">
+    Environments and Makefile
+  </span>
+  
+
+      </a>
+    </li>
+  
+
+              
+            
+              
+                
+  
+  
+  
+  
+    <li class="md-nav__item">
+      <a href="../../../getting-started/integrations/" class="md-nav__link">
+        
+  
+  <span class="md-ellipsis">
+    Integrations
+  </span>
+  
+
+      </a>
+    </li>
+  
+
+              
+            
+              
+                
+  
+  
+  
+  
+    <li class="md-nav__item">
+      <a href="../../../getting-started/quickstart-hydra/" class="md-nav__link">
+        
+  
+  <span class="md-ellipsis">
+    Quickstart (TrackerKit)
+  </span>
+  
+
+      </a>
+    </li>
+  
+
+              
+            
+              
+                
+  
+  
+  
+  
+    <li class="md-nav__item">
+      <a href="../../../getting-started/quickstart-posekit/" class="md-nav__link">
+        
+  
+  <span class="md-ellipsis">
+    Quickstart (PoseKit)
+  </span>
+  
+
+      </a>
+    </li>
+  
+
+              
+            
+              
+                
+  
+  
+  
+  
+    <li class="md-nav__item">
+      <a href="../../../getting-started/platforms/" class="md-nav__link">
+        
+  
+  <span class="md-ellipsis">
+    Platform Notes
+  </span>
+  
+
+      </a>
+    </li>
+  
+
+              
+            
+          </ul>
+        </nav>
+      
+    </li>
+  
+
+    
+      
+      
+  
+  
+  
+  
+    
+    
+    
+      
+      
+        
+      
+    
+    
+    <li class="md-nav__item md-nav__item--nested">
+      
+        
+        
+          
+        
+        <input class="md-nav__toggle md-toggle md-toggle--indeterminate" type="checkbox" id="__nav_3" >
+        
+          
+          <label class="md-nav__link" for="__nav_3" id="__nav_3_label" tabindex="0">
+            
+  
+  <span class="md-ellipsis">
+    User Guide
+  </span>
+  
+
+            <span class="md-nav__icon md-icon"></span>
+          </label>
+        
+        <nav class="md-nav" data-md-level="1" aria-labelledby="__nav_3_label" aria-expanded="false">
+          <label class="md-nav__title" for="__nav_3">
+            <span class="md-nav__icon md-icon"></span>
+            User Guide
+          </label>
+          <ul class="md-nav__list" data-md-scrollfix>
+            
+              
+                
+  
+  
+  
+  
+    <li class="md-nav__item">
+      <a href="../../../user-guide/overview/" class="md-nav__link">
+        
+  
+  <span class="md-ellipsis">
+    Overview
+  </span>
+  
+
+      </a>
+    </li>
+  
+
+              
+            
+              
+                
+  
+  
+  
+  
+    <li class="md-nav__item">
+      <a href="../../../user-guide/workflow/" class="md-nav__link">
+        
+  
+  <span class="md-ellipsis">
+    End-to-End Workflow
+  </span>
+  
+
+      </a>
+    </li>
+  
+
+              
+            
+              
+                
+  
+  
+  
+  
+    <li class="md-nav__item">
+      <a href="../../../user-guide/detection-modes/" class="md-nav__link">
+        
+  
+  <span class="md-ellipsis">
+    Detection Modes
+  </span>
+  
+
+      </a>
+    </li>
+  
+
+              
+            
+              
+                
+  
+  
+  
+  
+    <li class="md-nav__item">
+      <a href="../../../user-guide/tracking-and-merging/" class="md-nav__link">
+        
+  
+  <span class="md-ellipsis">
+    Tracking and Merging
+  </span>
+  
+
+      </a>
+    </li>
+  
+
+              
+            
+              
+                
+  
+  
+  
+  
+    <li class="md-nav__item">
+      <a href="../../../user-guide/post-processing/" class="md-nav__link">
+        
+  
+  <span class="md-ellipsis">
+    Post-processing
+  </span>
+  
+
+      </a>
+    </li>
+  
+
+              
+            
+              
+                
+  
+  
+  
+  
+    <li class="md-nav__item">
+      <a href="../../../user-guide/configuration-reference/" class="md-nav__link">
+        
+  
+  <span class="md-ellipsis">
+    Configuration Reference
+  </span>
+  
+
+      </a>
+    </li>
+  
+
+              
+            
+              
+                
+  
+  
+  
+  
+    <li class="md-nav__item">
+      <a href="../../../user-guide/compute-runtimes/" class="md-nav__link">
+        
+  
+  <span class="md-ellipsis">
+    Compute Runtimes
+  </span>
+  
+
+      </a>
+    </li>
+  
+
+              
+            
+              
+                
+  
+  
+  
+  
+    <li class="md-nav__item">
+      <a href="../../../user-guide/outputs-and-csv-schema/" class="md-nav__link">
+        
+  
+  <span class="md-ellipsis">
+    Outputs and CSV Schema
+  </span>
+  
+
+      </a>
+    </li>
+  
+
+              
+            
+              
+                
+  
+  
+  
+  
+    <li class="md-nav__item">
+      <a href="../../../user-guide/dataset-generation/" class="md-nav__link">
+        
+  
+  <span class="md-ellipsis">
+    Dataset Generation
+  </span>
+  
+
+      </a>
+    </li>
+  
+
+              
+            
+              
+                
+  
+  
+  
+  
+    <li class="md-nav__item">
+      <a href="../../../user-guide/individual-analysis/" class="md-nav__link">
+        
+  
+  <span class="md-ellipsis">
+    Individual Analysis
+  </span>
+  
+
+      </a>
+    </li>
+  
+
+              
+            
+              
+                
+  
+  
+  
+  
+    <li class="md-nav__item">
+      <a href="../../../user-guide/posekit/" class="md-nav__link">
+        
+  
+  <span class="md-ellipsis">
+    PoseKit
+  </span>
+  
+
+      </a>
+    </li>
+  
+
+              
+            
+              
+                
+  
+  
+  
+  
+    <li class="md-nav__item">
+      <a href="../../../user-guide/classkit/" class="md-nav__link">
+        
+  
+  <span class="md-ellipsis">
+    ClassKit
+  </span>
+  
+
+      </a>
+    </li>
+  
+
+              
+            
+              
+                
+  
+  
+  
+  
+    <li class="md-nav__item">
+      <a href="../../../user-guide/detectkit/" class="md-nav__link">
+        
+  
+  <span class="md-ellipsis">
+    DetectKit
+  </span>
+  
+
+      </a>
+    </li>
+  
+
+              
+            
+              
+                
+  
+  
+  
+  
+    <li class="md-nav__item">
+      <a href="../../../runbooks/detectkit-headless-training/" class="md-nav__link">
+        
+  
+  <span class="md-ellipsis">
+    DetectKit Headless Training
+  </span>
+  
+
+      </a>
+    </li>
+  
+
+              
+            
+              
+                
+  
+  
+  
+  
+    <li class="md-nav__item">
+      <a href="../../../user-guide/detectkit-semantic-escalation/" class="md-nav__link">
+        
+  
+  <span class="md-ellipsis">
+    DetectKit: Semantic Escalation (SAM3)
+  </span>
+  
+
+      </a>
+    </li>
+  
+
+              
+            
+              
+                
+  
+  
+  
+  
+    <li class="md-nav__item">
+      <a href="../../../user-guide/detectkit-sahi-calibration/" class="md-nav__link">
+        
+  
+  <span class="md-ellipsis">
+    DetectKit: SAHI Calibration Profiles
+  </span>
+  
+
+      </a>
+    </li>
+  
+
+              
+            
+              
+                
+  
+  
+  
+  
+    <li class="md-nav__item">
+      <a href="../../../user-guide/filterkit/" class="md-nav__link">
+        
+  
+  <span class="md-ellipsis">
+    FilterKit
+  </span>
+  
+
+      </a>
+    </li>
+  
+
+              
+            
+              
+                
+  
+  
+  
+  
+    <li class="md-nav__item">
+      <a href="../../../user-guide/refinekit/" class="md-nav__link">
+        
+  
+  <span class="md-ellipsis">
+    RefineKit
+  </span>
+  
+
+      </a>
+    </li>
+  
+
+              
+            
+              
+                
+  
+  
+  
+  
+    <li class="md-nav__item">
+      <a href="../../../user-guide/troubleshooting/" class="md-nav__link">
+        
+  
+  <span class="md-ellipsis">
+    Troubleshooting
+  </span>
+  
+
+      </a>
+    </li>
+  
+
+              
+            
+          </ul>
+        </nav>
+      
+    </li>
+  
+
+    
+      
+      
+  
+  
+  
+  
+    
+    
+    
+      
+      
+        
+      
+    
+    
+    <li class="md-nav__item md-nav__item--nested">
+      
+        
+        
+          
+        
+        <input class="md-nav__toggle md-toggle md-toggle--indeterminate" type="checkbox" id="__nav_4" >
+        
+          
+          <label class="md-nav__link" for="__nav_4" id="__nav_4_label" tabindex="0">
+            
+  
+  <span class="md-ellipsis">
+    Developer Guide
+  </span>
+  
+
+            <span class="md-nav__icon md-icon"></span>
+          </label>
+        
+        <nav class="md-nav" data-md-level="1" aria-labelledby="__nav_4_label" aria-expanded="false">
+          <label class="md-nav__title" for="__nav_4">
+            <span class="md-nav__icon md-icon"></span>
+            Developer Guide
+          </label>
+          <ul class="md-nav__list" data-md-scrollfix>
+            
+              
+                
+  
+  
+  
+  
+    <li class="md-nav__item">
+      <a href="../../../developer-guide/architecture/" class="md-nav__link">
+        
+  
+  <span class="md-ellipsis">
+    Architecture
+  </span>
+  
+
+      </a>
+    </li>
+  
+
+              
+            
+              
+                
+  
+  
+  
+  
+    <li class="md-nav__item">
+      <a href="../../../developer-guide/module-map/" class="md-nav__link">
+        
+  
+  <span class="md-ellipsis">
+    Module Map
+  </span>
+  
+
+      </a>
+    </li>
+  
+
+              
+            
+              
+                
+  
+  
+  
+  
+    <li class="md-nav__item">
+      <a href="../../../developer-guide/data-flow/" class="md-nav__link">
+        
+  
+  <span class="md-ellipsis">
+    Data Flow
+  </span>
+  
+
+      </a>
+    </li>
+  
+
+              
+            
+              
+                
+  
+  
+  
+  
+    <li class="md-nav__item">
+      <a href="../../../developer-guide/tracking-algorithm-deep-dive/" class="md-nav__link">
+        
+  
+  <span class="md-ellipsis">
+    Tracking Algorithm Deep Dive
+  </span>
+  
+
+      </a>
+    </li>
+  
+
+              
+            
+              
+                
+  
+  
+  
+  
+    <li class="md-nav__item">
+      <a href="../../../developer-guide/tracking-optimization/" class="md-nav__link">
+        
+  
+  <span class="md-ellipsis">
+    Tracking Optimization
+  </span>
+  
+
+      </a>
+    </li>
+  
+
+              
+            
+              
+                
+  
+  
+  
+  
+    <li class="md-nav__item">
+      <a href="../../../developer-guide/gpu-backends/" class="md-nav__link">
+        
+  
+  <span class="md-ellipsis">
+    GPU Backends
+  </span>
+  
+
+      </a>
+    </li>
+  
+
+              
+            
+              
+                
+  
+  
+  
+  
+    <li class="md-nav__item">
+      <a href="../../../developer-guide/runtime-integration/" class="md-nav__link">
+        
+  
+  <span class="md-ellipsis">
+    Runtime Integration
+  </span>
+  
+
+      </a>
+    </li>
+  
+
+              
+            
+              
+                
+  
+  
+  
+  
+    <li class="md-nav__item">
+      <a href="../../../developer-guide/resource-containment/" class="md-nav__link">
+        
+  
+  <span class="md-ellipsis">
+    Resource Containment
+  </span>
+  
+
+      </a>
+    </li>
+  
+
+              
+            
+              
+                
+  
+  
+  
+  
+    <li class="md-nav__item">
+      <a href="../../../developer-guide/profiling/" class="md-nav__link">
+        
+  
+  <span class="md-ellipsis">
+    Profiling
+  </span>
+  
+
+      </a>
+    </li>
+  
+
+              
+            
+              
+                
+  
+  
+  
+  
+    <li class="md-nav__item">
+      <a href="../../../developer-guide/dependency-cuda-updates/" class="md-nav__link">
+        
+  
+  <span class="md-ellipsis">
+    CUDA Dependency Updates
+  </span>
+  
+
+      </a>
+    </li>
+  
+
+              
+            
+              
+                
+  
+  
+  
+  
+    <li class="md-nav__item">
+      <a href="../../../developer-guide/performance-tuning/" class="md-nav__link">
+        
+  
+  <span class="md-ellipsis">
+    Performance Tuning
+  </span>
+  
+
+      </a>
+    </li>
+  
+
+              
+            
+              
+                
+  
+  
+  
+  
+    <li class="md-nav__item">
+      <a href="../../../developer-guide/inference-fast-mode/" class="md-nav__link">
+        
+  
+  <span class="md-ellipsis">
+    Inference Fast Mode
+  </span>
+  
+
+      </a>
+    </li>
+  
+
+              
+            
+              
+                
+  
+  
+  
+  
+    <li class="md-nav__item">
+      <a href="../../../developer-guide/confidence-metrics/" class="md-nav__link">
+        
+  
+  <span class="md-ellipsis">
+    Confidence Metrics
+  </span>
+  
+
+      </a>
+    </li>
+  
+
+              
+            
+              
+                
+  
+  
+  
+  
+    <li class="md-nav__item">
+      <a href="../../../developer-guide/extending-detection/" class="md-nav__link">
+        
+  
+  <span class="md-ellipsis">
+    Extending Detection
+  </span>
+  
+
+      </a>
+    </li>
+  
+
+              
+            
+              
+                
+  
+  
+  
+  
+    <li class="md-nav__item">
+      <a href="../../../developer-guide/extending-identity/" class="md-nav__link">
+        
+  
+  <span class="md-ellipsis">
+    Extending Identity
+  </span>
+  
+
+      </a>
+    </li>
+  
+
+              
+            
+              
+                
+  
+  
+  
+  
+    <li class="md-nav__item">
+      <a href="../../../developer-guide/code-health/" class="md-nav__link">
+        
+  
+  <span class="md-ellipsis">
+    Code Health & Auditing
+  </span>
+  
+
+      </a>
+    </li>
+  
+
+              
+            
+              
+                
+  
+  
+  
+  
+    <li class="md-nav__item">
+      <a href="../../../developer-guide/publishing/" class="md-nav__link">
+        
+  
+  <span class="md-ellipsis">
+    Publishing
+  </span>
+  
+
+      </a>
+    </li>
+  
+
+              
+            
+              
+                
+  
+  
+  
+  
+    <li class="md-nav__item">
+      <a href="../../../developer-guide/contributing/" class="md-nav__link">
+        
+  
+  <span class="md-ellipsis">
+    Contributing
+  </span>
+  
+
+      </a>
+    </li>
+  
+
+              
+            
+          </ul>
+        </nav>
+      
+    </li>
+  
+
+    
+      
+      
+  
+  
+  
+  
+    
+    
+    
+      
+      
+        
+      
+    
+    
+    <li class="md-nav__item md-nav__item--nested">
+      
+        
+        
+          
+        
+        <input class="md-nav__toggle md-toggle md-toggle--indeterminate" type="checkbox" id="__nav_5" >
+        
+          
+          <label class="md-nav__link" for="__nav_5" id="__nav_5_label" tabindex="0">
+            
+  
+  <span class="md-ellipsis">
+    Reference
+  </span>
+  
+
+            <span class="md-nav__icon md-icon"></span>
+          </label>
+        
+        <nav class="md-nav" data-md-level="1" aria-labelledby="__nav_5_label" aria-expanded="false">
+          <label class="md-nav__title" for="__nav_5">
+            <span class="md-nav__icon md-icon"></span>
+            Reference
+          </label>
+          <ul class="md-nav__list" data-md-scrollfix>
+            
+              
+                
+  
+  
+  
+  
+    <li class="md-nav__item">
+      <a href="../../../reference/api-index/" class="md-nav__link">
+        
+  
+  <span class="md-ellipsis">
+    API Index
+  </span>
+  
+
+      </a>
+    </li>
+  
+
+              
+            
+              
+                
+  
+  
+  
+  
+    <li class="md-nav__item">
+      <a href="../../../reference/ui-components-hydra/" class="md-nav__link">
+        
+  
+  <span class="md-ellipsis">
+    UI Components (TrackerKit)
+  </span>
+  
+
+      </a>
+    </li>
+  
+
+              
+            
+              
+                
+  
+  
+  
+  
+    <li class="md-nav__item">
+      <a href="../../../reference/ui-components-posekit/" class="md-nav__link">
+        
+  
+  <span class="md-ellipsis">
+    UI Components (PoseKit)
+  </span>
+  
+
+      </a>
+    </li>
+  
+
+              
+            
+              
+                
+  
+  
+  
+  
+    <li class="md-nav__item">
+      <a href="../../../reference/api-app/" class="md-nav__link">
+        
+  
+  <span class="md-ellipsis">
+    API (Launcher)
+  </span>
+  
+
+      </a>
+    </li>
+  
+
+              
+            
+              
+                
+  
+  
+  
+  
+    <li class="md-nav__item">
+      <a href="../../../reference/api-core/" class="md-nav__link">
+        
+  
+  <span class="md-ellipsis">
+    API (Core)
+  </span>
+  
+
+      </a>
+    </li>
+  
+
+              
+            
+              
+                
+  
+  
+  
+  
+    <li class="md-nav__item">
+      <a href="../../../reference/api-data/" class="md-nav__link">
+        
+  
+  <span class="md-ellipsis">
+    API (Data)
+  </span>
+  
+
+      </a>
+    </li>
+  
+
+              
+            
+              
+                
+  
+  
+  
+  
+    <li class="md-nav__item">
+      <a href="../../../reference/api-gui/" class="md-nav__link">
+        
+  
+  <span class="md-ellipsis">
+    API (TrackerKit GUI)
+  </span>
+  
+
+      </a>
+    </li>
+  
+
+              
+            
+              
+                
+  
+  
+  
+  
+    <li class="md-nav__item">
+      <a href="../../../reference/api-widgets/" class="md-nav__link">
+        
+  
+  <span class="md-ellipsis">
+    API (Widgets)
+  </span>
+  
+
+      </a>
+    </li>
+  
+
+              
+            
+              
+                
+  
+  
+  
+  
+    <li class="md-nav__item">
+      <a href="../../../reference/api-posekit/" class="md-nav__link">
+        
+  
+  <span class="md-ellipsis">
+    API (PoseKit)
+  </span>
+  
+
+      </a>
+    </li>
+  
+
+              
+            
+              
+                
+  
+  
+  
+  
+    <li class="md-nav__item">
+      <a href="../../../reference/api-utils/" class="md-nav__link">
+        
+  
+  <span class="md-ellipsis">
+    API (Utils)
+  </span>
+  
+
+      </a>
+    </li>
+  
+
+              
+            
+              
+                
+  
+  
+  
+  
+    <li class="md-nav__item">
+      <a href="../../../reference/cli-reference/" class="md-nav__link">
+        
+  
+  <span class="md-ellipsis">
+    CLI Reference
+  </span>
+  
+
+      </a>
+    </li>
+  
+
+              
+            
+              
+                
+  
+  
+  
+  
+    <li class="md-nav__item">
+      <a href="../../../reference/technical-reference/" class="md-nav__link">
+        
+  
+  <span class="md-ellipsis">
+    Technical Reference (LaTeX)
+  </span>
+  
+
+      </a>
+    </li>
+  
+
+              
+            
+              
+                
+  
+  
+  
+  
+    <li class="md-nav__item">
+      <a href="../../../reference/changelog/" class="md-nav__link">
+        
+  
+  <span class="md-ellipsis">
+    Changelog
+  </span>
+  
+
+      </a>
+    </li>
+  
+
+              
+            
+              
+                
+  
+  
+  
+  
+    <li class="md-nav__item">
+      <a href="../../../reference/faq/" class="md-nav__link">
+        
+  
+  <span class="md-ellipsis">
+    FAQ
+  </span>
+  
+
+      </a>
+    </li>
+  
+
+              
+            
+          </ul>
+        </nav>
+      
+    </li>
+  
+
+    
+  </ul>
+</nav>
+                  </div>
+                </div>
+              </div>
+            
+            
+              
+              <div class="md-sidebar md-sidebar--secondary" data-md-component="sidebar" data-md-type="toc" >
+                <div class="md-sidebar__scrollwrap">
+                  <div class="md-sidebar__inner">
+                    
+
+<nav class="md-nav md-nav--secondary" aria-label="Table of contents">
+  
+  
+  
+    
+  
+  
+    <label class="md-nav__title" for="__toc">
+      <span class="md-nav__icon md-icon"></span>
+      Table of contents
+    </label>
+    <ul class="md-nav__list" data-md-component="toc" data-md-scrollfix>
+      
+        <li class="md-nav__item">
+  <a href="#1-executive-summary-the-five-most-important-scientific-flaws-ranked" class="md-nav__link">
+    <span class="md-ellipsis">
+      1. Executive summary — the five most important scientific flaws, ranked
+    </span>
+  </a>
+  
+</li>
+      
+        <li class="md-nav__item">
+  <a href="#2-the-system-model-as-actually-built" class="md-nav__link">
+    <span class="md-ellipsis">
+      2. The system model as actually built
+    </span>
+  </a>
+  
+    <nav class="md-nav" aria-label="2. The system model as actually built">
+      <ul class="md-nav__list">
+        
+          <li class="md-nav__item">
+  <a href="#21-realtime-path-active-by-default-whenever-detection-is-yolo-obb-and-identity-models-are-configured" class="md-nav__link">
+    <span class="md-ellipsis">
+      2.1 Realtime path (active by default whenever detection is YOLO-OBB and identity models are configured)
+    </span>
+  </a>
+  
+</li>
+        
+          <li class="md-nav__item">
+  <a href="#22-offline-path-fragment-solver-on-by-default" class="md-nav__link">
+    <span class="md-ellipsis">
+      2.2 Offline path (fragment solver — ON by default)
+    </span>
+  </a>
+  
+</li>
+        
+      </ul>
+    </nav>
+  
+</li>
+      
+        <li class="md-nav__item">
+  <a href="#3-config-defaults-audit" class="md-nav__link">
+    <span class="md-ellipsis">
+      3. Config-defaults audit
+    </span>
+  </a>
+  
+</li>
+      
+        <li class="md-nav__item">
+  <a href="#4-findings" class="md-nav__link">
+    <span class="md-ellipsis">
+      4. Findings
+    </span>
+  </a>
+  
+    <nav class="md-nav" aria-label="4. Findings">
+      <ul class="md-nav__list">
+        
+          <li class="md-nav__item">
+  <a href="#f1-correlated-evidence-naive-bayes-fusion-uncapped" class="md-nav__link">
+    <span class="md-ellipsis">
+      F1 — Correlated-evidence naive-Bayes fusion, uncapped
+    </span>
+  </a>
+  
+</li>
+        
+          <li class="md-nav__item">
+  <a href="#f2-unknown-state-annihilation-no-open-set-model" class="md-nav__link">
+    <span class="md-ellipsis">
+      F2 — Unknown-state annihilation (no open-set model)
+    </span>
+  </a>
+  
+</li>
+        
+          <li class="md-nav__item">
+  <a href="#f3-slot-lock-bias-has-the-wrong-sign-a-lock-that-penalizes" class="md-nav__link">
+    <span class="md-ellipsis">
+      F3 — Slot-lock bias has the wrong sign (a "lock" that penalizes)
+    </span>
+  </a>
+  
+</li>
+        
+          <li class="md-nav__item">
+  <a href="#f4-the-05-override-margin-is-a-tautology-commit-revision-is-single-gate" class="md-nav__link">
+    <span class="md-ellipsis">
+      F4 — The 0.5 override margin is a tautology; commit revision is single-gate
+    </span>
+  </a>
+  
+</li>
+        
+          <li class="md-nav__item">
+  <a href="#f5-sticky-prior-circularity-seed-hypothesis-refuted-replaced-by-a-real-reporting-inconsistency" class="md-nav__link">
+    <span class="md-ellipsis">
+      F5 — Sticky-prior circularity: seed hypothesis refuted, replaced by a real reporting inconsistency
+    </span>
+  </a>
+  
+</li>
+        
+          <li class="md-nav__item">
+  <a href="#f6-assignmentevidence-feedback-loop-and-inconsistent-twin-likelihoods-flag-gated" class="md-nav__link">
+    <span class="md-ellipsis">
+      F6 — Assignment→evidence feedback loop and inconsistent twin likelihoods (flag-gated)
+    </span>
+  </a>
+  
+</li>
+        
+          <li class="md-nav__item">
+  <a href="#f7-identity-first-rejoin-one-uncalibrated-frame-within-trajectory-teleport" class="md-nav__link">
+    <span class="md-ellipsis">
+      F7 — Identity-first rejoin: one uncalibrated frame ⇒ within-trajectory teleport
+    </span>
+  </a>
+  
+</li>
+        
+          <li class="md-nav__item">
+  <a href="#f8-swap-correction-structurally-cannot-fix-an-isolated-flip" class="md-nav__link">
+    <span class="md-ellipsis">
+      F8 — Swap correction structurally cannot fix an isolated flip
+    </span>
+  </a>
+  
+</li>
+        
+          <li class="md-nav__item">
+  <a href="#f9-mutual-exclusion-is-per-frame-visible-only-and-soft-lost-committed-slots-create-deadlocks-and-slot-keyed-priors" class="md-nav__link">
+    <span class="md-ellipsis">
+      F9 — Mutual exclusion is per-frame, visible-only, and soft; lost committed slots create deadlocks and slot-keyed priors
+    </span>
+  </a>
+  
+</li>
+        
+          <li class="md-nav__item">
+  <a href="#f11-the-offline-objective-is-a-category-error-and-its-output-is-mislabeled-confidence" class="md-nav__link">
+    <span class="md-ellipsis">
+      F11 — The offline objective is a category error, and its output is mislabeled "confidence"
+    </span>
+  </a>
+  
+</li>
+        
+          <li class="md-nav__item">
+  <a href="#f12-the-solvers-online-prior-weight-025-is-dead-on-the-standard-pipeline" class="md-nav__link">
+    <span class="md-ellipsis">
+      F12 — The solver's "online prior" (weight 0.25) is dead on the standard pipeline
+    </span>
+  </a>
+  
+</li>
+        
+          <li class="md-nav__item">
+  <a href="#f13-offline-evidence-statistics-computed-on-smoothed-posteriors-temporal-double-counting" class="md-nav__link">
+    <span class="md-ellipsis">
+      F13 — Offline evidence statistics computed on smoothed posteriors: temporal double-counting
+    </span>
+  </a>
+  
+</li>
+        
+          <li class="md-nav__item">
+  <a href="#f14-fragment-granularity-trajectory-granularity-by-default-mode-1-errors-are-offline-invisible" class="md-nav__link">
+    <span class="md-ellipsis">
+      F14 — Fragment granularity = trajectory granularity by default: mode-1 errors are offline-invisible
+    </span>
+  </a>
+  
+</li>
+        
+          <li class="md-nav__item">
+  <a href="#f15-spatial-vetos-gap-cap-licenses-large-teleports-kinematic-break-disabled-z-test-one-sided" class="md-nav__link">
+    <span class="md-ellipsis">
+      F15 — Spatial veto's gap cap licenses large teleports; kinematic break disabled; z-test one-sided
+    </span>
+  </a>
+  
+</li>
+        
+          <li class="md-nav__item">
+  <a href="#f16-conflict-resolution-discards-rather-than-re-solves" class="md-nav__link">
+    <span class="md-ellipsis">
+      F16 — Conflict resolution discards rather than re-solves
+    </span>
+  </a>
+  
+</li>
+        
+          <li class="md-nav__item">
+  <a href="#f17-three-uncoordinated-scoring-vocabularies" class="md-nav__link">
+    <span class="md-ellipsis">
+      F17 — Three uncoordinated scoring vocabularies
+    </span>
+  </a>
+  
+</li>
+        
+      </ul>
+    </nav>
+  
+</li>
+      
+        <li class="md-nav__item">
+  <a href="#5-failure-mode-traces" class="md-nav__link">
+    <span class="md-ellipsis">
+      5. Failure-mode traces
+    </span>
+  </a>
+  
+    <nav class="md-nav" aria-label="5. Failure-mode traces">
+      <ul class="md-nav__list">
+        
+          <li class="md-nav__item">
+  <a href="#mode-1-identity-flips-mid-track-with-no-other-animal-nearby" class="md-nav__link">
+    <span class="md-ellipsis">
+      Mode 1 — identity flips mid-track with no other animal nearby
+    </span>
+  </a>
+  
+</li>
+        
+          <li class="md-nav__item">
+  <a href="#mode-2-overconfident-classification-overrides-motion-continuity" class="md-nav__link">
+    <span class="md-ellipsis">
+      Mode 2 — overconfident classification overrides motion continuity
+    </span>
+  </a>
+  
+</li>
+        
+          <li class="md-nav__item">
+  <a href="#mode-3-sudden-jump-to-a-far-point-then-return" class="md-nav__link">
+    <span class="md-ellipsis">
+      Mode 3 — sudden jump to a far point, then return
+    </span>
+  </a>
+  
+</li>
+        
+      </ul>
+    </nav>
+  
+</li>
+      
+        <li class="md-nav__item">
+  <a href="#6-incremental-fixes-within-the-current-architecture" class="md-nav__link">
+    <span class="md-ellipsis">
+      6. Incremental fixes (within the current architecture)
+    </span>
+  </a>
+  
+</li>
+      
+        <li class="md-nav__item">
+  <a href="#7-ground-up-redesign-the-theoretically-sound-version" class="md-nav__link">
+    <span class="md-ellipsis">
+      7. Ground-up redesign — the theoretically sound version
+    </span>
+  </a>
+  
+</li>
+      
+        <li class="md-nav__item">
+  <a href="#8-open-questions" class="md-nav__link">
+    <span class="md-ellipsis">
+      8. Open questions
+    </span>
+  </a>
+  
+</li>
+      
+        <li class="md-nav__item">
+  <a href="#appendix-a-empirical-probe-run-2026-08-13" class="md-nav__link">
+    <span class="md-ellipsis">
+      Appendix A — Empirical probe (run 2026-08-13)
+    </span>
+  </a>
+  
+</li>
+      
+    </ul>
+  
+</nav>
+                  </div>
+                </div>
+              </div>
+            
+          
+          
+            <div class="md-content" data-md-component="content">
+              <article class="md-content__inner md-typeset">
+                
+                  
+
+  
+    <a href="https://github.com/neurorishika/hydra-suite/edit/main/docs/superpowers/specs/2026-08-13-identity-audit.md" title="Edit this page" class="md-content__button md-icon">
+      
+      <svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 24 24"><path d="M10 20H6V4h7v5h5v3.1l2-2V8l-6-6H6c-1.1 0-2 .9-2 2v16c0 1.1.9 2 2 2h4zm10.2-7c.1 0 .3.1.4.2l1.3 1.3c.2.2.2.6 0 .8l-1 1-2.1-2.1 1-1c.1-.1.2-.2.4-.2m0 3.9L14.1 23H12v-2.1l6.1-6.1z"/></svg>
+    </a>
+  
+  
+
+
+<h1 id="identity-subsystem-scientific-logic-audit">Identity Subsystem — Scientific-Logic Audit<a class="headerlink" href="#identity-subsystem-scientific-logic-audit" title="Permanent link">&para;</a></h1>
+<p><strong>Date:</strong> 2026-08-13
+<strong>Scope:</strong> <code>src/hydra_suite/core/individual/identity/</code> (online + offline), its consumers
+(<code>core/assigners/hungarian.py</code>, <code>core/tracking/worker.py</code>, <code>core/post/processing.py</code>,
+<code>core/individual/postprocess_df.py</code>, <code>core/post/identity_postprocess.py</code>), and the config
+surface (<code>trackerkit/config/identity_schema.py</code>, <code>trackerkit/engine_params.py</code>).
+<strong>Method:</strong> static probabilistic reasoning over the code as written, plus one targeted
+empirical probe run against the real <code>OnlineIdentityDecoder</code> (no video required — see
+Appendix A). No production code was changed.</p>
+<hr />
+<h2 id="1-executive-summary-the-five-most-important-scientific-flaws-ranked">1. Executive summary — the five most important scientific flaws, ranked<a class="headerlink" href="#1-executive-summary-the-five-most-important-scientific-flaws-ranked" title="Permanent link">&para;</a></h2>
+<ol>
+<li>
+<p><strong>Uncapped naive-Bayes fusion of correlated evidence (F1).</strong> The decoder sums per-frame
+   CNN log-posteriors as if consecutive crops were independent observations. They are not
+   (same pose, same lighting, same occluder), so confidence inflates roughly linearly in
+   nats per frame with no ceiling. <strong>Measured on the real decoder: a cold slot commits at
+   0.85 after 4 frames of 0.6-confidence evidence; a fully committed <em>and slot-locked</em>
+   identity on an isolated animal flips to a different identity after 5 frames of
+   0.6-confidence wrong evidence, and flips back 5 frames later.</strong> The robustness
+   mechanisms designed to prevent exactly this (<code>per_frame_evidence_cap</code>, <code>prob_floor</code>)
+   exist in <code>substrate.fuse_log_evidence</code> but are dead code: no call site passes them and
+   no engine param emits them. This is the root of failure modes 1 and 2.</p>
+</li>
+<li>
+<p><strong>The system cannot say "I don't know" (F2).</strong> Every CNN evidence vector assigns the
+   <code>unknown</code> state a hard floor of 1e-6 <em>before normalization</em> (<code>catalog.cnn_log_prior</code>,
+   <code>substrate._factor_log_prob</code>). One frame of any CNN output drives
+   p(unknown) to ~1e-8 (measured). The unknown state — the only fail-safe hypothesis in
+   the model — is annihilated by construction, so every ambiguous or out-of-catalog animal
+   is forced into a catalog identity. All downstream "unassigned" logic (Hungarian dummy
+   columns priced at −log p(unknown) ≈ 18) is thereby neutered.</p>
+</li>
+<li>
+<p><strong>The two anti-flip guards are, respectively, a sign bug and a tautology (F3, F4).</strong>
+   The slot-lock "boost" adds <code>log(0.9) = −0.105</code> to the locked label — it <em>penalizes</em>
+   the locked identity every frame (measured: p(locked) decreases after the bias). And the
+   0.5 commit-override margin is vacuous: a challenger needs confidence ≥ 0.85 to reach the
+   check at all, which forces the incumbent ≤ 0.15, so the margin ≥ 0.70 &gt; 0.5 holds
+   automatically. Net effect: the <em>only</em> real protection on a committed identity is the
+   commit threshold itself, which flaw #1 makes trivially reachable in ~5 frames.</p>
+</li>
+<li>
+<p><strong>Motion and appearance never share a probability model (F6, F7, F11).</strong> Motion enters
+   identity nowhere (the belief is appearance + stickiness only); identity enters motion
+   through three separately-thresholded side channels (capped association addon,
+   identity-first rejoin at a <em>single-frame</em> 0.5 evidence threshold, offline
+   bridge-velocity veto with a 30-frame gap cap). Each channel can override the others,
+   there is no joint likelihood anywhere, and the rejoin channel in particular converts one
+   misclassified frame into a within-trajectory teleport (failure mode 3).</p>
+</li>
+<li>
+<p><strong>The offline "correction" layer cannot correct the dominant realtime failure (F14),
+   and its objective is not a probability (F11).</strong> With PELT splitting off by default, the
+   fragment solver can only relabel <em>whole trajectories</em>; a mid-track flip inside an
+   unbroken track (failure mode 1) is invisible to it — majority evidence wins the whole
+   fragment. Its objective is a weighted blend of geometric-mean log-evidence,
+   a spatial Gaussian, and a length heuristic, compared against an absolute margin of 0.10
+   — a score with no likelihood semantics, later written to the output as
+   <code>IdentityFinalConfidence</code>.</p>
+</li>
+</ol>
+<p>A cross-cutting conclusion for the config audit (§3): the shipped defaults are <strong>not</strong> the
+main problem. The disabled features (robustness caps, PELT, z-score breaks, the
+identity→geometry coupling) would mitigate some failures, but the flaws above live in code
+that <em>is</em> active by default. "A correct algorithm switched off" describes the robustness
+caps only; the rest is "an unsound algorithm switched on."</p>
+<hr />
+<h2 id="2-the-system-model-as-actually-built">2. The system model as actually built<a class="headerlink" href="#2-the-system-model-as-actually-built" title="Permanent link">&para;</a></h2>
+<h3 id="21-realtime-path-active-by-default-whenever-detection-is-yolo-obb-and-identity-models-are-configured">2.1 Realtime path (active by default whenever detection is YOLO-OBB and identity models are configured)<a class="headerlink" href="#21-realtime-path-active-by-default-whenever-detection-is-yolo-obb-and-identity-models-are-configured" title="Permanent link">&para;</a></h3>
+<p>Per frame, after geometric assignment (<code>worker.py:2935-3075</code>, <code>online.py:382-496</code>):</p>
+<ol>
+<li><strong>Predict.</strong> Each visible slot's log-posterior over the catalog (unknown at index 0) is
+   pushed through a sticky Markov transition, ε = 0.02 off-diagonal
+   (<code>online.py:326-332</code>). Note: this transition is a <em>leak toward uniform</em> — a forgetting
+   factor. It reduces confidence each frame; it does not inflate it.</li>
+<li><strong>Fuse.</strong> Every evidence item (calibrated CNN sidecar posterior remapped to the global
+   catalog, and/or an AprilTag prior) is added in log space and renormalized
+   (<code>online.py:349-351</code> → <code>substrate.fuse_log_evidence:96-97</code>). This is naive-Bayes
+   fusion: it is a valid Bayesian update <strong>iff</strong> each item is a conditionally independent
+   likelihood. The cap/floor arguments of <code>fuse_log_evidence</code> default to no-ops and no
+   caller overrides them.</li>
+<li><strong>Swap detection</strong> on pre-lock posteriors: pairs of <em>committed, visible</em> slots whose
+   posteriors mutually prefer each other's committed labels by ≥ 0.2 above 0.6 for 8
+   consecutive qualifying frames exchange committed labels (<code>online.py:620-753</code>).</li>
+<li><strong>Slot-lock bias:</strong> the committed label's log-posterior gets <code>+log(strength=0.9)</code>, i.e.
+   −0.105 nats (<code>online.py:354-365</code>).</li>
+<li><strong>Uniqueness assignment</strong> among <em>currently visible</em> slots only: Hungarian on
+   −log p with N dummy columns priced at −log p(unknown), then a 0.6 display gate
+   (<code>online.py:498-522</code>, <code>substrate.py:177-211</code>).</li>
+<li><strong>Commit state machine</strong> (<code>online.py:524-618</code>): commit at confidence ≥ 0.85 with ≥ 5
+   evidence hits, blocked if any other slot (visible or lost) holds the label; commitment
+   revision and lock release both gated by the (vacuous) 0.5 margin; slot-lock engages
+   after 30 stable frames. The <em>reported</em> label is the committed label regardless of the
+   current posterior argmax (<code>online.py:481-482</code>).</li>
+</ol>
+<p>Slot lifecycle: lost slots' committed beliefs are kept and decayed
+(<code>decay_absent_slot_beliefs</code>); respawned slots get a fresh prior mixed with a
+0.75-strength, 0.97-per-frame-decayed copy of the <em>previous occupant's</em> posterior for up
+to 120 frames (<code>online.py:270-300</code>) — an identity prior keyed to the <strong>slot index</strong>, not
+to space or appearance.</p>
+<p><strong>Identity→geometry coupling (OFF by default,</strong> <code>ENABLE_IDENTITY_ONLINE_DECODER=False</code>):
+(a) a capped additive term <code>α·(−log ⟨belief, evidence⟩)</code> on the assignment cost
+(<code>hungarian.py:223-271</code>); (b) identity-first rejoin of committed-lost slots: any
+unassigned detection whose single-frame evidence inner product with the slot's belief
+exceeds 0.5, within a motion budget that grows linearly with lost duration, is claimed —
+KF hard-reset to the detection, trajectory ID preserved (<code>hungarian.py:801-868</code>,
+<code>worker.py:3132-3145</code>); (c) committed-lost slots are reserved from slot reuse
+(<code>worker.py:3384-3389</code>).</p>
+<p><strong>Deviations from a coherent Bayesian treatment:</strong> correlated evidence fused as
+independent (F1); posteriors fused as likelihoods with an emission model that structurally
+excludes <code>unknown</code> (F2); mutual exclusion enforced only among visible slots per frame,
+softly, post-hoc (F9); an irreversible discrete commit layer whose guards don't function
+(F3, F4); motion absent from the model (F6/F7); and when the coupling flag is on, the same
+evidence is used both to <em>decide the assignment</em> and, after assignment, to <em>update the
+belief</em> that produced the assignment cost — a feedback loop (F6).</p>
+<h3 id="22-offline-path-fragment-solver-on-by-default">2.2 Offline path (fragment solver — ON by default)<a class="headerlink" href="#22-offline-path-fragment-solver-on-by-default" title="Permanent link">&para;</a></h3>
+<p><code>postprocess_df.apply_identity_postprocessing_to_df:273-289</code> → <code>run_fragment_solver</code>
+(<code>offline.py:1270-1441</code>):</p>
+<ol>
+<li>Per-trajectory evidence pulled from the always-written evidence sidecar, multi-source
+   fused per detection (<code>smoothing.load_trajectory_evidence</code>).</li>
+<li>Forward-backward smoothing with the same ε = 0.02 sticky chain (default on). The
+   two-filter combination <code>α + β − evidence</code> is <strong>mathematically correct</strong> for a uniform
+   initial prior — this part is sound.</li>
+<li>Optional PELT changepoint split on the smoothed posterior — <strong>off by default</strong>, so
+   fragments = trajectories.</li>
+<li><code>solve_global_assignment</code> → <code>_iterative_assign</code> (<code>offline.py:470-847</code>): per-fragment
+   label support = normalized <code>exp(0.40·mean-log-CNN + 0.15·log-tag + 0.25·log-online-prior)</code>;
+   candidate score = support × spatial-Gaussian(implied bridge velocity, σ = 50 px/f,
+   gap capped at 30 frames) × length factor; hard vetoes for time-overlap collision and
+   velocity &gt; 50 px/f; greedy doubt-ordered relabeling with a 0.10 absolute margin gate,
+   one-step swaps, and an Unknown-rescue pass. Base assignment via the shared Hungarian
+   solver per temporal-overlap component (a sound construction).</li>
+<li><code>resolve_simultaneous_identity_conflicts</code> (<code>processing.py:1485-1552</code>): pairwise
+   dominance per label; the loser's identity columns are <em>stripped to unknown</em>, not
+   re-solved.</li>
+</ol>
+<p><strong>Inactive/dead pieces under shipped defaults:</strong> PELT (off), velocity z-score breaks
+(<code>MAX_VELOCITY_ZSCORE</code> default 0.0, <code>engine_params.py:913</code>), robustness cap/floor (never
+emitted, never passed), <code>source_weights</code> (no consumer anywhere in <code>src/</code>), and the
+solver's 0.25-weight "online prior" (reads <code>IdentityFinalLabel</code>, which does not exist yet
+at solver time — see F12).</p>
+<hr />
+<h2 id="3-config-defaults-audit">3. Config-defaults audit<a class="headerlink" href="#3-config-defaults-audit" title="Permanent link">&para;</a></h2>
+<table>
+<thead>
+<tr>
+<th>Knob (schema → engine key)</th>
+<th>Default</th>
+<th>Actually active on shipped path?</th>
+</tr>
+</thead>
+<tbody>
+<tr>
+<td><code>IdentityConfig.enabled</code></td>
+<td>True</td>
+<td>Yes (gates CNN classifier config in GUI)</td>
+</tr>
+<tr>
+<td><code>realtime.enabled</code> → <code>ENABLE_IDENTITY_IN_TRACKING</code></td>
+<td>True</td>
+<td><strong>Yes</strong> — decoder instantiated &amp; labels tracks whenever pipeline is YOLO-OBB + catalog non-empty (<code>worker.py:1822-1858</code>)</td>
+</tr>
+<tr>
+<td><code>realtime.bayesian_cost_enabled</code> → <code>ENABLE_IDENTITY_ONLINE_DECODER</code></td>
+<td><strong>False</strong></td>
+<td>Gate for <em>all three</em> identity→geometry couplings: Bayesian cost (<code>hungarian.py:239</code>), committed-slot map → identity rejoin + slot reservation (<code>worker.py:2837-2847</code>). All OFF by default.</td>
+</tr>
+<tr>
+<td><code>realtime.association_weight</code> → <code>ASSOCIATION_IDENTITY_HINT_SCALE</code></td>
+<td>1.0</td>
+<td>Emitted, but moot while the flag above is off. (Note: the code-level fallback is 0.3, the emitted default is 1.0.)</td>
+</tr>
+<tr>
+<td><code>posthoc.enabled</code> → <code>IDENTITY_POSTHOC_ENABLED</code></td>
+<td>True</td>
+<td>Yes</td>
+</tr>
+<tr>
+<td><code>posthoc.fragment_solver_enabled</code> → <code>ENABLE_IDENTITY_FRAGMENT_SOLVER</code></td>
+<td><strong>True</strong> on the shipped path (<code>from_engine_config</code>: <code>enable_postprocessing=True</code> ∧ mode default <code>"Fragment Solver"</code>, <code>identity_schema.py:110-115</code>)</td>
+<td>Yes, whenever the catalog has entries. The dataclass default <code>False</code> is misleading; the derivation always runs. <strong>Seed hypothesis "solver disabled by default" is REFUTED.</strong></td>
+</tr>
+<tr>
+<td><code>posthoc.smoothing_enabled</code> → <code>IDENTITY_ENABLE_SMOOTHING</code></td>
+<td>True</td>
+<td>Yes — and it feeds the solver's evidence stats (see F13)</td>
+</tr>
+<tr>
+<td><code>posthoc.changepoint_enabled</code> → <code>ENABLE_PELT_SPLITTING</code></td>
+<td>False</td>
+<td><strong>Off</strong> — solver granularity is whole trajectories (F14)</td>
+</tr>
+<tr>
+<td><code>RobustnessConfig.per_frame_evidence_cap</code> / <code>prob_floor</code></td>
+<td>0.0 / 0.0</td>
+<td><strong>Dead</strong>: no engine key exists; every call to <code>fuse_log_evidence</code> (online <code>online.py:349</code>, offline <code>smoothing.py:133,265,271</code>) uses the no-op defaults</td>
+</tr>
+<tr>
+<td><code>RobustnessConfig.source_weights</code></td>
+<td><code>{}</code></td>
+<td><strong>Dead</strong>: zero consumers in <code>src/</code></td>
+</tr>
+<tr>
+<td><code>IDENTITY_SLOT_LOCK_MIN_FRAMES/STRENGTH/OVERRIDE_MARGIN</code>, <code>IDENTITY_COMMIT_MIN_HITS</code>, <code>IDENTITY_RESPAWN_PRIOR_*</code></td>
+<td>30 / 0.9 / 0.5 / 5 / 0.75-0.97-120</td>
+<td>Hardcoded decoder defaults — <strong>not emitted by <code>engine_params.py</code> at all</strong>, so not user-tunable</td>
+</tr>
+<tr>
+<td><code>MAX_VELOCITY_ZSCORE</code></td>
+<td>0.0</td>
+<td><strong>Off</strong> — the kinematic swap detector never runs; only the hard 50 px/f break and cross-gap spatial split act</td>
+</tr>
+<tr>
+<td><code>IDENTITY_GATES_TRAJECTORY_STRUCTURE</code></td>
+<td>True</td>
+<td>Yes (identity-disagree splits in merge)</td>
+</tr>
+<tr>
+<td><code>calibration_required</code></td>
+<td>False</td>
+<td>Calibration optional; evidence may be raw softmax</td>
+</tr>
+</tbody>
+</table>
+<p><strong>Answer to the key question:</strong> the shipped default system is (decoder labels tracks) +
+(fragment solver relabels whole trajectories). The degraded pieces — no robustness caps,
+no changepoints, no kinematic breaks, no geometry coupling — <em>worsen</em> the failures but do
+not explain them: F1–F5 (the flip machinery) are fully active by default, and F11–F14 (the
+offline blind spots) are properties of the active solver. One symptom <em>is</em> purely
+config-dependent: the within-trajectory geometric teleport (mode 3, path A) requires
+<code>ENABLE_IDENTITY_ONLINE_DECODER=True</code>, so if it was observed, that run had the flag on —
+worth confirming against the run's config.</p>
+<hr />
+<h2 id="4-findings">4. Findings<a class="headerlink" href="#4-findings" title="Permanent link">&para;</a></h2>
+<p>Format: <strong>name</strong> · type · evidence · flawed assumption · failure modes · severity ·
+confirmation.</p>
+<h3 id="f1-correlated-evidence-naive-bayes-fusion-uncapped">F1 — Correlated-evidence naive-Bayes fusion, uncapped<a class="headerlink" href="#f1-correlated-evidence-naive-bayes-fusion-uncapped" title="Permanent link">&para;</a></h3>
+<ul>
+<li><strong>Type:</strong> independence fallacy + miscalibration.</li>
+<li><strong>Evidence:</strong> <code>online.py:349-351</code> → <code>substrate.fuse_log_evidence</code> (<code>substrate.py:96-97</code>);
+  cap/floor parameters exist (<code>substrate.py:41-43</code>) but every caller uses defaults;
+  <code>RobustnessConfig</code> (<code>identity_schema.py:63-67</code>) is never emitted
+  (no <code>PER_FRAME_EVIDENCE_CAP</code>/<code>PROB_FLOOR</code> key in <code>engine_params.py</code>).</li>
+<li><strong>Flawed assumption:</strong> per-frame CNN posteriors are conditionally independent
+  likelihoods given identity. Consecutive crops of the same animal are highly correlated;
+  a systematic misread (pose, lighting, partial occlusion) produces a <em>streak</em>, and the sum
+  of a streak's log-odds is treated as k independent confirmations.</li>
+<li><strong>Consequence (measured, Appendix A):</strong> cold start → commit in 4 frames at 0.6
+  confidence; committed+locked → flipped in 5 frames of 0.6-confidence wrong evidence;
+  flips back in 5. The posterior saturates within ~3 frames of any consistent signal.</li>
+<li><strong>Failure modes:</strong> 1 (isolated flip), 2 (classification overrides everything).</li>
+<li><strong>Severity:</strong> critical. <strong>Confirmed:</strong> by probe run.</li>
+</ul>
+<h3 id="f2-unknown-state-annihilation-no-open-set-model">F2 — Unknown-state annihilation (no open-set model)<a class="headerlink" href="#f2-unknown-state-annihilation-no-open-set-model" title="Permanent link">&para;</a></h3>
+<ul>
+<li><strong>Type:</strong> miscalibration / fail-confident by construction.</li>
+<li><strong>Evidence:</strong> <code>catalog.py:220-221</code> (<code>cnn_log_prior</code>: unknown = floor 1e-6),
+  <code>substrate.py:257-258</code> (<code>_factor_log_prob</code>: same), <code>catalog.py:188-189</code> (AprilTag:
+  unknown = 1e-4). The CNN has no "none of the above" output, so unknown always gets the
+  floor.</li>
+<li><strong>Flawed assumption:</strong> that a K-way closed-set softmax says anything about
+  p(unknown). Fusing one such vector multiplies unknown's mass by ~1e-6 relative to knowns.
+  Measured: p(unknown) = 2.3e-7 after <strong>one</strong> frame.</li>
+<li><strong>Consequences:</strong> (a) the belief can never retreat to "uncertain" — the fail-safe state
+  is unreachable; (b) the Hungarian dummy columns (cost −log p(unknown) ≈ 18 vs ≈ 0 for
+  labels) make "leave unassigned" essentially never optimal, so uniqueness pressure always
+  resolves by assigning <em>some</em> label (the 0.6 display gate is the only remaining brake);
+  (c) out-of-catalog animals are forced into catalog identities.</li>
+<li><strong>Failure modes:</strong> 1, 2. <strong>Severity:</strong> critical. <strong>Confirmed:</strong> code + probe.</li>
+</ul>
+<h3 id="f3-slot-lock-bias-has-the-wrong-sign-a-lock-that-penalizes">F3 — Slot-lock bias has the wrong sign (a "lock" that penalizes)<a class="headerlink" href="#f3-slot-lock-bias-has-the-wrong-sign-a-lock-that-penalizes" title="Permanent link">&para;</a></h3>
+<ul>
+<li><strong>Type:</strong> implementation bug in a core stabilizer.</li>
+<li><strong>Evidence:</strong> <code>online.py:363-365</code>: <code>log_bias = log(max(strength, 1e-6))</code>; strength
+  default 0.9 → bias = −0.105 added to the locked label, then renormalize. The docstring
+  ("fraction of probability mass the lock diverts toward the locked label",
+  <code>online.py:72-73</code>) describes a mechanism that is not implemented.</li>
+<li><strong>Measured:</strong> p(locked label) <em>decreases</em> after <code>_apply_slot_lock_bias</code> (0.999343 →
+  0.999270). Because the posterior persists across frames, this is a small recurring
+  erosion of the committed identity, on top of the ε-transition leak.</li>
+<li><strong>Failure modes:</strong> 1, 2 (the intended defense is absent; actual effect mildly
+  destabilizing). <strong>Severity:</strong> high (mechanism inert), low (magnitude).
+  <strong>Confirmed:</strong> probe.</li>
+</ul>
+<h3 id="f4-the-05-override-margin-is-a-tautology-commit-revision-is-single-gate">F4 — The 0.5 override margin is a tautology; commit revision is single-gate<a class="headerlink" href="#f4-the-05-override-margin-is-a-tautology-commit-revision-is-single-gate" title="Permanent link">&para;</a></h3>
+<ul>
+<li><strong>Type:</strong> tautology / threshold interaction.</li>
+<li><strong>Evidence:</strong> <code>online.py:543-548</code> (must have confidence ≥ 0.85 to reach the check);
+  <code>online.py:555-561</code> and <code>573-580</code> (require <code>confidence − incumbent ≥ 0.5</code>). Since the
+  posterior sums to 1, confidence ≥ 0.85 ⟹ incumbent ≤ 0.15 ⟹ margin ≥ 0.70. The gate can
+  never fail. The same is true of the lock-release check.</li>
+<li><strong>Flawed assumption:</strong> that a probability-space margin adds protection beyond the commit
+  threshold. It cannot, because both quantities live on the same simplex.</li>
+<li><strong>Failure modes:</strong> 1, 2 — combined with F1, commitment is revised the moment the
+  posterior crosses 0.85, i.e. after a handful of wrong frames.</li>
+<li><strong>Severity:</strong> high. <strong>Confirmed:</strong> algebraic + probe (flip occurred the frame p(B) hit
+  0.947 with zero extra resistance).</li>
+</ul>
+<h3 id="f5-sticky-prior-circularity-seed-hypothesis-refuted-replaced-by-a-real-reporting-inconsistency">F5 — Sticky-prior circularity: seed hypothesis <strong>refuted</strong>, replaced by a real reporting inconsistency<a class="headerlink" href="#f5-sticky-prior-circularity-seed-hypothesis-refuted-replaced-by-a-real-reporting-inconsistency" title="Permanent link">&para;</a></h3>
+<ul>
+<li><strong>Type:</strong> (refutation + minor finding).</li>
+<li>The seed hypothesis said the sticky transition prior inflates confidence because the
+  slot was previously committed — circular. <strong>This is wrong:</strong> the ε-transition
+  (<code>online.py:326-332</code>) mixes the posterior <em>toward uniform</em> each frame; it is a
+  forgetting factor, the correct hedge. Confidence inflation comes from F1, not the prior.</li>
+<li>The real (smaller) issue: once committed, the <em>reported</em> label is <code>committed_label</code>
+  regardless of the current posterior (<code>online.py:481-482</code>), while the reported
+  <code>confidence</code> is the posterior of the <em>assigned</em> label — so during a contested period the
+  output row can pair a stale committed label with a confidence belonging to a different
+  label. Provenance columns are therefore not self-consistent row-wise.</li>
+<li><strong>Severity:</strong> low-medium (analysis hazard). <strong>Confirmed:</strong> reasoning.</li>
+</ul>
+<h3 id="f6-assignmentevidence-feedback-loop-and-inconsistent-twin-likelihoods-flag-gated">F6 — Assignment→evidence feedback loop and inconsistent twin likelihoods (flag-gated)<a class="headerlink" href="#f6-assignmentevidence-feedback-loop-and-inconsistent-twin-likelihoods-flag-gated" title="Permanent link">&para;</a></h3>
+<ul>
+<li><strong>Type:</strong> double-counting / feedback.</li>
+<li><strong>Evidence:</strong> with <code>ENABLE_IDENTITY_ONLINE_DECODER=True</code>, the same frame's identity
+  evidence is used (a) in the association cost that decides which track gets which
+  detection (<code>worker.py:2704-2755</code> → <code>hungarian.py:223-271</code>), then (b) fused into the
+  <em>winning</em> track's belief (<code>worker.py:2966-3072</code>). Belief → cost → assignment → belief.</li>
+<li>Additionally the two uses build <strong>different likelihoods from the same data</strong>: the cost
+  path reconstructs an <em>uncalibrated</em> top-1 spread (<code>worker.py:2721-2746</code>,
+  <code>catalog.cnn_log_prior</code>), the fusion path uses the calibrated full sidecar posterior
+  (<code>worker.py:3044-3068</code>). Same observation, two incompatible probability models.</li>
+<li><strong>Flawed assumption:</strong> that routing evidence by a belief and then updating that belief
+  with the routed evidence is a valid inference step. It is a self-confirming loop: a
+  wrong belief biases assignment toward identity-consistent detections, which then
+  reinforce the wrong belief.</li>
+<li><strong>Failure modes:</strong> 2, 3 (when flag on). <strong>Severity:</strong> high (flag-gated).
+  <strong>Confirmed:</strong> reasoning over code.</li>
+</ul>
+<h3 id="f7-identity-first-rejoin-one-uncalibrated-frame-within-trajectory-teleport">F7 — Identity-first rejoin: one uncalibrated frame ⇒ within-trajectory teleport<a class="headerlink" href="#f7-identity-first-rejoin-one-uncalibrated-frame-within-trajectory-teleport" title="Permanent link">&para;</a></h3>
+<ul>
+<li><strong>Type:</strong> unenforced constraint / fail-confident, threshold interaction.</li>
+<li><strong>Evidence:</strong> <code>hungarian.py:801-868</code>. Score = <code>logsumexp(log_post + log_like)</code> =
+  log⟨posterior, evidence⟩ — an inner product of two <em>distributions</em>, not p(same
+  identity). For a committed slot (posterior ≈ δ_L) the criterion reduces to: <strong>one
+  frame's</strong> detection evidence at L &gt; 0.5 — evidence built from the <em>uncalibrated top-1</em>
+  path (F6), for which unknown is annihilated (F2). Note 0.5 &lt; display threshold 0.6: a
+  label too weak to display can still teleport a track.</li>
+<li>Motion budget (<code>hungarian.py:825-832</code>): <code>max(2·body, lost_frames · 2·body · 1.5)</code> —
+  grows linearly without cap; after 100 lost frames at body = 20 px the budget is 6000 px.
+  The <code>missed_frames is None</code> bypass (<code>:826-827</code>) is real but <strong>unreachable on the live
+  path</strong> — the worker always passes <code>missed_frames</code> (<code>worker.py:2860</code>). Seed hypothesis
+  "gate disabled in production" is <strong>refuted</strong>; the exposure is the growth law and the
+  single-frame trigger, not a disabled gate.</li>
+<li>On success the KF is hard-reset to the detection with zeroed velocity and the
+  <strong>trajectory ID is preserved</strong> (<code>worker.py:3132-3145</code>) — this is the only code path that
+  moves an existing trajectory a long distance in one frame. No confirmation window, no
+  hysteresis: if the claim was wrong, the slot is typically outcompeted within frames,
+  goes lost again, and can rejoin back near the original location — the full
+  jump-and-return signature.</li>
+<li><strong>Failure modes:</strong> 3 (primary), 2. <strong>Severity:</strong> critical when flag on.
+  <strong>Confirmed:</strong> reasoning; empirical attribution experiment proposed (§7).</li>
+</ul>
+<h3 id="f8-swap-correction-structurally-cannot-fix-an-isolated-flip">F8 — Swap correction structurally cannot fix an isolated flip<a class="headerlink" href="#f8-swap-correction-structurally-cannot-fix-an-isolated-flip" title="Permanent link">&para;</a></h3>
+<ul>
+<li><strong>Type:</strong> design gap (confirmed seed hypothesis).</li>
+<li><strong>Evidence:</strong> <code>online.py:620-716</code> requires <strong>two committed, visible</strong> slots with
+  <em>mutual</em> mismatch (each ≥ 0.6 and ≥ 0.2 above own label) sustained 8 consecutive
+  qualifying frames; the pair counter is dropped on any frame the pair isn't
+  both-committed-visible-mismatched (<code>online.py:677,679-681</code>).</li>
+<li>For failure mode 1 (no other animal nearby) there is no partner, so the only corrective
+  path is commitment revision — which, per F1+F4, is exactly the mechanism that caused the
+  flip and will flap back and forth with the evidence streaks. The consecutive-frames
+  requirement also makes the swap fragile precisely during the occlusion-heavy
+  interactions where true swaps happen.</li>
+<li><strong>Failure modes:</strong> 1. <strong>Severity:</strong> high. <strong>Confirmed:</strong> code + probe (H-C/H-E flapping).</li>
+</ul>
+<h3 id="f9-mutual-exclusion-is-per-frame-visible-only-and-soft-lost-committed-slots-create-deadlocks-and-slot-keyed-priors">F9 — Mutual exclusion is per-frame, visible-only, and soft; lost committed slots create deadlocks and slot-keyed priors<a class="headerlink" href="#f9-mutual-exclusion-is-per-frame-visible-only-and-soft-lost-committed-slots-create-deadlocks-and-slot-keyed-priors" title="Permanent link">&para;</a></h3>
+<ul>
+<li><strong>Type:</strong> unenforced physical constraint.</li>
+<li><strong>Evidence:</strong> uniqueness solved only over <em>visible</em> slots (<code>online.py:443,498-522</code>); a
+  lost committed slot retains its label indefinitely and blocks any other slot from
+  <em>committing</em> it (<code>online.py:533-541</code>) while the visible animal can still be <em>assigned</em>
+  and displayed with that label — two slots claiming one identity across the
+  visible/lost boundary. With the decoder flag on, committed-lost slots are additionally
+  reserved from reuse (<code>worker.py:3384-3389</code>) and recoverable only via rejoin (F7): the
+  real animal's new slot can never commit, while the stale slot waits to teleport onto any<blockquote>
+<p>0.5 detection. With the flag off (default), the slot is eventually reused and its
+  belief is carried into the <em>new occupant</em> via <code>RespawnPrior</code> at strength 0.75
+  (<code>online.py:270-300</code>) — an identity prior attached to a <strong>slot index</strong>, which is an
+  arbitrary bookkeeping quantity, not a physical one.</p>
+</blockquote>
+</li>
+<li>Also: <code>_initial_log_posterior</code> blocks other slots' committed labels at 1e-300
+  (<code>online.py:222-239</code>), but one ε-transition step restores ~ε/(C−1) mass — the block is
+  one-frame cosmetics; semantics are neither hard nor soft (F10 folded in here).</li>
+<li><strong>Failure modes:</strong> 1, 3. <strong>Severity:</strong> high. <strong>Confirmed:</strong> reasoning.</li>
+</ul>
+<h3 id="f11-the-offline-objective-is-a-category-error-and-its-output-is-mislabeled-confidence">F11 — The offline objective is a category error, and its output is mislabeled "confidence"<a class="headerlink" href="#f11-the-offline-objective-is-a-category-error-and-its-output-is-mislabeled-confidence" title="Permanent link">&para;</a></h3>
+<ul>
+<li><strong>Type:</strong> category error / pseudo-probability (confirmed seed hypothesis).</li>
+<li><strong>Evidence:</strong> <code>offline.py:529-543</code>: per-label support =
+  <code>normalize(exp(0.40·mean-log-CNN + 0.15·log-tag + 0.25·log-prior))</code>. The mean-log
+  (geometric mean) discards <strong>evidence count</strong> — a 5-frame and a 500-frame fragment with
+  the same per-frame mean have identical evidence support; length re-enters only through a
+  separate multiplicative heuristic (<code>offline.py:511-525</code>). Candidate score = support ×
+  spatial Gaussian × length factor (<code>offline.py:594-620</code>), accepted if the improvement
+  beats an absolute 0.10 margin (<code>offline.py:795,804</code>) — a threshold on a quantity whose
+  scale depends on catalog size, fragment pool, and weights. The converged score is then
+  written as <code>IdentityFinalConfidence</code> (<code>offline.py:1204</code>) — it is not a probability of
+  anything.</li>
+<li>The weights (0.40/0.15/0.25/0.60) mix log-likelihood-ish terms with heuristics in one
+  additive/multiplicative blend; the "global objective" is greedy coordinate ascent with
+  vetoes, not MAP under any generative model. (The per-component Hungarian <em>base</em>
+  assignment and the collision veto are sound; the scoring is not.)</li>
+<li><strong>Failure modes:</strong> 2 (offline flavor), 3 (path C below). <strong>Severity:</strong> high.
+  <strong>Confirmed:</strong> reasoning.</li>
+</ul>
+<h3 id="f12-the-solvers-online-prior-weight-025-is-dead-on-the-standard-pipeline">F12 — The solver's "online prior" (weight 0.25) is dead on the standard pipeline<a class="headerlink" href="#f12-the-solvers-online-prior-weight-025-is-dead-on-the-standard-pipeline" title="Permanent link">&para;</a></h3>
+<ul>
+<li><strong>Type:</strong> disabled-in-practice.</li>
+<li><strong>Evidence:</strong> <code>_build_traj_summaries</code> reads <code>OnlineLabel</code> from <strong><code>IdentityFinalLabel</code></strong>
+  (<code>offline.py:973-993</code>), but the solver runs <em>before</em> the realtime→final mirror
+  (<code>postprocess_df.py:281</code> vs <code>:289</code>), so the column is empty → label "unknown" →
+  <code>_build_prior_log_scores</code> returns all-zero (uniform) log-scores (<code>offline.py:107-108</code>).
+  The realtime decoder's actual output (<code>IdentityRealtime*</code>) is never consulted by the
+  solver. The prior term only activates when re-running the solver over an already-solved
+  CSV — where it then double-counts the previous offline pass's own decision as "online"
+  evidence.</li>
+<li><strong>Severity:</strong> medium (a designed input silently absent; and a latent self-feedback on
+  re-runs). <strong>Confirmed:</strong> reasoning over call order.</li>
+</ul>
+<h3 id="f13-offline-evidence-statistics-computed-on-smoothed-posteriors-temporal-double-counting">F13 — Offline evidence statistics computed on <em>smoothed</em> posteriors: temporal double-counting<a class="headerlink" href="#f13-offline-evidence-statistics-computed-on-smoothed-posteriors-temporal-double-counting" title="Permanent link">&para;</a></h3>
+<ul>
+<li><strong>Type:</strong> double-counting / miscalibration.</li>
+<li><strong>Evidence:</strong> <code>run_fragment_solver</code> smooths first (default on, <code>offline.py:1379-1390</code>),
+  then <code>_evidence_dicts_for_fragment</code> takes per-frame means of the <strong>smoothed</strong> log
+  posteriors (<code>offline.py:874-887</code>), and <code>_fragment_stability</code> computes agreement/margin
+  on the same smoothed vectors (<code>offline.py:40-75</code>). After forward-backward smoothing,
+  every frame's posterior contains (transition-discounted) copies of <em>all</em> frames'
+  evidence: the fragment mean re-counts each observation many times, and stability's
+  "per-frame agreement" is agreement of a signal that has been forced to agree.
+  Anchor confidence and the doubt ordering are therefore systematically inflated.
+  PELT (when enabled) also runs on the smoothed signal, where the ε-sticky chain blurs
+  exactly the changepoints it is looking for.</li>
+<li><strong>Severity:</strong> medium-high. <strong>Confirmed:</strong> reasoning.</li>
+</ul>
+<h3 id="f14-fragment-granularity-trajectory-granularity-by-default-mode-1-errors-are-offline-invisible">F14 — Fragment granularity = trajectory granularity by default: mode-1 errors are offline-invisible<a class="headerlink" href="#f14-fragment-granularity-trajectory-granularity-by-default-mode-1-errors-are-offline-invisible" title="Permanent link">&para;</a></h3>
+<ul>
+<li><strong>Type:</strong> disabled-by-default (PELT) + design consequence.</li>
+<li><strong>Evidence:</strong> <code>ENABLE_PELT_SPLITTING</code> default False (<code>engine_params.py:942</code>,
+  <code>identity_schema.py:57</code>); <code>solve_global_assignment</code> assigns <strong>one label per
+  trajectory</strong> (<code>offline.py:1183-1206</code>). A mid-track identity flip that did not break the
+  track geometrically (the isolated-animal case: same detection chain, only the label
+  flipped) produces no fragment boundary, so the solver can only pick the majority label
+  for the whole track; the minority segment is silently mislabeled. The realtime flip is
+  visible in <code>IdentityRealtime*</code> but nothing downstream splits on committed-label
+  switches.</li>
+<li><strong>Failure modes:</strong> 1 (uncorrectable offline). <strong>Severity:</strong> high. <strong>Confirmed:</strong> reasoning.</li>
+</ul>
+<h3 id="f15-spatial-vetos-gap-cap-licenses-large-teleports-kinematic-break-disabled-z-test-one-sided">F15 — Spatial veto's gap cap licenses large teleports; kinematic break disabled; z-test one-sided<a class="headerlink" href="#f15-spatial-vetos-gap-cap-licenses-large-teleports-kinematic-break-disabled-z-test-one-sided" title="Permanent link">&para;</a></h3>
+<ul>
+<li><strong>Type:</strong> threshold interaction + disabled-by-default.</li>
+<li><strong>Evidence:</strong> <code>_spatial_score_for_fragment</code> clamps the gap at <code>MAX_BRIDGE_GAP_FRAMES=30</code>
+  (<code>offline.py:283-352</code>) — intended to stop long gaps from excusing jumps, but combined
+  with <code>MAX_VELOCITY_BREAK=50</code> px/f it <em>fixes</em> the allowed same-identity displacement at
+  up to 1500 px for <strong>any</strong> gap ≥ 30 frames, and the score at the veto boundary
+  (exp(−2) ≈ 0.14) still clears the 0.05 veto. Meanwhile <code>MAX_VELOCITY_ZSCORE</code> defaults to
+  0.0 = disabled (<code>engine_params.py:913</code>, <code>processing.py:890</code>), and when enabled the test
+  is positive-z only (<code>processing.py:528-531</code>) — a teleport that manifests as an abrupt
+  <em>stop</em> (or the return leg landing inside a low-motion window) is not tested. (Both legs
+  of a jump-and-return are accelerations, so the one-sidedness is a secondary gap; the
+  primary gap is that the detector is off.)</li>
+<li><strong>Failure modes:</strong> 3 (offline flavor). <strong>Severity:</strong> medium. <strong>Confirmed:</strong> reasoning.</li>
+</ul>
+<h3 id="f16-conflict-resolution-discards-rather-than-re-solves">F16 — Conflict resolution discards rather than re-solves<a class="headerlink" href="#f16-conflict-resolution-discards-rather-than-re-solves" title="Permanent link">&para;</a></h3>
+<ul>
+<li><strong>Type:</strong> heuristic uniqueness, information-destroying.</li>
+<li><strong>Evidence:</strong> <code>resolve_simultaneous_identity_conflicts</code> (<code>processing.py:1485-1552</code>)
+  strips the losing trajectory's identity columns to unknown. The loser's rows are not
+  offered their second-best identity; the pairwise dominance score is yet another bespoke
+  blend (agreement × conf × length + tag bonus + forward tiebreak) — the third distinct
+  scoring system for the same question. At least it fails <em>safe</em> (to unknown) — the only
+  mechanism in the stack that does.</li>
+<li><strong>Severity:</strong> low-medium. <strong>Confirmed:</strong> reasoning.</li>
+</ul>
+<h3 id="f17-three-uncoordinated-scoring-vocabularies">F17 — Three uncoordinated scoring vocabularies<a class="headerlink" href="#f17-three-uncoordinated-scoring-vocabularies" title="Permanent link">&para;</a></h3>
+<ul>
+<li><strong>Type:</strong> architectural incoherence (summary finding).</li>
+<li>The same question — "which identity does this evidence support, and how strongly?" — is
+  answered by (1) the decoder's fused posterior (calibrated sidecar evidence), (2) the
+  association/rejoin inner-product on uncalibrated top-1 spreads, and (3) the offline
+  weighted-blend support score; with four distinct uniqueness mechanisms (decoder
+  Hungarian, commit-blocking, offline collision veto, post-hoc pairwise dominance) none of
+  which share state. Inconsistency between paths is guaranteed by construction, which is
+  the general form of the seed hypothesis "motion and appearance can override each other"
+  — <strong>confirmed</strong>, and broader than motion-vs-appearance.</li>
+</ul>
+<hr />
+<h2 id="5-failure-mode-traces">5. Failure-mode traces<a class="headerlink" href="#5-failure-mode-traces" title="Permanent link">&para;</a></h2>
+<h3 id="mode-1-identity-flips-mid-track-with-no-other-animal-nearby">Mode 1 — identity flips mid-track with no other animal nearby<a class="headerlink" href="#mode-1-identity-flips-mid-track-with-no-other-animal-nearby" title="Permanent link">&para;</a></h3>
+<p>Primary path (active by default): CNN produces a correlated wrong-label streak (pose
+change, shadow, partial occlusion). Each frame's calibrated posterior is fused as
+independent evidence (<strong>F1</strong>, <code>online.py:349</code>); unknown cannot absorb the ambiguity
+(<strong>F2</strong>); the slot lock provides no resistance — it slightly helps the flip (<strong>F3</strong>);
+after ~4–6 frames p(wrong) ≥ 0.85 and <code>_update_commitment</code> revises the committed label,
+the margin gate passing automatically (<strong>F4</strong>, <code>online.py:573-580</code>). Swap correction is
+inapplicable — no partner (<strong>F8</strong>). When the streak ends, the same machinery flips back
+(<strong>probe H-E</strong>), producing label flapping. Offline, the track has no geometric break, PELT
+is off, so the fragment solver assigns the majority label to the whole trajectory
+(<strong>F14</strong>) — the flip either disappears (majority correct) or contaminates the entire track
+(majority wrong); the frame-accurate flip point is never recovered. Secondary paths:
+respawn-prior contamination when the slot was recently reused (<strong>F9</strong>), and
+<code>fill_identity_nans_with_consensus</code> back-filling a flipped consensus across NaN rows.</p>
+<h3 id="mode-2-overconfident-classification-overrides-motion-continuity">Mode 2 — overconfident classification overrides motion continuity<a class="headerlink" href="#mode-2-overconfident-classification-overrides-motion-continuity" title="Permanent link">&para;</a></h3>
+<p>Motion never enters the identity belief — there is no motion likelihood anywhere in
+<code>online.py</code>; the belief is appearance + stickiness, so <em>any</em> sufficiently long appearance
+streak wins over arbitrarily strong motion evidence by construction (<strong>F1/F6/F17</strong>). With
+the decoder flag off (default), the override is label-only (mode 1's mechanism). With the
+flag on: the Bayesian cost addon reorders geometrically-valid matches (capped —
+<code>hungarian.py:266-269</code> — a reasonable design), but the rejoin path is uncapped in the
+evidence dimension: a single uncalibrated frame at 0.5 claims a detection against motion
+(<strong>F7</strong>), and the feedback loop (<strong>F6</strong>) then routes further evidence to confirm the
+claim. Offline: evidence weight 0.40 against a spatial score whose no-neighbor default is
+0.3 and whose veto tolerates 50 px/frame over a capped gap (<strong>F11/F15</strong>) — a
+high-mean-CNN short fragment can take a label from a spatially coherent schedule.</p>
+<h3 id="mode-3-sudden-jump-to-a-far-point-then-return">Mode 3 — sudden jump to a far point, then return<a class="headerlink" href="#mode-3-sudden-jump-to-a-far-point-then-return" title="Permanent link">&para;</a></h3>
+<p>Path A (realtime, requires <code>ENABLE_IDENTITY_ONLINE_DECODER=True</code>): committed slot goes
+lost → belief reserved (<strong>F9</strong>) → some frames later a far detection (another animal, or a
+false positive) gets one CNN frame ≥ 0.5 at the lost slot's label (<strong>F2</strong> guarantees
+p(unknown)≈0, <strong>F7</strong>'s threshold is below the display threshold) and sits within the
+linearly-grown motion budget → identity rejoin fires: KF hard-reset to the far detection,
+<strong>same trajectory ID</strong> (<code>worker.py:3132-3145</code>) → jump. The claimed detection's true owner
+usually wins it back within frames (it is the geometrically consistent match), the rejoined
+slot goes unmatched → lost → rejoins or is respawned back near its original, internally
+consistent location → return. The velocity z-score detector that should flag both legs is
+disabled by default (<strong>F15</strong>); the hard 50 px/f break fires only if the jump is written as
+consecutive-frame motion, and the cross-gap splitter (<code>processing.py:609+</code>) uses
+<code>dist/frame_gap</code>, which a long gap dilutes.
+Path B (offline, always on): the fragment solver assigns a far-away fragment to identity L
+between two of L's segments — allowed because the bridge-gap cap fixes tolerable
+displacement at ≤1500 px regardless of true gap (<strong>F15</strong>) and evidence can outvote a 0.14
+spatial score (<strong>F11</strong>). Any per-identity time series (<code>sort_trajectories_by_identity</code>
+orders fragments by label) then shows teleport-out/teleport-back at the fragment
+boundaries.
+Path C (merge): forward/backward disagreement runs shorter than
+<code>IDENTITY_DISAGREE_MIN_RUN=5</code> are averaged through (<code>processing.py:1595-1639</code>), which can
+splice a brief wrong-association excursion into an otherwise consistent merged track.</p>
+<hr />
+<h2 id="6-incremental-fixes-within-the-current-architecture">6. Incremental fixes (within the current architecture)<a class="headerlink" href="#6-incremental-fixes-within-the-current-architecture" title="Permanent link">&para;</a></h2>
+<p>Ordered by leverage; each tied to findings.</p>
+<ol>
+<li><strong>Fix the slot-lock sign or delete the mechanism (F3).</strong> If kept, implement the
+   documented semantics: <code>p ← (1−s)·p + s·δ_lock</code> or an explicit log-odds bonus
+   <code>+log(1/(1−s))</code>. One-line change, currently the mechanism is inverted. <em>Risk: low.</em></li>
+<li><strong>Wire the existing robustness cap/floor and set defaults (F1, F2).</strong> Emit
+   <code>PER_FRAME_EVIDENCE_CAP</code> (≈ 0.5–1.0 nats) and <code>PROB_FLOOR</code> (≈ 1e-3) from
+   <code>RobustnessConfig</code>, and pass them at all three <code>fuse_log_evidence</code> call sites. This is
+   the intended Phase-3 design, already implemented and tested in <code>substrate.py</code> — it is
+   only unplugged. Expected effect: commit time stretches from ~4 frames to a tunable
+   horizon; single-streak flips of a committed identity become much harder; the unknown
+   state stays reachable. <em>Risk: low-medium (slower commits; re-tune commit_min_hits).</em></li>
+<li><strong>Better: temper evidence by an effective-sample-size factor (F1).</strong> Multiply each
+   frame's log-evidence by <code>1/τ</code> where τ ≈ the autocorrelation window of crops (measurable
+   from the sidecar: lag-1 correlation of per-frame posteriors), or fuse only every τ-th
+   frame. Converts "5 correlated frames = 5 confirmations" into "≈1 confirmation."
+   <em>Risk: medium (needs τ estimation; a fixed τ=5–10 is already a large improvement).</em></li>
+<li><strong>Give <code>unknown</code> a real emission (F2).</strong> Replace the 1e-6 floor with
+   p(evidence | unknown) = uniform over the model's classes (1/K), or a learned
+   open-set/outlier score. With calibrated evidence this makes p(unknown) grow under
+   ambiguity instead of vanishing. <em>Risk: medium — changes every posterior; re-tune
+   display/commit thresholds.</em></li>
+<li><strong>Make commitment revision require sustained counter-evidence (F4, F8).</strong> Replace the
+   vacuous probability-margin gate with: revise only after M consecutive frames where the
+   posterior argmax ≠ committed label (M ≈ swap_min_frames), mirroring the swap counter so
+   isolated flips get the same debounce that paired swaps already have. <em>Risk: low.</em></li>
+<li><strong>Harden the rejoin trigger (F7).</strong> Require (a) calibrated sidecar evidence, not the
+   top-1 reconstruction; (b) a confirmation window: the same detection/tracklet must
+   support the label for M ≥ 3 consecutive frames before the claim executes; (c) a
+   threshold ≥ display threshold; (d) a sublinear or capped motion budget
+   (e.g. <code>min(budget, arena_scale)</code> or √t diffusion growth, which is the physically
+   correct law for an unobserved random walk). <em>Risk: medium (slower re-ID after
+   occlusion — acceptable trade).</em></li>
+<li><strong>Remove the evidence double-use, or make the coupling one-way (F6).</strong> Either the
+   association cost consumes only the <em>prior</em> belief (fine) and fusion uses evidence not
+   used in the cost (e.g. fuse with weight reduced by the assignment's identity-cost
+   contribution), or more simply: keep the cost term but build it from the same calibrated
+   sidecar vectors as fusion so at least the two paths share one likelihood. <em>Risk: low
+   for the consistency half; the full de-double-counting needs care.</em></li>
+<li><strong>Point the solver's online prior at <code>IdentityRealtime*</code> (F12)</strong> — or delete the
+   0.25-weight term. Also guard re-runs: never read <code>IdentityFinalLabel</code> produced by a
+   previous offline pass as "online" evidence. <em>Risk: low.</em></li>
+<li><strong>Feed the solver raw (unsmoothed) per-frame evidence for support/stability (F13).</strong>
+   Keep smoothing for the per-row <code>IdentityFinalSmoothedLabel</code> display columns; compute
+   <code>CNNLogEvidence</code> (as a <em>sum</em>, not mean — restoring evidence count, optionally tempered
+   per fix 3) and <code>Stability</code> from the raw sequences. <em>Risk: medium (changes solver
+   behavior; gate with the equivalence harness on <code>ant_cnn_identity</code>/<code>emi_obb_identity</code>).</em></li>
+<li><strong>Split fragments at committed-label switches (F14).</strong> Even without PELT: the realtime
+    decoder already logs commitment revisions; splitting trajectories at
+    <code>IdentityRealtimeLabel</code> change points (with the min_run debounce) gives the solver
+    exactly the boundaries mode-1 errors create. Alternatively enable PELT on raw
+    evidence. <em>Risk: medium.</em></li>
+<li><strong>Scale the offline bridge veto with the true gap (F15):</strong> replace the 30-frame clamp
+    with a diffusion-scaled allowance <code>dist ≤ v_max·min(gap, cap) + c·√gap·body</code>, and
+    enable <code>MAX_VELOCITY_ZSCORE</code> (two-sided |z|) by default. <em>Risk: low-medium.</em></li>
+<li><strong>Emit the hardcoded decoder knobs</strong> (<code>IDENTITY_SLOT_LOCK_*</code>, <code>IDENTITY_COMMIT_MIN_HITS</code>,
+    respawn-prior trio) from the schema so they are tunable and auditable. <em>Risk: trivial.</em></li>
+<li><strong>Respawn prior: key on space, not slot (F9).</strong> Carry a lost identity's prior into a
+    respawned slot only if the respawn position is within the lost slot's motion budget of
+    its last position; otherwise start uninformative. Add a TTL to committed-lost beliefs
+    (e.g. respawn_prior_max_gap) after which the slot un-commits, releasing the label.
+    <em>Risk: low.</em></li>
+</ol>
+<hr />
+<h2 id="7-ground-up-redesign-the-theoretically-sound-version">7. Ground-up redesign — the theoretically sound version<a class="headerlink" href="#7-ground-up-redesign-the-theoretically-sound-version" title="Permanent link">&para;</a></h2>
+<p><strong>Generative model.</strong> K known animals (+ an open-set "clutter/unknown" class). Latent
+state per animal: kinematic state x_t (the existing Kalman model — unchanged) and, per
+detection, an identity indicator. One joint model:</p>
+<p>p(detections | assignment, identities) = ∏ p(position | x_t) · p(appearance | identity)</p>
+<p>with the <strong>hard constraint</strong> that the map detections→identities is injective per frame
+(and, over time, that each identity occupies one path).</p>
+<p><strong>Layer 1 — per-frame association (realtime).</strong> Keep the Hungarian assigner, but make the
+cost the negative log of one joint likelihood:
+<code>cost(i,j) = −log N(z_j; Hx_i, S_i) − λ·log p(z_j^app | id belief_i)</code> with the appearance
+term <em>tempered</em> (λ = 1/τ from the evidence-autocorrelation estimate) and computed from
+calibrated evidence with a real unknown emission. This subsumes today's capped hint, the
+rejoin path (a lost track is just a row whose motion likelihood is a gap-widened
+diffusion N(·; x, S + tQ) — long-range re-ID falls out naturally, with √t growth, no
+special-case budget), and the density gate. One likelihood, one solver, no side channels.</p>
+<p><strong>Layer 2 — identity belief (realtime).</strong> Per-track HMM exactly as now (sticky transition
+is fine), but: evidence tempered (ESS), unknown reachable, <strong>no internal commit state
+machine</strong>. "Committed" becomes a <em>reporting</em> concept: display argmax with its calibrated
+posterior; downstream consumers threshold as they wish. Uniqueness is enforced where it is
+physical — in the Layer-1 assignment and the Layer-3 global solve — not by blocking
+commits on stale slots. Swaps need no special detector: with a joint cost, a sustained
+mutual mismatch simply makes the swapped assignment cheaper and Layer 1 executes it as an
+ordinary re-association (the current swap machinery, lock machinery, respawn-prior
+machinery, and commit-blocking all disappear).</p>
+<p><strong>Layer 3 — offline global MAP (replaces the fragment solver).</strong> Standard tracklet-graph
+formulation: nodes = tracklets split at genuine ambiguity events (occlusion contacts,
+detection gaps, evidence changepoints on <em>raw</em> evidence); identities = K source-sink paths
+through the graph; edge weights = −log[motion likelihood of the bridge (gap-dependent
+diffusion) · appearance likelihood of the downstream tracklet under the identity (tempered
+sum of calibrated log-evidence — this restores evidence <em>count</em>, making the ad-hoc length
+factor unnecessary)]. Solve as min-cost flow / k-disjoint-shortest-paths (or a small ILP —
+tracklet counts here are tiny). This is exact MAP under the stated model: mutual exclusion
+is a flow constraint (hard, global, no pairwise post-hoc stripping), "length weight" is
+likelihood mass, "spatial score" is the motion likelihood, "doubt ordering / margin /
+unknown rescue / swap moves" are all replaced by optimality. <code>IdentityFinalConfidence</code>
+becomes a real quantity: the min-marginal (cost gap to the best solution with that
+tracklet-identity edge removed).</p>
+<p><strong>Why this removes the root fallacies:</strong> F1/F13 → tempering + sum-with-ESS makes fused
+confidence match information content; F2 → explicit unknown emission and an unassigned
+option priced by the model; F3/F4/F5/F8/F9 → the commit/lock/swap/respawn state machine is
+deleted, so its bugs and tautologies go with it; F6 → evidence enters the joint likelihood
+exactly once; F7 → re-ID is the same likelihood as tracking, with diffusion-correct
+distance scaling; F11/F14/F15/F16/F17 → one objective, exact hard uniqueness, fragment
+boundaries from the model, one scoring vocabulary end-to-end.</p>
+<p><strong>Mapping onto existing modules:</strong> <code>evidence.py</code>/<code>evidence_builder.py</code>/<code>calibration.py</code>/
+<code>cache.py</code> survive unchanged (the sidecar is exactly the right substrate — add an ESS/τ
+estimator over it); <code>catalog.py</code> gains the unknown emission; <code>online.py</code> shrinks to the
+tempered HMM filter (≈150 lines); <code>substrate.py</code>'s solver remains for Layer 1;
+<code>hungarian.py</code> gets the joint cost (replacing <code>_apply_bayesian_identity_cost</code> +
+<code>_assign_respawn</code>'s identity branch); <code>offline.py</code> is replaced by the tracklet-graph
+solver (smoothing.py's forward-backward survives for per-row smoothed decode);
+<code>processing.py</code>'s identity conflict resolver is deleted (subsumed by flow constraints).
+Calibration becomes load-bearing: <code>calibration_required</code> should default True, with
+<code>fit_temperature</code>/ECE (already implemented in <code>calibration.py</code>) run at model-publish time.</p>
+<hr />
+<h2 id="8-open-questions">8. Open questions<a class="headerlink" href="#8-open-questions" title="Permanent link">&para;</a></h2>
+<ol>
+<li><strong>Was the observed mode-3 teleport produced with <code>ENABLE_IDENTITY_ONLINE_DECODER=True</code>?</strong>
+   The within-trajectory jump path (F7) requires it. Check the run's saved config /
+   <code>IdentityRealtime*</code> columns. If the flag was off, mode 3 came from paths B/C (offline
+   assignment or merge) and the priority of fix 6 vs fixes 9-11 changes.</li>
+<li><strong>Are calibration temperatures actually fitted in practice?</strong> <code>CalibrationModel</code>
+   defaults to identity (T=1); <code>calibration_required</code> defaults False. If production models
+   run uncalibrated, F1's inflation is compounded by softmax overconfidence — worth
+   measuring ECE on a held-out identity set for the shipped classifiers.</li>
+<li><strong>What is the empirical crop-evidence autocorrelation τ?</strong> Determines the right
+   tempering constant (fix 3). Measurable directly from an existing evidence sidecar
+   (lag-k agreement of per-frame argmax / correlation of log-posteriors) on
+   <code>ant_cnn_identity</code> / <code>emi_obb_identity</code> — no new tracking runs needed.</li>
+<li><strong>Attribution runs (proposed, not executed):</strong> on <code>emi_obb_identity</code> and
+   <code>ant_cnn_identity</code> fixtures, (a) count <code>IdentityRealtimeLabel</code> flip events per 1k
+   frames with defaults vs with <code>fuse_log_evidence</code> cap = 1.0 nat (worktree toggle) —
+   directly tests F1's share of mode 1; (b) with the decoder flag ON, count
+   trajectory-internal displacement spikes &gt; 5×body with and without a 3-frame rejoin
+   confirmation window — tests F7's share of mode 3; (c) enable PELT on raw vs smoothed
+   evidence and count recovered mid-track label switches — tests F13/F14. Each is a single
+   named-hypothesis run under <code>tools/equivalence/</code> fixtures per the repo's harness
+   conventions (conda env active; verify CSV row counts &gt; 1).</li>
+<li><strong>Is the swap detector ever firing in practice?</strong> Its consecutive-frame requirement
+   (F8) plus the lock erosion (F3) make its firing conditions narrow; the
+   <code>Identity swap fired</code> log line frequency in real runs would show whether it is a live
+   mechanism or dead weight.</li>
+<li><strong><code>IDENTITY_WEIGHT</code> semantics:</strong> the emitted <code>ASSOCIATION_IDENTITY_HINT_SCALE</code> default
+   is 1.0 (schema) while the code fallback is 0.3 (<code>hungarian.py:241</code>); if users enable
+   the decoder flag without touching the weight they get a 3.3× stronger coupling than the
+   code's own default suggests. Which value was intended?</li>
+</ol>
+<hr />
+<h2 id="appendix-a-empirical-probe-run-2026-08-13">Appendix A — Empirical probe (run 2026-08-13)<a class="headerlink" href="#appendix-a-empirical-probe-run-2026-08-13" title="Permanent link">&para;</a></h2>
+<p>Script: <code>scratchpad/identity_decoder_probe.py</code> (session scratchpad), run as
+<code>PYTHONPATH=$PWD/src conda run -n hydra-mps python identity_decoder_probe.py</code> against the
+real <code>OnlineIdentityDecoder</code> with all-default params and a 4-identity catalog, evidence
+built via the code's own <code>catalog.cnn_log_prior</code> (i.e., exactly the worker's top-1
+construction).</p>
+<table>
+<thead>
+<tr>
+<th>Hypothesis</th>
+<th>Result</th>
+</tr>
+</thead>
+<tbody>
+<tr>
+<td>H-A: commit speed, cold start, evidence 0.6-on-A per frame</td>
+<td>conf 0.868 after 2 frames, 0.988 after 4; committed at frame 5 (hit gate, not confidence gate, was binding)</td>
+</tr>
+<tr>
+<td>H-D: unknown annihilation</td>
+<td>p(unknown) = 2.3e-7 after 1 frame, 8.5e-9 steady state</td>
+</tr>
+<tr>
+<td>H-B: slot-lock bias sign</td>
+<td>p(A) 0.999343 → 0.999270 after <code>_apply_slot_lock_bias</code> (strength 0.9): the lock <strong>decreases</strong> the locked label's probability</td>
+</tr>
+<tr>
+<td>H-C: committed + locked slot, isolated, wrong evidence B@0.6</td>
+<td>committed label flipped A→B after <strong>5 frames</strong>; lock destroyed; no gate resisted</td>
+</tr>
+<tr>
+<td>H-E: recovery</td>
+<td>flipped back B→A after 5 frames of A@0.6 — symmetric flapping</td>
+</tr>
+</tbody>
+</table>
+<p>These are unit-level dynamics of the decoder, independent of detector/video; they confirm
+F1–F4 quantitatively.</p>
+
+
+
+
+
+
+
+
+
+
+
+
+                
+              </article>
+            </div>
+          
+          
+<script>var target=document.getElementById(location.hash.slice(1));target&&target.name&&(target.checked=target.name.startsWith("__tabbed_"))</script>
+        </div>
+        
+          <button type="button" class="md-top md-icon" data-md-component="top" hidden>
+  
+  <svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 24 24"><path d="M13 20h-2V8l-5.5 5.5-1.42-1.42L12 4.16l7.92 7.92-1.42 1.42L13 8z"/></svg>
+  Back to top
+</button>
+        
+      </main>
+      
+        <footer class="md-footer">
+  
+  <div class="md-footer-meta md-typeset">
+    <div class="md-footer-meta__inner md-grid">
+      <div class="md-copyright">
+  
+  
+    Made with
+    <a href="https://squidfunk.github.io/mkdocs-material/" target="_blank" rel="noopener">
+      Material for MkDocs
+    </a>
+  
+</div>
+      
+    </div>
+  </div>
+</footer>
+      
+    </div>
+    <div class="md-dialog" data-md-component="dialog">
+      <div class="md-dialog__inner md-typeset"></div>
+    </div>
+    
+    
+    <script id="__config" type="application/json">{"base": "../../..", "features": ["navigation.tabs", "navigation.sections", "navigation.expand", "navigation.top", "content.code.copy", "content.action.edit", "search.suggest", "search.highlight"], "search": "../../../assets/javascripts/workers/search.6ce7567c.min.js", "translations": {"clipboard.copied": "Copied to clipboard", "clipboard.copy": "Copy to clipboard", "search.result.more.one": "1 more on this page", "search.result.more.other": "# more on this page", "search.result.none": "No matching documents", "search.result.one": "1 matching document", "search.result.other": "# matching documents", "search.result.placeholder": "Type to start searching", "search.result.term.missing": "Missing", "select.version": "Select version"}, "version": {"default": "latest", "provider": "mike"}}</script>
+    
+    
+      <script src="../../../assets/javascripts/bundle.83f73b43.min.js"></script>
+      
+    
+  </body>
+</html>

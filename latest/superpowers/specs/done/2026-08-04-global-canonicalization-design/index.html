@@ -1,0 +1,2569 @@
+
+<!doctype html>
+<html lang="en" class="no-js">
+  <head>
+    
+      <meta charset="utf-8">
+      <meta name="viewport" content="width=device-width,initial-scale=1">
+      
+        <meta name="description" content="User and developer documentation for HYDRA Suite">
+      
+      
+      
+        <link rel="canonical" href="https://neurorishika.github.io/hydra-suite/latest/superpowers/specs/done/2026-08-04-global-canonicalization-design/">
+      
+      
+      
+      
+      <link rel="icon" href="../../../../assets/images/favicon.png">
+      <meta name="generator" content="mkdocs-1.6.1, mkdocs-material-9.5.43">
+    
+    
+      
+        <title>Global canonicalization — design - HYDRA Suite Docs</title>
+      
+    
+    
+      <link rel="stylesheet" href="../../../../assets/stylesheets/main.0253249f.min.css">
+      
+        
+        <link rel="stylesheet" href="../../../../assets/stylesheets/palette.06af60db.min.css">
+      
+      
+
+
+    
+    
+      
+    
+    
+      
+        
+        
+        <link rel="preconnect" href="https://fonts.gstatic.com" crossorigin>
+        <link rel="stylesheet" href="https://fonts.googleapis.com/css?family=Roboto:300,300i,400,400i,700,700i%7CRoboto+Mono:400,400i,700,700i&display=fallback">
+        <style>:root{--md-text-font:"Roboto";--md-code-font:"Roboto Mono"}</style>
+      
+    
+    
+      <link rel="stylesheet" href="../../../../assets/_mkdocstrings.css">
+    
+    <script>__md_scope=new URL("../../../..",location),__md_hash=e=>[...e].reduce(((e,_)=>(e<<5)-e+_.charCodeAt(0)),0),__md_get=(e,_=localStorage,t=__md_scope)=>JSON.parse(_.getItem(t.pathname+"."+e)),__md_set=(e,_,t=localStorage,a=__md_scope)=>{try{t.setItem(a.pathname+"."+e,JSON.stringify(_))}catch(e){}}</script>
+    
+      
+
+    
+    
+    
+  </head>
+  
+  
+    
+    
+      
+    
+    
+    
+    
+    <body dir="ltr" data-md-color-scheme="default" data-md-color-primary="blue" data-md-color-accent="light-blue">
+  
+    
+    <input class="md-toggle" data-md-toggle="drawer" type="checkbox" id="__drawer" autocomplete="off">
+    <input class="md-toggle" data-md-toggle="search" type="checkbox" id="__search" autocomplete="off">
+    <label class="md-overlay" for="__drawer"></label>
+    <div data-md-component="skip">
+      
+        
+        <a href="#global-canonicalization-design" class="md-skip">
+          Skip to content
+        </a>
+      
+    </div>
+    <div data-md-component="announce">
+      
+    </div>
+    
+      <div data-md-color-scheme="default" data-md-component="outdated" hidden>
+        
+      </div>
+    
+    
+      
+
+<header class="md-header" data-md-component="header">
+  <nav class="md-header__inner md-grid" aria-label="Header">
+    <a href="../../../.." title="HYDRA Suite Docs" class="md-header__button md-logo" aria-label="HYDRA Suite Docs" data-md-component="logo">
+      
+  
+  <svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 24 24"><path d="M12 8a3 3 0 0 0 3-3 3 3 0 0 0-3-3 3 3 0 0 0-3 3 3 3 0 0 0 3 3m0 3.54C9.64 9.35 6.5 8 3 8v11c3.5 0 6.64 1.35 9 3.54 2.36-2.19 5.5-3.54 9-3.54V8c-3.5 0-6.64 1.35-9 3.54"/></svg>
+
+    </a>
+    <label class="md-header__button md-icon" for="__drawer">
+      
+      <svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 24 24"><path d="M3 6h18v2H3zm0 5h18v2H3zm0 5h18v2H3z"/></svg>
+    </label>
+    <div class="md-header__title" data-md-component="header-title">
+      <div class="md-header__ellipsis">
+        <div class="md-header__topic">
+          <span class="md-ellipsis">
+            HYDRA Suite Docs
+          </span>
+        </div>
+        <div class="md-header__topic" data-md-component="header-topic">
+          <span class="md-ellipsis">
+            
+              Global canonicalization — design
+            
+          </span>
+        </div>
+      </div>
+    </div>
+    
+      
+        <form class="md-header__option" data-md-component="palette">
+  
+    
+    
+    
+    <input class="md-option" data-md-color-media="(prefers-color-scheme: light)" data-md-color-scheme="default" data-md-color-primary="blue" data-md-color-accent="light-blue"  aria-label="Switch to dark mode"  type="radio" name="__palette" id="__palette_0">
+    
+      <label class="md-header__button md-icon" title="Switch to dark mode" for="__palette_1" hidden>
+        <svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 24 24"><path d="m17.75 4.09-2.53 1.94.91 3.06-2.63-1.81-2.63 1.81.91-3.06-2.53-1.94L12.44 4l1.06-3 1.06 3zm3.5 6.91-1.64 1.25.59 1.98-1.7-1.17-1.7 1.17.59-1.98L15.75 11l2.06-.05L18.5 9l.69 1.95zm-2.28 4.95c.83-.08 1.72 1.1 1.19 1.85-.32.45-.66.87-1.08 1.27C15.17 23 8.84 23 4.94 19.07c-3.91-3.9-3.91-10.24 0-14.14.4-.4.82-.76 1.27-1.08.75-.53 1.93.36 1.85 1.19-.27 2.86.69 5.83 2.89 8.02a9.96 9.96 0 0 0 8.02 2.89m-1.64 2.02a12.08 12.08 0 0 1-7.8-3.47c-2.17-2.19-3.33-5-3.49-7.82-2.81 3.14-2.7 7.96.31 10.98 3.02 3.01 7.84 3.12 10.98.31"/></svg>
+      </label>
+    
+  
+    
+    
+    
+    <input class="md-option" data-md-color-media="(prefers-color-scheme: dark)" data-md-color-scheme="slate" data-md-color-primary="blue" data-md-color-accent="light-blue"  aria-label="Switch to light mode"  type="radio" name="__palette" id="__palette_1">
+    
+      <label class="md-header__button md-icon" title="Switch to light mode" for="__palette_0" hidden>
+        <svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 24 24"><path d="M12 7a5 5 0 0 1 5 5 5 5 0 0 1-5 5 5 5 0 0 1-5-5 5 5 0 0 1 5-5m0 2a3 3 0 0 0-3 3 3 3 0 0 0 3 3 3 3 0 0 0 3-3 3 3 0 0 0-3-3m0-7 2.39 3.42C13.65 5.15 12.84 5 12 5s-1.65.15-2.39.42zM3.34 7l4.16-.35A7.2 7.2 0 0 0 5.94 8.5c-.44.74-.69 1.5-.83 2.29zm.02 10 1.76-3.77a7.131 7.131 0 0 0 2.38 4.14zM20.65 7l-1.77 3.79a7.02 7.02 0 0 0-2.38-4.15zm-.01 10-4.14.36c.59-.51 1.12-1.14 1.54-1.86.42-.73.69-1.5.83-2.29zM12 22l-2.41-3.44c.74.27 1.55.44 2.41.44.82 0 1.63-.17 2.37-.44z"/></svg>
+      </label>
+    
+  
+</form>
+      
+    
+    
+      <script>var palette=__md_get("__palette");if(palette&&palette.color){if("(prefers-color-scheme)"===palette.color.media){var media=matchMedia("(prefers-color-scheme: light)"),input=document.querySelector(media.matches?"[data-md-color-media='(prefers-color-scheme: light)']":"[data-md-color-media='(prefers-color-scheme: dark)']");palette.color.media=input.getAttribute("data-md-color-media"),palette.color.scheme=input.getAttribute("data-md-color-scheme"),palette.color.primary=input.getAttribute("data-md-color-primary"),palette.color.accent=input.getAttribute("data-md-color-accent")}for(var[key,value]of Object.entries(palette.color))document.body.setAttribute("data-md-color-"+key,value)}</script>
+    
+    
+    
+      <label class="md-header__button md-icon" for="__search">
+        
+        <svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 24 24"><path d="M9.5 3A6.5 6.5 0 0 1 16 9.5c0 1.61-.59 3.09-1.56 4.23l.27.27h.79l5 5-1.5 1.5-5-5v-.79l-.27-.27A6.52 6.52 0 0 1 9.5 16 6.5 6.5 0 0 1 3 9.5 6.5 6.5 0 0 1 9.5 3m0 2C7 5 5 7 5 9.5S7 14 9.5 14 14 12 14 9.5 12 5 9.5 5"/></svg>
+      </label>
+      <div class="md-search" data-md-component="search" role="dialog">
+  <label class="md-search__overlay" for="__search"></label>
+  <div class="md-search__inner" role="search">
+    <form class="md-search__form" name="search">
+      <input type="text" class="md-search__input" name="query" aria-label="Search" placeholder="Search" autocapitalize="off" autocorrect="off" autocomplete="off" spellcheck="false" data-md-component="search-query" required>
+      <label class="md-search__icon md-icon" for="__search">
+        
+        <svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 24 24"><path d="M9.5 3A6.5 6.5 0 0 1 16 9.5c0 1.61-.59 3.09-1.56 4.23l.27.27h.79l5 5-1.5 1.5-5-5v-.79l-.27-.27A6.52 6.52 0 0 1 9.5 16 6.5 6.5 0 0 1 3 9.5 6.5 6.5 0 0 1 9.5 3m0 2C7 5 5 7 5 9.5S7 14 9.5 14 14 12 14 9.5 12 5 9.5 5"/></svg>
+        
+        <svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 24 24"><path d="M20 11v2H8l5.5 5.5-1.42 1.42L4.16 12l7.92-7.92L13.5 5.5 8 11z"/></svg>
+      </label>
+      <nav class="md-search__options" aria-label="Search">
+        
+        <button type="reset" class="md-search__icon md-icon" title="Clear" aria-label="Clear" tabindex="-1">
+          
+          <svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 24 24"><path d="M19 6.41 17.59 5 12 10.59 6.41 5 5 6.41 10.59 12 5 17.59 6.41 19 12 13.41 17.59 19 19 17.59 13.41 12z"/></svg>
+        </button>
+      </nav>
+      
+        <div class="md-search__suggest" data-md-component="search-suggest"></div>
+      
+    </form>
+    <div class="md-search__output">
+      <div class="md-search__scrollwrap" tabindex="0" data-md-scrollfix>
+        <div class="md-search-result" data-md-component="search-result">
+          <div class="md-search-result__meta">
+            Initializing search
+          </div>
+          <ol class="md-search-result__list" role="presentation"></ol>
+        </div>
+      </div>
+    </div>
+  </div>
+</div>
+    
+    
+      <div class="md-header__source">
+        <a href="https://github.com/neurorishika/hydra-suite" title="Go to repository" class="md-source" data-md-component="source">
+  <div class="md-source__icon md-icon">
+    
+    <svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 448 512"><!--! Font Awesome Free 6.6.0 by @fontawesome - https://fontawesome.com License - https://fontawesome.com/license/free (Icons: CC BY 4.0, Fonts: SIL OFL 1.1, Code: MIT License) Copyright 2024 Fonticons, Inc.--><path d="M439.55 236.05 244 40.45a28.87 28.87 0 0 0-40.81 0l-40.66 40.63 51.52 51.52c27.06-9.14 52.68 16.77 43.39 43.68l49.66 49.66c34.23-11.8 61.18 31 35.47 56.69-26.49 26.49-70.21-2.87-56-37.34L240.22 199v121.85c25.3 12.54 22.26 41.85 9.08 55a34.34 34.34 0 0 1-48.55 0c-17.57-17.6-11.07-46.91 11.25-56v-123c-20.8-8.51-24.6-30.74-18.64-45L142.57 101 8.45 235.14a28.86 28.86 0 0 0 0 40.81l195.61 195.6a28.86 28.86 0 0 0 40.8 0l194.69-194.69a28.86 28.86 0 0 0 0-40.81"/></svg>
+  </div>
+  <div class="md-source__repository">
+    neurorishika/hydra-suite
+  </div>
+</a>
+      </div>
+    
+  </nav>
+  
+</header>
+    
+    <div class="md-container" data-md-component="container">
+      
+      
+        
+          
+            
+<nav class="md-tabs" aria-label="Tabs" data-md-component="tabs">
+  <div class="md-grid">
+    <ul class="md-tabs__list">
+      
+        
+  
+  
+  
+    <li class="md-tabs__item">
+      <a href="../../../.." class="md-tabs__link">
+        
+  
+    
+  
+  Home
+
+      </a>
+    </li>
+  
+
+      
+        
+  
+  
+  
+    
+    
+      <li class="md-tabs__item">
+        <a href="../../../../getting-started/installation/" class="md-tabs__link">
+          
+  
+  Getting Started
+
+        </a>
+      </li>
+    
+  
+
+      
+        
+  
+  
+  
+    
+    
+      <li class="md-tabs__item">
+        <a href="../../../../user-guide/overview/" class="md-tabs__link">
+          
+  
+  User Guide
+
+        </a>
+      </li>
+    
+  
+
+      
+        
+  
+  
+  
+    
+    
+      <li class="md-tabs__item">
+        <a href="../../../../developer-guide/architecture/" class="md-tabs__link">
+          
+  
+  Developer Guide
+
+        </a>
+      </li>
+    
+  
+
+      
+        
+  
+  
+  
+    
+    
+      <li class="md-tabs__item">
+        <a href="../../../../reference/api-index/" class="md-tabs__link">
+          
+  
+  Reference
+
+        </a>
+      </li>
+    
+  
+
+      
+    </ul>
+  </div>
+</nav>
+          
+        
+      
+      <main class="md-main" data-md-component="main">
+        <div class="md-main__inner md-grid">
+          
+            
+              
+              <div class="md-sidebar md-sidebar--primary" data-md-component="sidebar" data-md-type="navigation" >
+                <div class="md-sidebar__scrollwrap">
+                  <div class="md-sidebar__inner">
+                    
+
+
+  
+
+
+<nav class="md-nav md-nav--primary md-nav--lifted" aria-label="Navigation" data-md-level="0">
+  <label class="md-nav__title" for="__drawer">
+    <a href="../../../.." title="HYDRA Suite Docs" class="md-nav__button md-logo" aria-label="HYDRA Suite Docs" data-md-component="logo">
+      
+  
+  <svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 24 24"><path d="M12 8a3 3 0 0 0 3-3 3 3 0 0 0-3-3 3 3 0 0 0-3 3 3 3 0 0 0 3 3m0 3.54C9.64 9.35 6.5 8 3 8v11c3.5 0 6.64 1.35 9 3.54 2.36-2.19 5.5-3.54 9-3.54V8c-3.5 0-6.64 1.35-9 3.54"/></svg>
+
+    </a>
+    HYDRA Suite Docs
+  </label>
+  
+    <div class="md-nav__source">
+      <a href="https://github.com/neurorishika/hydra-suite" title="Go to repository" class="md-source" data-md-component="source">
+  <div class="md-source__icon md-icon">
+    
+    <svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 448 512"><!--! Font Awesome Free 6.6.0 by @fontawesome - https://fontawesome.com License - https://fontawesome.com/license/free (Icons: CC BY 4.0, Fonts: SIL OFL 1.1, Code: MIT License) Copyright 2024 Fonticons, Inc.--><path d="M439.55 236.05 244 40.45a28.87 28.87 0 0 0-40.81 0l-40.66 40.63 51.52 51.52c27.06-9.14 52.68 16.77 43.39 43.68l49.66 49.66c34.23-11.8 61.18 31 35.47 56.69-26.49 26.49-70.21-2.87-56-37.34L240.22 199v121.85c25.3 12.54 22.26 41.85 9.08 55a34.34 34.34 0 0 1-48.55 0c-17.57-17.6-11.07-46.91 11.25-56v-123c-20.8-8.51-24.6-30.74-18.64-45L142.57 101 8.45 235.14a28.86 28.86 0 0 0 0 40.81l195.61 195.6a28.86 28.86 0 0 0 40.8 0l194.69-194.69a28.86 28.86 0 0 0 0-40.81"/></svg>
+  </div>
+  <div class="md-source__repository">
+    neurorishika/hydra-suite
+  </div>
+</a>
+    </div>
+  
+  <ul class="md-nav__list" data-md-scrollfix>
+    
+      
+      
+  
+  
+  
+  
+    <li class="md-nav__item">
+      <a href="../../../.." class="md-nav__link">
+        
+  
+  <span class="md-ellipsis">
+    Home
+  </span>
+  
+
+      </a>
+    </li>
+  
+
+    
+      
+      
+  
+  
+  
+  
+    
+    
+    
+      
+      
+        
+      
+    
+    
+    <li class="md-nav__item md-nav__item--nested">
+      
+        
+        
+          
+        
+        <input class="md-nav__toggle md-toggle md-toggle--indeterminate" type="checkbox" id="__nav_2" >
+        
+          
+          <label class="md-nav__link" for="__nav_2" id="__nav_2_label" tabindex="0">
+            
+  
+  <span class="md-ellipsis">
+    Getting Started
+  </span>
+  
+
+            <span class="md-nav__icon md-icon"></span>
+          </label>
+        
+        <nav class="md-nav" data-md-level="1" aria-labelledby="__nav_2_label" aria-expanded="false">
+          <label class="md-nav__title" for="__nav_2">
+            <span class="md-nav__icon md-icon"></span>
+            Getting Started
+          </label>
+          <ul class="md-nav__list" data-md-scrollfix>
+            
+              
+                
+  
+  
+  
+  
+    <li class="md-nav__item">
+      <a href="../../../../getting-started/installation/" class="md-nav__link">
+        
+  
+  <span class="md-ellipsis">
+    Installation
+  </span>
+  
+
+      </a>
+    </li>
+  
+
+              
+            
+              
+                
+  
+  
+  
+  
+    <li class="md-nav__item">
+      <a href="../../../../getting-started/environments/" class="md-nav__link">
+        
+  
+  <span class="md-ellipsis">
+    Environments and Makefile
+  </span>
+  
+
+      </a>
+    </li>
+  
+
+              
+            
+              
+                
+  
+  
+  
+  
+    <li class="md-nav__item">
+      <a href="../../../../getting-started/integrations/" class="md-nav__link">
+        
+  
+  <span class="md-ellipsis">
+    Integrations
+  </span>
+  
+
+      </a>
+    </li>
+  
+
+              
+            
+              
+                
+  
+  
+  
+  
+    <li class="md-nav__item">
+      <a href="../../../../getting-started/quickstart-hydra/" class="md-nav__link">
+        
+  
+  <span class="md-ellipsis">
+    Quickstart (TrackerKit)
+  </span>
+  
+
+      </a>
+    </li>
+  
+
+              
+            
+              
+                
+  
+  
+  
+  
+    <li class="md-nav__item">
+      <a href="../../../../getting-started/quickstart-posekit/" class="md-nav__link">
+        
+  
+  <span class="md-ellipsis">
+    Quickstart (PoseKit)
+  </span>
+  
+
+      </a>
+    </li>
+  
+
+              
+            
+              
+                
+  
+  
+  
+  
+    <li class="md-nav__item">
+      <a href="../../../../getting-started/platforms/" class="md-nav__link">
+        
+  
+  <span class="md-ellipsis">
+    Platform Notes
+  </span>
+  
+
+      </a>
+    </li>
+  
+
+              
+            
+          </ul>
+        </nav>
+      
+    </li>
+  
+
+    
+      
+      
+  
+  
+  
+  
+    
+    
+    
+      
+      
+        
+      
+    
+    
+    <li class="md-nav__item md-nav__item--nested">
+      
+        
+        
+          
+        
+        <input class="md-nav__toggle md-toggle md-toggle--indeterminate" type="checkbox" id="__nav_3" >
+        
+          
+          <label class="md-nav__link" for="__nav_3" id="__nav_3_label" tabindex="0">
+            
+  
+  <span class="md-ellipsis">
+    User Guide
+  </span>
+  
+
+            <span class="md-nav__icon md-icon"></span>
+          </label>
+        
+        <nav class="md-nav" data-md-level="1" aria-labelledby="__nav_3_label" aria-expanded="false">
+          <label class="md-nav__title" for="__nav_3">
+            <span class="md-nav__icon md-icon"></span>
+            User Guide
+          </label>
+          <ul class="md-nav__list" data-md-scrollfix>
+            
+              
+                
+  
+  
+  
+  
+    <li class="md-nav__item">
+      <a href="../../../../user-guide/overview/" class="md-nav__link">
+        
+  
+  <span class="md-ellipsis">
+    Overview
+  </span>
+  
+
+      </a>
+    </li>
+  
+
+              
+            
+              
+                
+  
+  
+  
+  
+    <li class="md-nav__item">
+      <a href="../../../../user-guide/workflow/" class="md-nav__link">
+        
+  
+  <span class="md-ellipsis">
+    End-to-End Workflow
+  </span>
+  
+
+      </a>
+    </li>
+  
+
+              
+            
+              
+                
+  
+  
+  
+  
+    <li class="md-nav__item">
+      <a href="../../../../user-guide/detection-modes/" class="md-nav__link">
+        
+  
+  <span class="md-ellipsis">
+    Detection Modes
+  </span>
+  
+
+      </a>
+    </li>
+  
+
+              
+            
+              
+                
+  
+  
+  
+  
+    <li class="md-nav__item">
+      <a href="../../../../user-guide/tracking-and-merging/" class="md-nav__link">
+        
+  
+  <span class="md-ellipsis">
+    Tracking and Merging
+  </span>
+  
+
+      </a>
+    </li>
+  
+
+              
+            
+              
+                
+  
+  
+  
+  
+    <li class="md-nav__item">
+      <a href="../../../../user-guide/post-processing/" class="md-nav__link">
+        
+  
+  <span class="md-ellipsis">
+    Post-processing
+  </span>
+  
+
+      </a>
+    </li>
+  
+
+              
+            
+              
+                
+  
+  
+  
+  
+    <li class="md-nav__item">
+      <a href="../../../../user-guide/configuration-reference/" class="md-nav__link">
+        
+  
+  <span class="md-ellipsis">
+    Configuration Reference
+  </span>
+  
+
+      </a>
+    </li>
+  
+
+              
+            
+              
+                
+  
+  
+  
+  
+    <li class="md-nav__item">
+      <a href="../../../../user-guide/compute-runtimes/" class="md-nav__link">
+        
+  
+  <span class="md-ellipsis">
+    Compute Runtimes
+  </span>
+  
+
+      </a>
+    </li>
+  
+
+              
+            
+              
+                
+  
+  
+  
+  
+    <li class="md-nav__item">
+      <a href="../../../../user-guide/outputs-and-csv-schema/" class="md-nav__link">
+        
+  
+  <span class="md-ellipsis">
+    Outputs and CSV Schema
+  </span>
+  
+
+      </a>
+    </li>
+  
+
+              
+            
+              
+                
+  
+  
+  
+  
+    <li class="md-nav__item">
+      <a href="../../../../user-guide/dataset-generation/" class="md-nav__link">
+        
+  
+  <span class="md-ellipsis">
+    Dataset Generation
+  </span>
+  
+
+      </a>
+    </li>
+  
+
+              
+            
+              
+                
+  
+  
+  
+  
+    <li class="md-nav__item">
+      <a href="../../../../user-guide/individual-analysis/" class="md-nav__link">
+        
+  
+  <span class="md-ellipsis">
+    Individual Analysis
+  </span>
+  
+
+      </a>
+    </li>
+  
+
+              
+            
+              
+                
+  
+  
+  
+  
+    <li class="md-nav__item">
+      <a href="../../../../user-guide/posekit/" class="md-nav__link">
+        
+  
+  <span class="md-ellipsis">
+    PoseKit
+  </span>
+  
+
+      </a>
+    </li>
+  
+
+              
+            
+              
+                
+  
+  
+  
+  
+    <li class="md-nav__item">
+      <a href="../../../../user-guide/classkit/" class="md-nav__link">
+        
+  
+  <span class="md-ellipsis">
+    ClassKit
+  </span>
+  
+
+      </a>
+    </li>
+  
+
+              
+            
+              
+                
+  
+  
+  
+  
+    <li class="md-nav__item">
+      <a href="../../../../user-guide/detectkit/" class="md-nav__link">
+        
+  
+  <span class="md-ellipsis">
+    DetectKit
+  </span>
+  
+
+      </a>
+    </li>
+  
+
+              
+            
+              
+                
+  
+  
+  
+  
+    <li class="md-nav__item">
+      <a href="../../../../runbooks/detectkit-headless-training/" class="md-nav__link">
+        
+  
+  <span class="md-ellipsis">
+    DetectKit Headless Training
+  </span>
+  
+
+      </a>
+    </li>
+  
+
+              
+            
+              
+                
+  
+  
+  
+  
+    <li class="md-nav__item">
+      <a href="../../../../user-guide/detectkit-semantic-escalation/" class="md-nav__link">
+        
+  
+  <span class="md-ellipsis">
+    DetectKit: Semantic Escalation (SAM3)
+  </span>
+  
+
+      </a>
+    </li>
+  
+
+              
+            
+              
+                
+  
+  
+  
+  
+    <li class="md-nav__item">
+      <a href="../../../../user-guide/detectkit-sahi-calibration/" class="md-nav__link">
+        
+  
+  <span class="md-ellipsis">
+    DetectKit: SAHI Calibration Profiles
+  </span>
+  
+
+      </a>
+    </li>
+  
+
+              
+            
+              
+                
+  
+  
+  
+  
+    <li class="md-nav__item">
+      <a href="../../../../user-guide/filterkit/" class="md-nav__link">
+        
+  
+  <span class="md-ellipsis">
+    FilterKit
+  </span>
+  
+
+      </a>
+    </li>
+  
+
+              
+            
+              
+                
+  
+  
+  
+  
+    <li class="md-nav__item">
+      <a href="../../../../user-guide/refinekit/" class="md-nav__link">
+        
+  
+  <span class="md-ellipsis">
+    RefineKit
+  </span>
+  
+
+      </a>
+    </li>
+  
+
+              
+            
+              
+                
+  
+  
+  
+  
+    <li class="md-nav__item">
+      <a href="../../../../user-guide/troubleshooting/" class="md-nav__link">
+        
+  
+  <span class="md-ellipsis">
+    Troubleshooting
+  </span>
+  
+
+      </a>
+    </li>
+  
+
+              
+            
+          </ul>
+        </nav>
+      
+    </li>
+  
+
+    
+      
+      
+  
+  
+  
+  
+    
+    
+    
+      
+      
+        
+      
+    
+    
+    <li class="md-nav__item md-nav__item--nested">
+      
+        
+        
+          
+        
+        <input class="md-nav__toggle md-toggle md-toggle--indeterminate" type="checkbox" id="__nav_4" >
+        
+          
+          <label class="md-nav__link" for="__nav_4" id="__nav_4_label" tabindex="0">
+            
+  
+  <span class="md-ellipsis">
+    Developer Guide
+  </span>
+  
+
+            <span class="md-nav__icon md-icon"></span>
+          </label>
+        
+        <nav class="md-nav" data-md-level="1" aria-labelledby="__nav_4_label" aria-expanded="false">
+          <label class="md-nav__title" for="__nav_4">
+            <span class="md-nav__icon md-icon"></span>
+            Developer Guide
+          </label>
+          <ul class="md-nav__list" data-md-scrollfix>
+            
+              
+                
+  
+  
+  
+  
+    <li class="md-nav__item">
+      <a href="../../../../developer-guide/architecture/" class="md-nav__link">
+        
+  
+  <span class="md-ellipsis">
+    Architecture
+  </span>
+  
+
+      </a>
+    </li>
+  
+
+              
+            
+              
+                
+  
+  
+  
+  
+    <li class="md-nav__item">
+      <a href="../../../../developer-guide/module-map/" class="md-nav__link">
+        
+  
+  <span class="md-ellipsis">
+    Module Map
+  </span>
+  
+
+      </a>
+    </li>
+  
+
+              
+            
+              
+                
+  
+  
+  
+  
+    <li class="md-nav__item">
+      <a href="../../../../developer-guide/data-flow/" class="md-nav__link">
+        
+  
+  <span class="md-ellipsis">
+    Data Flow
+  </span>
+  
+
+      </a>
+    </li>
+  
+
+              
+            
+              
+                
+  
+  
+  
+  
+    <li class="md-nav__item">
+      <a href="../../../../developer-guide/tracking-algorithm-deep-dive/" class="md-nav__link">
+        
+  
+  <span class="md-ellipsis">
+    Tracking Algorithm Deep Dive
+  </span>
+  
+
+      </a>
+    </li>
+  
+
+              
+            
+              
+                
+  
+  
+  
+  
+    <li class="md-nav__item">
+      <a href="../../../../developer-guide/tracking-optimization/" class="md-nav__link">
+        
+  
+  <span class="md-ellipsis">
+    Tracking Optimization
+  </span>
+  
+
+      </a>
+    </li>
+  
+
+              
+            
+              
+                
+  
+  
+  
+  
+    <li class="md-nav__item">
+      <a href="../../../../developer-guide/gpu-backends/" class="md-nav__link">
+        
+  
+  <span class="md-ellipsis">
+    GPU Backends
+  </span>
+  
+
+      </a>
+    </li>
+  
+
+              
+            
+              
+                
+  
+  
+  
+  
+    <li class="md-nav__item">
+      <a href="../../../../developer-guide/runtime-integration/" class="md-nav__link">
+        
+  
+  <span class="md-ellipsis">
+    Runtime Integration
+  </span>
+  
+
+      </a>
+    </li>
+  
+
+              
+            
+              
+                
+  
+  
+  
+  
+    <li class="md-nav__item">
+      <a href="../../../../developer-guide/resource-containment/" class="md-nav__link">
+        
+  
+  <span class="md-ellipsis">
+    Resource Containment
+  </span>
+  
+
+      </a>
+    </li>
+  
+
+              
+            
+              
+                
+  
+  
+  
+  
+    <li class="md-nav__item">
+      <a href="../../../../developer-guide/profiling/" class="md-nav__link">
+        
+  
+  <span class="md-ellipsis">
+    Profiling
+  </span>
+  
+
+      </a>
+    </li>
+  
+
+              
+            
+              
+                
+  
+  
+  
+  
+    <li class="md-nav__item">
+      <a href="../../../../developer-guide/dependency-cuda-updates/" class="md-nav__link">
+        
+  
+  <span class="md-ellipsis">
+    CUDA Dependency Updates
+  </span>
+  
+
+      </a>
+    </li>
+  
+
+              
+            
+              
+                
+  
+  
+  
+  
+    <li class="md-nav__item">
+      <a href="../../../../developer-guide/performance-tuning/" class="md-nav__link">
+        
+  
+  <span class="md-ellipsis">
+    Performance Tuning
+  </span>
+  
+
+      </a>
+    </li>
+  
+
+              
+            
+              
+                
+  
+  
+  
+  
+    <li class="md-nav__item">
+      <a href="../../../../developer-guide/inference-fast-mode/" class="md-nav__link">
+        
+  
+  <span class="md-ellipsis">
+    Inference Fast Mode
+  </span>
+  
+
+      </a>
+    </li>
+  
+
+              
+            
+              
+                
+  
+  
+  
+  
+    <li class="md-nav__item">
+      <a href="../../../../developer-guide/confidence-metrics/" class="md-nav__link">
+        
+  
+  <span class="md-ellipsis">
+    Confidence Metrics
+  </span>
+  
+
+      </a>
+    </li>
+  
+
+              
+            
+              
+                
+  
+  
+  
+  
+    <li class="md-nav__item">
+      <a href="../../../../developer-guide/extending-detection/" class="md-nav__link">
+        
+  
+  <span class="md-ellipsis">
+    Extending Detection
+  </span>
+  
+
+      </a>
+    </li>
+  
+
+              
+            
+              
+                
+  
+  
+  
+  
+    <li class="md-nav__item">
+      <a href="../../../../developer-guide/extending-identity/" class="md-nav__link">
+        
+  
+  <span class="md-ellipsis">
+    Extending Identity
+  </span>
+  
+
+      </a>
+    </li>
+  
+
+              
+            
+              
+                
+  
+  
+  
+  
+    <li class="md-nav__item">
+      <a href="../../../../developer-guide/code-health/" class="md-nav__link">
+        
+  
+  <span class="md-ellipsis">
+    Code Health & Auditing
+  </span>
+  
+
+      </a>
+    </li>
+  
+
+              
+            
+              
+                
+  
+  
+  
+  
+    <li class="md-nav__item">
+      <a href="../../../../developer-guide/publishing/" class="md-nav__link">
+        
+  
+  <span class="md-ellipsis">
+    Publishing
+  </span>
+  
+
+      </a>
+    </li>
+  
+
+              
+            
+              
+                
+  
+  
+  
+  
+    <li class="md-nav__item">
+      <a href="../../../../developer-guide/contributing/" class="md-nav__link">
+        
+  
+  <span class="md-ellipsis">
+    Contributing
+  </span>
+  
+
+      </a>
+    </li>
+  
+
+              
+            
+          </ul>
+        </nav>
+      
+    </li>
+  
+
+    
+      
+      
+  
+  
+  
+  
+    
+    
+    
+      
+      
+        
+      
+    
+    
+    <li class="md-nav__item md-nav__item--nested">
+      
+        
+        
+          
+        
+        <input class="md-nav__toggle md-toggle md-toggle--indeterminate" type="checkbox" id="__nav_5" >
+        
+          
+          <label class="md-nav__link" for="__nav_5" id="__nav_5_label" tabindex="0">
+            
+  
+  <span class="md-ellipsis">
+    Reference
+  </span>
+  
+
+            <span class="md-nav__icon md-icon"></span>
+          </label>
+        
+        <nav class="md-nav" data-md-level="1" aria-labelledby="__nav_5_label" aria-expanded="false">
+          <label class="md-nav__title" for="__nav_5">
+            <span class="md-nav__icon md-icon"></span>
+            Reference
+          </label>
+          <ul class="md-nav__list" data-md-scrollfix>
+            
+              
+                
+  
+  
+  
+  
+    <li class="md-nav__item">
+      <a href="../../../../reference/api-index/" class="md-nav__link">
+        
+  
+  <span class="md-ellipsis">
+    API Index
+  </span>
+  
+
+      </a>
+    </li>
+  
+
+              
+            
+              
+                
+  
+  
+  
+  
+    <li class="md-nav__item">
+      <a href="../../../../reference/ui-components-hydra/" class="md-nav__link">
+        
+  
+  <span class="md-ellipsis">
+    UI Components (TrackerKit)
+  </span>
+  
+
+      </a>
+    </li>
+  
+
+              
+            
+              
+                
+  
+  
+  
+  
+    <li class="md-nav__item">
+      <a href="../../../../reference/ui-components-posekit/" class="md-nav__link">
+        
+  
+  <span class="md-ellipsis">
+    UI Components (PoseKit)
+  </span>
+  
+
+      </a>
+    </li>
+  
+
+              
+            
+              
+                
+  
+  
+  
+  
+    <li class="md-nav__item">
+      <a href="../../../../reference/api-app/" class="md-nav__link">
+        
+  
+  <span class="md-ellipsis">
+    API (Launcher)
+  </span>
+  
+
+      </a>
+    </li>
+  
+
+              
+            
+              
+                
+  
+  
+  
+  
+    <li class="md-nav__item">
+      <a href="../../../../reference/api-core/" class="md-nav__link">
+        
+  
+  <span class="md-ellipsis">
+    API (Core)
+  </span>
+  
+
+      </a>
+    </li>
+  
+
+              
+            
+              
+                
+  
+  
+  
+  
+    <li class="md-nav__item">
+      <a href="../../../../reference/api-data/" class="md-nav__link">
+        
+  
+  <span class="md-ellipsis">
+    API (Data)
+  </span>
+  
+
+      </a>
+    </li>
+  
+
+              
+            
+              
+                
+  
+  
+  
+  
+    <li class="md-nav__item">
+      <a href="../../../../reference/api-gui/" class="md-nav__link">
+        
+  
+  <span class="md-ellipsis">
+    API (TrackerKit GUI)
+  </span>
+  
+
+      </a>
+    </li>
+  
+
+              
+            
+              
+                
+  
+  
+  
+  
+    <li class="md-nav__item">
+      <a href="../../../../reference/api-widgets/" class="md-nav__link">
+        
+  
+  <span class="md-ellipsis">
+    API (Widgets)
+  </span>
+  
+
+      </a>
+    </li>
+  
+
+              
+            
+              
+                
+  
+  
+  
+  
+    <li class="md-nav__item">
+      <a href="../../../../reference/api-posekit/" class="md-nav__link">
+        
+  
+  <span class="md-ellipsis">
+    API (PoseKit)
+  </span>
+  
+
+      </a>
+    </li>
+  
+
+              
+            
+              
+                
+  
+  
+  
+  
+    <li class="md-nav__item">
+      <a href="../../../../reference/api-utils/" class="md-nav__link">
+        
+  
+  <span class="md-ellipsis">
+    API (Utils)
+  </span>
+  
+
+      </a>
+    </li>
+  
+
+              
+            
+              
+                
+  
+  
+  
+  
+    <li class="md-nav__item">
+      <a href="../../../../reference/cli-reference/" class="md-nav__link">
+        
+  
+  <span class="md-ellipsis">
+    CLI Reference
+  </span>
+  
+
+      </a>
+    </li>
+  
+
+              
+            
+              
+                
+  
+  
+  
+  
+    <li class="md-nav__item">
+      <a href="../../../../reference/technical-reference/" class="md-nav__link">
+        
+  
+  <span class="md-ellipsis">
+    Technical Reference (LaTeX)
+  </span>
+  
+
+      </a>
+    </li>
+  
+
+              
+            
+              
+                
+  
+  
+  
+  
+    <li class="md-nav__item">
+      <a href="../../../../reference/changelog/" class="md-nav__link">
+        
+  
+  <span class="md-ellipsis">
+    Changelog
+  </span>
+  
+
+      </a>
+    </li>
+  
+
+              
+            
+              
+                
+  
+  
+  
+  
+    <li class="md-nav__item">
+      <a href="../../../../reference/faq/" class="md-nav__link">
+        
+  
+  <span class="md-ellipsis">
+    FAQ
+  </span>
+  
+
+      </a>
+    </li>
+  
+
+              
+            
+          </ul>
+        </nav>
+      
+    </li>
+  
+
+    
+  </ul>
+</nav>
+                  </div>
+                </div>
+              </div>
+            
+            
+              
+              <div class="md-sidebar md-sidebar--secondary" data-md-component="sidebar" data-md-type="toc" >
+                <div class="md-sidebar__scrollwrap">
+                  <div class="md-sidebar__inner">
+                    
+
+<nav class="md-nav md-nav--secondary" aria-label="Table of contents">
+  
+  
+  
+    
+  
+  
+    <label class="md-nav__title" for="__toc">
+      <span class="md-nav__icon md-icon"></span>
+      Table of contents
+    </label>
+    <ul class="md-nav__list" data-md-component="toc" data-md-scrollfix>
+      
+        <li class="md-nav__item">
+  <a href="#why" class="md-nav__link">
+    <span class="md-ellipsis">
+      Why
+    </span>
+  </a>
+  
+</li>
+      
+        <li class="md-nav__item">
+  <a href="#non-goals" class="md-nav__link">
+    <span class="md-ellipsis">
+      Non-goals
+    </span>
+  </a>
+  
+</li>
+      
+        <li class="md-nav__item">
+  <a href="#1-the-contract" class="md-nav__link">
+    <span class="md-ellipsis">
+      1. The contract
+    </span>
+  </a>
+  
+    <nav class="md-nav" aria-label="1. The contract">
+      <ul class="md-nav__list">
+        
+          <li class="md-nav__item">
+  <a href="#layer-1-canonicalization-frame-canonical-crop" class="md-nav__link">
+    <span class="md-ellipsis">
+      Layer 1 — canonicalization: frame → canonical crop
+    </span>
+  </a>
+  
+</li>
+        
+          <li class="md-nav__item">
+  <a href="#layer-2-model-fit-canonical-crop-model-input-tensor" class="md-nav__link">
+    <span class="md-ellipsis">
+      Layer 2 — model fit: canonical crop → model input tensor
+    </span>
+  </a>
+  
+</li>
+        
+          <li class="md-nav__item">
+  <a href="#composition-and-inversion" class="md-nav__link">
+    <span class="md-ellipsis">
+      Composition and inversion
+    </span>
+  </a>
+  
+</li>
+        
+      </ul>
+    </nav>
+  
+</li>
+      
+        <li class="md-nav__item">
+  <a href="#2-new-module" class="md-nav__link">
+    <span class="md-ellipsis">
+      2. New module
+    </span>
+  </a>
+  
+</li>
+      
+        <li class="md-nav__item">
+  <a href="#3-what-changes-by-site" class="md-nav__link">
+    <span class="md-ellipsis">
+      3. What changes, by site
+    </span>
+  </a>
+  
+    <nav class="md-nav" aria-label="3. What changes, by site">
+      <ul class="md-nav__list">
+        
+          <li class="md-nav__item">
+  <a href="#core-geometry" class="md-nav__link">
+    <span class="md-ellipsis">
+      Core geometry
+    </span>
+  </a>
+  
+</li>
+        
+          <li class="md-nav__item">
+  <a href="#inference" class="md-nav__link">
+    <span class="md-ellipsis">
+      Inference
+    </span>
+  </a>
+  
+</li>
+        
+          <li class="md-nav__item">
+  <a href="#identity" class="md-nav__link">
+    <span class="md-ellipsis">
+      Identity
+    </span>
+  </a>
+  
+</li>
+        
+          <li class="md-nav__item">
+  <a href="#training" class="md-nav__link">
+    <span class="md-ellipsis">
+      Training
+    </span>
+  </a>
+  
+</li>
+        
+          <li class="md-nav__item">
+  <a href="#provenance-dataset-side" class="md-nav__link">
+    <span class="md-ellipsis">
+      Provenance: dataset side
+    </span>
+  </a>
+  
+</li>
+        
+          <li class="md-nav__item">
+  <a href="#provenance-model-side" class="md-nav__link">
+    <span class="md-ellipsis">
+      Provenance: model side
+    </span>
+  </a>
+  
+</li>
+        
+          <li class="md-nav__item">
+  <a href="#config-defects-swept-in-the-same-change" class="md-nav__link">
+    <span class="md-ellipsis">
+      Config defects swept in the same change
+    </span>
+  </a>
+  
+</li>
+        
+          <li class="md-nav__item">
+  <a href="#yolo-classify-does-not-fit-the-contract" class="md-nav__link">
+    <span class="md-ellipsis">
+      YOLO-classify does not fit the contract
+    </span>
+  </a>
+  
+</li>
+        
+          <li class="md-nav__item">
+  <a href="#non-square-classifier-inputs" class="md-nav__link">
+    <span class="md-ellipsis">
+      Non-square classifier inputs
+    </span>
+  </a>
+  
+</li>
+        
+      </ul>
+    </nav>
+  
+</li>
+      
+        <li class="md-nav__item">
+  <a href="#4-testing" class="md-nav__link">
+    <span class="md-ellipsis">
+      4. Testing
+    </span>
+  </a>
+  
+</li>
+      
+        <li class="md-nav__item">
+  <a href="#5-equivalence-and-retraining" class="md-nav__link">
+    <span class="md-ellipsis">
+      5. Equivalence and retraining
+    </span>
+  </a>
+  
+</li>
+      
+        <li class="md-nav__item">
+  <a href="#6-risks" class="md-nav__link">
+    <span class="md-ellipsis">
+      6. Risks
+    </span>
+  </a>
+  
+</li>
+      
+    </ul>
+  
+</nav>
+                  </div>
+                </div>
+              </div>
+            
+          
+          
+            <div class="md-content" data-md-component="content">
+              <article class="md-content__inner md-typeset">
+                
+                  
+
+  
+    <a href="https://github.com/neurorishika/hydra-suite/edit/main/docs/superpowers/specs/done/2026-08-04-global-canonicalization-design.md" title="Edit this page" class="md-content__button md-icon">
+      
+      <svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 24 24"><path d="M10 20H6V4h7v5h5v3.1l2-2V8l-6-6H6c-1.1 0-2 .9-2 2v16c0 1.1.9 2 2 2h4zm10.2-7c.1 0 .3.1.4.2l1.3 1.3c.2.2.2.6 0 .8l-1 1-2.1-2.1 1-1c.1-.1.2-.2.4-.2m0 3.9L14.1 23H12v-2.1l6.1-6.1z"/></svg>
+    </a>
+  
+  
+
+
+<h1 id="global-canonicalization-design">Global canonicalization — design<a class="headerlink" href="#global-canonicalization-design" title="Permanent link">&para;</a></h1>
+<p>Date: 2026-08-04. Branch: <code>feat/global-canonicalization</code>, off <code>main</code> @ <code>25a18d82</code>.</p>
+<p>Supersedes the per-checkpoint geometry work only in the sense of building on it:
+Slice 1 (<code>2026-08-03-vitpose-per-checkpoint-geometry-design.md</code>) and Slice 2
+(<code>2026-08-04-vitpose-dataset-auto-sizing-design.md</code>) are merged prerequisites.</p>
+<h2 id="why">Why<a class="headerlink" href="#why" title="Permanent link">&para;</a></h2>
+<p>Today the repo canonicalizes animal crops in three different ways, and none of
+them matches what any model is trained on.</p>
+<p><code>core/canonicalization/crop.py</code> (inference and tracking) sizes the canvas long
+edge from the animal's own major axis and derives the short edge from the
+species aspect ratio, while warping the animal's own oriented box onto it. The
+two axes therefore get independent scales:</p>
+<div class="language-text highlight"><pre><span></span><code><span id="__span-0-1"><a id="__codelineno-0-1" name="__codelineno-0-1" href="#__codelineno-0-1"></a>scale_x = canvas_w / (major * margin) = 1                # native
+</span><span id="__span-0-2"><a id="__codelineno-0-2" name="__codelineno-0-2" href="#__codelineno-0-2"></a>scale_y = canvas_h / (minor * margin) = own_AR / ref_AR  # silently resampled
+</span></code></pre></div>
+<p>Measured on the ant clip: the median animal is 2.44:1 against a configured 2.8,
+so it is squashed 13% vertically; about 40% of detections are distorted more
+than 20%; a curled 1.3:1 animal is squashed 54%. The distortion varies per
+animal and per frame, and the model cannot observe it.</p>
+<p>Two other implementations — <code>identity/dataset/oriented_video.py::_compute_affine</code>
+and <code>canonicalization/dataset.py::MatMetadataCanonicalizer</code> — use the animal's
+<em>own</em> aspect and are isotropic. So training exports and inference crops are
+built by different geometry.</p>
+<p>A second, subtler problem: because the canvas long edge tracks each animal's own
+major axis, <strong>every animal is normalised to the same length before any model
+sees it</strong>. Body size — a real biological signal, and a strong identity cue — is
+destroyed by construction.</p>
+<p>This design replaces all three with one canonicalization, used identically by
+inference, crop-dataset generation, oriented-video generation, ClassKit training
+and PoseKit training.</p>
+<p>Supporting survey: <code>docs/superpowers/specs/notes/global-canonicalization-research.md</code>.</p>
+<h2 id="non-goals">Non-goals<a class="headerlink" href="#non-goals" title="Permanent link">&para;</a></h2>
+<ul>
+<li><strong>No change to <code>REFERENCE_BODY_SIZE</code></strong>: not its meaning (median of the
+  per-detection geometric mean of major and minor), not its auto-set formula,
+  not any of its existing consumers (Kalman, Hungarian, background, cache key).
+  The crop path merely reads it in addition.</li>
+<li><strong>No new user-facing config knobs.</strong> Canvas geometry is derived from knobs
+  that already exist: <code>REFERENCE_BODY_SIZE</code>, <code>RESIZE_FACTOR</code>,
+  <code>reference_aspect_ratio</code>, and the canonical margin.</li>
+<li><strong>No automatic sizing of the canvas to guarantee zero clipping.</strong> Sizing the
+  crop so the largest animal fits is the operator's job, via margin and aspect
+  ratio. The system reports clipping; it does not silently compensate.</li>
+<li>No full-frame pose mode (SLEAP/DLC only, separate branch).</li>
+<li>No change to detection, filtering, assignment, or post-processing.</li>
+</ul>
+<hr />
+<h2 id="1-the-contract">1. The contract<a class="headerlink" href="#1-the-contract" title="Permanent link">&para;</a></h2>
+<p>Two layers. Each has exactly one implementation, called by every producer and
+every consumer.</p>
+<h3 id="layer-1-canonicalization-frame-canonical-crop">Layer 1 — canonicalization: frame → canonical crop<a class="headerlink" href="#layer-1-canonicalization-frame-canonical-crop" title="Permanent link">&para;</a></h3>
+<div class="language-text highlight"><pre><span></span><code><span id="__span-1-1"><a id="__codelineno-1-1" name="__codelineno-1-1" href="#__codelineno-1-1"></a>body_px   = REFERENCE_BODY_SIZE * RESIZE_FACTOR      # existing config, unchanged
+</span><span id="__span-1-2"><a id="__codelineno-1-2" name="__codelineno-1-2" href="#__codelineno-1-2"></a>major_px  = body_px * sqrt(reference_aspect_ratio)   # geometric mean → major axis
+</span><span id="__span-1-3"><a id="__codelineno-1-3" name="__codelineno-1-3" href="#__codelineno-1-3"></a>canvas_w  = even(major_px * margin)
+</span><span id="__span-1-4"><a id="__codelineno-1-4" name="__codelineno-1-4" href="#__codelineno-1-4"></a>canvas_h  = even(canvas_w / reference_aspect_ratio)
+</span><span id="__span-1-5"><a id="__codelineno-1-5" name="__codelineno-1-5" href="#__codelineno-1-5"></a>
+</span><span id="__span-1-6"><a id="__codelineno-1-6" name="__codelineno-1-6" href="#__codelineno-1-6"></a>src rect  = canvas_w x canvas_h frame pixels,
+</span><span id="__span-1-7"><a id="__codelineno-1-7" name="__codelineno-1-7" href="#__codelineno-1-7"></a>            centred on the OBB centroid,
+</span><span id="__span-1-8"><a id="__codelineno-1-8" name="__codelineno-1-8" href="#__codelineno-1-8"></a>            rotated so the major axis is horizontal
+</span></code></pre></div>
+<p><code>REFERENCE_BODY_SIZE</code> is the geometric mean <code>sqrt(major * minor)</code>; with
+<code>ar = major / minor</code> that gives <code>major = body_px * sqrt(ar)</code>. This recovers the
+major-axis extent from the existing knob without redefining it.</p>
+<p>The defining property: <strong>the source rectangle does not depend on the animal's
+own dimensions.</strong> The OBB supplies a centre and an angle; nothing else. It
+follows that:</p>
+<ul>
+<li><code>scale = 1</code> on both axes. Layer 1 is a <strong>rigid</strong> transform — rotation and
+  translation only. There is no scaling, therefore no anisotropy, and the only
+  resampling is the bilinear interpolation inherent to rotating.</li>
+<li>Every canonical crop has identical pixel dimensions <code>(canvas_w, canvas_h)</code>.</li>
+<li>Every canonical crop has identical scale, padding and centring.</li>
+<li>Body size survives as signal: a larger individual renders larger, a curled
+  animal renders shorter.</li>
+<li>The slack around a small animal fills with <strong>real surrounding frame</strong>, not
+  synthetic padding — the affine samples the source image. Only foreign-OBB
+  masking synthesises fill, using the existing background colour.</li>
+</ul>
+<p><code>reference_aspect_ratio</code> now sets the canvas <strong>shape</strong> only. As far as <em>cropping</em>
+is concerned it can no longer be wrong, only wasteful: a poorly matched value
+costs background pixels on the short axis. The misconfiguration failure mode
+that motivated this work disappears.</p>
+<p>One coupling survives, and must not be forgotten: the same knob also centres the
+detection aspect-ratio filter (<code>config.py:641-644</code> derives <code>min/max_aspect_ratio</code>
+as <code>ref_ar × multiplier</code>). That filter is off by default
+(<code>default.json:46</code>), but an operator who retunes the AR for canvas efficiency
+<em>with filtering on</em> silently changes which detections survive. The knob is left
+shared and the coupling documented in the GUI tooltip; splitting it is a
+separate decision about detection filtering, not about crops.</p>
+<p><strong>Clipping.</strong> An animal whose <code>major * margin</code> exceeds <code>canvas_w</code> (or whose
+<code>minor * margin</code> exceeds <code>canvas_h</code>) is clipped at the canvas edge. This is
+expected and is the operator's dial: raise <code>margin</code> until the largest animal
+fits. The system counts clipped detections and reports the count and the worst
+observed overflow ratio; it never rescales to compensate, because that would
+reintroduce per-animal scale.</p>
+<p>Margin is doing real work under this design, so it must be measurable and
+settable — today it is neither (defect D4). With <code>ar = 2.44</code> and
+<code>body_px = 20</code>, the median major axis is ~31px and <code>margin = 1.3</code> yields a 41px
+canvas, clipping anything beyond ~1.3× median length; covering a real colony
+likely needs a margin nearer 1.5. <code>detection_panel.py:1370</code> already computes and
+displays <code>stats["major"]["max"]</code>, so an <strong>"Auto-Set Margin from max"</strong> button
+beside the existing auto-set buttons is one line from the number it needs:</p>
+<div class="language-text highlight"><pre><span></span><code><span id="__span-2-1"><a id="__codelineno-2-1" name="__codelineno-2-1" href="#__codelineno-2-1"></a>suggested_margin = stats["major"]["max"] / (REFERENCE_BODY_SIZE * sqrt(ar))
+</span></code></pre></div>
+<p>That is the mechanism by which "the operator sizes the crop" (Non-goals) is an
+actual workflow rather than an instruction to guess.</p>
+<h3 id="layer-2-model-fit-canonical-crop-model-input-tensor">Layer 2 — model fit: canonical crop → model input tensor<a class="headerlink" href="#layer-2-model-fit-canonical-crop-model-input-tensor" title="Permanent link">&para;</a></h3>
+<div class="language-text highlight"><pre><span></span><code><span id="__span-3-1"><a id="__codelineno-3-1" name="__codelineno-3-1" href="#__codelineno-3-1"></a>fit    = min(model_w / canvas_w, model_h / canvas_h)     # isotropic
+</span><span id="__span-3-2"><a id="__codelineno-3-2" name="__codelineno-3-2" href="#__codelineno-3-2"></a>inner  = (round(canvas_w * fit), round(canvas_h * fit))
+</span><span id="__span-3-3"><a id="__codelineno-3-3" name="__codelineno-3-3" href="#__codelineno-3-3"></a>output = inner pasted centred into (model_w, model_h), remainder filled with 0
+</span></code></pre></div>
+<p>Isotropic, centred, letterboxed. Called identically by inference and by training
+data loading, in every kit. This is what replaces
+<code>transforms.Resize((sz, sz))</code>.</p>
+<p>Layer 2 is not geometry alone. Because it is the <em>only</em> thing standing between a
+canonical crop and a model, it must pin every property that a second
+implementation could get wrong. All four are fixed by this spec:</p>
+<table>
+<thead>
+<tr>
+<th>Property</th>
+<th>Value</th>
+<th>Why this one</th>
+</tr>
+</thead>
+<tbody>
+<tr>
+<td>dtype / range</td>
+<td>uint8 <code>[0, 255]</code></td>
+<td>What <code>cv2.imread</code> yields, and what three of four families' training reads. Enforced at the pose stage boundary as of <code>8900191d</code></td>
+</tr>
+<tr>
+<td>channel order</td>
+<td>BGR</td>
+<td>Both pose backends and the classifier preprocessing assume it</td>
+</tr>
+<tr>
+<td>resampler</td>
+<td><code>cv2.INTER_LINEAR</code>, <strong>antialias on downscale</strong></td>
+<td>ClassKit training currently uses PIL <code>Resize</code> (antialiased) while inference uses <code>cv2</code>/<code>F.interpolate</code> (not). A fixed canvas makes downscaling more common, so the mismatch has to be resolved, not inherited</td>
+</tr>
+<tr>
+<td>pad fill</td>
+<td><strong>zeros</strong></td>
+<td>Pose already pads zeros at both ends (<code>vitpose/transforms.py</code> default <code>BORDER_CONSTANT</code>; SLEAP's zero canvas). A background-colour default adopted only by inference would regress a currently-clean path</td>
+</tr>
+</tbody>
+</table>
+<p>The pad fill is deliberately <em>not</em> the foreign-mask background colour. Those are
+different jobs: one hides a neighbouring animal inside the crop, the other fills
+canvas outside the source image.</p>
+<p>Layer 2 applies to any source image, not only Layer 1 output — it needs only the
+source dimensions. So a ClassKit project containing the operator's own images,
+never produced by MAT, is fitted by exactly the same rule as inference uses.</p>
+<h3 id="composition-and-inversion">Composition and inversion<a class="headerlink" href="#composition-and-inversion" title="Permanent link">&para;</a></h3>
+<div class="language-text highlight"><pre><span></span><code><span id="__span-4-1"><a id="__codelineno-4-1" name="__codelineno-4-1" href="#__codelineno-4-1"></a>M_total   = M_fit ∘ M_orient ∘ M_align       # frame → model input
+</span><span id="__span-4-2"><a id="__codelineno-4-2" name="__codelineno-4-2" href="#__codelineno-4-2"></a>M_inverse = invert(M_total)                  # model input → frame
+</span></code></pre></div>
+<p><code>M_align</code> is Layer 1's rigid transform, <code>M_orient</code> the head-tail 0/90/180/270
+rotation (<code>apply_headtail_rotation</code>), <code>M_fit</code> Layer 2's scale-and-translate.
+Keypoints back-project through <code>M_inverse</code> in one step. Because <code>M_fit</code> is
+isotropic and <code>M_align</code> is rigid, the composite carries no shear — which is the
+structural reason the class of bug fixed in <code>83cf1907</code> cannot recur.</p>
+<hr />
+<h2 id="2-new-module">2. New module<a class="headerlink" href="#2-new-module" title="Permanent link">&para;</a></h2>
+<p><code>src/hydra_suite/core/canonicalization/geometry.py</code> — pure geometry, no Qt, no
+imports from any app layer.</p>
+<div class="language-python highlight"><pre><span></span><code><span id="__span-5-1"><a id="__codelineno-5-1" name="__codelineno-5-1" href="#__codelineno-5-1"></a><span class="nd">@dataclass</span><span class="p">(</span><span class="n">frozen</span><span class="o">=</span><span class="kc">True</span><span class="p">)</span>
+</span><span id="__span-5-2"><a id="__codelineno-5-2" name="__codelineno-5-2" href="#__codelineno-5-2"></a><span class="k">class</span><span class="w"> </span><span class="nc">CanonicalGeometry</span><span class="p">:</span>
+</span><span id="__span-5-3"><a id="__codelineno-5-3" name="__codelineno-5-3" href="#__codelineno-5-3"></a><span class="w">    </span><span class="sd">"""Fixed canonical crop geometry for one project/session."""</span>
+</span><span id="__span-5-4"><a id="__codelineno-5-4" name="__codelineno-5-4" href="#__codelineno-5-4"></a>    <span class="n">canvas_wh</span><span class="p">:</span> <span class="nb">tuple</span><span class="p">[</span><span class="nb">int</span><span class="p">,</span> <span class="nb">int</span><span class="p">]</span>
+</span><span id="__span-5-5"><a id="__codelineno-5-5" name="__codelineno-5-5" href="#__codelineno-5-5"></a>    <span class="n">margin</span><span class="p">:</span> <span class="nb">float</span>
+</span><span id="__span-5-6"><a id="__codelineno-5-6" name="__codelineno-5-6" href="#__codelineno-5-6"></a>    <span class="n">aspect_ratio</span><span class="p">:</span> <span class="nb">float</span>
+</span><span id="__span-5-7"><a id="__codelineno-5-7" name="__codelineno-5-7" href="#__codelineno-5-7"></a>
+</span><span id="__span-5-8"><a id="__codelineno-5-8" name="__codelineno-5-8" href="#__codelineno-5-8"></a>    <span class="nd">@classmethod</span>
+</span><span id="__span-5-9"><a id="__codelineno-5-9" name="__codelineno-5-9" href="#__codelineno-5-9"></a>    <span class="k">def</span><span class="w"> </span><span class="nf">from_reference</span><span class="p">(</span>
+</span><span id="__span-5-10"><a id="__codelineno-5-10" name="__codelineno-5-10" href="#__codelineno-5-10"></a>        <span class="bp">cls</span><span class="p">,</span>
+</span><span id="__span-5-11"><a id="__codelineno-5-11" name="__codelineno-5-11" href="#__codelineno-5-11"></a>        <span class="n">reference_body_px</span><span class="p">:</span> <span class="nb">float</span><span class="p">,</span>   <span class="c1"># REFERENCE_BODY_SIZE * RESIZE_FACTOR</span>
+</span><span id="__span-5-12"><a id="__codelineno-5-12" name="__codelineno-5-12" href="#__codelineno-5-12"></a>        <span class="n">aspect_ratio</span><span class="p">:</span> <span class="nb">float</span><span class="p">,</span>
+</span><span id="__span-5-13"><a id="__codelineno-5-13" name="__codelineno-5-13" href="#__codelineno-5-13"></a>        <span class="n">margin</span><span class="p">:</span> <span class="nb">float</span><span class="p">,</span>
+</span><span id="__span-5-14"><a id="__codelineno-5-14" name="__codelineno-5-14" href="#__codelineno-5-14"></a>    <span class="p">)</span> <span class="o">-&gt;</span> <span class="s2">"CanonicalGeometry"</span><span class="p">:</span> <span class="o">...</span>
+</span><span id="__span-5-15"><a id="__codelineno-5-15" name="__codelineno-5-15" href="#__codelineno-5-15"></a>
+</span><span id="__span-5-16"><a id="__codelineno-5-16" name="__codelineno-5-16" href="#__codelineno-5-16"></a>    <span class="nd">@property</span>
+</span><span id="__span-5-17"><a id="__codelineno-5-17" name="__codelineno-5-17" href="#__codelineno-5-17"></a>    <span class="k">def</span><span class="w"> </span><span class="nf">canvas_w</span><span class="p">(</span><span class="bp">self</span><span class="p">)</span> <span class="o">-&gt;</span> <span class="nb">int</span><span class="p">:</span> <span class="o">...</span>
+</span><span id="__span-5-18"><a id="__codelineno-5-18" name="__codelineno-5-18" href="#__codelineno-5-18"></a>    <span class="nd">@property</span>
+</span><span id="__span-5-19"><a id="__codelineno-5-19" name="__codelineno-5-19" href="#__codelineno-5-19"></a>    <span class="k">def</span><span class="w"> </span><span class="nf">canvas_h</span><span class="p">(</span><span class="bp">self</span><span class="p">)</span> <span class="o">-&gt;</span> <span class="nb">int</span><span class="p">:</span> <span class="o">...</span>
+</span><span id="__span-5-20"><a id="__codelineno-5-20" name="__codelineno-5-20" href="#__codelineno-5-20"></a>
+</span><span id="__span-5-21"><a id="__codelineno-5-21" name="__codelineno-5-21" href="#__codelineno-5-21"></a>
+</span><span id="__span-5-22"><a id="__codelineno-5-22" name="__codelineno-5-22" href="#__codelineno-5-22"></a><span class="k">def</span><span class="w"> </span><span class="nf">canonical_affine</span><span class="p">(</span>
+</span><span id="__span-5-23"><a id="__codelineno-5-23" name="__codelineno-5-23" href="#__codelineno-5-23"></a>    <span class="n">corners</span><span class="p">:</span> <span class="n">np</span><span class="o">.</span><span class="n">ndarray</span><span class="p">,</span>           <span class="c1"># (4, 2) OBB corners, frame coords</span>
+</span><span id="__span-5-24"><a id="__codelineno-5-24" name="__codelineno-5-24" href="#__codelineno-5-24"></a>    <span class="n">geometry</span><span class="p">:</span> <span class="n">CanonicalGeometry</span><span class="p">,</span>
+</span><span id="__span-5-25"><a id="__codelineno-5-25" name="__codelineno-5-25" href="#__codelineno-5-25"></a><span class="p">)</span> <span class="o">-&gt;</span> <span class="nb">tuple</span><span class="p">[</span><span class="n">np</span><span class="o">.</span><span class="n">ndarray</span><span class="p">,</span> <span class="nb">float</span><span class="p">,</span> <span class="nb">bool</span><span class="p">]:</span>
+</span><span id="__span-5-26"><a id="__codelineno-5-26" name="__codelineno-5-26" href="#__codelineno-5-26"></a><span class="w">    </span><span class="sd">"""Return (M_align 2x3 frame→canvas, major_axis_theta, clipped)."""</span>
+</span><span id="__span-5-27"><a id="__codelineno-5-27" name="__codelineno-5-27" href="#__codelineno-5-27"></a>
+</span><span id="__span-5-28"><a id="__codelineno-5-28" name="__codelineno-5-28" href="#__codelineno-5-28"></a>
+</span><span id="__span-5-29"><a id="__codelineno-5-29" name="__codelineno-5-29" href="#__codelineno-5-29"></a><span class="nd">@dataclass</span><span class="p">(</span><span class="n">frozen</span><span class="o">=</span><span class="kc">True</span><span class="p">)</span>
+</span><span id="__span-5-30"><a id="__codelineno-5-30" name="__codelineno-5-30" href="#__codelineno-5-30"></a><span class="k">class</span><span class="w"> </span><span class="nc">FitResult</span><span class="p">:</span>
+</span><span id="__span-5-31"><a id="__codelineno-5-31" name="__codelineno-5-31" href="#__codelineno-5-31"></a>    <span class="n">tensor_hw</span><span class="p">:</span> <span class="nb">tuple</span><span class="p">[</span><span class="nb">int</span><span class="p">,</span> <span class="nb">int</span><span class="p">]</span>     <span class="c1"># model input (H, W)</span>
+</span><span id="__span-5-32"><a id="__codelineno-5-32" name="__codelineno-5-32" href="#__codelineno-5-32"></a>    <span class="n">inner_hw</span><span class="p">:</span> <span class="nb">tuple</span><span class="p">[</span><span class="nb">int</span><span class="p">,</span> <span class="nb">int</span><span class="p">]</span>      <span class="c1"># scaled content size</span>
+</span><span id="__span-5-33"><a id="__codelineno-5-33" name="__codelineno-5-33" href="#__codelineno-5-33"></a>    <span class="n">offset_xy</span><span class="p">:</span> <span class="nb">tuple</span><span class="p">[</span><span class="nb">int</span><span class="p">,</span> <span class="nb">int</span><span class="p">]</span>     <span class="c1"># top-left of content within the canvas</span>
+</span><span id="__span-5-34"><a id="__codelineno-5-34" name="__codelineno-5-34" href="#__codelineno-5-34"></a>    <span class="n">scale</span><span class="p">:</span> <span class="nb">float</span>
+</span><span id="__span-5-35"><a id="__codelineno-5-35" name="__codelineno-5-35" href="#__codelineno-5-35"></a>
+</span><span id="__span-5-36"><a id="__codelineno-5-36" name="__codelineno-5-36" href="#__codelineno-5-36"></a>
+</span><span id="__span-5-37"><a id="__codelineno-5-37" name="__codelineno-5-37" href="#__codelineno-5-37"></a><span class="k">def</span><span class="w"> </span><span class="nf">fit_to_model_input</span><span class="p">(</span>
+</span><span id="__span-5-38"><a id="__codelineno-5-38" name="__codelineno-5-38" href="#__codelineno-5-38"></a>    <span class="n">source_wh</span><span class="p">:</span> <span class="nb">tuple</span><span class="p">[</span><span class="nb">int</span><span class="p">,</span> <span class="nb">int</span><span class="p">],</span>
+</span><span id="__span-5-39"><a id="__codelineno-5-39" name="__codelineno-5-39" href="#__codelineno-5-39"></a>    <span class="n">model_wh</span><span class="p">:</span> <span class="nb">tuple</span><span class="p">[</span><span class="nb">int</span><span class="p">,</span> <span class="nb">int</span><span class="p">],</span>
+</span><span id="__span-5-40"><a id="__codelineno-5-40" name="__codelineno-5-40" href="#__codelineno-5-40"></a><span class="p">)</span> <span class="o">-&gt;</span> <span class="n">FitResult</span><span class="p">:</span>
+</span><span id="__span-5-41"><a id="__codelineno-5-41" name="__codelineno-5-41" href="#__codelineno-5-41"></a><span class="w">    </span><span class="sd">"""Isotropic centred letterbox parameters. Pure arithmetic."""</span>
+</span><span id="__span-5-42"><a id="__codelineno-5-42" name="__codelineno-5-42" href="#__codelineno-5-42"></a>
+</span><span id="__span-5-43"><a id="__codelineno-5-43" name="__codelineno-5-43" href="#__codelineno-5-43"></a>
+</span><span id="__span-5-44"><a id="__codelineno-5-44" name="__codelineno-5-44" href="#__codelineno-5-44"></a><span class="k">def</span><span class="w"> </span><span class="nf">apply_fit</span><span class="p">(</span>
+</span><span id="__span-5-45"><a id="__codelineno-5-45" name="__codelineno-5-45" href="#__codelineno-5-45"></a>    <span class="n">image</span><span class="p">:</span> <span class="n">np</span><span class="o">.</span><span class="n">ndarray</span> <span class="o">|</span> <span class="n">torch</span><span class="o">.</span><span class="n">Tensor</span><span class="p">,</span>
+</span><span id="__span-5-46"><a id="__codelineno-5-46" name="__codelineno-5-46" href="#__codelineno-5-46"></a>    <span class="n">fit</span><span class="p">:</span> <span class="n">FitResult</span><span class="p">,</span>
+</span><span id="__span-5-47"><a id="__codelineno-5-47" name="__codelineno-5-47" href="#__codelineno-5-47"></a>    <span class="n">background</span><span class="p">:</span> <span class="nb">tuple</span><span class="p">[</span><span class="nb">int</span><span class="p">,</span> <span class="nb">int</span><span class="p">,</span> <span class="nb">int</span><span class="p">],</span>
+</span><span id="__span-5-48"><a id="__codelineno-5-48" name="__codelineno-5-48" href="#__codelineno-5-48"></a><span class="p">)</span> <span class="o">-&gt;</span> <span class="n">np</span><span class="o">.</span><span class="n">ndarray</span> <span class="o">|</span> <span class="n">torch</span><span class="o">.</span><span class="n">Tensor</span><span class="p">:</span> <span class="o">...</span>
+</span><span id="__span-5-49"><a id="__codelineno-5-49" name="__codelineno-5-49" href="#__codelineno-5-49"></a>
+</span><span id="__span-5-50"><a id="__codelineno-5-50" name="__codelineno-5-50" href="#__codelineno-5-50"></a>
+</span><span id="__span-5-51"><a id="__codelineno-5-51" name="__codelineno-5-51" href="#__codelineno-5-51"></a><span class="k">def</span><span class="w"> </span><span class="nf">fit_affine</span><span class="p">(</span><span class="n">fit</span><span class="p">:</span> <span class="n">FitResult</span><span class="p">)</span> <span class="o">-&gt;</span> <span class="n">np</span><span class="o">.</span><span class="n">ndarray</span><span class="p">:</span>
+</span><span id="__span-5-52"><a id="__codelineno-5-52" name="__codelineno-5-52" href="#__codelineno-5-52"></a><span class="w">    </span><span class="sd">"""2x3 affine for the fit, for composition into M_total."""</span>
+</span></code></pre></div>
+<p><code>canonical_affine</code> reports <code>clipped</code> rather than raising, so callers can count
+without branching on control flow.</p>
+<hr />
+<h2 id="3-what-changes-by-site">3. What changes, by site<a class="headerlink" href="#3-what-changes-by-site" title="Permanent link">&para;</a></h2>
+<h3 id="core-geometry">Core geometry<a class="headerlink" href="#core-geometry" title="Permanent link">&para;</a></h3>
+<p><code>core/canonicalization/crop.py</code>:
+- <code>compute_crop_dimensions</code>, <code>compute_native_crop_dimensions</code>,
+  <code>compute_native_scale_affine</code> — <strong>deleted</strong>. Canvas dimensions are no longer a
+  function of the detection.
+- <code>compute_alignment_affine</code> — <strong>deleted</strong>, replaced by <code>canonical_affine</code>.
+- <code>extract_canonical_crop</code>, <code>gpu_canonical_crop</code>, <code>gpu_canonical_crop_batch</code>,
+  <code>extract_and_classify_batch</code>, <code>_apply_foreign_mask_canonical</code> — retained,
+  re-pointed at <code>CanonicalGeometry</code>.
+- <code>apply_headtail_rotation</code> — retained; the 90° dimension swap now produces a
+  canvas of <code>(canvas_h, canvas_w)</code>, which Layer 2 handles like any other source.
+- <code>invert_keypoints</code> — unchanged.</p>
+<p><code>core/canonicalization/dataset.py</code> — <strong>deleted</strong>. <code>MatMetadataCanonicalizer</code> and
+<code>get_canon_transform</code> have no production consumers (tests only), and the
+per-image metadata path they implement is subsumed by Layer 1 + Layer 2.
+<code>tests/test_canonicalization.py</code> and <code>tests/test_canonicalization_flexible.py</code>
+go with them. The inert <code>canonicalize_mat</code> DB columns
+(<code>classkit/core/store/db.py</code>) are left in place — dropping SQLite columns is not
+worth a migration — but are documented as dead.</p>
+<h3 id="inference">Inference<a class="headerlink" href="#inference" title="Permanent link">&para;</a></h3>
+<ul>
+<li><code>stages/crops.py</code> — all nine entry points produce <code>(N, C, canvas_h, canvas_w)</code>.
+  The batch-max zero-pad in <code>_extract_canonical_cpu</code> (:215-227) is deleted;
+  crops are already uniform. <code>extract_classifier_crops</code> and its GPU/batch
+  variants stop warping straight to model input and instead produce canonical
+  crops that the consumer fits via Layer 2. Its unused <code>aspect_ratio</code> parameter
+  goes away with the rewrite.</li>
+</ul>
+<p><strong>This deliberately reverses an earlier optimisation.</strong> The comment at
+  <code>crops.py:238-247</code> records that the single direct warp exists precisely to
+  avoid a double resample, which had flipped 1-2% of head-tail decisions. The
+  new design reinstates that double resample (Layer 1 warp, then Layer 2 fit),
+  because a shared canonical artifact is the whole point — a consumer that
+  warps straight from the frame is a second geometry implementation by
+  definition. The cost is accepted and paid for by retraining head-tail on
+  the new convention; it is the reason head-tail needs explicit measurement
+  rather than assumption (§5).
+- <code>stages/pose.py</code> — the slice-back hack <code>hwc[: ch, : cw]</code> (:269, and the
+  equivalent at :402) is deleted. <code>M_inverse</code> becomes <code>M_total</code>'s inverse.
+- <code>stages/cnn.py</code>, <code>stages/headtail.py</code> — take a <code>CanonicalGeometry</code> instead of
+  <code>aspect_ratio</code> / <code>margin</code> floats; fit via Layer 2.
+- <code>config.py</code> — <code>canonical_aspect_ratio</code> and <code>canonical_margin</code> are replaced by
+  a single <code>canonical: CanonicalGeometry</code>, built in <code>from_parameters</code> from
+  <code>REFERENCE_BODY_SIZE</code>, <code>RESIZE_FACTOR</code>,
+  <code>ADVANCED_CONFIG.reference_aspect_ratio</code> and the canonical margin. This is a
+  derived field, not a new knob.
+- <code>cache/keys.py</code> — the canonical geometry enters the detection-cache key.
+  Without this, a stale <code>.npz</code> silently mixes conventions.
+- <code>pipeline.py</code>, <code>api.py</code>, <code>runner.py</code>, <code>result.py</code>,
+  <code>core/tracking/ingest/streaming_payload.py</code> — thread the geometry object;
+  <code>canonical_crops_cpu</code> / <code>canonical_crops_cuda</code> become uniformly shaped.</p>
+<h3 id="identity">Identity<a class="headerlink" href="#identity" title="Permanent link">&para;</a></h3>
+<ul>
+<li><code>identity/classification/headtail.py</code> (:517, :594, :748) — three crop sites
+  collapse to one Layer 1 call plus Layer 2. The <code>128 x 128/ref_AR</code> fallback
+  canvas is deleted.</li>
+<li><code>identity/dataset/generator.py</code> — writes Layer 1 crops. Gains a provenance
+  sidecar (below).</li>
+<li><code>identity/dataset/oriented_video.py::_compute_affine</code> (:1198-1220) — deleted,
+  replaced by Layer 1.</li>
+</ul>
+<h3 id="training">Training<a class="headerlink" href="#training" title="Permanent link">&para;</a></h3>
+<ul>
+<li><code>training/runner.py</code> (:1297, :1337, :1635, :1664) — <code>transforms.Resize((sz, sz))</code>
+  becomes a Layer 2 transform into the model's input shape. Both train and eval
+  transforms; the augmentation pipeline composes after the fit, as today.</li>
+<li>PoseKit ViTPose training (<code>posekit/core/vitpose_training.py</code>,
+  <code>posekit/gui/dialogs/training.py</code>) — the dataset transform fits into
+  <code>PoseGeometry.image_size_wh</code> via Layer 2, so training and inference share it.</li>
+<li><code>training/pose_geometry_measure.py</code> (Slice 2) — unchanged in formula; its
+  suggestion now describes the model input shape, which is what Layer 2 fits
+  into.</li>
+</ul>
+<h3 id="provenance-dataset-side">Provenance: dataset side<a class="headerlink" href="#provenance-dataset-side" title="Permanent link">&para;</a></h3>
+<p><strong>No new sidecar file.</strong> <code>generator.py:776-791</code> already writes
+<code>&lt;run_dir&gt;/metadata.json</code> with a <code>parameters</code> block carrying
+<code>padding_fraction</code> — the very knob that becomes the canonical margin. Its only
+reader is <code>canonicalization/dataset.py</code>, the module this spec deletes. The
+canonical geometry goes into that existing block:</p>
+<div class="language-json highlight"><pre><span></span><code><span id="__span-6-1"><a id="__codelineno-6-1" name="__codelineno-6-1" href="#__codelineno-6-1"></a><span class="nt">"parameters"</span><span class="p">:</span><span class="w"> </span><span class="p">{</span>
+</span><span id="__span-6-2"><a id="__codelineno-6-2" name="__codelineno-6-2" href="#__codelineno-6-2"></a><span class="w">  </span><span class="nt">"canonical"</span><span class="p">:</span><span class="w"> </span><span class="p">{</span>
+</span><span id="__span-6-3"><a id="__codelineno-6-3" name="__codelineno-6-3" href="#__codelineno-6-3"></a><span class="w">    </span><span class="nt">"canvas_wh"</span><span class="p">:</span><span class="w"> </span><span class="p">[</span><span class="mi">64</span><span class="p">,</span><span class="w"> </span><span class="mi">26</span><span class="p">],</span>
+</span><span id="__span-6-4"><a id="__codelineno-6-4" name="__codelineno-6-4" href="#__codelineno-6-4"></a><span class="w">    </span><span class="nt">"margin"</span><span class="p">:</span><span class="w"> </span><span class="mf">1.5</span><span class="p">,</span>
+</span><span id="__span-6-5"><a id="__codelineno-6-5" name="__codelineno-6-5" href="#__codelineno-6-5"></a><span class="w">    </span><span class="nt">"aspect_ratio"</span><span class="p">:</span><span class="w"> </span><span class="mf">2.44</span><span class="p">,</span>
+</span><span id="__span-6-6"><a id="__codelineno-6-6" name="__codelineno-6-6" href="#__codelineno-6-6"></a><span class="w">    </span><span class="nt">"reference_body_px"</span><span class="p">:</span><span class="w"> </span><span class="mf">20.0</span><span class="p">,</span>
+</span><span id="__span-6-7"><a id="__codelineno-6-7" name="__codelineno-6-7" href="#__codelineno-6-7"></a><span class="w">    </span><span class="nt">"resize_factor"</span><span class="p">:</span><span class="w"> </span><span class="mf">1.0</span><span class="p">,</span>
+</span><span id="__span-6-8"><a id="__codelineno-6-8" name="__codelineno-6-8" href="#__codelineno-6-8"></a><span class="w">    </span><span class="nt">"clipped_count"</span><span class="p">:</span><span class="w"> </span><span class="mi">3</span><span class="p">,</span>
+</span><span id="__span-6-9"><a id="__codelineno-6-9" name="__codelineno-6-9" href="#__codelineno-6-9"></a><span class="w">    </span><span class="nt">"worst_overflow_ratio"</span><span class="p">:</span><span class="w"> </span><span class="mf">1.08</span><span class="p">,</span>
+</span><span id="__span-6-10"><a id="__codelineno-6-10" name="__codelineno-6-10" href="#__codelineno-6-10"></a><span class="w">    </span><span class="nt">"schema_version"</span><span class="p">:</span><span class="w"> </span><span class="mi">1</span>
+</span><span id="__span-6-11"><a id="__codelineno-6-11" name="__codelineno-6-11" href="#__codelineno-6-11"></a><span class="w">  </span><span class="p">}</span>
+</span><span id="__span-6-12"><a id="__codelineno-6-12" name="__codelineno-6-12" href="#__codelineno-6-12"></a><span class="p">}</span>
+</span></code></pre></div>
+<p>This avoids inventing a new file next to an existing one, and sidesteps a real
+inconsistency: the repo uses two incompatible sidecar naming conventions —
+<code>.slice_meta.json</code> and <code>.runtime_meta.json</code> <strong>append</strong> to the full filename,
+while <code>.v2meta.json</code> <strong>replaces</strong> the suffix. <code>oriented_video.py</code>, which writes
+no JSON today, gains the same block in its own export metadata.</p>
+<p>A dataset without the block is unknown-provenance: fitted by Layer 2 on its raw
+dimensions, which is the correct behaviour for an operator's own images.</p>
+<h3 id="provenance-model-side">Provenance: model side<a class="headerlink" href="#provenance-model-side" title="Permanent link">&para;</a></h3>
+<p>The dataset stamp alone is not enough. This spec mandates retraining every
+model, and after that a checkpoint would carry <strong>no record of the convention it
+was trained under</strong> — precisely the "a consumer quietly keeping its own resize"
+risk in §6. The repo already has the pattern to copy: <code>.slice_meta.json</code> is
+written at publish (<code>training/model_publish.py:786-800</code>), read back through
+<code>core/inference/slice_meta.py</code>, and mirrored into registry metadata
+(<code>model_publish.py:823-826</code>).</p>
+<p>The canonical geometry is stamped the same way, so a model whose geometry does
+not match the session's is detected at load rather than producing quietly
+degraded output. This also hands the deferred model-registry unification
+(<code>2026-07-29-model-registry-unification-design.md</code>) one more field flowing
+through a mechanism it already models as <code>ModelRegistryEntry.extra</code>.</p>
+<p>Out of scope, owned by that registry spec: <code>TrainingRole</code> has no pose member, so
+ViTPose still cannot be published or registered. Do not add picker surface here.</p>
+<h3 id="config-defects-swept-in-the-same-change">Config defects swept in the same change<a class="headerlink" href="#config-defects-swept-in-the-same-change" title="Permanent link">&para;</a></h3>
+<table>
+<thead>
+<tr>
+<th>ID</th>
+<th>Defect</th>
+<th>Fix</th>
+</tr>
+</thead>
+<tbody>
+<tr>
+<td>D1</td>
+<td><code>crops_worker.py:306</code> reads <code>REFERENCE_ASPECT_RATIO</code> (uppercase), a key nothing writes, so the interpolated-crop head-tail analyzer always uses the 2.0 fallback</td>
+<td>Read the geometry object</td>
+</tr>
+<tr>
+<td>D2</td>
+<td><code>cli_config.py:299</code> defaults <code>reference_aspect_ratio</code> to 4.0 where every other site defaults to 2.0</td>
+<td>Single default, 2.0</td>
+</tr>
+<tr>
+<td>D3</td>
+<td><code>extract_classifier_crops</code> (<code>crops.py:231</code>) <strong>and</strong> <code>extract_classifier_crops_gpu</code> (<code>:430</code>) accept an unused <code>aspect_ratio</code></td>
+<td>Both removed with the rewrite</td>
+</tr>
+<tr>
+<td>D4</td>
+<td><code>config.py:812</code> reads <code>yolo_headtail_canonical_margin</code> — a key <strong>nothing in <code>src/</code> writes</strong> — so the inference margin is permanently 1.3 and not settable. The crop exporter reads <code>INDIVIDUAL_CROP_PADDING</code> (<code>generator.py:93</code>, default 0.1 → margin 1.1), which <em>is</em> GUI-wired. Training exports and inference crops use different margins today</td>
+<td>One margin knob, wired from both builders. This is load-bearing: §1 makes margin the operator's dial for clipping</td>
+</tr>
+<tr>
+<td>D5</td>
+<td><code>ClassifierMetadata.input_size</code> is documented <code>(H, W)</code> (<code>backend.py:47</code>) but read as <code>(W, H)</code> at <code>stages/cnn.py:55</code>, <code>stages/headtail.py:84</code>, <code>crops.py:261/367/450/487</code>, <code>headtail.py:522/599/753</code>; <code>native_sizes</code> rows are written transposed to match</td>
+<td>Fix with the Layer 2 wiring — see below</td>
+</tr>
+</tbody>
+</table>
+<p>D5 is currently harmless <em>only</em> because two anisotropic stretches cancel. An
+isotropic Layer 2 breaks that cancellation, so every non-square classifier would
+be silently mis-shaped. Tiny head-tail models default to <code>[64, 128]</code>, so
+non-square is already the norm there. <strong>This must land in the same change as
+Layer 2, not before or after.</strong></p>
+<p>All of D1–D5 are symptoms of geometry being computed in more than one place;
+they cannot recur once it is computed in one. D2 additionally needs its
+<em>mechanism</em> removed: <code>cli_config._default_advanced_config()</code> (21 keys) and
+<code>gui/orchestrators/config._load_advanced_config()</code> (25 keys) are duplicate
+tables that have already diverged, and neither contains
+<code>reference_aspect_ratio</code> — which is why the CLI had to invent a default. The two
+collapse into one module-level constant.</p>
+<h3 id="yolo-classify-does-not-fit-the-contract">YOLO-classify does not fit the contract<a class="headerlink" href="#yolo-classify-does-not-fit-the-contract" title="Permanent link">&para;</a></h3>
+<p><code>_forward_yolo</code> (<code>backend.py:950</code>) hands raw crops to Ultralytics, which applies
+<code>Resize(shortest_edge)</code> + <code>CenterCrop</code> at inference and
+<code>RandomResizedCrop(scale=0.08-1.0)</code> at training. A 128×64 canonical crop is
+upscaled and centre-cropped to 224×224, discarding half the animal's length, and
+<code>ClassifierMetadata.input_size</code> is ignored entirely.</p>
+<p>The byte-identical train/inference test (§4) is therefore <strong>not writable</strong> for
+this family as it stands. Resolution: pre-fit to a square via Layer 2 before
+<code>_forward_yolo</code>, so Ultralytics' centre-crop becomes a no-op. If that proves
+unreliable, declare YOLO-classify unsupported for canonical crops rather than
+leaving a hole in the guard.</p>
+<h3 id="non-square-classifier-inputs">Non-square classifier inputs<a class="headerlink" href="#non-square-classifier-inputs" title="Permanent link">&para;</a></h3>
+<p><code>CustomCNNParams.input_size</code> (<code>training/contracts.py:104</code>) is a single <code>int</code>,
+stamped as <code>(sz, sz)</code> (<code>runner.py:1170, 1195, 1832, 1855</code>). Layer 2 cannot
+produce a train/inference-identical tensor for the torchvision/TIMM backbone
+until this widens to an <code>(H, W)</code> pair. The tiny path already has
+<code>input_width</code>/<code>input_height</code>. This is its own task, not a detail of the
+<code>Resize</code> swap.</p>
+<hr />
+<h2 id="4-testing">4. Testing<a class="headerlink" href="#4-testing" title="Permanent link">&para;</a></h2>
+<p><strong>Layer 1 (pure, no Qt, no models):</strong>
+- Rigidity: for a fixed geometry, the affine's linear part is a pure rotation —
+  <code>M[:, :2]</code> is orthogonal with unit singular values, for OBBs of many different
+  aspect ratios. This is the direct assertion that the old bug is gone.
+- Invariance to animal size: two OBBs at the same centre and angle but different
+  extents produce <strong>identical</strong> affines.
+- Canvas dims depend only on the geometry, never on the detection.
+- <code>major_px = body_px * sqrt(ar)</code> round-trips: an OBB built to the reference
+  aspect and body size exactly fills <code>canvas / margin</code>.
+- Clipping is reported, not silently absorbed: an oversized OBB sets
+  <code>clipped=True</code> with the expected overflow ratio; an undersized one does not.
+- Head-tail 90° rotation swaps canvas dims and composes invertibly.</p>
+<p><strong>Layer 2 (pure):</strong>
+- Isotropy: <code>fit.scale</code> is a single scalar; content aspect is preserved exactly.
+- Centring: offsets are symmetric within one pixel on the padded axis.
+- Identity case: source dims equal model dims → <code>scale == 1</code>, zero offset, no
+  padding.
+- Both orientations: source wider than model, and taller.
+- <code>fit_affine</code> composed with its inverse round-trips points to sub-pixel error.</p>
+<p><strong>Composition:</strong>
+- A synthetic keypoint at a known frame position, pushed through
+  <code>M_total</code> and back through <code>M_inverse</code>, returns to within sub-pixel error —
+  across aspect ratios, head-tail directions, and both fit orientations.</p>
+<p><strong>Train/inference identity (the property the whole design exists for):</strong>
+- The same source image, fitted by the inference path and by the training
+  transform, produces <strong>byte-identical</strong> tensors. One test per kit
+  (ClassKit, PoseKit). This is the regression that would otherwise reappear
+  silently.</p>
+<p><strong>Integration:</strong>
+- The 10 existing tests that lock current crop geometry are re-baselined
+  against the new contract, not deleted:
+  <code>tests/helpers/tiny_clip.py</code>, <code>test_canonical_crop.py</code>,
+  <code>test_gpu_classifier_crop.py</code>, <code>test_inference_api_pose.py</code>,
+  <code>test_inference_cache_keys.py</code>, <code>test_inference_crops.py</code>,
+  <code>test_inference_extract_crops_batch.py</code>, <code>test_inference_foreign_mask.py</code>,
+  <code>test_inference_stages_crops.py</code>,
+  <code>test_pipeline_pose_batch_canonical_geometry.py</code>.
+- CPU and GPU crop paths agree to within interpolation tolerance under the new
+  geometry (existing <code>test_gpu_classifier_crop.py</code> pattern).</p>
+<p><strong>Gate:</strong> delta-based. The base suite carries pre-existing failures (6 in
+<code>test_oriented_track_video_export.py</code>, plus ordering pollution in
+<code>test_vitpose_export.py</code>); the gate is "no new failures", not an absolute count.</p>
+<hr />
+<h2 id="5-equivalence-and-retraining">5. Equivalence and retraining<a class="headerlink" href="#5-equivalence-and-retraining" title="Permanent link">&para;</a></h2>
+<p>This change is <strong>intentionally not equivalent</strong>. Every clip that runs a
+crop-consuming stage will differ: <code>emi_obb_identity</code>, <code>ant_pose_headtail</code>,
+<code>ant_obb_sleap</code>, <code>ant_obb_sequential</code>, <code>ant_cnn_identity</code>. <code>fly_obb</code> and
+<code>worm_bgsub</code> should be unaffected — to be confirmed, and their continued
+equivalence is a useful control that the change is confined to crop consumers.</p>
+<p>The harness is therefore used to <strong>re-baseline</strong>, not to pass: run the matrix
+before and after on both platforms (MPS here, CUDA on mehek), record the new
+baseline, and confirm the two non-crop clips stay byte-identical.</p>
+<p>Every existing model was trained on old-convention crops and needs retraining:
+head-tail, CNN identity, ViTPose, SLEAP. The operator has accepted this.</p>
+<p>Head-tail warrants explicit measurement rather than assumption. The comment at
+<code>stages/crops.py:240-247</code> records that merely adding a resample step flipped
+1-2% of direction decisions against legacy, and head-tail sits upstream of
+tracking identity. After retraining, measure direction agreement against the
+current model on a held-out clip and report it, rather than inferring health
+from tracking output.</p>
+<hr />
+<h2 id="6-risks">6. Risks<a class="headerlink" href="#6-risks" title="Permanent link">&para;</a></h2>
+<table>
+<thead>
+<tr>
+<th>Risk</th>
+<th>Mitigation</th>
+</tr>
+</thead>
+<tbody>
+<tr>
+<td>Head-tail regression propagating into identity</td>
+<td>Explicit direction-agreement measurement post-retrain; head-tail is demonstrably resample-sensitive</td>
+</tr>
+<tr>
+<td>Clipping unnoticed by the operator</td>
+<td>Counted and reported per run and stamped into the sidecar; surfaced in the GUI summary</td>
+</tr>
+<tr>
+<td>Stale detection caches mixing conventions</td>
+<td>Canonical geometry enters the cache key</td>
+</tr>
+<tr>
+<td>Crop memory grows</td>
+<td>The canvas is sized for the reference animal plus margin, not per-detection; fixed-size batches also remove the batch-max padding waste</td>
+</tr>
+<tr>
+<td>Mixed-provenance training datasets</td>
+<td>Sidecar comparison warns on mismatch</td>
+</tr>
+<tr>
+<td>A consumer quietly keeping its own resize</td>
+<td>The byte-identical train/inference test per kit is the structural guard</td>
+</tr>
+</tbody>
+</table>
+
+
+
+
+
+
+
+
+
+
+
+
+                
+              </article>
+            </div>
+          
+          
+<script>var target=document.getElementById(location.hash.slice(1));target&&target.name&&(target.checked=target.name.startsWith("__tabbed_"))</script>
+        </div>
+        
+          <button type="button" class="md-top md-icon" data-md-component="top" hidden>
+  
+  <svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 24 24"><path d="M13 20h-2V8l-5.5 5.5-1.42-1.42L12 4.16l7.92 7.92-1.42 1.42L13 8z"/></svg>
+  Back to top
+</button>
+        
+      </main>
+      
+        <footer class="md-footer">
+  
+  <div class="md-footer-meta md-typeset">
+    <div class="md-footer-meta__inner md-grid">
+      <div class="md-copyright">
+  
+  
+    Made with
+    <a href="https://squidfunk.github.io/mkdocs-material/" target="_blank" rel="noopener">
+      Material for MkDocs
+    </a>
+  
+</div>
+      
+    </div>
+  </div>
+</footer>
+      
+    </div>
+    <div class="md-dialog" data-md-component="dialog">
+      <div class="md-dialog__inner md-typeset"></div>
+    </div>
+    
+    
+    <script id="__config" type="application/json">{"base": "../../../..", "features": ["navigation.tabs", "navigation.sections", "navigation.expand", "navigation.top", "content.code.copy", "content.action.edit", "search.suggest", "search.highlight"], "search": "../../../../assets/javascripts/workers/search.6ce7567c.min.js", "translations": {"clipboard.copied": "Copied to clipboard", "clipboard.copy": "Copy to clipboard", "search.result.more.one": "1 more on this page", "search.result.more.other": "# more on this page", "search.result.none": "No matching documents", "search.result.one": "1 matching document", "search.result.other": "# matching documents", "search.result.placeholder": "Type to start searching", "search.result.term.missing": "Missing", "select.version": "Select version"}, "version": {"default": "latest", "provider": "mike"}}</script>
+    
+    
+      <script src="../../../../assets/javascripts/bundle.83f73b43.min.js"></script>
+      
+    
+  </body>
+</html>

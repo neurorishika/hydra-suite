@@ -1,0 +1,2258 @@
+
+<!doctype html>
+<html lang="en" class="no-js">
+  <head>
+    
+      <meta charset="utf-8">
+      <meta name="viewport" content="width=device-width,initial-scale=1">
+      
+        <meta name="description" content="User and developer documentation for HYDRA Suite">
+      
+      
+      
+        <link rel="canonical" href="https://neurorishika.github.io/hydra-suite/latest/superpowers/plans/done/2026-08-08-identity-phase3-evidence-stage/">
+      
+      
+      
+      
+      <link rel="icon" href="../../../../assets/images/favicon.png">
+      <meta name="generator" content="mkdocs-1.6.1, mkdocs-material-9.5.43">
+    
+    
+      
+        <title>Identity Overhaul — Phase 3: Evidence as an Inference-Time Artifact Implementation Plan - HYDRA Suite Docs</title>
+      
+    
+    
+      <link rel="stylesheet" href="../../../../assets/stylesheets/main.0253249f.min.css">
+      
+        
+        <link rel="stylesheet" href="../../../../assets/stylesheets/palette.06af60db.min.css">
+      
+      
+
+
+    
+    
+      
+    
+    
+      
+        
+        
+        <link rel="preconnect" href="https://fonts.gstatic.com" crossorigin>
+        <link rel="stylesheet" href="https://fonts.googleapis.com/css?family=Roboto:300,300i,400,400i,700,700i%7CRoboto+Mono:400,400i,700,700i&display=fallback">
+        <style>:root{--md-text-font:"Roboto";--md-code-font:"Roboto Mono"}</style>
+      
+    
+    
+      <link rel="stylesheet" href="../../../../assets/_mkdocstrings.css">
+    
+    <script>__md_scope=new URL("../../../..",location),__md_hash=e=>[...e].reduce(((e,_)=>(e<<5)-e+_.charCodeAt(0)),0),__md_get=(e,_=localStorage,t=__md_scope)=>JSON.parse(_.getItem(t.pathname+"."+e)),__md_set=(e,_,t=localStorage,a=__md_scope)=>{try{t.setItem(a.pathname+"."+e,JSON.stringify(_))}catch(e){}}</script>
+    
+      
+
+    
+    
+    
+  </head>
+  
+  
+    
+    
+      
+    
+    
+    
+    
+    <body dir="ltr" data-md-color-scheme="default" data-md-color-primary="blue" data-md-color-accent="light-blue">
+  
+    
+    <input class="md-toggle" data-md-toggle="drawer" type="checkbox" id="__drawer" autocomplete="off">
+    <input class="md-toggle" data-md-toggle="search" type="checkbox" id="__search" autocomplete="off">
+    <label class="md-overlay" for="__drawer"></label>
+    <div data-md-component="skip">
+      
+        
+        <a href="#identity-overhaul-phase-3-evidence-as-an-inference-time-artifact-implementation-plan" class="md-skip">
+          Skip to content
+        </a>
+      
+    </div>
+    <div data-md-component="announce">
+      
+    </div>
+    
+      <div data-md-color-scheme="default" data-md-component="outdated" hidden>
+        
+      </div>
+    
+    
+      
+
+<header class="md-header" data-md-component="header">
+  <nav class="md-header__inner md-grid" aria-label="Header">
+    <a href="../../../.." title="HYDRA Suite Docs" class="md-header__button md-logo" aria-label="HYDRA Suite Docs" data-md-component="logo">
+      
+  
+  <svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 24 24"><path d="M12 8a3 3 0 0 0 3-3 3 3 0 0 0-3-3 3 3 0 0 0-3 3 3 3 0 0 0 3 3m0 3.54C9.64 9.35 6.5 8 3 8v11c3.5 0 6.64 1.35 9 3.54 2.36-2.19 5.5-3.54 9-3.54V8c-3.5 0-6.64 1.35-9 3.54"/></svg>
+
+    </a>
+    <label class="md-header__button md-icon" for="__drawer">
+      
+      <svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 24 24"><path d="M3 6h18v2H3zm0 5h18v2H3zm0 5h18v2H3z"/></svg>
+    </label>
+    <div class="md-header__title" data-md-component="header-title">
+      <div class="md-header__ellipsis">
+        <div class="md-header__topic">
+          <span class="md-ellipsis">
+            HYDRA Suite Docs
+          </span>
+        </div>
+        <div class="md-header__topic" data-md-component="header-topic">
+          <span class="md-ellipsis">
+            
+              Identity Overhaul — Phase 3: Evidence as an Inference-Time Artifact Implementation Plan
+            
+          </span>
+        </div>
+      </div>
+    </div>
+    
+      
+        <form class="md-header__option" data-md-component="palette">
+  
+    
+    
+    
+    <input class="md-option" data-md-color-media="(prefers-color-scheme: light)" data-md-color-scheme="default" data-md-color-primary="blue" data-md-color-accent="light-blue"  aria-label="Switch to dark mode"  type="radio" name="__palette" id="__palette_0">
+    
+      <label class="md-header__button md-icon" title="Switch to dark mode" for="__palette_1" hidden>
+        <svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 24 24"><path d="m17.75 4.09-2.53 1.94.91 3.06-2.63-1.81-2.63 1.81.91-3.06-2.53-1.94L12.44 4l1.06-3 1.06 3zm3.5 6.91-1.64 1.25.59 1.98-1.7-1.17-1.7 1.17.59-1.98L15.75 11l2.06-.05L18.5 9l.69 1.95zm-2.28 4.95c.83-.08 1.72 1.1 1.19 1.85-.32.45-.66.87-1.08 1.27C15.17 23 8.84 23 4.94 19.07c-3.91-3.9-3.91-10.24 0-14.14.4-.4.82-.76 1.27-1.08.75-.53 1.93.36 1.85 1.19-.27 2.86.69 5.83 2.89 8.02a9.96 9.96 0 0 0 8.02 2.89m-1.64 2.02a12.08 12.08 0 0 1-7.8-3.47c-2.17-2.19-3.33-5-3.49-7.82-2.81 3.14-2.7 7.96.31 10.98 3.02 3.01 7.84 3.12 10.98.31"/></svg>
+      </label>
+    
+  
+    
+    
+    
+    <input class="md-option" data-md-color-media="(prefers-color-scheme: dark)" data-md-color-scheme="slate" data-md-color-primary="blue" data-md-color-accent="light-blue"  aria-label="Switch to light mode"  type="radio" name="__palette" id="__palette_1">
+    
+      <label class="md-header__button md-icon" title="Switch to light mode" for="__palette_0" hidden>
+        <svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 24 24"><path d="M12 7a5 5 0 0 1 5 5 5 5 0 0 1-5 5 5 5 0 0 1-5-5 5 5 0 0 1 5-5m0 2a3 3 0 0 0-3 3 3 3 0 0 0 3 3 3 3 0 0 0 3-3 3 3 0 0 0-3-3m0-7 2.39 3.42C13.65 5.15 12.84 5 12 5s-1.65.15-2.39.42zM3.34 7l4.16-.35A7.2 7.2 0 0 0 5.94 8.5c-.44.74-.69 1.5-.83 2.29zm.02 10 1.76-3.77a7.131 7.131 0 0 0 2.38 4.14zM20.65 7l-1.77 3.79a7.02 7.02 0 0 0-2.38-4.15zm-.01 10-4.14.36c.59-.51 1.12-1.14 1.54-1.86.42-.73.69-1.5.83-2.29zM12 22l-2.41-3.44c.74.27 1.55.44 2.41.44.82 0 1.63-.17 2.37-.44z"/></svg>
+      </label>
+    
+  
+</form>
+      
+    
+    
+      <script>var palette=__md_get("__palette");if(palette&&palette.color){if("(prefers-color-scheme)"===palette.color.media){var media=matchMedia("(prefers-color-scheme: light)"),input=document.querySelector(media.matches?"[data-md-color-media='(prefers-color-scheme: light)']":"[data-md-color-media='(prefers-color-scheme: dark)']");palette.color.media=input.getAttribute("data-md-color-media"),palette.color.scheme=input.getAttribute("data-md-color-scheme"),palette.color.primary=input.getAttribute("data-md-color-primary"),palette.color.accent=input.getAttribute("data-md-color-accent")}for(var[key,value]of Object.entries(palette.color))document.body.setAttribute("data-md-color-"+key,value)}</script>
+    
+    
+    
+      <label class="md-header__button md-icon" for="__search">
+        
+        <svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 24 24"><path d="M9.5 3A6.5 6.5 0 0 1 16 9.5c0 1.61-.59 3.09-1.56 4.23l.27.27h.79l5 5-1.5 1.5-5-5v-.79l-.27-.27A6.52 6.52 0 0 1 9.5 16 6.5 6.5 0 0 1 3 9.5 6.5 6.5 0 0 1 9.5 3m0 2C7 5 5 7 5 9.5S7 14 9.5 14 14 12 14 9.5 12 5 9.5 5"/></svg>
+      </label>
+      <div class="md-search" data-md-component="search" role="dialog">
+  <label class="md-search__overlay" for="__search"></label>
+  <div class="md-search__inner" role="search">
+    <form class="md-search__form" name="search">
+      <input type="text" class="md-search__input" name="query" aria-label="Search" placeholder="Search" autocapitalize="off" autocorrect="off" autocomplete="off" spellcheck="false" data-md-component="search-query" required>
+      <label class="md-search__icon md-icon" for="__search">
+        
+        <svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 24 24"><path d="M9.5 3A6.5 6.5 0 0 1 16 9.5c0 1.61-.59 3.09-1.56 4.23l.27.27h.79l5 5-1.5 1.5-5-5v-.79l-.27-.27A6.52 6.52 0 0 1 9.5 16 6.5 6.5 0 0 1 3 9.5 6.5 6.5 0 0 1 9.5 3m0 2C7 5 5 7 5 9.5S7 14 9.5 14 14 12 14 9.5 12 5 9.5 5"/></svg>
+        
+        <svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 24 24"><path d="M20 11v2H8l5.5 5.5-1.42 1.42L4.16 12l7.92-7.92L13.5 5.5 8 11z"/></svg>
+      </label>
+      <nav class="md-search__options" aria-label="Search">
+        
+        <button type="reset" class="md-search__icon md-icon" title="Clear" aria-label="Clear" tabindex="-1">
+          
+          <svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 24 24"><path d="M19 6.41 17.59 5 12 10.59 6.41 5 5 6.41 10.59 12 5 17.59 6.41 19 12 13.41 17.59 19 19 17.59 13.41 12z"/></svg>
+        </button>
+      </nav>
+      
+        <div class="md-search__suggest" data-md-component="search-suggest"></div>
+      
+    </form>
+    <div class="md-search__output">
+      <div class="md-search__scrollwrap" tabindex="0" data-md-scrollfix>
+        <div class="md-search-result" data-md-component="search-result">
+          <div class="md-search-result__meta">
+            Initializing search
+          </div>
+          <ol class="md-search-result__list" role="presentation"></ol>
+        </div>
+      </div>
+    </div>
+  </div>
+</div>
+    
+    
+      <div class="md-header__source">
+        <a href="https://github.com/neurorishika/hydra-suite" title="Go to repository" class="md-source" data-md-component="source">
+  <div class="md-source__icon md-icon">
+    
+    <svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 448 512"><!--! Font Awesome Free 6.6.0 by @fontawesome - https://fontawesome.com License - https://fontawesome.com/license/free (Icons: CC BY 4.0, Fonts: SIL OFL 1.1, Code: MIT License) Copyright 2024 Fonticons, Inc.--><path d="M439.55 236.05 244 40.45a28.87 28.87 0 0 0-40.81 0l-40.66 40.63 51.52 51.52c27.06-9.14 52.68 16.77 43.39 43.68l49.66 49.66c34.23-11.8 61.18 31 35.47 56.69-26.49 26.49-70.21-2.87-56-37.34L240.22 199v121.85c25.3 12.54 22.26 41.85 9.08 55a34.34 34.34 0 0 1-48.55 0c-17.57-17.6-11.07-46.91 11.25-56v-123c-20.8-8.51-24.6-30.74-18.64-45L142.57 101 8.45 235.14a28.86 28.86 0 0 0 0 40.81l195.61 195.6a28.86 28.86 0 0 0 40.8 0l194.69-194.69a28.86 28.86 0 0 0 0-40.81"/></svg>
+  </div>
+  <div class="md-source__repository">
+    neurorishika/hydra-suite
+  </div>
+</a>
+      </div>
+    
+  </nav>
+  
+</header>
+    
+    <div class="md-container" data-md-component="container">
+      
+      
+        
+          
+            
+<nav class="md-tabs" aria-label="Tabs" data-md-component="tabs">
+  <div class="md-grid">
+    <ul class="md-tabs__list">
+      
+        
+  
+  
+  
+    <li class="md-tabs__item">
+      <a href="../../../.." class="md-tabs__link">
+        
+  
+    
+  
+  Home
+
+      </a>
+    </li>
+  
+
+      
+        
+  
+  
+  
+    
+    
+      <li class="md-tabs__item">
+        <a href="../../../../getting-started/installation/" class="md-tabs__link">
+          
+  
+  Getting Started
+
+        </a>
+      </li>
+    
+  
+
+      
+        
+  
+  
+  
+    
+    
+      <li class="md-tabs__item">
+        <a href="../../../../user-guide/overview/" class="md-tabs__link">
+          
+  
+  User Guide
+
+        </a>
+      </li>
+    
+  
+
+      
+        
+  
+  
+  
+    
+    
+      <li class="md-tabs__item">
+        <a href="../../../../developer-guide/architecture/" class="md-tabs__link">
+          
+  
+  Developer Guide
+
+        </a>
+      </li>
+    
+  
+
+      
+        
+  
+  
+  
+    
+    
+      <li class="md-tabs__item">
+        <a href="../../../../reference/api-index/" class="md-tabs__link">
+          
+  
+  Reference
+
+        </a>
+      </li>
+    
+  
+
+      
+    </ul>
+  </div>
+</nav>
+          
+        
+      
+      <main class="md-main" data-md-component="main">
+        <div class="md-main__inner md-grid">
+          
+            
+              
+              <div class="md-sidebar md-sidebar--primary" data-md-component="sidebar" data-md-type="navigation" >
+                <div class="md-sidebar__scrollwrap">
+                  <div class="md-sidebar__inner">
+                    
+
+
+  
+
+
+<nav class="md-nav md-nav--primary md-nav--lifted" aria-label="Navigation" data-md-level="0">
+  <label class="md-nav__title" for="__drawer">
+    <a href="../../../.." title="HYDRA Suite Docs" class="md-nav__button md-logo" aria-label="HYDRA Suite Docs" data-md-component="logo">
+      
+  
+  <svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 24 24"><path d="M12 8a3 3 0 0 0 3-3 3 3 0 0 0-3-3 3 3 0 0 0-3 3 3 3 0 0 0 3 3m0 3.54C9.64 9.35 6.5 8 3 8v11c3.5 0 6.64 1.35 9 3.54 2.36-2.19 5.5-3.54 9-3.54V8c-3.5 0-6.64 1.35-9 3.54"/></svg>
+
+    </a>
+    HYDRA Suite Docs
+  </label>
+  
+    <div class="md-nav__source">
+      <a href="https://github.com/neurorishika/hydra-suite" title="Go to repository" class="md-source" data-md-component="source">
+  <div class="md-source__icon md-icon">
+    
+    <svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 448 512"><!--! Font Awesome Free 6.6.0 by @fontawesome - https://fontawesome.com License - https://fontawesome.com/license/free (Icons: CC BY 4.0, Fonts: SIL OFL 1.1, Code: MIT License) Copyright 2024 Fonticons, Inc.--><path d="M439.55 236.05 244 40.45a28.87 28.87 0 0 0-40.81 0l-40.66 40.63 51.52 51.52c27.06-9.14 52.68 16.77 43.39 43.68l49.66 49.66c34.23-11.8 61.18 31 35.47 56.69-26.49 26.49-70.21-2.87-56-37.34L240.22 199v121.85c25.3 12.54 22.26 41.85 9.08 55a34.34 34.34 0 0 1-48.55 0c-17.57-17.6-11.07-46.91 11.25-56v-123c-20.8-8.51-24.6-30.74-18.64-45L142.57 101 8.45 235.14a28.86 28.86 0 0 0 0 40.81l195.61 195.6a28.86 28.86 0 0 0 40.8 0l194.69-194.69a28.86 28.86 0 0 0 0-40.81"/></svg>
+  </div>
+  <div class="md-source__repository">
+    neurorishika/hydra-suite
+  </div>
+</a>
+    </div>
+  
+  <ul class="md-nav__list" data-md-scrollfix>
+    
+      
+      
+  
+  
+  
+  
+    <li class="md-nav__item">
+      <a href="../../../.." class="md-nav__link">
+        
+  
+  <span class="md-ellipsis">
+    Home
+  </span>
+  
+
+      </a>
+    </li>
+  
+
+    
+      
+      
+  
+  
+  
+  
+    
+    
+    
+      
+      
+        
+      
+    
+    
+    <li class="md-nav__item md-nav__item--nested">
+      
+        
+        
+          
+        
+        <input class="md-nav__toggle md-toggle md-toggle--indeterminate" type="checkbox" id="__nav_2" >
+        
+          
+          <label class="md-nav__link" for="__nav_2" id="__nav_2_label" tabindex="0">
+            
+  
+  <span class="md-ellipsis">
+    Getting Started
+  </span>
+  
+
+            <span class="md-nav__icon md-icon"></span>
+          </label>
+        
+        <nav class="md-nav" data-md-level="1" aria-labelledby="__nav_2_label" aria-expanded="false">
+          <label class="md-nav__title" for="__nav_2">
+            <span class="md-nav__icon md-icon"></span>
+            Getting Started
+          </label>
+          <ul class="md-nav__list" data-md-scrollfix>
+            
+              
+                
+  
+  
+  
+  
+    <li class="md-nav__item">
+      <a href="../../../../getting-started/installation/" class="md-nav__link">
+        
+  
+  <span class="md-ellipsis">
+    Installation
+  </span>
+  
+
+      </a>
+    </li>
+  
+
+              
+            
+              
+                
+  
+  
+  
+  
+    <li class="md-nav__item">
+      <a href="../../../../getting-started/environments/" class="md-nav__link">
+        
+  
+  <span class="md-ellipsis">
+    Environments and Makefile
+  </span>
+  
+
+      </a>
+    </li>
+  
+
+              
+            
+              
+                
+  
+  
+  
+  
+    <li class="md-nav__item">
+      <a href="../../../../getting-started/integrations/" class="md-nav__link">
+        
+  
+  <span class="md-ellipsis">
+    Integrations
+  </span>
+  
+
+      </a>
+    </li>
+  
+
+              
+            
+              
+                
+  
+  
+  
+  
+    <li class="md-nav__item">
+      <a href="../../../../getting-started/quickstart-hydra/" class="md-nav__link">
+        
+  
+  <span class="md-ellipsis">
+    Quickstart (TrackerKit)
+  </span>
+  
+
+      </a>
+    </li>
+  
+
+              
+            
+              
+                
+  
+  
+  
+  
+    <li class="md-nav__item">
+      <a href="../../../../getting-started/quickstart-posekit/" class="md-nav__link">
+        
+  
+  <span class="md-ellipsis">
+    Quickstart (PoseKit)
+  </span>
+  
+
+      </a>
+    </li>
+  
+
+              
+            
+              
+                
+  
+  
+  
+  
+    <li class="md-nav__item">
+      <a href="../../../../getting-started/platforms/" class="md-nav__link">
+        
+  
+  <span class="md-ellipsis">
+    Platform Notes
+  </span>
+  
+
+      </a>
+    </li>
+  
+
+              
+            
+          </ul>
+        </nav>
+      
+    </li>
+  
+
+    
+      
+      
+  
+  
+  
+  
+    
+    
+    
+      
+      
+        
+      
+    
+    
+    <li class="md-nav__item md-nav__item--nested">
+      
+        
+        
+          
+        
+        <input class="md-nav__toggle md-toggle md-toggle--indeterminate" type="checkbox" id="__nav_3" >
+        
+          
+          <label class="md-nav__link" for="__nav_3" id="__nav_3_label" tabindex="0">
+            
+  
+  <span class="md-ellipsis">
+    User Guide
+  </span>
+  
+
+            <span class="md-nav__icon md-icon"></span>
+          </label>
+        
+        <nav class="md-nav" data-md-level="1" aria-labelledby="__nav_3_label" aria-expanded="false">
+          <label class="md-nav__title" for="__nav_3">
+            <span class="md-nav__icon md-icon"></span>
+            User Guide
+          </label>
+          <ul class="md-nav__list" data-md-scrollfix>
+            
+              
+                
+  
+  
+  
+  
+    <li class="md-nav__item">
+      <a href="../../../../user-guide/overview/" class="md-nav__link">
+        
+  
+  <span class="md-ellipsis">
+    Overview
+  </span>
+  
+
+      </a>
+    </li>
+  
+
+              
+            
+              
+                
+  
+  
+  
+  
+    <li class="md-nav__item">
+      <a href="../../../../user-guide/workflow/" class="md-nav__link">
+        
+  
+  <span class="md-ellipsis">
+    End-to-End Workflow
+  </span>
+  
+
+      </a>
+    </li>
+  
+
+              
+            
+              
+                
+  
+  
+  
+  
+    <li class="md-nav__item">
+      <a href="../../../../user-guide/detection-modes/" class="md-nav__link">
+        
+  
+  <span class="md-ellipsis">
+    Detection Modes
+  </span>
+  
+
+      </a>
+    </li>
+  
+
+              
+            
+              
+                
+  
+  
+  
+  
+    <li class="md-nav__item">
+      <a href="../../../../user-guide/tracking-and-merging/" class="md-nav__link">
+        
+  
+  <span class="md-ellipsis">
+    Tracking and Merging
+  </span>
+  
+
+      </a>
+    </li>
+  
+
+              
+            
+              
+                
+  
+  
+  
+  
+    <li class="md-nav__item">
+      <a href="../../../../user-guide/post-processing/" class="md-nav__link">
+        
+  
+  <span class="md-ellipsis">
+    Post-processing
+  </span>
+  
+
+      </a>
+    </li>
+  
+
+              
+            
+              
+                
+  
+  
+  
+  
+    <li class="md-nav__item">
+      <a href="../../../../user-guide/configuration-reference/" class="md-nav__link">
+        
+  
+  <span class="md-ellipsis">
+    Configuration Reference
+  </span>
+  
+
+      </a>
+    </li>
+  
+
+              
+            
+              
+                
+  
+  
+  
+  
+    <li class="md-nav__item">
+      <a href="../../../../user-guide/compute-runtimes/" class="md-nav__link">
+        
+  
+  <span class="md-ellipsis">
+    Compute Runtimes
+  </span>
+  
+
+      </a>
+    </li>
+  
+
+              
+            
+              
+                
+  
+  
+  
+  
+    <li class="md-nav__item">
+      <a href="../../../../user-guide/outputs-and-csv-schema/" class="md-nav__link">
+        
+  
+  <span class="md-ellipsis">
+    Outputs and CSV Schema
+  </span>
+  
+
+      </a>
+    </li>
+  
+
+              
+            
+              
+                
+  
+  
+  
+  
+    <li class="md-nav__item">
+      <a href="../../../../user-guide/dataset-generation/" class="md-nav__link">
+        
+  
+  <span class="md-ellipsis">
+    Dataset Generation
+  </span>
+  
+
+      </a>
+    </li>
+  
+
+              
+            
+              
+                
+  
+  
+  
+  
+    <li class="md-nav__item">
+      <a href="../../../../user-guide/individual-analysis/" class="md-nav__link">
+        
+  
+  <span class="md-ellipsis">
+    Individual Analysis
+  </span>
+  
+
+      </a>
+    </li>
+  
+
+              
+            
+              
+                
+  
+  
+  
+  
+    <li class="md-nav__item">
+      <a href="../../../../user-guide/posekit/" class="md-nav__link">
+        
+  
+  <span class="md-ellipsis">
+    PoseKit
+  </span>
+  
+
+      </a>
+    </li>
+  
+
+              
+            
+              
+                
+  
+  
+  
+  
+    <li class="md-nav__item">
+      <a href="../../../../user-guide/classkit/" class="md-nav__link">
+        
+  
+  <span class="md-ellipsis">
+    ClassKit
+  </span>
+  
+
+      </a>
+    </li>
+  
+
+              
+            
+              
+                
+  
+  
+  
+  
+    <li class="md-nav__item">
+      <a href="../../../../user-guide/detectkit/" class="md-nav__link">
+        
+  
+  <span class="md-ellipsis">
+    DetectKit
+  </span>
+  
+
+      </a>
+    </li>
+  
+
+              
+            
+              
+                
+  
+  
+  
+  
+    <li class="md-nav__item">
+      <a href="../../../../runbooks/detectkit-headless-training/" class="md-nav__link">
+        
+  
+  <span class="md-ellipsis">
+    DetectKit Headless Training
+  </span>
+  
+
+      </a>
+    </li>
+  
+
+              
+            
+              
+                
+  
+  
+  
+  
+    <li class="md-nav__item">
+      <a href="../../../../user-guide/detectkit-semantic-escalation/" class="md-nav__link">
+        
+  
+  <span class="md-ellipsis">
+    DetectKit: Semantic Escalation (SAM3)
+  </span>
+  
+
+      </a>
+    </li>
+  
+
+              
+            
+              
+                
+  
+  
+  
+  
+    <li class="md-nav__item">
+      <a href="../../../../user-guide/detectkit-sahi-calibration/" class="md-nav__link">
+        
+  
+  <span class="md-ellipsis">
+    DetectKit: SAHI Calibration Profiles
+  </span>
+  
+
+      </a>
+    </li>
+  
+
+              
+            
+              
+                
+  
+  
+  
+  
+    <li class="md-nav__item">
+      <a href="../../../../user-guide/filterkit/" class="md-nav__link">
+        
+  
+  <span class="md-ellipsis">
+    FilterKit
+  </span>
+  
+
+      </a>
+    </li>
+  
+
+              
+            
+              
+                
+  
+  
+  
+  
+    <li class="md-nav__item">
+      <a href="../../../../user-guide/refinekit/" class="md-nav__link">
+        
+  
+  <span class="md-ellipsis">
+    RefineKit
+  </span>
+  
+
+      </a>
+    </li>
+  
+
+              
+            
+              
+                
+  
+  
+  
+  
+    <li class="md-nav__item">
+      <a href="../../../../user-guide/troubleshooting/" class="md-nav__link">
+        
+  
+  <span class="md-ellipsis">
+    Troubleshooting
+  </span>
+  
+
+      </a>
+    </li>
+  
+
+              
+            
+          </ul>
+        </nav>
+      
+    </li>
+  
+
+    
+      
+      
+  
+  
+  
+  
+    
+    
+    
+      
+      
+        
+      
+    
+    
+    <li class="md-nav__item md-nav__item--nested">
+      
+        
+        
+          
+        
+        <input class="md-nav__toggle md-toggle md-toggle--indeterminate" type="checkbox" id="__nav_4" >
+        
+          
+          <label class="md-nav__link" for="__nav_4" id="__nav_4_label" tabindex="0">
+            
+  
+  <span class="md-ellipsis">
+    Developer Guide
+  </span>
+  
+
+            <span class="md-nav__icon md-icon"></span>
+          </label>
+        
+        <nav class="md-nav" data-md-level="1" aria-labelledby="__nav_4_label" aria-expanded="false">
+          <label class="md-nav__title" for="__nav_4">
+            <span class="md-nav__icon md-icon"></span>
+            Developer Guide
+          </label>
+          <ul class="md-nav__list" data-md-scrollfix>
+            
+              
+                
+  
+  
+  
+  
+    <li class="md-nav__item">
+      <a href="../../../../developer-guide/architecture/" class="md-nav__link">
+        
+  
+  <span class="md-ellipsis">
+    Architecture
+  </span>
+  
+
+      </a>
+    </li>
+  
+
+              
+            
+              
+                
+  
+  
+  
+  
+    <li class="md-nav__item">
+      <a href="../../../../developer-guide/module-map/" class="md-nav__link">
+        
+  
+  <span class="md-ellipsis">
+    Module Map
+  </span>
+  
+
+      </a>
+    </li>
+  
+
+              
+            
+              
+                
+  
+  
+  
+  
+    <li class="md-nav__item">
+      <a href="../../../../developer-guide/data-flow/" class="md-nav__link">
+        
+  
+  <span class="md-ellipsis">
+    Data Flow
+  </span>
+  
+
+      </a>
+    </li>
+  
+
+              
+            
+              
+                
+  
+  
+  
+  
+    <li class="md-nav__item">
+      <a href="../../../../developer-guide/tracking-algorithm-deep-dive/" class="md-nav__link">
+        
+  
+  <span class="md-ellipsis">
+    Tracking Algorithm Deep Dive
+  </span>
+  
+
+      </a>
+    </li>
+  
+
+              
+            
+              
+                
+  
+  
+  
+  
+    <li class="md-nav__item">
+      <a href="../../../../developer-guide/tracking-optimization/" class="md-nav__link">
+        
+  
+  <span class="md-ellipsis">
+    Tracking Optimization
+  </span>
+  
+
+      </a>
+    </li>
+  
+
+              
+            
+              
+                
+  
+  
+  
+  
+    <li class="md-nav__item">
+      <a href="../../../../developer-guide/gpu-backends/" class="md-nav__link">
+        
+  
+  <span class="md-ellipsis">
+    GPU Backends
+  </span>
+  
+
+      </a>
+    </li>
+  
+
+              
+            
+              
+                
+  
+  
+  
+  
+    <li class="md-nav__item">
+      <a href="../../../../developer-guide/runtime-integration/" class="md-nav__link">
+        
+  
+  <span class="md-ellipsis">
+    Runtime Integration
+  </span>
+  
+
+      </a>
+    </li>
+  
+
+              
+            
+              
+                
+  
+  
+  
+  
+    <li class="md-nav__item">
+      <a href="../../../../developer-guide/resource-containment/" class="md-nav__link">
+        
+  
+  <span class="md-ellipsis">
+    Resource Containment
+  </span>
+  
+
+      </a>
+    </li>
+  
+
+              
+            
+              
+                
+  
+  
+  
+  
+    <li class="md-nav__item">
+      <a href="../../../../developer-guide/profiling/" class="md-nav__link">
+        
+  
+  <span class="md-ellipsis">
+    Profiling
+  </span>
+  
+
+      </a>
+    </li>
+  
+
+              
+            
+              
+                
+  
+  
+  
+  
+    <li class="md-nav__item">
+      <a href="../../../../developer-guide/dependency-cuda-updates/" class="md-nav__link">
+        
+  
+  <span class="md-ellipsis">
+    CUDA Dependency Updates
+  </span>
+  
+
+      </a>
+    </li>
+  
+
+              
+            
+              
+                
+  
+  
+  
+  
+    <li class="md-nav__item">
+      <a href="../../../../developer-guide/performance-tuning/" class="md-nav__link">
+        
+  
+  <span class="md-ellipsis">
+    Performance Tuning
+  </span>
+  
+
+      </a>
+    </li>
+  
+
+              
+            
+              
+                
+  
+  
+  
+  
+    <li class="md-nav__item">
+      <a href="../../../../developer-guide/inference-fast-mode/" class="md-nav__link">
+        
+  
+  <span class="md-ellipsis">
+    Inference Fast Mode
+  </span>
+  
+
+      </a>
+    </li>
+  
+
+              
+            
+              
+                
+  
+  
+  
+  
+    <li class="md-nav__item">
+      <a href="../../../../developer-guide/confidence-metrics/" class="md-nav__link">
+        
+  
+  <span class="md-ellipsis">
+    Confidence Metrics
+  </span>
+  
+
+      </a>
+    </li>
+  
+
+              
+            
+              
+                
+  
+  
+  
+  
+    <li class="md-nav__item">
+      <a href="../../../../developer-guide/extending-detection/" class="md-nav__link">
+        
+  
+  <span class="md-ellipsis">
+    Extending Detection
+  </span>
+  
+
+      </a>
+    </li>
+  
+
+              
+            
+              
+                
+  
+  
+  
+  
+    <li class="md-nav__item">
+      <a href="../../../../developer-guide/extending-identity/" class="md-nav__link">
+        
+  
+  <span class="md-ellipsis">
+    Extending Identity
+  </span>
+  
+
+      </a>
+    </li>
+  
+
+              
+            
+              
+                
+  
+  
+  
+  
+    <li class="md-nav__item">
+      <a href="../../../../developer-guide/code-health/" class="md-nav__link">
+        
+  
+  <span class="md-ellipsis">
+    Code Health & Auditing
+  </span>
+  
+
+      </a>
+    </li>
+  
+
+              
+            
+              
+                
+  
+  
+  
+  
+    <li class="md-nav__item">
+      <a href="../../../../developer-guide/publishing/" class="md-nav__link">
+        
+  
+  <span class="md-ellipsis">
+    Publishing
+  </span>
+  
+
+      </a>
+    </li>
+  
+
+              
+            
+              
+                
+  
+  
+  
+  
+    <li class="md-nav__item">
+      <a href="../../../../developer-guide/contributing/" class="md-nav__link">
+        
+  
+  <span class="md-ellipsis">
+    Contributing
+  </span>
+  
+
+      </a>
+    </li>
+  
+
+              
+            
+          </ul>
+        </nav>
+      
+    </li>
+  
+
+    
+      
+      
+  
+  
+  
+  
+    
+    
+    
+      
+      
+        
+      
+    
+    
+    <li class="md-nav__item md-nav__item--nested">
+      
+        
+        
+          
+        
+        <input class="md-nav__toggle md-toggle md-toggle--indeterminate" type="checkbox" id="__nav_5" >
+        
+          
+          <label class="md-nav__link" for="__nav_5" id="__nav_5_label" tabindex="0">
+            
+  
+  <span class="md-ellipsis">
+    Reference
+  </span>
+  
+
+            <span class="md-nav__icon md-icon"></span>
+          </label>
+        
+        <nav class="md-nav" data-md-level="1" aria-labelledby="__nav_5_label" aria-expanded="false">
+          <label class="md-nav__title" for="__nav_5">
+            <span class="md-nav__icon md-icon"></span>
+            Reference
+          </label>
+          <ul class="md-nav__list" data-md-scrollfix>
+            
+              
+                
+  
+  
+  
+  
+    <li class="md-nav__item">
+      <a href="../../../../reference/api-index/" class="md-nav__link">
+        
+  
+  <span class="md-ellipsis">
+    API Index
+  </span>
+  
+
+      </a>
+    </li>
+  
+
+              
+            
+              
+                
+  
+  
+  
+  
+    <li class="md-nav__item">
+      <a href="../../../../reference/ui-components-hydra/" class="md-nav__link">
+        
+  
+  <span class="md-ellipsis">
+    UI Components (TrackerKit)
+  </span>
+  
+
+      </a>
+    </li>
+  
+
+              
+            
+              
+                
+  
+  
+  
+  
+    <li class="md-nav__item">
+      <a href="../../../../reference/ui-components-posekit/" class="md-nav__link">
+        
+  
+  <span class="md-ellipsis">
+    UI Components (PoseKit)
+  </span>
+  
+
+      </a>
+    </li>
+  
+
+              
+            
+              
+                
+  
+  
+  
+  
+    <li class="md-nav__item">
+      <a href="../../../../reference/api-app/" class="md-nav__link">
+        
+  
+  <span class="md-ellipsis">
+    API (Launcher)
+  </span>
+  
+
+      </a>
+    </li>
+  
+
+              
+            
+              
+                
+  
+  
+  
+  
+    <li class="md-nav__item">
+      <a href="../../../../reference/api-core/" class="md-nav__link">
+        
+  
+  <span class="md-ellipsis">
+    API (Core)
+  </span>
+  
+
+      </a>
+    </li>
+  
+
+              
+            
+              
+                
+  
+  
+  
+  
+    <li class="md-nav__item">
+      <a href="../../../../reference/api-data/" class="md-nav__link">
+        
+  
+  <span class="md-ellipsis">
+    API (Data)
+  </span>
+  
+
+      </a>
+    </li>
+  
+
+              
+            
+              
+                
+  
+  
+  
+  
+    <li class="md-nav__item">
+      <a href="../../../../reference/api-gui/" class="md-nav__link">
+        
+  
+  <span class="md-ellipsis">
+    API (TrackerKit GUI)
+  </span>
+  
+
+      </a>
+    </li>
+  
+
+              
+            
+              
+                
+  
+  
+  
+  
+    <li class="md-nav__item">
+      <a href="../../../../reference/api-widgets/" class="md-nav__link">
+        
+  
+  <span class="md-ellipsis">
+    API (Widgets)
+  </span>
+  
+
+      </a>
+    </li>
+  
+
+              
+            
+              
+                
+  
+  
+  
+  
+    <li class="md-nav__item">
+      <a href="../../../../reference/api-posekit/" class="md-nav__link">
+        
+  
+  <span class="md-ellipsis">
+    API (PoseKit)
+  </span>
+  
+
+      </a>
+    </li>
+  
+
+              
+            
+              
+                
+  
+  
+  
+  
+    <li class="md-nav__item">
+      <a href="../../../../reference/api-utils/" class="md-nav__link">
+        
+  
+  <span class="md-ellipsis">
+    API (Utils)
+  </span>
+  
+
+      </a>
+    </li>
+  
+
+              
+            
+              
+                
+  
+  
+  
+  
+    <li class="md-nav__item">
+      <a href="../../../../reference/cli-reference/" class="md-nav__link">
+        
+  
+  <span class="md-ellipsis">
+    CLI Reference
+  </span>
+  
+
+      </a>
+    </li>
+  
+
+              
+            
+              
+                
+  
+  
+  
+  
+    <li class="md-nav__item">
+      <a href="../../../../reference/technical-reference/" class="md-nav__link">
+        
+  
+  <span class="md-ellipsis">
+    Technical Reference (LaTeX)
+  </span>
+  
+
+      </a>
+    </li>
+  
+
+              
+            
+              
+                
+  
+  
+  
+  
+    <li class="md-nav__item">
+      <a href="../../../../reference/changelog/" class="md-nav__link">
+        
+  
+  <span class="md-ellipsis">
+    Changelog
+  </span>
+  
+
+      </a>
+    </li>
+  
+
+              
+            
+              
+                
+  
+  
+  
+  
+    <li class="md-nav__item">
+      <a href="../../../../reference/faq/" class="md-nav__link">
+        
+  
+  <span class="md-ellipsis">
+    FAQ
+  </span>
+  
+
+      </a>
+    </li>
+  
+
+              
+            
+          </ul>
+        </nav>
+      
+    </li>
+  
+
+    
+  </ul>
+</nav>
+                  </div>
+                </div>
+              </div>
+            
+            
+              
+              <div class="md-sidebar md-sidebar--secondary" data-md-component="sidebar" data-md-type="toc" >
+                <div class="md-sidebar__scrollwrap">
+                  <div class="md-sidebar__inner">
+                    
+
+<nav class="md-nav md-nav--secondary" aria-label="Table of contents">
+  
+  
+  
+    
+  
+  
+    <label class="md-nav__title" for="__toc">
+      <span class="md-nav__icon md-icon"></span>
+      Table of contents
+    </label>
+    <ul class="md-nav__list" data-md-component="toc" data-md-scrollfix>
+      
+        <li class="md-nav__item">
+  <a href="#global-constraints" class="md-nav__link">
+    <span class="md-ellipsis">
+      Global Constraints
+    </span>
+  </a>
+  
+</li>
+      
+        <li class="md-nav__item">
+  <a href="#current-state-anchors-verified-by-exploration-line-numbers-may-drift-locate-by-content" class="md-nav__link">
+    <span class="md-ellipsis">
+      Current-state anchors (verified by exploration; line numbers may drift — locate by content)
+    </span>
+  </a>
+  
+</li>
+      
+        <li class="md-nav__item">
+  <a href="#file-structure" class="md-nav__link">
+    <span class="md-ellipsis">
+      File Structure
+    </span>
+  </a>
+  
+</li>
+      
+        <li class="md-nav__item">
+  <a href="#interfaces-defined-once" class="md-nav__link">
+    <span class="md-ellipsis">
+      Interfaces (defined once)
+    </span>
+  </a>
+  
+</li>
+      
+        <li class="md-nav__item">
+  <a href="#task-1-evidence-sidecar-cache-key" class="md-nav__link">
+    <span class="md-ellipsis">
+      Task 1: Evidence-sidecar cache key
+    </span>
+  </a>
+  
+</li>
+      
+        <li class="md-nav__item">
+  <a href="#task-2-evidencebuilder-shared-parity-with-the-emitter" class="md-nav__link">
+    <span class="md-ellipsis">
+      Task 2: EvidenceBuilder (shared) + parity with the emitter
+    </span>
+  </a>
+  
+</li>
+      
+        <li class="md-nav__item">
+  <a href="#task-3-identityevidencestage-over-raw-cache-reads" class="md-nav__link">
+    <span class="md-ellipsis">
+      Task 3: IdentityEvidenceStage over raw cache reads
+    </span>
+  </a>
+  
+</li>
+      
+        <li class="md-nav__item">
+  <a href="#task-4-wire-the-stage-into-inferencerunner-batch-realtime-thread-catalogcalibration" class="md-nav__link">
+    <span class="md-ellipsis">
+      Task 4: Wire the stage into InferenceRunner (batch + realtime) + thread catalog/calibration
+    </span>
+  </a>
+  
+</li>
+      
+        <li class="md-nav__item">
+  <a href="#task-5-flip-the-tracker-to-the-inference-sidecar-delete-the-emitter-reconstruction-fallback" class="md-nav__link">
+    <span class="md-ellipsis">
+      Task 5: Flip the tracker to the inference sidecar; delete the emitter + reconstruction fallback
+    </span>
+  </a>
+  
+</li>
+      
+        <li class="md-nav__item">
+  <a href="#phase-end-gate" class="md-nav__link">
+    <span class="md-ellipsis">
+      Phase-End Gate
+    </span>
+  </a>
+  
+</li>
+      
+        <li class="md-nav__item">
+  <a href="#self-review-against-the-spec-layer-2-phase-3" class="md-nav__link">
+    <span class="md-ellipsis">
+      Self-Review (against the spec — Layer 2 + Phase 3)
+    </span>
+  </a>
+  
+</li>
+      
+        <li class="md-nav__item">
+  <a href="#phase-end-gate-result-accepted" class="md-nav__link">
+    <span class="md-ellipsis">
+      Phase-End Gate — RESULT (accepted)
+    </span>
+  </a>
+  
+</li>
+      
+    </ul>
+  
+</nav>
+                  </div>
+                </div>
+              </div>
+            
+          
+          
+            <div class="md-content" data-md-component="content">
+              <article class="md-content__inner md-typeset">
+                
+                  
+
+  
+    <a href="https://github.com/neurorishika/hydra-suite/edit/main/docs/superpowers/plans/done/2026-08-08-identity-phase3-evidence-stage.md" title="Edit this page" class="md-content__button md-icon">
+      
+      <svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 24 24"><path d="M10 20H6V4h7v5h5v3.1l2-2V8l-6-6H6c-1.1 0-2 .9-2 2v16c0 1.1.9 2 2 2h4zm10.2-7c.1 0 .3.1.4.2l1.3 1.3c.2.2.2.6 0 .8l-1 1-2.1-2.1 1-1c.1-.1.2-.2.4-.2m0 3.9L14.1 23H12v-2.1l6.1-6.1z"/></svg>
+    </a>
+  
+  
+
+
+<h1 id="identity-overhaul-phase-3-evidence-as-an-inference-time-artifact-implementation-plan">Identity Overhaul — Phase 3: Evidence as an Inference-Time Artifact Implementation Plan<a class="headerlink" href="#identity-overhaul-phase-3-evidence-as-an-inference-time-artifact-implementation-plan" title="Permanent link">&para;</a></h1>
+<blockquote>
+<p><strong>For agentic workers:</strong> REQUIRED SUB-SKILL: Use superpowers:subagent-driven-development to implement this plan task-by-task. Steps use checkbox (<code>- [ ]</code>) syntax for tracking.</p>
+</blockquote>
+<p><strong>Goal:</strong> Move identity-evidence generation out of the tracking loop and into an <code>IdentityEvidenceStage</code> in the inference pass, so calibrated <code>IdentityEvidence</code> is a <strong>cached inference-time artifact</strong> written <em>before</em> tracking (batch) or inline (realtime). The tracker only <em>reads</em> the evidence cache; the tracking-time emitter and the top-1/<code>split("_")</code> reconstruction fallback are deleted.</p>
+<p><strong>Architecture:</strong> Every primitive already exists — <code>IdentityEvidence</code> (calibrated catalog <code>log_probs</code>), <code>IdentityEvidenceCache</code> (NPZ sidecar), the structured <code>(factor_index, class) → catalog_index</code> mapping + per-factor calibration (in <code>IdentityEvidenceEmitter</code>), and raw per-factor softmax in the CNN cache (<code>CNNCacheHandle</code>, <code>raw_probabilities</code>). This phase relocates the emitter's evidence-building logic to run against the <strong>raw caches</strong> in <code>InferenceRunner</code>, resolves the catalog + per-factor calibration <strong>before</strong> the pass, and writes the evidence sidecar as a cache with its own key (catalog + temps), leaving the raw CNN/AprilTag caches untouched. Because the tracker's online decoder already supports reading an evidence sidecar, flipping it to read the inference-written cache — and deleting the emitter — leaves online decisions <strong>byte-identical</strong>. That parity (new-stage evidence == old-emitter evidence) is asserted directly at the task level, then proven end-to-end by the equivalence gate.</p>
+<p><strong>Tech Stack:</strong> Python 3, NumPy, pytest. No new dependencies.</p>
+<p><strong>Spec:</strong> <code>docs/superpowers/specs/2026-07-22-identity-overhaul-consolidated-design.md</code> — Layer 2 (Evidence layer), Rollout "Phase 3". Builds on Phase 1 (<code>IdentityCatalog</code>/<code>resolve_catalog_spec</code>/<code>CatalogEntry.factors</code>) and Phase 2 (<code>CNNConfig.calibration_temperature</code>, <code>ClassifierMetadata.calibration_temperature</code>).</p>
+<h2 id="global-constraints">Global Constraints<a class="headerlink" href="#global-constraints" title="Permanent link">&para;</a></h2>
+<ul>
+<li><strong>Byte-identical is the gate.</strong> The <code>IdentityEvidenceStage</code> must produce evidence identical to what the current <code>IdentityEvidenceEmitter</code> produces for the same raw inputs, so online/offline decisions and tracking positions are byte-identical vs the pre-phase branch state. Gate: full equivalence matrix, <strong>MPS + CUDA</strong>, baselined against the <strong>branch commit at the start of Phase 3</strong> (not <code>legacy/main</code>, not main-HEAD — the branch has Phases 1-2 on it; isolate <em>this</em> phase's delta). Verify CSV row counts &gt; 1.</li>
+<li><strong>Do not touch raw-cache keys.</strong> The CNN/AprilTag raw caches store raw probabilities and exclude temperature/catalog from their keys (<code>cnn_cache_key</code>, <code>keys.py:230-238</code>). The evidence sidecar is a <strong>separate</strong> cache with its <strong>own</strong> key (catalog spec signature + per-factor temps + calibration signature). Changing calibration or the catalog must invalidate only the evidence sidecar, never the raw caches.</li>
+<li><strong>Reuse the emitter's mapping/calibration math; don't reinvent it.</strong> The structured <code>(factor_index, class)→catalog</code> mapping and per-factor calibration in <code>IdentityEvidenceEmitter</code> (<code>core/tracking/identity/evidence_emitter.py</code>) are correct. Extract/share that logic so the inference stage and any residual path cannot diverge. Never <code>split("_")</code> a composite label — key off <code>CatalogEntry.factors</code>.</li>
+<li><strong>Isolation.</strong> Work in the existing long-lived worktree <code>/Users/neurorishika/Projects/Rockefeller/Kronauer/multi-animal-tracker/.worktrees/identity-phases-3-7</code> (branch <code>feat/identity-phases-3-7</code>). Do NOT create a new worktree; do NOT merge to main (Phases 3-7 accumulate here; single merge at the end).</li>
+<li><strong>Dependency direction.</strong> The stage lives in Core (<code>core/inference/stages/</code> or <code>core/individual/identity/</code>) and imports only Core/Runtime/Utils — never an app layer.</li>
+<li><strong>Commit as the configured git user.</strong> No <code>Co-Authored-By: Claude</code> trailer.</li>
+<li><strong>Before commit:</strong> <code>make format</code> then <code>make lint</code> (moderate gate). Revert unrelated isort/black drift. Kill stale <code>sleap</code>/<code>hydra</code> before heavy runs.</li>
+<li><strong>Verification:</strong> unit tests on <code>hydra-mps</code>; equivalence gate on <code>hydra-mps</code> + <code>hydra-cuda</code> (mehek).</li>
+</ul>
+<hr />
+<h2 id="current-state-anchors-verified-by-exploration-line-numbers-may-drift-locate-by-content">Current-state anchors (verified by exploration; line numbers may drift — locate by content)<a class="headerlink" href="#current-state-anchors-verified-by-exploration-line-numbers-may-drift-locate-by-content" title="Permanent link">&para;</a></h2>
+<ul>
+<li><strong>Artifact/cache (reuse as-is):</strong> <code>core/individual/identity/evidence.py</code> — <code>IdentityEvidence</code> (<code>:37-94</code>), <code>from_cnn</code> (<code>:141-162</code>), <code>from_apriltag</code> (<code>:123-139</code>), <code>missing</code> (<code>:100-121</code>). <code>core/individual/identity/cache.py</code> — <code>IdentityEvidenceCache</code> (<code>save_frame</code> <code>:103-141</code>, <code>flush</code> <code>:143-166</code>, <code>load_frame</code> <code>:186-231</code>, path <code>&lt;base&gt;_identity_evidence_&lt;sig&gt;.npz</code>).</li>
+<li><strong>Emitter (source of the logic; deleted at the end):</strong> <code>core/tracking/identity/evidence_emitter.py</code> — <code>_factor_class_to_catalog: dict[(factor_index, class)→list[catalog_idx]]</code> built <code>:94-109</code>; <code>_factor_log_prob</code> <code>:223-273</code>; <code>_calibrate_posterior</code> (per-factor temperature) <code>:275-290</code>; <code>_build_log_probs_from_posteriors</code> <code>:292-306</code>; <code>build_frame_evidences</code> <code>:177-216</code>; <code>build_evidence_cache_path</code> <code>:398-412</code>.</li>
+<li><strong>Raw caches (read by the stage):</strong> <code>core/inference/cache/store.py</code> — <code>CNNCacheHandle.read_frame → list[CNNDetectionPrediction]</code> (<code>:332-361</code>, factors carry <code>raw_probabilities</code>); <code>AprilTagCacheHandle.read_frame → AprilTagResult(tag_ids, det_indices, …)</code> (<code>:502-514</code>).</li>
+<li><strong>Inference pass:</strong> <code>core/inference/runner.py</code> — <code>InferenceRunner</code> (<code>:500</code>); <code>run_batch_pass</code> (<code>:1014</code>; pipeline runs <code>:1066-1072</code>, caches close in <code>finally</code> <code>:1073-1083</code>); <code>run_realtime</code> (<code>:614</code>; raw caches written <code>:831-851</code>, <code>FrameResult</code> built <code>:853</code>). <code>_open_caches</code> (<code>:321-378</code>), <code>_CacheSet</code> (<code>:97-116</code>). Runner constructed with only <code>InferenceConfig</code>+<code>cache_dir</code>+<code>video_path</code>+<code>roi_mask</code> (<code>worker.py:1004-1016</code>).</li>
+<li><strong>Catalog/calibration resolution (today, in the worker):</strong> <code>resolve_catalog_spec(p["CNN_CLASSIFIERS"], p["TAG_IDENTITY_LABELS"])</code> (<code>worker.py:1842-1847</code>, from <code>core/individual/identity/resolve.py:48</code>); per-factor temps from each CNN cfg (<code>worker.py</code> ~<code>:4259-4272</code>, <code>CNNConfig.calibration_temperature</code>). Both available in <code>p</code> <strong>before</strong> <code>run_batch_pass</code> (<code>worker.py:1207</code>).</li>
+<li><strong>Tracker consumption (already sidecar-capable):</strong> online feed at <code>worker.py:2946-3168</code>; reads sidecar via <code>_evidence_cache.load_frame</code> (<code>:3030-3037</code>), cache opened by probing <code>build_evidence_cache_path(_path, label, sig)</code> for <code>sig ∈ ("batch","live","")</code> (<code>:1583-1610</code>). AprilTag evidence inline <code>from_apriltag</code> (<code>:3007-3009</code>); cached-evidence <code>from_cnn</code> (<code>:3054-3062</code>) — <strong>KEEP</strong>. Top-1/<code>split("_")</code> reconstruction fallback (<code>:3066-3164</code>) — <strong>DELETE</strong>.</li>
+<li><strong>Emitter wiring (delete):</strong> construct <code>worker.py:1471-1483</code> + builder <code>_build_cnn_evidence_emitter</code> <code>:4192-4315</code>; fed per-frame <code>:2460-2472</code> (via <code>frame_result_bridge.py:192-205</code>); flush <code>:3993-4007</code>. Dead <code>self.detected_cnn_cache_paths = {}</code> <code>worker.py:153</code> (+ GUI proxy chain) — delete.</li>
+<li><strong>Deferred (NOT this phase):</strong> <code>CNNIdentityCache</code> class + <code>augment_trajectories_with_detected_cnn_cache</code> (still feeds CSV export — Phase 5/retirement); <code>TrackCNNHistory.majority_class</code> (already orphaned, no live caller — later cleanup); offline path repointing (Phase 5).</li>
+</ul>
+<hr />
+<h2 id="file-structure">File Structure<a class="headerlink" href="#file-structure" title="Permanent link">&para;</a></h2>
+<p><strong>Create:</strong>
+- <code>src/hydra_suite/core/individual/identity/evidence_builder.py</code> — the shared, Qt-free, tracker-free evidence builder: structured <code>(factor,class)→catalog</code> mapping + per-factor calibration + true-softmax → <code>IdentityEvidence</code>, over a shared <code>IdentityCatalog</code>. (Extracted from the emitter so the inference stage and the emitter cannot diverge.)
+- <code>src/hydra_suite/core/inference/stages/identity_evidence.py</code> — <code>IdentityEvidenceStage</code>: consumes raw CNN/AprilTag cache reads for a frame → <code>list[IdentityEvidence]</code>; owns tag→label mapping.
+- <code>src/hydra_suite/core/inference/identity_evidence_key.py</code> (or add to <code>cache/keys.py</code>) — <code>identity_evidence_cache_key(catalog_spec, per_factor_temps, …)</code>.
+- <code>tests/identity/test_evidence_builder_parity.py</code>, <code>tests/identity/test_identity_evidence_stage.py</code>, <code>tests/identity/test_evidence_cache_key.py</code>.</p>
+<p><strong>Modify:</strong>
+- <code>core/tracking/identity/evidence_emitter.py</code> — refactor to delegate its mapping/calibration to <code>evidence_builder.py</code> (so parity is structural), pending deletion in Task 5.
+- <code>core/inference/runner.py</code> — accept a resolved catalog + per-factor calibration; invoke <code>IdentityEvidenceStage</code> in <code>run_batch_pass</code> (after <code>pipeline.run</code>, before cache close) and <code>run_realtime</code> (after raw caches written).
+- <code>core/inference/config.py</code> / a small carrier — thread the catalog spec + per-factor temps into the runner (or a dedicated <code>IdentityEvidenceConfig</code>).
+- <code>core/tracking/worker.py</code> — resolve catalog+calibration pre-inference and pass to the runner; <strong>delete</strong> the emitter construct/feed/flush/builder, the top-1/<code>split("_")</code> fallback (<code>:3066-3164</code>), and the dead <code>detected_cnn_cache_paths</code> init; flip online to read the inference-written sidecar.
+- GUI proxy chain for <code>detected_cnn_cache_paths</code> (<code>trackerkit/gui/workers/tracking_worker.py:90-91</code>, <code>main_window.py:338</code>, <code>orchestrators/tracking.py</code>) — remove the dead proxy.</p>
+<hr />
+<h2 id="interfaces-defined-once">Interfaces (defined once)<a class="headerlink" href="#interfaces-defined-once" title="Permanent link">&para;</a></h2>
+<div class="language-python highlight"><pre><span></span><code><span id="__span-0-1"><a id="__codelineno-0-1" name="__codelineno-0-1" href="#__codelineno-0-1"></a><span class="c1"># core/individual/identity/evidence_builder.py</span>
+</span><span id="__span-0-2"><a id="__codelineno-0-2" name="__codelineno-0-2" href="#__codelineno-0-2"></a><span class="k">class</span><span class="w"> </span><span class="nc">EvidenceBuilder</span><span class="p">:</span>
+</span><span id="__span-0-3"><a id="__codelineno-0-3" name="__codelineno-0-3" href="#__codelineno-0-3"></a>    <span class="k">def</span><span class="w"> </span><span class="fm">__init__</span><span class="p">(</span><span class="bp">self</span><span class="p">,</span> <span class="n">catalog</span><span class="p">:</span> <span class="n">IdentityCatalog</span><span class="p">,</span> <span class="n">source_name</span><span class="p">:</span> <span class="nb">str</span><span class="p">,</span>
+</span><span id="__span-0-4"><a id="__codelineno-0-4" name="__codelineno-0-4" href="#__codelineno-0-4"></a>                 <span class="n">class_labels_per_factor</span><span class="p">:</span> <span class="nb">list</span><span class="p">[</span><span class="nb">list</span><span class="p">[</span><span class="nb">str</span><span class="p">]],</span>
+</span><span id="__span-0-5"><a id="__codelineno-0-5" name="__codelineno-0-5" href="#__codelineno-0-5"></a>                 <span class="n">calibration</span><span class="p">:</span> <span class="s2">"CalibrationModel | None"</span> <span class="o">=</span> <span class="kc">None</span><span class="p">,</span>
+</span><span id="__span-0-6"><a id="__codelineno-0-6" name="__codelineno-0-6" href="#__codelineno-0-6"></a>                 <span class="n">calibration_signature</span><span class="p">:</span> <span class="nb">str</span> <span class="o">=</span> <span class="s2">""</span><span class="p">,</span> <span class="n">runtime_signature</span><span class="p">:</span> <span class="nb">str</span> <span class="o">=</span> <span class="s2">""</span><span class="p">):</span> <span class="o">...</span>
+</span><span id="__span-0-7"><a id="__codelineno-0-7" name="__codelineno-0-7" href="#__codelineno-0-7"></a>    <span class="c1"># structured (factor_index, class)-&gt;catalog map built from `catalog` + factors</span>
+</span><span id="__span-0-8"><a id="__codelineno-0-8" name="__codelineno-0-8" href="#__codelineno-0-8"></a>    <span class="k">def</span><span class="w"> </span><span class="nf">build_frame_evidences</span><span class="p">(</span><span class="bp">self</span><span class="p">,</span> <span class="n">frame_idx</span><span class="p">:</span> <span class="nb">int</span><span class="p">,</span> <span class="n">det_ids</span><span class="p">:</span> <span class="n">Sequence</span><span class="p">[</span><span class="nb">int</span><span class="p">],</span>
+</span><span id="__span-0-9"><a id="__codelineno-0-9" name="__codelineno-0-9" href="#__codelineno-0-9"></a>                              <span class="n">per_det_factor_probs</span><span class="p">:</span> <span class="nb">list</span><span class="p">[</span><span class="nb">list</span><span class="p">[</span><span class="n">np</span><span class="o">.</span><span class="n">ndarray</span><span class="p">]]</span>  <span class="c1"># [det][factor]=(K_f,) raw softmax</span>
+</span><span id="__span-0-10"><a id="__codelineno-0-10" name="__codelineno-0-10" href="#__codelineno-0-10"></a>                              <span class="p">)</span> <span class="o">-&gt;</span> <span class="nb">list</span><span class="p">[</span><span class="n">IdentityEvidence</span><span class="p">]:</span> <span class="o">...</span>
+</span><span id="__span-0-11"><a id="__codelineno-0-11" name="__codelineno-0-11" href="#__codelineno-0-11"></a>
+</span><span id="__span-0-12"><a id="__codelineno-0-12" name="__codelineno-0-12" href="#__codelineno-0-12"></a><span class="c1"># core/inference/stages/identity_evidence.py</span>
+</span><span id="__span-0-13"><a id="__codelineno-0-13" name="__codelineno-0-13" href="#__codelineno-0-13"></a><span class="k">class</span><span class="w"> </span><span class="nc">IdentityEvidenceStage</span><span class="p">:</span>
+</span><span id="__span-0-14"><a id="__codelineno-0-14" name="__codelineno-0-14" href="#__codelineno-0-14"></a>    <span class="k">def</span><span class="w"> </span><span class="fm">__init__</span><span class="p">(</span><span class="bp">self</span><span class="p">,</span> <span class="n">catalog</span><span class="p">:</span> <span class="n">IdentityCatalog</span><span class="p">,</span> <span class="n">cnn_builders</span><span class="p">:</span> <span class="nb">dict</span><span class="p">[</span><span class="nb">str</span><span class="p">,</span> <span class="n">EvidenceBuilder</span><span class="p">],</span>
+</span><span id="__span-0-15"><a id="__codelineno-0-15" name="__codelineno-0-15" href="#__codelineno-0-15"></a>                 <span class="n">tag_to_label</span><span class="p">:</span> <span class="nb">dict</span><span class="p">[</span><span class="nb">int</span><span class="p">,</span> <span class="nb">str</span><span class="p">],</span> <span class="n">tag_source_name</span><span class="p">:</span> <span class="nb">str</span> <span class="o">=</span> <span class="s2">"apriltag"</span><span class="p">):</span> <span class="o">...</span>
+</span><span id="__span-0-16"><a id="__codelineno-0-16" name="__codelineno-0-16" href="#__codelineno-0-16"></a>    <span class="k">def</span><span class="w"> </span><span class="nf">evidences_for_frame</span><span class="p">(</span><span class="bp">self</span><span class="p">,</span> <span class="n">frame_idx</span><span class="p">:</span> <span class="nb">int</span><span class="p">,</span> <span class="n">det_ids</span><span class="p">:</span> <span class="n">Sequence</span><span class="p">[</span><span class="nb">int</span><span class="p">],</span>
+</span><span id="__span-0-17"><a id="__codelineno-0-17" name="__codelineno-0-17" href="#__codelineno-0-17"></a>                            <span class="n">cnn_reads</span><span class="p">:</span> <span class="nb">dict</span><span class="p">[</span><span class="nb">str</span><span class="p">,</span> <span class="nb">list</span><span class="p">[</span><span class="s2">"CNNDetectionPrediction"</span><span class="p">]],</span>
+</span><span id="__span-0-18"><a id="__codelineno-0-18" name="__codelineno-0-18" href="#__codelineno-0-18"></a>                            <span class="n">tag_read</span><span class="p">:</span> <span class="s2">"AprilTagResult | None"</span><span class="p">)</span> <span class="o">-&gt;</span> <span class="nb">list</span><span class="p">[</span><span class="n">IdentityEvidence</span><span class="p">]:</span> <span class="o">...</span>
+</span><span id="__span-0-19"><a id="__codelineno-0-19" name="__codelineno-0-19" href="#__codelineno-0-19"></a>
+</span><span id="__span-0-20"><a id="__codelineno-0-20" name="__codelineno-0-20" href="#__codelineno-0-20"></a><span class="c1"># key</span>
+</span><span id="__span-0-21"><a id="__codelineno-0-21" name="__codelineno-0-21" href="#__codelineno-0-21"></a><span class="k">def</span><span class="w"> </span><span class="nf">identity_evidence_cache_key</span><span class="p">(</span><span class="n">catalog_spec</span><span class="p">:</span> <span class="n">IdentityCatalogSpec</span><span class="p">,</span>
+</span><span id="__span-0-22"><a id="__codelineno-0-22" name="__codelineno-0-22" href="#__codelineno-0-22"></a>                                <span class="n">per_factor_temps</span><span class="p">:</span> <span class="n">Mapping</span><span class="p">[</span><span class="nb">str</span><span class="p">,</span> <span class="nb">tuple</span><span class="p">[</span><span class="nb">float</span><span class="p">,</span> <span class="o">...</span><span class="p">]],</span>
+</span><span id="__span-0-23"><a id="__codelineno-0-23" name="__codelineno-0-23" href="#__codelineno-0-23"></a>                                <span class="n">base_signature</span><span class="p">:</span> <span class="nb">str</span><span class="p">)</span> <span class="o">-&gt;</span> <span class="nb">str</span><span class="p">:</span> <span class="o">...</span>  <span class="c1"># short content hash</span>
+</span></code></pre></div>
+<hr />
+<h2 id="task-1-evidence-sidecar-cache-key">Task 1: Evidence-sidecar cache key<a class="headerlink" href="#task-1-evidence-sidecar-cache-key" title="Permanent link">&para;</a></h2>
+<p>A content signature over the catalog spec + per-factor temperatures (+ the raw-cache base signature) so the evidence sidecar invalidates when calibration/catalog change, independently of the raw caches.</p>
+<p><strong>Files:</strong> Create <code>src/hydra_suite/core/inference/identity_evidence_key.py</code>; Test <code>tests/identity/test_evidence_cache_key.py</code>.</p>
+<p><strong>Interfaces:</strong> Produces <code>identity_evidence_cache_key(...) -&gt; str</code>. Consumed by Task 4.</p>
+<ul class="task-list">
+<li class="task-list-item"><label class="task-list-control"><input type="checkbox" disabled/><span class="task-list-indicator"></span></label> <strong>Step 1: Failing test</strong> — same catalog+temps → same key; changed temp → different key; changed catalog label → different key; deterministic across runs; short hex string.</li>
+</ul>
+<div class="language-python highlight"><pre><span></span><code><span id="__span-1-1"><a id="__codelineno-1-1" name="__codelineno-1-1" href="#__codelineno-1-1"></a><span class="c1"># tests/identity/test_evidence_cache_key.py</span>
+</span><span id="__span-1-2"><a id="__codelineno-1-2" name="__codelineno-1-2" href="#__codelineno-1-2"></a><span class="kn">from</span><span class="w"> </span><span class="nn">hydra_suite.core.individual.identity.spec</span><span class="w"> </span><span class="kn">import</span> <span class="n">CatalogEntry</span><span class="p">,</span> <span class="n">IdentityCatalogSpec</span>
+</span><span id="__span-1-3"><a id="__codelineno-1-3" name="__codelineno-1-3" href="#__codelineno-1-3"></a><span class="kn">from</span><span class="w"> </span><span class="nn">hydra_suite.core.inference.identity_evidence_key</span><span class="w"> </span><span class="kn">import</span> <span class="n">identity_evidence_cache_key</span>
+</span><span id="__span-1-4"><a id="__codelineno-1-4" name="__codelineno-1-4" href="#__codelineno-1-4"></a>
+</span><span id="__span-1-5"><a id="__codelineno-1-5" name="__codelineno-1-5" href="#__codelineno-1-5"></a>
+</span><span id="__span-1-6"><a id="__codelineno-1-6" name="__codelineno-1-6" href="#__codelineno-1-6"></a><span class="k">def</span><span class="w"> </span><span class="nf">_spec</span><span class="p">(</span><span class="n">label</span><span class="o">=</span><span class="s2">"red_big"</span><span class="p">):</span>
+</span><span id="__span-1-7"><a id="__codelineno-1-7" name="__codelineno-1-7" href="#__codelineno-1-7"></a>    <span class="k">return</span> <span class="n">IdentityCatalogSpec</span><span class="p">(</span><span class="n">entries</span><span class="o">=</span><span class="p">(</span>
+</span><span id="__span-1-8"><a id="__codelineno-1-8" name="__codelineno-1-8" href="#__codelineno-1-8"></a>        <span class="n">CatalogEntry</span><span class="p">(</span><span class="n">display_label</span><span class="o">=</span><span class="n">label</span><span class="p">,</span> <span class="n">factors</span><span class="o">=</span><span class="p">((</span><span class="s2">"color"</span><span class="p">,</span> <span class="s2">"red"</span><span class="p">),</span> <span class="p">(</span><span class="s2">"size"</span><span class="p">,</span> <span class="s2">"big"</span><span class="p">)),</span> <span class="n">source</span><span class="o">=</span><span class="s2">"cnn"</span><span class="p">),</span>
+</span><span id="__span-1-9"><a id="__codelineno-1-9" name="__codelineno-1-9" href="#__codelineno-1-9"></a>    <span class="p">))</span>
+</span><span id="__span-1-10"><a id="__codelineno-1-10" name="__codelineno-1-10" href="#__codelineno-1-10"></a>
+</span><span id="__span-1-11"><a id="__codelineno-1-11" name="__codelineno-1-11" href="#__codelineno-1-11"></a>
+</span><span id="__span-1-12"><a id="__codelineno-1-12" name="__codelineno-1-12" href="#__codelineno-1-12"></a><span class="k">def</span><span class="w"> </span><span class="nf">test_stable_and_sensitive</span><span class="p">():</span>
+</span><span id="__span-1-13"><a id="__codelineno-1-13" name="__codelineno-1-13" href="#__codelineno-1-13"></a>    <span class="n">a</span> <span class="o">=</span> <span class="n">identity_evidence_cache_key</span><span class="p">(</span><span class="n">_spec</span><span class="p">(),</span> <span class="p">{</span><span class="s2">"cnn0"</span><span class="p">:</span> <span class="p">(</span><span class="mf">1.5</span><span class="p">,)},</span> <span class="s2">"vidsig"</span><span class="p">)</span>
+</span><span id="__span-1-14"><a id="__codelineno-1-14" name="__codelineno-1-14" href="#__codelineno-1-14"></a>    <span class="n">b</span> <span class="o">=</span> <span class="n">identity_evidence_cache_key</span><span class="p">(</span><span class="n">_spec</span><span class="p">(),</span> <span class="p">{</span><span class="s2">"cnn0"</span><span class="p">:</span> <span class="p">(</span><span class="mf">1.5</span><span class="p">,)},</span> <span class="s2">"vidsig"</span><span class="p">)</span>
+</span><span id="__span-1-15"><a id="__codelineno-1-15" name="__codelineno-1-15" href="#__codelineno-1-15"></a>    <span class="k">assert</span> <span class="n">a</span> <span class="o">==</span> <span class="n">b</span> <span class="ow">and</span> <span class="nb">isinstance</span><span class="p">(</span><span class="n">a</span><span class="p">,</span> <span class="nb">str</span><span class="p">)</span> <span class="ow">and</span> <span class="nb">len</span><span class="p">(</span><span class="n">a</span><span class="p">)</span> <span class="o">&gt;=</span> <span class="mi">8</span>
+</span><span id="__span-1-16"><a id="__codelineno-1-16" name="__codelineno-1-16" href="#__codelineno-1-16"></a>    <span class="k">assert</span> <span class="n">identity_evidence_cache_key</span><span class="p">(</span><span class="n">_spec</span><span class="p">(),</span> <span class="p">{</span><span class="s2">"cnn0"</span><span class="p">:</span> <span class="p">(</span><span class="mf">2.0</span><span class="p">,)},</span> <span class="s2">"vidsig"</span><span class="p">)</span> <span class="o">!=</span> <span class="n">a</span>
+</span><span id="__span-1-17"><a id="__codelineno-1-17" name="__codelineno-1-17" href="#__codelineno-1-17"></a>    <span class="k">assert</span> <span class="n">identity_evidence_cache_key</span><span class="p">(</span><span class="n">_spec</span><span class="p">(</span><span class="s2">"blue_big"</span><span class="p">),</span> <span class="p">{</span><span class="s2">"cnn0"</span><span class="p">:</span> <span class="p">(</span><span class="mf">1.5</span><span class="p">,)},</span> <span class="s2">"vidsig"</span><span class="p">)</span> <span class="o">!=</span> <span class="n">a</span>
+</span><span id="__span-1-18"><a id="__codelineno-1-18" name="__codelineno-1-18" href="#__codelineno-1-18"></a>    <span class="k">assert</span> <span class="n">identity_evidence_cache_key</span><span class="p">(</span><span class="n">_spec</span><span class="p">(),</span> <span class="p">{</span><span class="s2">"cnn0"</span><span class="p">:</span> <span class="p">(</span><span class="mf">1.5</span><span class="p">,)},</span> <span class="s2">"other"</span><span class="p">)</span> <span class="o">!=</span> <span class="n">a</span>
+</span></code></pre></div>
+<ul class="task-list">
+<li class="task-list-item">
+<p><label class="task-list-control"><input type="checkbox" disabled/><span class="task-list-indicator"></span></label> <strong>Step 2: Run — FAIL</strong> (module missing).</p>
+</li>
+<li class="task-list-item">
+<p><label class="task-list-control"><input type="checkbox" disabled/><span class="task-list-indicator"></span></label> <strong>Step 3: Implement</strong></p>
+</li>
+</ul>
+<div class="language-python highlight"><pre><span></span><code><span id="__span-2-1"><a id="__codelineno-2-1" name="__codelineno-2-1" href="#__codelineno-2-1"></a><span class="c1"># src/hydra_suite/core/inference/identity_evidence_key.py</span>
+</span><span id="__span-2-2"><a id="__codelineno-2-2" name="__codelineno-2-2" href="#__codelineno-2-2"></a><span class="sd">"""Content signature for the identity-evidence sidecar cache.</span>
+</span><span id="__span-2-3"><a id="__codelineno-2-3" name="__codelineno-2-3" href="#__codelineno-2-3"></a>
+</span><span id="__span-2-4"><a id="__codelineno-2-4" name="__codelineno-2-4" href="#__codelineno-2-4"></a><span class="sd">Independent of the raw CNN/AprilTag cache keys: it folds in the catalog domain</span>
+</span><span id="__span-2-5"><a id="__codelineno-2-5" name="__codelineno-2-5" href="#__codelineno-2-5"></a><span class="sd">and the per-factor calibration temperatures so a recalibration or catalog change</span>
+</span><span id="__span-2-6"><a id="__codelineno-2-6" name="__codelineno-2-6" href="#__codelineno-2-6"></a><span class="sd">invalidates only the evidence sidecar, never the raw caches.</span>
+</span><span id="__span-2-7"><a id="__codelineno-2-7" name="__codelineno-2-7" href="#__codelineno-2-7"></a><span class="sd">"""</span>
+</span><span id="__span-2-8"><a id="__codelineno-2-8" name="__codelineno-2-8" href="#__codelineno-2-8"></a><span class="kn">from</span><span class="w"> </span><span class="nn">__future__</span><span class="w"> </span><span class="kn">import</span> <span class="n">annotations</span>
+</span><span id="__span-2-9"><a id="__codelineno-2-9" name="__codelineno-2-9" href="#__codelineno-2-9"></a>
+</span><span id="__span-2-10"><a id="__codelineno-2-10" name="__codelineno-2-10" href="#__codelineno-2-10"></a><span class="kn">import</span><span class="w"> </span><span class="nn">hashlib</span>
+</span><span id="__span-2-11"><a id="__codelineno-2-11" name="__codelineno-2-11" href="#__codelineno-2-11"></a><span class="kn">import</span><span class="w"> </span><span class="nn">json</span>
+</span><span id="__span-2-12"><a id="__codelineno-2-12" name="__codelineno-2-12" href="#__codelineno-2-12"></a><span class="kn">from</span><span class="w"> </span><span class="nn">typing</span><span class="w"> </span><span class="kn">import</span> <span class="n">Mapping</span>
+</span><span id="__span-2-13"><a id="__codelineno-2-13" name="__codelineno-2-13" href="#__codelineno-2-13"></a>
+</span><span id="__span-2-14"><a id="__codelineno-2-14" name="__codelineno-2-14" href="#__codelineno-2-14"></a><span class="kn">from</span><span class="w"> </span><span class="nn">hydra_suite.core.individual.identity.spec</span><span class="w"> </span><span class="kn">import</span> <span class="n">IdentityCatalogSpec</span>
+</span><span id="__span-2-15"><a id="__codelineno-2-15" name="__codelineno-2-15" href="#__codelineno-2-15"></a>
+</span><span id="__span-2-16"><a id="__codelineno-2-16" name="__codelineno-2-16" href="#__codelineno-2-16"></a>
+</span><span id="__span-2-17"><a id="__codelineno-2-17" name="__codelineno-2-17" href="#__codelineno-2-17"></a><span class="k">def</span><span class="w"> </span><span class="nf">identity_evidence_cache_key</span><span class="p">(</span>
+</span><span id="__span-2-18"><a id="__codelineno-2-18" name="__codelineno-2-18" href="#__codelineno-2-18"></a>    <span class="n">catalog_spec</span><span class="p">:</span> <span class="n">IdentityCatalogSpec</span><span class="p">,</span>
+</span><span id="__span-2-19"><a id="__codelineno-2-19" name="__codelineno-2-19" href="#__codelineno-2-19"></a>    <span class="n">per_factor_temps</span><span class="p">:</span> <span class="n">Mapping</span><span class="p">[</span><span class="nb">str</span><span class="p">,</span> <span class="nb">tuple</span><span class="p">[</span><span class="nb">float</span><span class="p">,</span> <span class="o">...</span><span class="p">]],</span>
+</span><span id="__span-2-20"><a id="__codelineno-2-20" name="__codelineno-2-20" href="#__codelineno-2-20"></a>    <span class="n">base_signature</span><span class="p">:</span> <span class="nb">str</span><span class="p">,</span>
+</span><span id="__span-2-21"><a id="__codelineno-2-21" name="__codelineno-2-21" href="#__codelineno-2-21"></a><span class="p">)</span> <span class="o">-&gt;</span> <span class="nb">str</span><span class="p">:</span>
+</span><span id="__span-2-22"><a id="__codelineno-2-22" name="__codelineno-2-22" href="#__codelineno-2-22"></a>    <span class="n">payload</span> <span class="o">=</span> <span class="p">{</span>
+</span><span id="__span-2-23"><a id="__codelineno-2-23" name="__codelineno-2-23" href="#__codelineno-2-23"></a>        <span class="s2">"catalog"</span><span class="p">:</span> <span class="n">catalog_spec</span><span class="o">.</span><span class="n">to_dict</span><span class="p">(),</span>
+</span><span id="__span-2-24"><a id="__codelineno-2-24" name="__codelineno-2-24" href="#__codelineno-2-24"></a>        <span class="s2">"temps"</span><span class="p">:</span> <span class="p">{</span><span class="n">k</span><span class="p">:</span> <span class="p">[</span><span class="nb">round</span><span class="p">(</span><span class="nb">float</span><span class="p">(</span><span class="n">t</span><span class="p">),</span> <span class="mi">6</span><span class="p">)</span> <span class="k">for</span> <span class="n">t</span> <span class="ow">in</span> <span class="n">v</span><span class="p">]</span> <span class="k">for</span> <span class="n">k</span><span class="p">,</span> <span class="n">v</span> <span class="ow">in</span> <span class="nb">sorted</span><span class="p">(</span><span class="n">per_factor_temps</span><span class="o">.</span><span class="n">items</span><span class="p">())},</span>
+</span><span id="__span-2-25"><a id="__codelineno-2-25" name="__codelineno-2-25" href="#__codelineno-2-25"></a>        <span class="s2">"base"</span><span class="p">:</span> <span class="nb">str</span><span class="p">(</span><span class="n">base_signature</span><span class="p">),</span>
+</span><span id="__span-2-26"><a id="__codelineno-2-26" name="__codelineno-2-26" href="#__codelineno-2-26"></a>    <span class="p">}</span>
+</span><span id="__span-2-27"><a id="__codelineno-2-27" name="__codelineno-2-27" href="#__codelineno-2-27"></a>    <span class="n">blob</span> <span class="o">=</span> <span class="n">json</span><span class="o">.</span><span class="n">dumps</span><span class="p">(</span><span class="n">payload</span><span class="p">,</span> <span class="n">sort_keys</span><span class="o">=</span><span class="kc">True</span><span class="p">,</span> <span class="n">separators</span><span class="o">=</span><span class="p">(</span><span class="s2">","</span><span class="p">,</span> <span class="s2">":"</span><span class="p">))</span><span class="o">.</span><span class="n">encode</span><span class="p">(</span><span class="s2">"utf-8"</span><span class="p">)</span>
+</span><span id="__span-2-28"><a id="__codelineno-2-28" name="__codelineno-2-28" href="#__codelineno-2-28"></a>    <span class="k">return</span> <span class="n">hashlib</span><span class="o">.</span><span class="n">sha1</span><span class="p">(</span><span class="n">blob</span><span class="p">)</span><span class="o">.</span><span class="n">hexdigest</span><span class="p">()[:</span><span class="mi">16</span><span class="p">]</span>
+</span></code></pre></div>
+<ul class="task-list">
+<li class="task-list-item"><label class="task-list-control"><input type="checkbox" disabled/><span class="task-list-indicator"></span></label> <strong>Step 4: Run — PASS.</strong></li>
+<li class="task-list-item"><label class="task-list-control"><input type="checkbox" disabled/><span class="task-list-indicator"></span></label> <strong>Step 5: <code>make format &amp;&amp; make lint</code>; commit</strong> <code>feat(identity): identity-evidence sidecar cache key (catalog + per-factor temps)</code>.</li>
+</ul>
+<hr />
+<h2 id="task-2-evidencebuilder-shared-parity-with-the-emitter">Task 2: <code>EvidenceBuilder</code> (shared) + parity with the emitter<a class="headerlink" href="#task-2-evidencebuilder-shared-parity-with-the-emitter" title="Permanent link">&para;</a></h2>
+<p>Extract the emitter's structured-mapping + calibration + evidence-construction into a Qt-free, tracker-free <code>EvidenceBuilder</code> over a shared <code>IdentityCatalog</code>, and refactor <code>IdentityEvidenceEmitter</code> to delegate to it. A <strong>parity test</strong> asserts the builder reproduces the emitter's evidence for identical inputs — this is the linchpin that makes the later deletion byte-identical.</p>
+<p><strong>Files:</strong> Create <code>core/individual/identity/evidence_builder.py</code>; Modify <code>core/tracking/identity/evidence_emitter.py</code> (delegate); Test <code>tests/identity/test_evidence_builder_parity.py</code>.</p>
+<p><strong>Interfaces:</strong> Produces <code>EvidenceBuilder</code> (Interfaces block). Consumed by Task 3's stage + the emitter.</p>
+<ul class="task-list">
+<li class="task-list-item"><label class="task-list-control"><input type="checkbox" disabled/><span class="task-list-indicator"></span></label> <strong>Step 1: Study the emitter, write the parity test.</strong> READ <code>evidence_emitter.py</code> fully. The test builds an <code>EvidenceBuilder</code> and an <code>IdentityEvidenceEmitter</code> with the SAME <code>class_labels_per_factor</code> + <code>calibration</code> + catalog, feeds both the SAME synthetic per-factor raw-softmax for a few detections, and asserts the resulting <code>IdentityEvidence.log_probs</code> are equal (<code>np.allclose</code> with atol=0, or exact) and <code>source_name</code>/<code>observed_mask</code> match. Cover: single-factor, multi-factor composite (incl. a class name containing <code>_</code> so the structured path is exercised and <code>split("_")</code> would fail), and a per-factor temperature ≠ 1.</li>
+</ul>
+<div class="language-python highlight"><pre><span></span><code><span id="__span-3-1"><a id="__codelineno-3-1" name="__codelineno-3-1" href="#__codelineno-3-1"></a><span class="c1"># tests/identity/test_evidence_builder_parity.py — skeleton (fill exact emitter ctor args from the file)</span>
+</span><span id="__span-3-2"><a id="__codelineno-3-2" name="__codelineno-3-2" href="#__codelineno-3-2"></a><span class="kn">import</span><span class="w"> </span><span class="nn">numpy</span><span class="w"> </span><span class="k">as</span><span class="w"> </span><span class="nn">np</span>
+</span><span id="__span-3-3"><a id="__codelineno-3-3" name="__codelineno-3-3" href="#__codelineno-3-3"></a><span class="kn">from</span><span class="w"> </span><span class="nn">hydra_suite.core.individual.identity.catalog</span><span class="w"> </span><span class="kn">import</span> <span class="n">IdentityCatalog</span>
+</span><span id="__span-3-4"><a id="__codelineno-3-4" name="__codelineno-3-4" href="#__codelineno-3-4"></a><span class="kn">from</span><span class="w"> </span><span class="nn">hydra_suite.core.individual.identity.evidence_builder</span><span class="w"> </span><span class="kn">import</span> <span class="n">EvidenceBuilder</span>
+</span><span id="__span-3-5"><a id="__codelineno-3-5" name="__codelineno-3-5" href="#__codelineno-3-5"></a><span class="kn">from</span><span class="w"> </span><span class="nn">hydra_suite.core.tracking.identity.evidence_emitter</span><span class="w"> </span><span class="kn">import</span> <span class="n">IdentityEvidenceEmitter</span>
+</span><span id="__span-3-6"><a id="__codelineno-3-6" name="__codelineno-3-6" href="#__codelineno-3-6"></a>
+</span><span id="__span-3-7"><a id="__codelineno-3-7" name="__codelineno-3-7" href="#__codelineno-3-7"></a>
+</span><span id="__span-3-8"><a id="__codelineno-3-8" name="__codelineno-3-8" href="#__codelineno-3-8"></a><span class="k">def</span><span class="w"> </span><span class="nf">test_builder_matches_emitter_multifactor_with_underscore</span><span class="p">(</span><span class="n">tmp_path</span><span class="p">):</span>
+</span><span id="__span-3-9"><a id="__codelineno-3-9" name="__codelineno-3-9" href="#__codelineno-3-9"></a>    <span class="n">labels</span> <span class="o">=</span> <span class="p">[[</span><span class="s2">"dark_red"</span><span class="p">,</span> <span class="s2">"blue"</span><span class="p">],</span> <span class="p">[</span><span class="s2">"big"</span><span class="p">,</span> <span class="s2">"small"</span><span class="p">]]</span>      <span class="c1"># class with "_" -&gt; split() would corrupt</span>
+</span><span id="__span-3-10"><a id="__codelineno-3-10" name="__codelineno-3-10" href="#__codelineno-3-10"></a>    <span class="n">catalog</span> <span class="o">=</span> <span class="n">IdentityCatalog</span><span class="o">.</span><span class="n">from_labels</span><span class="p">([</span><span class="s2">"dark_red_big"</span><span class="p">,</span> <span class="s2">"dark_red_small"</span><span class="p">,</span> <span class="s2">"blue_big"</span><span class="p">,</span> <span class="s2">"blue_small"</span><span class="p">])</span>
+</span><span id="__span-3-11"><a id="__codelineno-3-11" name="__codelineno-3-11" href="#__codelineno-3-11"></a>    <span class="c1"># per-det per-factor raw softmax</span>
+</span><span id="__span-3-12"><a id="__codelineno-3-12" name="__codelineno-3-12" href="#__codelineno-3-12"></a>    <span class="n">probs</span> <span class="o">=</span> <span class="p">[[</span><span class="n">np</span><span class="o">.</span><span class="n">array</span><span class="p">([</span><span class="mf">0.7</span><span class="p">,</span> <span class="mf">0.3</span><span class="p">]),</span> <span class="n">np</span><span class="o">.</span><span class="n">array</span><span class="p">([</span><span class="mf">0.6</span><span class="p">,</span> <span class="mf">0.4</span><span class="p">])],</span>
+</span><span id="__span-3-13"><a id="__codelineno-3-13" name="__codelineno-3-13" href="#__codelineno-3-13"></a>             <span class="p">[</span><span class="n">np</span><span class="o">.</span><span class="n">array</span><span class="p">([</span><span class="mf">0.2</span><span class="p">,</span> <span class="mf">0.8</span><span class="p">]),</span> <span class="n">np</span><span class="o">.</span><span class="n">array</span><span class="p">([</span><span class="mf">0.9</span><span class="p">,</span> <span class="mf">0.1</span><span class="p">])]]</span>
+</span><span id="__span-3-14"><a id="__codelineno-3-14" name="__codelineno-3-14" href="#__codelineno-3-14"></a>    <span class="n">builder</span> <span class="o">=</span> <span class="n">EvidenceBuilder</span><span class="p">(</span><span class="n">catalog</span><span class="p">,</span> <span class="s2">"cnn0"</span><span class="p">,</span> <span class="n">labels</span><span class="p">,</span> <span class="n">calibration</span><span class="o">=</span><span class="kc">None</span><span class="p">)</span>
+</span><span id="__span-3-15"><a id="__codelineno-3-15" name="__codelineno-3-15" href="#__codelineno-3-15"></a>    <span class="n">ev_b</span> <span class="o">=</span> <span class="n">builder</span><span class="o">.</span><span class="n">build_frame_evidences</span><span class="p">(</span><span class="mi">5</span><span class="p">,</span> <span class="p">[</span><span class="mi">10</span><span class="p">,</span> <span class="mi">11</span><span class="p">],</span> <span class="n">probs</span><span class="p">)</span>
+</span><span id="__span-3-16"><a id="__codelineno-3-16" name="__codelineno-3-16" href="#__codelineno-3-16"></a>    <span class="c1"># emitter path (posteriors == calibrated probs; no calibration): reuse its build_frame_evidences</span>
+</span><span id="__span-3-17"><a id="__codelineno-3-17" name="__codelineno-3-17" href="#__codelineno-3-17"></a>    <span class="n">emitter</span> <span class="o">=</span> <span class="n">IdentityEvidenceEmitter</span><span class="p">(</span><span class="n">cache_path</span><span class="o">=</span><span class="nb">str</span><span class="p">(</span><span class="n">tmp_path</span> <span class="o">/</span> <span class="s2">"e.npz"</span><span class="p">),</span> <span class="n">source_name</span><span class="o">=</span><span class="s2">"cnn0"</span><span class="p">,</span>
+</span><span id="__span-3-18"><a id="__codelineno-3-18" name="__codelineno-3-18" href="#__codelineno-3-18"></a>                                      <span class="n">class_labels_per_factor</span><span class="o">=</span><span class="n">labels</span><span class="p">,</span> <span class="n">calibration</span><span class="o">=</span><span class="kc">None</span><span class="p">)</span>
+</span><span id="__span-3-19"><a id="__codelineno-3-19" name="__codelineno-3-19" href="#__codelineno-3-19"></a>    <span class="n">ev_e</span> <span class="o">=</span> <span class="n">emitter</span><span class="o">.</span><span class="n">build_frame_evidences</span><span class="p">(</span><span class="mi">5</span><span class="p">,</span> <span class="n">_predictions_from</span><span class="p">(</span><span class="n">probs</span><span class="p">,</span> <span class="n">labels</span><span class="p">),</span> <span class="n">posteriors</span><span class="o">=</span><span class="n">probs</span><span class="p">,</span> <span class="n">detection_ids</span><span class="o">=</span><span class="p">[</span><span class="mi">10</span><span class="p">,</span> <span class="mi">11</span><span class="p">])</span>
+</span><span id="__span-3-20"><a id="__codelineno-3-20" name="__codelineno-3-20" href="#__codelineno-3-20"></a>    <span class="k">for</span> <span class="n">b</span><span class="p">,</span> <span class="n">e</span> <span class="ow">in</span> <span class="nb">zip</span><span class="p">(</span><span class="n">ev_b</span><span class="p">,</span> <span class="n">ev_e</span><span class="p">):</span>
+</span><span id="__span-3-21"><a id="__codelineno-3-21" name="__codelineno-3-21" href="#__codelineno-3-21"></a>        <span class="k">assert</span> <span class="n">np</span><span class="o">.</span><span class="n">array_equal</span><span class="p">(</span><span class="n">b</span><span class="o">.</span><span class="n">log_probs</span><span class="p">,</span> <span class="n">e</span><span class="o">.</span><span class="n">log_probs</span><span class="p">)</span>
+</span></code></pre></div>
+<p>(You will need <code>_predictions_from(...)</code> to build the <code>ClassPrediction</code> shape the emitter expects — READ <code>build_frame_evidences</code>/<code>build_frame_evidences</code>'s <code>predictions</code> param and mirror it. If constructing the emitter's exact <code>predictions</code> shape is heavy, assert parity against the emitter's lower-level <code>_build_log_probs_from_posteriors</code> instead, and say so.)</p>
+<ul class="task-list">
+<li class="task-list-item">
+<p><label class="task-list-control"><input type="checkbox" disabled/><span class="task-list-indicator"></span></label> <strong>Step 2: Run — FAIL</strong> (module missing).</p>
+</li>
+<li class="task-list-item">
+<p><label class="task-list-control"><input type="checkbox" disabled/><span class="task-list-indicator"></span></label> <strong>Step 3: Implement <code>EvidenceBuilder</code></strong> by lifting the emitter's <code>_factor_class_to_catalog</code> construction (<code>:94-109</code>), <code>_factor_log_prob</code> (<code>:223-273</code>), <code>_calibrate_posterior</code> (<code>:275-290</code>), <code>_build_log_probs_from_posteriors</code> (<code>:292-306</code>), and <code>build_frame_evidences</code> (<code>:177-216</code>) into the new class, parameterized by a passed-in <code>IdentityCatalog</code> (instead of building its own internal catalog). Keep the math <strong>identical</strong>. Then <strong>refactor <code>IdentityEvidenceEmitter</code> to delegate</strong> to <code>EvidenceBuilder</code> (construct one internally from its cartesian catalog + calibration; forward <code>build_frame_evidences</code>). The emitter keeps its cache-writing responsibility until Task 5 deletes it.</p>
+</li>
+<li class="task-list-item">
+<p><label class="task-list-control"><input type="checkbox" disabled/><span class="task-list-indicator"></span></label> <strong>Step 4: Run — PASS</strong> (parity holds across all cases). Run full <code>tests/identity/</code> — no regression.</p>
+</li>
+<li class="task-list-item">
+<p><label class="task-list-control"><input type="checkbox" disabled/><span class="task-list-indicator"></span></label> <strong>Step 5: <code>make format &amp;&amp; make lint</code>; commit</strong> <code>refactor(identity): shared EvidenceBuilder; emitter delegates (parity-tested)</code>.</p>
+</li>
+</ul>
+<hr />
+<h2 id="task-3-identityevidencestage-over-raw-cache-reads">Task 3: <code>IdentityEvidenceStage</code> over raw cache reads<a class="headerlink" href="#task-3-identityevidencestage-over-raw-cache-reads" title="Permanent link">&para;</a></h2>
+<p>The inference-time producer: given per-frame raw CNN predictions + AprilTag result + the shared catalog + per-factor <code>EvidenceBuilder</code>s + tag→label, return <code>list[IdentityEvidence]</code>. Owns the single tag→catalog mapping.</p>
+<p><strong>Files:</strong> Create <code>core/inference/stages/identity_evidence.py</code>; Test <code>tests/identity/test_identity_evidence_stage.py</code>.</p>
+<p><strong>Interfaces:</strong> Consumes Task 2 (<code>EvidenceBuilder</code>), <code>IdentityCatalog.apriltag_log_prior</code>. Produces <code>IdentityEvidenceStage</code>. Consumed by Task 4.</p>
+<ul class="task-list">
+<li class="task-list-item">
+<p><label class="task-list-control"><input type="checkbox" disabled/><span class="task-list-indicator"></span></label> <strong>Step 1: Failing test</strong> — construct a stage with a 1-CNN <code>EvidenceBuilder</code> + a <code>tag_to_label</code>, feed synthetic <code>cnn_reads</code> (<code>list[CNNDetectionPrediction]</code> with <code>raw_probabilities</code>) + an <code>AprilTagResult</code>; assert: CNN dets get <code>from_cnn</code> evidence with the builder's <code>log_probs</code>; tagged dets get <code>from_apriltag</code> evidence equal to <code>catalog.apriltag_log_prior(tag_id, tag_to_label)</code>; det ordering/ids preserved; a det with no CNN factor + no tag is absent (or <code>missing</code>, matching the emitter's contract — READ the emitter to decide which). Build the <code>CNNDetectionPrediction</code>/<code>CNNFactorPrediction</code> + <code>AprilTagResult</code> shapes per <code>core/inference/result.py</code> / <code>stages/apriltag.py</code>.</p>
+</li>
+<li class="task-list-item">
+<p><label class="task-list-control"><input type="checkbox" disabled/><span class="task-list-indicator"></span></label> <strong>Step 2: Run — FAIL.</strong></p>
+</li>
+<li class="task-list-item">
+<p><label class="task-list-control"><input type="checkbox" disabled/><span class="task-list-indicator"></span></label> <strong>Step 3: Implement.</strong> For each CNN phase read, pull per-det per-factor <code>raw_probabilities</code> (aligned to det_ids) and call the phase's <code>EvidenceBuilder.build_frame_evidences</code>. For the AprilTag read, build <code>tag_to_label</code> once (from <code>TAG_IDENTITY_LABELS</code>, the <code>enumerate</code> index→label pattern at <code>worker.py:2706</code>/<code>:2985</code>) and emit <code>IdentityEvidence.from_apriltag(frame_idx, det_id, catalog.apriltag_log_prior(tag_id, tag_to_label))</code> per tagged det. Merge per-frame CNN + tag evidences. Do NOT <code>split("_")</code> anywhere.</p>
+</li>
+<li class="task-list-item">
+<p><label class="task-list-control"><input type="checkbox" disabled/><span class="task-list-indicator"></span></label> <strong>Step 4: Run — PASS.</strong> Full <code>tests/identity/</code> — no regression.</p>
+</li>
+<li class="task-list-item">
+<p><label class="task-list-control"><input type="checkbox" disabled/><span class="task-list-indicator"></span></label> <strong>Step 5: <code>make format &amp;&amp; make lint</code>; commit</strong> <code>feat(inference): IdentityEvidenceStage builds evidence from raw caches</code>.</p>
+</li>
+</ul>
+<hr />
+<h2 id="task-4-wire-the-stage-into-inferencerunner-batch-realtime-thread-catalogcalibration">Task 4: Wire the stage into <code>InferenceRunner</code> (batch + realtime) + thread catalog/calibration<a class="headerlink" href="#task-4-wire-the-stage-into-inferencerunner-batch-realtime-thread-catalogcalibration" title="Permanent link">&para;</a></h2>
+<p>Resolve the catalog + per-factor calibration before the pass (in the worker) and thread them to the runner; write the evidence sidecar during inference.</p>
+<p><strong>Files:</strong> Modify <code>core/inference/runner.py</code>, a config carrier (e.g. <code>core/inference/config.py</code> or a new <code>IdentityEvidenceConfig</code>), and <code>core/tracking/worker.py</code> (resolve + pass; do NOT delete the emitter yet). Test: a runner-level integration test on a tiny synthetic cache dir, or an assertion that the written sidecar's evidence equals the emitter's for the same clip (see Gate).</p>
+<p><strong>Interfaces:</strong> Consumes Task 1 (key), Task 3 (stage). Produces the inference-written sidecar. Consumed by Task 5.</p>
+<ul class="task-list">
+<li class="task-list-item">
+<p><label class="task-list-control"><input type="checkbox" disabled/><span class="task-list-indicator"></span></label> <strong>Step 1:</strong> Add an optional <code>identity_evidence</code> config to the runner carrying: the resolved <code>IdentityCatalogSpec</code>, per-phase <code>class_names_per_factor</code>, per-phase <code>CalibrationModel</code> (per-factor temps), and <code>tag_to_label</code>/<code>TAG_IDENTITY_LABELS</code>. When absent (no identity configured), the stage is a no-op (no behavior change).</p>
+</li>
+<li class="task-list-item">
+<p><label class="task-list-control"><input type="checkbox" disabled/><span class="task-list-indicator"></span></label> <strong>Step 2 (batch):</strong> In <code>run_batch_pass</code>, after <code>pipeline.run(...)</code> completes and before closing caches (the <code>finally</code>), if identity-evidence config is present: read back each frame's raw CNN/AprilTag caches (<code>caches.cnn[i].read_frame</code>, <code>caches.apriltag.read_frame</code>), run <code>IdentityEvidenceStage.evidences_for_frame</code>, and write them to an <code>IdentityEvidenceCache</code> at <code>build_evidence_cache_path(&lt;cache base&gt;, "batch", identity_evidence_cache_key(...))</code>. Flush before caches close.</p>
+</li>
+<li class="task-list-item">
+<p><label class="task-list-control"><input type="checkbox" disabled/><span class="task-list-indicator"></span></label> <strong>Step 3 (realtime):</strong> In <code>run_realtime</code>, after the raw caches for the frame are written (<code>:851</code>) and before <code>FrameResult</code> build (<code>:853</code>), run the stage for that frame and <code>save_frame</code> into a realtime evidence cache (flushed at pass end). Identical evidence contract to batch.</p>
+</li>
+<li class="task-list-item">
+<p><label class="task-list-control"><input type="checkbox" disabled/><span class="task-list-indicator"></span></label> <strong>Step 4 (worker threading):</strong> In <code>worker.py</code>, before <code>run_batch_pass</code>/<code>run_realtime</code>, resolve <code>catalog_spec = resolve_catalog_spec(p["CNN_CLASSIFIERS"], p["TAG_IDENTITY_LABELS"])</code>, build per-phase <code>CalibrationModel</code>s (reuse the existing <code>worker.py:4259-4272</code> resolution), and pass the identity-evidence config into the runner. The emitter still runs (deleted in Task 5) — both writing evidence is fine transiently; the tracker still reads the emitter's "live" cache until Task 5 flips it.</p>
+</li>
+<li class="task-list-item">
+<p><label class="task-list-control"><input type="checkbox" disabled/><span class="task-list-indicator"></span></label> <strong>Step 5:</strong> Test at the runner level (synthetic cache dir with a couple of frames of raw CNN probs + tags → assert the sidecar exists and <code>load_frame</code> returns evidence equal to a direct <code>IdentityEvidenceStage</code> call). Run <code>tests/identity/</code> + any inference-runner tests — no regression.</p>
+</li>
+<li class="task-list-item">
+<p><label class="task-list-control"><input type="checkbox" disabled/><span class="task-list-indicator"></span></label> <strong>Step 6: <code>make format &amp;&amp; make lint</code>; commit</strong> <code>feat(inference): write identity-evidence sidecar during the inference pass (batch + realtime)</code>.</p>
+</li>
+</ul>
+<hr />
+<h2 id="task-5-flip-the-tracker-to-the-inference-sidecar-delete-the-emitter-reconstruction-fallback">Task 5: Flip the tracker to the inference sidecar; delete the emitter + reconstruction fallback<a class="headerlink" href="#task-5-flip-the-tracker-to-the-inference-sidecar-delete-the-emitter-reconstruction-fallback" title="Permanent link">&para;</a></h2>
+<p>The honesty-relevant cutover: the tracker reads the inference-written sidecar; the tracking-time emitter and the top-1/<code>split("_")</code> fallback are removed.</p>
+<p><strong>Files:</strong> Modify <code>core/tracking/worker.py</code> (+ <code>frame_result_bridge.py</code>, GUI proxy chain). Test: the equivalence gate is the primary guard; add a focused assertion that with the inference sidecar present, the online decoder's per-frame evidence equals what the emitter produced (can reuse Task 2/4 parity harness on one fixture).</p>
+<ul class="task-list">
+<li class="task-list-item">
+<p><label class="task-list-control"><input type="checkbox" disabled/><span class="task-list-indicator"></span></label> <strong>Step 1:</strong> Make the worker's evidence-cache open (<code>:1583-1610</code>) find the <strong>inference-written</strong> sidecar (the <code>"batch"</code>/realtime-signature file from Task 4). Confirm the online feed (<code>:3030-3037</code>) reads it.</p>
+</li>
+<li class="task-list-item">
+<p><label class="task-list-control"><input type="checkbox" disabled/><span class="task-list-indicator"></span></label> <strong>Step 2:</strong> Delete the emitter wiring: construct <code>:1471-1483</code>, <code>_build_cnn_evidence_emitter</code> <code>:4192-4315</code>, per-frame feed <code>:2460-2472</code> (+ the <code>evidence_emitter=</code> param/branch in <code>frame_result_bridge.py:192-205</code>), flush <code>:3993-4007</code>. Delete the whole top-1/<code>split("_")</code> reconstruction fallback <code>:3066-3164</code> (keep the AprilTag <code>:3007</code> + cached-evidence <code>:3054</code> constructions). Delete the dead <code>self.detected_cnn_cache_paths = {}</code> (<code>:153</code>) and its GUI proxy chain (<code>tracking_worker.py:90-91</code>, <code>main_window.py:338</code>, <code>orchestrators/tracking.py</code> references).</p>
+</li>
+<li class="task-list-item">
+<p><label class="task-list-control"><input type="checkbox" disabled/><span class="task-list-indicator"></span></label> <strong>Step 3: Grep-guard</strong> — <code>grep -n "IdentityEvidenceEmitter\|_evidence_emitters\|_build_cnn_evidence_emitter\|detected_cnn_cache_paths\|split(\"_\")\|_per_factor_dist" src/hydra_suite/core/tracking/worker.py</code> → no surviving references (except unrelated). If <code>evidence_emitter.py</code> now has no importers, delete the file too.</p>
+</li>
+<li class="task-list-item">
+<p><label class="task-list-control"><input type="checkbox" disabled/><span class="task-list-indicator"></span></label> <strong>Step 4:</strong> Run <code>tests/identity/</code> + tracking-adjacent tests. Then the equivalence smoke (fastest clips) — see Gate.</p>
+</li>
+<li class="task-list-item">
+<p><label class="task-list-control"><input type="checkbox" disabled/><span class="task-list-indicator"></span></label> <strong>Step 5: <code>make format &amp;&amp; make lint</code>; commit</strong> <code>refactor(identity): tracker reads inference evidence sidecar; delete tracking-time emitter + top-1/split reconstruction</code>.</p>
+</li>
+</ul>
+<hr />
+<h2 id="phase-end-gate">Phase-End Gate<a class="headerlink" href="#phase-end-gate" title="Permanent link">&para;</a></h2>
+<ul class="task-list">
+<li class="task-list-item"><label class="task-list-control"><input type="checkbox" disabled/><span class="task-list-indicator"></span></label> <strong>Full equivalence — MPS.</strong> Baseline = the branch commit at the START of Phase 3 (record it before Task 1); current = branch HEAD. <code>MAIN_SRC=&lt;worktree copy at phase-start SHA&gt;/src WT_SRC=&lt;worktree&gt;/src</code> (make a detached worktree at the phase-start SHA for the baseline src). Every clip EQUIVALENT at its determinism floor for <code>_forward.csv</code> + <code>_tracking_final.csv</code>; identical row counts; 0 unmatched. This proves the evidence relocation is byte-identical. <strong>Verify CSV row counts &gt; 1.</strong></li>
+<li class="task-list-item"><label class="task-list-control"><input type="checkbox" disabled/><span class="task-list-indicator"></span></label> <strong>Full equivalence — CUDA (mehek)</strong> per the CLAUDE.md recipe against the phase-start baseline (push the branch; worktrees at phase-start SHA + branch HEAD; <code>setsid</code> detached run; re-fetch fixtures with <code>PYTHONPATH=$PWD/src</code>).</li>
+<li class="task-list-item"><label class="task-list-control"><input type="checkbox" disabled/><span class="task-list-indicator"></span></label> <strong>Suite delta gate:</strong> <code>python -m pytest tests/identity/ -v</code> green.</li>
+<li class="task-list-item"><label class="task-list-control"><input type="checkbox" disabled/><span class="task-list-indicator"></span></label> <strong>Evidence-provenance check:</strong> confirm the evidence sidecar is written by the inference pass BEFORE tracking (e.g. it exists after a <code>cache-only</code>/inference-only run, before any tracking) — the core Phase-3 property.</li>
+</ul>
+<hr />
+<h2 id="self-review-against-the-spec-layer-2-phase-3">Self-Review (against the spec — Layer 2 + Phase 3)<a class="headerlink" href="#self-review-against-the-spec-layer-2-phase-3" title="Permanent link">&para;</a></h2>
+<ul>
+<li>"<code>InferenceRunner</code> gains an <code>IdentityEvidenceStage</code> … produces <code>IdentityEvidence</code> … writes the <code>IdentityEvidenceCache</code> sidecar" → Tasks 3, 4. ✅</li>
+<li>"Non-realtime: written in <code>run_batch_pass</code> … before tracking. Realtime: emitted inline in <code>run_realtime</code>, identical contract" → Task 4 Steps 2/3. ✅</li>
+<li>"owns the single factor→catalog mapping … true per-factor softmax (no top-1 reconstruction) … structured factor keys" → Tasks 2/3 (structured <code>(factor,class)</code> map; parity test with a <code>_</code>-containing class). ✅</li>
+<li>"Deleted: tracking-time <code>IdentityEvidenceEmitter</code> … the top-1 pseudo-distribution reconstruction … <code>detected_cnn_cache_paths</code>" → Task 5. ✅</li>
+<li><strong>Deferred (documented):</strong> orphaned V3 <code>CNNIdentityCache</code> (still feeds CSV export → retire in Phase 5/7), <code>TrackCNNHistory</code> majority-vote (already orphaned, later cleanup), offline path repointing (Phase 5). ✅ — these are explicitly NOT in Phase 3 to keep the byte-identical gate clean.</li>
+<li><strong>Placeholder scan:</strong> novel pieces (key, builder) carry real code; wiring/deletion tasks carry exact anchors + a <code>READ &lt;file&gt; first</code> where the real shape must be matched (emitter <code>predictions</code> shape, cache read shapes). Parity + grep-guard + equivalence gate are the safety nets.</li>
+<li><strong>Type consistency:</strong> <code>EvidenceBuilder.build_frame_evidences(det_ids, per_det_factor_probs)</code> and <code>IdentityEvidenceStage.evidences_for_frame(...)</code> return <code>list[IdentityEvidence]</code>; the sidecar key signature is used identically in Tasks 1 and 4.</li>
+</ul>
+<p><strong>Risk to watch at execution:</strong> the emitter today may, in some path, feed evidence from top-1 predictions rather than true posteriors — if so, switching to true per-factor softmax would change evidence and break byte-identical. Task 2's parity test MUST use the same input contract the live pipeline actually feeds the emitter; if the live pipeline feeds top-1 (not posteriors), that is itself the bug Phase 3 fixes and the "byte-identical" expectation must be renegotiated with the user (surface it, don't silently accept a diff). Confirm during Task 2 which the live pipeline uses (posteriors vs predictions) and report before proceeding to deletion.</p>
+<hr />
+<h2 id="phase-end-gate-result-accepted">Phase-End Gate — RESULT (accepted)<a class="headerlink" href="#phase-end-gate-result-accepted" title="Permanent link">&para;</a></h2>
+<p><strong>Positions/geometry: byte-identical on all 7 clips, MPS + CUDA.</strong> Evidence <em>values</em>: byte-identical (proven by <code>tests/identity/test_evidence_phase_basis_parity.py</code> for CNN+AprilTag and multi-CNN catalogs, and by direct sidecar comparison on <code>ant_cnn_identity</code>).</p>
+<p><strong>Accepted divergence (documented, not a regression) — <code>ant_cnn_identity</code> identity coverage:</strong> the new inference <code>IdentityEvidenceStage</code> emits identity evidence for ~7.5% more detections than the old during-tracking <code>IdentityEvidenceEmitter</code> (10841 vs 10083), yielding a ~7% identity-label delta (mostly new-commits-where-baseline-was-empty; 12 genuine disagreements). Root cause (verified, 100%/0% split): the <strong>baseline emitter had two bugs the new stage fixes</strong> — (1) a det-id fallback (<code>precompute.py:690-693</code>) fed garbage stable-ids → phantom evidence on non-existent detection ids (the baseline-only "missing" rows appear in no tracking CSV); (2) crop extraction silently dropped some newly-spawned detections' CNN crops → no evidence (the new-only "extra" rows are real detections present in both CSVs). Matching the baseline would mean reintroducing these bugs. <strong>This is a correctness improvement, treated like the documented head/tail π-flip noise floor.</strong> Note: current <code>origin/main</code> carries this latent identity-evidence bug on colortag-style configs; Phase 3 corrects it.</p>
+<p>Durable guards: <code>test_evidence_phase_basis_parity</code> (evidence values) + <code>test_evidence_sidecar_consumption</code> (batch consumption) + this documented rationale.</p>
+
+
+
+
+
+
+
+
+
+
+
+
+                
+              </article>
+            </div>
+          
+          
+<script>var target=document.getElementById(location.hash.slice(1));target&&target.name&&(target.checked=target.name.startsWith("__tabbed_"))</script>
+        </div>
+        
+          <button type="button" class="md-top md-icon" data-md-component="top" hidden>
+  
+  <svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 24 24"><path d="M13 20h-2V8l-5.5 5.5-1.42-1.42L12 4.16l7.92 7.92-1.42 1.42L13 8z"/></svg>
+  Back to top
+</button>
+        
+      </main>
+      
+        <footer class="md-footer">
+  
+  <div class="md-footer-meta md-typeset">
+    <div class="md-footer-meta__inner md-grid">
+      <div class="md-copyright">
+  
+  
+    Made with
+    <a href="https://squidfunk.github.io/mkdocs-material/" target="_blank" rel="noopener">
+      Material for MkDocs
+    </a>
+  
+</div>
+      
+    </div>
+  </div>
+</footer>
+      
+    </div>
+    <div class="md-dialog" data-md-component="dialog">
+      <div class="md-dialog__inner md-typeset"></div>
+    </div>
+    
+    
+    <script id="__config" type="application/json">{"base": "../../../..", "features": ["navigation.tabs", "navigation.sections", "navigation.expand", "navigation.top", "content.code.copy", "content.action.edit", "search.suggest", "search.highlight"], "search": "../../../../assets/javascripts/workers/search.6ce7567c.min.js", "translations": {"clipboard.copied": "Copied to clipboard", "clipboard.copy": "Copy to clipboard", "search.result.more.one": "1 more on this page", "search.result.more.other": "# more on this page", "search.result.none": "No matching documents", "search.result.one": "1 matching document", "search.result.other": "# matching documents", "search.result.placeholder": "Type to start searching", "search.result.term.missing": "Missing", "select.version": "Select version"}, "version": {"default": "latest", "provider": "mike"}}</script>
+    
+    
+      <script src="../../../../assets/javascripts/bundle.83f73b43.min.js"></script>
+      
+    
+  </body>
+</html>

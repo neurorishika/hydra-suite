@@ -2,258 +2,870 @@
 <urlset xmlns="http://www.sitemaps.org/schemas/sitemap/0.9">
     <url>
          <loc>https://neurorishika.github.io/hydra-suite/latest/</loc>
-         <lastmod>2026-07-10</lastmod>
+         <lastmod>2026-09-05</lastmod>
     </url>
     <url>
          <loc>https://neurorishika.github.io/hydra-suite/latest/developer-guide/architecture/</loc>
-         <lastmod>2026-07-10</lastmod>
+         <lastmod>2026-09-05</lastmod>
     </url>
     <url>
          <loc>https://neurorishika.github.io/hydra-suite/latest/developer-guide/classifier-compatibility/</loc>
-         <lastmod>2026-07-10</lastmod>
+         <lastmod>2026-09-05</lastmod>
     </url>
     <url>
          <loc>https://neurorishika.github.io/hydra-suite/latest/developer-guide/code-health/</loc>
-         <lastmod>2026-07-10</lastmod>
+         <lastmod>2026-09-05</lastmod>
     </url>
     <url>
          <loc>https://neurorishika.github.io/hydra-suite/latest/developer-guide/confidence-metrics/</loc>
-         <lastmod>2026-07-10</lastmod>
+         <lastmod>2026-09-05</lastmod>
     </url>
     <url>
          <loc>https://neurorishika.github.io/hydra-suite/latest/developer-guide/contributing/</loc>
-         <lastmod>2026-07-10</lastmod>
+         <lastmod>2026-09-05</lastmod>
     </url>
     <url>
          <loc>https://neurorishika.github.io/hydra-suite/latest/developer-guide/data-flow/</loc>
-         <lastmod>2026-07-10</lastmod>
+         <lastmod>2026-09-05</lastmod>
     </url>
     <url>
          <loc>https://neurorishika.github.io/hydra-suite/latest/developer-guide/dependency-cuda-updates/</loc>
-         <lastmod>2026-07-10</lastmod>
+         <lastmod>2026-09-05</lastmod>
     </url>
     <url>
          <loc>https://neurorishika.github.io/hydra-suite/latest/developer-guide/extending-detection/</loc>
-         <lastmod>2026-07-10</lastmod>
+         <lastmod>2026-09-05</lastmod>
     </url>
     <url>
          <loc>https://neurorishika.github.io/hydra-suite/latest/developer-guide/extending-identity/</loc>
-         <lastmod>2026-07-10</lastmod>
+         <lastmod>2026-09-05</lastmod>
     </url>
     <url>
          <loc>https://neurorishika.github.io/hydra-suite/latest/developer-guide/gpu-backends/</loc>
-         <lastmod>2026-07-10</lastmod>
+         <lastmod>2026-09-05</lastmod>
+    </url>
+    <url>
+         <loc>https://neurorishika.github.io/hydra-suite/latest/developer-guide/inference-fast-mode/</loc>
+         <lastmod>2026-09-05</lastmod>
     </url>
     <url>
          <loc>https://neurorishika.github.io/hydra-suite/latest/developer-guide/module-map/</loc>
-         <lastmod>2026-07-10</lastmod>
+         <lastmod>2026-09-05</lastmod>
     </url>
     <url>
          <loc>https://neurorishika.github.io/hydra-suite/latest/developer-guide/performance-tuning/</loc>
-         <lastmod>2026-07-10</lastmod>
+         <lastmod>2026-09-05</lastmod>
+    </url>
+    <url>
+         <loc>https://neurorishika.github.io/hydra-suite/latest/developer-guide/profiling/</loc>
+         <lastmod>2026-09-05</lastmod>
     </url>
     <url>
          <loc>https://neurorishika.github.io/hydra-suite/latest/developer-guide/publishing/</loc>
-         <lastmod>2026-07-10</lastmod>
+         <lastmod>2026-09-05</lastmod>
+    </url>
+    <url>
+         <loc>https://neurorishika.github.io/hydra-suite/latest/developer-guide/resource-containment/</loc>
+         <lastmod>2026-09-05</lastmod>
     </url>
     <url>
          <loc>https://neurorishika.github.io/hydra-suite/latest/developer-guide/runtime-integration/</loc>
-         <lastmod>2026-07-10</lastmod>
+         <lastmod>2026-09-05</lastmod>
     </url>
     <url>
          <loc>https://neurorishika.github.io/hydra-suite/latest/developer-guide/tracking-algorithm-deep-dive/</loc>
-         <lastmod>2026-07-10</lastmod>
+         <lastmod>2026-09-05</lastmod>
     </url>
     <url>
          <loc>https://neurorishika.github.io/hydra-suite/latest/developer-guide/tracking-optimization/</loc>
-         <lastmod>2026-07-10</lastmod>
+         <lastmod>2026-09-05</lastmod>
+    </url>
+    <url>
+         <loc>https://neurorishika.github.io/hydra-suite/latest/developer-guide/ui-verification-runtime-gen2/</loc>
+         <lastmod>2026-09-05</lastmod>
     </url>
     <url>
          <loc>https://neurorishika.github.io/hydra-suite/latest/getting-started/environments/</loc>
-         <lastmod>2026-07-10</lastmod>
+         <lastmod>2026-09-05</lastmod>
     </url>
     <url>
          <loc>https://neurorishika.github.io/hydra-suite/latest/getting-started/installation/</loc>
-         <lastmod>2026-07-10</lastmod>
+         <lastmod>2026-09-05</lastmod>
     </url>
     <url>
          <loc>https://neurorishika.github.io/hydra-suite/latest/getting-started/integrations/</loc>
-         <lastmod>2026-07-10</lastmod>
+         <lastmod>2026-09-05</lastmod>
     </url>
     <url>
          <loc>https://neurorishika.github.io/hydra-suite/latest/getting-started/platforms/</loc>
-         <lastmod>2026-07-10</lastmod>
+         <lastmod>2026-09-05</lastmod>
     </url>
     <url>
          <loc>https://neurorishika.github.io/hydra-suite/latest/getting-started/quickstart-hydra/</loc>
-         <lastmod>2026-07-10</lastmod>
+         <lastmod>2026-09-05</lastmod>
     </url>
     <url>
          <loc>https://neurorishika.github.io/hydra-suite/latest/getting-started/quickstart-posekit/</loc>
-         <lastmod>2026-07-10</lastmod>
+         <lastmod>2026-09-05</lastmod>
     </url>
     <url>
          <loc>https://neurorishika.github.io/hydra-suite/latest/reference/api-app/</loc>
-         <lastmod>2026-07-10</lastmod>
+         <lastmod>2026-09-05</lastmod>
     </url>
     <url>
          <loc>https://neurorishika.github.io/hydra-suite/latest/reference/api-core/</loc>
-         <lastmod>2026-07-10</lastmod>
+         <lastmod>2026-09-05</lastmod>
     </url>
     <url>
          <loc>https://neurorishika.github.io/hydra-suite/latest/reference/api-data/</loc>
-         <lastmod>2026-07-10</lastmod>
+         <lastmod>2026-09-05</lastmod>
     </url>
     <url>
          <loc>https://neurorishika.github.io/hydra-suite/latest/reference/api-gui/</loc>
-         <lastmod>2026-07-10</lastmod>
+         <lastmod>2026-09-05</lastmod>
     </url>
     <url>
          <loc>https://neurorishika.github.io/hydra-suite/latest/reference/api-index/</loc>
-         <lastmod>2026-07-10</lastmod>
+         <lastmod>2026-09-05</lastmod>
     </url>
     <url>
          <loc>https://neurorishika.github.io/hydra-suite/latest/reference/api-posekit/</loc>
-         <lastmod>2026-07-10</lastmod>
+         <lastmod>2026-09-05</lastmod>
     </url>
     <url>
          <loc>https://neurorishika.github.io/hydra-suite/latest/reference/api-utils/</loc>
-         <lastmod>2026-07-10</lastmod>
+         <lastmod>2026-09-05</lastmod>
     </url>
     <url>
          <loc>https://neurorishika.github.io/hydra-suite/latest/reference/api-widgets/</loc>
-         <lastmod>2026-07-10</lastmod>
+         <lastmod>2026-09-05</lastmod>
     </url>
     <url>
          <loc>https://neurorishika.github.io/hydra-suite/latest/reference/changelog/</loc>
-         <lastmod>2026-07-10</lastmod>
+         <lastmod>2026-09-05</lastmod>
     </url>
     <url>
          <loc>https://neurorishika.github.io/hydra-suite/latest/reference/cli-reference/</loc>
-         <lastmod>2026-07-10</lastmod>
+         <lastmod>2026-09-05</lastmod>
     </url>
     <url>
          <loc>https://neurorishika.github.io/hydra-suite/latest/reference/faq/</loc>
-         <lastmod>2026-07-10</lastmod>
+         <lastmod>2026-09-05</lastmod>
     </url>
     <url>
          <loc>https://neurorishika.github.io/hydra-suite/latest/reference/technical-reference/</loc>
-         <lastmod>2026-07-10</lastmod>
+         <lastmod>2026-09-05</lastmod>
     </url>
     <url>
          <loc>https://neurorishika.github.io/hydra-suite/latest/reference/ui-components-hydra/</loc>
-         <lastmod>2026-07-10</lastmod>
+         <lastmod>2026-09-05</lastmod>
     </url>
     <url>
          <loc>https://neurorishika.github.io/hydra-suite/latest/reference/ui-components-posekit/</loc>
-         <lastmod>2026-07-10</lastmod>
+         <lastmod>2026-09-05</lastmod>
+    </url>
+    <url>
+         <loc>https://neurorishika.github.io/hydra-suite/latest/runbooks/detectkit-headless-training/</loc>
+         <lastmod>2026-09-05</lastmod>
+    </url>
+    <url>
+         <loc>https://neurorishika.github.io/hydra-suite/latest/runbooks/detectkit-sahi-sliced-training/</loc>
+         <lastmod>2026-09-05</lastmod>
     </url>
     <url>
          <loc>https://neurorishika.github.io/hydra-suite/latest/schematics/trackerkit_pipeline/</loc>
-         <lastmod>2026-07-10</lastmod>
+         <lastmod>2026-09-05</lastmod>
     </url>
     <url>
-         <loc>https://neurorishika.github.io/hydra-suite/latest/superpowers/trackerkit-identity-overhaul-spec/</loc>
-         <lastmod>2026-07-10</lastmod>
+         <loc>https://neurorishika.github.io/hydra-suite/latest/superpowers/plans/2026-08-04-model-registry-unification/</loc>
+         <lastmod>2026-09-05</lastmod>
     </url>
     <url>
-         <loc>https://neurorishika.github.io/hydra-suite/latest/superpowers/trackerkit-streaming-individual-analysis-plan/</loc>
-         <lastmod>2026-07-10</lastmod>
+         <loc>https://neurorishika.github.io/hydra-suite/latest/superpowers/plans/2026-08-13-identity-retention-fixes/</loc>
+         <lastmod>2026-09-05</lastmod>
     </url>
     <url>
-         <loc>https://neurorishika.github.io/hydra-suite/latest/superpowers/plans/2026-04-26-inference-pipeline-redesign/</loc>
-         <lastmod>2026-07-10</lastmod>
+         <loc>https://neurorishika.github.io/hydra-suite/latest/superpowers/plans/2026-08-27-identity-subsystem-repair/</loc>
+         <lastmod>2026-09-05</lastmod>
     </url>
     <url>
-         <loc>https://neurorishika.github.io/hydra-suite/latest/superpowers/plans/2026-05-03-al-detection-dataset/</loc>
-         <lastmod>2026-07-10</lastmod>
+         <loc>https://neurorishika.github.io/hydra-suite/latest/superpowers/plans/2026-08-31-detectkit-sam3-finetune/</loc>
+         <lastmod>2026-09-05</lastmod>
     </url>
     <url>
-         <loc>https://neurorishika.github.io/hydra-suite/latest/superpowers/plans/2026-07-02-posekit-frame-mode/</loc>
-         <lastmod>2026-07-10</lastmod>
+         <loc>https://neurorishika.github.io/hydra-suite/latest/superpowers/plans/2026-09-04-measured-auto-batch-sizing/</loc>
+         <lastmod>2026-09-05</lastmod>
     </url>
     <url>
-         <loc>https://neurorishika.github.io/hydra-suite/latest/superpowers/specs/2026-04-26-inference-pipeline-redesign/</loc>
-         <lastmod>2026-07-10</lastmod>
+         <loc>https://neurorishika.github.io/hydra-suite/latest/superpowers/plans/done/2026-04-26-inference-pipeline-redesign/</loc>
+         <lastmod>2026-09-05</lastmod>
     </url>
     <url>
-         <loc>https://neurorishika.github.io/hydra-suite/latest/superpowers/specs/2026-05-03-al-detection-dataset-design/</loc>
-         <lastmod>2026-07-10</lastmod>
+         <loc>https://neurorishika.github.io/hydra-suite/latest/superpowers/plans/done/2026-05-03-al-detection-dataset/</loc>
+         <lastmod>2026-09-05</lastmod>
     </url>
     <url>
-         <loc>https://neurorishika.github.io/hydra-suite/latest/superpowers/specs/2026-07-01-filterkit-preserve-full-frames-design/</loc>
-         <lastmod>2026-07-10</lastmod>
+         <loc>https://neurorishika.github.io/hydra-suite/latest/superpowers/plans/done/2026-06-30-inference-acceleration-restoration/</loc>
+         <lastmod>2026-09-05</lastmod>
     </url>
     <url>
-         <loc>https://neurorishika.github.io/hydra-suite/latest/superpowers/specs/2026-07-02-posekit-frame-mode-design/</loc>
-         <lastmod>2026-07-10</lastmod>
+         <loc>https://neurorishika.github.io/hydra-suite/latest/superpowers/plans/done/2026-06-30-runtime-tiers-phase1-exact-wins/</loc>
+         <lastmod>2026-09-05</lastmod>
+    </url>
+    <url>
+         <loc>https://neurorishika.github.io/hydra-suite/latest/superpowers/plans/done/2026-06-30-runtime-tiers-phase2-taxonomy/</loc>
+         <lastmod>2026-09-05</lastmod>
+    </url>
+    <url>
+         <loc>https://neurorishika.github.io/hydra-suite/latest/superpowers/plans/done/2026-06-30-runtime-tiers-phase3-coreml/</loc>
+         <lastmod>2026-09-05</lastmod>
+    </url>
+    <url>
+         <loc>https://neurorishika.github.io/hydra-suite/latest/superpowers/plans/done/2026-07-02-posekit-frame-mode/</loc>
+         <lastmod>2026-09-05</lastmod>
+    </url>
+    <url>
+         <loc>https://neurorishika.github.io/hydra-suite/latest/superpowers/plans/done/2026-07-03-obb-direct-detect-segment/</loc>
+         <lastmod>2026-09-05</lastmod>
+    </url>
+    <url>
+         <loc>https://neurorishika.github.io/hydra-suite/latest/superpowers/plans/done/2026-07-04-tensorrt-coreml-cross-frame-batching/</loc>
+         <lastmod>2026-09-05</lastmod>
+    </url>
+    <url>
+         <loc>https://neurorishika.github.io/hydra-suite/latest/superpowers/plans/done/2026-07-16-bgsub-inference-stage-design/</loc>
+         <lastmod>2026-09-05</lastmod>
+    </url>
+    <url>
+         <loc>https://neurorishika.github.io/hydra-suite/latest/superpowers/plans/done/2026-07-16-bgsub-inference-stage/</loc>
+         <lastmod>2026-09-05</lastmod>
+    </url>
+    <url>
+         <loc>https://neurorishika.github.io/hydra-suite/latest/superpowers/plans/done/2026-07-16-inference-redesign-deletion-step/</loc>
+         <lastmod>2026-09-05</lastmod>
+    </url>
+    <url>
+         <loc>https://neurorishika.github.io/hydra-suite/latest/superpowers/plans/done/2026-07-16-legacy-batching-vestige-removal/</loc>
+         <lastmod>2026-09-05</lastmod>
+    </url>
+    <url>
+         <loc>https://neurorishika.github.io/hydra-suite/latest/superpowers/plans/done/2026-07-16-vitpose-native-port/</loc>
+         <lastmod>2026-09-05</lastmod>
+    </url>
+    <url>
+         <loc>https://neurorishika.github.io/hydra-suite/latest/superpowers/plans/done/2026-07-17-detector-retirement-1-foundation/</loc>
+         <lastmod>2026-09-05</lastmod>
+    </url>
+    <url>
+         <loc>https://neurorishika.github.io/hydra-suite/latest/superpowers/plans/done/2026-07-17-detector-retirement-2-consumers/</loc>
+         <lastmod>2026-09-05</lastmod>
+    </url>
+    <url>
+         <loc>https://neurorishika.github.io/hydra-suite/latest/superpowers/plans/done/2026-07-17-detector-retirement-3-benchmarking/</loc>
+         <lastmod>2026-09-05</lastmod>
+    </url>
+    <url>
+         <loc>https://neurorishika.github.io/hydra-suite/latest/superpowers/plans/done/2026-07-17-detector-retirement-4-retire/</loc>
+         <lastmod>2026-09-05</lastmod>
+    </url>
+    <url>
+         <loc>https://neurorishika.github.io/hydra-suite/latest/superpowers/plans/done/2026-07-17-vitpose-finetune/</loc>
+         <lastmod>2026-09-05</lastmod>
+    </url>
+    <url>
+         <loc>https://neurorishika.github.io/hydra-suite/latest/superpowers/plans/done/2026-07-19-qt-in-core-bg-optimizer-split/</loc>
+         <lastmod>2026-09-05</lastmod>
+    </url>
+    <url>
+         <loc>https://neurorishika.github.io/hydra-suite/latest/superpowers/plans/done/2026-07-19-runtime-resolver-gen2-consolidation/</loc>
+         <lastmod>2026-09-05</lastmod>
+    </url>
+    <url>
+         <loc>https://neurorishika.github.io/hydra-suite/latest/superpowers/plans/done/2026-07-19-trackingworker-qt-in-core-split/</loc>
+         <lastmod>2026-09-05</lastmod>
+    </url>
+    <url>
+         <loc>https://neurorishika.github.io/hydra-suite/latest/superpowers/plans/done/2026-07-20-bgsub-inference-unification/</loc>
+         <lastmod>2026-09-05</lastmod>
+    </url>
+    <url>
+         <loc>https://neurorishika.github.io/hydra-suite/latest/superpowers/plans/done/2026-07-20-runtime-gen2-gui-params-legacy-retirement/</loc>
+         <lastmod>2026-09-05</lastmod>
+    </url>
+    <url>
+         <loc>https://neurorishika.github.io/hydra-suite/latest/superpowers/plans/done/2026-07-20-vitpose-full-integration/</loc>
+         <lastmod>2026-09-05</lastmod>
+    </url>
+    <url>
+         <loc>https://neurorishika.github.io/hydra-suite/latest/superpowers/plans/done/2026-07-21-direct-obb-segment-postretirement-integration/</loc>
+         <lastmod>2026-09-05</lastmod>
+    </url>
+    <url>
+         <loc>https://neurorishika.github.io/hydra-suite/latest/superpowers/plans/done/2026-07-22-classkit-decode-augmentation-implementation/</loc>
+         <lastmod>2026-09-05</lastmod>
+    </url>
+    <url>
+         <loc>https://neurorishika.github.io/hydra-suite/latest/superpowers/plans/done/2026-07-22-gpu-native-classifier-crop-implementation/</loc>
+         <lastmod>2026-09-05</lastmod>
+    </url>
+    <url>
+         <loc>https://neurorishika.github.io/hydra-suite/latest/superpowers/plans/done/2026-07-22-nvdec-gpu-fast-tier-implementation/</loc>
+         <lastmod>2026-09-05</lastmod>
+    </url>
+    <url>
+         <loc>https://neurorishika.github.io/hydra-suite/latest/superpowers/plans/done/2026-07-22-vitpose-posekit-inference/</loc>
+         <lastmod>2026-09-05</lastmod>
+    </url>
+    <url>
+         <loc>https://neurorishika.github.io/hydra-suite/latest/superpowers/plans/done/2026-07-23-sahi-sliced-inference/</loc>
+         <lastmod>2026-09-05</lastmod>
+    </url>
+    <url>
+         <loc>https://neurorishika.github.io/hydra-suite/latest/superpowers/plans/done/2026-07-24-detectkit-geometry-levels/</loc>
+         <lastmod>2026-09-05</lastmod>
+    </url>
+    <url>
+         <loc>https://neurorishika.github.io/hydra-suite/latest/superpowers/plans/done/2026-07-27-detectkit-sahi-sliced-training/</loc>
+         <lastmod>2026-09-05</lastmod>
+    </url>
+    <url>
+         <loc>https://neurorishika.github.io/hydra-suite/latest/superpowers/plans/done/2026-07-27-sequential-segment-enablement/</loc>
+         <lastmod>2026-09-05</lastmod>
+    </url>
+    <url>
+         <loc>https://neurorishika.github.io/hydra-suite/latest/superpowers/plans/done/2026-07-28-sliced-geometry-loop/</loc>
+         <lastmod>2026-09-05</lastmod>
+    </url>
+    <url>
+         <loc>https://neurorishika.github.io/hydra-suite/latest/superpowers/plans/done/2026-07-29-inference-region-source-unification/</loc>
+         <lastmod>2026-09-05</lastmod>
+    </url>
+    <url>
+         <loc>https://neurorishika.github.io/hydra-suite/latest/superpowers/plans/done/2026-07-29-vitpose-completion/</loc>
+         <lastmod>2026-09-05</lastmod>
+    </url>
+    <url>
+         <loc>https://neurorishika.github.io/hydra-suite/latest/superpowers/plans/done/2026-07-31-headless-qt-free-slice1-policy-prereqs/</loc>
+         <lastmod>2026-09-05</lastmod>
+    </url>
+    <url>
+         <loc>https://neurorishika.github.io/hydra-suite/latest/superpowers/plans/done/2026-07-31-headless-qt-free-slice2-analysis-chain/</loc>
+         <lastmod>2026-09-05</lastmod>
+    </url>
+    <url>
+         <loc>https://neurorishika.github.io/hydra-suite/latest/superpowers/plans/done/2026-07-31-headless-qt-free-slice3-export-chain/</loc>
+         <lastmod>2026-09-05</lastmod>
+    </url>
+    <url>
+         <loc>https://neurorishika.github.io/hydra-suite/latest/superpowers/plans/done/2026-07-31-headless-qt-free-slice4-cli-cutover/</loc>
+         <lastmod>2026-09-05</lastmod>
+    </url>
+    <url>
+         <loc>https://neurorishika.github.io/hydra-suite/latest/superpowers/plans/done/2026-08-03-detectkit-sam2-escalation/</loc>
+         <lastmod>2026-09-05</lastmod>
+    </url>
+    <url>
+         <loc>https://neurorishika.github.io/hydra-suite/latest/superpowers/plans/done/2026-08-03-external-vitpose-checkpoint-probe/</loc>
+         <lastmod>2026-09-05</lastmod>
+    </url>
+    <url>
+         <loc>https://neurorishika.github.io/hydra-suite/latest/superpowers/plans/done/2026-08-03-vitpose-per-checkpoint-geometry/</loc>
+         <lastmod>2026-09-05</lastmod>
+    </url>
+    <url>
+         <loc>https://neurorishika.github.io/hydra-suite/latest/superpowers/plans/done/2026-08-04-gui-post-tracking-cutover/</loc>
+         <lastmod>2026-09-05</lastmod>
+    </url>
+    <url>
+         <loc>https://neurorishika.github.io/hydra-suite/latest/superpowers/plans/done/2026-08-04-vitpose-dataset-auto-sizing/</loc>
+         <lastmod>2026-09-05</lastmod>
+    </url>
+    <url>
+         <loc>https://neurorishika.github.io/hydra-suite/latest/superpowers/plans/done/2026-08-05-global-canonicalization/</loc>
+         <lastmod>2026-09-05</lastmod>
+    </url>
+    <url>
+         <loc>https://neurorishika.github.io/hydra-suite/latest/superpowers/plans/done/2026-08-05-shared-engine-param-builder/</loc>
+         <lastmod>2026-09-05</lastmod>
+    </url>
+    <url>
+         <loc>https://neurorishika.github.io/hydra-suite/latest/superpowers/plans/done/2026-08-06-canonicalization-divergence-fixes/</loc>
+         <lastmod>2026-09-05</lastmod>
+    </url>
+    <url>
+         <loc>https://neurorishika.github.io/hydra-suite/latest/superpowers/plans/done/2026-08-07-identity-phase1-typed-config-catalog/</loc>
+         <lastmod>2026-09-05</lastmod>
+    </url>
+    <url>
+         <loc>https://neurorishika.github.io/hydra-suite/latest/superpowers/plans/done/2026-08-07-identity-phase2-calibration/</loc>
+         <lastmod>2026-09-05</lastmod>
+    </url>
+    <url>
+         <loc>https://neurorishika.github.io/hydra-suite/latest/superpowers/plans/done/2026-08-08-identity-phase3-evidence-stage/</loc>
+         <lastmod>2026-09-05</lastmod>
+    </url>
+    <url>
+         <loc>https://neurorishika.github.io/hydra-suite/latest/superpowers/plans/done/2026-08-08-identity-phase4-substrate/</loc>
+         <lastmod>2026-09-05</lastmod>
+    </url>
+    <url>
+         <loc>https://neurorishika.github.io/hydra-suite/latest/superpowers/plans/done/2026-08-09-identity-phase5-posthoc-honesty/</loc>
+         <lastmod>2026-09-05</lastmod>
+    </url>
+    <url>
+         <loc>https://neurorishika.github.io/hydra-suite/latest/superpowers/plans/done/2026-08-10-identity-phase6-provenance-columns-ui/</loc>
+         <lastmod>2026-09-05</lastmod>
+    </url>
+    <url>
+         <loc>https://neurorishika.github.io/hydra-suite/latest/superpowers/plans/done/2026-08-11-identity-phase7-clean-break-retirement/</loc>
+         <lastmod>2026-09-05</lastmod>
+    </url>
+    <url>
+         <loc>https://neurorishika.github.io/hydra-suite/latest/superpowers/plans/done/2026-08-11-trackerkit-debug-mode/</loc>
+         <lastmod>2026-09-05</lastmod>
+    </url>
+    <url>
+         <loc>https://neurorishika.github.io/hydra-suite/latest/superpowers/plans/done/2026-08-13-legacy-detection-cache-retirement/</loc>
+         <lastmod>2026-09-05</lastmod>
+    </url>
+    <url>
+         <loc>https://neurorishika.github.io/hydra-suite/latest/superpowers/plans/done/2026-08-17-al-escalated-multi-format-export/</loc>
+         <lastmod>2026-09-05</lastmod>
+    </url>
+    <url>
+         <loc>https://neurorishika.github.io/hydra-suite/latest/superpowers/plans/done/2026-08-17-crop-warp-aabb-precrop/</loc>
+         <lastmod>2026-09-05</lastmod>
+    </url>
+    <url>
+         <loc>https://neurorishika.github.io/hydra-suite/latest/superpowers/plans/done/2026-08-17-yolo-cli-canonical-aug-offline/</loc>
+         <lastmod>2026-09-05</lastmod>
+    </url>
+    <url>
+         <loc>https://neurorishika.github.io/hydra-suite/latest/superpowers/plans/done/2026-08-18-crop-padding-retirement/</loc>
+         <lastmod>2026-09-05</lastmod>
+    </url>
+    <url>
+         <loc>https://neurorishika.github.io/hydra-suite/latest/superpowers/plans/done/2026-08-18-identity-heads-and-non-identifying-classes/</loc>
+         <lastmod>2026-09-05</lastmod>
+    </url>
+    <url>
+         <loc>https://neurorishika.github.io/hydra-suite/latest/superpowers/plans/done/2026-08-18-postproc-vectorize-and-orient-stability/</loc>
+         <lastmod>2026-09-05</lastmod>
+    </url>
+    <url>
+         <loc>https://neurorishika.github.io/hydra-suite/latest/superpowers/plans/done/2026-08-19-interpolated-crops-inference-unification-plan/</loc>
+         <lastmod>2026-09-05</lastmod>
+    </url>
+    <url>
+         <loc>https://neurorishika.github.io/hydra-suite/latest/superpowers/plans/done/2026-08-19-multi-arena-tracking/</loc>
+         <lastmod>2026-09-05</lastmod>
+    </url>
+    <url>
+         <loc>https://neurorishika.github.io/hydra-suite/latest/superpowers/plans/done/2026-08-21-multi-arena-ux-redesign/</loc>
+         <lastmod>2026-09-05</lastmod>
+    </url>
+    <url>
+         <loc>https://neurorishika.github.io/hydra-suite/latest/superpowers/plans/done/2026-08-22-inference-span-profiling/</loc>
+         <lastmod>2026-09-05</lastmod>
+    </url>
+    <url>
+         <loc>https://neurorishika.github.io/hydra-suite/latest/superpowers/plans/done/2026-08-27-al-pipeline-optimization/</loc>
+         <lastmod>2026-09-05</lastmod>
+    </url>
+    <url>
+         <loc>https://neurorishika.github.io/hydra-suite/latest/superpowers/plans/done/2026-08-27-detectkit-canvas-multi-level-plan/</loc>
+         <lastmod>2026-09-05</lastmod>
+    </url>
+    <url>
+         <loc>https://neurorishika.github.io/hydra-suite/latest/superpowers/plans/done/2026-08-27-detectkit-clear-labels-plan/</loc>
+         <lastmod>2026-09-05</lastmod>
+    </url>
+    <url>
+         <loc>https://neurorishika.github.io/hydra-suite/latest/superpowers/plans/done/2026-08-27-detectkit-source-unification-plan/</loc>
+         <lastmod>2026-09-05</lastmod>
+    </url>
+    <url>
+         <loc>https://neurorishika.github.io/hydra-suite/latest/superpowers/plans/done/2026-08-27-identity-final-consistency/</loc>
+         <lastmod>2026-09-05</lastmod>
+    </url>
+    <url>
+         <loc>https://neurorishika.github.io/hydra-suite/latest/superpowers/plans/done/2026-08-29-detectkit-sam3-semantic-escalation/</loc>
+         <lastmod>2026-09-05</lastmod>
+    </url>
+    <url>
+         <loc>https://neurorishika.github.io/hydra-suite/latest/superpowers/plans/done/2026-08-31-detectkit-frame-granular-review/</loc>
+         <lastmod>2026-09-05</lastmod>
+    </url>
+    <url>
+         <loc>https://neurorishika.github.io/hydra-suite/latest/superpowers/plans/done/2026-08-31-detectkit-overlay-layer-registry/</loc>
+         <lastmod>2026-09-05</lastmod>
+    </url>
+    <url>
+         <loc>https://neurorishika.github.io/hydra-suite/latest/superpowers/plans/done/2026-09-03-detectkit-oom-hardening-agent-instructions/</loc>
+         <lastmod>2026-09-05</lastmod>
+    </url>
+    <url>
+         <loc>https://neurorishika.github.io/hydra-suite/latest/superpowers/plans/done/2026-09-04-detectkit-sahi-calibration-profiles/</loc>
+         <lastmod>2026-09-05</lastmod>
+    </url>
+    <url>
+         <loc>https://neurorishika.github.io/hydra-suite/latest/superpowers/plans/notes/2026-07-16-cache-builder-decision/</loc>
+         <lastmod>2026-09-05</lastmod>
+    </url>
+    <url>
+         <loc>https://neurorishika.github.io/hydra-suite/latest/superpowers/plans/notes/2026-07-17-bgsub-task12-yolo-scope-correction/</loc>
+         <lastmod>2026-09-05</lastmod>
+    </url>
+    <url>
+         <loc>https://neurorishika.github.io/hydra-suite/latest/superpowers/specs/2026-07-16-test-suite-replacement-design/</loc>
+         <lastmod>2026-09-05</lastmod>
+    </url>
+    <url>
+         <loc>https://neurorishika.github.io/hydra-suite/latest/superpowers/specs/2026-07-23-cloud-gpu-inference-design/</loc>
+         <lastmod>2026-09-05</lastmod>
+    </url>
+    <url>
+         <loc>https://neurorishika.github.io/hydra-suite/latest/superpowers/specs/2026-07-29-model-registry-unification-design/</loc>
+         <lastmod>2026-09-05</lastmod>
+    </url>
+    <url>
+         <loc>https://neurorishika.github.io/hydra-suite/latest/superpowers/specs/2026-08-13-identity-audit/</loc>
+         <lastmod>2026-09-05</lastmod>
+    </url>
+    <url>
+         <loc>https://neurorishika.github.io/hydra-suite/latest/superpowers/specs/2026-08-27-identity-subsystem-repair-design/</loc>
+         <lastmod>2026-09-05</lastmod>
+    </url>
+    <url>
+         <loc>https://neurorishika.github.io/hydra-suite/latest/superpowers/specs/2026-08-31-detectkit-sam3-finetune-design/</loc>
+         <lastmod>2026-09-05</lastmod>
+    </url>
+    <url>
+         <loc>https://neurorishika.github.io/hydra-suite/latest/superpowers/specs/2026-09-01-sam3-training-sidecar-env-design/</loc>
+         <lastmod>2026-09-05</lastmod>
+    </url>
+    <url>
+         <loc>https://neurorishika.github.io/hydra-suite/latest/superpowers/specs/2026-09-03-chunked-inference-cache-format-decision/</loc>
+         <lastmod>2026-09-05</lastmod>
+    </url>
+    <url>
+         <loc>https://neurorishika.github.io/hydra-suite/latest/superpowers/specs/2026-09-04-sam3-spike-vs-build-consolidation/</loc>
+         <lastmod>2026-09-05</lastmod>
+    </url>
+    <url>
+         <loc>https://neurorishika.github.io/hydra-suite/latest/superpowers/specs/TEST_SUITE_AUDIT/</loc>
+         <lastmod>2026-09-05</lastmod>
+    </url>
+    <url>
+         <loc>https://neurorishika.github.io/hydra-suite/latest/superpowers/specs/done/2026-04-26-inference-pipeline-redesign/</loc>
+         <lastmod>2026-09-05</lastmod>
+    </url>
+    <url>
+         <loc>https://neurorishika.github.io/hydra-suite/latest/superpowers/specs/done/2026-05-03-al-detection-dataset-design/</loc>
+         <lastmod>2026-09-05</lastmod>
+    </url>
+    <url>
+         <loc>https://neurorishika.github.io/hydra-suite/latest/superpowers/specs/done/2026-06-30-inference-acceleration-restoration-design/</loc>
+         <lastmod>2026-09-05</lastmod>
+    </url>
+    <url>
+         <loc>https://neurorishika.github.io/hydra-suite/latest/superpowers/specs/done/2026-06-30-inference-runtime-tiers-design/</loc>
+         <lastmod>2026-09-05</lastmod>
+    </url>
+    <url>
+         <loc>https://neurorishika.github.io/hydra-suite/latest/superpowers/specs/done/2026-07-01-filterkit-preserve-full-frames-design/</loc>
+         <lastmod>2026-09-05</lastmod>
+    </url>
+    <url>
+         <loc>https://neurorishika.github.io/hydra-suite/latest/superpowers/specs/done/2026-07-02-posekit-frame-mode-design/</loc>
+         <lastmod>2026-09-05</lastmod>
+    </url>
+    <url>
+         <loc>https://neurorishika.github.io/hydra-suite/latest/superpowers/specs/done/2026-07-03-tensorrt-coreml-cross-frame-batching-design/</loc>
+         <lastmod>2026-09-05</lastmod>
+    </url>
+    <url>
+         <loc>https://neurorishika.github.io/hydra-suite/latest/superpowers/specs/done/2026-07-16-vitpose-backend-roadmap/</loc>
+         <lastmod>2026-09-05</lastmod>
+    </url>
+    <url>
+         <loc>https://neurorishika.github.io/hydra-suite/latest/superpowers/specs/done/2026-07-16-vitpose-native-port-design/</loc>
+         <lastmod>2026-09-05</lastmod>
+    </url>
+    <url>
+         <loc>https://neurorishika.github.io/hydra-suite/latest/superpowers/specs/done/2026-07-17-legacy-detector-retirement-design/</loc>
+         <lastmod>2026-09-05</lastmod>
+    </url>
+    <url>
+         <loc>https://neurorishika.github.io/hydra-suite/latest/superpowers/specs/done/2026-07-17-vitpose-finetune-design/</loc>
+         <lastmod>2026-09-05</lastmod>
+    </url>
+    <url>
+         <loc>https://neurorishika.github.io/hydra-suite/latest/superpowers/specs/done/2026-07-19-bgsub-inference-unification-design/</loc>
+         <lastmod>2026-09-05</lastmod>
+    </url>
+    <url>
+         <loc>https://neurorishika.github.io/hydra-suite/latest/superpowers/specs/done/2026-07-19-runtime-resolver-gen2-consolidation-design/</loc>
+         <lastmod>2026-09-05</lastmod>
+    </url>
+    <url>
+         <loc>https://neurorishika.github.io/hydra-suite/latest/superpowers/specs/done/2026-07-19-vitpose-full-integration-design/</loc>
+         <lastmod>2026-09-05</lastmod>
+    </url>
+    <url>
+         <loc>https://neurorishika.github.io/hydra-suite/latest/superpowers/specs/done/2026-07-21-direct-obb-segment-postretirement-integration-design/</loc>
+         <lastmod>2026-09-05</lastmod>
+    </url>
+    <url>
+         <loc>https://neurorishika.github.io/hydra-suite/latest/superpowers/specs/done/2026-07-22-classkit-decode-robust-augmentation-design/</loc>
+         <lastmod>2026-09-05</lastmod>
+    </url>
+    <url>
+         <loc>https://neurorishika.github.io/hydra-suite/latest/superpowers/specs/done/2026-07-22-gpu-native-classifier-crop-design/</loc>
+         <lastmod>2026-09-05</lastmod>
+    </url>
+    <url>
+         <loc>https://neurorishika.github.io/hydra-suite/latest/superpowers/specs/done/2026-07-22-identity-overhaul-consolidated-design/</loc>
+         <lastmod>2026-09-05</lastmod>
+    </url>
+    <url>
+         <loc>https://neurorishika.github.io/hydra-suite/latest/superpowers/specs/done/2026-07-22-nvdec-gpu-fast-tier-design/</loc>
+         <lastmod>2026-09-05</lastmod>
+    </url>
+    <url>
+         <loc>https://neurorishika.github.io/hydra-suite/latest/superpowers/specs/done/2026-07-22-vitpose-posekit-inference-design/</loc>
+         <lastmod>2026-09-05</lastmod>
+    </url>
+    <url>
+         <loc>https://neurorishika.github.io/hydra-suite/latest/superpowers/specs/done/2026-07-23-sahi-sliced-inference-design/</loc>
+         <lastmod>2026-09-05</lastmod>
+    </url>
+    <url>
+         <loc>https://neurorishika.github.io/hydra-suite/latest/superpowers/specs/done/2026-07-24-detectkit-geometry-levels-design/</loc>
+         <lastmod>2026-09-05</lastmod>
+    </url>
+    <url>
+         <loc>https://neurorishika.github.io/hydra-suite/latest/superpowers/specs/done/2026-07-24-headless-qt-free-session-service-design/</loc>
+         <lastmod>2026-09-05</lastmod>
+    </url>
+    <url>
+         <loc>https://neurorishika.github.io/hydra-suite/latest/superpowers/specs/done/2026-07-27-detectkit-sahi-sliced-training-design/</loc>
+         <lastmod>2026-09-05</lastmod>
+    </url>
+    <url>
+         <loc>https://neurorishika.github.io/hydra-suite/latest/superpowers/specs/done/2026-07-27-sequential-segment-enablement-design/</loc>
+         <lastmod>2026-09-05</lastmod>
+    </url>
+    <url>
+         <loc>https://neurorishika.github.io/hydra-suite/latest/superpowers/specs/done/2026-07-28-inference-region-source-unification-design/</loc>
+         <lastmod>2026-09-05</lastmod>
+    </url>
+    <url>
+         <loc>https://neurorishika.github.io/hydra-suite/latest/superpowers/specs/done/2026-07-28-sliced-geometry-loop-design/</loc>
+         <lastmod>2026-09-05</lastmod>
+    </url>
+    <url>
+         <loc>https://neurorishika.github.io/hydra-suite/latest/superpowers/specs/done/2026-08-03-detectkit-sam2-escalation-design/</loc>
+         <lastmod>2026-09-05</lastmod>
+    </url>
+    <url>
+         <loc>https://neurorishika.github.io/hydra-suite/latest/superpowers/specs/done/2026-08-03-vitpose-per-checkpoint-geometry-design/</loc>
+         <lastmod>2026-09-05</lastmod>
+    </url>
+    <url>
+         <loc>https://neurorishika.github.io/hydra-suite/latest/superpowers/specs/done/2026-08-04-global-canonicalization-design/</loc>
+         <lastmod>2026-09-05</lastmod>
+    </url>
+    <url>
+         <loc>https://neurorishika.github.io/hydra-suite/latest/superpowers/specs/done/2026-08-04-gui-post-tracking-cutover-design/</loc>
+         <lastmod>2026-09-05</lastmod>
+    </url>
+    <url>
+         <loc>https://neurorishika.github.io/hydra-suite/latest/superpowers/specs/done/2026-08-04-vitpose-dataset-auto-sizing-design/</loc>
+         <lastmod>2026-09-05</lastmod>
+    </url>
+    <url>
+         <loc>https://neurorishika.github.io/hydra-suite/latest/superpowers/specs/done/2026-08-05-shared-engine-param-builder-design/</loc>
+         <lastmod>2026-09-05</lastmod>
+    </url>
+    <url>
+         <loc>https://neurorishika.github.io/hydra-suite/latest/superpowers/specs/done/2026-08-06-canonicalization-divergence-fixes-design/</loc>
+         <lastmod>2026-09-05</lastmod>
+    </url>
+    <url>
+         <loc>https://neurorishika.github.io/hydra-suite/latest/superpowers/specs/done/2026-08-07-trackerkit-debug-mode-design/</loc>
+         <lastmod>2026-09-05</lastmod>
+    </url>
+    <url>
+         <loc>https://neurorishika.github.io/hydra-suite/latest/superpowers/specs/done/2026-08-13-legacy-detection-cache-retirement-design/</loc>
+         <lastmod>2026-09-05</lastmod>
+    </url>
+    <url>
+         <loc>https://neurorishika.github.io/hydra-suite/latest/superpowers/specs/done/2026-08-17-al-escalated-multi-format-export-design/</loc>
+         <lastmod>2026-09-05</lastmod>
+    </url>
+    <url>
+         <loc>https://neurorishika.github.io/hydra-suite/latest/superpowers/specs/done/2026-08-17-crop-warp-aabb-precrop-design/</loc>
+         <lastmod>2026-09-05</lastmod>
+    </url>
+    <url>
+         <loc>https://neurorishika.github.io/hydra-suite/latest/superpowers/specs/done/2026-08-18-crop-padding-retirement-design/</loc>
+         <lastmod>2026-09-05</lastmod>
+    </url>
+    <url>
+         <loc>https://neurorishika.github.io/hydra-suite/latest/superpowers/specs/done/2026-08-18-identity-heads-and-non-identifying-classes-design/</loc>
+         <lastmod>2026-09-05</lastmod>
+    </url>
+    <url>
+         <loc>https://neurorishika.github.io/hydra-suite/latest/superpowers/specs/done/2026-08-18-multi-arena-tracking-design/</loc>
+         <lastmod>2026-09-05</lastmod>
+    </url>
+    <url>
+         <loc>https://neurorishika.github.io/hydra-suite/latest/superpowers/specs/done/2026-08-18-postproc-vectorize-and-orient-stability-design/</loc>
+         <lastmod>2026-09-05</lastmod>
+    </url>
+    <url>
+         <loc>https://neurorishika.github.io/hydra-suite/latest/superpowers/specs/done/2026-08-19-interpolated-crops-inference-unification-design/</loc>
+         <lastmod>2026-09-05</lastmod>
+    </url>
+    <url>
+         <loc>https://neurorishika.github.io/hydra-suite/latest/superpowers/specs/done/2026-08-21-inference-span-profiling-design/</loc>
+         <lastmod>2026-09-05</lastmod>
+    </url>
+    <url>
+         <loc>https://neurorishika.github.io/hydra-suite/latest/superpowers/specs/done/2026-08-21-multi-arena-ux-redesign-design/</loc>
+         <lastmod>2026-09-05</lastmod>
+    </url>
+    <url>
+         <loc>https://neurorishika.github.io/hydra-suite/latest/superpowers/specs/done/2026-08-27-al-pipeline-optimization-design/</loc>
+         <lastmod>2026-09-05</lastmod>
+    </url>
+    <url>
+         <loc>https://neurorishika.github.io/hydra-suite/latest/superpowers/specs/done/2026-08-27-detectkit-canvas-multi-level-design/</loc>
+         <lastmod>2026-09-05</lastmod>
+    </url>
+    <url>
+         <loc>https://neurorishika.github.io/hydra-suite/latest/superpowers/specs/done/2026-08-27-detectkit-clear-labels-design/</loc>
+         <lastmod>2026-09-05</lastmod>
+    </url>
+    <url>
+         <loc>https://neurorishika.github.io/hydra-suite/latest/superpowers/specs/done/2026-08-27-detectkit-source-unification-design/</loc>
+         <lastmod>2026-09-05</lastmod>
+    </url>
+    <url>
+         <loc>https://neurorishika.github.io/hydra-suite/latest/superpowers/specs/done/2026-08-27-identity-final-consistency-design/</loc>
+         <lastmod>2026-09-05</lastmod>
+    </url>
+    <url>
+         <loc>https://neurorishika.github.io/hydra-suite/latest/superpowers/specs/done/2026-08-28-detectkit-sam3-semantic-escalation-design/</loc>
+         <lastmod>2026-09-05</lastmod>
+    </url>
+    <url>
+         <loc>https://neurorishika.github.io/hydra-suite/latest/superpowers/specs/done/2026-08-31-detectkit-frame-granular-review-design/</loc>
+         <lastmod>2026-09-05</lastmod>
+    </url>
+    <url>
+         <loc>https://neurorishika.github.io/hydra-suite/latest/superpowers/specs/done/2026-08-31-detectkit-overlay-layer-registry-design/</loc>
+         <lastmod>2026-09-05</lastmod>
+    </url>
+    <url>
+         <loc>https://neurorishika.github.io/hydra-suite/latest/superpowers/specs/done/2026-09-01-detectkit-sahi-calibration-profiles-design/</loc>
+         <lastmod>2026-09-05</lastmod>
+    </url>
+    <url>
+         <loc>https://neurorishika.github.io/hydra-suite/latest/superpowers/specs/done/trackerkit-identity-overhaul-spec/</loc>
+         <lastmod>2026-09-05</lastmod>
+    </url>
+    <url>
+         <loc>https://neurorishika.github.io/hydra-suite/latest/superpowers/specs/done/trackerkit-streaming-individual-analysis-plan/</loc>
+         <lastmod>2026-09-05</lastmod>
+    </url>
+    <url>
+         <loc>https://neurorishika.github.io/hydra-suite/latest/superpowers/specs/notes/global-canonicalization-rebaseline/</loc>
+         <lastmod>2026-09-05</lastmod>
+    </url>
+    <url>
+         <loc>https://neurorishika.github.io/hydra-suite/latest/superpowers/specs/notes/global-canonicalization-research/</loc>
+         <lastmod>2026-09-05</lastmod>
+    </url>
+    <url>
+         <loc>https://neurorishika.github.io/hydra-suite/latest/superpowers/specs/notes/global-canonicalization-review-prompt/</loc>
+         <lastmod>2026-09-05</lastmod>
     </url>
     <url>
          <loc>https://neurorishika.github.io/hydra-suite/latest/technical-reference/</loc>
-         <lastmod>2026-07-10</lastmod>
+         <lastmod>2026-09-05</lastmod>
     </url>
     <url>
          <loc>https://neurorishika.github.io/hydra-suite/latest/user-guide/classkit/</loc>
-         <lastmod>2026-07-10</lastmod>
+         <lastmod>2026-09-05</lastmod>
     </url>
     <url>
          <loc>https://neurorishika.github.io/hydra-suite/latest/user-guide/compute-runtimes/</loc>
-         <lastmod>2026-07-10</lastmod>
+         <lastmod>2026-09-05</lastmod>
     </url>
     <url>
          <loc>https://neurorishika.github.io/hydra-suite/latest/user-guide/configuration-reference/</loc>
-         <lastmod>2026-07-10</lastmod>
+         <lastmod>2026-09-05</lastmod>
     </url>
     <url>
          <loc>https://neurorishika.github.io/hydra-suite/latest/user-guide/dataset-generation/</loc>
-         <lastmod>2026-07-10</lastmod>
+         <lastmod>2026-09-05</lastmod>
     </url>
     <url>
          <loc>https://neurorishika.github.io/hydra-suite/latest/user-guide/detection-modes/</loc>
-         <lastmod>2026-07-10</lastmod>
+         <lastmod>2026-09-05</lastmod>
+    </url>
+    <url>
+         <loc>https://neurorishika.github.io/hydra-suite/latest/user-guide/detectkit-sahi-calibration/</loc>
+         <lastmod>2026-09-05</lastmod>
+    </url>
+    <url>
+         <loc>https://neurorishika.github.io/hydra-suite/latest/user-guide/detectkit-semantic-escalation/</loc>
+         <lastmod>2026-09-05</lastmod>
     </url>
     <url>
          <loc>https://neurorishika.github.io/hydra-suite/latest/user-guide/detectkit/</loc>
-         <lastmod>2026-07-10</lastmod>
+         <lastmod>2026-09-05</lastmod>
     </url>
     <url>
          <loc>https://neurorishika.github.io/hydra-suite/latest/user-guide/filterkit/</loc>
-         <lastmod>2026-07-10</lastmod>
+         <lastmod>2026-09-05</lastmod>
     </url>
     <url>
          <loc>https://neurorishika.github.io/hydra-suite/latest/user-guide/individual-analysis/</loc>
-         <lastmod>2026-07-10</lastmod>
+         <lastmod>2026-09-05</lastmod>
     </url>
     <url>
          <loc>https://neurorishika.github.io/hydra-suite/latest/user-guide/outputs-and-csv-schema/</loc>
-         <lastmod>2026-07-10</lastmod>
+         <lastmod>2026-09-05</lastmod>
     </url>
     <url>
          <loc>https://neurorishika.github.io/hydra-suite/latest/user-guide/overview/</loc>
-         <lastmod>2026-07-10</lastmod>
+         <lastmod>2026-09-05</lastmod>
     </url>
     <url>
          <loc>https://neurorishika.github.io/hydra-suite/latest/user-guide/posekit/</loc>
-         <lastmod>2026-07-10</lastmod>
+         <lastmod>2026-09-05</lastmod>
     </url>
     <url>
          <loc>https://neurorishika.github.io/hydra-suite/latest/user-guide/post-processing/</loc>
-         <lastmod>2026-07-10</lastmod>
+         <lastmod>2026-09-05</lastmod>
     </url>
     <url>
          <loc>https://neurorishika.github.io/hydra-suite/latest/user-guide/refinekit/</loc>
-         <lastmod>2026-07-10</lastmod>
+         <lastmod>2026-09-05</lastmod>
     </url>
     <url>
          <loc>https://neurorishika.github.io/hydra-suite/latest/user-guide/tracking-and-merging/</loc>
-         <lastmod>2026-07-10</lastmod>
+         <lastmod>2026-09-05</lastmod>
     </url>
     <url>
          <loc>https://neurorishika.github.io/hydra-suite/latest/user-guide/troubleshooting/</loc>
-         <lastmod>2026-07-10</lastmod>
+         <lastmod>2026-09-05</lastmod>
     </url>
     <url>
          <loc>https://neurorishika.github.io/hydra-suite/latest/user-guide/workflow/</loc>
-         <lastmod>2026-07-10</lastmod>
+         <lastmod>2026-09-05</lastmod>
     </url>
 </urlset>

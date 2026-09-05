@@ -1,0 +1,2194 @@
+
+<!doctype html>
+<html lang="en" class="no-js">
+  <head>
+    
+      <meta charset="utf-8">
+      <meta name="viewport" content="width=device-width,initial-scale=1">
+      
+        <meta name="description" content="User and developer documentation for HYDRA Suite">
+      
+      
+      
+        <link rel="canonical" href="https://neurorishika.github.io/hydra-suite/latest/superpowers/plans/done/2026-08-05-shared-engine-param-builder/">
+      
+      
+      
+      
+      <link rel="icon" href="../../../../assets/images/favicon.png">
+      <meta name="generator" content="mkdocs-1.6.1, mkdocs-material-9.5.43">
+    
+    
+      
+        <title>Shared Engine Param-Builder — Total GUI/CLI Unification Implementation Plan - HYDRA Suite Docs</title>
+      
+    
+    
+      <link rel="stylesheet" href="../../../../assets/stylesheets/main.0253249f.min.css">
+      
+        
+        <link rel="stylesheet" href="../../../../assets/stylesheets/palette.06af60db.min.css">
+      
+      
+
+
+    
+    
+      
+    
+    
+      
+        
+        
+        <link rel="preconnect" href="https://fonts.gstatic.com" crossorigin>
+        <link rel="stylesheet" href="https://fonts.googleapis.com/css?family=Roboto:300,300i,400,400i,700,700i%7CRoboto+Mono:400,400i,700,700i&display=fallback">
+        <style>:root{--md-text-font:"Roboto";--md-code-font:"Roboto Mono"}</style>
+      
+    
+    
+      <link rel="stylesheet" href="../../../../assets/_mkdocstrings.css">
+    
+    <script>__md_scope=new URL("../../../..",location),__md_hash=e=>[...e].reduce(((e,_)=>(e<<5)-e+_.charCodeAt(0)),0),__md_get=(e,_=localStorage,t=__md_scope)=>JSON.parse(_.getItem(t.pathname+"."+e)),__md_set=(e,_,t=localStorage,a=__md_scope)=>{try{t.setItem(a.pathname+"."+e,JSON.stringify(_))}catch(e){}}</script>
+    
+      
+
+    
+    
+    
+  </head>
+  
+  
+    
+    
+      
+    
+    
+    
+    
+    <body dir="ltr" data-md-color-scheme="default" data-md-color-primary="blue" data-md-color-accent="light-blue">
+  
+    
+    <input class="md-toggle" data-md-toggle="drawer" type="checkbox" id="__drawer" autocomplete="off">
+    <input class="md-toggle" data-md-toggle="search" type="checkbox" id="__search" autocomplete="off">
+    <label class="md-overlay" for="__drawer"></label>
+    <div data-md-component="skip">
+      
+        
+        <a href="#shared-engine-param-builder-total-guicli-unification-implementation-plan" class="md-skip">
+          Skip to content
+        </a>
+      
+    </div>
+    <div data-md-component="announce">
+      
+    </div>
+    
+      <div data-md-color-scheme="default" data-md-component="outdated" hidden>
+        
+      </div>
+    
+    
+      
+
+<header class="md-header" data-md-component="header">
+  <nav class="md-header__inner md-grid" aria-label="Header">
+    <a href="../../../.." title="HYDRA Suite Docs" class="md-header__button md-logo" aria-label="HYDRA Suite Docs" data-md-component="logo">
+      
+  
+  <svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 24 24"><path d="M12 8a3 3 0 0 0 3-3 3 3 0 0 0-3-3 3 3 0 0 0-3 3 3 3 0 0 0 3 3m0 3.54C9.64 9.35 6.5 8 3 8v11c3.5 0 6.64 1.35 9 3.54 2.36-2.19 5.5-3.54 9-3.54V8c-3.5 0-6.64 1.35-9 3.54"/></svg>
+
+    </a>
+    <label class="md-header__button md-icon" for="__drawer">
+      
+      <svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 24 24"><path d="M3 6h18v2H3zm0 5h18v2H3zm0 5h18v2H3z"/></svg>
+    </label>
+    <div class="md-header__title" data-md-component="header-title">
+      <div class="md-header__ellipsis">
+        <div class="md-header__topic">
+          <span class="md-ellipsis">
+            HYDRA Suite Docs
+          </span>
+        </div>
+        <div class="md-header__topic" data-md-component="header-topic">
+          <span class="md-ellipsis">
+            
+              Shared Engine Param-Builder — Total GUI/CLI Unification Implementation Plan
+            
+          </span>
+        </div>
+      </div>
+    </div>
+    
+      
+        <form class="md-header__option" data-md-component="palette">
+  
+    
+    
+    
+    <input class="md-option" data-md-color-media="(prefers-color-scheme: light)" data-md-color-scheme="default" data-md-color-primary="blue" data-md-color-accent="light-blue"  aria-label="Switch to dark mode"  type="radio" name="__palette" id="__palette_0">
+    
+      <label class="md-header__button md-icon" title="Switch to dark mode" for="__palette_1" hidden>
+        <svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 24 24"><path d="m17.75 4.09-2.53 1.94.91 3.06-2.63-1.81-2.63 1.81.91-3.06-2.53-1.94L12.44 4l1.06-3 1.06 3zm3.5 6.91-1.64 1.25.59 1.98-1.7-1.17-1.7 1.17.59-1.98L15.75 11l2.06-.05L18.5 9l.69 1.95zm-2.28 4.95c.83-.08 1.72 1.1 1.19 1.85-.32.45-.66.87-1.08 1.27C15.17 23 8.84 23 4.94 19.07c-3.91-3.9-3.91-10.24 0-14.14.4-.4.82-.76 1.27-1.08.75-.53 1.93.36 1.85 1.19-.27 2.86.69 5.83 2.89 8.02a9.96 9.96 0 0 0 8.02 2.89m-1.64 2.02a12.08 12.08 0 0 1-7.8-3.47c-2.17-2.19-3.33-5-3.49-7.82-2.81 3.14-2.7 7.96.31 10.98 3.02 3.01 7.84 3.12 10.98.31"/></svg>
+      </label>
+    
+  
+    
+    
+    
+    <input class="md-option" data-md-color-media="(prefers-color-scheme: dark)" data-md-color-scheme="slate" data-md-color-primary="blue" data-md-color-accent="light-blue"  aria-label="Switch to light mode"  type="radio" name="__palette" id="__palette_1">
+    
+      <label class="md-header__button md-icon" title="Switch to light mode" for="__palette_0" hidden>
+        <svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 24 24"><path d="M12 7a5 5 0 0 1 5 5 5 5 0 0 1-5 5 5 5 0 0 1-5-5 5 5 0 0 1 5-5m0 2a3 3 0 0 0-3 3 3 3 0 0 0 3 3 3 3 0 0 0 3-3 3 3 0 0 0-3-3m0-7 2.39 3.42C13.65 5.15 12.84 5 12 5s-1.65.15-2.39.42zM3.34 7l4.16-.35A7.2 7.2 0 0 0 5.94 8.5c-.44.74-.69 1.5-.83 2.29zm.02 10 1.76-3.77a7.131 7.131 0 0 0 2.38 4.14zM20.65 7l-1.77 3.79a7.02 7.02 0 0 0-2.38-4.15zm-.01 10-4.14.36c.59-.51 1.12-1.14 1.54-1.86.42-.73.69-1.5.83-2.29zM12 22l-2.41-3.44c.74.27 1.55.44 2.41.44.82 0 1.63-.17 2.37-.44z"/></svg>
+      </label>
+    
+  
+</form>
+      
+    
+    
+      <script>var palette=__md_get("__palette");if(palette&&palette.color){if("(prefers-color-scheme)"===palette.color.media){var media=matchMedia("(prefers-color-scheme: light)"),input=document.querySelector(media.matches?"[data-md-color-media='(prefers-color-scheme: light)']":"[data-md-color-media='(prefers-color-scheme: dark)']");palette.color.media=input.getAttribute("data-md-color-media"),palette.color.scheme=input.getAttribute("data-md-color-scheme"),palette.color.primary=input.getAttribute("data-md-color-primary"),palette.color.accent=input.getAttribute("data-md-color-accent")}for(var[key,value]of Object.entries(palette.color))document.body.setAttribute("data-md-color-"+key,value)}</script>
+    
+    
+    
+      <label class="md-header__button md-icon" for="__search">
+        
+        <svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 24 24"><path d="M9.5 3A6.5 6.5 0 0 1 16 9.5c0 1.61-.59 3.09-1.56 4.23l.27.27h.79l5 5-1.5 1.5-5-5v-.79l-.27-.27A6.52 6.52 0 0 1 9.5 16 6.5 6.5 0 0 1 3 9.5 6.5 6.5 0 0 1 9.5 3m0 2C7 5 5 7 5 9.5S7 14 9.5 14 14 12 14 9.5 12 5 9.5 5"/></svg>
+      </label>
+      <div class="md-search" data-md-component="search" role="dialog">
+  <label class="md-search__overlay" for="__search"></label>
+  <div class="md-search__inner" role="search">
+    <form class="md-search__form" name="search">
+      <input type="text" class="md-search__input" name="query" aria-label="Search" placeholder="Search" autocapitalize="off" autocorrect="off" autocomplete="off" spellcheck="false" data-md-component="search-query" required>
+      <label class="md-search__icon md-icon" for="__search">
+        
+        <svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 24 24"><path d="M9.5 3A6.5 6.5 0 0 1 16 9.5c0 1.61-.59 3.09-1.56 4.23l.27.27h.79l5 5-1.5 1.5-5-5v-.79l-.27-.27A6.52 6.52 0 0 1 9.5 16 6.5 6.5 0 0 1 3 9.5 6.5 6.5 0 0 1 9.5 3m0 2C7 5 5 7 5 9.5S7 14 9.5 14 14 12 14 9.5 12 5 9.5 5"/></svg>
+        
+        <svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 24 24"><path d="M20 11v2H8l5.5 5.5-1.42 1.42L4.16 12l7.92-7.92L13.5 5.5 8 11z"/></svg>
+      </label>
+      <nav class="md-search__options" aria-label="Search">
+        
+        <button type="reset" class="md-search__icon md-icon" title="Clear" aria-label="Clear" tabindex="-1">
+          
+          <svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 24 24"><path d="M19 6.41 17.59 5 12 10.59 6.41 5 5 6.41 10.59 12 5 17.59 6.41 19 12 13.41 17.59 19 19 17.59 13.41 12z"/></svg>
+        </button>
+      </nav>
+      
+        <div class="md-search__suggest" data-md-component="search-suggest"></div>
+      
+    </form>
+    <div class="md-search__output">
+      <div class="md-search__scrollwrap" tabindex="0" data-md-scrollfix>
+        <div class="md-search-result" data-md-component="search-result">
+          <div class="md-search-result__meta">
+            Initializing search
+          </div>
+          <ol class="md-search-result__list" role="presentation"></ol>
+        </div>
+      </div>
+    </div>
+  </div>
+</div>
+    
+    
+      <div class="md-header__source">
+        <a href="https://github.com/neurorishika/hydra-suite" title="Go to repository" class="md-source" data-md-component="source">
+  <div class="md-source__icon md-icon">
+    
+    <svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 448 512"><!--! Font Awesome Free 6.6.0 by @fontawesome - https://fontawesome.com License - https://fontawesome.com/license/free (Icons: CC BY 4.0, Fonts: SIL OFL 1.1, Code: MIT License) Copyright 2024 Fonticons, Inc.--><path d="M439.55 236.05 244 40.45a28.87 28.87 0 0 0-40.81 0l-40.66 40.63 51.52 51.52c27.06-9.14 52.68 16.77 43.39 43.68l49.66 49.66c34.23-11.8 61.18 31 35.47 56.69-26.49 26.49-70.21-2.87-56-37.34L240.22 199v121.85c25.3 12.54 22.26 41.85 9.08 55a34.34 34.34 0 0 1-48.55 0c-17.57-17.6-11.07-46.91 11.25-56v-123c-20.8-8.51-24.6-30.74-18.64-45L142.57 101 8.45 235.14a28.86 28.86 0 0 0 0 40.81l195.61 195.6a28.86 28.86 0 0 0 40.8 0l194.69-194.69a28.86 28.86 0 0 0 0-40.81"/></svg>
+  </div>
+  <div class="md-source__repository">
+    neurorishika/hydra-suite
+  </div>
+</a>
+      </div>
+    
+  </nav>
+  
+</header>
+    
+    <div class="md-container" data-md-component="container">
+      
+      
+        
+          
+            
+<nav class="md-tabs" aria-label="Tabs" data-md-component="tabs">
+  <div class="md-grid">
+    <ul class="md-tabs__list">
+      
+        
+  
+  
+  
+    <li class="md-tabs__item">
+      <a href="../../../.." class="md-tabs__link">
+        
+  
+    
+  
+  Home
+
+      </a>
+    </li>
+  
+
+      
+        
+  
+  
+  
+    
+    
+      <li class="md-tabs__item">
+        <a href="../../../../getting-started/installation/" class="md-tabs__link">
+          
+  
+  Getting Started
+
+        </a>
+      </li>
+    
+  
+
+      
+        
+  
+  
+  
+    
+    
+      <li class="md-tabs__item">
+        <a href="../../../../user-guide/overview/" class="md-tabs__link">
+          
+  
+  User Guide
+
+        </a>
+      </li>
+    
+  
+
+      
+        
+  
+  
+  
+    
+    
+      <li class="md-tabs__item">
+        <a href="../../../../developer-guide/architecture/" class="md-tabs__link">
+          
+  
+  Developer Guide
+
+        </a>
+      </li>
+    
+  
+
+      
+        
+  
+  
+  
+    
+    
+      <li class="md-tabs__item">
+        <a href="../../../../reference/api-index/" class="md-tabs__link">
+          
+  
+  Reference
+
+        </a>
+      </li>
+    
+  
+
+      
+    </ul>
+  </div>
+</nav>
+          
+        
+      
+      <main class="md-main" data-md-component="main">
+        <div class="md-main__inner md-grid">
+          
+            
+              
+              <div class="md-sidebar md-sidebar--primary" data-md-component="sidebar" data-md-type="navigation" >
+                <div class="md-sidebar__scrollwrap">
+                  <div class="md-sidebar__inner">
+                    
+
+
+  
+
+
+<nav class="md-nav md-nav--primary md-nav--lifted" aria-label="Navigation" data-md-level="0">
+  <label class="md-nav__title" for="__drawer">
+    <a href="../../../.." title="HYDRA Suite Docs" class="md-nav__button md-logo" aria-label="HYDRA Suite Docs" data-md-component="logo">
+      
+  
+  <svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 24 24"><path d="M12 8a3 3 0 0 0 3-3 3 3 0 0 0-3-3 3 3 0 0 0-3 3 3 3 0 0 0 3 3m0 3.54C9.64 9.35 6.5 8 3 8v11c3.5 0 6.64 1.35 9 3.54 2.36-2.19 5.5-3.54 9-3.54V8c-3.5 0-6.64 1.35-9 3.54"/></svg>
+
+    </a>
+    HYDRA Suite Docs
+  </label>
+  
+    <div class="md-nav__source">
+      <a href="https://github.com/neurorishika/hydra-suite" title="Go to repository" class="md-source" data-md-component="source">
+  <div class="md-source__icon md-icon">
+    
+    <svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 448 512"><!--! Font Awesome Free 6.6.0 by @fontawesome - https://fontawesome.com License - https://fontawesome.com/license/free (Icons: CC BY 4.0, Fonts: SIL OFL 1.1, Code: MIT License) Copyright 2024 Fonticons, Inc.--><path d="M439.55 236.05 244 40.45a28.87 28.87 0 0 0-40.81 0l-40.66 40.63 51.52 51.52c27.06-9.14 52.68 16.77 43.39 43.68l49.66 49.66c34.23-11.8 61.18 31 35.47 56.69-26.49 26.49-70.21-2.87-56-37.34L240.22 199v121.85c25.3 12.54 22.26 41.85 9.08 55a34.34 34.34 0 0 1-48.55 0c-17.57-17.6-11.07-46.91 11.25-56v-123c-20.8-8.51-24.6-30.74-18.64-45L142.57 101 8.45 235.14a28.86 28.86 0 0 0 0 40.81l195.61 195.6a28.86 28.86 0 0 0 40.8 0l194.69-194.69a28.86 28.86 0 0 0 0-40.81"/></svg>
+  </div>
+  <div class="md-source__repository">
+    neurorishika/hydra-suite
+  </div>
+</a>
+    </div>
+  
+  <ul class="md-nav__list" data-md-scrollfix>
+    
+      
+      
+  
+  
+  
+  
+    <li class="md-nav__item">
+      <a href="../../../.." class="md-nav__link">
+        
+  
+  <span class="md-ellipsis">
+    Home
+  </span>
+  
+
+      </a>
+    </li>
+  
+
+    
+      
+      
+  
+  
+  
+  
+    
+    
+    
+      
+      
+        
+      
+    
+    
+    <li class="md-nav__item md-nav__item--nested">
+      
+        
+        
+          
+        
+        <input class="md-nav__toggle md-toggle md-toggle--indeterminate" type="checkbox" id="__nav_2" >
+        
+          
+          <label class="md-nav__link" for="__nav_2" id="__nav_2_label" tabindex="0">
+            
+  
+  <span class="md-ellipsis">
+    Getting Started
+  </span>
+  
+
+            <span class="md-nav__icon md-icon"></span>
+          </label>
+        
+        <nav class="md-nav" data-md-level="1" aria-labelledby="__nav_2_label" aria-expanded="false">
+          <label class="md-nav__title" for="__nav_2">
+            <span class="md-nav__icon md-icon"></span>
+            Getting Started
+          </label>
+          <ul class="md-nav__list" data-md-scrollfix>
+            
+              
+                
+  
+  
+  
+  
+    <li class="md-nav__item">
+      <a href="../../../../getting-started/installation/" class="md-nav__link">
+        
+  
+  <span class="md-ellipsis">
+    Installation
+  </span>
+  
+
+      </a>
+    </li>
+  
+
+              
+            
+              
+                
+  
+  
+  
+  
+    <li class="md-nav__item">
+      <a href="../../../../getting-started/environments/" class="md-nav__link">
+        
+  
+  <span class="md-ellipsis">
+    Environments and Makefile
+  </span>
+  
+
+      </a>
+    </li>
+  
+
+              
+            
+              
+                
+  
+  
+  
+  
+    <li class="md-nav__item">
+      <a href="../../../../getting-started/integrations/" class="md-nav__link">
+        
+  
+  <span class="md-ellipsis">
+    Integrations
+  </span>
+  
+
+      </a>
+    </li>
+  
+
+              
+            
+              
+                
+  
+  
+  
+  
+    <li class="md-nav__item">
+      <a href="../../../../getting-started/quickstart-hydra/" class="md-nav__link">
+        
+  
+  <span class="md-ellipsis">
+    Quickstart (TrackerKit)
+  </span>
+  
+
+      </a>
+    </li>
+  
+
+              
+            
+              
+                
+  
+  
+  
+  
+    <li class="md-nav__item">
+      <a href="../../../../getting-started/quickstart-posekit/" class="md-nav__link">
+        
+  
+  <span class="md-ellipsis">
+    Quickstart (PoseKit)
+  </span>
+  
+
+      </a>
+    </li>
+  
+
+              
+            
+              
+                
+  
+  
+  
+  
+    <li class="md-nav__item">
+      <a href="../../../../getting-started/platforms/" class="md-nav__link">
+        
+  
+  <span class="md-ellipsis">
+    Platform Notes
+  </span>
+  
+
+      </a>
+    </li>
+  
+
+              
+            
+          </ul>
+        </nav>
+      
+    </li>
+  
+
+    
+      
+      
+  
+  
+  
+  
+    
+    
+    
+      
+      
+        
+      
+    
+    
+    <li class="md-nav__item md-nav__item--nested">
+      
+        
+        
+          
+        
+        <input class="md-nav__toggle md-toggle md-toggle--indeterminate" type="checkbox" id="__nav_3" >
+        
+          
+          <label class="md-nav__link" for="__nav_3" id="__nav_3_label" tabindex="0">
+            
+  
+  <span class="md-ellipsis">
+    User Guide
+  </span>
+  
+
+            <span class="md-nav__icon md-icon"></span>
+          </label>
+        
+        <nav class="md-nav" data-md-level="1" aria-labelledby="__nav_3_label" aria-expanded="false">
+          <label class="md-nav__title" for="__nav_3">
+            <span class="md-nav__icon md-icon"></span>
+            User Guide
+          </label>
+          <ul class="md-nav__list" data-md-scrollfix>
+            
+              
+                
+  
+  
+  
+  
+    <li class="md-nav__item">
+      <a href="../../../../user-guide/overview/" class="md-nav__link">
+        
+  
+  <span class="md-ellipsis">
+    Overview
+  </span>
+  
+
+      </a>
+    </li>
+  
+
+              
+            
+              
+                
+  
+  
+  
+  
+    <li class="md-nav__item">
+      <a href="../../../../user-guide/workflow/" class="md-nav__link">
+        
+  
+  <span class="md-ellipsis">
+    End-to-End Workflow
+  </span>
+  
+
+      </a>
+    </li>
+  
+
+              
+            
+              
+                
+  
+  
+  
+  
+    <li class="md-nav__item">
+      <a href="../../../../user-guide/detection-modes/" class="md-nav__link">
+        
+  
+  <span class="md-ellipsis">
+    Detection Modes
+  </span>
+  
+
+      </a>
+    </li>
+  
+
+              
+            
+              
+                
+  
+  
+  
+  
+    <li class="md-nav__item">
+      <a href="../../../../user-guide/tracking-and-merging/" class="md-nav__link">
+        
+  
+  <span class="md-ellipsis">
+    Tracking and Merging
+  </span>
+  
+
+      </a>
+    </li>
+  
+
+              
+            
+              
+                
+  
+  
+  
+  
+    <li class="md-nav__item">
+      <a href="../../../../user-guide/post-processing/" class="md-nav__link">
+        
+  
+  <span class="md-ellipsis">
+    Post-processing
+  </span>
+  
+
+      </a>
+    </li>
+  
+
+              
+            
+              
+                
+  
+  
+  
+  
+    <li class="md-nav__item">
+      <a href="../../../../user-guide/configuration-reference/" class="md-nav__link">
+        
+  
+  <span class="md-ellipsis">
+    Configuration Reference
+  </span>
+  
+
+      </a>
+    </li>
+  
+
+              
+            
+              
+                
+  
+  
+  
+  
+    <li class="md-nav__item">
+      <a href="../../../../user-guide/compute-runtimes/" class="md-nav__link">
+        
+  
+  <span class="md-ellipsis">
+    Compute Runtimes
+  </span>
+  
+
+      </a>
+    </li>
+  
+
+              
+            
+              
+                
+  
+  
+  
+  
+    <li class="md-nav__item">
+      <a href="../../../../user-guide/outputs-and-csv-schema/" class="md-nav__link">
+        
+  
+  <span class="md-ellipsis">
+    Outputs and CSV Schema
+  </span>
+  
+
+      </a>
+    </li>
+  
+
+              
+            
+              
+                
+  
+  
+  
+  
+    <li class="md-nav__item">
+      <a href="../../../../user-guide/dataset-generation/" class="md-nav__link">
+        
+  
+  <span class="md-ellipsis">
+    Dataset Generation
+  </span>
+  
+
+      </a>
+    </li>
+  
+
+              
+            
+              
+                
+  
+  
+  
+  
+    <li class="md-nav__item">
+      <a href="../../../../user-guide/individual-analysis/" class="md-nav__link">
+        
+  
+  <span class="md-ellipsis">
+    Individual Analysis
+  </span>
+  
+
+      </a>
+    </li>
+  
+
+              
+            
+              
+                
+  
+  
+  
+  
+    <li class="md-nav__item">
+      <a href="../../../../user-guide/posekit/" class="md-nav__link">
+        
+  
+  <span class="md-ellipsis">
+    PoseKit
+  </span>
+  
+
+      </a>
+    </li>
+  
+
+              
+            
+              
+                
+  
+  
+  
+  
+    <li class="md-nav__item">
+      <a href="../../../../user-guide/classkit/" class="md-nav__link">
+        
+  
+  <span class="md-ellipsis">
+    ClassKit
+  </span>
+  
+
+      </a>
+    </li>
+  
+
+              
+            
+              
+                
+  
+  
+  
+  
+    <li class="md-nav__item">
+      <a href="../../../../user-guide/detectkit/" class="md-nav__link">
+        
+  
+  <span class="md-ellipsis">
+    DetectKit
+  </span>
+  
+
+      </a>
+    </li>
+  
+
+              
+            
+              
+                
+  
+  
+  
+  
+    <li class="md-nav__item">
+      <a href="../../../../runbooks/detectkit-headless-training/" class="md-nav__link">
+        
+  
+  <span class="md-ellipsis">
+    DetectKit Headless Training
+  </span>
+  
+
+      </a>
+    </li>
+  
+
+              
+            
+              
+                
+  
+  
+  
+  
+    <li class="md-nav__item">
+      <a href="../../../../user-guide/detectkit-semantic-escalation/" class="md-nav__link">
+        
+  
+  <span class="md-ellipsis">
+    DetectKit: Semantic Escalation (SAM3)
+  </span>
+  
+
+      </a>
+    </li>
+  
+
+              
+            
+              
+                
+  
+  
+  
+  
+    <li class="md-nav__item">
+      <a href="../../../../user-guide/detectkit-sahi-calibration/" class="md-nav__link">
+        
+  
+  <span class="md-ellipsis">
+    DetectKit: SAHI Calibration Profiles
+  </span>
+  
+
+      </a>
+    </li>
+  
+
+              
+            
+              
+                
+  
+  
+  
+  
+    <li class="md-nav__item">
+      <a href="../../../../user-guide/filterkit/" class="md-nav__link">
+        
+  
+  <span class="md-ellipsis">
+    FilterKit
+  </span>
+  
+
+      </a>
+    </li>
+  
+
+              
+            
+              
+                
+  
+  
+  
+  
+    <li class="md-nav__item">
+      <a href="../../../../user-guide/refinekit/" class="md-nav__link">
+        
+  
+  <span class="md-ellipsis">
+    RefineKit
+  </span>
+  
+
+      </a>
+    </li>
+  
+
+              
+            
+              
+                
+  
+  
+  
+  
+    <li class="md-nav__item">
+      <a href="../../../../user-guide/troubleshooting/" class="md-nav__link">
+        
+  
+  <span class="md-ellipsis">
+    Troubleshooting
+  </span>
+  
+
+      </a>
+    </li>
+  
+
+              
+            
+          </ul>
+        </nav>
+      
+    </li>
+  
+
+    
+      
+      
+  
+  
+  
+  
+    
+    
+    
+      
+      
+        
+      
+    
+    
+    <li class="md-nav__item md-nav__item--nested">
+      
+        
+        
+          
+        
+        <input class="md-nav__toggle md-toggle md-toggle--indeterminate" type="checkbox" id="__nav_4" >
+        
+          
+          <label class="md-nav__link" for="__nav_4" id="__nav_4_label" tabindex="0">
+            
+  
+  <span class="md-ellipsis">
+    Developer Guide
+  </span>
+  
+
+            <span class="md-nav__icon md-icon"></span>
+          </label>
+        
+        <nav class="md-nav" data-md-level="1" aria-labelledby="__nav_4_label" aria-expanded="false">
+          <label class="md-nav__title" for="__nav_4">
+            <span class="md-nav__icon md-icon"></span>
+            Developer Guide
+          </label>
+          <ul class="md-nav__list" data-md-scrollfix>
+            
+              
+                
+  
+  
+  
+  
+    <li class="md-nav__item">
+      <a href="../../../../developer-guide/architecture/" class="md-nav__link">
+        
+  
+  <span class="md-ellipsis">
+    Architecture
+  </span>
+  
+
+      </a>
+    </li>
+  
+
+              
+            
+              
+                
+  
+  
+  
+  
+    <li class="md-nav__item">
+      <a href="../../../../developer-guide/module-map/" class="md-nav__link">
+        
+  
+  <span class="md-ellipsis">
+    Module Map
+  </span>
+  
+
+      </a>
+    </li>
+  
+
+              
+            
+              
+                
+  
+  
+  
+  
+    <li class="md-nav__item">
+      <a href="../../../../developer-guide/data-flow/" class="md-nav__link">
+        
+  
+  <span class="md-ellipsis">
+    Data Flow
+  </span>
+  
+
+      </a>
+    </li>
+  
+
+              
+            
+              
+                
+  
+  
+  
+  
+    <li class="md-nav__item">
+      <a href="../../../../developer-guide/tracking-algorithm-deep-dive/" class="md-nav__link">
+        
+  
+  <span class="md-ellipsis">
+    Tracking Algorithm Deep Dive
+  </span>
+  
+
+      </a>
+    </li>
+  
+
+              
+            
+              
+                
+  
+  
+  
+  
+    <li class="md-nav__item">
+      <a href="../../../../developer-guide/tracking-optimization/" class="md-nav__link">
+        
+  
+  <span class="md-ellipsis">
+    Tracking Optimization
+  </span>
+  
+
+      </a>
+    </li>
+  
+
+              
+            
+              
+                
+  
+  
+  
+  
+    <li class="md-nav__item">
+      <a href="../../../../developer-guide/gpu-backends/" class="md-nav__link">
+        
+  
+  <span class="md-ellipsis">
+    GPU Backends
+  </span>
+  
+
+      </a>
+    </li>
+  
+
+              
+            
+              
+                
+  
+  
+  
+  
+    <li class="md-nav__item">
+      <a href="../../../../developer-guide/runtime-integration/" class="md-nav__link">
+        
+  
+  <span class="md-ellipsis">
+    Runtime Integration
+  </span>
+  
+
+      </a>
+    </li>
+  
+
+              
+            
+              
+                
+  
+  
+  
+  
+    <li class="md-nav__item">
+      <a href="../../../../developer-guide/resource-containment/" class="md-nav__link">
+        
+  
+  <span class="md-ellipsis">
+    Resource Containment
+  </span>
+  
+
+      </a>
+    </li>
+  
+
+              
+            
+              
+                
+  
+  
+  
+  
+    <li class="md-nav__item">
+      <a href="../../../../developer-guide/profiling/" class="md-nav__link">
+        
+  
+  <span class="md-ellipsis">
+    Profiling
+  </span>
+  
+
+      </a>
+    </li>
+  
+
+              
+            
+              
+                
+  
+  
+  
+  
+    <li class="md-nav__item">
+      <a href="../../../../developer-guide/dependency-cuda-updates/" class="md-nav__link">
+        
+  
+  <span class="md-ellipsis">
+    CUDA Dependency Updates
+  </span>
+  
+
+      </a>
+    </li>
+  
+
+              
+            
+              
+                
+  
+  
+  
+  
+    <li class="md-nav__item">
+      <a href="../../../../developer-guide/performance-tuning/" class="md-nav__link">
+        
+  
+  <span class="md-ellipsis">
+    Performance Tuning
+  </span>
+  
+
+      </a>
+    </li>
+  
+
+              
+            
+              
+                
+  
+  
+  
+  
+    <li class="md-nav__item">
+      <a href="../../../../developer-guide/inference-fast-mode/" class="md-nav__link">
+        
+  
+  <span class="md-ellipsis">
+    Inference Fast Mode
+  </span>
+  
+
+      </a>
+    </li>
+  
+
+              
+            
+              
+                
+  
+  
+  
+  
+    <li class="md-nav__item">
+      <a href="../../../../developer-guide/confidence-metrics/" class="md-nav__link">
+        
+  
+  <span class="md-ellipsis">
+    Confidence Metrics
+  </span>
+  
+
+      </a>
+    </li>
+  
+
+              
+            
+              
+                
+  
+  
+  
+  
+    <li class="md-nav__item">
+      <a href="../../../../developer-guide/extending-detection/" class="md-nav__link">
+        
+  
+  <span class="md-ellipsis">
+    Extending Detection
+  </span>
+  
+
+      </a>
+    </li>
+  
+
+              
+            
+              
+                
+  
+  
+  
+  
+    <li class="md-nav__item">
+      <a href="../../../../developer-guide/extending-identity/" class="md-nav__link">
+        
+  
+  <span class="md-ellipsis">
+    Extending Identity
+  </span>
+  
+
+      </a>
+    </li>
+  
+
+              
+            
+              
+                
+  
+  
+  
+  
+    <li class="md-nav__item">
+      <a href="../../../../developer-guide/code-health/" class="md-nav__link">
+        
+  
+  <span class="md-ellipsis">
+    Code Health & Auditing
+  </span>
+  
+
+      </a>
+    </li>
+  
+
+              
+            
+              
+                
+  
+  
+  
+  
+    <li class="md-nav__item">
+      <a href="../../../../developer-guide/publishing/" class="md-nav__link">
+        
+  
+  <span class="md-ellipsis">
+    Publishing
+  </span>
+  
+
+      </a>
+    </li>
+  
+
+              
+            
+              
+                
+  
+  
+  
+  
+    <li class="md-nav__item">
+      <a href="../../../../developer-guide/contributing/" class="md-nav__link">
+        
+  
+  <span class="md-ellipsis">
+    Contributing
+  </span>
+  
+
+      </a>
+    </li>
+  
+
+              
+            
+          </ul>
+        </nav>
+      
+    </li>
+  
+
+    
+      
+      
+  
+  
+  
+  
+    
+    
+    
+      
+      
+        
+      
+    
+    
+    <li class="md-nav__item md-nav__item--nested">
+      
+        
+        
+          
+        
+        <input class="md-nav__toggle md-toggle md-toggle--indeterminate" type="checkbox" id="__nav_5" >
+        
+          
+          <label class="md-nav__link" for="__nav_5" id="__nav_5_label" tabindex="0">
+            
+  
+  <span class="md-ellipsis">
+    Reference
+  </span>
+  
+
+            <span class="md-nav__icon md-icon"></span>
+          </label>
+        
+        <nav class="md-nav" data-md-level="1" aria-labelledby="__nav_5_label" aria-expanded="false">
+          <label class="md-nav__title" for="__nav_5">
+            <span class="md-nav__icon md-icon"></span>
+            Reference
+          </label>
+          <ul class="md-nav__list" data-md-scrollfix>
+            
+              
+                
+  
+  
+  
+  
+    <li class="md-nav__item">
+      <a href="../../../../reference/api-index/" class="md-nav__link">
+        
+  
+  <span class="md-ellipsis">
+    API Index
+  </span>
+  
+
+      </a>
+    </li>
+  
+
+              
+            
+              
+                
+  
+  
+  
+  
+    <li class="md-nav__item">
+      <a href="../../../../reference/ui-components-hydra/" class="md-nav__link">
+        
+  
+  <span class="md-ellipsis">
+    UI Components (TrackerKit)
+  </span>
+  
+
+      </a>
+    </li>
+  
+
+              
+            
+              
+                
+  
+  
+  
+  
+    <li class="md-nav__item">
+      <a href="../../../../reference/ui-components-posekit/" class="md-nav__link">
+        
+  
+  <span class="md-ellipsis">
+    UI Components (PoseKit)
+  </span>
+  
+
+      </a>
+    </li>
+  
+
+              
+            
+              
+                
+  
+  
+  
+  
+    <li class="md-nav__item">
+      <a href="../../../../reference/api-app/" class="md-nav__link">
+        
+  
+  <span class="md-ellipsis">
+    API (Launcher)
+  </span>
+  
+
+      </a>
+    </li>
+  
+
+              
+            
+              
+                
+  
+  
+  
+  
+    <li class="md-nav__item">
+      <a href="../../../../reference/api-core/" class="md-nav__link">
+        
+  
+  <span class="md-ellipsis">
+    API (Core)
+  </span>
+  
+
+      </a>
+    </li>
+  
+
+              
+            
+              
+                
+  
+  
+  
+  
+    <li class="md-nav__item">
+      <a href="../../../../reference/api-data/" class="md-nav__link">
+        
+  
+  <span class="md-ellipsis">
+    API (Data)
+  </span>
+  
+
+      </a>
+    </li>
+  
+
+              
+            
+              
+                
+  
+  
+  
+  
+    <li class="md-nav__item">
+      <a href="../../../../reference/api-gui/" class="md-nav__link">
+        
+  
+  <span class="md-ellipsis">
+    API (TrackerKit GUI)
+  </span>
+  
+
+      </a>
+    </li>
+  
+
+              
+            
+              
+                
+  
+  
+  
+  
+    <li class="md-nav__item">
+      <a href="../../../../reference/api-widgets/" class="md-nav__link">
+        
+  
+  <span class="md-ellipsis">
+    API (Widgets)
+  </span>
+  
+
+      </a>
+    </li>
+  
+
+              
+            
+              
+                
+  
+  
+  
+  
+    <li class="md-nav__item">
+      <a href="../../../../reference/api-posekit/" class="md-nav__link">
+        
+  
+  <span class="md-ellipsis">
+    API (PoseKit)
+  </span>
+  
+
+      </a>
+    </li>
+  
+
+              
+            
+              
+                
+  
+  
+  
+  
+    <li class="md-nav__item">
+      <a href="../../../../reference/api-utils/" class="md-nav__link">
+        
+  
+  <span class="md-ellipsis">
+    API (Utils)
+  </span>
+  
+
+      </a>
+    </li>
+  
+
+              
+            
+              
+                
+  
+  
+  
+  
+    <li class="md-nav__item">
+      <a href="../../../../reference/cli-reference/" class="md-nav__link">
+        
+  
+  <span class="md-ellipsis">
+    CLI Reference
+  </span>
+  
+
+      </a>
+    </li>
+  
+
+              
+            
+              
+                
+  
+  
+  
+  
+    <li class="md-nav__item">
+      <a href="../../../../reference/technical-reference/" class="md-nav__link">
+        
+  
+  <span class="md-ellipsis">
+    Technical Reference (LaTeX)
+  </span>
+  
+
+      </a>
+    </li>
+  
+
+              
+            
+              
+                
+  
+  
+  
+  
+    <li class="md-nav__item">
+      <a href="../../../../reference/changelog/" class="md-nav__link">
+        
+  
+  <span class="md-ellipsis">
+    Changelog
+  </span>
+  
+
+      </a>
+    </li>
+  
+
+              
+            
+              
+                
+  
+  
+  
+  
+    <li class="md-nav__item">
+      <a href="../../../../reference/faq/" class="md-nav__link">
+        
+  
+  <span class="md-ellipsis">
+    FAQ
+  </span>
+  
+
+      </a>
+    </li>
+  
+
+              
+            
+          </ul>
+        </nav>
+      
+    </li>
+  
+
+    
+  </ul>
+</nav>
+                  </div>
+                </div>
+              </div>
+            
+            
+              
+              <div class="md-sidebar md-sidebar--secondary" data-md-component="sidebar" data-md-type="toc" >
+                <div class="md-sidebar__scrollwrap">
+                  <div class="md-sidebar__inner">
+                    
+
+<nav class="md-nav md-nav--secondary" aria-label="Table of contents">
+  
+  
+  
+    
+  
+  
+    <label class="md-nav__title" for="__toc">
+      <span class="md-nav__icon md-icon"></span>
+      Table of contents
+    </label>
+    <ul class="md-nav__list" data-md-component="toc" data-md-scrollfix>
+      
+        <li class="md-nav__item">
+  <a href="#global-constraints" class="md-nav__link">
+    <span class="md-ellipsis">
+      Global Constraints
+    </span>
+  </a>
+  
+    <nav class="md-nav" aria-label="Global Constraints">
+      <ul class="md-nav__list">
+        
+          <li class="md-nav__item">
+  <a href="#task-1-extract-the-shared-qt-free-build_engine_params-runtimecontext" class="md-nav__link">
+    <span class="md-ellipsis">
+      Task 1: Extract the shared Qt-free build_engine_params + RuntimeContext
+    </span>
+  </a>
+  
+</li>
+        
+          <li class="md-nav__item">
+  <a href="#task-2-failing-params-equality-oracle-gui-reference-vs-shared-builder" class="md-nav__link">
+    <span class="md-ellipsis">
+      Task 2: Failing params-equality oracle (GUI reference vs shared builder)
+    </span>
+  </a>
+  
+</li>
+        
+          <li class="md-nav__item">
+  <a href="#task-3-close-the-four-params-only-leaks-persist-them-into-config" class="md-nav__link">
+    <span class="md-ellipsis">
+      Task 3: Close the four params-only leaks (persist them into config)
+    </span>
+  </a>
+  
+</li>
+        
+          <li class="md-nav__item">
+  <a href="#task-4-emit-the-full-inert-key-set-from-config-bucket-2" class="md-nav__link">
+    <span class="md-ellipsis">
+      Task 4: Emit the full inert-key set from config (bucket 2)
+    </span>
+  </a>
+  
+</li>
+        
+          <li class="md-nav__item">
+  <a href="#task-5-pose-keypoint-token-sleap-batch-parity-minors" class="md-nav__link">
+    <span class="md-ellipsis">
+      Task 5: Pose keypoint-token + SLEAP-batch parity Minors
+    </span>
+  </a>
+  
+</li>
+        
+          <li class="md-nav__item">
+  <a href="#task-6-rewrite-get_parameters_dict-as-the-thin-wrapper-the-collapse" class="md-nav__link">
+    <span class="md-ellipsis">
+      Task 6: Rewrite get_parameters_dict() as the thin wrapper (the collapse)
+    </span>
+  </a>
+  
+</li>
+        
+          <li class="md-nav__item">
+  <a href="#task-7-full-verification-re-gate-end-to-end-guicli" class="md-nav__link">
+    <span class="md-ellipsis">
+      Task 7: Full verification — re-gate + end-to-end GUI==CLI
+    </span>
+  </a>
+  
+</li>
+        
+      </ul>
+    </nav>
+  
+</li>
+      
+        <li class="md-nav__item">
+  <a href="#self-review-notes-author" class="md-nav__link">
+    <span class="md-ellipsis">
+      Self-review notes (author)
+    </span>
+  </a>
+  
+</li>
+      
+    </ul>
+  
+</nav>
+                  </div>
+                </div>
+              </div>
+            
+          
+          
+            <div class="md-content" data-md-component="content">
+              <article class="md-content__inner md-typeset">
+                
+                  
+
+  
+    <a href="https://github.com/neurorishika/hydra-suite/edit/main/docs/superpowers/plans/done/2026-08-05-shared-engine-param-builder.md" title="Edit this page" class="md-content__button md-icon">
+      
+      <svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 24 24"><path d="M10 20H6V4h7v5h5v3.1l2-2V8l-6-6H6c-1.1 0-2 .9-2 2v16c0 1.1.9 2 2 2h4zm10.2-7c.1 0 .3.1.4.2l1.3 1.3c.2.2.2.6 0 .8l-1 1-2.1-2.1 1-1c.1-.1.2-.2.4-.2m0 3.9L14.1 23H12v-2.1l6.1-6.1z"/></svg>
+    </a>
+  
+  
+
+
+<h1 id="shared-engine-param-builder-total-guicli-unification-implementation-plan">Shared Engine Param-Builder — Total GUI/CLI Unification Implementation Plan<a class="headerlink" href="#shared-engine-param-builder-total-guicli-unification-implementation-plan" title="Permanent link">&para;</a></h1>
+<blockquote>
+<p><strong>For agentic workers:</strong> REQUIRED SUB-SKILL: Use superpowers:subagent-driven-development (recommended) or superpowers:executing-plans to implement this plan task-by-task. Steps use checkbox (<code>- [ ]</code>) syntax for tracking.</p>
+</blockquote>
+<p><strong>Goal:</strong> Collapse the GUI's <code>get_parameters_dict()</code> and the CLI's <code>build_tracking_parameters()</code> onto a single shared, Qt-free <code>build_engine_params(config, *, runtime)</code> so GUI and CLI tracking output is byte-identical by construction.</p>
+<p><strong>Architecture:</strong> The CLI's <code>build_tracking_parameters</code> (already a pure <code>config→params</code> function) is promoted to the canonical shared builder in a new Qt-free <code>trackerkit/engine_params.py</code>. The GUI's <code>get_parameters_dict()</code> is rewritten to <code>build_config_dict()</code> → <code>build_engine_params(cfg, runtime=gui_ctx)</code> → a thin GUI-only display overlay. Four params-only widget "leaks" are moved into the persisted config so the shared path carries them. Per-run values (ROI mask, cache paths, output dirs, fps/frames) travel in an output-neutral <code>RuntimeContext</code> each caller builds.</p>
+<p><strong>Tech Stack:</strong> Python 3, PySide6 (GUI only — the shared builder is Qt-free), pytest with offscreen Qt (<code>QT_QPA_PLATFORM=offscreen</code>, no pytest-qt), the <code>tools/equivalence</code> byte-identity harness.</p>
+<h2 id="global-constraints">Global Constraints<a class="headerlink" href="#global-constraints" title="Permanent link">&para;</a></h2>
+<ul>
+<li><strong>Reference / oracle:</strong> the GUI's current <code>get_parameters_dict()</code> output IS the correctness reference (it produced the params the Slice-4/5 gate validated byte-identical). <code>build_engine_params</code> MUST reproduce it key-for-key on every non-display key. This is stricter than the tracking gate and is the primary regression oracle.</li>
+<li><strong>Qt-free:</strong> <code>trackerkit/engine_params.py</code> must import nothing from <code>hydra_suite.trackerkit.gui</code> and must not touch PySide6. The CLI (<code>trackerkit/cli_config.py</code> / <code>headless_tracking.py</code>) stays importable with PySide6 blocked — the whole point of the parent program.</li>
+<li><strong>Parity-safety (Slice-4 B/B2/B3 template):</strong> a key inert for a clip must stay inert. Preserve exact defaults and gating when lifting a key's derivation (e.g. <code>identity_weight=0.0</code> gated by <code>alpha&gt;0</code> at <code>hungarian.py:239</code>; <code>ENABLE_POSE_EXTRACTOR</code> default <code>False</code> at <code>core/inference/config.py:843</code>).</li>
+<li><strong>Defaults:</strong> every NEW persisted config field must default to today's widget default so pre-existing saved configs (which lack the field) reproduce current behavior exactly.</li>
+<li><strong>No <code>core/</code> change expected.</strong> The builder lives in trackerkit. If a <code>core/</code> file is touched, the CLI re-gate (Task 7) must cover it; prefer not to.</li>
+<li><strong>Commit as the configured git user; NO <code>Co-Authored-By</code> trailer.</strong></li>
+<li><strong>Test command (from the worktree):</strong> <code>PYTHONPATH=$PWD/src KMP_DUPLICATE_LIB_OK=TRUE conda run -n hydra-mps python -m pytest &lt;path&gt; -q --ignore=tests/test_identity_postprocess.py</code>. <code>make format</code> is broken → <code>conda run -n hydra-mps black &lt;files&gt; &amp;&amp; conda run -n hydra-mps isort &lt;files&gt;</code>.</li>
+<li><strong>Long/SLEAP tests run FOREGROUND</strong> (blocking Bash, timeout up to 600000 ms) — background <code>Monitor</code> polling has a PID-reuse false-completion artifact. Full <code>pytest tests/</code> never finishes (classkit modal hang) → batch per file, judge failures as delta vs the pre-task baseline.</li>
+<li><strong>Line numbers in this plan are anchors from 2026-08-05 source; reconcile against live source before editing</strong> (<code>get_parameters_dict</code> and <code>cli_config.py</code> will shift as tasks land — grep the symbol, don't trust the number).</li>
+<li><strong>Gate fixture configs</strong> live under <code>tools/equivalence/fixtures/</code> (per-clip). The 7 clips: <code>fly_obb</code>, <code>worm_bgsub</code>, <code>emi_obb_identity</code>, <code>ant_pose_headtail</code>, <code>ant_obb_sleap</code>, <code>ant_obb_sequential</code>, <code>ant_cnn_identity</code>. Fixture clips/models are gitignored — symlink main's <code>tools/equivalence/fixtures/clips</code> into the worktree for tracking runs, remove after, never <code>git add</code>.</li>
+</ul>
+<hr />
+<h3 id="task-1-extract-the-shared-qt-free-build_engine_params-runtimecontext">Task 1: Extract the shared Qt-free <code>build_engine_params</code> + <code>RuntimeContext</code><a class="headerlink" href="#task-1-extract-the-shared-qt-free-build_engine_params-runtimecontext" title="Permanent link">&para;</a></h3>
+<p>Move the CLI's already-pure derivation into a new shared module and make the CLI a thin shim over it. Params output must be <strong>byte-identical</strong> to today's CLI (pure refactor).</p>
+<p><strong>Files:</strong>
+- Create: <code>src/hydra_suite/trackerkit/engine_params.py</code>
+- Modify: <code>src/hydra_suite/trackerkit/cli_config.py</code> (<code>build_tracking_parameters</code> becomes a shim; move helpers <code>_build_roi_mask</code>, <code>_coerce_pose_keypoint_tokens</code>, <code>_cfg_get</code>, <code>_cfg_get_time</code>, <code>_coerce_int_list</code>, <code>_autopick_greedy</code>, and the inner <code>_seconds_to_frames</code> logic into the new module — keep back-compat imports in <code>cli_config.py</code> for anything referenced elsewhere)
+- Test: <code>tests/test_engine_params_extraction.py</code></p>
+<p><strong>Interfaces:</strong>
+- Produces:
+  <div class="language-python highlight"><pre><span></span><code><span id="__span-0-1"><a id="__codelineno-0-1" name="__codelineno-0-1" href="#__codelineno-0-1"></a><span class="nd">@dataclass</span>
+</span><span id="__span-0-2"><a id="__codelineno-0-2" name="__codelineno-0-2" href="#__codelineno-0-2"></a><span class="k">class</span><span class="w"> </span><span class="nc">RuntimeContext</span><span class="p">:</span>
+</span><span id="__span-0-3"><a id="__codelineno-0-3" name="__codelineno-0-3" href="#__codelineno-0-3"></a>    <span class="n">fps</span><span class="p">:</span> <span class="nb">float</span>
+</span><span id="__span-0-4"><a id="__codelineno-0-4" name="__codelineno-0-4" href="#__codelineno-0-4"></a>    <span class="n">total_frames</span><span class="p">:</span> <span class="nb">int</span>
+</span><span id="__span-0-5"><a id="__codelineno-0-5" name="__codelineno-0-5" href="#__codelineno-0-5"></a>    <span class="n">frame_width</span><span class="p">:</span> <span class="nb">int</span>
+</span><span id="__span-0-6"><a id="__codelineno-0-6" name="__codelineno-0-6" href="#__codelineno-0-6"></a>    <span class="n">frame_height</span><span class="p">:</span> <span class="nb">int</span>
+</span><span id="__span-0-7"><a id="__codelineno-0-7" name="__codelineno-0-7" href="#__codelineno-0-7"></a>    <span class="n">roi_mask</span><span class="p">:</span> <span class="s2">"np.ndarray | None"</span> <span class="o">=</span> <span class="kc">None</span>
+</span><span id="__span-0-8"><a id="__codelineno-0-8" name="__codelineno-0-8" href="#__codelineno-0-8"></a>    <span class="n">dataset_output_dir</span><span class="p">:</span> <span class="nb">str</span> <span class="o">|</span> <span class="kc">None</span> <span class="o">=</span> <span class="kc">None</span>
+</span><span id="__span-0-9"><a id="__codelineno-0-9" name="__codelineno-0-9" href="#__codelineno-0-9"></a>    <span class="n">final_media_video_output_dir</span><span class="p">:</span> <span class="nb">str</span> <span class="o">|</span> <span class="kc">None</span> <span class="o">=</span> <span class="kc">None</span>
+</span><span id="__span-0-10"><a id="__codelineno-0-10" name="__codelineno-0-10" href="#__codelineno-0-10"></a>    <span class="n">individual_dataset_output_dir</span><span class="p">:</span> <span class="nb">str</span> <span class="o">|</span> <span class="kc">None</span> <span class="o">=</span> <span class="kc">None</span>
+</span><span id="__span-0-11"><a id="__codelineno-0-11" name="__codelineno-0-11" href="#__codelineno-0-11"></a>    <span class="n">individual_dataset_name</span><span class="p">:</span> <span class="nb">str</span> <span class="o">|</span> <span class="kc">None</span> <span class="o">=</span> <span class="kc">None</span>
+</span><span id="__span-0-12"><a id="__codelineno-0-12" name="__codelineno-0-12" href="#__codelineno-0-12"></a>    <span class="n">individual_dataset_run_id</span><span class="p">:</span> <span class="nb">str</span> <span class="o">|</span> <span class="kc">None</span> <span class="o">=</span> <span class="kc">None</span>
+</span><span id="__span-0-13"><a id="__codelineno-0-13" name="__codelineno-0-13" href="#__codelineno-0-13"></a>    <span class="n">individual_properties_cache_path</span><span class="p">:</span> <span class="nb">str</span> <span class="o">|</span> <span class="kc">None</span> <span class="o">=</span> <span class="kc">None</span>
+</span><span id="__span-0-14"><a id="__codelineno-0-14" name="__codelineno-0-14" href="#__codelineno-0-14"></a>
+</span><span id="__span-0-15"><a id="__codelineno-0-15" name="__codelineno-0-15" href="#__codelineno-0-15"></a><span class="k">def</span><span class="w"> </span><span class="nf">build_engine_params</span><span class="p">(</span>
+</span><span id="__span-0-16"><a id="__codelineno-0-16" name="__codelineno-0-16" href="#__codelineno-0-16"></a>    <span class="n">config</span><span class="p">:</span> <span class="n">Mapping</span><span class="p">[</span><span class="nb">str</span><span class="p">,</span> <span class="n">Any</span><span class="p">],</span>
+</span><span id="__span-0-17"><a id="__codelineno-0-17" name="__codelineno-0-17" href="#__codelineno-0-17"></a>    <span class="o">*</span><span class="p">,</span>
+</span><span id="__span-0-18"><a id="__codelineno-0-18" name="__codelineno-0-18" href="#__codelineno-0-18"></a>    <span class="n">runtime</span><span class="p">:</span> <span class="n">RuntimeContext</span><span class="p">,</span>
+</span><span id="__span-0-19"><a id="__codelineno-0-19" name="__codelineno-0-19" href="#__codelineno-0-19"></a>    <span class="n">advanced_config</span><span class="p">:</span> <span class="n">Mapping</span><span class="p">[</span><span class="nb">str</span><span class="p">,</span> <span class="n">Any</span><span class="p">]</span> <span class="o">|</span> <span class="kc">None</span> <span class="o">=</span> <span class="kc">None</span><span class="p">,</span>
+</span><span id="__span-0-20"><a id="__codelineno-0-20" name="__codelineno-0-20" href="#__codelineno-0-20"></a><span class="p">)</span> <span class="o">-&gt;</span> <span class="nb">dict</span><span class="p">[</span><span class="nb">str</span><span class="p">,</span> <span class="n">Any</span><span class="p">]:</span> <span class="o">...</span>
+</span><span id="__span-0-21"><a id="__codelineno-0-21" name="__codelineno-0-21" href="#__codelineno-0-21"></a>
+</span><span id="__span-0-22"><a id="__codelineno-0-22" name="__codelineno-0-22" href="#__codelineno-0-22"></a><span class="k">def</span><span class="w"> </span><span class="nf">build_roi_mask</span><span class="p">(</span><span class="n">roi_shapes</span><span class="p">,</span> <span class="n">width</span><span class="p">,</span> <span class="n">height</span><span class="p">)</span> <span class="o">-&gt;</span> <span class="s2">"np.ndarray | None"</span><span class="p">:</span> <span class="o">...</span>  <span class="c1"># moved from cli_config._build_roi_mask</span>
+</span></code></pre></div>
+- Consumes (from earlier program work): <code>load_advanced_tracker_config()</code>, <code>is_pose_inference_enabled(cfg)</code>, <code>ResolvedBackend</code>, <code>legacy_detection_runtime_fields</code>, <code>_resolve_solver_flags</code>, <code>resolve_tensorrt_max_batch_size</code> — import these into <code>engine_params.py</code> (they are already Qt-free).</p>
+<ul class="task-list">
+<li class="task-list-item"><label class="task-list-control"><input type="checkbox" disabled/><span class="task-list-indicator"></span></label> <strong>Step 1: Write the failing test</strong> — assert the shim reproduces the pre-refactor CLI params byte-for-byte for one fixture config.</li>
+</ul>
+<div class="language-python highlight"><pre><span></span><code><span id="__span-1-1"><a id="__codelineno-1-1" name="__codelineno-1-1" href="#__codelineno-1-1"></a><span class="c1"># tests/test_engine_params_extraction.py</span>
+</span><span id="__span-1-2"><a id="__codelineno-1-2" name="__codelineno-1-2" href="#__codelineno-1-2"></a><span class="kn">import</span><span class="w"> </span><span class="nn">os</span>
+</span><span id="__span-1-3"><a id="__codelineno-1-3" name="__codelineno-1-3" href="#__codelineno-1-3"></a><span class="n">os</span><span class="o">.</span><span class="n">environ</span><span class="o">.</span><span class="n">setdefault</span><span class="p">(</span><span class="s2">"QT_QPA_PLATFORM"</span><span class="p">,</span> <span class="s2">"offscreen"</span><span class="p">)</span>
+</span><span id="__span-1-4"><a id="__codelineno-1-4" name="__codelineno-1-4" href="#__codelineno-1-4"></a><span class="kn">from</span><span class="w"> </span><span class="nn">hydra_suite.trackerkit</span><span class="w"> </span><span class="kn">import</span> <span class="n">cli_config</span>
+</span><span id="__span-1-5"><a id="__codelineno-1-5" name="__codelineno-1-5" href="#__codelineno-1-5"></a><span class="kn">from</span><span class="w"> </span><span class="nn">hydra_suite.trackerkit.engine_params</span><span class="w"> </span><span class="kn">import</span> <span class="n">build_engine_params</span><span class="p">,</span> <span class="n">RuntimeContext</span>
+</span><span id="__span-1-6"><a id="__codelineno-1-6" name="__codelineno-1-6" href="#__codelineno-1-6"></a>
+</span><span id="__span-1-7"><a id="__codelineno-1-7" name="__codelineno-1-7" href="#__codelineno-1-7"></a><span class="k">def</span><span class="w"> </span><span class="nf">test_shim_matches_direct_builder</span><span class="p">(</span><span class="n">fly_obb_cfg</span><span class="p">,</span> <span class="n">fly_obb_probe</span><span class="p">):</span>
+</span><span id="__span-1-8"><a id="__codelineno-1-8" name="__codelineno-1-8" href="#__codelineno-1-8"></a>    <span class="c1"># fixtures load the saved fly_obb config dict + a TrackerCliVideoProbe</span>
+</span><span id="__span-1-9"><a id="__codelineno-1-9" name="__codelineno-1-9" href="#__codelineno-1-9"></a>    <span class="n">via_shim</span> <span class="o">=</span> <span class="n">cli_config</span><span class="o">.</span><span class="n">build_tracking_parameters</span><span class="p">(</span><span class="n">fly_obb_cfg</span><span class="p">,</span> <span class="n">video_probe</span><span class="o">=</span><span class="n">fly_obb_probe</span><span class="p">)</span>
+</span><span id="__span-1-10"><a id="__codelineno-1-10" name="__codelineno-1-10" href="#__codelineno-1-10"></a>    <span class="n">rt</span> <span class="o">=</span> <span class="n">RuntimeContext</span><span class="p">(</span><span class="n">fps</span><span class="o">=</span><span class="n">fly_obb_probe</span><span class="o">.</span><span class="n">fps</span><span class="p">,</span> <span class="n">total_frames</span><span class="o">=</span><span class="n">fly_obb_probe</span><span class="o">.</span><span class="n">total_frames</span><span class="p">,</span>
+</span><span id="__span-1-11"><a id="__codelineno-1-11" name="__codelineno-1-11" href="#__codelineno-1-11"></a>                        <span class="n">frame_width</span><span class="o">=</span><span class="n">fly_obb_probe</span><span class="o">.</span><span class="n">width</span><span class="p">,</span> <span class="n">frame_height</span><span class="o">=</span><span class="n">fly_obb_probe</span><span class="o">.</span><span class="n">height</span><span class="p">)</span>
+</span><span id="__span-1-12"><a id="__codelineno-1-12" name="__codelineno-1-12" href="#__codelineno-1-12"></a>    <span class="n">via_direct</span> <span class="o">=</span> <span class="n">build_engine_params</span><span class="p">(</span><span class="n">fly_obb_cfg</span><span class="p">,</span> <span class="n">runtime</span><span class="o">=</span><span class="n">rt</span><span class="p">)</span>
+</span><span id="__span-1-13"><a id="__codelineno-1-13" name="__codelineno-1-13" href="#__codelineno-1-13"></a>    <span class="c1"># every key the shim produces from the same inputs must match the direct call</span>
+</span><span id="__span-1-14"><a id="__codelineno-1-14" name="__codelineno-1-14" href="#__codelineno-1-14"></a>    <span class="k">for</span> <span class="n">k</span> <span class="ow">in</span> <span class="n">via_shim</span><span class="p">:</span>
+</span><span id="__span-1-15"><a id="__codelineno-1-15" name="__codelineno-1-15" href="#__codelineno-1-15"></a>        <span class="k">assert</span> <span class="n">via_shim</span><span class="p">[</span><span class="n">k</span><span class="p">]</span> <span class="o">==</span> <span class="n">via_direct</span><span class="o">.</span><span class="n">get</span><span class="p">(</span><span class="n">k</span><span class="p">,</span> <span class="s2">"__MISSING__"</span><span class="p">),</span> <span class="sa">f</span><span class="s2">"key </span><span class="si">{</span><span class="n">k</span><span class="si">}</span><span class="s2"> diverged"</span>
+</span></code></pre></div>
+<ul class="task-list">
+<li class="task-list-item"><label class="task-list-control"><input type="checkbox" disabled/><span class="task-list-indicator"></span></label> <strong>Step 2: Run it, expect ImportError/FAIL</strong> (<code>engine_params</code> does not exist yet).</li>
+<li class="task-list-item"><label class="task-list-control"><input type="checkbox" disabled/><span class="task-list-indicator"></span></label> <strong>Step 3: Create <code>engine_params.py</code></strong> — move the body of <code>build_tracking_parameters</code> verbatim into <code>build_engine_params(config, *, runtime, advanced_config=None)</code>. Mechanical transform of the input surface:</li>
+<li>Replace <code>video_probe.fps</code> → <code>runtime.fps</code>, <code>.total_frames</code> → <code>runtime.total_frames</code>, <code>.width/.height</code> → <code>runtime.frame_width/frame_height</code>.</li>
+<li>Replace the inline <code>_build_roi_mask(...)</code> call with <code>runtime.roi_mask if runtime.roi_mask is not None else build_roi_mask(config.get("roi_shapes"), runtime.frame_width, runtime.frame_height)</code>.</li>
+<li>Replace the CLI's output-dir derivations (<code>DATASET_OUTPUT_DIR</code>, <code>FINAL_MEDIA_EXPORT_VIDEO_OUTPUT_DIR</code>, <code>INDIVIDUAL_DATASET_*</code>, <code>INDIVIDUAL_PROPERTIES_CACHE_PATH</code>, <code>INDIVIDUAL_DATASET_RUN_ID</code>) with the corresponding <code>runtime.*</code> fields (fall back to the CLI's current default when the field is <code>None</code>, so the shim reproduces today's values).</li>
+<li>Move <code>_build_roi_mask</code>→<code>build_roi_mask</code>, <code>_coerce_pose_keypoint_tokens</code>, <code>_cfg_get</code>, <code>_cfg_get_time</code>, <code>_coerce_int_list</code>, <code>_autopick_greedy</code>, <code>_seconds_to_frames</code> into the module.</li>
+<li class="task-list-item"><label class="task-list-control"><input type="checkbox" disabled/><span class="task-list-indicator"></span></label> <strong>Step 4: Rewrite <code>cli_config.build_tracking_parameters</code> as a shim</strong> — keep its current signature <code>(cfg, *, video_probe, advanced_config=None)</code>; build a <code>RuntimeContext</code> from <code>video_probe</code> plus the CLI's existing output-path logic (the <code>_default_output_paths</code>/video-derived dirs it computes today), then <code>return build_engine_params(cfg, runtime=rt, advanced_config=advanced_config)</code>. Re-export moved helpers from <code>cli_config</code> (<code>from .engine_params import build_roi_mask as _build_roi_mask</code>, etc.) if any test/module imports them.</li>
+<li class="task-list-item"><label class="task-list-control"><input type="checkbox" disabled/><span class="task-list-indicator"></span></label> <strong>Step 5: Run the test, expect PASS.</strong> Then run the existing CLI param tests: <code>pytest tests/test_trackerkit_cli*.py tests/test_engine_params_extraction.py -q</code>. Expected: no new failures vs baseline.</li>
+<li class="task-list-item"><label class="task-list-control"><input type="checkbox" disabled/><span class="task-list-indicator"></span></label> <strong>Step 6: Qt-free guard</strong> — <code>PYTHONPATH=$PWD/src python -c "import sys; sys.modules['PySide6']=None; import hydra_suite.trackerkit.engine_params"</code> must succeed (no Qt import). Add this as an assertion in the test module.</li>
+<li class="task-list-item"><label class="task-list-control"><input type="checkbox" disabled/><span class="task-list-indicator"></span></label> <strong>Step 7: Commit</strong> — <code>refactor(trackerkit): extract shared Qt-free build_engine_params + RuntimeContext from CLI builder</code>.</li>
+</ul>
+<hr />
+<h3 id="task-2-failing-params-equality-oracle-gui-reference-vs-shared-builder">Task 2: Failing params-equality oracle (GUI reference vs shared builder)<a class="headerlink" href="#task-2-failing-params-equality-oracle-gui-reference-vs-shared-builder" title="Permanent link">&para;</a></h3>
+<p>Write the exhaustive regression oracle FIRST, RED. It loads each gate clip's saved config into an offscreen <code>MainWindow</code>, reads the GUI reference <code>get_parameters_dict()</code>, and asserts <code>build_engine_params(build_config_dict(), runtime=gui_ctx)</code> matches it on every non-display key. It fails now (the ~54 diverging keys); Tasks 3–6 drive it green.</p>
+<p><strong>Files:</strong>
+- Create: <code>tests/test_gui_cli_param_equivalence.py</code>
+- Test helper: reuse the offscreen-<code>MainWindow</code> load pattern from <code>tests/test_config_build_dict.py</code> (module-top <code>os.environ.setdefault("QT_QPA_PLATFORM","offscreen")</code>, <code>QApplication</code> fixture, <code>MainWindow()</code> with <code>_save/_load_advanced_config</code> stubbed).</p>
+<p><strong>Interfaces:</strong>
+- Consumes: <code>RuntimeContext</code>, <code>build_engine_params</code> (Task 1); <code>MainWindow</code>; <code>orchestrator.build_config_dict()</code> / <code>get_parameters_dict()</code>.
+- Produces: <code>DISPLAY_ONLY_KEYS</code> and <code>RUNTIME_OVERLAY_KEYS</code> constants (the bucket-3 and bucket-4 exclusion sets from the spec), reused by Task 6.</p>
+<ul class="task-list">
+<li class="task-list-item"><label class="task-list-control"><input type="checkbox" disabled/><span class="task-list-indicator"></span></label> <strong>Step 1: Enumerate the exclusion sets</strong> as module constants:</li>
+</ul>
+<div class="language-python highlight"><pre><span></span><code><span id="__span-2-1"><a id="__codelineno-2-1" name="__codelineno-2-1" href="#__codelineno-2-1"></a><span class="n">DISPLAY_ONLY_KEYS</span> <span class="o">=</span> <span class="p">{</span>
+</span><span id="__span-2-2"><a id="__codelineno-2-2" name="__codelineno-2-2" href="#__codelineno-2-2"></a>    <span class="s2">"SHOW_FG"</span><span class="p">,</span><span class="s2">"SHOW_BG"</span><span class="p">,</span><span class="s2">"SHOW_CIRCLES"</span><span class="p">,</span><span class="s2">"SHOW_ORIENTATION"</span><span class="p">,</span><span class="s2">"SHOW_YOLO_OBB"</span><span class="p">,</span>
+</span><span id="__span-2-3"><a id="__codelineno-2-3" name="__codelineno-2-3" href="#__codelineno-2-3"></a>    <span class="s2">"SHOW_TRAJECTORIES"</span><span class="p">,</span><span class="s2">"SHOW_LABELS"</span><span class="p">,</span><span class="s2">"SHOW_STATE"</span><span class="p">,</span><span class="s2">"SHOW_KALMAN_UNCERTAINTY"</span><span class="p">,</span>
+</span><span id="__span-2-4"><a id="__codelineno-2-4" name="__codelineno-2-4" href="#__codelineno-2-4"></a>    <span class="s2">"zoom_factor"</span><span class="p">,</span><span class="s2">"VISUALIZATION_FREE_MODE"</span><span class="p">,</span><span class="s2">"TRACKING_REALTIME_MODE"</span><span class="p">,</span>
+</span><span id="__span-2-5"><a id="__codelineno-2-5" name="__codelineno-2-5" href="#__codelineno-2-5"></a>    <span class="s2">"TRACKING_WORKFLOW_MODE"</span><span class="p">,</span><span class="s2">"TRAJECTORY_COLORS"</span><span class="p">,</span>
+</span><span id="__span-2-6"><a id="__codelineno-2-6" name="__codelineno-2-6" href="#__codelineno-2-6"></a><span class="p">}</span>
+</span><span id="__span-2-7"><a id="__codelineno-2-7" name="__codelineno-2-7" href="#__codelineno-2-7"></a><span class="n">RUNTIME_OVERLAY_KEYS</span> <span class="o">=</span> <span class="p">{</span>
+</span><span id="__span-2-8"><a id="__codelineno-2-8" name="__codelineno-2-8" href="#__codelineno-2-8"></a>    <span class="s2">"ROI_MASK"</span><span class="p">,</span><span class="s2">"INDIVIDUAL_PROPERTIES_CACHE_PATH"</span><span class="p">,</span><span class="s2">"INDIVIDUAL_DATASET_RUN_ID"</span><span class="p">,</span>
+</span><span id="__span-2-9"><a id="__codelineno-2-9" name="__codelineno-2-9" href="#__codelineno-2-9"></a>    <span class="s2">"DATASET_OUTPUT_DIR"</span><span class="p">,</span><span class="s2">"FINAL_MEDIA_EXPORT_VIDEO_OUTPUT_DIR"</span><span class="p">,</span>
+</span><span id="__span-2-10"><a id="__codelineno-2-10" name="__codelineno-2-10" href="#__codelineno-2-10"></a>    <span class="s2">"INDIVIDUAL_DATASET_OUTPUT_DIR"</span><span class="p">,</span><span class="s2">"INDIVIDUAL_DATASET_NAME"</span><span class="p">,</span>
+</span><span id="__span-2-11"><a id="__codelineno-2-11" name="__codelineno-2-11" href="#__codelineno-2-11"></a><span class="p">}</span>
+</span></code></pre></div>
+<ul class="task-list">
+<li class="task-list-item"><label class="task-list-control"><input type="checkbox" disabled/><span class="task-list-indicator"></span></label> <strong>Step 2: Write the parametrized failing test.</strong></li>
+</ul>
+<div class="language-python highlight"><pre><span></span><code><span id="__span-3-1"><a id="__codelineno-3-1" name="__codelineno-3-1" href="#__codelineno-3-1"></a><span class="kn">import</span><span class="w"> </span><span class="nn">pytest</span>
+</span><span id="__span-3-2"><a id="__codelineno-3-2" name="__codelineno-3-2" href="#__codelineno-3-2"></a><span class="n">CLIPS</span> <span class="o">=</span> <span class="p">[</span><span class="s2">"fly_obb"</span><span class="p">,</span><span class="s2">"worm_bgsub"</span><span class="p">,</span><span class="s2">"emi_obb_identity"</span><span class="p">,</span><span class="s2">"ant_pose_headtail"</span><span class="p">,</span>
+</span><span id="__span-3-3"><a id="__codelineno-3-3" name="__codelineno-3-3" href="#__codelineno-3-3"></a>         <span class="s2">"ant_obb_sleap"</span><span class="p">,</span><span class="s2">"ant_obb_sequential"</span><span class="p">,</span><span class="s2">"ant_cnn_identity"</span><span class="p">]</span>
+</span><span id="__span-3-4"><a id="__codelineno-3-4" name="__codelineno-3-4" href="#__codelineno-3-4"></a>
+</span><span id="__span-3-5"><a id="__codelineno-3-5" name="__codelineno-3-5" href="#__codelineno-3-5"></a><span class="nd">@pytest</span><span class="o">.</span><span class="n">mark</span><span class="o">.</span><span class="n">parametrize</span><span class="p">(</span><span class="s2">"clip"</span><span class="p">,</span> <span class="n">CLIPS</span><span class="p">)</span>
+</span><span id="__span-3-6"><a id="__codelineno-3-6" name="__codelineno-3-6" href="#__codelineno-3-6"></a><span class="k">def</span><span class="w"> </span><span class="nf">test_shared_builder_reproduces_gui_reference</span><span class="p">(</span><span class="n">main_window</span><span class="p">,</span> <span class="n">clip</span><span class="p">):</span>
+</span><span id="__span-3-7"><a id="__codelineno-3-7" name="__codelineno-3-7" href="#__codelineno-3-7"></a>    <span class="n">load_gate_config_into</span><span class="p">(</span><span class="n">main_window</span><span class="p">,</span> <span class="n">clip</span><span class="p">)</span>          <span class="c1"># via the config-load path</span>
+</span><span id="__span-3-8"><a id="__codelineno-3-8" name="__codelineno-3-8" href="#__codelineno-3-8"></a>    <span class="n">orch</span> <span class="o">=</span> <span class="n">main_window</span><span class="o">.</span><span class="n">_config_orch</span>
+</span><span id="__span-3-9"><a id="__codelineno-3-9" name="__codelineno-3-9" href="#__codelineno-3-9"></a>    <span class="n">reference</span> <span class="o">=</span> <span class="n">orch</span><span class="o">.</span><span class="n">get_parameters_dict</span><span class="p">()</span>            <span class="c1"># GUI reference (widget scrape)</span>
+</span><span id="__span-3-10"><a id="__codelineno-3-10" name="__codelineno-3-10" href="#__codelineno-3-10"></a>    <span class="n">cfg</span> <span class="o">=</span> <span class="n">orch</span><span class="o">.</span><span class="n">build_config_dict</span><span class="p">()</span>
+</span><span id="__span-3-11"><a id="__codelineno-3-11" name="__codelineno-3-11" href="#__codelineno-3-11"></a>    <span class="n">rt</span> <span class="o">=</span> <span class="n">gui_runtime_context</span><span class="p">(</span><span class="n">main_window</span><span class="p">)</span>             <span class="c1"># from _mw runtime attrs</span>
+</span><span id="__span-3-12"><a id="__codelineno-3-12" name="__codelineno-3-12" href="#__codelineno-3-12"></a>    <span class="n">shared</span> <span class="o">=</span> <span class="n">build_engine_params</span><span class="p">(</span><span class="n">cfg</span><span class="p">,</span> <span class="n">runtime</span><span class="o">=</span><span class="n">rt</span><span class="p">)</span>
+</span><span id="__span-3-13"><a id="__codelineno-3-13" name="__codelineno-3-13" href="#__codelineno-3-13"></a>    <span class="n">compared</span> <span class="o">=</span> <span class="p">(</span><span class="nb">set</span><span class="p">(</span><span class="n">reference</span><span class="p">)</span> <span class="o">|</span> <span class="nb">set</span><span class="p">(</span><span class="n">shared</span><span class="p">))</span> <span class="o">-</span> <span class="n">DISPLAY_ONLY_KEYS</span> <span class="o">-</span> <span class="n">RUNTIME_OVERLAY_KEYS</span>
+</span><span id="__span-3-14"><a id="__codelineno-3-14" name="__codelineno-3-14" href="#__codelineno-3-14"></a>    <span class="n">diffs</span> <span class="o">=</span> <span class="p">{</span><span class="n">k</span><span class="p">:</span> <span class="p">(</span><span class="n">reference</span><span class="o">.</span><span class="n">get</span><span class="p">(</span><span class="n">k</span><span class="p">,</span><span class="s2">"∅"</span><span class="p">),</span> <span class="n">shared</span><span class="o">.</span><span class="n">get</span><span class="p">(</span><span class="n">k</span><span class="p">,</span><span class="s2">"∅"</span><span class="p">))</span>
+</span><span id="__span-3-15"><a id="__codelineno-3-15" name="__codelineno-3-15" href="#__codelineno-3-15"></a>             <span class="k">for</span> <span class="n">k</span> <span class="ow">in</span> <span class="n">compared</span> <span class="k">if</span> <span class="n">reference</span><span class="o">.</span><span class="n">get</span><span class="p">(</span><span class="n">k</span><span class="p">,</span><span class="s2">"∅"</span><span class="p">)</span> <span class="o">!=</span> <span class="n">shared</span><span class="o">.</span><span class="n">get</span><span class="p">(</span><span class="n">k</span><span class="p">,</span><span class="s2">"∅"</span><span class="p">)}</span>
+</span><span id="__span-3-16"><a id="__codelineno-3-16" name="__codelineno-3-16" href="#__codelineno-3-16"></a>    <span class="k">assert</span> <span class="ow">not</span> <span class="n">diffs</span><span class="p">,</span> <span class="sa">f</span><span class="s2">"</span><span class="si">{</span><span class="n">clip</span><span class="si">}</span><span class="s2">: </span><span class="si">{</span><span class="nb">len</span><span class="p">(</span><span class="n">diffs</span><span class="p">)</span><span class="si">}</span><span class="s2"> keys diverge: </span><span class="si">{</span><span class="nb">sorted</span><span class="p">(</span><span class="n">diffs</span><span class="p">)</span><span class="si">}</span><span class="s2">"</span>
+</span></code></pre></div>
+<ul class="task-list">
+<li class="task-list-item"><label class="task-list-control"><input type="checkbox" disabled/><span class="task-list-indicator"></span></label> <strong>Step 3: Run it FOREGROUND, capture the diff.</strong> Expected: FAIL on most clips. Save the printed diverging-key list to <code>.superpowers/sdd/&lt;workspace&gt;/keydiff-baseline.txt</code> — this is the authoritative worklist for Tasks 3–5 (do NOT trust the spec's hand-listed categories over this empirical output).</li>
+<li class="task-list-item"><label class="task-list-control"><input type="checkbox" disabled/><span class="task-list-indicator"></span></label> <strong>Step 4: Commit</strong> — <code>test(trackerkit): failing GUI-reference vs shared-builder param equality oracle (7 clips)</code>. (Test is expected-failing; note that in the commit body and mark the assertions <code>xfail(strict=True)</code> so CI is green until Task 6 flips them — remove the xfail in Task 6.)</li>
+</ul>
+<hr />
+<h3 id="task-3-close-the-four-params-only-leaks-persist-them-into-config">Task 3: Close the four params-only leaks (persist them into config)<a class="headerlink" href="#task-3-close-the-four-params-only-leaks-persist-them-into-config" title="Permanent link">&para;</a></h3>
+<p>Move <code>MAX_BRIDGE_GAP_FRAMES</code>, <code>FRAGMENT_SPATIAL_VETO_THRESHOLD</code>, <code>COLOR_TAG_MODEL_PATH</code>, <code>COLOR_TAG_CONFIDENCE</code> from widget-only reads into persisted config fields, so both the GUI config→params path and the CLI carry them.</p>
+<p><strong>Files:</strong>
+- Modify: <code>src/hydra_suite/trackerkit/gui/orchestrators/config.py</code> (<code>build_config_dict</code> — add the 4 snake_case fields; the matching <code>_load_config_*</code> loader — read them back into widgets)
+- Modify: <code>src/hydra_suite/trackerkit/engine_params.py</code> (emit the 4 UPPER keys from config fields)
+- Test: extend <code>tests/test_config_build_dict.py</code> (round-trip) + the Task-2 oracle diff shrinks by 4 keys</p>
+<p><strong>Interfaces:</strong>
+- Config fields (snake_case) and their engine keys:
+  | engine key | config field | GUI widget source | default |
+  |---|---|---|---|
+  | <code>MAX_BRIDGE_GAP_FRAMES</code> | <code>max_bridge_gap_frames</code> | <code>postprocess.spin_max_bridge_gap_frames.value()</code> | widget's constructed default |
+  | <code>FRAGMENT_SPATIAL_VETO_THRESHOLD</code> | <code>fragment_spatial_veto_threshold</code> | <code>postprocess.spin_fragment_spatial_veto_threshold.value()</code> | widget's constructed default |
+  | <code>COLOR_TAG_MODEL_PATH</code> | <code>color_tag_model_path</code> | <code>identity.line_color_tag_model.text()</code> | <code>""</code> |
+  | <code>COLOR_TAG_CONFIDENCE</code> | <code>color_tag_confidence</code> | <code>identity.spin_color_tag_conf.value()</code> | widget's constructed default |</p>
+<ul class="task-list">
+<li class="task-list-item"><label class="task-list-control"><input type="checkbox" disabled/><span class="task-list-indicator"></span></label> <strong>Step 1: Find the exact widget defaults</strong> — grep each widget symbol in <code>trackerkit/gui/panels/</code> for its <code>.setValue(...)</code>/<code>.setText(...)</code>/constructor default; use those exact values as the config-field defaults (Global Constraint: defaults must match today's widgets).</li>
+<li class="task-list-item"><label class="task-list-control"><input type="checkbox" disabled/><span class="task-list-indicator"></span></label> <strong>Step 2: Write the failing round-trip test</strong> in <code>test_config_build_dict.py</code>: set the 4 widgets to non-default values, <code>build_config_dict()</code>, assert the 4 snake_case fields are present with those values; then load that dict back and assert the widgets read them.</li>
+<li class="task-list-item"><label class="task-list-control"><input type="checkbox" disabled/><span class="task-list-indicator"></span></label> <strong>Step 3: Run it, expect FAIL</strong> (fields absent from <code>build_config_dict</code>).</li>
+<li class="task-list-item"><label class="task-list-control"><input type="checkbox" disabled/><span class="task-list-indicator"></span></label> <strong>Step 4: Add the 4 fields</strong> to <code>build_config_dict</code> (near the postprocess / individual-analysis serialization blocks) and to the matching <code>_load_config_*</code> loader (so a saved config round-trips). Use <code>_cfg_get(cfg, "&lt;field&gt;", default=&lt;exact widget default&gt;)</code> on the load side.</li>
+<li class="task-list-item"><label class="task-list-control"><input type="checkbox" disabled/><span class="task-list-indicator"></span></label> <strong>Step 5: Emit the 4 engine keys</strong> from <code>config</code> in <code>build_engine_params</code> (they were previously CLI-absent). Use the same defaults.</li>
+<li class="task-list-item"><label class="task-list-control"><input type="checkbox" disabled/><span class="task-list-indicator"></span></label> <strong>Step 6: Run the round-trip test (PASS) + the Task-2 oracle</strong> (FOREGROUND) — the diverging-key count must drop by exactly these 4.</li>
+<li class="task-list-item"><label class="task-list-control"><input type="checkbox" disabled/><span class="task-list-indicator"></span></label> <strong>Step 7: Commit</strong> — <code>feat(trackerkit): persist max_bridge_gap/fragment_veto/color_tag config fields (close param leaks)</code>.</li>
+</ul>
+<hr />
+<h3 id="task-4-emit-the-full-inert-key-set-from-config-bucket-2">Task 4: Emit the full inert-key set from config (bucket 2)<a class="headerlink" href="#task-4-emit-the-full-inert-key-set-from-config-bucket-2" title="Permanent link">&para;</a></h3>
+<p>Extend <code>build_engine_params</code> to emit every remaining tracking-relevant key the GUI reference emits but the CLI dropped (<code>DATASET_*</code>, <code>SLICE_*</code>, <code>FINAL_MEDIA_EXPORT_*</code>, <code>INDIVIDUAL_*</code>, <code>YOLO_OBB_SEG_*</code>, <code>SUPPRESS_FOREIGN_OBB_*</code>, <code>METRIC_*</code>, <code>ENABLE_PROFILING</code>, legacy singular <code>CNN_CLASSIFIER_*</code>, <code>IDENTITY_METHOD</code> edge, etc.), derived from config, per parity-safety.</p>
+<p><strong>Files:</strong>
+- Modify: <code>src/hydra_suite/trackerkit/engine_params.py</code>
+- Reference: the GUI <code>get_parameters_dict()</code> derivation for each key (config.py:1948+) — lift the derivation, swapping widget reads for the corresponding config field
+- Test: the Task-2 oracle (diff → 0 on non-display keys)</p>
+<ul class="task-list">
+<li class="task-list-item"><label class="task-list-control"><input type="checkbox" disabled/><span class="task-list-indicator"></span></label> <strong>Step 1: Work from <code>keydiff-baseline.txt</code></strong> (Task 2) — the empirical remaining diverging keys. For each, open the GUI reference derivation and find the config field it corresponds to (<code>build_config_dict</code> emits it, or add it if a fifth leak surfaces — same pattern as Task 3).</li>
+<li class="task-list-item"><label class="task-list-control"><input type="checkbox" disabled/><span class="task-list-indicator"></span></label> <strong>Step 2: For each key group, add a failing sub-assertion</strong> (or just rely on the Task-2 oracle narrowing) and implement the derivation in <code>build_engine_params</code>, preserving exact defaults/gating (parity-safety). Do the <code>DATASET_*</code> block, then <code>SLICE_*</code>, then <code>YOLO_OBB_SEG_*</code>, then <code>INDIVIDUAL_*</code>/<code>METRIC_*</code>/misc — one commit-sized group at a time is fine but this task's DoD is the whole bucket.</li>
+<li class="task-list-item"><label class="task-list-control"><input type="checkbox" disabled/><span class="task-list-indicator"></span></label> <strong>Step 3: Handle the pose Minors here or in Task 5</strong> — <code>POSE_SLEAP_BATCH</code> must come from the same source as <code>POSE_BATCH_SIZE</code> (not a separate <code>pose_sleap_batch</code> field), and <code>POSE_IGNORE_KEYPOINTS</code>/<code>POSE_DIRECTION_*</code> token lists must be plain strings (see Task 5).</li>
+<li class="task-list-item"><label class="task-list-control"><input type="checkbox" disabled/><span class="task-list-indicator"></span></label> <strong>Step 4: Run the Task-2 oracle FOREGROUND</strong> — on every clip, <code>diffs</code> must be empty for all keys except those in <code>DISPLAY_ONLY_KEYS</code>/<code>RUNTIME_OVERLAY_KEYS</code>. Iterate until zero.</li>
+<li class="task-list-item"><label class="task-list-control"><input type="checkbox" disabled/><span class="task-list-indicator"></span></label> <strong>Step 5: Commit</strong> — <code>feat(trackerkit): shared builder emits full inert-key set from config (kills GUI/CLI drift)</code>.</li>
+</ul>
+<hr />
+<h3 id="task-5-pose-keypoint-token-sleap-batch-parity-minors">Task 5: Pose keypoint-token + SLEAP-batch parity Minors<a class="headerlink" href="#task-5-pose-keypoint-token-sleap-batch-parity-minors" title="Permanent link">&para;</a></h3>
+<p>Make the two pose Minors identical across paths (may already be closed by Task 4 — this task is the dedicated gate for them).</p>
+<p><strong>Files:</strong>
+- Modify: <code>src/hydra_suite/trackerkit/engine_params.py</code> (<code>_coerce_pose_keypoint_tokens</code>, <code>POSE_SLEAP_BATCH</code>)
+- Test: <code>tests/test_engine_params_pose_tokens.py</code></p>
+<ul class="task-list">
+<li class="task-list-item"><label class="task-list-control"><input type="checkbox" disabled/><span class="task-list-indicator"></span></label> <strong>Step 1: Write the failing test</strong> — given a config with <code>pose_ignore_keypoints</code>/<code>pose_direction_anterior_keypoints</code> and a <code>pose_batch_size</code>, assert <code>build_engine_params</code> emits <code>POSE_IGNORE_KEYPOINTS</code> as a list of <strong>plain strings</strong> (matching the GUI <code>_selected_pose_group_keypoints</code> output — <code>main_window.py:1159</code>) and <code>POSE_SLEAP_BATCH == POSE_BATCH_SIZE</code>.</li>
+<li class="task-list-item"><label class="task-list-control"><input type="checkbox" disabled/><span class="task-list-indicator"></span></label> <strong>Step 2: Run, expect FAIL</strong> if <code>_coerce_pose_keypoint_tokens</code> emits int/str tuples or <code>POSE_SLEAP_BATCH</code> reads a separate field.</li>
+<li class="task-list-item"><label class="task-list-control"><input type="checkbox" disabled/><span class="task-list-indicator"></span></label> <strong>Step 3: Fix</strong> <code>_coerce_pose_keypoint_tokens</code> to return plain strings; make <code>POSE_SLEAP_BATCH</code> read the <code>POSE_BATCH_SIZE</code> source.</li>
+<li class="task-list-item"><label class="task-list-control"><input type="checkbox" disabled/><span class="task-list-indicator"></span></label> <strong>Step 4: Run pose-token test (PASS) + a pose-clip slice of the Task-2 oracle</strong> (<code>ant_pose_headtail</code>, <code>ant_obb_sleap</code>).</li>
+<li class="task-list-item"><label class="task-list-control"><input type="checkbox" disabled/><span class="task-list-indicator"></span></label> <strong>Step 5: Commit</strong> — <code>fix(trackerkit): pose keypoint tokens + POSE_SLEAP_BATCH parity in shared builder</code>.</li>
+</ul>
+<hr />
+<h3 id="task-6-rewrite-get_parameters_dict-as-the-thin-wrapper-the-collapse">Task 6: Rewrite <code>get_parameters_dict()</code> as the thin wrapper (the collapse)<a class="headerlink" href="#task-6-rewrite-get_parameters_dict-as-the-thin-wrapper-the-collapse" title="Permanent link">&para;</a></h3>
+<p>Replace the ~800-line widget scrape with <code>build_config_dict()</code> → <code>build_engine_params(cfg, runtime=gui_ctx)</code> → GUI-only display overlay. Unify ROI onto the shared rasterizer. Flip the Task-2 oracle from xfail to strict-pass.</p>
+<p><strong>Files:</strong>
+- Modify: <code>src/hydra_suite/trackerkit/gui/orchestrators/config.py</code> (<code>get_parameters_dict</code> body)
+- Modify: <code>tests/test_gui_cli_param_equivalence.py</code> (remove xfail)
+- Test: the full Task-2 oracle, strict, all 7 clips</p>
+<p><strong>Interfaces:</strong>
+- Consumes: <code>build_engine_params</code>, <code>RuntimeContext</code>, <code>build_roi_mask</code>, <code>DISPLAY_ONLY_KEYS</code>.
+- Produces: <code>_gui_runtime_context(self) -&gt; RuntimeContext</code> (reads <code>self._mw.current_video_path</code>-derived dirs, <code>current_individual_properties_cache_path</code>, <code>_individual_dataset_run_id</code>, fps/frame dims, and rasterizes ROI from <code>config["roi_shapes"]</code> via <code>build_roi_mask</code>) and <code>_gui_display_overlay(self) -&gt; dict</code> (the ~13 display keys from <code>SHOW_*</code> widgets, <code>slider_zoom</code>, viz/realtime/workflow-mode state, <code>TRAJECTORY_COLORS</code>).</p>
+<ul class="task-list">
+<li class="task-list-item"><label class="task-list-control"><input type="checkbox" disabled/><span class="task-list-indicator"></span></label> <strong>Step 1: Add a characterization test FIRST</strong> — before touching <code>get_parameters_dict</code>, snapshot its current full output for <code>fly_obb</code> + <code>ant_cnn_identity</code> to a fixture, so the rewrite is provably output-preserving on ALL keys (including display + runtime). Assert new output == snapshot.</li>
+<li class="task-list-item"><label class="task-list-control"><input type="checkbox" disabled/><span class="task-list-indicator"></span></label> <strong>Step 2: Run it, expect PASS</strong> (characterizing current behavior).</li>
+<li class="task-list-item"><label class="task-list-control"><input type="checkbox" disabled/><span class="task-list-indicator"></span></label> <strong>Step 3: Implement <code>_gui_runtime_context</code> and <code>_gui_display_overlay</code>.</strong> For ROI: build from <code>config["roi_shapes"]</code> via <code>build_roi_mask</code>; assert (in a sub-test) it equals the current <code>self._mw.roi_mask</code> for the gate clips before trusting the switch (spec risk item).</li>
+<li class="task-list-item"><label class="task-list-control"><input type="checkbox" disabled/><span class="task-list-indicator"></span></label> <strong>Step 4: Rewrite <code>get_parameters_dict</code>:</strong></li>
+</ul>
+<div class="language-python highlight"><pre><span></span><code><span id="__span-4-1"><a id="__codelineno-4-1" name="__codelineno-4-1" href="#__codelineno-4-1"></a><span class="k">def</span><span class="w"> </span><span class="nf">get_parameters_dict</span><span class="p">(</span><span class="bp">self</span><span class="p">):</span>
+</span><span id="__span-4-2"><a id="__codelineno-4-2" name="__codelineno-4-2" href="#__codelineno-4-2"></a>    <span class="bp">self</span><span class="o">.</span><span class="n">_mw</span><span class="o">.</span><span class="n">_commit_pending_setup_edits</span><span class="p">()</span>
+</span><span id="__span-4-3"><a id="__codelineno-4-3" name="__codelineno-4-3" href="#__codelineno-4-3"></a>    <span class="n">config</span> <span class="o">=</span> <span class="bp">self</span><span class="o">.</span><span class="n">build_config_dict</span><span class="p">()</span>
+</span><span id="__span-4-4"><a id="__codelineno-4-4" name="__codelineno-4-4" href="#__codelineno-4-4"></a>    <span class="n">params</span> <span class="o">=</span> <span class="n">build_engine_params</span><span class="p">(</span><span class="n">config</span><span class="p">,</span> <span class="n">runtime</span><span class="o">=</span><span class="bp">self</span><span class="o">.</span><span class="n">_gui_runtime_context</span><span class="p">())</span>
+</span><span id="__span-4-5"><a id="__codelineno-4-5" name="__codelineno-4-5" href="#__codelineno-4-5"></a>    <span class="n">params</span><span class="o">.</span><span class="n">update</span><span class="p">(</span><span class="bp">self</span><span class="o">.</span><span class="n">_gui_display_overlay</span><span class="p">())</span>
+</span><span id="__span-4-6"><a id="__codelineno-4-6" name="__codelineno-4-6" href="#__codelineno-4-6"></a>    <span class="k">return</span> <span class="n">params</span>
+</span></code></pre></div>
+<ul class="task-list">
+<li class="task-list-item"><label class="task-list-control"><input type="checkbox" disabled/><span class="task-list-indicator"></span></label> <strong>Step 5: Run the characterization test</strong> — every key must still match the snapshot (display + runtime + all tracking keys). Fix overlay/runtime until green. This proves the collapse is behavior-preserving for the live GUI.</li>
+<li class="task-list-item"><label class="task-list-control"><input type="checkbox" disabled/><span class="task-list-indicator"></span></label> <strong>Step 6: Remove the xfail</strong> in <code>test_gui_cli_param_equivalence.py</code>; run it strict FOREGROUND on all 7 clips — must pass (now trivially, since <code>get_parameters_dict</code> calls the shared builder).</li>
+<li class="task-list-item"><label class="task-list-control"><input type="checkbox" disabled/><span class="task-list-indicator"></span></label> <strong>Step 7: Delete the now-dead widget-scrape helpers</strong> in <code>config.py</code> orphaned by the rewrite (grep <code>src/</code> + <code>tests/</code> for each before deleting).</li>
+<li class="task-list-item"><label class="task-list-control"><input type="checkbox" disabled/><span class="task-list-indicator"></span></label> <strong>Step 8: Commit</strong> — <code>refactor(trackerkit): get_parameters_dict = build_config_dict + shared build_engine_params + display overlay</code>.</li>
+</ul>
+<hr />
+<h3 id="task-7-full-verification-re-gate-end-to-end-guicli">Task 7: Full verification — re-gate + end-to-end GUI==CLI<a class="headerlink" href="#task-7-full-verification-re-gate-end-to-end-guicli" title="Permanent link">&para;</a></h3>
+<p>Prove byte-identity of the changed params path on both platforms, and that the whole GUI path equals the CLI end-to-end for the hardest clips.</p>
+<p><strong>Files:</strong>
+- Modify: <code>tests/test_gui_session_cutover_equivalence.py</code> (extend from <code>fly_obb</code> to add <code>ant_cnn_identity</code> + <code>ant_pose_headtail</code>)</p>
+<ul class="task-list">
+<li class="task-list-item"><label class="task-list-control"><input type="checkbox" disabled/><span class="task-list-indicator"></span></label> <strong>Step 1: Extend the Slice-5 GUI==CLI final-CSV test</strong> to <code>ant_cnn_identity</code> (identity) and <code>ant_pose_headtail</code> (pose), running the SessionWorker synchronously (monkeypatch <code>.start</code>→<code>.execute</code>, per the Slice-5 test). Requires conda <code>hydra-mps</code> + <code>sleap</code> env + symlinked fixture clips. Run FOREGROUND.</li>
+<li class="task-list-item"><label class="task-list-control"><input type="checkbox" disabled/><span class="task-list-indicator"></span></label> <strong>Step 2: CLI byte-identity re-gate, MPS.</strong> Baseline worktree at the pre-slice tip (record it: <code>git rev-parse HEAD</code> before Task 1) vs current, all 7 clips: <code>REPO=$PWD WT=$PWD MAIN_SRC=&lt;baseline&gt;/src WT_SRC=$PWD/src OUT=/tmp/equiv_paramunify RUNTIME=mps bash tools/equivalence/run_matrix.sh</code>. conda MUST be active; verify <code>wc -l</code> on CSVs &gt; 1. Acceptance: pos p99≈0, θ≈0, identical row counts, all EQUIVALENT (perf flags are noise).</li>
+<li class="task-list-item"><label class="task-list-control"><input type="checkbox" disabled/><span class="task-list-indicator"></span></label> <strong>Step 3: CLI byte-identity re-gate, CUDA (mehek).</strong> Per the program's gate how-to; discount the documented cupy-vacuous pose-clip failures (MPS authoritative for pose). Acceptance identical.</li>
+<li class="task-list-item"><label class="task-list-control"><input type="checkbox" disabled/><span class="task-list-indicator"></span></label> <strong>Step 4: Confirm no <code>core/</code> change</strong> — <code>git diff &lt;baseline&gt;..HEAD --stat -- src/hydra_suite/core/</code> empty (or, if non-empty, the re-gate above covers it — state which).</li>
+<li class="task-list-item"><label class="task-list-control"><input type="checkbox" disabled/><span class="task-list-indicator"></span></label> <strong>Step 5: Update memory</strong> <code>project_headless_qt_free_program.md</code> — mark the shared param-builder DONE, note the oracle test as the durable anti-drift guard, and record both-platform re-gate results.</li>
+<li class="task-list-item"><label class="task-list-control"><input type="checkbox" disabled/><span class="task-list-indicator"></span></label> <strong>Step 6: Commit</strong> — <code>test(trackerkit): GUI==CLI end-to-end equivalence for identity + pose clips</code>.</li>
+</ul>
+<hr />
+<h2 id="self-review-notes-author">Self-review notes (author)<a class="headerlink" href="#self-review-notes-author" title="Permanent link">&para;</a></h2>
+<ul>
+<li><strong>Spec coverage:</strong> builder extraction (T1), 4 leaks (T3), full inert set (T2 oracle + T4), pose Minors (T5), GUI collapse + ROI unification (T6), three verification layers (T2 oracle + T6 characterization = layer 1; T7 step 2/3 = layer 2; T7 step 1 = layer 3). All spec sections mapped.</li>
+<li><strong>Oracle direction:</strong> the plan pins the GUI reference <code>get_parameters_dict()</code> as the correctness oracle (Global Constraints) — stricter than the tracking gate, so it forces total unification, not just gate-clip inertness. This is the key insight that makes "identical output" provable without a tracking run per key.</li>
+<li><strong>Empirical worklist:</strong> Task 2 generates <code>keydiff-baseline.txt</code> so Task 4 works from live source, not this plan's possibly-stale category list.</li>
+<li><strong>Risk of a fifth leak:</strong> handled — Task 4 Step 1 adds any newly-surfaced widget-only key via the Task-3 pattern.</li>
+</ul>
+
+
+
+
+
+
+
+
+
+
+
+
+                
+              </article>
+            </div>
+          
+          
+<script>var target=document.getElementById(location.hash.slice(1));target&&target.name&&(target.checked=target.name.startsWith("__tabbed_"))</script>
+        </div>
+        
+          <button type="button" class="md-top md-icon" data-md-component="top" hidden>
+  
+  <svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 24 24"><path d="M13 20h-2V8l-5.5 5.5-1.42-1.42L12 4.16l7.92 7.92-1.42 1.42L13 8z"/></svg>
+  Back to top
+</button>
+        
+      </main>
+      
+        <footer class="md-footer">
+  
+  <div class="md-footer-meta md-typeset">
+    <div class="md-footer-meta__inner md-grid">
+      <div class="md-copyright">
+  
+  
+    Made with
+    <a href="https://squidfunk.github.io/mkdocs-material/" target="_blank" rel="noopener">
+      Material for MkDocs
+    </a>
+  
+</div>
+      
+    </div>
+  </div>
+</footer>
+      
+    </div>
+    <div class="md-dialog" data-md-component="dialog">
+      <div class="md-dialog__inner md-typeset"></div>
+    </div>
+    
+    
+    <script id="__config" type="application/json">{"base": "../../../..", "features": ["navigation.tabs", "navigation.sections", "navigation.expand", "navigation.top", "content.code.copy", "content.action.edit", "search.suggest", "search.highlight"], "search": "../../../../assets/javascripts/workers/search.6ce7567c.min.js", "translations": {"clipboard.copied": "Copied to clipboard", "clipboard.copy": "Copy to clipboard", "search.result.more.one": "1 more on this page", "search.result.more.other": "# more on this page", "search.result.none": "No matching documents", "search.result.one": "1 matching document", "search.result.other": "# matching documents", "search.result.placeholder": "Type to start searching", "search.result.term.missing": "Missing", "select.version": "Select version"}, "version": {"default": "latest", "provider": "mike"}}</script>
+    
+    
+      <script src="../../../../assets/javascripts/bundle.83f73b43.min.js"></script>
+      
+    
+  </body>
+</html>

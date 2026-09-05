@@ -886,6 +886,39 @@
 </li>
       
         <li class="md-nav__item">
+  <a href="#vitpose-backend" class="md-nav__link">
+    <span class="md-ellipsis">
+      ViTPose Backend
+    </span>
+  </a>
+  
+    <nav class="md-nav" aria-label="ViTPose Backend">
+      <ul class="md-nav__list">
+        
+          <li class="md-nav__item">
+  <a href="#weight-acquisition" class="md-nav__link">
+    <span class="md-ellipsis">
+      Weight acquisition
+    </span>
+  </a>
+  
+</li>
+        
+          <li class="md-nav__item">
+  <a href="#training" class="md-nav__link">
+    <span class="md-ellipsis">
+      Training
+    </span>
+  </a>
+  
+</li>
+        
+      </ul>
+    </nav>
+  
+</li>
+      
+        <li class="md-nav__item">
   <a href="#key-ux-concepts" class="md-nav__link">
     <span class="md-ellipsis">
       Key UX Concepts
@@ -963,6 +996,69 @@
   
   <span class="md-ellipsis">
     DetectKit
+  </span>
+  
+
+      </a>
+    </li>
+  
+
+              
+            
+              
+                
+  
+  
+  
+  
+    <li class="md-nav__item">
+      <a href="../../runbooks/detectkit-headless-training/" class="md-nav__link">
+        
+  
+  <span class="md-ellipsis">
+    DetectKit Headless Training
+  </span>
+  
+
+      </a>
+    </li>
+  
+
+              
+            
+              
+                
+  
+  
+  
+  
+    <li class="md-nav__item">
+      <a href="../detectkit-semantic-escalation/" class="md-nav__link">
+        
+  
+  <span class="md-ellipsis">
+    DetectKit: Semantic Escalation (SAM3)
+  </span>
+  
+
+      </a>
+    </li>
+  
+
+              
+            
+              
+                
+  
+  
+  
+  
+    <li class="md-nav__item">
+      <a href="../detectkit-sahi-calibration/" class="md-nav__link">
+        
+  
+  <span class="md-ellipsis">
+    DetectKit: SAHI Calibration Profiles
   </span>
   
 
@@ -1238,6 +1334,48 @@
   
   
     <li class="md-nav__item">
+      <a href="../../developer-guide/resource-containment/" class="md-nav__link">
+        
+  
+  <span class="md-ellipsis">
+    Resource Containment
+  </span>
+  
+
+      </a>
+    </li>
+  
+
+              
+            
+              
+                
+  
+  
+  
+  
+    <li class="md-nav__item">
+      <a href="../../developer-guide/profiling/" class="md-nav__link">
+        
+  
+  <span class="md-ellipsis">
+    Profiling
+  </span>
+  
+
+      </a>
+    </li>
+  
+
+              
+            
+              
+                
+  
+  
+  
+  
+    <li class="md-nav__item">
       <a href="../../developer-guide/dependency-cuda-updates/" class="md-nav__link">
         
   
@@ -1264,6 +1402,27 @@
   
   <span class="md-ellipsis">
     Performance Tuning
+  </span>
+  
+
+      </a>
+    </li>
+  
+
+              
+            
+              
+                
+  
+  
+  
+  
+    <li class="md-nav__item">
+      <a href="../../developer-guide/inference-fast-mode/" class="md-nav__link">
+        
+  
+  <span class="md-ellipsis">
+    Inference Fast Mode
   </span>
   
 
@@ -1803,6 +1962,39 @@
 </li>
       
         <li class="md-nav__item">
+  <a href="#vitpose-backend" class="md-nav__link">
+    <span class="md-ellipsis">
+      ViTPose Backend
+    </span>
+  </a>
+  
+    <nav class="md-nav" aria-label="ViTPose Backend">
+      <ul class="md-nav__list">
+        
+          <li class="md-nav__item">
+  <a href="#weight-acquisition" class="md-nav__link">
+    <span class="md-ellipsis">
+      Weight acquisition
+    </span>
+  </a>
+  
+</li>
+        
+          <li class="md-nav__item">
+  <a href="#training" class="md-nav__link">
+    <span class="md-ellipsis">
+      Training
+    </span>
+  </a>
+  
+</li>
+        
+      </ul>
+    </nav>
+  
+</li>
+      
+        <li class="md-nav__item">
   <a href="#key-ux-concepts" class="md-nav__link">
     <span class="md-ellipsis">
       Key UX Concepts
@@ -1881,6 +2073,35 @@
 <ul>
 <li><code>/getting-started/integrations/</code></li>
 </ul>
+<h2 id="vitpose-backend">ViTPose Backend<a class="headerlink" href="#vitpose-backend" title="Permanent link">&para;</a></h2>
+<p>ViTPose is a third selectable pose backend alongside YOLO-pose and SLEAP, available in:</p>
+<ul>
+<li><strong>Predict Keypoints</strong> (current-frame inference) and <strong>Predict Dataset</strong> (batch
+  inference over the labeled frame set) in the Model group.</li>
+<li><strong>Training Runner</strong> — fine-tune a ViTPose checkpoint on the project's YOLO-pose
+  dataset; supports Use-Latest resume, a loss-curve plot, and the same evaluation
+  dashboard as the other backends.</li>
+</ul>
+<h3 id="weight-acquisition">Weight acquisition<a class="headerlink" href="#weight-acquisition" title="Permanent link">&para;</a></h3>
+<ul>
+<li><strong>Auto download:</strong> the COCO-B catalog entry (<code>vitpose-b-coco</code>) downloads
+  <code>vitpose-b.pth</code> from the <code>nielsr/vitpose-original-checkpoints</code> Hugging Face repo on
+  first use, verifies it against a pinned SHA-256, and caches it locally. This is a
+  human-COCO-17-keypoint checkpoint — a reasonable general-purpose starting point, not
+  an animal-tuned model.</li>
+<li><strong>Browse:</strong> point at any local <code>.pth</code> checkpoint — this is how you load an
+  animal-pretrained checkpoint (for example fine-tuned on AP-10K or APT-36K) or a
+  checkpoint you trained yourself with the training CLI below. Animal (AP-10K/APT-36K)
+  checkpoints are <strong>not</strong> bundled or auto-downloadable; Browse is the only path to them
+  today.</li>
+</ul>
+<h3 id="training">Training<a class="headerlink" href="#training" title="Permanent link">&para;</a></h3>
+<p>ViTPose can also be trained/fine-tuned outside the GUI via its standalone CLI:</p>
+<div class="language-bash highlight"><pre><span></span><code><span id="__span-0-1"><a id="__codelineno-0-1" name="__codelineno-0-1" href="#__codelineno-0-1"></a>python<span class="w"> </span>-m<span class="w"> </span>hydra_suite.core.individual.pose.vitpose.training<span class="w"> </span>--config<span class="w"> </span>run.json
+</span></code></pre></div>
+<p>See <a href="../../developer-guide/runtime-integration/#vitpose-training-cli">Runtime Integration Guide: ViTPose Training CLI</a>
+for the full <code>RunConfig</code> field reference (checkpoint/variant selection, dataset/output
+paths, device, epochs, batch size, and other hyperparameters).</p>
 <h2 id="key-ux-concepts">Key UX Concepts<a class="headerlink" href="#key-ux-concepts" title="Permanent link">&para;</a></h2>
 <ul>
 <li>Keypoint order is semantic and must remain stable.</li>

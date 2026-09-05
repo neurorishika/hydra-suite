@@ -1,0 +1,2693 @@
+
+<!doctype html>
+<html lang="en" class="no-js">
+  <head>
+    
+      <meta charset="utf-8">
+      <meta name="viewport" content="width=device-width,initial-scale=1">
+      
+        <meta name="description" content="User and developer documentation for HYDRA Suite">
+      
+      
+      
+        <link rel="canonical" href="https://neurorishika.github.io/hydra-suite/latest/superpowers/plans/done/2026-07-19-runtime-resolver-gen2-consolidation/">
+      
+      
+      
+      
+      <link rel="icon" href="../../../../assets/images/favicon.png">
+      <meta name="generator" content="mkdocs-1.6.1, mkdocs-material-9.5.43">
+    
+    
+      
+        <title>Runtime Resolver Gen-2 Consolidation — Implementation Plan - HYDRA Suite Docs</title>
+      
+    
+    
+      <link rel="stylesheet" href="../../../../assets/stylesheets/main.0253249f.min.css">
+      
+        
+        <link rel="stylesheet" href="../../../../assets/stylesheets/palette.06af60db.min.css">
+      
+      
+
+
+    
+    
+      
+    
+    
+      
+        
+        
+        <link rel="preconnect" href="https://fonts.gstatic.com" crossorigin>
+        <link rel="stylesheet" href="https://fonts.googleapis.com/css?family=Roboto:300,300i,400,400i,700,700i%7CRoboto+Mono:400,400i,700,700i&display=fallback">
+        <style>:root{--md-text-font:"Roboto";--md-code-font:"Roboto Mono"}</style>
+      
+    
+    
+      <link rel="stylesheet" href="../../../../assets/_mkdocstrings.css">
+    
+    <script>__md_scope=new URL("../../../..",location),__md_hash=e=>[...e].reduce(((e,_)=>(e<<5)-e+_.charCodeAt(0)),0),__md_get=(e,_=localStorage,t=__md_scope)=>JSON.parse(_.getItem(t.pathname+"."+e)),__md_set=(e,_,t=localStorage,a=__md_scope)=>{try{t.setItem(a.pathname+"."+e,JSON.stringify(_))}catch(e){}}</script>
+    
+      
+
+    
+    
+    
+  </head>
+  
+  
+    
+    
+      
+    
+    
+    
+    
+    <body dir="ltr" data-md-color-scheme="default" data-md-color-primary="blue" data-md-color-accent="light-blue">
+  
+    
+    <input class="md-toggle" data-md-toggle="drawer" type="checkbox" id="__drawer" autocomplete="off">
+    <input class="md-toggle" data-md-toggle="search" type="checkbox" id="__search" autocomplete="off">
+    <label class="md-overlay" for="__drawer"></label>
+    <div data-md-component="skip">
+      
+        
+        <a href="#runtime-resolver-gen-2-consolidation-implementation-plan" class="md-skip">
+          Skip to content
+        </a>
+      
+    </div>
+    <div data-md-component="announce">
+      
+    </div>
+    
+      <div data-md-color-scheme="default" data-md-component="outdated" hidden>
+        
+      </div>
+    
+    
+      
+
+<header class="md-header" data-md-component="header">
+  <nav class="md-header__inner md-grid" aria-label="Header">
+    <a href="../../../.." title="HYDRA Suite Docs" class="md-header__button md-logo" aria-label="HYDRA Suite Docs" data-md-component="logo">
+      
+  
+  <svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 24 24"><path d="M12 8a3 3 0 0 0 3-3 3 3 0 0 0-3-3 3 3 0 0 0-3 3 3 3 0 0 0 3 3m0 3.54C9.64 9.35 6.5 8 3 8v11c3.5 0 6.64 1.35 9 3.54 2.36-2.19 5.5-3.54 9-3.54V8c-3.5 0-6.64 1.35-9 3.54"/></svg>
+
+    </a>
+    <label class="md-header__button md-icon" for="__drawer">
+      
+      <svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 24 24"><path d="M3 6h18v2H3zm0 5h18v2H3zm0 5h18v2H3z"/></svg>
+    </label>
+    <div class="md-header__title" data-md-component="header-title">
+      <div class="md-header__ellipsis">
+        <div class="md-header__topic">
+          <span class="md-ellipsis">
+            HYDRA Suite Docs
+          </span>
+        </div>
+        <div class="md-header__topic" data-md-component="header-topic">
+          <span class="md-ellipsis">
+            
+              Runtime Resolver Gen-2 Consolidation — Implementation Plan
+            
+          </span>
+        </div>
+      </div>
+    </div>
+    
+      
+        <form class="md-header__option" data-md-component="palette">
+  
+    
+    
+    
+    <input class="md-option" data-md-color-media="(prefers-color-scheme: light)" data-md-color-scheme="default" data-md-color-primary="blue" data-md-color-accent="light-blue"  aria-label="Switch to dark mode"  type="radio" name="__palette" id="__palette_0">
+    
+      <label class="md-header__button md-icon" title="Switch to dark mode" for="__palette_1" hidden>
+        <svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 24 24"><path d="m17.75 4.09-2.53 1.94.91 3.06-2.63-1.81-2.63 1.81.91-3.06-2.53-1.94L12.44 4l1.06-3 1.06 3zm3.5 6.91-1.64 1.25.59 1.98-1.7-1.17-1.7 1.17.59-1.98L15.75 11l2.06-.05L18.5 9l.69 1.95zm-2.28 4.95c.83-.08 1.72 1.1 1.19 1.85-.32.45-.66.87-1.08 1.27C15.17 23 8.84 23 4.94 19.07c-3.91-3.9-3.91-10.24 0-14.14.4-.4.82-.76 1.27-1.08.75-.53 1.93.36 1.85 1.19-.27 2.86.69 5.83 2.89 8.02a9.96 9.96 0 0 0 8.02 2.89m-1.64 2.02a12.08 12.08 0 0 1-7.8-3.47c-2.17-2.19-3.33-5-3.49-7.82-2.81 3.14-2.7 7.96.31 10.98 3.02 3.01 7.84 3.12 10.98.31"/></svg>
+      </label>
+    
+  
+    
+    
+    
+    <input class="md-option" data-md-color-media="(prefers-color-scheme: dark)" data-md-color-scheme="slate" data-md-color-primary="blue" data-md-color-accent="light-blue"  aria-label="Switch to light mode"  type="radio" name="__palette" id="__palette_1">
+    
+      <label class="md-header__button md-icon" title="Switch to light mode" for="__palette_0" hidden>
+        <svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 24 24"><path d="M12 7a5 5 0 0 1 5 5 5 5 0 0 1-5 5 5 5 0 0 1-5-5 5 5 0 0 1 5-5m0 2a3 3 0 0 0-3 3 3 3 0 0 0 3 3 3 3 0 0 0 3-3 3 3 0 0 0-3-3m0-7 2.39 3.42C13.65 5.15 12.84 5 12 5s-1.65.15-2.39.42zM3.34 7l4.16-.35A7.2 7.2 0 0 0 5.94 8.5c-.44.74-.69 1.5-.83 2.29zm.02 10 1.76-3.77a7.131 7.131 0 0 0 2.38 4.14zM20.65 7l-1.77 3.79a7.02 7.02 0 0 0-2.38-4.15zm-.01 10-4.14.36c.59-.51 1.12-1.14 1.54-1.86.42-.73.69-1.5.83-2.29zM12 22l-2.41-3.44c.74.27 1.55.44 2.41.44.82 0 1.63-.17 2.37-.44z"/></svg>
+      </label>
+    
+  
+</form>
+      
+    
+    
+      <script>var palette=__md_get("__palette");if(palette&&palette.color){if("(prefers-color-scheme)"===palette.color.media){var media=matchMedia("(prefers-color-scheme: light)"),input=document.querySelector(media.matches?"[data-md-color-media='(prefers-color-scheme: light)']":"[data-md-color-media='(prefers-color-scheme: dark)']");palette.color.media=input.getAttribute("data-md-color-media"),palette.color.scheme=input.getAttribute("data-md-color-scheme"),palette.color.primary=input.getAttribute("data-md-color-primary"),palette.color.accent=input.getAttribute("data-md-color-accent")}for(var[key,value]of Object.entries(palette.color))document.body.setAttribute("data-md-color-"+key,value)}</script>
+    
+    
+    
+      <label class="md-header__button md-icon" for="__search">
+        
+        <svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 24 24"><path d="M9.5 3A6.5 6.5 0 0 1 16 9.5c0 1.61-.59 3.09-1.56 4.23l.27.27h.79l5 5-1.5 1.5-5-5v-.79l-.27-.27A6.52 6.52 0 0 1 9.5 16 6.5 6.5 0 0 1 3 9.5 6.5 6.5 0 0 1 9.5 3m0 2C7 5 5 7 5 9.5S7 14 9.5 14 14 12 14 9.5 12 5 9.5 5"/></svg>
+      </label>
+      <div class="md-search" data-md-component="search" role="dialog">
+  <label class="md-search__overlay" for="__search"></label>
+  <div class="md-search__inner" role="search">
+    <form class="md-search__form" name="search">
+      <input type="text" class="md-search__input" name="query" aria-label="Search" placeholder="Search" autocapitalize="off" autocorrect="off" autocomplete="off" spellcheck="false" data-md-component="search-query" required>
+      <label class="md-search__icon md-icon" for="__search">
+        
+        <svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 24 24"><path d="M9.5 3A6.5 6.5 0 0 1 16 9.5c0 1.61-.59 3.09-1.56 4.23l.27.27h.79l5 5-1.5 1.5-5-5v-.79l-.27-.27A6.52 6.52 0 0 1 9.5 16 6.5 6.5 0 0 1 3 9.5 6.5 6.5 0 0 1 9.5 3m0 2C7 5 5 7 5 9.5S7 14 9.5 14 14 12 14 9.5 12 5 9.5 5"/></svg>
+        
+        <svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 24 24"><path d="M20 11v2H8l5.5 5.5-1.42 1.42L4.16 12l7.92-7.92L13.5 5.5 8 11z"/></svg>
+      </label>
+      <nav class="md-search__options" aria-label="Search">
+        
+        <button type="reset" class="md-search__icon md-icon" title="Clear" aria-label="Clear" tabindex="-1">
+          
+          <svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 24 24"><path d="M19 6.41 17.59 5 12 10.59 6.41 5 5 6.41 10.59 12 5 17.59 6.41 19 12 13.41 17.59 19 19 17.59 13.41 12z"/></svg>
+        </button>
+      </nav>
+      
+        <div class="md-search__suggest" data-md-component="search-suggest"></div>
+      
+    </form>
+    <div class="md-search__output">
+      <div class="md-search__scrollwrap" tabindex="0" data-md-scrollfix>
+        <div class="md-search-result" data-md-component="search-result">
+          <div class="md-search-result__meta">
+            Initializing search
+          </div>
+          <ol class="md-search-result__list" role="presentation"></ol>
+        </div>
+      </div>
+    </div>
+  </div>
+</div>
+    
+    
+      <div class="md-header__source">
+        <a href="https://github.com/neurorishika/hydra-suite" title="Go to repository" class="md-source" data-md-component="source">
+  <div class="md-source__icon md-icon">
+    
+    <svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 448 512"><!--! Font Awesome Free 6.6.0 by @fontawesome - https://fontawesome.com License - https://fontawesome.com/license/free (Icons: CC BY 4.0, Fonts: SIL OFL 1.1, Code: MIT License) Copyright 2024 Fonticons, Inc.--><path d="M439.55 236.05 244 40.45a28.87 28.87 0 0 0-40.81 0l-40.66 40.63 51.52 51.52c27.06-9.14 52.68 16.77 43.39 43.68l49.66 49.66c34.23-11.8 61.18 31 35.47 56.69-26.49 26.49-70.21-2.87-56-37.34L240.22 199v121.85c25.3 12.54 22.26 41.85 9.08 55a34.34 34.34 0 0 1-48.55 0c-17.57-17.6-11.07-46.91 11.25-56v-123c-20.8-8.51-24.6-30.74-18.64-45L142.57 101 8.45 235.14a28.86 28.86 0 0 0 0 40.81l195.61 195.6a28.86 28.86 0 0 0 40.8 0l194.69-194.69a28.86 28.86 0 0 0 0-40.81"/></svg>
+  </div>
+  <div class="md-source__repository">
+    neurorishika/hydra-suite
+  </div>
+</a>
+      </div>
+    
+  </nav>
+  
+</header>
+    
+    <div class="md-container" data-md-component="container">
+      
+      
+        
+          
+            
+<nav class="md-tabs" aria-label="Tabs" data-md-component="tabs">
+  <div class="md-grid">
+    <ul class="md-tabs__list">
+      
+        
+  
+  
+  
+    <li class="md-tabs__item">
+      <a href="../../../.." class="md-tabs__link">
+        
+  
+    
+  
+  Home
+
+      </a>
+    </li>
+  
+
+      
+        
+  
+  
+  
+    
+    
+      <li class="md-tabs__item">
+        <a href="../../../../getting-started/installation/" class="md-tabs__link">
+          
+  
+  Getting Started
+
+        </a>
+      </li>
+    
+  
+
+      
+        
+  
+  
+  
+    
+    
+      <li class="md-tabs__item">
+        <a href="../../../../user-guide/overview/" class="md-tabs__link">
+          
+  
+  User Guide
+
+        </a>
+      </li>
+    
+  
+
+      
+        
+  
+  
+  
+    
+    
+      <li class="md-tabs__item">
+        <a href="../../../../developer-guide/architecture/" class="md-tabs__link">
+          
+  
+  Developer Guide
+
+        </a>
+      </li>
+    
+  
+
+      
+        
+  
+  
+  
+    
+    
+      <li class="md-tabs__item">
+        <a href="../../../../reference/api-index/" class="md-tabs__link">
+          
+  
+  Reference
+
+        </a>
+      </li>
+    
+  
+
+      
+    </ul>
+  </div>
+</nav>
+          
+        
+      
+      <main class="md-main" data-md-component="main">
+        <div class="md-main__inner md-grid">
+          
+            
+              
+              <div class="md-sidebar md-sidebar--primary" data-md-component="sidebar" data-md-type="navigation" >
+                <div class="md-sidebar__scrollwrap">
+                  <div class="md-sidebar__inner">
+                    
+
+
+  
+
+
+<nav class="md-nav md-nav--primary md-nav--lifted" aria-label="Navigation" data-md-level="0">
+  <label class="md-nav__title" for="__drawer">
+    <a href="../../../.." title="HYDRA Suite Docs" class="md-nav__button md-logo" aria-label="HYDRA Suite Docs" data-md-component="logo">
+      
+  
+  <svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 24 24"><path d="M12 8a3 3 0 0 0 3-3 3 3 0 0 0-3-3 3 3 0 0 0-3 3 3 3 0 0 0 3 3m0 3.54C9.64 9.35 6.5 8 3 8v11c3.5 0 6.64 1.35 9 3.54 2.36-2.19 5.5-3.54 9-3.54V8c-3.5 0-6.64 1.35-9 3.54"/></svg>
+
+    </a>
+    HYDRA Suite Docs
+  </label>
+  
+    <div class="md-nav__source">
+      <a href="https://github.com/neurorishika/hydra-suite" title="Go to repository" class="md-source" data-md-component="source">
+  <div class="md-source__icon md-icon">
+    
+    <svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 448 512"><!--! Font Awesome Free 6.6.0 by @fontawesome - https://fontawesome.com License - https://fontawesome.com/license/free (Icons: CC BY 4.0, Fonts: SIL OFL 1.1, Code: MIT License) Copyright 2024 Fonticons, Inc.--><path d="M439.55 236.05 244 40.45a28.87 28.87 0 0 0-40.81 0l-40.66 40.63 51.52 51.52c27.06-9.14 52.68 16.77 43.39 43.68l49.66 49.66c34.23-11.8 61.18 31 35.47 56.69-26.49 26.49-70.21-2.87-56-37.34L240.22 199v121.85c25.3 12.54 22.26 41.85 9.08 55a34.34 34.34 0 0 1-48.55 0c-17.57-17.6-11.07-46.91 11.25-56v-123c-20.8-8.51-24.6-30.74-18.64-45L142.57 101 8.45 235.14a28.86 28.86 0 0 0 0 40.81l195.61 195.6a28.86 28.86 0 0 0 40.8 0l194.69-194.69a28.86 28.86 0 0 0 0-40.81"/></svg>
+  </div>
+  <div class="md-source__repository">
+    neurorishika/hydra-suite
+  </div>
+</a>
+    </div>
+  
+  <ul class="md-nav__list" data-md-scrollfix>
+    
+      
+      
+  
+  
+  
+  
+    <li class="md-nav__item">
+      <a href="../../../.." class="md-nav__link">
+        
+  
+  <span class="md-ellipsis">
+    Home
+  </span>
+  
+
+      </a>
+    </li>
+  
+
+    
+      
+      
+  
+  
+  
+  
+    
+    
+    
+      
+      
+        
+      
+    
+    
+    <li class="md-nav__item md-nav__item--nested">
+      
+        
+        
+          
+        
+        <input class="md-nav__toggle md-toggle md-toggle--indeterminate" type="checkbox" id="__nav_2" >
+        
+          
+          <label class="md-nav__link" for="__nav_2" id="__nav_2_label" tabindex="0">
+            
+  
+  <span class="md-ellipsis">
+    Getting Started
+  </span>
+  
+
+            <span class="md-nav__icon md-icon"></span>
+          </label>
+        
+        <nav class="md-nav" data-md-level="1" aria-labelledby="__nav_2_label" aria-expanded="false">
+          <label class="md-nav__title" for="__nav_2">
+            <span class="md-nav__icon md-icon"></span>
+            Getting Started
+          </label>
+          <ul class="md-nav__list" data-md-scrollfix>
+            
+              
+                
+  
+  
+  
+  
+    <li class="md-nav__item">
+      <a href="../../../../getting-started/installation/" class="md-nav__link">
+        
+  
+  <span class="md-ellipsis">
+    Installation
+  </span>
+  
+
+      </a>
+    </li>
+  
+
+              
+            
+              
+                
+  
+  
+  
+  
+    <li class="md-nav__item">
+      <a href="../../../../getting-started/environments/" class="md-nav__link">
+        
+  
+  <span class="md-ellipsis">
+    Environments and Makefile
+  </span>
+  
+
+      </a>
+    </li>
+  
+
+              
+            
+              
+                
+  
+  
+  
+  
+    <li class="md-nav__item">
+      <a href="../../../../getting-started/integrations/" class="md-nav__link">
+        
+  
+  <span class="md-ellipsis">
+    Integrations
+  </span>
+  
+
+      </a>
+    </li>
+  
+
+              
+            
+              
+                
+  
+  
+  
+  
+    <li class="md-nav__item">
+      <a href="../../../../getting-started/quickstart-hydra/" class="md-nav__link">
+        
+  
+  <span class="md-ellipsis">
+    Quickstart (TrackerKit)
+  </span>
+  
+
+      </a>
+    </li>
+  
+
+              
+            
+              
+                
+  
+  
+  
+  
+    <li class="md-nav__item">
+      <a href="../../../../getting-started/quickstart-posekit/" class="md-nav__link">
+        
+  
+  <span class="md-ellipsis">
+    Quickstart (PoseKit)
+  </span>
+  
+
+      </a>
+    </li>
+  
+
+              
+            
+              
+                
+  
+  
+  
+  
+    <li class="md-nav__item">
+      <a href="../../../../getting-started/platforms/" class="md-nav__link">
+        
+  
+  <span class="md-ellipsis">
+    Platform Notes
+  </span>
+  
+
+      </a>
+    </li>
+  
+
+              
+            
+          </ul>
+        </nav>
+      
+    </li>
+  
+
+    
+      
+      
+  
+  
+  
+  
+    
+    
+    
+      
+      
+        
+      
+    
+    
+    <li class="md-nav__item md-nav__item--nested">
+      
+        
+        
+          
+        
+        <input class="md-nav__toggle md-toggle md-toggle--indeterminate" type="checkbox" id="__nav_3" >
+        
+          
+          <label class="md-nav__link" for="__nav_3" id="__nav_3_label" tabindex="0">
+            
+  
+  <span class="md-ellipsis">
+    User Guide
+  </span>
+  
+
+            <span class="md-nav__icon md-icon"></span>
+          </label>
+        
+        <nav class="md-nav" data-md-level="1" aria-labelledby="__nav_3_label" aria-expanded="false">
+          <label class="md-nav__title" for="__nav_3">
+            <span class="md-nav__icon md-icon"></span>
+            User Guide
+          </label>
+          <ul class="md-nav__list" data-md-scrollfix>
+            
+              
+                
+  
+  
+  
+  
+    <li class="md-nav__item">
+      <a href="../../../../user-guide/overview/" class="md-nav__link">
+        
+  
+  <span class="md-ellipsis">
+    Overview
+  </span>
+  
+
+      </a>
+    </li>
+  
+
+              
+            
+              
+                
+  
+  
+  
+  
+    <li class="md-nav__item">
+      <a href="../../../../user-guide/workflow/" class="md-nav__link">
+        
+  
+  <span class="md-ellipsis">
+    End-to-End Workflow
+  </span>
+  
+
+      </a>
+    </li>
+  
+
+              
+            
+              
+                
+  
+  
+  
+  
+    <li class="md-nav__item">
+      <a href="../../../../user-guide/detection-modes/" class="md-nav__link">
+        
+  
+  <span class="md-ellipsis">
+    Detection Modes
+  </span>
+  
+
+      </a>
+    </li>
+  
+
+              
+            
+              
+                
+  
+  
+  
+  
+    <li class="md-nav__item">
+      <a href="../../../../user-guide/tracking-and-merging/" class="md-nav__link">
+        
+  
+  <span class="md-ellipsis">
+    Tracking and Merging
+  </span>
+  
+
+      </a>
+    </li>
+  
+
+              
+            
+              
+                
+  
+  
+  
+  
+    <li class="md-nav__item">
+      <a href="../../../../user-guide/post-processing/" class="md-nav__link">
+        
+  
+  <span class="md-ellipsis">
+    Post-processing
+  </span>
+  
+
+      </a>
+    </li>
+  
+
+              
+            
+              
+                
+  
+  
+  
+  
+    <li class="md-nav__item">
+      <a href="../../../../user-guide/configuration-reference/" class="md-nav__link">
+        
+  
+  <span class="md-ellipsis">
+    Configuration Reference
+  </span>
+  
+
+      </a>
+    </li>
+  
+
+              
+            
+              
+                
+  
+  
+  
+  
+    <li class="md-nav__item">
+      <a href="../../../../user-guide/compute-runtimes/" class="md-nav__link">
+        
+  
+  <span class="md-ellipsis">
+    Compute Runtimes
+  </span>
+  
+
+      </a>
+    </li>
+  
+
+              
+            
+              
+                
+  
+  
+  
+  
+    <li class="md-nav__item">
+      <a href="../../../../user-guide/outputs-and-csv-schema/" class="md-nav__link">
+        
+  
+  <span class="md-ellipsis">
+    Outputs and CSV Schema
+  </span>
+  
+
+      </a>
+    </li>
+  
+
+              
+            
+              
+                
+  
+  
+  
+  
+    <li class="md-nav__item">
+      <a href="../../../../user-guide/dataset-generation/" class="md-nav__link">
+        
+  
+  <span class="md-ellipsis">
+    Dataset Generation
+  </span>
+  
+
+      </a>
+    </li>
+  
+
+              
+            
+              
+                
+  
+  
+  
+  
+    <li class="md-nav__item">
+      <a href="../../../../user-guide/individual-analysis/" class="md-nav__link">
+        
+  
+  <span class="md-ellipsis">
+    Individual Analysis
+  </span>
+  
+
+      </a>
+    </li>
+  
+
+              
+            
+              
+                
+  
+  
+  
+  
+    <li class="md-nav__item">
+      <a href="../../../../user-guide/posekit/" class="md-nav__link">
+        
+  
+  <span class="md-ellipsis">
+    PoseKit
+  </span>
+  
+
+      </a>
+    </li>
+  
+
+              
+            
+              
+                
+  
+  
+  
+  
+    <li class="md-nav__item">
+      <a href="../../../../user-guide/classkit/" class="md-nav__link">
+        
+  
+  <span class="md-ellipsis">
+    ClassKit
+  </span>
+  
+
+      </a>
+    </li>
+  
+
+              
+            
+              
+                
+  
+  
+  
+  
+    <li class="md-nav__item">
+      <a href="../../../../user-guide/detectkit/" class="md-nav__link">
+        
+  
+  <span class="md-ellipsis">
+    DetectKit
+  </span>
+  
+
+      </a>
+    </li>
+  
+
+              
+            
+              
+                
+  
+  
+  
+  
+    <li class="md-nav__item">
+      <a href="../../../../runbooks/detectkit-headless-training/" class="md-nav__link">
+        
+  
+  <span class="md-ellipsis">
+    DetectKit Headless Training
+  </span>
+  
+
+      </a>
+    </li>
+  
+
+              
+            
+              
+                
+  
+  
+  
+  
+    <li class="md-nav__item">
+      <a href="../../../../user-guide/detectkit-semantic-escalation/" class="md-nav__link">
+        
+  
+  <span class="md-ellipsis">
+    DetectKit: Semantic Escalation (SAM3)
+  </span>
+  
+
+      </a>
+    </li>
+  
+
+              
+            
+              
+                
+  
+  
+  
+  
+    <li class="md-nav__item">
+      <a href="../../../../user-guide/detectkit-sahi-calibration/" class="md-nav__link">
+        
+  
+  <span class="md-ellipsis">
+    DetectKit: SAHI Calibration Profiles
+  </span>
+  
+
+      </a>
+    </li>
+  
+
+              
+            
+              
+                
+  
+  
+  
+  
+    <li class="md-nav__item">
+      <a href="../../../../user-guide/filterkit/" class="md-nav__link">
+        
+  
+  <span class="md-ellipsis">
+    FilterKit
+  </span>
+  
+
+      </a>
+    </li>
+  
+
+              
+            
+              
+                
+  
+  
+  
+  
+    <li class="md-nav__item">
+      <a href="../../../../user-guide/refinekit/" class="md-nav__link">
+        
+  
+  <span class="md-ellipsis">
+    RefineKit
+  </span>
+  
+
+      </a>
+    </li>
+  
+
+              
+            
+              
+                
+  
+  
+  
+  
+    <li class="md-nav__item">
+      <a href="../../../../user-guide/troubleshooting/" class="md-nav__link">
+        
+  
+  <span class="md-ellipsis">
+    Troubleshooting
+  </span>
+  
+
+      </a>
+    </li>
+  
+
+              
+            
+          </ul>
+        </nav>
+      
+    </li>
+  
+
+    
+      
+      
+  
+  
+  
+  
+    
+    
+    
+      
+      
+        
+      
+    
+    
+    <li class="md-nav__item md-nav__item--nested">
+      
+        
+        
+          
+        
+        <input class="md-nav__toggle md-toggle md-toggle--indeterminate" type="checkbox" id="__nav_4" >
+        
+          
+          <label class="md-nav__link" for="__nav_4" id="__nav_4_label" tabindex="0">
+            
+  
+  <span class="md-ellipsis">
+    Developer Guide
+  </span>
+  
+
+            <span class="md-nav__icon md-icon"></span>
+          </label>
+        
+        <nav class="md-nav" data-md-level="1" aria-labelledby="__nav_4_label" aria-expanded="false">
+          <label class="md-nav__title" for="__nav_4">
+            <span class="md-nav__icon md-icon"></span>
+            Developer Guide
+          </label>
+          <ul class="md-nav__list" data-md-scrollfix>
+            
+              
+                
+  
+  
+  
+  
+    <li class="md-nav__item">
+      <a href="../../../../developer-guide/architecture/" class="md-nav__link">
+        
+  
+  <span class="md-ellipsis">
+    Architecture
+  </span>
+  
+
+      </a>
+    </li>
+  
+
+              
+            
+              
+                
+  
+  
+  
+  
+    <li class="md-nav__item">
+      <a href="../../../../developer-guide/module-map/" class="md-nav__link">
+        
+  
+  <span class="md-ellipsis">
+    Module Map
+  </span>
+  
+
+      </a>
+    </li>
+  
+
+              
+            
+              
+                
+  
+  
+  
+  
+    <li class="md-nav__item">
+      <a href="../../../../developer-guide/data-flow/" class="md-nav__link">
+        
+  
+  <span class="md-ellipsis">
+    Data Flow
+  </span>
+  
+
+      </a>
+    </li>
+  
+
+              
+            
+              
+                
+  
+  
+  
+  
+    <li class="md-nav__item">
+      <a href="../../../../developer-guide/tracking-algorithm-deep-dive/" class="md-nav__link">
+        
+  
+  <span class="md-ellipsis">
+    Tracking Algorithm Deep Dive
+  </span>
+  
+
+      </a>
+    </li>
+  
+
+              
+            
+              
+                
+  
+  
+  
+  
+    <li class="md-nav__item">
+      <a href="../../../../developer-guide/tracking-optimization/" class="md-nav__link">
+        
+  
+  <span class="md-ellipsis">
+    Tracking Optimization
+  </span>
+  
+
+      </a>
+    </li>
+  
+
+              
+            
+              
+                
+  
+  
+  
+  
+    <li class="md-nav__item">
+      <a href="../../../../developer-guide/gpu-backends/" class="md-nav__link">
+        
+  
+  <span class="md-ellipsis">
+    GPU Backends
+  </span>
+  
+
+      </a>
+    </li>
+  
+
+              
+            
+              
+                
+  
+  
+  
+  
+    <li class="md-nav__item">
+      <a href="../../../../developer-guide/runtime-integration/" class="md-nav__link">
+        
+  
+  <span class="md-ellipsis">
+    Runtime Integration
+  </span>
+  
+
+      </a>
+    </li>
+  
+
+              
+            
+              
+                
+  
+  
+  
+  
+    <li class="md-nav__item">
+      <a href="../../../../developer-guide/resource-containment/" class="md-nav__link">
+        
+  
+  <span class="md-ellipsis">
+    Resource Containment
+  </span>
+  
+
+      </a>
+    </li>
+  
+
+              
+            
+              
+                
+  
+  
+  
+  
+    <li class="md-nav__item">
+      <a href="../../../../developer-guide/profiling/" class="md-nav__link">
+        
+  
+  <span class="md-ellipsis">
+    Profiling
+  </span>
+  
+
+      </a>
+    </li>
+  
+
+              
+            
+              
+                
+  
+  
+  
+  
+    <li class="md-nav__item">
+      <a href="../../../../developer-guide/dependency-cuda-updates/" class="md-nav__link">
+        
+  
+  <span class="md-ellipsis">
+    CUDA Dependency Updates
+  </span>
+  
+
+      </a>
+    </li>
+  
+
+              
+            
+              
+                
+  
+  
+  
+  
+    <li class="md-nav__item">
+      <a href="../../../../developer-guide/performance-tuning/" class="md-nav__link">
+        
+  
+  <span class="md-ellipsis">
+    Performance Tuning
+  </span>
+  
+
+      </a>
+    </li>
+  
+
+              
+            
+              
+                
+  
+  
+  
+  
+    <li class="md-nav__item">
+      <a href="../../../../developer-guide/inference-fast-mode/" class="md-nav__link">
+        
+  
+  <span class="md-ellipsis">
+    Inference Fast Mode
+  </span>
+  
+
+      </a>
+    </li>
+  
+
+              
+            
+              
+                
+  
+  
+  
+  
+    <li class="md-nav__item">
+      <a href="../../../../developer-guide/confidence-metrics/" class="md-nav__link">
+        
+  
+  <span class="md-ellipsis">
+    Confidence Metrics
+  </span>
+  
+
+      </a>
+    </li>
+  
+
+              
+            
+              
+                
+  
+  
+  
+  
+    <li class="md-nav__item">
+      <a href="../../../../developer-guide/extending-detection/" class="md-nav__link">
+        
+  
+  <span class="md-ellipsis">
+    Extending Detection
+  </span>
+  
+
+      </a>
+    </li>
+  
+
+              
+            
+              
+                
+  
+  
+  
+  
+    <li class="md-nav__item">
+      <a href="../../../../developer-guide/extending-identity/" class="md-nav__link">
+        
+  
+  <span class="md-ellipsis">
+    Extending Identity
+  </span>
+  
+
+      </a>
+    </li>
+  
+
+              
+            
+              
+                
+  
+  
+  
+  
+    <li class="md-nav__item">
+      <a href="../../../../developer-guide/code-health/" class="md-nav__link">
+        
+  
+  <span class="md-ellipsis">
+    Code Health & Auditing
+  </span>
+  
+
+      </a>
+    </li>
+  
+
+              
+            
+              
+                
+  
+  
+  
+  
+    <li class="md-nav__item">
+      <a href="../../../../developer-guide/publishing/" class="md-nav__link">
+        
+  
+  <span class="md-ellipsis">
+    Publishing
+  </span>
+  
+
+      </a>
+    </li>
+  
+
+              
+            
+              
+                
+  
+  
+  
+  
+    <li class="md-nav__item">
+      <a href="../../../../developer-guide/contributing/" class="md-nav__link">
+        
+  
+  <span class="md-ellipsis">
+    Contributing
+  </span>
+  
+
+      </a>
+    </li>
+  
+
+              
+            
+          </ul>
+        </nav>
+      
+    </li>
+  
+
+    
+      
+      
+  
+  
+  
+  
+    
+    
+    
+      
+      
+        
+      
+    
+    
+    <li class="md-nav__item md-nav__item--nested">
+      
+        
+        
+          
+        
+        <input class="md-nav__toggle md-toggle md-toggle--indeterminate" type="checkbox" id="__nav_5" >
+        
+          
+          <label class="md-nav__link" for="__nav_5" id="__nav_5_label" tabindex="0">
+            
+  
+  <span class="md-ellipsis">
+    Reference
+  </span>
+  
+
+            <span class="md-nav__icon md-icon"></span>
+          </label>
+        
+        <nav class="md-nav" data-md-level="1" aria-labelledby="__nav_5_label" aria-expanded="false">
+          <label class="md-nav__title" for="__nav_5">
+            <span class="md-nav__icon md-icon"></span>
+            Reference
+          </label>
+          <ul class="md-nav__list" data-md-scrollfix>
+            
+              
+                
+  
+  
+  
+  
+    <li class="md-nav__item">
+      <a href="../../../../reference/api-index/" class="md-nav__link">
+        
+  
+  <span class="md-ellipsis">
+    API Index
+  </span>
+  
+
+      </a>
+    </li>
+  
+
+              
+            
+              
+                
+  
+  
+  
+  
+    <li class="md-nav__item">
+      <a href="../../../../reference/ui-components-hydra/" class="md-nav__link">
+        
+  
+  <span class="md-ellipsis">
+    UI Components (TrackerKit)
+  </span>
+  
+
+      </a>
+    </li>
+  
+
+              
+            
+              
+                
+  
+  
+  
+  
+    <li class="md-nav__item">
+      <a href="../../../../reference/ui-components-posekit/" class="md-nav__link">
+        
+  
+  <span class="md-ellipsis">
+    UI Components (PoseKit)
+  </span>
+  
+
+      </a>
+    </li>
+  
+
+              
+            
+              
+                
+  
+  
+  
+  
+    <li class="md-nav__item">
+      <a href="../../../../reference/api-app/" class="md-nav__link">
+        
+  
+  <span class="md-ellipsis">
+    API (Launcher)
+  </span>
+  
+
+      </a>
+    </li>
+  
+
+              
+            
+              
+                
+  
+  
+  
+  
+    <li class="md-nav__item">
+      <a href="../../../../reference/api-core/" class="md-nav__link">
+        
+  
+  <span class="md-ellipsis">
+    API (Core)
+  </span>
+  
+
+      </a>
+    </li>
+  
+
+              
+            
+              
+                
+  
+  
+  
+  
+    <li class="md-nav__item">
+      <a href="../../../../reference/api-data/" class="md-nav__link">
+        
+  
+  <span class="md-ellipsis">
+    API (Data)
+  </span>
+  
+
+      </a>
+    </li>
+  
+
+              
+            
+              
+                
+  
+  
+  
+  
+    <li class="md-nav__item">
+      <a href="../../../../reference/api-gui/" class="md-nav__link">
+        
+  
+  <span class="md-ellipsis">
+    API (TrackerKit GUI)
+  </span>
+  
+
+      </a>
+    </li>
+  
+
+              
+            
+              
+                
+  
+  
+  
+  
+    <li class="md-nav__item">
+      <a href="../../../../reference/api-widgets/" class="md-nav__link">
+        
+  
+  <span class="md-ellipsis">
+    API (Widgets)
+  </span>
+  
+
+      </a>
+    </li>
+  
+
+              
+            
+              
+                
+  
+  
+  
+  
+    <li class="md-nav__item">
+      <a href="../../../../reference/api-posekit/" class="md-nav__link">
+        
+  
+  <span class="md-ellipsis">
+    API (PoseKit)
+  </span>
+  
+
+      </a>
+    </li>
+  
+
+              
+            
+              
+                
+  
+  
+  
+  
+    <li class="md-nav__item">
+      <a href="../../../../reference/api-utils/" class="md-nav__link">
+        
+  
+  <span class="md-ellipsis">
+    API (Utils)
+  </span>
+  
+
+      </a>
+    </li>
+  
+
+              
+            
+              
+                
+  
+  
+  
+  
+    <li class="md-nav__item">
+      <a href="../../../../reference/cli-reference/" class="md-nav__link">
+        
+  
+  <span class="md-ellipsis">
+    CLI Reference
+  </span>
+  
+
+      </a>
+    </li>
+  
+
+              
+            
+              
+                
+  
+  
+  
+  
+    <li class="md-nav__item">
+      <a href="../../../../reference/technical-reference/" class="md-nav__link">
+        
+  
+  <span class="md-ellipsis">
+    Technical Reference (LaTeX)
+  </span>
+  
+
+      </a>
+    </li>
+  
+
+              
+            
+              
+                
+  
+  
+  
+  
+    <li class="md-nav__item">
+      <a href="../../../../reference/changelog/" class="md-nav__link">
+        
+  
+  <span class="md-ellipsis">
+    Changelog
+  </span>
+  
+
+      </a>
+    </li>
+  
+
+              
+            
+              
+                
+  
+  
+  
+  
+    <li class="md-nav__item">
+      <a href="../../../../reference/faq/" class="md-nav__link">
+        
+  
+  <span class="md-ellipsis">
+    FAQ
+  </span>
+  
+
+      </a>
+    </li>
+  
+
+              
+            
+          </ul>
+        </nav>
+      
+    </li>
+  
+
+    
+  </ul>
+</nav>
+                  </div>
+                </div>
+              </div>
+            
+            
+              
+              <div class="md-sidebar md-sidebar--secondary" data-md-component="sidebar" data-md-type="toc" >
+                <div class="md-sidebar__scrollwrap">
+                  <div class="md-sidebar__inner">
+                    
+
+<nav class="md-nav md-nav--secondary" aria-label="Table of contents">
+  
+  
+  
+    
+  
+  
+    <label class="md-nav__title" for="__toc">
+      <span class="md-nav__icon md-icon"></span>
+      Table of contents
+    </label>
+    <ul class="md-nav__list" data-md-component="toc" data-md-scrollfix>
+      
+        <li class="md-nav__item">
+  <a href="#global-constraints" class="md-nav__link">
+    <span class="md-ellipsis">
+      Global Constraints
+    </span>
+  </a>
+  
+</li>
+      
+        <li class="md-nav__item">
+  <a href="#file-structure" class="md-nav__link">
+    <span class="md-ellipsis">
+      File Structure
+    </span>
+  </a>
+  
+</li>
+      
+        <li class="md-nav__item">
+  <a href="#task-1-golden-characterization-test-safety-net" class="md-nav__link">
+    <span class="md-ellipsis">
+      Task 1: Golden characterization test (safety net)
+    </span>
+  </a>
+  
+</li>
+      
+        <li class="md-nav__item">
+  <a href="#task-2-execution_providers_forresolved-alongside-the-string-api" class="md-nav__link">
+    <span class="md-ellipsis">
+      Task 2: execution_providers_for(resolved) alongside the string API
+    </span>
+  </a>
+  
+</li>
+      
+        <li class="md-nav__item">
+  <a href="#task-3-runtimecontextresolved-field" class="md-nav__link">
+    <span class="md-ellipsis">
+      Task 3: RuntimeContext.resolved field
+    </span>
+  </a>
+  
+</li>
+      
+        <li class="md-nav__item">
+  <a href="#task-4-rewrite-backend-stage-predicates-onto-resolvedbackend" class="md-nav__link">
+    <span class="md-ellipsis">
+      Task 4: Rewrite backend + stage predicates onto ResolvedBackend
+    </span>
+  </a>
+  
+</li>
+      
+        <li class="md-nav__item">
+  <a href="#task-5-delete-runtime_to_compute_runtime-and-resolve_compute_runtime" class="md-nav__link">
+    <span class="md-ellipsis">
+      Task 5: Delete runtime_to_compute_runtime and resolve_compute_runtime
+    </span>
+  </a>
+  
+</li>
+      
+        <li class="md-nav__item">
+  <a href="#task-6-retire-the-compute_runtime-params-dict-write-channel" class="md-nav__link">
+    <span class="md-ellipsis">
+      Task 6: Retire the COMPUTE_RUNTIME params-dict write channel
+    </span>
+  </a>
+  
+</li>
+      
+        <li class="md-nav__item">
+  <a href="#task-7-resolve-tier-at-the-propertiescachepy-boundary-drop-pose-flavor-fields" class="md-nav__link">
+    <span class="md-ellipsis">
+      Task 7: Resolve tier at the properties/cache.py boundary; drop pose-flavor fields
+    </span>
+  </a>
+  
+</li>
+      
+        <li class="md-nav__item">
+  <a href="#task-8-delete-derive_pose_runtime_settings-infer_compute_runtime_from_legacy-producers" class="md-nav__link">
+    <span class="md-ellipsis">
+      Task 8: Delete derive_pose_runtime_settings + infer_compute_runtime_from_legacy producers
+    </span>
+  </a>
+  
+</li>
+      
+        <li class="md-nav__item">
+  <a href="#task-9-rewrite-cuda_runtimescpu_runtimes-consumers-onto-resolvedbackend" class="md-nav__link">
+    <span class="md-ellipsis">
+      Task 9: Rewrite CUDA_RUNTIMES/CPU_RUNTIMES consumers onto ResolvedBackend
+    </span>
+  </a>
+  
+</li>
+      
+        <li class="md-nav__item">
+  <a href="#task-10-loud-missing-tier-error-drop-per-stage-compute_runtime-fields-computeruntime-type" class="md-nav__link">
+    <span class="md-ellipsis">
+      Task 10: Loud missing-tier error; drop per-stage compute_runtime fields + ComputeRuntime type
+    </span>
+  </a>
+  
+</li>
+      
+        <li class="md-nav__item">
+  <a href="#task-11-one-shot-migration-script" class="md-nav__link">
+    <span class="md-ellipsis">
+      Task 11: One-shot migration script
+    </span>
+  </a>
+  
+</li>
+      
+        <li class="md-nav__item">
+  <a href="#task-12-delete-legacy-surface-rename-module-to-onnx_providerspy" class="md-nav__link">
+    <span class="md-ellipsis">
+      Task 12: Delete legacy surface; rename module to onnx_providers.py
+    </span>
+  </a>
+  
+</li>
+      
+        <li class="md-nav__item">
+  <a href="#task-13-gui-display-cleanup-final-verification" class="md-nav__link">
+    <span class="md-ellipsis">
+      Task 13: GUI display cleanup; final verification
+    </span>
+  </a>
+  
+</li>
+      
+        <li class="md-nav__item">
+  <a href="#self-review-notes" class="md-nav__link">
+    <span class="md-ellipsis">
+      Self-Review Notes
+    </span>
+  </a>
+  
+</li>
+      
+    </ul>
+  
+</nav>
+                  </div>
+                </div>
+              </div>
+            
+          
+          
+            <div class="md-content" data-md-component="content">
+              <article class="md-content__inner md-typeset">
+                
+                  
+
+  
+    <a href="https://github.com/neurorishika/hydra-suite/edit/main/docs/superpowers/plans/done/2026-07-19-runtime-resolver-gen2-consolidation.md" title="Edit this page" class="md-content__button md-icon">
+      
+      <svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 24 24"><path d="M10 20H6V4h7v5h5v3.1l2-2V8l-6-6H6c-1.1 0-2 .9-2 2v16c0 1.1.9 2 2 2h4zm10.2-7c.1 0 .3.1.4.2l1.3 1.3c.2.2.2.6 0 .8l-1 1-2.1-2.1 1-1c.1-.1.2-.2.4-.2m0 3.9L14.1 23H12v-2.1l6.1-6.1z"/></svg>
+    </a>
+  
+  
+
+
+<h1 id="runtime-resolver-gen-2-consolidation-implementation-plan">Runtime Resolver Gen-2 Consolidation — Implementation Plan<a class="headerlink" href="#runtime-resolver-gen-2-consolidation-implementation-plan" title="Permanent link">&para;</a></h1>
+<blockquote>
+<p><strong>For agentic workers:</strong> REQUIRED SUB-SKILL: Use superpowers:subagent-driven-development (recommended) or superpowers:executing-plans to implement this plan task-by-task. Steps use checkbox (<code>- [ ]</code>) syntax for tracking.</p>
+</blockquote>
+<p><strong>Goal:</strong> Collapse the two-generation runtime system (5 representations, 6 bridges) down to the single Gen-2 path: <code>runtime_tier</code> → <code>RuntimeResolver.resolve</code> → <code>ResolvedBackend</code>, consumed directly by backends, with all legacy string vocabulary and migration logic deleted from <code>src/</code>.</p>
+<p><strong>Architecture:</strong> <code>ResolvedBackend(backend, device, used_fallback)</code> becomes the one runtime value that flows. Backend predicates are rewritten from string-set membership (<code>rt in ("cuda","onnx_cuda","tensorrt")</code>) to field checks (<code>resolved.device == "cuda"</code>) — a faithful translation because the resolver only ever emits <code>{cpu,mps,cuda,tensorrt,coreml}</code>, so <code>onnx_cuda</code>/<code>onnx_cpu</code> string cases simply never occur. A one-shot offline script migrates stored configs; loading a config with no <code>runtime_tier</code> becomes a loud error.</p>
+<p><strong>Tech Stack:</strong> Python 3, dataclasses, pytest, PySide6 (GUI, untouched in behavior), ONNX Runtime execution providers, PyTorch / TensorRT / CoreML backends.</p>
+<h2 id="global-constraints">Global Constraints<a class="headerlink" href="#global-constraints" title="Permanent link">&para;</a></h2>
+<ul>
+<li>Runtime tiers are exactly <code>{cpu, gpu, gpu_fast}</code> — do not add or rename.</li>
+<li>Resolver output backends are exactly <code>{torch, tensorrt, coreml}</code>; devices exactly <code>{cpu, cuda, mps}</code>. Do not introduce new values.</li>
+<li>Core/Runtime/Data/Training/Utils must never import from any app-layer package (trackerkit, posekit, etc.) or from Integrations. (CLAUDE.md dependency direction.)</li>
+<li>No change to public CLI entry points or inter-kit APIs.</li>
+<li>Tier semantics are preserved exactly: the Phase-0 golden table <code>(tier × platform × stage × artifact) → ResolvedBackend</code> must be byte-identical before and after every task in Tasks 2–13.</li>
+<li>Commit as the configured git user; do NOT add a <code>Co-Authored-By: Claude</code> trailer.</li>
+<li><code>make pytest</code> must pass at the end of every task. Run <code>make format</code> before each commit.</li>
+<li>Platform is injected via <code>PlatformInfo(has_cuda, has_mps)</code> — all four host shapes (neither, cuda-only, mps-only, both) are testable on any machine; never gate tests on the real host.</li>
+</ul>
+<hr />
+<h2 id="file-structure">File Structure<a class="headerlink" href="#file-structure" title="Permanent link">&para;</a></h2>
+<p><strong>New files</strong>
+- <code>tests/runtime/test_resolver_golden.py</code> — the behavior-preservation golden table (Task 1).
+- <code>scripts/migrate_runtime_config.py</code> — one-shot offline config/preset migrator; self-contained, imports nothing being deleted (Task 11).
+- <code>tests/scripts/test_migrate_runtime_config.py</code> — migration-script fixtures (Task 11).
+- <code>src/hydra_suite/runtime/onnx_providers.py</code> — the renamed, shrunken module: <code>execution_providers_for(resolved)</code>, CoreML options, TensorRT cache options, dedup helpers (Task 12).</p>
+<p><strong>Modified — core/inference</strong>
+- <code>runtime.py</code> — add <code>RuntimeContext.resolved</code>; derive mode flags from it; delete <code>runtime_to_compute_runtime</code> (Tasks 3, 5).
+- <code>config.py</code> — loud missing-tier error; drop per-stage <code>compute_runtime</code> fields, <code>ComputeRuntime</code> Literal, <code>CUDA_RUNTIMES</code>/<code>CPU_RUNTIMES</code> frozensets; <code>from_params</code> reads only <code>RUNTIME_TIER</code> (Tasks 8, 9, 10).
+- <code>stages/obb.py</code>, <code>stages/pose.py</code>, <code>stages/cnn.py</code>, <code>stages/headtail.py</code>, <code>stages/crops.py</code> — consume <code>runtime.resolved</code>; rewrite string predicates to field checks (Task 4).</p>
+<p><strong>Modified — core/individual backends</strong>
+- <code>classification/backend.py</code>, <code>classification/headtail.py</code>, <code>pose/backends/sleap.py</code> — accept <code>ResolvedBackend</code>; rewrite predicates; call <code>execution_providers_for</code> (Task 4).
+- <code>properties/cache.py</code> — resolve tier at the param-bag boundary; write resolved device into payload (Task 7).</p>
+<p><strong>Modified — GUI / params channel</strong>
+- <code>trackerkit/gui/orchestrators/{config,tracking,session}.py</code>, <code>panels/{detection_panel,identity_panel}.py</code>, <code>gui/workers/{preview_worker,crops_worker}.py</code>, <code>trackerkit/cli_config.py</code>, <code>trackerkit/tracking_cache.py</code>, <code>posekit/gui/main_window.py</code>, <code>posekit/gui/runtimes.py</code>, <code>core/tracking/worker.py</code>, <code>data/dataset_generation.py</code> — drop <code>COMPUTE_RUNTIME</code>/pose-flavor writes, keep <code>RUNTIME_TIER</code> (Tasks 6, 7, 13).</p>
+<p><strong>Modified — runtime</strong>
+- <code>resolver.py</code> — delete <code>resolve_compute_runtime</code> display shim (Task 5).
+- <code>compute_runtime.py</code> → renamed to <code>onnx_providers.py</code>; legacy surface deleted (Task 12).</p>
+<hr />
+<h2 id="task-1-golden-characterization-test-safety-net">Task 1: Golden characterization test (safety net)<a class="headerlink" href="#task-1-golden-characterization-test-safety-net" title="Permanent link">&para;</a></h2>
+<p><strong>Files:</strong>
+- Create: <code>tests/runtime/test_resolver_golden.py</code></p>
+<p><strong>Interfaces:</strong>
+- Consumes: <code>hydra_suite.runtime.resolver.{RuntimeResolver, PlatformInfo, ResolvedBackend}</code>.
+- Produces: a frozen golden dict other tasks must not change; the canonical enumeration of platform shapes used across the plan.</p>
+<ul class="task-list">
+<li class="task-list-item"><label class="task-list-control"><input type="checkbox" disabled/><span class="task-list-indicator"></span></label> <strong>Step 1: Write the golden table test</strong></li>
+</ul>
+<div class="language-python highlight"><pre><span></span><code><span id="__span-0-1"><a id="__codelineno-0-1" name="__codelineno-0-1" href="#__codelineno-0-1"></a><span class="c1"># tests/runtime/test_resolver_golden.py</span>
+</span><span id="__span-0-2"><a id="__codelineno-0-2" name="__codelineno-0-2" href="#__codelineno-0-2"></a><span class="sd">"""Behavior-preservation net for the Gen-2 runtime consolidation.</span>
+</span><span id="__span-0-3"><a id="__codelineno-0-3" name="__codelineno-0-3" href="#__codelineno-0-3"></a>
+</span><span id="__span-0-4"><a id="__codelineno-0-4" name="__codelineno-0-4" href="#__codelineno-0-4"></a><span class="sd">Every (tier, platform, stage, artifact_available) -&gt; ResolvedBackend mapping</span>
+</span><span id="__span-0-5"><a id="__codelineno-0-5" name="__codelineno-0-5" href="#__codelineno-0-5"></a><span class="sd">is frozen here. No task in the consolidation may change these values.</span>
+</span><span id="__span-0-6"><a id="__codelineno-0-6" name="__codelineno-0-6" href="#__codelineno-0-6"></a><span class="sd">"""</span>
+</span><span id="__span-0-7"><a id="__codelineno-0-7" name="__codelineno-0-7" href="#__codelineno-0-7"></a><span class="kn">import</span><span class="w"> </span><span class="nn">itertools</span>
+</span><span id="__span-0-8"><a id="__codelineno-0-8" name="__codelineno-0-8" href="#__codelineno-0-8"></a><span class="kn">import</span><span class="w"> </span><span class="nn">pytest</span>
+</span><span id="__span-0-9"><a id="__codelineno-0-9" name="__codelineno-0-9" href="#__codelineno-0-9"></a><span class="kn">from</span><span class="w"> </span><span class="nn">hydra_suite.runtime.resolver</span><span class="w"> </span><span class="kn">import</span> <span class="n">RuntimeResolver</span><span class="p">,</span> <span class="n">PlatformInfo</span>
+</span><span id="__span-0-10"><a id="__codelineno-0-10" name="__codelineno-0-10" href="#__codelineno-0-10"></a>
+</span><span id="__span-0-11"><a id="__codelineno-0-11" name="__codelineno-0-11" href="#__codelineno-0-11"></a><span class="n">TIERS</span> <span class="o">=</span> <span class="p">(</span><span class="s2">"cpu"</span><span class="p">,</span> <span class="s2">"gpu"</span><span class="p">,</span> <span class="s2">"gpu_fast"</span><span class="p">)</span>
+</span><span id="__span-0-12"><a id="__codelineno-0-12" name="__codelineno-0-12" href="#__codelineno-0-12"></a><span class="n">STAGES</span> <span class="o">=</span> <span class="p">(</span><span class="s2">"obb"</span><span class="p">,</span> <span class="s2">"head_tail"</span><span class="p">,</span> <span class="s2">"cnn"</span><span class="p">,</span> <span class="s2">"yolo_pose"</span><span class="p">,</span> <span class="s2">"sleap_pose"</span><span class="p">,</span> <span class="s2">"bgsub"</span><span class="p">)</span>
+</span><span id="__span-0-13"><a id="__codelineno-0-13" name="__codelineno-0-13" href="#__codelineno-0-13"></a><span class="n">PLATFORMS</span> <span class="o">=</span> <span class="p">{</span>
+</span><span id="__span-0-14"><a id="__codelineno-0-14" name="__codelineno-0-14" href="#__codelineno-0-14"></a>    <span class="s2">"none"</span><span class="p">:</span> <span class="n">PlatformInfo</span><span class="p">(</span><span class="n">has_cuda</span><span class="o">=</span><span class="kc">False</span><span class="p">,</span> <span class="n">has_mps</span><span class="o">=</span><span class="kc">False</span><span class="p">),</span>
+</span><span id="__span-0-15"><a id="__codelineno-0-15" name="__codelineno-0-15" href="#__codelineno-0-15"></a>    <span class="s2">"cuda"</span><span class="p">:</span> <span class="n">PlatformInfo</span><span class="p">(</span><span class="n">has_cuda</span><span class="o">=</span><span class="kc">True</span><span class="p">,</span> <span class="n">has_mps</span><span class="o">=</span><span class="kc">False</span><span class="p">),</span>
+</span><span id="__span-0-16"><a id="__codelineno-0-16" name="__codelineno-0-16" href="#__codelineno-0-16"></a>    <span class="s2">"mps"</span><span class="p">:</span> <span class="n">PlatformInfo</span><span class="p">(</span><span class="n">has_cuda</span><span class="o">=</span><span class="kc">False</span><span class="p">,</span> <span class="n">has_mps</span><span class="o">=</span><span class="kc">True</span><span class="p">),</span>
+</span><span id="__span-0-17"><a id="__codelineno-0-17" name="__codelineno-0-17" href="#__codelineno-0-17"></a>    <span class="s2">"both"</span><span class="p">:</span> <span class="n">PlatformInfo</span><span class="p">(</span><span class="n">has_cuda</span><span class="o">=</span><span class="kc">True</span><span class="p">,</span> <span class="n">has_mps</span><span class="o">=</span><span class="kc">True</span><span class="p">),</span>
+</span><span id="__span-0-18"><a id="__codelineno-0-18" name="__codelineno-0-18" href="#__codelineno-0-18"></a><span class="p">}</span>
+</span><span id="__span-0-19"><a id="__codelineno-0-19" name="__codelineno-0-19" href="#__codelineno-0-19"></a>
+</span><span id="__span-0-20"><a id="__codelineno-0-20" name="__codelineno-0-20" href="#__codelineno-0-20"></a><span class="k">def</span><span class="w"> </span><span class="nf">_key</span><span class="p">(</span><span class="n">tier</span><span class="p">,</span> <span class="n">plat</span><span class="p">,</span> <span class="n">stage</span><span class="p">,</span> <span class="n">artifact</span><span class="p">):</span>
+</span><span id="__span-0-21"><a id="__codelineno-0-21" name="__codelineno-0-21" href="#__codelineno-0-21"></a>    <span class="k">return</span> <span class="sa">f</span><span class="s2">"</span><span class="si">{</span><span class="n">tier</span><span class="si">}</span><span class="s2">|</span><span class="si">{</span><span class="n">plat</span><span class="si">}</span><span class="s2">|</span><span class="si">{</span><span class="n">stage</span><span class="si">}</span><span class="s2">|artifact=</span><span class="si">{</span><span class="n">artifact</span><span class="si">}</span><span class="s2">"</span>
+</span><span id="__span-0-22"><a id="__codelineno-0-22" name="__codelineno-0-22" href="#__codelineno-0-22"></a>
+</span><span id="__span-0-23"><a id="__codelineno-0-23" name="__codelineno-0-23" href="#__codelineno-0-23"></a><span class="k">def</span><span class="w"> </span><span class="nf">_resolve</span><span class="p">(</span><span class="n">tier</span><span class="p">,</span> <span class="n">plat_name</span><span class="p">,</span> <span class="n">stage</span><span class="p">,</span> <span class="n">artifact</span><span class="p">):</span>
+</span><span id="__span-0-24"><a id="__codelineno-0-24" name="__codelineno-0-24" href="#__codelineno-0-24"></a>    <span class="n">r</span> <span class="o">=</span> <span class="n">RuntimeResolver</span><span class="p">(</span><span class="n">tier</span><span class="p">,</span> <span class="n">PLATFORMS</span><span class="p">[</span><span class="n">plat_name</span><span class="p">])</span><span class="o">.</span><span class="n">resolve</span><span class="p">(</span>
+</span><span id="__span-0-25"><a id="__codelineno-0-25" name="__codelineno-0-25" href="#__codelineno-0-25"></a>        <span class="n">stage</span><span class="p">,</span> <span class="n">artifact_available</span><span class="o">=</span><span class="k">lambda</span><span class="p">:</span> <span class="n">artifact</span>
+</span><span id="__span-0-26"><a id="__codelineno-0-26" name="__codelineno-0-26" href="#__codelineno-0-26"></a>    <span class="p">)</span>
+</span><span id="__span-0-27"><a id="__codelineno-0-27" name="__codelineno-0-27" href="#__codelineno-0-27"></a>    <span class="k">return</span> <span class="p">(</span><span class="n">r</span><span class="o">.</span><span class="n">backend</span><span class="p">,</span> <span class="n">r</span><span class="o">.</span><span class="n">device</span><span class="p">,</span> <span class="n">r</span><span class="o">.</span><span class="n">used_fallback</span><span class="p">)</span>
+</span><span id="__span-0-28"><a id="__codelineno-0-28" name="__codelineno-0-28" href="#__codelineno-0-28"></a>
+</span><span id="__span-0-29"><a id="__codelineno-0-29" name="__codelineno-0-29" href="#__codelineno-0-29"></a><span class="k">def</span><span class="w"> </span><span class="nf">test_golden_table_is_stable</span><span class="p">():</span>
+</span><span id="__span-0-30"><a id="__codelineno-0-30" name="__codelineno-0-30" href="#__codelineno-0-30"></a>    <span class="n">table</span> <span class="o">=</span> <span class="p">{}</span>
+</span><span id="__span-0-31"><a id="__codelineno-0-31" name="__codelineno-0-31" href="#__codelineno-0-31"></a>    <span class="k">for</span> <span class="n">tier</span><span class="p">,</span> <span class="n">plat</span><span class="p">,</span> <span class="n">stage</span><span class="p">,</span> <span class="n">artifact</span> <span class="ow">in</span> <span class="n">itertools</span><span class="o">.</span><span class="n">product</span><span class="p">(</span>
+</span><span id="__span-0-32"><a id="__codelineno-0-32" name="__codelineno-0-32" href="#__codelineno-0-32"></a>        <span class="n">TIERS</span><span class="p">,</span> <span class="n">PLATFORMS</span><span class="p">,</span> <span class="n">STAGES</span><span class="p">,</span> <span class="p">(</span><span class="kc">True</span><span class="p">,</span> <span class="kc">False</span><span class="p">)</span>
+</span><span id="__span-0-33"><a id="__codelineno-0-33" name="__codelineno-0-33" href="#__codelineno-0-33"></a>    <span class="p">):</span>
+</span><span id="__span-0-34"><a id="__codelineno-0-34" name="__codelineno-0-34" href="#__codelineno-0-34"></a>        <span class="n">table</span><span class="p">[</span><span class="n">_key</span><span class="p">(</span><span class="n">tier</span><span class="p">,</span> <span class="n">plat</span><span class="p">,</span> <span class="n">stage</span><span class="p">,</span> <span class="n">artifact</span><span class="p">)]</span> <span class="o">=</span> <span class="n">_resolve</span><span class="p">(</span><span class="n">tier</span><span class="p">,</span> <span class="n">plat</span><span class="p">,</span> <span class="n">stage</span><span class="p">,</span> <span class="n">artifact</span><span class="p">)</span>
+</span><span id="__span-0-35"><a id="__codelineno-0-35" name="__codelineno-0-35" href="#__codelineno-0-35"></a>    <span class="c1"># Snapshot: values captured from current (pre-refactor) resolver.</span>
+</span><span id="__span-0-36"><a id="__codelineno-0-36" name="__codelineno-0-36" href="#__codelineno-0-36"></a>    <span class="c1"># Regenerate ONCE now, then treat as frozen for the rest of the plan.</span>
+</span><span id="__span-0-37"><a id="__codelineno-0-37" name="__codelineno-0-37" href="#__codelineno-0-37"></a>    <span class="k">assert</span> <span class="n">table</span> <span class="o">==</span> <span class="n">EXPECTED_GOLDEN</span>
+</span></code></pre></div>
+<ul class="task-list">
+<li class="task-list-item"><label class="task-list-control"><input type="checkbox" disabled/><span class="task-list-indicator"></span></label> <strong>Step 2: Generate the frozen snapshot</strong></li>
+</ul>
+<p>Run a throwaway print to capture current values, paste them into <code>EXPECTED_GOLDEN</code> as a literal dict at the top of the file:</p>
+<p>Run: <code>python -c "import tests.runtime.test_resolver_golden as t; import itertools; print({t._key(a,b,c,d): t._resolve(a,b,c,d) for a,b,c,d in itertools.product(t.TIERS,t.PLATFORMS,t.STAGES,(True,False))})"</code>
+Then define <code>EXPECTED_GOLDEN = { ... }</code> with that exact output.</p>
+<ul class="task-list">
+<li class="task-list-item"><label class="task-list-control"><input type="checkbox" disabled/><span class="task-list-indicator"></span></label> <strong>Step 3: Run to verify it passes against current code</strong></li>
+</ul>
+<p>Run: <code>python -m pytest tests/runtime/test_resolver_golden.py -v</code>
+Expected: PASS (snapshot matches live resolver).</p>
+<ul class="task-list">
+<li class="task-list-item"><label class="task-list-control"><input type="checkbox" disabled/><span class="task-list-indicator"></span></label> <strong>Step 4: Commit</strong></li>
+</ul>
+<div class="language-bash highlight"><pre><span></span><code><span id="__span-1-1"><a id="__codelineno-1-1" name="__codelineno-1-1" href="#__codelineno-1-1"></a>make<span class="w"> </span>format
+</span><span id="__span-1-2"><a id="__codelineno-1-2" name="__codelineno-1-2" href="#__codelineno-1-2"></a>git<span class="w"> </span>add<span class="w"> </span>tests/runtime/test_resolver_golden.py
+</span><span id="__span-1-3"><a id="__codelineno-1-3" name="__codelineno-1-3" href="#__codelineno-1-3"></a>git<span class="w"> </span>commit<span class="w"> </span>-m<span class="w"> </span><span class="s2">"test(runtime): freeze tier x platform x stage golden table"</span>
+</span></code></pre></div>
+<hr />
+<h2 id="task-2-execution_providers_forresolved-alongside-the-string-api">Task 2: <code>execution_providers_for(resolved)</code> alongside the string API<a class="headerlink" href="#task-2-execution_providers_forresolved-alongside-the-string-api" title="Permanent link">&para;</a></h2>
+<p><strong>Files:</strong>
+- Modify: <code>src/hydra_suite/runtime/compute_runtime.py</code>
+- Test: <code>tests/runtime/test_execution_providers_for.py</code> (create)</p>
+<p><strong>Interfaces:</strong>
+- Consumes: <code>ResolvedBackend</code> from <code>runtime.resolver</code>.
+- Produces: <code>execution_providers_for(resolved: ResolvedBackend, include_cpu_fallback: bool = True) -&gt; list[object]</code>. Later tasks (4, 12) call this; the old <code>derive_onnx_execution_providers(str)</code> stays until Task 12.</p>
+<ul class="task-list">
+<li class="task-list-item"><label class="task-list-control"><input type="checkbox" disabled/><span class="task-list-indicator"></span></label> <strong>Step 1: Write the failing test</strong> — assert TensorRT→<code>[Tensorrt…, CUDA…, CPU…]</code>, CoreML(on mps)→<code>[CoreML…, CPU…]</code>, torch/cpu→<code>[CPU…]</code>:</li>
+</ul>
+<div class="language-python highlight"><pre><span></span><code><span id="__span-2-1"><a id="__codelineno-2-1" name="__codelineno-2-1" href="#__codelineno-2-1"></a><span class="c1"># tests/runtime/test_execution_providers_for.py</span>
+</span><span id="__span-2-2"><a id="__codelineno-2-2" name="__codelineno-2-2" href="#__codelineno-2-2"></a><span class="kn">from</span><span class="w"> </span><span class="nn">hydra_suite.runtime.resolver</span><span class="w"> </span><span class="kn">import</span> <span class="n">ResolvedBackend</span>
+</span><span id="__span-2-3"><a id="__codelineno-2-3" name="__codelineno-2-3" href="#__codelineno-2-3"></a><span class="kn">from</span><span class="w"> </span><span class="nn">hydra_suite.runtime.compute_runtime</span><span class="w"> </span><span class="kn">import</span> <span class="p">(</span>
+</span><span id="__span-2-4"><a id="__codelineno-2-4" name="__codelineno-2-4" href="#__codelineno-2-4"></a>    <span class="n">execution_providers_for</span><span class="p">,</span> <span class="n">derive_onnx_execution_providers</span><span class="p">,</span>
+</span><span id="__span-2-5"><a id="__codelineno-2-5" name="__codelineno-2-5" href="#__codelineno-2-5"></a><span class="p">)</span>
+</span><span id="__span-2-6"><a id="__codelineno-2-6" name="__codelineno-2-6" href="#__codelineno-2-6"></a>
+</span><span id="__span-2-7"><a id="__codelineno-2-7" name="__codelineno-2-7" href="#__codelineno-2-7"></a><span class="k">def</span><span class="w"> </span><span class="nf">_names</span><span class="p">(</span><span class="n">providers</span><span class="p">):</span>
+</span><span id="__span-2-8"><a id="__codelineno-2-8" name="__codelineno-2-8" href="#__codelineno-2-8"></a>    <span class="k">return</span> <span class="p">[</span><span class="n">p</span><span class="p">[</span><span class="mi">0</span><span class="p">]</span> <span class="k">if</span> <span class="nb">isinstance</span><span class="p">(</span><span class="n">p</span><span class="p">,</span> <span class="nb">tuple</span><span class="p">)</span> <span class="k">else</span> <span class="n">p</span> <span class="k">for</span> <span class="n">p</span> <span class="ow">in</span> <span class="n">providers</span><span class="p">]</span>
+</span><span id="__span-2-9"><a id="__codelineno-2-9" name="__codelineno-2-9" href="#__codelineno-2-9"></a>
+</span><span id="__span-2-10"><a id="__codelineno-2-10" name="__codelineno-2-10" href="#__codelineno-2-10"></a><span class="k">def</span><span class="w"> </span><span class="nf">test_tensorrt_matches_string_api</span><span class="p">():</span>
+</span><span id="__span-2-11"><a id="__codelineno-2-11" name="__codelineno-2-11" href="#__codelineno-2-11"></a>    <span class="n">rb</span> <span class="o">=</span> <span class="n">ResolvedBackend</span><span class="p">(</span><span class="s2">"tensorrt"</span><span class="p">,</span> <span class="s2">"cuda"</span><span class="p">,</span> <span class="kc">False</span><span class="p">)</span>
+</span><span id="__span-2-12"><a id="__codelineno-2-12" name="__codelineno-2-12" href="#__codelineno-2-12"></a>    <span class="k">assert</span> <span class="n">_names</span><span class="p">(</span><span class="n">execution_providers_for</span><span class="p">(</span><span class="n">rb</span><span class="p">))</span> <span class="o">==</span> <span class="n">_names</span><span class="p">(</span>
+</span><span id="__span-2-13"><a id="__codelineno-2-13" name="__codelineno-2-13" href="#__codelineno-2-13"></a>        <span class="n">derive_onnx_execution_providers</span><span class="p">(</span><span class="s2">"tensorrt"</span><span class="p">)</span>
+</span><span id="__span-2-14"><a id="__codelineno-2-14" name="__codelineno-2-14" href="#__codelineno-2-14"></a>    <span class="p">)</span>
+</span><span id="__span-2-15"><a id="__codelineno-2-15" name="__codelineno-2-15" href="#__codelineno-2-15"></a>
+</span><span id="__span-2-16"><a id="__codelineno-2-16" name="__codelineno-2-16" href="#__codelineno-2-16"></a><span class="k">def</span><span class="w"> </span><span class="nf">test_cpu_backend_is_cpu_only</span><span class="p">():</span>
+</span><span id="__span-2-17"><a id="__codelineno-2-17" name="__codelineno-2-17" href="#__codelineno-2-17"></a>    <span class="n">rb</span> <span class="o">=</span> <span class="n">ResolvedBackend</span><span class="p">(</span><span class="s2">"torch"</span><span class="p">,</span> <span class="s2">"cpu"</span><span class="p">,</span> <span class="kc">False</span><span class="p">)</span>
+</span><span id="__span-2-18"><a id="__codelineno-2-18" name="__codelineno-2-18" href="#__codelineno-2-18"></a>    <span class="k">assert</span> <span class="n">_names</span><span class="p">(</span><span class="n">execution_providers_for</span><span class="p">(</span><span class="n">rb</span><span class="p">))</span> <span class="o">==</span> <span class="p">[</span><span class="s2">"CPUExecutionProvider"</span><span class="p">]</span>
+</span></code></pre></div>
+<ul class="task-list">
+<li class="task-list-item"><label class="task-list-control"><input type="checkbox" disabled/><span class="task-list-indicator"></span></label> <strong>Step 2: Run to verify it fails</strong></li>
+</ul>
+<p>Run: <code>python -m pytest tests/runtime/test_execution_providers_for.py -v</code>
+Expected: FAIL — <code>execution_providers_for</code> not defined.</p>
+<ul class="task-list">
+<li class="task-list-item"><label class="task-list-control"><input type="checkbox" disabled/><span class="task-list-indicator"></span></label> <strong>Step 3: Implement, delegating to the existing string logic for now</strong></li>
+</ul>
+<p>In <code>compute_runtime.py</code>, add (keep <code>derive_onnx_execution_providers</code> untouched):</p>
+<div class="language-python highlight"><pre><span></span><code><span id="__span-3-1"><a id="__codelineno-3-1" name="__codelineno-3-1" href="#__codelineno-3-1"></a><span class="k">def</span><span class="w"> </span><span class="nf">execution_providers_for</span><span class="p">(</span><span class="n">resolved</span><span class="p">,</span> <span class="n">include_cpu_fallback</span><span class="p">:</span> <span class="nb">bool</span> <span class="o">=</span> <span class="kc">True</span><span class="p">):</span>
+</span><span id="__span-3-2"><a id="__codelineno-3-2" name="__codelineno-3-2" href="#__codelineno-3-2"></a><span class="w">    </span><span class="sd">"""ONNX EP list keyed off a ResolvedBackend (the Gen-2 vocabulary).</span>
+</span><span id="__span-3-3"><a id="__codelineno-3-3" name="__codelineno-3-3" href="#__codelineno-3-3"></a>
+</span><span id="__span-3-4"><a id="__codelineno-3-4" name="__codelineno-3-4" href="#__codelineno-3-4"></a><span class="sd">    torch backends never run ONNX; tensorrt -&gt; TRT-EP+CUDA-EP+cache,</span>
+</span><span id="__span-3-5"><a id="__codelineno-3-5" name="__codelineno-3-5" href="#__codelineno-3-5"></a><span class="sd">    coreml -&gt; CoreML-EP. CPU fallback appended per include_cpu_fallback.</span>
+</span><span id="__span-3-6"><a id="__codelineno-3-6" name="__codelineno-3-6" href="#__codelineno-3-6"></a><span class="sd">    """</span>
+</span><span id="__span-3-7"><a id="__codelineno-3-7" name="__codelineno-3-7" href="#__codelineno-3-7"></a>    <span class="k">if</span> <span class="n">resolved</span><span class="o">.</span><span class="n">backend</span> <span class="o">==</span> <span class="s2">"tensorrt"</span><span class="p">:</span>
+</span><span id="__span-3-8"><a id="__codelineno-3-8" name="__codelineno-3-8" href="#__codelineno-3-8"></a>        <span class="n">_compute_runtime</span> <span class="o">=</span> <span class="s2">"tensorrt"</span>
+</span><span id="__span-3-9"><a id="__codelineno-3-9" name="__codelineno-3-9" href="#__codelineno-3-9"></a>    <span class="k">elif</span> <span class="n">resolved</span><span class="o">.</span><span class="n">backend</span> <span class="o">==</span> <span class="s2">"coreml"</span><span class="p">:</span>
+</span><span id="__span-3-10"><a id="__codelineno-3-10" name="__codelineno-3-10" href="#__codelineno-3-10"></a>        <span class="n">_compute_runtime</span> <span class="o">=</span> <span class="s2">"coreml"</span>
+</span><span id="__span-3-11"><a id="__codelineno-3-11" name="__codelineno-3-11" href="#__codelineno-3-11"></a>    <span class="k">else</span><span class="p">:</span>
+</span><span id="__span-3-12"><a id="__codelineno-3-12" name="__codelineno-3-12" href="#__codelineno-3-12"></a>        <span class="n">_compute_runtime</span> <span class="o">=</span> <span class="n">resolved</span><span class="o">.</span><span class="n">device</span>  <span class="c1"># cpu / cuda / mps -&gt; no accel EP</span>
+</span><span id="__span-3-13"><a id="__codelineno-3-13" name="__codelineno-3-13" href="#__codelineno-3-13"></a>    <span class="k">return</span> <span class="n">derive_onnx_execution_providers</span><span class="p">(</span><span class="n">_compute_runtime</span><span class="p">,</span> <span class="n">include_cpu_fallback</span><span class="p">)</span>
+</span></code></pre></div>
+<ul class="task-list">
+<li class="task-list-item"><label class="task-list-control"><input type="checkbox" disabled/><span class="task-list-indicator"></span></label> <strong>Step 4: Run to verify it passes</strong></li>
+</ul>
+<p>Run: <code>python -m pytest tests/runtime/test_execution_providers_for.py -v</code>
+Expected: PASS.</p>
+<ul class="task-list">
+<li class="task-list-item"><label class="task-list-control"><input type="checkbox" disabled/><span class="task-list-indicator"></span></label> <strong>Step 5: Commit</strong></li>
+</ul>
+<div class="language-bash highlight"><pre><span></span><code><span id="__span-4-1"><a id="__codelineno-4-1" name="__codelineno-4-1" href="#__codelineno-4-1"></a>make<span class="w"> </span>format
+</span><span id="__span-4-2"><a id="__codelineno-4-2" name="__codelineno-4-2" href="#__codelineno-4-2"></a>git<span class="w"> </span>add<span class="w"> </span>src/hydra_suite/runtime/compute_runtime.py<span class="w"> </span>tests/runtime/test_execution_providers_for.py
+</span><span id="__span-4-3"><a id="__codelineno-4-3" name="__codelineno-4-3" href="#__codelineno-4-3"></a>git<span class="w"> </span>commit<span class="w"> </span>-m<span class="w"> </span><span class="s2">"feat(runtime): add ResolvedBackend-keyed execution_providers_for"</span>
+</span></code></pre></div>
+<hr />
+<h2 id="task-3-runtimecontextresolved-field">Task 3: <code>RuntimeContext.resolved</code> field<a class="headerlink" href="#task-3-runtimecontextresolved-field" title="Permanent link">&para;</a></h2>
+<p><strong>Files:</strong>
+- Modify: <code>src/hydra_suite/core/inference/runtime.py</code> (dataclass ~lines 24-68; <code>from_config</code> ~lines 120-150)
+- Test: <code>tests/core/inference/test_runtime_context_resolved.py</code> (create)</p>
+<p><strong>Interfaces:</strong>
+- Consumes: <code>RuntimeResolver.resolve</code> (already called in <code>from_config</code>).
+- Produces: <code>RuntimeContext.resolved: ResolvedBackend</code>. Tasks 4 and 5 read it.</p>
+<ul class="task-list">
+<li class="task-list-item"><label class="task-list-control"><input type="checkbox" disabled/><span class="task-list-indicator"></span></label> <strong>Step 1: Write the failing test</strong></li>
+</ul>
+<div class="language-python highlight"><pre><span></span><code><span id="__span-5-1"><a id="__codelineno-5-1" name="__codelineno-5-1" href="#__codelineno-5-1"></a><span class="c1"># tests/core/inference/test_runtime_context_resolved.py</span>
+</span><span id="__span-5-2"><a id="__codelineno-5-2" name="__codelineno-5-2" href="#__codelineno-5-2"></a><span class="kn">from</span><span class="w"> </span><span class="nn">hydra_suite.core.inference.config</span><span class="w"> </span><span class="kn">import</span> <span class="n">InferenceConfig</span>
+</span><span id="__span-5-3"><a id="__codelineno-5-3" name="__codelineno-5-3" href="#__codelineno-5-3"></a><span class="kn">from</span><span class="w"> </span><span class="nn">hydra_suite.core.inference.runtime</span><span class="w"> </span><span class="kn">import</span> <span class="n">RuntimeContext</span>
+</span><span id="__span-5-4"><a id="__codelineno-5-4" name="__codelineno-5-4" href="#__codelineno-5-4"></a><span class="kn">from</span><span class="w"> </span><span class="nn">hydra_suite.runtime.resolver</span><span class="w"> </span><span class="kn">import</span> <span class="n">ResolvedBackend</span>
+</span><span id="__span-5-5"><a id="__codelineno-5-5" name="__codelineno-5-5" href="#__codelineno-5-5"></a>
+</span><span id="__span-5-6"><a id="__codelineno-5-6" name="__codelineno-5-6" href="#__codelineno-5-6"></a><span class="k">def</span><span class="w"> </span><span class="nf">test_from_config_populates_resolved</span><span class="p">():</span>
+</span><span id="__span-5-7"><a id="__codelineno-5-7" name="__codelineno-5-7" href="#__codelineno-5-7"></a>    <span class="n">cfg</span> <span class="o">=</span> <span class="n">InferenceConfig</span><span class="p">(</span><span class="n">runtime_tier</span><span class="o">=</span><span class="s2">"cpu"</span><span class="p">)</span>
+</span><span id="__span-5-8"><a id="__codelineno-5-8" name="__codelineno-5-8" href="#__codelineno-5-8"></a>    <span class="n">ctx</span> <span class="o">=</span> <span class="n">RuntimeContext</span><span class="o">.</span><span class="n">from_config</span><span class="p">(</span><span class="n">cfg</span><span class="p">)</span>
+</span><span id="__span-5-9"><a id="__codelineno-5-9" name="__codelineno-5-9" href="#__codelineno-5-9"></a>    <span class="k">assert</span> <span class="nb">isinstance</span><span class="p">(</span><span class="n">ctx</span><span class="o">.</span><span class="n">resolved</span><span class="p">,</span> <span class="n">ResolvedBackend</span><span class="p">)</span>
+</span><span id="__span-5-10"><a id="__codelineno-5-10" name="__codelineno-5-10" href="#__codelineno-5-10"></a>    <span class="k">assert</span> <span class="n">ctx</span><span class="o">.</span><span class="n">resolved</span><span class="o">.</span><span class="n">device</span> <span class="o">==</span> <span class="s2">"cpu"</span>
+</span><span id="__span-5-11"><a id="__codelineno-5-11" name="__codelineno-5-11" href="#__codelineno-5-11"></a>    <span class="k">assert</span> <span class="n">ctx</span><span class="o">.</span><span class="n">device</span> <span class="o">==</span> <span class="s2">"cpu"</span>
+</span></code></pre></div>
+<ul class="task-list">
+<li class="task-list-item"><label class="task-list-control"><input type="checkbox" disabled/><span class="task-list-indicator"></span></label> <strong>Step 2: Run to verify it fails</strong></li>
+</ul>
+<p>Run: <code>python -m pytest tests/core/inference/test_runtime_context_resolved.py -v</code>
+Expected: FAIL — <code>RuntimeContext</code> has no <code>resolved</code>.</p>
+<ul class="task-list">
+<li class="task-list-item"><label class="task-list-control"><input type="checkbox" disabled/><span class="task-list-indicator"></span></label> <strong>Step 3: Add the field and populate it</strong></li>
+</ul>
+<p>In the <code>RuntimeContext</code> dataclass add <code>resolved: "ResolvedBackend | None" = None</code> (import <code>ResolvedBackend</code> under <code>TYPE_CHECKING</code> + a runtime import in <code>from_config</code>). In <code>from_config</code>, capture the <code>resolved</code> object already produced by <code>resolver.resolve("obb")</code> and pass <code>resolved=resolved</code> into the constructor. Do NOT yet change any downstream reader.</p>
+<ul class="task-list">
+<li class="task-list-item"><label class="task-list-control"><input type="checkbox" disabled/><span class="task-list-indicator"></span></label> <strong>Step 4: Run to verify it passes</strong></li>
+</ul>
+<p>Run: <code>python -m pytest tests/core/inference/test_runtime_context_resolved.py tests/runtime/test_resolver_golden.py -v</code>
+Expected: PASS (golden unchanged).</p>
+<ul class="task-list">
+<li class="task-list-item"><label class="task-list-control"><input type="checkbox" disabled/><span class="task-list-indicator"></span></label> <strong>Step 5: Commit</strong></li>
+</ul>
+<div class="language-bash highlight"><pre><span></span><code><span id="__span-6-1"><a id="__codelineno-6-1" name="__codelineno-6-1" href="#__codelineno-6-1"></a>make<span class="w"> </span>format
+</span><span id="__span-6-2"><a id="__codelineno-6-2" name="__codelineno-6-2" href="#__codelineno-6-2"></a>git<span class="w"> </span>add<span class="w"> </span>src/hydra_suite/core/inference/runtime.py<span class="w"> </span>tests/core/inference/test_runtime_context_resolved.py
+</span><span id="__span-6-3"><a id="__codelineno-6-3" name="__codelineno-6-3" href="#__codelineno-6-3"></a>git<span class="w"> </span>commit<span class="w"> </span>-m<span class="w"> </span><span class="s2">"feat(inference): carry ResolvedBackend on RuntimeContext"</span>
+</span></code></pre></div>
+<hr />
+<h2 id="task-4-rewrite-backend-stage-predicates-onto-resolvedbackend">Task 4: Rewrite backend + stage predicates onto <code>ResolvedBackend</code><a class="headerlink" href="#task-4-rewrite-backend-stage-predicates-onto-resolvedbackend" title="Permanent link">&para;</a></h2>
+<p><strong>Files:</strong>
+- Modify: <code>src/hydra_suite/core/inference/stages/obb.py:295</code>, <code>stages/pose.py:98,106,138</code>, <code>stages/cnn.py:35</code>, <code>stages/headtail.py:58</code>, <code>stages/crops.py:31</code>
+- Modify: <code>src/hydra_suite/core/individual/classification/backend.py:425-562</code>, <code>classification/headtail.py:364,722,848</code>, <code>pose/backends/sleap.py:327-352</code>
+- Test: <code>tests/core/inference/test_backend_runtime_predicates.py</code> (create)</p>
+<p><strong>Interfaces:</strong>
+- Consumes: <code>RuntimeContext.resolved</code> (Task 3), <code>execution_providers_for</code> (Task 2).
+- Produces: backend factories accept <code>ResolvedBackend</code>; internal device/accelerator predicates read <code>resolved.device</code> / <code>resolved.backend</code>.</p>
+<p><strong>Transformation rules (apply verbatim at each site; the resolver never emits <code>onnx_cuda</code>/<code>onnx_cpu</code>/<code>onnx_coreml</code>, so these are faithful):</strong></p>
+<table>
+<thead>
+<tr>
+<th>Current predicate</th>
+<th>Replacement</th>
+</tr>
+</thead>
+<tbody>
+<tr>
+<td><code>rt in ("cuda", "onnx_cuda", "tensorrt")</code></td>
+<td><code>resolved.device == "cuda"</code></td>
+</tr>
+<tr>
+<td><code>rt in ("mps", "onnx_coreml")</code></td>
+<td><code>resolved.device == "mps"</code></td>
+</tr>
+<tr>
+<td><code>self._compute_runtime == "coreml"</code></td>
+<td><code>resolved.backend == "coreml"</code></td>
+</tr>
+<tr>
+<td><code>derive_onnx_execution_providers(compute_runtime)</code></td>
+<td><code>execution_providers_for(resolved)</code></td>
+</tr>
+<tr>
+<td><code>_torch_device(compute_runtime)</code> returns cuda/mps/cpu</td>
+<td><code>resolved.device</code></td>
+</tr>
+<tr>
+<td>SLEAP <code>_normalize(req) -&gt; onnx_*</code> then <code>derive_onnx_execution_providers</code></td>
+<td><code>execution_providers_for(resolved)</code></td>
+</tr>
+</tbody>
+</table>
+<p><strong>Boundary handling:</strong> each stage currently does <code>compute_runtime = runtime_to_compute_runtime(runtime)</code>. Change to <code>resolved = runtime.resolved</code> and pass <code>resolved</code> into the backend factory (whose signature changes from <code>compute_runtime: str</code> to <code>resolved: ResolvedBackend</code>).</p>
+<ul class="task-list">
+<li class="task-list-item"><label class="task-list-control"><input type="checkbox" disabled/><span class="task-list-indicator"></span></label> <strong>Step 1: Write the failing characterization test</strong> — one assertion per backend that the resolved device/EP outcome matches the pre-refactor string outcome for all 5 producible ResolvedBackends:</li>
+</ul>
+<div class="language-python highlight"><pre><span></span><code><span id="__span-7-1"><a id="__codelineno-7-1" name="__codelineno-7-1" href="#__codelineno-7-1"></a><span class="c1"># tests/core/inference/test_backend_runtime_predicates.py</span>
+</span><span id="__span-7-2"><a id="__codelineno-7-2" name="__codelineno-7-2" href="#__codelineno-7-2"></a><span class="kn">import</span><span class="w"> </span><span class="nn">pytest</span>
+</span><span id="__span-7-3"><a id="__codelineno-7-3" name="__codelineno-7-3" href="#__codelineno-7-3"></a><span class="kn">from</span><span class="w"> </span><span class="nn">hydra_suite.runtime.resolver</span><span class="w"> </span><span class="kn">import</span> <span class="n">ResolvedBackend</span>
+</span><span id="__span-7-4"><a id="__codelineno-7-4" name="__codelineno-7-4" href="#__codelineno-7-4"></a><span class="kn">from</span><span class="w"> </span><span class="nn">hydra_suite.core.individual.classification.backend</span><span class="w"> </span><span class="kn">import</span> <span class="n">_torch_device_for_resolved</span>
+</span><span id="__span-7-5"><a id="__codelineno-7-5" name="__codelineno-7-5" href="#__codelineno-7-5"></a>
+</span><span id="__span-7-6"><a id="__codelineno-7-6" name="__codelineno-7-6" href="#__codelineno-7-6"></a><span class="n">FIVE</span> <span class="o">=</span> <span class="p">[</span>
+</span><span id="__span-7-7"><a id="__codelineno-7-7" name="__codelineno-7-7" href="#__codelineno-7-7"></a>    <span class="p">(</span><span class="n">ResolvedBackend</span><span class="p">(</span><span class="s2">"torch"</span><span class="p">,</span> <span class="s2">"cpu"</span><span class="p">,</span> <span class="kc">False</span><span class="p">),</span> <span class="s2">"cpu"</span><span class="p">),</span>
+</span><span id="__span-7-8"><a id="__codelineno-7-8" name="__codelineno-7-8" href="#__codelineno-7-8"></a>    <span class="p">(</span><span class="n">ResolvedBackend</span><span class="p">(</span><span class="s2">"torch"</span><span class="p">,</span> <span class="s2">"mps"</span><span class="p">,</span> <span class="kc">False</span><span class="p">),</span> <span class="s2">"mps"</span><span class="p">),</span>
+</span><span id="__span-7-9"><a id="__codelineno-7-9" name="__codelineno-7-9" href="#__codelineno-7-9"></a>    <span class="p">(</span><span class="n">ResolvedBackend</span><span class="p">(</span><span class="s2">"torch"</span><span class="p">,</span> <span class="s2">"cuda"</span><span class="p">,</span> <span class="kc">False</span><span class="p">),</span> <span class="s2">"cuda"</span><span class="p">),</span>
+</span><span id="__span-7-10"><a id="__codelineno-7-10" name="__codelineno-7-10" href="#__codelineno-7-10"></a>    <span class="p">(</span><span class="n">ResolvedBackend</span><span class="p">(</span><span class="s2">"tensorrt"</span><span class="p">,</span> <span class="s2">"cuda"</span><span class="p">,</span> <span class="kc">False</span><span class="p">),</span> <span class="s2">"cuda"</span><span class="p">),</span>
+</span><span id="__span-7-11"><a id="__codelineno-7-11" name="__codelineno-7-11" href="#__codelineno-7-11"></a>    <span class="p">(</span><span class="n">ResolvedBackend</span><span class="p">(</span><span class="s2">"coreml"</span><span class="p">,</span> <span class="s2">"mps"</span><span class="p">,</span> <span class="kc">False</span><span class="p">),</span> <span class="s2">"mps"</span><span class="p">),</span>
+</span><span id="__span-7-12"><a id="__codelineno-7-12" name="__codelineno-7-12" href="#__codelineno-7-12"></a><span class="p">]</span>
+</span><span id="__span-7-13"><a id="__codelineno-7-13" name="__codelineno-7-13" href="#__codelineno-7-13"></a>
+</span><span id="__span-7-14"><a id="__codelineno-7-14" name="__codelineno-7-14" href="#__codelineno-7-14"></a><span class="nd">@pytest</span><span class="o">.</span><span class="n">mark</span><span class="o">.</span><span class="n">parametrize</span><span class="p">(</span><span class="s2">"resolved,expected_device"</span><span class="p">,</span> <span class="n">FIVE</span><span class="p">)</span>
+</span><span id="__span-7-15"><a id="__codelineno-7-15" name="__codelineno-7-15" href="#__codelineno-7-15"></a><span class="k">def</span><span class="w"> </span><span class="nf">test_torch_device_for_resolved</span><span class="p">(</span><span class="n">resolved</span><span class="p">,</span> <span class="n">expected_device</span><span class="p">):</span>
+</span><span id="__span-7-16"><a id="__codelineno-7-16" name="__codelineno-7-16" href="#__codelineno-7-16"></a>    <span class="k">assert</span> <span class="n">_torch_device_for_resolved</span><span class="p">(</span><span class="n">resolved</span><span class="p">)</span> <span class="o">==</span> <span class="n">expected_device</span>
+</span></code></pre></div>
+<ul class="task-list">
+<li class="task-list-item"><label class="task-list-control"><input type="checkbox" disabled/><span class="task-list-indicator"></span></label> <strong>Step 2: Run to verify it fails</strong></li>
+</ul>
+<p>Run: <code>python -m pytest tests/core/inference/test_backend_runtime_predicates.py -v</code>
+Expected: FAIL — <code>_torch_device_for_resolved</code> not defined.</p>
+<ul class="task-list">
+<li class="task-list-item">
+<p><label class="task-list-control"><input type="checkbox" disabled/><span class="task-list-indicator"></span></label> <strong>Step 3: Apply the transformation rules</strong> — rewrite <code>classification/backend.py</code> first: add <code>_torch_device_for_resolved(resolved) -&gt; str: return resolved.device</code>; change <code>ClassifierBackend.__init__</code> to accept <code>resolved: ResolvedBackend</code>; replace the string predicates per the table; call <code>execution_providers_for(resolved)</code>. Repeat for <code>classification/headtail.py</code>, <code>pose/backends/sleap.py</code>. Then update the 5 stage files to pass <code>runtime.resolved</code>.</p>
+</li>
+<li class="task-list-item">
+<p><label class="task-list-control"><input type="checkbox" disabled/><span class="task-list-indicator"></span></label> <strong>Step 4: Run backend + golden + full inference tests</strong></p>
+</li>
+</ul>
+<p>Run: <code>python -m pytest tests/core/inference tests/runtime/test_resolver_golden.py -v</code>
+Expected: PASS.</p>
+<ul class="task-list">
+<li class="task-list-item"><label class="task-list-control"><input type="checkbox" disabled/><span class="task-list-indicator"></span></label> <strong>Step 5: Commit</strong></li>
+</ul>
+<div class="language-bash highlight"><pre><span></span><code><span id="__span-8-1"><a id="__codelineno-8-1" name="__codelineno-8-1" href="#__codelineno-8-1"></a>make<span class="w"> </span>format
+</span><span id="__span-8-2"><a id="__codelineno-8-2" name="__codelineno-8-2" href="#__codelineno-8-2"></a>git<span class="w"> </span>add<span class="w"> </span>src/hydra_suite/core/inference/stages<span class="w"> </span>src/hydra_suite/core/individual<span class="w"> </span>tests/core/inference/test_backend_runtime_predicates.py
+</span><span id="__span-8-3"><a id="__codelineno-8-3" name="__codelineno-8-3" href="#__codelineno-8-3"></a>git<span class="w"> </span>commit<span class="w"> </span>-m<span class="w"> </span><span class="s2">"refactor(inference): backends consume ResolvedBackend, not runtime strings"</span>
+</span></code></pre></div>
+<hr />
+<h2 id="task-5-delete-runtime_to_compute_runtime-and-resolve_compute_runtime">Task 5: Delete <code>runtime_to_compute_runtime</code> and <code>resolve_compute_runtime</code><a class="headerlink" href="#task-5-delete-runtime_to_compute_runtime-and-resolve_compute_runtime" title="Permanent link">&para;</a></h2>
+<p><strong>Files:</strong>
+- Modify: <code>src/hydra_suite/core/inference/runtime.py</code> (delete <code>runtime_to_compute_runtime</code>; derive <code>cuda_mode</code>/<code>coreml_mode</code>/<code>tensor_on_cuda</code> from <code>resolved</code>)
+- Modify: <code>src/hydra_suite/runtime/resolver.py:104-124</code> (delete <code>resolve_compute_runtime</code>)
+- Modify: any residual importers (<code>stages/obb.py</code>, <code>pose.py</code>, <code>cnn.py</code>, <code>headtail.py</code> already switched in Task 4; confirm none remain)</p>
+<p><strong>Interfaces:</strong>
+- Consumes: <code>RuntimeContext.resolved</code>.
+- Produces: nothing new; removes two bridges.</p>
+<ul class="task-list">
+<li class="task-list-item"><label class="task-list-control"><input type="checkbox" disabled/><span class="task-list-indicator"></span></label> <strong>Step 1: Confirm no live callers remain</strong></li>
+</ul>
+<p>Run: <code>grep -rn "runtime_to_compute_runtime\|resolve_compute_runtime" src/ --include='*.py' | grep -v "def "</code>
+Expected: only the definitions themselves (and doc comments). If any live caller remains, it was missed in Task 4 — fix it there first.</p>
+<ul class="task-list">
+<li class="task-list-item"><label class="task-list-control"><input type="checkbox" disabled/><span class="task-list-indicator"></span></label> <strong>Step 2: Write/adjust the guard test</strong> — assert mode flags derive from <code>resolved</code>:</li>
+</ul>
+<div class="language-python highlight"><pre><span></span><code><span id="__span-9-1"><a id="__codelineno-9-1" name="__codelineno-9-1" href="#__codelineno-9-1"></a><span class="k">def</span><span class="w"> </span><span class="nf">test_mode_flags_from_resolved</span><span class="p">():</span>
+</span><span id="__span-9-2"><a id="__codelineno-9-2" name="__codelineno-9-2" href="#__codelineno-9-2"></a>    <span class="kn">from</span><span class="w"> </span><span class="nn">hydra_suite.core.inference.config</span><span class="w"> </span><span class="kn">import</span> <span class="n">InferenceConfig</span>
+</span><span id="__span-9-3"><a id="__codelineno-9-3" name="__codelineno-9-3" href="#__codelineno-9-3"></a>    <span class="kn">from</span><span class="w"> </span><span class="nn">hydra_suite.core.inference.runtime</span><span class="w"> </span><span class="kn">import</span> <span class="n">RuntimeContext</span>
+</span><span id="__span-9-4"><a id="__codelineno-9-4" name="__codelineno-9-4" href="#__codelineno-9-4"></a>    <span class="n">ctx</span> <span class="o">=</span> <span class="n">RuntimeContext</span><span class="o">.</span><span class="n">from_config</span><span class="p">(</span><span class="n">InferenceConfig</span><span class="p">(</span><span class="n">runtime_tier</span><span class="o">=</span><span class="s2">"cpu"</span><span class="p">))</span>
+</span><span id="__span-9-5"><a id="__codelineno-9-5" name="__codelineno-9-5" href="#__codelineno-9-5"></a>    <span class="k">assert</span> <span class="n">ctx</span><span class="o">.</span><span class="n">cuda_mode</span> <span class="ow">is</span> <span class="kc">False</span> <span class="ow">and</span> <span class="n">ctx</span><span class="o">.</span><span class="n">coreml_mode</span> <span class="ow">is</span> <span class="kc">False</span>
+</span></code></pre></div>
+<p>Add to <code>tests/core/inference/test_runtime_context_resolved.py</code>.</p>
+<ul class="task-list">
+<li class="task-list-item"><label class="task-list-control"><input type="checkbox" disabled/><span class="task-list-indicator"></span></label> <strong>Step 3: Delete both functions; make mode flags computed from <code>resolved</code></strong></li>
+</ul>
+<p>Replace the stored <code>cuda_mode</code>/<code>coreml_mode</code>/<code>tensor_on_cuda</code> construction so they are computed from <code>resolved</code> (e.g. <code>cuda_mode = resolved.device == "cuda" and resolved.backend == "torch"</code>), preserving the <code>__post_init__</code> guard. Delete <code>resolve_compute_runtime</code> from <code>resolver.py</code>.</p>
+<ul class="task-list">
+<li class="task-list-item"><label class="task-list-control"><input type="checkbox" disabled/><span class="task-list-indicator"></span></label> <strong>Step 4: Run tests</strong></li>
+</ul>
+<p>Run: <code>python -m pytest tests/core/inference tests/runtime -v</code>
+Expected: PASS.</p>
+<ul class="task-list">
+<li class="task-list-item"><label class="task-list-control"><input type="checkbox" disabled/><span class="task-list-indicator"></span></label> <strong>Step 5: Commit</strong></li>
+</ul>
+<div class="language-bash highlight"><pre><span></span><code><span id="__span-10-1"><a id="__codelineno-10-1" name="__codelineno-10-1" href="#__codelineno-10-1"></a>make<span class="w"> </span>format
+</span><span id="__span-10-2"><a id="__codelineno-10-2" name="__codelineno-10-2" href="#__codelineno-10-2"></a>git<span class="w"> </span>add<span class="w"> </span>src/hydra_suite/core/inference/runtime.py<span class="w"> </span>src/hydra_suite/runtime/resolver.py<span class="w"> </span>tests/core/inference/test_runtime_context_resolved.py
+</span><span id="__span-10-3"><a id="__codelineno-10-3" name="__codelineno-10-3" href="#__codelineno-10-3"></a>git<span class="w"> </span>commit<span class="w"> </span>-m<span class="w"> </span><span class="s2">"refactor(runtime): delete runtime_to_compute_runtime + resolve_compute_runtime shims"</span>
+</span></code></pre></div>
+<hr />
+<h2 id="task-6-retire-the-compute_runtime-params-dict-write-channel">Task 6: Retire the <code>COMPUTE_RUNTIME</code> params-dict write channel<a class="headerlink" href="#task-6-retire-the-compute_runtime-params-dict-write-channel" title="Permanent link">&para;</a></h2>
+<p><strong>Files:</strong>
+- Modify: <code>src/hydra_suite/trackerkit/gui/orchestrators/config.py</code>, <code>orchestrators/tracking.py</code>, <code>gui/workers/preview_worker.py</code>, <code>gui/workers/crops_worker.py</code>, <code>trackerkit/tracking_cache.py</code>, <code>data/dataset_generation.py</code>
+- Test: <code>tests/core/inference/test_params_runtime_tier.py</code> (create)</p>
+<p><strong>Interfaces:</strong>
+- Consumes: <code>RUNTIME_TIER</code> param (already emitted at <code>preview_worker.py:576</code>, read at <code>worker.py:1146</code>).
+- Produces: params dicts carry only <code>RUNTIME_TIER</code>, no <code>COMPUTE_RUNTIME</code>.</p>
+<ul class="task-list">
+<li class="task-list-item"><label class="task-list-control"><input type="checkbox" disabled/><span class="task-list-indicator"></span></label> <strong>Step 1: Write the failing test</strong> — <code>build_inference_config_from_params</code> must honor <code>RUNTIME_TIER</code> with no <code>COMPUTE_RUNTIME</code> present:</li>
+</ul>
+<div class="language-python highlight"><pre><span></span><code><span id="__span-11-1"><a id="__codelineno-11-1" name="__codelineno-11-1" href="#__codelineno-11-1"></a><span class="c1"># tests/core/inference/test_params_runtime_tier.py</span>
+</span><span id="__span-11-2"><a id="__codelineno-11-2" name="__codelineno-11-2" href="#__codelineno-11-2"></a><span class="kn">from</span><span class="w"> </span><span class="nn">hydra_suite.core.inference.config</span><span class="w"> </span><span class="kn">import</span> <span class="n">build_inference_config_from_params</span>
+</span><span id="__span-11-3"><a id="__codelineno-11-3" name="__codelineno-11-3" href="#__codelineno-11-3"></a>
+</span><span id="__span-11-4"><a id="__codelineno-11-4" name="__codelineno-11-4" href="#__codelineno-11-4"></a><span class="k">def</span><span class="w"> </span><span class="nf">test_runtime_tier_only_params</span><span class="p">():</span>
+</span><span id="__span-11-5"><a id="__codelineno-11-5" name="__codelineno-11-5" href="#__codelineno-11-5"></a>    <span class="n">cfg</span> <span class="o">=</span> <span class="n">build_inference_config_from_params</span><span class="p">({</span><span class="s2">"RUNTIME_TIER"</span><span class="p">:</span> <span class="s2">"gpu_fast"</span><span class="p">})</span>
+</span><span id="__span-11-6"><a id="__codelineno-11-6" name="__codelineno-11-6" href="#__codelineno-11-6"></a>    <span class="k">assert</span> <span class="n">cfg</span><span class="o">.</span><span class="n">runtime_tier</span> <span class="o">==</span> <span class="s2">"gpu_fast"</span>
+</span><span id="__span-11-7"><a id="__codelineno-11-7" name="__codelineno-11-7" href="#__codelineno-11-7"></a>
+</span><span id="__span-11-8"><a id="__codelineno-11-8" name="__codelineno-11-8" href="#__codelineno-11-8"></a><span class="k">def</span><span class="w"> </span><span class="nf">test_missing_runtime_tier_defaults_cpu</span><span class="p">():</span>
+</span><span id="__span-11-9"><a id="__codelineno-11-9" name="__codelineno-11-9" href="#__codelineno-11-9"></a>    <span class="n">cfg</span> <span class="o">=</span> <span class="n">build_inference_config_from_params</span><span class="p">({})</span>
+</span><span id="__span-11-10"><a id="__codelineno-11-10" name="__codelineno-11-10" href="#__codelineno-11-10"></a>    <span class="k">assert</span> <span class="n">cfg</span><span class="o">.</span><span class="n">runtime_tier</span> <span class="o">==</span> <span class="s2">"cpu"</span>
+</span></code></pre></div>
+<ul class="task-list">
+<li class="task-list-item"><label class="task-list-control"><input type="checkbox" disabled/><span class="task-list-indicator"></span></label> <strong>Step 2: Run to verify current behavior</strong> (may already pass for line 1; line 2 depends on Task 10)</li>
+</ul>
+<p>Run: <code>python -m pytest tests/core/inference/test_params_runtime_tier.py -v</code>
+Expected: first test PASS, second may FAIL until Task 10 — mark <code>test_missing_runtime_tier_defaults_cpu</code> with <code>@pytest.mark.xfail(reason="Task 10")</code> for now.</p>
+<ul class="task-list">
+<li class="task-list-item">
+<p><label class="task-list-control"><input type="checkbox" disabled/><span class="task-list-indicator"></span></label> <strong>Step 3: Remove <code>COMPUTE_RUNTIME</code> writes</strong> — in each GUI/orchestrator/data file above, delete the line that sets <code>params["COMPUTE_RUNTIME"] = ...</code>. Keep the <code>RUNTIME_TIER</code> write. Do NOT touch <code>properties/cache.py</code> (Task 7) or <code>worker.py</code>'s reader yet.</p>
+</li>
+<li class="task-list-item">
+<p><label class="task-list-control"><input type="checkbox" disabled/><span class="task-list-indicator"></span></label> <strong>Step 4: Run GUI-adjacent + inference tests</strong></p>
+</li>
+</ul>
+<p>Run: <code>python -m pytest tests/ -k "params or config or tracking" -v</code>
+Expected: PASS (xfail stays xfail).</p>
+<ul class="task-list">
+<li class="task-list-item"><label class="task-list-control"><input type="checkbox" disabled/><span class="task-list-indicator"></span></label> <strong>Step 5: Commit</strong></li>
+</ul>
+<div class="language-bash highlight"><pre><span></span><code><span id="__span-12-1"><a id="__codelineno-12-1" name="__codelineno-12-1" href="#__codelineno-12-1"></a>make<span class="w"> </span>format
+</span><span id="__span-12-2"><a id="__codelineno-12-2" name="__codelineno-12-2" href="#__codelineno-12-2"></a>git<span class="w"> </span>add<span class="w"> </span>src/hydra_suite<span class="w"> </span>tests/core/inference/test_params_runtime_tier.py
+</span><span id="__span-12-3"><a id="__codelineno-12-3" name="__codelineno-12-3" href="#__codelineno-12-3"></a>git<span class="w"> </span>commit<span class="w"> </span>-m<span class="w"> </span><span class="s2">"refactor(trackerkit): drop COMPUTE_RUNTIME param writes, keep RUNTIME_TIER"</span>
+</span></code></pre></div>
+<hr />
+<h2 id="task-7-resolve-tier-at-the-propertiescachepy-boundary-drop-pose-flavor-fields">Task 7: Resolve tier at the <code>properties/cache.py</code> boundary; drop pose-flavor fields<a class="headerlink" href="#task-7-resolve-tier-at-the-propertiescachepy-boundary-drop-pose-flavor-fields" title="Permanent link">&para;</a></h2>
+<p><strong>Files:</strong>
+- Modify: <code>src/hydra_suite/core/individual/properties/cache.py:173-196,256-271</code>
+- Modify: pose-flavor threading in <code>trackerkit/gui/orchestrators/{session,tracking,config}.py</code>, <code>panels/{detection_panel,identity_panel}.py</code>, <code>trackerkit/gui/main_window.py</code>, <code>posekit/gui/main_window.py</code>, <code>trackerkit/cli_config.py</code>
+- Test: <code>tests/core/individual/test_cache_runtime_payload.py</code> (create)</p>
+<p><strong>Interfaces:</strong>
+- Consumes: <code>RUNTIME_TIER</code> param, <code>RuntimeResolver</code>, <code>detect_platform</code>.
+- Produces: cache payload stores resolved <code>device</code>/<code>backend</code> (no <code>pose_runtime_flavor</code>/<code>pose_sleap_device</code>).</p>
+<ul class="task-list">
+<li class="task-list-item"><label class="task-list-control"><input type="checkbox" disabled/><span class="task-list-indicator"></span></label> <strong>Step 1: Write the failing test</strong></li>
+</ul>
+<div class="language-python highlight"><pre><span></span><code><span id="__span-13-1"><a id="__codelineno-13-1" name="__codelineno-13-1" href="#__codelineno-13-1"></a><span class="c1"># tests/core/individual/test_cache_runtime_payload.py</span>
+</span><span id="__span-13-2"><a id="__codelineno-13-2" name="__codelineno-13-2" href="#__codelineno-13-2"></a><span class="kn">from</span><span class="w"> </span><span class="nn">hydra_suite.core.individual.properties.cache</span><span class="w"> </span><span class="kn">import</span> <span class="n">_runtime_payload_for_params</span>
+</span><span id="__span-13-3"><a id="__codelineno-13-3" name="__codelineno-13-3" href="#__codelineno-13-3"></a>
+</span><span id="__span-13-4"><a id="__codelineno-13-4" name="__codelineno-13-4" href="#__codelineno-13-4"></a><span class="k">def</span><span class="w"> </span><span class="nf">test_payload_from_tier</span><span class="p">():</span>
+</span><span id="__span-13-5"><a id="__codelineno-13-5" name="__codelineno-13-5" href="#__codelineno-13-5"></a>    <span class="n">payload</span> <span class="o">=</span> <span class="n">_runtime_payload_for_params</span><span class="p">({</span><span class="s2">"RUNTIME_TIER"</span><span class="p">:</span> <span class="s2">"cpu"</span><span class="p">})</span>
+</span><span id="__span-13-6"><a id="__codelineno-13-6" name="__codelineno-13-6" href="#__codelineno-13-6"></a>    <span class="k">assert</span> <span class="n">payload</span><span class="p">[</span><span class="s2">"device"</span><span class="p">]</span> <span class="o">==</span> <span class="s2">"cpu"</span>
+</span><span id="__span-13-7"><a id="__codelineno-13-7" name="__codelineno-13-7" href="#__codelineno-13-7"></a>    <span class="k">assert</span> <span class="s2">"pose_runtime_flavor"</span> <span class="ow">not</span> <span class="ow">in</span> <span class="n">payload</span>
+</span></code></pre></div>
+<ul class="task-list">
+<li class="task-list-item"><label class="task-list-control"><input type="checkbox" disabled/><span class="task-list-indicator"></span></label> <strong>Step 2: Run to verify it fails</strong></li>
+</ul>
+<p>Run: <code>python -m pytest tests/core/individual/test_cache_runtime_payload.py -v</code>
+Expected: FAIL — helper not defined.</p>
+<ul class="task-list">
+<li class="task-list-item">
+<p><label class="task-list-control"><input type="checkbox" disabled/><span class="task-list-indicator"></span></label> <strong>Step 3: Implement</strong> — add <code>_runtime_payload_for_params(params)</code> that reads <code>RUNTIME_TIER</code>, resolves via <code>RuntimeResolver(tier, detect_platform()).resolve("sleap_pose")</code>, and returns <code>{"device": resolved.device, "backend": resolved.backend}</code>. Replace the <code>COMPUTE_RUNTIME</code>/<code>POSE_SLEAP_DEVICE</code> reads at 173-196 and 256-271 with it. Delete <code>pose_runtime_flavor</code>/<code>pose_sleap_device</code> set/get in the listed GUI files.</p>
+</li>
+<li class="task-list-item">
+<p><label class="task-list-control"><input type="checkbox" disabled/><span class="task-list-indicator"></span></label> <strong>Step 4: Run identity + GUI tests</strong></p>
+</li>
+</ul>
+<p>Run: <code>python -m pytest tests/core/individual tests/ -k "cache or pose or identity" -v</code>
+Expected: PASS.</p>
+<ul class="task-list">
+<li class="task-list-item"><label class="task-list-control"><input type="checkbox" disabled/><span class="task-list-indicator"></span></label> <strong>Step 5: Commit</strong></li>
+</ul>
+<div class="language-bash highlight"><pre><span></span><code><span id="__span-14-1"><a id="__codelineno-14-1" name="__codelineno-14-1" href="#__codelineno-14-1"></a>make<span class="w"> </span>format
+</span><span id="__span-14-2"><a id="__codelineno-14-2" name="__codelineno-14-2" href="#__codelineno-14-2"></a>git<span class="w"> </span>add<span class="w"> </span>src/hydra_suite<span class="w"> </span>tests/core/individual/test_cache_runtime_payload.py
+</span><span id="__span-14-3"><a id="__codelineno-14-3" name="__codelineno-14-3" href="#__codelineno-14-3"></a>git<span class="w"> </span>commit<span class="w"> </span>-m<span class="w"> </span><span class="s2">"refactor(identity): resolve runtime tier at cache boundary, drop pose-flavor strings"</span>
+</span></code></pre></div>
+<hr />
+<h2 id="task-8-delete-derive_pose_runtime_settings-infer_compute_runtime_from_legacy-producers">Task 8: Delete <code>derive_pose_runtime_settings</code> + <code>infer_compute_runtime_from_legacy</code> producers<a class="headerlink" href="#task-8-delete-derive_pose_runtime_settings-infer_compute_runtime_from_legacy-producers" title="Permanent link">&para;</a></h2>
+<p><strong>Files:</strong>
+- Modify: <code>src/hydra_suite/runtime/compute_runtime.py</code> (delete <code>derive_pose_runtime_settings</code>, <code>infer_compute_runtime_from_legacy</code>, <code>_runtime_from_pose_flavor</code>, <code>_best_auto_runtime</code>, <code>_best_explicit_onnx_runtime</code>)
+- Modify: <code>posekit/gui/runtimes.py</code> (remove re-exports), <code>trackerkit/gui/orchestrators/{session,tracking,config}.py</code>, <code>panels/detection_panel.py</code>, <code>trackerkit/cli_config.py</code> (drop imports/uses)</p>
+<p><strong>Interfaces:</strong>
+- Consumes: nothing new.
+- Produces: removes 5 legacy functions. All uses were eliminated in Tasks 6–7; this task confirms and deletes.</p>
+<ul class="task-list">
+<li class="task-list-item"><label class="task-list-control"><input type="checkbox" disabled/><span class="task-list-indicator"></span></label> <strong>Step 1: Confirm no live callers</strong></li>
+</ul>
+<p>Run: <code>grep -rn "derive_pose_runtime_settings\|infer_compute_runtime_from_legacy\|_runtime_from_pose_flavor" src/ --include='*.py' | grep -v "def "</code>
+Expected: empty (all removed in Tasks 6–7). If any remain, remove that call site first.</p>
+<ul class="task-list">
+<li class="task-list-item">
+<p><label class="task-list-control"><input type="checkbox" disabled/><span class="task-list-indicator"></span></label> <strong>Step 2: Delete the five functions</strong> from <code>compute_runtime.py</code> and their imports from <code>posekit/gui/runtimes.py</code> and the trackerkit files.</p>
+</li>
+<li class="task-list-item">
+<p><label class="task-list-control"><input type="checkbox" disabled/><span class="task-list-indicator"></span></label> <strong>Step 3: Run full suite</strong></p>
+</li>
+</ul>
+<p>Run: <code>make pytest</code>
+Expected: PASS.</p>
+<ul class="task-list">
+<li class="task-list-item"><label class="task-list-control"><input type="checkbox" disabled/><span class="task-list-indicator"></span></label> <strong>Step 4: Commit</strong></li>
+</ul>
+<div class="language-bash highlight"><pre><span></span><code><span id="__span-15-1"><a id="__codelineno-15-1" name="__codelineno-15-1" href="#__codelineno-15-1"></a>make<span class="w"> </span>format
+</span><span id="__span-15-2"><a id="__codelineno-15-2" name="__codelineno-15-2" href="#__codelineno-15-2"></a>git<span class="w"> </span>add<span class="w"> </span>src/hydra_suite
+</span><span id="__span-15-3"><a id="__codelineno-15-3" name="__codelineno-15-3" href="#__codelineno-15-3"></a>git<span class="w"> </span>commit<span class="w"> </span>-m<span class="w"> </span><span class="s2">"refactor(runtime): delete legacy pose-settings + legacy-config inference helpers"</span>
+</span></code></pre></div>
+<hr />
+<h2 id="task-9-rewrite-cuda_runtimescpu_runtimes-consumers-onto-resolvedbackend">Task 9: Rewrite <code>CUDA_RUNTIMES</code>/<code>CPU_RUNTIMES</code> consumers onto <code>ResolvedBackend</code><a class="headerlink" href="#task-9-rewrite-cuda_runtimescpu_runtimes-consumers-onto-resolvedbackend" title="Permanent link">&para;</a></h2>
+<p><strong>Files:</strong>
+- Modify: <code>src/hydra_suite/core/inference/config.py:15-16,33</code>, <code>runtime.py:30,140</code>, <code>stages/obb.py:12</code>
+- Test: extend <code>tests/core/inference/test_runtime_context_resolved.py</code></p>
+<p><strong>Interfaces:</strong>
+- Consumes: <code>ResolvedBackend.device</code>.
+- Produces: removes the frozenset-membership runtime classification; <code>default_runtime: ComputeRuntime</code> field replaced by <code>resolved</code>.</p>
+<ul class="task-list">
+<li class="task-list-item"><label class="task-list-control"><input type="checkbox" disabled/><span class="task-list-indicator"></span></label> <strong>Step 1: Locate every frozenset use</strong></li>
+</ul>
+<p>Run: <code>grep -rn "CUDA_RUNTIMES\|CPU_RUNTIMES\|default_runtime" src/ --include='*.py'</code>
+Record each site; each becomes a <code>resolved.device == "cuda"</code> / <code>== "cpu"</code> check.</p>
+<ul class="task-list">
+<li class="task-list-item"><label class="task-list-control"><input type="checkbox" disabled/><span class="task-list-indicator"></span></label> <strong>Step 2: Write the guard test</strong> — assert the replaced classification matches the frozensets for all 5 producible backends:</li>
+</ul>
+<div class="language-python highlight"><pre><span></span><code><span id="__span-16-1"><a id="__codelineno-16-1" name="__codelineno-16-1" href="#__codelineno-16-1"></a><span class="k">def</span><span class="w"> </span><span class="nf">test_cuda_classification_matches_device</span><span class="p">():</span>
+</span><span id="__span-16-2"><a id="__codelineno-16-2" name="__codelineno-16-2" href="#__codelineno-16-2"></a>    <span class="kn">from</span><span class="w"> </span><span class="nn">hydra_suite.runtime.resolver</span><span class="w"> </span><span class="kn">import</span> <span class="n">ResolvedBackend</span>
+</span><span id="__span-16-3"><a id="__codelineno-16-3" name="__codelineno-16-3" href="#__codelineno-16-3"></a>    <span class="k">for</span> <span class="n">rb</span> <span class="ow">in</span> <span class="p">[</span><span class="n">ResolvedBackend</span><span class="p">(</span><span class="s2">"torch"</span><span class="p">,</span><span class="s2">"cuda"</span><span class="p">,</span><span class="kc">False</span><span class="p">),</span> <span class="n">ResolvedBackend</span><span class="p">(</span><span class="s2">"tensorrt"</span><span class="p">,</span><span class="s2">"cuda"</span><span class="p">,</span><span class="kc">False</span><span class="p">)]:</span>
+</span><span id="__span-16-4"><a id="__codelineno-16-4" name="__codelineno-16-4" href="#__codelineno-16-4"></a>        <span class="k">assert</span> <span class="n">rb</span><span class="o">.</span><span class="n">device</span> <span class="o">==</span> <span class="s2">"cuda"</span>
+</span><span id="__span-16-5"><a id="__codelineno-16-5" name="__codelineno-16-5" href="#__codelineno-16-5"></a>    <span class="k">for</span> <span class="n">rb</span> <span class="ow">in</span> <span class="p">[</span><span class="n">ResolvedBackend</span><span class="p">(</span><span class="s2">"torch"</span><span class="p">,</span><span class="s2">"cpu"</span><span class="p">,</span><span class="kc">False</span><span class="p">),</span> <span class="n">ResolvedBackend</span><span class="p">(</span><span class="s2">"torch"</span><span class="p">,</span><span class="s2">"mps"</span><span class="p">,</span><span class="kc">False</span><span class="p">),</span> <span class="n">ResolvedBackend</span><span class="p">(</span><span class="s2">"coreml"</span><span class="p">,</span><span class="s2">"mps"</span><span class="p">,</span><span class="kc">False</span><span class="p">)]:</span>
+</span><span id="__span-16-6"><a id="__codelineno-16-6" name="__codelineno-16-6" href="#__codelineno-16-6"></a>        <span class="k">assert</span> <span class="n">rb</span><span class="o">.</span><span class="n">device</span> <span class="o">!=</span> <span class="s2">"cuda"</span>
+</span></code></pre></div>
+<ul class="task-list">
+<li class="task-list-item">
+<p><label class="task-list-control"><input type="checkbox" disabled/><span class="task-list-indicator"></span></label> <strong>Step 3: Replace each site</strong> — swap <code>rt in CUDA_RUNTIMES</code> → <code>resolved.device == "cuda"</code>; remove the <code>default_runtime</code> field from <code>RuntimeContext</code>, using <code>resolved</code> instead. Delete the two frozensets and the <code>fast</code> set at <code>config.py:33</code>.</p>
+</li>
+<li class="task-list-item">
+<p><label class="task-list-control"><input type="checkbox" disabled/><span class="task-list-indicator"></span></label> <strong>Step 4: Run tests</strong></p>
+</li>
+</ul>
+<p>Run: <code>python -m pytest tests/core/inference tests/runtime -v</code>
+Expected: PASS.</p>
+<ul class="task-list">
+<li class="task-list-item"><label class="task-list-control"><input type="checkbox" disabled/><span class="task-list-indicator"></span></label> <strong>Step 5: Commit</strong></li>
+</ul>
+<div class="language-bash highlight"><pre><span></span><code><span id="__span-17-1"><a id="__codelineno-17-1" name="__codelineno-17-1" href="#__codelineno-17-1"></a>make<span class="w"> </span>format
+</span><span id="__span-17-2"><a id="__codelineno-17-2" name="__codelineno-17-2" href="#__codelineno-17-2"></a>git<span class="w"> </span>add<span class="w"> </span>src/hydra_suite/core/inference<span class="w"> </span>tests/core/inference/test_runtime_context_resolved.py
+</span><span id="__span-17-3"><a id="__codelineno-17-3" name="__codelineno-17-3" href="#__codelineno-17-3"></a>git<span class="w"> </span>commit<span class="w"> </span>-m<span class="w"> </span><span class="s2">"refactor(inference): classify runtime by ResolvedBackend.device, drop frozensets"</span>
+</span></code></pre></div>
+<hr />
+<h2 id="task-10-loud-missing-tier-error-drop-per-stage-compute_runtime-fields-computeruntime-type">Task 10: Loud missing-tier error; drop per-stage <code>compute_runtime</code> fields + <code>ComputeRuntime</code> type<a class="headerlink" href="#task-10-loud-missing-tier-error-drop-per-stage-compute_runtime-fields-computeruntime-type" title="Permanent link">&para;</a></h2>
+<p><strong>Files:</strong>
+- Modify: <code>src/hydra_suite/core/inference/config.py</code> (<code>_dict_to_config:437-447</code>, <code>build_inference_config_from_params:491-500</code>, per-stage dataclass fields at lines 89,105-106,217,231,245,257; the <code>ComputeRuntime</code> Literal at 11; <code>_collect_legacy_runtime_strings</code>; <code>migrate_runtime_to_tier</code>)
+- Test: extend <code>tests/core/inference/test_params_runtime_tier.py</code></p>
+<p><strong>Interfaces:</strong>
+- Consumes: nothing new.
+- Produces: <code>from_dict</code> raises <code>ValueError</code> on missing <code>runtime_tier</code>; <code>from_params</code> defaults absent tier to <code>"cpu"</code>; per-stage <code>compute_runtime</code> fields and <code>ComputeRuntime</code> gone.</p>
+<ul class="task-list">
+<li class="task-list-item"><label class="task-list-control"><input type="checkbox" disabled/><span class="task-list-indicator"></span></label> <strong>Step 1: Write the tests</strong> (replace the xfail from Task 6):</li>
+</ul>
+<div class="language-python highlight"><pre><span></span><code><span id="__span-18-1"><a id="__codelineno-18-1" name="__codelineno-18-1" href="#__codelineno-18-1"></a><span class="k">def</span><span class="w"> </span><span class="nf">test_from_dict_missing_tier_raises</span><span class="p">():</span>
+</span><span id="__span-18-2"><a id="__codelineno-18-2" name="__codelineno-18-2" href="#__codelineno-18-2"></a>    <span class="kn">import</span><span class="w"> </span><span class="nn">pytest</span>
+</span><span id="__span-18-3"><a id="__codelineno-18-3" name="__codelineno-18-3" href="#__codelineno-18-3"></a>    <span class="kn">from</span><span class="w"> </span><span class="nn">hydra_suite.core.inference.config</span><span class="w"> </span><span class="kn">import</span> <span class="n">_dict_to_config</span>
+</span><span id="__span-18-4"><a id="__codelineno-18-4" name="__codelineno-18-4" href="#__codelineno-18-4"></a>    <span class="k">with</span> <span class="n">pytest</span><span class="o">.</span><span class="n">raises</span><span class="p">(</span><span class="ne">ValueError</span><span class="p">,</span> <span class="n">match</span><span class="o">=</span><span class="s2">"migrate_runtime_config"</span><span class="p">):</span>
+</span><span id="__span-18-5"><a id="__codelineno-18-5" name="__codelineno-18-5" href="#__codelineno-18-5"></a>        <span class="n">_dict_to_config</span><span class="p">({</span><span class="s2">"obb"</span><span class="p">:</span> <span class="p">{}})</span>  <span class="c1"># no runtime_tier</span>
+</span><span id="__span-18-6"><a id="__codelineno-18-6" name="__codelineno-18-6" href="#__codelineno-18-6"></a>
+</span><span id="__span-18-7"><a id="__codelineno-18-7" name="__codelineno-18-7" href="#__codelineno-18-7"></a><span class="k">def</span><span class="w"> </span><span class="nf">test_missing_runtime_tier_defaults_cpu</span><span class="p">():</span>
+</span><span id="__span-18-8"><a id="__codelineno-18-8" name="__codelineno-18-8" href="#__codelineno-18-8"></a>    <span class="kn">from</span><span class="w"> </span><span class="nn">hydra_suite.core.inference.config</span><span class="w"> </span><span class="kn">import</span> <span class="n">build_inference_config_from_params</span>
+</span><span id="__span-18-9"><a id="__codelineno-18-9" name="__codelineno-18-9" href="#__codelineno-18-9"></a>    <span class="k">assert</span> <span class="n">build_inference_config_from_params</span><span class="p">({})</span><span class="o">.</span><span class="n">runtime_tier</span> <span class="o">==</span> <span class="s2">"cpu"</span>
+</span></code></pre></div>
+<p>(Remove the <code>xfail</code> marker added in Task 6.)</p>
+<ul class="task-list">
+<li class="task-list-item"><label class="task-list-control"><input type="checkbox" disabled/><span class="task-list-indicator"></span></label> <strong>Step 2: Run to verify failure</strong></li>
+</ul>
+<p>Run: <code>python -m pytest tests/core/inference/test_params_runtime_tier.py -v</code>
+Expected: FAIL — currently migrates instead of raising.</p>
+<ul class="task-list">
+<li class="task-list-item"><label class="task-list-control"><input type="checkbox" disabled/><span class="task-list-indicator"></span></label> <strong>Step 3: Implement</strong></li>
+</ul>
+<p>In <code>_dict_to_config</code>: replace the <code>migrate_runtime_to_tier(legacy)</code> fallback with
+<div class="language-python highlight"><pre><span></span><code><span id="__span-19-1"><a id="__codelineno-19-1" name="__codelineno-19-1" href="#__codelineno-19-1"></a><span class="n">raw_tier</span> <span class="o">=</span> <span class="n">d</span><span class="o">.</span><span class="n">get</span><span class="p">(</span><span class="s2">"runtime_tier"</span><span class="p">)</span>
+</span><span id="__span-19-2"><a id="__codelineno-19-2" name="__codelineno-19-2" href="#__codelineno-19-2"></a><span class="k">if</span> <span class="n">raw_tier</span> <span class="ow">is</span> <span class="kc">None</span><span class="p">:</span>
+</span><span id="__span-19-3"><a id="__codelineno-19-3" name="__codelineno-19-3" href="#__codelineno-19-3"></a>    <span class="k">raise</span> <span class="ne">ValueError</span><span class="p">(</span>
+</span><span id="__span-19-4"><a id="__codelineno-19-4" name="__codelineno-19-4" href="#__codelineno-19-4"></a>        <span class="s2">"Config has no 'runtime_tier'. Run "</span>
+</span><span id="__span-19-5"><a id="__codelineno-19-5" name="__codelineno-19-5" href="#__codelineno-19-5"></a>        <span class="s2">"`python scripts/migrate_runtime_config.py &lt;file&gt;` to migrate legacy configs."</span>
+</span><span id="__span-19-6"><a id="__codelineno-19-6" name="__codelineno-19-6" href="#__codelineno-19-6"></a>    <span class="p">)</span>
+</span></code></pre></div>
+In <code>build_inference_config_from_params</code>: replace the <code>migrate_runtime_to_tier({compute_runtime})</code> fallback with <code>runtime_tier = _raw_tier if _raw_tier in {"cpu","gpu","gpu_fast"} else "cpu"</code>. Delete every per-stage <code>compute_runtime</code> field and its <code>detect_compute_runtime</code>/<code>obb_compute_runtime</code> siblings, the <code>ComputeRuntime</code> Literal, <code>_collect_legacy_runtime_strings</code>, and <code>migrate_runtime_to_tier</code>. Remove now-dead <code>compute_runtime=...</code> kwargs in <code>from_params</code>'s config construction.</p>
+<ul class="task-list">
+<li class="task-list-item"><label class="task-list-control"><input type="checkbox" disabled/><span class="task-list-indicator"></span></label> <strong>Step 4: Run tests</strong></li>
+</ul>
+<p>Run: <code>python -m pytest tests/core/inference tests/runtime -v</code>
+Expected: PASS.</p>
+<ul class="task-list">
+<li class="task-list-item"><label class="task-list-control"><input type="checkbox" disabled/><span class="task-list-indicator"></span></label> <strong>Step 5: Commit</strong></li>
+</ul>
+<div class="language-bash highlight"><pre><span></span><code><span id="__span-20-1"><a id="__codelineno-20-1" name="__codelineno-20-1" href="#__codelineno-20-1"></a>make<span class="w"> </span>format
+</span><span id="__span-20-2"><a id="__codelineno-20-2" name="__codelineno-20-2" href="#__codelineno-20-2"></a>git<span class="w"> </span>add<span class="w"> </span>src/hydra_suite/core/inference/config.py<span class="w"> </span>tests/core/inference/test_params_runtime_tier.py
+</span><span id="__span-20-3"><a id="__codelineno-20-3" name="__codelineno-20-3" href="#__codelineno-20-3"></a>git<span class="w"> </span>commit<span class="w"> </span>-m<span class="w"> </span><span class="s2">"refactor(inference): loud missing-tier error, drop per-stage compute_runtime + ComputeRuntime"</span>
+</span></code></pre></div>
+<hr />
+<h2 id="task-11-one-shot-migration-script">Task 11: One-shot migration script<a class="headerlink" href="#task-11-one-shot-migration-script" title="Permanent link">&para;</a></h2>
+<p><strong>Files:</strong>
+- Create: <code>scripts/migrate_runtime_config.py</code>
+- Create: <code>tests/scripts/test_migrate_runtime_config.py</code>
+- Modify: <code>src/hydra_suite/resources/configs/ooceraea_biroi.json</code> (migrated output committed)</p>
+<p><strong>Interfaces:</strong>
+- Consumes: nothing from <code>src/</code> runtime modules (self-contained; the deleted legacy logic lives here).
+- Produces: CLI <code>python scripts/migrate_runtime_config.py &lt;path...&gt;</code> rewriting configs in place.</p>
+<ul class="task-list">
+<li class="task-list-item"><label class="task-list-control"><input type="checkbox" disabled/><span class="task-list-indicator"></span></label> <strong>Step 1: Write the failing test</strong> with representative legacy fixtures:</li>
+</ul>
+<div class="language-python highlight"><pre><span></span><code><span id="__span-21-1"><a id="__codelineno-21-1" name="__codelineno-21-1" href="#__codelineno-21-1"></a><span class="c1"># tests/scripts/test_migrate_runtime_config.py</span>
+</span><span id="__span-21-2"><a id="__codelineno-21-2" name="__codelineno-21-2" href="#__codelineno-21-2"></a><span class="kn">import</span><span class="w"> </span><span class="nn">json</span>
+</span><span id="__span-21-3"><a id="__codelineno-21-3" name="__codelineno-21-3" href="#__codelineno-21-3"></a><span class="kn">from</span><span class="w"> </span><span class="nn">scripts.migrate_runtime_config</span><span class="w"> </span><span class="kn">import</span> <span class="n">migrate_config_dict</span>
+</span><span id="__span-21-4"><a id="__codelineno-21-4" name="__codelineno-21-4" href="#__codelineno-21-4"></a>
+</span><span id="__span-21-5"><a id="__codelineno-21-5" name="__codelineno-21-5" href="#__codelineno-21-5"></a><span class="k">def</span><span class="w"> </span><span class="nf">test_per_stage_cuda_becomes_gpu</span><span class="p">():</span>
+</span><span id="__span-21-6"><a id="__codelineno-21-6" name="__codelineno-21-6" href="#__codelineno-21-6"></a>    <span class="n">out</span> <span class="o">=</span> <span class="n">migrate_config_dict</span><span class="p">({</span><span class="s2">"obb"</span><span class="p">:</span> <span class="p">{</span><span class="s2">"direct"</span><span class="p">:</span> <span class="p">{</span><span class="s2">"compute_runtime"</span><span class="p">:</span> <span class="s2">"cuda"</span><span class="p">}}})</span>
+</span><span id="__span-21-7"><a id="__codelineno-21-7" name="__codelineno-21-7" href="#__codelineno-21-7"></a>    <span class="k">assert</span> <span class="n">out</span><span class="p">[</span><span class="s2">"runtime_tier"</span><span class="p">]</span> <span class="o">==</span> <span class="s2">"gpu"</span>
+</span><span id="__span-21-8"><a id="__codelineno-21-8" name="__codelineno-21-8" href="#__codelineno-21-8"></a>    <span class="k">assert</span> <span class="s2">"compute_runtime"</span> <span class="ow">not</span> <span class="ow">in</span> <span class="n">out</span><span class="p">[</span><span class="s2">"obb"</span><span class="p">][</span><span class="s2">"direct"</span><span class="p">]</span>
+</span><span id="__span-21-9"><a id="__codelineno-21-9" name="__codelineno-21-9" href="#__codelineno-21-9"></a>
+</span><span id="__span-21-10"><a id="__codelineno-21-10" name="__codelineno-21-10" href="#__codelineno-21-10"></a><span class="k">def</span><span class="w"> </span><span class="nf">test_tensorrt_becomes_gpu_fast</span><span class="p">():</span>
+</span><span id="__span-21-11"><a id="__codelineno-21-11" name="__codelineno-21-11" href="#__codelineno-21-11"></a>    <span class="n">out</span> <span class="o">=</span> <span class="n">migrate_config_dict</span><span class="p">({</span><span class="s2">"pose"</span><span class="p">:</span> <span class="p">{</span><span class="s2">"sleap"</span><span class="p">:</span> <span class="p">{</span><span class="s2">"compute_runtime"</span><span class="p">:</span> <span class="s2">"tensorrt"</span><span class="p">}}})</span>
+</span><span id="__span-21-12"><a id="__codelineno-21-12" name="__codelineno-21-12" href="#__codelineno-21-12"></a>    <span class="k">assert</span> <span class="n">out</span><span class="p">[</span><span class="s2">"runtime_tier"</span><span class="p">]</span> <span class="o">==</span> <span class="s2">"gpu_fast"</span>
+</span><span id="__span-21-13"><a id="__codelineno-21-13" name="__codelineno-21-13" href="#__codelineno-21-13"></a>
+</span><span id="__span-21-14"><a id="__codelineno-21-14" name="__codelineno-21-14" href="#__codelineno-21-14"></a><span class="k">def</span><span class="w"> </span><span class="nf">test_cpu_stays_cpu</span><span class="p">():</span>
+</span><span id="__span-21-15"><a id="__codelineno-21-15" name="__codelineno-21-15" href="#__codelineno-21-15"></a>    <span class="n">out</span> <span class="o">=</span> <span class="n">migrate_config_dict</span><span class="p">({</span><span class="s2">"obb"</span><span class="p">:</span> <span class="p">{</span><span class="s2">"direct"</span><span class="p">:</span> <span class="p">{</span><span class="s2">"compute_runtime"</span><span class="p">:</span> <span class="s2">"cpu"</span><span class="p">}}})</span>
+</span><span id="__span-21-16"><a id="__codelineno-21-16" name="__codelineno-21-16" href="#__codelineno-21-16"></a>    <span class="k">assert</span> <span class="n">out</span><span class="p">[</span><span class="s2">"runtime_tier"</span><span class="p">]</span> <span class="o">==</span> <span class="s2">"cpu"</span>
+</span><span id="__span-21-17"><a id="__codelineno-21-17" name="__codelineno-21-17" href="#__codelineno-21-17"></a>
+</span><span id="__span-21-18"><a id="__codelineno-21-18" name="__codelineno-21-18" href="#__codelineno-21-18"></a><span class="k">def</span><span class="w"> </span><span class="nf">test_existing_tier_preserved</span><span class="p">():</span>
+</span><span id="__span-21-19"><a id="__codelineno-21-19" name="__codelineno-21-19" href="#__codelineno-21-19"></a>    <span class="n">out</span> <span class="o">=</span> <span class="n">migrate_config_dict</span><span class="p">({</span><span class="s2">"runtime_tier"</span><span class="p">:</span> <span class="s2">"gpu_fast"</span><span class="p">,</span> <span class="s2">"obb"</span><span class="p">:</span> <span class="p">{}})</span>
+</span><span id="__span-21-20"><a id="__codelineno-21-20" name="__codelineno-21-20" href="#__codelineno-21-20"></a>    <span class="k">assert</span> <span class="n">out</span><span class="p">[</span><span class="s2">"runtime_tier"</span><span class="p">]</span> <span class="o">==</span> <span class="s2">"gpu_fast"</span>
+</span></code></pre></div>
+<ul class="task-list">
+<li class="task-list-item"><label class="task-list-control"><input type="checkbox" disabled/><span class="task-list-indicator"></span></label> <strong>Step 2: Run to verify it fails</strong></li>
+</ul>
+<p>Run: <code>python -m pytest tests/scripts/test_migrate_runtime_config.py -v</code>
+Expected: FAIL — module missing.</p>
+<ul class="task-list">
+<li class="task-list-item">
+<p><label class="task-list-control"><input type="checkbox" disabled/><span class="task-list-indicator"></span></label> <strong>Step 3: Implement the script</strong> — self-contained <code>migrate_config_dict(d) -&gt; dict</code> embedding the old tier-inference rules (fast set <code>{onnx_cpu,onnx_cuda,onnx_coreml,tensorrt}</code> → <code>gpu_fast</code>; cuda-like/mps → <code>gpu</code>; cpu → <code>cpu</code>), collecting every per-stage <code>compute_runtime</code>, computing the tier, stripping the deprecated fields and <code>pose_runtime_flavor</code>/<code>pose_sleap_device</code>, and setting <code>runtime_tier</code>. <code>main()</code> reads JSON files from argv, applies it, writes back with a <code>.bak</code>.</p>
+</li>
+<li class="task-list-item">
+<p><label class="task-list-control"><input type="checkbox" disabled/><span class="task-list-indicator"></span></label> <strong>Step 4: Run tests; migrate the bundled resource</strong></p>
+</li>
+</ul>
+<p>Run: <code>python -m pytest tests/scripts/test_migrate_runtime_config.py -v &amp;&amp; python scripts/migrate_runtime_config.py src/hydra_suite/resources/configs/ooceraea_biroi.json</code>
+Expected: PASS; the resource JSON gains <code>runtime_tier</code> and loses legacy fields.</p>
+<ul class="task-list">
+<li class="task-list-item"><label class="task-list-control"><input type="checkbox" disabled/><span class="task-list-indicator"></span></label> <strong>Step 5: Commit</strong></li>
+</ul>
+<div class="language-bash highlight"><pre><span></span><code><span id="__span-22-1"><a id="__codelineno-22-1" name="__codelineno-22-1" href="#__codelineno-22-1"></a>make<span class="w"> </span>format
+</span><span id="__span-22-2"><a id="__codelineno-22-2" name="__codelineno-22-2" href="#__codelineno-22-2"></a>git<span class="w"> </span>add<span class="w"> </span>scripts/migrate_runtime_config.py<span class="w"> </span>tests/scripts/test_migrate_runtime_config.py<span class="w"> </span>src/hydra_suite/resources/configs/ooceraea_biroi.json
+</span><span id="__span-22-3"><a id="__codelineno-22-3" name="__codelineno-22-3" href="#__codelineno-22-3"></a>git<span class="w"> </span>commit<span class="w"> </span>-m<span class="w"> </span><span class="s2">"feat(scripts): one-shot legacy runtime-config migrator; migrate bundled config"</span>
+</span></code></pre></div>
+<hr />
+<h2 id="task-12-delete-legacy-surface-rename-module-to-onnx_providerspy">Task 12: Delete legacy surface; rename module to <code>onnx_providers.py</code><a class="headerlink" href="#task-12-delete-legacy-surface-rename-module-to-onnx_providerspy" title="Permanent link">&para;</a></h2>
+<p><strong>Files:</strong>
+- Rename: <code>src/hydra_suite/runtime/compute_runtime.py</code> → <code>src/hydra_suite/runtime/onnx_providers.py</code>
+- Modify importers: <code>core/individual/classification/backend.py</code>, <code>pose/backends/sleap.py</code>, <code>training/tiny_model.py</code>, <code>posekit/gui/runtimes.py</code>
+- Delete from the module: <code>_normalize_runtime</code>, <code>runtime_label</code>, <code>CANONICAL_RUNTIMES</code>, <code>_pipeline_supports_runtime</code>, <code>supported_runtimes_for_pipeline</code>, <code>allowed_runtimes_for_pipelines</code>, <code>_onnx_available</code>, <code>_sleap_onnx_available</code>, <code>derive_onnx_execution_providers</code> (string API — now unused), <code>_best_explicit_onnx_runtime</code></p>
+<p><strong>Interfaces:</strong>
+- Consumes: nothing new.
+- Produces: <code>onnx_providers.py</code> exposing only <code>execution_providers_for</code>, <code>COREML_PROVIDER_OPTIONS</code>, <code>_tensorrt_ep_cache_options</code>, dedup helpers.</p>
+<ul class="task-list">
+<li class="task-list-item"><label class="task-list-control"><input type="checkbox" disabled/><span class="task-list-indicator"></span></label> <strong>Step 1: Confirm the string API + capability tables are unused</strong></li>
+</ul>
+<p>Run: <code>grep -rn "derive_onnx_execution_providers\|CANONICAL_RUNTIMES\|runtime_label\|_normalize_runtime\|supported_runtimes_for_pipeline\|allowed_runtimes_for_pipelines" src/ --include='*.py' | grep -v "def \|compute_runtime.py"</code>
+Expected: empty. Any hit is a missed migration — resolve before renaming.</p>
+<ul class="task-list">
+<li class="task-list-item"><label class="task-list-control"><input type="checkbox" disabled/><span class="task-list-indicator"></span></label> <strong>Step 2: <code>git mv</code> and prune</strong></li>
+</ul>
+<p><div class="language-bash highlight"><pre><span></span><code><span id="__span-23-1"><a id="__codelineno-23-1" name="__codelineno-23-1" href="#__codelineno-23-1"></a>git<span class="w"> </span>mv<span class="w"> </span>src/hydra_suite/runtime/compute_runtime.py<span class="w"> </span>src/hydra_suite/runtime/onnx_providers.py
+</span></code></pre></div>
+Delete the listed functions from the renamed file. Update the 4 importers to <code>from hydra_suite.runtime.onnx_providers import execution_providers_for</code>.</p>
+<ul class="task-list">
+<li class="task-list-item"><label class="task-list-control"><input type="checkbox" disabled/><span class="task-list-indicator"></span></label> <strong>Step 3: Run full suite + dead-code check</strong></li>
+</ul>
+<p>Run: <code>make pytest &amp;&amp; make dead-code</code>
+Expected: PASS; vulture reports no new unreferenced runtime helpers.</p>
+<ul class="task-list">
+<li class="task-list-item"><label class="task-list-control"><input type="checkbox" disabled/><span class="task-list-indicator"></span></label> <strong>Step 4: Commit</strong></li>
+</ul>
+<div class="language-bash highlight"><pre><span></span><code><span id="__span-24-1"><a id="__codelineno-24-1" name="__codelineno-24-1" href="#__codelineno-24-1"></a>make<span class="w"> </span>format
+</span><span id="__span-24-2"><a id="__codelineno-24-2" name="__codelineno-24-2" href="#__codelineno-24-2"></a>git<span class="w"> </span>add<span class="w"> </span>-A<span class="w"> </span>src/hydra_suite/runtime<span class="w"> </span>src/hydra_suite/core<span class="w"> </span>src/hydra_suite/training<span class="w"> </span>src/hydra_suite/posekit
+</span><span id="__span-24-3"><a id="__codelineno-24-3" name="__codelineno-24-3" href="#__codelineno-24-3"></a>git<span class="w"> </span>commit<span class="w"> </span>-m<span class="w"> </span><span class="s2">"refactor(runtime): shrink+rename compute_runtime.py to onnx_providers.py, delete legacy surface"</span>
+</span></code></pre></div>
+<hr />
+<h2 id="task-13-gui-display-cleanup-final-verification">Task 13: GUI display cleanup; final verification<a class="headerlink" href="#task-13-gui-display-cleanup-final-verification" title="Permanent link">&para;</a></h2>
+<p><strong>Files:</strong>
+- Modify: <code>posekit/gui/runtimes.py</code>, any file still importing <code>runtime_label</code>
+- Verify: <code>trackerkit/gui/panels/setup_panel.py</code>, <code>posekit/gui/main_window.py</code> selectors already use <code>tier_label</code></p>
+<p><strong>Interfaces:</strong>
+- Consumes: <code>runtime/resolver.py</code> <code>{available_tiers, tier_label}</code>.
+- Produces: no runtime string vocabulary anywhere in GUI.</p>
+<ul class="task-list">
+<li class="task-list-item"><label class="task-list-control"><input type="checkbox" disabled/><span class="task-list-indicator"></span></label> <strong>Step 1: Find residual string-vocab references</strong></li>
+</ul>
+<p>Run: <code>grep -rn "runtime_label\|compute_runtime\|COMPUTE_RUNTIME\|pose_runtime_flavor\|pose_sleap_device" src/ --include='*.py'</code>
+Expected: only genuinely-required survivors (e.g. <code>worker.py</code> reading <code>RUNTIME_TIER</code>). Investigate every hit; remove dead ones.</p>
+<ul class="task-list">
+<li class="task-list-item">
+<p><label class="task-list-control"><input type="checkbox" disabled/><span class="task-list-indicator"></span></label> <strong>Step 2: Collapse <code>posekit/gui/runtimes.py</code></strong> to re-export only resolver symbols (<code>available_tiers</code>, <code>tier_label</code>, <code>RuntimeTier</code>, <code>PlatformInfo</code>, <code>detect_platform</code>).</p>
+</li>
+<li class="task-list-item">
+<p><label class="task-list-control"><input type="checkbox" disabled/><span class="task-list-indicator"></span></label> <strong>Step 3: Full verification sweep</strong></p>
+</li>
+</ul>
+<p>Run: <code>make pytest &amp;&amp; make lint-moderate &amp;&amp; make dead-code</code>
+Expected: all green; dead-code clean.</p>
+<ul class="task-list">
+<li class="task-list-item"><label class="task-list-control"><input type="checkbox" disabled/><span class="task-list-indicator"></span></label> <strong>Step 4: Launch smoke test</strong> — start each affected app to confirm runtime selectors populate:</li>
+</ul>
+<p>Run: <code>trackerkit</code> and <code>posekit</code> (manual: confirm the runtime dropdown shows tier labels and tracking a short clip on CPU tier still runs).</p>
+<ul class="task-list">
+<li class="task-list-item"><label class="task-list-control"><input type="checkbox" disabled/><span class="task-list-indicator"></span></label> <strong>Step 5: Commit</strong></li>
+</ul>
+<div class="language-bash highlight"><pre><span></span><code><span id="__span-25-1"><a id="__codelineno-25-1" name="__codelineno-25-1" href="#__codelineno-25-1"></a>make<span class="w"> </span>format
+</span><span id="__span-25-2"><a id="__codelineno-25-2" name="__codelineno-25-2" href="#__codelineno-25-2"></a>git<span class="w"> </span>add<span class="w"> </span>-A
+</span><span id="__span-25-3"><a id="__codelineno-25-3" name="__codelineno-25-3" href="#__codelineno-25-3"></a>git<span class="w"> </span>commit<span class="w"> </span>-m<span class="w"> </span><span class="s2">"refactor(gui): resolver-only runtime vocabulary; final consolidation cleanup"</span>
+</span></code></pre></div>
+<hr />
+<h2 id="self-review-notes">Self-Review Notes<a class="headerlink" href="#self-review-notes" title="Permanent link">&para;</a></h2>
+<ul>
+<li><strong>Spec coverage:</strong> every spec phase maps to tasks — P0→T1, P1→T2/T3/T4, P2→T5, P3→T6/T7, P4→T9/T10, P5→T11, P6→T8/T12, P7→T13. The four critical-review additions are covered: missing-tier error (T10), <code>onnx_*</code>-in-backends predicate rewrite (T4), <code>COMPUTE_RUNTIME</code> params channel (T6), frozenset/type migration (T9).</li>
+<li><strong>Ordering:</strong> producers of a value are retired only after all consumers are migrated (backends T4 before shim delete T5; params writes T6 before legacy-helper delete T8; per-stage fields T10 before script T11 before module prune T12).</li>
+<li><strong>Behavior preservation:</strong> the Task-1 golden table is re-run in Tasks 3, 4, 5, 9 as the regression gate.</li>
+<li><strong>Risk residual:</strong> the predicate-rewrite table in T4 is only faithful because the resolver cannot emit <code>onnx_cuda</code>/<code>onnx_cpu</code>; if a future resolver change adds an ONNX-EP backend, revisit T4's predicates.</li>
+</ul>
+
+
+
+
+
+
+
+
+
+
+
+
+                
+              </article>
+            </div>
+          
+          
+<script>var target=document.getElementById(location.hash.slice(1));target&&target.name&&(target.checked=target.name.startsWith("__tabbed_"))</script>
+        </div>
+        
+          <button type="button" class="md-top md-icon" data-md-component="top" hidden>
+  
+  <svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 24 24"><path d="M13 20h-2V8l-5.5 5.5-1.42-1.42L12 4.16l7.92 7.92-1.42 1.42L13 8z"/></svg>
+  Back to top
+</button>
+        
+      </main>
+      
+        <footer class="md-footer">
+  
+  <div class="md-footer-meta md-typeset">
+    <div class="md-footer-meta__inner md-grid">
+      <div class="md-copyright">
+  
+  
+    Made with
+    <a href="https://squidfunk.github.io/mkdocs-material/" target="_blank" rel="noopener">
+      Material for MkDocs
+    </a>
+  
+</div>
+      
+    </div>
+  </div>
+</footer>
+      
+    </div>
+    <div class="md-dialog" data-md-component="dialog">
+      <div class="md-dialog__inner md-typeset"></div>
+    </div>
+    
+    
+    <script id="__config" type="application/json">{"base": "../../../..", "features": ["navigation.tabs", "navigation.sections", "navigation.expand", "navigation.top", "content.code.copy", "content.action.edit", "search.suggest", "search.highlight"], "search": "../../../../assets/javascripts/workers/search.6ce7567c.min.js", "translations": {"clipboard.copied": "Copied to clipboard", "clipboard.copy": "Copy to clipboard", "search.result.more.one": "1 more on this page", "search.result.more.other": "# more on this page", "search.result.none": "No matching documents", "search.result.one": "1 matching document", "search.result.other": "# matching documents", "search.result.placeholder": "Type to start searching", "search.result.term.missing": "Missing", "select.version": "Select version"}, "version": {"default": "latest", "provider": "mike"}}</script>
+    
+    
+      <script src="../../../../assets/javascripts/bundle.83f73b43.min.js"></script>
+      
+    
+  </body>
+</html>

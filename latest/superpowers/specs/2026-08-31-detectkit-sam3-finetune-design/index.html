@@ -1,0 +1,2924 @@
+
+<!doctype html>
+<html lang="en" class="no-js">
+  <head>
+    
+      <meta charset="utf-8">
+      <meta name="viewport" content="width=device-width,initial-scale=1">
+      
+        <meta name="description" content="User and developer documentation for HYDRA Suite">
+      
+      
+      
+        <link rel="canonical" href="https://neurorishika.github.io/hydra-suite/latest/superpowers/specs/2026-08-31-detectkit-sam3-finetune-design/">
+      
+      
+      
+      
+      <link rel="icon" href="../../../assets/images/favicon.png">
+      <meta name="generator" content="mkdocs-1.6.1, mkdocs-material-9.5.43">
+    
+    
+      
+        <title>DetectKit — SAM3 LoRA finetuning as a training role - HYDRA Suite Docs</title>
+      
+    
+    
+      <link rel="stylesheet" href="../../../assets/stylesheets/main.0253249f.min.css">
+      
+        
+        <link rel="stylesheet" href="../../../assets/stylesheets/palette.06af60db.min.css">
+      
+      
+
+
+    
+    
+      
+    
+    
+      
+        
+        
+        <link rel="preconnect" href="https://fonts.gstatic.com" crossorigin>
+        <link rel="stylesheet" href="https://fonts.googleapis.com/css?family=Roboto:300,300i,400,400i,700,700i%7CRoboto+Mono:400,400i,700,700i&display=fallback">
+        <style>:root{--md-text-font:"Roboto";--md-code-font:"Roboto Mono"}</style>
+      
+    
+    
+      <link rel="stylesheet" href="../../../assets/_mkdocstrings.css">
+    
+    <script>__md_scope=new URL("../../..",location),__md_hash=e=>[...e].reduce(((e,_)=>(e<<5)-e+_.charCodeAt(0)),0),__md_get=(e,_=localStorage,t=__md_scope)=>JSON.parse(_.getItem(t.pathname+"."+e)),__md_set=(e,_,t=localStorage,a=__md_scope)=>{try{t.setItem(a.pathname+"."+e,JSON.stringify(_))}catch(e){}}</script>
+    
+      
+
+    
+    
+    
+  </head>
+  
+  
+    
+    
+      
+    
+    
+    
+    
+    <body dir="ltr" data-md-color-scheme="default" data-md-color-primary="blue" data-md-color-accent="light-blue">
+  
+    
+    <input class="md-toggle" data-md-toggle="drawer" type="checkbox" id="__drawer" autocomplete="off">
+    <input class="md-toggle" data-md-toggle="search" type="checkbox" id="__search" autocomplete="off">
+    <label class="md-overlay" for="__drawer"></label>
+    <div data-md-component="skip">
+      
+        
+        <a href="#detectkit-sam3-lora-finetuning-as-a-training-role" class="md-skip">
+          Skip to content
+        </a>
+      
+    </div>
+    <div data-md-component="announce">
+      
+    </div>
+    
+      <div data-md-color-scheme="default" data-md-component="outdated" hidden>
+        
+      </div>
+    
+    
+      
+
+<header class="md-header" data-md-component="header">
+  <nav class="md-header__inner md-grid" aria-label="Header">
+    <a href="../../.." title="HYDRA Suite Docs" class="md-header__button md-logo" aria-label="HYDRA Suite Docs" data-md-component="logo">
+      
+  
+  <svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 24 24"><path d="M12 8a3 3 0 0 0 3-3 3 3 0 0 0-3-3 3 3 0 0 0-3 3 3 3 0 0 0 3 3m0 3.54C9.64 9.35 6.5 8 3 8v11c3.5 0 6.64 1.35 9 3.54 2.36-2.19 5.5-3.54 9-3.54V8c-3.5 0-6.64 1.35-9 3.54"/></svg>
+
+    </a>
+    <label class="md-header__button md-icon" for="__drawer">
+      
+      <svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 24 24"><path d="M3 6h18v2H3zm0 5h18v2H3zm0 5h18v2H3z"/></svg>
+    </label>
+    <div class="md-header__title" data-md-component="header-title">
+      <div class="md-header__ellipsis">
+        <div class="md-header__topic">
+          <span class="md-ellipsis">
+            HYDRA Suite Docs
+          </span>
+        </div>
+        <div class="md-header__topic" data-md-component="header-topic">
+          <span class="md-ellipsis">
+            
+              DetectKit — SAM3 LoRA finetuning as a training role
+            
+          </span>
+        </div>
+      </div>
+    </div>
+    
+      
+        <form class="md-header__option" data-md-component="palette">
+  
+    
+    
+    
+    <input class="md-option" data-md-color-media="(prefers-color-scheme: light)" data-md-color-scheme="default" data-md-color-primary="blue" data-md-color-accent="light-blue"  aria-label="Switch to dark mode"  type="radio" name="__palette" id="__palette_0">
+    
+      <label class="md-header__button md-icon" title="Switch to dark mode" for="__palette_1" hidden>
+        <svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 24 24"><path d="m17.75 4.09-2.53 1.94.91 3.06-2.63-1.81-2.63 1.81.91-3.06-2.53-1.94L12.44 4l1.06-3 1.06 3zm3.5 6.91-1.64 1.25.59 1.98-1.7-1.17-1.7 1.17.59-1.98L15.75 11l2.06-.05L18.5 9l.69 1.95zm-2.28 4.95c.83-.08 1.72 1.1 1.19 1.85-.32.45-.66.87-1.08 1.27C15.17 23 8.84 23 4.94 19.07c-3.91-3.9-3.91-10.24 0-14.14.4-.4.82-.76 1.27-1.08.75-.53 1.93.36 1.85 1.19-.27 2.86.69 5.83 2.89 8.02a9.96 9.96 0 0 0 8.02 2.89m-1.64 2.02a12.08 12.08 0 0 1-7.8-3.47c-2.17-2.19-3.33-5-3.49-7.82-2.81 3.14-2.7 7.96.31 10.98 3.02 3.01 7.84 3.12 10.98.31"/></svg>
+      </label>
+    
+  
+    
+    
+    
+    <input class="md-option" data-md-color-media="(prefers-color-scheme: dark)" data-md-color-scheme="slate" data-md-color-primary="blue" data-md-color-accent="light-blue"  aria-label="Switch to light mode"  type="radio" name="__palette" id="__palette_1">
+    
+      <label class="md-header__button md-icon" title="Switch to light mode" for="__palette_0" hidden>
+        <svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 24 24"><path d="M12 7a5 5 0 0 1 5 5 5 5 0 0 1-5 5 5 5 0 0 1-5-5 5 5 0 0 1 5-5m0 2a3 3 0 0 0-3 3 3 3 0 0 0 3 3 3 3 0 0 0 3-3 3 3 0 0 0-3-3m0-7 2.39 3.42C13.65 5.15 12.84 5 12 5s-1.65.15-2.39.42zM3.34 7l4.16-.35A7.2 7.2 0 0 0 5.94 8.5c-.44.74-.69 1.5-.83 2.29zm.02 10 1.76-3.77a7.131 7.131 0 0 0 2.38 4.14zM20.65 7l-1.77 3.79a7.02 7.02 0 0 0-2.38-4.15zm-.01 10-4.14.36c.59-.51 1.12-1.14 1.54-1.86.42-.73.69-1.5.83-2.29zM12 22l-2.41-3.44c.74.27 1.55.44 2.41.44.82 0 1.63-.17 2.37-.44z"/></svg>
+      </label>
+    
+  
+</form>
+      
+    
+    
+      <script>var palette=__md_get("__palette");if(palette&&palette.color){if("(prefers-color-scheme)"===palette.color.media){var media=matchMedia("(prefers-color-scheme: light)"),input=document.querySelector(media.matches?"[data-md-color-media='(prefers-color-scheme: light)']":"[data-md-color-media='(prefers-color-scheme: dark)']");palette.color.media=input.getAttribute("data-md-color-media"),palette.color.scheme=input.getAttribute("data-md-color-scheme"),palette.color.primary=input.getAttribute("data-md-color-primary"),palette.color.accent=input.getAttribute("data-md-color-accent")}for(var[key,value]of Object.entries(palette.color))document.body.setAttribute("data-md-color-"+key,value)}</script>
+    
+    
+    
+      <label class="md-header__button md-icon" for="__search">
+        
+        <svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 24 24"><path d="M9.5 3A6.5 6.5 0 0 1 16 9.5c0 1.61-.59 3.09-1.56 4.23l.27.27h.79l5 5-1.5 1.5-5-5v-.79l-.27-.27A6.52 6.52 0 0 1 9.5 16 6.5 6.5 0 0 1 3 9.5 6.5 6.5 0 0 1 9.5 3m0 2C7 5 5 7 5 9.5S7 14 9.5 14 14 12 14 9.5 12 5 9.5 5"/></svg>
+      </label>
+      <div class="md-search" data-md-component="search" role="dialog">
+  <label class="md-search__overlay" for="__search"></label>
+  <div class="md-search__inner" role="search">
+    <form class="md-search__form" name="search">
+      <input type="text" class="md-search__input" name="query" aria-label="Search" placeholder="Search" autocapitalize="off" autocorrect="off" autocomplete="off" spellcheck="false" data-md-component="search-query" required>
+      <label class="md-search__icon md-icon" for="__search">
+        
+        <svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 24 24"><path d="M9.5 3A6.5 6.5 0 0 1 16 9.5c0 1.61-.59 3.09-1.56 4.23l.27.27h.79l5 5-1.5 1.5-5-5v-.79l-.27-.27A6.52 6.52 0 0 1 9.5 16 6.5 6.5 0 0 1 3 9.5 6.5 6.5 0 0 1 9.5 3m0 2C7 5 5 7 5 9.5S7 14 9.5 14 14 12 14 9.5 12 5 9.5 5"/></svg>
+        
+        <svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 24 24"><path d="M20 11v2H8l5.5 5.5-1.42 1.42L4.16 12l7.92-7.92L13.5 5.5 8 11z"/></svg>
+      </label>
+      <nav class="md-search__options" aria-label="Search">
+        
+        <button type="reset" class="md-search__icon md-icon" title="Clear" aria-label="Clear" tabindex="-1">
+          
+          <svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 24 24"><path d="M19 6.41 17.59 5 12 10.59 6.41 5 5 6.41 10.59 12 5 17.59 6.41 19 12 13.41 17.59 19 19 17.59 13.41 12z"/></svg>
+        </button>
+      </nav>
+      
+        <div class="md-search__suggest" data-md-component="search-suggest"></div>
+      
+    </form>
+    <div class="md-search__output">
+      <div class="md-search__scrollwrap" tabindex="0" data-md-scrollfix>
+        <div class="md-search-result" data-md-component="search-result">
+          <div class="md-search-result__meta">
+            Initializing search
+          </div>
+          <ol class="md-search-result__list" role="presentation"></ol>
+        </div>
+      </div>
+    </div>
+  </div>
+</div>
+    
+    
+      <div class="md-header__source">
+        <a href="https://github.com/neurorishika/hydra-suite" title="Go to repository" class="md-source" data-md-component="source">
+  <div class="md-source__icon md-icon">
+    
+    <svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 448 512"><!--! Font Awesome Free 6.6.0 by @fontawesome - https://fontawesome.com License - https://fontawesome.com/license/free (Icons: CC BY 4.0, Fonts: SIL OFL 1.1, Code: MIT License) Copyright 2024 Fonticons, Inc.--><path d="M439.55 236.05 244 40.45a28.87 28.87 0 0 0-40.81 0l-40.66 40.63 51.52 51.52c27.06-9.14 52.68 16.77 43.39 43.68l49.66 49.66c34.23-11.8 61.18 31 35.47 56.69-26.49 26.49-70.21-2.87-56-37.34L240.22 199v121.85c25.3 12.54 22.26 41.85 9.08 55a34.34 34.34 0 0 1-48.55 0c-17.57-17.6-11.07-46.91 11.25-56v-123c-20.8-8.51-24.6-30.74-18.64-45L142.57 101 8.45 235.14a28.86 28.86 0 0 0 0 40.81l195.61 195.6a28.86 28.86 0 0 0 40.8 0l194.69-194.69a28.86 28.86 0 0 0 0-40.81"/></svg>
+  </div>
+  <div class="md-source__repository">
+    neurorishika/hydra-suite
+  </div>
+</a>
+      </div>
+    
+  </nav>
+  
+</header>
+    
+    <div class="md-container" data-md-component="container">
+      
+      
+        
+          
+            
+<nav class="md-tabs" aria-label="Tabs" data-md-component="tabs">
+  <div class="md-grid">
+    <ul class="md-tabs__list">
+      
+        
+  
+  
+  
+    <li class="md-tabs__item">
+      <a href="../../.." class="md-tabs__link">
+        
+  
+    
+  
+  Home
+
+      </a>
+    </li>
+  
+
+      
+        
+  
+  
+  
+    
+    
+      <li class="md-tabs__item">
+        <a href="../../../getting-started/installation/" class="md-tabs__link">
+          
+  
+  Getting Started
+
+        </a>
+      </li>
+    
+  
+
+      
+        
+  
+  
+  
+    
+    
+      <li class="md-tabs__item">
+        <a href="../../../user-guide/overview/" class="md-tabs__link">
+          
+  
+  User Guide
+
+        </a>
+      </li>
+    
+  
+
+      
+        
+  
+  
+  
+    
+    
+      <li class="md-tabs__item">
+        <a href="../../../developer-guide/architecture/" class="md-tabs__link">
+          
+  
+  Developer Guide
+
+        </a>
+      </li>
+    
+  
+
+      
+        
+  
+  
+  
+    
+    
+      <li class="md-tabs__item">
+        <a href="../../../reference/api-index/" class="md-tabs__link">
+          
+  
+  Reference
+
+        </a>
+      </li>
+    
+  
+
+      
+    </ul>
+  </div>
+</nav>
+          
+        
+      
+      <main class="md-main" data-md-component="main">
+        <div class="md-main__inner md-grid">
+          
+            
+              
+              <div class="md-sidebar md-sidebar--primary" data-md-component="sidebar" data-md-type="navigation" >
+                <div class="md-sidebar__scrollwrap">
+                  <div class="md-sidebar__inner">
+                    
+
+
+  
+
+
+<nav class="md-nav md-nav--primary md-nav--lifted" aria-label="Navigation" data-md-level="0">
+  <label class="md-nav__title" for="__drawer">
+    <a href="../../.." title="HYDRA Suite Docs" class="md-nav__button md-logo" aria-label="HYDRA Suite Docs" data-md-component="logo">
+      
+  
+  <svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 24 24"><path d="M12 8a3 3 0 0 0 3-3 3 3 0 0 0-3-3 3 3 0 0 0-3 3 3 3 0 0 0 3 3m0 3.54C9.64 9.35 6.5 8 3 8v11c3.5 0 6.64 1.35 9 3.54 2.36-2.19 5.5-3.54 9-3.54V8c-3.5 0-6.64 1.35-9 3.54"/></svg>
+
+    </a>
+    HYDRA Suite Docs
+  </label>
+  
+    <div class="md-nav__source">
+      <a href="https://github.com/neurorishika/hydra-suite" title="Go to repository" class="md-source" data-md-component="source">
+  <div class="md-source__icon md-icon">
+    
+    <svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 448 512"><!--! Font Awesome Free 6.6.0 by @fontawesome - https://fontawesome.com License - https://fontawesome.com/license/free (Icons: CC BY 4.0, Fonts: SIL OFL 1.1, Code: MIT License) Copyright 2024 Fonticons, Inc.--><path d="M439.55 236.05 244 40.45a28.87 28.87 0 0 0-40.81 0l-40.66 40.63 51.52 51.52c27.06-9.14 52.68 16.77 43.39 43.68l49.66 49.66c34.23-11.8 61.18 31 35.47 56.69-26.49 26.49-70.21-2.87-56-37.34L240.22 199v121.85c25.3 12.54 22.26 41.85 9.08 55a34.34 34.34 0 0 1-48.55 0c-17.57-17.6-11.07-46.91 11.25-56v-123c-20.8-8.51-24.6-30.74-18.64-45L142.57 101 8.45 235.14a28.86 28.86 0 0 0 0 40.81l195.61 195.6a28.86 28.86 0 0 0 40.8 0l194.69-194.69a28.86 28.86 0 0 0 0-40.81"/></svg>
+  </div>
+  <div class="md-source__repository">
+    neurorishika/hydra-suite
+  </div>
+</a>
+    </div>
+  
+  <ul class="md-nav__list" data-md-scrollfix>
+    
+      
+      
+  
+  
+  
+  
+    <li class="md-nav__item">
+      <a href="../../.." class="md-nav__link">
+        
+  
+  <span class="md-ellipsis">
+    Home
+  </span>
+  
+
+      </a>
+    </li>
+  
+
+    
+      
+      
+  
+  
+  
+  
+    
+    
+    
+      
+      
+        
+      
+    
+    
+    <li class="md-nav__item md-nav__item--nested">
+      
+        
+        
+          
+        
+        <input class="md-nav__toggle md-toggle md-toggle--indeterminate" type="checkbox" id="__nav_2" >
+        
+          
+          <label class="md-nav__link" for="__nav_2" id="__nav_2_label" tabindex="0">
+            
+  
+  <span class="md-ellipsis">
+    Getting Started
+  </span>
+  
+
+            <span class="md-nav__icon md-icon"></span>
+          </label>
+        
+        <nav class="md-nav" data-md-level="1" aria-labelledby="__nav_2_label" aria-expanded="false">
+          <label class="md-nav__title" for="__nav_2">
+            <span class="md-nav__icon md-icon"></span>
+            Getting Started
+          </label>
+          <ul class="md-nav__list" data-md-scrollfix>
+            
+              
+                
+  
+  
+  
+  
+    <li class="md-nav__item">
+      <a href="../../../getting-started/installation/" class="md-nav__link">
+        
+  
+  <span class="md-ellipsis">
+    Installation
+  </span>
+  
+
+      </a>
+    </li>
+  
+
+              
+            
+              
+                
+  
+  
+  
+  
+    <li class="md-nav__item">
+      <a href="../../../getting-started/environments/" class="md-nav__link">
+        
+  
+  <span class="md-ellipsis">
+    Environments and Makefile
+  </span>
+  
+
+      </a>
+    </li>
+  
+
+              
+            
+              
+                
+  
+  
+  
+  
+    <li class="md-nav__item">
+      <a href="../../../getting-started/integrations/" class="md-nav__link">
+        
+  
+  <span class="md-ellipsis">
+    Integrations
+  </span>
+  
+
+      </a>
+    </li>
+  
+
+              
+            
+              
+                
+  
+  
+  
+  
+    <li class="md-nav__item">
+      <a href="../../../getting-started/quickstart-hydra/" class="md-nav__link">
+        
+  
+  <span class="md-ellipsis">
+    Quickstart (TrackerKit)
+  </span>
+  
+
+      </a>
+    </li>
+  
+
+              
+            
+              
+                
+  
+  
+  
+  
+    <li class="md-nav__item">
+      <a href="../../../getting-started/quickstart-posekit/" class="md-nav__link">
+        
+  
+  <span class="md-ellipsis">
+    Quickstart (PoseKit)
+  </span>
+  
+
+      </a>
+    </li>
+  
+
+              
+            
+              
+                
+  
+  
+  
+  
+    <li class="md-nav__item">
+      <a href="../../../getting-started/platforms/" class="md-nav__link">
+        
+  
+  <span class="md-ellipsis">
+    Platform Notes
+  </span>
+  
+
+      </a>
+    </li>
+  
+
+              
+            
+          </ul>
+        </nav>
+      
+    </li>
+  
+
+    
+      
+      
+  
+  
+  
+  
+    
+    
+    
+      
+      
+        
+      
+    
+    
+    <li class="md-nav__item md-nav__item--nested">
+      
+        
+        
+          
+        
+        <input class="md-nav__toggle md-toggle md-toggle--indeterminate" type="checkbox" id="__nav_3" >
+        
+          
+          <label class="md-nav__link" for="__nav_3" id="__nav_3_label" tabindex="0">
+            
+  
+  <span class="md-ellipsis">
+    User Guide
+  </span>
+  
+
+            <span class="md-nav__icon md-icon"></span>
+          </label>
+        
+        <nav class="md-nav" data-md-level="1" aria-labelledby="__nav_3_label" aria-expanded="false">
+          <label class="md-nav__title" for="__nav_3">
+            <span class="md-nav__icon md-icon"></span>
+            User Guide
+          </label>
+          <ul class="md-nav__list" data-md-scrollfix>
+            
+              
+                
+  
+  
+  
+  
+    <li class="md-nav__item">
+      <a href="../../../user-guide/overview/" class="md-nav__link">
+        
+  
+  <span class="md-ellipsis">
+    Overview
+  </span>
+  
+
+      </a>
+    </li>
+  
+
+              
+            
+              
+                
+  
+  
+  
+  
+    <li class="md-nav__item">
+      <a href="../../../user-guide/workflow/" class="md-nav__link">
+        
+  
+  <span class="md-ellipsis">
+    End-to-End Workflow
+  </span>
+  
+
+      </a>
+    </li>
+  
+
+              
+            
+              
+                
+  
+  
+  
+  
+    <li class="md-nav__item">
+      <a href="../../../user-guide/detection-modes/" class="md-nav__link">
+        
+  
+  <span class="md-ellipsis">
+    Detection Modes
+  </span>
+  
+
+      </a>
+    </li>
+  
+
+              
+            
+              
+                
+  
+  
+  
+  
+    <li class="md-nav__item">
+      <a href="../../../user-guide/tracking-and-merging/" class="md-nav__link">
+        
+  
+  <span class="md-ellipsis">
+    Tracking and Merging
+  </span>
+  
+
+      </a>
+    </li>
+  
+
+              
+            
+              
+                
+  
+  
+  
+  
+    <li class="md-nav__item">
+      <a href="../../../user-guide/post-processing/" class="md-nav__link">
+        
+  
+  <span class="md-ellipsis">
+    Post-processing
+  </span>
+  
+
+      </a>
+    </li>
+  
+
+              
+            
+              
+                
+  
+  
+  
+  
+    <li class="md-nav__item">
+      <a href="../../../user-guide/configuration-reference/" class="md-nav__link">
+        
+  
+  <span class="md-ellipsis">
+    Configuration Reference
+  </span>
+  
+
+      </a>
+    </li>
+  
+
+              
+            
+              
+                
+  
+  
+  
+  
+    <li class="md-nav__item">
+      <a href="../../../user-guide/compute-runtimes/" class="md-nav__link">
+        
+  
+  <span class="md-ellipsis">
+    Compute Runtimes
+  </span>
+  
+
+      </a>
+    </li>
+  
+
+              
+            
+              
+                
+  
+  
+  
+  
+    <li class="md-nav__item">
+      <a href="../../../user-guide/outputs-and-csv-schema/" class="md-nav__link">
+        
+  
+  <span class="md-ellipsis">
+    Outputs and CSV Schema
+  </span>
+  
+
+      </a>
+    </li>
+  
+
+              
+            
+              
+                
+  
+  
+  
+  
+    <li class="md-nav__item">
+      <a href="../../../user-guide/dataset-generation/" class="md-nav__link">
+        
+  
+  <span class="md-ellipsis">
+    Dataset Generation
+  </span>
+  
+
+      </a>
+    </li>
+  
+
+              
+            
+              
+                
+  
+  
+  
+  
+    <li class="md-nav__item">
+      <a href="../../../user-guide/individual-analysis/" class="md-nav__link">
+        
+  
+  <span class="md-ellipsis">
+    Individual Analysis
+  </span>
+  
+
+      </a>
+    </li>
+  
+
+              
+            
+              
+                
+  
+  
+  
+  
+    <li class="md-nav__item">
+      <a href="../../../user-guide/posekit/" class="md-nav__link">
+        
+  
+  <span class="md-ellipsis">
+    PoseKit
+  </span>
+  
+
+      </a>
+    </li>
+  
+
+              
+            
+              
+                
+  
+  
+  
+  
+    <li class="md-nav__item">
+      <a href="../../../user-guide/classkit/" class="md-nav__link">
+        
+  
+  <span class="md-ellipsis">
+    ClassKit
+  </span>
+  
+
+      </a>
+    </li>
+  
+
+              
+            
+              
+                
+  
+  
+  
+  
+    <li class="md-nav__item">
+      <a href="../../../user-guide/detectkit/" class="md-nav__link">
+        
+  
+  <span class="md-ellipsis">
+    DetectKit
+  </span>
+  
+
+      </a>
+    </li>
+  
+
+              
+            
+              
+                
+  
+  
+  
+  
+    <li class="md-nav__item">
+      <a href="../../../runbooks/detectkit-headless-training/" class="md-nav__link">
+        
+  
+  <span class="md-ellipsis">
+    DetectKit Headless Training
+  </span>
+  
+
+      </a>
+    </li>
+  
+
+              
+            
+              
+                
+  
+  
+  
+  
+    <li class="md-nav__item">
+      <a href="../../../user-guide/detectkit-semantic-escalation/" class="md-nav__link">
+        
+  
+  <span class="md-ellipsis">
+    DetectKit: Semantic Escalation (SAM3)
+  </span>
+  
+
+      </a>
+    </li>
+  
+
+              
+            
+              
+                
+  
+  
+  
+  
+    <li class="md-nav__item">
+      <a href="../../../user-guide/detectkit-sahi-calibration/" class="md-nav__link">
+        
+  
+  <span class="md-ellipsis">
+    DetectKit: SAHI Calibration Profiles
+  </span>
+  
+
+      </a>
+    </li>
+  
+
+              
+            
+              
+                
+  
+  
+  
+  
+    <li class="md-nav__item">
+      <a href="../../../user-guide/filterkit/" class="md-nav__link">
+        
+  
+  <span class="md-ellipsis">
+    FilterKit
+  </span>
+  
+
+      </a>
+    </li>
+  
+
+              
+            
+              
+                
+  
+  
+  
+  
+    <li class="md-nav__item">
+      <a href="../../../user-guide/refinekit/" class="md-nav__link">
+        
+  
+  <span class="md-ellipsis">
+    RefineKit
+  </span>
+  
+
+      </a>
+    </li>
+  
+
+              
+            
+              
+                
+  
+  
+  
+  
+    <li class="md-nav__item">
+      <a href="../../../user-guide/troubleshooting/" class="md-nav__link">
+        
+  
+  <span class="md-ellipsis">
+    Troubleshooting
+  </span>
+  
+
+      </a>
+    </li>
+  
+
+              
+            
+          </ul>
+        </nav>
+      
+    </li>
+  
+
+    
+      
+      
+  
+  
+  
+  
+    
+    
+    
+      
+      
+        
+      
+    
+    
+    <li class="md-nav__item md-nav__item--nested">
+      
+        
+        
+          
+        
+        <input class="md-nav__toggle md-toggle md-toggle--indeterminate" type="checkbox" id="__nav_4" >
+        
+          
+          <label class="md-nav__link" for="__nav_4" id="__nav_4_label" tabindex="0">
+            
+  
+  <span class="md-ellipsis">
+    Developer Guide
+  </span>
+  
+
+            <span class="md-nav__icon md-icon"></span>
+          </label>
+        
+        <nav class="md-nav" data-md-level="1" aria-labelledby="__nav_4_label" aria-expanded="false">
+          <label class="md-nav__title" for="__nav_4">
+            <span class="md-nav__icon md-icon"></span>
+            Developer Guide
+          </label>
+          <ul class="md-nav__list" data-md-scrollfix>
+            
+              
+                
+  
+  
+  
+  
+    <li class="md-nav__item">
+      <a href="../../../developer-guide/architecture/" class="md-nav__link">
+        
+  
+  <span class="md-ellipsis">
+    Architecture
+  </span>
+  
+
+      </a>
+    </li>
+  
+
+              
+            
+              
+                
+  
+  
+  
+  
+    <li class="md-nav__item">
+      <a href="../../../developer-guide/module-map/" class="md-nav__link">
+        
+  
+  <span class="md-ellipsis">
+    Module Map
+  </span>
+  
+
+      </a>
+    </li>
+  
+
+              
+            
+              
+                
+  
+  
+  
+  
+    <li class="md-nav__item">
+      <a href="../../../developer-guide/data-flow/" class="md-nav__link">
+        
+  
+  <span class="md-ellipsis">
+    Data Flow
+  </span>
+  
+
+      </a>
+    </li>
+  
+
+              
+            
+              
+                
+  
+  
+  
+  
+    <li class="md-nav__item">
+      <a href="../../../developer-guide/tracking-algorithm-deep-dive/" class="md-nav__link">
+        
+  
+  <span class="md-ellipsis">
+    Tracking Algorithm Deep Dive
+  </span>
+  
+
+      </a>
+    </li>
+  
+
+              
+            
+              
+                
+  
+  
+  
+  
+    <li class="md-nav__item">
+      <a href="../../../developer-guide/tracking-optimization/" class="md-nav__link">
+        
+  
+  <span class="md-ellipsis">
+    Tracking Optimization
+  </span>
+  
+
+      </a>
+    </li>
+  
+
+              
+            
+              
+                
+  
+  
+  
+  
+    <li class="md-nav__item">
+      <a href="../../../developer-guide/gpu-backends/" class="md-nav__link">
+        
+  
+  <span class="md-ellipsis">
+    GPU Backends
+  </span>
+  
+
+      </a>
+    </li>
+  
+
+              
+            
+              
+                
+  
+  
+  
+  
+    <li class="md-nav__item">
+      <a href="../../../developer-guide/runtime-integration/" class="md-nav__link">
+        
+  
+  <span class="md-ellipsis">
+    Runtime Integration
+  </span>
+  
+
+      </a>
+    </li>
+  
+
+              
+            
+              
+                
+  
+  
+  
+  
+    <li class="md-nav__item">
+      <a href="../../../developer-guide/resource-containment/" class="md-nav__link">
+        
+  
+  <span class="md-ellipsis">
+    Resource Containment
+  </span>
+  
+
+      </a>
+    </li>
+  
+
+              
+            
+              
+                
+  
+  
+  
+  
+    <li class="md-nav__item">
+      <a href="../../../developer-guide/profiling/" class="md-nav__link">
+        
+  
+  <span class="md-ellipsis">
+    Profiling
+  </span>
+  
+
+      </a>
+    </li>
+  
+
+              
+            
+              
+                
+  
+  
+  
+  
+    <li class="md-nav__item">
+      <a href="../../../developer-guide/dependency-cuda-updates/" class="md-nav__link">
+        
+  
+  <span class="md-ellipsis">
+    CUDA Dependency Updates
+  </span>
+  
+
+      </a>
+    </li>
+  
+
+              
+            
+              
+                
+  
+  
+  
+  
+    <li class="md-nav__item">
+      <a href="../../../developer-guide/performance-tuning/" class="md-nav__link">
+        
+  
+  <span class="md-ellipsis">
+    Performance Tuning
+  </span>
+  
+
+      </a>
+    </li>
+  
+
+              
+            
+              
+                
+  
+  
+  
+  
+    <li class="md-nav__item">
+      <a href="../../../developer-guide/inference-fast-mode/" class="md-nav__link">
+        
+  
+  <span class="md-ellipsis">
+    Inference Fast Mode
+  </span>
+  
+
+      </a>
+    </li>
+  
+
+              
+            
+              
+                
+  
+  
+  
+  
+    <li class="md-nav__item">
+      <a href="../../../developer-guide/confidence-metrics/" class="md-nav__link">
+        
+  
+  <span class="md-ellipsis">
+    Confidence Metrics
+  </span>
+  
+
+      </a>
+    </li>
+  
+
+              
+            
+              
+                
+  
+  
+  
+  
+    <li class="md-nav__item">
+      <a href="../../../developer-guide/extending-detection/" class="md-nav__link">
+        
+  
+  <span class="md-ellipsis">
+    Extending Detection
+  </span>
+  
+
+      </a>
+    </li>
+  
+
+              
+            
+              
+                
+  
+  
+  
+  
+    <li class="md-nav__item">
+      <a href="../../../developer-guide/extending-identity/" class="md-nav__link">
+        
+  
+  <span class="md-ellipsis">
+    Extending Identity
+  </span>
+  
+
+      </a>
+    </li>
+  
+
+              
+            
+              
+                
+  
+  
+  
+  
+    <li class="md-nav__item">
+      <a href="../../../developer-guide/code-health/" class="md-nav__link">
+        
+  
+  <span class="md-ellipsis">
+    Code Health & Auditing
+  </span>
+  
+
+      </a>
+    </li>
+  
+
+              
+            
+              
+                
+  
+  
+  
+  
+    <li class="md-nav__item">
+      <a href="../../../developer-guide/publishing/" class="md-nav__link">
+        
+  
+  <span class="md-ellipsis">
+    Publishing
+  </span>
+  
+
+      </a>
+    </li>
+  
+
+              
+            
+              
+                
+  
+  
+  
+  
+    <li class="md-nav__item">
+      <a href="../../../developer-guide/contributing/" class="md-nav__link">
+        
+  
+  <span class="md-ellipsis">
+    Contributing
+  </span>
+  
+
+      </a>
+    </li>
+  
+
+              
+            
+          </ul>
+        </nav>
+      
+    </li>
+  
+
+    
+      
+      
+  
+  
+  
+  
+    
+    
+    
+      
+      
+        
+      
+    
+    
+    <li class="md-nav__item md-nav__item--nested">
+      
+        
+        
+          
+        
+        <input class="md-nav__toggle md-toggle md-toggle--indeterminate" type="checkbox" id="__nav_5" >
+        
+          
+          <label class="md-nav__link" for="__nav_5" id="__nav_5_label" tabindex="0">
+            
+  
+  <span class="md-ellipsis">
+    Reference
+  </span>
+  
+
+            <span class="md-nav__icon md-icon"></span>
+          </label>
+        
+        <nav class="md-nav" data-md-level="1" aria-labelledby="__nav_5_label" aria-expanded="false">
+          <label class="md-nav__title" for="__nav_5">
+            <span class="md-nav__icon md-icon"></span>
+            Reference
+          </label>
+          <ul class="md-nav__list" data-md-scrollfix>
+            
+              
+                
+  
+  
+  
+  
+    <li class="md-nav__item">
+      <a href="../../../reference/api-index/" class="md-nav__link">
+        
+  
+  <span class="md-ellipsis">
+    API Index
+  </span>
+  
+
+      </a>
+    </li>
+  
+
+              
+            
+              
+                
+  
+  
+  
+  
+    <li class="md-nav__item">
+      <a href="../../../reference/ui-components-hydra/" class="md-nav__link">
+        
+  
+  <span class="md-ellipsis">
+    UI Components (TrackerKit)
+  </span>
+  
+
+      </a>
+    </li>
+  
+
+              
+            
+              
+                
+  
+  
+  
+  
+    <li class="md-nav__item">
+      <a href="../../../reference/ui-components-posekit/" class="md-nav__link">
+        
+  
+  <span class="md-ellipsis">
+    UI Components (PoseKit)
+  </span>
+  
+
+      </a>
+    </li>
+  
+
+              
+            
+              
+                
+  
+  
+  
+  
+    <li class="md-nav__item">
+      <a href="../../../reference/api-app/" class="md-nav__link">
+        
+  
+  <span class="md-ellipsis">
+    API (Launcher)
+  </span>
+  
+
+      </a>
+    </li>
+  
+
+              
+            
+              
+                
+  
+  
+  
+  
+    <li class="md-nav__item">
+      <a href="../../../reference/api-core/" class="md-nav__link">
+        
+  
+  <span class="md-ellipsis">
+    API (Core)
+  </span>
+  
+
+      </a>
+    </li>
+  
+
+              
+            
+              
+                
+  
+  
+  
+  
+    <li class="md-nav__item">
+      <a href="../../../reference/api-data/" class="md-nav__link">
+        
+  
+  <span class="md-ellipsis">
+    API (Data)
+  </span>
+  
+
+      </a>
+    </li>
+  
+
+              
+            
+              
+                
+  
+  
+  
+  
+    <li class="md-nav__item">
+      <a href="../../../reference/api-gui/" class="md-nav__link">
+        
+  
+  <span class="md-ellipsis">
+    API (TrackerKit GUI)
+  </span>
+  
+
+      </a>
+    </li>
+  
+
+              
+            
+              
+                
+  
+  
+  
+  
+    <li class="md-nav__item">
+      <a href="../../../reference/api-widgets/" class="md-nav__link">
+        
+  
+  <span class="md-ellipsis">
+    API (Widgets)
+  </span>
+  
+
+      </a>
+    </li>
+  
+
+              
+            
+              
+                
+  
+  
+  
+  
+    <li class="md-nav__item">
+      <a href="../../../reference/api-posekit/" class="md-nav__link">
+        
+  
+  <span class="md-ellipsis">
+    API (PoseKit)
+  </span>
+  
+
+      </a>
+    </li>
+  
+
+              
+            
+              
+                
+  
+  
+  
+  
+    <li class="md-nav__item">
+      <a href="../../../reference/api-utils/" class="md-nav__link">
+        
+  
+  <span class="md-ellipsis">
+    API (Utils)
+  </span>
+  
+
+      </a>
+    </li>
+  
+
+              
+            
+              
+                
+  
+  
+  
+  
+    <li class="md-nav__item">
+      <a href="../../../reference/cli-reference/" class="md-nav__link">
+        
+  
+  <span class="md-ellipsis">
+    CLI Reference
+  </span>
+  
+
+      </a>
+    </li>
+  
+
+              
+            
+              
+                
+  
+  
+  
+  
+    <li class="md-nav__item">
+      <a href="../../../reference/technical-reference/" class="md-nav__link">
+        
+  
+  <span class="md-ellipsis">
+    Technical Reference (LaTeX)
+  </span>
+  
+
+      </a>
+    </li>
+  
+
+              
+            
+              
+                
+  
+  
+  
+  
+    <li class="md-nav__item">
+      <a href="../../../reference/changelog/" class="md-nav__link">
+        
+  
+  <span class="md-ellipsis">
+    Changelog
+  </span>
+  
+
+      </a>
+    </li>
+  
+
+              
+            
+              
+                
+  
+  
+  
+  
+    <li class="md-nav__item">
+      <a href="../../../reference/faq/" class="md-nav__link">
+        
+  
+  <span class="md-ellipsis">
+    FAQ
+  </span>
+  
+
+      </a>
+    </li>
+  
+
+              
+            
+          </ul>
+        </nav>
+      
+    </li>
+  
+
+    
+  </ul>
+</nav>
+                  </div>
+                </div>
+              </div>
+            
+            
+              
+              <div class="md-sidebar md-sidebar--secondary" data-md-component="sidebar" data-md-type="toc" >
+                <div class="md-sidebar__scrollwrap">
+                  <div class="md-sidebar__inner">
+                    
+
+<nav class="md-nav md-nav--secondary" aria-label="Table of contents">
+  
+  
+  
+    
+  
+  
+    <label class="md-nav__title" for="__toc">
+      <span class="md-nav__icon md-icon"></span>
+      Table of contents
+    </label>
+    <ul class="md-nav__list" data-md-component="toc" data-md-scrollfix>
+      
+        <li class="md-nav__item">
+  <a href="#why" class="md-nav__link">
+    <span class="md-ellipsis">
+      Why
+    </span>
+  </a>
+  
+</li>
+      
+        <li class="md-nav__item">
+  <a href="#scope" class="md-nav__link">
+    <span class="md-ellipsis">
+      Scope
+    </span>
+  </a>
+  
+</li>
+      
+        <li class="md-nav__item">
+  <a href="#decisions-taken" class="md-nav__link">
+    <span class="md-ellipsis">
+      Decisions taken
+    </span>
+  </a>
+  
+    <nav class="md-nav" aria-label="Decisions taken">
+      <ul class="md-nav__list">
+        
+          <li class="md-nav__item">
+  <a href="#why-a-merged-checkpoint" class="md-nav__link">
+    <span class="md-ellipsis">
+      Why a merged checkpoint
+    </span>
+  </a>
+  
+</li>
+        
+          <li class="md-nav__item">
+  <a href="#why-we-own-the-trainer" class="md-nav__link">
+    <span class="md-ellipsis">
+      Why we own the trainer
+    </span>
+  </a>
+  
+</li>
+        
+          <li class="md-nav__item">
+  <a href="#provenance-a-hard-ordering-dependency-on-the-review-redesign" class="md-nav__link">
+    <span class="md-ellipsis">
+      Provenance: a hard ordering dependency on the review redesign
+    </span>
+  </a>
+  
+</li>
+        
+      </ul>
+    </nav>
+  
+</li>
+      
+        <li class="md-nav__item">
+  <a href="#architecture" class="md-nav__link">
+    <span class="md-ellipsis">
+      Architecture
+    </span>
+  </a>
+  
+    <nav class="md-nav" aria-label="Architecture">
+      <ul class="md-nav__list">
+        
+          <li class="md-nav__item">
+  <a href="#1-contracts-trainingcontractspy" class="md-nav__link">
+    <span class="md-ellipsis">
+      1. Contracts (training/contracts.py)
+    </span>
+  </a>
+  
+</li>
+        
+          <li class="md-nav__item">
+  <a href="#2-dataset-builder-trainingdataset_builderspy" class="md-nav__link">
+    <span class="md-ellipsis">
+      2. Dataset builder (training/dataset_builders.py)
+    </span>
+  </a>
+  
+</li>
+        
+          <li class="md-nav__item">
+  <a href="#2b-what-this-role-does-not-get-for-free" class="md-nav__link">
+    <span class="md-ellipsis">
+      2b. What this role does NOT get for free
+    </span>
+  </a>
+  
+</li>
+        
+          <li class="md-nav__item">
+  <a href="#3-trainer-trainingsam3_lora-qt-free" class="md-nav__link">
+    <span class="md-ellipsis">
+      3. Trainer (training/sam3_lora/, Qt-free)
+    </span>
+  </a>
+  
+</li>
+        
+          <li class="md-nav__item">
+  <a href="#4-publish-a-fork-not-an-extension" class="md-nav__link">
+    <span class="md-ellipsis">
+      4. Publish — a fork, not an extension
+    </span>
+  </a>
+  
+</li>
+        
+          <li class="md-nav__item">
+  <a href="#4b-adapter-key-mapping" class="md-nav__link">
+    <span class="md-ellipsis">
+      4b. Adapter key mapping
+    </span>
+  </a>
+  
+</li>
+        
+          <li class="md-nav__item">
+  <a href="#5-escalation-consumption" class="md-nav__link">
+    <span class="md-ellipsis">
+      5. Escalation consumption
+    </span>
+  </a>
+  
+</li>
+        
+          <li class="md-nav__item">
+  <a href="#a-prerequisite-bug-escalation-runs-sam3-at-644-not-1008" class="md-nav__link">
+    <span class="md-ellipsis">
+      A prerequisite bug: escalation runs SAM3 at 644, not 1008
+    </span>
+  </a>
+  
+</li>
+        
+          <li class="md-nav__item">
+  <a href="#the-silent-load-guard" class="md-nav__link">
+    <span class="md-ellipsis">
+      The silent-load guard
+    </span>
+  </a>
+  
+</li>
+        
+          <li class="md-nav__item">
+  <a href="#6-preflight" class="md-nav__link">
+    <span class="md-ellipsis">
+      6. Preflight
+    </span>
+  </a>
+  
+</li>
+        
+          <li class="md-nav__item">
+  <a href="#7-things-this-design-fixes-the-meaning-of" class="md-nav__link">
+    <span class="md-ellipsis">
+      7. Things this design fixes the meaning of
+    </span>
+  </a>
+  
+</li>
+        
+      </ul>
+    </nav>
+  
+</li>
+      
+        <li class="md-nav__item">
+  <a href="#testing" class="md-nav__link">
+    <span class="md-ellipsis">
+      Testing
+    </span>
+  </a>
+  
+</li>
+      
+        <li class="md-nav__item">
+  <a href="#acceptance" class="md-nav__link">
+    <span class="md-ellipsis">
+      Acceptance
+    </span>
+  </a>
+  
+</li>
+      
+        <li class="md-nav__item">
+  <a href="#risks" class="md-nav__link">
+    <span class="md-ellipsis">
+      Risks
+    </span>
+  </a>
+  
+</li>
+      
+    </ul>
+  
+</nav>
+                  </div>
+                </div>
+              </div>
+            
+          
+          
+            <div class="md-content" data-md-component="content">
+              <article class="md-content__inner md-typeset">
+                
+                  
+
+  
+    <a href="https://github.com/neurorishika/hydra-suite/edit/main/docs/superpowers/specs/2026-08-31-detectkit-sam3-finetune-design.md" title="Edit this page" class="md-content__button md-icon">
+      
+      <svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 24 24"><path d="M10 20H6V4h7v5h5v3.1l2-2V8l-6-6H6c-1.1 0-2 .9-2 2v16c0 1.1.9 2 2 2h4zm10.2-7c.1 0 .3.1.4.2l1.3 1.3c.2.2.2.6 0 .8l-1 1-2.1-2.1 1-1c.1-.1.2-.2.4-.2m0 3.9L14.1 23H12v-2.1l6.1-6.1z"/></svg>
+    </a>
+  
+  
+
+
+<h1 id="detectkit-sam3-lora-finetuning-as-a-training-role">DetectKit — SAM3 LoRA finetuning as a training role<a class="headerlink" href="#detectkit-sam3-lora-finetuning-as-a-training-role" title="Permanent link">&para;</a></h1>
+<p><strong>Status:</strong> pending implementation plan</p>
+<h2 id="why">Why<a class="headerlink" href="#why" title="Permanent link">&para;</a></h2>
+<p>DetectKit's semantic escalation runs SAM3 zero-shot from a text prompt. On the
+<code>improved_ant_detection</code> project that is not good enough, and a YOLO-seg model
+trained on the same three frames is worse. A leave-one-frame-out spike (<code>spike/sam3-lora</code>,
+<code>scratch/sam3_lora_spike/FINDINGS.md</code>, result JSONs under
+<code>scratch/sam3_lora_spike/results/</code>) trained three folds — each on two frames
+(~48 ant polygons), each scored on the third, genuinely held-out frame:</p>
+<table>
+<thead>
+<tr>
+<th>arm (mean over 3 held-out frames)</th>
+<th>AP50</th>
+<th>AP75</th>
+<th>mean matched IoU</th>
+<th>R@50</th>
+</tr>
+</thead>
+<tbody>
+<tr>
+<td>YOLO-seg, best tile size</td>
+<td>0.479</td>
+<td>0.255</td>
+<td>0.764</td>
+<td>0.931</td>
+</tr>
+<tr>
+<td>SAM3 zero-shot</td>
+<td>0.465</td>
+<td>0.000</td>
+<td>0.571</td>
+<td>0.667</td>
+</tr>
+<tr>
+<td><strong>SAM3 + LoRA (last @ epoch 40)</strong></td>
+<td><strong>0.838</strong></td>
+<td><strong>0.624</strong></td>
+<td>0.757</td>
+<td>0.903</td>
+</tr>
+</tbody>
+</table>
+<p>Per fold, so the spread is visible rather than hidden in a mean:</p>
+<table>
+<thead>
+<tr>
+<th>held-out frame</th>
+<th>AP50</th>
+<th>AP75</th>
+<th>mean matched IoU</th>
+</tr>
+</thead>
+<tbody>
+<tr>
+<td>f008078</td>
+<td>0.924</td>
+<td>0.669</td>
+<td>0.757</td>
+</tr>
+<tr>
+<td>f008161</td>
+<td>0.678</td>
+<td>0.417</td>
+<td>0.739</td>
+</tr>
+<tr>
+<td>f008975</td>
+<td>0.911</td>
+<td>0.786</td>
+<td>0.775</td>
+</tr>
+</tbody>
+</table>
+<p><strong>Every fold beats the tuned YOLO baseline on AP75</strong>, the worst of them
+(0.417) by 1.6x and the mean by 2.4x. The diagnosis this design rests on is
+what the numbers say: <strong>zero-shot SAM3 already localises the animals about as
+well as a trained YOLO (AP50 0.465 vs 0.479) but its mask geometry is wrong</strong>
+— AP75 0.000, mean IoU 0.571 against YOLO's 0.764. That is the ~1.7x area
+overshoot (tracing legs) the shape-aware calibration work documented.
+Finetuning fixes exactly that term: IoU 0.571 -&gt; 0.757, AP75 0.000 -&gt; 0.624.
+Localisation is expensive to teach; shape is cheap, and the labels already
+exist.</p>
+<p><strong>What this evidence does and does not support.</strong> Three frames from one video,
+one arena, one lighting condition, 24 instances each. Leave-one-frame-out
+controls overfitting to a <em>frame</em>, not to a <em>setup</em>, so these numbers justify
+building the feature and do not promise a value on a new rig. Both known biases
+favour YOLO (its training set included these frames; its tile size was swept on
+them), so the margin is conservative. Between-fold spread is real — AP50 ranges
+0.678 to 0.924 — and <code>f008161</code> is materially weaker than the other two.
+Two properties of the scorer travel with the numbers: <code>mean matched IoU</code> is
+averaged only over the GT each arm found, so zero-shot's 0.571 is a selection
+effect over the 67% it hit; and the greedy argmax matching is not COCO matching,
+so these are not comparable to published COCO AP.</p>
+<p>Validation loss proved a <strong>useless</strong> signal here and should not be used as a
+stopping criterion: fold <code>f008975</code> had the worst val loss of the three (~2.5 at
+epoch 10, ~1.7 at 40, against ~0.85 elsewhere) and the <em>best</em> held-out AP75
+(0.786).</p>
+<p>Operating point: AP is ranking-based and flat across conf 0.1/0.2/0.4, but
+precision at fixed recall moves 0.17 -&gt; 0.32 -&gt; 0.72. A deployed model wants
+conf ~0.4; the escalation default of 0.2 leaves easy precision on the table.</p>
+<p>Confidence threshold is not the lever: zero-shot AP50 is 0.465/0.465/0.462 at
+conf 0.1/0.2/0.4.</p>
+<p><strong>The numbers above were measured through Meta's native <code>sam3</code> stack, not
+through the stack that will ship.</strong> The spike scored
+<code>pred_logits.sigmoid().max(-1)</code> with no presence term and no per-tile NMS;
+ultralytics' <code>SAM3SemanticPredictor.postprocess</code> multiplies
+<code>sigmoid(logits) * presence</code> and applies NMS at <code>iou=0.7</code>
+(<code>ultralytics/models/sam/predict.py:2299-2315</code>, pinned as <code>PREDICTOR_NMS_IOU</code>
+in <code>semantic/sam3.py:33</code>). Confidence thresholds are therefore <strong>not comparable
+between the two stacks</strong>, and no run has yet put a merged checkpoint through the
+ultralytics graph. Closing that gap is an acceptance criterion, not a follow-up:
+see "Acceptance".</p>
+<h2 id="scope">Scope<a class="headerlink" href="#scope" title="Permanent link">&para;</a></h2>
+<p>A new first-class training role that finetunes SAM3 on a DetectKit source's
+polygon labels and publishes a checkpoint the existing escalation path can load.</p>
+<p>Out of scope: video/tracking SAM3, prompt-free operation, multi-class SAM3,
+adapter stacking, and any change to how escalations are reviewed.</p>
+<h2 id="decisions-taken">Decisions taken<a class="headerlink" href="#decisions-taken" title="Permanent link">&para;</a></h2>
+<ol>
+<li><strong>Merged full checkpoint, not a shipped adapter.</strong> LoRA is merged into the
+   base weights at publish time and written as a ~3.4 GB <code>.pt</code> in Meta key
+   layout. Justification below.</li>
+<li><strong>Training uses every label in the chosen source.</strong> Per-frame provenance does
+   not survive a review (see "Provenance is unavailable"), so a human-only mode
+   would be a lie. The user is warned instead.</li>
+<li><strong>A full training role</strong>, in the existing contracts/runner/service/publish
+   machinery — not a side door in the escalation dialog.</li>
+<li><strong>We own the trainer.</strong> ~350 lines against Meta's <code>sam3</code> package, importing
+   Meta's own loss and matcher.</li>
+</ol>
+<h3 id="why-a-merged-checkpoint">Why a merged checkpoint<a class="headerlink" href="#why-a-merged-checkpoint" title="Permanent link">&para;</a></h3>
+<p><code>ultralytics/models/sam/build_sam3.py:357</code> builds its state dict as
+<code>{k.replace("detector.", ""): v for k, v in ckpt.items() if "detector" in k}</code>
+and then calls <code>load_state_dict(..., strict=False)</code>. The published
+<code>facebook/sam3</code> <code>sam3.pt</code> is a raw Meta-layout state dict with <code>detector.</code>
+prefixes, so <strong>a merged checkpoint written in that same layout loads into the
+existing ultralytics escalation path with no inference-side code change and no
+new runtime dependency.</strong> The alternative — shipping the 46 MB adapter — needs a
+second SAM3 inference backend built on Meta's package, which drags <code>decord</code>,
+<code>torchmetrics</code>, <code>scipy</code> and <code>einops</code> into the runtime install for every user.
+Disk is the cheaper currency here.</p>
+<p>That <code>strict=False</code> is a footgun and this design must guard it: see
+"The silent-load guard".</p>
+<h3 id="why-we-own-the-trainer">Why we own the trainer<a class="headerlink" href="#why-we-own-the-trainer" title="Permanent link">&para;</a></h3>
+<p><code>Sompote/sam3_lora</code> proved the approach and is what the spike used, but its
+value was concentrated in one fact: <strong>it does not reimplement the objective.</strong>
+It imports Meta's <code>Sam3LossWrapper</code> and <code>BinaryHungarianMatcherV2</code> from the
+official <code>sam3</code> package and wraps them in a LoRA injection, a COCO dataloader
+and a training loop. Those three are standard code we should own and test.
+The repo itself is a poor dependency — 70 MB, thirteen training scripts, a
+60 KB trainer, a vendored copy of <code>sam3</code>, and a bundled <code>Machinery.zip</code>.
+Vendoring it is a maintenance liability; treating it as an external tool under
+<code>integrations/</code> (the SLEAP precedent) is unjustified for a two-week-old
+single-contributor repo.</p>
+<h3 id="provenance-a-hard-ordering-dependency-on-the-review-redesign">Provenance: a hard ordering dependency on the review redesign<a class="headerlink" href="#provenance-a-hard-ordering-dependency-on-the-review-redesign" title="Permanent link">&para;</a></h3>
+<p><strong>Today, source choice IS the provenance filter.</strong>
+<code>accept_pending_semantic_escalation</code> (<code>detectkit/jobs/semantic_escalation.py:1174</code>)
+promotes staged SAM3 output to a <strong>new sibling source</strong> and deliberately never
+touches the origin's labels -- its docstring says overwriting them "would be
+worse". So a user can train on hand-labelled polygons today simply by selecting
+the hand-labelled source.</p>
+<p>That changes only when
+<code>2026-08-31-detectkit-frame-granular-review-design.md</code> lands. After it, accepted
+labels are written <strong>in place</strong> into the source's <code>labels/</code>, byte-indistinguishable
+from hand-drawn polygons; <code>decisions.json</code> holds per-frame outcomes only for the
+review's lifetime ("completing it removes the staging dir"); and <code>producer</code> is
+source-level and explicitly "load-bearing for <em>nothing</em>". At that point, and only
+then, "train on human labels only" stops being expressible.</p>
+<p><strong>This is therefore a stated ordering dependency, not a background assumption:</strong></p>
+<ul>
+<li>If this role ships <strong>before</strong> the review redesign, the training panel must say
+  that selecting a non-escalation source is the provenance filter, and the
+  warning is advisory.</li>
+<li>Once the review redesign lands, the distinction is gone and the warning becomes
+  the only control.</li>
+</ul>
+<p>Either way the role trains on whatever is in the selected source's <code>labels/</code>, and
+<strong>requires the user to acknowledge a warning before the run starts</strong>: SAM3 will
+learn any systematic error in those labels, including its own accepted output.
+The acknowledgement and the source fingerprint are recorded in the run record so
+a suspect model can be traced back to its labels.</p>
+<h2 id="architecture">Architecture<a class="headerlink" href="#architecture" title="Permanent link">&para;</a></h2>
+<p>Dependency direction is unchanged: <code>training/</code> and <code>core/inference/semantic/</code>
+are below the app layer; DetectKit imports them and neither imports DetectKit.</p>
+<h3 id="1-contracts-trainingcontractspy">1. Contracts (<code>training/contracts.py</code>)<a class="headerlink" href="#1-contracts-trainingcontractspy" title="Permanent link">&para;</a></h3>
+<div class="language-python highlight"><pre><span></span><code><span id="__span-0-1"><a id="__codelineno-0-1" name="__codelineno-0-1" href="#__codelineno-0-1"></a><span class="k">class</span><span class="w"> </span><span class="nc">TrainingRole</span><span class="p">(</span><span class="nb">str</span><span class="p">,</span> <span class="n">Enum</span><span class="p">):</span>
+</span><span id="__span-0-2"><a id="__codelineno-0-2" name="__codelineno-0-2" href="#__codelineno-0-2"></a>    <span class="o">...</span>
+</span><span id="__span-0-3"><a id="__codelineno-0-3" name="__codelineno-0-3" href="#__codelineno-0-3"></a>    <span class="n">SEMANTIC_SAM3</span> <span class="o">=</span> <span class="s2">"semantic_sam3"</span>
+</span><span id="__span-0-4"><a id="__codelineno-0-4" name="__codelineno-0-4" href="#__codelineno-0-4"></a>
+</span><span id="__span-0-5"><a id="__codelineno-0-5" name="__codelineno-0-5" href="#__codelineno-0-5"></a>
+</span><span id="__span-0-6"><a id="__codelineno-0-6" name="__codelineno-0-6" href="#__codelineno-0-6"></a><span class="nd">@dataclass</span><span class="p">(</span><span class="n">slots</span><span class="o">=</span><span class="kc">True</span><span class="p">)</span>
+</span><span id="__span-0-7"><a id="__codelineno-0-7" name="__codelineno-0-7" href="#__codelineno-0-7"></a><span class="k">class</span><span class="w"> </span><span class="nc">Sam3LoraParams</span><span class="p">:</span>
+</span><span id="__span-0-8"><a id="__codelineno-0-8" name="__codelineno-0-8" href="#__codelineno-0-8"></a>    <span class="n">prompt</span><span class="p">:</span> <span class="nb">str</span> <span class="o">=</span> <span class="s2">""</span>              <span class="c1"># the concept text; required, no default concept</span>
+</span><span id="__span-0-9"><a id="__codelineno-0-9" name="__codelineno-0-9" href="#__codelineno-0-9"></a>    <span class="n">rank</span><span class="p">:</span> <span class="nb">int</span> <span class="o">=</span> <span class="mi">16</span>
+</span><span id="__span-0-10"><a id="__codelineno-0-10" name="__codelineno-0-10" href="#__codelineno-0-10"></a>    <span class="n">alpha</span><span class="p">:</span> <span class="nb">int</span> <span class="o">=</span> <span class="mi">32</span>
+</span><span id="__span-0-11"><a id="__codelineno-0-11" name="__codelineno-0-11" href="#__codelineno-0-11"></a>    <span class="n">dropout</span><span class="p">:</span> <span class="nb">float</span> <span class="o">=</span> <span class="mf">0.1</span>
+</span><span id="__span-0-12"><a id="__codelineno-0-12" name="__codelineno-0-12" href="#__codelineno-0-12"></a>    <span class="n">lr</span><span class="p">:</span> <span class="nb">float</span> <span class="o">=</span> <span class="mf">5e-5</span>
+</span><span id="__span-0-13"><a id="__codelineno-0-13" name="__codelineno-0-13" href="#__codelineno-0-13"></a>    <span class="n">epochs</span><span class="p">:</span> <span class="nb">int</span> <span class="o">=</span> <span class="mi">10</span>
+</span><span id="__span-0-14"><a id="__codelineno-0-14" name="__codelineno-0-14" href="#__codelineno-0-14"></a>    <span class="n">batch</span><span class="p">:</span> <span class="nb">int</span> <span class="o">=</span> <span class="mi">1</span>                <span class="c1"># 1008 px + ViT backprop; see VRAM preflight</span>
+</span><span id="__span-0-15"><a id="__codelineno-0-15" name="__codelineno-0-15" href="#__codelineno-0-15"></a>    <span class="n">grad_accum</span><span class="p">:</span> <span class="nb">int</span> <span class="o">=</span> <span class="mi">8</span>
+</span><span id="__span-0-16"><a id="__codelineno-0-16" name="__codelineno-0-16" href="#__codelineno-0-16"></a>    <span class="n">mixed_precision</span><span class="p">:</span> <span class="nb">str</span> <span class="o">=</span> <span class="s2">"bf16"</span>
+</span><span id="__span-0-17"><a id="__codelineno-0-17" name="__codelineno-0-17" href="#__codelineno-0-17"></a>    <span class="n">num_negatives</span><span class="p">:</span> <span class="nb">int</span> <span class="o">=</span> <span class="mi">3</span>        <span class="c1"># hard-negative prompts that must return nothing</span>
+</span><span id="__span-0-18"><a id="__codelineno-0-18" name="__codelineno-0-18" href="#__codelineno-0-18"></a>    <span class="n">negative_prompts</span><span class="p">:</span> <span class="nb">list</span><span class="p">[</span><span class="nb">str</span><span class="p">]</span> <span class="o">=</span> <span class="n">field</span><span class="p">(</span><span class="n">default_factory</span><span class="o">=</span><span class="nb">list</span><span class="p">)</span>  <span class="c1"># explicit; see §2</span>
+</span><span id="__span-0-19"><a id="__codelineno-0-19" name="__codelineno-0-19" href="#__codelineno-0-19"></a>    <span class="c1"># Which submodules receive adapters. Text encoder is False by default as a</span>
+</span><span id="__span-0-20"><a id="__codelineno-0-20" name="__codelineno-0-20" href="#__codelineno-0-20"></a>    <span class="c1"># precaution against eroding prompt discrimination -- untested here; the</span>
+</span><span id="__span-0-21"><a id="__codelineno-0-21" name="__codelineno-0-21" href="#__codelineno-0-21"></a>    <span class="c1"># spike froze it in every configuration.</span>
+</span><span id="__span-0-22"><a id="__codelineno-0-22" name="__codelineno-0-22" href="#__codelineno-0-22"></a>    <span class="n">adapt_vision_encoder</span><span class="p">:</span> <span class="nb">bool</span> <span class="o">=</span> <span class="kc">True</span>
+</span><span id="__span-0-23"><a id="__codelineno-0-23" name="__codelineno-0-23" href="#__codelineno-0-23"></a>    <span class="n">adapt_text_encoder</span><span class="p">:</span> <span class="nb">bool</span> <span class="o">=</span> <span class="kc">False</span>
+</span><span id="__span-0-24"><a id="__codelineno-0-24" name="__codelineno-0-24" href="#__codelineno-0-24"></a>    <span class="n">adapt_geometry_encoder</span><span class="p">:</span> <span class="nb">bool</span> <span class="o">=</span> <span class="kc">True</span>
+</span><span id="__span-0-25"><a id="__codelineno-0-25" name="__codelineno-0-25" href="#__codelineno-0-25"></a>    <span class="n">adapt_detr_encoder</span><span class="p">:</span> <span class="nb">bool</span> <span class="o">=</span> <span class="kc">True</span>
+</span><span id="__span-0-26"><a id="__codelineno-0-26" name="__codelineno-0-26" href="#__codelineno-0-26"></a>    <span class="n">adapt_detr_decoder</span><span class="p">:</span> <span class="nb">bool</span> <span class="o">=</span> <span class="kc">True</span>
+</span><span id="__span-0-27"><a id="__codelineno-0-27" name="__codelineno-0-27" href="#__codelineno-0-27"></a>    <span class="n">adapt_mask_decoder</span><span class="p">:</span> <span class="nb">bool</span> <span class="o">=</span> <span class="kc">True</span>
+</span><span id="__span-0-28"><a id="__codelineno-0-28" name="__codelineno-0-28" href="#__codelineno-0-28"></a>    <span class="c1"># Tiling, mirroring the SAHI sliced-training knobs.</span>
+</span><span id="__span-0-29"><a id="__codelineno-0-29" name="__codelineno-0-29" href="#__codelineno-0-29"></a>    <span class="n">geometry_mode</span><span class="p">:</span> <span class="nb">str</span> <span class="o">=</span> <span class="s2">"auto_object"</span>   <span class="c1"># auto_object | auto_model | custom</span>
+</span><span id="__span-0-30"><a id="__codelineno-0-30" name="__codelineno-0-30" href="#__codelineno-0-30"></a>    <span class="n">object_tile_fraction</span><span class="p">:</span> <span class="nb">float</span> <span class="o">=</span> <span class="mf">0.055</span>
+</span><span id="__span-0-31"><a id="__codelineno-0-31" name="__codelineno-0-31" href="#__codelineno-0-31"></a>    <span class="n">slice_width</span><span class="p">:</span> <span class="nb">int</span> <span class="o">=</span> <span class="mi">0</span>                 <span class="c1"># custom mode only; 0 =&gt; fall back to imgsz</span>
+</span><span id="__span-0-32"><a id="__codelineno-0-32" name="__codelineno-0-32" href="#__codelineno-0-32"></a>    <span class="n">slice_height</span><span class="p">:</span> <span class="nb">int</span> <span class="o">=</span> <span class="mi">0</span>                <span class="c1"># custom mode only</span>
+</span><span id="__span-0-33"><a id="__codelineno-0-33" name="__codelineno-0-33" href="#__codelineno-0-33"></a>    <span class="n">tile_overlap</span><span class="p">:</span> <span class="nb">float</span> <span class="o">=</span> <span class="mf">0.25</span>
+</span><span id="__span-0-34"><a id="__codelineno-0-34" name="__codelineno-0-34" href="#__codelineno-0-34"></a>    <span class="n">keep_empty_tiles</span><span class="p">:</span> <span class="nb">bool</span> <span class="o">=</span> <span class="kc">True</span>
+</span><span id="__span-0-35"><a id="__codelineno-0-35" name="__codelineno-0-35" href="#__codelineno-0-35"></a>    <span class="c1"># Provenance does not survive a review (see the ordering dependency above),</span>
+</span><span id="__span-0-36"><a id="__codelineno-0-36" name="__codelineno-0-36" href="#__codelineno-0-36"></a>    <span class="c1"># so the user must affirm the labels are good before SAM3 learns them --</span>
+</span><span id="__span-0-37"><a id="__codelineno-0-37" name="__codelineno-0-37" href="#__codelineno-0-37"></a>    <span class="c1"># including its own accepted output. Preflight refuses without it.</span>
+</span><span id="__span-0-38"><a id="__codelineno-0-38" name="__codelineno-0-38" href="#__codelineno-0-38"></a>    <span class="n">label_quality_acknowledged</span><span class="p">:</span> <span class="nb">bool</span> <span class="o">=</span> <span class="kc">False</span>
+</span></code></pre></div>
+<p><code>TrainingRunSpec</code> gains <code>sam3_params: Sam3LoraParams | None = None</code>, exactly as
+it already carries <code>tiny_params</code> and <code>custom_params</code>.</p>
+<p><strong>The six <code>adapt_*</code> flags select submodules by PREFIX, not suffix</strong>, so the LoRA
+seam needs both: a target-suffix list (which <code>nn.Linear</code> leaves to wrap) and an
+include-prefix list (which subtree they must live under). A suffix-only filter
+cannot express these flags at all and would adapt the text encoder we
+deliberately freeze.</p>
+<p>The prefixes are <strong>measured</strong>, not guessed — against a live
+<code>build_sam3_image_model</code> carrying 293 <code>nn.Linear</code> modules:</p>
+<table>
+<thead>
+<tr>
+<th>flag</th>
+<th>prefix</th>
+<th>Linears</th>
+</tr>
+</thead>
+<tbody>
+<tr>
+<td><code>adapt_vision_encoder</code></td>
+<td><code>backbone.vision_backbone</code></td>
+<td>128</td>
+</tr>
+<tr>
+<td><code>adapt_text_encoder</code></td>
+<td><code>backbone.language_backbone</code></td>
+<td>73</td>
+</tr>
+<tr>
+<td><code>adapt_detr_decoder</code></td>
+<td><code>transformer.decoder</code></td>
+<td>42</td>
+</tr>
+<tr>
+<td><code>adapt_detr_encoder</code></td>
+<td><code>transformer.encoder</code></td>
+<td>24</td>
+</tr>
+<tr>
+<td><code>adapt_geometry_encoder</code></td>
+<td><code>geometry_encoder</code></td>
+<td>18</td>
+</tr>
+<tr>
+<td><code>adapt_mask_decoder</code></td>
+<td><code>segmentation_head</code></td>
+<td>4</td>
+</tr>
+</tbody>
+</table>
+<p>Two natural guesses are wrong and would match <strong>nothing</strong>, silently making
+their flag a no-op: the geometry encoder is top-level, not
+<code>backbone.geometry_encoder</code>, and the mask decoder is <code>segmentation_head</code>, not
+<code>mask_decoder</code>. <code>dot_prod_scoring</code> (4 Linears, the text/vision similarity head)
+is named by no flag and is therefore never adapted; add a flag rather than
+folding it into another.</p>
+<p><code>object_tile_fraction</code> defaults to 0.055 because that is what the spike
+measured, not because it is principled: 55 px animals in a 1008 px tile. It is
+a knob with a measured default, and the design says so rather than dressing it
+up. It deliberately diverges from the <code>0.15</code> used by the SAHI consumers
+(<code>core/inference/config.py:74</code>, <code>training/sliced_dataset.py:92</code>) and the <code>0.05</code>
+escalation seed (<code>semantic/tiling.py:32</code>) because SAM3's fixed 1008 input makes
+the trade-off a different one.</p>
+<p><code>epochs = 10</code> is <strong>measured, not guessed.</strong> The AP-vs-epoch curve on fold 1's
+held-out frame (<code>scratch/sam3_lora_spike/results/curve/</code>, 10 checkpoints across
+40 epochs):</p>
+<table>
+<thead>
+<tr>
+<th>epoch</th>
+<th>1</th>
+<th>5</th>
+<th>9</th>
+<th>13</th>
+<th>17</th>
+<th>21</th>
+<th>25</th>
+<th>29</th>
+<th>33</th>
+<th>37</th>
+</tr>
+</thead>
+<tbody>
+<tr>
+<td>AP50</td>
+<td>.821</td>
+<td>.828</td>
+<td>.877</td>
+<td>.853</td>
+<td>.884</td>
+<td>.880</td>
+<td>.855</td>
+<td>.924</td>
+<td>.855</td>
+<td>.911</td>
+</tr>
+<tr>
+<td>AP75</td>
+<td>.594</td>
+<td>.624</td>
+<td>.649</td>
+<td>.673</td>
+<td>.578</td>
+<td>.707</td>
+<td>.621</td>
+<td>.610</td>
+<td>.637</td>
+<td>.660</td>
+</tr>
+</tbody>
+</table>
+<p>From epoch 9 on, AP75 has mean 0.642 and <strong>sd 0.040</strong>, and swings ±0.13 between
+adjacent points (0.578 at 17, 0.707 at 21) — that is sampling noise on 24
+instances in one frame, not learning. Epoch 1 already scores 0.594 and epoch 5
+0.624, both within about one sd of the plateau. So the useful adaptation is
+essentially complete within the first handful of epochs; 10 buys the plateau
+with margin, and 40 buys nothing.</p>
+<p>This is a <strong>practical</strong> finding as much as a numeric one: the finetune costs
+minutes of GPU, not hours, which is what makes it reasonable to offer as a
+routine step rather than an expedition.</p>
+<p>One caveat that keeps this honest: the curve is one fold's held-out frame. The
+right reading is "the plateau arrives early", not "epoch 21 is optimal" — picking
+the curve's argmax would be selection on the evaluation frame, the same leak the
+checkpoint-selection rule above exists to prevent.</p>
+<h3 id="2-dataset-builder-trainingdataset_builderspy">2. Dataset builder (<code>training/dataset_builders.py</code>)<a class="headerlink" href="#2-dataset-builder-trainingdataset_builderspy" title="Permanent link">&para;</a></h3>
+<p><code>prepare_role_dataset</code> gains a <code>SEMANTIC_SAM3</code> branch producing a COCO
+instance-segmentation dataset of tiles:</p>
+<div class="language-text highlight"><pre><span></span><code><span id="__span-1-1"><a id="__codelineno-1-1" name="__codelineno-1-1" href="#__codelineno-1-1"></a>&lt;derived&gt;/semantic_sam3/&lt;run&gt;/
+</span><span id="__span-1-2"><a id="__codelineno-1-2" name="__codelineno-1-2" href="#__codelineno-1-2"></a>    train/_annotations.coco.json  + tile jpgs
+</span><span id="__span-1-3"><a id="__codelineno-1-3" name="__codelineno-1-3" href="#__codelineno-1-3"></a>    valid/_annotations.coco.json  + tile jpgs
+</span><span id="__span-1-4"><a id="__codelineno-1-4" name="__codelineno-1-4" href="#__codelineno-1-4"></a>    build_manifest.json
+</span></code></pre></div>
+<ul>
+<li>Tile size from <code>slice_geometry.tile_size_for_mode(...)</code> using the source's
+  measured <code>reference_body_px</code> — the same measurement the SAHI builder already
+  makes and stamps. <code>custom</code> mode needs <code>slice_width</code>/<code>slice_height</code>, which is
+  why <code>Sam3LoraParams</code> carries them.</li>
+<li><strong>SAM3's input is a fixed 1008 px square.</strong> A <code>tile_px</code> tile is cut from the
+  frame and resized to 1008 before it reaches the model, so the scale the model
+  sees is <code>1008 / tile_px</code>. The spike's "native resolution" case is only the one
+  where <code>tile_px</code> happened to be 1008 and the resize was the identity; that is
+  not an invariant and the builder must not assume it. <code>object_tile_fraction</code> is
+  precisely the knob that sets this ratio — it fixes how many of the 1008 px an
+  animal occupies (0.055 =&gt; ~55 px) regardless of its size in the source frame.
+  Training and inference must resolve <code>tile_px</code> from the <strong>same</strong> stamped
+  <code>reference_body_px</code> and fraction, or the model is finetuned at a scale
+  escalation never reproduces.</li>
+<li>Tile positions from <code>slice_geometry.plan_tiles</code>, polygons clipped with
+  <code>slice_geometry.clip_polygon_to_tile</code>. The spike's throwaway tiler
+  reimplemented all of this; the role must not.</li>
+<li>An instance clipped below <code>MIN_RETAINED_AREA_FRAC = 0.5</code> by a tile seam is
+  written with <code>iscrowd = 1</code> so it neither rewards nor punishes. Dropping it
+  instead would teach SAM3 that a visible half-animal is background.</li>
+<li>Empty tiles are <strong>kept</strong> when <code>keep_empty_tiles</code>. False positives on
+  background are half of what "is it good" means, and the trainer's
+  hard-negative prompts cover prompt discrimination, not empty scenes.</li>
+<li>On a multi-class source the builder emits <strong>only the selected class</strong>.</li>
+<li><strong>Negative prompts are named, not inferred.</strong> SAM3 is trained with prompts that
+  must return nothing, so that the tuned model still discriminates concepts
+  instead of firing on any text. The spike's third-party trainer sampled these
+  from <em>other COCO categories</em> — unavailable here, because this builder emits a
+  single category by construction. So the source is explicit, in priority order:</li>
+<li><code>Sam3LoraParams.negative_prompts</code>, when the user supplies them.</li>
+<li>Otherwise the <strong>other class names of the source</strong> (a multi-class source's
+     unselected classes are exactly the confusable concepts worth suppressing).</li>
+<li>Otherwise a small curated out-of-domain pool (<code>"background"</code>, <code>"shadow"</code>,
+     <code>"debris"</code>), with any entry sharing a word with the selected prompt removed.
+  <code>num_negatives</code> samples from the resolved list per image. The resolved list is
+  written to the build manifest and the run record, because a model's prompt
+  discrimination is otherwise unexplainable after the fact.</li>
+<li><code>category.name</code> is <code>Sam3LoraParams.prompt</code>, so the concept the model is
+  trained on and the concept escalation prompts with are the same string by
+  construction.</li>
+</ul>
+<p>The split is by <strong>frame</strong>, never by tile: tiles from one frame overlap, so a
+tile-level split leaks pixels across train/valid. Concretely, and this matters
+because the motivating project has only three labelled frames:</p>
+<ul>
+<li>Ratio is <code>SplitConfig</code> as for every other role, applied to <strong>frames</strong>, shuffled
+  under <code>TrainingRunSpec.seed</code>, with at least one frame in each of train and val.</li>
+<li><strong>2 frames:</strong> 1/1, with a logged warning that val metrics come from a single
+  frame and are near-meaningless.</li>
+<li><strong>1 frame:</strong> train-only. Val is skipped, the run record records
+  <code>validation: "none"</code>, and the GUI says so. Refusing would block the exact
+  bootstrap case this feature exists to serve.</li>
+<li>Use <code>n_val = max(1, round(n * split.val))</code> whenever <code>n &gt;= 2</code>: with three
+  frames and <code>val=0.2</code> a plain floor yields an empty valid split.</li>
+<li>The spike's own leak (its <code>valid/</code> split <em>was</em> the held-out evaluation frame)
+  is a lesson, not a pattern: in production, val is drawn from the training
+  frames and evaluation is a separate concern.</li>
+</ul>
+<h3 id="2b-what-this-role-does-not-get-for-free">2b. What this role does NOT get for free<a class="headerlink" href="#2b-what-this-role-does-not-get-for-free" title="Permanent link">&para;</a></h3>
+<p>Adding a role is not a drop-in. Every item below is a concrete breakage on the
+existing path, verified in code, and each needs work the implementation plan
+must budget for:</p>
+<table>
+<thead>
+<tr>
+<th>#</th>
+<th>Site</th>
+<th>What happens today</th>
+<th>Needed</th>
+</tr>
+</thead>
+<tbody>
+<tr>
+<td>1</td>
+<td><code>validation.py:439</code></td>
+<td><code>validate_role_dataset</code> calls <code>inspect_obb_or_detect_dataset</code> <strong>unconditionally, before any role branch</strong>, and that inspector <strong>raises</strong> <code>RuntimeError("No valid OBB/detect dataset layout found…")</code> on a COCO layout (<code>dataset_inspector.py:233-247</code>). <code>service.build_role_dataset:400</code> calls it on every derived dataset.</td>
+<td>Branch on the role <strong>before</strong> the inspector runs; add a COCO-layout validator. <strong>This is a crash, not a gap</strong> — the freshly built dataset fails validation immediately. Trap: the function's final fall-through returns <code>valid=True</code> for unhandled roles (<code>validation.py:463</code>), so branching early but forgetting the validator makes validation silently pass.</td>
+</tr>
+<tr>
+<td>2</td>
+<td><code>dataset_builders.py:1001-1016</code></td>
+<td><code>role_min_level</code> raises <code>RuntimeError("Role has no geometry-level requirement")</code> for unknown roles, and <code>prepare_role_dataset:1044</code> calls it first thing.</td>
+<td><code>SEMANTIC_SAM3: GeometryLevel.POLYGON</code> in <code>_ROLE_MIN_LEVEL</code>.</td>
+</tr>
+<tr>
+<td>3</td>
+<td><code>model_publish.py:42</code>, <code>:72</code></td>
+<td><code>_repo_dir_for_role</code> and <code>_task_usage_for_role</code> both raise <code>"Unsupported publish role"</code>.</td>
+<td><strong>Decided: fork.</strong> See §4.</td>
+</tr>
+<tr>
+<td>4</td>
+<td><code>service.py:465-472</code></td>
+<td>Auto-publish routes through <code>_publish_training_artifacts</code> → <code>publish_trained_model</code>, which hits #3.</td>
+<td>The forked path registers in <code>model_registry.json</code> (§4 step 5). A directory scan would be a <strong>second registry convention</strong>, in tension with <code>2026-07-29-model-registry-unification-design.md</code>. Registry, not scan — and not into the download cache dir.</td>
+</tr>
+<tr>
+<td>5</td>
+<td><code>dataset_builders.py:1031</code></td>
+<td><code>prepare_role_dataset</code>'s second positional is <code>merged_obb_dataset_dir</code> (<code>role</code> is first); the service merges sources first (<code>service.py:328-347</code>).</td>
+<td><strong>Decided: a single raw source</strong>, not the merged dir. Concept training is per-source; <code>TrainingOrchestrator.build_merged_obb_dataset</code> is skipped for this role, and the service path must not assume it ran.</td>
+</tr>
+<tr>
+<td>6</td>
+<td><code>runner.py:2261</code></td>
+<td>Any role that falls past the custom-classify branches reaches <code>build_ultralytics_command</code> (:2303).</td>
+<td>Dispatch <code>SEMANTIC_SAM3</code> <strong>before</strong> that fall-through, or it silently builds a nonsense <code>yolo</code> command.</td>
+</tr>
+<tr>
+<td>7</td>
+<td><code>detectkit/gui/dialogs/training_dialog.py</code></td>
+<td><strong>2676 lines</strong>, already &gt;5x the 500-line guidance, with the six YOLO roles hard-wired: <code>_SELECTION_ROLE_MAP:55</code>, per-role dispatch :1892-1945, <code>_selected_roles:1928-1945</code>, merge-then-loop-roles :2041-2086.</td>
+<td>A role card plus a ~20-knob <code>Sam3LoraParams</code> editor cannot go inline without making this worse. New <code>detectkit/gui/panels/sam3_training_panel.py</code>; the dialog gains a role entry and delegates.</td>
+</tr>
+<tr>
+<td>8</td>
+<td>same dialog</td>
+<td>No surface exists for the mandated label-quality acknowledgement, the CUDA-host requirement, or probe-driven disablement.</td>
+<td>The panel owns all three; the action is disabled with <code>probe_sam3_training_availability()</code>'s reason rather than enabled-then-failing.</td>
+</tr>
+</tbody>
+</table>
+<p>Only <code>TrainingRunSpec.sam3_params</code> genuinely slots in as-is: it mirrors
+<code>custom_params</code>, and <code>to_dict</code>'s <code>asdict</code> handles slots dataclasses
+(<code>contracts.py:192-196</code>).</p>
+<h3 id="3-trainer-trainingsam3_lora-qt-free">3. Trainer (<code>training/sam3_lora/</code>, Qt-free)<a class="headerlink" href="#3-trainer-trainingsam3_lora-qt-free" title="Permanent link">&para;</a></h3>
+<p>A <strong>package</strong>, not a module — the seams below are separate files, per the
+no-god-object rule. Dispatched from <code>runner.run_training</code> before the ultralytics
+fall-through, in the same shape as <code>_CUSTOM_CLASSIFY_ROLES</code>.</p>
+<p>Four units, each independently testable:</p>
+<ul>
+<li><code>lora.py</code> seam — <code>LoraConfig</code>, <code>inject_adapters(model, cfg) -&gt; int</code>,
+  <code>adapter_state_dict(model)</code>, <code>merge_adapters(base_state_dict, adapters)</code>.
+  Pure tensor code, no SAM3 import, so it is unit-testable on a toy module.</li>
+<li><code>dataset.py</code> seam — COCO tiles → the <code>Datapoint</code> / <code>FindQueryLoaded</code> /
+  <code>collate_fn_api</code> structures Meta's model consumes, plus negative-prompt
+  sampling.</li>
+<li>The loop — AdamW, cosine schedule with warmup, grad accumulation, bf16,
+  gradient clipping at 1.0. Emits <code>log_cb</code>/<code>progress_cb</code> and honours
+  <code>should_cancel</code> between steps, like every other trainer here.</li>
+<li><code>probe_sam3_training_availability()</code> — mirrors
+  <code>semantic/checkpoints.py:probe_availability</code>: checks <code>sam3</code>, <code>torchmetrics</code>,
+  <code>scipy</code>, <code>einops</code>, <code>decord</code> and the base checkpoint <strong>without importing
+  ultralytics or downloading anything</strong>, returning a structured reason the GUI
+  shows on a disabled action instead of failing at click time.</li>
+</ul>
+<p>Objective and matcher are imported from Meta's package
+(<code>sam3.train.loss.sam3_loss.Sam3LossWrapper</code>,
+<code>sam3.train.matcher.BinaryHungarianMatcherV2</code>). We do not reimplement them.</p>
+<p>Optimiser state is not checkpointed; <code>resume_from</code> is unsupported for this role
+and rejected in preflight rather than silently ignored.</p>
+<h3 id="4-publish-a-fork-not-an-extension">4. Publish — a fork, not an extension<a class="headerlink" href="#4-publish-a-fork-not-an-extension" title="Permanent link">&para;</a></h3>
+<p><code>publish_trained_model</code>'s naming scheme (<code>{stamp}_{size}_{species}_{info}{ext}</code>
+under a role directory, <code>model_publish.py:767-830</code>) does not fit a
+promptable-concept checkpoint, and both <code>_repo_dir_for_role:42</code> and
+<code>_task_usage_for_role:72</code> raise for an unknown role. <strong>This role forks publish</strong>
+rather than extending those two functions. Breakage-table row 3 asked the spec to
+decide; this is the decision.</p>
+<p>On success the trainer writes <code>adapters.pt</code> (~46 MB) into the run dir, and
+<code>publish_sam3_model()</code> (new, in <code>training/sam3_lora/publish.py</code>) does:</p>
+<ol>
+<li>Load the base <code>sam3.pt</code> state dict (Meta layout, <code>detector.</code>-prefixed).</li>
+<li>Apply <code>merge_adapters</code> in that layout (see "Adapter key mapping").</li>
+<li>Write the merged checkpoint <strong>to a repository directory that is not the
+   download cache</strong>. <code>get_models_dir()/"sam3"</code> is already
+   <code>checkpoints.py:_cache_dir</code> — where the licence-gated stock <code>sam3.pt</code> is
+   staged — so publishing there would mix a 3.4 GB artifact repository into the
+   stock checkpoint cache. Published models go to
+   <code>get_models_dir()/"sam3_finetuned"/&lt;run_id&gt;.pt</code>.</li>
+<li>Write the <code>&lt;artifact&gt;.sam3_meta.json</code> sidecar (below).</li>
+<li><strong>Register in <code>model_registry.json</code>.</strong> The earlier draft omitted this step
+   while its own breakage table demanded "Registry, not scan" — an outright
+   self-contradiction. The entry carries <code>task_family: "semantic"</code>,
+   <code>usage_role: "semantic_sam3"</code>, the artifact path, the run id and the sidecar
+   path. <code>core/inference/model_paths.py:178-240</code> passes unknown usage-roles
+   through rather than crashing, so a new value is safe; <code>available_models()</code>
+   reads the registry the same way <code>model_paths.py:168</code> already does, and
+   performs <strong>no directory scan</strong>.</li>
+</ol>
+<div class="language-json highlight"><pre><span></span><code><span id="__span-2-1"><a id="__codelineno-2-1" name="__codelineno-2-1" href="#__codelineno-2-1"></a><span class="p">{</span>
+</span><span id="__span-2-2"><a id="__codelineno-2-2" name="__codelineno-2-2" href="#__codelineno-2-2"></a><span class="w">  </span><span class="nt">"base_variant"</span><span class="p">:</span><span class="w"> </span><span class="s2">"sam3"</span><span class="p">,</span>
+</span><span id="__span-2-3"><a id="__codelineno-2-3" name="__codelineno-2-3" href="#__codelineno-2-3"></a><span class="w">  </span><span class="nt">"prompt"</span><span class="p">:</span><span class="w"> </span><span class="s2">"ant with color patch"</span><span class="p">,</span>
+</span><span id="__span-2-4"><a id="__codelineno-2-4" name="__codelineno-2-4" href="#__codelineno-2-4"></a><span class="w">  </span><span class="nt">"train_tile_px"</span><span class="p">:</span><span class="w"> </span><span class="mi">1007</span><span class="p">,</span>
+</span><span id="__span-2-5"><a id="__codelineno-2-5" name="__codelineno-2-5" href="#__codelineno-2-5"></a><span class="w">  </span><span class="nt">"reference_body_px"</span><span class="p">:</span><span class="w"> </span><span class="mf">55.4</span><span class="p">,</span>
+</span><span id="__span-2-6"><a id="__codelineno-2-6" name="__codelineno-2-6" href="#__codelineno-2-6"></a><span class="w">  </span><span class="nt">"object_tile_fraction"</span><span class="p">:</span><span class="w"> </span><span class="mf">0.055</span><span class="p">,</span>
+</span><span id="__span-2-7"><a id="__codelineno-2-7" name="__codelineno-2-7" href="#__codelineno-2-7"></a><span class="w">  </span><span class="nt">"stripped_keys"</span><span class="p">:</span><span class="w"> </span><span class="p">[</span><span class="s2">"backbone.vision_backbone..."</span><span class="p">,</span><span class="w"> </span><span class="s2">"..."</span><span class="p">],</span>
+</span><span id="__span-2-8"><a id="__codelineno-2-8" name="__codelineno-2-8" href="#__codelineno-2-8"></a><span class="w">  </span><span class="nt">"tuned_fingerprints"</span><span class="p">:</span><span class="w"> </span><span class="p">{</span><span class="nt">"&lt;key&gt;"</span><span class="p">:</span><span class="w"> </span><span class="s2">"&lt;sha256 of tensor bytes&gt;"</span><span class="p">},</span>
+</span><span id="__span-2-9"><a id="__codelineno-2-9" name="__codelineno-2-9" href="#__codelineno-2-9"></a><span class="w">  </span><span class="nt">"source_fingerprint"</span><span class="p">:</span><span class="w"> </span><span class="s2">"&lt;dataset fingerprint&gt;"</span><span class="p">,</span>
+</span><span id="__span-2-10"><a id="__codelineno-2-10" name="__codelineno-2-10" href="#__codelineno-2-10"></a><span class="w">  </span><span class="nt">"label_quality_acknowledged"</span><span class="p">:</span><span class="w"> </span><span class="kc">true</span>
+</span><span id="__span-2-11"><a id="__codelineno-2-11" name="__codelineno-2-11" href="#__codelineno-2-11"></a><span class="p">}</span>
+</span></code></pre></div>
+<p><code>train_tile_px</code> is named to prevent the conflation §2 warns about: it is a
+<strong>frame-space</strong> tile size, not SAM3's fixed 1008 px input. In the spike they
+coincided (55.4 / 0.055 ≈ 1007); they generally do not.</p>
+<p><code>publish_sam3_model</code> returns <strong><code>(registry_key, artifact_path)</code></strong> — the same
+shape <code>publish_trained_model</code> returns, because <code>run_role_training</code> unpacks it as
+<code>(published_key, published_path)</code> (<code>service.py:463-472</code>). Returning
+<code>(artifact, sidecar)</code> would silently record the JSON sidecar as the published
+model. The sidecar is reachable from the registry entry.</p>
+<p><strong>Where the sidecar's geometry comes from.</strong> <code>train_tile_px</code> and
+<code>reference_body_px</code> are written by the <em>builder</em>, into
+<code>&lt;derived&gt;/build_manifest.json</code>; <code>publish_metadata</code> carries size/species-style
+fields only. The publish fork must read that manifest, or the sidecar ships
+without geometry, the escalation prefill has nothing to prefill, and the
+scale-round-trip acceptance gate cannot pass. <code>source_fingerprint</code> likewise
+comes from the caller's <code>dataset_fingerprint_value</code>, not from the manifest.</p>
+<p>The adapters are retained in the run dir. They are the cheap artifact to keep for
+re-merging against a future base checkpoint; the 3.4 GB file is the disposable
+one.</p>
+<h3 id="4b-adapter-key-mapping">4b. Adapter key mapping<a class="headerlink" href="#4b-adapter-key-mapping" title="Permanent link">&para;</a></h3>
+<p><code>merge_adapters</code> receives adapters trained against Meta's model, whose module
+paths are <strong>un-prefixed</strong>, and a base state dict whose keys are <code>detector.</code>-
+prefixed and also contain non-<code>detector</code> entries (which is why ultralytics
+filters them). The mapping contract is therefore explicit:</p>
+<ul>
+<li>Adapter module path <code>P</code> merges into base key <code>f"detector.{P}.weight"</code>.</li>
+<li>A merge that fails to resolve every adapter to exactly one base key is a
+  <strong>hard error</strong>, never a skip. A silent skip here is indistinguishable from a
+  successful merge and yields a checkpoint that is byte-different from base but
+  behaviourally identical to it.</li>
+<li>Non-<code>detector</code> base keys are copied through untouched.</li>
+</ul>
+<h3 id="5-escalation-consumption">5. Escalation consumption<a class="headerlink" href="#5-escalation-consumption" title="Permanent link">&para;</a></h3>
+<p><code>variant</code> is not a display string — it is baked into six places that a published
+model key would crash today:</p>
+<table>
+<thead>
+<tr>
+<th>Site</th>
+<th>Today</th>
+</tr>
+</thead>
+<tbody>
+<tr>
+<td><code>semantic_escalation.py:164-174</code></td>
+<td><code>variant</code> feeds the staging-dir hash</td>
+</tr>
+<tr>
+<td><code>semantic_escalation.py:239</code></td>
+<td>recorded on the request</td>
+</tr>
+<tr>
+<td><code>semantic_escalation.py:960, 1055, 1102</code></td>
+<td>three <code>from_variant</code> call sites</td>
+</tr>
+<tr>
+<td><code>semantic_escalation_dialog.py:139-141, 351</code></td>
+<td>saved/restored dialog config</td>
+</tr>
+<tr>
+<td><code>checkpoints.py:155-157</code></td>
+<td><code>probe_availability</code> → "Unknown SAM3 variant"</td>
+</tr>
+<tr>
+<td><code>checkpoints.py:196-200</code></td>
+<td><code>ensure_checkpoint</code> raises <code>ValueError</code></td>
+</tr>
+</tbody>
+</table>
+<p>So:</p>
+<ul>
+<li><code>checkpoints.py</code> grows <code>resolve_checkpoint(variant_or_model_key)</code> returning a
+  stock variant's path <strong>or</strong> a published artifact's path, and <code>available_models()</code>
+  returning stock variants plus registry-published ones.</li>
+<li><strong><code>probe_availability</code> splits in two</strong>: a variant-independent <em>dependency</em> probe
+  (packages, ultralytics symbol) and a <em>checkpoint</em> probe that accepts either kind
+  of key. Today it rejects anything not in <code>SAM3_VARIANTS</code>, so without this split
+  every published model is "unknown" and the action stays disabled.</li>
+<li>All three <code>from_variant</code> call sites and the staging-hash input move to the
+  resolved key. The hash must stay stable for stock variants so existing pending
+  escalations still match.</li>
+<li><code>Sam3SemanticLabeler.from_variant</code> gains a <code>checkpoint:</code> override so the
+  labeler can be built from a published artifact. Nothing else in the SAM3
+  inference path changes.</li>
+<li><code>SemanticEscalationDialog</code>'s Model combo lists published models alongside
+  stock variants; choosing one <strong>prefills prompt and tile fraction from the
+  sidecar</strong>, the same pattern TrackerKit already uses to prefill its SAHI panel
+  from <code>.slice_meta.json</code>. Prefill is a default, not a lock — <code>REFERENCE_BODY_SIZE</code>
+  precedent applies: the measured value is sacrosanct, the derived one is a
+  starting point.</li>
+</ul>
+<h3 id="a-prerequisite-bug-escalation-runs-sam3-at-644-not-1008">A prerequisite bug: escalation runs SAM3 at 644, not 1008<a class="headerlink" href="#a-prerequisite-bug-escalation-runs-sam3-at-644-not-1008" title="Permanent link">&para;</a></h3>
+<p>Found while rendering the finetuned model's output through the shipping path, and
+it must be fixed <strong>before</strong> the stack-parity gate can mean anything.</p>
+<p><code>build_sam3.py:38</code> and <code>:308</code> build the SAM3 architecture at <code>img_size=1008</code>. But
+<code>SAM3SemanticPredictor</code> takes <code>imgsz</code> from ultralytics' default config — <code>640</code>,
+rounded up to <code>644</code> for the stride-14 backbone — and calls <code>self.model.set_imgsz</code>
+with it (<code>predict.py:571</code>). <code>predictor_overrides</code> in <code>semantic/sam3.py:36-54</code>
+pins <code>model</code>, <code>device</code>, <code>conf</code> and <code>iou</code> but <strong>not</strong> <code>imgsz</code>. So every semantic
+escalation this project has ever run has fed SAM3 644 px tiles against a
+1008-native architecture.</p>
+<p>Consequences, in order of importance:</p>
+<ol>
+<li><strong>It costs stock escalation a little — measured, not assumed.</strong> Stock SAM3
+   over three unlabelled frames at conf &gt;= 0.4 found 23/31/31 instances at 644
+   and 23/33/31 at 1008, with confidences rising from ~0.88-0.90 to ~0.91-0.93
+   and visibly similar masks. So this is a modest quality loss, not a
+   catastrophe; do not oversell it as the reason to act.</li>
+<li><strong>The sharper problem is train/serve scale mismatch</strong>, which is what makes
+   this blocking rather than merely tidy. It makes the two stacks disagree on
+   more than post-processing: the spike
+   measured at 1008 (Meta's default), the product serves at 644. A model
+   finetuned at 1008 and served at 644 sees a <strong>1.56x scale mismatch</strong> — exactly
+   the failure §2's scale-coupling rule exists to prevent, arriving through a
+   parameter neither the sidecar nor the prefill ever mentioned.</li>
+</ol>
+<p>So:</p>
+<ul>
+<li><code>predictor_overrides</code> pins <code>imgsz = 1008</code> (the architecture's own value, named
+  as a constant beside <code>PREDICTOR_NMS_IOU</code> with the same "pinned, not inherited"
+  reasoning the existing comments use).</li>
+<li>The sidecar records <code>imgsz</code>, and the labeler refuses a checkpoint whose
+  recorded <code>imgsz</code> differs from the one it is about to run at, rather than
+  silently rescaling.</li>
+<li>Because this changes stock behaviour, it is its own commit with its own
+  before/after measurement — not folded into the finetune work where a quality
+  change would be misattributed.</li>
+</ul>
+<h3 id="the-silent-load-guard">The silent-load guard<a class="headerlink" href="#the-silent-load-guard" title="Permanent link">&para;</a></h3>
+<p><code>_load_checkpoint</code> <strong>discards</strong> the return value of
+<code>load_state_dict(..., strict=False)</code> (<code>ultralytics/models/sam/build_sam3.py:381</code>),
+and the model is built lazily inside the predictor's first call. So the labeler
+cannot simply read <code>missing_keys</code>/<code>unexpected_keys</code> off the load. If a future
+ultralytics renames keys, a finetuned checkpoint loads <strong>zero</strong> tuned weights and
+escalation silently reverts to zero-shot quality — no error, no symptom except
+worse masks, which is the hardest failure to notice.</p>
+<p>The guard therefore needs a stated mechanism, not an intention:</p>
+<ol>
+<li><strong>Publish</strong> records two things in the sidecar: the full <strong>stripped key list</strong>
+   the merged checkpoint contributes — the result of ultralytics' own transform,
+   <code>{k.replace("detector.", ""): v for k, v in ckpt.items() if "detector" in k}</code>
+   (a substring test, not a prefix match), reduced to sorted key names — and
+   <code>tuned_fingerprints</code>, the SHA-256 of the raw bytes of <strong>2-3 tensors the merge
+   actually changed</strong>.</li>
+<li><strong>Load</strong> forces eager <code>setup_model()</code> (it exists: <code>predict.py:2198</code>) at labeler
+   construction rather than on first inference, so the built model's tensors are
+   observable.</li>
+<li><strong>Assert both.</strong> The key set is a subset of the model's <em>and</em> the fingerprinted
+   tensors in the live model match the sidecar. Raise naming what diverged.</li>
+</ol>
+<p><strong>Why the key check alone is insufficient.</strong> A key-set assertion catches a
+<em>model-side</em> rename. It does not catch a change to ultralytics' <em>load-time
+transform</em>: if that filter changes, our merged checkpoint contributes zero tuned
+weights while the model's key namespace — and so the key assertion — is entirely
+unchanged. The guard would pass on exactly the failure it exists to catch. Only
+comparing tensor content proves that our weights, rather than the base weights,
+are the ones resident in the model.</p>
+<p>Reading the key index does <strong>not</strong> require materialising 3.4 GB: <code>torch.load</code>
+with <code>mmap=True</code> (or reading the zip directory) yields key names cheaply.</p>
+<p>Two honest limits. Shape-mismatched keys raise even under <code>strict=False</code>, so key
+identity is the only thing needing a guard. And a <strong>stock</strong> variant is
+deliberately unguarded — it ships no sidecar and makes no claim — so an upstream
+rename degrades stock escalation with the same silence. That is pre-existing, not
+introduced here, and worth a separate issue rather than scope creep.</p>
+<h3 id="6-preflight">6. Preflight<a class="headerlink" href="#6-preflight" title="Permanent link">&para;</a></h3>
+<p>Before any weights load:</p>
+<ul>
+<li><strong>Device and VRAM.</strong> The spike measured ~29 GB at batch 1 (batch 2 OOMed on a
+  47 GB card). The threshold is therefore <strong>refuse below 32 GB free</strong>, warn
+  below 40 GB — not "warn below 24", which would wave through the 24-29 GB band
+  straight into the OOM the preflight exists to prevent.</li>
+<li><strong>Where it can run.</strong> CUDA only. That means the role <strong>cannot run in-process on
+  the macOS box where DetectKit is normally driven</strong> — <code>run_training</code> executes in
+  the caller's process, like the custom-classify roles. This spec does <strong>not</strong>
+  solve remote training; it requires the GUI to state plainly that the role needs
+  a CUDA host, and it scopes the first slice to running there. A remote-execution
+  story is a separate design.</li>
+<li><strong>bf16.</strong> Default <code>mixed_precision: "bf16"</code> requires compute capability &gt;= 8.0.
+  Probe and fall back to fp16/fp32 with a logged notice rather than failing deep
+  in the loop.</li>
+<li><strong>Disk.</strong> The merged artifact is ~3.4 GB and the merge needs the base
+  checkpoint resident. Check free space before training starts, not at publish
+  time after an hour of GPU.</li>
+<li><strong>Prompt.</strong> Empty prompt rejected; there is no defensible default concept.</li>
+<li><strong>Instances.</strong> Below <code>MIN_TRAIN_INSTANCES = 20</code> (matching <code>calibration.py:58</code>'s
+  existing floor) the run is refused as unmeasurable.</li>
+<li><strong>Label quality.</strong> The acknowledgement described above.</li>
+<li><strong><code>resume_from</code></strong> set =&gt; rejected (optimiser state is not checkpointed).</li>
+</ul>
+<h3 id="7-things-this-design-fixes-the-meaning-of">7. Things this design fixes the meaning of<a class="headerlink" href="#7-things-this-design-fixes-the-meaning-of" title="Permanent link">&para;</a></h3>
+<ul>
+<li><strong>Determinism.</strong> The trainer consumes <code>TrainingRunSpec.seed</code> (<code>contracts.py:182</code>)
+  for torch/numpy/python RNG and the tile-order shuffle. Byte-identical reruns are
+  <strong>not</strong> promised — cuDNN autotuning and bf16 reduction order are not pinned —
+  but seed-controlled reruns are.</li>
+<li><strong>Multi-class sources.</strong> <code>category.name = prompt</code> is single-concept by
+  construction. On a source with multiple classes the builder trains the
+  <strong>selected class only</strong> and records which; it does not silently merge classes
+  into one concept.</li>
+<li><strong>Cancellation and progress.</strong> <code>should_cancel</code> is honoured between optimiser
+  steps, and the multi-minute base-checkpoint load + merge at publish reports
+  progress rather than appearing hung.</li>
+<li><strong>Equivalence gates.</strong> Nothing here is on the tracking path, and semantic
+  escalation has no equivalence-fixture coverage at all. So there is no gate to
+  run — and equally, no safety net. The Testing section is the only net.</li>
+</ul>
+<h2 id="testing">Testing<a class="headerlink" href="#testing" title="Permanent link">&para;</a></h2>
+<ol>
+<li><strong>Tiling/COCO builder</strong> — clip fractions at the <code>iscrowd</code> boundary in both
+   directions; empty-tile retention; frame-level (not tile-level) split;
+   <code>category.name</code> equals the prompt.</li>
+<li><strong>Negative-prompt resolution</strong> — each of the three priority tiers; the
+   word-overlap filter on the curated pool; and that the resolved list reaches
+   the build manifest.</li>
+<li><strong>LoRA seam</strong> — inject/merge round-trip on a toy <code>nn.Module</code>: merged weights
+   equal base + BA*scale; <code>inject_adapters</code> returns the expected count; merging
+   a zero-initialised adapter is a no-op on the base state dict.</li>
+<li><strong>Merged-checkpoint key layout</strong> — the published artifact's keys are a
+   superset of what <code>build_sam3.py</code>'s <code>detector.</code>-strip produces, and
+   the sidecar's <code>stripped_keys</code> matches. This is the test that actually protects the
+   integration; it needs no GPU and no real weights, only key names.</li>
+<li><strong>Silent-load guard</strong> — two cases, because one is the hole the first draft
+   left: a renamed key raises; <strong>and</strong> a checkpoint whose keys are all present but
+   whose tuned tensors equal the base's fails the fingerprint assertion.</li>
+<li><strong>Adapter key mapping</strong> — an adapter that resolves to no base key is a hard
+   error, not a skip.</li>
+<li><strong>Preflight</strong> — each refusal path returns its structured reason and does not
+   import ultralytics or touch the network.</li>
+<li><strong>Availability probe</strong> — a missing training dep yields a disabled action with
+   a reason, never an AutoUpdate pip install.</li>
+</ol>
+<p>An end-to-end training test is not in the suite: it needs a licence-gated 3.4 GB
+checkpoint and a 32 GB CUDA card. The manual gate is below.</p>
+<h2 id="acceptance">Acceptance<a class="headerlink" href="#acceptance" title="Permanent link">&para;</a></h2>
+<p>Automated tests cannot cover the integration that actually matters, so these are
+the conditions for calling the role done. Both run on mehek.</p>
+<ol>
+<li>
+<p><strong>Three-fold held-out AP — SATISFIED by the spike.</strong> Every fold's <code>last</code>
+   checkpoint was scored on its own held-out frame: AP75 0.669 / 0.417 / 0.786,
+   against a 0.20 stop-and-investigate floor and a zero-shot baseline of 0.000.
+   All three clear it, and all three beat tuned YOLO's 0.255. This gate is
+   recorded as met; it remains in the list because a future retrain must clear it
+   again.</p>
+</li>
+<li>
+<p><strong>Stack-parity gate (blocking).</strong> The merged checkpoint, loaded through the
+   <strong>ultralytics</strong> path, must reproduce the native-<code>sam3</code>-path result on the same
+   held-out frame: <strong>AP50 and AP75 each within 0.05 absolute</strong>, at matched
+   operating points, using <code>scratch/sam3_lora_spike/evaluate.py</code> for both. The
+   0.05 band is a judgement call, not a derived quantity — it is wide enough to
+   absorb the presence-multiplication and NMS differences between the stacks and
+   narrow enough that "the adapters did not load" (which would collapse AP75 to
+   ~0.00) cannot pass. This is the criterion the original spec was missing: every number motivating this work was measured on the native stack,
+   and the two stacks score differently (presence multiplication, NMS at 0.7).
+   Until this passes, nothing is known about what ships.</p>
+</li>
+</ol>
+<p>The spike harness cannot run this today — <code>Sam3SemanticLabeler.from_variant</code>
+   has no checkpoint override (<code>semantic/sam3.py:75-84</code>). The <code>checkpoint:</code>
+   override this design adds (§5) makes it a ~10-line change to
+   <code>scratch/sam3_lora_spike/arm_sam3.py</code>, which already drives the ultralytics
+   path. Add the override first, then this gate is cheap.</p>
+<ol>
+<li>
+<p><strong>Beats the tuned baseline (blocking).</strong> Through the ultralytics path, on
+   <strong>every</strong> held-out frame, the finetuned model beats the best-configured
+   YOLO-seg arm on AP75 (the baseline to beat is 0.255 mean / 0.220 on f008078).
+   AP50 parity is not sufficient — zero-shot already achieves that, and mask
+   geometry is the entire thesis.</p>
+</li>
+<li>
+<p><strong>Scale round-trip (blocking).</strong> A model trained at <code>train_tile_px</code> X and
+   escalated at X must reproduce its training-time AP75 within the same 0.05
+   band; the sidecar prefill is what guarantees it. This gate tests that the
+   prefill contract works, nothing more.</p>
+</li>
+</ol>
+<p>A deliberate scale mismatch is run as a <strong>diagnostic, never a blocker</strong>. The
+   earlier draft made non-degradation-under-mismatch a failure, which would have
+   failed a scale-robust model — perverse. Record what mismatch does and move on.</p>
+<h2 id="risks">Risks<a class="headerlink" href="#risks" title="Permanent link">&para;</a></h2>
+<ul>
+<li><strong>3.4 GB per published model.</strong> Accepted deliberately (see above). Mitigated
+  by keeping adapters as the re-mergeable artifact.</li>
+<li><strong>Self-training loop.</strong> Unavoidable today; warned about, and the source
+  fingerprint is recorded so a suspect model can be traced to its labels.</li>
+<li><strong>Single-video evidence.</strong> The spike's three frames share one arena and
+  lighting. Leave-one-frame-out controls overfitting to a <em>frame</em>, not to a
+  <em>setup</em>. The AP numbers above justify building this; they do not promise a
+  number on a new rig.</li>
+<li><strong>Meta <code>sam3</code> is an unversioned dependency.</strong> Pin it, and treat the
+  stripped-key-list guard as the tripwire for upstream drift.</li>
+<li><strong>Two scoring stacks.</strong> Training uses Meta's <code>sam3</code>; inference uses
+  ultralytics' wrapper over the same weights. They agree on weights, not on
+  post-processing. The stack-parity gate is the only thing standing between that
+  and a silent quality gap; it is blocking for exactly that reason.</li>
+<li><strong>The role cannot run where the GUI runs.</strong> CUDA-only, ~32 GB. Until a remote
+  execution story exists, this is a lab-box feature exposed in a desktop app —
+  the GUI must say so rather than offering a button that always fails.</li>
+</ul>
+
+
+
+
+
+
+
+
+
+
+
+
+                
+              </article>
+            </div>
+          
+          
+<script>var target=document.getElementById(location.hash.slice(1));target&&target.name&&(target.checked=target.name.startsWith("__tabbed_"))</script>
+        </div>
+        
+          <button type="button" class="md-top md-icon" data-md-component="top" hidden>
+  
+  <svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 24 24"><path d="M13 20h-2V8l-5.5 5.5-1.42-1.42L12 4.16l7.92 7.92-1.42 1.42L13 8z"/></svg>
+  Back to top
+</button>
+        
+      </main>
+      
+        <footer class="md-footer">
+  
+  <div class="md-footer-meta md-typeset">
+    <div class="md-footer-meta__inner md-grid">
+      <div class="md-copyright">
+  
+  
+    Made with
+    <a href="https://squidfunk.github.io/mkdocs-material/" target="_blank" rel="noopener">
+      Material for MkDocs
+    </a>
+  
+</div>
+      
+    </div>
+  </div>
+</footer>
+      
+    </div>
+    <div class="md-dialog" data-md-component="dialog">
+      <div class="md-dialog__inner md-typeset"></div>
+    </div>
+    
+    
+    <script id="__config" type="application/json">{"base": "../../..", "features": ["navigation.tabs", "navigation.sections", "navigation.expand", "navigation.top", "content.code.copy", "content.action.edit", "search.suggest", "search.highlight"], "search": "../../../assets/javascripts/workers/search.6ce7567c.min.js", "translations": {"clipboard.copied": "Copied to clipboard", "clipboard.copy": "Copy to clipboard", "search.result.more.one": "1 more on this page", "search.result.more.other": "# more on this page", "search.result.none": "No matching documents", "search.result.one": "1 matching document", "search.result.other": "# matching documents", "search.result.placeholder": "Type to start searching", "search.result.term.missing": "Missing", "select.version": "Select version"}, "version": {"default": "latest", "provider": "mike"}}</script>
+    
+    
+      <script src="../../../assets/javascripts/bundle.83f73b43.min.js"></script>
+      
+    
+  </body>
+</html>

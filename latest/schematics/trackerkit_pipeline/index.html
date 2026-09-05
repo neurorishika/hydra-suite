@@ -867,6 +867,69 @@
   
   
     <li class="md-nav__item">
+      <a href="../../runbooks/detectkit-headless-training/" class="md-nav__link">
+        
+  
+  <span class="md-ellipsis">
+    DetectKit Headless Training
+  </span>
+  
+
+      </a>
+    </li>
+  
+
+              
+            
+              
+                
+  
+  
+  
+  
+    <li class="md-nav__item">
+      <a href="../../user-guide/detectkit-semantic-escalation/" class="md-nav__link">
+        
+  
+  <span class="md-ellipsis">
+    DetectKit: Semantic Escalation (SAM3)
+  </span>
+  
+
+      </a>
+    </li>
+  
+
+              
+            
+              
+                
+  
+  
+  
+  
+    <li class="md-nav__item">
+      <a href="../../user-guide/detectkit-sahi-calibration/" class="md-nav__link">
+        
+  
+  <span class="md-ellipsis">
+    DetectKit: SAHI Calibration Profiles
+  </span>
+  
+
+      </a>
+    </li>
+  
+
+              
+            
+              
+                
+  
+  
+  
+  
+    <li class="md-nav__item">
       <a href="../../user-guide/filterkit/" class="md-nav__link">
         
   
@@ -1126,6 +1189,48 @@
   
   
     <li class="md-nav__item">
+      <a href="../../developer-guide/resource-containment/" class="md-nav__link">
+        
+  
+  <span class="md-ellipsis">
+    Resource Containment
+  </span>
+  
+
+      </a>
+    </li>
+  
+
+              
+            
+              
+                
+  
+  
+  
+  
+    <li class="md-nav__item">
+      <a href="../../developer-guide/profiling/" class="md-nav__link">
+        
+  
+  <span class="md-ellipsis">
+    Profiling
+  </span>
+  
+
+      </a>
+    </li>
+  
+
+              
+            
+              
+                
+  
+  
+  
+  
+    <li class="md-nav__item">
       <a href="../../developer-guide/dependency-cuda-updates/" class="md-nav__link">
         
   
@@ -1152,6 +1257,27 @@
   
   <span class="md-ellipsis">
     Performance Tuning
+  </span>
+  
+
+      </a>
+    </li>
+  
+
+              
+            
+              
+                
+  
+  
+  
+  
+    <li class="md-nav__item">
+      <a href="../../developer-guide/inference-fast-mode/" class="md-nav__link">
+        
+  
+  <span class="md-ellipsis">
+    Inference Fast Mode
   </span>
   
 
@@ -1782,57 +1908,57 @@ fragment-solving, merging, and post-processing are mode-agnostic.</p>
 </span><span id="__span-0-10"><a id="__codelineno-0-10" name="__codelineno-0-10" href="#__codelineno-0-10"></a>
 </span><span id="__span-0-11"><a id="__codelineno-0-11" name="__codelineno-0-11" href="#__codelineno-0-11"></a>    Start([User clicks Run]):::io
 </span><span id="__span-0-12"><a id="__codelineno-0-12" name="__codelineno-0-12" href="#__codelineno-0-12"></a>
-</span><span id="__span-0-13"><a id="__codelineno-0-13" name="__codelineno-0-13" href="#__codelineno-0-13"></a>    subgraph S1[&quot; 1 · Setup &quot;]
-</span><span id="__span-0-14"><a id="__codelineno-0-14" name="__codelineno-0-14" href="#__codelineno-0-14"></a>        Cfg[&quot;Build job config&lt;br/&gt;TrackingOrchestrator&quot;]:::req
-</span><span id="__span-0-15"><a id="__codelineno-0-15" name="__codelineno-0-15" href="#__codelineno-0-15"></a>        Mod[&quot;Load detector / prime BG model&quot;]:::req
+</span><span id="__span-0-13"><a id="__codelineno-0-13" name="__codelineno-0-13" href="#__codelineno-0-13"></a>    subgraph S1[" 1 · Setup "]
+</span><span id="__span-0-14"><a id="__codelineno-0-14" name="__codelineno-0-14" href="#__codelineno-0-14"></a>        Cfg["Build job config&lt;br/&gt;TrackingOrchestrator"]:::req
+</span><span id="__span-0-15"><a id="__codelineno-0-15" name="__codelineno-0-15" href="#__codelineno-0-15"></a>        Mod["Load detector / prime BG model"]:::req
 </span><span id="__span-0-16"><a id="__codelineno-0-16" name="__codelineno-0-16" href="#__codelineno-0-16"></a>    end
 </span><span id="__span-0-17"><a id="__codelineno-0-17" name="__codelineno-0-17" href="#__codelineno-0-17"></a>
-</span><span id="__span-0-18"><a id="__codelineno-0-18" name="__codelineno-0-18" href="#__codelineno-0-18"></a>    Decide{{&quot;Forward-pass mode select&lt;br/&gt;worker.py · 1028 – 1148&quot;}}:::sel
+</span><span id="__span-0-18"><a id="__codelineno-0-18" name="__codelineno-0-18" href="#__codelineno-0-18"></a>    Decide{{"Forward-pass mode select&lt;br/&gt;worker.py · 1028 – 1148"}}:::sel
 </span><span id="__span-0-19"><a id="__codelineno-0-19" name="__codelineno-0-19" href="#__codelineno-0-19"></a>
-</span><span id="__span-0-20"><a id="__codelineno-0-20" name="__codelineno-0-20" href="#__codelineno-0-20"></a>    subgraph LA[&quot; A · Streaming  ·  default for fresh forward YOLO with pose / tag / CNN &quot;]
+</span><span id="__span-0-20"><a id="__codelineno-0-20" name="__codelineno-0-20" href="#__codelineno-0-20"></a>    subgraph LA[" A · Streaming  ·  default for fresh forward YOLO with pose / tag / CNN "]
 </span><span id="__span-0-21"><a id="__codelineno-0-21" name="__codelineno-0-21" href="#__codelineno-0-21"></a>        direction TB
-</span><span id="__span-0-22"><a id="__codelineno-0-22" name="__codelineno-0-22" href="#__codelineno-0-22"></a>        A1[&quot;Forward loop · per frame&lt;br/&gt;① YOLO detect_objects + head/tail on this frame&#39;s filtered detections&lt;br/&gt;     (single-frame call · cross-frame batching is NOT used here)&lt;br/&gt;② build_streaming_payload (filtered detections + heading + canonical affines)&lt;br/&gt;③ UnifiedPrecompute.process_live_frame&lt;br/&gt;     extracts crops · runs pose · AprilTag · CNN&lt;br/&gt;④ Kalman + Hungarian tracker&lt;br/&gt;⑤ append detection cache · evidence cache · pose / tag / CNN caches in-place&lt;br/&gt;&lt;br/&gt;(no batched prepass · no confidence density map · no precompute.run)&quot;]:::A
+</span><span id="__span-0-22"><a id="__codelineno-0-22" name="__codelineno-0-22" href="#__codelineno-0-22"></a>        A1["Forward loop · per frame&lt;br/&gt;① YOLO detect_objects + head/tail on this frame's filtered detections&lt;br/&gt;     (single-frame call · cross-frame batching is NOT used here)&lt;br/&gt;② build_streaming_payload (filtered detections + heading + canonical affines)&lt;br/&gt;③ UnifiedPrecompute.process_live_frame&lt;br/&gt;     extracts crops · runs pose · AprilTag · CNN&lt;br/&gt;④ Kalman + Hungarian tracker&lt;br/&gt;⑤ append detection cache · evidence cache · pose / tag / CNN caches in-place&lt;br/&gt;&lt;br/&gt;(no batched prepass · no confidence density map · no precompute.run)"]:::A
 </span><span id="__span-0-23"><a id="__codelineno-0-23" name="__codelineno-0-23" href="#__codelineno-0-23"></a>    end
 </span><span id="__span-0-24"><a id="__codelineno-0-24" name="__codelineno-0-24" href="#__codelineno-0-24"></a>
-</span><span id="__span-0-25"><a id="__codelineno-0-25" name="__codelineno-0-25" href="#__codelineno-0-25"></a>    subgraph LB[&quot; B · Replay / precompute  ·  FORCE_INDIVIDUAL_PRECOMPUTE_REPLAY · or cached detections + need rebuild &quot;]
+</span><span id="__span-0-25"><a id="__codelineno-0-25" name="__codelineno-0-25" href="#__codelineno-0-25"></a>    subgraph LB[" B · Replay / precompute  ·  FORCE_INDIVIDUAL_PRECOMPUTE_REPLAY · or cached detections + need rebuild "]
 </span><span id="__span-0-26"><a id="__codelineno-0-26" name="__codelineno-0-26" href="#__codelineno-0-26"></a>        direction TB
-</span><span id="__span-0-27"><a id="__codelineno-0-27" name="__codelineno-0-27" href="#__codelineno-0-27"></a>        B1[&quot;① Batched detection prepass&lt;br/&gt;YOLO OBB + cross-frame head/tail&lt;br/&gt;frames 0 → N · written to detection cache&lt;br/&gt;(skipped if cache already covers range)&quot;]:::B
-</span><span id="__span-0-28"><a id="__codelineno-0-28" name="__codelineno-0-28" href="#__codelineno-0-28"></a>        B2[&quot;② Confidence density map&lt;br/&gt;3-D crowding regions from cached detections&quot;]:::opt
-</span><span id="__span-0-29"><a id="__codelineno-0-29" name="__codelineno-0-29" href="#__codelineno-0-29"></a>        B3[&quot;③ UnifiedPrecompute.run&lt;br/&gt;re-reads video frames 0 → N&lt;br/&gt;pulls cached OBB + canonical affine, extracts crops once&lt;br/&gt;dispatches to pose · AprilTag · CNN phases (each batches internally)&lt;br/&gt;writes per-phase caches + evidence cache&quot;]:::B
-</span><span id="__span-0-30"><a id="__codelineno-0-30" name="__codelineno-0-30" href="#__codelineno-0-30"></a>        B4[&quot;④ Forward tracking loop&lt;br/&gt;reads detection cache + evidence cache frame-by-frame&lt;br/&gt;Kalman + Hungarian only (no inference inside loop)&quot;]:::B
+</span><span id="__span-0-27"><a id="__codelineno-0-27" name="__codelineno-0-27" href="#__codelineno-0-27"></a>        B1["① Batched detection prepass&lt;br/&gt;YOLO OBB + cross-frame head/tail&lt;br/&gt;frames 0 → N · written to detection cache&lt;br/&gt;(skipped if cache already covers range)"]:::B
+</span><span id="__span-0-28"><a id="__codelineno-0-28" name="__codelineno-0-28" href="#__codelineno-0-28"></a>        B2["② Confidence density map&lt;br/&gt;3-D crowding regions from cached detections"]:::opt
+</span><span id="__span-0-29"><a id="__codelineno-0-29" name="__codelineno-0-29" href="#__codelineno-0-29"></a>        B3["③ UnifiedPrecompute.run&lt;br/&gt;re-reads video frames 0 → N&lt;br/&gt;pulls cached OBB + canonical affine, extracts crops once&lt;br/&gt;dispatches to pose · AprilTag · CNN phases (each batches internally)&lt;br/&gt;writes per-phase caches + evidence cache"]:::B
+</span><span id="__span-0-30"><a id="__codelineno-0-30" name="__codelineno-0-30" href="#__codelineno-0-30"></a>        B4["④ Forward tracking loop&lt;br/&gt;reads detection cache + evidence cache frame-by-frame&lt;br/&gt;Kalman + Hungarian only (no inference inside loop)"]:::B
 </span><span id="__span-0-31"><a id="__codelineno-0-31" name="__codelineno-0-31" href="#__codelineno-0-31"></a>        B1 --&gt; B2 --&gt; B3 --&gt; B4
 </span><span id="__span-0-32"><a id="__codelineno-0-32" name="__codelineno-0-32" href="#__codelineno-0-32"></a>    end
 </span><span id="__span-0-33"><a id="__codelineno-0-33" name="__codelineno-0-33" href="#__codelineno-0-33"></a>
-</span><span id="__span-0-34"><a id="__codelineno-0-34" name="__codelineno-0-34" href="#__codelineno-0-34"></a>    subgraph LC[&quot; C · Plain online  ·  no individual analysis configured  (BG-subtraction · YOLO without pose / tag / CNN) &quot;]
+</span><span id="__span-0-34"><a id="__codelineno-0-34" name="__codelineno-0-34" href="#__codelineno-0-34"></a>    subgraph LC[" C · Plain online  ·  no individual analysis configured  (BG-subtraction · YOLO without pose / tag / CNN) "]
 </span><span id="__span-0-35"><a id="__codelineno-0-35" name="__codelineno-0-35" href="#__codelineno-0-35"></a>        direction TB
-</span><span id="__span-0-36"><a id="__codelineno-0-36" name="__codelineno-0-36" href="#__codelineno-0-36"></a>        C1[&quot;Optional batched detection prepass&lt;br/&gt;plain non-realtime YOLO only · gives detection cache&quot;]:::opt
-</span><span id="__span-0-37"><a id="__codelineno-0-37" name="__codelineno-0-37" href="#__codelineno-0-37"></a>        C2[&quot;Optional confidence density map&lt;br/&gt;runs whenever use_cached_detections=True&lt;br/&gt;(after a prepass · or when reusing a prior detection cache)&quot;]:::opt
-</span><span id="__span-0-38"><a id="__codelineno-0-38" name="__codelineno-0-38" href="#__codelineno-0-38"></a>        C3[&quot;Forward loop · detect + Kalman + Hungarian per frame&lt;br/&gt;BG-sub does fitEllipse on contours; realtime mode skips the prepass&lt;br/&gt;YOLO inference per-frame (no individual analysis runs in this mode)&quot;]:::C
+</span><span id="__span-0-36"><a id="__codelineno-0-36" name="__codelineno-0-36" href="#__codelineno-0-36"></a>        C1["Optional batched detection prepass&lt;br/&gt;plain non-realtime YOLO only · gives detection cache"]:::opt
+</span><span id="__span-0-37"><a id="__codelineno-0-37" name="__codelineno-0-37" href="#__codelineno-0-37"></a>        C2["Optional confidence density map&lt;br/&gt;runs whenever use_cached_detections=True&lt;br/&gt;(after a prepass · or when reusing a prior detection cache)"]:::opt
+</span><span id="__span-0-38"><a id="__codelineno-0-38" name="__codelineno-0-38" href="#__codelineno-0-38"></a>        C3["Forward loop · detect + Kalman + Hungarian per frame&lt;br/&gt;BG-sub does fitEllipse on contours; realtime mode skips the prepass&lt;br/&gt;YOLO inference per-frame (no individual analysis runs in this mode)"]:::C
 </span><span id="__span-0-39"><a id="__codelineno-0-39" name="__codelineno-0-39" href="#__codelineno-0-39"></a>        C1 --&gt; C2 --&gt; C3
 </span><span id="__span-0-40"><a id="__codelineno-0-40" name="__codelineno-0-40" href="#__codelineno-0-40"></a>    end
 </span><span id="__span-0-41"><a id="__codelineno-0-41" name="__codelineno-0-41" href="#__codelineno-0-41"></a>
-</span><span id="__span-0-42"><a id="__codelineno-0-42" name="__codelineno-0-42" href="#__codelineno-0-42"></a>    DC[(&quot;Detection Cache · .npz&lt;br/&gt;OBB · heading hints · canonical affines&quot;)]:::art
-</span><span id="__span-0-43"><a id="__codelineno-0-43" name="__codelineno-0-43" href="#__codelineno-0-43"></a>    EC[(&quot;Evidence + per-phase caches · .npz&lt;br/&gt;identity log-priors · pose props · tag obs · CNN preds&quot;)]:::art
-</span><span id="__span-0-44"><a id="__codelineno-0-44" name="__codelineno-0-44" href="#__codelineno-0-44"></a>    FwdCSV[(&quot;Forward trajectories CSV&quot;)]:::art
+</span><span id="__span-0-42"><a id="__codelineno-0-42" name="__codelineno-0-42" href="#__codelineno-0-42"></a>    DC[("Detection Cache · .npz&lt;br/&gt;OBB · heading hints · canonical affines")]:::art
+</span><span id="__span-0-43"><a id="__codelineno-0-43" name="__codelineno-0-43" href="#__codelineno-0-43"></a>    EC[("Evidence + per-phase caches · .npz&lt;br/&gt;identity log-priors · pose props · tag obs · CNN preds")]:::art
+</span><span id="__span-0-44"><a id="__codelineno-0-44" name="__codelineno-0-44" href="#__codelineno-0-44"></a>    FwdCSV[("Forward trajectories CSV")]:::art
 </span><span id="__span-0-45"><a id="__codelineno-0-45" name="__codelineno-0-45" href="#__codelineno-0-45"></a>
-</span><span id="__span-0-46"><a id="__codelineno-0-46" name="__codelineno-0-46" href="#__codelineno-0-46"></a>    Bwd[&quot;Backward pass · t = N → 0  (optional)&lt;br/&gt;same Kalman + Hungarian, reversed time&lt;br/&gt;reads caches only — no detection or precompute work&quot;]:::opt
-</span><span id="__span-0-47"><a id="__codelineno-0-47" name="__codelineno-0-47" href="#__codelineno-0-47"></a>    BwdCSV[(&quot;Backward trajectories CSV&quot;)]:::art
+</span><span id="__span-0-46"><a id="__codelineno-0-46" name="__codelineno-0-46" href="#__codelineno-0-46"></a>    Bwd["Backward pass · t = N → 0  (optional)&lt;br/&gt;same Kalman + Hungarian, reversed time&lt;br/&gt;reads caches only — no detection or precompute work"]:::opt
+</span><span id="__span-0-47"><a id="__codelineno-0-47" name="__codelineno-0-47" href="#__codelineno-0-47"></a>    BwdCSV[("Backward trajectories CSV")]:::art
 </span><span id="__span-0-48"><a id="__codelineno-0-48" name="__codelineno-0-48" href="#__codelineno-0-48"></a>
-</span><span id="__span-0-49"><a id="__codelineno-0-49" name="__codelineno-0-49" href="#__codelineno-0-49"></a>    subgraph S4[&quot; 4 · Refinement &amp; export &quot;]
+</span><span id="__span-0-49"><a id="__codelineno-0-49" name="__codelineno-0-49" href="#__codelineno-0-49"></a>    subgraph S4[" 4 · Refinement &amp; export "]
 </span><span id="__span-0-50"><a id="__codelineno-0-50" name="__codelineno-0-50" href="#__codelineno-0-50"></a>        direction TB
-</span><span id="__span-0-51"><a id="__codelineno-0-51" name="__codelineno-0-51" href="#__codelineno-0-51"></a>        Frag[&quot;Fragment solver&lt;br/&gt;PELT changepoints + greedy assignment&quot;]:::req
-</span><span id="__span-0-52"><a id="__codelineno-0-52" name="__codelineno-0-52" href="#__codelineno-0-52"></a>        Mer[&quot;Forward / backward merge&lt;br/&gt;conservative consensus&quot;]:::req
-</span><span id="__span-0-53"><a id="__codelineno-0-53" name="__codelineno-0-53" href="#__codelineno-0-53"></a>        Post[&quot;Post-processing&lt;br/&gt;break · interpolate · identity fill&quot;]:::req
+</span><span id="__span-0-51"><a id="__codelineno-0-51" name="__codelineno-0-51" href="#__codelineno-0-51"></a>        Frag["Fragment solver&lt;br/&gt;PELT changepoints + greedy assignment"]:::req
+</span><span id="__span-0-52"><a id="__codelineno-0-52" name="__codelineno-0-52" href="#__codelineno-0-52"></a>        Mer["Forward / backward merge&lt;br/&gt;conservative consensus"]:::req
+</span><span id="__span-0-53"><a id="__codelineno-0-53" name="__codelineno-0-53" href="#__codelineno-0-53"></a>        Post["Post-processing&lt;br/&gt;break · interpolate · identity fill"]:::req
 </span><span id="__span-0-54"><a id="__codelineno-0-54" name="__codelineno-0-54" href="#__codelineno-0-54"></a>        Frag --&gt; Mer --&gt; Post
 </span><span id="__span-0-55"><a id="__codelineno-0-55" name="__codelineno-0-55" href="#__codelineno-0-55"></a>    end
 </span><span id="__span-0-56"><a id="__codelineno-0-56" name="__codelineno-0-56" href="#__codelineno-0-56"></a>
-</span><span id="__span-0-57"><a id="__codelineno-0-57" name="__codelineno-0-57" href="#__codelineno-0-57"></a>    Out[(&quot;Final CSV&lt;br/&gt;trajectories + identity + pose + tags&quot;)]:::io
-</span><span id="__span-0-58"><a id="__codelineno-0-58" name="__codelineno-0-58" href="#__codelineno-0-58"></a>    Med[&quot;Final media export&lt;br/&gt;oriented videos · canonical stills&quot;]:::opt
+</span><span id="__span-0-57"><a id="__codelineno-0-57" name="__codelineno-0-57" href="#__codelineno-0-57"></a>    Out[("Final CSV&lt;br/&gt;trajectories + identity + pose + tags")]:::io
+</span><span id="__span-0-58"><a id="__codelineno-0-58" name="__codelineno-0-58" href="#__codelineno-0-58"></a>    Med["Final media export&lt;br/&gt;oriented videos · canonical stills"]:::opt
 </span><span id="__span-0-59"><a id="__codelineno-0-59" name="__codelineno-0-59" href="#__codelineno-0-59"></a>
 </span><span id="__span-0-60"><a id="__codelineno-0-60" name="__codelineno-0-60" href="#__codelineno-0-60"></a>    Start --&gt; Cfg --&gt; Mod --&gt; Decide
-</span><span id="__span-0-61"><a id="__codelineno-0-61" name="__codelineno-0-61" href="#__codelineno-0-61"></a>    Decide -- &quot;fresh YOLO + individual analysis&quot; --&gt; A1
-</span><span id="__span-0-62"><a id="__codelineno-0-62" name="__codelineno-0-62" href="#__codelineno-0-62"></a>    Decide -- &quot;FORCE_REPLAY · or cached dets + rebuild&quot; --&gt; B1
-</span><span id="__span-0-63"><a id="__codelineno-0-63" name="__codelineno-0-63" href="#__codelineno-0-63"></a>    Decide -- &quot;BG-sub · or YOLO without individual analysis&quot; --&gt; C1
+</span><span id="__span-0-61"><a id="__codelineno-0-61" name="__codelineno-0-61" href="#__codelineno-0-61"></a>    Decide -- "fresh YOLO + individual analysis" --&gt; A1
+</span><span id="__span-0-62"><a id="__codelineno-0-62" name="__codelineno-0-62" href="#__codelineno-0-62"></a>    Decide -- "FORCE_REPLAY · or cached dets + rebuild" --&gt; B1
+</span><span id="__span-0-63"><a id="__codelineno-0-63" name="__codelineno-0-63" href="#__codelineno-0-63"></a>    Decide -- "BG-sub · or YOLO without individual analysis" --&gt; C1
 </span><span id="__span-0-64"><a id="__codelineno-0-64" name="__codelineno-0-64" href="#__codelineno-0-64"></a>
 </span><span id="__span-0-65"><a id="__codelineno-0-65" name="__codelineno-0-65" href="#__codelineno-0-65"></a>    A1 -. write .-&gt; DC
 </span><span id="__span-0-66"><a id="__codelineno-0-66" name="__codelineno-0-66" href="#__codelineno-0-66"></a>    A1 -. write .-&gt; EC
@@ -1925,49 +2051,49 @@ does not care which produced the detections.</p>
 </span><span id="__span-1-13"><a id="__codelineno-1-13" name="__codelineno-1-13" href="#__codelineno-1-13"></a>    Branch{DETECTION_METHOD}
 </span><span id="__span-1-14"><a id="__codelineno-1-14" name="__codelineno-1-14" href="#__codelineno-1-14"></a>
 </span><span id="__span-1-15"><a id="__codelineno-1-15" name="__codelineno-1-15" href="#__codelineno-1-15"></a>    %% --- Background subtraction ---
-</span><span id="__span-1-16"><a id="__codelineno-1-16" name="__codelineno-1-16" href="#__codelineno-1-16"></a>    subgraph BG[&quot; Background subtraction (CPU / Numba · CuPy · Torch) &quot;]
+</span><span id="__span-1-16"><a id="__codelineno-1-16" name="__codelineno-1-16" href="#__codelineno-1-16"></a>    subgraph BG[" Background subtraction (CPU / Numba · CuPy · Torch) "]
 </span><span id="__span-1-17"><a id="__codelineno-1-17" name="__codelineno-1-17" href="#__codelineno-1-17"></a>        direction TB
-</span><span id="__span-1-18"><a id="__codelineno-1-18" name="__codelineno-1-18" href="#__codelineno-1-18"></a>        BG1[&quot;Prime BG model&lt;br/&gt;lightest-pixel + IQR-clipped mean&lt;br/&gt;over BACKGROUND_PRIME_FRAMES&quot;]:::bg
-</span><span id="__span-1-19"><a id="__codelineno-1-19" name="__codelineno-1-19" href="#__codelineno-1-19"></a>        BG2[&quot;Pixel adjustments&lt;br/&gt;brightness · contrast · gamma&lt;br/&gt;+ optional lighting stabilization&quot;]:::bg
-</span><span id="__span-1-20"><a id="__codelineno-1-20" name="__codelineno-1-20" href="#__codelineno-1-20"></a>        BG3[&quot;Adaptive update&lt;br/&gt;per-pixel EMA&lt;br/&gt;(lightest fallback if unstable)&quot;]:::bg
-</span><span id="__span-1-21"><a id="__codelineno-1-21" name="__codelineno-1-21" href="#__codelineno-1-21"></a>        BG4[&quot;Foreground diff + threshold&lt;br/&gt;THRESHOLD_VALUE&quot;]:::bg
-</span><span id="__span-1-22"><a id="__codelineno-1-22" name="__codelineno-1-22" href="#__codelineno-1-22"></a>        BG5[&quot;Morphology&lt;br/&gt;open · close · optional dilate&quot;]:::bg
-</span><span id="__span-1-23"><a id="__codelineno-1-23" name="__codelineno-1-23" href="#__codelineno-1-23"></a>        BG6[&quot;Conservative split&lt;br/&gt;local rethreshold of merged blobs&quot;]:::opt
-</span><span id="__span-1-24"><a id="__codelineno-1-24" name="__codelineno-1-24" href="#__codelineno-1-24"></a>        BG7[&quot;Contours → fitEllipse&lt;br/&gt;cx · cy · θ · major · minor&quot;]:::bg
+</span><span id="__span-1-18"><a id="__codelineno-1-18" name="__codelineno-1-18" href="#__codelineno-1-18"></a>        BG1["Prime BG model&lt;br/&gt;lightest-pixel + IQR-clipped mean&lt;br/&gt;over BACKGROUND_PRIME_FRAMES"]:::bg
+</span><span id="__span-1-19"><a id="__codelineno-1-19" name="__codelineno-1-19" href="#__codelineno-1-19"></a>        BG2["Pixel adjustments&lt;br/&gt;brightness · contrast · gamma&lt;br/&gt;+ optional lighting stabilization"]:::bg
+</span><span id="__span-1-20"><a id="__codelineno-1-20" name="__codelineno-1-20" href="#__codelineno-1-20"></a>        BG3["Adaptive update&lt;br/&gt;per-pixel EMA&lt;br/&gt;(lightest fallback if unstable)"]:::bg
+</span><span id="__span-1-21"><a id="__codelineno-1-21" name="__codelineno-1-21" href="#__codelineno-1-21"></a>        BG4["Foreground diff + threshold&lt;br/&gt;THRESHOLD_VALUE"]:::bg
+</span><span id="__span-1-22"><a id="__codelineno-1-22" name="__codelineno-1-22" href="#__codelineno-1-22"></a>        BG5["Morphology&lt;br/&gt;open · close · optional dilate"]:::bg
+</span><span id="__span-1-23"><a id="__codelineno-1-23" name="__codelineno-1-23" href="#__codelineno-1-23"></a>        BG6["Conservative split&lt;br/&gt;local rethreshold of merged blobs"]:::opt
+</span><span id="__span-1-24"><a id="__codelineno-1-24" name="__codelineno-1-24" href="#__codelineno-1-24"></a>        BG7["Contours → fitEllipse&lt;br/&gt;cx · cy · θ · major · minor"]:::bg
 </span><span id="__span-1-25"><a id="__codelineno-1-25" name="__codelineno-1-25" href="#__codelineno-1-25"></a>    end
 </span><span id="__span-1-26"><a id="__codelineno-1-26" name="__codelineno-1-26" href="#__codelineno-1-26"></a>
 </span><span id="__span-1-27"><a id="__codelineno-1-27" name="__codelineno-1-27" href="#__codelineno-1-27"></a>    %% --- YOLO OBB ---
-</span><span id="__span-1-28"><a id="__codelineno-1-28" name="__codelineno-1-28" href="#__codelineno-1-28"></a>    subgraph YO[&quot; YOLO OBB (PyTorch · ONNX · TensorRT) &quot;]
+</span><span id="__span-1-28"><a id="__codelineno-1-28" name="__codelineno-1-28" href="#__codelineno-1-28"></a>    subgraph YO[" YOLO OBB (PyTorch · ONNX · TensorRT) "]
 </span><span id="__span-1-29"><a id="__codelineno-1-29" name="__codelineno-1-29" href="#__codelineno-1-29"></a>        direction TB
-</span><span id="__span-1-30"><a id="__codelineno-1-30" name="__codelineno-1-30" href="#__codelineno-1-30"></a>        YO1[&quot;LetterBox preprocess&lt;br/&gt;BGR→RGB · HWC→CHW · imgsz=640&lt;br/&gt;pinned host buffer + async H2D&quot;]:::yolo
+</span><span id="__span-1-30"><a id="__codelineno-1-30" name="__codelineno-1-30" href="#__codelineno-1-30"></a>        YO1["LetterBox preprocess&lt;br/&gt;BGR→RGB · HWC→CHW · imgsz=640&lt;br/&gt;pinned host buffer + async H2D"]:::yolo
 </span><span id="__span-1-31"><a id="__codelineno-1-31" name="__codelineno-1-31" href="#__codelineno-1-31"></a>        YO2{Mode}
-</span><span id="__span-1-32"><a id="__codelineno-1-32" name="__codelineno-1-32" href="#__codelineno-1-32"></a>        YO3[&quot;Direct: single-stage OBB&quot;]:::yolo
-</span><span id="__span-1-33"><a id="__codelineno-1-33" name="__codelineno-1-33" href="#__codelineno-1-33"></a>        YO4[&quot;Sequential: stage-1 detect&lt;br/&gt;→ crop → stage-2 OBB / crop&quot;]:::yolo
-</span><span id="__span-1-34"><a id="__codelineno-1-34" name="__codelineno-1-34" href="#__codelineno-1-34"></a>        YO5[&quot;Backend executor&lt;br/&gt;Direct CUDA / ONNXRuntime / TensorRT&lt;br/&gt;fixed-batch · chunked · NVDec optional&quot;]:::yolo
-</span><span id="__span-1-35"><a id="__codelineno-1-35" name="__codelineno-1-35" href="#__codelineno-1-35"></a>        YO6[&quot;Decode xywhr&lt;br/&gt;angle normalize · enforce major≥minor&quot;]:::yolo
-</span><span id="__span-1-36"><a id="__codelineno-1-36" name="__codelineno-1-36" href="#__codelineno-1-36"></a>        YO7[&quot;Validity drop&lt;br/&gt;NaN · Inf · non-positive axes&quot;]:::yolo
+</span><span id="__span-1-32"><a id="__codelineno-1-32" name="__codelineno-1-32" href="#__codelineno-1-32"></a>        YO3["Direct: single-stage OBB"]:::yolo
+</span><span id="__span-1-33"><a id="__codelineno-1-33" name="__codelineno-1-33" href="#__codelineno-1-33"></a>        YO4["Sequential: stage-1 detect&lt;br/&gt;→ crop → stage-2 OBB / crop"]:::yolo
+</span><span id="__span-1-34"><a id="__codelineno-1-34" name="__codelineno-1-34" href="#__codelineno-1-34"></a>        YO5["Backend executor&lt;br/&gt;Direct CUDA / ONNXRuntime / TensorRT&lt;br/&gt;fixed-batch · chunked · NVDec optional"]:::yolo
+</span><span id="__span-1-35"><a id="__codelineno-1-35" name="__codelineno-1-35" href="#__codelineno-1-35"></a>        YO6["Decode xywhr&lt;br/&gt;angle normalize · enforce major≥minor"]:::yolo
+</span><span id="__span-1-36"><a id="__codelineno-1-36" name="__codelineno-1-36" href="#__codelineno-1-36"></a>        YO7["Validity drop&lt;br/&gt;NaN · Inf · non-positive axes"]:::yolo
 </span><span id="__span-1-37"><a id="__codelineno-1-37" name="__codelineno-1-37" href="#__codelineno-1-37"></a>    end
 </span><span id="__span-1-38"><a id="__codelineno-1-38" name="__codelineno-1-38" href="#__codelineno-1-38"></a>
 </span><span id="__span-1-39"><a id="__codelineno-1-39" name="__codelineno-1-39" href="#__codelineno-1-39"></a>    %% --- Shared filter ---
-</span><span id="__span-1-40"><a id="__codelineno-1-40" name="__codelineno-1-40" href="#__codelineno-1-40"></a>    subgraph FL[&quot; Detection filter (shared OBBGeometryMixin) &quot;]
+</span><span id="__span-1-40"><a id="__codelineno-1-40" name="__codelineno-1-40" href="#__codelineno-1-40"></a>    subgraph FL[" Detection filter (shared OBBGeometryMixin) "]
 </span><span id="__span-1-41"><a id="__codelineno-1-41" name="__codelineno-1-41" href="#__codelineno-1-41"></a>        direction TB
-</span><span id="__span-1-42"><a id="__codelineno-1-42" name="__codelineno-1-42" href="#__codelineno-1-42"></a>        F1[&quot;Confidence gate · ≥ YOLO_CONFIDENCE_THRESHOLD&quot;]:::common
-</span><span id="__span-1-43"><a id="__codelineno-1-43" name="__codelineno-1-43" href="#__codelineno-1-43"></a>        F2[&quot;Size gate · MIN/MAX_OBJECT_SIZE&quot;]:::common
-</span><span id="__span-1-44"><a id="__codelineno-1-44" name="__codelineno-1-44" href="#__codelineno-1-44"></a>        F3[&quot;Aspect-ratio gate · ref_AR · min/max mult&quot;]:::opt
-</span><span id="__span-1-45"><a id="__codelineno-1-45" name="__codelineno-1-45" href="#__codelineno-1-45"></a>        F4[&quot;ROI mask · pixel-in-ROI&quot;]:::opt
-</span><span id="__span-1-46"><a id="__codelineno-1-46" name="__codelineno-1-46" href="#__codelineno-1-46"></a>        F5[&quot;OBB IoU NMS&lt;br/&gt;AABB pre-screen + cv2.intersectConvexConvex&quot;]:::common
-</span><span id="__span-1-47"><a id="__codelineno-1-47" name="__codelineno-1-47" href="#__codelineno-1-47"></a>        F6[&quot;Top-K cap · MAX_TARGETS&quot;]:::common
+</span><span id="__span-1-42"><a id="__codelineno-1-42" name="__codelineno-1-42" href="#__codelineno-1-42"></a>        F1["Confidence gate · ≥ YOLO_CONFIDENCE_THRESHOLD"]:::common
+</span><span id="__span-1-43"><a id="__codelineno-1-43" name="__codelineno-1-43" href="#__codelineno-1-43"></a>        F2["Size gate · MIN/MAX_OBJECT_SIZE"]:::common
+</span><span id="__span-1-44"><a id="__codelineno-1-44" name="__codelineno-1-44" href="#__codelineno-1-44"></a>        F3["Aspect-ratio gate · ref_AR · min/max mult"]:::opt
+</span><span id="__span-1-45"><a id="__codelineno-1-45" name="__codelineno-1-45" href="#__codelineno-1-45"></a>        F4["ROI mask · pixel-in-ROI"]:::opt
+</span><span id="__span-1-46"><a id="__codelineno-1-46" name="__codelineno-1-46" href="#__codelineno-1-46"></a>        F5["OBB IoU NMS&lt;br/&gt;AABB pre-screen + cv2.intersectConvexConvex"]:::common
+</span><span id="__span-1-47"><a id="__codelineno-1-47" name="__codelineno-1-47" href="#__codelineno-1-47"></a>        F6["Top-K cap · MAX_TARGETS"]:::common
 </span><span id="__span-1-48"><a id="__codelineno-1-48" name="__codelineno-1-48" href="#__codelineno-1-48"></a>    end
 </span><span id="__span-1-49"><a id="__codelineno-1-49" name="__codelineno-1-49" href="#__codelineno-1-49"></a>
-</span><span id="__span-1-50"><a id="__codelineno-1-50" name="__codelineno-1-50" href="#__codelineno-1-50"></a>    HT[&quot;Head/Tail classifier&lt;br/&gt;cross-frame batched on candidates&quot;]:::opt
+</span><span id="__span-1-50"><a id="__codelineno-1-50" name="__codelineno-1-50" href="#__codelineno-1-50"></a>    HT["Head/Tail classifier&lt;br/&gt;cross-frame batched on candidates"]:::opt
 </span><span id="__span-1-51"><a id="__codelineno-1-51" name="__codelineno-1-51" href="#__codelineno-1-51"></a>
-</span><span id="__span-1-52"><a id="__codelineno-1-52" name="__codelineno-1-52" href="#__codelineno-1-52"></a>    Out[(&quot;Detection record (per frame)&lt;br/&gt;cx · cy · θ · area · AR · conf · OBB corners&lt;br/&gt;+ heading hint · canonical affine&quot;)]:::art
+</span><span id="__span-1-52"><a id="__codelineno-1-52" name="__codelineno-1-52" href="#__codelineno-1-52"></a>    Out[("Detection record (per frame)&lt;br/&gt;cx · cy · θ · area · AR · conf · OBB corners&lt;br/&gt;+ heading hint · canonical affine")]:::art
 </span><span id="__span-1-53"><a id="__codelineno-1-53" name="__codelineno-1-53" href="#__codelineno-1-53"></a>
 </span><span id="__span-1-54"><a id="__codelineno-1-54" name="__codelineno-1-54" href="#__codelineno-1-54"></a>    Frame --&gt; Branch
-</span><span id="__span-1-55"><a id="__codelineno-1-55" name="__codelineno-1-55" href="#__codelineno-1-55"></a>    Branch -- &quot;background_subtraction&quot; --&gt; BG1 --&gt; BG2 --&gt; BG3 --&gt; BG4 --&gt; BG5 --&gt; BG6 --&gt; BG7
-</span><span id="__span-1-56"><a id="__codelineno-1-56" name="__codelineno-1-56" href="#__codelineno-1-56"></a>    Branch -- &quot;yolo_obb&quot; --&gt; YO1 --&gt; YO2
-</span><span id="__span-1-57"><a id="__codelineno-1-57" name="__codelineno-1-57" href="#__codelineno-1-57"></a>    YO2 -- &quot;direct&quot; --&gt; YO3 --&gt; YO5
-</span><span id="__span-1-58"><a id="__codelineno-1-58" name="__codelineno-1-58" href="#__codelineno-1-58"></a>    YO2 -- &quot;sequential&quot; --&gt; YO4 --&gt; YO5
+</span><span id="__span-1-55"><a id="__codelineno-1-55" name="__codelineno-1-55" href="#__codelineno-1-55"></a>    Branch -- "background_subtraction" --&gt; BG1 --&gt; BG2 --&gt; BG3 --&gt; BG4 --&gt; BG5 --&gt; BG6 --&gt; BG7
+</span><span id="__span-1-56"><a id="__codelineno-1-56" name="__codelineno-1-56" href="#__codelineno-1-56"></a>    Branch -- "yolo_obb" --&gt; YO1 --&gt; YO2
+</span><span id="__span-1-57"><a id="__codelineno-1-57" name="__codelineno-1-57" href="#__codelineno-1-57"></a>    YO2 -- "direct" --&gt; YO3 --&gt; YO5
+</span><span id="__span-1-58"><a id="__codelineno-1-58" name="__codelineno-1-58" href="#__codelineno-1-58"></a>    YO2 -- "sequential" --&gt; YO4 --&gt; YO5
 </span><span id="__span-1-59"><a id="__codelineno-1-59" name="__codelineno-1-59" href="#__codelineno-1-59"></a>    YO5 --&gt; YO6 --&gt; YO7
 </span><span id="__span-1-60"><a id="__codelineno-1-60" name="__codelineno-1-60" href="#__codelineno-1-60"></a>    BG7 --&gt; F1
 </span><span id="__span-1-61"><a id="__codelineno-1-61" name="__codelineno-1-61" href="#__codelineno-1-61"></a>    YO7 --&gt; F1
@@ -2001,49 +2127,49 @@ tracker</strong> (Section 4), not here.</p>
 </span><span id="__span-2-7"><a id="__codelineno-2-7" name="__codelineno-2-7" href="#__codelineno-2-7"></a>
 </span><span id="__span-2-8"><a id="__codelineno-2-8" name="__codelineno-2-8" href="#__codelineno-2-8"></a>    Det([OBB detection · cx, cy, θ, corners]):::art
 </span><span id="__span-2-9"><a id="__codelineno-2-9" name="__codelineno-2-9" href="#__codelineno-2-9"></a>
-</span><span id="__span-2-10"><a id="__codelineno-2-10" name="__codelineno-2-10" href="#__codelineno-2-10"></a>    subgraph Can[&quot; Canonical crop extraction &quot;]
-</span><span id="__span-2-11"><a id="__codelineno-2-11" name="__codelineno-2-11" href="#__codelineno-2-11"></a>        C1[&quot;compute_alignment_affine&lt;br/&gt;center + rotate to major axis&lt;br/&gt;→ M_align, axis_θ&quot;]:::geom
-</span><span id="__span-2-12"><a id="__codelineno-2-12" name="__codelineno-2-12" href="#__codelineno-2-12"></a>        C2[&quot;Canvas dims · compute_native_crop_dimensions&lt;br/&gt;W = OBB_major × (1 + padding_fraction)&lt;br/&gt;H = W / reference_aspect_ratio&lt;br/&gt;(both rounded to even, ≥ 8 px)&quot;]:::geom
-</span><span id="__span-2-13"><a id="__codelineno-2-13" name="__codelineno-2-13" href="#__codelineno-2-13"></a>        C3[&quot;warpAffine (CPU) · or grid_sample (GPU, batched)&quot;]:::geom
-</span><span id="__span-2-14"><a id="__codelineno-2-14" name="__codelineno-2-14" href="#__codelineno-2-14"></a>        C4[&quot;Optional foreign-mask&lt;br/&gt;SUPPRESS_FOREIGN_OBB_REGIONS&quot;]:::geom
+</span><span id="__span-2-10"><a id="__codelineno-2-10" name="__codelineno-2-10" href="#__codelineno-2-10"></a>    subgraph Can[" Canonical crop extraction "]
+</span><span id="__span-2-11"><a id="__codelineno-2-11" name="__codelineno-2-11" href="#__codelineno-2-11"></a>        C1["compute_alignment_affine&lt;br/&gt;center + rotate to major axis&lt;br/&gt;→ M_align, axis_θ"]:::geom
+</span><span id="__span-2-12"><a id="__codelineno-2-12" name="__codelineno-2-12" href="#__codelineno-2-12"></a>        C2["Canvas dims · compute_native_crop_dimensions&lt;br/&gt;W = OBB_major × (1 + padding_fraction)&lt;br/&gt;H = W / reference_aspect_ratio&lt;br/&gt;(both rounded to even, ≥ 8 px)"]:::geom
+</span><span id="__span-2-13"><a id="__codelineno-2-13" name="__codelineno-2-13" href="#__codelineno-2-13"></a>        C3["warpAffine (CPU) · or grid_sample (GPU, batched)"]:::geom
+</span><span id="__span-2-14"><a id="__codelineno-2-14" name="__codelineno-2-14" href="#__codelineno-2-14"></a>        C4["Optional foreign-mask&lt;br/&gt;SUPPRESS_FOREIGN_OBB_REGIONS"]:::geom
 </span><span id="__span-2-15"><a id="__codelineno-2-15" name="__codelineno-2-15" href="#__codelineno-2-15"></a>    end
 </span><span id="__span-2-16"><a id="__codelineno-2-16" name="__codelineno-2-16" href="#__codelineno-2-16"></a>
-</span><span id="__span-2-17"><a id="__codelineno-2-17" name="__codelineno-2-17" href="#__codelineno-2-17"></a>    subgraph HT[&quot; Head/Tail orientation &quot;]
-</span><span id="__span-2-18"><a id="__codelineno-2-18" name="__codelineno-2-18" href="#__codelineno-2-18"></a>        H1[&quot;HeadTailAnalyzer · flat single-head CNN&lt;br/&gt;labels ⊆ {left, right, up, down, unknown}&lt;br/&gt;up/down treated as unknown by default&quot;]:::cnn
-</span><span id="__span-2-19"><a id="__codelineno-2-19" name="__codelineno-2-19" href="#__codelineno-2-19"></a>        H2[&quot;directed=True iff conf ≥ YOLO_HEADTAIL_CONF_THRESHOLD&lt;br/&gt;(default 0.5)&quot;]:::cnn
-</span><span id="__span-2-20"><a id="__codelineno-2-20" name="__codelineno-2-20" href="#__codelineno-2-20"></a>        H3[&quot;apply_headtail_rotation&lt;br/&gt;M_canonical = M_orient ∘ M_align&lt;br/&gt;M_inverse = invertAffine(M_canonical)&quot;]:::geom
+</span><span id="__span-2-17"><a id="__codelineno-2-17" name="__codelineno-2-17" href="#__codelineno-2-17"></a>    subgraph HT[" Head/Tail orientation "]
+</span><span id="__span-2-18"><a id="__codelineno-2-18" name="__codelineno-2-18" href="#__codelineno-2-18"></a>        H1["HeadTailAnalyzer · flat single-head CNN&lt;br/&gt;labels ⊆ {left, right, up, down, unknown}&lt;br/&gt;up/down treated as unknown by default"]:::cnn
+</span><span id="__span-2-19"><a id="__codelineno-2-19" name="__codelineno-2-19" href="#__codelineno-2-19"></a>        H2["directed=True iff conf ≥ YOLO_HEADTAIL_CONF_THRESHOLD&lt;br/&gt;(default 0.5)"]:::cnn
+</span><span id="__span-2-20"><a id="__codelineno-2-20" name="__codelineno-2-20" href="#__codelineno-2-20"></a>        H3["apply_headtail_rotation&lt;br/&gt;M_canonical = M_orient ∘ M_align&lt;br/&gt;M_inverse = invertAffine(M_canonical)"]:::geom
 </span><span id="__span-2-21"><a id="__codelineno-2-21" name="__codelineno-2-21" href="#__codelineno-2-21"></a>    end
 </span><span id="__span-2-22"><a id="__codelineno-2-22" name="__codelineno-2-22" href="#__codelineno-2-22"></a>
-</span><span id="__span-2-23"><a id="__codelineno-2-23" name="__codelineno-2-23" href="#__codelineno-2-23"></a>    subgraph Par[&quot; Per-detection analyses (parallel on canonical crop) &quot;]
+</span><span id="__span-2-23"><a id="__codelineno-2-23" name="__codelineno-2-23" href="#__codelineno-2-23"></a>    subgraph Par[" Per-detection analyses (parallel on canonical crop) "]
 </span><span id="__span-2-24"><a id="__codelineno-2-24" name="__codelineno-2-24" href="#__codelineno-2-24"></a>        direction LR
 </span><span id="__span-2-25"><a id="__codelineno-2-25" name="__codelineno-2-25" href="#__codelineno-2-25"></a>
-</span><span id="__span-2-26"><a id="__codelineno-2-26" name="__codelineno-2-26" href="#__codelineno-2-26"></a>        subgraph PS[&quot; Pose inference &quot;]
+</span><span id="__span-2-26"><a id="__codelineno-2-26" name="__codelineno-2-26" href="#__codelineno-2-26"></a>        subgraph PS[" Pose inference "]
 </span><span id="__span-2-27"><a id="__codelineno-2-27" name="__codelineno-2-27" href="#__codelineno-2-27"></a>            direction TB
-</span><span id="__span-2-28"><a id="__codelineno-2-28" name="__codelineno-2-28" href="#__codelineno-2-28"></a>            P1[&quot;YOLO Pose · or SLEAP&lt;br/&gt;PyTorch / ONNX / TensorRT&quot;]:::pose
-</span><span id="__span-2-29"><a id="__codelineno-2-29" name="__codelineno-2-29" href="#__codelineno-2-29"></a>            P2[&quot;Keypoints (K × 3)&lt;br/&gt;x, y, conf in canonical space&quot;]:::pose
-</span><span id="__span-2-30"><a id="__codelineno-2-30" name="__codelineno-2-30" href="#__codelineno-2-30"></a>            P3[&quot;invert_keypoints via M_inverse&lt;br/&gt;→ frame coordinates&quot;]:::pose
+</span><span id="__span-2-28"><a id="__codelineno-2-28" name="__codelineno-2-28" href="#__codelineno-2-28"></a>            P1["YOLO Pose · or SLEAP&lt;br/&gt;PyTorch / ONNX / TensorRT"]:::pose
+</span><span id="__span-2-29"><a id="__codelineno-2-29" name="__codelineno-2-29" href="#__codelineno-2-29"></a>            P2["Keypoints (K × 3)&lt;br/&gt;x, y, conf in canonical space"]:::pose
+</span><span id="__span-2-30"><a id="__codelineno-2-30" name="__codelineno-2-30" href="#__codelineno-2-30"></a>            P3["invert_keypoints via M_inverse&lt;br/&gt;→ frame coordinates"]:::pose
 </span><span id="__span-2-31"><a id="__codelineno-2-31" name="__codelineno-2-31" href="#__codelineno-2-31"></a>            P1 --&gt; P2 --&gt; P3
 </span><span id="__span-2-32"><a id="__codelineno-2-32" name="__codelineno-2-32" href="#__codelineno-2-32"></a>        end
 </span><span id="__span-2-33"><a id="__codelineno-2-33" name="__codelineno-2-33" href="#__codelineno-2-33"></a>
-</span><span id="__span-2-34"><a id="__codelineno-2-34" name="__codelineno-2-34" href="#__codelineno-2-34"></a>        subgraph CN[&quot; CNN classification &quot;]
+</span><span id="__span-2-34"><a id="__codelineno-2-34" name="__codelineno-2-34" href="#__codelineno-2-34"></a>        subgraph CN[" CNN classification "]
 </span><span id="__span-2-35"><a id="__codelineno-2-35" name="__codelineno-2-35" href="#__codelineno-2-35"></a>            direction TB
-</span><span id="__span-2-36"><a id="__codelineno-2-36" name="__codelineno-2-36" href="#__codelineno-2-36"></a>            N1[&quot;ClassifierBackend.predict_batch[_cuda]&lt;br/&gt;Tiny · ResNet · ConvNeXt · YOLO-cls&lt;br/&gt;flat or multi-head; PyTorch / ONNX / TRT&quot;]:::cnn
-</span><span id="__span-2-37"><a id="__codelineno-2-37" name="__codelineno-2-37" href="#__codelineno-2-37"></a>            N2[&quot;ClassPrediction (always)&lt;br/&gt;per-factor class_name + confidence&lt;br/&gt;(+ full probs if posterior cache enabled)&quot;]:::cnn
-</span><span id="__span-2-38"><a id="__codelineno-2-38" name="__codelineno-2-38" href="#__codelineno-2-38"></a>            N3[&quot;Calibrate · temperature scaling&lt;br/&gt;→ log-posterior over factor classes&quot;]:::cnn
-</span><span id="__span-2-39"><a id="__codelineno-2-39" name="__codelineno-2-39" href="#__codelineno-2-39"></a>            N4[&quot;IdentityEvidence emitted&lt;br/&gt;only when unique_identifier=True&lt;br/&gt;composite catalog log-prior&quot;]:::cnn
+</span><span id="__span-2-36"><a id="__codelineno-2-36" name="__codelineno-2-36" href="#__codelineno-2-36"></a>            N1["ClassifierBackend.predict_batch[_cuda]&lt;br/&gt;Tiny · ResNet · ConvNeXt · YOLO-cls&lt;br/&gt;flat or multi-head; PyTorch / ONNX / TRT"]:::cnn
+</span><span id="__span-2-37"><a id="__codelineno-2-37" name="__codelineno-2-37" href="#__codelineno-2-37"></a>            N2["ClassPrediction (always)&lt;br/&gt;per-factor class_name + confidence&lt;br/&gt;(+ full probs if posterior cache enabled)"]:::cnn
+</span><span id="__span-2-38"><a id="__codelineno-2-38" name="__codelineno-2-38" href="#__codelineno-2-38"></a>            N3["Calibrate · temperature scaling&lt;br/&gt;→ log-posterior over factor classes"]:::cnn
+</span><span id="__span-2-39"><a id="__codelineno-2-39" name="__codelineno-2-39" href="#__codelineno-2-39"></a>            N4["IdentityEvidence emitted&lt;br/&gt;only when unique_identifier=True&lt;br/&gt;composite catalog log-prior"]:::cnn
 </span><span id="__span-2-40"><a id="__codelineno-2-40" name="__codelineno-2-40" href="#__codelineno-2-40"></a>            N1 --&gt; N2 --&gt; N3 --&gt; N4
 </span><span id="__span-2-41"><a id="__codelineno-2-41" name="__codelineno-2-41" href="#__codelineno-2-41"></a>        end
 </span><span id="__span-2-42"><a id="__codelineno-2-42" name="__codelineno-2-42" href="#__codelineno-2-42"></a>
-</span><span id="__span-2-43"><a id="__codelineno-2-43" name="__codelineno-2-43" href="#__codelineno-2-43"></a>        subgraph TG[&quot; AprilTag reading &quot;]
+</span><span id="__span-2-43"><a id="__codelineno-2-43" name="__codelineno-2-43" href="#__codelineno-2-43"></a>        subgraph TG[" AprilTag reading "]
 </span><span id="__span-2-44"><a id="__codelineno-2-44" name="__codelineno-2-44" href="#__codelineno-2-44"></a>            direction TB
-</span><span id="__span-2-45"><a id="__codelineno-2-45" name="__codelineno-2-45" href="#__codelineno-2-45"></a>            T1[&quot;Composite-strip&lt;br/&gt;tile all crops into one image&lt;br/&gt;1× detector call&quot;]:::tag
-</span><span id="__span-2-46"><a id="__codelineno-2-46" name="__codelineno-2-46" href="#__codelineno-2-46"></a>            T2[&quot;AprilTag detector&lt;br/&gt;family tag36h11 (lab fork)&lt;br/&gt;max_hamming = 1&quot;]:::tag
-</span><span id="__span-2-47"><a id="__codelineno-2-47" name="__codelineno-2-47" href="#__codelineno-2-47"></a>            T3[&quot;tag_id · hamming · catalog label&lt;br/&gt;→ apriltag_log_prior over catalog&lt;br/&gt;emitted as IdentityEvidence&quot;]:::tag
+</span><span id="__span-2-45"><a id="__codelineno-2-45" name="__codelineno-2-45" href="#__codelineno-2-45"></a>            T1["Composite-strip&lt;br/&gt;tile all crops into one image&lt;br/&gt;1× detector call"]:::tag
+</span><span id="__span-2-46"><a id="__codelineno-2-46" name="__codelineno-2-46" href="#__codelineno-2-46"></a>            T2["AprilTag detector&lt;br/&gt;family tag36h11 (lab fork)&lt;br/&gt;max_hamming = 1"]:::tag
+</span><span id="__span-2-47"><a id="__codelineno-2-47" name="__codelineno-2-47" href="#__codelineno-2-47"></a>            T3["tag_id · hamming · catalog label&lt;br/&gt;→ apriltag_log_prior over catalog&lt;br/&gt;emitted as IdentityEvidence"]:::tag
 </span><span id="__span-2-48"><a id="__codelineno-2-48" name="__codelineno-2-48" href="#__codelineno-2-48"></a>            T1 --&gt; T2 --&gt; T3
 </span><span id="__span-2-49"><a id="__codelineno-2-49" name="__codelineno-2-49" href="#__codelineno-2-49"></a>        end
 </span><span id="__span-2-50"><a id="__codelineno-2-50" name="__codelineno-2-50" href="#__codelineno-2-50"></a>    end
 </span><span id="__span-2-51"><a id="__codelineno-2-51" name="__codelineno-2-51" href="#__codelineno-2-51"></a>
-</span><span id="__span-2-52"><a id="__codelineno-2-52" name="__codelineno-2-52" href="#__codelineno-2-52"></a>    Out[(&quot;Per-detection outputs · per frame&lt;br/&gt;• M_canonical · M_inverse&lt;br/&gt;• pose keypoints (frame coords) + per-kp conf&lt;br/&gt;• ClassPrediction from every CNN&lt;br/&gt;• IdentityEvidence (log-priors over catalog)&lt;br/&gt;   from CNNs with unique_identifier=True, plus AprilTag&lt;br/&gt;→ Section 4 (online tracker) runs the fusion&quot;)]:::art
+</span><span id="__span-2-52"><a id="__codelineno-2-52" name="__codelineno-2-52" href="#__codelineno-2-52"></a>    Out[("Per-detection outputs · per frame&lt;br/&gt;• M_canonical · M_inverse&lt;br/&gt;• pose keypoints (frame coords) + per-kp conf&lt;br/&gt;• ClassPrediction from every CNN&lt;br/&gt;• IdentityEvidence (log-priors over catalog)&lt;br/&gt;   from CNNs with unique_identifier=True, plus AprilTag&lt;br/&gt;→ Section 4 (online tracker) runs the fusion")]:::art
 </span><span id="__span-2-53"><a id="__codelineno-2-53" name="__codelineno-2-53" href="#__codelineno-2-53"></a>
 </span><span id="__span-2-54"><a id="__codelineno-2-54" name="__codelineno-2-54" href="#__codelineno-2-54"></a>    Det --&gt; C1 --&gt; C2 --&gt; C3 --&gt; C4 --&gt; H1 --&gt; H2 --&gt; H3
 </span><span id="__span-2-55"><a id="__codelineno-2-55" name="__codelineno-2-55" href="#__codelineno-2-55"></a>    H3 --&gt; P1
@@ -2095,47 +2221,47 @@ cost matrix, closing a frame-to-frame feedback loop.</p>
 </span><span id="__span-3-8"><a id="__codelineno-3-8" name="__codelineno-3-8" href="#__codelineno-3-8"></a>
 </span><span id="__span-3-9"><a id="__codelineno-3-9" name="__codelineno-3-9" href="#__codelineno-3-9"></a>    Frame([Frame t]):::io
 </span><span id="__span-3-10"><a id="__codelineno-3-10" name="__codelineno-3-10" href="#__codelineno-3-10"></a>
-</span><span id="__span-3-11"><a id="__codelineno-3-11" name="__codelineno-3-11" href="#__codelineno-3-11"></a>    subgraph KP[&quot; ① Kalman predict (per active track) &quot;]
-</span><span id="__span-3-12"><a id="__codelineno-3-12" name="__codelineno-3-12" href="#__codelineno-3-12"></a>        K1[&quot;State x = (x, y, θ, vx, vy)&lt;br/&gt;F: const-θ · v ← DAMPING · v  (default 0.95)&lt;br/&gt;Q anisotropic: q_long ≫ q_lat&lt;br/&gt;rotated into body frame via heading θ&quot;]:::kf
-</span><span id="__span-3-13"><a id="__codelineno-3-13" name="__codelineno-3-13" href="#__codelineno-3-13"></a>        K2[&quot;Innovation cov S&lt;br/&gt;+ adaptive jitter (∝ trace of position block)&lt;br/&gt;+ max-velocity innovation clip&lt;br/&gt;Joseph-form covariance update&quot;]:::kf
-</span><span id="__span-3-14"><a id="__codelineno-3-14" name="__codelineno-3-14" href="#__codelineno-3-14"></a>        K3[&quot;Maturity-attenuated velocity&lt;br/&gt;young tracks (age &amp;lt; KALMAN_MATURITY_AGE):&lt;br/&gt;retention ramps from KALMAN_INITIAL_VELOCITY_RETENTION → 1.0&quot;]:::kf
+</span><span id="__span-3-11"><a id="__codelineno-3-11" name="__codelineno-3-11" href="#__codelineno-3-11"></a>    subgraph KP[" ① Kalman predict (per active track) "]
+</span><span id="__span-3-12"><a id="__codelineno-3-12" name="__codelineno-3-12" href="#__codelineno-3-12"></a>        K1["State x = (x, y, θ, vx, vy)&lt;br/&gt;F: const-θ · v ← DAMPING · v  (default 0.95)&lt;br/&gt;Q anisotropic: q_long ≫ q_lat&lt;br/&gt;rotated into body frame via heading θ"]:::kf
+</span><span id="__span-3-13"><a id="__codelineno-3-13" name="__codelineno-3-13" href="#__codelineno-3-13"></a>        K2["Innovation cov S&lt;br/&gt;+ adaptive jitter (∝ trace of position block)&lt;br/&gt;+ max-velocity innovation clip&lt;br/&gt;Joseph-form covariance update"]:::kf
+</span><span id="__span-3-14"><a id="__codelineno-3-14" name="__codelineno-3-14" href="#__codelineno-3-14"></a>        K3["Maturity-attenuated velocity&lt;br/&gt;young tracks (age &amp;lt; KALMAN_MATURITY_AGE):&lt;br/&gt;retention ramps from KALMAN_INITIAL_VELOCITY_RETENTION → 1.0"]:::kf
 </span><span id="__span-3-15"><a id="__codelineno-3-15" name="__codelineno-3-15" href="#__codelineno-3-15"></a>    end
 </span><span id="__span-3-16"><a id="__codelineno-3-16" name="__codelineno-3-16" href="#__codelineno-3-16"></a>
-</span><span id="__span-3-17"><a id="__codelineno-3-17" name="__codelineno-3-17" href="#__codelineno-3-17"></a>    Det[&quot;② Detections + per-detection features&lt;br/&gt;(cx, cy, θ, area, AR, pose, IdentityEvidence)&lt;br/&gt;from Section 3&quot;]:::cost
+</span><span id="__span-3-17"><a id="__codelineno-3-17" name="__codelineno-3-17" href="#__codelineno-3-17"></a>    Det["② Detections + per-detection features&lt;br/&gt;(cx, cy, θ, area, AR, pose, IdentityEvidence)&lt;br/&gt;from Section 3"]:::cost
 </span><span id="__span-3-18"><a id="__codelineno-3-18" name="__codelineno-3-18" href="#__codelineno-3-18"></a>
-</span><span id="__span-3-19"><a id="__codelineno-3-19" name="__codelineno-3-19" href="#__codelineno-3-19"></a>    subgraph CM[&quot; ③ Cost matrix C[i, j] = track i × det j &quot;]
+</span><span id="__span-3-19"><a id="__codelineno-3-19" name="__codelineno-3-19" href="#__codelineno-3-19"></a>    subgraph CM[" ③ Cost matrix C[i, j] = track i × det j "]
 </span><span id="__span-3-20"><a id="__codelineno-3-20" name="__codelineno-3-20" href="#__codelineno-3-20"></a>        direction TB
-</span><span id="__span-3-21"><a id="__codelineno-3-21" name="__codelineno-3-21" href="#__codelineno-3-21"></a>        C1[&quot;Position · Mahalanobis&lt;br/&gt;√(Δᵀ S⁻¹ Δ) · per-track adaptive radius gate&quot;]:::cost
-</span><span id="__span-3-22"><a id="__codelineno-3-22" name="__codelineno-3-22" href="#__codelineno-3-22"></a>        C2[&quot;Orientation · |Δθ|&lt;br/&gt;directed → π-wrap · undirected → ½-wrap (axis-only)&quot;]:::cost
-</span><span id="__span-3-23"><a id="__codelineno-3-23" name="__codelineno-3-23" href="#__codelineno-3-23"></a>        C3[&quot;Shape · |Δarea| + |Δaspect|&quot;]:::cost
-</span><span id="__span-3-24"><a id="__codelineno-3-24" name="__codelineno-3-24" href="#__codelineno-3-24"></a>        C4[&quot;Identity · −log P(det_id | track posterior_{t−1})&lt;br/&gt;uses prev-frame posterior — feedback loop&quot;]:::cost
-</span><span id="__span-3-25"><a id="__codelineno-3-25" name="__codelineno-3-25" href="#__codelineno-3-25"></a>        C5[&quot;Pose rejection · per-keypoint MAD veto&lt;br/&gt;hard-block on excess pose distance&quot;]:::cost
-</span><span id="__span-3-26"><a id="__codelineno-3-26" name="__codelineno-3-26" href="#__codelineno-3-26"></a>        C6[&quot;Density gate · 0.7× MAX_DIST in confidence-density regions&quot;]:::cost
-</span><span id="__span-3-27"><a id="__codelineno-3-27" name="__codelineno-3-27" href="#__codelineno-3-27"></a>        C7[(&quot;Weighted sum&lt;br/&gt;Wp·d + Wo·Δθ + Wa·Δarea + Wasp·Δaspect&lt;br/&gt;+ ASSOCIATION_IDENTITY_HINT_SCALE · id_cost&quot;)]:::cost
+</span><span id="__span-3-21"><a id="__codelineno-3-21" name="__codelineno-3-21" href="#__codelineno-3-21"></a>        C1["Position · Mahalanobis&lt;br/&gt;√(Δᵀ S⁻¹ Δ) · per-track adaptive radius gate"]:::cost
+</span><span id="__span-3-22"><a id="__codelineno-3-22" name="__codelineno-3-22" href="#__codelineno-3-22"></a>        C2["Orientation · |Δθ|&lt;br/&gt;directed → π-wrap · undirected → ½-wrap (axis-only)"]:::cost
+</span><span id="__span-3-23"><a id="__codelineno-3-23" name="__codelineno-3-23" href="#__codelineno-3-23"></a>        C3["Shape · |Δarea| + |Δaspect|"]:::cost
+</span><span id="__span-3-24"><a id="__codelineno-3-24" name="__codelineno-3-24" href="#__codelineno-3-24"></a>        C4["Identity · −log P(det_id | track posterior_{t−1})&lt;br/&gt;uses prev-frame posterior — feedback loop"]:::cost
+</span><span id="__span-3-25"><a id="__codelineno-3-25" name="__codelineno-3-25" href="#__codelineno-3-25"></a>        C5["Pose rejection · per-keypoint MAD veto&lt;br/&gt;hard-block on excess pose distance"]:::cost
+</span><span id="__span-3-26"><a id="__codelineno-3-26" name="__codelineno-3-26" href="#__codelineno-3-26"></a>        C6["Density gate · 0.7× MAX_DIST in confidence-density regions"]:::cost
+</span><span id="__span-3-27"><a id="__codelineno-3-27" name="__codelineno-3-27" href="#__codelineno-3-27"></a>        C7[("Weighted sum&lt;br/&gt;Wp·d + Wo·Δθ + Wa·Δarea + Wasp·Δaspect&lt;br/&gt;+ ASSOCIATION_IDENTITY_HINT_SCALE · id_cost")]:::cost
 </span><span id="__span-3-28"><a id="__codelineno-3-28" name="__codelineno-3-28" href="#__codelineno-3-28"></a>    end
 </span><span id="__span-3-29"><a id="__codelineno-3-29" name="__codelineno-3-29" href="#__codelineno-3-29"></a>
-</span><span id="__span-3-30"><a id="__codelineno-3-30" name="__codelineno-3-30" href="#__codelineno-3-30"></a>    subgraph AS[&quot; ④ Hungarian assignment (3 phases · `assign_tracks`) &quot;]
-</span><span id="__span-3-31"><a id="__codelineno-3-31" name="__codelineno-3-31" href="#__codelineno-3-31"></a>        A1[&quot;Phase 1 · Established (continuity ≥ MATURITY_AGE)&lt;br/&gt;linear_sum_assignment on full cost&quot;]:::assign
-</span><span id="__span-3-32"><a id="__codelineno-3-32" name="__codelineno-3-32" href="#__codelineno-3-32"></a>        A2[&quot;Phase 2 · Young (continuity &amp;lt; MATURITY_AGE)&lt;br/&gt;greedy nearest&quot;]:::assign
-</span><span id="__span-3-33"><a id="__codelineno-3-33" name="__codelineno-3-33" href="#__codelineno-3-33"></a>        A3[&quot;Phase 3 · Respawn lost slots&lt;br/&gt;committed-identity log-likelihood first&lt;br/&gt;→ proximity fallback (motion-budget gate)&quot;]:::assign
+</span><span id="__span-3-30"><a id="__codelineno-3-30" name="__codelineno-3-30" href="#__codelineno-3-30"></a>    subgraph AS[" ④ Hungarian assignment (3 phases · `assign_tracks`) "]
+</span><span id="__span-3-31"><a id="__codelineno-3-31" name="__codelineno-3-31" href="#__codelineno-3-31"></a>        A1["Phase 1 · Established (continuity ≥ MATURITY_AGE)&lt;br/&gt;linear_sum_assignment on full cost"]:::assign
+</span><span id="__span-3-32"><a id="__codelineno-3-32" name="__codelineno-3-32" href="#__codelineno-3-32"></a>        A2["Phase 2 · Young (continuity &amp;lt; MATURITY_AGE)&lt;br/&gt;greedy nearest"]:::assign
+</span><span id="__span-3-33"><a id="__codelineno-3-33" name="__codelineno-3-33" href="#__codelineno-3-33"></a>        A3["Phase 3 · Respawn lost slots&lt;br/&gt;committed-identity log-likelihood first&lt;br/&gt;→ proximity fallback (motion-budget gate)"]:::assign
 </span><span id="__span-3-34"><a id="__codelineno-3-34" name="__codelineno-3-34" href="#__codelineno-3-34"></a>    end
 </span><span id="__span-3-35"><a id="__codelineno-3-35" name="__codelineno-3-35" href="#__codelineno-3-35"></a>
-</span><span id="__span-3-36"><a id="__codelineno-3-36" name="__codelineno-3-36" href="#__codelineno-3-36"></a>    subgraph LF[&quot; ⑤ Lifecycle update &quot;]
-</span><span id="__span-3-37"><a id="__codelineno-3-37" name="__codelineno-3-37" href="#__codelineno-3-37"></a>        L1[&quot;active → occluded → lost&lt;br/&gt;(missed_frames vs LOST_THRESHOLD_FRAMES)&quot;]:::life
-</span><span id="__span-3-38"><a id="__codelineno-3-38" name="__codelineno-3-38" href="#__codelineno-3-38"></a>        L2[&quot;Track birth · unmatched det → free lost slot&lt;br/&gt;hard KF reset · zero velocity · new trajectory_id&quot;]:::life
-</span><span id="__span-3-39"><a id="__codelineno-3-39" name="__codelineno-3-39" href="#__codelineno-3-39"></a>        L3[&quot;Identity-aware respawn · committed slot rejoin&lt;br/&gt;soft KF reset · preserves trajectory_id&quot;]:::life
+</span><span id="__span-3-36"><a id="__codelineno-3-36" name="__codelineno-3-36" href="#__codelineno-3-36"></a>    subgraph LF[" ⑤ Lifecycle update "]
+</span><span id="__span-3-37"><a id="__codelineno-3-37" name="__codelineno-3-37" href="#__codelineno-3-37"></a>        L1["active → occluded → lost&lt;br/&gt;(missed_frames vs LOST_THRESHOLD_FRAMES)"]:::life
+</span><span id="__span-3-38"><a id="__codelineno-3-38" name="__codelineno-3-38" href="#__codelineno-3-38"></a>        L2["Track birth · unmatched det → free lost slot&lt;br/&gt;hard KF reset · zero velocity · new trajectory_id"]:::life
+</span><span id="__span-3-39"><a id="__codelineno-3-39" name="__codelineno-3-39" href="#__codelineno-3-39"></a>        L3["Identity-aware respawn · committed slot rejoin&lt;br/&gt;soft KF reset · preserves trajectory_id"]:::life
 </span><span id="__span-3-40"><a id="__codelineno-3-40" name="__codelineno-3-40" href="#__codelineno-3-40"></a>    end
 </span><span id="__span-3-41"><a id="__codelineno-3-41" name="__codelineno-3-41" href="#__codelineno-3-41"></a>
-</span><span id="__span-3-42"><a id="__codelineno-3-42" name="__codelineno-3-42" href="#__codelineno-3-42"></a>    subgraph ID[&quot; ⑥ OnlineIdentityDecoder · per slot &quot;]
-</span><span id="__span-3-43"><a id="__codelineno-3-43" name="__codelineno-3-43" href="#__codelineno-3-43"></a>        I1[&quot;Predict · sticky Markov&lt;br/&gt;diag = 1−ε  off-diag = ε / (C−1)&lt;br/&gt;ε ≈ IDENTITY_TRANSITION_EPSILON (0.02)&quot;]:::ident
-</span><span id="__span-3-44"><a id="__codelineno-3-44" name="__codelineno-3-44" href="#__codelineno-3-44"></a>        I2[&quot;Fuse · log-add CNN + AprilTag evidences · renormalize&quot;]:::ident
-</span><span id="__span-3-45"><a id="__codelineno-3-45" name="__codelineno-3-45" href="#__codelineno-3-45"></a>        I3[&quot;Swap detector · pairwise mutual-mismatch&lt;br/&gt;counter ≥ IDENTITY_SWAP_MIN_FRAMES (8)&lt;br/&gt;margin ≥ IDENTITY_SWAP_CONF_MARGIN (0.2)&quot;]:::ident
-</span><span id="__span-3-46"><a id="__codelineno-3-46" name="__codelineno-3-46" href="#__codelineno-3-46"></a>        I4[&quot;Soft slot-lock · stable_count ≥ IDENTITY_SLOT_LOCK_MIN_FRAMES (30)&lt;br/&gt;biases posterior toward locked label&quot;]:::ident
-</span><span id="__span-3-47"><a id="__codelineno-3-47" name="__codelineno-3-47" href="#__codelineno-3-47"></a>        I5[&quot;Uniqueness Hungarian&lt;br/&gt;N×(K identities + N dummy &#39;unassigned&#39;)&quot;]:::ident
-</span><span id="__span-3-48"><a id="__codelineno-3-48" name="__codelineno-3-48" href="#__codelineno-3-48"></a>        I6[&quot;Commit · conf ≥ IDENTITY_COMMIT_THRESHOLD (0.85)&lt;br/&gt;∧ hits ≥ IDENTITY_COMMIT_MIN_HITS (5)&quot;]:::ident
+</span><span id="__span-3-42"><a id="__codelineno-3-42" name="__codelineno-3-42" href="#__codelineno-3-42"></a>    subgraph ID[" ⑥ OnlineIdentityDecoder · per slot "]
+</span><span id="__span-3-43"><a id="__codelineno-3-43" name="__codelineno-3-43" href="#__codelineno-3-43"></a>        I1["Predict · sticky Markov&lt;br/&gt;diag = 1−ε  off-diag = ε / (C−1)&lt;br/&gt;ε ≈ IDENTITY_TRANSITION_EPSILON (0.02)"]:::ident
+</span><span id="__span-3-44"><a id="__codelineno-3-44" name="__codelineno-3-44" href="#__codelineno-3-44"></a>        I2["Fuse · log-add CNN + AprilTag evidences · renormalize"]:::ident
+</span><span id="__span-3-45"><a id="__codelineno-3-45" name="__codelineno-3-45" href="#__codelineno-3-45"></a>        I3["Swap detector · pairwise mutual-mismatch&lt;br/&gt;counter ≥ IDENTITY_SWAP_MIN_FRAMES (8)&lt;br/&gt;margin ≥ IDENTITY_SWAP_CONF_MARGIN (0.2)"]:::ident
+</span><span id="__span-3-46"><a id="__codelineno-3-46" name="__codelineno-3-46" href="#__codelineno-3-46"></a>        I4["Soft slot-lock · stable_count ≥ IDENTITY_SLOT_LOCK_MIN_FRAMES (30)&lt;br/&gt;biases posterior toward locked label"]:::ident
+</span><span id="__span-3-47"><a id="__codelineno-3-47" name="__codelineno-3-47" href="#__codelineno-3-47"></a>        I5["Uniqueness Hungarian&lt;br/&gt;N×(K identities + N dummy 'unassigned')"]:::ident
+</span><span id="__span-3-48"><a id="__codelineno-3-48" name="__codelineno-3-48" href="#__codelineno-3-48"></a>        I6["Commit · conf ≥ IDENTITY_COMMIT_THRESHOLD (0.85)&lt;br/&gt;∧ hits ≥ IDENTITY_COMMIT_MIN_HITS (5)"]:::ident
 </span><span id="__span-3-49"><a id="__codelineno-3-49" name="__codelineno-3-49" href="#__codelineno-3-49"></a>    end
 </span><span id="__span-3-50"><a id="__codelineno-3-50" name="__codelineno-3-50" href="#__codelineno-3-50"></a>
-</span><span id="__span-3-51"><a id="__codelineno-3-51" name="__codelineno-3-51" href="#__codelineno-3-51"></a>    U1[&quot;⑦ Kalman correct&lt;br/&gt;z = (x, y, θ); Joseph-form update&quot;]:::kf
+</span><span id="__span-3-51"><a id="__codelineno-3-51" name="__codelineno-3-51" href="#__codelineno-3-51"></a>    U1["⑦ Kalman correct&lt;br/&gt;z = (x, y, θ); Joseph-form update"]:::kf
 </span><span id="__span-3-52"><a id="__codelineno-3-52" name="__codelineno-3-52" href="#__codelineno-3-52"></a>    Em([⑧ Emit per-track row · state · pos · heading · identity · pose]):::io
 </span><span id="__span-3-53"><a id="__codelineno-3-53" name="__codelineno-3-53" href="#__codelineno-3-53"></a>
 </span><span id="__span-3-54"><a id="__codelineno-3-54" name="__codelineno-3-54" href="#__codelineno-3-54"></a>    Frame --&gt; K1 --&gt; K2 --&gt; K3 --&gt; Det
@@ -2146,7 +2272,7 @@ cost matrix, closing a frame-to-frame feedback loop.</p>
 </span><span id="__span-3-59"><a id="__codelineno-3-59" name="__codelineno-3-59" href="#__codelineno-3-59"></a>    I6 --&gt; U1 --&gt; Em
 </span><span id="__span-3-60"><a id="__codelineno-3-60" name="__codelineno-3-60" href="#__codelineno-3-60"></a>
 </span><span id="__span-3-61"><a id="__codelineno-3-61" name="__codelineno-3-61" href="#__codelineno-3-61"></a>    %% Frame-to-frame feedback
-</span><span id="__span-3-62"><a id="__codelineno-3-62" name="__codelineno-3-62" href="#__codelineno-3-62"></a>    I6 -. &quot;posterior at t · used as prior at t+1&quot; .-&gt; C4
+</span><span id="__span-3-62"><a id="__codelineno-3-62" name="__codelineno-3-62" href="#__codelineno-3-62"></a>    I6 -. "posterior at t · used as prior at t+1" .-&gt; C4
 </span></code></pre></div>
 <p><strong>Key code references</strong></p>
 <ul>
@@ -2156,7 +2282,7 @@ cost matrix, closing a frame-to-frame feedback loop.</p>
 <li>Cost matrix construction: <code>core/assigners/hungarian.py:71-103, 223-271, 285-348</code>.</li>
 <li>Density gate (0.7×): <code>worker.py:3165-3187</code>.</li>
 <li>3-phase <code>assign_tracks</code>: <code>hungarian.py:901-1018</code>; committed-identity respawn at <code>794-862</code>.</li>
-<li>Identity decoder: <code>core/identity/online.py:148+</code> (sticky transition <code>203-208</code>, fuse <code>333-351</code>, swap <code>667-729</code>, slot-lock <code>653-659</code>, uniqueness Hungarian <code>515-551</code>, commit <code>590-597</code>).</li>
+<li>Identity decoder: <code>core/individual/identity/online.py:148+</code> (sticky transition <code>203-208</code>, fuse <code>333-351</code>, swap <code>667-729</code>, slot-lock <code>653-659</code>, uniqueness Hungarian <code>515-551</code>, commit <code>590-597</code>).</li>
 <li>State management: <code>worker.py:3288-3295</code>.</li>
 <li>Identity decoder invocation: <code>worker.py:3301-3529</code> (<code>update_frame(visible_slots, slot_evs)</code>).</li>
 <li>Track birth (hard reset): <code>worker.py:3561-3582</code>; identity-aware respawn (soft reset): <code>worker.py:3583-3596</code>.</li>
@@ -2198,65 +2324,65 @@ already written.</p>
 </span><span id="__span-4-9"><a id="__codelineno-4-9" name="__codelineno-4-9" href="#__codelineno-4-9"></a>
 </span><span id="__span-4-10"><a id="__codelineno-4-10" name="__codelineno-4-10" href="#__codelineno-4-10"></a>    Vid([Video]):::io
 </span><span id="__span-4-11"><a id="__codelineno-4-11" name="__codelineno-4-11" href="#__codelineno-4-11"></a>
-</span><span id="__span-4-12"><a id="__codelineno-4-12" name="__codelineno-4-12" href="#__codelineno-4-12"></a>    DC[(&quot;Detection cache · .npz\nOBB · heading · canonical affines&quot;)]:::cache
-</span><span id="__span-4-13"><a id="__codelineno-4-13" name="__codelineno-4-13" href="#__codelineno-4-13"></a>    EC[(&quot;Evidence cache · .npz\nper-source log-priors\n+ catalog · calibration sig&quot;)]:::cache
+</span><span id="__span-4-12"><a id="__codelineno-4-12" name="__codelineno-4-12" href="#__codelineno-4-12"></a>    DC[("Detection cache · .npz\nOBB · heading · canonical affines")]:::cache
+</span><span id="__span-4-13"><a id="__codelineno-4-13" name="__codelineno-4-13" href="#__codelineno-4-13"></a>    EC[("Evidence cache · .npz\nper-source log-priors\n+ catalog · calibration sig")]:::cache
 </span><span id="__span-4-14"><a id="__codelineno-4-14" name="__codelineno-4-14" href="#__codelineno-4-14"></a>
-</span><span id="__span-4-15"><a id="__codelineno-4-15" name="__codelineno-4-15" href="#__codelineno-4-15"></a>    subgraph FwdP[&quot; ① Forward pass · t = 0 → N &quot;]
+</span><span id="__span-4-15"><a id="__codelineno-4-15" name="__codelineno-4-15" href="#__codelineno-4-15"></a>    subgraph FwdP[" ① Forward pass · t = 0 → N "]
 </span><span id="__span-4-16"><a id="__codelineno-4-16" name="__codelineno-4-16" href="#__codelineno-4-16"></a>        F1[Online tracker\nKalman + Hungarian]:::fwd
-</span><span id="__span-4-17"><a id="__codelineno-4-17" name="__codelineno-4-17" href="#__codelineno-4-17"></a>        F2[&quot;Raw forward CSV\n_forward.csv&quot;]:::fwd
+</span><span id="__span-4-17"><a id="__codelineno-4-17" name="__codelineno-4-17" href="#__codelineno-4-17"></a>        F2["Raw forward CSV\n_forward.csv"]:::fwd
 </span><span id="__span-4-18"><a id="__codelineno-4-18" name="__codelineno-4-18" href="#__codelineno-4-18"></a>        F1 --&gt; F2
 </span><span id="__span-4-19"><a id="__codelineno-4-19" name="__codelineno-4-19" href="#__codelineno-4-19"></a>    end
 </span><span id="__span-4-20"><a id="__codelineno-4-20" name="__codelineno-4-20" href="#__codelineno-4-20"></a>
-</span><span id="__span-4-21"><a id="__codelineno-4-21" name="__codelineno-4-21" href="#__codelineno-4-21"></a>    subgraph PPF[&quot; ② PostProcessWorker · forward &quot;]
-</span><span id="__span-4-22"><a id="__codelineno-4-22" name="__codelineno-4-22" href="#__codelineno-4-22"></a>        PF1[&quot;process_trajectories_from_csv\nbreak short tracks · velocity breaks\nocclusion-gap splits&quot;]:::pp
-</span><span id="__span-4-23"><a id="__codelineno-4-23" name="__codelineno-4-23" href="#__codelineno-4-23"></a>        PF2[&quot;_forward_processed.csv&quot;]:::pp
+</span><span id="__span-4-21"><a id="__codelineno-4-21" name="__codelineno-4-21" href="#__codelineno-4-21"></a>    subgraph PPF[" ② PostProcessWorker · forward "]
+</span><span id="__span-4-22"><a id="__codelineno-4-22" name="__codelineno-4-22" href="#__codelineno-4-22"></a>        PF1["process_trajectories_from_csv\nbreak short tracks · velocity breaks\nocclusion-gap splits"]:::pp
+</span><span id="__span-4-23"><a id="__codelineno-4-23" name="__codelineno-4-23" href="#__codelineno-4-23"></a>        PF2["_forward_processed.csv"]:::pp
 </span><span id="__span-4-24"><a id="__codelineno-4-24" name="__codelineno-4-24" href="#__codelineno-4-24"></a>        PF1 --&gt; PF2
 </span><span id="__span-4-25"><a id="__codelineno-4-25" name="__codelineno-4-25" href="#__codelineno-4-25"></a>    end
 </span><span id="__span-4-26"><a id="__codelineno-4-26" name="__codelineno-4-26" href="#__codelineno-4-26"></a>
-</span><span id="__span-4-27"><a id="__codelineno-4-27" name="__codelineno-4-27" href="#__codelineno-4-27"></a>    subgraph BwdP[&quot; ③ Backward pass · t = N → 0  (optional) &quot;]
-</span><span id="__span-4-28"><a id="__codelineno-4-28" name="__codelineno-4-28" href="#__codelineno-4-28"></a>        B1[&quot;Online tracker · reversed time\nreads detection + evidence caches&quot;]:::bwd
-</span><span id="__span-4-29"><a id="__codelineno-4-29" name="__codelineno-4-29" href="#__codelineno-4-29"></a>        B2[&quot;Raw backward CSV\n_backward.csv&quot;]:::bwd
+</span><span id="__span-4-27"><a id="__codelineno-4-27" name="__codelineno-4-27" href="#__codelineno-4-27"></a>    subgraph BwdP[" ③ Backward pass · t = N → 0  (optional) "]
+</span><span id="__span-4-28"><a id="__codelineno-4-28" name="__codelineno-4-28" href="#__codelineno-4-28"></a>        B1["Online tracker · reversed time\nreads detection + evidence caches"]:::bwd
+</span><span id="__span-4-29"><a id="__codelineno-4-29" name="__codelineno-4-29" href="#__codelineno-4-29"></a>        B2["Raw backward CSV\n_backward.csv"]:::bwd
 </span><span id="__span-4-30"><a id="__codelineno-4-30" name="__codelineno-4-30" href="#__codelineno-4-30"></a>        B1 --&gt; B2
 </span><span id="__span-4-31"><a id="__codelineno-4-31" name="__codelineno-4-31" href="#__codelineno-4-31"></a>    end
 </span><span id="__span-4-32"><a id="__codelineno-4-32" name="__codelineno-4-32" href="#__codelineno-4-32"></a>
-</span><span id="__span-4-33"><a id="__codelineno-4-33" name="__codelineno-4-33" href="#__codelineno-4-33"></a>    subgraph PPB[&quot; ④ PostProcessWorker · backward &quot;]
-</span><span id="__span-4-34"><a id="__codelineno-4-34" name="__codelineno-4-34" href="#__codelineno-4-34"></a>        PB1[&quot;process_trajectories_from_csv\nsame per-direction cleanup&quot;]:::pp
-</span><span id="__span-4-35"><a id="__codelineno-4-35" name="__codelineno-4-35" href="#__codelineno-4-35"></a>        PB2[&quot;_backward_processed.csv&quot;]:::pp
+</span><span id="__span-4-33"><a id="__codelineno-4-33" name="__codelineno-4-33" href="#__codelineno-4-33"></a>    subgraph PPB[" ④ PostProcessWorker · backward "]
+</span><span id="__span-4-34"><a id="__codelineno-4-34" name="__codelineno-4-34" href="#__codelineno-4-34"></a>        PB1["process_trajectories_from_csv\nsame per-direction cleanup"]:::pp
+</span><span id="__span-4-35"><a id="__codelineno-4-35" name="__codelineno-4-35" href="#__codelineno-4-35"></a>        PB2["_backward_processed.csv"]:::pp
 </span><span id="__span-4-36"><a id="__codelineno-4-36" name="__codelineno-4-36" href="#__codelineno-4-36"></a>        PB1 --&gt; PB2
 </span><span id="__span-4-37"><a id="__codelineno-4-37" name="__codelineno-4-37" href="#__codelineno-4-37"></a>    end
 </span><span id="__span-4-38"><a id="__codelineno-4-38" name="__codelineno-4-38" href="#__codelineno-4-38"></a>
-</span><span id="__span-4-39"><a id="__codelineno-4-39" name="__codelineno-4-39" href="#__codelineno-4-39"></a>    subgraph MW[&quot; ⑤ MergeWorker.execute  (only if backward enabled) &quot;]
+</span><span id="__span-4-39"><a id="__codelineno-4-39" name="__codelineno-4-39" href="#__codelineno-4-39"></a>    subgraph MW[" ⑤ MergeWorker.execute  (only if backward enabled) "]
 </span><span id="__span-4-40"><a id="__codelineno-4-40" name="__codelineno-4-40" href="#__codelineno-4-40"></a>        direction TB
-</span><span id="__span-4-41"><a id="__codelineno-4-41" name="__codelineno-4-41" href="#__codelineno-4-41"></a>        subgraph RT[&quot; resolve_trajectories  (conservative consensus) &quot;]
+</span><span id="__span-4-41"><a id="__codelineno-4-41" name="__codelineno-4-41" href="#__codelineno-4-41"></a>        subgraph RT[" resolve_trajectories  (conservative consensus) "]
 </span><span id="__span-4-42"><a id="__codelineno-4-42" name="__codelineno-4-42" href="#__codelineno-4-42"></a>            direction TB
-</span><span id="__span-4-43"><a id="__codelineno-4-43" name="__codelineno-4-43" href="#__codelineno-4-43"></a>            R1[&quot;Find merge candidates\ndistance ≤ AGREEMENT_DISTANCE 15px\noverlap ≥ MIN_OVERLAP_FRAMES 5&quot;]:::merge
-</span><span id="__span-4-44"><a id="__codelineno-4-44" name="__codelineno-4-44" href="#__codelineno-4-44"></a>            R2[&quot;Apply candidates · conservative\naverage where agree · split where disagree\nidentity-disagree split run ≥ 5&quot;]:::merge
-</span><span id="__span-4-45"><a id="__codelineno-4-45" name="__codelineno-4-45" href="#__codelineno-4-45"></a>            R3[&quot;Spatial dedup #1\ndrop trajectories &amp;gt; 70% contained in another&quot;]:::merge
+</span><span id="__span-4-43"><a id="__codelineno-4-43" name="__codelineno-4-43" href="#__codelineno-4-43"></a>            R1["Find merge candidates\ndistance ≤ AGREEMENT_DISTANCE 15px\noverlap ≥ MIN_OVERLAP_FRAMES 5"]:::merge
+</span><span id="__span-4-44"><a id="__codelineno-4-44" name="__codelineno-4-44" href="#__codelineno-4-44"></a>            R2["Apply candidates · conservative\naverage where agree · split where disagree\nidentity-disagree split run ≥ 5"]:::merge
+</span><span id="__span-4-45"><a id="__codelineno-4-45" name="__codelineno-4-45" href="#__codelineno-4-45"></a>            R3["Spatial dedup #1\ndrop trajectories &amp;gt; 70% contained in another"]:::merge
 </span><span id="__span-4-46"><a id="__codelineno-4-46" name="__codelineno-4-46" href="#__codelineno-4-46"></a>            R4[Merge overlapping agreeing fragments]:::merge
-</span><span id="__span-4-47"><a id="__codelineno-4-47" name="__codelineno-4-47" href="#__codelineno-4-47"></a>            R5[&quot;Stitch broken fragments\ngap ≤ STITCH_MAX_GAP_FRAMES 3\ndistance ≤ 2× AGREEMENT_DISTANCE&quot;]:::merge
-</span><span id="__span-4-48"><a id="__codelineno-4-48" name="__codelineno-4-48" href="#__codelineno-4-48"></a>            R6[&quot;Spatial dedup #2  (post-stitch)&quot;]:::merge
-</span><span id="__span-4-49"><a id="__codelineno-4-49" name="__codelineno-4-49" href="#__codelineno-4-49"></a>            R7[&quot;resolve_simultaneous_identity_conflicts\nclaim score = 1.5·tag_votes +\nagreement·confidence·length&quot;]:::merge
+</span><span id="__span-4-47"><a id="__codelineno-4-47" name="__codelineno-4-47" href="#__codelineno-4-47"></a>            R5["Stitch broken fragments\ngap ≤ STITCH_MAX_GAP_FRAMES 3\ndistance ≤ 2× AGREEMENT_DISTANCE"]:::merge
+</span><span id="__span-4-48"><a id="__codelineno-4-48" name="__codelineno-4-48" href="#__codelineno-4-48"></a>            R6["Spatial dedup #2  (post-stitch)"]:::merge
+</span><span id="__span-4-49"><a id="__codelineno-4-49" name="__codelineno-4-49" href="#__codelineno-4-49"></a>            R7["resolve_simultaneous_identity_conflicts\nclaim score = 1.5·tag_votes +\nagreement·confidence·length"]:::merge
 </span><span id="__span-4-50"><a id="__codelineno-4-50" name="__codelineno-4-50" href="#__codelineno-4-50"></a>            R8[Reassign trajectory IDs]:::merge
 </span><span id="__span-4-51"><a id="__codelineno-4-51" name="__codelineno-4-51" href="#__codelineno-4-51"></a>            R1 --&gt; R2 --&gt; R3 --&gt; R4 --&gt; R5 --&gt; R6 --&gt; R7 --&gt; R8
 </span><span id="__span-4-52"><a id="__codelineno-4-52" name="__codelineno-4-52" href="#__codelineno-4-52"></a>        end
-</span><span id="__span-4-53"><a id="__codelineno-4-53" name="__codelineno-4-53" href="#__codelineno-4-53"></a>        I1[&quot;interpolate_trajectories\nfill gaps ≤ max_gap · sin/cos heading\nflip-burst correction&quot;]:::merge
-</span><span id="__span-4-54"><a id="__codelineno-4-54" name="__codelineno-4-54" href="#__codelineno-4-54"></a>        I2[&quot;_resolve_tag_identities\nper-frame nearest tag ≤ TAG_ASSOCIATION_RADIUS 50px\nmajority vote · detect_tag_swaps&quot;]:::merge
-</span><span id="__span-4-55"><a id="__codelineno-4-55" name="__codelineno-4-55" href="#__codelineno-4-55"></a>        I3[&quot;_rescale_coordinates\nX, Y, Width, Height ÷ resize_factor&quot;]:::merge
+</span><span id="__span-4-53"><a id="__codelineno-4-53" name="__codelineno-4-53" href="#__codelineno-4-53"></a>        I1["interpolate_trajectories\nfill gaps ≤ max_gap · sin/cos heading\nflip-burst correction"]:::merge
+</span><span id="__span-4-54"><a id="__codelineno-4-54" name="__codelineno-4-54" href="#__codelineno-4-54"></a>        I2["_resolve_tag_identities\nper-frame nearest tag ≤ TAG_ASSOCIATION_RADIUS 50px\nmajority vote · detect_tag_swaps"]:::merge
+</span><span id="__span-4-55"><a id="__codelineno-4-55" name="__codelineno-4-55" href="#__codelineno-4-55"></a>        I3["_rescale_coordinates\nX, Y, Width, Height ÷ resize_factor"]:::merge
 </span><span id="__span-4-56"><a id="__codelineno-4-56" name="__codelineno-4-56" href="#__codelineno-4-56"></a>        R8 --&gt; I1 --&gt; I2 --&gt; I3
 </span><span id="__span-4-57"><a id="__codelineno-4-57" name="__codelineno-4-57" href="#__codelineno-4-57"></a>    end
 </span><span id="__span-4-58"><a id="__codelineno-4-58" name="__codelineno-4-58" href="#__codelineno-4-58"></a>
-</span><span id="__span-4-59"><a id="__codelineno-4-59" name="__codelineno-4-59" href="#__codelineno-4-59"></a>    MergedCSV[(&quot;Merged final CSV\n_final.csv&quot;)]:::cache
+</span><span id="__span-4-59"><a id="__codelineno-4-59" name="__codelineno-4-59" href="#__codelineno-4-59"></a>    MergedCSV[("Merged final CSV\n_final.csv")]:::cache
 </span><span id="__span-4-60"><a id="__codelineno-4-60" name="__codelineno-4-60" href="#__codelineno-4-60"></a>
-</span><span id="__span-4-61"><a id="__codelineno-4-61" name="__codelineno-4-61" href="#__codelineno-4-61"></a>    subgraph RX[&quot; ⑥ Rich-export build  (_build_rich_export_dataframe) &quot;]
+</span><span id="__span-4-61"><a id="__codelineno-4-61" name="__codelineno-4-61" href="#__codelineno-4-61"></a>    subgraph RX[" ⑥ Rich-export build  (_build_rich_export_dataframe) "]
 </span><span id="__span-4-62"><a id="__codelineno-4-62" name="__codelineno-4-62" href="#__codelineno-4-62"></a>        direction TB
 </span><span id="__span-4-63"><a id="__codelineno-4-63" name="__codelineno-4-63" href="#__codelineno-4-63"></a>        X1[Join with pose / CNN / tag caches]:::rich
-</span><span id="__span-4-64"><a id="__codelineno-4-64" name="__codelineno-4-64" href="#__codelineno-4-64"></a>        X2[&quot;run_fragment_solver  (gated on ENABLE_IDENTITY_FRAGMENT_SOLVER)\nPELT changepoint detection on per-trajectory CNN probs\niterative greedy assignment CNN 0.40 + tag 0.15 + prior 0.25\n+ log-length factor · spatial-velocity veto\nunknown-rescue pass&quot;]:::rich
-</span><span id="__span-4-65"><a id="__codelineno-4-65" name="__codelineno-4-65" href="#__codelineno-4-65"></a>        X3[&quot;fill_identity_nans_with_consensus\nper-trajectory mode&quot;]:::rich
-</span><span id="__span-4-66"><a id="__codelineno-4-66" name="__codelineno-4-66" href="#__codelineno-4-66"></a>        X4[&quot;sort_trajectories_by_identity\nrenumber TrajectoryID&quot;]:::rich
+</span><span id="__span-4-64"><a id="__codelineno-4-64" name="__codelineno-4-64" href="#__codelineno-4-64"></a>        X2["run_fragment_solver  (gated on ENABLE_IDENTITY_FRAGMENT_SOLVER)\nPELT changepoint detection on per-trajectory CNN probs\niterative greedy assignment CNN 0.40 + tag 0.15 + prior 0.25\n+ log-length factor · spatial-velocity veto\nunknown-rescue pass"]:::rich
+</span><span id="__span-4-65"><a id="__codelineno-4-65" name="__codelineno-4-65" href="#__codelineno-4-65"></a>        X3["fill_identity_nans_with_consensus\nper-trajectory mode"]:::rich
+</span><span id="__span-4-66"><a id="__codelineno-4-66" name="__codelineno-4-66" href="#__codelineno-4-66"></a>        X4["sort_trajectories_by_identity\nrenumber TrajectoryID"]:::rich
 </span><span id="__span-4-67"><a id="__codelineno-4-67" name="__codelineno-4-67" href="#__codelineno-4-67"></a>        X1 --&gt; X2 --&gt; X3 --&gt; X4
 </span><span id="__span-4-68"><a id="__codelineno-4-68" name="__codelineno-4-68" href="#__codelineno-4-68"></a>    end
 </span><span id="__span-4-69"><a id="__codelineno-4-69" name="__codelineno-4-69" href="#__codelineno-4-69"></a>
-</span><span id="__span-4-70"><a id="__codelineno-4-70" name="__codelineno-4-70" href="#__codelineno-4-70"></a>    Out([&quot;Final outputs\n_final.csv · _with_individual.csv&quot;]):::io
+</span><span id="__span-4-70"><a id="__codelineno-4-70" name="__codelineno-4-70" href="#__codelineno-4-70"></a>    Out(["Final outputs\n_final.csv · _with_individual.csv"]):::io
 </span><span id="__span-4-71"><a id="__codelineno-4-71" name="__codelineno-4-71" href="#__codelineno-4-71"></a>
 </span><span id="__span-4-72"><a id="__codelineno-4-72" name="__codelineno-4-72" href="#__codelineno-4-72"></a>    Vid --&gt; F1
 </span><span id="__span-4-73"><a id="__codelineno-4-73" name="__codelineno-4-73" href="#__codelineno-4-73"></a>    F1 -. write .-&gt; DC
@@ -2270,7 +2396,7 @@ already written.</p>
 </span><span id="__span-4-81"><a id="__codelineno-4-81" name="__codelineno-4-81" href="#__codelineno-4-81"></a>    I3 --&gt; MergedCSV
 </span><span id="__span-4-82"><a id="__codelineno-4-82" name="__codelineno-4-82" href="#__codelineno-4-82"></a>    MergedCSV --&gt; X1
 </span><span id="__span-4-83"><a id="__codelineno-4-83" name="__codelineno-4-83" href="#__codelineno-4-83"></a>    X4 --&gt; Out
-</span><span id="__span-4-84"><a id="__codelineno-4-84" name="__codelineno-4-84" href="#__codelineno-4-84"></a>    PF2 -. &quot;if backward disabled&quot; .-&gt; MergedCSV
+</span><span id="__span-4-84"><a id="__codelineno-4-84" name="__codelineno-4-84" href="#__codelineno-4-84"></a>    PF2 -. "if backward disabled" .-&gt; MergedCSV
 </span></code></pre></div>
 <p><strong>Notes for newcomers</strong></p>
 <ul>
@@ -2309,7 +2435,7 @@ already written.</p>
 <li>Tag identity: <code>core/post/tag_identity.py:resolve_tag_identities,
   detect_tag_swaps</code> (called at <code>merge_worker.py:104-110</code>).</li>
 <li>Rich-export + fragment solver: <code>gui/orchestrators/tracking.py:3111-3175</code>
-  → <code>core/identity/fragment_solver.py:run_fragment_solver</code> (line 1335);
+  → <code>core/individual/identity/offline.py:run_fragment_solver</code> (line 1335);
   <code>core/post/identity_postprocess.py:fill_identity_nans_with_consensus,
   sort_trajectories_by_identity</code>.</li>
 <li>Forward-only short-circuit: <code>tracking.py:2344-2425</code> (<code>_handle_forward_tracking_done</code>).</li>
@@ -2331,50 +2457,46 @@ build). Section 5 is the map; this is the deep-dive.</p>
 </span><span id="__span-5-5"><a id="__codelineno-5-5" name="__codelineno-5-5" href="#__codelineno-5-5"></a>    classDef ident fill:#e8f5e9,stroke:#2e7d32,stroke-width:2px,color:#1b5e20
 </span><span id="__span-5-6"><a id="__codelineno-5-6" name="__codelineno-5-6" href="#__codelineno-5-6"></a>    classDef ctx   fill:#fff8e1,stroke:#a1887f,stroke-width:1px,stroke-dasharray:3 3,color:#5d4037
 </span><span id="__span-5-7"><a id="__codelineno-5-7" name="__codelineno-5-7" href="#__codelineno-5-7"></a>
-</span><span id="__span-5-8"><a id="__codelineno-5-8" name="__codelineno-5-8" href="#__codelineno-5-8"></a>    subgraph PT[&quot; Primitive 1 · process_trajectories_from_csv  (per direction · BEFORE merge) &quot;]
+</span><span id="__span-5-8"><a id="__codelineno-5-8" name="__codelineno-5-8" href="#__codelineno-5-8"></a>    subgraph PT[" Primitive 1 · process_trajectories_from_csv  (per direction · BEFORE merge) "]
 </span><span id="__span-5-9"><a id="__codelineno-5-9" name="__codelineno-5-9" href="#__codelineno-5-9"></a>        direction TB
-</span><span id="__span-5-10"><a id="__codelineno-5-10" name="__codelineno-5-10" href="#__codelineno-5-10"></a>        CTX_PT[&quot;Called from: PostProcessWorker.execute  (workers/postprocess_worker.py)&quot;]:::ctx
-</span><span id="__span-5-11"><a id="__codelineno-5-11" name="__codelineno-5-11" href="#__codelineno-5-11"></a>        P0[&quot;NaN X / Y / Theta on rows where&lt;br/&gt;State ∈ {occluded, lost}&quot;]:::brk
-</span><span id="__span-5-12"><a id="__codelineno-5-12" name="__codelineno-5-12" href="#__codelineno-5-12"></a>        P1[&quot;Drop trajectories shorter than&lt;br/&gt;MIN_TRAJECTORY_LENGTH (default 10)&quot;]:::brk
-</span><span id="__span-5-13"><a id="__codelineno-5-13" name="__codelineno-5-13" href="#__codelineno-5-13"></a>        P2[&quot;Velocity break · split where Δposition exceeds&lt;br/&gt;MAX_VELOCITY_BREAK (default 100 px/frame)&lt;br/&gt;+ optional rolling z-score (MAX_VELOCITY_ZSCORE &gt; 0)&lt;br/&gt;over VELOCITY_ZSCORE_WINDOW (default 10)&quot;]:::brk
-</span><span id="__span-5-14"><a id="__codelineno-5-14" name="__codelineno-5-14" href="#__codelineno-5-14"></a>        P3[&quot;Occlusion-gap split · split where occlusion run&lt;br/&gt;exceeds MAX_OCCLUSION_GAP (default 30 frames)&quot;]:::brk
-</span><span id="__span-5-15"><a id="__codelineno-5-15" name="__codelineno-5-15" href="#__codelineno-5-15"></a>        P4[&quot;Spatial-jump split · split across NaN gaps&lt;br/&gt;where reappearance distance exceeds MAX_VELOCITY_BREAK&quot;]:::brk
-</span><span id="__span-5-16"><a id="__codelineno-5-16" name="__codelineno-5-16" href="#__codelineno-5-16"></a>        P5[&quot;Reassign trajectory IDs over the new segments&quot;]:::brk
+</span><span id="__span-5-10"><a id="__codelineno-5-10" name="__codelineno-5-10" href="#__codelineno-5-10"></a>        CTX_PT["Called from: PostProcessWorker.execute  (workers/postprocess_worker.py)"]:::ctx
+</span><span id="__span-5-11"><a id="__codelineno-5-11" name="__codelineno-5-11" href="#__codelineno-5-11"></a>        P0["NaN X / Y / Theta on rows where&lt;br/&gt;State ∈ {occluded, lost}"]:::brk
+</span><span id="__span-5-12"><a id="__codelineno-5-12" name="__codelineno-5-12" href="#__codelineno-5-12"></a>        P1["Drop trajectories shorter than&lt;br/&gt;MIN_TRAJECTORY_LENGTH (default 10)"]:::brk
+</span><span id="__span-5-13"><a id="__codelineno-5-13" name="__codelineno-5-13" href="#__codelineno-5-13"></a>        P2["Velocity break · split where Δposition exceeds&lt;br/&gt;MAX_VELOCITY_BREAK (default 100 px/frame)&lt;br/&gt;+ optional rolling z-score (MAX_VELOCITY_ZSCORE &gt; 0)&lt;br/&gt;over VELOCITY_ZSCORE_WINDOW (default 10)"]:::brk
+</span><span id="__span-5-14"><a id="__codelineno-5-14" name="__codelineno-5-14" href="#__codelineno-5-14"></a>        P3["Occlusion-gap split · split where occlusion run&lt;br/&gt;exceeds MAX_OCCLUSION_GAP (default 30 frames)"]:::brk
+</span><span id="__span-5-15"><a id="__codelineno-5-15" name="__codelineno-5-15" href="#__codelineno-5-15"></a>        P4["Spatial-jump split · split across NaN gaps&lt;br/&gt;where reappearance distance exceeds MAX_VELOCITY_BREAK"]:::brk
+</span><span id="__span-5-16"><a id="__codelineno-5-16" name="__codelineno-5-16" href="#__codelineno-5-16"></a>        P5["Reassign trajectory IDs over the new segments"]:::brk
 </span><span id="__span-5-17"><a id="__codelineno-5-17" name="__codelineno-5-17" href="#__codelineno-5-17"></a>        CTX_PT --&gt; P0 --&gt; P1 --&gt; P2 --&gt; P3 --&gt; P4 --&gt; P5
 </span><span id="__span-5-18"><a id="__codelineno-5-18" name="__codelineno-5-18" href="#__codelineno-5-18"></a>    end
 </span><span id="__span-5-19"><a id="__codelineno-5-19" name="__codelineno-5-19" href="#__codelineno-5-19"></a>
-</span><span id="__span-5-20"><a id="__codelineno-5-20" name="__codelineno-5-20" href="#__codelineno-5-20"></a>    subgraph IT[&quot; Primitive 2 · interpolate_trajectories  (inside MergeWorker · or forward-only path) &quot;]
+</span><span id="__span-5-20"><a id="__codelineno-5-20" name="__codelineno-5-20" href="#__codelineno-5-20"></a>    subgraph IT[" Primitive 2 · interpolate_trajectories  (inside MergeWorker · or forward-only path) "]
 </span><span id="__span-5-21"><a id="__codelineno-5-21" name="__codelineno-5-21" href="#__codelineno-5-21"></a>        direction TB
-</span><span id="__span-5-22"><a id="__codelineno-5-22" name="__codelineno-5-22" href="#__codelineno-5-22"></a>        CTX_IT[&quot;Called from: MergeWorker.execute (line 185)&lt;br/&gt;or _handle_forward_tracking_done (line 2399, forward-only)&quot;]:::ctx
-</span><span id="__span-5-23"><a id="__codelineno-5-23" name="__codelineno-5-23" href="#__codelineno-5-23"></a>        I0[&quot;Fill X / Y gaps up to max_gap (default 10 frames)&lt;br/&gt;method ∈ {none, linear, cubic, spline}&quot;]:::inter
-</span><span id="__span-5-24"><a id="__codelineno-5-24" name="__codelineno-5-24" href="#__codelineno-5-24"></a>        I1[&quot;Heading via sin/cos decomposition&lt;br/&gt;fill (sin θ, cos θ) separately, then atan2&lt;br/&gt;(avoids the ±π wrap discontinuity)&quot;]:::inter
-</span><span id="__span-5-25"><a id="__codelineno-5-25" name="__codelineno-5-25" href="#__codelineno-5-25"></a>        I2[&quot;Heading-flip correction · two modes:&lt;br/&gt;• local burst ≤ heading_flip_max_burst (default 5) — drop short flips&lt;br/&gt;• global DP (directed_heading_posthoc=True) — full path consistency&quot;]:::inter
+</span><span id="__span-5-22"><a id="__codelineno-5-22" name="__codelineno-5-22" href="#__codelineno-5-22"></a>        CTX_IT["Called from: MergeWorker.execute (line 185)&lt;br/&gt;or _handle_forward_tracking_done (line 2399, forward-only)"]:::ctx
+</span><span id="__span-5-23"><a id="__codelineno-5-23" name="__codelineno-5-23" href="#__codelineno-5-23"></a>        I0["Fill X / Y gaps up to max_gap (default 10 frames)&lt;br/&gt;method ∈ {none, linear, cubic, spline}"]:::inter
+</span><span id="__span-5-24"><a id="__codelineno-5-24" name="__codelineno-5-24" href="#__codelineno-5-24"></a>        I1["Heading via sin/cos decomposition&lt;br/&gt;fill (sin θ, cos θ) separately, then atan2&lt;br/&gt;(avoids the ±π wrap discontinuity)"]:::inter
+</span><span id="__span-5-25"><a id="__codelineno-5-25" name="__codelineno-5-25" href="#__codelineno-5-25"></a>        I2["Heading-flip correction · two modes:&lt;br/&gt;• local burst ≤ heading_flip_max_burst (default 5) — drop short flips&lt;br/&gt;• global DP (directed_heading_posthoc=True) — full path consistency"]:::inter
 </span><span id="__span-5-26"><a id="__codelineno-5-26" name="__codelineno-5-26" href="#__codelineno-5-26"></a>        CTX_IT --&gt; I0 --&gt; I1 --&gt; I2
 </span><span id="__span-5-27"><a id="__codelineno-5-27" name="__codelineno-5-27" href="#__codelineno-5-27"></a>    end
 </span><span id="__span-5-28"><a id="__codelineno-5-28" name="__codelineno-5-28" href="#__codelineno-5-28"></a>
-</span><span id="__span-5-29"><a id="__codelineno-5-29" name="__codelineno-5-29" href="#__codelineno-5-29"></a>    subgraph TG[&quot; Primitive 3 · resolve_tag_identities + detect_tag_swaps  (inside MergeWorker only) &quot;]
+</span><span id="__span-5-29"><a id="__codelineno-5-29" name="__codelineno-5-29" href="#__codelineno-5-29"></a>    subgraph TG[" Primitive 3 · resolve_tag_identities + detect_tag_swaps  (inside MergeWorker only) "]
 </span><span id="__span-5-30"><a id="__codelineno-5-30" name="__codelineno-5-30" href="#__codelineno-5-30"></a>        direction TB
-</span><span id="__span-5-31"><a id="__codelineno-5-31" name="__codelineno-5-31" href="#__codelineno-5-31"></a>        CTX_TG[&quot;Called from: MergeWorker._resolve_tag_identities (lines 88-116)&lt;br/&gt;(skipped on forward-only runs and when no tag cache exists)&quot;]:::ctx
-</span><span id="__span-5-32"><a id="__codelineno-5-32" name="__codelineno-5-32" href="#__codelineno-5-32"></a>        T1[&quot;Per-frame nearest AprilTag in TagObservationCache&lt;br/&gt;distance ≤ TAG_ASSOCIATION_RADIUS (default 50 px)&quot;]:::tag
-</span><span id="__span-5-33"><a id="__codelineno-5-33" name="__codelineno-5-33" href="#__codelineno-5-33"></a>        T2[&quot;Majority vote across all frames in trajectory&lt;br/&gt;→ TagID, TagVotes columns&quot;]:::tag
-</span><span id="__span-5-34"><a id="__codelineno-5-34" name="__codelineno-5-34" href="#__codelineno-5-34"></a>        T3[&quot;detect_tag_swaps · scan for streaks where the same tag&lt;br/&gt;switches between trajectories ≥ TAG_SWAP_MIN_STREAK (default 3) frames&lt;br/&gt;→ logs warning, does NOT auto-fix&quot;]:::tag
+</span><span id="__span-5-31"><a id="__codelineno-5-31" name="__codelineno-5-31" href="#__codelineno-5-31"></a>        CTX_TG["Called from: MergeWorker._resolve_tag_identities (lines 88-116)&lt;br/&gt;(skipped on forward-only runs and when no tag cache exists)"]:::ctx
+</span><span id="__span-5-32"><a id="__codelineno-5-32" name="__codelineno-5-32" href="#__codelineno-5-32"></a>        T1["Per-frame nearest AprilTag in TagObservationCache&lt;br/&gt;distance ≤ TAG_ASSOCIATION_RADIUS (default 50 px)"]:::tag
+</span><span id="__span-5-33"><a id="__codelineno-5-33" name="__codelineno-5-33" href="#__codelineno-5-33"></a>        T2["Majority vote across all frames in trajectory&lt;br/&gt;→ TagID, TagVotes columns"]:::tag
+</span><span id="__span-5-34"><a id="__codelineno-5-34" name="__codelineno-5-34" href="#__codelineno-5-34"></a>        T3["detect_tag_swaps · scan for streaks where the same tag&lt;br/&gt;switches between trajectories ≥ TAG_SWAP_MIN_STREAK (default 3) frames&lt;br/&gt;→ logs warning, does NOT auto-fix"]:::tag
 </span><span id="__span-5-35"><a id="__codelineno-5-35" name="__codelineno-5-35" href="#__codelineno-5-35"></a>        CTX_TG --&gt; T1 --&gt; T2 --&gt; T3
 </span><span id="__span-5-36"><a id="__codelineno-5-36" name="__codelineno-5-36" href="#__codelineno-5-36"></a>    end
 </span><span id="__span-5-37"><a id="__codelineno-5-37" name="__codelineno-5-37" href="#__codelineno-5-37"></a>
-</span><span id="__span-5-38"><a id="__codelineno-5-38" name="__codelineno-5-38" href="#__codelineno-5-38"></a>    subgraph IF[&quot; Primitive 4 · Identity finalize  (rich-export build, once at end) &quot;]
+</span><span id="__span-5-38"><a id="__codelineno-5-38" name="__codelineno-5-38" href="#__codelineno-5-38"></a>    subgraph IF[" Primitive 4 · Identity finalize  (rich-export build, once at end) "]
 </span><span id="__span-5-39"><a id="__codelineno-5-39" name="__codelineno-5-39" href="#__codelineno-5-39"></a>        direction TB
-</span><span id="__span-5-40"><a id="__codelineno-5-40" name="__codelineno-5-40" href="#__codelineno-5-40"></a>        CTX_IF[&quot;Called from: _build_rich_export_dataframe&lt;br/&gt;(orchestrators/tracking.py:3174-3175)&lt;br/&gt;after run_fragment_solver (gated)&quot;]:::ctx
-</span><span id="__span-5-41"><a id="__codelineno-5-41" name="__codelineno-5-41" href="#__codelineno-5-41"></a>        F1[&quot;fill_identity_nans_with_consensus&lt;br/&gt;missing IdentityAssignedLabel rows ←&lt;br/&gt;per-trajectory mode (most-common label)&quot;]:::ident
-</span><span id="__span-5-42"><a id="__codelineno-5-42" name="__codelineno-5-42" href="#__codelineno-5-42"></a>        F2[&quot;sort_trajectories_by_identity&lt;br/&gt;renumber TrajectoryID by (label, first_frame)&lt;br/&gt;so same-identity rows stay consecutive&quot;]:::ident
+</span><span id="__span-5-40"><a id="__codelineno-5-40" name="__codelineno-5-40" href="#__codelineno-5-40"></a>        CTX_IF["Called from: _build_rich_export_dataframe&lt;br/&gt;(orchestrators/tracking.py:3174-3175)&lt;br/&gt;after run_fragment_solver (gated)"]:::ctx
+</span><span id="__span-5-41"><a id="__codelineno-5-41" name="__codelineno-5-41" href="#__codelineno-5-41"></a>        F1["fill_identity_nans_with_consensus&lt;br/&gt;missing IdentityAssignedLabel rows ←&lt;br/&gt;per-trajectory mode (most-common label)"]:::ident
+</span><span id="__span-5-42"><a id="__codelineno-5-42" name="__codelineno-5-42" href="#__codelineno-5-42"></a>        F2["sort_trajectories_by_identity&lt;br/&gt;renumber TrajectoryID by (label, first_frame)&lt;br/&gt;so same-identity rows stay consecutive"]:::ident
 </span><span id="__span-5-43"><a id="__codelineno-5-43" name="__codelineno-5-43" href="#__codelineno-5-43"></a>        CTX_IF --&gt; F1 --&gt; F2
 </span><span id="__span-5-44"><a id="__codelineno-5-44" name="__codelineno-5-44" href="#__codelineno-5-44"></a>    end
 </span></code></pre></div>
 <p><strong>What's not here (and why)</strong></p>
 <ul>
-<li><strong><code>build_tag_only_trajectories</code></strong> (<code>tag_identity.py:332</code>) is defined but
-  has <strong>no call site</strong> anywhere in the pipeline — dead code. The previous
-  Section 6 listed it as "Tag-only fallback trajectories"; that step
-  doesn't actually run.</li>
 <li><strong><code>resolve_simultaneous_identity_conflicts</code></strong> is mapped in Section 5,
   not here, because it lives <em>inside</em> <code>resolve_trajectories</code> rather than
   as a standalone primitive — it always runs together with the conservative
@@ -2484,13 +2606,13 @@ specifics.</p>
 </span><span id="__span-6-3"><a id="__codelineno-6-3" name="__codelineno-6-3" href="#__codelineno-6-3"></a>  layout: elk
 </span><span id="__span-6-4"><a id="__codelineno-6-4" name="__codelineno-6-4" href="#__codelineno-6-4"></a>---
 </span><span id="__span-6-5"><a id="__codelineno-6-5" name="__codelineno-6-5" href="#__codelineno-6-5"></a>flowchart LR
-</span><span id="__span-6-6"><a id="__codelineno-6-6" name="__codelineno-6-6" href="#__codelineno-6-6"></a>    Vid([&quot;Select Video&quot;]) --&gt; Setup[&quot;Setup Config&quot;]
-</span><span id="__span-6-7"><a id="__codelineno-6-7" name="__codelineno-6-7" href="#__codelineno-6-7"></a>    Setup --&gt; Fwd[&quot;Forward Tracking&lt;br&gt;(Frame 1-&amp;gt;N)&quot;]
-</span><span id="__span-6-8"><a id="__codelineno-6-8" name="__codelineno-6-8" href="#__codelineno-6-8"></a>    Fwd --&gt; Cache[(&quot;Save Caches&lt;br&gt;Detection · Individual Properties · Identity evidence&quot;)] &amp; Refine[&quot;Merge &amp;amp; Reconcile, Splitting, Stictching, Identity Reconciliation&quot;]
-</span><span id="__span-6-9"><a id="__codelineno-6-9" name="__codelineno-6-9" href="#__codelineno-6-9"></a>    Cache --&gt; Bwd@{ label: &quot;&lt;span style=\&quot;color:\&quot;&gt;Backward Tracking&lt;/span&gt;&lt;br style=\&quot;--tw-border-spacing-y:\&quot;&gt;&lt;span style=\&quot;color:\&quot;&gt;(Frame N-&amp;gt;1)&lt;/span&gt;&quot; } &amp; Refine
+</span><span id="__span-6-6"><a id="__codelineno-6-6" name="__codelineno-6-6" href="#__codelineno-6-6"></a>    Vid(["Select Video"]) --&gt; Setup["Setup Config"]
+</span><span id="__span-6-7"><a id="__codelineno-6-7" name="__codelineno-6-7" href="#__codelineno-6-7"></a>    Setup --&gt; Fwd["Forward Tracking&lt;br&gt;(Frame 1-&amp;gt;N)"]
+</span><span id="__span-6-8"><a id="__codelineno-6-8" name="__codelineno-6-8" href="#__codelineno-6-8"></a>    Fwd --&gt; Cache[("Save Caches&lt;br&gt;Detection · Individual Properties · Identity evidence")] &amp; Refine["Merge &amp;amp; Reconcile, Splitting, Stictching, Identity Reconciliation"]
+</span><span id="__span-6-9"><a id="__codelineno-6-9" name="__codelineno-6-9" href="#__codelineno-6-9"></a>    Cache --&gt; Bwd@{ label: "&lt;span style=\"color:\"&gt;Backward Tracking&lt;/span&gt;&lt;br style=\"--tw-border-spacing-y:\"&gt;&lt;span style=\"color:\"&gt;(Frame N-&amp;gt;1)&lt;/span&gt;" } &amp; Refine
 </span><span id="__span-6-10"><a id="__codelineno-6-10" name="__codelineno-6-10" href="#__codelineno-6-10"></a>    Bwd --&gt; Refine
-</span><span id="__span-6-11"><a id="__codelineno-6-11" name="__codelineno-6-11" href="#__codelineno-6-11"></a>    Refine --&gt; CSV([&quot;Final CSV&quot;])
-</span><span id="__span-6-12"><a id="__codelineno-6-12" name="__codelineno-6-12" href="#__codelineno-6-12"></a>    CSV --&gt; n1([&quot;Video Generation&quot;])
+</span><span id="__span-6-11"><a id="__codelineno-6-11" name="__codelineno-6-11" href="#__codelineno-6-11"></a>    Refine --&gt; CSV(["Final CSV"])
+</span><span id="__span-6-12"><a id="__codelineno-6-12" name="__codelineno-6-12" href="#__codelineno-6-12"></a>    CSV --&gt; n1(["Video Generation"])
 </span><span id="__span-6-13"><a id="__codelineno-6-13" name="__codelineno-6-13" href="#__codelineno-6-13"></a>
 </span><span id="__span-6-14"><a id="__codelineno-6-14" name="__codelineno-6-14" href="#__codelineno-6-14"></a>    Bwd@{ shape: rect}
 </span><span id="__span-6-15"><a id="__codelineno-6-15" name="__codelineno-6-15" href="#__codelineno-6-15"></a>     Vid:::io
@@ -2518,26 +2640,26 @@ and post-processing are mode-agnostic — they all work off the caches.</p>
 </span><span id="__span-7-3"><a id="__codelineno-7-3" name="__codelineno-7-3" href="#__codelineno-7-3"></a>  layout: elk
 </span><span id="__span-7-4"><a id="__codelineno-7-4" name="__codelineno-7-4" href="#__codelineno-7-4"></a>---
 </span><span id="__span-7-5"><a id="__codelineno-7-5" name="__codelineno-7-5" href="#__codelineno-7-5"></a>flowchart TB
-</span><span id="__span-7-6"><a id="__codelineno-7-6" name="__codelineno-7-6" href="#__codelineno-7-6"></a> subgraph LA[&quot;Streaming&quot;]
+</span><span id="__span-7-6"><a id="__codelineno-7-6" name="__codelineno-7-6" href="#__codelineno-7-6"></a> subgraph LA["Streaming"]
 </span><span id="__span-7-7"><a id="__codelineno-7-7" name="__codelineno-7-7" href="#__codelineno-7-7"></a>    direction TB
-</span><span id="__span-7-8"><a id="__codelineno-7-8" name="__codelineno-7-8" href="#__codelineno-7-8"></a>        a1[&quot;Per Frame detect&lt;br&gt;OBB / Detectﬂ°°8594¶ßOBB + head-tail&quot;]
-</span><span id="__span-7-9"><a id="__codelineno-7-9" name="__codelineno-7-9" href="#__codelineno-7-9"></a>        a2[&quot;Per Frame &lt;br&gt;Pose · AprilTag · CNN&lt;br&gt;&quot;]
-</span><span id="__span-7-10"><a id="__codelineno-7-10" name="__codelineno-7-10" href="#__codelineno-7-10"></a>        a3[&quot;Forward Tracking + Append Caches&quot;]
-</span><span id="__span-7-11"><a id="__codelineno-7-11" name="__codelineno-7-11" href="#__codelineno-7-11"></a>        a4[&quot;Density map (optional)&quot;]
-</span><span id="__span-7-12"><a id="__codelineno-7-12" name="__codelineno-7-12" href="#__codelineno-7-12"></a>        a5[&quot;Backward Tracking&quot;]
+</span><span id="__span-7-8"><a id="__codelineno-7-8" name="__codelineno-7-8" href="#__codelineno-7-8"></a>        a1["Per Frame detect&lt;br&gt;OBB / Detectﬂ°°8594¶ßOBB + head-tail"]
+</span><span id="__span-7-9"><a id="__codelineno-7-9" name="__codelineno-7-9" href="#__codelineno-7-9"></a>        a2["Per Frame &lt;br&gt;Pose · AprilTag · CNN&lt;br&gt;"]
+</span><span id="__span-7-10"><a id="__codelineno-7-10" name="__codelineno-7-10" href="#__codelineno-7-10"></a>        a3["Forward Tracking + Append Caches"]
+</span><span id="__span-7-11"><a id="__codelineno-7-11" name="__codelineno-7-11" href="#__codelineno-7-11"></a>        a4["Density map (optional)"]
+</span><span id="__span-7-12"><a id="__codelineno-7-12" name="__codelineno-7-12" href="#__codelineno-7-12"></a>        a5["Backward Tracking"]
 </span><span id="__span-7-13"><a id="__codelineno-7-13" name="__codelineno-7-13" href="#__codelineno-7-13"></a>  end
-</span><span id="__span-7-14"><a id="__codelineno-7-14" name="__codelineno-7-14" href="#__codelineno-7-14"></a> subgraph LB[&quot;Replay / precompute&quot;]
+</span><span id="__span-7-14"><a id="__codelineno-7-14" name="__codelineno-7-14" href="#__codelineno-7-14"></a> subgraph LB["Replay / precompute"]
 </span><span id="__span-7-15"><a id="__codelineno-7-15" name="__codelineno-7-15" href="#__codelineno-7-15"></a>    direction TB
-</span><span id="__span-7-16"><a id="__codelineno-7-16" name="__codelineno-7-16" href="#__codelineno-7-16"></a>        b1[&quot;Batched detect&lt;br&gt;OBB / Detectﬂ°°8594¶ßOBB + head-tail&quot;]
-</span><span id="__span-7-17"><a id="__codelineno-7-17" name="__codelineno-7-17" href="#__codelineno-7-17"></a>        b2[&quot;Density map (optional)&quot;]
-</span><span id="__span-7-18"><a id="__codelineno-7-18" name="__codelineno-7-18" href="#__codelineno-7-18"></a>        b3[&quot;Batched Precompute&lt;br&gt;Pose · AprilTag · CNN&quot;]
-</span><span id="__span-7-19"><a id="__codelineno-7-19" name="__codelineno-7-19" href="#__codelineno-7-19"></a>        b4[&quot;Tracking Pipeline&quot;]
+</span><span id="__span-7-16"><a id="__codelineno-7-16" name="__codelineno-7-16" href="#__codelineno-7-16"></a>        b1["Batched detect&lt;br&gt;OBB / Detectﬂ°°8594¶ßOBB + head-tail"]
+</span><span id="__span-7-17"><a id="__codelineno-7-17" name="__codelineno-7-17" href="#__codelineno-7-17"></a>        b2["Density map (optional)"]
+</span><span id="__span-7-18"><a id="__codelineno-7-18" name="__codelineno-7-18" href="#__codelineno-7-18"></a>        b3["Batched Precompute&lt;br&gt;Pose · AprilTag · CNN"]
+</span><span id="__span-7-19"><a id="__codelineno-7-19" name="__codelineno-7-19" href="#__codelineno-7-19"></a>        b4["Tracking Pipeline"]
 </span><span id="__span-7-20"><a id="__codelineno-7-20" name="__codelineno-7-20" href="#__codelineno-7-20"></a>  end
-</span><span id="__span-7-21"><a id="__codelineno-7-21" name="__codelineno-7-21" href="#__codelineno-7-21"></a> subgraph LC[&quot;No Individual Analysis&quot;]
+</span><span id="__span-7-21"><a id="__codelineno-7-21" name="__codelineno-7-21" href="#__codelineno-7-21"></a> subgraph LC["No Individual Analysis"]
 </span><span id="__span-7-22"><a id="__codelineno-7-22" name="__codelineno-7-22" href="#__codelineno-7-22"></a>    direction TB
-</span><span id="__span-7-23"><a id="__codelineno-7-23" name="__codelineno-7-23" href="#__codelineno-7-23"></a>        c1[&quot;Batched detection&lt;br&gt;OBB / Detectﬂ°°8594¶ßOBB&quot;]
-</span><span id="__span-7-24"><a id="__codelineno-7-24" name="__codelineno-7-24" href="#__codelineno-7-24"></a>        c2[&quot;Density map (optional)&quot;]
-</span><span id="__span-7-25"><a id="__codelineno-7-25" name="__codelineno-7-25" href="#__codelineno-7-25"></a>        c3[&quot;Tracking Pipeline&quot;]
+</span><span id="__span-7-23"><a id="__codelineno-7-23" name="__codelineno-7-23" href="#__codelineno-7-23"></a>        c1["Batched detection&lt;br&gt;OBB / Detectﬂ°°8594¶ßOBB"]
+</span><span id="__span-7-24"><a id="__codelineno-7-24" name="__codelineno-7-24" href="#__codelineno-7-24"></a>        c2["Density map (optional)"]
+</span><span id="__span-7-25"><a id="__codelineno-7-25" name="__codelineno-7-25" href="#__codelineno-7-25"></a>        c3["Tracking Pipeline"]
 </span><span id="__span-7-26"><a id="__codelineno-7-26" name="__codelineno-7-26" href="#__codelineno-7-26"></a>  end
 </span><span id="__span-7-27"><a id="__codelineno-7-27" name="__codelineno-7-27" href="#__codelineno-7-27"></a>    a1 --&gt; a2
 </span><span id="__span-7-28"><a id="__codelineno-7-28" name="__codelineno-7-28" href="#__codelineno-7-28"></a>    a2 --&gt; a3
@@ -2605,29 +2727,29 @@ and post-processing are mode-agnostic — they all work off the caches.</p>
 </span><span id="__span-8-3"><a id="__codelineno-8-3" name="__codelineno-8-3" href="#__codelineno-8-3"></a>  layout: elk
 </span><span id="__span-8-4"><a id="__codelineno-8-4" name="__codelineno-8-4" href="#__codelineno-8-4"></a>---
 </span><span id="__span-8-5"><a id="__codelineno-8-5" name="__codelineno-8-5" href="#__codelineno-8-5"></a>flowchart TB
-</span><span id="__span-8-6"><a id="__codelineno-8-6" name="__codelineno-8-6" href="#__codelineno-8-6"></a> subgraph BG[&quot;Background subtraction&quot;]
+</span><span id="__span-8-6"><a id="__codelineno-8-6" name="__codelineno-8-6" href="#__codelineno-8-6"></a> subgraph BG["Background subtraction"]
 </span><span id="__span-8-7"><a id="__codelineno-8-7" name="__codelineno-8-7" href="#__codelineno-8-7"></a>    direction TB
-</span><span id="__span-8-8"><a id="__codelineno-8-8" name="__codelineno-8-8" href="#__codelineno-8-8"></a>        bg1[&quot;Image Adjustments + Lighting Stabilization&quot;]
-</span><span id="__span-8-9"><a id="__codelineno-8-9" name="__codelineno-8-9" href="#__codelineno-8-9"></a>        bg2[&quot;Difference Thresholding&quot;]
-</span><span id="__span-8-10"><a id="__codelineno-8-10" name="__codelineno-8-10" href="#__codelineno-8-10"></a>        bg3[&quot;Morphological Operations&quot;]
-</span><span id="__span-8-11"><a id="__codelineno-8-11" name="__codelineno-8-11" href="#__codelineno-8-11"></a>        bg4[&quot;Contours → fitEllipse → OBB Normalization&quot;]
-</span><span id="__span-8-12"><a id="__codelineno-8-12" name="__codelineno-8-12" href="#__codelineno-8-12"></a>        n3@{ label: &quot;&lt;span style=\&quot;color:\&quot;&gt;EMA Update Background model&lt;/span&gt;&quot; }
-</span><span id="__span-8-13"><a id="__codelineno-8-13" name="__codelineno-8-13" href="#__codelineno-8-13"></a>        n8([&quot;Localized rethresolding&quot;])
+</span><span id="__span-8-8"><a id="__codelineno-8-8" name="__codelineno-8-8" href="#__codelineno-8-8"></a>        bg1["Image Adjustments + Lighting Stabilization"]
+</span><span id="__span-8-9"><a id="__codelineno-8-9" name="__codelineno-8-9" href="#__codelineno-8-9"></a>        bg2["Difference Thresholding"]
+</span><span id="__span-8-10"><a id="__codelineno-8-10" name="__codelineno-8-10" href="#__codelineno-8-10"></a>        bg3["Morphological Operations"]
+</span><span id="__span-8-11"><a id="__codelineno-8-11" name="__codelineno-8-11" href="#__codelineno-8-11"></a>        bg4["Contours → fitEllipse → OBB Normalization"]
+</span><span id="__span-8-12"><a id="__codelineno-8-12" name="__codelineno-8-12" href="#__codelineno-8-12"></a>        n3@{ label: "&lt;span style=\"color:\"&gt;EMA Update Background model&lt;/span&gt;" }
+</span><span id="__span-8-13"><a id="__codelineno-8-13" name="__codelineno-8-13" href="#__codelineno-8-13"></a>        n8(["Localized rethresolding"])
 </span><span id="__span-8-14"><a id="__codelineno-8-14" name="__codelineno-8-14" href="#__codelineno-8-14"></a>  end
-</span><span id="__span-8-15"><a id="__codelineno-8-15" name="__codelineno-8-15" href="#__codelineno-8-15"></a> subgraph YO[&quot;YOLO OBB&quot;]
+</span><span id="__span-8-15"><a id="__codelineno-8-15" name="__codelineno-8-15" href="#__codelineno-8-15"></a> subgraph YO["YOLO OBB"]
 </span><span id="__span-8-16"><a id="__codelineno-8-16" name="__codelineno-8-16" href="#__codelineno-8-16"></a>    direction TB
-</span><span id="__span-8-17"><a id="__codelineno-8-17" name="__codelineno-8-17" href="#__codelineno-8-17"></a>        yo1[&quot;Preprocessing&quot;]
-</span><span id="__span-8-18"><a id="__codelineno-8-18" name="__codelineno-8-18" href="#__codelineno-8-18"></a>        yo3[&quot;OBB Normalization&quot;]
-</span><span id="__span-8-19"><a id="__codelineno-8-19" name="__codelineno-8-19" href="#__codelineno-8-19"></a>        n4[&quot;Mode&quot;]
-</span><span id="__span-8-20"><a id="__codelineno-8-20" name="__codelineno-8-20" href="#__codelineno-8-20"></a>        n5[&quot;YOLO Detect&quot;]
-</span><span id="__span-8-21"><a id="__codelineno-8-21" name="__codelineno-8-21" href="#__codelineno-8-21"></a>        n6[&quot;YOLO OBB&quot;]
-</span><span id="__span-8-22"><a id="__codelineno-8-22" name="__codelineno-8-22" href="#__codelineno-8-22"></a>        n7[&quot;Crop + YOLO OBB&quot;]
+</span><span id="__span-8-17"><a id="__codelineno-8-17" name="__codelineno-8-17" href="#__codelineno-8-17"></a>        yo1["Preprocessing"]
+</span><span id="__span-8-18"><a id="__codelineno-8-18" name="__codelineno-8-18" href="#__codelineno-8-18"></a>        yo3["OBB Normalization"]
+</span><span id="__span-8-19"><a id="__codelineno-8-19" name="__codelineno-8-19" href="#__codelineno-8-19"></a>        n4["Mode"]
+</span><span id="__span-8-20"><a id="__codelineno-8-20" name="__codelineno-8-20" href="#__codelineno-8-20"></a>        n5["YOLO Detect"]
+</span><span id="__span-8-21"><a id="__codelineno-8-21" name="__codelineno-8-21" href="#__codelineno-8-21"></a>        n6["YOLO OBB"]
+</span><span id="__span-8-22"><a id="__codelineno-8-22" name="__codelineno-8-22" href="#__codelineno-8-22"></a>        n7["Crop + YOLO OBB"]
 </span><span id="__span-8-23"><a id="__codelineno-8-23" name="__codelineno-8-23" href="#__codelineno-8-23"></a>  end
-</span><span id="__span-8-24"><a id="__codelineno-8-24" name="__codelineno-8-24" href="#__codelineno-8-24"></a> subgraph SH[&quot;Shared filter&quot;]
+</span><span id="__span-8-24"><a id="__codelineno-8-24" name="__codelineno-8-24" href="#__codelineno-8-24"></a> subgraph SH["Shared filter"]
 </span><span id="__span-8-25"><a id="__codelineno-8-25" name="__codelineno-8-25" href="#__codelineno-8-25"></a>    direction TB
-</span><span id="__span-8-26"><a id="__codelineno-8-26" name="__codelineno-8-26" href="#__codelineno-8-26"></a>        s1[&quot;Confidence + Size + Video ROI Filtering&quot;]
-</span><span id="__span-8-27"><a id="__codelineno-8-27" name="__codelineno-8-27" href="#__codelineno-8-27"></a>        s2[&quot;OBB IoU Enforcement&quot;]
-</span><span id="__span-8-28"><a id="__codelineno-8-28" name="__codelineno-8-28" href="#__codelineno-8-28"></a>        s3[&quot;Top K Selection&quot;]
+</span><span id="__span-8-26"><a id="__codelineno-8-26" name="__codelineno-8-26" href="#__codelineno-8-26"></a>        s1["Confidence + Size + Video ROI Filtering"]
+</span><span id="__span-8-27"><a id="__codelineno-8-27" name="__codelineno-8-27" href="#__codelineno-8-27"></a>        s2["OBB IoU Enforcement"]
+</span><span id="__span-8-28"><a id="__codelineno-8-28" name="__codelineno-8-28" href="#__codelineno-8-28"></a>        s3["Top K Selection"]
 </span><span id="__span-8-29"><a id="__codelineno-8-29" name="__codelineno-8-29" href="#__codelineno-8-29"></a>  end
 </span><span id="__span-8-30"><a id="__codelineno-8-30" name="__codelineno-8-30" href="#__codelineno-8-30"></a>    bg1 --&gt; n3
 </span><span id="__span-8-31"><a id="__codelineno-8-31" name="__codelineno-8-31" href="#__codelineno-8-31"></a>    bg2 --&gt; bg3
@@ -2635,12 +2757,12 @@ and post-processing are mode-agnostic — they all work off the caches.</p>
 </span><span id="__span-8-33"><a id="__codelineno-8-33" name="__codelineno-8-33" href="#__codelineno-8-33"></a>    yo1 --&gt; n4
 </span><span id="__span-8-34"><a id="__codelineno-8-34" name="__codelineno-8-34" href="#__codelineno-8-34"></a>    s1 --&gt; s2
 </span><span id="__span-8-35"><a id="__codelineno-8-35" name="__codelineno-8-35" href="#__codelineno-8-35"></a>    s2 --&gt; s3
-</span><span id="__span-8-36"><a id="__codelineno-8-36" name="__codelineno-8-36" href="#__codelineno-8-36"></a>    Pick{&quot;Method&quot;} --&gt; bg1 &amp; yo1
+</span><span id="__span-8-36"><a id="__codelineno-8-36" name="__codelineno-8-36" href="#__codelineno-8-36"></a>    Pick{"Method"} --&gt; bg1 &amp; yo1
 </span><span id="__span-8-37"><a id="__codelineno-8-37" name="__codelineno-8-37" href="#__codelineno-8-37"></a>    bg4 --&gt; s1
 </span><span id="__span-8-38"><a id="__codelineno-8-38" name="__codelineno-8-38" href="#__codelineno-8-38"></a>    yo3 --&gt; s1
-</span><span id="__span-8-39"><a id="__codelineno-8-39" name="__codelineno-8-39" href="#__codelineno-8-39"></a>    s3 --&gt; Out([&quot;Detections per frame&quot;])
-</span><span id="__span-8-40"><a id="__codelineno-8-40" name="__codelineno-8-40" href="#__codelineno-8-40"></a>    Frame([&quot;Video&quot;]) --&gt; n1([&quot;Frame&quot;])
-</span><span id="__span-8-41"><a id="__codelineno-8-41" name="__codelineno-8-41" href="#__codelineno-8-41"></a>    Frame -. Sample N .-&gt; n2[&quot;Image adjustments + Prime Background Model&lt;br&gt;(Lightest/Darkest Pixel with IQR clipping )&quot;]
+</span><span id="__span-8-39"><a id="__codelineno-8-39" name="__codelineno-8-39" href="#__codelineno-8-39"></a>    s3 --&gt; Out(["Detections per frame"])
+</span><span id="__span-8-40"><a id="__codelineno-8-40" name="__codelineno-8-40" href="#__codelineno-8-40"></a>    Frame(["Video"]) --&gt; n1(["Frame"])
+</span><span id="__span-8-41"><a id="__codelineno-8-41" name="__codelineno-8-41" href="#__codelineno-8-41"></a>    Frame -. Sample N .-&gt; n2["Image adjustments + Prime Background Model&lt;br&gt;(Lightest/Darkest Pixel with IQR clipping )"]
 </span><span id="__span-8-42"><a id="__codelineno-8-42" name="__codelineno-8-42" href="#__codelineno-8-42"></a>    n1 --&gt; Pick
 </span><span id="__span-8-43"><a id="__codelineno-8-43" name="__codelineno-8-43" href="#__codelineno-8-43"></a>    n2 --&gt; bg1
 </span><span id="__span-8-44"><a id="__codelineno-8-44" name="__codelineno-8-44" href="#__codelineno-8-44"></a>    n3 --&gt; bg2
@@ -2718,24 +2840,24 @@ and post-processing are mode-agnostic — they all work off the caches.</p>
 </span><span id="__span-9-3"><a id="__codelineno-9-3" name="__codelineno-9-3" href="#__codelineno-9-3"></a>  layout: elk
 </span><span id="__span-9-4"><a id="__codelineno-9-4" name="__codelineno-9-4" href="#__codelineno-9-4"></a>---
 </span><span id="__span-9-5"><a id="__codelineno-9-5" name="__codelineno-9-5" href="#__codelineno-9-5"></a>flowchart TB
-</span><span id="__span-9-6"><a id="__codelineno-9-6" name="__codelineno-9-6" href="#__codelineno-9-6"></a>    Det[&quot;Single OBB Detection&quot;] --&gt; Crop[&quot;Canonical crop&lt;br&gt;center + rotate to body axis&quot;]
-</span><span id="__span-9-7"><a id="__codelineno-9-7" name="__codelineno-9-7" href="#__codelineno-9-7"></a>    Crop --&gt; n1[&quot;HeadTail CNN Inference&lt;br&gt;{left, right, up, unknown}&quot;]
-</span><span id="__span-9-8"><a id="__codelineno-9-8" name="__codelineno-9-8" href="#__codelineno-9-8"></a>    HT[&quot;Crop Canonicalization&lt;br&gt;flip crop · 180° resolved&quot;] --&gt; Pose[&quot;Pose Inference&lt;br&gt;&quot;] &amp; CNN[&quot;Class Inference&lt;br&gt;(Single Head, Multihead, SharedTrunkMultihead)&quot;]
-</span><span id="__span-9-9"><a id="__codelineno-9-9" name="__codelineno-9-9" href="#__codelineno-9-9"></a>    Pose --&gt; n2[&quot;MODE&quot;]
+</span><span id="__span-9-6"><a id="__codelineno-9-6" name="__codelineno-9-6" href="#__codelineno-9-6"></a>    Det["Single OBB Detection"] --&gt; Crop["Canonical crop&lt;br&gt;center + rotate to body axis"]
+</span><span id="__span-9-7"><a id="__codelineno-9-7" name="__codelineno-9-7" href="#__codelineno-9-7"></a>    Crop --&gt; n1["HeadTail CNN Inference&lt;br&gt;{left, right, up, unknown}"]
+</span><span id="__span-9-8"><a id="__codelineno-9-8" name="__codelineno-9-8" href="#__codelineno-9-8"></a>    HT["Crop Canonicalization&lt;br&gt;flip crop · 180° resolved"] --&gt; Pose["Pose Inference&lt;br&gt;"] &amp; CNN["Class Inference&lt;br&gt;(Single Head, Multihead, SharedTrunkMultihead)"]
+</span><span id="__span-9-9"><a id="__codelineno-9-9" name="__codelineno-9-9" href="#__codelineno-9-9"></a>    Pose --&gt; n2["MODE"]
 </span><span id="__span-9-10"><a id="__codelineno-9-10" name="__codelineno-9-10" href="#__codelineno-9-10"></a>    n1 --&gt; HT
-</span><span id="__span-9-11"><a id="__codelineno-9-11" name="__codelineno-9-11" href="#__codelineno-9-11"></a>    n2 --&gt; n3[&quot;YOLO Pose&quot;] &amp; n4[&quot;SLEAP&quot;]
-</span><span id="__span-9-12"><a id="__codelineno-9-12" name="__codelineno-9-12" href="#__codelineno-9-12"></a>    n3 --&gt; n5[&quot;Pose Standardization + EKS&quot;]
+</span><span id="__span-9-11"><a id="__codelineno-9-11" name="__codelineno-9-11" href="#__codelineno-9-11"></a>    n2 --&gt; n3["YOLO Pose"] &amp; n4["SLEAP"]
+</span><span id="__span-9-12"><a id="__codelineno-9-12" name="__codelineno-9-12" href="#__codelineno-9-12"></a>    n3 --&gt; n5["Pose Standardization + EKS"]
 </span><span id="__span-9-13"><a id="__codelineno-9-13" name="__codelineno-9-13" href="#__codelineno-9-13"></a>    n4 --&gt; n5
-</span><span id="__span-9-14"><a id="__codelineno-9-14" name="__codelineno-9-14" href="#__codelineno-9-14"></a>    n5 --&gt; Out([&quot;Per-detection record&quot;])
-</span><span id="__span-9-15"><a id="__codelineno-9-15" name="__codelineno-9-15" href="#__codelineno-9-15"></a>    CNN --&gt; n6[&quot;Unique Identifier?&quot;]
-</span><span id="__span-9-16"><a id="__codelineno-9-16" name="__codelineno-9-16" href="#__codelineno-9-16"></a>    n6 --&gt; n7[&quot;Identity Classes&lt;br&gt;log-Posterior over catalog&quot;] &amp; n8[&quot;Non-identity Class &lt;br&gt;Per Catalog Confidence&quot;]
+</span><span id="__span-9-14"><a id="__codelineno-9-14" name="__codelineno-9-14" href="#__codelineno-9-14"></a>    n5 --&gt; Out(["Per-detection record"])
+</span><span id="__span-9-15"><a id="__codelineno-9-15" name="__codelineno-9-15" href="#__codelineno-9-15"></a>    CNN --&gt; n6["Unique Identifier?"]
+</span><span id="__span-9-16"><a id="__codelineno-9-16" name="__codelineno-9-16" href="#__codelineno-9-16"></a>    n6 --&gt; n7["Identity Classes&lt;br&gt;log-Posterior over catalog"] &amp; n8["Non-identity Class &lt;br&gt;Per Catalog Confidence"]
 </span><span id="__span-9-17"><a id="__codelineno-9-17" name="__codelineno-9-17" href="#__codelineno-9-17"></a>    n8 --&gt; Out
 </span><span id="__span-9-18"><a id="__codelineno-9-18" name="__codelineno-9-18" href="#__codelineno-9-18"></a>    n7 --&gt; Out
-</span><span id="__span-9-19"><a id="__codelineno-9-19" name="__codelineno-9-19" href="#__codelineno-9-19"></a>    Tag[&quot;AprilTag&quot;] --&gt; n9[&quot;Composite Strip into a single detector&quot;]
-</span><span id="__span-9-20"><a id="__codelineno-9-20" name="__codelineno-9-20" href="#__codelineno-9-20"></a>    n10@{ label: &quot;&lt;span style=\&quot;color:\&quot;&gt;Frame OBB detections&lt;/span&gt;&quot; } --&gt; Tag
+</span><span id="__span-9-19"><a id="__codelineno-9-19" name="__codelineno-9-19" href="#__codelineno-9-19"></a>    Tag["AprilTag"] --&gt; n9["Composite Strip into a single detector"]
+</span><span id="__span-9-20"><a id="__codelineno-9-20" name="__codelineno-9-20" href="#__codelineno-9-20"></a>    n10@{ label: "&lt;span style=\"color:\"&gt;Frame OBB detections&lt;/span&gt;" } --&gt; Tag
 </span><span id="__span-9-21"><a id="__codelineno-9-21" name="__codelineno-9-21" href="#__codelineno-9-21"></a>    n10 -- Loop over all --&gt; Det
-</span><span id="__span-9-22"><a id="__codelineno-9-22" name="__codelineno-9-22" href="#__codelineno-9-22"></a>    n9 --&gt; n11[&quot;AprilTag detector&quot;]
-</span><span id="__span-9-23"><a id="__codelineno-9-23" name="__codelineno-9-23" href="#__codelineno-9-23"></a>    n11 --&gt; n12[&quot;Apriltag Classes&lt;br&gt;Log-Probability over catalog&quot;]
+</span><span id="__span-9-22"><a id="__codelineno-9-22" name="__codelineno-9-22" href="#__codelineno-9-22"></a>    n9 --&gt; n11["AprilTag detector"]
+</span><span id="__span-9-23"><a id="__codelineno-9-23" name="__codelineno-9-23" href="#__codelineno-9-23"></a>    n11 --&gt; n12["Apriltag Classes&lt;br&gt;Log-Probability over catalog"]
 </span><span id="__span-9-24"><a id="__codelineno-9-24" name="__codelineno-9-24" href="#__codelineno-9-24"></a>    n12 --&gt; Out
 </span><span id="__span-9-25"><a id="__codelineno-9-25" name="__codelineno-9-25" href="#__codelineno-9-25"></a>
 </span><span id="__span-9-26"><a id="__codelineno-9-26" name="__codelineno-9-26" href="#__codelineno-9-26"></a>    Det@{ shape: rect}
@@ -2806,6 +2928,61 @@ and post-processing are mode-agnostic — they all work off the caches.</p>
 </tr>
 </tbody>
 </table>
+<h3 id="identity-heads-and-the-catalog">Identity heads and the catalog<a class="headerlink" href="#identity-heads-and-the-catalog" title="Permanent link">&para;</a></h3>
+<p>Only classifiers marked <strong>Unique identifier</strong> in the identity panel feed the
+<code>Unique Identifier?</code> branch above and contribute to the identity catalog
+(<code>n7</code>). Every other CNN classifier — behavior, sex, caste, anything not meant
+to distinguish individuals — is exported as ordinary columns (<code>n8</code>) and
+influences nothing about identity: not the Hungarian solve, not the relink
+veto, not merge/swap decisions.</p>
+<p>Multiple unique-identifier classifiers <strong>combine</strong>: thorax colour × abdomen
+shape produces one composite catalog (<code>red_notch</code>, <code>red_plain</code>, <code>blue_notch</code>,
+...), not two catalogs competing for the same track. Each classifier
+contributes one axis; the catalog is the cross-product of all axes.</p>
+<h3 id="non-identifying-classes">Non-identifying classes<a class="headerlink" href="#non-identifying-classes" title="Permanent link">&para;</a></h3>
+<p>Some class values are not identity information at all — an untagged animal
+classified <code>notag</code>, a smudged or ambiguous tag read, anything the model can
+detect but that carries no individual identity. Declaring such values as
+<strong>non-identifying</strong> removes the composites they produce from the catalog
+entirely, so no exclusivity mechanism (Hungarian column, swap candidacy,
+relink identity veto) ever applies to them. Any number of tracks can carry a
+non-identifying label at once, and none of them displaces a genuinely
+identified animal.</p>
+<p>A mark can be declared at three granularities, per identity classifier:</p>
+<table>
+<thead>
+<tr>
+<th>Form</th>
+<th>Matches</th>
+</tr>
+</thead>
+<tbody>
+<tr>
+<td><code>notag</code></td>
+<td>that class value in <em>any</em> axis of that model</td>
+</tr>
+<tr>
+<td><code>front:notag</code></td>
+<td>that class value in one named factor only</td>
+</tr>
+<tr>
+<td><code>notag_notag</code></td>
+<td>one specific whole composite label</td>
+</tr>
+</tbody>
+</table>
+<p>Tracks that never resolve a real identity because every axis reads a declared
+non-identifying value get a descriptive label instead of the ordinary
+"unknown" placeholder: <code>IdentityFinalLabel</code> is set to the composite (e.g.
+<code>notag_notag</code>), <code>IdentityFinalSource</code> is <code>nonidentifying</code>, and — the
+load-bearing part — <strong><code>IdentityFinalID</code> stays <code>0</code>, the unknown slot</strong>. A
+shared descriptive label is never mistaken for a resolved identity by any
+downstream consumer that keys on <code>IdentityFinalID</code>.</p>
+<p>The honest limitation: these animals get no identity resolution. They are
+tracked as distinct trajectories and labelled for what they are, but there is
+no identity-based fragment stitching across occlusions for them — the relink
+stage sees no identity evidence for a non-identifying value (not agreement,
+not conflict) and falls back to spatial/motion gates alone.</p>
 <hr />
 <h2 id="slide-5-online-tracking-per-frame-loop">Slide 5 · Online tracking · per-frame loop<a class="headerlink" href="#slide-5-online-tracking-per-frame-loop" title="Permanent link">&para;</a></h2>
 <div class="language-text highlight"><pre><span></span><code><span id="__span-10-1"><a id="__codelineno-10-1" name="__codelineno-10-1" href="#__codelineno-10-1"></a>---
@@ -2813,19 +2990,19 @@ and post-processing are mode-agnostic — they all work off the caches.</p>
 </span><span id="__span-10-3"><a id="__codelineno-10-3" name="__codelineno-10-3" href="#__codelineno-10-3"></a>  layout: dagre
 </span><span id="__span-10-4"><a id="__codelineno-10-4" name="__codelineno-10-4" href="#__codelineno-10-4"></a>---
 </span><span id="__span-10-5"><a id="__codelineno-10-5" name="__codelineno-10-5" href="#__codelineno-10-5"></a>flowchart TB
-</span><span id="__span-10-6"><a id="__codelineno-10-6" name="__codelineno-10-6" href="#__codelineno-10-6"></a>    F([&quot;Frame t&quot;]) --&gt; P[&quot;Kalman predict &lt;br&gt;(x, y, θ, vx, vy)&lt;br&gt;&lt;br&gt;Motion model assumes&lt;br&gt;Damped Linear Velocity, Constant Heading &amp;amp;&lt;br&gt;Anisotropic Uncertainty in the forward-lateral axes&quot;]
-</span><span id="__span-10-7"><a id="__codelineno-10-7" name="__codelineno-10-7" href="#__codelineno-10-7"></a>    P --&gt; C[&quot;Cost Matrix Evaluation&lt;br&gt;&lt;br&gt;1) (uncertainly shaped) position &lt;br&gt;2) orientation &lt;br&gt;3) shape &lt;br&gt;(optional) identity&lt;br&gt;Pose can hard veto. Density can gate jumping&quot;]
-</span><span id="__span-10-8"><a id="__codelineno-10-8" name="__codelineno-10-8" href="#__codelineno-10-8"></a>    C --&gt; H[&quot;Prediction-Detection Assignment Algorithm&lt;br&gt;&quot;]
-</span><span id="__span-10-9"><a id="__codelineno-10-9" name="__codelineno-10-9" href="#__codelineno-10-9"></a>    H --&gt; n1[&quot;Track Age&quot;]
-</span><span id="__span-10-10"><a id="__codelineno-10-10" name="__codelineno-10-10" href="#__codelineno-10-10"></a>    L[&quot;Lifecycle&lt;br&gt;&lt;br&gt;active (detection assigned)&lt;br&gt;lost(no assignment for many frames)&lt;br&gt;occluded (intermediate stage)&lt;br&gt;&quot;] --&gt; I[&quot;Identity decoder&lt;br&gt;&lt;br&gt;Assume Sticky Markov Labels&lt;br&gt;Fuse different sources&lt;br&gt;Pair-wise swap detection&lt;br&gt;Soft lock identity slots&lt;br&gt;Uniqueness Hungarian&lt;br&gt;&quot;] &amp; U[&quot;Kalman correction with detection, Innovation clipping, Covariance update&quot;] &amp; n1
+</span><span id="__span-10-6"><a id="__codelineno-10-6" name="__codelineno-10-6" href="#__codelineno-10-6"></a>    F(["Frame t"]) --&gt; P["Kalman predict &lt;br&gt;(x, y, θ, vx, vy)&lt;br&gt;&lt;br&gt;Motion model assumes&lt;br&gt;Damped Linear Velocity, Constant Heading &amp;amp;&lt;br&gt;Anisotropic Uncertainty in the forward-lateral axes"]
+</span><span id="__span-10-7"><a id="__codelineno-10-7" name="__codelineno-10-7" href="#__codelineno-10-7"></a>    P --&gt; C["Cost Matrix Evaluation&lt;br&gt;&lt;br&gt;1) (uncertainly shaped) position &lt;br&gt;2) orientation &lt;br&gt;3) shape &lt;br&gt;(optional) identity&lt;br&gt;Pose can hard veto. Density can gate jumping"]
+</span><span id="__span-10-8"><a id="__codelineno-10-8" name="__codelineno-10-8" href="#__codelineno-10-8"></a>    C --&gt; H["Prediction-Detection Assignment Algorithm&lt;br&gt;"]
+</span><span id="__span-10-9"><a id="__codelineno-10-9" name="__codelineno-10-9" href="#__codelineno-10-9"></a>    H --&gt; n1["Track Age"]
+</span><span id="__span-10-10"><a id="__codelineno-10-10" name="__codelineno-10-10" href="#__codelineno-10-10"></a>    L["Lifecycle&lt;br&gt;&lt;br&gt;active (detection assigned)&lt;br&gt;lost(no assignment for many frames)&lt;br&gt;occluded (intermediate stage)&lt;br&gt;"] --&gt; I["Identity decoder&lt;br&gt;&lt;br&gt;Assume Sticky Markov Labels&lt;br&gt;Fuse different sources&lt;br&gt;Pair-wise swap detection&lt;br&gt;Soft lock identity slots&lt;br&gt;Uniqueness Hungarian&lt;br&gt;"] &amp; U["Kalman correction with detection, Innovation clipping, Covariance update"] &amp; n1
 </span><span id="__span-10-11"><a id="__codelineno-10-11" name="__codelineno-10-11" href="#__codelineno-10-11"></a>    I --&gt; U
-</span><span id="__span-10-12"><a id="__codelineno-10-12" name="__codelineno-10-12" href="#__codelineno-10-12"></a>    U --&gt; Em([&quot;Emit Frame Assigments&quot;])
+</span><span id="__span-10-12"><a id="__codelineno-10-12" name="__codelineno-10-12" href="#__codelineno-10-12"></a>    U --&gt; Em(["Emit Frame Assigments"])
 </span><span id="__span-10-13"><a id="__codelineno-10-13" name="__codelineno-10-13" href="#__codelineno-10-13"></a>    I -. posterior · feedback to next frame .-&gt; C
-</span><span id="__span-10-14"><a id="__codelineno-10-14" name="__codelineno-10-14" href="#__codelineno-10-14"></a>    n1 -- New --&gt; n2[&quot;Identity&lt;br&gt;Available&quot;]
-</span><span id="__span-10-15"><a id="__codelineno-10-15" name="__codelineno-10-15" href="#__codelineno-10-15"></a>    n1 -- Young --&gt; n4[&quot;Greedy Nearest&quot;]
-</span><span id="__span-10-16"><a id="__codelineno-10-16" name="__codelineno-10-16" href="#__codelineno-10-16"></a>    n1 -- Established --&gt; n3[&quot;Hungarian Assignment&quot;]
-</span><span id="__span-10-17"><a id="__codelineno-10-17" name="__codelineno-10-17" href="#__codelineno-10-17"></a>    n2 -- Yes --&gt; n5[&quot;Committed-identity Track based on Log-likelihood&quot;]
-</span><span id="__span-10-18"><a id="__codelineno-10-18" name="__codelineno-10-18" href="#__codelineno-10-18"></a>    n2 -- No --&gt; n6[&quot;Proximity to last known animal per track&quot;]
+</span><span id="__span-10-14"><a id="__codelineno-10-14" name="__codelineno-10-14" href="#__codelineno-10-14"></a>    n1 -- New --&gt; n2["Identity&lt;br&gt;Available"]
+</span><span id="__span-10-15"><a id="__codelineno-10-15" name="__codelineno-10-15" href="#__codelineno-10-15"></a>    n1 -- Young --&gt; n4["Greedy Nearest"]
+</span><span id="__span-10-16"><a id="__codelineno-10-16" name="__codelineno-10-16" href="#__codelineno-10-16"></a>    n1 -- Established --&gt; n3["Hungarian Assignment"]
+</span><span id="__span-10-17"><a id="__codelineno-10-17" name="__codelineno-10-17" href="#__codelineno-10-17"></a>    n2 -- Yes --&gt; n5["Committed-identity Track based on Log-likelihood"]
+</span><span id="__span-10-18"><a id="__codelineno-10-18" name="__codelineno-10-18" href="#__codelineno-10-18"></a>    n2 -- No --&gt; n6["Proximity to last known animal per track"]
 </span><span id="__span-10-19"><a id="__codelineno-10-19" name="__codelineno-10-19" href="#__codelineno-10-19"></a>    n5 --&gt; L
 </span><span id="__span-10-20"><a id="__codelineno-10-20" name="__codelineno-10-20" href="#__codelineno-10-20"></a>    n3 --&gt; L
 </span><span id="__span-10-21"><a id="__codelineno-10-21" name="__codelineno-10-21" href="#__codelineno-10-21"></a>    n6 --&gt; L
@@ -2900,14 +3077,14 @@ cost matrix (via the <code>−log P(det_id ∣ track_posterior)</code> term).</p
 </span><span id="__span-11-3"><a id="__codelineno-11-3" name="__codelineno-11-3" href="#__codelineno-11-3"></a>  layout: elk
 </span><span id="__span-11-4"><a id="__codelineno-11-4" name="__codelineno-11-4" href="#__codelineno-11-4"></a>---
 </span><span id="__span-11-5"><a id="__codelineno-11-5" name="__codelineno-11-5" href="#__codelineno-11-5"></a>flowchart TB
-</span><span id="__span-11-6"><a id="__codelineno-11-6" name="__codelineno-11-6" href="#__codelineno-11-6"></a>    F[&quot;Forward&lt;br&gt;Tracking Pass&quot;] --&gt; PpF[&quot;PostProcess&lt;br&gt;forward tracking output&quot;]
-</span><span id="__span-11-7"><a id="__codelineno-11-7" name="__codelineno-11-7" href="#__codelineno-11-7"></a>    PpF --&gt; M[&quot;Backward Forward Merge&lt;br&gt;&lt;br&gt;find candidates conservative merge&lt;br&gt;spatial dedup&lt;br&gt;stitch fragments&lt;br&gt;(optional) identity-conflict resolution&lt;br&gt;interpolate trajectories&quot;]
-</span><span id="__span-11-8"><a id="__codelineno-11-8" name="__codelineno-11-8" href="#__codelineno-11-8"></a>    F -. write .-&gt; Cache[(&quot;Detection cache&lt;br&gt;+ Inference cache&quot;)]
-</span><span id="__span-11-9"><a id="__codelineno-11-9" name="__codelineno-11-9" href="#__codelineno-11-9"></a>    Cache --&gt; B[&quot;Backward&lt;br&gt;Tracking Pass&quot;]
-</span><span id="__span-11-10"><a id="__codelineno-11-10" name="__codelineno-11-10" href="#__codelineno-11-10"></a>    B --&gt; PpB[&quot;Post Process&lt;br&gt;backward tracking output&quot;]
+</span><span id="__span-11-6"><a id="__codelineno-11-6" name="__codelineno-11-6" href="#__codelineno-11-6"></a>    F["Forward&lt;br&gt;Tracking Pass"] --&gt; PpF["PostProcess&lt;br&gt;forward tracking output"]
+</span><span id="__span-11-7"><a id="__codelineno-11-7" name="__codelineno-11-7" href="#__codelineno-11-7"></a>    PpF --&gt; M["Backward Forward Merge&lt;br&gt;&lt;br&gt;find candidates conservative merge&lt;br&gt;spatial dedup&lt;br&gt;stitch fragments&lt;br&gt;(optional) identity-conflict resolution&lt;br&gt;interpolate trajectories"]
+</span><span id="__span-11-8"><a id="__codelineno-11-8" name="__codelineno-11-8" href="#__codelineno-11-8"></a>    F -. write .-&gt; Cache[("Detection cache&lt;br&gt;+ Inference cache")]
+</span><span id="__span-11-9"><a id="__codelineno-11-9" name="__codelineno-11-9" href="#__codelineno-11-9"></a>    Cache --&gt; B["Backward&lt;br&gt;Tracking Pass"]
+</span><span id="__span-11-10"><a id="__codelineno-11-10" name="__codelineno-11-10" href="#__codelineno-11-10"></a>    B --&gt; PpB["Post Process&lt;br&gt;backward tracking output"]
 </span><span id="__span-11-11"><a id="__codelineno-11-11" name="__codelineno-11-11" href="#__codelineno-11-11"></a>    PpB --&gt; M
-</span><span id="__span-11-12"><a id="__codelineno-11-12" name="__codelineno-11-12" href="#__codelineno-11-12"></a>    M --&gt; R[&quot;Full Export and Cleanup&lt;br&gt;&lt;br&gt;join with individual output&lt;br&gt;fragment iterative greedy assignment&lt;br&gt;identity consensus and cleanup&quot;]
-</span><span id="__span-11-13"><a id="__codelineno-11-13" name="__codelineno-11-13" href="#__codelineno-11-13"></a>    R --&gt; Out([&quot;Final output&quot;])
+</span><span id="__span-11-12"><a id="__codelineno-11-12" name="__codelineno-11-12" href="#__codelineno-11-12"></a>    M --&gt; R["Full Export and Cleanup&lt;br&gt;&lt;br&gt;join with individual output&lt;br&gt;fragment iterative greedy assignment&lt;br&gt;identity consensus and cleanup"]
+</span><span id="__span-11-13"><a id="__codelineno-11-13" name="__codelineno-11-13" href="#__codelineno-11-13"></a>    R --&gt; Out(["Final output"])
 </span><span id="__span-11-14"><a id="__codelineno-11-14" name="__codelineno-11-14" href="#__codelineno-11-14"></a>    PpF -. if no backward · skip merge .-&gt; R
 </span><span id="__span-11-15"><a id="__codelineno-11-15" name="__codelineno-11-15" href="#__codelineno-11-15"></a>
 </span><span id="__span-11-16"><a id="__codelineno-11-16" name="__codelineno-11-16" href="#__codelineno-11-16"></a>     F:::fwd
@@ -2974,30 +3151,30 @@ than guessed. Stitching reconnects fragments separated by short gaps
 <hr />
 <h2 id="slide-7-cleanup-primitives-how-each-one-works">Slide 7 · Cleanup primitives · how each one works<a class="headerlink" href="#slide-7-cleanup-primitives-how-each-one-works" title="Permanent link">&para;</a></h2>
 <div class="language-text highlight"><pre><span></span><code><span id="__span-12-1"><a id="__codelineno-12-1" name="__codelineno-12-1" href="#__codelineno-12-1"></a>flowchart RL
-</span><span id="__span-12-2"><a id="__codelineno-12-2" name="__codelineno-12-2" href="#__codelineno-12-2"></a> subgraph P1[&quot;Post Processing Tracking Output&quot;]
+</span><span id="__span-12-2"><a id="__codelineno-12-2" name="__codelineno-12-2" href="#__codelineno-12-2"></a> subgraph P1["Post Processing Tracking Output"]
 </span><span id="__span-12-3"><a id="__codelineno-12-3" name="__codelineno-12-3" href="#__codelineno-12-3"></a>    direction LR
-</span><span id="__span-12-4"><a id="__codelineno-12-4" name="__codelineno-12-4" href="#__codelineno-12-4"></a>        a0[&quot;NaN Cleanup X/Y/θ on&lt;br&gt;occluded · lost&quot;]
-</span><span id="__span-12-5"><a id="__codelineno-12-5" name="__codelineno-12-5" href="#__codelineno-12-5"></a>        a1[&quot;Drop short&lt;br&gt;tracks&quot;]
-</span><span id="__span-12-6"><a id="__codelineno-12-6" name="__codelineno-12-6" href="#__codelineno-12-6"></a>        a2[&quot;High Velocity&lt;br&gt;break&quot;]
-</span><span id="__span-12-7"><a id="__codelineno-12-7" name="__codelineno-12-7" href="#__codelineno-12-7"></a>        a3[&quot;Large Occlusion-gap&lt;br&gt;split&quot;]
-</span><span id="__span-12-8"><a id="__codelineno-12-8" name="__codelineno-12-8" href="#__codelineno-12-8"></a>        a4[&quot;Spatial-jump&lt;br&gt;split&quot;]
+</span><span id="__span-12-4"><a id="__codelineno-12-4" name="__codelineno-12-4" href="#__codelineno-12-4"></a>        a0["NaN Cleanup X/Y/θ on&lt;br&gt;occluded · lost"]
+</span><span id="__span-12-5"><a id="__codelineno-12-5" name="__codelineno-12-5" href="#__codelineno-12-5"></a>        a1["Drop short&lt;br&gt;tracks"]
+</span><span id="__span-12-6"><a id="__codelineno-12-6" name="__codelineno-12-6" href="#__codelineno-12-6"></a>        a2["High Velocity&lt;br&gt;break"]
+</span><span id="__span-12-7"><a id="__codelineno-12-7" name="__codelineno-12-7" href="#__codelineno-12-7"></a>        a3["Large Occlusion-gap&lt;br&gt;split"]
+</span><span id="__span-12-8"><a id="__codelineno-12-8" name="__codelineno-12-8" href="#__codelineno-12-8"></a>        a4["Spatial-jump&lt;br&gt;split"]
 </span><span id="__span-12-9"><a id="__codelineno-12-9" name="__codelineno-12-9" href="#__codelineno-12-9"></a>  end
-</span><span id="__span-12-10"><a id="__codelineno-12-10" name="__codelineno-12-10" href="#__codelineno-12-10"></a> subgraph P2[&quot;Interpolation&quot;]
+</span><span id="__span-12-10"><a id="__codelineno-12-10" name="__codelineno-12-10" href="#__codelineno-12-10"></a> subgraph P2["Interpolation"]
 </span><span id="__span-12-11"><a id="__codelineno-12-11" name="__codelineno-12-11" href="#__codelineno-12-11"></a>    direction LR
-</span><span id="__span-12-12"><a id="__codelineno-12-12" name="__codelineno-12-12" href="#__codelineno-12-12"></a>        b1[&quot;Fill X/Y gaps&lt;br&gt;linear · cubic · spline&quot;]
-</span><span id="__span-12-13"><a id="__codelineno-12-13" name="__codelineno-12-13" href="#__codelineno-12-13"></a>        b2[&quot;Heading via&lt;br&gt;sin/cos · atan2&quot;]
-</span><span id="__span-12-14"><a id="__codelineno-12-14" name="__codelineno-12-14" href="#__codelineno-12-14"></a>        b3[&quot;Flip correction&lt;br&gt;local burst · or global DP&quot;]
+</span><span id="__span-12-12"><a id="__codelineno-12-12" name="__codelineno-12-12" href="#__codelineno-12-12"></a>        b1["Fill X/Y gaps&lt;br&gt;linear · cubic · spline"]
+</span><span id="__span-12-13"><a id="__codelineno-12-13" name="__codelineno-12-13" href="#__codelineno-12-13"></a>        b2["Heading via&lt;br&gt;sin/cos · atan2"]
+</span><span id="__span-12-14"><a id="__codelineno-12-14" name="__codelineno-12-14" href="#__codelineno-12-14"></a>        b3["Flip correction&lt;br&gt;local burst · or global DP"]
 </span><span id="__span-12-15"><a id="__codelineno-12-15" name="__codelineno-12-15" href="#__codelineno-12-15"></a>  end
-</span><span id="__span-12-16"><a id="__codelineno-12-16" name="__codelineno-12-16" href="#__codelineno-12-16"></a> subgraph P3[&quot;Tag Swap Detector&quot;]
+</span><span id="__span-12-16"><a id="__codelineno-12-16" name="__codelineno-12-16" href="#__codelineno-12-16"></a> subgraph P3["Tag Swap Detector"]
 </span><span id="__span-12-17"><a id="__codelineno-12-17" name="__codelineno-12-17" href="#__codelineno-12-17"></a>    direction LR
-</span><span id="__span-12-18"><a id="__codelineno-12-18" name="__codelineno-12-18" href="#__codelineno-12-18"></a>        c1[&quot;Nearest AprilTag&lt;br&gt;per frame&quot;]
-</span><span id="__span-12-19"><a id="__codelineno-12-19" name="__codelineno-12-19" href="#__codelineno-12-19"></a>        c2[&quot;Majority vote&lt;br&gt;→ TagID, TagVotes&quot;]
-</span><span id="__span-12-20"><a id="__codelineno-12-20" name="__codelineno-12-20" href="#__codelineno-12-20"></a>        c3[&quot;Swap detector&lt;br&gt;&quot;]
+</span><span id="__span-12-18"><a id="__codelineno-12-18" name="__codelineno-12-18" href="#__codelineno-12-18"></a>        c1["Nearest AprilTag&lt;br&gt;per frame"]
+</span><span id="__span-12-19"><a id="__codelineno-12-19" name="__codelineno-12-19" href="#__codelineno-12-19"></a>        c2["Majority vote&lt;br&gt;→ TagID, TagVotes"]
+</span><span id="__span-12-20"><a id="__codelineno-12-20" name="__codelineno-12-20" href="#__codelineno-12-20"></a>        c3["Swap detector&lt;br&gt;"]
 </span><span id="__span-12-21"><a id="__codelineno-12-21" name="__codelineno-12-21" href="#__codelineno-12-21"></a>  end
-</span><span id="__span-12-22"><a id="__codelineno-12-22" name="__codelineno-12-22" href="#__codelineno-12-22"></a> subgraph P4[&quot;Identity Cleanup&quot;]
+</span><span id="__span-12-22"><a id="__codelineno-12-22" name="__codelineno-12-22" href="#__codelineno-12-22"></a> subgraph P4["Identity Cleanup"]
 </span><span id="__span-12-23"><a id="__codelineno-12-23" name="__codelineno-12-23" href="#__codelineno-12-23"></a>    direction LR
-</span><span id="__span-12-24"><a id="__codelineno-12-24" name="__codelineno-12-24" href="#__codelineno-12-24"></a>        d1[&quot;fill_identity_nans&lt;br&gt;per-traj mode&quot;]
-</span><span id="__span-12-25"><a id="__codelineno-12-25" name="__codelineno-12-25" href="#__codelineno-12-25"></a>        d2[&quot;sort_by_identity&lt;br&gt;renumber TrajectoryID&quot;]
+</span><span id="__span-12-24"><a id="__codelineno-12-24" name="__codelineno-12-24" href="#__codelineno-12-24"></a>        d1["fill_identity_nans&lt;br&gt;per-traj mode"]
+</span><span id="__span-12-25"><a id="__codelineno-12-25" name="__codelineno-12-25" href="#__codelineno-12-25"></a>        d2["sort_by_identity&lt;br&gt;renumber TrajectoryID"]
 </span><span id="__span-12-26"><a id="__codelineno-12-26" name="__codelineno-12-26" href="#__codelineno-12-26"></a>  end
 </span><span id="__span-12-27"><a id="__codelineno-12-27" name="__codelineno-12-27" href="#__codelineno-12-27"></a>    a0 --&gt; a1
 </span><span id="__span-12-28"><a id="__codelineno-12-28" name="__codelineno-12-28" href="#__codelineno-12-28"></a>    a1 --&gt; a2
@@ -3060,11 +3237,10 @@ than guessed. Stitching reconnects fragments separated by short gaps
 </table>
 <blockquote>
 <p><strong>Not in the pipeline (despite previous diagrams claiming so):</strong>
-<code>build_tag_only_trajectories</code> (<code>tag_identity.py:332</code>) is dead code with
-zero call sites. There is no "forward + backward fill of entropy /
-margin." Identity-conflict arbitration and identity-disagreement splits
-live inside <code>resolve_trajectories</code> (Slide 6 stage ⑤), not as standalone
-primitives.</p>
+<code>build_tag_only_trajectories</code> was deleted (dead code with zero call sites).
+There is no "forward + backward fill of entropy / margin." Identity-conflict
+arbitration and identity-disagreement splits live inside <code>resolve_trajectories</code>
+(Slide 6 stage ⑤), not as standalone primitives.</p>
 </blockquote>
 <hr />
 <h2 id="suggested-meeting-flow-10-min">Suggested meeting flow (10 min)<a class="headerlink" href="#suggested-meeting-flow-10-min" title="Permanent link">&para;</a></h2>
@@ -3081,23 +3257,23 @@ primitives.</p>
 </span><span id="__span-13-3"><a id="__codelineno-13-3" name="__codelineno-13-3" href="#__codelineno-13-3"></a>  layout: dagre
 </span><span id="__span-13-4"><a id="__codelineno-13-4" name="__codelineno-13-4" href="#__codelineno-13-4"></a>---
 </span><span id="__span-13-5"><a id="__codelineno-13-5" name="__codelineno-13-5" href="#__codelineno-13-5"></a>flowchart LR
-</span><span id="__span-13-6"><a id="__codelineno-13-6" name="__codelineno-13-6" href="#__codelineno-13-6"></a> subgraph s1[&quot;Individual Level inference&quot;]
-</span><span id="__span-13-7"><a id="__codelineno-13-7" name="__codelineno-13-7" href="#__codelineno-13-7"></a>        n1[&quot;Identity&quot;]
-</span><span id="__span-13-8"><a id="__codelineno-13-8" name="__codelineno-13-8" href="#__codelineno-13-8"></a>        n2[&quot;Orientation&quot;]
-</span><span id="__span-13-9"><a id="__codelineno-13-9" name="__codelineno-13-9" href="#__codelineno-13-9"></a>        n3[&quot;Pose&quot;]
+</span><span id="__span-13-6"><a id="__codelineno-13-6" name="__codelineno-13-6" href="#__codelineno-13-6"></a> subgraph s1["Individual Level inference"]
+</span><span id="__span-13-7"><a id="__codelineno-13-7" name="__codelineno-13-7" href="#__codelineno-13-7"></a>        n1["Identity"]
+</span><span id="__span-13-8"><a id="__codelineno-13-8" name="__codelineno-13-8" href="#__codelineno-13-8"></a>        n2["Orientation"]
+</span><span id="__span-13-9"><a id="__codelineno-13-9" name="__codelineno-13-9" href="#__codelineno-13-9"></a>        n3["Pose"]
 </span><span id="__span-13-10"><a id="__codelineno-13-10" name="__codelineno-13-10" href="#__codelineno-13-10"></a>  end
-</span><span id="__span-13-11"><a id="__codelineno-13-11" name="__codelineno-13-11" href="#__codelineno-13-11"></a> subgraph s2[&quot;Tracking Logic&quot;]
-</span><span id="__span-13-12"><a id="__codelineno-13-12" name="__codelineno-13-12" href="#__codelineno-13-12"></a>        Fwd[&quot;Assignment Logic&quot;]
-</span><span id="__span-13-13"><a id="__codelineno-13-13" name="__codelineno-13-13" href="#__codelineno-13-13"></a>        n4[&quot;Identity Logic&quot;]
+</span><span id="__span-13-11"><a id="__codelineno-13-11" name="__codelineno-13-11" href="#__codelineno-13-11"></a> subgraph s2["Tracking Logic"]
+</span><span id="__span-13-12"><a id="__codelineno-13-12" name="__codelineno-13-12" href="#__codelineno-13-12"></a>        Fwd["Assignment Logic"]
+</span><span id="__span-13-13"><a id="__codelineno-13-13" name="__codelineno-13-13" href="#__codelineno-13-13"></a>        n4["Identity Logic"]
 </span><span id="__span-13-14"><a id="__codelineno-13-14" name="__codelineno-13-14" href="#__codelineno-13-14"></a>  end
 </span><span id="__span-13-15"><a id="__codelineno-13-15" name="__codelineno-13-15" href="#__codelineno-13-15"></a>    Fwd --&gt; n4
-</span><span id="__span-13-16"><a id="__codelineno-13-16" name="__codelineno-13-16" href="#__codelineno-13-16"></a>    s2 --&gt; Refine[&quot;Post Processing&quot;]
+</span><span id="__span-13-16"><a id="__codelineno-13-16" name="__codelineno-13-16" href="#__codelineno-13-16"></a>    s2 --&gt; Refine["Post Processing"]
 </span><span id="__span-13-17"><a id="__codelineno-13-17" name="__codelineno-13-17" href="#__codelineno-13-17"></a>    s1 --&gt; s2
 </span><span id="__span-13-18"><a id="__codelineno-13-18" name="__codelineno-13-18" href="#__codelineno-13-18"></a>    n4 --&gt; Fwd
-</span><span id="__span-13-19"><a id="__codelineno-13-19" name="__codelineno-13-19" href="#__codelineno-13-19"></a>    Setup[&quot;Detection&quot;] --&gt; s1 &amp; s2
-</span><span id="__span-13-20"><a id="__codelineno-13-20" name="__codelineno-13-20" href="#__codelineno-13-20"></a>    n5[&quot;Input&quot;] --&gt; Setup
-</span><span id="__span-13-21"><a id="__codelineno-13-21" name="__codelineno-13-21" href="#__codelineno-13-21"></a>    Refine --&gt; n6[&quot;Output&quot;]
-</span><span id="__span-13-22"><a id="__codelineno-13-22" name="__codelineno-13-22" href="#__codelineno-13-22"></a>    n6 --&gt; n7[&quot;Proofreading&quot;]
+</span><span id="__span-13-19"><a id="__codelineno-13-19" name="__codelineno-13-19" href="#__codelineno-13-19"></a>    Setup["Detection"] --&gt; s1 &amp; s2
+</span><span id="__span-13-20"><a id="__codelineno-13-20" name="__codelineno-13-20" href="#__codelineno-13-20"></a>    n5["Input"] --&gt; Setup
+</span><span id="__span-13-21"><a id="__codelineno-13-21" name="__codelineno-13-21" href="#__codelineno-13-21"></a>    Refine --&gt; n6["Output"]
+</span><span id="__span-13-22"><a id="__codelineno-13-22" name="__codelineno-13-22" href="#__codelineno-13-22"></a>    n6 --&gt; n7["Proofreading"]
 </span><span id="__span-13-23"><a id="__codelineno-13-23" name="__codelineno-13-23" href="#__codelineno-13-23"></a>
 </span><span id="__span-13-24"><a id="__codelineno-13-24" name="__codelineno-13-24" href="#__codelineno-13-24"></a>     n1:::opt
 </span><span id="__span-13-25"><a id="__codelineno-13-25" name="__codelineno-13-25" href="#__codelineno-13-25"></a>     n2:::opt

@@ -1,0 +1,3389 @@
+
+<!doctype html>
+<html lang="en" class="no-js">
+  <head>
+    
+      <meta charset="utf-8">
+      <meta name="viewport" content="width=device-width,initial-scale=1">
+      
+        <meta name="description" content="User and developer documentation for HYDRA Suite">
+      
+      
+      
+        <link rel="canonical" href="https://neurorishika.github.io/hydra-suite/latest/superpowers/plans/done/2026-09-03-detectkit-oom-hardening-agent-instructions/">
+      
+      
+      
+      
+      <link rel="icon" href="../../../../assets/images/favicon.png">
+      <meta name="generator" content="mkdocs-1.6.1, mkdocs-material-9.5.43">
+    
+    
+      
+        <title>DetectKit OOM Hardening — Agent Execution Instructions - HYDRA Suite Docs</title>
+      
+    
+    
+      <link rel="stylesheet" href="../../../../assets/stylesheets/main.0253249f.min.css">
+      
+        
+        <link rel="stylesheet" href="../../../../assets/stylesheets/palette.06af60db.min.css">
+      
+      
+
+
+    
+    
+      
+    
+    
+      
+        
+        
+        <link rel="preconnect" href="https://fonts.gstatic.com" crossorigin>
+        <link rel="stylesheet" href="https://fonts.googleapis.com/css?family=Roboto:300,300i,400,400i,700,700i%7CRoboto+Mono:400,400i,700,700i&display=fallback">
+        <style>:root{--md-text-font:"Roboto";--md-code-font:"Roboto Mono"}</style>
+      
+    
+    
+      <link rel="stylesheet" href="../../../../assets/_mkdocstrings.css">
+    
+    <script>__md_scope=new URL("../../../..",location),__md_hash=e=>[...e].reduce(((e,_)=>(e<<5)-e+_.charCodeAt(0)),0),__md_get=(e,_=localStorage,t=__md_scope)=>JSON.parse(_.getItem(t.pathname+"."+e)),__md_set=(e,_,t=localStorage,a=__md_scope)=>{try{t.setItem(a.pathname+"."+e,JSON.stringify(_))}catch(e){}}</script>
+    
+      
+
+    
+    
+    
+  </head>
+  
+  
+    
+    
+      
+    
+    
+    
+    
+    <body dir="ltr" data-md-color-scheme="default" data-md-color-primary="blue" data-md-color-accent="light-blue">
+  
+    
+    <input class="md-toggle" data-md-toggle="drawer" type="checkbox" id="__drawer" autocomplete="off">
+    <input class="md-toggle" data-md-toggle="search" type="checkbox" id="__search" autocomplete="off">
+    <label class="md-overlay" for="__drawer"></label>
+    <div data-md-component="skip">
+      
+        
+        <a href="#detectkit-oom-hardening-agent-execution-instructions" class="md-skip">
+          Skip to content
+        </a>
+      
+    </div>
+    <div data-md-component="announce">
+      
+    </div>
+    
+      <div data-md-color-scheme="default" data-md-component="outdated" hidden>
+        
+      </div>
+    
+    
+      
+
+<header class="md-header" data-md-component="header">
+  <nav class="md-header__inner md-grid" aria-label="Header">
+    <a href="../../../.." title="HYDRA Suite Docs" class="md-header__button md-logo" aria-label="HYDRA Suite Docs" data-md-component="logo">
+      
+  
+  <svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 24 24"><path d="M12 8a3 3 0 0 0 3-3 3 3 0 0 0-3-3 3 3 0 0 0-3 3 3 3 0 0 0 3 3m0 3.54C9.64 9.35 6.5 8 3 8v11c3.5 0 6.64 1.35 9 3.54 2.36-2.19 5.5-3.54 9-3.54V8c-3.5 0-6.64 1.35-9 3.54"/></svg>
+
+    </a>
+    <label class="md-header__button md-icon" for="__drawer">
+      
+      <svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 24 24"><path d="M3 6h18v2H3zm0 5h18v2H3zm0 5h18v2H3z"/></svg>
+    </label>
+    <div class="md-header__title" data-md-component="header-title">
+      <div class="md-header__ellipsis">
+        <div class="md-header__topic">
+          <span class="md-ellipsis">
+            HYDRA Suite Docs
+          </span>
+        </div>
+        <div class="md-header__topic" data-md-component="header-topic">
+          <span class="md-ellipsis">
+            
+              DetectKit OOM Hardening — Agent Execution Instructions
+            
+          </span>
+        </div>
+      </div>
+    </div>
+    
+      
+        <form class="md-header__option" data-md-component="palette">
+  
+    
+    
+    
+    <input class="md-option" data-md-color-media="(prefers-color-scheme: light)" data-md-color-scheme="default" data-md-color-primary="blue" data-md-color-accent="light-blue"  aria-label="Switch to dark mode"  type="radio" name="__palette" id="__palette_0">
+    
+      <label class="md-header__button md-icon" title="Switch to dark mode" for="__palette_1" hidden>
+        <svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 24 24"><path d="m17.75 4.09-2.53 1.94.91 3.06-2.63-1.81-2.63 1.81.91-3.06-2.53-1.94L12.44 4l1.06-3 1.06 3zm3.5 6.91-1.64 1.25.59 1.98-1.7-1.17-1.7 1.17.59-1.98L15.75 11l2.06-.05L18.5 9l.69 1.95zm-2.28 4.95c.83-.08 1.72 1.1 1.19 1.85-.32.45-.66.87-1.08 1.27C15.17 23 8.84 23 4.94 19.07c-3.91-3.9-3.91-10.24 0-14.14.4-.4.82-.76 1.27-1.08.75-.53 1.93.36 1.85 1.19-.27 2.86.69 5.83 2.89 8.02a9.96 9.96 0 0 0 8.02 2.89m-1.64 2.02a12.08 12.08 0 0 1-7.8-3.47c-2.17-2.19-3.33-5-3.49-7.82-2.81 3.14-2.7 7.96.31 10.98 3.02 3.01 7.84 3.12 10.98.31"/></svg>
+      </label>
+    
+  
+    
+    
+    
+    <input class="md-option" data-md-color-media="(prefers-color-scheme: dark)" data-md-color-scheme="slate" data-md-color-primary="blue" data-md-color-accent="light-blue"  aria-label="Switch to light mode"  type="radio" name="__palette" id="__palette_1">
+    
+      <label class="md-header__button md-icon" title="Switch to light mode" for="__palette_0" hidden>
+        <svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 24 24"><path d="M12 7a5 5 0 0 1 5 5 5 5 0 0 1-5 5 5 5 0 0 1-5-5 5 5 0 0 1 5-5m0 2a3 3 0 0 0-3 3 3 3 0 0 0 3 3 3 3 0 0 0 3-3 3 3 0 0 0-3-3m0-7 2.39 3.42C13.65 5.15 12.84 5 12 5s-1.65.15-2.39.42zM3.34 7l4.16-.35A7.2 7.2 0 0 0 5.94 8.5c-.44.74-.69 1.5-.83 2.29zm.02 10 1.76-3.77a7.131 7.131 0 0 0 2.38 4.14zM20.65 7l-1.77 3.79a7.02 7.02 0 0 0-2.38-4.15zm-.01 10-4.14.36c.59-.51 1.12-1.14 1.54-1.86.42-.73.69-1.5.83-2.29zM12 22l-2.41-3.44c.74.27 1.55.44 2.41.44.82 0 1.63-.17 2.37-.44z"/></svg>
+      </label>
+    
+  
+</form>
+      
+    
+    
+      <script>var palette=__md_get("__palette");if(palette&&palette.color){if("(prefers-color-scheme)"===palette.color.media){var media=matchMedia("(prefers-color-scheme: light)"),input=document.querySelector(media.matches?"[data-md-color-media='(prefers-color-scheme: light)']":"[data-md-color-media='(prefers-color-scheme: dark)']");palette.color.media=input.getAttribute("data-md-color-media"),palette.color.scheme=input.getAttribute("data-md-color-scheme"),palette.color.primary=input.getAttribute("data-md-color-primary"),palette.color.accent=input.getAttribute("data-md-color-accent")}for(var[key,value]of Object.entries(palette.color))document.body.setAttribute("data-md-color-"+key,value)}</script>
+    
+    
+    
+      <label class="md-header__button md-icon" for="__search">
+        
+        <svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 24 24"><path d="M9.5 3A6.5 6.5 0 0 1 16 9.5c0 1.61-.59 3.09-1.56 4.23l.27.27h.79l5 5-1.5 1.5-5-5v-.79l-.27-.27A6.52 6.52 0 0 1 9.5 16 6.5 6.5 0 0 1 3 9.5 6.5 6.5 0 0 1 9.5 3m0 2C7 5 5 7 5 9.5S7 14 9.5 14 14 12 14 9.5 12 5 9.5 5"/></svg>
+      </label>
+      <div class="md-search" data-md-component="search" role="dialog">
+  <label class="md-search__overlay" for="__search"></label>
+  <div class="md-search__inner" role="search">
+    <form class="md-search__form" name="search">
+      <input type="text" class="md-search__input" name="query" aria-label="Search" placeholder="Search" autocapitalize="off" autocorrect="off" autocomplete="off" spellcheck="false" data-md-component="search-query" required>
+      <label class="md-search__icon md-icon" for="__search">
+        
+        <svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 24 24"><path d="M9.5 3A6.5 6.5 0 0 1 16 9.5c0 1.61-.59 3.09-1.56 4.23l.27.27h.79l5 5-1.5 1.5-5-5v-.79l-.27-.27A6.52 6.52 0 0 1 9.5 16 6.5 6.5 0 0 1 3 9.5 6.5 6.5 0 0 1 9.5 3m0 2C7 5 5 7 5 9.5S7 14 9.5 14 14 12 14 9.5 12 5 9.5 5"/></svg>
+        
+        <svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 24 24"><path d="M20 11v2H8l5.5 5.5-1.42 1.42L4.16 12l7.92-7.92L13.5 5.5 8 11z"/></svg>
+      </label>
+      <nav class="md-search__options" aria-label="Search">
+        
+        <button type="reset" class="md-search__icon md-icon" title="Clear" aria-label="Clear" tabindex="-1">
+          
+          <svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 24 24"><path d="M19 6.41 17.59 5 12 10.59 6.41 5 5 6.41 10.59 12 5 17.59 6.41 19 12 13.41 17.59 19 19 17.59 13.41 12z"/></svg>
+        </button>
+      </nav>
+      
+        <div class="md-search__suggest" data-md-component="search-suggest"></div>
+      
+    </form>
+    <div class="md-search__output">
+      <div class="md-search__scrollwrap" tabindex="0" data-md-scrollfix>
+        <div class="md-search-result" data-md-component="search-result">
+          <div class="md-search-result__meta">
+            Initializing search
+          </div>
+          <ol class="md-search-result__list" role="presentation"></ol>
+        </div>
+      </div>
+    </div>
+  </div>
+</div>
+    
+    
+      <div class="md-header__source">
+        <a href="https://github.com/neurorishika/hydra-suite" title="Go to repository" class="md-source" data-md-component="source">
+  <div class="md-source__icon md-icon">
+    
+    <svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 448 512"><!--! Font Awesome Free 6.6.0 by @fontawesome - https://fontawesome.com License - https://fontawesome.com/license/free (Icons: CC BY 4.0, Fonts: SIL OFL 1.1, Code: MIT License) Copyright 2024 Fonticons, Inc.--><path d="M439.55 236.05 244 40.45a28.87 28.87 0 0 0-40.81 0l-40.66 40.63 51.52 51.52c27.06-9.14 52.68 16.77 43.39 43.68l49.66 49.66c34.23-11.8 61.18 31 35.47 56.69-26.49 26.49-70.21-2.87-56-37.34L240.22 199v121.85c25.3 12.54 22.26 41.85 9.08 55a34.34 34.34 0 0 1-48.55 0c-17.57-17.6-11.07-46.91 11.25-56v-123c-20.8-8.51-24.6-30.74-18.64-45L142.57 101 8.45 235.14a28.86 28.86 0 0 0 0 40.81l195.61 195.6a28.86 28.86 0 0 0 40.8 0l194.69-194.69a28.86 28.86 0 0 0 0-40.81"/></svg>
+  </div>
+  <div class="md-source__repository">
+    neurorishika/hydra-suite
+  </div>
+</a>
+      </div>
+    
+  </nav>
+  
+</header>
+    
+    <div class="md-container" data-md-component="container">
+      
+      
+        
+          
+            
+<nav class="md-tabs" aria-label="Tabs" data-md-component="tabs">
+  <div class="md-grid">
+    <ul class="md-tabs__list">
+      
+        
+  
+  
+  
+    <li class="md-tabs__item">
+      <a href="../../../.." class="md-tabs__link">
+        
+  
+    
+  
+  Home
+
+      </a>
+    </li>
+  
+
+      
+        
+  
+  
+  
+    
+    
+      <li class="md-tabs__item">
+        <a href="../../../../getting-started/installation/" class="md-tabs__link">
+          
+  
+  Getting Started
+
+        </a>
+      </li>
+    
+  
+
+      
+        
+  
+  
+  
+    
+    
+      <li class="md-tabs__item">
+        <a href="../../../../user-guide/overview/" class="md-tabs__link">
+          
+  
+  User Guide
+
+        </a>
+      </li>
+    
+  
+
+      
+        
+  
+  
+  
+    
+    
+      <li class="md-tabs__item">
+        <a href="../../../../developer-guide/architecture/" class="md-tabs__link">
+          
+  
+  Developer Guide
+
+        </a>
+      </li>
+    
+  
+
+      
+        
+  
+  
+  
+    
+    
+      <li class="md-tabs__item">
+        <a href="../../../../reference/api-index/" class="md-tabs__link">
+          
+  
+  Reference
+
+        </a>
+      </li>
+    
+  
+
+      
+    </ul>
+  </div>
+</nav>
+          
+        
+      
+      <main class="md-main" data-md-component="main">
+        <div class="md-main__inner md-grid">
+          
+            
+              
+              <div class="md-sidebar md-sidebar--primary" data-md-component="sidebar" data-md-type="navigation" >
+                <div class="md-sidebar__scrollwrap">
+                  <div class="md-sidebar__inner">
+                    
+
+
+  
+
+
+<nav class="md-nav md-nav--primary md-nav--lifted" aria-label="Navigation" data-md-level="0">
+  <label class="md-nav__title" for="__drawer">
+    <a href="../../../.." title="HYDRA Suite Docs" class="md-nav__button md-logo" aria-label="HYDRA Suite Docs" data-md-component="logo">
+      
+  
+  <svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 24 24"><path d="M12 8a3 3 0 0 0 3-3 3 3 0 0 0-3-3 3 3 0 0 0-3 3 3 3 0 0 0 3 3m0 3.54C9.64 9.35 6.5 8 3 8v11c3.5 0 6.64 1.35 9 3.54 2.36-2.19 5.5-3.54 9-3.54V8c-3.5 0-6.64 1.35-9 3.54"/></svg>
+
+    </a>
+    HYDRA Suite Docs
+  </label>
+  
+    <div class="md-nav__source">
+      <a href="https://github.com/neurorishika/hydra-suite" title="Go to repository" class="md-source" data-md-component="source">
+  <div class="md-source__icon md-icon">
+    
+    <svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 448 512"><!--! Font Awesome Free 6.6.0 by @fontawesome - https://fontawesome.com License - https://fontawesome.com/license/free (Icons: CC BY 4.0, Fonts: SIL OFL 1.1, Code: MIT License) Copyright 2024 Fonticons, Inc.--><path d="M439.55 236.05 244 40.45a28.87 28.87 0 0 0-40.81 0l-40.66 40.63 51.52 51.52c27.06-9.14 52.68 16.77 43.39 43.68l49.66 49.66c34.23-11.8 61.18 31 35.47 56.69-26.49 26.49-70.21-2.87-56-37.34L240.22 199v121.85c25.3 12.54 22.26 41.85 9.08 55a34.34 34.34 0 0 1-48.55 0c-17.57-17.6-11.07-46.91 11.25-56v-123c-20.8-8.51-24.6-30.74-18.64-45L142.57 101 8.45 235.14a28.86 28.86 0 0 0 0 40.81l195.61 195.6a28.86 28.86 0 0 0 40.8 0l194.69-194.69a28.86 28.86 0 0 0 0-40.81"/></svg>
+  </div>
+  <div class="md-source__repository">
+    neurorishika/hydra-suite
+  </div>
+</a>
+    </div>
+  
+  <ul class="md-nav__list" data-md-scrollfix>
+    
+      
+      
+  
+  
+  
+  
+    <li class="md-nav__item">
+      <a href="../../../.." class="md-nav__link">
+        
+  
+  <span class="md-ellipsis">
+    Home
+  </span>
+  
+
+      </a>
+    </li>
+  
+
+    
+      
+      
+  
+  
+  
+  
+    
+    
+    
+      
+      
+        
+      
+    
+    
+    <li class="md-nav__item md-nav__item--nested">
+      
+        
+        
+          
+        
+        <input class="md-nav__toggle md-toggle md-toggle--indeterminate" type="checkbox" id="__nav_2" >
+        
+          
+          <label class="md-nav__link" for="__nav_2" id="__nav_2_label" tabindex="0">
+            
+  
+  <span class="md-ellipsis">
+    Getting Started
+  </span>
+  
+
+            <span class="md-nav__icon md-icon"></span>
+          </label>
+        
+        <nav class="md-nav" data-md-level="1" aria-labelledby="__nav_2_label" aria-expanded="false">
+          <label class="md-nav__title" for="__nav_2">
+            <span class="md-nav__icon md-icon"></span>
+            Getting Started
+          </label>
+          <ul class="md-nav__list" data-md-scrollfix>
+            
+              
+                
+  
+  
+  
+  
+    <li class="md-nav__item">
+      <a href="../../../../getting-started/installation/" class="md-nav__link">
+        
+  
+  <span class="md-ellipsis">
+    Installation
+  </span>
+  
+
+      </a>
+    </li>
+  
+
+              
+            
+              
+                
+  
+  
+  
+  
+    <li class="md-nav__item">
+      <a href="../../../../getting-started/environments/" class="md-nav__link">
+        
+  
+  <span class="md-ellipsis">
+    Environments and Makefile
+  </span>
+  
+
+      </a>
+    </li>
+  
+
+              
+            
+              
+                
+  
+  
+  
+  
+    <li class="md-nav__item">
+      <a href="../../../../getting-started/integrations/" class="md-nav__link">
+        
+  
+  <span class="md-ellipsis">
+    Integrations
+  </span>
+  
+
+      </a>
+    </li>
+  
+
+              
+            
+              
+                
+  
+  
+  
+  
+    <li class="md-nav__item">
+      <a href="../../../../getting-started/quickstart-hydra/" class="md-nav__link">
+        
+  
+  <span class="md-ellipsis">
+    Quickstart (TrackerKit)
+  </span>
+  
+
+      </a>
+    </li>
+  
+
+              
+            
+              
+                
+  
+  
+  
+  
+    <li class="md-nav__item">
+      <a href="../../../../getting-started/quickstart-posekit/" class="md-nav__link">
+        
+  
+  <span class="md-ellipsis">
+    Quickstart (PoseKit)
+  </span>
+  
+
+      </a>
+    </li>
+  
+
+              
+            
+              
+                
+  
+  
+  
+  
+    <li class="md-nav__item">
+      <a href="../../../../getting-started/platforms/" class="md-nav__link">
+        
+  
+  <span class="md-ellipsis">
+    Platform Notes
+  </span>
+  
+
+      </a>
+    </li>
+  
+
+              
+            
+          </ul>
+        </nav>
+      
+    </li>
+  
+
+    
+      
+      
+  
+  
+  
+  
+    
+    
+    
+      
+      
+        
+      
+    
+    
+    <li class="md-nav__item md-nav__item--nested">
+      
+        
+        
+          
+        
+        <input class="md-nav__toggle md-toggle md-toggle--indeterminate" type="checkbox" id="__nav_3" >
+        
+          
+          <label class="md-nav__link" for="__nav_3" id="__nav_3_label" tabindex="0">
+            
+  
+  <span class="md-ellipsis">
+    User Guide
+  </span>
+  
+
+            <span class="md-nav__icon md-icon"></span>
+          </label>
+        
+        <nav class="md-nav" data-md-level="1" aria-labelledby="__nav_3_label" aria-expanded="false">
+          <label class="md-nav__title" for="__nav_3">
+            <span class="md-nav__icon md-icon"></span>
+            User Guide
+          </label>
+          <ul class="md-nav__list" data-md-scrollfix>
+            
+              
+                
+  
+  
+  
+  
+    <li class="md-nav__item">
+      <a href="../../../../user-guide/overview/" class="md-nav__link">
+        
+  
+  <span class="md-ellipsis">
+    Overview
+  </span>
+  
+
+      </a>
+    </li>
+  
+
+              
+            
+              
+                
+  
+  
+  
+  
+    <li class="md-nav__item">
+      <a href="../../../../user-guide/workflow/" class="md-nav__link">
+        
+  
+  <span class="md-ellipsis">
+    End-to-End Workflow
+  </span>
+  
+
+      </a>
+    </li>
+  
+
+              
+            
+              
+                
+  
+  
+  
+  
+    <li class="md-nav__item">
+      <a href="../../../../user-guide/detection-modes/" class="md-nav__link">
+        
+  
+  <span class="md-ellipsis">
+    Detection Modes
+  </span>
+  
+
+      </a>
+    </li>
+  
+
+              
+            
+              
+                
+  
+  
+  
+  
+    <li class="md-nav__item">
+      <a href="../../../../user-guide/tracking-and-merging/" class="md-nav__link">
+        
+  
+  <span class="md-ellipsis">
+    Tracking and Merging
+  </span>
+  
+
+      </a>
+    </li>
+  
+
+              
+            
+              
+                
+  
+  
+  
+  
+    <li class="md-nav__item">
+      <a href="../../../../user-guide/post-processing/" class="md-nav__link">
+        
+  
+  <span class="md-ellipsis">
+    Post-processing
+  </span>
+  
+
+      </a>
+    </li>
+  
+
+              
+            
+              
+                
+  
+  
+  
+  
+    <li class="md-nav__item">
+      <a href="../../../../user-guide/configuration-reference/" class="md-nav__link">
+        
+  
+  <span class="md-ellipsis">
+    Configuration Reference
+  </span>
+  
+
+      </a>
+    </li>
+  
+
+              
+            
+              
+                
+  
+  
+  
+  
+    <li class="md-nav__item">
+      <a href="../../../../user-guide/compute-runtimes/" class="md-nav__link">
+        
+  
+  <span class="md-ellipsis">
+    Compute Runtimes
+  </span>
+  
+
+      </a>
+    </li>
+  
+
+              
+            
+              
+                
+  
+  
+  
+  
+    <li class="md-nav__item">
+      <a href="../../../../user-guide/outputs-and-csv-schema/" class="md-nav__link">
+        
+  
+  <span class="md-ellipsis">
+    Outputs and CSV Schema
+  </span>
+  
+
+      </a>
+    </li>
+  
+
+              
+            
+              
+                
+  
+  
+  
+  
+    <li class="md-nav__item">
+      <a href="../../../../user-guide/dataset-generation/" class="md-nav__link">
+        
+  
+  <span class="md-ellipsis">
+    Dataset Generation
+  </span>
+  
+
+      </a>
+    </li>
+  
+
+              
+            
+              
+                
+  
+  
+  
+  
+    <li class="md-nav__item">
+      <a href="../../../../user-guide/individual-analysis/" class="md-nav__link">
+        
+  
+  <span class="md-ellipsis">
+    Individual Analysis
+  </span>
+  
+
+      </a>
+    </li>
+  
+
+              
+            
+              
+                
+  
+  
+  
+  
+    <li class="md-nav__item">
+      <a href="../../../../user-guide/posekit/" class="md-nav__link">
+        
+  
+  <span class="md-ellipsis">
+    PoseKit
+  </span>
+  
+
+      </a>
+    </li>
+  
+
+              
+            
+              
+                
+  
+  
+  
+  
+    <li class="md-nav__item">
+      <a href="../../../../user-guide/classkit/" class="md-nav__link">
+        
+  
+  <span class="md-ellipsis">
+    ClassKit
+  </span>
+  
+
+      </a>
+    </li>
+  
+
+              
+            
+              
+                
+  
+  
+  
+  
+    <li class="md-nav__item">
+      <a href="../../../../user-guide/detectkit/" class="md-nav__link">
+        
+  
+  <span class="md-ellipsis">
+    DetectKit
+  </span>
+  
+
+      </a>
+    </li>
+  
+
+              
+            
+              
+                
+  
+  
+  
+  
+    <li class="md-nav__item">
+      <a href="../../../../runbooks/detectkit-headless-training/" class="md-nav__link">
+        
+  
+  <span class="md-ellipsis">
+    DetectKit Headless Training
+  </span>
+  
+
+      </a>
+    </li>
+  
+
+              
+            
+              
+                
+  
+  
+  
+  
+    <li class="md-nav__item">
+      <a href="../../../../user-guide/detectkit-semantic-escalation/" class="md-nav__link">
+        
+  
+  <span class="md-ellipsis">
+    DetectKit: Semantic Escalation (SAM3)
+  </span>
+  
+
+      </a>
+    </li>
+  
+
+              
+            
+              
+                
+  
+  
+  
+  
+    <li class="md-nav__item">
+      <a href="../../../../user-guide/detectkit-sahi-calibration/" class="md-nav__link">
+        
+  
+  <span class="md-ellipsis">
+    DetectKit: SAHI Calibration Profiles
+  </span>
+  
+
+      </a>
+    </li>
+  
+
+              
+            
+              
+                
+  
+  
+  
+  
+    <li class="md-nav__item">
+      <a href="../../../../user-guide/filterkit/" class="md-nav__link">
+        
+  
+  <span class="md-ellipsis">
+    FilterKit
+  </span>
+  
+
+      </a>
+    </li>
+  
+
+              
+            
+              
+                
+  
+  
+  
+  
+    <li class="md-nav__item">
+      <a href="../../../../user-guide/refinekit/" class="md-nav__link">
+        
+  
+  <span class="md-ellipsis">
+    RefineKit
+  </span>
+  
+
+      </a>
+    </li>
+  
+
+              
+            
+              
+                
+  
+  
+  
+  
+    <li class="md-nav__item">
+      <a href="../../../../user-guide/troubleshooting/" class="md-nav__link">
+        
+  
+  <span class="md-ellipsis">
+    Troubleshooting
+  </span>
+  
+
+      </a>
+    </li>
+  
+
+              
+            
+          </ul>
+        </nav>
+      
+    </li>
+  
+
+    
+      
+      
+  
+  
+  
+  
+    
+    
+    
+      
+      
+        
+      
+    
+    
+    <li class="md-nav__item md-nav__item--nested">
+      
+        
+        
+          
+        
+        <input class="md-nav__toggle md-toggle md-toggle--indeterminate" type="checkbox" id="__nav_4" >
+        
+          
+          <label class="md-nav__link" for="__nav_4" id="__nav_4_label" tabindex="0">
+            
+  
+  <span class="md-ellipsis">
+    Developer Guide
+  </span>
+  
+
+            <span class="md-nav__icon md-icon"></span>
+          </label>
+        
+        <nav class="md-nav" data-md-level="1" aria-labelledby="__nav_4_label" aria-expanded="false">
+          <label class="md-nav__title" for="__nav_4">
+            <span class="md-nav__icon md-icon"></span>
+            Developer Guide
+          </label>
+          <ul class="md-nav__list" data-md-scrollfix>
+            
+              
+                
+  
+  
+  
+  
+    <li class="md-nav__item">
+      <a href="../../../../developer-guide/architecture/" class="md-nav__link">
+        
+  
+  <span class="md-ellipsis">
+    Architecture
+  </span>
+  
+
+      </a>
+    </li>
+  
+
+              
+            
+              
+                
+  
+  
+  
+  
+    <li class="md-nav__item">
+      <a href="../../../../developer-guide/module-map/" class="md-nav__link">
+        
+  
+  <span class="md-ellipsis">
+    Module Map
+  </span>
+  
+
+      </a>
+    </li>
+  
+
+              
+            
+              
+                
+  
+  
+  
+  
+    <li class="md-nav__item">
+      <a href="../../../../developer-guide/data-flow/" class="md-nav__link">
+        
+  
+  <span class="md-ellipsis">
+    Data Flow
+  </span>
+  
+
+      </a>
+    </li>
+  
+
+              
+            
+              
+                
+  
+  
+  
+  
+    <li class="md-nav__item">
+      <a href="../../../../developer-guide/tracking-algorithm-deep-dive/" class="md-nav__link">
+        
+  
+  <span class="md-ellipsis">
+    Tracking Algorithm Deep Dive
+  </span>
+  
+
+      </a>
+    </li>
+  
+
+              
+            
+              
+                
+  
+  
+  
+  
+    <li class="md-nav__item">
+      <a href="../../../../developer-guide/tracking-optimization/" class="md-nav__link">
+        
+  
+  <span class="md-ellipsis">
+    Tracking Optimization
+  </span>
+  
+
+      </a>
+    </li>
+  
+
+              
+            
+              
+                
+  
+  
+  
+  
+    <li class="md-nav__item">
+      <a href="../../../../developer-guide/gpu-backends/" class="md-nav__link">
+        
+  
+  <span class="md-ellipsis">
+    GPU Backends
+  </span>
+  
+
+      </a>
+    </li>
+  
+
+              
+            
+              
+                
+  
+  
+  
+  
+    <li class="md-nav__item">
+      <a href="../../../../developer-guide/runtime-integration/" class="md-nav__link">
+        
+  
+  <span class="md-ellipsis">
+    Runtime Integration
+  </span>
+  
+
+      </a>
+    </li>
+  
+
+              
+            
+              
+                
+  
+  
+  
+  
+    <li class="md-nav__item">
+      <a href="../../../../developer-guide/resource-containment/" class="md-nav__link">
+        
+  
+  <span class="md-ellipsis">
+    Resource Containment
+  </span>
+  
+
+      </a>
+    </li>
+  
+
+              
+            
+              
+                
+  
+  
+  
+  
+    <li class="md-nav__item">
+      <a href="../../../../developer-guide/profiling/" class="md-nav__link">
+        
+  
+  <span class="md-ellipsis">
+    Profiling
+  </span>
+  
+
+      </a>
+    </li>
+  
+
+              
+            
+              
+                
+  
+  
+  
+  
+    <li class="md-nav__item">
+      <a href="../../../../developer-guide/dependency-cuda-updates/" class="md-nav__link">
+        
+  
+  <span class="md-ellipsis">
+    CUDA Dependency Updates
+  </span>
+  
+
+      </a>
+    </li>
+  
+
+              
+            
+              
+                
+  
+  
+  
+  
+    <li class="md-nav__item">
+      <a href="../../../../developer-guide/performance-tuning/" class="md-nav__link">
+        
+  
+  <span class="md-ellipsis">
+    Performance Tuning
+  </span>
+  
+
+      </a>
+    </li>
+  
+
+              
+            
+              
+                
+  
+  
+  
+  
+    <li class="md-nav__item">
+      <a href="../../../../developer-guide/inference-fast-mode/" class="md-nav__link">
+        
+  
+  <span class="md-ellipsis">
+    Inference Fast Mode
+  </span>
+  
+
+      </a>
+    </li>
+  
+
+              
+            
+              
+                
+  
+  
+  
+  
+    <li class="md-nav__item">
+      <a href="../../../../developer-guide/confidence-metrics/" class="md-nav__link">
+        
+  
+  <span class="md-ellipsis">
+    Confidence Metrics
+  </span>
+  
+
+      </a>
+    </li>
+  
+
+              
+            
+              
+                
+  
+  
+  
+  
+    <li class="md-nav__item">
+      <a href="../../../../developer-guide/extending-detection/" class="md-nav__link">
+        
+  
+  <span class="md-ellipsis">
+    Extending Detection
+  </span>
+  
+
+      </a>
+    </li>
+  
+
+              
+            
+              
+                
+  
+  
+  
+  
+    <li class="md-nav__item">
+      <a href="../../../../developer-guide/extending-identity/" class="md-nav__link">
+        
+  
+  <span class="md-ellipsis">
+    Extending Identity
+  </span>
+  
+
+      </a>
+    </li>
+  
+
+              
+            
+              
+                
+  
+  
+  
+  
+    <li class="md-nav__item">
+      <a href="../../../../developer-guide/code-health/" class="md-nav__link">
+        
+  
+  <span class="md-ellipsis">
+    Code Health & Auditing
+  </span>
+  
+
+      </a>
+    </li>
+  
+
+              
+            
+              
+                
+  
+  
+  
+  
+    <li class="md-nav__item">
+      <a href="../../../../developer-guide/publishing/" class="md-nav__link">
+        
+  
+  <span class="md-ellipsis">
+    Publishing
+  </span>
+  
+
+      </a>
+    </li>
+  
+
+              
+            
+              
+                
+  
+  
+  
+  
+    <li class="md-nav__item">
+      <a href="../../../../developer-guide/contributing/" class="md-nav__link">
+        
+  
+  <span class="md-ellipsis">
+    Contributing
+  </span>
+  
+
+      </a>
+    </li>
+  
+
+              
+            
+          </ul>
+        </nav>
+      
+    </li>
+  
+
+    
+      
+      
+  
+  
+  
+  
+    
+    
+    
+      
+      
+        
+      
+    
+    
+    <li class="md-nav__item md-nav__item--nested">
+      
+        
+        
+          
+        
+        <input class="md-nav__toggle md-toggle md-toggle--indeterminate" type="checkbox" id="__nav_5" >
+        
+          
+          <label class="md-nav__link" for="__nav_5" id="__nav_5_label" tabindex="0">
+            
+  
+  <span class="md-ellipsis">
+    Reference
+  </span>
+  
+
+            <span class="md-nav__icon md-icon"></span>
+          </label>
+        
+        <nav class="md-nav" data-md-level="1" aria-labelledby="__nav_5_label" aria-expanded="false">
+          <label class="md-nav__title" for="__nav_5">
+            <span class="md-nav__icon md-icon"></span>
+            Reference
+          </label>
+          <ul class="md-nav__list" data-md-scrollfix>
+            
+              
+                
+  
+  
+  
+  
+    <li class="md-nav__item">
+      <a href="../../../../reference/api-index/" class="md-nav__link">
+        
+  
+  <span class="md-ellipsis">
+    API Index
+  </span>
+  
+
+      </a>
+    </li>
+  
+
+              
+            
+              
+                
+  
+  
+  
+  
+    <li class="md-nav__item">
+      <a href="../../../../reference/ui-components-hydra/" class="md-nav__link">
+        
+  
+  <span class="md-ellipsis">
+    UI Components (TrackerKit)
+  </span>
+  
+
+      </a>
+    </li>
+  
+
+              
+            
+              
+                
+  
+  
+  
+  
+    <li class="md-nav__item">
+      <a href="../../../../reference/ui-components-posekit/" class="md-nav__link">
+        
+  
+  <span class="md-ellipsis">
+    UI Components (PoseKit)
+  </span>
+  
+
+      </a>
+    </li>
+  
+
+              
+            
+              
+                
+  
+  
+  
+  
+    <li class="md-nav__item">
+      <a href="../../../../reference/api-app/" class="md-nav__link">
+        
+  
+  <span class="md-ellipsis">
+    API (Launcher)
+  </span>
+  
+
+      </a>
+    </li>
+  
+
+              
+            
+              
+                
+  
+  
+  
+  
+    <li class="md-nav__item">
+      <a href="../../../../reference/api-core/" class="md-nav__link">
+        
+  
+  <span class="md-ellipsis">
+    API (Core)
+  </span>
+  
+
+      </a>
+    </li>
+  
+
+              
+            
+              
+                
+  
+  
+  
+  
+    <li class="md-nav__item">
+      <a href="../../../../reference/api-data/" class="md-nav__link">
+        
+  
+  <span class="md-ellipsis">
+    API (Data)
+  </span>
+  
+
+      </a>
+    </li>
+  
+
+              
+            
+              
+                
+  
+  
+  
+  
+    <li class="md-nav__item">
+      <a href="../../../../reference/api-gui/" class="md-nav__link">
+        
+  
+  <span class="md-ellipsis">
+    API (TrackerKit GUI)
+  </span>
+  
+
+      </a>
+    </li>
+  
+
+              
+            
+              
+                
+  
+  
+  
+  
+    <li class="md-nav__item">
+      <a href="../../../../reference/api-widgets/" class="md-nav__link">
+        
+  
+  <span class="md-ellipsis">
+    API (Widgets)
+  </span>
+  
+
+      </a>
+    </li>
+  
+
+              
+            
+              
+                
+  
+  
+  
+  
+    <li class="md-nav__item">
+      <a href="../../../../reference/api-posekit/" class="md-nav__link">
+        
+  
+  <span class="md-ellipsis">
+    API (PoseKit)
+  </span>
+  
+
+      </a>
+    </li>
+  
+
+              
+            
+              
+                
+  
+  
+  
+  
+    <li class="md-nav__item">
+      <a href="../../../../reference/api-utils/" class="md-nav__link">
+        
+  
+  <span class="md-ellipsis">
+    API (Utils)
+  </span>
+  
+
+      </a>
+    </li>
+  
+
+              
+            
+              
+                
+  
+  
+  
+  
+    <li class="md-nav__item">
+      <a href="../../../../reference/cli-reference/" class="md-nav__link">
+        
+  
+  <span class="md-ellipsis">
+    CLI Reference
+  </span>
+  
+
+      </a>
+    </li>
+  
+
+              
+            
+              
+                
+  
+  
+  
+  
+    <li class="md-nav__item">
+      <a href="../../../../reference/technical-reference/" class="md-nav__link">
+        
+  
+  <span class="md-ellipsis">
+    Technical Reference (LaTeX)
+  </span>
+  
+
+      </a>
+    </li>
+  
+
+              
+            
+              
+                
+  
+  
+  
+  
+    <li class="md-nav__item">
+      <a href="../../../../reference/changelog/" class="md-nav__link">
+        
+  
+  <span class="md-ellipsis">
+    Changelog
+  </span>
+  
+
+      </a>
+    </li>
+  
+
+              
+            
+              
+                
+  
+  
+  
+  
+    <li class="md-nav__item">
+      <a href="../../../../reference/faq/" class="md-nav__link">
+        
+  
+  <span class="md-ellipsis">
+    FAQ
+  </span>
+  
+
+      </a>
+    </li>
+  
+
+              
+            
+          </ul>
+        </nav>
+      
+    </li>
+  
+
+    
+  </ul>
+</nav>
+                  </div>
+                </div>
+              </div>
+            
+            
+              
+              <div class="md-sidebar md-sidebar--secondary" data-md-component="sidebar" data-md-type="toc" >
+                <div class="md-sidebar__scrollwrap">
+                  <div class="md-sidebar__inner">
+                    
+
+<nav class="md-nav md-nav--secondary" aria-label="Table of contents">
+  
+  
+  
+    
+  
+  
+    <label class="md-nav__title" for="__toc">
+      <span class="md-nav__icon md-icon"></span>
+      Table of contents
+    </label>
+    <ul class="md-nav__list" data-md-component="toc" data-md-scrollfix>
+      
+        <li class="md-nav__item">
+  <a href="#goal" class="md-nav__link">
+    <span class="md-ellipsis">
+      Goal
+    </span>
+  </a>
+  
+</li>
+      
+        <li class="md-nav__item">
+  <a href="#required-sequencing" class="md-nav__link">
+    <span class="md-ellipsis">
+      Required sequencing
+    </span>
+  </a>
+  
+</li>
+      
+        <li class="md-nav__item">
+  <a href="#global-instructions-for-every-agent" class="md-nav__link">
+    <span class="md-ellipsis">
+      Global instructions for every agent
+    </span>
+  </a>
+  
+</li>
+      
+        <li class="md-nav__item">
+  <a href="#shared-safety-invariants" class="md-nav__link">
+    <span class="md-ellipsis">
+      Shared safety invariants
+    </span>
+  </a>
+  
+</li>
+      
+        <li class="md-nav__item">
+  <a href="#agent-brief-1-bounded-sam3-data-path" class="md-nav__link">
+    <span class="md-ellipsis">
+      Agent brief 1 — Bounded SAM3 data path
+    </span>
+  </a>
+  
+    <nav class="md-nav" aria-label="Agent brief 1 — Bounded SAM3 data path">
+      <ul class="md-nav__list">
+        
+          <li class="md-nav__item">
+  <a href="#dispatch-prompt" class="md-nav__link">
+    <span class="md-ellipsis">
+      Dispatch prompt
+    </span>
+  </a>
+  
+</li>
+        
+          <li class="md-nav__item">
+  <a href="#primary-files-and-seams" class="md-nav__link">
+    <span class="md-ellipsis">
+      Primary files and seams
+    </span>
+  </a>
+  
+</li>
+        
+          <li class="md-nav__item">
+  <a href="#required-investigation" class="md-nav__link">
+    <span class="md-ellipsis">
+      Required investigation
+    </span>
+  </a>
+  
+</li>
+        
+          <li class="md-nav__item">
+  <a href="#required-design" class="md-nav__link">
+    <span class="md-ellipsis">
+      Required design
+    </span>
+  </a>
+  
+</li>
+        
+          <li class="md-nav__item">
+  <a href="#required-tests" class="md-nav__link">
+    <span class="md-ellipsis">
+      Required tests
+    </span>
+  </a>
+  
+</li>
+        
+          <li class="md-nav__item">
+  <a href="#commit-structure" class="md-nav__link">
+    <span class="md-ellipsis">
+      Commit structure
+    </span>
+  </a>
+  
+</li>
+        
+          <li class="md-nav__item">
+  <a href="#acceptance-criteria" class="md-nav__link">
+    <span class="md-ellipsis">
+      Acceptance criteria
+    </span>
+  </a>
+  
+</li>
+        
+      </ul>
+    </nav>
+  
+</li>
+      
+        <li class="md-nav__item">
+  <a href="#agent-brief-2-resource-admission-and-process-containment" class="md-nav__link">
+    <span class="md-ellipsis">
+      Agent brief 2 — Resource admission and process containment
+    </span>
+  </a>
+  
+    <nav class="md-nav" aria-label="Agent brief 2 — Resource admission and process containment">
+      <ul class="md-nav__list">
+        
+          <li class="md-nav__item">
+  <a href="#dispatch-prompt_1" class="md-nav__link">
+    <span class="md-ellipsis">
+      Dispatch prompt
+    </span>
+  </a>
+  
+</li>
+        
+          <li class="md-nav__item">
+  <a href="#primary-files-and-seams_1" class="md-nav__link">
+    <span class="md-ellipsis">
+      Primary files and seams
+    </span>
+  </a>
+  
+</li>
+        
+          <li class="md-nav__item">
+  <a href="#required-design_1" class="md-nav__link">
+    <span class="md-ellipsis">
+      Required design
+    </span>
+  </a>
+  
+</li>
+        
+          <li class="md-nav__item">
+  <a href="#required-tests_1" class="md-nav__link">
+    <span class="md-ellipsis">
+      Required tests
+    </span>
+  </a>
+  
+</li>
+        
+          <li class="md-nav__item">
+  <a href="#commit-structure_1" class="md-nav__link">
+    <span class="md-ellipsis">
+      Commit structure
+    </span>
+  </a>
+  
+</li>
+        
+          <li class="md-nav__item">
+  <a href="#acceptance-criteria_1" class="md-nav__link">
+    <span class="md-ellipsis">
+      Acceptance criteria
+    </span>
+  </a>
+  
+</li>
+        
+          <li class="md-nav__item">
+  <a href="#set-2-safety-boundary" class="md-nav__link">
+    <span class="md-ellipsis">
+      Set 2 safety boundary
+    </span>
+  </a>
+  
+</li>
+        
+      </ul>
+    </nav>
+  
+</li>
+      
+        <li class="md-nav__item">
+  <a href="#agent-brief-2b-bounded-process-isolated-dataset-preparation" class="md-nav__link">
+    <span class="md-ellipsis">
+      Agent brief 2B — Bounded, process-isolated dataset preparation
+    </span>
+  </a>
+  
+    <nav class="md-nav" aria-label="Agent brief 2B — Bounded, process-isolated dataset preparation">
+      <ul class="md-nav__list">
+        
+          <li class="md-nav__item">
+  <a href="#scope-and-sequencing" class="md-nav__link">
+    <span class="md-ellipsis">
+      Scope and sequencing
+    </span>
+  </a>
+  
+</li>
+        
+          <li class="md-nav__item">
+  <a href="#acceptance-gates" class="md-nav__link">
+    <span class="md-ellipsis">
+      Acceptance gates
+    </span>
+  </a>
+  
+</li>
+        
+      </ul>
+    </nav>
+  
+</li>
+      
+        <li class="md-nav__item">
+  <a href="#agent-brief-3-memory-safe-sam3-publishing" class="md-nav__link">
+    <span class="md-ellipsis">
+      Agent brief 3 — Memory-safe SAM3 publishing
+    </span>
+  </a>
+  
+    <nav class="md-nav" aria-label="Agent brief 3 — Memory-safe SAM3 publishing">
+      <ul class="md-nav__list">
+        
+          <li class="md-nav__item">
+  <a href="#dispatch-prompt_2" class="md-nav__link">
+    <span class="md-ellipsis">
+      Dispatch prompt
+    </span>
+  </a>
+  
+</li>
+        
+          <li class="md-nav__item">
+  <a href="#primary-files-and-seams_2" class="md-nav__link">
+    <span class="md-ellipsis">
+      Primary files and seams
+    </span>
+  </a>
+  
+</li>
+        
+          <li class="md-nav__item">
+  <a href="#required-investigation_1" class="md-nav__link">
+    <span class="md-ellipsis">
+      Required investigation
+    </span>
+  </a>
+  
+</li>
+        
+          <li class="md-nav__item">
+  <a href="#required-design_2" class="md-nav__link">
+    <span class="md-ellipsis">
+      Required design
+    </span>
+  </a>
+  
+</li>
+        
+          <li class="md-nav__item">
+  <a href="#required-tests_2" class="md-nav__link">
+    <span class="md-ellipsis">
+      Required tests
+    </span>
+  </a>
+  
+</li>
+        
+          <li class="md-nav__item">
+  <a href="#commit-structure_2" class="md-nav__link">
+    <span class="md-ellipsis">
+      Commit structure
+    </span>
+  </a>
+  
+</li>
+        
+          <li class="md-nav__item">
+  <a href="#acceptance-criteria_2" class="md-nav__link">
+    <span class="md-ellipsis">
+      Acceptance criteria
+    </span>
+  </a>
+  
+</li>
+        
+      </ul>
+    </nav>
+  
+</li>
+      
+        <li class="md-nav__item">
+  <a href="#agent-brief-4-bounded-tile-proposal-crop-and-result-inference" class="md-nav__link">
+    <span class="md-ellipsis">
+      Agent brief 4 — Bounded tile, proposal, crop, and result inference
+    </span>
+  </a>
+  
+    <nav class="md-nav" aria-label="Agent brief 4 — Bounded tile, proposal, crop, and result inference">
+      <ul class="md-nav__list">
+        
+          <li class="md-nav__item">
+  <a href="#dispatch-prompt_3" class="md-nav__link">
+    <span class="md-ellipsis">
+      Dispatch prompt
+    </span>
+  </a>
+  
+</li>
+        
+          <li class="md-nav__item">
+  <a href="#primary-files-and-seams_3" class="md-nav__link">
+    <span class="md-ellipsis">
+      Primary files and seams
+    </span>
+  </a>
+  
+</li>
+        
+          <li class="md-nav__item">
+  <a href="#required-design_3" class="md-nav__link">
+    <span class="md-ellipsis">
+      Required design
+    </span>
+  </a>
+  
+</li>
+        
+          <li class="md-nav__item">
+  <a href="#required-tests_3" class="md-nav__link">
+    <span class="md-ellipsis">
+      Required tests
+    </span>
+  </a>
+  
+</li>
+        
+          <li class="md-nav__item">
+  <a href="#commit-structure_3" class="md-nav__link">
+    <span class="md-ellipsis">
+      Commit structure
+    </span>
+  </a>
+  
+</li>
+        
+          <li class="md-nav__item">
+  <a href="#acceptance-criteria_3" class="md-nav__link">
+    <span class="md-ellipsis">
+      Acceptance criteria
+    </span>
+  </a>
+  
+</li>
+        
+      </ul>
+    </nav>
+  
+</li>
+      
+        <li class="md-nav__item">
+  <a href="#agent-brief-5-chunked-inference-caches-and-bounded-writer" class="md-nav__link">
+    <span class="md-ellipsis">
+      Agent brief 5 — Chunked inference caches and bounded writer
+    </span>
+  </a>
+  
+    <nav class="md-nav" aria-label="Agent brief 5 — Chunked inference caches and bounded writer">
+      <ul class="md-nav__list">
+        
+          <li class="md-nav__item">
+  <a href="#dispatch-prompt_4" class="md-nav__link">
+    <span class="md-ellipsis">
+      Dispatch prompt
+    </span>
+  </a>
+  
+</li>
+        
+          <li class="md-nav__item">
+  <a href="#primary-files-and-seams_4" class="md-nav__link">
+    <span class="md-ellipsis">
+      Primary files and seams
+    </span>
+  </a>
+  
+</li>
+        
+          <li class="md-nav__item">
+  <a href="#required-design-investigation" class="md-nav__link">
+    <span class="md-ellipsis">
+      Required design investigation
+    </span>
+  </a>
+  
+</li>
+        
+          <li class="md-nav__item">
+  <a href="#required-tests_4" class="md-nav__link">
+    <span class="md-ellipsis">
+      Required tests
+    </span>
+  </a>
+  
+</li>
+        
+          <li class="md-nav__item">
+  <a href="#commit-structure_4" class="md-nav__link">
+    <span class="md-ellipsis">
+      Commit structure
+    </span>
+  </a>
+  
+</li>
+        
+          <li class="md-nav__item">
+  <a href="#acceptance-criteria_4" class="md-nav__link">
+    <span class="md-ellipsis">
+      Acceptance criteria
+    </span>
+  </a>
+  
+</li>
+        
+      </ul>
+    </nav>
+  
+</li>
+      
+        <li class="md-nav__item">
+  <a href="#agent-brief-6-process-isolated-detectkit-model-operations" class="md-nav__link">
+    <span class="md-ellipsis">
+      Agent brief 6 — Process-isolated DetectKit model operations
+    </span>
+  </a>
+  
+    <nav class="md-nav" aria-label="Agent brief 6 — Process-isolated DetectKit model operations">
+      <ul class="md-nav__list">
+        
+          <li class="md-nav__item">
+  <a href="#dispatch-prompt_5" class="md-nav__link">
+    <span class="md-ellipsis">
+      Dispatch prompt
+    </span>
+  </a>
+  
+</li>
+        
+          <li class="md-nav__item">
+  <a href="#operations-in-scope" class="md-nav__link">
+    <span class="md-ellipsis">
+      Operations in scope
+    </span>
+  </a>
+  
+</li>
+        
+          <li class="md-nav__item">
+  <a href="#primary-files-and-seams_5" class="md-nav__link">
+    <span class="md-ellipsis">
+      Primary files and seams
+    </span>
+  </a>
+  
+</li>
+        
+          <li class="md-nav__item">
+  <a href="#required-design_4" class="md-nav__link">
+    <span class="md-ellipsis">
+      Required design
+    </span>
+  </a>
+  
+</li>
+        
+          <li class="md-nav__item">
+  <a href="#required-tests_5" class="md-nav__link">
+    <span class="md-ellipsis">
+      Required tests
+    </span>
+  </a>
+  
+</li>
+        
+          <li class="md-nav__item">
+  <a href="#commit-structure_5" class="md-nav__link">
+    <span class="md-ellipsis">
+      Commit structure
+    </span>
+  </a>
+  
+</li>
+        
+          <li class="md-nav__item">
+  <a href="#acceptance-criteria_5" class="md-nav__link">
+    <span class="md-ellipsis">
+      Acceptance criteria
+    </span>
+  </a>
+  
+</li>
+        
+      </ul>
+    </nav>
+  
+</li>
+      
+        <li class="md-nav__item">
+  <a href="#agent-brief-7-adaptive-sizing-observability-and-final-safety-gates" class="md-nav__link">
+    <span class="md-ellipsis">
+      Agent brief 7 — Adaptive sizing, observability, and final safety gates
+    </span>
+  </a>
+  
+    <nav class="md-nav" aria-label="Agent brief 7 — Adaptive sizing, observability, and final safety gates">
+      <ul class="md-nav__list">
+        
+          <li class="md-nav__item">
+  <a href="#dispatch-prompt_6" class="md-nav__link">
+    <span class="md-ellipsis">
+      Dispatch prompt
+    </span>
+  </a>
+  
+</li>
+        
+          <li class="md-nav__item">
+  <a href="#primary-files-and-seams_6" class="md-nav__link">
+    <span class="md-ellipsis">
+      Primary files and seams
+    </span>
+  </a>
+  
+</li>
+        
+          <li class="md-nav__item">
+  <a href="#required-design_5" class="md-nav__link">
+    <span class="md-ellipsis">
+      Required design
+    </span>
+  </a>
+  
+</li>
+        
+          <li class="md-nav__item">
+  <a href="#required-tests-and-final-verification" class="md-nav__link">
+    <span class="md-ellipsis">
+      Required tests and final verification
+    </span>
+  </a>
+  
+</li>
+        
+          <li class="md-nav__item">
+  <a href="#commit-structure_6" class="md-nav__link">
+    <span class="md-ellipsis">
+      Commit structure
+    </span>
+  </a>
+  
+</li>
+        
+          <li class="md-nav__item">
+  <a href="#acceptance-criteria_6" class="md-nav__link">
+    <span class="md-ellipsis">
+      Acceptance criteria
+    </span>
+  </a>
+  
+</li>
+        
+      </ul>
+    </nav>
+  
+</li>
+      
+        <li class="md-nav__item">
+  <a href="#program-completion-checklist" class="md-nav__link">
+    <span class="md-ellipsis">
+      Program completion checklist
+    </span>
+  </a>
+  
+</li>
+      
+        <li class="md-nav__item">
+  <a href="#required-final-handoff-from-every-agent" class="md-nav__link">
+    <span class="md-ellipsis">
+      Required final handoff from every agent
+    </span>
+  </a>
+  
+</li>
+      
+    </ul>
+  
+</nav>
+                  </div>
+                </div>
+              </div>
+            
+          
+          
+            <div class="md-content" data-md-component="content">
+              <article class="md-content__inner md-typeset">
+                
+                  
+
+  
+    <a href="https://github.com/neurorishika/hydra-suite/edit/main/docs/superpowers/plans/done/2026-09-03-detectkit-oom-hardening-agent-instructions.md" title="Edit this page" class="md-content__button md-icon">
+      
+      <svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 24 24"><path d="M10 20H6V4h7v5h5v3.1l2-2V8l-6-6H6c-1.1 0-2 .9-2 2v16c0 1.1.9 2 2 2h4zm10.2-7c.1 0 .3.1.4.2l1.3 1.3c.2.2.2.6 0 .8l-1 1-2.1-2.1 1-1c.1-.1.2-.2.4-.2m0 3.9L14.1 23H12v-2.1l6.1-6.1z"/></svg>
+    </a>
+  
+  
+
+
+<h1 id="detectkit-oom-hardening-agent-execution-instructions">DetectKit OOM Hardening — Agent Execution Instructions<a class="headerlink" href="#detectkit-oom-hardening-agent-execution-instructions" title="Permanent link">&para;</a></h1>
+<p>Status: Shipped — merged to main (9cab84ae)</p>
+<p>Implementation record (2026-09-04): Sets 1, 2, 2B, 3, 4, 5, and 6 were
+merged independently as required. Set 7 adds versioned device/model-specific
+profiles, monotonic recommendations, fresh-sidecar classified-OOM retries,
+structured peak/high-water telemetry, and durable retry history. The final
+focused safety matrix passed 572 tests with one platform skip. MPS equivalence
+was exact and non-empty for sequential (12,450 forward / 941 final rows, 1.12x)
+and direct fly inference (1,494 / 1,500 rows, 0.99x). CUDA passed 167 focused
+tests and exact non-empty fly equivalence (1,494 / 1,500 rows, 1.17x). The final
+post-audit affected matrix passed 614 tests with 14 platform skips. The SAM3
+dataset-build soak measured 551,895,040 bytes at 100 frames and 553,271,296
+bytes at 2,000 frames (+0.25% for 20x the source length).</p>
+<h2 id="goal">Goal<a class="headerlink" href="#goal" title="Permanent link">&para;</a></h2>
+<p>Make every high-memory DetectKit training, publishing, evaluation, and inference
+path scale with an explicit batch or byte budget, and ensure that a bad estimate
+can terminate only the worker process rather than destabilizing the computer or
+the DetectKit GUI.</p>
+<p>This document is intentionally divided into seven independently reviewable work
+sets. Sets 1–3 form the minimum SAM3 safety milestone. Sets 4–6 harden inference
+and all GUI-triggered model operations. Set 7 adds adaptive tuning and operational
+evidence after the bounded algorithms and containment mechanisms exist.</p>
+<h2 id="required-sequencing">Required sequencing<a class="headerlink" href="#required-sequencing" title="Permanent link">&para;</a></h2>
+<table>
+<thead>
+<tr>
+<th>Set</th>
+<th>Work</th>
+<th>Depends on</th>
+<th>Release gate</th>
+</tr>
+</thead>
+<tbody>
+<tr>
+<td>1</td>
+<td>Bounded SAM3 data path</td>
+<td>Current main</td>
+<td>Required before SAM3 training is declared production-safe</td>
+</tr>
+<tr>
+<td>2</td>
+<td>Resource admission and process containment</td>
+<td>Set 1 merged</td>
+<td>Required before SAM3 training is declared production-safe</td>
+</tr>
+<tr>
+<td>2B</td>
+<td>Bounded, process-isolated dataset preparation</td>
+<td>Set 2 merged</td>
+<td>Required before GUI/CLI prepare-and-train is machine-safe</td>
+</tr>
+<tr>
+<td>3</td>
+<td>Memory-safe SAM3 publishing</td>
+<td>Sets 1–2 merged</td>
+<td>Required before SAM3 training is declared production-safe</td>
+</tr>
+<tr>
+<td>4</td>
+<td>Bounded tile, proposal, crop, and result inference</td>
+<td>Set 2 merged</td>
+<td>Required for inference OOM guarantee</td>
+</tr>
+<tr>
+<td>5</td>
+<td>Chunked inference caches and bounded writer</td>
+<td>Prefer Set 4 merged</td>
+<td>Required for long-video OOM guarantee</td>
+</tr>
+<tr>
+<td>6</td>
+<td>Process-isolated DetectKit model operations</td>
+<td>Sets 2 and 5 merged</td>
+<td>Required for GUI-survival guarantee</td>
+</tr>
+<tr>
+<td>7</td>
+<td>Adaptive sizing, observability, and final gates</td>
+<td>Sets 1–6 merged</td>
+<td>Closes the hardening program</td>
+</tr>
+</tbody>
+</table>
+<p>Do not combine all seven sets into one branch. If an interface needed by a later
+set changes, finish and merge the producing set first, then branch the consumer
+from the new local HEAD. Sets 1–3 should be performed sequentially. Sets 4 and 5
+may be prepared independently only if their agents coordinate the pipeline/cache
+seam and do not edit the same files concurrently.</p>
+<h2 id="global-instructions-for-every-agent">Global instructions for every agent<a class="headerlink" href="#global-instructions-for-every-agent" title="Permanent link">&para;</a></h2>
+<ol>
+<li>Read the repository AGENTS.md and CLAUDE.md before acting. Read the active
+   SAM3 plan and design when touching SAM3:
+   docs/superpowers/plans/2026-08-31-detectkit-sam3-finetune.md and its linked
+   design specification.</li>
+<li>Inspect the primary checkout and preserve every existing user change. Create
+   the dedicated worktree named in the brief from the current local HEAD, never
+   from origin/main.</li>
+<li>Reproduce or characterize the memory failure before editing. Add a regression
+   test that fails for the right reason. Memory tests must run in an isolated
+   child with deliberately small fixtures; never attempt to OOM the workstation.</li>
+<li>Implement the smallest coherent change. Commit completed subsystems
+   separately. Never mix formatting churn or unrelated cleanup into these
+   branches.</li>
+<li>Use the hydra-mps conda environment for local tests. Use hydra-cuda on
+   rutalab@mehek.taild08eb9.ts.net when CUDA behavior or SAM3 training must be
+   validated. Inspect processes before heavy runs and stop only confirmed stale
+   Hydra/SLEAP processes.</li>
+<li>Report both correctness and resource behavior. A test that proves output
+   parity without bounding peak memory is insufficient; a memory test that does
+   not prove semantic parity is also insufficient.</li>
+<li>Review the full branch diff against its merge base. Resolve every actionable
+   finding, rerun affected checks, merge into the primary checkout only after the
+   branch is green, then rerun integration checks in the primary checkout.</li>
+<li>Do not delete the worktree or branch until post-merge verification succeeds.</li>
+<li>Do not claim a hard guarantee from a heuristic estimate. Estimates control
+   admission and tuning; the worker boundary and OS enforcement provide
+   containment.</li>
+<li>Do not use garbage collection or empty-cache calls as the primary fix. They
+    are acceptable only at explicit teardown boundaries after object lifetimes
+    are corrected.</li>
+</ol>
+<h2 id="shared-safety-invariants">Shared safety invariants<a class="headerlink" href="#shared-safety-invariants" title="Permanent link">&para;</a></h2>
+<p>Every set must preserve or advance these invariants:</p>
+<ul>
+<li>Peak memory is bounded by configured in-flight work, not source length,
+  dataset size, tile count, epoch count, or video duration.</li>
+<li>Any queue holding frames, tiles, masks, crops, or model results applies
+  backpressure. Prefer byte-aware bounds when payload sizes vary materially.</li>
+<li>User-facing batch controls cannot bypass a hard safe maximum.</li>
+<li>Unlimited detections, masks, candidates, or worker prefetch are not normal
+  production defaults.</li>
+<li>The GUI process never loads or executes a high-memory training, evaluation,
+  publishing, or inference model after Set 6.</li>
+<li>Partial artifacts are written under temporary names and become visible only
+  after validation and atomic promotion.</li>
+<li>Cancellation and OOM terminate the whole owned process group and never kill an
+  unrelated process.</li>
+<li>An OOM result distinguishes host admission refusal, host soft-limit abort,
+  host hard-limit kill, CUDA/MPS allocator OOM, and ordinary model failure.</li>
+<li>MPS unified memory is one shared host/device budget; it must not be counted as
+  two independent pools.</li>
+</ul>
+<hr />
+<h2 id="agent-brief-1-bounded-sam3-data-path">Agent brief 1 — Bounded SAM3 data path<a class="headerlink" href="#agent-brief-1-bounded-sam3-data-path" title="Permanent link">&para;</a></h2>
+<h3 id="dispatch-prompt">Dispatch prompt<a class="headerlink" href="#dispatch-prompt" title="Permanent link">&para;</a></h3>
+<p>Implement Set 1 of the DetectKit OOM hardening plan: make SAM3 LoRA train and
+validation data loading memory-bounded and eliminate repeated image transforms
+for negative prompts. Work only in a dedicated worktree created with:</p>
+<div class="language-text highlight"><pre><span></span><code>git worktree add .worktrees/detectkit-oom-sam3-streaming \
+  -b codex/detectkit-oom-sam3-streaming HEAD
+</code></pre></div>
+<p>Do not add admission control, OS memory limits, checkpoint-publishing changes, or
+general inference changes in this set.</p>
+<h3 id="primary-files-and-seams">Primary files and seams<a class="headerlink" href="#primary-files-and-seams" title="Permanent link">&para;</a></h3>
+<ul>
+<li>src/hydra_suite/training/sam3_lora/dataloader.py</li>
+<li>src/hydra_suite/training/sam3_lora/datapoints.py</li>
+<li>src/hydra_suite/training/sam3_lora/cli.py</li>
+<li>src/hydra_suite/training/sam3_lora/dataset_build.py, only if lightweight
+  descriptor metadata must be extended</li>
+<li>tests/test_sam3_dataloader.py</li>
+<li>New focused memory/lifetime tests under tests/</li>
+</ul>
+<h3 id="required-investigation">Required investigation<a class="headerlink" href="#required-investigation" title="Permanent link">&para;</a></h3>
+<ol>
+<li>Record the current retained bytes per 1008×1008 tile, including float image
+   tensors, raw RGB images, positive object masks, and collated copies.</li>
+<li>Inspect the installed Meta SAM3 Datapoint, Image, FindQueryLoaded, and
+   collate_fn_api implementations in the actual SAM3 environment. Determine
+   whether one Datapoint with one Image and multiple find queries is loss-
+   equivalent to the current one-datapoint-per-query representation.</li>
+<li>Characterize current transform call counts and the number of simultaneously
+   live image tensors for a synthetic split with several tiles and negatives.</li>
+<li>Confirm what raw_images is used for by Meta's collator/training path before
+   removing or changing it.</li>
+</ol>
+<h3 id="required-design">Required design<a class="headerlink" href="#required-design" title="Permanent link">&para;</a></h3>
+<p>Introduce lightweight, serializable sample descriptors containing paths,
+polygon/crowd metadata, positive prompt, and sampled negative prompts. Dataset
+construction and epoch shuffling may materialize descriptors or integer indices,
+but never decoded images, transformed tensors, dense masks, or collated batches.</p>
+<p>Preferred representation:</p>
+<ul>
+<li>Decode a tile once when its work enters the active batch.</li>
+<li>Transform the image once.</li>
+<li>Attach the positive and sampled negative queries to the same image object.</li>
+<li>Rasterize positive masks only while that tile is active.</li>
+<li>Release tile pixels, masks, and collated output after the corresponding step.</li>
+</ul>
+<p>Adopt the multi-query representation only after a parity test proves that Meta's
+collator and loss produce the intended positive and negative targets. If it is
+not equivalent, retain one logical datapoint per query but use a tile-scoped
+shared image owner and process the tile's queries as a bounded group. Document
+the semantic reason for the fallback.</p>
+<p>Replace collate_batches and collate_epoch_batches list-returning behavior with
+iterators. Preserve deterministic epoch variation by shuffling lightweight tile
+or query identifiers using spec.seed + epoch. Do not shuffle tensor objects.</p>
+<p>Training and validation must consume the same bounded implementation. Progress,
+step counts, gradient accumulation, validation statistics, and empty-split error
+behavior must remain correct without relying on len() of a materialized tensor
+list.</p>
+<h3 id="required-tests">Required tests<a class="headerlink" href="#required-tests" title="Permanent link">&para;</a></h3>
+<ul>
+<li>A synthetic N-tile test that proves no eager transform occurs while descriptors
+  are built.</li>
+<li>Transform invocation count is once per tile, not 1 + num_negatives.</li>
+<li>Positive and negative queries reference the intended single image payload.</li>
+<li>Deterministic ordering for the same seed and different ordering for different
+  epoch seeds.</li>
+<li>Every descriptor/query appears exactly once per epoch, including incomplete
+  final batches.</li>
+<li>Empty and absent validation split behavior remains unchanged.</li>
+<li>Positive target masks, object IDs, crowd metadata, and negative empty targets
+  match the previous path on a small fixture.</li>
+<li>An isolated-process peak-RSS test compares a small and much larger synthetic
+  dataset at fixed batch/prefetch. Define a generous noise tolerance, but require
+  growth to be O(batch), not O(number of tiles).</li>
+<li>If possible in the SAM3 environment, compare one forward/loss computation
+  between old and new representations on a tiny fixed fixture.</li>
+</ul>
+<p>Run at minimum:</p>
+<div class="language-text highlight"><pre><span></span><code>PYTHONPATH=src mamba run -n hydra-mps python -m pytest \
+  tests/test_sam3_dataloader.py -v
+</code></pre></div>
+<p>Run the closest SAM3 training unit suites as well. Perform one bounded CUDA smoke
+run with a tiny derived dataset before merge; report observed host RSS and CUDA
+allocated/reserved peaks.</p>
+<h3 id="commit-structure">Commit structure<a class="headerlink" href="#commit-structure" title="Permanent link">&para;</a></h3>
+<ol>
+<li>Regression instrumentation and descriptor/ordering tests.</li>
+<li>Lazy descriptor and transform-sharing implementation.</li>
+<li>Lazy training/validation collation and CLI integration.</li>
+<li>Any test-driven cleanup needed after branch review.</li>
+</ol>
+<h3 id="acceptance-criteria">Acceptance criteria<a class="headerlink" href="#acceptance-criteria" title="Permanent link">&para;</a></h3>
+<ul>
+<li>No call in the train or validation path materializes all Datapoints or all
+  collated batches.</li>
+<li>Dataset-size increases do not materially increase peak image/mask RSS at a
+  fixed batch and prefetch configuration.</li>
+<li>A tile is transformed only once for its positive and negatives.</li>
+<li>Training semantics, counts, and deterministic seeds are preserved.</li>
+<li>Focused tests and CUDA smoke verification are green.</li>
+</ul>
+<hr />
+<h2 id="agent-brief-2-resource-admission-and-process-containment">Agent brief 2 — Resource admission and process containment<a class="headerlink" href="#agent-brief-2-resource-admission-and-process-containment" title="Permanent link">&para;</a></h2>
+<h3 id="dispatch-prompt_1">Dispatch prompt<a class="headerlink" href="#dispatch-prompt_1" title="Permanent link">&para;</a></h3>
+<p>Implement Set 2 after Set 1 is merged. Add a shared lower-layer resource budget,
+parameter-aware preflight, protected worker bootstrap, parent watchdog, and
+cross-process heavy-job admission lease. Create:</p>
+<div class="language-text highlight"><pre><span></span><code>git worktree add .worktrees/detectkit-oom-containment \
+  -b codex/detectkit-oom-containment HEAD
+</code></pre></div>
+<p>Integrate the first version with SAM3 training. Design the interfaces for reuse
+by YOLO training and inference, but do not migrate every GUI operation in this
+set.</p>
+<h3 id="primary-files-and-seams_1">Primary files and seams<a class="headerlink" href="#primary-files-and-seams_1" title="Permanent link">&para;</a></h3>
+<ul>
+<li>New focused modules under src/hydra_suite/runtime/ or src/hydra_suite/utils/
+  for resource budgets, leases, and sidecar supervision</li>
+<li>src/hydra_suite/training/sam3_lora/preflight.py</li>
+<li>src/hydra_suite/training/sam3_lora/train.py</li>
+<li>src/hydra_suite/training/sam3_lora/cli.py</li>
+<li>src/hydra_suite/utils/batch_optimizer.py, only to reuse or consolidate probes</li>
+<li>tests/test_sam3_preflight.py</li>
+<li>New resource-budget, supervisor, and process-limit tests</li>
+</ul>
+<p>The shared modules must not import DetectKit or another app package.</p>
+<h3 id="required-design_1">Required design<a class="headerlink" href="#required-design_1" title="Permanent link">&para;</a></h3>
+<p>Create typed inputs and outputs rather than passing unstructured dicts. The
+budget result must expose at least:</p>
+<ul>
+<li>estimated steady and peak host bytes;</li>
+<li>estimated accelerator steady and peak bytes;</li>
+<li>disk/transient artifact bytes where applicable;</li>
+<li>available host/device bytes at admission time;</li>
+<li>reserved host floor and accelerator safety fraction;</li>
+<li>effective batch, worker, prefetch, tile, and candidate limits when adjusted;</li>
+<li>refusal and warning reasons with the dominant allocations identified;</li>
+<li>an estimator/profile version for diagnostics and cache invalidation.</li>
+</ul>
+<p>For post-Set-1 SAM3, estimate in-flight decoded pixels, one transformed image per
+tile, active dense masks, collated copies, optimizer/model state, and validation
+and publish phases separately. Do not multiply transformed image bytes by the
+total dataset tile count after the streaming fix. Use COCO metadata to estimate
+crowded-tile mask peaks without decoding the full dataset.</p>
+<p>Use psutil.virtual_memory().available for the live host observation, but retain
+an absolute and proportional reserve. The policy must be configurable and
+reported. A reasonable default may reserve the larger of a fixed GiB amount and
+a percentage of total RAM, but select final values from measurements and tests,
+not intuition alone.</p>
+<p>Create a child bootstrap that applies limits before importing torch, SAM3, or
+Ultralytics. Do not use unsafe preexec_fn logic from a multithreaded Qt parent.
+Limits must be inherited by the actual conda-launched workload and its
+descendants.</p>
+<p>Containment policy:</p>
+<ul>
+<li>On Linux, prefer cgroup v2/systemd scope enforcement where available. Support
+  a soft threshold and a hard MemoryMax-style threshold, and record cgroup OOM
+  evidence when mapping child exit to a diagnostic.</li>
+<li>Use RLIMIT_AS only as a documented POSIX fallback. Explicitly state that it
+  counts virtual address space, may conflict with CUDA reservations, and does
+  not constrain discrete GPU VRAM.</li>
+<li>On macOS/MPS, combine process isolation, supported framework allocator limits,
+  conservative address-space containment, and a parent system-pressure/RSS
+  watchdog. Treat MPS as unified host memory.</li>
+<li>On CUDA, combine host containment with device preflight, allocator telemetry,
+  finite batches, and explicit handling of torch.cuda.OutOfMemoryError.</li>
+</ul>
+<p>The parent watchdog must monitor the child process tree, not only the conda
+wrapper PID. It must run independently of child log output and Python training
+steps. At a soft limit it requests graceful termination; after a short bounded
+grace it kills the owned process group. It must never target a PID or process
+group it does not own.</p>
+<p>Add a cross-process lease keyed by host and accelerator identity. Admission must
+be atomic: two jobs cannot both observe the same free memory and start. Define
+stale-lease recovery using PID/start-time validation rather than deleting locks
+blindly.</p>
+<p>Bound the sidecar stdout queue or retain only a fixed tail so a log flood cannot
+become another memory leak.</p>
+<h3 id="required-tests_1">Required tests<a class="headerlink" href="#required-tests_1" title="Permanent link">&para;</a></h3>
+<ul>
+<li>Boundary tests for host available memory, reserve floors, crowded-mask peaks,
+  batch changes, precision changes, and no-CUDA behavior.</li>
+<li>Set 1's streaming estimate must remain independent of total tile count except
+  for lightweight metadata/disk terms.</li>
+<li>An isolated child intentionally exceeds a tiny test cap; the parent survives,
+  the complete child process tree is gone, and the result identifies a hard
+  memory-limit failure.</li>
+<li>A cooperative child crosses the soft threshold and exits cleanly with the
+  expected diagnostic.</li>
+<li>A blocked or silent child is still observed and terminated.</li>
+<li>A noisy child cannot grow the log queue without bound.</li>
+<li>Two concurrent admission attempts for the same resource yield one lease; a
+  different resource key may proceed.</li>
+<li>Stale lease recovery never steals a live job's lease.</li>
+<li>Cancellation and ordinary nonzero exits retain their existing meanings.</li>
+</ul>
+<p>Linux cgroup tests may be capability-gated, but the fallback path must be tested
+locally. Perform a real CUDA SAM3 smoke run with telemetry before merge. Never
+test a cap by consuming a dangerous amount of physical RAM.</p>
+<h3 id="commit-structure_1">Commit structure<a class="headerlink" href="#commit-structure_1" title="Permanent link">&para;</a></h3>
+<ol>
+<li>Typed resource budget and host/device probes.</li>
+<li>Resource lease and isolated unit tests.</li>
+<li>Sidecar bootstrap, limits, watchdog, and exit classification.</li>
+<li>SAM3 preflight and launcher integration.</li>
+</ol>
+<h3 id="acceptance-criteria_1">Acceptance criteria<a class="headerlink" href="#acceptance-criteria_1" title="Permanent link">&para;</a></h3>
+<ul>
+<li>SAM3 admission reflects host RAM and user parameters, not only a fixed VRAM
+  threshold.</li>
+<li>A deliberately over-limit child is killed without killing or freezing the
+  parent.</li>
+<li>Estimates and hard enforcement are clearly separated in code and messages.</li>
+<li>A second conflicting heavy job is refused before allocating its model.</li>
+<li>All focused tests and a real CUDA smoke run are green.</li>
+</ul>
+<h3 id="set-2-safety-boundary">Set 2 safety boundary<a class="headerlink" href="#set-2-safety-boundary" title="Permanent link">&para;</a></h3>
+<p>Set 2 contains the SAM3 training subprocess, but it is not an end-to-end OOM
+guarantee. SAM3 checkpoint merge/publish remains a Set 3 dependency and must not
+be described as production-safe until Sets 1–3 are complete. Dataset preparation
+and inspection also still run in GUI worker threads and retain large frame/path
+and COCO structures; their streaming/process-isolation root fix is a separate
+follow-up set. Until that lands, prepare datasets separately with conservative
+inputs and do not represent the GUI prepare-and-train workflow as machine-safe.</p>
+<hr />
+<h2 id="agent-brief-2b-bounded-process-isolated-dataset-preparation">Agent brief 2B — Bounded, process-isolated dataset preparation<a class="headerlink" href="#agent-brief-2b-bounded-process-isolated-dataset-preparation" title="Permanent link">&para;</a></h2>
+<p>Status: Implemented on <code>codex/detectkit-oom-dataset-preparation</code>; awaiting merge.</p>
+<h3 id="scope-and-sequencing">Scope and sequencing<a class="headerlink" href="#scope-and-sequencing" title="Permanent link">&para;</a></h3>
+<p>Set 2B branches from the merged Set 2 containment foundation and lands before
+the GUI/CLI prepare-and-train workflow is described as machine-safe. It is
+independent of Set 3 checkpoint publishing and must not broaden into inference,
+active learning, or model execution. The implementation sequence is:</p>
+<ol>
+<li>Add shared bounded filesystem/text primitives and explicit file, byte,
+   directory-depth, pathname, line, point, metadata, and image-pixel caps.</li>
+<li>Convert SAM3 COCO preparation to disk-backed ordering/splitting and
+   one-frame-at-a-time decode/label/tile processing. Preserve the existing
+   seeded split and output schema exactly.</li>
+<li>Incrementally spool COCO arrays and manifests, fsync them, validate them,
+   and atomically promote a private build directory.</li>
+<li>Bound common DetectKit inspection and label/YAML/manifest reads, use fixed
+   reservoir sampling for size inspection, and remove temporary eager recursive
+   discovery collections in sibling builders where the shared primitive fits.</li>
+<li>Run inspection plus all role derivation in a Set 2 CPU sidecar. Attach an
+   immutable typed host/disk budget, canonical host lease, parent-death
+   guardian, process-tree watchdog, bounded log/result protocol, and whole-tree
+   cancellation. Repeat host, disk, and source-footprint checks while the lease
+   is held immediately before launch.</li>
+<li>Build the complete multi-role result under one private staging workspace and
+   promote it only after successful validation. Cleanup may remove a private
+   staging/final path only after quiescence is proved; retained-owner errors
+   carry the exact recovery callback.</li>
+<li>Route both the CLI and GUI worker through the sidecar. The GUI QThread may
+   supervise and relay bounded events but must never inspect, decode, or derive
+   the dataset itself.</li>
+</ol>
+<h3 id="acceptance-gates">Acceptance gates<a class="headerlink" href="#acceptance-gates" title="Permanent link">&para;</a></h3>
+<ul>
+<li>Python heap growth is independent of source frame count for the SAM3 path;
+  global deterministic order and reference-size median use SQLite rather than
+  source-sized Python collections.</li>
+<li>No builder retains more than one decoded source image or one frame's parsed
+  polygons at once; tile generation is lazy.</li>
+<li>File/count/depth/path/JSON/YAML/label/line/point/image-pixel caps reject
+  adversarial inputs with a bounded diagnostic.</li>
+<li>COCO IDs, tile names, seeded frame membership/order, split semantics,
+  reference size, categories, and manifest schema match pre-Set-2B fixtures.</li>
+<li>Disk/transient-space admission occurs before output construction and is
+  repeated immediately before the child begins.</li>
+<li>Injection at discovery, decode, write, validation, promotion, cancellation,
+  soft-limit, and hard-limit boundaries leaves no partially visible final
+  dataset.</li>
+<li>GUI and CLI use only the contained entry point; cancellation remains
+  responsive even when the child emits no progress.</li>
+<li>Focused preparation/SAM3/GUI/CLI tests, nearest training suites, formatting,
+  lint, docs checks, a child-process RSS scaling probe, and full branch review
+  are green before merge.</li>
+</ul>
+<hr />
+<h2 id="agent-brief-3-memory-safe-sam3-publishing">Agent brief 3 — Memory-safe SAM3 publishing<a class="headerlink" href="#agent-brief-3-memory-safe-sam3-publishing" title="Permanent link">&para;</a></h2>
+<h3 id="dispatch-prompt_2">Dispatch prompt<a class="headerlink" href="#dispatch-prompt_2" title="Permanent link">&para;</a></h3>
+<p>Implement Set 3 after Sets 1 and 2 are merged. Reduce SAM3 publish peak memory to
+approximately one base checkpoint plus one active tensor temporary, and execute
+the high-memory merge inside the protected sidecar boundary. Create:</p>
+<div class="language-text highlight"><pre><span></span><code>git worktree add .worktrees/detectkit-oom-sam3-publish \
+  -b codex/detectkit-oom-sam3-publish HEAD
+</code></pre></div>
+<p>Do not redesign the model registry or alter inference checkpoint semantics.</p>
+<h3 id="primary-files-and-seams_2">Primary files and seams<a class="headerlink" href="#primary-files-and-seams_2" title="Permanent link">&para;</a></h3>
+<ul>
+<li>src/hydra_suite/training/sam3_lora/lora.py</li>
+<li>src/hydra_suite/training/sam3_lora/publish.py</li>
+<li>src/hydra_suite/training/sam3_lora/train.py and/or a focused publish sidecar</li>
+<li>src/hydra_suite/training/service.py</li>
+<li>Existing SAM3 publish/LoRA tests plus new peak-memory and failure-atomicity tests</li>
+</ul>
+<h3 id="required-investigation_1">Required investigation<a class="headerlink" href="#required-investigation_1" title="Permanent link">&para;</a></h3>
+<ol>
+<li>Measure current peak RSS for loading the base, cloning every tensor, forming
+   LoRA deltas, hashing validation tensors, and torch.save.</li>
+<li>Record the exact checkpoint wrapper/key layout, dtype behavior, metadata, and
+   fingerprints expected by the current inference loader.</li>
+<li>Determine whether the current serialization format permits true streaming.
+   If not, implement the best bounded in-memory approach now and document a
+   future sharded/safetensors migration rather than pretending torch.save is
+   streaming.</li>
+</ol>
+<h3 id="required-design_2">Required design<a class="headerlink" href="#required-design_2" title="Permanent link">&para;</a></h3>
+<ul>
+<li>Load one base state dictionary.</li>
+<li>Validate all adapter-to-base key mappings before mutating any tensor.</li>
+<li>Preserve any original base fingerprints needed for the unchanged/changed
+  safety checks before applying an in-place update.</li>
+<li>For each adapter, compute and apply its delta one tensor at a time, releasing
+  intermediates immediately. Do not clone the complete state dictionary.</li>
+<li>Preserve untouched stock-only keys, prefix behavior, dtype conversion,
+  checkpoint-load guards, and published sidecar metadata exactly.</li>
+<li>Write the checkpoint and metadata to temporary paths. Validate the temporary
+  artifact with the existing consumer-facing guards, fsync where appropriate,
+  then atomically promote it.</li>
+<li>Run merge/serialization in a resource-capped sidecar. Keep the parent-side
+  registry update small and atomic after the child reports a validated artifact.</li>
+<li>On cancellation, OOM, or validation failure, leave neither a registered model
+  nor a partially named final checkpoint.</li>
+</ul>
+<h3 id="required-tests_2">Required tests<a class="headerlink" href="#required-tests_2" title="Permanent link">&para;</a></h3>
+<ul>
+<li>Toy-state numerical equality between the old clone-based formula and the new
+  in-place tensor-at-a-time implementation.</li>
+<li>Missing adapter key fails before any externally visible mutation or artifact.</li>
+<li>Dtype, prefix, untouched-key, and fingerprint behavior remains unchanged.</li>
+<li>An isolated peak-RSS test shows no second full checkpoint-sized clone.</li>
+<li>Inject failure during merge, save, validation, and atomic promotion; every
+  case leaves the prior published model and registry intact.</li>
+<li>Sidecar OOM classification is surfaced through the Set 2 supervisor.</li>
+<li>Load the final test artifact through the same consumer guard used by semantic
+  inference.</li>
+</ul>
+<p>Perform a real base-checkpoint publish smoke test on an appropriate machine and
+record peak RSS. Do not commit the checkpoint.</p>
+<h3 id="commit-structure_2">Commit structure<a class="headerlink" href="#commit-structure_2" title="Permanent link">&para;</a></h3>
+<ol>
+<li>Pre-mutation validation and in-place merge with numerical tests.</li>
+<li>Atomic artifact writer and failure tests.</li>
+<li>Protected publish sidecar and service integration.</li>
+</ol>
+<h3 id="acceptance-criteria_2">Acceptance criteria<a class="headerlink" href="#acceptance-criteria_2" title="Permanent link">&para;</a></h3>
+<ul>
+<li>The complete base state dictionary is not cloned.</li>
+<li>Peak RSS measurement supports the claimed reduction.</li>
+<li>The published checkpoint remains behaviorally and structurally compatible.</li>
+<li>A failed publish cannot register or expose a partial artifact.</li>
+<li>Sets 1–3 pass together; SAM3 must not be declared production-safe until
+  post-merge CUDA verification succeeds.</li>
+</ul>
+<hr />
+<h2 id="agent-brief-4-bounded-tile-proposal-crop-and-result-inference">Agent brief 4 — Bounded tile, proposal, crop, and result inference<a class="headerlink" href="#agent-brief-4-bounded-tile-proposal-crop-and-result-inference" title="Permanent link">&para;</a></h2>
+<h3 id="dispatch-prompt_3">Dispatch prompt<a class="headerlink" href="#dispatch-prompt_3" title="Permanent link">&para;</a></h3>
+<p>Implement Set 4: make core DetectKit/TrackerKit inference bounded from frame
+input through tiling, model execution, remapping, downstream crops, and result
+delivery. Create:</p>
+<div class="language-text highlight"><pre><span></span><code>git worktree add .worktrees/detectkit-oom-inference-streaming \
+  -b codex/detectkit-oom-inference-streaming HEAD
+</code></pre></div>
+<p>Set 2 must already be merged. Keep cache-format redesign out of this branch;
+consume the existing CacheWriter interface so Set 5 can replace its storage.</p>
+<h3 id="primary-files-and-seams_3">Primary files and seams<a class="headerlink" href="#primary-files-and-seams_3" title="Permanent link">&para;</a></h3>
+<ul>
+<li>src/hydra_suite/core/inference/pipeline.py</li>
+<li>src/hydra_suite/core/inference/stages/slicing.py</li>
+<li>src/hydra_suite/core/inference/stages/regions.py</li>
+<li>src/hydra_suite/core/inference/stages/crops.py</li>
+<li>src/hydra_suite/core/inference/stages/obb.py</li>
+<li>src/hydra_suite/core/inference/config.py</li>
+<li>src/hydra_suite/utils/slice_geometry.py</li>
+<li>src/hydra_suite/detectkit/gui/prediction_preview.py, only to reuse the shared
+  bounded engine rather than maintain a second eager tiler</li>
+<li>Existing inference slicing, region, crop, depth, and CUDA tensor tests</li>
+</ul>
+<h3 id="required-design_3">Required design<a class="headerlink" href="#required-design_3" title="Permanent link">&para;</a></h3>
+<p>Introduce a bounded region/tile job iterator. It must:</p>
+<ul>
+<li>produce only the next permitted chunk of CPU/MPS tile copies;</li>
+<li>preserve zero-copy CUDA views where supported;</li>
+<li>predict the chunk, immediately extract compact frame-space arrays, then
+  release vendor result objects and tile pixels;</li>
+<li>retain only the compact candidates needed for mathematically exact cross-tile
+  merging;</li>
+<li>apply a finite resource-derived candidate cap before downstream crop or mask
+  expansion;</li>
+<li>preserve deterministic tile order and current merge behavior on fixtures.</li>
+</ul>
+<p>Do not equate the existing 4,096-tile geometric ceiling with a memory budget.
+The effective plan must be admitted by estimated bytes and work. Refuse absurd
+geometry early with a message containing frame size, tile size, tile count, and
+estimated peak bytes.</p>
+<p>Apply the same approach to sequential inference:</p>
+<ul>
+<li>bound stage-1 proposals before crop creation;</li>
+<li>extract and resize only one stage-2 crop chunk at a time;</li>
+<li>never interpret an unset stage2_batch_size as all crops;</li>
+<li>scatter compact stage-2 results before releasing the crop batch.</li>
+</ul>
+<p>Downstream head-tail, CNN, pose, and AprilTag work must have a crop-batch budget
+independent of detection frame batch. Avoid concatenating every detection crop
+in a window. Foreign-mask handling must not clone an unbounded window-sized crop
+tensor.</p>
+<p>Change full-video Pipeline result retention to an explicit policy. The normal
+runner path should count progress and stream results to consumers/caches without
+retaining every FrameResult. Preserve an opt-in collection mode for callers and
+tests that genuinely need an in-memory result list.</p>
+<p>Set finite production defaults for raw detection and semantic candidate caps,
+derived from expected animal counts where available. Retain an explicit expert
+override only if it remains bounded by the resource budget.</p>
+<h3 id="required-tests_3">Required tests<a class="headerlink" href="#required-tests_3" title="Permanent link">&para;</a></h3>
+<ul>
+<li>Tile input and merged-output parity for CPU NumPy, MPS where available, and
+  CUDA tensor paths on small fixtures.</li>
+<li>A fake slow model records that no more than the configured tile chunk is live.</li>
+<li>Peak RSS remains bounded as tile count increases at fixed chunk/candidate cap.</li>
+<li>Sequential stage 2 never receives more than its effective crop batch.</li>
+<li>Downstream crop models receive all detections exactly once with correct frame
+  and detection IDs.</li>
+<li>Foreign masking stays byte-identical on existing fixtures.</li>
+<li>Excessive tile geometry and candidate counts refuse before crop
+  materialization.</li>
+<li>The normal pipeline does not retain full-video FrameResults; opt-in collection
+  still works.</li>
+<li>Pipeline depth and cancellation tests remain green and no producer can remain
+  blocked during teardown.</li>
+</ul>
+<p>Run the nearest slicing, OBB, region, crop, pipeline-depth, MPS, and CUDA suites.
+Because this is performance-sensitive tracking code, run the repository
+equivalence harness as required by CLAUDE.md. Verify non-empty CSV outputs,
+compare both forward and tracking-final CSVs, and enforce PERF_TOLERANCE.</p>
+<h3 id="commit-structure_3">Commit structure<a class="headerlink" href="#commit-structure_3" title="Permanent link">&para;</a></h3>
+<ol>
+<li>Bounded tile iterator and direct-sliced integration.</li>
+<li>Bounded sequential proposals/crops.</li>
+<li>Bounded downstream crop processing and candidate caps.</li>
+<li>Optional Pipeline result collection.</li>
+<li>Preview reuse of the shared bounded path.</li>
+</ol>
+<h3 id="acceptance-criteria_3">Acceptance criteria<a class="headerlink" href="#acceptance-criteria_3" title="Permanent link">&para;</a></h3>
+<ul>
+<li>Tile and crop pixels scale with configured chunk size, not total tiles or
+  detections.</li>
+<li>Full-video inference does not retain all FrameResults by default.</li>
+<li>Existing outputs remain equivalent within the repository's defined gates.</li>
+<li>MPS and CUDA verification is complete for the affected paths.</li>
+</ul>
+<hr />
+<h2 id="agent-brief-5-chunked-inference-caches-and-bounded-writer">Agent brief 5 — Chunked inference caches and bounded writer<a class="headerlink" href="#agent-brief-5-chunked-inference-caches-and-bounded-writer" title="Permanent link">&para;</a></h2>
+<h3 id="dispatch-prompt_4">Dispatch prompt<a class="headerlink" href="#dispatch-prompt_4" title="Permanent link">&para;</a></h3>
+<p>Implement Set 5: replace whole-run in-memory cache accumulation with an
+appendable, crash-resumable format and enforce bounded backpressure in
+CacheWriter. Create:</p>
+<div class="language-text highlight"><pre><span></span><code>git worktree add .worktrees/detectkit-oom-chunked-cache \
+  -b codex/detectkit-oom-chunked-cache HEAD
+</code></pre></div>
+<p>Prefer to start after Set 4 is merged. Preserve read compatibility with existing
+NPZ caches. Do not silently rewrite or delete user caches.</p>
+<h3 id="primary-files-and-seams_4">Primary files and seams<a class="headerlink" href="#primary-files-and-seams_4" title="Permanent link">&para;</a></h3>
+<ul>
+<li>src/hydra_suite/core/inference/cache/writer.py</li>
+<li>src/hydra_suite/core/inference/cache/store.py</li>
+<li>src/hydra_suite/core/inference/cache/reader.py</li>
+<li>src/hydra_suite/core/inference/cache/reuse.py</li>
+<li>src/hydra_suite/core/inference/cache/base.py</li>
+<li>src/hydra_suite/core/inference/runner.py</li>
+<li>tests/test_inference_cache_writer.py and cache/reuse/pipeline tests</li>
+</ul>
+<h3 id="required-design-investigation">Required design investigation<a class="headerlink" href="#required-design-investigation" title="Permanent link">&para;</a></h3>
+<p>Before implementation, write a short design note in the branch comparing:</p>
+<ul>
+<li>a directory of immutable NPZ chunks plus an atomic manifest;</li>
+<li>Zarr/HDF5 or another appendable dependency;</li>
+<li>a compact SQLite/Arrow representation where appropriate.</li>
+</ul>
+<p>Prefer the least complex format that supports bounded writes, indexed frame
+reads, atomic completion, and no whole-file load. Avoid adding a heavy dependency
+unless it materially improves correctness and packaging remains reliable.</p>
+<p>The format must represent explicitly processed empty frames, detection IDs,
+class IDs, downstream phase data, pose validity, AprilTags, cache key/version,
+and the covered frame range. It must support interrupted-run resume without
+mistaking an incomplete chunk for complete data.</p>
+<p>Write one bounded chunk at a time. A safe pattern is write temporary chunk,
+flush/close, atomic rename, then atomically update the manifest. Never concatenate
+the entire run on close. Reads must load only the requested chunk or memory-map
+an indexed backing store.</p>
+<p>CacheWriter must enforce backpressure. An item-count limit is acceptable only if
+every item is tightly bounded; otherwise add byte accounting and block producers
+when queued payload bytes exceed the configured budget. Worker failure must wake
+blocked producers and surface exactly once without deadlock.</p>
+<p>Keep legacy NPZ files readable. New writes should use the new format. If an
+explicit migration helper is added, it must write beside the old cache and
+atomically promote only after validation; automatic destructive migration is
+forbidden.</p>
+<h3 id="required-tests_4">Required tests<a class="headerlink" href="#required-tests_4" title="Permanent link">&para;</a></h3>
+<ul>
+<li>Detection and every downstream cache type round-trip across multiple chunks.</li>
+<li>Processed empty frames remain distinguishable from missing frames.</li>
+<li>Random indexed reads do not load unrelated chunks.</li>
+<li>Peak RSS remains bounded as frame count grows at fixed chunk size.</li>
+<li>A deliberately slow writer causes producer backpressure at the configured
+  queue/byte bound.</li>
+<li>Worker exceptions wake blocked producers; flush/close never deadlocks.</li>
+<li>Crash before chunk rename, after chunk rename, and before manifest promotion
+  produces a recoverable and honest cache state.</li>
+<li>Resume processes only missing/incomplete frames.</li>
+<li>Legacy NPZ fixtures retain read parity.</li>
+<li>Cache-key mismatch and truncated data are rejected, not treated as valid empty
+  results.</li>
+<li>Forward/backward tracking cache coverage behavior remains correct.</li>
+</ul>
+<p>Run cache, pipeline-depth, runner, AL reuse, and relevant equivalence tests. Use
+long synthetic metadata/results, not huge decoded frames, for the memory test.</p>
+<h3 id="commit-structure_4">Commit structure<a class="headerlink" href="#commit-structure_4" title="Permanent link">&para;</a></h3>
+<ol>
+<li>Format design note, schema, and low-level chunk store.</li>
+<li>Detection and downstream handle implementations.</li>
+<li>Bounded CacheWriter and failure/backpressure handling.</li>
+<li>Runner/reuse integration and legacy compatibility.</li>
+</ol>
+<h3 id="acceptance-criteria_4">Acceptance criteria<a class="headerlink" href="#acceptance-criteria_4" title="Permanent link">&para;</a></h3>
+<ul>
+<li>No cache handle retains a whole video's results.</li>
+<li>Closing a cache does not allocate a whole-run concatenation.</li>
+<li>Queue memory is bounded and backpressure is proven.</li>
+<li>Interrupted writes are recoverable and legacy caches remain readable.</li>
+</ul>
+<hr />
+<h2 id="agent-brief-6-process-isolated-detectkit-model-operations">Agent brief 6 — Process-isolated DetectKit model operations<a class="headerlink" href="#agent-brief-6-process-isolated-detectkit-model-operations" title="Permanent link">&para;</a></h2>
+<h3 id="dispatch-prompt_5">Dispatch prompt<a class="headerlink" href="#dispatch-prompt_5" title="Permanent link">&para;</a></h3>
+<p>Implement Set 6 after Sets 2 and 5 are merged. Move every high-memory
+DetectKit-triggered model operation out of the GUI process and route it through
+the shared protected sidecar supervisor. Create:</p>
+<div class="language-text highlight"><pre><span></span><code>git worktree add .worktrees/detectkit-oom-gui-sidecars \
+  -b codex/detectkit-oom-gui-sidecars HEAD
+</code></pre></div>
+<p>Do not add model/business logic to MainWindow. Keep workers and protocol code in
+focused modules.</p>
+<h3 id="operations-in-scope">Operations in scope<a class="headerlink" href="#operations-in-scope" title="Permanent link">&para;</a></h3>
+<ul>
+<li>Dataset-wide direct, sliced, sequential OBB/detect/segment inference</li>
+<li>DetectKit model evaluation</li>
+<li>SAM3 semantic escalation</li>
+<li>Semantic calibration and previews that load SAM3</li>
+<li>Any SAM3 publishing still reachable from the GUI process after Set 3</li>
+<li>Generic Ultralytics training launch integration if it does not yet use the Set
+  2 supervisor and memory policy</li>
+</ul>
+<h3 id="primary-files-and-seams_5">Primary files and seams<a class="headerlink" href="#primary-files-and-seams_5" title="Permanent link">&para;</a></h3>
+<ul>
+<li>src/hydra_suite/detectkit/gui/main_window.py</li>
+<li>src/hydra_suite/detectkit/jobs/evaluation.py</li>
+<li>src/hydra_suite/detectkit/jobs/semantic_escalation.py</li>
+<li>src/hydra_suite/detectkit/gui/prediction_preview.py</li>
+<li>src/hydra_suite/detectkit/jobs/inference_stager.py</li>
+<li>src/hydra_suite/training/runner.py</li>
+<li>New focused Qt-free sidecar protocol/entry-point modules</li>
+<li>Existing BaseWorker remains a thin GUI coordinator, not the model executor</li>
+</ul>
+<h3 id="required-design_4">Required design<a class="headerlink" href="#required-design_4" title="Permanent link">&para;</a></h3>
+<p>Define a versioned, typed request/result protocol. Requests may use JSON for
+small metadata, but frame arrays, polygons, masks, and complete result sets must
+travel through bounded files/chunks or an explicitly bounded transport—not an
+unbounded stdout message or one giant returned dictionary.</p>
+<p>For dataset inference:</p>
+<ul>
+<li>The sidecar processes one admitted frame/tile/crop window at a time.</li>
+<li>Results are committed incrementally through the Set 5 cache/staging format.</li>
+<li>The GUI retains only aggregate counts, the current/visible image's candidates,
+  and a small bounded LRU for navigation.</li>
+<li>Slider filtering reads indexed results; it must not duplicate every detection
+  into multiple whole-source dicts/lists.</li>
+</ul>
+<p>For semantic escalation and calibration:</p>
+<ul>
+<li>Store candidates per frame/chunk instead of loading and rewriting one complete
+  JSON document after each frame.</li>
+<li>Use a finite, stratified calibration sample budget and report which frames were
+  sampled.</li>
+<li>Enforce max instances inside the predictor if the backend supports it, before
+  full mask materialization. If not, document the limitation and retain a strict
+  admitted tile/candidate budget.</li>
+<li>Keep candidate collection and merge resumable without accepting a half-tiled
+  frame as complete.</li>
+</ul>
+<p>For evaluation and generic training, launch the tool in a protected sidecar and
+stream bounded progress. Avoid importing Ultralytics or torch model weights in
+the GUI process.</p>
+<p>Cancellation must terminate the owned process group even when the child is
+silent or blocked in native code. Child OOM must yield a specific, actionable UI
+message with the configured limit, observed peak if available, and suggested
+safe adjustment. It must not be collapsed into a generic exception.</p>
+<h3 id="required-tests_5">Required tests<a class="headerlink" href="#required-tests_5" title="Permanent link">&para;</a></h3>
+<ul>
+<li>Assert GUI worker modules do not load model weights or call model.predict/val
+  in-process; use import seams or fake executors.</li>
+<li>Protocol round-trip, version mismatch, malformed messages, and bounded log
+  handling.</li>
+<li>Dataset inference writes incrementally and the GUI's retained result cache has
+  a fixed bound independent of source length.</li>
+<li>Slider/staging semantics remain unchanged on existing fixtures.</li>
+<li>Evaluation results and persisted metrics match the old path.</li>
+<li>Semantic cancellation never commits a half-frame.</li>
+<li>Calibration respects its sample budget and remains deterministic.</li>
+<li>Simulated child host OOM, accelerator OOM, cancellation, crash, and success all
+  produce distinct results while leaving the GUI process alive.</li>
+<li>Process groups and temporary artifacts are cleaned without touching unrelated
+  processes/files.</li>
+</ul>
+<p>Run focused Qt tests offscreen, job tests, inference staging tests, semantic
+tests, evaluation tests, and one end-to-end GUI-launched smoke operation on MPS
+and CUDA where applicable.</p>
+<h3 id="commit-structure_5">Commit structure<a class="headerlink" href="#commit-structure_5" title="Permanent link">&para;</a></h3>
+<ol>
+<li>Versioned sidecar protocol and Qt-free entry points.</li>
+<li>Dataset inference isolation and indexed GUI result access.</li>
+<li>Evaluation/training supervisor migration.</li>
+<li>Semantic escalation/calibration/preview isolation.</li>
+<li>UI diagnostics and teardown hardening.</li>
+</ol>
+<h3 id="acceptance-criteria_5">Acceptance criteria<a class="headerlink" href="#acceptance-criteria_5" title="Permanent link">&para;</a></h3>
+<ul>
+<li>The GUI process does not construct a high-memory model for any in-scope
+  operation.</li>
+<li>Dataset-wide results are not retained in one GUI dictionary.</li>
+<li>OOM or native hangs kill only the sidecar and leave the GUI responsive.</li>
+<li>Existing inference, staging, evaluation, and semantic behavior remains
+  equivalent on fixtures.</li>
+</ul>
+<hr />
+<h2 id="agent-brief-7-adaptive-sizing-observability-and-final-safety-gates">Agent brief 7 — Adaptive sizing, observability, and final safety gates<a class="headerlink" href="#agent-brief-7-adaptive-sizing-observability-and-final-safety-gates" title="Permanent link">&para;</a></h2>
+<h3 id="dispatch-prompt_6">Dispatch prompt<a class="headerlink" href="#dispatch-prompt_6" title="Permanent link">&para;</a></h3>
+<p>Implement Set 7 only after Sets 1–6 are merged and verified. Add empirical memory
+profiles, bounded adaptive batch selection, structured peak reporting, and final
+cross-platform safety/equivalence gates. Create:</p>
+<div class="language-text highlight"><pre><span></span><code>git worktree add .worktrees/detectkit-oom-adaptive \
+  -b codex/detectkit-oom-adaptive HEAD
+</code></pre></div>
+<p>Do not weaken hard limits or reintroduce eager algorithms in pursuit of higher
+throughput.</p>
+<h3 id="primary-files-and-seams_6">Primary files and seams<a class="headerlink" href="#primary-files-and-seams_6" title="Permanent link">&para;</a></h3>
+<ul>
+<li>Shared resource budget/supervisor modules from Set 2</li>
+<li>src/hydra_suite/utils/batch_optimizer.py</li>
+<li>Training and inference configuration schemas</li>
+<li>Training history/run manifests and inference profiling outputs</li>
+<li>Documentation for memory policy and OOM diagnostics</li>
+<li>tools/equivalence/ only where reusable measurement support belongs there</li>
+</ul>
+<h3 id="required-design_5">Required design<a class="headerlink" href="#required-design_5" title="Permanent link">&para;</a></h3>
+<p>Replace the current input-bytes-times-constant estimator with empirical profiles
+keyed by at least:</p>
+<ul>
+<li>operation type;</li>
+<li>model/checkpoint identity or architecture family;</li>
+<li>backend and device identity;</li>
+<li>precision;</li>
+<li>task type;</li>
+<li>input resolution and tiling mode;</li>
+<li>batch, pipeline depth, worker/prefetch, and crop batch;</li>
+<li>relevant adapter scope/rank for SAM3 training.</li>
+</ul>
+<p>Profiles must be versioned and invalidated when the estimator/schema or model
+identity changes. Never transfer a CUDA profile to MPS or treat MPS device memory
+as independent of host memory.</p>
+<p>For an unknown profile, perform a bounded probe at the smallest viable batch.
+Use measured allocated/reserved accelerator memory and process-tree RSS to fit a
+conservative batch recommendation. Increase via bounded search only while the
+reserve remains intact. The probe itself must run inside the hard-contained
+sidecar.</p>
+<p>Adaptive retry rules:</p>
+<ul>
+<li>Retry only recognized accelerator OOMs or resource soft-limit failures.</li>
+<li>Reduce the specific pressure source: frame batch, tile chunk, crop batch,
+  workers/prefetch, or cache chunk—not an unrelated parameter.</li>
+<li>Clear failed child state by starting a fresh sidecar; do not rely on a damaged
+  allocator context.</li>
+<li>Use a small finite retry count and never retry a host hard-limit kill with the
+  same configuration.</li>
+<li>Preserve deterministic seeds and record every adjustment in the run manifest.</li>
+<li>Do not mask shape errors, corrupted checkpoints, data errors, or programmer
+  exceptions as OOM retries.</li>
+</ul>
+<p>Emit structured telemetry for each phase: admission estimate, applied limits,
+effective parameters, peak parent/child RSS, system minimum available RAM,
+accelerator allocated/reserved peak, queue high-water marks, cache chunk size,
+exit classification, and retry history. Keep filesystem paths and sensitive
+environment values out of general telemetry unless already part of the local run
+manifest.</p>
+<p>Review temporary conservative clamps introduced by earlier sets. Relax them only
+when empirical profiles and containment tests prove the new range safe.</p>
+<h3 id="required-tests-and-final-verification">Required tests and final verification<a class="headerlink" href="#required-tests-and-final-verification" title="Permanent link">&para;</a></h3>
+<ul>
+<li>Profile-key separation and invalidation tests.</li>
+<li>Unknown-device probe begins at the minimum and cannot exceed the hard budget.</li>
+<li>Monotonic recommendations: increasing available memory cannot recommend a
+  smaller batch absent another changed constraint; larger inputs cannot
+  recommend a larger batch.</li>
+<li>Recognized OOM reduces the correct pressure parameter and succeeds on a fresh
+  child; unrelated exceptions do not retry.</li>
+<li>Retry count is finite and every adjustment is recorded.</li>
+<li>MPS unified-memory accounting is not fractioned twice.</li>
+<li>Concurrent jobs honor Set 2's leases and reservations.</li>
+<li>Structured telemetry accurately reports simulated peaks/high-water marks.</li>
+<li>Complete Sets 1–6 regression suites pass.</li>
+<li>Full appropriate MPS and CUDA equivalence runs produce non-empty CSVs, match
+  required forward/tracking-final outputs, and remain within PERF_TOLERANCE.</li>
+<li>Long synthetic train, tile, cache, and dataset-inference soak tests show no
+  source-length-correlated RSS growth.</li>
+</ul>
+<h3 id="commit-structure_6">Commit structure<a class="headerlink" href="#commit-structure_6" title="Permanent link">&para;</a></h3>
+<ol>
+<li>Versioned profile schema and probe measurements.</li>
+<li>Adaptive batch/chunk selection and bounded retry.</li>
+<li>Structured telemetry and user-facing reporting.</li>
+<li>Cross-platform soak/equivalence gates and documentation.</li>
+</ol>
+<h3 id="acceptance-criteria_6">Acceptance criteria<a class="headerlink" href="#acceptance-criteria_6" title="Permanent link">&para;</a></h3>
+<ul>
+<li>Safe defaults are measurement-backed and device-specific.</li>
+<li>Every automatic adjustment is bounded, visible, and reproducible.</li>
+<li>Host and accelerator peaks remain below enforced budgets during soak tests.</li>
+<li>The final cross-platform and equivalence gates are green.</li>
+</ul>
+<hr />
+<h2 id="program-completion-checklist">Program completion checklist<a class="headerlink" href="#program-completion-checklist" title="Permanent link">&para;</a></h2>
+<p>The hardening program is complete only when all of the following are true:</p>
+<ul class="task-list">
+<li class="task-list-item"><label class="task-list-control"><input type="checkbox" disabled checked/><span class="task-list-indicator"></span></label> SAM3 train and validation peak image/mask memory is independent of dataset
+      size at fixed in-flight settings.</li>
+<li class="task-list-item"><label class="task-list-control"><input type="checkbox" disabled checked/><span class="task-list-indicator"></span></label> Positive and negative SAM3 queries share one tile transform without loss
+      or target-semantic drift.</li>
+<li class="task-list-item"><label class="task-list-control"><input type="checkbox" disabled checked/><span class="task-list-indicator"></span></label> Host and accelerator admission reflects real parameters and preserves a
+      system reserve.</li>
+<li class="task-list-item"><label class="task-list-control"><input type="checkbox" disabled checked/><span class="task-list-indicator"></span></label> A test child that exceeds its limit is killed while its parent and the GUI
+      survive.</li>
+<li class="task-list-item"><label class="task-list-control"><input type="checkbox" disabled checked/><span class="task-list-indicator"></span></label> SAM3 publishing does not clone a complete checkpoint and is atomic.</li>
+<li class="task-list-item"><label class="task-list-control"><input type="checkbox" disabled checked/><span class="task-list-indicator"></span></label> Tile, proposal, and downstream crop memory is bounded end-to-end.</li>
+<li class="task-list-item"><label class="task-list-control"><input type="checkbox" disabled checked/><span class="task-list-indicator"></span></label> Full-video FrameResults are not retained unless explicitly requested.</li>
+<li class="task-list-item"><label class="task-list-control"><input type="checkbox" disabled checked/><span class="task-list-indicator"></span></label> Cache queues and storage are bounded; long-video cache close does not
+      concatenate the complete run.</li>
+<li class="task-list-item"><label class="task-list-control"><input type="checkbox" disabled checked/><span class="task-list-indicator"></span></label> Dataset inference, evaluation, semantic work, publishing, and training all
+      execute outside the GUI process.</li>
+<li class="task-list-item"><label class="task-list-control"><input type="checkbox" disabled checked/><span class="task-list-indicator"></span></label> A global lease prevents conflicting heavy jobs from overcommitting the same
+      host/device.</li>
+<li class="task-list-item"><label class="task-list-control"><input type="checkbox" disabled checked/><span class="task-list-indicator"></span></label> MPS and CUDA tests, equivalence comparisons, and soak tests are complete
+      with non-empty outputs and recorded peak metrics.</li>
+<li class="task-list-item"><label class="task-list-control"><input type="checkbox" disabled checked/><span class="task-list-indicator"></span></label> All completed implementation plans/designs are moved to their done/
+      directories during final merge according to AGENTS.md.</li>
+</ul>
+<h2 id="required-final-handoff-from-every-agent">Required final handoff from every agent<a class="headerlink" href="#required-final-handoff-from-every-agent" title="Permanent link">&para;</a></h2>
+<p>Each agent's final report must include:</p>
+<ol>
+<li>Branch and commit list.</li>
+<li>Files and public interfaces changed.</li>
+<li>Reproduction or baseline measurements.</li>
+<li>Exact focused, broader, formatting, lint, documentation, equivalence, and
+   platform commands run, with pass/fail/skip status.</li>
+<li>Peak RSS and accelerator-memory measurements relevant to the set.</li>
+<li>Full-diff review findings and how each was resolved.</li>
+<li>Remaining limitations or follow-up work, without calling the set verified if
+   a required gate did not run or failed.</li>
+</ol>
+
+
+
+
+
+
+
+
+
+
+
+
+                
+              </article>
+            </div>
+          
+          
+<script>var target=document.getElementById(location.hash.slice(1));target&&target.name&&(target.checked=target.name.startsWith("__tabbed_"))</script>
+        </div>
+        
+          <button type="button" class="md-top md-icon" data-md-component="top" hidden>
+  
+  <svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 24 24"><path d="M13 20h-2V8l-5.5 5.5-1.42-1.42L12 4.16l7.92 7.92-1.42 1.42L13 8z"/></svg>
+  Back to top
+</button>
+        
+      </main>
+      
+        <footer class="md-footer">
+  
+  <div class="md-footer-meta md-typeset">
+    <div class="md-footer-meta__inner md-grid">
+      <div class="md-copyright">
+  
+  
+    Made with
+    <a href="https://squidfunk.github.io/mkdocs-material/" target="_blank" rel="noopener">
+      Material for MkDocs
+    </a>
+  
+</div>
+      
+    </div>
+  </div>
+</footer>
+      
+    </div>
+    <div class="md-dialog" data-md-component="dialog">
+      <div class="md-dialog__inner md-typeset"></div>
+    </div>
+    
+    
+    <script id="__config" type="application/json">{"base": "../../../..", "features": ["navigation.tabs", "navigation.sections", "navigation.expand", "navigation.top", "content.code.copy", "content.action.edit", "search.suggest", "search.highlight"], "search": "../../../../assets/javascripts/workers/search.6ce7567c.min.js", "translations": {"clipboard.copied": "Copied to clipboard", "clipboard.copy": "Copy to clipboard", "search.result.more.one": "1 more on this page", "search.result.more.other": "# more on this page", "search.result.none": "No matching documents", "search.result.one": "1 matching document", "search.result.other": "# matching documents", "search.result.placeholder": "Type to start searching", "search.result.term.missing": "Missing", "select.version": "Select version"}, "version": {"default": "latest", "provider": "mike"}}</script>
+    
+    
+      <script src="../../../../assets/javascripts/bundle.83f73b43.min.js"></script>
+      
+    
+  </body>
+</html>

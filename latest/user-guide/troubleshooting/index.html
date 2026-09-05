@@ -876,6 +876,69 @@
   
   
     <li class="md-nav__item">
+      <a href="../../runbooks/detectkit-headless-training/" class="md-nav__link">
+        
+  
+  <span class="md-ellipsis">
+    DetectKit Headless Training
+  </span>
+  
+
+      </a>
+    </li>
+  
+
+              
+            
+              
+                
+  
+  
+  
+  
+    <li class="md-nav__item">
+      <a href="../detectkit-semantic-escalation/" class="md-nav__link">
+        
+  
+  <span class="md-ellipsis">
+    DetectKit: Semantic Escalation (SAM3)
+  </span>
+  
+
+      </a>
+    </li>
+  
+
+              
+            
+              
+                
+  
+  
+  
+  
+    <li class="md-nav__item">
+      <a href="../detectkit-sahi-calibration/" class="md-nav__link">
+        
+  
+  <span class="md-ellipsis">
+    DetectKit: SAHI Calibration Profiles
+  </span>
+  
+
+      </a>
+    </li>
+  
+
+              
+            
+              
+                
+  
+  
+  
+  
+    <li class="md-nav__item">
       <a href="../filterkit/" class="md-nav__link">
         
   
@@ -1247,6 +1310,48 @@
   
   
     <li class="md-nav__item">
+      <a href="../../developer-guide/resource-containment/" class="md-nav__link">
+        
+  
+  <span class="md-ellipsis">
+    Resource Containment
+  </span>
+  
+
+      </a>
+    </li>
+  
+
+              
+            
+              
+                
+  
+  
+  
+  
+    <li class="md-nav__item">
+      <a href="../../developer-guide/profiling/" class="md-nav__link">
+        
+  
+  <span class="md-ellipsis">
+    Profiling
+  </span>
+  
+
+      </a>
+    </li>
+  
+
+              
+            
+              
+                
+  
+  
+  
+  
+    <li class="md-nav__item">
       <a href="../../developer-guide/dependency-cuda-updates/" class="md-nav__link">
         
   
@@ -1273,6 +1378,27 @@
   
   <span class="md-ellipsis">
     Performance Tuning
+  </span>
+  
+
+      </a>
+    </li>
+  
+
+              
+            
+              
+                
+  
+  
+  
+  
+    <li class="md-nav__item">
+      <a href="../../developer-guide/inference-fast-mode/" class="md-nav__link">
+        
+  
+  <span class="md-ellipsis">
+    Inference Fast Mode
   </span>
   
 
@@ -1895,7 +2021,8 @@
 </ul>
 <h2 id="runtime-is-too-slow">Runtime is too slow<a class="headerlink" href="#runtime-is-too-slow" title="Permanent link">&para;</a></h2>
 <ul>
-<li>Lower <code>resize_factor</code>.</li>
+<li>Lower <code>resize_factor</code> (background subtraction only — it is clamped to <code>1.0</code>
+  for YOLO OBB, which letterboxes frames to its own input size regardless).</li>
 <li>Disable non-essential real-time overlays/histograms.</li>
 <li>Verify backend detection (<code>hydra_suite.utils.gpu_utils</code>).</li>
 </ul>

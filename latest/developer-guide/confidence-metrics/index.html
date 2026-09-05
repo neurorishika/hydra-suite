@@ -13,7 +13,7 @@
         <link rel="canonical" href="https://neurorishika.github.io/hydra-suite/latest/developer-guide/confidence-metrics/">
       
       
-        <link rel="prev" href="../performance-tuning/">
+        <link rel="prev" href="../inference-fast-mode/">
       
       
         <link rel="next" href="../extending-detection/">
@@ -873,6 +873,69 @@
   
   
     <li class="md-nav__item">
+      <a href="../../runbooks/detectkit-headless-training/" class="md-nav__link">
+        
+  
+  <span class="md-ellipsis">
+    DetectKit Headless Training
+  </span>
+  
+
+      </a>
+    </li>
+  
+
+              
+            
+              
+                
+  
+  
+  
+  
+    <li class="md-nav__item">
+      <a href="../../user-guide/detectkit-semantic-escalation/" class="md-nav__link">
+        
+  
+  <span class="md-ellipsis">
+    DetectKit: Semantic Escalation (SAM3)
+  </span>
+  
+
+      </a>
+    </li>
+  
+
+              
+            
+              
+                
+  
+  
+  
+  
+    <li class="md-nav__item">
+      <a href="../../user-guide/detectkit-sahi-calibration/" class="md-nav__link">
+        
+  
+  <span class="md-ellipsis">
+    DetectKit: SAHI Calibration Profiles
+  </span>
+  
+
+      </a>
+    </li>
+  
+
+              
+            
+              
+                
+  
+  
+  
+  
+    <li class="md-nav__item">
       <a href="../../user-guide/filterkit/" class="md-nav__link">
         
   
@@ -1135,6 +1198,48 @@
   
   
     <li class="md-nav__item">
+      <a href="../resource-containment/" class="md-nav__link">
+        
+  
+  <span class="md-ellipsis">
+    Resource Containment
+  </span>
+  
+
+      </a>
+    </li>
+  
+
+              
+            
+              
+                
+  
+  
+  
+  
+    <li class="md-nav__item">
+      <a href="../profiling/" class="md-nav__link">
+        
+  
+  <span class="md-ellipsis">
+    Profiling
+  </span>
+  
+
+      </a>
+    </li>
+  
+
+              
+            
+              
+                
+  
+  
+  
+  
+    <li class="md-nav__item">
       <a href="../dependency-cuda-updates/" class="md-nav__link">
         
   
@@ -1161,6 +1266,27 @@
   
   <span class="md-ellipsis">
     Performance Tuning
+  </span>
+  
+
+      </a>
+    </li>
+  
+
+              
+            
+              
+                
+  
+  
+  
+  
+    <li class="md-nav__item">
+      <a href="../inference-fast-mode/" class="md-nav__link">
+        
+  
+  <span class="md-ellipsis">
+    Inference Fast Mode
   </span>
   
 
@@ -1244,6 +1370,24 @@
   <a href="#integration-points" class="md-nav__link">
     <span class="md-ellipsis">
       Integration Points
+    </span>
+  </a>
+  
+</li>
+      
+        <li class="md-nav__item">
+  <a href="#frame-selection-metrics-dataal" class="md-nav__link">
+    <span class="md-ellipsis">
+      Frame-Selection Metrics (data/al/)
+    </span>
+  </a>
+  
+</li>
+      
+        <li class="md-nav__item">
+  <a href="#coordinate-space-the-scorer-is-working-space-only" class="md-nav__link">
+    <span class="md-ellipsis">
+      Coordinate space: the scorer is working-space only
     </span>
   </a>
   
@@ -1766,6 +1910,24 @@
   
 </li>
       
+        <li class="md-nav__item">
+  <a href="#frame-selection-metrics-dataal" class="md-nav__link">
+    <span class="md-ellipsis">
+      Frame-Selection Metrics (data/al/)
+    </span>
+  </a>
+  
+</li>
+      
+        <li class="md-nav__item">
+  <a href="#coordinate-space-the-scorer-is-working-space-only" class="md-nav__link">
+    <span class="md-ellipsis">
+      Coordinate space: the scorer is working-space only
+    </span>
+  </a>
+  
+</li>
+      
     </ul>
   
 </nav>
@@ -1809,6 +1971,108 @@
 <li>Optionally persisted to CSV when enabled.</li>
 <li>Consumed by dataset generation/scoring workflows.</li>
 </ul>
+<h2 id="frame-selection-metrics-dataal">Frame-Selection Metrics (<code>data/al/</code>)<a class="headerlink" href="#frame-selection-metrics-dataal" title="Permanent link">&para;</a></h2>
+<p>Active-learning frame selection (<code>hydra_suite.data.al.signals</code>,
+<code>hydra_suite.data.al.acquisition</code>) scores every tracked frame on a fixed set
+of named channels, then ranks frames by a weighted composite. Every channel
+is an <strong>absolute severity</strong> in <code>[0, 1]</code>, exactly <code>0.0</code> on a frame with no
+problem on that axis — not a within-run rank. A previous implementation
+min-max normalized each channel across the run, which meant the top frame of
+even a cleanly tracked video always scored near <code>1.0</code> and <code>min_score</code> could
+never gate anything; that normalization has been removed and must not be
+reintroduced (<code>_composite_score</code> in <code>acquisition.py</code> documents this in a
+code comment for exactly that reason).</p>
+<p>The channels:</p>
+<table>
+<thead>
+<tr>
+<th>Channel</th>
+<th>Meaning</th>
+<th>Absolute definition</th>
+</tr>
+</thead>
+<tbody>
+<tr>
+<td><code>uncertainty</code></td>
+<td>Low mean detection confidence</td>
+<td><code>0</code> if <code>mean_conf &gt;= conf_floor</code>, else <code>(conf_floor - mean_conf) / conf_floor</code></td>
+</tr>
+<tr>
+<td><code>count</code></td>
+<td>Detection count vs. expected target count</td>
+<td>asymmetric: under-count <code>(expected - n) / expected</code>; over-count <code>min((n - expected) / expected, 1) * 0.5</code></td>
+</tr>
+<tr>
+<td><code>crowd</code></td>
+<td>Animals genuinely overlapping/touching</td>
+<td>max pairwise polygon-overlap ratio across detection pairs</td>
+</tr>
+<tr>
+<td><code>fragmentation</code></td>
+<td>One animal apparently split into two detections</td>
+<td>proximity + overlap + both-smaller-than-typical heuristic, with a 0.45 suspicion gate</td>
+</tr>
+<tr>
+<td><code>edge</code></td>
+<td>A detection near the frame border</td>
+<td>border-proximity, computed against the real frame shape</td>
+</tr>
+<tr>
+<td><code>assignment</code></td>
+<td>Poor track-to-detection matches</td>
+<td><code>1 - mean(assignment_confidence)</code>, or a cost-based fallback</td>
+</tr>
+<tr>
+<td><code>track_loss</code></td>
+<td>Coasted/lost tracks</td>
+<td><code>min(lost / max_targets, 1)</code></td>
+</tr>
+<tr>
+<td><code>position_uncertainty</code></td>
+<td>High state-covariance uncertainty</td>
+<td><code>min(mean(uncertainty) / 50, 1)</code></td>
+</tr>
+<tr>
+<td><code>nms_instability</code></td>
+<td>Detections unstable under threshold perturbation (DetectKit path)</td>
+<td><code>1 - mean(set IoU)</code></td>
+</tr>
+</tbody>
+</table>
+<p><strong><code>fragmentation</code> and <code>crowd</code> are separate channels with separate weights and
+separate UI controls.</strong> They measure different phenomena: <code>fragmentation</code> is
+evidence that a single animal was split into two nearby, undersized
+detections; <code>crowd</code> is evidence that two full-size animals are genuinely
+touching or overlapping. An earlier version of the tracker path had the
+<code>METRIC_FRAGMENTED_DETECTIONS</code> checkbox gating the <code>crowd</code> weight instead of
+a fragmentation channel — the fragmentation signal was computed but never
+consulted — which is not what the control's label said. That has been
+corrected: the checkbox now gates <code>fragmentation</code>, and <code>crowd</code> has its own
+independent control.</p>
+<p>When a selection run comes back empty (no frame clears <code>min_score</code>),
+<code>hydra_suite.data.al.acquisition.explain()</code> reports the observed maximum of
+each weighted channel, so the caller can report <em>why</em> nothing was selected
+instead of a bare empty result.</p>
+<h2 id="coordinate-space-the-scorer-is-working-space-only">Coordinate space: the scorer is working-space only<a class="headerlink" href="#coordinate-space-the-scorer-is-working-space-only" title="Permanent link">&para;</a></h2>
+<p><code>FrameQualityScorer</code> scores entirely in <strong><code>RESIZE_FACTOR</code> working space</strong>,
+because that is the space <code>detection_data["obb_corners"]</code> arrives in — the
+detection cache is written from the resized detection frame, never from the
+original frame.</p>
+<p>Callers pass <strong>original-space</strong> quantities: <code>frame_shape</code> comes from
+<code>cv2.CAP_PROP_FRAME_{WIDTH,HEIGHT}</code>, and <code>REFERENCE_BODY_SIZE</code> is an
+original-space length (<code>core/canonicalization/geometry.py</code>,
+<code>core/tracking/worker.py</code> and <code>core/assigners/hungarian.py</code> all multiply it by
+<code>RESIZE_FACTOR</code> to reach working space). Both are converted <strong>once</strong>, in
+<code>FrameQualityScorer.__init__</code>; <code>self.reference_body_size</code> keeps the
+original-space value under its historical public name and
+<code>self.reference_body_size_working</code> is what every signal actually uses.</p>
+<p>Mixing the two spaces made <code>fragmentation</code> — the largest weight in
+<code>tracker_default</code> — a function of the resize knob rather than of the scene
+(the same two animals 16 px apart scored <code>0.000</code> at <code>RESIZE_FACTOR=1.0</code> and
+<code>0.651</code> at <code>0.5</code>), and <code>edge</code> had the mirror defect. <code>tests/test_dataset_generation.py</code>
+pins invariance across <code>RESIZE_FACTOR</code> 1.0 vs 0.5 for the same physical scene.
+An unopenable video yields <code>frame_shape=None</code> (edge score <code>0.0</code>) rather than
+<code>(0, 0)</code>, which would have called every detection maximally close to the border.</p>
 
 
 

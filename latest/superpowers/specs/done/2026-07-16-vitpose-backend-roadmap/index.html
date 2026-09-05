@@ -1,0 +1,2496 @@
+
+<!doctype html>
+<html lang="en" class="no-js">
+  <head>
+    
+      <meta charset="utf-8">
+      <meta name="viewport" content="width=device-width,initial-scale=1">
+      
+        <meta name="description" content="User and developer documentation for HYDRA Suite">
+      
+      
+      
+        <link rel="canonical" href="https://neurorishika.github.io/hydra-suite/latest/superpowers/specs/done/2026-07-16-vitpose-backend-roadmap/">
+      
+      
+      
+      
+      <link rel="icon" href="../../../../assets/images/favicon.png">
+      <meta name="generator" content="mkdocs-1.6.1, mkdocs-material-9.5.43">
+    
+    
+      
+        <title>ViTPose Native Backend — Roadmap - HYDRA Suite Docs</title>
+      
+    
+    
+      <link rel="stylesheet" href="../../../../assets/stylesheets/main.0253249f.min.css">
+      
+        
+        <link rel="stylesheet" href="../../../../assets/stylesheets/palette.06af60db.min.css">
+      
+      
+
+
+    
+    
+      
+    
+    
+      
+        
+        
+        <link rel="preconnect" href="https://fonts.gstatic.com" crossorigin>
+        <link rel="stylesheet" href="https://fonts.googleapis.com/css?family=Roboto:300,300i,400,400i,700,700i%7CRoboto+Mono:400,400i,700,700i&display=fallback">
+        <style>:root{--md-text-font:"Roboto";--md-code-font:"Roboto Mono"}</style>
+      
+    
+    
+      <link rel="stylesheet" href="../../../../assets/_mkdocstrings.css">
+    
+    <script>__md_scope=new URL("../../../..",location),__md_hash=e=>[...e].reduce(((e,_)=>(e<<5)-e+_.charCodeAt(0)),0),__md_get=(e,_=localStorage,t=__md_scope)=>JSON.parse(_.getItem(t.pathname+"."+e)),__md_set=(e,_,t=localStorage,a=__md_scope)=>{try{t.setItem(a.pathname+"."+e,JSON.stringify(_))}catch(e){}}</script>
+    
+      
+
+    
+    
+    
+  </head>
+  
+  
+    
+    
+      
+    
+    
+    
+    
+    <body dir="ltr" data-md-color-scheme="default" data-md-color-primary="blue" data-md-color-accent="light-blue">
+  
+    
+    <input class="md-toggle" data-md-toggle="drawer" type="checkbox" id="__drawer" autocomplete="off">
+    <input class="md-toggle" data-md-toggle="search" type="checkbox" id="__search" autocomplete="off">
+    <label class="md-overlay" for="__drawer"></label>
+    <div data-md-component="skip">
+      
+        
+        <a href="#vitpose-native-backend-roadmap" class="md-skip">
+          Skip to content
+        </a>
+      
+    </div>
+    <div data-md-component="announce">
+      
+    </div>
+    
+      <div data-md-color-scheme="default" data-md-component="outdated" hidden>
+        
+      </div>
+    
+    
+      
+
+<header class="md-header" data-md-component="header">
+  <nav class="md-header__inner md-grid" aria-label="Header">
+    <a href="../../../.." title="HYDRA Suite Docs" class="md-header__button md-logo" aria-label="HYDRA Suite Docs" data-md-component="logo">
+      
+  
+  <svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 24 24"><path d="M12 8a3 3 0 0 0 3-3 3 3 0 0 0-3-3 3 3 0 0 0-3 3 3 3 0 0 0 3 3m0 3.54C9.64 9.35 6.5 8 3 8v11c3.5 0 6.64 1.35 9 3.54 2.36-2.19 5.5-3.54 9-3.54V8c-3.5 0-6.64 1.35-9 3.54"/></svg>
+
+    </a>
+    <label class="md-header__button md-icon" for="__drawer">
+      
+      <svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 24 24"><path d="M3 6h18v2H3zm0 5h18v2H3zm0 5h18v2H3z"/></svg>
+    </label>
+    <div class="md-header__title" data-md-component="header-title">
+      <div class="md-header__ellipsis">
+        <div class="md-header__topic">
+          <span class="md-ellipsis">
+            HYDRA Suite Docs
+          </span>
+        </div>
+        <div class="md-header__topic" data-md-component="header-topic">
+          <span class="md-ellipsis">
+            
+              ViTPose Native Backend — Roadmap
+            
+          </span>
+        </div>
+      </div>
+    </div>
+    
+      
+        <form class="md-header__option" data-md-component="palette">
+  
+    
+    
+    
+    <input class="md-option" data-md-color-media="(prefers-color-scheme: light)" data-md-color-scheme="default" data-md-color-primary="blue" data-md-color-accent="light-blue"  aria-label="Switch to dark mode"  type="radio" name="__palette" id="__palette_0">
+    
+      <label class="md-header__button md-icon" title="Switch to dark mode" for="__palette_1" hidden>
+        <svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 24 24"><path d="m17.75 4.09-2.53 1.94.91 3.06-2.63-1.81-2.63 1.81.91-3.06-2.53-1.94L12.44 4l1.06-3 1.06 3zm3.5 6.91-1.64 1.25.59 1.98-1.7-1.17-1.7 1.17.59-1.98L15.75 11l2.06-.05L18.5 9l.69 1.95zm-2.28 4.95c.83-.08 1.72 1.1 1.19 1.85-.32.45-.66.87-1.08 1.27C15.17 23 8.84 23 4.94 19.07c-3.91-3.9-3.91-10.24 0-14.14.4-.4.82-.76 1.27-1.08.75-.53 1.93.36 1.85 1.19-.27 2.86.69 5.83 2.89 8.02a9.96 9.96 0 0 0 8.02 2.89m-1.64 2.02a12.08 12.08 0 0 1-7.8-3.47c-2.17-2.19-3.33-5-3.49-7.82-2.81 3.14-2.7 7.96.31 10.98 3.02 3.01 7.84 3.12 10.98.31"/></svg>
+      </label>
+    
+  
+    
+    
+    
+    <input class="md-option" data-md-color-media="(prefers-color-scheme: dark)" data-md-color-scheme="slate" data-md-color-primary="blue" data-md-color-accent="light-blue"  aria-label="Switch to light mode"  type="radio" name="__palette" id="__palette_1">
+    
+      <label class="md-header__button md-icon" title="Switch to light mode" for="__palette_0" hidden>
+        <svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 24 24"><path d="M12 7a5 5 0 0 1 5 5 5 5 0 0 1-5 5 5 5 0 0 1-5-5 5 5 0 0 1 5-5m0 2a3 3 0 0 0-3 3 3 3 0 0 0 3 3 3 3 0 0 0 3-3 3 3 0 0 0-3-3m0-7 2.39 3.42C13.65 5.15 12.84 5 12 5s-1.65.15-2.39.42zM3.34 7l4.16-.35A7.2 7.2 0 0 0 5.94 8.5c-.44.74-.69 1.5-.83 2.29zm.02 10 1.76-3.77a7.131 7.131 0 0 0 2.38 4.14zM20.65 7l-1.77 3.79a7.02 7.02 0 0 0-2.38-4.15zm-.01 10-4.14.36c.59-.51 1.12-1.14 1.54-1.86.42-.73.69-1.5.83-2.29zM12 22l-2.41-3.44c.74.27 1.55.44 2.41.44.82 0 1.63-.17 2.37-.44z"/></svg>
+      </label>
+    
+  
+</form>
+      
+    
+    
+      <script>var palette=__md_get("__palette");if(palette&&palette.color){if("(prefers-color-scheme)"===palette.color.media){var media=matchMedia("(prefers-color-scheme: light)"),input=document.querySelector(media.matches?"[data-md-color-media='(prefers-color-scheme: light)']":"[data-md-color-media='(prefers-color-scheme: dark)']");palette.color.media=input.getAttribute("data-md-color-media"),palette.color.scheme=input.getAttribute("data-md-color-scheme"),palette.color.primary=input.getAttribute("data-md-color-primary"),palette.color.accent=input.getAttribute("data-md-color-accent")}for(var[key,value]of Object.entries(palette.color))document.body.setAttribute("data-md-color-"+key,value)}</script>
+    
+    
+    
+      <label class="md-header__button md-icon" for="__search">
+        
+        <svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 24 24"><path d="M9.5 3A6.5 6.5 0 0 1 16 9.5c0 1.61-.59 3.09-1.56 4.23l.27.27h.79l5 5-1.5 1.5-5-5v-.79l-.27-.27A6.52 6.52 0 0 1 9.5 16 6.5 6.5 0 0 1 3 9.5 6.5 6.5 0 0 1 9.5 3m0 2C7 5 5 7 5 9.5S7 14 9.5 14 14 12 14 9.5 12 5 9.5 5"/></svg>
+      </label>
+      <div class="md-search" data-md-component="search" role="dialog">
+  <label class="md-search__overlay" for="__search"></label>
+  <div class="md-search__inner" role="search">
+    <form class="md-search__form" name="search">
+      <input type="text" class="md-search__input" name="query" aria-label="Search" placeholder="Search" autocapitalize="off" autocorrect="off" autocomplete="off" spellcheck="false" data-md-component="search-query" required>
+      <label class="md-search__icon md-icon" for="__search">
+        
+        <svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 24 24"><path d="M9.5 3A6.5 6.5 0 0 1 16 9.5c0 1.61-.59 3.09-1.56 4.23l.27.27h.79l5 5-1.5 1.5-5-5v-.79l-.27-.27A6.52 6.52 0 0 1 9.5 16 6.5 6.5 0 0 1 3 9.5 6.5 6.5 0 0 1 9.5 3m0 2C7 5 5 7 5 9.5S7 14 9.5 14 14 12 14 9.5 12 5 9.5 5"/></svg>
+        
+        <svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 24 24"><path d="M20 11v2H8l5.5 5.5-1.42 1.42L4.16 12l7.92-7.92L13.5 5.5 8 11z"/></svg>
+      </label>
+      <nav class="md-search__options" aria-label="Search">
+        
+        <button type="reset" class="md-search__icon md-icon" title="Clear" aria-label="Clear" tabindex="-1">
+          
+          <svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 24 24"><path d="M19 6.41 17.59 5 12 10.59 6.41 5 5 6.41 10.59 12 5 17.59 6.41 19 12 13.41 17.59 19 19 17.59 13.41 12z"/></svg>
+        </button>
+      </nav>
+      
+        <div class="md-search__suggest" data-md-component="search-suggest"></div>
+      
+    </form>
+    <div class="md-search__output">
+      <div class="md-search__scrollwrap" tabindex="0" data-md-scrollfix>
+        <div class="md-search-result" data-md-component="search-result">
+          <div class="md-search-result__meta">
+            Initializing search
+          </div>
+          <ol class="md-search-result__list" role="presentation"></ol>
+        </div>
+      </div>
+    </div>
+  </div>
+</div>
+    
+    
+      <div class="md-header__source">
+        <a href="https://github.com/neurorishika/hydra-suite" title="Go to repository" class="md-source" data-md-component="source">
+  <div class="md-source__icon md-icon">
+    
+    <svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 448 512"><!--! Font Awesome Free 6.6.0 by @fontawesome - https://fontawesome.com License - https://fontawesome.com/license/free (Icons: CC BY 4.0, Fonts: SIL OFL 1.1, Code: MIT License) Copyright 2024 Fonticons, Inc.--><path d="M439.55 236.05 244 40.45a28.87 28.87 0 0 0-40.81 0l-40.66 40.63 51.52 51.52c27.06-9.14 52.68 16.77 43.39 43.68l49.66 49.66c34.23-11.8 61.18 31 35.47 56.69-26.49 26.49-70.21-2.87-56-37.34L240.22 199v121.85c25.3 12.54 22.26 41.85 9.08 55a34.34 34.34 0 0 1-48.55 0c-17.57-17.6-11.07-46.91 11.25-56v-123c-20.8-8.51-24.6-30.74-18.64-45L142.57 101 8.45 235.14a28.86 28.86 0 0 0 0 40.81l195.61 195.6a28.86 28.86 0 0 0 40.8 0l194.69-194.69a28.86 28.86 0 0 0 0-40.81"/></svg>
+  </div>
+  <div class="md-source__repository">
+    neurorishika/hydra-suite
+  </div>
+</a>
+      </div>
+    
+  </nav>
+  
+</header>
+    
+    <div class="md-container" data-md-component="container">
+      
+      
+        
+          
+            
+<nav class="md-tabs" aria-label="Tabs" data-md-component="tabs">
+  <div class="md-grid">
+    <ul class="md-tabs__list">
+      
+        
+  
+  
+  
+    <li class="md-tabs__item">
+      <a href="../../../.." class="md-tabs__link">
+        
+  
+    
+  
+  Home
+
+      </a>
+    </li>
+  
+
+      
+        
+  
+  
+  
+    
+    
+      <li class="md-tabs__item">
+        <a href="../../../../getting-started/installation/" class="md-tabs__link">
+          
+  
+  Getting Started
+
+        </a>
+      </li>
+    
+  
+
+      
+        
+  
+  
+  
+    
+    
+      <li class="md-tabs__item">
+        <a href="../../../../user-guide/overview/" class="md-tabs__link">
+          
+  
+  User Guide
+
+        </a>
+      </li>
+    
+  
+
+      
+        
+  
+  
+  
+    
+    
+      <li class="md-tabs__item">
+        <a href="../../../../developer-guide/architecture/" class="md-tabs__link">
+          
+  
+  Developer Guide
+
+        </a>
+      </li>
+    
+  
+
+      
+        
+  
+  
+  
+    
+    
+      <li class="md-tabs__item">
+        <a href="../../../../reference/api-index/" class="md-tabs__link">
+          
+  
+  Reference
+
+        </a>
+      </li>
+    
+  
+
+      
+    </ul>
+  </div>
+</nav>
+          
+        
+      
+      <main class="md-main" data-md-component="main">
+        <div class="md-main__inner md-grid">
+          
+            
+              
+              <div class="md-sidebar md-sidebar--primary" data-md-component="sidebar" data-md-type="navigation" >
+                <div class="md-sidebar__scrollwrap">
+                  <div class="md-sidebar__inner">
+                    
+
+
+  
+
+
+<nav class="md-nav md-nav--primary md-nav--lifted" aria-label="Navigation" data-md-level="0">
+  <label class="md-nav__title" for="__drawer">
+    <a href="../../../.." title="HYDRA Suite Docs" class="md-nav__button md-logo" aria-label="HYDRA Suite Docs" data-md-component="logo">
+      
+  
+  <svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 24 24"><path d="M12 8a3 3 0 0 0 3-3 3 3 0 0 0-3-3 3 3 0 0 0-3 3 3 3 0 0 0 3 3m0 3.54C9.64 9.35 6.5 8 3 8v11c3.5 0 6.64 1.35 9 3.54 2.36-2.19 5.5-3.54 9-3.54V8c-3.5 0-6.64 1.35-9 3.54"/></svg>
+
+    </a>
+    HYDRA Suite Docs
+  </label>
+  
+    <div class="md-nav__source">
+      <a href="https://github.com/neurorishika/hydra-suite" title="Go to repository" class="md-source" data-md-component="source">
+  <div class="md-source__icon md-icon">
+    
+    <svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 448 512"><!--! Font Awesome Free 6.6.0 by @fontawesome - https://fontawesome.com License - https://fontawesome.com/license/free (Icons: CC BY 4.0, Fonts: SIL OFL 1.1, Code: MIT License) Copyright 2024 Fonticons, Inc.--><path d="M439.55 236.05 244 40.45a28.87 28.87 0 0 0-40.81 0l-40.66 40.63 51.52 51.52c27.06-9.14 52.68 16.77 43.39 43.68l49.66 49.66c34.23-11.8 61.18 31 35.47 56.69-26.49 26.49-70.21-2.87-56-37.34L240.22 199v121.85c25.3 12.54 22.26 41.85 9.08 55a34.34 34.34 0 0 1-48.55 0c-17.57-17.6-11.07-46.91 11.25-56v-123c-20.8-8.51-24.6-30.74-18.64-45L142.57 101 8.45 235.14a28.86 28.86 0 0 0 0 40.81l195.61 195.6a28.86 28.86 0 0 0 40.8 0l194.69-194.69a28.86 28.86 0 0 0 0-40.81"/></svg>
+  </div>
+  <div class="md-source__repository">
+    neurorishika/hydra-suite
+  </div>
+</a>
+    </div>
+  
+  <ul class="md-nav__list" data-md-scrollfix>
+    
+      
+      
+  
+  
+  
+  
+    <li class="md-nav__item">
+      <a href="../../../.." class="md-nav__link">
+        
+  
+  <span class="md-ellipsis">
+    Home
+  </span>
+  
+
+      </a>
+    </li>
+  
+
+    
+      
+      
+  
+  
+  
+  
+    
+    
+    
+      
+      
+        
+      
+    
+    
+    <li class="md-nav__item md-nav__item--nested">
+      
+        
+        
+          
+        
+        <input class="md-nav__toggle md-toggle md-toggle--indeterminate" type="checkbox" id="__nav_2" >
+        
+          
+          <label class="md-nav__link" for="__nav_2" id="__nav_2_label" tabindex="0">
+            
+  
+  <span class="md-ellipsis">
+    Getting Started
+  </span>
+  
+
+            <span class="md-nav__icon md-icon"></span>
+          </label>
+        
+        <nav class="md-nav" data-md-level="1" aria-labelledby="__nav_2_label" aria-expanded="false">
+          <label class="md-nav__title" for="__nav_2">
+            <span class="md-nav__icon md-icon"></span>
+            Getting Started
+          </label>
+          <ul class="md-nav__list" data-md-scrollfix>
+            
+              
+                
+  
+  
+  
+  
+    <li class="md-nav__item">
+      <a href="../../../../getting-started/installation/" class="md-nav__link">
+        
+  
+  <span class="md-ellipsis">
+    Installation
+  </span>
+  
+
+      </a>
+    </li>
+  
+
+              
+            
+              
+                
+  
+  
+  
+  
+    <li class="md-nav__item">
+      <a href="../../../../getting-started/environments/" class="md-nav__link">
+        
+  
+  <span class="md-ellipsis">
+    Environments and Makefile
+  </span>
+  
+
+      </a>
+    </li>
+  
+
+              
+            
+              
+                
+  
+  
+  
+  
+    <li class="md-nav__item">
+      <a href="../../../../getting-started/integrations/" class="md-nav__link">
+        
+  
+  <span class="md-ellipsis">
+    Integrations
+  </span>
+  
+
+      </a>
+    </li>
+  
+
+              
+            
+              
+                
+  
+  
+  
+  
+    <li class="md-nav__item">
+      <a href="../../../../getting-started/quickstart-hydra/" class="md-nav__link">
+        
+  
+  <span class="md-ellipsis">
+    Quickstart (TrackerKit)
+  </span>
+  
+
+      </a>
+    </li>
+  
+
+              
+            
+              
+                
+  
+  
+  
+  
+    <li class="md-nav__item">
+      <a href="../../../../getting-started/quickstart-posekit/" class="md-nav__link">
+        
+  
+  <span class="md-ellipsis">
+    Quickstart (PoseKit)
+  </span>
+  
+
+      </a>
+    </li>
+  
+
+              
+            
+              
+                
+  
+  
+  
+  
+    <li class="md-nav__item">
+      <a href="../../../../getting-started/platforms/" class="md-nav__link">
+        
+  
+  <span class="md-ellipsis">
+    Platform Notes
+  </span>
+  
+
+      </a>
+    </li>
+  
+
+              
+            
+          </ul>
+        </nav>
+      
+    </li>
+  
+
+    
+      
+      
+  
+  
+  
+  
+    
+    
+    
+      
+      
+        
+      
+    
+    
+    <li class="md-nav__item md-nav__item--nested">
+      
+        
+        
+          
+        
+        <input class="md-nav__toggle md-toggle md-toggle--indeterminate" type="checkbox" id="__nav_3" >
+        
+          
+          <label class="md-nav__link" for="__nav_3" id="__nav_3_label" tabindex="0">
+            
+  
+  <span class="md-ellipsis">
+    User Guide
+  </span>
+  
+
+            <span class="md-nav__icon md-icon"></span>
+          </label>
+        
+        <nav class="md-nav" data-md-level="1" aria-labelledby="__nav_3_label" aria-expanded="false">
+          <label class="md-nav__title" for="__nav_3">
+            <span class="md-nav__icon md-icon"></span>
+            User Guide
+          </label>
+          <ul class="md-nav__list" data-md-scrollfix>
+            
+              
+                
+  
+  
+  
+  
+    <li class="md-nav__item">
+      <a href="../../../../user-guide/overview/" class="md-nav__link">
+        
+  
+  <span class="md-ellipsis">
+    Overview
+  </span>
+  
+
+      </a>
+    </li>
+  
+
+              
+            
+              
+                
+  
+  
+  
+  
+    <li class="md-nav__item">
+      <a href="../../../../user-guide/workflow/" class="md-nav__link">
+        
+  
+  <span class="md-ellipsis">
+    End-to-End Workflow
+  </span>
+  
+
+      </a>
+    </li>
+  
+
+              
+            
+              
+                
+  
+  
+  
+  
+    <li class="md-nav__item">
+      <a href="../../../../user-guide/detection-modes/" class="md-nav__link">
+        
+  
+  <span class="md-ellipsis">
+    Detection Modes
+  </span>
+  
+
+      </a>
+    </li>
+  
+
+              
+            
+              
+                
+  
+  
+  
+  
+    <li class="md-nav__item">
+      <a href="../../../../user-guide/tracking-and-merging/" class="md-nav__link">
+        
+  
+  <span class="md-ellipsis">
+    Tracking and Merging
+  </span>
+  
+
+      </a>
+    </li>
+  
+
+              
+            
+              
+                
+  
+  
+  
+  
+    <li class="md-nav__item">
+      <a href="../../../../user-guide/post-processing/" class="md-nav__link">
+        
+  
+  <span class="md-ellipsis">
+    Post-processing
+  </span>
+  
+
+      </a>
+    </li>
+  
+
+              
+            
+              
+                
+  
+  
+  
+  
+    <li class="md-nav__item">
+      <a href="../../../../user-guide/configuration-reference/" class="md-nav__link">
+        
+  
+  <span class="md-ellipsis">
+    Configuration Reference
+  </span>
+  
+
+      </a>
+    </li>
+  
+
+              
+            
+              
+                
+  
+  
+  
+  
+    <li class="md-nav__item">
+      <a href="../../../../user-guide/compute-runtimes/" class="md-nav__link">
+        
+  
+  <span class="md-ellipsis">
+    Compute Runtimes
+  </span>
+  
+
+      </a>
+    </li>
+  
+
+              
+            
+              
+                
+  
+  
+  
+  
+    <li class="md-nav__item">
+      <a href="../../../../user-guide/outputs-and-csv-schema/" class="md-nav__link">
+        
+  
+  <span class="md-ellipsis">
+    Outputs and CSV Schema
+  </span>
+  
+
+      </a>
+    </li>
+  
+
+              
+            
+              
+                
+  
+  
+  
+  
+    <li class="md-nav__item">
+      <a href="../../../../user-guide/dataset-generation/" class="md-nav__link">
+        
+  
+  <span class="md-ellipsis">
+    Dataset Generation
+  </span>
+  
+
+      </a>
+    </li>
+  
+
+              
+            
+              
+                
+  
+  
+  
+  
+    <li class="md-nav__item">
+      <a href="../../../../user-guide/individual-analysis/" class="md-nav__link">
+        
+  
+  <span class="md-ellipsis">
+    Individual Analysis
+  </span>
+  
+
+      </a>
+    </li>
+  
+
+              
+            
+              
+                
+  
+  
+  
+  
+    <li class="md-nav__item">
+      <a href="../../../../user-guide/posekit/" class="md-nav__link">
+        
+  
+  <span class="md-ellipsis">
+    PoseKit
+  </span>
+  
+
+      </a>
+    </li>
+  
+
+              
+            
+              
+                
+  
+  
+  
+  
+    <li class="md-nav__item">
+      <a href="../../../../user-guide/classkit/" class="md-nav__link">
+        
+  
+  <span class="md-ellipsis">
+    ClassKit
+  </span>
+  
+
+      </a>
+    </li>
+  
+
+              
+            
+              
+                
+  
+  
+  
+  
+    <li class="md-nav__item">
+      <a href="../../../../user-guide/detectkit/" class="md-nav__link">
+        
+  
+  <span class="md-ellipsis">
+    DetectKit
+  </span>
+  
+
+      </a>
+    </li>
+  
+
+              
+            
+              
+                
+  
+  
+  
+  
+    <li class="md-nav__item">
+      <a href="../../../../runbooks/detectkit-headless-training/" class="md-nav__link">
+        
+  
+  <span class="md-ellipsis">
+    DetectKit Headless Training
+  </span>
+  
+
+      </a>
+    </li>
+  
+
+              
+            
+              
+                
+  
+  
+  
+  
+    <li class="md-nav__item">
+      <a href="../../../../user-guide/detectkit-semantic-escalation/" class="md-nav__link">
+        
+  
+  <span class="md-ellipsis">
+    DetectKit: Semantic Escalation (SAM3)
+  </span>
+  
+
+      </a>
+    </li>
+  
+
+              
+            
+              
+                
+  
+  
+  
+  
+    <li class="md-nav__item">
+      <a href="../../../../user-guide/detectkit-sahi-calibration/" class="md-nav__link">
+        
+  
+  <span class="md-ellipsis">
+    DetectKit: SAHI Calibration Profiles
+  </span>
+  
+
+      </a>
+    </li>
+  
+
+              
+            
+              
+                
+  
+  
+  
+  
+    <li class="md-nav__item">
+      <a href="../../../../user-guide/filterkit/" class="md-nav__link">
+        
+  
+  <span class="md-ellipsis">
+    FilterKit
+  </span>
+  
+
+      </a>
+    </li>
+  
+
+              
+            
+              
+                
+  
+  
+  
+  
+    <li class="md-nav__item">
+      <a href="../../../../user-guide/refinekit/" class="md-nav__link">
+        
+  
+  <span class="md-ellipsis">
+    RefineKit
+  </span>
+  
+
+      </a>
+    </li>
+  
+
+              
+            
+              
+                
+  
+  
+  
+  
+    <li class="md-nav__item">
+      <a href="../../../../user-guide/troubleshooting/" class="md-nav__link">
+        
+  
+  <span class="md-ellipsis">
+    Troubleshooting
+  </span>
+  
+
+      </a>
+    </li>
+  
+
+              
+            
+          </ul>
+        </nav>
+      
+    </li>
+  
+
+    
+      
+      
+  
+  
+  
+  
+    
+    
+    
+      
+      
+        
+      
+    
+    
+    <li class="md-nav__item md-nav__item--nested">
+      
+        
+        
+          
+        
+        <input class="md-nav__toggle md-toggle md-toggle--indeterminate" type="checkbox" id="__nav_4" >
+        
+          
+          <label class="md-nav__link" for="__nav_4" id="__nav_4_label" tabindex="0">
+            
+  
+  <span class="md-ellipsis">
+    Developer Guide
+  </span>
+  
+
+            <span class="md-nav__icon md-icon"></span>
+          </label>
+        
+        <nav class="md-nav" data-md-level="1" aria-labelledby="__nav_4_label" aria-expanded="false">
+          <label class="md-nav__title" for="__nav_4">
+            <span class="md-nav__icon md-icon"></span>
+            Developer Guide
+          </label>
+          <ul class="md-nav__list" data-md-scrollfix>
+            
+              
+                
+  
+  
+  
+  
+    <li class="md-nav__item">
+      <a href="../../../../developer-guide/architecture/" class="md-nav__link">
+        
+  
+  <span class="md-ellipsis">
+    Architecture
+  </span>
+  
+
+      </a>
+    </li>
+  
+
+              
+            
+              
+                
+  
+  
+  
+  
+    <li class="md-nav__item">
+      <a href="../../../../developer-guide/module-map/" class="md-nav__link">
+        
+  
+  <span class="md-ellipsis">
+    Module Map
+  </span>
+  
+
+      </a>
+    </li>
+  
+
+              
+            
+              
+                
+  
+  
+  
+  
+    <li class="md-nav__item">
+      <a href="../../../../developer-guide/data-flow/" class="md-nav__link">
+        
+  
+  <span class="md-ellipsis">
+    Data Flow
+  </span>
+  
+
+      </a>
+    </li>
+  
+
+              
+            
+              
+                
+  
+  
+  
+  
+    <li class="md-nav__item">
+      <a href="../../../../developer-guide/tracking-algorithm-deep-dive/" class="md-nav__link">
+        
+  
+  <span class="md-ellipsis">
+    Tracking Algorithm Deep Dive
+  </span>
+  
+
+      </a>
+    </li>
+  
+
+              
+            
+              
+                
+  
+  
+  
+  
+    <li class="md-nav__item">
+      <a href="../../../../developer-guide/tracking-optimization/" class="md-nav__link">
+        
+  
+  <span class="md-ellipsis">
+    Tracking Optimization
+  </span>
+  
+
+      </a>
+    </li>
+  
+
+              
+            
+              
+                
+  
+  
+  
+  
+    <li class="md-nav__item">
+      <a href="../../../../developer-guide/gpu-backends/" class="md-nav__link">
+        
+  
+  <span class="md-ellipsis">
+    GPU Backends
+  </span>
+  
+
+      </a>
+    </li>
+  
+
+              
+            
+              
+                
+  
+  
+  
+  
+    <li class="md-nav__item">
+      <a href="../../../../developer-guide/runtime-integration/" class="md-nav__link">
+        
+  
+  <span class="md-ellipsis">
+    Runtime Integration
+  </span>
+  
+
+      </a>
+    </li>
+  
+
+              
+            
+              
+                
+  
+  
+  
+  
+    <li class="md-nav__item">
+      <a href="../../../../developer-guide/resource-containment/" class="md-nav__link">
+        
+  
+  <span class="md-ellipsis">
+    Resource Containment
+  </span>
+  
+
+      </a>
+    </li>
+  
+
+              
+            
+              
+                
+  
+  
+  
+  
+    <li class="md-nav__item">
+      <a href="../../../../developer-guide/profiling/" class="md-nav__link">
+        
+  
+  <span class="md-ellipsis">
+    Profiling
+  </span>
+  
+
+      </a>
+    </li>
+  
+
+              
+            
+              
+                
+  
+  
+  
+  
+    <li class="md-nav__item">
+      <a href="../../../../developer-guide/dependency-cuda-updates/" class="md-nav__link">
+        
+  
+  <span class="md-ellipsis">
+    CUDA Dependency Updates
+  </span>
+  
+
+      </a>
+    </li>
+  
+
+              
+            
+              
+                
+  
+  
+  
+  
+    <li class="md-nav__item">
+      <a href="../../../../developer-guide/performance-tuning/" class="md-nav__link">
+        
+  
+  <span class="md-ellipsis">
+    Performance Tuning
+  </span>
+  
+
+      </a>
+    </li>
+  
+
+              
+            
+              
+                
+  
+  
+  
+  
+    <li class="md-nav__item">
+      <a href="../../../../developer-guide/inference-fast-mode/" class="md-nav__link">
+        
+  
+  <span class="md-ellipsis">
+    Inference Fast Mode
+  </span>
+  
+
+      </a>
+    </li>
+  
+
+              
+            
+              
+                
+  
+  
+  
+  
+    <li class="md-nav__item">
+      <a href="../../../../developer-guide/confidence-metrics/" class="md-nav__link">
+        
+  
+  <span class="md-ellipsis">
+    Confidence Metrics
+  </span>
+  
+
+      </a>
+    </li>
+  
+
+              
+            
+              
+                
+  
+  
+  
+  
+    <li class="md-nav__item">
+      <a href="../../../../developer-guide/extending-detection/" class="md-nav__link">
+        
+  
+  <span class="md-ellipsis">
+    Extending Detection
+  </span>
+  
+
+      </a>
+    </li>
+  
+
+              
+            
+              
+                
+  
+  
+  
+  
+    <li class="md-nav__item">
+      <a href="../../../../developer-guide/extending-identity/" class="md-nav__link">
+        
+  
+  <span class="md-ellipsis">
+    Extending Identity
+  </span>
+  
+
+      </a>
+    </li>
+  
+
+              
+            
+              
+                
+  
+  
+  
+  
+    <li class="md-nav__item">
+      <a href="../../../../developer-guide/code-health/" class="md-nav__link">
+        
+  
+  <span class="md-ellipsis">
+    Code Health & Auditing
+  </span>
+  
+
+      </a>
+    </li>
+  
+
+              
+            
+              
+                
+  
+  
+  
+  
+    <li class="md-nav__item">
+      <a href="../../../../developer-guide/publishing/" class="md-nav__link">
+        
+  
+  <span class="md-ellipsis">
+    Publishing
+  </span>
+  
+
+      </a>
+    </li>
+  
+
+              
+            
+              
+                
+  
+  
+  
+  
+    <li class="md-nav__item">
+      <a href="../../../../developer-guide/contributing/" class="md-nav__link">
+        
+  
+  <span class="md-ellipsis">
+    Contributing
+  </span>
+  
+
+      </a>
+    </li>
+  
+
+              
+            
+          </ul>
+        </nav>
+      
+    </li>
+  
+
+    
+      
+      
+  
+  
+  
+  
+    
+    
+    
+      
+      
+        
+      
+    
+    
+    <li class="md-nav__item md-nav__item--nested">
+      
+        
+        
+          
+        
+        <input class="md-nav__toggle md-toggle md-toggle--indeterminate" type="checkbox" id="__nav_5" >
+        
+          
+          <label class="md-nav__link" for="__nav_5" id="__nav_5_label" tabindex="0">
+            
+  
+  <span class="md-ellipsis">
+    Reference
+  </span>
+  
+
+            <span class="md-nav__icon md-icon"></span>
+          </label>
+        
+        <nav class="md-nav" data-md-level="1" aria-labelledby="__nav_5_label" aria-expanded="false">
+          <label class="md-nav__title" for="__nav_5">
+            <span class="md-nav__icon md-icon"></span>
+            Reference
+          </label>
+          <ul class="md-nav__list" data-md-scrollfix>
+            
+              
+                
+  
+  
+  
+  
+    <li class="md-nav__item">
+      <a href="../../../../reference/api-index/" class="md-nav__link">
+        
+  
+  <span class="md-ellipsis">
+    API Index
+  </span>
+  
+
+      </a>
+    </li>
+  
+
+              
+            
+              
+                
+  
+  
+  
+  
+    <li class="md-nav__item">
+      <a href="../../../../reference/ui-components-hydra/" class="md-nav__link">
+        
+  
+  <span class="md-ellipsis">
+    UI Components (TrackerKit)
+  </span>
+  
+
+      </a>
+    </li>
+  
+
+              
+            
+              
+                
+  
+  
+  
+  
+    <li class="md-nav__item">
+      <a href="../../../../reference/ui-components-posekit/" class="md-nav__link">
+        
+  
+  <span class="md-ellipsis">
+    UI Components (PoseKit)
+  </span>
+  
+
+      </a>
+    </li>
+  
+
+              
+            
+              
+                
+  
+  
+  
+  
+    <li class="md-nav__item">
+      <a href="../../../../reference/api-app/" class="md-nav__link">
+        
+  
+  <span class="md-ellipsis">
+    API (Launcher)
+  </span>
+  
+
+      </a>
+    </li>
+  
+
+              
+            
+              
+                
+  
+  
+  
+  
+    <li class="md-nav__item">
+      <a href="../../../../reference/api-core/" class="md-nav__link">
+        
+  
+  <span class="md-ellipsis">
+    API (Core)
+  </span>
+  
+
+      </a>
+    </li>
+  
+
+              
+            
+              
+                
+  
+  
+  
+  
+    <li class="md-nav__item">
+      <a href="../../../../reference/api-data/" class="md-nav__link">
+        
+  
+  <span class="md-ellipsis">
+    API (Data)
+  </span>
+  
+
+      </a>
+    </li>
+  
+
+              
+            
+              
+                
+  
+  
+  
+  
+    <li class="md-nav__item">
+      <a href="../../../../reference/api-gui/" class="md-nav__link">
+        
+  
+  <span class="md-ellipsis">
+    API (TrackerKit GUI)
+  </span>
+  
+
+      </a>
+    </li>
+  
+
+              
+            
+              
+                
+  
+  
+  
+  
+    <li class="md-nav__item">
+      <a href="../../../../reference/api-widgets/" class="md-nav__link">
+        
+  
+  <span class="md-ellipsis">
+    API (Widgets)
+  </span>
+  
+
+      </a>
+    </li>
+  
+
+              
+            
+              
+                
+  
+  
+  
+  
+    <li class="md-nav__item">
+      <a href="../../../../reference/api-posekit/" class="md-nav__link">
+        
+  
+  <span class="md-ellipsis">
+    API (PoseKit)
+  </span>
+  
+
+      </a>
+    </li>
+  
+
+              
+            
+              
+                
+  
+  
+  
+  
+    <li class="md-nav__item">
+      <a href="../../../../reference/api-utils/" class="md-nav__link">
+        
+  
+  <span class="md-ellipsis">
+    API (Utils)
+  </span>
+  
+
+      </a>
+    </li>
+  
+
+              
+            
+              
+                
+  
+  
+  
+  
+    <li class="md-nav__item">
+      <a href="../../../../reference/cli-reference/" class="md-nav__link">
+        
+  
+  <span class="md-ellipsis">
+    CLI Reference
+  </span>
+  
+
+      </a>
+    </li>
+  
+
+              
+            
+              
+                
+  
+  
+  
+  
+    <li class="md-nav__item">
+      <a href="../../../../reference/technical-reference/" class="md-nav__link">
+        
+  
+  <span class="md-ellipsis">
+    Technical Reference (LaTeX)
+  </span>
+  
+
+      </a>
+    </li>
+  
+
+              
+            
+              
+                
+  
+  
+  
+  
+    <li class="md-nav__item">
+      <a href="../../../../reference/changelog/" class="md-nav__link">
+        
+  
+  <span class="md-ellipsis">
+    Changelog
+  </span>
+  
+
+      </a>
+    </li>
+  
+
+              
+            
+              
+                
+  
+  
+  
+  
+    <li class="md-nav__item">
+      <a href="../../../../reference/faq/" class="md-nav__link">
+        
+  
+  <span class="md-ellipsis">
+    FAQ
+  </span>
+  
+
+      </a>
+    </li>
+  
+
+              
+            
+          </ul>
+        </nav>
+      
+    </li>
+  
+
+    
+  </ul>
+</nav>
+                  </div>
+                </div>
+              </div>
+            
+            
+              
+              <div class="md-sidebar md-sidebar--secondary" data-md-component="sidebar" data-md-type="toc" >
+                <div class="md-sidebar__scrollwrap">
+                  <div class="md-sidebar__inner">
+                    
+
+<nav class="md-nav md-nav--secondary" aria-label="Table of contents">
+  
+  
+  
+    
+  
+  
+    <label class="md-nav__title" for="__toc">
+      <span class="md-nav__icon md-icon"></span>
+      Table of contents
+    </label>
+    <ul class="md-nav__list" data-md-component="toc" data-md-scrollfix>
+      
+        <li class="md-nav__item">
+  <a href="#status-update-2026-07-19" class="md-nav__link">
+    <span class="md-ellipsis">
+      Status update (2026-07-19)
+    </span>
+  </a>
+  
+</li>
+      
+        <li class="md-nav__item">
+  <a href="#goal" class="md-nav__link">
+    <span class="md-ellipsis">
+      Goal
+    </span>
+  </a>
+  
+</li>
+      
+        <li class="md-nav__item">
+  <a href="#the-core-decision-port-to-native-pytorch-do-not-use-mmposemmcv" class="md-nav__link">
+    <span class="md-ellipsis">
+      The core decision: port to native PyTorch, do not use mmpose/mmcv
+    </span>
+  </a>
+  
+</li>
+      
+        <li class="md-nav__item">
+  <a href="#the-three-silent-accuracy-traps-spine-of-spec-1" class="md-nav__link">
+    <span class="md-ellipsis">
+      The three silent-accuracy traps (spine of Spec 1)
+    </span>
+  </a>
+  
+</li>
+      
+        <li class="md-nav__item">
+  <a href="#weights" class="md-nav__link">
+    <span class="md-ellipsis">
+      Weights
+    </span>
+  </a>
+  
+</li>
+      
+        <li class="md-nav__item">
+  <a href="#the-four-specs" class="md-nav__link">
+    <span class="md-ellipsis">
+      The four specs
+    </span>
+  </a>
+  
+    <nav class="md-nav" aria-label="The four specs">
+      <ul class="md-nav__list">
+        
+          <li class="md-nav__item">
+  <a href="#spec-1-standalone-vitpose-port-numerical-parity" class="md-nav__link">
+    <span class="md-ellipsis">
+      Spec 1 — Standalone ViTPose port + numerical parity
+    </span>
+  </a>
+  
+</li>
+        
+          <li class="md-nav__item">
+  <a href="#spec-2-native-runtime-layer-tensor-first-protocol" class="md-nav__link">
+    <span class="md-ellipsis">
+      Spec 2 — Native runtime layer + tensor-first Protocol
+    </span>
+  </a>
+  
+</li>
+        
+          <li class="md-nav__item">
+  <a href="#spec-3-config-reshape-registry-and-runtime-integration" class="md-nav__link">
+    <span class="md-ellipsis">
+      Spec 3 — Config reshape, registry, and runtime integration
+    </span>
+  </a>
+  
+</li>
+        
+          <li class="md-nav__item">
+  <a href="#spec-4-fine-tuning" class="md-nav__link">
+    <span class="md-ellipsis">
+      Spec 4 — Fine-tuning
+    </span>
+  </a>
+  
+</li>
+        
+      </ul>
+    </nav>
+  
+</li>
+      
+        <li class="md-nav__item">
+  <a href="#why-this-ordering" class="md-nav__link">
+    <span class="md-ellipsis">
+      Why this ordering
+    </span>
+  </a>
+  
+</li>
+      
+        <li class="md-nav__item">
+  <a href="#environment-fix-duplicate-openmp-runtime-applied-2026-07-16" class="md-nav__link">
+    <span class="md-ellipsis">
+      Environment fix: duplicate OpenMP runtime (applied 2026-07-16)
+    </span>
+  </a>
+  
+</li>
+      
+        <li class="md-nav__item">
+  <a href="#exportartifact-conventions-in-this-repo-mapped-2026-07-16" class="md-nav__link">
+    <span class="md-ellipsis">
+      Export/artifact conventions in this repo (mapped 2026-07-16)
+    </span>
+  </a>
+  
+    <nav class="md-nav" aria-label="Export/artifact conventions in this repo (mapped 2026-07-16)">
+      <ul class="md-nav__list">
+        
+          <li class="md-nav__item">
+  <a href="#the-key-structural-fact" class="md-nav__link">
+    <span class="md-ellipsis">
+      The key structural fact
+    </span>
+  </a>
+  
+</li>
+        
+          <li class="md-nav__item">
+  <a href="#there-is-no-single-canonical-export-module-there-are-four-systems" class="md-nav__link">
+    <span class="md-ellipsis">
+      There is no single canonical export module — there are four systems
+    </span>
+  </a>
+  
+</li>
+        
+          <li class="md-nav__item">
+  <a href="#conventions-that-are-consistent-everywhere-safe-to-copy" class="md-nav__link">
+    <span class="md-ellipsis">
+      Conventions that are consistent everywhere — safe to copy
+    </span>
+  </a>
+  
+</li>
+        
+          <li class="md-nav__item">
+  <a href="#where-the-code-contradicts-itself-decide-deliberately-do-not-copy-blindly" class="md-nav__link">
+    <span class="md-ellipsis">
+      Where the code contradicts itself — decide deliberately, do not copy blindly
+    </span>
+  </a>
+  
+</li>
+        
+          <li class="md-nav__item">
+  <a href="#coreml-for-pose-does-not-exist" class="md-nav__link">
+    <span class="md-ellipsis">
+      CoreML for pose does not exist
+    </span>
+  </a>
+  
+</li>
+        
+          <li class="md-nav__item">
+  <a href="#verification-convention" class="md-nav__link">
+    <span class="md-ellipsis">
+      Verification convention
+    </span>
+  </a>
+  
+</li>
+        
+          <li class="md-nav__item">
+  <a href="#doc-drift-to-be-aware-of" class="md-nav__link">
+    <span class="md-ellipsis">
+      Doc drift to be aware of
+    </span>
+  </a>
+  
+</li>
+        
+      </ul>
+    </nav>
+  
+</li>
+      
+        <li class="md-nav__item">
+  <a href="#conventions-that-constrain-all-four-specs" class="md-nav__link">
+    <span class="md-ellipsis">
+      Conventions that constrain all four specs
+    </span>
+  </a>
+  
+</li>
+      
+        <li class="md-nav__item">
+  <a href="#open-questions-unverified" class="md-nav__link">
+    <span class="md-ellipsis">
+      Open questions / unverified
+    </span>
+  </a>
+  
+</li>
+      
+    </ul>
+  
+</nav>
+                  </div>
+                </div>
+              </div>
+            
+          
+          
+            <div class="md-content" data-md-component="content">
+              <article class="md-content__inner md-typeset">
+                
+                  
+
+  
+    <a href="https://github.com/neurorishika/hydra-suite/edit/main/docs/superpowers/specs/done/2026-07-16-vitpose-backend-roadmap.md" title="Edit this page" class="md-content__button md-icon">
+      
+      <svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 24 24"><path d="M10 20H6V4h7v5h5v3.1l2-2V8l-6-6H6c-1.1 0-2 .9-2 2v16c0 1.1.9 2 2 2h4zm10.2-7c.1 0 .3.1.4.2l1.3 1.3c.2.2.2.6 0 .8l-1 1-2.1-2.1 1-1c.1-.1.2-.2.4-.2m0 3.9L14.1 23H12v-2.1l6.1-6.1z"/></svg>
+    </a>
+  
+  
+
+
+<h1 id="vitpose-native-backend-roadmap">ViTPose Native Backend — Roadmap<a class="headerlink" href="#vitpose-native-backend-roadmap" title="Permanent link">&para;</a></h1>
+<p><strong>Date:</strong> 2026-07-16 (updated 2026-07-19)
+<strong>Status:</strong> Spec 1 ✅ done · Spec 4 ✅ done · Specs 2+3 reshaped and consolidated
+into <code>2026-07-19-vitpose-full-integration-design.md</code>, gated behind Gen-2
+(<code>2026-07-19-runtime-resolver-gen2-consolidation-design.md</code>).
+<strong>Purpose:</strong> Durable context anchor across sessions. This document holds the <em>why</em>
+and the <em>ordering</em>. Each spec below gets its own design doc, plan, and
+implementation cycle.</p>
+<h2 id="status-update-2026-07-19">Status update (2026-07-19)<a class="headerlink" href="#status-update-2026-07-19" title="Permanent link">&para;</a></h2>
+<ul>
+<li><strong>Spec 1</strong> (native port + parity + export) — ✅ merged (<code>#19</code>). Leaf at
+  <code>core/individual/pose/vitpose/</code>, incl. <code>export_onnx</code>/<code>build_tensorrt_engine</code>/
+  <code>export_coreml</code> and the on-device <code>decode_udp_torch</code>.</li>
+<li><strong>Spec 4</strong> (fine-tuning) — ✅ merged (<code>0b5b4b3</code>). Training payload +
+  PoseKit orchestration + GUI.</li>
+<li><strong>Gen-2 runtime consolidation</strong> — spec+plan committed, implementation pending.
+  It collapses the five runtime representations to <code>runtime_tier</code> →
+  <code>ResolvedBackend</code>, which <strong>dissolves most of Spec 3's runtime-plumbing surface</strong>
+  and gives Specs 2/3 a uniform interface. <strong>Prerequisite</strong> for the integration.</li>
+<li><strong>Specs 2 + 3</strong> — reshaped after a 2026-07-19 code audit and merged into
+  <code>2026-07-19-vitpose-full-integration-design.md</code>. Key scope changes: pose-only
+  runtime (not pose+detector), drop the tensor-first Protocol reshape, and a slim
+  post-Gen-2 family-registry integration. See that doc's <em>Deviations</em> section.</li>
+</ul>
+<h2 id="goal">Goal<a class="headerlink" href="#goal" title="Permanent link">&para;</a></h2>
+<p>Run inference and fine-tune ViTPose models (classic ViTPose B/L/H and ViTPose+
+MoE variants) as a first-class pose backend in HYDRA Suite, on CUDA and MPS, with
+ONNX/TensorRT export available, and with <strong>no GPU→CPU roundtrips</strong> in the
+inference path.</p>
+<h2 id="the-core-decision-port-to-native-pytorch-do-not-use-mmposemmcv">The core decision: port to native PyTorch, do not use mmpose/mmcv<a class="headerlink" href="#the-core-decision-port-to-native-pytorch-do-not-use-mmposemmcv" title="Permanent link">&para;</a></h2>
+<p>Decided 2026-07-16. The evidence:</p>
+<ul>
+<li><strong>No compiled ops in the forward path.</strong> <code>mmpose/models/backbones/vit.py</code> and
+  <code>vit_moe.py</code> import zero mmcv (only <code>torch</code> and three <code>timm.models.layers</code>
+  helpers). Nothing in ViTPose imports <code>mmcv.ops</code> or <code>mmcv._ext</code>. The only mmcv
+  usage in the head is pure-Python layer <em>factories</em> (<code>build_conv_layer</code>,
+  <code>build_norm_layer</code>, <code>build_upsample_layer</code>) that resolve to plain
+  <code>nn.Conv2d</code> / <code>nn.BatchNorm2d</code> / <code>nn.ConvTranspose2d</code>. The detector uses
+  <code>mmcv.image</code>/<code>mmcv.visualization</code> for IO only.</li>
+<li><strong>The entire mmcv coupling is scaffolding</strong>: config system, registry, runner,
+  dataset pipeline. The model itself is ~250 lines of clean PyTorch.</li>
+<li><strong>mmcv would be actively costly here.</strong> It is unmaintained, and would have to be
+  built against the CUDA-12-userspace matrix pinned in <code>environment-cuda.yml:33-45</code>.
+  There is currently no mmcv/mmpose/openmmlab anywhere in this repo.</li>
+<li><strong>mmpose cannot meet our requirements anyway.</strong> Its exporter hardcodes
+  <code>assert opset_version == 11</code>. <code>torch.compile</code>/AMP through mmcv is impractical.</li>
+<li><strong><code>timm</code> is already a base dependency</strong>, so the ViT building blocks are free.</li>
+<li><strong>HuggingFace <code>transformers.VitPose</code> is not a substitute</strong>: it contains a literal
+  <code>raise NotImplementedError("Training is not yet supported")</code>, converts only 7
+  checkpoints (no non-plus S/L/H, no simple decoder beyond base), has no
+  flip-test, and no <code>use_udp</code> toggle. Useful as a <em>reference implementation</em> and
+  a <em>converted-weights source</em>; not as our training or inference path.</li>
+</ul>
+<h2 id="the-three-silent-accuracy-traps-spine-of-spec-1">The three silent-accuracy traps (spine of Spec 1)<a class="headerlink" href="#the-three-silent-accuracy-traps-spine-of-spec-1" title="Permanent link">&para;</a></h2>
+<p>These are why a ViTPose port fails quietly rather than loudly. Each is verified
+against upstream source.</p>
+<ol>
+<li><strong>Patch embed uses <code>padding=2</code>, not 0.</strong> <code>Conv2d(3, D, kernel_size=16,
+   stride=16, padding=2)</code>. Output grid is <em>coincidentally</em> the same 16×12 = 192
+   tokens, so a stock <code>timm</code> patch embed loads with <strong>no shape error</strong> and
+   silently samples a shifted pixel grid.</li>
+<li><strong>Pos-embed adds the cls slot to every token</strong>:
+   <code>x = x + pos_embed[:, 1:] + pos_embed[:, :1]</code>. <code>pos_embed</code> is
+   <code>(1, num_patches+1, D)</code> — the MAE cls slot is retained even though no
+   <code>cls_token</code> module exists. Dropping the second term changes outputs.</li>
+<li><strong>UDP is unconditional in every released checkpoint.</strong> Warp, encode, and decode
+   must all agree. Mixing UDP decode with non-UDP warp (or vice versa) costs
+   ~1–2 AP with nothing visible in the logs.</li>
+</ol>
+<p><strong>Diagnostic ladder</strong> (from parity work): off by ~1 AP → UDP mismatch; ~0.3 AP →
+decode blur sigma; wildly off → patch padding or pos-embed.</p>
+<h2 id="weights">Weights<a class="headerlink" href="#weights" title="Permanent link">&para;</a></h2>
+<p>Official links are OneDrive-only (94 <code>1drv.ms</code> links in the README; <code>curl</code> gets
+403 behind a JS/bot gate). <strong>Use <code>nielsr/vitpose-original-checkpoints</code> on
+HuggingFace instead</strong> — it re-hosts the originals and is what HF's own conversion
+script downloads. Contains <code>vitpose-b.pth</code>, <code>vitpose-b-simple.pth</code>,
+<code>vitpose_base_coco_aic_mpii.pth</code>, <code>vitpose+_{small,base,large,huge}.pth</code>,
+<code>vitpose_small.pth</code>, <code>vitpose_small_up4.pth</code>.</p>
+<p><strong>Gap:</strong> no non-plus L/H there — those still require OneDrive.</p>
+<p>Key structure: <code>torch.load(...)["state_dict"]</code>, prefixes <code>backbone.</code>,
+<code>keypoint_head.</code>, plus <code>associate_keypoint_heads.</code> for ViTPose+.</p>
+<p><strong>Load with <code>weights_only=True</code>.</strong> These checkpoints are plain tensor state_dicts,
+so this costs nothing — and we are deliberately sourcing them from a <em>third-party
+re-host</em> rather than upstream, which is exactly the threat model <code>torch.load</code>'s
+<code>weights_only=False</code> default exposes (arbitrary code execution via unpickling).
+Record each checkpoint's SHA256 when first downloaded.</p>
+<h2 id="the-four-specs">The four specs<a class="headerlink" href="#the-four-specs" title="Permanent link">&para;</a></h2>
+<p>Ordering is deliberate and argued below. Each links to its own design doc when written.</p>
+<h3 id="spec-1-standalone-vitpose-port-numerical-parity">Spec 1 — Standalone ViTPose port + numerical parity<a class="headerlink" href="#spec-1-standalone-vitpose-port-numerical-parity" title="Permanent link">&para;</a></h3>
+<p><strong>Status:</strong> ✅ done — merged (<code>#19</code>), <code>2026-07-16-vitpose-native-port-design.md</code></p>
+<p>Backbone (classic + MoE), both heads (classic deconv + simple), weight loader,
+pre/post-processing, and (added 2026-07-16) the <strong>export recipe</strong> (<code>vitpose/export.py</code>:
+torch -&gt; ONNX/TensorRT/CoreML, one parity test per artifact). <strong>Imports nothing from
+<code>hydra_suite</code>.</strong> No repo integration whatsoever.</p>
+<p>The export recipe belongs here because it is model-specific -- it is the piece ultralytics'
+<code>model.export()</code> supplies for YOLO, which nobody supplies for ViTPose. The auto-export
+<em>caching wrapper</em> is NOT here; it goes in <code>backends/vitpose.py</code> at Spec 3, mirroring
+<code>auto_export_yolo_model</code>/<code>auto_export_sleap_model</code>.</p>
+<p><strong>Done when:</strong> <code>vitpose-b.pth</code> and <code>vitpose+_base.pth</code> load with <code>strict=True</code>,
+and COCO val AP reproduces published numbers (75.8 classic / 75.5 simple for B)
+within ~0.2. Requires downloading COCO val2017 + standard person detections.</p>
+<h3 id="spec-2-native-runtime-layer-tensor-first-protocol">Spec 2 — Native runtime layer + tensor-first Protocol<a class="headerlink" href="#spec-2-native-runtime-layer-tensor-first-protocol" title="Permanent link">&para;</a></h3>
+<p><strong>Status:</strong> ⟳ reshaped → consolidated into <code>2026-07-19-vitpose-full-integration-design.md</code>
+(Phase A). <strong>Changed after 2026-07-19 audit:</strong> scope is a <em>pose-only</em> runtime
+(<code>core/individual/pose/runtime/</code>) extracted from <code>sleap.py</code> and shared with
+ViTPose — <strong>not</strong> a pose+detector runtime (the detector overlap is only
+TRT-lifecycle-deep; everything else diverges). The <strong>tensor-first Protocol
+reshape is dropped</strong> (the win is TensorRT-input-side only; every backend already
+returns a numpy <code>PoseResult</code>); the <code>predict_batch_cuda</code> + <code>hasattr</code> idiom is
+retained. The one cross-world win (detector hardcodes ONNX providers) is folded
+into Gen-2's <code>execution_providers_for</code>.</p>
+<p><em>Original text below, retained for rationale.</em></p>
+<p>Extract a shared native-torch runtime: device resolution, warmup, AMP,
+<code>torch.compile</code>, batching, ONNX session, TensorRT engine, artifact auto-export.</p>
+<p><strong>Note (2026-07-16):</strong> the export <em>recipe</em> moved into Spec 1 (<code>vitpose/export.py</code>) —
+it is model-specific, and it is the piece ultralytics supplies for YOLO. Spec 2 owns
+runtime EXECUTION (sessions, engine lifecycle, warmup/AMP/batching) and consumes
+artifacts Spec 1 has already proven exportable and numerically faithful (Gate D).</p>
+<p><strong>Motivated by existing duplication, not speculation.</strong> <code>sleap.py</code> is 1780 lines
+(against CLAUDE.md's ~500-line rule) and hides <code>_DirectOnnxSession</code> (<code>sleap.py:343</code>)
+and <code>_DirectTensorRTEngine</code> (<code>sleap.py:468</code>); <code>core/detectors/_direct_obb_runtime.py</code>
+does morally similar work. Two-to-three real consumers today.</p>
+<p><strong>Tensor-first contract.</strong> The current <code>PoseInferenceBackend.predict_batch(
+Sequence[np.ndarray]) -&gt; List[PoseResult]</code> (<code>pose/types.py:56</code>) <em>is</em> a CPU
+roundtrip by construction — which is why <code>predict_batch_cuda</code> exists as an
+off-Protocol escape hatch probed by <code>hasattr</code> at <code>stages/pose.py:301</code> and
+implemented only by SLEAP (<code>sleap.py:1056</code>). The new contract makes the
+device-resident tensor path <strong>primary</strong>, with the numpy <code>predict_batch</code> as a thin
+compatibility shim over it.</p>
+<p><strong>SLEAP migration: characterization tests first.</strong> <code>tools/equivalence/</code> already
+provides this — <code>verify_sleap_exported_vs_service.py</code> constructs backends through
+the production selector and compares keypoints pixel-for-pixel on real crops. Pin
+behavior there <strong>before</strong> touching <code>sleap.py</code>; migrate only once parity is
+provable. See also <code>tools/equivalence/PARITY_AUDIT.md</code>.</p>
+<h3 id="spec-3-config-reshape-registry-and-runtime-integration">Spec 3 — Config reshape, registry, and runtime integration<a class="headerlink" href="#spec-3-config-reshape-registry-and-runtime-integration" title="Permanent link">&para;</a></h3>
+<p><strong>Status:</strong> ⟳ reshaped → consolidated into <code>2026-07-19-vitpose-full-integration-design.md</code>
+(Phase C). <strong>Changed after 2026-07-19 audit:</strong> Gen-2 deletes/rewrites most of the
+runtime-plumbing sites listed below (<code>_pipeline_supports_runtime</code>,
+<code>derive_pose_runtime_settings</code>, <code>get_pose_runtime_options</code>, the <code>properties/cache.py</code>
+param-bag boundary), so widening them for ViTPose first would be wasted churn.
+Post-Gen-2 this shrinks to the <strong>pure family axis</strong>: registry factory,
+<code>PoseRuntimeConfig</code> → per-backend sub-dicts, one <code>vitpose_pose</code> resolver stage,
+cache-key + GUI pickers. The site inventory below was also partly <strong>stale/under-scoped</strong>
+(e.g. <code>tracking/worker.py:4605</code> no longer exists; trackerkit orchestrators + posekit
+dialogs were missed) — the consolidated spec supersedes it.</p>
+<p><em>Original text below, retained for the hardcoded-site inventory (verify against
+current code — several line numbers have drifted).</em></p>
+<p><code>PoseRuntimeConfig</code> (<code>pose/types.py:22-44</code>) is structurally non-generic — flat
+<code>yolo_*</code> / <code>sleap_*</code> fields and <code>backend_family: str  # yolo | sleap</code>. Reshape to
+per-backend sub-dicts so backends own a config namespace. Replace the if/elif in
+<code>create_pose_backend_from_config</code> (<code>pose/api.py:32</code>, raising at <code>:159</code>) with a
+dict registry.</p>
+<p><strong>Do not build entry-point plugin discovery.</strong> That is N=1 speculation; the right
+shape is learned from the second and third native backend.</p>
+<p>Known hardcoded <code>"yolo" | "sleap"</code> sites to widen: <code>pose/types.py:26</code>;
+<code>pose/api.py:33,53,99,159</code>; <code>pose/utils.py:350-368</code>;
+<code>core/inference/config.py:75,193,350</code>; <code>core/inference/api.py:60</code>;
+<code>core/inference/stages/pose.py:83,143</code>; <code>core/tracking/worker.py:4605,4644-4646</code>;
+<code>core/individual/properties/cache.py:171,194</code> (cache identity!);
+<code>runtime/resolver.py:15</code>; <code>runtime/compute_runtime.py:187,204,305</code>;
+<code>utils/gpu_utils.py:380-415</code>; <code>posekit/gui/main_window.py:4225,4258,4359,4674,4762,4921</code>.</p>
+<p>Follow the 9-step checklist in <code>docs/developer-guide/runtime-integration.md</code>.</p>
+<h3 id="spec-4-fine-tuning">Spec 4 — Fine-tuning<a class="headerlink" href="#spec-4-fine-tuning" title="Permanent link">&para;</a></h3>
+<p><strong>Status:</strong> ✅ done — merged (<code>0b5b4b3</code>), <code>2026-07-17-vitpose-finetune-design.md</code>.
+Note for integration: training saves <code>best.pt</code> as
+<code>{"model_state", "variant", "num_keypoints", ...}</code> — the backend needs an adapter
+(the leaf <code>load_checkpoint</code> expects a <code>"state_dict"</code> key), and the checkpoint
+should also record <code>head</code>. Tracked in the consolidated integration spec (Phase B).</p>
+<p><strong>Decided 2026-07-16:</strong> native torch training script <strong>launched as a subprocess
+from PoseKit</strong>. This preserves the repo convention that training shells out (cf.
+<code>build_ultralytics_command</code>, <code>training/runner.py:111</code>; SLEAP trains in a separate
+conda env) while still giving us layer-wise LR decay and final-layer surgery,
+which are exactly what shelling out to a third-party CLI makes awkward.</p>
+<p>Data source is already built: <code>build_coco_keypoints_dataset</code>
+(<code>posekit/core/extensions.py:1138</code>) emits COCO keypoints, ViTPose's native format.</p>
+<p>Recipe notes for when we get here — AdamW <code>lr=5e-4</code> (1e-3 for ViTPose+),
+<code>wd=0.1</code>, grad clip 1.0, <code>JointsMSELoss(use_target_weight=True)</code>, Gaussian targets
+<code>sigma=2</code> UDP-encoded. Layer-wise LR decay arithmetic: <code>num_layers = depth + 2</code>;
+<code>pos_embed</code>/<code>patch_embed</code> → id 0, <code>blocks.{i}</code> → <code>i+1</code>, head → <code>num_layers-1</code>;
+<code>lr_scale = decay ** (num_layers - layer_id - 1)</code>. The <code>+2</code> is easy to get wrong
+and materially changes backbone LR.</p>
+<p>For a new dataset: re-init <code>final_layer</code> only, load <code>strict=False</code> and <strong>assert
+the only missing/unexpected keys are <code>final_layer.*</code></strong>; fix <code>flip_pairs</code> for the
+skeleton (or disable flip entirely if no L/R symmetry); disable half-body
+transform (COCO-anatomy-specific); cut drop_path (~0.1, not 0.3) and epochs
+(~20-50, not 210) for small data.</p>
+<h2 id="why-this-ordering">Why this ordering<a class="headerlink" href="#why-this-ordering" title="Permanent link">&para;</a></h2>
+<p><strong>Every genuine unknown lives in Spec 1.</strong> Does <code>padding=2</code> matter as much as the
+source says? Does an on-device UDP decode match cv2? Do the MoE <code>fc2</code> shapes load?
+Those are answerable in a standalone module against an objective oracle (COCO AP)
+that does not care about this repo.</p>
+<p><strong>Specs 2 and 3 are engineering with known outcomes.</strong> They are work, but nothing
+about them should surprise us — and they are the ones that touch working code.</p>
+<p>Doing the refactors first would mean reshaping config and migrating SLEAP onto a
+runtime layer whose requirements are <em>guessed</em> from a ViTPose that has not run
+yet. If the port then reveals that (say) the on-device decode belongs in the
+runtime contract rather than the backend, we reshape twice. Spec 1 first means
+Spec 2's abstraction is designed against two backends that both demonstrably work
+— the same argument that rules out a premature plugin registry, applied to
+ourselves.</p>
+<h2 id="environment-fix-duplicate-openmp-runtime-applied-2026-07-16">Environment fix: duplicate OpenMP runtime (applied 2026-07-16)<a class="headerlink" href="#environment-fix-duplicate-openmp-runtime-applied-2026-07-16" title="Permanent link">&para;</a></h2>
+<p><strong>Symptom:</strong> <code>import torch, cv2</code> aborted the process (<code>OMP: Error #15</code>, exit 134).
+<code>import cv2, torch</code> was fine. This bit any test importing both — i.e. all of
+Spec 1.</p>
+<p><strong>Cause:</strong> two libomp copies mapped, and their <em>install names</em> diverged so dyld
+could not dedupe them:</p>
+<table>
+<thead>
+<tr>
+<th>copy</th>
+<th>install_name</th>
+</tr>
+</thead>
+<tbody>
+<tr>
+<td><code>$CONDA_PREFIX/lib/libomp.dylib</code> (llvm-openmp 22.1.2)</td>
+<td><code>@rpath/libomp.dylib</code></td>
+</tr>
+<tr>
+<td><code>.../site-packages/torch/lib/libomp.dylib</code> (vendored)</td>
+<td><code>/opt/llvm-openmp/lib/libomp.dylib</code></td>
+</tr>
+</tbody>
+</table>
+<p>torch links <code>@rpath/libomp.dylib</code> and resolves it via its own rpath to the
+vendored copy, which dyld then registers under a different name than conda's.</p>
+<p><strong>Fix applied</strong> (to the <code>hydra-mps</code> env):</p>
+<div class="language-bash highlight"><pre><span></span><code><span id="__span-0-1"><a id="__codelineno-0-1" name="__codelineno-0-1" href="#__codelineno-0-1"></a><span class="nv">E</span><span class="o">=</span><span class="nv">$CONDA_PREFIX</span><span class="w">  </span><span class="c1"># hydra-mps</span>
+</span><span id="__span-0-2"><a id="__codelineno-0-2" name="__codelineno-0-2" href="#__codelineno-0-2"></a><span class="nv">T</span><span class="o">=</span><span class="nv">$E</span>/lib/python3.13/site-packages/torch/lib/libomp.dylib
+</span><span id="__span-0-3"><a id="__codelineno-0-3" name="__codelineno-0-3" href="#__codelineno-0-3"></a>cp<span class="w"> </span>-p<span class="w"> </span><span class="s2">"</span><span class="nv">$T</span><span class="s2">"</span><span class="w"> </span><span class="s2">"</span><span class="nv">$T</span><span class="s2">.orig-backup"</span>
+</span><span id="__span-0-4"><a id="__codelineno-0-4" name="__codelineno-0-4" href="#__codelineno-0-4"></a>ln<span class="w"> </span>-sf<span class="w"> </span><span class="s2">"</span><span class="nv">$E</span><span class="s2">/lib/libomp.dylib"</span><span class="w"> </span><span class="s2">"</span><span class="nv">$T</span><span class="s2">"</span>
+</span></code></pre></div>
+<p>Safe because the LC_ID_DYLIB compat versions match exactly (current 5.0.0,
+compatibility 5.0.0). Verified after: exactly one libomp maps; all import orders
+work; torch matmul + MPS compute fine; pre-existing pose suite still 29 passed;
+SLEAP/YOLO backends import.</p>
+<p><strong>⚠️ Not persistent.</strong> <code>make env-create-mps</code> (or any torch reinstall) restores the
+vendored copy and the abort returns. Re-apply then.</p>
+<p><strong>Two rejected alternatives</strong>, recorded so they are not re-litigated:
+- <em><code>KMP_DUPLICATE_LIB_OK=TRUE</code></em> — the repo's incumbent workaround
+  (<code>trackerkit/app.py:18</code>, <code>tools/equivalence/runner.py:31</code>,
+  <code>PARITY_AUDIT.md:83</code>). LLVM documents it as possibly producing <em>silently
+  incorrect results</em>, which is the exact failure mode a numerical-parity port
+  cannot tolerate. Now unnecessary; the <code>app.py</code> call is redundant but harmless.
+- <em>"import cv2 before torch"</em> — <strong>does not work.</strong> isort sorts third-party
+  <code>import torch</code> ahead of first-party <code>from hydra_suite...</code>, so torch wins the
+  race in any module importing both. This was tried and removed.</p>
+<p><strong>Root cause note:</strong> OpenCV is also installed twice (conda-forge <code>opencv 4.13.0</code>
+<em>and</em> pip <code>opencv-python</code>/<code>-headless 4.13.0.92</code>; the pip wheel currently shadows
+conda's). That did not cause this abort — the pip wheel bundles no libomp — but
+it is worth cleaning up separately.</p>
+<h2 id="exportartifact-conventions-in-this-repo-mapped-2026-07-16">Export/artifact conventions in this repo (mapped 2026-07-16)<a class="headerlink" href="#exportartifact-conventions-in-this-repo-mapped-2026-07-16" title="Permanent link">&para;</a></h2>
+<p>Read before adding export or runtime code to ANY backend. This is what the existing code
+actually does — including where it disagrees with itself.</p>
+<h3 id="the-key-structural-fact">The key structural fact<a class="headerlink" href="#the-key-structural-fact" title="Permanent link">&para;</a></h3>
+<p><code>auto_export_yolo_model</code> (<code>yolo.py:38</code>) and <code>auto_export_sleap_model</code> (<code>sleap.py:1353</code>) are
+<strong>not the export</strong>. They are the caching wrapper — signature, location, sidecar, staleness —
+and they delegate the actual conversion to ultralytics' <code>model.export()</code> and SLEAP's
+conda-env exporter respectively. For ViTPose nobody supplies that conversion, so we own it,
+and the layering falls out cleanly:</p>
+<table>
+<thead>
+<tr>
+<th>layer</th>
+<th>YOLO</th>
+<th>SLEAP</th>
+<th>ViTPose</th>
+</tr>
+</thead>
+<tbody>
+<tr>
+<td>recipe (torch -&gt; artifact)</td>
+<td>ultralytics <code>model.export()</code></td>
+<td>SLEAP exporter</td>
+<td><code>vitpose/export.py</code> (Spec 1, leaf)</td>
+</tr>
+<tr>
+<td>caching wrapper</td>
+<td><code>auto_export_yolo_model</code></td>
+<td><code>auto_export_sleap_model</code></td>
+<td><code>backends/vitpose.py</code> (Spec 3)</td>
+</tr>
+<tr>
+<td>lazy trigger</td>
+<td><code>api.py:75</code></td>
+<td><code>api.py:117</code></td>
+<td><code>api.py</code> (Spec 3)</td>
+</tr>
+</tbody>
+</table>
+<h3 id="there-is-no-single-canonical-export-module-there-are-four-systems">There is no single canonical export module — there are four systems<a class="headerlink" href="#there-is-no-single-canonical-export-module-there-are-four-systems" title="Permanent link">&para;</a></h3>
+<table>
+<thead>
+<tr>
+<th>domain</th>
+<th>export entry</th>
+<th>file</th>
+</tr>
+</thead>
+<tbody>
+<tr>
+<td>YOLO pose</td>
+<td><code>auto_export_yolo_model</code></td>
+<td><code>pose/backends/yolo.py:38</code></td>
+</tr>
+<tr>
+<td>SLEAP pose</td>
+<td><code>auto_export_sleap_model</code></td>
+<td><code>pose/backends/sleap.py:1353</code></td>
+</tr>
+<tr>
+<td>OBB detector (legacy mixin)</td>
+<td><code>RuntimeArtifactMixin._prepare_runtime_artifact_for_task</code></td>
+<td><code>core/detectors/_runtime_artifacts.py:1007</code></td>
+</tr>
+<tr>
+<td>OBB detector (clean rewrite)</td>
+<td><code>load_obb_executor</code> / <code>_export_artifact</code></td>
+<td><code>core/inference/runtime_artifacts.py:412,123</code></td>
+</tr>
+</tbody>
+</table>
+<p><code>core/inference/runtime_artifacts.py</code> is an explicit, documented <strong>clean rewrite</strong> of the
+legacy mixin, created to fix parity-audit finding <strong>H4</strong> (the legacy code silently fell back
+to PyTorch instead of erroring). Its stance is the more recent and more defensible one.</p>
+<h3 id="conventions-that-are-consistent-everywhere-safe-to-copy">Conventions that are consistent everywhere — safe to copy<a class="headerlink" href="#conventions-that-are-consistent-everywhere-safe-to-copy" title="Permanent link">&para;</a></h3>
+<ul>
+<li><strong>Co-locate the artifact with the source checkpoint.</strong> <code>paths.get_models_dir()</code> exists but
+  is used by ZERO export paths (0 hits in <code>core/</code>). Do not "improve" this.</li>
+<li><strong>Sidecar <code>&lt;artifact&gt;.runtime_meta.json</code></strong> holding the signature; written only after a
+  successful export, checked before reuse.</li>
+<li><strong>Lazy, on-first-use export</strong>, never a separate pre-export step; always on a <code>QThread</code>
+  worker (<code>posekit/gui/workers.py</code> <code>QObject.run()</code>), never the GUI thread.</li>
+<li><strong><code>pose/artifacts.py</code> is the shared primitive set</strong> for the pose package —
+  <code>path_fingerprint_token</code> (:71), <code>artifact_meta_path</code> (:82), <code>artifact_meta_matches</code> (:92),
+  <code>write_artifact_meta</code> (:107). Both <code>yolo.py</code> and <code>sleap.py</code> use them. A ViTPose backend
+  must too. (The detector code ignores them and reimplements its own — twice.)</li>
+<li><strong><code>derive_onnx_execution_providers(compute_runtime)</code></strong> (<code>compute_runtime.py:160-184</code>) is
+  the ONE genuinely canonical shared piece. Any ONNX session must get its providers there.</li>
+<li><strong>Python API export, never a <code>trtexec</code> subprocess</strong> (zero hits repo-wide).</li>
+</ul>
+<h3 id="where-the-code-contradicts-itself-decide-deliberately-do-not-copy-blindly">Where the code contradicts itself — decide deliberately, do not copy blindly<a class="headerlink" href="#where-the-code-contradicts-itself-decide-deliberately-do-not-copy-blindly" title="Permanent link">&para;</a></h3>
+<ol>
+<li><strong>FP16.</strong> OBB hardcodes <code>half=True</code> (<code>_runtime_artifacts.py:896</code>,
+   <code>runtime_artifacts.py:162</code>). SLEAP deliberately keeps FP32 — <code>sleap.py:420-421</code>: "fp16 is
+   deferred to preserve keypoint precision" — and <code>compute_runtime.py:141-142</code> states the
+   same rule for the ORT-TRT-EP path. <strong>DECIDED for ViTPose: FP32</strong>, following the SLEAP
+   keypoint precedent. A keypoint model with sub-pixel decoding is the SLEAP case, not OBB's.</li>
+<li><strong>Failure semantics.</strong> The pose package silently downgrades a failed export to
+   native/service (<code>api.py:78-85</code>, <code>133-141</code>). The clean OBB rewrite raises
+   <code>ArtifactExportError</code> precisely because silent fallback was a real parity bug (H4).
+   <strong>Unresolved — Spec 3 must choose.</strong> The rewrite's stance looks right, but note it still
+   defaults <code>auto_export=True</code>; it only refuses to silently downgrade to a <em>different runtime</em>.</li>
+<li><strong>Signature scheme.</strong> Hash-with-version-tag (pose package; OBB legacy bakes in
+   <code>onnx_v4_static_imgsz{N}_opset17...</code> so a recipe change forces a rebuild) vs. plain
+   mtime+imgsz freshness (clean rewrite, which traded that robustness for simplicity and
+   LOST recipe-versioning). The pose package's own signatures have no version tag either —
+   bumping <code>opset</code> in <code>yolo.py:93</code> would silently reuse stale artifacts. <strong>A ViTPose signature
+   should include a recipe version tag.</strong></li>
+<li><strong>GPU fingerprinting in the TRT cache key: absent everywhere</strong>, despite TensorRT engines
+   being GPU/driver-specific. <code>_get_tensorrt_build_context()</code> collects <code>gpu_name</code>/<code>cuda_version</code>
+   and writes them to the sidecar, but <code>_artifact_signature()</code> never includes them — so a
+   <code>.engine</code> built on a different GPU is happily reused. Mismatches are caught only
+   reactively, by sniffing exception text (<code>_is_fatal_tensorrt_environment_error</code>). <strong>Copying
+   "the convention" here copies a known gap.</strong> Fixing it for ViTPose would be an improvement,
+   not a departure.</li>
+</ol>
+<h3 id="coreml-for-pose-does-not-exist">CoreML for pose does not exist<a class="headerlink" href="#coreml-for-pose-does-not-exist" title="Permanent link">&para;</a></h3>
+<p>The pose runtime vocabulary (<code>normalize_runtime_flavor</code>, <code>pose/utils.py:350</code>) is
+<code>native | onnx | tensorrt</code> — no CoreML. Only the OBB/detector world has CoreML, via
+ultralytics' own <code>model.export(format="coreml")</code> (<code>runtime_artifacts.py:168-176</code>), which we
+cannot use for a hand-rolled model. <code>YoloNativeBackend</code>'s "CoreML" is ORT's
+<code>CoreMLExecutionProvider</code> at <em>inference</em> time, not a <code>.mlpackage</code> export.</p>
+<p>Commit <code>ebf5296</code> ("Apple GPU-Fast to CoreML with native-MPS fallback") is a <strong>resolver</strong>
+change, not an export mechanism: it makes the Apple <code>gpu_fast</code> tier return CoreML only if an
+artifact already exists, else fall back to native MPS.</p>
+<p>So <strong>CoreML for ViTPose is new design, not convention-following.</strong> Risk: <code>coremltools 9.0</code>
+warns torch 2.11 is untested (max tested 2.7).</p>
+<h3 id="verification-convention">Verification convention<a class="headerlink" href="#verification-convention" title="Permanent link">&para;</a></h3>
+<p><code>tools/equivalence/verify_sleap_exported_vs_service.py</code> is the template: build BOTH backends
+through the <em>production selector</em> (<code>create_pose_backend_from_config</code>), feed identical real
+crops, compare keypoints pixel-for-pixel. <code>PARITY_AUDIT.md</code> is the living ledger of
+findings. A ViTPose backend should get an analogous <code>verify_vitpose_*.py</code> at Spec 3.</p>
+<h3 id="doc-drift-to-be-aware-of">Doc drift to be aware of<a class="headerlink" href="#doc-drift-to-be-aware-of" title="Permanent link">&para;</a></h3>
+<p><code>docs/developer-guide/runtime-integration.md:21</code> cites
+<code>src/hydra_suite/core/runtime/compute_runtime.py</code>; the real path has no <code>core/</code>. Line 29
+references <code>derive_detection_runtime_settings(...)</code>, which has been <strong>deleted</strong>. The
+checklist is structurally authoritative; its function/path names are not.</p>
+<h2 id="conventions-that-constrain-all-four-specs">Conventions that constrain all four specs<a class="headerlink" href="#conventions-that-constrain-all-four-specs" title="Permanent link">&para;</a></h2>
+<ul>
+<li><strong>Dependency direction</strong> (CLAUDE.md:159-165, 192-198): Core/Runtime/Data/
+  Training/Utils never import from app layers or Integrations. The backend belongs
+  at <code>core/individual/pose/backends/vitpose.py</code>.</li>
+<li><strong>~500-line rule</strong> (CLAUDE.md:123). <code>yolo.py</code> (293 lines) is the model to follow;
+  <code>sleap.py</code> (1780) is the cautionary tale.</li>
+<li><strong>Paths</strong> (CLAUDE.md:199-201): never <code>Path(__file__).parents[N]</code>; use
+  <code>hydra_suite.paths</code> (<code>get_models_dir()</code>, <code>get_skeleton_dir()</code>).</li>
+<li><strong>Canonical runtimes</strong> (CLAUDE.md:257): <code>cpu</code>, <code>mps</code>, <code>cuda</code>, <code>onnx_cpu</code>,
+  <code>onnx_cuda</code>, <code>tensorrt</code>.</li>
+<li><strong>torch is deliberately unpinned</strong> and absent from <code>pyproject.toml</code> (needs a
+  custom index URL; see <code>requirements.txt:5-7</code>).</li>
+<li><strong>Pre-PR</strong> (CLAUDE.md:74-79): <code>make commit-prep</code> → <code>make lint-moderate</code> →
+  <code>make docs-check</code>. Line length 88.</li>
+</ul>
+<h2 id="open-questions-unverified">Open questions / unverified<a class="headerlink" href="#open-questions-unverified" title="Permanent link">&para;</a></h2>
+<ul>
+<li>OneDrive checkpoint liveness for non-plus L/H (403 to <code>curl</code>; needs a browser).</li>
+<li>Whether HF's decode <code>sigma=0.8</code> deviation is deliberate — no comment or issue
+  found. See Spec 1 design for why it matters.</li>
+<li>ViTPose+ effective batch size: config says <code>samples_per_gpu=64</code>; GPU count is
+  not in the config, so the 512 effective figure is inferred.</li>
+</ul>
+
+
+
+
+
+
+
+
+
+
+
+
+                
+              </article>
+            </div>
+          
+          
+<script>var target=document.getElementById(location.hash.slice(1));target&&target.name&&(target.checked=target.name.startsWith("__tabbed_"))</script>
+        </div>
+        
+          <button type="button" class="md-top md-icon" data-md-component="top" hidden>
+  
+  <svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 24 24"><path d="M13 20h-2V8l-5.5 5.5-1.42-1.42L12 4.16l7.92 7.92-1.42 1.42L13 8z"/></svg>
+  Back to top
+</button>
+        
+      </main>
+      
+        <footer class="md-footer">
+  
+  <div class="md-footer-meta md-typeset">
+    <div class="md-footer-meta__inner md-grid">
+      <div class="md-copyright">
+  
+  
+    Made with
+    <a href="https://squidfunk.github.io/mkdocs-material/" target="_blank" rel="noopener">
+      Material for MkDocs
+    </a>
+  
+</div>
+      
+    </div>
+  </div>
+</footer>
+      
+    </div>
+    <div class="md-dialog" data-md-component="dialog">
+      <div class="md-dialog__inner md-typeset"></div>
+    </div>
+    
+    
+    <script id="__config" type="application/json">{"base": "../../../..", "features": ["navigation.tabs", "navigation.sections", "navigation.expand", "navigation.top", "content.code.copy", "content.action.edit", "search.suggest", "search.highlight"], "search": "../../../../assets/javascripts/workers/search.6ce7567c.min.js", "translations": {"clipboard.copied": "Copied to clipboard", "clipboard.copy": "Copy to clipboard", "search.result.more.one": "1 more on this page", "search.result.more.other": "# more on this page", "search.result.none": "No matching documents", "search.result.one": "1 matching document", "search.result.other": "# matching documents", "search.result.placeholder": "Type to start searching", "search.result.term.missing": "Missing", "select.version": "Select version"}, "version": {"default": "latest", "provider": "mike"}}</script>
+    
+    
+      <script src="../../../../assets/javascripts/bundle.83f73b43.min.js"></script>
+      
+    
+  </body>
+</html>

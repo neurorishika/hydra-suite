@@ -1,0 +1,2405 @@
+
+<!doctype html>
+<html lang="en" class="no-js">
+  <head>
+    
+      <meta charset="utf-8">
+      <meta name="viewport" content="width=device-width,initial-scale=1">
+      
+        <meta name="description" content="User and developer documentation for HYDRA Suite">
+      
+      
+      
+        <link rel="canonical" href="https://neurorishika.github.io/hydra-suite/latest/superpowers/plans/2026-08-04-model-registry-unification/">
+      
+      
+      
+      
+      <link rel="icon" href="../../../assets/images/favicon.png">
+      <meta name="generator" content="mkdocs-1.6.1, mkdocs-material-9.5.43">
+    
+    
+      
+        <title>Model Registry Unification Implementation Plan - HYDRA Suite Docs</title>
+      
+    
+    
+      <link rel="stylesheet" href="../../../assets/stylesheets/main.0253249f.min.css">
+      
+        
+        <link rel="stylesheet" href="../../../assets/stylesheets/palette.06af60db.min.css">
+      
+      
+
+
+    
+    
+      
+    
+    
+      
+        
+        
+        <link rel="preconnect" href="https://fonts.gstatic.com" crossorigin>
+        <link rel="stylesheet" href="https://fonts.googleapis.com/css?family=Roboto:300,300i,400,400i,700,700i%7CRoboto+Mono:400,400i,700,700i&display=fallback">
+        <style>:root{--md-text-font:"Roboto";--md-code-font:"Roboto Mono"}</style>
+      
+    
+    
+      <link rel="stylesheet" href="../../../assets/_mkdocstrings.css">
+    
+    <script>__md_scope=new URL("../../..",location),__md_hash=e=>[...e].reduce(((e,_)=>(e<<5)-e+_.charCodeAt(0)),0),__md_get=(e,_=localStorage,t=__md_scope)=>JSON.parse(_.getItem(t.pathname+"."+e)),__md_set=(e,_,t=localStorage,a=__md_scope)=>{try{t.setItem(a.pathname+"."+e,JSON.stringify(_))}catch(e){}}</script>
+    
+      
+
+    
+    
+    
+  </head>
+  
+  
+    
+    
+      
+    
+    
+    
+    
+    <body dir="ltr" data-md-color-scheme="default" data-md-color-primary="blue" data-md-color-accent="light-blue">
+  
+    
+    <input class="md-toggle" data-md-toggle="drawer" type="checkbox" id="__drawer" autocomplete="off">
+    <input class="md-toggle" data-md-toggle="search" type="checkbox" id="__search" autocomplete="off">
+    <label class="md-overlay" for="__drawer"></label>
+    <div data-md-component="skip">
+      
+        
+        <a href="#model-registry-unification-implementation-plan" class="md-skip">
+          Skip to content
+        </a>
+      
+    </div>
+    <div data-md-component="announce">
+      
+    </div>
+    
+      <div data-md-color-scheme="default" data-md-component="outdated" hidden>
+        
+      </div>
+    
+    
+      
+
+<header class="md-header" data-md-component="header">
+  <nav class="md-header__inner md-grid" aria-label="Header">
+    <a href="../../.." title="HYDRA Suite Docs" class="md-header__button md-logo" aria-label="HYDRA Suite Docs" data-md-component="logo">
+      
+  
+  <svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 24 24"><path d="M12 8a3 3 0 0 0 3-3 3 3 0 0 0-3-3 3 3 0 0 0-3 3 3 3 0 0 0 3 3m0 3.54C9.64 9.35 6.5 8 3 8v11c3.5 0 6.64 1.35 9 3.54 2.36-2.19 5.5-3.54 9-3.54V8c-3.5 0-6.64 1.35-9 3.54"/></svg>
+
+    </a>
+    <label class="md-header__button md-icon" for="__drawer">
+      
+      <svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 24 24"><path d="M3 6h18v2H3zm0 5h18v2H3zm0 5h18v2H3z"/></svg>
+    </label>
+    <div class="md-header__title" data-md-component="header-title">
+      <div class="md-header__ellipsis">
+        <div class="md-header__topic">
+          <span class="md-ellipsis">
+            HYDRA Suite Docs
+          </span>
+        </div>
+        <div class="md-header__topic" data-md-component="header-topic">
+          <span class="md-ellipsis">
+            
+              Model Registry Unification Implementation Plan
+            
+          </span>
+        </div>
+      </div>
+    </div>
+    
+      
+        <form class="md-header__option" data-md-component="palette">
+  
+    
+    
+    
+    <input class="md-option" data-md-color-media="(prefers-color-scheme: light)" data-md-color-scheme="default" data-md-color-primary="blue" data-md-color-accent="light-blue"  aria-label="Switch to dark mode"  type="radio" name="__palette" id="__palette_0">
+    
+      <label class="md-header__button md-icon" title="Switch to dark mode" for="__palette_1" hidden>
+        <svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 24 24"><path d="m17.75 4.09-2.53 1.94.91 3.06-2.63-1.81-2.63 1.81.91-3.06-2.53-1.94L12.44 4l1.06-3 1.06 3zm3.5 6.91-1.64 1.25.59 1.98-1.7-1.17-1.7 1.17.59-1.98L15.75 11l2.06-.05L18.5 9l.69 1.95zm-2.28 4.95c.83-.08 1.72 1.1 1.19 1.85-.32.45-.66.87-1.08 1.27C15.17 23 8.84 23 4.94 19.07c-3.91-3.9-3.91-10.24 0-14.14.4-.4.82-.76 1.27-1.08.75-.53 1.93.36 1.85 1.19-.27 2.86.69 5.83 2.89 8.02a9.96 9.96 0 0 0 8.02 2.89m-1.64 2.02a12.08 12.08 0 0 1-7.8-3.47c-2.17-2.19-3.33-5-3.49-7.82-2.81 3.14-2.7 7.96.31 10.98 3.02 3.01 7.84 3.12 10.98.31"/></svg>
+      </label>
+    
+  
+    
+    
+    
+    <input class="md-option" data-md-color-media="(prefers-color-scheme: dark)" data-md-color-scheme="slate" data-md-color-primary="blue" data-md-color-accent="light-blue"  aria-label="Switch to light mode"  type="radio" name="__palette" id="__palette_1">
+    
+      <label class="md-header__button md-icon" title="Switch to light mode" for="__palette_0" hidden>
+        <svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 24 24"><path d="M12 7a5 5 0 0 1 5 5 5 5 0 0 1-5 5 5 5 0 0 1-5-5 5 5 0 0 1 5-5m0 2a3 3 0 0 0-3 3 3 3 0 0 0 3 3 3 3 0 0 0 3-3 3 3 0 0 0-3-3m0-7 2.39 3.42C13.65 5.15 12.84 5 12 5s-1.65.15-2.39.42zM3.34 7l4.16-.35A7.2 7.2 0 0 0 5.94 8.5c-.44.74-.69 1.5-.83 2.29zm.02 10 1.76-3.77a7.131 7.131 0 0 0 2.38 4.14zM20.65 7l-1.77 3.79a7.02 7.02 0 0 0-2.38-4.15zm-.01 10-4.14.36c.59-.51 1.12-1.14 1.54-1.86.42-.73.69-1.5.83-2.29zM12 22l-2.41-3.44c.74.27 1.55.44 2.41.44.82 0 1.63-.17 2.37-.44z"/></svg>
+      </label>
+    
+  
+</form>
+      
+    
+    
+      <script>var palette=__md_get("__palette");if(palette&&palette.color){if("(prefers-color-scheme)"===palette.color.media){var media=matchMedia("(prefers-color-scheme: light)"),input=document.querySelector(media.matches?"[data-md-color-media='(prefers-color-scheme: light)']":"[data-md-color-media='(prefers-color-scheme: dark)']");palette.color.media=input.getAttribute("data-md-color-media"),palette.color.scheme=input.getAttribute("data-md-color-scheme"),palette.color.primary=input.getAttribute("data-md-color-primary"),palette.color.accent=input.getAttribute("data-md-color-accent")}for(var[key,value]of Object.entries(palette.color))document.body.setAttribute("data-md-color-"+key,value)}</script>
+    
+    
+    
+      <label class="md-header__button md-icon" for="__search">
+        
+        <svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 24 24"><path d="M9.5 3A6.5 6.5 0 0 1 16 9.5c0 1.61-.59 3.09-1.56 4.23l.27.27h.79l5 5-1.5 1.5-5-5v-.79l-.27-.27A6.52 6.52 0 0 1 9.5 16 6.5 6.5 0 0 1 3 9.5 6.5 6.5 0 0 1 9.5 3m0 2C7 5 5 7 5 9.5S7 14 9.5 14 14 12 14 9.5 12 5 9.5 5"/></svg>
+      </label>
+      <div class="md-search" data-md-component="search" role="dialog">
+  <label class="md-search__overlay" for="__search"></label>
+  <div class="md-search__inner" role="search">
+    <form class="md-search__form" name="search">
+      <input type="text" class="md-search__input" name="query" aria-label="Search" placeholder="Search" autocapitalize="off" autocorrect="off" autocomplete="off" spellcheck="false" data-md-component="search-query" required>
+      <label class="md-search__icon md-icon" for="__search">
+        
+        <svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 24 24"><path d="M9.5 3A6.5 6.5 0 0 1 16 9.5c0 1.61-.59 3.09-1.56 4.23l.27.27h.79l5 5-1.5 1.5-5-5v-.79l-.27-.27A6.52 6.52 0 0 1 9.5 16 6.5 6.5 0 0 1 3 9.5 6.5 6.5 0 0 1 9.5 3m0 2C7 5 5 7 5 9.5S7 14 9.5 14 14 12 14 9.5 12 5 9.5 5"/></svg>
+        
+        <svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 24 24"><path d="M20 11v2H8l5.5 5.5-1.42 1.42L4.16 12l7.92-7.92L13.5 5.5 8 11z"/></svg>
+      </label>
+      <nav class="md-search__options" aria-label="Search">
+        
+        <button type="reset" class="md-search__icon md-icon" title="Clear" aria-label="Clear" tabindex="-1">
+          
+          <svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 24 24"><path d="M19 6.41 17.59 5 12 10.59 6.41 5 5 6.41 10.59 12 5 17.59 6.41 19 12 13.41 17.59 19 19 17.59 13.41 12z"/></svg>
+        </button>
+      </nav>
+      
+        <div class="md-search__suggest" data-md-component="search-suggest"></div>
+      
+    </form>
+    <div class="md-search__output">
+      <div class="md-search__scrollwrap" tabindex="0" data-md-scrollfix>
+        <div class="md-search-result" data-md-component="search-result">
+          <div class="md-search-result__meta">
+            Initializing search
+          </div>
+          <ol class="md-search-result__list" role="presentation"></ol>
+        </div>
+      </div>
+    </div>
+  </div>
+</div>
+    
+    
+      <div class="md-header__source">
+        <a href="https://github.com/neurorishika/hydra-suite" title="Go to repository" class="md-source" data-md-component="source">
+  <div class="md-source__icon md-icon">
+    
+    <svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 448 512"><!--! Font Awesome Free 6.6.0 by @fontawesome - https://fontawesome.com License - https://fontawesome.com/license/free (Icons: CC BY 4.0, Fonts: SIL OFL 1.1, Code: MIT License) Copyright 2024 Fonticons, Inc.--><path d="M439.55 236.05 244 40.45a28.87 28.87 0 0 0-40.81 0l-40.66 40.63 51.52 51.52c27.06-9.14 52.68 16.77 43.39 43.68l49.66 49.66c34.23-11.8 61.18 31 35.47 56.69-26.49 26.49-70.21-2.87-56-37.34L240.22 199v121.85c25.3 12.54 22.26 41.85 9.08 55a34.34 34.34 0 0 1-48.55 0c-17.57-17.6-11.07-46.91 11.25-56v-123c-20.8-8.51-24.6-30.74-18.64-45L142.57 101 8.45 235.14a28.86 28.86 0 0 0 0 40.81l195.61 195.6a28.86 28.86 0 0 0 40.8 0l194.69-194.69a28.86 28.86 0 0 0 0-40.81"/></svg>
+  </div>
+  <div class="md-source__repository">
+    neurorishika/hydra-suite
+  </div>
+</a>
+      </div>
+    
+  </nav>
+  
+</header>
+    
+    <div class="md-container" data-md-component="container">
+      
+      
+        
+          
+            
+<nav class="md-tabs" aria-label="Tabs" data-md-component="tabs">
+  <div class="md-grid">
+    <ul class="md-tabs__list">
+      
+        
+  
+  
+  
+    <li class="md-tabs__item">
+      <a href="../../.." class="md-tabs__link">
+        
+  
+    
+  
+  Home
+
+      </a>
+    </li>
+  
+
+      
+        
+  
+  
+  
+    
+    
+      <li class="md-tabs__item">
+        <a href="../../../getting-started/installation/" class="md-tabs__link">
+          
+  
+  Getting Started
+
+        </a>
+      </li>
+    
+  
+
+      
+        
+  
+  
+  
+    
+    
+      <li class="md-tabs__item">
+        <a href="../../../user-guide/overview/" class="md-tabs__link">
+          
+  
+  User Guide
+
+        </a>
+      </li>
+    
+  
+
+      
+        
+  
+  
+  
+    
+    
+      <li class="md-tabs__item">
+        <a href="../../../developer-guide/architecture/" class="md-tabs__link">
+          
+  
+  Developer Guide
+
+        </a>
+      </li>
+    
+  
+
+      
+        
+  
+  
+  
+    
+    
+      <li class="md-tabs__item">
+        <a href="../../../reference/api-index/" class="md-tabs__link">
+          
+  
+  Reference
+
+        </a>
+      </li>
+    
+  
+
+      
+    </ul>
+  </div>
+</nav>
+          
+        
+      
+      <main class="md-main" data-md-component="main">
+        <div class="md-main__inner md-grid">
+          
+            
+              
+              <div class="md-sidebar md-sidebar--primary" data-md-component="sidebar" data-md-type="navigation" >
+                <div class="md-sidebar__scrollwrap">
+                  <div class="md-sidebar__inner">
+                    
+
+
+  
+
+
+<nav class="md-nav md-nav--primary md-nav--lifted" aria-label="Navigation" data-md-level="0">
+  <label class="md-nav__title" for="__drawer">
+    <a href="../../.." title="HYDRA Suite Docs" class="md-nav__button md-logo" aria-label="HYDRA Suite Docs" data-md-component="logo">
+      
+  
+  <svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 24 24"><path d="M12 8a3 3 0 0 0 3-3 3 3 0 0 0-3-3 3 3 0 0 0-3 3 3 3 0 0 0 3 3m0 3.54C9.64 9.35 6.5 8 3 8v11c3.5 0 6.64 1.35 9 3.54 2.36-2.19 5.5-3.54 9-3.54V8c-3.5 0-6.64 1.35-9 3.54"/></svg>
+
+    </a>
+    HYDRA Suite Docs
+  </label>
+  
+    <div class="md-nav__source">
+      <a href="https://github.com/neurorishika/hydra-suite" title="Go to repository" class="md-source" data-md-component="source">
+  <div class="md-source__icon md-icon">
+    
+    <svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 448 512"><!--! Font Awesome Free 6.6.0 by @fontawesome - https://fontawesome.com License - https://fontawesome.com/license/free (Icons: CC BY 4.0, Fonts: SIL OFL 1.1, Code: MIT License) Copyright 2024 Fonticons, Inc.--><path d="M439.55 236.05 244 40.45a28.87 28.87 0 0 0-40.81 0l-40.66 40.63 51.52 51.52c27.06-9.14 52.68 16.77 43.39 43.68l49.66 49.66c34.23-11.8 61.18 31 35.47 56.69-26.49 26.49-70.21-2.87-56-37.34L240.22 199v121.85c25.3 12.54 22.26 41.85 9.08 55a34.34 34.34 0 0 1-48.55 0c-17.57-17.6-11.07-46.91 11.25-56v-123c-20.8-8.51-24.6-30.74-18.64-45L142.57 101 8.45 235.14a28.86 28.86 0 0 0 0 40.81l195.61 195.6a28.86 28.86 0 0 0 40.8 0l194.69-194.69a28.86 28.86 0 0 0 0-40.81"/></svg>
+  </div>
+  <div class="md-source__repository">
+    neurorishika/hydra-suite
+  </div>
+</a>
+    </div>
+  
+  <ul class="md-nav__list" data-md-scrollfix>
+    
+      
+      
+  
+  
+  
+  
+    <li class="md-nav__item">
+      <a href="../../.." class="md-nav__link">
+        
+  
+  <span class="md-ellipsis">
+    Home
+  </span>
+  
+
+      </a>
+    </li>
+  
+
+    
+      
+      
+  
+  
+  
+  
+    
+    
+    
+      
+      
+        
+      
+    
+    
+    <li class="md-nav__item md-nav__item--nested">
+      
+        
+        
+          
+        
+        <input class="md-nav__toggle md-toggle md-toggle--indeterminate" type="checkbox" id="__nav_2" >
+        
+          
+          <label class="md-nav__link" for="__nav_2" id="__nav_2_label" tabindex="0">
+            
+  
+  <span class="md-ellipsis">
+    Getting Started
+  </span>
+  
+
+            <span class="md-nav__icon md-icon"></span>
+          </label>
+        
+        <nav class="md-nav" data-md-level="1" aria-labelledby="__nav_2_label" aria-expanded="false">
+          <label class="md-nav__title" for="__nav_2">
+            <span class="md-nav__icon md-icon"></span>
+            Getting Started
+          </label>
+          <ul class="md-nav__list" data-md-scrollfix>
+            
+              
+                
+  
+  
+  
+  
+    <li class="md-nav__item">
+      <a href="../../../getting-started/installation/" class="md-nav__link">
+        
+  
+  <span class="md-ellipsis">
+    Installation
+  </span>
+  
+
+      </a>
+    </li>
+  
+
+              
+            
+              
+                
+  
+  
+  
+  
+    <li class="md-nav__item">
+      <a href="../../../getting-started/environments/" class="md-nav__link">
+        
+  
+  <span class="md-ellipsis">
+    Environments and Makefile
+  </span>
+  
+
+      </a>
+    </li>
+  
+
+              
+            
+              
+                
+  
+  
+  
+  
+    <li class="md-nav__item">
+      <a href="../../../getting-started/integrations/" class="md-nav__link">
+        
+  
+  <span class="md-ellipsis">
+    Integrations
+  </span>
+  
+
+      </a>
+    </li>
+  
+
+              
+            
+              
+                
+  
+  
+  
+  
+    <li class="md-nav__item">
+      <a href="../../../getting-started/quickstart-hydra/" class="md-nav__link">
+        
+  
+  <span class="md-ellipsis">
+    Quickstart (TrackerKit)
+  </span>
+  
+
+      </a>
+    </li>
+  
+
+              
+            
+              
+                
+  
+  
+  
+  
+    <li class="md-nav__item">
+      <a href="../../../getting-started/quickstart-posekit/" class="md-nav__link">
+        
+  
+  <span class="md-ellipsis">
+    Quickstart (PoseKit)
+  </span>
+  
+
+      </a>
+    </li>
+  
+
+              
+            
+              
+                
+  
+  
+  
+  
+    <li class="md-nav__item">
+      <a href="../../../getting-started/platforms/" class="md-nav__link">
+        
+  
+  <span class="md-ellipsis">
+    Platform Notes
+  </span>
+  
+
+      </a>
+    </li>
+  
+
+              
+            
+          </ul>
+        </nav>
+      
+    </li>
+  
+
+    
+      
+      
+  
+  
+  
+  
+    
+    
+    
+      
+      
+        
+      
+    
+    
+    <li class="md-nav__item md-nav__item--nested">
+      
+        
+        
+          
+        
+        <input class="md-nav__toggle md-toggle md-toggle--indeterminate" type="checkbox" id="__nav_3" >
+        
+          
+          <label class="md-nav__link" for="__nav_3" id="__nav_3_label" tabindex="0">
+            
+  
+  <span class="md-ellipsis">
+    User Guide
+  </span>
+  
+
+            <span class="md-nav__icon md-icon"></span>
+          </label>
+        
+        <nav class="md-nav" data-md-level="1" aria-labelledby="__nav_3_label" aria-expanded="false">
+          <label class="md-nav__title" for="__nav_3">
+            <span class="md-nav__icon md-icon"></span>
+            User Guide
+          </label>
+          <ul class="md-nav__list" data-md-scrollfix>
+            
+              
+                
+  
+  
+  
+  
+    <li class="md-nav__item">
+      <a href="../../../user-guide/overview/" class="md-nav__link">
+        
+  
+  <span class="md-ellipsis">
+    Overview
+  </span>
+  
+
+      </a>
+    </li>
+  
+
+              
+            
+              
+                
+  
+  
+  
+  
+    <li class="md-nav__item">
+      <a href="../../../user-guide/workflow/" class="md-nav__link">
+        
+  
+  <span class="md-ellipsis">
+    End-to-End Workflow
+  </span>
+  
+
+      </a>
+    </li>
+  
+
+              
+            
+              
+                
+  
+  
+  
+  
+    <li class="md-nav__item">
+      <a href="../../../user-guide/detection-modes/" class="md-nav__link">
+        
+  
+  <span class="md-ellipsis">
+    Detection Modes
+  </span>
+  
+
+      </a>
+    </li>
+  
+
+              
+            
+              
+                
+  
+  
+  
+  
+    <li class="md-nav__item">
+      <a href="../../../user-guide/tracking-and-merging/" class="md-nav__link">
+        
+  
+  <span class="md-ellipsis">
+    Tracking and Merging
+  </span>
+  
+
+      </a>
+    </li>
+  
+
+              
+            
+              
+                
+  
+  
+  
+  
+    <li class="md-nav__item">
+      <a href="../../../user-guide/post-processing/" class="md-nav__link">
+        
+  
+  <span class="md-ellipsis">
+    Post-processing
+  </span>
+  
+
+      </a>
+    </li>
+  
+
+              
+            
+              
+                
+  
+  
+  
+  
+    <li class="md-nav__item">
+      <a href="../../../user-guide/configuration-reference/" class="md-nav__link">
+        
+  
+  <span class="md-ellipsis">
+    Configuration Reference
+  </span>
+  
+
+      </a>
+    </li>
+  
+
+              
+            
+              
+                
+  
+  
+  
+  
+    <li class="md-nav__item">
+      <a href="../../../user-guide/compute-runtimes/" class="md-nav__link">
+        
+  
+  <span class="md-ellipsis">
+    Compute Runtimes
+  </span>
+  
+
+      </a>
+    </li>
+  
+
+              
+            
+              
+                
+  
+  
+  
+  
+    <li class="md-nav__item">
+      <a href="../../../user-guide/outputs-and-csv-schema/" class="md-nav__link">
+        
+  
+  <span class="md-ellipsis">
+    Outputs and CSV Schema
+  </span>
+  
+
+      </a>
+    </li>
+  
+
+              
+            
+              
+                
+  
+  
+  
+  
+    <li class="md-nav__item">
+      <a href="../../../user-guide/dataset-generation/" class="md-nav__link">
+        
+  
+  <span class="md-ellipsis">
+    Dataset Generation
+  </span>
+  
+
+      </a>
+    </li>
+  
+
+              
+            
+              
+                
+  
+  
+  
+  
+    <li class="md-nav__item">
+      <a href="../../../user-guide/individual-analysis/" class="md-nav__link">
+        
+  
+  <span class="md-ellipsis">
+    Individual Analysis
+  </span>
+  
+
+      </a>
+    </li>
+  
+
+              
+            
+              
+                
+  
+  
+  
+  
+    <li class="md-nav__item">
+      <a href="../../../user-guide/posekit/" class="md-nav__link">
+        
+  
+  <span class="md-ellipsis">
+    PoseKit
+  </span>
+  
+
+      </a>
+    </li>
+  
+
+              
+            
+              
+                
+  
+  
+  
+  
+    <li class="md-nav__item">
+      <a href="../../../user-guide/classkit/" class="md-nav__link">
+        
+  
+  <span class="md-ellipsis">
+    ClassKit
+  </span>
+  
+
+      </a>
+    </li>
+  
+
+              
+            
+              
+                
+  
+  
+  
+  
+    <li class="md-nav__item">
+      <a href="../../../user-guide/detectkit/" class="md-nav__link">
+        
+  
+  <span class="md-ellipsis">
+    DetectKit
+  </span>
+  
+
+      </a>
+    </li>
+  
+
+              
+            
+              
+                
+  
+  
+  
+  
+    <li class="md-nav__item">
+      <a href="../../../runbooks/detectkit-headless-training/" class="md-nav__link">
+        
+  
+  <span class="md-ellipsis">
+    DetectKit Headless Training
+  </span>
+  
+
+      </a>
+    </li>
+  
+
+              
+            
+              
+                
+  
+  
+  
+  
+    <li class="md-nav__item">
+      <a href="../../../user-guide/detectkit-semantic-escalation/" class="md-nav__link">
+        
+  
+  <span class="md-ellipsis">
+    DetectKit: Semantic Escalation (SAM3)
+  </span>
+  
+
+      </a>
+    </li>
+  
+
+              
+            
+              
+                
+  
+  
+  
+  
+    <li class="md-nav__item">
+      <a href="../../../user-guide/detectkit-sahi-calibration/" class="md-nav__link">
+        
+  
+  <span class="md-ellipsis">
+    DetectKit: SAHI Calibration Profiles
+  </span>
+  
+
+      </a>
+    </li>
+  
+
+              
+            
+              
+                
+  
+  
+  
+  
+    <li class="md-nav__item">
+      <a href="../../../user-guide/filterkit/" class="md-nav__link">
+        
+  
+  <span class="md-ellipsis">
+    FilterKit
+  </span>
+  
+
+      </a>
+    </li>
+  
+
+              
+            
+              
+                
+  
+  
+  
+  
+    <li class="md-nav__item">
+      <a href="../../../user-guide/refinekit/" class="md-nav__link">
+        
+  
+  <span class="md-ellipsis">
+    RefineKit
+  </span>
+  
+
+      </a>
+    </li>
+  
+
+              
+            
+              
+                
+  
+  
+  
+  
+    <li class="md-nav__item">
+      <a href="../../../user-guide/troubleshooting/" class="md-nav__link">
+        
+  
+  <span class="md-ellipsis">
+    Troubleshooting
+  </span>
+  
+
+      </a>
+    </li>
+  
+
+              
+            
+          </ul>
+        </nav>
+      
+    </li>
+  
+
+    
+      
+      
+  
+  
+  
+  
+    
+    
+    
+      
+      
+        
+      
+    
+    
+    <li class="md-nav__item md-nav__item--nested">
+      
+        
+        
+          
+        
+        <input class="md-nav__toggle md-toggle md-toggle--indeterminate" type="checkbox" id="__nav_4" >
+        
+          
+          <label class="md-nav__link" for="__nav_4" id="__nav_4_label" tabindex="0">
+            
+  
+  <span class="md-ellipsis">
+    Developer Guide
+  </span>
+  
+
+            <span class="md-nav__icon md-icon"></span>
+          </label>
+        
+        <nav class="md-nav" data-md-level="1" aria-labelledby="__nav_4_label" aria-expanded="false">
+          <label class="md-nav__title" for="__nav_4">
+            <span class="md-nav__icon md-icon"></span>
+            Developer Guide
+          </label>
+          <ul class="md-nav__list" data-md-scrollfix>
+            
+              
+                
+  
+  
+  
+  
+    <li class="md-nav__item">
+      <a href="../../../developer-guide/architecture/" class="md-nav__link">
+        
+  
+  <span class="md-ellipsis">
+    Architecture
+  </span>
+  
+
+      </a>
+    </li>
+  
+
+              
+            
+              
+                
+  
+  
+  
+  
+    <li class="md-nav__item">
+      <a href="../../../developer-guide/module-map/" class="md-nav__link">
+        
+  
+  <span class="md-ellipsis">
+    Module Map
+  </span>
+  
+
+      </a>
+    </li>
+  
+
+              
+            
+              
+                
+  
+  
+  
+  
+    <li class="md-nav__item">
+      <a href="../../../developer-guide/data-flow/" class="md-nav__link">
+        
+  
+  <span class="md-ellipsis">
+    Data Flow
+  </span>
+  
+
+      </a>
+    </li>
+  
+
+              
+            
+              
+                
+  
+  
+  
+  
+    <li class="md-nav__item">
+      <a href="../../../developer-guide/tracking-algorithm-deep-dive/" class="md-nav__link">
+        
+  
+  <span class="md-ellipsis">
+    Tracking Algorithm Deep Dive
+  </span>
+  
+
+      </a>
+    </li>
+  
+
+              
+            
+              
+                
+  
+  
+  
+  
+    <li class="md-nav__item">
+      <a href="../../../developer-guide/tracking-optimization/" class="md-nav__link">
+        
+  
+  <span class="md-ellipsis">
+    Tracking Optimization
+  </span>
+  
+
+      </a>
+    </li>
+  
+
+              
+            
+              
+                
+  
+  
+  
+  
+    <li class="md-nav__item">
+      <a href="../../../developer-guide/gpu-backends/" class="md-nav__link">
+        
+  
+  <span class="md-ellipsis">
+    GPU Backends
+  </span>
+  
+
+      </a>
+    </li>
+  
+
+              
+            
+              
+                
+  
+  
+  
+  
+    <li class="md-nav__item">
+      <a href="../../../developer-guide/runtime-integration/" class="md-nav__link">
+        
+  
+  <span class="md-ellipsis">
+    Runtime Integration
+  </span>
+  
+
+      </a>
+    </li>
+  
+
+              
+            
+              
+                
+  
+  
+  
+  
+    <li class="md-nav__item">
+      <a href="../../../developer-guide/resource-containment/" class="md-nav__link">
+        
+  
+  <span class="md-ellipsis">
+    Resource Containment
+  </span>
+  
+
+      </a>
+    </li>
+  
+
+              
+            
+              
+                
+  
+  
+  
+  
+    <li class="md-nav__item">
+      <a href="../../../developer-guide/profiling/" class="md-nav__link">
+        
+  
+  <span class="md-ellipsis">
+    Profiling
+  </span>
+  
+
+      </a>
+    </li>
+  
+
+              
+            
+              
+                
+  
+  
+  
+  
+    <li class="md-nav__item">
+      <a href="../../../developer-guide/dependency-cuda-updates/" class="md-nav__link">
+        
+  
+  <span class="md-ellipsis">
+    CUDA Dependency Updates
+  </span>
+  
+
+      </a>
+    </li>
+  
+
+              
+            
+              
+                
+  
+  
+  
+  
+    <li class="md-nav__item">
+      <a href="../../../developer-guide/performance-tuning/" class="md-nav__link">
+        
+  
+  <span class="md-ellipsis">
+    Performance Tuning
+  </span>
+  
+
+      </a>
+    </li>
+  
+
+              
+            
+              
+                
+  
+  
+  
+  
+    <li class="md-nav__item">
+      <a href="../../../developer-guide/inference-fast-mode/" class="md-nav__link">
+        
+  
+  <span class="md-ellipsis">
+    Inference Fast Mode
+  </span>
+  
+
+      </a>
+    </li>
+  
+
+              
+            
+              
+                
+  
+  
+  
+  
+    <li class="md-nav__item">
+      <a href="../../../developer-guide/confidence-metrics/" class="md-nav__link">
+        
+  
+  <span class="md-ellipsis">
+    Confidence Metrics
+  </span>
+  
+
+      </a>
+    </li>
+  
+
+              
+            
+              
+                
+  
+  
+  
+  
+    <li class="md-nav__item">
+      <a href="../../../developer-guide/extending-detection/" class="md-nav__link">
+        
+  
+  <span class="md-ellipsis">
+    Extending Detection
+  </span>
+  
+
+      </a>
+    </li>
+  
+
+              
+            
+              
+                
+  
+  
+  
+  
+    <li class="md-nav__item">
+      <a href="../../../developer-guide/extending-identity/" class="md-nav__link">
+        
+  
+  <span class="md-ellipsis">
+    Extending Identity
+  </span>
+  
+
+      </a>
+    </li>
+  
+
+              
+            
+              
+                
+  
+  
+  
+  
+    <li class="md-nav__item">
+      <a href="../../../developer-guide/code-health/" class="md-nav__link">
+        
+  
+  <span class="md-ellipsis">
+    Code Health & Auditing
+  </span>
+  
+
+      </a>
+    </li>
+  
+
+              
+            
+              
+                
+  
+  
+  
+  
+    <li class="md-nav__item">
+      <a href="../../../developer-guide/publishing/" class="md-nav__link">
+        
+  
+  <span class="md-ellipsis">
+    Publishing
+  </span>
+  
+
+      </a>
+    </li>
+  
+
+              
+            
+              
+                
+  
+  
+  
+  
+    <li class="md-nav__item">
+      <a href="../../../developer-guide/contributing/" class="md-nav__link">
+        
+  
+  <span class="md-ellipsis">
+    Contributing
+  </span>
+  
+
+      </a>
+    </li>
+  
+
+              
+            
+          </ul>
+        </nav>
+      
+    </li>
+  
+
+    
+      
+      
+  
+  
+  
+  
+    
+    
+    
+      
+      
+        
+      
+    
+    
+    <li class="md-nav__item md-nav__item--nested">
+      
+        
+        
+          
+        
+        <input class="md-nav__toggle md-toggle md-toggle--indeterminate" type="checkbox" id="__nav_5" >
+        
+          
+          <label class="md-nav__link" for="__nav_5" id="__nav_5_label" tabindex="0">
+            
+  
+  <span class="md-ellipsis">
+    Reference
+  </span>
+  
+
+            <span class="md-nav__icon md-icon"></span>
+          </label>
+        
+        <nav class="md-nav" data-md-level="1" aria-labelledby="__nav_5_label" aria-expanded="false">
+          <label class="md-nav__title" for="__nav_5">
+            <span class="md-nav__icon md-icon"></span>
+            Reference
+          </label>
+          <ul class="md-nav__list" data-md-scrollfix>
+            
+              
+                
+  
+  
+  
+  
+    <li class="md-nav__item">
+      <a href="../../../reference/api-index/" class="md-nav__link">
+        
+  
+  <span class="md-ellipsis">
+    API Index
+  </span>
+  
+
+      </a>
+    </li>
+  
+
+              
+            
+              
+                
+  
+  
+  
+  
+    <li class="md-nav__item">
+      <a href="../../../reference/ui-components-hydra/" class="md-nav__link">
+        
+  
+  <span class="md-ellipsis">
+    UI Components (TrackerKit)
+  </span>
+  
+
+      </a>
+    </li>
+  
+
+              
+            
+              
+                
+  
+  
+  
+  
+    <li class="md-nav__item">
+      <a href="../../../reference/ui-components-posekit/" class="md-nav__link">
+        
+  
+  <span class="md-ellipsis">
+    UI Components (PoseKit)
+  </span>
+  
+
+      </a>
+    </li>
+  
+
+              
+            
+              
+                
+  
+  
+  
+  
+    <li class="md-nav__item">
+      <a href="../../../reference/api-app/" class="md-nav__link">
+        
+  
+  <span class="md-ellipsis">
+    API (Launcher)
+  </span>
+  
+
+      </a>
+    </li>
+  
+
+              
+            
+              
+                
+  
+  
+  
+  
+    <li class="md-nav__item">
+      <a href="../../../reference/api-core/" class="md-nav__link">
+        
+  
+  <span class="md-ellipsis">
+    API (Core)
+  </span>
+  
+
+      </a>
+    </li>
+  
+
+              
+            
+              
+                
+  
+  
+  
+  
+    <li class="md-nav__item">
+      <a href="../../../reference/api-data/" class="md-nav__link">
+        
+  
+  <span class="md-ellipsis">
+    API (Data)
+  </span>
+  
+
+      </a>
+    </li>
+  
+
+              
+            
+              
+                
+  
+  
+  
+  
+    <li class="md-nav__item">
+      <a href="../../../reference/api-gui/" class="md-nav__link">
+        
+  
+  <span class="md-ellipsis">
+    API (TrackerKit GUI)
+  </span>
+  
+
+      </a>
+    </li>
+  
+
+              
+            
+              
+                
+  
+  
+  
+  
+    <li class="md-nav__item">
+      <a href="../../../reference/api-widgets/" class="md-nav__link">
+        
+  
+  <span class="md-ellipsis">
+    API (Widgets)
+  </span>
+  
+
+      </a>
+    </li>
+  
+
+              
+            
+              
+                
+  
+  
+  
+  
+    <li class="md-nav__item">
+      <a href="../../../reference/api-posekit/" class="md-nav__link">
+        
+  
+  <span class="md-ellipsis">
+    API (PoseKit)
+  </span>
+  
+
+      </a>
+    </li>
+  
+
+              
+            
+              
+                
+  
+  
+  
+  
+    <li class="md-nav__item">
+      <a href="../../../reference/api-utils/" class="md-nav__link">
+        
+  
+  <span class="md-ellipsis">
+    API (Utils)
+  </span>
+  
+
+      </a>
+    </li>
+  
+
+              
+            
+              
+                
+  
+  
+  
+  
+    <li class="md-nav__item">
+      <a href="../../../reference/cli-reference/" class="md-nav__link">
+        
+  
+  <span class="md-ellipsis">
+    CLI Reference
+  </span>
+  
+
+      </a>
+    </li>
+  
+
+              
+            
+              
+                
+  
+  
+  
+  
+    <li class="md-nav__item">
+      <a href="../../../reference/technical-reference/" class="md-nav__link">
+        
+  
+  <span class="md-ellipsis">
+    Technical Reference (LaTeX)
+  </span>
+  
+
+      </a>
+    </li>
+  
+
+              
+            
+              
+                
+  
+  
+  
+  
+    <li class="md-nav__item">
+      <a href="../../../reference/changelog/" class="md-nav__link">
+        
+  
+  <span class="md-ellipsis">
+    Changelog
+  </span>
+  
+
+      </a>
+    </li>
+  
+
+              
+            
+              
+                
+  
+  
+  
+  
+    <li class="md-nav__item">
+      <a href="../../../reference/faq/" class="md-nav__link">
+        
+  
+  <span class="md-ellipsis">
+    FAQ
+  </span>
+  
+
+      </a>
+    </li>
+  
+
+              
+            
+          </ul>
+        </nav>
+      
+    </li>
+  
+
+    
+  </ul>
+</nav>
+                  </div>
+                </div>
+              </div>
+            
+            
+              
+              <div class="md-sidebar md-sidebar--secondary" data-md-component="sidebar" data-md-type="toc" >
+                <div class="md-sidebar__scrollwrap">
+                  <div class="md-sidebar__inner">
+                    
+
+<nav class="md-nav md-nav--secondary" aria-label="Table of contents">
+  
+  
+  
+    
+  
+  
+    <label class="md-nav__title" for="__toc">
+      <span class="md-nav__icon md-icon"></span>
+      Table of contents
+    </label>
+    <ul class="md-nav__list" data-md-component="toc" data-md-scrollfix>
+      
+        <li class="md-nav__item">
+  <a href="#global-constraints" class="md-nav__link">
+    <span class="md-ellipsis">
+      Global Constraints
+    </span>
+  </a>
+  
+</li>
+      
+        <li class="md-nav__item">
+  <a href="#phase-1-the-unified-data-module-no-consumers-yet" class="md-nav__link">
+    <span class="md-ellipsis">
+      Phase 1 — The unified data module (no consumers yet)
+    </span>
+  </a>
+  
+    <nav class="md-nav" aria-label="Phase 1 — The unified data module (no consumers yet)">
+      <ul class="md-nav__list">
+        
+          <li class="md-nav__item">
+  <a href="#task-1-modelregistryentry-schema-loadsave-legacy-read" class="md-nav__link">
+    <span class="md-ellipsis">
+      Task 1: ModelRegistryEntry schema + load/save + legacy read
+    </span>
+  </a>
+  
+</li>
+        
+          <li class="md-nav__item">
+  <a href="#task-2-register_model-unregister_model-get_entry-list_entries" class="md-nav__link">
+    <span class="md-ellipsis">
+      Task 2: register_model / unregister_model / get_entry / list_entries
+    </span>
+  </a>
+  
+</li>
+        
+          <li class="md-nav__item">
+  <a href="#task-3-find_unregistered-entry_is_stale" class="md-nav__link">
+    <span class="md-ellipsis">
+      Task 3: find_unregistered + entry_is_stale
+    </span>
+  </a>
+  
+</li>
+        
+      </ul>
+    </nav>
+  
+</li>
+      
+        <li class="md-nav__item">
+  <a href="#phase-2-retire-old-apis-repoint-callers" class="md-nav__link">
+    <span class="md-ellipsis">
+      Phase 2 — Retire old APIs, repoint callers
+    </span>
+  </a>
+  
+    <nav class="md-nav" aria-label="Phase 2 — Retire old APIs, repoint callers">
+      <ul class="md-nav__list">
+        
+          <li class="md-nav__item">
+  <a href="#task-4-repoint-training-side-model_publish-to-datamodel_registry-delete-old" class="md-nav__link">
+    <span class="md-ellipsis">
+      Task 4: Repoint Training-side (model_publish) to data.model_registry; delete old
+    </span>
+  </a>
+  
+</li>
+        
+          <li class="md-nav__item">
+  <a href="#task-5-repoint-gui-side-model_utils-config-main_window-delete-old" class="md-nav__link">
+    <span class="md-ellipsis">
+      Task 5: Repoint GUI-side (model_utils + config + main_window); delete old
+    </span>
+  </a>
+  
+</li>
+        
+      </ul>
+    </nav>
+  
+</li>
+      
+        <li class="md-nav__item">
+  <a href="#phase-3-extend-registration-to-pose-publish-role" class="md-nav__link">
+    <span class="md-ellipsis">
+      Phase 3 — Extend registration to pose + publish role
+    </span>
+  </a>
+  
+    <nav class="md-nav" aria-label="Phase 3 — Extend registration to pose + publish role">
+      <ul class="md-nav__list">
+        
+          <li class="md-nav__item">
+  <a href="#task-6-pose-trainingrole-members-publish_trained_model-pose-support" class="md-nav__link">
+    <span class="md-ellipsis">
+      Task 6: Pose TrainingRole members + publish_trained_model pose support
+    </span>
+  </a>
+  
+</li>
+        
+          <li class="md-nav__item">
+  <a href="#task-7-gui-pose-imports-register-all-3-backends-replace-parity-test" class="md-nav__link">
+    <span class="md-ellipsis">
+      Task 7: GUI pose imports register all 3 backends; replace parity test
+    </span>
+  </a>
+  
+</li>
+        
+      </ul>
+    </nav>
+  
+</li>
+      
+        <li class="md-nav__item">
+  <a href="#phase-4-pickers-as-source-of-truth-trackerkit-upgrade-cliff-notice" class="md-nav__link">
+    <span class="md-ellipsis">
+      Phase 4 — Pickers as source of truth (TrackerKit) + upgrade-cliff notice
+    </span>
+  </a>
+  
+    <nav class="md-nav" aria-label="Phase 4 — Pickers as source of truth (TrackerKit) + upgrade-cliff notice">
+      <ul class="md-nav__list">
+        
+          <li class="md-nav__item">
+  <a href="#task-8-populate-model-combos-from-the-registry-add-migrate-notice-stale-handling" class="md-nav__link">
+    <span class="md-ellipsis">
+      Task 8: Populate model combos from the registry; add migrate notice + stale handling
+    </span>
+  </a>
+  
+</li>
+        
+      </ul>
+    </nav>
+  
+</li>
+      
+        <li class="md-nav__item">
+  <a href="#phase-5-cli-migration-script" class="md-nav__link">
+    <span class="md-ellipsis">
+      Phase 5 — CLI migration script
+    </span>
+  </a>
+  
+    <nav class="md-nav" aria-label="Phase 5 — CLI migration script">
+      <ul class="md-nav__list">
+        
+          <li class="md-nav__item">
+  <a href="#task-9-scriptsmigrate_model_registrypy-interactive-auto-legacy-upgrade-stale-prune" class="md-nav__link">
+    <span class="md-ellipsis">
+      Task 9: scripts/migrate_model_registry.py (interactive + --auto, legacy upgrade, stale prune)
+    </span>
+  </a>
+  
+</li>
+        
+      </ul>
+    </nav>
+  
+</li>
+      
+        <li class="md-nav__item">
+  <a href="#final-verification-after-all-tasks" class="md-nav__link">
+    <span class="md-ellipsis">
+      Final Verification (after all tasks)
+    </span>
+  </a>
+  
+</li>
+      
+        <li class="md-nav__item">
+  <a href="#self-review-checklist-plan-author-ran-this" class="md-nav__link">
+    <span class="md-ellipsis">
+      Self-Review Checklist (plan author ran this)
+    </span>
+  </a>
+  
+</li>
+      
+    </ul>
+  
+</nav>
+                  </div>
+                </div>
+              </div>
+            
+          
+          
+            <div class="md-content" data-md-component="content">
+              <article class="md-content__inner md-typeset">
+                
+                  
+
+  
+    <a href="https://github.com/neurorishika/hydra-suite/edit/main/docs/superpowers/plans/2026-08-04-model-registry-unification.md" title="Edit this page" class="md-content__button md-icon">
+      
+      <svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 24 24"><path d="M10 20H6V4h7v5h5v3.1l2-2V8l-6-6H6c-1.1 0-2 .9-2 2v16c0 1.1.9 2 2 2h4zm10.2-7c.1 0 .3.1.4.2l1.3 1.3c.2.2.2.6 0 .8l-1 1-2.1-2.1 1-1c.1-.1.2-.2.4-.2m0 3.9L14.1 23H12v-2.1l6.1-6.1z"/></svg>
+    </a>
+  
+  
+
+
+<h1 id="model-registry-unification-implementation-plan">Model Registry Unification Implementation Plan<a class="headerlink" href="#model-registry-unification-implementation-plan" title="Permanent link">&para;</a></h1>
+<blockquote>
+<p><strong>For agentic workers:</strong> REQUIRED SUB-SKILL: Use superpowers:subagent-driven-development (recommended) or superpowers:executing-plans to implement this plan task-by-task. Steps use checkbox (<code>- [ ]</code>) syntax for tracking.</p>
+</blockquote>
+<p><strong>Goal:</strong> Make <code>model_registry.json</code> the single authoritative model inventory: one owning module in the Data layer, rich per-family metadata that pickers consume, all backends (incl. the 3 pose backends) registered on import, a pose publish role, and an interactive CLI to backfill pre-existing models — with the two old writer APIs retired outright (no shims).</p>
+<p><strong>Architecture:</strong> New <code>hydra_suite/data/model_registry.py</code> (Data layer — importable by app kits, Training, and the CLI without violating dependency direction) owns <code>model_registry.json</code>. The GUI-side (<code>trackerkit/gui/model_utils.py</code>) and Training-side (<code>training/model_publish.py</code>) registry functions are deleted and every call site repointed. Pickers list from the registry (source of truth); unregistered models trigger a non-blocking migrate notice. A CLI backfills existing models.</p>
+<p><strong>Tech Stack:</strong> Python 3, dataclasses, PyQt, pytest. Conda env <code>hydra-mps</code>.</p>
+<p><strong>Design spec:</strong> <code>docs/superpowers/specs/2026-07-29-model-registry-unification-design.md</code></p>
+<h2 id="global-constraints">Global Constraints<a class="headerlink" href="#global-constraints" title="Permanent link">&para;</a></h2>
+<ul>
+<li>Work in an isolated worktree under <code>.worktrees/</code>; branch <code>feature/model-registry-unification</code>. Main stays untouched.</li>
+<li>Environment: <code>source ~/miniforge3/etc/profile.d/conda.sh &amp;&amp; conda activate hydra-mps</code> before running anything.</li>
+<li>Run tests from the worktree with <code>PYTHONPATH=$PWD/src</code>. Base suite has ~24 pre-existing unrelated failures (incl. a collection error in <code>tests/test_identity_postprocess.py</code>) — gate on the delta (your new/touched tests), not absolute green. Run vitpose-adjacent suites with <code>--continue-on-collection-errors</code>.</li>
+<li>Line length 88. Do NOT run <code>make format</code>. Match surrounding style manually.</li>
+<li>Commit as the configured git user. NO <code>Co-Authored-By: Claude</code> trailer.</li>
+<li><strong>Dependency rule (hard):</strong> <code>hydra_suite/data/model_registry.py</code> MUST NOT import from any app-layer package (trackerkit/posekit/classkit/refinekit/detectkit/filterkit) or Integrations. It may import from <code>hydra_suite.paths</code> and stdlib only. App layers + Training + the CLI import IT.</li>
+<li><strong>Retire, don't shim:</strong> after repointing callers, DELETE the old registry functions. No back-compat wrappers left behind.</li>
+<li><strong>Registry file:</strong> both old writers target <code>get_models_dir()/model_registry.json</code>. <code>training/model_publish.py</code> additionally honors a <code>_use_project_root_override()</code> (project-root <code>models/</code>) test hook — the unified module MUST preserve an equivalent override so <code>model_publish</code> tests still work. Confirm the real override mechanism before finalizing path resolution.</li>
+<li><strong>Root file format:</strong> <code>{"schema_version": &lt;int&gt;, "entries": {relpath: entry}}</code>. Bump <code>schema_version</code> to 3 for the unified schema; <code>load_registry</code> transparently upgrades v2-GUI, flat-legacy, and v2-<code>model_publish</code> entries on read.</li>
+<li><strong>Atomic writes:</strong> <code>save_registry</code> writes to a temp file + <code>os.replace</code> (never a partial file on crash).</li>
+</ul>
+<hr />
+<h2 id="phase-1-the-unified-data-module-no-consumers-yet">Phase 1 — The unified data module (no consumers yet)<a class="headerlink" href="#phase-1-the-unified-data-module-no-consumers-yet" title="Permanent link">&para;</a></h2>
+<h3 id="task-1-modelregistryentry-schema-loadsave-legacy-read">Task 1: <code>ModelRegistryEntry</code> schema + load/save + legacy read<a class="headerlink" href="#task-1-modelregistryentry-schema-loadsave-legacy-read" title="Permanent link">&para;</a></h3>
+<p><strong>Files:</strong>
+- Create: <code>src/hydra_suite/data/model_registry.py</code>
+- Test: <code>tests/test_model_registry_core.py</code></p>
+<p><strong>Interfaces:</strong>
+- Produces:
+  - <code>@dataclass ModelRegistryEntry</code> with fields: <code>task_family: str</code> (<code>obb</code>/<code>detect</code>/<code>segment</code>/<code>classify</code>/<code>pose</code>), <code>backend: str</code> (<code>yolo</code>/<code>sleap</code>/<code>vitpose</code>), <code>usage_role: str = ""</code>, <code>species: str = ""</code>, <code>notes: str = ""</code>, <code>added_at: str = ""</code>, <code>source_path: str = ""</code>, <code>stored_filename: str = ""</code>, <code>size: str = ""</code>, <code>num_keypoints: int = 0</code>, <code>skeleton_name: str = ""</code>, <code>num_classes: int = 0</code>, <code>class_names: list[str] = field(default_factory=list)</code>, <code>needs_review: bool = False</code>, <code>extra: dict = field(default_factory=dict)</code>. Methods <code>to_dict()</code> / <code>from_dict(d)</code>.
+  - <code>SCHEMA_VERSION = 3</code>
+  - <code>registry_path() -&gt; Path</code> — <code>get_models_dir()/model_registry.json</code>, honoring the <code>model_publish</code> project-root override.
+  - <code>load_registry() -&gt; dict[str, ModelRegistryEntry]</code> — reads the file, upgrades any legacy entry via <code>read_legacy_entry</code>, returns <code>{relpath: ModelRegistryEntry}</code>; <code>{}</code> on missing/corrupt.
+  - <code>save_registry(entries: dict[str, ModelRegistryEntry]) -&gt; None</code> — atomic write of <code>{"schema_version": 3, "entries": {p: e.to_dict()}}</code>.
+  - <code>read_legacy_entry(relpath: str, raw: dict) -&gt; ModelRegistryEntry</code> — maps the GUI format (<code>{size, species, model_info, added_at, source_path, stored_filename, task_family, usage_role}</code>), the <code>model_publish</code> format (arch/description/classifier fields), and flat unknown keys (→ <code>extra</code>) into a <code>ModelRegistryEntry</code>. <code>model_info</code>→<code>notes</code>. Infers <code>task_family</code> from the relpath prefix (<code>obb/</code>, <code>detection/</code>, <code>classification/</code>, <code>pose/</code>) when absent, and <code>backend</code> from <code>pose/&lt;Backend&gt;/</code> or default <code>yolo</code>.</p>
+<ul class="task-list">
+<li class="task-list-item"><label class="task-list-control"><input type="checkbox" disabled/><span class="task-list-indicator"></span></label> <strong>Step 1: Write failing tests</strong></li>
+</ul>
+<div class="language-python highlight"><pre><span></span><code><span id="__span-0-1"><a id="__codelineno-0-1" name="__codelineno-0-1" href="#__codelineno-0-1"></a><span class="c1"># tests/test_model_registry_core.py</span>
+</span><span id="__span-0-2"><a id="__codelineno-0-2" name="__codelineno-0-2" href="#__codelineno-0-2"></a><span class="kn">import</span><span class="w"> </span><span class="nn">json</span>
+</span><span id="__span-0-3"><a id="__codelineno-0-3" name="__codelineno-0-3" href="#__codelineno-0-3"></a><span class="kn">from</span><span class="w"> </span><span class="nn">hydra_suite.data.model_registry</span><span class="w"> </span><span class="kn">import</span> <span class="p">(</span>
+</span><span id="__span-0-4"><a id="__codelineno-0-4" name="__codelineno-0-4" href="#__codelineno-0-4"></a>    <span class="n">ModelRegistryEntry</span><span class="p">,</span> <span class="n">SCHEMA_VERSION</span><span class="p">,</span> <span class="n">load_registry</span><span class="p">,</span> <span class="n">save_registry</span><span class="p">,</span>
+</span><span id="__span-0-5"><a id="__codelineno-0-5" name="__codelineno-0-5" href="#__codelineno-0-5"></a>    <span class="n">read_legacy_entry</span><span class="p">,</span> <span class="n">registry_path</span><span class="p">,</span>
+</span><span id="__span-0-6"><a id="__codelineno-0-6" name="__codelineno-0-6" href="#__codelineno-0-6"></a><span class="p">)</span>
+</span><span id="__span-0-7"><a id="__codelineno-0-7" name="__codelineno-0-7" href="#__codelineno-0-7"></a>
+</span><span id="__span-0-8"><a id="__codelineno-0-8" name="__codelineno-0-8" href="#__codelineno-0-8"></a>
+</span><span id="__span-0-9"><a id="__codelineno-0-9" name="__codelineno-0-9" href="#__codelineno-0-9"></a><span class="k">def</span><span class="w"> </span><span class="nf">test_entry_roundtrip</span><span class="p">():</span>
+</span><span id="__span-0-10"><a id="__codelineno-0-10" name="__codelineno-0-10" href="#__codelineno-0-10"></a>    <span class="n">e</span> <span class="o">=</span> <span class="n">ModelRegistryEntry</span><span class="p">(</span><span class="n">task_family</span><span class="o">=</span><span class="s2">"pose"</span><span class="p">,</span> <span class="n">backend</span><span class="o">=</span><span class="s2">"vitpose"</span><span class="p">,</span> <span class="n">num_keypoints</span><span class="o">=</span><span class="mi">17</span><span class="p">,</span>
+</span><span id="__span-0-11"><a id="__codelineno-0-11" name="__codelineno-0-11" href="#__codelineno-0-11"></a>                           <span class="n">species</span><span class="o">=</span><span class="s2">"ant"</span><span class="p">,</span> <span class="n">notes</span><span class="o">=</span><span class="s2">"hi"</span><span class="p">)</span>
+</span><span id="__span-0-12"><a id="__codelineno-0-12" name="__codelineno-0-12" href="#__codelineno-0-12"></a>    <span class="k">assert</span> <span class="n">ModelRegistryEntry</span><span class="o">.</span><span class="n">from_dict</span><span class="p">(</span><span class="n">e</span><span class="o">.</span><span class="n">to_dict</span><span class="p">())</span> <span class="o">==</span> <span class="n">e</span>
+</span><span id="__span-0-13"><a id="__codelineno-0-13" name="__codelineno-0-13" href="#__codelineno-0-13"></a>
+</span><span id="__span-0-14"><a id="__codelineno-0-14" name="__codelineno-0-14" href="#__codelineno-0-14"></a>
+</span><span id="__span-0-15"><a id="__codelineno-0-15" name="__codelineno-0-15" href="#__codelineno-0-15"></a><span class="k">def</span><span class="w"> </span><span class="nf">test_save_then_load_roundtrip</span><span class="p">(</span><span class="n">tmp_path</span><span class="p">,</span> <span class="n">monkeypatch</span><span class="p">):</span>
+</span><span id="__span-0-16"><a id="__codelineno-0-16" name="__codelineno-0-16" href="#__codelineno-0-16"></a>    <span class="n">monkeypatch</span><span class="o">.</span><span class="n">setenv</span><span class="p">(</span><span class="s2">"HYDRA_DATA_DIR"</span><span class="p">,</span> <span class="nb">str</span><span class="p">(</span><span class="n">tmp_path</span><span class="p">))</span>
+</span><span id="__span-0-17"><a id="__codelineno-0-17" name="__codelineno-0-17" href="#__codelineno-0-17"></a>    <span class="kn">import</span><span class="w"> </span><span class="nn">hydra_suite.paths</span><span class="w"> </span><span class="k">as</span><span class="w"> </span><span class="nn">paths</span><span class="o">,</span><span class="w"> </span><span class="nn">importlib</span>
+</span><span id="__span-0-18"><a id="__codelineno-0-18" name="__codelineno-0-18" href="#__codelineno-0-18"></a>    <span class="n">importlib</span><span class="o">.</span><span class="n">reload</span><span class="p">(</span><span class="n">paths</span><span class="p">)</span>
+</span><span id="__span-0-19"><a id="__codelineno-0-19" name="__codelineno-0-19" href="#__codelineno-0-19"></a>    <span class="kn">import</span><span class="w"> </span><span class="nn">hydra_suite.data.model_registry</span><span class="w"> </span><span class="k">as</span><span class="w"> </span><span class="nn">mr</span>
+</span><span id="__span-0-20"><a id="__codelineno-0-20" name="__codelineno-0-20" href="#__codelineno-0-20"></a>    <span class="n">importlib</span><span class="o">.</span><span class="n">reload</span><span class="p">(</span><span class="n">mr</span><span class="p">)</span>
+</span><span id="__span-0-21"><a id="__codelineno-0-21" name="__codelineno-0-21" href="#__codelineno-0-21"></a>    <span class="n">e</span> <span class="o">=</span> <span class="n">mr</span><span class="o">.</span><span class="n">ModelRegistryEntry</span><span class="p">(</span><span class="n">task_family</span><span class="o">=</span><span class="s2">"obb"</span><span class="p">,</span> <span class="n">backend</span><span class="o">=</span><span class="s2">"yolo"</span><span class="p">,</span> <span class="n">species</span><span class="o">=</span><span class="s2">"fly"</span><span class="p">)</span>
+</span><span id="__span-0-22"><a id="__codelineno-0-22" name="__codelineno-0-22" href="#__codelineno-0-22"></a>    <span class="n">mr</span><span class="o">.</span><span class="n">save_registry</span><span class="p">({</span><span class="s2">"obb/m.pt"</span><span class="p">:</span> <span class="n">e</span><span class="p">})</span>
+</span><span id="__span-0-23"><a id="__codelineno-0-23" name="__codelineno-0-23" href="#__codelineno-0-23"></a>    <span class="n">got</span> <span class="o">=</span> <span class="n">mr</span><span class="o">.</span><span class="n">load_registry</span><span class="p">()</span>
+</span><span id="__span-0-24"><a id="__codelineno-0-24" name="__codelineno-0-24" href="#__codelineno-0-24"></a>    <span class="k">assert</span> <span class="n">got</span><span class="p">[</span><span class="s2">"obb/m.pt"</span><span class="p">]</span><span class="o">.</span><span class="n">species</span> <span class="o">==</span> <span class="s2">"fly"</span>
+</span><span id="__span-0-25"><a id="__codelineno-0-25" name="__codelineno-0-25" href="#__codelineno-0-25"></a>    <span class="n">raw</span> <span class="o">=</span> <span class="n">json</span><span class="o">.</span><span class="n">loads</span><span class="p">(</span><span class="n">mr</span><span class="o">.</span><span class="n">registry_path</span><span class="p">()</span><span class="o">.</span><span class="n">read_text</span><span class="p">())</span>
+</span><span id="__span-0-26"><a id="__codelineno-0-26" name="__codelineno-0-26" href="#__codelineno-0-26"></a>    <span class="k">assert</span> <span class="n">raw</span><span class="p">[</span><span class="s2">"schema_version"</span><span class="p">]</span> <span class="o">==</span> <span class="n">mr</span><span class="o">.</span><span class="n">SCHEMA_VERSION</span>
+</span><span id="__span-0-27"><a id="__codelineno-0-27" name="__codelineno-0-27" href="#__codelineno-0-27"></a>
+</span><span id="__span-0-28"><a id="__codelineno-0-28" name="__codelineno-0-28" href="#__codelineno-0-28"></a>
+</span><span id="__span-0-29"><a id="__codelineno-0-29" name="__codelineno-0-29" href="#__codelineno-0-29"></a><span class="k">def</span><span class="w"> </span><span class="nf">test_read_legacy_gui_format</span><span class="p">():</span>
+</span><span id="__span-0-30"><a id="__codelineno-0-30" name="__codelineno-0-30" href="#__codelineno-0-30"></a>    <span class="n">raw</span> <span class="o">=</span> <span class="p">{</span><span class="s2">"size"</span><span class="p">:</span> <span class="s2">"s"</span><span class="p">,</span> <span class="s2">"species"</span><span class="p">:</span> <span class="s2">"fly"</span><span class="p">,</span> <span class="s2">"model_info"</span><span class="p">:</span> <span class="s2">"v1"</span><span class="p">,</span>
+</span><span id="__span-0-31"><a id="__codelineno-0-31" name="__codelineno-0-31" href="#__codelineno-0-31"></a>           <span class="s2">"added_at"</span><span class="p">:</span> <span class="s2">"2026-01-01T00:00:00"</span><span class="p">,</span> <span class="s2">"source_path"</span><span class="p">:</span> <span class="s2">"/x/y.pt"</span><span class="p">,</span>
+</span><span id="__span-0-32"><a id="__codelineno-0-32" name="__codelineno-0-32" href="#__codelineno-0-32"></a>           <span class="s2">"stored_filename"</span><span class="p">:</span> <span class="s2">"y.pt"</span><span class="p">,</span> <span class="s2">"task_family"</span><span class="p">:</span> <span class="s2">"obb"</span><span class="p">,</span> <span class="s2">"usage_role"</span><span class="p">:</span> <span class="s2">"primary"</span><span class="p">}</span>
+</span><span id="__span-0-33"><a id="__codelineno-0-33" name="__codelineno-0-33" href="#__codelineno-0-33"></a>    <span class="n">e</span> <span class="o">=</span> <span class="n">read_legacy_entry</span><span class="p">(</span><span class="s2">"obb/y.pt"</span><span class="p">,</span> <span class="n">raw</span><span class="p">)</span>
+</span><span id="__span-0-34"><a id="__codelineno-0-34" name="__codelineno-0-34" href="#__codelineno-0-34"></a>    <span class="k">assert</span> <span class="n">e</span><span class="o">.</span><span class="n">task_family</span> <span class="o">==</span> <span class="s2">"obb"</span> <span class="ow">and</span> <span class="n">e</span><span class="o">.</span><span class="n">backend</span> <span class="o">==</span> <span class="s2">"yolo"</span>
+</span><span id="__span-0-35"><a id="__codelineno-0-35" name="__codelineno-0-35" href="#__codelineno-0-35"></a>    <span class="k">assert</span> <span class="n">e</span><span class="o">.</span><span class="n">notes</span> <span class="o">==</span> <span class="s2">"v1"</span> <span class="ow">and</span> <span class="n">e</span><span class="o">.</span><span class="n">size</span> <span class="o">==</span> <span class="s2">"s"</span> <span class="ow">and</span> <span class="n">e</span><span class="o">.</span><span class="n">usage_role</span> <span class="o">==</span> <span class="s2">"primary"</span>
+</span><span id="__span-0-36"><a id="__codelineno-0-36" name="__codelineno-0-36" href="#__codelineno-0-36"></a>
+</span><span id="__span-0-37"><a id="__codelineno-0-37" name="__codelineno-0-37" href="#__codelineno-0-37"></a>
+</span><span id="__span-0-38"><a id="__codelineno-0-38" name="__codelineno-0-38" href="#__codelineno-0-38"></a><span class="k">def</span><span class="w"> </span><span class="nf">test_read_legacy_infers_family_and_backend_from_path</span><span class="p">():</span>
+</span><span id="__span-0-39"><a id="__codelineno-0-39" name="__codelineno-0-39" href="#__codelineno-0-39"></a>    <span class="n">e</span> <span class="o">=</span> <span class="n">read_legacy_entry</span><span class="p">(</span><span class="s2">"pose/ViTPose/best.pt"</span><span class="p">,</span> <span class="p">{})</span>
+</span><span id="__span-0-40"><a id="__codelineno-0-40" name="__codelineno-0-40" href="#__codelineno-0-40"></a>    <span class="k">assert</span> <span class="n">e</span><span class="o">.</span><span class="n">task_family</span> <span class="o">==</span> <span class="s2">"pose"</span> <span class="ow">and</span> <span class="n">e</span><span class="o">.</span><span class="n">backend</span> <span class="o">==</span> <span class="s2">"vitpose"</span>
+</span><span id="__span-0-41"><a id="__codelineno-0-41" name="__codelineno-0-41" href="#__codelineno-0-41"></a>
+</span><span id="__span-0-42"><a id="__codelineno-0-42" name="__codelineno-0-42" href="#__codelineno-0-42"></a>
+</span><span id="__span-0-43"><a id="__codelineno-0-43" name="__codelineno-0-43" href="#__codelineno-0-43"></a><span class="k">def</span><span class="w"> </span><span class="nf">test_read_legacy_unknown_keys_go_to_extra</span><span class="p">():</span>
+</span><span id="__span-0-44"><a id="__codelineno-0-44" name="__codelineno-0-44" href="#__codelineno-0-44"></a>    <span class="n">e</span> <span class="o">=</span> <span class="n">read_legacy_entry</span><span class="p">(</span><span class="s2">"classification/z.pt"</span><span class="p">,</span> <span class="p">{</span><span class="s2">"arch"</span><span class="p">:</span> <span class="s2">"resnet"</span><span class="p">,</span> <span class="s2">"weird"</span><span class="p">:</span> <span class="mi">1</span><span class="p">})</span>
+</span><span id="__span-0-45"><a id="__codelineno-0-45" name="__codelineno-0-45" href="#__codelineno-0-45"></a>    <span class="k">assert</span> <span class="n">e</span><span class="o">.</span><span class="n">extra</span><span class="o">.</span><span class="n">get</span><span class="p">(</span><span class="s2">"arch"</span><span class="p">)</span> <span class="o">==</span> <span class="s2">"resnet"</span> <span class="ow">and</span> <span class="n">e</span><span class="o">.</span><span class="n">extra</span><span class="o">.</span><span class="n">get</span><span class="p">(</span><span class="s2">"weird"</span><span class="p">)</span> <span class="o">==</span> <span class="mi">1</span>
+</span></code></pre></div>
+<ul class="task-list">
+<li class="task-list-item"><label class="task-list-control"><input type="checkbox" disabled/><span class="task-list-indicator"></span></label> <strong>Step 2: Run tests, verify RED</strong></li>
+</ul>
+<p>Run: <code>PYTHONPATH=$PWD/src python -m pytest tests/test_model_registry_core.py -v</code> → FAIL (module/symbols not defined).</p>
+<ul class="task-list">
+<li class="task-list-item"><label class="task-list-control"><input type="checkbox" disabled/><span class="task-list-indicator"></span></label> <strong>Step 3: Implement <code>model_registry.py</code></strong></li>
+</ul>
+<p>Write the dataclass, <code>SCHEMA_VERSION = 3</code>, <code>registry_path()</code> (import <code>get_models_dir</code> from <code>hydra_suite.paths</code>; replicate the <code>model_publish</code> project-root override — READ <code>training/model_publish.py::get_models_root</code>/<code>_use_project_root_override</code> first and reuse the same mechanism/env hook so both resolve identically), <code>load_registry</code>/<code>save_registry</code> (atomic via temp + <code>os.replace</code>), and <code>read_legacy_entry</code>. Import stdlib + <code>hydra_suite.paths</code> ONLY — no app-layer imports.</p>
+<ul class="task-list">
+<li class="task-list-item"><label class="task-list-control"><input type="checkbox" disabled/><span class="task-list-indicator"></span></label> <strong>Step 4: Run tests, verify GREEN</strong></li>
+</ul>
+<p>Run: <code>PYTHONPATH=$PWD/src python -m pytest tests/test_model_registry_core.py -v</code> → PASS.</p>
+<ul class="task-list">
+<li class="task-list-item"><label class="task-list-control"><input type="checkbox" disabled/><span class="task-list-indicator"></span></label> <strong>Step 5: Commit</strong></li>
+</ul>
+<div class="language-bash highlight"><pre><span></span><code><span id="__span-1-1"><a id="__codelineno-1-1" name="__codelineno-1-1" href="#__codelineno-1-1"></a>git<span class="w"> </span>add<span class="w"> </span>src/hydra_suite/data/model_registry.py<span class="w"> </span>tests/test_model_registry_core.py
+</span><span id="__span-1-2"><a id="__codelineno-1-2" name="__codelineno-1-2" href="#__codelineno-1-2"></a>git<span class="w"> </span>commit<span class="w"> </span>-m<span class="w"> </span><span class="s2">"feat(data): unified model_registry module — schema, load/save, legacy read"</span>
+</span></code></pre></div>
+<hr />
+<h3 id="task-2-register_model-unregister_model-get_entry-list_entries">Task 2: <code>register_model</code> / <code>unregister_model</code> / <code>get_entry</code> / <code>list_entries</code><a class="headerlink" href="#task-2-register_model-unregister_model-get_entry-list_entries" title="Permanent link">&para;</a></h3>
+<p><strong>Files:</strong>
+- Modify: <code>src/hydra_suite/data/model_registry.py</code>
+- Test: <code>tests/test_model_registry_ops.py</code></p>
+<p><strong>Interfaces:</strong>
+- Consumes: <code>load_registry</code>/<code>save_registry</code>/<code>ModelRegistryEntry</code> (Task 1).
+- Produces:
+  - <code>register_model(relpath: str, entry: ModelRegistryEntry) -&gt; None</code> — upsert + save.
+  - <code>unregister_model(relpath: str) -&gt; bool</code> — remove if present + save; False if absent.
+  - <code>get_entry(relpath: str) -&gt; ModelRegistryEntry | None</code>.
+  - <code>list_entries(task_family: str | None = None, backend: str | None = None) -&gt; dict[str, ModelRegistryEntry]</code> — filtered view.
+  - Keys are always models-root-relative POSIX paths — add <code>normalize_relpath(path) -&gt; str</code> and use it in every op so absolute/relative/backslash inputs converge.</p>
+<ul class="task-list">
+<li class="task-list-item"><label class="task-list-control"><input type="checkbox" disabled/><span class="task-list-indicator"></span></label> <strong>Step 1: Write failing tests</strong></li>
+</ul>
+<div class="language-python highlight"><pre><span></span><code><span id="__span-2-1"><a id="__codelineno-2-1" name="__codelineno-2-1" href="#__codelineno-2-1"></a><span class="c1"># tests/test_model_registry_ops.py</span>
+</span><span id="__span-2-2"><a id="__codelineno-2-2" name="__codelineno-2-2" href="#__codelineno-2-2"></a><span class="kn">import</span><span class="w"> </span><span class="nn">importlib</span><span class="o">,</span><span class="w"> </span><span class="nn">pytest</span>
+</span><span id="__span-2-3"><a id="__codelineno-2-3" name="__codelineno-2-3" href="#__codelineno-2-3"></a>
+</span><span id="__span-2-4"><a id="__codelineno-2-4" name="__codelineno-2-4" href="#__codelineno-2-4"></a>
+</span><span id="__span-2-5"><a id="__codelineno-2-5" name="__codelineno-2-5" href="#__codelineno-2-5"></a><span class="nd">@pytest</span><span class="o">.</span><span class="n">fixture</span>
+</span><span id="__span-2-6"><a id="__codelineno-2-6" name="__codelineno-2-6" href="#__codelineno-2-6"></a><span class="k">def</span><span class="w"> </span><span class="nf">mr</span><span class="p">(</span><span class="n">tmp_path</span><span class="p">,</span> <span class="n">monkeypatch</span><span class="p">):</span>
+</span><span id="__span-2-7"><a id="__codelineno-2-7" name="__codelineno-2-7" href="#__codelineno-2-7"></a>    <span class="n">monkeypatch</span><span class="o">.</span><span class="n">setenv</span><span class="p">(</span><span class="s2">"HYDRA_DATA_DIR"</span><span class="p">,</span> <span class="nb">str</span><span class="p">(</span><span class="n">tmp_path</span><span class="p">))</span>
+</span><span id="__span-2-8"><a id="__codelineno-2-8" name="__codelineno-2-8" href="#__codelineno-2-8"></a>    <span class="kn">import</span><span class="w"> </span><span class="nn">hydra_suite.paths</span><span class="w"> </span><span class="k">as</span><span class="w"> </span><span class="nn">paths</span>
+</span><span id="__span-2-9"><a id="__codelineno-2-9" name="__codelineno-2-9" href="#__codelineno-2-9"></a>    <span class="n">importlib</span><span class="o">.</span><span class="n">reload</span><span class="p">(</span><span class="n">paths</span><span class="p">)</span>
+</span><span id="__span-2-10"><a id="__codelineno-2-10" name="__codelineno-2-10" href="#__codelineno-2-10"></a>    <span class="kn">import</span><span class="w"> </span><span class="nn">hydra_suite.data.model_registry</span><span class="w"> </span><span class="k">as</span><span class="w"> </span><span class="nn">m</span>
+</span><span id="__span-2-11"><a id="__codelineno-2-11" name="__codelineno-2-11" href="#__codelineno-2-11"></a>    <span class="n">importlib</span><span class="o">.</span><span class="n">reload</span><span class="p">(</span><span class="n">m</span><span class="p">)</span>
+</span><span id="__span-2-12"><a id="__codelineno-2-12" name="__codelineno-2-12" href="#__codelineno-2-12"></a>    <span class="k">return</span> <span class="n">m</span>
+</span><span id="__span-2-13"><a id="__codelineno-2-13" name="__codelineno-2-13" href="#__codelineno-2-13"></a>
+</span><span id="__span-2-14"><a id="__codelineno-2-14" name="__codelineno-2-14" href="#__codelineno-2-14"></a>
+</span><span id="__span-2-15"><a id="__codelineno-2-15" name="__codelineno-2-15" href="#__codelineno-2-15"></a><span class="k">def</span><span class="w"> </span><span class="nf">test_register_get_roundtrip</span><span class="p">(</span><span class="n">mr</span><span class="p">):</span>
+</span><span id="__span-2-16"><a id="__codelineno-2-16" name="__codelineno-2-16" href="#__codelineno-2-16"></a>    <span class="n">e</span> <span class="o">=</span> <span class="n">mr</span><span class="o">.</span><span class="n">ModelRegistryEntry</span><span class="p">(</span><span class="n">task_family</span><span class="o">=</span><span class="s2">"pose"</span><span class="p">,</span> <span class="n">backend</span><span class="o">=</span><span class="s2">"sleap"</span><span class="p">,</span> <span class="n">species</span><span class="o">=</span><span class="s2">"ant"</span><span class="p">)</span>
+</span><span id="__span-2-17"><a id="__codelineno-2-17" name="__codelineno-2-17" href="#__codelineno-2-17"></a>    <span class="n">mr</span><span class="o">.</span><span class="n">register_model</span><span class="p">(</span><span class="s2">"pose/SLEAP/m"</span><span class="p">,</span> <span class="n">e</span><span class="p">)</span>
+</span><span id="__span-2-18"><a id="__codelineno-2-18" name="__codelineno-2-18" href="#__codelineno-2-18"></a>    <span class="k">assert</span> <span class="n">mr</span><span class="o">.</span><span class="n">get_entry</span><span class="p">(</span><span class="s2">"pose/SLEAP/m"</span><span class="p">)</span><span class="o">.</span><span class="n">species</span> <span class="o">==</span> <span class="s2">"ant"</span>
+</span><span id="__span-2-19"><a id="__codelineno-2-19" name="__codelineno-2-19" href="#__codelineno-2-19"></a>
+</span><span id="__span-2-20"><a id="__codelineno-2-20" name="__codelineno-2-20" href="#__codelineno-2-20"></a>
+</span><span id="__span-2-21"><a id="__codelineno-2-21" name="__codelineno-2-21" href="#__codelineno-2-21"></a><span class="k">def</span><span class="w"> </span><span class="nf">test_register_upsert_overwrites</span><span class="p">(</span><span class="n">mr</span><span class="p">):</span>
+</span><span id="__span-2-22"><a id="__codelineno-2-22" name="__codelineno-2-22" href="#__codelineno-2-22"></a>    <span class="n">mr</span><span class="o">.</span><span class="n">register_model</span><span class="p">(</span><span class="s2">"obb/a.pt"</span><span class="p">,</span> <span class="n">mr</span><span class="o">.</span><span class="n">ModelRegistryEntry</span><span class="p">(</span><span class="n">task_family</span><span class="o">=</span><span class="s2">"obb"</span><span class="p">,</span> <span class="n">backend</span><span class="o">=</span><span class="s2">"yolo"</span><span class="p">,</span> <span class="n">species</span><span class="o">=</span><span class="s2">"v1"</span><span class="p">))</span>
+</span><span id="__span-2-23"><a id="__codelineno-2-23" name="__codelineno-2-23" href="#__codelineno-2-23"></a>    <span class="n">mr</span><span class="o">.</span><span class="n">register_model</span><span class="p">(</span><span class="s2">"obb/a.pt"</span><span class="p">,</span> <span class="n">mr</span><span class="o">.</span><span class="n">ModelRegistryEntry</span><span class="p">(</span><span class="n">task_family</span><span class="o">=</span><span class="s2">"obb"</span><span class="p">,</span> <span class="n">backend</span><span class="o">=</span><span class="s2">"yolo"</span><span class="p">,</span> <span class="n">species</span><span class="o">=</span><span class="s2">"v2"</span><span class="p">))</span>
+</span><span id="__span-2-24"><a id="__codelineno-2-24" name="__codelineno-2-24" href="#__codelineno-2-24"></a>    <span class="k">assert</span> <span class="n">mr</span><span class="o">.</span><span class="n">get_entry</span><span class="p">(</span><span class="s2">"obb/a.pt"</span><span class="p">)</span><span class="o">.</span><span class="n">species</span> <span class="o">==</span> <span class="s2">"v2"</span>
+</span><span id="__span-2-25"><a id="__codelineno-2-25" name="__codelineno-2-25" href="#__codelineno-2-25"></a>    <span class="k">assert</span> <span class="nb">len</span><span class="p">(</span><span class="n">mr</span><span class="o">.</span><span class="n">load_registry</span><span class="p">())</span> <span class="o">==</span> <span class="mi">1</span>
+</span><span id="__span-2-26"><a id="__codelineno-2-26" name="__codelineno-2-26" href="#__codelineno-2-26"></a>
+</span><span id="__span-2-27"><a id="__codelineno-2-27" name="__codelineno-2-27" href="#__codelineno-2-27"></a>
+</span><span id="__span-2-28"><a id="__codelineno-2-28" name="__codelineno-2-28" href="#__codelineno-2-28"></a><span class="k">def</span><span class="w"> </span><span class="nf">test_unregister</span><span class="p">(</span><span class="n">mr</span><span class="p">):</span>
+</span><span id="__span-2-29"><a id="__codelineno-2-29" name="__codelineno-2-29" href="#__codelineno-2-29"></a>    <span class="n">mr</span><span class="o">.</span><span class="n">register_model</span><span class="p">(</span><span class="s2">"obb/a.pt"</span><span class="p">,</span> <span class="n">mr</span><span class="o">.</span><span class="n">ModelRegistryEntry</span><span class="p">(</span><span class="n">task_family</span><span class="o">=</span><span class="s2">"obb"</span><span class="p">,</span> <span class="n">backend</span><span class="o">=</span><span class="s2">"yolo"</span><span class="p">))</span>
+</span><span id="__span-2-30"><a id="__codelineno-2-30" name="__codelineno-2-30" href="#__codelineno-2-30"></a>    <span class="k">assert</span> <span class="n">mr</span><span class="o">.</span><span class="n">unregister_model</span><span class="p">(</span><span class="s2">"obb/a.pt"</span><span class="p">)</span> <span class="ow">is</span> <span class="kc">True</span>
+</span><span id="__span-2-31"><a id="__codelineno-2-31" name="__codelineno-2-31" href="#__codelineno-2-31"></a>    <span class="k">assert</span> <span class="n">mr</span><span class="o">.</span><span class="n">unregister_model</span><span class="p">(</span><span class="s2">"obb/a.pt"</span><span class="p">)</span> <span class="ow">is</span> <span class="kc">False</span>
+</span><span id="__span-2-32"><a id="__codelineno-2-32" name="__codelineno-2-32" href="#__codelineno-2-32"></a>    <span class="k">assert</span> <span class="n">mr</span><span class="o">.</span><span class="n">get_entry</span><span class="p">(</span><span class="s2">"obb/a.pt"</span><span class="p">)</span> <span class="ow">is</span> <span class="kc">None</span>
+</span><span id="__span-2-33"><a id="__codelineno-2-33" name="__codelineno-2-33" href="#__codelineno-2-33"></a>
+</span><span id="__span-2-34"><a id="__codelineno-2-34" name="__codelineno-2-34" href="#__codelineno-2-34"></a>
+</span><span id="__span-2-35"><a id="__codelineno-2-35" name="__codelineno-2-35" href="#__codelineno-2-35"></a><span class="k">def</span><span class="w"> </span><span class="nf">test_list_entries_filters</span><span class="p">(</span><span class="n">mr</span><span class="p">):</span>
+</span><span id="__span-2-36"><a id="__codelineno-2-36" name="__codelineno-2-36" href="#__codelineno-2-36"></a>    <span class="n">mr</span><span class="o">.</span><span class="n">register_model</span><span class="p">(</span><span class="s2">"obb/a.pt"</span><span class="p">,</span> <span class="n">mr</span><span class="o">.</span><span class="n">ModelRegistryEntry</span><span class="p">(</span><span class="n">task_family</span><span class="o">=</span><span class="s2">"obb"</span><span class="p">,</span> <span class="n">backend</span><span class="o">=</span><span class="s2">"yolo"</span><span class="p">))</span>
+</span><span id="__span-2-37"><a id="__codelineno-2-37" name="__codelineno-2-37" href="#__codelineno-2-37"></a>    <span class="n">mr</span><span class="o">.</span><span class="n">register_model</span><span class="p">(</span><span class="s2">"pose/ViTPose/b.pt"</span><span class="p">,</span> <span class="n">mr</span><span class="o">.</span><span class="n">ModelRegistryEntry</span><span class="p">(</span><span class="n">task_family</span><span class="o">=</span><span class="s2">"pose"</span><span class="p">,</span> <span class="n">backend</span><span class="o">=</span><span class="s2">"vitpose"</span><span class="p">))</span>
+</span><span id="__span-2-38"><a id="__codelineno-2-38" name="__codelineno-2-38" href="#__codelineno-2-38"></a>    <span class="n">mr</span><span class="o">.</span><span class="n">register_model</span><span class="p">(</span><span class="s2">"pose/SLEAP/c"</span><span class="p">,</span> <span class="n">mr</span><span class="o">.</span><span class="n">ModelRegistryEntry</span><span class="p">(</span><span class="n">task_family</span><span class="o">=</span><span class="s2">"pose"</span><span class="p">,</span> <span class="n">backend</span><span class="o">=</span><span class="s2">"sleap"</span><span class="p">))</span>
+</span><span id="__span-2-39"><a id="__codelineno-2-39" name="__codelineno-2-39" href="#__codelineno-2-39"></a>    <span class="k">assert</span> <span class="nb">set</span><span class="p">(</span><span class="n">mr</span><span class="o">.</span><span class="n">list_entries</span><span class="p">(</span><span class="n">task_family</span><span class="o">=</span><span class="s2">"pose"</span><span class="p">))</span> <span class="o">==</span> <span class="p">{</span><span class="s2">"pose/ViTPose/b.pt"</span><span class="p">,</span> <span class="s2">"pose/SLEAP/c"</span><span class="p">}</span>
+</span><span id="__span-2-40"><a id="__codelineno-2-40" name="__codelineno-2-40" href="#__codelineno-2-40"></a>    <span class="k">assert</span> <span class="nb">set</span><span class="p">(</span><span class="n">mr</span><span class="o">.</span><span class="n">list_entries</span><span class="p">(</span><span class="n">backend</span><span class="o">=</span><span class="s2">"vitpose"</span><span class="p">))</span> <span class="o">==</span> <span class="p">{</span><span class="s2">"pose/ViTPose/b.pt"</span><span class="p">}</span>
+</span></code></pre></div>
+<ul class="task-list">
+<li class="task-list-item"><label class="task-list-control"><input type="checkbox" disabled/><span class="task-list-indicator"></span></label> <strong>Step 2: RED</strong> — <code>pytest tests/test_model_registry_ops.py -v</code>.</li>
+<li class="task-list-item"><label class="task-list-control"><input type="checkbox" disabled/><span class="task-list-indicator"></span></label> <strong>Step 3: Implement</strong> the four ops + <code>normalize_relpath</code> on top of load/save.</li>
+<li class="task-list-item"><label class="task-list-control"><input type="checkbox" disabled/><span class="task-list-indicator"></span></label> <strong>Step 4: GREEN.</strong></li>
+<li class="task-list-item"><label class="task-list-control"><input type="checkbox" disabled/><span class="task-list-indicator"></span></label> <strong>Step 5: Commit</strong> — <code>feat(data): registry ops register/unregister/get/list_entries</code>.</li>
+</ul>
+<hr />
+<h3 id="task-3-find_unregistered-entry_is_stale">Task 3: <code>find_unregistered</code> + <code>entry_is_stale</code><a class="headerlink" href="#task-3-find_unregistered-entry_is_stale" title="Permanent link">&para;</a></h3>
+<p><strong>Files:</strong>
+- Modify: <code>src/hydra_suite/data/model_registry.py</code>
+- Test: <code>tests/test_model_registry_discovery.py</code></p>
+<p><strong>Interfaces:</strong>
+- Produces:
+  - <code>find_unregistered(models_root: Path | None = None) -&gt; list[str]</code> — scan the model dirs (<code>obb/</code>, <code>detection/</code>, <code>classification/</code>, <code>pose/YOLO</code>, <code>pose/SLEAP</code>, <code>pose/ViTPose</code>) for <code>.pt</code>/<code>.pth</code> files and SLEAP model dirs, return models-root-relative paths that have NO registry entry. Default root = <code>get_models_dir()</code>.
+  - <code>entry_is_stale(relpath: str, models_root: Path | None = None) -&gt; bool</code> — True if the registered path no longer exists on disk.</p>
+<ul class="task-list">
+<li class="task-list-item"><label class="task-list-control"><input type="checkbox" disabled/><span class="task-list-indicator"></span></label> <strong>Step 1: Write failing tests</strong> (create files under a tmp models root; register one, leave one unregistered; assert <code>find_unregistered</code> returns exactly the unregistered one; register a path then delete the file and assert <code>entry_is_stale</code> is True). Use the <code>HYDRA_DATA_DIR</code> + reload fixture pattern from Task 2.</li>
+<li class="task-list-item"><label class="task-list-control"><input type="checkbox" disabled/><span class="task-list-indicator"></span></label> <strong>Step 2: RED.</strong></li>
+<li class="task-list-item"><label class="task-list-control"><input type="checkbox" disabled/><span class="task-list-indicator"></span></label> <strong>Step 3: Implement</strong> the scan (know the SLEAP case: a model is a directory, not a file) and stale check.</li>
+<li class="task-list-item"><label class="task-list-control"><input type="checkbox" disabled/><span class="task-list-indicator"></span></label> <strong>Step 4: GREEN.</strong></li>
+<li class="task-list-item"><label class="task-list-control"><input type="checkbox" disabled/><span class="task-list-indicator"></span></label> <strong>Step 5: Commit</strong> — <code>feat(data): find_unregistered + entry_is_stale discovery helpers</code>.</li>
+</ul>
+<hr />
+<h2 id="phase-2-retire-old-apis-repoint-callers">Phase 2 — Retire old APIs, repoint callers<a class="headerlink" href="#phase-2-retire-old-apis-repoint-callers" title="Permanent link">&para;</a></h2>
+<h3 id="task-4-repoint-training-side-model_publish-to-datamodel_registry-delete-old">Task 4: Repoint Training-side (<code>model_publish</code>) to <code>data.model_registry</code>; delete old<a class="headerlink" href="#task-4-repoint-training-side-model_publish-to-datamodel_registry-delete-old" title="Permanent link">&para;</a></h3>
+<p><strong>Files:</strong>
+- Modify: <code>src/hydra_suite/training/model_publish.py</code> (<code>_registry_path</code>, <code>load_model_registry</code>, <code>save_model_registry</code>, and the registry read/write inside <code>publish_trained_model</code> at ~515-537, 631, 662, 832-837)
+- Modify/Migrate tests: <code>tests/test_model_registry_helpers.py</code>, <code>tests/test_model_publish_slice_geometry.py</code></p>
+<p><strong>Interfaces:</strong>
+- Consumes: <code>data.model_registry.{load_registry, register_model, get_entry, ModelRegistryEntry}</code>.
+- Produces: <code>publish_trained_model</code> still returns <code>(registry_key, absolute_model_path)</code> and writes the same on-disk result, but via <code>register_model</code>. <code>load_model_registry</code>/<code>save_model_registry</code>/<code>_registry_path</code> DELETED from <code>model_publish</code>.</p>
+<ul class="task-list">
+<li class="task-list-item"><label class="task-list-control"><input type="checkbox" disabled/><span class="task-list-indicator"></span></label> <strong>Step 1: Read</strong> <code>publish_trained_model</code> fully (703-end) and the 4 registry-touch sites to see exactly what entry dict it builds (arch/description/classifier_v2/slice_geometry fields). Map those into <code>ModelRegistryEntry</code> (rich classifier/slice fields go into <code>extra</code> unless they have a first-class column). Note: <code>_task_usage_for_role</code>/<code>_repo_dir_for_role</code> stay.</li>
+<li class="task-list-item"><label class="task-list-control"><input type="checkbox" disabled/><span class="task-list-indicator"></span></label> <strong>Step 2: Write/adjust failing tests</strong> — <code>test_model_registry_helpers.py</code> currently asserts <code>save_model_registry</code>/<code>load_model_registry</code> behavior; rewrite it to assert the same round-trip through <code>data.model_registry</code> (import the new module). Keep a test proving <code>publish_trained_model</code> produces a registry entry readable via <code>get_entry</code>. Run to confirm RED against current code where appropriate.</li>
+<li class="task-list-item"><label class="task-list-control"><input type="checkbox" disabled/><span class="task-list-indicator"></span></label> <strong>Step 3: Implement</strong> — replace the registry helpers' bodies' callers with <code>data.model_registry</code> calls; delete <code>load_model_registry</code>/<code>save_model_registry</code>/<code>_registry_path</code>; rewrite <code>publish_trained_model</code>'s registry section to build a <code>ModelRegistryEntry</code> and call <code>register_model</code>. Preserve the project-root override (now centralized in <code>data.model_registry.registry_path</code>).</li>
+<li class="task-list-item"><label class="task-list-control"><input type="checkbox" disabled/><span class="task-list-indicator"></span></label> <strong>Step 4: GREEN</strong> — run <code>test_model_registry_helpers.py</code> + <code>test_model_publish_slice_geometry.py</code> + <code>pytest -k model_publish</code>.</li>
+<li class="task-list-item"><label class="task-list-control"><input type="checkbox" disabled/><span class="task-list-indicator"></span></label> <strong>Step 5: Commit</strong> — <code>refactor(training): route model_publish through data.model_registry; drop local registry</code>.</li>
+</ul>
+<hr />
+<h3 id="task-5-repoint-gui-side-model_utils-config-main_window-delete-old">Task 5: Repoint GUI-side (<code>model_utils</code> + config + main_window); delete old<a class="headerlink" href="#task-5-repoint-gui-side-model_utils-config-main_window-delete-old" title="Permanent link">&para;</a></h3>
+<p><strong>Files:</strong>
+- Modify: <code>src/hydra_suite/trackerkit/gui/model_utils.py</code> (delete <code>load_yolo_model_registry</code>, <code>save_yolo_model_registry</code>, <code>register_yolo_model</code>, <code>unregister_yolo_model</code>, <code>get_yolo_model_registry_path</code>, <code>_extract_registry_entries</code>, <code>_normalize_yolo_model_metadata</code> if now unused; rewrite <code>get_yolo_model_metadata</code> + the registry-clearing part of <code>remove_model_from_repository</code> via <code>data.model_registry</code>)
+- Modify: <code>src/hydra_suite/trackerkit/gui/main_window.py:76-79</code> (the 4 re-exports — drop or repoint)
+- Modify: <code>src/hydra_suite/trackerkit/gui/orchestrators/config.py:39, 3991</code> (import + the <code>register_yolo_model(rel_path, metadata)</code> call → build <code>ModelRegistryEntry</code> + <code>register_model</code>)
+- Test: <code>tests/test_model_registry_gui_import.py</code></p>
+<p><strong>Interfaces:</strong>
+- Consumes: <code>data.model_registry.{register_model, get_entry, unregister_model, ModelRegistryEntry, normalize_relpath}</code>.
+- Produces: <code>_import_yolo_model_to_repository</code> (config.py) registers via <code>register_model</code>; <code>remove_model_from_repository</code> clears via <code>unregister_model</code>; <code>get_yolo_model_metadata</code> reads via <code>get_entry</code>. Old <code>*_yolo_model_registry</code> symbols GONE.</p>
+<ul class="task-list">
+<li class="task-list-item"><label class="task-list-control"><input type="checkbox" disabled/><span class="task-list-indicator"></span></label> <strong>Step 1: Read</strong> the current <code>_import_yolo_model_to_repository</code> (config.py ~3868-3992) metadata dict and <code>remove_model_from_repository</code> (model_utils 306-345) to preserve behavior exactly (path safety checks in remove stay).</li>
+<li class="task-list-item"><label class="task-list-control"><input type="checkbox" disabled/><span class="task-list-indicator"></span></label> <strong>Step 2: Write failing test</strong> — <code>test_model_registry_gui_import.py</code>: call <code>_import_yolo_model_to_repository</code> (or its metadata-building + register path) for an OBB model and assert <code>get_entry</code> returns an entry with the right <code>task_family</code>/<code>species</code>; call <code>remove_model_from_repository</code> and assert the entry is gone. Use a QApplication-less path if possible, else the MainWindow test harness. RED first.</li>
+<li class="task-list-item"><label class="task-list-control"><input type="checkbox" disabled/><span class="task-list-indicator"></span></label> <strong>Step 3: Implement</strong> — repoint config.py:3991 to build a <code>ModelRegistryEntry(task_family=..., backend="yolo", size=..., species=..., notes=model_info, ...)</code> and call <code>register_model</code>; repoint <code>remove_model_from_repository</code> + <code>get_yolo_model_metadata</code>; delete the dead <code>model_utils</code> registry functions and the <code>main_window.py:76-79</code> re-exports (grep the codebase for any other reference first and repoint/remove).</li>
+<li class="task-list-item"><label class="task-list-control"><input type="checkbox" disabled/><span class="task-list-indicator"></span></label> <strong>Step 4: GREEN</strong> + <code>grep -rn "register_yolo_model\|_yolo_model_registry" src/</code> returns nothing.</li>
+<li class="task-list-item"><label class="task-list-control"><input type="checkbox" disabled/><span class="task-list-indicator"></span></label> <strong>Step 5: Commit</strong> — <code>refactor(trackerkit): route model imports through data.model_registry; delete legacy registry API</code>.</li>
+</ul>
+<hr />
+<h2 id="phase-3-extend-registration-to-pose-publish-role">Phase 3 — Extend registration to pose + publish role<a class="headerlink" href="#phase-3-extend-registration-to-pose-publish-role" title="Permanent link">&para;</a></h2>
+<h3 id="task-6-pose-trainingrole-members-publish_trained_model-pose-support">Task 6: Pose <code>TrainingRole</code> members + <code>publish_trained_model</code> pose support<a class="headerlink" href="#task-6-pose-trainingrole-members-publish_trained_model-pose-support" title="Permanent link">&para;</a></h3>
+<p><strong>Files:</strong>
+- Modify: <code>src/hydra_suite/training/contracts.py</code> (<code>TrainingRole</code>: add <code>POSE_YOLO</code>, <code>POSE_SLEAP</code>, <code>POSE_VITPOSE</code>)
+- Modify: <code>src/hydra_suite/training/model_publish.py</code> (<code>_repo_dir_for_role</code>, <code>_task_usage_for_role</code>, and any role-branching in <code>publish_trained_model</code> to handle pose → <code>pose/&lt;Backend&gt;/</code>, <code>task_family="pose"</code>, <code>backend</code> per role)
+- Test: <code>tests/test_model_publish_pose.py</code></p>
+<p><strong>Interfaces:</strong>
+- Consumes: <code>data.model_registry</code>.
+- Produces: <code>publish_trained_model(role=TrainingRole.POSE_VITPOSE, ...)</code> copies to <code>pose/ViTPose/</code> and registers <code>ModelRegistryEntry(task_family="pose", backend="vitpose", num_keypoints=..., ...)</code>. Accept <code>num_keypoints</code>/<code>skeleton_name</code> (thread a new optional kwarg or via existing <code>training_params</code>).</p>
+<ul class="task-list">
+<li class="task-list-item"><label class="task-list-control"><input type="checkbox" disabled/><span class="task-list-indicator"></span></label> <strong>Step 1: Read</strong> <code>_repo_dir_for_role</code>/<code>_task_usage_for_role</code> to see the mapping table; extend for the 3 pose roles.</li>
+<li class="task-list-item"><label class="task-list-control"><input type="checkbox" disabled/><span class="task-list-indicator"></span></label> <strong>Step 2: Write failing test</strong> — publish a fake pose artifact with <code>role=POSE_VITPOSE</code>, assert it lands under <code>pose/ViTPose/</code> and <code>get_entry</code> shows <code>task_family="pose"</code>, <code>backend="vitpose"</code>, <code>num_keypoints</code> set. RED.</li>
+<li class="task-list-item"><label class="task-list-control"><input type="checkbox" disabled/><span class="task-list-indicator"></span></label> <strong>Step 3: Implement</strong> the role additions + mappings.</li>
+<li class="task-list-item"><label class="task-list-control"><input type="checkbox" disabled/><span class="task-list-indicator"></span></label> <strong>Step 4: GREEN.</strong></li>
+<li class="task-list-item"><label class="task-list-control"><input type="checkbox" disabled/><span class="task-list-indicator"></span></label> <strong>Step 5: Commit</strong> — <code>feat(training): pose TrainingRole members + pose publish support</code>.</li>
+</ul>
+<hr />
+<h3 id="task-7-gui-pose-imports-register-all-3-backends-replace-parity-test">Task 7: GUI pose imports register all 3 backends; replace parity test<a class="headerlink" href="#task-7-gui-pose-imports-register-all-3-backends-replace-parity-test" title="Permanent link">&para;</a></h3>
+<p><strong>Files:</strong>
+- Modify: <code>src/hydra_suite/trackerkit/gui/orchestrators/config.py</code> (<code>_import_pose_model_to_repository</code> ~4268-4415 — add a <code>register_model</code> call after the copy, for all three pose backends, with <code>task_family="pose"</code>, <code>backend∈{yolo,sleap,vitpose}</code>, <code>num_keypoints</code> where known)
+- Delete + Replace: <code>tests/test_vitpose_registration_parity.py</code> → <code>tests/test_pose_registration.py</code></p>
+<p><strong>Interfaces:</strong>
+- Consumes: <code>data.model_registry.register_model</code>.
+- Produces: importing any pose model writes a registry entry (reversing the old parity-lock decision).</p>
+<ul class="task-list">
+<li class="task-list-item"><label class="task-list-control"><input type="checkbox" disabled/><span class="task-list-indicator"></span></label> <strong>Step 1: Read</strong> <code>_import_pose_model_to_repository</code> to get the backend-key derivation + dest path + metadata dialog values already collected (species/type/info), and <code>num_keypoints</code> availability (may need project keypoint count — if unavailable at import, leave 0 and let the CLI/inspection fill it; do NOT block import).</li>
+<li class="task-list-item"><label class="task-list-control"><input type="checkbox" disabled/><span class="task-list-indicator"></span></label> <strong>Step 2: Write failing test</strong> — <code>test_pose_registration.py</code>: importing a pose model (per backend) registers an entry with <code>task_family="pose"</code> and the right <code>backend</code>; assert <code>register_yolo_model</code>/parity-absence is no longer the contract. RED (no register call yet).</li>
+<li class="task-list-item"><label class="task-list-control"><input type="checkbox" disabled/><span class="task-list-indicator"></span></label> <strong>Step 3: Implement</strong> the <code>register_model</code> call in the pose import path; delete <code>test_vitpose_registration_parity.py</code>.</li>
+<li class="task-list-item"><label class="task-list-control"><input type="checkbox" disabled/><span class="task-list-indicator"></span></label> <strong>Step 4: GREEN.</strong></li>
+<li class="task-list-item"><label class="task-list-control"><input type="checkbox" disabled/><span class="task-list-indicator"></span></label> <strong>Step 5: Commit</strong> — <code>feat(trackerkit): register pose model imports (yolo/sleap/vitpose)</code>.</li>
+</ul>
+<hr />
+<h2 id="phase-4-pickers-as-source-of-truth-trackerkit-upgrade-cliff-notice">Phase 4 — Pickers as source of truth (TrackerKit) + upgrade-cliff notice<a class="headerlink" href="#phase-4-pickers-as-source-of-truth-trackerkit-upgrade-cliff-notice" title="Permanent link">&para;</a></h2>
+<h3 id="task-8-populate-model-combos-from-the-registry-add-migrate-notice-stale-handling">Task 8: Populate model combos from the registry; add migrate notice + stale handling<a class="headerlink" href="#task-8-populate-model-combos-from-the-registry-add-migrate-notice-stale-handling" title="Permanent link">&para;</a></h3>
+<p><strong>Files:</strong>
+- Modify: <code>src/hydra_suite/trackerkit/gui/orchestrators/config.py</code> (<code>_populate_yolo_model_combo</code> ~3740-3790 and <code>_populate_pose_model_combo</code> ~3995-4025 — list from <code>list_entries(...)</code> instead of <code>os.listdir</code>; render metadata in the label; skip/grey stale entries)
+- Modify: the panel/UI that hosts the combos to show a non-blocking notice when <code>find_unregistered()</code> is non-empty (locate the identity/detection panel that owns these combos)
+- Test: <code>tests/test_registry_backed_pickers.py</code></p>
+<p><strong>Interfaces:</strong>
+- Consumes: <code>data.model_registry.{list_entries, find_unregistered, entry_is_stale, get_entry}</code>.
+- Produces: combos list only registered models of the matching family/backend, labeled with species/date; unregistered models are absent but a notice is emitted.</p>
+<ul class="task-list">
+<li class="task-list-item"><label class="task-list-control"><input type="checkbox" disabled/><span class="task-list-indicator"></span></label> <strong>Step 1: Read</strong> both populate functions to see the exact combo item format (userData carries the path). Preserve <code>preferred_model_path</code> selection behavior. Determine where a non-blocking notice can live (a label/status line in the panel — match existing patterns like the SLEAP-env row).</li>
+<li class="task-list-item"><label class="task-list-control"><input type="checkbox" disabled/><span class="task-list-indicator"></span></label> <strong>Step 2: Write failing test</strong> — build the combo population (a headless helper that returns the list of (label, path) it would add) fed a registry with 2 registered + 1 unregistered model; assert only registered appear, labels include metadata, and a <code>has_unregistered</code> flag/notice signal is set. Extract a pure <code>registry_items_for(task_family, backend)</code> helper so the assertion doesn't need a live Qt combo. RED.</li>
+<li class="task-list-item"><label class="task-list-control"><input type="checkbox" disabled/><span class="task-list-indicator"></span></label> <strong>Step 3: Implement</strong> — swap the <code>os.listdir</code> bodies for <code>list_entries(...)</code>, add the <code>registry_items_for</code> helper + label formatting, skip stale entries, and wire the notice. Keep selection/preferred-path behavior.</li>
+<li class="task-list-item"><label class="task-list-control"><input type="checkbox" disabled/><span class="task-list-indicator"></span></label> <strong>Step 4: GREEN</strong> + a quick manual note in the report (combos still select correctly).</li>
+<li class="task-list-item"><label class="task-list-control"><input type="checkbox" disabled/><span class="task-list-indicator"></span></label> <strong>Step 5: Commit</strong> — <code>feat(trackerkit): registry-backed model pickers + migrate notice</code>.</li>
+</ul>
+<hr />
+<h2 id="phase-5-cli-migration-script">Phase 5 — CLI migration script<a class="headerlink" href="#phase-5-cli-migration-script" title="Permanent link">&para;</a></h2>
+<h3 id="task-9-scriptsmigrate_model_registrypy-interactive-auto-legacy-upgrade-stale-prune">Task 9: <code>scripts/migrate_model_registry.py</code> (interactive + <code>--auto</code>, legacy upgrade, stale prune)<a class="headerlink" href="#task-9-scriptsmigrate_model_registrypy-interactive-auto-legacy-upgrade-stale-prune" title="Permanent link">&para;</a></h3>
+<p><strong>Files:</strong>
+- Create: <code>scripts/migrate_model_registry.py</code> (also runnable as <code>python -m hydra_suite.data.migrate_model_registry</code> — put the logic in <code>src/hydra_suite/data/migrate_model_registry.py</code> with a thin <code>scripts/</code> shim, so it's importable/testable)
+- Test: <code>tests/test_migrate_model_registry.py</code></p>
+<p><strong>Interfaces:</strong>
+- Consumes: <code>data.model_registry.{find_unregistered, register_model, get_entry, load_registry, save_registry, entry_is_stale, ModelRegistryEntry, read_legacy_entry}</code>.
+- Produces: <code>run_migration(models_root=None, auto=False, prompt_fn=input, prune_stale=False) -&gt; MigrationSummary</code> — the pure core the CLI wraps; <code>main(argv)</code> parses <code>--auto</code>, <code>--prune-stale</code>.</p>
+<ul class="task-list">
+<li class="task-list-item"><label class="task-list-control"><input type="checkbox" disabled/><span class="task-list-indicator"></span></label> <strong>Step 1: Write failing tests</strong></li>
+</ul>
+<div class="language-python highlight"><pre><span></span><code><span id="__span-3-1"><a id="__codelineno-3-1" name="__codelineno-3-1" href="#__codelineno-3-1"></a><span class="c1"># tests/test_migrate_model_registry.py</span>
+</span><span id="__span-3-2"><a id="__codelineno-3-2" name="__codelineno-3-2" href="#__codelineno-3-2"></a><span class="kn">import</span><span class="w"> </span><span class="nn">importlib</span><span class="o">,</span><span class="w"> </span><span class="nn">pytest</span>
+</span><span id="__span-3-3"><a id="__codelineno-3-3" name="__codelineno-3-3" href="#__codelineno-3-3"></a><span class="kn">from</span><span class="w"> </span><span class="nn">pathlib</span><span class="w"> </span><span class="kn">import</span> <span class="n">Path</span>
+</span><span id="__span-3-4"><a id="__codelineno-3-4" name="__codelineno-3-4" href="#__codelineno-3-4"></a>
+</span><span id="__span-3-5"><a id="__codelineno-3-5" name="__codelineno-3-5" href="#__codelineno-3-5"></a>
+</span><span id="__span-3-6"><a id="__codelineno-3-6" name="__codelineno-3-6" href="#__codelineno-3-6"></a><span class="nd">@pytest</span><span class="o">.</span><span class="n">fixture</span>
+</span><span id="__span-3-7"><a id="__codelineno-3-7" name="__codelineno-3-7" href="#__codelineno-3-7"></a><span class="k">def</span><span class="w"> </span><span class="nf">env</span><span class="p">(</span><span class="n">tmp_path</span><span class="p">,</span> <span class="n">monkeypatch</span><span class="p">):</span>
+</span><span id="__span-3-8"><a id="__codelineno-3-8" name="__codelineno-3-8" href="#__codelineno-3-8"></a>    <span class="n">monkeypatch</span><span class="o">.</span><span class="n">setenv</span><span class="p">(</span><span class="s2">"HYDRA_DATA_DIR"</span><span class="p">,</span> <span class="nb">str</span><span class="p">(</span><span class="n">tmp_path</span><span class="p">))</span>
+</span><span id="__span-3-9"><a id="__codelineno-3-9" name="__codelineno-3-9" href="#__codelineno-3-9"></a>    <span class="kn">import</span><span class="w"> </span><span class="nn">hydra_suite.paths</span><span class="w"> </span><span class="k">as</span><span class="w"> </span><span class="nn">paths</span>
+</span><span id="__span-3-10"><a id="__codelineno-3-10" name="__codelineno-3-10" href="#__codelineno-3-10"></a>    <span class="n">importlib</span><span class="o">.</span><span class="n">reload</span><span class="p">(</span><span class="n">paths</span><span class="p">)</span>
+</span><span id="__span-3-11"><a id="__codelineno-3-11" name="__codelineno-3-11" href="#__codelineno-3-11"></a>    <span class="kn">import</span><span class="w"> </span><span class="nn">hydra_suite.data.model_registry</span><span class="w"> </span><span class="k">as</span><span class="w"> </span><span class="nn">mr</span>
+</span><span id="__span-3-12"><a id="__codelineno-3-12" name="__codelineno-3-12" href="#__codelineno-3-12"></a>    <span class="n">importlib</span><span class="o">.</span><span class="n">reload</span><span class="p">(</span><span class="n">mr</span><span class="p">)</span>
+</span><span id="__span-3-13"><a id="__codelineno-3-13" name="__codelineno-3-13" href="#__codelineno-3-13"></a>    <span class="kn">import</span><span class="w"> </span><span class="nn">hydra_suite.data.migrate_model_registry</span><span class="w"> </span><span class="k">as</span><span class="w"> </span><span class="nn">mig</span>
+</span><span id="__span-3-14"><a id="__codelineno-3-14" name="__codelineno-3-14" href="#__codelineno-3-14"></a>    <span class="n">importlib</span><span class="o">.</span><span class="n">reload</span><span class="p">(</span><span class="n">mig</span><span class="p">)</span>
+</span><span id="__span-3-15"><a id="__codelineno-3-15" name="__codelineno-3-15" href="#__codelineno-3-15"></a>    <span class="n">root</span> <span class="o">=</span> <span class="n">paths</span><span class="o">.</span><span class="n">get_models_dir</span><span class="p">()</span>
+</span><span id="__span-3-16"><a id="__codelineno-3-16" name="__codelineno-3-16" href="#__codelineno-3-16"></a>    <span class="p">(</span><span class="n">root</span> <span class="o">/</span> <span class="s2">"obb"</span><span class="p">)</span><span class="o">.</span><span class="n">mkdir</span><span class="p">(</span><span class="n">parents</span><span class="o">=</span><span class="kc">True</span><span class="p">,</span> <span class="n">exist_ok</span><span class="o">=</span><span class="kc">True</span><span class="p">)</span>
+</span><span id="__span-3-17"><a id="__codelineno-3-17" name="__codelineno-3-17" href="#__codelineno-3-17"></a>    <span class="p">(</span><span class="n">root</span> <span class="o">/</span> <span class="s2">"obb"</span> <span class="o">/</span> <span class="s2">"m.pt"</span><span class="p">)</span><span class="o">.</span><span class="n">write_bytes</span><span class="p">(</span><span class="sa">b</span><span class="s2">"x"</span><span class="p">)</span>
+</span><span id="__span-3-18"><a id="__codelineno-3-18" name="__codelineno-3-18" href="#__codelineno-3-18"></a>    <span class="k">return</span> <span class="n">mr</span><span class="p">,</span> <span class="n">mig</span><span class="p">,</span> <span class="n">root</span>
+</span><span id="__span-3-19"><a id="__codelineno-3-19" name="__codelineno-3-19" href="#__codelineno-3-19"></a>
+</span><span id="__span-3-20"><a id="__codelineno-3-20" name="__codelineno-3-20" href="#__codelineno-3-20"></a>
+</span><span id="__span-3-21"><a id="__codelineno-3-21" name="__codelineno-3-21" href="#__codelineno-3-21"></a><span class="k">def</span><span class="w"> </span><span class="nf">test_auto_backfills_unregistered_flagged_needs_review</span><span class="p">(</span><span class="n">env</span><span class="p">):</span>
+</span><span id="__span-3-22"><a id="__codelineno-3-22" name="__codelineno-3-22" href="#__codelineno-3-22"></a>    <span class="n">mr</span><span class="p">,</span> <span class="n">mig</span><span class="p">,</span> <span class="n">root</span> <span class="o">=</span> <span class="n">env</span>
+</span><span id="__span-3-23"><a id="__codelineno-3-23" name="__codelineno-3-23" href="#__codelineno-3-23"></a>    <span class="n">summary</span> <span class="o">=</span> <span class="n">mig</span><span class="o">.</span><span class="n">run_migration</span><span class="p">(</span><span class="n">auto</span><span class="o">=</span><span class="kc">True</span><span class="p">)</span>
+</span><span id="__span-3-24"><a id="__codelineno-3-24" name="__codelineno-3-24" href="#__codelineno-3-24"></a>    <span class="n">e</span> <span class="o">=</span> <span class="n">mr</span><span class="o">.</span><span class="n">get_entry</span><span class="p">(</span><span class="s2">"obb/m.pt"</span><span class="p">)</span>
+</span><span id="__span-3-25"><a id="__codelineno-3-25" name="__codelineno-3-25" href="#__codelineno-3-25"></a>    <span class="k">assert</span> <span class="n">e</span> <span class="ow">is</span> <span class="ow">not</span> <span class="kc">None</span> <span class="ow">and</span> <span class="n">e</span><span class="o">.</span><span class="n">task_family</span> <span class="o">==</span> <span class="s2">"obb"</span> <span class="ow">and</span> <span class="n">e</span><span class="o">.</span><span class="n">needs_review</span> <span class="ow">is</span> <span class="kc">True</span>
+</span><span id="__span-3-26"><a id="__codelineno-3-26" name="__codelineno-3-26" href="#__codelineno-3-26"></a>    <span class="k">assert</span> <span class="n">summary</span><span class="o">.</span><span class="n">registered</span> <span class="o">==</span> <span class="mi">1</span>
+</span><span id="__span-3-27"><a id="__codelineno-3-27" name="__codelineno-3-27" href="#__codelineno-3-27"></a>
+</span><span id="__span-3-28"><a id="__codelineno-3-28" name="__codelineno-3-28" href="#__codelineno-3-28"></a>
+</span><span id="__span-3-29"><a id="__codelineno-3-29" name="__codelineno-3-29" href="#__codelineno-3-29"></a><span class="k">def</span><span class="w"> </span><span class="nf">test_idempotent_rerun_registers_nothing_new</span><span class="p">(</span><span class="n">env</span><span class="p">):</span>
+</span><span id="__span-3-30"><a id="__codelineno-3-30" name="__codelineno-3-30" href="#__codelineno-3-30"></a>    <span class="n">mr</span><span class="p">,</span> <span class="n">mig</span><span class="p">,</span> <span class="n">root</span> <span class="o">=</span> <span class="n">env</span>
+</span><span id="__span-3-31"><a id="__codelineno-3-31" name="__codelineno-3-31" href="#__codelineno-3-31"></a>    <span class="n">mig</span><span class="o">.</span><span class="n">run_migration</span><span class="p">(</span><span class="n">auto</span><span class="o">=</span><span class="kc">True</span><span class="p">)</span>
+</span><span id="__span-3-32"><a id="__codelineno-3-32" name="__codelineno-3-32" href="#__codelineno-3-32"></a>    <span class="n">summary2</span> <span class="o">=</span> <span class="n">mig</span><span class="o">.</span><span class="n">run_migration</span><span class="p">(</span><span class="n">auto</span><span class="o">=</span><span class="kc">True</span><span class="p">)</span>
+</span><span id="__span-3-33"><a id="__codelineno-3-33" name="__codelineno-3-33" href="#__codelineno-3-33"></a>    <span class="k">assert</span> <span class="n">summary2</span><span class="o">.</span><span class="n">registered</span> <span class="o">==</span> <span class="mi">0</span>
+</span><span id="__span-3-34"><a id="__codelineno-3-34" name="__codelineno-3-34" href="#__codelineno-3-34"></a>
+</span><span id="__span-3-35"><a id="__codelineno-3-35" name="__codelineno-3-35" href="#__codelineno-3-35"></a>
+</span><span id="__span-3-36"><a id="__codelineno-3-36" name="__codelineno-3-36" href="#__codelineno-3-36"></a><span class="k">def</span><span class="w"> </span><span class="nf">test_interactive_uses_prompt_answers</span><span class="p">(</span><span class="n">env</span><span class="p">):</span>
+</span><span id="__span-3-37"><a id="__codelineno-3-37" name="__codelineno-3-37" href="#__codelineno-3-37"></a>    <span class="n">mr</span><span class="p">,</span> <span class="n">mig</span><span class="p">,</span> <span class="n">root</span> <span class="o">=</span> <span class="n">env</span>
+</span><span id="__span-3-38"><a id="__codelineno-3-38" name="__codelineno-3-38" href="#__codelineno-3-38"></a>    <span class="n">answers</span> <span class="o">=</span> <span class="nb">iter</span><span class="p">([</span><span class="s2">"ant"</span><span class="p">,</span> <span class="s2">"primary"</span><span class="p">,</span> <span class="s2">""</span><span class="p">])</span>  <span class="c1"># species, role, notes (match your prompt order)</span>
+</span><span id="__span-3-39"><a id="__codelineno-3-39" name="__codelineno-3-39" href="#__codelineno-3-39"></a>    <span class="n">e_summary</span> <span class="o">=</span> <span class="n">mig</span><span class="o">.</span><span class="n">run_migration</span><span class="p">(</span><span class="n">auto</span><span class="o">=</span><span class="kc">False</span><span class="p">,</span> <span class="n">prompt_fn</span><span class="o">=</span><span class="k">lambda</span> <span class="n">_</span><span class="o">=</span><span class="s2">""</span><span class="p">:</span> <span class="nb">next</span><span class="p">(</span><span class="n">answers</span><span class="p">))</span>
+</span><span id="__span-3-40"><a id="__codelineno-3-40" name="__codelineno-3-40" href="#__codelineno-3-40"></a>    <span class="n">e</span> <span class="o">=</span> <span class="n">mr</span><span class="o">.</span><span class="n">get_entry</span><span class="p">(</span><span class="s2">"obb/m.pt"</span><span class="p">)</span>
+</span><span id="__span-3-41"><a id="__codelineno-3-41" name="__codelineno-3-41" href="#__codelineno-3-41"></a>    <span class="k">assert</span> <span class="n">e</span><span class="o">.</span><span class="n">species</span> <span class="o">==</span> <span class="s2">"ant"</span> <span class="ow">and</span> <span class="n">e</span><span class="o">.</span><span class="n">needs_review</span> <span class="ow">is</span> <span class="kc">False</span>
+</span><span id="__span-3-42"><a id="__codelineno-3-42" name="__codelineno-3-42" href="#__codelineno-3-42"></a>
+</span><span id="__span-3-43"><a id="__codelineno-3-43" name="__codelineno-3-43" href="#__codelineno-3-43"></a>
+</span><span id="__span-3-44"><a id="__codelineno-3-44" name="__codelineno-3-44" href="#__codelineno-3-44"></a><span class="k">def</span><span class="w"> </span><span class="nf">test_prune_stale_removes_missing_file_entries</span><span class="p">(</span><span class="n">env</span><span class="p">):</span>
+</span><span id="__span-3-45"><a id="__codelineno-3-45" name="__codelineno-3-45" href="#__codelineno-3-45"></a>    <span class="n">mr</span><span class="p">,</span> <span class="n">mig</span><span class="p">,</span> <span class="n">root</span> <span class="o">=</span> <span class="n">env</span>
+</span><span id="__span-3-46"><a id="__codelineno-3-46" name="__codelineno-3-46" href="#__codelineno-3-46"></a>    <span class="n">mr</span><span class="o">.</span><span class="n">register_model</span><span class="p">(</span><span class="s2">"obb/gone.pt"</span><span class="p">,</span> <span class="n">mr</span><span class="o">.</span><span class="n">ModelRegistryEntry</span><span class="p">(</span><span class="n">task_family</span><span class="o">=</span><span class="s2">"obb"</span><span class="p">,</span> <span class="n">backend</span><span class="o">=</span><span class="s2">"yolo"</span><span class="p">))</span>
+</span><span id="__span-3-47"><a id="__codelineno-3-47" name="__codelineno-3-47" href="#__codelineno-3-47"></a>    <span class="n">summary</span> <span class="o">=</span> <span class="n">mig</span><span class="o">.</span><span class="n">run_migration</span><span class="p">(</span><span class="n">auto</span><span class="o">=</span><span class="kc">True</span><span class="p">,</span> <span class="n">prune_stale</span><span class="o">=</span><span class="kc">True</span><span class="p">)</span>
+</span><span id="__span-3-48"><a id="__codelineno-3-48" name="__codelineno-3-48" href="#__codelineno-3-48"></a>    <span class="k">assert</span> <span class="n">mr</span><span class="o">.</span><span class="n">get_entry</span><span class="p">(</span><span class="s2">"obb/gone.pt"</span><span class="p">)</span> <span class="ow">is</span> <span class="kc">None</span>
+</span><span id="__span-3-49"><a id="__codelineno-3-49" name="__codelineno-3-49" href="#__codelineno-3-49"></a>    <span class="k">assert</span> <span class="n">summary</span><span class="o">.</span><span class="n">pruned</span> <span class="o">==</span> <span class="mi">1</span>
+</span></code></pre></div>
+<ul class="task-list">
+<li class="task-list-item"><label class="task-list-control"><input type="checkbox" disabled/><span class="task-list-indicator"></span></label> <strong>Step 2: RED</strong> — <code>pytest tests/test_migrate_model_registry.py -v</code>.</li>
+<li class="task-list-item"><label class="task-list-control"><input type="checkbox" disabled/><span class="task-list-indicator"></span></label> <strong>Step 3: Implement</strong> <code>run_migration</code> + <code>MigrationSummary</code> (registered/skipped/pruned/upgraded counts), filename-parse guesses for interactive pre-fill, <code>--auto</code> sets <code>needs_review=True</code>, legacy-entry upgrade (re-save through <code>load_registry</code>/<code>save_registry</code> bumps schema), stale prune. Add <code>main(argv)</code> with argparse and the <code>scripts/</code> shim. <code>prompt_fn</code> defaults to <code>input</code> so tests inject answers.</li>
+<li class="task-list-item"><label class="task-list-control"><input type="checkbox" disabled/><span class="task-list-indicator"></span></label> <strong>Step 4: GREEN.</strong></li>
+<li class="task-list-item"><label class="task-list-control"><input type="checkbox" disabled/><span class="task-list-indicator"></span></label> <strong>Step 5: Commit</strong> — <code>feat(data): interactive model-registry migration CLI</code>.</li>
+</ul>
+<hr />
+<h2 id="final-verification-after-all-tasks">Final Verification (after all tasks)<a class="headerlink" href="#final-verification-after-all-tasks" title="Permanent link">&para;</a></h2>
+<ul class="task-list">
+<li class="task-list-item"><label class="task-list-control"><input type="checkbox" disabled/><span class="task-list-indicator"></span></label> <code>grep -rn "register_yolo_model\|load_yolo_model_registry\|save_yolo_model_registry\|def load_model_registry\|def save_model_registry" src/</code> → nothing (old APIs fully retired).</li>
+<li class="task-list-item"><label class="task-list-control"><input type="checkbox" disabled/><span class="task-list-indicator"></span></label> Full registry test set: <code>PYTHONPATH=$PWD/src python -m pytest tests/ -k "registry or model_publish or migrate or pose_registration" -v --continue-on-collection-errors</code> → all green (delta gate).</li>
+<li class="task-list-item"><label class="task-list-control"><input type="checkbox" disabled/><span class="task-list-indicator"></span></label> <code>make lint-moderate</code> on touched files — no new issues.</li>
+<li class="task-list-item"><label class="task-list-control"><input type="checkbox" disabled/><span class="task-list-indicator"></span></label> Import-cycle / layering check: <code>python -c "import hydra_suite.data.model_registry"</code> from a clean env, and confirm <code>model_registry.py</code> imports no app-layer package (grep its imports).</li>
+<li class="task-list-item"><label class="task-list-control"><input type="checkbox" disabled/><span class="task-list-indicator"></span></label> Manual smoke (report, not automated): run <code>python -m hydra_suite.data.migrate_model_registry --auto</code> against a scratch <code>HYDRA_DATA_DIR</code> with a couple of dummy models; confirm entries appear; open TrackerKit combos conceptually list from the registry.</li>
+</ul>
+<h2 id="self-review-checklist-plan-author-ran-this">Self-Review Checklist (plan author ran this)<a class="headerlink" href="#self-review-checklist-plan-author-ran-this" title="Permanent link">&para;</a></h2>
+<ul>
+<li><strong>Spec coverage:</strong> unify APIs (Tasks 4,5) ✓; registry-driven pickers (Task 8) ✓; pose in registry + publish (Tasks 6,7) ✓; CLI backfill (Task 9) ✓; retire-not-shim (Tasks 4,5 delete) ✓; legacy read of both formats (Task 1) ✓; upgrade-cliff notice (Task 8) ✓; stale handling (Tasks 3,8,9) ✓.</li>
+<li><strong>Dependency direction:</strong> <code>data/model_registry.py</code> imports only stdlib + <code>hydra_suite.paths</code> (Global Constraints + Task 1 Step 3 + final layering check).</li>
+<li><strong>Ordering:</strong> module (P1) → callers repointed (P2) → pose extension (P3) → pickers (P4) → CLI (P5). Each phase builds on the prior. Task 8 (pickers) depends on entries existing (Tasks 5-7); Task 9 (CLI) depends on the full module (P1) + registration story.</li>
+<li><strong>Type consistency:</strong> <code>ModelRegistryEntry</code>, <code>register_model</code>, <code>list_entries</code>, <code>find_unregistered</code>, <code>entry_is_stale</code>, <code>read_legacy_entry</code>, <code>normalize_relpath</code>, <code>run_migration</code>/<code>MigrationSummary</code> each defined once and referenced consistently.</li>
+<li><strong>Known reversal:</strong> Task 7 deletes <code>test_vitpose_registration_parity.py</code> (the pose-parity lock is intentionally superseded).</li>
+</ul>
+
+
+
+
+
+
+
+
+
+
+
+
+                
+              </article>
+            </div>
+          
+          
+<script>var target=document.getElementById(location.hash.slice(1));target&&target.name&&(target.checked=target.name.startsWith("__tabbed_"))</script>
+        </div>
+        
+          <button type="button" class="md-top md-icon" data-md-component="top" hidden>
+  
+  <svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 24 24"><path d="M13 20h-2V8l-5.5 5.5-1.42-1.42L12 4.16l7.92 7.92-1.42 1.42L13 8z"/></svg>
+  Back to top
+</button>
+        
+      </main>
+      
+        <footer class="md-footer">
+  
+  <div class="md-footer-meta md-typeset">
+    <div class="md-footer-meta__inner md-grid">
+      <div class="md-copyright">
+  
+  
+    Made with
+    <a href="https://squidfunk.github.io/mkdocs-material/" target="_blank" rel="noopener">
+      Material for MkDocs
+    </a>
+  
+</div>
+      
+    </div>
+  </div>
+</footer>
+      
+    </div>
+    <div class="md-dialog" data-md-component="dialog">
+      <div class="md-dialog__inner md-typeset"></div>
+    </div>
+    
+    
+    <script id="__config" type="application/json">{"base": "../../..", "features": ["navigation.tabs", "navigation.sections", "navigation.expand", "navigation.top", "content.code.copy", "content.action.edit", "search.suggest", "search.highlight"], "search": "../../../assets/javascripts/workers/search.6ce7567c.min.js", "translations": {"clipboard.copied": "Copied to clipboard", "clipboard.copy": "Copy to clipboard", "search.result.more.one": "1 more on this page", "search.result.more.other": "# more on this page", "search.result.none": "No matching documents", "search.result.one": "1 matching document", "search.result.other": "# matching documents", "search.result.placeholder": "Type to start searching", "search.result.term.missing": "Missing", "select.version": "Select version"}, "version": {"default": "latest", "provider": "mike"}}</script>
+    
+    
+      <script src="../../../assets/javascripts/bundle.83f73b43.min.js"></script>
+      
+    
+  </body>
+</html>

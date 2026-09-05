@@ -1,0 +1,2439 @@
+
+<!doctype html>
+<html lang="en" class="no-js">
+  <head>
+    
+      <meta charset="utf-8">
+      <meta name="viewport" content="width=device-width,initial-scale=1">
+      
+        <meta name="description" content="User and developer documentation for HYDRA Suite">
+      
+      
+      
+        <link rel="canonical" href="https://neurorishika.github.io/hydra-suite/latest/superpowers/specs/done/2026-08-17-al-escalated-multi-format-export-design/">
+      
+      
+      
+      
+      <link rel="icon" href="../../../../assets/images/favicon.png">
+      <meta name="generator" content="mkdocs-1.6.1, mkdocs-material-9.5.43">
+    
+    
+      
+        <title>Active-Learning Escalated Multi-Format Export — Design - HYDRA Suite Docs</title>
+      
+    
+    
+      <link rel="stylesheet" href="../../../../assets/stylesheets/main.0253249f.min.css">
+      
+        
+        <link rel="stylesheet" href="../../../../assets/stylesheets/palette.06af60db.min.css">
+      
+      
+
+
+    
+    
+      
+    
+    
+      
+        
+        
+        <link rel="preconnect" href="https://fonts.gstatic.com" crossorigin>
+        <link rel="stylesheet" href="https://fonts.googleapis.com/css?family=Roboto:300,300i,400,400i,700,700i%7CRoboto+Mono:400,400i,700,700i&display=fallback">
+        <style>:root{--md-text-font:"Roboto";--md-code-font:"Roboto Mono"}</style>
+      
+    
+    
+      <link rel="stylesheet" href="../../../../assets/_mkdocstrings.css">
+    
+    <script>__md_scope=new URL("../../../..",location),__md_hash=e=>[...e].reduce(((e,_)=>(e<<5)-e+_.charCodeAt(0)),0),__md_get=(e,_=localStorage,t=__md_scope)=>JSON.parse(_.getItem(t.pathname+"."+e)),__md_set=(e,_,t=localStorage,a=__md_scope)=>{try{t.setItem(a.pathname+"."+e,JSON.stringify(_))}catch(e){}}</script>
+    
+      
+
+    
+    
+    
+  </head>
+  
+  
+    
+    
+      
+    
+    
+    
+    
+    <body dir="ltr" data-md-color-scheme="default" data-md-color-primary="blue" data-md-color-accent="light-blue">
+  
+    
+    <input class="md-toggle" data-md-toggle="drawer" type="checkbox" id="__drawer" autocomplete="off">
+    <input class="md-toggle" data-md-toggle="search" type="checkbox" id="__search" autocomplete="off">
+    <label class="md-overlay" for="__drawer"></label>
+    <div data-md-component="skip">
+      
+        
+        <a href="#active-learning-escalated-multi-format-export-design" class="md-skip">
+          Skip to content
+        </a>
+      
+    </div>
+    <div data-md-component="announce">
+      
+    </div>
+    
+      <div data-md-color-scheme="default" data-md-component="outdated" hidden>
+        
+      </div>
+    
+    
+      
+
+<header class="md-header" data-md-component="header">
+  <nav class="md-header__inner md-grid" aria-label="Header">
+    <a href="../../../.." title="HYDRA Suite Docs" class="md-header__button md-logo" aria-label="HYDRA Suite Docs" data-md-component="logo">
+      
+  
+  <svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 24 24"><path d="M12 8a3 3 0 0 0 3-3 3 3 0 0 0-3-3 3 3 0 0 0-3 3 3 3 0 0 0 3 3m0 3.54C9.64 9.35 6.5 8 3 8v11c3.5 0 6.64 1.35 9 3.54 2.36-2.19 5.5-3.54 9-3.54V8c-3.5 0-6.64 1.35-9 3.54"/></svg>
+
+    </a>
+    <label class="md-header__button md-icon" for="__drawer">
+      
+      <svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 24 24"><path d="M3 6h18v2H3zm0 5h18v2H3zm0 5h18v2H3z"/></svg>
+    </label>
+    <div class="md-header__title" data-md-component="header-title">
+      <div class="md-header__ellipsis">
+        <div class="md-header__topic">
+          <span class="md-ellipsis">
+            HYDRA Suite Docs
+          </span>
+        </div>
+        <div class="md-header__topic" data-md-component="header-topic">
+          <span class="md-ellipsis">
+            
+              Active-Learning Escalated Multi-Format Export — Design
+            
+          </span>
+        </div>
+      </div>
+    </div>
+    
+      
+        <form class="md-header__option" data-md-component="palette">
+  
+    
+    
+    
+    <input class="md-option" data-md-color-media="(prefers-color-scheme: light)" data-md-color-scheme="default" data-md-color-primary="blue" data-md-color-accent="light-blue"  aria-label="Switch to dark mode"  type="radio" name="__palette" id="__palette_0">
+    
+      <label class="md-header__button md-icon" title="Switch to dark mode" for="__palette_1" hidden>
+        <svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 24 24"><path d="m17.75 4.09-2.53 1.94.91 3.06-2.63-1.81-2.63 1.81.91-3.06-2.53-1.94L12.44 4l1.06-3 1.06 3zm3.5 6.91-1.64 1.25.59 1.98-1.7-1.17-1.7 1.17.59-1.98L15.75 11l2.06-.05L18.5 9l.69 1.95zm-2.28 4.95c.83-.08 1.72 1.1 1.19 1.85-.32.45-.66.87-1.08 1.27C15.17 23 8.84 23 4.94 19.07c-3.91-3.9-3.91-10.24 0-14.14.4-.4.82-.76 1.27-1.08.75-.53 1.93.36 1.85 1.19-.27 2.86.69 5.83 2.89 8.02a9.96 9.96 0 0 0 8.02 2.89m-1.64 2.02a12.08 12.08 0 0 1-7.8-3.47c-2.17-2.19-3.33-5-3.49-7.82-2.81 3.14-2.7 7.96.31 10.98 3.02 3.01 7.84 3.12 10.98.31"/></svg>
+      </label>
+    
+  
+    
+    
+    
+    <input class="md-option" data-md-color-media="(prefers-color-scheme: dark)" data-md-color-scheme="slate" data-md-color-primary="blue" data-md-color-accent="light-blue"  aria-label="Switch to light mode"  type="radio" name="__palette" id="__palette_1">
+    
+      <label class="md-header__button md-icon" title="Switch to light mode" for="__palette_0" hidden>
+        <svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 24 24"><path d="M12 7a5 5 0 0 1 5 5 5 5 0 0 1-5 5 5 5 0 0 1-5-5 5 5 0 0 1 5-5m0 2a3 3 0 0 0-3 3 3 3 0 0 0 3 3 3 3 0 0 0 3-3 3 3 0 0 0-3-3m0-7 2.39 3.42C13.65 5.15 12.84 5 12 5s-1.65.15-2.39.42zM3.34 7l4.16-.35A7.2 7.2 0 0 0 5.94 8.5c-.44.74-.69 1.5-.83 2.29zm.02 10 1.76-3.77a7.131 7.131 0 0 0 2.38 4.14zM20.65 7l-1.77 3.79a7.02 7.02 0 0 0-2.38-4.15zm-.01 10-4.14.36c.59-.51 1.12-1.14 1.54-1.86.42-.73.69-1.5.83-2.29zM12 22l-2.41-3.44c.74.27 1.55.44 2.41.44.82 0 1.63-.17 2.37-.44z"/></svg>
+      </label>
+    
+  
+</form>
+      
+    
+    
+      <script>var palette=__md_get("__palette");if(palette&&palette.color){if("(prefers-color-scheme)"===palette.color.media){var media=matchMedia("(prefers-color-scheme: light)"),input=document.querySelector(media.matches?"[data-md-color-media='(prefers-color-scheme: light)']":"[data-md-color-media='(prefers-color-scheme: dark)']");palette.color.media=input.getAttribute("data-md-color-media"),palette.color.scheme=input.getAttribute("data-md-color-scheme"),palette.color.primary=input.getAttribute("data-md-color-primary"),palette.color.accent=input.getAttribute("data-md-color-accent")}for(var[key,value]of Object.entries(palette.color))document.body.setAttribute("data-md-color-"+key,value)}</script>
+    
+    
+    
+      <label class="md-header__button md-icon" for="__search">
+        
+        <svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 24 24"><path d="M9.5 3A6.5 6.5 0 0 1 16 9.5c0 1.61-.59 3.09-1.56 4.23l.27.27h.79l5 5-1.5 1.5-5-5v-.79l-.27-.27A6.52 6.52 0 0 1 9.5 16 6.5 6.5 0 0 1 3 9.5 6.5 6.5 0 0 1 9.5 3m0 2C7 5 5 7 5 9.5S7 14 9.5 14 14 12 14 9.5 12 5 9.5 5"/></svg>
+      </label>
+      <div class="md-search" data-md-component="search" role="dialog">
+  <label class="md-search__overlay" for="__search"></label>
+  <div class="md-search__inner" role="search">
+    <form class="md-search__form" name="search">
+      <input type="text" class="md-search__input" name="query" aria-label="Search" placeholder="Search" autocapitalize="off" autocorrect="off" autocomplete="off" spellcheck="false" data-md-component="search-query" required>
+      <label class="md-search__icon md-icon" for="__search">
+        
+        <svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 24 24"><path d="M9.5 3A6.5 6.5 0 0 1 16 9.5c0 1.61-.59 3.09-1.56 4.23l.27.27h.79l5 5-1.5 1.5-5-5v-.79l-.27-.27A6.52 6.52 0 0 1 9.5 16 6.5 6.5 0 0 1 3 9.5 6.5 6.5 0 0 1 9.5 3m0 2C7 5 5 7 5 9.5S7 14 9.5 14 14 12 14 9.5 12 5 9.5 5"/></svg>
+        
+        <svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 24 24"><path d="M20 11v2H8l5.5 5.5-1.42 1.42L4.16 12l7.92-7.92L13.5 5.5 8 11z"/></svg>
+      </label>
+      <nav class="md-search__options" aria-label="Search">
+        
+        <button type="reset" class="md-search__icon md-icon" title="Clear" aria-label="Clear" tabindex="-1">
+          
+          <svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 24 24"><path d="M19 6.41 17.59 5 12 10.59 6.41 5 5 6.41 10.59 12 5 17.59 6.41 19 12 13.41 17.59 19 19 17.59 13.41 12z"/></svg>
+        </button>
+      </nav>
+      
+        <div class="md-search__suggest" data-md-component="search-suggest"></div>
+      
+    </form>
+    <div class="md-search__output">
+      <div class="md-search__scrollwrap" tabindex="0" data-md-scrollfix>
+        <div class="md-search-result" data-md-component="search-result">
+          <div class="md-search-result__meta">
+            Initializing search
+          </div>
+          <ol class="md-search-result__list" role="presentation"></ol>
+        </div>
+      </div>
+    </div>
+  </div>
+</div>
+    
+    
+      <div class="md-header__source">
+        <a href="https://github.com/neurorishika/hydra-suite" title="Go to repository" class="md-source" data-md-component="source">
+  <div class="md-source__icon md-icon">
+    
+    <svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 448 512"><!--! Font Awesome Free 6.6.0 by @fontawesome - https://fontawesome.com License - https://fontawesome.com/license/free (Icons: CC BY 4.0, Fonts: SIL OFL 1.1, Code: MIT License) Copyright 2024 Fonticons, Inc.--><path d="M439.55 236.05 244 40.45a28.87 28.87 0 0 0-40.81 0l-40.66 40.63 51.52 51.52c27.06-9.14 52.68 16.77 43.39 43.68l49.66 49.66c34.23-11.8 61.18 31 35.47 56.69-26.49 26.49-70.21-2.87-56-37.34L240.22 199v121.85c25.3 12.54 22.26 41.85 9.08 55a34.34 34.34 0 0 1-48.55 0c-17.57-17.6-11.07-46.91 11.25-56v-123c-20.8-8.51-24.6-30.74-18.64-45L142.57 101 8.45 235.14a28.86 28.86 0 0 0 0 40.81l195.61 195.6a28.86 28.86 0 0 0 40.8 0l194.69-194.69a28.86 28.86 0 0 0 0-40.81"/></svg>
+  </div>
+  <div class="md-source__repository">
+    neurorishika/hydra-suite
+  </div>
+</a>
+      </div>
+    
+  </nav>
+  
+</header>
+    
+    <div class="md-container" data-md-component="container">
+      
+      
+        
+          
+            
+<nav class="md-tabs" aria-label="Tabs" data-md-component="tabs">
+  <div class="md-grid">
+    <ul class="md-tabs__list">
+      
+        
+  
+  
+  
+    <li class="md-tabs__item">
+      <a href="../../../.." class="md-tabs__link">
+        
+  
+    
+  
+  Home
+
+      </a>
+    </li>
+  
+
+      
+        
+  
+  
+  
+    
+    
+      <li class="md-tabs__item">
+        <a href="../../../../getting-started/installation/" class="md-tabs__link">
+          
+  
+  Getting Started
+
+        </a>
+      </li>
+    
+  
+
+      
+        
+  
+  
+  
+    
+    
+      <li class="md-tabs__item">
+        <a href="../../../../user-guide/overview/" class="md-tabs__link">
+          
+  
+  User Guide
+
+        </a>
+      </li>
+    
+  
+
+      
+        
+  
+  
+  
+    
+    
+      <li class="md-tabs__item">
+        <a href="../../../../developer-guide/architecture/" class="md-tabs__link">
+          
+  
+  Developer Guide
+
+        </a>
+      </li>
+    
+  
+
+      
+        
+  
+  
+  
+    
+    
+      <li class="md-tabs__item">
+        <a href="../../../../reference/api-index/" class="md-tabs__link">
+          
+  
+  Reference
+
+        </a>
+      </li>
+    
+  
+
+      
+    </ul>
+  </div>
+</nav>
+          
+        
+      
+      <main class="md-main" data-md-component="main">
+        <div class="md-main__inner md-grid">
+          
+            
+              
+              <div class="md-sidebar md-sidebar--primary" data-md-component="sidebar" data-md-type="navigation" >
+                <div class="md-sidebar__scrollwrap">
+                  <div class="md-sidebar__inner">
+                    
+
+
+  
+
+
+<nav class="md-nav md-nav--primary md-nav--lifted" aria-label="Navigation" data-md-level="0">
+  <label class="md-nav__title" for="__drawer">
+    <a href="../../../.." title="HYDRA Suite Docs" class="md-nav__button md-logo" aria-label="HYDRA Suite Docs" data-md-component="logo">
+      
+  
+  <svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 24 24"><path d="M12 8a3 3 0 0 0 3-3 3 3 0 0 0-3-3 3 3 0 0 0-3 3 3 3 0 0 0 3 3m0 3.54C9.64 9.35 6.5 8 3 8v11c3.5 0 6.64 1.35 9 3.54 2.36-2.19 5.5-3.54 9-3.54V8c-3.5 0-6.64 1.35-9 3.54"/></svg>
+
+    </a>
+    HYDRA Suite Docs
+  </label>
+  
+    <div class="md-nav__source">
+      <a href="https://github.com/neurorishika/hydra-suite" title="Go to repository" class="md-source" data-md-component="source">
+  <div class="md-source__icon md-icon">
+    
+    <svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 448 512"><!--! Font Awesome Free 6.6.0 by @fontawesome - https://fontawesome.com License - https://fontawesome.com/license/free (Icons: CC BY 4.0, Fonts: SIL OFL 1.1, Code: MIT License) Copyright 2024 Fonticons, Inc.--><path d="M439.55 236.05 244 40.45a28.87 28.87 0 0 0-40.81 0l-40.66 40.63 51.52 51.52c27.06-9.14 52.68 16.77 43.39 43.68l49.66 49.66c34.23-11.8 61.18 31 35.47 56.69-26.49 26.49-70.21-2.87-56-37.34L240.22 199v121.85c25.3 12.54 22.26 41.85 9.08 55a34.34 34.34 0 0 1-48.55 0c-17.57-17.6-11.07-46.91 11.25-56v-123c-20.8-8.51-24.6-30.74-18.64-45L142.57 101 8.45 235.14a28.86 28.86 0 0 0 0 40.81l195.61 195.6a28.86 28.86 0 0 0 40.8 0l194.69-194.69a28.86 28.86 0 0 0 0-40.81"/></svg>
+  </div>
+  <div class="md-source__repository">
+    neurorishika/hydra-suite
+  </div>
+</a>
+    </div>
+  
+  <ul class="md-nav__list" data-md-scrollfix>
+    
+      
+      
+  
+  
+  
+  
+    <li class="md-nav__item">
+      <a href="../../../.." class="md-nav__link">
+        
+  
+  <span class="md-ellipsis">
+    Home
+  </span>
+  
+
+      </a>
+    </li>
+  
+
+    
+      
+      
+  
+  
+  
+  
+    
+    
+    
+      
+      
+        
+      
+    
+    
+    <li class="md-nav__item md-nav__item--nested">
+      
+        
+        
+          
+        
+        <input class="md-nav__toggle md-toggle md-toggle--indeterminate" type="checkbox" id="__nav_2" >
+        
+          
+          <label class="md-nav__link" for="__nav_2" id="__nav_2_label" tabindex="0">
+            
+  
+  <span class="md-ellipsis">
+    Getting Started
+  </span>
+  
+
+            <span class="md-nav__icon md-icon"></span>
+          </label>
+        
+        <nav class="md-nav" data-md-level="1" aria-labelledby="__nav_2_label" aria-expanded="false">
+          <label class="md-nav__title" for="__nav_2">
+            <span class="md-nav__icon md-icon"></span>
+            Getting Started
+          </label>
+          <ul class="md-nav__list" data-md-scrollfix>
+            
+              
+                
+  
+  
+  
+  
+    <li class="md-nav__item">
+      <a href="../../../../getting-started/installation/" class="md-nav__link">
+        
+  
+  <span class="md-ellipsis">
+    Installation
+  </span>
+  
+
+      </a>
+    </li>
+  
+
+              
+            
+              
+                
+  
+  
+  
+  
+    <li class="md-nav__item">
+      <a href="../../../../getting-started/environments/" class="md-nav__link">
+        
+  
+  <span class="md-ellipsis">
+    Environments and Makefile
+  </span>
+  
+
+      </a>
+    </li>
+  
+
+              
+            
+              
+                
+  
+  
+  
+  
+    <li class="md-nav__item">
+      <a href="../../../../getting-started/integrations/" class="md-nav__link">
+        
+  
+  <span class="md-ellipsis">
+    Integrations
+  </span>
+  
+
+      </a>
+    </li>
+  
+
+              
+            
+              
+                
+  
+  
+  
+  
+    <li class="md-nav__item">
+      <a href="../../../../getting-started/quickstart-hydra/" class="md-nav__link">
+        
+  
+  <span class="md-ellipsis">
+    Quickstart (TrackerKit)
+  </span>
+  
+
+      </a>
+    </li>
+  
+
+              
+            
+              
+                
+  
+  
+  
+  
+    <li class="md-nav__item">
+      <a href="../../../../getting-started/quickstart-posekit/" class="md-nav__link">
+        
+  
+  <span class="md-ellipsis">
+    Quickstart (PoseKit)
+  </span>
+  
+
+      </a>
+    </li>
+  
+
+              
+            
+              
+                
+  
+  
+  
+  
+    <li class="md-nav__item">
+      <a href="../../../../getting-started/platforms/" class="md-nav__link">
+        
+  
+  <span class="md-ellipsis">
+    Platform Notes
+  </span>
+  
+
+      </a>
+    </li>
+  
+
+              
+            
+          </ul>
+        </nav>
+      
+    </li>
+  
+
+    
+      
+      
+  
+  
+  
+  
+    
+    
+    
+      
+      
+        
+      
+    
+    
+    <li class="md-nav__item md-nav__item--nested">
+      
+        
+        
+          
+        
+        <input class="md-nav__toggle md-toggle md-toggle--indeterminate" type="checkbox" id="__nav_3" >
+        
+          
+          <label class="md-nav__link" for="__nav_3" id="__nav_3_label" tabindex="0">
+            
+  
+  <span class="md-ellipsis">
+    User Guide
+  </span>
+  
+
+            <span class="md-nav__icon md-icon"></span>
+          </label>
+        
+        <nav class="md-nav" data-md-level="1" aria-labelledby="__nav_3_label" aria-expanded="false">
+          <label class="md-nav__title" for="__nav_3">
+            <span class="md-nav__icon md-icon"></span>
+            User Guide
+          </label>
+          <ul class="md-nav__list" data-md-scrollfix>
+            
+              
+                
+  
+  
+  
+  
+    <li class="md-nav__item">
+      <a href="../../../../user-guide/overview/" class="md-nav__link">
+        
+  
+  <span class="md-ellipsis">
+    Overview
+  </span>
+  
+
+      </a>
+    </li>
+  
+
+              
+            
+              
+                
+  
+  
+  
+  
+    <li class="md-nav__item">
+      <a href="../../../../user-guide/workflow/" class="md-nav__link">
+        
+  
+  <span class="md-ellipsis">
+    End-to-End Workflow
+  </span>
+  
+
+      </a>
+    </li>
+  
+
+              
+            
+              
+                
+  
+  
+  
+  
+    <li class="md-nav__item">
+      <a href="../../../../user-guide/detection-modes/" class="md-nav__link">
+        
+  
+  <span class="md-ellipsis">
+    Detection Modes
+  </span>
+  
+
+      </a>
+    </li>
+  
+
+              
+            
+              
+                
+  
+  
+  
+  
+    <li class="md-nav__item">
+      <a href="../../../../user-guide/tracking-and-merging/" class="md-nav__link">
+        
+  
+  <span class="md-ellipsis">
+    Tracking and Merging
+  </span>
+  
+
+      </a>
+    </li>
+  
+
+              
+            
+              
+                
+  
+  
+  
+  
+    <li class="md-nav__item">
+      <a href="../../../../user-guide/post-processing/" class="md-nav__link">
+        
+  
+  <span class="md-ellipsis">
+    Post-processing
+  </span>
+  
+
+      </a>
+    </li>
+  
+
+              
+            
+              
+                
+  
+  
+  
+  
+    <li class="md-nav__item">
+      <a href="../../../../user-guide/configuration-reference/" class="md-nav__link">
+        
+  
+  <span class="md-ellipsis">
+    Configuration Reference
+  </span>
+  
+
+      </a>
+    </li>
+  
+
+              
+            
+              
+                
+  
+  
+  
+  
+    <li class="md-nav__item">
+      <a href="../../../../user-guide/compute-runtimes/" class="md-nav__link">
+        
+  
+  <span class="md-ellipsis">
+    Compute Runtimes
+  </span>
+  
+
+      </a>
+    </li>
+  
+
+              
+            
+              
+                
+  
+  
+  
+  
+    <li class="md-nav__item">
+      <a href="../../../../user-guide/outputs-and-csv-schema/" class="md-nav__link">
+        
+  
+  <span class="md-ellipsis">
+    Outputs and CSV Schema
+  </span>
+  
+
+      </a>
+    </li>
+  
+
+              
+            
+              
+                
+  
+  
+  
+  
+    <li class="md-nav__item">
+      <a href="../../../../user-guide/dataset-generation/" class="md-nav__link">
+        
+  
+  <span class="md-ellipsis">
+    Dataset Generation
+  </span>
+  
+
+      </a>
+    </li>
+  
+
+              
+            
+              
+                
+  
+  
+  
+  
+    <li class="md-nav__item">
+      <a href="../../../../user-guide/individual-analysis/" class="md-nav__link">
+        
+  
+  <span class="md-ellipsis">
+    Individual Analysis
+  </span>
+  
+
+      </a>
+    </li>
+  
+
+              
+            
+              
+                
+  
+  
+  
+  
+    <li class="md-nav__item">
+      <a href="../../../../user-guide/posekit/" class="md-nav__link">
+        
+  
+  <span class="md-ellipsis">
+    PoseKit
+  </span>
+  
+
+      </a>
+    </li>
+  
+
+              
+            
+              
+                
+  
+  
+  
+  
+    <li class="md-nav__item">
+      <a href="../../../../user-guide/classkit/" class="md-nav__link">
+        
+  
+  <span class="md-ellipsis">
+    ClassKit
+  </span>
+  
+
+      </a>
+    </li>
+  
+
+              
+            
+              
+                
+  
+  
+  
+  
+    <li class="md-nav__item">
+      <a href="../../../../user-guide/detectkit/" class="md-nav__link">
+        
+  
+  <span class="md-ellipsis">
+    DetectKit
+  </span>
+  
+
+      </a>
+    </li>
+  
+
+              
+            
+              
+                
+  
+  
+  
+  
+    <li class="md-nav__item">
+      <a href="../../../../runbooks/detectkit-headless-training/" class="md-nav__link">
+        
+  
+  <span class="md-ellipsis">
+    DetectKit Headless Training
+  </span>
+  
+
+      </a>
+    </li>
+  
+
+              
+            
+              
+                
+  
+  
+  
+  
+    <li class="md-nav__item">
+      <a href="../../../../user-guide/detectkit-semantic-escalation/" class="md-nav__link">
+        
+  
+  <span class="md-ellipsis">
+    DetectKit: Semantic Escalation (SAM3)
+  </span>
+  
+
+      </a>
+    </li>
+  
+
+              
+            
+              
+                
+  
+  
+  
+  
+    <li class="md-nav__item">
+      <a href="../../../../user-guide/detectkit-sahi-calibration/" class="md-nav__link">
+        
+  
+  <span class="md-ellipsis">
+    DetectKit: SAHI Calibration Profiles
+  </span>
+  
+
+      </a>
+    </li>
+  
+
+              
+            
+              
+                
+  
+  
+  
+  
+    <li class="md-nav__item">
+      <a href="../../../../user-guide/filterkit/" class="md-nav__link">
+        
+  
+  <span class="md-ellipsis">
+    FilterKit
+  </span>
+  
+
+      </a>
+    </li>
+  
+
+              
+            
+              
+                
+  
+  
+  
+  
+    <li class="md-nav__item">
+      <a href="../../../../user-guide/refinekit/" class="md-nav__link">
+        
+  
+  <span class="md-ellipsis">
+    RefineKit
+  </span>
+  
+
+      </a>
+    </li>
+  
+
+              
+            
+              
+                
+  
+  
+  
+  
+    <li class="md-nav__item">
+      <a href="../../../../user-guide/troubleshooting/" class="md-nav__link">
+        
+  
+  <span class="md-ellipsis">
+    Troubleshooting
+  </span>
+  
+
+      </a>
+    </li>
+  
+
+              
+            
+          </ul>
+        </nav>
+      
+    </li>
+  
+
+    
+      
+      
+  
+  
+  
+  
+    
+    
+    
+      
+      
+        
+      
+    
+    
+    <li class="md-nav__item md-nav__item--nested">
+      
+        
+        
+          
+        
+        <input class="md-nav__toggle md-toggle md-toggle--indeterminate" type="checkbox" id="__nav_4" >
+        
+          
+          <label class="md-nav__link" for="__nav_4" id="__nav_4_label" tabindex="0">
+            
+  
+  <span class="md-ellipsis">
+    Developer Guide
+  </span>
+  
+
+            <span class="md-nav__icon md-icon"></span>
+          </label>
+        
+        <nav class="md-nav" data-md-level="1" aria-labelledby="__nav_4_label" aria-expanded="false">
+          <label class="md-nav__title" for="__nav_4">
+            <span class="md-nav__icon md-icon"></span>
+            Developer Guide
+          </label>
+          <ul class="md-nav__list" data-md-scrollfix>
+            
+              
+                
+  
+  
+  
+  
+    <li class="md-nav__item">
+      <a href="../../../../developer-guide/architecture/" class="md-nav__link">
+        
+  
+  <span class="md-ellipsis">
+    Architecture
+  </span>
+  
+
+      </a>
+    </li>
+  
+
+              
+            
+              
+                
+  
+  
+  
+  
+    <li class="md-nav__item">
+      <a href="../../../../developer-guide/module-map/" class="md-nav__link">
+        
+  
+  <span class="md-ellipsis">
+    Module Map
+  </span>
+  
+
+      </a>
+    </li>
+  
+
+              
+            
+              
+                
+  
+  
+  
+  
+    <li class="md-nav__item">
+      <a href="../../../../developer-guide/data-flow/" class="md-nav__link">
+        
+  
+  <span class="md-ellipsis">
+    Data Flow
+  </span>
+  
+
+      </a>
+    </li>
+  
+
+              
+            
+              
+                
+  
+  
+  
+  
+    <li class="md-nav__item">
+      <a href="../../../../developer-guide/tracking-algorithm-deep-dive/" class="md-nav__link">
+        
+  
+  <span class="md-ellipsis">
+    Tracking Algorithm Deep Dive
+  </span>
+  
+
+      </a>
+    </li>
+  
+
+              
+            
+              
+                
+  
+  
+  
+  
+    <li class="md-nav__item">
+      <a href="../../../../developer-guide/tracking-optimization/" class="md-nav__link">
+        
+  
+  <span class="md-ellipsis">
+    Tracking Optimization
+  </span>
+  
+
+      </a>
+    </li>
+  
+
+              
+            
+              
+                
+  
+  
+  
+  
+    <li class="md-nav__item">
+      <a href="../../../../developer-guide/gpu-backends/" class="md-nav__link">
+        
+  
+  <span class="md-ellipsis">
+    GPU Backends
+  </span>
+  
+
+      </a>
+    </li>
+  
+
+              
+            
+              
+                
+  
+  
+  
+  
+    <li class="md-nav__item">
+      <a href="../../../../developer-guide/runtime-integration/" class="md-nav__link">
+        
+  
+  <span class="md-ellipsis">
+    Runtime Integration
+  </span>
+  
+
+      </a>
+    </li>
+  
+
+              
+            
+              
+                
+  
+  
+  
+  
+    <li class="md-nav__item">
+      <a href="../../../../developer-guide/resource-containment/" class="md-nav__link">
+        
+  
+  <span class="md-ellipsis">
+    Resource Containment
+  </span>
+  
+
+      </a>
+    </li>
+  
+
+              
+            
+              
+                
+  
+  
+  
+  
+    <li class="md-nav__item">
+      <a href="../../../../developer-guide/profiling/" class="md-nav__link">
+        
+  
+  <span class="md-ellipsis">
+    Profiling
+  </span>
+  
+
+      </a>
+    </li>
+  
+
+              
+            
+              
+                
+  
+  
+  
+  
+    <li class="md-nav__item">
+      <a href="../../../../developer-guide/dependency-cuda-updates/" class="md-nav__link">
+        
+  
+  <span class="md-ellipsis">
+    CUDA Dependency Updates
+  </span>
+  
+
+      </a>
+    </li>
+  
+
+              
+            
+              
+                
+  
+  
+  
+  
+    <li class="md-nav__item">
+      <a href="../../../../developer-guide/performance-tuning/" class="md-nav__link">
+        
+  
+  <span class="md-ellipsis">
+    Performance Tuning
+  </span>
+  
+
+      </a>
+    </li>
+  
+
+              
+            
+              
+                
+  
+  
+  
+  
+    <li class="md-nav__item">
+      <a href="../../../../developer-guide/inference-fast-mode/" class="md-nav__link">
+        
+  
+  <span class="md-ellipsis">
+    Inference Fast Mode
+  </span>
+  
+
+      </a>
+    </li>
+  
+
+              
+            
+              
+                
+  
+  
+  
+  
+    <li class="md-nav__item">
+      <a href="../../../../developer-guide/confidence-metrics/" class="md-nav__link">
+        
+  
+  <span class="md-ellipsis">
+    Confidence Metrics
+  </span>
+  
+
+      </a>
+    </li>
+  
+
+              
+            
+              
+                
+  
+  
+  
+  
+    <li class="md-nav__item">
+      <a href="../../../../developer-guide/extending-detection/" class="md-nav__link">
+        
+  
+  <span class="md-ellipsis">
+    Extending Detection
+  </span>
+  
+
+      </a>
+    </li>
+  
+
+              
+            
+              
+                
+  
+  
+  
+  
+    <li class="md-nav__item">
+      <a href="../../../../developer-guide/extending-identity/" class="md-nav__link">
+        
+  
+  <span class="md-ellipsis">
+    Extending Identity
+  </span>
+  
+
+      </a>
+    </li>
+  
+
+              
+            
+              
+                
+  
+  
+  
+  
+    <li class="md-nav__item">
+      <a href="../../../../developer-guide/code-health/" class="md-nav__link">
+        
+  
+  <span class="md-ellipsis">
+    Code Health & Auditing
+  </span>
+  
+
+      </a>
+    </li>
+  
+
+              
+            
+              
+                
+  
+  
+  
+  
+    <li class="md-nav__item">
+      <a href="../../../../developer-guide/publishing/" class="md-nav__link">
+        
+  
+  <span class="md-ellipsis">
+    Publishing
+  </span>
+  
+
+      </a>
+    </li>
+  
+
+              
+            
+              
+                
+  
+  
+  
+  
+    <li class="md-nav__item">
+      <a href="../../../../developer-guide/contributing/" class="md-nav__link">
+        
+  
+  <span class="md-ellipsis">
+    Contributing
+  </span>
+  
+
+      </a>
+    </li>
+  
+
+              
+            
+          </ul>
+        </nav>
+      
+    </li>
+  
+
+    
+      
+      
+  
+  
+  
+  
+    
+    
+    
+      
+      
+        
+      
+    
+    
+    <li class="md-nav__item md-nav__item--nested">
+      
+        
+        
+          
+        
+        <input class="md-nav__toggle md-toggle md-toggle--indeterminate" type="checkbox" id="__nav_5" >
+        
+          
+          <label class="md-nav__link" for="__nav_5" id="__nav_5_label" tabindex="0">
+            
+  
+  <span class="md-ellipsis">
+    Reference
+  </span>
+  
+
+            <span class="md-nav__icon md-icon"></span>
+          </label>
+        
+        <nav class="md-nav" data-md-level="1" aria-labelledby="__nav_5_label" aria-expanded="false">
+          <label class="md-nav__title" for="__nav_5">
+            <span class="md-nav__icon md-icon"></span>
+            Reference
+          </label>
+          <ul class="md-nav__list" data-md-scrollfix>
+            
+              
+                
+  
+  
+  
+  
+    <li class="md-nav__item">
+      <a href="../../../../reference/api-index/" class="md-nav__link">
+        
+  
+  <span class="md-ellipsis">
+    API Index
+  </span>
+  
+
+      </a>
+    </li>
+  
+
+              
+            
+              
+                
+  
+  
+  
+  
+    <li class="md-nav__item">
+      <a href="../../../../reference/ui-components-hydra/" class="md-nav__link">
+        
+  
+  <span class="md-ellipsis">
+    UI Components (TrackerKit)
+  </span>
+  
+
+      </a>
+    </li>
+  
+
+              
+            
+              
+                
+  
+  
+  
+  
+    <li class="md-nav__item">
+      <a href="../../../../reference/ui-components-posekit/" class="md-nav__link">
+        
+  
+  <span class="md-ellipsis">
+    UI Components (PoseKit)
+  </span>
+  
+
+      </a>
+    </li>
+  
+
+              
+            
+              
+                
+  
+  
+  
+  
+    <li class="md-nav__item">
+      <a href="../../../../reference/api-app/" class="md-nav__link">
+        
+  
+  <span class="md-ellipsis">
+    API (Launcher)
+  </span>
+  
+
+      </a>
+    </li>
+  
+
+              
+            
+              
+                
+  
+  
+  
+  
+    <li class="md-nav__item">
+      <a href="../../../../reference/api-core/" class="md-nav__link">
+        
+  
+  <span class="md-ellipsis">
+    API (Core)
+  </span>
+  
+
+      </a>
+    </li>
+  
+
+              
+            
+              
+                
+  
+  
+  
+  
+    <li class="md-nav__item">
+      <a href="../../../../reference/api-data/" class="md-nav__link">
+        
+  
+  <span class="md-ellipsis">
+    API (Data)
+  </span>
+  
+
+      </a>
+    </li>
+  
+
+              
+            
+              
+                
+  
+  
+  
+  
+    <li class="md-nav__item">
+      <a href="../../../../reference/api-gui/" class="md-nav__link">
+        
+  
+  <span class="md-ellipsis">
+    API (TrackerKit GUI)
+  </span>
+  
+
+      </a>
+    </li>
+  
+
+              
+            
+              
+                
+  
+  
+  
+  
+    <li class="md-nav__item">
+      <a href="../../../../reference/api-widgets/" class="md-nav__link">
+        
+  
+  <span class="md-ellipsis">
+    API (Widgets)
+  </span>
+  
+
+      </a>
+    </li>
+  
+
+              
+            
+              
+                
+  
+  
+  
+  
+    <li class="md-nav__item">
+      <a href="../../../../reference/api-posekit/" class="md-nav__link">
+        
+  
+  <span class="md-ellipsis">
+    API (PoseKit)
+  </span>
+  
+
+      </a>
+    </li>
+  
+
+              
+            
+              
+                
+  
+  
+  
+  
+    <li class="md-nav__item">
+      <a href="../../../../reference/api-utils/" class="md-nav__link">
+        
+  
+  <span class="md-ellipsis">
+    API (Utils)
+  </span>
+  
+
+      </a>
+    </li>
+  
+
+              
+            
+              
+                
+  
+  
+  
+  
+    <li class="md-nav__item">
+      <a href="../../../../reference/cli-reference/" class="md-nav__link">
+        
+  
+  <span class="md-ellipsis">
+    CLI Reference
+  </span>
+  
+
+      </a>
+    </li>
+  
+
+              
+            
+              
+                
+  
+  
+  
+  
+    <li class="md-nav__item">
+      <a href="../../../../reference/technical-reference/" class="md-nav__link">
+        
+  
+  <span class="md-ellipsis">
+    Technical Reference (LaTeX)
+  </span>
+  
+
+      </a>
+    </li>
+  
+
+              
+            
+              
+                
+  
+  
+  
+  
+    <li class="md-nav__item">
+      <a href="../../../../reference/changelog/" class="md-nav__link">
+        
+  
+  <span class="md-ellipsis">
+    Changelog
+  </span>
+  
+
+      </a>
+    </li>
+  
+
+              
+            
+              
+                
+  
+  
+  
+  
+    <li class="md-nav__item">
+      <a href="../../../../reference/faq/" class="md-nav__link">
+        
+  
+  <span class="md-ellipsis">
+    FAQ
+  </span>
+  
+
+      </a>
+    </li>
+  
+
+              
+            
+          </ul>
+        </nav>
+      
+    </li>
+  
+
+    
+  </ul>
+</nav>
+                  </div>
+                </div>
+              </div>
+            
+            
+              
+              <div class="md-sidebar md-sidebar--secondary" data-md-component="sidebar" data-md-type="toc" >
+                <div class="md-sidebar__scrollwrap">
+                  <div class="md-sidebar__inner">
+                    
+
+<nav class="md-nav md-nav--secondary" aria-label="Table of contents">
+  
+  
+  
+    
+  
+  
+    <label class="md-nav__title" for="__toc">
+      <span class="md-nav__icon md-icon"></span>
+      Table of contents
+    </label>
+    <ul class="md-nav__list" data-md-component="toc" data-md-scrollfix>
+      
+        <li class="md-nav__item">
+  <a href="#problem" class="md-nav__link">
+    <span class="md-ellipsis">
+      Problem
+    </span>
+  </a>
+  
+</li>
+      
+        <li class="md-nav__item">
+  <a href="#current-state" class="md-nav__link">
+    <span class="md-ellipsis">
+      Current state
+    </span>
+  </a>
+  
+    <nav class="md-nav" aria-label="Current state">
+      <ul class="md-nav__list">
+        
+          <li class="md-nav__item">
+  <a href="#existing-machinery-this-design-reuses" class="md-nav__link">
+    <span class="md-ellipsis">
+      Existing machinery this design reuses
+    </span>
+  </a>
+  
+</li>
+        
+          <li class="md-nav__item">
+  <a href="#audit-findings" class="md-nav__link">
+    <span class="md-ellipsis">
+      Audit findings
+    </span>
+  </a>
+  
+</li>
+        
+      </ul>
+    </nav>
+  
+</li>
+      
+        <li class="md-nav__item">
+  <a href="#design" class="md-nav__link">
+    <span class="md-ellipsis">
+      Design
+    </span>
+  </a>
+  
+    <nav class="md-nav" aria-label="Design">
+      <ul class="md-nav__list">
+        
+          <li class="md-nav__item">
+  <a href="#1-output-layout" class="md-nav__link">
+    <span class="md-ellipsis">
+      1. Output layout
+    </span>
+  </a>
+  
+</li>
+        
+          <li class="md-nav__item">
+  <a href="#2-level-honesty" class="md-nav__link">
+    <span class="md-ellipsis">
+      2. Level honesty
+    </span>
+  </a>
+  
+</li>
+        
+          <li class="md-nav__item">
+  <a href="#3-shared-modules" class="md-nav__link">
+    <span class="md-ellipsis">
+      3. Shared modules
+    </span>
+  </a>
+  
+</li>
+        
+          <li class="md-nav__item">
+  <a href="#4-acquisition-scoring-port-before-delete" class="md-nav__link">
+    <span class="md-ellipsis">
+      4. Acquisition scoring: port before delete
+    </span>
+  </a>
+  
+</li>
+        
+          <li class="md-nav__item">
+  <a href="#5-strict-labels-and-accounting" class="md-nav__link">
+    <span class="md-ellipsis">
+      5. Strict labels and accounting
+    </span>
+  </a>
+  
+</li>
+        
+          <li class="md-nav__item">
+  <a href="#6-inference-plumbing" class="md-nav__link">
+    <span class="md-ellipsis">
+      6. Inference plumbing
+    </span>
+  </a>
+  
+</li>
+        
+          <li class="md-nav__item">
+  <a href="#7-candidate-pool-dedup-on-the-tracker-path" class="md-nav__link">
+    <span class="md-ellipsis">
+      7. Candidate-pool dedup on the tracker path
+    </span>
+  </a>
+  
+</li>
+        
+          <li class="md-nav__item">
+  <a href="#8-ui" class="md-nav__link">
+    <span class="md-ellipsis">
+      8. UI
+    </span>
+  </a>
+  
+</li>
+        
+      </ul>
+    </nav>
+  
+</li>
+      
+        <li class="md-nav__item">
+  <a href="#error-handling" class="md-nav__link">
+    <span class="md-ellipsis">
+      Error handling
+    </span>
+  </a>
+  
+</li>
+      
+        <li class="md-nav__item">
+  <a href="#testing" class="md-nav__link">
+    <span class="md-ellipsis">
+      Testing
+    </span>
+  </a>
+  
+</li>
+      
+        <li class="md-nav__item">
+  <a href="#out-of-scope" class="md-nav__link">
+    <span class="md-ellipsis">
+      Out of scope
+    </span>
+  </a>
+  
+</li>
+      
+    </ul>
+  
+</nav>
+                  </div>
+                </div>
+              </div>
+            
+          
+          
+            <div class="md-content" data-md-component="content">
+              <article class="md-content__inner md-typeset">
+                
+                  
+
+  
+    <a href="https://github.com/neurorishika/hydra-suite/edit/main/docs/superpowers/specs/done/2026-08-17-al-escalated-multi-format-export-design.md" title="Edit this page" class="md-content__button md-icon">
+      
+      <svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 24 24"><path d="M10 20H6V4h7v5h5v3.1l2-2V8l-6-6H6c-1.1 0-2 .9-2 2v16c0 1.1.9 2 2 2h4zm10.2-7c.1 0 .3.1.4.2l1.3 1.3c.2.2.2.6 0 .8l-1 1-2.1-2.1 1-1c.1-.1.2-.2.4-.2m0 3.9L14.1 23H12v-2.1l6.1-6.1z"/></svg>
+    </a>
+  
+  
+
+
+<h1 id="active-learning-escalated-multi-format-export-design">Active-Learning Escalated Multi-Format Export — Design<a class="headerlink" href="#active-learning-escalated-multi-format-export-design" title="Permanent link">&para;</a></h1>
+<p><strong>Date:</strong> 2026-08-17
+<strong>Status:</strong> Shipped — merged to main (2b46e1b7).
+<strong>Scope:</strong> TrackerKit + DetectKit active-learning dataset generation</p>
+<h2 id="problem">Problem<a class="headerlink" href="#problem" title="Permanent link">&para;</a></h2>
+<p>TrackerKit's active-learning (AL) dataset export writes YOLO OBB labels and nothing
+else. When tracking runs a segmentation model, the mask contours the model produced
+are discarded and the export degrades to oriented boxes. Downstream, DetectKit and
+the training layer already understand a geometry-level ladder
+(<code>polygon &gt; obb &gt; aabb</code>), so the information loss is gratuitous.</p>
+<p>Auditing the export path to add escalation surfaced a second problem: TrackerKit's AL
+implementation has diverged from DetectKit's, and the TrackerKit side carries
+correctness bugs that corrupt both frame selection and label geometry.</p>
+<p>This design covers both: escalated multi-format export, and convergence of the two AL
+implementations onto one shared core.</p>
+<h2 id="current-state">Current state<a class="headerlink" href="#current-state" title="Permanent link">&para;</a></h2>
+<p>Two AL implementations exist and have diverged.</p>
+<table>
+<thead>
+<tr>
+<th></th>
+<th>TrackerKit path</th>
+<th>DetectKit path</th>
+</tr>
+</thead>
+<tbody>
+<tr>
+<td>Entry</td>
+<td><code>core/tracking/session.py:374 _run_dataset_generation</code>, <code>trackerkit/gui/workers/dataset_worker.py</code></td>
+<td><code>detectkit/jobs/al_worker.py:run_active_learning</code></td>
+</tr>
+<tr>
+<td>Scoring</td>
+<td><code>data/dataset_generation.py:FrameQualityScorer</code></td>
+<td><code>data/al/</code> directly</td>
+</tr>
+<tr>
+<td>Candidate pool</td>
+<td>none</td>
+<td><code>build_candidate_pool</code> (pHash dedup)</td>
+</tr>
+<tr>
+<td>Label writer</td>
+<td><code>_format_obb_corners</code> / <code>_compute_obb_corners</code>, OBB only, class hardcoded <code>0</code></td>
+<td><code>_write_geometry_label</code>, polygon-first</td>
+</tr>
+<tr>
+<td>Output contract</td>
+<td>loose folder + <code>metadata.json</code></td>
+<td>registered <code>OBBSource(level=…)</code></td>
+</tr>
+</tbody>
+</table>
+<p>The shared core (<code>data/al/{signals,acquisition,candidate_pool,frame_source}.py</code>) is
+sound. The problems are in the TrackerKit adapter, the exporter, and the
+half-wired level plumbing on both sides.</p>
+<h3 id="existing-machinery-this-design-reuses">Existing machinery this design reuses<a class="headerlink" href="#existing-machinery-this-design-reuses" title="Permanent link">&para;</a></h3>
+<p>The escalation ladder is already built and has exactly one consumer:</p>
+<ul>
+<li><code>OBBConfig.emit_native_geometry</code> (<code>core/inference/config.py:203</code>) — export-only opt-in.</li>
+<li><code>OBBResult.polygons</code> (<code>core/inference/result.py:35</code>) — native contours in frame
+  pixel space, populated by the segment extractor from <code>masks.xy</code>
+  (<code>core/inference/stages/obb.py:1039</code>). Never serialized to the <code>.npz</code> cache.</li>
+<li><code>GeometryLevel</code> + <code>scan_source_levels</code> (<code>training/geometry_levels.py</code>).</li>
+<li><code>derive_detect_dataset_from_obb</code> (<code>training/dataset_builders.py:406</code>).</li>
+<li><code>_write_geometry_label</code> (<code>detectkit/jobs/al_worker.py:118</code>) — polygon-first writer.</li>
+</ul>
+<p>TrackerKit's exporter opts into none of it.</p>
+<h3 id="audit-findings">Audit findings<a class="headerlink" href="#audit-findings" title="Permanent link">&para;</a></h3>
+<p>Correctness bugs:</p>
+<ol>
+<li><strong><code>edge_score</code> is corrupt on the tracker path.</strong> <code>dataset_generation.py:105</code> calls
+   <code>score_crowd(obb_corners, frame_shape=(1, 1))</code> with pixel-space corners. Inside,
+   <code>dx = min(x, w - x)</code> with <code>w=1</code> goes strongly negative, so
+   <code>edge_norm = max(0, 1 - margin_px / 1.0)</code> returns values around 1900 instead of
+   <code>[0, 1]</code>. After <code>_minmax</code> it survives as a channel ranking frames by how far
+   right/down any detection sits.</li>
+<li><strong>Unconstrained detection matching.</strong> <code>_match_yolo_detection</code> uses a hardcoded
+   50 px radius, independent of <code>REFERENCE_BODY_SIZE</code> and <code>RESIZE_FACTOR</code>, and is
+   greedy with no mutual exclusion — two CSV rows can bind the same detection and
+   emit duplicate boxes.</li>
+<li><strong>Fabricated geometry is indistinguishable from real geometry.</strong> On no match,
+   <code>_write_frame_annotations</code> invents <code>w = ref * 2.2, h = ref * 0.8</code>. The
+   <code>dimension_source</code> flag reaches <code>metadata.json</code> only; the <code>.txt</code> label looks real.</li>
+<li><strong>Lost and interpolated tracks are exported as ground truth.</strong> The only row filter
+   is <code>pd.isna(X/Y)</code>. Since AL selects frames <em>because</em> tracking struggled, this
+   systematically injects wrong boxes where the model is weakest.</li>
+<li><strong>Non-OBB detection methods export a fully synthetic dataset.</strong>
+   <code>_init_detection_runner</code> returns <code>None</code> unless <code>DETECTION_METHOD == "yolo_obb"</code>,
+   so bgsub tracking exports 100% reference-size boxes with no warning.</li>
+<li><strong>Multi-class collapse.</strong> Both writers hardcode class <code>0</code> while
+   <code>OBBResult.class_ids</code> exists and DetectKit projects are multi-class.</li>
+<li><strong>Segmentation models cannot reach the exporter.</strong> <code>build_obb_only_config</code>
+   (<code>config.py:1054</code>) never forwards <code>YOLO_OBB_DIRECT_TASK</code>, so the export runner is
+   always built as <code>model_task="obb"</code>. A segmentation checkpoint hits the loud
+   task-mismatch check at <code>stages/obb.py:358</code>.</li>
+</ol>
+<p>Orphaned and regressed signals — the refactor that introduced <code>data/al/</code> left the
+legacy scorer in place and wired only part of it:</p>
+<ol>
+<li><strong>The fragmentation signal is computed and discarded.</strong>
+   <code>_score_fragmented_detections</code> detects one animal split into two detections
+   (proximity + polygon overlap + both-boxes-suspiciously-small), weighted 0.3 in
+   legacy. It now feeds only the dead scalar score. Its nominal replacement, the
+   <code>crowd</code> channel, is max pairwise polygon overlap — animals <em>touching</em>, a different
+   phenomenon. The <code>METRIC_FRAGMENTED_DETECTIONS</code> checkbox gates the <code>crowd</code> weight
+   (<code>dataset_generation.py:58</code>), so the control does not do what its label says.</li>
+<li><strong>Absolute thresholds became relative.</strong> Legacy metrics returned 0 unless the frame
+   was actually bad. <code>_composite_score</code> min-max normalizes every channel within the
+   run, so a cleanly tracked video still yields a full ranking and exports its
+   least-good frames. <code>DATASET_MIN_SELECTION_SCORE</code> therefore cannot work as its
+   tooltip advertises, and scores are not comparable across videos.</li>
+<li><strong>Count asymmetry lost.</strong> Legacy weighted under-counting (0.3) twice as hard as
+    over-counting (0.15). <code>score_count_deviation</code> is symmetric.</li>
+<li><strong><code>margin</code> is dead.</strong> Computed and stored; <code>AcquisitionWeights</code> has no margin
+    channel. Its only input, <code>DATASET_CONF_THRESHOLD</code>, is hardcoded to <code>0.5</code> at
+    <code>engine_params.py:1214</code> and is not user-settable.</li>
+<li><strong>bgsub confidences are all <code>NaN</code></strong> (<code>core/background/measure.py:216</code>), and
+    <code>_channel_array</code> maps NaN to 0. On bgsub the <code>uncertainty</code> channel (weight 0.30)
+    is silently dead and the remaining channels are diluted rather than renormalized.</li>
+<li><strong><code>ALRequest.export_level</code> is never set</strong> by DetectKit's AL dialog; it is
+    permanently <code>"obb"</code>.</li>
+</ol>
+<p>Design smells:</p>
+<ol>
+<li><strong>~220 lines of dead-weight computation per frame.</strong> <code>score_frame</code> runs both the
+    <code>ALSignals</code> pipeline and the entire legacy scalar pipeline, including the O(n²)
+    <code>_score_fragmented_detections</code> loop. <code>get_worst_frames</code> reads only
+    <code>frame_signals</code>. Eight of the sixteen tests in <code>tests/test_dataset_generation.py</code>
+    pin the dead path; the live path is barely covered.</li>
+<li>~~<strong>Double inference with divergent thresholds.</strong> The scorer reads cached OBBs; the
+    exporter spins up a second <code>InferenceRunner</code> at conf 0.05 / iou 0.5 and
+    re-detects. Defensible ("detect everything for annotation") but undocumented in
+    the output, and it means labels can disagree with what tracking saw.~~
+    <strong>Correction:</strong> fixed in <code>docs/superpowers/plans/2026-08-27-al-pipeline-optimization.md</code>
+    (Task 4) — the premise (the detection cache lacks the low-enough-confidence
+    detections the export pass needs) was false; export now reuses the existing
+    on-disk detection cache instead of always rerunning inference.</li>
+<li><strong><code>include_context</code> fights the diversity window.</strong> ±1 frames triples the set with
+    unscored near-duplicates; no perceptual dedup on this path. Context frames outside
+    the tracked range silently produce empty label files.</li>
+<li><strong>O(n²) pandas and per-frame seeking.</strong> <code>df[df["FrameID"] == frame_id]</code> inside
+    both the scoring and writing loops is a full scan per frame;
+    <code>cap.set(POS_FRAMES)</code> seeks per frame. <code>valid_batch_indices</code> is threaded into
+    <code>_detect_batch</code> and never used.</li>
+<li><strong>No DetectKit handshake.</strong> Output records no level, registers no <code>OBBSource</code>, and
+    stamps no model/threshold/preset provenance, so a round is not reproducible. The
+    generated <code>README.md</code> still instructs users to open X-AnyLabeling.</li>
+</ol>
+<h2 id="design">Design<a class="headerlink" href="#design" title="Permanent link">&para;</a></h2>
+<h3 id="1-output-layout">1. Output layout<a class="headerlink" href="#1-output-layout" title="Permanent link">&para;</a></h3>
+<p>One AL round produces up to three sibling <strong>source roots</strong>, each independently a
+valid DetectKit source:</p>
+<div class="language-text highlight"><pre><span></span><code><span id="__span-0-1"><a id="__codelineno-0-1" name="__codelineno-0-1" href="#__codelineno-0-1"></a>&lt;video&gt;_datasets/active_learning/al_20260817_141230/
+</span><span id="__span-0-2"><a id="__codelineno-0-2" name="__codelineno-0-2" href="#__codelineno-0-2"></a>  polygon/  images/  labels/  classes.txt  source.json    level=polygon, authoritative
+</span><span id="__span-0-3"><a id="__codelineno-0-3" name="__codelineno-0-3" href="#__codelineno-0-3"></a>  obb/      images/  labels/  classes.txt  source.json    level=obb,  derived_from=polygon
+</span><span id="__span-0-4"><a id="__codelineno-0-4" name="__codelineno-0-4" href="#__codelineno-0-4"></a>  aabb/     images/  labels/  classes.txt  source.json    level=aabb, derived_from=polygon
+</span></code></pre></div>
+<p>Images in derived roots are <strong>hardlinks</strong> to the authoritative root's images, so disk
+cost stays at roughly 1× regardless of level count.</p>
+<p>Rationale for sibling roots rather than sibling <code>labels_*/</code> directories inside one
+root: DetectKit hardcodes <code>&lt;source_root&gt;/labels</code> at roughly ten call sites
+(<code>detectkit/gui/utils.py</code>, <code>gui/source_import.py</code>, <code>gui/dialogs/source_validation.py</code>,
+<code>gui/panels/dataset_panel.py</code>, <code>jobs/sam2_escalation.py</code>). Sibling label directories
+would be invisible to all of them. Sibling roots need zero DetectKit changes.</p>
+<p>Each root is registered as an <code>OBBSource</code> with its <code>level</code>,
+<code>source_kind="trackerkit_al"</code>, and — for derived roots — <code>derived_from</code> and
+<code>reviewed=False</code>, so the authoritative root stays the single point of human review. A
+"regenerate derived levels" action re-derives the two lower roots from the
+authoritative one, containing drift.</p>
+<h3 id="2-level-honesty">2. Level honesty<a class="headerlink" href="#2-level-honesty" title="Permanent link">&para;</a></h3>
+<p>The export never claims a level the model did not produce.</p>
+<table>
+<thead>
+<tr>
+<th>Detection source</th>
+<th>Native geometry</th>
+<th>Roots written</th>
+</tr>
+</thead>
+<tbody>
+<tr>
+<td>YOLO segment (direct or sequential stage-2)</td>
+<td>mask contours via <code>masks.xy</code></td>
+<td>polygon, obb, aabb</td>
+</tr>
+<tr>
+<td>YOLO OBB</td>
+<td>rotated quad</td>
+<td>obb, aabb</td>
+</tr>
+<tr>
+<td>YOLO detect</td>
+<td>axis-aligned box</td>
+<td>aabb</td>
+</tr>
+<tr>
+<td>bgsub</td>
+<td>foreground contours</td>
+<td>polygon, obb, aabb</td>
+</tr>
+</tbody>
+</table>
+<p>A rotated quad is <strong>not</strong> written as a polygon-level root: it carries no contour
+information, and <code>scan_source_levels</code> already treats 9-field lines as ambiguous
+<code>four_point</code>. Downward derivation (polygon → <code>minAreaRect</code> → obb → aabb) is lossless
+to its target; upward derivation is out of scope.</p>
+<h3 id="3-shared-modules">3. Shared modules<a class="headerlink" href="#3-shared-modules" title="Permanent link">&para;</a></h3>
+<p>New Qt-free code under <code>data/al/</code>, consumed by both AL paths:</p>
+<ul>
+<li><strong><code>data/al/escalation.py</code></strong> — the single geometry-escalation authority. A
+  <code>LabelRecord</code> per detection (<code>class_id</code>, <code>conf</code>, <code>polygon | None</code>, <code>corners</code>,
+  <code>native_level</code>), <code>records_from_obb_result(obb, level)</code>, and
+  <code>derive_down(records, target_level)</code>. Level conversion is written exactly once.</li>
+<li><strong><code>data/al/labels.py</code></strong> — <code>write_label_file(path, records, frame_size, level)</code>.
+  This is <code>_write_geometry_label</code> moved down out of <code>detectkit/jobs/al_worker.py</code>;
+  DetectKit then imports it (app → data, correct direction).</li>
+<li><strong><code>data/al/export.py</code></strong> — <code>export_al_dataset(...)</code>: writes the three-root layout,
+  hardlinks images, stamps <code>source.json</code>, returns a manifest. Both
+  <code>data/dataset_generation.py:export_dataset</code> and
+  <code>detectkit/jobs/al_worker.py:run_active_learning</code> collapse onto it.</li>
+</ul>
+<p><code>GeometryLevel</code> and <code>classify_label_line</code> move from <code>training/geometry_levels.py</code> to
+<code>utils/geometry_levels.py</code> (bottom layer, importable by Data and Training alike), and
+are re-exported from the old path for back-compat. <code>scan_source_levels</code> stays in
+Training — it is ingestion logic.</p>
+<h3 id="4-acquisition-scoring-port-before-delete">4. Acquisition scoring: port before delete<a class="headerlink" href="#4-acquisition-scoring-port-before-delete" title="Permanent link">&para;</a></h3>
+<p>The legacy scalar pipeline is not pure dead weight. Three behaviours are ported into
+<code>data/al/</code> as first-class channels <strong>before</strong> the legacy code is deleted.</p>
+<p><strong>4a. Absolute floors replace min-max normalization.</strong> <code>_minmax</code> is removed from
+<code>_composite_score</code>. Every <code>score_*</code> function returns an absolute severity in <code>[0, 1]</code>
+that is exactly <code>0</code> when the frame is not problematic:</p>
+<table>
+<thead>
+<tr>
+<th>Channel</th>
+<th>Absolute definition</th>
+</tr>
+</thead>
+<tbody>
+<tr>
+<td><code>uncertainty</code></td>
+<td><code>0</code> if <code>mean_conf &gt;= conf_floor</code>, else <code>(conf_floor - mean_conf) / conf_floor</code></td>
+</tr>
+<tr>
+<td><code>count</code></td>
+<td>asymmetric — under: <code>(expected - n) / expected</code>; over: <code>min((n - expected) / expected, 1) * 0.5</code></td>
+</tr>
+<tr>
+<td><code>fragmentation</code></td>
+<td>ported heuristic, already absolute with its 0.45 suspicion gate</td>
+</tr>
+<tr>
+<td><code>crowd</code></td>
+<td>max pairwise polygon overlap ratio</td>
+</tr>
+<tr>
+<td><code>edge</code></td>
+<td>border proximity, computed against the <strong>real</strong> frame shape</td>
+</tr>
+<tr>
+<td><code>assignment</code></td>
+<td><code>1 - mean(assignment_confidence)</code>, or <code>min(mean(cost) / 50, 1)</code></td>
+</tr>
+<tr>
+<td><code>track_loss</code></td>
+<td><code>min(lost / max_targets, 1)</code></td>
+</tr>
+<tr>
+<td><code>position_uncertainty</code></td>
+<td><code>min(mean(uncertainty) / 50, 1)</code></td>
+</tr>
+<tr>
+<td><code>nms_instability</code></td>
+<td><code>1 - mean(set IoU)</code> under threshold perturbation (DetectKit path)</td>
+</tr>
+</tbody>
+</table>
+<p>The weighted composite is then in <code>[0, 1]</code> and comparable across videos, making
+<code>DATASET_MIN_SELECTION_SCORE</code> a real gate. A cleanly tracked video legitimately
+exports few or no frames; when the selection comes back empty, the UI reports the
+per-channel maxima observed so the user can see <em>why</em> rather than seeing a bare error.</p>
+<p>This changes selection on the DetectKit path too (its <code>balanced</code> and
+<code>uncertainty_heavy</code> presets score absolutely as well). That is intended: one scoring
+vocabulary across both kits.</p>
+<p><strong>4b. <code>fragmentation</code> becomes a real channel.</strong> The <code>_score_fragmented_detections</code>
+heuristic moves into <code>data/al/signals.py</code> as <code>score_fragmentation</code>, joins <code>ALSignals</code>,
+and gains its own weight in <code>AcquisitionWeights</code> (0.30 in <code>tracker_default</code>, mirroring
+its legacy weight). <code>METRIC_FRAGMENTED_DETECTIONS</code> is repointed at it, so the checkbox
+finally controls what its label claims, and <code>crowd</code> gets its own weight and control.</p>
+<p><strong>4c. <code>count</code> becomes asymmetric</strong>, as in 4a.</p>
+<p>Only after these three land is the legacy pipeline (<code>_score_confidence</code> through
+<code>_score_fragmented_detections</code>, plus <code>frame_scores</code>) deleted and the eight tests that
+pin it repointed at <code>frame_signals</code> / <code>select</code>. <code>score_frame</code> and <code>get_worst_frames</code>
+keep their signatures.</p>
+<p>Also resolved here: <code>score_crowd</code> receives the real frame shape (finding 1);
+<code>DATASET_CONF_THRESHOLD</code> becomes the user-settable <code>uncertainty</code> floor (surfaced in
+the panel) and the unused <code>margin</code> field is removed from <code>ALSignals</code> and
+<code>score_uncertainty</code>, which then returns <code>mean_confidence</code> alone (finding 11); on bgsub the <code>uncertainty</code> weight is
+zeroed <strong>explicitly and the remainder renormalized</strong>, rather than silently diluted
+(finding 12).</p>
+<h3 id="5-strict-labels-and-accounting">5. Strict labels and accounting<a class="headerlink" href="#5-strict-labels-and-accounting" title="Permanent link">&para;</a></h3>
+<ul>
+<li>A CSV row is exported only if it binds to a real detection. Dropped:
+  <code>State == "lost"</code>, interpolated rows, and unmatched rows. Fabricated
+  <code>ref * 2.2 × ref * 0.8</code> boxes are gone.</li>
+<li>Nearest-center-within-50 px is replaced by mutual-exclusion assignment
+  (<code>core/assigners/hungarian.py</code>) gated by a radius scaled to <code>REFERENCE_BODY_SIZE</code>,
+  fixing both duplicate binding and wrong-scale matching.</li>
+<li>Real <code>class_id</code>s from <code>OBBResult.class_ids</code>; <code>classes.txt</code> from the project's
+  <code>class_names</code>.</li>
+<li><code>source.json</code> records per round and per frame: rows total, exported, dropped-lost,
+  dropped-unmatched; plus model path, model task, thresholds, acquisition preset and
+  weights, native level, and which frame ids were <em>selected</em> versus <em>context</em>. An AL
+  round becomes reproducible and auditable.</li>
+</ul>
+<h3 id="6-inference-plumbing">6. Inference plumbing<a class="headerlink" href="#6-inference-plumbing" title="Permanent link">&para;</a></h3>
+<p>Small, additive, all opt-in so the tracking hot path stays byte-identical:</p>
+<ol>
+<li><code>build_obb_only_config</code> forwards <code>model_task</code> and <code>emit_native_geometry</code>
+   (fixes finding 7).</li>
+<li><code>_init_detection_runner</code> stops gating on <code>DETECTION_METHOD == "yolo_obb"</code>, reads
+   the real task, and builds a bgsub export runner instead of returning <code>None</code>
+   (fixes finding 5).</li>
+<li><code>core/background/measure.py:detect_objects</code> gains an opt-in contour return,
+   threaded through the same size-filter and cap subselections; <code>run_bgsub</code> populates
+   <code>OBBResult.polygons</code> under <code>emit_native_geometry</code>. The contours are already
+   computed at <code>measure.py:196</code> and discarded, so this adds no work to the hot path.</li>
+</ol>
+<h3 id="7-candidate-pool-dedup-on-the-tracker-path">7. Candidate-pool dedup on the tracker path<a class="headerlink" href="#7-candidate-pool-dedup-on-the-tracker-path" title="Permanent link">&para;</a></h3>
+<p><code>build_candidate_pool</code> runs over the <strong>selected</strong> frames plus their context, not the
+whole video. pHash over 100k frames is prohibitive; over a few hundred it is free, and
+that is exactly where the <code>include_context</code> near-duplicate problem lives (finding 16).</p>
+<h3 id="8-ui">8. UI<a class="headerlink" href="#8-ui" title="Permanent link">&para;</a></h3>
+<p><strong>TrackerKit <code>DatasetPanel</code>:</strong></p>
+<ol>
+<li><strong>Export level status — read-only, derived</strong> from the detection config and updated
+   live: segmentation → "polygon + obb + aabb"; OBB → "obb + aabb — polygon requires a
+   segmentation model"; detect → "aabb only"; bgsub → "polygon + obb + aabb (from
+   foreground contours)". The level-honesty rule becomes visible before the run.</li>
+<li><strong>Level checkboxes</strong> — which achievable roots to materialize; all on by default,
+   greyed where unachievable.</li>
+<li><strong>Class names</strong> — <code>line_dataset_class_name</code> becomes an ordered comma-separated list
+   (index = class id). Single-class users type what they type today.</li>
+<li><strong>DetectKit target</strong> — optional "Register into DetectKit project" with browse.
+   Empty means standalone output plus <code>source.json</code>, which DetectKit's importer adopts
+   with levels already known.</li>
+<li><strong>Dedup controls</strong> — method (<code>phash</code>/<code>ahash</code>/<code>dhash</code>/<code>histogram</code>/<code>none</code>) and
+   threshold, mirroring <code>CandidatePoolConfig</code>, beside the diversity window.</li>
+<li><strong>Quality-metric controls corrected</strong> — separate <code>fragmentation</code> and <code>crowd</code>
+   checkboxes (per 4b); <code>METRIC_HIGH_UNCERTAINTY</code> default reconsidered.</li>
+<li><strong>Min-selection-score tooltip rewritten</strong> — under absolute scoring it is now a real
+   cross-video gate, and the tooltip should say so.</li>
+<li><strong>Results summary</strong> — <code>finished_signal</code> widens from <code>Signal(str, int)</code> to carry the
+   manifest, so the panel reports the three roots and their levels, frames exported,
+   and the strict-drop counts.</li>
+<li><strong>bgsub notice</strong> — inline note that the uncertainty channel is unavailable
+   (all-NaN confidences) and remaining weights were renormalized.</li>
+<li><strong>Stale text</strong> — panel help and the generated <code>README.md</code> retarget from
+    X-AnyLabeling to DetectKit.</li>
+</ol>
+<p><strong>DetectKit AL dialog</strong> gets the same level status and checkboxes, wiring the dead
+<code>export_level</code> field (finding 13), so both kits present one control vocabulary.</p>
+<p><strong>Plumbing:</strong> new knobs (<code>dataset_export_levels</code>, <code>dataset_dedup_method</code>,
+<code>dataset_dedup_threshold</code>, <code>dataset_class_names</code>, <code>dataset_detectkit_project</code>) live in
+<code>trackerkit/config/schemas.py</code> and flow through the shared <code>build_engine_params</code> — not
+around it — so CLI and GUI stay unified.</p>
+<h2 id="error-handling">Error handling<a class="headerlink" href="#error-handling" title="Permanent link">&para;</a></h2>
+<ul>
+<li><strong>Empty selection under absolute scoring</strong> is a legitimate outcome, not an error.
+  Report the per-channel maxima observed and the configured floors.</li>
+<li><strong>Level unavailable</strong>: requesting polygon from an OBB model is refused at config
+  time with the reason, not silently downgraded.</li>
+<li><strong>Contour extraction failure</strong> (empty <code>findContours</code> result) falls back to the
+  detection's <code>corners</code> for that instance, as the segment extractor already does at
+  <code>stages/obb.py:1046</code>.</li>
+<li><strong>Hardlink failure</strong> (cross-device, unsupported filesystem) falls back to copying,
+  with a logged warning.</li>
+<li><strong>Partial writes</strong>: roots are written to a temporary directory and moved into place
+  so a cancelled round never registers a half-written source.</li>
+</ul>
+<h2 id="testing">Testing<a class="headerlink" href="#testing" title="Permanent link">&para;</a></h2>
+<ul>
+<li>Unit: <code>derive_down</code> level round-trip properties; level honesty (an OBB model must
+  never produce a polygon root); strict-drop accounting; hardlink layout with copy
+  fallback; <code>source.json</code> schema.</li>
+<li>Unit: each absolute <code>score_*</code> returns exactly 0 on a clean frame and rises
+  monotonically with severity; asymmetric count weighting; ported fragmentation
+  heuristic matches the legacy scorer's output on the existing fixtures.</li>
+<li>Integration: DetectKit round-trip — <code>scan_source_levels</code> on each of the three roots
+  resolves to the stamped level.</li>
+<li>Regression: the eight tests currently pinning the legacy scalar path are repointed
+  at <code>frame_signals</code> / <code>select</code> rather than deleted.</li>
+<li><strong>Equivalence harness runs as a no-op gate.</strong> Every change here is export-only or
+  behind an opt-in flag, so tracking output must remain byte-identical on MPS and
+  CUDA. Frame <em>selection</em> deliberately changes and is covered by a committed
+  characterization golden instead — the durable-guard pattern established by the
+  shared param-builder work, since a post-collapse oracle would be tautological.</li>
+</ul>
+<h2 id="out-of-scope">Out of scope<a class="headerlink" href="#out-of-scope" title="Permanent link">&para;</a></h2>
+<ul>
+<li>Upward level derivation (inferring contours from boxes). SAM2 mask-priming already
+  covers that need in DetectKit (<code>jobs/sam2_escalation.py</code>).</li>
+<li>Relocating <code>FilterKitCore</code> out of the app layer — the documented carve-out in
+  <code>data/al/candidate_pool.py</code> stays until the Simplification Sprint lands it.</li>
+<li>Pose or identity dataset export; this design covers detection geometry only.</li>
+<li>The double-inference pass (finding 15) is documented in <code>source.json</code> rather than
+  removed; unifying it with the cached detections is a separate performance slice.</li>
+</ul>
+
+
+
+
+
+
+
+
+
+
+
+
+                
+              </article>
+            </div>
+          
+          
+<script>var target=document.getElementById(location.hash.slice(1));target&&target.name&&(target.checked=target.name.startsWith("__tabbed_"))</script>
+        </div>
+        
+          <button type="button" class="md-top md-icon" data-md-component="top" hidden>
+  
+  <svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 24 24"><path d="M13 20h-2V8l-5.5 5.5-1.42-1.42L12 4.16l7.92 7.92-1.42 1.42L13 8z"/></svg>
+  Back to top
+</button>
+        
+      </main>
+      
+        <footer class="md-footer">
+  
+  <div class="md-footer-meta md-typeset">
+    <div class="md-footer-meta__inner md-grid">
+      <div class="md-copyright">
+  
+  
+    Made with
+    <a href="https://squidfunk.github.io/mkdocs-material/" target="_blank" rel="noopener">
+      Material for MkDocs
+    </a>
+  
+</div>
+      
+    </div>
+  </div>
+</footer>
+      
+    </div>
+    <div class="md-dialog" data-md-component="dialog">
+      <div class="md-dialog__inner md-typeset"></div>
+    </div>
+    
+    
+    <script id="__config" type="application/json">{"base": "../../../..", "features": ["navigation.tabs", "navigation.sections", "navigation.expand", "navigation.top", "content.code.copy", "content.action.edit", "search.suggest", "search.highlight"], "search": "../../../../assets/javascripts/workers/search.6ce7567c.min.js", "translations": {"clipboard.copied": "Copied to clipboard", "clipboard.copy": "Copy to clipboard", "search.result.more.one": "1 more on this page", "search.result.more.other": "# more on this page", "search.result.none": "No matching documents", "search.result.one": "1 matching document", "search.result.other": "# matching documents", "search.result.placeholder": "Type to start searching", "search.result.term.missing": "Missing", "select.version": "Select version"}, "version": {"default": "latest", "provider": "mike"}}</script>
+    
+    
+      <script src="../../../../assets/javascripts/bundle.83f73b43.min.js"></script>
+      
+    
+  </body>
+</html>

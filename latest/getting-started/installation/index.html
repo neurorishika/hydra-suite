@@ -1258,6 +1258,69 @@
   
   
     <li class="md-nav__item">
+      <a href="../../runbooks/detectkit-headless-training/" class="md-nav__link">
+        
+  
+  <span class="md-ellipsis">
+    DetectKit Headless Training
+  </span>
+  
+
+      </a>
+    </li>
+  
+
+              
+            
+              
+                
+  
+  
+  
+  
+    <li class="md-nav__item">
+      <a href="../../user-guide/detectkit-semantic-escalation/" class="md-nav__link">
+        
+  
+  <span class="md-ellipsis">
+    DetectKit: Semantic Escalation (SAM3)
+  </span>
+  
+
+      </a>
+    </li>
+  
+
+              
+            
+              
+                
+  
+  
+  
+  
+    <li class="md-nav__item">
+      <a href="../../user-guide/detectkit-sahi-calibration/" class="md-nav__link">
+        
+  
+  <span class="md-ellipsis">
+    DetectKit: SAHI Calibration Profiles
+  </span>
+  
+
+      </a>
+    </li>
+  
+
+              
+            
+              
+                
+  
+  
+  
+  
+    <li class="md-nav__item">
       <a href="../../user-guide/filterkit/" class="md-nav__link">
         
   
@@ -1517,6 +1580,48 @@
   
   
     <li class="md-nav__item">
+      <a href="../../developer-guide/resource-containment/" class="md-nav__link">
+        
+  
+  <span class="md-ellipsis">
+    Resource Containment
+  </span>
+  
+
+      </a>
+    </li>
+  
+
+              
+            
+              
+                
+  
+  
+  
+  
+    <li class="md-nav__item">
+      <a href="../../developer-guide/profiling/" class="md-nav__link">
+        
+  
+  <span class="md-ellipsis">
+    Profiling
+  </span>
+  
+
+      </a>
+    </li>
+  
+
+              
+            
+              
+                
+  
+  
+  
+  
+    <li class="md-nav__item">
       <a href="../../developer-guide/dependency-cuda-updates/" class="md-nav__link">
         
   
@@ -1543,6 +1648,27 @@
   
   <span class="md-ellipsis">
     Performance Tuning
+  </span>
+  
+
+      </a>
+    </li>
+  
+
+              
+            
+              
+                
+  
+  
+  
+  
+    <li class="md-nav__item">
+      <a href="../../developer-guide/inference-fast-mode/" class="md-nav__link">
+        
+  
+  <span class="md-ellipsis">
+    Inference Fast Mode
   </span>
   
 
@@ -2508,15 +2634,15 @@ README.</p>
 </span></code></pre></div>
 <h3 id="apple-silicon-mps-macos-m1-m4">Apple Silicon / MPS (macOS M1-M4)<a class="headerlink" href="#apple-silicon-mps-macos-m1-m4" title="Permanent link">&para;</a></h3>
 <div class="language-bash highlight"><pre><span></span><code><span id="__span-1-1"><a id="__codelineno-1-1" name="__codelineno-1-1" href="#__codelineno-1-1"></a>pip<span class="w"> </span>install<span class="w"> </span>torch<span class="w"> </span>torchvision
-</span><span id="__span-1-2"><a id="__codelineno-1-2" name="__codelineno-1-2" href="#__codelineno-1-2"></a>pip<span class="w"> </span>install<span class="w"> </span><span class="s2">&quot;hydra-suite[mps]&quot;</span>
+</span><span id="__span-1-2"><a id="__codelineno-1-2" name="__codelineno-1-2" href="#__codelineno-1-2"></a>pip<span class="w"> </span>install<span class="w"> </span><span class="s2">"hydra-suite[mps]"</span>
 </span></code></pre></div>
 <p>MPS is built into the standard PyTorch macOS wheel. GPU acceleration works for YOLO inference and neural network operations.</p>
 <h3 id="nvidia-gpu-cuda-linux-windows">NVIDIA GPU / CUDA (Linux, Windows)<a class="headerlink" href="#nvidia-gpu-cuda-linux-windows" title="Permanent link">&para;</a></h3>
-<div class="language-bash highlight"><pre><span></span><code><span id="__span-2-1"><a id="__codelineno-2-1" name="__codelineno-2-1" href="#__codelineno-2-1"></a><span class="c1"># Step 1: Install PyTorch from PyTorch&#39;s own index</span>
+<div class="language-bash highlight"><pre><span></span><code><span id="__span-2-1"><a id="__codelineno-2-1" name="__codelineno-2-1" href="#__codelineno-2-1"></a><span class="c1"># Step 1: Install PyTorch from PyTorch's own index</span>
 </span><span id="__span-2-2"><a id="__codelineno-2-2" name="__codelineno-2-2" href="#__codelineno-2-2"></a>pip<span class="w"> </span>install<span class="w"> </span>torch<span class="w"> </span>torchvision<span class="w"> </span>--index-url<span class="w"> </span>https://download.pytorch.org/whl/cu128
 </span><span id="__span-2-3"><a id="__codelineno-2-3" name="__codelineno-2-3" href="#__codelineno-2-3"></a>
 </span><span id="__span-2-4"><a id="__codelineno-2-4" name="__codelineno-2-4" href="#__codelineno-2-4"></a><span class="c1"># Step 2: Install hydra-suite with CUDA extras</span>
-</span><span id="__span-2-5"><a id="__codelineno-2-5" name="__codelineno-2-5" href="#__codelineno-2-5"></a>pip<span class="w"> </span>install<span class="w"> </span><span class="s2">&quot;hydra-suite[cuda]&quot;</span>
+</span><span id="__span-2-5"><a id="__codelineno-2-5" name="__codelineno-2-5" href="#__codelineno-2-5"></a>pip<span class="w"> </span>install<span class="w"> </span><span class="s2">"hydra-suite[cuda]"</span>
 </span></code></pre></div>
 <p>This installs everything: ONNX Runtime GPU, TensorRT, CuPy, ONNX export tools.</p>
 <p><strong>CUDA version selection:</strong></p>
@@ -2548,7 +2674,7 @@ README.</p>
 </table>
 <p><code>[cuda]</code> is an alias for <code>[cuda12]</code>. For CUDA 13 systems:</p>
 <div class="language-bash highlight"><pre><span></span><code><span id="__span-3-1"><a id="__codelineno-3-1" name="__codelineno-3-1" href="#__codelineno-3-1"></a>pip<span class="w"> </span>install<span class="w"> </span>torch<span class="w"> </span>torchvision<span class="w"> </span>--index-url<span class="w"> </span>https://download.pytorch.org/whl/cu130
-</span><span id="__span-3-2"><a id="__codelineno-3-2" name="__codelineno-3-2" href="#__codelineno-3-2"></a>pip<span class="w"> </span>install<span class="w"> </span><span class="s2">&quot;hydra-suite[cuda13]&quot;</span>
+</span><span id="__span-3-2"><a id="__codelineno-3-2" name="__codelineno-3-2" href="#__codelineno-3-2"></a>pip<span class="w"> </span>install<span class="w"> </span><span class="s2">"hydra-suite[cuda13]"</span>
 </span></code></pre></div>
 <p><strong>You do not need the CUDA toolkit installed.</strong> PyTorch's pip wheel bundles NVIDIA CUDA runtime libraries (<code>nvidia-cublas-cu12</code>, <code>nvidia-cudnn-cu12</code>, <code>nvidia-curand-cu12</code>, etc.) as pip dependencies and preloads them at import time, so ONNX Runtime and TensorRT find them automatically.</p>
 <h3 id="why-is-gpu-install-two-commands">Why is GPU install two commands?<a class="headerlink" href="#why-is-gpu-install-two-commands" title="Permanent link">&para;</a></h3>
@@ -2562,31 +2688,31 @@ README.</p>
 <li>A collaborator wants to try the latest version</li>
 </ul>
 <h3 id="cpu">CPU<a class="headerlink" href="#cpu" title="Permanent link">&para;</a></h3>
-<div class="language-bash highlight"><pre><span></span><code><span id="__span-4-1"><a id="__codelineno-4-1" name="__codelineno-4-1" href="#__codelineno-4-1"></a>pip<span class="w"> </span>install<span class="w"> </span><span class="s2">&quot;hydra-suite @ git+https://github.com/neurorishika/hydra-suite.git&quot;</span>
+<div class="language-bash highlight"><pre><span></span><code><span id="__span-4-1"><a id="__codelineno-4-1" name="__codelineno-4-1" href="#__codelineno-4-1"></a>pip<span class="w"> </span>install<span class="w"> </span><span class="s2">"hydra-suite @ git+https://github.com/neurorishika/hydra-suite.git"</span>
 </span></code></pre></div>
 <h3 id="with-gpu-extras">With GPU extras<a class="headerlink" href="#with-gpu-extras" title="Permanent link">&para;</a></h3>
 <div class="language-bash highlight"><pre><span></span><code><span id="__span-5-1"><a id="__codelineno-5-1" name="__codelineno-5-1" href="#__codelineno-5-1"></a><span class="c1"># MPS</span>
 </span><span id="__span-5-2"><a id="__codelineno-5-2" name="__codelineno-5-2" href="#__codelineno-5-2"></a>pip<span class="w"> </span>install<span class="w"> </span>torch<span class="w"> </span>torchvision
-</span><span id="__span-5-3"><a id="__codelineno-5-3" name="__codelineno-5-3" href="#__codelineno-5-3"></a>pip<span class="w"> </span>install<span class="w"> </span><span class="s2">&quot;hydra-suite[mps] @ git+https://github.com/neurorishika/hydra-suite.git&quot;</span>
+</span><span id="__span-5-3"><a id="__codelineno-5-3" name="__codelineno-5-3" href="#__codelineno-5-3"></a>pip<span class="w"> </span>install<span class="w"> </span><span class="s2">"hydra-suite[mps] @ git+https://github.com/neurorishika/hydra-suite.git"</span>
 </span><span id="__span-5-4"><a id="__codelineno-5-4" name="__codelineno-5-4" href="#__codelineno-5-4"></a>
 </span><span id="__span-5-5"><a id="__codelineno-5-5" name="__codelineno-5-5" href="#__codelineno-5-5"></a><span class="c1"># CUDA</span>
 </span><span id="__span-5-6"><a id="__codelineno-5-6" name="__codelineno-5-6" href="#__codelineno-5-6"></a>pip<span class="w"> </span>install<span class="w"> </span>torch<span class="w"> </span>torchvision<span class="w"> </span>--index-url<span class="w"> </span>https://download.pytorch.org/whl/cu128
-</span><span id="__span-5-7"><a id="__codelineno-5-7" name="__codelineno-5-7" href="#__codelineno-5-7"></a>pip<span class="w"> </span>install<span class="w"> </span><span class="s2">&quot;hydra-suite[cuda] @ git+https://github.com/neurorishika/hydra-suite.git&quot;</span>
+</span><span id="__span-5-7"><a id="__codelineno-5-7" name="__codelineno-5-7" href="#__codelineno-5-7"></a>pip<span class="w"> </span>install<span class="w"> </span><span class="s2">"hydra-suite[cuda] @ git+https://github.com/neurorishika/hydra-suite.git"</span>
 </span><span id="__span-5-8"><a id="__codelineno-5-8" name="__codelineno-5-8" href="#__codelineno-5-8"></a>
 </span><span id="__span-5-9"><a id="__codelineno-5-9" name="__codelineno-5-9" href="#__codelineno-5-9"></a><span class="c1"># CUDA 13</span>
 </span><span id="__span-5-10"><a id="__codelineno-5-10" name="__codelineno-5-10" href="#__codelineno-5-10"></a>pip<span class="w"> </span>install<span class="w"> </span>torch<span class="w"> </span>torchvision<span class="w"> </span>--index-url<span class="w"> </span>https://download.pytorch.org/whl/cu130
-</span><span id="__span-5-11"><a id="__codelineno-5-11" name="__codelineno-5-11" href="#__codelineno-5-11"></a>pip<span class="w"> </span>install<span class="w"> </span><span class="s2">&quot;hydra-suite[cuda13] @ git+https://github.com/neurorishika/hydra-suite.git&quot;</span>
+</span><span id="__span-5-11"><a id="__codelineno-5-11" name="__codelineno-5-11" href="#__codelineno-5-11"></a>pip<span class="w"> </span>install<span class="w"> </span><span class="s2">"hydra-suite[cuda13] @ git+https://github.com/neurorishika/hydra-suite.git"</span>
 </span></code></pre></div>
 <h3 id="install-a-specific-branch-or-tag">Install a specific branch or tag<a class="headerlink" href="#install-a-specific-branch-or-tag" title="Permanent link">&para;</a></h3>
 <div class="language-bash highlight"><pre><span></span><code><span id="__span-6-1"><a id="__codelineno-6-1" name="__codelineno-6-1" href="#__codelineno-6-1"></a><span class="c1"># Specific branch</span>
-</span><span id="__span-6-2"><a id="__codelineno-6-2" name="__codelineno-6-2" href="#__codelineno-6-2"></a>pip<span class="w"> </span>install<span class="w"> </span><span class="s2">&quot;hydra-suite @ git+https://github.com/neurorishika/hydra-suite.git@main&quot;</span>
+</span><span id="__span-6-2"><a id="__codelineno-6-2" name="__codelineno-6-2" href="#__codelineno-6-2"></a>pip<span class="w"> </span>install<span class="w"> </span><span class="s2">"hydra-suite @ git+https://github.com/neurorishika/hydra-suite.git@main"</span>
 </span><span id="__span-6-3"><a id="__codelineno-6-3" name="__codelineno-6-3" href="#__codelineno-6-3"></a>
 </span><span id="__span-6-4"><a id="__codelineno-6-4" name="__codelineno-6-4" href="#__codelineno-6-4"></a><span class="c1"># Specific tag</span>
-</span><span id="__span-6-5"><a id="__codelineno-6-5" name="__codelineno-6-5" href="#__codelineno-6-5"></a>pip<span class="w"> </span>install<span class="w"> </span><span class="s2">&quot;hydra-suite @ git+https://github.com/neurorishika/hydra-suite.git@v1.0.0&quot;</span>
+</span><span id="__span-6-5"><a id="__codelineno-6-5" name="__codelineno-6-5" href="#__codelineno-6-5"></a>pip<span class="w"> </span>install<span class="w"> </span><span class="s2">"hydra-suite @ git+https://github.com/neurorishika/hydra-suite.git@v1.0.0"</span>
 </span></code></pre></div>
 <h3 id="upgrading-a-github-install">Upgrading a GitHub install<a class="headerlink" href="#upgrading-a-github-install" title="Permanent link">&para;</a></h3>
 <div class="language-bash highlight"><pre><span></span><code><span id="__span-7-1"><a id="__codelineno-7-1" name="__codelineno-7-1" href="#__codelineno-7-1"></a>pip<span class="w"> </span>install<span class="w"> </span>--upgrade<span class="w"> </span>--force-reinstall<span class="w"> </span>--no-deps<span class="w"> </span><span class="se">\</span>
-</span><span id="__span-7-2"><a id="__codelineno-7-2" name="__codelineno-7-2" href="#__codelineno-7-2"></a><span class="w">    </span><span class="s2">&quot;hydra-suite @ git+https://github.com/neurorishika/hydra-suite.git&quot;</span>
+</span><span id="__span-7-2"><a id="__codelineno-7-2" name="__codelineno-7-2" href="#__codelineno-7-2"></a><span class="w">    </span><span class="s2">"hydra-suite @ git+https://github.com/neurorishika/hydra-suite.git"</span>
 </span></code></pre></div>
 <hr />
 <h2 id="conda-pip-developer-install">conda + pip (developer install)<a class="headerlink" href="#conda-pip-developer-install" title="Permanent link">&para;</a></h2>
@@ -2634,11 +2760,11 @@ README.</p>
 <h2 id="after-installation">After installation<a class="headerlink" href="#after-installation" title="Permanent link">&para;</a></h2>
 <h3 id="verify">Verify<a class="headerlink" href="#verify" title="Permanent link">&para;</a></h3>
 <div class="language-bash highlight"><pre><span></span><code><span id="__span-12-1"><a id="__codelineno-12-1" name="__codelineno-12-1" href="#__codelineno-12-1"></a>hydra<span class="w"> </span>--help
-</span><span id="__span-12-2"><a id="__codelineno-12-2" name="__codelineno-12-2" href="#__codelineno-12-2"></a>python<span class="w"> </span>-c<span class="w"> </span><span class="s2">&quot;import torch; print(&#39;CUDA:&#39;, torch.cuda.is_available(), &#39;| MPS:&#39;, torch.backends.mps.is_available())&quot;</span>
+</span><span id="__span-12-2"><a id="__codelineno-12-2" name="__codelineno-12-2" href="#__codelineno-12-2"></a>python<span class="w"> </span>-c<span class="w"> </span><span class="s2">"import torch; print('CUDA:', torch.cuda.is_available(), '| MPS:', torch.backends.mps.is_available())"</span>
 </span></code></pre></div>
 <p>For CUDA, also check ONNX Runtime:</p>
-<div class="language-bash highlight"><pre><span></span><code><span id="__span-13-1"><a id="__codelineno-13-1" name="__codelineno-13-1" href="#__codelineno-13-1"></a>python<span class="w"> </span>-c<span class="w"> </span><span class="s2">&quot;import onnxruntime as ort; print(ort.get_available_providers())&quot;</span>
-</span><span id="__span-13-2"><a id="__codelineno-13-2" name="__codelineno-13-2" href="#__codelineno-13-2"></a><span class="c1"># Should include &#39;CUDAExecutionProvider&#39;</span>
+<div class="language-bash highlight"><pre><span></span><code><span id="__span-13-1"><a id="__codelineno-13-1" name="__codelineno-13-1" href="#__codelineno-13-1"></a>python<span class="w"> </span>-c<span class="w"> </span><span class="s2">"import onnxruntime as ort; print(ort.get_available_providers())"</span>
+</span><span id="__span-13-2"><a id="__codelineno-13-2" name="__codelineno-13-2" href="#__codelineno-13-2"></a><span class="c1"># Should include 'CUDAExecutionProvider'</span>
 </span></code></pre></div>
 <h3 id="launch">Launch<a class="headerlink" href="#launch" title="Permanent link">&para;</a></h3>
 <div class="language-bash highlight"><pre><span></span><code><span id="__span-14-1"><a id="__codelineno-14-1" name="__codelineno-14-1" href="#__codelineno-14-1"></a>hydra<span class="w">              </span><span class="c1"># HYDRA Suite launcher</span>
@@ -2714,7 +2840,7 @@ README.</p>
 </span><span id="__span-15-6"><a id="__codelineno-15-6" name="__codelineno-15-6" href="#__codelineno-15-6"></a><span class="nv">HYDRA_CONFIG_DIR</span><span class="o">=</span>./my-project-config<span class="w"> </span>mat
 </span><span id="__span-15-7"><a id="__codelineno-15-7" name="__codelineno-15-7" href="#__codelineno-15-7"></a>
 </span><span id="__span-15-8"><a id="__codelineno-15-8" name="__codelineno-15-8" href="#__codelineno-15-8"></a><span class="c1"># Check where everything currently points</span>
-</span><span id="__span-15-9"><a id="__codelineno-15-9" name="__codelineno-15-9" href="#__codelineno-15-9"></a>python<span class="w"> </span>-c<span class="w"> </span><span class="s2">&quot;from hydra_suite.paths import print_paths; print_paths()&quot;</span>
+</span><span id="__span-15-9"><a id="__codelineno-15-9" name="__codelineno-15-9" href="#__codelineno-15-9"></a>python<span class="w"> </span>-c<span class="w"> </span><span class="s2">"from hydra_suite.paths import print_paths; print_paths()"</span>
 </span></code></pre></div>
 <p>All sub-applications (TrackerKit, PoseKit, DetectKit, ClassKit, RefineKit, FilterKit) use the same <code>hydra_suite.paths</code> module, so they all respect these overrides and share the same data directories.</p>
 <h3 id="programmatic-access-from-other-tools">Programmatic access from other tools<a class="headerlink" href="#programmatic-access-from-other-tools" title="Permanent link">&para;</a></h3>
@@ -2737,7 +2863,7 @@ README.</p>
 </span></code></pre></div>
 <h3 id="pip-github">pip (GitHub)<a class="headerlink" href="#pip-github" title="Permanent link">&para;</a></h3>
 <div class="language-bash highlight"><pre><span></span><code><span id="__span-19-1"><a id="__codelineno-19-1" name="__codelineno-19-1" href="#__codelineno-19-1"></a>pip<span class="w"> </span>install<span class="w"> </span>--upgrade<span class="w"> </span>--force-reinstall<span class="w"> </span>--no-deps<span class="w"> </span><span class="se">\</span>
-</span><span id="__span-19-2"><a id="__codelineno-19-2" name="__codelineno-19-2" href="#__codelineno-19-2"></a><span class="w">    </span><span class="s2">&quot;hydra-suite @ git+https://github.com/neurorishika/hydra-suite.git&quot;</span>
+</span><span id="__span-19-2"><a id="__codelineno-19-2" name="__codelineno-19-2" href="#__codelineno-19-2"></a><span class="w">    </span><span class="s2">"hydra-suite @ git+https://github.com/neurorishika/hydra-suite.git"</span>
 </span></code></pre></div>
 <h3 id="conda-pip-developer">conda + pip (developer)<a class="headerlink" href="#conda-pip-developer" title="Permanent link">&para;</a></h3>
 <div class="language-bash highlight"><pre><span></span><code><span id="__span-20-1"><a id="__codelineno-20-1" name="__codelineno-20-1" href="#__codelineno-20-1"></a>conda<span class="w"> </span>activate<span class="w"> </span>hydra-mps<span class="w">  </span><span class="c1"># or your env</span>
@@ -2766,7 +2892,7 @@ README.</p>
 <h3 id="fresh-reinstall">Fresh reinstall<a class="headerlink" href="#fresh-reinstall" title="Permanent link">&para;</a></h3>
 <div class="language-bash highlight"><pre><span></span><code><span id="__span-22-1"><a id="__codelineno-22-1" name="__codelineno-22-1" href="#__codelineno-22-1"></a><span class="c1"># pip</span>
 </span><span id="__span-22-2"><a id="__codelineno-22-2" name="__codelineno-22-2" href="#__codelineno-22-2"></a>pip<span class="w"> </span>uninstall<span class="w"> </span>hydra-suite
-</span><span id="__span-22-3"><a id="__codelineno-22-3" name="__codelineno-22-3" href="#__codelineno-22-3"></a>pip<span class="w"> </span>install<span class="w"> </span><span class="s2">&quot;hydra-suite[cuda]&quot;</span>
+</span><span id="__span-22-3"><a id="__codelineno-22-3" name="__codelineno-22-3" href="#__codelineno-22-3"></a>pip<span class="w"> </span>install<span class="w"> </span><span class="s2">"hydra-suite[cuda]"</span>
 </span><span id="__span-22-4"><a id="__codelineno-22-4" name="__codelineno-22-4" href="#__codelineno-22-4"></a>
 </span><span id="__span-22-5"><a id="__codelineno-22-5" name="__codelineno-22-5" href="#__codelineno-22-5"></a><span class="c1"># conda</span>
 </span><span id="__span-22-6"><a id="__codelineno-22-6" name="__codelineno-22-6" href="#__codelineno-22-6"></a>conda<span class="w"> </span>env<span class="w"> </span>remove<span class="w"> </span>-n<span class="w"> </span>hydra-cuda

@@ -873,6 +873,69 @@
   
   
     <li class="md-nav__item">
+      <a href="../../runbooks/detectkit-headless-training/" class="md-nav__link">
+        
+  
+  <span class="md-ellipsis">
+    DetectKit Headless Training
+  </span>
+  
+
+      </a>
+    </li>
+  
+
+              
+            
+              
+                
+  
+  
+  
+  
+    <li class="md-nav__item">
+      <a href="../../user-guide/detectkit-semantic-escalation/" class="md-nav__link">
+        
+  
+  <span class="md-ellipsis">
+    DetectKit: Semantic Escalation (SAM3)
+  </span>
+  
+
+      </a>
+    </li>
+  
+
+              
+            
+              
+                
+  
+  
+  
+  
+    <li class="md-nav__item">
+      <a href="../../user-guide/detectkit-sahi-calibration/" class="md-nav__link">
+        
+  
+  <span class="md-ellipsis">
+    DetectKit: SAHI Calibration Profiles
+  </span>
+  
+
+      </a>
+    </li>
+  
+
+              
+            
+              
+                
+  
+  
+  
+  
+    <li class="md-nav__item">
       <a href="../../user-guide/filterkit/" class="md-nav__link">
         
   
@@ -1132,6 +1195,48 @@
   
   
     <li class="md-nav__item">
+      <a href="../../developer-guide/resource-containment/" class="md-nav__link">
+        
+  
+  <span class="md-ellipsis">
+    Resource Containment
+  </span>
+  
+
+      </a>
+    </li>
+  
+
+              
+            
+              
+                
+  
+  
+  
+  
+    <li class="md-nav__item">
+      <a href="../../developer-guide/profiling/" class="md-nav__link">
+        
+  
+  <span class="md-ellipsis">
+    Profiling
+  </span>
+  
+
+      </a>
+    </li>
+  
+
+              
+            
+              
+                
+  
+  
+  
+  
+    <li class="md-nav__item">
       <a href="../../developer-guide/dependency-cuda-updates/" class="md-nav__link">
         
   
@@ -1158,6 +1263,27 @@
   
   <span class="md-ellipsis">
     Performance Tuning
+  </span>
+  
+
+      </a>
+    </li>
+  
+
+              
+            
+              
+                
+  
+  
+  
+  
+    <li class="md-nav__item">
+      <a href="../../developer-guide/inference-fast-mode/" class="md-nav__link">
+        
+  
+  <span class="md-ellipsis">
+    Inference Fast Mode
   </span>
   
 
@@ -1882,6 +2008,15 @@
   <a href="#hydra_suite.posekit.core.extensions.pick_frames_stratified" class="md-nav__link">
     <span class="md-ellipsis">
       <code class="doc-symbol doc-symbol-toc doc-symbol-function"></code>&nbsp;pick_frames_stratified
+    </span>
+  </a>
+  
+</li>
+        
+          <li class="md-nav__item">
+  <a href="#hydra_suite.posekit.core.extensions.select_frames_by_cluster_coverage" class="md-nav__link">
+    <span class="md-ellipsis">
+      <code class="doc-symbol doc-symbol-toc doc-symbol-function"></code>&nbsp;select_frames_by_cluster_coverage
     </span>
   </a>
   
@@ -3298,6 +3433,15 @@
   <a href="#hydra_suite.posekit.core.extensions.pick_frames_stratified" class="md-nav__link">
     <span class="md-ellipsis">
       <code class="doc-symbol doc-symbol-toc doc-symbol-function"></code>&nbsp;pick_frames_stratified
+    </span>
+  </a>
+  
+</li>
+        
+          <li class="md-nav__item">
+  <a href="#hydra_suite.posekit.core.extensions.select_frames_by_cluster_coverage" class="md-nav__link">
+    <span class="md-ellipsis">
+      <code class="doc-symbol doc-symbol-toc doc-symbol-function"></code>&nbsp;select_frames_by_cluster_coverage
     </span>
   </a>
   
@@ -5033,7 +5177,7 @@ Returns: (needs_compute_indices, cached_indices)</p>
 
 
 <h3 id="hydra_suite.posekit.core.extensions.cluster_embeddings_cosine" class="doc doc-heading">
-<code class="doc-symbol doc-symbol-heading doc-symbol-function"></code>            <code class="highlight language-python"><span class="n">cluster_embeddings_cosine</span><span class="p">(</span><span class="n">emb</span><span class="p">,</span> <span class="n">k</span><span class="p">,</span> <span class="n">method</span><span class="o">=</span><span class="s1">&#39;hierarchical&#39;</span><span class="p">,</span> <span class="n">seed</span><span class="o">=</span><span class="mi">0</span><span class="p">,</span> <span class="n">hierarchical_limit</span><span class="o">=</span><span class="mi">2500</span><span class="p">)</span></code>
+<code class="doc-symbol doc-symbol-heading doc-symbol-function"></code>            <code class="highlight language-python"><span class="n">cluster_embeddings_cosine</span><span class="p">(</span><span class="n">emb</span><span class="p">,</span> <span class="n">k</span><span class="p">,</span> <span class="n">method</span><span class="o">=</span><span class="s1">'hierarchical'</span><span class="p">,</span> <span class="n">seed</span><span class="o">=</span><span class="mi">0</span><span class="p">,</span> <span class="n">hierarchical_limit</span><span class="o">=</span><span class="mi">2500</span><span class="p">)</span></code>
 
 <a href="#hydra_suite.posekit.core.extensions.cluster_embeddings_cosine" class="headerlink" title="Permanent link">&para;</a></h3>
 
@@ -5051,7 +5195,7 @@ Returns cluster labels in [0..k-1].</p>
 
 
 <h3 id="hydra_suite.posekit.core.extensions.pick_frames_stratified" class="doc doc-heading">
-<code class="doc-symbol doc-symbol-heading doc-symbol-function"></code>            <code class="highlight language-python"><span class="n">pick_frames_stratified</span><span class="p">(</span><span class="n">emb</span><span class="p">,</span> <span class="n">cluster_id</span><span class="p">,</span> <span class="n">want_n</span><span class="p">,</span> <span class="n">eligible_indices</span><span class="p">,</span> <span class="n">min_per_cluster</span><span class="o">=</span><span class="mi">1</span><span class="p">,</span> <span class="n">seed</span><span class="o">=</span><span class="mi">0</span><span class="p">,</span> <span class="n">strategy</span><span class="o">=</span><span class="s1">&#39;centroid_then_diverse&#39;</span><span class="p">)</span></code>
+<code class="doc-symbol doc-symbol-heading doc-symbol-function"></code>            <code class="highlight language-python"><span class="n">pick_frames_stratified</span><span class="p">(</span><span class="n">emb</span><span class="p">,</span> <span class="n">cluster_id</span><span class="p">,</span> <span class="n">want_n</span><span class="p">,</span> <span class="n">eligible_indices</span><span class="p">,</span> <span class="n">min_per_cluster</span><span class="o">=</span><span class="mi">1</span><span class="p">,</span> <span class="n">seed</span><span class="o">=</span><span class="mi">0</span><span class="p">,</span> <span class="n">strategy</span><span class="o">=</span><span class="s1">'centroid_then_diverse'</span><span class="p">)</span></code>
 
 <a href="#hydra_suite.posekit.core.extensions.pick_frames_stratified" class="headerlink" title="Permanent link">&para;</a></h3>
 
@@ -5062,6 +5206,37 @@ Returns cluster labels in [0..k-1].</p>
 emb: embeddings for eligible_indices (same order)
 cluster_id: cluster labels for eligible_indices
 returns: selected <em>global</em> indices (from eligible_indices mapping)</p>
+
+    </div>
+
+</div>
+
+<div class="doc doc-object doc-function">
+
+
+<h3 id="hydra_suite.posekit.core.extensions.select_frames_by_cluster_coverage" class="doc doc-heading">
+<code class="doc-symbol doc-symbol-heading doc-symbol-function"></code>            <code class="highlight language-python"><span class="n">select_frames_by_cluster_coverage</span><span class="p">(</span><span class="n">cluster_id</span><span class="p">,</span> <span class="n">eligible_indices</span><span class="p">,</span> <span class="n">frame_key_of_index</span><span class="p">,</span> <span class="n">want_n_frames</span><span class="p">)</span></code>
+
+<a href="#hydra_suite.posekit.core.extensions.select_frames_by_cluster_coverage" class="headerlink" title="Permanent link">&para;</a></h3>
+
+
+    <div class="doc doc-contents ">
+
+        <p>Greedily select frame keys to maximize embedding-cluster coverage.</p>
+<p><code>cluster_id</code> is aligned with <code>eligible_indices</code> (cluster_id[i] is the
+cluster of eligible_indices[i], matching cluster_embeddings_cosine's
+output convention). <code>frame_key_of_index</code> maps a subset (or all) of
+<code>eligible_indices</code> to an opaque, comparable per-source frame key (see
+<code>hydra_suite.posekit.core.frame_grouping.group_indices_by_frame</code>).</p>
+<p>Diversity is scored on the true per-individual embeddings/clusters —
+never averaged across a frame's companions. Each round picks the
+frame covering the most not-yet-covered clusters; ties break on (a)
+total distinct clusters spanned, then (b) the smallest frame key, for
+determinism. Once all clusters are covered, remaining picks continue
+to use the same ranking (which naturally falls back to "most total
+distinct clusters" once new-coverage is zero for every candidate),
+so the full requested budget is used rather than under-filling.</p>
+<p>Returns the selected frame keys, in selection order.</p>
 
     </div>
 
@@ -5105,7 +5280,7 @@ returns: selected <em>global</em> indices (from eligible_indices mapping)</p>
 
 
 <h3 id="hydra_suite.posekit.core.extensions.migrate_labels_keypoints" class="doc doc-heading">
-<code class="doc-symbol doc-symbol-heading doc-symbol-function"></code>            <code class="highlight language-python"><span class="n">migrate_labels_keypoints</span><span class="p">(</span><span class="n">labels_dir</span><span class="p">,</span> <span class="n">old_kpt_names</span><span class="p">,</span> <span class="n">new_kpt_names</span><span class="p">,</span> <span class="n">mode</span><span class="o">=</span><span class="s1">&#39;name&#39;</span><span class="p">)</span></code>
+<code class="doc-symbol doc-symbol-heading doc-symbol-function"></code>            <code class="highlight language-python"><span class="n">migrate_labels_keypoints</span><span class="p">(</span><span class="n">labels_dir</span><span class="p">,</span> <span class="n">old_kpt_names</span><span class="p">,</span> <span class="n">new_kpt_names</span><span class="p">,</span> <span class="n">mode</span><span class="o">=</span><span class="s1">'name'</span><span class="p">)</span></code>
 
 <a href="#hydra_suite.posekit.core.extensions.migrate_labels_keypoints" class="headerlink" title="Permanent link">&para;</a></h3>
 
@@ -6918,7 +7093,7 @@ top-level <code>project.images_dir</code>.</p>
 
 
 <h3 id="hydra_suite.posekit.gui.project.add_source_to_project" class="doc doc-heading">
-<code class="doc-symbol doc-symbol-heading doc-symbol-function"></code>            <code class="highlight language-python"><span class="n">add_source_to_project</span><span class="p">(</span><span class="n">project</span><span class="p">,</span> <span class="n">dataset_dir</span><span class="p">,</span> <span class="n">description</span><span class="o">=</span><span class="s1">&#39;&#39;</span><span class="p">)</span></code>
+<code class="doc-symbol doc-symbol-heading doc-symbol-function"></code>            <code class="highlight language-python"><span class="n">add_source_to_project</span><span class="p">(</span><span class="n">project</span><span class="p">,</span> <span class="n">dataset_dir</span><span class="p">,</span> <span class="n">description</span><span class="o">=</span><span class="s1">''</span><span class="p">)</span></code>
 
 <a href="#hydra_suite.posekit.gui.project.add_source_to_project" class="headerlink" title="Permanent link">&para;</a></h3>
 

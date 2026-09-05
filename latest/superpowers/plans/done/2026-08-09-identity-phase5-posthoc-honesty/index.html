@@ -1,0 +1,2092 @@
+
+<!doctype html>
+<html lang="en" class="no-js">
+  <head>
+    
+      <meta charset="utf-8">
+      <meta name="viewport" content="width=device-width,initial-scale=1">
+      
+        <meta name="description" content="User and developer documentation for HYDRA Suite">
+      
+      
+      
+        <link rel="canonical" href="https://neurorishika.github.io/hydra-suite/latest/superpowers/plans/done/2026-08-09-identity-phase5-posthoc-honesty/">
+      
+      
+      
+      
+      <link rel="icon" href="../../../../assets/images/favicon.png">
+      <meta name="generator" content="mkdocs-1.6.1, mkdocs-material-9.5.43">
+    
+    
+      
+        <title>Identity Overhaul — Phase 5: Post-hoc Self-Sufficiency + Forward-Backward Smoothing (the Honesty Fix) - HYDRA Suite Docs</title>
+      
+    
+    
+      <link rel="stylesheet" href="../../../../assets/stylesheets/main.0253249f.min.css">
+      
+        
+        <link rel="stylesheet" href="../../../../assets/stylesheets/palette.06af60db.min.css">
+      
+      
+
+
+    
+    
+      
+    
+    
+      
+        
+        
+        <link rel="preconnect" href="https://fonts.gstatic.com" crossorigin>
+        <link rel="stylesheet" href="https://fonts.googleapis.com/css?family=Roboto:300,300i,400,400i,700,700i%7CRoboto+Mono:400,400i,700,700i&display=fallback">
+        <style>:root{--md-text-font:"Roboto";--md-code-font:"Roboto Mono"}</style>
+      
+    
+    
+      <link rel="stylesheet" href="../../../../assets/_mkdocstrings.css">
+    
+    <script>__md_scope=new URL("../../../..",location),__md_hash=e=>[...e].reduce(((e,_)=>(e<<5)-e+_.charCodeAt(0)),0),__md_get=(e,_=localStorage,t=__md_scope)=>JSON.parse(_.getItem(t.pathname+"."+e)),__md_set=(e,_,t=localStorage,a=__md_scope)=>{try{t.setItem(a.pathname+"."+e,JSON.stringify(_))}catch(e){}}</script>
+    
+      
+
+    
+    
+    
+  </head>
+  
+  
+    
+    
+      
+    
+    
+    
+    
+    <body dir="ltr" data-md-color-scheme="default" data-md-color-primary="blue" data-md-color-accent="light-blue">
+  
+    
+    <input class="md-toggle" data-md-toggle="drawer" type="checkbox" id="__drawer" autocomplete="off">
+    <input class="md-toggle" data-md-toggle="search" type="checkbox" id="__search" autocomplete="off">
+    <label class="md-overlay" for="__drawer"></label>
+    <div data-md-component="skip">
+      
+        
+        <a href="#identity-overhaul-phase-5-post-hoc-self-sufficiency-forward-backward-smoothing-the-honesty-fix" class="md-skip">
+          Skip to content
+        </a>
+      
+    </div>
+    <div data-md-component="announce">
+      
+    </div>
+    
+      <div data-md-color-scheme="default" data-md-component="outdated" hidden>
+        
+      </div>
+    
+    
+      
+
+<header class="md-header" data-md-component="header">
+  <nav class="md-header__inner md-grid" aria-label="Header">
+    <a href="../../../.." title="HYDRA Suite Docs" class="md-header__button md-logo" aria-label="HYDRA Suite Docs" data-md-component="logo">
+      
+  
+  <svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 24 24"><path d="M12 8a3 3 0 0 0 3-3 3 3 0 0 0-3-3 3 3 0 0 0-3 3 3 3 0 0 0 3 3m0 3.54C9.64 9.35 6.5 8 3 8v11c3.5 0 6.64 1.35 9 3.54 2.36-2.19 5.5-3.54 9-3.54V8c-3.5 0-6.64 1.35-9 3.54"/></svg>
+
+    </a>
+    <label class="md-header__button md-icon" for="__drawer">
+      
+      <svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 24 24"><path d="M3 6h18v2H3zm0 5h18v2H3zm0 5h18v2H3z"/></svg>
+    </label>
+    <div class="md-header__title" data-md-component="header-title">
+      <div class="md-header__ellipsis">
+        <div class="md-header__topic">
+          <span class="md-ellipsis">
+            HYDRA Suite Docs
+          </span>
+        </div>
+        <div class="md-header__topic" data-md-component="header-topic">
+          <span class="md-ellipsis">
+            
+              Identity Overhaul — Phase 5: Post-hoc Self-Sufficiency + Forward-Backward Smoothing (the Honesty Fix)
+            
+          </span>
+        </div>
+      </div>
+    </div>
+    
+      
+        <form class="md-header__option" data-md-component="palette">
+  
+    
+    
+    
+    <input class="md-option" data-md-color-media="(prefers-color-scheme: light)" data-md-color-scheme="default" data-md-color-primary="blue" data-md-color-accent="light-blue"  aria-label="Switch to dark mode"  type="radio" name="__palette" id="__palette_0">
+    
+      <label class="md-header__button md-icon" title="Switch to dark mode" for="__palette_1" hidden>
+        <svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 24 24"><path d="m17.75 4.09-2.53 1.94.91 3.06-2.63-1.81-2.63 1.81.91-3.06-2.53-1.94L12.44 4l1.06-3 1.06 3zm3.5 6.91-1.64 1.25.59 1.98-1.7-1.17-1.7 1.17.59-1.98L15.75 11l2.06-.05L18.5 9l.69 1.95zm-2.28 4.95c.83-.08 1.72 1.1 1.19 1.85-.32.45-.66.87-1.08 1.27C15.17 23 8.84 23 4.94 19.07c-3.91-3.9-3.91-10.24 0-14.14.4-.4.82-.76 1.27-1.08.75-.53 1.93.36 1.85 1.19-.27 2.86.69 5.83 2.89 8.02a9.96 9.96 0 0 0 8.02 2.89m-1.64 2.02a12.08 12.08 0 0 1-7.8-3.47c-2.17-2.19-3.33-5-3.49-7.82-2.81 3.14-2.7 7.96.31 10.98 3.02 3.01 7.84 3.12 10.98.31"/></svg>
+      </label>
+    
+  
+    
+    
+    
+    <input class="md-option" data-md-color-media="(prefers-color-scheme: dark)" data-md-color-scheme="slate" data-md-color-primary="blue" data-md-color-accent="light-blue"  aria-label="Switch to light mode"  type="radio" name="__palette" id="__palette_1">
+    
+      <label class="md-header__button md-icon" title="Switch to light mode" for="__palette_0" hidden>
+        <svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 24 24"><path d="M12 7a5 5 0 0 1 5 5 5 5 0 0 1-5 5 5 5 0 0 1-5-5 5 5 0 0 1 5-5m0 2a3 3 0 0 0-3 3 3 3 0 0 0 3 3 3 3 0 0 0 3-3 3 3 0 0 0-3-3m0-7 2.39 3.42C13.65 5.15 12.84 5 12 5s-1.65.15-2.39.42zM3.34 7l4.16-.35A7.2 7.2 0 0 0 5.94 8.5c-.44.74-.69 1.5-.83 2.29zm.02 10 1.76-3.77a7.131 7.131 0 0 0 2.38 4.14zM20.65 7l-1.77 3.79a7.02 7.02 0 0 0-2.38-4.15zm-.01 10-4.14.36c.59-.51 1.12-1.14 1.54-1.86.42-.73.69-1.5.83-2.29zM12 22l-2.41-3.44c.74.27 1.55.44 2.41.44.82 0 1.63-.17 2.37-.44z"/></svg>
+      </label>
+    
+  
+</form>
+      
+    
+    
+      <script>var palette=__md_get("__palette");if(palette&&palette.color){if("(prefers-color-scheme)"===palette.color.media){var media=matchMedia("(prefers-color-scheme: light)"),input=document.querySelector(media.matches?"[data-md-color-media='(prefers-color-scheme: light)']":"[data-md-color-media='(prefers-color-scheme: dark)']");palette.color.media=input.getAttribute("data-md-color-media"),palette.color.scheme=input.getAttribute("data-md-color-scheme"),palette.color.primary=input.getAttribute("data-md-color-primary"),palette.color.accent=input.getAttribute("data-md-color-accent")}for(var[key,value]of Object.entries(palette.color))document.body.setAttribute("data-md-color-"+key,value)}</script>
+    
+    
+    
+      <label class="md-header__button md-icon" for="__search">
+        
+        <svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 24 24"><path d="M9.5 3A6.5 6.5 0 0 1 16 9.5c0 1.61-.59 3.09-1.56 4.23l.27.27h.79l5 5-1.5 1.5-5-5v-.79l-.27-.27A6.52 6.52 0 0 1 9.5 16 6.5 6.5 0 0 1 3 9.5 6.5 6.5 0 0 1 9.5 3m0 2C7 5 5 7 5 9.5S7 14 9.5 14 14 12 14 9.5 12 5 9.5 5"/></svg>
+      </label>
+      <div class="md-search" data-md-component="search" role="dialog">
+  <label class="md-search__overlay" for="__search"></label>
+  <div class="md-search__inner" role="search">
+    <form class="md-search__form" name="search">
+      <input type="text" class="md-search__input" name="query" aria-label="Search" placeholder="Search" autocapitalize="off" autocorrect="off" autocomplete="off" spellcheck="false" data-md-component="search-query" required>
+      <label class="md-search__icon md-icon" for="__search">
+        
+        <svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 24 24"><path d="M9.5 3A6.5 6.5 0 0 1 16 9.5c0 1.61-.59 3.09-1.56 4.23l.27.27h.79l5 5-1.5 1.5-5-5v-.79l-.27-.27A6.52 6.52 0 0 1 9.5 16 6.5 6.5 0 0 1 3 9.5 6.5 6.5 0 0 1 9.5 3m0 2C7 5 5 7 5 9.5S7 14 9.5 14 14 12 14 9.5 12 5 9.5 5"/></svg>
+        
+        <svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 24 24"><path d="M20 11v2H8l5.5 5.5-1.42 1.42L4.16 12l7.92-7.92L13.5 5.5 8 11z"/></svg>
+      </label>
+      <nav class="md-search__options" aria-label="Search">
+        
+        <button type="reset" class="md-search__icon md-icon" title="Clear" aria-label="Clear" tabindex="-1">
+          
+          <svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 24 24"><path d="M19 6.41 17.59 5 12 10.59 6.41 5 5 6.41 10.59 12 5 17.59 6.41 19 12 13.41 17.59 19 19 17.59 13.41 12z"/></svg>
+        </button>
+      </nav>
+      
+        <div class="md-search__suggest" data-md-component="search-suggest"></div>
+      
+    </form>
+    <div class="md-search__output">
+      <div class="md-search__scrollwrap" tabindex="0" data-md-scrollfix>
+        <div class="md-search-result" data-md-component="search-result">
+          <div class="md-search-result__meta">
+            Initializing search
+          </div>
+          <ol class="md-search-result__list" role="presentation"></ol>
+        </div>
+      </div>
+    </div>
+  </div>
+</div>
+    
+    
+      <div class="md-header__source">
+        <a href="https://github.com/neurorishika/hydra-suite" title="Go to repository" class="md-source" data-md-component="source">
+  <div class="md-source__icon md-icon">
+    
+    <svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 448 512"><!--! Font Awesome Free 6.6.0 by @fontawesome - https://fontawesome.com License - https://fontawesome.com/license/free (Icons: CC BY 4.0, Fonts: SIL OFL 1.1, Code: MIT License) Copyright 2024 Fonticons, Inc.--><path d="M439.55 236.05 244 40.45a28.87 28.87 0 0 0-40.81 0l-40.66 40.63 51.52 51.52c27.06-9.14 52.68 16.77 43.39 43.68l49.66 49.66c34.23-11.8 61.18 31 35.47 56.69-26.49 26.49-70.21-2.87-56-37.34L240.22 199v121.85c25.3 12.54 22.26 41.85 9.08 55a34.34 34.34 0 0 1-48.55 0c-17.57-17.6-11.07-46.91 11.25-56v-123c-20.8-8.51-24.6-30.74-18.64-45L142.57 101 8.45 235.14a28.86 28.86 0 0 0 0 40.81l195.61 195.6a28.86 28.86 0 0 0 40.8 0l194.69-194.69a28.86 28.86 0 0 0 0-40.81"/></svg>
+  </div>
+  <div class="md-source__repository">
+    neurorishika/hydra-suite
+  </div>
+</a>
+      </div>
+    
+  </nav>
+  
+</header>
+    
+    <div class="md-container" data-md-component="container">
+      
+      
+        
+          
+            
+<nav class="md-tabs" aria-label="Tabs" data-md-component="tabs">
+  <div class="md-grid">
+    <ul class="md-tabs__list">
+      
+        
+  
+  
+  
+    <li class="md-tabs__item">
+      <a href="../../../.." class="md-tabs__link">
+        
+  
+    
+  
+  Home
+
+      </a>
+    </li>
+  
+
+      
+        
+  
+  
+  
+    
+    
+      <li class="md-tabs__item">
+        <a href="../../../../getting-started/installation/" class="md-tabs__link">
+          
+  
+  Getting Started
+
+        </a>
+      </li>
+    
+  
+
+      
+        
+  
+  
+  
+    
+    
+      <li class="md-tabs__item">
+        <a href="../../../../user-guide/overview/" class="md-tabs__link">
+          
+  
+  User Guide
+
+        </a>
+      </li>
+    
+  
+
+      
+        
+  
+  
+  
+    
+    
+      <li class="md-tabs__item">
+        <a href="../../../../developer-guide/architecture/" class="md-tabs__link">
+          
+  
+  Developer Guide
+
+        </a>
+      </li>
+    
+  
+
+      
+        
+  
+  
+  
+    
+    
+      <li class="md-tabs__item">
+        <a href="../../../../reference/api-index/" class="md-tabs__link">
+          
+  
+  Reference
+
+        </a>
+      </li>
+    
+  
+
+      
+    </ul>
+  </div>
+</nav>
+          
+        
+      
+      <main class="md-main" data-md-component="main">
+        <div class="md-main__inner md-grid">
+          
+            
+              
+              <div class="md-sidebar md-sidebar--primary" data-md-component="sidebar" data-md-type="navigation" >
+                <div class="md-sidebar__scrollwrap">
+                  <div class="md-sidebar__inner">
+                    
+
+
+  
+
+
+<nav class="md-nav md-nav--primary md-nav--lifted" aria-label="Navigation" data-md-level="0">
+  <label class="md-nav__title" for="__drawer">
+    <a href="../../../.." title="HYDRA Suite Docs" class="md-nav__button md-logo" aria-label="HYDRA Suite Docs" data-md-component="logo">
+      
+  
+  <svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 24 24"><path d="M12 8a3 3 0 0 0 3-3 3 3 0 0 0-3-3 3 3 0 0 0-3 3 3 3 0 0 0 3 3m0 3.54C9.64 9.35 6.5 8 3 8v11c3.5 0 6.64 1.35 9 3.54 2.36-2.19 5.5-3.54 9-3.54V8c-3.5 0-6.64 1.35-9 3.54"/></svg>
+
+    </a>
+    HYDRA Suite Docs
+  </label>
+  
+    <div class="md-nav__source">
+      <a href="https://github.com/neurorishika/hydra-suite" title="Go to repository" class="md-source" data-md-component="source">
+  <div class="md-source__icon md-icon">
+    
+    <svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 448 512"><!--! Font Awesome Free 6.6.0 by @fontawesome - https://fontawesome.com License - https://fontawesome.com/license/free (Icons: CC BY 4.0, Fonts: SIL OFL 1.1, Code: MIT License) Copyright 2024 Fonticons, Inc.--><path d="M439.55 236.05 244 40.45a28.87 28.87 0 0 0-40.81 0l-40.66 40.63 51.52 51.52c27.06-9.14 52.68 16.77 43.39 43.68l49.66 49.66c34.23-11.8 61.18 31 35.47 56.69-26.49 26.49-70.21-2.87-56-37.34L240.22 199v121.85c25.3 12.54 22.26 41.85 9.08 55a34.34 34.34 0 0 1-48.55 0c-17.57-17.6-11.07-46.91 11.25-56v-123c-20.8-8.51-24.6-30.74-18.64-45L142.57 101 8.45 235.14a28.86 28.86 0 0 0 0 40.81l195.61 195.6a28.86 28.86 0 0 0 40.8 0l194.69-194.69a28.86 28.86 0 0 0 0-40.81"/></svg>
+  </div>
+  <div class="md-source__repository">
+    neurorishika/hydra-suite
+  </div>
+</a>
+    </div>
+  
+  <ul class="md-nav__list" data-md-scrollfix>
+    
+      
+      
+  
+  
+  
+  
+    <li class="md-nav__item">
+      <a href="../../../.." class="md-nav__link">
+        
+  
+  <span class="md-ellipsis">
+    Home
+  </span>
+  
+
+      </a>
+    </li>
+  
+
+    
+      
+      
+  
+  
+  
+  
+    
+    
+    
+      
+      
+        
+      
+    
+    
+    <li class="md-nav__item md-nav__item--nested">
+      
+        
+        
+          
+        
+        <input class="md-nav__toggle md-toggle md-toggle--indeterminate" type="checkbox" id="__nav_2" >
+        
+          
+          <label class="md-nav__link" for="__nav_2" id="__nav_2_label" tabindex="0">
+            
+  
+  <span class="md-ellipsis">
+    Getting Started
+  </span>
+  
+
+            <span class="md-nav__icon md-icon"></span>
+          </label>
+        
+        <nav class="md-nav" data-md-level="1" aria-labelledby="__nav_2_label" aria-expanded="false">
+          <label class="md-nav__title" for="__nav_2">
+            <span class="md-nav__icon md-icon"></span>
+            Getting Started
+          </label>
+          <ul class="md-nav__list" data-md-scrollfix>
+            
+              
+                
+  
+  
+  
+  
+    <li class="md-nav__item">
+      <a href="../../../../getting-started/installation/" class="md-nav__link">
+        
+  
+  <span class="md-ellipsis">
+    Installation
+  </span>
+  
+
+      </a>
+    </li>
+  
+
+              
+            
+              
+                
+  
+  
+  
+  
+    <li class="md-nav__item">
+      <a href="../../../../getting-started/environments/" class="md-nav__link">
+        
+  
+  <span class="md-ellipsis">
+    Environments and Makefile
+  </span>
+  
+
+      </a>
+    </li>
+  
+
+              
+            
+              
+                
+  
+  
+  
+  
+    <li class="md-nav__item">
+      <a href="../../../../getting-started/integrations/" class="md-nav__link">
+        
+  
+  <span class="md-ellipsis">
+    Integrations
+  </span>
+  
+
+      </a>
+    </li>
+  
+
+              
+            
+              
+                
+  
+  
+  
+  
+    <li class="md-nav__item">
+      <a href="../../../../getting-started/quickstart-hydra/" class="md-nav__link">
+        
+  
+  <span class="md-ellipsis">
+    Quickstart (TrackerKit)
+  </span>
+  
+
+      </a>
+    </li>
+  
+
+              
+            
+              
+                
+  
+  
+  
+  
+    <li class="md-nav__item">
+      <a href="../../../../getting-started/quickstart-posekit/" class="md-nav__link">
+        
+  
+  <span class="md-ellipsis">
+    Quickstart (PoseKit)
+  </span>
+  
+
+      </a>
+    </li>
+  
+
+              
+            
+              
+                
+  
+  
+  
+  
+    <li class="md-nav__item">
+      <a href="../../../../getting-started/platforms/" class="md-nav__link">
+        
+  
+  <span class="md-ellipsis">
+    Platform Notes
+  </span>
+  
+
+      </a>
+    </li>
+  
+
+              
+            
+          </ul>
+        </nav>
+      
+    </li>
+  
+
+    
+      
+      
+  
+  
+  
+  
+    
+    
+    
+      
+      
+        
+      
+    
+    
+    <li class="md-nav__item md-nav__item--nested">
+      
+        
+        
+          
+        
+        <input class="md-nav__toggle md-toggle md-toggle--indeterminate" type="checkbox" id="__nav_3" >
+        
+          
+          <label class="md-nav__link" for="__nav_3" id="__nav_3_label" tabindex="0">
+            
+  
+  <span class="md-ellipsis">
+    User Guide
+  </span>
+  
+
+            <span class="md-nav__icon md-icon"></span>
+          </label>
+        
+        <nav class="md-nav" data-md-level="1" aria-labelledby="__nav_3_label" aria-expanded="false">
+          <label class="md-nav__title" for="__nav_3">
+            <span class="md-nav__icon md-icon"></span>
+            User Guide
+          </label>
+          <ul class="md-nav__list" data-md-scrollfix>
+            
+              
+                
+  
+  
+  
+  
+    <li class="md-nav__item">
+      <a href="../../../../user-guide/overview/" class="md-nav__link">
+        
+  
+  <span class="md-ellipsis">
+    Overview
+  </span>
+  
+
+      </a>
+    </li>
+  
+
+              
+            
+              
+                
+  
+  
+  
+  
+    <li class="md-nav__item">
+      <a href="../../../../user-guide/workflow/" class="md-nav__link">
+        
+  
+  <span class="md-ellipsis">
+    End-to-End Workflow
+  </span>
+  
+
+      </a>
+    </li>
+  
+
+              
+            
+              
+                
+  
+  
+  
+  
+    <li class="md-nav__item">
+      <a href="../../../../user-guide/detection-modes/" class="md-nav__link">
+        
+  
+  <span class="md-ellipsis">
+    Detection Modes
+  </span>
+  
+
+      </a>
+    </li>
+  
+
+              
+            
+              
+                
+  
+  
+  
+  
+    <li class="md-nav__item">
+      <a href="../../../../user-guide/tracking-and-merging/" class="md-nav__link">
+        
+  
+  <span class="md-ellipsis">
+    Tracking and Merging
+  </span>
+  
+
+      </a>
+    </li>
+  
+
+              
+            
+              
+                
+  
+  
+  
+  
+    <li class="md-nav__item">
+      <a href="../../../../user-guide/post-processing/" class="md-nav__link">
+        
+  
+  <span class="md-ellipsis">
+    Post-processing
+  </span>
+  
+
+      </a>
+    </li>
+  
+
+              
+            
+              
+                
+  
+  
+  
+  
+    <li class="md-nav__item">
+      <a href="../../../../user-guide/configuration-reference/" class="md-nav__link">
+        
+  
+  <span class="md-ellipsis">
+    Configuration Reference
+  </span>
+  
+
+      </a>
+    </li>
+  
+
+              
+            
+              
+                
+  
+  
+  
+  
+    <li class="md-nav__item">
+      <a href="../../../../user-guide/compute-runtimes/" class="md-nav__link">
+        
+  
+  <span class="md-ellipsis">
+    Compute Runtimes
+  </span>
+  
+
+      </a>
+    </li>
+  
+
+              
+            
+              
+                
+  
+  
+  
+  
+    <li class="md-nav__item">
+      <a href="../../../../user-guide/outputs-and-csv-schema/" class="md-nav__link">
+        
+  
+  <span class="md-ellipsis">
+    Outputs and CSV Schema
+  </span>
+  
+
+      </a>
+    </li>
+  
+
+              
+            
+              
+                
+  
+  
+  
+  
+    <li class="md-nav__item">
+      <a href="../../../../user-guide/dataset-generation/" class="md-nav__link">
+        
+  
+  <span class="md-ellipsis">
+    Dataset Generation
+  </span>
+  
+
+      </a>
+    </li>
+  
+
+              
+            
+              
+                
+  
+  
+  
+  
+    <li class="md-nav__item">
+      <a href="../../../../user-guide/individual-analysis/" class="md-nav__link">
+        
+  
+  <span class="md-ellipsis">
+    Individual Analysis
+  </span>
+  
+
+      </a>
+    </li>
+  
+
+              
+            
+              
+                
+  
+  
+  
+  
+    <li class="md-nav__item">
+      <a href="../../../../user-guide/posekit/" class="md-nav__link">
+        
+  
+  <span class="md-ellipsis">
+    PoseKit
+  </span>
+  
+
+      </a>
+    </li>
+  
+
+              
+            
+              
+                
+  
+  
+  
+  
+    <li class="md-nav__item">
+      <a href="../../../../user-guide/classkit/" class="md-nav__link">
+        
+  
+  <span class="md-ellipsis">
+    ClassKit
+  </span>
+  
+
+      </a>
+    </li>
+  
+
+              
+            
+              
+                
+  
+  
+  
+  
+    <li class="md-nav__item">
+      <a href="../../../../user-guide/detectkit/" class="md-nav__link">
+        
+  
+  <span class="md-ellipsis">
+    DetectKit
+  </span>
+  
+
+      </a>
+    </li>
+  
+
+              
+            
+              
+                
+  
+  
+  
+  
+    <li class="md-nav__item">
+      <a href="../../../../runbooks/detectkit-headless-training/" class="md-nav__link">
+        
+  
+  <span class="md-ellipsis">
+    DetectKit Headless Training
+  </span>
+  
+
+      </a>
+    </li>
+  
+
+              
+            
+              
+                
+  
+  
+  
+  
+    <li class="md-nav__item">
+      <a href="../../../../user-guide/detectkit-semantic-escalation/" class="md-nav__link">
+        
+  
+  <span class="md-ellipsis">
+    DetectKit: Semantic Escalation (SAM3)
+  </span>
+  
+
+      </a>
+    </li>
+  
+
+              
+            
+              
+                
+  
+  
+  
+  
+    <li class="md-nav__item">
+      <a href="../../../../user-guide/detectkit-sahi-calibration/" class="md-nav__link">
+        
+  
+  <span class="md-ellipsis">
+    DetectKit: SAHI Calibration Profiles
+  </span>
+  
+
+      </a>
+    </li>
+  
+
+              
+            
+              
+                
+  
+  
+  
+  
+    <li class="md-nav__item">
+      <a href="../../../../user-guide/filterkit/" class="md-nav__link">
+        
+  
+  <span class="md-ellipsis">
+    FilterKit
+  </span>
+  
+
+      </a>
+    </li>
+  
+
+              
+            
+              
+                
+  
+  
+  
+  
+    <li class="md-nav__item">
+      <a href="../../../../user-guide/refinekit/" class="md-nav__link">
+        
+  
+  <span class="md-ellipsis">
+    RefineKit
+  </span>
+  
+
+      </a>
+    </li>
+  
+
+              
+            
+              
+                
+  
+  
+  
+  
+    <li class="md-nav__item">
+      <a href="../../../../user-guide/troubleshooting/" class="md-nav__link">
+        
+  
+  <span class="md-ellipsis">
+    Troubleshooting
+  </span>
+  
+
+      </a>
+    </li>
+  
+
+              
+            
+          </ul>
+        </nav>
+      
+    </li>
+  
+
+    
+      
+      
+  
+  
+  
+  
+    
+    
+    
+      
+      
+        
+      
+    
+    
+    <li class="md-nav__item md-nav__item--nested">
+      
+        
+        
+          
+        
+        <input class="md-nav__toggle md-toggle md-toggle--indeterminate" type="checkbox" id="__nav_4" >
+        
+          
+          <label class="md-nav__link" for="__nav_4" id="__nav_4_label" tabindex="0">
+            
+  
+  <span class="md-ellipsis">
+    Developer Guide
+  </span>
+  
+
+            <span class="md-nav__icon md-icon"></span>
+          </label>
+        
+        <nav class="md-nav" data-md-level="1" aria-labelledby="__nav_4_label" aria-expanded="false">
+          <label class="md-nav__title" for="__nav_4">
+            <span class="md-nav__icon md-icon"></span>
+            Developer Guide
+          </label>
+          <ul class="md-nav__list" data-md-scrollfix>
+            
+              
+                
+  
+  
+  
+  
+    <li class="md-nav__item">
+      <a href="../../../../developer-guide/architecture/" class="md-nav__link">
+        
+  
+  <span class="md-ellipsis">
+    Architecture
+  </span>
+  
+
+      </a>
+    </li>
+  
+
+              
+            
+              
+                
+  
+  
+  
+  
+    <li class="md-nav__item">
+      <a href="../../../../developer-guide/module-map/" class="md-nav__link">
+        
+  
+  <span class="md-ellipsis">
+    Module Map
+  </span>
+  
+
+      </a>
+    </li>
+  
+
+              
+            
+              
+                
+  
+  
+  
+  
+    <li class="md-nav__item">
+      <a href="../../../../developer-guide/data-flow/" class="md-nav__link">
+        
+  
+  <span class="md-ellipsis">
+    Data Flow
+  </span>
+  
+
+      </a>
+    </li>
+  
+
+              
+            
+              
+                
+  
+  
+  
+  
+    <li class="md-nav__item">
+      <a href="../../../../developer-guide/tracking-algorithm-deep-dive/" class="md-nav__link">
+        
+  
+  <span class="md-ellipsis">
+    Tracking Algorithm Deep Dive
+  </span>
+  
+
+      </a>
+    </li>
+  
+
+              
+            
+              
+                
+  
+  
+  
+  
+    <li class="md-nav__item">
+      <a href="../../../../developer-guide/tracking-optimization/" class="md-nav__link">
+        
+  
+  <span class="md-ellipsis">
+    Tracking Optimization
+  </span>
+  
+
+      </a>
+    </li>
+  
+
+              
+            
+              
+                
+  
+  
+  
+  
+    <li class="md-nav__item">
+      <a href="../../../../developer-guide/gpu-backends/" class="md-nav__link">
+        
+  
+  <span class="md-ellipsis">
+    GPU Backends
+  </span>
+  
+
+      </a>
+    </li>
+  
+
+              
+            
+              
+                
+  
+  
+  
+  
+    <li class="md-nav__item">
+      <a href="../../../../developer-guide/runtime-integration/" class="md-nav__link">
+        
+  
+  <span class="md-ellipsis">
+    Runtime Integration
+  </span>
+  
+
+      </a>
+    </li>
+  
+
+              
+            
+              
+                
+  
+  
+  
+  
+    <li class="md-nav__item">
+      <a href="../../../../developer-guide/resource-containment/" class="md-nav__link">
+        
+  
+  <span class="md-ellipsis">
+    Resource Containment
+  </span>
+  
+
+      </a>
+    </li>
+  
+
+              
+            
+              
+                
+  
+  
+  
+  
+    <li class="md-nav__item">
+      <a href="../../../../developer-guide/profiling/" class="md-nav__link">
+        
+  
+  <span class="md-ellipsis">
+    Profiling
+  </span>
+  
+
+      </a>
+    </li>
+  
+
+              
+            
+              
+                
+  
+  
+  
+  
+    <li class="md-nav__item">
+      <a href="../../../../developer-guide/dependency-cuda-updates/" class="md-nav__link">
+        
+  
+  <span class="md-ellipsis">
+    CUDA Dependency Updates
+  </span>
+  
+
+      </a>
+    </li>
+  
+
+              
+            
+              
+                
+  
+  
+  
+  
+    <li class="md-nav__item">
+      <a href="../../../../developer-guide/performance-tuning/" class="md-nav__link">
+        
+  
+  <span class="md-ellipsis">
+    Performance Tuning
+  </span>
+  
+
+      </a>
+    </li>
+  
+
+              
+            
+              
+                
+  
+  
+  
+  
+    <li class="md-nav__item">
+      <a href="../../../../developer-guide/inference-fast-mode/" class="md-nav__link">
+        
+  
+  <span class="md-ellipsis">
+    Inference Fast Mode
+  </span>
+  
+
+      </a>
+    </li>
+  
+
+              
+            
+              
+                
+  
+  
+  
+  
+    <li class="md-nav__item">
+      <a href="../../../../developer-guide/confidence-metrics/" class="md-nav__link">
+        
+  
+  <span class="md-ellipsis">
+    Confidence Metrics
+  </span>
+  
+
+      </a>
+    </li>
+  
+
+              
+            
+              
+                
+  
+  
+  
+  
+    <li class="md-nav__item">
+      <a href="../../../../developer-guide/extending-detection/" class="md-nav__link">
+        
+  
+  <span class="md-ellipsis">
+    Extending Detection
+  </span>
+  
+
+      </a>
+    </li>
+  
+
+              
+            
+              
+                
+  
+  
+  
+  
+    <li class="md-nav__item">
+      <a href="../../../../developer-guide/extending-identity/" class="md-nav__link">
+        
+  
+  <span class="md-ellipsis">
+    Extending Identity
+  </span>
+  
+
+      </a>
+    </li>
+  
+
+              
+            
+              
+                
+  
+  
+  
+  
+    <li class="md-nav__item">
+      <a href="../../../../developer-guide/code-health/" class="md-nav__link">
+        
+  
+  <span class="md-ellipsis">
+    Code Health & Auditing
+  </span>
+  
+
+      </a>
+    </li>
+  
+
+              
+            
+              
+                
+  
+  
+  
+  
+    <li class="md-nav__item">
+      <a href="../../../../developer-guide/publishing/" class="md-nav__link">
+        
+  
+  <span class="md-ellipsis">
+    Publishing
+  </span>
+  
+
+      </a>
+    </li>
+  
+
+              
+            
+              
+                
+  
+  
+  
+  
+    <li class="md-nav__item">
+      <a href="../../../../developer-guide/contributing/" class="md-nav__link">
+        
+  
+  <span class="md-ellipsis">
+    Contributing
+  </span>
+  
+
+      </a>
+    </li>
+  
+
+              
+            
+          </ul>
+        </nav>
+      
+    </li>
+  
+
+    
+      
+      
+  
+  
+  
+  
+    
+    
+    
+      
+      
+        
+      
+    
+    
+    <li class="md-nav__item md-nav__item--nested">
+      
+        
+        
+          
+        
+        <input class="md-nav__toggle md-toggle md-toggle--indeterminate" type="checkbox" id="__nav_5" >
+        
+          
+          <label class="md-nav__link" for="__nav_5" id="__nav_5_label" tabindex="0">
+            
+  
+  <span class="md-ellipsis">
+    Reference
+  </span>
+  
+
+            <span class="md-nav__icon md-icon"></span>
+          </label>
+        
+        <nav class="md-nav" data-md-level="1" aria-labelledby="__nav_5_label" aria-expanded="false">
+          <label class="md-nav__title" for="__nav_5">
+            <span class="md-nav__icon md-icon"></span>
+            Reference
+          </label>
+          <ul class="md-nav__list" data-md-scrollfix>
+            
+              
+                
+  
+  
+  
+  
+    <li class="md-nav__item">
+      <a href="../../../../reference/api-index/" class="md-nav__link">
+        
+  
+  <span class="md-ellipsis">
+    API Index
+  </span>
+  
+
+      </a>
+    </li>
+  
+
+              
+            
+              
+                
+  
+  
+  
+  
+    <li class="md-nav__item">
+      <a href="../../../../reference/ui-components-hydra/" class="md-nav__link">
+        
+  
+  <span class="md-ellipsis">
+    UI Components (TrackerKit)
+  </span>
+  
+
+      </a>
+    </li>
+  
+
+              
+            
+              
+                
+  
+  
+  
+  
+    <li class="md-nav__item">
+      <a href="../../../../reference/ui-components-posekit/" class="md-nav__link">
+        
+  
+  <span class="md-ellipsis">
+    UI Components (PoseKit)
+  </span>
+  
+
+      </a>
+    </li>
+  
+
+              
+            
+              
+                
+  
+  
+  
+  
+    <li class="md-nav__item">
+      <a href="../../../../reference/api-app/" class="md-nav__link">
+        
+  
+  <span class="md-ellipsis">
+    API (Launcher)
+  </span>
+  
+
+      </a>
+    </li>
+  
+
+              
+            
+              
+                
+  
+  
+  
+  
+    <li class="md-nav__item">
+      <a href="../../../../reference/api-core/" class="md-nav__link">
+        
+  
+  <span class="md-ellipsis">
+    API (Core)
+  </span>
+  
+
+      </a>
+    </li>
+  
+
+              
+            
+              
+                
+  
+  
+  
+  
+    <li class="md-nav__item">
+      <a href="../../../../reference/api-data/" class="md-nav__link">
+        
+  
+  <span class="md-ellipsis">
+    API (Data)
+  </span>
+  
+
+      </a>
+    </li>
+  
+
+              
+            
+              
+                
+  
+  
+  
+  
+    <li class="md-nav__item">
+      <a href="../../../../reference/api-gui/" class="md-nav__link">
+        
+  
+  <span class="md-ellipsis">
+    API (TrackerKit GUI)
+  </span>
+  
+
+      </a>
+    </li>
+  
+
+              
+            
+              
+                
+  
+  
+  
+  
+    <li class="md-nav__item">
+      <a href="../../../../reference/api-widgets/" class="md-nav__link">
+        
+  
+  <span class="md-ellipsis">
+    API (Widgets)
+  </span>
+  
+
+      </a>
+    </li>
+  
+
+              
+            
+              
+                
+  
+  
+  
+  
+    <li class="md-nav__item">
+      <a href="../../../../reference/api-posekit/" class="md-nav__link">
+        
+  
+  <span class="md-ellipsis">
+    API (PoseKit)
+  </span>
+  
+
+      </a>
+    </li>
+  
+
+              
+            
+              
+                
+  
+  
+  
+  
+    <li class="md-nav__item">
+      <a href="../../../../reference/api-utils/" class="md-nav__link">
+        
+  
+  <span class="md-ellipsis">
+    API (Utils)
+  </span>
+  
+
+      </a>
+    </li>
+  
+
+              
+            
+              
+                
+  
+  
+  
+  
+    <li class="md-nav__item">
+      <a href="../../../../reference/cli-reference/" class="md-nav__link">
+        
+  
+  <span class="md-ellipsis">
+    CLI Reference
+  </span>
+  
+
+      </a>
+    </li>
+  
+
+              
+            
+              
+                
+  
+  
+  
+  
+    <li class="md-nav__item">
+      <a href="../../../../reference/technical-reference/" class="md-nav__link">
+        
+  
+  <span class="md-ellipsis">
+    Technical Reference (LaTeX)
+  </span>
+  
+
+      </a>
+    </li>
+  
+
+              
+            
+              
+                
+  
+  
+  
+  
+    <li class="md-nav__item">
+      <a href="../../../../reference/changelog/" class="md-nav__link">
+        
+  
+  <span class="md-ellipsis">
+    Changelog
+  </span>
+  
+
+      </a>
+    </li>
+  
+
+              
+            
+              
+                
+  
+  
+  
+  
+    <li class="md-nav__item">
+      <a href="../../../../reference/faq/" class="md-nav__link">
+        
+  
+  <span class="md-ellipsis">
+    FAQ
+  </span>
+  
+
+      </a>
+    </li>
+  
+
+              
+            
+          </ul>
+        </nav>
+      
+    </li>
+  
+
+    
+  </ul>
+</nav>
+                  </div>
+                </div>
+              </div>
+            
+            
+              
+              <div class="md-sidebar md-sidebar--secondary" data-md-component="sidebar" data-md-type="toc" >
+                <div class="md-sidebar__scrollwrap">
+                  <div class="md-sidebar__inner">
+                    
+
+<nav class="md-nav md-nav--secondary" aria-label="Table of contents">
+  
+  
+  
+    
+  
+  
+    <label class="md-nav__title" for="__toc">
+      <span class="md-nav__icon md-icon"></span>
+      Table of contents
+    </label>
+    <ul class="md-nav__list" data-md-component="toc" data-md-scrollfix>
+      
+        <li class="md-nav__item">
+  <a href="#global-constraints" class="md-nav__link">
+    <span class="md-ellipsis">
+      Global Constraints
+    </span>
+  </a>
+  
+</li>
+      
+        <li class="md-nav__item">
+  <a href="#current-state-anchors-verified-worktree-paths-locate-by-content" class="md-nav__link">
+    <span class="md-ellipsis">
+      Current-state anchors (verified; worktree paths; locate by content)
+    </span>
+  </a>
+  
+</li>
+      
+        <li class="md-nav__item">
+  <a href="#file-structure" class="md-nav__link">
+    <span class="md-ellipsis">
+      File Structure
+    </span>
+  </a>
+  
+</li>
+      
+        <li class="md-nav__item">
+  <a href="#interfaces-defined-once" class="md-nav__link">
+    <span class="md-ellipsis">
+      Interfaces (defined once)
+    </span>
+  </a>
+  
+</li>
+      
+        <li class="md-nav__item">
+  <a href="#task-1-offline-evidence-sourcing-from-the-cache" class="md-nav__link">
+    <span class="md-ellipsis">
+      Task 1: Offline evidence sourcing from the cache
+    </span>
+  </a>
+  
+</li>
+      
+        <li class="md-nav__item">
+  <a href="#task-2-forward-backward-smoothing" class="md-nav__link">
+    <span class="md-ellipsis">
+      Task 2: Forward-backward smoothing
+    </span>
+  </a>
+  
+</li>
+      
+        <li class="md-nav__item">
+  <a href="#task-3-changepoint-on-the-smoothed-posterior" class="md-nav__link">
+    <span class="md-ellipsis">
+      Task 3: Changepoint on the smoothed posterior
+    </span>
+  </a>
+  
+</li>
+      
+        <li class="md-nav__item">
+  <a href="#task-4-fragment-assignment-conflict-resolution-via-the-substrate-solver" class="md-nav__link">
+    <span class="md-ellipsis">
+      Task 4: Fragment assignment + conflict resolution via the substrate solver
+    </span>
+  </a>
+  
+</li>
+      
+        <li class="md-nav__item">
+  <a href="#task-5-wire-the-self-sufficient-offline-pipeline" class="md-nav__link">
+    <span class="md-ellipsis">
+      Task 5: Wire the self-sufficient offline pipeline
+    </span>
+  </a>
+  
+</li>
+      
+        <li class="md-nav__item">
+  <a href="#task-6-independent-post-hoc-toggle-honest-tooltip" class="md-nav__link">
+    <span class="md-ellipsis">
+      Task 6: Independent post-hoc toggle + honest tooltip
+    </span>
+  </a>
+  
+</li>
+      
+        <li class="md-nav__item">
+  <a href="#phase-end-gate" class="md-nav__link">
+    <span class="md-ellipsis">
+      Phase-End Gate
+    </span>
+  </a>
+  
+</li>
+      
+        <li class="md-nav__item">
+  <a href="#self-review-against-spec-layer-4b-phase-5" class="md-nav__link">
+    <span class="md-ellipsis">
+      Self-Review (against spec Layer 4b + Phase 5)
+    </span>
+  </a>
+  
+</li>
+      
+    </ul>
+  
+</nav>
+                  </div>
+                </div>
+              </div>
+            
+          
+          
+            <div class="md-content" data-md-component="content">
+              <article class="md-content__inner md-typeset">
+                
+                  
+
+  
+    <a href="https://github.com/neurorishika/hydra-suite/edit/main/docs/superpowers/plans/done/2026-08-09-identity-phase5-posthoc-honesty.md" title="Edit this page" class="md-content__button md-icon">
+      
+      <svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 24 24"><path d="M10 20H6V4h7v5h5v3.1l2-2V8l-6-6H6c-1.1 0-2 .9-2 2v16c0 1.1.9 2 2 2h4zm10.2-7c.1 0 .3.1.4.2l1.3 1.3c.2.2.2.6 0 .8l-1 1-2.1-2.1 1-1c.1-.1.2-.2.4-.2m0 3.9L14.1 23H12v-2.1l6.1-6.1z"/></svg>
+    </a>
+  
+  
+
+
+<h1 id="identity-overhaul-phase-5-post-hoc-self-sufficiency-forward-backward-smoothing-the-honesty-fix">Identity Overhaul — Phase 5: Post-hoc Self-Sufficiency + Forward-Backward Smoothing (the Honesty Fix)<a class="headerlink" href="#identity-overhaul-phase-5-post-hoc-self-sufficiency-forward-backward-smoothing-the-honesty-fix" title="Permanent link">&para;</a></h1>
+<blockquote>
+<p><strong>For agentic workers:</strong> REQUIRED SUB-SKILL: Use superpowers:subagent-driven-development to implement this plan task-by-task. Steps use checkbox (<code>- [ ]</code>) syntax for tracking.</p>
+</blockquote>
+<p><strong>Goal:</strong> Make the offline (post-hoc) identity decoder self-sufficient — sourced from the always-written Phase-3 <code>IdentityEvidenceCache</code> (not the decoder-populated CSV columns) — add forward-backward smoothing over calibrated evidence, run changepoint splitting on the <em>smoothed posterior</em>, resolve fragments via the shared <code>substrate.solve_unique_assignment</code>, and make post-hoc an independent toggle. <strong>This closes the honesty bug: realtime identity influence OFF + post-hoc ON now produces real identities.</strong></p>
+<p><strong>Architecture:</strong> Today <code>run_fragment_solver</code> reconstructs per-trajectory identity from wide-CSV <code>CNN_*_Prob</code>/<code>DetectedTag*</code> columns (a heuristic product-of-columns → weighted-sum-of-mean-logs → single softmax) plus an online prior from <code>IdentityAssignedLabel</code>/<code>Confidence</code> that only the realtime decoder writes — so with realtime off the solver is starved. Phase 3 already writes a calibrated per-frame evidence sidecar every run regardless of the realtime flags; Phase 4 provides <code>fuse_log_evidence</code> (real posterior chaining) and <code>solve_unique_assignment</code> (the shared uniqueness solver). Phase 5 re-sources offline from that cache (join trajectory rows to evidence via <code>(FrameID, ln)→detection_id</code>), chains a real per-frame posterior forward and backward per trajectory, splits at changepoints in the smoothed posterior, and assigns fragments with the substrate solver — folding the offline collision-veto and <code>post/processing.resolve_simultaneous_identity_conflicts</code> onto that one solver. <strong>This is a deliberate behavior change</strong> (not byte-identical): the acceptance bar is the honesty regression + invariants + realtime-agreement, with positions byte-identical (identity is additive to geometry).</p>
+<p><strong>Tech Stack:</strong> Python 3, NumPy, pandas, SciPy, <code>ruptures</code> (PELT), pytest.</p>
+<p><strong>Spec:</strong> <code>docs/superpowers/specs/2026-07-22-identity-overhaul-consolidated-design.md</code> — Layer 4b (Post-hoc consumer), Rollout "Phase 5". Builds on Phase 3 (<code>IdentityEvidenceCache</code>) + Phase 4 (<code>substrate.fuse_log_evidence</code>/<code>solve_unique_assignment</code>/<code>map_tag_to_catalog</code>).</p>
+<h2 id="global-constraints">Global Constraints<a class="headerlink" href="#global-constraints" title="Permanent link">&para;</a></h2>
+<ul>
+<li><strong>Deliberate behavior change — NOT byte-identical.</strong> Acceptance (user-approved):</li>
+<li><strong>Honesty regression (primary):</strong> realtime OFF (<code>ENABLE_IDENTITY_IN_TRACKING=False</code>) + post-hoc ON → non-empty <code>IdentityAssignedLabel</code> on the CNN-identity clip (<code>ant_cnn_identity</code>). Direct proof of the fix.</li>
+<li><strong>Positions byte-identical</strong> — identity is additive; tracking geometry unchanged. Equivalence gate positions p99=0 on MPS + CUDA, baseline = Phase-5-start branch SHA.</li>
+<li><strong>Uniqueness invariant</strong> — no duplicate committed identity per frame; every emitted label is a valid catalog entry.</li>
+<li><strong>Smoothing unit test</strong> — a synthetic late-confident/early-ambiguous trajectory is corrected by the forward-backward pass.</li>
+<li><strong>Realtime-agreement (quality proxy):</strong> with realtime ON, new post-hoc identities roughly agree with the realtime identities (both have full evidence). No ground-truth clips assumed; controller judges + reports, user confirms.</li>
+<li><strong>Source of truth = the evidence cache.</strong> Offline must read <code>IdentityEvidenceCache</code> (calibrated per-frame <code>log_probs</code>), NOT the CSV <code>CNN_*_Prob</code>/<code>DetectedTag*</code> reconstruction (retired) nor the online-decoder columns as evidence. The online result may still be read as an optional weak <em>prior</em> only if present (do not depend on it).</li>
+<li><strong>One uniqueness solver.</strong> Fragment assignment + <code>resolve_simultaneous_identity_conflicts</code> both go through <code>substrate.solve_unique_assignment</code>. Keep the iterative residual pass for ambiguous fragments.</li>
+<li><strong>Catalog via <code>resolve_catalog_spec</code>.</strong> Retire the inline catalog duplicate in <code>postprocess_df.py:73-110</code>; use the Phase-1 shared resolver + <code>IdentityCatalog.from_spec</code>.</li>
+<li><strong>Isolation.</strong> Long-lived worktree <code>.worktrees/identity-phases-3-7</code> (branch <code>feat/identity-phases-3-7</code>). No new worktree; no merge to main.</li>
+<li><strong>Dependency direction.</strong> Offline/substrate are Core; import only Core/Runtime/Utils. <code>postprocess_df</code>/offline may not import app layers.</li>
+<li><strong>Commit as the git user;</strong> no <code>Co-Authored-By</code>. <code>make format</code> + <code>make lint</code> before commit; revert unrelated drift. Kill stale sleap/hydra before heavy runs.</li>
+<li><strong>Verification:</strong> unit tests + honesty test on <code>hydra-mps</code>; positions-equivalence on MPS + CUDA (mehek).</li>
+</ul>
+<hr />
+<h2 id="current-state-anchors-verified-worktree-paths-locate-by-content">Current-state anchors (verified; worktree paths; locate by content)<a class="headerlink" href="#current-state-anchors-verified-worktree-paths-locate-by-content" title="Permanent link">&para;</a></h2>
+<ul>
+<li><strong>Offline (<code>core/individual/identity/offline.py</code>):</strong> CSV reconstruction <code>_trajectory_cnn_log_evidence</code> (:188-272), <code>_trajectory_tag_evidence</code> (:390-442), <code>_build_prior_log_scores</code> (:468-485); fusion weights + blend (:741-743, :785-793), <code>_normalize_support_scores</code> (:445-465); PELT <code>detect_identity_changepoints</code> (:488-570, operates on <code>CNN_*_Prob</code> cols), <code>split_trajectories_at_changepoints</code> (:573-634); solver <code>_iterative_assign</code> (:720-1098, collision-veto greedy), <code>_build_traj_summaries</code> (:1100-1203), <code>solve_global_assignment</code> (:1206-1332), <code>run_fragment_solver</code> (:1335-1411, public entry; PELT dispatch :1392-1411). Column consts <code>_LABEL_COL</code>/<code>_CONF_COL</code> (:29-30).</li>
+<li><strong>Invocation:</strong> <code>core/individual/postprocess_df.py</code> <code>apply_identity_postprocessing_to_df</code> — inline catalog build (:73-110), gate + call <code>run_fragment_solver</code> (:112-116), <code>_annotate_identity_summary_columns</code> (:14-56, already references <code>IdentityOfflineLabel</code>/<code>IdentitySmoothedLabel</code> at :28-31 — unwritten output slots).</li>
+<li><strong>Evidence cache read:</strong> <code>IdentityEvidenceCache(path, mode="r")</code> — <code>load_frame(frame_idx)-&gt;list[IdentityEvidence]</code> (cache.py:238-288), <code>get_cached_frames()</code> (:290-301), <code>catalog_labels</code> (:303), <code>catalog_labels_for_source(src)</code> (:309-321). <code>IdentityEvidence.detection_id</code> = the trajectory df's <code>ln</code> column (join on <code>(FrameID, ln)</code>). <code>TrajectoryID</code> groups rows.</li>
+<li><strong>Substrate (Phase 4):</strong> <code>fuse_log_evidence(log_posterior, evidence_log_probs, *, per_frame_cap=inf, prob_floor=0.0)</code> (substrate.py:37), <code>solve_unique_assignment(posterior_probs, num_known, display_threshold, *, use_scipy=True)-&gt;list[int|None]</code> (:137), <code>map_tag_to_catalog</code> (:364). Online sticky transition reference: <code>online._build_log_transition</code> (online.py:203-208), <code>_predict_belief</code> (:325-331).</li>
+<li><strong>Honesty-bug gate:</strong> decoder built only if <code>individual_pipeline_enabled and ENABLE_IDENTITY_IN_TRACKING</code> (worker.py:1883-1907); blanks emitted by <code>_online_identity_row_values</code> (:1924-1980) when decoder None. Evidence cache written independent of realtime (runner.py:688-693, 1008-1011; worker <code>_resolve_identity_evidence_run_config</code> :4205-4259). Post-hoc already flag-independent (identity_schema.py:96-127; engine_params.py:1123-1128) but reads CSV. Reserved <code>PostHocIdentityConfig.enabled</code> (identity_schema.py:47) not yet emitted. Misleading tooltip <code>tracking_panel.py:538-544</code>. Trajectory-structure gating consuming <code>IdentityCommitted</code>: <code>core/post/processing.py:1484-1496, 2594-2615</code>. Third uniqueness site: <code>resolve_simultaneous_identity_conflicts</code> (<code>core/post/processing.py:1404</code>+).</li>
+<li><strong>Cache-path plumbing:</strong> offline runs in post-processing (after tracking); the evidence sidecar path must be threaded from the worker/runner (<code>inference_runner.identity_evidence_sidecar_path("batch")</code>) into <code>apply_identity_postprocessing_to_df</code> (via params or an explicit arg). READ how post-processing is invoked from the worker to find the seam.</li>
+</ul>
+<hr />
+<h2 id="file-structure">File Structure<a class="headerlink" href="#file-structure" title="Permanent link">&para;</a></h2>
+<p><strong>Create:</strong> <code>src/hydra_suite/core/individual/identity/smoothing.py</code> (forward-backward smoother + evidence-cache trajectory sourcing); tests under <code>tests/identity/</code>.
+<strong>Modify:</strong> <code>offline.py</code> (source from cache, PELT-on-smoothed, substrate uniqueness); <code>postprocess_df.py</code> (catalog via resolve_catalog_spec, thread cache path, wire smoothing); <code>core/post/processing.py</code> (<code>resolve_simultaneous_identity_conflicts</code> → substrate solver); <code>trackerkit/config/identity_schema.py</code> + <code>engine_params.py</code> (emit <code>posthoc.enabled</code>); <code>core/tracking/worker.py</code>/post seam (thread evidence-cache path into post-processing); <code>tracking_panel.py</code> (tooltip).</p>
+<h2 id="interfaces-defined-once">Interfaces (defined once)<a class="headerlink" href="#interfaces-defined-once" title="Permanent link">&para;</a></h2>
+<div class="language-python highlight"><pre><span></span><code><span id="__span-0-1"><a id="__codelineno-0-1" name="__codelineno-0-1" href="#__codelineno-0-1"></a><span class="c1"># core/individual/identity/smoothing.py</span>
+</span><span id="__span-0-2"><a id="__codelineno-0-2" name="__codelineno-0-2" href="#__codelineno-0-2"></a><span class="k">def</span><span class="w"> </span><span class="nf">load_trajectory_evidence</span><span class="p">(</span><span class="n">df</span><span class="p">,</span> <span class="n">cache</span><span class="p">:</span> <span class="s2">"IdentityEvidenceCache"</span><span class="p">,</span> <span class="n">catalog</span><span class="p">:</span> <span class="s2">"IdentityCatalog"</span>
+</span><span id="__span-0-3"><a id="__codelineno-0-3" name="__codelineno-0-3" href="#__codelineno-0-3"></a>                             <span class="p">)</span> <span class="o">-&gt;</span> <span class="nb">dict</span><span class="p">[</span><span class="nb">int</span><span class="p">,</span> <span class="nb">list</span><span class="p">[</span><span class="nb">tuple</span><span class="p">[</span><span class="nb">int</span><span class="p">,</span> <span class="n">np</span><span class="o">.</span><span class="n">ndarray</span><span class="p">]]]:</span>
+</span><span id="__span-0-4"><a id="__codelineno-0-4" name="__codelineno-0-4" href="#__codelineno-0-4"></a><span class="w">    </span><span class="sd">"""Per TrajectoryID → ordered [(FrameID, catalog_log_probs)] pulled from the evidence cache</span>
+</span><span id="__span-0-5"><a id="__codelineno-0-5" name="__codelineno-0-5" href="#__codelineno-0-5"></a><span class="sd">    by joining rows on (FrameID, ln)-&gt;detection_id (remapped to `catalog` if source basis differs).</span>
+</span><span id="__span-0-6"><a id="__codelineno-0-6" name="__codelineno-0-6" href="#__codelineno-0-6"></a><span class="sd">    Rows with no cached evidence are omitted."""</span>
+</span><span id="__span-0-7"><a id="__codelineno-0-7" name="__codelineno-0-7" href="#__codelineno-0-7"></a>
+</span><span id="__span-0-8"><a id="__codelineno-0-8" name="__codelineno-0-8" href="#__codelineno-0-8"></a><span class="k">def</span><span class="w"> </span><span class="nf">smooth_trajectory_posteriors</span><span class="p">(</span><span class="n">frame_log_probs</span><span class="p">:</span> <span class="nb">list</span><span class="p">[</span><span class="n">np</span><span class="o">.</span><span class="n">ndarray</span><span class="p">],</span> <span class="n">transition_epsilon</span><span class="p">:</span> <span class="nb">float</span>
+</span><span id="__span-0-9"><a id="__codelineno-0-9" name="__codelineno-0-9" href="#__codelineno-0-9"></a>                                 <span class="p">)</span> <span class="o">-&gt;</span> <span class="nb">list</span><span class="p">[</span><span class="n">np</span><span class="o">.</span><span class="n">ndarray</span><span class="p">]:</span>
+</span><span id="__span-0-10"><a id="__codelineno-0-10" name="__codelineno-0-10" href="#__codelineno-0-10"></a><span class="w">    </span><span class="sd">"""Forward-backward (two-filter) smoothing: forward chain via fuse_log_evidence + sticky-Markov</span>
+</span><span id="__span-0-11"><a id="__codelineno-0-11" name="__codelineno-0-11" href="#__codelineno-0-11"></a><span class="sd">    transition, backward chain likewise, combine per frame → smoothed per-frame log-posteriors."""</span>
+</span><span id="__span-0-12"><a id="__codelineno-0-12" name="__codelineno-0-12" href="#__codelineno-0-12"></a>
+</span><span id="__span-0-13"><a id="__codelineno-0-13" name="__codelineno-0-13" href="#__codelineno-0-13"></a><span class="k">def</span><span class="w"> </span><span class="nf">smoothed_label_and_conf</span><span class="p">(</span><span class="n">smoothed</span><span class="p">:</span> <span class="nb">list</span><span class="p">[</span><span class="n">np</span><span class="o">.</span><span class="n">ndarray</span><span class="p">],</span> <span class="n">catalog</span><span class="p">,</span> <span class="n">display_threshold</span><span class="p">:</span> <span class="nb">float</span>
+</span><span id="__span-0-14"><a id="__codelineno-0-14" name="__codelineno-0-14" href="#__codelineno-0-14"></a>                            <span class="p">)</span> <span class="o">-&gt;</span> <span class="nb">list</span><span class="p">[</span><span class="nb">tuple</span><span class="p">[</span><span class="nb">str</span><span class="p">,</span> <span class="nb">float</span><span class="p">]]:</span>
+</span><span id="__span-0-15"><a id="__codelineno-0-15" name="__codelineno-0-15" href="#__codelineno-0-15"></a><span class="w">    </span><span class="sd">"""Per-frame (label, confidence) from smoothed posteriors (unknown/'' below threshold)."""</span>
+</span></code></pre></div>
+<hr />
+<h2 id="task-1-offline-evidence-sourcing-from-the-cache">Task 1: Offline evidence sourcing from the cache<a class="headerlink" href="#task-1-offline-evidence-sourcing-from-the-cache" title="Permanent link">&para;</a></h2>
+<p>Create <code>smoothing.py</code> + <code>load_trajectory_evidence</code>. Join trajectory rows to <code>IdentityEvidenceCache</code> via <code>(FrameID, ln)→detection_id</code>; return per-trajectory ordered per-frame catalog <code>log_probs</code>. Remap source-basis to the global catalog via the same phase→global remap the worker uses if a source's basis differs (reuse <code>catalog_labels_for_source</code>).</p>
+<p><strong>Files:</strong> Create <code>smoothing.py</code>, <code>tests/identity/test_offline_evidence_sourcing.py</code>.
+- [ ] Failing test: synthetic df (<code>TrajectoryID</code>,<code>FrameID</code>,<code>ln</code>) + a written <code>IdentityEvidenceCache</code> → assert <code>load_trajectory_evidence</code> returns the right per-trajectory <code>(FrameID, log_probs)</code> sequences, joined correctly, with cache-basis remapped to the passed catalog; rows with NaN/absent <code>ln</code> omitted.
+- [ ] Run RED → implement → GREEN → full <code>tests/identity/</code> no regression.
+- [ ] <code>make format &amp;&amp; make lint</code>; commit <code>feat(identity): offline sources per-trajectory evidence from the cache (FrameID,ln join)</code>.</p>
+<h2 id="task-2-forward-backward-smoothing">Task 2: Forward-backward smoothing<a class="headerlink" href="#task-2-forward-backward-smoothing" title="Permanent link">&para;</a></h2>
+<p><code>smooth_trajectory_posteriors</code> + <code>smoothed_label_and_conf</code> using <code>substrate.fuse_log_evidence</code> + a sticky-Markov transition (reuse online's <code>_build_log_transition</code> form).</p>
+<p><strong>Files:</strong> <code>smoothing.py</code> (add); <code>tests/identity/test_offline_smoothing.py</code>.
+- [ ] Failing test: a synthetic trajectory whose early frames are ambiguous (near-uniform) and late frames confidently identity B → assert the SMOOTHED early-frame posteriors favor B (a late-confident burst corrects early ambiguity), while forward-only would not. Also: single-frame trajectory returns its own posterior; empty → empty.
+- [ ] Implement forward pass (chain fuse+transition), backward pass (reverse), combine (two-filter: <code>smoothed ∝ forward · backward / prior</code>, in log-space, renormalized — define precisely and test it reduces to the evidence when transition is identity).
+- [ ] RED→GREEN; no regression. Commit <code>feat(identity): forward-backward trajectory smoothing over calibrated evidence</code>.</p>
+<h2 id="task-3-changepoint-on-the-smoothed-posterior">Task 3: Changepoint on the smoothed posterior<a class="headerlink" href="#task-3-changepoint-on-the-smoothed-posterior" title="Permanent link">&para;</a></h2>
+<p>Repoint <code>detect_identity_changepoints</code> to run PELT on the smoothed per-frame posterior signal (per trajectory) instead of the <code>CNN_*_Prob</code> columns.</p>
+<p><strong>Files:</strong> Modify <code>offline.py:488-570</code>; test.
+- [ ] Failing test: a trajectory that switches identity mid-way (smoothed posterior regime change) → changepoint detected at the switch; a stable trajectory → no split. Drive <code>detect_identity_changepoints</code> with the smoothed signal.
+- [ ] Implement: build the PELT signal from the smoothed posteriors (from Task 2) rather than <code>CNN_*_Prob</code>; keep <code>CHANGEPOINT_PENALTY</code>/<code>MIN_FRAGMENT_FRAMES</code>/<code>PELT_MODEL</code> params + the <code>ruptures</code>-absent graceful fallback.
+- [ ] RED→GREEN; commit <code>refactor(identity): PELT changepoint on smoothed posterior (not CNN_*_Prob columns)</code>.</p>
+<h2 id="task-4-fragment-assignment-conflict-resolution-via-the-substrate-solver">Task 4: Fragment assignment + conflict resolution via the substrate solver<a class="headerlink" href="#task-4-fragment-assignment-conflict-resolution-via-the-substrate-solver" title="Permanent link">&para;</a></h2>
+<p>Replace the offline collision-veto greedy's core assignment with <code>substrate.solve_unique_assignment</code> (keep the iterative residual pass for ambiguous fragments), and fold <code>post/processing.resolve_simultaneous_identity_conflicts</code> onto the same solver.</p>
+<p><strong>Files:</strong> Modify <code>offline.py</code> (<code>_iterative_assign</code>/<code>solve_global_assignment</code>), <code>core/post/processing.py:1404+</code>; tests.
+- [ ] Failing test: N fragments with overlapping same-label evidence → <code>solve_unique_assignment</code>-based global assignment yields a valid partial-injective assignment (no two overlapping fragments share a committed identity); the conflict-resolver test: two trajectories, same majority label, shared frames → one cleared, via the shared solver.
+- [ ] Implement: build per-fragment catalog posteriors (from smoothed evidence) → <code>solve_unique_assignment</code>; keep the residual/veto refinement for ambiguity; rewrite <code>resolve_simultaneous_identity_conflicts</code> to call the solver. Preserve output columns (<code>IdentityAssignedLabel</code>, <code>IdentityFragmentScore</code>, <code>IdentityCommitted</code>, <code>IdentityConflictResolved</code>).
+- [ ] RED→GREEN; commit <code>refactor(identity): offline fragment assignment + conflict-resolution via substrate.solve_unique_assignment</code>.</p>
+<h2 id="task-5-wire-the-self-sufficient-offline-pipeline">Task 5: Wire the self-sufficient offline pipeline<a class="headerlink" href="#task-5-wire-the-self-sufficient-offline-pipeline" title="Permanent link">&para;</a></h2>
+<p><code>run_fragment_solver</code>/<code>postprocess_df</code> source from the cache → smooth → changepoint(smoothed) → assign; catalog via <code>resolve_catalog_spec</code>; thread the evidence-cache path from the worker into <code>apply_identity_postprocessing_to_df</code>; write <code>IdentitySmoothedLabel</code>/<code>IdentityOfflineLabel</code>.</p>
+<p><strong>Files:</strong> Modify <code>offline.py</code> (<code>run_fragment_solver</code>, <code>_build_traj_summaries</code> → cache-sourced), <code>postprocess_df.py</code> (catalog resolver, cache path, annotate), the worker/post seam (pass sidecar path). Test.
+- [ ] <strong>Honesty regression test (the key one):</strong> build a tracking-output df + a written evidence cache, run <code>apply_identity_postprocessing_to_df</code> with <code>ENABLE_IDENTITY_IN_TRACKING</code>-off-style inputs (empty <code>IdentityAssignedLabel</code> columns) → assert <code>IdentityAssignedLabel</code> becomes NON-EMPTY (post-hoc self-sufficient from the cache). RED first (proves today's starvation).
+- [ ] Implement the wiring; retire the CSV <code>CNN_*_Prob</code>/<code>DetectedTag*</code> reconstruction path (clean break); catalog via <code>resolve_catalog_spec(p["CNN_CLASSIFIERS"], p["TAG_IDENTITY_LABELS"])</code>.
+- [ ] RRun the honesty test GREEN + full <code>tests/identity/</code>; commit <code>feat(identity): self-sufficient offline pipeline sourced from the evidence cache (closes honesty bug)</code>.</p>
+<h2 id="task-6-independent-post-hoc-toggle-honest-tooltip">Task 6: Independent post-hoc toggle + honest tooltip<a class="headerlink" href="#task-6-independent-post-hoc-toggle-honest-tooltip" title="Permanent link">&para;</a></h2>
+<p>Emit <code>PostHocIdentityConfig.enabled</code> into engine params; make offline run whenever identity classification is on (never gated on realtime); correct the misleading <code>tracking_panel.py</code> tooltip.</p>
+<p><strong>Files:</strong> <code>identity_schema.py</code> (from_engine_config emits <code>enabled</code>), <code>engine_params.py</code> (emit <code>IDENTITY_POSTHOC_ENABLED</code>), <code>postprocess_df.py</code> (honor it), <code>tracking_panel.py:538-544</code> (tooltip), golden test update.
+- [ ] Update the <code>test_get_parameters_dict_characterization</code> golden for the new key (capture baseline). Tooltip: state plainly that post-hoc reads the inference-time evidence cache and works regardless of realtime.
+- [ ] Commit <code>feat(identity): independent post-hoc toggle + honest realtime tooltip</code>.</p>
+<h2 id="phase-end-gate">Phase-End Gate<a class="headerlink" href="#phase-end-gate" title="Permanent link">&para;</a></h2>
+<ul class="task-list">
+<li class="task-list-item"><label class="task-list-control"><input type="checkbox" disabled/><span class="task-list-indicator"></span></label> <strong>Honesty regression (primary):</strong> a real <code>ant_cnn_identity</code> run with realtime OFF + post-hoc ON → non-empty <code>IdentityAssignedLabel</code> (was empty before Phase 5). Run on hydra-mps (short range acceptable).</li>
+<li class="task-list-item"><label class="task-list-control"><input type="checkbox" disabled/><span class="task-list-indicator"></span></label> <strong>Positions byte-identical — MPS + CUDA</strong> (baseline = Phase-5-start SHA): all clips pos p99=0 (identity is additive). Identity columns WILL differ (that's the point) — do not gate on them.</li>
+<li class="task-list-item"><label class="task-list-control"><input type="checkbox" disabled/><span class="task-list-indicator"></span></label> <strong>Uniqueness invariant</strong> check on the identity clips: no duplicate committed identity within a frame; all labels ∈ catalog.</li>
+<li class="task-list-item"><label class="task-list-control"><input type="checkbox" disabled/><span class="task-list-indicator"></span></label> <strong>Realtime-agreement:</strong> realtime ON, compare new post-hoc identities to the realtime identities — report agreement %; controller judges "sensible", user confirms.</li>
+<li class="task-list-item"><label class="task-list-control"><input type="checkbox" disabled/><span class="task-list-indicator"></span></label> <strong>Suite:</strong> <code>tests/identity/</code> green.</li>
+</ul>
+<h2 id="self-review-against-spec-layer-4b-phase-5">Self-Review (against spec Layer 4b + Phase 5)<a class="headerlink" href="#self-review-against-spec-layer-4b-phase-5" title="Permanent link">&para;</a></h2>
+<ul>
+<li>"Forward-backward smoothing over calibrated evidence" → Task 2. ✅</li>
+<li>"Changepoint on the smoothed posteriors" → Task 3. ✅</li>
+<li>"Fragment global assignment via the substrate uniqueness solver (+ keep iterative residual)" → Task 4. ✅ folds the 3rd uniqueness site (resolve_simultaneous_identity_conflicts).</li>
+<li>"Post-hoc runs from the evidence cache + final trajectories with NO dependency on the realtime decoder" → Tasks 1, 5, 6. ✅ (the honesty fix)</li>
+<li>"Independent toggle" → Task 6. ✅</li>
+<li>Retire CSV-reconstruction heuristic + inline catalog duplicate → Task 5. ✅</li>
+<li>Verification: honesty test + invariants + realtime-agreement + positions byte-identical (user-approved bar). ✅</li>
+<li><strong>Deferred:</strong> provenance-explicit output columns (<code>Identity_Evidence_*</code>/<code>Identity_Realtime_*</code>/<code>Identity_Final_*</code>) → Phase 6; robustness cap/floor value-wiring → later; <code>map_tag_to_catalog</code> wiring at tag sites can land here (Task 4/5) or Phase 6.</li>
+</ul>
+
+
+
+
+
+
+
+
+
+
+
+
+                
+              </article>
+            </div>
+          
+          
+<script>var target=document.getElementById(location.hash.slice(1));target&&target.name&&(target.checked=target.name.startsWith("__tabbed_"))</script>
+        </div>
+        
+          <button type="button" class="md-top md-icon" data-md-component="top" hidden>
+  
+  <svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 24 24"><path d="M13 20h-2V8l-5.5 5.5-1.42-1.42L12 4.16l7.92 7.92-1.42 1.42L13 8z"/></svg>
+  Back to top
+</button>
+        
+      </main>
+      
+        <footer class="md-footer">
+  
+  <div class="md-footer-meta md-typeset">
+    <div class="md-footer-meta__inner md-grid">
+      <div class="md-copyright">
+  
+  
+    Made with
+    <a href="https://squidfunk.github.io/mkdocs-material/" target="_blank" rel="noopener">
+      Material for MkDocs
+    </a>
+  
+</div>
+      
+    </div>
+  </div>
+</footer>
+      
+    </div>
+    <div class="md-dialog" data-md-component="dialog">
+      <div class="md-dialog__inner md-typeset"></div>
+    </div>
+    
+    
+    <script id="__config" type="application/json">{"base": "../../../..", "features": ["navigation.tabs", "navigation.sections", "navigation.expand", "navigation.top", "content.code.copy", "content.action.edit", "search.suggest", "search.highlight"], "search": "../../../../assets/javascripts/workers/search.6ce7567c.min.js", "translations": {"clipboard.copied": "Copied to clipboard", "clipboard.copy": "Copy to clipboard", "search.result.more.one": "1 more on this page", "search.result.more.other": "# more on this page", "search.result.none": "No matching documents", "search.result.one": "1 matching document", "search.result.other": "# matching documents", "search.result.placeholder": "Type to start searching", "search.result.term.missing": "Missing", "select.version": "Select version"}, "version": {"default": "latest", "provider": "mike"}}</script>
+    
+    
+      <script src="../../../../assets/javascripts/bundle.83f73b43.min.js"></script>
+      
+    
+  </body>
+</html>
