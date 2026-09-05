@@ -2654,32 +2654,16 @@ class DetectionPanel(QWidget):
         model's sidecar -- a still-valid id or an explicit training/custom
         request always wins over it.
         """
-        from hydra_suite.core.inference.slice_meta import (
-            available_slice_profiles,
-            slice_meta_to_panel_values,
-            slice_meta_values_from_settings,
-        )
+        from hydra_suite.core.inference.slice_meta import resolve_slice_profile_values
 
         if self._slice_meta is None:
             return
         self._slice_profile_requested_id = profile_id
-        known_ids = {p["id"] for p in available_slice_profiles(self._slice_meta)}
-        # A session saved mid-custom-edit has a complete effective-settings
-        # snapshot. Excluding "__custom__" here made the restore fall through
-        # to the PRIMARY profile, overwrite slice_profile_id with the
-        # primary's id and label the panel with the primary's name -- while
-        # the settings the user actually saved sat unused.
         is_custom_restore = bool(profile_id == "__custom__" and saved_settings)
-        use_saved_settings = is_custom_restore or bool(
-            profile_id
-            and profile_id not in ("__training__", "__custom__")
-            and profile_id not in known_ids
-            and saved_settings
+        values = resolve_slice_profile_values(
+            self._slice_meta, profile_id, saved_settings
         )
-        if use_saved_settings:
-            values = slice_meta_values_from_settings(self._slice_meta, saved_settings)
-        else:
-            values = slice_meta_to_panel_values(self._slice_meta, profile_id)
+        use_saved_settings = values["resolution"] == "saved_settings"
         self._slice_profile_applied_id = values["profile_id"]
         self._slice_profile_applied_name = values["profile_name"]
         if is_custom_restore:
