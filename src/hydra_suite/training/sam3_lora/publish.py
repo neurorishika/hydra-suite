@@ -359,6 +359,30 @@ def _request_payload(
     geometry: dict[str, int | float | None] = {}
     for field in ("tile_px", "reference_body_px", "object_tile_fraction"):
         value = build_manifest.get(field)
+        # `dataset_build` writes tile_px as a [width, height] PAIR, while the
+        # sidecar's `train_tile_px` -- and the escalation dialog's prefill --
+        # take a single number. Publishing therefore failed for EVERY SAM3 run
+        # with "must be numeric"; the pipeline had never reached publish before,
+        # so nothing caught it. Tiles are square by construction
+        # (`utils.slice_geometry.tile_size_for_mode`), so a pair collapses to
+        # its single value -- but a genuinely non-square pair is a real
+        # disagreement about training geometry and must not be quietly halved.
+        if isinstance(value, (list, tuple)):
+            if len(value) != 2 or any(
+                isinstance(v, bool) or not isinstance(v, (int, float)) for v in value
+            ):
+                raise ValueError(
+                    f"SAM3 publish geometry {field!r} must be a number or a "
+                    f"[width, height] pair of numbers; got {value!r}"
+                )
+            if value[0] != value[1]:
+                raise ValueError(
+                    f"SAM3 publish geometry {field!r} is non-square {value!r}. "
+                    "The sidecar records a single training tile size, so a "
+                    "non-square tile cannot be represented without silently "
+                    "discarding one dimension."
+                )
+            value = value[0]
         if value is not None and (
             isinstance(value, bool) or not isinstance(value, (int, float))
         ):

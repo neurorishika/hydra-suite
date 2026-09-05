@@ -1,6 +1,7 @@
 """The merged artifact must load through ultralytics' own key transform."""
 
 import json
+from pathlib import Path
 
 import pytest
 import torch
@@ -193,3 +194,42 @@ def test_stock_only_keys_survive_untouched_into_the_artifact(tmp_path):
         merged["detector.vision_backbone.sam2_convs.0.weight"], stock_only
     )
     assert not torch.equal(merged["detector.qkv.weight"], tuned_before)
+
+
+def test_publish_accepts_the_square_tile_pair_the_builder_writes():
+    """dataset_build writes tile_px as [w, h]; publish wanted a scalar.
+
+    Publishing therefore failed for EVERY SAM3 run with
+    "SAM3 publish geometry 'tile_px' must be numeric" -- the pipeline had
+    never reached publish before, so nothing caught it.
+    """
+    from hydra_suite.training.sam3_lora.publish import _request_payload
+
+    payload = _request_payload(
+        run_id="r",
+        adapters_path=Path("/tmp/a.pt"),
+        base_checkpoint=Path("/tmp/b.pt"),
+        build_manifest={"tile_px": [971, 971], "reference_body_px": 97.1},
+        params=Sam3LoraParams(prompt="ant", label_quality_acknowledged=True),
+        source_fingerprint="fp",
+        models_root=Path("/tmp/models"),
+        attempt_id="a",
+    )
+    assert payload["build_manifest"]["tile_px"] == 971
+
+
+def test_publish_refuses_a_non_square_tile_pair():
+    """Collapsing [971, 512] to 971 would silently discard a dimension."""
+    from hydra_suite.training.sam3_lora.publish import _request_payload
+
+    with pytest.raises(ValueError, match="non-square"):
+        _request_payload(
+            run_id="r",
+            adapters_path=Path("/tmp/a.pt"),
+            base_checkpoint=Path("/tmp/b.pt"),
+            build_manifest={"tile_px": [971, 512]},
+            params=Sam3LoraParams(prompt="ant", label_quality_acknowledged=True),
+            source_fingerprint="fp",
+            models_root=Path("/tmp/models"),
+            attempt_id="a",
+        )
