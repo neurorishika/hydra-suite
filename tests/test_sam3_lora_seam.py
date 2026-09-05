@@ -172,7 +172,12 @@ def test_lora_config_all_scopes_uses_explicit_budgeted_prefixes():
     assert set(config.include_prefixes) == {
         prefix for prefixes in SUBMODULE_PREFIXES.values() for prefix in prefixes
     }
+    # The scoring head is a separate opt-in scope (`adapt_scoring_head`,
+    # default off) carried on `include_module_paths`, never on the prefixes:
+    # every prefix flag being on must still leave it unadapted. See
+    # tests/test_sam3_lora_scopes.py for the surface itself.
     assert "dot_prod_scoring" not in config.include_prefixes
+    assert not config.include_module_paths
 
 
 def test_lora_config_rejects_no_enabled_scope():

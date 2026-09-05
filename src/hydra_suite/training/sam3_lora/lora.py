@@ -23,6 +23,11 @@ class LoraConfig:
     # -- including the text encoder we deliberately freeze.
     include_prefixes: tuple[str, ...] = ()
     exclude_prefixes: tuple[str, ...] = ()
+    # Exact dotted module paths adapted regardless of their leaf name. Some
+    # spike-trained Linears (`dot_prod_scoring.prompt_proj`, and Task 2's
+    # geometry projections) match no `target_suffixes` entry, and broadening
+    # the suffix list to reach them would change what every OTHER scope wraps.
+    include_module_paths: tuple[str, ...] = ()
 
     @property
     def scaling(self) -> float:
@@ -47,11 +52,21 @@ class LoraConfig:
 #   adapt_detr_decoder                60   (was 42 Linears with 12 skipped)
 #   adapt_geometry_encoder             6
 #   adapt_mask_decoder                 0
-#   dot_prod_scoring                   4 Linears <- covered by NO flag, deliberately
+#   dot_prod_scoring                   4 Linears <- 2 of them via
+#                                                   adapt_scoring_head (below)
 #
-# `dot_prod_scoring` (the text/vision similarity head) is named by no adapt_*
-# flag and is therefore never adapted. Add a flag if a future experiment wants
-# it; do not fold it into another.
+# `dot_prod_scoring` (the text/vision similarity head that emits detection
+# confidence) previously carried a comment here saying it was "covered by NO
+# flag, deliberately". RECONSIDERED 2026-09-05: the finetune quality audit
+# (docs/superpowers/specs/2026-09-05-sam3-finetune-quality-audit.md, N1)
+# compared our adapted set against the research spike's checkpoint and found
+# `dot_prod_scoring.prompt_proj` has the LARGEST lora_B norm (0.174) of every
+# module the spike adapts and we do not, with `hs_proj` (0.097) also well
+# above the spike-only median. The old reasoning assumed the spike left the
+# head alone; it did not. It is now reachable via the opt-in
+# `adapt_scoring_head` flag, DEFAULT OFF: a large lora_B norm proves the head
+# MOVED, not that it moved toward better precision, so the flag stays off
+# until the paired retrain ("RUN A") validates it.
 SUBMODULE_PREFIXES: dict[str, tuple[str, ...]] = {
     "adapt_vision_encoder": ("backbone.vision_backbone",),
     "adapt_text_encoder": ("backbone.language_backbone",),
@@ -59,6 +74,32 @@ SUBMODULE_PREFIXES: dict[str, tuple[str, ...]] = {
     "adapt_detr_encoder": ("transformer.encoder",),
     "adapt_detr_decoder": ("transformer.decoder",),
     "adapt_mask_decoder": ("segmentation_head",),
+}
+
+
+# Exact dotted module paths per adapt_* flag, for spike-trained Linears whose
+# leaf name is in no TARGET_SUFFIXES entry. Keyed by flag exactly like
+# SUBMODULE_PREFIXES, and unioned with it by `lora_config_from_params`.
+#
+# DEVIATION from the plan's stated interface, justified here: the plan also
+# asked for a `SUBMODULE_PREFIXES["adapt_scoring_head"] = ("dot_prod_scoring",)`
+# entry alongside this allowlist. It is deliberately absent. The head holds 4
+# Linears but the spike trained exactly 2; a prefix entry ALSO wraps any of the
+# other two whose leaf happens to be a target suffix (`proj` is one), silently
+# exceeding the spike surface and breaking the module arithmetic (316 vs 314).
+# An exact-path list makes "exactly 2" unconditional. Cost of the deviation:
+# the prefix-only sentinel in `inject_adapters` must now account for
+# path-only scopes (it does -- see `_scoped`), and a future scope that really
+# is prefix-shaped still belongs in SUBMODULE_PREFIXES.
+#
+# `sam3_image.py:83-85` builds `instance_dot_prod_scoring = deepcopy(...)`.
+# Exact-path matching excludes it, and that exclusion IS intended parity: the
+# spike checkpoint carries no adapters for it.
+SUBMODULE_PATHS: dict[str, tuple[str, ...]] = {
+    "adapt_scoring_head": (
+        "dot_prod_scoring.prompt_proj",
+        "dot_prod_scoring.hs_proj",
+    ),
 }
 
 
@@ -86,17 +127,24 @@ def lora_config_from_params(params) -> "LoraConfig":
     Always return the explicit declared-prefix union. The empty-prefix sentinel
     means "everything" to the generic injector and would include unbudgeted
     modules such as ``dot_prod_scoring``.
+
+    Path-keyed scopes (``SUBMODULE_PATHS``) are read with a ``False`` default:
+    they are opt-in additions, so a params object predating the flag means
+    "off", whereas a missing prefix flag is still a programming error.
     """
     enabled = [f for f in SUBMODULE_PREFIXES if getattr(params, f)]
-    if not enabled:
+    enabled_paths = [f for f in SUBMODULE_PATHS if getattr(params, f, False)]
+    if not enabled and not enabled_paths:
         raise ValueError("at least one SAM3 LoRA adapter scope must be enabled")
     include = tuple(pref for flag in enabled for pref in SUBMODULE_PREFIXES[flag])
+    paths = tuple(path for flag in enabled_paths for path in SUBMODULE_PATHS[flag])
     return LoraConfig(
         rank=params.rank,
         alpha=params.alpha,
         dropout=params.dropout,
         target_suffixes=TARGET_SUFFIXES,
         include_prefixes=include,
+        include_module_paths=paths,
     )
 
 
@@ -340,10 +388,19 @@ def inject_adapters(model: nn.Module, cfg: LoraConfig) -> int:
     of wrapped Linears.
     """
 
+    def _excluded(name: str) -> bool:
+        return bool(cfg.exclude_prefixes) and name.startswith(cfg.exclude_prefixes)
+
     def _scoped(name: str) -> bool:
-        if cfg.exclude_prefixes and name.startswith(cfg.exclude_prefixes):
+        if _excluded(name):
             return False
-        return not cfg.include_prefixes or name.startswith(cfg.include_prefixes)
+        if cfg.include_prefixes:
+            return name.startswith(cfg.include_prefixes)
+        # The "no includes at all" sentinel still means "the whole model" (the
+        # raw-LoraConfig callers rely on it), but a config that declares ONLY
+        # exact module paths is a real scope: falling back to everything there
+        # would adapt the entire model off a two-module flag.
+        return not cfg.include_module_paths
 
     # Pass 1: split in-scope fused attention. Uses exact isinstance so
     # subclasses/clones with different forwards can never be silently
@@ -392,8 +449,10 @@ def inject_adapters(model: nn.Module, cfg: LoraConfig) -> int:
         (name, mod)
         for name, mod in model.named_modules()
         if isinstance(mod, nn.Linear)
-        and name.split(".")[-1] in cfg.target_suffixes
-        and _scoped(name)
+        and (
+            (name in cfg.include_module_paths and not _excluded(name))
+            or (name.split(".")[-1] in cfg.target_suffixes and _scoped(name))
+        )
         and not _parent_uses_weights_directly(name)
     ]
     for name, mod in targets:
