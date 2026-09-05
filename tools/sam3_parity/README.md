@@ -30,8 +30,15 @@ the orchestration is real and tested, but it has never been run against a
 real checkpoint. Run it on a GPU box (courtship or mehek) with the
 `hydra-sam3` sidecar env active:
 
+Use the env that has ULTRALYTICS, not the `sam3` training sidecar. Inference
+goes through `ultralytics.models.sam.SAM3SemanticPredictor`
+(`core/inference/semantic/sam3.py::from_variant`), which the `hydra-sam3`
+sidecar does not have -- that env exists for LoRA TRAINING against Meta's
+`sam3` package. On courtship the right env is `hydra-cuda` (it also needs
+`scikit-learn`, pulled in by the `data.al` import chain).
+
 ```bash
-conda activate hydra-sam3
+conda activate hydra-cuda
 KMP_DUPLICATE_LIB_OK=TRUE python tools/sam3_parity/compare_models.py \
   --checkpoint-a /path/to/ours.pt \
   --checkpoint-b ~/sam3_spike/work/checkpoints/fold_all_r16/adapters.pt \
