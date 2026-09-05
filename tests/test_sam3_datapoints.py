@@ -407,3 +407,47 @@ def test_fragment_tile_downgrades_only_the_positive_query(monkeypatch):
     assert len(datapoint.images[0].objects) == 2
     assert [q.object_ids_output for q in datapoint.find_queries] == [[0], []]
     assert [q.is_exhaustive for q in datapoint.find_queries] == [False, True]
+
+
+def test_real_collator_accepts_a_non_exhaustive_fragment_tile():
+    """CUDA-box guard for the one contract this Mac cannot verify.
+
+    Fake dataclasses cannot tell us whether Meta's `collate_fn_api` tolerates
+    `object_ids_output=[]` paired with `is_exhaustive=False` (negatives already
+    pair `[]` with `True`, so it is only plausible, not proven). Skips here,
+    runs automatically wherever `sam3` is installed.
+    """
+    pytest.importorskip("sam3", exc_type=ImportError)
+
+    from hydra_suite.training.sam3_lora.dataloader import _default_transform
+    from hydra_suite.training.sam3_lora.datapoints import (
+        build_tile_datapoint,
+        collate_datapoints,
+    )
+
+    tile = np.zeros((RES, RES, 3), dtype=np.uint8)
+    full = np.array(
+        [[100.0, 100.0], [300.0, 100.0], [300.0, 300.0], [100.0, 300.0]],
+        dtype=np.float32,
+    )
+    fragment = np.array(
+        [[0.0, 0.0], [40.0, 0.0], [40.0, 40.0], [0.0, 40.0]], dtype=np.float32
+    )
+    transform = _default_transform()
+
+    mixed = collate_datapoints(
+        [
+            build_tile_datapoint(
+                tile, "ant", [(full, False), (fragment, True)], ["floor"], transform
+            )
+        ]
+    )["input"]
+    assert mixed.find_targets[0].is_exhaustive.tolist() == [False, True]
+    assert mixed.find_targets[0].num_boxes.tolist() == [1, 0]
+
+    # Fragment-only tile: present in the batch, never claimed empty.
+    only = collate_datapoints(
+        [build_tile_datapoint(tile, "ant", [(fragment, True)], [], transform)]
+    )["input"]
+    assert only.find_targets[0].is_exhaustive.tolist() == [False]
+    assert only.find_targets[0].num_boxes.tolist() == [0]

@@ -144,6 +144,48 @@ def test_above_floor_clip_stays_a_normal_positive():
     assert _crowd_flags([[45, 10], [55, 10], [55, 20], [45, 20]]) == [False, False]
 
 
+def _seam_source(tmp_path, n_frames=3, size=100):
+    """A source whose only animal straddles a tile seam 20/80.
+
+    Below the 0.25 floor on the left tile (a fragment) and well above it on the
+    right (a normal positive), so the downgrade tallies are provably nonzero.
+    """
+    img_dir = tmp_path / "images"
+    lbl_dir = tmp_path / "labels"
+    img_dir.mkdir(parents=True)
+    lbl_dir.mkdir(parents=True)
+    rng = np.random.default_rng(0)
+    poly = np.array([[0.48, 0.10], [0.58, 0.10], [0.58, 0.20], [0.48, 0.20]])
+    for i in range(n_frames):
+        cv2.imwrite(
+            str(img_dir / f"f{i}.jpg"),
+            rng.integers(0, 255, (size, size, 3), dtype=np.uint8),
+        )
+        (lbl_dir / f"f{i}.txt").write_text(
+            "0 " + " ".join(f"{v:.6f}" for v in poly.reshape(-1)) + "\n"
+        )
+    (tmp_path / "classes.txt").write_text("ant\n")
+    return tmp_path
+
+
+def test_downgraded_tile_counts_are_actually_tallied(tmp_path):
+    # Guards the tally itself, not just the manifest keys: every frame yields
+    # exactly one fragment tile (20 % retained) and one full-positive tile.
+    out = tmp_path / "out"
+    stats = build_sam3_coco_dataset(
+        _seam_source(tmp_path / "src", n_frames=3),
+        out,
+        _params(slice_width=50, slice_height=50, tile_overlap=0.0),
+    )
+    manifest = json.loads((out / "build_manifest.json").read_text())
+    counts = manifest["fragment_counts"]
+    assert stats["fragment_annotations"] == 3
+    assert stats["downgraded_tiles"] == 3
+    assert stats["fragment_only_tiles"] == 3
+    for key in ("fragment_annotations", "downgraded_tiles", "fragment_only_tiles"):
+        assert stats[key] == counts["train"][key] + counts["valid"][key]
+
+
 def test_manifest_reports_fragment_and_downgraded_tile_counts(tmp_path):
     # The M2 risk (nearly half the annotated stream losing FP pressure) must be
     # visible from the built dataset BEFORE anyone spends GPU hours on it.
