@@ -18,9 +18,15 @@ without having written `adapters.pt`, which the launcher already treats as
 a failed/canceled run -- see `train.py`'s artifact-existence check.
 
 Checkpoint selection is always the LAST epoch's weights, never the epoch
-with the best validation loss: the spike found val loss anti-correlated with
-held-out AP (the fold with the worst val loss had the best held-out AP75).
-Do not add best-checkpoint selection or early stopping on val loss here.
+with the best validation loss. The spike's own val-loss-vs-AP comparison is
+not usable evidence either way: it came from a fold whose val split was
+byte-identical to its train split, so the reported anti-correlation reflects
+that overlap, not a real relationship between val loss and held-out AP.
+There is no evidence for or against best-checkpoint selection here -- last-
+epoch is kept because it is simple and matches the spike's own practice, not
+because of the anti-correlation claim. Do not add best-checkpoint selection
+or early stopping on val loss without first re-measuring on a fold with a
+genuinely disjoint val split.
 
 The training set is built and checked for emptiness BEFORE any `sam3` model
 is loaded: an empty dataloader must exit nonzero, never silently train
