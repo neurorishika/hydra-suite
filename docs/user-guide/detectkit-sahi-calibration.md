@@ -212,6 +212,27 @@ explicit `--sahi-profile` argument is user intent stated on this run, so a
 bad value should stop the run rather than substitute a different profile
 silently.
 
+### Older configs change too, even when they name no profile
+
+If your saved config predates calibration profiles, it carries no
+`slice_profile_id` -- but a CLI run of it can still tile differently than it
+used to. Whenever the config's direct-detection model has **any** sidecar
+attached (every sliced-training publish stamps one, calibration or not),
+`trackerkit track` now takes the tiling knobs from that sidecar: the model's
+primary profile if one is marked, otherwise the geometry the model was
+trained with. Tile size, overlap, object-tile fraction and trained body size
+therefore come from the model, and the four `slice_merge_*` knobs are reset
+to their defaults, instead of all of them being read from the local
+machine's `advanced_config.json`.
+
+This is intended, and it is the same thing the GUI has always done the moment
+you select that model -- the CLI was the odd one out. But it is a real change
+in what a pre-existing config detects, with no action on your part, so if you
+have headless runs whose output you compare across this upgrade, re-check
+them. To pin an exact operating point instead, open the config in TrackerKit,
+set the tiling you want, and re-save it: the saved settings are then carried
+with the config.
+
 ### A profile never overrides your saved confidence threshold
 
 A calibration profile records the confidence threshold it was measured at,

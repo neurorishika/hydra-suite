@@ -2273,7 +2273,7 @@ class DetectionPanel(QWidget):
             not sequential and self.chk_slice_enabled.isChecked(),
         )
         if not sequential and self.chk_slice_enabled.isChecked():
-            self._on_slice_geometry_changed(self.combo_slice_geometry.currentIndex())
+            self._refresh_slice_param_visibility()
 
         # Sequential-mode controls (right column of the YOLO grid).
         self._set_widget_visible(getattr(self, "row_seq_detect", None), sequential)
@@ -2313,7 +2313,7 @@ class DetectionPanel(QWidget):
         self._set_widget_visible(self.row_slice_geometry, visible)
         self._set_widget_visible(self.row_slice_params, visible)
         if visible:
-            self._on_slice_geometry_changed(self.combo_slice_geometry.currentIndex())
+            self._refresh_slice_param_visibility()
 
     def _on_slice_geometry_changed(self, _index: object) -> None:
         """Reveal only the SAHI parameters that apply to the chosen geometry mode.
@@ -2322,9 +2322,21 @@ class DetectionPanel(QWidget):
         object fraction; auto_model derives the tile from the checkpoint and
         needs nothing. Tile overlap applies to every mode.
         """
+        self._mark_slice_profile_custom()
+        self._refresh_slice_param_visibility()
+
+    def _refresh_slice_param_visibility(self) -> None:
+        """Show the SAHI parameter widgets the current geometry mode uses.
+
+        Split out of ``_on_slice_geometry_changed`` so that purely cosmetic
+        refreshes (a direct/sequential mode switch) do not mark the profile
+        Custom: with the count guard removed that would otherwise claim a
+        user edit that never happened, and "__custom__" resolves merge_* from
+        advanced_config where "__training__" resolves them to defaults -- a
+        real change to what runs.
+        """
         if not hasattr(self, "combo_slice_geometry"):
             return
-        self._mark_slice_profile_custom()
         mode = self.combo_slice_geometry.currentText()
         is_custom = mode == "custom"
         is_auto_object = mode == "auto_object"
@@ -2625,16 +2637,29 @@ class DetectionPanel(QWidget):
             return
         if getattr(self._main_window, "_restoring_config", False):
             return
-        if self.combo_slice_profile.count() <= 1:
+        if self._slice_meta is None:
+            # No sidecar at all: apply_slice_meta_for_model deliberately keeps
+            # ``slice_profile_id`` empty, and there is nothing to be custom
+            # *from*. (This also covers the panel's own construction-time
+            # setValue calls, which run before any model is selected.)
             return
-        custom_index = self.combo_slice_profile.findData("__custom__", Qt.UserRole)
-        if custom_index < 0:
-            self.combo_slice_profile.addItem("Custom", "__custom__")
-            custom_index = self.combo_slice_profile.count() - 1
-        self.combo_slice_profile.blockSignals(True)
-        self.combo_slice_profile.setCurrentIndex(custom_index)
-        self.combo_slice_profile.blockSignals(False)
+        # The id write is UNCONDITIONAL past the two guards above. Gating it on
+        # a populated combo silently discarded user edits for the commonest
+        # sidecar of all -- training geometry with no calibration profiles --
+        # because ``resolve_slice_profile_values`` excludes "__training__" from
+        # the saved-settings rung, so the overlay in build_engine_params then
+        # overwrote the edited spins with the sidecar's training numbers.
         self._main_window.advanced_config["slice_profile_id"] = "__custom__"
+        if self.combo_slice_profile.count() > 1:
+            # Combo manipulation stays guarded: with no profiles the row is
+            # hidden, so a "Custom" entry there would be invisible anyway.
+            custom_index = self.combo_slice_profile.findData("__custom__", Qt.UserRole)
+            if custom_index < 0:
+                self.combo_slice_profile.addItem("Custom", "__custom__")
+                custom_index = self.combo_slice_profile.count() - 1
+            self.combo_slice_profile.blockSignals(True)
+            self.combo_slice_profile.setCurrentIndex(custom_index)
+            self.combo_slice_profile.blockSignals(False)
         self._update_slice_profile_status_label()
 
     def _on_slice_profile_changed(self, _index: int) -> None:

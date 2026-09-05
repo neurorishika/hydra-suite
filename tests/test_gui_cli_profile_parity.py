@@ -154,3 +154,89 @@ def test_overlay_is_a_no_op_inside_the_gui(tmp_path, monkeypatch):
         if key in ("SLICE_ENABLED", "SLICE_GEOMETRY_MODE"):
             continue  # config-owned; unaffected by the model path
         assert with_overlay[key] == without_model[key], key
+
+
+def _select_training_geometry_only_model(tmp_path, monkeypatch):
+    """Select a model whose sidecar carries training geometry but NO profiles.
+
+    This is the commonest sidecar in existence -- every sliced-training publish
+    stamps one, while calibration profiles are opt-in -- and the case where a
+    combo-count guard used to swallow the Custom mark, so the overlay silently
+    reverted the user's edits to the sidecar's training numbers.
+    """
+    import shutil
+
+    from hydra_suite.core.inference.model_paths import get_models_root_directory
+
+    panel, window, raw_model_path = _make_panel_with_sidecar(tmp_path, monkeypatch)
+    models_root = Path(get_models_root_directory())
+    models_root.mkdir(parents=True, exist_ok=True)
+    model_path = models_root / raw_model_path.name
+    shutil.copy2(str(raw_model_path), str(model_path))
+    (model_path.parent / (model_path.name + ".slice_meta.json")).write_text(
+        json.dumps(
+            {
+                "schema_version": 2,
+                "training_geometry": {
+                    "geometry_mode": "auto_object",
+                    "overlap": 0.2,
+                    "object_tile_fraction": 0.15,
+                    "reference_body_px": 100.0,
+                },
+                "primary_profile_id": "",
+                "profiles": [],
+            }
+        ),
+        encoding="utf-8",
+    )
+    panel._refresh_yolo_model_combo(preferred_model_path=str(model_path))
+    window._set_yolo_model_selection(str(model_path))
+    panel.apply_slice_meta_for_model(str(model_path))
+    return panel, window, model_path
+
+
+def test_edits_survive_for_a_zero_profile_sidecar(tmp_path, monkeypatch):
+    panel, window, _model_path = _select_training_geometry_only_model(
+        tmp_path, monkeypatch
+    )
+    assert panel.spin_slice_overlap.value() == pytest.approx(0.2)
+
+    panel.spin_slice_overlap.setValue(0.35)
+
+    # What actually RUNS is the params dict -- assert there FIRST, both halves,
+    # so a regression fails on the value that ships, not on the internal id.
+    gui_params = window.get_parameters_dict()
+    assert gui_params["SLICE_OVERLAP"] == pytest.approx(0.35)
+    cfg = window._config_orch.build_config_dict()
+    cli_params = build_engine_params(
+        cfg,
+        runtime=RuntimeContext(
+            fps=30.0, total_frames=None, frame_width=None, frame_height=None
+        ),
+    )
+    assert cli_params["SLICE_OVERLAP"] == pytest.approx(0.35)
+    for key in SLICE_KEYS:
+        assert cli_params[key] == gui_params[key], key
+
+    assert window.advanced_config["slice_profile_id"] == "__custom__"
+    assert window.advanced_config["slice_overlap"] == pytest.approx(0.35)
+    # The hidden profile row must not gain a Custom entry: with no profiles the
+    # combo holds only "Training geometry" and the row is not shown. (A later
+    # session RESTORE of "__custom__" does add a hidden one -- see the report.)
+    assert panel.combo_slice_profile.findData("__custom__") < 0
+    window.close()
+
+
+def test_mode_switch_does_not_claim_a_custom_profile(tmp_path, monkeypatch):
+    """A direct/sequential visibility refresh is not a user edit."""
+    panel, window, _model_path = _select_training_geometry_only_model(
+        tmp_path, monkeypatch
+    )
+    panel.chk_slice_enabled.setChecked(True)
+    window.advanced_config["slice_profile_id"] = "__training__"
+
+    panel.combo_yolo_obb_mode.setCurrentIndex(1)  # sequential
+    panel.combo_yolo_obb_mode.setCurrentIndex(0)  # back to direct
+
+    assert window.advanced_config["slice_profile_id"] == "__training__"
+    window.close()
