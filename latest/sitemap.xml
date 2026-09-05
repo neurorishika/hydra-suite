@@ -197,6 +197,10 @@
          <lastmod>2026-09-05</lastmod>
     </url>
     <url>
+         <loc>https://neurorishika.github.io/hydra-suite/latest/superpowers/plans/2026-09-05-sam3-spike-parity-finetuning/</loc>
+         <lastmod>2026-09-05</lastmod>
+    </url>
+    <url>
          <loc>https://neurorishika.github.io/hydra-suite/latest/superpowers/plans/done/2026-04-26-inference-pipeline-redesign/</loc>
          <lastmod>2026-09-05</lastmod>
     </url>
@@ -550,6 +554,14 @@
     </url>
     <url>
          <loc>https://neurorishika.github.io/hydra-suite/latest/superpowers/specs/2026-09-04-sam3-spike-vs-build-consolidation/</loc>
+         <lastmod>2026-09-05</lastmod>
+    </url>
+    <url>
+         <loc>https://neurorishika.github.io/hydra-suite/latest/superpowers/specs/2026-09-05-parity-plan-review/</loc>
+         <lastmod>2026-09-05</lastmod>
+    </url>
+    <url>
+         <loc>https://neurorishika.github.io/hydra-suite/latest/superpowers/specs/2026-09-05-sam3-finetune-quality-audit/</loc>
          <lastmod>2026-09-05</lastmod>
     </url>
     <url>
