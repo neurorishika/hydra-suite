@@ -327,3 +327,55 @@ def test_detection_and_headtail_caches_are_independent(tmp_path):
     ht_handle = HeadTailCacheHandle(path=ht_path, key=_key("/ht.pt"))
     assert not ht_handle.is_valid()
     assert DetectionCacheHandle(path=det_path, key=_key("/obb.pt")).is_valid()
+
+
+def test_headtail_accepts_selection_ordered_det_indices(tmp_path):
+    """filter_with_indices returns indices in SELECTION order, not ascending.
+
+    ``filter_with_indices`` reorders its surviving indices twice: NMS walks
+    detections confidence-descending (stages/filtering.py:207) and the
+    MAX_TARGETS cap re-sorts them largest-first (stages/filtering.py:331-334).
+    ``runner.py`` hands that array straight to the downstream caches, so a
+    crowded frame produced a non-ascending array and the cache raised, killing
+    the whole batch pass. The cache's real requirement is UNIQUE keys -- the
+    ordering was incidental -- so it must accept this and store it sorted.
+    """
+    path = tmp_path / "sel.ht.npz"
+    key = _key()
+    handle = HeadTailCacheHandle(path=path, key=key)
+
+    # Largest-first selection order, as the detection cap emits it.
+    handle.write_frame(
+        0,
+        det_indices=np.array([5, 1, 3], dtype=np.int32),
+        heading_hints=np.array([0.5, 0.1, 0.3], dtype=np.float32),
+        heading_confidences=np.array([0.55, 0.11, 0.33], dtype=np.float32),
+        directed_mask=np.array([1, 0, 1], dtype=np.uint8),
+    )
+    handle.close()
+
+    handle2 = HeadTailCacheHandle(path=path, key=key)
+    di, hints, confs, directed = handle2.read_frame(0)
+    # Stored ascending, with every payload value still attached to its own index.
+    assert di.tolist() == [1, 3, 5]
+    assert hints == pytest.approx([0.1, 0.3, 0.5])
+    assert confs == pytest.approx([0.11, 0.33, 0.55])
+    assert directed.tolist() == [0, 1, 1]
+    handle2.close()
+
+
+def test_headtail_still_rejects_duplicate_det_indices(tmp_path):
+    """Sorting must not weaken the guarantee that actually matters: unique keys.
+
+    Two rows claiming the same detection is a real defect -- the loader keys by
+    value, so one would silently shadow the other.
+    """
+    handle = HeadTailCacheHandle(path=tmp_path / "dup.ht.npz", key=_key())
+    with pytest.raises(ValueError, match="unique"):
+        handle.write_frame(
+            0,
+            det_indices=np.array([2, 2, 3], dtype=np.int32),
+            heading_hints=np.zeros(3, dtype=np.float32),
+            heading_confidences=np.zeros(3, dtype=np.float32),
+            directed_mask=np.zeros(3, dtype=np.uint8),
+        )

@@ -9,7 +9,7 @@ from __future__ import annotations
 import json
 import sys
 from abc import ABC, abstractmethod
-from dataclasses import dataclass, field
+from dataclasses import dataclass, field, replace
 from pathlib import Path
 from typing import Any, Iterator
 
@@ -95,6 +95,30 @@ def _require_unique_increasing(name: str, values: np.ndarray) -> None:
         len(array) > 1 and np.any(np.diff(array.astype(np.int64)) <= 0)
     ):
         raise ValueError(f"{name} must be one-dimensional, unique, and increasing")
+
+
+def _sorted_by_det_index(
+    name: str, det_indices: np.ndarray, *parallel: np.ndarray
+) -> tuple[np.ndarray, ...]:
+    """Sort ``det_indices`` ascending, carrying its parallel payload arrays along.
+
+    Producers hand us indices in SELECTION order, not ascending order:
+    ``filter_with_indices`` walks NMS confidence-descending (stages/filtering.py)
+    and the MAX_TARGETS cap re-sorts survivors largest-first, so a crowded frame
+    arrives as e.g. ``[5, 1, 3]``. The stored layout wants ascending keys, but
+    that ordering was never the caller's contract -- the requirement that
+    actually matters is UNIQUENESS, because ``load_frame`` keys by index value
+    and a duplicate would silently shadow its twin.
+
+    So we sort here rather than demanding the caller do it: reordering the
+    caller's own arrays would change detection order downstream, which decides
+    assignment and identity. Uniqueness is still enforced, on the sorted array,
+    where a duplicate shows up as a zero diff.
+    """
+    order = np.argsort(det_indices.astype(np.int64), kind="stable")
+    ordered = tuple(np.ascontiguousarray(a[order]) for a in (det_indices, *parallel))
+    _require_unique_increasing(name, ordered[0])
+    return ordered
 
 
 def _buffer_value_bytes(value: Any, seen: set[int] | None = None) -> int:
@@ -524,7 +548,7 @@ class HeadTailCacheHandle(_ChunkedHandleMixin, CacheHandle):
         lengths = [len(value) for value in arrays[1:]]
         if len(set(lengths)) != 1 or any(value.ndim != 1 for value in arrays[1:]):
             raise ValueError("headtail arrays must have aligned lengths")
-        _require_unique_increasing("headtail det_indices", arrays[1])
+        arrays = (arrays[0], *_sorted_by_det_index("headtail det_indices", *arrays[1:]))
         if not self._prepare_frame_write(frame_idx):
             return
         self._append_buffered(frame_idx, arrays)
@@ -590,6 +614,11 @@ class CNNCacheHandle(_ChunkedHandleMixin, CacheHandle):
     def write_frame(
         self, frame_idx: int, *, predictions: list[CNNDetectionPrediction], **_
     ) -> None:
+        # Same selection-order contract as the head/tail and pose caches: the
+        # producer hands predictions in detection order, which the NMS walk and
+        # the MAX_TARGETS cap leave non-ascending. Sort the predictions rather
+        # than rejecting them; uniqueness is still enforced below.
+        predictions = sorted(predictions, key=lambda prediction: prediction.det_index)
         det_indices = np.asarray([prediction.det_index for prediction in predictions])
         _require_unique_increasing("CNN det_indices", det_indices)
         expected = None
@@ -748,7 +777,7 @@ class PoseCacheHandle(_ChunkedHandleMixin, CacheHandle):
             raise ValueError("pose arrays have invalid ranks or shapes")
         if arrays[3].ndim != 1:
             raise ValueError("pose valid_mask must be one-dimensional")
-        _require_unique_increasing("pose det_indices", arrays[1])
+        arrays = (arrays[0], *_sorted_by_det_index("pose det_indices", *arrays[1:]))
         keypoint_shape = tuple(int(value) for value in arrays[2].shape[1:])
         if self._keypoint_shape is None:
             self._keypoint_shape = keypoint_shape
@@ -827,7 +856,20 @@ class AprilTagCacheHandle(_ChunkedHandleMixin, CacheHandle):
             or np.asarray(result.corners).shape != (lengths[0], 4, 2)
         ):
             raise ValueError("apriltag arrays have invalid ranks or shapes")
-        _require_unique_increasing("apriltag det_indices", result.det_indices)
+        det_indices, tag_ids, centers, corners = _sorted_by_det_index(
+            "apriltag det_indices",
+            np.asarray(result.det_indices, dtype=np.int32),
+            np.asarray(result.tag_ids, dtype=np.int32),
+            np.asarray(result.centers),
+            np.asarray(result.corners),
+        )
+        result = replace(
+            result,
+            det_indices=det_indices,
+            tag_ids=tag_ids,
+            centers=centers,
+            corners=corners,
+        )
         if not self._prepare_frame_write(frame_idx):
             return
         self._append_buffered(frame_idx, (int(frame_idx), result))
