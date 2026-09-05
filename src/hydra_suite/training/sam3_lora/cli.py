@@ -246,6 +246,47 @@ def _write_validated_adapter_artifact(
         temporary.unlink(missing_ok=True)
 
 
+# Interrupted runs used to leave nothing at all: `adapters.pt` is written only
+# after the final epoch, so a kill at hour six discarded every step. Epoch
+# checkpoints are salvage -- `adapters.pt` remains the ONLY completion signal
+# (the launcher treats its presence as "the run finished"), so these live in a
+# subdirectory under their own names and can never be mistaken for it.
+EPOCH_CHECKPOINT_DIRNAME = "checkpoints"
+KEEP_EPOCH_CHECKPOINTS = 3
+
+
+def prune_epoch_checkpoints(directory: Path, keep: int = KEEP_EPOCH_CHECKPOINTS):
+    """Delete all but the newest *keep* epoch checkpoints (and their markers).
+
+    Returns the paths removed. Bounded on purpose: 10 epochs x ~42 MB is
+    tolerable, but epoch counts are user-supplied and disk exhaustion mid-run
+    would destroy the very artifact this feature exists to preserve.
+    """
+    if keep < 1 or not directory.is_dir():
+        return []
+    checkpoints = sorted(
+        directory.glob("epoch_*.pt"), key=lambda path: path.name, reverse=True
+    )
+    removed = []
+    for stale in checkpoints[keep:]:
+        stale.unlink(missing_ok=True)
+        stale.with_name(stale.name + ".complete.json").unlink(missing_ok=True)
+        removed.append(stale)
+    return removed
+
+
+def _write_epoch_checkpoint(
+    model: Any, run_dir_path: Path, epoch_number: int, torch_module: Any
+) -> Path:
+    """Persist this epoch's adapters as salvage, atomically."""
+    directory = run_dir_path / EPOCH_CHECKPOINT_DIRNAME
+    directory.mkdir(parents=True, exist_ok=True)
+    target = directory / f"epoch_{epoch_number:03d}.pt"
+    _write_validated_adapter_artifact(adapter_state_dict(model), target, torch_module)
+    prune_epoch_checkpoints(directory)
+    return target
+
+
 def _build_dataloader(spec: Any, params: Any, *, split: str) -> list:
     """Read the built COCO split into lightweight tile descriptors.
 
@@ -676,6 +717,12 @@ def run_training(spec: Any, run_dir_path: Path) -> bool:
                     )
                 loss_window.reset()
             del batch, model_input, targets, outputs, loss_dict, loss
+
+        # Salvage checkpoint, skipped on the final epoch because the real
+        # artifact is written moments later from the same weights.
+        if epoch + 1 < params.epochs:
+            saved = _write_epoch_checkpoint(model, run_dir_path, epoch + 1, torch)
+            emit_log(f"epoch {epoch} checkpoint: {saved}")
 
         emit_progress(epoch + 1, params.epochs)
 

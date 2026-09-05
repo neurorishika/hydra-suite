@@ -487,3 +487,51 @@ def test_a_long_run_of_skipped_steps_aborts():
     source = __import__("inspect").getsource(cli.run_training)
     assert "MAX_CONSECUTIVE_SKIPPED_STEPS" in source
     assert "no longer learning" in source
+
+
+def test_prune_keeps_only_the_newest_epoch_checkpoints(tmp_path):
+    """Epoch counts are user-supplied; unbounded salvage could exhaust the
+    disk mid-run and destroy the artifact this feature exists to preserve."""
+    from hydra_suite.training.sam3_lora.cli import prune_epoch_checkpoints
+
+    for n in range(1, 6):
+        (tmp_path / f"epoch_{n:03d}.pt").write_text("x")
+        (tmp_path / f"epoch_{n:03d}.pt.complete.json").write_text("{}")
+
+    removed = prune_epoch_checkpoints(tmp_path, keep=2)
+
+    remaining = sorted(p.name for p in tmp_path.glob("epoch_*.pt"))
+    assert remaining == ["epoch_004.pt", "epoch_005.pt"]
+    assert len(removed) == 3
+    # Completion markers must go with their checkpoint, not linger as
+    # evidence of an artifact that no longer exists.
+    assert not (tmp_path / "epoch_003.pt.complete.json").exists()
+    assert (tmp_path / "epoch_005.pt.complete.json").exists()
+
+
+def test_prune_is_safe_on_a_missing_directory_or_zero_keep(tmp_path):
+    from hydra_suite.training.sam3_lora.cli import prune_epoch_checkpoints
+
+    assert prune_epoch_checkpoints(tmp_path / "absent", keep=2) == []
+    (tmp_path / "epoch_001.pt").write_text("x")
+    assert prune_epoch_checkpoints(tmp_path, keep=0) == []
+    assert (tmp_path / "epoch_001.pt").exists(), "keep=0 must not wipe everything"
+
+
+def test_epoch_checkpoints_never_shadow_the_completion_signal():
+    """`adapters.pt` is the launcher's 'run finished' marker.
+
+    A per-epoch write to that name would make a killed run look complete, so
+    salvage lives in a subdirectory under its own names.
+    """
+    import inspect
+
+    from hydra_suite.training.sam3_lora import cli
+
+    source = inspect.getsource(cli._write_epoch_checkpoint)
+    assert cli.EPOCH_CHECKPOINT_DIRNAME in source
+    assert "adapters.pt" not in source
+
+    loop = inspect.getsource(cli.run_training)
+    # Salvage is skipped on the final epoch; the real artifact follows.
+    assert "epoch + 1 < params.epochs" in loop
