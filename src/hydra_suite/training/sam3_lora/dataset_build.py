@@ -18,7 +18,7 @@ import random
 import sqlite3
 from datetime import datetime
 from pathlib import Path
-from typing import Iterator
+from typing import Iterator, NamedTuple
 
 import cv2
 import numpy as np
@@ -47,14 +47,49 @@ from ..sliced_dataset import measure_reference_body_px
 
 logger = logging.getLogger(__name__)
 
+
+class SplitCounts(NamedTuple):
+    """Per-split tallies, including how much precision pressure was given up.
+
+    ``downgraded_tiles`` / ``fragment_only_tiles`` exist so the cost documented
+    at ``MIN_RETAINED_AREA_FRAC`` is measurable from a built dataset instead of
+    being discovered after a training run.
+    """
+
+    tiles: int
+    annotations: int
+    fragment_annotations: int
+    downgraded_tiles: int
+    fragment_only_tiles: int
+
+
 # Explicit negative-prompt tiers (see resolve_negative_prompts): curated last
 # resort when the source declares only one class and the caller gave none.
 CURATED_NEGATIVES = ("background", "shadow", "debris")
 
-# A clipped instance retaining less than half its original area is still a
-# visible, real object -- SAM3 must not be taught it is background. It is kept
-# as `iscrowd=1` rather than dropped.
-MIN_RETAINED_AREA_FRAC = 0.5
+# A tile-clipped instance retaining less than this fraction of its original
+# area is a FRAGMENT: still a visible, real object, so it is kept as
+# `iscrowd=1` rather than dropped (SAM3 must never be taught it is
+# background), but it is excluded from the positive query's supervised
+# instance list downstream, and the tile is marked non-exhaustive in the same
+# step (`datapoints.select_output_objects`).
+#
+# Deviation from the research spike, and what it costs. The spike (and this
+# builder before Task 5) trains every truncated instance as a full exhaustive
+# positive, because nothing in `sam3.train.{loss,matcher,data}` reads
+# `is_crowd` -- so a 5 %-visible sliver became a full-quality mask target.
+# Downgrading instead nullifies the downgraded tile's no-object BCE and
+# excludes it from false-positive penalties, i.e. it REMOVES precision
+# pressure from the seam-adjacent tiles where false positives are most likely
+# -- and extras/frame is the metric this programme optimises. The floor is
+# therefore set as high as the fragments are small and no higher: 0.25 (was
+# 0.5, which classified even a cleanly halved animal as a fragment and would
+# have downgraded roughly half the annotated tiles). At 0.25 a mostly-visible
+# animal stays a full positive and only genuinely unreconstructable slivers
+# cost a tile its precision pressure. The build manifest reports how many
+# tiles were actually downgraded so the size of that cost is visible before
+# anyone trains.
+MIN_RETAINED_AREA_FRAC = 0.25
 
 # SAM3's native training resolution (see the design's "1008 px OOMs at batch
 # 2" note); used only as the `imgsz` fallback for auto_model / auto_object
@@ -383,7 +418,7 @@ def build_sam3_coco_dataset(
         )
         database.commit()
 
-        def _build_split(build_root: Path, split_name: str) -> tuple[int, int, int]:
+        def _build_split(build_root: Path, split_name: str) -> SplitCounts:
             split_dir = build_root / split_name
             split_dir.mkdir(parents=True, exist_ok=True)
             images_spool = split_dir / ".images.jsonl"
@@ -391,6 +426,8 @@ def build_sam3_coco_dataset(
             image_id = 0
             ann_id = 0
             crowd_count = 0
+            downgraded_tiles = 0
+            fragment_only_tiles = 0
             with (
                 images_spool.open("w", encoding="utf-8") as image_records,
                 annotations_spool.open("w", encoding="utf-8") as annotation_records,
@@ -443,6 +480,11 @@ def build_sam3_coco_dataset(
                             separators=(",", ":"),
                         )
                         image_records.write("\n")
+                        fragments = sum(1 for _poly, crowd in instances if crowd)
+                        if fragments:
+                            downgraded_tiles += 1
+                            if fragments == len(instances):
+                                fragment_only_tiles += 1
                         for local_poly, is_crowd in instances:
                             ann_id += 1
                             crowd_count += int(is_crowd)
@@ -475,19 +517,21 @@ def build_sam3_coco_dataset(
             )
             images_spool.unlink()
             annotations_spool.unlink()
-            return image_id, ann_id, crowd_count
+            return SplitCounts(
+                tiles=image_id,
+                annotations=ann_id,
+                fragment_annotations=crowd_count,
+                downgraded_tiles=downgraded_tiles,
+                fragment_only_tiles=fragment_only_tiles,
+            )
 
         with atomic_output_directory(out_root) as build_root:
-            train_images, train_annotations, train_crowd = _build_split(
-                build_root, "train"
-            )
+            train_counts = _build_split(build_root, "train")
             if train_count < frame_count:
-                val_images, val_annotations, val_crowd = _build_split(
-                    build_root, "valid"
-                )
+                valid_counts = _build_split(build_root, "valid")
                 validation = "ok"
             else:
-                val_images = val_annotations = val_crowd = 0
+                valid_counts = SplitCounts(0, 0, 0, 0, 0)
                 validation = "none"
 
             manifest_path = build_root / "build_manifest.json"
@@ -503,6 +547,15 @@ def build_sam3_coco_dataset(
                 "prompt": params.prompt,
                 "negative_prompts": negatives,
                 "selected_class": selected_class,
+                "min_retained_area_frac": MIN_RETAINED_AREA_FRAC,
+                # Makes the M2 cost of the fragment policy auditable before any
+                # GPU time is spent: how many tiles gave up their no-object BCE
+                # and false-positive penalty, and how many kept no supervised
+                # positive at all.
+                "fragment_counts": {
+                    "train": train_counts._asdict(),
+                    "valid": valid_counts._asdict(),
+                },
             }
             with manifest_path.open("w", encoding="utf-8") as manifest:
                 manifest.write("{")
@@ -537,15 +590,27 @@ def build_sam3_coco_dataset(
                 os.fsync(manifest.fileno())
 
         return {
-            "train_images": train_images,
-            "train_annotations": train_annotations,
-            "crowd_annotations": train_crowd + val_crowd,
+            "train_images": train_counts.tiles,
+            "train_annotations": train_counts.annotations,
+            "crowd_annotations": (
+                train_counts.fragment_annotations + valid_counts.fragment_annotations
+            ),
+            "fragment_annotations": (
+                train_counts.fragment_annotations + valid_counts.fragment_annotations
+            ),
+            "downgraded_tiles": (
+                train_counts.downgraded_tiles + valid_counts.downgraded_tiles
+            ),
+            "fragment_only_tiles": (
+                train_counts.fragment_only_tiles + valid_counts.fragment_only_tiles
+            ),
+            "min_retained_area_frac": MIN_RETAINED_AREA_FRAC,
             "tile_px": [int(tile_w), int(tile_h)],
             "negative_prompts": negatives,
             "validation": validation,
             "selected_class": selected_class,
-            "val_images": val_images,
-            "val_annotations": val_annotations,
+            "val_images": valid_counts.tiles,
+            "val_annotations": valid_counts.annotations,
         }
     finally:
         database.close()
