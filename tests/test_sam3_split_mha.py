@@ -512,9 +512,7 @@ class _Sam3CloneAttention(nn.Module):
 
 def _clone_pair(embed, heads, *, batch_first, dropout=0.0, seed=0):
     torch.manual_seed(seed)
-    clone = _Sam3CloneAttention(
-        embed, heads, dropout=dropout, batch_first=batch_first
-    )
+    clone = _Sam3CloneAttention(embed, heads, dropout=dropout, batch_first=batch_first)
     split = SplitSam3Attention.from_sam3_mha(clone)
     return clone.eval(), split.eval()
 

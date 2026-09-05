@@ -728,22 +728,42 @@ def test_unsafe_combined_rank_and_scope_size_is_refused(tmp_path):
 
 
 def test_scope_with_no_estimated_trainable_parameters_is_refused(tmp_path):
+    """Every enabled scope contributing nothing must be refused, not sized to 0.
+
+    This used to be expressed as "adapt_mask_decoder alone", which was a
+    zero-coefficient scope while `segmentation_head` held no adaptable Linear.
+    Splitting SAM3's own attention clone gave it four (2_048 params/rank), so
+    the only remaining way to enable a scope-set with no trainable parameters
+    is to enable none -- which is exactly the condition this refusal names.
+    """
     _write_coco(tmp_path)
 
     decision = _decision(
         _spec(
             tmp_path,
-            adapt_vision_encoder=False,
-            adapt_text_encoder=False,
-            adapt_geometry_encoder=False,
-            adapt_detr_encoder=False,
-            adapt_detr_decoder=False,
-            adapt_mask_decoder=True,
+            **{flag: False for flag in pf._LORA_PARAMS_PER_RANK},
         )
     )
 
     assert not decision.admitted
     assert any("scope" in reason.lower() for reason in decision.refusals)
+
+
+def test_mask_decoder_scope_alone_is_now_a_real_scope(tmp_path):
+    """Regression companion: `segmentation_head.cross_attend_prompt` is one
+    SAM3 attention clone, so the mask-decoder scope now budgets four wrapped
+    projections instead of being an admissible no-op."""
+    _write_coco(tmp_path)
+
+    decision = _decision(
+        _spec(
+            tmp_path,
+            **{flag: flag == "adapt_mask_decoder" for flag in pf._LORA_PARAMS_PER_RANK},
+        )
+    )
+
+    assert decision.admitted
+    assert pf._LORA_PARAMS_PER_RANK["adapt_mask_decoder"] == 2_048
 
 
 def test_artifact_and_publish_disk_targets_are_observed_separately(
