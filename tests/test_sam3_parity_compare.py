@@ -27,6 +27,7 @@ from compare_models import (  # noqa: E402
     sign_test,
     unmatched_predictions,
 )
+from compare_models import _trapezoid  # noqa: E402
 
 # ---------------------------------------------------------------------------
 # Step 1: paired per-frame diffs
@@ -230,7 +231,7 @@ def test_average_precision_monotone_envelope():
     ap = average_precision(recalls, precisions)
     # Envelope becomes [0.95, 0.95, 0.95, 0.4]; trapz over recall.
     expected_envelope = [0.95, 0.95, 0.95, 0.4]
-    expected = np.trapezoid(expected_envelope, recalls)
+    expected = _trapezoid(expected_envelope, recalls)
     assert ap == pytest.approx(expected)
 
 

@@ -271,6 +271,13 @@ def precision_recall_curve(
     return recalls, precisions
 
 
+# ``np.trapezoid`` is the numpy >= 2.0 spelling; ``np.trapz`` is the 1.x one
+# (removed in 2.0). The GPU sidecar envs this tool actually runs in are not
+# guaranteed to be on numpy 2 -- courtship's ``hydra-sam3`` is numpy 1.26.4 --
+# so bind whichever exists at import time rather than dying at AP time.
+_trapezoid = getattr(np, "trapezoid", None) or np.trapz
+
+
 def average_precision(recalls: Sequence[float], precisions: Sequence[float]) -> float:
     """PASCAL-VOC-style AP: integrate the monotone-decreasing precision
     envelope (each precision replaced by the max precision at that recall or
@@ -292,7 +299,7 @@ def average_precision(recalls: Sequence[float], precisions: Sequence[float]) -> 
     envelope = np.maximum.accumulate(p[::-1])[::-1]
     if r.size == 1:
         return float(envelope[0] * r[0])
-    return float(np.trapezoid(envelope, r))
+    return float(_trapezoid(envelope, r))
 
 
 # ---------------------------------------------------------------------------
