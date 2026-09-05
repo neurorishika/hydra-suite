@@ -1064,6 +1064,17 @@ class DetectionPanel(QWidget):
             "Higher = fewer detections (may miss animals).\n"
             "Recommended: 0.2-0.4"
         )
+        # The profile-owned SAHI spins above route through _sync_advanced;
+        # confidence is different -- it is the user's global YOLO threshold,
+        # written straight into the config, not into advanced_config. It must
+        # still un-claim the profile: a session that reports "Balanced" while
+        # running a threshold Balanced never measured is a provenance lie.
+        # _mark_slice_profile_custom's own _applying_slice_profile guard makes
+        # this safe against the programmatic setValue in
+        # _apply_slice_meta_values:2740.
+        self.spin_yolo_confidence.valueChanged.connect(
+            lambda _value: self._mark_slice_profile_custom()
+        )
         self.spin_yolo_iou = QDoubleSpinBox()
         self.spin_yolo_iou.setRange(0.01, 1.0)
         self.spin_yolo_iou.setValue(0.7)
