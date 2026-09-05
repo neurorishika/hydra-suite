@@ -192,7 +192,13 @@ def test_inject_replaces_torch_mha_and_wraps_its_projections():
     assert n == 5
 
 
-def test_inject_still_skips_the_sam3_clone():
+def test_inject_skips_a_fused_module_with_no_attn_bias_contract():
+    """`_CloneLikeMHA` fuses q/k/v but takes no `attn_bias`, so it is NOT the
+    SAM3 clone this injector reinterprets -- it stands for any third-party
+    fused attention, which must be left alone. (Before the clone-splitting
+    pass this test was named "still skips the sam3 clone"; SAM3's real clone
+    IS now replaced, and `_Sam3CloneAttention` below is what stands for it.)
+    """
     model = _Host()
     inject_adapters(model, _cfg())
     assert isinstance(model.clone_attn, _CloneLikeMHA)
@@ -753,8 +759,30 @@ def test_geometry_paths_are_exactly_the_spike_set():
     }
 
 
+def test_a_torch_mha_subclass_is_skipped_loudly():
+    """An older vendored SAM3 tree shipped the clone as a torch-MHA subclass.
+    It matches neither pass-1 branch (exact-type rejects it; the clone
+    duck-type rejects every nn.MultiheadAttention instance on purpose), so the
+    skip must be announced here rather than surfacing later as an
+    estimator-drift refusal that names the wrong cause."""
+
+    class _MultiheadAttentionWrapper(nn.MultiheadAttention):
+        pass
+
+    model = nn.Module()
+    model.attn = _MultiheadAttentionWrapper(16, 4)
+    model.linear1 = nn.Linear(16, 16)
+    with pytest.warns(RuntimeWarning, match="subclass of nn.MultiheadAttention"):
+        n = inject_adapters(model, _cfg())
+    assert type(model.attn) is _MultiheadAttentionWrapper
+    assert not isinstance(model.attn.out_proj, LoraLinear)
+    assert n == 1  # linear1 only
+
+
 # ---------------------------------------------------------------------------
 # The live gate: 308 after the clone pass, 314 with the geometry Linears.
+# 314 is SPIKE parity and includes the two `adapt_scoring_head` modules; the
+# production ceiling today is 312, because `cli.py` still refuses that flag.
 # Skipped everywhere `sam3` cannot be imported (macOS: triton).  The numbers
 # below were also verified out-of-band on the CUDA box -- see the task report.
 # ---------------------------------------------------------------------------

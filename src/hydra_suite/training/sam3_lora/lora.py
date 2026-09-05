@@ -57,7 +57,11 @@ class LoraConfig:
 #   adapt_scoring_head                 2   (exact paths, opt-in, default OFF)
 # With the text encoder OFF, as the research spike ran it, that totals the
 # spike checkpoint's 314 adapted modules exactly (308 before the six geometry
-# paths are added).
+# paths are added). NOTE the production ceiling is 312, not 314: the last two
+# are `adapt_scoring_head`, which `cli.py` still refuses by name because it
+# has no measured LORA_PARAMS_PER_RANK coefficient (deliberate -- landing one
+# would un-refuse an unvalidated scope). Full 314 parity with the spike is
+# reachable only once that flag is validated.
 #
 # `dot_prod_scoring` (the text/vision similarity head that emits detection
 # confidence) previously carried a comment here saying it was "covered by NO
@@ -708,6 +712,33 @@ def inject_adapters(model: nn.Module, cfg: LoraConfig) -> int:
         if _scoped(name)
         and (type(mod) is nn.MultiheadAttention or is_sam3_clone_attention(mod))
     ]
+    # A torch-MHA SUBCLASS falls through both matchers: exact-type matching
+    # rejects it, and `is_sam3_clone_attention` rejects every
+    # `nn.MultiheadAttention` instance on purpose (its forward semantics are
+    # the subclass's, not the clone's). That is the correct conservative
+    # outcome, but it must not be a SILENT one: the research spike's OLDER
+    # vendored SAM3 tree shipped its clone as exactly such a subclass
+    # (`MultiheadAttentionWrapper(nn.MultiheadAttention)`), so on that tree
+    # ~100 projections would go unadapted and the only symptom would be the
+    # estimator-drift refusal in `cli.py`, whose message names the wrong
+    # cause. Say it here, where the cause is known.
+    for name, mod in model.named_modules():
+        if (
+            isinstance(mod, nn.MultiheadAttention)
+            and type(mod) is not nn.MultiheadAttention
+            and _scoped(name)
+        ):
+            warnings.warn(
+                f"in-scope attention module {name!r} is a subclass of "
+                f"nn.MultiheadAttention ({type(mod).__name__}), not the class "
+                "itself, and does not carry SAM3's attn_bias forward contract; "
+                "its fused projections are left unadapted because its forward "
+                "semantics are unknown. If this is an older vendored SAM3 tree "
+                "whose clone subclasses torch's MHA, the adapter surface will "
+                "be short by four projections per site.",
+                RuntimeWarning,
+                stacklevel=2,
+            )
     for name, mod, is_torch_mha in fused:
         *parent_path, attr = name.split(".")
         parent = model
