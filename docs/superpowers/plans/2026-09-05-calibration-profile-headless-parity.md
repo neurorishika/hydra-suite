@@ -1053,6 +1053,15 @@ def apply_sahi_profile_override(
         result.pop("slice_profile_settings", None)
         return result
 
+    # Preflight ruling P1: report the REAL reason first. Checking the mode
+    # after the name lookup made a sequential config with an unknown profile
+    # report "not a profile of X", hiding why profiles do not apply at all.
+    if str(result.get("yolo_obb_mode", "direct")).strip().lower() != "direct":
+        raise ValueError(
+            "--sahi-profile applies to direct-detector inference only; this "
+            "config runs in sequential mode, where profiles are not consumed."
+        )
+
     model_path = resolve_model_path(
         str(
             result.get("yolo_obb_direct_model_path")
@@ -1072,11 +1081,6 @@ def apply_sahi_profile_override(
             f"--sahi-profile {requested!r} is not a profile of "
             f"{model_path or '<no direct model in config>'}. "
             f"Available: {known or '(none)'}"
-        )
-    if str(result.get("yolo_obb_mode", "direct")).strip().lower() != "direct":
-        raise ValueError(
-            "--sahi-profile applies to direct-detector inference only; this "
-            "config runs in sequential mode, where profiles are not consumed."
         )
     result["slice_profile_id"] = match["id"]
     # A snapshot captured under a DIFFERENT profile would win the ladder over
