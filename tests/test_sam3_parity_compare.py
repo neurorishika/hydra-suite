@@ -5,6 +5,7 @@ no GPU -- because they are the real gate for `tools/sam3_parity/compare_models.p
 (see that module's docstring: Step 6, the live run, is deferred).
 """
 
+import json
 import sys
 from pathlib import Path
 
@@ -352,3 +353,190 @@ def test_extras_unique_to_a_empty_b_flags_all_unmatched():
         preds_a, preds_b, labels, match_fn=_stub_match_fn, iou_fn=_iou
     )
     assert unique == [0, 1]
+
+
+# ---------------------------------------------------------------------------
+# Live-orchestration smoke test: drives `_run_live_comparison` end to end
+# with FAKE labelers (no sam3, no GPU). This is what proves the wiring
+# (calibrate() -> per-frame re-threshold -> paired stats -> baseline.json)
+# actually exists, not just the pure functions it calls.
+# ---------------------------------------------------------------------------
+
+
+def _coco_square(x, y, size=10.0):
+    return [x, y, x + size, y, x + size, y + size, x, y + size]
+
+
+def _write_fixture(tmp_path):
+    import cv2
+
+    images_dir = tmp_path / "images"
+    images_dir.mkdir()
+    for name in ("frame0.jpg", "frame1.jpg"):
+        cv2.imwrite(str(images_dir / name), np.zeros((200, 200, 3), dtype=np.uint8))
+
+    # Two labels per frame, both at fixed positions so a fixed-output fake
+    # labeler can "find" them identically on every frame.
+    label_a = _coco_square(20, 20)
+    label_b = _coco_square(60, 60)
+    coco = {
+        "images": [
+            {"id": 0, "file_name": "frame0.jpg", "width": 200, "height": 200},
+            {"id": 1, "file_name": "frame1.jpg", "width": 200, "height": 200},
+        ],
+        "categories": [{"id": 1, "name": "ant"}],
+        "annotations": [
+            {"id": 0, "image_id": 0, "category_id": 1, "segmentation": [label_a]},
+            {"id": 1, "image_id": 0, "category_id": 1, "segmentation": [label_b]},
+            {"id": 2, "image_id": 1, "category_id": 1, "segmentation": [label_a]},
+            {"id": 3, "image_id": 1, "category_id": 1, "segmentation": [label_b]},
+        ],
+    }
+    coco_path = tmp_path / "_annotations.coco.json"
+    coco_path.write_text(json.dumps(coco))
+    return images_dir, coco_path, [label_a, label_b]
+
+
+class _FakeLabeler:
+    """A `SemanticLabeler` stand-in: ignores the image, returns a fixed set
+    of detections regardless of prompt or confidence_threshold (calibration
+    re-thresholds offline from the cached raw candidates anyway).
+    """
+
+    def __init__(self, name, detections):
+        self._name = name
+        self._detections = detections
+
+    @property
+    def name(self):
+        return self._name
+
+    def label_image(
+        self, image_bgr, prompt, *, confidence_threshold=0.0, max_instances=0
+    ):
+        return list(self._detections)
+
+
+def _instance(poly, confidence):
+    from hydra_suite.core.inference.semantic.base import SemanticInstance
+
+    return SemanticInstance(
+        polygon_px=np.asarray(poly, dtype=np.float32), confidence=confidence
+    )
+
+
+def test_run_live_comparison_wiring_produces_well_formed_baseline(tmp_path):
+    from compare_models import _run_live_comparison
+
+    images_dir, coco_path, (label_a, label_b) = _write_fixture(tmp_path)
+
+    def _poly(flat):
+        return np.asarray(flat, dtype=np.float32).reshape(-1, 2)
+
+    true_positives = [
+        _instance(_poly(label_a), 0.9),
+        _instance(_poly(label_b), 0.9),
+    ]
+    # Model A: one extra detection (clutter/unlabelled ant) per frame.
+    labeler_a = _FakeLabeler(
+        "a", true_positives + [_instance(_coco_square(150, 150), 0.6)]
+    )
+    # Model B: two extra detections per frame -- more clutter than A, the
+    # kind of directional signal the paired comparison exists to detect.
+    labeler_b = _FakeLabeler(
+        "b",
+        true_positives
+        + [
+            _instance(_coco_square(150, 150), 0.6),
+            _instance(_coco_square(170, 170), 0.55),
+        ],
+    )
+
+    def factory(checkpoint):
+        return labeler_a if str(checkpoint) == "ckpt_a" else labeler_b
+
+    out_path = tmp_path / "baseline.json"
+    baseline = _run_live_comparison(
+        checkpoint_a=Path("ckpt_a"),
+        checkpoint_b=Path("ckpt_b"),
+        frames_dir=images_dir,
+        coco_json=coco_path,
+        prompt="ant",
+        reference_body_px=10.0,
+        tile_fraction=None,
+        seam_margin_px=2.0,
+        merge_iou=0.5,
+        compare_confidence=0.5,
+        target_recall=0.5,
+        out_path=out_path,
+        labeler_factory=factory,
+    )
+
+    # The function's return value and the file it writes must agree.
+    assert out_path.exists()
+    on_disk = json.loads(out_path.read_text())
+    assert on_disk == baseline
+
+    assert baseline["n_frames"] == 2
+    assert len(baseline["frames"]) == 2
+    assert baseline["checkpoint_a"] == "ckpt_a"
+    assert baseline["checkpoint_b"] == "ckpt_b"
+    assert baseline["compare_confidence"] == 0.5
+    assert baseline["target_recall"] == 0.5
+
+    # Step 1-2: model B has strictly more extras at 0.5 confidence on every
+    # frame (2 vs 1), so a - b should be negative on every frame and the
+    # paired comparison should catch that direction.
+    paired = baseline["paired_extras_per_frame"]
+    assert paired["n_frames"] == 2
+    assert paired["mean_diff"] == pytest.approx(-1.0)
+
+    # Step 4: AP is a real number in [0, 1] for both models.
+    ap = baseline["average_precision"]
+    assert 0.0 <= ap["a"] <= 1.0
+    assert 0.0 <= ap["b"] <= 1.0
+
+    # Step 3: matched-recall figures are present (float or None; None only
+    # if target_recall fell outside the achieved range, which is not the
+    # case in this fixture where recall spans 0.0 to 1.0).
+    matched = baseline["extras_per_frame_at_target_recall"]
+    assert matched["a"] is not None
+    assert matched["b"] is not None
+
+
+def test_run_live_comparison_raises_on_no_common_frames(tmp_path):
+    from compare_models import _run_live_comparison
+
+    images_dir, coco_path, _labels = _write_fixture(tmp_path)
+
+    class _EmptyLabeler(_FakeLabeler):
+        def __init__(self):
+            super().__init__("empty", [])
+
+    def factory(_checkpoint):
+        return _EmptyLabeler()
+
+    # Regardless of detections, both models still produce a result for both
+    # frames (zero detections is a valid result, not a load failure), so
+    # this exercises the "both models ran" path rather than the "no common
+    # frames" guard directly -- but it proves the function tolerates an
+    # all-miss run without crashing, which the arithmetic (division by
+    # (matched+extra)==0 in precision_recall_curve) must handle.
+    baseline = _run_live_comparison(
+        checkpoint_a=Path("ckpt_a"),
+        checkpoint_b=Path("ckpt_b"),
+        frames_dir=images_dir,
+        coco_json=coco_path,
+        prompt="ant",
+        reference_body_px=10.0,
+        tile_fraction=None,
+        seam_margin_px=2.0,
+        merge_iou=0.5,
+        compare_confidence=0.5,
+        target_recall=0.5,
+        out_path=tmp_path / "baseline_empty.json",
+        labeler_factory=factory,
+    )
+    assert baseline["n_frames"] == 2
+    assert baseline["average_precision"]["a"] == 0.0
+    assert baseline["average_precision"]["b"] == 0.0

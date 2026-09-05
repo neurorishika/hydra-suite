@@ -28,23 +28,32 @@ tested on synthetic data in ``tests/test_sam3_parity_compare.py`` -- that is
 the real gate for this file, independent of whether SAM3 is importable on
 this machine.
 
-The `main()` CLI below wires those pure functions to the live calibration
-harness (``core/inference/semantic/calibration.py``) to run the comparison
-end to end and write ``baseline.json``. It requires a working ``sam3``
-install and two published checkpoints, so it cannot be exercised on this
-machine (macOS, triton-blocked) -- see ``tools/sam3_parity/README.md`` for
-the exact command to run it on a GPU box. Running it is Step 6 of the plan's
-Task 0 and is deliberately DEFERRED here; no numbers are fabricated in its
-place.
+`_run_live_comparison` wires those pure functions to the live calibration
+harness (``core/inference/semantic/calibration.py``) end to end: it loads
+frames + labels from a COCO json, runs ``calibrate()`` for each of two
+labelers, recomputes per-frame extras/missed at a chosen confidence from the
+cached raw candidates (for the Step 1-2 paired comparison), builds
+``OperatingPoint`` sweeps per model (for Step 3-4), and writes
+``baseline.json`` with the exact calibration arguments and frame list. The
+ONLY step that requires ``sam3`` to be importable is constructing the two
+``SemanticLabeler``s from their checkpoints (``_default_labeler_factory``,
+called lazily); everything else is plain numpy/dataclass plumbing and is
+exercised end to end in ``tests/test_sam3_parity_compare.py`` via a fake
+labeler (no sam3, no GPU). Running it for real against real checkpoints is
+Step 6 of the plan's Task 0 and is deliberately DEFERRED on this machine
+(macOS, triton-blocked, no published checkpoints locally) -- see
+``tools/sam3_parity/README.md`` for the exact command to run it on a GPU
+box. No numbers are fabricated in its place.
 """
 
 from __future__ import annotations
 
 import argparse
+import json
 import math
-from dataclasses import dataclass
+from dataclasses import asdict, dataclass
 from pathlib import Path
-from typing import Sequence
+from typing import Callable, Sequence
 
 import numpy as np
 
@@ -345,8 +354,156 @@ def extras_unique_to_a(
 
 
 # ---------------------------------------------------------------------------
-# Live orchestration (Step 6) -- requires a working sam3 install; DEFERRED.
+# Live orchestration (Step 6). Sam3-import-free except for the ONE seam
+# (`_default_labeler_factory`) that constructs a model from a checkpoint --
+# every other function below is plain numpy/dataclass plumbing over the
+# calibration harness and is exercised end to end (with a fake labeler) in
+# tests/test_sam3_parity_compare.py.
 # ---------------------------------------------------------------------------
+
+
+def _default_labeler_factory(checkpoint: Path):
+    """Build a real SAM3 labeler from *checkpoint*. Requires ``import sam3``
+    to succeed -- deferred here so nothing else in this module does.
+    """
+    from hydra_suite.core.inference.semantic.calibration import CONFIDENCE_GRID
+    from hydra_suite.core.inference.semantic.sam3 import Sam3SemanticLabeler
+
+    # confidence_floor must be at or below the lowest confidence this tool's
+    # sweep will ever re-threshold at, or the calibration cache silently
+    # excludes candidates a later confidence in the grid needs -- see
+    # calibration.py's own docstring on the same hazard.
+    return Sam3SemanticLabeler.from_variant(
+        checkpoint=checkpoint, confidence_floor=CONFIDENCE_GRID[0]
+    )
+
+
+def _load_frames_from_coco(
+    coco_json: Path, frames_dir: Path
+) -> list[tuple[Path, list]]:
+    """Load ``(image_path, [LabelRecord, ...])`` pairs from a COCO
+    instance-segmentation json, the format calibration's ``frames`` argument
+    expects (`core/inference/semantic/calibration.py::calibrate`).
+
+    Only the first polygon of a (possibly multi-part) ``segmentation`` is
+    used, matching the labelled-frame data this tool targets (single-part
+    ant/worm outlines); annotations with no segmentation are skipped.
+    """
+    from hydra_suite.data.al.escalation import LabelRecord
+    from hydra_suite.utils.geometry_levels import GeometryLevel
+
+    data = json.loads(Path(coco_json).read_text())
+    images_by_id = {img["id"]: img for img in data.get("images", [])}
+    categories = sorted(data.get("categories", []), key=lambda c: c["id"])
+    cat_id_to_class = {cat["id"]: i for i, cat in enumerate(categories)}
+    records_by_image: dict[int, list] = {img_id: [] for img_id in images_by_id}
+    for ann in data.get("annotations", []):
+        image_id = ann.get("image_id")
+        if image_id not in images_by_id:
+            continue
+        seg = ann.get("segmentation")
+        if not seg:
+            continue
+        flat = seg[0] if isinstance(seg[0], (list, tuple)) else seg
+        pts = np.asarray(flat, dtype=np.float32).reshape(-1, 2)
+        class_id = cat_id_to_class.get(ann.get("category_id"), 0)
+        records_by_image[image_id].append(
+            LabelRecord(
+                class_id=class_id,
+                confidence=1.0,
+                points=pts,
+                level=GeometryLevel.POLYGON,
+            )
+        )
+    frames = [
+        (Path(frames_dir) / img["file_name"], records_by_image[image_id])
+        for image_id, img in images_by_id.items()
+    ]
+    frames.sort(key=lambda item: str(item[0]))
+    return frames
+
+
+def _calibrate_one_model(
+    labeler,
+    frames: Sequence[tuple[Path, list]],
+    prompt: str,
+    *,
+    reference_body_px: float,
+    tile_fraction: float | None,
+    seam_margin_px: float,
+    merge_iou: float,
+) -> tuple[list, list]:
+    """Run ``calibration.calibrate`` for one labeler at one tile fraction,
+    returning ``(CalibrationPoint list, CalibrationPreviewFrame list)``.
+    """
+    from hydra_suite.core.inference.semantic.calibration import calibrate
+
+    preview_holder: list = []
+    points = calibrate(
+        labeler,
+        frames,
+        prompt,
+        reference_body_px=reference_body_px,
+        tile_fractions=(tile_fraction,),
+        seam_margin_px=seam_margin_px,
+        merge_iou=merge_iou,
+        preview_sink=preview_holder.append,
+    )
+    previews = preview_holder[0] if preview_holder else []
+    return points, previews
+
+
+def _operating_points_from_calibration(
+    points: Sequence, tile_fraction: float | None
+) -> tuple[list[OperatingPoint], list[float]]:
+    """Project ``CalibrationPoint``s at *tile_fraction* onto the
+    ``OperatingPoint`` shape Steps 3-4 consume, plus their aligned
+    ``missed_per_frame`` (needed to recover an absolute precision scale in
+    ``precision_recall_curve``).
+    """
+    at_fraction = [p for p in points if p.tile_fraction == tile_fraction]
+    operating_points = [
+        OperatingPoint(
+            confidence=p.confidence, recall=p.recall, extra_per_frame=p.extra_per_frame
+        )
+        for p in at_fraction
+    ]
+    missed_per_frame = [p.missed_per_frame for p in at_fraction]
+    return operating_points, missed_per_frame
+
+
+def _per_frame_extras_missed(
+    previews: Sequence,
+    tile_fraction: float | None,
+    confidence: float,
+    area_band,
+    merge_iou: float,
+) -> dict[Path, tuple[int, int]]:
+    """Re-threshold each preview frame's cached raw candidates at
+    *confidence* and return ``{image_path: (extra_count, missed_count)}`` --
+    the per-frame series Steps 1-2's paired comparison needs, which
+    ``calibrate()`` itself only exposes pre-aggregated into a mean.
+    """
+    from hydra_suite.core.inference.semantic.calibration import match_one_to_one
+    from hydra_suite.core.inference.semantic.tiling import merge_candidates
+
+    out: dict[Path, tuple[int, int]] = {}
+    for preview in previews:
+        candidates = preview.candidates_by_fraction.get(tile_fraction, ())
+        merged = merge_candidates(
+            candidates,
+            confidence_threshold=confidence,
+            iou_threshold=merge_iou,
+            area_band=area_band,
+        )
+        preds = [m.polygon_px for m in merged]
+        label_polys = [g.polygon_px for g in preview.ground_truth]
+        pairs = match_one_to_one(preds, label_polys, area_band=area_band)
+        out[preview.image_path] = (
+            len(preds) - len(pairs),
+            len(label_polys) - len(pairs),
+        )
+    return out
 
 
 def _run_live_comparison(
@@ -360,29 +517,116 @@ def _run_live_comparison(
     tile_fraction: float | None,
     seam_margin_px: float,
     merge_iou: float,
+    compare_confidence: float,
+    target_recall: float,
     out_path: Path,
-) -> None:
-    """Wire the pure functions above to the live calibration harness and
-    write ``baseline.json``. Requires ``import sam3`` to succeed, so this is
-    NOT importable/runnable on this (macOS, triton-blocked) machine -- see
-    ``tools/sam3_parity/README.md`` for the command to run it on a GPU box.
+    labeler_factory: Callable[[Path], object] | None = None,
+) -> dict:
+    """Run Task 0 Steps 1-5 end to end against two checkpoints and write
+    *out_path* as ``baseline.json``.
 
-    Imports of ``sam3``-dependent modules are deferred inside this function
-    body so the rest of this file (and its unit tests) never require sam3.
+    *labeler_factory* defaults to ``_default_labeler_factory`` (real SAM3,
+    requires ``sam3``); tests inject a fake to exercise every line of this
+    function's orchestration without sam3 or a GPU.
     """
+    from hydra_suite.core.inference.semantic.shape_prior import fit_area_band
 
-    # Deferred: constructing a SemanticLabeler from each checkpoint is
-    # model-loading code that lives in the app/training layers and differs
-    # by variant (Sam3SemanticLabeler.from_variant). Left as a narrow seam
-    # for the GPU-box runner rather than duplicated here.
-    raise NotImplementedError(
-        "Live comparison requires a GPU box with sam3 installed; see "
-        "tools/sam3_parity/README.md for the exact invocation. This "
-        "function's plumbing (calibrate() -> preview frames -> paired "
-        "stats -> baseline.json) is intentionally left for that box to "
-        "fill in the two SemanticLabeler constructions, which is the only "
-        "sam3-import-requiring step."
+    factory = labeler_factory or _default_labeler_factory
+    frames = _load_frames_from_coco(coco_json, frames_dir)
+    if not frames:
+        raise ValueError(f"No frames resolved from {coco_json} under {frames_dir}")
+
+    # One area band for BOTH models, fitted from the shared ground truth --
+    # comparability requires the same admissibility gate on both sides
+    # (see calibration.calibrate's own docstring on the same point).
+    area_band = fit_area_band(
+        [poly for _path, labels in frames for poly in (r.points for r in labels)]
     )
+
+    per_model: dict[str, dict] = {}
+    for key, checkpoint in (("a", checkpoint_a), ("b", checkpoint_b)):
+        labeler = factory(checkpoint)
+        points, previews = _calibrate_one_model(
+            labeler,
+            frames,
+            prompt,
+            reference_body_px=reference_body_px,
+            tile_fraction=tile_fraction,
+            seam_margin_px=seam_margin_px,
+            merge_iou=merge_iou,
+        )
+        operating_points, missed_per_frame = _operating_points_from_calibration(
+            points, tile_fraction
+        )
+        per_frame = _per_frame_extras_missed(
+            previews, tile_fraction, compare_confidence, area_band, merge_iou
+        )
+        per_model[key] = {
+            "checkpoint": str(checkpoint),
+            "operating_points": operating_points,
+            "missed_per_frame": missed_per_frame,
+            "per_frame": per_frame,
+        }
+
+    # Step 1-2: paired per-frame comparison, restricted to frames BOTH
+    # models actually produced a result for -- a model-specific load
+    # failure must not silently misalign the pairing.
+    common_paths = sorted(
+        set(per_model["a"]["per_frame"]) & set(per_model["b"]["per_frame"]),
+        key=str,
+    )
+    if not common_paths:
+        raise ValueError(
+            "Models produced no frames in common; cannot run a paired comparison."
+        )
+    extras_a = [per_model["a"]["per_frame"][p][0] for p in common_paths]
+    extras_b = [per_model["b"]["per_frame"][p][0] for p in common_paths]
+    comparison = paired_comparison(extras_a, extras_b)
+
+    # Step 4: AP / PR curve, no threshold matching required.
+    recalls_a, precisions_a = precision_recall_curve(
+        per_model["a"]["operating_points"],
+        missed_per_frame=per_model["a"]["missed_per_frame"],
+    )
+    recalls_b, precisions_b = precision_recall_curve(
+        per_model["b"]["operating_points"],
+        missed_per_frame=per_model["b"]["missed_per_frame"],
+    )
+    ap_a = average_precision(recalls_a, precisions_a)
+    ap_b = average_precision(recalls_b, precisions_b)
+
+    # Step 3: matched-recall interpolation, held at the pre-stated
+    # target_recall for both models independently.
+    extras_at_target_a = interpolate_extras_at_recall(
+        per_model["a"]["operating_points"], target_recall
+    )
+    extras_at_target_b = interpolate_extras_at_recall(
+        per_model["b"]["operating_points"], target_recall
+    )
+
+    baseline = {
+        "checkpoint_a": str(checkpoint_a),
+        "checkpoint_b": str(checkpoint_b),
+        "frames_dir": str(frames_dir),
+        "coco_json": str(coco_json),
+        "prompt": prompt,
+        "reference_body_px": reference_body_px,
+        "tile_fraction": tile_fraction,
+        "seam_margin_px": seam_margin_px,
+        "merge_iou": merge_iou,
+        "compare_confidence": compare_confidence,
+        "target_recall": target_recall,
+        "n_frames": len(common_paths),
+        "frames": [str(p) for p in common_paths],
+        "paired_extras_per_frame": asdict(comparison),
+        "average_precision": {"a": ap_a, "b": ap_b},
+        "extras_per_frame_at_target_recall": {
+            "a": extras_at_target_a,
+            "b": extras_at_target_b,
+        },
+    }
+    Path(out_path).write_text(json.dumps(baseline, indent=2, sort_keys=True))
+    return baseline
 
 
 def _build_arg_parser() -> argparse.ArgumentParser:
@@ -396,6 +640,21 @@ def _build_arg_parser() -> argparse.ArgumentParser:
     parser.add_argument("--tile-fraction", type=float, default=None)
     parser.add_argument("--seam-margin-px", type=float, default=8.0)
     parser.add_argument("--merge-iou", type=float, default=0.5)
+    parser.add_argument(
+        "--compare-confidence",
+        type=float,
+        default=0.5,
+        help="Confidence at which per-frame extras/missed are computed for "
+        "the Step 1-2 paired comparison. Fixed here rather than swept, per "
+        "the plan's Step 2: state the criterion before running.",
+    )
+    parser.add_argument(
+        "--target-recall",
+        type=float,
+        default=0.9,
+        help="Recall each model's own confidence sweep is interpolated onto "
+        "for the Step 3 matched-recall extras/frame figure.",
+    )
     parser.add_argument(
         "--out", type=Path, default=Path(__file__).parent / "baseline.json"
     )
@@ -414,6 +673,8 @@ def main(argv: Sequence[str] | None = None) -> int:
         tile_fraction=args.tile_fraction,
         seam_margin_px=args.seam_margin_px,
         merge_iou=args.merge_iou,
+        compare_confidence=args.compare_confidence,
+        target_recall=args.target_recall,
         out_path=args.out,
     )
     return 0

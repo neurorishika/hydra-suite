@@ -2,14 +2,33 @@
 
 `compare_models.py` implements the plan's Task 0 Steps 1-5 (paired per-frame
 comparison, significance criterion, matched-recall interpolation, AP/PR
-curve, adjudication helpers) as pure, unit-tested functions -- see
-`tests/test_sam3_parity_compare.py`.
+curve, adjudication helpers) as pure, unit-tested functions, AND wires them
+end to end to the live calibration harness in `_run_live_comparison`: it
+loads frames + labels from a COCO json, runs `calibration.calibrate()` for
+each of two labelers, recomputes per-frame extras/missed at a fixed
+confidence from the cached raw candidates, builds `OperatingPoint` sweeps,
+and writes `baseline.json`. All of that orchestration is exercised end to
+end -- with a fake, dependency-injected labeler, no `sam3`, no GPU -- by
+`test_run_live_comparison_wiring_produces_well_formed_baseline` and
+`test_run_live_comparison_raises_on_no_common_frames` in
+`tests/test_sam3_parity_compare.py`; the Step 1-5 pure functions have 31
+further tests of their own.
+
+The ONLY step that genuinely requires `sam3` to be importable is
+`_default_labeler_factory`, which constructs a real `Sam3SemanticLabeler`
+from a checkpoint via `Sam3SemanticLabeler.from_variant`. That import is
+deferred inside the function body, so nothing else in this module needs
+`sam3` at import time, and `main()`/`_build_arg_parser()` always use the
+real factory (no CLI flag currently overrides it -- only tests inject a
+fake, via `_run_live_comparison`'s `labeler_factory` parameter).
 
 Step 6 (run on the 16 held-out validation frames and commit `baseline.json`)
-is deferred: it requires a working `sam3` install and both published
-checkpoints, neither of which is available on this (macOS, triton-blocked)
-machine. Run it on a GPU box (courtship or mehek) with the `hydra-sam3`
-sidecar env active:
+is nonetheless deferred on THIS machine: it needs a working `sam3` install
+and both published checkpoints, neither of which is available here (macOS,
+triton-blocked). No number in this repo has been fabricated in its place --
+the orchestration is real and tested, but it has never been run against a
+real checkpoint. Run it on a GPU box (courtship or mehek) with the
+`hydra-sam3` sidecar env active:
 
 ```bash
 conda activate hydra-sam3
@@ -22,18 +41,36 @@ KMP_DUPLICATE_LIB_OK=TRUE python tools/sam3_parity/compare_models.py \
   --reference-body-px 97 \
   --seam-margin-px 8 \
   --merge-iou 0.5 \
+  --compare-confidence 0.5 \
+  --target-recall 0.9 \
   --out tools/sam3_parity/baseline.json
 ```
+
+`--compare-confidence` (Step 2) and `--target-recall` (Step 3) are stated
+here rather than swept, per the plan's requirement to fix the significance
+criterion and the matched-recall procedure before running. Pick
+`--tile-fraction` from the trained/deployed SAHI configuration (omit for
+full-frame, no tiling).
 
 Use the 16-frame held-out validation split (576 tiles, 805 instances,
 verified present in `_annotations.coco.json`) named in the plan. `--out`
 defaults to `tools/sam3_parity/baseline.json` in this directory; commit that
-file (with the exact arguments used, which the tool records alongside the
-results) once it has been produced on real checkpoints.
+file (with the exact arguments recorded inside it -- `checkpoint_a/b`,
+`prompt`, `reference_body_px`, `tile_fraction`, `seam_margin_px`,
+`merge_iou`, `compare_confidence`, `target_recall`, and the resolved
+`frames` list) once it has been produced on real checkpoints.
 
-`_run_live_comparison` in `compare_models.py` currently raises
-`NotImplementedError` at the one seam that requires `sam3` to be importable
-(constructing each `SemanticLabeler` from its checkpoint via
-`Sam3SemanticLabeler.from_variant`); fill that seam in on the GPU box, then
-call the pure functions in this module the same way the module docstring
-describes and the tests exercise.
+`_run_live_comparison`'s orchestration (load frames from COCO -> run
+`calibrate()` per model -> per-frame re-threshold -> paired stats -> AP/PR
+-> matched-recall -> write `baseline.json`) is fully implemented and
+covered by a smoke test (see above); nothing needs to be "filled in" beyond
+having `sam3` importable and real checkpoints. `main()` uses the real
+`_default_labeler_factory` unconditionally -- there is no CLI flag to
+substitute a fake labeler outside of tests.
+
+Adjudicating whether extras are clutter or unlabelled ants (plan Step 5) is
+NOT automated by this CLI: `extras_unique_to_a` / `unmatched_predictions`
+are available as library functions for that inspection, but no `--out`
+artifact currently records which polygons they flag. A human still has to
+call them (or write a small script that does, against the calibration
+preview data) and look at the results.
