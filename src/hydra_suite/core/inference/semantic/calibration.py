@@ -57,7 +57,10 @@ from .tiling import (
 
 # Refuse to recommend a threshold fitted on fewer matched instances than this.
 MIN_MATCHED_INSTANCES = 20
-# Recall floor a point must clear to be recommendable.
+# Recall floor a point must clear to be recommendable. NOTE: for curved,
+# elongated animals this floor may be unreachable for SCORING rather than
+# detection reasons -- see the measured containment defect on `_centroid` /
+# `match_one_to_one` below. Do not lower it to compensate; fix the matcher.
 MIN_RECALL = 0.90
 # Mean match quality a point must clear to be recommendable. An ELIGIBILITY
 # filter in the same spirit as MIN_MATCHED_INSTANCES, not a new objective:
@@ -114,6 +117,20 @@ class CalibrationPreviewFrame:
 
 
 def _centroid(poly: np.ndarray) -> np.ndarray:
+    # KNOWN DEFECT -- measured, not suspected. This is the MEAN OF POLYGON
+    # VERTICES, not the area centroid, and for a curved, elongated, densely
+    # sampled outline it routinely falls OUTSIDE the polygon: measured on a
+    # real ant validation split, 128 of 805 (15.9 %) ground-truth outlines do
+    # not contain their own vertex-mean. `match_one_to_one`'s containment gate
+    # therefore vetoes near-perfect masks (verified case: IoU 0.904, matching
+    # area, claimed by no other label -- scored a MISS). See the consequences
+    # noted on `match_one_to_one` below, and
+    # docs/superpowers/specs/2026-09-05-sam3-spike-parity-measurement-findings.md
+    # for the measurement and the recommended fix (an inside-guaranteed
+    # representative point, or an IoU precondition instead of containment).
+    # NOT fixed there deliberately: it would have changed the metric of a
+    # pre-registered comparison after the result was seen. It needs its own
+    # branch with its own before/after gate.
     return np.asarray(poly, dtype=np.float64).reshape(-1, 2).mean(axis=0)
 
 
@@ -136,6 +153,18 @@ def match_one_to_one(
     * containment -- the prediction's centroid falls inside the label, or
       the label's centroid inside the prediction. Stops one oversized blob
       from claiming its neighbour's label in a dense cluster.
+      **This gate is measurably biased** -- see `_centroid` above: its
+      vertex-mean lies outside 15.9 % (128/805) of real ant outlines. On one
+      held-out split, holding the PREDICTIONS fixed and swapping this matcher
+      for a plain IoU >= 0.5 rule moved recall 0.868 -> 0.962 and extras/tile
+      0.20 -> 0.07; ~65 % of the "extras" it reports are already-labelled
+      animals whose match it vetoed. Two independently trained checkpoints
+      moved together (+9.4 and +8.9 points), which is what a shared harness
+      defect predicts and a model difference does not. Consequence:
+      `MIN_RECALL = 0.90` above may be **unreachable for SCORING rather than
+      detection reasons** for curved animals, and every calibration figure the
+      product has shown for one is biased downward.
+      docs/superpowers/specs/2026-09-05-sam3-spike-parity-measurement-findings.md
     * the area band, when one is supplied -- see ``shape_prior``.
     * ``min_quality`` -- a floor on the graded score, so a pair that is
       technically admissible but plainly not the same object (a mask ~40x

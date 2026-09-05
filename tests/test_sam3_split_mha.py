@@ -823,6 +823,11 @@ def test_live_model_reaches_the_spike_module_counts():
 
     assert _count(scoring) == 308
     assert _count(scoring + geometry) == 314
+    # 312 is what PRODUCTION actually builds: adapt_geometry_encoder defaults
+    # True, adapt_scoring_head defaults False (and cli.py still refuses it by
+    # name for want of a measured sizing coefficient). Asserting only 308/314
+    # left the shipped configuration uncovered.
+    assert _count(geometry) == 312
 
 
 def test_an_unreproducible_clone_is_skipped_loudly_not_approximated():

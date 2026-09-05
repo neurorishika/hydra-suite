@@ -381,6 +381,24 @@ def _dataset_profile(dataset_dir: str) -> Sam3DatasetProfile:
                     annotation.get("segmentation")
                 )
             )
+            # TWO CARRIED CAVEATS on this count, recorded rather than changed
+            # (no behaviour change intended here):
+            #
+            # 1. It feeds the MIN_TRAIN_INSTANCES refusal below, and that gate
+            #    has LOOSENED without anyone deciding to loosen it. Lowering
+            #    MIN_RETAINED_AREA_FRAC from 0.5 to 0.25 means fewer tile
+            #    fragments are demoted to `iscrowd`, so fewer rows are excluded
+            #    here and the same dataset now reports MORE train_instances
+            #    than it did before. The threshold is unchanged; what it
+            #    measures is not.
+            # 2. Excluding `iscrowd` rows is "correct by accident", not by
+            #    design. It happens to align with the builder's use of iscrowd
+            #    to mark heavily-clipped fragments that should not be counted
+            #    as trainable instances -- but nothing enforces that meaning,
+            #    and a future producer using iscrowd in its COCO sense
+            #    (genuine crowd regions) would silently change this gate again.
+            #    If either is revisited, re-derive the threshold from what the
+            #    count now means instead of adjusting the count to fit it.
             if is_train and polygons and not annotation.get("iscrowd"):
                 train_instances += 1
     valid_images = valid.get("images", [])

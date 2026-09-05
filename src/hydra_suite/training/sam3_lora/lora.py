@@ -812,13 +812,48 @@ def inject_adapters(model: nn.Module, cfg: LoraConfig) -> int:
     # zero-match cases (adapt_mask_decoder is 0 on the real model); an exact
     # path does not. Refuse, mirroring `merge_adapters`' hard error on an
     # adapter key that resolves to no base weight.
+    #
+    # WHY THIS IS FATAL WHILE CLONE-SPLIT DRIFT ABOVE ONLY WARNS. The two
+    # policies sit on the same default-ON scope (`adapt_geometry_encoder`
+    # supplies both prefix-shaped attention sites and the six exact Linear
+    # paths), so the asymmetry is deliberate, not an oversight:
+    #   * A clone-split site that cannot be reproduced is a LOCAL, BOUNDED,
+    #     OBSERVABLE loss -- that site stays unadapted, ~100 others still
+    #     wrap, the module is named in a RuntimeWarning, and the run is a
+    #     slightly smaller surface that still trains. Making it fatal would
+    #     let one exotic attention configuration in a future SAM3 build block
+    #     every training run.
+    #   * An exact path that matches nothing is a SILENT, GLOBAL,
+    #     ATTRIBUTION-DESTROYING loss (see the paragraph above) with no bounded
+    #     blast radius and no signal in the numbers.
+    # The cost of the choice, stated plainly: a vendored SAM3 build that
+    # renames e.g. `geometry_encoder.final_proj` now hard-fails training for
+    # the DEFAULT config, where it previously degraded silently. That is the
+    # intended trade -- a rename means the surface is no longer the one every
+    # published manifest claims, and continuing would produce checkpoints that
+    # are quietly not comparable to any other. Fix the path list, do not
+    # soften this to a warning.
     matched = {name for name, _ in targets}
     missing = [path for path in cfg.include_module_paths if path not in matched]
     if missing:
+        # Distinguish the two ways a path can end up unmatched. Both are
+        # fatal, but naming the wrong cause sends the reader hunting for a
+        # module that exists: an `exclude_prefixes` entry drops the path from
+        # `targets` above, after which it is indistinguishable from a typo.
+        excluded = [path for path in missing if _excluded(path)]
+        unmatched = [path for path in missing if path not in excluded]
+        reasons = []
+        if unmatched:
+            reasons.append(f"path(s) {unmatched!r} match no nn.Linear in this model")
+        if excluded:
+            reasons.append(
+                f"path(s) {excluded!r} exist but are suppressed by "
+                f"exclude_prefixes={tuple(cfg.exclude_prefixes)!r}"
+            )
         raise KeyError(
-            "LoRA scope names exact module path(s) "
-            f"{missing!r} that match no nn.Linear in this model; refusing an "
-            "inert adapter scope"
+            "LoRA scope names exact module "
+            + "; ".join(reasons)
+            + "; refusing an inert adapter scope"
         )
 
     for name, mod in targets:

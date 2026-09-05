@@ -95,6 +95,42 @@ def test_sidecar_records_the_guard_fields(tmp_path):
     assert meta["reference_body_px"] == 55.4
 
 
+def test_sidecar_records_the_adapter_surface_not_only_the_flags(tmp_path):
+    """The adapt_* flags cannot distinguish a 206-module surface from a
+    312-module one: `codex/sam3-spike-parity` changed what
+    `adapt_geometry_encoder` REACHES without changing the flag. Without the
+    module/parameter counts, no retrain is attributable to a surface."""
+
+    base = {
+        "detector.qkv.weight": torch.randn(4, 4),
+        "detector.proj.weight": torch.randn(6, 4),
+    }
+    torch.save(base, tmp_path / "base.pt")
+    torch.save(
+        {
+            "qkv.lora_A": torch.randn(2, 4),
+            "qkv.lora_B": torch.randn(4, 2),
+            "proj.lora_A": torch.randn(2, 4),
+            "proj.lora_B": torch.randn(6, 2),
+        },
+        tmp_path / "adapters.pt",
+    )
+    _, art = publish_sam3_model(
+        run_id="r1",
+        adapters_path=tmp_path / "adapters.pt",
+        base_checkpoint=tmp_path / "base.pt",
+        build_manifest={"tile_px": 1007, "reference_body_px": 55.4},
+        params=Sam3LoraParams(prompt="ant", rank=2, alpha=4),
+        source_fingerprint="fp1",
+        models_root=tmp_path / "models",
+    )
+    meta = json.loads(Path(str(art) + ".sam3_meta.json").read_text())
+    # One count per LoraLinear (one lora_A/lora_B pair each), not per tensor.
+    assert meta["adapted_modules"] == 2
+    # 2*4 + 4*2 + 2*4 + 6*2 = 36
+    assert meta["adapter_trainable_params"] == 36
+
+
 def test_bf16_base_checkpoint_does_not_crash_fingerprinting(tmp_path):
     """Fingerprints must be dtype-agnostic; our own default is bf16 training.
 
