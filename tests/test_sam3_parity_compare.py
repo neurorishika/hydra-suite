@@ -25,6 +25,8 @@ from compare_models import (  # noqa: E402
     paired_frame_diffs,
     precision_recall_curve,
     sign_test,
+    group_extras_by_frame,
+    source_frame_of,
     unmatched_predictions,
 )
 from compare_models import _trapezoid  # noqa: E402
@@ -541,3 +543,24 @@ def test_run_live_comparison_raises_on_no_common_frames(tmp_path):
     assert baseline["n_frames"] == 2
     assert baseline["average_precision"]["a"] == 0.0
     assert baseline["average_precision"]["b"] == 0.0
+
+
+# ---------------------------------------------------------------------------
+# Tile -> source-frame rollup (the pre-registered criterion is per FRAME)
+# ---------------------------------------------------------------------------
+
+
+def test_source_frame_of_recovers_frame_id_from_both_tile_conventions():
+    assert source_frame_of("/x/f009024_tile017.jpg") == "f009024"
+    assert source_frame_of("/x/f008975_1512_756.jpg") == "f008975"
+    assert source_frame_of("/x/plainframe.png") == "plainframe"
+
+
+def test_group_extras_by_frame_sums_tiles_within_a_frame():
+    per_frame = {
+        Path("/x/f1_tile000.jpg"): (2, 1),
+        Path("/x/f1_tile001.jpg"): (3, 0),
+        Path("/x/f2_tile000.jpg"): (5, 4),
+    }
+    assert group_extras_by_frame(per_frame) == {"f1": 5.0, "f2": 5.0}
+    assert group_extras_by_frame(per_frame, index=1) == {"f1": 1.0, "f2": 4.0}

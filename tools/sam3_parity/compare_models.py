@@ -513,6 +513,37 @@ def _per_frame_extras_missed(
     return out
 
 
+def source_frame_of(image_path: Path | str) -> str:
+    """The source frame a tile image belongs to.
+
+    The COCO jsons this tool consumes are TILE manifests: one source frame
+    explodes into many ``<frame>_tile<NNN>.jpg`` / ``<frame>_<x>_<y>.jpg``
+    images. Pairing per COCO image therefore pairs per TILE, and tiles
+    within a frame are correlated -- a tile-level CI overstates confidence
+    for a criterion that was pre-registered per FRAME. This recovers the
+    frame key so the paired statistics can be reported at BOTH granularities.
+
+    The rule is the leading underscore-delimited token of the stem, which is
+    the frame id in both tile-naming conventions in use here; an image with
+    no underscore is its own frame.
+    """
+    stem = Path(image_path).stem
+    return stem.split("_", 1)[0] if "_" in stem else stem
+
+
+def group_extras_by_frame(
+    per_frame: dict, index: int = 0
+) -> dict[str, float]:
+    """Sum a ``{image_path: (extras, missed)}`` map up to per-source-frame
+    totals of the tuple element at *index* (0 = extras, 1 = missed)."""
+    out: dict[str, float] = {}
+    for path, counts in per_frame.items():
+        out[source_frame_of(path)] = out.get(source_frame_of(path), 0.0) + float(
+            counts[index]
+        )
+    return out
+
+
 def _run_live_comparison(
     *,
     checkpoint_a: Path,
@@ -611,6 +642,17 @@ def _run_live_comparison(
         per_model["b"]["operating_points"], target_recall
     )
 
+    # The pre-registered criterion is per FRAME, but a tile manifest pairs
+    # per TILE. Report both: frames as primary (tiles within a frame are
+    # correlated, so the tile CI is anticonservative), tiles as secondary.
+    frame_extras_a = group_extras_by_frame(per_model["a"]["per_frame"])
+    frame_extras_b = group_extras_by_frame(per_model["b"]["per_frame"])
+    common_frames = sorted(set(frame_extras_a) & set(frame_extras_b))
+    frame_comparison = paired_comparison(
+        [frame_extras_a[f] for f in common_frames],
+        [frame_extras_b[f] for f in common_frames],
+    )
+
     baseline = {
         "checkpoint_a": str(checkpoint_a),
         "checkpoint_b": str(checkpoint_b),
@@ -625,7 +667,27 @@ def _run_live_comparison(
         "target_recall": target_recall,
         "n_frames": len(common_paths),
         "frames": [str(p) for p in common_paths],
-        "paired_extras_per_frame": asdict(comparison),
+        "paired_extras_per_tile": asdict(comparison),
+        "paired_extras_per_frame": asdict(frame_comparison),
+        "source_frames": common_frames,
+        "n_source_frames": len(common_frames),
+        # Raw per-image (extras, missed) series for BOTH models, so the
+        # paired statistics above can be recomputed, and any sensitivity
+        # analysis (e.g. dropping a contaminated frame) can be done without
+        # a second GPU pass.
+        "per_image_extras_missed": {
+            key: {str(path): list(counts) for path, counts in per_model[key][
+                "per_frame"
+            ].items()}
+            for key in ("a", "b")
+        },
+        "operating_points": {
+            key: [asdict(op) for op in per_model[key]["operating_points"]]
+            for key in ("a", "b")
+        },
+        "missed_per_frame_sweep": {
+            key: list(per_model[key]["missed_per_frame"]) for key in ("a", "b")
+        },
         "average_precision": {"a": ap_a, "b": ap_b},
         "extras_per_frame_at_target_recall": {
             "a": extras_at_target_a,
