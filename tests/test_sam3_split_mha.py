@@ -795,3 +795,20 @@ def test_live_model_reaches_the_spike_module_counts():
 
     assert _count(scoring) == 308
     assert _count(scoring + geometry) == 314
+
+
+def test_an_unreproducible_clone_is_skipped_loudly_not_approximated():
+    """The plan's ruling: a site whose forward cannot be reproduced faithfully
+    is SKIPPED and RECORDED, never approximated -- and never fatal to the ~100
+    sites that are reproducible.  The wrapped count must exclude it, which is
+    what makes the `cli.py` estimator-drift check the backstop."""
+    model = _CloneHost()
+    model.self_attn.use_fa3 = True
+    with pytest.warns(RuntimeWarning, match="left unadapted"):
+        n = inject_adapters(model, _cfg())
+    assert isinstance(model.self_attn, _Sam3CloneAttention)
+    assert not isinstance(model.self_attn.out_proj, LoraLinear)
+    assert isinstance(model.cross_attn_image, SplitSam3Attention)
+    # 1 reproducible clone x 4 projections + linear1 + linear2; the fa3 clone
+    # contributes nothing.
+    assert n == 6
