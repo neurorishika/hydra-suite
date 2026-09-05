@@ -430,3 +430,33 @@ def slice_meta_values_from_settings(
         values["geometry_mode"] = "auto_object"
     values["resolution"] = "saved_settings"
     return values
+
+
+def resolve_slice_profile_values(
+    meta: dict[str, Any],
+    profile_id: str | None,
+    saved_settings: dict[str, Any] | None,
+) -> dict[str, Any]:
+    """Resolve a saved session's SAHI request into applied panel values.
+
+    This is the ONE ladder. TrackerKit's detection panel
+    (``_apply_slice_meta_values``) and the Qt-free ``build_engine_params``
+    both route through it, so the GUI and the CLI cannot resolve the same
+    saved config to different settings -- the divergence this exists to fix.
+
+    ``"__custom__"`` must be checked explicitly: ``profile_by_id`` special-
+    cases only ``"__training__"``, so a raw custom id would otherwise fall
+    through to the primary profile and silently overwrite the very edits the
+    snapshot was captured to preserve.
+    """
+    known_ids = {profile["id"] for profile in available_slice_profiles(meta)}
+    is_custom_restore = bool(profile_id == "__custom__" and saved_settings)
+    use_saved_settings = is_custom_restore or bool(
+        profile_id
+        and profile_id not in ("__training__", "__custom__")
+        and profile_id not in known_ids
+        and saved_settings
+    )
+    if use_saved_settings:
+        return slice_meta_values_from_settings(meta, dict(saved_settings or {}))
+    return slice_meta_to_panel_values(meta, profile_id)
