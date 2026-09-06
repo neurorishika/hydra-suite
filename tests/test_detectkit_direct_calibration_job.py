@@ -899,3 +899,38 @@ def test_saved_then_reloaded_points_still_earn_the_same_recommendation(tmp_path)
     assert (live_choice is None) == (reloaded_choice is None)
     if live_choice is not None:
         assert reloaded_choice.label == live_choice.label
+
+
+def test_profile_missing_mean_quality_key_loads_as_never_measured(tmp_path):
+    """Finding 4: a profile saved before D8 (2026-09-06) has no
+    ``mean_quality`` key at all. Reloading it must NOT collapse the
+    missing measurement to ``0.0`` -- that would make ``recommend_balanced``
+    reject it with a "mistargeted" claim about geometry that was never
+    actually measured. It must reload as ``None`` (never measured), and
+    stay distinguishable from a profile with a genuine, measured 0.0.
+    """
+    from hydra_suite.core.inference import direct_calibration as core_direct
+    from hydra_suite.detectkit.jobs.direct_calibration import (
+        _point_from_dict,
+        _point_to_dict,
+    )
+
+    point = _scored_point()
+    raw = _point_to_dict(point)
+    del raw["score"]["mean_quality"]  # simulate a pre-D8 saved profile
+    restored = _point_from_dict(raw)
+    assert restored.score.mean_quality is None
+
+    _best, reason = core_direct.recommend_balanced([restored])
+    assert "never measured" in reason
+    assert "Mistargeted" not in reason
+
+    # Contrast: a genuine, measured 0.0 must still read as mistargeting.
+    raw_zero = _point_to_dict(point)
+    raw_zero["score"]["mean_quality"] = 0.0
+    restored_zero = _point_from_dict(raw_zero)
+    assert restored_zero.score.mean_quality == 0.0
+
+    _best, reason_zero = core_direct.recommend_balanced([restored_zero])
+    assert "Mistargeted" in reason_zero
+    assert "never measured" not in reason_zero

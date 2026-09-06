@@ -414,15 +414,24 @@ def _point_from_dict(raw: dict) -> DirectCalibrationPoint:
         recall=float(score_raw["recall"]),
         f1=float(score_raw["f1"]),
         mean_iou=float(score_raw["mean_iou"]),
-        # ``.get``, not ``[...]``: profiles saved before D8 (2026-09-06)
-        # have no ``mean_quality`` because the quantity did not exist. They
-        # must keep loading -- they are valid SETTINGS -- so the field
-        # defaults to 0.0. Be aware of the consequence: re-running
-        # ``recommend_balanced`` over such a profile refuses it at the
-        # MIN_MEAN_QUALITY floor. That refusal reflects "never measured",
-        # not "measured bad"; the profile's ``recommendation_rule`` already
-        # reads ``unknown (pre-2026-09-06)``, which is the honest signal.
-        mean_quality=float(score_raw.get("mean_quality", 0.0)),
+        # ``.get(..., None)``, not ``.get(..., 0.0)``: profiles saved before
+        # D8 (2026-09-06) have no ``mean_quality`` because the quantity did
+        # not exist yet. They must keep loading -- they are valid SETTINGS --
+        # but the absent key means "never measured", which is NOT the same
+        # value as a genuine, measured 0.0. Collapsing the two would make
+        # ``recommend_balanced`` refuse a never-measured profile with a
+        # "mistargeted" reason -- a positive claim about geometry that was
+        # never checked. ``None`` threads the missing-measurement fact
+        # through so the refusal path (see
+        # ``core/inference/direct_calibration.recommend_balanced``) can say
+        # so honestly instead. This is a different signal from the
+        # ``unknown (pre-2026-09-06)`` recommendation-rule label -- nothing
+        # here correlates the two.
+        mean_quality=(
+            None
+            if score_raw.get("mean_quality") is None
+            else float(score_raw["mean_quality"])
+        ),
     )
     return DirectCalibrationPoint(
         label=str(raw["label"]),

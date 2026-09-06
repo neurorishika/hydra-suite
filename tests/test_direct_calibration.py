@@ -164,6 +164,33 @@ def test_poor_match_quality_is_excluded_even_at_perfect_recall():
     )
     assert best is None
     assert "quality" in reason
+    assert "Mistargeted" in reason
+    assert "never measured" not in reason
+
+
+def test_never_measured_quality_is_not_reported_as_mistargeting():
+    """Finding 4: a profile with no ``mean_quality`` (pre-D8) must refuse
+    with an honest "never measured" reason, not the "mistargeted" claim --
+    that claim asserts something about detection geometry that was never
+    actually checked for this profile."""
+    best, reason = recommend_balanced(
+        [_point("unmeasured", 0.1, missed=0, mean_quality=None)]
+    )
+    assert best is None
+    assert "never measured" in reason
+    assert "Mistargeted" not in reason
+    assert "probably covering the wrong thing" not in reason
+
+
+def test_never_measured_and_genuinely_bad_quality_are_distinguishable():
+    """A genuine mean_quality of 0.0 (measured, and bad) must still be
+    reported as mistargeting -- distinct from an absent measurement."""
+    best, reason = recommend_balanced(
+        [_point("measured_zero", 0.1, missed=0, mean_quality=0.0)]
+    )
+    assert best is None
+    assert "Mistargeted" in reason
+    assert "never measured" not in reason
 
 
 def test_a_qualifying_point_beats_a_higher_quality_slower_one():

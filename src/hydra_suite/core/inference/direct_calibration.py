@@ -9,7 +9,7 @@ candidate polygons from one fixed geometry pass and call this scorer repeatedly.
 from __future__ import annotations
 
 from dataclasses import dataclass
-from typing import Iterable, Sequence
+from typing import Iterable, Optional, Sequence
 
 import numpy as np
 
@@ -57,7 +57,12 @@ class CalibrationScore:
     recall: float
     f1: float
     mean_iou: float
-    mean_quality: float = 0.0
+    # ``None`` means "never measured" (profile predates the D8 mean-quality
+    # metric, 2026-09-06) -- distinct from a genuine, measured 0.0. Do not
+    # collapse the two: a caller that treats ``None`` as ``0.0`` will read a
+    # never-measured profile as a bad (mistargeted) one. See
+    # ``recommend_balanced`` for the refusal path that depends on this.
+    mean_quality: Optional[float] = 0.0
 
 
 def _valid_polygon(value: np.ndarray) -> np.ndarray | None:
@@ -385,17 +390,48 @@ def recommend_balanced(
             "confidence floor, or label frames that better represent the "
             "hard cases. " + RECOMMENDATION_RULE
         )
+    # ``mean_quality is None`` means the profile predates the D8 metric and
+    # quality was never measured -- that is a missing-measurement, not a
+    # measured-bad-quality. It must never be silently treated as 0.0 here:
+    # doing so would make an unmeasured profile fail this floor and be
+    # reported as "mistargeted" (a positive geometry claim that was never
+    # checked). Split it out and refuse with a distinct, honest reason.
+    quality_measured = [
+        point for point in on_recall if point.score.mean_quality is not None
+    ]
+    quality_unmeasured = [
+        point for point in on_recall if point.score.mean_quality is None
+    ]
     on_quality = [
-        point for point in on_recall if point.score.mean_quality >= min_quality
+        point for point in quality_measured if point.score.mean_quality >= min_quality
     ]
     if not on_quality:
-        best_quality = max(point.score.mean_quality for point in on_recall)
+        if not quality_measured:
+            return None, (
+                f"Quality was never measured for any configuration reaching "
+                f"{min_recall:.0%} recall (these profiles predate the "
+                f"{RECOMMENDATION_RULE_EFFECTIVE_DATE} mean-quality metric). "
+                "This is a missing measurement, not evidence of mistargeting "
+                "-- re-run calibration to measure quality before recommending. "
+                + RECOMMENDATION_RULE
+            )
+        best_quality = max(point.score.mean_quality for point in quality_measured)
+        unmeasured_note = (
+            f" ({len(quality_unmeasured)} additional configuration(s) reaching "
+            "recall have never-measured quality and are excluded from this "
+            "comparison.)"
+            if quality_unmeasured
+            else ""
+        )
         return None, (
             f"Mistargeted: every configuration reaching {min_recall:.0%} "
             f"recall did so with detections that match the labels poorly "
             f"(best mean quality {best_quality:.2f}, need {min_quality:.2f}). "
             "The detections are probably covering the wrong thing -- merged "
-            "neighbours, or parts of an animal. " + RECOMMENDATION_RULE
+            "neighbours, or parts of an animal."
+            + unmeasured_note
+            + " "
+            + RECOMMENDATION_RULE
         )
     eligible = [point for point in on_quality if point.score.matched >= min_matched]
     if not eligible:
