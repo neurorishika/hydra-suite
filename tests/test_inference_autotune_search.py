@@ -1,5 +1,9 @@
 from __future__ import annotations
 
+import multiprocessing
+import time
+from pathlib import Path
+
 import pandas as pd
 
 from hydra_suite.core.inference.autotune.candidates import (
@@ -70,7 +74,7 @@ def _settings(det=1, pose=1, identity=1):
     )
 
 
-def _planner(*, free=10_000, cost=None):
+def _planner(*, free=10_000, cost=None, cached_fields=frozenset()):
     observation = ResourceObservation(
         total_host_bytes=100_000,
         available_host_bytes=100_000,
@@ -96,6 +100,7 @@ def _planner(*, free=10_000, cost=None):
                 reserve_host_fraction=0,
                 accelerator_safety_fraction=1,
             ),
+            cached_fields=cached_fields,
         )
     )
 
@@ -190,6 +195,42 @@ class FixedExecutor:
             warmup_calls=3,
             warmup_frames=8,
         )
+
+
+class CountingExecutor:
+    def __init__(self, counter_path: str):
+        self.counter_path = counter_path
+
+    def run(self, settings, *, phase, field_name, block_index, should_cancel):
+        with Path(self.counter_path).open("a", encoding="utf-8") as stream:
+            stream.write("trial\n")
+        time.sleep(0.02)
+        return TrialObservation(
+            settings,
+            100.0,
+            0.5,
+            _outputs(),
+            warmup_calls=3,
+            warmup_frames=8,
+            measured_frames=26,
+        )
+
+
+def _resolve_in_fresh_process(root: str, counter: str, barrier, queue) -> None:
+    barrier.wait()
+    result = AutotuneCoordinator(
+        InferenceTuningProfileStore(root),
+        trial_executor=CountingExecutor(counter),
+    ).resolve(
+        AutotuneRequest(
+            _key(),
+            _settings(),
+            _planner(cached_fields=frozenset(_settings().field_names())),
+            mode="automatic",
+            singleflight_wait_seconds=10.0,
+        )
+    )
+    queue.put(result.overlay.status)
 
 
 def test_cache_hit_down_admits_only_validated_settings_and_does_not_mutate_store(
@@ -337,3 +378,26 @@ def test_record_only_persists_but_does_not_apply(tmp_path):
     assert result.overlay.status == "recorded"
     assert result.overlay.effective == baseline
     assert store.load(key).state is ProfileState.VALIDATED
+
+
+def test_concurrent_fresh_processes_create_one_profile_and_one_trial_set(tmp_path):
+    context = multiprocessing.get_context("spawn")
+    barrier = context.Barrier(2)
+    queue = context.Queue()
+    counter = tmp_path / "trial-count.txt"
+    args = (str(tmp_path / "profiles"), str(counter), barrier, queue)
+    processes = [
+        context.Process(target=_resolve_in_fresh_process, args=args) for _ in range(2)
+    ]
+    for process in processes:
+        process.start()
+    for process in processes:
+        process.join(timeout=60)
+
+    assert all(process.exitcode == 0 for process in processes)
+    statuses = {queue.get(timeout=2), queue.get(timeout=2)}
+    assert "calibrated" in statuses
+    assert statuses <= {"calibrated", "cache_hit", "cache_hit_after_wait"}
+    assert len(counter.read_text(encoding="utf-8").splitlines()) == 10
+    records = list((tmp_path / "profiles").glob("*.json"))
+    assert len(records) == 1
