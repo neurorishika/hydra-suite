@@ -21,6 +21,10 @@ from hydra_suite.training.contracts import (
     TrainingRole,
     sam3_prompt_text_error,
 )
+from hydra_suite.utils.slice_geometry import (
+    LEGACY_TARGET_SIZE_IMGSZ,
+    target_fractions_from,
+)
 
 _MAX_TRAINING_PLAN_BYTES = 1024 * 1024
 _MAX_TRAINING_PLAN_DEPTH = 64
@@ -262,9 +266,13 @@ class SliceTrainingConfig:
             )
 
     def target_fractions(self) -> list[float]:
-        if self.target_size_fractions:
-            return [float(value) for value in self.target_size_fractions]
-        return [float(value) / 640.0 for value in self.target_sizes if value > 0.0]
+        # Shared definition (see utils.slice_geometry.target_fractions_from):
+        # legacy absolute target_sizes are anchored to a 640px model input.
+        return target_fractions_from(
+            fractions=self.target_size_fractions,
+            legacy_pixel_sizes=self.target_sizes,
+            legacy_pixel_denominator=LEGACY_TARGET_SIZE_IMGSZ,
+        )
 
     def target_sizes_for(self, imgsz: int) -> list[float]:
         input_size = max(1, int(imgsz))

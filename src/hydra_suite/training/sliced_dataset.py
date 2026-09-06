@@ -30,7 +30,7 @@ from hydra_suite.utils.slice_geometry import (
     clip_polygon_to_tile,
     plan_tiles,
     polygon_area,
-    tile_size_for_mode,
+    resolve_scales,
 )
 
 from .contracts import DatasetBuildResult
@@ -171,39 +171,20 @@ def _iter_dataset_items(merged_dir: Path):
 def _tile_sizes_for_params(params, reference_body_px) -> list[tuple[int, int]]:
     """Resolve the (deduped) list of (w,h) tile sizes to emit.
 
-    ``auto_object`` with a measured reference and a non-empty ``target_sizes``
-    fans out one square tile per target apparent size (target/imgsz -> fraction);
-    otherwise a single size from the geometry mode.
+    Thin caller of the shared ``resolve_scales``: the pixel ``target_sizes``
+    are converted to fractions of THIS build's ``imgsz`` here, at the call
+    site that owns that denominator.
     """
-    if (
-        params.geometry_mode == "auto_object"
-        and reference_body_px > 0
-        and params.target_sizes
-    ):
-        sizes: list[tuple[int, int]] = []
-        for target in params.target_sizes:
-            frac = max(0.01, min(0.9, float(target) / max(1, params.imgsz)))
-            w, h = tile_size_for_mode(
-                geometry_mode="auto_object",
-                imgsz=params.imgsz,
-                reference_body_px=reference_body_px,
-                object_tile_fraction=frac,
-                slice_width=0,
-                slice_height=0,
-            )
-            if (w, h) not in sizes:
-                sizes.append((w, h))
-        if sizes:
-            return sizes
-    w, h = tile_size_for_mode(
+    imgsz = max(1, params.imgsz)
+    return resolve_scales(
         geometry_mode=params.geometry_mode,
         imgsz=params.imgsz,
         reference_body_px=reference_body_px,
+        fractions=[float(target) / imgsz for target in params.target_sizes],
         object_tile_fraction=params.object_tile_fraction,
         slice_width=params.slice_width,
         slice_height=params.slice_height,
     )
-    return [(w, h)]
 
 
 def build_sliced_obb_dataset(

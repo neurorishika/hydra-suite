@@ -19,6 +19,11 @@ logger = logging.getLogger(__name__)
 # refuse pathological slice/overlap combos loudly instead of spinning for hours.
 MAX_TILES_PER_FRAME = 4096
 
+# The model input that legacy absolute ``target_sizes`` were expressed at.
+# It is a HISTORICAL constant, not "the model input": SAM3 runs at 1008, so
+# reusing this denominator there would shift every scale by 1.575x.
+LEGACY_TARGET_SIZE_IMGSZ = 640.0
+
 
 @dataclass
 class SlicePlan:
@@ -134,6 +139,91 @@ def tile_size_for_mode(
         return size, size
     # auto_model (and auto_object fallback when no ref object is known).
     return int(imgsz), int(imgsz)
+
+
+def target_fractions_from(
+    *,
+    fractions,
+    legacy_pixel_sizes,
+    legacy_pixel_denominator: float,
+) -> list[float]:
+    """Resolve a target-scale set to FRACTIONS of the model input.
+
+    One definition, shared by ``SliceTrainingConfig`` and the DetectKit GUI's
+    ``SliceTrainingSettings`` (they previously carried two near-identical
+    copies that disagreed on malformed input). Defined behaviour: keep only
+    fractions in ``(0, 1]``; fall back to the legacy absolute pixel sizes only
+    when nothing survives. Filtering first is the GUI's behaviour and is a
+    no-op for a validated config, so it is the choice that changes neither
+    call site for well-formed input while still being total.
+
+    ``legacy_pixel_denominator`` has NO default on purpose. Legacy absolute
+    ``target_sizes`` are anchored to a 640px model input; dividing them by a
+    different input size (SAM3's is 1008) silently rescales every tile by
+    1.575x. The caller must name the input those pixels were expressed at.
+    """
+    kept = [float(value) for value in fractions if 0.0 < float(value) <= 1.0]
+    if kept:
+        return kept
+    denominator = float(legacy_pixel_denominator)
+    if denominator <= 0.0:
+        raise ValueError("legacy_pixel_denominator must be positive")
+    return [
+        float(value) / denominator for value in legacy_pixel_sizes if float(value) > 0.0
+    ]
+
+
+def resolve_scales(
+    *,
+    geometry_mode: str,
+    imgsz: int,
+    reference_body_px: float,
+    fractions,
+    object_tile_fraction: float,
+    slice_width: int,
+    slice_height: int,
+) -> list[tuple[int, int]]:
+    """Resolve the deduped list of ``(w, h)`` tile sizes for a scale set.
+
+    ``fractions`` are ``object_tile_fraction``-valued, i.e. fractions of the
+    model input for a square tile resized to it -- the same quantity as a
+    ``target_size_fraction`` (``apparent/imgsz == ref/tile``). There is
+    deliberately NO pixel-list parameter: a legacy absolute set must be turned
+    into fractions by ``target_fractions_from`` at its own denominator first,
+    so no caller can divide by an ``imgsz`` it did not itself use.
+
+    ``auto_object`` with a measured reference and a non-empty ``fractions``
+    fans out one square tile per fraction (each clamped into ``[0.01, 0.9]``
+    by ``tile_size_for_mode``), deduping while preserving first-seen order.
+    Anything else -- another geometry mode, no measured reference, or an empty
+    set -- yields the single ``geometry_mode`` size from the scalar
+    ``object_tile_fraction``.
+    """
+    if geometry_mode == "auto_object" and reference_body_px > 0 and len(fractions):
+        sizes: list[tuple[int, int]] = []
+        for fraction in fractions:
+            size = tile_size_for_mode(
+                geometry_mode="auto_object",
+                imgsz=imgsz,
+                reference_body_px=reference_body_px,
+                object_tile_fraction=float(fraction),
+                slice_width=0,
+                slice_height=0,
+            )
+            if size not in sizes:
+                sizes.append(size)
+        if sizes:
+            return sizes
+    return [
+        tile_size_for_mode(
+            geometry_mode=geometry_mode,
+            imgsz=imgsz,
+            reference_body_px=reference_body_px,
+            object_tile_fraction=object_tile_fraction,
+            slice_width=slice_width,
+            slice_height=slice_height,
+        )
+    ]
 
 
 def plan_tiles(

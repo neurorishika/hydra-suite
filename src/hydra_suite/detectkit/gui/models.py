@@ -8,6 +8,10 @@ from pathlib import Path
 from typing import Any
 
 from hydra_suite.data.project_bundle import write_json_atomic
+from hydra_suite.utils.slice_geometry import (
+    LEGACY_TARGET_SIZE_IMGSZ,
+    target_fractions_from,
+)
 
 DEFAULT_CLASS_NAME = "object"
 # Dataset inference retains candidates at this floor, then applies the UI
@@ -249,16 +253,11 @@ class SliceTrainingSettings:
         Older projects stored pixel targets with an implicit 640px model input;
         preserve that interpretation when no explicit fractions are present.
         """
-        fractions = [
-            float(value)
-            for value in self.target_size_fractions
-            if 0.0 < float(value) <= 1.0
-        ]
-        if fractions:
-            return fractions
-        return [
-            float(value) / 640.0 for value in self.target_sizes if float(value) > 0.0
-        ]
+        return target_fractions_from(
+            fractions=self.target_size_fractions,
+            legacy_pixel_sizes=self.target_sizes,
+            legacy_pixel_denominator=LEGACY_TARGET_SIZE_IMGSZ,
+        )
 
     def target_sizes_for(self, imgsz: int) -> list[float]:
         """Resolve the configured relative target scales for one model input."""
