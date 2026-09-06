@@ -5,17 +5,12 @@ from __future__ import annotations
 import json
 import logging
 import tempfile
-from copy import deepcopy
 from pathlib import Path
-from typing import Any, Sequence
+from typing import Sequence
 
-from hydra_suite.trackerkit.cli_config import (
-    apply_sahi_profile_override,
-    load_tracker_cli_config,
-    load_tracker_cli_session,
-)
+from hydra_suite.trackerkit.batch_plan import BatchJobSpec, plan_batch_jobs
+from hydra_suite.trackerkit.cli_config import load_tracker_cli_session
 from hydra_suite.trackerkit.headless_tracking import run_headless_tracking_session
-from hydra_suite.trackerkit.session_plan import build_batch_video_plan
 
 logger = logging.getLogger(__name__)
 
@@ -39,62 +34,44 @@ def run_tracking_cli(
     if config_path and not Path(config_path).is_file():
         raise FileNotFoundError(f"Config not found: {config_path}")
 
-    plan = build_batch_video_plan(
+    specs = plan_batch_jobs(
         videos,
         explicit_config_path=config_path,
         keystone_override=keystone_override,
+        sahi_profile=sahi_profile,
     )
-    if not plan:
+    if not specs:
         raise ValueError("No videos were resolved for tracking.")
+    return _run_sequential(specs)
 
+
+def _run_sequential(specs: Sequence[BatchJobSpec]) -> int:
+    """The in-process path: one session after another on this process."""
     exit_code = 0
     with tempfile.TemporaryDirectory(prefix="trackerkit-cli-") as tmpdir:
         tmpdir_path = Path(tmpdir)
-        baseline_config_data: dict[str, Any] | None = None
-
-        for index, item in enumerate(plan, start=1):
+        for spec in specs:
             logger.info(
                 "Tracker CLI: preparing video %s/%s: %s",
-                index,
-                len(plan),
-                item.video_path,
+                spec.index,
+                len(specs),
+                spec.video_path,
             )
-            effective_config_data = None
-            if item.use_keystone_baseline and item.config_path is None:
-                effective_config_data = baseline_config_data or {}
-
-            if sahi_profile:
-                base_cfg = (
-                    effective_config_data
-                    if effective_config_data is not None
-                    else load_tracker_cli_config(item.config_path)
-                )
-                effective_config_data = apply_sahi_profile_override(
-                    base_cfg, sahi_profile
-                )
-
             session = load_tracker_cli_session(
-                item.video_path,
-                config_path=(
-                    item.config_path if effective_config_data is None else None
-                ),
-                config_data=effective_config_data,
+                spec.video_path,
+                config_path=spec.config_path,
+                config_data=spec.config,
             )
-
-            if index == 1:
-                baseline_config_data = (
-                    deepcopy(load_tracker_cli_config(item.config_path))
-                    if item.config_path
-                    else deepcopy(session.config)
-                )
-
-            # Persist the resolved keystone baseline for provenance/debugging; the
-            # direct path consumes ``session`` directly and needs no config file.
-            # Dump the OVERRIDDEN config (``session.config``), not the
+            # Persist the resolved keystone baseline for provenance/debugging;
+            # the direct path consumes ``session`` directly and needs no config
+            # file. Dump the OVERRIDDEN config (``session.config``), not the
             # pre-override baseline, so the provenance file names the profile
-            # that actually ran.
-            if item.use_keystone_baseline and item.config_path is None:
-                keystone_dump = tmpdir_path / f"keystone_config_{index}.json"
+            # that actually ran. ``config_path is None`` narrows this to the
+            # videos that truly inherited the baseline dict -- a later video
+            # that loads the keystone's own file is keystone provenance too,
+            # but it has a file of its own to point at.
+            if spec.provenance == "keystone-baseline" and spec.config_path is None:
+                keystone_dump = tmpdir_path / f"keystone_config_{spec.index}.json"
                 with open(keystone_dump, "w", encoding="utf-8") as handle:
                     json.dump(session.config or {}, handle, indent=2)
 
@@ -107,7 +84,7 @@ def run_tracking_cli(
                 error_message = result.get("error") or "Tracker session failed."
                 logger.error(
                     "Tracker CLI failed for %s: %s",
-                    item.video_path,
+                    spec.video_path,
                     error_message,
                 )
                 exit_code = 1
