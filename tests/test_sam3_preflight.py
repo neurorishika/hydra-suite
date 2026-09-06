@@ -929,7 +929,7 @@ def test_multi_gpu_device_string_warns_that_only_the_first_gpu_is_used(tmp_path)
     )
 
 
-def test_bare_ordinal_refusal_names_the_accepted_forms(tmp_path):
+def test_non_cuda_device_refusal_names_the_accepted_forms(tmp_path):
     """A refused SPELLING must not masquerade as absent hardware."""
 
     _write_coco(tmp_path)

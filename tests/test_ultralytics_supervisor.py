@@ -616,6 +616,13 @@ def _launch_sidecar(monkeypatch, mod, launched):
             check = kwargs.get("prelaunch_check")
             if check is not None:
                 check()
+            # The real SupervisedSidecar also polls `accelerator_probe` while
+            # the child runs. Dropping it left the accelerator re-probe site
+            # completely uncovered while three sibling sites were tested --
+            # exactly how a gap survives review.
+            probe = kwargs.get("accelerator_probe")
+            if probe is not None:
+                probe()
             launched.append(plan)
             self.process = Process()
             self.output = Output()

@@ -308,8 +308,8 @@ def _run_ultralytics_once(
     # real device on the CUDA box. SAM3 already had the right shape: probe by
     # the device string, then compare the observed `.uuid` to the pinned one --
     # that equality is what actually detects a device swap, and it is kept.
-    cuda_probe_device = normalize_cuda_device(spec.device)
     if cuda is not None:
+        cuda_probe_device = normalize_cuda_device(spec.device)
         cuda_uuid = cuda.uuid
         environment["CUDA_VISIBLE_DEVICES"] = cuda_uuid
 
