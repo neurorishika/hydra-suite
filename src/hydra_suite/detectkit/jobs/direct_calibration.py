@@ -29,6 +29,7 @@ from hydra_suite.core.inference.direct_calibration import (
     CalibrationDetection,
     CalibrationScore,
     DirectCalibrationPoint,
+    fit_calibration_area_band,
     score_frames,
 )
 from hydra_suite.core.inference.direct_calibration_grid import (
@@ -822,6 +823,15 @@ def run_direct_calibration(request, *, progress=None, should_stop=None):
             )
         )
     }
+    # D9: ONE size prior, fitted from the user's labels before the sweep
+    # starts and threaded unchanged into every scored point. The labels do
+    # not vary across candidates/merges/confidences, so fitting here rather
+    # than inside score_frames() both saves the repeated fit and makes it
+    # structurally impossible for two points in one sweep to be judged
+    # against different priors.
+    label_area_band = fit_calibration_area_band(
+        (_label_detections(labels) for _path, labels in frames), task=request.task
+    )
     for index, candidate in enumerate(request.candidates):
         if should_stop is not None and should_stop():
             outcome.partial = True
@@ -941,7 +951,11 @@ def run_direct_calibration(request, *, progress=None, should_stop=None):
                         confidence=confidence,
                         tiles=tiles,
                         seconds=seconds_per_frame,
-                        score=score_frames(scored, task=request.task),
+                        score=score_frames(
+                            scored,
+                            task=request.task,
+                            area_band=label_area_band,
+                        ),
                         merge_backend=backend,
                         candidate_index=index,
                     )

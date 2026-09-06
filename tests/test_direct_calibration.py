@@ -214,3 +214,57 @@ def test_rotated_prediction_is_scored_as_its_aabb_under_detect():
         task="detect",
     )
     assert detect_score.mean_iou > obb_score.mean_iou
+
+
+def test_area_band_rejects_an_oversized_mistargeted_prediction():
+    """D9: containment alone credits a blob that swallows a whole label.
+
+    Without a band the huge prediction contains the label's representative
+    point, so it earns the recall credit; with a band fitted from the
+    labels themselves it is inadmissible and the label is honestly a miss.
+    """
+    from hydra_suite.core.inference.direct_calibration import fit_calibration_area_band
+
+    labels = [_box(0, 0, 10, 10), _box(30, 0, 40, 10)]
+    blob = [_box(0, 0, 40, 10)]  # 4x a single label: spans both animals
+    band = fit_calibration_area_band([labels])
+
+    unbanded = match_frame(blob, labels)
+    assert unbanded.matched == 1
+
+    banded = match_frame(blob, labels, area_band=band)
+    assert banded.matched == 0
+    assert banded.missed == 2
+    assert banded.extra == 1
+
+
+def test_area_band_still_admits_the_extent_convention_overshoot():
+    """The band must not undo D7: a correct silhouette traced ~1.7x the
+    labelled body core is still well inside HIGH_MULTIPLIER."""
+    from hydra_suite.core.inference.direct_calibration import fit_calibration_area_band
+
+    labels = [_box(0, 0, 20, 20)]
+    inflated = [_box(-3, -3, 23, 23)]
+    band = fit_calibration_area_band([labels])
+    assert match_frame(inflated, labels, area_band=band).matched == 1
+
+
+def test_area_band_is_pooled_over_every_labelled_frame():
+    """The prior is a property of the whole label set, not of one frame."""
+    from hydra_suite.core.inference.direct_calibration import fit_calibration_area_band
+
+    small = [_box(0, 0, 10, 10)]
+    large = [_box(0, 0, 40, 40)]
+    band = fit_calibration_area_band([small, large])
+    assert band is not None
+    assert band.n_labels == 2
+    # Ceiling anchored to the LARGEST label, floor to the smallest.
+    assert band.max_px2 >= 2.5 * 1600.0
+    assert band.min_px2 <= 0.3 * 100.0
+
+
+def test_unfittable_labels_yield_no_band_and_admit_everything():
+    from hydra_suite.core.inference.direct_calibration import fit_calibration_area_band
+
+    assert fit_calibration_area_band([]) is None
+    assert fit_calibration_area_band([[]]) is None

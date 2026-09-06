@@ -17,6 +17,7 @@ from hydra_suite.core.inference.match_geometry import match_one_to_one
 from hydra_suite.core.inference.shape_prior import (
     MIN_MATCH_QUALITY,
     AreaBand,
+    fit_area_band,
     match_quality,
 )
 from hydra_suite.utils.polygon_iou import polygon_iou
@@ -79,6 +80,42 @@ def _as_task_polygon(polygon: np.ndarray, task: str) -> np.ndarray:
     x0, y0 = polygon.min(axis=0)
     x1, y1 = polygon.max(axis=0)
     return np.array([[x0, y0], [x1, y0], [x1, y1], [x0, y1]], dtype=np.float32)
+
+
+def fit_calibration_area_band(
+    label_sets: Iterable[Sequence[CalibrationDetection]],
+    *,
+    task: str = "obb",
+) -> AreaBand | None:
+    """Fit ONE size prior over the whole labelled evidence set. D9.
+
+    Mirrors the semantic path's ``calibrate()``: the band is a property of
+    the USER'S LABELS, not of the operating point being scored, so it is
+    fitted once, pooled over every labelled frame, and threaded unchanged
+    through the entire confidence x merge sweep. Fitting per point would
+    let each configuration be judged against a prior derived from itself.
+
+    Pooled over the whole label set, NOT per class -- that is the ruling's
+    wording, and a per-class band on a sparse class would be fitted from a
+    handful of instances.
+
+    Polygons are reduced by ``_as_task_polygon`` first, for the same reason
+    the matcher reduces them: under ``detect`` everything is scored as an
+    axis-aligned quad, so a band fitted on un-reduced outlines would be
+    systematically tighter than the areas it has to admit.
+
+    Returns ``None`` when nothing is fittable; ``in_band`` treats a ``None``
+    band as admitting everything, so an unlabelled set degrades to the
+    pre-D9 behaviour rather than rejecting all predictions.
+    """
+    polygons: list[np.ndarray] = []
+    for labels in label_sets:
+        for label in labels:
+            polygon = _valid_polygon(label.polygon_px)
+            if polygon is None or not np.isfinite(polygon).all():
+                continue
+            polygons.append(_as_task_polygon(polygon, task))
+    return fit_area_band(polygons)
 
 
 def match_frame(
