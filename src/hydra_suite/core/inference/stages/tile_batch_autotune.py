@@ -9,6 +9,7 @@ explicitly selected batch.
 from __future__ import annotations
 
 import hashlib
+import statistics
 import time
 from dataclasses import dataclass
 from pathlib import Path
@@ -37,6 +38,7 @@ class TileBatchAutotuneKey:
 _CACHE: dict[TileBatchAutotuneKey, int] = {}
 _CACHE_LOCK = Lock()
 _ARTIFACT_HASHES: dict[tuple[str, int, int], str] = {}
+_MEASUREMENT_REPEATS = 3
 
 
 def clear_tile_batch_autotune_cache() -> None:
@@ -105,13 +107,13 @@ def select_tile_batch_size(
     *,
     benchmark: Callable[[int], float],
     candidates: tuple[int, ...] | None = None,
-) -> int:
+) -> int | None:
     """Benchmark candidates after a warmup and cache the fastest safe batch.
 
-    A non-finite/non-positive duration, or any model/timer failure, simply
-    excludes that candidate.  If nothing can be measured, batch one is the
-    conservative fallback.  The caller executes its normal prediction path
-    after this probe; probe results are never consumed as detector output.
+    A non-finite/non-positive duration, or any model/timer failure, excludes
+    that candidate.  ``None`` means tuning was unusable; callers must retain
+    their already-admitted chunk.  The caller executes its normal prediction
+    path after this probe; probe results are never consumed as detector output.
     """
     with _CACHE_LOCK:
         cached = _CACHE.get(key)
@@ -124,24 +126,31 @@ def select_tile_batch_size(
         if 1 <= c <= key.admitted_max
     )
     if not choices:
-        return 1
+        return None
     try:
         benchmark(choices[0])  # one warmup, excluded from measurement
     except Exception:
-        return 1
+        return None
     best_size, best_rate = 1, -1.0
     for size in choices:
-        try:
-            elapsed = float(benchmark(size))
-        except Exception:
+        samples: list[float] = []
+        for _ in range(_MEASUREMENT_REPEATS):
+            try:
+                elapsed = float(benchmark(size))
+            except Exception:
+                samples = []
+                break
+            if not (elapsed > 0.0 and elapsed < float("inf")):
+                samples = []
+                break
+            samples.append(elapsed)
+        if not samples:
             continue
-        if not (elapsed > 0.0 and elapsed < float("inf")):
-            continue
-        rate = size / elapsed
+        rate = size / statistics.median(samples)
         if rate > best_rate:
             best_size, best_rate = size, rate
     if best_rate < 0:
-        return 1
+        return None
     with _CACHE_LOCK:
         # Another worker may have tuned the same model while this one warmed up.
         return _CACHE.setdefault(key, best_size)

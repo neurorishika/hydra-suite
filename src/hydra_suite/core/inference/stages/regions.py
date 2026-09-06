@@ -113,7 +113,8 @@ def _autotune_tile_chunk_size(
             predict(images[:size], size)
             return clock() - start
 
-        return select_tile_batch_size(key, benchmark=benchmark)
+        selected = select_tile_batch_size(key, benchmark=benchmark)
+        return chunk_size if selected is None else selected
     except Exception:
         # The normal admitted batch remains correct if a backend lacks a
         # reliable timer or cannot safely issue probe predictions.

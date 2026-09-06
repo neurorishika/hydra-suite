@@ -37,7 +37,7 @@ def test_selects_fastest_admitted_batch_after_warmup():
         return {1: 1.0, 2: 1.0, 4: 0.5, 8: 4.0}[batch]
 
     assert select_tile_batch_size(_key(), benchmark=timer) == 4
-    assert calls == [1, 1, 2, 4, 8]
+    assert calls == [1, 1, 1, 1, 2, 2, 2, 4, 4, 4, 8, 8, 8]
 
 
 def test_cached_selection_avoids_repeat_probe():
@@ -74,17 +74,66 @@ def test_keys_separate_device_geometry_and_artifact():
     )
 
 
-def test_failure_or_unusable_clock_falls_back_to_one():
+def test_warmup_failure_returns_none_and_does_not_cache():
     clear_tile_batch_autotune_cache()
     assert (
         select_tile_batch_size(
             _key(), benchmark=lambda n: (_ for _ in ()).throw(RuntimeError())
         )
-        == 1
+        is None
     )
+    assert select_tile_batch_size(_key(), benchmark=lambda n: 1.0 / n) == 8
+
+
+def test_unusable_candidate_timings_return_none_without_cache_pollution():
+    clear_tile_batch_autotune_cache()
     assert (
         select_tile_batch_size(_key(artifact="sha256:clock"), benchmark=lambda n: 0.0)
-        == 1
+        is None
+    )
+    calls = 0
+
+    def fail_after_warmup(_batch):
+        nonlocal calls
+        calls += 1
+        if calls == 1:
+            return 1.0
+        raise RuntimeError()
+
+    assert (
+        select_tile_batch_size(
+            _key(artifact="sha256:exceptions"), benchmark=fail_after_warmup
+        )
+        is None
+    )
+    assert (
+        select_tile_batch_size(
+            _key(artifact="sha256:clock"), benchmark=lambda n: 1.0 / n
+        )
+        == 8
+    )
+    assert (
+        select_tile_batch_size(
+            _key(artifact="sha256:exceptions"), benchmark=lambda n: 1.0 / n
+        )
+        == 8
+    )
+
+
+def test_median_repeat_selection_is_deterministic_against_one_noisy_sample():
+    clear_tile_batch_autotune_cache()
+    samples = {
+        1: iter((1.0, 1.0, 1.0, 1.0)),
+        2: iter((0.9, 0.9, 0.9)),
+        4: iter((0.1, 2.0, 2.0)),
+        8: iter((10.0, 10.0, 10.0)),
+    }
+
+    assert (
+        select_tile_batch_size(
+            _key(artifact="sha256:median"), benchmark=lambda n: next(samples[n])
+        )
+        == 2
     )
 
 
