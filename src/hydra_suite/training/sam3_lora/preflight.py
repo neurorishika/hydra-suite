@@ -11,15 +11,26 @@ from __future__ import annotations
 import copy
 import csv
 import dataclasses
+import hashlib
 import json
 import math
 import os
 import shutil
 import subprocess
+from collections.abc import Sequence
 from dataclasses import asdict, dataclass
 from pathlib import Path
 from typing import Any, Optional
 
+from hydra_suite.runtime.memory_profiles import (
+    MEASURED_SAFETY_FRACTION,
+    MemoryMeasurement,
+    MemoryProfileStore,
+    ProfileIdentity,
+    fit_batch_curve,
+    profile_store_path,
+    records_for,
+)
 from hydra_suite.runtime.resource_budget import (
     AcceleratorKind,
     PhaseEstimate,
@@ -186,6 +197,12 @@ class Sam3PreflightDecision:
     containment_hard_host_bytes: int
     refusals: tuple[str, ...]
     warnings: tuple[str, ...]
+    # Which side of `device_requirement_bytes` produced the device peak.
+    # Defaulted so every existing construction site stays valid.
+    device_peak_provenance: str = "analytic"
+    device_peak_analytic_bytes: int = 0
+    device_peak_measured_bytes: int = 0
+    device_peak_fingerprint: str = ""
 
     def to_dict(self) -> dict[str, Any]:
         """Return JSON-safe diagnostics for logs and run manifests."""
@@ -204,6 +221,10 @@ class Sam3PreflightDecision:
             "containment_hard_host_bytes": self.containment_hard_host_bytes,
             "refusals": list(self.refusals),
             "warnings": list(self.warnings),
+            "device_peak_provenance": self.device_peak_provenance,
+            "device_peak_analytic_bytes": int(self.device_peak_analytic_bytes),
+            "device_peak_measured_bytes": int(self.device_peak_measured_bytes),
+            "device_peak_fingerprint": self.device_peak_fingerprint,
         }
 
 
@@ -681,6 +702,223 @@ def containment_host_limits(params: Any, host_peak_bytes: int) -> tuple[int, int
     return soft, hard
 
 
+def _analytic_training_device_peak(
+    *,
+    precision_multiplier: float,
+    batch_size: int,
+    lora_training_state: int,
+    default_lora_training_state: int,
+    dense_masks_device: int,
+) -> int:
+    """The composed analytic device estimate, unchanged in form.
+
+    Base envelope + per-batch term + LoRA adjustment + dense masks, each
+    scaled where precision scales it. Extracted verbatim from
+    `build_resource_request` so exactly one expression exists and both the
+    admission gate and the batch-selection path can consult it.
+    """
+
+    return int(
+        _MEASURED_BF16_DEVICE_PEAK_BYTES * precision_multiplier
+        + max(0, batch_size - 1) * _EXTRA_BATCH_DEVICE_BYTES * precision_multiplier
+        + max(0, lora_training_state - default_lora_training_state)
+        + dense_masks_device
+    )
+
+
+def _lora_params_per_rank(params: Any) -> int:
+    return sum(
+        count
+        for flag, count in _LORA_PARAMS_PER_RANK.items()
+        if bool(getattr(params, flag, False))
+    )
+
+
+def _default_lora_training_state() -> int:
+    return (
+        16
+        * (
+            _LORA_PARAMS_PER_RANK["adapt_vision_encoder"]
+            + _LORA_PARAMS_PER_RANK["adapt_geometry_encoder"]
+            + _LORA_PARAMS_PER_RANK["adapt_detr_encoder"]
+            + _LORA_PARAMS_PER_RANK["adapt_detr_decoder"]
+        )
+        * 24
+    )
+
+
+def analytic_device_peak_bytes(
+    params: Any,
+    dataset: Sam3DatasetProfile,
+    *,
+    batch_size: int | None = None,
+) -> int:
+    """The composed analytic device estimate for one (params, dataset, batch).
+
+    Shares `_analytic_training_device_peak` with `build_resource_request`, so
+    admission and batch selection read the same expression.
+    """
+
+    batch = max(1, int(batch_size if batch_size is not None else params.batch))
+    image_pixels = PREDICTOR_IMGSZ * PREDICTOR_IMGSZ
+    inflight_tiles = min(batch, max(1, dataset.tile_count))
+    active_instances = inflight_tiles * dataset.max_active_instances_per_tile
+    bounded_rank = min(_MAX_LORA_RANK, max(1, int(getattr(params, "rank", 1))))
+    lora_training_state = bounded_rank * _lora_params_per_rank(params) * 24
+    return _analytic_training_device_peak(
+        precision_multiplier=(
+            _FP32_DEVICE_PEAK_MULTIPLIER
+            if getattr(params, "mixed_precision", "bf16") == "fp32"
+            else 1.0
+        ),
+        batch_size=batch,
+        lora_training_state=lora_training_state,
+        default_lora_training_state=_default_lora_training_state(),
+        dense_masks_device=active_instances
+        * image_pixels
+        * _MASK_DEVICE_BYTES_PER_PIXEL,
+    )
+
+
+def measured_envelope_bytes(
+    records: Sequence[MemoryMeasurement],
+    batch_size: int,
+) -> int:
+    """The measured requirement at `batch_size`: fit, floored by observations.
+
+    `max(fit_batch_curve(records) at n, every observed peak at batch <= n)` --
+    the same envelope `select_batch` uses, so selection and admission cannot
+    disagree about what a measurement says.
+    """
+
+    ordered = sorted(records, key=lambda record: record.settings.batch_size)
+    if not ordered:
+        return 0
+    base_bytes, slope_bytes = fit_batch_curve(ordered)
+    observed = max(
+        (
+            record.accelerator_reserved_peak_bytes
+            for record in ordered
+            if record.settings.batch_size <= batch_size
+        ),
+        default=0,
+    )
+    return int(max(base_bytes + slope_bytes * batch_size, observed))
+
+
+def device_requirement_bytes(
+    analytic_bytes: int,
+    records: Sequence[MemoryMeasurement],
+    batch_size: int,
+) -> tuple[int, str, int]:
+    """The single authority on device demand: `max(analytic, measured)`.
+
+    Returns `(requirement_bytes, provenance, measured_bytes)` with provenance
+    in `{"analytic", "measured", "extrapolated"}`.
+
+    A MEASUREMENT MAY ONLY RAISE THIS NUMBER, NEVER LOWER IT, and the reason
+    is empirical, not stylistic. On mehek (2026-09-06, one spec, one card,
+    densest-first tile order, changing only the step count) the SAME surface
+    reserved 7.34 GiB after the probe's 2 optimizer steps, 9.93 GiB after 60,
+    and 12.99 GiB by step 320 of a full run -- and that run sat FLAT at
+    10.22 GiB for 230 consecutive steps, across an epoch boundary, before
+    rising twice inside ten steps. No "stable for K steps" stopping rule
+    catches that. Rare dense tiles and allocator fragmentation are simply not
+    sampled by a short probe, so THE PROBE PRODUCES A LOWER BOUND. The
+    composed analytic estimate for that same configuration was 12.364 GiB --
+    far closer to the truth. Replacing the analytic estimate with the
+    measurement (which an earlier draft of this task specified) would have
+    admitted a run that OOMs minutes in. Do not "simplify" this back to the
+    measurement alone.
+
+    No `precision_multiplier` is ever applied to a measurement: precision is
+    part of the profile fingerprint, so a record only matches a run of the
+    same precision.
+    """
+
+    analytic = int(analytic_bytes)
+    if not records:
+        return analytic, "analytic", 0
+    measured = measured_envelope_bytes(records, batch_size)
+    if measured <= analytic:
+        return analytic, "analytic", measured
+    largest_observed = max(record.settings.batch_size for record in records)
+    provenance = "measured" if batch_size <= largest_observed else "extrapolated"
+    return measured, provenance, measured
+
+
+def profile_fingerprint_key(identity: ProfileIdentity) -> str:
+    """A short, stable, log-safe digest of a `ProfileIdentity`."""
+
+    payload = json.dumps(asdict(identity), sort_keys=True, separators=(",", ":"))
+    return hashlib.sha256(payload.encode("utf-8")).hexdigest()[:16]
+
+
+def _profile_records() -> tuple[MemoryMeasurement, ...]:
+    """Every stored SAM3 memory profile (seam for tests).
+
+    Offline and millisecond-fast by construction: one bounded local JSON
+    read, never a probe. Any failure degrades to "no measurement", which
+    falls back to the analytic estimate.
+    """
+
+    from .autobatch import PROFILE_SCOPE
+
+    try:
+        path = profile_store_path(PROFILE_SCOPE)
+        if not path.exists():
+            return ()
+        return MemoryProfileStore(path).load()
+    except (OSError, ValueError):
+        return ()
+
+
+def _workload_identity(
+    spec: Any,
+    cuda_device: Optional[CudaDeviceObservation],
+) -> Optional[ProfileIdentity]:
+    """The profile fingerprint for `spec` on `cuda_device` (seam for tests)."""
+
+    if cuda_device is None:
+        return None
+    try:
+        from . import autobatch
+
+        dataset = autobatch.sam3_dataset_density_profile(spec)
+        return autobatch.sam3_workload_fingerprint(
+            spec, cuda_device=cuda_device, dataset=dataset
+        ).identity
+    except (OSError, ValueError, KeyError, TypeError, subprocess.SubprocessError):
+        # Environment/IO failures mean "no measurement matched", which falls
+        # back to the analytic estimate. Deliberately NOT a bare `except`: a
+        # silent lookup failure lowers the requirement back to analytic while
+        # a record that should have won sits in the store, so a programming
+        # error here must surface rather than degrade the gate quietly.
+        return None
+
+
+def _stored_records(
+    spec: Any,
+    cuda_device: Optional[CudaDeviceObservation],
+) -> tuple[MemoryMeasurement, ...]:
+    """Validated stored measurements for this exact workload, or `()`.
+
+    The store is read FIRST: with no store there is nothing to match and the
+    fingerprint (which hashes an environment) is never computed, so the
+    common case stays fast.
+    """
+
+    stored = _profile_records()
+    if not stored:
+        return ()
+    identity = _workload_identity(spec, cuda_device)
+    if identity is None:
+        return ()
+    from .autobatch import validate_probe_records
+
+    return validate_probe_records(records_for(stored, identity), identity)
+
+
 def build_resource_request(
     spec: Any,
     dataset: Sam3DatasetProfile,
@@ -688,6 +926,7 @@ def build_resource_request(
     params: Any | None = None,
     negative_prompts: tuple[str, ...] = (),
     probe_floor: bool = False,
+    measured_records: Sequence[MemoryMeasurement] = (),
 ) -> ResourceRequest:
     """Estimate phase peaks from streamed work limits and COCO metadata.
 
@@ -729,11 +968,7 @@ def build_resource_request(
     active_instances = inflight_tiles * dataset.max_active_instances_per_tile
     dense_masks_host = active_instances * image_pixels * _MASK_HOST_BYTES_PER_PIXEL
     dense_masks_device = active_instances * image_pixels * _MASK_DEVICE_BYTES_PER_PIXEL
-    params_per_rank = sum(
-        count
-        for flag, count in _LORA_PARAMS_PER_RANK.items()
-        if bool(getattr(params, flag, False))
-    )
+    params_per_rank = _lora_params_per_rank(params)
     requested_rank = int(params.rank)
     bounded_rank = min(_MAX_LORA_RANK, max(1, requested_rank))
     lora_params = bounded_rank * params_per_rank
@@ -742,16 +977,7 @@ def build_resource_request(
     lora_cpu_training_state = lora_params * _LORA_CPU_TRAINING_BYTES_PER_PARAM
     lora_reload_copy = lora_params * _LORA_RELOAD_BYTES_PER_PARAM
     lora_serialization_copies = lora_params * _LORA_SERIALIZATION_BYTES_PER_PARAM
-    default_lora_training_state = (
-        16
-        * (
-            _LORA_PARAMS_PER_RANK["adapt_vision_encoder"]
-            + _LORA_PARAMS_PER_RANK["adapt_geometry_encoder"]
-            + _LORA_PARAMS_PER_RANK["adapt_detr_encoder"]
-            + _LORA_PARAMS_PER_RANK["adapt_detr_decoder"]
-        )
-        * 24
-    )
+    default_lora_training_state = _default_lora_training_state()
     requested_negatives = max(0, int(getattr(params, "num_negatives", 0)))
     selected_negatives = min(
         requested_negatives,
@@ -801,17 +1027,24 @@ def build_resource_request(
         * _MASK_DEVICE_BYTES_PER_PIXEL
     )
     if probe_floor:
-        training_device_peak = (
+        # NEVER consult a measurement here: this floor is a deliberate
+        # under-estimate so the probe that PRODUCES the measurement can run.
+        training_device_peak = int(
             _CHECKPOINT_BYTES
             + lora_training_state
             + one_tile_device_bytes * precision_multiplier
         )
     else:
-        training_device_peak = (
-            _MEASURED_BF16_DEVICE_PEAK_BYTES * precision_multiplier
-            + max(0, batch_size - 1) * _EXTRA_BATCH_DEVICE_BYTES * precision_multiplier
-            + max(0, lora_training_state - default_lora_training_state)
-            + dense_masks_device
+        training_device_peak, _provenance, _measured = device_requirement_bytes(
+            _analytic_training_device_peak(
+                precision_multiplier=precision_multiplier,
+                batch_size=batch_size,
+                lora_training_state=lora_training_state,
+                default_lora_training_state=default_lora_training_state,
+                dense_masks_device=dense_masks_device,
+            ),
+            tuple(measured_records),
+            batch_size,
         )
     training_device_peak = int(training_device_peak)
     device_steady_bytes = _CHECKPOINT_BYTES if probe_floor else _DEVICE_STEADY_BYTES
@@ -983,16 +1216,39 @@ def assess_preflight(
         for prompt in resolved_negative_prompts
         if type(prompt) is str and bool(prompt.strip())
     )
+    if cuda_device is _UNSET:
+        cuda_device = _probe_cuda_device(str(getattr(spec, "device", "auto")))
+    assert cuda_device is None or isinstance(cuda_device, CudaDeviceObservation)
+    # The measurement lookup needs the physical device identity, so it must
+    # follow the device probe. The probe-floor estimate deliberately ignores
+    # measurements (see `build_resource_request`).
+    measured_records = () if probe_floor else _stored_records(spec, cuda_device)
     request = build_resource_request(
         spec,
         dataset,
         params=params,
         negative_prompts=valid_negative_prompts,
         probe_floor=probe_floor,
+        measured_records=measured_records,
     )
-    if cuda_device is _UNSET:
-        cuda_device = _probe_cuda_device(str(getattr(spec, "device", "auto")))
-    assert cuda_device is None or isinstance(cuda_device, CudaDeviceObservation)
+    if probe_floor:
+        device_peak_provenance = "probe_floor"
+        analytic_device_bytes = 0
+        measured_device_bytes = 0
+    else:
+        analytic_device_bytes = analytic_device_peak_bytes(params, dataset)
+        _requirement, device_peak_provenance, measured_device_bytes = (
+            device_requirement_bytes(
+                analytic_device_bytes,
+                measured_records,
+                max(1, int(getattr(params, "batch", 1))),
+            )
+        )
+    device_peak_fingerprint = (
+        profile_fingerprint_key(measured_records[0].identity)
+        if measured_records
+        else ""
+    )
     observation = observation or _observe_resources(cuda_device)
     policy = _resource_policy(params)
     budget = evaluate_resource_request(request, observation, policy)
@@ -1013,6 +1269,25 @@ def assess_preflight(
         publish_free_disk = _free_disk_bytes(str(publish_target))
     refusals = list(budget.refusals)
     warnings = list(budget.warnings)
+
+    if device_peak_provenance in ("measured", "extrapolated"):
+        # A measurement is a raw envelope with no margin, so the measured
+        # path keeps headroom explicitly. Applied ONCE, against raw free
+        # device bytes -- never against `budget.usable_accelerator_bytes`,
+        # which the policy has already discounted.
+        free_device_bytes = observation.available_accelerator_bytes
+        if (
+            free_device_bytes is not None
+            and free_device_bytes * MEASURED_SAFETY_FRACTION
+            < budget.accelerator_peak_bytes
+        ):
+            refusals.append(
+                "The measured device requirement for this workload is "
+                f"{budget.accelerator_peak_bytes / GiB:.1f} GiB "
+                f"({device_peak_provenance}), but only "
+                f"{free_device_bytes / GiB:.1f} GiB is free on the selected "
+                f"GPU (usable at {MEASURED_SAFETY_FRACTION:.0%} safety)."
+            )
 
     if containment_hard_host_bytes > budget.usable_host_bytes:
         refusals.append(
@@ -1210,6 +1485,10 @@ def assess_preflight(
         containment_hard_host_bytes=containment_hard_host_bytes,
         refusals=tuple(refusals),
         warnings=tuple(warnings),
+        device_peak_provenance=device_peak_provenance,
+        device_peak_analytic_bytes=int(analytic_device_bytes),
+        device_peak_measured_bytes=int(measured_device_bytes),
+        device_peak_fingerprint=device_peak_fingerprint,
     )
 
 
