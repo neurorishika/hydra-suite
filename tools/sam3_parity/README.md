@@ -105,3 +105,25 @@ are available as library functions for that inspection, but no `--out`
 artifact currently records which polygons they flag. A human still has to
 call them (or write a small script that does, against the calibration
 preview data) and look at the results.
+
+## `matcher_gate.py` — the before/after for the matcher containment fix
+
+`baseline.json` above was scored with the matcher whose containment defect
+§"The matcher is biased" describes. `matcher_gate.py` measures that defect's
+cost directly: it runs SAM3 **once** per checkpoint, caches the raw
+candidates (in memory and to a pickle, so scoring is re-runnable with
+`--score-only` on any machine with no GPU), and scores that single cache
+with **two** matchers — a frozen verbatim copy of the pre-fix
+`match_one_to_one` at `d9d9ac31`, and the live one from `src/`. Predictions
+are therefore identical between arms by construction, not by assuming
+inference is deterministic.
+
+It does not touch `baseline.json`; it only READS its run parameters via
+`--from-baseline`, and writes `matcher_gate_results.json` instead.
+
+```bash
+conda activate hydra-cuda   # ultralytics, not the hydra-sam3 training sidecar
+KMP_DUPLICATE_LIB_OK=TRUE PYTHONPATH=$PWD/src python tools/sam3_parity/matcher_gate.py \
+  --from-baseline tools/sam3_parity/baseline.json --confidences 0.2 0.5 \
+  --cache /tmp/matcher_gate_cache.pkl --out tools/sam3_parity/matcher_gate_results.json
+```
