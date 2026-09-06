@@ -292,24 +292,30 @@ def checkpoint_budget_bytes(
     actually use -- currently free space plus whatever the existing epoch
     checkpoints already occupy (they are reclaimable).
 
-    Fails OPEN: if free space cannot be measured, returns `None` (retain
-    everything) and says so. A failed measurement must never masquerade as a
-    binding budget -- deleting evidence because `disk_usage` raised is the
-    exact failure class this replaced.
+    Fails OPEN, and does so for the WHOLE measurement: any `OSError` from
+    `disk_usage` OR from stat-ing the existing checkpoints returns `None`
+    (retain everything, prune nothing) and says why. Two reasons this is not
+    just belt-and-braces. First, a failed measurement must never masquerade
+    as a binding budget -- deleting evidence because a stat raced with an
+    unlink is the exact failure class this replaced. Second, this runs inside
+    `_write_epoch_checkpoint`, so an escaping `OSError` would propagate into
+    `run_training` and KILL the run; the count-based pruner it replaced made
+    no stat calls at all and could not do that. Retention is best-effort
+    housekeeping and must never be able to end a training run.
     """
     import shutil
 
     probe = directory if directory.is_dir() else directory.parent
-    if free_bytes is None:
-        try:
+    try:
+        if free_bytes is None:
             free_bytes = int(shutil.disk_usage(probe).free)
-        except OSError as exc:
-            log(
-                "checkpoint retention budget could not be measured "
-                f"({exc}); retaining every epoch checkpoint."
-            )
-            return None
-    used = sum(path.stat().st_size for path in directory.glob("epoch_*.pt"))
+        used = sum(path.stat().st_size for path in directory.glob("epoch_*.pt"))
+    except OSError as exc:
+        log(
+            "checkpoint retention budget could not be measured "
+            f"({exc}); retaining every epoch checkpoint."
+        )
+        return None
     return int((free_bytes + used) * CHECKPOINT_BUDGET_FRACTION_OF_FREE)
 
 
@@ -360,10 +366,20 @@ def enforce_checkpoint_budget(
     """
     if not directory.is_dir():
         return []
-    paths = sorted(directory.glob("epoch_*.pt"), key=lambda path: path.name)
-    if not paths:
+    try:
+        paths = sorted(directory.glob("epoch_*.pt"), key=lambda path: path.name)
+        if not paths:
+            return []
+        # Same fail-open contract as `checkpoint_budget_bytes`, for the same
+        # reason: this call sits on the training path, so no measurement
+        # failure here may prune, and none may raise.
+        adapter_bytes = max(path.stat().st_size for path in paths)
+    except OSError as exc:
+        log(
+            "checkpoint sizes could not be measured "
+            f"({exc}); retaining every epoch checkpoint."
+        )
         return []
-    adapter_bytes = max(path.stat().st_size for path in paths)
     if budget_bytes is None:
         budget_bytes = checkpoint_budget_bytes(directory, log=log)
         if budget_bytes is None:
@@ -1062,7 +1078,12 @@ def _record_epoch_validation(
             model.train()
     if stats is None:
         return None
-    record = {"epoch": epoch_number, **stats}
+    # Stamp the effective cadence into every record. Without it the cadence
+    # is only inferable from epoch gaps in the series -- and a cadence gap is
+    # indistinguishable from a crash-restart gap. An unrecorded env knob that
+    # changes what a run measured is a provenance defect this project has
+    # already been bitten by (`object_tile_fraction` silently defaulting).
+    record = {"epoch": epoch_number, "val_cadence": val_cadence(), **stats}
     append_val_record(run_dir_path, record)
     emit_log(
         f"epoch {epoch_number} val_loss_mean={stats['val_loss_mean']:.5f} "
@@ -1104,16 +1125,20 @@ def _evaluate_and_write(
     if stats is None:
         return None
 
+    cadence = val_cadence()
     val_stats = {
         "val_loss_mean": stats["val_loss_mean"],
         "val_batches": stats["val_batches"],
         "val_terms_mean": stats["val_terms_mean"],
+        "val_cadence": cadence,
         "note": "informational only; checkpoint selection is always 'last'",
     }
     metrics_path = run_dir_path / "val_stats.json"
     metrics_path.write_text(json.dumps(val_stats, indent=2), encoding="utf-8")
     if epoch_number is not None:
-        append_val_record(run_dir_path, {"epoch": epoch_number, **stats})
+        append_val_record(
+            run_dir_path, {"epoch": epoch_number, "val_cadence": cadence, **stats}
+        )
     return metrics_path
 
 

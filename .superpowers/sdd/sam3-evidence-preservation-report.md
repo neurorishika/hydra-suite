@@ -28,6 +28,8 @@
   both places a future reader would be tempted: the `_record_epoch_validation` docstring
   and the `_evaluate_split` docstring.
 - Cadence knob: `HYDRA_SAM3_VAL_EVERY` (default 1 = every epoch), read via `val_cadence()`.
+  The effective cadence is stamped into every series record and into `val_stats.json`, so a
+  cadence gap can never be mistaken for a crash-restart gap.
   An env var rather than a `Sam3LoraParams` field, so there is no spec.json / dialog /
   params-threading ripple. The final epoch is recorded regardless of cadence.
 
@@ -43,8 +45,12 @@
   repeatedly drop the middle-most survivor. Never a sliding window; the earliest epochs —
   the stall evidence — are never the first casualty, and the checkpoint just written is
   never deleted.
-- Fails OPEN: if `disk_usage` raises, the budget is `None`, nothing is deleted, and the
-  reason is logged. A failed measurement must never masquerade as a binding budget.
+- Fails OPEN across the WHOLE measurement: any `OSError` from `disk_usage` **or** from
+  stat-ing the checkpoints returns `None`/`[]`, deletes nothing, and logs why. Two reasons:
+  a failed measurement must never masquerade as a binding budget, and this runs inside
+  `_write_epoch_checkpoint`, so an escaping `OSError` (stat racing an unlink, stale NFS
+  handle) would propagate into `run_training` and kill the run -- the count-based pruner it
+  replaced made no stat calls and could not do that.
 - `enforce_checkpoint_budget(directory)` applies the plan, deletes each `.complete.json`
   marker with its artifact, and `emit_log`s LOUDLY with the measured numbers that forced
   the prune.
@@ -55,14 +61,19 @@
 
 ## Tests
 - Before: **408 passed, 5 skipped** (`-k sam3`).
-- After: **418 passed, 5 skipped**.
-- TDD: 12 new tests written first, all 11 observed failing, then implemented. The two old
+- After: **422 passed, 5 skipped**.
+- TDD: 16 new tests written first, all 11 observed failing, then implemented. The two old
   sliding-window tests were rewritten to the new policy (keeping their marker-deletion and
   safe-on-missing-directory assertions). New coverage: budget-allows-keep-all,
   thin-middle-keep-ends, never-delete-just-written, budget-is-derived-not-hardcoded,
   markers+loud-log, missing-dir safety, JSONL append, cadence env parsing (incl. garbage),
   RNG save/restore present, loss decomposition + elapsed_s recorded, anti-correlation
-  comment present, unmeasurable-budget-retains-everything. `import sam3` is unavailable on macOS, so the live-model paths are
+  comment present, unmeasurable-budget-retains-everything, stat-failure-skips-pruning.
+- The RNG restore is pinned BEHAVIOURALLY, not by source grep: a stub model plus an
+  `_evaluate_split` stub that burns the python/numpy/torch streams (both on the success and
+  the raising path). Mutation-checked -- deleting any one of the three restore lines fails
+  2 tests. The `torch.cuda` restore line is unexercised on this box (no CUDA) and remains
+  read-verified only. `import sam3` is unavailable on macOS, so the live-model paths are
   covered by source/stub assertions, as the existing file already does.
 
 ## Measured per-epoch validation cost

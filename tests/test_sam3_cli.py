@@ -621,6 +621,168 @@ def test_per_epoch_validation_cannot_perturb_training():
     assert "model.train()" in source
 
 
+class _RngBurningModel:
+    """Stub standing in for the SAM3 image model on the no-`sam3` box.
+
+    Records mode transitions; the evaluation stub burns every RNG stream so a
+    missing restore is observable rather than merely un-greppable.
+    """
+
+    def __init__(self) -> None:
+        self.training = True
+        self.mode_calls: list[str] = []
+
+    def train(self) -> None:
+        self.training = True
+        self.mode_calls.append("train")
+
+    def eval(self) -> None:
+        self.training = False
+        self.mode_calls.append("eval")
+
+
+def _rng_fingerprint():
+    import random as _random
+
+    import numpy as _np
+    import torch as _torch
+
+    return (
+        _random.getstate(),
+        _np.random.get_state()[1].tobytes(),
+        _torch.get_rng_state().clone(),
+    )
+
+
+def _assert_same_rng(before, after):
+    import torch as _torch
+
+    assert before[0] == after[0], "python RNG stream was not restored"
+    assert before[1] == after[1], "numpy RNG stream was not restored"
+    assert _torch.equal(before[2], after[2]), "torch RNG stream was not restored"
+
+
+def test_mid_run_validation_restores_every_rng_stream(tmp_path, monkeypatch):
+    """The load-bearing property of the whole branch: recording evidence must
+    not move a single number the next epoch draws."""
+    pytest.importorskip("torch")
+    import random as _random
+
+    import numpy as _np
+    import torch as _torch
+
+    from hydra_suite.training.sam3_lora import cli
+
+    def _burn(*_args, **_kwargs):
+        _random.random()
+        _np.random.rand()
+        _torch.rand(4)
+        return {
+            "val_loss_mean": 1.25,
+            "val_batches": 3,
+            "val_terms_mean": {"loss_ce": 1.0},
+            "elapsed_s": 0.5,
+        }
+
+    monkeypatch.setattr(cli, "_evaluate_split", _burn)
+    model = _RngBurningModel()
+
+    _random.seed(7)
+    _np.random.seed(7)
+    _torch.manual_seed(7)
+    before = _rng_fingerprint()
+
+    record = cli._record_epoch_validation(
+        model, None, None, None, None, None, None, True, tmp_path, 2
+    )
+
+    _assert_same_rng(before, _rng_fingerprint())
+    assert model.training, "the model must be returned to train mode"
+    assert record["epoch"] == 2
+    assert record["val_cadence"] == 1, "effective cadence must be stamped"
+
+
+def test_rng_is_restored_even_when_validation_raises(tmp_path, monkeypatch):
+    pytest.importorskip("torch")
+    import random as _random
+
+    import numpy as _np
+    import torch as _torch
+
+    from hydra_suite.training.sam3_lora import cli
+
+    def _burn_then_fail(*_args, **_kwargs):
+        _random.random()
+        _np.random.rand()
+        _torch.rand(4)
+        raise RuntimeError("CUDA OOM during validation")
+
+    monkeypatch.setattr(cli, "_evaluate_split", _burn_then_fail)
+    model = _RngBurningModel()
+
+    _random.seed(11)
+    _np.random.seed(11)
+    _torch.manual_seed(11)
+    before = _rng_fingerprint()
+
+    with pytest.raises(RuntimeError):
+        cli._record_epoch_validation(
+            model, None, None, None, None, None, None, True, tmp_path, 3
+        )
+
+    _assert_same_rng(before, _rng_fingerprint())
+    assert model.training
+
+
+def test_cadence_is_stamped_so_a_gap_is_not_mistaken_for_a_crash(tmp_path, monkeypatch):
+    pytest.importorskip("torch")
+    from hydra_suite.training.sam3_lora import cli
+
+    monkeypatch.setenv(cli.VAL_CADENCE_ENV, "2")
+    monkeypatch.setattr(
+        cli,
+        "_evaluate_split",
+        lambda *a, **k: {
+            "val_loss_mean": 1.0,
+            "val_batches": 1,
+            "val_terms_mean": {},
+            "elapsed_s": 0.1,
+        },
+    )
+    cli._record_epoch_validation(
+        _RngBurningModel(), None, None, None, None, None, None, True, tmp_path, 4
+    )
+    row = json.loads((tmp_path / cli.VAL_SERIES_FILENAME).read_text().strip())
+    assert row["val_cadence"] == 2
+
+
+def test_a_stat_failure_skips_pruning_instead_of_killing_the_run(tmp_path):
+    """Retention is best-effort housekeeping; it runs on the training path and
+    must never raise into `run_training`."""
+    from pathlib import Path as _Path
+
+    from hydra_suite.training.sam3_lora import cli
+
+    paths = _make_checkpoints(tmp_path, 6)
+    original = _Path.stat
+
+    def _boom(self, *args, **kwargs):
+        if self.name.startswith("epoch_"):
+            raise OSError("stale NFS file handle")
+        return original(self, *args, **kwargs)
+
+    messages: list[str] = []
+    _Path.stat = _boom
+    try:
+        removed = cli.enforce_checkpoint_budget(tmp_path, log=messages.append)
+    finally:
+        _Path.stat = original
+
+    assert removed == []
+    assert all(path.exists() for path in paths)
+    assert any("could not be measured" in m for m in messages)
+
+
 def test_val_record_carries_the_full_loss_decomposition_and_its_cost(tmp_path):
     import inspect
 
