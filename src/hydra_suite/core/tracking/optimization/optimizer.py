@@ -484,6 +484,21 @@ _PROPOSAL_METRICS = (
     "crowding",
 )
 
+# This is a search-allocation term only, not a held-out promotion metric.  The
+# saturating transform prevents an outlying cycle loss from dominating the
+# native replay composite before the diverse production shortlist can inspect
+# it.
+_PROPOSAL_CYCLE_TERM_WEIGHT = 0.25
+
+
+def _bounded_cycle_proposal_penalty(cycle_loss: float) -> float:
+    """Map a non-negative cycle loss monotonically into ``[0, weight)``."""
+
+    if not np.isfinite(cycle_loss) or cycle_loss < 0:
+        raise ValueError("cycle_loss must be finite and non-negative")
+    return float(_PROPOSAL_CYCLE_TERM_WEIGHT * cycle_loss / (1.0 + cycle_loss))
+
+
 # Upper real-time limits mirror TrackerKit's seconds-based controls.  Dynamic
 # frame ranges are capped here so every generated candidate remains applyable.
 _LIFECYCLE_MAX_SECONDS = {
@@ -982,9 +997,14 @@ class TrackingOptimizerCore:
             cycle_loss = 10.0
         sub_scores = dict(sub_scores)
         sub_scores["cycle_loss"] = cycle_loss
-        # A non-negative weighted sum is used only to guide Optuna.  Unlike the
-        # old standard-deviation bonus, worsening either term cannot improve it.
-        return float(forward_score + 0.25 * cycle_loss), sub_scores
+        # This bounded, monotonic penalty only guides Optuna.  Unlike the old
+        # unbounded weighted term, a pathological cycle result cannot dominate
+        # the native replay composite or exclude diverse candidates upstream of
+        # held-out production validation.
+        return (
+            float(forward_score + _bounded_cycle_proposal_penalty(cycle_loss)),
+            sub_scores,
+        )
 
     @staticmethod
     def _validation_evaluations(
