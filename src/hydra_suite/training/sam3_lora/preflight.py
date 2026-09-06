@@ -261,8 +261,10 @@ class Sam3PreflightDecision:
     containment_hard_host_bytes: int
     refusals: tuple[str, ...]
     warnings: tuple[str, ...]
-    # Which side of `device_requirement_bytes` produced the device peak.
-    # Defaulted so every existing construction site stays valid.
+    # Which case of `device_requirement_bytes` produced the device peak:
+    # "analytic" (no records), "measured" (records decided at/below an
+    # observed rung), "max_extrapolated" (past the rungs, so max() applied),
+    # or "probe_floor". Defaulted so every construction site stays valid.
     device_peak_provenance: str = "analytic"
     device_peak_analytic_bytes: int = 0
     device_peak_measured_bytes: int = 0
@@ -861,6 +863,7 @@ class DeviceRequirement(NamedTuple):
     provenance: str
     measured_bytes: int
     measured_extrapolated: bool
+    decided_by_measurement: bool = False
 
 
 def device_requirement_bytes(
@@ -868,36 +871,54 @@ def device_requirement_bytes(
     records: Sequence[MemoryMeasurement],
     batch_size: int,
 ) -> DeviceRequirement:
-    """The single authority on device demand: `max(analytic, measured)`.
+    """The single authority on device demand.
 
-    `provenance` is WINNER-based (`"analytic"` or `"measured"`): it answers
-    "what set this number", so it never claims a measurement set a number the
-    analytic estimate set. `measured_extrapolated` is a SEPARATE question --
-    was the measured side evaluated past the largest observed rung -- and is
-    reported independently of which side won, because "analytic won over a
-    guess" and "analytic won over a solid observation" deserve very different
-    levels of trust when someone is diagnosing an OOM.
+    Three cases, and `provenance` names which one applied:
 
-    A MEASUREMENT MAY ONLY RAISE THIS NUMBER, NEVER LOWER IT, and the reason
-    is empirical, not stylistic. On mehek (2026-09-06, one spec, one card,
-    densest-first tile order, changing only the step count) the SAME surface
-    reserved 7.34 GiB after the probe's 2 optimizer steps, 9.93 GiB after 60,
-    and 12.99 GiB by step 320 of a full run -- and that run sat FLAT at
-    10.22 GiB for 230 consecutive steps, across an epoch boundary, before
-    rising twice inside ten steps. No "stable for K steps" stopping rule
-    catches that. Rare dense tiles and allocator fragmentation are simply not
-    sampled by a short probe, so THE PROBE PRODUCES A LOWER BOUND.
-    The cause was later isolated: it is ALLOCATOR FRAGMENTATION, not unlucky
-    tile sampling. From 2 to 60 steps under the default CUDA allocator,
-    RESERVED grew 35% while ALLOCATED grew 2%; under
-    `PYTORCH_CUDA_ALLOC_CONF=expandable_segments:True` the staircase vanishes
-    (6.89 -> 6.91 GiB flat from step 2 to 120). So the probe's number is
-    depressed by an allocator behaviour a short probe cannot observe.
-    The composed analytic estimate for that same configuration was 12.364 GiB --
-    far closer to the truth. Replacing the analytic estimate with the
-    measurement (which an earlier draft of this task specified) would have
-    admitted a run that OOMs minutes in. Do not "simplify" this back to the
-    measurement alone.
+    ==========================  =====================  ===================
+    situation                   requirement            provenance
+    ==========================  =====================  ===================
+    no matching records         analytic estimate      ``"analytic"``
+    records, batch <= top rung  measured envelope      ``"measured"``
+    records, batch > top rung   max(analytic, meas.)   ``"max_extrapolated"``
+    ==========================  =====================  ===================
+
+    `measured_extrapolated` remains a SEPARATE fact -- was the measured side
+    evaluated past the largest observed rung -- and is true exactly on the
+    third row. `decided_by_measurement` says whether the number returned came
+    off the measured side, which is what the measured-safety headroom check
+    keys on; the provenance string is for humans and telemetry.
+
+    WHY A MEASUREMENT MAY NOW DECIDE (it previously could only RAISE the
+    analytic estimate). The original rule was empirical: on mehek the SAME
+    surface reserved 7.34 GiB after a 2-step probe, 9.93 GiB after 60, and
+    12.99 GiB by step 320 of a full run, so the probe was a lower bound and
+    trusting it would have admitted a run that OOMs minutes in. That growth
+    was later isolated to ALLOCATOR FRAGMENTATION, not the workload: reserved
+    grew 35% while allocated grew 2%. Under
+    `PYTORCH_CUDA_ALLOC_CONF=expandable_segments:True` it does not happen --
+    reserved is flat 6.89 -> 6.91 GiB from step 2 to 120, and a full 2430-step
+    run stayed flat across eight epoch boundaries with the
+    reserved-minus-allocated gap constant at ~0.49 GiB.
+
+    Three things had to become true together, and all three now are:
+
+    1. `sam3_env_environ()` HARDCODES that flag, so every probe child and
+       every training child runs under it.
+    2. The allocator config is hashed into the profile fingerprint's
+       `backend` (`autobatch.sidecar_alloc_conf_hash`), so a record taken
+       under the default allocator cannot match an expandable run. Stale
+       records cannot decide; they are not even returned.
+    3. `PROBE_STEPS` is 30, which reaches the -2.82% truncation plateau (see
+       that constant), well inside the 0.80/0.85 safety fractions applied
+       downstream.
+
+    THE EXTRAPOLATION GUARD IS NOT NEGOTIABLE. Past the largest observed
+    rung, `measured_envelope_bytes` is a linear FIT -- a guess, not an
+    observation -- and records at n=1,2 must never authorise a measured-only
+    verdict at n=8. There the old `max(analytic, measured)` still applies, and
+    the analytic estimate is retained (never deleted) as the fallback for
+    every workload that has never been probed.
 
     No `precision_multiplier` is ever applied to a measurement: precision is
     part of the profile fingerprint, so a record only matches a run of the
@@ -906,12 +927,16 @@ def device_requirement_bytes(
 
     analytic = int(analytic_bytes)
     if not records:
-        return DeviceRequirement(analytic, "analytic", 0, False)
+        return DeviceRequirement(analytic, "analytic", 0, False, False)
     measured = measured_envelope_bytes(records, batch_size)
     extrapolated = batch_size > max(record.settings.batch_size for record in records)
-    if measured <= analytic:
-        return DeviceRequirement(analytic, "analytic", measured, extrapolated)
-    return DeviceRequirement(measured, "measured", measured, extrapolated)
+    if not extrapolated:
+        # At or below an observed rung the envelope is anchored by real
+        # observations, so it decides -- upward OR downward.
+        return DeviceRequirement(measured, "measured", measured, False, True)
+    if measured > analytic:
+        return DeviceRequirement(measured, "max_extrapolated", measured, True, True)
+    return DeviceRequirement(analytic, "max_extrapolated", measured, True, False)
 
 
 def profile_fingerprint_key(identity: ProfileIdentity) -> str:
@@ -1111,6 +1136,7 @@ def build_resource_request(
         ).bytes
     training_device_peak = int(training_device_peak)
     device_steady_bytes = _CHECKPOINT_BYTES if probe_floor else _DEVICE_STEADY_BYTES
+
     device_envelope_label = (
         "probe hard floor (checkpoint + LoRA state + one tile)"
         if probe_floor
@@ -1152,7 +1178,18 @@ def build_resource_request(
                 _TRAIN_HOST_FIXED_BYTES + metadata + lora_cpu_training_state
             ),
             host_peak_bytes=training_host_peak,
-            accelerator_steady_bytes=device_steady_bytes + lora_training_state,
+            # `PhaseEstimate` rejects a peak below its own steady floor, and
+            # rightly so. The analytic estimate can never go below the steady
+            # constants, but a MEASURED envelope now decides on its own and
+            # legitimately can: a real SAM3 LoRA run reserved ~6.9 GiB total,
+            # under the 8 GiB `_DEVICE_STEADY_BYTES` guess for resident
+            # weights alone. The measurement is the authority on the whole
+            # device envelope, so the analytic steady guess yields to it --
+            # never the other way round, which would silently inflate every
+            # measured requirement back to the constant it replaced.
+            accelerator_steady_bytes=min(
+                device_steady_bytes + lora_training_state, training_device_peak
+            ),
             accelerator_peak_bytes=training_device_peak,
             disk_transient_bytes=2 * lora_artifact,
             dominant_allocations=common_allocations
@@ -1299,6 +1336,7 @@ def assess_preflight(
         analytic_device_bytes = 0
         measured_device_bytes = 0
         measured_extrapolated = False
+        device_peak_decided_by_measurement = False
     else:
         analytic_device_bytes = analytic_device_peak_bytes(params, dataset)
         requirement = device_requirement_bytes(
@@ -1309,6 +1347,7 @@ def assess_preflight(
         device_peak_provenance = requirement.provenance
         measured_device_bytes = requirement.measured_bytes
         measured_extrapolated = requirement.measured_extrapolated
+        device_peak_decided_by_measurement = requirement.decided_by_measurement
     device_peak_fingerprint = (
         profile_fingerprint_key(measured_records[0].identity)
         if measured_records
@@ -1335,11 +1374,16 @@ def assess_preflight(
     refusals = list(budget.refusals)
     warnings = list(budget.warnings)
 
-    if device_peak_provenance == "measured":
+    if device_peak_decided_by_measurement:
         # A measurement is a raw envelope with no margin, so the measured
         # path keeps headroom explicitly. Applied ONCE, against raw free
         # device bytes -- never against `budget.usable_accelerator_bytes`,
         # which the policy has already discounted.
+        #
+        # Keyed on "did the measured side produce this number", not on the
+        # provenance STRING: under `max_extrapolated` the measured side can
+        # still win, and that number needs the same headroom it would have
+        # needed under `measured`.
         free_device_bytes = observation.available_accelerator_bytes
         if (
             free_device_bytes is not None

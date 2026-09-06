@@ -788,16 +788,32 @@ def test_a_corrupt_marker_self_heals_on_an_authoritative_ladder(tmp_path, monkey
 def test_selection_never_exceeds_what_the_analytic_estimate_permits(
     tmp_path, monkeypatch
 ):
-    """The item-2 guard, run with the REAL analytic estimate (no stub).
+    """The item-2 guard, re-pointed at the EXTRAPOLATION cap, still un-stubbed.
 
-    A short probe is a lower bound, so measured records can understate the
-    requirement badly. Here the probe says batch 2 costs 10 GiB, which the
-    measured envelope alone would happily admit on a 16 GiB free card
-    (0.8 x 16 = 12.8 GiB budget) -- but the (empty-dataset, rank-16) analytic
-    estimate for batch 2 is ~14.0 GiB (base ~12 GiB + 1 extra item x the
-    measured 2 GiB/item `_EXTRA_BATCH_DEVICE_BYTES`), above that budget.
-    Selection must fall back to batch 1 rather than launch a run that OOMs
-    minutes in.
+    Its original premise -- "a measurement may only raise the analytic
+    estimate" -- no longer holds: with `expandable_segments:True` enforced for
+    the sidecar, the allocator config in the fingerprint, and `PROBE_STEPS`
+    at the -2.82% plateau, a measurement now DECIDES at or below an observed
+    rung. What survives, and what this guard now pins, is
+    `device_requirement_bytes`'s remaining cap: PAST the largest observed
+    rung the measured envelope is a linear fit -- a guess -- so
+    `max(analytic, measured)` still applies there.
+
+    Why this asserts through the shared function rather than on a resolved
+    batch: `memory_profiles.select_batch` iterates only up to the largest
+    observed rung, and an explicit positive batch bypasses
+    `_resolve_measured_batch` entirely, so no batch beyond the rungs is
+    REACHABLE through the auto flow. The beyond-rung case is reached by
+    preflight admission of an explicit batch, through this same one function.
+    Everything here is real: the records come out of the store the real
+    ladder wrote, and the analytic estimate is not stubbed.
+
+    The numbers: the ladder measures batch 1 at 6 GiB and OOMs at 2, so the
+    only rung is 1. A one-point fit extrapolates to 12 GiB at batch 2, which
+    the 0.8 x 16 GiB = 12.8 GiB budget would happily admit -- but the
+    (empty-dataset, rank-16) analytic estimate at batch 2 is ~14.0 GiB (base
+    ~12 GiB + 1 extra item x the measured 2 GiB/item
+    `_EXTRA_BATCH_DEVICE_BYTES`). The cap must win.
     """
 
     harness = _install(
@@ -805,23 +821,38 @@ def test_selection_never_exceeds_what_the_analytic_estimate_permits(
         tmp_path,
         stub_analytic=False,
         free_bytes=16 * GiB,
-        probe_peaks={1: 6 * GiB, 2: 10 * GiB},
+        probe_peaks={1: 6 * GiB},
     )
 
     result = _run(harness, _spec(tmp_path, batch=-1))
-
     assert result["success"]
+
+    # The auto flow itself cannot exceed the observed rung.
     spec_on_disk = json.loads((harness.run_dir / "spec.json").read_text())
-    assert spec_on_disk["sam3_params"]["batch"] == 1, (
-        "the measured envelope alone admits batch 2; the analytic estimate "
-        "does not, and the shared requirement function must win"
-    )
+    assert spec_on_disk["sam3_params"]["batch"] == 1
     resolution = json.loads((harness.run_dir / "batch_resolution.json").read_text())
-    assert resolution["requirement_provenance"] == "analytic"
-    assert resolution[
-        "requirement_bytes"
-    ] == tr.preflight_module.analytic_device_peak_bytes(
-        _spec(tmp_path, batch=-1).sam3_params,
+    assert resolution["requirement_provenance"] == "measured"
+    assert not resolution["requirement_measured_extrapolated"]
+
+    # Now the beyond-rung question, on the records the ladder really wrote.
+    records = MemoryProfileStore(tmp_path / "profiles.json").load()
+    assert [record.settings.batch_size for record in records] == [1]
+    analytic_at_2 = tr.preflight_module.analytic_device_peak_bytes(
+        _spec(tmp_path, batch=2).sam3_params,
         tr.preflight_module.dataset_profile(str(tmp_path / "dataset")),
-        batch_size=1,
+        batch_size=2,
     )
+    fitted_at_2 = 12 * GiB
+    assert fitted_at_2 < analytic_at_2, "the fit must be the LOWER number here"
+
+    requirement = tr.preflight_module.device_requirement_bytes(
+        analytic_at_2, records, 2
+    )
+    assert requirement.bytes == analytic_at_2, (
+        "records observed only at batch 1 must not authorise a measured-only "
+        "verdict at batch 2; the analytic cap must still apply"
+    )
+    assert requirement.provenance == "max_extrapolated"
+    assert requirement.measured_extrapolated
+    assert not requirement.decided_by_measurement
+    assert requirement.measured_bytes == fitted_at_2

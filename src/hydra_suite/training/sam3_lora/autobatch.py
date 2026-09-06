@@ -527,10 +527,30 @@ def sam3_workload_fingerprint(
 MAX_AUTO_BATCH = 8
 PROBE_CANDIDATES: tuple[int, ...] = (1, 2, 4, 8)
 
-# Two full steps THROUGH `optimizer.step()`: the first materialises Adam's
-# lazy exp_avg/exp_avg_sq state, so a one-step probe understates the peak by
-# the whole optimizer state.
-PROBE_STEPS = 2
+# Steps THROUGH `optimizer.step()` per candidate. At least two are needed on
+# principle: the first materialises Adam's lazy exp_avg/exp_avg_sq state, so a
+# one-step probe understates the peak by the whole optimizer state.
+#
+# 30 is chosen from measurement, not taste. Truncation error of a K-step probe
+# against a completed 2430-step run of the same configuration, under the
+# `PYTORCH_CUDA_ALLOC_CONF=expandable_segments:True` that `sam3_env_environ()`
+# now hardcodes for every probe and training child:
+#
+#       2 steps   -6.42%
+#      30 steps   -2.82%
+#      60 steps   -2.82%
+#     120 steps   -2.53%
+#
+# 30 reaches the plateau; 60 buys nothing over it while doubling probe cost
+# (one full model load per candidate, four candidates). Under the DEFAULT
+# allocator the same comparison is -41%, which is why the flag is enforced
+# rather than left to the caller's shell -- and why the allocator config is
+# part of the fingerprint (see `sidecar_alloc_conf_hash`).
+#
+# `PROBE_STEPS` is hashed into the workload fingerprint's `task` payload, so
+# changing it invalidates every stored record. That is INTENDED: records taken
+# with a different probe protocol are measurements of a different thing.
+PROBE_STEPS = 30
 
 # Set to "1" to re-measure even when the store already has records for this
 # exact fingerprint (e.g. after a driver upgrade the key does not capture).

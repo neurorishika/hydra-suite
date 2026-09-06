@@ -2,6 +2,7 @@
 
 from __future__ import annotations
 
+import dataclasses
 import json
 import os
 import subprocess
@@ -106,6 +107,18 @@ def _decision(spec, *, cuda=None, host=None):
     cuda = cuda if cuda is not None else _cuda()
     host = host if host is not None else _host()
     return pf.assess_preflight(spec, cuda_device=cuda, observation=host)
+
+
+def _training_phase(decision):
+    """The training phase estimate.
+
+    `budget.accelerator_peak_bytes` is a MAX over phases, and the model-load
+    phase carries its own `_DEVICE_STEADY_BYTES` floor, so it is the wrong
+    place to read a training-phase requirement that a measurement lowered
+    below that constant.
+    """
+
+    return next(phase for phase in decision.request.phases if phase.name == "training")
 
 
 def _allocation(phase, name):
@@ -1267,13 +1280,22 @@ def _legacy_expression(tmp_path, *, batch, precision="bf16"):
     )
 
 
-def test_a_short_probe_measurement_may_not_lower_the_analytic_estimate(
+def test_a_measurement_at_an_observed_rung_decides_below_the_analytic_estimate(
     tmp_path, monkeypatch
 ):
-    """THE regression guard. A 2-step probe measured 7.34 GiB on the same
-    surface whose real peak reached 12.99 GiB 320 steps in. Letting that
-    measurement replace the analytic estimate would admit a run that OOMs
-    minutes later."""
+    """The rule this file used to encode, deliberately INVERTED.
+
+    It used to read "a 2-step probe measured 7.34 GiB on a surface whose real
+    peak reached 12.99 GiB, so a measurement may only RAISE the analytic
+    estimate". That growth was later isolated to allocator fragmentation:
+    under the `expandable_segments:True` that `sam3_env_environ()` now
+    hardcodes for every probe and training child it does not happen, and a
+    30-step probe under-reads a full run by 2.8% rather than 41%. Since the
+    allocator config is part of the fingerprint, a record taken under the old
+    allocator cannot reach this path at all.
+
+    So at an OBSERVED rung the measurement now decides, downward included.
+    """
 
     _write_coco(tmp_path)
     _install_records(monkeypatch, _records({1: int(7.34 * pf.GiB)}))
@@ -1282,8 +1304,105 @@ def test_a_short_probe_measurement_may_not_lower_the_analytic_estimate(
 
     analytic = _legacy_expression(tmp_path, batch=1)
     assert analytic > 12 * pf.GiB > 7.34 * pf.GiB
-    assert decision.budget.accelerator_peak_bytes == analytic
+    assert _training_phase(decision).accelerator_peak_bytes == int(7.34 * pf.GiB)
+    assert decision.device_peak_measured_bytes == int(7.34 * pf.GiB)
+    assert decision.device_peak_provenance == "measured"
+    assert not decision.device_peak_measured_extrapolated
+    assert decision.device_peak_analytic_bytes == analytic
+
+
+def test_a_measurement_between_rungs_still_decides(tmp_path, monkeypatch):
+    """Interpolation is inside the observed range, so it is not the guarded
+    case: records at 1, 2 and 4 decide at batch 3 without the analytic cap."""
+
+    _write_coco(tmp_path)
+    _install_records(
+        monkeypatch, _records({1: 4 * pf.GiB, 2: 5 * pf.GiB, 4: 7 * pf.GiB})
+    )
+
+    decision = _decision(_spec(tmp_path, batch=3))
+
+    assert decision.device_peak_provenance == "measured"
+    assert not decision.device_peak_measured_extrapolated
+    envelope = pf.measured_envelope_bytes(
+        _records({1: 4 * pf.GiB, 2: 5 * pf.GiB, 4: 7 * pf.GiB}), 3
+    )
+    assert _training_phase(decision).accelerator_peak_bytes == envelope
+    assert envelope < _legacy_expression(tmp_path, batch=3)
+
+
+def test_no_records_leaves_the_analytic_estimate_in_charge(tmp_path, monkeypatch):
+    """The fallback is retained, not deleted: an unprobed workload is still
+    admitted purely on the analytic estimate."""
+
+    _write_coco(tmp_path)
+    _install_records(monkeypatch, ())
+
+    decision = _decision(_spec(tmp_path, batch=2))
+
     assert decision.device_peak_provenance == "analytic"
+    assert decision.device_peak_measured_bytes == 0
+    assert not decision.device_peak_measured_extrapolated
+    assert decision.budget.accelerator_peak_bytes == _legacy_expression(
+        tmp_path, batch=2
+    )
+
+
+def test_a_default_allocator_record_cannot_decide_for_an_expandable_run(
+    tmp_path, monkeypatch
+):
+    """Guard (b), exercised through the REAL identity matching.
+
+    `_install_records` bypasses `records_for`, which would make this
+    tautological. Here `pf._profile_records` returns two records that differ
+    only in the allocator sub-hash inside `backend`, and the real
+    `_stored_records` path (fingerprint -> `records_for` ->
+    `validate_probe_records`) must surface only the expandable one -- so a
+    stale default-allocator measurement can never decide.
+    """
+
+    from hydra_suite.training.sam3_lora import autobatch as ab
+
+    _write_coco(tmp_path)
+    live_hash = ab.sidecar_alloc_conf_hash()
+    stale_hash = ab.sidecar_alloc_conf_hash({})
+    assert live_hash != stale_hash
+    assert live_hash == ab.sidecar_alloc_conf_hash(
+        {"PYTORCH_CUDA_ALLOC_CONF": "expandable_segments:True"}
+    ), "the sidecar environment must hash as expandable_segments"
+
+    live_identity = dataclasses.replace(_identity(), backend=f"env|{live_hash}")
+    stale_identity = dataclasses.replace(_identity(), backend=f"env|{stale_hash}")
+
+    def _record(identity, batch, peak):
+        return MemoryMeasurement(
+            identity=identity,
+            settings=PressureSettings(
+                input_width=1008, input_height=1008, batch_size=batch
+            ),
+            accelerator_kind=AcceleratorKind.CUDA,
+            host_peak_bytes=pf.GiB,
+            accelerator_reserved_peak_bytes=int(peak),
+            observed_at_unix_ns=1,
+        )
+
+    stored = (
+        _record(stale_identity, 1, 3 * pf.GiB),
+        _record(live_identity, 1, 9 * pf.GiB),
+    )
+    monkeypatch.setattr(pf, "_profile_records", lambda: stored)
+    # Only the fingerprint is faked; `records_for` and `validate_probe_records`
+    # are the real ones.
+    monkeypatch.setattr(pf, "_workload_identity", lambda *_a, **_k: live_identity)
+
+    matched = pf._stored_records(_spec(tmp_path, batch=1), _cuda())
+    assert [record.accelerator_reserved_peak_bytes for record in matched] == [
+        9 * pf.GiB
+    ], "the default-allocator record must not survive identity matching"
+
+    decision = _decision(_spec(tmp_path, batch=1))
+    assert decision.device_peak_provenance == "measured"
+    assert _training_phase(decision).accelerator_peak_bytes == 9 * pf.GiB
 
 
 def test_measured_extra_batch_bytes_admits_batch_4_on_a_24gb_card(tmp_path):
@@ -1377,9 +1496,11 @@ def test_the_measured_envelope_is_never_below_an_observation(tmp_path, monkeypat
 
 
 def test_a_batch_beyond_the_observations_is_flagged_extrapolated(tmp_path, monkeypatch):
-    """Provenance stays winner-based; extrapolation is a separate flag, so a
-    reader can tell "analytic won over a guess" from "analytic won over a
-    solid observation"."""
+    """Guard (a): past the top rung the measured side is a FIT, not an
+    observation, so `max(analytic, measured)` still applies and provenance
+    says so (`max_extrapolated`) rather than naming a winner. That string is
+    what distinguishes this case from "analytic decided because there were no
+    records at all"."""
 
     _write_coco(tmp_path)
     _install_records(monkeypatch, _records({1: 40 * pf.GiB}))
@@ -1388,7 +1509,7 @@ def test_a_batch_beyond_the_observations_is_flagged_extrapolated(tmp_path, monke
 
     # fitted: slope 40 GiB/item from a single point -> 80 GiB at batch 2.
     assert decision.budget.accelerator_peak_bytes == 80 * pf.GiB
-    assert decision.device_peak_provenance == "measured"
+    assert decision.device_peak_provenance == "max_extrapolated"
     assert decision.device_peak_measured_extrapolated
 
     # The analytic wins here, yet the measured side is still a guess.
@@ -1398,7 +1519,7 @@ def test_a_batch_beyond_the_observations_is_flagged_extrapolated(tmp_path, monke
     # comfortably below it.
     _install_records(monkeypatch, _records({1: 5 * pf.GiB}))
     small = _decision(_spec(tmp_path, batch=2))
-    assert small.device_peak_provenance == "analytic"
+    assert small.device_peak_provenance == "max_extrapolated"
     assert small.device_peak_measured_extrapolated
     assert not _decision(_spec(tmp_path, batch=1)).device_peak_measured_extrapolated
 

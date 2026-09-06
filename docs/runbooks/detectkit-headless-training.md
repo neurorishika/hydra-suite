@@ -174,16 +174,26 @@ runs.**
 
 `-1` makes HYDRA measure this workload on this card before launching. It walks
 a ladder of contained probe children (batch 1, 2, 4, 8), each a real SAM3 LoRA
-run taken through two full optimizer steps on the densest tiles, and records
+run taken through thirty full optimizer steps on the densest tiles, and records
 the reserved device peak each one reaches. An out-of-memory inside a probe
 child is a **measurement**, not a failure.
 
-The chosen batch then has to be safe under **both** the measurement and a
-conservative analytic estimate — the requirement is `max(analytic, measured)`.
-A measurement may only **raise** the estimate, never lower it, because a short
-probe systematically under-reports (the same run measured 7.34 GiB over two
-steps, 9.93 GiB over sixty, and 12.99 GiB over a full run; the cause is CUDA
-allocator fragmentation).
+What decides the requirement depends on what has been measured:
+
+| Situation | Requirement |
+| --- | --- |
+| No stored record for this workload fingerprint | the analytic estimate |
+| Records exist, and the batch is at or below the largest measured rung | the **measured** envelope, up or down |
+| Records exist, but the batch is beyond the largest measured rung | `max(analytic, measured)` — the measured side is a fitted guess there, not an observation |
+
+A measurement used to be allowed only to **raise** the estimate, because a
+short probe under-reported badly (the same run measured 7.34 GiB over two
+steps, 9.93 GiB over sixty, and 12.99 GiB over a full run). That was CUDA
+allocator fragmentation, not the workload: the sidecar now always runs under
+`PYTORCH_CUDA_ALLOC_CONF=expandable_segments:True`, where a 30-step probe
+under-reads a full run by 2.8% instead of 41%. The allocator config is part of
+the profile fingerprint, so a record taken under the old allocator can never
+be reused.
 
 Be clear-eyed about what that buys you: this is **not** an optimal-batch
 search, and it is not tuned for throughput. The analytic term currently
@@ -214,7 +224,7 @@ path, including the ones shared with the YOLO block:
 | --- | --- |
 | `fingerprint` | The workload key the records were stored under. |
 | `provenance` | `measured` (we probed this run), `cached`, or `explicit`. |
-| `requirement_provenance` | Which side of `max(analytic, measured)` decided the requirement that was cleared. |
+| `requirement_provenance` | Which case decided the requirement that was cleared: `analytic` (no records), `measured` (records decided at or below an observed rung), or `max_extrapolated` (past the rungs, so `max(analytic, measured)` applied). |
 | `requirement_basis` | `measured` if the chosen batch is a rung we actually observed, `extrapolated` if it fell between rungs. |
 | `requirement_bytes` | The requirement the chosen batch cleared. |
 | `requirement_measured_extrapolated` | Whether the measured side of that requirement was itself extrapolated. |

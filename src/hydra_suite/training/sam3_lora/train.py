@@ -513,12 +513,21 @@ def _resolve_measured_batch(
         usable_bytes=free_bytes,
         maximum=autobatch.MAX_AUTO_BATCH,
     )
-    # Selection must clear the SAME requirement admission does. A short probe
-    # is a lower bound (see `preflight.device_requirement_bytes`), so trusting
-    # the measured envelope alone here could pick a batch whose real peak the
-    # analytic estimate already says will not fit -- the identical defect one
-    # layer up. Requirement is monotone in batch, so a downward scan finds the
-    # largest admissible candidate.
+    # Selection must clear the SAME requirement admission does -- one
+    # function, `preflight.device_requirement_bytes`, so selection and
+    # admission cannot disagree by construction.
+    #
+    # What this scan actually catches, now that a measurement DECIDES at or
+    # below an observed rung: `select_batch` never returns a batch above the
+    # largest observed rung, so on the auto path every candidate here is
+    # at/below a rung and the scan re-checks the number `select_batch`
+    # already cleared -- a no-op, deliberately kept rather than deleted so
+    # the two consumers cannot drift if `select_batch` ever widens. The
+    # extrapolation guard inside `device_requirement_bytes` is what protects
+    # a batch BEYOND the rungs (an explicit user batch), where the measured
+    # side is a fitted guess and `max(analytic, measured)` still applies.
+    # Requirement is monotone in batch, so a downward scan finds the largest
+    # admissible candidate.
     profile = preflight_module.dataset_profile(spec.derived_dataset_dir)
     # TWO fractions, deliberately different, do not "fix" this:
     # auto-selection gates at MEASURED_SAFETY_FRACTION (0.80) while
@@ -581,10 +590,19 @@ def _resolve_measured_batch(
         # different questions:
         #   provenance             -- did we probe this run ("measured") or
         #                             reuse a cached/explicit answer?
-        #   requirement_provenance -- which side of max(analytic, measured)
-        #                             decided the requirement we cleared?
+        #   requirement_provenance -- which CASE of
+        #                             `device_requirement_bytes` decided the
+        #                             requirement we cleared: "analytic" (no
+        #                             records), "measured" (records decided),
+        #                             or "max_extrapolated" (past the rungs,
+        #                             so max() applied)?
         #   requirement_basis      -- did `resolved` land on a batch size we
         #                             actually observed, or between rungs?
+        #                             NOTE its "extrapolated" value means
+        #                             BETWEEN rungs (interpolated), which is
+        #                             not the same question as
+        #                             `requirement_measured_extrapolated`,
+        #                             which means PAST the top rung.
         # `measured_envelope_bytes` is NOT a raw observation: at an observed
         # rung it can still exceed that rung's peak when the fitted curve is
         # higher. Named for the envelope it is, not for a measurement it is
