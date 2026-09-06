@@ -15,6 +15,8 @@ from pathlib import Path
 
 import numpy as np
 
+from .geometry_drift import stamped_object_tile_fraction
+
 FRACTION_STEPS: tuple[float, ...] = (0.75, 1.0, 1.5)
 OVERLAP_STEPS: tuple[float, ...] = (0.1, 0.2, 0.3)
 DEFAULT_MAX_TOTAL_TILES = 20000
@@ -64,7 +66,12 @@ def build_candidate_grid(
     overlaps: tuple[float, ...] = OVERLAP_STEPS,
 ) -> list[CandidateGeometry]:
     """Full frame + training geometry + nearby fractions x overlaps (+ custom)."""
-    base_fraction = float(training_geometry.get("object_tile_fraction") or 0.15)
+    # A multi-scale artifact OMITS the bare `object_tile_fraction` (a median
+    # under a measurement's name is how a scale set silently becomes "the
+    # training tile size"), stamping its median as `prefill_object_tile_fraction`
+    # instead. Read through the back-compat reader or every multi-scale model
+    # would silently calibrate around the 0.15 default.
+    base_fraction = float(stamped_object_tile_fraction(training_geometry) or 0.15)
     base_overlap = float(training_geometry.get("overlap") or 0.2)
     mode = str(training_geometry.get("geometry_mode") or "auto_object")
     if mode not in {"auto_model", "auto_object", "custom"}:

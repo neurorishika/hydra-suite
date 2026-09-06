@@ -43,6 +43,26 @@ _RUN_ID = re.compile(r"[A-Za-z0-9][A-Za-z0-9_.-]{0,127}\Z")
 _ATTEMPT_ID = re.compile(r"[0-9a-f]{32}\Z")
 
 
+def _scale_metadata(build_manifest: dict[str, Any]) -> dict[str, Any]:
+    """The trained-geometry block for the sidecar, single- or multi-scale."""
+    scale_set = build_manifest.get("tile_px_set")
+    if not scale_set:
+        return {
+            "train_tile_px": build_manifest.get("tile_px"),
+            "object_tile_fraction": build_manifest.get("object_tile_fraction"),
+        }
+    return {
+        "train_tile_px_set": scale_set,
+        "object_tile_fractions": build_manifest.get("object_tile_fractions"),
+        "full_frame_mix": bool(build_manifest.get("full_frame_mix")),
+        "scale_range_px": build_manifest.get("scale_range_px"),
+        "prefill_train_tile_px": build_manifest.get("prefill_tile_px"),
+        "prefill_object_tile_fraction": build_manifest.get(
+            "prefill_object_tile_fraction"
+        ),
+    }
+
+
 def stripped_keys(state_dict: dict[str, Any]) -> list[str]:
     """Reproduce ultralytics' substring filter and replacement exactly."""
 
@@ -264,9 +284,16 @@ def publish_sam3_artifact(
             "adapted_modules": adapted_modules,
             "adapter_trainable_params": adapter_trainable_params,
             "prompt": getattr(params, "prompt", ""),
-            "train_tile_px": build_manifest.get("tile_px"),
+            # Single-scale keeps the exact legacy shape (a scalar
+            # `train_tile_px`, which is what both already-published
+            # checkpoints carry). A multi-scale artifact stamps the WHOLE set
+            # and omits the bare scalars, carrying its median only under
+            # explicitly-named `prefill_*` keys -- read back by
+            # `geometry_drift.stamped_tile_px_set` /
+            # `stamped_object_tile_fraction`, which accept both shapes so no
+            # existing sidecar stops loading.
+            **_scale_metadata(build_manifest),
             "reference_body_px": build_manifest.get("reference_body_px"),
-            "object_tile_fraction": build_manifest.get("object_tile_fraction"),
             "imgsz": PREDICTOR_IMGSZ,
             "stripped_keys": stripped_keys(merged),
             "tuned_fingerprints": tuned_fingerprints,
