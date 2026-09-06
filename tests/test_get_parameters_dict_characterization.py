@@ -284,10 +284,20 @@ RESOLVER_DEPENDENT_DROPPED_KEYS = {
     "ENABLE_GPU_BACKGROUND",
     "ENABLE_TENSORRT",
     "ENABLE_ONNX_RUNTIME",
+    "RUNTIME_TIER",
     "TENSORRT_MAX_BATCH_SIZE",
 }
 
-DROPPED_KEYS = HOST_DEPENDENT_DROPPED_KEYS | RESOLVER_DEPENDENT_DROPPED_KEYS
+# Internal runtime payloads are covered by their focused integration contracts.
+# Pinning the full project snapshot here would duplicate every fixture key inside
+# each golden and make unrelated project-config edits look like GUI overlay drift.
+PRIVATE_RUNTIME_DROPPED_KEYS = {"INFERENCE_AUTOTUNE_PROJECT_CONFIG"}
+
+DROPPED_KEYS = (
+    HOST_DEPENDENT_DROPPED_KEYS
+    | RESOLVER_DEPENDENT_DROPPED_KEYS
+    | PRIVATE_RUNTIME_DROPPED_KEYS
+)
 
 
 @pytest.fixture(scope="module")
