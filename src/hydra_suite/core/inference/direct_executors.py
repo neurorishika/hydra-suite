@@ -13,6 +13,7 @@ from __future__ import annotations
 import ast
 import json
 import struct
+from collections import OrderedDict
 from pathlib import Path
 from typing import TYPE_CHECKING, Sequence
 
@@ -20,6 +21,11 @@ if TYPE_CHECKING:
     import torch
 
 import numpy as np
+
+# Dynamic TRT profiles can legally receive many batch sizes.  Keep the working
+# set small instead of turning a long SAHI run into an unbounded shape cache.
+_MAX_REUSABLE_BATCH_BUFFERS = 4
+_MAX_REUSABLE_OUTPUT_BUFFERS = 4
 
 
 def _parse_meta_bool(value, default: bool = False) -> bool:
@@ -75,10 +81,63 @@ class _BaseDirectOBBExecutor:
         self._gpu_input = torch.empty(
             (1, 3, self.imgsz, self.imgsz), dtype=torch.float32, device="cuda:0"
         )
+        # Slots contain (pinned uint8 staging, CUDA float input).  The common
+        # B=1 slot above remains the canonical fast path; extra slots make
+        # multi-image SAHI chunks just as allocation-free.  The bounded set
+        # prevents dynamic engines from caching every observed batch size.
+        self._input_buffers: OrderedDict[int, tuple] = OrderedDict(
+            [(1, (self._pinned_input, self._gpu_input))]
+        )
 
-    def _preprocess(self, frames: Sequence[np.ndarray]):
+    def _input_buffer(self, batch_size: int):
+        """Return a bounded pinned-host/CUDA input slot for ``batch_size``."""
         import torch
 
+        batch_size = max(1, int(batch_size))
+        cached = self._input_buffers.pop(batch_size, None)
+        if cached is not None:
+            self._input_buffers[batch_size] = cached
+            return cached
+        # This hook is a no-op except for TensorRT, where it queues a
+        # device-side dependency before overwriting a buffer still read by its
+        # private stream.
+        self._wait_input_reusable()
+        if len(self._input_buffers) < _MAX_REUSABLE_BATCH_BUFFERS:
+            slot = (
+                torch.empty(
+                    (batch_size, 3, self.imgsz, self.imgsz),
+                    dtype=torch.uint8,
+                    pin_memory=True,
+                ),
+                torch.empty(
+                    (batch_size, 3, self.imgsz, self.imgsz),
+                    dtype=torch.float32,
+                    device="cuda:0",
+                ),
+            )
+            self._input_buffers[batch_size] = slot
+        else:
+            # Do not evict a tensor whose raw pointer may still be owned by a
+            # foreign execution stream.  Rare shapes beyond the bounded working
+            # set use an uncached exact slot; the cache itself remains bounded.
+            slot = (
+                torch.empty(
+                    (batch_size, 3, self.imgsz, self.imgsz),
+                    dtype=torch.uint8,
+                    pin_memory=True,
+                ),
+                torch.empty(
+                    (batch_size, 3, self.imgsz, self.imgsz),
+                    dtype=torch.float32,
+                    device="cuda:0",
+                ),
+            )
+        return slot
+
+    def _wait_input_reusable(self) -> None:
+        """Hook for runtimes with a private CUDA execution stream."""
+
+    def _preprocess(self, frames: Sequence[np.ndarray]):
         if not frames:
             raise ValueError("direct OBB executor received no frames")
 
@@ -98,6 +157,7 @@ class _BaseDirectOBBExecutor:
             # pre-allocated CUDA float tensor with a non-blocking async DMA copy.
             # This avoids per-call CUDA memory allocations and the associated
             # allocator-induced latency spikes.
+            self._wait_input_reusable()
             lb_frame = self._letterbox(image=frames[0])
             if lb_frame.ndim != 3 or lb_frame.shape[2] != 3:
                 raise ValueError("direct OBB executor expects HxWx3 BGR frames")
@@ -112,17 +172,19 @@ class _BaseDirectOBBExecutor:
             self._gpu_input.mul_(1.0 / 255.0)
             return self._gpu_input
 
-        # Multi-frame path: build a batched uint8 array and transfer in one shot.
-        batch = []
-        for frame in frames:
+        # Multi-frame path: fill reusable pinned staging directly.  This keeps
+        # the exact transpose/BGR→RGB conversion used above while avoiding both
+        # np.stack and a transient CUDA tensor for every SAHI chunk.
+        pinned, gpu = self._input_buffer(len(frames))
+        self._wait_input_reusable()
+        for index, frame in enumerate(frames):
             lb_frame = self._letterbox(image=frame)
             if lb_frame.ndim != 3 or lb_frame.shape[2] != 3:
                 raise ValueError("direct OBB executor expects HxWx3 BGR frames")
-            batch.append(np.ascontiguousarray(lb_frame.transpose(2, 0, 1)[::-1]))
-        batch_uint8 = np.stack(batch, axis=0)
-        return (
-            torch.from_numpy(batch_uint8).to(device="cuda:0").float().mul_(1.0 / 255.0)
-        )
+            np.copyto(pinned.numpy()[index], lb_frame.transpose(2, 0, 1)[::-1])
+        gpu.copy_(pinned, non_blocking=True)
+        gpu.mul_(1.0 / 255.0)
+        return gpu
 
     def _preprocess_cuda(self, cuda_rgb_hwc: "torch.Tensor") -> "torch.Tensor":
         """GPU-only preprocessing for frames decoded directly to CUDA memory.
@@ -138,6 +200,7 @@ class _BaseDirectOBBExecutor:
         import torch
         import torch.nn.functional as F
 
+        self._wait_input_reusable()
         H, W = int(cuda_rgb_hwc.shape[0]), int(cuda_rgb_hwc.shape[1])
         r = min(self.imgsz / H, self.imgsz / W)
         new_h = int(H * r)
@@ -177,8 +240,9 @@ class _BaseDirectOBBExecutor:
         import torch
         import torch.nn.functional as F
 
-        processed = []
-        for cuda_rgb_hwc in cuda_frames:
+        _, output = self._input_buffer(len(cuda_frames))
+        self._wait_input_reusable()
+        for index, cuda_rgb_hwc in enumerate(cuda_frames):
             H, W = int(cuda_rgb_hwc.shape[0]), int(cuda_rgb_hwc.shape[1])
             r = min(self.imgsz / H, self.imgsz / W)
             new_h = int(H * r)
@@ -195,8 +259,8 @@ class _BaseDirectOBBExecutor:
             pad_right = self.imgsz - new_w - pad_left
             if pad_top or pad_bot or pad_left or pad_right:
                 t = F.pad(t, (pad_left, pad_right, pad_top, pad_bot), value=114.0)
-            processed.append(t.squeeze(0).mul_(1.0 / 255.0))  # [3, H, W]
-        return torch.stack(processed, dim=0)  # [N, 3, H, W]
+            output[index].copy_(t.squeeze(0).mul_(1.0 / 255.0))
+        return output
 
     def predict_from_cuda_frame(
         self,
@@ -229,7 +293,7 @@ class _BaseDirectOBBExecutor:
             orig_w,
         ):
             self._dummy_orig = np.empty((orig_h, orig_w, 3), dtype=np.uint8)
-        return self._postprocess(
+        results = self._postprocess(
             raw_preds,
             img_tensor,
             [self._dummy_orig],
@@ -237,6 +301,8 @@ class _BaseDirectOBBExecutor:
             classes=classes,
             max_det=max_det,
         )
+        self._release_output(raw_preds)
+        return results
 
     def _postprocess(
         self,
@@ -374,7 +440,7 @@ class _BaseDirectOBBExecutor:
             img_tensor = self._preprocess(frames)
             orig_frames = list(frames)
         raw_preds = self._run_inference(img_tensor)
-        return self._postprocess(
+        results = self._postprocess(
             raw_preds,
             img_tensor,
             orig_frames,
@@ -382,6 +448,11 @@ class _BaseDirectOBBExecutor:
             classes=classes,
             max_det=max_det,
         )
+        self._release_output(raw_preds)
+        return results
+
+    def _release_output(self, raw_preds) -> None:
+        """Hook called after postprocessing has queued all reads of an output."""
 
     def _run_inference(self, img_tensor):
         raise NotImplementedError
@@ -650,6 +721,12 @@ class DirectTensorRTOBBExecutor(_BaseDirectOBBExecutor):
         # CUDA event used to synchronize preprocessing (default stream) →
         # TRT inference (dedicated stream) without blocking the CPU.
         self._sync_event = torch.cuda.Event()
+        # The two events close the ownership loop without CPU synchronization:
+        # input_done protects a reusable input from the TRT reader; output_done
+        # protects a reusable output from NMS/scaling on PyTorch's stream.
+        self._input_done_event = torch.cuda.Event()
+        self._output_buffers: OrderedDict[tuple[int, ...], tuple] = OrderedDict()
+        self._active_output_event = None
 
         # Warm up the TRT engine immediately after construction to trigger JIT kernel
         # compilation on Ada/Hopper GPUs ("compiler backend").  Without this, the
@@ -674,7 +751,7 @@ class DirectTensorRTOBBExecutor(_BaseDirectOBBExecutor):
         x = img_tensor.float().contiguous()
         self.context.set_input_shape(self._input_name, tuple(x.shape))
         out_shape = tuple(self.context.get_tensor_shape(self._output_name))
-        output = torch.empty(out_shape, dtype=torch.float32, device=x.device)
+        output, prior_consumer = self._output_buffer(out_shape, x.device)
         self.context.set_tensor_address(self._input_name, x.data_ptr())
         self.context.set_tensor_address(self._output_name, output.data_ptr())
         # Record a CUDA event on the current (default) stream so that any
@@ -684,9 +761,53 @@ class DirectTensorRTOBBExecutor(_BaseDirectOBBExecutor):
         # the CPU while still creating the necessary GPU-side ordering dependency.
         self._sync_event.record(torch.cuda.current_stream())
         self._cuda_stream.wait_event(self._sync_event)
+        if prior_consumer is not None:
+            self._cuda_stream.wait_event(prior_consumer)
         self.context.execute_async_v3(self._cuda_stream.cuda_stream)
-        self._cuda_stream.synchronize()
+        # Let PyTorch's allocator retain external-stream storage if a bounded
+        # dynamic-shape cache evicts a completed slot later.
+        x.record_stream(self._cuda_stream)
+        output.record_stream(self._cuda_stream)
+        self._input_done_event.record(self._cuda_stream)
+        # Postprocessing runs on PyTorch's current stream.  Queue its dependency
+        # rather than synchronizing the host after each SAHI tile chunk.
+        torch.cuda.current_stream().wait_event(self._input_done_event)
         return output
+
+    def _output_buffer(self, shape: tuple[int, ...], device):
+        """Get a bounded reusable output and its last consumer event."""
+        import torch
+
+        cached = self._output_buffers.pop(shape, None)
+        if cached is None:
+            cached = (torch.empty(shape, dtype=torch.float32, device=device), None)
+        self._output_buffers[shape] = cached
+        if len(self._output_buffers) > _MAX_REUSABLE_OUTPUT_BUFFERS:
+            self._output_buffers.popitem(last=False)
+        self._active_output_event = cached[1]
+        return cached
+
+    def _wait_input_reusable(self) -> None:
+        # The default stream must not overwrite an input until TRT's private
+        # stream has finished reading it.  This is only a queued dependency.
+        event = getattr(self, "_input_done_event", None)
+        if event is not None:
+            import torch
+
+            torch.cuda.current_stream().wait_event(event)
+
+    def _release_output(self, raw_preds) -> None:
+        import torch
+
+        if not isinstance(raw_preds, torch.Tensor):
+            return
+        shape = tuple(raw_preds.shape)
+        cached = self._output_buffers.get(shape)
+        if cached is None or cached[0] is not raw_preds:
+            return
+        event = torch.cuda.Event()
+        event.record(torch.cuda.current_stream())
+        self._output_buffers[shape] = (raw_preds, event)
 
 
 class DirectPyTorchCUDAOBBExecutor(_BaseDirectOBBExecutor):
@@ -1186,6 +1307,10 @@ class DirectTensorRTSegmentExecutor(_BaseDirectOBBExecutor):
 
         self._cuda_stream = torch.cuda.Stream()
         self._sync_event = torch.cuda.Event()
+        self._input_done_event = torch.cuda.Event()
+        self._output_buffers: OrderedDict[
+            tuple[tuple[int, ...], tuple[int, ...]], tuple
+        ] = OrderedDict()
 
         try:
             _warmup = torch.zeros(
@@ -1207,16 +1332,54 @@ class DirectTensorRTSegmentExecutor(_BaseDirectOBBExecutor):
         self.context.set_input_shape(self._input_name, tuple(x.shape))
         det_shape = tuple(self.context.get_tensor_shape(self._det_name))
         proto_shape = tuple(self.context.get_tensor_shape(self._proto_name))
-        det_out = torch.empty(det_shape, dtype=torch.float32, device=x.device)
-        proto_out = torch.empty(proto_shape, dtype=torch.float32, device=x.device)
+        key = (det_shape, proto_shape)
+        cached = self._output_buffers.pop(key, None)
+        if cached is None:
+            cached = (
+                torch.empty(det_shape, dtype=torch.float32, device=x.device),
+                torch.empty(proto_shape, dtype=torch.float32, device=x.device),
+                None,
+            )
+        det_out, proto_out, prior_consumer = cached
+        self._output_buffers[key] = cached
+        if len(self._output_buffers) > _MAX_REUSABLE_OUTPUT_BUFFERS:
+            self._output_buffers.popitem(last=False)
         self.context.set_tensor_address(self._input_name, x.data_ptr())
         self.context.set_tensor_address(self._det_name, det_out.data_ptr())
         self.context.set_tensor_address(self._proto_name, proto_out.data_ptr())
         self._sync_event.record(torch.cuda.current_stream())
         self._cuda_stream.wait_event(self._sync_event)
+        if prior_consumer is not None:
+            self._cuda_stream.wait_event(prior_consumer)
         self.context.execute_async_v3(self._cuda_stream.cuda_stream)
-        self._cuda_stream.synchronize()
+        x.record_stream(self._cuda_stream)
+        det_out.record_stream(self._cuda_stream)
+        proto_out.record_stream(self._cuda_stream)
+        self._input_done_event.record(self._cuda_stream)
+        torch.cuda.current_stream().wait_event(self._input_done_event)
         return det_out, proto_out
+
+    def _wait_input_reusable(self) -> None:
+        import torch
+
+        torch.cuda.current_stream().wait_event(self._input_done_event)
+
+    def _release_output(self, raw_preds) -> None:
+        if not isinstance(raw_preds, tuple) or len(raw_preds) != 2:
+            return
+        key = (tuple(raw_preds[0].shape), tuple(raw_preds[1].shape))
+        cached = self._output_buffers.get(key)
+        if (
+            cached is None
+            or cached[0] is not raw_preds[0]
+            or cached[1] is not raw_preds[1]
+        ):
+            return
+        import torch
+
+        event = torch.cuda.Event()
+        event.record(torch.cuda.current_stream())
+        self._output_buffers[key] = (*raw_preds, event)
 
     def _postprocess(
         self,
