@@ -33,6 +33,7 @@ import time
 from pathlib import Path
 from typing import Any, Callable, Sequence
 
+from hydra_suite.runtime.process_supervisor import WorkloadStillOwnedError
 from hydra_suite.runtime.resource_budget import AcceleratorKind
 from hydra_suite.training.contracts import TrainingHyperParams
 
@@ -277,13 +278,35 @@ def resolve_yolo_batch(
     child_spec = replace(
         spec,
         device=normalized,
-        hyperparams=replace(spec.hyperparams, batch=fallback, epochs=1),
+        hyperparams=replace(spec.hyperparams, batch=fallback),
     )
     log("auto batch: asking Ultralytics to size the batch before launch.")
-    result = dict(run_child(command, child_spec) or {})
-    if result.get("canceled"):
-        raise ResolutionCanceled("YOLO batch resolution canceled.")
-    if cancelled():
+    try:
+        result = dict(run_child(command, child_spec) or {})
+    except WorkloadStillOwnedError:
+        # The ONE exception that must not become a fallback. Falling back would
+        # launch training on top of a child that may still be alive and still
+        # holding the device lease; that is worse than failing, and it is an
+        # ownership violation rather than a resolution failure.
+        raise
+    except Exception as exc:  # noqa: BLE001 - resolution must never kill a run
+        # The launcher raises on several real paths: the CUDA device vanishing
+        # between the parent's probe and the child, and -- pointedly -- a
+        # failure of the child's OUTPUT channel, which is the very condition
+        # that made us read a file instead of a stdout marker. Letting any of
+        # them out would abort the training run over a batch-size estimate.
+        report.unlink(missing_ok=True)
+        log(
+            "auto batch: the resolution child raised "
+            f"({type(exc).__name__}: {exc}), so nothing was resolved -- "
+            f"falling back to batch={fallback}."
+        )
+        return fallback, "fallback"
+    if result.get("canceled") or cancelled():
+        # Cancellation writes NO resolution. A successful child that we then
+        # cancelled on would otherwise leave its report on disk, describing a
+        # run that never launched.
+        report.unlink(missing_ok=True)
         raise ResolutionCanceled("YOLO batch resolution canceled.")
 
     if not result.get("success"):
@@ -304,12 +327,16 @@ def resolve_yolo_batch(
 
     resolved = min(YOLO_MAX_AUTO_BATCH, max(1, reported))
     if resolved != reported:
+        why = (
+            f"above {YOLO_MAX_AUTO_BATCH}, the largest batch Ultralytics "
+            "actually profiles rather than extrapolates to from a linear fit"
+            if reported > YOLO_MAX_AUTO_BATCH
+            else "not a runnable batch at all"
+        )
         log(
-            f"auto batch: Ultralytics reported {reported}, which is outside "
-            f"[1, {YOLO_MAX_AUTO_BATCH}] -- the range it actually profiles "
-            f"rather than extrapolates. Clamped to {resolved}. This is "
-            "Ultralytics' estimate, not a measured peak; the OOM-retry ladder "
-            "protects the run."
+            f"auto batch: Ultralytics reported {reported}, which is {why}. "
+            f"Clamped to {resolved}. This is Ultralytics' estimate, not a "
+            "measured peak; the OOM-retry ladder protects the run."
         )
         return resolved, "ultralytics_autobatch_clamped"
     log(

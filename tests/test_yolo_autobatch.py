@@ -3,6 +3,7 @@
 from __future__ import annotations
 
 import json
+import os
 from pathlib import Path
 
 import pytest
@@ -27,7 +28,7 @@ def _spec(tmp_path, batch, *, imgsz=64, device="cpu"):
     )
 
 
-def _child(*, writes=None, fails=False, canceled=False, seen=None):
+def _child(*, writes=None, fails=False, canceled=False, raises=None, seen=None):
     """A fake resolution child that WRITES a file (it never prints a line)."""
 
     def run_child(command, spec):
@@ -35,6 +36,8 @@ def _child(*, writes=None, fails=False, canceled=False, seen=None):
             seen.append(tuple(command))
         command = [str(item) for item in command]
         out = Path(command[command.index("--out") + 1])
+        if raises is not None:
+            raise raises
         if writes is not None:
             out.parent.mkdir(parents=True, exist_ok=True)
             out.write_text(json.dumps({"resolved": writes}), encoding="utf-8")
@@ -149,6 +152,9 @@ def test_cancellation_during_resolution_raises_and_launches_nothing(tmp_path):
 
 
 def test_the_resolution_block_matches_the_sam3_schema(tmp_path):
+    """The key set of SAM3's EXPLICIT block. SAM3's MEASURED block additionally
+    carries `requirement_provenance`/`requirement_measured_extrapolated`, which
+    describe a probe this path does not run; consumers read by key."""
     from hydra_suite.training.yolo_autobatch import batch_resolution_block
 
     block = batch_resolution_block(-1, 24, "ultralytics_autobatch")
@@ -179,7 +185,10 @@ def test_the_child_command_carries_the_run_geometry(tmp_path):
     command = [str(item) for item in seen[0]]
     assert "hydra_suite.training.yolo_autobatch" in command
     assert str(tmp_path / "batch_resolution.json") in command
-    assert "64" in command  # imgsz
+    assert command[command.index("--imgsz") + 1] == "64"
+    assert command[command.index("--out") + 1] == str(
+        tmp_path / "batch_resolution.json"
+    )
     assert command[command.index("--device") + 1] == "cuda:0"
 
 
@@ -313,3 +322,107 @@ def test_the_resolution_child_is_classified_as_cuda_for_a_bare_ordinal(tmp_path)
         run_child=run_child,
     )
     assert seen == ["cuda:0"]
+
+
+def test_a_raising_launcher_falls_back_instead_of_killing_the_run(tmp_path):
+    """The injected launcher RAISES on real paths -- the CUDA device vanishing
+    between probe and child, and a failure of the child's output channel, which
+    is the very condition that made us read a file rather than a stdout marker.
+    Resolution must never abort a training run over a batch-size estimate."""
+    for error in (
+        RuntimeError("the requested CUDA device is unavailable"),
+        OSError("output channel failed"),
+        ValueError("nonsense"),
+    ):
+        batch, provenance = _resolve(tmp_path, raises=error)
+        assert batch >= 1
+        assert provenance == "fallback"
+
+
+def test_a_raising_launcher_leaves_no_resolution_on_disk(tmp_path):
+    (tmp_path / "batch_resolution.json").write_text(
+        json.dumps({"resolved": 512}), encoding="utf-8"
+    )
+    _resolve(tmp_path, raises=RuntimeError("boom"))
+    assert not (tmp_path / "batch_resolution.json").exists()
+
+
+def test_a_still_owned_workload_is_re_raised_not_swallowed(tmp_path):
+    """Falling back here would launch training on top of a child that may
+    still be alive and still holding the lease. That is an ownership
+    violation, not a resolution failure."""
+    from hydra_suite.runtime.process_supervisor import WorkloadStillOwnedError
+
+    owner = object()
+    with pytest.raises(WorkloadStillOwnedError) as caught:
+        _resolve(tmp_path, raises=WorkloadStillOwnedError("still owned", owner))
+    assert caught.value.sidecar is owner
+
+
+def test_cancelling_after_a_successful_child_writes_no_resolution(tmp_path):
+    """The child succeeded and wrote its report, but the run never launched --
+    leaving that file would describe a resolution for a run that did not
+    happen."""
+    from hydra_suite.training.yolo_autobatch import ResolutionCanceled
+
+    with pytest.raises(ResolutionCanceled):
+        _resolve(tmp_path, writes=24, should_cancel=lambda: True)
+    assert not (tmp_path / "batch_resolution.json").exists()
+
+    with pytest.raises(ResolutionCanceled):
+        _resolve(tmp_path, writes=24, canceled=True)
+    assert not (tmp_path / "batch_resolution.json").exists()
+
+
+def test_the_clamp_log_says_the_right_thing_in_both_directions(tmp_path):
+    high: list[str] = []
+    low: list[str] = []
+    from hydra_suite.training.yolo_autobatch import resolve_yolo_batch
+
+    for writes, logged in ((1024, high), (0, low)):
+        resolve_yolo_batch(
+            _spec(tmp_path, -1),
+            tmp_path,
+            accelerator_kind=AcceleratorKind.CUDA,
+            run_child=_child(writes=writes),
+            log_cb=logged.append,
+        )
+    assert any("extrapolates" in line for line in high)
+    assert not any("extrapolates" in line for line in low)
+    assert any("not a runnable batch" in line for line in low)
+
+
+def test_the_child_runs_as_a_real_subprocess_and_honours_the_argv_contract(tmp_path):
+    """`child_command` and the child's argparse must actually agree. Everything
+    else calls `main()` in-process, which would never catch a renamed flag.
+
+    On this box the child is EXPECTED to fail at the CUDA step -- there is no
+    GPU. What is asserted is the argv contract and the failure SHAPE, not a
+    resolved batch: argparse must not reject the argv (exit 2) and must not
+    fail on an unrecognised argument.
+    """
+    import subprocess
+
+    from hydra_suite.training.yolo_autobatch import child_command
+
+    command = [str(item) for item in child_command(_spec(tmp_path, -1), tmp_path)]
+    proc = subprocess.run(
+        command,
+        capture_output=True,
+        text=True,
+        timeout=600,
+        env={
+            **os.environ,
+            "PYTHONPATH": str(Path(__file__).resolve().parents[1] / "src"),
+        },
+    )
+    assert proc.returncode != 2, f"argparse rejected the argv: {proc.stderr}"
+    assert "unrecognized arguments" not in proc.stderr
+    assert "error: the following arguments are required" not in proc.stderr
+    if proc.returncode == 0:  # a CUDA box: the contract went all the way through
+        assert (
+            json.loads((tmp_path / "batch_resolution.json").read_text())["resolved"]
+            >= 1
+        )
+    else:  # no GPU here: it must die at the model/CUDA step, not on its argv
+        assert "Traceback" in proc.stderr

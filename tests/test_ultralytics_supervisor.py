@@ -250,6 +250,13 @@ def test_the_resolved_batch_is_persisted_with_its_provenance(monkeypatch, tmp_pa
 def test_an_explicit_batch_is_never_rewritten_and_runs_no_child(monkeypatch, tmp_path):
     commands, _ = _capture_commands(monkeypatch, tmp_path, _auto_spec(tmp_path, 16))
     assert "batch=16" in commands[0]
+    # `commands` filters the resolution argv out, so assert on the artifact a
+    # child would have to leave and on the provenance it would have to claim.
+    import json
+
+    payload = json.loads((tmp_path / "batch_resolution.json").read_text())
+    assert payload["provenance"] == "explicit"
+    assert payload["requested"] == payload["resolved"] == 16
 
 
 def test_a_memory_pressure_retry_halves_from_the_resolved_batch(monkeypatch, tmp_path):
@@ -399,3 +406,116 @@ def test_an_unavailable_normalised_device_falls_back_instead_of_refusing(
     )
     assert result["success"] is True
     assert "batch=16" in commands[0]
+
+
+def test_a_bare_ordinal_on_a_box_without_cuda_launches_rather_than_refusing(
+    monkeypatch, tmp_path
+):
+    """The same case, driven end to end through the REAL `_accelerator`."""
+    import hydra_suite.training.ultralytics_supervisor as mod
+
+    try:
+        real_kind, _cuda = mod._accelerator("cuda:0")
+    except RuntimeError:
+        real_kind = None
+    if real_kind is mod.AcceleratorKind.CUDA:
+        import pytest
+
+        pytest.skip("this box has CUDA; the absent-device path cannot be taken")
+
+    spec = _auto_spec(tmp_path, -1)
+    spec.device = "0"
+    commands: list[tuple[str, ...]] = []
+
+    def run_once(command, run_spec, **_kwargs):
+        commands.append(tuple(str(item) for item in command))
+        return {
+            "success": True,
+            "failure_kind": ExitKind.SUCCESS.value,
+            "hard_host_bytes": 100,
+            "resource_telemetry": {"observed": {"peak_tree_rss_bytes": 90}},
+        }
+
+    monkeypatch.setattr(mod, "_run_ultralytics_once", run_once)
+    result = mod.run_ultralytics_supervised(
+        ["trainer", "batch=-1", "workers=0", "device=0"], spec, run_dir=tmp_path
+    )
+    assert result["success"] is True
+    # No resolution child ran, and the run launched with a positive batch.
+    assert len(commands) == 1
+    assert "batch=16" in commands[0]
+    assert "device=0" in commands[0]
+
+    import json
+
+    assert (
+        json.loads((tmp_path / "batch_resolution.json").read_text())["provenance"]
+        == "default_non_cuda"
+    )
+
+
+def test_a_raising_resolution_child_does_not_abort_the_training_run(
+    monkeypatch, tmp_path
+):
+    """`_run_ultralytics_once` raises on real paths -- notably `raise
+    output_error` in its drain loop, the exact dropped/erroring-output
+    condition that made us read a file rather than a stdout marker. runner.py
+    has no try around `run_ultralytics_supervised`, so an escape would kill
+    the run."""
+    import hydra_suite.training.ultralytics_supervisor as mod
+
+    monkeypatch.setattr(
+        mod, "_accelerator", lambda device: (mod.AcceleratorKind.CUDA, None)
+    )
+    commands: list[tuple[str, ...]] = []
+
+    def run_once(command, run_spec, **_kwargs):
+        text = [str(item) for item in command]
+        if "hydra_suite.training.yolo_autobatch" in text:
+            raise OSError("the child output channel failed")
+        commands.append(tuple(text))
+        return {
+            "success": True,
+            "failure_kind": ExitKind.SUCCESS.value,
+            "hard_host_bytes": 100,
+            "resource_telemetry": {"observed": {"peak_tree_rss_bytes": 90}},
+        }
+
+    monkeypatch.setattr(mod, "_run_ultralytics_once", run_once)
+    result = mod.run_ultralytics_supervised(
+        ["trainer", "batch=-1", "workers=0"], _auto_spec(tmp_path, -1), run_dir=tmp_path
+    )
+    assert result["success"] is True
+    assert "batch=16" in commands[0]
+
+
+def test_a_still_owned_resolution_child_stops_the_run(monkeypatch, tmp_path):
+    """The one deliberate exception: never launch training on top of a child
+    that may still hold the lease."""
+    import pytest
+
+    import hydra_suite.training.ultralytics_supervisor as mod
+    from hydra_suite.runtime.process_supervisor import WorkloadStillOwnedError
+
+    owner = object()
+    monkeypatch.setattr(
+        mod, "_accelerator", lambda device: (mod.AcceleratorKind.CUDA, None)
+    )
+    launched: list = []
+
+    def run_once(command, run_spec, **_kwargs):
+        text = [str(item) for item in command]
+        if "hydra_suite.training.yolo_autobatch" in text:
+            raise WorkloadStillOwnedError("still owned", owner)
+        launched.append(text)
+        return {"success": True, "failure_kind": ExitKind.SUCCESS.value}
+
+    monkeypatch.setattr(mod, "_run_ultralytics_once", run_once)
+    with pytest.raises(WorkloadStillOwnedError) as caught:
+        mod.run_ultralytics_supervised(
+            ["trainer", "batch=-1", "workers=0"],
+            _auto_spec(tmp_path, -1),
+            run_dir=tmp_path,
+        )
+    assert caught.value.sidecar is owner
+    assert launched == []
