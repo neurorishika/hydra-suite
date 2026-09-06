@@ -15,6 +15,7 @@ connected components in that 3D mask.
 from __future__ import annotations
 
 import json
+import math
 from dataclasses import dataclass
 from pathlib import Path
 from typing import TYPE_CHECKING, Any, Callable, Dict, List, Optional, Tuple
@@ -29,6 +30,267 @@ if TYPE_CHECKING:  # pragma: no cover - typing only
 
 _GAUSSIAN_TRUNCATE = 4.0
 _FULL_SMOOTH_MAX_BYTES = 256 * 1024 * 1024
+_SMOOTH_CHUNK_FRAMES = 500
+
+# Read-only autotuner replays rebuild candidate-specific density evidence in
+# the GUI process.  Unlike ordinary tracking, a replay must not quietly fall
+# back to no density regions when that evidence cannot be built: doing so
+# would score a different candidate policy.  The worker applies this bound only
+# to ``cache_read_only_replay``; normal production density generation remains
+# uncapped by this admission guard.
+DEFAULT_AUTOTUNE_DENSITY_MAX_BYTES = 512 * 1024 * 1024
+
+
+class ConfidenceDensityCancelled(RuntimeError):
+    """Raised when a density map is cancelled before all evidence is complete.
+
+    Returning a partially accumulated map would be indistinguishable from a
+    genuine sparse-confidence result.  A distinct exception makes callers end
+    a read-only replay rather than silently score incomplete density evidence.
+    """
+
+
+@dataclass(frozen=True)
+class DensityMapMemoryEstimate:
+    """Conservative in-process working-set estimate for a density map.
+
+    The estimate covers only arrays allocated by this module after the caller
+    has materialized a detection cache.  It deliberately uses the number of
+    cached frame *keys*, never their absolute values, so sparse source timelines
+    cannot turn a high frame number into a dense allocation.
+
+    ``smoothing_peak_bytes`` includes the retained raw volume, binary output,
+    SciPy's float32 smoothing output/workspace, and threshold temporaries.
+    ``labeling_peak_bytes`` includes the retained raw/binary volumes, int32
+    connected-component labels, and one uint8-per-voxel bookkeeping margin.
+    In multi-arena mode those transient phases also include the retained
+    aggregate float32/uint8 diagnostic volumes and the per-arena float32 work
+    volume.  Chunked smoothing substitutes its largest extended temporal
+    chunk for a full float32 volume, but labeling remains full-volume.
+    """
+
+    frame_count: int
+    grid_h: int
+    grid_w: int
+    voxel_count: int
+    timeline_bytes: int
+    accumulation_peak_bytes: int
+    smoothing_peak_bytes: int
+    labeling_peak_bytes: int
+    peak_bytes: int
+    uses_chunked_smoothing: bool
+    multi_arena: bool
+
+
+class DensityReplayBudgetExceeded(RuntimeError):
+    """A read-only replay cannot safely materialize density evidence."""
+
+    def __init__(
+        self, estimate: DensityMapMemoryEstimate, max_working_bytes: int
+    ) -> None:
+        self.estimate = estimate
+        self.max_working_bytes = int(max_working_bytes)
+        super().__init__(
+            "read-only confidence-density replay was not admitted: estimated "
+            f"peak {_format_density_bytes(estimate.peak_bytes)} for "
+            f"{estimate.frame_count} cached frame(s) at "
+            f"{estimate.grid_w}x{estimate.grid_h} grid resolution exceeds "
+            "AUTOTUNE_DENSITY_MAX_BYTES="
+            f"{_format_density_bytes(self.max_working_bytes)}"
+        )
+
+
+def _format_density_bytes(value: int) -> str:
+    """Return a short deterministic byte count for diagnostics."""
+
+    if value >= 1024**3:
+        return f"{value / 1024**3:.1f} GiB"
+    if value >= 1024**2:
+        return f"{value / 1024**2:.1f} MiB"
+    if value >= 1024:
+        return f"{value / 1024:.1f} KiB"
+    return f"{value} bytes"
+
+
+def _density_grid_shape(
+    frame_h: int, frame_w: int, downsample_factor: int
+) -> tuple[int, int, int]:
+    """Return the effective downsample factor and map dimensions."""
+
+    ds = max(1, int(downsample_factor))
+    return ds, max(1, int(frame_h) // ds), max(1, int(frame_w) // ds)
+
+
+def _largest_smoothing_chunk_frames(frame_count: int, temporal_sigma: float) -> int:
+    """Return the largest extended temporal slice used by chunked smoothing."""
+
+    if frame_count <= 0:
+        return 0
+    try:
+        sigma = float(temporal_sigma)
+    except (TypeError, ValueError):
+        # The caller will ultimately surface the invalid smoothing parameter;
+        # until then, refuse to under-estimate its potential working set.
+        return frame_count
+    if not math.isfinite(sigma) or sigma < 0:
+        return frame_count
+    radius = int(math.ceil(_GAUSSIAN_TRUNCATE * sigma)) + 1
+    return min(frame_count, _SMOOTH_CHUNK_FRAMES + 2 * radius)
+
+
+def estimate_density_map_working_set(
+    frame_count: int,
+    frame_h: int,
+    frame_w: int,
+    downsample_factor: int = 8,
+    *,
+    temporal_sigma: float = 2.0,
+    multi_arena: bool = False,
+) -> DensityMapMemoryEstimate:
+    """Estimate a conservative peak for density-map arrays without allocating.
+
+    ``frame_count`` is the count of cache keys to replay, not ``max(key)``.
+    Whole-frame maps retain one float32 raw grid and one uint8 binary grid per
+    cache key.  A full smoothing pass additionally needs a float32 SciPy
+    output/workspace and threshold temporaries; connected-components need an
+    int32 label volume.  Multi-arena maps retain aggregate float32/uint8
+    diagnostic volumes plus one float32 work volume while processing each
+    arena.  Above :data:`_FULL_SMOOTH_MAX_BYTES`, the implementation smooths
+    chunks, and this estimate uses the largest extended chunk; labeling is
+    still a full-volume operation.
+
+    The returned bound intentionally excludes the caller-owned detection cache
+    and arbitrary Python component metadata.  It is an admission guard, not a
+    process-memory containment boundary.
+    """
+
+    frames = int(frame_count)
+    if frames < 0:
+        raise ValueError("frame_count must be non-negative")
+    _ds, grid_h, grid_w = _density_grid_shape(frame_h, frame_w, downsample_factor)
+    voxels = frames * grid_h * grid_w
+    float_bytes = voxels * np.dtype(np.float32).itemsize
+    binary_bytes = voxels * np.dtype(np.uint8).itemsize
+    label_bytes = voxels * np.dtype(np.int32).itemsize
+    # ``sorted(detection_cache.keys())`` holds references and ``frame_indices``
+    # owns int64 copies.  Count both even though they are small beside a map.
+    timeline_bytes = frames * (np.dtype(np.int64).itemsize * 2)
+    uses_chunked_smoothing = float_bytes > _FULL_SMOOTH_MAX_BYTES
+
+    if multi_arena:
+        # Aggregate float32 + uint8 diagnostic volumes and one arena's work
+        # float32 volume remain resident across every arena iteration.
+        retained_bytes = float_bytes * 2 + binary_bytes
+        accumulation = timeline_bytes + retained_bytes
+        labeling = (
+            timeline_bytes + retained_bytes + binary_bytes + label_bytes + binary_bytes
+        )
+    else:
+        retained_bytes = float_bytes
+        accumulation = timeline_bytes + retained_bytes
+        labeling = (
+            timeline_bytes + retained_bytes + binary_bytes + label_bytes + binary_bytes
+        )
+
+    if uses_chunked_smoothing:
+        chunk_voxels = _largest_smoothing_chunk_frames(frames, temporal_sigma) * (
+            grid_h * grid_w
+        )
+        chunk_float_bytes = chunk_voxels * np.dtype(np.float32).itemsize
+        chunk_binary_bytes = chunk_voxels * np.dtype(np.uint8).itemsize
+        # Raw + output binary stay resident; each chunk can require float32
+        # output plus a same-size SciPy workspace and uint8 comparison/cast
+        # temporaries.  In arena mode ``retained_bytes`` already includes the
+        # aggregate and work volumes.
+        smoothing = (
+            timeline_bytes
+            + retained_bytes
+            + binary_bytes
+            + chunk_float_bytes * 2
+            + chunk_binary_bytes * 2
+        )
+    else:
+        # Treat SciPy's full output and workspace as co-resident.  The actual
+        # phases are shorter-lived, but this avoids a brittle dependency on
+        # private scipy allocation details.
+        smoothing = (
+            timeline_bytes
+            + retained_bytes
+            + binary_bytes
+            + float_bytes * 2
+            + binary_bytes * 2
+        )
+
+    peak = max(accumulation, smoothing, labeling)
+    return DensityMapMemoryEstimate(
+        frame_count=frames,
+        grid_h=grid_h,
+        grid_w=grid_w,
+        voxel_count=voxels,
+        timeline_bytes=timeline_bytes,
+        accumulation_peak_bytes=accumulation,
+        smoothing_peak_bytes=smoothing,
+        labeling_peak_bytes=labeling,
+        peak_bytes=peak,
+        uses_chunked_smoothing=uses_chunked_smoothing,
+        multi_arena=bool(multi_arena),
+    )
+
+
+def estimate_density_map_working_bytes(*args: Any, **kwargs: Any) -> int:
+    """Return only :attr:`DensityMapMemoryEstimate.peak_bytes`.
+
+    This compact wrapper is useful to callers that only need an admission
+    comparison; detailed diagnostics should use
+    :func:`estimate_density_map_working_set` instead.
+    """
+
+    return estimate_density_map_working_set(*args, **kwargs).peak_bytes
+
+
+def admit_density_map_working_set(
+    frame_count: int,
+    frame_h: int,
+    frame_w: int,
+    downsample_factor: int = 8,
+    *,
+    temporal_sigma: float = 2.0,
+    multi_arena: bool = False,
+    max_working_bytes: int | None = None,
+) -> DensityMapMemoryEstimate:
+    """Return an estimate or raise before a requested density allocation.
+
+    ``None`` leaves admission disabled.  A positive bound refuses work only
+    when the conservative estimate is strictly larger, so an exact boundary is
+    admitted deterministically.
+    """
+
+    estimate = estimate_density_map_working_set(
+        frame_count,
+        frame_h,
+        frame_w,
+        downsample_factor,
+        temporal_sigma=temporal_sigma,
+        multi_arena=multi_arena,
+    )
+    if max_working_bytes is None:
+        return estimate
+    limit = int(max_working_bytes)
+    if limit <= 0:
+        raise ValueError("max_working_bytes must be positive when specified")
+    if estimate.peak_bytes > limit:
+        raise DensityReplayBudgetExceeded(estimate, limit)
+    return estimate
+
+
+def _raise_if_density_cancelled(should_stop: Callable[[], bool] | None) -> None:
+    """Raise instead of returning partial density evidence on cancellation."""
+
+    if should_stop is not None and should_stop():
+        raise ConfidenceDensityCancelled(
+            "confidence-density map cancelled before complete evidence was available"
+        )
+
 
 # ---------------------------------------------------------------------------
 # DensityRegion
@@ -187,6 +449,8 @@ def accumulate_frame(
     confidences: np.ndarray,
     sizes: np.ndarray,
     sigma_scale: float,
+    *,
+    should_stop: Callable[[], bool] | None = None,
 ) -> np.ndarray:
     """Add ``(1 - confidence)`` weighted Gaussians to *grid* in-place.
 
@@ -209,12 +473,17 @@ def accumulate_frame(
         Squared bounding-box diagonal (or area proxy), shape ``(N,)``.
     sigma_scale:
         Scalar that controls the spread of each Gaussian relative to size.
+    should_stop:
+        Optional cooperative cancellation predicate.  A cancellation raises
+        :class:`ConfidenceDensityCancelled` rather than returning a partially
+        accumulated grid.
 
     Returns
     -------
     np.ndarray
         The modified *grid* (same object that was passed in).
     """
+    _raise_if_density_cancelled(should_stop)
     if meas.shape[0] == 0:
         return grid
 
@@ -235,6 +504,7 @@ def accumulate_frame(
     for det_cx, det_cy, det_weight, det_sigma in zip(
         cx, cy, weights, sigmas, strict=False
     ):
+        _raise_if_density_cancelled(should_stop)
         sigma = max(float(det_sigma), 1e-3)
         radius = max(1, int(np.ceil(_GAUSSIAN_TRUNCATE * sigma)))
 
@@ -279,25 +549,34 @@ def _contiguous_frame_slices(
     return tuple(slice(int(start), int(stop)) for start, stop in zip(starts, stops))
 
 
-def _smoothed_global_max(frames: np.ndarray, temporal_sigma: float) -> float:
+def _smoothed_global_max(
+    frames: np.ndarray,
+    temporal_sigma: float,
+    *,
+    should_stop: Callable[[], bool] | None = None,
+) -> float:
     """Return the temporal Gaussian maximum without retaining a full output."""
 
+    _raise_if_density_cancelled(should_stop)
     T = len(frames)
     if T == 0:
         return 0.0
     if int(frames.nbytes) <= _FULL_SMOOTH_MAX_BYTES:
-        return float(gaussian_filter(frames, sigma=(temporal_sigma, 0.0, 0.0)).max())
+        smoothed = gaussian_filter(frames, sigma=(temporal_sigma, 0.0, 0.0))
+        _raise_if_density_cancelled(should_stop)
+        return float(smoothed.max())
 
     radius = int(np.ceil(4.0 * temporal_sigma)) + 1
-    chunk_size = 500
     global_max = 0.0
-    for chunk_start in range(0, T, chunk_size):
-        chunk_end = min(T, chunk_start + chunk_size)
+    for chunk_start in range(0, T, _SMOOTH_CHUNK_FRAMES):
+        _raise_if_density_cancelled(should_stop)
+        chunk_end = min(T, chunk_start + _SMOOTH_CHUNK_FRAMES)
         ext_start = max(0, chunk_start - radius)
         ext_end = min(T, chunk_end + radius)
         smoothed_chunk = gaussian_filter(
             frames[ext_start:ext_end], sigma=(temporal_sigma, 0.0, 0.0)
         )
+        _raise_if_density_cancelled(should_stop)
         trim_start = chunk_start - ext_start
         trim_stop = trim_start + (chunk_end - chunk_start)
         global_max = max(global_max, float(smoothed_chunk[trim_start:trim_stop].max()))
@@ -309,31 +588,38 @@ def _binarize_smoothed(
     temporal_sigma: float,
     raw_threshold: float,
     output: np.ndarray,
+    *,
+    should_stop: Callable[[], bool] | None = None,
 ) -> None:
     """Write thresholded temporal smoothing into a preallocated output volume."""
 
+    _raise_if_density_cancelled(should_stop)
     T = len(frames)
     if T == 0:
         return
     if int(frames.nbytes) <= _FULL_SMOOTH_MAX_BYTES:
         smoothed = gaussian_filter(frames, sigma=(temporal_sigma, 0.0, 0.0))
+        _raise_if_density_cancelled(should_stop)
         output[:] = (smoothed >= raw_threshold).astype(np.uint8)
+        _raise_if_density_cancelled(should_stop)
         return
 
     radius = int(np.ceil(4.0 * temporal_sigma)) + 1
-    chunk_size = 500
-    for chunk_start in range(0, T, chunk_size):
-        chunk_end = min(T, chunk_start + chunk_size)
+    for chunk_start in range(0, T, _SMOOTH_CHUNK_FRAMES):
+        _raise_if_density_cancelled(should_stop)
+        chunk_end = min(T, chunk_start + _SMOOTH_CHUNK_FRAMES)
         ext_start = max(0, chunk_start - radius)
         ext_end = min(T, chunk_end + radius)
         smoothed_chunk = gaussian_filter(
             frames[ext_start:ext_end], sigma=(temporal_sigma, 0.0, 0.0)
         )
+        _raise_if_density_cancelled(should_stop)
         trim_start = chunk_start - ext_start
         trim_stop = trim_start + (chunk_end - chunk_start)
         output[chunk_start:chunk_end] = (
             smoothed_chunk[trim_start:trim_stop] >= raw_threshold
         ).astype(np.uint8)
+        _raise_if_density_cancelled(should_stop)
 
 
 def smooth_and_binarize(
@@ -342,6 +628,7 @@ def smooth_and_binarize(
     threshold: float,
     *,
     frame_indices: np.ndarray | None = None,
+    should_stop: Callable[[], bool] | None = None,
 ) -> np.ndarray:
     """Smooth the density volume temporally, normalise globally, binarize.
 
@@ -360,24 +647,39 @@ def smooth_and_binarize(
         Gaussian smoothing never crosses a gap in these keys, while the
         threshold remains normalized against the global maximum across all
         available cache frames.
+    should_stop:
+        Optional cooperative cancellation predicate.  Cancellation raises
+        :class:`ConfidenceDensityCancelled` and never returns a partial mask.
 
     Returns
     -------
     np.ndarray
         Uint8 binary array of shape ``(T, H, W)`` with values in ``{0, 1}``.
     """
+    _raise_if_density_cancelled(should_stop)
     T, H, W = frames.shape
     binary = np.zeros((T, H, W), dtype=np.uint8)
     if T == 0:
         return binary
 
     runs = _contiguous_frame_slices(frame_indices, T)
-    global_max = max(_smoothed_global_max(frames[run], temporal_sigma) for run in runs)
+    global_max = max(
+        _smoothed_global_max(frames[run], temporal_sigma, should_stop=should_stop)
+        for run in runs
+    )
+    _raise_if_density_cancelled(should_stop)
     if global_max <= 0.0:
         return binary
     raw_threshold = threshold * global_max
     for run in runs:
-        _binarize_smoothed(frames[run], temporal_sigma, raw_threshold, binary[run])
+        _raise_if_density_cancelled(should_stop)
+        _binarize_smoothed(
+            frames[run],
+            temporal_sigma,
+            raw_threshold,
+            binary[run],
+            should_stop=should_stop,
+        )
 
     return binary
 
@@ -395,6 +697,7 @@ def find_regions(
     min_area_px: int = 100,
     *,
     frame_indices: np.ndarray | None = None,
+    should_stop: Callable[[], bool] | None = None,
 ) -> List[DensityRegion]:
     """Find 3-D connected components in a binary (T, H, W) volume.
 
@@ -420,6 +723,9 @@ def find_regions(
         to the time rows in *binary*. This maps region endpoints back to the
         cache's native timeline. Gaps must be split before calling this
         function; :func:`compute_density_map_from_cache` does so automatically.
+    should_stop:
+        Optional cooperative cancellation predicate.  It is checked before
+        allocating connected-component labels and during component conversion.
 
     Returns
     -------
@@ -428,6 +734,7 @@ def find_regions(
         occurrence frame then by pixel-space centroid x.  Empty list if no
         foreground voxels exist.
     """
+    _raise_if_density_cancelled(should_stop)
     if frame_indices is None:
         indices = None
     else:
@@ -445,9 +752,11 @@ def find_regions(
     # Force int32 output (scipy default is int64 on 64-bit platforms, which
     # would allocate 8× the binary volume's size).  int32 supports up to
     # ~2 billion distinct regions — far beyond any practical limit here.
+    _raise_if_density_cancelled(should_stop)
     labeled = np.empty(binary.shape, dtype=np.int32)
     # When output= is a pre-allocated array, scipy returns only the feature count.
     label(binary, structure=structure, output=labeled)
+    _raise_if_density_cancelled(should_stop)
 
     # find_objects returns bounding slices per component in O(N) — much
     # faster than per-component np.nonzero which allocates a full (T,H,W)
@@ -459,6 +768,7 @@ def find_regions(
 
     regions: List[DensityRegion] = []
     for component_id, obj_slices in enumerate(slices, start=1):
+        _raise_if_density_cancelled(should_stop)
         if obj_slices is None:
             continue
 
@@ -507,12 +817,15 @@ def _find_regions_by_frame_runs(
     min_frame_duration: int,
     min_area_px: int,
     frame_indices: np.ndarray,
+    *,
+    should_stop: Callable[[], bool] | None = None,
 ) -> List[DensityRegion]:
     """Label contiguous source-frame runs without connecting missing keys."""
 
     indices = np.asarray(frame_indices, dtype=np.int64)
     regions: List[DensityRegion] = []
     for run in _contiguous_frame_slices(indices, len(binary)):
+        _raise_if_density_cancelled(should_stop)
         regions.extend(
             find_regions(
                 binary[run],
@@ -521,6 +834,7 @@ def _find_regions_by_frame_runs(
                 min_frame_duration=min_frame_duration,
                 min_area_px=min_area_px,
                 frame_indices=indices[run],
+                should_stop=should_stop,
             )
         )
     regions.sort(key=lambda region: (region.frame_start, region.pixel_bbox[0]))
@@ -617,6 +931,40 @@ def _scaled_for_grid(meas, sizes, ds):
     return meas, sizes
 
 
+def _scale_region_bboxes_to_frame(
+    regions: List[DensityRegion],
+    *,
+    ds: int,
+    grid_h: int,
+    grid_w: int,
+    frame_h: int,
+    frame_w: int,
+    should_stop: Callable[[], bool] | None = None,
+) -> None:
+    """Map inclusive grid-cell bboxes back to inclusive source pixels.
+
+    A grid maximum is an inclusive cell index, not a coordinate to multiply
+    directly.  The final floor-division cell also represents a non-divisible
+    source-frame remainder, so it expands to the true frame edge.
+    """
+
+    if ds <= 1:
+        return
+    max_x = max(0, int(frame_w) - 1)
+    max_y = max(0, int(frame_h) - 1)
+    final_grid_x = max(0, int(grid_w) - 1)
+    final_grid_y = max(0, int(grid_h) - 1)
+    for region in regions:
+        _raise_if_density_cancelled(should_stop)
+        x1, y1, x2, y2 = region.pixel_bbox
+        region.pixel_bbox = (
+            min(max_x, max(0, int(x1) * ds)),
+            min(max_y, max(0, int(y1) * ds)),
+            max_x if int(x2) >= final_grid_x else min(max_x, (int(x2) + 1) * ds - 1),
+            max_y if int(y2) >= final_grid_y else min(max_y, (int(y2) + 1) * ds - 1),
+        )
+
+
 def _compute_density_map_per_arena(
     detection_cache,
     arena_layout,
@@ -631,6 +979,7 @@ def _compute_density_map_per_arena(
     min_frame_duration: int,
     min_area_px: int,
     progress_callback: Optional[Callable[[int, str], None]] = None,
+    should_stop: Callable[[], bool] | None = None,
 ) -> Tuple[ConfidenceDensityMap, np.ndarray]:
     """Compute density regions independently for each arena.
 
@@ -676,6 +1025,7 @@ def _compute_density_map_per_arena(
     (sum of the masked grids, elementwise max of the binaries) purely so the
     diagnostic video keeps working; nothing in the tracking path reads them.
     """
+    _raise_if_density_cancelled(should_stop)
     sorted_frames = sorted(detection_cache.keys())
     frame_indices = np.asarray(sorted_frames, dtype=np.int64)
     n_total = len(sorted_frames)
@@ -686,6 +1036,7 @@ def _compute_density_map_per_arena(
     # and its grid cell can never disagree.
     det_arena: List[np.ndarray] = []
     for frame_idx in sorted_frames:
+        _raise_if_density_cancelled(should_stop)
         meas, _confs, _sizes = detection_cache[frame_idx]
         if meas.shape[0] == 0:
             det_arena.append(np.zeros(0, dtype=np.int32))
@@ -704,8 +1055,10 @@ def _compute_density_map_per_arena(
     regions: List[DensityRegion] = []
 
     for arena_id in range(n_arenas):
+        _raise_if_density_cancelled(should_stop)
         work[:] = 0.0
         for i, frame_idx in enumerate(sorted_frames):
+            _raise_if_density_cancelled(should_stop)
             meas, confs, sizes = detection_cache[frame_idx]
             if meas.shape[0] == 0:
                 continue
@@ -714,7 +1067,12 @@ def _compute_density_map_per_arena(
                 continue
             meas_scaled, sizes_scaled = _scaled_for_grid(meas[sel], sizes[sel], ds)
             accumulate_frame(
-                work[i], meas_scaled, confs[sel], sizes_scaled, sigma_scale=sigma_scale
+                work[i],
+                meas_scaled,
+                confs[sel],
+                sizes_scaled,
+                sigma_scale=sigma_scale,
+                should_stop=should_stop,
             )
         # Mask to this arena's own pixels: a Gaussian tail that spills over the
         # wall must not be able to seed a region on the other side. float32
@@ -727,7 +1085,9 @@ def _compute_density_map_per_arena(
             temporal_sigma=temporal_sigma,
             threshold=threshold,
             frame_indices=frame_indices,
+            should_stop=should_stop,
         )
+        _raise_if_density_cancelled(should_stop)
         arena_regions = _find_regions_by_frame_runs(
             binary,
             frame_h=grid_h,
@@ -735,6 +1095,7 @@ def _compute_density_map_per_arena(
             min_frame_duration=min_frame_duration,
             min_area_px=min_area_px,
             frame_indices=frame_indices,
+            should_stop=should_stop,
         )
         for r in arena_regions:
             r.arena = arena_id
@@ -743,22 +1104,29 @@ def _compute_density_map_per_arena(
         total_grids += work
         np.maximum(binary_total, binary, out=binary_total)
         del binary
+        _raise_if_density_cancelled(should_stop)
 
         if progress_callback is not None:
             pct = int(45 * (arena_id + 1) / max(1, n_arenas))
             progress_callback(pct, f"Density map: arena {arena_id + 1}/{n_arenas}")
 
-    # Scale bounding boxes back to original pixel coordinates.
-    if ds > 1:
-        for r in regions:
-            x1, y1, x2, y2 = r.pixel_bbox
-            r.pixel_bbox = (x1 * ds, y1 * ds, x2 * ds, y2 * ds)
+    # Scale inclusive grid-cell bboxes back to original pixel coordinates.
+    _scale_region_bboxes_to_frame(
+        regions,
+        ds=ds,
+        grid_h=grid_h,
+        grid_w=grid_w,
+        frame_h=frame_h,
+        frame_w=frame_w,
+        should_stop=should_stop,
+    )
 
     # Deterministic global ordering/labelling across arenas (arena breaks ties
     # so two arenas producing an identical (frame_start, x1) still sort
     # stably).
     regions.sort(key=lambda r: (r.frame_start, r.pixel_bbox[0], r.arena))
     for idx, region in enumerate(regions, start=1):
+        _raise_if_density_cancelled(should_stop)
         region.label = f"region-{idx}"
 
     if progress_callback is not None:
@@ -796,6 +1164,9 @@ def compute_density_map_from_cache(
     min_area_px: int = 100,
     progress_callback: Optional[Callable[[int, str], None]] = None,
     arena_layout: Optional["ArenaLayout"] = None,
+    *,
+    max_working_bytes: int | None = None,
+    should_stop: Callable[[], bool] | None = None,
 ) -> Tuple[ConfidenceDensityMap, List[np.ndarray]]:
     """Run the full density-map pipeline from a detection cache.
 
@@ -832,6 +1203,16 @@ def compute_density_map_from_cache(
         :func:`_compute_density_map_per_arena`). ``None``, a single-arena
         layout, or a layout with no label image all take the ORIGINAL
         whole-frame path below, unmodified.
+    max_working_bytes:
+        Optional conservative peak-memory admission cap.  The check happens
+        before any density-volume allocation and uses the number of cache keys,
+        never their absolute source-frame values.  Ordinary tracking leaves
+        this as ``None``; read-only autotuner replay supplies its own cap.
+    should_stop:
+        Optional cooperative cancellation predicate.  It is propagated through
+        accumulation, smoothing, arena iteration, and connected-component
+        labeling.  Cancellation raises :class:`ConfidenceDensityCancelled`
+        rather than returning partial density evidence.
 
     Returns
     -------
@@ -843,9 +1224,14 @@ def compute_density_map_from_cache(
     holds the binarised volume (at downsampled resolution) so it can be passed
     directly to :func:`export_diagnostic_video` for contour rendering.
     """
-    ds = max(1, int(downsample_factor))
-    grid_h = max(1, frame_h // ds)
-    grid_w = max(1, frame_w // ds)
+    _raise_if_density_cancelled(should_stop)
+    ds, grid_h, grid_w = _density_grid_shape(frame_h, frame_w, downsample_factor)
+    # Validate an explicit replay admission setting even when an empty cache
+    # takes the allocation-free early return below. Silently accepting an
+    # invalid override based on cache contents makes configuration behavior
+    # nondeterministic between otherwise equivalent replays.
+    if max_working_bytes is not None and int(max_working_bytes) <= 0:
+        raise ValueError("max_working_bytes must be positive when specified")
 
     if not detection_cache:
         frame_grids = np.zeros((0, grid_h, grid_w), dtype=np.float32)
@@ -858,11 +1244,25 @@ def compute_density_map_from_cache(
         )
         return cdm, []
 
-    if (
+    multi_arena = bool(
         arena_layout is not None
         and not arena_layout.is_single_arena
         and arena_layout.label_image is not None
-    ):
+    )
+    # Admission is deliberately based on cache cardinality, not max(frame key),
+    # and happens before either volume path allocates density grids.
+    if max_working_bytes is not None:
+        admit_density_map_working_set(
+            len(detection_cache),
+            frame_h,
+            frame_w,
+            ds,
+            temporal_sigma=temporal_sigma,
+            multi_arena=multi_arena,
+            max_working_bytes=max_working_bytes,
+        )
+
+    if multi_arena:
         return _compute_density_map_per_arena(
             detection_cache=detection_cache,
             arena_layout=arena_layout,
@@ -877,6 +1277,7 @@ def compute_density_map_from_cache(
             min_frame_duration=min_frame_duration,
             min_area_px=min_area_px,
             progress_callback=progress_callback,
+            should_stop=should_stop,
         )
 
     sorted_frames = sorted(detection_cache.keys())
@@ -887,6 +1288,7 @@ def compute_density_map_from_cache(
     # which would briefly hold two copies of the entire volume in RAM.
     frame_grids = np.zeros((n_total, grid_h, grid_w), dtype=np.float32)
     for i, frame_idx in enumerate(sorted_frames):
+        _raise_if_density_cancelled(should_stop)
         meas, confs, sizes = detection_cache[frame_idx]
         # Scale detection positions and sizes to the downsampled grid.
         if meas.shape[0] > 0 and ds > 1:
@@ -898,7 +1300,12 @@ def compute_density_map_from_cache(
             meas_scaled = meas
             sizes_scaled = sizes
         accumulate_frame(
-            frame_grids[i], meas_scaled, confs, sizes_scaled, sigma_scale=sigma_scale
+            frame_grids[i],
+            meas_scaled,
+            confs,
+            sizes_scaled,
+            sigma_scale=sigma_scale,
+            should_stop=should_stop,
         )
         if progress_callback is not None and (i % 50 == 0 or i == n_total - 1):
             pct = int(40 * (i + 1) / n_total)  # 0–40% for accumulation
@@ -912,7 +1319,9 @@ def compute_density_map_from_cache(
         temporal_sigma=temporal_sigma,
         threshold=threshold,
         frame_indices=frame_indices,
+        should_stop=should_stop,
     )
+    _raise_if_density_cancelled(should_stop)
 
     if progress_callback is not None:
         progress_callback(45, "Density map: finding regions...")
@@ -924,18 +1333,19 @@ def compute_density_map_from_cache(
         min_frame_duration=min_frame_duration,
         min_area_px=min_area_px,
         frame_indices=frame_indices,
+        should_stop=should_stop,
     )
 
-    # Scale bounding boxes back to original pixel coordinates.
-    if ds > 1:
-        for r in regions:
-            x1, y1, x2, y2 = r.pixel_bbox
-            r.pixel_bbox = (
-                x1 * ds,
-                y1 * ds,
-                x2 * ds,
-                y2 * ds,
-            )
+    # Scale inclusive grid-cell bboxes back to original pixel coordinates.
+    _scale_region_bboxes_to_frame(
+        regions,
+        ds=ds,
+        grid_h=grid_h,
+        grid_w=grid_w,
+        frame_h=frame_h,
+        frame_w=frame_w,
+        should_stop=should_stop,
+    )
 
     if progress_callback is not None:
         progress_callback(48, f"Density map complete: {len(regions)} regions found")

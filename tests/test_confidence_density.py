@@ -1,11 +1,18 @@
 # tests/test_confidence_density.py
 import numpy as np
+import pytest
 from scipy.ndimage import gaussian_filter
 
+import hydra_suite.core.tracking.confidence.confidence_density as density_module
 from hydra_suite.core.tracking.confidence.confidence_density import (
+    DEFAULT_AUTOTUNE_DENSITY_MAX_BYTES,
+    ConfidenceDensityCancelled,
     DensityRegion,
+    DensityReplayBudgetExceeded,
     accumulate_frame,
+    admit_density_map_working_set,
     compute_density_map_from_cache,
+    estimate_density_map_working_set,
     find_regions,
     smooth_and_binarize,
     tag_detections,
@@ -159,6 +166,255 @@ def test_density_cache_large_absolute_gap_stays_sparse_in_memory():
         (7, 7),
         (2_000_007, 2_000_007),
     ]
+
+
+def test_density_admission_uses_sparse_key_count_and_allows_exact_boundary():
+    """A high absolute cache key never inflates replay-map admission."""
+
+    estimate = admit_density_map_working_set(
+        2,
+        16,
+        16,
+        downsample_factor=1,
+        temporal_sigma=0.0,
+    )
+    detections = _make_detections(1, 8.0, 8.0, 0.0, bbox_diag=4.0)
+    cache = {7: detections, 2_000_007: detections}
+
+    density_map, _ = compute_density_map_from_cache(
+        cache,
+        frame_h=16,
+        frame_w=16,
+        sigma_scale=0.5,
+        temporal_sigma=0.0,
+        threshold=0.5,
+        downsample_factor=1,
+        min_frame_duration=1,
+        min_area_px=1,
+        max_working_bytes=estimate.peak_bytes,
+    )
+
+    assert density_map.frame_indices.tolist() == [7, 2_000_007]
+    with pytest.raises(DensityReplayBudgetExceeded) as error:
+        compute_density_map_from_cache(
+            cache,
+            frame_h=16,
+            frame_w=16,
+            sigma_scale=0.5,
+            temporal_sigma=0.0,
+            threshold=0.5,
+            downsample_factor=1,
+            min_frame_duration=1,
+            min_area_px=1,
+            max_working_bytes=estimate.peak_bytes - 1,
+        )
+    assert error.value.estimate.frame_count == 2
+    assert error.value.max_working_bytes == estimate.peak_bytes - 1
+
+
+@pytest.mark.parametrize("max_working_bytes", [0, -1])
+def test_density_empty_cache_rejects_nonpositive_admission_limit(max_working_bytes):
+    """A configured replay budget is validated even when no frames are cached."""
+
+    with pytest.raises(ValueError, match="must be positive"):
+        compute_density_map_from_cache(
+            {},
+            frame_h=16,
+            frame_w=16,
+            sigma_scale=0.5,
+            temporal_sigma=0.0,
+            threshold=0.5,
+            max_working_bytes=max_working_bytes,
+        )
+
+
+def test_density_admission_refuses_4k_five_minute_read_only_replay():
+    """Admission rejects a realistic large replay before any map allocation."""
+
+    estimate = estimate_density_map_working_set(
+        frame_count=5 * 60 * 30,
+        frame_h=2160,
+        frame_w=3840,
+        downsample_factor=8,
+        temporal_sigma=2.0,
+    )
+
+    assert (estimate.grid_h, estimate.grid_w) == (270, 480)
+    assert estimate.uses_chunked_smoothing
+    assert estimate.peak_bytes > 10 * 1024**3
+    with pytest.raises(DensityReplayBudgetExceeded, match="AUTOTUNE_DENSITY_MAX_BYTES"):
+        admit_density_map_working_set(
+            5 * 60 * 30,
+            2160,
+            3840,
+            downsample_factor=8,
+            temporal_sigma=2.0,
+            max_working_bytes=DEFAULT_AUTOTUNE_DENSITY_MAX_BYTES,
+        )
+
+
+def test_density_compute_cancels_during_accumulation(monkeypatch):
+    """Cancellation after one frame stops before another frame is accumulated."""
+
+    cancelled = {"value": False}
+    calls = 0
+    original = density_module.accumulate_frame
+
+    def _accumulate(*args, **kwargs):
+        nonlocal calls
+        result = original(*args, **kwargs)
+        calls += 1
+        cancelled["value"] = True
+        return result
+
+    monkeypatch.setattr(density_module, "accumulate_frame", _accumulate)
+    detections = _make_detections(1, 8.0, 8.0, 0.0, bbox_diag=4.0)
+    with pytest.raises(ConfidenceDensityCancelled):
+        compute_density_map_from_cache(
+            {0: detections, 1: detections},
+            frame_h=16,
+            frame_w=16,
+            sigma_scale=0.5,
+            temporal_sigma=0.0,
+            threshold=0.5,
+            downsample_factor=1,
+            should_stop=lambda: cancelled["value"],
+        )
+    assert calls == 1
+
+
+def test_density_compute_cancels_during_smoothing(monkeypatch):
+    """Cancellation raised after SciPy smoothing never falls through to CC."""
+
+    cancelled = {"value": False}
+    original = density_module.gaussian_filter
+
+    def _smoothing(*args, **kwargs):
+        result = original(*args, **kwargs)
+        cancelled["value"] = True
+        return result
+
+    monkeypatch.setattr(density_module, "gaussian_filter", _smoothing)
+    detections = _make_detections(1, 8.0, 8.0, 0.0, bbox_diag=4.0)
+    with pytest.raises(ConfidenceDensityCancelled):
+        compute_density_map_from_cache(
+            {0: detections, 1: detections},
+            frame_h=16,
+            frame_w=16,
+            sigma_scale=0.5,
+            temporal_sigma=1.0,
+            threshold=0.5,
+            downsample_factor=1,
+            should_stop=lambda: cancelled["value"],
+        )
+
+
+def test_density_compute_cancels_inside_first_arena_iteration(monkeypatch):
+    """A stop between arena phases prevents the second arena from starting."""
+
+    from hydra_suite.core.tracking.arenas import ArenaLayout
+
+    cancelled = {"value": False}
+    smooth_calls = 0
+
+    def _smoothing(frames, *_args, **_kwargs):
+        nonlocal smooth_calls
+        smooth_calls += 1
+        cancelled["value"] = True
+        return np.zeros(frames.shape, dtype=np.uint8)
+
+    labels = np.zeros((16, 16), dtype=np.uint16)
+    labels[:, :8] = 1
+    labels[:, 8:] = 2
+    layout = ArenaLayout(n_arenas=2, animals_per_arena=1, label_image=labels)
+    cache = {
+        0: _make_detections(1, 4.0, 8.0, 0.0, bbox_diag=4.0),
+        1: _make_detections(1, 12.0, 8.0, 0.0, bbox_diag=4.0),
+    }
+    monkeypatch.setattr(density_module, "smooth_and_binarize", _smoothing)
+
+    with pytest.raises(ConfidenceDensityCancelled):
+        compute_density_map_from_cache(
+            cache,
+            frame_h=16,
+            frame_w=16,
+            sigma_scale=0.5,
+            temporal_sigma=1.0,
+            threshold=0.5,
+            downsample_factor=1,
+            arena_layout=layout,
+            should_stop=lambda: cancelled["value"],
+        )
+    assert smooth_calls == 1
+
+
+def test_find_regions_cancels_before_connected_component_labeling(monkeypatch):
+    """The large int32 label volume is never allocated after cancellation."""
+
+    called = False
+
+    def _label(*_args, **_kwargs):
+        nonlocal called
+        called = True
+        raise AssertionError("connected-component labeling must not run")
+
+    monkeypatch.setattr(density_module, "label", _label)
+    with pytest.raises(ConfidenceDensityCancelled):
+        find_regions(
+            np.ones((2, 4, 4), dtype=np.uint8),
+            frame_h=4,
+            frame_w=4,
+            should_stop=lambda: True,
+        )
+    assert not called
+
+
+@pytest.mark.parametrize("multi_arena", [False, True])
+@pytest.mark.parametrize(
+    ("grid_bbox", "expected_bbox"),
+    [
+        ((1, 1, 1, 1), (8, 8, 15, 15)),
+        ((3, 3, 3, 3), (24, 24, 32, 32)),
+    ],
+)
+def test_density_grid_bboxes_scale_inclusively_and_cover_remainder_edges(
+    monkeypatch, multi_arena, grid_bbox, expected_bbox
+):
+    """Both density paths preserve inclusive cells and final frame remainders."""
+
+    from hydra_suite.core.tracking.arenas import ArenaLayout
+
+    def _regions(*_args, **_kwargs):
+        return [DensityRegion("region-1", 0, 0, grid_bbox)]
+
+    monkeypatch.setattr(density_module, "_find_regions_by_frame_runs", _regions)
+    detections = _make_detections(1, 4.0, 4.0, 0.0, bbox_diag=4.0)
+    kwargs = {}
+    expected_count = 1
+    if multi_arena:
+        labels = np.zeros((33, 33), dtype=np.uint16)
+        labels[:, :16] = 1
+        labels[:, 17:] = 2
+        kwargs["arena_layout"] = ArenaLayout(
+            n_arenas=2, animals_per_arena=1, label_image=labels
+        )
+        expected_count = 2
+
+    density_map, _ = compute_density_map_from_cache(
+        {0: detections},
+        frame_h=33,
+        frame_w=33,
+        sigma_scale=0.5,
+        temporal_sigma=0.0,
+        threshold=0.5,
+        downsample_factor=8,
+        min_frame_duration=1,
+        min_area_px=1,
+        **kwargs,
+    )
+
+    assert len(density_map.regions) == expected_count
+    assert {region.pixel_bbox for region in density_map.regions} == {expected_bbox}
 
 
 def test_tag_detections_labels_correctly():

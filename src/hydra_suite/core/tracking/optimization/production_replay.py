@@ -16,10 +16,21 @@ from typing import Any, Callable, Sequence
 
 import numpy as np
 
+from hydra_suite.core.tracking.confidence.confidence_density import (
+    ConfidenceDensityCancelled,
+)
+
 _REPLAY_THRESHOLD_TUNING_DIMENSIONS = (
     "YOLO_CONFIDENCE_THRESHOLD",
     "YOLO_IOU_THRESHOLD",
 )
+_REPLAY_UNVALIDATED_TUNING_DIMENSIONS = {
+    "KALMAN_INITIAL_VELOCITY_RETENTION": (
+        "Read-only replay has no lifecycle diagnostic proving a young-filter "
+        "association in the scored held-out interval; this bootstrap control "
+        "is disabled rather than recommending an unvalidated value."
+    )
+}
 
 
 def disabled_replay_tuning_dimensions(params: Mapping[str, Any]) -> dict[str, str]:
@@ -37,6 +48,7 @@ def disabled_replay_tuning_dimensions(params: Mapping[str, Any]) -> dict[str, st
     surface the same explicit explanation before a run starts.
     """
 
+    disabled = dict(_REPLAY_UNVALIDATED_TUNING_DIMENSIONS)
     detection_method = (
         str(params.get("DETECTION_METHOD", "background_subtraction")).strip().lower()
     )
@@ -45,7 +57,8 @@ def disabled_replay_tuning_dimensions(params: Mapping[str, Any]) -> dict[str, st
             "YOLO confidence/IoU are inactive for the selected detection source; "
             "read-only replay will not tune inert dimensions."
         )
-        return {name: reason for name in _REPLAY_THRESHOLD_TUNING_DIMENSIONS}
+        disabled.update({name: reason for name in _REPLAY_THRESHOLD_TUNING_DIMENSIONS})
+        return disabled
 
     downstream_stages: list[str] = []
     if str(params.get("YOLO_HEADTAIL_MODEL_PATH", "") or "").strip():
@@ -60,14 +73,15 @@ def disabled_replay_tuning_dimensions(params: Mapping[str, Any]) -> dict[str, st
     if bool(params.get("USE_APRILTAGS", False)):
         downstream_stages.append("AprilTag")
     if not downstream_stages:
-        return {}
+        return disabled
 
     reason = (
         "Read-only replay cannot faithfully re-index cached downstream "
         f"({', '.join(downstream_stages)}) evidence after confidence/IoU filtering "
         "changes; those tuning dimensions are disabled."
     )
-    return {name: reason for name in _REPLAY_THRESHOLD_TUNING_DIMENSIONS}
+    disabled.update({name: reason for name in _REPLAY_THRESHOLD_TUNING_DIMENSIONS})
+    return disabled
 
 
 def sanitize_replay_tuning_config(
@@ -259,6 +273,10 @@ class ProductionReplayEvaluator:
         engine.set_parameters(replay_params)
         try:
             engine.run_tracking()
+        except ConfidenceDensityCancelled:
+            # A cancelled density build is never failed candidate evidence.
+            # Let the optimizer discard the entire partial search result.
+            raise
         except Exception as exc:  # production errors become a rejected candidate
             captured["error"] = str(exc)
 

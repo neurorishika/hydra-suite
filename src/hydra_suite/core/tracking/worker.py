@@ -1433,6 +1433,9 @@ class TrackingEngineCore:
                     import cv2 as _cv2
 
                     from hydra_suite.core.tracking.confidence.confidence_density import (
+                        DEFAULT_AUTOTUNE_DENSITY_MAX_BYTES,
+                        ConfidenceDensityCancelled,
+                        DensityReplayBudgetExceeded,
                         compute_density_map_from_cache,
                         export_diagnostic_video,
                         save_regions,
@@ -1482,6 +1485,21 @@ class TrackingEngineCore:
                         # path structurally -- see
                         # `compute_density_map_from_cache`'s dispatch.
                         arena_layout=self.arena_layout,
+                        # Candidate replay must either use candidate-specific
+                        # density evidence or fail validation explicitly.  The
+                        # bounded admission guard is intentionally replay-only;
+                        # ordinary production tracking remains uncapped here.
+                        max_working_bytes=(
+                            int(
+                                p.get(
+                                    "AUTOTUNE_DENSITY_MAX_BYTES",
+                                    DEFAULT_AUTOTUNE_DENSITY_MAX_BYTES,
+                                )
+                            )
+                            if self.cache_read_only_replay
+                            else None
+                        ),
+                        should_stop=self._is_stop_requested,
                     )
                     self._density_regions = _dm.regions
 
@@ -1559,7 +1577,38 @@ class TrackingEngineCore:
                     if start_frame > 0:
                         cap.set(_cv2.CAP_PROP_POS_FRAMES, start_frame)
 
-                except Exception:
+                except ConfidenceDensityCancelled:
+                    # Do not turn a cancelled density build into an empty map:
+                    # the production replay must end so held-out validation
+                    # reports cancellation rather than scoring partial evidence.
+                    logger.info("Confidence density map generation cancelled")
+                    raise
+                except DensityReplayBudgetExceeded as exc:
+                    message = (
+                        "Held-out autotuner replay lacks required "
+                        f"confidence-density evidence: {exc}"
+                    )
+                    logger.warning(message)
+                    self._emit_warning(
+                        "Autotuner Density Evidence Unavailable", message
+                    )
+                    # ProductionReplayEvaluator converts this into a rejected
+                    # candidate result.  Continuing with [] would silently
+                    # evaluate different assignment semantics.
+                    raise
+                except Exception as exc:
+                    if self.cache_read_only_replay:
+                        message = (
+                            "Held-out autotuner replay failed while building "
+                            f"candidate confidence-density evidence: {exc}"
+                        )
+                        logger.exception(message)
+                        self._emit_warning(
+                            "Autotuner Density Evidence Unavailable", message
+                        )
+                        # Candidate replay has no valid fallback: an empty map
+                        # is not candidate-specific evidence.
+                        raise
                     logger.exception(
                         "Confidence density map generation failed (non-fatal)"
                     )

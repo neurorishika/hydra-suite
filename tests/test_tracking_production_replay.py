@@ -157,6 +157,69 @@ def test_production_replay_forwards_per_frame_cancellation_token(tmp_path):
     assert captured["should_stop"] is should_stop
 
 
+def test_production_replay_reports_density_budget_refusal_as_evidence_failure(
+    tmp_path,
+):
+    """A replay-density admission refusal rejects one candidate without a crash."""
+
+    from hydra_suite.core.tracking.confidence.confidence_density import (
+        DensityReplayBudgetExceeded,
+        admit_density_map_working_set,
+    )
+
+    estimate = admit_density_map_working_set(2, 16, 16, downsample_factor=1)
+
+    class _BudgetRefusingEngine:
+        def __init__(self, _video_path, **_kwargs):
+            pass
+
+        def set_parameters(self, _params):
+            pass
+
+        def run_tracking(self):
+            raise DensityReplayBudgetExceeded(estimate, estimate.peak_bytes - 1)
+
+    result = ProductionReplayEvaluator(
+        "clip.mp4",
+        str(tmp_path / "cache"),
+        0,
+        1,
+        engine_factory=_BudgetRefusingEngine,
+    ).run({"MAX_TARGETS": 1})
+
+    assert not result.success
+    assert result.error is not None
+    assert "AUTOTUNE_DENSITY_MAX_BYTES" in result.error
+
+
+def test_production_replay_propagates_density_cancellation(tmp_path):
+    """A density stop is cancellation, not a nonfatal rejected candidate."""
+
+    from hydra_suite.core.tracking.confidence.confidence_density import (
+        ConfidenceDensityCancelled,
+    )
+
+    class _CancelledDensityEngine:
+        def __init__(self, _video_path, **_kwargs):
+            pass
+
+        def set_parameters(self, _params):
+            pass
+
+        def run_tracking(self):
+            raise ConfidenceDensityCancelled("density replay was cancelled")
+
+    evaluator = ProductionReplayEvaluator(
+        "clip.mp4",
+        str(tmp_path / "cache"),
+        0,
+        1,
+        engine_factory=_CancelledDensityEngine,
+    )
+    with pytest.raises(ConfidenceDensityCancelled):
+        evaluator.run({"MAX_TARGETS": 1})
+
+
 def test_production_replay_rejects_missing_target_count(tmp_path):
     evaluator = ProductionReplayEvaluator(
         "clip.mp4", str(tmp_path / "cache"), 0, 1, engine_factory=lambda *_a, **_k: None
