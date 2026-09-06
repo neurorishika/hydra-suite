@@ -51,6 +51,25 @@ def test_cuda_probe_uses_most_conservative_free_memory_sample():
     assert result.temperature_range_c == (40.0, 42.0)
 
 
+def test_cuda_probe_targets_the_process_visible_physical_device(monkeypatch):
+    commands = []
+    monkeypatch.setenv("CUDA_VISIBLE_DEVICES", "GPU-visible,1")
+
+    def query(command):
+        commands.append(command)
+        return "GPU-visible, A, 8.0, 10000, 9500, 0, 40, Not Active, 1, bus\n"
+
+    probe_runtime_resources(
+        "cuda",
+        query=query,
+        sample_count=2,
+        sample_interval_seconds=0,
+        host_probe=lambda: (10_000, 9_000),
+    )
+
+    assert all("--id=GPU-visible" in command for command in commands)
+
+
 def test_cpu_and_mps_never_claim_a_separate_memory_pool():
     for kind in (AcceleratorKind.CPU, AcceleratorKind.MPS):
         result = probe_runtime_resources(

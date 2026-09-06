@@ -29,6 +29,7 @@ from hydra_suite.core.inference.autotune.fingerprint import (
     TuningProfileKey,
     WorkloadFingerprint,
     count_bucket,
+    default_software_fingerprint,
 )
 from hydra_suite.core.inference.autotune.measure import (
     MeasurementProtocol,
@@ -198,6 +199,13 @@ def test_density_buckets_and_crop_geometry_are_stable_and_explicit():
     assert workload.detections_p95_bucket == 32
     assert workload.crops_p95_bucket == 32
     assert workload.canonical_crop_geometries == ("256x128",)
+
+
+def test_software_fingerprint_never_uses_an_unknown_code_revision():
+    fingerprint = default_software_fingerprint(backend="torch", precision="fp32")
+
+    assert fingerprint.hydra_commit != "unknown"
+    assert fingerprint.hydra_commit
 
 
 def test_overlay_settings_apply_without_mutating_requested_config():

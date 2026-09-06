@@ -7,6 +7,7 @@ cannot authorize disruptive calibration.
 
 from __future__ import annotations
 
+import os
 import platform
 import subprocess
 import time
@@ -107,13 +108,15 @@ def probe_runtime_resources(
             thermal_throttled=False,
         )
 
+    visible = os.environ.get("CUDA_VISIBLE_DEVICES", "").split(",", 1)[0].strip()
+    device_selector = visible if visible and visible != "-1" else "0"
     command = (
         "nvidia-smi",
         "--query-gpu=uuid,name,compute_cap,memory.total,memory.free,"
         "utilization.gpu,temperature.gpu,clocks_throttle_reasons.active,"
         "driver_version,pci.bus_id",
         "--format=csv,noheader,nounits",
-        "--id=0",
+        f"--id={device_selector}",
     )
     samples = []
     for index in range(int(sample_count)):

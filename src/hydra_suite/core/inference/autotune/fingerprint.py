@@ -10,7 +10,7 @@ import socket
 import sys
 from dataclasses import asdict, dataclass
 from functools import lru_cache
-from importlib import metadata
+from importlib import metadata, resources
 from pathlib import Path
 from typing import Any, Iterable, Mapping
 
@@ -309,6 +309,64 @@ def _package_version(name: str) -> str:
         return "absent"
 
 
+@lru_cache(maxsize=1)
+def hydra_code_identity() -> str:
+    """Return a deployable revision identity without invoking git."""
+
+    explicit = os.environ.get("HYDRA_BUILD_COMMIT", "").strip()
+    if explicit:
+        return _text(explicit, "HYDRA_BUILD_COMMIT")
+    try:
+        direct_url = metadata.distribution("hydra-suite").read_text("direct_url.json")
+        if direct_url:
+            vcs = json.loads(direct_url).get("vcs_info", {})
+            commit_id = str(vcs.get("commit_id", "")).strip()
+            if commit_id:
+                return _text(commit_id, "installed commit")
+    except (
+        metadata.PackageNotFoundError,
+        OSError,
+        ValueError,
+        TypeError,
+        AttributeError,
+    ):
+        pass
+
+    # Editable/source deployments do not necessarily carry VCS metadata.
+    # Hashing all package Python sources is a deterministic, stronger fallback:
+    # any pipeline code change invalidates reuse even without a git checkout.
+    digest = hashlib.sha256()
+
+    def visit(node, relative: str = "") -> None:
+        children = sorted(node.iterdir(), key=lambda item: item.name)
+        for child in children:
+            name = f"{relative}/{child.name}" if relative else child.name
+            if child.is_dir():
+                visit(child, name)
+            elif child.name.endswith(".py"):
+                encoded = name.encode("utf-8")
+                digest.update(len(encoded).to_bytes(8, "big"))
+                digest.update(encoded)
+                digest.update(child.read_bytes())
+
+    try:
+        visit(resources.files("hydra_suite"))
+        return f"source-sha256:{digest.hexdigest()}"
+    except (OSError, TypeError, AttributeError):
+        # A packaged build without traversable sources still has an immutable
+        # distribution version; retain an explicit namespace rather than the
+        # unsafe generic "unknown" token.
+        return f"version:{hydra_version}"
+
+
+def _first_installed_version(names: tuple[str, ...]) -> str:
+    for name in names:
+        version = _package_version(name)
+        if version != "absent":
+            return version
+    return "absent"
+
+
 def default_system_fingerprint(*, total_host_bytes: int) -> SystemFingerprint:
     stable_host = hashlib.sha256(
         f"{socket.gethostname()}|{platform.node()}".encode("utf-8")
@@ -329,7 +387,7 @@ def default_software_fingerprint(
     *,
     backend: str,
     precision: str,
-    hydra_commit: str = "unknown",
+    hydra_commit: str | None = None,
     driver: str = "unknown",
     cuda: str = "unknown",
     cudnn: str = "unknown",
@@ -338,13 +396,23 @@ def default_software_fingerprint(
 
     return SoftwareFingerprint(
         hydra_version=str(hydra_version),
-        hydra_commit=str(hydra_commit),
+        hydra_commit=str(hydra_commit or hydra_code_identity()),
         python_abi=f"{sys.implementation.name}-{sys.version_info.major}.{sys.version_info.minor}-{getattr(sys, 'abiflags', '')}",
         backend=_text(backend, "backend"),
         precision=_text(precision, "precision"),
         driver=str(driver),
-        cuda=str(cuda),
-        cudnn=str(cudnn),
+        cuda=(
+            str(cuda)
+            if str(cuda) != "unknown"
+            else _first_installed_version(
+                ("nvidia-cuda-runtime-cu13", "nvidia-cuda-runtime-cu12")
+            )
+        ),
+        cudnn=(
+            str(cudnn)
+            if str(cudnn) != "unknown"
+            else _first_installed_version(("nvidia-cudnn-cu13", "nvidia-cudnn-cu12"))
+        ),
         tensorrt=_package_version("tensorrt"),
         pytorch=_package_version("torch"),
         ultralytics=_package_version("ultralytics"),
