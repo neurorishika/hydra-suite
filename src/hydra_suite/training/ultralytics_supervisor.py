@@ -2,6 +2,7 @@
 
 from __future__ import annotations
 
+import json
 import os
 import re
 import sys
@@ -40,6 +41,13 @@ from hydra_suite.runtime.resource_limits import (
     build_limited_launch,
 )
 from hydra_suite.runtime.safe_text import bounded_terminal_text
+from hydra_suite.training.yolo_autobatch import (
+    BATCH_RESOLUTION_FILENAME,
+    ResolutionCanceled,
+    batch_resolution_block,
+    child_degraded_reasons,
+    resolve_yolo_batch,
+)
 
 OUTPUT_MAX_LINES = 512
 OUTPUT_MAX_CHARS = 256 * 1024
@@ -64,7 +72,16 @@ def _accelerator(device: str):
 
 def _estimate_host_bytes(spec) -> int:
     params = spec.hyperparams
-    batch = max(1, int(params.batch))
+    batch = int(params.batch)
+    if batch <= 0:
+        # Pre-launch resolution runs in front of every estimate, so a
+        # non-positive batch here means it was skipped. Silently coercing to 1
+        # was the original bug: containment, the host estimate and the
+        # accelerator estimate were all admitted for batch 1 while the child
+        # went on to choose something much larger.
+        raise ValueError(
+            "the host estimate needs a resolved positive batch; " f"got batch={batch}"
+        )
     imgsz = max(32, int(params.imgsz))
     # Activations, augmentation workspace, optimizer/model state, and runtime.
     estimate = 2 * GiB + batch * imgsz * imgsz * 3 * 4 * 10
@@ -134,7 +151,7 @@ def _run_ultralytics_once(
                 ),
             ),
             limits=WorkLimits(
-                batch_size=max(1, int(spec.hyperparams.batch)),
+                batch_size=int(spec.hyperparams.batch),
                 workers=max(0, int(spec.hyperparams.workers)),
                 prefetch_batches=2,
             ),
@@ -310,16 +327,74 @@ def run_ultralytics_supervised(
     command: Sequence[str],
     spec,
     *,
+    run_dir: Path | str | None = None,
     log_cb: Callable[[str], None] | None = None,
     progress_cb: Callable[[int, int], None] | None = None,
     should_cancel: Callable[[], bool] | None = None,
 ) -> dict:
-    """Run training with finite, classified OOM retries in fresh sidecars."""
+    """Run training with finite, classified OOM retries in fresh sidecars.
+
+    A non-positive ``spec.hyperparams.batch`` means "let Ultralytics size it".
+    That is resolved to a positive number BEFORE the first launch, so
+    ``PressureSettings`` keeps its ``>= 1`` invariant, containment is sized for
+    the batch that will actually run, and the OOM-retry halving ladder starts
+    from a real number.
+    """
+
+    requested_batch = int(spec.hyperparams.batch)
+    resolved_batch, provenance = requested_batch, "explicit"
+    if requested_batch <= 0:
+        accelerator_kind, _cuda = _accelerator(spec.device)
+        try:
+            resolved_batch, provenance = resolve_yolo_batch(
+                spec,
+                Path(run_dir) if run_dir is not None else None,
+                accelerator_kind=accelerator_kind,
+                run_child=lambda child_command, child_spec: _run_ultralytics_once(
+                    child_command,
+                    child_spec,
+                    log_cb=log_cb,
+                    should_cancel=should_cancel,
+                ),
+                log_cb=log_cb,
+                should_cancel=should_cancel,
+            )
+        except ResolutionCanceled as exc:
+            # Launch nothing and write no resolution: this run never resolved.
+            return {
+                "success": False,
+                "canceled": True,
+                "failure_kind": ExitKind.CANCELED.value,
+                "error_message": str(exc),
+                "effective_command": list(command),
+            }
+        spec = replace(
+            spec, hyperparams=replace(spec.hyperparams, batch=resolved_batch)
+        )
+    if run_dir is not None:
+        # The child flags anything that made its estimate weaker (a missing
+        # train-label root hides assigner memory and skews the estimate
+        # optimistic). Carry that through rather than writing a clean [].
+        degraded = child_degraded_reasons(Path(run_dir)) if requested_batch <= 0 else []
+        if degraded and log_cb is not None:
+            log_cb("auto batch: DEGRADED estimate -- " + "; ".join(degraded))
+        resolution = batch_resolution_block(
+            requested_batch, resolved_batch, provenance, degraded
+        )
+        try:
+            target = Path(run_dir)
+            target.mkdir(parents=True, exist_ok=True)
+            (target / BATCH_RESOLUTION_FILENAME).write_text(
+                json.dumps(resolution, indent=2), encoding="utf-8"
+            )
+        except OSError as exc:  # provenance is not worth failing a run over
+            if log_cb is not None:
+                log_cb(f"auto batch: could not persist the resolution: {exc}")
 
     initial = PressureSettings(
         input_width=max(1, int(spec.hyperparams.imgsz)),
         input_height=max(1, int(spec.hyperparams.imgsz)),
-        batch_size=max(1, int(spec.hyperparams.batch)),
+        batch_size=int(spec.hyperparams.batch),
         workers=max(0, int(spec.hyperparams.workers)),
         prefetch_batches=2,
     )

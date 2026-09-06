@@ -99,6 +99,56 @@ Publishing is disabled by default for headless plans. Successful checkpoints
 remain in `<workspace>/runs/<run-id>/`. Enable `publish.auto_import` only when
 the server's HYDRA model registry is the intended destination.
 
+### Batch size
+
+`training.batch` defaults to `16`. Setting it to `-1` means "let Ultralytics
+size the batch before launch": a short, contained resolution child runs
+Ultralytics' own autobatch, and the number it reports is clamped to
+`[1, 64]` — `64` is the largest batch Ultralytics actually profiles rather than
+extrapolates to from a linear fit.
+
+The resolved value and where it came from land in
+`<run_dir>/batch_resolution.json`:
+
+```json
+{
+  "requested": -1,
+  "resolved": 24,
+  "provenance": "ultralytics_autobatch",
+  "fingerprint": "",
+  "degraded_reasons": [],
+  "measured_reserved_bytes": 0,
+  "free_bytes": 0,
+  "resolved_at_unix_ns": 1757030400000000000
+}
+```
+
+The file shares the SAM3 resolution schema. `measured_reserved_bytes` and
+`free_bytes` stay `0` on this path on purpose: nothing here was measured by
+HYDRA, so nothing claims to have been. `degraded_reasons` lists anything that
+made the estimate weaker, such as a missing train-label root.
+
+`provenance` is one of `explicit` (you set a positive batch), `ultralytics_autobatch`,
+`ultralytics_autobatch_clamped`, `default_non_cuda` (Ultralytics only measures on
+CUDA, so off CUDA the default is used unchanged), or `fallback` (the resolution
+child failed or left no readable report — the default is used and `-1` is never
+passed on).
+
+The resolved number is **Ultralytics' estimate**, not a measured peak and not a
+guarantee that the run will fit: it profiles a single step and extrapolates.
+The bounded OOM-retry ladder — which halves the batch in a fresh child on a
+classified out-of-memory exit — is what actually protects the run.
+
+Auto batch needs a CUDA device that HYDRA recognises as CUDA, which today means
+`training.device` set to `"cuda:0"` (or `"auto"` on a CUDA host). With the
+Ultralytics-style ordinal `"0"` used in the example above, HYDRA classifies the
+run as CPU, so `-1` resolves to the default with `provenance:
+"default_non_cuda"`.
+
+Auto batch is not reproducible across machines, because it depends on the GPU
+it measures on. **Set a fixed positive `training.batch` for byte-reproducible
+runs.**
+
 ## Validate and prepare
 
 Validate the configuration and inspect all resolved paths without creating the

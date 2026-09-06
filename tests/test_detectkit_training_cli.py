@@ -832,3 +832,30 @@ def test_sam3_batch_accepts_auto_but_still_rejects_zero_and_below_minus_one(tmp_
     for bad in (0, -2):
         with pytest.raises(TrainingPlanError, match="sam3.batch"):
             _load(bad)
+
+
+def test_training_batch_is_opt_in_auto_and_keeps_the_shared_default(tmp_path):
+    """`-1` means "let Ultralytics measure before launch" and is OPT-IN.
+
+    `TrainingHyperParams.batch = 16` is a cross-kit contract default shared by
+    PoseKit/ClassKit/TrackerKit, not a DetectKit knob, so omitting
+    `training.batch` still resolves to 16 rather than silently switching every
+    kit's YOLO training to autobatch.
+    """
+
+    from hydra_suite.detectkit.config.training import load_training_plan
+    from hydra_suite.training.contracts import TrainingHyperParams
+
+    def _load(batch):
+        payload = _plan_payload(tmp_path)
+        if batch is None:
+            payload["training"].pop("batch")
+        else:
+            payload["training"]["batch"] = batch
+        config_path = tmp_path / "training.json"
+        config_path.write_text(json.dumps(payload), encoding="utf-8")
+        return load_training_plan(config_path)
+
+    assert _load(None).hyperparams.batch == TrainingHyperParams().batch == 16
+    assert _load(16).hyperparams.batch == 16
+    assert _load(-1).hyperparams.batch == -1

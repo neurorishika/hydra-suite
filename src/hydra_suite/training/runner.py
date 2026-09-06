@@ -2413,6 +2413,7 @@ def run_training(
     supervised = run_ultralytics_supervised(
         command,
         spec,
+        run_dir=run_dir,
         log_cb=log_cb,
         progress_cb=progress_cb,
         should_cancel=should_cancel,

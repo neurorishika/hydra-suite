@@ -1,3 +1,4 @@
+from pathlib import Path
 from types import SimpleNamespace
 
 from hydra_suite.runtime.process_supervisor import ExitKind
@@ -162,3 +163,136 @@ def test_generic_training_retries_recognized_oom_in_a_fresh_reduced_child(
     assert result["retry_history"] == [
         {"attempt": 1, "field": "batch_size", "from": 8, "to": 4}
     ]
+
+
+def _auto_spec(tmp_path, batch, imgsz=64):
+    return TrainingRunSpec(
+        role=TrainingRole.OBB_DIRECT,
+        source_datasets=[],
+        derived_dataset_dir=str(tmp_path),
+        base_model="yolo.pt",
+        hyperparams=TrainingHyperParams(batch=batch, imgsz=imgsz, workers=0),
+        device="cpu",
+    )
+
+
+def _capture_commands(
+    monkeypatch, tmp_path, spec, *, child_writes=None, oom_on_attempt=None, **kwargs
+):
+    """Drive the supervisor with a fake `_run_ultralytics_once`.
+
+    The resolution child goes through the SAME entry point, so the fake writes
+    `batch_resolution.json` for it -- reflecting that the child writes a file
+    rather than printing a marker line.
+    """
+    import json
+
+    import hydra_suite.training.ultralytics_supervisor as mod
+
+    commands: list[tuple[str, ...]] = []
+
+    def run_once(command, run_spec, **_kwargs):
+        command = [str(item) for item in command]
+        if "hydra_suite.training.yolo_autobatch" in command:
+            if child_writes is not None:
+                out = command[command.index("--out") + 1]
+                Path(out).write_text(json.dumps({"resolved": child_writes}))
+            return {
+                "success": child_writes is not None,
+                "canceled": False,
+                "failure_kind": ExitKind.SUCCESS.value,
+            }
+        commands.append(tuple(command))
+        failed = oom_on_attempt is not None and len(commands) - 1 == oom_on_attempt
+        return {
+            "success": not failed,
+            "failure_kind": (
+                ExitKind.ACCELERATOR_OOM.value if failed else ExitKind.SUCCESS.value
+            ),
+            "hard_host_bytes": 100,
+            "resource_telemetry": {"observed": {"peak_tree_rss_bytes": 90}},
+        }
+
+    monkeypatch.setattr(mod, "_run_ultralytics_once", run_once)
+    monkeypatch.setattr(
+        mod, "_accelerator", lambda device: (mod.AcceleratorKind.CUDA, None)
+    )
+    result = mod.run_ultralytics_supervised(
+        ["trainer", f"batch={spec.hyperparams.batch}", "workers=0"],
+        spec,
+        run_dir=tmp_path,
+        **kwargs,
+    )
+    return commands, result
+
+
+def test_resolution_runs_before_launch_and_the_command_has_a_positive_batch(
+    monkeypatch, tmp_path
+):
+    commands, _ = _capture_commands(
+        monkeypatch, tmp_path, _auto_spec(tmp_path, -1), child_writes=24
+    )
+    assert "batch=-1" not in commands[0]
+    assert "batch=24" in commands[0]
+
+
+def test_the_resolved_batch_is_persisted_with_its_provenance(monkeypatch, tmp_path):
+    import json
+
+    _capture_commands(monkeypatch, tmp_path, _auto_spec(tmp_path, -1), child_writes=24)
+    payload = json.loads((tmp_path / "batch_resolution.json").read_text())
+    assert payload["requested"] == -1
+    assert payload["resolved"] == 24
+    assert payload["provenance"] == "ultralytics_autobatch"
+    assert payload["resolved_at_unix_ns"] > 0
+
+
+def test_an_explicit_batch_is_never_rewritten_and_runs_no_child(monkeypatch, tmp_path):
+    commands, _ = _capture_commands(monkeypatch, tmp_path, _auto_spec(tmp_path, 16))
+    assert "batch=16" in commands[0]
+
+
+def test_a_memory_pressure_retry_halves_from_the_resolved_batch(monkeypatch, tmp_path):
+    commands, _ = _capture_commands(
+        monkeypatch,
+        tmp_path,
+        _auto_spec(tmp_path, -1),
+        child_writes=24,
+        oom_on_attempt=0,
+    )
+    assert "batch=24" in commands[0]
+    assert "batch=12" in commands[1]
+
+
+def test_a_resolution_failure_still_launches_with_a_positive_batch(
+    monkeypatch, tmp_path
+):
+    commands, _ = _capture_commands(
+        monkeypatch, tmp_path, _auto_spec(tmp_path, -1), child_writes=None
+    )
+    assert "batch=16" in commands[0]
+
+
+def test_cancellation_during_resolution_launches_no_training(monkeypatch, tmp_path):
+    commands, result = _capture_commands(
+        monkeypatch,
+        tmp_path,
+        _auto_spec(tmp_path, -1),
+        child_writes=24,
+        should_cancel=lambda: True,
+    )
+    assert commands == []
+    assert result["canceled"] is True
+    assert not (tmp_path / "batch_resolution.json").exists()
+
+
+def test_host_estimate_uses_the_resolved_batch(tmp_path):
+    import pytest
+
+    import hydra_suite.training.ultralytics_supervisor as mod
+
+    big = mod._estimate_host_bytes(_auto_spec(tmp_path, 24, imgsz=1280))
+    small = mod._estimate_host_bytes(_auto_spec(tmp_path, 1, imgsz=1280))
+    assert big > small
+    with pytest.raises(ValueError, match="resolved"):
+        mod._estimate_host_bytes(_auto_spec(tmp_path, -1, imgsz=1280))
