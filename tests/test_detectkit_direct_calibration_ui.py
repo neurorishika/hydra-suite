@@ -243,6 +243,12 @@ def results_dialog(tmp_path):
                 recall=f1,
                 f1=f1,
                 mean_iou=0.8,
+                # D8: recommend_balanced gates on mean_quality (>= 0.35).
+                # Must be populated here so this fixture keeps exercising a
+                # real recommendation under the recall-first rule, rather
+                # than silently falling back to the "never measured"
+                # default of 0.0 and yielding no recommendation at all.
+                mean_quality=0.8,
             ),
         )
 
@@ -296,9 +302,9 @@ def test_match_quality_column_is_distinct_from_localization_iou(results_dialog):
     localization_text = dialog.table_rows.item(
         0, dialog.COL_LOCALIZATION_QUALITY
     ).text()
-    # The fixture never passes ``mean_quality``, so it defaults to a
-    # genuinely measured 0.0 -- rendered as a number, not "never measured".
-    assert match_quality_text == "0.000"
+    # The fixture now passes a genuine, measured mean_quality -- rendered
+    # as a number, not "never measured".
+    assert match_quality_text == "0.800"
     assert localization_text == "0.800"
 
 
