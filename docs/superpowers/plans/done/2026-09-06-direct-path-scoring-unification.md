@@ -1,7 +1,8 @@
 # Direct-path scoring unification — D7 + D8 + D9 behind one gate
 
 **Spec:** `docs/superpowers/specs/2026-09-06-unified-sahi-training-geometry-design.md`
-**Status:** pending implementation
+**Status:** Shipped — merged to main. Measured gate at
+`tests/data/direct_calibration_golden/ATTRIBUTION.md`.
 **Branch:** `feat/direct-scoring-unification`
 
 ## Why one branch

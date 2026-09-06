@@ -1,0 +1,897 @@
+{
+  "cases": [
+    {
+      "aggregate": {
+        "duplicate": 0,
+        "extra": 0,
+        "f1": 1.0,
+        "frames": 1,
+        "matched": 1,
+        "mean_iou": 0.43240801576872534,
+        "mean_quality": 0.5659046047595001,
+        "missed": 0,
+        "precision": 1.0,
+        "recall": 1.0
+      },
+      "area_band": {
+        "max": 1000.0,
+        "median": 400.0,
+        "min": 120.0,
+        "n": 1
+      },
+      "name": "d7_extent_convention_inflation_detect",
+      "per_frame": [
+        {
+          "duplicate": 0,
+          "extra": 0,
+          "matched": 1,
+          "mean_iou": 0.43240801576872534,
+          "mean_quality": 0.5659046047595001,
+          "missed": 0
+        }
+      ],
+      "task": "detect"
+    },
+    {
+      "aggregate": {
+        "duplicate": 0,
+        "extra": 1,
+        "f1": 0.0,
+        "frames": 1,
+        "matched": 0,
+        "mean_iou": 0.0,
+        "mean_quality": 0.0,
+        "missed": 1,
+        "precision": 0.0,
+        "recall": 0.0
+      },
+      "area_band": {
+        "max": 1939.6138340234756,
+        "median": 775.8455336093903,
+        "min": 232.75366008281708,
+        "n": 1
+      },
+      "name": "d7_nonconvex_rotated_detect",
+      "per_frame": [
+        {
+          "duplicate": 0,
+          "extra": 1,
+          "matched": 0,
+          "mean_iou": 0.0,
+          "mean_quality": 0.0,
+          "missed": 1
+        }
+      ],
+      "task": "detect"
+    },
+    {
+      "aggregate": {
+        "duplicate": 0,
+        "extra": 0,
+        "f1": 1.0,
+        "frames": 1,
+        "matched": 1,
+        "mean_iou": 0.5111008325624422,
+        "mean_quality": 0.7995101586744675,
+        "missed": 0,
+        "precision": 1.0,
+        "recall": 1.0
+      },
+      "area_band": {
+        "max": 1499.8923623934388,
+        "median": 599.9569449573755,
+        "min": 179.98708348721266,
+        "n": 1
+      },
+      "name": "rotated_task_divergence_detect",
+      "per_frame": [
+        {
+          "duplicate": 0,
+          "extra": 0,
+          "matched": 1,
+          "mean_iou": 0.5111008325624422,
+          "mean_quality": 0.7995101586744675,
+          "missed": 0
+        }
+      ],
+      "task": "detect"
+    },
+    {
+      "aggregate": {
+        "duplicate": 0,
+        "extra": 1,
+        "f1": 0.0,
+        "frames": 1,
+        "matched": 0,
+        "mean_iou": 0.0,
+        "mean_quality": 0.0,
+        "missed": 1,
+        "precision": 0.0,
+        "recall": 0.0
+      },
+      "area_band": {
+        "max": 360.0,
+        "median": 144.0,
+        "min": 43.199999999999996,
+        "n": 1
+      },
+      "name": "nonconvex_centroid_outside_detect",
+      "per_frame": [
+        {
+          "duplicate": 0,
+          "extra": 1,
+          "matched": 0,
+          "mean_iou": 0.0,
+          "mean_quality": 0.0,
+          "missed": 1
+        }
+      ],
+      "task": "detect"
+    },
+    {
+      "aggregate": {
+        "duplicate": 0,
+        "extra": 0,
+        "f1": 0.6666666666666666,
+        "frames": 1,
+        "matched": 1,
+        "mean_iou": 0.6571514423076923,
+        "mean_quality": 0.7398934384658785,
+        "missed": 1,
+        "precision": 1.0,
+        "recall": 0.5
+      },
+      "area_band": {
+        "max": 1000.0,
+        "median": 400.0,
+        "min": 120.0,
+        "n": 2
+      },
+      "name": "d9_blob_spans_two_animals_detect",
+      "per_frame": [
+        {
+          "duplicate": 0,
+          "extra": 0,
+          "matched": 1,
+          "mean_iou": 0.6571514423076923,
+          "mean_quality": 0.7398934384658785,
+          "missed": 1
+        }
+      ],
+      "task": "detect"
+    },
+    {
+      "aggregate": {
+        "duplicate": 1,
+        "extra": 1,
+        "f1": 0.5,
+        "frames": 1,
+        "matched": 1,
+        "mean_iou": 0.61,
+        "mean_quality": 0.8480926088488114,
+        "missed": 1,
+        "precision": 0.5,
+        "recall": 0.5
+      },
+      "area_band": {
+        "max": 1000.0,
+        "median": 400.0,
+        "min": 120.0,
+        "n": 2
+      },
+      "name": "dense_cluster_label_steal_detect",
+      "per_frame": [
+        {
+          "duplicate": 1,
+          "extra": 1,
+          "matched": 1,
+          "mean_iou": 0.61,
+          "mean_quality": 0.8480926088488114,
+          "missed": 1
+        }
+      ],
+      "task": "detect"
+    },
+    {
+      "aggregate": {
+        "duplicate": 0,
+        "extra": 2,
+        "f1": 0.5,
+        "frames": 1,
+        "matched": 1,
+        "mean_iou": 1.0,
+        "mean_quality": 1.0,
+        "missed": 0,
+        "precision": 0.3333333333333333,
+        "recall": 1.0
+      },
+      "area_band": {
+        "max": 250.0,
+        "median": 100.0,
+        "min": 30.0,
+        "n": 1
+      },
+      "name": "degenerate_geometry_detect",
+      "per_frame": [
+        {
+          "duplicate": 0,
+          "extra": 2,
+          "matched": 1,
+          "mean_iou": 1.0,
+          "mean_quality": 1.0,
+          "missed": 0
+        }
+      ],
+      "task": "detect"
+    },
+    {
+      "aggregate": {
+        "duplicate": 0,
+        "extra": 0,
+        "f1": 1.0,
+        "frames": 1,
+        "matched": 1,
+        "mean_iou": 0.43240801576872534,
+        "mean_quality": 0.5659046047595001,
+        "missed": 0,
+        "precision": 1.0,
+        "recall": 1.0
+      },
+      "area_band": {
+        "max": 1000.0,
+        "median": 400.0,
+        "min": 120.0,
+        "n": 1
+      },
+      "name": "d7_extent_convention_inflation_obb",
+      "per_frame": [
+        {
+          "duplicate": 0,
+          "extra": 0,
+          "matched": 1,
+          "mean_iou": 0.43240801576872534,
+          "mean_quality": 0.5659046047595001,
+          "missed": 0
+        }
+      ],
+      "task": "obb"
+    },
+    {
+      "aggregate": {
+        "duplicate": 0,
+        "extra": 0,
+        "f1": 1.0,
+        "frames": 1,
+        "matched": 1,
+        "mean_iou": 0.42305540011191944,
+        "mean_quality": 0.5367575957505738,
+        "missed": 0,
+        "precision": 1.0,
+        "recall": 1.0
+      },
+      "area_band": {
+        "max": 999.9666284912382,
+        "median": 399.9866513964953,
+        "min": 119.99599541894858,
+        "n": 1
+      },
+      "name": "d7_nonconvex_rotated_obb",
+      "per_frame": [
+        {
+          "duplicate": 0,
+          "extra": 0,
+          "matched": 1,
+          "mean_iou": 0.42305540011191944,
+          "mean_quality": 0.5367575957505738,
+          "missed": 0
+        }
+      ],
+      "task": "obb"
+    },
+    {
+      "aggregate": {
+        "duplicate": 0,
+        "extra": 0,
+        "f1": 1.0,
+        "frames": 1,
+        "matched": 1,
+        "mean_iou": 0.4643177737881508,
+        "mean_quality": 0.77433403423703,
+        "missed": 0,
+        "precision": 1.0,
+        "recall": 1.0
+      },
+      "area_band": {
+        "max": 999.9402468279004,
+        "median": 399.97609873116016,
+        "min": 119.99282961934804,
+        "n": 1
+      },
+      "name": "rotated_task_divergence_obb",
+      "per_frame": [
+        {
+          "duplicate": 0,
+          "extra": 0,
+          "matched": 1,
+          "mean_iou": 0.4643177737881508,
+          "mean_quality": 0.77433403423703,
+          "missed": 0
+        }
+      ],
+      "task": "obb"
+    },
+    {
+      "aggregate": {
+        "duplicate": 0,
+        "extra": 1,
+        "f1": 0.0,
+        "frames": 1,
+        "matched": 0,
+        "mean_iou": 0.0,
+        "mean_quality": 0.0,
+        "missed": 1,
+        "precision": 0.0,
+        "recall": 0.0
+      },
+      "area_band": {
+        "max": 360.0,
+        "median": 144.0,
+        "min": 43.199999999999996,
+        "n": 1
+      },
+      "name": "nonconvex_centroid_outside_obb",
+      "per_frame": [
+        {
+          "duplicate": 0,
+          "extra": 1,
+          "matched": 0,
+          "mean_iou": 0.0,
+          "mean_quality": 0.0,
+          "missed": 1
+        }
+      ],
+      "task": "obb"
+    },
+    {
+      "aggregate": {
+        "duplicate": 0,
+        "extra": 0,
+        "f1": 0.6666666666666666,
+        "frames": 1,
+        "matched": 1,
+        "mean_iou": 0.6571514423076923,
+        "mean_quality": 0.7398934384658785,
+        "missed": 1,
+        "precision": 1.0,
+        "recall": 0.5
+      },
+      "area_band": {
+        "max": 1000.0,
+        "median": 400.0,
+        "min": 120.0,
+        "n": 2
+      },
+      "name": "d9_blob_spans_two_animals_obb",
+      "per_frame": [
+        {
+          "duplicate": 0,
+          "extra": 0,
+          "matched": 1,
+          "mean_iou": 0.6571514423076923,
+          "mean_quality": 0.7398934384658785,
+          "missed": 1
+        }
+      ],
+      "task": "obb"
+    },
+    {
+      "aggregate": {
+        "duplicate": 1,
+        "extra": 1,
+        "f1": 0.5,
+        "frames": 1,
+        "matched": 1,
+        "mean_iou": 0.61,
+        "mean_quality": 0.8480926088488114,
+        "missed": 1,
+        "precision": 0.5,
+        "recall": 0.5
+      },
+      "area_band": {
+        "max": 1000.0,
+        "median": 400.0,
+        "min": 120.0,
+        "n": 2
+      },
+      "name": "dense_cluster_label_steal_obb",
+      "per_frame": [
+        {
+          "duplicate": 1,
+          "extra": 1,
+          "matched": 1,
+          "mean_iou": 0.61,
+          "mean_quality": 0.8480926088488114,
+          "missed": 1
+        }
+      ],
+      "task": "obb"
+    },
+    {
+      "aggregate": {
+        "duplicate": 0,
+        "extra": 2,
+        "f1": 0.5,
+        "frames": 1,
+        "matched": 1,
+        "mean_iou": 1.0,
+        "mean_quality": 1.0,
+        "missed": 0,
+        "precision": 0.3333333333333333,
+        "recall": 1.0
+      },
+      "area_band": {
+        "max": 250.0,
+        "median": 100.0,
+        "min": 30.0,
+        "n": 1
+      },
+      "name": "degenerate_geometry_obb",
+      "per_frame": [
+        {
+          "duplicate": 0,
+          "extra": 2,
+          "matched": 1,
+          "mean_iou": 1.0,
+          "mean_quality": 1.0,
+          "missed": 0
+        }
+      ],
+      "task": "obb"
+    },
+    {
+      "aggregate": {
+        "duplicate": 0,
+        "extra": 0,
+        "f1": 1.0,
+        "frames": 1,
+        "matched": 1,
+        "mean_iou": 0.43240801576872534,
+        "mean_quality": 0.5659046047595001,
+        "missed": 0,
+        "precision": 1.0,
+        "recall": 1.0
+      },
+      "area_band": {
+        "max": 1000.0,
+        "median": 400.0,
+        "min": 120.0,
+        "n": 1
+      },
+      "name": "d7_extent_convention_inflation_segment",
+      "per_frame": [
+        {
+          "duplicate": 0,
+          "extra": 0,
+          "matched": 1,
+          "mean_iou": 0.43240801576872534,
+          "mean_quality": 0.5659046047595001,
+          "missed": 0
+        }
+      ],
+      "task": "segment"
+    },
+    {
+      "aggregate": {
+        "duplicate": 0,
+        "extra": 0,
+        "f1": 1.0,
+        "frames": 1,
+        "matched": 1,
+        "mean_iou": 0.42305540011191944,
+        "mean_quality": 0.5367575957505738,
+        "missed": 0,
+        "precision": 1.0,
+        "recall": 1.0
+      },
+      "area_band": {
+        "max": 999.9666284912382,
+        "median": 399.9866513964953,
+        "min": 119.99599541894858,
+        "n": 1
+      },
+      "name": "d7_nonconvex_rotated_segment",
+      "per_frame": [
+        {
+          "duplicate": 0,
+          "extra": 0,
+          "matched": 1,
+          "mean_iou": 0.42305540011191944,
+          "mean_quality": 0.5367575957505738,
+          "missed": 0
+        }
+      ],
+      "task": "segment"
+    },
+    {
+      "aggregate": {
+        "duplicate": 0,
+        "extra": 0,
+        "f1": 1.0,
+        "frames": 1,
+        "matched": 1,
+        "mean_iou": 0.4643177737881508,
+        "mean_quality": 0.77433403423703,
+        "missed": 0,
+        "precision": 1.0,
+        "recall": 1.0
+      },
+      "area_band": {
+        "max": 999.9402468279004,
+        "median": 399.97609873116016,
+        "min": 119.99282961934804,
+        "n": 1
+      },
+      "name": "rotated_task_divergence_segment",
+      "per_frame": [
+        {
+          "duplicate": 0,
+          "extra": 0,
+          "matched": 1,
+          "mean_iou": 0.4643177737881508,
+          "mean_quality": 0.77433403423703,
+          "missed": 0
+        }
+      ],
+      "task": "segment"
+    },
+    {
+      "aggregate": {
+        "duplicate": 0,
+        "extra": 1,
+        "f1": 0.0,
+        "frames": 1,
+        "matched": 0,
+        "mean_iou": 0.0,
+        "mean_quality": 0.0,
+        "missed": 1,
+        "precision": 0.0,
+        "recall": 0.0
+      },
+      "area_band": {
+        "max": 360.0,
+        "median": 144.0,
+        "min": 43.199999999999996,
+        "n": 1
+      },
+      "name": "nonconvex_centroid_outside_segment",
+      "per_frame": [
+        {
+          "duplicate": 0,
+          "extra": 1,
+          "matched": 0,
+          "mean_iou": 0.0,
+          "mean_quality": 0.0,
+          "missed": 1
+        }
+      ],
+      "task": "segment"
+    },
+    {
+      "aggregate": {
+        "duplicate": 0,
+        "extra": 0,
+        "f1": 0.6666666666666666,
+        "frames": 1,
+        "matched": 1,
+        "mean_iou": 0.6571514423076923,
+        "mean_quality": 0.7398934384658785,
+        "missed": 1,
+        "precision": 1.0,
+        "recall": 0.5
+      },
+      "area_band": {
+        "max": 1000.0,
+        "median": 400.0,
+        "min": 120.0,
+        "n": 2
+      },
+      "name": "d9_blob_spans_two_animals_segment",
+      "per_frame": [
+        {
+          "duplicate": 0,
+          "extra": 0,
+          "matched": 1,
+          "mean_iou": 0.6571514423076923,
+          "mean_quality": 0.7398934384658785,
+          "missed": 1
+        }
+      ],
+      "task": "segment"
+    },
+    {
+      "aggregate": {
+        "duplicate": 1,
+        "extra": 1,
+        "f1": 0.5,
+        "frames": 1,
+        "matched": 1,
+        "mean_iou": 0.61,
+        "mean_quality": 0.8480926088488114,
+        "missed": 1,
+        "precision": 0.5,
+        "recall": 0.5
+      },
+      "area_band": {
+        "max": 1000.0,
+        "median": 400.0,
+        "min": 120.0,
+        "n": 2
+      },
+      "name": "dense_cluster_label_steal_segment",
+      "per_frame": [
+        {
+          "duplicate": 1,
+          "extra": 1,
+          "matched": 1,
+          "mean_iou": 0.61,
+          "mean_quality": 0.8480926088488114,
+          "missed": 1
+        }
+      ],
+      "task": "segment"
+    },
+    {
+      "aggregate": {
+        "duplicate": 0,
+        "extra": 2,
+        "f1": 0.5,
+        "frames": 1,
+        "matched": 1,
+        "mean_iou": 1.0,
+        "mean_quality": 1.0,
+        "missed": 0,
+        "precision": 0.3333333333333333,
+        "recall": 1.0
+      },
+      "area_band": {
+        "max": 250.0,
+        "median": 100.0,
+        "min": 30.0,
+        "n": 1
+      },
+      "name": "degenerate_geometry_segment",
+      "per_frame": [
+        {
+          "duplicate": 0,
+          "extra": 2,
+          "matched": 1,
+          "mean_iou": 1.0,
+          "mean_quality": 1.0,
+          "missed": 0
+        }
+      ],
+      "task": "segment"
+    },
+    {
+      "aggregate": {
+        "duplicate": 0,
+        "extra": 0,
+        "f1": 1.0,
+        "frames": 5,
+        "matched": 80,
+        "mean_iou": 0.7418862922365541,
+        "mean_quality": 0.834771562840346,
+        "missed": 0,
+        "precision": 1.0,
+        "recall": 1.0
+      },
+      "area_band": {
+        "max": 1000.0,
+        "median": 400.0,
+        "min": 120.0,
+        "n": 80
+      },
+      "name": "bulk_easy_matches_detect",
+      "per_frame": [
+        {
+          "duplicate": 0,
+          "extra": 0,
+          "matched": 16,
+          "mean_iou": 0.7779546756196881,
+          "mean_quality": 0.8571605156995405,
+          "missed": 0
+        },
+        {
+          "duplicate": 0,
+          "extra": 0,
+          "matched": 16,
+          "mean_iou": 0.7459171514076295,
+          "mean_quality": 0.8305110860688962,
+          "missed": 0
+        },
+        {
+          "duplicate": 0,
+          "extra": 0,
+          "matched": 16,
+          "mean_iou": 0.7115836967965976,
+          "mean_quality": 0.8198322808463088,
+          "missed": 0
+        },
+        {
+          "duplicate": 0,
+          "extra": 0,
+          "matched": 16,
+          "mean_iou": 0.748030312803452,
+          "mean_quality": 0.8461456633855586,
+          "missed": 0
+        },
+        {
+          "duplicate": 0,
+          "extra": 0,
+          "matched": 16,
+          "mean_iou": 0.7259456245554039,
+          "mean_quality": 0.8202082682014251,
+          "missed": 0
+        }
+      ],
+      "task": "detect"
+    },
+    {
+      "aggregate": {
+        "duplicate": 0,
+        "extra": 0,
+        "f1": 1.0,
+        "frames": 5,
+        "matched": 80,
+        "mean_iou": 0.7322044796380209,
+        "mean_quality": 0.8331036810419438,
+        "missed": 0,
+        "precision": 1.0,
+        "recall": 1.0
+      },
+      "area_band": {
+        "max": 1000.0,
+        "median": 400.0,
+        "min": 120.0,
+        "n": 80
+      },
+      "name": "bulk_easy_matches_obb",
+      "per_frame": [
+        {
+          "duplicate": 0,
+          "extra": 0,
+          "matched": 16,
+          "mean_iou": 0.7211855373542257,
+          "mean_quality": 0.8284254840094011,
+          "missed": 0
+        },
+        {
+          "duplicate": 0,
+          "extra": 0,
+          "matched": 16,
+          "mean_iou": 0.7245063817877625,
+          "mean_quality": 0.8402879104338901,
+          "missed": 0
+        },
+        {
+          "duplicate": 0,
+          "extra": 0,
+          "matched": 16,
+          "mean_iou": 0.7279061940449609,
+          "mean_quality": 0.8198900984221629,
+          "missed": 0
+        },
+        {
+          "duplicate": 0,
+          "extra": 0,
+          "matched": 16,
+          "mean_iou": 0.7350997984990836,
+          "mean_quality": 0.832479414467252,
+          "missed": 0
+        },
+        {
+          "duplicate": 0,
+          "extra": 0,
+          "matched": 16,
+          "mean_iou": 0.7523244865040717,
+          "mean_quality": 0.8444354978770124,
+          "missed": 0
+        }
+      ],
+      "task": "obb"
+    },
+    {
+      "aggregate": {
+        "duplicate": 0,
+        "extra": 0,
+        "f1": 1.0,
+        "frames": 5,
+        "matched": 80,
+        "mean_iou": 0.7429521722811282,
+        "mean_quality": 0.837658760342598,
+        "missed": 0,
+        "precision": 1.0,
+        "recall": 1.0
+      },
+      "area_band": {
+        "max": 1000.0,
+        "median": 400.0,
+        "min": 120.0,
+        "n": 80
+      },
+      "name": "bulk_easy_matches_segment",
+      "per_frame": [
+        {
+          "duplicate": 0,
+          "extra": 0,
+          "matched": 16,
+          "mean_iou": 0.7305507830693214,
+          "mean_quality": 0.8269154115466496,
+          "missed": 0
+        },
+        {
+          "duplicate": 0,
+          "extra": 0,
+          "matched": 16,
+          "mean_iou": 0.7524147227041509,
+          "mean_quality": 0.8392125669236776,
+          "missed": 0
+        },
+        {
+          "duplicate": 0,
+          "extra": 0,
+          "matched": 16,
+          "mean_iou": 0.7453452752106802,
+          "mean_quality": 0.8445336880112995,
+          "missed": 0
+        },
+        {
+          "duplicate": 0,
+          "extra": 0,
+          "matched": 16,
+          "mean_iou": 0.7516979418554144,
+          "mean_quality": 0.842733479568218,
+          "missed": 0
+        },
+        {
+          "duplicate": 0,
+          "extra": 0,
+          "matched": 16,
+          "mean_iou": 0.7347521385660742,
+          "mean_quality": 0.8348986556631451,
+          "missed": 0
+        }
+      ],
+      "task": "segment"
+    }
+  ],
+  "generated_at_commit": "1efaf026cfa818eea4d07c5f781195278059373c",
+  "hydra_suite_package_root": "/Users/neurorishika/Projects/Rockefeller/Kronauer/multi-animal-tracker/.worktrees/direct-scoring/src/hydra_suite",
+  "recommend_balanced_demo": {
+    "candidate_labels": [
+      "synthetic_best_slow",
+      "synthetic_near_best_faster",
+      "synthetic_sparse_dominated",
+      "synthetic_undersampled",
+      "synthetic_failed"
+    ],
+    "chosen_f1": 0.9937106918238994,
+    "chosen_label": "synthetic_near_best_faster",
+    "chosen_mean_quality": 0.8231036810419438,
+    "chosen_recall": 0.9875,
+    "chosen_seconds_per_frame": 0.5,
+    "explanation": "synthetic_near_best_faster: recall 0.988, mean quality 0.82, F1 0.994 (reported, not optimised), 0.50s/frame on this machine and data. Recall-first rule: drop failed points, keep only those recalling at least 90% of labelled instances, then only those whose mean match quality is at least 0.35, then only those with at least 60 matched instances; among the survivors take the cheapest measured seconds/frame, breaking ties on fewer tiles then higher confidence.",
+    "rule_id": "recall-first-quality-floors-v1",
+    "rule_text": "Recall-first rule: drop failed points, keep only those recalling at least 90% of labelled instances, then only those whose mean match quality is at least 0.35, then only those with at least 60 matched instances; among the survivors take the cheapest measured seconds/frame, breaking ties on fewer tiles then higher confidence."
+  },
+  "scoring_rules": {
+    "area_band": "fitted per evidence set via fit_calibration_area_band",
+    "matcher": "shared containment matcher (representative point + containment, quality ranking, no IoU gate)",
+    "min_matched_instances": 60,
+    "min_mean_quality": 0.35,
+    "min_recall": 0.9,
+    "recommender": "recall-first-quality-floors-v1",
+    "recommender_rule_id": "recall-first-quality-floors-v1"
+  },
+  "stage": "after"
+}

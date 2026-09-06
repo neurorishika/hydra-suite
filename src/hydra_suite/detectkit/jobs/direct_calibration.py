@@ -23,9 +23,13 @@ from PySide6.QtCore import Signal
 _LOGGER = logging.getLogger(__name__)
 
 from hydra_suite.core.inference.direct_calibration import (
+    RECOMMENDATION_RULE,
+    RECOMMENDATION_RULE_EFFECTIVE_DATE,
+    RECOMMENDATION_RULE_ID,
     CalibrationDetection,
     CalibrationScore,
     DirectCalibrationPoint,
+    fit_calibration_area_band,
     score_frames,
 )
 from hydra_suite.core.inference.direct_calibration_grid import (
@@ -267,12 +271,26 @@ class DirectCalibrationRequest:
     evidence_dir: Path
 
 
+UNKNOWN_RECOMMENDATION_RULE_ID = "unknown"
+UNKNOWN_RECOMMENDATION_RULE_LABEL = "unknown (pre-2026-09-06)"
+
+
 @dataclass
 class DirectCalibrationOutcome:
     points: list = field(default_factory=list)
     previews: list = field(default_factory=list)
     partial: bool = False
     message: str = ""
+    # Provenance for the recommendation RULE (not a stored recommendation
+    # result -- ``recommend_balanced`` is still re-run live on the loaded
+    # points). Identifies which rule was in effect when this evidence was
+    # saved, so a later rule change cannot silently reinterpret an older
+    # "measured best" as having been produced by the new rule. v4-and-older
+    # evidence predates this field entirely and is labelled unknown rather
+    # than back-filled with the rule current at load time.
+    recommendation_rule_id: str = ""
+    recommendation_rule: str = ""
+    recommendation_rule_effective_date: str = ""
 
 
 @dataclass(frozen=True)
@@ -320,7 +338,26 @@ EVIDENCE_FILENAME_GZ = "direct_calibration.json.gz"
 # an on-screen overlay) and the payload is gzip-compressed on disk. v3 and
 # older previews are DROPPED on load for the same reason v1/v2 previews were
 # dropped when v3 shipped -- they lack the frame table v4 depends on.
-EVIDENCE_VERSION = 4
+#
+# v5: the payload gains a ``recommendation`` block stamping the machine-
+# readable id, human description and effective date of the recommendation
+# RULE (``core.inference.direct_calibration.RECOMMENDATION_RULE_ID``) in
+# effect at save time. v4 profiles remain valid SETTINGS -- their points AND
+# previews load exactly as before -- but carry no rule provenance -- they
+# are labelled ``unknown (pre-2026-09-06)`` on load rather than back-filled
+# with the current rule, per R6 (back-filling asserts provenance that never
+# existed).
+EVIDENCE_VERSION = 5
+# The frame-table/preview format introduced in v4 (see above) is a
+# DIFFERENT axis of versioning than the overall evidence payload version:
+# EVIDENCE_VERSION will keep incrementing for reasons (new top-level
+# blocks, like v5's ``recommendation``) that have nothing to do with the
+# preview format. Gating preview loading on ``version >= EVIDENCE_VERSION``
+# would silently drop a genuine v4 payload's previews the instant
+# EVIDENCE_VERSION advances past 4 for an unrelated reason. Gate on this
+# constant instead, and only bump it when the frame-table/preview format
+# itself changes shape.
+PREVIEW_FORMAT_VERSION = 4
 _ROUND_NDIGITS = 1
 
 
@@ -360,6 +397,7 @@ def _point_to_dict(point: DirectCalibrationPoint) -> dict:
             "recall": score.recall,
             "f1": score.f1,
             "mean_iou": score.mean_iou,
+            "mean_quality": score.mean_quality,
         },
     }
 
@@ -376,6 +414,24 @@ def _point_from_dict(raw: dict) -> DirectCalibrationPoint:
         recall=float(score_raw["recall"]),
         f1=float(score_raw["f1"]),
         mean_iou=float(score_raw["mean_iou"]),
+        # ``.get(..., None)``, not ``.get(..., 0.0)``: profiles saved before
+        # D8 (2026-09-06) have no ``mean_quality`` because the quantity did
+        # not exist yet. They must keep loading -- they are valid SETTINGS --
+        # but the absent key means "never measured", which is NOT the same
+        # value as a genuine, measured 0.0. Collapsing the two would make
+        # ``recommend_balanced`` refuse a never-measured profile with a
+        # "mistargeted" reason -- a positive claim about geometry that was
+        # never checked. ``None`` threads the missing-measurement fact
+        # through so the refusal path (see
+        # ``core/inference/direct_calibration.recommend_balanced``) can say
+        # so honestly instead. This is a different signal from the
+        # ``unknown (pre-2026-09-06)`` recommendation-rule label -- nothing
+        # here correlates the two.
+        mean_quality=(
+            None
+            if score_raw.get("mean_quality") is None
+            else float(score_raw["mean_quality"])
+        ),
     )
     return DirectCalibrationPoint(
         label=str(raw["label"]),
@@ -524,6 +580,11 @@ def save_direct_calibration(
         "points": [_point_to_dict(point) for point in outcome.points],
         "frames": frame_table.entries,
         "previews": previews,
+        "recommendation": {
+            "rule_id": RECOMMENDATION_RULE_ID,
+            "rule": RECOMMENDATION_RULE,
+            "effective_date": RECOMMENDATION_RULE_EFFECTIVE_DATE,
+        },
     }
     fd, tmp_name = tempfile.mkstemp(
         dir=str(evidence_dir), prefix=f".{EVIDENCE_FILENAME_GZ}.", suffix=".tmp"
@@ -574,14 +635,31 @@ def load_direct_calibration(evidence_dir: Path) -> DirectCalibrationOutcome | No
                 _preview_from_dict(evidence_dir, frame_entries, raw)
                 for raw in payload.get("previews", [])
             ]
-            if version >= EVIDENCE_VERSION
+            if version >= PREVIEW_FORMAT_VERSION
             else []
         )
+        # v5+ carries real rule provenance; anything older (points/settings
+        # are still valid) predates the field entirely and must be labelled
+        # unknown rather than back-filled with whatever rule is current now.
+        if version >= 5:
+            raw_recommendation = payload.get("recommendation") or {}
+            recommendation_rule_id = str(raw_recommendation.get("rule_id", ""))
+            recommendation_rule = str(raw_recommendation.get("rule", ""))
+            recommendation_rule_effective_date = str(
+                raw_recommendation.get("effective_date", "")
+            )
+        else:
+            recommendation_rule_id = UNKNOWN_RECOMMENDATION_RULE_ID
+            recommendation_rule = UNKNOWN_RECOMMENDATION_RULE_LABEL
+            recommendation_rule_effective_date = ""
         return DirectCalibrationOutcome(
             points=points,
             previews=previews,
             partial=bool(payload.get("partial", False)),
             message=str(payload.get("message", "")),
+            recommendation_rule_id=recommendation_rule_id,
+            recommendation_rule=recommendation_rule,
+            recommendation_rule_effective_date=recommendation_rule_effective_date,
         )
     except (
         OSError,
@@ -764,6 +842,15 @@ def run_direct_calibration(request, *, progress=None, should_stop=None):
             )
         )
     }
+    # D9: ONE size prior, fitted from the user's labels before the sweep
+    # starts and threaded unchanged into every scored point. The labels do
+    # not vary across candidates/merges/confidences, so fitting here rather
+    # than inside score_frames() both saves the repeated fit and makes it
+    # structurally impossible for two points in one sweep to be judged
+    # against different priors.
+    label_area_band = fit_calibration_area_band(
+        (_label_detections(labels) for _path, labels in frames), task=request.task
+    )
     for index, candidate in enumerate(request.candidates):
         if should_stop is not None and should_stop():
             outcome.partial = True
@@ -883,7 +970,11 @@ def run_direct_calibration(request, *, progress=None, should_stop=None):
                         confidence=confidence,
                         tiles=tiles,
                         seconds=seconds_per_frame,
-                        score=score_frames(scored, task=request.task),
+                        score=score_frames(
+                            scored,
+                            task=request.task,
+                            area_band=label_area_band,
+                        ),
                         merge_backend=backend,
                         candidate_index=index,
                     )
