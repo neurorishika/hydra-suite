@@ -16,7 +16,7 @@
         <link rel="prev" href="../classkit/">
       
       
-        <link rel="next" href="../filterkit/">
+        <link rel="next" href="../../runbooks/detectkit-headless-training/">
       
       
       <link rel="icon" href="../../assets/images/favicon.png">
@@ -934,12 +934,99 @@
     </span>
   </a>
   
+    <nav class="md-nav" aria-label="Key Features">
+      <ul class="md-nav__list">
+        
+          <li class="md-nav__item">
+  <a href="#evaluate-trained-models" class="md-nav__link">
+    <span class="md-ellipsis">
+      Evaluate trained models
+    </span>
+  </a>
+  
+</li>
+        
+          <li class="md-nav__item">
+  <a href="#dataset-panel" class="md-nav__link">
+    <span class="md-ellipsis">
+      Dataset panel
+    </span>
+  </a>
+  
+</li>
+        
+      </ul>
+    </nav>
+  
 </li>
       
     </ul>
   
 </nav>
       
+    </li>
+  
+
+              
+            
+              
+                
+  
+  
+  
+  
+    <li class="md-nav__item">
+      <a href="../../runbooks/detectkit-headless-training/" class="md-nav__link">
+        
+  
+  <span class="md-ellipsis">
+    DetectKit Headless Training
+  </span>
+  
+
+      </a>
+    </li>
+  
+
+              
+            
+              
+                
+  
+  
+  
+  
+    <li class="md-nav__item">
+      <a href="../detectkit-semantic-escalation/" class="md-nav__link">
+        
+  
+  <span class="md-ellipsis">
+    DetectKit: Semantic Escalation (SAM3)
+  </span>
+  
+
+      </a>
+    </li>
+  
+
+              
+            
+              
+                
+  
+  
+  
+  
+    <li class="md-nav__item">
+      <a href="../detectkit-sahi-calibration/" class="md-nav__link">
+        
+  
+  <span class="md-ellipsis">
+    DetectKit: SAHI Calibration Profiles
+  </span>
+  
+
+      </a>
     </li>
   
 
@@ -1211,6 +1298,48 @@
   
   
     <li class="md-nav__item">
+      <a href="../../developer-guide/resource-containment/" class="md-nav__link">
+        
+  
+  <span class="md-ellipsis">
+    Resource Containment
+  </span>
+  
+
+      </a>
+    </li>
+  
+
+              
+            
+              
+                
+  
+  
+  
+  
+    <li class="md-nav__item">
+      <a href="../../developer-guide/profiling/" class="md-nav__link">
+        
+  
+  <span class="md-ellipsis">
+    Profiling
+  </span>
+  
+
+      </a>
+    </li>
+  
+
+              
+            
+              
+                
+  
+  
+  
+  
+    <li class="md-nav__item">
       <a href="../../developer-guide/dependency-cuda-updates/" class="md-nav__link">
         
   
@@ -1237,6 +1366,27 @@
   
   <span class="md-ellipsis">
     Performance Tuning
+  </span>
+  
+
+      </a>
+    </li>
+  
+
+              
+            
+              
+                
+  
+  
+  
+  
+    <li class="md-nav__item">
+      <a href="../../developer-guide/inference-fast-mode/" class="md-nav__link">
+        
+  
+  <span class="md-ellipsis">
+    Inference Fast Mode
   </span>
   
 
@@ -1782,6 +1932,30 @@
     </span>
   </a>
   
+    <nav class="md-nav" aria-label="Key Features">
+      <ul class="md-nav__list">
+        
+          <li class="md-nav__item">
+  <a href="#evaluate-trained-models" class="md-nav__link">
+    <span class="md-ellipsis">
+      Evaluate trained models
+    </span>
+  </a>
+  
+</li>
+        
+          <li class="md-nav__item">
+  <a href="#dataset-panel" class="md-nav__link">
+    <span class="md-ellipsis">
+      Dataset panel
+    </span>
+  </a>
+  
+</li>
+        
+      </ul>
+    </nav>
+  
 </li>
       
     </ul>
@@ -1825,8 +1999,34 @@
 <ul>
 <li>Dataset panel for assembling and inspecting training data</li>
 <li>Training panel with configurable hyperparameters</li>
+<li>Validation-set evaluation with precision, recall, mAP50, and mAP50-95</li>
+<li>Side-by-side comparison of completed training runs</li>
 <li>Integration with TrackerKit's dataset generation exports</li>
 </ul>
+<h3 id="evaluate-trained-models">Evaluate trained models<a class="headerlink" href="#evaluate-trained-models" title="Permanent link">&para;</a></h3>
+<p>Open <strong>Evaluate</strong> from the main toolbar or <strong>Evaluate…</strong> in the Dataset panel.
+DetectKit lists completed YOLO training runs that still have both their model
+artifact and derived dataset. Select one or more runs, then choose <strong>Evaluate
+Selected</strong> or <strong>Evaluate All Available</strong>.</p>
+<p>Each model is evaluated on the held-out <code>val</code> split recorded for that training
+run. Detection and OBB runs report box metrics; segmentation runs report mask
+metrics. Results include precision, recall, mAP50, mAP50-95, and measured
+inference time. Evaluation history is saved with the project so runs can be
+compared again after reopening it. SAM3 concept runs use a different evaluation
+stack and are shown as unavailable in this YOLO evaluator.</p>
+<h3 id="dataset-panel">Dataset panel<a class="headerlink" href="#dataset-panel" title="Permanent link">&para;</a></h3>
+<p>Dataset curation changes are recoverable. Removing selected images with
+<strong>Delete</strong> or <strong>Backspace</strong> moves the images and matching labels into the
+project's <code>artifacts/recovery/</code> folder. The frame-, source-, and whole-project
+<strong>Clear labels</strong> actions save exact copies there before truncating the working
+label files. This also protects linked sources that live outside the project:
+their recovery payload is owned by the project that initiated the change.</p>
+<p>Use <strong>Undo last dataset change</strong> or the platform Undo shortcut (Command-Z on
+macOS, Ctrl-Z elsewhere) to restore the newest operation. Undo will not
+overwrite an image recreated at the same path or labels edited after they were
+cleared; resolve that conflict manually and try again. Nested images are shown
+by their paths relative to the source's <code>images/</code> directory, with the absolute
+path available in the row tooltip.</p>
 
 
 

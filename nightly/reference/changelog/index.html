@@ -873,6 +873,69 @@
   
   
     <li class="md-nav__item">
+      <a href="../../runbooks/detectkit-headless-training/" class="md-nav__link">
+        
+  
+  <span class="md-ellipsis">
+    DetectKit Headless Training
+  </span>
+  
+
+      </a>
+    </li>
+  
+
+              
+            
+              
+                
+  
+  
+  
+  
+    <li class="md-nav__item">
+      <a href="../../user-guide/detectkit-semantic-escalation/" class="md-nav__link">
+        
+  
+  <span class="md-ellipsis">
+    DetectKit: Semantic Escalation (SAM3)
+  </span>
+  
+
+      </a>
+    </li>
+  
+
+              
+            
+              
+                
+  
+  
+  
+  
+    <li class="md-nav__item">
+      <a href="../../user-guide/detectkit-sahi-calibration/" class="md-nav__link">
+        
+  
+  <span class="md-ellipsis">
+    DetectKit: SAHI Calibration Profiles
+  </span>
+  
+
+      </a>
+    </li>
+  
+
+              
+            
+              
+                
+  
+  
+  
+  
+    <li class="md-nav__item">
       <a href="../../user-guide/filterkit/" class="md-nav__link">
         
   
@@ -1132,6 +1195,48 @@
   
   
     <li class="md-nav__item">
+      <a href="../../developer-guide/resource-containment/" class="md-nav__link">
+        
+  
+  <span class="md-ellipsis">
+    Resource Containment
+  </span>
+  
+
+      </a>
+    </li>
+  
+
+              
+            
+              
+                
+  
+  
+  
+  
+    <li class="md-nav__item">
+      <a href="../../developer-guide/profiling/" class="md-nav__link">
+        
+  
+  <span class="md-ellipsis">
+    Profiling
+  </span>
+  
+
+      </a>
+    </li>
+  
+
+              
+            
+              
+                
+  
+  
+  
+  
+    <li class="md-nav__item">
       <a href="../../developer-guide/dependency-cuda-updates/" class="md-nav__link">
         
   
@@ -1158,6 +1263,27 @@
   
   <span class="md-ellipsis">
     Performance Tuning
+  </span>
+  
+
+      </a>
+    </li>
+  
+
+              
+            
+              
+                
+  
+  
+  
+  
+    <li class="md-nav__item">
+      <a href="../../developer-guide/inference-fast-mode/" class="md-nav__link">
+        
+  
+  <span class="md-ellipsis">
+    Inference Fast Mode
   </span>
   
 
@@ -1613,6 +1739,17 @@
         
       
       
+        <label class="md-nav__link md-nav__link--active" for="__toc">
+          
+  
+  <span class="md-ellipsis">
+    Changelog
+  </span>
+  
+
+          <span class="md-nav__icon md-icon"></span>
+        </label>
+      
       <a href="./" class="md-nav__link md-nav__link--active">
         
   
@@ -1622,6 +1759,34 @@
   
 
       </a>
+      
+        
+
+<nav class="md-nav md-nav--secondary" aria-label="Table of contents">
+  
+  
+  
+    
+  
+  
+    <label class="md-nav__title" for="__toc">
+      <span class="md-nav__icon md-icon"></span>
+      Table of contents
+    </label>
+    <ul class="md-nav__list" data-md-component="toc" data-md-scrollfix>
+      
+        <li class="md-nav__item">
+  <a href="#identity-heads-composite-catalogs-non-identifying-classes-unreleased" class="md-nav__link">
+    <span class="md-ellipsis">
+      Identity heads, composite catalogs, non-identifying classes (unreleased)
+    </span>
+  </a>
+  
+</li>
+      
+    </ul>
+  
+</nav>
       
     </li>
   
@@ -1676,6 +1841,23 @@
     
   
   
+    <label class="md-nav__title" for="__toc">
+      <span class="md-nav__icon md-icon"></span>
+      Table of contents
+    </label>
+    <ul class="md-nav__list" data-md-component="toc" data-md-scrollfix>
+      
+        <li class="md-nav__item">
+  <a href="#identity-heads-composite-catalogs-non-identifying-classes-unreleased" class="md-nav__link">
+    <span class="md-ellipsis">
+      Identity heads, composite catalogs, non-identifying classes (unreleased)
+    </span>
+  </a>
+  
+</li>
+      
+    </ul>
+  
 </nav>
                   </div>
                 </div>
@@ -1708,6 +1890,63 @@
 <li>Reorganized docs into audience-based tracks.</li>
 <li>Added mkdocstrings API reference pages.</li>
 <li>Standardized command terminology to <code>posekit</code>.</li>
+</ul>
+<h2 id="identity-heads-composite-catalogs-non-identifying-classes-unreleased">Identity heads, composite catalogs, non-identifying classes (unreleased)<a class="headerlink" href="#identity-heads-composite-catalogs-non-identifying-classes-unreleased" title="Permanent link">&para;</a></h2>
+<ul>
+<li>
+<p><strong>Fixed (data loss):</strong> the rich export's per-detection CNN columns
+  (<code>CNN_&lt;label&gt;[_&lt;factor&gt;]_Class</code> / <code>_Conf</code>) had been silently absent since the
+  Gen-2 inference migration. They were merged from a V3 <code>CNNIdentityCache</code>
+  whose writer was replaced by the CNN stage's own cache; the reader was
+  <code>os.path.exists</code>-guarded, so it degraded to a no-op instead of failing. Any
+  run with a CNN classifier therefore produced a rich CSV with no CNN columns,
+  no <code>IdentityEvidenceTopLabel</code> / <code>IdentityEvidenceConfidence</code>, and no
+  <code>UniqueIdentityKey</code>. All are restored. On the identity fixture this adds 7
+  columns to <code>&lt;video&gt;_tracking_final_with_individual.csv</code> and populates them on
+  7,475 of 8,099 rows (the rest are interpolated rows with no detection);
+  <code>IdentityEvidenceSources</code> and <code>IdentityEvidenceConflictFlag</code> now report the
+  CNN source. Positions, <code>TrajectoryID</code>, and the <code>IdentityFinal*</code> family are
+  unchanged. <strong>Anyone who built analyses on the post-migration rich CSV was
+  working without identity evidence columns and should re-export.</strong></p>
+</li>
+<li>
+<p><strong>Breaking:</strong> <code>UniqueIdentityKey</code> now contains identity-head sources only.
+  Non-identity classifiers (behavior, sex, caste, ...) no longer appear in
+  this column. Downstream parsers of <code>UniqueIdentityKey</code> will see fewer
+  sources per row than before.</p>
+</li>
+<li><strong>Breaking:</strong> configurations with two or more classifiers marked "Unique
+  identifier" now produce a cross-product catalog (one composite identity per
+  axis combination) instead of a union of separate catalogs. Prior results
+  for such multi-identity-model configurations were incorrect (each model
+  competed for the same Hungarian columns); the new cross-product behavior is
+  the correct one and results will differ.</li>
+<li><strong>New, opt-in:</strong> identity classifiers can declare <code>non_identifying_classes</code>
+  (bare class, <code>factor:class</code>, or whole composite label) to exclude those
+  composites from the catalog. Tracks that only ever show non-identifying
+  evidence are labelled with the composite (e.g. <code>notag_notag</code>) but keep
+  <code>IdentityFinalID == 0</code> and <code>IdentityFinalSource == "nonidentifying"</code> -- they
+  are tracked and labelled, never identity-resolved. No fixture declares this
+  option, so it is a provable no-op for all existing configurations
+  (byte-identical equivalence gate). See
+  <a href="../../user-guide/individual-analysis/#identity-classifiers-and-non-identifying-classes">Individual Analysis</a>
+  for usage.</li>
+<li><strong>Fixed:</strong> non-identity classifiers (behavior, sex, caste, ...) now reach the
+  clean <code>&lt;video&gt;_tracks.csv</code> as <code>&lt;label&gt;[_&lt;factor&gt;]_class</code> / <code>_conf</code>. In User
+  mode the clean CSV is the <em>only</em> export written, and it carried no classifier
+  output at all -- so a classifier configured purely as output ran, cost
+  inference time, and was discarded at export. The design's data contract
+  ("they are output, not identity, and still fully exported") had held only in
+  Debug mode. Identity classifiers are deliberately excluded: their channel is
+  the resolved <code>identity</code>/<code>identity_id</code>, and their per-frame calls are evidence
+  that belongs in the Debug export.</li>
+<li><strong>New column:</strong> the clean <code>&lt;video&gt;_tracks.csv</code> gains <code>identity_id</code>, the
+  resolved catalog slot that already existed in the rich export as
+  <code>IdentityFinalID</code> (<code>0</code> = unknown / non-identifying). The <code>identity</code> label
+  alone is not unique -- a non-identifying label is shared by every track
+  carrying it -- so group by <code>identity_id</code>, not by <code>identity</code>. Readers that
+  select columns by name are unaffected; readers that assume a fixed column
+  count must be updated.</li>
 </ul>
 
 

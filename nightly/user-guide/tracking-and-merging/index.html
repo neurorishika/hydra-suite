@@ -817,6 +817,15 @@
   
 </li>
         
+          <li class="md-nav__item">
+  <a href="#8-multi-arena-videos" class="md-nav__link">
+    <span class="md-ellipsis">
+      8. Multi-arena videos
+    </span>
+  </a>
+  
+</li>
+        
       </ul>
     </nav>
   
@@ -1282,6 +1291,69 @@
   
   
     <li class="md-nav__item">
+      <a href="../../runbooks/detectkit-headless-training/" class="md-nav__link">
+        
+  
+  <span class="md-ellipsis">
+    DetectKit Headless Training
+  </span>
+  
+
+      </a>
+    </li>
+  
+
+              
+            
+              
+                
+  
+  
+  
+  
+    <li class="md-nav__item">
+      <a href="../detectkit-semantic-escalation/" class="md-nav__link">
+        
+  
+  <span class="md-ellipsis">
+    DetectKit: Semantic Escalation (SAM3)
+  </span>
+  
+
+      </a>
+    </li>
+  
+
+              
+            
+              
+                
+  
+  
+  
+  
+    <li class="md-nav__item">
+      <a href="../detectkit-sahi-calibration/" class="md-nav__link">
+        
+  
+  <span class="md-ellipsis">
+    DetectKit: SAHI Calibration Profiles
+  </span>
+  
+
+      </a>
+    </li>
+  
+
+              
+            
+              
+                
+  
+  
+  
+  
+    <li class="md-nav__item">
       <a href="../filterkit/" class="md-nav__link">
         
   
@@ -1541,6 +1613,48 @@
   
   
     <li class="md-nav__item">
+      <a href="../../developer-guide/resource-containment/" class="md-nav__link">
+        
+  
+  <span class="md-ellipsis">
+    Resource Containment
+  </span>
+  
+
+      </a>
+    </li>
+  
+
+              
+            
+              
+                
+  
+  
+  
+  
+    <li class="md-nav__item">
+      <a href="../../developer-guide/profiling/" class="md-nav__link">
+        
+  
+  <span class="md-ellipsis">
+    Profiling
+  </span>
+  
+
+      </a>
+    </li>
+  
+
+              
+            
+              
+                
+  
+  
+  
+  
+    <li class="md-nav__item">
       <a href="../../developer-guide/dependency-cuda-updates/" class="md-nav__link">
         
   
@@ -1567,6 +1681,27 @@
   
   <span class="md-ellipsis">
     Performance Tuning
+  </span>
+  
+
+      </a>
+    </li>
+  
+
+              
+            
+              
+                
+  
+  
+  
+  
+    <li class="md-nav__item">
+      <a href="../../developer-guide/inference-fast-mode/" class="md-nav__link">
+        
+  
+  <span class="md-ellipsis">
+    Inference Fast Mode
   </span>
   
 
@@ -2184,6 +2319,15 @@
   
 </li>
         
+          <li class="md-nav__item">
+  <a href="#8-multi-arena-videos" class="md-nav__link">
+    <span class="md-ellipsis">
+      8. Multi-arena videos
+    </span>
+  </a>
+  
+</li>
+        
       </ul>
     </nav>
   
@@ -2588,6 +2732,23 @@
 <!-- TODO: add postprocessing-stack.svg diagram -->
 <!-- ![Post-processing stack](../assets/figures/postprocessing-stack.svg) -->
 
+<h3 id="8-multi-arena-videos">8. Multi-arena videos<a class="headerlink" href="#8-multi-arena-videos" title="Permanent link">&para;</a></h3>
+<p>If your ROI is set up as several separate shapes, each tagged with its own arena ID
+(dishes, wells, or boxes captured in one camera view), the tracker runs each arena as an
+<strong>independent tracking problem</strong>: its own track slots, its own assignment, its own
+identity decoding, and its own post-processing. An identity label (e.g. "ant A") can
+repeat once per arena without the two being confused for each other, and animals in one
+arena never compete for track slots with animals in another.</p>
+<p><strong>Caveat — detection budgets are still shared across the whole frame.</strong> The per-frame
+detection budget (how many candidate objects a frame is allowed to yield, and which ones
+survive if there are more candidates than slots) is spent globally, not per arena. In
+practice this means a crowded or noisy arena can consume detection budget that "belongs"
+to a quieter arena, so the quiet arena may lose detections it would have kept had it been
+tracked alone. This only bites when total detections across all arenas exceed the total
+number of track slots (<code>animals_per_arena * number_of_arenas</code>) — the nominal case, where
+each arena's real detection count stays within its own share of that budget, is
+unaffected. Tracking, assignment, identity decoding, and post-processing remain fully
+per-arena regardless.</p>
 <h2 id="the-current-tracking-logic-in-detail">The Current Tracking Logic in Detail<a class="headerlink" href="#the-current-tracking-logic-in-detail" title="Permanent link">&para;</a></h2>
 <h3 id="measurement-representation">Measurement representation<a class="headerlink" href="#measurement-representation" title="Permanent link">&para;</a></h3>
 <p>A detection contributes several parallel data streams:</p>

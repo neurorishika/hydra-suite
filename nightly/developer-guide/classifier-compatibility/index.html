@@ -867,6 +867,69 @@
   
   
     <li class="md-nav__item">
+      <a href="../../runbooks/detectkit-headless-training/" class="md-nav__link">
+        
+  
+  <span class="md-ellipsis">
+    DetectKit Headless Training
+  </span>
+  
+
+      </a>
+    </li>
+  
+
+              
+            
+              
+                
+  
+  
+  
+  
+    <li class="md-nav__item">
+      <a href="../../user-guide/detectkit-semantic-escalation/" class="md-nav__link">
+        
+  
+  <span class="md-ellipsis">
+    DetectKit: Semantic Escalation (SAM3)
+  </span>
+  
+
+      </a>
+    </li>
+  
+
+              
+            
+              
+                
+  
+  
+  
+  
+    <li class="md-nav__item">
+      <a href="../../user-guide/detectkit-sahi-calibration/" class="md-nav__link">
+        
+  
+  <span class="md-ellipsis">
+    DetectKit: SAHI Calibration Profiles
+  </span>
+  
+
+      </a>
+    </li>
+  
+
+              
+            
+              
+                
+  
+  
+  
+  
+    <li class="md-nav__item">
       <a href="../../user-guide/filterkit/" class="md-nav__link">
         
   
@@ -1126,6 +1189,48 @@
   
   
     <li class="md-nav__item">
+      <a href="../resource-containment/" class="md-nav__link">
+        
+  
+  <span class="md-ellipsis">
+    Resource Containment
+  </span>
+  
+
+      </a>
+    </li>
+  
+
+              
+            
+              
+                
+  
+  
+  
+  
+    <li class="md-nav__item">
+      <a href="../profiling/" class="md-nav__link">
+        
+  
+  <span class="md-ellipsis">
+    Profiling
+  </span>
+  
+
+      </a>
+    </li>
+  
+
+              
+            
+              
+                
+  
+  
+  
+  
+    <li class="md-nav__item">
       <a href="../dependency-cuda-updates/" class="md-nav__link">
         
   
@@ -1152,6 +1257,27 @@
   
   <span class="md-ellipsis">
     Performance Tuning
+  </span>
+  
+
+      </a>
+    </li>
+  
+
+              
+            
+              
+                
+  
+  
+  
+  
+    <li class="md-nav__item">
+      <a href="../inference-fast-mode/" class="md-nav__link">
+        
+  
+  <span class="md-ellipsis">
+    Inference Fast Mode
   </span>
   
 
@@ -1706,6 +1832,15 @@
 </li>
       
         <li class="md-nav__item">
+  <a href="#fit-policy" class="md-nav__link">
+    <span class="md-ellipsis">
+      Fit policy
+    </span>
+  </a>
+  
+</li>
+      
+        <li class="md-nav__item">
   <a href="#compute-runtimes" class="md-nav__link">
     <span class="md-ellipsis">
       Compute runtimes
@@ -1811,9 +1946,9 @@ single-factor schemes still use <code>flat_custom</code>.</p>
 <p>The registry is stored at <code>{models_root}/model_registry.json</code> in the v2
 root shape:</p>
 <div class="language-json highlight"><pre><span></span><code><span id="__span-0-1"><a id="__codelineno-0-1" name="__codelineno-0-1" href="#__codelineno-0-1"></a><span class="p">{</span>
-</span><span id="__span-0-2"><a id="__codelineno-0-2" name="__codelineno-0-2" href="#__codelineno-0-2"></a><span class="w">  </span><span class="nt">&quot;schema_version&quot;</span><span class="p">:</span><span class="w"> </span><span class="mi">2</span><span class="p">,</span>
-</span><span id="__span-0-3"><a id="__codelineno-0-3" name="__codelineno-0-3" href="#__codelineno-0-3"></a><span class="w">  </span><span class="nt">&quot;entries&quot;</span><span class="p">:</span><span class="w"> </span><span class="p">{</span>
-</span><span id="__span-0-4"><a id="__codelineno-0-4" name="__codelineno-0-4" href="#__codelineno-0-4"></a><span class="w">    </span><span class="nt">&quot;classification/identity/....pth&quot;</span><span class="p">:</span><span class="w"> </span><span class="p">{</span><span class="w"> </span><span class="nt">&quot;schema_version&quot;</span><span class="p">:</span><span class="w"> </span><span class="mi">2</span><span class="p">,</span><span class="w"> </span><span class="err">...</span><span class="w"> </span><span class="p">}</span>
+</span><span id="__span-0-2"><a id="__codelineno-0-2" name="__codelineno-0-2" href="#__codelineno-0-2"></a><span class="w">  </span><span class="nt">"schema_version"</span><span class="p">:</span><span class="w"> </span><span class="mi">2</span><span class="p">,</span>
+</span><span id="__span-0-3"><a id="__codelineno-0-3" name="__codelineno-0-3" href="#__codelineno-0-3"></a><span class="w">  </span><span class="nt">"entries"</span><span class="p">:</span><span class="w"> </span><span class="p">{</span>
+</span><span id="__span-0-4"><a id="__codelineno-0-4" name="__codelineno-0-4" href="#__codelineno-0-4"></a><span class="w">    </span><span class="nt">"classification/identity/....pth"</span><span class="p">:</span><span class="w"> </span><span class="p">{</span><span class="w"> </span><span class="nt">"schema_version"</span><span class="p">:</span><span class="w"> </span><span class="mi">2</span><span class="p">,</span><span class="w"> </span><span class="err">...</span><span class="w"> </span><span class="p">}</span>
 </span><span id="__span-0-5"><a id="__codelineno-0-5" name="__codelineno-0-5" href="#__codelineno-0-5"></a><span class="w">  </span><span class="p">}</span>
 </span><span id="__span-0-6"><a id="__codelineno-0-6" name="__codelineno-0-6" href="#__codelineno-0-6"></a><span class="p">}</span>
 </span></code></pre></div>
@@ -1826,10 +1961,53 @@ directly from UI code.</p>
 <li>CNN identity accepts flat and multi-head artifacts. Multi-head imports
   require a <code>scoring_mode</code> (<code>"atomic"</code> or <code>"per_head_average"</code>).</li>
 </ul>
+<h2 id="fit-policy">Fit policy<a class="headerlink" href="#fit-policy" title="Permanent link">&para;</a></h2>
+<p>A classifier artifact records the <strong>Layer-2 fit policy</strong> it was trained
+under: how a canonical crop of arbitrary aspect ratio is mapped onto the
+model's square input. <code>ClassifierMetadata.fit_policy</code> is one of:</p>
+<table>
+<thead>
+<tr>
+<th>Policy</th>
+<th>Meaning</th>
+</tr>
+</thead>
+<tbody>
+<tr>
+<td><code>letterbox</code></td>
+<td>Aspect-preserving resize onto a zero-padded canvas. What <code>training/canonical_transform.py</code> (<code>CanonicalFitTransform</code>) produces, and what every model published since 2026-08-05 is trained with.</td>
+</tr>
+<tr>
+<td><code>squash</code></td>
+<td>Legacy anisotropic <code>Resize((sz, sz))</code> — the crop is stretched to fill the square. What training produced <em>before</em> commit <code>3a2163ac</code> (2026-08-05).</td>
+</tr>
+<tr>
+<td><code>native</code></td>
+<td>The backend applies its own transform (ultralytics YOLO); crops are handed over untouched.</td>
+</tr>
+</tbody>
+</table>
+<p>Every classifier consumer goes through one shared Layer-2 function,
+<code>core.canonicalization.fit.fit_crops_for_model(crops, model_hw, policy)</code>
+(the parallel crop path in <code>inference/stages/crops.py</code> dispatches to the
+same function). No consumer preprocesses classifier crops by hand.</p>
+<p><strong>The legacy rule.</strong> An artifact with no <code>fit_policy</code> key predates
+stamping, so <code>resolve_fit_policy</code> resolves it to <code>squash</code> and logs a
+warning naming the file. This is not cosmetic: feeding a <code>squash</code>-trained
+model letterboxed crops leaves a large fraction of the input black, and on
+the April 2026 colour-tag model that collapsed joint max-probability from
+0.946 to 0.141 — evidence indistinguishable from noise. Stamp such an
+artifact explicitly (which also silences the warning):</p>
+<div class="language-bash highlight"><pre><span></span><code><span id="__span-1-1"><a id="__codelineno-1-1" name="__codelineno-1-1" href="#__codelineno-1-1"></a>python<span class="w"> </span>scripts/stamp_fit_policy.py<span class="w"> </span>&lt;model.pth<span class="w"> </span><span class="p">|</span><span class="w"> </span>bundle.multihead.json&gt;<span class="w"> </span><span class="se">\</span>
+</span><span id="__span-1-2"><a id="__codelineno-1-2" name="__codelineno-1-2" href="#__codelineno-1-2"></a><span class="w">    </span>--policy<span class="w"> </span>letterbox<span class="p">|</span>squash<span class="w">        </span><span class="c1"># --dry-run to preview; writes a .bak sibling</span>
+</span></code></pre></div>
+<p>An unrecognized value is a hard <code>ClassifierFormatError</code>, never a silent
+fallback.</p>
 <h2 id="compute-runtimes">Compute runtimes<a class="headerlink" href="#compute-runtimes" title="Permanent link">&para;</a></h2>
-<p>Both consumers use <code>compute_runtime</code> dispatch via <code>ClassifierBackend</code>.
-<code>_pipeline_supports_runtime</code> returns the same capability set for
-<code>cnn_identity</code> and <code>head_tail</code>.</p>
+<p>Both consumers receive a <code>ResolvedBackend</code> (from
+<code>runtime/resolver.py</code>) via <code>ClassifierBackend</code>; the same runtime tier
+resolves identically for the <code>cnn_identity</code> and <code>head_tail</code> stages. See
+<a href="../runtime-integration/">Runtime integration</a>.</p>
 
 
 

@@ -871,6 +871,69 @@
   
   
     <li class="md-nav__item">
+      <a href="../../runbooks/detectkit-headless-training/" class="md-nav__link">
+        
+  
+  <span class="md-ellipsis">
+    DetectKit Headless Training
+  </span>
+  
+
+      </a>
+    </li>
+  
+
+              
+            
+              
+                
+  
+  
+  
+  
+    <li class="md-nav__item">
+      <a href="../../user-guide/detectkit-semantic-escalation/" class="md-nav__link">
+        
+  
+  <span class="md-ellipsis">
+    DetectKit: Semantic Escalation (SAM3)
+  </span>
+  
+
+      </a>
+    </li>
+  
+
+              
+            
+              
+                
+  
+  
+  
+  
+    <li class="md-nav__item">
+      <a href="../../user-guide/detectkit-sahi-calibration/" class="md-nav__link">
+        
+  
+  <span class="md-ellipsis">
+    DetectKit: SAHI Calibration Profiles
+  </span>
+  
+
+      </a>
+    </li>
+  
+
+              
+            
+              
+                
+  
+  
+  
+  
+    <li class="md-nav__item">
       <a href="../../user-guide/filterkit/" class="md-nav__link">
         
   
@@ -1130,6 +1193,48 @@
   
   
     <li class="md-nav__item">
+      <a href="../../developer-guide/resource-containment/" class="md-nav__link">
+        
+  
+  <span class="md-ellipsis">
+    Resource Containment
+  </span>
+  
+
+      </a>
+    </li>
+  
+
+              
+            
+              
+                
+  
+  
+  
+  
+    <li class="md-nav__item">
+      <a href="../../developer-guide/profiling/" class="md-nav__link">
+        
+  
+  <span class="md-ellipsis">
+    Profiling
+  </span>
+  
+
+      </a>
+    </li>
+  
+
+              
+            
+              
+                
+  
+  
+  
+  
+    <li class="md-nav__item">
       <a href="../../developer-guide/dependency-cuda-updates/" class="md-nav__link">
         
   
@@ -1156,6 +1261,27 @@
   
   <span class="md-ellipsis">
     Performance Tuning
+  </span>
+  
+
+      </a>
+    </li>
+  
+
+              
+            
+              
+                
+  
+  
+  
+  
+    <li class="md-nav__item">
+      <a href="../../developer-guide/inference-fast-mode/" class="md-nav__link">
+        
+  
+  <span class="md-ellipsis">
+    Inference Fast Mode
   </span>
   
 
@@ -2052,8 +2178,8 @@
 </ul>
 <p>Use a dedicated SLEAP env (typically named with prefix <code>sleap</code>).</p>
 <h3 id="how-do-i-verify-my-sleap-env-quickly">How do I verify my SLEAP env quickly?<a class="headerlink" href="#how-do-i-verify-my-sleap-env-quickly" title="Permanent link">&para;</a></h3>
-<div class="language-bash highlight"><pre><span></span><code><span id="__span-0-1"><a id="__codelineno-0-1" name="__codelineno-0-1" href="#__codelineno-0-1"></a>conda<span class="w"> </span>run<span class="w"> </span>-n<span class="w"> </span>sleap<span class="w"> </span>python<span class="w"> </span>-c<span class="w"> </span><span class="s2">&quot;import importlib.util as u; print(&#39;sleap_nn&#39;, bool(u.find_spec(&#39;sleap_nn&#39;))); print(&#39;onnx&#39;, bool(u.find_spec(&#39;onnx&#39;))); print(&#39;onnxruntime&#39;, bool(u.find_spec(&#39;onnxruntime&#39;)))&quot;</span>
-</span><span id="__span-0-2"><a id="__codelineno-0-2" name="__codelineno-0-2" href="#__codelineno-0-2"></a>conda<span class="w"> </span>run<span class="w"> </span>-n<span class="w"> </span>sleap<span class="w"> </span>python<span class="w"> </span>-c<span class="w"> </span><span class="s2">&quot;import torch, torchvision; print(&#39;torch&#39;, torch.__version__); print(&#39;torchvision&#39;, torchvision.__version__)&quot;</span>
+<div class="language-bash highlight"><pre><span></span><code><span id="__span-0-1"><a id="__codelineno-0-1" name="__codelineno-0-1" href="#__codelineno-0-1"></a>conda<span class="w"> </span>run<span class="w"> </span>-n<span class="w"> </span>sleap<span class="w"> </span>python<span class="w"> </span>-c<span class="w"> </span><span class="s2">"import importlib.util as u; print('sleap_nn', bool(u.find_spec('sleap_nn'))); print('onnx', bool(u.find_spec('onnx'))); print('onnxruntime', bool(u.find_spec('onnxruntime')))"</span>
+</span><span id="__span-0-2"><a id="__codelineno-0-2" name="__codelineno-0-2" href="#__codelineno-0-2"></a>conda<span class="w"> </span>run<span class="w"> </span>-n<span class="w"> </span>sleap<span class="w"> </span>python<span class="w"> </span>-c<span class="w"> </span><span class="s2">"import torch, torchvision; print('torch', torch.__version__); print('torchvision', torchvision.__version__)"</span>
 </span></code></pre></div>
 <h3 id="i-get-operator-torchvisionnms-does-not-exist-how-do-i-fix-it">I get <code>operator torchvision::nms does not exist</code>. How do I fix it?<a class="headerlink" href="#i-get-operator-torchvisionnms-does-not-exist-how-do-i-fix-it" title="Permanent link">&para;</a></h3>
 <p><code>torch</code> and <code>torchvision</code> are mismatched. Reinstall a matching pair from one channel/index.</p>
@@ -2072,7 +2198,7 @@
 </span><span id="__span-2-3"><a id="__codelineno-2-3" name="__codelineno-2-3" href="#__codelineno-2-3"></a>conda<span class="w"> </span>run<span class="w"> </span>-n<span class="w"> </span>sleap<span class="w"> </span>python<span class="w"> </span>-m<span class="w"> </span>pip<span class="w"> </span>install<span class="w"> </span>--upgrade<span class="w"> </span>nvidia-nccl-cu13
 </span></code></pre></div>
 <p>If import only works when unsetting <code>LD_LIBRARY_PATH</code>, your shell is injecting incompatible CUDA/NCCL libs:</p>
-<div class="language-bash highlight"><pre><span></span><code><span id="__span-3-1"><a id="__codelineno-3-1" name="__codelineno-3-1" href="#__codelineno-3-1"></a>env<span class="w"> </span>-u<span class="w"> </span>LD_LIBRARY_PATH<span class="w"> </span>conda<span class="w"> </span>run<span class="w"> </span>-n<span class="w"> </span>sleap<span class="w"> </span>python<span class="w"> </span>-c<span class="w"> </span><span class="s2">&quot;import torch; print(torch.cuda.is_available())&quot;</span>
+<div class="language-bash highlight"><pre><span></span><code><span id="__span-3-1"><a id="__codelineno-3-1" name="__codelineno-3-1" href="#__codelineno-3-1"></a>env<span class="w"> </span>-u<span class="w"> </span>LD_LIBRARY_PATH<span class="w"> </span>conda<span class="w"> </span>run<span class="w"> </span>-n<span class="w"> </span>sleap<span class="w"> </span>python<span class="w"> </span>-c<span class="w"> </span><span class="s2">"import torch; print(torch.cuda.is_available())"</span>
 </span></code></pre></div>
 <h3 id="where-is-the-full-sleap-integration-guide">Where is the full SLEAP integration guide?<a class="headerlink" href="#where-is-the-full-sleap-integration-guide" title="Permanent link">&para;</a></h3>
 <p>See <a href="../../getting-started/integrations/">SLEAP Integration</a>.</p>

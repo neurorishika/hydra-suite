@@ -847,6 +847,15 @@
 </li>
       
         <li class="md-nav__item">
+  <a href="#identity-evidence-and-the-quality-breaker" class="md-nav__link">
+    <span class="md-ellipsis">
+      Identity Evidence and the Quality Breaker
+    </span>
+  </a>
+  
+</li>
+      
+        <li class="md-nav__item">
   <a href="#related-reading" class="md-nav__link">
     <span class="md-ellipsis">
       Related Reading
@@ -1023,6 +1032,69 @@
   
   <span class="md-ellipsis">
     DetectKit
+  </span>
+  
+
+      </a>
+    </li>
+  
+
+              
+            
+              
+                
+  
+  
+  
+  
+    <li class="md-nav__item">
+      <a href="../../runbooks/detectkit-headless-training/" class="md-nav__link">
+        
+  
+  <span class="md-ellipsis">
+    DetectKit Headless Training
+  </span>
+  
+
+      </a>
+    </li>
+  
+
+              
+            
+              
+                
+  
+  
+  
+  
+    <li class="md-nav__item">
+      <a href="../detectkit-semantic-escalation/" class="md-nav__link">
+        
+  
+  <span class="md-ellipsis">
+    DetectKit: Semantic Escalation (SAM3)
+  </span>
+  
+
+      </a>
+    </li>
+  
+
+              
+            
+              
+                
+  
+  
+  
+  
+    <li class="md-nav__item">
+      <a href="../detectkit-sahi-calibration/" class="md-nav__link">
+        
+  
+  <span class="md-ellipsis">
+    DetectKit: SAHI Calibration Profiles
   </span>
   
 
@@ -1298,6 +1370,48 @@
   
   
     <li class="md-nav__item">
+      <a href="../../developer-guide/resource-containment/" class="md-nav__link">
+        
+  
+  <span class="md-ellipsis">
+    Resource Containment
+  </span>
+  
+
+      </a>
+    </li>
+  
+
+              
+            
+              
+                
+  
+  
+  
+  
+    <li class="md-nav__item">
+      <a href="../../developer-guide/profiling/" class="md-nav__link">
+        
+  
+  <span class="md-ellipsis">
+    Profiling
+  </span>
+  
+
+      </a>
+    </li>
+  
+
+              
+            
+              
+                
+  
+  
+  
+  
+    <li class="md-nav__item">
       <a href="../../developer-guide/dependency-cuda-updates/" class="md-nav__link">
         
   
@@ -1324,6 +1438,27 @@
   
   <span class="md-ellipsis">
     Performance Tuning
+  </span>
+  
+
+      </a>
+    </li>
+  
+
+              
+            
+              
+                
+  
+  
+  
+  
+    <li class="md-nav__item">
+      <a href="../../developer-guide/inference-fast-mode/" class="md-nav__link">
+        
+  
+  <span class="md-ellipsis">
+    Inference Fast Mode
   </span>
   
 
@@ -1950,6 +2085,15 @@
 </li>
       
         <li class="md-nav__item">
+  <a href="#identity-evidence-and-the-quality-breaker" class="md-nav__link">
+    <span class="md-ellipsis">
+      Identity Evidence and the Quality Breaker
+    </span>
+  </a>
+  
+</li>
+      
+        <li class="md-nav__item">
   <a href="#related-reading" class="md-nav__link">
     <span class="md-ellipsis">
       Related Reading
@@ -2086,6 +2230,39 @@
 <li>crossings are rare,</li>
 <li>and fragmentation is the main failure mode.</li>
 </ul>
+<h2 id="identity-evidence-and-the-quality-breaker">Identity Evidence and the Quality Breaker<a class="headerlink" href="#identity-evidence-and-the-quality-breaker" title="Permanent link">&para;</a></h2>
+<p>When identity is enabled, the fragment solver can split a trajectory where
+the identity evidence changes (PELT changepoint detection) before assigning
+labels. Two behaviours are worth knowing:</p>
+<ul>
+<li>
+<p><strong>The PELT penalty is in probability units.</strong> The signal is the smoothed
+  per-label posterior on the simplex, <code>[0, 1]</code>, used raw. Earlier versions
+  z-scored it per trajectory, which made the penalty's units depend on the
+  trajectory and inflated float noise on a flat posterior into unit-variance
+  "signal" -- 660 spurious splits over 128 tracks in one measured run. Because
+  the units are now absolute, a penalty tuned on one video means the same
+  thing on the next.</p>
+</li>
+<li>
+<p><strong>Uninformative evidence is refused, not acted on.</strong> Before splitting, the
+  solver assesses evidence quality: the fraction of detections confident
+  above <code>EVIDENCE_CONF_LEVEL</code> (0.5) must reach <code>EVIDENCE_MIN_CONF_FRAC</code>
+  (10%), and the distinct-labels-per-frame diversity must reach
+  <code>EVIDENCE_MIN_DIVERSITY</code> (0.30) of what is achievable. If either fails, the
+  solver logs an ERROR and refuses to split or assign:</p>
+</li>
+</ul>
+<div class="language-text highlight"><pre><span></span><code><span id="__span-0-1"><a id="__codelineno-0-1" name="__codelineno-0-1" href="#__codelineno-0-1"></a>fragment_solver: identity evidence is uninformative (confident=..% of
+</span><span id="__span-0-2"><a id="__codelineno-0-2" name="__codelineno-0-2" href="#__codelineno-0-2"></a>detections, diversity=.. over .. frames) -- refusing to split or assign
+</span><span id="__span-0-3"><a id="__codelineno-0-3" name="__codelineno-0-3" href="#__codelineno-0-3"></a>identities. Check the classifier's fit_policy / preprocessing.
+</span></code></pre></div>
+<p>Trajectories are then left intact rather than shredded by a source that
+  does not know anything. The smoothed per-row posterior is still written to
+  <code>IdentityFinalSmoothedLabel</code> / <code>...Confidence</code> so you can see what the
+  (uninformative) source thought. Seeing this ERROR almost always means the
+  classifier is being fed the wrong crop shape -- see
+  <a href="../individual-analysis/#older-classifiers-and-crop-preprocessing">Older Classifiers and Crop Preprocessing</a>.</p>
 <h2 id="related-reading">Related Reading<a class="headerlink" href="#related-reading" title="Permanent link">&para;</a></h2>
 <ul>
 <li><a href="../tracking-and-merging/">Tracking, Identity Continuity, and Merging</a></li>

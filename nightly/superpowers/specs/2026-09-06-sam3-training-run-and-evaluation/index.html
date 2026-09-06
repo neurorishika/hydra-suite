@@ -1,0 +1,3303 @@
+
+<!doctype html>
+<html lang="en" class="no-js">
+  <head>
+    
+      <meta charset="utf-8">
+      <meta name="viewport" content="width=device-width,initial-scale=1">
+      
+        <meta name="description" content="User and developer documentation for HYDRA Suite">
+      
+      
+      
+        <link rel="canonical" href="https://neurorishika.github.io/hydra-suite/nightly/superpowers/specs/2026-09-06-sam3-training-run-and-evaluation/">
+      
+      
+      
+      
+      <link rel="icon" href="../../../assets/images/favicon.png">
+      <meta name="generator" content="mkdocs-1.6.1, mkdocs-material-9.5.43">
+    
+    
+      
+        <title>SAM3 LoRA training run — improved_ant_detection / obb-6609f9b105 - HYDRA Suite Docs</title>
+      
+    
+    
+      <link rel="stylesheet" href="../../../assets/stylesheets/main.0253249f.min.css">
+      
+        
+        <link rel="stylesheet" href="../../../assets/stylesheets/palette.06af60db.min.css">
+      
+      
+
+
+    
+    
+      
+    
+    
+      
+        
+        
+        <link rel="preconnect" href="https://fonts.gstatic.com" crossorigin>
+        <link rel="stylesheet" href="https://fonts.googleapis.com/css?family=Roboto:300,300i,400,400i,700,700i%7CRoboto+Mono:400,400i,700,700i&display=fallback">
+        <style>:root{--md-text-font:"Roboto";--md-code-font:"Roboto Mono"}</style>
+      
+    
+    
+      <link rel="stylesheet" href="../../../assets/_mkdocstrings.css">
+    
+    <script>__md_scope=new URL("../../..",location),__md_hash=e=>[...e].reduce(((e,_)=>(e<<5)-e+_.charCodeAt(0)),0),__md_get=(e,_=localStorage,t=__md_scope)=>JSON.parse(_.getItem(t.pathname+"."+e)),__md_set=(e,_,t=localStorage,a=__md_scope)=>{try{t.setItem(a.pathname+"."+e,JSON.stringify(_))}catch(e){}}</script>
+    
+      
+
+    
+    
+    
+  </head>
+  
+  
+    
+    
+      
+    
+    
+    
+    
+    <body dir="ltr" data-md-color-scheme="default" data-md-color-primary="blue" data-md-color-accent="light-blue">
+  
+    
+    <input class="md-toggle" data-md-toggle="drawer" type="checkbox" id="__drawer" autocomplete="off">
+    <input class="md-toggle" data-md-toggle="search" type="checkbox" id="__search" autocomplete="off">
+    <label class="md-overlay" for="__drawer"></label>
+    <div data-md-component="skip">
+      
+        
+        <a href="#sam3-lora-training-run-improved_ant_detection-obb-6609f9b105" class="md-skip">
+          Skip to content
+        </a>
+      
+    </div>
+    <div data-md-component="announce">
+      
+    </div>
+    
+      <div data-md-color-scheme="default" data-md-component="outdated" hidden>
+        
+      </div>
+    
+    
+      
+
+<header class="md-header" data-md-component="header">
+  <nav class="md-header__inner md-grid" aria-label="Header">
+    <a href="../../.." title="HYDRA Suite Docs" class="md-header__button md-logo" aria-label="HYDRA Suite Docs" data-md-component="logo">
+      
+  
+  <svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 24 24"><path d="M12 8a3 3 0 0 0 3-3 3 3 0 0 0-3-3 3 3 0 0 0-3 3 3 3 0 0 0 3 3m0 3.54C9.64 9.35 6.5 8 3 8v11c3.5 0 6.64 1.35 9 3.54 2.36-2.19 5.5-3.54 9-3.54V8c-3.5 0-6.64 1.35-9 3.54"/></svg>
+
+    </a>
+    <label class="md-header__button md-icon" for="__drawer">
+      
+      <svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 24 24"><path d="M3 6h18v2H3zm0 5h18v2H3zm0 5h18v2H3z"/></svg>
+    </label>
+    <div class="md-header__title" data-md-component="header-title">
+      <div class="md-header__ellipsis">
+        <div class="md-header__topic">
+          <span class="md-ellipsis">
+            HYDRA Suite Docs
+          </span>
+        </div>
+        <div class="md-header__topic" data-md-component="header-topic">
+          <span class="md-ellipsis">
+            
+              SAM3 LoRA training run — improved_ant_detection / obb-6609f9b105
+            
+          </span>
+        </div>
+      </div>
+    </div>
+    
+      
+        <form class="md-header__option" data-md-component="palette">
+  
+    
+    
+    
+    <input class="md-option" data-md-color-media="(prefers-color-scheme: light)" data-md-color-scheme="default" data-md-color-primary="blue" data-md-color-accent="light-blue"  aria-label="Switch to dark mode"  type="radio" name="__palette" id="__palette_0">
+    
+      <label class="md-header__button md-icon" title="Switch to dark mode" for="__palette_1" hidden>
+        <svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 24 24"><path d="m17.75 4.09-2.53 1.94.91 3.06-2.63-1.81-2.63 1.81.91-3.06-2.53-1.94L12.44 4l1.06-3 1.06 3zm3.5 6.91-1.64 1.25.59 1.98-1.7-1.17-1.7 1.17.59-1.98L15.75 11l2.06-.05L18.5 9l.69 1.95zm-2.28 4.95c.83-.08 1.72 1.1 1.19 1.85-.32.45-.66.87-1.08 1.27C15.17 23 8.84 23 4.94 19.07c-3.91-3.9-3.91-10.24 0-14.14.4-.4.82-.76 1.27-1.08.75-.53 1.93.36 1.85 1.19-.27 2.86.69 5.83 2.89 8.02a9.96 9.96 0 0 0 8.02 2.89m-1.64 2.02a12.08 12.08 0 0 1-7.8-3.47c-2.17-2.19-3.33-5-3.49-7.82-2.81 3.14-2.7 7.96.31 10.98 3.02 3.01 7.84 3.12 10.98.31"/></svg>
+      </label>
+    
+  
+    
+    
+    
+    <input class="md-option" data-md-color-media="(prefers-color-scheme: dark)" data-md-color-scheme="slate" data-md-color-primary="blue" data-md-color-accent="light-blue"  aria-label="Switch to light mode"  type="radio" name="__palette" id="__palette_1">
+    
+      <label class="md-header__button md-icon" title="Switch to light mode" for="__palette_0" hidden>
+        <svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 24 24"><path d="M12 7a5 5 0 0 1 5 5 5 5 0 0 1-5 5 5 5 0 0 1-5-5 5 5 0 0 1 5-5m0 2a3 3 0 0 0-3 3 3 3 0 0 0 3 3 3 3 0 0 0 3-3 3 3 0 0 0-3-3m0-7 2.39 3.42C13.65 5.15 12.84 5 12 5s-1.65.15-2.39.42zM3.34 7l4.16-.35A7.2 7.2 0 0 0 5.94 8.5c-.44.74-.69 1.5-.83 2.29zm.02 10 1.76-3.77a7.131 7.131 0 0 0 2.38 4.14zM20.65 7l-1.77 3.79a7.02 7.02 0 0 0-2.38-4.15zm-.01 10-4.14.36c.59-.51 1.12-1.14 1.54-1.86.42-.73.69-1.5.83-2.29zM12 22l-2.41-3.44c.74.27 1.55.44 2.41.44.82 0 1.63-.17 2.37-.44z"/></svg>
+      </label>
+    
+  
+</form>
+      
+    
+    
+      <script>var palette=__md_get("__palette");if(palette&&palette.color){if("(prefers-color-scheme)"===palette.color.media){var media=matchMedia("(prefers-color-scheme: light)"),input=document.querySelector(media.matches?"[data-md-color-media='(prefers-color-scheme: light)']":"[data-md-color-media='(prefers-color-scheme: dark)']");palette.color.media=input.getAttribute("data-md-color-media"),palette.color.scheme=input.getAttribute("data-md-color-scheme"),palette.color.primary=input.getAttribute("data-md-color-primary"),palette.color.accent=input.getAttribute("data-md-color-accent")}for(var[key,value]of Object.entries(palette.color))document.body.setAttribute("data-md-color-"+key,value)}</script>
+    
+    
+    
+      <label class="md-header__button md-icon" for="__search">
+        
+        <svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 24 24"><path d="M9.5 3A6.5 6.5 0 0 1 16 9.5c0 1.61-.59 3.09-1.56 4.23l.27.27h.79l5 5-1.5 1.5-5-5v-.79l-.27-.27A6.52 6.52 0 0 1 9.5 16 6.5 6.5 0 0 1 3 9.5 6.5 6.5 0 0 1 9.5 3m0 2C7 5 5 7 5 9.5S7 14 9.5 14 14 12 14 9.5 12 5 9.5 5"/></svg>
+      </label>
+      <div class="md-search" data-md-component="search" role="dialog">
+  <label class="md-search__overlay" for="__search"></label>
+  <div class="md-search__inner" role="search">
+    <form class="md-search__form" name="search">
+      <input type="text" class="md-search__input" name="query" aria-label="Search" placeholder="Search" autocapitalize="off" autocorrect="off" autocomplete="off" spellcheck="false" data-md-component="search-query" required>
+      <label class="md-search__icon md-icon" for="__search">
+        
+        <svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 24 24"><path d="M9.5 3A6.5 6.5 0 0 1 16 9.5c0 1.61-.59 3.09-1.56 4.23l.27.27h.79l5 5-1.5 1.5-5-5v-.79l-.27-.27A6.52 6.52 0 0 1 9.5 16 6.5 6.5 0 0 1 3 9.5 6.5 6.5 0 0 1 9.5 3m0 2C7 5 5 7 5 9.5S7 14 9.5 14 14 12 14 9.5 12 5 9.5 5"/></svg>
+        
+        <svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 24 24"><path d="M20 11v2H8l5.5 5.5-1.42 1.42L4.16 12l7.92-7.92L13.5 5.5 8 11z"/></svg>
+      </label>
+      <nav class="md-search__options" aria-label="Search">
+        
+        <button type="reset" class="md-search__icon md-icon" title="Clear" aria-label="Clear" tabindex="-1">
+          
+          <svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 24 24"><path d="M19 6.41 17.59 5 12 10.59 6.41 5 5 6.41 10.59 12 5 17.59 6.41 19 12 13.41 17.59 19 19 17.59 13.41 12z"/></svg>
+        </button>
+      </nav>
+      
+        <div class="md-search__suggest" data-md-component="search-suggest"></div>
+      
+    </form>
+    <div class="md-search__output">
+      <div class="md-search__scrollwrap" tabindex="0" data-md-scrollfix>
+        <div class="md-search-result" data-md-component="search-result">
+          <div class="md-search-result__meta">
+            Initializing search
+          </div>
+          <ol class="md-search-result__list" role="presentation"></ol>
+        </div>
+      </div>
+    </div>
+  </div>
+</div>
+    
+    
+      <div class="md-header__source">
+        <a href="https://github.com/neurorishika/hydra-suite" title="Go to repository" class="md-source" data-md-component="source">
+  <div class="md-source__icon md-icon">
+    
+    <svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 448 512"><!--! Font Awesome Free 6.6.0 by @fontawesome - https://fontawesome.com License - https://fontawesome.com/license/free (Icons: CC BY 4.0, Fonts: SIL OFL 1.1, Code: MIT License) Copyright 2024 Fonticons, Inc.--><path d="M439.55 236.05 244 40.45a28.87 28.87 0 0 0-40.81 0l-40.66 40.63 51.52 51.52c27.06-9.14 52.68 16.77 43.39 43.68l49.66 49.66c34.23-11.8 61.18 31 35.47 56.69-26.49 26.49-70.21-2.87-56-37.34L240.22 199v121.85c25.3 12.54 22.26 41.85 9.08 55a34.34 34.34 0 0 1-48.55 0c-17.57-17.6-11.07-46.91 11.25-56v-123c-20.8-8.51-24.6-30.74-18.64-45L142.57 101 8.45 235.14a28.86 28.86 0 0 0 0 40.81l195.61 195.6a28.86 28.86 0 0 0 40.8 0l194.69-194.69a28.86 28.86 0 0 0 0-40.81"/></svg>
+  </div>
+  <div class="md-source__repository">
+    neurorishika/hydra-suite
+  </div>
+</a>
+      </div>
+    
+  </nav>
+  
+</header>
+    
+    <div class="md-container" data-md-component="container">
+      
+      
+        
+          
+            
+<nav class="md-tabs" aria-label="Tabs" data-md-component="tabs">
+  <div class="md-grid">
+    <ul class="md-tabs__list">
+      
+        
+  
+  
+  
+    <li class="md-tabs__item">
+      <a href="../../.." class="md-tabs__link">
+        
+  
+    
+  
+  Home
+
+      </a>
+    </li>
+  
+
+      
+        
+  
+  
+  
+    
+    
+      <li class="md-tabs__item">
+        <a href="../../../getting-started/installation/" class="md-tabs__link">
+          
+  
+  Getting Started
+
+        </a>
+      </li>
+    
+  
+
+      
+        
+  
+  
+  
+    
+    
+      <li class="md-tabs__item">
+        <a href="../../../user-guide/overview/" class="md-tabs__link">
+          
+  
+  User Guide
+
+        </a>
+      </li>
+    
+  
+
+      
+        
+  
+  
+  
+    
+    
+      <li class="md-tabs__item">
+        <a href="../../../developer-guide/architecture/" class="md-tabs__link">
+          
+  
+  Developer Guide
+
+        </a>
+      </li>
+    
+  
+
+      
+        
+  
+  
+  
+    
+    
+      <li class="md-tabs__item">
+        <a href="../../../reference/api-index/" class="md-tabs__link">
+          
+  
+  Reference
+
+        </a>
+      </li>
+    
+  
+
+      
+    </ul>
+  </div>
+</nav>
+          
+        
+      
+      <main class="md-main" data-md-component="main">
+        <div class="md-main__inner md-grid">
+          
+            
+              
+              <div class="md-sidebar md-sidebar--primary" data-md-component="sidebar" data-md-type="navigation" >
+                <div class="md-sidebar__scrollwrap">
+                  <div class="md-sidebar__inner">
+                    
+
+
+  
+
+
+<nav class="md-nav md-nav--primary md-nav--lifted" aria-label="Navigation" data-md-level="0">
+  <label class="md-nav__title" for="__drawer">
+    <a href="../../.." title="HYDRA Suite Docs" class="md-nav__button md-logo" aria-label="HYDRA Suite Docs" data-md-component="logo">
+      
+  
+  <svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 24 24"><path d="M12 8a3 3 0 0 0 3-3 3 3 0 0 0-3-3 3 3 0 0 0-3 3 3 3 0 0 0 3 3m0 3.54C9.64 9.35 6.5 8 3 8v11c3.5 0 6.64 1.35 9 3.54 2.36-2.19 5.5-3.54 9-3.54V8c-3.5 0-6.64 1.35-9 3.54"/></svg>
+
+    </a>
+    HYDRA Suite Docs
+  </label>
+  
+    <div class="md-nav__source">
+      <a href="https://github.com/neurorishika/hydra-suite" title="Go to repository" class="md-source" data-md-component="source">
+  <div class="md-source__icon md-icon">
+    
+    <svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 448 512"><!--! Font Awesome Free 6.6.0 by @fontawesome - https://fontawesome.com License - https://fontawesome.com/license/free (Icons: CC BY 4.0, Fonts: SIL OFL 1.1, Code: MIT License) Copyright 2024 Fonticons, Inc.--><path d="M439.55 236.05 244 40.45a28.87 28.87 0 0 0-40.81 0l-40.66 40.63 51.52 51.52c27.06-9.14 52.68 16.77 43.39 43.68l49.66 49.66c34.23-11.8 61.18 31 35.47 56.69-26.49 26.49-70.21-2.87-56-37.34L240.22 199v121.85c25.3 12.54 22.26 41.85 9.08 55a34.34 34.34 0 0 1-48.55 0c-17.57-17.6-11.07-46.91 11.25-56v-123c-20.8-8.51-24.6-30.74-18.64-45L142.57 101 8.45 235.14a28.86 28.86 0 0 0 0 40.81l195.61 195.6a28.86 28.86 0 0 0 40.8 0l194.69-194.69a28.86 28.86 0 0 0 0-40.81"/></svg>
+  </div>
+  <div class="md-source__repository">
+    neurorishika/hydra-suite
+  </div>
+</a>
+    </div>
+  
+  <ul class="md-nav__list" data-md-scrollfix>
+    
+      
+      
+  
+  
+  
+  
+    <li class="md-nav__item">
+      <a href="../../.." class="md-nav__link">
+        
+  
+  <span class="md-ellipsis">
+    Home
+  </span>
+  
+
+      </a>
+    </li>
+  
+
+    
+      
+      
+  
+  
+  
+  
+    
+    
+    
+      
+      
+        
+      
+    
+    
+    <li class="md-nav__item md-nav__item--nested">
+      
+        
+        
+          
+        
+        <input class="md-nav__toggle md-toggle md-toggle--indeterminate" type="checkbox" id="__nav_2" >
+        
+          
+          <label class="md-nav__link" for="__nav_2" id="__nav_2_label" tabindex="0">
+            
+  
+  <span class="md-ellipsis">
+    Getting Started
+  </span>
+  
+
+            <span class="md-nav__icon md-icon"></span>
+          </label>
+        
+        <nav class="md-nav" data-md-level="1" aria-labelledby="__nav_2_label" aria-expanded="false">
+          <label class="md-nav__title" for="__nav_2">
+            <span class="md-nav__icon md-icon"></span>
+            Getting Started
+          </label>
+          <ul class="md-nav__list" data-md-scrollfix>
+            
+              
+                
+  
+  
+  
+  
+    <li class="md-nav__item">
+      <a href="../../../getting-started/installation/" class="md-nav__link">
+        
+  
+  <span class="md-ellipsis">
+    Installation
+  </span>
+  
+
+      </a>
+    </li>
+  
+
+              
+            
+              
+                
+  
+  
+  
+  
+    <li class="md-nav__item">
+      <a href="../../../getting-started/environments/" class="md-nav__link">
+        
+  
+  <span class="md-ellipsis">
+    Environments and Makefile
+  </span>
+  
+
+      </a>
+    </li>
+  
+
+              
+            
+              
+                
+  
+  
+  
+  
+    <li class="md-nav__item">
+      <a href="../../../getting-started/integrations/" class="md-nav__link">
+        
+  
+  <span class="md-ellipsis">
+    Integrations
+  </span>
+  
+
+      </a>
+    </li>
+  
+
+              
+            
+              
+                
+  
+  
+  
+  
+    <li class="md-nav__item">
+      <a href="../../../getting-started/quickstart-hydra/" class="md-nav__link">
+        
+  
+  <span class="md-ellipsis">
+    Quickstart (TrackerKit)
+  </span>
+  
+
+      </a>
+    </li>
+  
+
+              
+            
+              
+                
+  
+  
+  
+  
+    <li class="md-nav__item">
+      <a href="../../../getting-started/quickstart-posekit/" class="md-nav__link">
+        
+  
+  <span class="md-ellipsis">
+    Quickstart (PoseKit)
+  </span>
+  
+
+      </a>
+    </li>
+  
+
+              
+            
+              
+                
+  
+  
+  
+  
+    <li class="md-nav__item">
+      <a href="../../../getting-started/platforms/" class="md-nav__link">
+        
+  
+  <span class="md-ellipsis">
+    Platform Notes
+  </span>
+  
+
+      </a>
+    </li>
+  
+
+              
+            
+          </ul>
+        </nav>
+      
+    </li>
+  
+
+    
+      
+      
+  
+  
+  
+  
+    
+    
+    
+      
+      
+        
+      
+    
+    
+    <li class="md-nav__item md-nav__item--nested">
+      
+        
+        
+          
+        
+        <input class="md-nav__toggle md-toggle md-toggle--indeterminate" type="checkbox" id="__nav_3" >
+        
+          
+          <label class="md-nav__link" for="__nav_3" id="__nav_3_label" tabindex="0">
+            
+  
+  <span class="md-ellipsis">
+    User Guide
+  </span>
+  
+
+            <span class="md-nav__icon md-icon"></span>
+          </label>
+        
+        <nav class="md-nav" data-md-level="1" aria-labelledby="__nav_3_label" aria-expanded="false">
+          <label class="md-nav__title" for="__nav_3">
+            <span class="md-nav__icon md-icon"></span>
+            User Guide
+          </label>
+          <ul class="md-nav__list" data-md-scrollfix>
+            
+              
+                
+  
+  
+  
+  
+    <li class="md-nav__item">
+      <a href="../../../user-guide/overview/" class="md-nav__link">
+        
+  
+  <span class="md-ellipsis">
+    Overview
+  </span>
+  
+
+      </a>
+    </li>
+  
+
+              
+            
+              
+                
+  
+  
+  
+  
+    <li class="md-nav__item">
+      <a href="../../../user-guide/workflow/" class="md-nav__link">
+        
+  
+  <span class="md-ellipsis">
+    End-to-End Workflow
+  </span>
+  
+
+      </a>
+    </li>
+  
+
+              
+            
+              
+                
+  
+  
+  
+  
+    <li class="md-nav__item">
+      <a href="../../../user-guide/detection-modes/" class="md-nav__link">
+        
+  
+  <span class="md-ellipsis">
+    Detection Modes
+  </span>
+  
+
+      </a>
+    </li>
+  
+
+              
+            
+              
+                
+  
+  
+  
+  
+    <li class="md-nav__item">
+      <a href="../../../user-guide/tracking-and-merging/" class="md-nav__link">
+        
+  
+  <span class="md-ellipsis">
+    Tracking and Merging
+  </span>
+  
+
+      </a>
+    </li>
+  
+
+              
+            
+              
+                
+  
+  
+  
+  
+    <li class="md-nav__item">
+      <a href="../../../user-guide/post-processing/" class="md-nav__link">
+        
+  
+  <span class="md-ellipsis">
+    Post-processing
+  </span>
+  
+
+      </a>
+    </li>
+  
+
+              
+            
+              
+                
+  
+  
+  
+  
+    <li class="md-nav__item">
+      <a href="../../../user-guide/configuration-reference/" class="md-nav__link">
+        
+  
+  <span class="md-ellipsis">
+    Configuration Reference
+  </span>
+  
+
+      </a>
+    </li>
+  
+
+              
+            
+              
+                
+  
+  
+  
+  
+    <li class="md-nav__item">
+      <a href="../../../user-guide/compute-runtimes/" class="md-nav__link">
+        
+  
+  <span class="md-ellipsis">
+    Compute Runtimes
+  </span>
+  
+
+      </a>
+    </li>
+  
+
+              
+            
+              
+                
+  
+  
+  
+  
+    <li class="md-nav__item">
+      <a href="../../../user-guide/outputs-and-csv-schema/" class="md-nav__link">
+        
+  
+  <span class="md-ellipsis">
+    Outputs and CSV Schema
+  </span>
+  
+
+      </a>
+    </li>
+  
+
+              
+            
+              
+                
+  
+  
+  
+  
+    <li class="md-nav__item">
+      <a href="../../../user-guide/dataset-generation/" class="md-nav__link">
+        
+  
+  <span class="md-ellipsis">
+    Dataset Generation
+  </span>
+  
+
+      </a>
+    </li>
+  
+
+              
+            
+              
+                
+  
+  
+  
+  
+    <li class="md-nav__item">
+      <a href="../../../user-guide/individual-analysis/" class="md-nav__link">
+        
+  
+  <span class="md-ellipsis">
+    Individual Analysis
+  </span>
+  
+
+      </a>
+    </li>
+  
+
+              
+            
+              
+                
+  
+  
+  
+  
+    <li class="md-nav__item">
+      <a href="../../../user-guide/posekit/" class="md-nav__link">
+        
+  
+  <span class="md-ellipsis">
+    PoseKit
+  </span>
+  
+
+      </a>
+    </li>
+  
+
+              
+            
+              
+                
+  
+  
+  
+  
+    <li class="md-nav__item">
+      <a href="../../../user-guide/classkit/" class="md-nav__link">
+        
+  
+  <span class="md-ellipsis">
+    ClassKit
+  </span>
+  
+
+      </a>
+    </li>
+  
+
+              
+            
+              
+                
+  
+  
+  
+  
+    <li class="md-nav__item">
+      <a href="../../../user-guide/detectkit/" class="md-nav__link">
+        
+  
+  <span class="md-ellipsis">
+    DetectKit
+  </span>
+  
+
+      </a>
+    </li>
+  
+
+              
+            
+              
+                
+  
+  
+  
+  
+    <li class="md-nav__item">
+      <a href="../../../runbooks/detectkit-headless-training/" class="md-nav__link">
+        
+  
+  <span class="md-ellipsis">
+    DetectKit Headless Training
+  </span>
+  
+
+      </a>
+    </li>
+  
+
+              
+            
+              
+                
+  
+  
+  
+  
+    <li class="md-nav__item">
+      <a href="../../../user-guide/detectkit-semantic-escalation/" class="md-nav__link">
+        
+  
+  <span class="md-ellipsis">
+    DetectKit: Semantic Escalation (SAM3)
+  </span>
+  
+
+      </a>
+    </li>
+  
+
+              
+            
+              
+                
+  
+  
+  
+  
+    <li class="md-nav__item">
+      <a href="../../../user-guide/detectkit-sahi-calibration/" class="md-nav__link">
+        
+  
+  <span class="md-ellipsis">
+    DetectKit: SAHI Calibration Profiles
+  </span>
+  
+
+      </a>
+    </li>
+  
+
+              
+            
+              
+                
+  
+  
+  
+  
+    <li class="md-nav__item">
+      <a href="../../../user-guide/filterkit/" class="md-nav__link">
+        
+  
+  <span class="md-ellipsis">
+    FilterKit
+  </span>
+  
+
+      </a>
+    </li>
+  
+
+              
+            
+              
+                
+  
+  
+  
+  
+    <li class="md-nav__item">
+      <a href="../../../user-guide/refinekit/" class="md-nav__link">
+        
+  
+  <span class="md-ellipsis">
+    RefineKit
+  </span>
+  
+
+      </a>
+    </li>
+  
+
+              
+            
+              
+                
+  
+  
+  
+  
+    <li class="md-nav__item">
+      <a href="../../../user-guide/troubleshooting/" class="md-nav__link">
+        
+  
+  <span class="md-ellipsis">
+    Troubleshooting
+  </span>
+  
+
+      </a>
+    </li>
+  
+
+              
+            
+          </ul>
+        </nav>
+      
+    </li>
+  
+
+    
+      
+      
+  
+  
+  
+  
+    
+    
+    
+      
+      
+        
+      
+    
+    
+    <li class="md-nav__item md-nav__item--nested">
+      
+        
+        
+          
+        
+        <input class="md-nav__toggle md-toggle md-toggle--indeterminate" type="checkbox" id="__nav_4" >
+        
+          
+          <label class="md-nav__link" for="__nav_4" id="__nav_4_label" tabindex="0">
+            
+  
+  <span class="md-ellipsis">
+    Developer Guide
+  </span>
+  
+
+            <span class="md-nav__icon md-icon"></span>
+          </label>
+        
+        <nav class="md-nav" data-md-level="1" aria-labelledby="__nav_4_label" aria-expanded="false">
+          <label class="md-nav__title" for="__nav_4">
+            <span class="md-nav__icon md-icon"></span>
+            Developer Guide
+          </label>
+          <ul class="md-nav__list" data-md-scrollfix>
+            
+              
+                
+  
+  
+  
+  
+    <li class="md-nav__item">
+      <a href="../../../developer-guide/architecture/" class="md-nav__link">
+        
+  
+  <span class="md-ellipsis">
+    Architecture
+  </span>
+  
+
+      </a>
+    </li>
+  
+
+              
+            
+              
+                
+  
+  
+  
+  
+    <li class="md-nav__item">
+      <a href="../../../developer-guide/module-map/" class="md-nav__link">
+        
+  
+  <span class="md-ellipsis">
+    Module Map
+  </span>
+  
+
+      </a>
+    </li>
+  
+
+              
+            
+              
+                
+  
+  
+  
+  
+    <li class="md-nav__item">
+      <a href="../../../developer-guide/data-flow/" class="md-nav__link">
+        
+  
+  <span class="md-ellipsis">
+    Data Flow
+  </span>
+  
+
+      </a>
+    </li>
+  
+
+              
+            
+              
+                
+  
+  
+  
+  
+    <li class="md-nav__item">
+      <a href="../../../developer-guide/tracking-algorithm-deep-dive/" class="md-nav__link">
+        
+  
+  <span class="md-ellipsis">
+    Tracking Algorithm Deep Dive
+  </span>
+  
+
+      </a>
+    </li>
+  
+
+              
+            
+              
+                
+  
+  
+  
+  
+    <li class="md-nav__item">
+      <a href="../../../developer-guide/tracking-optimization/" class="md-nav__link">
+        
+  
+  <span class="md-ellipsis">
+    Tracking Optimization
+  </span>
+  
+
+      </a>
+    </li>
+  
+
+              
+            
+              
+                
+  
+  
+  
+  
+    <li class="md-nav__item">
+      <a href="../../../developer-guide/gpu-backends/" class="md-nav__link">
+        
+  
+  <span class="md-ellipsis">
+    GPU Backends
+  </span>
+  
+
+      </a>
+    </li>
+  
+
+              
+            
+              
+                
+  
+  
+  
+  
+    <li class="md-nav__item">
+      <a href="../../../developer-guide/runtime-integration/" class="md-nav__link">
+        
+  
+  <span class="md-ellipsis">
+    Runtime Integration
+  </span>
+  
+
+      </a>
+    </li>
+  
+
+              
+            
+              
+                
+  
+  
+  
+  
+    <li class="md-nav__item">
+      <a href="../../../developer-guide/resource-containment/" class="md-nav__link">
+        
+  
+  <span class="md-ellipsis">
+    Resource Containment
+  </span>
+  
+
+      </a>
+    </li>
+  
+
+              
+            
+              
+                
+  
+  
+  
+  
+    <li class="md-nav__item">
+      <a href="../../../developer-guide/profiling/" class="md-nav__link">
+        
+  
+  <span class="md-ellipsis">
+    Profiling
+  </span>
+  
+
+      </a>
+    </li>
+  
+
+              
+            
+              
+                
+  
+  
+  
+  
+    <li class="md-nav__item">
+      <a href="../../../developer-guide/dependency-cuda-updates/" class="md-nav__link">
+        
+  
+  <span class="md-ellipsis">
+    CUDA Dependency Updates
+  </span>
+  
+
+      </a>
+    </li>
+  
+
+              
+            
+              
+                
+  
+  
+  
+  
+    <li class="md-nav__item">
+      <a href="../../../developer-guide/performance-tuning/" class="md-nav__link">
+        
+  
+  <span class="md-ellipsis">
+    Performance Tuning
+  </span>
+  
+
+      </a>
+    </li>
+  
+
+              
+            
+              
+                
+  
+  
+  
+  
+    <li class="md-nav__item">
+      <a href="../../../developer-guide/inference-fast-mode/" class="md-nav__link">
+        
+  
+  <span class="md-ellipsis">
+    Inference Fast Mode
+  </span>
+  
+
+      </a>
+    </li>
+  
+
+              
+            
+              
+                
+  
+  
+  
+  
+    <li class="md-nav__item">
+      <a href="../../../developer-guide/confidence-metrics/" class="md-nav__link">
+        
+  
+  <span class="md-ellipsis">
+    Confidence Metrics
+  </span>
+  
+
+      </a>
+    </li>
+  
+
+              
+            
+              
+                
+  
+  
+  
+  
+    <li class="md-nav__item">
+      <a href="../../../developer-guide/extending-detection/" class="md-nav__link">
+        
+  
+  <span class="md-ellipsis">
+    Extending Detection
+  </span>
+  
+
+      </a>
+    </li>
+  
+
+              
+            
+              
+                
+  
+  
+  
+  
+    <li class="md-nav__item">
+      <a href="../../../developer-guide/extending-identity/" class="md-nav__link">
+        
+  
+  <span class="md-ellipsis">
+    Extending Identity
+  </span>
+  
+
+      </a>
+    </li>
+  
+
+              
+            
+              
+                
+  
+  
+  
+  
+    <li class="md-nav__item">
+      <a href="../../../developer-guide/code-health/" class="md-nav__link">
+        
+  
+  <span class="md-ellipsis">
+    Code Health & Auditing
+  </span>
+  
+
+      </a>
+    </li>
+  
+
+              
+            
+              
+                
+  
+  
+  
+  
+    <li class="md-nav__item">
+      <a href="../../../developer-guide/publishing/" class="md-nav__link">
+        
+  
+  <span class="md-ellipsis">
+    Publishing
+  </span>
+  
+
+      </a>
+    </li>
+  
+
+              
+            
+              
+                
+  
+  
+  
+  
+    <li class="md-nav__item">
+      <a href="../../../developer-guide/contributing/" class="md-nav__link">
+        
+  
+  <span class="md-ellipsis">
+    Contributing
+  </span>
+  
+
+      </a>
+    </li>
+  
+
+              
+            
+          </ul>
+        </nav>
+      
+    </li>
+  
+
+    
+      
+      
+  
+  
+  
+  
+    
+    
+    
+      
+      
+        
+      
+    
+    
+    <li class="md-nav__item md-nav__item--nested">
+      
+        
+        
+          
+        
+        <input class="md-nav__toggle md-toggle md-toggle--indeterminate" type="checkbox" id="__nav_5" >
+        
+          
+          <label class="md-nav__link" for="__nav_5" id="__nav_5_label" tabindex="0">
+            
+  
+  <span class="md-ellipsis">
+    Reference
+  </span>
+  
+
+            <span class="md-nav__icon md-icon"></span>
+          </label>
+        
+        <nav class="md-nav" data-md-level="1" aria-labelledby="__nav_5_label" aria-expanded="false">
+          <label class="md-nav__title" for="__nav_5">
+            <span class="md-nav__icon md-icon"></span>
+            Reference
+          </label>
+          <ul class="md-nav__list" data-md-scrollfix>
+            
+              
+                
+  
+  
+  
+  
+    <li class="md-nav__item">
+      <a href="../../../reference/api-index/" class="md-nav__link">
+        
+  
+  <span class="md-ellipsis">
+    API Index
+  </span>
+  
+
+      </a>
+    </li>
+  
+
+              
+            
+              
+                
+  
+  
+  
+  
+    <li class="md-nav__item">
+      <a href="../../../reference/ui-components-hydra/" class="md-nav__link">
+        
+  
+  <span class="md-ellipsis">
+    UI Components (TrackerKit)
+  </span>
+  
+
+      </a>
+    </li>
+  
+
+              
+            
+              
+                
+  
+  
+  
+  
+    <li class="md-nav__item">
+      <a href="../../../reference/ui-components-posekit/" class="md-nav__link">
+        
+  
+  <span class="md-ellipsis">
+    UI Components (PoseKit)
+  </span>
+  
+
+      </a>
+    </li>
+  
+
+              
+            
+              
+                
+  
+  
+  
+  
+    <li class="md-nav__item">
+      <a href="../../../reference/api-app/" class="md-nav__link">
+        
+  
+  <span class="md-ellipsis">
+    API (Launcher)
+  </span>
+  
+
+      </a>
+    </li>
+  
+
+              
+            
+              
+                
+  
+  
+  
+  
+    <li class="md-nav__item">
+      <a href="../../../reference/api-core/" class="md-nav__link">
+        
+  
+  <span class="md-ellipsis">
+    API (Core)
+  </span>
+  
+
+      </a>
+    </li>
+  
+
+              
+            
+              
+                
+  
+  
+  
+  
+    <li class="md-nav__item">
+      <a href="../../../reference/api-data/" class="md-nav__link">
+        
+  
+  <span class="md-ellipsis">
+    API (Data)
+  </span>
+  
+
+      </a>
+    </li>
+  
+
+              
+            
+              
+                
+  
+  
+  
+  
+    <li class="md-nav__item">
+      <a href="../../../reference/api-gui/" class="md-nav__link">
+        
+  
+  <span class="md-ellipsis">
+    API (TrackerKit GUI)
+  </span>
+  
+
+      </a>
+    </li>
+  
+
+              
+            
+              
+                
+  
+  
+  
+  
+    <li class="md-nav__item">
+      <a href="../../../reference/api-widgets/" class="md-nav__link">
+        
+  
+  <span class="md-ellipsis">
+    API (Widgets)
+  </span>
+  
+
+      </a>
+    </li>
+  
+
+              
+            
+              
+                
+  
+  
+  
+  
+    <li class="md-nav__item">
+      <a href="../../../reference/api-posekit/" class="md-nav__link">
+        
+  
+  <span class="md-ellipsis">
+    API (PoseKit)
+  </span>
+  
+
+      </a>
+    </li>
+  
+
+              
+            
+              
+                
+  
+  
+  
+  
+    <li class="md-nav__item">
+      <a href="../../../reference/api-utils/" class="md-nav__link">
+        
+  
+  <span class="md-ellipsis">
+    API (Utils)
+  </span>
+  
+
+      </a>
+    </li>
+  
+
+              
+            
+              
+                
+  
+  
+  
+  
+    <li class="md-nav__item">
+      <a href="../../../reference/cli-reference/" class="md-nav__link">
+        
+  
+  <span class="md-ellipsis">
+    CLI Reference
+  </span>
+  
+
+      </a>
+    </li>
+  
+
+              
+            
+              
+                
+  
+  
+  
+  
+    <li class="md-nav__item">
+      <a href="../../../reference/technical-reference/" class="md-nav__link">
+        
+  
+  <span class="md-ellipsis">
+    Technical Reference (LaTeX)
+  </span>
+  
+
+      </a>
+    </li>
+  
+
+              
+            
+              
+                
+  
+  
+  
+  
+    <li class="md-nav__item">
+      <a href="../../../reference/changelog/" class="md-nav__link">
+        
+  
+  <span class="md-ellipsis">
+    Changelog
+  </span>
+  
+
+      </a>
+    </li>
+  
+
+              
+            
+              
+                
+  
+  
+  
+  
+    <li class="md-nav__item">
+      <a href="../../../reference/faq/" class="md-nav__link">
+        
+  
+  <span class="md-ellipsis">
+    FAQ
+  </span>
+  
+
+      </a>
+    </li>
+  
+
+              
+            
+          </ul>
+        </nav>
+      
+    </li>
+  
+
+    
+  </ul>
+</nav>
+                  </div>
+                </div>
+              </div>
+            
+            
+              
+              <div class="md-sidebar md-sidebar--secondary" data-md-component="sidebar" data-md-type="toc" >
+                <div class="md-sidebar__scrollwrap">
+                  <div class="md-sidebar__inner">
+                    
+
+<nav class="md-nav md-nav--secondary" aria-label="Table of contents">
+  
+  
+  
+    
+  
+  
+    <label class="md-nav__title" for="__toc">
+      <span class="md-nav__icon md-icon"></span>
+      Table of contents
+    </label>
+    <ul class="md-nav__list" data-md-component="toc" data-md-scrollfix>
+      
+        <li class="md-nav__item">
+  <a href="#1-dataset-rebuild-on-mehek-1871-survived" class="md-nav__link">
+    <span class="md-ellipsis">
+      1. Dataset rebuild on mehek — 1871 SURVIVED
+    </span>
+  </a>
+  
+</li>
+      
+        <li class="md-nav__item">
+  <a href="#2-preflight-on-mehek-admitted" class="md-nav__link">
+    <span class="md-ellipsis">
+      2. Preflight on mehek — ADMITTED
+    </span>
+  </a>
+  
+</li>
+      
+        <li class="md-nav__item">
+  <a href="#3-launch" class="md-nav__link">
+    <span class="md-ellipsis">
+      3. Launch
+    </span>
+  </a>
+  
+</li>
+      
+        <li class="md-nav__item">
+  <a href="#3-launch_1" class="md-nav__link">
+    <span class="md-ellipsis">
+      3. Launch
+    </span>
+  </a>
+  
+    <nav class="md-nav" aria-label="3. Launch">
+      <ul class="md-nav__list">
+        
+          <li class="md-nav__item">
+  <a href="#the-60-gb-cap-was-redundant-the-pipeline-caps-itself-harder" class="md-nav__link">
+    <span class="md-ellipsis">
+      The 60 GB cap was redundant — the pipeline caps itself harder
+    </span>
+  </a>
+  
+</li>
+        
+      </ul>
+    </nav>
+  
+</li>
+      
+        <li class="md-nav__item">
+  <a href="#4-training" class="md-nav__link">
+    <span class="md-ellipsis">
+      4. Training
+    </span>
+  </a>
+  
+    <nav class="md-nav" aria-label="4. Training">
+      <ul class="md-nav__list">
+        
+          <li class="md-nav__item">
+  <a href="#vram-the-probe-under-measured-a-finding-in-its-own-right" class="md-nav__link">
+    <span class="md-ellipsis">
+      VRAM — the probe under-measured; a finding in its own right
+    </span>
+  </a>
+  
+</li>
+        
+          <li class="md-nav__item">
+  <a href="#admission-gate-breach-observed-vram-exceeded-the-estimate-not-just-the-constant" class="md-nav__link">
+    <span class="md-ellipsis">
+      *** ADMISSION-GATE BREACH — observed VRAM exceeded the ESTIMATE, not just the constant ***
+    </span>
+  </a>
+  
+</li>
+        
+          <li class="md-nav__item">
+  <a href="#what-the-logged-loss-number-actually-is-mechanism-stated-precisely" class="md-nav__link">
+    <span class="md-ellipsis">
+      What the logged loss number actually is (mechanism, stated precisely)
+    </span>
+  </a>
+  
+</li>
+        
+          <li class="md-nav__item">
+  <a href="#loss-spikes-are-classification-driven-and-they-are-diminishing" class="md-nav__link">
+    <span class="md-ellipsis">
+      Loss spikes are classification-driven, and they are diminishing
+    </span>
+  </a>
+  
+</li>
+        
+      </ul>
+    </nav>
+  
+</li>
+      
+        <li class="md-nav__item">
+  <a href="#5-evaluation-staging-prepared-during-training-run-after-it-finished" class="md-nav__link">
+    <span class="md-ellipsis">
+      5. Evaluation staging (prepared during training; run after it finished)
+    </span>
+  </a>
+  
+</li>
+      
+        <li class="md-nav__item">
+  <a href="#6-checkpoint-ladder-added-mid-run-to-test-the-last-epoch-selection-default" class="md-nav__link">
+    <span class="md-ellipsis">
+      6. Checkpoint ladder (added mid-run, to test the last-epoch selection default)
+    </span>
+  </a>
+  
+    <nav class="md-nav" aria-label="6. Checkpoint ladder (added mid-run, to test the last-epoch selection default)">
+      <ul class="md-nav__list">
+        
+          <li class="md-nav__item">
+  <a href="#finding-publish-is-serialized-behind-the-host-memory-lease" class="md-nav__link">
+    <span class="md-ellipsis">
+      Finding: publish is serialized behind the host-memory lease
+    </span>
+  </a>
+  
+</li>
+        
+      </ul>
+    </nav>
+  
+</li>
+      
+        <li class="md-nav__item">
+  <a href="#7-training-outcome-completed-all-10-epochs" class="md-nav__link">
+    <span class="md-ellipsis">
+      7. Training outcome — COMPLETED, all 10 epochs
+    </span>
+  </a>
+  
+    <nav class="md-nav" aria-label="7. Training outcome — COMPLETED, all 10 epochs">
+      <ul class="md-nav__list">
+        
+          <li class="md-nav__item">
+  <a href="#final-vram-ladder-the-controlled-pairs-default-allocator-arm" class="md-nav__link">
+    <span class="md-ellipsis">
+      Final VRAM ladder (the controlled pair's default-allocator arm)
+    </span>
+  </a>
+  
+</li>
+        
+          <li class="md-nav__item">
+  <a href="#recommended-stopping-rule-for-toolssam3measure_bf16_peakpy" class="md-nav__link">
+    <span class="md-ellipsis">
+      Recommended stopping rule for tools/sam3/measure_bf16_peak.py
+    </span>
+  </a>
+  
+</li>
+        
+      </ul>
+    </nav>
+  
+</li>
+      
+        <li class="md-nav__item">
+  <a href="#8-publish-failed-root-caused-fixed-a-real-pipeline-defect" class="md-nav__link">
+    <span class="md-ellipsis">
+      8. Publish — FAILED, root-caused, FIXED (a real pipeline defect)
+    </span>
+  </a>
+  
+    <nav class="md-nav" aria-label="8. Publish — FAILED, root-caused, FIXED (a real pipeline defect)">
+      <ul class="md-nav__list">
+        
+          <li class="md-nav__item">
+  <a href="#contributing-defect-not-fixed-reporting-only" class="md-nav__link">
+    <span class="md-ellipsis">
+      Contributing defect (not fixed — reporting only)
+    </span>
+  </a>
+  
+</li>
+        
+          <li class="md-nav__item">
+  <a href="#context-publish-is-the-least-exercised-path-in-the-pipeline" class="md-nav__link">
+    <span class="md-ellipsis">
+      Context: publish is the least-exercised path in the pipeline
+    </span>
+  </a>
+  
+</li>
+        
+      </ul>
+    </nav>
+  
+</li>
+      
+        <li class="md-nav__item">
+  <a href="#9-published-artifacts-all-three-present-and-verified" class="md-nav__link">
+    <span class="md-ellipsis">
+      9. Published artifacts — all three present and verified
+    </span>
+  </a>
+  
+</li>
+      
+        <li class="md-nav__item">
+  <a href="#10-the-geometry-confound-read-this-before-any-number-in-section-11" class="md-nav__link">
+    <span class="md-ellipsis">
+      10. THE GEOMETRY CONFOUND — read this before any number in section 11
+    </span>
+  </a>
+  
+    <nav class="md-nav" aria-label="10. THE GEOMETRY CONFOUND — read this before any number in section 11">
+      <ul class="md-nav__list">
+        
+          <li class="md-nav__item">
+  <a href="#root-cause-a-process-defect-not-a-code-bug" class="md-nav__link">
+    <span class="md-ellipsis">
+      Root cause — a process defect, not a code bug
+    </span>
+  </a>
+  
+</li>
+        
+          <li class="md-nav__item">
+  <a href="#provenance-caveat-on-the-reference" class="md-nav__link">
+    <span class="md-ellipsis">
+      Provenance caveat on the reference
+    </span>
+  </a>
+  
+</li>
+        
+          <li class="md-nav__item">
+  <a href="#the-clean-good-news-independent-of-every-confound-above" class="md-nav__link">
+    <span class="md-ellipsis">
+      The clean good news, independent of every confound above
+    </span>
+  </a>
+  
+</li>
+        
+      </ul>
+    </nav>
+  
+</li>
+      
+        <li class="md-nav__item">
+  <a href="#11-held-out-evaluation-16-frames-576-tiles-805-instances-corrected-matcher" class="md-nav__link">
+    <span class="md-ellipsis">
+      11. Held-out evaluation — 16 frames / 576 tiles / 805 instances, corrected matcher
+    </span>
+  </a>
+  
+    <nav class="md-nav" aria-label="11. Held-out evaluation — 16 frames / 576 tiles / 805 instances, corrected matcher">
+      <ul class="md-nav__list">
+        
+          <li class="md-nav__item">
+  <a href="#11a-cross-model-comparisons-on-the-971-px-corpus-confounded-not-model-claims" class="md-nav__link">
+    <span class="md-ellipsis">
+      11a. Cross-model comparisons on the 971-px corpus — CONFOUNDED, not model claims
+    </span>
+  </a>
+  
+</li>
+        
+          <li class="md-nav__item">
+  <a href="#11b-checkpoint-ladder-internally-clean-and-the-most-informative-result" class="md-nav__link">
+    <span class="md-ellipsis">
+      11b. Checkpoint ladder — internally clean, and the most informative result
+    </span>
+  </a>
+  
+</li>
+        
+          <li class="md-nav__item">
+  <a href="#11c-the-2x2-the-model-effect-flips-sign-between-geometries" class="md-nav__link">
+    <span class="md-ellipsis">
+      11c. The 2x2 — the model effect FLIPS SIGN between geometries
+    </span>
+  </a>
+  
+</li>
+        
+          <li class="md-nav__item">
+  <a href="#11d-the-deployment-realistic-diagonal-descriptive-only" class="md-nav__link">
+    <span class="md-ellipsis">
+      11d. The deployment-realistic diagonal (descriptive only)
+    </span>
+  </a>
+  
+</li>
+        
+      </ul>
+    </nav>
+  
+</li>
+      
+        <li class="md-nav__item">
+  <a href="#12-artifact-locations" class="md-nav__link">
+    <span class="md-ellipsis">
+      12. Artifact locations
+    </span>
+  </a>
+  
+</li>
+      
+        <li class="md-nav__item">
+  <a href="#13-pipeline-defects-found-the-answer-to-does-sam3-training-work-end-to-end" class="md-nav__link">
+    <span class="md-ellipsis">
+      13. Pipeline defects found — the answer to "does SAM3 training work end to end?"
+    </span>
+  </a>
+  
+</li>
+      
+        <li class="md-nav__item">
+  <a href="#14-postscript-the-paired-allocator-arm" class="md-nav__link">
+    <span class="md-ellipsis">
+      14. Postscript — the paired allocator arm
+    </span>
+  </a>
+  
+</li>
+      
+    </ul>
+  
+</nav>
+                  </div>
+                </div>
+              </div>
+            
+          
+          
+            <div class="md-content" data-md-component="content">
+              <article class="md-content__inner md-typeset">
+                
+                  
+
+  
+    <a href="https://github.com/neurorishika/hydra-suite/edit/main/docs/superpowers/specs/2026-09-06-sam3-training-run-and-evaluation.md" title="Edit this page" class="md-content__button md-icon">
+      
+      <svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 24 24"><path d="M10 20H6V4h7v5h5v3.1l2-2V8l-6-6H6c-1.1 0-2 .9-2 2v16c0 1.1.9 2 2 2h4zm10.2-7c.1 0 .3.1.4.2l1.3 1.3c.2.2.2.6 0 .8l-1 1-2.1-2.1 1-1c.1-.1.2-.2.4-.2m0 3.9L14.1 23H12v-2.1l6.1-6.1z"/></svg>
+    </a>
+  
+  
+
+
+<h1 id="sam3-lora-training-run-improved_ant_detection-obb-6609f9b105">SAM3 LoRA training run — improved_ant_detection / obb-6609f9b105<a class="headerlink" href="#sam3-lora-training-run-improved_ant_detection-obb-6609f9b105" title="Permanent link">&para;</a></h1>
+<p><strong>Status: IN PROGRESS</strong> (this file is updated as the run proceeds; final status at the bottom).</p>
+<p>Date: 2026-09-06. Training box: <code>mehek</code> (RTX 6000 Ada, 49 GB). Eval box: <code>courtship</code> (RTX 4090).
+Code: <code>~/sam3_train_wt</code> on mehek, pinned <code>b9e92bc7</code>; <code>~/sam3_eval_wt</code> on courtship, <code>git archive</code> of the
+same commit (<code>PINNED_COMMIT</code> file records it). <code>~/hydra-suite</code> on mehek was NOT touched.</p>
+<h2 id="1-dataset-rebuild-on-mehek-1871-survived">1. Dataset rebuild on mehek — 1871 SURVIVED<a class="headerlink" href="#1-dataset-rebuild-on-mehek-1871-survived" title="Permanent link">&para;</a></h2>
+<p>Source rsynced to <code>mehek:~/sam3_lora_runs/ant_2026-09-06/source/obb-6609f9b105</code>.
+Pre-build check on mehek: 79 <code>.txt</code> files (78 labels + <code>classes.txt</code>), <strong>1871 non-empty label lines</strong>.</p>
+<p><code>--prepare-only</code> build manifest diffed against the local one. The ONLY differences:</p>
+<table>
+<thead>
+<tr>
+<th>key</th>
+<th>local</th>
+<th>mehek</th>
+</tr>
+</thead>
+<tbody>
+<tr>
+<td><code>created_at</code></td>
+<td>2026-09-06T01:01:59</td>
+<td>2026-09-06T02:02:53</td>
+</tr>
+<tr>
+<td><code>source</code></td>
+<td>mac path</td>
+<td>mehek path</td>
+</tr>
+<tr>
+<td><code>reference_body_px</code></td>
+<td>97.13015937805176</td>
+<td>97.13015747070312</td>
+</tr>
+</tbody>
+</table>
+<p>Everything else byte-identical, including:</p>
+<ul>
+<li><code>fragment_counts.train</code> = tiles 486, annotations 3363, fragment_annotations 21, downgraded_tiles 20, fragment_only_tiles 1</li>
+<li><code>fragment_counts.valid</code> = tiles 147, annotations 1183, fragment_annotations 14, downgraded_tiles 14, fragment_only_tiles 0</li>
+<li><code>tile_px</code> = [1766, 1766], <code>tile_overlap</code> 0.25, <code>seed</code> 42, <code>selected_class</code> "ant"</li>
+<li><code>frame_split.valid</code> = exactly the 16 held-out stems (same set)</li>
+</ul>
+<p>The <code>reference_body_px</code> delta is 1.9e-6 px — a float32 rounding difference between the macOS and Linux
+measurement path. It does not change <code>tile_px</code>, so the tiling is identical, which the identical tile and
+annotation counts confirm. <strong>The build is deterministic and reproduced exactly, so the local 1871-survival
+proof transfers.</strong> Total annotations 3363+1183 = 4546, the same overlap-duplicated total as locally.</p>
+<p>Three separate prepared datasets were built during this session (prepare-only, the failed first launch, and
+the real launch); all three manifests carry identical counts.</p>
+<h2 id="2-preflight-on-mehek-admitted">2. Preflight on mehek — ADMITTED<a class="headerlink" href="#2-preflight-on-mehek-admitted" title="Permanent link">&para;</a></h2>
+<p><code>assess_preflight</code> run under <code>hydra-cuda</code> with <code>PYTHONPATH=~/sam3_train_wt/src</code>:</p>
+<div class="language-text highlight"><pre><span></span><code><span id="__span-0-1"><a id="__codelineno-0-1" name="__codelineno-0-1" href="#__codelineno-0-1"></a>admitted: true
+</span><span id="__span-0-2"><a id="__codelineno-0-2" name="__codelineno-0-2" href="#__codelineno-0-2"></a>refusals: []
+</span><span id="__span-0-3"><a id="__codelineno-0-3" name="__codelineno-0-3" href="#__codelineno-0-3"></a>warnings: []
+</span><span id="__span-0-4"><a id="__codelineno-0-4" name="__codelineno-0-4" href="#__codelineno-0-4"></a>estimator_version: sam3-lora-streaming-v2
+</span></code></pre></div>
+<table>
+<thead>
+<tr>
+<th></th>
+<th>bytes</th>
+<th>GiB</th>
+</tr>
+</thead>
+<tbody>
+<tr>
+<td>accelerator peak (phase <code>training</code>)</td>
+<td>13,275,856,896</td>
+<td>12.364</td>
+</tr>
+<tr>
+<td>accelerator steady (training)</td>
+<td>8,863,616,000</td>
+<td>8.255</td>
+</tr>
+<tr>
+<td>accelerator peak (phase <code>model_load</code>)</td>
+<td>8,589,934,592</td>
+<td>8.000</td>
+</tr>
+<tr>
+<td>host peak (phase <code>model_load</code>)</td>
+<td>9,692,834,633</td>
+<td>9.027</td>
+</tr>
+<tr>
+<td>host steady (training)</td>
+<td>6,654,063,433</td>
+<td>6.197</td>
+</tr>
+<tr>
+<td>disk transient</td>
+<td>91,227,136</td>
+<td>0.085</td>
+</tr>
+<tr>
+<td>containment soft host</td>
+<td>10,862,817,796</td>
+<td>10.116</td>
+</tr>
+<tr>
+<td>containment hard host</td>
+<td>12,344,111,132</td>
+<td>11.496</td>
+</tr>
+</tbody>
+</table>
+<p>CUDA device observed: RTX 6000 Ada, free 50,387,222,528 B (46.9 GiB) of 51,527,024,640 B. Free disk 1.99 TB.
+Dataset profile accepted: train_tiles 486, validation_tiles 147, validation_present true, train_instances
+3342, max_active_instances_per_tile 24, polygon_count 4546, polygon_vertices 54150. Limits: batch_size 1,
+workers 0, prefetch_batches 0, tiles 1, candidates 24.</p>
+<p>No refusal was bypassed — none fired.</p>
+<h2 id="3-launch">3. Launch<a class="headerlink" href="#3-launch" title="Permanent link">&para;</a></h2>
+<p>(pending — filled in below)</p>
+<h2 id="3-launch_1">3. Launch<a class="headerlink" href="#3-launch_1" title="Permanent link">&para;</a></h2>
+<p>First launch <strong>FAILED</strong> immediately after dataset prep:</p>
+<div class="language-text highlight"><pre><span></span><code><span id="__span-1-1"><a id="__codelineno-1-1" name="__codelineno-1-1" href="#__codelineno-1-1"></a>[semantic_sam3] EnvironmentLocationNotFound: Not a conda environment: /home/rutalab/mambaforge/envs/hydra-sam3
+</span></code></pre></div>
+<p><code>resolve_sam3_env</code> falls back to <code>DEFAULT_SAM3_ENV = "hydra-sam3"</code>; mehek's sidecar env is named <code>sam3-lora</code>.
+Fixed by exporting <code>HYDRA_SAM3_ENV=sam3-lora</code> in the unit. This is a box-naming difference, not a code
+defect, and the error was loud and immediate — no silent fallback. No code change was needed.</p>
+<p>Working launch:</p>
+<div class="language-bash highlight"><pre><span></span><code><span id="__span-2-1"><a id="__codelineno-2-1" name="__codelineno-2-1" href="#__codelineno-2-1"></a>systemd-run<span class="w"> </span>--user<span class="w"> </span>--unit<span class="o">=</span>sam3-train-ant<span class="w"> </span>-p<span class="w"> </span><span class="nv">MemoryMax</span><span class="o">=</span>60G<span class="w"> </span>-p<span class="w"> </span><span class="nv">MemorySwapMax</span><span class="o">=</span><span class="m">0</span><span class="w"> </span>-p<span class="w"> </span><span class="nv">TasksMax</span><span class="o">=</span><span class="m">4096</span><span class="w"> </span><span class="se">\</span>
+</span><span id="__span-2-2"><a id="__codelineno-2-2" name="__codelineno-2-2" href="#__codelineno-2-2"></a><span class="w">  </span>/usr/bin/bash<span class="w"> </span>-c<span class="w"> </span><span class="s2">"source ~/mambaforge/etc/profile.d/conda.sh &amp;&amp; conda activate hydra-cuda &amp;&amp; \</span>
+</span><span id="__span-2-3"><a id="__codelineno-2-3" name="__codelineno-2-3" href="#__codelineno-2-3"></a><span class="s2">  export PYTHONPATH=/home/rutalab/sam3_train_wt/src KMP_DUPLICATE_LIB_OK=TRUE HYDRA_SAM3_ENV=sam3-lora &amp;&amp; \</span>
+</span><span id="__span-2-4"><a id="__codelineno-2-4" name="__codelineno-2-4" href="#__codelineno-2-4"></a><span class="s2">  cd ~/sam3_lora_runs/ant_2026-09-06 &amp;&amp; exec python -u -m hydra_suite.detectkit.cli \</span>
+</span><span id="__span-2-5"><a id="__codelineno-2-5" name="__codelineno-2-5" href="#__codelineno-2-5"></a><span class="s2">  --config ~/sam3_lora_runs/ant_2026-09-06/training_plan.json &gt; ~/sam3_lora_runs/ant_2026-09-06/train.log 2&gt;&amp;1"</span>
+</span></code></pre></div>
+<p><code>publish.auto_import</code> was flipped to <code>true</code> in the mehek copy of the plan (the prep report left this
+decision to the run owner; publishing is part of this brief).</p>
+<h3 id="the-60-gb-cap-was-redundant-the-pipeline-caps-itself-harder">The 60 GB cap was redundant — the pipeline caps itself harder<a class="headerlink" href="#the-60-gb-cap-was-redundant-the-pipeline-caps-itself-harder" title="Permanent link">&para;</a></h3>
+<p>The trainer does NOT run inside the <code>sam3-train-ant</code> cgroup. <code>process_supervisor</code> moves the sidecar into its
+own transient scope, and that scope carries limits derived from preflight's containment numbers:</p>
+<div class="language-text highlight"><pre><span></span><code><span id="__span-3-1"><a id="__codelineno-3-1" name="__codelineno-3-1" href="#__codelineno-3-1"></a>hydra-job-c6ce34e9548640748cee453e176add37.scope
+</span><span id="__span-3-2"><a id="__codelineno-3-2" name="__codelineno-3-2" href="#__codelineno-3-2"></a>  MemoryHigh=10,862,817,796   MemoryMax=12,344,111,132   MemorySwapMax=0   TasksMax=512
+</span></code></pre></div>
+<p>i.e. a hard 11.5 GiB host cap with swap disabled, matching <code>containment_hard_host_bytes</code> exactly. The
+"~128 GB on a 125 GB box" failure mode is structurally prevented by the product itself, not just by the
+outer <code>systemd-run</code> flag. Worth knowing: the outer <code>MemoryMax=60G</code> would never have fired.</p>
+<h2 id="4-training">4. Training<a class="headerlink" href="#4-training" title="Permanent link">&para;</a></h2>
+<p>Startup lines (the adapter-surface confirmation):</p>
+<div class="language-text highlight"><pre><span></span><code><span id="__span-4-1"><a id="__codelineno-4-1" name="__codelineno-4-1" href="#__codelineno-4-1"></a>Patched vitdet.addmm_act with a grad-safe eager equivalent.
+</span><span id="__span-4-2"><a id="__codelineno-4-2" name="__codelineno-4-2" href="#__codelineno-4-2"></a>Injected LoRA adapters into 312 Linear modules.
+</span><span id="__span-4-3"><a id="__codelineno-4-3" name="__codelineno-4-3" href="#__codelineno-4-3"></a>Verified LoRA-only optimizer scope: 11,403,392 parameters in 624 tensors across 312 adapters.
+</span><span id="__span-4-4"><a id="__codelineno-4-4" name="__codelineno-4-4" href="#__codelineno-4-4"></a>training shape: 486 tiles, 1944 datapoints, batch=1 grad_accum=8, 1944 micro-batches/epoch,
+</span><span id="__span-4-5"><a id="__codelineno-4-5" name="__codelineno-4-5" href="#__codelineno-4-5"></a>                ~243 steps/epoch x 10 epochs
+</span></code></pre></div>
+<p><strong>312 modules confirmed at runtime</strong> (the figure the prep report could only quote). The dataloader is
+non-empty — 486 tiles / 1944 datapoints — so the zero-init-LoRA no-op trap does not apply.</p>
+<h3 id="vram-the-probe-under-measured-a-finding-in-its-own-right">VRAM — the probe under-measured; a finding in its own right<a class="headerlink" href="#vram-the-probe-under-measured-a-finding-in-its-own-right" title="Permanent link">&para;</a></h3>
+<p>The <code>vram_peak=</code> printed each logged step is <code>torch.cuda.max_memory_reserved()</code> (<code>cli.py::_peak_vram_gib</code>).
+That is the <strong>same metric</strong> <code>tools/sam3/measure_bf16_peak.py</code> records as <code>reserved_peak_bytes</code> and the same
+one <code>preflight.py::_MEASURED_BF16_DEVICE_PEAK_BYTES = 12 GiB</code> gates against — so the comparison below is
+exactly apples-to-apples. It is a never-reset running maximum, so every new value is a real high-water mark.</p>
+<p>Observed new maxima (step at which each first appeared):</p>
+<table>
+<thead>
+<tr>
+<th>step</th>
+<th>new max vram_peak</th>
+</tr>
+</thead>
+<tbody>
+<tr>
+<td>1</td>
+<td>7.60 GiB</td>
+</tr>
+<tr>
+<td>~30</td>
+<td>8.89 GiB</td>
+</tr>
+<tr>
+<td>~70</td>
+<td>10.22 GiB</td>
+</tr>
+</tbody>
+</table>
+<p>(table completed at end of run)</p>
+<h3 id="admission-gate-breach-observed-vram-exceeded-the-estimate-not-just-the-constant">*** ADMISSION-GATE BREACH — observed VRAM exceeded the ESTIMATE, not just the constant ***<a class="headerlink" href="#admission-gate-breach-observed-vram-exceeded-the-estimate-not-just-the-constant" title="Permanent link">&para;</a></h3>
+<p>At <strong>epoch 1 step 320</strong> <code>vram_peak</code> reached <strong>12.99 GiB</strong>. The arithmetic, exactly:</p>
+<table>
+<thead>
+<tr>
+<th>quantity</th>
+<th>bytes</th>
+<th>GiB</th>
+</tr>
+</thead>
+<tbody>
+<tr>
+<td><code>_MEASURED_BF16_DEVICE_PEAK_BYTES</code> (the envelope constant)</td>
+<td>12,884,901,888</td>
+<td>12.000</td>
+</tr>
+<tr>
+<td>+ LoRA/optimizer delta + dense device masks</td>
+<td>390,955,008</td>
+<td>0.364</td>
+</tr>
+<tr>
+<td><strong>= preflight <code>training.accelerator_peak_bytes</code> (the whole estimate)</strong></td>
+<td><strong>13,275,856,896</strong></td>
+<td><strong>12.364</strong></td>
+</tr>
+<tr>
+<td><strong>observed <code>max_memory_reserved</code> at epoch 1 step 320</strong></td>
+<td><strong>~13,947,906,294</strong></td>
+<td><strong>12.99</strong></td>
+</tr>
+</tbody>
+</table>
+<p>So the breach is not merely of the 12 GiB base term — <strong>the composed admission estimate itself is exceeded,
+by ~0.63 GiB (5.1%), and the run is only at step 320 of ~2430.</strong> The 7.72 GiB the 30-step probe recorded is
+<strong>41% below</strong> the observed peak.</p>
+<p>What this does and does not mean, precisely:</p>
+<ul>
+<li>Admission applies <code>accelerator_safety_fraction = 0.85</code>, so preflight demands <code>12.364 / 0.85 = 14.55 GiB</code>
+  free before admitting. The observed 12.99 GiB still fits under 14.55 GiB, so the safety fraction is
+  currently absorbing the error. <strong>No OOM has occurred and none is predicted on this card.</strong></li>
+<li>But the safety fraction exists to cover allocator noise, not to cover a wrong central estimate. It has
+  been silently consumed: intended slack 2.18 GiB, remaining slack 1.56 GiB, and still climbing.</li>
+<li>If the peak reaches 14.55 GiB, a card that preflight ADMITS will OOM. That is the user's stated
+  "no OOM errors" goal, and it is a shipped-product defect, not a lab curiosity.</li>
+</ul>
+<h3 id="what-the-logged-loss-number-actually-is-mechanism-stated-precisely">What the logged <code>loss</code> number actually is (mechanism, stated precisely)<a class="headerlink" href="#what-the-logged-loss-number-actually-is-mechanism-stated-precisely" title="Permanent link">&para;</a></h3>
+<p><code>cli.py:743-748</code> prints <code>loss_window.summary()</code> and then calls <code>loss_window.reset()</code> <strong>on every optimizer
+step</strong>. <code>_LossWindow</code> (cli.py:474) accumulates and then divides by <code>n</code>. So the printed value is:</p>
+<blockquote>
+<p><strong>the MEAN core loss across the <code>grad_accum = 8</code> micro-batches accumulated into that one optimizer step</strong></p>
+</blockquote>
+<p>It is <em>not</em> a running window spanning multiple steps, and it is <em>not</em> a single micro-batch either. This
+matters for reading the spikes: a logged value of 49.5 is an average of 8 micro-batches, so either several
+micro-batches in that window scored badly or one scored ~8x worse than the window mean — a lone mild
+outlier cannot produce it.</p>
+<p>The docstring explains why the mean is used at all: logging the last micro-batch of the window always lands
+on the same query TYPE (negatives are interleaved one per tile), which previously made a healthy run read
+as a total collapse with all terms at 0.0000.</p>
+<h3 id="loss-spikes-are-classification-driven-and-they-are-diminishing">Loss spikes are classification-driven, and they are diminishing<a class="headerlink" href="#loss-spikes-are-classification-driven-and-they-are-diminishing" title="Permanent link">&para;</a></h3>
+<p>The bimodal high/low alternation is entirely <code>loss_ce</code>; the geometry and mask terms barely move:</p>
+<div class="language-text highlight"><pre><span></span><code><span id="__span-5-1"><a id="__codelineno-5-1" name="__codelineno-5-1" href="#__codelineno-5-1"></a>step 640 (spike)  loss 49.53  loss_ce=0.0740  giou=0.0295  dice=0.0206
+</span><span id="__span-5-2"><a id="__codelineno-5-2" name="__codelineno-5-2" href="#__codelineno-5-2"></a>step 650 (normal) loss  6.59  loss_ce=0.0060  giou=0.0150  dice=0.0165
+</span><span id="__span-5-3"><a id="__codelineno-5-3" name="__codelineno-5-3" href="#__codelineno-5-3"></a>step 700 (spike)  loss 38.76  loss_ce=0.0648  giou=0.0364  dice=0.0331
+</span><span id="__span-5-4"><a id="__codelineno-5-4" name="__codelineno-5-4" href="#__codelineno-5-4"></a>step 710 (normal) loss  6.26  loss_ce=0.0054  giou=0.0214  dice=0.0172
+</span></code></pre></div>
+<p><code>loss_ce</code> moves ~10x on spike steps. This is the presence/scoring head mis-scoring particular batches, not
+geometry or mask quality degrading. At <code>batch=1 x grad_accum=8</code> that level of variance is unremarkable.</p>
+<p>Per-epoch statistics (over the logged steps — the trainer logs step 1,2,3 then every 10th, so these are a
+systematic 1-in-10 sample of ~243 steps/epoch, n per epoch shown):</p>
+<table>
+<thead>
+<tr>
+<th>epoch</th>
+<th>n</th>
+<th>mean loss</th>
+<th>median</th>
+<th>min</th>
+<th>max</th>
+<th>steps &gt;= 20</th>
+<th>mean loss_ce</th>
+<th>mean dice</th>
+<th>mean giou</th>
+<th>vram max</th>
+<th>skipped</th>
+</tr>
+</thead>
+<tbody>
+<tr>
+<td>0</td>
+<td>27</td>
+<td>34.05</td>
+<td>26.40</td>
+<td>5.38</td>
+<td>95.80</td>
+<td>14 (51.9%)</td>
+<td>0.0422</td>
+<td>0.0398</td>
+<td>0.0550</td>
+<td>10.22</td>
+<td>0</td>
+</tr>
+<tr>
+<td>1</td>
+<td>24</td>
+<td>29.20</td>
+<td>22.11</td>
+<td>4.63</td>
+<td>79.84</td>
+<td>15 (62.5%)</td>
+<td>0.0418</td>
+<td>0.0238</td>
+<td>0.0281</td>
+<td>12.99</td>
+<td>0</td>
+</tr>
+<tr>
+<td>2</td>
+<td>24</td>
+<td>19.08</td>
+<td>8.51</td>
+<td>4.81</td>
+<td>49.53</td>
+<td>10 (41.7%)</td>
+<td>0.0266</td>
+<td>0.0190</td>
+<td>0.0238</td>
+<td>12.99</td>
+<td>0</td>
+</tr>
+</tbody>
+</table>
+<p><strong>Epoch means are falling monotonically (34.05 -&gt; 29.20 -&gt; 19.08), medians faster still
+(26.40 -&gt; 22.11 -&gt; 8.51), and the proportion of high-loss batches is falling after epoch 1
+(51.9% -&gt; 62.5% -&gt; 41.7%) alongside <code>mean loss_ce</code> (0.0422 -&gt; 0.0418 -&gt; 0.0266).</strong> The scoring head is
+learning the hard cases rather than plateauing on them.</p>
+<p>Relevance, without overclaiming: the scoring/classification head is exactly the component the earlier parity
+programme ranked as the top suspected cause of our precision behaviour (<code>dot_prod_scoring</code>), and
+<code>adapt_scoring_head</code> is the scope deliberately left OFF for this run for lack of a measured sizing
+coefficient. <code>loss_ce</code> being the noisy, slowest-converging term is therefore a reason to consider testing
+that scope later — but this is a training-curve observation only and says nothing about held-out accuracy.
+The held-out evaluation is the verdict.</p>
+<h2 id="5-evaluation-staging-prepared-during-training-run-after-it-finished">5. Evaluation staging (prepared during training; run after it finished)<a class="headerlink" href="#5-evaluation-staging-prepared-during-training-run-after-it-finished" title="Permanent link">&para;</a></h2>
+<p><strong>Evaluation was moved to mehek, not courtship.</strong> A matched run is in flight on courtship under
+<code>PYTORCH_CUDA_ALLOC_CONF=expandable_segments:True</code> (same corpus, same 2430-step horizon, verified identical
+dataset manifest) — courtship's GPU was measured at 96% util / 7980 MiB, so it was left alone. This run is
+therefore the <strong>default-allocator arm</strong> of that controlled pair; the VRAM ladder below is one half of it.</p>
+<p>Staged onto mehek (read-only pulls from courtship, routed via the Mac since mehek-&gt;courtship ssh has no
+host key; no GPU work on courtship):</p>
+<table>
+<thead>
+<tr>
+<th>artifact</th>
+<th>mehek path</th>
+<th>check</th>
+</tr>
+</thead>
+<tbody>
+<tr>
+<td>held-out tiles + COCO</td>
+<td><code>~/sam3_eval/data/valid</code></td>
+<td>576 images, 805 annotations, exactly the 16 held-out stems — identical corpus to the pre-registered baseline</td>
+</tr>
+<tr>
+<td>2026-09-04 reference ckpt + sidecar</td>
+<td><code>~/sam3_eval/refs/20260904-143950_semantic_sam3_ca1bd031.pt</code></td>
+<td>md5 <code>97288cddb7a9ef203f062c64d16008e1</code> matched against courtship's copy</td>
+</tr>
+<tr>
+<td>spike ckpt</td>
+<td><code>~/sam3_spike/out/sam3_ant_finetuned.pt</code></td>
+<td>md5 <code>5d41842564f638b3e0b1b5579afa46f3</code>, <strong>identical to courtship's copy</strong> — so the artifact named in the brief is the one evaluated</td>
+</tr>
+</tbody>
+</table>
+<p>Corrected matcher confirmed present in the pinned tree on mehek
+(<code>~/sam3_train_wt/src/hydra_suite/core/inference/semantic/calibration.py</code>): ranks by match QUALITY, keeps the
+containment gate, tests <code>representative_point</code> rather than the vertex mean, and the IoU second admissibility
+route is REMOVED (it survives only in explanatory comments). Its docstring records the measured effect with
+predictions held fixed: recall 0.867 -&gt; 0.988, extras/tile 0.203 -&gt; 0.035.</p>
+<p>Environment dry-run on mehek <code>hydra-cuda</code> (imports only, no GPU allocation while training held the card):
+<code>compare_models.py --help</code> exits 0; ultralytics 8.4.41, numpy 2.4.3 (<code>np.trapezoid</code> present, so the 1.x
+fallback is not exercised), <code>SAM3SemanticPredictor</code> imports, <code>scikit-learn</code>/<code>shapely</code> present,
+<code>hydra_suite.__file__</code> = <code>~/sam3_train_wt/src/hydra_suite/__init__.py</code>.</p>
+<p><code>tools/sam3_parity/baseline.json</code> is NOT written: <code>--out</code> is overridden to new files under
+<code>~/sam3_eval/results/</code>. Every other argument is copied verbatim from <code>baseline.json</code>'s recorded values
+(<code>prompt=ant</code>, <code>reference_body_px=97.13015747070312</code>, <code>tile_fraction</code> omitted/None, <code>seam_margin_px=8</code>,
+<code>merge_iou=0.5</code>, <code>compare_confidence=0.5</code>, <code>target_recall=0.9</code>) so that the matcher is the only difference
+from the pre-registered run.</p>
+<h2 id="6-checkpoint-ladder-added-mid-run-to-test-the-last-epoch-selection-default">6. Checkpoint ladder (added mid-run, to test the last-epoch selection default)<a class="headerlink" href="#6-checkpoint-ladder-added-mid-run-to-test-the-last-epoch-selection-default" title="Permanent link">&para;</a></h2>
+<p><code>cli.py:20</code> selects the LAST epoch's weights, always. <code>cli.py:267</code> sets <code>KEEP_EPOCH_CHECKPOINTS = 3</code>.
+Because the epoch means stalled after epoch 2, a ladder of per-epoch checkpoints was preserved so that
+last-epoch selection can be tested against held-out metrics rather than assumed.</p>
+<p><strong><code>epoch_001.pt</code> and <code>epoch_002.pt</code> were ALREADY PRUNED by the time this was set up</strong> — only
+<code>epoch_003.pt</code>, <code>epoch_004.pt</code>, <code>epoch_005.pt</code> remained. Stated rather than silently substituted. Those
+three were copied to <code>~/sam3_eval/ladder/</code> (outside the pruning path) and a 30-second copy loop
+(<code>~/sam3_eval/preserve.sh</code>) now preserves every subsequent epoch checkpoint.</p>
+<p>Epoch checkpoints are <strong>adapters only (45,820,383 bytes)</strong>. <code>Sam3SemanticLabeler.from_variant</code> needs a
+merged artifact plus its <code>.sam3_meta.json</code> sidecar (the load guard reads the sidecar), so each rung must be
+published before it can be evaluated. That is done with <code>publish_sam3_model</code>, mirroring
+<code>training/service.py:184</code>'s SEMANTIC_SAM3 branch, but with <code>models_root</code> pointed at an isolated
+<code>~/sam3_eval/ladder_models</code> so the real registry is not polluted with ladder rungs.</p>
+<h3 id="finding-publish-is-serialized-behind-the-host-memory-lease">Finding: publish is serialized behind the host-memory lease<a class="headerlink" href="#finding-publish-is-serialized-behind-the-host-memory-lease" title="Permanent link">&para;</a></h3>
+<p>Attempting a ladder publish while training was still running was REFUSED:</p>
+<div class="language-text highlight"><pre><span></span><code><span id="__span-6-1"><a id="__codelineno-6-1" name="__codelineno-6-1" href="#__codelineno-6-1"></a>ResourceBusyError: Resource 'mehek:host-memory' is already leased by PID 2791995
+</span><span id="__span-6-2"><a id="__codelineno-6-2" name="__codelineno-6-2" href="#__codelineno-6-2"></a>Sam3PublishError: SAM3 publish sidecar launch refused
+</span></code></pre></div>
+<p>This is correct, intentional behaviour — one heavy host job at a time — and it is a loud refusal, not a
+silent degradation. Consequence for scheduling: ladder publishes cannot be overlapped with training to save
+wall-clock; they must run after the run releases its lease. Publishing itself is CPU-only
+(<code>CUDA_VISIBLE_DEVICES=""</code>), so it does not contend for the GPU.</p>
+<h2 id="7-training-outcome-completed-all-10-epochs">7. Training outcome — COMPLETED, all 10 epochs<a class="headerlink" href="#7-training-outcome-completed-all-10-epochs" title="Permanent link">&para;</a></h2>
+<div class="language-text highlight"><pre><span></span><code><span id="__span-7-1"><a id="__codelineno-7-1" name="__codelineno-7-1" href="#__codelineno-7-1"></a>progress 10/10
+</span><span id="__span-7-2"><a id="__codelineno-7-2" name="__codelineno-7-2" href="#__codelineno-7-2"></a>adapters.pt          45,820,383 bytes
+</span><span id="__span-7-3"><a id="__codelineno-7-3" name="__codelineno-7-3" href="#__codelineno-7-3"></a>adapters.pt.complete.json  sha256 738749e2dfe25d7871089ddc5b0361c6f3df4105ece133fc16b360ae41b8a60d
+</span><span id="__span-7-4"><a id="__codelineno-7-4" name="__codelineno-7-4" href="#__codelineno-7-4"></a>val_stats.json       {"val_loss_mean": 0.9056838208355572, "val_batches": 588,
+</span><span id="__span-7-5"><a id="__codelineno-7-5" name="__codelineno-7-5" href="#__codelineno-7-5"></a>                      "note": "informational only; checkpoint selection is always 'last'"}
+</span></code></pre></div>
+<p>Wall clock 02:04:37 -&gt; 04:17 EDT, ~2h12m for 2430 optimizer steps. Training worker exit code <strong>0</strong>.</p>
+<ul>
+<li><strong>Skipped steps: 0</strong> across all 2430 optimizer steps. No non-finite loss, no gradient skip, so the
+  <code>MAX_CONSECUTIVE_SKIPPED_STEPS</code> guard never engaged.</li>
+<li><strong>Dataloader non-empty</strong>: 486 tiles / 1944 datapoints / 588 validation batches — the zero-init-LoRA no-op
+  trap (a "successful" run publishing a checkpoint byte-identical to stock SAM3) does not apply.</li>
+<li>No OOM, no exit 137, no hang.</li>
+</ul>
+<p>Per-epoch loss (1-in-10 systematic sample of ~243 steps/epoch; the trainer logs step 1,2,3 then every 10th,
+so n ~ 24-27 per epoch; the distribution is strongly bimodal so these means carry a wide error bar):</p>
+<table>
+<thead>
+<tr>
+<th>epoch</th>
+<th>n</th>
+<th>mean</th>
+<th>median</th>
+<th>min</th>
+<th>max</th>
+<th>steps &gt;= 20</th>
+<th>mean loss_ce</th>
+<th>vram max</th>
+<th>skipped</th>
+</tr>
+</thead>
+<tbody>
+<tr>
+<td>0</td>
+<td>27</td>
+<td>34.05</td>
+<td>26.40</td>
+<td>5.38</td>
+<td>95.80</td>
+<td>51.9%</td>
+<td>0.0422</td>
+<td>10.22</td>
+<td>0</td>
+</tr>
+<tr>
+<td>1</td>
+<td>24</td>
+<td>29.20</td>
+<td>22.11</td>
+<td>4.63</td>
+<td>79.84</td>
+<td>62.5%</td>
+<td>0.0418</td>
+<td>12.99</td>
+<td>0</td>
+</tr>
+<tr>
+<td>2</td>
+<td>24</td>
+<td>19.08</td>
+<td>8.51</td>
+<td>4.81</td>
+<td>49.53</td>
+<td>41.7%</td>
+<td>0.0266</td>
+<td>12.99</td>
+<td>0</td>
+</tr>
+<tr>
+<td>3</td>
+<td>25</td>
+<td>19.68</td>
+<td>12.30</td>
+<td>3.63</td>
+<td>49.99</td>
+<td>32.0%</td>
+<td>0.0267</td>
+<td>12.99</td>
+<td>0</td>
+</tr>
+<tr>
+<td>4</td>
+<td>24</td>
+<td>19.85</td>
+<td>13.81</td>
+<td>5.49</td>
+<td>60.14</td>
+<td>41.7%</td>
+<td>0.0273</td>
+<td>12.99</td>
+<td>0</td>
+</tr>
+<tr>
+<td>5</td>
+<td>24</td>
+<td>20.85</td>
+<td>15.30</td>
+<td>3.73</td>
+<td>56.87</td>
+<td>41.7%</td>
+<td>0.0281</td>
+<td>12.99</td>
+<td>0</td>
+</tr>
+<tr>
+<td>6</td>
+<td>25</td>
+<td>19.31</td>
+<td>9.84</td>
+<td>4.21</td>
+<td>70.64</td>
+<td>40.0%</td>
+<td>0.0264</td>
+<td>12.99</td>
+<td>0</td>
+</tr>
+<tr>
+<td>7</td>
+<td>24</td>
+<td>18.13</td>
+<td>9.80</td>
+<td>3.38</td>
+<td>48.62</td>
+<td>41.7%</td>
+<td>0.0249</td>
+<td>12.99</td>
+<td>0</td>
+</tr>
+<tr>
+<td>8</td>
+<td>24</td>
+<td>19.96</td>
+<td>11.61</td>
+<td>2.86</td>
+<td>63.11</td>
+<td>41.7%</td>
+<td>0.0279</td>
+<td>12.99</td>
+<td>0</td>
+</tr>
+</tbody>
+</table>
+<p><strong>Learning is visible for epochs 0-2 (34.05 -&gt; 29.20 -&gt; 19.08) and then stops.</strong> Epochs 2-8 oscillate in a
+flat band of 18.1-20.9 with no trend in either direction; <code>mean loss_ce</code> is flat at 0.025-0.028 and the
+high-loss-batch fraction is pinned at 40-42% for six consecutive epochs. Nothing after epoch 2 is
+distinguishable from sampling noise. That is what motivated the checkpoint ladder in section 6.</p>
+<h3 id="final-vram-ladder-the-controlled-pairs-default-allocator-arm">Final VRAM ladder (the controlled pair's default-allocator arm)<a class="headerlink" href="#final-vram-ladder-the-controlled-pairs-default-allocator-arm" title="Permanent link">&para;</a></h3>
+<table>
+<thead>
+<tr>
+<th>new maximum</th>
+<th>first appeared at</th>
+</tr>
+</thead>
+<tbody>
+<tr>
+<td>7.60 GiB</td>
+<td>epoch 0, step 1</td>
+</tr>
+<tr>
+<td>8.89 GiB</td>
+<td>epoch 0, step 30</td>
+</tr>
+<tr>
+<td>10.22 GiB</td>
+<td>epoch 0, step 70</td>
+</tr>
+<tr>
+<td>11.59 GiB</td>
+<td>epoch 1, step 310</td>
+</tr>
+<tr>
+<td><strong>12.99 GiB (final)</strong></td>
+<td><strong>epoch 1, step 320</strong></td>
+</tr>
+</tbody>
+</table>
+<p><strong>The peak last moved at step 320 and then held for 2110 consecutive steps (8.7 epochs) to the end of the
+run.</strong> So it does plateau — but only after crossing the admission estimate, and only after a 230-step flat
+stretch at 10.22 GiB that spanned a whole epoch boundary and would have fooled any flatness-based rule.</p>
+<p>Final honest numbers: <strong>full-run peak 12.99 GiB</strong>, versus a 30-step probe reading of <strong>7.72 GiB</strong> (41% low)
+and a preflight estimate of <strong>12.364 GiB</strong> (5.1% low). No OOM occurred, because the 0.85 safety fraction
+demands 14.55 GiB free and 12.99 fits under it — the error was absorbed by margin that exists for other
+reasons.</p>
+<h3 id="recommended-stopping-rule-for-toolssam3measure_bf16_peakpy">Recommended stopping rule for <code>tools/sam3/measure_bf16_peak.py</code><a class="headerlink" href="#recommended-stopping-rule-for-toolssam3measure_bf16_peakpy" title="Permanent link">&para;</a></h3>
+<p>The probe currently stops after <code>--optimizer-steps</code> (default 5; the recalibration used 30). Both are far too
+early, and the failure is not "N was too small" but "step count is the wrong variable". Evidence: the peak
+was still flat at 10.22 GiB at step 300 and jumped twice within the next 20 steps.</p>
+<p>Root cause of the growth is almost certainly the tile with the most simultaneous instances —
+<code>max_active_instances_per_tile</code> is 24 and preflight already models device peak as a function of it — so the
+peak is reached when the loader first draws a worst-case tile, and with <code>batch=1</code> over 486 shuffled tiles
+that can land anywhere in the first few hundred steps.</p>
+<p>Recommended, in preference order:</p>
+<ol>
+<li><strong>Stop on dataset coverage, not step count: run at least one full epoch</strong> (486 optimizer-step-equivalents
+   here). This is the only rule that guarantees every tile — including the worst-case one — has been seen.
+   Cost here would have been ~13 minutes, against a 4.3-hour run.</li>
+<li><strong>If a full epoch is too expensive, order the probe's tiles by descending instance count</strong> and run the top
+   K (say K=16 covering the largest tiles), rather than sampling the shuffled order. This targets the
+   variable that actually drives the peak, and would likely find the true maximum in far fewer steps than
+   random order.</li>
+<li><strong>Never accept a plateau as evidence.</strong> Require that the peak has not moved for a stated number of steps
+   AND that dataset coverage is complete. A pure flatness test would have stopped at step 300 with 10.22.</li>
+</ol>
+<p>Also worth noting: the probe records <code>reserved_peak_bytes</code> from <code>torch.cuda.max_memory_reserved()</code>, which is
+exactly the metric the training loop logs and the metric admission is written against — that part of the
+methodology is sound. Only the stopping rule is wrong.</p>
+<p><strong>No source constant was edited.</strong> <code>_MEASURED_BF16_DEVICE_PEAK_BYTES</code> is left at 12 GiB; the recommendation
+is that a corrected measurement be persisted through <code>runtime/memory_profiles.py</code> (as
+<code>measure_bf16_peak.py</code> already does via <code>MemoryProfileStore</code>), re-measured under rule 1 above.</p>
+<h2 id="8-publish-failed-root-caused-fixed-a-real-pipeline-defect">8. Publish — FAILED, root-caused, FIXED (a real pipeline defect)<a class="headerlink" href="#8-publish-failed-root-caused-fixed-a-real-pipeline-defect" title="Permanent link">&para;</a></h2>
+<p>After the completed 10-epoch run, publish died. <code>training_result.json</code> recorded
+<code>"success": false</code>, <code>published_registry_key: ""</code>, <code>published_model_path: ""</code> — the training worker itself
+exited 0 and <code>adapters.pt</code> was safely on disk, but <strong>no artifact, no sidecar, no registry entry</strong>.</p>
+<div class="language-text highlight"><pre><span></span><code><span id="__span-8-1"><a id="__codelineno-8-1" name="__codelineno-8-1" href="#__codelineno-8-1"></a>Worker exited with code 130. Child output tail:
+</span><span id="__span-8-2"><a id="__codelineno-8-2" name="__codelineno-8-2" href="#__codelineno-8-2"></a>OpenBLAS blas_thread_init: pthread_create failed for thread 31 of 32: Resource temporarily unavailable
+</span><span id="__span-8-3"><a id="__codelineno-8-3" name="__codelineno-8-3" href="#__codelineno-8-3"></a>OpenBLAS blas_thread_init: RLIMIT_NPROC 513222 current, 513222 max
+</span><span id="__span-8-4"><a id="__codelineno-8-4" name="__codelineno-8-4" href="#__codelineno-8-4"></a>...
+</span><span id="__span-8-5"><a id="__codelineno-8-5" name="__codelineno-8-5" href="#__codelineno-8-5"></a>  File ".../training/sam3_lora/publish_worker.py", line 31, in &lt;module&gt;
+</span><span id="__span-8-6"><a id="__codelineno-8-6" name="__codelineno-8-6" href="#__codelineno-8-6"></a>    from hydra_suite.utils.sam3_constants import PREDICTOR_IMGSZ
+</span><span id="__span-8-7"><a id="__codelineno-8-7" name="__codelineno-8-7" href="#__codelineno-8-7"></a>  File ".../hydra_suite/utils/__init__.py", line 8, in &lt;module&gt;
+</span><span id="__span-8-8"><a id="__codelineno-8-8" name="__codelineno-8-8" href="#__codelineno-8-8"></a>    from .frame_prefetcher import FramePrefetcher
+</span><span id="__span-8-9"><a id="__codelineno-8-9" name="__codelineno-8-9" href="#__codelineno-8-9"></a>  File ".../hydra_suite/utils/frame_prefetcher.py", line 14, in &lt;module&gt;
+</span><span id="__span-8-10"><a id="__codelineno-8-10" name="__codelineno-8-10" href="#__codelineno-8-10"></a>    import cv2
+</span><span id="__span-8-11"><a id="__codelineno-8-11" name="__codelineno-8-11" href="#__codelineno-8-11"></a>KeyboardInterrupt
+</span></code></pre></div>
+<p>Reproduced standalone (so: deterministic, not a transient), then isolated with four controlled tests:</p>
+<table>
+<thead>
+<tr>
+<th>test</th>
+<th>result</th>
+</tr>
+</thead>
+<tbody>
+<tr>
+<td><code>conda run</code>, no containment</td>
+<td><strong>OK</strong> (cv2 imports in 0.1 s)</td>
+</tr>
+<tr>
+<td>direct python, <code>TasksMax=64</code></td>
+<td><strong>OK</strong></td>
+</tr>
+<tr>
+<td><strong><code>conda run</code> + <code>TasksMax=64</code></strong></td>
+<td><strong>FAILS — <code>pthread_create failed for thread 31 of 32</code>, <code>ImportError: numpy._core.multiarray failed to import</code>, segfault</strong></td>
+</tr>
+<tr>
+<td><code>conda run</code>, <code>TasksMax=512</code></td>
+<td><strong>OK</strong></td>
+</tr>
+</tbody>
+</table>
+<p><strong>Root cause:</strong> <code>publish.py:54</code> set <code>MAX_PROCESSES = 64</code>. The publish sidecar is launched through <code>conda run</code>,
+and conda's process tree plus numpy/OpenBLAS's core-count-sized thread pool (32 on this box) exhausts a
+<code>pids.max</code> of 64 before the worker finishes importing. Training's own scope runs at <code>TasksMax=512</code> and is
+unaffected — which is why 4.3 hours of training succeeded and the 3-minute publish could never have.</p>
+<p><strong>Fix:</strong> <code>MAX_PROCESSES = 64 -&gt; 512</code>, with the measurement recorded in-comment. Committed locally by explicit
+path with <code>-n</code> as <strong><code>9c50a40b</code></strong> (NOT pushed). With the fix applied, publish succeeded on the first attempt.</p>
+<h3 id="contributing-defect-not-fixed-reporting-only">Contributing defect (not fixed — reporting only)<a class="headerlink" href="#contributing-defect-not-fixed-reporting-only" title="Permanent link">&para;</a></h3>
+<p><code>utils/sam3_constants.py</code> opens with: <em>"Deliberately a dependency-free leaf module: it imports nothing. The
+SAM3 training sidecar runs in a minimal conda env with no numba, sklearn, cv2 or ultralytics..."</em> — but
+<code>hydra_suite/utils/__init__.py:8</code> eagerly does <code>from .frame_prefetcher import FramePrefetcher</code>, which imports
+<code>cv2</code>. Importing that one integer therefore executes the whole heavy graph, defeating the module's stated
+design intent and putting OpenBLAS in the crash path in the first place. It only works at all on this box
+because its <code>sam3-lora</code> env happens to have cv2, contrary to the docstring's assumption. Fixing this would
+independently have prevented the crash.</p>
+<h3 id="context-publish-is-the-least-exercised-path-in-the-pipeline">Context: publish is the least-exercised path in the pipeline<a class="headerlink" href="#context-publish-is-the-least-exercised-path-in-the-pipeline" title="Permanent link">&para;</a></h3>
+<p><code>publish.py:378</code> carries a comment from a previous incident: <em>"Publishing therefore failed for EVERY SAM3 run
+with 'must be numeric'; the pipeline had never reached publish before, so nothing caught it."</em> This run found
+the next defect in the same stretch of code. Publish is reached only after a multi-hour training run
+succeeds, so it gets almost no coverage — worth a fast synthetic publish test with a tiny adapter.</p>
+<h2 id="9-published-artifacts-all-three-present-and-verified">9. Published artifacts — all three present and verified<a class="headerlink" href="#9-published-artifacts-all-three-present-and-verified" title="Permanent link">&para;</a></h2>
+<table>
+<thead>
+<tr>
+<th>artifact</th>
+<th>value</th>
+</tr>
+</thead>
+<tbody>
+<tr>
+<td><code>.pt</code></td>
+<td><code>~/.local/share/hydra-suite/models/sam3_finetuned/20260906-020455_semantic_sam3_ee10d3d0.pt</code> (3,450,158,878 B)</td>
+</tr>
+<tr>
+<td>sidecar</td>
+<td><code>...ee10d3d0.pt.sam3_meta.json</code> (74,836 B)</td>
+</tr>
+<tr>
+<td>registry</td>
+<td><code>model_registry.json</code> schema_version 2, key <code>sam3_finetuned/20260906-020455_semantic_sam3_ee10d3d0.pt</code></td>
+</tr>
+</tbody>
+</table>
+<p>Sidecar stamps, both confirmed against the runtime log:</p>
+<div class="language-text highlight"><pre><span></span><code><span id="__span-9-1"><a id="__codelineno-9-1" name="__codelineno-9-1" href="#__codelineno-9-1"></a>adapted_modules          = 312          &lt;- matches the 312-module surface
+</span><span id="__span-9-2"><a id="__codelineno-9-2" name="__codelineno-9-2" href="#__codelineno-9-2"></a>adapter_trainable_params = 11403392     &lt;- matches "11,403,392 parameters in 624 tensors across 312 adapters"
+</span><span id="__span-9-3"><a id="__codelineno-9-3" name="__codelineno-9-3" href="#__codelineno-9-3"></a>base_variant = sam3   imgsz = 1008   prompt = ant
+</span><span id="__span-9-4"><a id="__codelineno-9-4" name="__codelineno-9-4" href="#__codelineno-9-4"></a>object_tile_fraction = 0.055   train_tile_px = 1766   reference_body_px = 97.13015747070312
+</span><span id="__span-9-5"><a id="__codelineno-9-5" name="__codelineno-9-5" href="#__codelineno-9-5"></a>label_quality_acknowledged = True
+</span><span id="__span-9-6"><a id="__codelineno-9-6" name="__codelineno-9-6" href="#__codelineno-9-6"></a>source_fingerprint = 87e03e24554704ea3fe5bb5d7cb830fdfd71d1700745cb0f08846b72110d3ae0
+</span></code></pre></div>
+<p>Registry entry carries <code>stored_path</code>, <code>sidecar_path</code>, <code>trained_from_run_id</code>, <code>dataset_fingerprint</code>,
+<code>task_family: semantic</code>, <code>usage_role: semantic_sam3</code>, <code>added_at: 2026-09-06T04:20:19</code>.</p>
+<p><strong>Load guard passes</strong>: <code>Sam3SemanticLabeler.from_variant(checkpoint=...)</code> returns a live labeler; the
+<code>assert_checkpoint_loaded</code> guard (which compares the live state dict against the sidecar's
+<code>tuned_fingerprints</code>/<code>stripped_keys</code> at <code>imgsz=1008</code>) raised nothing.</p>
+<h2 id="10-the-geometry-confound-read-this-before-any-number-in-section-11">10. THE GEOMETRY CONFOUND — read this before any number in section 11<a class="headerlink" href="#10-the-geometry-confound-read-this-before-any-number-in-section-11" title="Permanent link">&para;</a></h2>
+<p>The 2026-09-06 run and the 2026-09-04 reference were <strong>not trained at the same tile geometry</strong>:</p>
+<table>
+<thead>
+<tr>
+<th></th>
+<th>new (2026-09-06)</th>
+<th>reference (2026-09-04)</th>
+</tr>
+</thead>
+<tbody>
+<tr>
+<td><code>object_tile_fraction</code></td>
+<td><strong>0.055</strong></td>
+<td><strong>0.10</strong></td>
+</tr>
+<tr>
+<td><code>train_tile_px</code></td>
+<td><strong>1766</strong></td>
+<td><strong>971</strong></td>
+</tr>
+</tbody>
+</table>
+<p>SAM3 resizes every tile to its native 1008 px. So a 97.13 px ant is presented to each model at a different
+apparent scale:</p>
+<ul>
+<li>reference: tile 971 -&gt; 1008, ant appears at 97.13 x 1008/971 ~= <strong>101 px</strong></li>
+<li>new: tile 1766 -&gt; 1008, ant appears at 97.13 x 1008/1766 ~= <strong>55 px</strong></li>
+</ul>
+<p>The pre-registered evaluation corpus (<code>~/sam3_eval/data/valid</code>) is <strong>971 x 971</strong> tiles — built at the
+REFERENCE model's geometry. Evaluating both models on it tests the reference at the scale it trained on and
+the new model at a scale ~1.82x away from the one it trained on. <strong>Any single-geometry comparison is
+therefore confounded with a train/serve scale mismatch that handicaps exactly one arm.</strong></p>
+<h3 id="root-cause-a-process-defect-not-a-code-bug">Root cause — a process defect, not a code bug<a class="headerlink" href="#root-cause-a-process-defect-not-a-code-bug" title="Permanent link">&para;</a></h3>
+<p><code>training/contracts.py:250</code> declares <code>object_tile_fraction: float = 0.055</code>. The 2026-09-06 plan did not set
+the field, so dataset prep silently took the default; the 2026-09-04 reference had used 0.10. <strong>This was
+never a like-for-like retrain</strong>, and the divergence entered through prep quietly accepting a default rather
+than matching the checkpoint the run existed to be compared against.</p>
+<p><strong>Could anything have warned?</strong> No. Searching <code>src/</code> for any warning or mismatch check on
+<code>object_tile_fraction</code> returns nothing, and <code>train_tile_px</code> has exactly two references in the whole tree —
+<code>publish_worker.py:267</code> (which writes it) and a comment in <code>publish.py:378</code>. Nothing reads a prior
+checkpoint's sidecar geometry at plan time, and nothing compares a new run's geometry against it. The
+geometry IS faithfully stamped on the artifact, so the information exists; it is simply never checked.</p>
+<p><strong>Recommendation:</strong> when a run exists to be compared against a prior checkpoint, its geometry parameters
+should be read from that checkpoint's <code>.sam3_meta.json</code> rather than from <code>contracts.py</code> defaults — or, at
+minimum, a plan that names a comparison baseline should warn when <code>object_tile_fraction</code> / <code>tile_px</code> differ
+from it.</p>
+<h3 id="provenance-caveat-on-the-reference">Provenance caveat on the reference<a class="headerlink" href="#provenance-caveat-on-the-reference" title="Permanent link">&para;</a></h3>
+<p>The 2026-09-04 sidecar's <code>source_fingerprint</code> is the placeholder string
+<code>courtship:20260904-143950_semantic_sam3_ca1bd031</code>, not a dataset hash, so <strong>same-corpus could not be proved
+from metadata.</strong> Its <code>reference_body_px</code> is identical to this run's (97.13015747070312), which is suggestive
+of the same source labels, but that is not proof and is not upgraded to a claim here.</p>
+<h3 id="the-clean-good-news-independent-of-every-confound-above">The clean good news, independent of every confound above<a class="headerlink" href="#the-clean-good-news-independent-of-every-confound-above" title="Permanent link">&para;</a></h3>
+<p><strong>The corrected matcher is demonstrably working.</strong> On these same 16 held-out frames, recall is <strong>0.98</strong>
+under the corrected matcher versus <strong>0.867</strong> recorded in <code>baseline.json</code> under the old vertex-mean matcher.
+That reproduces the fix's own predicted effect (0.867 -&gt; 0.988) on an independent run, and it is unaffected
+by the tile-geometry question, which touches the models rather than the matcher.</p>
+<p><code>tools/sam3_parity/baseline.json</code> was NOT modified. All results are written to new files under
+<code>~/sam3_eval/results/</code>.</p>
+<h2 id="11-held-out-evaluation-16-frames-576-tiles-805-instances-corrected-matcher">11. Held-out evaluation — 16 frames / 576 tiles / 805 instances, corrected matcher<a class="headerlink" href="#11-held-out-evaluation-16-frames-576-tiles-805-instances-corrected-matcher" title="Permanent link">&para;</a></h2>
+<p>All runs: <code>--prompt ant --reference-body-px 97.13015747070312 --seam-margin-px 8 --merge-iou 0.5
+--compare-confidence 0.5 --target-recall 0.9</code>, no <code>--tile-fraction</code> — every value copied verbatim from
+<code>baseline.json</code> so the matcher and the corpus geometry are the only things that differ from the
+pre-registered run. Results written to <code>~/sam3_eval/results/*.json</code>; <strong><code>baseline.json</code> was not touched.</strong></p>
+<p>Note on a naming quirk: <code>operating_points[*].extra_per_frame</code> is per-TILE despite its name (it matches the
+<code>extras/tile</code> figures in <code>baseline.json</code>'s caveats). The explicitly-named <code>paired_extras_per_frame</code> and
+<code>paired_extras_per_tile</code> blocks are per-frame and per-tile respectively.</p>
+<p><strong><code>median IoU</code> is NOT reported: <code>compare_models.py</code> does not emit it.</strong> There is no such key in its output
+and no code path computes one (the only IoU uses are <code>--merge-iou</code> and the matcher's internal
+<code>match_quality</code>). Recording this as unavailable rather than inventing a number.</p>
+<h3 id="11a-cross-model-comparisons-on-the-971-px-corpus-confounded-not-model-claims">11a. Cross-model comparisons on the 971-px corpus — CONFOUNDED, not model claims<a class="headerlink" href="#11a-cross-model-comparisons-on-the-971-px-corpus-confounded-not-model-claims" title="Permanent link">&para;</a></h3>
+<p>Read section 10 first. On this corpus the reference model is at its trained scale and the new model is
+1.82x away from its own.</p>
+<table>
+<thead>
+<tr>
+<th></th>
+<th>new (2026-09-06)</th>
+<th>ref (2026-09-04)</th>
+<th>spike</th>
+</tr>
+</thead>
+<tbody>
+<tr>
+<td>recall @ conf 0.5</td>
+<td>0.9801</td>
+<td>0.9801</td>
+<td>0.9565</td>
+</tr>
+<tr>
+<td>extras/tile @ conf 0.5</td>
+<td>0.1094</td>
+<td>0.0191</td>
+<td>0.0087</td>
+</tr>
+<tr>
+<td>max recall</td>
+<td>0.9975 @0.20</td>
+<td>0.9876 @0.20</td>
+<td>0.9689 @0.10</td>
+</tr>
+<tr>
+<td>AP</td>
+<td>0.6135</td>
+<td>0.6930</td>
+<td>0.6081</td>
+</tr>
+<tr>
+<td>extras/frame @ target recall 0.9</td>
+<td>0.0516</td>
+<td>0.0056</td>
+<td>0.0035</td>
+</tr>
+</tbody>
+</table>
+<ul>
+<li><strong>new vs ref:</strong> paired extras/frame <strong>+3.25, 95% CI [2.8125, 3.75]</strong>, sign p = 3.05e-05; per-tile
+  <strong>+0.0903, CI [0.0660, 0.1163]</strong>, p = 9.06e-14. CI excludes zero.</li>
+<li><strong>new vs spike:</strong> paired extras/frame <strong>+3.625, 95% CI [3.00, 4.375]</strong>, sign p = 3.05e-05. CI excludes zero.</li>
+</ul>
+<p>Both differences are "real" by the pre-registered criterion, and both say the new model emits more extras at
+equal-or-better recall. <strong>Neither is presented as a model claim</strong>: the tile-geometry confound handicaps the
+new model in both, and for the spike the brief's own caveats apply independently (3-frame training set with
+train == valid, and held-out frame <code>f008975</code> sits inside it).</p>
+<h3 id="11b-checkpoint-ladder-internally-clean-and-the-most-informative-result">11b. Checkpoint ladder — internally clean, and the most informative result<a class="headerlink" href="#11b-checkpoint-ladder-internally-clean-and-the-most-informative-result" title="Permanent link">&para;</a></h3>
+<p>All four arms come from THIS run, share <code>object_tile_fraction = 0.055</code> / 1766-px training geometry, and are
+scored on the same 971-px corpus. The scale handicap is therefore identical across arms and cancels. (State
+that shared handicap whenever these numbers are quoted — the absolute values are depressed for all four.)</p>
+<p>Each rung is <code>a</code>, the final checkpoint is <code>b</code>:</p>
+<table>
+<thead>
+<tr>
+<th>rung</th>
+<th>AP</th>
+<th>recall @0.5</th>
+<th>extras/tile @0.5</th>
+<th>extras/frame @ recall 0.9</th>
+<th>paired extras/frame vs final</th>
+<th>95% CI</th>
+<th>sign p</th>
+</tr>
+</thead>
+<tbody>
+<tr>
+<td>epoch_003 (end ep 2)</td>
+<td><strong>0.6379</strong></td>
+<td>0.9789</td>
+<td><strong>0.0764</strong></td>
+<td><strong>0.0232</strong></td>
+<td><strong>-1.1875</strong></td>
+<td>[-1.6875, -0.75]</td>
+<td>4.88e-04</td>
+</tr>
+<tr>
+<td>epoch_005 (end ep 4)</td>
+<td>0.5985</td>
+<td>0.9839</td>
+<td>0.1354</td>
+<td>0.0385</td>
+<td>+0.9375</td>
+<td>[0.125, 1.75]</td>
+<td>0.146</td>
+</tr>
+<tr>
+<td>epoch_008 (end ep 7)</td>
+<td>0.6202</td>
+<td>0.9814</td>
+<td>0.0972</td>
+<td>0.0501</td>
+<td>-0.4375</td>
+<td>[-0.6875, -0.1875]</td>
+<td>0.0156</td>
+</tr>
+<tr>
+<td><strong>final (end ep 9)</strong></td>
+<td>0.6135</td>
+<td>0.9801</td>
+<td>0.1094</td>
+<td>0.0516</td>
+<td>—</td>
+<td>—</td>
+<td>—</td>
+</tr>
+</tbody>
+</table>
+<p><strong>Interpretation, stated conservatively.</strong></p>
+<ul>
+<li>By AP the ordering is epoch_003 (0.6379) &gt; epoch_008 (0.6202) &gt; <strong>final (0.6135)</strong> &gt; epoch_005 (0.5985).
+  The always-last-epoch default picked a checkpoint that is <strong>third of the four sampled</strong>.</li>
+<li><strong>The ladder is NOT monotonic in training duration.</strong> If longer training were systematically harmful,
+  epoch_005 would sit between epoch_003 and the final; instead it is the worst arm. So this is NOT evidence
+  of a duration effect — it is at least as consistent with substantial epoch-to-epoch variance in the
+  adapter, with epoch_003 a good draw and epoch_005 a bad one.</li>
+<li>Recall is essentially constant across all four arms (0.9789-0.9839, a spread of 0.005). Everything that
+  moves, moves in precision.</li>
+<li>These are <strong>three comparisons against a common reference, uncorrected for multiplicity</strong>; the
+  pre-registered criterion was written for a single comparison.</li>
+<li><strong>Methodological flag:</strong> for epoch_005 the tool reports <code>"significant": true</code> (CI [0.125, 1.75] excludes
+  zero) while <code>sign_test_p = 0.146</code> would not reject. The two disagree; the pre-registered rule is the CI.
+  epoch_003 is the sturdier result because both agree there (CI excludes zero AND p = 4.88e-04).</li>
+</ul>
+<p><strong>What survives:</strong> ten epochs bought nothing measurable over three — no rung beats epoch_003, and the loss
+curve independently stopped improving after epoch 2. Last-epoch selection is not obviously right, but this
+data does not establish a better rule either. It is real evidence to put against <code>cli.py:20</code>'s default,
+where previously there was none; it is not yet a mandate to change it.</p>
+<h3 id="11c-the-2x2-the-model-effect-flips-sign-between-geometries">11c. The 2x2 — the model effect FLIPS SIGN between geometries<a class="headerlink" href="#11c-the-2x2-the-model-effect-flips-sign-between-geometries" title="Permanent link">&para;</a></h3>
+<p>Running the same pair on both corpora separates the model effect (down a column, geometry fixed) from the
+geometry effect (across a row, model fixed). <code>a</code> = new (trained 1766), <code>b</code> = ref 2026-09-04 (trained 971).</p>
+<table>
+<thead>
+<tr>
+<th></th>
+<th>corpus 971 px (576 tiles)</th>
+<th>corpus 1766 px (147 tiles)</th>
+</tr>
+</thead>
+<tbody>
+<tr>
+<td><strong>paired extras/frame (a - b)</strong></td>
+<td><strong>+3.25</strong>, CI [+2.81, +3.75], p = 3.05e-05</td>
+<td><strong>-2.8125</strong>, CI [-3.9375, -1.8125], p = 1.22e-04</td>
+</tr>
+<tr>
+<td>paired extras/tile (a - b)</td>
+<td>+0.0903, CI [+0.066, +0.116]</td>
+<td>-0.3061, CI [-0.415, -0.204]</td>
+</tr>
+<tr>
+<td>recall @0.5 — a / b</td>
+<td>0.9801 / 0.9801</td>
+<td>0.9713 / 0.9383</td>
+</tr>
+<tr>
+<td>extras/tile @0.5 — a / b</td>
+<td>0.1094 / 0.0191</td>
+<td>0.1361 / 0.4422</td>
+</tr>
+<tr>
+<td>extras/frame @ recall 0.9 — a / b</td>
+<td>0.0516 / 0.0056</td>
+<td>0.0272 / 0.1298</td>
+</tr>
+<tr>
+<td>AP — a / b</td>
+<td>0.6135 / 0.6930</td>
+<td>0.9622 / 0.9676</td>
+</tr>
+</tbody>
+</table>
+<p><strong>On the pre-registered metric (paired extras/frame) the sign FLIPS: +3.25 on the 971-px corpus,
+-2.8125 on the 1766-px corpus, both with CIs excluding zero. Each model wins decisively on its own training
+geometry. Neither single-geometry comparison supports a model claim.</strong></p>
+<p>One precision, because it matters and the flip is not uniform across metrics: <strong>AP does not flip.</strong> It
+mildly favours the reference on both corpora (0.6135 vs 0.6930 at 971; 0.9622 vs 0.9676 at 1766) — but the
+gap collapses from 0.080 to 0.005 when the new model is scored at its own geometry. So the flip is a
+property of the extras metric the criterion was registered on; AP shows the same directional pull, greatly
+attenuated.</p>
+<p><strong>AP is not comparable across corpora.</strong> Both models score ~0.96 at 1766 px versus 0.61-0.69 at 971 px. The
+larger-tile corpus is simply an easier scoring regime (fewer, larger tiles; 147 vs 576), so the 0.96 figures
+must never be compared against the 0.61-0.69 ones.</p>
+<p><strong>Practical conclusion: <code>object_tile_fraction</code> dominated every model difference measured tonight.</strong> It
+entered silently as the <code>contracts.py:250</code> default (0.055) instead of being read from the reference
+checkpoint's sidecar (0.10), and its effect on the measured comparison is larger than, and opposite in sign
+to, whatever real difference exists between the two adapters.</p>
+<h3 id="11d-the-deployment-realistic-diagonal-descriptive-only">11d. The deployment-realistic diagonal (descriptive only)<a class="headerlink" href="#11d-the-deployment-realistic-diagonal-descriptive-only" title="Permanent link">&para;</a></h3>
+<p>Each model scored at the geometry stamped in its own sidecar — how each would actually be served, since
+TrackerKit reads <code>train_tile_px</code> back to prefill SAHI. <strong>This is NOT a controlled comparison</strong>: the two
+arms use different corpora, so there is no paired statistic, no CI, and AP is not comparable (see above).</p>
+<table>
+<thead>
+<tr>
+<th></th>
+<th>new @ 1766 px</th>
+<th>ref 09-04 @ 971 px</th>
+</tr>
+</thead>
+<tbody>
+<tr>
+<td>recall @ conf 0.5</td>
+<td>0.9713</td>
+<td>0.9801</td>
+</tr>
+<tr>
+<td>max recall</td>
+<td>0.9924 @0.10</td>
+<td>0.9876 @0.20</td>
+</tr>
+<tr>
+<td>extras/frame @ recall 0.9</td>
+<td>0.0272</td>
+<td>0.0056</td>
+</tr>
+<tr>
+<td>AP (NOT comparable across corpora)</td>
+<td>0.9622</td>
+<td>0.6930</td>
+</tr>
+</tbody>
+</table>
+<p>On the only two figures that are even loosely comparable — per-frame recall and per-frame extras at matched
+recall — the 2026-09-04 reference at its own geometry is modestly ahead: slightly higher recall at conf 0.5
+(0.9801 vs 0.9713) and ~4.8x fewer extras per frame at target recall. Treat as descriptive, not a verdict.</p>
+<h2 id="12-artifact-locations">12. Artifact locations<a class="headerlink" href="#12-artifact-locations" title="Permanent link">&para;</a></h2>
+<p><strong>On the Mac</strong> (<code>.../Behavior/sam3_lora_runs/ant_2026-09-06/published/</code>) — all md5-verified against mehek,
+15/15 files matching:</p>
+<div class="language-text highlight"><pre><span></span><code><span id="__span-10-1"><a id="__codelineno-10-1" name="__codelineno-10-1" href="#__codelineno-10-1"></a>20260906-020455_semantic_sam3_ee10d3d0.pt               62e909168c2cbcc68aa2ee3e8720070a  (3,450,158,878 B)
+</span><span id="__span-10-2"><a id="__codelineno-10-2" name="__codelineno-10-2" href="#__codelineno-10-2"></a>20260906-020455_semantic_sam3_ee10d3d0.pt.sam3_meta.json 7c09e88da83832272e109f6d39b07d6f
+</span><span id="__span-10-3"><a id="__codelineno-10-3" name="__codelineno-10-3" href="#__codelineno-10-3"></a>adapters.pt                                              37bc1f7a8d492c348b8dea1604e0d840
+</span><span id="__span-10-4"><a id="__codelineno-10-4" name="__codelineno-10-4" href="#__codelineno-10-4"></a>adapters.pt.complete.json                                0b0336784798fbe489d132690d75d1b1
+</span><span id="__span-10-5"><a id="__codelineno-10-5" name="__codelineno-10-5" href="#__codelineno-10-5"></a>val_stats.json                                           3d133535b5c5f628163130d5d7c29259
+</span><span id="__span-10-6"><a id="__codelineno-10-6" name="__codelineno-10-6" href="#__codelineno-10-6"></a>spec.json                                                87858d8f3d1ab19dd58b0642bb984729
+</span><span id="__span-10-7"><a id="__codelineno-10-7" name="__codelineno-10-7" href="#__codelineno-10-7"></a>resource_preflight.json                                  e73a65f10b670c281449db006829f545
+</span><span id="__span-10-8"><a id="__codelineno-10-8" name="__codelineno-10-8" href="#__codelineno-10-8"></a>train.log                                                346b7c2c92eb9b650c7c44c163604465
+</span><span id="__span-10-9"><a id="__codelineno-10-9" name="__codelineno-10-9" href="#__codelineno-10-9"></a>ladder_adapters/epoch_003..009.pt   (7 files, all md5-matched)
+</span><span id="__span-10-10"><a id="__codelineno-10-10" name="__codelineno-10-10" href="#__codelineno-10-10"></a>eval_results/*.json                 (6 result files + 2 run logs)
+</span></code></pre></div>
+<p><strong>Left in place on mehek</strong> (not deleted):</p>
+<table>
+<thead>
+<tr>
+<th>what</th>
+<th>path</th>
+</tr>
+</thead>
+<tbody>
+<tr>
+<td>published model + sidecar + registry</td>
+<td><code>~/.local/share/hydra-suite/models/sam3_finetuned/</code></td>
+</tr>
+<tr>
+<td>run dir (adapters, spec, preflight, val_stats)</td>
+<td><code>~/sam3_lora_runs/ant_2026-09-06/workspace/runs/20260906-020455_semantic_sam3_ee10d3d0/</code></td>
+</tr>
+<tr>
+<td>preserved ladder adapters (7)</td>
+<td><code>~/sam3_eval/ladder/</code></td>
+</tr>
+<tr>
+<td>ladder rungs published (isolated root)</td>
+<td><code>~/sam3_eval/ladder_models/sam3_finetuned/</code></td>
+</tr>
+<tr>
+<td>evaluation results (6 JSON)</td>
+<td><code>~/sam3_eval/results/</code></td>
+</tr>
+<tr>
+<td>held-out eval corpus (971 px) + reference checkpoints</td>
+<td><code>~/sam3_eval/data/valid/</code>, <code>~/sam3_eval/refs/</code></td>
+</tr>
+<tr>
+<td>pinned code tree (b9e92bc7 + the publish fix)</td>
+<td><code>~/sam3_train_wt/</code></td>
+</tr>
+</tbody>
+</table>
+<p><code>~/hydra-suite</code> on mehek was never touched. Courtship was used read-only (file pulls); no GPU work ran there.</p>
+<h2 id="13-pipeline-defects-found-the-answer-to-does-sam3-training-work-end-to-end">13. Pipeline defects found — the answer to "does SAM3 training work end to end?"<a class="headerlink" href="#13-pipeline-defects-found-the-answer-to-does-sam3-training-work-end-to-end" title="Permanent link">&para;</a></h2>
+<p><strong>Training: YES. Publish: NO, until fixed tonight.</strong></p>
+<ol>
+<li><strong><code>publish.py</code> <code>MAX_PROCESSES = 64</code> — FIXED (<code>9c50a40b</code>, local, not pushed).</strong> 100% reproducible publish
+   failure after a completed multi-hour run: <code>conda run</code> + numpy/OpenBLAS under <code>pids.max=64</code> exhausts the
+   cgroup mid-import (<code>pthread_create failed for thread 31 of 32</code> -&gt; <code>ImportError: numpy._core.multiarray
+   failed to import</code> -&gt; segfault, exit 130). Raised to 512, matching the training scope. <strong>Nobody running
+   this pipeline could have published a SAM3 model before this fix.</strong></li>
+<li><strong><code>utils/sam3_constants.py</code> is a "dependency-free leaf module" that isn't — NOT fixed, reported.</strong>
+   <code>hydra_suite/utils/__init__.py:8</code> eagerly imports <code>frame_prefetcher</code> -&gt; <code>cv2</code>, so importing one integer
+   executes the whole heavy graph, defeating the module's explicit documented purpose and putting OpenBLAS
+   in the crash path of defect 1. Fixing it would independently have prevented that crash.</li>
+<li><strong>VRAM admission is under-evidenced.</strong> Full-run peak 12.99 GiB vs a 12.364 GiB preflight estimate (5.1%
+   low) and a 7.72 GiB probe reading (41% low). No OOM, because the 0.85 safety fraction absorbed it. The
+   probe's step-count stopping rule is the root cause — see section 7 for the recommended coverage-based
+   rule. No constant edited.</li>
+<li><strong>No geometry guard against a comparison baseline — process defect.</strong> <code>object_tile_fraction</code> silently
+   took its <code>contracts.py</code> default and diverged from the checkpoint this run existed to be compared with.
+   Nothing in <code>src/</code> warns; <code>train_tile_px</code> is written but never read back for validation.</li>
+<li><strong>Publish is the least-covered path in the pipeline.</strong> <code>publish.py:378</code> documents a prior incident with
+   the same signature ("the pipeline had never reached publish before, so nothing caught it"). Two publish
+   defects in two attempts. A fast synthetic publish test with a tiny adapter would pay for itself.</li>
+<li><strong>Minor / environmental:</strong> <code>DEFAULT_SAM3_ENV = "hydra-sam3"</code> does not match mehek's <code>sam3-lora</code>
+   (loud, immediate failure; fixed with <code>HYDRA_SAM3_ENV</code>). And <code>compare_models.py</code> reports
+   <code>"significant": true</code> from the CI even when the sign test disagrees (epoch_005: CI [0.125, 1.75] excludes
+   zero, sign p = 0.146) — the two criteria can conflict and only the CI is pre-registered.</li>
+</ol>
+<p><strong>Status: COMPLETE.</strong></p>
+<h2 id="14-postscript-the-paired-allocator-arm">14. Postscript — the paired allocator arm<a class="headerlink" href="#14-postscript-the-paired-allocator-arm" title="Permanent link">&para;</a></h2>
+<p>While this run was in flight, the matched arm on courtship
+(<code>PYTORCH_CUDA_ALLOC_CONF=expandable_segments:True</code>, same corpus, same 2430-step horizon) completed, and its
+result landed on local <code>main</code> as <strong><code>e65bdb2a</code> — "perf(sam3): set expandable_segments for the sidecar --
+45% of peak VRAM was fragmentation"</strong>.</p>
+<p>That directly explains the finding in section 7: <strong>this run is the default-allocator arm, and roughly 45% of
+its 12.99 GiB reserved peak was allocator fragmentation rather than live tensors.</strong> <code>max_memory_reserved</code>
+counts blocks the caching allocator holds but has not returned to the driver, so a fragmenting allocator
+inflates exactly the metric admission is written against.</p>
+<p>Two consequences worth carrying forward:</p>
+<ol>
+<li>The VRAM ladder in section 7 (7.60 -&gt; 8.89 -&gt; 10.22 -&gt; 11.59 -&gt; 12.99 GiB) should be read as the
+   <strong>default-allocator upper bound</strong>, not as the intrinsic memory requirement of this adapter surface.</li>
+<li>The recommendation in section 7 stands and gains a rider: any re-measurement persisted through
+   <code>runtime/memory_profiles.py</code> must record <strong>which allocator configuration it was taken under</strong>, because
+   the two differ by nearly a factor of two on the same workload. A single unlabelled number would be
+   actively misleading.</li>
+</ol>
+
+
+
+
+
+
+
+
+
+
+
+
+                
+              </article>
+            </div>
+          
+          
+<script>var target=document.getElementById(location.hash.slice(1));target&&target.name&&(target.checked=target.name.startsWith("__tabbed_"))</script>
+        </div>
+        
+          <button type="button" class="md-top md-icon" data-md-component="top" hidden>
+  
+  <svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 24 24"><path d="M13 20h-2V8l-5.5 5.5-1.42-1.42L12 4.16l7.92 7.92-1.42 1.42L13 8z"/></svg>
+  Back to top
+</button>
+        
+      </main>
+      
+        <footer class="md-footer">
+  
+  <div class="md-footer-meta md-typeset">
+    <div class="md-footer-meta__inner md-grid">
+      <div class="md-copyright">
+  
+  
+    Made with
+    <a href="https://squidfunk.github.io/mkdocs-material/" target="_blank" rel="noopener">
+      Material for MkDocs
+    </a>
+  
+</div>
+      
+    </div>
+  </div>
+</footer>
+      
+    </div>
+    <div class="md-dialog" data-md-component="dialog">
+      <div class="md-dialog__inner md-typeset"></div>
+    </div>
+    
+    
+    <script id="__config" type="application/json">{"base": "../../..", "features": ["navigation.tabs", "navigation.sections", "navigation.expand", "navigation.top", "content.code.copy", "content.action.edit", "search.suggest", "search.highlight"], "search": "../../../assets/javascripts/workers/search.6ce7567c.min.js", "translations": {"clipboard.copied": "Copied to clipboard", "clipboard.copy": "Copy to clipboard", "search.result.more.one": "1 more on this page", "search.result.more.other": "# more on this page", "search.result.none": "No matching documents", "search.result.one": "1 matching document", "search.result.other": "# matching documents", "search.result.placeholder": "Type to start searching", "search.result.term.missing": "Missing", "select.version": "Select version"}, "version": {"default": "latest", "provider": "mike"}}</script>
+    
+    
+      <script src="../../../assets/javascripts/bundle.83f73b43.min.js"></script>
+      
+    
+  </body>
+</html>

@@ -1,0 +1,2540 @@
+
+<!doctype html>
+<html lang="en" class="no-js">
+  <head>
+    
+      <meta charset="utf-8">
+      <meta name="viewport" content="width=device-width,initial-scale=1">
+      
+        <meta name="description" content="User and developer documentation for HYDRA Suite">
+      
+      
+      
+        <link rel="canonical" href="https://neurorishika.github.io/hydra-suite/nightly/superpowers/specs/2026-09-06-sam3-training-vram-probe-audit/">
+      
+      
+      
+      
+      <link rel="icon" href="../../../assets/images/favicon.png">
+      <meta name="generator" content="mkdocs-1.6.1, mkdocs-material-9.5.43">
+    
+    
+      
+        <title>SAM3 training: GUI/CLI parity, OOM safety, and auto batch sizing — audit - HYDRA Suite Docs</title>
+      
+    
+    
+      <link rel="stylesheet" href="../../../assets/stylesheets/main.0253249f.min.css">
+      
+        
+        <link rel="stylesheet" href="../../../assets/stylesheets/palette.06af60db.min.css">
+      
+      
+
+
+    
+    
+      
+    
+    
+      
+        
+        
+        <link rel="preconnect" href="https://fonts.gstatic.com" crossorigin>
+        <link rel="stylesheet" href="https://fonts.googleapis.com/css?family=Roboto:300,300i,400,400i,700,700i%7CRoboto+Mono:400,400i,700,700i&display=fallback">
+        <style>:root{--md-text-font:"Roboto";--md-code-font:"Roboto Mono"}</style>
+      
+    
+    
+      <link rel="stylesheet" href="../../../assets/_mkdocstrings.css">
+    
+    <script>__md_scope=new URL("../../..",location),__md_hash=e=>[...e].reduce(((e,_)=>(e<<5)-e+_.charCodeAt(0)),0),__md_get=(e,_=localStorage,t=__md_scope)=>JSON.parse(_.getItem(t.pathname+"."+e)),__md_set=(e,_,t=localStorage,a=__md_scope)=>{try{t.setItem(a.pathname+"."+e,JSON.stringify(_))}catch(e){}}</script>
+    
+      
+
+    
+    
+    
+  </head>
+  
+  
+    
+    
+      
+    
+    
+    
+    
+    <body dir="ltr" data-md-color-scheme="default" data-md-color-primary="blue" data-md-color-accent="light-blue">
+  
+    
+    <input class="md-toggle" data-md-toggle="drawer" type="checkbox" id="__drawer" autocomplete="off">
+    <input class="md-toggle" data-md-toggle="search" type="checkbox" id="__search" autocomplete="off">
+    <label class="md-overlay" for="__drawer"></label>
+    <div data-md-component="skip">
+      
+        
+        <a href="#sam3-training-guicli-parity-oom-safety-and-auto-batch-sizing-audit" class="md-skip">
+          Skip to content
+        </a>
+      
+    </div>
+    <div data-md-component="announce">
+      
+    </div>
+    
+      <div data-md-color-scheme="default" data-md-component="outdated" hidden>
+        
+      </div>
+    
+    
+      
+
+<header class="md-header" data-md-component="header">
+  <nav class="md-header__inner md-grid" aria-label="Header">
+    <a href="../../.." title="HYDRA Suite Docs" class="md-header__button md-logo" aria-label="HYDRA Suite Docs" data-md-component="logo">
+      
+  
+  <svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 24 24"><path d="M12 8a3 3 0 0 0 3-3 3 3 0 0 0-3-3 3 3 0 0 0-3 3 3 3 0 0 0 3 3m0 3.54C9.64 9.35 6.5 8 3 8v11c3.5 0 6.64 1.35 9 3.54 2.36-2.19 5.5-3.54 9-3.54V8c-3.5 0-6.64 1.35-9 3.54"/></svg>
+
+    </a>
+    <label class="md-header__button md-icon" for="__drawer">
+      
+      <svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 24 24"><path d="M3 6h18v2H3zm0 5h18v2H3zm0 5h18v2H3z"/></svg>
+    </label>
+    <div class="md-header__title" data-md-component="header-title">
+      <div class="md-header__ellipsis">
+        <div class="md-header__topic">
+          <span class="md-ellipsis">
+            HYDRA Suite Docs
+          </span>
+        </div>
+        <div class="md-header__topic" data-md-component="header-topic">
+          <span class="md-ellipsis">
+            
+              SAM3 training: GUI/CLI parity, OOM safety, and auto batch sizing — audit
+            
+          </span>
+        </div>
+      </div>
+    </div>
+    
+      
+        <form class="md-header__option" data-md-component="palette">
+  
+    
+    
+    
+    <input class="md-option" data-md-color-media="(prefers-color-scheme: light)" data-md-color-scheme="default" data-md-color-primary="blue" data-md-color-accent="light-blue"  aria-label="Switch to dark mode"  type="radio" name="__palette" id="__palette_0">
+    
+      <label class="md-header__button md-icon" title="Switch to dark mode" for="__palette_1" hidden>
+        <svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 24 24"><path d="m17.75 4.09-2.53 1.94.91 3.06-2.63-1.81-2.63 1.81.91-3.06-2.53-1.94L12.44 4l1.06-3 1.06 3zm3.5 6.91-1.64 1.25.59 1.98-1.7-1.17-1.7 1.17.59-1.98L15.75 11l2.06-.05L18.5 9l.69 1.95zm-2.28 4.95c.83-.08 1.72 1.1 1.19 1.85-.32.45-.66.87-1.08 1.27C15.17 23 8.84 23 4.94 19.07c-3.91-3.9-3.91-10.24 0-14.14.4-.4.82-.76 1.27-1.08.75-.53 1.93.36 1.85 1.19-.27 2.86.69 5.83 2.89 8.02a9.96 9.96 0 0 0 8.02 2.89m-1.64 2.02a12.08 12.08 0 0 1-7.8-3.47c-2.17-2.19-3.33-5-3.49-7.82-2.81 3.14-2.7 7.96.31 10.98 3.02 3.01 7.84 3.12 10.98.31"/></svg>
+      </label>
+    
+  
+    
+    
+    
+    <input class="md-option" data-md-color-media="(prefers-color-scheme: dark)" data-md-color-scheme="slate" data-md-color-primary="blue" data-md-color-accent="light-blue"  aria-label="Switch to light mode"  type="radio" name="__palette" id="__palette_1">
+    
+      <label class="md-header__button md-icon" title="Switch to light mode" for="__palette_0" hidden>
+        <svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 24 24"><path d="M12 7a5 5 0 0 1 5 5 5 5 0 0 1-5 5 5 5 0 0 1-5-5 5 5 0 0 1 5-5m0 2a3 3 0 0 0-3 3 3 3 0 0 0 3 3 3 3 0 0 0 3-3 3 3 0 0 0-3-3m0-7 2.39 3.42C13.65 5.15 12.84 5 12 5s-1.65.15-2.39.42zM3.34 7l4.16-.35A7.2 7.2 0 0 0 5.94 8.5c-.44.74-.69 1.5-.83 2.29zm.02 10 1.76-3.77a7.131 7.131 0 0 0 2.38 4.14zM20.65 7l-1.77 3.79a7.02 7.02 0 0 0-2.38-4.15zm-.01 10-4.14.36c.59-.51 1.12-1.14 1.54-1.86.42-.73.69-1.5.83-2.29zM12 22l-2.41-3.44c.74.27 1.55.44 2.41.44.82 0 1.63-.17 2.37-.44z"/></svg>
+      </label>
+    
+  
+</form>
+      
+    
+    
+      <script>var palette=__md_get("__palette");if(palette&&palette.color){if("(prefers-color-scheme)"===palette.color.media){var media=matchMedia("(prefers-color-scheme: light)"),input=document.querySelector(media.matches?"[data-md-color-media='(prefers-color-scheme: light)']":"[data-md-color-media='(prefers-color-scheme: dark)']");palette.color.media=input.getAttribute("data-md-color-media"),palette.color.scheme=input.getAttribute("data-md-color-scheme"),palette.color.primary=input.getAttribute("data-md-color-primary"),palette.color.accent=input.getAttribute("data-md-color-accent")}for(var[key,value]of Object.entries(palette.color))document.body.setAttribute("data-md-color-"+key,value)}</script>
+    
+    
+    
+      <label class="md-header__button md-icon" for="__search">
+        
+        <svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 24 24"><path d="M9.5 3A6.5 6.5 0 0 1 16 9.5c0 1.61-.59 3.09-1.56 4.23l.27.27h.79l5 5-1.5 1.5-5-5v-.79l-.27-.27A6.52 6.52 0 0 1 9.5 16 6.5 6.5 0 0 1 3 9.5 6.5 6.5 0 0 1 9.5 3m0 2C7 5 5 7 5 9.5S7 14 9.5 14 14 12 14 9.5 12 5 9.5 5"/></svg>
+      </label>
+      <div class="md-search" data-md-component="search" role="dialog">
+  <label class="md-search__overlay" for="__search"></label>
+  <div class="md-search__inner" role="search">
+    <form class="md-search__form" name="search">
+      <input type="text" class="md-search__input" name="query" aria-label="Search" placeholder="Search" autocapitalize="off" autocorrect="off" autocomplete="off" spellcheck="false" data-md-component="search-query" required>
+      <label class="md-search__icon md-icon" for="__search">
+        
+        <svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 24 24"><path d="M9.5 3A6.5 6.5 0 0 1 16 9.5c0 1.61-.59 3.09-1.56 4.23l.27.27h.79l5 5-1.5 1.5-5-5v-.79l-.27-.27A6.52 6.52 0 0 1 9.5 16 6.5 6.5 0 0 1 3 9.5 6.5 6.5 0 0 1 9.5 3m0 2C7 5 5 7 5 9.5S7 14 9.5 14 14 12 14 9.5 12 5 9.5 5"/></svg>
+        
+        <svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 24 24"><path d="M20 11v2H8l5.5 5.5-1.42 1.42L4.16 12l7.92-7.92L13.5 5.5 8 11z"/></svg>
+      </label>
+      <nav class="md-search__options" aria-label="Search">
+        
+        <button type="reset" class="md-search__icon md-icon" title="Clear" aria-label="Clear" tabindex="-1">
+          
+          <svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 24 24"><path d="M19 6.41 17.59 5 12 10.59 6.41 5 5 6.41 10.59 12 5 17.59 6.41 19 12 13.41 17.59 19 19 17.59 13.41 12z"/></svg>
+        </button>
+      </nav>
+      
+        <div class="md-search__suggest" data-md-component="search-suggest"></div>
+      
+    </form>
+    <div class="md-search__output">
+      <div class="md-search__scrollwrap" tabindex="0" data-md-scrollfix>
+        <div class="md-search-result" data-md-component="search-result">
+          <div class="md-search-result__meta">
+            Initializing search
+          </div>
+          <ol class="md-search-result__list" role="presentation"></ol>
+        </div>
+      </div>
+    </div>
+  </div>
+</div>
+    
+    
+      <div class="md-header__source">
+        <a href="https://github.com/neurorishika/hydra-suite" title="Go to repository" class="md-source" data-md-component="source">
+  <div class="md-source__icon md-icon">
+    
+    <svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 448 512"><!--! Font Awesome Free 6.6.0 by @fontawesome - https://fontawesome.com License - https://fontawesome.com/license/free (Icons: CC BY 4.0, Fonts: SIL OFL 1.1, Code: MIT License) Copyright 2024 Fonticons, Inc.--><path d="M439.55 236.05 244 40.45a28.87 28.87 0 0 0-40.81 0l-40.66 40.63 51.52 51.52c27.06-9.14 52.68 16.77 43.39 43.68l49.66 49.66c34.23-11.8 61.18 31 35.47 56.69-26.49 26.49-70.21-2.87-56-37.34L240.22 199v121.85c25.3 12.54 22.26 41.85 9.08 55a34.34 34.34 0 0 1-48.55 0c-17.57-17.6-11.07-46.91 11.25-56v-123c-20.8-8.51-24.6-30.74-18.64-45L142.57 101 8.45 235.14a28.86 28.86 0 0 0 0 40.81l195.61 195.6a28.86 28.86 0 0 0 40.8 0l194.69-194.69a28.86 28.86 0 0 0 0-40.81"/></svg>
+  </div>
+  <div class="md-source__repository">
+    neurorishika/hydra-suite
+  </div>
+</a>
+      </div>
+    
+  </nav>
+  
+</header>
+    
+    <div class="md-container" data-md-component="container">
+      
+      
+        
+          
+            
+<nav class="md-tabs" aria-label="Tabs" data-md-component="tabs">
+  <div class="md-grid">
+    <ul class="md-tabs__list">
+      
+        
+  
+  
+  
+    <li class="md-tabs__item">
+      <a href="../../.." class="md-tabs__link">
+        
+  
+    
+  
+  Home
+
+      </a>
+    </li>
+  
+
+      
+        
+  
+  
+  
+    
+    
+      <li class="md-tabs__item">
+        <a href="../../../getting-started/installation/" class="md-tabs__link">
+          
+  
+  Getting Started
+
+        </a>
+      </li>
+    
+  
+
+      
+        
+  
+  
+  
+    
+    
+      <li class="md-tabs__item">
+        <a href="../../../user-guide/overview/" class="md-tabs__link">
+          
+  
+  User Guide
+
+        </a>
+      </li>
+    
+  
+
+      
+        
+  
+  
+  
+    
+    
+      <li class="md-tabs__item">
+        <a href="../../../developer-guide/architecture/" class="md-tabs__link">
+          
+  
+  Developer Guide
+
+        </a>
+      </li>
+    
+  
+
+      
+        
+  
+  
+  
+    
+    
+      <li class="md-tabs__item">
+        <a href="../../../reference/api-index/" class="md-tabs__link">
+          
+  
+  Reference
+
+        </a>
+      </li>
+    
+  
+
+      
+    </ul>
+  </div>
+</nav>
+          
+        
+      
+      <main class="md-main" data-md-component="main">
+        <div class="md-main__inner md-grid">
+          
+            
+              
+              <div class="md-sidebar md-sidebar--primary" data-md-component="sidebar" data-md-type="navigation" >
+                <div class="md-sidebar__scrollwrap">
+                  <div class="md-sidebar__inner">
+                    
+
+
+  
+
+
+<nav class="md-nav md-nav--primary md-nav--lifted" aria-label="Navigation" data-md-level="0">
+  <label class="md-nav__title" for="__drawer">
+    <a href="../../.." title="HYDRA Suite Docs" class="md-nav__button md-logo" aria-label="HYDRA Suite Docs" data-md-component="logo">
+      
+  
+  <svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 24 24"><path d="M12 8a3 3 0 0 0 3-3 3 3 0 0 0-3-3 3 3 0 0 0-3 3 3 3 0 0 0 3 3m0 3.54C9.64 9.35 6.5 8 3 8v11c3.5 0 6.64 1.35 9 3.54 2.36-2.19 5.5-3.54 9-3.54V8c-3.5 0-6.64 1.35-9 3.54"/></svg>
+
+    </a>
+    HYDRA Suite Docs
+  </label>
+  
+    <div class="md-nav__source">
+      <a href="https://github.com/neurorishika/hydra-suite" title="Go to repository" class="md-source" data-md-component="source">
+  <div class="md-source__icon md-icon">
+    
+    <svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 448 512"><!--! Font Awesome Free 6.6.0 by @fontawesome - https://fontawesome.com License - https://fontawesome.com/license/free (Icons: CC BY 4.0, Fonts: SIL OFL 1.1, Code: MIT License) Copyright 2024 Fonticons, Inc.--><path d="M439.55 236.05 244 40.45a28.87 28.87 0 0 0-40.81 0l-40.66 40.63 51.52 51.52c27.06-9.14 52.68 16.77 43.39 43.68l49.66 49.66c34.23-11.8 61.18 31 35.47 56.69-26.49 26.49-70.21-2.87-56-37.34L240.22 199v121.85c25.3 12.54 22.26 41.85 9.08 55a34.34 34.34 0 0 1-48.55 0c-17.57-17.6-11.07-46.91 11.25-56v-123c-20.8-8.51-24.6-30.74-18.64-45L142.57 101 8.45 235.14a28.86 28.86 0 0 0 0 40.81l195.61 195.6a28.86 28.86 0 0 0 40.8 0l194.69-194.69a28.86 28.86 0 0 0 0-40.81"/></svg>
+  </div>
+  <div class="md-source__repository">
+    neurorishika/hydra-suite
+  </div>
+</a>
+    </div>
+  
+  <ul class="md-nav__list" data-md-scrollfix>
+    
+      
+      
+  
+  
+  
+  
+    <li class="md-nav__item">
+      <a href="../../.." class="md-nav__link">
+        
+  
+  <span class="md-ellipsis">
+    Home
+  </span>
+  
+
+      </a>
+    </li>
+  
+
+    
+      
+      
+  
+  
+  
+  
+    
+    
+    
+      
+      
+        
+      
+    
+    
+    <li class="md-nav__item md-nav__item--nested">
+      
+        
+        
+          
+        
+        <input class="md-nav__toggle md-toggle md-toggle--indeterminate" type="checkbox" id="__nav_2" >
+        
+          
+          <label class="md-nav__link" for="__nav_2" id="__nav_2_label" tabindex="0">
+            
+  
+  <span class="md-ellipsis">
+    Getting Started
+  </span>
+  
+
+            <span class="md-nav__icon md-icon"></span>
+          </label>
+        
+        <nav class="md-nav" data-md-level="1" aria-labelledby="__nav_2_label" aria-expanded="false">
+          <label class="md-nav__title" for="__nav_2">
+            <span class="md-nav__icon md-icon"></span>
+            Getting Started
+          </label>
+          <ul class="md-nav__list" data-md-scrollfix>
+            
+              
+                
+  
+  
+  
+  
+    <li class="md-nav__item">
+      <a href="../../../getting-started/installation/" class="md-nav__link">
+        
+  
+  <span class="md-ellipsis">
+    Installation
+  </span>
+  
+
+      </a>
+    </li>
+  
+
+              
+            
+              
+                
+  
+  
+  
+  
+    <li class="md-nav__item">
+      <a href="../../../getting-started/environments/" class="md-nav__link">
+        
+  
+  <span class="md-ellipsis">
+    Environments and Makefile
+  </span>
+  
+
+      </a>
+    </li>
+  
+
+              
+            
+              
+                
+  
+  
+  
+  
+    <li class="md-nav__item">
+      <a href="../../../getting-started/integrations/" class="md-nav__link">
+        
+  
+  <span class="md-ellipsis">
+    Integrations
+  </span>
+  
+
+      </a>
+    </li>
+  
+
+              
+            
+              
+                
+  
+  
+  
+  
+    <li class="md-nav__item">
+      <a href="../../../getting-started/quickstart-hydra/" class="md-nav__link">
+        
+  
+  <span class="md-ellipsis">
+    Quickstart (TrackerKit)
+  </span>
+  
+
+      </a>
+    </li>
+  
+
+              
+            
+              
+                
+  
+  
+  
+  
+    <li class="md-nav__item">
+      <a href="../../../getting-started/quickstart-posekit/" class="md-nav__link">
+        
+  
+  <span class="md-ellipsis">
+    Quickstart (PoseKit)
+  </span>
+  
+
+      </a>
+    </li>
+  
+
+              
+            
+              
+                
+  
+  
+  
+  
+    <li class="md-nav__item">
+      <a href="../../../getting-started/platforms/" class="md-nav__link">
+        
+  
+  <span class="md-ellipsis">
+    Platform Notes
+  </span>
+  
+
+      </a>
+    </li>
+  
+
+              
+            
+          </ul>
+        </nav>
+      
+    </li>
+  
+
+    
+      
+      
+  
+  
+  
+  
+    
+    
+    
+      
+      
+        
+      
+    
+    
+    <li class="md-nav__item md-nav__item--nested">
+      
+        
+        
+          
+        
+        <input class="md-nav__toggle md-toggle md-toggle--indeterminate" type="checkbox" id="__nav_3" >
+        
+          
+          <label class="md-nav__link" for="__nav_3" id="__nav_3_label" tabindex="0">
+            
+  
+  <span class="md-ellipsis">
+    User Guide
+  </span>
+  
+
+            <span class="md-nav__icon md-icon"></span>
+          </label>
+        
+        <nav class="md-nav" data-md-level="1" aria-labelledby="__nav_3_label" aria-expanded="false">
+          <label class="md-nav__title" for="__nav_3">
+            <span class="md-nav__icon md-icon"></span>
+            User Guide
+          </label>
+          <ul class="md-nav__list" data-md-scrollfix>
+            
+              
+                
+  
+  
+  
+  
+    <li class="md-nav__item">
+      <a href="../../../user-guide/overview/" class="md-nav__link">
+        
+  
+  <span class="md-ellipsis">
+    Overview
+  </span>
+  
+
+      </a>
+    </li>
+  
+
+              
+            
+              
+                
+  
+  
+  
+  
+    <li class="md-nav__item">
+      <a href="../../../user-guide/workflow/" class="md-nav__link">
+        
+  
+  <span class="md-ellipsis">
+    End-to-End Workflow
+  </span>
+  
+
+      </a>
+    </li>
+  
+
+              
+            
+              
+                
+  
+  
+  
+  
+    <li class="md-nav__item">
+      <a href="../../../user-guide/detection-modes/" class="md-nav__link">
+        
+  
+  <span class="md-ellipsis">
+    Detection Modes
+  </span>
+  
+
+      </a>
+    </li>
+  
+
+              
+            
+              
+                
+  
+  
+  
+  
+    <li class="md-nav__item">
+      <a href="../../../user-guide/tracking-and-merging/" class="md-nav__link">
+        
+  
+  <span class="md-ellipsis">
+    Tracking and Merging
+  </span>
+  
+
+      </a>
+    </li>
+  
+
+              
+            
+              
+                
+  
+  
+  
+  
+    <li class="md-nav__item">
+      <a href="../../../user-guide/post-processing/" class="md-nav__link">
+        
+  
+  <span class="md-ellipsis">
+    Post-processing
+  </span>
+  
+
+      </a>
+    </li>
+  
+
+              
+            
+              
+                
+  
+  
+  
+  
+    <li class="md-nav__item">
+      <a href="../../../user-guide/configuration-reference/" class="md-nav__link">
+        
+  
+  <span class="md-ellipsis">
+    Configuration Reference
+  </span>
+  
+
+      </a>
+    </li>
+  
+
+              
+            
+              
+                
+  
+  
+  
+  
+    <li class="md-nav__item">
+      <a href="../../../user-guide/compute-runtimes/" class="md-nav__link">
+        
+  
+  <span class="md-ellipsis">
+    Compute Runtimes
+  </span>
+  
+
+      </a>
+    </li>
+  
+
+              
+            
+              
+                
+  
+  
+  
+  
+    <li class="md-nav__item">
+      <a href="../../../user-guide/outputs-and-csv-schema/" class="md-nav__link">
+        
+  
+  <span class="md-ellipsis">
+    Outputs and CSV Schema
+  </span>
+  
+
+      </a>
+    </li>
+  
+
+              
+            
+              
+                
+  
+  
+  
+  
+    <li class="md-nav__item">
+      <a href="../../../user-guide/dataset-generation/" class="md-nav__link">
+        
+  
+  <span class="md-ellipsis">
+    Dataset Generation
+  </span>
+  
+
+      </a>
+    </li>
+  
+
+              
+            
+              
+                
+  
+  
+  
+  
+    <li class="md-nav__item">
+      <a href="../../../user-guide/individual-analysis/" class="md-nav__link">
+        
+  
+  <span class="md-ellipsis">
+    Individual Analysis
+  </span>
+  
+
+      </a>
+    </li>
+  
+
+              
+            
+              
+                
+  
+  
+  
+  
+    <li class="md-nav__item">
+      <a href="../../../user-guide/posekit/" class="md-nav__link">
+        
+  
+  <span class="md-ellipsis">
+    PoseKit
+  </span>
+  
+
+      </a>
+    </li>
+  
+
+              
+            
+              
+                
+  
+  
+  
+  
+    <li class="md-nav__item">
+      <a href="../../../user-guide/classkit/" class="md-nav__link">
+        
+  
+  <span class="md-ellipsis">
+    ClassKit
+  </span>
+  
+
+      </a>
+    </li>
+  
+
+              
+            
+              
+                
+  
+  
+  
+  
+    <li class="md-nav__item">
+      <a href="../../../user-guide/detectkit/" class="md-nav__link">
+        
+  
+  <span class="md-ellipsis">
+    DetectKit
+  </span>
+  
+
+      </a>
+    </li>
+  
+
+              
+            
+              
+                
+  
+  
+  
+  
+    <li class="md-nav__item">
+      <a href="../../../runbooks/detectkit-headless-training/" class="md-nav__link">
+        
+  
+  <span class="md-ellipsis">
+    DetectKit Headless Training
+  </span>
+  
+
+      </a>
+    </li>
+  
+
+              
+            
+              
+                
+  
+  
+  
+  
+    <li class="md-nav__item">
+      <a href="../../../user-guide/detectkit-semantic-escalation/" class="md-nav__link">
+        
+  
+  <span class="md-ellipsis">
+    DetectKit: Semantic Escalation (SAM3)
+  </span>
+  
+
+      </a>
+    </li>
+  
+
+              
+            
+              
+                
+  
+  
+  
+  
+    <li class="md-nav__item">
+      <a href="../../../user-guide/detectkit-sahi-calibration/" class="md-nav__link">
+        
+  
+  <span class="md-ellipsis">
+    DetectKit: SAHI Calibration Profiles
+  </span>
+  
+
+      </a>
+    </li>
+  
+
+              
+            
+              
+                
+  
+  
+  
+  
+    <li class="md-nav__item">
+      <a href="../../../user-guide/filterkit/" class="md-nav__link">
+        
+  
+  <span class="md-ellipsis">
+    FilterKit
+  </span>
+  
+
+      </a>
+    </li>
+  
+
+              
+            
+              
+                
+  
+  
+  
+  
+    <li class="md-nav__item">
+      <a href="../../../user-guide/refinekit/" class="md-nav__link">
+        
+  
+  <span class="md-ellipsis">
+    RefineKit
+  </span>
+  
+
+      </a>
+    </li>
+  
+
+              
+            
+              
+                
+  
+  
+  
+  
+    <li class="md-nav__item">
+      <a href="../../../user-guide/troubleshooting/" class="md-nav__link">
+        
+  
+  <span class="md-ellipsis">
+    Troubleshooting
+  </span>
+  
+
+      </a>
+    </li>
+  
+
+              
+            
+          </ul>
+        </nav>
+      
+    </li>
+  
+
+    
+      
+      
+  
+  
+  
+  
+    
+    
+    
+      
+      
+        
+      
+    
+    
+    <li class="md-nav__item md-nav__item--nested">
+      
+        
+        
+          
+        
+        <input class="md-nav__toggle md-toggle md-toggle--indeterminate" type="checkbox" id="__nav_4" >
+        
+          
+          <label class="md-nav__link" for="__nav_4" id="__nav_4_label" tabindex="0">
+            
+  
+  <span class="md-ellipsis">
+    Developer Guide
+  </span>
+  
+
+            <span class="md-nav__icon md-icon"></span>
+          </label>
+        
+        <nav class="md-nav" data-md-level="1" aria-labelledby="__nav_4_label" aria-expanded="false">
+          <label class="md-nav__title" for="__nav_4">
+            <span class="md-nav__icon md-icon"></span>
+            Developer Guide
+          </label>
+          <ul class="md-nav__list" data-md-scrollfix>
+            
+              
+                
+  
+  
+  
+  
+    <li class="md-nav__item">
+      <a href="../../../developer-guide/architecture/" class="md-nav__link">
+        
+  
+  <span class="md-ellipsis">
+    Architecture
+  </span>
+  
+
+      </a>
+    </li>
+  
+
+              
+            
+              
+                
+  
+  
+  
+  
+    <li class="md-nav__item">
+      <a href="../../../developer-guide/module-map/" class="md-nav__link">
+        
+  
+  <span class="md-ellipsis">
+    Module Map
+  </span>
+  
+
+      </a>
+    </li>
+  
+
+              
+            
+              
+                
+  
+  
+  
+  
+    <li class="md-nav__item">
+      <a href="../../../developer-guide/data-flow/" class="md-nav__link">
+        
+  
+  <span class="md-ellipsis">
+    Data Flow
+  </span>
+  
+
+      </a>
+    </li>
+  
+
+              
+            
+              
+                
+  
+  
+  
+  
+    <li class="md-nav__item">
+      <a href="../../../developer-guide/tracking-algorithm-deep-dive/" class="md-nav__link">
+        
+  
+  <span class="md-ellipsis">
+    Tracking Algorithm Deep Dive
+  </span>
+  
+
+      </a>
+    </li>
+  
+
+              
+            
+              
+                
+  
+  
+  
+  
+    <li class="md-nav__item">
+      <a href="../../../developer-guide/tracking-optimization/" class="md-nav__link">
+        
+  
+  <span class="md-ellipsis">
+    Tracking Optimization
+  </span>
+  
+
+      </a>
+    </li>
+  
+
+              
+            
+              
+                
+  
+  
+  
+  
+    <li class="md-nav__item">
+      <a href="../../../developer-guide/gpu-backends/" class="md-nav__link">
+        
+  
+  <span class="md-ellipsis">
+    GPU Backends
+  </span>
+  
+
+      </a>
+    </li>
+  
+
+              
+            
+              
+                
+  
+  
+  
+  
+    <li class="md-nav__item">
+      <a href="../../../developer-guide/runtime-integration/" class="md-nav__link">
+        
+  
+  <span class="md-ellipsis">
+    Runtime Integration
+  </span>
+  
+
+      </a>
+    </li>
+  
+
+              
+            
+              
+                
+  
+  
+  
+  
+    <li class="md-nav__item">
+      <a href="../../../developer-guide/resource-containment/" class="md-nav__link">
+        
+  
+  <span class="md-ellipsis">
+    Resource Containment
+  </span>
+  
+
+      </a>
+    </li>
+  
+
+              
+            
+              
+                
+  
+  
+  
+  
+    <li class="md-nav__item">
+      <a href="../../../developer-guide/profiling/" class="md-nav__link">
+        
+  
+  <span class="md-ellipsis">
+    Profiling
+  </span>
+  
+
+      </a>
+    </li>
+  
+
+              
+            
+              
+                
+  
+  
+  
+  
+    <li class="md-nav__item">
+      <a href="../../../developer-guide/dependency-cuda-updates/" class="md-nav__link">
+        
+  
+  <span class="md-ellipsis">
+    CUDA Dependency Updates
+  </span>
+  
+
+      </a>
+    </li>
+  
+
+              
+            
+              
+                
+  
+  
+  
+  
+    <li class="md-nav__item">
+      <a href="../../../developer-guide/performance-tuning/" class="md-nav__link">
+        
+  
+  <span class="md-ellipsis">
+    Performance Tuning
+  </span>
+  
+
+      </a>
+    </li>
+  
+
+              
+            
+              
+                
+  
+  
+  
+  
+    <li class="md-nav__item">
+      <a href="../../../developer-guide/inference-fast-mode/" class="md-nav__link">
+        
+  
+  <span class="md-ellipsis">
+    Inference Fast Mode
+  </span>
+  
+
+      </a>
+    </li>
+  
+
+              
+            
+              
+                
+  
+  
+  
+  
+    <li class="md-nav__item">
+      <a href="../../../developer-guide/confidence-metrics/" class="md-nav__link">
+        
+  
+  <span class="md-ellipsis">
+    Confidence Metrics
+  </span>
+  
+
+      </a>
+    </li>
+  
+
+              
+            
+              
+                
+  
+  
+  
+  
+    <li class="md-nav__item">
+      <a href="../../../developer-guide/extending-detection/" class="md-nav__link">
+        
+  
+  <span class="md-ellipsis">
+    Extending Detection
+  </span>
+  
+
+      </a>
+    </li>
+  
+
+              
+            
+              
+                
+  
+  
+  
+  
+    <li class="md-nav__item">
+      <a href="../../../developer-guide/extending-identity/" class="md-nav__link">
+        
+  
+  <span class="md-ellipsis">
+    Extending Identity
+  </span>
+  
+
+      </a>
+    </li>
+  
+
+              
+            
+              
+                
+  
+  
+  
+  
+    <li class="md-nav__item">
+      <a href="../../../developer-guide/code-health/" class="md-nav__link">
+        
+  
+  <span class="md-ellipsis">
+    Code Health & Auditing
+  </span>
+  
+
+      </a>
+    </li>
+  
+
+              
+            
+              
+                
+  
+  
+  
+  
+    <li class="md-nav__item">
+      <a href="../../../developer-guide/publishing/" class="md-nav__link">
+        
+  
+  <span class="md-ellipsis">
+    Publishing
+  </span>
+  
+
+      </a>
+    </li>
+  
+
+              
+            
+              
+                
+  
+  
+  
+  
+    <li class="md-nav__item">
+      <a href="../../../developer-guide/contributing/" class="md-nav__link">
+        
+  
+  <span class="md-ellipsis">
+    Contributing
+  </span>
+  
+
+      </a>
+    </li>
+  
+
+              
+            
+          </ul>
+        </nav>
+      
+    </li>
+  
+
+    
+      
+      
+  
+  
+  
+  
+    
+    
+    
+      
+      
+        
+      
+    
+    
+    <li class="md-nav__item md-nav__item--nested">
+      
+        
+        
+          
+        
+        <input class="md-nav__toggle md-toggle md-toggle--indeterminate" type="checkbox" id="__nav_5" >
+        
+          
+          <label class="md-nav__link" for="__nav_5" id="__nav_5_label" tabindex="0">
+            
+  
+  <span class="md-ellipsis">
+    Reference
+  </span>
+  
+
+            <span class="md-nav__icon md-icon"></span>
+          </label>
+        
+        <nav class="md-nav" data-md-level="1" aria-labelledby="__nav_5_label" aria-expanded="false">
+          <label class="md-nav__title" for="__nav_5">
+            <span class="md-nav__icon md-icon"></span>
+            Reference
+          </label>
+          <ul class="md-nav__list" data-md-scrollfix>
+            
+              
+                
+  
+  
+  
+  
+    <li class="md-nav__item">
+      <a href="../../../reference/api-index/" class="md-nav__link">
+        
+  
+  <span class="md-ellipsis">
+    API Index
+  </span>
+  
+
+      </a>
+    </li>
+  
+
+              
+            
+              
+                
+  
+  
+  
+  
+    <li class="md-nav__item">
+      <a href="../../../reference/ui-components-hydra/" class="md-nav__link">
+        
+  
+  <span class="md-ellipsis">
+    UI Components (TrackerKit)
+  </span>
+  
+
+      </a>
+    </li>
+  
+
+              
+            
+              
+                
+  
+  
+  
+  
+    <li class="md-nav__item">
+      <a href="../../../reference/ui-components-posekit/" class="md-nav__link">
+        
+  
+  <span class="md-ellipsis">
+    UI Components (PoseKit)
+  </span>
+  
+
+      </a>
+    </li>
+  
+
+              
+            
+              
+                
+  
+  
+  
+  
+    <li class="md-nav__item">
+      <a href="../../../reference/api-app/" class="md-nav__link">
+        
+  
+  <span class="md-ellipsis">
+    API (Launcher)
+  </span>
+  
+
+      </a>
+    </li>
+  
+
+              
+            
+              
+                
+  
+  
+  
+  
+    <li class="md-nav__item">
+      <a href="../../../reference/api-core/" class="md-nav__link">
+        
+  
+  <span class="md-ellipsis">
+    API (Core)
+  </span>
+  
+
+      </a>
+    </li>
+  
+
+              
+            
+              
+                
+  
+  
+  
+  
+    <li class="md-nav__item">
+      <a href="../../../reference/api-data/" class="md-nav__link">
+        
+  
+  <span class="md-ellipsis">
+    API (Data)
+  </span>
+  
+
+      </a>
+    </li>
+  
+
+              
+            
+              
+                
+  
+  
+  
+  
+    <li class="md-nav__item">
+      <a href="../../../reference/api-gui/" class="md-nav__link">
+        
+  
+  <span class="md-ellipsis">
+    API (TrackerKit GUI)
+  </span>
+  
+
+      </a>
+    </li>
+  
+
+              
+            
+              
+                
+  
+  
+  
+  
+    <li class="md-nav__item">
+      <a href="../../../reference/api-widgets/" class="md-nav__link">
+        
+  
+  <span class="md-ellipsis">
+    API (Widgets)
+  </span>
+  
+
+      </a>
+    </li>
+  
+
+              
+            
+              
+                
+  
+  
+  
+  
+    <li class="md-nav__item">
+      <a href="../../../reference/api-posekit/" class="md-nav__link">
+        
+  
+  <span class="md-ellipsis">
+    API (PoseKit)
+  </span>
+  
+
+      </a>
+    </li>
+  
+
+              
+            
+              
+                
+  
+  
+  
+  
+    <li class="md-nav__item">
+      <a href="../../../reference/api-utils/" class="md-nav__link">
+        
+  
+  <span class="md-ellipsis">
+    API (Utils)
+  </span>
+  
+
+      </a>
+    </li>
+  
+
+              
+            
+              
+                
+  
+  
+  
+  
+    <li class="md-nav__item">
+      <a href="../../../reference/cli-reference/" class="md-nav__link">
+        
+  
+  <span class="md-ellipsis">
+    CLI Reference
+  </span>
+  
+
+      </a>
+    </li>
+  
+
+              
+            
+              
+                
+  
+  
+  
+  
+    <li class="md-nav__item">
+      <a href="../../../reference/technical-reference/" class="md-nav__link">
+        
+  
+  <span class="md-ellipsis">
+    Technical Reference (LaTeX)
+  </span>
+  
+
+      </a>
+    </li>
+  
+
+              
+            
+              
+                
+  
+  
+  
+  
+    <li class="md-nav__item">
+      <a href="../../../reference/changelog/" class="md-nav__link">
+        
+  
+  <span class="md-ellipsis">
+    Changelog
+  </span>
+  
+
+      </a>
+    </li>
+  
+
+              
+            
+              
+                
+  
+  
+  
+  
+    <li class="md-nav__item">
+      <a href="../../../reference/faq/" class="md-nav__link">
+        
+  
+  <span class="md-ellipsis">
+    FAQ
+  </span>
+  
+
+      </a>
+    </li>
+  
+
+              
+            
+          </ul>
+        </nav>
+      
+    </li>
+  
+
+    
+  </ul>
+</nav>
+                  </div>
+                </div>
+              </div>
+            
+            
+              
+              <div class="md-sidebar md-sidebar--secondary" data-md-component="sidebar" data-md-type="toc" >
+                <div class="md-sidebar__scrollwrap">
+                  <div class="md-sidebar__inner">
+                    
+
+<nav class="md-nav md-nav--secondary" aria-label="Table of contents">
+  
+  
+  
+    
+  
+  
+    <label class="md-nav__title" for="__toc">
+      <span class="md-nav__icon md-icon"></span>
+      Table of contents
+    </label>
+    <ul class="md-nav__list" data-md-component="toc" data-md-scrollfix>
+      
+        <li class="md-nav__item">
+  <a href="#part-1-gui-vs-cli-parity" class="md-nav__link">
+    <span class="md-ellipsis">
+      Part 1 — GUI vs CLI parity
+    </span>
+  </a>
+  
+    <nav class="md-nav" aria-label="Part 1 — GUI vs CLI parity">
+      <ul class="md-nav__list">
+        
+          <li class="md-nav__item">
+  <a href="#verdict" class="md-nav__link">
+    <span class="md-ellipsis">
+      Verdict
+    </span>
+  </a>
+  
+</li>
+        
+          <li class="md-nav__item">
+  <a href="#why-the-shape-is-safe-verified" class="md-nav__link">
+    <span class="md-ellipsis">
+      Why the shape is safe (VERIFIED)
+    </span>
+  </a>
+  
+</li>
+        
+          <li class="md-nav__item">
+  <a href="#field-table-all-31-sam3loraparams-fields" class="md-nav__link">
+    <span class="md-ellipsis">
+      Field table (all 31 Sam3LoraParams fields)
+    </span>
+  </a>
+  
+</li>
+        
+          <li class="md-nav__item">
+  <a href="#divergences" class="md-nav__link">
+    <span class="md-ellipsis">
+      Divergences
+    </span>
+  </a>
+  
+</li>
+        
+      </ul>
+    </nav>
+  
+</li>
+      
+        <li class="md-nav__item">
+  <a href="#part-2-oom-safety" class="md-nav__link">
+    <span class="md-ellipsis">
+      Part 2 — OOM safety
+    </span>
+  </a>
+  
+    <nav class="md-nav" aria-label="Part 2 — OOM safety">
+      <ul class="md-nav__list">
+        
+          <li class="md-nav__item">
+  <a href="#the-guard-chain-verified" class="md-nav__link">
+    <span class="md-ellipsis">
+      The guard chain (VERIFIED)
+    </span>
+  </a>
+  
+</li>
+        
+          <li class="md-nav__item">
+  <a href="#the-128-gb-host-ram-crash-fixed-by-a-guard-not-by-an-accident-verified" class="md-nav__link">
+    <span class="md-ellipsis">
+      The 128 GB host-RAM crash: fixed by a GUARD, not by an accident (VERIFIED)
+    </span>
+  </a>
+  
+</li>
+        
+          <li class="md-nav__item">
+  <a href="#is-_measured_bf16_device_peak_bytes-12-gib-still-defensible" class="md-nav__link">
+    <span class="md-ellipsis">
+      Is _MEASURED_BF16_DEVICE_PEAK_BYTES = 12 GiB still defensible?
+    </span>
+  </a>
+  
+</li>
+        
+          <li class="md-nav__item">
+  <a href="#the-probes-stopping-rule" class="md-nav__link">
+    <span class="md-ellipsis">
+      The probe's stopping rule
+    </span>
+  </a>
+  
+</li>
+        
+      </ul>
+    </nav>
+  
+</li>
+      
+        <li class="md-nav__item">
+  <a href="#part-3-efficient-max-batch-sizing" class="md-nav__link">
+    <span class="md-ellipsis">
+      Part 3 — "Efficient max batch sizing"
+    </span>
+  </a>
+  
+    <nav class="md-nav" aria-label="Part 3 — "Efficient max batch sizing"">
+      <ul class="md-nav__list">
+        
+          <li class="md-nav__item">
+  <a href="#landed-on-the-branch-not-on-main" class="md-nav__link">
+    <span class="md-ellipsis">
+      Landed (on the branch, not on main)
+    </span>
+  </a>
+  
+</li>
+        
+          <li class="md-nav__item">
+  <a href="#remaining" class="md-nav__link">
+    <span class="md-ellipsis">
+      Remaining
+    </span>
+  </a>
+  
+</li>
+        
+          <li class="md-nav__item">
+  <a href="#critical-does-the-landed-auto-batch-search-interact-correctly-with-part-2" class="md-nav__link">
+    <span class="md-ellipsis">
+      CRITICAL — does the landed auto-batch search interact correctly with Part 2?
+    </span>
+  </a>
+  
+</li>
+        
+      </ul>
+    </nav>
+  
+</li>
+      
+        <li class="md-nav__item">
+  <a href="#part-4-ranked-gaps-to-functional-sam3-training-via-gui-and-cli-no-oom-efficient-max-batch" class="md-nav__link">
+    <span class="md-ellipsis">
+      Part 4 — Ranked gaps to "functional SAM3 training via GUI and CLI, no OOM, efficient max batch"
+    </span>
+  </a>
+  
+</li>
+      
+        <li class="md-nav__item">
+  <a href="#could-not-verify" class="md-nav__link">
+    <span class="md-ellipsis">
+      Could not verify
+    </span>
+  </a>
+  
+</li>
+      
+    </ul>
+  
+</nav>
+                  </div>
+                </div>
+              </div>
+            
+          
+          
+            <div class="md-content" data-md-component="content">
+              <article class="md-content__inner md-typeset">
+                
+                  
+
+  
+    <a href="https://github.com/neurorishika/hydra-suite/edit/main/docs/superpowers/specs/2026-09-06-sam3-training-vram-probe-audit.md" title="Edit this page" class="md-content__button md-icon">
+      
+      <svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 24 24"><path d="M10 20H6V4h7v5h5v3.1l2-2V8l-6-6H6c-1.1 0-2 .9-2 2v16c0 1.1.9 2 2 2h4zm10.2-7c.1 0 .3.1.4.2l1.3 1.3c.2.2.2.6 0 .8l-1 1-2.1-2.1 1-1c.1-.1.2-.2.4-.2m0 3.9L14.1 23H12v-2.1l6.1-6.1z"/></svg>
+    </a>
+  
+  
+
+
+<h1 id="sam3-training-guicli-parity-oom-safety-and-auto-batch-sizing-audit">SAM3 training: GUI/CLI parity, OOM safety, and auto batch sizing — audit<a class="headerlink" href="#sam3-training-guicli-parity-oom-safety-and-auto-batch-sizing-audit" title="Permanent link">&para;</a></h1>
+<p><strong>Date:</strong> 2026-09-06. <strong>Repo state audited:</strong> <code>main</code> @ <code>65f85669</code>, plus the unmerged
+branch <code>codex/measured-auto-batch</code> (7 commits ahead, owned by another session — audited
+read-only via <code>git show</code>/<code>git diff main...</code>, never checked out).</p>
+<p><strong>Method note.</strong> Everything below is either VERIFIED (read in the tree at the cited
+file:line, or read out of a git object on the named branch) or INFERRED (reasoning from
+verified code). Nothing was executed: <code>import sam3</code> is unavailable on this host and the
+CUDA box was off-limits. Runtime numbers for the live run come from the coordinator and
+are labelled as REPORTED, not verified by me.</p>
+<hr />
+<h2 id="part-1-gui-vs-cli-parity">Part 1 — GUI vs CLI parity<a class="headerlink" href="#part-1-gui-vs-cli-parity" title="Permanent link">&para;</a></h2>
+<h3 id="verdict">Verdict<a class="headerlink" href="#verdict" title="Permanent link">&para;</a></h3>
+<p><strong>Structurally parity-safe.</strong> Both entry points converge on one builder: the GUI
+constructs a <code>DetectTrainingPlan</code>, calls <code>plan.validate()</code> and <code>plan.role_entries()</code>
+(<code>src/hydra_suite/detectkit/gui/dialogs/training_dialog.py:2956-2993</code>), which is exactly
+what <code>detectkit train</code> does (<code>src/hydra_suite/detectkit/cli.py:215</code>, <code>:273</code>). This is
+<strong>not</strong> the <code>build_engine_params</code> failure class — there is no parallel field mapping on
+the SAM3 path. Four small divergences remain, listed below; only two are worth acting on.</p>
+<h3 id="why-the-shape-is-safe-verified">Why the shape is safe (VERIFIED)<a class="headerlink" href="#why-the-shape-is-safe-verified" title="Permanent link">&para;</a></h3>
+<ul>
+<li><code>Sam3TrainingPanel._build_ui</code> ends with <code>self.set_params(Sam3LoraParams())</code>
+  (<code>sam3_training_panel.py:492</code>). Every widget's initial value is therefore <em>seeded from
+  the dataclass default</em>, so a default can never drift between the panel and the
+  contract — the classic divergence is structurally impossible here.</li>
+<li><code>Sam3TrainingPanel.params()</code> (<code>sam3_training_panel.py:496-560</code>) constructs
+  <code>Sam3LoraParams</code> with <strong>all 31 fields</strong> explicitly, including <code>adapt_scoring_head</code>
+  (round-tripped through a plain attribute rather than a widget, deliberately —
+  see the comment at <code>:539-546</code>).</li>
+<li>The CLI validator coerces the same 31 fields
+  (<code>detectkit/config/training.py:495-549</code>: 9 bool, 8 int, 9 number, 4 string, plus
+  <code>negative_prompts</code>), and <code>_construct_dataclass</code> (<code>training.py:~150</code>) <strong>rejects unknown
+  keys</strong>, so a typo'd <code>sam3.*</code> key is a hard error, not a silent no-op.</li>
+<li><code>label_quality_acknowledged</code>: gated on <strong>both</strong> sides — GUI checkbox
+  (<code>sam3_training_panel.py:485</code>, read at <code>:557</code>) and CLI
+  <code>plan.validate()</code> (<code>config/training.py:644-647</code>). No asymmetry.</li>
+<li>SAM3 <code>imgsz</code>: 640 default on both sides (<code>config/training.py:290</code> for the CLI;
+  <code>training_dialog.py:_imgsz_for_role</code> falls through to <code>return 640</code> for
+  <code>SEMANTIC_SAM3</code>, which has no spin box).</li>
+</ul>
+<h3 id="field-table-all-31-sam3loraparams-fields">Field table (all 31 <code>Sam3LoraParams</code> fields)<a class="headerlink" href="#field-table-all-31-sam3loraparams-fields" title="Permanent link">&para;</a></h3>
+<table>
+<thead>
+<tr>
+<th>Field</th>
+<th>GUI widget</th>
+<th>CLI plan key</th>
+<th>Default source</th>
+<th>Divergence</th>
+</tr>
+</thead>
+<tbody>
+<tr>
+<td><code>prompt</code></td>
+<td><code>prompt_edit</code></td>
+<td><code>sam3.prompt</code></td>
+<td>dataclass</td>
+<td>—</td>
+</tr>
+<tr>
+<td><code>negative_prompts</code></td>
+<td><code>negative_prompts_edit</code></td>
+<td><code>sam3.negative_prompts</code></td>
+<td>dataclass</td>
+<td>—</td>
+</tr>
+<tr>
+<td><code>rank</code>, <code>alpha</code>, <code>dropout</code></td>
+<td>3 spins</td>
+<td>✔</td>
+<td>dataclass</td>
+<td>—</td>
+</tr>
+<tr>
+<td><code>lr</code>, <code>epochs</code>, <code>batch</code>, <code>grad_accum</code></td>
+<td>4 spins</td>
+<td>✔</td>
+<td>dataclass</td>
+<td><strong><code>batch: -1</code> — see below</strong></td>
+</tr>
+<tr>
+<td><code>mixed_precision</code></td>
+<td>combo (<code>bf16</code> only)</td>
+<td>✔ (any string)</td>
+<td>dataclass</td>
+<td>CLI accepts <code>fp32</code>; GUI cannot express it. Deliberate (legacy-plan loading, <code>config/training.py:696</code>).</td>
+</tr>
+<tr>
+<td><code>num_negatives</code></td>
+<td>spin</td>
+<td>✔</td>
+<td>dataclass</td>
+<td>—</td>
+</tr>
+<tr>
+<td><code>host_reserve_gb</code>, <code>host_reserve_fraction</code>, <code>cuda_safety_fraction</code>, <code>host_limit_headroom_fraction</code>, <code>watchdog_poll_seconds</code></td>
+<td>5 spins ("Resource safety")</td>
+<td>✔</td>
+<td>dataclass</td>
+<td>—</td>
+</tr>
+<tr>
+<td><code>adapt_vision_encoder</code> … <code>adapt_mask_decoder</code> (6)</td>
+<td>6 checkboxes</td>
+<td>✔</td>
+<td>dataclass</td>
+<td>—</td>
+</tr>
+<tr>
+<td><code>adapt_scoring_head</code></td>
+<td><strong>no widget</strong>, round-tripped</td>
+<td>✔</td>
+<td>dataclass</td>
+<td>Headless-only by design and documented at the construction site. Acceptable.</td>
+</tr>
+<tr>
+<td><code>geometry_mode</code>, <code>object_tile_fraction</code>, <code>slice_width</code>, <code>slice_height</code>, <code>tile_overlap</code>, <code>keep_empty_tiles</code></td>
+<td>6 widgets</td>
+<td>✔</td>
+<td>dataclass</td>
+<td>—</td>
+</tr>
+<tr>
+<td><code>label_quality_acknowledged</code></td>
+<td>checkbox</td>
+<td>✔</td>
+<td>dataclass</td>
+<td>—</td>
+</tr>
+<tr>
+<td><code>env_name</code></td>
+<td><code>env_edit</code></td>
+<td>✔</td>
+<td><strong>NOT the dataclass default</strong></td>
+<td><strong>Divergence D1, below</strong></td>
+</tr>
+</tbody>
+</table>
+<h3 id="divergences">Divergences<a class="headerlink" href="#divergences" title="Permanent link">&para;</a></h3>
+<ul>
+<li><strong>D1 (real, small). <code>env_name</code> is never empty from the GUI.</strong>
+  <code>set_params</code> writes <code>p.env_name or DEFAULT_SAM3_ENV</code> (<code>sam3_training_panel.py:559</code>), so
+  a GUI run always records a concrete env name. The dataclass default is <code>""</code>, which
+  <code>resolve_sam3_env</code> resolves <em>at run time</em>, honouring <code>HYDRA_SAM3_ENV</code>
+  (<code>training/sam3_lora/env.py</code>). Consequence: on a box where <code>HYDRA_SAM3_ENV</code> points at a
+  non-default env, a CLI plan honours it and the GUI silently overrides it with the
+  compiled-in default. INFERRED consequence; the code paths are VERIFIED.</li>
+<li><strong>D2 (minor, corrected on inspection). <code>device</code>.</strong> GUI:
+  <code>combo_device.currentText().strip() or "cpu"</code> (<code>training_dialog.py:2981</code>); CLI default
+  <code>"auto"</code>. VERIFIED <code>_build_device_options</code> (<code>training_dialog.py:2489-2507</code>) enumerates
+  <code>cuda</code>/<code>cuda:N</code>/<code>mps</code>/<code>cpu</code> and always appends <code>cpu</code>, so on a CUDA box the combo's first
+  item is <code>cuda:0</code> (or <code>cuda</code> with &gt;1 GPU) and the <code>or "cpu"</code> branch is unreachable. The
+  GUI therefore never emits <code>"auto"</code> — it emits a concrete device, which
+  <code>preflight._probe_cuda_device</code> (<code>preflight.py:521</code>) handles identically. The only
+  residual is that a GUI user on a CPU-only box can start a SAM3 run that preflight then
+  refuses, where the CLI's <code>"auto"</code> produces the same refusal by a different route. Not
+  worth fixing; recorded so it is not re-discovered as a bug.</li>
+<li><strong>D3 (intentional, already announced). <code>publish_policy</code>.</strong> GUI hard-codes
+  <code>auto_import=True</code> (<code>training_dialog.py:2987</code>); the CLI defaults to <code>False</code> and now
+  prints a banner saying so (<code>detectkit/cli.py:221-233</code>).</li>
+<li><strong>D4 (dead code, remove).</strong> <code>TrainingDialog._sam3_spec_for</code>
+  (<code>training_dialog.py:2571-2593</code>) is a <em>second</em> SAM3 spec builder that bypasses
+  <code>plan.validate()</code> and <code>build_role_entries</code> and hard-codes
+  <code>TrainingHyperParams(epochs=params.epochs)</code> with no <code>imgsz</code>, <code>device</code> or
+  <code>publish_policy</code>. VERIFIED: its only references are in
+  <code>tests/test_sam3_dialog_wiring.py:96,112</code> — no production caller. It is precisely the
+  divergent-second-builder the convention exists to prevent, currently kept alive by a
+  test. Delete both.</li>
+</ul>
+<hr />
+<h2 id="part-2-oom-safety">Part 2 — OOM safety<a class="headerlink" href="#part-2-oom-safety" title="Permanent link">&para;</a></h2>
+<h3 id="the-guard-chain-verified">The guard chain (VERIFIED)<a class="headerlink" href="#the-guard-chain-verified" title="Permanent link">&para;</a></h3>
+<ol>
+<li><strong>Plan validation</strong> — <code>DetectTrainingPlan.validate()</code> (<code>config/training.py:637-712</code>)
+   bounds every safety knob before anything allocates.</li>
+<li><strong>Admission preflight</strong> — <code>preflight.assess_preflight</code> (<code>preflight.py:~880</code>) composes
+   per-phase <code>PhaseEstimate</code>s (<code>model_load</code> / <code>training</code> / <code>validation</code> / <code>publish</code>) and
+   checks them against a <code>ResourceObservation</code> derived from <code>nvidia-smi</code>
+   (<code>preflight._probe_cuda_device</code>, <code>:521</code> — deliberately torch-free).</li>
+<li>Device side: <code>training_device_peak = _MEASURED_BF16_DEVICE_PEAK_BYTES *
+     precision_multiplier + max(0, batch-1) * _EXTRA_BATCH_DEVICE_BYTES + …</code>
+     (<code>preflight.py:758-764</code>), with <code>_MEASURED_BF16_DEVICE_PEAK_BYTES = 12 GiB</code>
+     (<code>preflight.py:94</code>) and <code>_EXTRA_BATCH_DEVICE_BYTES = 18 GiB</code> (<code>preflight.py:101</code>).</li>
+<li><code>accelerator_safety_fraction = 0.85</code> (<code>runtime/resource_budget.py:156</code>, applied at
+     <code>:335</code>), capped in preflight at <code>_MAXIMUM_CUDA_SAFETY_FRACTION = 0.90</code>
+     (<code>preflight.py:126</code>).</li>
+<li><strong>Host containment</strong> — <code>containment_host_limits</code> (<code>preflight.py:648-658</code>) turns the
+   estimated host peak into a soft/hard pair via <code>host_limit_headroom_fraction</code> (1.25),
+   handed to <code>runtime/resource_limits.py</code>, which launches the sidecar under
+   <code>systemd-run … --property=MemoryMax=&lt;hard&gt;</code> (<code>resource_limits.py:187,194</code>) when
+   available (<code>:105</code>).</li>
+<li><strong>Immutability across the run</strong> — <code>train.py:226-233</code> refuses to let a live re-assessment
+   raise the hard limit above the one admission granted.</li>
+<li><strong>Watchdog</strong> — parent-side polling at <code>params.watchdog_poll_seconds</code>
+   (<code>sam3_lora/train.py:202</code>, <code>:281</code>, <code>:313</code>), supervising the contained sidecar.</li>
+</ol>
+<h3 id="the-128-gb-host-ram-crash-fixed-by-a-guard-not-by-an-accident-verified">The 128 GB host-RAM crash: fixed by a GUARD, not by an accident (VERIFIED)<a class="headerlink" href="#the-128-gb-host-ram-crash-fixed-by-a-guard-not-by-an-accident-verified" title="Permanent link">&para;</a></h3>
+<p>The dataloader is structurally streaming, not incidentally small:</p>
+<ul>
+<li><code>build_descriptors</code> (<code>sam3_lora/dataloader.py:158-200</code>) returns only <code>TileDescriptor</code>s —
+  polygons and paths, explicitly "no OpenCV/PIL images, float tensors, dense masks, or
+  collated batches" (<code>:161-166</code>). Memory scales with annotation metadata alone.</li>
+<li><code>collate_epoch_batches</code> (<code>:310-322</code>) shuffles <strong>indices</strong>, then delegates to
+  <code>collate_batches</code> (<code>:285-307</code>), a generator that decodes one tile at a time
+  (<code>load_datapoints</code> → <code>cv2.imread</code>, <code>:203-220</code>), yields one batch, and <code>del</code>s it.</li>
+<li>The consumer honours the laziness: <code>cli.py:680</code> iterates <code>collate_epoch_batches</code>
+  directly and <code>cli.py:805-810</code> iterates <code>collate_batches</code> for validation. There is no
+  <code>list(...)</code> over either. VERIFIED by grep.</li>
+</ul>
+<p>So the epoch can no longer be materialised whatever the settings are. On top of that the
+<code>MemoryMax</code> cgroup cap is a genuine second guard: it converts any regression here into a
+kill with an attributable exit code instead of a machine-wide OOM.</p>
+<h3 id="is-_measured_bf16_device_peak_bytes-12-gib-still-defensible">Is <code>_MEASURED_BF16_DEVICE_PEAK_BYTES = 12 GiB</code> still defensible?<a class="headerlink" href="#is-_measured_bf16_device_peak_bytes-12-gib-still-defensible" title="Permanent link">&para;</a></h3>
+<p><strong>No.</strong> Honest arithmetic against the live run (peaks REPORTED by the coordinator, same
+metric <code>torch.cuda.max_memory_reserved</code>, never reset, so each is a true running max):</p>
+<table>
+<thead>
+<tr>
+<th>Source</th>
+<th>Peak</th>
+<th>Under-measures the next by</th>
+</tr>
+</thead>
+<tbody>
+<tr>
+<td>Inherited constant, never measured</td>
+<td>29.00 GiB</td>
+<td>(a 3.7× over-estimate, correctly retired)</td>
+</tr>
+<tr>
+<td><code>tools/sam3/measure_bf16_peak.py</code>, N=5 <strong>and</strong> N=30</td>
+<td>7.72 GiB</td>
+<td>41% low vs final</td>
+</tr>
+<tr>
+<td>Live run, step 70</td>
+<td>10.22 GiB</td>
+<td></td>
+</tr>
+<tr>
+<td>Live run, step 310</td>
+<td>11.59 GiB</td>
+<td></td>
+</tr>
+<tr>
+<td>Live run, step 320</td>
+<td><strong>12.99 GiB</strong></td>
+<td></td>
+</tr>
+</tbody>
+</table>
+<ul>
+<li>vs the base constant (12 GiB): <strong>the observation exceeds it.</strong></li>
+<li>vs preflight's <em>composed</em> <code>training.accelerator_peak_bytes</code> = 13,275,856,896 B =
+  <strong>12.364 GiB</strong>: the observation exceeds the whole admission estimate by <strong>5.1%</strong>.</li>
+<li>Headroom is therefore <strong>negative</strong>, not the ~55% the comment at <code>preflight.py:80-81</code>
+  still claims. That comment is now factually wrong in the tree and should be corrected
+  regardless of what else is done.</li>
+</ul>
+<p><strong>No OOM occurred and none is predicted on this card.</strong> Admission demands
+<code>12.364 / 0.85 = 14.55 GiB</code> free, and 12.99 still fits under that. But the run survived on
+slack whose stated purpose is absorbing allocator noise (2.18 GiB intended, 1.56 GiB
+consumed), not covering a central estimate that is 5% too low. That is a correct outcome
+produced by the wrong mechanism: it is luck with a documented margin, and the next
+configuration — a denser dataset, a bigger <code>rank</code>, <code>batch &gt; 1</code>, or a smaller card — has no
+reason to be lucky.</p>
+<p><strong>What the constant should be derived from.</strong> Not a constant at all. It should be the
+<code>max</code> over a <em>completed</em> run, recorded per <code>(GPU model, adapter surface, dataset density,
+sidecar env hash)</code> in the profile store the branch already builds
+(<code>runtime/memory_profiles.py</code> + <code>sam3_lora/autobatch.py</code>'s fingerprint), with the source
+constant demoted to a coarse <strong>floor</strong> used only when the store has no matching record —
+which is exactly the design Task 4 of the auto-batch plan describes, and exactly the task
+that has not landed. Until then, the interim honest value is
+<code>ceil(observed_full_run_max × inflation)</code>; on the only evidence available that is
+<code>12.99 × 1.25 ≈ 16 GiB</code>, and it should carry a comment saying it is a placeholder for a
+store lookup.</p>
+<h3 id="the-probes-stopping-rule">The probe's stopping rule<a class="headerlink" href="#the-probes-stopping-rule" title="Permanent link">&para;</a></h3>
+<p><strong>What is wrong with the current rule.</strong> <code>tools/sam3/measure_bf16_peak.py</code> runs the real
+training entry point and aborts after <code>--optimizer-steps</code> (default 5, <code>:44</code>, enforced at
+<code>:102-108</code>). Its own docstring asserts the premise that has now been refuted: "peak VRAM
+is reached early and then stays flat" (<code>:4-6</code>). Because the production loop <strong>shuffles</strong>
+(<code>collate_epoch_batches</code>, <code>dataloader.py:319-320</code>), N fixed steps is a random sample of N
+tiles from the head of one permutation. N=5 and N=30 agreeing was two samples from the
+same easy prefix, not a plateau.</p>
+<p><strong>Why no flatness rule can be recommended.</strong> The trace was flat at 10.22 GiB for 230
+consecutive steps <em>across an epoch boundary</em>, then rose twice within 10 steps. Any
+"stable for K steps" or "N steps after the last new maximum" rule fails at every plausible
+K. Time-based rules are dead.</p>
+<p><strong>Recommended rule — content-derived, plus a calibration factor, plus a live tripwire.</strong></p>
+<ol>
+<li><strong>Probe the corpus's worst tiles deliberately, not a shuffled stream.</strong> The dataset
+   builder already knows per-tile instance counts — the branch even records
+   <code>max_active_instances_per_tile</code> and a new <code>p95_active_instances_per_tile</code>
+   (<code>preflight.py</code>, added on <code>codex/measured-auto-batch</code>). Order descending and measure
+   the top tiles. Sampling more of a shuffled stream only improves the odds of hitting the
+   tail; it never bounds it.
+   <em>Status: the landed probe already does this</em> — <code>cli._densest_first</code>
+   (branch <code>cli.py:865-874</code>) sorts by <code>len(d.instances)</code> descending and
+   <code>run_probe_measurement</code> (<code>:888-1000</code>) steps on that order.</li>
+<li><strong>Rank instance-count density by mask work, not instance count alone.</strong> <code>len(instances)</code>
+   is a proxy; the allocation driver is (instances × tile pixels), and preflight already
+   uses <code>_MASK_DEVICE_BYTES_PER_PIXEL</code> for exactly that. Sort by
+   <code>sum(polygon_bbox_area)</code> or <code>instances × tile_area</code>, and take the top-<code>max(8, batch×4)</code>
+   tiles rather than the top <code>batch</code>.</li>
+<li><strong>Calibrate probe→run, and publish the factor.</strong> Even densest-first, the landed probe
+   reported <strong>7.34 GiB at batch 1</strong> (branch <code>contracts.py:218-228</code>, measured on mehek
+   2026-09-06) against the live run's <strong>12.99 GiB</strong> — a <strong>1.77× under-measurement of the
+   same nominal configuration</strong>. Until that gap is explained, any probe number must be
+   multiplied by a stored, dated inflation factor (≥1.8 on current evidence) <em>before</em>
+   <code>select_batch</code> sees it, on top of the existing <code>MEASURED_SAFETY_FRACTION = 0.8</code>.</li>
+<li><strong>Explain the gap before trusting the probe</strong> — one cheap diagnostic decides the fix.
+   The live run's <code>max_memory_reserved</code> is 12.99; compare it against
+   <code>max_memory_allocated</code> on the same run. If <strong>allocated</strong> is close to the probe's
+   figure and only <strong>reserved</strong> grew, the driver is the caching allocator's fragmentation
+   ratchet over hundreds of steps — which no content-derived probe on a virgin allocator
+   can ever see, and the right fixes are <code>PYTORCH_CUDA_ALLOC_CONF=expandable_segments:True</code>
+   plus a fragmentation multiplier on the probe figure. If <strong>allocated</strong> also grew to
+   ~12.99, the driver really is content and the density metric in step 2 is wrong (the
+   probe is not finding the true worst tile). This is the single highest-information
+   measurement available and it costs one line in the training loop.
+   I could NOT run it. Flagged as unverified.</li>
+<li><strong>Add a live tripwire regardless.</strong> Every K optimizer steps, read
+   <code>torch.cuda.max_memory_reserved()</code> and compare it to the admitted
+   <code>training.accelerator_peak_bytes</code>. On exceedance, log loudly, record the new max to the
+   profile store, and (optionally) stop at the next safe boundary. This converts the
+   residual risk from "OOM at hour three with nothing learned" into "a diagnosis and a
+   better number in the store", which is what makes the estimate converge instead of
+   being re-guessed. One-line-ish, and it is the cheapest item in this whole report.</li>
+<li><strong>Make the offline tool honest.</strong> <code>measure_bf16_peak.py</code> should default to a full run
+   (no <code>--optimizer-steps</code>), record the running max continuously, and label any truncated
+   figure <code>"lower_bound": true</code> in the store record so nothing downstream can mistake it
+   for a peak. Its docstring's flatness claim must go.</li>
+</ol>
+<hr />
+<h2 id="part-3-efficient-max-batch-sizing">Part 3 — "Efficient max batch sizing"<a class="headerlink" href="#part-3-efficient-max-batch-sizing" title="Permanent link">&para;</a></h2>
+<p>Plan: <code>docs/superpowers/plans/2026-09-04-measured-auto-batch-sizing.md</code> (revision 4,
+user-authored, authoritative). Implementation branch: <code>codex/measured-auto-batch</code>,
+<strong>7 commits, unmerged</strong>, +3,215/−120 across 13 files.</p>
+<h3 id="landed-on-the-branch-not-on-main">Landed (on the branch, not on <code>main</code>)<a class="headerlink" href="#landed-on-the-branch-not-on-main" title="Permanent link">&para;</a></h3>
+<ul>
+<li><strong>Task 1 — batch-curve fit and conservative selection.</strong> <code>cb95363f</code> + <code>56b18369</code>.
+  <code>runtime/memory_profiles.py</code>: <code>fit_batch_curve</code>, <code>select_batch</code>
+  (branch <code>:249-304</code>), <code>merge_records</code> (<code>:319</code>), <code>profile_store_path</code> (<code>:307</code>),
+  <code>MEASURED_SAFETY_FRACTION = 0.8</code> (<code>:30</code>). <code>select_batch</code>'s requirement is
+  <code>max(fitted, every observed peak at batch ≤ n)</code> and it never exceeds the largest
+  observed rung — a sound envelope <em>given sound inputs</em>.</li>
+<li><strong>Task 2 — SAM3 workload fingerprint.</strong> <code>25f66e2f</code> + <code>e3dc8a5d</code>.
+  New <code>training/sam3_lora/autobatch.py</code> (702 lines), sidecar-env package hash without
+  importing the env; <code>p95_active_instances_per_tile</code> added to the dataset profile.</li>
+<li><strong>Task 3 — parent-orchestrated probe phase.</strong> <code>a9862605</code> + <code>d985a78a</code> + <code>b136322e</code>.
+  <code>PROBE_CANDIDATES = (1,2,4,8)</code>, <code>MAX_AUTO_BATCH = 8</code>, <code>PROBE_STEPS = 2</code>
+  (branch <code>autobatch.py:428-433</code>); a fresh contained sidecar per candidate
+  (<code>train.py:231</code> <code>_run_probe_candidate</code>); ladder-termination taxonomy
+  (<code>complete</code>/<code>oom</code>/<code>refused</code>/<code>host_limit</code>, only the last treated as transient);
+  <code>cli.py --probe --probe-batch N</code> (<code>:1009-1034</code>) and <code>run_probe_measurement</code>
+  (<code>:888-1000</code>); <code>assess_probe_preflight</code> with a <code>probe_floor=True</code> estimate that
+  deliberately <em>bypasses</em> <code>_MEASURED_BF16_DEVICE_PEAK_BYTES</code> so the probe is not gated by
+  the constant it exists to replace; <code>batch: -1</code> accepted in <code>Sam3LoraParams</code> and the plan
+  validator (branch <code>config/training.py:649-655</code>).</li>
+</ul>
+<h3 id="remaining">Remaining<a class="headerlink" href="#remaining" title="Permanent link">&para;</a></h3>
+<ul>
+<li><strong>Task 4 — the measured preflight formula.</strong> NOT landed. VERIFIED: the branch's
+  <code>preflight.py</code> contains no reference to <code>MemoryProfileStore</code> / <code>memory_profiles</code>; the
+  training-path estimate still uses the 12 GiB constant + 18 GiB/extra-batch
+  (<code>preflight.py:758-764</code>). Given Part 2, this is now the most consequential remaining
+  task, not a polish item.</li>
+<li><strong>Task 5 — YOLO pre-launch batch resolution.</strong> NOT landed (no <code>jobs/</code> or Ultralytics
+  file touched on the branch). Note <code>TrainingHyperParams.batch = -1</code> is already <em>accepted</em>
+  by the plan validator (<code>config/training.py:734</code>) and the GUI already emits it
+  (<code>training_dialog.py:2947</code>) — so today <code>-1</code> is handed straight to Ultralytics'
+  own autobatch, which is the inherited-analytic path the plan wants replaced.</li>
+<li><strong>Task 6 — expose SAM3 auto batch in the panel.</strong> NOT landed;
+  <code>sam3_training_panel.py</code> is untouched on the branch. Consequence: <strong><code>batch: -1</code> for
+  SAM3 is CLI-only.</strong> <code>batch_spin.setRange(1, 256)</code> (<code>sam3_training_panel.py:392</code>) cannot
+  express <code>-1</code>, and <code>set_params</code> would silently clamp a loaded <code>-1</code> to 1 — a <em>new</em>
+  GUI/CLI divergence introduced by the branch, and a silent-clamp round-trip bug on top.</li>
+<li><strong>Verification block</strong> — GPU acceptance on mehek, <code>make lint-moderate</code>,
+  <code>make docs-check</code>, final branch-diff review, merge, plan <code>**Status:**</code> update. All open.</li>
+</ul>
+<h3 id="critical-does-the-landed-auto-batch-search-interact-correctly-with-part-2">CRITICAL — does the landed auto-batch search interact correctly with Part 2?<a class="headerlink" href="#critical-does-the-landed-auto-batch-search-interact-correctly-with-part-2" title="Permanent link">&para;</a></h3>
+<p><strong>No. It would have been fooled by this exact trace.</strong></p>
+<ul>
+<li>The candidate measurement is <code>PROBE_STEPS = 2</code> optimizer steps
+  (branch <code>autobatch.py:433</code>, consumed at <code>cli.py:947-963</code>). Two steps is chosen to
+  materialise Adam's lazy <code>exp_avg</code>/<code>exp_avg_sq</code>, which is a real and correct reason — but
+  it is a <em>floor</em> argument, not a peak argument.</li>
+<li>The probe is fed densest-first (<code>cli._densest_first</code>), which is the right instinct and
+  is genuinely better than the shuffled N-step tool. <strong>It still under-measured.</strong> The
+  branch's own recorded numbers (<code>contracts.py:218-228</code>): batch 1 → <strong>7.34 GiB</strong>,
+  batch 2 → 10.16, batch 4 → 13.98. The live batch-1 run reached <strong>12.99 GiB</strong>. Same
+  card, same env, same adapter surface, same tile size, same metric. <strong>1.77×.</strong>
+  (Caveat, UNVERIFIED: I could not confirm the probe's dataset is byte-identical to the
+  live run's. If it is not, that is itself the finding — the fingerprint is supposed to
+  make the two records non-interchangeable, and confirming or refuting it is one <code>diff</code>.)</li>
+<li>Propagating that error through <code>select_batch</code>: with records (1, 7.34), (2, 10.16),
+  (4, 13.98) the fit is ≈ <code>5.1 + 2.22·n</code> GiB. On a 24 GB card with ~23 GiB free the
+  budget is <code>0.8 × 23 = 18.4</code> GiB, so batch <strong>4</strong> is selected (requirement 13.98).
+  Inflated by the observed 1.77× the true requirement at batch 4 is ≈ 24.7 GiB —
+  <strong>an OOM, hours in.</strong> On a 47 GB card it selects 8 against a true requirement near
+  40 GiB, which clears only because the card is large. The 0.8 safety fraction covers a
+  25% error; the observed error is 77%.</li>
+<li>Aggravating factor: the error is <em>multiplicative in batch</em>, so the absolute miss grows
+  with the batch the search is trying to justify. An auto-batch feature whose measurement
+  error scales with its own output is worse than no auto-batch, because it converts a
+  conservative default (<code>batch: 1</code>) into a confident wrong answer.</li>
+<li>The mitigations already on the branch are real but insufficient: fail-closed when no
+  candidate survives (<code>train.py:517-524</code>), per-candidate containment so a probe OOM is a
+  <em>measurement</em>, and <code>select_batch</code> never extrapolating past the largest observed rung.
+  All of these protect against a probe that OOMs. None protects against a probe that
+  <em>succeeds with a number that is too small</em> — which is the actual failure mode.</li>
+</ul>
+<p><strong>Recommendation to the owning session:</strong> do not merge the branch until either
+(a) <code>PROBE_STEPS</code> is replaced by the content-derived + calibrated rule in Part 2 (items 2-4),
+or (b) a stored, dated probe→run inflation factor is applied inside <code>resolve_batch</code>
+before <code>select_batch</code>, with <code>MAX_AUTO_BATCH</code> temporarily reduced until a full-run record
+exists for at least one fingerprint. Item (b) is small and unblocks the merge; item (a) is
+the durable fix. Either way, Part 2 item 5 (the live tripwire) should ship with it, because
+it is what makes a wrong selection visible instead of fatal.</p>
+<hr />
+<h2 id="part-4-ranked-gaps-to-functional-sam3-training-via-gui-and-cli-no-oom-efficient-max-batch">Part 4 — Ranked gaps to "functional SAM3 training via GUI and CLI, no OOM, efficient max batch"<a class="headerlink" href="#part-4-ranked-gaps-to-functional-sam3-training-via-gui-and-cli-no-oom-efficient-max-batch" title="Permanent link">&para;</a></h2>
+<table>
+<thead>
+<tr>
+<th>#</th>
+<th>Gap</th>
+<th>Size</th>
+<th>Owned by other session?</th>
+</tr>
+</thead>
+<tbody>
+<tr>
+<td>1</td>
+<td>Auto-batch probe under-measures by 1.77× (<code>PROBE_STEPS = 2</code>); selection will pick a batch that OOMs later, and the error scales with batch. Blocks merge of <code>codex/measured-auto-batch</code>.</td>
+<td>substantial</td>
+<td>Yes — branch is theirs; this finding is not yet reflected in it</td>
+</tr>
+<tr>
+<td>2</td>
+<td><code>_MEASURED_BF16_DEVICE_PEAK_BYTES = 12 GiB</code> and the composed 12.364 GiB estimate are <strong>below</strong> a live observation of 12.99 GiB; the run survived only on the 0.85 noise margin. Raise the constant now (interim ≈16 GiB) and fix the false "~55% headroom" comment at <code>preflight.py:80-81</code>.</td>
+<td>one-line (constant) + small (comment/justification)</td>
+<td>No — free to take, but coordinate: Task 4 will supersede it</td>
+</tr>
+<tr>
+<td>3</td>
+<td>Task 4 — preflight must read the measured profile store instead of the constant. This is what makes #2 stop recurring.</td>
+<td>substantial</td>
+<td>Plan-owned, not started by them</td>
+</tr>
+<tr>
+<td>4</td>
+<td>Diagnose reserved-vs-allocated on the live run to decide whether the gap is allocator fragmentation or content; add the live <code>max_memory_reserved</code> tripwire either way.</td>
+<td>one-line (diagnostic) + small (tripwire)</td>
+<td>No</td>
+</tr>
+<tr>
+<td>5</td>
+<td>Task 6 — SAM3 <code>batch: -1</code> is CLI-only; the panel's <code>setRange(1, 256)</code> cannot express it and silently clamps a loaded <code>-1</code> to 1. A <em>new</em> GUI/CLI divergence and a round-trip bug the branch introduces.</td>
+<td>small</td>
+<td>Plan-owned, not started</td>
+</tr>
+<tr>
+<td>6</td>
+<td>Task 5 — YOLO <code>batch: -1</code> still routes to Ultralytics' inherited autobatch rather than a measured pre-launch resolution.</td>
+<td>substantial</td>
+<td>Plan-owned, not started</td>
+</tr>
+<tr>
+<td>7</td>
+<td><code>measure_bf16_peak.py</code> defaults to 5 steps and its docstring asserts the refuted flatness premise; any figure it writes to the store is an unlabelled lower bound.</td>
+<td>small</td>
+<td>No</td>
+</tr>
+<tr>
+<td>8</td>
+<td>Dead second SAM3 spec builder <code>TrainingDialog._sam3_spec_for</code> + the two tests keeping it alive.</td>
+<td>small</td>
+<td>No</td>
+</tr>
+<tr>
+<td>9</td>
+<td>D1 — GUI always pins <code>env_name</code>, overriding <code>HYDRA_SAM3_ENV</code>. (D2, the <code>device</code> default, was checked and is a non-issue — see Part 1.)</td>
+<td>one-line</td>
+<td>No</td>
+</tr>
+</tbody>
+</table>
+<p><strong>Bottom line against the user's goal.</strong> GUI/CLI parity is essentially <em>already there</em> and
+is the strongest part of this subsystem — gaps 5, 8 and 9 (D1 only) are the only parity work left and
+they are all small. "No OOM errors" is <em>not</em> there: the admission estimate is currently
+below a measured peak, and it has been below every successive measurement this project has
+taken. "Efficient max batch sizing" is ~60% built on an unmerged branch, and the built part
+would ship a confidently wrong number.</p>
+<hr />
+<h2 id="could-not-verify">Could not verify<a class="headerlink" href="#could-not-verify" title="Permanent link">&para;</a></h2>
+<ul>
+<li>Nothing was executed; <code>import sam3</code> is unavailable on macOS and the CUDA box was
+  off-limits by instruction. All GiB figures for live runs and for the branch's probe are
+  read from source comments or supplied by the coordinator.</li>
+<li>Whether the branch's probe measurement (7.34 GiB @ batch 1) and the live run
+  (12.99 GiB @ batch 1) used the same prepared dataset. This is the pivotal control for
+  the Critical finding in Part 3 and should be checked first.</li>
+<li>Whether <code>systemd-run</code> is actually available on mehek (<code>resource_limits.py:105</code> degrades
+  silently if not), i.e. whether the host <code>MemoryMax</code> cap is live or a no-op there.</li>
+</ul>
+
+
+
+
+
+
+
+
+
+
+
+
+                
+              </article>
+            </div>
+          
+          
+<script>var target=document.getElementById(location.hash.slice(1));target&&target.name&&(target.checked=target.name.startsWith("__tabbed_"))</script>
+        </div>
+        
+          <button type="button" class="md-top md-icon" data-md-component="top" hidden>
+  
+  <svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 24 24"><path d="M13 20h-2V8l-5.5 5.5-1.42-1.42L12 4.16l7.92 7.92-1.42 1.42L13 8z"/></svg>
+  Back to top
+</button>
+        
+      </main>
+      
+        <footer class="md-footer">
+  
+  <div class="md-footer-meta md-typeset">
+    <div class="md-footer-meta__inner md-grid">
+      <div class="md-copyright">
+  
+  
+    Made with
+    <a href="https://squidfunk.github.io/mkdocs-material/" target="_blank" rel="noopener">
+      Material for MkDocs
+    </a>
+  
+</div>
+      
+    </div>
+  </div>
+</footer>
+      
+    </div>
+    <div class="md-dialog" data-md-component="dialog">
+      <div class="md-dialog__inner md-typeset"></div>
+    </div>
+    
+    
+    <script id="__config" type="application/json">{"base": "../../..", "features": ["navigation.tabs", "navigation.sections", "navigation.expand", "navigation.top", "content.code.copy", "content.action.edit", "search.suggest", "search.highlight"], "search": "../../../assets/javascripts/workers/search.6ce7567c.min.js", "translations": {"clipboard.copied": "Copied to clipboard", "clipboard.copy": "Copy to clipboard", "search.result.more.one": "1 more on this page", "search.result.more.other": "# more on this page", "search.result.none": "No matching documents", "search.result.one": "1 matching document", "search.result.other": "# matching documents", "search.result.placeholder": "Type to start searching", "search.result.term.missing": "Missing", "select.version": "Select version"}, "version": {"default": "latest", "provider": "mike"}}</script>
+    
+    
+      <script src="../../../assets/javascripts/bundle.83f73b43.min.js"></script>
+      
+    
+  </body>
+</html>
