@@ -22,6 +22,22 @@ _FALLBACK_KEY = CacheKey(
 )
 
 
+def _requires_live_native_geometry(runner: object) -> bool:
+    """Whether raw cache reuse would discard this runner's required output.
+
+    ``DetectionCacheHandle`` intentionally stores compact fixed-shape OBB
+    fields only; ragged native polygons are not serializable there.  Export
+    callers that request them must therefore use a live detector result for
+    every frame rather than treating a cache hit as geometry evidence.
+    """
+
+    config = getattr(runner, "config", None)
+    return bool(
+        getattr(getattr(config, "obb", None), "emit_native_geometry", False)
+        or getattr(getattr(config, "bgsub", None), "emit_native_geometry", False)
+    )
+
+
 def _cache_key_for(runner: object) -> tuple[CacheKey, bool]:
     """Return ``(key, require_key)`` for validating/stamping this call's cache.
 
@@ -101,6 +117,12 @@ def get_or_compute_raw(
 
     ``runner`` must implement ``detect_batch_raw(frames, frame_indices=...)
     -> list[OBBResult]`` (``InferenceRunner.detect_batch_raw``, Task 2).
+
+    A real OBB or background-subtraction configuration that requests native
+    polygon geometry bypasses both reads and writes: the compact raw cache
+    does not serialize ragged polygons, so its contents cannot satisfy that
+    output contract. This remains a deliberate temporary live-only path until
+    polygon serialization is implemented.
     """
     frame_indices = list(frame_indices)
     frames = list(frames)
@@ -114,6 +136,20 @@ def get_or_compute_raw(
         raise ValueError("frame indices must be unique")
     if any(right <= left for left, right in zip(frame_indices, frame_indices[1:])):
         raise ValueError("frame indices must be strictly increasing")
+
+    if _requires_live_native_geometry(runner):
+        raw_results = runner.detect_batch_raw(frames, frame_indices=frame_indices)
+        if len(raw_results) != len(frame_indices):
+            raise ValueError("detect_batch_raw must return one result per frame")
+        if any(
+            int(result.frame_idx) != int(idx)
+            for idx, result in zip(frame_indices, raw_results)
+        ):
+            raise ValueError(
+                "detect_batch_raw result.frame_idx must match its requested frame"
+            )
+        return dict(zip(frame_indices, raw_results))
+
     cache_path = Path(cache_dir) / "detection.npz"
     read_handle = cache_reader or open_raw_detection_cache_reader(runner, cache_dir)
     cached: dict[int, OBBResult | None] = {}

@@ -6,7 +6,12 @@ from hydra_suite.core.inference.cache.reuse import (
     get_or_compute_raw,
     open_raw_detection_cache_reader,
 )
-from hydra_suite.core.inference.config import BgSubConfig, InferenceConfig
+from hydra_suite.core.inference.config import (
+    BgSubConfig,
+    InferenceConfig,
+    OBBConfig,
+    OBBDirectConfig,
+)
 from hydra_suite.core.inference.result import OBBResult
 
 
@@ -30,6 +35,56 @@ class _FakeRunner:
     def detect_batch_raw(self, frames, frame_indices=None, roi_mask=None):
         self.calls.append(list(frame_indices))
         return [_make_raw_result(idx) for idx in frame_indices]
+
+
+@pytest.mark.parametrize("source", ["obb", "bgsub"])
+def test_native_geometry_recomputes_instead_of_reusing_polygon_free_raw_cache(
+    tmp_path, source
+):
+    """Export geometry is live-only until ragged polygons become serializable."""
+
+    if source == "obb":
+        config = InferenceConfig(
+            obb=OBBConfig(
+                mode="direct",
+                direct=OBBDirectConfig(model_path="export-segment.pt"),
+                emit_native_geometry=True,
+            )
+        )
+    else:
+        bgsub = BgSubConfig.from_params({"THRESHOLD_VALUE": 25})
+        bgsub.emit_native_geometry = True
+        config = InferenceConfig(obb=None, bgsub=bgsub)
+
+    class _GeometryRunner(_FakeRunner):
+        def __init__(self):
+            super().__init__()
+            self.config = config
+            self._video_sig = ""
+
+        def detect_batch_raw(self, frames, frame_indices=None, roi_mask=None):
+            results = super().detect_batch_raw(
+                frames, frame_indices=frame_indices, roi_mask=roi_mask
+            )
+            for result in results:
+                result.polygons = [
+                    np.array([[0.0, 0.0], [1.0, 0.0], [1.0, 1.0]], dtype=np.float32)
+                ]
+            return results
+
+    runner = _GeometryRunner()
+    frames = [np.zeros((4, 4, 3), dtype=np.uint8)]
+
+    first = get_or_compute_raw(runner, tmp_path, frames, [0])
+    runner.calls.clear()
+    second = get_or_compute_raw(runner, tmp_path, frames, [0])
+
+    # A normal raw cache drops `OBBResult.polygons`; the second call must
+    # still execute the live extractor rather than returning that false hit.
+    assert runner.calls == [[0]]
+    assert first[0].polygons is not None
+    assert second[0].polygons is not None
+    assert not (tmp_path / "detection.npz").exists()
 
 
 def test_get_or_compute_raw_computes_on_empty_cache(tmp_path):
