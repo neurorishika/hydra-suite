@@ -442,3 +442,130 @@ def test_the_row_marks_its_own_scope_so_the_raw_jsonl_is_self_describing():
 
     accumulator.observe(_Outputs())
     assert accumulator.result()["ap_scope"] == "tile"
+
+
+# ---------------------------------------------------------------------------
+# Batch-size alignment: `outputs.output` is per INTERACTIVITY STAGE, not per
+# query. Meta's `SAM3Output` is a `List[List[Dict]]` indexed by
+# stage-then-step (`sam3/model/model_misc.py`, `class SAM3Output`), and
+# `collate_fn_api` builds one `FindStage`/`BatchedFindTarget` per stage --
+# NOT one per datapoint. The batch lives INSIDE the tensors as dim 0
+# (`pred_logits` [B, Q, C], `pred_masks` [B, Q, H, W]).
+#
+# Our tiles all share one `query_processing_order`, so `len(outputs.output)`
+# is 1 for EVERY forward regardless of batch size. At batch 1 that happens to
+# equal the query count, which is exactly why every test above passed while a
+# real batch-8 run recorded
+#   "produced 288 queries but the descriptor plan expects 2304".
+# These tests must therefore be parametric over batch size or they cannot see
+# the bug at all.
+# ---------------------------------------------------------------------------
+
+
+_GRID = 64  # stub mask resolution; RES / _GRID is the extraction scale
+_CELL = 16  # grid cells between adjacent stub objects
+_EXTENT = 13  # object side in grid cells
+
+
+def _stub_batch_stage(mask_stacks, score_lists, presence=0.9):
+    """One SAM3 last-stage dict for a WHOLE batch: [B, Q, ...] tensors."""
+    torch = pytest.importorskip("torch")
+
+    masks = torch.stack(
+        [
+            torch.where(
+                torch.as_tensor(np.asarray(stack)),
+                torch.tensor(5.0),
+                torch.tensor(-5.0),
+            )
+            for stack in mask_stacks
+        ]
+    )
+    logits = torch.stack(
+        [
+            torch.logit(torch.as_tensor(scores, dtype=torch.float32)).reshape(
+                len(scores), 1
+            )
+            for scores in score_lists
+        ]
+    )
+    stage = {"pred_logits": logits, "pred_masks": masks}
+    if presence is not None:
+        stage["presence_logit_dec"] = torch.logit(
+            torch.full((len(mask_stacks), 1), float(presence))
+        )
+    return stage
+
+
+class _StageOutputs:
+    """`SAM3Output`-shaped: one outer entry per stage, each a list of steps."""
+
+    def __init__(self, stage):
+        self.output = [[stage]]
+
+
+def _distinct_object(index):
+    """Grid cell and matching RES-space ground-truth square for one query.
+
+    Every query gets a DIFFERENT location, so a batch iterated in the wrong
+    order scores each prediction against another tile's ground truth and the
+    match fails -- a count-only assertion would not notice.
+    """
+    from hydra_suite.training.sam3_lora.detection_quality import RES
+
+    column = (index % 4) * _CELL
+    row = (index // 4) * _CELL
+    scale = float(RES) / float(_GRID)
+    gt = _square(column * scale, row * scale, size=_EXTENT * scale)
+    mask = np.zeros((1, _GRID, _GRID), dtype=bool)
+    mask[0, row : row + _EXTENT, column : column + _EXTENT] = True
+    return mask, gt
+
+
+@pytest.mark.parametrize(
+    "n_queries,batch_size",
+    [(16, 1), (16, 4), (16, 8), (10, 8)],  # (10, 8) exercises the ragged tail
+)
+def test_predictions_stay_aligned_at_every_batch_size(n_queries, batch_size):
+    pytest.importorskip("torch")
+    from hydra_suite.training.sam3_lora import detection_quality as dq
+
+    objects = [_distinct_object(i) for i in range(n_queries)]
+    descriptors = [_Descriptor([gt], n_neg=0) for _mask, gt in objects]
+    accumulator = dq.DetectionQualityAccumulator(descriptors)
+
+    for start in range(0, n_queries, batch_size):
+        chunk = objects[start : start + batch_size]
+        stage = _stub_batch_stage(
+            [mask for mask, _gt in chunk], [[0.95] for _ in chunk]
+        )
+        accumulator.observe(_StageOutputs(stage))
+
+    stats = accumulator.result()
+    assert "ap_error" not in stats, stats.get("ap_error")
+    assert stats["ap_tiles"] == n_queries
+    # Each query's prediction must land on ITS OWN descriptor: a perfect
+    # one-to-one prediction set can only score ~1.0 if the mapping is right.
+    assert stats["ap"] > 0.99
+
+
+def test_a_short_batch_dimension_is_still_caught_at_batch_eight():
+    """The completeness guard must keep firing when the shortfall is inside
+    the batch dimension rather than in the number of forwards."""
+    pytest.importorskip("torch")
+    from hydra_suite.training.sam3_lora import detection_quality as dq
+
+    objects = [_distinct_object(i) for i in range(8)]
+    descriptors = [_Descriptor([gt], n_neg=0) for _mask, gt in objects]
+    accumulator = dq.DetectionQualityAccumulator(descriptors)
+
+    # Only six of the eight planned queries came back in the one forward.
+    short = objects[:6]
+    accumulator.observe(
+        _StageOutputs(
+            _stub_batch_stage([m for m, _g in short], [[0.95] for _ in short])
+        )
+    )
+    stats = accumulator.result()
+    assert "ap" not in stats
+    assert "6" in stats["ap_error"] and "8" in stats["ap_error"]

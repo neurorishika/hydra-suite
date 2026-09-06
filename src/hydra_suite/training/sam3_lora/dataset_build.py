@@ -35,7 +35,7 @@ from hydra_suite.utils.slice_geometry import (
     clip_polygon_to_tile,
     plan_tiles,
     polygon_area,
-    tile_size_for_mode,
+    resolve_scales,
 )
 
 from ..class_mapping import resolve_dataset_class_names
@@ -69,6 +69,53 @@ class SplitCounts(NamedTuple):
     fragment_annotations: int
     downgraded_tiles: int
     fragment_only_tiles: int
+
+
+_SCALE_COUNTER_KEYS = (
+    "tiles",
+    "annotations",
+    "fragment_annotations",
+    "downgraded_tiles",
+    "fragment_only_tiles",
+    "non_square_tiles",
+)
+
+
+def _log_scale_table(
+    per_scale: dict,
+    non_square_totals: dict,
+    totals: dict,
+) -> None:
+    """Print the realised per-scale table before any GPU time is spent.
+
+    Single-scale builds have no per-scale buckets; they still get the split
+    line, so the anisotropic-edge-tile count (R2) and the seam-downgrade count
+    (R3b) are reported on EVERY path rather than only on the opt-in one.
+    """
+
+    for split_name in ("train", "valid"):
+        buckets = per_scale.get(split_name) or {}
+        split_counts = totals.get(split_name)
+        logger.info(
+            "SAM3 dataset build [%s]: tiles=%d annotations=%d "
+            "downgraded_tiles=%d fragment_only_tiles=%d non_square_tiles=%d",
+            split_name,
+            getattr(split_counts, "tiles", 0),
+            getattr(split_counts, "annotations", 0),
+            getattr(split_counts, "downgraded_tiles", 0),
+            getattr(split_counts, "fragment_only_tiles", 0),
+            int(non_square_totals.get(split_name, 0)),
+        )
+        for group in sorted(buckets):
+            bucket = buckets[group]
+            logger.info(
+                "SAM3 dataset build [%s] %s: %s",
+                split_name,
+                group,
+                " ".join(
+                    f"{key}={int(bucket.get(key, 0))}" for key in _SCALE_COUNTER_KEYS
+                ),
+            )
 
 
 # Explicit negative-prompt tiers (see resolve_negative_prompts): curated last
@@ -285,6 +332,99 @@ def _tile_frame(
             yield (xi0, yi0, xi1, yi1), crop, instances
 
 
+def _median(values: list[float] | tuple[float, ...]) -> float:
+    """Lower-interpolated median, matching ``np.median`` without importing it."""
+    ordered = sorted(float(value) for value in values)
+    middle = len(ordered) // 2
+    if len(ordered) % 2:
+        return ordered[middle]
+    return (ordered[middle - 1] + ordered[middle]) / 2.0
+
+
+def _median_scale(scale_set: list[tuple[int, int]]) -> tuple[int, int]:
+    """The set's median tile size, chosen as an ACTUAL member of the set.
+
+    Averaging two tile sizes would name a scale the build never used; the
+    prefill must be a geometry the artifact was really trained at.
+    """
+    ordered = sorted(scale_set, key=lambda pair: (pair[0] * pair[1], pair))
+    return ordered[(len(ordered) - 1) // 2]
+
+
+def _full_frame_instances(
+    img: np.ndarray, labels_px: list[np.ndarray]
+) -> list[tuple[np.ndarray, bool]]:
+    """The un-tiled arm's instances: every polygon, whole, never a fragment."""
+    instances: list[tuple[np.ndarray, bool]] = []
+    for poly_px in labels_px:
+        if polygon_area(poly_px) <= 1e-6:
+            continue
+        instances.append((np.asarray(poly_px, dtype=np.float32).copy(), False))
+    return instances
+
+
+def _scaled_frame_jobs(
+    img: np.ndarray,
+    labels_px: list[np.ndarray],
+    stem: str,
+    scale_set: list[tuple[int, int]],
+    *,
+    overlap: float,
+    keep_empty_tiles: bool,
+    full_frame_mix: bool,
+) -> Iterator[tuple[str, str, tuple[int, int] | None, np.ndarray, list]]:
+    """Yield ``(file_name, scale_group, tile_px, crop, instances)`` per emission.
+
+    The multi-scale arm only. ``scale_group`` is emitted as DATA on the COCO
+    record (D19); the filename token exists so a filename-only consumer still
+    agrees, and both are produced here from the same tuple so they cannot
+    drift apart.
+
+    ``MAX_TILES_PER_FRAME`` is enforced by ``plan_tiles`` PER SCALE. The YOLO
+    builder swallows that ``ValueError`` and drops the offending scale; SAM3
+    re-raises with the scale named. Silently truncating one scale would leave
+    a dataset that claims a scale set it does not contain -- corrupting
+    exactly the cross-scale comparison this fan-out exists to enable.
+    """
+    for tile_w, tile_h in scale_set:
+        group = f"tile:{tile_w}x{tile_h}"
+        # Stepped by hand rather than a for-loop so the ceiling's ValueError
+        # is re-raised with the scale named while the tiles stay STREAMED
+        # (materializing a scale's tiles would undo this builder's
+        # source-independent heap discipline).
+        tiles = _tile_frame(img, labels_px, tile_w, tile_h, overlap, keep_empty_tiles)
+        tile_idx = 0
+        while True:
+            try:
+                _rect, crop, instances = next(tiles)
+            except StopIteration:
+                break
+            except ValueError as exc:
+                raise ValueError(
+                    f"SAM3 tiling refused at scale {tile_w}x{tile_h} for frame "
+                    f"{stem!r}: {exc}"
+                ) from exc
+            yield (
+                f"{stem}_t{tile_w}x{tile_h}_{tile_idx:04d}.jpg",
+                group,
+                (tile_w, tile_h),
+                crop,
+                instances,
+            )
+            tile_idx += 1
+    if full_frame_mix:
+        instances = _full_frame_instances(img, labels_px)
+        if instances or keep_empty_tiles:
+            height, width = img.shape[:2]
+            yield (
+                f"{stem}_full.jpg",
+                "full",
+                (int(width), int(height)),
+                img,
+                instances,
+            )
+
+
 def build_sam3_coco_dataset(
     source_dir: str,
     out_dir: str,
@@ -387,14 +527,33 @@ def build_sam3_coco_dataset(
         else:
             reference_body_px = 0.0
 
-        tile_w, tile_h = tile_size_for_mode(
+        # The scale SET. ``resolve_scales`` is fed the contract's fractions
+        # DIRECTLY: computing a pixel ratio here and dividing it back out by
+        # an imgsz would reintroduce the 640-vs-1008 denominator confusion
+        # that the 0.055 incident is an instance of.
+        scale_set = resolve_scales(
             geometry_mode=params.geometry_mode,
             imgsz=_SAM3_IMGSZ,
             reference_body_px=reference_body_px,
+            fractions=tuple(params.object_tile_fractions),
             object_tile_fraction=params.object_tile_fraction,
             slice_width=params.slice_width,
             slice_height=params.slice_height,
         )
+        # Fork on set-emptiness, not on len(scale_set): a one-element set that
+        # a user asked for still gets the scale-tagged names, and today's
+        # default takes literally today's path (the Task 1 tree-hash golden is
+        # what proves that claim rather than asserting it).
+        multiscale = bool(params.object_tile_fractions) or bool(params.full_frame_mix)
+        tile_w, tile_h = scale_set[0]
+        # The median, kept ONLY under an explicitly named `prefill_*` key. A
+        # bare collapsed scalar would read as a measurement of "the training
+        # tile size" at every consumer that takes one number.
+        _effective_fractions = tuple(params.object_tile_fractions) or (
+            float(params.object_tile_fraction),
+        )
+        _prefill_fraction = float(_median(sorted(_effective_fractions)))
+        _prefill_tile = _median_scale(scale_set)
 
         # Provenance + drift guard, before a single tile is written. The
         # 0.055 incident was undetectable because the effective geometry's
@@ -413,24 +572,34 @@ def build_sam3_coco_dataset(
             <= 1e-12
             else GeometrySource.EXPLICIT
         )
+        _geometry_values: dict[str, object] = {
+            "geometry_mode": params.geometry_mode,
+            "object_tile_fraction": float(params.object_tile_fraction),
+            "reference_body_px": reference_body_px,
+            "tile_px": [int(tile_w), int(tile_h)],
+            "imgsz": _SAM3_IMGSZ,
+        }
+        _geometry_sources = {
+            "geometry_mode": GeometrySource.EXPLICIT,
+            "object_tile_fraction": _fraction_source,
+            # Measured from this project's own labels, above.
+            "reference_body_px": GeometrySource.CORPUS_DERIVED,
+            "tile_px": GeometrySource.CORPUS_DERIVED,
+            "imgsz": GeometrySource.CONTRACT_DEFAULT,
+        }
+        if multiscale:
+            # The whole set, before a single tile is written: a build that
+            # fans out N-fold must say so where a reader looks first.
+            _geometry_values["object_tile_fractions"] = [
+                float(value) for value in params.object_tile_fractions
+            ]
+            _geometry_values["tile_px_set"] = [[int(w), int(h)] for w, h in scale_set]
+            _geometry_values["full_frame_mix"] = bool(params.full_frame_mix)
+            _geometry_sources["object_tile_fractions"] = GeometrySource.EXPLICIT
+            _geometry_sources["tile_px_set"] = GeometrySource.CORPUS_DERIVED
+            _geometry_sources["full_frame_mix"] = GeometrySource.EXPLICIT
         log_effective_geometry(
-            logger,
-            "SAM3 dataset build",
-            {
-                "geometry_mode": params.geometry_mode,
-                "object_tile_fraction": float(params.object_tile_fraction),
-                "reference_body_px": reference_body_px,
-                "tile_px": [int(tile_w), int(tile_h)],
-                "imgsz": _SAM3_IMGSZ,
-            },
-            {
-                "geometry_mode": GeometrySource.EXPLICIT,
-                "object_tile_fraction": _fraction_source,
-                # Measured from this project's own labels, above.
-                "reference_body_px": GeometrySource.CORPUS_DERIVED,
-                "tile_px": GeometrySource.CORPUS_DERIVED,
-                "imgsz": GeometrySource.CONTRACT_DEFAULT,
-            },
+            logger, "SAM3 dataset build", _geometry_values, _geometry_sources
         )
         if baseline_model_key:
             # Report only. A PREFILL verdict is deliberately NOT adopted here:
@@ -443,9 +612,19 @@ def build_sam3_coco_dataset(
                     {
                         "reference_body_px": reference_body_px,
                         "object_tile_fraction": float(params.object_tile_fraction),
-                        # ``publish_worker`` stamps the manifest's ``tile_px``,
-                        # which is a [w, h] pair -- compare the same shape.
-                        "train_tile_px": [int(tile_w), int(tile_h)],
+                        # STALE-COMMENT FIX: `publish.py:_request_payload`
+                        # COLLAPSES a square `tile_px` pair to a scalar before
+                        # the child ever writes the sidecar, so a published
+                        # single-scale sidecar carries `train_tile_px: 971`, a
+                        # number -- not the [w, h] pair the old comment here
+                        # claimed. The guard reads both shapes (and a set), so
+                        # the pair is still the honest thing to send: it is
+                        # what THIS build used.
+                        "train_tile_px": (
+                            [[int(w), int(h)] for w, h in scale_set]
+                            if multiscale
+                            else [int(tile_w), int(tile_h)]
+                        ),
                     },
                     baseline_label=baseline_model_key,
                 ),
@@ -490,7 +669,13 @@ def build_sam3_coco_dataset(
         )
         database.commit()
 
-        def _build_split(build_root: Path, split_name: str) -> SplitCounts:
+        def _build_split(
+            build_root: Path, split_name: str
+        ) -> tuple[SplitCounts, dict[str, dict[str, int]], int]:
+            # Realised counts PER SCALE. Empty on the single-scale path so the
+            # default manifest gains no key -- the Task 1 golden hashes
+            # `build_manifest.json`, so an unconditional key would break it.
+            per_scale: dict[str, dict[str, int]] = {}
             split_dir = build_root / split_name
             split_dir.mkdir(parents=True, exist_ok=True)
             images_spool = split_dir / ".images.jsonl"
@@ -500,6 +685,18 @@ def build_sam3_coco_dataset(
             crowd_count = 0
             downgraded_tiles = 0
             fragment_only_tiles = 0
+            # R2: a non-square tile gets stretched anisotropically to RESxRES
+            # by `datapoints.py`. Edge tiles are NOT the cause -- tiling is
+            # edge-flushed to full tile size (`slice_geometry._axis_starts`),
+            # so every tile this builder cuts is already tile_w x tile_h.
+            # Non-square tiles instead come from: a requested tile size
+            # clamped down to a smaller frame dimension, a custom
+            # (non-square) slice geometry, or the full-frame arm (whose
+            # "tile" is the frame itself, of arbitrary aspect). Counted on
+            # every path (a single-scale build can hit the clamp too); it
+            # rides on the RETURN summary there, because `build_manifest.json`
+            # is byte-frozen by the Task 1 golden.
+            non_square_tiles = 0
             with (
                 images_spool.open("w", encoding="utf-8") as image_records,
                 annotations_spool.open("w", encoding="utf-8") as annotation_records,
@@ -524,39 +721,80 @@ def build_sam3_coco_dataset(
                         pixels[:, 0] *= int(width)
                         pixels[:, 1] *= int(height)
                         labels_px.append(pixels)
-                    for tile_idx, (_rect, crop, instances) in enumerate(
-                        _tile_frame(
+                    if multiscale:
+                        jobs = _scaled_frame_jobs(
                             image,
                             labels_px,
-                            tile_w,
-                            tile_h,
-                            params.tile_overlap,
-                            params.keep_empty_tiles,
+                            str(stem),
+                            scale_set,
+                            overlap=params.tile_overlap,
+                            keep_empty_tiles=params.keep_empty_tiles,
+                            full_frame_mix=params.full_frame_mix,
                         )
-                    ):
+                    else:
+                        jobs = (
+                            (f"{stem}_tile{tile_idx:03d}.jpg", None, None, crop, insts)
+                            for tile_idx, (_rect, crop, insts) in enumerate(
+                                _tile_frame(
+                                    image,
+                                    labels_px,
+                                    tile_w,
+                                    tile_h,
+                                    params.tile_overlap,
+                                    params.keep_empty_tiles,
+                                )
+                            )
+                        )
+                    for file_name, scale_group, tile_px, crop, instances in jobs:
                         image_id += 1
-                        file_name = f"{stem}_tile{tile_idx:03d}.jpg"
                         if not cv2.imwrite(str(split_dir / file_name), crop):
                             raise RuntimeError(
                                 f"Could not write tile image: {file_name}"
                             )
                         tile_height, tile_width = crop.shape[:2]
+                        record = {
+                            "id": image_id,
+                            "file_name": file_name,
+                            "width": int(tile_width),
+                            "height": int(tile_height),
+                        }
+                        if scale_group is not None:
+                            # DATA, not a filename to be parsed back out (D19).
+                            record["scale_group"] = scale_group
+                            record["tile_px"] = [int(tile_px[0]), int(tile_px[1])]
                         json.dump(
-                            {
-                                "id": image_id,
-                                "file_name": file_name,
-                                "width": int(tile_width),
-                                "height": int(tile_height),
-                            },
+                            record,
                             image_records,
                             separators=(",", ":"),
                         )
                         image_records.write("\n")
+                        is_non_square = int(tile_width) != int(tile_height)
+                        non_square_tiles += int(is_non_square)
                         fragments = sum(1 for _poly, crowd in instances if crowd)
                         if fragments:
                             downgraded_tiles += 1
                             if fragments == len(instances):
                                 fragment_only_tiles += 1
+                        if scale_group is not None:
+                            bucket = per_scale.setdefault(
+                                scale_group,
+                                {
+                                    "tiles": 0,
+                                    "annotations": 0,
+                                    "fragment_annotations": 0,
+                                    "downgraded_tiles": 0,
+                                    "fragment_only_tiles": 0,
+                                    "non_square_tiles": 0,
+                                },
+                            )
+                            bucket["tiles"] += 1
+                            bucket["non_square_tiles"] += int(is_non_square)
+                            bucket["annotations"] += len(instances)
+                            bucket["fragment_annotations"] += fragments
+                            if fragments:
+                                bucket["downgraded_tiles"] += 1
+                                if fragments == len(instances):
+                                    bucket["fragment_only_tiles"] += 1
                         for local_poly, is_crowd in instances:
                             ann_id += 1
                             crowd_count += int(is_crowd)
@@ -589,46 +827,105 @@ def build_sam3_coco_dataset(
             )
             images_spool.unlink()
             annotations_spool.unlink()
-            return SplitCounts(
-                tiles=image_id,
-                annotations=ann_id,
-                fragment_annotations=crowd_count,
-                downgraded_tiles=downgraded_tiles,
-                fragment_only_tiles=fragment_only_tiles,
+            return (
+                SplitCounts(
+                    tiles=image_id,
+                    annotations=ann_id,
+                    fragment_annotations=crowd_count,
+                    downgraded_tiles=downgraded_tiles,
+                    fragment_only_tiles=fragment_only_tiles,
+                ),
+                per_scale,
+                non_square_tiles,
             )
 
         with atomic_output_directory(out_root) as build_root:
-            train_counts = _build_split(build_root, "train")
+            train_counts, train_per_scale, train_non_square = _build_split(
+                build_root, "train"
+            )
             if train_count < frame_count:
-                valid_counts = _build_split(build_root, "valid")
+                valid_counts, valid_per_scale, valid_non_square = _build_split(
+                    build_root, "valid"
+                )
                 validation = "ok"
             else:
                 valid_counts = SplitCounts(0, 0, 0, 0, 0)
+                valid_per_scale = {}
+                valid_non_square = 0
                 validation = "none"
+            # BEFORE any GPU time is spent: what the fan-out actually cost, per
+            # scale. Anisotropic edge tiles and seam downgrades appear in
+            # neither the loss nor any existing artifact, so if this table is
+            # not printed the cost is invisible until after a training run.
+            _log_scale_table(
+                {"train": train_per_scale, "valid": valid_per_scale},
+                {"train": train_non_square, "valid": valid_non_square},
+                {"train": train_counts, "valid": valid_counts},
+            )
 
             manifest_path = build_root / "build_manifest.json"
             fields = {
                 "type": "sam3_coco_tiles",
                 "source": str(source),
                 "created_at": datetime.now().isoformat(timespec="seconds"),
-                "tile_px": [int(tile_w), int(tile_h)],
-                "reference_body_px": reference_body_px,
-                "object_tile_fraction": params.object_tile_fraction,
-                "geometry_mode": params.geometry_mode,
-                "tile_overlap": params.tile_overlap,
-                "prompt": params.prompt,
-                "negative_prompts": negatives,
-                "selected_class": selected_class,
-                "min_retained_area_frac": MIN_RETAINED_AREA_FRAC,
-                # Makes the M2 cost of the fragment policy auditable before any
-                # GPU time is spent: how many tiles gave up their no-object BCE
-                # and false-positive penalty, and how many kept no supervised
-                # positive at all.
-                "fragment_counts": {
-                    "train": train_counts._asdict(),
-                    "valid": valid_counts._asdict(),
-                },
             }
+            if multiscale:
+                # The WHOLE set. The legacy scalars are OMITTED rather than
+                # filled with the median: a median under a measurement's name
+                # reads as "the training tile size" at every downstream
+                # surface. The median still travels, under names that say what
+                # it is.
+                fields.update(
+                    {
+                        "tile_px_set": [[int(w), int(h)] for w, h in scale_set],
+                        "object_tile_fractions": [
+                            float(value) for value in _effective_fractions
+                        ],
+                        "full_frame_mix": bool(params.full_frame_mix),
+                        "scale_range_px": [
+                            int(min(min(pair) for pair in scale_set)),
+                            int(max(max(pair) for pair in scale_set)),
+                        ],
+                        "prefill_tile_px": [
+                            int(_prefill_tile[0]),
+                            int(_prefill_tile[1]),
+                        ],
+                        "prefill_object_tile_fraction": _prefill_fraction,
+                        # Realised, not planned: what the build ACTUALLY wrote
+                        # at each scale, so the fan-out's cost is visible
+                        # before any GPU time is spent.
+                        "scale_counts": {
+                            "train": train_per_scale,
+                            "valid": valid_per_scale,
+                        },
+                    }
+                )
+            else:
+                fields.update(
+                    {
+                        "tile_px": [int(tile_w), int(tile_h)],
+                        "object_tile_fraction": params.object_tile_fraction,
+                    }
+                )
+            fields.update(
+                {
+                    "reference_body_px": reference_body_px,
+                    "geometry_mode": params.geometry_mode,
+                    "tile_overlap": params.tile_overlap,
+                    "prompt": params.prompt,
+                    "negative_prompts": negatives,
+                    "selected_class": selected_class,
+                    "min_retained_area_frac": MIN_RETAINED_AREA_FRAC,
+                    # Makes the M2 cost of the fragment policy auditable before
+                    # any GPU time is spent: how many tiles gave up their
+                    # no-object BCE and false-positive penalty, and how many
+                    # kept no supervised positive at all.
+                    "fragment_counts": {
+                        "train": train_counts._asdict(),
+                        "valid": valid_counts._asdict(),
+                    },
+                }
+            )
             with manifest_path.open("w", encoding="utf-8") as manifest:
                 manifest.write("{")
                 first_field = True
@@ -676,8 +973,16 @@ def build_sam3_coco_dataset(
             "fragment_only_tiles": (
                 train_counts.fragment_only_tiles + valid_counts.fragment_only_tiles
             ),
+            "non_square_tiles": int(train_non_square + valid_non_square),
             "min_retained_area_frac": MIN_RETAINED_AREA_FRAC,
-            "tile_px": [int(tile_w), int(tile_h)],
+            **(
+                {
+                    "tile_px_set": [[int(w), int(h)] for w, h in scale_set],
+                    "prefill_tile_px": [int(_prefill_tile[0]), int(_prefill_tile[1])],
+                }
+                if multiscale
+                else {"tile_px": [int(tile_w), int(tile_h)]}
+            ),
             "negative_prompts": negatives,
             "validation": validation,
             "selected_class": selected_class,

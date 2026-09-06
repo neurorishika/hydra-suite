@@ -82,24 +82,63 @@ class TileCounts:
     missed: int
 
 
-def _last_stage(query_output: Any) -> Any:
-    """The final decoder stage's output dict for one query.
+def _last_stage(stage_output: Any) -> Any:
+    """The final decoder step's output dict for one interactivity stage.
 
-    ``outputs.output`` is one list of stage dicts per query; Meta's
-    postprocessor scores the LAST stage, so that is what is scored here.
+    ``outputs.output`` is Meta's ``SAM3Output``: a ``List[List[Dict]]``
+    indexed by INTERACTIVITY STAGE and then by step -- NOT by query, and NOT
+    by batch element. ``collate_fn_api`` likewise builds one ``FindStage`` and
+    one ``BatchedFindTarget`` per stage, which is why ``cli`` can zip
+    ``outputs.output`` against ``model_input.find_targets``. Our tiles all
+    share one ``query_processing_order``, so this outer list has length 1 for
+    every forward whatever the batch size; the batch lives inside the tensors
+    as dim 0. Meta's postprocessor scores the LAST step, so that is what is
+    scored here.
     """
-    if isinstance(query_output, dict):
-        return query_output
-    stages = list(query_output)
+    if isinstance(stage_output, dict):
+        return stage_output
+    stages = list(stage_output)
     if not stages:
         raise KeyError("SAM3 query output had no decoder stages")
     return stages[-1]
 
 
+def _scored_stage(output: Any) -> Any:
+    """The last-step stage dict, with the keys the scoring needs present.
+
+    Raises ``KeyError`` naming the keys that WERE present when the expected
+    ones are missing -- see ``extract_predictions``.
+    """
+    stage = _last_stage(output)
+    missing = [k for k in (PRED_LOGITS_KEY, PRED_MASKS_KEY) if k not in stage]
+    if missing:
+        raise KeyError(
+            f"SAM3 output is missing {missing}; present keys: {sorted(stage)}"
+        )
+    return stage
+
+
+def batch_size_of(output: Any) -> int:
+    """How many batch elements one stage's output actually carries.
+
+    Read from the tensors rather than assumed from the outer list length,
+    which is per-stage and therefore 1 for every batch size. Reading it here
+    is what lets the accumulator advance its cursor once per QUERY instead of
+    once per forward, and it handles a ragged final batch for free.
+    """
+    return int(_scored_stage(output)[PRED_LOGITS_KEY].shape[0])
+
+
 def extract_predictions(
-    output: Any, *, target_size: int = RES
+    output: Any, *, batch_index: int = 0, target_size: int = RES
 ) -> tuple[list[np.ndarray], list[float], bool]:
     """Predicted polygons (in ``target_size`` space), scores, presence flag.
+
+    ``batch_index`` selects ONE element of the batched stage tensors
+    (``pred_logits`` is ``[B, Q, C]``, ``pred_masks`` ``[B, Q, H, W]``). It is
+    not optional in spirit: hardcoding 0 here silently scored only the first
+    tile of every batch and left the accumulator's cursor 8x short on a
+    batch-8 run.
 
     The third element says whether the presence multiplication was actually
     applied. It is returned rather than swallowed because its absence CHANGES
@@ -113,21 +152,25 @@ def extract_predictions(
     """
     from hydra_suite.core.inference.masks import mask_to_contour
 
-    stage = _last_stage(output)
-    missing = [k for k in (PRED_LOGITS_KEY, PRED_MASKS_KEY) if k not in stage]
-    if missing:
-        raise KeyError(
-            f"SAM3 output is missing {missing}; present keys: {sorted(stage)}"
-        )
+    stage = _scored_stage(output)
     logits = stage[PRED_LOGITS_KEY]
     masks = stage[PRED_MASKS_KEY]
-    scores_t = logits.sigmoid()[0].max(-1).values
+    scores_t = logits.sigmoid()[batch_index].max(-1).values
     presence = stage.get(PRESENCE_KEY)
     presence_used = presence is not None
     if presence_used:
         # A per-image scalar: it rescales every query in the tile equally, so
         # within-tile ranking is unchanged and only absolute thresholds move.
-        scores_t = scores_t * presence.sigmoid().reshape(-1)[0]
+        # Indexed per batch element -- its leading dim is the batch too, and
+        # taking element 0 for all of them would apply one tile's presence to
+        # the whole batch.
+        presence_t = presence.sigmoid()
+        scores_t = (
+            scores_t
+            * presence_t.reshape(int(presence_t.shape[0]), -1)[batch_index].reshape(-1)[
+                0
+            ]
+        )
     # If it is ABSENT, the scores are no longer Meta's postprocessor
     # definition: cross-tile ordering and therefore the sweep counts and AP
     # move, while every number still looks perfectly plausible. A vendor
@@ -140,7 +183,7 @@ def extract_predictions(
     # unacceptable is the definition changing with no trace, and the flag is
     # that trace, in the DATA rather than only in the docs.
     scores_np = scores_t.detach().float().cpu().numpy().reshape(-1)
-    masks_np = masks[0].detach().float().cpu().numpy() > 0.0
+    masks_np = masks[batch_index].detach().float().cpu().numpy() > 0.0
 
     height, width = masks_np.shape[-2:]
     scale = np.asarray(
@@ -268,35 +311,46 @@ class DetectionQualityAccumulator:
         self._presence_used: bool | None = None
 
     def observe(self, outputs: Any) -> None:
-        """Record one batch's per-query outputs, in query order."""
+        """Record one batch's per-query outputs, in query order.
+
+        ``outputs.output`` has ONE entry per interactivity stage, not one per
+        query, so the cursor must advance by the tensors' batch dimension --
+        see ``batch_size_of``. Advancing once per entry made this metric
+        correct only at batch 1: a batch-8 run collected 288 of its 2304
+        queries (all of them element 0 of their batch) and the completeness
+        check below rejected the whole epoch.
+        """
         started = time.perf_counter()
         try:
-            for query_output in outputs.output:
-                if self._cursor >= len(self._plan):
-                    raise RuntimeError(
-                        "SAM3 validation produced more queries "
-                        f"({self._cursor + 1}) than the descriptor plan "
-                        f"({len(self._plan)}); prediction/label alignment "
-                        "cannot be trusted."
-                    )
-                descriptor_index = self._plan[self._cursor]
-                self._cursor += 1
-                if descriptor_index is None:
-                    continue
-                polys, scores, presence_used = extract_predictions(query_output)
-                self._predictions[descriptor_index] = (polys, scores)
-                if self._presence_used is None:
-                    self._presence_used = presence_used
-                    if not presence_used:
-                        emit_log(
-                            "SAM3 validation outputs carry no "
-                            f"{PRESENCE_KEY!r}: AP scores are NOT Meta's "
-                            "postprocessor definition (no presence "
-                            "multiplication). Recorded as "
-                            "ap_presence_used=false; training unaffected."
+            for stage_output in outputs.output:
+                for batch_index in range(batch_size_of(stage_output)):
+                    if self._cursor >= len(self._plan):
+                        raise RuntimeError(
+                            "SAM3 validation produced more queries "
+                            f"({self._cursor + 1}) than the descriptor plan "
+                            f"({len(self._plan)}); prediction/label alignment "
+                            "cannot be trusted."
                         )
-                else:
-                    self._presence_used = self._presence_used and presence_used
+                    descriptor_index = self._plan[self._cursor]
+                    self._cursor += 1
+                    if descriptor_index is None:
+                        continue
+                    polys, scores, presence_used = extract_predictions(
+                        stage_output, batch_index=batch_index
+                    )
+                    self._predictions[descriptor_index] = (polys, scores)
+                    if self._presence_used is None:
+                        self._presence_used = presence_used
+                        if not presence_used:
+                            emit_log(
+                                "SAM3 validation outputs carry no "
+                                f"{PRESENCE_KEY!r}: AP scores are NOT Meta's "
+                                "postprocessor definition (no presence "
+                                "multiplication). Recorded as "
+                                "ap_presence_used=false; training unaffected."
+                            )
+                    else:
+                        self._presence_used = self._presence_used and presence_used
         except Exception as exc:  # noqa: BLE001 - recording must never kill a run
             self._error = f"{type(exc).__name__}: {exc}"
         finally:
