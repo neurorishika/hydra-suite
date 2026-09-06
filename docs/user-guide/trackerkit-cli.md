@@ -44,7 +44,8 @@ run. Rules:
   (else 1, which stays sequential and in-process), and is clamped to the
   number of selected GPUs.
 - A failed video stops new launches; running videos finish. Exit code is 1
-  if any video failed. A per-video table with log paths is printed at the end.
+  if any video failed or the run was cancelled; the per-video table still
+  shows which videos completed.
 - Ctrl-C asks every child to stop cleanly, then terminates stragglers.
 - Per-child logs: `<video dir>/<stem>_logs/<stem>_fanout_<timestamp>.log`.
 - `--threads-per-job N` (opt-in) caps OMP/MKL/OpenBLAS/Numba threads per child.
@@ -53,7 +54,7 @@ run. Rules:
 - Requirements in each child: `conda` on `PATH` for SLEAP pose, and the same
   `HYDRA_DATA_DIR`/`HYDRA_CONFIG_DIR` as the parent (inherited automatically).
 
-The GUI exposes the same feature under **Batch › Run videos in parallel**.
+The GUI exposes the same feature under **Batch › Run videos in parallel (one process per GPU)**.
 
 ## Example: nine-GPU host
 
