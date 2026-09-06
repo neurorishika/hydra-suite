@@ -882,6 +882,7 @@ class IdentityPanel(QWidget):
             # columns in the GUI while the CLI kept the old ones. Cleared on a
             # user model switch, like the scoring_mode pin.
             self._label_override: str | None = None
+            self._label_conflict_logged = False
             self.btn_non_identifying = QPushButton("Non-identifying classes…")
             self.btn_non_identifying.setToolTip(
                 "Classes that do not identify an individual (e.g. 'notag').\n"
@@ -1007,6 +1008,14 @@ class IdentityPanel(QWidget):
                 self._scoring_mode_override = None
                 self._scoring_mode_conflict_logged = False
                 self._label_override = None
+                # Echoed CLI-only keys belong to the model they were saved
+                # against. calibration_temperature in particular OVERRIDES the
+                # artifact's own fitted value (core/inference/config.py
+                # _resolve_cnn_temperature), so carrying it across a model
+                # switch would run the new model at the old one's temperature
+                # while _sync_calibration_status displayed the new model's fit.
+                self._passthrough_cfg = {}
+                self._label_conflict_logged = False
                 # The threshold was pinned for the PREVIOUS model; the newly
                 # chosen one gets to offer its own recommendation.
                 self._confidence_pinned = False
@@ -1041,6 +1050,33 @@ class IdentityPanel(QWidget):
             ):
                 return
             self._main_window._identity_panel._refresh_cnn_classifier_model_rows()
+
+        def _effective_label(self, meta: dict) -> str:
+            """Return the classification label this row should emit.
+
+            Warns once when a pinned session label disagrees with the
+            registry's, matching _effective_scoring_mode: the panel's
+            "Classification label" field shows the REGISTRY's value, so a
+            silent divergence would leave the display and the emitted CSV
+            column names disagreeing with no explanation.
+            """
+            registry_label = str(meta.get("classification_label", "") or "cnn_identity")
+            if not self._label_override:
+                return registry_label
+            if (
+                self._label_override != registry_label
+                and not self._label_conflict_logged
+            ):
+                self._label_conflict_logged = True
+                logger.warning(
+                    "CNN classifier: the loaded session pins label=%r but the "
+                    "model registry records %r; keeping the session's value so "
+                    "its CNN_<label>_* columns stay stable. Re-select the model "
+                    "to adopt the registry's.",
+                    self._label_override,
+                    registry_label,
+                )
+            return self._label_override
 
         def _on_confidence_edited(self, _value: float) -> None:
             """A user edit pins the threshold against model recommendations."""
@@ -1126,9 +1162,7 @@ class IdentityPanel(QWidget):
             meta = self._main_window._identity_panel._cnn_registry_entry(rel_path)
             models_root = get_models_root_directory()
             abs_path = os.path.join(models_root, rel_path)
-            label = self._label_override or str(
-                meta.get("classification_label", "") or "cnn_identity"
-            )
+            label = self._effective_label(meta)
             cnpf = meta.get("class_names_per_factor") or []
             all_labels: list[str] = []
             for factor_labels in cnpf:
@@ -1249,6 +1283,7 @@ class IdentityPanel(QWidget):
             }
             saved_label = str(cfg.get("label", "") or "")
             self._label_override = saved_label or None
+            self._label_conflict_logged = False
             saved_mode = str(cfg.get("scoring_mode", "") or "")
             self._scoring_mode_override = (
                 saved_mode if saved_mode in ("atomic", "per_head_average") else None

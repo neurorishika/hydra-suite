@@ -223,6 +223,48 @@ def test_registry_label_applies_when_the_config_names_none(row):
     assert entry["label"] == "registry_label"
 
 
+def test_user_switching_model_drops_the_passthrough(row, monkeypatch):
+    """A stale calibration_temperature must not follow the user to a new model.
+
+    core/inference/config.py's _resolve_cnn_temperature gives an explicit
+    entry value priority over the artifact's own fitted temperature, so
+    carrying it across a model switch would silently run model B at model A's
+    temperature -- while the panel's calibration status displayed B's fit.
+    """
+    panel = main_window_of(row)
+    monkeypatch.setattr(panel, "_registry_has_cnn_entry", lambda _rel: True)
+    monkeypatch.setattr(row, "_sync_model_ui", lambda: None)
+    monkeypatch.setattr(
+        row._main_window, "_sync_individual_analysis_mode_ui", lambda: None
+    )
+    row.load_from_config(dict(CLI_ONLY, confidence=0.5))
+    assert row._passthrough_cfg
+
+    row.combo_model.addItem("other", "classification/identity/other.json")
+    row._on_model_selected(row.combo_model.count() - 1)
+
+    assert row._passthrough_cfg == {}
+    entry = _to_config_with_stub_model(row)
+    for key in CLI_ONLY:
+        assert key not in entry, f"{key} followed the user to a different model"
+
+
+def test_a_label_conflict_is_logged_once(row, caplog):
+    row.load_from_config({"label": "session_label"})
+    with caplog.at_level("WARNING"):
+        for _ in range(4):
+            row._effective_label({"classification_label": "registry_label"})
+    hits = [r for r in caplog.records if "label" in r.message]
+    assert len(hits) == 1, f"expected one warning, got {len(hits)}"
+
+
+def test_a_matching_label_is_not_logged(row, caplog):
+    row.load_from_config({"label": "registry_label"})
+    with caplog.at_level("WARNING"):
+        row._effective_label({"classification_label": "registry_label"})
+    assert not [r for r in caplog.records if "pins label" in r.message]
+
+
 def test_user_switching_model_drops_the_label_pin(row, monkeypatch):
     panel = main_window_of(row)
     monkeypatch.setattr(panel, "_registry_has_cnn_entry", lambda _rel: True)
