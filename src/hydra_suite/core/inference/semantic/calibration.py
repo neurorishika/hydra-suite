@@ -57,10 +57,13 @@ from .tiling import (
 
 # Refuse to recommend a threshold fitted on fewer matched instances than this.
 MIN_MATCHED_INSTANCES = 20
-# Recall floor a point must clear to be recommendable. NOTE: for curved,
-# elongated animals this floor may be unreachable for SCORING rather than
-# detection reasons -- see the measured containment defect on `_centroid` /
-# `match_one_to_one` below. Do not lower it to compensate; fix the matcher.
+# Recall floor a point must clear to be recommendable. It was previously
+# annotated as possibly unreachable for SCORING rather than detection
+# reasons; the matcher defect responsible has now been fixed (see
+# `representative_point` and `match_one_to_one` below) and the before/after
+# measurement is in tools/sam3_parity/matcher_gate_results.json. The value is
+# UNCHANGED: a measurement is not a reason to move a product requirement, and
+# baking one into a constant is exactly the coupling that hid the defect.
 MIN_RECALL = 0.90
 # Mean match quality a point must clear to be recommendable. An ELIGIBILITY
 # filter in the same spirit as MIN_MATCHED_INSTANCES, not a new objective:
@@ -69,6 +72,18 @@ MIN_MEAN_QUALITY = 0.35
 CONFIDENCE_GRID: tuple[float, ...] = tuple(
     round(float(c), 2) for c in np.arange(0.05, 0.96, 0.05)
 )
+# IoU at which a pair is admissible REGARDLESS of containment -- see
+# `match_one_to_one`. Not a hard gate (nothing is rejected for being below
+# it); a second, independent route to admissibility.
+ADMISSIBLE_IOU = 0.5
+# `cv2.moments` m00 below this is treated as no area at all, so the area
+# centroid is not computed from a near-zero denominator.
+_MIN_MOMENT_AREA = 1e-9
+# Raster budget for the pole-of-inaccessibility fallback, in pixels. A
+# pathological polygon (a label spanning most of a 4500 px frame) must not
+# turn one containment test into a 20 M px allocation; above the budget the
+# fallback declines and `representative_point` drops to its last stage.
+_MAX_RASTER_PX = 4_000_000
 
 
 @dataclass(frozen=True)
@@ -116,27 +131,99 @@ class CalibrationPreviewFrame:
     candidates_by_fraction: dict[float | None, tuple[TileCandidate, ...]]
 
 
-def _centroid(poly: np.ndarray) -> np.ndarray:
-    # KNOWN DEFECT -- measured, not suspected. This is the MEAN OF POLYGON
-    # VERTICES, not the area centroid, and for a curved, elongated, densely
-    # sampled outline it routinely falls OUTSIDE the polygon: measured on a
-    # real ant validation split, 128 of 805 (15.9 %) ground-truth outlines do
-    # not contain their own vertex-mean. `match_one_to_one`'s containment gate
-    # therefore vetoes near-perfect masks (verified case: IoU 0.904, matching
-    # area, claimed by no other label -- scored a MISS). See the consequences
-    # noted on `match_one_to_one` below, and
-    # docs/superpowers/specs/2026-09-05-sam3-spike-parity-measurement-findings.md
-    # for the measurement and the recommended fix (an inside-guaranteed
-    # representative point, or an IoU precondition instead of containment).
-    # NOT fixed there deliberately: it would have changed the metric of a
-    # pre-registered comparison after the result was seen. It needs its own
-    # branch with its own before/after gate.
-    return np.asarray(poly, dtype=np.float64).reshape(-1, 2).mean(axis=0)
-
-
 def _contains(poly: np.ndarray, point: np.ndarray) -> bool:
     contour = np.asarray(poly, dtype=np.float32).reshape(-1, 1, 2)
     return cv2.pointPolygonTest(contour, (float(point[0]), float(point[1])), False) >= 0
+
+
+def _vertex_mean(poly: np.ndarray) -> np.ndarray:
+    """Mean of the polygon's vertices. NOT inside-guaranteed -- see
+    ``representative_point``; retained only as the last-resort branch and
+    for the deterministic distance tie-break, where insideness is
+    irrelevant."""
+    return np.asarray(poly, dtype=np.float64).reshape(-1, 2).mean(axis=0)
+
+
+def _pole_of_inaccessibility(pts: np.ndarray) -> np.ndarray | None:
+    """The interior point furthest from the boundary, or None if unavailable.
+
+    Rasterise-and-distance-transform, rather than an analytic construction:
+    it is exact-enough (one pixel), needs only ``cv2``/``numpy`` (``shapely``
+    is not a dependency of this project), and is correct for crescents, U and
+    S curves, and self-intersecting outlines alike, because ``fillPoly``
+    settles the interior question the same way ``pointPolygonTest`` does.
+
+    DEVIATION worth stating: this rasterises in the polygon's OWN bounding
+    box, not in frame space. Frames here are ~4500 px square while a labelled
+    animal is ~50 px, so a frame-space raster would cost ~20 M px per polygon
+    and per call. The box is also padded by one pixel so the boundary is not
+    clipped by the raster edge, which would otherwise make edge pixels look
+    interior to the distance transform.
+    """
+    if pts.shape[0] < 3:
+        return None
+    lo = np.floor(pts.min(axis=0)) - 1.0
+    hi = np.ceil(pts.max(axis=0)) + 1.0
+    w, h = int(hi[0] - lo[0]) + 1, int(hi[1] - lo[1]) + 1
+    if w < 3 or h < 3 or w * h > _MAX_RASTER_PX:
+        return None
+    mask = np.zeros((h, w), dtype=np.uint8)
+    shifted = np.round(pts - lo).astype(np.int32).reshape(-1, 1, 2)
+    cv2.fillPoly(mask, [shifted], 255)
+    if not mask.any():
+        return None
+    dist = cv2.distanceTransform(mask, cv2.DIST_L2, 3)
+    iy, ix = np.unravel_index(int(np.argmax(dist)), dist.shape)
+    return np.array([float(ix) + lo[0], float(iy) + lo[1]], dtype=np.float64)
+
+
+def representative_point(poly: np.ndarray) -> np.ndarray:
+    """An INSIDE-GUARANTEED point standing in for *poly* in containment tests.
+
+    Replaces a measured defect. The previous implementation returned the
+    MEAN OF POLYGON VERTICES, which for a curved, elongated, densely sampled
+    outline routinely falls OUTSIDE the polygon: measured on a real ant
+    validation split, 128 of 805 (15.9 %) ground-truth outlines did not
+    contain their own vertex-mean, so ``match_one_to_one``'s containment gate
+    vetoed near-perfect masks (verified case: IoU 0.904, matching area,
+    claimed by no other label -- scored a MISS). See
+    docs/superpowers/specs/2026-09-05-sam3-spike-parity-measurement-findings.md
+
+    Three stages, each VERIFIED with the same ``_contains`` predicate the gate
+    itself uses, so the point and the test can never disagree:
+
+    1. the AREA centroid (``cv2.moments``). Correct and cheap for the convex
+       and mildly concave majority. It is *not* sufficient alone -- for a
+       crescent or a U the area centroid also lies outside -- which is why it
+       is verified rather than trusted.
+    2. the pole of inaccessibility (see ``_pole_of_inaccessibility``): the
+       interior point maximising distance to the boundary. Chosen over a
+       scanline midpoint because it is the most robustly interior point
+       available, so it degrades gracefully on thin arcs, and because it is
+       stable under vertex resampling -- a scanline midpoint jumps between
+       lobes when the sampling changes, which would make matching depend on
+       how densely a user's annotation tool emitted points.
+    3. the first vertex, for shapes with no interior at all (zero area, a
+       duplicate-vertex degenerate, a sub-pixel-thin sliver). ``_contains``
+       accepts on-boundary points (``>= 0``), so this is still "inside" by
+       the gate's own definition and never returns a point the gate would
+       then veto.
+    """
+    pts = np.asarray(poly, dtype=np.float64).reshape(-1, 2)
+    if pts.shape[0] == 0:
+        return np.zeros(2, dtype=np.float64)
+    if pts.shape[0] >= 3:
+        m = cv2.moments(pts.astype(np.float32).reshape(-1, 1, 2))
+        if abs(m["m00"]) > _MIN_MOMENT_AREA:
+            centroid = np.array(
+                [m["m10"] / m["m00"], m["m01"] / m["m00"]], dtype=np.float64
+            )
+            if _contains(pts, centroid):
+                return centroid
+        pole = _pole_of_inaccessibility(pts)
+        if pole is not None and _contains(pts, pole):
+            return pole
+    return pts[0].copy()
 
 
 def match_one_to_one(
@@ -148,49 +235,63 @@ def match_one_to_one(
 ) -> list[tuple[int, int]]:
     """Greedy one-to-one pairing by descending match QUALITY.
 
-    Three conditions make a pair admissible:
+    A pair is admissible when it clears the area band and ``min_quality``
+    AND takes either of two independent routes:
 
-    * containment -- the prediction's centroid falls inside the label, or
-      the label's centroid inside the prediction. Stops one oversized blob
-      from claiming its neighbour's label in a dense cluster.
-      **This gate is measurably biased** -- see `_centroid` above: its
-      vertex-mean lies outside 15.9 % (128/805) of real ant outlines. On one
-      held-out split, holding the PREDICTIONS fixed and swapping this matcher
-      for a plain IoU >= 0.5 rule moved recall 0.868 -> 0.962 and extras/tile
-      0.20 -> 0.07; ~65 % of the "extras" it reports are already-labelled
-      animals whose match it vetoed. Two independently trained checkpoints
-      moved together (+9.4 and +8.9 points), which is what a shared harness
-      defect predicts and a model difference does not. Consequence:
-      `MIN_RECALL = 0.90` above may be **unreachable for SCORING rather than
-      detection reasons** for curved animals, and every calibration figure the
-      product has shown for one is biased downward.
-      docs/superpowers/specs/2026-09-05-sam3-spike-parity-measurement-findings.md
-    * the area band, when one is supplied -- see ``shape_prior``.
-    * ``min_quality`` -- a floor on the graded score, so a pair that is
-      technically admissible but plainly not the same object (a mask ~40x
-      the label's area still contains its centroid) is not counted a find.
+    * **containment** -- the prediction's representative point falls inside
+      the label, or the label's inside the prediction. This is what stops one
+      oversized blob from claiming its neighbour's label in a dense cluster,
+      so it is kept, not deleted. What was FIXED is the point it tests: it
+      used to be the mean of polygon vertices, which lies outside 15.9 %
+      (128/805) of real ant outlines and so vetoed near-perfect masks. It is
+      now ``representative_point``, which is inside by construction.
+    * **overlap** -- IoU >= ``ADMISSIBLE_IOU``. Added deliberately, as a
+      SECOND route rather than a replacement, because fixing the point is
+      necessary but measurably not sufficient: on the same held-out split an
+      area-centroid gate reached recall 0.929 while a plain IoU >= 0.5 rule
+      reached 0.962. The residue is real geometry, not a bug -- SAM3 traces
+      legs and antennae, so a correct mask's interior point can sit outside a
+      body-core quad and vice versa, at IoU 0.9. Note what this does NOT do:
+      it never REJECTS a pair for low IoU, so ``shape_prior``'s commitment
+      that overlap enters as a score and not as a hard threshold stands. It
+      only widens admissibility, and widening is safe here because the
+      anti-blob protection comes from the area band and ``min_quality``, not
+      from containment being narrow -- a blob at IoU >= 0.5 with a label is
+      not a blob.
 
     Ranking by quality rather than by centroid distance also fixes cluster
     pairing: the nearest centroid is not always the better fit, and a
     distance-first greedy pass can hand a prediction to the wrong label and
     strand the right one.
+
+    Measured effect of the two changes together, predictions held fixed:
+    see ``tools/sam3_parity/matcher_gate_results.json`` and
+    docs/superpowers/specs/2026-09-05-sam3-spike-parity-measurement-findings.md
     """
-    pred_c = [_centroid(p) for p in pred_polys]
-    label_c = [_centroid(g) for g in label_polys]
+    pred_c = [representative_point(p) for p in pred_polys]
+    label_c = [representative_point(g) for g in label_polys]
+    # The tie-break below is a DISTANCE, not a containment test, so the plain
+    # vertex mean is fine for it and is kept: it is cheap, and changing the
+    # tie-break would perturb pairings for no stated reason.
+    pred_m = [_vertex_mean(p) for p in pred_polys]
+    label_m = [_vertex_mean(g) for g in label_polys]
     admissible = [i for i, p in enumerate(pred_polys) if in_band(p, area_band)]
     pairs: list[tuple[float, int, int]] = []
     for pi in admissible:
         pc = pred_c[pi]
         for gi, gc in enumerate(label_c):
-            if not (_contains(label_polys[gi], pc) or _contains(pred_polys[pi], gc)):
-                continue
+            contained = _contains(label_polys[gi], pc) or _contains(pred_polys[pi], gc)
             quality = match_quality(pred_polys[pi], label_polys[gi])
+            if not contained and (
+                polygon_iou(pred_polys[pi], label_polys[gi]) < ADMISSIBLE_IOU
+            ):
+                continue
             if quality < min_quality:
                 continue
             # Negated so a plain ascending sort puts the BEST pair first,
             # with the centroid distance as a deterministic tie-break.
             pairs.append((-quality, pi, gi))
-    pairs.sort(key=lambda t: (t[0], float(np.hypot(*(pred_c[t[1]] - label_c[t[2]])))))
+    pairs.sort(key=lambda t: (t[0], float(np.hypot(*(pred_m[t[1]] - label_m[t[2]])))))
     used_p: set[int] = set()
     used_g: set[int] = set()
     out: list[tuple[int, int]] = []
