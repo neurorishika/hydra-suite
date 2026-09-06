@@ -55,6 +55,7 @@ def test_input_slots_reuse_matching_batch_and_bound_cache(monkeypatch):
     executor = object.__new__(_BaseDirectOBBExecutor)
     executor.imgsz = 32
     executor._input_buffers = OrderedDict()
+    executor._host_staging_events = {}
     executor._wait_input_reusable = lambda: None
 
     first = executor._input_buffer(2)
@@ -66,6 +67,31 @@ def test_input_slots_reuse_matching_batch_and_bound_cache(monkeypatch):
     # turn a long run into a cache that grows with every observed shape.
     assert len(executor._input_buffers) == 4
     assert len(created) == 12  # two tensors per distinct requested shape
+
+
+def test_input_lru_replaces_autotune_probe_with_selected_production_batch(monkeypatch):
+    created = []
+    monkeypatch.setitem(sys.modules, "torch", _fake_torch(created))
+    executor = object.__new__(_BaseDirectOBBExecutor)
+    executor.imgsz = 32
+    executor._input_buffers = OrderedDict()
+    executor._host_staging_events = {}
+    executor._wait_input_reusable = lambda: None
+
+    for batch in (1, 2, 4, 8):
+        pinned, _ = executor._input_buffer(batch)
+        executor._host_staging_events[id(pinned)] = _Event()
+
+    selected = executor._input_buffer(16)
+    selected_again = executor._input_buffer(16)
+
+    assert selected_again is selected
+    assert 1 not in executor._input_buffers
+    assert tuple(executor._input_buffers) == (2, 4, 8, 16)
+    assert len(executor._input_buffers) == 4
+    # The evicted probe's event is removed with its pinned tensor, preventing
+    # the event registry from outgrowing the bounded buffer cache.
+    assert len(executor._host_staging_events) <= 3
 
 
 def test_dynamic_output_shape_reuses_slot_and_is_bounded(monkeypatch):

@@ -106,36 +106,27 @@ class _BaseDirectOBBExecutor:
         # device-side dependency before overwriting a buffer still read by its
         # private stream.
         self._wait_input_reusable()
-        if len(self._input_buffers) < _MAX_REUSABLE_BATCH_BUFFERS:
-            slot = (
-                torch.empty(
-                    (batch_size, 3, self.imgsz, self.imgsz),
-                    dtype=torch.uint8,
-                    pin_memory=True,
-                ),
-                torch.empty(
-                    (batch_size, 3, self.imgsz, self.imgsz),
-                    dtype=torch.float32,
-                    device="cuda:0",
-                ),
-            )
-            self._input_buffers[batch_size] = slot
-        else:
-            # Do not evict a tensor whose raw pointer may still be owned by a
-            # foreign execution stream.  Rare shapes beyond the bounded working
-            # set use an uncached exact slot; the cache itself remains bounded.
-            slot = (
-                torch.empty(
-                    (batch_size, 3, self.imgsz, self.imgsz),
-                    dtype=torch.uint8,
-                    pin_memory=True,
-                ),
-                torch.empty(
-                    (batch_size, 3, self.imgsz, self.imgsz),
-                    dtype=torch.float32,
-                    device="cuda:0",
-                ),
-            )
+        if len(self._input_buffers) >= _MAX_REUSABLE_BATCH_BUFFERS:
+            _, evicted = self._input_buffers.popitem(last=False)
+            # GPU input tensors have been record_stream()'d by TensorRT, so
+            # PyTorch's allocator retains their device storage safely. Pinned
+            # host tensors do not have that allocator contract: explicitly
+            # fence their final H2D use before releasing the staging slot.
+            self._wait_host_staging_reusable(evicted[0])
+            self._host_staging_events.pop(id(evicted[0]), None)
+        slot = (
+            torch.empty(
+                (batch_size, 3, self.imgsz, self.imgsz),
+                dtype=torch.uint8,
+                pin_memory=True,
+            ),
+            torch.empty(
+                (batch_size, 3, self.imgsz, self.imgsz),
+                dtype=torch.float32,
+                device="cuda:0",
+            ),
+        )
+        self._input_buffers[batch_size] = slot
         return slot
 
     def _wait_input_reusable(self) -> None:
