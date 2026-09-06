@@ -175,13 +175,19 @@ Its entire effect is on the recommendation:
 | justification reported | F1 0.9937, 0.50 s/frame | recall 0.9875, mean quality 0.8231, F1 0.9937 *(reported, not optimised)*, 0.50 s/frame |
 
 **Both rules pick the same candidate on this synthetic set.** That is stated plainly
-because it is a limitation, not a result: the six synthetic operating points were
+because it is a limitation, not a result: the five synthetic operating points were
 constructed (in Task 3) to exercise the *legacy* rule's Pareto/F1-tolerance/fastest
 tie-break, and they happen not to separate the two rules. What the gate does show is
 that the rule id, the eligibility criteria, and the reported justification all changed
 together, and that the new rule's floors admit the candidate rather than refusing it.
-It does **not** show a case where recall-first and F1-balanced disagree. Constructing
-such a case would require touching the frozen corpus.
+It does **not** show a case where recall-first and F1-balanced disagree on THIS
+corpus. Constructing such a case here would require touching the frozen corpus, but
+the disagreement itself is separately and provably live: an independent standing
+test, `tests/test_direct_calibration.py:126`
+(`test_f1_no_longer_influences_selection`), asserts the two rules pick different
+points at equal recall -- F1 0.741 vs 0.952, with recall-first choosing the cheaper,
+lower-F1 point. So the limitation is that this particular synthetic gate does not
+exercise that disagreement, not that the disagreement is untested.
 
 One deliberate construction change on the after side: `generate_after.py` seeds
 `mean_quality` onto the synthetic scores (perturbed in lockstep with `mean_iou`, as
@@ -200,7 +206,7 @@ Read this before quoting any number above.
    specific mechanisms fire. It is **not** organic sweep output from a real model on
    real frames. It demonstrates *mechanism*; it does **not** estimate effect size on
    real data. "Recall 0.9363 -> 0.9625" is a property of this file, not of any dataset.
-2. **The six `DirectCalibrationPoint` rows driving the recommender are synthetic.**
+2. **The five `DirectCalibrationPoint` rows driving the recommender are synthetic.**
    There is no model, no confidence axis, no measured wall-clock. The timings
    (0.05–0.90 s/frame) are invented to create a Pareto frontier.
 3. **No model was ever run.** No `ultralytics`, no inference, at any stage.
