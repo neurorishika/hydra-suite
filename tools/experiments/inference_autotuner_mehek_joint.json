@@ -50,6 +50,22 @@
       "config": {"detection_batch_size": 1, "pipeline_depth": 1, "pose_batch_size": 4, "headtail_batch_size": 4}
     },
     {
+      "label": "ant-pose-head4-d2",
+      "config_path": "../equivalence/fixtures/configs/ant_pose_headtail.json",
+      "video_path": "../equivalence/fixtures/clips/ant_pose_headtail.mp4",
+      "skeleton_path": "../equivalence/fixtures/ooceraea_biroi.json",
+      "runtime": "gpu",
+      "config": {"detection_batch_size": 1, "pipeline_depth": 2, "pose_batch_size": 25, "headtail_batch_size": 4}
+    },
+    {
+      "label": "ant-pose-pose4-head4-d2",
+      "config_path": "../equivalence/fixtures/configs/ant_pose_headtail.json",
+      "video_path": "../equivalence/fixtures/clips/ant_pose_headtail.mp4",
+      "skeleton_path": "../equivalence/fixtures/ooceraea_biroi.json",
+      "runtime": "gpu",
+      "config": {"detection_batch_size": 1, "pipeline_depth": 2, "pose_batch_size": 4, "headtail_batch_size": 4}
+    },
+    {
       "label": "ant-identity-manual-baseline",
       "config_path": "../equivalence/fixtures/configs/ant_cnn_identity.json",
       "video_path": "../equivalence/fixtures/clips/ant_cnn_identity.mp4",
@@ -64,6 +80,22 @@
       "skeleton_path": "../equivalence/fixtures/ooceraea_biroi.json",
       "runtime": "gpu",
       "config": {"detection_batch_size": 1, "pipeline_depth": 1, "pose_batch_size": 4, "headtail_batch_size": 4, "cnn_batch_size": 8}
+    },
+    {
+      "label": "ant-identity-head4-d2",
+      "config_path": "../equivalence/fixtures/configs/ant_cnn_identity.json",
+      "video_path": "../equivalence/fixtures/clips/ant_cnn_identity.mp4",
+      "skeleton_path": "../equivalence/fixtures/ooceraea_biroi.json",
+      "runtime": "gpu",
+      "config": {"detection_batch_size": 1, "pipeline_depth": 2, "pose_batch_size": 25, "headtail_batch_size": 4, "cnn_batch_size": 25}
+    },
+    {
+      "label": "ant-identity-head4-cnn8-d2",
+      "config_path": "../equivalence/fixtures/configs/ant_cnn_identity.json",
+      "video_path": "../equivalence/fixtures/clips/ant_cnn_identity.mp4",
+      "skeleton_path": "../equivalence/fixtures/ooceraea_biroi.json",
+      "runtime": "gpu",
+      "config": {"detection_batch_size": 1, "pipeline_depth": 2, "pose_batch_size": 25, "headtail_batch_size": 4, "cnn_batch_size": 8}
     }
   ]
 }
