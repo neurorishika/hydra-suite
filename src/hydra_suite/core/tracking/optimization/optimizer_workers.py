@@ -49,6 +49,7 @@ from hydra_suite.core.tracking.arenas import (
 from hydra_suite.core.tracking.optimization.detection_config import (
     inference_config_for_optimizer_params,
 )
+from hydra_suite.core.tracking.optimization.production_replay import cache_directory
 
 logger = logging.getLogger(__name__)
 
@@ -319,8 +320,6 @@ def run_tracking_preview(
     to this function and wires ``frame_cb``/``stop_check`` to its own
     signal/flag.
     """
-    from pathlib import Path
-
     cap = cv2.VideoCapture(video_path)
     # Open the InferenceRunner detection cache read-only. This handle
     # must never have close() called on it: DetectionCacheHandle.close()
@@ -329,7 +328,7 @@ def run_tracking_preview(
     cfg = inference_config_for_optimizer_params(params)
     caches = _open_caches(
         cfg,
-        Path(detection_cache_path),
+        cache_directory(detection_cache_path),
         video_signature(video_path),
         params.get("ROI_MASK", None),
         read_only=True,

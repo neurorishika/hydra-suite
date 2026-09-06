@@ -97,7 +97,11 @@ def cache_directory(cache_path: str | Path) -> Path:
     """Return the InferenceRunner cache directory for a dir or member path."""
 
     path = Path(cache_path)
-    return path.parent if path.name == "detection.npz" else path
+    # Normal TrackerKit production runs retain ``detection.npz`` as their
+    # artifact path. Existing cache members other than that canonical name are
+    # also safe to normalize; a non-existent optimizer build target remains a
+    # directory so it can be created by ``InferenceRunner``.
+    return path.parent if path.name == "detection.npz" or path.is_file() else path
 
 
 def trajectories_to_positions(

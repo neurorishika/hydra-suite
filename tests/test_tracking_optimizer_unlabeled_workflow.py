@@ -1,5 +1,7 @@
 from __future__ import annotations
 
+from pathlib import Path
+
 import numpy as np
 
 from hydra_suite.core.tracking.optimization import optimizer as optimizer_module
@@ -116,6 +118,47 @@ def test_out_of_range_current_value_is_not_clamped_into_seed():
     core.base_params["W_POSITION"] = 99.0
 
     assert "W_POSITION" not in core._build_seed_trial()
+
+
+def test_seed_and_optuna_candidates_are_quantized_before_evaluation() -> None:
+    core = _optimizer()
+    core.base_params["W_POSITION"] = 1.2345
+    core.tuning_config = {
+        "W_POSITION": True,
+        "KALMAN_DAMPING": True,
+        "MAX_DISTANCE_MULTIPLIER": True,
+    }
+
+    class _Trial:
+        def suggest_float(self, name, _low, _high, *, log=False):
+            assert log is False
+            return {
+                "W_POSITION": 1.2345,
+                "KALMAN_DAMPING": 0.91234,
+                "MAX_DISTANCE_MULTIPLIER": 1.2345,
+            }[name]
+
+    assert core._build_seed_trial()["W_POSITION"] == 1.23
+    assert core._suggest_trial_params(_Trial(), scaled_body_size=10.0) == {
+        "W_POSITION": 1.23,
+        "KALMAN_DAMPING": 0.912,
+        "MAX_DISTANCE_MULTIPLIER": 1.23,
+        "MAX_DISTANCE_THRESHOLD": 12.3,
+    }
+
+
+def test_optimizer_normalizes_detection_cache_member_path(tmp_path) -> None:
+    cache_member = tmp_path / "cache" / "detection.npz"
+    core = TrackingOptimizerCore(
+        "clip.mp4",
+        str(cache_member),
+        0,
+        1,
+        {"MAX_TARGETS": 1},
+        {},
+    )
+
+    assert Path(core.detection_cache_path) == cache_member.parent
 
 
 def test_short_ranges_explicitly_keep_baseline_without_heldout_claim():

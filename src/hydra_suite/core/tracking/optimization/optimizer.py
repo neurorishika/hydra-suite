@@ -49,8 +49,14 @@ from hydra_suite.core.tracking.arenas import (
 from hydra_suite.core.tracking.optimization.detection_config import (
     inference_config_for_optimizer_params,
 )
+from hydra_suite.core.tracking.optimization.parameter_contract import (
+    PARAM_RANGES,
+    quantize_tracking_autotune_params,
+    quantize_tracking_autotune_value,
+)
 from hydra_suite.core.tracking.optimization.production_replay import (
     ProductionReplayEvaluator,
+    cache_directory,
     sanitize_replay_tuning_config,
 )
 from hydra_suite.core.tracking.optimization.unlabeled_scoring import (
@@ -447,23 +453,9 @@ def _compute_composite_score(
     return composite, sub_scores
 
 
-# Canonical search-space bounds — module-level so they can be imported externally.
-_PARAM_RANGES: Dict[str, tuple] = {
-    "YOLO_CONFIDENCE_THRESHOLD": ("float", 0.01, 1.0),
-    "YOLO_IOU_THRESHOLD": ("float", 0.01, 1.0),
-    "MAX_DISTANCE_MULTIPLIER": ("float", 0.1, 20.0),
-    "KALMAN_NOISE_COVARIANCE": ("log_float", 0.0001, 1.0),
-    "KALMAN_MEASUREMENT_NOISE_COVARIANCE": ("log_float", 0.0001, 1.0),
-    "W_POSITION": ("float", 0.0, 10.0),
-    "W_ORIENTATION": ("float", 0.0, 10.0),
-    "W_AREA": ("float", 0.0, 2.0),
-    "W_ASPECT": ("float", 0.0, 10.0),
-    "KALMAN_DAMPING": ("float", 0.5, 0.999),
-    "KALMAN_LONGITUDINAL_NOISE_MULTIPLIER": ("float", 0.1, 20.0),
-    "KALMAN_INITIAL_VELOCITY_RETENTION": ("float", 0.0, 1.0),
-    "LOST_THRESHOLD_FRAMES": ("int", 2, 25),
-    "KALMAN_MATURITY_AGE": ("int", 1, 20),
-}
+# Backwards-compatible module export. The typed lower-layer parameter contract
+# is the source of truth for bounds and Qt-representable precision.
+_PARAM_RANGES: Dict[str, tuple] = dict(PARAM_RANGES)
 
 _UNLABELED_METRIC_SPECS = (
     MetricSpec("cycle_loss", MetricDirection.MINIMIZE),
@@ -575,7 +567,11 @@ class TrackingOptimizerCore:
         self._result_cb = result_cb
         self._error_cb = error_cb
         self.video_path = video_path
-        self.detection_cache_path = detection_cache_path
+        # TrackerKit historically stores the member file from a production
+        # cache (``.../detection.npz``), whereas optimizer/preview readers
+        # consume the cache directory. Normalize the public boundary once so
+        # all core callers support either valid form.
+        self.detection_cache_path = str(cache_directory(detection_cache_path))
         self.start_frame = start_frame
         self.end_frame = end_frame
         self.base_params = base_params
@@ -653,9 +649,9 @@ class TrackingOptimizerCore:
     def _open_and_validate_cache(self) -> bool:
         """Open the InferenceRunner detection cache and validate compatibility.
 
-        ``self.detection_cache_path`` is the cache **directory** written by
-        ``DetectionCacheBuildWorker``. The handle is opened read-only here: it
-        must never have ``close()`` called on it, because
+        ``self.detection_cache_path`` is normalized to the cache **directory**
+        written by ``DetectionCacheBuildWorker``. The handle is opened
+        read-only here: it must never have ``close()`` called on it, because
         ``DetectionCacheHandle.close()`` flushes its (empty, since we never
         write) buffer and would clobber the on-disk cache with zero frames.
 
@@ -793,7 +789,13 @@ class TrackingOptimizerCore:
                 continue
             ptype, low, high = self._search_range(key)
             raw = self.base_params.get(key, self._SEED_DEFAULTS.get(key, low))
-            value = int(raw) if ptype == "int" else float(raw)
+            try:
+                value = quantize_tracking_autotune_value(key, raw)
+            except ValueError:
+                # The exact baseline is evaluated separately. An invalid
+                # external production value must not be silently rounded into
+                # a different seed candidate.
+                continue
             if low <= value <= high and not (ptype == "log_float" and value <= 0):
                 seed_params[key] = value
         return seed_params
@@ -834,7 +836,7 @@ class TrackingOptimizerCore:
                 center = float(base_val) if base_val is not None else (low + high) / 2.0
                 sigma = scale * (high - low)
                 pt[key] = int(np.clip(round(rng.normal(center, sigma)), low, high))
-        return pt
+        return quantize_tracking_autotune_params(pt)
 
     def _random_from_ranges(self, rng) -> dict:
         """Uniform-random point across the full search space (used for plateau restarts)."""
@@ -849,7 +851,7 @@ class TrackingOptimizerCore:
                 pt[key] = float(rng.uniform(low, high))
             else:  # int
                 pt[key] = int(rng.integers(low, high + 1))
-        return pt
+        return quantize_tracking_autotune_params(pt)
 
     def _suggest_trial_params(self, trial, scaled_body_size: float) -> Dict[str, Any]:
         """Use the Optuna trial to suggest values for all enabled parameters."""
@@ -868,6 +870,11 @@ class TrackingOptimizerCore:
                 trial_params[name] = trial.suggest_float(
                     name, float(low), float(high), log=ptype == "log_float"
                 )
+
+        # Every proposal is evaluated at the same decimal precision TrackerKit
+        # can later write into its QDoubleSpinBoxes. Derive the pixel threshold
+        # only after canonicalizing the body-length multiplier.
+        trial_params = quantize_tracking_autotune_params(trial_params)
 
         # Derived parameter: MAX_DISTANCE_THRESHOLD from multiplier
         if "MAX_DISTANCE_MULTIPLIER" in trial_params:
