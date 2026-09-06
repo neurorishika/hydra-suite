@@ -453,6 +453,11 @@ class Sam3TrainingPanel(QWidget):
         self.chk_adapt_mask_decoder = QCheckBox("Mask decoder")
         # Headless-only scope; see the params builder for why it has no widget.
         self._adapt_scoring_head = False
+        # Multi-scale tiling has no widget yet (D16 is open, so the panel must
+        # not imply a recommended set). Carried through verbatim so loading a
+        # hand-written multi-scale spec is not silently reset to single-scale.
+        self._object_tile_fractions: tuple[float, ...] = ()
+        self._full_frame_mix = False
         for chk in (
             self.chk_adapt_vision_encoder,
             self.chk_adapt_text_encoder,
@@ -556,6 +561,8 @@ class Sam3TrainingPanel(QWidget):
             # the round-trip so loading a spec that enables it -- e.g. one
             # written by hand for that retrain -- is not silently reset here.
             adapt_scoring_head=self._adapt_scoring_head,
+            object_tile_fractions=self._object_tile_fractions,
+            full_frame_mix=self._full_frame_mix,
             geometry_mode=self.geometry_mode_combo.currentText(),
             object_tile_fraction=self.object_tile_fraction_spin.value(),
             slice_width=self.slice_width_spin.value(),
@@ -598,6 +605,10 @@ class Sam3TrainingPanel(QWidget):
         self.chk_adapt_detr_decoder.setChecked(p.adapt_detr_decoder)
         self.chk_adapt_mask_decoder.setChecked(p.adapt_mask_decoder)
         self._adapt_scoring_head = bool(p.adapt_scoring_head)
+        self._object_tile_fractions = tuple(
+            float(value) for value in p.object_tile_fractions
+        )
+        self._full_frame_mix = bool(p.full_frame_mix)
         idx = self.geometry_mode_combo.findText(p.geometry_mode)
         if idx >= 0:
             self.geometry_mode_combo.setCurrentIndex(idx)

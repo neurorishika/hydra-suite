@@ -17,16 +17,20 @@ interventions on purpose: it was previously called
 from __future__ import annotations
 
 import json
-import math
 import os
-import random
-import re
 import sys
-from collections import defaultdict
 from pathlib import Path
-from typing import Any, Iterator, Sequence
+from typing import Any, Sequence
 
-_TILE_NAME = re.compile(r"_t(?P<width>\d+)x(?P<height>\d+)_\d+$")
+# Promoted to the shared module (Task 5): nothing in these three is
+# Ultralytics-specific, and the SAM3 sidecar needs them. Re-exported here so
+# every existing caller and monkeypatch target keeps working.
+from hydra_suite.training.scale_balance import (  # noqa: F401
+    ScaleGroupedBatchSampler,
+    scale_group_for_path,
+    scale_group_weights,
+)
+
 _WEIGHT_KEY = "hydra_sahi_scale_loss_weight"
 _PATCH_ATTR = "_hydra_sahi_scale_balance_original"
 
@@ -104,93 +108,6 @@ def _ddp_opt_out_selected() -> bool:
         "false",
         "no",
     }
-
-
-def scale_group_for_path(path: str | Path) -> str:
-    """Return the emitted sliced-dataset scale group for one image path."""
-
-    stem = Path(path).stem
-    if stem.endswith("_full"):
-        return "full"
-    match = _TILE_NAME.search(stem)
-    if match:
-        return f"tile:{match.group('width')}x{match.group('height')}"
-    return "other"
-
-
-def scale_group_weights(
-    image_paths: Sequence[str | Path], *, power: float
-) -> tuple[list[str], dict[str, float]]:
-    """Return each image's group and normalized inverse-count group weights.
-
-    Full-frame examples remain at weight one, preserving their configured mix.
-    Tile groups use ``(mean_count / group_count) ** power``; ``power=1``
-    gives exact group balance and ``0.5`` gives square-root balancing.
-    """
-
-    bounded_power = min(1.0, max(0.0, float(power)))
-    groups = [scale_group_for_path(path) for path in image_paths]
-    counts: dict[str, int] = defaultdict(int)
-    for group in groups:
-        if group.startswith("tile:"):
-            counts[group] += 1
-    if not counts:
-        return groups, {group: 1.0 for group in set(groups)}
-    mean_count = sum(counts.values()) / len(counts)
-    weights = {
-        group: (mean_count / count) ** bounded_power for group, count in counts.items()
-    }
-    weights.update({"full": 1.0, "other": 1.0})
-    return groups, weights
-
-
-class ScaleGroupedBatchSampler:
-    """Shuffle homogeneous scale batches while yielding every index once/epoch."""
-
-    def __init__(
-        self,
-        groups: Sequence[str],
-        *,
-        batch_size: int,
-        seed: int,
-        drop_last: bool = False,
-    ) -> None:
-        self._groups = list(groups)
-        self._batch_size = max(1, int(batch_size))
-        self._seed = int(seed)
-        self._drop_last = bool(drop_last)
-        self._epoch = 0
-
-    def set_epoch(self, epoch: int) -> None:
-        """Set a deterministic shuffle epoch (matching PyTorch samplers)."""
-
-        self._epoch = int(epoch)
-
-    def __len__(self) -> int:
-        by_group: dict[str, int] = defaultdict(int)
-        for group in self._groups:
-            by_group[group] += 1
-        if self._drop_last:
-            return sum(count // self._batch_size for count in by_group.values())
-        return sum(math.ceil(count / self._batch_size) for count in by_group.values())
-
-    def __iter__(self) -> Iterator[list[int]]:
-        rng = random.Random(self._seed + self._epoch)
-        by_group: dict[str, list[int]] = defaultdict(list)
-        for index, group in enumerate(self._groups):
-            by_group[group].append(index)
-        batches: list[list[int]] = []
-        for indices in by_group.values():
-            rng.shuffle(indices)
-            stop = len(indices) - (len(indices) % self._batch_size)
-            if not self._drop_last:
-                stop = len(indices)
-            for start in range(0, stop, self._batch_size):
-                batch = indices[start : start + self._batch_size]
-                if len(batch) == self._batch_size or not self._drop_last:
-                    batches.append(batch)
-        rng.shuffle(batches)
-        yield from batches
 
 
 def _balance_settings_from_argv(argv: Sequence[str]) -> dict[str, float] | None:

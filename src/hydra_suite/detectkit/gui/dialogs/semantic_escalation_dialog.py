@@ -25,7 +25,10 @@ from PySide6.QtWidgets import (
     QWidget,
 )
 
-from hydra_suite.core.inference.geometry_drift import compare_geometry_value
+from hydra_suite.core.inference.geometry_drift import (
+    compare_geometry_value,
+    stamped_object_tile_fraction,
+)
 from hydra_suite.core.inference.semantic.checkpoints import (
     CHECKPOINT_SIZE_GB,
     available_models,
@@ -374,7 +377,10 @@ class SemanticEscalationDialog(BaseDialog):
         prompt = meta.get("prompt")
         if prompt:
             self._prompt.setText(str(prompt))
-        fraction = meta.get("object_tile_fraction")
+        # Multi-scale artifacts omit the bare key and stamp their median as
+        # `prefill_object_tile_fraction`; the shared reader accepts both, so a
+        # multi-scale model prefills its own median instead of nothing.
+        fraction = stamped_object_tile_fraction(meta)
         if fraction is not None:
             try:
                 self._tile_fraction.setValue(float(fraction))

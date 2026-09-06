@@ -30,6 +30,7 @@ from hydra_suite.runtime.sam3_checkpoint_guard import (
 )
 from hydra_suite.utils.sam3_constants import PREDICTOR_IMGSZ
 
+from .dataloader import read_sam3_scale_grouping_stamp
 from .lora import (
     _validated_adapter_pairs,
     adapter_touched_keys,
@@ -41,6 +42,59 @@ logger = logging.getLogger(__name__)
 
 _RUN_ID = re.compile(r"[A-Za-z0-9][A-Za-z0-9_.-]{0,127}\Z")
 _ATTEMPT_ID = re.compile(r"[0-9a-f]{32}\Z")
+
+
+def _scale_grouping_metadata(run_dir: "Path | None") -> dict[str, Any]:
+    """The REALISED scale-grouping block for the sidecar, or {} when unknown.
+
+    `build_manifest.json` only ever records what the build REQUESTED (the
+    dataset's tile geometry); it cannot say whether THIS run actually batched
+    scale-grouped, because that decision is made at train time
+    (`scale_grouping_decision`) and only the run directory's
+    `hydra_sam3_scale_grouping.json` stamp -- written on BOTH arms -- knows
+    the answer. Mirrors `service.apply_realised_balance_stamp`'s Ultralytics
+    precedent: what lands here is what the run REALISED, never what it
+    requested to."""
+
+    if run_dir is None:
+        return {}
+    stamp = read_sam3_scale_grouping_stamp(run_dir)
+    if stamp is None:
+        return {}
+    applied = stamp.get("applied") or {}
+    return {
+        "scale_grouped_batching": {
+            "requested": bool(
+                (stamp.get("requested") or {}).get("scale_grouped_batching", False)
+            ),
+            "applied": bool(applied.get("scale_grouped_batching", False)),
+            "reason": str(applied.get("reason", "")),
+            "group_counts": dict(applied.get("group_counts") or {}),
+        }
+    }
+
+
+def _scale_metadata(
+    build_manifest: dict[str, Any], run_dir: "Path | None" = None
+) -> dict[str, Any]:
+    """The trained-geometry block for the sidecar, single- or multi-scale."""
+    scale_set = build_manifest.get("tile_px_set")
+    if not scale_set:
+        return {
+            "train_tile_px": build_manifest.get("tile_px"),
+            "object_tile_fraction": build_manifest.get("object_tile_fraction"),
+        }
+    return {
+        "train_tile_px_set": scale_set,
+        "object_tile_fractions": build_manifest.get("object_tile_fractions"),
+        "full_frame_mix": bool(build_manifest.get("full_frame_mix")),
+        "scale_range_px": build_manifest.get("scale_range_px"),
+        "prefill_train_tile_px": build_manifest.get("prefill_tile_px"),
+        "prefill_object_tile_fraction": build_manifest.get(
+            "prefill_object_tile_fraction"
+        ),
+        **_scale_grouping_metadata(run_dir),
+    }
 
 
 def stripped_keys(state_dict: dict[str, Any]) -> list[str]:
@@ -264,9 +318,16 @@ def publish_sam3_artifact(
             "adapted_modules": adapted_modules,
             "adapter_trainable_params": adapter_trainable_params,
             "prompt": getattr(params, "prompt", ""),
-            "train_tile_px": build_manifest.get("tile_px"),
+            # Single-scale keeps the exact legacy shape (a scalar
+            # `train_tile_px`, which is what both already-published
+            # checkpoints carry). A multi-scale artifact stamps the WHOLE set
+            # and omits the bare scalars, carrying its median only under
+            # explicitly-named `prefill_*` keys -- read back by
+            # `geometry_drift.stamped_tile_px_set` /
+            # `stamped_object_tile_fraction`, which accept both shapes so no
+            # existing sidecar stops loading.
+            **_scale_metadata(build_manifest, Path(adapters_path).parent),
             "reference_body_px": build_manifest.get("reference_body_px"),
-            "object_tile_fraction": build_manifest.get("object_tile_fraction"),
             "imgsz": PREDICTOR_IMGSZ,
             "stripped_keys": stripped_keys(merged),
             "tuned_fingerprints": tuned_fingerprints,

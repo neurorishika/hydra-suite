@@ -371,8 +371,75 @@ def _request_payload(
     if prompt_error is not None:
         raise ValueError(f"SAM3 publish prompt {prompt_error}")
 
-    geometry: dict[str, int | float | None] = {}
-    for field in ("tile_px", "reference_body_px", "object_tile_fraction"):
+    geometry: dict[str, Any] = {}
+    # The multi-scale block. Carried through WHOLE and validated by shape --
+    # never collapsed to a median here. A median under a measurement's name is
+    # how a scale set silently becomes "the training tile size" downstream;
+    # the builder already emits its median under an explicitly-named
+    # `prefill_*` key, and that name travels with it.
+    scale_set = build_manifest.get("tile_px_set")
+    if scale_set is not None:
+        if not isinstance(scale_set, (list, tuple)) or not scale_set:
+            raise ValueError(
+                "SAM3 publish geometry 'tile_px_set' must be a non-empty list "
+                f"of [width, height] pairs; got {scale_set!r}"
+            )
+        pairs: list[list[float]] = []
+        for entry in scale_set:
+            if (
+                not isinstance(entry, (list, tuple))
+                or len(entry) != 2
+                or any(
+                    isinstance(v, bool) or not isinstance(v, (int, float))
+                    for v in entry
+                )
+                or any(not math.isfinite(float(v)) or float(v) <= 0 for v in entry)
+            ):
+                raise ValueError(
+                    "SAM3 publish geometry 'tile_px_set' entries must each be a "
+                    f"[width, height] pair of positive numbers; got {entry!r}"
+                )
+            pairs.append([entry[0], entry[1]])
+        geometry["tile_px_set"] = pairs
+        fractions = build_manifest.get("object_tile_fractions") or []
+        if not isinstance(fractions, (list, tuple)) or any(
+            isinstance(v, bool)
+            or not isinstance(v, (int, float))
+            or not 0.0 < float(v) <= 1.0
+            for v in fractions
+        ):
+            raise ValueError(
+                "SAM3 publish geometry 'object_tile_fractions' must be a list of "
+                f"numbers in (0, 1]; got {fractions!r}"
+            )
+        geometry["object_tile_fractions"] = [float(v) for v in fractions]
+        geometry["full_frame_mix"] = bool(build_manifest.get("full_frame_mix"))
+        scale_range = build_manifest.get("scale_range_px")
+        if scale_range is not None:
+            if (
+                not isinstance(scale_range, (list, tuple))
+                or len(scale_range) != 2
+                or any(
+                    isinstance(v, bool) or not isinstance(v, (int, float))
+                    for v in scale_range
+                )
+            ):
+                raise ValueError(
+                    "SAM3 publish geometry 'scale_range_px' must be a "
+                    f"[min, max] pair of numbers; got {scale_range!r}"
+                )
+            geometry["scale_range_px"] = [scale_range[0], scale_range[1]]
+
+    geometry_fields = ["tile_px", "reference_body_px", "object_tile_fraction"]
+    if scale_set is not None:
+        # Named prefills only. The bare keys are ABSENT on a multi-scale
+        # manifest by construction; if one shows up anyway it is a collapsed
+        # scalar masquerading as a measurement, so let it fail the loop below
+        # rather than quietly preferring it.
+        geometry_fields += ["prefill_tile_px", "prefill_object_tile_fraction"]
+    for field in geometry_fields:
+        if field not in build_manifest:
+            continue
         value = build_manifest.get(field)
         # `dataset_build` writes tile_px as a [width, height] PAIR, while the
         # sidecar's `train_tile_px` -- and the escalation dialog's prefill --

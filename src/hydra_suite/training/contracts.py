@@ -132,6 +132,10 @@ class CustomCNNParams:
 
 SAM3_MAX_NEGATIVE_QUERIES_PER_TILE = 100
 SAM3_MAX_NEGATIVE_PROMPT_COUNT = 4096
+# Cap on the multi-scale fan-out, mirroring the sidecar's MAX_CLASSES bound:
+# each entry multiplies the built dataset, so an unbounded list is a disk and
+# wall-clock hazard, not just a config typo.
+SAM3_MAX_SCALE_SET = 4096
 SAM3_MAX_NEGATIVE_PROMPT_BYTES = 256 * 1024
 SAM3_MAX_CONFIGURED_PROMPT_BYTES = 256 * 1024
 # SAM3's text encoder has a short context.  Keep a separate per-prompt cap so
@@ -262,6 +266,19 @@ class Sam3LoraParams:
     # Tiling, mirroring the SAHI sliced-training knobs.
     geometry_mode: str = "auto_object"  # auto_object | auto_model | custom
     object_tile_fraction: float = 0.055
+    # Multi-scale fan-out. EMPTY means "use the scalar above", so today's
+    # single-scale build is bit-for-bit unchanged by default. These are
+    # ``object_tile_fraction``-valued (fractions of the model input for a
+    # square tile resized to it) -- the SAME quantity as a YOLO
+    # ``target_size_fraction``, so a YOLO set ports across as the identity
+    # map. Never a pixel list: legacy absolute sizes are anchored to 640 and
+    # SAM3 runs at 1008. Whether SAM3 should ADOPT a particular set (D16) is
+    # open and is decided by a pre-registered ablation, not by this default.
+    object_tile_fractions: tuple[float, ...] = ()
+    # One un-tiled full-frame copy per image, mirroring the YOLO builder's
+    # separate branch. Off by default: SAM3 has no full-frame arm today and
+    # the spec declines to assert that full frames help.
+    full_frame_mix: bool = False
     slice_width: int = 0  # custom mode only; 0 => fall back to imgsz
     slice_height: int = 0  # custom mode only
     tile_overlap: float = 0.25

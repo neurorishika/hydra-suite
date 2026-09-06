@@ -95,6 +95,71 @@ def test_sidecar_records_the_guard_fields(tmp_path):
     assert meta["reference_body_px"] == 55.4
 
 
+def test_sidecar_records_the_realised_scale_grouping_not_just_the_request(tmp_path):
+    """Finding 1: the grouping stamp `dataloader.write_sam3_scale_grouping_stamp`
+    writes into the run directory must land on the published sidecar. Without
+    this, once the run directory is deleted the sidecar can no longer say
+    whether the model trained scale-grouped or ungrouped -- and the two are
+    not byte-identical."""
+    from hydra_suite.training.sam3_lora.dataloader import (
+        write_sam3_scale_grouping_stamp,
+    )
+
+    base = {"detector.qkv.weight": torch.randn(4, 4)}
+    torch.save(base, tmp_path / "base.pt")
+    torch.save(
+        {"qkv.lora_A": torch.randn(2, 4), "qkv.lora_B": torch.randn(4, 2)},
+        tmp_path / "adapters.pt",
+    )
+    # adapters.pt lives directly under the run dir (cli.py writes it there),
+    # so the run dir here is tmp_path itself.
+    write_sam3_scale_grouping_stamp(
+        tmp_path,
+        requested=True,
+        applied=True,
+        reason="",
+        group_counts={"tile:727x727": 5, "tile:1024x1024": 3},
+    )
+    _, art = publish_sam3_model(
+        run_id="r1",
+        adapters_path=tmp_path / "adapters.pt",
+        base_checkpoint=tmp_path / "base.pt",
+        build_manifest={
+            "tile_px_set": [[727, 727], [1024, 1024]],
+            "reference_body_px": 55.4,
+        },
+        params=Sam3LoraParams(prompt="ant", rank=2, alpha=4),
+        source_fingerprint="fp1",
+        models_root=tmp_path / "models",
+    )
+    meta = json.loads(Path(str(art) + ".sam3_meta.json").read_text())
+    grouping = meta["scale_grouped_batching"]
+    assert grouping["requested"] is True
+    assert grouping["applied"] is True
+    assert grouping["group_counts"] == {"tile:727x727": 5, "tile:1024x1024": 3}
+
+
+def test_sidecar_omits_scale_grouping_when_no_stamp_exists(tmp_path):
+    """No stamp on disk (e.g. an older run) must not fabricate a grouping claim."""
+    base = {"detector.qkv.weight": torch.randn(4, 4)}
+    torch.save(base, tmp_path / "base.pt")
+    torch.save(
+        {"qkv.lora_A": torch.randn(2, 4), "qkv.lora_B": torch.randn(4, 2)},
+        tmp_path / "adapters.pt",
+    )
+    _, art = publish_sam3_model(
+        run_id="r1",
+        adapters_path=tmp_path / "adapters.pt",
+        base_checkpoint=tmp_path / "base.pt",
+        build_manifest={"tile_px": 1007, "reference_body_px": 55.4},
+        params=Sam3LoraParams(prompt="ant", rank=2, alpha=4),
+        source_fingerprint="fp1",
+        models_root=tmp_path / "models",
+    )
+    meta = json.loads(Path(str(art) + ".sam3_meta.json").read_text())
+    assert "scale_grouped_batching" not in meta
+
+
 def test_sidecar_records_the_adapter_surface_not_only_the_flags(tmp_path):
     """The adapt_* flags cannot distinguish a 206-module surface from a
     312-module one: `codex/sam3-spike-parity` changed what

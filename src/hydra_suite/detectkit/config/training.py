@@ -12,6 +12,7 @@ from hydra_suite.training.contracts import (
     SAM3_MAX_CONFIGURED_PROMPT_BYTES,
     SAM3_MAX_NEGATIVE_PROMPT_COUNT,
     SAM3_MAX_NEGATIVE_QUERIES_PER_TILE,
+    SAM3_MAX_SCALE_SET,
     AugmentationProfile,
     PublishPolicy,
     Sam3LoraParams,
@@ -20,6 +21,10 @@ from hydra_suite.training.contracts import (
     TrainingHyperParams,
     TrainingRole,
     sam3_prompt_text_error,
+)
+from hydra_suite.utils.slice_geometry import (
+    LEGACY_TARGET_SIZE_IMGSZ,
+    target_fractions_from,
 )
 
 _MAX_TRAINING_PLAN_BYTES = 1024 * 1024
@@ -262,9 +267,13 @@ class SliceTrainingConfig:
             )
 
     def target_fractions(self) -> list[float]:
-        if self.target_size_fractions:
-            return [float(value) for value in self.target_size_fractions]
-        return [float(value) / 640.0 for value in self.target_sizes if value > 0.0]
+        # Shared definition (see utils.slice_geometry.target_fractions_from):
+        # legacy absolute target_sizes are anchored to a 640px model input.
+        return target_fractions_from(
+            fractions=self.target_size_fractions,
+            legacy_pixel_sizes=self.target_sizes,
+            legacy_pixel_denominator=LEGACY_TARGET_SIZE_IMGSZ,
+        )
 
     def target_sizes_for(self, imgsz: int) -> list[float]:
         input_size = max(1, int(imgsz))
@@ -523,6 +532,7 @@ class DetectTrainingPlan:
                 "adapt_mask_decoder",
                 "adapt_scoring_head",
                 "keep_empty_tiles",
+                "full_frame_mix",
                 "label_quality_acknowledged",
             ):
                 if name in sam3_values:
@@ -559,6 +569,16 @@ class DetectTrainingPlan:
                     sam3_values[name] = _require_string(
                         sam3_values[name], f"sam3.{name}"
                     )
+            if "object_tile_fractions" in sam3_values:
+                # JSON has no tuple; keep the dataclass's declared shape so a
+                # round-tripped plan is not silently a different type.
+                sam3_values["object_tile_fractions"] = tuple(
+                    _require_number(item, "sam3.object_tile_fractions[]")
+                    for item in _require_list(
+                        sam3_values["object_tile_fractions"],
+                        "sam3.object_tile_fractions",
+                    )
+                )
             if "negative_prompts" in sam3_values:
                 sam3_values["negative_prompts"] = [
                     _require_string(item, "sam3.negative_prompts[]")
@@ -737,6 +757,18 @@ class DetectTrainingPlan:
                 raise TrainingPlanError("sam3.tile_overlap must be in [0, 1)")
             if self.sam3_params.object_tile_fraction <= 0.0:
                 raise TrainingPlanError("sam3.object_tile_fraction must be positive")
+            # The multi-scale set. Same (0, 1] band as the YOLO side's
+            # `target_size_fractions` -- these are the SAME quantity, so a
+            # YOLO set ports across unconverted.
+            if len(self.sam3_params.object_tile_fractions) > SAM3_MAX_SCALE_SET:
+                raise TrainingPlanError(
+                    f"sam3.object_tile_fractions exceeds {SAM3_MAX_SCALE_SET} entries"
+                )
+            for index, fraction in enumerate(self.sam3_params.object_tile_fractions):
+                if not 0.0 < float(fraction) <= 1.0:
+                    raise TrainingPlanError(
+                        f"sam3.object_tile_fractions[{index}] must be in (0, 1]"
+                    )
         if self.hyperparams.epochs <= 0:
             raise TrainingPlanError("training.epochs must be positive")
         if self.hyperparams.batch == 0 or self.hyperparams.batch < -1:
@@ -803,9 +835,26 @@ class DetectTrainingPlan:
             "publish": asdict(self.publish_policy),
             "species": self.species,
             "model_tag": self.model_tag,
-            "sam3": asdict(self.sam3_params) if self.sam3_params else None,
+            "sam3": _sam3_to_json(self.sam3_params),
             "comparison_baseline": self.comparison_baseline,
         }
+
+
+def _sam3_to_json(params: Sam3LoraParams | None) -> dict[str, Any] | None:
+    """JSON-shape the SAM3 params: tuples become arrays.
+
+    ``asdict`` leaves ``object_tile_fractions`` a tuple, which ``from_dict``'s
+    ``_require_list`` rejects -- so a plan written by ``to_dict`` would not
+    load back. Serialized here rather than loosened there: the loader's
+    "arrays are arrays" rule is the one that keeps a hand-written plan honest.
+    """
+    if params is None:
+        return None
+    payload = asdict(params)
+    payload["object_tile_fractions"] = [
+        float(value) for value in params.object_tile_fractions
+    ]
+    return payload
 
 
 def load_training_plan(path: str | Path) -> DetectTrainingPlan:
