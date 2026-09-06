@@ -163,6 +163,36 @@ def _read_child_report(path: Path) -> int | None:
     return int(value)
 
 
+def normalize_cuda_device(device: Any) -> str:
+    """Map Ultralytics' bare-ordinal device convention onto a torch device.
+
+    Ultralytics writes GPUs as ``"0"`` / ``"0,1"``. `_accelerator` in
+    :mod:`hydra_suite.training.ultralytics_supervisor` matches ``"mps"``,
+    ``"auto"`` and anything starting with ``"cuda"``, so a bare ``"0"`` falls
+    through to `AcceleratorKind.CPU`.
+
+    KNOWN, PRE-EXISTING, DELIBERATELY NOT FIXED HERE: that misclassification
+    affects containment for EVERY ``device: "0"`` YOLO run, not just this one
+    -- such runs get host-only accounting and no CUDA UUID pin today. Widening
+    `_accelerator` would be more correct, but it would newly subject runs that
+    have always worked to accelerator admission gates, so it is escalated as a
+    separate decision. This normalisation is scoped to the batch-resolution
+    path ONLY: it changes what WE reason about, never the global
+    classification and never what is passed through to Ultralytics, which
+    expects its own convention in the launch command.
+
+    Multi-GPU forms resolve against the FIRST device: Ultralytics' autobatch
+    profiles one device, and spreading it across several would overstate
+    capacity.
+    """
+
+    value = str(device or "auto").strip()
+    first = value.split(",")[0].strip()
+    if first.isdigit():
+        return f"cuda:{int(first)}"
+    return value
+
+
 def child_degraded_reasons(run_dir: Path | None) -> list[str]:
     """Whatever the child flagged about the workload it sized, or nothing."""
 
@@ -234,11 +264,20 @@ def resolve_yolo_batch(
 
     command = child_command(spec, Path(run_dir))
     # The child must run under limits sized for a real positive batch, not for
-    # `max(1, -1)`.
+    # `max(1, -1)`, and it must be classified as CUDA so it gets the UUID pin.
     from dataclasses import replace
 
+    normalized = normalize_cuda_device(spec.device)
+    if str(spec.device or "").strip().count(",") >= 1:
+        log(
+            f"auto batch: {spec.device} names several devices, but Ultralytics "
+            f"profiles one -- sizing against {normalized} alone rather than "
+            "overstating the capacity of the set."
+        )
     child_spec = replace(
-        spec, hyperparams=replace(spec.hyperparams, batch=fallback, epochs=1)
+        spec,
+        device=normalized,
+        hyperparams=replace(spec.hyperparams, batch=fallback, epochs=1),
     )
     log("auto batch: asking Ultralytics to size the batch before launch.")
     result = dict(run_child(command, child_spec) or {})

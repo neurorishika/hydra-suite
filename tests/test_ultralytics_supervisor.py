@@ -296,3 +296,106 @@ def test_host_estimate_uses_the_resolved_batch(tmp_path):
     assert big > small
     with pytest.raises(ValueError, match="resolved"):
         mod._estimate_host_bytes(_auto_spec(tmp_path, -1, imgsz=1280))
+
+
+def test_a_bare_ordinal_device_reaches_the_cuda_resolution_path(monkeypatch, tmp_path):
+    """`device: "0"` is the documented DetectKit config. Before normalisation
+    it classified as CPU, so `batch: -1` silently ran the default."""
+    import hydra_suite.training.ultralytics_supervisor as mod
+
+    asked: list[str] = []
+
+    def recorder(device):
+        asked.append(device)
+        return mod.AcceleratorKind.CUDA, None
+
+    monkeypatch.setattr(mod, "_accelerator", recorder)
+    spec = _auto_spec(tmp_path, -1)
+    spec.device = "0"
+
+    def run_once(command, run_spec, **_kwargs):
+        command = [str(item) for item in command]
+        if "hydra_suite.training.yolo_autobatch" in command:
+            Path(command[command.index("--out") + 1]).write_text('{"resolved": 24}')
+            return {"success": True, "canceled": False}
+        return {
+            "success": True,
+            "failure_kind": ExitKind.SUCCESS.value,
+            "hard_host_bytes": 100,
+            "resource_telemetry": {"observed": {"peak_tree_rss_bytes": 90}},
+        }
+
+    monkeypatch.setattr(mod, "_run_ultralytics_once", run_once)
+    mod.run_ultralytics_supervised(
+        ["trainer", "batch=-1", "workers=0", "device=0"], spec, run_dir=tmp_path
+    )
+    assert asked == ["cuda:0"]
+
+
+def test_normalisation_never_changes_the_launch_command_device(monkeypatch, tmp_path):
+    """Ultralytics expects its OWN convention in the command. Normalisation is
+    for our classification, not for what we pass through."""
+    import hydra_suite.training.ultralytics_supervisor as mod
+
+    monkeypatch.setattr(
+        mod, "_accelerator", lambda device: (mod.AcceleratorKind.CUDA, None)
+    )
+    spec = _auto_spec(tmp_path, -1)
+    spec.device = "0"
+    commands: list[tuple[str, ...]] = []
+
+    def run_once(command, run_spec, **_kwargs):
+        command = [str(item) for item in command]
+        if "hydra_suite.training.yolo_autobatch" in command:
+            Path(command[command.index("--out") + 1]).write_text('{"resolved": 24}')
+            return {"success": True, "canceled": False}
+        commands.append(tuple(command))
+        return {
+            "success": True,
+            "failure_kind": ExitKind.SUCCESS.value,
+            "hard_host_bytes": 100,
+            "resource_telemetry": {"observed": {"peak_tree_rss_bytes": 90}},
+        }
+
+    monkeypatch.setattr(mod, "_run_ultralytics_once", run_once)
+    mod.run_ultralytics_supervised(
+        ["trainer", "batch=-1", "workers=0", "device=0"], spec, run_dir=tmp_path
+    )
+    assert "device=0" in commands[0]
+    assert "device=cuda:0" not in commands[0]
+    assert spec.device == "0"
+    assert "batch=24" in commands[0]
+
+
+def test_an_unavailable_normalised_device_falls_back_instead_of_refusing(
+    monkeypatch, tmp_path
+):
+    """Normalising must not turn a run that used to launch on CPU into a
+    refusal on a box with no CUDA."""
+    import hydra_suite.training.ultralytics_supervisor as mod
+
+    def unavailable(device):
+        if device.startswith("cuda"):
+            raise RuntimeError("the requested CUDA device is unavailable")
+        return mod.AcceleratorKind.CPU, None
+
+    monkeypatch.setattr(mod, "_accelerator", unavailable)
+    spec = _auto_spec(tmp_path, -1)
+    spec.device = "0"
+    commands: list[tuple[str, ...]] = []
+
+    def run_once(command, run_spec, **_kwargs):
+        commands.append(tuple(str(item) for item in command))
+        return {
+            "success": True,
+            "failure_kind": ExitKind.SUCCESS.value,
+            "hard_host_bytes": 100,
+            "resource_telemetry": {"observed": {"peak_tree_rss_bytes": 90}},
+        }
+
+    monkeypatch.setattr(mod, "_run_ultralytics_once", run_once)
+    result = mod.run_ultralytics_supervised(
+        ["trainer", "batch=-1", "workers=0", "device=0"], spec, run_dir=tmp_path
+    )
+    assert result["success"] is True
+    assert "batch=16" in commands[0]

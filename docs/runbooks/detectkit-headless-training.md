@@ -139,11 +139,15 @@ guarantee that the run will fit: it profiles a single step and extrapolates.
 The bounded OOM-retry ladder — which halves the batch in a fresh child on a
 classified out-of-memory exit — is what actually protects the run.
 
-Auto batch needs a CUDA device that HYDRA recognises as CUDA, which today means
-`training.device` set to `"cuda:0"` (or `"auto"` on a CUDA host). With the
-Ultralytics-style ordinal `"0"` used in the example above, HYDRA classifies the
-run as CPU, so `-1` resolves to the default with `provenance:
-"default_non_cuda"`.
+`training.batch` is **opt-in**: `16` is a default shared with PoseKit, ClassKit
+and TrackerKit, so omitting `training.batch` still gives you `16`. You have to
+write `-1` to get auto batch.
+
+Ultralytics device conventions work here: `"0"`, `"0,1"` and `"cuda:0"` all
+reach resolution, as does `"auto"` on a CUDA host. A multi-GPU value resolves
+against the **first** device only — Ultralytics profiles one device, and sizing
+against the whole set would overstate capacity. The launch command still
+receives the device string exactly as you wrote it.
 
 Auto batch is not reproducible across machines, because it depends on the GPU
 it measures on. **Set a fixed positive `training.batch` for byte-reproducible

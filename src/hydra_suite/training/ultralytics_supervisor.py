@@ -46,6 +46,7 @@ from hydra_suite.training.yolo_autobatch import (
     ResolutionCanceled,
     batch_resolution_block,
     child_degraded_reasons,
+    normalize_cuda_device,
     resolve_yolo_batch,
 )
 
@@ -344,7 +345,18 @@ def run_ultralytics_supervised(
     requested_batch = int(spec.hyperparams.batch)
     resolved_batch, provenance = requested_batch, "explicit"
     if requested_batch <= 0:
-        accelerator_kind, _cuda = _accelerator(spec.device)
+        # Ask the classification question about the NORMALISED device so a
+        # plan written with Ultralytics' `device: "0"` can reach resolution.
+        # `spec.device` itself is left alone: `_accelerator`'s global
+        # classification and the launch command both keep seeing the user's
+        # original string (see `normalize_cuda_device`).
+        try:
+            accelerator_kind, _cuda = _accelerator(normalize_cuda_device(spec.device))
+        except RuntimeError:
+            # The normalised device is not actually present. Resolution has
+            # nothing to measure on, but this run would still launch under its
+            # original classification, so fall back instead of refusing it.
+            accelerator_kind = AcceleratorKind.CPU
         try:
             resolved_batch, provenance = resolve_yolo_batch(
                 spec,

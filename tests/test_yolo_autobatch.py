@@ -256,3 +256,60 @@ def test_max_num_obj_mirrors_the_ultralytics_mosaic_factor(tmp_path):
     assert max_num_obj == 8
     assert dataset_size == 2
     assert degraded == []
+
+
+def test_ultralytics_device_ordinals_normalise_for_our_reasoning_only():
+    """`_accelerator` does not recognise the bare-digit convention, so
+    `device: "0"` -- what the runbook and every Ultralytics user writes --
+    classified as CPU and never reached resolution."""
+    from hydra_suite.training.yolo_autobatch import normalize_cuda_device
+
+    assert normalize_cuda_device("0") == "cuda:0"
+    assert normalize_cuda_device("1") == "cuda:1"
+    assert normalize_cuda_device(" 2 ") == "cuda:2"
+    # Multi-GPU resolves against the FIRST device: Ultralytics profiles one.
+    assert normalize_cuda_device("0,1") == "cuda:0"
+    assert normalize_cuda_device("1,0") == "cuda:1"
+    # Everything else is passed through untouched.
+    for value in ("auto", "mps", "cpu", "cuda:3"):
+        assert normalize_cuda_device(value) == value
+    assert normalize_cuda_device("") == "auto"
+    assert normalize_cuda_device(None) == "auto"
+
+
+def test_a_multi_gpu_device_says_it_sized_against_one(tmp_path):
+    from hydra_suite.training.yolo_autobatch import resolve_yolo_batch
+
+    logged: list[str] = []
+    resolve_yolo_batch(
+        _spec(tmp_path, -1, device="0,1"),
+        tmp_path,
+        accelerator_kind=AcceleratorKind.CUDA,
+        run_child=_child(writes=24),
+        log_cb=logged.append,
+    )
+    assert any("cuda:0" in line and "profiles one" in line for line in logged)
+
+
+def test_the_resolution_child_is_classified_as_cuda_for_a_bare_ordinal(tmp_path):
+    """The child needs the CUDA classification to get the UUID pin, so the
+    spec it runs under carries the normalised device."""
+    from hydra_suite.training.yolo_autobatch import resolve_yolo_batch
+
+    seen: list = []
+
+    def run_child(command, spec):
+        seen.append(spec.device)
+        out = Path(
+            [str(i) for i in command][[str(i) for i in command].index("--out") + 1]
+        )
+        out.write_text(json.dumps({"resolved": 24}), encoding="utf-8")
+        return {"success": True, "canceled": False}
+
+    resolve_yolo_batch(
+        _spec(tmp_path, -1, device="0"),
+        tmp_path,
+        accelerator_kind=AcceleratorKind.CUDA,
+        run_child=run_child,
+    )
+    assert seen == ["cuda:0"]
