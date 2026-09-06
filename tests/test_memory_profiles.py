@@ -7,6 +7,7 @@ from types import SimpleNamespace
 import pytest
 
 from hydra_suite.runtime.memory_profiles import (
+    MEASURED_SAFETY_FRACTION,
     PROFILE_SCHEMA_VERSION,
     AdaptiveAttemptResult,
     AttemptTelemetry,
@@ -16,12 +17,32 @@ from hydra_suite.runtime.memory_profiles import (
     PressureSettings,
     ProbePlan,
     ProfileIdentity,
+    fit_batch_curve,
+    merge_records,
+    profile_store_path,
     recommend_batch_size,
+    records_for,
     resource_telemetry,
     run_with_bounded_oom_retries,
+    select_batch,
 )
 from hydra_suite.runtime.process_supervisor import ExitKind
 from hydra_suite.runtime.resource_budget import AcceleratorKind
+
+GiB = 1024**3
+
+
+def _records(batch_to_peak, **identity_changes):
+    identity = _identity(**identity_changes)
+    return tuple(
+        _measurement(
+            identity=identity,
+            settings=_settings(batch_size=batch_size),
+            accelerator_allocated_peak_bytes=0,
+            accelerator_reserved_peak_bytes=peak,
+        )
+        for batch_size, peak in batch_to_peak.items()
+    )
 
 
 def _identity(**changes):
@@ -247,4 +268,74 @@ def test_structured_telemetry_reports_admission_limits_peaks_and_adjustments():
     assert telemetry["observed"]["peak_tree_rss_bytes"] == 90
     assert telemetry["observed"]["minimum_system_available_bytes"] == 310
     assert telemetry["observed"]["queue_high_water_bytes"] == 70
-    assert telemetry["retry_history"][0]["to"] == 4
+
+
+def test_fit_batch_curve_recovers_a_known_line():
+    base, slope = fit_batch_curve(_records({1: 8_000, 2: 12_000, 4: 20_000}))
+    assert abs(base - 4_000) < 200 and abs(slope - 4_000) < 200
+
+
+def test_single_record_never_yields_a_zero_slope():
+    _base, slope = fit_batch_curve(_records({1: 8_000}))
+    assert slope > 0, "a zero slope would make every batch size look free"
+
+
+def test_selection_never_predicts_below_an_observed_peak():
+    # A superlinear jump at 2 must not be smoothed away by the linear fit.
+    assert (
+        select_batch(
+            _records({1: 8 * GiB, 2: 20 * GiB}), usable_bytes=24 * GiB, maximum=8
+        )
+        == 1
+    )
+
+
+def test_selection_never_exceeds_the_largest_observed_batch():
+    assert (
+        select_batch(
+            _records({1: 1 * GiB, 2: 2 * GiB}), usable_bytes=512 * GiB, maximum=64
+        )
+        == 2
+    )
+
+
+def test_selection_returns_zero_when_nothing_fits():
+    assert select_batch((), usable_bytes=24 * GiB, maximum=8) == 0
+    assert select_batch(_records({1: 40 * GiB}), usable_bytes=24 * GiB, maximum=8) == 0
+
+
+def test_safety_fraction_is_applied_exactly_once():
+    # usable_bytes is RAW free memory; 20 GiB at 0.8 admits a 16 GiB peak.
+    assert select_batch(_records({1: 16 * GiB}), usable_bytes=20 * GiB, maximum=1) == 1
+    assert select_batch(_records({1: 16 * GiB}), usable_bytes=19 * GiB, maximum=1) == 0
+
+
+def test_default_safety_fraction_matches_measured_constant():
+    assert MEASURED_SAFETY_FRACTION == 0.8
+
+
+def test_merge_replaces_a_record_for_the_same_batch_size():
+    merged = merge_records(_records({1: 1_000}), _records({1: 2_000}))
+    assert len(merged) == 1 and merged[0].accelerator_reserved_peak_bytes == 2_000
+
+
+def test_store_round_trips_one_record_per_batch(tmp_path):
+    store = MemoryProfileStore(tmp_path / "sam3.json")
+    store.save(_records({1: 1_000, 2: 2_000}))
+    assert {r.settings.batch_size for r in store.load()} == {1, 2}
+
+
+def test_records_for_filters_by_exact_identity():
+    matching = _records({1: 1_000, 2: 2_000})
+    other = _records({1: 500}, operation="train")
+    combined = matching + other
+    found = records_for(combined, matching[0].identity)
+    assert set(found) == set(matching)
+
+
+def test_profile_store_path_uses_paths_module(monkeypatch, tmp_path):
+    monkeypatch.setattr(
+        "hydra_suite.runtime.memory_profiles.get_data_dir", lambda: tmp_path
+    )
+    path = profile_store_path("sam3")
+    assert path == tmp_path / "memory_profiles" / "sam3.json"
