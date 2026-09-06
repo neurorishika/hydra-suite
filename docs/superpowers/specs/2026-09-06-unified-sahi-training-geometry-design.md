@@ -690,6 +690,12 @@ One dataclass and one resolver, consumed by both builders. Proposed shape (names
   `object_tile_fraction: float`, or `custom_wh: tuple[int,int]`, or the sentinel
   `FULL_FRAME`. Mirrors the existing `TILE_FRACTION_GRID` convention where `None` = full
   frame (`tiling.py:37-38`) — reuse that sentinel meaning rather than a new one.
+  **AMENDED (§2.8):** the `target_apparent_px` alternative should be spelled
+  `target_size_fraction` (relative to `model_imgsz`), matching what `4de070f3` shipped, with
+  absolute pixels accepted only as a legacy input. The two relative forms have **different
+  denominators** — `object_tile_fraction` is relative to the measured body,
+  `target_size_fraction` to the model input — so `ScaleSpec` must name them distinctly and
+  `TilingContract` must declare `object_tile_fraction` the canonical unit.
 - `TilingContract` — `geometry_mode`, `scales: tuple[ScaleSpec, ...]`, `overlap`,
   `reference_body_px`, `model_imgsz`, `empty_tile_policy`, `fragment_policy`,
   `max_tiles_per_frame`. **`overlap` is the single canonical name**; `tile_overlap` becomes an
@@ -1166,8 +1172,11 @@ dependency on D12 (§5.4) — recording is unconditional — so it can proceed w
 study runs, and it is a precondition for that study ever being repeatable. It changes no
 behaviour, blocks nothing, and is measured in hours.
 
-1. **ONE shared, Qt-free geometry-drift guard + provenance logging — built once in core, not
-   four times.** Revised in light of all four paths: the guard already exists, correct and
+1. **[SHIPPED 2026-09-06 — `b577ea6c`, fixed by `e3058ecb`]** **ONE shared, Qt-free
+   geometry-drift guard + provenance logging — built once in core, not
+   four times.** Delivered as `core/inference/geometry_drift.py` with (a)-(d) all in place;
+   see the SHIPPED note under F-E for what landed and for the inert-guard defect
+   `e3058ecb` fixed. Revised in light of all four paths: the guard already exists, correct and
    well-reasoned, at `detectkit/gui/dialogs/semantic_escalation_dialog.py:382-406` — but it is
    inside a Qt dialog, so it cannot serve P1, P2, P3 or any headless run (§0 F-E). The step is
    therefore *extract, then apply four times*, not *write four guards*:
@@ -1197,8 +1206,20 @@ behaviour, blocks nothing, and is measured in hours.
 8. **Deferred entirely:** any attempt to calibrate the *training* scale set by training
    multiple arms. Not viable as a wizard (§3.4).
 
-1b. **Delete the fifth tile-size formula** (`semantic/tiling.py:123-139` -> `tile_size_for_mode`).
+1b. **[SHIPPED 2026-09-06 — `011a34b2`, characterized first by `a153e86a`]** **Delete the
+   fifth tile-size formula** (`semantic/tiling.py` -> `tile_size_for_mode`).
    Numerically inert today, and it is the precondition for P4 ever inheriting a shared change.
+
+**Steps 6 and 7 are amended by the 2026-09-06 default changes:**
+- **Step 6** is *partially* done: `4de070f3` replaced the absolute `[200,300,400]` with a
+  relative `(0.05,0.10,0.15,0.20)` in all copies, which fixes the *unit* but not the
+  *derivation*. The corpus-derived proposal (§3.6, now proposing fractions and seeded from
+  distribution quantiles) is still outstanding, and R4 grew.
+- **Step 7 is no longer deferrable and no longer says `none` is the shipping default.**
+  `306738ec` shipped scale-grouped sampling + inverse-frequency loss weighting, default-ON,
+  for YOLO. The step becomes: *promote the three pure functions out of
+  `training/ultralytics_scale_balance.py` into the shared layer, stamp the realised per-scale
+  counts, and decide D17/D19 before SAM3 grows a second adapter.*
 
 Steps 5-8 renumber unchanged. Two additions to the tail:
 
