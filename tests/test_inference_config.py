@@ -101,6 +101,23 @@ def test_sequential_config_round_trip():
     assert loaded.runtime_tier == "gpu_fast"
 
 
+def test_tracker_sequential_raw_stage_uses_floor_not_final_confidence_filter():
+    cfg = build_inference_config_from_params(
+        {
+            "DETECTION_METHOD": "yolo_obb",
+            "YOLO_OBB_MODE": "sequential",
+            "YOLO_DETECT_MODEL_PATH": "/tmp/detect.pt",
+            "YOLO_CROP_OBB_MODEL_PATH": "/tmp/obb.pt",
+            "YOLO_CONFIDENCE_THRESHOLD": 0.72,
+        }
+    )
+
+    assert cfg.obb is not None
+    assert cfg.obb.sequential is not None
+    assert cfg.obb.sequential.obb_confidence_threshold == pytest.approx(1e-3)
+    assert cfg.obb.confidence_threshold == pytest.approx(0.72)
+
+
 def test_obb_direct_config_model_task_round_trips(tmp_path):
     config = InferenceConfig(
         obb=OBBConfig(

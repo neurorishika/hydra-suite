@@ -82,6 +82,10 @@ def _params(single_arena: bool = False):
         {
             "MAX_DISTANCE_THRESHOLD": 1000.0,
             "LOST_THRESHOLD_FRAMES": 1,
+            # Arena routing is the invariant under test; start immediately so
+            # the production startup-stability gate does not consume this tiny
+            # two-frame fixture before assignment is exercised.
+            "MIN_DETECTION_COUNTS": 1,
             "ENABLE_POSE_EXTRACTOR": False,
         }
     )
@@ -255,7 +259,9 @@ def _run_preview(monkeypatch, tmp_path, *, single_arena):
     )
     monkeypatch.setattr(ow, "video_signature", lambda *_a, **_k: "sig")
     monkeypatch.setattr(
-        ow, "build_inference_config_from_params", lambda *_a, **_k: None
+        ow,
+        "inference_config_for_optimizer_params",
+        lambda *_a, **_k: types.SimpleNamespace(detection_source="bgsub"),
     )
 
     frames = []

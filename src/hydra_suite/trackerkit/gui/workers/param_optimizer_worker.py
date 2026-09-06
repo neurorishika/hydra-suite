@@ -15,8 +15,10 @@ from typing import Any, Dict
 import numpy as np
 from PySide6.QtCore import QThread, Signal
 
-from hydra_suite.core.inference.config import build_inference_config_from_params
 from hydra_suite.core.inference.runner import InferenceRunner
+from hydra_suite.core.tracking.optimization.detection_config import (
+    inference_config_for_optimizer_params,
+)
 from hydra_suite.core.tracking.optimization.optimizer import TrackingOptimizerCore
 from hydra_suite.core.tracking.optimization.optimizer_workers import (
     run_tracking_preview,
@@ -56,9 +58,12 @@ class DetectionCacheBuildWorker(QThread):
 
     def run(self):
         try:
-            cfg = build_inference_config_from_params(self.params)
+            cfg = inference_config_for_optimizer_params(self.params)
             runner = InferenceRunner(
-                cfg, cache_dir=Path(self.cache_dir), video_path=self.video_path
+                cfg,
+                cache_dir=Path(self.cache_dir),
+                video_path=self.video_path,
+                roi_mask=self.params.get("ROI_MASK"),
             )
         except Exception as e:
             logger.error("DetectionCacheBuild: could not build runner: %s", e)

@@ -31,9 +31,6 @@ from hydra_suite.core.individual.pose.features import (
 from hydra_suite.core.individual.pose.features import (
     load_pose_context_from_params as _pf_load_pose_context,
 )
-from hydra_suite.core.inference.api import (
-    apply_detection_filter as _apply_detection_filter,
-)
 
 # The optimizer reads a detection cache built by DetectionCacheBuildWorker
 # (core/tracking/optimization/optimizer_workers.py), which now writes an
@@ -41,13 +38,32 @@ from hydra_suite.core.inference.api import (
 # of the legacy flat DetectionCache. Building and reading must derive their
 # InferenceConfig from the SAME params so the cache key matches; a mismatch
 # makes the handle read back as empty.
-from hydra_suite.core.inference.config import build_inference_config_from_params
 from hydra_suite.core.inference.runner import _open_caches, video_signature
+from hydra_suite.core.inference.stages.filtering import filter_for_source
 from hydra_suite.core.tracking.arenas import arena_ids_for_meas as _meas_arena_ids
 from hydra_suite.core.tracking.arenas import (
     arena_layout_from_params,
     check_slot_arena_covers_all_slots,
     tracking_frame_size,
+)
+from hydra_suite.core.tracking.optimization.detection_config import (
+    inference_config_for_optimizer_params,
+)
+from hydra_suite.core.tracking.optimization.production_replay import (
+    ProductionReplayEvaluator,
+)
+from hydra_suite.core.tracking.optimization.unlabeled_scoring import (
+    CandidateEvaluation,
+    MetricDirection,
+    MetricSpec,
+    aggregate_candidate_evaluations,
+    build_train_validation_split,
+    decide_heldout_baseline_protection,
+    forward_backward_cycle_consistency,
+    pareto_ranks,
+    partition_temporal_segments,
+    recommend_dominating_candidate,
+    trajectory_quality_metrics,
 )
 
 logger = logging.getLogger(__name__)
@@ -141,27 +157,18 @@ def _filter_cached_detections(det_filter, cache, f_idx, roi_mask):
     """Read a frame from detection cache and apply filtering.
 
     Detection caches are always ``OBBResult`` (InferenceRunner-based
-    builder); filtering is applied via ``apply_detection_filter`` from
-    ``core/inference/api``.
+    builder).  Replay filters through the same source-aware production
+    dispatcher used by ``InferenceRunner.load_frame``.
     """
     frame_data = cache.read_frame(f_idx)
 
     from hydra_suite.core.inference.result import OBBResult as _OBBResult
 
     if isinstance(frame_data, _OBBResult):
-        # New pipeline path: use apply_detection_filter shim.
-        # Build a minimal OBBConfig from det_filter params if it has params attribute,
-        # otherwise use defaults.
-        from hydra_suite.core.inference.config import OBBConfig
-
-        conf_threshold = 0.0
-        if hasattr(det_filter, "params"):
-            conf_threshold = float(det_filter.params.get("DETECTION_CONFIDENCE", 0.0))
-        elif hasattr(det_filter, "confidence_threshold"):
-            conf_threshold = float(det_filter.confidence_threshold)
-
-        _cfg = OBBConfig(confidence_threshold=conf_threshold)
-        filtered_obb = _apply_detection_filter(frame_data, _cfg)
+        inference_config = getattr(det_filter, "inference_config", None)
+        if inference_config is None:
+            inference_config = inference_config_for_optimizer_params(det_filter.params)
+        filtered_obb, _ = filter_for_source(inference_config, frame_data, roi_mask)
 
         # Convert OBBResult back to the legacy format expected by the tracking loop.
         meas = np.concatenate(
@@ -384,7 +391,10 @@ def _compute_composite_score(
     """Compute the composite multi-objective score from accumulated metrics."""
     _cov_frac = _coverage_sum / max(n_frames, 1)
     _mean_dets = _det_count_sum / max(n_frames, 1)
-    _det_excess = min(max(_mean_dets / max(N, 1.0) - 1.2, 0.0) / max(N * 0.5, 1.0), 1.0)
+    # Normalize excess detections as a fraction of the expected target count.
+    # The previous expression divided by N twice, making this penalty vanish as
+    # MAX_TARGETS increased.
+    _det_excess = min(max(_mean_dets / max(N, 1.0) - 1.0, 0.0) / 0.5, 1.0)
     coverage_cost = 0.80 * (1.0 - _cov_frac) + 0.20 * _det_excess
     assign_cost = _assign_cost_sum / _assign_count if _assign_count > 0 else 1.0
     _cont_frac = min(sum(_max_continuity) / max(N, 1) / max(n_frames, 1), 1.0)
@@ -431,31 +441,57 @@ def _compute_composite_score(
         [_w_cov, _w_asn, _w_frg, _w_occ, _w_vel, _w_crd], dtype=np.float64
     )
     composite = float(np.dot(weights, sub_scores_arr))
-    active_mask = weights > 1e-9
-    if active_mask.sum() > 1:
-        composite += 0.3 * float(np.std(sub_scores_arr[active_mask]))
-
     return composite, sub_scores
 
 
 # Canonical search-space bounds — module-level so they can be imported externally.
 _PARAM_RANGES: Dict[str, tuple] = {
-    "YOLO_CONFIDENCE_THRESHOLD": ("float", 0.05, 0.8),
-    "YOLO_IOU_THRESHOLD": ("float", 0.1, 0.9),
-    "MAX_DISTANCE_MULTIPLIER": ("float", 0.5, 3.0),
-    "KALMAN_NOISE_COVARIANCE": ("log_float", 0.001, 0.2),
-    "KALMAN_MEASUREMENT_NOISE_COVARIANCE": ("log_float", 0.01, 1.0),
-    "W_POSITION": ("float", 0.1, 5.0),
-    "W_ORIENTATION": ("float", 0.0, 5.0),
+    "YOLO_CONFIDENCE_THRESHOLD": ("float", 0.01, 1.0),
+    "YOLO_IOU_THRESHOLD": ("float", 0.01, 1.0),
+    "MAX_DISTANCE_MULTIPLIER": ("float", 0.1, 20.0),
+    "KALMAN_NOISE_COVARIANCE": ("log_float", 0.0001, 1.0),
+    "KALMAN_MEASUREMENT_NOISE_COVARIANCE": ("log_float", 0.0001, 1.0),
+    "W_POSITION": ("float", 0.0, 10.0),
+    "W_ORIENTATION": ("float", 0.0, 10.0),
     "W_AREA": ("float", 0.0, 2.0),
-    "W_ASPECT": ("float", 0.0, 2.0),
-    "KALMAN_DAMPING": ("float", 0.70, 0.999),
-    "KALMAN_LONGITUDINAL_NOISE_MULTIPLIER": ("float", 1.0, 20.0),
+    "W_ASPECT": ("float", 0.0, 10.0),
+    "KALMAN_DAMPING": ("float", 0.5, 0.999),
+    "KALMAN_LONGITUDINAL_NOISE_MULTIPLIER": ("float", 0.1, 20.0),
     "KALMAN_INITIAL_VELOCITY_RETENTION": ("float", 0.0, 1.0),
-    "KALMAN_YOUNG_GATE_MULTIPLIER": ("float", 1.0, 4.0),
     "LOST_THRESHOLD_FRAMES": ("int", 2, 25),
     "KALMAN_MATURITY_AGE": ("int", 1, 20),
 }
+
+_UNLABELED_METRIC_SPECS = (
+    MetricSpec("cycle_loss", MetricDirection.MINIMIZE),
+    MetricSpec("coverage_loss", MetricDirection.MINIMIZE),
+    MetricSpec("fragmentation_loss", MetricDirection.MINIMIZE),
+    MetricSpec("motion_roughness_loss", MetricDirection.MINIMIZE),
+)
+
+# Upper real-time limits mirror TrackerKit's seconds-based controls.  Dynamic
+# frame ranges are capped here so every generated candidate remains applyable.
+_LIFECYCLE_MAX_SECONDS = {
+    "KALMAN_MATURITY_AGE": 8.0,
+    "LOST_THRESHOLD_FRAMES": 40.0,
+}
+
+
+def _dense_frame_positions(
+    frame_positions: Dict[int, np.ndarray],
+    start_frame: int,
+    end_frame: int,
+    n_tracks: int,
+) -> np.ndarray:
+    """Convert a replay's frame map to chronological ``(F, N, 2)`` form."""
+
+    dense = np.full((end_frame - start_frame + 1, n_tracks, 2), np.nan, np.float32)
+    for frame_idx, positions in frame_positions.items():
+        if start_frame <= int(frame_idx) <= end_frame:
+            value = np.asarray(positions, dtype=np.float32)
+            if value.shape == (n_tracks, 2):
+                dense[int(frame_idx) - start_frame] = value
+    return dense
 
 
 class OptimizationResult:
@@ -465,11 +501,23 @@ class OptimizationResult:
         score: float,
         trial_number: int,
         sub_scores: Dict[str, float] | None = None,
+        *,
+        candidate_id: str | None = None,
+        is_baseline: bool = False,
     ):
         self.params = params
         self.score = score
         self.trial_number = trial_number
         self.sub_scores: Dict[str, float] = sub_scores or {}
+        self.candidate_id = candidate_id or (
+            "baseline" if is_baseline else f"trial-{trial_number}"
+        )
+        self.is_baseline = bool(is_baseline)
+        self.pareto_rank: int | None = None
+        self.recommended = False
+        self.recommendation_reason = "not production-validated"
+        self.validation_metrics: Dict[str, Any] = {}
+        self.mean_relative_spread: float | None = None
 
 
 class TrackingOptimizerCore:
@@ -590,7 +638,7 @@ class TrackingOptimizerCore:
         try:
             from pathlib import Path
 
-            _cfg = build_inference_config_from_params(self.base_params)
+            _cfg = inference_config_for_optimizer_params(self.base_params)
             _roi_mask = self.base_params.get("ROI_MASK", None)
             caches = _open_caches(
                 _cfg,
@@ -676,28 +724,51 @@ class TrackingOptimizerCore:
         "KALMAN_DAMPING": 0.95,
         "KALMAN_LONGITUDINAL_NOISE_MULTIPLIER": 5.0,
         "KALMAN_INITIAL_VELOCITY_RETENTION": 0.2,
-        "KALMAN_YOUNG_GATE_MULTIPLIER": 1.5,
         "LOST_THRESHOLD_FRAMES": 10,
         "KALMAN_MATURITY_AGE": 5,
     }
 
+    def _search_range(self, key: str) -> tuple[str, float, float]:
+        """Return a search range in the parameter's production units.
+
+        Lifecycle parameters are stored as frames, but fixed frame bounds have
+        different real-time meanings at different FPS. Explore dimensionless
+        factors around the user's current duration instead, which preserves the
+        same seconds-scale neighborhood across videos.
+        """
+
+        ptype, low, high = self._PARAM_RANGES[key]
+        if key not in {"LOST_THRESHOLD_FRAMES", "KALMAN_MATURITY_AGE"}:
+            return ptype, float(low), float(high)
+        raw_base = self.base_params.get(key, self._SEED_DEFAULTS[key])
+        try:
+            base = max(float(raw_base), float(low))
+        except (TypeError, ValueError):
+            base = float(self._SEED_DEFAULTS[key])
+        fps = max(float(self.base_params.get("FPS", 1.0)), 1e-6)
+        representable_high = max(
+            float(low), math.floor(_LIFECYCLE_MAX_SECONDS[key] * fps)
+        )
+        search_high = min(representable_high, max(float(low), math.ceil(base * 4.0)))
+        search_low = min(search_high, max(float(low), math.floor(base * 0.25)))
+        return ptype, search_low, search_high
+
     def _build_seed_trial(self) -> Dict[str, Any]:
         """Build the initial seed trial from the user's current parameters.
 
-        Values are clamped to each parameter's valid range so that base_params
-        with zero or out-of-range entries never produce an invalid enqueued
-        trial -- especially critical for log-scale params where the value must
-        be strictly positive.
+        Only representable values are enqueued.  The exact, unclamped baseline
+        is evaluated separately before search, so an out-of-range production
+        setting is never silently relabelled as the user's baseline.
         """
         seed_params: Dict[str, Any] = {}
-        for key, (ptype, low, high) in self._PARAM_RANGES.items():
+        for key in self._PARAM_RANGES:
             if not self.tuning_config.get(key):
                 continue
+            ptype, low, high = self._search_range(key)
             raw = self.base_params.get(key, self._SEED_DEFAULTS.get(key, low))
-            if ptype == "int":
-                seed_params[key] = int(np.clip(int(raw), low, high))
-            else:
-                seed_params[key] = float(np.clip(float(raw), low, high))
+            value = int(raw) if ptype == "int" else float(raw)
+            if low <= value <= high and not (ptype == "log_float" and value <= 0):
+                seed_params[key] = value
         return seed_params
 
     def _perturb_near_base(self, rng, scale: float) -> dict:
@@ -712,9 +783,10 @@ class TrackingOptimizerCore:
         stays close to the current settings; 0.3 allows more exploration.
         """
         pt: Dict[str, Any] = {}
-        for key, (ptype, low, high) in self._PARAM_RANGES.items():
+        for key in self._PARAM_RANGES:
             if not self.tuning_config.get(key):
                 continue
+            ptype, low, high = self._search_range(key)
             base_val = self.base_params.get(key)
             if ptype == "log_float":
                 log_low, log_high = np.log(low), np.log(high)
@@ -740,9 +812,10 @@ class TrackingOptimizerCore:
     def _random_from_ranges(self, rng) -> dict:
         """Uniform-random point across the full search space (used for plateau restarts)."""
         pt: Dict[str, Any] = {}
-        for key, (ptype, low, high) in self._PARAM_RANGES.items():
+        for key in self._PARAM_RANGES:
             if not self.tuning_config.get(key):
                 continue
+            ptype, low, high = self._search_range(key)
             if ptype == "log_float":
                 pt[key] = float(np.exp(rng.uniform(np.log(low), np.log(high))))
             elif ptype == "float":
@@ -755,32 +828,19 @@ class TrackingOptimizerCore:
         """Use the Optuna trial to suggest values for all enabled parameters."""
         trial_params: Dict[str, Any] = {}
 
-        # Map of param_name -> (suggest_method, args, kwargs)
-        _SUGGEST_SPEC = {
-            "YOLO_CONFIDENCE_THRESHOLD": ("suggest_float", (0.05, 0.8), {}),
-            "YOLO_IOU_THRESHOLD": ("suggest_float", (0.1, 0.9), {}),
-            "MAX_DISTANCE_MULTIPLIER": ("suggest_float", (0.5, 3.0), {}),
-            "KALMAN_NOISE_COVARIANCE": ("suggest_float", (0.001, 0.2), {"log": True}),
-            "KALMAN_MEASUREMENT_NOISE_COVARIANCE": (
-                "suggest_float",
-                (0.01, 1.0),
-                {"log": True},
-            ),
-            "W_POSITION": ("suggest_float", (0.1, 5.0), {}),
-            "W_ORIENTATION": ("suggest_float", (0.0, 5.0), {}),
-            "W_AREA": ("suggest_float", (0.0, 2.0), {}),
-            "W_ASPECT": ("suggest_float", (0.0, 2.0), {}),
-            "KALMAN_DAMPING": ("suggest_float", (0.70, 0.999), {}),
-            "KALMAN_LONGITUDINAL_NOISE_MULTIPLIER": ("suggest_float", (1.0, 20.0), {}),
-            "KALMAN_INITIAL_VELOCITY_RETENTION": ("suggest_float", (0.0, 1.0), {}),
-            "KALMAN_YOUNG_GATE_MULTIPLIER": ("suggest_float", (1.0, 4.0), {}),
-            "LOST_THRESHOLD_FRAMES": ("suggest_int", (2, 25), {}),
-            "KALMAN_MATURITY_AGE": ("suggest_int", (1, 20), {}),
-        }
-
-        for name, (method, args, kwargs) in _SUGGEST_SPEC.items():
-            if self.tuning_config.get(name):
-                trial_params[name] = getattr(trial, method)(name, *args, **kwargs)
+        # One canonical range table drives seeds, random restarts, and Optuna
+        # suggestions.  This prevents the three paths from silently exploring
+        # different contracts.
+        for name in self._PARAM_RANGES:
+            if not self.tuning_config.get(name):
+                continue
+            ptype, low, high = self._search_range(name)
+            if ptype == "int":
+                trial_params[name] = trial.suggest_int(name, int(low), int(high))
+            else:
+                trial_params[name] = trial.suggest_float(
+                    name, float(low), float(high), log=ptype == "log_float"
+                )
 
         # Derived parameter: MAX_DISTANCE_THRESHOLD from multiplier
         if "MAX_DISTANCE_MULTIPLIER" in trial_params:
@@ -789,6 +849,261 @@ class TrackingOptimizerCore:
             )
 
         return trial_params
+
+    def _search_and_validation_bounds(
+        self,
+    ) -> tuple[tuple[int, int], tuple[int, int] | None]:
+        """Reserve a chronological tail for held-out production replay."""
+
+        frame_count = self.end_frame - self.start_frame + 1
+        if frame_count < 8:
+            return (self.start_frame, self.end_frame), None
+        gap_frames = 1 if frame_count >= 12 else 0
+        split = build_train_validation_split(
+            frame_count, validation_fraction=0.25, gap_frames=gap_frames
+        )
+        train = split.train[0]
+        validation = split.validation[0]
+        return (
+            (self.start_frame + train.start, self.start_frame + train.stop - 1),
+            (
+                self.start_frame + validation.start,
+                self.start_frame + validation.stop - 1,
+            ),
+        )
+
+    def _proposal_score(
+        self,
+        params: Dict[str, Any],
+        start_frame: int,
+        end_frame: int,
+    ) -> tuple[float, Dict[str, float]]:
+        """Fast search-only score with a forward/backward consistency signal.
+
+        This deliberately remains a proposal heuristic.  Final recommendation
+        is decided by the production loop on held-out frames below.
+        """
+
+        forward_score, sub_scores, forward_map = self._run_tracking_loop(
+            params, start_frame=start_frame, end_frame=end_frame
+        )
+        _, _, backward_map = self._run_tracking_loop(
+            params, reverse=True, start_frame=start_frame, end_frame=end_frame
+        )
+        n_tracks = int(params["MAX_TARGETS"])
+        forward = _dense_frame_positions(forward_map, start_frame, end_frame, n_tracks)
+        backward = _dense_frame_positions(
+            backward_map, start_frame, end_frame, n_tracks
+        )
+        body_scale = max(
+            float(params.get("REFERENCE_BODY_SIZE", 20.0))
+            * float(params.get("RESIZE_FACTOR", 1.0)),
+            1e-6,
+        )
+        try:
+            cycle = forward_backward_cycle_consistency(
+                forward,
+                backward,
+                backward_is_reverse_chronological=False,
+                spatial_scale=body_scale,
+            )
+            cycle_loss = min(float(cycle.mean_normalized_error), 10.0)
+        except ValueError:
+            cycle_loss = 10.0
+        sub_scores = dict(sub_scores)
+        sub_scores["cycle_loss"] = cycle_loss
+        # A non-negative weighted sum is used only to guide Optuna.  Unlike the
+        # old standard-deviation bonus, worsening either term cannot improve it.
+        return float(forward_score + 0.25 * cycle_loss), sub_scores
+
+    @staticmethod
+    def _validation_evaluations(
+        candidate_id: str,
+        forward: np.ndarray,
+        backward: np.ndarray,
+        body_scale: float,
+    ) -> list[CandidateEvaluation]:
+        """Build repeated temporal-region measurements for one candidate."""
+
+        segment_count = min(3, len(forward))
+        evaluations: list[CandidateEvaluation] = []
+        for index, segment in enumerate(
+            partition_temporal_segments(len(forward), segment_count)
+        ):
+            forward_segment = forward[segment.start : segment.stop]
+            backward_segment = backward[segment.start : segment.stop]
+            forward_quality = trajectory_quality_metrics(
+                forward_segment, spatial_scale=body_scale
+            )
+            backward_quality = trajectory_quality_metrics(
+                backward_segment, spatial_scale=body_scale
+            )
+            try:
+                cycle_loss = forward_backward_cycle_consistency(
+                    forward_segment,
+                    backward_segment,
+                    backward_is_reverse_chronological=False,
+                    spatial_scale=body_scale,
+                ).mean_normalized_error
+            except ValueError:
+                # No shared observation is strong evidence against automatic
+                # promotion, while remaining finite for deterministic ranking.
+                cycle_loss = 10.0
+            evaluations.append(
+                CandidateEvaluation(
+                    candidate_id,
+                    {
+                        "cycle_loss": min(float(cycle_loss), 10.0),
+                        "coverage_loss": max(
+                            float(forward_quality.coverage_loss),
+                            float(backward_quality.coverage_loss),
+                        ),
+                        "fragmentation_loss": max(
+                            float(forward_quality.fragmentation_loss),
+                            float(backward_quality.fragmentation_loss),
+                        ),
+                        "motion_roughness_loss": min(
+                            max(
+                                float(forward_quality.motion_roughness_loss),
+                                float(backward_quality.motion_roughness_loss),
+                            ),
+                            10.0,
+                        ),
+                    },
+                    perturbation_id=f"temporal-region-{index + 1}",
+                )
+            )
+        return evaluations
+
+    def _production_validate_shortlist(
+        self,
+        results: list[OptimizationResult],
+        validation_bounds: tuple[int, int] | None,
+    ) -> None:
+        """Annotate results and choose a conservatively safe recommendation."""
+
+        baseline = next(result for result in results if result.is_baseline)
+        baseline.recommended = True
+        baseline.recommendation_reason = "current settings retained by default"
+        if validation_bounds is None:
+            baseline.recommendation_reason = "current settings retained: frame range is too short for held-out validation"
+            return
+        if self._stop_requested:
+            baseline.recommendation_reason = (
+                "current settings retained: held-out validation was cancelled"
+            )
+            return
+
+        # Validate only a bounded shortlist through the much heavier production
+        # loop.  The baseline is always included exactly as configured.
+        candidates = [result for result in results if not result.is_baseline]
+        shortlist = [baseline, *sorted(candidates, key=lambda item: item.score)[:5]]
+        start_frame, end_frame = validation_bounds
+        evaluator = ProductionReplayEvaluator(
+            self.video_path,
+            self.detection_cache_path,
+            start_frame,
+            end_frame,
+            should_stop=lambda: self._stop_requested,
+        )
+        all_evaluations: list[CandidateEvaluation] = []
+        validated_results: list[OptimizationResult] = []
+        for index, result in enumerate(shortlist):
+            if self._stop_requested:
+                break
+            if self._progress_cb is not None:
+                self._progress_cb(
+                    85 + int(15 * index / max(len(shortlist), 1)),
+                    f"Production-validating candidate {index + 1}/{len(shortlist)}",
+                )
+            params = dict(self.base_params)
+            params.update(result.params)
+            forward = evaluator.run(params, reverse=False)
+            backward = evaluator.run(params, reverse=True)
+            if not forward.success or not backward.success:
+                messages = [value for value in (forward.error, backward.error) if value]
+                result.recommendation_reason = "production validation failed" + (
+                    f": {'; '.join(messages)}" if messages else ""
+                )
+                continue
+            body_scale = max(
+                float(params.get("REFERENCE_BODY_SIZE", 20.0))
+                * float(params.get("RESIZE_FACTOR", 1.0)),
+                1e-6,
+            )
+            all_evaluations.extend(
+                self._validation_evaluations(
+                    result.candidate_id,
+                    forward.positions,
+                    backward.positions,
+                    body_scale,
+                )
+            )
+            validated_results.append(result)
+
+        if self._progress_cb is not None:
+            self._progress_cb(100, "Held-out production validation complete")
+
+        if self._stop_requested:
+            baseline.recommendation_reason = (
+                "current settings retained: held-out validation was cancelled"
+            )
+            return
+        if baseline not in validated_results:
+            baseline.recommendation_reason = (
+                "current settings retained: baseline production validation failed"
+            )
+            return
+
+        scores = aggregate_candidate_evaluations(
+            all_evaluations, _UNLABELED_METRIC_SPECS
+        )
+        score_by_id = {score.candidate_id: score for score in scores}
+        result_by_id = {result.candidate_id: result for result in validated_results}
+        for rank in pareto_ranks(scores, _UNLABELED_METRIC_SPECS):
+            result = result_by_id[rank.candidate_id]
+            result.pareto_rank = rank.front
+            score = score_by_id[rank.candidate_id]
+            result.mean_relative_spread = score.mean_relative_spread
+            result.validation_metrics = {
+                name: {
+                    "mean": estimate.mean,
+                    "std": estimate.std,
+                    "sample_count": estimate.sample_count,
+                }
+                for name, estimate in score.metrics.items()
+            }
+            result.sub_scores.update(
+                {name: estimate.mean for name, estimate in score.metrics.items()}
+            )
+
+        recommendation = recommend_dominating_candidate(
+            scores, baseline.candidate_id, _UNLABELED_METRIC_SPECS
+        )
+        if recommendation.candidate_id is None:
+            baseline.recommendation_reason = (
+                "current settings retained: " + recommendation.reason
+            )
+            return
+
+        candidate = result_by_id[recommendation.candidate_id]
+        decision = decide_heldout_baseline_protection(
+            score_by_id[baseline.candidate_id],
+            score_by_id[candidate.candidate_id],
+            _UNLABELED_METRIC_SPECS,
+            primary_metric="cycle_loss",
+            minimum_improvement=float(
+                self.base_params.get("AUTOTUNE_MIN_HELDOUT_IMPROVEMENT", 0.01)
+            ),
+        )
+        if not decision.accepted:
+            baseline.recommendation_reason = (
+                "current settings retained: " + decision.reason
+            )
+            return
+        baseline.recommended = False
+        candidate.recommended = True
+        candidate.recommendation_reason = decision.reason
 
     # ------------------------------------------------------------------
     # Main entry point
@@ -808,7 +1123,7 @@ class TrackingOptimizerCore:
 
         sampler = self._build_sampler(n_active)
         study = optuna.create_study(direction="minimize", sampler=sampler)
-        results = []
+        results: list[OptimizationResult] = []
 
         # Pre-calculated scaled body size for pixel conversions
         ref_size = self.base_params.get("REFERENCE_BODY_SIZE", 20.0)
@@ -817,7 +1132,39 @@ class TrackingOptimizerCore:
 
         self._preload_pose_data()
 
-        # Seed the first trial with the user's current production settings.
+        search_bounds, validation_bounds = self._search_and_validation_bounds()
+        search_start, search_end = search_bounds
+
+        # The current production settings are a first-class candidate and are
+        # evaluated exactly, even when a value sits outside the exploration
+        # range.  They are never replaced by a clamped approximation.
+        try:
+            baseline_score, baseline_sub_scores = self._proposal_score(
+                dict(self.base_params), search_start, search_end
+            )
+        except Exception as exc:
+            logger.exception("Optimizer: exact baseline evaluation failed")
+            if self._error_cb is not None:
+                self._error_cb(f"Baseline evaluation failed: {exc}")
+            self.cache = None
+            self._pose_frame_cache = None
+            if self._result_cb is not None:
+                self._result_cb([])
+            return []
+        results.append(
+            OptimizationResult(
+                {},
+                baseline_score,
+                -1,
+                baseline_sub_scores,
+                candidate_id="baseline",
+                is_baseline=True,
+            )
+        )
+
+        # Seed search near current settings when every selected value is inside
+        # the exploration contract.  Exact baseline evidence is already stored
+        # above, so a partial/out-of-range seed is not misrepresented as it.
         seed_params = self._build_seed_trial()
         if seed_params:
             study.enqueue_trial(seed_params)
@@ -854,18 +1201,22 @@ class TrackingOptimizerCore:
             current_params = self.base_params.copy()
             current_params.update(trial_params)
 
-            # Run tracking simulation and compute composite score
-            composite, sub_scores, _ = self._run_tracking_loop(current_params)
-            score = composite
+            # Fast replay only proposes candidates on the training slice.
+            # Production replay on held-out frames decides whether one is safe
+            # to recommend after the study.
+            score, sub_scores = self._proposal_score(
+                current_params, search_start, search_end
+            )
 
             results.append(
                 OptimizationResult(trial_params, score, trial.number, sub_scores)
             )
-            pct = int(((trial.number + 1) / self.n_trials) * 100)
+            pct = int(((trial.number + 1) / max(self.n_trials, 1)) * 85)
             if self._progress_cb is not None:
                 self._progress_cb(
                     int(pct),
-                    f"Trial {trial.number + 1}/{self.n_trials} (Score: {score:.3f})",
+                    f"Proposal {trial.number + 1}/{self.n_trials} "
+                    f"(search loss: {score:.3f})",
                 )
 
             # Plateau detection
@@ -897,7 +1248,18 @@ class TrackingOptimizerCore:
             if self._error_cb is not None:
                 self._error_cb(f"Optimization trial failed: {e}")
 
-        results.sort(key=lambda x: x.score)
+        self._production_validate_shortlist(results, validation_bounds)
+        # Put the conservative recommendation first.  Remaining rows are a
+        # transparent shortlist: production-validated Pareto fronts first,
+        # then the search heuristic used only to generate proposals.
+        results.sort(
+            key=lambda item: (
+                not item.recommended,
+                item.pareto_rank is None,
+                item.pareto_rank if item.pareto_rank is not None else 10**9,
+                item.score,
+            )
+        )
         # Do not call self.cache.close(): it was opened read-only and
         # DetectionCacheHandle.close() flushes its (empty) write buffer,
         # which would clobber the on-disk cache with zero frames.
@@ -907,7 +1269,14 @@ class TrackingOptimizerCore:
             self._result_cb(results)
         return results
 
-    def _run_tracking_loop(self, params: Dict[str, Any], reverse: bool = False):
+    def _run_tracking_loop(
+        self,
+        params: Dict[str, Any],
+        reverse: bool = False,
+        *,
+        start_frame: int | None = None,
+        end_frame: int | None = None,
+    ):
         """
         Core tracking simulation shared by quality scoring and the FB consistency metric.
 
@@ -916,8 +1285,8 @@ class TrackingOptimizerCore:
         composite : float
             Lower-is-better composite score balancing four orthogonal objectives.
         frame_positions : Dict[int, np.ndarray]
-            Maps frame_idx -> (N, 2) float32 array of KF-estimated positions.
-            Rows for lost tracks contain NaN.
+            Maps frame_idx -> (N, 2) float32 array of current detection
+            observations. Missing/unmatched rows contain NaN.
         """
 
         # Correction 21: create a lightweight params holder that _filter_cached_detections
@@ -925,6 +1294,12 @@ class TrackingOptimizerCore:
         class _ParamsFilter:
             def __init__(self, p):
                 self.params = p
+                self.inference_config = inference_config_for_optimizer_params(p)
+
+        start_frame = self.start_frame if start_frame is None else int(start_frame)
+        end_frame = self.end_frame if end_frame is None else int(end_frame)
+        if end_frame < start_frame:
+            raise ValueError("end_frame must be greater than or equal to start_frame")
 
         det_filter = _ParamsFilter(params)
         kf_manager = KalmanFilterManager(params["MAX_TARGETS"], params)
@@ -990,12 +1365,14 @@ class TrackingOptimizerCore:
         orientation_last: list = [None] * N
         track_avg_step = np.zeros(N, dtype=np.float32)
         lost_threshold = params.get("LOST_THRESHOLD_FRAMES", 5)
-        n_frames = self.end_frame - self.start_frame + 1
+        n_frames = end_frame - start_frame + 1
+        detection_initialized = False
+        detection_counts = 0
 
         frame_order = (
-            range(self.end_frame, self.start_frame - 1, -1)
+            range(end_frame, start_frame - 1, -1)
             if reverse
-            else range(self.start_frame, self.end_frame + 1)
+            else range(start_frame, end_frame + 1)
         )
         frame_positions: Dict[int, np.ndarray] = {}
 
@@ -1065,8 +1442,19 @@ class TrackingOptimizerCore:
                 "track_pose_prototypes": track_pose_prototypes,
                 "track_avg_step": track_avg_step.copy(),
             }
+            current_observations: Dict[int, np.ndarray] = {}
+            if len(meas) >= int(params.get("MIN_DETECTIONS_TO_START", 1)):
+                detection_counts += 1
+            else:
+                detection_counts = 0
+            if (
+                detection_counts
+                >= max(1, int(params.get("MIN_DETECTION_COUNTS", 1)) // 2)
+                and not detection_initialized
+            ):
+                detection_initialized = True
 
-            if meas:
+            if detection_initialized and meas:
                 kf_manager.predict()
 
                 _meas_arena = _meas_arena_ids(_arena_layout, meas, _arena_frame_size)
@@ -1165,6 +1553,7 @@ class TrackingOptimizerCore:
                 )
                 for r, c in zip(matched_r, matched_c):
                     last_shape_info[r] = shapes[c]
+                    current_observations[r] = np.asarray(meas[c][:2], dtype=np.float32)
 
                 next_trajectory_id = _respawn_free_detections(
                     free_dets,
@@ -1185,7 +1574,8 @@ class TrackingOptimizerCore:
                     detection_directed_heading,
                     _det_pose_kpts,
                 )
-            else:
+            elif detection_initialized:
+                kf_manager.predict()
                 _update_unmatched_track_states(
                     N,
                     set(),
@@ -1228,11 +1618,12 @@ class TrackingOptimizerCore:
                 _n_pairs,
             )
 
-            # Record estimated positions (NaN = lost track)
+            # Record only current-frame observations.  Production output uses
+            # NaN for coasted Kalman states, so hidden posterior positions must
+            # not make a candidate look artificially smooth.
             pos = np.full((N, 2), np.nan, dtype=np.float32)
-            for r in range(N):
-                if track_states[r] != "lost":
-                    pos[r] = kf_manager.X[r, :2]
+            for r, observed in current_observations.items():
+                pos[r] = observed
             frame_positions[f_idx] = pos
 
         composite, sub_scores = _compute_composite_score(

@@ -141,6 +141,8 @@ class TrackingEngineCore:
         on_stats=None,
         on_warning=None,
         on_pose_model_resolved=None,
+        inference_cache_dir=None,
+        cache_read_only_replay=False,
     ):
         self._on_frame = on_frame
         self._on_finished = on_finished
@@ -155,6 +157,13 @@ class TrackingEngineCore:
         self.detection_cache_path = detection_cache_path
         self.preview_mode = preview_mode
         self.use_cached_detections = use_cached_detections
+        # Autotuning and other diagnostic replays may point at an explicit
+        # InferenceRunner cache and must never promote or rewrite a cache
+        # generation.  These keyword-only options leave normal tracking
+        # sessions unchanged while letting callers reuse the production loop
+        # as a read-only evaluator.
+        self.inference_cache_dir = inference_cache_dir
+        self.cache_read_only_replay = bool(cache_read_only_replay)
         self.video_writer = None
         self._params_lock = threading.Lock()
         self.parameters = {}
@@ -1031,7 +1040,8 @@ class TrackingEngineCore:
                 return
 
             _cache_dir = self._resolve_cache_dir()
-            _cache_dir.mkdir(parents=True, exist_ok=True)
+            if not self.cache_read_only_replay:
+                _cache_dir.mkdir(parents=True, exist_ok=True)
             # Backward (replay) passes only call load_frame / caches_all_valid —
             # they never invoke run_realtime or run_batch_pass.  Skip loading
             # HeadTail, CNN, Pose (incl. SLEAP), and AprilTag backends in that
@@ -1040,7 +1050,7 @@ class TrackingEngineCore:
                 _inference_cfg,
                 cache_dir=_cache_dir,
                 video_path=self.video_path,
-                cache_only=self.backward_mode,
+                cache_only=self.backward_mode or self.cache_read_only_replay,
                 # Arena ROI mask (native video resolution). Folded into the
                 # detection cache key ONLY when sliced inference is enabled, and
                 # used to ROI-gate slice tiles in the batch pass. Passing it at
@@ -1051,10 +1061,10 @@ class TrackingEngineCore:
                 identity_evidence=_identity_evidence_run_config,
             )
 
-            if self.backward_mode:
+            if self.backward_mode or self.cache_read_only_replay:
                 if not inference_runner.caches_all_valid():
                     logger.error(
-                        "Backward tracking requires valid forward-pass inference caches. "
+                        "Cached tracking replay requires valid inference caches. "
                         "Please run forward tracking first."
                     )
                     inference_runner.close()
@@ -1068,7 +1078,7 @@ class TrackingEngineCore:
                         start_frame, end_frame
                     )
                     logger.error(
-                        "Backward tracking requires a forward-pass cache covering "
+                        "Cached tracking replay requires a cache covering "
                         "frames %d-%d, but it is incomplete (missing e.g. %s). "
                         "Please re-run forward tracking over the full range.",
                         start_frame,
@@ -1081,7 +1091,8 @@ class TrackingEngineCore:
                     return
                 use_cached_detections = True
                 logger.info(
-                    "Backward pass: using pre-computed InferenceRunner caches from %s",
+                    "%s pass: using read-only InferenceRunner caches from %s",
+                    "Backward" if self.backward_mode else "Forward",
                     _cache_dir,
                 )
             elif (
@@ -1111,7 +1122,12 @@ class TrackingEngineCore:
                     )
 
             # Load density regions sidecar for backward pass
-            if density_map_enabled and self.backward_mode and not self._density_regions:
+            if (
+                density_map_enabled
+                and self.backward_mode
+                and not self.cache_read_only_replay
+                and not self._density_regions
+            ):
                 try:
                     from hydra_suite.core.tracking.confidence.confidence_density import (
                         load_regions as _load_regions,
@@ -1164,8 +1180,9 @@ class TrackingEngineCore:
             )
             _cache_dir = self._resolve_cache_dir()
 
-            if self.backward_mode:
-                _cache_dir.mkdir(parents=True, exist_ok=True)
+            if self.backward_mode or self.cache_read_only_replay:
+                if self.backward_mode and not self.cache_read_only_replay:
+                    _cache_dir.mkdir(parents=True, exist_ok=True)
                 bgsub_runner = InferenceRunner(
                     bgsub_inference_config,
                     cache_dir=_cache_dir,
@@ -1176,7 +1193,7 @@ class TrackingEngineCore:
                     bgsub_runner.detection_cache_covers_range(start_frame, end_frame)
                 ):
                     logger.error(
-                        "Backward tracking requires a valid forward bg-sub "
+                        "Cached tracking replay requires a valid bg-sub "
                         "detection cache covering frames %d-%d at %s. Please run "
                         "forward tracking over the full range first.",
                         start_frame,
@@ -1189,8 +1206,9 @@ class TrackingEngineCore:
                     return
                 use_cached_detections = True
                 logger.info(
-                    "Backward pass: replaying cached bg-sub detections via "
+                    "%s pass: replaying cached bg-sub detections via "
                     "InferenceRunner from %s",
+                    "Backward" if self.backward_mode else "Forward",
                     _cache_dir / "detection.npz",
                 )
             else:
@@ -1285,8 +1303,10 @@ class TrackingEngineCore:
             logger.info("=" * 80)
 
         # === COMPUTE CONFIDENCE DENSITY MAP ===
-        # Runs for BOTH fresh and cached detections (forward pass only).
-        # Backward pass loads regions from the sidecar JSON instead.
+        # Runs for BOTH fresh and cached detections. Normal backward tracking
+        # loads regions from the forward sidecar; read-only candidate replay
+        # recomputes them in memory so each threshold setting is evaluated with
+        # its own density evidence and no shared artifact is mutated.
         # For YOLO OBB: uses InferenceRunner detection cache via build_density_cache_dict.
         # For background subtraction: SKIPPED BY DESIGN -- bg-sub produces no
         # confidence signal (its cached `confidences` are all NaN), so there is
@@ -1297,14 +1317,14 @@ class TrackingEngineCore:
         # bg-sub does write a detection cache since the InferenceRunner unification.)
         if (
             density_map_enabled
-            and not self.backward_mode
+            and (not self.backward_mode or self.cache_read_only_replay)
             and inference_runner is not None
             and use_cached_detections
         ):
             profiler.phase_start("confidence_density")
 
             _regions_path = _cache_dir / "confidence_regions.json"
-            if _regions_path.exists():
+            if _regions_path.exists() and not self.cache_read_only_replay:
                 # Regions already computed — just load them.
                 try:
                     from hydra_suite.core.tracking.confidence.confidence_density import (
@@ -1380,11 +1400,18 @@ class TrackingEngineCore:
                     )
                     self._density_regions = _dm.regions
 
-                    save_regions(self._density_regions, _regions_path)
-                    logger.info(
-                        f"Density map: {len(self._density_regions)} regions, "
-                        f"saved to {_regions_path}"
-                    )
+                    if not self.cache_read_only_replay:
+                        save_regions(self._density_regions, _regions_path)
+                        logger.info(
+                            f"Density map: {len(self._density_regions)} regions, "
+                            f"saved to {_regions_path}"
+                        )
+                    else:
+                        logger.info(
+                            "Read-only replay computed %d candidate-specific "
+                            "density regions in memory.",
+                            len(self._density_regions),
+                        )
 
                     # Export diagnostic video at reduced resolution with
                     # sequential frame reading (avoids expensive random seeks
@@ -1405,7 +1432,10 @@ class TrackingEngineCore:
                         _ok, _fr = _cap.read()
                         return _fr if _ok else None
 
-                    if self._confidence_density_video_export_enabled(p):
+                    if (
+                        not self.cache_read_only_replay
+                        and self._confidence_density_video_export_enabled(p)
+                    ):
                         logger.info("Exporting confidence density diagnostic video...")
                         self._emit_progress(50, "Exporting confidence density video...")
 
@@ -1773,7 +1803,7 @@ class TrackingEngineCore:
             compute_filter_settings_hash(p),
             compute_extractor_hash(p),
         )
-        if not self.preview_mode:
+        if not self.preview_mode and not self.cache_read_only_replay:
             self.detected_properties_cache_path = str(
                 self._build_detected_properties_cache_path(
                     detected_props_id, start_frame, end_frame
@@ -1781,7 +1811,7 @@ class TrackingEngineCore:
             )
         detected_props_cache = (
             None
-            if self.preview_mode
+            if self.preview_mode or self.cache_read_only_replay
             else DetectedPropertiesCache(self.detected_properties_cache_path, mode="w")
         )
 
@@ -4195,6 +4225,7 @@ class TrackingEngineCore:
         if (
             not stop_requested
             and not self.preview_mode
+            and not self.cache_read_only_replay
             and isinstance(live_pose_props_cache, LivePosePropertiesStore)
         ):
             try:
@@ -4290,6 +4321,8 @@ class TrackingEngineCore:
         written under the source video's ``<stem>_logs/`` directory — never
         under a detection-cache directory.
         """
+        if self.cache_read_only_replay:
+            return None
         if self.video_output_path:
             _pbase = Path(self.video_output_path).with_suffix("")
             return Path(f"{_pbase}_{dir_tag}.profile.json")
@@ -4360,6 +4393,8 @@ class TrackingEngineCore:
 
     def _resolve_cache_dir(self) -> Path:
         """Return the per-video cache directory for InferenceRunner caches."""
+        if self.inference_cache_dir is not None:
+            return Path(self.inference_cache_dir)
         from hydra_suite.utils.video_artifacts import build_inference_cache_dir
 
         return build_inference_cache_dir(self.video_path)

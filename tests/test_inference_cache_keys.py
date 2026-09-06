@@ -258,8 +258,8 @@ def test_slice_param_change_changes_key_when_enabled():
     assert a.config_hash != b.config_hash
 
 
-def test_sequential_mode_slice_contribution_stays_empty():
-    """Slicing is direct-mode only; sequential mode's key is unaffected."""
+def test_sequential_mode_key_records_raw_extraction_contract():
+    """Sequential caches are versioned independently of final filtering."""
     cfg = OBBConfig(
         mode="sequential",
         sequential=OBBSequentialConfig(
@@ -267,7 +267,53 @@ def test_sequential_mode_slice_contribution_stays_empty():
             obb_model_path="/obb.pt",
         ),
     )
-    assert detection_cache_key(cfg).config_hash == ""
+    key = detection_cache_key(cfg)
+    assert key.config_hash
+
+    changed_final_filter = OBBConfig(
+        mode="sequential",
+        confidence_threshold=0.9,
+        iou_threshold=0.1,
+        sequential=cfg.sequential,
+    )
+    assert detection_cache_key(changed_final_filter).config_hash == key.config_hash
+
+
+def test_sequential_key_changes_with_raw_stage_settings():
+    base = OBBConfig(
+        mode="sequential",
+        sequential=OBBSequentialConfig(
+            detect_model_path="/det.pt",
+            obb_model_path="/obb.pt",
+            detect_confidence_threshold=0.1,
+        ),
+    )
+    changed_stage1 = OBBConfig(
+        mode="sequential",
+        sequential=OBBSequentialConfig(
+            detect_model_path="/det.pt",
+            obb_model_path="/obb.pt",
+            detect_confidence_threshold=0.2,
+        ),
+    )
+    changed_crop = OBBConfig(
+        mode="sequential",
+        sequential=OBBSequentialConfig(
+            detect_model_path="/det.pt",
+            obb_model_path="/obb.pt",
+            detect_confidence_threshold=0.1,
+            crop_pad_ratio=0.4,
+        ),
+    )
+
+    assert (
+        detection_cache_key(base).config_hash
+        != detection_cache_key(changed_stage1).config_hash
+    )
+    assert (
+        detection_cache_key(base).config_hash
+        != detection_cache_key(changed_crop).config_hash
+    )
 
 
 @pytest.mark.parametrize(
@@ -358,14 +404,33 @@ def test_roi_content_hash_not_truncated_str():
 
 
 def test_roi_sequential_mode_ignores_mask():
-    """Sequential mode never slices, so a mask must not perturb its key."""
+    """Non-sliced sequential mode does not use ROI tile gating."""
     cfg = OBBConfig(
         mode="sequential",
         sequential=OBBSequentialConfig(
             detect_model_path="/det.pt", obb_model_path="/obb.pt"
         ),
     )
-    assert detection_cache_key(cfg, _roi()).config_hash == ""
+    assert (
+        detection_cache_key(cfg, _roi()).config_hash
+        == detection_cache_key(cfg).config_hash
+    )
+
+
+def test_roi_sequential_stage1_slicing_hashes_mask_content():
+    cfg = OBBConfig(
+        mode="sequential",
+        sequential=OBBSequentialConfig(
+            detect_model_path="/det.pt",
+            obb_model_path="/obb.pt",
+            stage1_slice=SliceConfig(enabled=True),
+        ),
+    )
+
+    assert (
+        detection_cache_key(cfg, _roi(fill=1)).config_hash
+        != detection_cache_key(cfg, _roi(corner_zero=True)).config_hash
+    )
 
 
 # ---- bgsub_detection_cache_key ----

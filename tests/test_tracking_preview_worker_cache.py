@@ -80,7 +80,10 @@ def test_preview_worker_opens_new_format_cache_and_does_not_close_it(
     monkeypatch.setattr(ow, "_open_caches", _fake_open_caches, raising=False)
     monkeypatch.setattr(ow, "video_signature", _fake_video_signature, raising=False)
     monkeypatch.setattr(
-        ow, "build_inference_config_from_params", lambda p: object(), raising=False
+        ow,
+        "inference_config_for_optimizer_params",
+        lambda p: type("Config", (), {"detection_source": "bgsub"})(),
+        raising=False,
     )
     monkeypatch.setattr(ow, "DetectionCache", _boom, raising=False)
 

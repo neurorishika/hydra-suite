@@ -38,16 +38,16 @@ from hydra_suite.core.individual.pose.features import (
 from hydra_suite.core.individual.pose.features import (
     load_pose_context_from_params as _pf_load_pose_context,
 )
-from hydra_suite.core.inference.api import (
-    apply_detection_filter as _apply_detection_filter,
-)
-from hydra_suite.core.inference.config import build_inference_config_from_params
 from hydra_suite.core.inference.runner import _open_caches, video_signature
+from hydra_suite.core.inference.stages.filtering import filter_for_source
 from hydra_suite.core.tracking.arenas import arena_ids_for_meas as _meas_arena_ids
 from hydra_suite.core.tracking.arenas import (
     arena_layout_from_params,
     check_slot_arena_covers_all_slots,
     tracking_frame_size,
+)
+from hydra_suite.core.tracking.optimization.detection_config import (
+    inference_config_for_optimizer_params,
 )
 
 logger = logging.getLogger(__name__)
@@ -57,24 +57,18 @@ def _preview_filter_cached_detections(det_filter, cache, f_idx, roi_mask):
     """Read a frame from cache and apply detection filtering for preview.
 
     Detection caches are always ``OBBResult`` (InferenceRunner-based
-    builder); filtering is applied via ``apply_detection_filter`` from
-    ``core/inference/api``.
+    builder).  Preview replays the same source-aware production filter as
+    scoring and ``InferenceRunner.load_frame``.
     """
     frame_data = cache.read_frame(f_idx)
 
     from hydra_suite.core.inference.result import OBBResult as _OBBResult
 
     if isinstance(frame_data, _OBBResult):
-        from hydra_suite.core.inference.config import OBBConfig
-
-        conf_threshold = 0.0
-        if hasattr(det_filter, "params"):
-            conf_threshold = float(det_filter.params.get("DETECTION_CONFIDENCE", 0.0))
-        elif hasattr(det_filter, "confidence_threshold"):
-            conf_threshold = float(det_filter.confidence_threshold)
-
-        _cfg = OBBConfig(confidence_threshold=conf_threshold)
-        filtered_obb = _apply_detection_filter(frame_data, _cfg)
+        inference_config = getattr(det_filter, "inference_config", None)
+        if inference_config is None:
+            inference_config = inference_config_for_optimizer_params(det_filter.params)
+        filtered_obb, _ = filter_for_source(inference_config, frame_data, roi_mask)
         meas = np.concatenate(
             [filtered_obb.centroids, filtered_obb.angles[:, None]], axis=1
         ).tolist()
@@ -332,7 +326,7 @@ def run_tracking_preview(
     # must never have close() called on it: DetectionCacheHandle.close()
     # flushes its (empty, since we never write) buffer and would clobber
     # the on-disk cache with zero frames (see optimizer._open_and_validate_cache).
-    cfg = build_inference_config_from_params(params)
+    cfg = inference_config_for_optimizer_params(params)
     caches = _open_caches(
         cfg,
         Path(detection_cache_path),
@@ -371,12 +365,12 @@ def run_tracking_preview(
                 int(cap.get(cv2.CAP_PROP_FRAME_HEIGHT)),
             )
 
-        # Correction 21: _ParamsFilter is a lightweight shim that exposes .params
-        # so _preview_filter_cached_detections can read DETECTION_CONFIDENCE from
-        # it regardless of whether the cache returns OBBResult or a legacy 12-tuple.
+        # Carries the exact source-aware config used to open this cache, so each
+        # replayed frame runs through the production filtering dispatcher.
         class _ParamsFilter:
             def __init__(self, p):
                 self.params = p
+                self.inference_config = inference_config_for_optimizer_params(p)
 
         det_filter = _ParamsFilter(params)
         _roi_mask = params.get("ROI_MASK", None)
