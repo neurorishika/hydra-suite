@@ -268,6 +268,31 @@ def _probe_frame_hw(video_path: str | None) -> tuple[int, int] | None:
         cap.release()
 
 
+def frame_space_roi_mask(
+    roi_mask: np.ndarray | None, video_path: str | Path | None
+) -> np.ndarray | None:
+    """Return an ROI mask in the native coordinate space of cached frames.
+
+    Detection caches store native video-frame coordinates even when tracking
+    parameters originated from a resized display.  Cache readers and auxiliary
+    output diagnostics must therefore use this same nearest-neighbor transform
+    before applying source filtering.
+    """
+
+    if roi_mask is None:
+        return None
+    frame_hw = _probe_frame_hw(str(video_path) if video_path else None)
+    if frame_hw is None or roi_mask.shape[:2] == frame_hw:
+        return roi_mask
+    import cv2
+
+    return cv2.resize(
+        roi_mask,
+        (frame_hw[1], frame_hw[0]),  # cv2 wants (w, h)
+        interpolation=cv2.INTER_NEAREST,
+    )
+
+
 def _probe_model_imgsz(model_path: str | None) -> int | None:
     """Resolve the model's square input size, or None on failure."""
     if not model_path:
@@ -1554,17 +1579,7 @@ class InferenceRunner:
         cache_key = (str(video_path) if video_path else None, id(mask))
         if cache_key in self._frame_space_roi_mask_cache:
             return self._frame_space_roi_mask_cache[cache_key]
-        frame_hw = _probe_frame_hw(str(video_path) if video_path else None)
-        if frame_hw is None or mask.shape[:2] == frame_hw:
-            resolved = mask
-        else:
-            import cv2
-
-            resolved = cv2.resize(
-                mask,
-                (frame_hw[1], frame_hw[0]),  # cv2 wants (w, h)
-                interpolation=cv2.INTER_NEAREST,
-            )
+        resolved = frame_space_roi_mask(mask, video_path)
         self._frame_space_roi_mask_cache[cache_key] = resolved
         return resolved
 
@@ -1734,7 +1749,15 @@ class InferenceRunner:
         pipeline.cache_writer.flush()
         pipeline.cache_writer.close()
 
-    def load_frame(self, frame_idx: int) -> FrameResult:
+    def load_filtered_obb(self, frame_idx: int):
+        """Load one cached OBB frame through the production filter contract.
+
+        This is the cache-replay prefix shared by full ``load_frame`` calls and
+        consumers such as confidence-density construction.  Keeping it here
+        makes every consumer use the candidate's source-aware filtering and
+        native-frame ROI transform rather than reimplementing one or the other.
+        """
+
         if self.cache_dir is None:
             raise RuntimeError("cache_dir not set — cannot load cached frames")
         if self._caches is None:
@@ -1767,10 +1790,15 @@ class InferenceRunner:
         # pipeline. Without this, ROI filtering silently never applied to any
         # cached/replayed YOLO-OBB read (forward cache reuse AND the backward
         # pass), regardless of the ROI configured at construction.
-        filtered_obb, det_indices = filter_for_source(
+        return filter_for_source(
             self.config, raw_obb, self._frame_space_roi_mask(self._video_path)
         )
 
+    def load_frame(self, frame_idx: int) -> FrameResult:
+        """Load one cached frame with its production filtering and evidence."""
+
+        filtered_obb, det_indices = self.load_filtered_obb(frame_idx)
+        assert self._caches is not None  # established by load_filtered_obb
         ht_result = _load_headtail_for_indices(
             self._caches.headtail, frame_idx, det_indices, filtered_obb
         )

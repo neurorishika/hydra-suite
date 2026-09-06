@@ -265,6 +265,7 @@ def forward_backward_cycle_consistency(
     backward_is_reverse_chronological: bool = True,
     spatial_scale: float | None = None,
     slot_alignment: SlotAlignment | None = None,
+    minimum_shared_observations: int = 2,
 ) -> CycleConsistency:
     """Measure forward/backward disagreement after aligning time direction.
 
@@ -288,17 +289,23 @@ def forward_backward_cycle_consistency(
     if backward_is_reverse_chronological:
         backward = backward[::-1]
 
+    shared_count = _validated_minimum_shared_observations(minimum_shared_observations)
     scale = _resolve_spatial_scale(forward, spatial_scale)
     alignment = slot_alignment or global_slot_alignment(
         forward,
         backward,
         backward_is_reverse_chronological=False,
         spatial_scale=scale,
+        minimum_shared_observations=shared_count,
     )
     if not np.isclose(scale, alignment.spatial_scale, rtol=1e-9, atol=1e-12):
         raise ValueError("slot_alignment spatial_scale does not match this score")
     errors, shared_observations = _errors_for_slot_alignment(
-        forward, backward, alignment, scale
+        forward,
+        backward,
+        alignment,
+        scale,
+        minimum_shared_observations=shared_count,
     )
     available_observations = min(
         int(np.count_nonzero(np.isfinite(forward).all(axis=2))),
@@ -343,16 +350,7 @@ def global_slot_alignment(
         )
     if backward_is_reverse_chronological:
         backward = backward[::-1]
-    try:
-        shared_count = int(minimum_shared_observations)
-    except (TypeError, ValueError) as exc:
-        raise ValueError("minimum_shared_observations must be at least one") from exc
-    if (
-        isinstance(minimum_shared_observations, bool)
-        or shared_count != minimum_shared_observations
-        or shared_count < 1
-    ):
-        raise ValueError("minimum_shared_observations must be at least one")
+    shared_count = _validated_minimum_shared_observations(minimum_shared_observations)
     scale = _resolve_spatial_scale(forward, spatial_scale)
     mapping, shared_observations = _robust_global_slot_mapping(
         forward,
@@ -1009,6 +1007,8 @@ def _errors_for_slot_alignment(
     backward: FloatArray,
     alignment: SlotAlignment,
     scale: float,
+    *,
+    minimum_shared_observations: int,
 ) -> tuple[FloatArray, int]:
     """Return the pooled errors for a precomputed full-window slot mapping."""
 
@@ -1024,7 +1024,7 @@ def _errors_for_slot_alignment(
         valid = np.isfinite(forward[:, forward_track]).all(axis=1) & np.isfinite(
             backward[:, backward_track]
         ).all(axis=1)
-        if not np.any(valid):
+        if np.count_nonzero(valid) < minimum_shared_observations:
             continue
         differences = forward[valid, forward_track] - backward[valid, backward_track]
         normalized = np.linalg.norm(differences, axis=1) / scale
@@ -1033,6 +1033,18 @@ def _errors_for_slot_alignment(
     if not errors:
         raise ValueError("no position is observed in matched forward/backward tracks")
     return np.asarray(errors, dtype=np.float64), shared_observations
+
+
+def _validated_minimum_shared_observations(value: int) -> int:
+    """Return an integral overlap floor for alignment and regional reporting."""
+
+    try:
+        shared_count = int(value)
+    except (TypeError, ValueError) as exc:
+        raise ValueError("minimum_shared_observations must be at least one") from exc
+    if isinstance(value, bool) or shared_count != value or shared_count < 1:
+        raise ValueError("minimum_shared_observations must be at least one")
+    return shared_count
 
 
 def _validated_metric_segment(

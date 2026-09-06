@@ -305,8 +305,12 @@ def build_density_cache_dict(
     unique_fi = det_cache.iter_covered_frames(start_frame, end_frame)
 
     for fi in unique_fi:
-        obb = det_cache.read_frame(fi)
-        if obb is None or obb.num_detections == 0:
+        # Use the same cached-replay prefix as TrackingEngineCore.  In
+        # particular, this applies the candidate's source-aware filter and
+        # InferenceRunner's native-frame ROI conversion before density regions
+        # influence assignment costs.
+        obb, _ = runner.load_filtered_obb(fi)
+        if obb.num_detections == 0:
             result[fi] = (
                 np.zeros((0, 3), dtype=np.float32),
                 np.zeros(0, dtype=np.float32),

@@ -16,6 +16,9 @@ change:
    source, and ROI filtering are re-applied with the same `filter_for_source`
    path used by production inference. Background-subtraction detections therefore
    bypass YOLO-only confidence filtering.
+   Candidate confidence-density regions are built from those same filtered
+   detections after any ROI mask is resampled to native cache-frame coordinates;
+   raw cached detections are never substituted for density evidence.
 2. Optuna explores the user-selected parameter dimensions on a chronological
    training slice. Its scalar loss is only a search heuristic. The current
    production settings are also evaluated exactly and are never clamped into
@@ -121,7 +124,9 @@ Detection caches and production validation replays are read-only.
 Automatic promotion requires enough held-out support for four paired regions at
 the largest active temporal horizon. A short range can still show proposals,
 but it retains the current settings and explains that held-out validation cannot
-support a recommendation.
+support a recommendation. Frame count alone is not evidence: each region must
+also contain observed forward/backward motion triplets and robust shared cycle
+observations before it contributes to promotion.
 
 Cancel, window close, `reject()`, `accept()`, and direct `done()` all request
 optimizer and preview cancellation before a terminal dialog transition. The

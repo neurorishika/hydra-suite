@@ -38,7 +38,11 @@ from hydra_suite.core.individual.pose.features import (
 # of the legacy flat DetectionCache. Building and reading must derive their
 # InferenceConfig from the SAME params so the cache key matches; a mismatch
 # makes the handle read back as empty.
-from hydra_suite.core.inference.runner import _open_caches, video_signature
+from hydra_suite.core.inference.runner import (
+    _open_caches,
+    frame_space_roi_mask,
+    video_signature,
+)
 from hydra_suite.core.inference.stages.filtering import filter_for_source
 from hydra_suite.core.tracking.arenas import arena_ids_for_meas as _meas_arena_ids
 from hydra_suite.core.tracking.arenas import (
@@ -601,6 +605,12 @@ class TrackingOptimizerCore:
         self._stop_requested = False
         self._search_converged = False
         self.cache = None
+        # ROI is fixed over an optimization run, while every proposal repeatedly
+        # filters cached native-frame detections. Resolve it lazily once rather
+        # than reopening the video for each forward/backward proposal replay.
+        self._native_roi_mask_source_id: int | None = None
+        self._native_roi_mask: np.ndarray | None = None
+        self._native_roi_mask_initialized = False
 
     # Alias to module-level constant so existing internal references keep working.
     _PARAM_RANGES = _PARAM_RANGES  # type: ignore[assignment]
@@ -656,6 +666,22 @@ class TrackingOptimizerCore:
 
     def request_stop(self):
         self._stop_requested = True
+
+    def _frame_space_roi_mask_for_params(
+        self, params: Dict[str, Any]
+    ) -> np.ndarray | None:
+        """Return the cached native-frame ROI for a fixed evaluation contract."""
+
+        raw_mask = params.get("ROI_MASK", None)
+        source_id = id(raw_mask)
+        if (
+            not self._native_roi_mask_initialized
+            or self._native_roi_mask_source_id != source_id
+        ):
+            self._native_roi_mask = frame_space_roi_mask(raw_mask, self.video_path)
+            self._native_roi_mask_source_id = source_id
+            self._native_roi_mask_initialized = True
+        return self._native_roi_mask
 
     # ------------------------------------------------------------------
     # run() helpers
@@ -1116,6 +1142,53 @@ class TrackingOptimizerCore:
             )
         return evaluations
 
+    def _validation_temporal_evidence_reason(
+        self,
+        forward: np.ndarray,
+        backward: np.ndarray,
+        body_scale: float,
+        evaluations: list[CandidateEvaluation],
+    ) -> str | None:
+        """Return why regional production metrics lack real temporal evidence.
+
+        Frame count establishes only the *opportunity* to observe transitions.
+        Promotion also needs sufficient fully observed motion-triplet support
+        in both replay directions and robust cycle overlap in every paired
+        region.  The corresponding candidate evaluations stay finite for
+        diagnostics, but their neutral/sentinel values must not become
+        statistical evidence.
+        """
+
+        segments = partition_temporal_segments(len(forward), len(evaluations))
+        # A 3-frame metric needs one triplet.  For a larger tuned lifecycle
+        # horizon, require enough consecutive observations to actually cover
+        # that horizon rather than accepting one isolated smooth blip.
+        required_motion_triplets = max(1, self._temporal_validation_horizon() - 2)
+        for index, (segment, evaluation) in enumerate(
+            zip(segments, evaluations, strict=True), start=1
+        ):
+            for direction, positions in (
+                ("forward", forward),
+                ("backward", backward),
+            ):
+                quality = trajectory_quality_metrics(
+                    positions, spatial_scale=body_scale, segment=segment
+                )
+                if quality.valid_motion_triplets < required_motion_triplets:
+                    return (
+                        "held-out temporal support is inadequate: validation "
+                        f"region {index} requires at least {required_motion_triplets} "
+                        "observed motion-triplet(s) but found "
+                        f"{quality.valid_motion_triplets} in the {direction} replay"
+                    )
+            if evaluation.metrics["cycle_observation_coverage"] <= 0.0:
+                return (
+                    "held-out temporal support is inadequate: validation "
+                    f"region {index} has no robust shared forward/backward "
+                    "cycle observations"
+                )
+        return None
+
     def _validation_detection_counts(
         self, params: Dict[str, Any], start_frame: int, end_frame: int
     ) -> np.ndarray | None:
@@ -1138,7 +1211,7 @@ class TrackingOptimizerCore:
 
         try:
             detector = _ParamsFilter(params)
-            roi_mask = params.get("ROI_MASK", None)
+            roi_mask = self._frame_space_roi_mask_for_params(params)
             return np.asarray(
                 [
                     len(
@@ -1392,15 +1465,30 @@ class TrackingOptimizerCore:
                 * float(params.get("RESIZE_FACTOR", 1.0)),
                 1e-6,
             )
-            all_evaluations.extend(
-                self._validation_evaluations(
-                    result.candidate_id,
-                    forward.positions,
-                    backward.positions,
-                    body_scale,
-                    detection_counts=detection_counts,
-                )
+            evaluations = self._validation_evaluations(
+                result.candidate_id,
+                forward.positions,
+                backward.positions,
+                body_scale,
+                detection_counts=detection_counts,
             )
+            temporal_evidence_reason = self._validation_temporal_evidence_reason(
+                forward.positions,
+                backward.positions,
+                body_scale,
+                evaluations,
+            )
+            if temporal_evidence_reason is not None:
+                result.recommendation_reason = "production validation skipped: " + (
+                    temporal_evidence_reason
+                )
+                if result.is_baseline:
+                    baseline.recommendation_reason = "current settings retained: " + (
+                        temporal_evidence_reason
+                    )
+                    return
+                continue
+            all_evaluations.extend(evaluations)
             validated_results.append(result)
 
         if self._progress_cb is not None:
@@ -1692,7 +1780,7 @@ class TrackingOptimizerCore:
         _arena_frame_size = None
         if not _arena_layout.is_single_arena:
             _arena_frame_size = _optimizer_frame_size(self.video_path, params)
-        _roi_mask = params.get("ROI_MASK", None)
+        _roi_mask = self._frame_space_roi_mask_for_params(params)
 
         (
             _pose_anterior,
