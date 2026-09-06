@@ -12,7 +12,7 @@ from dataclasses import dataclass
 #      random priming and keyed by a hash that ignored THRESHOLD_VALUE. Those
 #      artifacts are unsound and must not be inherited.
 # v4 = bumped for the identity-subsystem repair (2026-08-27,
-#      docs/superpowers/plans/2026-08-27-identity-subsystem-repair.md): the
+#      docs/superpowers/plans/done/2026-08-27-identity-subsystem-repair.md): the
 #      Layer-2 fit-policy-aware dispatch (Tasks 1-3) and the head-first crop
 #      orientation fix (Task 4) change what the CNN and head/tail stages
 #      produce from the SAME model_path/mtime/geometry inputs, so old caches

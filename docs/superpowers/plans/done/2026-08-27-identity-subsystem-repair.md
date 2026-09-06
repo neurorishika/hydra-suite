@@ -2,6 +2,8 @@
 
 > **For agentic workers:** REQUIRED SUB-SKILL: Use superpowers:subagent-driven-development (recommended) or superpowers:executing-plans to implement this plan task-by-task. Steps use checkbox (`- [ ]`) syntax for tracking.
 
+**Status:** Shipped — Tasks 1-9 landed linearly on `main` (no merge commit), ending at `f2d4ca36`. Task 10 (docs + lifecycle close-out) completed separately; the unticked checkboxes below were never updated during execution and do not indicate outstanding work. Follow-ups listed at the end of the plan remain open.
+
 **Goal:** Make TrackerKit identity usable: preprocess classifiers the way they were trained, stop the fragment solver shredding trajectories, and let evidence express ignorance.
 
 **Architecture:** (1) an artifact-level `fit_policy` honoured by one shared Layer-2 function used by every classifier consumer, stamped by training; (2) head-first classifier crops fed from the head/tail stage; (3) fragment solver: raw-signal PELT, no dropped rows, self-owned re-merge, evidence-quality breaker; (4) live `unknown` prior with an evidence-cache schema bump.

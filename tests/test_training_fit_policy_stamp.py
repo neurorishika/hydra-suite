@@ -1,6 +1,6 @@
 """Tests for fit_policy stamping: training-time writers + the stamping script.
 
-Root cause (see docs/superpowers/specs/2026-08-27-identity-subsystem-repair-design.md):
+Root cause (see docs/superpowers/specs/done/2026-08-27-identity-subsystem-repair-design.md):
 classifiers trained before commit 3a2163ac used an anisotropic Resize((sz,sz))
 squash; training now uses CanonicalFitTransform (letterbox) unconditionally, so
 every artifact training publishes must carry fit_policy="letterbox". Existing
