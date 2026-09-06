@@ -1,6 +1,7 @@
 from __future__ import annotations
 
 import json
+import os
 from dataclasses import replace
 
 import numpy as np
@@ -30,6 +31,7 @@ from hydra_suite.core.inference.autotune.fingerprint import (
     WorkloadFingerprint,
     count_bucket,
     default_software_fingerprint,
+    model_content_digest,
 )
 from hydra_suite.core.inference.autotune.measure import (
     MeasurementProtocol,
@@ -206,6 +208,18 @@ def test_software_fingerprint_never_uses_an_unknown_code_revision():
 
     assert fingerprint.hydra_commit != "unknown"
     assert fingerprint.hydra_commit
+
+
+def test_model_digest_detects_same_size_rewrite_with_restored_mtime(tmp_path):
+    model = tmp_path / "model.bin"
+    model.write_bytes(b"model-a")
+    original = model.stat()
+    first = model_content_digest(model)
+
+    model.write_bytes(b"model-b")
+    os.utime(model, ns=(original.st_atime_ns, original.st_mtime_ns))
+
+    assert model_content_digest(model) != first
 
 
 def test_overlay_settings_apply_without_mutating_requested_config():

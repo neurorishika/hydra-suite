@@ -235,8 +235,10 @@ def _percentile(values: tuple[int, ...], percentile: int) -> int:
 
 
 @lru_cache(maxsize=1024)
-def _digest_stat(path: str, size: int, mtime_ns: int) -> str:
-    del size, mtime_ns
+def _digest_stat(path: str, size: int, mtime_ns: int, ctime_ns: int, inode: int) -> str:
+    # Metadata participates only in the in-process memoization key. The
+    # persistent identity remains the SHA-256 of the actual artifact bytes.
+    del size, mtime_ns, ctime_ns, inode
     digest = hashlib.sha256()
     with open(path, "rb") as stream:
         for chunk in iter(lambda: stream.read(1024 * 1024), b""):
@@ -245,12 +247,14 @@ def _digest_stat(path: str, size: int, mtime_ns: int) -> str:
 
 
 @lru_cache(maxsize=128)
-def _digest_directory_stat(root: str, entries: tuple[tuple[str, int, int], ...]) -> str:
+def _digest_directory_stat(
+    root: str, entries: tuple[tuple[str, int, int, int, int], ...]
+) -> str:
     """Digest a model bundle by relative names and bytes, memoized by its stat set."""
 
     base = Path(root)
     digest = hashlib.sha256()
-    for relative, _size, _mtime_ns in entries:
+    for relative, _size, _mtime_ns, _ctime_ns, _inode in entries:
         encoded_name = relative.encode("utf-8")
         digest.update(len(encoded_name).to_bytes(8, "big"))
         digest.update(encoded_name)
@@ -261,26 +265,37 @@ def _digest_directory_stat(root: str, entries: tuple[tuple[str, int, int], ...])
 
 
 def model_content_digest(path: str | Path) -> str:
-    """Hash model bytes once per size/mtime identity; never persist its path."""
+    """Hash model bytes once per filesystem-change identity; never persist paths."""
 
     artifact = Path(path).expanduser().resolve()
     if artifact.is_dir():
+
+        def entry_identity(item: Path) -> tuple[str, int, int, int, int]:
+            stat = item.stat()
+            return (
+                str(item.relative_to(artifact)),
+                int(stat.st_size),
+                int(stat.st_mtime_ns),
+                int(stat.st_ctime_ns),
+                int(stat.st_ino),
+            )
+
         files = tuple(
             sorted(
-                (
-                    str(item.relative_to(artifact)),
-                    int(item.stat().st_size),
-                    int(item.stat().st_mtime_ns),
-                )
-                for item in artifact.rglob("*")
-                if item.is_file()
+                entry_identity(item) for item in artifact.rglob("*") if item.is_file()
             )
         )
         if not files:
             raise ValueError(f"model bundle has no files: {artifact}")
         return _digest_directory_stat(str(artifact), files)
     stat = artifact.stat()
-    return _digest_stat(str(artifact), int(stat.st_size), int(stat.st_mtime_ns))
+    return _digest_stat(
+        str(artifact),
+        int(stat.st_size),
+        int(stat.st_mtime_ns),
+        int(stat.st_ctime_ns),
+        int(stat.st_ino),
+    )
 
 
 def model_fingerprint(
