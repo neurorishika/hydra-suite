@@ -130,7 +130,7 @@ REPO=$PWD WT=$PWD MAIN_SRC=$PWD/.worktrees/equiv-legacy/src WT_SRC=$PWD/src \
   aborts torch otherwise ("OMP Error #15").
 - **`RUNTIME`** accepts the Gen-2 tier names `gpu`/`gpu_fast` (runner.py maps them) as well
   as `cpu`/`mps`/`cuda`/`tensorrt`.
-- Clips: `emi_obb_identity`, `ant_pose_headtail`, `ant_obb_sleap`, `ant_obb_sequential`,
+- Clips: `ant_pose_headtail`, `ant_obb_sleap`, `ant_obb_sequential`,
   `worm_bgsub`, `ant_cnn_identity`, `fly_obb`. `fly_obb`/`worm_bgsub` are the fastest
   smoke clips (no pose/SLEAP).
 - **Sequence for a refactor:** run this BEFORE and AFTER a risky slice with the same

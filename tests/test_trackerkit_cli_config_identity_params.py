@@ -130,7 +130,7 @@ def test_emi_and_sleap_and_sequential_configs_zero_the_identity_hint_scale(tmp_p
     # _apply_bayesian_identity_cost and the identity-first slot-rejoining
     # gate both no-ops (hungarian.py:239, worker.py:2899-2910) -- so the
     # decoder engaging is harmless and byte-identity is preserved.
-    for name in ("emi_obb_identity", "ant_obb_sleap", "ant_obb_sequential"):
+    for name in ("ant_obb_sleap", "ant_obb_sequential"):
         config = _load_fixture_config(name)
         params = _build_params(config, tmp_path)
         assert params["ENABLE_IDENTITY_ONLINE_DECODER"] is True, name

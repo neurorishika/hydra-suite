@@ -30,7 +30,6 @@ SKEL = FX / "ooceraea_biroi.json"
 
 # name | needs skeleton
 FIXTURES = [
-    ("emi_obb_identity", False),
     ("ant_pose_headtail", True),
     ("ant_obb_sleap", True),
     ("worm_bgsub", False),
