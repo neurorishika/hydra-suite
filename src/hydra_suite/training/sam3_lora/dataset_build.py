@@ -35,7 +35,7 @@ from hydra_suite.utils.slice_geometry import (
     clip_polygon_to_tile,
     plan_tiles,
     polygon_area,
-    tile_size_for_mode,
+    resolve_scales,
 )
 
 from ..class_mapping import resolve_dataset_class_names
@@ -285,6 +285,80 @@ def _tile_frame(
             yield (xi0, yi0, xi1, yi1), crop, instances
 
 
+def _full_frame_instances(
+    img: np.ndarray, labels_px: list[np.ndarray]
+) -> list[tuple[np.ndarray, bool]]:
+    """The un-tiled arm's instances: every polygon, whole, never a fragment."""
+    instances: list[tuple[np.ndarray, bool]] = []
+    for poly_px in labels_px:
+        if polygon_area(poly_px) <= 1e-6:
+            continue
+        instances.append((np.asarray(poly_px, dtype=np.float32).copy(), False))
+    return instances
+
+
+def _scaled_frame_jobs(
+    img: np.ndarray,
+    labels_px: list[np.ndarray],
+    stem: str,
+    scale_set: list[tuple[int, int]],
+    *,
+    overlap: float,
+    keep_empty_tiles: bool,
+    full_frame_mix: bool,
+) -> Iterator[tuple[str, str, tuple[int, int] | None, np.ndarray, list]]:
+    """Yield ``(file_name, scale_group, tile_px, crop, instances)`` per emission.
+
+    The multi-scale arm only. ``scale_group`` is emitted as DATA on the COCO
+    record (D19); the filename token exists so a filename-only consumer still
+    agrees, and both are produced here from the same tuple so they cannot
+    drift apart.
+
+    ``MAX_TILES_PER_FRAME`` is enforced by ``plan_tiles`` PER SCALE. The YOLO
+    builder swallows that ``ValueError`` and drops the offending scale; SAM3
+    re-raises with the scale named. Silently truncating one scale would leave
+    a dataset that claims a scale set it does not contain -- corrupting
+    exactly the cross-scale comparison this fan-out exists to enable.
+    """
+    for tile_w, tile_h in scale_set:
+        group = f"tile:{tile_w}x{tile_h}"
+        # Stepped by hand rather than a for-loop so the ceiling's ValueError
+        # is re-raised with the scale named while the tiles stay STREAMED
+        # (materializing a scale's tiles would undo this builder's
+        # source-independent heap discipline).
+        tiles = _tile_frame(img, labels_px, tile_w, tile_h, overlap, keep_empty_tiles)
+        tile_idx = 0
+        while True:
+            try:
+                _rect, crop, instances = next(tiles)
+            except StopIteration:
+                break
+            except ValueError as exc:
+                raise ValueError(
+                    f"SAM3 tiling refused at scale {tile_w}x{tile_h} for frame "
+                    f"{stem!r}: {exc}"
+                ) from exc
+            yield (
+                f"{stem}_t{tile_w}x{tile_h}_{tile_idx:04d}.jpg",
+                group,
+                (tile_w, tile_h),
+                crop,
+                instances,
+            )
+            tile_idx += 1
+    if full_frame_mix:
+        instances = _full_frame_instances(img, labels_px)
+        if instances or keep_empty_tiles:
+            height, width = img.shape[:2]
+            yield (
+                f"{stem}_full.jpg",
+                "full",
+                (int(width), int(height)),
+                img,
+                instances,
+            )
+
+
 def build_sam3_coco_dataset(
     source_dir: str,
     out_dir: str,
@@ -387,14 +461,25 @@ def build_sam3_coco_dataset(
         else:
             reference_body_px = 0.0
 
-        tile_w, tile_h = tile_size_for_mode(
+        # The scale SET. ``resolve_scales`` is fed the contract's fractions
+        # DIRECTLY: computing a pixel ratio here and dividing it back out by
+        # an imgsz would reintroduce the 640-vs-1008 denominator confusion
+        # that the 0.055 incident is an instance of.
+        scale_set = resolve_scales(
             geometry_mode=params.geometry_mode,
             imgsz=_SAM3_IMGSZ,
             reference_body_px=reference_body_px,
+            fractions=tuple(params.object_tile_fractions),
             object_tile_fraction=params.object_tile_fraction,
             slice_width=params.slice_width,
             slice_height=params.slice_height,
         )
+        # Fork on set-emptiness, not on len(scale_set): a one-element set that
+        # a user asked for still gets the scale-tagged names, and today's
+        # default takes literally today's path (the Task 1 tree-hash golden is
+        # what proves that claim rather than asserting it).
+        multiscale = bool(params.object_tile_fractions) or bool(params.full_frame_mix)
+        tile_w, tile_h = scale_set[0]
 
         # Provenance + drift guard, before a single tile is written. The
         # 0.055 incident was undetectable because the effective geometry's
@@ -413,24 +498,34 @@ def build_sam3_coco_dataset(
             <= 1e-12
             else GeometrySource.EXPLICIT
         )
+        _geometry_values: dict[str, object] = {
+            "geometry_mode": params.geometry_mode,
+            "object_tile_fraction": float(params.object_tile_fraction),
+            "reference_body_px": reference_body_px,
+            "tile_px": [int(tile_w), int(tile_h)],
+            "imgsz": _SAM3_IMGSZ,
+        }
+        _geometry_sources = {
+            "geometry_mode": GeometrySource.EXPLICIT,
+            "object_tile_fraction": _fraction_source,
+            # Measured from this project's own labels, above.
+            "reference_body_px": GeometrySource.CORPUS_DERIVED,
+            "tile_px": GeometrySource.CORPUS_DERIVED,
+            "imgsz": GeometrySource.CONTRACT_DEFAULT,
+        }
+        if multiscale:
+            # The whole set, before a single tile is written: a build that
+            # fans out N-fold must say so where a reader looks first.
+            _geometry_values["object_tile_fractions"] = [
+                float(value) for value in params.object_tile_fractions
+            ]
+            _geometry_values["tile_px_set"] = [[int(w), int(h)] for w, h in scale_set]
+            _geometry_values["full_frame_mix"] = bool(params.full_frame_mix)
+            _geometry_sources["object_tile_fractions"] = GeometrySource.EXPLICIT
+            _geometry_sources["tile_px_set"] = GeometrySource.CORPUS_DERIVED
+            _geometry_sources["full_frame_mix"] = GeometrySource.EXPLICIT
         log_effective_geometry(
-            logger,
-            "SAM3 dataset build",
-            {
-                "geometry_mode": params.geometry_mode,
-                "object_tile_fraction": float(params.object_tile_fraction),
-                "reference_body_px": reference_body_px,
-                "tile_px": [int(tile_w), int(tile_h)],
-                "imgsz": _SAM3_IMGSZ,
-            },
-            {
-                "geometry_mode": GeometrySource.EXPLICIT,
-                "object_tile_fraction": _fraction_source,
-                # Measured from this project's own labels, above.
-                "reference_body_px": GeometrySource.CORPUS_DERIVED,
-                "tile_px": GeometrySource.CORPUS_DERIVED,
-                "imgsz": GeometrySource.CONTRACT_DEFAULT,
-            },
+            logger, "SAM3 dataset build", _geometry_values, _geometry_sources
         )
         if baseline_model_key:
             # Report only. A PREFILL verdict is deliberately NOT adopted here:
@@ -524,30 +619,49 @@ def build_sam3_coco_dataset(
                         pixels[:, 0] *= int(width)
                         pixels[:, 1] *= int(height)
                         labels_px.append(pixels)
-                    for tile_idx, (_rect, crop, instances) in enumerate(
-                        _tile_frame(
+                    if multiscale:
+                        jobs = _scaled_frame_jobs(
                             image,
                             labels_px,
-                            tile_w,
-                            tile_h,
-                            params.tile_overlap,
-                            params.keep_empty_tiles,
+                            str(stem),
+                            scale_set,
+                            overlap=params.tile_overlap,
+                            keep_empty_tiles=params.keep_empty_tiles,
+                            full_frame_mix=params.full_frame_mix,
                         )
-                    ):
+                    else:
+                        jobs = (
+                            (f"{stem}_tile{tile_idx:03d}.jpg", None, None, crop, insts)
+                            for tile_idx, (_rect, crop, insts) in enumerate(
+                                _tile_frame(
+                                    image,
+                                    labels_px,
+                                    tile_w,
+                                    tile_h,
+                                    params.tile_overlap,
+                                    params.keep_empty_tiles,
+                                )
+                            )
+                        )
+                    for file_name, scale_group, tile_px, crop, instances in jobs:
                         image_id += 1
-                        file_name = f"{stem}_tile{tile_idx:03d}.jpg"
                         if not cv2.imwrite(str(split_dir / file_name), crop):
                             raise RuntimeError(
                                 f"Could not write tile image: {file_name}"
                             )
                         tile_height, tile_width = crop.shape[:2]
+                        record = {
+                            "id": image_id,
+                            "file_name": file_name,
+                            "width": int(tile_width),
+                            "height": int(tile_height),
+                        }
+                        if scale_group is not None:
+                            # DATA, not a filename to be parsed back out (D19).
+                            record["scale_group"] = scale_group
+                            record["tile_px"] = [int(tile_px[0]), int(tile_px[1])]
                         json.dump(
-                            {
-                                "id": image_id,
-                                "file_name": file_name,
-                                "width": int(tile_width),
-                                "height": int(tile_height),
-                            },
+                            record,
                             image_records,
                             separators=(",", ":"),
                         )
