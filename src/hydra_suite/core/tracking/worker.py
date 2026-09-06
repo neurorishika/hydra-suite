@@ -121,6 +121,7 @@ def _resolve_inference_autotune_before_load(
     from hydra_suite.core.inference.autotune.device import probe_runtime_resources
     from hydra_suite.core.inference.autotune.integration import (
         TrackingRunContext,
+        build_tracking_autotune_request,
         resolve_tracking_inference_config,
         sample_detection_workload,
     )
@@ -164,6 +165,30 @@ def _resolve_inference_autotune_before_load(
         thermal_throttled=probe.thermal_throttled,
         should_cancel=should_cancel,
     )
+    preflight = build_tracking_autotune_request(
+        config,
+        context,
+        observation=probe.observation,
+        backend=resolved.backend,
+        device_identity=(
+            probe.device_uuid,
+            probe.device_model,
+            probe.compute_capability,
+            int(probe.observation.total_accelerator_bytes or 0),
+        ),
+    )
+    artifact_batch_size = max(
+        (
+            value
+            for field in ("detection_batch_size", "slice_tile_batch_size")
+            for value in preflight.planner.values_for(field, preflight.baseline)
+        ),
+        default=preflight.baseline.detection_batch_size,
+    )
+    if resolved.backend == "tensorrt":
+        ephemeral_params["INFERENCE_AUTOTUNE_TENSORRT_PROFILE_BATCH_SIZE"] = (
+            artifact_batch_size
+        )
     executor = ContainedTrialExecutor(
         SidecarTrialSpec(
             video_path=video_path,
@@ -173,6 +198,9 @@ def _resolve_inference_autotune_before_load(
             start_frame=start_frame,
             end_frame=end_frame,
             budget_seconds=config.inference_autotune.budget_seconds,
+            runtime_artifact_batch_size=(
+                artifact_batch_size if resolved.backend == "tensorrt" else None
+            ),
         )
     )
     effective, overlay, _result = resolve_tracking_inference_config(
@@ -287,6 +315,8 @@ class TrackingEngineCore:
         self._inference_progress_times = deque(maxlen=30)
         self._stop_requested = False
         self.inference_autotune_overlay = None
+        self.inference_runtime_artifact_ids = ()
+        self.inference_runtime_artifact_prepare_seconds = 0.0
 
         # Internal state variables that helper methods depend on
         self.frame_count = 0
@@ -1257,6 +1287,12 @@ class TrackingEngineCore:
                 roi_mask=p.get("ROI_MASK"),
                 identity_evidence=_identity_evidence_run_config,
                 runtime_overlay=self.inference_autotune_overlay,
+            )
+            self.inference_runtime_artifact_ids = tuple(
+                getattr(inference_runner, "runtime_artifact_ids", ())
+            )
+            self.inference_runtime_artifact_prepare_seconds = float(
+                getattr(inference_runner, "runtime_artifact_prepare_seconds", 0.0)
             )
             if self.cache_read_only_replay and density_map_enabled:
                 # Refuse an unaffordable candidate before ``caches_all_valid``

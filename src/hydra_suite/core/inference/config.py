@@ -504,6 +504,11 @@ class InferenceConfig:
     canonical: CanonicalGeometry = field(default_factory=_default_canonical_geometry)
     detection_batch_size: int = 1
     pipeline_depth: int = 2
+    # Transient calibration-only override: execution still uses the candidate
+    # batch, while TensorRT loads one wide profile covering every admitted
+    # candidate. Normal production configs leave this unset and therefore
+    # prepare the dedicated selected profile.
+    runtime_artifact_batch_size: int | None = None
     runtime_tier: RuntimeTier = "gpu"
     realtime: bool = False
     use_cache: bool = True
@@ -532,6 +537,7 @@ class InferenceConfig:
     def __post_init__(self) -> None:
         self._validate_pipeline_depth()
         self._validate_detection_batch_size()
+        self._validate_runtime_artifact_batch_size()
         self._validate_detection_source()
 
     def _validate_pipeline_depth(self) -> None:
@@ -552,6 +558,16 @@ class InferenceConfig:
             raise InferenceConfigError(
                 "detection_batch_size must be between 1 and "
                 f"{MAX_DETECTION_BATCH_SIZE}, got {self.detection_batch_size}"
+            )
+
+    def _validate_runtime_artifact_batch_size(self) -> None:
+        value = self.runtime_artifact_batch_size
+        if value is not None and (
+            type(value) is not int or not 1 <= value <= MAX_DETECTION_BATCH_SIZE
+        ):
+            raise InferenceConfigError(
+                "runtime_artifact_batch_size must be unset or between 1 and "
+                f"{MAX_DETECTION_BATCH_SIZE}, got {value}"
             )
 
     def _validate_detection_source(self) -> None:
@@ -664,6 +680,7 @@ def _dict_to_config(d: dict[str, Any]) -> InferenceConfig:
         canonical=canonical,
         detection_batch_size=d.get("detection_batch_size", 1),
         pipeline_depth=d.get("pipeline_depth", 2),
+        runtime_artifact_batch_size=d.get("runtime_artifact_batch_size"),
         runtime_tier=raw_tier,
         realtime=d.get("realtime", False),
         use_cache=d.get("use_cache", True),
@@ -1235,6 +1252,11 @@ def build_inference_config_from_params(params: dict) -> InferenceConfig:
         canonical=canonical,
         detection_batch_size=batch_size,
         pipeline_depth=int(params.get("PIPELINE_DEPTH", 2)),
+        runtime_artifact_batch_size=(
+            int(params["INFERENCE_AUTOTUNE_ARTIFACT_BATCH_SIZE"])
+            if params.get("INFERENCE_AUTOTUNE_ARTIFACT_BATCH_SIZE")
+            else None
+        ),
         realtime=False,
         use_cache=True,
         runtime_tier=runtime_tier,

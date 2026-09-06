@@ -60,6 +60,7 @@ class SidecarTrialSpec:
     budget_seconds: float = 120.0
     per_trial_timeout_seconds: float = 45.0
     maximum_frames: int = 128
+    runtime_artifact_batch_size: int | None = None
 
     def __post_init__(self) -> None:
         if self.start_frame < 0 or self.end_frame < self.start_frame:
@@ -70,10 +71,17 @@ class SidecarTrialSpec:
             raise ValueError("trial timeout must be between 5 and 120 seconds")
         if not 8 <= self.maximum_frames <= 128:
             raise ValueError("calibration frame cap must be between 8 and 128")
+        if self.runtime_artifact_batch_size is not None and not (
+            1 <= self.runtime_artifact_batch_size <= 64
+        ):
+            raise ValueError("runtime artifact batch size must be between 1 and 64")
 
 
 def apply_settings_to_params(
-    params: Mapping[str, Any], settings: InferenceTuningSettings
+    params: Mapping[str, Any],
+    settings: InferenceTuningSettings,
+    *,
+    runtime_artifact_batch_size: int | None = None,
 ) -> dict[str, Any]:
     """Return candidate engine params without mutating the session snapshot."""
 
@@ -81,6 +89,10 @@ def apply_settings_to_params(
     result["INFERENCE_AUTOTUNE_MODE"] = "off"
     result["YOLO_BATCH_SIZE"] = settings.detection_batch_size
     result["PIPELINE_DEPTH"] = settings.pipeline_depth
+    if runtime_artifact_batch_size is not None:
+        result["INFERENCE_AUTOTUNE_ARTIFACT_BATCH_SIZE"] = int(
+            runtime_artifact_batch_size
+        )
     if settings.slice_tile_batch_size is not None:
         if str(result.get("YOLO_OBB_MODE", "direct")).lower() == "sequential":
             result["YOLO_SEQ_STAGE1_SLICE_TILE_BATCH_SIZE"] = (
@@ -158,7 +170,15 @@ def write_sidecar_request(
 
     root.mkdir(parents=True, exist_ok=False)
     roi_path = root / "roi.npy"
-    params = apply_settings_to_params(spec.params, settings)
+    params = apply_settings_to_params(
+        spec.params,
+        settings,
+        # Screens share one wide profile. The authoritative final pass omits
+        # the override so it builds/loads the dedicated selected profile.
+        runtime_artifact_batch_size=(
+            None if phase == "final_validation" else spec.runtime_artifact_batch_size
+        ),
+    )
     payload = {
         "schema_version": SIDECAR_SCHEMA_VERSION,
         "video_path": str(Path(spec.video_path).expanduser().resolve()),

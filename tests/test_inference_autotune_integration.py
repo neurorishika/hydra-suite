@@ -19,6 +19,7 @@ from hydra_suite.core.inference.config import (
     PoseYOLOConfig,
     SliceConfig,
 )
+from hydra_suite.core.inference.runner import _load_obb_for_config
 from hydra_suite.runtime.resource_budget import AcceleratorKind, ResourceObservation
 
 
@@ -103,6 +104,31 @@ def test_tracking_request_fingerprints_every_model_and_path_free_geometry(tmp_pa
     assert request.key.workload.detections_p95_bucket == 32
     assert request.key.workload.canonical_crop_geometries
     assert "private-name.mp4" not in str(request.key.to_dict())
+
+
+def test_tensorrt_profile_identity_is_part_of_every_compiled_detector_key(tmp_path):
+    config = _config(tmp_path)
+    context = TrackingRunContext(
+        video_path=tmp_path / "video.mp4",
+        params={
+            "MAX_TARGETS": 25,
+            "INFERENCE_AUTOTUNE_TENSORRT_PROFILE_BATCH_SIZE": 16,
+        },
+        frame_width=1200,
+        frame_height=900,
+    )
+
+    request = build_tracking_autotune_request(
+        config,
+        context,
+        observation=_observation(),
+        backend="tensorrt",
+        device_identity=("gpu", "GPU", "8.9", 48 * 1024**3),
+    )
+
+    by_role = {item.role: item for item in request.key.models}
+    assert by_role["detector.direct"].tensorrt_profile_id != "none"
+    assert by_role["headtail"].tensorrt_profile_id == "none"
 
 
 def test_streaming_drops_inert_detector_batch_and_depth_coordinates(tmp_path):
@@ -231,3 +257,24 @@ def test_existing_detection_cache_supplies_zero_inclusive_density(
     )
 
     assert sample_detection_workload(tmp_path, start_frame=1, end_frame=3) == (0, 1, 3)
+
+
+def test_calibration_uses_one_wide_runtime_profile_without_changing_candidate_batch(
+    monkeypatch, tmp_path
+):
+    config = _config(tmp_path)
+    config.detection_batch_size = 2
+    config.runtime_artifact_batch_size = 16
+    captured = {}
+
+    def load(_obb, _runtime, *, batch_size, stage1_batch_size=None):
+        captured["batch_size"] = batch_size
+        captured["stage1_batch_size"] = stage1_batch_size
+        return object()
+
+    monkeypatch.setattr("hydra_suite.core.inference.stages.obb.load_obb_models", load)
+
+    _load_obb_for_config(config, object())
+
+    assert config.detection_batch_size == 2
+    assert captured == {"batch_size": 16, "stage1_batch_size": None}

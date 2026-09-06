@@ -723,7 +723,7 @@ def _meta_path(artifact_path: Path) -> Path:
     return artifact_path.with_suffix(f"{artifact_path.suffix}.runtime_meta.json")
 
 
-def _trt_profile_fingerprint(batch_size: int) -> str:
+def tensorrt_profile_fingerprint(batch_size: int) -> str:
     """Versioned identity for the dynamic TensorRT batch profile.
 
     The artifact filename contains the maximum batch, but retaining this in
@@ -737,6 +737,10 @@ def _trt_profile_fingerprint(batch_size: int) -> str:
         "max_batch": max(1, int(batch_size)),
     }
     return sha256(json.dumps(profile, sort_keys=True).encode("utf-8")).hexdigest()
+
+
+# Retained for internal callers and compatibility with focused artifact tests.
+_trt_profile_fingerprint = tensorrt_profile_fingerprint
 
 
 def _trt_profile_identity(batch_size: int) -> dict[str, object]:
@@ -946,9 +950,18 @@ class DirectExecutorAdapter:
     geometry-extraction stage completely unchanged.
     """
 
-    def __init__(self, executor: Any, *, max_det: int = _DEFAULT_MAX_DET) -> None:
+    def __init__(
+        self,
+        executor: Any,
+        *,
+        max_det: int = _DEFAULT_MAX_DET,
+        runtime_artifact_id: str | None = None,
+        prepare_seconds: float = 0.0,
+    ) -> None:
         self._executor = executor
         self._max_det = int(max_det)
+        self.runtime_artifact_id = runtime_artifact_id
+        self.runtime_artifact_prepare_seconds = float(prepare_seconds)
         # Surface class names for parity with YOLO model attribute access.
         self.names = getattr(executor, "names", None)
         # Surface the executor's fixed input size — obb.py's _resolve_imgsz()
@@ -1107,8 +1120,16 @@ class _CoreMLBatchExecutor:
     attribute (``.task``, ``.names``, ...) delegates to the wrapped model.
     """
 
-    def __init__(self, model: Any) -> None:
+    def __init__(
+        self,
+        model: Any,
+        *,
+        runtime_artifact_id: str | None = None,
+        prepare_seconds: float = 0.0,
+    ) -> None:
         self._model = model
+        self.runtime_artifact_id = runtime_artifact_id
+        self.runtime_artifact_prepare_seconds = float(prepare_seconds)
 
     def __getattr__(self, name: str) -> Any:
         # Only reached when normal lookup fails, so the real ``_model`` instance
@@ -1176,7 +1197,11 @@ def _load_coreml_executor(
         prepared.prepare_seconds,
     )
 
-    return _CoreMLBatchExecutor(_load_torch_model(str(artifact_path)))
+    return _CoreMLBatchExecutor(
+        _load_torch_model(str(artifact_path)),
+        runtime_artifact_id=prepared.identity.digest,
+        prepare_seconds=prepared.prepare_seconds,
+    )
 
 
 def _load_direct_executor(
@@ -1267,4 +1292,9 @@ def _load_direct_executor(
         class_names=class_names,
         task=task,
     )
-    return DirectExecutorAdapter(executor, max_det=max_det)
+    return DirectExecutorAdapter(
+        executor,
+        max_det=max_det,
+        runtime_artifact_id=prepared.identity.digest,
+        prepare_seconds=prepared.prepare_seconds,
+    )

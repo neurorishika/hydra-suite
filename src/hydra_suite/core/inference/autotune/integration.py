@@ -155,10 +155,25 @@ def _detector_imgsz(config: InferenceConfig, params: Mapping[str, Any]) -> int:
         return 640
 
 
-def _model_fingerprints(config: InferenceConfig, params: Mapping[str, Any]):
+def _model_fingerprints(
+    config: InferenceConfig, params: Mapping[str, Any], *, backend: str
+):
     models = []
     detector_imgsz = _detector_imgsz(config, params)
     canonical_w, canonical_h = map(int, config.canonical.canvas_wh)
+    trt_profile_id = "none"
+    if backend == "tensorrt":
+        from hydra_suite.core.inference.runtime_artifacts import (
+            tensorrt_profile_fingerprint,
+        )
+
+        requested_profile_batch = int(
+            params.get(
+                "INFERENCE_AUTOTUNE_TENSORRT_PROFILE_BATCH_SIZE",
+                config.detection_batch_size,
+            )
+        )
+        trt_profile_id = tensorrt_profile_fingerprint(requested_profile_batch)
     if config.obb is not None:
         if config.obb.mode == "direct" and config.obb.direct is not None:
             models.append(
@@ -166,6 +181,7 @@ def _model_fingerprints(config: InferenceConfig, params: Mapping[str, Any]):
                     "detector.direct",
                     config.obb.direct.model_path,
                     input_size=(detector_imgsz, detector_imgsz),
+                    tensorrt_profile_id=trt_profile_id,
                 )
             )
         elif config.obb.sequential is not None:
@@ -176,12 +192,14 @@ def _model_fingerprints(config: InferenceConfig, params: Mapping[str, Any]):
                         "detector.stage1",
                         seq.detect_model_path,
                         input_size=(detector_imgsz, detector_imgsz),
+                        tensorrt_profile_id=trt_profile_id,
                     ),
                     model_fingerprint(
                         "detector.stage2",
                         seq.obb_model_path,
                         input_size=(seq.stage2_image_size, seq.stage2_image_size),
                         crop_size=(canonical_w, canonical_h),
+                        tensorrt_profile_id=trt_profile_id,
                     ),
                 )
             )
@@ -330,7 +348,7 @@ def build_tracking_autotune_request(
     params = context.params
     policy = config.inference_autotune
     baseline = InferenceTuningSettings.from_config(config)
-    models = _model_fingerprints(config, params)
+    models = _model_fingerprints(config, params, backend=backend)
     slice_key = _slice_fingerprint(
         config, params, context.frame_width, context.frame_height
     )

@@ -138,7 +138,14 @@ def _run_window(
     label: str,
     start: int,
     end: int,
-) -> tuple[pd.DataFrame, pd.DataFrame, float, float, dict[str, float]]:
+) -> tuple[
+    pd.DataFrame,
+    pd.DataFrame,
+    float,
+    float,
+    dict[str, float],
+    tuple[str, ...],
+]:
     run_root = root / label
     run_root.mkdir(parents=True, exist_ok=False)
     raw_csv = run_root / "forward.csv"
@@ -237,7 +244,15 @@ def _run_window(
     if final.empty:
         raise RuntimeError("calibration final tracking output produced no rows")
     steady, prepare, phase_seconds = _profile_times(video_path)
-    return forward, final, steady, prepare, phase_seconds
+    artifact_prepare = float(engine.inference_runtime_artifact_prepare_seconds)
+    return (
+        forward,
+        final,
+        steady,
+        max(prepare, artifact_prepare),
+        phase_seconds,
+        tuple(engine.inference_runtime_artifact_ids),
+    )
 
 
 def _stage_evidence(
@@ -334,9 +349,10 @@ def run(request_path: Path) -> None:
     prepare_seconds = 0.0
     measured_frames = 0
     phase_seconds: dict[str, float] = {}
+    artifact_ids: set[str] = set()
     wall_started = time.perf_counter()
     for index, (window_start, window_end) in enumerate(windows):
-        forward, final, steady, prepare, window_phases = _run_window(
+        forward, final, steady, prepare, window_phases, window_artifacts = _run_window(
             video_path=private_video,
             params=params,
             project_config=project_config,
@@ -352,6 +368,7 @@ def run(request_path: Path) -> None:
         measured_frames += window_end - window_start + 1
         for name, seconds in window_phases.items():
             phase_seconds[name] = phase_seconds.get(name, 0.0) + seconds
+        artifact_ids.update(window_artifacts)
     wall_seconds = time.perf_counter() - wall_started
     if steady_seconds <= 0:
         steady_seconds = wall_seconds
@@ -381,7 +398,7 @@ def run(request_path: Path) -> None:
             "warmup_frames": warmup_frames,
             "forward_csv": "output/forward.csv",
             "final_csv": "output/final.csv",
-            "artifact_ids": [],
+            "artifact_ids": sorted(artifact_ids),
             "stage_shares": stage_evidence,
         },
     )

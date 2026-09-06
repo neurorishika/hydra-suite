@@ -153,8 +153,11 @@ def test_store_single_flight_is_process_safe(tmp_path):
     second = context.Process(target=_process_build_once, args=args)
     first.start()
     second.start()
-    first.join(timeout=10)
-    second.join(timeout=10)
+    # macOS spawn imports the inference stack in each fresh interpreter; that
+    # can take well over ten seconds when Core ML/Torch are cold. The build
+    # itself remains bounded by the 0.1 s callback above.
+    first.join(timeout=30)
+    second.join(timeout=30)
 
     assert first.exitcode == 0
     assert second.exitcode == 0

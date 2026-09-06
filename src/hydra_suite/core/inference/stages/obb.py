@@ -272,6 +272,32 @@ class OBBModels:
     detect_model: Any | None = None  # sequential stage-1
     obb_model: Any | None = None  # sequential stage-2
 
+    @property
+    def runtime_artifact_ids(self) -> tuple[str, ...]:
+        return tuple(
+            sorted(
+                {
+                    value
+                    for model in (
+                        self.direct_model,
+                        self.detect_model,
+                        self.obb_model,
+                    )
+                    if model is not None
+                    for value in (getattr(model, "runtime_artifact_id", None),)
+                    if value
+                }
+            )
+        )
+
+    @property
+    def runtime_artifact_prepare_seconds(self) -> float:
+        return sum(
+            float(getattr(model, "runtime_artifact_prepare_seconds", 0.0))
+            for model in (self.direct_model, self.detect_model, self.obb_model)
+            if model is not None
+        )
+
     def close(self) -> None:
         pass  # ultralytics models don't need explicit cleanup
 

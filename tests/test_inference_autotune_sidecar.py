@@ -59,7 +59,9 @@ def test_candidate_param_overlay_is_detached_complete_and_disables_recursion():
         "SLICE_TILE_BATCH_AUTOTUNE": True,
     }
 
-    output = apply_settings_to_params(source, _settings())
+    output = apply_settings_to_params(
+        source, _settings(), runtime_artifact_batch_size=32
+    )
 
     assert source["CNN_CLASSIFIERS"][0]["batch_size"] == 1
     assert output["INFERENCE_AUTOTUNE_MODE"] == "off"
@@ -71,6 +73,7 @@ def test_candidate_param_overlay_is_detached_complete_and_disables_recursion():
     assert output["HEADTAIL_BATCH_SIZE"] == 4
     assert [item["batch_size"] for item in output["CNN_CLASSIFIERS"]] == [16, 3]
     assert output["USE_CACHED_DETECTIONS"] is False
+    assert output["INFERENCE_AUTOTUNE_ARTIFACT_BATCH_SIZE"] == 32
 
 
 def test_request_stages_roi_as_relative_non_pickle_payload(tmp_path):
@@ -124,6 +127,46 @@ def test_measurement_blocks_share_one_128_frame_cap(tmp_path):
 
     assert caps == [26, 26, 26, 25, 25]
     assert sum(caps) == 128
+
+
+def test_final_validation_uses_dedicated_selected_runtime_profile(tmp_path):
+    observation, probe = _resources()
+    spec = SidecarTrialSpec(
+        video_path=tmp_path / "video.mp4",
+        params={},
+        observation=observation,
+        resource_probe=probe,
+        start_frame=0,
+        end_frame=20,
+        runtime_artifact_batch_size=32,
+    )
+    screen = write_sidecar_request(
+        tmp_path / "screen",
+        spec,
+        _settings(),
+        phase="stage",
+        field_name="detection_batch_size",
+        block_index=0,
+    )
+    final = write_sidecar_request(
+        tmp_path / "final",
+        spec,
+        _settings(),
+        phase="final_validation",
+        field_name=None,
+        block_index=0,
+    )
+
+    assert (
+        json.loads(screen.read_text())["params"][
+            "INFERENCE_AUTOTUNE_ARTIFACT_BATCH_SIZE"
+        ]
+        == 32
+    )
+    assert (
+        "INFERENCE_AUTOTUNE_ARTIFACT_BATCH_SIZE"
+        not in json.loads(final.read_text())["params"]
+    )
 
 
 def test_request_rejects_arbitrary_python_objects(tmp_path):
