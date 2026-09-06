@@ -77,6 +77,26 @@ def _build(cfg):
     return build_engine_params(cfg, runtime=RUNTIME, advanced_config=dict(ADVANCED))
 
 
+def test_tile_execution_controls_forward_to_core_slice_params():
+    advanced = dict(ADVANCED)
+    advanced.update(
+        {
+            "slice_tile_batch_size": 7,
+            "slice_tile_batch_autotune": True,
+            "slice_memory_budget_mib": 96,
+        }
+    )
+    params = build_engine_params(
+        _cfg(""),
+        runtime=RUNTIME,
+        advanced_config=advanced,
+    )
+
+    assert params["SLICE_TILE_BATCH_SIZE"] == 7
+    assert params["SLICE_TILE_BATCH_AUTOTUNE"] is True
+    assert params["SLICE_MEMORY_BUDGET_MIB"] == 96
+
+
 def test_named_profile_supplies_the_advanced_only_keys(tmp_path):
     params = _build(_cfg(_profiled(tmp_path), slice_profile_id="balanced"))
     assert params["SLICE_OVERLAP"] == 0.31

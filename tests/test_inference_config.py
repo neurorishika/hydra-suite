@@ -255,6 +255,8 @@ def test_build_config_reads_slice_params():
         "SLICE_MERGE_BACKEND": "gpu",
         "SLICE_OBJECT_TILE_FRACTION": 0.2,
         "SLICE_PERFORM_STANDARD_PRED": True,
+        "SLICE_TILE_BATCH_SIZE": 7,
+        "SLICE_MEMORY_BUDGET_MIB": 96,
     }
     cfg = build_inference_config_from_params(params)
     s = cfg.obb.direct.slice
@@ -266,6 +268,8 @@ def test_build_config_reads_slice_params():
     assert s.merge_threshold == 0.4 and s.merge_backend == "gpu"
     assert s.object_tile_fraction == 0.2
     assert s.perform_standard_pred is True
+    assert s.tile_batch_size == 7
+    assert s.tile_memory_budget_bytes == 96 * 1024 * 1024
 
 
 def test_build_config_slice_defaults_when_absent():

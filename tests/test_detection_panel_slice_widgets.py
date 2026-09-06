@@ -214,6 +214,33 @@ def test_slice_params_sync_advanced_config(monkeypatch):
     window.close()
 
 
+def test_slice_tile_execution_controls_sync_and_explain_admission(monkeypatch):
+    """Requested tile chunks persist separately from geometry and are honest
+    about runtime memory admission rather than promising a speedup."""
+    window = _make_main_window(
+        monkeypatch,
+        advanced_config={"slice_tile_batch_size": 12, "slice_memory_budget_mib": 96},
+    )
+    panel = window._detection_panel
+
+    assert panel.spin_slice_tile_batch.value() == 12
+    assert panel.spin_slice_memory_budget.value() == 96
+    assert "admitted" in panel.lbl_slice_batch_admission.text().lower()
+    assert "not always faster" in panel.spin_slice_tile_batch.toolTip()
+
+    panel.spin_slice_tile_batch.setValue(7)
+    panel.spin_slice_memory_budget.setValue(48)
+    assert window.advanced_config["slice_tile_batch_size"] == 7
+    assert window.advanced_config["slice_memory_budget_mib"] == 48
+    assert "7 tiles/call" in panel.lbl_slice_batch_admission.text()
+    assert "48 MiB" in panel.lbl_slice_batch_admission.text()
+    panel.chk_slice_tile_batch_autotune.setChecked(True)
+    assert window.advanced_config["slice_tile_batch_autotune"] is True
+    assert panel.spin_slice_tile_batch.isEnabled() is False
+    assert "automatic batch" in panel.lbl_slice_batch_admission.text().lower()
+    window.close()
+
+
 def _seed_seq_crop_model(monkeypatch, tmp_path, *, name, training_params=None) -> str:
     """Seed a stub sequential crop-OBB model; returns its registry key."""
     data_dir = tmp_path / "hydra-data"

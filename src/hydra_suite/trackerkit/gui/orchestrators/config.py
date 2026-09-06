@@ -427,6 +427,9 @@ class ConfigOrchestrator:
             "trained_body_px": advanced.get("slice_trained_body_px", 0.0),
             "slice_width": panel.spin_slice_tile_w.value(),
             "slice_height": panel.spin_slice_tile_h.value(),
+            "tile_batch_size": panel.spin_slice_tile_batch.value(),
+            "tile_batch_autotune": panel.chk_slice_tile_batch_autotune.isChecked(),
+            "memory_budget_mib": panel.spin_slice_memory_budget.value(),
             "confidence_threshold": panel.spin_yolo_confidence.value(),
             "merge_policy": advanced.get("slice_merge_policy"),
             "merge_metric": advanced.get("slice_merge_metric"),
@@ -480,6 +483,38 @@ class ConfigOrchestrator:
             self._mw.advanced_config["_slice_profile_saved_settings"] = dict(
                 saved_slice_settings
             )
+            # Tile execution settings are not calibration-profile geometry,
+            # but a saved session must reproduce its requested admission
+            # limits even when its global advanced config differs.
+            for key, snapshot_key, default, maximum in (
+                ("slice_tile_batch_size", "tile_batch_size", 16, 128),
+                ("slice_memory_budget_mib", "memory_budget_mib", 256, 256),
+            ):
+                try:
+                    value = int(saved_slice_settings.get(snapshot_key, default))
+                except (TypeError, ValueError):
+                    value = default
+                self._mw.advanced_config[key] = max(1, min(maximum, value))
+            self._mw.advanced_config["slice_tile_batch_autotune"] = bool(
+                saved_slice_settings.get("tile_batch_autotune", False)
+            )
+            for spin, key in (
+                (
+                    self._panels.detection.spin_slice_tile_batch,
+                    "slice_tile_batch_size",
+                ),
+                (
+                    self._panels.detection.spin_slice_memory_budget,
+                    "slice_memory_budget_mib",
+                ),
+            ):
+                spin.blockSignals(True)
+                spin.setValue(self._mw.advanced_config[key])
+                spin.blockSignals(False)
+            self._panels.detection.chk_slice_tile_batch_autotune.setChecked(
+                self._mw.advanced_config["slice_tile_batch_autotune"]
+            )
+            self._panels.detection._update_slice_batch_admission_label()
         else:
             self._mw.advanced_config.pop("_slice_profile_saved_settings", None)
 

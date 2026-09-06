@@ -11,9 +11,10 @@ Two execution models are implemented:
 * **depth=1** — fully synchronous: window ``k`` is OBB'd and fully processed
   (crops → HT/CNN/pose → AprilTag → scatter → cache write) before window ``k+1``
   begins. No threads.
-* **depth>=2** — deep prefetch: a single PRODUCER thread runs decode+OBB and
-  pushes ``(window, obb_raw_list)`` onto a bounded
-  ``queue.Queue(maxsize=depth-1)``, while a SINGLE in-order consumer (the calling
+* **depth>=2** — deep prefetch: CPU/MPS retain one decode+OBB producer. CUDA
+  adds a bounded decoder queue ahead of the detector, which pushes
+  ``(window, obb_raw_list)`` onto ``queue.Queue(maxsize=depth-1)``. A SINGLE
+  in-order consumer (the calling
   thread) pulls windows in strict ascending order and runs crops → individual
   stages → scatter → cache write. ``maxsize=depth-1`` lets the producer run up to
   ``depth-1`` windows ahead (depth=2 is the classic double buffer with one
@@ -162,8 +163,9 @@ def _effective_depth(depth: int) -> int:
 class Pipeline:
     """Inference orchestrator over frame-indexed windows.
 
-    depth=1 runs fully synchronously; depth>=2 runs a producer (decode+OBB)
-    ahead of a single in-order consumer via a bounded queue (``maxsize=depth-1``).
+    depth=1 runs fully synchronously. At depth>=2, CPU/MPS retain the original
+    decode+OBB producer; CUDA adds an independent decode producer ahead of OBB.
+    The raw-result queue has ``maxsize=depth-1`` in either path.
     All depths produce byte-identical caches.
     """
 
@@ -585,8 +587,10 @@ class Pipeline:
         ``progress_cb(processed, range_total)`` is called with the same cadence
         as the legacy runner read loop (every ``max(1, range_total // 100)``
         frames read, plus a final call). At depth=1 this runs synchronously;
-        at depth>=2 a producer thread runs decode+OBB up to ``depth-1`` windows
-        ahead (bounded queue) while this single in-order consumer thread runs the
+        CUDA at depth>=2 uses an independent decoder to overlap the detector;
+        CPU/MPS retain a single decode+detector producer. The detector may run
+        up to ``depth-1`` windows ahead (bounded queue) while this single
+        in-order consumer thread runs the
         downstream stages + cache writes.
 
         ``should_stop``, if given, is polled at window and admitted tile/crop
@@ -677,76 +681,138 @@ class Pipeline:
         collect_results: bool = False,
         result_consumer: Callable[[FrameResult], None] | None = None,
     ) -> InferencePassResult:
+        """Run the depth>=2 pipeline using the backend-appropriate producer.
+
+        A separate decoder is useful only when CUDA inference can execute while
+        CPU decode (and its host transfer) continues. On CPU and MPS it merely
+        adds queue hand-offs and GIL contention, so preserve the original
+        decode+OBB producer exactly on those backends.
+        """
+        if not bool(getattr(self.runtime, "cuda_mode", False)):
+            return self._run_single_producer_buffer(
+                frame_source,
+                progress_cb,
+                range_total,
+                should_stop,
+                collect_results,
+                result_consumer,
+            )
+        return self._run_cuda_decode_overlap(
+            frame_source,
+            progress_cb,
+            range_total,
+            should_stop,
+            collect_results,
+            result_consumer,
+        )
+
+    def _run_cuda_decode_overlap(
+        self,
+        frame_source: Iterable,
+        progress_cb: Callable[[int, int], None] | None,
+        range_total: int,
+        should_stop: Callable[[], bool] | None = None,
+        collect_results: bool = False,
+        result_consumer: Callable[[FrameResult], None] | None = None,
+    ) -> InferencePassResult:
         result = InferencePassResult()
         w = self.window_size
         step = max(1, range_total // 100) if range_total > 0 else 1
 
-        # Bounded hand-off: (window, raw_obb_list) producer -> consumer. A
-        # sentinel ``None`` marks end-of-stream. maxsize bounds in-flight windows
-        # so the producer can run at most ``queue_bound`` windows ahead.
+        # There are deliberately two bounded queues.  Decoding is normally an
+        # independent CPU task even when inference uses CUDA, and serialising it
+        # behind OBB wastes a core on SAHI-heavy runs.  Keep only one decoded
+        # window waiting for detection: this permits overlap without silently
+        # multiplying the user-selected prefetch runway.  The second queue is
+        # the existing detector -> downstream queue, sized by pipeline depth.
+        # ``None`` marks end-of-stream on either queue.
+        decode_q: queue.Queue = queue.Queue(maxsize=1)
         handoff_q: queue.Queue = queue.Queue(maxsize=max(1, int(self.queue_bound)))
         stop = threading.Event()
         consumer_done = threading.Event()
-        producer_error: list[BaseException] = []
+        detector_done = threading.Event()
+        decode_error: list[BaseException] = []
+        detector_error: list[BaseException] = []
         producer_cancelled = threading.Event()
-        # Frames read so far (written by producer, read for progress). Guarded by
-        # being the producer's sole responsibility; the consumer only reads it
-        # after the producer has put the corresponding window on the queue.
+        # Frames read so far (written by detector, read for progress). The
+        # consumer only reads it after the detector has put that window on the
+        # queue, so no additional lock is needed.
         read_counter = {"n": 0}
 
-        def cancellable_put(item) -> bool:
-            """Put without ever pinning the producer behind a dead consumer."""
-            while not stop.is_set() and not consumer_done.is_set():
+        def cancellable_put(
+            target: queue.Queue, item, peer_done: threading.Event
+        ) -> bool:
+            """Put without pinning an upstream worker behind a departed peer."""
+            while not stop.is_set() and not peer_done.is_set():
                 try:
-                    handoff_q.put(item, timeout=0.05)
+                    target.put(item, timeout=0.05)
                     return True
                 except queue.Full:
                     continue
             return False
 
-        def publish_sentinel() -> None:
-            # A producer-requested stop still needs to wake a live consumer.
-            # A failed/departed consumer does not: consumer_done cancels this
-            # otherwise potentially blocking final put.
-            while not consumer_done.is_set():
+        def publish_sentinel(target: queue.Queue, peer_done: threading.Event) -> None:
+            """Wake a live downstream worker without deadlocking teardown."""
+            while not peer_done.is_set():
                 try:
-                    handoff_q.put(None, timeout=0.05)
+                    target.put(None, timeout=0.05)
                     return
                 except queue.Full:
                     if stop.is_set():
-                        # The supervisor drains while joining after an error.
                         continue
 
-        def producer() -> None:
+        def decoder() -> None:
             try:
                 for window in self._stream_windows(frame_source, w):
                     if stop.is_set() or (should_stop is not None and should_stop()):
                         producer_cancelled.set()
                         stop.set()
                         break
-                    raw_list = self._run_detection_for_window(window)
-                    read_counter["n"] += len(window)
-                    # Carry the running read count so the consumer can emit
-                    # progress with the same cadence as the sync path.
-                    if not cancellable_put((window, raw_list, read_counter["n"])):
+                    if not cancellable_put(decode_q, window, detector_done):
                         break
             except InferenceCancelled:
                 producer_cancelled.set()
                 stop.set()
             except BaseException as exc:  # noqa: BLE001,B036 supervisor
-                producer_error.append(exc)
+                decode_error.append(exc)
                 stop.set()
             finally:
-                publish_sentinel()
+                publish_sentinel(decode_q, detector_done)
 
-        producer_thread = threading.Thread(
-            # A new thread starts with a fresh context, so an unbound producer
+        def detector() -> None:
+            try:
+                while not stop.is_set():
+                    window = decode_q.get()
+                    if window is None:
+                        break
+                    raw_list = self._run_detection_for_window(window)
+                    read_counter["n"] += len(window)
+                    if not cancellable_put(
+                        handoff_q, (window, raw_list, read_counter["n"]), consumer_done
+                    ):
+                        break
+            except InferenceCancelled:
+                producer_cancelled.set()
+                stop.set()
+            except BaseException as exc:  # noqa: BLE001,B036 supervisor
+                detector_error.append(exc)
+                stop.set()
+            finally:
+                detector_done.set()
+                publish_sentinel(handoff_q, consumer_done)
+
+        decoder_thread = threading.Thread(
+            target=bind_target(decoder), name="pipeline-decode-producer", daemon=True
+        )
+        detector_thread = threading.Thread(
+            # A new thread starts with a fresh context, so an unbound detector
             # would report zero OBB time at depth>=2.
-            target=bind_target(producer),
+            target=bind_target(detector),
             name="pipeline-obb-producer",
             daemon=True,
         )
-        producer_thread.start()
+        decoder_thread.start()
+        detector_thread.start()
 
         consumer_error: BaseException | None = None
         try:
@@ -775,15 +841,23 @@ class Pipeline:
             consumer_done.set()
         finally:
             # Supervisor teardown: stop the producer at the next window boundary,
-            # drain the queue so a blocked producer ``put`` unblocks, then join.
+            # close a blocking reader, drain both queues, then join both workers.
             stop.set()
+            # Closing here is what makes cancellation and downstream errors safe
+            # for a reader blocked inside decode. FrameSource.close is required to
+            # be idempotent; run_batch_pass closes it again for the normal owner.
+            close = getattr(frame_source, "close", None)
+            if callable(close):
+                close()
             # Python cannot safely terminate a thread that is inside model or
             # device inference. Keep ownership here until that call returns;
             # the process-level containment layer owns hard wall-clock limits.
             # Returning early would let caller teardown race live GPU work.
-            while producer_thread.is_alive():
+            while decoder_thread.is_alive() or detector_thread.is_alive():
+                self._drain_queue(decode_q)
                 self._drain_queue(handoff_q)
-                producer_thread.join(timeout=0.05)
+                decoder_thread.join(timeout=0.05)
+                detector_thread.join(timeout=0.05)
             # Flush + close the (async) cache writer so no write is left pending,
             # regardless of whether we are unwinding an error or finishing clean.
             # ``cache_writer`` is only ``None`` for Pipeline.for_test() shims used
@@ -796,10 +870,127 @@ class Pipeline:
 
         if consumer_error is not None:
             raise consumer_error
+        if decode_error:
+            raise decode_error[0]
+        if detector_error:
+            raise detector_error[0]
+        result.cancelled = producer_cancelled.is_set()
+
+        if progress_cb:
+            progress_cb(result.frames_processed, range_total)
+        return result
+
+    def _run_single_producer_buffer(
+        self,
+        frame_source: Iterable,
+        progress_cb: Callable[[int, int], None] | None,
+        range_total: int,
+        should_stop: Callable[[], bool] | None = None,
+        collect_results: bool = False,
+        result_consumer: Callable[[FrameResult], None] | None = None,
+    ) -> InferencePassResult:
+        """Original depth>=2 decode+OBB producer for CPU and MPS.
+
+        Keep this scheduling path separate rather than emulating it with the
+        CUDA queues: its one worker is the measured fast path on non-CUDA
+        backends and retains the prior profiling/thread topology.
+        """
+        result = InferencePassResult()
+        w = self.window_size
+        step = max(1, range_total // 100) if range_total > 0 else 1
+        handoff_q: queue.Queue = queue.Queue(maxsize=max(1, int(self.queue_bound)))
+        stop = threading.Event()
+        consumer_done = threading.Event()
+        producer_error: list[BaseException] = []
+        producer_cancelled = threading.Event()
+        read_counter = {"n": 0}
+
+        def cancellable_put(item) -> bool:
+            while not stop.is_set() and not consumer_done.is_set():
+                try:
+                    handoff_q.put(item, timeout=0.05)
+                    return True
+                except queue.Full:
+                    continue
+            return False
+
+        def publish_sentinel() -> None:
+            while not consumer_done.is_set():
+                try:
+                    handoff_q.put(None, timeout=0.05)
+                    return
+                except queue.Full:
+                    if stop.is_set():
+                        continue
+
+        def producer() -> None:
+            try:
+                for window in self._stream_windows(frame_source, w):
+                    if stop.is_set() or (should_stop is not None and should_stop()):
+                        producer_cancelled.set()
+                        stop.set()
+                        break
+                    raw_list = self._run_detection_for_window(window)
+                    read_counter["n"] += len(window)
+                    if not cancellable_put((window, raw_list, read_counter["n"])):
+                        break
+            except InferenceCancelled:
+                producer_cancelled.set()
+                stop.set()
+            except BaseException as exc:  # noqa: BLE001,B036 supervisor
+                producer_error.append(exc)
+                stop.set()
+            finally:
+                publish_sentinel()
+
+        producer_thread = threading.Thread(
+            target=bind_target(producer),
+            name="pipeline-obb-producer",
+            daemon=True,
+        )
+        producer_thread.start()
+
+        consumer_error: BaseException | None = None
+        try:
+            while True:
+                item = handoff_q.get()
+                if item is None:
+                    consumer_done.set()
+                    break
+                window, raw_list, read_n = item
+                with span(N.WINDOW, units=len(window)):
+                    window_results = self._process_obb_results(window, raw_list)
+                result.frames_processed += len(window)
+                self._deliver_results(
+                    result, window_results, collect_results, result_consumer
+                )
+                if progress_cb and range_total > 0:
+                    self._emit_progress(
+                        progress_cb,
+                        read_n,
+                        len(window),
+                        step,
+                        range_total,
+                    )
+        except BaseException as exc:  # noqa: BLE001,B036 supervisor
+            consumer_error = exc
+            consumer_done.set()
+        finally:
+            stop.set()
+            while producer_thread.is_alive():
+                self._drain_queue(handoff_q)
+                producer_thread.join(timeout=0.05)
+            if self.cache_writer is not None:
+                try:
+                    self.cache_writer.flush()
+                finally:
+                    self.cache_writer.close()
+
+        if consumer_error is not None:
+            raise consumer_error
         if producer_error:
             raise producer_error[0]
         result.cancelled = producer_cancelled.is_set()
-
         if progress_cb:
             progress_cb(result.frames_processed, range_total)
         return result
@@ -820,7 +1011,7 @@ class Pipeline:
             indices_buf: list[int] = []
             # The actual video-decode cost lives in pulling from ``frame_source``
             # (the underlying reader/prefetcher), not in this generator's own
-            # bookkeeping. At depth>=2 this generator runs on the bound producer
+            # bookkeeping. At depth>=2 this generator runs on the bound decoder
             # thread (see module docstring), so this is where DECODE must be
             # spanned. Bounded to one window's worth of pulls.
             #
@@ -841,7 +1032,11 @@ class Pipeline:
                     except StopIteration:
                         break
                     frame_bytes = self._frame_payload_bytes(frame)
-                    retained_windows = self.queue_bound + 2 if self.depth >= 2 else 1
+                    # depth>=2 holds at most one decoded window waiting for OBB,
+                    # one being detected, ``queue_bound`` raw windows, and one
+                    # consumer window. Keep the admission estimate aligned with
+                    # that concrete bounded ownership graph.
+                    retained_windows = self.queue_bound + 3 if self.depth >= 2 else 1
                     estimated = frame_bytes * w * retained_windows
                     if estimated > MAX_PIPELINE_BUFFER_BYTES:
                         raise ValueError(

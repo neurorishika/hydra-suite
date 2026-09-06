@@ -394,7 +394,11 @@ def _assert_task_matches_checkpoint(
 
 
 def load_obb_models(
-    config: OBBConfig, runtime: RuntimeContext, *, batch_size: int = 1
+    config: OBBConfig,
+    runtime: RuntimeContext,
+    *,
+    batch_size: int = 1,
+    stage1_batch_size: int | None = None,
 ) -> OBBModels:
     # Derive the resolved backend from the RuntimeContext (which reflects
     # runtime_tier via from_config). Per-stage compute_runtime fields are
@@ -460,7 +464,7 @@ def load_obb_models(
         # Stage-1 is a plain detector (no angle head) -- must be parsed as
         # Results(boxes=...), not Results(obb=...), under tensorrt/onnx.
         task="detect",
-        batch_size=batch_size,
+        batch_size=stage1_batch_size or batch_size,
     )
     # stage2_image_size is always the effective input size (the pipeline
     # pre-resizes every crop to it in resize_crops_for_stage2), so the

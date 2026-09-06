@@ -1952,19 +1952,40 @@ def test_slice_config_persists_and_reloads(monkeypatch, qapp, tmp_path):
     window = _make_main_window(monkeypatch)
     window._detection_panel.chk_slice_enabled.setChecked(True)
     window._detection_panel.combo_slice_geometry.setCurrentText("custom")
+    window._detection_panel.spin_slice_tile_batch.setValue(7)
+    window._detection_panel.spin_slice_memory_budget.setValue(96)
+    window._detection_panel.chk_slice_tile_batch_autotune.setChecked(True)
 
     config_path = tmp_path / "slice_roundtrip.json"
     assert window.save_config(preset_mode=True, preset_path=str(config_path))
     saved = json.loads(config_path.read_text(encoding="utf-8"))
     assert saved["slice_enabled"] is True
     assert saved["slice_geometry_mode"] == "custom"
+    assert saved["slice_profile_settings"]["tile_batch_size"] == 7
+    assert saved["slice_profile_settings"]["tile_batch_autotune"] is True
+    assert saved["slice_profile_settings"]["memory_budget_mib"] == 96
     window.close()
 
     reloaded = _make_main_window(monkeypatch)
     reloaded._load_config_from_file(str(config_path), preset_mode=True)
     assert reloaded._detection_panel.chk_slice_enabled.isChecked() is True
     assert reloaded._detection_panel.combo_slice_geometry.currentText() == "custom"
+    assert reloaded._detection_panel.spin_slice_tile_batch.value() == 7
+    assert reloaded._detection_panel.chk_slice_tile_batch_autotune.isChecked() is True
+    assert reloaded._detection_panel.spin_slice_memory_budget.value() == 96
     reloaded.close()
+
+    # Older sessions have a slice snapshot but no tile execution controls.
+    # They must retain the established manual/default behavior.
+    for key in ("tile_batch_size", "tile_batch_autotune", "memory_budget_mib"):
+        saved["slice_profile_settings"].pop(key)
+    config_path.write_text(json.dumps(saved), encoding="utf-8")
+    legacy = _make_main_window(monkeypatch)
+    legacy._load_config_from_file(str(config_path), preset_mode=True)
+    assert legacy._detection_panel.spin_slice_tile_batch.value() == 16
+    assert legacy._detection_panel.chk_slice_tile_batch_autotune.isChecked() is False
+    assert legacy._detection_panel.spin_slice_memory_budget.value() == 256
+    legacy.close()
 
 
 def test_slice_params_reach_upper_snake_dict(monkeypatch, qapp):
@@ -1979,6 +2000,8 @@ def test_slice_params_reach_upper_snake_dict(monkeypatch, qapp):
     assert params["SLICE_GEOMETRY_MODE"] == "auto_object"
     assert params["SLICE_OVERLAP"] == 0.25
     assert params["SLICE_MERGE_BACKEND"] == "gpu"
+    assert params["SLICE_TILE_BATCH_SIZE"] == 16
+    assert params["SLICE_MEMORY_BUDGET_MIB"] == 256
     window.close()
 
 

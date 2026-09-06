@@ -1,5 +1,6 @@
 import threading
 import time
+from types import SimpleNamespace
 
 import pytest
 
@@ -231,6 +232,180 @@ def test_depth2_consumer_error_unblocks_full_producer_queue_without_thread_leak(
     )
 
 
+def test_depth2_decodes_next_window_while_detector_is_blocked():
+    """Decode has its own producer and can overlap a slow SAHI detector."""
+    from hydra_suite.core.inference.pipeline import Pipeline
+
+    pipe = Pipeline.for_test(window_size=1, depth=2, stage=lambda window: [])
+    pipe.runtime = SimpleNamespace(cuda_mode=True)
+    second_frame_requested = threading.Event()
+    release_detector = threading.Event()
+
+    class _Source:
+        def __iter__(self):
+            yield 0, object()
+            second_frame_requested.set()
+            yield 1, object()
+
+        def close(self):
+            pass
+
+    calls = 0
+
+    def slow_detection(window):
+        nonlocal calls
+        calls += 1
+        if calls == 1:
+            # The decoder must request frame 1 while OBB is still working on 0.
+            assert second_frame_requested.wait(1.0)
+            assert release_detector.wait(2.0)
+        return [object()]
+
+    pipe._run_detection_for_window = slow_detection  # type: ignore[assignment]
+    pipe._process_obb_results = lambda window, raw: []  # type: ignore[assignment]
+
+    runner = threading.Thread(
+        target=lambda: pipe.run(_Source(), range(2), range_total=2), daemon=True
+    )
+    runner.start()
+    assert second_frame_requested.wait(1.0)
+    release_detector.set()
+    runner.join(timeout=2.0)
+    assert not runner.is_alive()
+
+
+def test_depth2_decoder_queue_is_bounded_and_source_is_closed_on_consumer_error():
+    """A failed consumer cannot leave a blocked decoder or reader behind."""
+    from hydra_suite.core.inference import pipeline as pipeline_mod
+    from hydra_suite.core.inference.pipeline import Pipeline
+
+    real_queue = pipeline_mod.queue.Queue
+    maxsizes: list[int] = []
+
+    def spy_queue(*args, **kwargs):
+        q = real_queue(*args, **kwargs)
+        maxsizes.append(q.maxsize)
+        return q
+
+    closed = threading.Event()
+
+    class _Source:
+        def __iter__(self):
+            for idx in range(100):
+                yield idx, object()
+
+        def close(self):
+            closed.set()
+
+    pipe = Pipeline.for_test(window_size=1, depth=2, stage=lambda window: [])
+    pipe.runtime = SimpleNamespace(cuda_mode=True)
+    pipe._run_detection_for_window = lambda window: [object()]  # type: ignore[assignment]
+    pipe._process_obb_results = (  # type: ignore[assignment]
+        lambda window, raw: (_ for _ in ()).throw(RuntimeError("consumer boom"))
+    )
+
+    from unittest.mock import patch
+
+    with patch.object(pipeline_mod.queue, "Queue", side_effect=spy_queue):
+        with pytest.raises(RuntimeError, match="consumer boom"):
+            pipe.run(_Source(), range(100), range_total=100)
+
+    # First queue is the one-window decode staging queue; the second remains
+    # the configured detector-result runway for strict in-order consumption.
+    assert maxsizes[:2] == [1, 1]
+    assert closed.is_set()
+    assert not any(
+        thread.name in {"pipeline-decode-producer", "pipeline-obb-producer"}
+        and thread.is_alive()
+        for thread in threading.enumerate()
+    )
+
+
+def test_depth2_decode_exception_propagates_and_closes_source():
+    """Reader exceptions are reported from the decoder, not hidden by a sentinel."""
+    from hydra_suite.core.inference.pipeline import Pipeline
+
+    closed = threading.Event()
+
+    class _Source:
+        def __iter__(self):
+            yield 0, object()
+            raise OSError("decode failed")
+
+        def close(self):
+            closed.set()
+
+    pipe = Pipeline.for_test(window_size=1, depth=2, stage=lambda window: [])
+    pipe.runtime = SimpleNamespace(cuda_mode=True)
+    pipe._run_detection_for_window = lambda window: [object()]  # type: ignore[assignment]
+    pipe._process_obb_results = lambda window, raw: []  # type: ignore[assignment]
+
+    with pytest.raises(OSError, match="decode failed"):
+        pipe.run(_Source(), range(2), range_total=2)
+    assert closed.is_set()
+
+
+def test_depth2_non_cuda_keeps_single_decode_and_detection_producer():
+    """MPS/CPU preserve the established one-thread decode+OBB schedule."""
+    from unittest.mock import patch
+
+    from hydra_suite.core.inference import pipeline as pipeline_mod
+    from hydra_suite.core.inference.pipeline import Pipeline
+
+    pipe = Pipeline.for_test(window_size=1, depth=2, stage=lambda window: [])
+    pipe.runtime = SimpleNamespace(cuda_mode=False)
+    queue_maxsizes: list[int] = []
+    real_queue = pipeline_mod.queue.Queue
+
+    def spy_queue(*args, **kwargs):
+        q = real_queue(*args, **kwargs)
+        queue_maxsizes.append(q.maxsize)
+        return q
+
+    pipe._run_detection_for_window = lambda window: [object()]  # type: ignore[assignment]
+    pipe._process_obb_results = lambda window, raw: []  # type: ignore[assignment]
+    with patch.object(pipeline_mod.queue, "Queue", side_effect=spy_queue):
+        result = pipe.run([(0, object()), (1, object())], range(2), range_total=2)
+
+    assert result.frames_processed == 2
+    assert queue_maxsizes == [1]
+    assert not any(
+        thread.name == "pipeline-decode-producer" and thread.is_alive()
+        for thread in threading.enumerate()
+    )
+
+
+def test_cuda_decode_overlap_cancellation_joins_both_producers():
+    """CUDA cancellation tears down decoder and detector without leaking work."""
+    from hydra_suite.core.inference.pipeline import Pipeline
+
+    pipe = Pipeline.for_test(window_size=1, depth=2, stage=lambda window: [])
+    pipe.runtime = SimpleNamespace(cuda_mode=True)
+    pipe._run_detection_for_window = lambda window: [object()]  # type: ignore[assignment]
+    pipe._process_obb_results = lambda window, raw: []  # type: ignore[assignment]
+    checks = 0
+
+    def should_stop():
+        nonlocal checks
+        checks += 1
+        return checks > 1
+
+    result = pipe.run(
+        [(idx, object()) for idx in range(20)],
+        range(20),
+        range_total=20,
+        should_stop=should_stop,
+    )
+
+    assert result.cancelled is True
+    assert result.frames_processed <= 1
+    assert not any(
+        thread.name in {"pipeline-decode-producer", "pipeline-obb-producer"}
+        and thread.is_alive()
+        for thread in threading.enumerate()
+    )
+
+
 def test_run_does_not_return_while_detection_call_still_owns_model():
     """Python cannot kill inference safely; model ownership waits for its exit."""
     from hydra_suite.core.inference.pipeline import Pipeline
@@ -251,9 +426,15 @@ def test_run_does_not_return_while_detection_call_still_owns_model():
         return [object()]
 
     pipe._run_detection_for_window = blocked_detection  # type: ignore[assignment]
-    pipe._process_obb_results = (  # type: ignore[assignment]
-        lambda window, raw: (_ for _ in ()).throw(RuntimeError("consumer failed"))
-    )
+
+    def fail_after_second_detection(window, raw):
+        # The consumer owns only the first raw window while the detector starts
+        # its second call. This explicitly exercises the teardown guarantee
+        # without relying on the old decode+OBB single-producer scheduling.
+        assert detection_entered.wait(1.0)
+        raise RuntimeError("consumer failed")
+
+    pipe._process_obb_results = fail_after_second_detection  # type: ignore[assignment]
 
     def invoke():
         try:
