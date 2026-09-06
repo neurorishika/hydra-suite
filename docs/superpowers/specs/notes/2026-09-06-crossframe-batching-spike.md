@@ -1,7 +1,7 @@
 # Cross-frame crop batching (Option B) — measurement spike
 
-**Status:** measurement only. No pipeline code changed. Run on `courtship`
-(RTX 4090, torch 2.11.0+cu128) against repo `17eb4c48`.
+**Status:** measurement complete, both platforms, all stages. No pipeline code
+changed. **Verdict: do not implement.**
 
 ## Question
 
@@ -12,133 +12,167 @@ accumulation via an independent, crop-count-bounded accumulator, decoupled
 from `detection_batch_size`. Is the speedup worth the cache-ordering and
 numerics cost?
 
+Two specific hypotheses motivated it:
+
+1. **SLEAP pose round-trip** — `project_sleap_gpu_mehek` concluded "pose
+   slowness = per-frame service round-trip overhead; lever = batch frames per
+   request."
+2. **CoreML classifier 7.8×** — `2026-07-03-tensorrt-coreml-cross-frame-batching-design.md`
+   measured a 7.8× per-frame speedup from batched CoreML classification.
+
+**Both are refuted below.**
+
 ## Method
 
 `tools/spikes/crossframe_batching/spike_crossframe.py` builds the REAL stages
 from a real fixture config + clip (`build_tracking_parameters` →
-`build_inference_config_from_params` → `InferenceRunner`), runs detection
-ONCE to fix the inputs, then calls the REAL batch stage functions two ways
-over the SAME detections:
+`build_inference_config_from_params` → `InferenceRunner`), runs detection ONCE
+to fix the inputs, then calls the REAL batch stage functions two ways over the
+SAME detections:
 
 - **per_frame**   — `run_*_batch([f], [obb])` once per frame  (today)
 - **accumulated** — `run_*_batch(frames, obbs)` once per group (Option B)
 
-`torch.cuda.synchronize()` around every timing; 2 warmup, median of 5.
-Numeric agreement is reported harness-style: an `accumulated` vs `accumulated`
-DETERMINISM floor first, then `per_frame` vs `accumulated` against it.
+`torch.cuda.synchronize()` around every timing; warmup then median of N.
+Numeric agreement is reported harness-style: an accumulated-vs-accumulated
+DETERMINISM floor first, then per_frame vs accumulated against it.
 
-Clips: `ant_cnn_identity` (head-tail + multi-head identity CNN, ~17 det/frame),
-`ant_pose_headtail` (head-tail only, ~18 det/frame). 32 frames each.
+Hardware: `courtship` RTX 4090 (torch 2.11.0+cu128, sleap-nn 0.1.3 in a
+purpose-built `sleap-nn` env) and this Apple Silicon box (`hydra-mps`,
+sleap-nn 0.1.3). Clips `ant_cnn_identity` (HT + multi-head identity CNN,
+~17 det/frame) and `ant_pose_headtail` (HT + SLEAP pose, ~18 det/frame).
 
-## Results — speedup (per_frame / accumulated, >1 = B is faster)
+## Results — best speedup per stage (per_frame / accumulated)
 
-`ant_cnn_identity`, gpu tier (native torch CUDA):
+| platform | tier | backend | stage | best | numerics vs 0.0 floor |
+|---|---|---|---|---|---|
+| CUDA | gpu | torch | head-tail | **1.23×** | 0.0 — byte-identical |
+| CUDA | gpu | torch | CNN | **1.18×** | Δprob 2.2e-3, 0 argmax flips |
+| CUDA | gpu_fast | ONNX/TRT | HT + CNN | 0.94–1.11× (noise) | 0.0 — byte-identical |
+| CUDA | gpu | sleap-nn service | **pose** | **1.04×** | Δ up to **1.045 px** |
+| MPS | gpu | torch | head-tail | **1.31×** | 0.0 — byte-identical |
+| MPS | gpu | torch | CNN | **1.14×** | Δprob 1.4e-6 |
+| MPS | gpu_fast | **CoreML** | head-tail | **1.15×** | 0.0 — byte-identical |
+| MPS | gpu_fast | **CoreML** | CNN | **1.15×** | Δprob **0.048**, 0 argmax flips |
+| MPS | gpu | sleap-nn service | **pose** | 1.09× @ batch 4, **1.35×** @ batch 64 | 0.0 |
+| both | all | — | **crop warp** | ~1.0× | n/a |
 
-| classifier batch knob | group | warp | head-tail | CNN |
-|---|---|---|---|---|
-| 25 (fixture value) | 1 (null) | 1.00× | 0.98× | 1.00× |
-| 25 | 2 | 0.92× | 1.02× | 1.02× |
-| 25 | 4 | 0.81× | 1.09× | 1.04× |
-| 25 | 8 | 0.89× | 1.11× | 1.09× |
-| **64 (code default)** | 1 (null) | 1.00× | 1.07× | 0.99× |
-| **64** | 2 | 0.92× | **1.18×** | **1.18×** |
-| **64** | 4 | 1.09× | **1.16×** | 1.07× |
-| **64** | 8 | 1.02× | **1.23×** | **1.17×** |
-| 256 | 2 | 0.93× | 1.16× | 1.19× |
-| 256 | 4 | 1.11× | 1.31× | 1.14× |
-| 256 | 8 | 1.01× | 1.20× | 1.11× |
+### Noise floor — read every row with this
 
-`ant_cnn_identity`, gpu_fast tier (ONNX Runtime; classifier `.onnx` artifacts
-confirmed present on the box):
+Group 1 is a null arm: both sides do identical work by construction, so its
+deviation from 1.00× IS the noise. Across all runs it reads **0.93–1.29×**.
+Absolute times for identical work swung up to 40% between runs (clock/thermal
+ramp; the arms run sequentially, biasing whichever runs second). One MPS row
+is a visible outlier (head-tail g4 @ pose-batch 4 read 3.46× — a contaminated
+sample, not a real effect). **Treat anything under ~1.15× as unproven.**
 
-| batch knob | group | warp | head-tail | CNN |
-|---|---|---|---|---|
-| 25 | 4 | 1.09× | 1.09× | 0.99× |
-| 25 | 8 | 0.98× | 1.11× | 1.02× |
-| 256 | 4 | 1.07× | 1.07× | 0.96× |
-| 256 | 8 | 0.94× | 0.99× | 0.94× |
+## The two motivating hypotheses, tested
 
-`ant_pose_headtail`, gpu tier, knob 256 (second clip, confirmation):
+**1. SLEAP round-trip — REFUTED.** Cross-frame pose accumulation buys
+**1.01–1.04×** on the RTX 4090 at either SLEAP batch setting. Batching frames
+per request is not the lever the earlier audit assumed. On MPS pose reaches
+1.35×, but only with `PoseSLEAPConfig.batch_size` raised 4 → 64 *and* group-8
+accumulation; at the default batch it is 1.04–1.09×.
 
-| group | warp | head-tail |
-|---|---|---|
-| 1 (null) | 1.00× | 0.97× |
-| 4 | 1.19× | 1.26× |
-| 8 | 0.95× | 1.22× |
-| 16 | 1.07× | 1.18× |
+**The knob alone is inert — it is not a separate cheap win.** Compare the
+per_frame arm (what the pipeline does today) at batch 4 vs 64:
 
-### Noise floor — read the tables with this
-
-Group 1 is the null arm: both arms do identical work by construction, so its
-deviation from 1.00× IS the noise. It reads **0.94–1.07×**, and absolute warp
-time for the same 536 crops varied 55–98 ms across runs (clock/thermal ramp;
-the two arms run sequentially, which biases toward whichever runs second).
-**Treat anything under ~1.10× as noise.** On that basis the b25 rows carry no
-signal; the b64 and b256 head-tail/CNN gains do.
-
-## Results — numerics
-
-| stage | tier | determinism floor | per_frame vs accumulated |
+| | g1 | g4 | g8 |
 |---|---|---|---|
-| head-tail | gpu | 0 flips, Δ=0.0 | **0 flips, Δ=0.0** (byte-identical, all knobs/groups, both clips) |
-| CNN | gpu | 0 flips, Δ=0.0 | 0 argmax flips / 1072 factor preds, **max \|Δprob\| ≈ 0.0022** |
-| head-tail, CNN | gpu_fast | 0 flips, Δ=0.0 | **0 flips, Δ=0.0** (byte-identical) |
+| MPS per_frame, batch 4 | 975 ms | 919 ms | 817 ms |
+| MPS per_frame, batch 64 | 1184 ms | 1064 ms | 886 ms |
+| CUDA per_frame, batch 4 | 288 ms | 285 ms | 281 ms |
+| CUDA per_frame, batch 64 | 292 ms | 288 ms | 299 ms |
 
-The head-tail π-flip worry is **dismissed on this evidence** — head-tail is
-byte-identical under regrouping on both tiers.
+Flat or slower. With ~18 crops per frame, 5 chunks of 4 costs the same as 1
+chunk of 18 — which is itself further evidence that chunk/round-trip count is
+cheap. The knob only does anything once accumulation has already produced a
+144-crop call, i.e. it is a multiplier on B, not an alternative to it.
 
-CNN on the gpu tier is not: chunk composition (one chunk of 136 crops from 8
-frames vs 8 chunks of ~17) shifts probabilities by up to 2.2e-3 against a
-perfectly reproducible 0.0 floor. No decision changed on these clips, but
-Debug CSVs carry `IdentityEvidence*` probability columns, so **B breaks
-byte-identity of the equivalence gate on identity clips**, and Bayes
-log-compat accumulation over thousands of frames could turn 2e-3 into a flip
-somewhere. gpu_fast is immune (fixed-shape ONNX path).
+**2. CoreML 7.8× — REFUTED as an argument for B.** (CoreML genuinely ran:
+`.mlpackage` artifacts are present for both the orientation and identity
+models, and CNN's Δprob of 0.048 vs 1.4e-6 on the torch-MPS tier confirms a
+different backend was exercised.) Measured CoreML classifier
+gain from cross-frame accumulation is **1.15×**, not 7.8×. The original 7.8×
+came from fixing a call-count bug (`_forward_coreml` looping per crop instead
+of one batched `predict()`), and that fix already shipped — today's per-frame
+call already batches all ~17 of a frame's crops. Accumulating *more* on top of
+an already-batched call adds ~15%, which is the same ~15% every other backend
+shows. There is no Apple-specific windfall left to collect.
 
-## Verdict for CUDA classifiers
+## Numerics — three findings
 
-**Marginal.** At the code-default batch knob (64), B buys ~1.2× on head-tail
-and ~1.2× on CNN, gpu tier only; gpu_fast shows nothing above noise. Crop warp
-does not shrink (~1.0×), confirming the prior — B accelerates only the backend
-forward, not the ~32%-of-wall warp. The cost is the cache-ordering rework
-(`write_downstream` deferral vs `runner.py`'s strict window order + the
-explicit-empty cancel invariant) plus loss of identity byte-identity.
+- **Head-tail is byte-identical** under regrouping on every platform/tier
+  (0 flips, Δ=0.0, 1000+ predictions). The θ π-flip worry is **dead**.
+- **Pose is byte-identical on MPS**; on CUDA five of six rows are ≤0.001 px
+  but **one row (batch 64, group 4) drifts 1.045 px** on a keypoint against a
+  0.0 determinism floor — outlier-class, not systematic, but real.
+- **CNN drift is backend-dependent and worst on CoreML**: Δprob 1.4e-6
+  (torch-MPS) → 2.2e-3 (torch-CUDA) → **0.048 (CoreML)**, always with 0 argmax
+  flips. 0.048 is ~5 percentage points on a probability.
 
-## What is NOT measured (and why the overall go/no-go is still open)
+Because Debug CSVs carry `IdentityEvidence*` probability columns and pose
+keypoint coordinates, **B breaks equivalence byte-identity on identity and
+pose clips on three of the four backends measured.**
 
-Both of the arguments that actually motivated B are unmeasured here:
+## Verdict
 
-1. **SLEAP pose round-trip** — hypothesized to be the largest lever
-   (`project_sleap_gpu_mehek`: "lever = batch frames per request").
-   **Blocked on courtship:** its `sleap` conda env is TensorFlow SLEAP 1.4.1
-   on Python 3.7, not the sleap-nn/PyTorch runtime the pipeline requires
-   (`No module named 'torch'` inside the env). No exported SLEAP `.onnx` on
-   the box either, so the gpu_fast in-process pose arm is unavailable too.
-   Needs mehek or a sleap-nn env.
-2. **CoreML classifier batching** — the 2026-07-03 spec measured **7.8×** per
-   frame for batched CoreML classification. That is Apple-only and is the one
-   place B could be a large win rather than a marginal one. Not reproducible
-   on CUDA hardware; needs the MPS box.
+**Do not implement Option B.** Every stage, both platforms, every tier lands
+in a 1.0–1.35× band, mostly within ~2× of the measurement noise floor. Crop
+warp — ~32% of wall per `project_sleap_roundtrip_audit` — does not shrink at
+all, because B only affects the backend forward. Against that, B costs:
+deferring `write_downstream` against `runner.py`'s strict window order, a new
+cancel-path flush invariant, a crop-count-bounded accumulator, a
+pre-extracted-batch parameter for `run_cnn_batch` (it builds its own crops),
+and loss of gate byte-identity on identity + pose clips.
 
-The spike script is portable — `--tier gpu` gives the SLEAP service arm and
-`--tier gpu_fast` gives CoreML classifiers on the MPS box.
+**End-to-end, the ceiling is negligible.** `project_sleap_roundtrip_audit`
+measured pose at 4.6% of wall, so even the best-case 1.35× on pose is ~1.2%
+end-to-end. The classifier gains sit on a similarly small slice.
+
+**Where to look instead:** crop warp, not the backend forward. It is ~32% of
+wall and B provably does not touch it. Note also that no batch-knob tuning is
+available as a consolation prize — the classifier knobs (64) already exceed
+typical per-frame detection counts and so are inert, and the SLEAP knob is
+inert without accumulation (above).
+
+## Incidental findings
+
+- **`POSE_SLEAP_ENV` and `pose_sleap_batch` are dead keys.**
+  `build_inference_config_from_params` constructs `PoseSLEAPConfig` with only
+  `model_path` and `POSE_BATCH_SIZE` (`config.py:1097-1100`), so `conda_env`
+  is always the `"sleap"` default no matter what the config says. Same class
+  as the `DETECTION_BATCH_SIZE` dead key. The spike works around it by
+  mutating the built config.
+- **`pip install "sleap[nn,nn-export-gpu]"` unpinned installs sleap-nn 0.3.3,
+  which breaks the pipeline's shared-memory transport** (`findDecoder
+  imread_('inmem_crop_000000')`). The working version is sleap-nn 0.1.3 via
+  `sleap==1.6.2`. `docs/getting-started/integrations.md` gives the unpinned
+  command.
+- On courtship, `sleap[nn,nn-export-gpu]` pulls torch cu130, which the box's
+  535 driver cannot run — reinstall torch/torchvision from the cu128 index.
+- The equivalence clips are gitignored, so **a git worktree contains no
+  fixtures**; a first run silently measured 0 detections and would have
+  reported meaningless ratios. The harness now aborts loudly on 0 frames or 0
+  detections.
 
 ## Reproducing
 
 ```bash
 conda activate hydra-cuda          # or hydra-mps
-export PYTHONPATH=$PWD/src KMP_DUPLICATE_LIB_OK=TRUE SPIKE_NO_POSE=1
+export PYTHONPATH=$PWD/src KMP_DUPLICATE_LIB_OK=TRUE
 python tools/spikes/crossframe_batching/spike_crossframe.py \
-  --config tools/equivalence/fixtures/configs/ant_cnn_identity.json \
-  --clip   tools/equivalence/fixtures/clips/ant_cnn_identity.mp4 \
+  --config <fixtures>/configs/ant_cnn_identity.json \
+  --clip   <fixtures>/clips/ant_cnn_identity.mp4 \
   --tier gpu --frames 32 --groups 1 2 4 8 --repeats 5 --warmup 2 \
   --skeleton <skeletons>/ooceraea_biroi.json --out results.json
 ```
 
-Env overrides: `SPIKE_NO_POSE=1`, `SPIKE_CLS_BATCH=<n>` (head-tail + CNN
-batch knob), `SPIKE_POSE_BATCH=<n>`.
+Point `--clip`/`--config` at the PRIMARY checkout's fixtures (absolute paths).
+Env overrides: `SPIKE_NO_POSE=1`, `SPIKE_CLS_BATCH=<n>`,
+`SPIKE_POSE_BATCH=<n>`, `SPIKE_SLEAP_ENV=<env>`.
 
-`--skeleton` is required for SLEAP configs because the fixture configs carry
+`--skeleton` is required for SLEAP configs: the fixture configs carry
 `pose_skeleton_file: ""` and `runner.py`'s `load_pose_model` call passes no
 `keypoint_names` override — the pre-existing main breakage recorded in
 `project_main_pose_sleap_breakage`.

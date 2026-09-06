@@ -78,8 +78,17 @@ def build(config_path: Path, clip: Path, tier: str, n_frames: int, skeleton: str
             config.headtail.batch_size = _b
         for _c in config.cnn_phases:
             _c.batch_size = _b
-    if os.environ.get("SPIKE_POSE_BATCH"):
-        config.pose.batch_size = int(os.environ["SPIKE_POSE_BATCH"])
+    # NOTE: set on the SLEAP sub-config directly. `POSE_SLEAP_ENV` /
+    # `pose_sleap_batch` params are NOT read by
+    # build_inference_config_from_params -- it constructs PoseSLEAPConfig with
+    # only model_path + POSE_BATCH_SIZE, so conda_env is always the "sleap"
+    # default. Mutating the built config is the only way to override here.
+    _sleap = getattr(config.pose, "sleap", None) if config.pose else None
+    if _sleap is not None:
+        if os.environ.get("SPIKE_POSE_BATCH"):
+            _sleap.batch_size = int(os.environ["SPIKE_POSE_BATCH"])
+        if os.environ.get("SPIKE_SLEAP_ENV"):
+            _sleap.conda_env = os.environ["SPIKE_SLEAP_ENV"]
     runner = InferenceRunner(config, cache_dir=None, video_path=str(clip))
     models = runner._models
     runtime = runner.runtime
@@ -149,8 +158,21 @@ def main() -> int:
     config, models, runtime, frames = build(
         Path(args.config), Path(args.clip), args.tier, args.frames, args.skeleton
     )
+    if not frames:
+        raise SystemExit(
+            f"FATAL: decoded 0 frames from {args.clip!r}. The equivalence clips are "
+            "gitignored, so a git worktree does NOT contain them -- point --clip at "
+            "the primary checkout's fixtures/clips/ with an absolute path."
+        )
     pairs = detections_for(frames, models, config, runtime)
+    if not pairs:
+        raise SystemExit(
+            f"FATAL: {len(frames)} frames decoded but 0 produced detections. A silent "
+            "empty run would report a meaningless speedup -- check the config/model "
+            "pairing before trusting any number from this harness."
+        )
     dets = [p[1].num_detections for p in pairs]
+    _sleap_cfg = getattr(config.pose, "sleap", None) if config.pose else None
     report: dict = {
         "clip": Path(args.clip).name,
         "config": Path(args.config).name,
@@ -170,7 +192,8 @@ def main() -> int:
         "batch_knobs": {
             "headtail": getattr(config.headtail, "batch_size", None),
             "cnn": [c.batch_size for c in config.cnn_phases],
-            "pose": getattr(config.pose, "batch_size", None),
+            "pose_sleap": getattr(_sleap_cfg, "batch_size", None),
+            "sleap_env": getattr(_sleap_cfg, "conda_env", None),
             "detection_batch_size": config.detection_batch_size,
         },
         "results": [],
