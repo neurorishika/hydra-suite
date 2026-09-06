@@ -10,6 +10,7 @@ polygons into frame space, and merging duplicates across overlapping tiles.
 from __future__ import annotations
 
 import logging
+import math
 import time
 from dataclasses import dataclass
 from typing import Callable, Sequence
@@ -17,7 +18,11 @@ from typing import Callable, Sequence
 import numpy as np
 
 from hydra_suite.core.inference.masks import polygon_iou
-from hydra_suite.utils.slice_geometry import SlicePlan, plan_tiles
+from hydra_suite.utils.slice_geometry import (
+    SlicePlan,
+    plan_tiles,
+    tile_size_for_mode,
+)
 
 from .base import SemanticInstance, SemanticLabeler
 from .shape_prior import AreaBand, in_band, polygon_area
@@ -135,8 +140,26 @@ def resolve_tile_px(
         return None
     if reference_body_px is None or float(reference_body_px) <= 0:
         return None
-    frac = max(0.01, min(0.9, float(fraction)))
-    return int(max(64, min(4096, round(float(reference_body_px) / frac))))
+    ref = float(reference_body_px)
+    if math.isnan(ref):
+        # ``tile_size_for_mode``'s ``reference_body_px > 0`` gate is False for
+        # NaN, so delegating would silently return the ``auto_model`` imgsz
+        # fallback. The inline formula this function used to carry raised from
+        # ``round(nan)``; keep raising rather than invent a tile size.
+        raise ValueError("cannot convert float NaN to integer")
+    # ``geometry_mode`` is pinned to "auto_object", not exposed: this call site
+    # has no geometry-mode concept and never had one. The guards above
+    # guarantee ``ref > 0``, so the ``auto_object`` branch always fires and the
+    # ``imgsz``/``slice_*`` arguments are unreachable -- they are inert.
+    tile_w, _ = tile_size_for_mode(
+        geometry_mode="auto_object",
+        imgsz=0,
+        reference_body_px=ref,
+        object_tile_fraction=float(fraction),
+        slice_width=0,
+        slice_height=0,
+    )
+    return tile_w
 
 
 @dataclass(frozen=True)
