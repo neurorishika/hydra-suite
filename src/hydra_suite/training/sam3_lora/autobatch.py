@@ -679,14 +679,30 @@ def _reject_allocator_mismatch(
     DECIDES rather than only raising, that safety must not rest on luck.
     Fail closed: a record we cannot honestly key is not stored at all.
 
-    A child that reports no hash at all is accepted, so an older child or a
-    test double is not retro-invalidated; only a hash that CONTRADICTS the
-    key is refused.
+    SILENCE IS REFUSED TOO, not just contradiction. A record with no
+    self-report is one this process cannot honestly key, and it is allowed to
+    be the SOLE gate on GPU admission -- the gap it could hide is exactly the
+    42% this branch's safety argument rests on. The cost of refusing it is
+    nil: there is no production profile store yet, so the set of records this
+    retro-invalidates is empty, and the only production producer is
+    `cli.py::run_probe_measurement`, which always self-reports. A test double
+    that omits the field is one we control. Discard and re-probe.
     """
+
+    if identity.backend == "unfingerprinted":
+        # Not a deciding path. `_unfingerprinted_identity` is a placeholder no
+        # real fingerprint can equal, and `validate_probe_records` discards
+        # everything under it, so such a record can never gate an admission.
+        # There is no key here to be honest or dishonest about.
+        return
 
     reported = peaks.get("alloc_conf_hash")
     if not reported:
-        return
+        raise ProbeAllocatorMismatch(
+            f"The SAM3 probe child at batch {batch_size} reported no allocator "
+            "config, so its measurement cannot be honestly keyed. Nothing was "
+            "cached; the ladder will be re-probed by a child that reports one."
+        )
     if not identity.backend.endswith(f"|{reported}"):
         raise ProbeAllocatorMismatch(
             f"The SAM3 probe child at batch {batch_size} ran under allocator "

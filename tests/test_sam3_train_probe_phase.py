@@ -49,7 +49,10 @@ _PROBE_PEAKS = {1: 8 * GiB, 2: 14 * GiB}
 _IDENTITY = ProfileIdentity(
     operation=ab.OPERATION,
     model_identity="model",
-    backend="env",
+    # Must carry the live allocator sub-hash: `run_probe` refuses a record
+    # whose child allocator does not match the key it would be filed under,
+    # and this harness's fake child reports the live hash below.
+    backend=f"env|{ab.sidecar_alloc_conf_hash()}",
     device_identity="Test CUDA|48",
     precision="bf16",
     task="task",
@@ -273,6 +276,7 @@ def _install(
                     "accelerator_allocated_peak_bytes": peak // 2,
                     "host_peak_bytes": GiB,
                     "observed_at_unix_ns": 5,
+                    "alloc_conf_hash": ab.sidecar_alloc_conf_hash(),
                 }
             )
             (records_dir / f"batch_{self.batch}.json").write_text(

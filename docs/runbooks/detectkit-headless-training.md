@@ -204,8 +204,10 @@ is only chosen when that observation also fits.
 
 For a workload that has never been probed, the analytic estimate is all there
 is, and it dominates on the cards this role targets, so a first `-1` run will
-often resolve to `1`. Once records exist, the measurement decides and the
-resolved batch reflects what the card actually did.
+often resolve to `1`. Once records exist, the measurement decides **at or
+below the largest probed batch**; beyond that the conservative analytic
+estimate still applies, because there the measured side is a fitted guess
+rather than an observation.
 
 **It can also refuse the run.** If batch 1 does not fit in the free VRAM at the
 safety margin, training fails with an explicit refusal naming the requirement

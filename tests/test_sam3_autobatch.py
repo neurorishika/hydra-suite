@@ -399,10 +399,37 @@ def test_a_child_allocator_that_contradicts_the_cache_key_is_not_stored(tmp_path
     assert not list(tmp_path.glob("*.json")), "a mis-keyed record must not cache"
 
 
-def test_a_matching_or_absent_child_allocator_is_accepted(tmp_path):
-    """The live hash is accepted, and so is a child that reports none: only a
-    hash that CONTRADICTS the key is refused, so an older child or a test
-    double is not retro-invalidated."""
+def test_the_unfingerprinted_exemption_cannot_reach_a_decision(tmp_path):
+    """`run_probe` without an identity is exempt from the allocator check.
+
+    That exemption is only safe because such records can never gate anything:
+    `_unfingerprinted_identity` is a placeholder no real fingerprint can
+    equal, and `validate_probe_records` discards every record under it. Pinned
+    here so the exemption cannot quietly become a hole.
+    """
+
+    def silent(batch):
+        return {"accelerator_reserved_peak_bytes": batch * GiB}
+
+    ladder = ab.run_probe(_spec(tmp_path), tmp_path, step_fn=silent)
+    real = ab.sam3_workload_fingerprint(
+        _spec(tmp_path), cuda_device=_dev(), dataset=_dataset()
+    ).identity
+
+    assert ladder, "the ladder itself still runs"
+    assert ab.validate_probe_records(tuple(ladder), real) == ()
+
+
+def test_only_a_self_reporting_child_allocator_is_accepted(tmp_path):
+    """Silence is refused exactly like a contradiction.
+
+    A record with no self-report is one we cannot honestly key, and it is
+    allowed to be the sole gate on GPU admission -- the gap it could hide is
+    the same 42% a contradiction hides. Refusing it costs nothing: there is no
+    production profile store yet, so it retro-invalidates an empty set, and
+    the only production producer (`cli.py::run_probe_measurement`) always
+    reports.
+    """
 
     identity = ab.sam3_workload_fingerprint(
         _spec(tmp_path), cuda_device=_dev(), dataset=_dataset()
@@ -417,11 +444,14 @@ def test_a_matching_or_absent_child_allocator_is_accepted(tmp_path):
     def silent(batch):
         return {"accelerator_reserved_peak_bytes": batch * GiB}
 
-    for step in (matching, silent):
-        ladder = ab.run_probe(
-            _spec(tmp_path), tmp_path, step_fn=step, identity=identity
-        )
-        assert [record.settings.batch_size for record in ladder] == [1, 2, 4, 8]
+    ladder = ab.run_probe(
+        _spec(tmp_path), tmp_path, step_fn=matching, identity=identity
+    )
+    assert [record.settings.batch_size for record in ladder] == [1, 2, 4, 8]
+
+    with pytest.raises(ab.ProbeAllocatorMismatch):
+        ab.run_probe(_spec(tmp_path), tmp_path, step_fn=silent, identity=identity)
+    assert not list(tmp_path.glob("*.json")), "an unkeyable record must not cache"
 
 
 def test_a_host_refusal_stops_the_ladder_rather_than_skipping_it(tmp_path):
