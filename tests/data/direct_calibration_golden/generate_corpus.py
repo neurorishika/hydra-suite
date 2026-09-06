@@ -32,6 +32,51 @@ def _rect(x0, y0, x1, y1):
     return [[x0, y0], [x1, y0], [x1, y1], [x0, y1]]
 
 
+def _rotate(points, angle_deg, center):
+    """Rotate a list of [x, y] points about ``center`` by ``angle_deg``.
+
+    Pure geometry helper, no randomness. Used to build non-axis-aligned
+    instances so ``detect``'s AABB reduction (``_as_task_polygon``) is
+    genuinely exercised -- on axis-aligned input, AABB reduction is the
+    identity transform and cannot diverge from full-polygon IoU.
+    """
+    theta = np.deg2rad(angle_deg)
+    cos_t, sin_t = np.cos(theta), np.sin(theta)
+    pts = np.asarray(points, dtype=np.float64) - np.asarray(center, dtype=np.float64)
+    rotated = np.stack(
+        [pts[:, 0] * cos_t - pts[:, 1] * sin_t, pts[:, 0] * sin_t + pts[:, 1] * cos_t],
+        axis=1,
+    )
+    return (rotated + np.asarray(center, dtype=np.float64)).tolist()
+
+
+def _round2(points):
+    return [[round(x, 3), round(y, 3)] for x, y in points]
+
+
+def _horseshoe(cx, cy, r_outer, r_inner, gap_deg, n=24):
+    """A C-shaped (annulus-sector) polygon: a non-convex mask-style
+    silhouette whose area centroid AND vertex mean both fall in the empty
+    gap/hole, outside the polygon itself. Verified numerically (see
+    ``build_nonconvex_centroid_outside_case`` docstring) against
+    ``core.inference.match_geometry.representative_point``, which is
+    exactly the function this case exists to exercise.
+    """
+    start = gap_deg / 2
+    end = 360 - gap_deg / 2
+    theta_outer = np.deg2rad(np.linspace(start, end, n))
+    theta_inner = np.deg2rad(np.linspace(end, start, n))
+    outer = np.stack(
+        [cx + r_outer * np.cos(theta_outer), cy + r_outer * np.sin(theta_outer)],
+        axis=1,
+    )
+    inner = np.stack(
+        [cx + r_inner * np.cos(theta_inner), cy + r_inner * np.sin(theta_inner)],
+        axis=1,
+    )
+    return np.concatenate([outer, inner], axis=0).tolist()
+
+
 def _frame(labels, predictions):
     return {"labels": labels, "predictions": predictions}
 
@@ -57,6 +102,125 @@ def build_d7_case():
     return _frame(
         [_det(0, label)],
         [_det(0, prediction)],
+    )
+
+
+def build_d7_nonconvex_rotated_case():
+    """A rotated, non-convex version of the D7 1.7x-area case.
+
+    Fix-round addition: the plain D7 rectangle proves the thresholding half
+    of D7 but nothing else -- it is axis-aligned (so ``detect``'s AABB
+    reduction is the identity transform on it) and convex (so it cannot
+    exercise ``representative_point``'s non-convex fallback path). This
+    case makes the headline case representative of a real traced mask
+    silhouette: a body-core rectangle with one non-convex "leg" spike
+    protruding from it, at the SAME 1.7x area ratio as the plain case,
+    then both polygons rotated 35 degrees about the label's centroid so
+    ``detect`` (AABB-reduced) genuinely differs from ``obb``/``segment``
+    (full polygon).
+
+    Verified by hand (pre-rotation, since shoelace area and IoU are
+    rotation-invariant): label is a 20x20 square, area 400. Prediction is
+    a 7-vertex polygon (rectangle (90,104)-(126,121) with a spike apex at
+    (160,112)), shoelace area 680.0 == 1.7x the label, and NOT convex
+    (two reflex vertices where the spike rejoins the rectangle edge).
+    Rotated IoU (both polygons rotated 35 deg about (110,110)) ~= 0.423 <
+    0.5 -- still a simultaneous miss+extra under the legacy gate. Both
+    representative points (area centroid, since the prediction's centroid
+    lands inside its own body -- the spike is thin relative to the body)
+    fall inside the other polygon, confirmed against
+    ``core.inference.match_geometry.representative_point`` at generation
+    time; that mutual-containment property is what Task 4's matcher will
+    rely on. This case does NOT test the pole-of-inaccessibility fallback
+    -- see ``build_nonconvex_centroid_outside_case`` for that.
+    """
+    label = _rect(100, 100, 120, 120)  # area 400
+    prediction = [
+        [90, 104],
+        [126, 104],
+        [126, 110],
+        [160, 112],
+        [126, 114],
+        [126, 121],
+        [90, 121],
+    ]  # shoelace area 680.0 == 1.7x, non-convex (reflex at the spike base)
+    center = (110, 110)
+    label_r = _round2(_rotate(label, 35, center))
+    prediction_r = _round2(_rotate(prediction, 35, center))
+    return _frame(
+        [_det(0, label_r)],
+        [_det(0, prediction_r)],
+    )
+
+
+def build_rotated_task_divergence_case():
+    """Rotated rectangles chosen so ``detect``'s AABB reduction crosses the
+    0.5 IoU gate in the OPPOSITE direction from ``obb``/``segment`` --
+    i.e. this single case's match/miss OUTCOME (not just its IoU number)
+    differs by task. This is the direct proof that "three-task coverage"
+    is not one task's arithmetic three times over.
+
+    Fix-round addition (Finding 1). Both label and prediction are 20x20
+    squares, one offset by (-6, -2) from the other, both rotated 15
+    degrees about a shared center (700, 700).
+
+    Verified by hand at generation time: full-polygon IoU (what ``obb``/
+    ``segment`` score) ~= 0.464 -- BELOW the 0.5 gate, so those two tasks
+    score this as a miss + an extra. The same two rotated squares reduced
+    to their axis-aligned bounding quads first (what ``detect`` scores,
+    per ``_as_task_polygon``) have IoU ~= 0.511 -- AT OR ABOVE the gate,
+    so ``detect`` scores this as a match. Recorded once here in
+    ``obb``-native form; the per-task loop in ``main`` reuses the same
+    geometry for all three tasks and lets ``match_frame``'s own
+    ``_as_task_polygon`` perform the ``detect`` reduction, so the
+    divergence is measured by the scorer itself, not asserted by the
+    generator.
+    """
+    label = _rect(690, 690, 710, 710)
+    prediction = _rect(684, 688, 704, 708)
+    center = (700, 700)
+    label_r = _round2(_rotate(label, 15, center))
+    prediction_r = _round2(_rotate(prediction, 15, center))
+    return _frame(
+        [_det(0, label_r)],
+        [_det(0, prediction_r)],
+    )
+
+
+def build_nonconvex_centroid_outside_case():
+    """A mask-style non-convex silhouette (a C-shaped/horseshoe outline,
+    standing in for a body-plus-limbs trace with a concave bite) whose
+    AREA CENTROID -- not just its vertex mean -- falls OUTSIDE the polygon.
+
+    Fix-round addition (Finding 2). This is the D7 ruling's actual
+    containment-robustness subject matter: ``representative_point``
+    exists specifically because a real traced silhouette's area centroid
+    can land in a concavity outside the shape, which would wrongly fail a
+    containment gate that trusted the naive centroid. Nothing in the
+    corpus before this fix so much as attempted a shape where the AREA
+    centroid (not merely the vertex mean) is outside.
+
+    Verified numerically at generation time against
+    ``core.inference.match_geometry.representative_point``/``_contains``:
+    for this 48-vertex horseshoe (outer radius 50, inner radius 30, 100
+    degree gap, centered at (800, 800)):
+    - the naive vertex mean is OUTSIDE the polygon;
+    - the ``cv2.moments`` AREA centroid is ALSO outside (both fall in the
+      annulus's hollow center);
+    - ``representative_point`` falls through moments -> pole of
+      inaccessibility and returns (815.0, 763.0), which IS inside the
+      polygon (confirmed via ``_contains``).
+    The label is a small 12x12 square placed exactly at that verified
+    representative point, so a correct future matcher can find it, while
+    the legacy IoU-only gate (which never calls ``representative_point``)
+    scores this pair at IoU ~= 0.04 -- a miss + an extra, same as the
+    other under-threshold cases, since this case predates D7 adoption.
+    """
+    silhouette = _round2(_horseshoe(800, 800, 50, 30, 100, n=24))
+    label = _rect(809, 757, 821, 769)
+    return _frame(
+        [_det(0, label)],
+        [_det(0, silhouette)],
     )
 
 
@@ -193,6 +357,50 @@ def main():
                     "are mutually contained."
                 ),
                 "frames": [build_d7_case()],
+            }
+        )
+        cases.append(
+            {
+                "name": f"d7_nonconvex_rotated_{task}",
+                "task": task,
+                "description": (
+                    "Rotated, non-convex version of the D7 1.7x-area case "
+                    "(a body-core rectangle plus one leg-spike, rotated 35 "
+                    "degrees) -- makes the headline D7 case representative "
+                    "of a real traced silhouette instead of an axis-"
+                    "aligned rectangle that is merely too big."
+                ),
+                "frames": [build_d7_nonconvex_rotated_case()],
+            }
+        )
+        cases.append(
+            {
+                "name": f"rotated_task_divergence_{task}",
+                "task": task,
+                "description": (
+                    "Rotated squares whose full-polygon IoU (obb/segment, "
+                    "~0.464, below the gate) and AABB-reduced IoU (detect, "
+                    "~0.511, at/above the gate) fall on OPPOSITE sides of "
+                    "the legacy 0.5 threshold -- proves detect/obb/segment "
+                    "produce genuinely different match outcomes, not just "
+                    "different IoU numbers on the same outcome."
+                ),
+                "frames": [build_rotated_task_divergence_case()],
+            }
+        )
+        cases.append(
+            {
+                "name": f"nonconvex_centroid_outside_{task}",
+                "task": task,
+                "description": (
+                    "Non-convex horseshoe/C-shaped silhouette whose AREA "
+                    "centroid (not just its vertex mean) falls outside the "
+                    "polygon, in the concave gap -- the exact failure mode "
+                    "representative_point()'s pole-of-inaccessibility "
+                    "fallback exists to handle. Label sits at the verified "
+                    "representative point."
+                ),
+                "frames": [build_nonconvex_centroid_outside_case()],
             }
         )
         cases.append(

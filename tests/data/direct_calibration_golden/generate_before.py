@@ -155,35 +155,51 @@ def main():
             candidate_index=len(label),
         )
 
+    # Fix-round addition (Finding 2): the original 6-point set never put two
+    # points inside F1_TOLERANCE=0.01 of each other at different speeds, so
+    # recommend_balanced()'s Pareto-frontier + F1-tolerance + fastest-wins
+    # branches were never actually decided by the tie-break -- one point was
+    # simply dominant. This set is constructed so that:
+    #   - synthetic_best_slow has the best F1 (1.0) but is the SLOWEST.
+    #   - synthetic_near_best_faster has F1 ~= 0.994 (within the 0.01
+    #     tolerance of 1.0) and is almost twice as fast (0.50s vs 0.90s).
+    #     Because it is faster on the "seconds" cost axis, it is NOT
+    #     Pareto-dominated by synthetic_best_slow (dominance requires being
+    #     beaten or tied on EVERY axis) -- both survive the Pareto filter,
+    #     both clear the F1-tolerance band, and the fastest of the two,
+    #     synthetic_near_best_faster, is the one recommend_balanced() must
+    #     pick. If this variant ever again resolves to the slow point, the
+    #     tie-break is not doing what the rule text claims.
+    #   - synthetic_sparse_dominated is strictly worse than
+    #     synthetic_near_best_faster on every cost axis (more missed, more
+    #     extra, AND slower) so it is genuinely Pareto-dominated, not merely
+    #     eligibility-excluded.
     synthetic_points = [
-        # Matches the real bulk aggregate almost exactly; slowest (most tiles).
         _variant(
-            "synthetic_dense_slow",
+            "synthetic_best_slow",
             matched=bulk_agg["matched"],
             missed=bulk_agg["missed"],
             extra=bulk_agg["extra"],
             mean_iou=bulk_agg["mean_iou"],
             seconds=0.90,
         ),
-        # Fewer tiles: slightly worse recall/extra, much faster. Should stay
-        # on the Pareto frontier and, if within F1 tolerance, win on speed.
         _variant(
-            "synthetic_medium",
-            matched=max(0, bulk_agg["matched"] - 2),
-            missed=bulk_agg["missed"] + 2,
-            extra=bulk_agg["extra"] + 1,
-            mean_iou=max(0.0, bulk_agg["mean_iou"] - 0.02),
-            seconds=0.45,
+            "synthetic_near_best_faster",
+            matched=bulk_agg["matched"] - 1,
+            missed=bulk_agg["missed"] + 1,
+            extra=bulk_agg["extra"],
+            mean_iou=max(0.0, bulk_agg["mean_iou"] - 0.01),
+            seconds=0.50,
         ),
-        # Very sparse tiling: fast but clearly worse on both misses and
-        # extras -- should be Pareto-dominated by synthetic_medium.
+        # Strictly worse than synthetic_near_best_faster on every cost axis
+        # (missed, extra, AND seconds) -- genuinely Pareto-dominated.
         _variant(
             "synthetic_sparse_dominated",
-            matched=max(0, bulk_agg["matched"] - 10),
+            matched=bulk_agg["matched"] - 10,
             missed=bulk_agg["missed"] + 10,
-            extra=bulk_agg["extra"] + 6,
+            extra=bulk_agg["extra"] + 8,
             mean_iou=max(0.0, bulk_agg["mean_iou"] - 0.05),
-            seconds=0.40,
+            seconds=0.60,
         ),
         # Below MIN_MATCHED_INSTANCES -- must be excluded by eligibility
         # regardless of how good its rates look.

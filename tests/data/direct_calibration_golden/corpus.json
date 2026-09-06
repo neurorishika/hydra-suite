@@ -58,6 +58,365 @@
       "task": "detect"
     },
     {
+      "description": "Rotated, non-convex version of the D7 1.7x-area case (a body-core rectangle plus one leg-spike, rotated 35 degrees) -- makes the headline D7 case representative of a real traced silhouette instead of an axis-aligned rectangle that is merely too big.",
+      "frames": [
+        {
+          "labels": [
+            {
+              "class_id": 0,
+              "confidence": 1.0,
+              "polygon_px": [
+                [
+                  107.544,
+                  96.073
+                ],
+                [
+                  123.927,
+                  107.544
+                ],
+                [
+                  112.456,
+                  123.927
+                ],
+                [
+                  96.073,
+                  112.456
+                ]
+              ]
+            }
+          ],
+          "predictions": [
+            {
+              "class_id": 0,
+              "confidence": 1.0,
+              "polygon_px": [
+                [
+                  97.058,
+                  93.614
+                ],
+                [
+                  126.548,
+                  114.262
+                ],
+                [
+                  123.106,
+                  119.177
+                ],
+                [
+                  149.81,
+                  140.317
+                ],
+                [
+                  120.812,
+                  122.454
+                ],
+                [
+                  116.797,
+                  128.188
+                ],
+                [
+                  87.308,
+                  107.539
+                ]
+              ]
+            }
+          ]
+        }
+      ],
+      "name": "d7_nonconvex_rotated_detect",
+      "task": "detect"
+    },
+    {
+      "description": "Rotated squares whose full-polygon IoU (obb/segment, ~0.464, below the gate) and AABB-reduced IoU (detect, ~0.511, at/above the gate) fall on OPPOSITE sides of the legacy 0.5 threshold -- proves detect/obb/segment produce genuinely different match outcomes, not just different IoU numbers on the same outcome.",
+      "frames": [
+        {
+          "labels": [
+            {
+              "class_id": 0,
+              "confidence": 1.0,
+              "polygon_px": [
+                [
+                  692.929,
+                  687.753
+                ],
+                [
+                  712.247,
+                  692.929
+                ],
+                [
+                  707.071,
+                  712.247
+                ],
+                [
+                  687.753,
+                  707.071
+                ]
+              ]
+            }
+          ],
+          "predictions": [
+            {
+              "class_id": 0,
+              "confidence": 1.0,
+              "polygon_px": [
+                [
+                  687.651,
+                  684.268
+                ],
+                [
+                  706.97,
+                  689.444
+                ],
+                [
+                  701.793,
+                  708.763
+                ],
+                [
+                  682.475,
+                  703.586
+                ]
+              ]
+            }
+          ]
+        }
+      ],
+      "name": "rotated_task_divergence_detect",
+      "task": "detect"
+    },
+    {
+      "description": "Non-convex horseshoe/C-shaped silhouette whose AREA centroid (not just its vertex mean) falls outside the polygon, in the concave gap -- the exact failure mode representative_point()'s pole-of-inaccessibility fallback exists to handle. Label sits at the verified representative point.",
+      "frames": [
+        {
+          "labels": [
+            {
+              "class_id": 0,
+              "confidence": 1.0,
+              "polygon_px": [
+                [
+                  809,
+                  757
+                ],
+                [
+                  821,
+                  757
+                ],
+                [
+                  821,
+                  769
+                ],
+                [
+                  809,
+                  769
+                ]
+              ]
+            }
+          ],
+          "predictions": [
+            {
+              "class_id": 0,
+              "confidence": 1.0,
+              "polygon_px": [
+                [
+                  832.139,
+                  838.302
+                ],
+                [
+                  824.008,
+                  843.859
+                ],
+                [
+                  814.945,
+                  847.714
+                ],
+                [
+                  805.302,
+                  849.718
+                ],
+                [
+                  795.453,
+                  849.793
+                ],
+                [
+                  785.781,
+                  847.936
+                ],
+                [
+                  776.661,
+                  844.218
+                ],
+                [
+                  768.446,
+                  838.786
+                ],
+                [
+                  761.455,
+                  831.848
+                ],
+                [
+                  755.96,
+                  823.674
+                ],
+                [
+                  752.174,
+                  814.582
+                ],
+                [
+                  750.243,
+                  804.924
+                ],
+                [
+                  750.243,
+                  795.076
+                ],
+                [
+                  752.174,
+                  785.418
+                ],
+                [
+                  755.96,
+                  776.326
+                ],
+                [
+                  761.455,
+                  768.152
+                ],
+                [
+                  768.446,
+                  761.214
+                ],
+                [
+                  776.661,
+                  755.782
+                ],
+                [
+                  785.781,
+                  752.064
+                ],
+                [
+                  795.453,
+                  750.207
+                ],
+                [
+                  805.302,
+                  750.282
+                ],
+                [
+                  814.945,
+                  752.286
+                ],
+                [
+                  824.008,
+                  756.141
+                ],
+                [
+                  832.139,
+                  761.698
+                ],
+                [
+                  819.284,
+                  777.019
+                ],
+                [
+                  814.405,
+                  773.685
+                ],
+                [
+                  808.967,
+                  771.371
+                ],
+                [
+                  803.181,
+                  770.169
+                ],
+                [
+                  797.272,
+                  770.124
+                ],
+                [
+                  791.469,
+                  771.239
+                ],
+                [
+                  785.996,
+                  773.469
+                ],
+                [
+                  781.067,
+                  776.729
+                ],
+                [
+                  776.873,
+                  780.891
+                ],
+                [
+                  773.576,
+                  785.795
+                ],
+                [
+                  771.304,
+                  791.251
+                ],
+                [
+                  770.146,
+                  797.045
+                ],
+                [
+                  770.146,
+                  802.955
+                ],
+                [
+                  771.304,
+                  808.749
+                ],
+                [
+                  773.576,
+                  814.205
+                ],
+                [
+                  776.873,
+                  819.109
+                ],
+                [
+                  781.067,
+                  823.271
+                ],
+                [
+                  785.996,
+                  826.531
+                ],
+                [
+                  791.469,
+                  828.761
+                ],
+                [
+                  797.272,
+                  829.876
+                ],
+                [
+                  803.181,
+                  829.831
+                ],
+                [
+                  808.967,
+                  828.629
+                ],
+                [
+                  814.405,
+                  826.315
+                ],
+                [
+                  819.284,
+                  822.981
+                ]
+              ]
+            }
+          ]
+        }
+      ],
+      "name": "nonconvex_centroid_outside_detect",
+      "task": "detect"
+    },
+    {
       "description": "One oversized blob prediction spans two labelled animals; legacy IoU-only gate credits it as a match against one of them.",
       "frames": [
         {
@@ -410,6 +769,365 @@
       "task": "obb"
     },
     {
+      "description": "Rotated, non-convex version of the D7 1.7x-area case (a body-core rectangle plus one leg-spike, rotated 35 degrees) -- makes the headline D7 case representative of a real traced silhouette instead of an axis-aligned rectangle that is merely too big.",
+      "frames": [
+        {
+          "labels": [
+            {
+              "class_id": 0,
+              "confidence": 1.0,
+              "polygon_px": [
+                [
+                  107.544,
+                  96.073
+                ],
+                [
+                  123.927,
+                  107.544
+                ],
+                [
+                  112.456,
+                  123.927
+                ],
+                [
+                  96.073,
+                  112.456
+                ]
+              ]
+            }
+          ],
+          "predictions": [
+            {
+              "class_id": 0,
+              "confidence": 1.0,
+              "polygon_px": [
+                [
+                  97.058,
+                  93.614
+                ],
+                [
+                  126.548,
+                  114.262
+                ],
+                [
+                  123.106,
+                  119.177
+                ],
+                [
+                  149.81,
+                  140.317
+                ],
+                [
+                  120.812,
+                  122.454
+                ],
+                [
+                  116.797,
+                  128.188
+                ],
+                [
+                  87.308,
+                  107.539
+                ]
+              ]
+            }
+          ]
+        }
+      ],
+      "name": "d7_nonconvex_rotated_obb",
+      "task": "obb"
+    },
+    {
+      "description": "Rotated squares whose full-polygon IoU (obb/segment, ~0.464, below the gate) and AABB-reduced IoU (detect, ~0.511, at/above the gate) fall on OPPOSITE sides of the legacy 0.5 threshold -- proves detect/obb/segment produce genuinely different match outcomes, not just different IoU numbers on the same outcome.",
+      "frames": [
+        {
+          "labels": [
+            {
+              "class_id": 0,
+              "confidence": 1.0,
+              "polygon_px": [
+                [
+                  692.929,
+                  687.753
+                ],
+                [
+                  712.247,
+                  692.929
+                ],
+                [
+                  707.071,
+                  712.247
+                ],
+                [
+                  687.753,
+                  707.071
+                ]
+              ]
+            }
+          ],
+          "predictions": [
+            {
+              "class_id": 0,
+              "confidence": 1.0,
+              "polygon_px": [
+                [
+                  687.651,
+                  684.268
+                ],
+                [
+                  706.97,
+                  689.444
+                ],
+                [
+                  701.793,
+                  708.763
+                ],
+                [
+                  682.475,
+                  703.586
+                ]
+              ]
+            }
+          ]
+        }
+      ],
+      "name": "rotated_task_divergence_obb",
+      "task": "obb"
+    },
+    {
+      "description": "Non-convex horseshoe/C-shaped silhouette whose AREA centroid (not just its vertex mean) falls outside the polygon, in the concave gap -- the exact failure mode representative_point()'s pole-of-inaccessibility fallback exists to handle. Label sits at the verified representative point.",
+      "frames": [
+        {
+          "labels": [
+            {
+              "class_id": 0,
+              "confidence": 1.0,
+              "polygon_px": [
+                [
+                  809,
+                  757
+                ],
+                [
+                  821,
+                  757
+                ],
+                [
+                  821,
+                  769
+                ],
+                [
+                  809,
+                  769
+                ]
+              ]
+            }
+          ],
+          "predictions": [
+            {
+              "class_id": 0,
+              "confidence": 1.0,
+              "polygon_px": [
+                [
+                  832.139,
+                  838.302
+                ],
+                [
+                  824.008,
+                  843.859
+                ],
+                [
+                  814.945,
+                  847.714
+                ],
+                [
+                  805.302,
+                  849.718
+                ],
+                [
+                  795.453,
+                  849.793
+                ],
+                [
+                  785.781,
+                  847.936
+                ],
+                [
+                  776.661,
+                  844.218
+                ],
+                [
+                  768.446,
+                  838.786
+                ],
+                [
+                  761.455,
+                  831.848
+                ],
+                [
+                  755.96,
+                  823.674
+                ],
+                [
+                  752.174,
+                  814.582
+                ],
+                [
+                  750.243,
+                  804.924
+                ],
+                [
+                  750.243,
+                  795.076
+                ],
+                [
+                  752.174,
+                  785.418
+                ],
+                [
+                  755.96,
+                  776.326
+                ],
+                [
+                  761.455,
+                  768.152
+                ],
+                [
+                  768.446,
+                  761.214
+                ],
+                [
+                  776.661,
+                  755.782
+                ],
+                [
+                  785.781,
+                  752.064
+                ],
+                [
+                  795.453,
+                  750.207
+                ],
+                [
+                  805.302,
+                  750.282
+                ],
+                [
+                  814.945,
+                  752.286
+                ],
+                [
+                  824.008,
+                  756.141
+                ],
+                [
+                  832.139,
+                  761.698
+                ],
+                [
+                  819.284,
+                  777.019
+                ],
+                [
+                  814.405,
+                  773.685
+                ],
+                [
+                  808.967,
+                  771.371
+                ],
+                [
+                  803.181,
+                  770.169
+                ],
+                [
+                  797.272,
+                  770.124
+                ],
+                [
+                  791.469,
+                  771.239
+                ],
+                [
+                  785.996,
+                  773.469
+                ],
+                [
+                  781.067,
+                  776.729
+                ],
+                [
+                  776.873,
+                  780.891
+                ],
+                [
+                  773.576,
+                  785.795
+                ],
+                [
+                  771.304,
+                  791.251
+                ],
+                [
+                  770.146,
+                  797.045
+                ],
+                [
+                  770.146,
+                  802.955
+                ],
+                [
+                  771.304,
+                  808.749
+                ],
+                [
+                  773.576,
+                  814.205
+                ],
+                [
+                  776.873,
+                  819.109
+                ],
+                [
+                  781.067,
+                  823.271
+                ],
+                [
+                  785.996,
+                  826.531
+                ],
+                [
+                  791.469,
+                  828.761
+                ],
+                [
+                  797.272,
+                  829.876
+                ],
+                [
+                  803.181,
+                  829.831
+                ],
+                [
+                  808.967,
+                  828.629
+                ],
+                [
+                  814.405,
+                  826.315
+                ],
+                [
+                  819.284,
+                  822.981
+                ]
+              ]
+            }
+          ]
+        }
+      ],
+      "name": "nonconvex_centroid_outside_obb",
+      "task": "obb"
+    },
+    {
       "description": "One oversized blob prediction spans two labelled animals; legacy IoU-only gate credits it as a match against one of them.",
       "frames": [
         {
@@ -759,6 +1477,365 @@
         }
       ],
       "name": "d7_extent_convention_inflation_segment",
+      "task": "segment"
+    },
+    {
+      "description": "Rotated, non-convex version of the D7 1.7x-area case (a body-core rectangle plus one leg-spike, rotated 35 degrees) -- makes the headline D7 case representative of a real traced silhouette instead of an axis-aligned rectangle that is merely too big.",
+      "frames": [
+        {
+          "labels": [
+            {
+              "class_id": 0,
+              "confidence": 1.0,
+              "polygon_px": [
+                [
+                  107.544,
+                  96.073
+                ],
+                [
+                  123.927,
+                  107.544
+                ],
+                [
+                  112.456,
+                  123.927
+                ],
+                [
+                  96.073,
+                  112.456
+                ]
+              ]
+            }
+          ],
+          "predictions": [
+            {
+              "class_id": 0,
+              "confidence": 1.0,
+              "polygon_px": [
+                [
+                  97.058,
+                  93.614
+                ],
+                [
+                  126.548,
+                  114.262
+                ],
+                [
+                  123.106,
+                  119.177
+                ],
+                [
+                  149.81,
+                  140.317
+                ],
+                [
+                  120.812,
+                  122.454
+                ],
+                [
+                  116.797,
+                  128.188
+                ],
+                [
+                  87.308,
+                  107.539
+                ]
+              ]
+            }
+          ]
+        }
+      ],
+      "name": "d7_nonconvex_rotated_segment",
+      "task": "segment"
+    },
+    {
+      "description": "Rotated squares whose full-polygon IoU (obb/segment, ~0.464, below the gate) and AABB-reduced IoU (detect, ~0.511, at/above the gate) fall on OPPOSITE sides of the legacy 0.5 threshold -- proves detect/obb/segment produce genuinely different match outcomes, not just different IoU numbers on the same outcome.",
+      "frames": [
+        {
+          "labels": [
+            {
+              "class_id": 0,
+              "confidence": 1.0,
+              "polygon_px": [
+                [
+                  692.929,
+                  687.753
+                ],
+                [
+                  712.247,
+                  692.929
+                ],
+                [
+                  707.071,
+                  712.247
+                ],
+                [
+                  687.753,
+                  707.071
+                ]
+              ]
+            }
+          ],
+          "predictions": [
+            {
+              "class_id": 0,
+              "confidence": 1.0,
+              "polygon_px": [
+                [
+                  687.651,
+                  684.268
+                ],
+                [
+                  706.97,
+                  689.444
+                ],
+                [
+                  701.793,
+                  708.763
+                ],
+                [
+                  682.475,
+                  703.586
+                ]
+              ]
+            }
+          ]
+        }
+      ],
+      "name": "rotated_task_divergence_segment",
+      "task": "segment"
+    },
+    {
+      "description": "Non-convex horseshoe/C-shaped silhouette whose AREA centroid (not just its vertex mean) falls outside the polygon, in the concave gap -- the exact failure mode representative_point()'s pole-of-inaccessibility fallback exists to handle. Label sits at the verified representative point.",
+      "frames": [
+        {
+          "labels": [
+            {
+              "class_id": 0,
+              "confidence": 1.0,
+              "polygon_px": [
+                [
+                  809,
+                  757
+                ],
+                [
+                  821,
+                  757
+                ],
+                [
+                  821,
+                  769
+                ],
+                [
+                  809,
+                  769
+                ]
+              ]
+            }
+          ],
+          "predictions": [
+            {
+              "class_id": 0,
+              "confidence": 1.0,
+              "polygon_px": [
+                [
+                  832.139,
+                  838.302
+                ],
+                [
+                  824.008,
+                  843.859
+                ],
+                [
+                  814.945,
+                  847.714
+                ],
+                [
+                  805.302,
+                  849.718
+                ],
+                [
+                  795.453,
+                  849.793
+                ],
+                [
+                  785.781,
+                  847.936
+                ],
+                [
+                  776.661,
+                  844.218
+                ],
+                [
+                  768.446,
+                  838.786
+                ],
+                [
+                  761.455,
+                  831.848
+                ],
+                [
+                  755.96,
+                  823.674
+                ],
+                [
+                  752.174,
+                  814.582
+                ],
+                [
+                  750.243,
+                  804.924
+                ],
+                [
+                  750.243,
+                  795.076
+                ],
+                [
+                  752.174,
+                  785.418
+                ],
+                [
+                  755.96,
+                  776.326
+                ],
+                [
+                  761.455,
+                  768.152
+                ],
+                [
+                  768.446,
+                  761.214
+                ],
+                [
+                  776.661,
+                  755.782
+                ],
+                [
+                  785.781,
+                  752.064
+                ],
+                [
+                  795.453,
+                  750.207
+                ],
+                [
+                  805.302,
+                  750.282
+                ],
+                [
+                  814.945,
+                  752.286
+                ],
+                [
+                  824.008,
+                  756.141
+                ],
+                [
+                  832.139,
+                  761.698
+                ],
+                [
+                  819.284,
+                  777.019
+                ],
+                [
+                  814.405,
+                  773.685
+                ],
+                [
+                  808.967,
+                  771.371
+                ],
+                [
+                  803.181,
+                  770.169
+                ],
+                [
+                  797.272,
+                  770.124
+                ],
+                [
+                  791.469,
+                  771.239
+                ],
+                [
+                  785.996,
+                  773.469
+                ],
+                [
+                  781.067,
+                  776.729
+                ],
+                [
+                  776.873,
+                  780.891
+                ],
+                [
+                  773.576,
+                  785.795
+                ],
+                [
+                  771.304,
+                  791.251
+                ],
+                [
+                  770.146,
+                  797.045
+                ],
+                [
+                  770.146,
+                  802.955
+                ],
+                [
+                  771.304,
+                  808.749
+                ],
+                [
+                  773.576,
+                  814.205
+                ],
+                [
+                  776.873,
+                  819.109
+                ],
+                [
+                  781.067,
+                  823.271
+                ],
+                [
+                  785.996,
+                  826.531
+                ],
+                [
+                  791.469,
+                  828.761
+                ],
+                [
+                  797.272,
+                  829.876
+                ],
+                [
+                  803.181,
+                  829.831
+                ],
+                [
+                  808.967,
+                  828.629
+                ],
+                [
+                  814.405,
+                  826.315
+                ],
+                [
+                  819.284,
+                  822.981
+                ]
+              ]
+            }
+          ]
+        }
+      ],
+      "name": "nonconvex_centroid_outside_segment",
       "task": "segment"
     },
     {

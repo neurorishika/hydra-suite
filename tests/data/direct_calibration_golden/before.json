@@ -27,6 +27,78 @@
     {
       "aggregate": {
         "duplicate": 0,
+        "extra": 1,
+        "f1": 0.0,
+        "frames": 1,
+        "matched": 0,
+        "mean_iou": 0.0,
+        "missed": 1,
+        "precision": 0.0,
+        "recall": 0.0
+      },
+      "name": "d7_nonconvex_rotated_detect",
+      "per_frame": [
+        {
+          "duplicate": 0,
+          "extra": 1,
+          "matched": 0,
+          "mean_iou": 0.0,
+          "missed": 1
+        }
+      ],
+      "task": "detect"
+    },
+    {
+      "aggregate": {
+        "duplicate": 0,
+        "extra": 0,
+        "f1": 1.0,
+        "frames": 1,
+        "matched": 1,
+        "mean_iou": 0.5111008325624422,
+        "missed": 0,
+        "precision": 1.0,
+        "recall": 1.0
+      },
+      "name": "rotated_task_divergence_detect",
+      "per_frame": [
+        {
+          "duplicate": 0,
+          "extra": 0,
+          "matched": 1,
+          "mean_iou": 0.5111008325624422,
+          "missed": 0
+        }
+      ],
+      "task": "detect"
+    },
+    {
+      "aggregate": {
+        "duplicate": 0,
+        "extra": 1,
+        "f1": 0.0,
+        "frames": 1,
+        "matched": 0,
+        "mean_iou": 0.0,
+        "missed": 1,
+        "precision": 0.0,
+        "recall": 0.0
+      },
+      "name": "nonconvex_centroid_outside_detect",
+      "per_frame": [
+        {
+          "duplicate": 0,
+          "extra": 1,
+          "matched": 0,
+          "mean_iou": 0.0,
+          "missed": 1
+        }
+      ],
+      "task": "detect"
+    },
+    {
+      "aggregate": {
+        "duplicate": 0,
         "extra": 0,
         "f1": 0.6666666666666666,
         "frames": 1,
@@ -123,6 +195,78 @@
     {
       "aggregate": {
         "duplicate": 0,
+        "extra": 1,
+        "f1": 0.0,
+        "frames": 1,
+        "matched": 0,
+        "mean_iou": 0.0,
+        "missed": 1,
+        "precision": 0.0,
+        "recall": 0.0
+      },
+      "name": "d7_nonconvex_rotated_obb",
+      "per_frame": [
+        {
+          "duplicate": 0,
+          "extra": 1,
+          "matched": 0,
+          "mean_iou": 0.0,
+          "missed": 1
+        }
+      ],
+      "task": "obb"
+    },
+    {
+      "aggregate": {
+        "duplicate": 0,
+        "extra": 1,
+        "f1": 0.0,
+        "frames": 1,
+        "matched": 0,
+        "mean_iou": 0.0,
+        "missed": 1,
+        "precision": 0.0,
+        "recall": 0.0
+      },
+      "name": "rotated_task_divergence_obb",
+      "per_frame": [
+        {
+          "duplicate": 0,
+          "extra": 1,
+          "matched": 0,
+          "mean_iou": 0.0,
+          "missed": 1
+        }
+      ],
+      "task": "obb"
+    },
+    {
+      "aggregate": {
+        "duplicate": 0,
+        "extra": 1,
+        "f1": 0.0,
+        "frames": 1,
+        "matched": 0,
+        "mean_iou": 0.0,
+        "missed": 1,
+        "precision": 0.0,
+        "recall": 0.0
+      },
+      "name": "nonconvex_centroid_outside_obb",
+      "per_frame": [
+        {
+          "duplicate": 0,
+          "extra": 1,
+          "matched": 0,
+          "mean_iou": 0.0,
+          "missed": 1
+        }
+      ],
+      "task": "obb"
+    },
+    {
+      "aggregate": {
+        "duplicate": 0,
         "extra": 0,
         "f1": 0.6666666666666666,
         "frames": 1,
@@ -205,6 +349,78 @@
         "recall": 0.0
       },
       "name": "d7_extent_convention_inflation_segment",
+      "per_frame": [
+        {
+          "duplicate": 0,
+          "extra": 1,
+          "matched": 0,
+          "mean_iou": 0.0,
+          "missed": 1
+        }
+      ],
+      "task": "segment"
+    },
+    {
+      "aggregate": {
+        "duplicate": 0,
+        "extra": 1,
+        "f1": 0.0,
+        "frames": 1,
+        "matched": 0,
+        "mean_iou": 0.0,
+        "missed": 1,
+        "precision": 0.0,
+        "recall": 0.0
+      },
+      "name": "d7_nonconvex_rotated_segment",
+      "per_frame": [
+        {
+          "duplicate": 0,
+          "extra": 1,
+          "matched": 0,
+          "mean_iou": 0.0,
+          "missed": 1
+        }
+      ],
+      "task": "segment"
+    },
+    {
+      "aggregate": {
+        "duplicate": 0,
+        "extra": 1,
+        "f1": 0.0,
+        "frames": 1,
+        "matched": 0,
+        "mean_iou": 0.0,
+        "missed": 1,
+        "precision": 0.0,
+        "recall": 0.0
+      },
+      "name": "rotated_task_divergence_segment",
+      "per_frame": [
+        {
+          "duplicate": 0,
+          "extra": 1,
+          "matched": 0,
+          "mean_iou": 0.0,
+          "missed": 1
+        }
+      ],
+      "task": "segment"
+    },
+    {
+      "aggregate": {
+        "duplicate": 0,
+        "extra": 1,
+        "f1": 0.0,
+        "frames": 1,
+        "matched": 0,
+        "mean_iou": 0.0,
+        "missed": 1,
+        "precision": 0.0,
+        "recall": 0.0
+      },
+      "name": "nonconvex_centroid_outside_segment",
       "per_frame": [
         {
           "duplicate": 0,
@@ -445,19 +661,19 @@
       "task": "segment"
     }
   ],
-  "generated_at_commit": "5a5dfe178956d5211ac3beca83d79ce35f811f9d",
+  "generated_at_commit": "eb913f169b5c96d1c916834de260ea1db0931f5c",
   "recommend_balanced_demo": {
     "candidate_labels": [
-      "synthetic_dense_slow",
-      "synthetic_medium",
+      "synthetic_best_slow",
+      "synthetic_near_best_faster",
       "synthetic_sparse_dominated",
       "synthetic_undersampled",
       "synthetic_failed"
     ],
-    "chosen_f1": 1.0,
-    "chosen_label": "synthetic_dense_slow",
-    "chosen_seconds_per_frame": 0.9,
-    "explanation": "synthetic_dense_slow: F1 1.000 (best 1.000), 0.90s/frame on this machine and data. Balanced rule: drop failed and undersampled points, keep the Pareto frontier of misses, extras and time, then take the fastest point whose F1 is within 0.01 of the best and whose localization quality is at least 0.5.",
+    "chosen_f1": 0.9937106918238994,
+    "chosen_label": "synthetic_near_best_faster",
+    "chosen_seconds_per_frame": 0.5,
+    "explanation": "synthetic_near_best_faster: F1 0.994 (best 1.000), 0.50s/frame on this machine and data. Balanced rule: drop failed and undersampled points, keep the Pareto frontier of misses, extras and time, then take the fastest point whose F1 is within 0.01 of the best and whose localization quality is at least 0.5.",
     "rule_id": "balanced-pareto-fastest-v1",
     "rule_text": "Balanced rule: drop failed and undersampled points, keep the Pareto frontier of misses, extras and time, then take the fastest point whose F1 is within 0.01 of the best and whose localization quality is at least 0.5."
   },
