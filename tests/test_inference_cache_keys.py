@@ -251,6 +251,31 @@ def test_direct_raw_output_contract_changes_detection_cache_key():
     assert detection_cache_key(base) != detection_cache_key(cap)
 
 
+@pytest.mark.parametrize("mode", ["direct", "sequential"])
+def test_native_geometry_export_changes_obb_detection_cache_key(mode: str) -> None:
+    """Polygon export needs a live extraction, not a polygon-free cache hit."""
+
+    if mode == "direct":
+        base = _obb_direct()
+        export = _obb_direct()
+    else:
+        base = OBBConfig(
+            mode="sequential",
+            sequential=OBBSequentialConfig(
+                detect_model_path="/det.pt", obb_model_path="/obb.pt"
+            ),
+        )
+        export = OBBConfig(
+            mode="sequential",
+            sequential=OBBSequentialConfig(
+                detect_model_path="/det.pt", obb_model_path="/obb.pt"
+            ),
+        )
+    export.emit_native_geometry = True
+
+    assert detection_cache_key(base) != detection_cache_key(export)
+
+
 def test_sequential_second_model_signature_invalidates_detection_key(monkeypatch):
     cfg = OBBConfig(
         mode="sequential",
@@ -510,6 +535,14 @@ def test_bgsub_key_stable_for_same_params():
     assert bgsub_detection_cache_key(
         BgSubConfig.from_params(params)
     ) == bgsub_detection_cache_key(BgSubConfig.from_params(dict(params)))
+
+
+def test_native_geometry_export_changes_bgsub_detection_cache_key() -> None:
+    base = BgSubConfig.from_params({"THRESHOLD_VALUE": 25})
+    export = BgSubConfig.from_params({"THRESHOLD_VALUE": 25})
+    export.emit_native_geometry = True
+
+    assert bgsub_detection_cache_key(base) != bgsub_detection_cache_key(export)
 
 
 def test_bgsub_key_video_bound():

@@ -119,7 +119,7 @@ def _direct_raw_config_hash(config: OBBConfig) -> str:
     direct = config.direct
     task = str(direct.model_task)
     payload = (
-        "direct-raw-v3",
+        "direct-raw-v4",
         _model_signature(direct.model_path),
         direct.confidence_floor,
         direct.auto_export,
@@ -132,6 +132,10 @@ def _direct_raw_config_hash(config: OBBConfig) -> str:
         tuple(config.target_classes),
         config.max_detections,
         config.raw_detection_cap,
+        # OBBResult cache serialization intentionally omits native polygons.
+        # Export therefore needs a geometry-producing live extraction rather
+        # than a false cache hit from an ordinary tracking replay.
+        config.emit_native_geometry,
         _slice_config_hash(direct.slice),
     )
     return _sha("|".join(map(str, payload)))
@@ -149,7 +153,7 @@ def _sequential_config_hash(config: OBBConfig) -> str:
     assert config.sequential is not None
     seq = config.sequential
     payload = (
-        "sequential-raw-v3",
+        "sequential-raw-v4",
         _model_signature(seq.detect_model_path),
         _model_signature(seq.obb_model_path),
         seq.auto_export,
@@ -170,6 +174,8 @@ def _sequential_config_hash(config: OBBConfig) -> str:
         tuple(config.target_classes),
         config.max_detections,
         config.raw_detection_cap,
+        # See the corresponding direct-mode raw contract above.
+        config.emit_native_geometry,
     )
     return _sha("|".join(map(str, payload)))
 
@@ -278,7 +284,15 @@ def bgsub_detection_cache_key(config: BgSubConfig) -> CacheKey:
     be a lie.
     """
     params = config.params
-    payload = "|".join(f"{k}={_param_repr(params.get(k))}" for k in _BGSUB_KEY_PARAMS)
+    payload = "|".join(
+        [
+            *(f"{k}={_param_repr(params.get(k))}" for k in _BGSUB_KEY_PARAMS),
+            # As with OBB, the compact raw cache does not serialize polygons.
+            # This explicit config field is often set by an export caller after
+            # constructing BgSubConfig, so it cannot rely on params alone.
+            f"emit_native_geometry={bool(config.emit_native_geometry)}",
+        ]
+    )
     return CacheKey(
         schema_version=CACHE_SCHEMA_VERSION,
         model_path="background_subtraction",
