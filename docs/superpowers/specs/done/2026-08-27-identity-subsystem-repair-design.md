@@ -1,6 +1,6 @@
 # Identity Subsystem Repair — Design
 
-**Status:** approved for planning (2026-08-27). Plan: `docs/superpowers/plans/2026-08-27-identity-subsystem-repair.md`.
+**Status:** Shipped — landed linearly on `main`, ending at `f2d4ca36`. Plan: `docs/superpowers/plans/done/2026-08-27-identity-subsystem-repair.md`.
 
 ## 1. Problem (diagnosed, adversarially reviewed)
 
