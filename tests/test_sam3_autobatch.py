@@ -845,6 +845,28 @@ def test_unreadable_scale_set_is_degraded_and_still_distinct(
         assert "multiscale_tile_px_set_unreadable" in result.degraded_reasons
 
 
+def test_default_params_still_key_on_a_reused_multiscale_manifest(
+    tmp_path, monkeypatch, prefix
+):
+    """Finding 2: gating the suffix on PARAMS alone, while the tile set is
+    read from the MANIFEST, lets a default-params spec run against a reused
+    dataset directory whose manifest already carries a multi-scale
+    `tile_px_set` skip the suffix entirely -- reusing a single-scale VRAM
+    probe for a multi-scale workload, precisely the OOM path this task
+    exists to close."""
+    identity = _multiscale_fingerprint(
+        tmp_path,
+        monkeypatch,
+        prefix,
+        # Default params: no requested fan-out, no full-frame mix.
+        fractions=(),
+        full_frame_mix=False,
+        # But the manifest on disk already carries a multi-scale set.
+        tile_px_set=((907, 907), (727, 727), (363, 363), (181, 181)),
+    )
+    assert "tile_px_set=" in identity.task
+
+
 def test_single_scale_key_is_unchanged_by_the_scale_set_work(
     tmp_path, monkeypatch, prefix
 ):

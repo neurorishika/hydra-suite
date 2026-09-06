@@ -534,8 +534,24 @@ def sam3_workload_fingerprint(
     # inherits a probe measured on one small tile size. Appended only when the
     # run actually requested a fan-out, so an unchanged single-scale run keeps
     # its stored probe (verified by
-    # `test_single_scale_key_is_unchanged_by_the_scale_set_work`).
-    if params.object_tile_fractions or params.full_frame_mix:
+    # `test_single_scale_key_is_unchanged_by_the_scale_set_work`). ALSO
+    # triggered when the manifest's OWN tile_px_set already fans out to 2+
+    # distinct sizes, even under untouched default params: a spec hand-run
+    # against a reused dataset directory whose manifest already carries a
+    # multi-scale `tile_px_set` must not silently reuse a single-scale VRAM
+    # probe for that multi-scale workload (verified by
+    # `test_default_params_still_key_on_a_reused_multiscale_manifest`). A
+    # manifest tile_px_set of exactly one size is indistinguishable from no
+    # set at all -- there is no cross-scale VRAM risk to key on -- so it does
+    # not by itself trigger the suffix.
+    manifest_has_real_fanout = (
+        len({(int(w), int(h)) for w, h in dataset.tile_px_set}) > 1
+    )
+    if (
+        params.object_tile_fractions
+        or params.full_frame_mix
+        or manifest_has_real_fanout
+    ):
         if dataset.tile_px_set:
             # Canonicalised (sorted, deduped, int pairs) rather than
             # f-string-interpolating a list, whose `repr` keys by accident of
