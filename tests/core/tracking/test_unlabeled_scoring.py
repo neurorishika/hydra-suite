@@ -148,6 +148,31 @@ def test_cycle_assignment_prioritizes_sufficient_overlap_before_error() -> None:
     assert result.mean_normalized_error == pytest.approx(1.0)
 
 
+def test_cycle_assignment_can_leave_a_slot_unmatched_for_far_more_overlap() -> None:
+    """An unavailable edge must not force two marginal matches over one strong one."""
+
+    forward = np.full((103, 2, 2), np.nan)
+    backward = np.full_like(forward, np.nan)
+    # Eligible-overlap matrix with a three-observation floor:
+    # [[100, 3], [3, 0]].  A square-only assignment incorrectly chooses the
+    # cross-pairs (six observations) to avoid an unavailable real edge.
+    forward[:100, 0] = 0.0
+    forward[100:, 1] = 0.0
+    backward[:, 0] = 0.0
+    backward[:3, 1] = 0.0
+
+    alignment = global_slot_alignment(
+        forward,
+        backward,
+        backward_is_reverse_chronological=False,
+        spatial_scale=1.0,
+        minimum_shared_observations=3,
+    )
+
+    assert alignment.backward_for_forward == (0, None)
+    assert alignment.shared_observations == 100
+
+
 def test_temporal_region_metrics_keep_transition_evidence_at_block_boundary() -> None:
     positions = np.zeros((6, 1, 2), dtype=float)
     positions[3:] = np.nan

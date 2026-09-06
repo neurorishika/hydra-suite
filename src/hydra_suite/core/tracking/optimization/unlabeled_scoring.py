@@ -984,15 +984,28 @@ def _robust_global_slot_mapping(
     # trade-off.
     overlap_priority = float(np.sum(total_errors[eligible]) + 1.0)
     eligible_cost = -overlaps * overlap_priority + total_errors
-    unavailable_cost = float(
-        np.max(np.abs(eligible_cost[eligible])) * (track_count + 1) + 1.0
+    # Match real slots in a rectangular-with-dummies problem rather than a
+    # forced square real-slot problem.  Every forward slot can choose its own
+    # zero-cost dummy column and every backward slot can be consumed by a
+    # zero-cost dummy row.  Thus an unavailable real edge is never needed just
+    # to complete a permutation, and the negative eligible costs genuinely
+    # maximise *total* overlap before pooled error.  The input ordering and
+    # SciPy's deterministic assignment tie resolution retain stable results.
+    #
+    # Layout: real forward rows / dummy-backward rows × real backward columns /
+    # dummy-forward columns.  A positive unavailable cost is noncompetitive
+    # with either unmatched route (zero) while every eligible edge is negative.
+    unavailable_cost = 1.0
+    assignment_cost = np.zeros((2 * track_count, 2 * track_count), dtype=float)
+    assignment_cost[:track_count, :track_count] = np.where(
+        eligible, eligible_cost, unavailable_cost
     )
-    rows, columns = linear_sum_assignment(
-        np.where(eligible, eligible_cost, unavailable_cost)
-    )
+    rows, columns = linear_sum_assignment(assignment_cost)
     mapping: list[int | None] = [None] * track_count
     shared_observations = 0
     for forward_track, backward_track in zip(rows, columns, strict=True):
+        if forward_track >= track_count or backward_track >= track_count:
+            continue
         if not eligible[forward_track, backward_track]:
             continue
         mapping[int(forward_track)] = int(backward_track)
