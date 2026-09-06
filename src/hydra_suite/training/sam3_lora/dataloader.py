@@ -13,6 +13,7 @@ that module for the confirmed values and citation.
 from __future__ import annotations
 
 import json
+import logging
 import random
 from dataclasses import dataclass
 from pathlib import Path
@@ -25,6 +26,12 @@ from hydra_suite.training.contracts import sam3_prompt_text_error
 
 from .datapoints import build_shared_query_datapoints, collate_datapoints
 from .polygons import validated_segmentation_polygons
+
+logger = logging.getLogger(__name__)
+
+# The one shared realised-stamp shape (`4baab88c`): requested vs applied, so a
+# grouped and an ungrouped run are never confusable after the fact.
+SCALE_GROUPING_STAMP_FILENAME = "hydra_sam3_scale_grouping.json"
 
 
 @dataclass(frozen=True, slots=True)
@@ -52,6 +59,12 @@ class TileDescriptor:
     # "assume already RES-sized", which is what the scaler treats as a no-op.
     width: int = 0
     height: int = 0
+    # The tile's scale group, read straight off the COCO image record's
+    # `scale_group` field (D19) -- NOT parsed back out of the filename, which
+    # is what the Ultralytics side is forced to do. Empty means the dataset
+    # carries no scale groups (single-scale build, or a hand-built descriptor),
+    # in which case grouped batching declines rather than inventing one.
+    scale_group: str = ""
 
 
 def _default_transform():
@@ -199,6 +212,7 @@ def build_descriptors(
                 ),
                 width=int(image_meta.get("width", 0) or 0),
                 height=int(image_meta.get("height", 0) or 0),
+                scale_group=str(image_meta.get("scale_group", "") or ""),
             )
         )
 
@@ -317,16 +331,137 @@ def collate_batches(
         del batch
 
 
+def scale_group_summary(
+    descriptors: Sequence[TileDescriptor],
+) -> dict[str, int]:
+    """Tile count per scale group, plus an explicit `ungrouped` tally.
+
+    R8: a descriptor with no scale group is COUNTED and WARNED, never silently
+    folded into a neighbouring group -- an unnoticed ungrouped population is
+    exactly how a "grouped" run quietly stops being grouped.
+    """
+
+    counts: dict[str, int] = {}
+    ungrouped = 0
+    for descriptor in descriptors:
+        group = str(descriptor.scale_group or "")
+        if not group:
+            ungrouped += 1
+            continue
+        counts[group] = counts.get(group, 0) + 1
+    counts["ungrouped"] = ungrouped
+    if ungrouped and counts.keys() - {"ungrouped"}:
+        logger.warning(
+            "SAM3 scale grouping: %d ungrouped tiles alongside %d grouped "
+            "scales; they form their own batch group and are NOT weighted "
+            "into any scale",
+            ungrouped,
+            len(counts) - 1,
+        )
+    return counts
+
+
+def _grouped_descriptors(
+    descriptors: Sequence[TileDescriptor],
+) -> dict[str, list[TileDescriptor]]:
+    grouped: dict[str, list[TileDescriptor]] = {}
+    for descriptor in descriptors:
+        grouped.setdefault(str(descriptor.scale_group or ""), []).append(descriptor)
+    return grouped
+
+
+def grouped_batch_count(descriptors: Sequence[TileDescriptor], batch_size: int) -> int:
+    """Micro-batches per epoch under scale-grouped batching.
+
+    Higher than the ungrouped count: each group flushes its own partial batch
+    at its boundary rather than sharing one with the next group. The training
+    loop needs the exact number, so it is computed rather than estimated.
+    """
+
+    return sum(
+        batch_count(query_count(group), batch_size)
+        for group in _grouped_descriptors(descriptors).values()
+    )
+
+
 def collate_epoch_batches(
-    descriptors: Sequence[TileDescriptor], batch_size: int, *, seed: int
+    descriptors: Sequence[TileDescriptor],
+    batch_size: int,
+    *,
+    seed: int,
+    group_by_scale: bool = False,
 ) -> Iterator[Any]:
     """Shuffle lightweight descriptor indices and lazily yield each batch.
 
     A tile's positive and negatives deliberately remain adjacent query-level
     Datapoints so they can share one transformed Image owner without changing
     the established query-batch semantics.
+
+    ``group_by_scale`` makes every batch scale-HOMOGENEOUS. The motivation is
+    SAM3-specific: the collator pads to the batch's max instance count and
+    marginal VRAM per item is superlinear (1.31 -> 1.40 -> 1.88 GiB), so a
+    coarse tile mixed into a fine batch inflates the peak for reasons that have
+    nothing to do with tile pixels. That is a HYPOTHESIS from the batch-scaling
+    measurement, not a measurement of mixed batches -- the plan's Task 8
+    measures it, which is why this is a switch and not a new default.
+
+    Groups are shuffled internally and the GROUP ORDER is shuffled too, but
+    batches are not interleaved across groups: doing that would mean
+    materialising every batch, and the whole point of this generator is that it
+    stays lazy over a dataset-sized tile list.
     """
+    if group_by_scale:
+        grouped = _grouped_descriptors(descriptors)
+        rng = random.Random(seed)
+        keys = sorted(grouped)
+        rng.shuffle(keys)
+        return _grouped_epoch_batches(grouped, keys, batch_size, rng)
     order = list(range(len(descriptors)))
     random.Random(seed).shuffle(order)
     shuffled = [descriptors[i] for i in order]
     return collate_batches(shuffled, batch_size)
+
+
+def _grouped_epoch_batches(
+    grouped: dict[str, list[TileDescriptor]],
+    keys: Sequence[str],
+    batch_size: int,
+    rng: random.Random,
+) -> Iterator[Any]:
+    for key in keys:
+        members = list(grouped[key])
+        rng.shuffle(members)
+        yield from collate_batches(members, batch_size)
+
+
+def write_sam3_scale_grouping_stamp(
+    run_dir: "str | Path",
+    *,
+    requested: bool,
+    applied: bool,
+    reason: str = "",
+    group_counts: "dict[str, int] | None" = None,
+) -> "Path | None":
+    """Record what this run ACTUALLY batched, never what it asked for.
+
+    Same requested-vs-applied shape as the Ultralytics realised stamp, written
+    on BOTH arms so a grouped and an ungrouped SAM3 run are distinguishable
+    afterwards from the run directory alone.
+    """
+
+    payload = {
+        "requested": {"scale_grouped_batching": bool(requested)},
+        "applied": {
+            "scale_grouped_batching": bool(applied),
+            "reason": str(reason),
+            "group_counts": dict(group_counts or {}),
+        },
+    }
+    try:
+        directory = Path(run_dir)
+        directory.mkdir(parents=True, exist_ok=True)
+        target = directory / SCALE_GROUPING_STAMP_FILENAME
+        target.write_text(json.dumps(payload, indent=2, sort_keys=True) + "\n", "utf-8")
+        return target
+    except OSError:
+        return None

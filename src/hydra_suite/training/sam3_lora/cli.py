@@ -74,8 +74,11 @@ from .dataloader import (
     build_descriptors,
     collate_batches,
     collate_epoch_batches,
+    grouped_batch_count,
     query_count,
+    scale_group_summary,
     try_build_descriptors,
+    write_sam3_scale_grouping_stamp,
 )
 from .lora import (
     SUBMODULE_PATHS,
@@ -905,7 +908,46 @@ def run_training(spec: Any, run_dir_path: Path) -> bool:
             "(it probes this workload on this card first). Run through "
             "`train_sam3_lora`, or set a positive batch in the spec."
         )
-    n_batches = batch_count(query_count(train_descriptors), batch_size)
+    # Scale-grouped batching (plan Task 5). Engaged only when the built
+    # dataset actually carries scale groups -- a single-scale build takes
+    # literally today's path. `HYDRA_SAM3_SCALE_GROUPED_BATCHING=0` runs the
+    # ungrouped arm, which is what Task 8's grouped-vs-ungrouped comparison
+    # needs. Whichever arm runs, the run dir gets a requested-vs-applied stamp,
+    # so the two are never confusable afterwards.
+    #
+    # SAM3 is single-process, single-GPU by construction, so there is no
+    # distributed case to fall back FROM here (a committed tripwire test fails
+    # the moment `sam3_lora/` gains one -- at which point this must RAISE, not
+    # warn, exactly as the Ultralytics installer does).
+    group_counts = scale_group_summary(train_descriptors)
+    dataset_has_groups = bool(group_counts.keys() - {"ungrouped"})
+    grouping_requested = str(
+        os.environ.get("HYDRA_SAM3_SCALE_GROUPED_BATCHING", "1")
+    ).strip().lower() not in {"0", "false", "no"}
+    group_by_scale = bool(grouping_requested and dataset_has_groups)
+    if grouping_requested and not dataset_has_groups:
+        grouping_reason = "dataset carries no scale_group records (single-scale build)"
+    elif not grouping_requested:
+        grouping_reason = "disabled via HYDRA_SAM3_SCALE_GROUPED_BATCHING"
+    else:
+        grouping_reason = ""
+    write_sam3_scale_grouping_stamp(
+        run_dir_path,
+        requested=grouping_requested,
+        applied=group_by_scale,
+        reason=grouping_reason,
+        group_counts=group_counts,
+    )
+    if group_by_scale:
+        n_batches = grouped_batch_count(train_descriptors, batch_size)
+        emit_log(
+            "scale-grouped batching ON: "
+            + ", ".join(
+                f"{name}={count}" for name, count in sorted(group_counts.items())
+            )
+        )
+    else:
+        n_batches = batch_count(query_count(train_descriptors), batch_size)
     steps_per_epoch = -(-n_batches // grad_accum)  # ceil division
     total_steps = max(1, steps_per_epoch * params.epochs)
     warmup_steps = min(50, total_steps // 4)
@@ -947,7 +989,10 @@ def run_training(spec: Any, run_dir_path: Path) -> bool:
         # epoch, so runs stay reproducible). Queries remain tile-grouped to
         # share one transformed image without a dataset-sized tensor cache.
         epoch_batches = collate_epoch_batches(
-            train_descriptors, batch_size, seed=spec.seed + epoch
+            train_descriptors,
+            batch_size,
+            seed=spec.seed + epoch,
+            group_by_scale=group_by_scale,
         )
         n_epoch_batches = n_batches
         for micro_idx, batch in enumerate(epoch_batches):
