@@ -320,6 +320,17 @@ def test_profile_store_roundtrip_corruption_schema_and_singleflight(tmp_path):
     assert store.load(profile.key) is None
 
 
+def test_production_observation_rejects_noncanonical_profile_ids(tmp_path):
+    store = InferenceTuningProfileStore(tmp_path)
+    profile = _profile()
+    store.save(profile)
+
+    assert store.observe_production_throughput("*", 100.0) is None
+    assert (
+        store.observe_production_throughput(profile.profile_id.upper(), 100.0) is None
+    )
+
+
 def test_profile_atomic_failure_keeps_previous_record(tmp_path, monkeypatch):
     store = InferenceTuningProfileStore(tmp_path)
     original = _profile()

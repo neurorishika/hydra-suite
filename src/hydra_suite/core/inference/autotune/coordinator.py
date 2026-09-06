@@ -53,6 +53,7 @@ class AutotuneRequest:
 class ResolveResult:
     overlay: InferenceRuntimeOverlay
     profile: InferenceTuningProfile | None = None
+    key_digest: str | None = None
 
 
 class AutotuneCoordinator:
@@ -167,6 +168,31 @@ class AutotuneCoordinator:
                 state=ProfileState.VALIDATED,
                 selection_reason=result.reason,
                 rejected=result.rejected,
+                calibration_summary=(
+                    ("candidate_count", len(result.evidence)),
+                    (
+                        "configured_target_count",
+                        request.key.workload.configured_target_count,
+                    ),
+                    (
+                        "detections_p50_bucket",
+                        request.key.workload.detections_p50_bucket,
+                    ),
+                    (
+                        "detections_p95_bucket",
+                        request.key.workload.detections_p95_bucket,
+                    ),
+                    ("crops_p50_bucket", request.key.workload.crops_p50_bucket),
+                    ("crops_p95_bucket", request.key.workload.crops_p95_bucket),
+                    (
+                        "canonical_crop_geometries",
+                        request.key.workload.canonical_crop_geometries,
+                    ),
+                    (
+                        "measured_frames",
+                        sum(item.measured_frames for item in result.evidence),
+                    ),
+                ),
                 created_at_unix_ns=now,
                 last_validation_unix_ns=now,
             )

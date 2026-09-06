@@ -88,6 +88,8 @@ def test_setup_panel_wired_in_main_window(main_window):
     assert main_window._setup_panel.spin_traj_hist.minimum() == -1
     assert hasattr(main_window._setup_panel, "chk_inference_autotune")
     assert hasattr(main_window._setup_panel, "lbl_inference_autotune_status")
+    assert hasattr(main_window._setup_panel, "btn_continue_inference_settings")
+    assert not main_window._setup_panel.btn_continue_inference_settings.isVisible()
 
 
 def test_setup_inference_autotune_policy_persists_and_status_is_read_only(main_window):

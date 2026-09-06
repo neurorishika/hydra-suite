@@ -2,6 +2,12 @@
 
 from __future__ import annotations
 
+from hydra_suite.core.inference.autotune.coordinator import ResolveResult
+from hydra_suite.core.inference.autotune.models import (
+    InferenceRuntimeOverlay,
+    InferenceTuningSettings,
+)
+from hydra_suite.core.tracking.worker import _inference_autotune_stats
 from hydra_suite.trackerkit.app import parse_arguments
 from hydra_suite.trackerkit.cli_config import (
     TrackerCliVideoProbe,
@@ -111,6 +117,9 @@ def test_gui_status_displays_effective_runtime_overlay() -> None:
     captured = []
 
     class Setup:
+        def set_inference_autotune_calibration_active(self, _active):
+            pass
+
         def set_inference_autotune_status(self, text):
             captured.append(text)
 
@@ -135,3 +144,51 @@ def test_gui_status_displays_effective_runtime_overlay() -> None:
     assert "Cache hit" in captured[0]
     assert "abc123" in captured[0]
     assert "detection_batch_size=4" in captured[0]
+
+
+def test_gui_continue_action_cancels_only_calibration() -> None:
+    calls = []
+
+    class Worker:
+        def cancel_inference_autotune(self):
+            calls.append("cancel")
+
+    class Setup:
+        def set_inference_autotune_calibration_active(self, active):
+            calls.append(("active", active))
+
+        def set_inference_autotune_status(self, text):
+            calls.append(("status", text))
+
+    class MainWindow:
+        tracking_worker = Worker()
+
+    orchestrator = object.__new__(TrackingOrchestrator)
+    orchestrator._mw = MainWindow()
+    orchestrator._panels = type("Panels", (), {"setup": Setup()})()
+
+    orchestrator.continue_with_current_inference_settings()
+
+    assert calls == [
+        "cancel",
+        ("active", False),
+        ("status", "Continuing with configured inference settings…"),
+    ]
+
+
+def test_run_summary_includes_fingerprint_even_without_promoted_profile() -> None:
+    runtime = InferenceTuningSettings(detection_batch_size=2, pipeline_depth=1)
+    overlay = InferenceRuntimeOverlay.baseline(
+        runtime,
+        status="fallback",
+        reason="budget expired",
+    )
+
+    summary = _inference_autotune_stats(
+        overlay,
+        ResolveResult(overlay, key_digest="a" * 64),
+    )
+
+    assert summary["fingerprint_digest"] == "a" * 64
+    assert summary["requested"] == runtime.to_dict()
+    assert summary["status"] == "fallback"

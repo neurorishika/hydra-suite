@@ -408,7 +408,10 @@ def test_record_only_persists_but_does_not_apply(tmp_path):
     )
     assert result.overlay.status == "recorded"
     assert result.overlay.effective == baseline
-    assert store.load(key).state is ProfileState.VALIDATED
+    stored = store.load(key)
+    assert stored.state is ProfileState.VALIDATED
+    assert dict(stored.calibration_summary)["candidate_count"] == len(stored.candidates)
+    assert dict(stored.calibration_summary)["detections_p95_bucket"] == 8
 
 
 def test_concurrent_fresh_processes_create_one_profile_and_one_trial_set(tmp_path):

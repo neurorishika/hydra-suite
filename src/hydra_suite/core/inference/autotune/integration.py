@@ -8,7 +8,7 @@ model framework or candidate model in the production process.
 from __future__ import annotations
 
 import logging
-from dataclasses import dataclass
+from dataclasses import dataclass, replace
 from pathlib import Path
 from typing import Any, Callable, Literal, Mapping
 
@@ -477,7 +477,10 @@ def build_tracking_autotune_request(
         config.obb.max_detections if config.obb is not None else configured_targets
     )
     mode = config.obb.mode if config.obb is not None else "background"
-    cache_mask = tuple(sorted(map(str, params.get("RESULT_CACHE_STAGE_MASK", ()))))
+    raw_cache_mask = params.get("RESULT_CACHE_STAGE_MASK", ())
+    if isinstance(raw_cache_mask, str):
+        raw_cache_mask = (raw_cache_mask,)
+    cache_mask = tuple(sorted(map(str, raw_cache_mask)))
     key = TuningProfileKey(
         schema=SchemaFingerprint(),
         system=default_system_fingerprint(
@@ -670,6 +673,7 @@ def resolve_tracking_inference_config(
         result = AutotuneCoordinator(
             profile_store, trial_executor=trial_executor
         ).resolve(request)
+        result = replace(result, key_digest=request.key.digest)
         if result.profile is not None and result.overlay.status in {
             "calibrated",
             "recorded",

@@ -4,6 +4,7 @@ from __future__ import annotations
 
 import json
 import os
+import re
 import tempfile
 import time
 from contextlib import AbstractContextManager
@@ -183,7 +184,11 @@ class InferenceTuningProfileStore:
     ) -> ProfileState | None:
         """Append live evidence and provision on density or sustained regression."""
 
-        if not profile_id or not throughput or throughput <= 0:
+        if (
+            re.fullmatch(r"[0-9a-f]{24}", str(profile_id)) is None
+            or not throughput
+            or throughput <= 0
+        ):
             return None
         matches = tuple(
             path

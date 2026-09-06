@@ -452,10 +452,20 @@ def test_autotune_overlay_resolves_before_runner_loads_models(monkeypatch, tmp_p
     calls = []
 
     def resolve(config, _params, **_kwargs):
+        from hydra_suite.core.inference.autotune.coordinator import ResolveResult
+        from hydra_suite.core.inference.autotune.models import (
+            InferenceRuntimeOverlay,
+            InferenceTuningSettings,
+        )
+
         calls.append("resolve")
         effective = copy.deepcopy(config)
         effective.detection_batch_size = 4
-        return effective, None
+        baseline = InferenceTuningSettings.from_config(config)
+        overlay = InferenceRuntimeOverlay.baseline(
+            baseline, status="fallback", reason="test"
+        )
+        return effective, overlay, ResolveResult(overlay)
 
     class _ProbeRunner:
         def __init__(self, config, *_args, **_kwargs):
@@ -492,6 +502,20 @@ def test_autotune_overlay_resolves_before_runner_loads_models(monkeypatch, tmp_p
         pass
 
     assert calls == ["resolve", ("runner", 4)]
+
+
+def test_autotune_cancel_request_keeps_tracking_stop_flag_clear(tmp_path):
+    import hydra_suite.core.tracking.worker as worker_mod
+
+    worker = worker_mod.TrackingEngineCore(
+        str(tmp_path / "video.mp4"),
+        on_finished=lambda *_args: None,
+    )
+
+    worker.cancel_inference_autotune()
+
+    assert worker._inference_autotune_cancel_requested is True
+    assert worker._stop_requested is False
 
 
 def test_forward_valid_caches_skips_batch_pass(monkeypatch, tmp_path):

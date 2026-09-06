@@ -41,6 +41,7 @@ class SetupPanel(QWidget):
     """Preset picker, video/batch file selection, ROI, and display options."""
 
     config_changed: Signal = Signal(object)
+    inference_autotune_continue_requested: Signal = Signal()
 
     def __init__(
         self,
@@ -756,6 +757,17 @@ class SetupPanel(QWidget):
         self.lbl_inference_autotune_status.setStyleSheet(
             "color: #8a8a8a; font-size: 10px;"
         )
+        self.btn_continue_inference_settings = QPushButton(
+            "Continue with current settings"
+        )
+        self.btn_continue_inference_settings.setToolTip(
+            "Cancel only the bounded calibration and continue this tracking run "
+            "with your configured inference values."
+        )
+        self.btn_continue_inference_settings.setVisible(False)
+        self.btn_continue_inference_settings.clicked.connect(
+            self.inference_autotune_continue_requested.emit
+        )
         self.set_inference_autotune_status_for_mode(
             self._config.inference_autotune_mode
         )
@@ -775,6 +787,7 @@ class SetupPanel(QWidget):
         perf_toggle_grid.addWidget(self.chk_realtime_mode, 0, 0)
         perf_toggle_grid.addWidget(self.chk_inference_autotune, 1, 0)
         perf_toggle_grid.addWidget(self.lbl_inference_autotune_status, 2, 0)
+        perf_toggle_grid.addWidget(self.btn_continue_inference_settings, 3, 0)
         perf_toggle_grid.setColumnStretch(0, 1)
         self._reflow_performance_controls()
         vl_sys.addLayout(self.performance_control_grid)
@@ -950,6 +963,11 @@ class SetupPanel(QWidget):
     def set_inference_autotune_status(self, status: str) -> None:
         """Update the read-only result summary without changing the policy."""
         self.lbl_inference_autotune_status.setText(str(status))
+
+    def set_inference_autotune_calibration_active(self, active: bool) -> None:
+        """Show the one-run calibration escape hatch only while it is useful."""
+        self.btn_continue_inference_settings.setEnabled(bool(active))
+        self.btn_continue_inference_settings.setVisible(bool(active))
 
     def _create_performance_control_card(self, title: str, widget: QWidget) -> QFrame:
         """Build a compact labeled card for one performance control."""

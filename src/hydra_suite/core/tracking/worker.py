@@ -113,11 +113,12 @@ def _resolve_inference_autotune_before_load(
     realtime: bool,
     should_cancel,
     cache_dir=None,
+    use_cached_detections: bool = False,
 ):
     """Resolve a run overlay before ``InferenceRunner`` can load any model."""
 
     if config.inference_autotune.mode == "off":
-        return config, None
+        return config, None, None
     from hydra_suite.core.inference.autotune.device import probe_runtime_resources
     from hydra_suite.core.inference.autotune.integration import (
         TrackingRunContext,
@@ -142,15 +143,23 @@ def _resolve_inference_autotune_before_load(
     probe = probe_runtime_resources(kind)
     ephemeral_params = dict(params)
     ephemeral_params["INFERENCE_AUTOTUNE_DRIVER_VERSION"] = probe.driver_version
-    if "INFERENCE_AUTOTUNE_DETECTION_COUNTS" not in ephemeral_params and cache_dir:
+    prior_counts = ()
+    if cache_dir:
         prior_counts = sample_detection_workload(
             cache_dir,
             start_frame=start_frame,
             end_frame=end_frame,
         )
-        if prior_counts:
+        if (
+            prior_counts
+            and "INFERENCE_AUTOTUNE_DETECTION_COUNTS" not in ephemeral_params
+        ):
             ephemeral_params["INFERENCE_AUTOTUNE_DETECTION_COUNTS"] = prior_counts
             ephemeral_params["INFERENCE_AUTOTUNE_CROP_COUNTS"] = prior_counts
+    cached_fields = frozenset()
+    if use_cached_detections and prior_counts:
+        cached_fields = frozenset(("detection_batch_size", "slice_tile_batch_size"))
+        ephemeral_params["RESULT_CACHE_STAGE_MASK"] = ("detector",)
     context = TrackingRunContext(
         video_path=video_path,
         params=ephemeral_params,
@@ -161,6 +170,7 @@ def _resolve_inference_autotune_before_load(
         execution_mode="realtime" if realtime else "batch",
         start_frame=start_frame,
         end_frame=end_frame,
+        cached_fields=cached_fields,
         contention_detected=probe.contention_detected,
         thermal_throttled=probe.thermal_throttled,
         should_cancel=should_cancel,
@@ -203,7 +213,7 @@ def _resolve_inference_autotune_before_load(
             ),
         )
     )
-    effective, overlay, _result = resolve_tracking_inference_config(
+    effective, overlay, result = resolve_tracking_inference_config(
         config,
         context,
         observation=probe.observation,
@@ -216,7 +226,74 @@ def _resolve_inference_autotune_before_load(
         ),
         trial_executor=executor,
     )
-    return effective, overlay
+    return effective, overlay, result
+
+
+def _inference_autotune_stats(overlay, result) -> dict:
+    """Build one bounded, path-free run summary for logs, CLI, and GUI."""
+
+    summary = {
+        "status": overlay.status,
+        "profile_id": overlay.profile_id,
+        "fingerprint_digest": getattr(result, "key_digest", None),
+        "reason": overlay.reason,
+        "requested": overlay.requested.to_dict(),
+        "admitted": overlay.admitted.to_dict(),
+        "effective": overlay.effective.to_dict(),
+        "field_sources": dict(overlay.field_sources),
+    }
+    profile = getattr(result, "profile", None)
+    if profile is None:
+        return summary
+    baseline = next(
+        (item for item in profile.candidates if item.phase == "baseline"), None
+    )
+    selected = next(
+        (
+            item
+            for item in reversed(profile.candidates)
+            if item.settings == profile.selected
+            and item.phase in {"final_validation", "full"}
+        ),
+        None,
+    )
+    selected_evidence = tuple(
+        item for item in profile.candidates if item.settings == profile.selected
+    )
+    summary.update(
+        {
+            "profile_state": profile.state.value,
+            "invalidation_reason": profile.invalidation_reason,
+            "baseline_throughput": (
+                baseline.median_throughput if baseline is not None else None
+            ),
+            "selected_throughput": (
+                selected.median_throughput if selected is not None else None
+            ),
+            "throughput_confidence_95": (
+                selected.throughput_confidence_95 if selected is not None else None
+            ),
+            "peak_host_bytes": max(
+                (item.host_peak_bytes for item in selected_evidence), default=0
+            ),
+            "peak_accelerator_bytes": max(
+                (item.accelerator_peak_bytes for item in selected_evidence), default=0
+            ),
+            "preparation_seconds": sum(
+                item.prepare_seconds for item in profile.candidates
+            ),
+            "artifact_ids": sorted(
+                {
+                    artifact
+                    for item in profile.candidates
+                    for artifact in item.artifact_ids
+                }
+            ),
+            "rejected_candidates": list(profile.rejected),
+            "calibration_summary": dict(profile.calibration_summary),
+        }
+    )
+    return summary
 
 
 def _classify_cache_runtime_string(params: dict, stage: str = "cnn") -> str:
@@ -314,7 +391,9 @@ class TrackingEngineCore:
         self._inference_progress_start_time = None
         self._inference_progress_times = deque(maxlen=30)
         self._stop_requested = False
+        self._inference_autotune_cancel_requested = False
         self.inference_autotune_overlay = None
+        self.inference_autotune_result = None
         self.inference_runtime_artifact_ids = ()
         self.inference_runtime_artifact_prepare_seconds = 0.0
 
@@ -624,6 +703,9 @@ class TrackingEngineCore:
                 if name in provenance:
                     resolved[name] = provenance[name]
         return resolved
+    def cancel_inference_autotune(self) -> None:
+        """Skip the remaining calibration without stopping production tracking."""
+        self._inference_autotune_cancel_requested = True
 
     def _forward_frame_iterator(self, cap, use_prefetcher=False):
         """Iterate through frames in forward direction.
@@ -1228,19 +1310,25 @@ class TrackingEngineCore:
             if not self.backward_mode and not self.cache_read_only_replay:
                 if _inference_cfg.inference_autotune.mode != "off":
                     self._emit_progress(0, "Optimizing inference (bounded calibration)")
-                _inference_cfg, self.inference_autotune_overlay = (
-                    _resolve_inference_autotune_before_load(
-                        _inference_cfg,
-                        p,
-                        video_path=str(self.video_path),
-                        frame_width=int(cap.get(cv2.CAP_PROP_FRAME_WIDTH) or 1),
-                        frame_height=int(cap.get(cv2.CAP_PROP_FRAME_HEIGHT) or 1),
-                        start_frame=int(start_frame),
-                        end_frame=int(end_frame),
-                        realtime=effective_realtime_tracking_mode,
-                        should_cancel=lambda: self._stop_requested,
-                        cache_dir=self._resolve_cache_dir(),
-                    )
+                (
+                    _inference_cfg,
+                    self.inference_autotune_overlay,
+                    self.inference_autotune_result,
+                ) = _resolve_inference_autotune_before_load(
+                    _inference_cfg,
+                    p,
+                    video_path=str(self.video_path),
+                    frame_width=int(cap.get(cv2.CAP_PROP_FRAME_WIDTH) or 1),
+                    frame_height=int(cap.get(cv2.CAP_PROP_FRAME_HEIGHT) or 1),
+                    start_frame=int(start_frame),
+                    end_frame=int(end_frame),
+                    realtime=effective_realtime_tracking_mode,
+                    should_cancel=lambda: (
+                        self._stop_requested
+                        or self._inference_autotune_cancel_requested
+                    ),
+                    cache_dir=self._resolve_cache_dir(),
+                    use_cached_detections=self.use_cached_detections,
                 )
                 if self.inference_autotune_overlay is not None:
                     logger.info(
@@ -1255,14 +1343,10 @@ class TrackingEngineCore:
                     )
                     self._emit_stats(
                         {
-                            "inference_autotune": {
-                                "status": self.inference_autotune_overlay.status,
-                                "profile_id": self.inference_autotune_overlay.profile_id,
-                                "reason": self.inference_autotune_overlay.reason,
-                                "requested": self.inference_autotune_overlay.requested.to_dict(),
-                                "admitted": self.inference_autotune_overlay.admitted.to_dict(),
-                                "effective": self.inference_autotune_overlay.effective.to_dict(),
-                            }
+                            "inference_autotune": _inference_autotune_stats(
+                                self.inference_autotune_overlay,
+                                self.inference_autotune_result,
+                            )
                         }
                     )
 
