@@ -39,6 +39,8 @@ def test_slice_settings_group_round_trips(_app):
     assert out.target_fractions() == pytest.approx([123.0 / 640.0, 456.0 / 640.0])
     assert out.negative_tile_fraction == pytest.approx(0.3)
     assert out.reference_body_px == pytest.approx(42.0)
+    assert out.balance_multiscale_loss is True
+    assert out.balance_multiscale_loss_power == pytest.approx(0.5)
 
 
 def test_slice_settings_show_only_controls_for_selected_geometry(_app):
@@ -76,8 +78,10 @@ def test_slice_fraction_controls_explain_their_numeric_meaning(_app):
     labels = {label.text() for label, _control in w._rows.values()}
     assert "Minimum retained object area" in labels
     assert "Empty-tile sampling fraction" in labels
+    assert "Balance strength" in labels
     assert "10%" in w.spin_min_area.toolTip()
     assert "15%" in w.spin_neg.toolTip()
+    assert "square-root" in w.spin_balance_power.toolTip()
 
 
 def test_slice_settings_preview_renders_tile_layout(_app):
