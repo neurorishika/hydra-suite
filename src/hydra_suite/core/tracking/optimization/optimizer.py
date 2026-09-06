@@ -688,6 +688,18 @@ class TrackingOptimizerCore:
     def request_stop(self):
         self._stop_requested = True
 
+    def _release_optimization_resources(self) -> None:
+        """Drop read-only replay references after every optimization terminal path.
+
+        The cache handle must not be ``close()``d because its generic close path
+        flushes the write buffer even for a read-only optimizer reader. Clearing
+        our references is both safe for the cache and deterministic for a
+        completed, failed, or cancelled search.
+        """
+
+        self.cache = None
+        self._pose_frame_cache = None
+
     def _frame_space_roi_mask_for_params(
         self, params: Dict[str, Any]
     ) -> np.ndarray | None:
@@ -1361,7 +1373,11 @@ class TrackingOptimizerCore:
         maturity_thresholds = lifecycle_thresholds.get("KALMAN_MATURITY_AGE")
         if maturity_thresholds is not None:
             baseline_maturity, candidate_maturity = maturity_thresholds
-            required_maturity = min(baseline_maturity, candidate_maturity)
+            # Bootstrap creates an active track with continuity zero and the
+            # first later association tests maturity before incrementing it.
+            # Consequently an age-T lifecycle policy first has an observable
+            # effect on the (T + 1)th exported observation.
+            required_maturity = min(baseline_maturity, candidate_maturity) + 1
             for direction, positions in (("forward", forward), ("backward", backward)):
                 longest_run = int(
                     np.max(self._longest_consecutive_observed_runs(positions))
@@ -1416,8 +1432,11 @@ class TrackingOptimizerCore:
         try:
             detector = _ParamsFilter(params)
             roi_mask = self._frame_space_roi_mask_for_params(params)
-            return np.asarray(
-                [
+            counts: list[int] = []
+            for frame in range(start_frame, end_frame + 1):
+                if self._stop_requested:
+                    return None
+                counts.append(
                     len(
                         _filter_cached_detections(
                             detector,
@@ -1427,10 +1446,8 @@ class TrackingOptimizerCore:
                             apply_max_detections=False,
                         )[0]
                     )
-                    for frame in range(start_frame, end_frame + 1)
-                ],
-                dtype=np.int64,
-            )
+                )
+            return np.asarray(counts, dtype=np.int64)
         except Exception:
             logger.warning(
                 "Optimizer: unable to calculate source detection-excess safeguard",
@@ -1606,6 +1623,13 @@ class TrackingOptimizerCore:
         baseline = next(result for result in results if result.is_baseline)
         baseline.recommended = True
         baseline.recommendation_reason = "current settings retained by default"
+
+        def _cancelled() -> None:
+            baseline.recommended = True
+            baseline.recommendation_reason = (
+                "current settings retained: held-out validation was cancelled"
+            )
+
         if validation_bounds is None:
             baseline.recommendation_reason = (
                 "current settings retained: frame range is too short for "
@@ -1613,9 +1637,7 @@ class TrackingOptimizerCore:
             )
             return
         if self._stop_requested:
-            baseline.recommendation_reason = (
-                "current settings retained: held-out validation was cancelled"
-            )
+            _cancelled()
             return
         support_reason = self._validation_support_reason(validation_bounds)
         if support_reason is not None:
@@ -1642,25 +1664,36 @@ class TrackingOptimizerCore:
         validated_results: list[OptimizationResult] = []
         for index, result in enumerate(shortlist):
             if self._stop_requested:
-                break
+                _cancelled()
+                return
             if self._progress_cb is not None:
                 self._progress_cb(
                     85 + int(15 * index / max(len(shortlist), 1)),
                     f"Production-validating candidate {index + 1}/{len(shortlist)}",
                 )
+            if self._stop_requested:
+                _cancelled()
+                return
             params = self._candidate_evaluation_params(result.params)
             detection_counts = self._validation_detection_counts(
                 params, start_frame, end_frame
             )
+            if self._stop_requested:
+                _cancelled()
+                return
             forward = evaluator.run(params, reverse=False)
             if self._stop_requested:
-                break
+                _cancelled()
+                return
             if not forward.success:
                 result.recommendation_reason = "production validation failed" + (
                     f": {forward.error}" if forward.error else ""
                 )
                 continue
             backward = evaluator.run(params, reverse=True)
+            if self._stop_requested:
+                _cancelled()
+                return
             if not backward.success:
                 messages = [value for value in (forward.error, backward.error) if value]
                 result.recommendation_reason = "production validation failed" + (
@@ -1699,13 +1732,14 @@ class TrackingOptimizerCore:
             all_evaluations.extend(evaluations)
             validated_results.append(result)
 
+        if self._stop_requested:
+            _cancelled()
+            return
         if self._progress_cb is not None:
             self._progress_cb(100, "Held-out production validation complete")
 
         if self._stop_requested:
-            baseline.recommendation_reason = (
-                "current settings retained: held-out validation was cancelled"
-            )
+            _cancelled()
             return
         if baseline not in validated_results:
             baseline.recommendation_reason = (
@@ -1776,12 +1810,27 @@ class TrackingOptimizerCore:
     # ------------------------------------------------------------------
 
     def optimize(self):
+        """Run a search and release its read-only replay state on every exit."""
+
+        try:
+            return self._optimize()
+        finally:
+            self._release_optimization_resources()
+
+    def _optimize(self):
+        """Implementation of :meth:`optimize` with cancellation-safe exits."""
+
+        self._search_converged = False
+        if self._stop_requested:
+            return []
         if not self._open_and_validate_cache():
             # Explicitly push an empty result set so a stale result list from a
             # previous successful run in the same dialog session isn't left
             # showing as if this run had produced (or reused) results.
-            if self._result_cb is not None:
+            if not self._stop_requested and self._result_cb is not None:
                 self._result_cb([])
+            return []
+        if self._stop_requested:
             return []
 
         optuna.logging.set_verbosity(optuna.logging.WARNING)
@@ -1797,6 +1846,8 @@ class TrackingOptimizerCore:
         scaled_body_size = ref_size * resize_f
 
         self._preload_pose_data()
+        if self._stop_requested:
+            return []
 
         search_bounds, validation_bounds = self._search_and_validation_bounds()
         search_start, search_end = search_bounds
@@ -1809,13 +1860,17 @@ class TrackingOptimizerCore:
                 dict(self.base_params), search_start, search_end
             )
         except Exception as exc:
+            if self._stop_requested:
+                return []
             logger.exception("Optimizer: exact baseline evaluation failed")
             if self._error_cb is not None:
                 self._error_cb(f"Baseline evaluation failed: {exc}")
-            self.cache = None
-            self._pose_frame_cache = None
             if self._result_cb is not None:
                 self._result_cb([])
+            return []
+        if self._stop_requested:
+            # The replay loop is cooperative and can return partial maps after
+            # a stop request. They are never valid baseline evidence.
             return []
         results.append(
             OptimizationResult(
@@ -1858,11 +1913,17 @@ class TrackingOptimizerCore:
 
         def objective(trial):
             nonlocal _no_improve_count, _best_score_seen
-            if self._stop_requested:
+
+            def _cancel_trial() -> None:
                 study.stop()
                 raise optuna.TrialPruned()
 
+            if self._stop_requested:
+                _cancel_trial()
+
             trial_params = self._suggest_trial_params(trial, scaled_body_size)
+            if self._stop_requested:
+                _cancel_trial()
 
             # One canonical merge keeps fast replay, held-out production
             # replay, preview, and the eventual GUI apply surface aligned.
@@ -1874,17 +1935,37 @@ class TrackingOptimizerCore:
             score, sub_scores = self._proposal_score(
                 current_params, search_start, search_end
             )
+            # Re-check immediately after scoring. A stop can arrive while the
+            # forward/backward replay drains, leaving a deliberately partial
+            # score that must not be appended, shown as progress, or ranked.
+            if self._stop_requested:
+                _cancel_trial()
 
-            results.append(
-                OptimizationResult(trial_params, score, trial.number, sub_scores)
+            trial_result = OptimizationResult(
+                trial_params, score, trial.number, sub_scores
             )
+            if self._stop_requested:
+                _cancel_trial()
+            results.append(trial_result)
+            if self._stop_requested:
+                results.pop()
+                _cancel_trial()
             pct = int(((trial.number + 1) / max(self.n_trials, 1)) * 85)
             if self._progress_cb is not None:
+                if self._stop_requested:
+                    results.pop()
+                    _cancel_trial()
                 self._progress_cb(
                     int(pct),
                     f"Proposal {trial.number + 1}/{self.n_trials} "
                     f"(search loss: {score:.3f})",
                 )
+            if self._stop_requested:
+                # A callback itself can synchronously request cancellation.
+                # Remove the just-recorded trial before Optuna observes it.
+                if results and results[-1] is trial_result:
+                    results.pop()
+                _cancel_trial()
 
             # Plateau detection
             if score < _best_score_seen:
@@ -1910,6 +1991,8 @@ class TrackingOptimizerCore:
         try:
             study.optimize(objective, n_trials=self.n_trials)
         except Exception as e:
+            if self._stop_requested:
+                return []
             # Optuna's default catch=() means ANY exception raised inside a
             # trial (e.g. the very first one, before any result is appended)
             # aborts the whole study immediately. Surface this loudly instead
@@ -1919,7 +2002,13 @@ class TrackingOptimizerCore:
             if self._error_cb is not None:
                 self._error_cb(f"Optimization trial failed: {e}")
 
+        if self._stop_requested:
+            return []
         self._production_validate_shortlist(results, validation_bounds)
+        if self._stop_requested:
+            # Held-out replay can also observe a late explicit stop. Discard
+            # all partially validated/ranked state rather than emitting it.
+            return []
         # Put the conservative recommendation first.  Remaining rows are a
         # transparent shortlist: production-validated Pareto fronts first,
         # then the search heuristic used only to generate proposals.
@@ -1931,11 +2020,8 @@ class TrackingOptimizerCore:
                 item.score,
             )
         )
-        # Do not call self.cache.close(): it was opened read-only and
-        # DetectionCacheHandle.close() flushes its (empty) write buffer,
-        # which would clobber the on-disk cache with zero frames.
-        self.cache = None
-        self._pose_frame_cache = None  # free memory after optimization
+        if self._stop_requested:
+            return []
         if self._result_cb is not None:
             self._result_cb(results)
         return results

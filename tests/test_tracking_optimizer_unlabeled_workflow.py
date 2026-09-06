@@ -518,10 +518,10 @@ def test_lifecycle_maturity_gate_rejects_many_short_observation_fragments() -> N
     assert "KALMAN_MATURITY_AGE" in reason
 
 
-def test_lifecycle_maturity_gate_accepts_baseline_crossing_for_raised_candidate() -> (
+def test_lifecycle_maturity_gate_requires_post_bootstrap_baseline_crossing_for_raised_candidate() -> (
     None
 ):
-    """A run that reaches baseline age distinguishes it from a higher candidate age."""
+    """Maturity starts at zero, so an age-T policy needs T+1 observations."""
 
     core = _optimizer()
     core.base_params["KALMAN_MATURITY_AGE"] = 4
@@ -546,6 +546,30 @@ def test_lifecycle_maturity_gate_accepts_baseline_crossing_for_raised_candidate(
             positions.copy(),
             1.0,
             evaluations,
+            candidate_params={"KALMAN_MATURITY_AGE": 8},
+        )
+        is not None
+    )
+
+    supported = np.full((80, 2, 2), np.nan, dtype=np.float32)
+    for track in range(2):
+        for start in range(0, 76, 6):
+            supported[start : start + 5, track] = np.column_stack(
+                (
+                    track * 100.0 + np.arange(5, dtype=np.float32),
+                    np.zeros(5, dtype=np.float32),
+                )
+            )
+    supported_evaluations = core._validation_evaluations(
+        "candidate", supported, supported.copy(), 1.0
+    )
+
+    assert (
+        core._validation_temporal_evidence_reason(
+            supported,
+            supported.copy(),
+            1.0,
+            supported_evaluations,
             candidate_params={"KALMAN_MATURITY_AGE": 8},
         )
         is None
@@ -775,12 +799,87 @@ def test_plateau_stop_marks_convergence_without_requesting_cancellation(
     monkeypatch.setattr(
         optimizer_module.optuna, "create_study", lambda **_kwargs: _Study()
     )
+    emitted: list[list[OptimizationResult]] = []
+    core._result_cb = emitted.append
 
-    core.optimize()
+    results = core.optimize()
 
     assert core._search_converged is True
     assert core._stop_requested is False
     assert validated
+    assert emitted == [results]
+
+
+def test_cancel_during_proposal_score_discards_partial_trial_and_releases_state(
+    monkeypatch,
+) -> None:
+    """A stop set inside scoring must not surface a half-scored trial as results."""
+
+    class _Trial:
+        number = 0
+
+    class _Study:
+        def __init__(self) -> None:
+            self.stopped = False
+
+        def enqueue_trial(self, _params) -> None:
+            pass
+
+        def stop(self) -> None:
+            self.stopped = True
+
+        def optimize(self, objective, *, n_trials: int) -> None:
+            assert n_trials == 1
+            try:
+                objective(_Trial())
+            except optimizer_module.optuna.TrialPruned:
+                pass
+
+    core = _optimizer()
+    core.n_trials = 1
+    emitted: list[list[OptimizationResult]] = []
+    progress: list[tuple[int, str]] = []
+    validated: list[tuple[list[OptimizationResult], tuple[int, int] | None]] = []
+    core._result_cb = emitted.append
+    core._progress_cb = lambda value, message: progress.append((value, message))
+
+    def _open() -> bool:
+        core.cache = object()
+        return True
+
+    score_calls = 0
+
+    def _score(*_args, **_kwargs):
+        nonlocal score_calls
+        score_calls += 1
+        if score_calls == 2:  # the first Optuna proposal, after exact baseline
+            core.request_stop()
+        return 1.0, {"cycle_loss": 0.0}
+
+    monkeypatch.setattr(core, "_open_and_validate_cache", _open)
+    monkeypatch.setattr(core, "_preload_pose_data", lambda: None)
+    monkeypatch.setattr(core, "_build_sampler", lambda _active: object())
+    monkeypatch.setattr(core, "_search_and_validation_bounds", lambda: ((0, 1), (2, 3)))
+    monkeypatch.setattr(
+        core, "_suggest_trial_params", lambda *_args: {"W_POSITION": 2.0}
+    )
+    monkeypatch.setattr(core, "_proposal_score", _score)
+    monkeypatch.setattr(
+        core,
+        "_production_validate_shortlist",
+        lambda results, bounds: validated.append((results, bounds)),
+    )
+    monkeypatch.setattr(
+        optimizer_module.optuna, "create_study", lambda **_kwargs: _Study()
+    )
+
+    assert core.optimize() == []
+    assert score_calls == 2
+    assert validated == []
+    assert emitted == []
+    assert progress == []
+    assert core.cache is None
+    assert core._pose_frame_cache is None
 
 
 def test_shortlist_includes_normalized_metric_extremes_and_diverse_candidates() -> None:

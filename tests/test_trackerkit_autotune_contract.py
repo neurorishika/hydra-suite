@@ -513,10 +513,13 @@ def test_state_key_changes_for_objective_and_search_configuration(
 
         dialog.spin_w_coverage.setValue(dialog.spin_w_coverage.value() - 0.05)
         baseline = dialog._compute_state_key()
-        dialog.cb_kalman_init_vel.setChecked(not dialog.cb_kalman_init_vel.isChecked())
+        # Initial velocity retention is deliberately disabled for read-only
+        # replay; use a supported control to prove selected dimensions feed
+        # the state identity.
+        dialog.cb_kalman_damp.setChecked(not dialog.cb_kalman_damp.isChecked())
         assert dialog._compute_state_key() != baseline
 
-        dialog.cb_kalman_init_vel.setChecked(not dialog.cb_kalman_init_vel.isChecked())
+        dialog.cb_kalman_damp.setChecked(not dialog.cb_kalman_damp.isChecked())
         baseline = dialog._compute_state_key()
         dialog.spin_trials.setValue(dialog.spin_trials.value() + 1)
         assert dialog._compute_state_key() != baseline
@@ -650,6 +653,27 @@ def test_yolo_replay_disables_unfaithful_threshold_dimensions(
         dialog.close()
 
 
+def test_replay_disables_unvalidated_initial_velocity_retention_immediately(
+    qapp: QApplication, tmp_path
+) -> None:
+    """A fresh dialog must not offer bootstrap tuning before a replay starts."""
+
+    dialog = ParameterHelperDialog(
+        video_path="/tmp/video.mp4",
+        detection_cache_path=str(tmp_path / "cache"),
+        start_frame=0,
+        end_frame=10,
+        current_params={"DETECTION_METHOD": "background_subtraction"},
+    )
+    try:
+        assert dialog.cb_kalman_init_vel.isEnabled() is False
+        assert dialog.cb_kalman_init_vel.isChecked() is False
+        assert "young-filter association" in dialog.cb_kalman_init_vel.toolTip()
+        assert dialog.get_tuning_config()["KALMAN_INITIAL_VELOCITY_RETENTION"] is False
+    finally:
+        dialog.close()
+
+
 class _RunningWorker:
     def __init__(self, *, stop_finishes: bool = True) -> None:
         self.stop_calls = 0
@@ -693,6 +717,75 @@ def test_terminal_dialog_paths_stop_workers_with_bounded_wait(
     )
 
     dialog.close()
+
+
+def test_terminal_shutdown_ignores_late_optimizer_results(
+    qapp: QApplication, tmp_path, monkeypatch
+) -> None:
+    """A queued result after terminal shutdown cannot revive Apply or persistence."""
+
+    dialog = ParameterHelperDialog(
+        video_path="/tmp/video.mp4",
+        detection_cache_path=str(tmp_path / "cache"),
+        start_frame=0,
+        end_frame=10,
+        current_params={},
+    )
+    persisted: list[bool] = []
+    monkeypatch.setattr(dialog, "_save_state", lambda: persisted.append(True))
+    late_result = OptimizationResult({"W_POSITION": 2.0}, score=0.1, trial_number=0)
+    dialog._terminal_shutdown_started = True
+    try:
+        dialog.on_results([late_result])
+
+        assert dialog.results == []
+        assert dialog.table.rowCount() == 0
+        assert dialog.btn_apply.isEnabled() is False
+        assert dialog.btn_preview.isEnabled() is False
+        assert persisted == []
+    finally:
+        # Let Qt close the test dialog normally; the assertion above is about
+        # the late signal, not this explicit fixture cleanup.
+        dialog._terminal_shutdown_started = False
+        dialog.close()
+
+
+def test_explicit_stop_discards_results_and_ignores_late_optimizer_signal(
+    qapp: QApplication, tmp_path, monkeypatch
+) -> None:
+    """User Stop makes partial/stale rows ineligible for preview, apply, or save."""
+
+    dialog = ParameterHelperDialog(
+        video_path="/tmp/video.mp4",
+        detection_cache_path=str(tmp_path / "cache"),
+        start_frame=0,
+        end_frame=10,
+        current_params={},
+    )
+    stale_result = OptimizationResult({"W_POSITION": 2.0}, score=0.1, trial_number=0)
+    dialog.results = [stale_result]
+    dialog.table.setRowCount(1)
+    dialog.btn_apply.setEnabled(True)
+    dialog.btn_preview.setEnabled(True)
+    dialog.optimizer = _RunningWorker()
+    persisted: list[bool] = []
+    monkeypatch.setattr(dialog, "_save_state", lambda: persisted.append(True))
+    try:
+        dialog._stop_optimization()
+        dialog.on_results([stale_result])
+        dialog.on_finished()
+
+        assert dialog._optimization_cancel_requested is True
+        assert dialog.optimizer.stop_calls == 1
+        assert dialog.results == []
+        assert dialog.table.rowCount() == 0
+        assert dialog.btn_apply.isEnabled() is False
+        assert dialog.btn_preview.isEnabled() is False
+        assert dialog.get_selected_params() == {}
+        assert "cancelled" in dialog.status_label.text().lower()
+        assert persisted == []
+    finally:
+        dialog.close()
 
 
 @pytest.mark.parametrize("terminal_action", ["reject", "done"])
