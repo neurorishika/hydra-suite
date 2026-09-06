@@ -489,33 +489,136 @@ def test_a_long_run_of_skipped_steps_aborts():
     assert "no longer learning" in source
 
 
-def test_prune_keeps_only_the_newest_epoch_checkpoints(tmp_path):
-    """Epoch counts are user-supplied; unbounded salvage could exhaust the
-    disk mid-run and destroy the artifact this feature exists to preserve."""
-    from hydra_suite.training.sam3_lora.cli import prune_epoch_checkpoints
-
-    for n in range(1, 6):
-        (tmp_path / f"epoch_{n:03d}.pt").write_text("x")
-        (tmp_path / f"epoch_{n:03d}.pt.complete.json").write_text("{}")
-
-    removed = prune_epoch_checkpoints(tmp_path, keep=2)
-
-    remaining = sorted(p.name for p in tmp_path.glob("epoch_*.pt"))
-    assert remaining == ["epoch_004.pt", "epoch_005.pt"]
-    assert len(removed) == 3
-    # Completion markers must go with their checkpoint, not linger as
-    # evidence of an artifact that no longer exists.
-    assert not (tmp_path / "epoch_003.pt.complete.json").exists()
-    assert (tmp_path / "epoch_005.pt.complete.json").exists()
+def _make_checkpoints(directory, count, size=1024):
+    for n in range(1, count + 1):
+        (directory / f"epoch_{n:03d}.pt").write_bytes(b"x" * size)
+        (directory / f"epoch_{n:03d}.pt.complete.json").write_text("{}")
+    return sorted(directory.glob("epoch_*.pt"))
 
 
-def test_prune_is_safe_on_a_missing_directory_or_zero_keep(tmp_path):
-    from hydra_suite.training.sam3_lora.cli import prune_epoch_checkpoints
+def test_retention_keeps_every_checkpoint_when_the_budget_allows(tmp_path):
+    """A count cap ALWAYS destroys the earliest epochs; a budget only prunes
+    when disk actually demands it."""
+    from hydra_suite.training.sam3_lora.cli import plan_checkpoint_retention
 
-    assert prune_epoch_checkpoints(tmp_path / "absent", keep=2) == []
-    (tmp_path / "epoch_001.pt").write_text("x")
-    assert prune_epoch_checkpoints(tmp_path, keep=0) == []
-    assert (tmp_path / "epoch_001.pt").exists(), "keep=0 must not wipe everything"
+    paths = _make_checkpoints(tmp_path, 10)
+    removed = plan_checkpoint_retention(
+        paths, free_bytes=100 * 1024 * 1024, adapter_bytes=1024
+    )
+    assert removed == []
+
+
+def test_retention_thins_the_middle_and_keeps_first_and_last(tmp_path):
+    from hydra_suite.training.sam3_lora.cli import plan_checkpoint_retention
+
+    paths = _make_checkpoints(tmp_path, 9)
+    # Budget deliberately tiny: only a few adapters fit.
+    removed = plan_checkpoint_retention(paths, free_bytes=0, adapter_bytes=1024)
+    kept = [p for p in paths if p not in removed]
+    assert kept, "retention must never delete everything"
+    assert kept[0].name == "epoch_001.pt", "the earliest epoch is the stall evidence"
+    assert kept[-1].name == "epoch_009.pt", "the newest epoch is the salvage artifact"
+    assert len(kept) < len(paths)
+
+
+def test_retention_never_deletes_the_checkpoint_just_written(tmp_path):
+    from hydra_suite.training.sam3_lora.cli import plan_checkpoint_retention
+
+    paths = _make_checkpoints(tmp_path, 4)
+    removed = plan_checkpoint_retention(paths, free_bytes=0, adapter_bytes=10**9)
+    assert paths[-1] not in removed
+
+
+def test_retention_budget_is_derived_from_measured_free_space_and_size(tmp_path):
+    """No hardcoded byte budget and no hardcoded count may appear."""
+    import inspect
+
+    from hydra_suite.training.sam3_lora import cli
+
+    assert not hasattr(cli, "KEEP_EPOCH_CHECKPOINTS")
+    source = inspect.getsource(cli.enforce_checkpoint_budget) + inspect.getsource(
+        cli.checkpoint_budget_bytes
+    )
+    assert "disk_usage" in source
+    assert "stat()" in source or "st_size" in source
+
+
+def test_enforce_budget_removes_markers_and_logs_loudly(tmp_path):
+    from hydra_suite.training.sam3_lora import cli
+
+    _make_checkpoints(tmp_path, 6)
+    messages: list[str] = []
+    removed = cli.enforce_checkpoint_budget(
+        tmp_path, budget_bytes=2048, log=messages.append
+    )
+    assert removed
+    for stale in removed:
+        assert not stale.exists()
+        assert not stale.with_name(stale.name + ".complete.json").exists()
+    assert any("budget" in m.lower() for m in messages)
+
+
+def test_enforce_budget_is_safe_on_a_missing_directory(tmp_path):
+    from hydra_suite.training.sam3_lora import cli
+
+    assert cli.enforce_checkpoint_budget(tmp_path / "absent") == []
+
+
+def test_val_series_is_appended_per_epoch_as_jsonl(tmp_path):
+    from hydra_suite.training.sam3_lora import cli
+
+    cli.append_val_record(tmp_path, {"epoch": 1, "val_loss_mean": 2.0})
+    cli.append_val_record(tmp_path, {"epoch": 2, "val_loss_mean": 1.5})
+
+    lines = (tmp_path / cli.VAL_SERIES_FILENAME).read_text().strip().splitlines()
+    assert [json.loads(line)["epoch"] for line in lines] == [1, 2]
+
+
+def test_val_cadence_defaults_to_every_epoch_and_is_env_configurable(monkeypatch):
+    from hydra_suite.training.sam3_lora import cli
+
+    monkeypatch.delenv(cli.VAL_CADENCE_ENV, raising=False)
+    assert cli.val_cadence() == 1
+    monkeypatch.setenv(cli.VAL_CADENCE_ENV, "3")
+    assert cli.val_cadence() == 3
+    monkeypatch.setenv(cli.VAL_CADENCE_ENV, "garbage")
+    assert cli.val_cadence() == 1
+
+
+def test_per_epoch_validation_cannot_perturb_training():
+    """Evidence recording must be provably behaviour-preserving: RNG state is
+    saved and restored around the mid-run validation pass."""
+    import inspect
+
+    from hydra_suite.training.sam3_lora import cli
+
+    source = inspect.getsource(cli._record_epoch_validation)
+    assert "get_rng_state" in source and "set_rng_state" in source
+    assert "model.train()" in source
+
+
+def test_val_record_carries_the_full_loss_decomposition_and_its_cost(tmp_path):
+    import inspect
+
+    from hydra_suite.training.sam3_lora import cli
+
+    source = inspect.getsource(cli._evaluate_split)
+    assert "val_loss_mean" in source
+    assert "elapsed_s" in source
+    # The terminal artifact keeps its existing shape; the series adds to it.
+    assert "informational only" in inspect.getsource(cli._evaluate_and_write)
+
+
+def test_nothing_selects_a_checkpoint_on_the_recorded_series():
+    """Selection stays last-epoch; a study measured every per-query validation
+    signal ANTI-correlating with held-out AP."""
+    import inspect
+
+    from hydra_suite.training.sam3_lora import cli
+
+    source = inspect.getsource(cli._record_epoch_validation)
+    assert "anti-correlat" in source.lower()
+    assert "selection" in source.lower()
 
 
 def test_epoch_checkpoints_never_shadow_the_completion_signal():

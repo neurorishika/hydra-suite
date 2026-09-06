@@ -264,38 +264,171 @@ def _write_validated_adapter_artifact(
 # (the launcher treats its presence as "the run finished"), so these live in a
 # subdirectory under their own names and can never be mistaken for it.
 EPOCH_CHECKPOINT_DIRNAME = "checkpoints"
-KEEP_EPOCH_CHECKPOINTS = 3
+
+# Retention is a BUDGET, not a count.
+#
+# This used to be `KEEP_EPOCH_CHECKPOINTS = 3` plus a sliding window. That
+# constant's stated rationale is sound and is preserved here: epoch counts are
+# user-supplied, and disk exhaustion mid-run would destroy the very artifact
+# this feature exists to preserve (a 200-epoch run on a full disk is a real
+# failure mode). What was wrong was the MECHANISM, not the concern -- a
+# newest-N window ALWAYS destroys the earliest epochs, which are exactly the
+# ones a stall analysis needs. A 2026-09-06 run stopped learning after epoch 2
+# and `epoch_001`/`epoch_002` had already been pruned, unmeasured.
+#
+# So: retain everything the disk can afford, measured at runtime (free space
+# from `shutil.disk_usage`, adapter size from the files themselves -- never a
+# hardcoded byte figure), and when the budget binds, thin the MIDDLE while
+# always keeping the first and last checkpoint, and say so loudly.
+CHECKPOINT_BUDGET_FRACTION_OF_FREE = 0.25
 
 
-def prune_epoch_checkpoints(directory: Path, keep: int = KEEP_EPOCH_CHECKPOINTS):
-    """Delete all but the newest *keep* epoch checkpoints (and their markers).
+def checkpoint_budget_bytes(directory: Path, *, free_bytes: int | None = None) -> int:
+    """Measured retention budget for *directory*, in bytes.
 
-    Returns the paths removed. Bounded on purpose: 10 epochs x ~42 MB is
-    tolerable, but epoch counts are user-supplied and disk exhaustion mid-run
-    would destroy the very artifact this feature exists to preserve.
+    Derived, never hardcoded: a policy fraction of the space this run could
+    actually use -- currently free space plus whatever the existing epoch
+    checkpoints already occupy (they are reclaimable).
     """
-    if keep < 1 or not directory.is_dir():
+    import shutil
+
+    probe = directory if directory.is_dir() else directory.parent
+    if free_bytes is None:
+        try:
+            free_bytes = int(shutil.disk_usage(probe).free)
+        except OSError:
+            return 0
+    used = sum(path.stat().st_size for path in directory.glob("epoch_*.pt"))
+    return int((free_bytes + used) * CHECKPOINT_BUDGET_FRACTION_OF_FREE)
+
+
+def plan_checkpoint_retention(
+    paths: list[Path],
+    *,
+    free_bytes: int,
+    adapter_bytes: int,
+    budget_bytes: int | None = None,
+) -> list[Path]:
+    """Decide which epoch checkpoints must go, given a MEASURED budget.
+
+    Pure: takes the measurements, returns the paths to delete, touches no
+    disk. Policy when the budget binds: keep the FIRST and LAST checkpoints
+    unconditionally, then repeatedly drop the middle-most survivor until the
+    remainder fits. That preserves both ends of the loss curve -- the shape a
+    stall analysis reads -- instead of a window that keeps only the tail.
+    """
+    ordered = sorted(paths, key=lambda path: path.name)
+    if len(ordered) <= 2 or adapter_bytes <= 0:
         return []
-    checkpoints = sorted(
-        directory.glob("epoch_*.pt"), key=lambda path: path.name, reverse=True
+    if budget_bytes is None:
+        budget_bytes = int(
+            (free_bytes + adapter_bytes * len(ordered))
+            * CHECKPOINT_BUDGET_FRACTION_OF_FREE
+        )
+    max_keep = max(2, int(budget_bytes // adapter_bytes))
+    if len(ordered) <= max_keep:
+        return []
+    removed: list[Path] = []
+    kept = list(ordered)
+    while len(kept) > max_keep:
+        # Middle-most of the interior span; endpoints are never candidates.
+        removed.append(kept.pop(len(kept) // 2))
+    return sorted(removed, key=lambda path: path.name)
+
+
+def enforce_checkpoint_budget(
+    directory: Path,
+    *,
+    budget_bytes: int | None = None,
+    log: Any = emit_log,
+) -> list[Path]:
+    """Apply `plan_checkpoint_retention` to *directory*, loudly.
+
+    Returns the paths removed (each with its `.complete.json` marker, so a
+    marker never outlives the artifact it vouches for).
+    """
+    if not directory.is_dir():
+        return []
+    paths = sorted(directory.glob("epoch_*.pt"), key=lambda path: path.name)
+    if not paths:
+        return []
+    adapter_bytes = max(path.stat().st_size for path in paths)
+    if budget_bytes is None:
+        budget_bytes = checkpoint_budget_bytes(directory)
+    stale = plan_checkpoint_retention(
+        paths,
+        free_bytes=0,
+        adapter_bytes=adapter_bytes,
+        budget_bytes=budget_bytes,
     )
-    removed = []
-    for stale in checkpoints[keep:]:
-        stale.unlink(missing_ok=True)
-        stale.with_name(stale.name + ".complete.json").unlink(missing_ok=True)
-        removed.append(stale)
-    return removed
+    for path in stale:
+        path.unlink(missing_ok=True)
+        path.with_name(path.name + ".complete.json").unlink(missing_ok=True)
+    if stale:
+        log(
+            "CHECKPOINT RETENTION BUDGET BINDING: disk budget "
+            f"{budget_bytes / 1e6:.0f} MB holds only "
+            f"{max(2, budget_bytes // max(1, adapter_bytes))} of {len(paths)} "
+            f"epoch checkpoints (~{adapter_bytes / 1e6:.1f} MB each). Thinned "
+            "the middle, kept first and last: deleted "
+            + ", ".join(path.name for path in stale)
+        )
+    return stale
+
+
+# --- Per-epoch validation series ------------------------------------------
+#
+# A single terminal validation number cannot distinguish "the model converged"
+# from "the model stalled at epoch 2 and burned eight more epochs of GPU
+# time". The series can, and it costs one forward-only pass per epoch. It is
+# recorded UNCONDITIONALLY, as evidence, and `val_stats.json` keeps its
+# existing shape so every current reader is unaffected.
+VAL_SERIES_FILENAME = "val_series.jsonl"
+VAL_CADENCE_ENV = "HYDRA_SAM3_VAL_EVERY"
+
+
+def val_cadence(default: int = 1) -> int:
+    """Epochs between mid-run validation passes (1 = every epoch).
+
+    A knob rather than a silent cost: the pass is forward-only but it is not
+    free (order 10-20% of an epoch on the 2026-09-06 geometry), and epoch
+    counts are user-supplied. The FINAL epoch is always recorded regardless,
+    because the terminal evaluation already runs there.
+    """
+    raw = os.environ.get(VAL_CADENCE_ENV, "")
+    try:
+        value = int(raw)
+    except (TypeError, ValueError):
+        return default
+    return value if value >= 1 else default
+
+
+def append_val_record(run_dir_path: Path, record: dict[str, Any]) -> Path:
+    """Append one epoch's validation record to the run's JSONL series.
+
+    Append-per-epoch (not a dict rewritten at the end) so a killed or crashed
+    run still leaves every epoch it actually reached.
+    """
+    path = run_dir_path / VAL_SERIES_FILENAME
+    with path.open("a", encoding="utf-8") as handle:
+        handle.write(json.dumps(record, sort_keys=True) + "\n")
+    return path
 
 
 def _write_epoch_checkpoint(
     model: Any, run_dir_path: Path, epoch_number: int, torch_module: Any
 ) -> Path:
-    """Persist this epoch's adapters as salvage, atomically."""
+    """Persist this epoch's adapters as salvage, atomically.
+
+    Writes into the run's `checkpoints` subdirectory, under its own epoch
+    name (never the completion-signal artifact name), then applies the
+    measured retention budget.
+    """
     directory = run_dir_path / EPOCH_CHECKPOINT_DIRNAME
     directory.mkdir(parents=True, exist_ok=True)
     target = directory / f"epoch_{epoch_number:03d}.pt"
     _write_validated_adapter_artifact(adapter_state_dict(model), target, torch_module)
-    prune_epoch_checkpoints(directory)
+    enforce_checkpoint_budget(directory)
     return target
 
 
@@ -753,6 +886,23 @@ def run_training(spec: Any, run_dir_path: Path) -> bool:
         if epoch + 1 < params.epochs:
             saved = _write_epoch_checkpoint(model, run_dir_path, epoch + 1, torch)
             emit_log(f"epoch {epoch} checkpoint: {saved}")
+            # Record the validation series as it happens. The final epoch is
+            # deliberately excluded here: the terminal `_evaluate_and_write`
+            # below appends it from the same computation, so no epoch is
+            # evaluated twice.
+            if (epoch + 1) % val_cadence() == 0:
+                _record_epoch_validation(
+                    model,
+                    spec,
+                    params,
+                    matcher,
+                    loss_fn,
+                    device,
+                    autocast_dtype,
+                    True,
+                    run_dir_path,
+                    epoch + 1,
+                )
 
         emit_progress(epoch + 1, params.epochs)
 
@@ -769,10 +919,144 @@ def run_training(spec: Any, run_dir_path: Path) -> bool:
         autocast_dtype,
         True,
         run_dir_path,
+        params.epochs,
     )
     artifact_path = run_dir_path / "adapters.pt"
     _write_validated_adapter_artifact(adapters, artifact_path, torch)
     return True
+
+
+def _evaluate_split(
+    model: Any,
+    spec: Any,
+    params: Any,
+    matcher: Any,
+    loss_fn: Any,
+    device: Any,
+    autocast_dtype: Any,
+    use_bf16: bool,
+) -> dict[str, Any] | None:
+    """Run the validation split and return its loss decomposition.
+
+    Returns `val_loss_mean` (the same number the terminal `val_stats.json`
+    has always reported), the per-term breakdown averaged over batches, the
+    batch count, and `elapsed_s` -- the pass's own measured wall clock, so the
+    cost of this evidence is itself evidence rather than an estimate.
+
+    Reporting only. Nothing here may select a checkpoint: a 2026-09-06 study
+    measured every per-query validation signal ANTI-correlating with held-out
+    AP, so selecting on it would be actively wrong.
+
+    Returns `None` when there is no validation split (small datasets skip it
+    -- see `dataset_build.py`'s `validation: "none"` case) rather than
+    fabricating a placeholder.
+    """
+    import time
+
+    import torch
+
+    val_descriptors = try_build_descriptors(
+        spec.derived_dataset_dir, params, "valid", seed=spec.seed
+    )
+    if not val_descriptors:
+        return None
+    n_val_batches = batch_count(query_count(val_descriptors), params.batch)
+    val_batches = collate_batches(val_descriptors, params.batch)
+
+    started = time.perf_counter()
+    model.eval()
+    total_loss = 0.0
+    term_totals: dict[str, float] = {}
+    with torch.no_grad():
+        for batch in val_batches:
+            # Same split as training: matcher and loss in fp32, forward in bf16.
+            with torch.autocast(
+                device_type="cuda", dtype=autocast_dtype, enabled=use_bf16
+            ):
+                model_input, targets, outputs = _forward_batch(batch, model, device)
+            _attach_matcher_indices(outputs, targets, matcher)
+            loss_dict = loss_fn(outputs, targets)
+            loss = _core_loss(loss_dict)
+            total_loss += float(loss)
+            if isinstance(loss_dict, dict):
+                for key, value in loss_dict.items():
+                    try:
+                        term_totals[key] = term_totals.get(key, 0.0) + float(value)
+                    except (TypeError, ValueError):
+                        continue
+            del batch, model_input, targets, outputs, loss_dict, loss
+
+    return {
+        "val_loss_mean": total_loss / n_val_batches,
+        "val_batches": n_val_batches,
+        "val_terms_mean": {
+            key: total / n_val_batches for key, total in sorted(term_totals.items())
+        },
+        "elapsed_s": time.perf_counter() - started,
+    }
+
+
+def _record_epoch_validation(
+    model: Any,
+    spec: Any,
+    params: Any,
+    matcher: Any,
+    loss_fn: Any,
+    device: Any,
+    autocast_dtype: Any,
+    use_bf16: bool,
+    run_dir_path: Path,
+    epoch_number: int,
+) -> dict[str, Any] | None:
+    """Evaluate the validation split mid-run and append it to the series.
+
+    EVIDENCE ONLY -- if you are here to wire best-checkpoint selection or
+    early stopping onto this series, don't. Selection stays last-epoch: a
+    2026-09-06 study on a genuinely disjoint fold measured every per-query
+    validation signal ANTI-correlating with held-out AP, so choosing the
+    minimum of this curve would pick a worse detector. The series exists to
+    distinguish "converged" from "stalled at epoch 2", nothing else.
+
+    Provably behaviour-preserving: the model is returned to `train()` and
+    every RNG stream is restored, so the next epoch draws exactly the numbers
+    it would have drawn without this call.
+    """
+    import torch
+
+    was_training = model.training
+    py_state = random.getstate()
+    np_state = np.random.get_state()
+    cpu_state = torch.get_rng_state()
+    cuda_states = torch.cuda.get_rng_state_all() if torch.cuda.is_available() else None
+    try:
+        stats = _evaluate_split(
+            model,
+            spec,
+            params,
+            matcher,
+            loss_fn,
+            device,
+            autocast_dtype,
+            use_bf16,
+        )
+    finally:
+        random.setstate(py_state)
+        np.random.set_state(np_state)
+        torch.set_rng_state(cpu_state)
+        if cuda_states is not None:
+            torch.cuda.set_rng_state_all(cuda_states)
+        if was_training:
+            model.train()
+    if stats is None:
+        return None
+    record = {"epoch": epoch_number, **stats}
+    append_val_record(run_dir_path, record)
+    emit_log(
+        f"epoch {epoch_number} val_loss_mean={stats['val_loss_mean']:.5f} "
+        f"({stats['val_batches']} batches, {stats['elapsed_s']:.1f}s) "
+        "[recorded as evidence; selection is unchanged]"
+    )
+    return record
 
 
 def _evaluate_and_write(
@@ -785,6 +1069,7 @@ def _evaluate_and_write(
     autocast_dtype: Any,
     use_bf16: bool,
     run_dir_path: Path,
+    epoch_number: int | None = None,
 ) -> Path | None:
     """Compute real validation-set loss, for reporting ONLY.
 
@@ -793,39 +1078,29 @@ def _evaluate_and_write(
     split (small datasets skip it -- see `dataset_build.py`'s `validation:
     "none"` case), no file is written and `None` is returned rather than
     fabricating a placeholder.
+
+    Writes `val_stats.json` in its historical shape (`val_loss_mean`,
+    `val_batches`, `note`) plus the additive per-term breakdown, and appends
+    the SAME computation as the final entry of `val_series.jsonl`, so the
+    series' last row and the terminal artifact can never disagree and the
+    final epoch is never evaluated twice.
     """
-    import torch
-
-    val_descriptors = try_build_descriptors(
-        spec.derived_dataset_dir, params, "valid", seed=spec.seed
+    stats = _evaluate_split(
+        model, spec, params, matcher, loss_fn, device, autocast_dtype, use_bf16
     )
-    if not val_descriptors:
+    if stats is None:
         return None
-    n_val_batches = batch_count(query_count(val_descriptors), params.batch)
-    val_batches = collate_batches(val_descriptors, params.batch)
-
-    model.eval()
-    total_loss = 0.0
-    with torch.no_grad():
-        for batch in val_batches:
-            # Same split as training: matcher and loss in fp32, forward in bf16.
-            with torch.autocast(
-                device_type="cuda", dtype=autocast_dtype, enabled=use_bf16
-            ):
-                model_input, targets, outputs = _forward_batch(batch, model, device)
-            _attach_matcher_indices(outputs, targets, matcher)
-            loss_dict = loss_fn(outputs, targets)
-            loss = _core_loss(loss_dict)
-            total_loss += float(loss)
-            del batch, model_input, targets, outputs, loss_dict, loss
 
     val_stats = {
-        "val_loss_mean": total_loss / n_val_batches,
-        "val_batches": n_val_batches,
+        "val_loss_mean": stats["val_loss_mean"],
+        "val_batches": stats["val_batches"],
+        "val_terms_mean": stats["val_terms_mean"],
         "note": "informational only; checkpoint selection is always 'last'",
     }
     metrics_path = run_dir_path / "val_stats.json"
     metrics_path.write_text(json.dumps(val_stats, indent=2), encoding="utf-8")
+    if epoch_number is not None:
+        append_val_record(run_dir_path, {"epoch": epoch_number, **stats})
     return metrics_path
 
 
