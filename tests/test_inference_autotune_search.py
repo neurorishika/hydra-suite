@@ -414,6 +414,20 @@ def test_record_only_persists_but_does_not_apply(tmp_path):
     assert dict(stored.calibration_summary)["detections_p95_bucket"] == 8
 
 
+def test_search_status_reports_incumbent_field_and_budget() -> None:
+    statuses = []
+
+    CoordinateSearch(_planner(), FixedExecutor()).run(
+        _settings(),
+        stage_shares={"pose_batch_size": 1.0},
+        status_callback=statuses.append,
+    )
+
+    assert statuses[0].startswith("Optimizing inference — baseline")
+    assert any("field pose_batch_size" in status for status in statuses)
+    assert all("/120s" in status for status in statuses)
+
+
 def test_concurrent_fresh_processes_create_one_profile_and_one_trial_set(tmp_path):
     context = multiprocessing.get_context("spawn")
     barrier = context.Barrier(2)

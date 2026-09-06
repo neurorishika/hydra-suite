@@ -180,6 +180,7 @@ def _compare_one(
     details = []
     nonzero = len(reference) > 0 and len(candidate) > 0
     counts_match = len(reference) == len(candidate)
+    columns_match = set(reference.columns) == set(candidate.columns)
     metrics = _positional(reference, candidate, policy.match_gate)
     aligned = _aligned(reference, candidate)
     nan_mismatches = 0
@@ -212,6 +213,12 @@ def _compare_one(
         details.append(
             f"{name}: row counts differ ({len(reference)} != {len(candidate)})"
         )
+    if not columns_match:
+        missing = sorted(set(reference.columns) - set(candidate.columns))
+        extra = sorted(set(candidate.columns) - set(reference.columns))
+        details.append(
+            f"{name}: output columns differ (missing={missing}, extra={extra})"[:1024]
+        )
     if metrics["unmatched"]:
         details.append(f"{name}: {metrics['unmatched']} unmatched positional rows")
     if nan_mismatches:
@@ -221,6 +228,7 @@ def _compare_one(
     passed = bool(
         nonzero
         and counts_match
+        and columns_match
         and int(metrics["matched"]) > 0
         and int(metrics["unmatched"]) == 0
         and float(metrics["position_p99"]) <= position_limit

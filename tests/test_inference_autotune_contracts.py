@@ -421,6 +421,12 @@ def test_correctness_gate_rejects_empty_count_nan_and_categorical_changes():
     changed_nan = _outputs()
     changed_nan.forward.loc[0, "PoseNoseX"] = np.nan
     assert not compare_outputs(baseline, changed_nan).passed
+
+    complete = _outputs()
+    missing_pose = CalibrationOutputs(
+        complete.forward.drop(columns=["PoseNoseX"]), complete.final
+    )
+    assert not compare_outputs(baseline, missing_pose).passed
     empty = CalibrationOutputs(baseline.forward.iloc[:0], baseline.final.iloc[:0])
     assert not compare_outputs(empty, empty).passed
 

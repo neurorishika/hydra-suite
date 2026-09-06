@@ -101,11 +101,14 @@ class CoordinateSearch:
         manual_fields: frozenset[str] = frozenset(),
         stage_shares: Mapping[str, float] | None = None,
         should_cancel: Callable[[], bool] = lambda: False,
+        status_callback: Callable[[str], None] = lambda _message: None,
     ) -> SearchResult:
         started = self.monotonic()
         deadline = started + self.protocol.budget_seconds
         evidence: list[CandidateEvidence] = []
         rejected: list[tuple[str, str]] = []
+
+        self._status(status_callback, started, "baseline", baseline)
 
         baseline_measurements = self._measure(
             (baseline,),
@@ -175,6 +178,12 @@ class CoordinateSearch:
                     )
                 if not mutations:
                     continue
+                self._status(
+                    status_callback,
+                    started,
+                    f"field {field_name}",
+                    incumbent,
+                )
                 screened = self._measure(
                     mutations,
                     phase="stage",
@@ -204,6 +213,12 @@ class CoordinateSearch:
                 if not fastest_screened:
                     continue
                 finalists = tuple(item.settings for item in fastest_screened)
+                self._status(
+                    status_callback,
+                    started,
+                    f"full-pipeline confirmation for {field_name}",
+                    incumbent,
+                )
                 full = self._measure(
                     (incumbent, *finalists),
                     phase="full",
@@ -274,6 +289,7 @@ class CoordinateSearch:
                 False,
                 "cancelled" if should_cancel() else "budget_expired",
             )
+        self._status(status_callback, started, "final confirmation", incumbent)
         final = self._measure(
             (incumbent,),
             phase="final_validation",
@@ -508,6 +524,19 @@ class CoordinateSearch:
 
     def _expired(self, deadline: float, should_cancel: Callable[[], bool]) -> bool:
         return should_cancel() or self.monotonic() >= deadline
+
+    def _status(
+        self,
+        callback: Callable[[str], None],
+        started: float,
+        phase: str,
+        incumbent: InferenceTuningSettings,
+    ) -> None:
+        elapsed = max(0.0, self.monotonic() - started)
+        callback(
+            f"Optimizing inference — {phase}; incumbent "
+            f"{self._label(incumbent)}; {elapsed:.1f}/{self.protocol.budget_seconds:g}s"
+        )
 
     @staticmethod
     def _label(settings: InferenceTuningSettings) -> str:

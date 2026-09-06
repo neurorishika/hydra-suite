@@ -76,6 +76,7 @@ class TrackingRunContext:
     contention_detected: bool = False
     thermal_throttled: bool = False
     should_cancel: Callable[[], bool] = lambda: False
+    status_callback: Callable[[str], None] = lambda _message: None
 
     def __post_init__(self) -> None:
         if self.frame_width < 1 or self.frame_height < 1 or self.channels < 1:
@@ -634,6 +635,7 @@ def build_tracking_autotune_request(
         eligibility_reason=eligibility_reason,
         stage_shares=stage_shares,
         should_cancel=context.should_cancel,
+        status_callback=context.status_callback,
     )
 
 

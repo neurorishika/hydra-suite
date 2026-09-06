@@ -112,6 +112,7 @@ def _resolve_inference_autotune_before_load(
     end_frame: int,
     realtime: bool,
     should_cancel,
+    status_callback=lambda _message: None,
     cache_dir=None,
     use_cached_detections: bool = False,
 ):
@@ -174,6 +175,7 @@ def _resolve_inference_autotune_before_load(
         contention_detected=probe.contention_detected,
         thermal_throttled=probe.thermal_throttled,
         should_cancel=should_cancel,
+        status_callback=status_callback,
     )
     preflight = build_tracking_autotune_request(
         config,
@@ -964,11 +966,15 @@ class TrackingEngineCore:
         # === 1. INITIALIZATION (Identical to Original) ===
         gc.collect()
         self._stop_requested = False
+        self._inference_autotune_cancel_requested = False
         p = self.get_current_params()
 
         # Create profiler early so initialization timing is captured.
         # The profiler is configured with metadata later, once all params are known.
-        _profiling_enabled = bool(p.get("ENABLE_PROFILING", False))
+        _profiling_export_enabled = bool(p.get("ENABLE_PROFILING", False))
+        _profiling_enabled = _profiling_export_enabled or str(
+            p.get("INFERENCE_AUTOTUNE_MODE", "off")
+        ).strip().lower() in {"automatic", "record"}
         profiler = TrackingProfiler(enabled=_profiling_enabled)
         profiler.phase_start("initialization")
 
@@ -1327,6 +1333,7 @@ class TrackingEngineCore:
                         self._stop_requested
                         or self._inference_autotune_cancel_requested
                     ),
+                    status_callback=lambda message: self._emit_progress(0, message),
                     cache_dir=self._resolve_cache_dir(),
                     use_cached_detections=self.use_cached_detections,
                 )
@@ -4833,7 +4840,11 @@ class TrackingEngineCore:
         # Use a direction suffix so forward and backward profiles are kept separate.
         _dir_tag = "backward" if self.backward_mode else "forward"
         profile_export_path = self._resolve_profile_path(_dir_tag)
-        if profile_export_path is not None and not stop_requested:
+        if (
+            _profiling_export_enabled
+            and profile_export_path is not None
+            and not stop_requested
+        ):
             profiler.export_summary(profile_export_path)
 
         if (

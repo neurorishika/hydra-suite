@@ -36,6 +36,7 @@ class AutotuneRequest:
     eligibility_reason: str | None = None
     stage_shares: tuple[tuple[str, float], ...] = ()
     should_cancel: Callable[[], bool] = lambda: False
+    status_callback: Callable[[str], None] = lambda _message: None
 
     def __post_init__(self) -> None:
         if self.mode not in {"off", "record", "automatic"}:
@@ -136,6 +137,7 @@ class AutotuneCoordinator:
                     manual_fields=request.manual_fields,
                     stage_shares=dict(request.stage_shares),
                     should_cancel=request.should_cancel,
+                    status_callback=request.status_callback,
                 )
             except Exception as exc:
                 logger.exception("Inference throughput calibration failed safely")
