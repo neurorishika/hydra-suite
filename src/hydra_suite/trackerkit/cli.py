@@ -4,15 +4,28 @@ from __future__ import annotations
 
 import json
 import logging
+import signal
 import tempfile
+import threading
 from pathlib import Path
-from typing import Sequence
+from typing import Callable, Sequence
 
+from hydra_suite.runtime.cuda_devices import parse_gpu_selectors, resolve_gpu_selectors
+from hydra_suite.trackerkit.batch_fanout import (
+    FanoutOptions,
+    FanoutResult,
+    run_batch_fanout,
+)
 from hydra_suite.trackerkit.batch_plan import BatchJobSpec, plan_batch_jobs
 from hydra_suite.trackerkit.cli_config import load_tracker_cli_session
 from hydra_suite.trackerkit.headless_tracking import run_headless_tracking_session
 
 logger = logging.getLogger(__name__)
+
+
+def fanout_requested(gpus: str | None, jobs: int) -> bool:
+    """The gating rule: fan-out iff --gpus was given or --jobs > 1."""
+    return bool(str(gpus or "").strip()) or int(jobs or 1) > 1
 
 
 def run_tracking_cli(
@@ -21,6 +34,10 @@ def run_tracking_cli(
     config_path: str | None = None,
     keystone_override: bool = False,
     sahi_profile: str | None = None,
+    gpus: str | None = None,
+    jobs: int = 1,
+    threads_per_job: int | None = None,
+    log_level: str = "INFO",
 ) -> int:
     """Run one or more TrackerKit sessions from the CLI (direct Qt-free path)."""
 
@@ -42,7 +59,20 @@ def run_tracking_cli(
     )
     if not specs:
         raise ValueError("No videos were resolved for tracking.")
-    return _run_sequential(specs)
+    if not fanout_requested(gpus, jobs):
+        return _run_sequential(specs)
+    devices = resolve_gpu_selectors(parse_gpu_selectors(gpus)) if gpus else []
+    options = FanoutOptions(
+        gpus=devices,
+        jobs=(
+            int(jobs or 1)
+            if not devices
+            else max(1, min(int(jobs or len(devices)), len(devices)))
+        ),
+        threads_per_job=threads_per_job,
+        log_level=log_level,
+    )
+    return _run_fanout(specs, options)
 
 
 def _run_sequential(specs: Sequence[BatchJobSpec]) -> int:
@@ -91,3 +121,100 @@ def _run_sequential(specs: Sequence[BatchJobSpec]) -> int:
                 break
 
     return exit_code
+
+
+class _CliEvents:
+    """Log-only event sink for the terminal."""
+
+    def job_started(self, spec, gpu, log_path) -> None:
+        logger.info(
+            "[job %d] started %s on %s (log: %s)",
+            spec.index,
+            Path(spec.video_path).name,
+            gpu.uuid if gpu else "inherited device",
+            log_path,
+        )
+
+    def job_progress(self, spec, percent, message) -> None:
+        logger.info("[job %d] %3d%% %s", spec.index, percent, message)
+
+    def job_log(self, spec, line) -> None:
+        # Child lines already land in the per-job log file; the terminal only
+        # shows the progress/lifecycle summary.
+        pass
+
+    def job_finished(self, result) -> None:
+        logger.info(
+            "[job %d] %s (%.1fs)",
+            result.spec.index,
+            "OK" if result.success else f"FAIL: {result.error}",
+            result.wall_s,
+        )
+
+
+def _install_stop_flag() -> tuple[Callable[[], bool], Callable[[], None]]:
+    """Turn SIGINT into a cooperative stop flag for the fan-out scheduler."""
+    stop = threading.Event()
+    try:
+        previous = signal.getsignal(signal.SIGINT)
+
+        def _handler(_signum, _frame):
+            logger.warning("SIGINT received - stopping all fan-out children.")
+            stop.set()
+
+        signal.signal(signal.SIGINT, _handler)
+
+        def _restore() -> None:
+            try:
+                signal.signal(signal.SIGINT, previous)
+            except (ValueError, OSError):
+                pass
+
+    except (ValueError, OSError):
+        # Not the main thread (or no signal support): run without a handler.
+        def _restore() -> None:  # noqa: E704
+            return None
+
+    return stop.is_set, _restore
+
+
+def _print_fanout_table(result: FanoutResult) -> None:
+    rows = [("#", "video", "gpu", "status", "wall", "log")]
+    for job in result.jobs:
+        rows.append(
+            (
+                str(job.spec.index),
+                Path(job.spec.video_path).name,
+                (job.gpu.uuid[:12] if job.gpu else "-"),
+                "OK" if job.success else f"FAIL ({job.error})",
+                f"{job.wall_s:.0f}s",
+                str(job.log_path),
+            )
+        )
+    widths = [max(len(r[i]) for r in rows) for i in range(len(rows[0]))]
+    for row in rows:
+        print("  ".join(cell.ljust(widths[i]) for i, cell in enumerate(row)))
+    ok = sum(1 for job in result.jobs if job.success)
+    print(
+        f"\n{ok}/{len(result.jobs)} videos succeeded"
+        + ("  (CANCELLED)" if result.cancelled else "")
+    )
+
+
+def _run_fanout(specs: Sequence[BatchJobSpec], options: FanoutOptions) -> int:
+    """The process-per-slot path: one child per video, N at a time."""
+    should_stop, restore = _install_stop_flag()
+    try:
+        logger.info(
+            "Tracker CLI fan-out: %d videos, %d slot(s)%s",
+            len(specs),
+            len(options.gpus) if options.gpus else options.jobs,
+            f" on GPUs {[g.index for g in options.gpus]}" if options.gpus else "",
+        )
+        result = run_batch_fanout(
+            specs, options, should_stop=should_stop, events=_CliEvents()
+        )
+    finally:
+        restore()
+    _print_fanout_table(result)
+    return 0 if result.success else 1
