@@ -175,3 +175,125 @@ def test_plan_rejects_out_of_band_fractions(bad):
 
     with pytest.raises(TrainingPlanError, match="object_tile_fractions"):
         DetectTrainingPlan.from_dict(_plan_dict(object_tile_fractions=bad)).validate()
+
+
+# ---------------------------------------------------------------------------
+# Task 7 -- per-scale counters, including `non_square_tiles` (R2 + R3b).
+#
+# A partial edge tile is not square, and `datapoints.py:167-168` stretches it
+# anisotropically to RESxRES. Adding scales multiplies the edge-tile
+# population, so a multi-scale dataset carries proportionally MORE distorted
+# supervision than a single-scale one -- and nothing reported it.
+# ---------------------------------------------------------------------------
+
+
+def _rect_corpus(root: Path, width: int, height: int) -> Path:
+    """A corpus whose frames are NOT square, so edge tiles are not square."""
+    import cv2
+    import numpy as np
+
+    images = root / "images"
+    labels = root / "labels"
+    images.mkdir(parents=True)
+    labels.mkdir(parents=True)
+    rng = np.random.default_rng(31415)
+    for index in range(2):
+        frame = rng.integers(0, 255, (height, width, 3), dtype=np.uint8)
+        assert cv2.imwrite(str(images / f"frame{index:02d}.png"), frame)
+        step_x, step_y = 40.0 / width, 40.0 / height
+        lines = []
+        for slot in range(3):
+            cx = 0.2 + 0.3 * slot
+            cy = 0.25 + 0.2 * slot + 0.02 * index
+            poly = [
+                [cx - step_x / 2, cy - step_y / 2],
+                [cx + step_x / 2, cy - step_y / 2],
+                [cx + step_x / 2, cy + step_y / 2],
+                [cx - step_x / 2, cy + step_y / 2],
+            ]
+            lines.append("0 " + " ".join(f"{v:.6f}" for point in poly for v in point))
+        (labels / f"frame{index:02d}.txt").write_text("\n".join(lines) + "\n")
+    (root / "classes.txt").write_text("ant\n")
+    return root
+
+
+def _build_rect(
+    tmp_path: Path,
+    name: str,
+    params: Sam3LoraParams,
+    *,
+    size: tuple[int, int] = (1500, 1100),
+) -> tuple[Path, dict]:
+    out = tmp_path / name
+    summary = build_sam3_coco_dataset(
+        str(_rect_corpus(tmp_path / f"rect_{name}", *size)),
+        str(out),
+        params,
+        seed=42,
+        split=SplitConfig(),
+    )
+    return out, summary
+
+
+def test_non_square_tiles_are_counted_per_scale(tmp_path):
+    """The counter equals what `plan_tiles` says is clipped, at each scale."""
+    params = _params(object_tile_fractions=(0.055, 0.02))
+    out, _summary = _build_rect(tmp_path, "nonsq", params)
+    manifest = json.loads((out / "build_manifest.json").read_text())
+    counts = manifest["scale_counts"]["train"]
+    stems = len(manifest["frame_split"]["train"])
+    assert stems
+
+    expected = {}
+    for width, height in (tuple(pair) for pair in manifest["tile_px_set"]):
+        plan = plan_tiles((1100, 1500), width, height, 0.25, 0.25)
+        clipped = sum(
+            1
+            for tile in plan.tiles
+            for w, h in [(tile[2] - tile[0], tile[3] - tile[1])]
+            if w != h
+        )
+        expected[f"tile:{width}x{height}"] = clipped * stems
+
+    actual = {name: bucket["non_square_tiles"] for name, bucket in counts.items()}
+    assert actual == expected
+    assert any(value > 0 for value in expected.values()), "corpus grew no edge tiles"
+
+
+def test_full_frames_are_counted_as_non_square_when_they_are(tmp_path):
+    out, _summary = _build_rect(
+        tmp_path,
+        "fullnonsq",
+        _params(object_tile_fractions=(0.055,), full_frame_mix=True),
+    )
+    manifest = json.loads((out / "build_manifest.json").read_text())
+    full = manifest["scale_counts"]["train"]["full"]
+    assert full["non_square_tiles"] == full["tiles"] > 0
+
+
+def test_non_square_total_is_reported_on_the_single_scale_path_too(tmp_path):
+    """No scale set, so no per-scale table -- but the total still travels.
+
+    The build manifest is byte-frozen by the Task 1 golden, so this rides on
+    the builder's RETURN summary rather than a new manifest key. The frame is
+    SHORTER than the resolved tile (727px), which is the shape that actually
+    produces a clipped, anisotropically-stretched tile: `plan_tiles` shifts an
+    interior last tile back to full size, so a merely-not-a-multiple frame does
+    NOT (that is a fact about the planner worth pinning here).
+    """
+    out, summary = _build_rect(tmp_path, "single", _params(), size=(1500, 600))
+    assert summary["non_square_tiles"] > 0
+    (square,) = {
+        (record["width"], record["height"])
+        for record in _coco(out)["images"]
+        if record["width"] == record["height"]
+    } or {None}
+    assert square is None, "expected every tile clipped by the short frame"
+
+
+def test_per_scale_table_is_logged_before_any_gpu_time(tmp_path, caplog):
+    with caplog.at_level("INFO"):
+        _build_rect(tmp_path, "logged", _params(object_tile_fractions=(0.055, 0.02)))
+    text = "\n".join(record.getMessage() for record in caplog.records)
+    assert "non_square_tiles" in text
+    assert "tile:" in text

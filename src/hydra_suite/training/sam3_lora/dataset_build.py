@@ -71,6 +71,53 @@ class SplitCounts(NamedTuple):
     fragment_only_tiles: int
 
 
+_SCALE_COUNTER_KEYS = (
+    "tiles",
+    "annotations",
+    "fragment_annotations",
+    "downgraded_tiles",
+    "fragment_only_tiles",
+    "non_square_tiles",
+)
+
+
+def _log_scale_table(
+    per_scale: dict,
+    non_square_totals: dict,
+    totals: dict,
+) -> None:
+    """Print the realised per-scale table before any GPU time is spent.
+
+    Single-scale builds have no per-scale buckets; they still get the split
+    line, so the anisotropic-edge-tile count (R2) and the seam-downgrade count
+    (R3b) are reported on EVERY path rather than only on the opt-in one.
+    """
+
+    for split_name in ("train", "valid"):
+        buckets = per_scale.get(split_name) or {}
+        split_counts = totals.get(split_name)
+        logger.info(
+            "SAM3 dataset build [%s]: tiles=%d annotations=%d "
+            "downgraded_tiles=%d fragment_only_tiles=%d non_square_tiles=%d",
+            split_name,
+            getattr(split_counts, "tiles", 0),
+            getattr(split_counts, "annotations", 0),
+            getattr(split_counts, "downgraded_tiles", 0),
+            getattr(split_counts, "fragment_only_tiles", 0),
+            int(non_square_totals.get(split_name, 0)),
+        )
+        for group in sorted(buckets):
+            bucket = buckets[group]
+            logger.info(
+                "SAM3 dataset build [%s] %s: %s",
+                split_name,
+                group,
+                " ".join(
+                    f"{key}={int(bucket.get(key, 0))}" for key in _SCALE_COUNTER_KEYS
+                ),
+            )
+
+
 # Explicit negative-prompt tiers (see resolve_negative_prompts): curated last
 # resort when the source declares only one class and the caller gave none.
 CURATED_NEGATIVES = ("background", "shadow", "debris")
@@ -624,7 +671,7 @@ def build_sam3_coco_dataset(
 
         def _build_split(
             build_root: Path, split_name: str
-        ) -> tuple[SplitCounts, dict[str, dict[str, int]]]:
+        ) -> tuple[SplitCounts, dict[str, dict[str, int]], int]:
             # Realised counts PER SCALE. Empty on the single-scale path so the
             # default manifest gains no key -- the Task 1 golden hashes
             # `build_manifest.json`, so an unconditional key would break it.
@@ -638,6 +685,12 @@ def build_sam3_coco_dataset(
             crowd_count = 0
             downgraded_tiles = 0
             fragment_only_tiles = 0
+            # R2: a partial edge tile is NOT square, and `datapoints.py`
+            # stretches it anisotropically to RESxRES. Counted on every path
+            # (a single-scale build has edge tiles too); it rides on the
+            # RETURN summary there, because `build_manifest.json` is
+            # byte-frozen by the Task 1 golden.
+            non_square_tiles = 0
             with (
                 images_spool.open("w", encoding="utf-8") as image_records,
                 annotations_spool.open("w", encoding="utf-8") as annotation_records,
@@ -709,6 +762,8 @@ def build_sam3_coco_dataset(
                             separators=(",", ":"),
                         )
                         image_records.write("\n")
+                        is_non_square = int(tile_width) != int(tile_height)
+                        non_square_tiles += int(is_non_square)
                         fragments = sum(1 for _poly, crowd in instances if crowd)
                         if fragments:
                             downgraded_tiles += 1
@@ -723,9 +778,11 @@ def build_sam3_coco_dataset(
                                     "fragment_annotations": 0,
                                     "downgraded_tiles": 0,
                                     "fragment_only_tiles": 0,
+                                    "non_square_tiles": 0,
                                 },
                             )
                             bucket["tiles"] += 1
+                            bucket["non_square_tiles"] += int(is_non_square)
                             bucket["annotations"] += len(instances)
                             bucket["fragment_annotations"] += fragments
                             if fragments:
@@ -773,17 +830,32 @@ def build_sam3_coco_dataset(
                     fragment_only_tiles=fragment_only_tiles,
                 ),
                 per_scale,
+                non_square_tiles,
             )
 
         with atomic_output_directory(out_root) as build_root:
-            train_counts, train_per_scale = _build_split(build_root, "train")
+            train_counts, train_per_scale, train_non_square = _build_split(
+                build_root, "train"
+            )
             if train_count < frame_count:
-                valid_counts, valid_per_scale = _build_split(build_root, "valid")
+                valid_counts, valid_per_scale, valid_non_square = _build_split(
+                    build_root, "valid"
+                )
                 validation = "ok"
             else:
                 valid_counts = SplitCounts(0, 0, 0, 0, 0)
                 valid_per_scale = {}
+                valid_non_square = 0
                 validation = "none"
+            # BEFORE any GPU time is spent: what the fan-out actually cost, per
+            # scale. Anisotropic edge tiles and seam downgrades appear in
+            # neither the loss nor any existing artifact, so if this table is
+            # not printed the cost is invisible until after a training run.
+            _log_scale_table(
+                {"train": train_per_scale, "valid": valid_per_scale},
+                {"train": train_non_square, "valid": valid_non_square},
+                {"train": train_counts, "valid": valid_counts},
+            )
 
             manifest_path = build_root / "build_manifest.json"
             fields = {
@@ -895,6 +967,7 @@ def build_sam3_coco_dataset(
             "fragment_only_tiles": (
                 train_counts.fragment_only_tiles + valid_counts.fragment_only_tiles
             ),
+            "non_square_tiles": int(train_non_square + valid_non_square),
             "min_retained_area_frac": MIN_RETAINED_AREA_FRAC,
             **(
                 {
