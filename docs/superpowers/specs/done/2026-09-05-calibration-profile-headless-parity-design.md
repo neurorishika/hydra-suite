@@ -1,6 +1,6 @@
 # DetectKit calibration profiles: headless parity and sidecar durability
 
-**Status:** Proposed
+**Status:** Shipped — merged to main
 **Date:** 2026-09-05
 **Audit this argues from:** `docs/superpowers/specs/2026-09-05-calibration-profile-headless-parity-audit.md`
 (read-only Fable audit of `main` @ b8c424e7; every claim below carries its file:line there)
