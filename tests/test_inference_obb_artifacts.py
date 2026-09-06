@@ -139,7 +139,7 @@ def test_tensorrt_existing_engine_skips_export(fake_loader, tmp_path):
     # Pre-create the engine artifact + metadata so it is considered fresh.
     engine = ra._artifact_path_for(pt, "tensorrt")
     engine.write_bytes(b"prebuilt")
-    ra._write_fresh_marker(engine, pt, ra._DEFAULT_IMGSZ)
+    ra._write_fresh_marker(engine, pt, ra._DEFAULT_IMGSZ, enforce_trt_profile=True)
 
     adapter = load_obb_executor(str(pt), "tensorrt", auto_export=True)
     assert isinstance(adapter._executor, _FakeExecutor)
@@ -160,6 +160,23 @@ def test_tensorrt_profile_marker_rejects_an_incompatible_batch_fingerprint(
     load_obb_executor(str(pt), "tensorrt", auto_export=True, batch_size=8)
 
     assert fake_loader["export"] == 1
+
+
+def test_non_tensorrt_artifact_freshness_does_not_require_trt_profile_marker(tmp_path):
+    pt = tmp_path / "model.pt"
+    artifact = tmp_path / "model.mlpackage"
+    pt.write_bytes(b"x")
+    artifact.mkdir()
+    ra._write_fresh_marker(artifact, pt, ra._DEFAULT_IMGSZ)
+
+    assert ra._artifact_is_fresh(artifact, pt, ra._DEFAULT_IMGSZ, batch_size=8)
+    assert not ra._artifact_is_fresh(
+        artifact,
+        pt,
+        ra._DEFAULT_IMGSZ,
+        batch_size=8,
+        enforce_trt_profile=True,
+    )
 
 
 def test_tensorrt_no_auto_export_missing_engine_raises_clear_error(
@@ -421,6 +438,7 @@ from hydra_suite.core.inference.config import (  # noqa: E402
     InferenceConfig,
     OBBConfig,
     OBBDirectConfig,
+    OBBSequentialConfig,
     SliceConfig,
 )
 
@@ -514,6 +532,66 @@ def test_sahi_trt_profile_accounts_for_cuda_source_residency_and_budget():
     assert _sliced_tile_batch(ample, (4512, 4512), 1024, device_tiles=True) == 21
     assert _sliced_tile_batch(constrained, (4512, 4512), 1024, device_tiles=False) == 4
     assert _sliced_tile_batch(constrained, (4512, 4512), 1024, device_tiles=True) == 5
+
+
+@pytest.mark.parametrize("persisted_batch", [1, 16])
+def test_sahi_trt_profile_autotune_ignores_persisted_manual_tile_batch(
+    persisted_batch,
+):
+    from hydra_suite.core.inference.runner import _sliced_tile_batch
+
+    cfg = _sahi_profile_config()
+    cfg.obb.direct.slice.tile_batch_size = persisted_batch
+    cfg.obb.direct.slice.tile_batch_autotune = True
+
+    # Runtime autotune starts from MAX_TILE_CHUNK, then applies the same 256 MiB
+    # admission, so the stale/manual value of one cannot undersize the engine.
+    assert _sliced_tile_batch(cfg, (4512, 4512), 1024, device_tiles=False) == 17
+
+
+def test_load_sequential_stage1_sliced_model_uses_its_admitted_tile_chunk(
+    monkeypatch,
+):
+    import hydra_suite.core.inference.runner as runnermod
+    import hydra_suite.core.inference.stages.obb as obbmod
+    from hydra_suite.core.inference.stages.obb import OBBModels
+
+    calls = []
+
+    def _fake_load_yolo(model_path, compute_runtime, **kwargs):
+        calls.append((model_path, kwargs["batch_size"], kwargs.get("task", "obb")))
+        return object()
+
+    monkeypatch.setattr(obbmod, "_load_yolo", _fake_load_yolo)
+    monkeypatch.setattr(runnermod, "_probe_frame_hw", lambda _: (4512, 4512))
+
+    cfg = InferenceConfig(
+        detection_batch_size=7,
+        obb=OBBConfig(
+            mode="sequential",
+            sequential=OBBSequentialConfig(
+                detect_model_path="detect.pt",
+                obb_model_path="obb.pt",
+                detect_image_size=1024,
+                stage1_slice=SliceConfig(
+                    enabled=True, geometry_mode="auto_model", tile_batch_size=128
+                ),
+            ),
+        ),
+    )
+
+    from hydra_suite.core.inference.runtime import RuntimeContext
+
+    runtime = RuntimeContext(
+        cuda_mode=False,
+        device="cpu",
+        use_nvdec=False,
+        tensor_on_cuda=False,
+    )
+    models = runnermod._load_obb_for_config(cfg, runtime, video_path="v.mp4")
+
+    assert isinstance(models, OBBModels)
+    assert calls == [("detect.pt", 17, "detect"), ("obb.pt", 7, "obb")]
 
 
 def test_load_obb_models_unchanged_when_slicing_disabled(monkeypatch):

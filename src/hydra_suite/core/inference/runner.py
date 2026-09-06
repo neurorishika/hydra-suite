@@ -169,11 +169,13 @@ class _CacheSet:
         self.pending_promotion = False
 
 
-def _sliced_tile_batch(
-    config: InferenceConfig,
+def _admitted_sliced_tile_batch(
+    *,
+    slice_cfg: Any,
     frame_hw: tuple[int, int],
     imgsz: int,
-    *,
+    task: str,
+    max_detections: int,
     device_tiles: bool = False,
 ) -> int:
     """Largest resource-admissible tile chunk for a sliced direct OBB run.
@@ -187,10 +189,8 @@ def _sliced_tile_batch(
     ``device_tiles`` describes source residency when it is known: CPU/numpy
     tiles include their contiguous crop allocation, whereas CUDA views do not.
     """
-    from .stages.obb import effective_raw_detection_cap
     from .stages.slicing import MAX_TILE_CHUNK, admitted_tile_chunk_size, plan_slices
 
-    slice_cfg = config.obb.direct.slice
     plan = plan_slices(
         frame_hw,
         slice_cfg,
@@ -203,10 +203,15 @@ def _sliced_tile_batch(
         None,
         ref_object_px=slice_cfg.reference_body_px,
     )
+    # Autotune begins from the same largest legal/admitted chunk as runtime;
+    # a persisted manual value is intentionally ignored in that mode.
     requested = min(
         plan.jobs_per_frame,
-        int(getattr(slice_cfg, "tile_batch_size", MAX_TILE_CHUNK)),
-        MAX_TILE_CHUNK,
+        (
+            MAX_TILE_CHUNK
+            if getattr(slice_cfg, "tile_batch_autotune", False)
+            else int(getattr(slice_cfg, "tile_batch_size", MAX_TILE_CHUNK))
+        ),
     )
     return admitted_tile_chunk_size(
         plan,
@@ -216,8 +221,29 @@ def _sliced_tile_batch(
         byte_budget=int(
             getattr(slice_cfg, "tile_memory_budget_bytes", 256 * 1024 * 1024)
         ),
-        task=config.obb.direct.model_task,
+        task=task,
+        max_detections=max_detections,
+    )
+
+
+def _sliced_tile_batch(
+    config: InferenceConfig,
+    frame_hw: tuple[int, int],
+    imgsz: int,
+    *,
+    device_tiles: bool = False,
+) -> int:
+    """Return the admissible direct-OBB tile chunk used for its TRT profile."""
+    from .stages.obb import effective_raw_detection_cap
+
+    direct = config.obb.direct
+    return _admitted_sliced_tile_batch(
+        slice_cfg=direct.slice,
+        frame_hw=frame_hw,
+        imgsz=imgsz,
+        task=direct.model_task,
         max_detections=effective_raw_detection_cap(config),
+        device_tiles=device_tiles,
     )
 
 
@@ -271,7 +297,11 @@ def _load_obb_for_config(
 
     batch_size = config.detection_batch_size
     direct = config.obb.direct if config.obb is not None else None
+    sequential = config.obb.sequential if config.obb is not None else None
     slice_cfg = getattr(direct, "slice", None) if direct is not None else None
+    stage1_slice_cfg = (
+        getattr(sequential, "stage1_slice", None) if sequential is not None else None
+    )
     if slice_cfg is not None and slice_cfg.enabled:
         frame_hw = _probe_frame_hw(video_path)
         imgsz = _probe_model_imgsz(direct.model_path)
@@ -298,6 +328,41 @@ def _load_obb_for_config(
                 imgsz,
                 batch_size,
             )
+        return load_obb_models(config.obb, runtime, batch_size=batch_size)
+
+    if stage1_slice_cfg is not None and stage1_slice_cfg.enabled:
+        frame_hw = _probe_frame_hw(video_path)
+        imgsz = (
+            int(sequential.detect_image_size)
+            if sequential.detect_image_size > 0
+            else _probe_model_imgsz(sequential.detect_model_path)
+        )
+        if frame_hw is not None and imgsz:
+            from .stages.obb import effective_raw_detection_cap
+
+            stage1_batch_size = _admitted_sliced_tile_batch(
+                slice_cfg=stage1_slice_cfg,
+                frame_hw=frame_hw,
+                imgsz=imgsz,
+                task="detect",
+                max_detections=effective_raw_detection_cap(config),
+                device_tiles=bool(getattr(runtime, "tensor_on_cuda", False)),
+            )
+            return load_obb_models(
+                config.obb,
+                runtime,
+                batch_size=batch_size,
+                stage1_batch_size=stage1_batch_size,
+            )
+        logger.warning(
+            "Sliced sequential stage-1 enabled but frame size (%s) and/or "
+            "detect imgsz (%s) could not be probed at load time; falling back "
+            "to detection_batch_size=%d for its TensorRT engine profile.",
+            frame_hw,
+            imgsz,
+            batch_size,
+        )
+
     return load_obb_models(config.obb, runtime, batch_size=batch_size)
 
 

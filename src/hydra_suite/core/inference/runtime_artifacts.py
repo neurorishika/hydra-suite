@@ -345,6 +345,7 @@ def _write_fresh_marker(
     imgsz: int,
     *,
     batch_size: int = _DEFAULT_BATCH_SIZE,
+    enforce_trt_profile: bool = False,
 ) -> None:
     """Write a freshness marker recording the source ``.pt`` mtime + build imgsz.
 
@@ -359,16 +360,10 @@ def _write_fresh_marker(
         source_mtime_ns = source_pt.stat().st_mtime_ns
     except Exception:
         source_mtime_ns = 0
-    _meta_path(artifact_path).write_text(
-        json.dumps(
-            {
-                "source_mtime_ns": source_mtime_ns,
-                "imgsz": int(imgsz),
-                "trt_profile_fingerprint": _trt_profile_fingerprint(batch_size),
-            }
-        ),
-        encoding="utf-8",
-    )
+    marker = {"source_mtime_ns": source_mtime_ns, "imgsz": int(imgsz)}
+    if enforce_trt_profile:
+        marker["trt_profile_fingerprint"] = _trt_profile_fingerprint(batch_size)
+    _meta_path(artifact_path).write_text(json.dumps(marker), encoding="utf-8")
 
 
 def _artifact_is_fresh(
@@ -377,6 +372,7 @@ def _artifact_is_fresh(
     imgsz: int,
     *,
     batch_size: int = _DEFAULT_BATCH_SIZE,
+    enforce_trt_profile: bool = False,
 ) -> bool:
     """Return True when ``artifact_path`` exists and is newer than its source.
 
@@ -402,9 +398,11 @@ def _artifact_is_fresh(
         return False
     if recorded != current:
         return False
-    # Older markers (pre-imgsz/profile tracking) omit either field -- treat as
-    # stale so an engine sized before tile-chunk admission cannot be reused.
-    return int(data.get("imgsz", -1)) == int(imgsz) and data.get(
+    if int(data.get("imgsz", -1)) != int(imgsz):
+        return False
+    # Dynamic profiles are meaningful only for TensorRT.  Do not invalidate
+    # CoreML/non-TRT artifacts merely because they predate this TRT marker.
+    return not enforce_trt_profile or data.get(
         "trt_profile_fingerprint"
     ) == _trt_profile_fingerprint(batch_size)
 
@@ -719,7 +717,13 @@ def _load_direct_executor(
         else _resolve_imgsz(resolved)
     )
 
-    if _artifact_is_fresh(artifact_path, resolved, imgsz, batch_size=batch_size):
+    if _artifact_is_fresh(
+        artifact_path,
+        resolved,
+        imgsz,
+        batch_size=batch_size,
+        enforce_trt_profile=True,
+    ):
         logger.info("Reusing cached %s OBB artifact: %s", runtime, artifact_path.name)
     else:
         if not auto_export:
@@ -738,7 +742,13 @@ def _load_direct_executor(
             imgsz=imgsz,
             batch_size=batch_size,
         )
-        _write_fresh_marker(artifact_path, resolved, imgsz, batch_size=batch_size)
+        _write_fresh_marker(
+            artifact_path,
+            resolved,
+            imgsz,
+            batch_size=batch_size,
+            enforce_trt_profile=True,
+        )
         logger.info("Exported %s OBB artifact: %s", runtime, artifact_path)
 
     class_names = _model_class_names(resolved)
