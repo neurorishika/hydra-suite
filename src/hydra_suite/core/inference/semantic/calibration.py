@@ -27,7 +27,7 @@ from __future__ import annotations
 import time
 from dataclasses import dataclass
 from pathlib import Path
-from typing import Callable, Sequence
+from typing import TYPE_CHECKING, Callable, Sequence
 
 import cv2
 import numpy as np
@@ -51,7 +51,15 @@ from hydra_suite.core.inference.match_geometry import (  # noqa: F401
     match_one_to_one,
     representative_point,
 )
-from hydra_suite.data.al.escalation import LabelRecord
+
+if TYPE_CHECKING:  # pragma: no cover - typing only
+    # NOT a runtime import: ``hydra_suite.data.al`` reaches
+    # ``filterkit.core`` through a documented layer carve-out, which
+    # imports sklearn. The slim ``sam3-lora`` sidecar has no sklearn, so a
+    # runtime import here killed a SAM3 training run at epoch 0 the moment
+    # per-epoch AP validation touched this module. LabelRecord is only ever
+    # a type annotation below.
+    from hydra_suite.data.al.escalation import LabelRecord
 
 from .base import SemanticLabeler
 from .shape_prior import fit_area_band, match_quality, polygon_area
