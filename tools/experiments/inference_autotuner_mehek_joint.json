@@ -47,7 +47,7 @@
       "video_path": "../equivalence/fixtures/clips/ant_pose_headtail.mp4",
       "skeleton_path": "../equivalence/fixtures/ooceraea_biroi.json",
       "runtime": "gpu",
-      "config": {"detection_batch_size": 4, "pipeline_depth": 1, "pose_batch_size": 4, "headtail_batch_size": 4}
+      "config": {"detection_batch_size": 1, "pipeline_depth": 1, "pose_batch_size": 4, "headtail_batch_size": 4}
     },
     {
       "label": "ant-identity-manual-baseline",
