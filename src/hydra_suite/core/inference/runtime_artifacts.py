@@ -50,11 +50,13 @@ import logging
 import os
 import shutil
 import tempfile
+import time
+from contextlib import contextmanager
+from dataclasses import dataclass
 from hashlib import sha256
 from pathlib import Path
-from typing import Any
+from typing import Any, Callable, Iterator
 
-from hydra_suite.runtime.artifact_lock import artifact_build_lock
 
 logger = logging.getLogger(__name__)
 
@@ -76,6 +78,302 @@ class ArtifactExportError(RuntimeError):
     missing and ``auto_export=False``, we raise this instead of quietly running
     PyTorch.
     """
+
+
+def _sha256_file(path: Path) -> str:
+    """Return a content digest for an immutable runtime-artifact source."""
+    digest = sha256()
+    with Path(path).open("rb") as handle:
+        while chunk := handle.read(1024 * 1024):
+            digest.update(chunk)
+    return digest.hexdigest()
+
+
+def _canonical_json(value: object) -> str:
+    return json.dumps(value, sort_keys=True, separators=(",", ":"), default=str)
+
+
+def runtime_artifact_runtime_fingerprint(runtime: str) -> dict[str, str]:
+    """Return the runtime/toolchain identity that makes an engine reusable.
+
+    This deliberately excludes performance-search policy versions.  Engine
+    artifacts have an independent lifecycle from throughput profiles, but a
+    TensorRT/CoreML ABI or precision change must never reuse an old binary.
+    Optional packages are represented by a stable ``"unavailable"`` value.
+    """
+    import platform
+    import sys
+    from importlib import metadata
+
+    versions: dict[str, str] = {
+        "runtime": str(runtime),
+        "python_abi": getattr(sys.implementation, "cache_tag", "unknown"),
+        "platform": f"{platform.system()}-{platform.machine()}",
+    }
+    for package in ("torch", "tensorrt", "ultralytics", "coremltools"):
+        try:
+            versions[package] = metadata.version(package)
+        except metadata.PackageNotFoundError:
+            versions[package] = "unavailable"
+    try:
+        import torch
+
+        versions["cuda"] = str(torch.version.cuda or "none")
+        versions["cudnn"] = str(torch.backends.cudnn.version() or "none")
+        if runtime == "tensorrt" and torch.cuda.is_available():
+            properties = torch.cuda.get_device_properties(0)
+            versions["accelerator"] = (
+                f"{properties.name}|cc={properties.major}.{properties.minor}|"
+                f"vram={properties.total_memory}"
+            )
+        else:
+            versions["accelerator"] = "not-applicable"
+    except Exception:
+        versions["cuda"] = "unavailable"
+        versions["cudnn"] = "unavailable"
+    return versions
+
+
+@dataclass(frozen=True)
+class RuntimeArtifactIdentity:
+    """Exact immutable identity for one TensorRT or CoreML artifact.
+
+    The identity is intentionally narrower than a throughput profile and has
+    no video path, workload bucket, or tuning-policy revision.  It contains
+    every property that can alter compiled runtime behavior instead.
+    """
+
+    source_digest: str
+    runtime: str
+    runtime_fingerprint: str
+    imgsz: int
+    task: str
+    precision: str
+    profile: tuple[tuple[str, object], ...]
+
+    @classmethod
+    def from_source(
+        cls,
+        *,
+        source_path: Path,
+        runtime: str,
+        runtime_fingerprint: str | dict[str, str],
+        imgsz: int,
+        task: str,
+        precision: str,
+        profile: dict[str, object],
+    ) -> "RuntimeArtifactIdentity":
+        return cls(
+            source_digest=_sha256_file(Path(source_path)),
+            runtime=str(runtime),
+            runtime_fingerprint=(
+                runtime_fingerprint
+                if isinstance(runtime_fingerprint, str)
+                else _canonical_json(runtime_fingerprint)
+            ),
+            imgsz=int(imgsz),
+            task=str(task),
+            precision=str(precision),
+            profile=tuple(sorted((str(key), value) for key, value in profile.items())),
+        )
+
+    def as_dict(self) -> dict[str, object]:
+        return {
+            "schema": "runtime-artifact-v1",
+            "source_digest": self.source_digest,
+            "runtime": self.runtime,
+            "runtime_fingerprint": self.runtime_fingerprint,
+            "imgsz": self.imgsz,
+            "task": self.task,
+            "precision": self.precision,
+            "profile": dict(self.profile),
+        }
+
+    @property
+    def digest(self) -> str:
+        return sha256(_canonical_json(self.as_dict()).encode("utf-8")).hexdigest()
+
+
+@dataclass(frozen=True)
+class RuntimeArtifactBuild:
+    """The outcome of a serialized immutable runtime-artifact preparation."""
+
+    identity: RuntimeArtifactIdentity
+    path: Path
+    built: bool
+    prepare_seconds: float
+
+
+ArtifactBuilder = Callable[[Path, Path], None]
+
+
+class RuntimeArtifactStore:
+    """Process-safe store for immutable TensorRT/CoreML build artifacts.
+
+    Each identity gets a directory of its own, so the payload and freshness
+    sidecar are promoted together.  Build callbacks receive a private copied
+    source checkpoint and output path; this prevents Ultralytics' generic
+    intermediate names from colliding across candidate/profile builds.
+    """
+
+    def __init__(self, root: Path) -> None:
+        self.root = Path(root).expanduser().resolve()
+        self._tmp_root = self.root / ".tmp"
+        self._lock_root = self.root / ".locks"
+
+    def path_for(self, identity: RuntimeArtifactIdentity) -> Path:
+        return self.root / identity.runtime / identity.digest
+
+    def artifact_path_for(self, identity: RuntimeArtifactIdentity) -> Path:
+        return self.path_for(identity) / f"artifact{_artifact_suffix(identity.runtime)}"
+
+    def is_ready(self, identity: RuntimeArtifactIdentity) -> bool:
+        artifact_path = self.artifact_path_for(identity)
+        marker = _meta_path(artifact_path)
+        if not artifact_path.exists() or not marker.is_file():
+            return False
+        try:
+            metadata = json.loads(marker.read_text(encoding="utf-8"))
+        except (OSError, json.JSONDecodeError, TypeError):
+            return False
+        return metadata.get("runtime_artifact_id") == identity.digest
+
+    def ensure(
+        self,
+        identity: RuntimeArtifactIdentity,
+        build: ArtifactBuilder,
+        *,
+        source_path: Path | None = None,
+    ) -> RuntimeArtifactBuild:
+        """Return a ready artifact, building it once under an OS file lock."""
+        started = time.perf_counter()
+        source = Path(source_path) if source_path is not None else None
+        if source is not None and not source.is_file():
+            raise ArtifactExportError(
+                f"runtime-artifact source does not exist: {source}"
+            )
+        self._lock_root.mkdir(parents=True, exist_ok=True)
+        self._tmp_root.mkdir(parents=True, exist_ok=True)
+        lock_path = self._lock_root / f"{identity.digest}.lock"
+        with _exclusive_artifact_lock(lock_path):
+            if self.is_ready(identity):
+                return RuntimeArtifactBuild(
+                    identity,
+                    self.artifact_path_for(identity),
+                    False,
+                    time.perf_counter() - started,
+                )
+            if source is None:
+                raise ArtifactExportError(
+                    "building a new artifact requires its source path"
+                )
+            return self._build_locked(identity, source, build, started)
+
+    def import_legacy(
+        self,
+        identity: RuntimeArtifactIdentity,
+        legacy_path: Path,
+        *,
+        source_path: Path,
+    ) -> RuntimeArtifactBuild | None:
+        """Atomically migrate a verified old sidecar artifact into this store."""
+        legacy_path = Path(legacy_path)
+        if not legacy_path.exists():
+            return None
+
+        def copy_legacy(_private_source: Path, output: Path) -> None:
+            if legacy_path.is_dir():
+                shutil.copytree(legacy_path, output)
+            else:
+                shutil.copy2(legacy_path, output)
+
+        return self.ensure(identity, copy_legacy, source_path=source_path)
+
+    def _build_locked(
+        self,
+        identity: RuntimeArtifactIdentity,
+        source: Path,
+        build: ArtifactBuilder,
+        started: float,
+    ) -> RuntimeArtifactBuild:
+        stage = Path(
+            tempfile.mkdtemp(prefix=f"{identity.digest[:12]}-", dir=self._tmp_root)
+        )
+        os.chmod(stage, 0o700)
+        try:
+            private_source = stage / source.name
+            shutil.copy2(source, private_source)
+            artifact_path = stage / f"artifact{_artifact_suffix(identity.runtime)}"
+            build(private_source, artifact_path)
+            if not artifact_path.exists():
+                raise ArtifactExportError(
+                    f"runtime-artifact builder produced no payload for {identity.digest}"
+                )
+            _write_fresh_marker(
+                artifact_path,
+                source,
+                identity.imgsz,
+                batch_size=int(dict(identity.profile).get("opt_batch", 1)),
+                enforce_trt_profile=identity.runtime == "tensorrt",
+                runtime_artifact_id=identity.digest,
+                runtime_artifact_identity=identity.as_dict(),
+            )
+            _fsync_artifact_tree(stage)
+            destination = self.path_for(identity)
+            destination.parent.mkdir(parents=True, exist_ok=True)
+            if destination.exists():
+                # A pre-marker crash cannot be a ready immutable artifact.  The
+                # per-key lock makes this bounded cleanup safe and local.
+                shutil.rmtree(destination)
+            os.replace(stage, destination)
+            _fsync_directory(destination.parent)
+            return RuntimeArtifactBuild(
+                identity,
+                self.artifact_path_for(identity),
+                True,
+                time.perf_counter() - started,
+            )
+        except BaseException:
+            shutil.rmtree(stage, ignore_errors=True)
+            raise
+
+
+@contextmanager
+def _exclusive_artifact_lock(path: Path) -> Iterator[None]:
+    """Acquire a blocking OS-backed lock for one artifact identity."""
+    path.parent.mkdir(parents=True, exist_ok=True)
+    with path.open("a+b") as handle:
+        try:
+            import fcntl
+
+            fcntl.flock(handle.fileno(), fcntl.LOCK_EX)
+        except ImportError:  # pragma: no cover - Windows is not a TRT host
+            raise RuntimeError("runtime artifact locking requires an OS file lock")
+        try:
+            yield
+        finally:
+            fcntl.flock(handle.fileno(), fcntl.LOCK_UN)
+
+
+def _fsync_directory(path: Path) -> None:
+    try:
+        descriptor = os.open(path, os.O_RDONLY)
+    except OSError:
+        return
+    try:
+        os.fsync(descriptor)
+    except OSError:
+        pass
+    finally:
+        os.close(descriptor)
+
+
+def _fsync_artifact_tree(root: Path) -> None:
+    for candidate in root.rglob("*"):
+        if candidate.is_file():
+            with candidate.open("rb") as handle:
+                os.fsync(handle.fileno())
+    _fsync_directory(root)
 
 
 # ---------------------------------------------------------------------------
@@ -441,6 +739,113 @@ def _trt_profile_fingerprint(batch_size: int) -> str:
     return sha256(json.dumps(profile, sort_keys=True).encode("utf-8")).hexdigest()
 
 
+def _trt_profile_identity(batch_size: int) -> dict[str, object]:
+    """Return the explicit TensorRT optimization-profile identity."""
+    return {
+        "schema": "sahi-tile-profile-v2",
+        "min_batch": 1,
+        "opt_batch": max(1, int(batch_size)),
+        "max_batch": max(1, int(batch_size)),
+    }
+
+
+def _runtime_artifact_store_for(source_path: Path) -> RuntimeArtifactStore:
+    """Locate the user-writable engine cache without using model directories.
+
+    A read-only/shared model registry is a normal deployment.  The fallback is
+    deliberately local only for constrained environments where the configured
+    data directory itself cannot be created (for example a sandboxed test).
+    """
+    try:
+        from hydra_suite.paths import get_data_dir
+
+        root = get_data_dir() / "runtime-artifacts"
+        root.mkdir(parents=True, exist_ok=True)
+    except OSError:
+        root = source_path.parent / ".hydra-runtime-artifacts"
+        root.mkdir(parents=True, exist_ok=True)
+    return RuntimeArtifactStore(root)
+
+
+def _runtime_artifact_identity(
+    source_path: Path,
+    runtime: str,
+    *,
+    imgsz: int,
+    batch_size: int,
+    task: str,
+) -> RuntimeArtifactIdentity:
+    profile = (
+        _trt_profile_identity(batch_size)
+        if runtime == "tensorrt"
+        else {"schema": "coreml-static-v1", "batch": 1}
+    )
+    return RuntimeArtifactIdentity.from_source(
+        source_path=source_path,
+        runtime=runtime,
+        runtime_fingerprint=runtime_artifact_runtime_fingerprint(runtime),
+        imgsz=imgsz,
+        task=task,
+        precision="fp16" if runtime == "tensorrt" else "fp32",
+        profile=profile,
+    )
+
+
+def _prepare_runtime_artifact(
+    *,
+    source_path: Path,
+    runtime: str,
+    imgsz: int,
+    batch_size: int,
+    task: str,
+    auto_export: bool,
+) -> RuntimeArtifactBuild:
+    """Find or safely prepare the exact runtime artifact for one source model."""
+    identity = _runtime_artifact_identity(
+        source_path,
+        runtime,
+        imgsz=imgsz,
+        batch_size=batch_size,
+        task=task,
+    )
+    store = _runtime_artifact_store_for(source_path)
+    if store.is_ready(identity):
+        return RuntimeArtifactBuild(
+            identity, store.artifact_path_for(identity), False, 0.0
+        )
+
+    # Old adjacent artifacts remain a read-only compatibility input.  Once
+    # imported they are no longer touched, and the new record gains the exact
+    # runtime/profile identity missing from legacy sidecars.
+    legacy_path = _artifact_path_for(source_path, runtime, batch_size=batch_size)
+    if _artifact_is_fresh(
+        legacy_path,
+        source_path,
+        imgsz,
+        batch_size=batch_size,
+        enforce_trt_profile=runtime == "tensorrt",
+    ):
+        migrated = store.import_legacy(identity, legacy_path, source_path=source_path)
+        if migrated is not None:
+            return migrated
+    if not auto_export:
+        raise ArtifactExportError(
+            f"compute runtime {runtime!r} requested but no compatible immutable "
+            f"runtime artifact exists for {source_path.name} and auto_export=False."
+        )
+
+    def build(private_source: Path, output: Path) -> None:
+        _export_artifact(
+            pt_path=private_source,
+            artifact_path=output,
+            runtime=runtime,
+            imgsz=imgsz,
+            batch_size=batch_size,
+        )
+
+    return store.ensure(identity, build, source_path=source_path)
+
+
 def _write_fresh_marker(
     artifact_path: Path,
     source_pt: Path,
@@ -448,6 +853,8 @@ def _write_fresh_marker(
     *,
     batch_size: int = _DEFAULT_BATCH_SIZE,
     enforce_trt_profile: bool = False,
+    runtime_artifact_id: str | None = None,
+    runtime_artifact_identity: dict[str, object] | None = None,
 ) -> None:
     """Write a freshness marker recording the source ``.pt`` mtime + build imgsz.
 
@@ -465,7 +872,15 @@ def _write_fresh_marker(
     marker = {"source_mtime_ns": source_mtime_ns, "imgsz": int(imgsz)}
     if enforce_trt_profile:
         marker["trt_profile_fingerprint"] = _trt_profile_fingerprint(batch_size)
-    _meta_path(artifact_path).write_text(json.dumps(marker), encoding="utf-8")
+    if runtime_artifact_id is not None:
+        marker["runtime_artifact_id"] = str(runtime_artifact_id)
+    if runtime_artifact_identity is not None:
+        marker["runtime_artifact_identity"] = runtime_artifact_identity
+    marker_path = _meta_path(artifact_path)
+    with marker_path.open("w", encoding="utf-8") as handle:
+        json.dump(marker, handle, sort_keys=True)
+        handle.flush()
+        os.fsync(handle.fileno())
 
 
 def _artifact_is_fresh(
@@ -475,6 +890,7 @@ def _artifact_is_fresh(
     *,
     batch_size: int = _DEFAULT_BATCH_SIZE,
     enforce_trt_profile: bool = False,
+    runtime_artifact_id: str | None = None,
 ) -> bool:
     """Return True when ``artifact_path`` exists and is newer than its source.
 
@@ -501,6 +917,11 @@ def _artifact_is_fresh(
     if recorded != current:
         return False
     if int(data.get("imgsz", -1)) != int(imgsz):
+        return False
+    if (
+        runtime_artifact_id is not None
+        and data.get("runtime_artifact_id") != runtime_artifact_id
+    ):
         return False
     # Dynamic profiles are meaningful only for TensorRT.  Do not invalidate
     # CoreML/non-TRT artifacts merely because they predate this TRT marker.
@@ -645,7 +1066,10 @@ def load_obb_executor(
 
     if runtime in _COREML_RUNTIMES:
         return _load_coreml_executor(
-            model_path, auto_export=auto_export, imgsz_override=imgsz_override
+            model_path,
+            auto_export=auto_export,
+            imgsz_override=imgsz_override,
+            task=task,
         )
 
     raise ArtifactExportError(f"Unsupported compute_runtime: {compute_runtime!r}")
@@ -701,7 +1125,11 @@ class _CoreMLBatchExecutor:
 
 
 def _load_coreml_executor(
-    model_path: str, *, auto_export: bool, imgsz_override: int | None = None
+    model_path: str,
+    *,
+    auto_export: bool,
+    imgsz_override: int | None = None,
+    task: str = "obb",
 ) -> Any:
     """Load (or auto-export) a CoreML ``.mlpackage`` and return a YOLO model.
 
@@ -726,46 +1154,27 @@ def _load_coreml_executor(
             )
         return _CoreMLBatchExecutor(_load_torch_model(str(resolved)))
 
-    artifact_path = _artifact_path_for(resolved, "coreml")
     imgsz = (
         int(imgsz_override)
         if imgsz_override and imgsz_override > 0
         else _resolve_imgsz(resolved)
     )
-
-    def _fresh() -> bool:
-        return _artifact_is_fresh(artifact_path, resolved, imgsz)
-
-    if _fresh():
-        logger.info("Reusing cached CoreML artifact: %s", artifact_path.name)
-    else:
-        if not auto_export:
-            raise ArtifactExportError(
-                "compute_runtime='coreml' requested but no fresh .mlpackage exists "
-                f"for {resolved.name} and auto_export=False. "
-                "Provide a prebuilt .mlpackage or enable auto_export."
-            )
-        # Same contract as ``_load_direct_executor``: concurrent fan-out
-        # children on an Apple host (the gpu_fast tier resolves every non-bgsub
-        # stage to CoreML there) all miss the cache at once. Serialize the
-        # build and re-check after the wait (double-checked locking), so the
-        # second child reuses the first's artifact instead of racing it.
-        with artifact_build_lock(artifact_path):
-            if _fresh():
-                logger.info(
-                    "Reusing CoreML artifact built by another process: %s",
-                    artifact_path.name,
-                )
-            else:
-                _export_artifact(
-                    pt_path=resolved,
-                    artifact_path=artifact_path,
-                    runtime="coreml",
-                    imgsz=imgsz,
-                    batch_size=_DEFAULT_BATCH_SIZE,
-                )
-                _write_fresh_marker(artifact_path, resolved, imgsz)
-                logger.info("Exported CoreML artifact: %s", artifact_path)
+    prepared = _prepare_runtime_artifact(
+        source_path=resolved,
+        runtime="coreml",
+        imgsz=imgsz,
+        batch_size=_DEFAULT_BATCH_SIZE,
+        task=task,
+        auto_export=auto_export,
+    )
+    artifact_path = prepared.path
+    logger.info(
+        "%s CoreML artifact %s (%s, prepare %.3fs)",
+        "Built" if prepared.built else "Reusing",
+        prepared.identity.digest[:12],
+        artifact_path.name,
+        prepared.prepare_seconds,
+    )
 
     return _CoreMLBatchExecutor(_load_torch_model(str(artifact_path)))
 
@@ -827,59 +1236,28 @@ def _load_direct_executor(
         return DirectExecutorAdapter(executor, max_det=max_det)
 
     # 2) Source .pt path: locate (or build) the derived artifact.
-    artifact_path = _artifact_path_for(resolved, runtime, batch_size=batch_size)
     imgsz = (
         int(imgsz_override)
         if imgsz_override and imgsz_override > 0
         else _resolve_imgsz(resolved)
     )
-
-    def _fresh() -> bool:
-        return _artifact_is_fresh(
-            artifact_path,
-            resolved,
-            imgsz,
-            batch_size=batch_size,
-            enforce_trt_profile=True,
-        )
-
-    if _fresh():
-        logger.info("Reusing cached %s OBB artifact: %s", runtime, artifact_path.name)
-    else:
-        if not auto_export:
-            raise ArtifactExportError(
-                f"compute_runtime={compute_runtime!r} requested but no fresh "
-                f"{_artifact_suffix(runtime)} artifact exists for {resolved.name} "
-                f"and auto_export=False. Provide a prebuilt "
-                f"{_artifact_suffix(runtime)} (point model_path at it) or enable "
-                f"auto_export (CUDA box) — refusing to silently fall back to "
-                f"PyTorch (H4)."
-            )
-        # Concurrent fan-out children may all miss the cache at once;
-        # serialize the build and re-check after the wait (double-checked).
-        with artifact_build_lock(artifact_path):
-            if _fresh():
-                logger.info(
-                    "Reusing %s OBB artifact built by another process: %s",
-                    runtime,
-                    artifact_path.name,
-                )
-            else:
-                _export_artifact(
-                    pt_path=resolved,
-                    artifact_path=artifact_path,
-                    runtime=runtime,
-                    imgsz=imgsz,
-                    batch_size=batch_size,
-                )
-                _write_fresh_marker(
-                    artifact_path,
-                    resolved,
-                    imgsz,
-                    batch_size=batch_size,
-                    enforce_trt_profile=True,
-                )
-                logger.info("Exported %s OBB artifact: %s", runtime, artifact_path)
+    prepared = _prepare_runtime_artifact(
+        source_path=resolved,
+        runtime=runtime,
+        imgsz=imgsz,
+        batch_size=batch_size,
+        task=task,
+        auto_export=auto_export,
+    )
+    artifact_path = prepared.path
+    logger.info(
+        "%s %s artifact %s (%s, prepare %.3fs)",
+        "Built" if prepared.built else "Reusing",
+        runtime,
+        prepared.identity.digest[:12],
+        artifact_path.name,
+        prepared.prepare_seconds,
+    )
 
     class_names = _model_class_names(resolved)
     executor = _create_direct_executor(
