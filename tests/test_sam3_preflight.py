@@ -1348,6 +1348,45 @@ def test_no_records_leaves_the_analytic_estimate_in_charge(tmp_path, monkeypatch
     )
 
 
+def test_the_measured_headroom_gate_reads_the_requirement_not_the_budget_peak(
+    tmp_path, monkeypatch
+):
+    """The 0.80 measured headroom must gate the MEASURED requirement.
+
+    `budget.accelerator_peak_bytes` is a max over phases and the `model_load`
+    phase carries the analytic 8 GiB `_DEVICE_STEADY_BYTES` floor, which a
+    measurement can legitimately sit below. Gating on the budget peak would
+    apply the measured fraction to an analytic constant and then report that
+    constant as "the measured device requirement".
+
+    Here the measurement is 6 GiB and free is 9.5 GiB: 0.80 x 9.5 = 7.6 GiB,
+    which clears the 6 GiB requirement but NOT the 8 GiB model-load floor,
+    while the policy's own 0.85 x 9.5 = 8.075 GiB does clear that floor. The
+    run must be admitted.
+    """
+
+    _write_coco(tmp_path)
+    _install_records(monkeypatch, _records({1: 6 * pf.GiB}))
+
+    host = ResourceObservation(
+        total_host_bytes=64 * pf.GiB,
+        available_host_bytes=56 * pf.GiB,
+        accelerator_kind=AcceleratorKind.CUDA,
+        accelerator_name="Test CUDA",
+        total_accelerator_bytes=48 * pf.GiB,
+        available_accelerator_bytes=int(9.5 * pf.GiB),
+    )
+    decision = _decision(_spec(tmp_path, batch=1), host=host)
+
+    assert decision.device_peak_provenance == "measured"
+    assert _training_phase(decision).accelerator_peak_bytes == 6 * pf.GiB
+    assert decision.budget.accelerator_peak_bytes == 8 * pf.GiB
+    assert not [
+        refusal for refusal in decision.refusals if "measured device" in refusal
+    ], decision.refusals
+    assert decision.admitted, decision.refusals
+
+
 def test_a_default_allocator_record_cannot_decide_for_an_expandable_run(
     tmp_path, monkeypatch
 ):

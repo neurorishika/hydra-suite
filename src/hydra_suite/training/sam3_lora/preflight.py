@@ -1337,6 +1337,7 @@ def assess_preflight(
         measured_device_bytes = 0
         measured_extrapolated = False
         device_peak_decided_by_measurement = False
+        device_peak_requirement_bytes = 0
     else:
         analytic_device_bytes = analytic_device_peak_bytes(params, dataset)
         requirement = device_requirement_bytes(
@@ -1348,6 +1349,7 @@ def assess_preflight(
         measured_device_bytes = requirement.measured_bytes
         measured_extrapolated = requirement.measured_extrapolated
         device_peak_decided_by_measurement = requirement.decided_by_measurement
+        device_peak_requirement_bytes = requirement.bytes
     device_peak_fingerprint = (
         profile_fingerprint_key(measured_records[0].identity)
         if measured_records
@@ -1384,15 +1386,26 @@ def assess_preflight(
         # provenance STRING: under `max_extrapolated` the measured side can
         # still win, and that number needs the same headroom it would have
         # needed under `measured`.
+        # Gated on the REQUIREMENT, not on `budget.accelerator_peak_bytes`.
+        # The budget peak is a max over phases and the `model_load` phase
+        # carries its own analytic `_DEVICE_STEADY_BYTES` floor, which a
+        # measurement can legitimately sit below (a real run reserved
+        # ~6.9 GiB). Gating on the budget peak would apply this 0.80 fraction
+        # to an analytic constant and then print it as "the measured device
+        # requirement", which is simply false. That floor stays in the budget
+        # -- `run_probe_measurement` calls `reset_peak_memory_stats` AFTER
+        # `_build_model_and_loss`, so the model-load transient is genuinely
+        # unmeasured and the analytic floor is the only number covering it --
+        # but it is the policy's own 0.85 admission that gates it, not this.
         free_device_bytes = observation.available_accelerator_bytes
         if (
             free_device_bytes is not None
             and free_device_bytes * MEASURED_SAFETY_FRACTION
-            < budget.accelerator_peak_bytes
+            < device_peak_requirement_bytes
         ):
             refusals.append(
                 "The measured device requirement for this workload is "
-                f"{budget.accelerator_peak_bytes / GiB:.1f} GiB"
+                f"{device_peak_requirement_bytes / GiB:.1f} GiB"
                 f"{' (extrapolated past the last measured batch)' if measured_extrapolated else ''}"
                 ", but only "
                 f"{free_device_bytes / GiB:.1f} GiB is free on the selected "

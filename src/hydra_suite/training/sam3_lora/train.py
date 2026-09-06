@@ -617,7 +617,8 @@ def _resolve_measured_batch(
     log_cb(
         f"auto batch: {resolved} (requirement {requirement.bytes / GiB:.1f} GiB "
         f"[{requirement.provenance}"
-        + (", extrapolated" if requirement.measured_extrapolated else "")
+        # No ", extrapolated" suffix: `max_extrapolated` already says it, and
+        # the flag can only be true in that case.
         + f"] of {free_bytes / GiB:.1f} GiB free; {requirement_basis} envelope "
         + f"{selected_envelope / GiB:.1f} GiB at batch {resolved}; "
         f"provenance={provenance}, ladder={terminated_by})"
