@@ -1464,3 +1464,214 @@ def test_measurement_stamps_the_rule_that_produced_it(results_dialog):
 
     measurement = results_dialog.measurement_for_row(0)
     assert measurement["recommendation_rule_id"] == RECOMMENDATION_RULE_ID
+
+
+# ---------------------------------------------------------------------------
+# Stored-mode display: show the STORED pick and rule, never a silent
+# recompute -- and an explicit re-evaluate action when the user wants one.
+# ---------------------------------------------------------------------------
+
+
+def _stored_dialog(tmp_path, outcome):
+    from hydra_suite.detectkit.gui.dialogs.direct_calibration_results import (
+        DirectCalibrationResultsDialog,
+    )
+
+    model = tmp_path / "m.pt"
+    model.write_bytes(b"weights")
+    return DirectCalibrationResultsDialog(
+        None,
+        model_path=model,
+        outcome=outcome,
+        training_geometry={"geometry_mode": "auto_object", "imgsz": 640},
+        previews=[],
+        stored=True,
+    )
+
+
+def _make_point(label, candidate_index=0, merge_threshold=0.5, confidence=0.35):
+    from hydra_suite.core.inference.direct_calibration import (
+        CalibrationScore,
+        DirectCalibrationPoint,
+    )
+
+    return DirectCalibrationPoint(
+        label=label,
+        candidate_index=candidate_index,
+        enabled=True,
+        geometry_mode="auto_object",
+        tile_width=640,
+        tile_height=640,
+        overlap=0.2,
+        object_tile_fraction=0.4,
+        max_detections=64,
+        tiles_per_frame=9,
+        seconds_per_frame=0.4,
+        confidence=confidence,
+        merge_policy="greedy_nmm",
+        merge_metric="ios",
+        merge_threshold=merge_threshold,
+        merge_backend="cv2",
+        score=CalibrationScore(
+            frames=20,
+            matched=200,
+            missed=10,
+            extra=10,
+            duplicate=1,
+            precision=0.95,
+            recall=0.95,
+            f1=0.95,
+            mean_iou=0.81,
+            mean_quality=0.8,
+        ),
+    )
+
+
+def test_stored_mode_shows_the_persisted_pick_without_recomputing(
+    tmp_path, monkeypatch
+):
+    """Stored mode must display the recorded winner and rule VERBATIM, and
+    must never call ``recommend_balanced`` to derive them."""
+    import hydra_suite.detectkit.gui.dialogs.direct_calibration_results as results_mod
+    from hydra_suite.detectkit.jobs.direct_calibration import DirectCalibrationOutcome
+
+    called = []
+    real = results_mod.recommend_balanced
+
+    def _spy(points):
+        called.append(1)
+        return real(points)
+
+    monkeypatch.setattr(results_mod, "recommend_balanced", _spy)
+
+    point = _make_point("Training geometry", candidate_index=3)
+    outcome = DirectCalibrationOutcome(
+        points=[point],
+        recommendation_rule_id="recall-first-quality-floors-v1",
+        recommendation_rule="Recall-first rule text",
+        recommendation_rule_effective_date="2026-09-06",
+        recommendation_pick_recorded=True,
+        recommendation_pick_key=(3, 0.5, 0.35),
+        recommendation_pick_reason="Training geometry: measured best.",
+    )
+    dialog = _stored_dialog(tmp_path, outcome)
+    try:
+        assert called == [], "stored mode must not call recommend_balanced at open time"
+        assert dialog._recommended_point is point
+        assert "Training geometry: measured best." in dialog._lbl_reason.text()
+        assert "as saved" in dialog._lbl_rule.text()
+        assert "Recall-first rule text" in dialog._lbl_rule.text()
+    finally:
+        dialog.close()
+
+
+def test_stored_mode_without_recorded_pick_says_so_honestly(tmp_path):
+    """A v5-and-older profile has no recorded pick -- the dialog must say
+    so, not silently show a live recomputation as if it were the original."""
+    from hydra_suite.detectkit.jobs.direct_calibration import DirectCalibrationOutcome
+
+    point = _make_point("Training geometry")
+    outcome = DirectCalibrationOutcome(
+        points=[point],
+        recommendation_rule_id="unknown",
+        recommendation_rule="unknown (pre-2026-09-06)",
+        recommendation_pick_recorded=False,
+    )
+    dialog = _stored_dialog(tmp_path, outcome)
+    try:
+        assert dialog._recommended_point is None
+        assert "not recorded" in dialog._lbl_reason.text() or (
+            "never recorded" in dialog._lbl_reason.text()
+        )
+        assert dialog.btn_reevaluate.isEnabled()
+    finally:
+        dialog.close()
+
+
+def test_reevaluate_button_recomputes_and_labels_it_a_recomputation(tmp_path):
+    """The explicit re-evaluate action recomputes under the CURRENT rule and
+    makes clear that the evidence predates it."""
+    from hydra_suite.core.inference.direct_calibration import RECOMMENDATION_RULE_ID
+    from hydra_suite.detectkit.jobs.direct_calibration import DirectCalibrationOutcome
+
+    point = _make_point("Training geometry")
+    outcome = DirectCalibrationOutcome(
+        points=[point],
+        recommendation_rule_id="unknown",
+        recommendation_rule="unknown (pre-2026-09-06)",
+        recommendation_pick_recorded=False,
+    )
+    dialog = _stored_dialog(tmp_path, outcome)
+    try:
+        dialog._on_reevaluate_clicked()
+        assert dialog._recommended_point is point
+        assert RECOMMENDATION_RULE_ID in dialog._lbl_reason.text()
+        assert "recomputation" in dialog._lbl_reason.text()
+        assert "unknown" in dialog._lbl_reason.text()
+        # measurement_for_row must now stamp the CURRENT rule, since the
+        # user explicitly asked for a recomputation under it.
+        measurement = dialog.measurement_for_row(0)
+        assert measurement["recommendation_rule_id"] == RECOMMENDATION_RULE_ID
+    finally:
+        dialog.close()
+
+
+def test_stored_mode_measurement_stamps_the_stored_rule_not_the_current_one(tmp_path):
+    """Saving a profile straight from LOADED old evidence (without
+    re-evaluating) must stamp the rule the evidence was actually scored
+    under -- stamping the live constant would claim the current rule
+    produced numbers it never touched."""
+    from hydra_suite.core.inference.direct_calibration import RECOMMENDATION_RULE_ID
+    from hydra_suite.detectkit.jobs.direct_calibration import (
+        UNKNOWN_RECOMMENDATION_RULE_ID,
+        DirectCalibrationOutcome,
+    )
+
+    point = _make_point("Training geometry")
+    outcome = DirectCalibrationOutcome(
+        points=[point],
+        recommendation_rule_id=UNKNOWN_RECOMMENDATION_RULE_ID,
+        recommendation_rule="unknown (pre-2026-09-06)",
+        recommendation_pick_recorded=False,
+    )
+    dialog = _stored_dialog(tmp_path, outcome)
+    try:
+        measurement = dialog.measurement_for_row(0)
+        assert measurement["recommendation_rule_id"] == UNKNOWN_RECOMMENDATION_RULE_ID
+        assert measurement["recommendation_rule_id"] != RECOMMENDATION_RULE_ID
+    finally:
+        dialog.close()
+
+
+def test_fresh_mode_is_unaffected_by_stored_mode(tmp_path):
+    """A freshly computed calibration (``stored`` defaults to False) keeps
+    showing the current rule's live pick, stamped with the current rule --
+    unchanged by this feature."""
+    from hydra_suite.core.inference.direct_calibration import RECOMMENDATION_RULE_ID
+    from hydra_suite.detectkit.jobs.direct_calibration import DirectCalibrationOutcome
+
+    point = _make_point("Training geometry")
+    outcome = DirectCalibrationOutcome(points=[point])
+    dialog = _stored_dialog(tmp_path, outcome)
+    dialog.close()
+
+    from hydra_suite.detectkit.gui.dialogs.direct_calibration_results import (
+        DirectCalibrationResultsDialog,
+    )
+
+    model = tmp_path / "m2.pt"
+    model.write_bytes(b"weights")
+    fresh = DirectCalibrationResultsDialog(
+        None,
+        model_path=model,
+        outcome=DirectCalibrationOutcome(points=[point]),
+        training_geometry={"geometry_mode": "auto_object", "imgsz": 640},
+        previews=[],
+    )
+    try:
+        assert not hasattr(fresh, "btn_reevaluate")
+        assert fresh._recommended_point is point
+        measurement = fresh.measurement_for_row(0)
+        assert measurement["recommendation_rule_id"] == RECOMMENDATION_RULE_ID
+    finally:
+        fresh.close()
