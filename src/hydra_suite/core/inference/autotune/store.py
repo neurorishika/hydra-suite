@@ -7,13 +7,13 @@ import os
 import tempfile
 import time
 from contextlib import AbstractContextManager
-from dataclasses import asdict
+from dataclasses import asdict, replace
 from pathlib import Path
 from typing import IO, Any, Mapping
 
 from hydra_suite.paths import get_data_dir
 
-from .fingerprint import TUNING_SCHEMA_VERSION, TuningProfileKey
+from .fingerprint import TUNING_SCHEMA_VERSION, TuningProfileKey, WorkloadFingerprint
 from .models import (
     CandidateEvidence,
     EquivalenceVerdict,
@@ -164,17 +164,90 @@ class InferenceTuningProfileStore:
     def mark_provisional(self, key: TuningProfileKey) -> bool:
         """Invalidate reuse without changing the stored winning settings."""
 
-        profile = self.load(key)
-        if profile is None:
-            return False
-        raw = _profile_to_dict(profile)
-        raw["state"] = ProfileState.PROVISIONAL.value
-        replacement = _profile_from_dict(raw)
         with self.claim(key, timeout_seconds=0.0) as claim:
             if not claim.acquired:
                 return False
-            self.save(replacement)
+            profile = self.load(key)
+            if profile is None:
+                return False
+            self.save(replace(profile, state=ProfileState.PROVISIONAL))
         return True
+
+    def observe_production_throughput(
+        self,
+        profile_id: str,
+        throughput: float,
+        *,
+        detection_counts: tuple[int, ...] | None = None,
+        crop_counts: tuple[int, ...] | None = None,
+    ) -> ProfileState | None:
+        """Append live evidence and provision on density or sustained regression."""
+
+        if not profile_id or not throughput or throughput <= 0:
+            return None
+        matches = tuple(
+            path
+            for path in self.root.glob(f"{profile_id}*.json")
+            if path.is_file() and path.stem.startswith(profile_id)
+        )
+        if len(matches) != 1:
+            return None
+        try:
+            with matches[0].open("rb") as stream:
+                encoded = stream.read(MAX_PROFILE_BYTES + 1)
+            if len(encoded) > MAX_PROFILE_BYTES:
+                return None
+            raw = json.loads(encoded)
+            profile = _profile_from_dict(raw["profile"])
+            if profile.profile_id != profile_id:
+                return None
+        except (OSError, ValueError, TypeError, KeyError, AttributeError):
+            return None
+        with self.claim(profile.key, timeout_seconds=0.0) as claim:
+            if not claim.acquired:
+                return None
+            current = self.load(profile.key)
+            if current is None:
+                return None
+            history = (*current.observed_production_throughput, float(throughput))[-64:]
+            state = current.state
+            invalidation_reason = current.invalidation_reason
+            if detection_counts:
+                observed_workload = WorkloadFingerprint.from_counts(
+                    current.key.workload.configured_target_count,
+                    detection_counts,
+                    crop_counts or detection_counts,
+                    current.key.workload.canonical_crop_geometries,
+                )
+                if observed_workload != current.key.workload:
+                    state = ProfileState.PROVISIONAL
+                    invalidation_reason = "production workload density bucket changed"
+            comparable = [
+                item
+                for item in current.candidates
+                if item.settings == current.selected
+                and item.phase in {"full", "final_validation", "baseline"}
+                and item.failure_class is None
+                and item.throughput_samples
+            ]
+            reference = comparable[-1].median_throughput if comparable else 0.0
+            if (
+                state is ProfileState.VALIDATED
+                and reference > 0
+                and len(history) >= 3
+                and all(value < reference * 0.85 for value in history[-3:])
+            ):
+                state = ProfileState.PROVISIONAL
+                invalidation_reason = "production throughput regressed by more than 15%"
+            self.save(
+                replace(
+                    current,
+                    state=state,
+                    observed_production_throughput=tuple(history),
+                    invalidation_reason=invalidation_reason,
+                )
+            )
+            return state
 
     def _prune_before_write(self, *, excluding: Path) -> None:
         try:
@@ -210,6 +283,7 @@ def _profile_to_dict(profile: InferenceTuningProfile) -> dict[str, Any]:
         "created_at_unix_ns": profile.created_at_unix_ns,
         "last_validation_unix_ns": profile.last_validation_unix_ns,
         "observed_production_throughput": list(profile.observed_production_throughput),
+        "invalidation_reason": profile.invalidation_reason,
     }
 
 
@@ -233,6 +307,8 @@ def _candidate_from_dict(value: Mapping[str, Any]) -> CandidateEvidence:
         "stage_seconds_samples",
         "artifact_ids",
         "thermal_c_range",
+        "throughput_confidence_95",
+        "stage_shares",
     ):
         if raw.get(name) is not None:
             raw[name] = tuple(raw[name])

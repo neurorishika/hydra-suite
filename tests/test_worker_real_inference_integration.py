@@ -443,6 +443,57 @@ def test_forward_invalid_caches_triggers_batch_pass(monkeypatch, tmp_path):
     ), "forward run with invalid caches must call run_batch_pass"
 
 
+def test_autotune_overlay_resolves_before_runner_loads_models(monkeypatch, tmp_path):
+    """The production runner must see only the detached effective config."""
+    import copy
+
+    import hydra_suite.core.tracking.worker as worker_mod
+
+    calls = []
+
+    def resolve(config, _params, **_kwargs):
+        calls.append("resolve")
+        effective = copy.deepcopy(config)
+        effective.detection_batch_size = 4
+        return effective, None
+
+    class _ProbeRunner:
+        def __init__(self, config, *_args, **_kwargs):
+            calls.append(("runner", config.detection_batch_size))
+
+        def caches_all_valid(self):
+            return False
+
+        def detection_cache_covers_range(self, *_args):
+            return False
+
+        def run_batch_pass(self, *_args, **_kwargs):
+            raise _StopAfterDispatch("runner constructed")
+
+        def close(self):
+            pass
+
+    monkeypatch.setattr(worker_mod, "TrackingProfiler", _FakeProfiler)
+    monkeypatch.setattr(worker_mod.cv2, "VideoCapture", _FakeVideoCapture)
+    monkeypatch.setattr(worker_mod, "InferenceRunner", _ProbeRunner)
+    monkeypatch.setattr(worker_mod, "_resolve_inference_autotune_before_load", resolve)
+    worker = worker_mod.TrackingEngineCore(
+        str(tmp_path / "video.mp4"),
+        on_finished=lambda *_args: None,
+        use_cached_detections=False,
+    )
+    worker.set_parameters(
+        _dispatch_params(INFERENCE_AUTOTUNE_MODE="automatic", YOLO_BATCH_SIZE=1)
+    )
+
+    try:
+        worker.run_tracking()
+    except _StopAfterDispatch:
+        pass
+
+    assert calls == ["resolve", ("runner", 4)]
+
+
 def test_forward_valid_caches_skips_batch_pass(monkeypatch, tmp_path):
     """Real run_tracking(): forward, cache reuse enabled, caches valid & covering →
     run_batch_pass is SKIPPED and the cached replay path (load_frame) is used instead.

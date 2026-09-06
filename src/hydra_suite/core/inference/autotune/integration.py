@@ -86,6 +86,54 @@ def _counts(value: Any, fallback: int) -> tuple[int, ...]:
     return (max(0, int(fallback)),)
 
 
+def sample_detection_workload(
+    cache_path: str | Path,
+    *,
+    start_frame: int = 0,
+    end_frame: int | None = None,
+    maximum_frames: int = 512,
+) -> tuple[int, ...]:
+    """Read bounded per-frame density from an existing cache without models.
+
+    Both zero-detection and populated frames contribute to the signature. A
+    missing, corrupt, or legacy cache without a complete written-frame index is
+    treated as unavailable instead of inventing a workload identity.
+    """
+
+    if maximum_frames < 1:
+        raise ValueError("maximum_frames must be positive")
+    candidate = Path(cache_path)
+    if candidate.is_dir():
+        candidate = candidate / "detection.npz"
+    try:
+        from hydra_suite.core.inference.cache import open_detection_cache_reader
+
+        reader = open_detection_cache_reader(candidate)
+        if not reader.is_valid():
+            return ()
+        counts: dict[int, int] = {}
+        for arrays in reader.iter_arrays():
+            written = tuple(int(value) for value in arrays.get("written_frames", ()))
+            if not written:
+                # Modern chunks always retain written frames, including empty
+                # ones. Refuse a partial density view when that contract is absent.
+                return ()
+            for frame in written:
+                if frame < start_frame or (end_frame is not None and frame > end_frame):
+                    continue
+                if frame not in counts and len(counts) < maximum_frames:
+                    counts[frame] = 0
+            for raw_frame in arrays.get("frame_indices", ()):
+                frame = int(raw_frame)
+                if frame in counts:
+                    counts[frame] += 1
+            if len(counts) >= maximum_frames:
+                break
+        return tuple(counts[frame] for frame in sorted(counts))
+    except (OSError, ValueError, TypeError, KeyError, AttributeError):
+        return ()
+
+
 def _active_slice(config: InferenceConfig):
     if config.obb is None:
         return None

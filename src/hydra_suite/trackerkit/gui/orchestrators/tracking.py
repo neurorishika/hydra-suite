@@ -659,6 +659,24 @@ class TrackingOrchestrator:
         """Update real-time tracking statistics."""
         if self._mw._stop_all_requested:
             return
+        tuning = stats.get("inference_autotune")
+        if isinstance(tuning, dict):
+            status = str(tuning.get("status", "unknown")).replace("_", " ")
+            reason = str(tuning.get("reason", "")).strip()
+            effective = tuning.get("effective", {})
+            values = ""
+            if isinstance(effective, dict):
+                compact = ", ".join(
+                    f"{name}={value}"
+                    for name, value in effective.items()
+                    if value not in (None, {}, [], ())
+                )
+                values = f" Effective: {compact}." if compact else ""
+            profile = str(tuning.get("profile_id") or "").strip()
+            profile_text = f" Profile {profile}." if profile else ""
+            self._panels.setup.set_inference_autotune_status(
+                f"{status.capitalize()} — {reason}.{profile_text}{values}"
+            )
         phase = str(stats.get("phase", "tracking"))
         is_precompute = phase == "individual_precompute"
 

@@ -208,6 +208,7 @@ class CandidateEvidence:
     settings: InferenceTuningSettings
     throughput_samples: tuple[float, ...]
     stage_seconds_samples: tuple[float, ...] = ()
+    measured_frames: int = 0
     host_peak_bytes: int = 0
     accelerator_peak_bytes: int = 0
     queue_high_water_bytes: int = 0
@@ -220,6 +221,9 @@ class CandidateEvidence:
     artifact_ids: tuple[str, ...] = ()
     equivalence: EquivalenceVerdict | None = None
     failure_class: str | None = None
+    phase: str = "unknown"
+    throughput_confidence_95: tuple[float, float] | None = None
+    stage_shares: tuple[tuple[str, float], ...] = ()
 
     def __post_init__(self) -> None:
         if any(not math.isfinite(v) or v <= 0 for v in self.throughput_samples):
@@ -234,12 +238,30 @@ class CandidateEvidence:
                 self.frame_buffer_high_water_bytes,
                 self.warmup_calls,
                 self.warmup_frames,
+                self.measured_frames,
             )
             < 0
         ):
             raise ValueError(
                 "candidate counters and memory observations must be non-negative"
             )
+        if self.phase not in {
+            "unknown",
+            "baseline",
+            "stage",
+            "full",
+            "final_validation",
+        }:
+            raise ValueError("unknown inference tuning evidence phase")
+        if self.throughput_confidence_95 is not None:
+            low, high = self.throughput_confidence_95
+            if not (math.isfinite(low) and math.isfinite(high) and low <= high):
+                raise ValueError("invalid throughput confidence interval")
+        if any(
+            not name or not math.isfinite(value) or value < 0
+            for name, value in self.stage_shares
+        ):
+            raise ValueError("invalid inference stage share")
 
     @property
     def median_throughput(self) -> float:
@@ -279,6 +301,7 @@ class InferenceTuningProfile:
     created_at_unix_ns: int = 0
     last_validation_unix_ns: int = 0
     observed_production_throughput: tuple[float, ...] = ()
+    invalidation_reason: str | None = None
 
     def __post_init__(self) -> None:
         if not self.profile_id or len(self.profile_id) > 128:
@@ -287,6 +310,12 @@ class InferenceTuningProfile:
             raise ValueError("selection_reason is invalid")
         if len(self.candidates) > 256 or len(self.rejected) > 256:
             raise ValueError("profile evidence exceeds its bounded record cap")
+        if len(self.observed_production_throughput) > 64:
+            raise ValueError("production throughput history exceeds its bounded cap")
+        if self.invalidation_reason is not None and (
+            not self.invalidation_reason or len(self.invalidation_reason) > 1024
+        ):
+            raise ValueError("invalidation_reason is invalid")
 
 
 @dataclass(frozen=True, slots=True)

@@ -12,7 +12,9 @@ from .equivalence import CalibrationOutputs, EquivalencePolicy, compare_outputs
 from .measure import (
     MeasurementProtocol,
     deterministic_block_order,
+    measurement_complete,
     paired_gain_interval,
+    robust_summary,
 )
 from .models import CandidateEvidence, EquivalenceVerdict, InferenceTuningSettings
 
@@ -31,7 +33,9 @@ class TrialObservation:
     warmup_calls: int = 3
     warmup_frames: int = 8
     prepare_seconds: float = 0.0
+    measured_frames: int = 0
     artifact_ids: tuple[str, ...] = ()
+    stage_shares: tuple[tuple[str, float], ...] = ()
     failure_class: str | None = None
 
     def __post_init__(self) -> None:
@@ -143,7 +147,7 @@ class CoordinateSearch:
         field_names = [
             field for field in baseline.field_names() if field not in manual_fields
         ]
-        shares = dict(stage_shares or {})
+        shares = dict(stage_shares or baseline_evidence.stage_shares)
         field_names.sort(key=lambda field: (-float(shares.get(field, 0.0)), field))
         accepted_fields: list[str] = []
 
@@ -363,10 +367,15 @@ class CoordinateSearch:
             thermal = [
                 item.thermal_c for item in successful if item.thermal_c is not None
             ]
+            throughputs = tuple(item.throughput for item in successful)
+            throughput_summary = robust_summary(
+                throughputs, seed=self.protocol.random_seed + seed_offset
+            )
             evidence = CandidateEvidence(
                 settings=candidate,
-                throughput_samples=tuple(item.throughput for item in successful),
+                throughput_samples=throughputs,
                 stage_seconds_samples=tuple(item.stage_seconds for item in successful),
+                measured_frames=sum(item.measured_frames for item in successful),
                 host_peak_bytes=max(item.host_peak_bytes for item in successful),
                 accelerator_peak_bytes=max(
                     item.accelerator_peak_bytes for item in successful
@@ -392,7 +401,27 @@ class CoordinateSearch:
                     )
                 ),
                 equivalence=verdict,
+                phase=phase,
+                throughput_confidence_95=(
+                    throughput_summary.confidence_low,
+                    throughput_summary.confidence_high,
+                ),
+                stage_shares=tuple(
+                    sorted(
+                        {
+                            name: sum(
+                                dict(item.stage_shares).get(name, 0.0)
+                                for item in successful
+                            )
+                            / len(successful)
+                            for item in successful
+                            for name, _value in item.stage_shares
+                        }.items()
+                    )
+                ),
             )
+            if not measurement_complete(evidence, self.protocol):
+                continue
             output[candidate] = (evidence, outputs)
         return output
 

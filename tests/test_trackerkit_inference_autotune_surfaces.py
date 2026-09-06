@@ -9,6 +9,7 @@ from hydra_suite.trackerkit.cli_config import (
     load_tracker_cli_session,
 )
 from hydra_suite.trackerkit.config.schemas import TrackerConfig
+from hydra_suite.trackerkit.gui.orchestrators.tracking import TrackingOrchestrator
 
 
 def test_tracker_config_round_trips_inference_autotune_policy() -> None:
@@ -104,3 +105,33 @@ def test_cli_autotune_manual_field_can_be_repeated() -> None:
     )
 
     assert args.inference_autotune_manual == ["pose_batch_size", "pipeline_depth"]
+
+
+def test_gui_status_displays_effective_runtime_overlay() -> None:
+    captured = []
+
+    class Setup:
+        def set_inference_autotune_status(self, text):
+            captured.append(text)
+
+    class MainWindow:
+        _stop_all_requested = False
+
+    orchestrator = object.__new__(TrackingOrchestrator)
+    orchestrator._mw = MainWindow()
+    orchestrator._panels = type("Panels", (), {"setup": Setup()})()
+
+    orchestrator.on_stats_update(
+        {
+            "inference_autotune": {
+                "status": "cache_hit",
+                "profile_id": "abc123",
+                "reason": "validated profile reused",
+                "effective": {"detection_batch_size": 4, "pipeline_depth": 2},
+            }
+        }
+    )
+
+    assert "Cache hit" in captured[0]
+    assert "abc123" in captured[0]
+    assert "detection_batch_size=4" in captured[0]

@@ -6,6 +6,7 @@ from pathlib import Path
 from hydra_suite.core.inference.autotune.integration import (
     TrackingRunContext,
     build_tracking_autotune_request,
+    sample_detection_workload,
 )
 from hydra_suite.core.inference.config import (
     CNNConfig,
@@ -209,3 +210,24 @@ def test_core_inference_policy_roundtrip_and_legacy_default(tmp_path):
     path.write_text(json.dumps(raw), encoding="utf-8")
     legacy = InferenceConfig.from_json(str(path))
     assert legacy.inference_autotune.mode == "off"
+
+
+def test_existing_detection_cache_supplies_zero_inclusive_density(
+    monkeypatch, tmp_path
+):
+    class Reader:
+        def is_valid(self):
+            return True
+
+        def iter_arrays(self):
+            yield {
+                "written_frames": [0, 1, 2, 3],
+                "frame_indices": [0, 0, 2, 3, 3, 3],
+            }
+
+    monkeypatch.setattr(
+        "hydra_suite.core.inference.cache.open_detection_cache_reader",
+        lambda _path: Reader(),
+    )
+
+    assert sample_detection_workload(tmp_path, start_frame=1, end_frame=3) == (0, 1, 3)

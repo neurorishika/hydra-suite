@@ -32,6 +32,7 @@ class AutotuneRequest:
     budget_seconds: float = 120.0
     singleflight_wait_seconds: float = 2.0
     eligible: bool = True
+    allow_cached_reuse: bool = True
     eligibility_reason: str | None = None
     stage_shares: tuple[tuple[str, float], ...] = ()
     should_cancel: Callable[[], bool] = lambda: False
@@ -78,7 +79,11 @@ class AutotuneCoordinator:
                 )
             )
         cached = self.store.load(request.key)
-        if cached is not None and cached.state is ProfileState.VALIDATED:
+        if (
+            request.allow_cached_reuse
+            and cached is not None
+            and cached.state is ProfileState.VALIDATED
+        ):
             return self._reuse(request, cached, status="cache_hit")
         if not request.eligible:
             return ResolveResult(
@@ -111,7 +116,11 @@ class AutotuneCoordinator:
                 )
             # The winning process may have promoted while this process waited.
             cached = self.store.load(request.key)
-            if cached is not None and cached.state is ProfileState.VALIDATED:
+            if (
+                request.allow_cached_reuse
+                and cached is not None
+                and cached.state is ProfileState.VALIDATED
+            ):
                 return self._reuse(request, cached, status="cache_hit_after_wait")
             try:
                 protocol = MeasurementProtocol(budget_seconds=request.budget_seconds)

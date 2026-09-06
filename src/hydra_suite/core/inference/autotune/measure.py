@@ -144,5 +144,8 @@ def measurement_complete(
         evidence.warmup_calls >= protocol.warmup_calls
         and evidence.warmup_frames >= protocol.warmup_frames
         and len(evidence.throughput_samples) >= protocol.minimum_blocks
-        and measured_seconds >= protocol.minimum_stage_seconds
+        and (
+            measured_seconds >= protocol.minimum_stage_seconds
+            or evidence.measured_frames >= protocol.maximum_frames
+        )
     )

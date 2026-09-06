@@ -180,6 +180,18 @@ class ExplodingExecutor:
         raise AssertionError("a validated cache hit must not launch trials")
 
 
+class FixedExecutor:
+    def run(self, settings, *, phase, field_name, block_index, should_cancel):
+        return TrialObservation(
+            settings,
+            100.0,
+            0.5,
+            _outputs(),
+            warmup_calls=3,
+            warmup_frames=8,
+        )
+
+
 def test_cache_hit_down_admits_only_validated_settings_and_does_not_mutate_store(
     tmp_path,
 ):
@@ -261,6 +273,51 @@ def test_manual_field_precedence_over_cached_profile(tmp_path):
     assert result.overlay.effective.detection_batch_size == 4
     assert result.overlay.effective.pose_batch_size == 1
     assert dict(result.overlay.field_sources)["pose_batch_size"] == "manual"
+
+
+def test_permanently_ineligible_runtime_never_reuses_validated_cache(tmp_path):
+    key = _key()
+    baseline = _settings(det=1)
+    selected = _settings(det=4)
+    profile = InferenceTuningProfile(
+        key.digest[:24],
+        key,
+        baseline,
+        baseline,
+        selected,
+        selected,
+        (
+            CandidateEvidence(
+                selected,
+                (120.0,) * 5,
+                stage_seconds_samples=(0.5,) * 5,
+                warmup_calls=3,
+                warmup_frames=8,
+                equivalence=EquivalenceVerdict(True),
+            ),
+        ),
+        ProfileState.VALIDATED,
+        "winner",
+    )
+    store = InferenceTuningProfileStore(tmp_path)
+    store.save(profile)
+
+    result = AutotuneCoordinator(store, trial_executor=FixedExecutor()).resolve(
+        AutotuneRequest(
+            key,
+            baseline,
+            _planner(),
+            mode="automatic",
+            eligible=False,
+            allow_cached_reuse=False,
+            eligibility_reason="automatic tuning is CUDA-only",
+        )
+    )
+
+    assert result.profile is None
+    assert result.overlay.status == "deferred_due_to_contention"
+    assert result.overlay.effective == baseline
+    assert result.overlay.profile_id is None
 
 
 def test_record_only_persists_but_does_not_apply(tmp_path):

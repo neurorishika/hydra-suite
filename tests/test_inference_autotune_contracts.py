@@ -328,6 +328,57 @@ def test_profile_atomic_failure_keeps_previous_record(tmp_path, monkeypatch):
     assert store.load(original.key) == original
 
 
+def test_three_comparable_production_regressions_mark_profile_provisional(tmp_path):
+    store = InferenceTuningProfileStore(tmp_path)
+    original = _profile()
+    original = replace(
+        original,
+        candidates=(replace(original.candidates[0], phase="final_validation"),),
+    )
+    store.save(original)
+
+    assert (
+        store.observe_production_throughput(original.profile_id, 80.0)
+        is ProfileState.VALIDATED
+    )
+    assert (
+        store.observe_production_throughput(original.profile_id, 82.0)
+        is ProfileState.VALIDATED
+    )
+    assert (
+        store.observe_production_throughput(original.profile_id, 84.0)
+        is ProfileState.PROVISIONAL
+    )
+
+    updated = store.load(original.key)
+    assert updated is not None
+    assert updated.state is ProfileState.PROVISIONAL
+    assert updated.selected == original.selected
+    assert updated.observed_production_throughput == (80.0, 82.0, 84.0)
+    assert "regressed" in (updated.invalidation_reason or "")
+
+
+def test_production_density_bucket_change_immediately_marks_profile_provisional(
+    tmp_path,
+):
+    store = InferenceTuningProfileStore(tmp_path)
+    original = _profile()
+    store.save(original)
+
+    state = store.observe_production_throughput(
+        original.profile_id,
+        100.0,
+        detection_counts=(1, 2, 3),
+        crop_counts=(1, 2, 3),
+    )
+
+    assert state is ProfileState.PROVISIONAL
+    updated = store.load(original.key)
+    assert updated is not None
+    assert updated.selected == original.selected
+    assert updated.invalidation_reason == "production workload density bucket changed"
+
+
 def _outputs(identity="A", *, x=1.0, rows=1):
     frame = pd.DataFrame(
         {

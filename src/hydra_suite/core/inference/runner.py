@@ -17,6 +17,7 @@ from hydra_suite.utils.profiling import span
 if TYPE_CHECKING:
     from hydra_suite.core.individual.identity.cache import IdentityEvidenceCache
     from hydra_suite.core.individual.identity.catalog import IdentityCatalog
+    from hydra_suite.core.inference.autotune.models import InferenceRuntimeOverlay
 
     from .config import PoseConfig
     from .identity_evidence_config import IdentityEvidenceRunConfig
@@ -932,12 +933,17 @@ class InferenceRunner:
         cache_only: bool = False,
         roi_mask: "np.ndarray | None" = None,
         identity_evidence: "IdentityEvidenceRunConfig | None" = None,
+        runtime_overlay: "InferenceRuntimeOverlay | None" = None,
     ) -> None:
         from hydra_suite.utils.profiling_process import maybe_arm_process_recorder
 
         maybe_arm_process_recorder()
 
         self.config = config
+        # Immutable per-run evidence of requested/admitted/effective execution
+        # values. The runner consumes the already-resolved config and never
+        # mutates or persists this overlay.
+        self.runtime_overlay = runtime_overlay
         self.cache_dir = cache_dir
         self.cache_only = cache_only
         # Arena ROI mask for sliced-inference tile gating. It is the single

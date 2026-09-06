@@ -1,0 +1,205 @@
+from __future__ import annotations
+
+import json
+
+import numpy as np
+import pytest
+
+from hydra_suite.core.inference.autotune.device import RuntimeResourceProbe
+from hydra_suite.core.inference.autotune.models import InferenceTuningSettings
+from hydra_suite.core.inference.autotune.search import TrialObservation
+from hydra_suite.core.inference.autotune.sidecar import (
+    ContainedTrialExecutor,
+    SidecarTrialSpec,
+    apply_settings_to_params,
+    write_sidecar_request,
+)
+from hydra_suite.core.inference.autotune.sidecar_child import _representative_windows
+from hydra_suite.runtime.resource_budget import AcceleratorKind, ResourceObservation
+
+
+def _resources():
+    observation = ResourceObservation(
+        total_host_bytes=64 * 1024**3,
+        available_host_bytes=48 * 1024**3,
+        accelerator_kind=AcceleratorKind.CPU,
+    )
+    probe = RuntimeResourceProbe(
+        observation,
+        "cpu",
+        "CPU",
+        "none",
+        None,
+        "test",
+        False,
+        False,
+    )
+    return observation, probe
+
+
+def _settings():
+    return InferenceTuningSettings(
+        detection_batch_size=4,
+        slice_tile_batch_size=2,
+        pose_batch_size=8,
+        headtail_batch_size=4,
+        identity_batch_sizes=(("color", 16),),
+        pipeline_depth=3,
+    )
+
+
+def test_candidate_param_overlay_is_detached_complete_and_disables_recursion():
+    source = {
+        "YOLO_OBB_MODE": "direct",
+        "CNN_CLASSIFIERS": [
+            {"label": "color", "batch_size": 1},
+            {"label": "behavior", "batch_size": 3},
+        ],
+        "INFERENCE_AUTOTUNE_MODE": "automatic",
+        "SLICE_TILE_BATCH_AUTOTUNE": True,
+    }
+
+    output = apply_settings_to_params(source, _settings())
+
+    assert source["CNN_CLASSIFIERS"][0]["batch_size"] == 1
+    assert output["INFERENCE_AUTOTUNE_MODE"] == "off"
+    assert output["YOLO_BATCH_SIZE"] == 4
+    assert output["PIPELINE_DEPTH"] == 3
+    assert output["SLICE_TILE_BATCH_SIZE"] == 2
+    assert output["SLICE_TILE_BATCH_AUTOTUNE"] is False
+    assert output["POSE_BATCH_SIZE"] == 8
+    assert output["HEADTAIL_BATCH_SIZE"] == 4
+    assert [item["batch_size"] for item in output["CNN_CLASSIFIERS"]] == [16, 3]
+    assert output["USE_CACHED_DETECTIONS"] is False
+
+
+def test_request_stages_roi_as_relative_non_pickle_payload(tmp_path):
+    observation, probe = _resources()
+    spec = SidecarTrialSpec(
+        video_path=tmp_path / "video.mp4",
+        params={"ROI_MASK": np.ones((2, 3), dtype=np.uint8)},
+        observation=observation,
+        resource_probe=probe,
+        start_frame=0,
+        end_frame=20,
+    )
+
+    request = write_sidecar_request(
+        tmp_path / "ipc",
+        spec,
+        _settings(),
+        phase="full",
+        field_name=None,
+        block_index=0,
+    )
+
+    payload = json.loads(request.read_text(encoding="utf-8"))
+    assert payload["params"]["ROI_MASK"] == {"__hydra_roi_npy__": "roi.npy"}
+    restored = np.load(request.parent / "roi.npy", allow_pickle=False)
+    np.testing.assert_array_equal(restored, np.ones((2, 3), dtype=np.uint8))
+    assert payload["maximum_frames"] == 26
+
+
+def test_measurement_blocks_share_one_128_frame_cap(tmp_path):
+    observation, probe = _resources()
+    spec = SidecarTrialSpec(
+        video_path=tmp_path / "video.mp4",
+        params={},
+        observation=observation,
+        resource_probe=probe,
+        start_frame=0,
+        end_frame=1000,
+    )
+    caps = []
+    for block in range(5):
+        request = write_sidecar_request(
+            tmp_path / f"ipc-{block}",
+            spec,
+            _settings(),
+            phase="stage",
+            field_name="detection_batch_size",
+            block_index=block,
+        )
+        caps.append(json.loads(request.read_text())["maximum_frames"])
+
+    assert caps == [26, 26, 26, 25, 25]
+    assert sum(caps) == 128
+
+
+def test_request_rejects_arbitrary_python_objects(tmp_path):
+    observation, probe = _resources()
+    spec = SidecarTrialSpec(
+        video_path=tmp_path / "video.mp4",
+        params={"callback": object()},
+        observation=observation,
+        resource_probe=probe,
+        start_frame=0,
+        end_frame=20,
+    )
+    with pytest.raises(TypeError, match="unsupported sidecar parameter"):
+        write_sidecar_request(
+            tmp_path / "ipc",
+            spec,
+            _settings(),
+            phase="full",
+            field_name=None,
+            block_index=0,
+        )
+
+
+def test_representative_windows_are_bounded_early_middle_late():
+    windows = _representative_windows(10, 1009, 120)
+    assert len(windows) == 3
+    assert windows[0][0] == 10
+    assert windows[-1][1] == 1009
+    assert sum(end - start + 1 for start, end in windows) <= 120
+
+
+def test_oom_adaptation_is_two_retries_and_never_mislabels_reduced_result(
+    tmp_path, monkeypatch
+):
+    observation, probe = _resources()
+    executor = ContainedTrialExecutor(
+        SidecarTrialSpec(
+            video_path=tmp_path / "video.mp4",
+            params={},
+            observation=observation,
+            resource_probe=probe,
+            start_frame=0,
+            end_frame=20,
+        )
+    )
+    attempted = []
+
+    def fake_once(settings, **_kwargs):
+        attempted.append(settings.detection_batch_size)
+        if settings.detection_batch_size > 2:
+            return TrialObservation(
+                settings, 0.0, 0.0, None, failure_class="accelerator-oom"
+            )
+        return TrialObservation(settings, 10.0, 2.0, None)
+
+    monkeypatch.setattr(executor, "_run_once", fake_once)
+    requested = _settings().with_value("detection_batch_size", 8)
+    result = executor.run(
+        requested,
+        phase="stage",
+        field_name="detection_batch_size",
+        block_index=0,
+        should_cancel=lambda: False,
+    )
+
+    assert attempted == [8, 4, 2]
+    assert result.settings == requested
+    assert result.failure_class == "accelerator-oom"
+    reduced = requested.with_value("detection_batch_size", 2)
+    cached = executor.run(
+        reduced,
+        phase="stage",
+        field_name="detection_batch_size",
+        block_index=0,
+        should_cancel=lambda: False,
+    )
+    assert cached.settings == reduced
+    assert cached.failure_class is None
+    assert attempted == [8, 4, 2]

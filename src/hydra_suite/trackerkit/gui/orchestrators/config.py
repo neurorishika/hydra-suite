@@ -328,7 +328,7 @@ class ConfigOrchestrator:
         except (TypeError, ValueError):
             budget_seconds = 120.0
         self._mw.config.inference_autotune_budget_seconds = max(
-            1.0, min(120.0, budget_seconds)
+            5.0, min(120.0, budget_seconds)
         )
         panel = self._panels.setup
         panel.chk_inference_autotune.blockSignals(True)
