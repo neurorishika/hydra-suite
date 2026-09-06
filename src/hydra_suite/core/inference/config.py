@@ -94,7 +94,12 @@ class SliceConfig:
     perform_standard_pred: bool = False
     # Maximum tile images presented to a model call. CPU tiles are copied only
     # for this active chunk; CUDA inputs remain views where supported.
+    # Positive explicit batch size. The existing fixed default remains the
+    # compatibility path; enabling ``tile_batch_autotune`` opts into timing.
     tile_batch_size: int = 16
+    # Opt-in until the user-facing control can choose a project default. When
+    # false, ``tile_batch_size`` is manual; when true, the tuner owns it.
+    tile_batch_autotune: bool = False
     # Hard upper bound for active tile pixels + float model inputs. Values over
     # the internal safety ceiling are reduced by the admission helper.
     tile_memory_budget_bytes: int = 256 * 1024 * 1024
@@ -672,6 +677,7 @@ def _slice_config_from_params(
         tile_batch_size=_clamped_int(
             params.get(f"{prefix}TILE_BATCH_SIZE", 16), 16, 1, 128
         ),
+        tile_batch_autotune=bool(params.get(f"{prefix}TILE_BATCH_AUTOTUNE", False)),
         tile_memory_budget_bytes=(
             _clamped_int(params.get(f"{prefix}MEMORY_BUDGET_MIB", 256), 256, 1, 256)
             * 1024
