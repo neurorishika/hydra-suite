@@ -46,6 +46,45 @@ def test_params_round_trip(qapp):
     assert back.cuda_safety_fraction == pytest.approx(0.8)
 
 
+def test_auto_batch_checkbox_round_trip(qapp):
+    from hydra_suite.detectkit.gui.panels.sam3_training_panel import Sam3TrainingPanel
+    from hydra_suite.training.contracts import Sam3LoraParams
+
+    panel = Sam3TrainingPanel()
+
+    # Default (batch=1, no auto) leaves the checkbox unchecked and the spin enabled.
+    assert panel.auto_batch_checkbox.isChecked() is False
+    assert panel.batch_spin.isEnabled() is True
+
+    # Loading a plan with batch=-1 checks the box and disables the spin.
+    panel.set_params(Sam3LoraParams(batch=-1))
+    assert panel.auto_batch_checkbox.isChecked() is True
+    assert panel.batch_spin.isEnabled() is False
+    assert panel.params().batch == -1
+
+    # Loading a plan with an explicit batch unchecks the box, re-enables the
+    # spin, and shows the value.
+    panel.set_params(Sam3LoraParams(batch=8))
+    assert panel.auto_batch_checkbox.isChecked() is False
+    assert panel.batch_spin.isEnabled() is True
+    assert panel.batch_spin.value() == 8
+    assert panel.params().batch == 8
+
+    # Checking the box interactively disables the spin and emits -1, without
+    # widening the spin's range or mutating its displayed value.
+    panel.auto_batch_checkbox.setChecked(True)
+    assert panel.batch_spin.isEnabled() is False
+    assert panel.batch_spin.value() == 8
+    assert panel.params().batch == -1
+    assert panel.batch_spin.minimum() == 1
+    assert panel.batch_spin.maximum() == 256
+
+    # Unchecking restores the spin's value as the emitted batch.
+    panel.auto_batch_checkbox.setChecked(False)
+    assert panel.batch_spin.isEnabled() is True
+    assert panel.params().batch == 8
+
+
 def test_prompt_editors_bound_programmatic_and_pasted_input(qapp):
     from hydra_suite.detectkit.gui.panels.sam3_training_panel import Sam3TrainingPanel
     from hydra_suite.training.contracts import (

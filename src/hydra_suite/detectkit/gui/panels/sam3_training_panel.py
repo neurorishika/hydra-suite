@@ -390,7 +390,18 @@ class Sam3TrainingPanel(QWidget):
         opt_form.addRow("Epochs", self.epochs_spin)
         self.batch_spin = QSpinBox()
         self.batch_spin.setRange(1, 256)
-        opt_form.addRow("Batch", self.batch_spin)
+        self.auto_batch_checkbox = QCheckBox("Auto (measure)")
+        self.auto_batch_checkbox.setToolTip(
+            "Measure the largest batch that fits before launch, and refuse "
+            "the run if nothing fits. This is not an optimal-batch search -- "
+            "the measurement is conservative by design and can only raise "
+            "the estimate, never lower it."
+        )
+        self.auto_batch_checkbox.toggled.connect(self._on_auto_batch_toggled)
+        batch_row = QHBoxLayout()
+        batch_row.addWidget(self.batch_spin)
+        batch_row.addWidget(self.auto_batch_checkbox)
+        opt_form.addRow("Batch", batch_row)
         self.grad_accum_spin = QSpinBox()
         self.grad_accum_spin.setRange(1, 256)
         opt_form.addRow("Grad accum", self.grad_accum_spin)
@@ -493,6 +504,9 @@ class Sam3TrainingPanel(QWidget):
 
     # -- Public interface --------------------------------------------------
 
+    def _on_auto_batch_toggled(self, checked: bool) -> None:
+        self.batch_spin.setEnabled(not checked)
+
     def params(self) -> Sam3LoraParams:
         negative_prompts = [
             line.strip()
@@ -513,7 +527,9 @@ class Sam3TrainingPanel(QWidget):
             dropout=self.dropout_spin.value(),
             lr=self.lr_spin.value(),
             epochs=self.epochs_spin.value(),
-            batch=self.batch_spin.value(),
+            batch=(
+                -1 if self.auto_batch_checkbox.isChecked() else self.batch_spin.value()
+            ),
             grad_accum=self.grad_accum_spin.value(),
             mixed_precision=self.precision_combo.currentText(),
             host_reserve_gb=self.host_reserve_gb_spin.value(),
@@ -553,7 +569,11 @@ class Sam3TrainingPanel(QWidget):
         self.dropout_spin.setValue(p.dropout)
         self.lr_spin.setValue(p.lr)
         self.epochs_spin.setValue(p.epochs)
-        self.batch_spin.setValue(p.batch)
+        if p.batch == -1:
+            self.auto_batch_checkbox.setChecked(True)
+        else:
+            self.batch_spin.setValue(p.batch)
+            self.auto_batch_checkbox.setChecked(False)
         self.grad_accum_spin.setValue(p.grad_accum)
         idx = self.precision_combo.findText(p.mixed_precision)
         if idx >= 0:
