@@ -138,6 +138,8 @@ def _install(
     degraded_reasons=(),
     probe_peaks=None,
     cancel_after=None,
+    probe_refusals=(),
+    sidecar_factory=None,
 ):
     harness = _Harness()
     probe_peaks = _PROBE_PEAKS if probe_peaks is None else probe_peaks
@@ -157,6 +159,8 @@ def _install(
     def assess_probe(_spec, *, batch, **_kwargs):
         harness.order.append("probe")
         harness.probe_preflight_batches.append(int(batch))
+        if probe_refusals:
+            return _Decision(admitted=False, refusals=probe_refusals)
         return _Decision()
 
     monkeypatch.setattr(tr.preflight_module, "assess_preflight", assess)
@@ -261,7 +265,7 @@ def _install(
         def cancel(self, _grace):
             self.canceled = True
 
-    monkeypatch.setattr(tr, "SupervisedSidecar", FakeSidecar)
+    monkeypatch.setattr(tr, "SupervisedSidecar", sidecar_factory or FakeSidecar)
 
     def should_cancel():
         if cancel_after is None:
@@ -452,3 +456,44 @@ def test_a_degraded_fingerprint_is_logged_as_loudly_as_the_banner(
         "sidecar_env_package_hash_degraded" in line and "DEGRADED" in line
         for line in harness.logs
     )
+
+
+def test_an_admission_refusal_at_batch_one_reports_its_own_reason(
+    tmp_path, monkeypatch
+):
+    """A missing credential is not "your workload does not fit the GPU". The
+    generic no-fit message would send the user hunting for VRAM they have."""
+
+    harness = _install(
+        monkeypatch,
+        tmp_path,
+        probe_refusals=("No Hugging Face credential found.",),
+    )
+
+    result = _run(harness, _spec(tmp_path, batch=-1))
+
+    assert not result["success"]
+    assert result["failure_kind"] == ExitKind.HOST_ADMISSION_REFUSAL.value
+    assert "No Hugging Face credential found." in result["error_message"]
+    assert harness.probe_preflight_batches == [1]
+    assert not harness.training_launches
+    assert not MemoryProfileStore(harness.store_path).load()
+
+
+def test_a_busy_lease_during_the_probe_is_a_structured_refusal(tmp_path, monkeypatch):
+    """`ResourceBusyError` is a RuntimeError, not an OSError, so without the
+    probe's own constructor guard it escapes as an unhandled traceback."""
+
+    from hydra_suite.runtime.resource_lease import ResourceBusyError
+
+    def busy(*_args, **_kwargs):
+        raise ResourceBusyError("cuda:GPU-physical-0", None)
+
+    harness = _install(monkeypatch, tmp_path, sidecar_factory=busy)
+
+    result = _run(harness, _spec(tmp_path, batch=-1))
+
+    assert not result["success"]
+    assert result["failure_kind"] == ExitKind.HOST_ADMISSION_REFUSAL.value
+    assert "probe sidecar launch refused" in result["error_message"]
+    assert not MemoryProfileStore(harness.store_path).load()

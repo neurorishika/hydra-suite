@@ -548,6 +548,8 @@ def run_probe(
 
     Raises `ProbeFailedError` when nothing survives, including at batch 1:
     that configuration cannot run on this hardware and must not be cached.
+    An admission refusal at batch 1 is reported through the same error, but
+    carrying the refusal's own reason rather than a no-fit message.
     """
 
     del run_dir  # The child owns record I/O; the ladder owns control flow.
@@ -559,7 +561,16 @@ def run_probe(
             raise ProbeCanceled(f"cancelled before probing batch {candidate}")
         try:
             peaks = step_fn(candidate)
-        except ProbeCandidateRefused:
+        except ProbeCandidateRefused as exc:
+            if not records:
+                # A refusal at the FIRST candidate is an admission problem --
+                # a missing credential, unacknowledged labels, an unwritable
+                # run dir -- not "this workload does not fit the GPU".
+                # Reporting the generic no-fit message would send the user
+                # hunting for VRAM they already have. Carry the real reason.
+                raise ProbeFailedError(
+                    "SAM3 memory probe could not be admitted at batch 1: " f"{exc}"
+                ) from exc
             break
         except BaseException as exc:  # noqa: BLE001 - re-raised unless it is an OOM
             if not _is_out_of_memory(exc):

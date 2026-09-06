@@ -293,11 +293,23 @@ def _run_probe_candidate(
         minimum_system_available_bytes=decision.budget.reserved_host_bytes,
         poll_interval_seconds=float(params.watchdog_poll_seconds),
     )
-    sidecar = SupervisedSidecar(
-        plan,
-        output_max_lines=OUTPUT_MAX_LINES,
-        output_max_chars=OUTPUT_MAX_CHARS,
-    )
+    try:
+        sidecar = SupervisedSidecar(
+            plan,
+            output_max_lines=OUTPUT_MAX_LINES,
+            output_max_chars=OUTPUT_MAX_CHARS,
+        )
+    except WorkloadStillOwnedError:
+        raise
+    except (ResourceBusyError, FileNotFoundError, RuntimeError) as exc:
+        # Mirrors the training constructor guard. A busy lease -- another
+        # heavy job on this box, the normal case this machinery exists for --
+        # is a structured refusal, not an unhandled traceback out of the
+        # probe ladder. `ResourceBusyError` is a RuntimeError, not an
+        # OSError, so it would not otherwise be caught upstream.
+        raise _BatchResolutionRefused(
+            f"SAM3 probe sidecar launch refused at batch {batch}: {exc}"
+        ) from exc
     try:
         _pump_child_output(
             sidecar, plan, params, log_cb, lambda _e, _t: None, should_cancel
