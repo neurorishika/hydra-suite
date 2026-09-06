@@ -56,18 +56,39 @@ from hydra_suite.core.inference.direct_calibration import (
 
 
 def _point(
-    label, f1, seconds, *, matched=200, missed=10, extra=10, mean_iou=0.8, failed=""
+    label,
+    seconds,
+    *,
+    matched=200,
+    missed=10,
+    extra=10,
+    mean_iou=0.8,
+    mean_quality=0.7,
+    failed="",
+    tiles=9,
+    confidence=0.35,
 ):
+    """Build a scored point with SELF-CONSISTENT precision/recall/F1.
+
+    The pre-D8 fixture set precision = recall = f1 = a hand-passed number
+    independent of the counts. That was harmless while F1 was the target;
+    under a recall-first rule it would let a test assert on a recall the
+    counts do not support, so the rates are derived from the counts here.
+    """
+    precision = matched / (matched + extra) if matched + extra else 0.0
+    recall = matched / (matched + missed) if matched + missed else 0.0
+    f1 = (2 * precision * recall / (precision + recall)) if precision + recall else 0.0
     score = CalibrationScore(
         frames=20,
         matched=matched,
         missed=missed,
         extra=extra,
-        precision=f1,
-        recall=f1,
+        precision=precision,
+        recall=recall,
         f1=f1,
         duplicate=0,
         mean_iou=mean_iou,
+        mean_quality=mean_quality,
     )
     return DirectCalibrationPoint(
         label=label,
@@ -78,9 +99,9 @@ def _point(
         overlap=0.2,
         object_tile_fraction=0.4,
         max_detections=64,
-        tiles_per_frame=9,
+        tiles_per_frame=tiles,
         seconds_per_frame=seconds,
-        confidence=0.35,
+        confidence=confidence,
         merge_policy="greedy_nmm",
         merge_metric="ios",
         merge_threshold=0.5,
@@ -90,67 +111,93 @@ def _point(
     )
 
 
-def test_recommendation_prefers_the_cheapest_point_within_f1_tolerance():
-    """'fast' is on the frontier (cheapest) and within 0.01 F1 of the best."""
+def test_recommendation_takes_the_cheapest_point_clearing_every_floor():
     best, reason = recommend_balanced(
         [
-            _point("slow", 0.920, 2.0, missed=8, extra=8),
-            _point("fast", 0.915, 0.4, missed=9, extra=9),
-            _point("bad", 0.600, 0.1, missed=60, extra=60),
+            _point("slow", 2.0, missed=8, extra=8),
+            _point("fast", 0.4, missed=9, extra=9),
+            _point("low_recall", 0.1, matched=100, missed=100, extra=1),
         ]
     )
     assert best.label == "fast"
     assert RECOMMENDATION_RULE in reason
 
 
-def test_a_dominated_cheap_point_never_wins():
-    """'cheap' is worse on misses AND extras AND time is not enough to save it."""
-    best, _reason = recommend_balanced(
-        [
-            _point("good", 0.930, 1.0, missed=5, extra=5),
-            _point("cheap", 0.930, 2.0, missed=9, extra=9),
-        ]
+def test_f1_no_longer_influences_selection():
+    """D8's load-bearing assertion. ``lower_f1_faster`` has a strictly worse
+    F1 (many more extras) but clears every floor and is cheaper, so under
+    the retired F1-tolerance rule -- 0.741 vs 0.952, far outside 0.01 -- the
+    high-F1 point won. Recall-first must now pick the cheap one. F1 is still
+    reported on both points, and still appears in the explanation.
+    """
+    high_f1 = _point("high_f1_slow", 2.0, matched=200, missed=10, extra=10)
+    lower_f1 = _point("lower_f1_faster", 0.4, matched=200, missed=10, extra=130)
+    assert lower_f1.score.f1 < high_f1.score.f1 - 0.01
+    assert lower_f1.score.recall == high_f1.score.recall
+    best, reason = recommend_balanced([high_f1, lower_f1])
+    assert best.label == "lower_f1_faster"
+    assert "F1" in reason  # retired as a target, still reported
+
+
+def test_recall_below_the_floor_is_refused_outright():
+    best, reason = recommend_balanced(
+        [_point("precise_but_blind", 0.1, matched=100, missed=100, extra=0)]
     )
-    assert best.label == "good"
+    assert best is None
+    assert "recall" in reason
 
 
 def test_failed_and_undersampled_points_are_never_recommended():
     best, reason = recommend_balanced(
         [
-            _point("broken", 0.99, 0.1, failed="tile budget exceeded"),
-            _point("thin", 0.99, 0.1, matched=MIN_MATCHED_INSTANCES - 1),
+            _point("broken", 0.1, failed="tile budget exceeded"),
+            _point("thin", 0.1, matched=MIN_MATCHED_INSTANCES - 1, missed=1, extra=1),
         ]
     )
     assert best is None
     assert "matched instances" in reason
 
 
-def test_poor_localization_is_excluded_even_at_high_f1():
+def test_poor_match_quality_is_excluded_even_at_perfect_recall():
+    best, reason = recommend_balanced(
+        [_point("mistargeted", 0.1, missed=0, mean_quality=0.2)]
+    )
+    assert best is None
+    assert "quality" in reason
+
+
+def test_a_qualifying_point_beats_a_higher_quality_slower_one():
+    """Cost is the objective among survivors; quality is a FLOOR, not a
+    ranking term -- otherwise the floors would be applied twice."""
     best, _reason = recommend_balanced(
         [
-            _point("sloppy", 0.99, 0.1, mean_iou=0.2),
-            _point("clean", 0.90, 1.0, missed=5, extra=5),
+            _point("pristine_slow", 2.0, mean_quality=0.95),
+            _point("adequate_fast", 0.5, mean_quality=0.40),
         ]
     )
-    assert best.label == "clean"
+    assert best.label == "adequate_fast"
+
+
+def test_equal_speed_ties_break_on_fewer_tiles_then_higher_confidence():
+    best, _reason = recommend_balanced(
+        [
+            _point("many_tiles", 1.0, tiles=16, confidence=0.9),
+            _point("few_tiles", 1.0, tiles=4, confidence=0.2),
+        ]
+    )
+    assert best.label == "few_tiles"
+    best, _reason = recommend_balanced(
+        [
+            _point("timid", 1.0, tiles=4, confidence=0.2),
+            _point("confident", 1.0, tiles=4, confidence=0.8),
+        ]
+    )
+    assert best.label == "confident"
 
 
 def test_empty_input_refuses_rather_than_raising():
     best, reason = recommend_balanced([])
     assert best is None and RECOMMENDATION_RULE in reason
-
-
-def test_a_point_dominated_at_equal_speed_is_dropped_by_the_frontier():
-    """Removing _pareto's filtering flips this result, so it proves the frontier runs."""
-    best, _reason = recommend_balanced(
-        [
-            _point(
-                "dominated", 0.930, 1.0, missed=20, extra=20
-            ),  # first in list, same speed
-            _point("dominating", 0.935, 1.0, missed=5, extra=5),
-        ]
-    )
-    assert best.label == "dominating"
 
 
 def test_axis_aligned_matching_counts_crowded_boxes_one_to_one():

@@ -285,13 +285,20 @@ def score_frames(
     )
 
 
+# Sampling-sufficiency floor: how much EVIDENCE a recommendation needs.
+# Deliberately NOT unified to the semantic path's 20. D8 changes what is
+# optimised, not how much evidence is required, and lowering this here
+# would smuggle a fourth unattributed shift into the gate.
 MIN_MATCHED_INSTANCES = 60
-F1_TOLERANCE = 0.01
-MIN_LOCALIZATION = 0.5
+# D8 objective floors, taken from the semantic path (semantic/calibration.py).
+MIN_RECALL = 0.90
+MIN_MEAN_QUALITY = 0.35
 RECOMMENDATION_RULE = (
-    "Balanced rule: drop failed and undersampled points, keep the Pareto "
-    "frontier of misses, extras and time, then take the fastest point whose F1 "
-    "is within 0.01 of the best and whose localization quality is at least 0.5."
+    "Recall-first rule: drop failed points, keep only those recalling at "
+    "least 90% of labelled instances, then only those whose mean match "
+    "quality is at least 0.35, then only those with at least 60 matched "
+    "instances; among the survivors take the cheapest measured "
+    "seconds/frame, breaking ties on fewer tiles then higher confidence."
 )
 # Stable machine-readable identifier for the rule ``recommend_balanced``
 # currently implements. Bump this (and its effective date) whenever the
@@ -299,7 +306,14 @@ RECOMMENDATION_RULE = (
 # which rule produced their "measured best" claim. Never reuse an id for a
 # different rule and never back-fill this id onto profiles saved before it
 # existed.
-RECOMMENDATION_RULE_ID = "balanced-pareto-fastest-v1"
+#
+# ``balanced-pareto-fastest-v1`` (F1-tolerance + Pareto + fastest) was
+# RETIRED on 2026-09-06 by D8 of
+# docs/superpowers/plans/2026-09-06-direct-path-scoring-unification.md.
+# F1 is retired as an OPTIMISATION TARGET only -- ``CalibrationScore.f1``
+# is still computed and still reported; it simply no longer appears
+# anywhere in the selection objective.
+RECOMMENDATION_RULE_ID = "recall-first-quality-floors-v1"
 RECOMMENDATION_RULE_EFFECTIVE_DATE = "2026-09-06"
 
 
@@ -331,67 +345,79 @@ class DirectCalibrationPoint:
     candidate_index: int = -1
 
 
-def _pareto(points: Sequence[DirectCalibrationPoint]) -> list[DirectCalibrationPoint]:
-    """Keep points not dominated on (misses, extras, seconds) simultaneously."""
-
-    def cost(point: DirectCalibrationPoint) -> tuple[float, float, float]:
-        return (
-            float(point.score.missed),
-            float(point.score.extra),
-            float(point.seconds_per_frame),
-        )
-
-    keep: list[DirectCalibrationPoint] = []
-    for candidate in points:
-        this = cost(candidate)
-        dominated = any(
-            all(o <= t for o, t in zip(cost(other), this))
-            and any(o < t for o, t in zip(cost(other), this))
-            for other in points
-            if other is not candidate
-        )
-        if not dominated:
-            keep.append(candidate)
-    return keep
-
-
 def recommend_balanced(
     points: Sequence[DirectCalibrationPoint],
     *,
     min_matched: int = MIN_MATCHED_INSTANCES,
-    f1_tolerance: float = F1_TOLERANCE,
-    min_iou: float = MIN_LOCALIZATION,
+    min_recall: float = MIN_RECALL,
+    min_quality: float = MIN_MEAN_QUALITY,
 ) -> tuple[DirectCalibrationPoint | None, str]:
     """Explain a suggestion, or refuse. It is never applied automatically.
 
+    D8: RECALL-FIRST, with quality floors. F1 is retired as the optimisation
+    target -- it is a harmonic mean that happily trades away found animals
+    for tidier precision, which is the wrong trade for a tracker that cannot
+    recover an instance it never detected. The staged structure mirrors
+    ``semantic/calibration.py``'s ``recommend``: each stage refuses with a
+    reason naming the floor it hit, so a user is told WHICH property failed
+    rather than being handed a bare "no recommendation".
+
+    Model-vs-model comparison is a different question and uses AP from
+    ``core/inference/semantic/detection_metrics.py``; do not reimplement it
+    here.
+
     The floors are ELIGIBILITY filters, not vetoes on the winner: a
-    configuration that finds almost nothing would otherwise post a perfect F1
-    on a handful of matches and win.
+    configuration that finds almost nothing would otherwise post a perfect
+    score on a handful of matches and win.
     """
-    eligible = [
-        point
-        for point in points
-        if not point.failed_reason
-        and point.score.matched >= min_matched
-        and point.score.mean_iou >= min_iou
-    ]
-    if not eligible:
+    live = [point for point in points if not point.failed_reason]
+    if not live:
         return None, (
-            f"No point cleared the floors: at least {min_matched} matched "
-            f"instances and {min_iou:g} localization quality. Label a few more "
-            "frames or widen the sweep. " + RECOMMENDATION_RULE
+            "No calibration point ran to completion; nothing to recommend. "
+            + RECOMMENDATION_RULE
         )
-    best_f1 = max(point.score.f1 for point in eligible)
-    frontier = _pareto(eligible)
-    near_best = [p for p in frontier if p.score.f1 >= best_f1 - f1_tolerance]
-    if not near_best:
-        # The best-F1 point is always within tolerance of itself, so an empty
-        # set here means it was dominated on every cost axis; fall back to it
-        # explicitly rather than to an arbitrary frontier member.
-        near_best = [p for p in eligible if p.score.f1 >= best_f1 - f1_tolerance]
-    chosen = min(near_best, key=lambda p: p.seconds_per_frame)
+    on_recall = [point for point in live if point.score.recall >= min_recall]
+    if not on_recall:
+        best_recall = max(point.score.recall for point in live)
+        return None, (
+            f"No configuration reached {min_recall:.0%} recall on these "
+            f"frames (best {best_recall:.1%}). Widen the sweep, lower the "
+            "confidence floor, or label frames that better represent the "
+            "hard cases. " + RECOMMENDATION_RULE
+        )
+    on_quality = [
+        point for point in on_recall if point.score.mean_quality >= min_quality
+    ]
+    if not on_quality:
+        best_quality = max(point.score.mean_quality for point in on_recall)
+        return None, (
+            f"Mistargeted: every configuration reaching {min_recall:.0%} "
+            f"recall did so with detections that match the labels poorly "
+            f"(best mean quality {best_quality:.2f}, need {min_quality:.2f}). "
+            "The detections are probably covering the wrong thing -- merged "
+            "neighbours, or parts of an animal. " + RECOMMENDATION_RULE
+        )
+    eligible = [point for point in on_quality if point.score.matched >= min_matched]
+    if not eligible:
+        best_matched = max(point.score.matched for point in on_quality)
+        return None, (
+            f"Insufficient data: the best qualifying configuration matched "
+            f"only {best_matched} instance(s) across the labelled frames "
+            f"(need {min_matched} matched instances). Label a few more "
+            "frames. " + RECOMMENDATION_RULE
+        )
+    # DEVIATION from the semantic path, stated on purpose: semantic ranks on
+    # ``(tiles_per_frame, -confidence)`` because tiles are its only available
+    # PROXY for cost. Direct calibration measures real wall-clock per frame,
+    # so it ranks on the measured quantity the proxy stands in for, and keeps
+    # tiles/confidence only as deterministic tie-breaks.
+    chosen = min(
+        eligible,
+        key=lambda p: (p.seconds_per_frame, p.tiles_per_frame, -p.confidence),
+    )
     return chosen, (
-        f"{chosen.label}: F1 {chosen.score.f1:.3f} (best {best_f1:.3f}), "
-        f"{chosen.seconds_per_frame:.2f}s/frame on this machine and data. "
-        + RECOMMENDATION_RULE
+        f"{chosen.label}: recall {chosen.score.recall:.3f}, mean quality "
+        f"{chosen.score.mean_quality:.2f}, F1 {chosen.score.f1:.3f} "
+        f"(reported, not optimised), {chosen.seconds_per_frame:.2f}s/frame "
+        "on this machine and data. " + RECOMMENDATION_RULE
     )
