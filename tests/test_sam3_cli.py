@@ -489,33 +489,403 @@ def test_a_long_run_of_skipped_steps_aborts():
     assert "no longer learning" in source
 
 
-def test_prune_keeps_only_the_newest_epoch_checkpoints(tmp_path):
-    """Epoch counts are user-supplied; unbounded salvage could exhaust the
-    disk mid-run and destroy the artifact this feature exists to preserve."""
-    from hydra_suite.training.sam3_lora.cli import prune_epoch_checkpoints
-
-    for n in range(1, 6):
-        (tmp_path / f"epoch_{n:03d}.pt").write_text("x")
-        (tmp_path / f"epoch_{n:03d}.pt.complete.json").write_text("{}")
-
-    removed = prune_epoch_checkpoints(tmp_path, keep=2)
-
-    remaining = sorted(p.name for p in tmp_path.glob("epoch_*.pt"))
-    assert remaining == ["epoch_004.pt", "epoch_005.pt"]
-    assert len(removed) == 3
-    # Completion markers must go with their checkpoint, not linger as
-    # evidence of an artifact that no longer exists.
-    assert not (tmp_path / "epoch_003.pt.complete.json").exists()
-    assert (tmp_path / "epoch_005.pt.complete.json").exists()
+def _make_checkpoints(directory, count, size=1024):
+    for n in range(1, count + 1):
+        (directory / f"epoch_{n:03d}.pt").write_bytes(b"x" * size)
+        (directory / f"epoch_{n:03d}.pt.complete.json").write_text("{}")
+    return sorted(directory.glob("epoch_*.pt"))
 
 
-def test_prune_is_safe_on_a_missing_directory_or_zero_keep(tmp_path):
-    from hydra_suite.training.sam3_lora.cli import prune_epoch_checkpoints
+def test_retention_keeps_every_checkpoint_when_the_budget_allows(tmp_path):
+    """A count cap ALWAYS destroys the earliest epochs; a budget only prunes
+    when disk actually demands it."""
+    from hydra_suite.training.sam3_lora.cli import plan_checkpoint_retention
 
-    assert prune_epoch_checkpoints(tmp_path / "absent", keep=2) == []
-    (tmp_path / "epoch_001.pt").write_text("x")
-    assert prune_epoch_checkpoints(tmp_path, keep=0) == []
-    assert (tmp_path / "epoch_001.pt").exists(), "keep=0 must not wipe everything"
+    paths = _make_checkpoints(tmp_path, 10)
+    removed = plan_checkpoint_retention(
+        paths, free_bytes=100 * 1024 * 1024, adapter_bytes=1024
+    )
+    assert removed == []
+
+
+def test_retention_thins_the_middle_and_keeps_first_and_last(tmp_path):
+    from hydra_suite.training.sam3_lora.cli import plan_checkpoint_retention
+
+    paths = _make_checkpoints(tmp_path, 9)
+    # Budget deliberately tiny: only a few adapters fit.
+    removed = plan_checkpoint_retention(paths, free_bytes=0, adapter_bytes=1024)
+    kept = [p for p in paths if p not in removed]
+    assert kept, "retention must never delete everything"
+    assert kept[0].name == "epoch_001.pt", "the earliest epoch is the stall evidence"
+    assert kept[-1].name == "epoch_009.pt", "the newest epoch is the salvage artifact"
+    assert len(kept) < len(paths)
+
+
+def test_retention_never_deletes_the_checkpoint_just_written(tmp_path):
+    from hydra_suite.training.sam3_lora.cli import plan_checkpoint_retention
+
+    paths = _make_checkpoints(tmp_path, 4)
+    removed = plan_checkpoint_retention(paths, free_bytes=0, adapter_bytes=10**9)
+    assert paths[-1] not in removed
+
+
+def test_retention_budget_is_derived_from_measured_free_space_and_size(tmp_path):
+    """No hardcoded byte budget and no hardcoded count may appear."""
+    import inspect
+
+    from hydra_suite.training.sam3_lora import cli
+
+    assert not hasattr(cli, "KEEP_EPOCH_CHECKPOINTS")
+    source = inspect.getsource(cli.enforce_checkpoint_budget) + inspect.getsource(
+        cli.checkpoint_budget_bytes
+    )
+    assert "disk_usage" in source
+    assert "stat()" in source or "st_size" in source
+
+
+def test_enforce_budget_removes_markers_and_logs_loudly(tmp_path):
+    from hydra_suite.training.sam3_lora import cli
+
+    _make_checkpoints(tmp_path, 6)
+    messages: list[str] = []
+    removed = cli.enforce_checkpoint_budget(
+        tmp_path, budget_bytes=2048, log=messages.append
+    )
+    assert removed
+    for stale in removed:
+        assert not stale.exists()
+        assert not stale.with_name(stale.name + ".complete.json").exists()
+    assert any("budget" in m.lower() for m in messages)
+
+
+def test_an_unmeasurable_budget_retains_everything(tmp_path):
+    """A failed measurement must never masquerade as a binding budget."""
+    import shutil
+
+    from hydra_suite.training.sam3_lora import cli
+
+    paths = _make_checkpoints(tmp_path, 6)
+
+    def _boom(_path):
+        raise OSError("no such device")
+
+    messages: list[str] = []
+    original = shutil.disk_usage
+    shutil.disk_usage = _boom
+    try:
+        removed = cli.enforce_checkpoint_budget(tmp_path, log=messages.append)
+    finally:
+        shutil.disk_usage = original
+
+    assert removed == []
+    assert all(path.exists() for path in paths)
+    assert any("could not be measured" in m for m in messages)
+
+
+def test_enforce_budget_is_safe_on_a_missing_directory(tmp_path):
+    from hydra_suite.training.sam3_lora import cli
+
+    assert cli.enforce_checkpoint_budget(tmp_path / "absent") == []
+
+
+def test_val_series_is_appended_per_epoch_as_jsonl(tmp_path):
+    from hydra_suite.training.sam3_lora import cli
+
+    cli.append_val_record(tmp_path, {"epoch": 1, "val_loss_mean": 2.0})
+    cli.append_val_record(tmp_path, {"epoch": 2, "val_loss_mean": 1.5})
+
+    lines = (tmp_path / cli.VAL_SERIES_FILENAME).read_text().strip().splitlines()
+    assert [json.loads(line)["epoch"] for line in lines] == [1, 2]
+
+
+def test_val_cadence_defaults_to_every_epoch_and_is_env_configurable(monkeypatch):
+    from hydra_suite.training.sam3_lora import cli
+
+    monkeypatch.delenv(cli.VAL_CADENCE_ENV, raising=False)
+    assert cli.val_cadence() == 1
+    monkeypatch.setenv(cli.VAL_CADENCE_ENV, "3")
+    assert cli.val_cadence() == 3
+    monkeypatch.setenv(cli.VAL_CADENCE_ENV, "garbage")
+    assert cli.val_cadence() == 1
+
+
+def test_per_epoch_validation_cannot_perturb_training():
+    """Evidence recording must be provably behaviour-preserving: RNG state is
+    saved and restored around the mid-run validation pass."""
+    import inspect
+
+    from hydra_suite.training.sam3_lora import cli
+
+    source = inspect.getsource(cli._record_epoch_validation)
+    assert "get_rng_state" in source and "set_rng_state" in source
+    assert "model.train()" in source
+
+
+class _RngBurningModel:
+    """Stub standing in for the SAM3 image model on the no-`sam3` box.
+
+    Records mode transitions; the evaluation stub burns every RNG stream so a
+    missing restore is observable rather than merely un-greppable.
+    """
+
+    def __init__(self) -> None:
+        self.training = True
+        self.mode_calls: list[str] = []
+
+    def train(self) -> None:
+        self.training = True
+        self.mode_calls.append("train")
+
+    def eval(self) -> None:
+        self.training = False
+        self.mode_calls.append("eval")
+
+
+def _rng_fingerprint():
+    import random as _random
+
+    import numpy as _np
+    import torch as _torch
+
+    return (
+        _random.getstate(),
+        _np.random.get_state()[1].tobytes(),
+        _torch.get_rng_state().clone(),
+    )
+
+
+def _assert_same_rng(before, after):
+    import torch as _torch
+
+    assert before[0] == after[0], "python RNG stream was not restored"
+    assert before[1] == after[1], "numpy RNG stream was not restored"
+    assert _torch.equal(before[2], after[2]), "torch RNG stream was not restored"
+
+
+def test_mid_run_validation_restores_every_rng_stream(tmp_path, monkeypatch):
+    """The load-bearing property of the whole branch: recording evidence must
+    not move a single number the next epoch draws."""
+    pytest.importorskip("torch")
+    import random as _random
+
+    import numpy as _np
+    import torch as _torch
+
+    from hydra_suite.training.sam3_lora import cli
+
+    def _burn(*_args, **_kwargs):
+        _random.random()
+        _np.random.rand()
+        _torch.rand(4)
+        return {
+            "val_loss_mean": 1.25,
+            "val_batches": 3,
+            "val_terms_mean": {"loss_ce": 1.0},
+            "elapsed_s": 0.5,
+        }
+
+    monkeypatch.setattr(cli, "_evaluate_split", _burn)
+    model = _RngBurningModel()
+
+    _random.seed(7)
+    _np.random.seed(7)
+    _torch.manual_seed(7)
+    before = _rng_fingerprint()
+
+    record = cli._record_epoch_validation(
+        model, None, None, None, None, None, None, True, tmp_path, 2
+    )
+
+    _assert_same_rng(before, _rng_fingerprint())
+    assert model.training, "the model must be returned to train mode"
+    assert record["epoch"] == 2
+    assert record["val_cadence"] == 1, "effective cadence must be stamped"
+
+
+def test_rng_is_restored_even_when_validation_raises(tmp_path, monkeypatch):
+    pytest.importorskip("torch")
+    import random as _random
+
+    import numpy as _np
+    import torch as _torch
+
+    from hydra_suite.training.sam3_lora import cli
+
+    def _burn_then_fail(*_args, **_kwargs):
+        _random.random()
+        _np.random.rand()
+        _torch.rand(4)
+        raise RuntimeError("CUDA OOM during validation")
+
+    monkeypatch.setattr(cli, "_evaluate_split", _burn_then_fail)
+    model = _RngBurningModel()
+
+    _random.seed(11)
+    _np.random.seed(11)
+    _torch.manual_seed(11)
+    before = _rng_fingerprint()
+
+    with pytest.raises(RuntimeError):
+        cli._record_epoch_validation(
+            model, None, None, None, None, None, None, True, tmp_path, 3
+        )
+
+    _assert_same_rng(before, _rng_fingerprint())
+    assert model.training
+
+
+def test_cadence_is_stamped_so_a_gap_is_not_mistaken_for_a_crash(tmp_path, monkeypatch):
+    pytest.importorskip("torch")
+    from hydra_suite.training.sam3_lora import cli
+
+    monkeypatch.setenv(cli.VAL_CADENCE_ENV, "2")
+    monkeypatch.setattr(
+        cli,
+        "_evaluate_split",
+        lambda *a, **k: {
+            "val_loss_mean": 1.0,
+            "val_batches": 1,
+            "val_terms_mean": {},
+            "elapsed_s": 0.1,
+        },
+    )
+    cli._record_epoch_validation(
+        _RngBurningModel(), None, None, None, None, None, None, True, tmp_path, 4
+    )
+    row = json.loads((tmp_path / cli.VAL_SERIES_FILENAME).read_text().strip())
+    assert row["val_cadence"] == 2
+
+
+def test_a_stat_failure_skips_pruning_instead_of_killing_the_run(tmp_path):
+    """Retention is best-effort housekeeping; it runs on the training path and
+    must never raise into `run_training`."""
+    from pathlib import Path as _Path
+
+    from hydra_suite.training.sam3_lora import cli
+
+    paths = _make_checkpoints(tmp_path, 6)
+    original = _Path.stat
+
+    def _boom(self, *args, **kwargs):
+        if self.name.startswith("epoch_"):
+            raise OSError("stale NFS file handle")
+        return original(self, *args, **kwargs)
+
+    messages: list[str] = []
+    _Path.stat = _boom
+    try:
+        removed = cli.enforce_checkpoint_budget(tmp_path, log=messages.append)
+    finally:
+        _Path.stat = original
+
+    assert removed == []
+    assert all(path.exists() for path in paths)
+    assert any("could not be measured" in m for m in messages)
+
+
+def test_an_unlink_failure_skips_pruning_instead_of_killing_the_run(tmp_path):
+    """Deletion is filesystem I/O on the training path too.
+
+    `missing_ok=True` suppresses only FileNotFoundError; a PermissionError
+    would propagate into `run_training` and kill a multi-hour run.
+    """
+    from pathlib import Path as _Path
+
+    from hydra_suite.training.sam3_lora import cli
+
+    paths = _make_checkpoints(tmp_path, 9)
+    original = _Path.unlink
+
+    def _denied(self, *args, **kwargs):
+        if self.name.startswith("epoch_"):
+            raise PermissionError("read-only file system")
+        return original(self, *args, **kwargs)
+
+    messages: list[str] = []
+    _Path.unlink = _denied
+    try:
+        removed = cli.enforce_checkpoint_budget(
+            tmp_path, budget_bytes=2048, log=messages.append
+        )
+    finally:
+        _Path.unlink = original
+
+    assert removed == [], "nothing was actually deleted, so nothing may be reported"
+    assert all(path.exists() for path in paths)
+    assert any("could not delete" in m for m in messages)
+
+
+def test_one_unlink_failure_does_not_abort_the_other_deletions(tmp_path):
+    """Each deletion is independent: a partially thinned directory is fine, a
+    dead run is not."""
+    from pathlib import Path as _Path
+
+    from hydra_suite.training.sam3_lora import cli
+
+    _make_checkpoints(tmp_path, 9)
+    original = _Path.unlink
+    blocked = "epoch_005.pt"
+
+    def _selective(self, *args, **kwargs):
+        if self.name == blocked:
+            raise PermissionError("read-only file system")
+        return original(self, *args, **kwargs)
+
+    messages: list[str] = []
+    _Path.unlink = _selective
+    try:
+        removed = cli.enforce_checkpoint_budget(
+            tmp_path, budget_bytes=2048, log=messages.append
+        )
+    finally:
+        _Path.unlink = original
+
+    assert removed, "the deletions that could succeed must still have happened"
+    assert blocked not in [path.name for path in removed]
+    assert (tmp_path / blocked).exists()
+    # A marker may never outlive the artifact it vouches for.
+    assert (tmp_path / (blocked + ".complete.json")).exists()
+    for path in removed:
+        assert not path.exists()
+        assert not path.with_name(path.name + ".complete.json").exists()
+
+
+def test_retention_guards_stay_scoped_to_oserror(tmp_path, monkeypatch):
+    """A logic bug in the planner must still surface, not be swallowed."""
+    from hydra_suite.training.sam3_lora import cli
+
+    _make_checkpoints(tmp_path, 4)
+
+    def _bug(*_args, **_kwargs):
+        raise TypeError("planner logic bug")
+
+    monkeypatch.setattr(cli, "plan_checkpoint_retention", _bug)
+    with pytest.raises(TypeError):
+        cli.enforce_checkpoint_budget(tmp_path, budget_bytes=2048, log=lambda _m: None)
+
+
+def test_val_record_carries_the_full_loss_decomposition_and_its_cost(tmp_path):
+    import inspect
+
+    from hydra_suite.training.sam3_lora import cli
+
+    source = inspect.getsource(cli._evaluate_split)
+    assert "val_loss_mean" in source
+    assert "elapsed_s" in source
+    # The terminal artifact keeps its existing shape; the series adds to it.
+    assert "informational only" in inspect.getsource(cli._evaluate_and_write)
+
+
+def test_nothing_selects_a_checkpoint_on_the_recorded_series():
+    """Selection stays last-epoch; a study measured every per-query validation
+    signal ANTI-correlating with held-out AP."""
+    import inspect
+
+    from hydra_suite.training.sam3_lora import cli
+
+    source = inspect.getsource(cli._record_epoch_validation)
+    assert "anti-correlat" in source.lower()
+    assert "selection" in source.lower()
 
 
 def test_epoch_checkpoints_never_shadow_the_completion_signal():
