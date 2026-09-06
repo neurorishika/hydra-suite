@@ -1,4 +1,4 @@
-# TrackerKit system-specific inference autotuner
+# TrackerKit system-specific inference throughput autotuner
 
 **Date:** 2026-09-06
 **Status:** Proposed; experimentally specified, not implemented
@@ -76,6 +76,28 @@ head-tail batch 4 at the existing depth 2, improving median throughput about
 - Making CPU/MPS policy claims from the Mehek CUDA measurements. The
   architecture supports backend-specific policies, but every backend needs its
   own evidence and profile.
+
+## Relationship to the tracking auto-tuner
+
+TrackerKit already has a tracking auto-tuner under
+`hydra_suite.core.tracking.optimization`. It recommends semantic detection,
+assignment, and Kalman parameters using held-out trajectory-quality evidence,
+then applies representable values through
+`trackerkit.gui.autotune_contract`. That is a separate product and objective.
+
+This design is named the **Inference Throughput Autotuner** in code, logs, and
+UI. It changes execution strategy only and must not:
+
+- add batch/depth fields to `TRACKING_AUTOTUNE_CANDIDATE_KEYS`;
+- write its result through the tracking candidate UI contract;
+- claim an accuracy or trajectory-quality improvement; or
+- search semantic thresholds to recover throughput or equivalence.
+
+The two systems may share read-only inference/result caches and common runtime
+profiling primitives, but their keys, evidence, stores, recommendations, and UI
+actions remain separate. If both are requested, semantic tracking parameters
+are resolved first; their resulting detection/count workload signature then
+keys throughput tuning.
 
 ## Architecture
 
