@@ -46,9 +46,22 @@ from hydra_suite.training.yolo_autobatch import (
     ResolutionCanceled,
     batch_resolution_block,
     child_degraded_reasons,
+    is_bare_ordinal_device,
     normalize_cuda_device,
     resolve_yolo_batch,
 )
+
+#: WARNING PERIOD (temporary). `_accelerator` now recognises Ultralytics' bare
+#: ordinal device convention ("0", "0,1") as CUDA. Those runs were classified
+#: CPU before, so they never faced the accelerator admission gate. While this
+#: flag is True, a bare-ordinal run that the accelerator gate would REFUSE is
+#: instead admitted with a loud warning and host-only accounting -- exactly the
+#: accounting it had before the widening. Nothing else is downgraded: a run the
+#: PRE-CHANGE evaluation would also have refused is still refused.
+#:
+#: TO END THE WARNING PERIOD: set this to False (then delete this constant and
+#: the `_bare_ordinal_gate_warning` branch in `_run_ultralytics_once`).
+BARE_ORDINAL_ACCELERATOR_GATE_WARNING_PERIOD = True
 
 OUTPUT_MAX_LINES = 512
 OUTPUT_MAX_CHARS = 256 * 1024
@@ -57,18 +70,60 @@ MAX_PROCESSES = 512
 
 
 def _accelerator(device: str):
+    """Classify a device string for containment purposes.
+
+    Bare ordinals ("0", "0,1") are Ultralytics' OWN convention and are what
+    the runbook's example uses; they are CUDA, and are resolved through the
+    shared `normalize_cuda_device` (multi-GPU forms resolve against the FIRST
+    device, matching what Ultralytics profiles).
+
+    A bare ordinal on a box WITHOUT CUDA still returns CPU rather than raising:
+    raising would turn a run that worked yesterday into a hard failure. Only an
+    explicit ``cuda...`` request raises when the device is absent.
+    """
+
     value = str(device or "auto").strip().lower()
     if value == "mps" or (value == "auto" and sys.platform == "darwin"):
         return AcceleratorKind.MPS, None
-    if value.startswith("cuda") or value == "auto":
+    bare_ordinal = is_bare_ordinal_device(value)
+    if value.startswith("cuda") or value == "auto" or bare_ordinal:
         from hydra_suite.training.sam3_lora.preflight import _probe_cuda_device
 
-        observed = _probe_cuda_device(value)
+        observed = _probe_cuda_device(
+            normalize_cuda_device(value) if bare_ordinal else value
+        )
         if observed is not None:
             return AcceleratorKind.CUDA, observed
         if value.startswith("cuda"):
             raise RuntimeError("the requested CUDA device is unavailable")
     return AcceleratorKind.CPU, None
+
+
+def _gib(value: int) -> str:
+    return f"{max(0, int(value)) / GiB:.1f} GiB"
+
+
+def _bare_ordinal_gate_warning(device, budget) -> str:
+    """The warning-period notice; see BARE_ORDINAL_ACCELERATOR_GATE_WARNING_PERIOD."""
+
+    return (
+        "WARNING: device=%s is Ultralytics' bare-ordinal convention. It used to "
+        "be classified as CPU for containment (host-only accounting, no CUDA "
+        "pin); it is now correctly classified as CUDA, and under that "
+        "classification the accelerator admission gate WOULD REFUSE this run: "
+        "estimated accelerator peak %s against %s usable of %s available "
+        "device memory. During the warning period the run is allowed to "
+        "proceed with the host-only accounting it had before. THIS "
+        "CONFIGURATION WILL BE REFUSED IN A FUTURE RELEASE -- lower the batch "
+        "or free device memory. Gate refusals: %s"
+        % (
+            device,
+            _gib(budget.accelerator_peak_bytes),
+            _gib(budget.usable_accelerator_bytes or 0),
+            _gib(budget.available_accelerator_bytes or 0),
+            "; ".join(budget.refusals),
+        )
+    )
 
 
 def _estimate_host_bytes(spec) -> int:
@@ -127,6 +182,17 @@ def _run_ultralytics_once(
 ) -> dict:
     """Run one CLI under immutable limits and return bounded exit evidence."""
     accelerator, cuda = _accelerator(spec.device)
+    if (
+        accelerator is AcceleratorKind.CUDA
+        and is_bare_ordinal_device(spec.device)
+        and str(spec.device).count(",") >= 1
+        and log_cb is not None
+    ):
+        log_cb(
+            f"containment: {spec.device} names several devices; accounting and "
+            f"the device pin resolve against {normalize_cuda_device(spec.device)} "
+            "alone rather than overstating the capacity of the set."
+        )
     estimate = _estimate_host_bytes(spec)
     policy = ResourcePolicy()
 
@@ -140,15 +206,14 @@ def _run_ultralytics_once(
             )
         return probe_resources(accelerator)
 
-    initial = observe()
-    budget = evaluate_resource_request(
-        ResourceRequest(
+    def request(accelerator_peak: int):
+        return ResourceRequest(
             job_name="Ultralytics training",
             phases=(
                 PhaseEstimate(
                     "training",
                     host_peak_bytes=estimate,
-                    accelerator_peak_bytes=estimate if cuda is not None else 0,
+                    accelerator_peak_bytes=accelerator_peak,
                 ),
             ),
             limits=WorkLimits(
@@ -156,15 +221,40 @@ def _run_ultralytics_once(
                 workers=max(0, int(spec.hyperparams.workers)),
                 prefetch_batches=2,
             ),
-        ),
-        initial,
-        policy,
+        )
+
+    initial = observe()
+    budget = evaluate_resource_request(
+        request(estimate if cuda is not None else 0), initial, policy
     )
+    admission_warnings: list[str] = []
+    if (
+        not budget.admitted
+        and BARE_ORDINAL_ACCELERATOR_GATE_WARNING_PERIOD
+        and accelerator is AcceleratorKind.CUDA
+        and is_bare_ordinal_device(spec.device)
+    ):
+        # The oracle is the LITERAL pre-change evaluation: this device string
+        # used to classify as CPU, so re-run the admission it actually faced
+        # yesterday -- a CPU observation with no accelerator estimate. Only if
+        # THAT admits is the refusal newly introduced by the widening; any
+        # refusal it reproduces (host, and every non-admission refusal further
+        # down: lease, prelaunch, dataset) is left to refuse untouched.
+        legacy = evaluate_resource_request(
+            request(0), probe_resources(AcceleratorKind.CPU), policy
+        )
+        if legacy.admitted:
+            warning = _bare_ordinal_gate_warning(spec.device, budget)
+            admission_warnings.append(warning)
+            if log_cb is not None:
+                log_cb(warning)
+            budget = legacy
     if not budget.admitted:
         return {
             "success": False,
             "failure_kind": ExitKind.HOST_ADMISSION_REFUSAL.value,
             "error_message": "; ".join(budget.refusals),
+            "admission_warnings": admission_warnings,
             "resource_telemetry": resource_telemetry(
                 budget, hard_host_bytes=0, soft_host_bytes=0
             ),
@@ -279,6 +369,7 @@ def _run_ultralytics_once(
             sidecar.cancel(2.0)
         raise
     return {
+        "admission_warnings": admission_warnings,
         "success": result.classified_exit.kind is ExitKind.SUCCESS,
         "canceled": result.classified_exit.kind is ExitKind.CANCELED,
         "exit_code": result.returncode,
@@ -364,11 +455,10 @@ def run_ultralytics_supervised(
     resolved_batch, provenance = requested_batch, "explicit"
     resolution: dict | None = None
     if requested_batch <= 0:
-        # Ask the classification question about the NORMALISED device so a
-        # plan written with Ultralytics' `device: "0"` can reach resolution.
-        # `spec.device` itself is left alone: `_accelerator`'s global
-        # classification and the launch command both keep seeing the user's
-        # original string (see `normalize_cuda_device`).
+        # Ask the classification question about the NORMALISED device.
+        # `_accelerator` now normalises bare ordinals itself, so this is
+        # belt-and-braces rather than the only path; `spec.device` is still
+        # left alone, and the launch command keeps the user's original string.
         try:
             accelerator_kind, _cuda = _accelerator(normalize_cuda_device(spec.device))
         except RuntimeError:

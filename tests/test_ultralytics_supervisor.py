@@ -553,3 +553,226 @@ def test_a_still_owned_resolution_child_stops_the_run(monkeypatch, tmp_path):
         )
     assert caught.value.sidecar is owner
     assert launched == []
+
+
+# --- bare-ordinal accelerator classification + its warning period -----------
+
+
+def _cuda_device(free_bytes, total_bytes=64 * 1024**3):
+    return SimpleNamespace(
+        name="NVIDIA Test",
+        uuid="GPU-1111",
+        free_bytes=free_bytes,
+        total_bytes=total_bytes,
+    )
+
+
+def _fake_probe(kind, name=None, free=None, total=None):
+    """A `probe_resources` double accepting both call shapes."""
+
+    from hydra_suite.runtime.resource_budget import AcceleratorKind, ResourceObservation
+
+    def probe(accelerator_kind, accelerator_name=None, accelerator_probe=None):
+        if accelerator_kind is AcceleratorKind.CUDA:
+            return ResourceObservation(
+                total_host_bytes=total_host,
+                available_host_bytes=available_host,
+                accelerator_kind=AcceleratorKind.CUDA,
+                accelerator_name=accelerator_name or "NVIDIA Test",
+                total_accelerator_bytes=total or 64 * 1024**3,
+                available_accelerator_bytes=free,
+            )
+        return ResourceObservation(
+            total_host_bytes=total_host,
+            available_host_bytes=available_host,
+            accelerator_kind=AcceleratorKind.CPU,
+        )
+
+    total_host, available_host = kind
+    return probe
+
+
+def _launch_sidecar(monkeypatch, mod, launched):
+    class Process:
+        returncode = 0
+
+        def poll(self):
+            return 0
+
+    class Output:
+        def drain(self, timeout=None):
+            return ([], True, None)
+
+    class Sidecar:
+        def __init__(self, plan, **kwargs):
+            launched.append(plan)
+            self.process = Process()
+            self.output = Output()
+
+        def wait(self):
+            return SimpleNamespace(
+                returncode=0,
+                classified_exit=SimpleNamespace(kind=ExitKind.SUCCESS, message="ok"),
+                peak_tree_rss_bytes=1,
+                peak_accelerator_bytes=None,
+                dropped_output_lines=0,
+            )
+
+    monkeypatch.setattr(mod, "SupervisedSidecar", Sidecar)
+
+
+def _bare_ordinal_run(monkeypatch, tmp_path, *, host, gpu_free, device="0"):
+    """Drive one real-gate run for a bare-ordinal device; return (result, log)."""
+
+    import hydra_suite.training.ultralytics_supervisor as mod
+    from hydra_suite.training.sam3_lora import preflight
+
+    monkeypatch.setattr(
+        preflight, "_probe_cuda_device", lambda dev: _cuda_device(gpu_free)
+    )
+    monkeypatch.setattr(mod, "probe_resources", _fake_probe(host, free=gpu_free))
+    launched = []
+    _launch_sidecar(monkeypatch, mod, launched)
+    spec = _spec(tmp_path)
+    spec.device = device
+    spec.hyperparams = TrainingHyperParams(batch=2, imgsz=64, workers=0)
+    log = []
+    result = mod.run_ultralytics_supervised(
+        ["trainer", "device=0"], spec, run_dir=tmp_path, log_cb=log.append
+    )
+    return result, log, launched
+
+
+def test_a_bare_ordinal_is_classified_cuda_and_gets_a_uuid_pin(monkeypatch, tmp_path):
+    import hydra_suite.training.ultralytics_supervisor as mod
+    from hydra_suite.training.sam3_lora import preflight
+
+    monkeypatch.setattr(
+        preflight, "_probe_cuda_device", lambda dev: _cuda_device(40 * 1024**3)
+    )
+    kind, observed = mod._accelerator("0")
+    assert kind is mod.AcceleratorKind.CUDA
+    assert observed is not None and observed.uuid == "GPU-1111"
+
+    result, _log, launched = _bare_ordinal_run(
+        monkeypatch,
+        tmp_path,
+        host=(256 * 1024**3, 200 * 1024**3),
+        gpu_free=40 * 1024**3,
+    )
+    assert result["success"] is True
+    assert launched[0].launch.environment["CUDA_VISIBLE_DEVICES"] == "GPU-1111"
+
+
+def test_a_multi_gpu_ordinal_resolves_against_the_first_device(monkeypatch, tmp_path):
+    import hydra_suite.training.ultralytics_supervisor as mod
+    from hydra_suite.training.sam3_lora import preflight
+
+    asked = []
+
+    def probe(device):
+        asked.append(device)
+        return _cuda_device(40 * 1024**3)
+
+    monkeypatch.setattr(preflight, "_probe_cuda_device", probe)
+    kind, _observed = mod._accelerator("0,1")
+    assert kind is mod.AcceleratorKind.CUDA
+    assert asked == ["cuda:0"]
+
+    _result, log, _launched = _bare_ordinal_run(
+        monkeypatch,
+        tmp_path,
+        host=(256 * 1024**3, 200 * 1024**3),
+        gpu_free=40 * 1024**3,
+        device="0,1",
+    )
+    assert any("cuda:0" in line for line in log)
+
+
+def test_the_new_accelerator_gate_warns_instead_of_refusing(monkeypatch, tmp_path):
+    """The whole point of the warning period: a run the widened classification
+    would newly refuse still launches, loudly."""
+
+    result, log, launched = _bare_ordinal_run(
+        monkeypatch,
+        tmp_path,
+        host=(256 * 1024**3, 200 * 1024**3),
+        gpu_free=1 * 1024**3,
+    )
+
+    assert result["success"] is True
+    assert launched, "the run must still launch during the warning period"
+    warning = "\n".join(result["admission_warnings"])
+    assert warning and warning in "\n".join(log)
+    assert "device=0" in warning
+    assert "classified as CPU" in warning and "classified as CUDA" in warning
+    assert "REFUSED IN A FUTURE RELEASE" in warning
+    assert "GiB" in warning
+
+
+def test_a_pre_existing_refusal_is_still_refused_during_the_warning_period(
+    monkeypatch, tmp_path
+):
+    """Scoping proof: the host gate refused this run BEFORE the widening, so
+    the warning period must not rescue it."""
+
+    result, log, launched = _bare_ordinal_run(
+        monkeypatch,
+        tmp_path,
+        host=(16 * 1024**3, 1 * 1024**3),
+        gpu_free=1 * 1024**3,
+    )
+
+    assert result["success"] is False
+    assert result["failure_kind"] == ExitKind.HOST_ADMISSION_REFUSAL.value
+    assert not launched, "a pre-existing refusal must never launch"
+    assert result["admission_warnings"] == []
+    assert not any("FUTURE RELEASE" in line for line in log)
+
+
+def test_the_widened_classification_keeps_device_zero_in_the_launch_command(
+    monkeypatch, tmp_path
+):
+    import hydra_suite.training.ultralytics_supervisor as mod
+    from hydra_suite.training.sam3_lora import preflight
+
+    monkeypatch.setattr(
+        preflight, "_probe_cuda_device", lambda dev: _cuda_device(40 * 1024**3)
+    )
+    monkeypatch.setattr(
+        mod,
+        "probe_resources",
+        _fake_probe((256 * 1024**3, 200 * 1024**3), free=40 * 1024**3),
+    )
+    launched = []
+    _launch_sidecar(monkeypatch, mod, launched)
+    spec = _spec(tmp_path)
+    spec.device = "0"
+    spec.hyperparams = TrainingHyperParams(batch=2, imgsz=64, workers=0)
+    mod.run_ultralytics_supervised(
+        ["trainer", "batch=2", "device=0"], spec, run_dir=tmp_path
+    )
+    command = list(launched[0].launch.command)
+    assert "device=0" in command
+    assert "device=cuda:0" not in command
+    assert spec.device == "0"
+
+
+def test_a_bare_ordinal_without_cuda_still_returns_cpu_rather_than_raising(
+    monkeypatch,
+):
+    """The hazard an earlier round hit: normalising "0" must not convert a
+    working CPU run into a hard failure on a box with no CUDA."""
+
+    import hydra_suite.training.ultralytics_supervisor as mod
+    from hydra_suite.training.sam3_lora import preflight
+
+    asked = []
+
+    def absent(device):
+        asked.append(device)
+        return None
+
+    monkeypatch.setattr(preflight, "_probe_cuda_device", absent)
+    assert mod._accelerator("0") == (mod.AcceleratorKind.CPU, None)
+    assert asked == ["cuda:0"]

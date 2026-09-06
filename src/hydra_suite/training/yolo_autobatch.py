@@ -181,15 +181,18 @@ def normalize_cuda_device(device: Any) -> str:
     ``"auto"`` and anything starting with ``"cuda"``, so a bare ``"0"`` falls
     through to `AcceleratorKind.CPU`.
 
-    KNOWN, PRE-EXISTING, DELIBERATELY NOT FIXED HERE: that misclassification
-    affects containment for EVERY ``device: "0"`` YOLO run, not just this one
-    -- such runs get host-only accounting and no CUDA UUID pin today. Widening
-    `_accelerator` would be more correct, but it would newly subject runs that
-    have always worked to accelerator admission gates, so it is escalated as a
-    separate decision. This normalisation is scoped to the batch-resolution
-    path ONLY: it changes what WE reason about, never the global
-    classification and never what is passed through to Ultralytics, which
-    expects its own convention in the launch command.
+    That misclassification -- host-only accounting and no CUDA UUID pin for
+    every ``device: "0"`` run -- is now fixed: `_accelerator` recognises bare
+    ordinals through `is_bare_ordinal_device` and resolves them with this same
+    helper. Because widening the classification newly subjects always-worked
+    runs to the accelerator admission gate, that gate is downgraded to a
+    warning for exactly those runs while
+    ``BARE_ORDINAL_ACCELERATOR_GATE_WARNING_PERIOD`` is set in
+    :mod:`hydra_suite.training.ultralytics_supervisor`.
+
+    Normalisation changes only what WE reason about; it never mutates
+    ``spec.device`` and never reaches the launch command, which must keep
+    Ultralytics' own convention.
 
     Multi-GPU forms resolve against the FIRST device: Ultralytics' autobatch
     profiles one device, and spreading it across several would overstate
@@ -201,6 +204,18 @@ def normalize_cuda_device(device: Any) -> str:
     if first.isdigit():
         return f"cuda:{int(first)}"
     return value
+
+
+def is_bare_ordinal_device(device: Any) -> bool:
+    """True for Ultralytics' bare-ordinal GPU convention (``"0"``, ``"0,1"``).
+
+    ``"cuda:0"``, ``"cpu"``, ``"mps"`` and ``"auto"`` are all False: those were
+    already classified correctly before bare ordinals were recognised, so they
+    are NOT part of the warning period.
+    """
+
+    first = str(device or "").strip().split(",")[0].strip()
+    return first.isdigit()
 
 
 def child_degraded_reasons(run_dir: Path | None) -> list[str]:
