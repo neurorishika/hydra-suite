@@ -1,6 +1,6 @@
 # TrackerKit batch fan-out across GPUs — design
 
-**Status:** approved design, pending implementation plan
+**Status:** approved design; plan at `docs/superpowers/plans/2026-09-06-batch-gpu-fanout.md`
 **Date:** 2026-09-06
 **Branch:** `feat/batch-gpu-fanout` (worktree `.worktrees/batch-fanout`)
 
@@ -45,16 +45,16 @@ class BatchJobSpec:
     provenance: str            # "own-sidecar" | "explicit" | "keystone-baseline"
 
 def plan_batch_jobs(
-    video_paths, *, explicit_config_path=None, explicit_config_data=None,
+    video_paths, *, explicit_config_path=None,
     keystone_override=False, sahi_profile=None,
 ) -> list[BatchJobSpec]
 ```
 
 Rules are exactly today's: `build_batch_video_plan` decides which config
 source each video uses; video 1's resolved config becomes the keystone
-baseline; `--sahi-profile` applies to every video; `explicit_config_data`
-(a dict) is accepted so the GUI can pass its freshly built keystone config
-without a round-trip through disk. The sequential loop in `cli.py` is
+baseline; `--sahi-profile` applies to every video. The GUI passes no in-memory
+config: it saves the keystone sidecar first (as it does today), so the
+planner sees exactly what `trackerkit track --video-list` sees. The sequential loop in `cli.py` is
 rewritten to consume `plan_batch_jobs` and then call
 `load_tracker_cli_session(video, config_data=spec.config)`.
 
@@ -208,9 +208,8 @@ child invocations are unchanged.
   message), a Cancel button, and a final pass/fail summary with log paths.
 - **`TrackingOrchestrator.start_tracking`:** after the existing batch
   confirmation and `save_config` call, if `g_batch` and `chk_batch_parallel`
-  are both checked: build the keystone config dict via
-  `_config_orch.build_config_dict()`, call `plan_batch_jobs(batch_videos,
-  explicit_config_data=keystone_cfg, keystone_override=chk…)`, resolve GPUs,
+  are both checked: call `plan_batch_jobs(batch_videos,
+  keystone_override=chk…)` (the keystone sidecar was just saved), resolve GPUs,
   start the worker, open the dialog, and enter the `"tracking"` UI state.
   `stop_tracking` cancels the worker. On finish, restore the UI and show the
   summary. No frame preview and no live FPS during fan-out: children are
