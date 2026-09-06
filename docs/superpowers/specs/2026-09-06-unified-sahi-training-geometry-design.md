@@ -668,6 +668,54 @@ made once, not an automatic loop.
 
 ### 3.10 Additional decisions this forces — for the user
 
+> ## RESOLVED 2026-09-06 — D7, D8, D9 decided by the user. D12 decided by measurement.
+>
+> All three were put to the user with the evidence and their recommendations were
+> accepted. **These are no longer open.** Implementers must follow them and must
+> not re-litigate them; any future change needs new evidence, not a new opinion.
+>
+> **D7 — direct-path matcher: ADOPT CONTAINMENT, DROP THE IoU GATE.**
+> The direct path unifies onto the semantic path's inside-guaranteed
+> `representative_point` + containment matcher (merged `b9e92bc7`). Rationale: a hard
+> `IoU >= 0.5` as the SOLE criterion counts a correct silhouette with a different
+> extent convention as a miss AND an extra simultaneously, because masks trace legs
+> and antennae at ~1.7x labelled body-core area. One matcher means "recall" is finally
+> the same quantity in both harnesses.
+> **Required:** a before/after gate on the same predictions, in the shape of the one
+> that validated the semantic fix (recall 0.867 -> 0.988, identical predictions, only
+> the scorer changing). **Accepted cost:** existing YOLO/OBB calibration
+> recommendations WILL move, and stored profiles become rule-relative — see R6, which
+> is why the recommendation rule must be versioned into profiles before this lands.
+>
+> **D8 — one objective: RECALL-FIRST TO RECOMMEND, AP TO COMPARE. F1 IS RETIRED.**
+> Calibration recommends on recall-first with quality floors (the semantic path's
+> approach). Model-vs-model comparison uses AP with paired frame-bootstrap CIs.
+> Cross-project reporting uses extras/frame at a target recall, quoted with
+> labels-per-frame density. F1 is retired as an OPTIMISATION TARGET (it may still be
+> reported).
+> Rationale, two independent lines agreeing: `semantic/calibration.py:9-13` already
+> rejected F1 with its own measurement ("the F1-optimal threshold missed 4.7
+> animals/frame where a recall-first one missed 1.0"); and the 2026-09-06 reliability
+> study ranked F1 LAST for stability — paired effect size **0.91, 0/6 CIs surviving
+> Bonferroni**, versus **AP 2.92**. The second finding arrives from insensitivity
+> rather than recall-hostility, so the two arguments are genuinely independent.
+> **Binding limitation:** AP is NOT comparable across corpora (measured 0.96 on
+> 1766-px tiles vs 0.61-0.69 on 971-px, same models). Never quote AP across corpora;
+> that is what the extras/frame reporting metric is for.
+>
+> **D9 — shape prior: ADD IT TO THE DIRECT PATH.**
+> Port `fit_area_band` so both harnesses reject mistargeted detections identically.
+> Without it the direct path can score a blob spanning two animals as a success. Share
+> the code rather than duplicating it — this document exists because the tile-size
+> formula reached five copies.
+>
+> **Sequencing note.** D7 and D9 both change what direct calibration MEASURES, and D8
+> changes what it OPTIMISES over those measurements. Land them together behind one
+> before/after gate, not as three separate silent shifts, or the resulting change in
+> recommendations will be unattributable — the exact failure the 2026-09-06 geometry
+> confound demonstrated.
+
+
 - **D7 — direct-path matcher admissibility.** Adopt the semantic path's graded/containment
   policy for P3 (fixes the inverse defect of §2.7) or keep the hard IoU gate? Adopting it will
   change recommended profiles for existing projects. **Recommend adopting for `segment`, where
