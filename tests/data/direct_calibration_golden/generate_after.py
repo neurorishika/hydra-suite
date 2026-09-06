@@ -51,7 +51,7 @@ def _package_root() -> Path:
 
 def _git_sha(path: Path) -> str:
     try:
-        return (
+        sha = (
             subprocess.check_output(
                 ["git", "rev-parse", "HEAD"], cwd=str(path), stderr=subprocess.DEVNULL
             )
@@ -60,6 +60,21 @@ def _git_sha(path: Path) -> str:
         )
     except Exception:  # pragma: no cover - provenance best effort
         return "unknown"
+    try:
+        dirty = bool(
+            subprocess.check_output(
+                ["git", "status", "--porcelain"],
+                cwd=str(path),
+                stderr=subprocess.DEVNULL,
+            )
+            .decode()
+            .strip()
+        )
+    except Exception:  # pragma: no cover - provenance best effort
+        # Can't tell if the tree is dirty -- don't silently stamp a clean
+        # sha over an unknown working-tree state.
+        return f"{sha}-unknown-dirty-state"
+    return f"{sha}-dirty" if dirty else sha
 
 
 # --------------------------------------------------------------------------
