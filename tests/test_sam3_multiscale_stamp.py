@@ -145,6 +145,11 @@ class TestPublishGuard:
         assert geometry["tile_px_set"] == [[500, 500], [971, 971]]
         assert geometry["object_tile_fractions"] == [0.2, 0.1]
         assert geometry["full_frame_mix"] is True
+        # The named prefill goes through the same square-pair collapse the
+        # legacy scalar does, so the published sidecar keeps the shape every
+        # existing consumer (and both on-disk sidecars) already carry.
+        assert geometry["prefill_tile_px"] == 971
+        assert geometry["prefill_object_tile_fraction"] == 0.1
         # A collapsed scalar must never be invented from a set.
         assert "tile_px" not in geometry or geometry["tile_px"] is None
         assert "object_tile_fraction" not in geometry or (
@@ -265,5 +270,12 @@ class TestPublishedSidecar:
         assert "object_tile_fraction" not in meta
         assert "train_tile_px" not in meta
         assert meta["prefill_object_tile_fraction"] == 0.1
+        # Shape note, pinned so it is a decision rather than an accident: the
+        # child copies `prefill_tile_px` through verbatim, so a pair stays a
+        # pair here, while the PARENT path collapses a square pair to the
+        # legacy scalar first (asserted in TestPublishGuard). Both shapes are
+        # square-equivalent and both read back identically -- which is the
+        # property that actually matters.
+        assert meta["prefill_train_tile_px"] == [971, 971]
         assert stamped_tile_px_set(meta) == ((500.0, 500.0), (971.0, 971.0))
         assert stamped_object_tile_fraction(meta) == pytest.approx(0.1)
