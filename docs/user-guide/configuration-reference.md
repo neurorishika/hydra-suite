@@ -24,7 +24,7 @@ For a complete, control-by-control interface reference (question labels, value g
 | Key | Meaning | Typical Range |
 |---|---|---|
 | `detection_method` | `background_subtraction` or `yolo_obb` | enum |
-| `reference_body_size` | Body-size anchor (pixels @ resize=1) | experiment-specific |
+| `reference_body_size` | Body-size anchor (pixels @ resize=1) — see the caveat below | experiment-specific |
 | `enable_size_filtering` | Enable area filtering | bool |
 | `min_object_size_multiplier` | Lower size bound vs body area | `0.1 - 5.0` |
 | `max_object_size_multiplier` | Upper size bound vs body area | `0.5 - 10.0` |
@@ -34,6 +34,32 @@ For a complete, control-by-control interface reference (question labels, value g
 | `yolo_confidence_threshold` | Detector confidence gate | `0.01 - 1.0` |
 | `yolo_iou_threshold` | IOU overlap threshold | `0.01 - 1.0` |
 | `yolo_device` | Compute device selector | `auto/cpu/cuda:0/mps` |
+
+### `reference_body_size` is detector-dependent
+
+It is not a property of your animal. It is the **geometric mean** of the
+detection box axes, `sqrt(major x minor)`, measured from *whichever detector
+produced the boxes*. Two models on the same footage can disagree sharply:
+
+| Detector | major | minor | aspect | `reference_body_size` |
+|---|---|---|---|---|
+| YOLO-OBB detect | 115.4 | 51.0 | 2.30 | **76.5** |
+| Segmentation | 91.0 | 25.7 | 3.46 | **47.9** |
+
+Those are real measurements from the same 489 frames. The box *lengths*
+differ by only 21% — which is all you see when you eyeball an overlay — but
+the *widths* differ 2x, and a geometric mean weights width exactly as much as
+length. A segmentation model traces the silhouette; a detection model's box
+swallows legs and antennae.
+
+**Never carry the value across a model change.** Every body-scaled gate moves
+with it, and the object-size window moves as the *square*. Carrying 49.83
+onto the OBB model above turns the window into 390–3900 px² while that
+model's median detection is 5852 px² — **1.8% of real detections survive**,
+versus 93.5% at the correct 76.81. Tracking still runs, and the equivalence
+gate still reports EQUIVALENT, because nothing checks that the fixture is
+detecting anything. Re-run Auto-Set after any detector change and re-check
+the body-scaled parameters.
 
 ## Tracking
 

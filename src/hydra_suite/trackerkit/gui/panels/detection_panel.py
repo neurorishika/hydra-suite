@@ -1274,7 +1274,16 @@ class DetectionPanel(QWidget):
         )
         self.spin_reference_body_size.setFixedHeight(30)
         self.spin_reference_body_size.setToolTip(
-            "Reference animal body diameter in pixels (at resize=1.0).\n"
+            "Reference animal body size in pixels (at resize=1.0): the\n"
+            "GEOMETRIC MEAN of the detection box axes, sqrt(major * minor) --\n"
+            "not the body length.\n\n"
+            "This is a property of the animal AND the detector that measured\n"
+            "it, not of the animal alone. A model that draws tighter boxes\n"
+            "(e.g. segmentation tracing the silhouette vs a detector whose box\n"
+            "swallows legs and antennae) reports a substantially smaller value\n"
+            "for the SAME footage. Because the metric is a geometric mean, a\n"
+            "halved box width alone shifts it by ~1.4x even when the box\n"
+            "LENGTH looks unchanged.\n\n"
             "All distance/size parameters are scaled relative to this value."
         )
         self.spin_reference_body_size.valueChanged.connect(self._update_body_size_info)
@@ -1285,6 +1294,26 @@ class DetectionPanel(QWidget):
             "color: #6a6a6a; font-size: 10px; font-style: italic;"
         )
         fl_ref.addRow("", self.label_body_size_info)
+
+        # Persistent caveat: this value is detector-dependent, and every
+        # body-derived gate moves with it. Measured on one recording, an OBB
+        # detector and a segmentation model reported 76.5 px and 47.9 px --
+        # a 1.6x gap from boxes whose LENGTH differed by only 21%, because the
+        # width differed 2x and the metric is sqrt(major * minor).
+        self.label_body_size_warning = QLabel(
+            "\u26a0\ufe0f Measured from your DETECTOR's boxes, not the animal. "
+            "Switching detection models can change this a lot even when the "
+            "boxes look similar (width drives it as much as length). After "
+            "changing it, re-check every body-scaled parameter below \u2014 "
+            "object-size filters especially, since a wrong value can silently "
+            "reject most real detections."
+        )
+        self.label_body_size_warning.setWordWrap(True)
+        self.label_body_size_warning.setStyleSheet(
+            "color: #8a6d00; background: #fff8e1; border: 1px solid #ffe082;"
+            " border-radius: 4px; padding: 6px; font-size: 10px;"
+        )
+        fl_ref.addRow("", self.label_body_size_warning)
 
         self.spin_reference_aspect_ratio = QDoubleSpinBox()
         self.spin_reference_aspect_ratio.setRange(1.0, 20.0)
@@ -1716,12 +1745,46 @@ class DetectionPanel(QWidget):
     # BODY SIZE INFO (moved from MainWindow)
     # =========================================================================
 
+    # Parameters whose effective value is derived from REFERENCE_BODY_SIZE.
+    # Kept next to the control that invalidates them so the warning below can
+    # name them instead of saying "some parameters".
+    BODY_SCALED_PARAMS = (
+        "min/max object size",
+        "max distance threshold",
+        "agreement distance",
+        "min respawn distance",
+        "velocity threshold",
+        "max velocity break",
+    )
+
     def _update_body_size_info(self):
-        """Update the info label showing calculated body area."""
+        """Update the info label showing calculated body area.
+
+        Also warns when the value moves materially from the one the rest of
+        the configuration was tuned against: every gate in
+        ``BODY_SCALED_PARAMS`` moves with it, and the object-size window in
+        particular can end up excluding the detections it is meant to admit.
+        """
         body_size = self.spin_reference_body_size.value()
         body_area = math.pi * (body_size / 2.0) ** 2
         self.label_body_size_info.setText(
             f"\u2248 {body_area:.1f} px\u00b2 area (all size/distance params scale with this)"
+        )
+
+        previous = getattr(self, "_last_body_size", None)
+        self._last_body_size = body_size
+        if not previous or previous <= 0:
+            return
+        ratio = body_size / previous
+        if 0.85 <= ratio <= 1.18:  # small nudge: not worth shouting about
+            return
+        self.label_body_size_warning.setText(
+            f"\u26a0\ufe0f Body size changed {previous:.1f} \u2192 "
+            f"{body_size:.1f} px ({ratio:.2f}x). Every body-scaled parameter "
+            f"moved with it: {', '.join(self.BODY_SCALED_PARAMS)}. Re-check "
+            f"them \u2014 the object-size window scales as the SQUARE of this "
+            f"value, so a {ratio:.2f}x change is a {ratio * ratio:.2f}x change "
+            f"in the area limits and can reject detections you still want."
         )
 
     # =========================================================================
