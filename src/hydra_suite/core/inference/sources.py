@@ -395,9 +395,11 @@ class NvdecFrameReader(FrameSource):
         """Convert a PyNvVideoCodec NATIVE (NV12) DecodedFrame to a ``(H, W, 3)``
         uint8 RGB CUDA torch.Tensor with cv2-matching BT.601 conversion.
 
-        The returned tensor is a fresh allocation (the conversion allocates), so
-        it does not alias the decoder buffer -- but the caller still clones for
-        parity with the historical contract.
+        The returned tensor is a fresh allocation (``torch.stack`` allocates),
+        so it does not alias the decoder buffer and may safely outlive the next
+        decoder call. Do not add a defensive clone at the iterator boundary:
+        that copy is redundant and makes the decode-prefetch queue consume a
+        second full GPU frame per item.
         """
         planes = frame.cuda()
         if not planes or len(planes) < 2:
@@ -411,9 +413,9 @@ class NvdecFrameReader(FrameSource):
     def __iter__(self) -> Iterator[tuple[int, "np.ndarray"]]:
         """Yield ``(frame_index, cuda_tensor)`` pairs from ``start_frame`` to ``end_frame``.
 
-        Each frame tensor is immediately cloned so the decoder buffer can be
-        safely reused for the next ``get_batch_frames()`` call.  Stops early
-        if the decoder returns no frames (end of stream).
+        RGB conversion produces an owned tensor, so yielded frame tensors are
+        safe while the decoder advances to the next buffer. Stops early if the
+        decoder returns no frames (end of stream).
         """
         if self._closed or self._dec is None:
             return
@@ -422,7 +424,8 @@ class NvdecFrameReader(FrameSource):
         end = self._end_frame
         # Yield the frame primed during construction (the trial-decode that
         # validated NVDEC works on this GPU) first, so the validation decode is
-        # not wasted. It was already cloned, so it is safe to yield directly.
+        # not wasted. It is an owned conversion result, so it is safe to yield
+        # directly.
         if self._primed_frame is not None:
             yield idx, self._primed_frame
             self._primed_frame = None
@@ -432,8 +435,9 @@ class NvdecFrameReader(FrameSource):
             if not batch:
                 break
             cuda_tensor = self._nvdec_frame_to_cuda_tensor(batch[0])
-            # Clone immediately — NVDec decoder buffer is reused on next get_batch_frames().
-            yield idx, cuda_tensor.clone()
+            # `_nvdec_frame_to_cuda_tensor` allocates RGB output. The decoder
+            # may now reuse `batch[0]` without invalidating this payload.
+            yield idx, cuda_tensor
             idx += 1
 
     def close(self) -> None:

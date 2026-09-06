@@ -130,6 +130,38 @@ def test_nvdec_reader_rejects_non_cuda_device(tiny_video):
         NvdecFrameReader(tiny_video, device="cpu")
 
 
+def test_nvdec_iterator_keeps_owned_rgb_conversion_without_extra_clone():
+    """The conversion output owns its storage; iterator must not copy it again.
+
+    This CPU-only ownership test deliberately bypasses the CUDA decoder. It
+    guards the precise contract that permits a queued NVDEC frame to remain
+    valid while the decoder obtains its next native buffer.
+    """
+    from hydra_suite.core.inference.sources import NvdecFrameReader
+
+    converted = object()
+
+    class _Decoder:
+        def __init__(self):
+            self.calls = 0
+
+        def get_batch_frames(self, count):
+            self.calls += 1
+            return [object()] if self.calls == 1 else []
+
+    reader = NvdecFrameReader.__new__(NvdecFrameReader)
+    reader._closed = False
+    reader._dec = _Decoder()
+    reader._start_frame = 0
+    reader._end_frame = 0
+    reader._primed_frame = None
+    reader._nvdec_frame_to_cuda_tensor = lambda frame: converted
+
+    pairs = list(reader)
+    assert pairs == [(0, converted)]
+    assert pairs[0][1] is converted
+
+
 # ---------------------------------------------------------------------------
 # make_frame_source — fallback tests (run on all platforms, including MPS)
 # ---------------------------------------------------------------------------
