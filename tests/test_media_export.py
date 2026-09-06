@@ -145,6 +145,35 @@ def test_explicit_unknown_smoothed_label_does_not_fall_through_to_raw_evidence()
     assert keys[0] == "trajectory:6"
 
 
+def test_disabled_identity_hides_rich_csv_identity_labels_and_colors():
+    """The final video must not leak rich-intermediate identity columns.
+
+    User mode retains a rich CSV while rendering so pose columns remain
+    available.  When the UI's identity master gate is off, that temporary
+    file may not change either overlay labels or colors.
+    """
+    df = pd.DataFrame(
+        {
+            "TrajectoryID": [5],
+            "UniqueIdentityKey": ["cnn:colortag=blue"],
+            "IdentityFinalLabel": ["blue"],
+        }
+    )
+
+    assert (
+        media_export.should_show_identity_video_overlay(
+            {"enable_identity_analysis": False, "identity_method": "none_disabled"}
+        )
+        is False
+    )
+    assert list(
+        media_export.build_video_track_label_array(df, show_identity=False)
+    ) == ["ID5"]
+    assert list(
+        media_export.build_video_track_color_key_array(df, show_identity=False)
+    ) == ["trajectory:5"]
+
+
 def test_precomputed_palette_uses_trajectory_colors_for_plain_tracks():
     colors = [(10, 20, 30), (40, 50, 60), (70, 80, 90)]
     track_ids = np.asarray([0, 1, 2], dtype=np.int32)

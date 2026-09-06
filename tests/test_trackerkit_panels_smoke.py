@@ -185,8 +185,10 @@ def test_preview_detection_context_keeps_identity_overlays_without_master_toggle
         runtime_cfg = detection_panel._identity_config()
         preview_cfg = detection_panel._preview_identity_config()
         preview_context = detection_panel._collect_preview_detection_context()
+        saved_cfg = main_window._config_orch.build_config_dict()
 
         assert runtime_cfg == {"use_apriltags": False, "cnn_classifiers": []}
+        assert saved_cfg["enable_identity_analysis"] is False
         assert preview_cfg["use_apriltags"] is True
         assert len(preview_cfg["cnn_classifiers"]) == 1
         assert preview_context["use_apriltags"] is True

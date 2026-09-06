@@ -841,6 +841,9 @@ def build_engine_params(
     identity_method = (
         str(_cfg_get(cfg, "identity_method", default="none_disabled")).strip().lower()
     )
+    identity_analysis_enabled = bool(
+        _cfg_get(cfg, "enable_identity_analysis", default=True)
+    ) and identity_method not in ("none_disabled", "none", "")
 
     # Pose block: faithfully replicate the bridge's derivation
     # (gui/orchestrators/config.py:2436-2460). ``ENABLE_POSE_EXTRACTOR`` uses
@@ -1409,7 +1412,7 @@ def build_engine_params(
         "IDENTITY_GATES_TRAJECTORY_STRUCTURE": (
             identity_cfg.posthoc.gates_trajectory_structure
         ),
-        "ENABLE_IDENTITY_ANALYSIS": individual_pipeline_enabled,
+        "ENABLE_IDENTITY_ANALYSIS": identity_analysis_enabled,
         "ENABLE_INDIVIDUAL_PIPELINE": individual_pipeline_enabled,
         "IDENTITY_METHOD": identity_method,
         "USE_APRILTAGS": use_apriltags,
