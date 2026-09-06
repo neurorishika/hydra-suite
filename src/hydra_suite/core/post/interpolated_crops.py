@@ -486,15 +486,25 @@ def _flush_pose_cnn_window(
     """Run pose + CNN inference over a window of (frame, synthetic OBB) pairs.
 
     Calls the SAME stage functions ``Pipeline`` calls for real detections
-    (``pipeline.py:367-387``): ``extract_canonical_crops_batch`` then
-    ``run_pose_batch`` for pose, ``run_cnn_batch`` per CNN phase for CNN --
-    instead of this module's old hand-rolled crop extraction + batching
-    (``_flush_pose_batch``/``_flush_cnn_batch``). ``suppress_foreign`` for the
-    pose call is read from ``cfg.pose.suppress_foreign_regions`` -- the SAME
-    config knob ``Pipeline`` reads for real detections (``pipeline.py:369-
-    370``) -- so a user who disables foreign suppression gets that honored for
-    interpolated crops too, not a hardcoded ``True`` (design spec, AprilTag/
-    foreign-suppression decisions). Pose and CNN crops are now genuinely independent
+    (``pipeline.py::Pipeline._process_downstream_frame``):
+    ``extract_canonical_crops_batch`` then ``run_pose_batch`` for pose,
+    ``run_cnn_batch`` per CNN phase for CNN -- instead of this module's old
+    hand-rolled crop extraction + batching
+    (``_flush_pose_batch``/``_flush_cnn_batch``).
+
+    Same functions, DIFFERENT batching: ``Pipeline`` hands them exactly one
+    frame at a time (a deliberate crop-memory bound), whereas this path hands
+    them a whole ``INTERP_POSE_INFERENCE_BATCH_SIZE`` window, so the crops
+    genuinely flatten across frames before the single backend forward. This is
+    the only caller of these stage functions that passes more than one frame.
+
+    ``suppress_foreign`` for the pose call is read from
+    ``cfg.pose.suppress_foreign_regions`` -- the SAME config knob ``Pipeline``
+    reads for real detections
+    (``pipeline.py::Pipeline._process_downstream_frame``) -- so a user who
+    disables foreign suppression gets that honored for interpolated crops too,
+    not a hardcoded ``True`` (design spec, AprilTag/foreign-suppression
+    decisions). Pose and CNN crops are now genuinely independent
     (CNN via ``extract_classifier_crops_batch_np`` inside ``run_cnn_batch``,
     not a reused pose crop) -- design spec bug fix #1.
 
@@ -681,9 +691,9 @@ def _flush_pose_cnn_window(
 def _detect_apriltags_in_frame(apriltag_model, cfg, frame, obb, tasks, interp_tag_rows):
     """Detect AprilTags in one frame's interpolated crops via the SAME
     ``extract_aabb_crops``/``run_apriltag`` ``Pipeline`` uses for real
-    detections (``pipeline.py:389-398``) -- no batch variant exists for
-    AprilTag (design spec, "Key architectural finding"), so this stays
-    per-frame like today.
+    detections (``pipeline.py::Pipeline._process_downstream_frame``) -- no
+    batch variant exists for AprilTag (design spec, "Key architectural
+    finding"), so this stays per-frame like today.
 
     Per the design spec's AprilTag/foreign-suppression decision: unlike the
     old hand-rolled path (which foreign-masked other synthetic tasks' AABB
@@ -721,8 +731,9 @@ def _flush_headtail_window(
 ):
     """Run head-tail classification over a window via ``run_headtail_batch``
     -- the SAME function ``Pipeline`` calls for real detections
-    (``pipeline.py:342-350``). Switches from the old per-frame
-    ``HeadTailAnalyzer.analyze_crops`` to the windowed batch path: a
+    (``pipeline.py::Pipeline._process_downstream_frame``, which calls it with
+    a single frame; this path passes the whole window). Switches from the old
+    per-frame ``HeadTailAnalyzer.analyze_crops`` to the windowed batch path: a
     materially different crop-construction path, registered as an expected
     difference in the design spec's Testing section (verify equivalence
     empirically on the characterization golden, not byte-identity).

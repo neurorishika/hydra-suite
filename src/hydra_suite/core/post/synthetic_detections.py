@@ -44,7 +44,8 @@ def filter_degenerate_tasks(
     ``interpolated_crops.py::_filter_degenerate_and_get_corners`` used to do
     inline. For kept tasks it also records the real overflow via
     ``canonical_affine``, matching what ``Pipeline`` does for real
-    detections (``pipeline.py:331-338``).
+    detections (``pipeline.py::Pipeline._process_obb_results``, the
+    ``clipping_stats.record`` F1 guard).
     """
     kept: list[dict] = []
     for task in tasks:
