@@ -68,8 +68,9 @@ model's square input. `ClassifierMetadata.fit_policy` is one of:
 | `native` | The backend applies its own transform (ultralytics YOLO); crops are handed over untouched. |
 
 Every classifier consumer goes through one shared Layer-2 function,
-`core.canonicalization.fit.fit_crops_for_policy(crops, model_hw, policy)`.
-Nothing preprocesses crops for a classifier by hand.
+`core.canonicalization.fit.fit_crops_for_model(crops, model_hw, policy)`
+(the parallel crop path in `inference/stages/crops.py` dispatches to the
+same function). No consumer preprocesses classifier crops by hand.
 
 **The legacy rule.** An artifact with no `fit_policy` key predates
 stamping, so `resolve_fit_policy` resolves it to `squash` and logs a
