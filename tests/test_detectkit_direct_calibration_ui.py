@@ -1451,3 +1451,16 @@ def test_training_dialog_falls_back_to_the_prepared_dataset_dir(monkeypatch, tmp
     dlg.calibrate_then_register()
     dlg.close()
     assert seen["dataset_yaml"] == dataset / "dataset.yaml"
+
+
+def test_measurement_stamps_the_rule_that_produced_it(results_dialog):
+    """A sidecar measurement must name the rule its numbers came from.
+
+    ``localization_quality`` means one thing on a pre-2026-09-06 profile and
+    another after D8 re-based it. Without a rule id on the row, the two are
+    indistinguishable populations wearing the same key.
+    """
+    from hydra_suite.core.inference.direct_calibration import RECOMMENDATION_RULE_ID
+
+    measurement = results_dialog.measurement_for_row(0)
+    assert measurement["recommendation_rule_id"] == RECOMMENDATION_RULE_ID

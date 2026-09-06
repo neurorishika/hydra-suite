@@ -44,6 +44,7 @@ from PySide6.QtWidgets import (
 
 from hydra_suite.core.inference.direct_calibration import (
     RECOMMENDATION_RULE,
+    RECOMMENDATION_RULE_ID,
     recommend_balanced,
 )
 from hydra_suite.core.inference.direct_calibration_grid import checkpoint_fingerprint
@@ -556,6 +557,11 @@ class DirectCalibrationResultsDialog(BaseDialog):
                 if point.score.mean_quality is None
                 else float(point.score.mean_quality)
             ),
+            # Which scoring/recommendation rule produced every number above.
+            # Without it, "localization_quality" on a pre-2026-09-06 sidecar
+            # and on this one are two different populations wearing one key,
+            # and nothing on the sidecar says so.
+            "recommendation_rule_id": RECOMMENDATION_RULE_ID,
         }
 
     # ------------------------------------------------------------------
