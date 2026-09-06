@@ -180,6 +180,37 @@ def test_coordinate_search_requires_full_pipeline_and_exact_identity():
     )
 
 
+class FinalRegressionExecutor(ConflictingExecutor):
+    def run(self, settings, *, phase, field_name, block_index, should_cancel):
+        if phase == "final_validation" and settings.pose_batch_size > 1:
+            return TrialObservation(
+                settings,
+                90.0,
+                0.5,
+                _outputs(),
+                warmup_calls=3,
+                warmup_frames=8,
+            )
+        return super().run(
+            settings,
+            phase=phase,
+            field_name=field_name,
+            block_index=block_index,
+            should_cancel=should_cancel,
+        )
+
+
+def test_fresh_final_vector_must_repeat_the_full_pipeline_performance_gain():
+    result = CoordinateSearch(_planner(), FinalRegressionExecutor()).run(
+        _settings(),
+        stage_shares={"pose_batch_size": 1.0},
+    )
+
+    assert not result.completed
+    assert result.selected == _settings()
+    assert result.reason == "final_performance_gate_failed"
+
+
 class ExplodingExecutor:
     def run(self, *_args, **_kwargs):
         raise AssertionError("a validated cache hit must not launch trials")

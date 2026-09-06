@@ -296,6 +296,29 @@ class CoordinateSearch:
                 False,
                 "final_validation_failed",
             )
+        if incumbent != baseline:
+            final_evidence = final[0]
+            low, _high = paired_gain_interval(
+                baseline_evidence.throughput_samples,
+                final_evidence.throughput_samples,
+                seed=self.protocol.random_seed + 90_000,
+            )
+            gain = (
+                final_evidence.median_throughput / baseline_evidence.median_throughput
+                - 1.0
+            )
+            if gain < self.minimum_gain or low <= 0.0:
+                evidence.append(final_evidence)
+                rejected.append(
+                    (self._label(incumbent), "final_performance_gate_failed")
+                )
+                return SearchResult(
+                    baseline,
+                    tuple(evidence),
+                    tuple(rejected),
+                    False,
+                    "final_performance_gate_failed",
+                )
         evidence.append(final[0])
         reason = (
             "kept_current_settings"
