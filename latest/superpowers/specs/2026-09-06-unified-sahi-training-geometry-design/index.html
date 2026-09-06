@@ -3791,6 +3791,15 @@ changes what it OPTIMISES over those measurements. Land them together behind one
 before/after gate, not as three separate silent shifts, or the resulting change in
 recommendations will be unattributable — the exact failure the 2026-09-06 geometry
 confound demonstrated.</p>
+<p><strong>SUPERSEDED for D7, D8 and D9 — read the RESOLVED block above instead.</strong>
+The three bullets below are the PRE-RULING analysis, kept for provenance only.
+Their recommendations were NOT what shipped: the D8 bullet in particular
+recommends defaulting each path to its current rule "so nothing changes",
+and the opposite was decided and implemented (recall-first everywhere, F1
+retired as a target). Implemented on branch <code>feat/direct-scoring-unification</code>
+with a measured before/after gate at
+<code>tests/data/direct_calibration_golden/ATTRIBUTION.md</code>.
+D10 and D11 below remain genuinely OPEN.</p>
 </blockquote>
 <ul>
 <li><strong>D7 — direct-path matcher admissibility.</strong> Adopt the semantic path's graded/containment
