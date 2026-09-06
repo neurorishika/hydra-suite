@@ -296,6 +296,7 @@ def run_case(
         "output_dir": str(outdir),
         "log_path": str(log_path),
         "meta": meta,
+        "expected_failure": bool(case.get("expect_failure", False)),
     }
     if profile is not None:
         result["forward_profile"] = {
@@ -376,9 +377,17 @@ def main(argv: list[str] | None = None) -> int:
             )
             manifest["results"].append(result)
             _atomic_json(manifest_path, manifest)
-            if result["returncode"] != 0:
+            expected_failure = bool(result.get("expected_failure", False))
+            if result["returncode"] != 0 and not expected_failure:
                 failures += 1
                 print(result.get("error_tail", "case failed"), file=sys.stderr)
+            elif result["returncode"] == 0 and expected_failure:
+                failures += 1
+                print(
+                    f"Case {case['label']} unexpectedly succeeded; its expected "
+                    "admission boundary was not reproduced.",
+                    file=sys.stderr,
+                )
 
     manifest["finished_at_unix_ns"] = time.time_ns()
     _atomic_json(manifest_path, manifest)

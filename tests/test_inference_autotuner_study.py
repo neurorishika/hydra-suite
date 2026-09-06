@@ -69,3 +69,11 @@ def test_selected_cases_rejects_unknown_label():
         assert "missing" in str(exc)
     else:
         raise AssertionError("unknown labels must fail rather than run nothing")
+
+
+def test_expected_failure_is_preserved_in_selected_case():
+    matrix = {"cases": [{"label": "boundary", "expect_failure": True}]}
+
+    selected = study._selected_cases(matrix, {"boundary"})
+
+    assert selected[0]["expect_failure"] is True
