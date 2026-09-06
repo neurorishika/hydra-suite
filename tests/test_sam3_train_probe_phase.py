@@ -624,3 +624,98 @@ def test_the_banner_labels_an_extrapolated_requirement_as_extrapolated(
     assert resolution["resolved"] == 3
     assert resolution["requirement_basis"] == "extrapolated"
     assert any("extrapolated" in line for line in harness.logs)
+
+
+def test_an_unreadable_ladder_marker_re_probes_rather_than_trusting_the_cache(
+    tmp_path, monkeypatch
+):
+    """Failing open here would re-arm the permanent-ceiling bug the marker
+    exists to prevent -- for every cached workload at once, silently. A
+    marker that cannot be trusted must mean "re-probe", not "trust"."""
+
+    cached = tuple(
+        MemoryMeasurement(
+            identity=_IDENTITY,
+            settings=PressureSettings(
+                input_width=640, input_height=640, batch_size=batch
+            ),
+            accelerator_kind=AcceleratorKind.CUDA,
+            host_peak_bytes=GiB,
+            accelerator_reserved_peak_bytes=peak,
+            observed_at_unix_ns=1,
+        )
+        for batch, peak in _PROBE_PEAKS.items()
+    )
+    harness = _install(monkeypatch, tmp_path, store_records=cached)
+    (tmp_path / "profiles.json.incomplete.json").write_text("{truncated", "utf-8")
+
+    result = _run(harness, _spec(tmp_path, batch=-1))
+
+    assert result["success"]
+    assert harness.probe_preflight_batches == [
+        1,
+        2,
+        4,
+    ], "a corrupt marker must degrade to re-probing, not to the cache"
+
+
+def test_the_ladder_marker_is_cleared_by_a_later_authoritative_ladder(
+    tmp_path, monkeypatch
+):
+    """Set and read were proven; the CLEAR was not. A marker that is never
+    cleared would re-probe forever."""
+
+    host_limited = [True]
+
+    def factory(fake, plan, **kwargs):
+        sidecar = fake(plan, **kwargs)
+        if host_limited[0] and _probe_batch_of(plan.launch.command) == 2:
+            sidecar.returncode = 137
+            sidecar.forced_kind = ExitKind.HOST_HARD_LIMIT
+        return sidecar
+
+    harness = _install(monkeypatch, tmp_path, sidecar_factory=factory)
+    marker = tmp_path / "profiles.json.incomplete.json"
+
+    _run(harness, _spec(tmp_path, batch=-1))
+    assert json.loads(marker.read_text()), "a host-limit stop must be marked"
+
+    # The box quietens down; the ladder now ends for an authoritative reason.
+    host_limited[0] = False
+    harness.probe_preflight_batches.clear()
+    result = _run(harness, _spec(tmp_path, batch=-1))
+
+    assert result["success"]
+    assert harness.probe_preflight_batches == [1, 2, 4]
+    assert json.loads(marker.read_text()) == {}, "the mark must be cleared"
+
+    # ...and a third run may now legitimately take the cache.
+    harness.probe_preflight_batches.clear()
+    _run(harness, _spec(tmp_path, batch=-1))
+    assert harness.probe_preflight_batches == []
+
+
+def test_the_cached_path_does_not_claim_the_ladder_was_complete(tmp_path, monkeypatch):
+    """A cached run walked no ladder, so it has no standing to report how the
+    original one ended."""
+
+    cached = tuple(
+        MemoryMeasurement(
+            identity=_IDENTITY,
+            settings=PressureSettings(
+                input_width=640, input_height=640, batch_size=batch
+            ),
+            accelerator_kind=AcceleratorKind.CUDA,
+            host_peak_bytes=GiB,
+            accelerator_reserved_peak_bytes=peak,
+            observed_at_unix_ns=1,
+        )
+        for batch, peak in _PROBE_PEAKS.items()
+    )
+    harness = _install(monkeypatch, tmp_path, store_records=cached)
+
+    _run(harness, _spec(tmp_path, batch=-1))
+
+    resolution = json.loads((harness.run_dir / "batch_resolution.json").read_text())
+    assert resolution["provenance"] == "cached"
+    assert resolution["ladder_terminated_by"] == "cached"

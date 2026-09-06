@@ -217,7 +217,8 @@ class Sam3LoraParams:
     # A positive value is the user's explicit choice and is honoured as-is.
     # `-1` means "measure it": the parent probes this exact workload on this
     # exact card before launching, and the PROBE is the authority on what
-    # fits -- not a constant carried over from someone else's machine. The
+    # fits -- not a constant carried over from someone else's machine.
+    #
     # The note this comment used to carry -- "batch 2 OOMs at 1008 px on a
     # 47 GB card" -- is MEASURED FALSE against current code. On mehek
     # (2026-09-06, real semantic_sam3 dataset, sam3-lora env, 312 adapters,

@@ -420,7 +420,12 @@ def _resolve_measured_batch(
     if cached and not forced and was_incomplete is None:
         records = cached
         provenance = "cached"
-        terminated_by = autobatch.LADDER_COMPLETE
+        # NOT `complete`: this run did not walk a ladder, so it has no
+        # standing to say how the original one ended. Claiming "complete"
+        # here would report a workload whose first probe stopped on an OOM at
+        # batch 4 as having tried every rung, on every later run -- in a
+        # field that exists precisely for honesty.
+        terminated_by = "cached"
     else:
         if cached and was_incomplete is not None:
             log_cb(
@@ -571,13 +576,34 @@ def _incomplete_ladders_path() -> Path:
     return store.with_name(store.name + ".incomplete.json")
 
 
+class _AllLaddersIncomplete(dict):
+    """Sentinel mapping: every fingerprint reads as incomplete.
+
+    Returned when the marker file exists but cannot be trusted. This
+    deliberately fails toward RE-PROBING rather than toward the cache: a
+    truncated or hand-edited marker that read as "nothing is incomplete"
+    would re-arm the permanent-ceiling bug the marker exists to prevent, for
+    every cached workload at once and without a sound. The file self-heals on
+    the next `_mark_incomplete_ladder` write, so the cost is one extra probe.
+    """
+
+    def get(self, key: object, default: object = None) -> object:
+        del key, default
+        return "unreadable_ladder_marker"
+
+
 def _incomplete_ladders() -> dict[str, str]:
+    path = _incomplete_ladders_path()
+    if not path.exists():
+        # Never written, or already cleared: nothing is known to be
+        # incomplete. Distinct from "present but unreadable".
+        return {}
     try:
-        loaded = json.loads(_incomplete_ladders_path().read_text(encoding="utf-8"))
+        loaded = json.loads(path.read_text(encoding="utf-8"))
     except (OSError, ValueError):
-        return {}
+        return _AllLaddersIncomplete()
     if not isinstance(loaded, dict):
-        return {}
+        return _AllLaddersIncomplete()
     return {str(k): str(v) for k, v in loaded.items() if isinstance(v, str)}
 
 
