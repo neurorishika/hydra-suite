@@ -113,39 +113,6 @@ def frozen_match_one_to_one(
     return out
 
 
-def containment_only_match(
-    pred_polys: Sequence[np.ndarray],
-    label_polys: Sequence[np.ndarray],
-    *,
-    area_band=None,
-) -> list[tuple[int, int]]:
-    """Arm C: the FIXED representative point, containment only, NO IoU route.
-
-    The IoU route was justified by an INDIRECT measurement -- an
-    area-centroid-only gate reaching 0.929 where a plain IoU rule reached
-    0.962 -- but `representative_point` is strictly stronger than an area
-    centroid, so 0.929 is a lower bound on containment-only, not a
-    measurement of it. This arm measures it directly, so the project can
-    decide whether `ADMISSIBLE_IOU` earns its place as a production knob.
-
-    Implemented by neutralising the ONE `polygon_iou` reference the IoU route
-    uses, rather than by copying the matcher: a copy would drift, and
-    `match_quality`'s own internal overlap term (imported separately in
-    `shape_prior`) must stay live so the ranking and the quality floor are
-    unchanged between arms.
-    """
-    from hydra_suite.core.inference.semantic import calibration
-
-    original = calibration.polygon_iou
-    calibration.polygon_iou = lambda _a, _b: 0.0
-    try:
-        return calibration.match_one_to_one(
-            pred_polys, label_polys, area_band=area_band
-        )
-    finally:
-        calibration.polygon_iou = original
-
-
 # ---------------------------------------------------------------------------
 # Scoring
 # ---------------------------------------------------------------------------
@@ -315,6 +282,9 @@ def main(argv: Sequence[str] | None = None, *, labeler_factory=None) -> int:
 
     results: dict = {
         "_": "Before/after gate for the calibration matcher containment fix. "
+        "`fixed_representative_point` IS THE SHIPPING CONFIGURATION: the "
+        "inside-guaranteed point plus containment, no IoU route (one was "
+        "tried and removed -- it was worth 1 instance in 805). "
         "NOT a re-run of baseline.json (which is pre-registered and untouched): "
         "same frames, same cached predictions, scoring varied.",
         "hydra_suite_module": hydra_suite.__file__,
@@ -338,7 +308,6 @@ def main(argv: Sequence[str] | None = None, *, labeler_factory=None) -> int:
         for arm_name, fn in (
             ("shipped_vertex_mean", frozen_match_one_to_one),
             ("fixed_representative_point", match_one_to_one),
-            ("fixed_containment_only_no_iou_route", containment_only_match),
         ):
             results["arms"][key][arm_name] = [
                 score_arm(

@@ -72,10 +72,6 @@ MIN_MEAN_QUALITY = 0.35
 CONFIDENCE_GRID: tuple[float, ...] = tuple(
     round(float(c), 2) for c in np.arange(0.05, 0.96, 0.05)
 )
-# IoU at which a pair is admissible REGARDLESS of containment -- see
-# `match_one_to_one`. Not a hard gate (nothing is rejected for being below
-# it); a second, independent route to admissibility.
-ADMISSIBLE_IOU = 0.5
 # `cv2.moments` m00 below this is treated as no area at all, so the area
 # centroid is not computed from a near-zero denominator.
 _MIN_MOMENT_AREA = 1e-9
@@ -255,34 +251,21 @@ def match_one_to_one(
     """Greedy one-to-one pairing by descending match QUALITY.
 
     A pair is admissible when it clears the area band and ``min_quality``
-    AND takes either of two independent routes:
+    and is CONTAINED -- the prediction's representative point falls inside
+    the label, or the label's inside the prediction. Containment is what
+    stops one oversized blob from claiming its neighbour's label in a dense
+    cluster, so the gate is kept, not deleted.
 
-    * **containment** -- the prediction's representative point falls inside
-      the label, or the label's inside the prediction. This is what stops one
-      oversized blob from claiming its neighbour's label in a dense cluster,
-      so it is kept, not deleted. What was FIXED is the point it tests: it
-      used to be the mean of polygon vertices, which lies outside 15.9 %
-      (128/805) of real ant outlines and so vetoed near-perfect masks. It is
-      now ``representative_point``, which is inside by construction.
-    * **overlap** -- IoU >= ``ADMISSIBLE_IOU``. Added as a SECOND route
-      rather than a replacement. The motivating evidence is INDIRECT and the
-      limit is worth stating: on the held-out split an AREA-CENTROID-only
-      gate reached recall 0.929 where a plain IoU >= 0.5 rule reached 0.962.
-      ``representative_point`` is strictly stronger than an area centroid
-      (0/805 of those labels fail to contain it, against 128/805 for the
-      vertex mean), so that 0.929 is a LOWER bound on what containment alone
-      would now achieve, not a measurement of it. See
-      ``tools/sam3_parity/matcher_gate_results.json`` for the arm that
-      measures containment-only under the shipped point directly. The
-      mechanism the route covers is real geometry, not a bug -- SAM3 traces
-      legs and antennae, so a correct mask's interior point can sit outside a
-      body-core quad and vice versa, at IoU 0.9. Note what this does NOT do:
-      it never REJECTS a pair for low IoU, so ``shape_prior``'s commitment
-      that overlap enters as a score and not as a hard threshold stands. It
-      only widens admissibility, and widening is safe here because the
-      anti-blob protection comes from the area band and ``min_quality``, not
-      from containment being narrow -- a blob at IoU >= 0.5 with a label is
-      not a blob.
+    What was FIXED is the point it tests. It used to be the mean of polygon
+    vertices, which lies outside 15.9 % (128/805) of real ant outlines and so
+    vetoed near-perfect masks; it is now ``representative_point``, which is
+    inside by construction. On the held-out split, predictions held fixed,
+    that change alone moved recall 0.867 -> 0.988 and extras/tile
+    0.203 -> 0.035.
+
+    An IoU second admissibility route was tried and then REMOVED after it was
+    measured -- read the comment at the containment test in the body before
+    re-adding one.
 
     Ranking by quality rather than by centroid distance also fixes cluster
     pairing: the nearest centroid is not always the better fit, and a
@@ -300,12 +283,17 @@ def match_one_to_one(
     # tie-break would perturb pairings for no stated reason.
     pred_m = [_vertex_mean(p) for p in pred_polys]
     label_m = [_vertex_mean(g) for g in label_polys]
-    # Non-finite vertices are dropped up front, on BOTH sides. `polygon_iou`
-    # and `cv2` both raise on NaN/inf, and the IoU route below reaches
-    # `polygon_iou` for pairs the old containment-only gate never scored -- so
-    # without this a malformed label would turn a silent non-match into a hard
-    # crash on a GUI-reachable path. A polygon with no finite geometry cannot
-    # be matched to anything, which is exactly what dropping it means.
+    # Non-finite vertices are dropped up front, on BOTH sides. This is KEPT
+    # after the IoU route's removal on purpose: it is correct defensive
+    # behaviour, and the pre-fix code's silent NaN no-match is not something
+    # to restore. Malformed geometry had TWO crash entrances, not one --
+    # `cv2` raises inside the representative point, and `polygon_iou` raises
+    # independently (`utils/polygon_iou.py:59`,
+    # "cannot convert float NaN to integer"), which the retired IoU route
+    # reached for pairs containment never scored. `match_quality` still calls
+    # `polygon_iou` for every admissible pair, so that second entrance is
+    # live regardless. A polygon with no finite geometry cannot be matched to
+    # anything, which is exactly what dropping it means.
     finite_label = [_is_finite(g) for g in label_polys]
     admissible = [
         i for i, p in enumerate(pred_polys) if _is_finite(p) and in_band(p, area_band)
@@ -316,11 +304,31 @@ def match_one_to_one(
         for gi, gc in enumerate(label_c):
             if not finite_label[gi]:
                 continue
-            contained = _contains(label_polys[gi], pc) or _contains(pred_polys[pi], gc)
-            if (
-                not contained
-                and polygon_iou(pred_polys[pi], label_polys[gi]) < ADMISSIBLE_IOU
-            ):
+            # A SECOND admissibility route lived here and was REMOVED after
+            # measurement: `or polygon_iou(pred, label) >= 0.5`, added
+            # alongside the point fix. Measured against it on the 16 held-out
+            # frames, predictions held fixed (`--score-only` over the cached
+            # candidates on courtship; see
+            # tools/sam3_parity/matcher_gate_results.json): containment alone,
+            # under `representative_point`, scored recall 0.9876 -- with the
+            # IoU route, 0.9888. ONE instance in 805.
+            #
+            # Deleted because its safety rested entirely on the threshold
+            # being exactly 0.5: IoU >= 0.5 implies the two areas are within
+            # 2x of each other, and that is what makes a region spanning two
+            # labels geometrically unable to use the route at all. At 0.3 the
+            # bound becomes 3.3x and a two-label blob gets in. A knob that is
+            # safe at exactly one value, that nobody has a reason to tune, and
+            # that buys 0.1 % recall is a liability, not a feature.
+            #
+            # Its original justification was also unsound, which is worth
+            # recording so it is not rediscovered: it rested on an
+            # AREA-CENTROID measurement (recall 0.929) that never transferred,
+            # because `representative_point` is materially stronger than an
+            # area centroid -- 0/805 of these labels fail to contain it,
+            # against 128/805 for the vertex mean. Re-add a route like this
+            # only with a measurement that actually says it is needed.
+            if not (_contains(label_polys[gi], pc) or _contains(pred_polys[pi], gc)):
                 continue
             # Only AFTER admissibility: `match_quality` is the expensive term
             # (it computes IoU, area and minAreaRect), and the overwhelming
