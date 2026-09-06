@@ -1,0 +1,450 @@
+"""Pre-launch YOLO batch resolution: contained child, clamped, never `-1`."""
+
+from __future__ import annotations
+
+import json
+import os
+from pathlib import Path
+
+import pytest
+
+from hydra_suite.runtime.process_supervisor import ExitKind
+from hydra_suite.runtime.resource_budget import AcceleratorKind
+from hydra_suite.training.contracts import (
+    TrainingHyperParams,
+    TrainingRole,
+    TrainingRunSpec,
+)
+
+
+def _spec(tmp_path, batch, *, imgsz=64, device="cpu"):
+    return TrainingRunSpec(
+        role=TrainingRole.OBB_DIRECT,
+        source_datasets=[],
+        derived_dataset_dir=str(tmp_path),
+        base_model="yolo.pt",
+        hyperparams=TrainingHyperParams(batch=batch, imgsz=imgsz, workers=0),
+        device=device,
+    )
+
+
+def _child(*, writes=None, fails=False, canceled=False, raises=None, seen=None):
+    """A fake resolution child that WRITES a file (it never prints a line)."""
+
+    def run_child(command, spec):
+        if seen is not None:
+            seen.append(tuple(command))
+        command = [str(item) for item in command]
+        out = Path(command[command.index("--out") + 1])
+        if raises is not None:
+            raise raises
+        if writes is not None:
+            out.parent.mkdir(parents=True, exist_ok=True)
+            out.write_text(json.dumps({"resolved": writes}), encoding="utf-8")
+        if canceled:
+            return {
+                "success": False,
+                "canceled": True,
+                "failure_kind": ExitKind.CANCELED.value,
+            }
+        return {
+            "success": not fails,
+            "canceled": False,
+            "failure_kind": (
+                ExitKind.ORDINARY_FAILURE.value if fails else ExitKind.SUCCESS.value
+            ),
+            "error_message": "child died" if fails else "",
+        }
+
+    return run_child
+
+
+def _resolve(
+    tmp_path,
+    *,
+    batch=-1,
+    device="cpu",
+    accelerator=AcceleratorKind.CUDA,
+    should_cancel=None,
+    **child,
+):
+    from hydra_suite.training.yolo_autobatch import resolve_yolo_batch
+
+    return resolve_yolo_batch(
+        _spec(tmp_path, batch, device=device),
+        tmp_path,
+        accelerator_kind=accelerator,
+        run_child=_child(**child),
+        log_cb=lambda message: None,
+        should_cancel=should_cancel,
+    )
+
+
+def test_an_explicit_batch_resolves_without_a_child(tmp_path):
+    seen: list = []
+    from hydra_suite.training.yolo_autobatch import resolve_yolo_batch
+
+    batch, provenance = resolve_yolo_batch(
+        _spec(tmp_path, 16),
+        tmp_path,
+        accelerator_kind=AcceleratorKind.CUDA,
+        run_child=_child(writes=99, seen=seen),
+    )
+    assert (batch, provenance) == (16, "explicit")
+    assert seen == []
+
+
+def test_a_reported_batch_is_taken_as_ultralytics_estimate(tmp_path):
+    assert _resolve(tmp_path, writes=24) == (24, "ultralytics_autobatch")
+
+
+def test_an_absurd_report_is_clamped_not_trusted(tmp_path):
+    from hydra_suite.training.yolo_autobatch import YOLO_MAX_AUTO_BATCH
+
+    assert YOLO_MAX_AUTO_BATCH == 64
+    assert _resolve(tmp_path, writes=1024) == (64, "ultralytics_autobatch_clamped")
+
+
+def test_a_nonpositive_report_is_clamped_up_never_propagated(tmp_path):
+    assert _resolve(tmp_path, writes=-1) == (1, "ultralytics_autobatch_clamped")
+
+
+def test_non_cuda_returns_the_default_and_says_so(tmp_path):
+    logged: list[str] = []
+    from hydra_suite.training.yolo_autobatch import resolve_yolo_batch
+
+    result = resolve_yolo_batch(
+        _spec(tmp_path, -1, device="mps"),
+        tmp_path,
+        accelerator_kind=AcceleratorKind.MPS,
+        run_child=_child(writes=48),
+        log_cb=logged.append,
+    )
+    assert result == (TrainingHyperParams().batch, "default_non_cuda")
+    assert any("does not measure" in line for line in logged)
+
+
+def test_a_resolution_failure_falls_back_and_never_propagates_minus_one(tmp_path):
+    batch, provenance = _resolve(tmp_path, fails=True)
+    assert batch >= 1 and provenance == "fallback"
+
+
+def test_a_missing_or_unparseable_report_falls_back(tmp_path):
+    assert _resolve(tmp_path, writes=None)[1] == "fallback"
+    (tmp_path / "batch_resolution.json").write_text("{", encoding="utf-8")
+    assert _resolve(tmp_path, writes=None)[1] == "fallback"
+
+
+def test_a_stale_report_from_a_previous_run_is_never_trusted(tmp_path):
+    (tmp_path / "batch_resolution.json").write_text(
+        json.dumps({"resolved": 512}), encoding="utf-8"
+    )
+    assert _resolve(tmp_path, fails=True) == (TrainingHyperParams().batch, "fallback")
+
+
+def test_cancellation_during_resolution_raises_and_launches_nothing(tmp_path):
+    from hydra_suite.training.yolo_autobatch import ResolutionCanceled
+
+    with pytest.raises(ResolutionCanceled):
+        _resolve(tmp_path, canceled=True)
+    with pytest.raises(ResolutionCanceled):
+        _resolve(tmp_path, writes=24, should_cancel=lambda: True)
+
+
+def test_the_resolution_block_matches_the_sam3_schema(tmp_path):
+    """The key set of SAM3's EXPLICIT block. SAM3's MEASURED block additionally
+    carries `requirement_provenance`/`requirement_measured_extrapolated`, which
+    describe a probe this path does not run; consumers read by key."""
+    from hydra_suite.training.yolo_autobatch import batch_resolution_block
+
+    block = batch_resolution_block(-1, 24, "ultralytics_autobatch")
+    assert set(block) == {
+        "requested",
+        "resolved",
+        "provenance",
+        "fingerprint",
+        "degraded_reasons",
+        "effective_batch",
+        "measured_envelope_bytes",
+        "free_bytes",
+        "resolved_at_unix_ns",
+    }
+    assert block["requested"] == -1
+    assert block["resolved"] == 24
+    assert block["provenance"] == "ultralytics_autobatch"
+    # Honesty: nothing here was measured, so nothing claims a measured peak.
+    assert block["measured_envelope_bytes"] == 0
+    # Unknowable until the OOM-retry ladder settles; the supervisor fills it.
+    assert block["effective_batch"] is None
+    assert block["free_bytes"] == 0
+    assert block["fingerprint"] == ""
+    assert block["degraded_reasons"] == []
+    assert block["resolved_at_unix_ns"] > 0
+
+
+def test_the_child_command_carries_the_run_geometry(tmp_path):
+    seen: list = []
+    _resolve(tmp_path, writes=8, seen=seen)
+    command = [str(item) for item in seen[0]]
+    assert "hydra_suite.training.yolo_autobatch" in command
+    assert str(tmp_path / "batch_resolution.json") in command
+    assert command[command.index("--imgsz") + 1] == "64"
+    assert command[command.index("--out") + 1] == str(
+        tmp_path / "batch_resolution.json"
+    )
+    assert command[command.index("--device") + 1] == "cuda:0"
+
+
+def test_a_missing_label_root_is_reported_not_swallowed(tmp_path):
+    """Without labels the estimate ignores assigner memory and skews
+    optimistic, so it must be flagged rather than pass as a clean result."""
+    from hydra_suite.training.yolo_autobatch import _dataset_label_profile
+
+    max_num_obj, dataset_size, degraded = _dataset_label_profile(tmp_path)
+    assert (max_num_obj, dataset_size) == (0, 0)
+    assert degraded and "no train labels" in degraded[0]
+
+
+def test_the_child_device_is_pinned_and_never_an_ultralytics_token(tmp_path):
+    """`torch.device()` raises on "auto" and on "0", and the parent already
+    pinned CUDA_VISIBLE_DEVICES, so the child must always be told `cuda:0`.
+    Forwarding `spec.device` would kill the child on its first line and
+    silently degrade every run to `fallback`."""
+    from hydra_suite.training.yolo_autobatch import child_command
+
+    for token in ("auto", "0", "cuda:3", ""):
+        command = [
+            str(item)
+            for item in child_command(_spec(tmp_path, -1, device=token), tmp_path)
+        ]
+        assert command[command.index("--device") + 1] == "cuda:0"
+
+
+def test_a_degraded_child_report_is_carried_through(tmp_path):
+    from hydra_suite.training.yolo_autobatch import child_degraded_reasons
+
+    assert child_degraded_reasons(tmp_path) == []
+    (tmp_path / "batch_resolution.json").write_text(
+        json.dumps({"resolved": 8, "degraded_reasons": ["no train labels"]}),
+        encoding="utf-8",
+    )
+    assert child_degraded_reasons(tmp_path) == ["no train labels"]
+
+
+def test_the_child_reports_ultralytics_estimate_to_the_file(tmp_path):
+    """The child writes; it does not print. Dropped output cannot degrade it."""
+    from hydra_suite.training import yolo_autobatch
+
+    out = tmp_path / "batch_resolution.json"
+    yolo_autobatch.main(
+        [
+            "--model",
+            "yolo.pt",
+            "--dataset-dir",
+            str(tmp_path),
+            "--imgsz",
+            "640",
+            "--device",
+            "cuda:0",
+            "--default-batch",
+            "16",
+            "--out",
+            str(out),
+        ],
+        estimate=lambda **kwargs: 24,
+    )
+    assert json.loads(out.read_text())["resolved"] == 24
+
+
+def test_max_num_obj_mirrors_the_ultralytics_mosaic_factor(tmp_path):
+    """DetectionTrainer.auto_batch uses max(len(label.cls)) * 4."""
+    from hydra_suite.training.yolo_autobatch import _dataset_label_profile
+
+    labels = tmp_path / "train" / "labels"
+    labels.mkdir(parents=True)
+    (labels / "a.txt").write_text("0 1 1 1 1\n0 1 1 1 1\n", encoding="utf-8")
+    (labels / "b.txt").write_text("0 1 1 1 1\n", encoding="utf-8")
+    max_num_obj, dataset_size, degraded = _dataset_label_profile(tmp_path)
+    assert max_num_obj == 8
+    assert dataset_size == 2
+    assert degraded == []
+
+
+def test_ultralytics_device_ordinals_normalise_for_our_reasoning_only():
+    """`_accelerator` does not recognise the bare-digit convention, so
+    `device: "0"` -- what the runbook and every Ultralytics user writes --
+    classified as CPU and never reached resolution."""
+    from hydra_suite.training.yolo_autobatch import normalize_cuda_device
+
+    assert normalize_cuda_device("0") == "cuda:0"
+    assert normalize_cuda_device("1") == "cuda:1"
+    assert normalize_cuda_device(" 2 ") == "cuda:2"
+    # Multi-GPU resolves against the FIRST device: Ultralytics profiles one.
+    assert normalize_cuda_device("0,1") == "cuda:0"
+    assert normalize_cuda_device("1,0") == "cuda:1"
+    # Everything else is passed through untouched.
+    for value in ("auto", "mps", "cpu", "cuda:3"):
+        assert normalize_cuda_device(value) == value
+    assert normalize_cuda_device("") == "auto"
+    assert normalize_cuda_device(None) == "auto"
+
+
+def test_a_multi_gpu_device_says_it_sized_against_one(tmp_path):
+    from hydra_suite.training.yolo_autobatch import resolve_yolo_batch
+
+    logged: list[str] = []
+    resolve_yolo_batch(
+        _spec(tmp_path, -1, device="0,1"),
+        tmp_path,
+        accelerator_kind=AcceleratorKind.CUDA,
+        run_child=_child(writes=24),
+        log_cb=logged.append,
+    )
+    assert any("cuda:0" in line and "profiles one" in line for line in logged)
+
+
+def test_the_resolution_child_is_classified_as_cuda_for_a_bare_ordinal(tmp_path):
+    """The child needs the CUDA classification to get the UUID pin, so the
+    spec it runs under carries the normalised device."""
+    from hydra_suite.training.yolo_autobatch import resolve_yolo_batch
+
+    seen: list = []
+
+    def run_child(command, spec):
+        seen.append(spec.device)
+        out = Path(
+            [str(i) for i in command][[str(i) for i in command].index("--out") + 1]
+        )
+        out.write_text(json.dumps({"resolved": 24}), encoding="utf-8")
+        return {"success": True, "canceled": False}
+
+    resolve_yolo_batch(
+        _spec(tmp_path, -1, device="0"),
+        tmp_path,
+        accelerator_kind=AcceleratorKind.CUDA,
+        run_child=run_child,
+    )
+    assert seen == ["cuda:0"]
+
+
+def test_a_raising_launcher_falls_back_instead_of_killing_the_run(tmp_path):
+    """The injected launcher RAISES on real paths -- the CUDA device vanishing
+    between probe and child, and a failure of the child's output channel, which
+    is the very condition that made us read a file rather than a stdout marker.
+    Resolution must never abort a training run over a batch-size estimate."""
+    for error in (
+        RuntimeError("the requested CUDA device is unavailable"),
+        OSError("output channel failed"),
+        ValueError("nonsense"),
+    ):
+        batch, provenance = _resolve(tmp_path, raises=error)
+        assert batch >= 1
+        assert provenance == "fallback"
+
+
+def test_a_raising_launcher_leaves_no_resolution_on_disk(tmp_path):
+    (tmp_path / "batch_resolution.json").write_text(
+        json.dumps({"resolved": 512}), encoding="utf-8"
+    )
+    _resolve(tmp_path, raises=RuntimeError("boom"))
+    assert not (tmp_path / "batch_resolution.json").exists()
+
+
+def test_a_still_owned_workload_is_re_raised_not_swallowed(tmp_path):
+    """Falling back here would launch training on top of a child that may
+    still be alive and still holding the lease. That is an ownership
+    violation, not a resolution failure."""
+    from hydra_suite.runtime.process_supervisor import WorkloadStillOwnedError
+
+    owner = object()
+    with pytest.raises(WorkloadStillOwnedError) as caught:
+        _resolve(tmp_path, raises=WorkloadStillOwnedError("still owned", owner))
+    assert caught.value.sidecar is owner
+
+
+def test_cancelling_after_a_successful_child_writes_no_resolution(tmp_path):
+    """The child succeeded and wrote its report, but the run never launched --
+    leaving that file would describe a resolution for a run that did not
+    happen."""
+    from hydra_suite.training.yolo_autobatch import ResolutionCanceled
+
+    with pytest.raises(ResolutionCanceled):
+        _resolve(tmp_path, writes=24, should_cancel=lambda: True)
+    assert not (tmp_path / "batch_resolution.json").exists()
+
+    with pytest.raises(ResolutionCanceled):
+        _resolve(tmp_path, writes=24, canceled=True)
+    assert not (tmp_path / "batch_resolution.json").exists()
+
+
+def test_the_clamp_log_says_the_right_thing_in_both_directions(tmp_path):
+    high: list[str] = []
+    low: list[str] = []
+    from hydra_suite.training.yolo_autobatch import resolve_yolo_batch
+
+    for writes, logged in ((1024, high), (0, low)):
+        resolve_yolo_batch(
+            _spec(tmp_path, -1),
+            tmp_path,
+            accelerator_kind=AcceleratorKind.CUDA,
+            run_child=_child(writes=writes),
+            log_cb=logged.append,
+        )
+    assert any("extrapolates" in line for line in high)
+    assert not any("extrapolates" in line for line in low)
+    assert any("not a runnable batch" in line for line in low)
+
+
+def test_the_child_runs_as_a_real_subprocess_and_honours_the_argv_contract(tmp_path):
+    """`child_command` and the child's argparse must actually agree. Everything
+    else calls `main()` in-process, which would never catch a renamed flag.
+
+    On this box the child is EXPECTED to fail at the CUDA step -- there is no
+    GPU. What is asserted is the argv contract and the failure SHAPE, not a
+    resolved batch: argparse must not reject the argv (exit 2) and must not
+    fail on an unrecognised argument.
+    """
+    import subprocess
+
+    from hydra_suite.training.yolo_autobatch import child_command
+
+    command = [str(item) for item in child_command(_spec(tmp_path, -1), tmp_path)]
+    proc = subprocess.run(
+        command,
+        capture_output=True,
+        text=True,
+        timeout=600,
+        env={
+            **os.environ,
+            "PYTHONPATH": str(Path(__file__).resolve().parents[1] / "src"),
+        },
+    )
+    assert proc.returncode != 2, f"argparse rejected the argv: {proc.stderr}"
+    assert "unrecognized arguments" not in proc.stderr
+    assert "error: the following arguments are required" not in proc.stderr
+    if proc.returncode == 0:  # a CUDA box: the contract went all the way through
+        assert (
+            json.loads((tmp_path / "batch_resolution.json").read_text())["resolved"]
+            >= 1
+        )
+    else:  # no GPU here: it must die at the model/CUDA step, not on its argv
+        assert "Traceback" in proc.stderr
+
+
+def test_device_helpers_are_the_shared_ones_not_a_second_parser():
+    """The helpers MOVED to `training.device_ids`; YOLO behaviour is unchanged.
+
+    SAM3's preflight now parses device strings with the same objects, so a
+    plan's ``device: "0"`` cannot mean one thing to a YOLO role and another to
+    a SAM3 role again.
+    """
+
+    from hydra_suite.training import device_ids, ultralytics_supervisor, yolo_autobatch
+    from hydra_suite.training.sam3_lora import preflight
+
+    assert yolo_autobatch.normalize_cuda_device is device_ids.normalize_cuda_device
+    assert yolo_autobatch.is_bare_ordinal_device is device_ids.is_bare_ordinal_device
+    assert (
+        ultralytics_supervisor.normalize_cuda_device is device_ids.normalize_cuda_device
+    )
+    assert preflight.normalize_cuda_device is device_ids.normalize_cuda_device

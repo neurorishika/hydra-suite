@@ -4,7 +4,18 @@
 > (recommended) or superpowers:executing-plans to implement this plan task-by-task.
 > Steps use checkbox (`- [ ]`) syntax for tracking.
 
-**Status:** revision 4, 2026-09-04. Revision 2 answered the first
+**Status:** Shipped — merged to main. Implemented via subagent-driven development
+2026-09-06, then extended beyond the original plan by three user decisions (set the
+per-item constant from measurement; let a measured envelope decide; widen bare-ordinal
+device classification with a warning period) and one live-bug fix found during GPU
+acceptance (SAM3 died at preflight for every `device: "0"` spec; four silent run
+failures on mehek). Hardware-verified on an RTX 6000 Ada and an RTX 4090.
+
+NOTE: the per-task checkboxes below were never ticked during execution — progress was
+tracked in the SDD ledger instead. Every task landed, with reviews and fix rounds; the
+unticked boxes are a bookkeeping artefact, not outstanding work.
+
+**Original status:** revision 4, 2026-09-04. Revision 2 answered the first
 implementation-readiness audit (framework reuse, parent-side resolution, GUI,
 branch convention, dead-task removal, merge workflow). This revision answers the
 second audit: probe admission policy, workload fingerprint, cache-write

@@ -43,6 +43,7 @@ import math
 import os
 import random
 import sys
+import time
 from pathlib import Path
 from typing import Any
 
@@ -708,32 +709,21 @@ class _LossWindow:
         return f"loss {self._core / self._n:.4f}" + (f"  {terms}" if terms else "")
 
 
-def run_training(spec: Any, run_dir_path: Path) -> bool:
-    """Run the SAM3 LoRA training loop and write `adapters.pt`.
+def _build_model_and_loss(params: Any) -> tuple[Any, Any, Any, Any, list]:
+    """Build the device, model, adapters, matcher, and loss ONE way.
 
-    Returns True on a completed run that wrote the artifact, False on the
-    zero-datapoint refusal (the only failure mode this function itself
-    reports -- everything past this point either succeeds or raises, and an
-    uncaught exception is `main()`'s cue to exit nonzero).
+    Shared verbatim by `run_training` and by the memory probe, so the
+    probe measures the same construction ordering training uses --
+    `requires_grad_(False)` -> inject adapters -> validate -> `.to(device)`.
+    A probe that built a different stack would measure a different peak,
+    which is exactly the class of bug measured auto-batching exists to end.
+
+    Returns `(device, model, matcher, loss_fn, trainable_params)`. The
+    optimizer is deliberately NOT built here: both callers need their own
+    (training pairs it with a scheduler), and both must build one, because
+    lazy Adam state is part of the peak.
     """
-    params = spec.sam3_params
-
-    train_descriptors = _build_dataloader(spec, params, split="train")
-    if not train_descriptors:
-        emit_log(
-            "Training set produced zero datapoints; refusing to report "
-            "success for a run that trained nothing."
-        )
-        return False
-
-    # --- Lazy, training-only imports -----------------------------------
     import torch
-
-    refusal = _runtime_admission_refusal(torch, params)
-    if refusal:
-        emit_log(refusal)
-        return False
-    _seed_everything(spec.seed)
 
     # NOTE: verified against the real Meta sam3 source on the CUDA box
     # (2026-08-31): sam3/build_sam.py does not exist. The builder lives in
@@ -824,9 +814,52 @@ def run_training(spec: Any, run_dir_path: Path) -> bool:
         matcher=matcher,
         o2m_matcher=BinaryOneToManyMatcher(alpha=0.3, threshold=0.4, topk=4),
     )
+    return device, model, matcher, loss_fn, trainable_params
+
+
+def run_training(spec: Any, run_dir_path: Path) -> bool:
+    """Run the SAM3 LoRA training loop and write `adapters.pt`.
+
+    Returns True on a completed run that wrote the artifact, False on the
+    zero-datapoint refusal (the only failure mode this function itself
+    reports -- everything past this point either succeeds or raises, and an
+    uncaught exception is `main()`'s cue to exit nonzero).
+    """
+    params = spec.sam3_params
+
+    train_descriptors = _build_dataloader(spec, params, split="train")
+    if not train_descriptors:
+        emit_log(
+            "Training set produced zero datapoints; refusing to report "
+            "success for a run that trained nothing."
+        )
+        return False
+
+    # --- Lazy, training-only imports -----------------------------------
+    import torch
+
+    refusal = _runtime_admission_refusal(torch, params)
+    if refusal:
+        emit_log(refusal)
+        return False
+    _seed_everything(spec.seed)
+
+    device, model, matcher, loss_fn, trainable_params = _build_model_and_loss(params)
 
     grad_accum = max(1, int(params.grad_accum))
-    batch_size = max(1, int(params.batch))
+    # NOT `max(1, ...)`. A silent floor of 1 is the exact bug measured auto
+    # batch sizing exists to kill: the parent resolves `-1` to a positive
+    # value before this process is ever launched, so a non-positive batch
+    # here means someone hand-ran the child against an unresolved spec. Train
+    # at a size nobody chose and the run is worthless and looks fine.
+    batch_size = int(params.batch)
+    if batch_size < 1:
+        raise RuntimeError(
+            f"SAM3 training received batch={batch_size}. A non-positive batch "
+            "is a request to MEASURE one, which only the launcher can do "
+            "(it probes this workload on this card first). Run through "
+            "`train_sam3_lora`, or set a positive batch in the spec."
+        )
     n_batches = batch_count(query_count(train_descriptors), batch_size)
     steps_per_epoch = -(-n_batches // grad_accum)  # ceil division
     total_steps = max(1, steps_per_epoch * params.epochs)
@@ -1171,6 +1204,168 @@ def _evaluate_and_write(
     return metrics_path
 
 
+def _densest_first(descriptors: list) -> list:
+    """Order tiles by active instance count, densest first.
+
+    Mask memory scales with the number of active instances in a tile, so a
+    probe fed median tiles understates the peak the run will actually hit --
+    and a batch size chosen from an understated peak OOMs hours later. This
+    is the same density the workload fingerprint records.
+    """
+
+    return sorted(descriptors, key=lambda d: len(d.instances), reverse=True)
+
+
+def _host_peak_bytes() -> int:
+    """Peak RSS of this process, in bytes."""
+
+    import resource
+
+    usage = resource.getrusage(resource.RUSAGE_SELF).ru_maxrss
+    # Linux reports kilobytes; macOS reports bytes. The child always runs on
+    # the CUDA box (Linux), but keep the conversion honest either way.
+    return int(usage) * (1 if sys.platform == "darwin" else 1024)
+
+
+# How often the probe child reports in. Frequent enough that no plausible
+# step time leaves the log silent for long, rare enough not to spam a 30-step
+# run. Deliberately not expressed in seconds: step time varies by card and
+# corpus, and quoting a duration nobody measured on this box would be a guess.
+_PROBE_HEARTBEAT_STEPS = 10
+
+
+def run_probe_measurement(spec: Any, run_dir_path: Path, batch_size: int) -> int:
+    """Measure this configuration's device peak at ONE batch size.
+
+    Runs inside a contained sidecar admitted at exactly `batch_size` (see
+    `preflight.assess_probe_preflight`), builds the SAME model/loss stack
+    training builds plus its own optimizer, and takes at least
+    `PROBE_STEPS` full steps THROUGH `optimizer.step()` on the densest tiles.
+    The first step is not enough on its own: Adam's `exp_avg`/`exp_avg_sq`
+    are allocated lazily inside the first `step()`, so a one-step probe
+    misses the whole optimizer state.
+
+    Writes `run_dir/probe_records/batch_<N>.json` and returns a process exit
+    code. An out-of-memory error is a RESULT, not a crash: it is recorded as
+    `{"outcome": "oom"}` and reported with a non-zero exit, because the
+    supervisor sees exit codes and cgroup kills, never a Python
+    `OutOfMemoryError` raised inside this process.
+    """
+
+    from .autobatch import PROBE_RECORDS_DIRNAME, PROBE_STEPS, sidecar_alloc_conf_hash
+
+    params = spec.sam3_params
+    batch_size = max(1, int(batch_size))
+    records_dir = run_dir_path / PROBE_RECORDS_DIRNAME
+    records_dir.mkdir(parents=True, exist_ok=True)
+    record_path = records_dir / f"batch_{batch_size}.json"
+
+    def _write(payload: dict) -> None:
+        record_path.write_text(json.dumps(payload, indent=2), encoding="utf-8")
+
+    descriptors = _build_dataloader(spec, params, split="train")
+    if not descriptors:
+        emit_log("Probe found zero training datapoints; nothing to measure.")
+        _write({"outcome": "empty_dataset", "batch_size": batch_size})
+        return 1
+
+    import torch
+
+    refusal = _runtime_admission_refusal(torch, params)
+    if refusal:
+        emit_log(refusal)
+        _write({"outcome": "refused", "batch_size": batch_size, "reason": refusal})
+        return 1
+    _seed_everything(spec.seed)
+
+    device, model, matcher, loss_fn, trainable_params = _build_model_and_loss(params)
+    del matcher
+    # Built here and not in the shared helper on purpose: the optimizer IS
+    # part of the peak this probe exists to measure.
+    optimizer = torch.optim.AdamW(trainable_params, lr=params.lr)
+    autocast_dtype = torch.bfloat16
+    densest = _densest_first(descriptors)
+
+    torch.cuda.reset_peak_memory_stats(device)
+    try:
+        model.train()
+        optimizer.zero_grad()
+        steps = 0
+        # The densest tiles are re-walked if the dataset is smaller than the
+        # step budget; a probe must reach PROBE_STEPS, not run out of tiles.
+        for _pass in range(PROBE_STEPS):
+            for batch in collate_batches(densest, batch_size):
+                with torch.autocast(
+                    device_type="cuda", dtype=autocast_dtype, enabled=True
+                ):
+                    model_input, targets, outputs = _forward_batch(batch, model, device)
+                loss_dict = loss_fn(outputs, targets)
+                loss = _core_loss(loss_dict)
+                loss.backward()
+                torch.nn.utils.clip_grad_norm_(trainable_params, max_norm=1.0)
+                optimizer.step()
+                optimizer.zero_grad()
+                steps += 1
+                del batch, model_input, targets, outputs, loss_dict, loss
+                if steps % _PROBE_HEARTBEAT_STEPS == 0 or steps >= PROBE_STEPS:
+                    # The probe path was otherwise SILENT for its whole
+                    # duration: nothing is written until the last step lands,
+                    # and the launcher passes a no-op progress callback, so a
+                    # user watching the log or the GUI saw nothing at all.
+                    emit_log(
+                        f"probe batch {batch_size}: step {steps}/{PROBE_STEPS}, "
+                        f"reserved "
+                        f"{torch.cuda.max_memory_reserved(device) / (1024 ** 3):.2f} GiB"
+                    )
+                if steps >= PROBE_STEPS:
+                    break
+            if steps >= PROBE_STEPS:
+                break
+        if steps < PROBE_STEPS:
+            emit_log(
+                f"Probe completed only {steps} of {PROBE_STEPS} steps at batch "
+                f"{batch_size}; refusing to report an understated peak."
+            )
+            _write({"outcome": "incomplete", "batch_size": batch_size, "steps": steps})
+            return 1
+        reserved = int(torch.cuda.max_memory_reserved(device))
+        allocated = int(torch.cuda.max_memory_allocated(device))
+    except torch.cuda.OutOfMemoryError as exc:
+        emit_log(f"Probe at batch {batch_size} ran out of device memory: {exc}")
+        _write({"outcome": "oom", "batch_size": batch_size, "detail": str(exc)})
+        return 2
+    finally:
+        optimizer.zero_grad(set_to_none=True)
+        torch.cuda.empty_cache()
+
+    _write(
+        {
+            "outcome": "ok",
+            "batch_size": batch_size,
+            "steps": steps,
+            "accelerator_reserved_peak_bytes": reserved,
+            "accelerator_allocated_peak_bytes": allocated,
+            "host_peak_bytes": _host_peak_bytes(),
+            "observed_at_unix_ns": time.time_ns(),
+            # What THIS child actually ran under, hashed the same way the
+            # parent hashes it for the fingerprint. The parent computes the
+            # fingerprint from `sam3_env_environ()` -- its own idea of the
+            # child's environment -- so without this a record could be filed
+            # under an "expandable_segments" key by a child that never saw
+            # the flag. Measured on courtship, same box, same 30 steps:
+            # reserved 9.82 GiB without the flag vs 6.89 GiB with it, 42%
+            # apart. In the product path the two always agree; this closes
+            # the gap for any child launched outside `_child_environment`.
+            "alloc_conf_hash": sidecar_alloc_conf_hash(dict(os.environ)),
+        }
+    )
+    emit_log(
+        f"Probe at batch {batch_size}: reserved {reserved / (1024 ** 3):.2f} GiB, "
+        f"allocated {allocated / (1024 ** 3):.2f} GiB over {steps} steps."
+    )
+    return 0
+
+
 def main(argv: list[str] | None = None) -> int:
     parser = argparse.ArgumentParser(description=__doc__)
     parser.add_argument(
@@ -1179,12 +1374,33 @@ def main(argv: list[str] | None = None) -> int:
     parser.add_argument(
         "--run-dir", required=True, help="Run directory to write artifacts into"
     )
+    parser.add_argument(
+        "--probe",
+        action="store_true",
+        help=(
+            "Measure this configuration's device peak instead of training. "
+            "The candidate batch size arrives on the command line, not in "
+            "spec.json: the spec carries exactly one batch, and it is "
+            "rewritten once, by the parent, with the RESOLVED value."
+        ),
+    )
+    parser.add_argument(
+        "--probe-batch",
+        type=int,
+        default=0,
+        help="Batch size to measure; required with --probe",
+    )
     args = parser.parse_args(argv)
+    if args.probe and args.probe_batch < 1:
+        parser.error("--probe requires a positive --probe-batch")
 
     run_dir_path = Path(args.run_dir).expanduser().resolve()
     run_dir_path.mkdir(parents=True, exist_ok=True)
 
     spec = _load_spec(Path(args.spec).expanduser().resolve())
+
+    if args.probe:
+        return run_probe_measurement(spec, run_dir_path, args.probe_batch)
 
     ok = run_training(spec, run_dir_path)
     return 0 if ok else 1

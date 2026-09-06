@@ -101,6 +101,152 @@ Publishing is disabled by default for headless plans. Successful checkpoints
 remain in `<workspace>/runs/<run-id>/`. Enable `publish.auto_import` only when
 the server's HYDRA model registry is the intended destination.
 
+### Batch size
+
+`training.batch` defaults to `16`. Setting it to `-1` means "let Ultralytics
+size the batch before launch": a short, contained resolution child runs
+Ultralytics' own autobatch, and the number it reports is clamped to
+`[1, 64]` — `64` is the largest batch Ultralytics actually profiles rather than
+extrapolates to from a linear fit.
+
+The resolved value and where it came from land in
+`<run_dir>/batch_resolution.json`:
+
+```json
+{
+  "requested": -1,
+  "resolved": 24,
+  "provenance": "ultralytics_autobatch",
+  "fingerprint": "",
+  "degraded_reasons": [],
+  "effective_batch": 24,
+  "measured_envelope_bytes": 0,
+  "free_bytes": 0,
+  "resolved_at_unix_ns": 1757030400000000000
+}
+```
+
+The file shares its **core keys** with the SAM3 block below, which carries
+several more. `measured_envelope_bytes` and `free_bytes` stay `0` on this path
+on purpose: nothing here was measured by HYDRA, so nothing claims to have been.
+`degraded_reasons` lists anything that made the estimate weaker, such as a
+missing train-label root.
+
+`resolved` and `effective_batch` mean different things and can differ:
+
+- `resolved` is what **resolution chose**, written before the run starts so a
+  crash still leaves the provenance behind.
+- `effective_batch` is the batch of the **final attempt** — what trained, or,
+  for a run that failed every attempt, the last batch tried. It is `null`
+  until the bounded OOM-retry ladder settles, at which point the file is
+  rewritten with the settled value. Because that ladder halves the batch in
+  a fresh child on a classified out-of-memory exit, `effective_batch` can be
+  half or a quarter of `resolved`. Read this key, not `resolved`, when you want
+  to know what ran.
+
+`provenance` is one of `explicit` (you set a positive batch), `ultralytics_autobatch`,
+`ultralytics_autobatch_clamped`, `default_non_cuda` (Ultralytics only measures on
+CUDA, so off CUDA the default is used unchanged), or `fallback` (the resolution
+child failed or left no readable report — the default is used and `-1` is never
+passed on).
+
+The resolved number is **Ultralytics' estimate**, not a measured peak and not a
+guarantee that the run will fit: it profiles a single step and extrapolates.
+The bounded OOM-retry ladder — which halves the batch in a fresh child on a
+classified out-of-memory exit — is what actually protects the run.
+
+`training.batch` is **opt-in**: `16` is a default shared with PoseKit, ClassKit
+and TrackerKit, so omitting `training.batch` still gives you `16`. You have to
+write `-1` to get auto batch.
+
+Ultralytics device conventions work here: `"0"`, `"0,1"` and `"cuda:0"` all
+reach resolution, as does `"auto"` on a CUDA host. A multi-GPU value resolves
+against the **first** device only — Ultralytics profiles one device, and sizing
+against the whole set would overstate capacity. The launch command still
+receives the device string exactly as you wrote it.
+
+Auto batch is not reproducible across machines, because it depends on the GPU
+it measures on. **Set a fixed positive `training.batch` for byte-reproducible
+runs.**
+
+### SAM3 batch
+
+`sam3.batch` accepts `-1` too, but it means something quite different from
+`training.batch: -1` and is **not** Ultralytics' autobatch.
+
+`-1` makes HYDRA measure this workload on this card before launching. It walks
+a ladder of contained probe children (batch 1, 2, 4, 8), each a real SAM3 LoRA
+run taken through thirty full optimizer steps on the densest tiles, and records
+the reserved device peak each one reaches. An out-of-memory inside a probe
+child is a **measurement**, not a failure.
+
+What decides the requirement depends on what has been measured:
+
+| Situation | Requirement |
+| --- | --- |
+| No stored record for this workload fingerprint | the analytic estimate |
+| Records exist, and the batch is at or below the largest measured rung | the **measured** envelope, up or down |
+| Records exist, but the batch is beyond the largest measured rung | `max(analytic, measured)` — the measured side is a fitted guess there, not an observation |
+
+A measurement used to be allowed only to **raise** the estimate, because a
+short probe under-reported badly (the same run measured 7.34 GiB over two
+steps, 9.93 GiB over sixty, and 12.99 GiB over a full run). That was CUDA
+allocator fragmentation, not the workload: the sidecar now always runs under
+`PYTORCH_CUDA_ALLOC_CONF=expandable_segments:True`, where a 30-step probe
+under-reads a full run by 2.8% instead of 41%. The allocator config is part of
+the profile fingerprint, so a record taken under the old allocator can never
+be reused.
+
+Be clear-eyed about what that buys you: this is **not** an optimal-batch
+search, and it is not tuned for throughput. It walks a power-of-two ladder
+(1, 2, 4, 8) and picks the largest rung whose requirement fits at the safety
+margin. Nothing here promises the largest batch that would fit — a batch
+*between* two rungs is charged the observed peak of the rung above it, so it
+is only chosen when that observation also fits.
+
+For a workload that has never been probed, the analytic estimate is all there
+is, and it dominates on the cards this role targets, so a first `-1` run will
+often resolve to `1`. Once records exist, the measurement decides **at or
+below the largest probed batch**; beyond that the conservative analytic
+estimate still applies, because there the measured side is a fitted guess
+rather than an observation.
+
+**It can also refuse the run.** If batch 1 does not fit in the free VRAM at the
+safety margin, training fails with an explicit refusal naming the requirement
+and the free bytes. The measurement is still cached, so retrying on a quieter
+GPU reuses it rather than re-probing.
+
+**Where the measurements live.** Records are keyed by a workload fingerprint —
+checkpoint, sidecar-env package set, GPU model, precision, LoRA rank and
+adapter scope, tile geometry, dataset density, and the probe protocol itself —
+and stored **globally, across runs**, at
+`<HYDRA_DATA_DIR>/memory_profiles/sam3_lora.json`. A second run with the same
+fingerprint reuses the cached records and launches no probe. Anything that
+changes the memory changes the key, including bumping the probe step count.
+
+**Escape hatch.** Set `HYDRA_SAM3_FORCE_PROBE=1` to re-measure even when the
+store already has records for this exact fingerprint — for example after a
+driver upgrade, which the key does not capture.
+
+**Keys.** Every key `<run_dir>/batch_resolution.json` carries on the SAM3
+path, including the ones shared with the YOLO block:
+
+| Key | Meaning |
+| --- | --- |
+| `fingerprint` | The workload key the records were stored under. |
+| `provenance` | `measured` (we probed this run), `cached`, or `explicit`. |
+| `requirement_provenance` | Which case decided the requirement that was cleared: `analytic` (no records), `measured` (records decided at or below an observed rung), or `max_extrapolated` (past the rungs, so `max(analytic, measured)` applied). |
+| `requirement_basis` | `measured` if the chosen batch is a rung we actually observed, `extrapolated` if it fell between rungs. |
+| `requirement_bytes` | The requirement the chosen batch cleared. |
+| `requirement_measured_extrapolated` | Whether the measured side of that requirement was itself extrapolated. |
+| `measured_envelope_bytes` | `max(fitted curve, every observed peak at or below this batch)`. An envelope, not a raw observation — at an observed rung it can still exceed that rung's peak. |
+| `ladder_terminated_by` | Why the probe ladder stopped. |
+| `degraded_reasons` | Anything that weakened the fingerprint, such as a checkpoint that could not be stat'ed. |
+| `free_bytes` | Free VRAM on the selected GPU at selection time. |
+
+Like YOLO's, SAM3 auto batch is not reproducible across machines. **Set a fixed
+positive `sam3.batch` for reproducible runs.**
+
 ## Validate and prepare
 
 Validate the configuration and inspect all resolved paths without creating the

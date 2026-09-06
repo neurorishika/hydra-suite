@@ -15,6 +15,7 @@ from enum import Enum
 from pathlib import Path
 from typing import Callable, Iterable, Mapping
 
+from ..paths import get_data_dir
 from .process_supervisor import ExitKind
 from .resource_budget import ESTIMATOR_VERSION, AcceleratorKind
 
@@ -23,6 +24,10 @@ MAX_PROFILE_BYTES = 4 * 1024 * 1024
 MAX_PROFILE_RECORDS = 2_048
 MAX_RETRIES = 2
 TELEMETRY_SCHEMA_VERSION = 1
+
+# Fraction of raw usable device memory that measured selection admits.
+# Applied exactly once, inside `select_batch`; nothing else may apply it.
+MEASURED_SAFETY_FRACTION = 0.8
 
 
 def _bounded_text(value: object, name: str) -> str:
@@ -149,9 +154,16 @@ def recommend_batch_size(
     input_width: int,
     input_height: int,
     maximum: int,
-    safety_fraction: float = 0.8,
+    safety_fraction: float = MEASURED_SAFETY_FRACTION,
 ) -> int:
-    """Return a conservative monotonic recommendation from one measured point."""
+    """Return a conservative monotonic recommendation from one measured point.
+
+    The default is `MEASURED_SAFETY_FRACTION`, not a second hardcoded 0.8:
+    there is one safety fraction in this module and this is it. Currently
+    reachable only from tests -- kept rather than deleted because retiring a
+    public helper is a larger decision than pointing its default at the
+    constant it was already duplicating.
+    """
 
     if maximum < 1 or input_width < 1 or input_height < 1:
         raise ValueError("recommendation bounds and input dimensions must be positive")
@@ -182,6 +194,167 @@ def recommend_batch_size(
         return 1
     per_item = math.ceil((measured_peak / sample_batch) * scale)
     return max(1, min(int(usable * safety_fraction) // max(1, per_item), maximum))
+
+
+def records_for(
+    records: Iterable[MemoryMeasurement],
+    identity: ProfileIdentity,
+) -> tuple[MemoryMeasurement, ...]:
+    """Return the subset of `records` matching `identity` exactly.
+
+    `records` must be an iterable of `MemoryMeasurement` (e.g. the tuple
+    returned by `MemoryProfileStore.load()`) — a `MemoryProfileStore`
+    instance itself is not iterable and must be `.load()`-ed first.
+
+    Pure and small on purpose: later callers (a training launcher and a
+    preflight estimator) both need identity-scoped lookups and must share
+    this instead of re-implementing identity matching twice.
+    """
+
+    return tuple(record for record in records if record.identity == identity)
+
+
+def fit_batch_curve(records: Iterable[MemoryMeasurement]) -> tuple[int, int]:
+    """Fit `reserved_peak ~= base + slope * batch_size` from measured records.
+
+    Records are expected to share one `ProfileIdentity`; the fit is a plain
+    least-squares line over `(batch_size, accelerator_reserved_peak_bytes)`
+    pairs. With a single record, the "slope" is defined as the per-item cost
+    implied by that one point (`peak / batch_size`), which is never zero for a
+    positive peak — a zero slope would make every larger batch size look free.
+    """
+
+    points = [
+        (record.settings.batch_size, record.accelerator_reserved_peak_bytes)
+        for record in records
+    ]
+    if not points:
+        return 0, 0
+    if len(points) == 1:
+        batch_size, peak = points[0]
+        per_item = max(1, int(math.ceil(peak / max(1, batch_size))))
+        return 0, per_item
+
+    n = len(points)
+    sum_x = sum(x for x, _ in points)
+    sum_y = sum(y for _, y in points)
+    sum_xx = sum(x * x for x, _ in points)
+    sum_xy = sum(x * y for x, y in points)
+    denominator = n * sum_xx - sum_x * sum_x
+    if denominator == 0:
+        # Degenerate (all batch sizes identical): fall back to the largest peak.
+        largest_batch, largest_peak = max(points, key=lambda item: item[0])
+        per_item = max(1, int(math.ceil(largest_peak / max(1, largest_batch))))
+        return 0, per_item
+    slope = (n * sum_xy - sum_x * sum_y) / denominator
+    base = (sum_y - slope * sum_x) / n
+    slope_bytes = max(1, int(round(slope)))
+    base_bytes = max(0, int(round(base)))
+    return base_bytes, slope_bytes
+
+
+def measured_envelope_bytes(
+    records: Iterable[MemoryMeasurement],
+    batch_size: int,
+) -> int:
+    """The measured requirement at `batch_size`: fit, floored by observations.
+
+    `max(fit_batch_curve(records) at n, every observed peak at batch <= n)`.
+    A conservative envelope that never predicts below an observed sample, so
+    a superlinear jump cannot be smoothed away by the linear fit.
+
+    Shared on purpose: `select_batch` and the SAM3 admission estimator both
+    call it, so selection and admission cannot disagree about what a
+    measurement says by construction rather than by inspection.
+    """
+
+    ordered = sorted(records, key=lambda record: record.settings.batch_size)
+    if not ordered:
+        return 0
+    base_bytes, slope_bytes = fit_batch_curve(ordered)
+    observed = max(
+        (
+            record.accelerator_reserved_peak_bytes
+            for record in ordered
+            if record.settings.batch_size <= batch_size
+        ),
+        default=0,
+    )
+    return int(max(base_bytes + slope_bytes * batch_size, observed))
+
+
+def select_batch(
+    records: Iterable[MemoryMeasurement],
+    *,
+    usable_bytes: int,
+    maximum: int,
+    safety_fraction: float = MEASURED_SAFETY_FRACTION,
+) -> int:
+    """Pick the largest batch size the fitted curve and observed peaks admit.
+
+    `usable_bytes` is **raw free device bytes** — never pre-multiply it by a
+    safety margin before calling. `safety_fraction` is applied exactly once,
+    inside this function, against `usable_bytes`; applying it anywhere else
+    (e.g. in a caller before passing `usable_bytes`) would double-discount
+    the budget.
+
+    The requirement for candidate batch size *n* is
+    `max(fit(n), every observed peak at batch <= n)`: a conservative envelope
+    that never predicts below an observed sample, so a superlinear jump at
+    some batch size can't be smoothed away by the linear fit. The result
+    never exceeds the largest batch size actually observed without OOM.
+    Returns 0 when no candidate fits, including for an empty record set.
+    """
+
+    if maximum < 1:
+        raise ValueError("maximum must be positive")
+    if not 0.0 < safety_fraction <= 1.0:
+        raise ValueError("safety_fraction must be in (0, 1]")
+
+    ordered = sorted(records, key=lambda record: record.settings.batch_size)
+    if not ordered:
+        return 0
+
+    largest_observed = ordered[-1].settings.batch_size
+    budget = int(usable_bytes * safety_fraction)
+
+    best = 0
+    for candidate in range(1, min(maximum, largest_observed) + 1):
+        if measured_envelope_bytes(ordered, candidate) <= budget:
+            best = candidate
+        else:
+            break
+    return best
+
+
+def profile_store_path(scope: str) -> Path:
+    """Canonical on-disk location for a scope's memory-profile store.
+
+    Always goes through `hydra_suite.paths.get_data_dir`; never derive this
+    from `Path(__file__).parents[N]`. `MemoryProfileStore` has no production
+    caller before this, so this function defines the convention every later
+    caller should reuse.
+    """
+
+    return get_data_dir() / "memory_profiles" / f"{_bounded_text(scope, 'scope')}.json"
+
+
+def merge_records(
+    existing: Iterable[MemoryMeasurement],
+    incoming: Iterable[MemoryMeasurement],
+) -> tuple[MemoryMeasurement, ...]:
+    """Merge two record sets, replacing (never appending) by (identity, batch_size).
+
+    The newest observation wins. Without this, repeated re-probes would grow
+    the store until `MAX_PROFILE_RECORDS` truncation silently drops good data.
+    """
+
+    merged: dict[tuple[ProfileIdentity, int], MemoryMeasurement] = {}
+    for record in existing:
+        merged[(record.identity, record.settings.batch_size)] = record
+    for record in incoming:
+        merged[(record.identity, record.settings.batch_size)] = record
+    return tuple(merged.values())
 
 
 class PressureField(str, Enum):
@@ -286,29 +459,44 @@ class MemoryProfileStore:
         self.path = Path(path)
 
     def load(self) -> tuple[MemoryMeasurement, ...]:
+        """Load stored records, degrading to "measure again" on any corruption.
+
+        A stale or corrupted cache must never crash and must never fabricate
+        a wrong number — any unreadable, undecodable, oversized, or
+        structurally invalid store yields `()`, exactly like a schema or
+        estimator-version mismatch. Only a well-formed store on the current
+        schema/estimator version yields real records.
+        """
+
         if not self.path.exists():
             return ()
-        with self.path.open("rb") as stream:
-            encoded = stream.read(MAX_PROFILE_BYTES + 1)
-        if len(encoded) > MAX_PROFILE_BYTES:
-            raise ValueError("memory profile store exceeds its size cap")
-        raw = json.loads(encoded)
-        if not isinstance(raw, dict) or set(raw) != {"schema_version", "records"}:
-            raise ValueError("memory profile store has invalid fields")
-        if raw["schema_version"] != PROFILE_SCHEMA_VERSION:
+        try:
+            with self.path.open("rb") as stream:
+                encoded = stream.read(MAX_PROFILE_BYTES + 1)
+            if len(encoded) > MAX_PROFILE_BYTES:
+                return ()
+            raw = json.loads(encoded)
+            if not isinstance(raw, dict) or set(raw) != {"schema_version", "records"}:
+                return ()
+            if raw["schema_version"] != PROFILE_SCHEMA_VERSION:
+                return ()
+            records = raw["records"]
+            if not isinstance(records, list) or len(records) > MAX_PROFILE_RECORDS:
+                return ()
+            output = []
+            for record in records:
+                if not isinstance(record, dict):
+                    return ()
+                record = dict(record)
+                identity = ProfileIdentity(**record.pop("identity"))
+                settings = PressureSettings(**record.pop("settings"))
+                record["accelerator_kind"] = AcceleratorKind(record["accelerator_kind"])
+                measurement = MemoryMeasurement(identity, settings, **record)
+                if measurement.estimator_version == ESTIMATOR_VERSION:
+                    output.append(measurement)
+            return tuple(output)
+        except (OSError, ValueError, TypeError, KeyError, AttributeError):
             return ()
-        records = raw["records"]
-        if not isinstance(records, list) or len(records) > MAX_PROFILE_RECORDS:
-            raise ValueError("memory profile record count exceeds its cap")
-        output = []
-        for record in records:
-            identity = ProfileIdentity(**record.pop("identity"))
-            settings = PressureSettings(**record.pop("settings"))
-            record["accelerator_kind"] = AcceleratorKind(record["accelerator_kind"])
-            measurement = MemoryMeasurement(identity, settings, **record)
-            if measurement.estimator_version == ESTIMATOR_VERSION:
-                output.append(measurement)
-        return tuple(output)
 
     def save(self, records: Iterable[MemoryMeasurement]) -> None:
         bounded = tuple(records)

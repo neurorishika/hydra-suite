@@ -2,6 +2,7 @@
 
 from __future__ import annotations
 
+import dataclasses
 import json
 import os
 import subprocess
@@ -9,6 +10,11 @@ import sys
 
 import pytest
 
+from hydra_suite.runtime.memory_profiles import (
+    MemoryMeasurement,
+    PressureSettings,
+    ProfileIdentity,
+)
 from hydra_suite.runtime.resource_budget import AcceleratorKind, ResourceObservation
 from hydra_suite.training.contracts import (
     PublishPolicy,
@@ -18,6 +24,7 @@ from hydra_suite.training.contracts import (
     TrainingRole,
     TrainingRunSpec,
 )
+from hydra_suite.training.sam3_lora import autobatch as ab
 from hydra_suite.training.sam3_lora import preflight as pf
 
 
@@ -45,7 +52,7 @@ def _cuda(*, free_gib=48, total_gib=48, major=8):
         pci_bus_id="00000000:01:00.0",
         name="Test CUDA",
         compute_capability=(major, 0),
-        free_bytes=free_gib * pf.GiB,
+        free_bytes=int(free_gib * pf.GiB),
         total_bytes=total_gib * pf.GiB,
     )
 
@@ -100,6 +107,18 @@ def _decision(spec, *, cuda=None, host=None):
     cuda = cuda if cuda is not None else _cuda()
     host = host if host is not None else _host()
     return pf.assess_preflight(spec, cuda_device=cuda, observation=host)
+
+
+def _training_phase(decision):
+    """The training phase estimate.
+
+    `budget.accelerator_peak_bytes` is a MAX over phases, and the model-load
+    phase carries its own `_DEVICE_STEADY_BYTES` floor, so it is the wrong
+    place to read a training-phase requirement that a measurement lowered
+    below that constant.
+    """
+
+    return next(phase for phase in decision.request.phases if phase.name == "training")
 
 
 def _allocation(phase, name):
@@ -830,10 +849,97 @@ def test_negative_cuda_indices_are_rejected(device):
         pf._visible_device_selector(device)
 
 
-@pytest.mark.parametrize("device", ["cpu", "mps"])
+@pytest.mark.parametrize("device", ["cpu", "mps", "tpu", "gpu0", "", "   "])
 def test_non_cuda_device_selection_is_rejected_before_gpu_probe(device):
-    with pytest.raises(ValueError, match="CUDA"):
+    """SAM3 LoRA training is CUDA-only; only the WORDING of the refusal moved.
+
+    The message must name the real cause and the accepted spellings: the old
+    "No CUDA device is available" sent users to inspect a GPU that was fine.
+    """
+
+    with pytest.raises(ValueError, match="requires a CUDA device"):
         pf._visible_device_selector(device)
+    message = pf.sam3_device_form_error(device)
+    assert message is not None
+    assert "Accepted:" in message and "'0'" in message
+
+
+@pytest.mark.parametrize("device", ["auto", "cuda", "cuda:0", "0", "1", "0,1"])
+def test_accepted_device_forms_report_no_form_error(device):
+    assert pf.sam3_device_form_error(device) is None
+
+
+def test_an_empty_device_is_a_config_error_not_a_silent_auto():
+    """A bare ordinal is intent; an empty device is a mistake.
+
+    The shared parser maps a falsy device onto "auto", which would silently
+    pick GPU 0 that nobody named -- the same silence that let the original
+    misdiagnosis survive four dead runs.
+    """
+
+    message = pf.sam3_device_form_error("")
+    assert message is not None and "empty device" in message
+    assert "Accepted:" in message
+
+
+def _two_gpu_probe():
+    return subprocess.CompletedProcess(
+        [],
+        0,
+        stdout=(
+            "0, GPU-first, 0000:01:00.0, First, 8.9, 49140, 48000, Disabled\n"
+            "1, GPU-second, 0000:02:00.0, Second, 8.9, 49140, 47000, Disabled\n"
+        ),
+        stderr="",
+    )
+
+
+@pytest.mark.parametrize(
+    "ordinal, equivalent", [("0", "cuda:0"), ("1", "cuda:1"), ("0,1", "cuda:0")]
+)
+def test_bare_ordinal_devices_resolve_like_their_cuda_spelling(
+    monkeypatch, ordinal, equivalent
+):
+    """Ultralytics' bare ordinals are what DetectKit plans carry.
+
+    Refusing them killed four real SAM3 runs at preflight on a box with 47 GiB
+    free. A multi-GPU form resolves against the FIRST device.
+    """
+
+    monkeypatch.delenv("CUDA_VISIBLE_DEVICES", raising=False)
+    monkeypatch.delenv("CUDA_DEVICE_ORDER", raising=False)
+    monkeypatch.setattr(pf.subprocess, "run", lambda *_a, **_k: _two_gpu_probe())
+
+    observed = pf._probe_cuda_device(ordinal)
+
+    assert observed is not None
+    assert observed == pf._probe_cuda_device(equivalent)
+
+
+def test_multi_gpu_device_string_warns_that_only_the_first_gpu_is_used(tmp_path):
+    _write_coco(tmp_path)
+    spec = _spec(tmp_path)
+    spec.device = "0,1"
+
+    decision = _decision(spec)
+
+    assert any(
+        "names several GPUs" in warning and "cuda:0" in warning
+        for warning in decision.warnings
+    )
+
+
+def test_non_cuda_device_refusal_names_the_accepted_forms(tmp_path):
+    """A refused SPELLING must not masquerade as absent hardware."""
+
+    _write_coco(tmp_path)
+    spec = _spec(tmp_path)
+    spec.device = "cpu"
+
+    decision = pf.assess_preflight(spec, cuda_device=None, observation=_host())
+
+    assert any("Accepted:" in reason for reason in decision.refusals)
+    assert not any("No CUDA device is available" in r for r in decision.refusals)
 
 
 def test_cuda_visible_remapping_resolves_the_selected_physical_uuid(monkeypatch):
@@ -1071,3 +1177,637 @@ def test_token_probe_reads_env_vars_then_the_token_file(tmp_path, monkeypatch):
     assert pf._huggingface_token_present() is False
     monkeypatch.setenv("HF_TOKEN", "hf_yyy")
     assert pf._huggingface_token_present() is True
+
+
+# ---------------------------------------------------------------------------
+# Probe admission (Task 3a): measure first, gate on the measurement later.
+# ---------------------------------------------------------------------------
+
+
+def test_probe_admission_does_not_use_the_fallback_device_envelope(
+    tmp_path, monkeypatch
+):
+    """The inherited device envelope is exactly what the probe exists to
+    replace. Gating the probe on it would refuse hardware whose real batch-1
+    peak fits, before it was ever measured."""
+
+    _write_coco(tmp_path)
+    monkeypatch.setattr(pf, "_MEASURED_BF16_DEVICE_PEAK_BYTES", 10_000 * pf.GiB)
+    monkeypatch.setattr(pf, "_EXTRA_BATCH_DEVICE_BYTES", 10_000 * pf.GiB)
+    monkeypatch.setattr(pf, "_DEVICE_STEADY_BYTES", 10_000 * pf.GiB)
+
+    decision = pf.assess_probe_preflight(
+        _spec(tmp_path, batch=-1),
+        batch=1,
+        cuda_device=_cuda(),
+        observation=_host(),
+    )
+
+    assert decision.admitted, decision.refusals
+    assert decision.budget.limits.batch_size == 1
+
+
+def test_probe_admission_still_refuses_below_the_hard_floor(tmp_path):
+    """The floor is model + LoRA state + one tile -- an under-estimate by
+    construction. A card that cannot hold even that is refused before a probe
+    child is ever launched."""
+
+    _write_coco(tmp_path)
+
+    decision = pf.assess_probe_preflight(
+        _spec(tmp_path, batch=-1),
+        batch=1,
+        cuda_device=_cuda(free_gib=2, total_gib=2),
+    )
+
+    assert not decision.admitted
+
+
+def test_probe_admission_is_evaluated_per_candidate_on_the_host_side(tmp_path):
+    """Host demand scales with batch (decoded tiles, transformed tiles,
+    collated images, dense masks), so each candidate gets its own estimate."""
+
+    _write_coco(tmp_path)
+    spec = _spec(tmp_path, batch=-1)
+
+    small = pf.assess_probe_preflight(
+        spec, batch=1, cuda_device=_cuda(), observation=_host()
+    )
+    large = pf.assess_probe_preflight(
+        spec, batch=8, cuda_device=_cuda(), observation=_host()
+    )
+
+    def _training_host_peak(decision):
+        return next(
+            phase.host_peak_bytes
+            for phase in decision.request.phases
+            if phase.name == "training"
+        )
+
+    assert _training_host_peak(large) > _training_host_peak(small)
+    assert large.budget.limits.batch_size == 8
+
+
+def test_probe_admission_shares_every_other_refusal_with_normal_admission(tmp_path):
+    """Leases, dataset validity, prompts, and publish policy are shared
+    concerns -- factored, not forked."""
+
+    _write_coco(tmp_path)
+
+    decision = pf.assess_probe_preflight(
+        _spec(tmp_path, batch=-1, ack=False),
+        batch=1,
+        cuda_device=_cuda(),
+        observation=_host(),
+    )
+
+    assert not decision.admitted
+    assert any("Label quality" in reason for reason in decision.refusals)
+
+
+def test_dataset_profile_reports_the_p95_instance_density(tmp_path):
+    """Non-uniform on purpose: with every tile the same density a `return
+    max(...)` stub would pass and the p95 would be untested. One outlier tile
+    of 50 must NOT drag the p95 up with it -- distinguishing the two is the
+    whole reason the fingerprint records both."""
+
+    split_dir = tmp_path / "dataset" / "train"
+    split_dir.mkdir(parents=True, exist_ok=True)
+    densities = [1] * 15 + [2] * 4 + [50]
+    images = [
+        {"id": i + 1, "file_name": f"t{i}.png", "width": 1008, "height": 1008}
+        for i in range(len(densities))
+    ]
+    annotations = []
+    ann_id = 1
+    for image, count in zip(images, densities):
+        for _ in range(count):
+            annotations.append(
+                {
+                    "id": ann_id,
+                    "image_id": image["id"],
+                    "iscrowd": 0,
+                    "segmentation": [[0, 0, 10, 0, 10, 10, 0, 10]],
+                }
+            )
+            ann_id += 1
+    (split_dir / "_annotations.coco.json").write_text(
+        json.dumps({"images": images, "annotations": annotations}), encoding="utf-8"
+    )
+
+    profile = pf._dataset_profile(str(tmp_path / "dataset"))
+
+    assert profile.max_active_instances_per_tile == 50
+    assert profile.p95_active_instances_per_tile == 2
+
+
+# ---------------------------------------------------------------------------
+# Task 4: measurement may RAISE the device estimate, never lower it.
+# ---------------------------------------------------------------------------
+
+
+def _identity(precision="bf16"):
+    return ProfileIdentity(
+        operation="sam3_lora_training",
+        model_identity="model",
+        backend="env",
+        device_identity="Test CUDA|48",
+        precision=precision,
+        task="task",
+    )
+
+
+def _records(peaks, *, precision="bf16"):
+    return tuple(
+        MemoryMeasurement(
+            identity=_identity(precision),
+            settings=PressureSettings(
+                input_width=1008, input_height=1008, batch_size=batch
+            ),
+            accelerator_kind=AcceleratorKind.CUDA,
+            host_peak_bytes=pf.GiB,
+            accelerator_reserved_peak_bytes=int(peak),
+            observed_at_unix_ns=1,
+        )
+        for batch, peak in sorted(peaks.items())
+    )
+
+
+def _install_records(monkeypatch, records, *, identity=None):
+    monkeypatch.setattr(pf, "_profile_records", lambda: tuple(records))
+    monkeypatch.setattr(
+        pf,
+        "_workload_identity",
+        lambda *_a, **_k: identity if identity is not None else _identity(),
+    )
+
+
+def _legacy_expression(tmp_path, *, batch, precision="bf16"):
+    """The pre-Task-4 analytic expression, written out literally.
+
+    Deliberately NOT a call into `preflight`: this is the drift guard, so it
+    must fail if the production expression changes shape.
+    """
+
+    dataset = pf._dataset_profile(str(tmp_path / "dataset"))
+    image_pixels = 1008 * 1008
+    inflight_tiles = min(batch, max(1, dataset.tile_count))
+    active_instances = inflight_tiles * dataset.max_active_instances_per_tile
+    dense_masks_device = active_instances * image_pixels * 16
+    # Sam3LoraParams defaults also adapt the mask decoder, which the
+    # "default" LoRA state the old expression subtracts does NOT include.
+    lora_training_state = 16 * (565_248 + 28_680 + 52_224 + 64_512 + 2_048) * 24
+    default_lora_training_state = 16 * (565_248 + 28_680 + 52_224 + 64_512) * 24
+    multiplier = 2.0 if precision == "fp32" else 1.0
+    return int(
+        pf._MEASURED_BF16_DEVICE_PEAK_BYTES * multiplier
+        + max(0, batch - 1) * pf._EXTRA_BATCH_DEVICE_BYTES * multiplier
+        + max(0, lora_training_state - default_lora_training_state)
+        + dense_masks_device
+    )
+
+
+def test_a_measurement_at_an_observed_rung_decides_below_the_analytic_estimate(
+    tmp_path, monkeypatch
+):
+    """The rule this file used to encode, deliberately INVERTED.
+
+    It used to read "a 2-step probe measured 7.34 GiB on a surface whose real
+    peak reached 12.99 GiB, so a measurement may only RAISE the analytic
+    estimate". That growth was later isolated to allocator fragmentation:
+    under the `expandable_segments:True` that `sam3_env_environ()` now
+    hardcodes for every probe and training child it does not happen, and a
+    30-step probe under-reads a full run by 2.8% rather than 41%. Since the
+    allocator config is part of the fingerprint, a record taken under the old
+    allocator cannot reach this path at all.
+
+    So at an OBSERVED rung the measurement now decides, downward included.
+    """
+
+    _write_coco(tmp_path)
+    _install_records(monkeypatch, _records({1: int(7.34 * pf.GiB)}))
+
+    decision = _decision(_spec(tmp_path, batch=1))
+
+    analytic = _legacy_expression(tmp_path, batch=1)
+    assert analytic > 12 * pf.GiB > 7.34 * pf.GiB
+    assert _training_phase(decision).accelerator_peak_bytes == int(7.34 * pf.GiB)
+    assert decision.device_peak_measured_bytes == int(7.34 * pf.GiB)
+    assert decision.device_peak_provenance == "measured"
+    assert not decision.device_peak_measured_extrapolated
+    assert decision.device_peak_analytic_bytes == analytic
+
+
+def test_a_between_rung_batch_is_charged_the_observed_peak_above_it(
+    tmp_path, monkeypatch
+):
+    """A batch inside the observed range but not ON a rung still decides
+    without the analytic cap -- but not on the fit.
+
+    With rungs 1, 2 and 4, batch 3's fitted envelope is a guess, so the
+    requirement is raised to the OBSERVED peak at batch 4: a guaranteed-safe
+    upper bound by monotonicity, `true_need(3) <= peak@4`. Charging the fit
+    instead would admit batch 3 on a card that provably cannot hold batch 4.
+    """
+
+    records = _records({1: 4 * pf.GiB, 2: 5 * pf.GiB, 4: 7 * pf.GiB})
+    _write_coco(tmp_path)
+    _install_records(monkeypatch, records)
+
+    fitted = pf.measured_envelope_bytes(records, 3)
+    assert fitted < 7 * pf.GiB, "the fit must be the LOWER number here"
+
+    decision = _decision(_spec(tmp_path, batch=3))
+
+    assert decision.device_peak_provenance == "measured"
+    assert not decision.device_peak_measured_extrapolated
+    assert _training_phase(decision).accelerator_peak_bytes == 7 * pf.GiB
+    assert 7 * pf.GiB < _legacy_expression(tmp_path, batch=3)
+
+
+def test_a_batch_on_a_rung_is_charged_that_rung_not_the_one_above(
+    tmp_path, monkeypatch
+):
+    """The upper-rung rule must not leak onto observed rungs: batch 2 is an
+    observation and is charged its own envelope, never batch 4's peak."""
+
+    records = _records({1: 4 * pf.GiB, 2: 5 * pf.GiB, 4: 7 * pf.GiB})
+    _write_coco(tmp_path)
+    _install_records(monkeypatch, records)
+
+    decision = _decision(_spec(tmp_path, batch=2))
+
+    assert decision.device_peak_provenance == "measured"
+    assert _training_phase(decision).accelerator_peak_bytes == (
+        pf.measured_envelope_bytes(records, 2)
+    )
+    assert _training_phase(decision).accelerator_peak_bytes < 7 * pf.GiB
+
+
+def test_no_records_leaves_the_analytic_estimate_in_charge(tmp_path, monkeypatch):
+    """The fallback is retained, not deleted: an unprobed workload is still
+    admitted purely on the analytic estimate."""
+
+    _write_coco(tmp_path)
+    _install_records(monkeypatch, ())
+
+    decision = _decision(_spec(tmp_path, batch=2))
+
+    assert decision.device_peak_provenance == "analytic"
+    assert decision.device_peak_measured_bytes == 0
+    assert not decision.device_peak_measured_extrapolated
+    assert decision.budget.accelerator_peak_bytes == _legacy_expression(
+        tmp_path, batch=2
+    )
+
+
+def test_a_sub_steady_measurement_admits_a_dataset_with_a_validation_split(
+    tmp_path, monkeypatch
+):
+    """A measurement below `_DEVICE_STEADY_BYTES` must not raise out of preflight.
+
+    `PhaseEstimate` rejects a peak below its own steady floor. Now that a
+    measurement DECIDES, the ordinary case (real runs reserve 6.9-7.3 GiB,
+    under the 8 GiB resident-weights guess) puts the training AND validation
+    phases' peaks below that analytic steady constant. Clamping only the
+    training phase left `validation` raising `ValueError` -- an unhandled
+    traceback out of the training launch rather than a refusal -- for every
+    project with a valid split, which is most of them.
+
+    Every other measured-record test uses a train-only dataset, so the
+    validation phase is not even constructed there. This one has both splits
+    on purpose.
+    """
+
+    _write_coco(tmp_path)
+    _write_coco(tmp_path, split="valid")
+    _install_records(monkeypatch, _records({1: 6 * pf.GiB}))
+
+    decision = _decision(_spec(tmp_path, batch=1))
+
+    assert decision.dataset.validation_tiles > 0, "the guarded phase must exist"
+    validation = next(
+        phase for phase in decision.request.phases if phase.name == "validation"
+    )
+    assert validation.accelerator_peak_bytes == 6 * pf.GiB
+    assert validation.accelerator_steady_bytes <= validation.accelerator_peak_bytes
+    assert decision.device_peak_provenance == "measured"
+
+
+def test_the_measured_headroom_gate_reads_the_requirement_not_the_budget_peak(
+    tmp_path, monkeypatch
+):
+    """The 0.80 measured headroom must gate the MEASURED requirement.
+
+    `budget.accelerator_peak_bytes` is a max over phases and the `model_load`
+    phase carries the analytic 8 GiB `_DEVICE_STEADY_BYTES` floor, which a
+    measurement can legitimately sit below. Gating on the budget peak would
+    apply the measured fraction to an analytic constant and then report that
+    constant as "the measured device requirement".
+
+    Here the measurement is 6 GiB and free is 9.5 GiB: 0.80 x 9.5 = 7.6 GiB,
+    which clears the 6 GiB requirement but NOT the 8 GiB model-load floor,
+    while the policy's own 0.85 x 9.5 = 8.075 GiB does clear that floor. The
+    run must be admitted.
+    """
+
+    _write_coco(tmp_path)
+    _install_records(monkeypatch, _records({1: 6 * pf.GiB}))
+
+    host = ResourceObservation(
+        total_host_bytes=64 * pf.GiB,
+        available_host_bytes=56 * pf.GiB,
+        accelerator_kind=AcceleratorKind.CUDA,
+        accelerator_name="Test CUDA",
+        total_accelerator_bytes=48 * pf.GiB,
+        available_accelerator_bytes=int(9.5 * pf.GiB),
+    )
+    decision = _decision(_spec(tmp_path, batch=1), host=host)
+
+    assert decision.device_peak_provenance == "measured"
+    assert _training_phase(decision).accelerator_peak_bytes == 6 * pf.GiB
+    assert decision.budget.accelerator_peak_bytes == 8 * pf.GiB
+    assert not [
+        refusal for refusal in decision.refusals if "measured device" in refusal
+    ], decision.refusals
+    assert decision.admitted, decision.refusals
+
+
+def test_a_default_allocator_record_cannot_decide_for_an_expandable_run(
+    tmp_path, monkeypatch
+):
+    """Guard (b), exercised through the REAL identity matching.
+
+    `_install_records` bypasses `records_for`, which would make this
+    tautological. Here `pf._profile_records` returns two records that differ
+    only in the allocator sub-hash inside `backend`, and the real
+    `_stored_records` path (fingerprint -> `records_for` ->
+    `validate_probe_records`) must surface only the expandable one -- so a
+    stale default-allocator measurement can never decide.
+    """
+
+    from hydra_suite.training.sam3_lora import autobatch as ab
+
+    _write_coco(tmp_path)
+    live_hash = ab.sidecar_alloc_conf_hash()
+    stale_hash = ab.sidecar_alloc_conf_hash({})
+    assert live_hash != stale_hash
+    assert live_hash == ab.sidecar_alloc_conf_hash(
+        {"PYTORCH_CUDA_ALLOC_CONF": "expandable_segments:True"}
+    ), "the sidecar environment must hash as expandable_segments"
+
+    live_identity = dataclasses.replace(_identity(), backend=f"env|{live_hash}")
+    stale_identity = dataclasses.replace(_identity(), backend=f"env|{stale_hash}")
+
+    def _record(identity, batch, peak):
+        return MemoryMeasurement(
+            identity=identity,
+            settings=PressureSettings(
+                input_width=1008, input_height=1008, batch_size=batch
+            ),
+            accelerator_kind=AcceleratorKind.CUDA,
+            host_peak_bytes=pf.GiB,
+            accelerator_reserved_peak_bytes=int(peak),
+            observed_at_unix_ns=1,
+        )
+
+    stored = (
+        _record(stale_identity, 1, 3 * pf.GiB),
+        _record(live_identity, 1, 9 * pf.GiB),
+    )
+    monkeypatch.setattr(pf, "_profile_records", lambda: stored)
+    # Only the fingerprint is faked; `records_for` and `validate_probe_records`
+    # are the real ones.
+    monkeypatch.setattr(pf, "_workload_identity", lambda *_a, **_k: live_identity)
+
+    matched = pf._stored_records(_spec(tmp_path, batch=1), _cuda())
+    assert [record.accelerator_reserved_peak_bytes for record in matched] == [
+        9 * pf.GiB
+    ], "the default-allocator record must not survive identity matching"
+
+    decision = _decision(_spec(tmp_path, batch=1))
+    assert decision.device_peak_provenance == "measured"
+    assert _training_phase(decision).accelerator_peak_bytes == 9 * pf.GiB
+
+
+def test_measured_extra_batch_bytes_admits_batch_4_on_a_24gb_card(tmp_path):
+    """Task 8 pin: with `_EXTRA_BATCH_DEVICE_BYTES` measured at 2 GiB, a
+    24 GB card's analytic-only admission (no probe records yet) clears
+    batch 4, not just batch 1.
+
+    Base at b1 is ~12.1 GiB; +2 GiB/item puts b2 at ~14.2 and b4 at ~18.4
+    GiB, both under a 24 GB card's usable budget (0.85 safety -> ~20.4 GiB).
+    b8 (~26.4 GiB) does not fit. This is a regression guard: reverting the
+    constant to its old 18 GiB value pushes b2 alone to ~30 GiB, which
+    would refuse everything past batch 1 on the very same card.
+    """
+
+    _write_coco(tmp_path)
+    cuda = _cuda(free_gib=24, total_gib=24)
+    host = ResourceObservation(
+        total_host_bytes=64 * pf.GiB,
+        available_host_bytes=56 * pf.GiB,
+        accelerator_kind=AcceleratorKind.CUDA,
+        accelerator_name="Test CUDA",
+        total_accelerator_bytes=24 * pf.GiB,
+        available_accelerator_bytes=24 * pf.GiB,
+    )
+
+    decision_b4 = _decision(_spec(tmp_path, batch=4), cuda=cuda, host=host)
+    assert decision_b4.admitted, decision_b4.refusals
+
+    decision_b8 = _decision(_spec(tmp_path, batch=8), cuda=cuda, host=host)
+    assert not decision_b8.admitted
+
+
+def test_reverting_extra_batch_bytes_to_18gib_would_refuse_batch_2(
+    tmp_path, monkeypatch
+):
+    """Companion regression guard: prove the OLD 18 GiB value actually
+    breaks the batch-4 story this branch fixes, so a silent revert of
+    `_EXTRA_BATCH_DEVICE_BYTES` is caught here rather than only in a
+    provenance comment nobody re-reads."""
+
+    _write_coco(tmp_path)
+    monkeypatch.setattr(pf, "_EXTRA_BATCH_DEVICE_BYTES", 18 * pf.GiB)
+    cuda = _cuda(free_gib=24, total_gib=24)
+    host = ResourceObservation(
+        total_host_bytes=64 * pf.GiB,
+        available_host_bytes=56 * pf.GiB,
+        accelerator_kind=AcceleratorKind.CUDA,
+        accelerator_name="Test CUDA",
+        total_accelerator_bytes=24 * pf.GiB,
+        available_accelerator_bytes=24 * pf.GiB,
+    )
+
+    decision_b2 = _decision(_spec(tmp_path, batch=2), cuda=cuda, host=host)
+    assert not decision_b2.admitted
+
+
+def test_a_measurement_above_the_analytic_estimate_raises_the_requirement(
+    tmp_path, monkeypatch
+):
+    _write_coco(tmp_path)
+    _install_records(monkeypatch, _records({1: 20 * pf.GiB}))
+
+    decision = _decision(_spec(tmp_path, batch=1))
+
+    assert decision.budget.accelerator_peak_bytes == 20 * pf.GiB
+    assert decision.device_peak_provenance == "measured"
+    assert decision.device_peak_analytic_bytes == _legacy_expression(tmp_path, batch=1)
+
+
+def test_the_measured_envelope_is_never_below_an_observation(tmp_path, monkeypatch):
+    """The envelope is `max(fit, every observation at batch <= n)`; the fit's
+    base is clamped at zero, so a superlinear jump cannot be smoothed away."""
+
+    records = _records({1: 16 * pf.GiB, 2: 40 * pf.GiB})
+    for batch in (1, 2):
+        observed = max(
+            record.accelerator_reserved_peak_bytes
+            for record in records
+            if record.settings.batch_size <= batch
+        )
+        assert pf.measured_envelope_bytes(records, batch) >= observed
+
+    _write_coco(tmp_path)
+    _install_records(monkeypatch, records)
+
+    decision = _decision(_spec(tmp_path, batch=2))
+
+    # base clamps to 0, slope 24 GiB/item -> 48 GiB, above both observations.
+    assert decision.budget.accelerator_peak_bytes == 48 * pf.GiB
+    assert decision.device_peak_provenance == "measured"
+
+
+def test_a_batch_beyond_the_observations_is_flagged_extrapolated(tmp_path, monkeypatch):
+    """Guard (a): past the top rung the measured side is a FIT, not an
+    observation, so `max(analytic, measured)` still applies and provenance
+    says so (`max_extrapolated`) rather than naming a winner. That string is
+    what distinguishes this case from "analytic decided because there were no
+    records at all"."""
+
+    _write_coco(tmp_path)
+    _install_records(monkeypatch, _records({1: 40 * pf.GiB}))
+
+    decision = _decision(_spec(tmp_path, batch=2))
+
+    # fitted: slope 40 GiB/item from a single point -> 80 GiB at batch 2.
+    assert decision.budget.accelerator_peak_bytes == 80 * pf.GiB
+    assert decision.device_peak_provenance == "max_extrapolated"
+    assert decision.device_peak_measured_extrapolated
+
+    # The analytic wins here, yet the measured side is still a guess.
+    # `_EXTRA_BATCH_DEVICE_BYTES` is now measured at 2 GiB/item (was an
+    # unmeasured 18 GiB), so the analytic side at batch 2 is only ~14.2 GiB
+    # for this dataset -- a single b1=5 GiB point extrapolates to 10 GiB,
+    # comfortably below it.
+    _install_records(monkeypatch, _records({1: 5 * pf.GiB}))
+    small = _decision(_spec(tmp_path, batch=2))
+    assert small.device_peak_provenance == "max_extrapolated"
+    # The decision-level proof that the ANALYTIC side actually won: provenance
+    # and the flag alone would pass even if the fitted guess had decided.
+    assert small.budget.accelerator_peak_bytes == _legacy_expression(tmp_path, batch=2)
+    assert small.device_peak_measured_extrapolated
+    assert not _decision(_spec(tmp_path, batch=1)).device_peak_measured_extrapolated
+
+
+def test_a_precision_change_misses_the_cache_and_falls_back(tmp_path, monkeypatch):
+    _write_coco(tmp_path)
+    _install_records(
+        monkeypatch,
+        _records({1: 40 * pf.GiB}, precision="bf16"),
+        identity=_identity("fp32"),
+    )
+
+    decision = _decision(_spec(tmp_path, batch=1, mixed_precision="fp32"))
+
+    assert decision.budget.accelerator_peak_bytes == _legacy_expression(
+        tmp_path, batch=1, precision="fp32"
+    )
+    assert decision.device_peak_provenance == "analytic"
+
+
+def test_the_fallback_matches_the_previous_expression_exactly(tmp_path, monkeypatch):
+    _write_coco(tmp_path)
+    _install_records(monkeypatch, ())
+
+    for batch in (1, 2, 4):
+        decision = _decision(_spec(tmp_path, batch=batch))
+        assert decision.budget.accelerator_peak_bytes == _legacy_expression(
+            tmp_path, batch=batch
+        )
+        assert decision.device_peak_provenance == "analytic"
+
+
+def test_the_measured_path_applies_the_safety_fraction_exactly_once(
+    tmp_path, monkeypatch
+):
+    """20 GiB free admits a 16 GiB measured requirement at 0.8 once
+    (16 <= 16.0) and refuses it if 0.8 were applied twice (16 > 12.8)."""
+
+    _write_coco(tmp_path)
+    _install_records(monkeypatch, _records({1: 16 * pf.GiB}))
+
+    def decide(free_gib):
+        host = ResourceObservation(
+            total_host_bytes=64 * pf.GiB,
+            available_host_bytes=56 * pf.GiB,
+            accelerator_kind=AcceleratorKind.CUDA,
+            accelerator_name="Test CUDA",
+            total_accelerator_bytes=48 * pf.GiB,
+            available_accelerator_bytes=int(free_gib * pf.GiB),
+        )
+        return _decision(
+            _spec(tmp_path, batch=1), cuda=_cuda(free_gib=free_gib), host=host
+        )
+
+    assert decide(20).admitted
+    refused = decide(19.9)
+    assert not refused.admitted
+    assert any("measured" in text for text in refused.refusals)
+
+
+def test_preflight_never_probes(tmp_path, monkeypatch):
+    _write_coco(tmp_path)
+
+    def _explode(*_a, **_k):
+        raise AssertionError("preflight must never launch a probe")
+
+    monkeypatch.setattr(ab, "run_probe", _explode)
+    _install_records(monkeypatch, _records({1: 16 * pf.GiB}))
+
+    assert _decision(_spec(tmp_path, batch=1)).budget.accelerator_peak_bytes
+
+
+def test_the_probe_floor_never_consults_a_measurement(tmp_path, monkeypatch):
+    """The floor is a deliberate under-estimate; gating the probe on the
+    measurement it exists to produce would refuse hardware that fits."""
+
+    _write_coco(tmp_path)
+    _install_records(monkeypatch, _records({1: 40 * pf.GiB}))
+
+    decision = pf.assess_probe_preflight(
+        _spec(tmp_path, batch=1), batch=1, cuda_device=_cuda(), observation=_host()
+    )
+
+    assert decision.budget.accelerator_peak_bytes < 40 * pf.GiB
+    assert decision.device_peak_provenance == "probe_floor"
+
+
+def test_the_stamped_analytic_estimate_is_the_one_the_budget_used(
+    tmp_path, monkeypatch
+):
+    """One derivation, not two that happen to agree. A non-trivial dataset so
+    the dense-mask term is non-zero and a drifting duplicate would show."""
+
+    _write_coco(tmp_path, tiles=6, instances_per_tile=9)
+    _install_records(monkeypatch, ())
+
+    for batch in (1, 3):
+        decision = _decision(_spec(tmp_path, batch=batch))
+        assert decision.device_peak_analytic_bytes > 0
+        assert (
+            decision.budget.accelerator_peak_bytes
+            == decision.device_peak_analytic_bytes
+        )

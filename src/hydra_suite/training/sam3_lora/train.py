@@ -8,12 +8,20 @@ the selected host boundary before conda, torch, or SAM3 can be imported.
 
 from __future__ import annotations
 
+import hashlib
 import json
 import os
 import time
+from dataclasses import asdict
 from pathlib import Path
 from typing import Any, Callable, Optional
 
+from hydra_suite.runtime.memory_profiles import (
+    MemoryProfileStore,
+    measured_envelope_bytes,
+    merge_records,
+    profile_store_path,
+)
 from hydra_suite.runtime.process_supervisor import (
     ContainmentPlan,
     ExitKind,
@@ -27,8 +35,10 @@ from hydra_suite.runtime.resource_limits import (
     ProcessMemoryLimits,
     build_limited_launch,
 )
+from hydra_suite.training import device_ids
 
 from ..model_publish import get_models_root
+from . import autobatch
 from . import preflight as preflight_module
 from .artifacts import remove_artifact, validate_completion
 from .env import resolve_sam3_env, sam3_env_command, sam3_env_environ
@@ -39,8 +49,37 @@ OUTPUT_MAX_CHARS = 256 * 1024
 MAX_PROCESSES = 512
 
 
+GiB = 1024**3
+
+
 class _AdmissionRefused(RuntimeError):
     """A lease-held final resource observation no longer fits the budget."""
+
+
+class _Canceled(RuntimeError):
+    """The user cancelled; the child has already been torn down."""
+
+
+class _BatchResolutionRefused(RuntimeError):
+    """Auto batch sizing could not produce a batch size this run may use."""
+
+
+# CUDA OOM is invisible to the supervisor -- it sees exit codes and cgroup
+# kills, not a Python `OutOfMemoryError` -- so the probe child ALSO writes an
+# explicit `{"outcome": "oom"}` record; both routes are honoured.
+#
+# HOST limit kills are deliberately NOT treated as a device verdict. They are
+# caused by whatever else is running on the box, so a ladder that ends on one
+# is INCOMPLETE: caching its survivors is right, but letting them permanently
+# cap the batch size would turn one bad afternoon into a silent forever
+# ceiling.
+_HOST_LIMIT_KINDS = frozenset({ExitKind.HOST_HARD_LIMIT, ExitKind.HOST_SOFT_LIMIT})
+
+
+def _store_path() -> Path:
+    """Where measured SAM3 memory profiles live (seam for tests)."""
+
+    return profile_store_path(autobatch.PROFILE_SCOPE)
 
 
 class _ArtifactInvalid(RuntimeError):
@@ -123,6 +162,620 @@ def _containment_diagnostic(
     return payload
 
 
+def _pump_child_output(
+    sidecar: Any,
+    plan: ContainmentPlan,
+    params: Any,
+    log_cb: Callable[[str], None],
+    progress_cb: Callable[[int, int], None],
+    should_cancel: Callable[[], bool],
+) -> None:
+    """Drain one supervised child until it exits, or cancel it and raise.
+
+    Shared by the memory probe and by training so a probe child is torn down
+    through exactly the same supervisor path a training child is. Raises
+    `_Canceled` AFTER `sidecar.cancel` has run, so a `WorkloadStillOwnedError`
+    from that teardown still propagates to the caller's own handler.
+    """
+
+    while True:
+        lines, eof, output_error = sidecar.output.drain(
+            float(params.watchdog_poll_seconds)
+        )
+        for raw_line in lines:
+            line = raw_line.rstrip("\r\n")
+            if not line:
+                continue
+            record = parse_record(line)
+            if record is None:
+                log_cb(line)
+            else:
+                dispatch_record(record, log_cb, progress_cb)
+        if output_error is not None:
+            raise output_error
+        process_returncode = sidecar.process.poll()
+        # Root exit transfers control to wait(), which owns final tree
+        # quiescence. A descendant may inherit stdout and hold EOF open.
+        if process_returncode is not None:
+            return
+        if should_cancel():
+            sidecar.cancel(plan.terminate_grace_seconds)
+            raise _Canceled()
+        if eof:
+            # A workload may deliberately close stdout before it exits.
+            # Once the buffer is at EOF, drain() cannot block for us.
+            time.sleep(float(params.watchdog_poll_seconds))
+
+
+def _child_environment(cuda_device: Any) -> dict[str, str]:
+    """The sidecar environment, with the physical GPU pinned by UUID.
+
+    Bind the child logical cuda:0 to the exact physical GPU admitted, probed,
+    and leased by UUID. Never let the runtime choose another GPU -- a probe
+    that measured a different card than training will use is worse than no
+    measurement at all.
+    """
+
+    return {
+        **os.environ,
+        **sam3_env_environ(),
+        "CUDA_VISIBLE_DEVICES": cuda_device.uuid,
+    }
+
+
+def _sam3_command(env_name: str, arguments: list[str]) -> tuple[str, ...]:
+    return sam3_env_command(
+        env_name, ["hydra_suite.training.sam3_lora.cli"] + arguments
+    )
+
+
+def _run_probe_candidate(
+    spec: Any,
+    run_dir_path: Path,
+    batch: int,
+    *,
+    spec_path: Path,
+    cuda_device: Any,
+    env_name: str,
+    params: Any,
+    models_root: Optional[Path],
+    log_cb: Callable[[str], None],
+    should_cancel: Callable[[], bool],
+) -> dict[str, Any]:
+    """Measure ONE candidate in its own freshly contained sidecar.
+
+    Every candidate gets its own `assess_probe_preflight` decision, its own
+    `WorkLimits`, and the same `CUDA_VISIBLE_DEVICES` pin training uses.
+    Candidates 2-8 must not run under batch-1 containment: a model reload
+    costs seconds, wrong containment costs the box.
+
+    The candidate arrives on the command line, never in `spec.json`: the spec
+    carries exactly one `batch`, and it is rewritten once, with the resolved
+    value, after the ladder.
+    """
+
+    decision = preflight_module.assess_probe_preflight(
+        spec,
+        batch=batch,
+        run_dir=run_dir_path,
+        models_root=models_root,
+    )
+    if not decision.admitted:
+        raise autobatch.ProbeCandidateRefused("; ".join(decision.refusals))
+
+    record_path = run_dir_path / autobatch.PROBE_RECORDS_DIRNAME / f"batch_{batch}.json"
+    if record_path.exists():
+        # A stale record from an earlier attempt must never be mistaken for
+        # this candidate's measurement.
+        record_path.unlink()
+
+    command = _sam3_command(
+        env_name,
+        [
+            "--spec",
+            str(spec_path),
+            "--run-dir",
+            str(run_dir_path),
+            "--probe",
+            "--probe-batch",
+            str(batch),
+        ],
+    )
+    log_cb(
+        f"auto batch: probing batch {batch} "
+        f"({autobatch.PROBE_STEPS} optimizer steps on the densest tiles, "
+        "plus one model load)"
+    )
+    launch = build_limited_launch(
+        command,
+        _memory_limits(decision),
+        environment=_child_environment(cuda_device),
+        accelerator_kind=AcceleratorKind.CUDA,
+        accelerator_device_uuid=cuda_device.uuid,
+    )
+    plan = ContainmentPlan(
+        launch=launch,
+        job_name=f"SAM3 LoRA memory probe (batch {batch})",
+        minimum_system_available_bytes=decision.budget.reserved_host_bytes,
+        poll_interval_seconds=float(params.watchdog_poll_seconds),
+    )
+    try:
+        sidecar = SupervisedSidecar(
+            plan,
+            output_max_lines=OUTPUT_MAX_LINES,
+            output_max_chars=OUTPUT_MAX_CHARS,
+        )
+    except WorkloadStillOwnedError:
+        raise
+    except (ResourceBusyError, FileNotFoundError, RuntimeError) as exc:
+        # Mirrors the training constructor guard. A busy lease -- another
+        # heavy job on this box, the normal case this machinery exists for --
+        # is a structured refusal, not an unhandled traceback out of the
+        # probe ladder. `ResourceBusyError` is a RuntimeError, not an
+        # OSError, so it would not otherwise be caught upstream.
+        #
+        # Raised as a CANDIDATE refusal, not a resolution refusal: if earlier
+        # rungs already measured, those measurements are facts about this
+        # hardware and must still be cached. `run_probe` owns the
+        # first-candidate-vs-later distinction.
+        raise autobatch.ProbeCandidateRefused(
+            f"SAM3 probe sidecar launch refused at batch {batch}: {exc}"
+        ) from exc
+    try:
+        _pump_child_output(
+            sidecar, plan, params, log_cb, lambda _e, _t: None, should_cancel
+        )
+        supervised = sidecar.wait()
+    except _Canceled:
+        raise autobatch.ProbeCanceled(
+            f"cancelled while probing batch {batch}"
+        ) from None
+    except WorkloadStillOwnedError:
+        raise
+    except BaseException:
+        try:
+            sidecar.cancel(plan.terminate_grace_seconds)
+        except WorkloadStillOwnedError:
+            raise
+        raise
+
+    payload: dict[str, Any] = {}
+    if record_path.exists():
+        try:
+            loaded = json.loads(record_path.read_text(encoding="utf-8"))
+        except (OSError, ValueError):
+            loaded = None
+        if isinstance(loaded, dict):
+            payload = loaded
+    outcome = payload.get("outcome")
+    kind = supervised.classified_exit.kind
+    if outcome == "ok" and kind is ExitKind.SUCCESS:
+        return payload
+    if kind in _HOST_LIMIT_KINDS:
+        # A HOST cgroup/RLIMIT kill says something about what else is running
+        # on this box right now, not about what this workload needs on this
+        # GPU. Recorded as transient so it can never become a permanent
+        # batch ceiling.
+        raise autobatch.ProbeHostLimitError(
+            f"SAM3 memory probe at batch {batch} was stopped by a host memory "
+            f"limit ({kind.value}); this is transient, not a device verdict."
+        )
+    if outcome == "oom" or kind is ExitKind.ACCELERATOR_OOM:
+        raise autobatch.ProbeOutOfMemoryError(
+            f"SAM3 memory probe at batch {batch} did not fit "
+            f"({outcome or kind.value})."
+        )
+    tail = "".join(supervised.output_tail).strip() or "(no output)"
+    raise autobatch.ProbeCandidateRefused(
+        f"SAM3 memory probe at batch {batch} failed without producing a "
+        f"measurement ({kind.value}). Child output tail:\n{tail}"
+    )
+
+
+def _resolve_measured_batch(
+    spec: Any,
+    run_dir_path: Path,
+    params: Any,
+    *,
+    env_name: str,
+    models_root: Optional[Path],
+    log_cb: Callable[[str], None],
+    should_cancel: Callable[[], bool],
+) -> tuple[int, dict[str, Any]]:
+    """Steps 0-6 of the parent flow: observe, fingerprint, probe, select.
+
+    Returns `(resolved_batch, batch_resolution)`. Raises
+    `_BatchResolutionRefused` when the run must not launch and
+    `autobatch.ProbeCanceled` when the user cancelled.
+    """
+
+    # Step 0: observe the physical device BEFORE any preflight. The
+    # fingerprint needs its identity and every launch needs its UUID.
+    cuda_device = preflight_module._probe_cuda_device(
+        str(getattr(spec, "device", "auto"))
+    )
+    if cuda_device is None:
+        raise _BatchResolutionRefused(
+            preflight_module.sam3_device_form_error(getattr(spec, "device", "auto"))
+            or "No CUDA device is available; SAM3 LoRA training requires CUDA."
+        )
+    if device_ids.names_several_devices(getattr(spec, "device", "auto")):
+        # As loud as the other banners. SAM3 pins ONE physical device by UUID,
+        # so a multi-GPU string is narrowed, and a silent narrowing is exactly
+        # how a user concludes both GPUs are in use.
+        log_cb(
+            f"device: {str(spec.device)!r} names several GPUs, but SAM3 pins a "
+            f"single device -- this run uses {cuda_device.name} "
+            f"({device_ids.normalize_cuda_device(spec.device)}, {cuda_device.uuid}) "
+            "alone."
+        )
+
+    dataset = autobatch.sam3_dataset_density_profile(spec)
+    fingerprint = autobatch.sam3_workload_fingerprint(
+        spec, cuda_device=cuda_device, dataset=dataset
+    )
+    if fingerprint.degraded_reasons:
+        # As loud as the resolved-batch banner, deliberately. A degraded key
+        # still works -- it cannot collide with a healthy one -- but it means
+        # the cache will miss more often, and a silent degradation is exactly
+        # how this whole class of bug hides.
+        log_cb(
+            "auto batch: DEGRADED fingerprint -- "
+            + ", ".join(fingerprint.degraded_reasons)
+            + ". The measurement will still be cached, but this key is weaker "
+            "than a full one and will miss more often."
+        )
+
+    store = MemoryProfileStore(_store_path())
+    stored = store.load()
+    cached = autobatch.validate_probe_records(stored, fingerprint.identity)
+    forced = os.environ.get(autobatch.FORCE_PROBE_ENV_VAR) == "1"
+    key = _fingerprint_key(fingerprint.identity)
+    incomplete = _incomplete_ladders()
+    was_incomplete = incomplete.get(key)
+
+    if cached and not forced and was_incomplete is None:
+        records = cached
+        provenance = "cached"
+        # NOT `complete`: this run did not walk a ladder, so it has no
+        # standing to say how the original one ended. Claiming "complete"
+        # here would report a workload whose first probe stopped on an OOM at
+        # batch 4 as having tried every rung, on every later run -- in a
+        # field that exists precisely for honesty.
+        terminated_by = "cached"
+    else:
+        if cached and was_incomplete is not None:
+            log_cb(
+                "auto batch: re-probing -- the last ladder for this workload "
+                f"stopped early ({was_incomplete}), so its highest measured "
+                "batch is a floor, not a ceiling. Cached records alone would "
+                "have capped this run permanently."
+            )
+        run_dir_path.mkdir(parents=True, exist_ok=True)
+        spec_path = run_dir_path / "spec.json"
+        # The probe children need a spec to load. This is the REQUESTED spec;
+        # the resolved rewrite happens exactly once, later.
+        _write_json(spec_path, spec.to_dict())
+
+        def step(batch: int) -> dict[str, Any]:
+            return _run_probe_candidate(
+                spec,
+                run_dir_path,
+                batch,
+                spec_path=spec_path,
+                cuda_device=cuda_device,
+                env_name=env_name,
+                params=params,
+                models_root=models_root,
+                log_cb=log_cb,
+                should_cancel=should_cancel,
+            )
+
+        try:
+            measured = autobatch.run_probe(
+                spec,
+                run_dir_path,
+                step_fn=step,
+                identity=fingerprint.identity,
+                should_cancel=should_cancel,
+            )
+        except autobatch.ProbeFailedError as exc:
+            # Fail-closed: the ONLY case where a completed probe caches
+            # nothing at all.
+            raise _BatchResolutionRefused(str(exc)) from exc
+        terminated_by = measured.terminated_by
+        # Validate, then merge, then select -- in that order and on purpose.
+        records = autobatch.validate_probe_records(measured, fingerprint.identity)
+        if not records:
+            raise _BatchResolutionRefused(
+                "The SAM3 memory probe produced no record that survived "
+                "validation; refusing to size this run from a broken "
+                "measurement."
+            )
+        # A measurement is a fact about this hardware and workload; a
+        # selection also depends on how much VRAM happens to be free right
+        # now. Cache the fact even if the selection below refuses, so the
+        # next attempt on a quieter GPU reuses it rather than re-probing.
+        # Known, deliberate limitation: this read-modify-write is lock-free,
+        # like the ladder marker. Two concurrent probes can lose one side's
+        # records; the failure direction is one extra probe, never a wrong
+        # number, so it is not worth a lock file here.
+        store.save(merge_records(stored, records))
+        # A ladder cut short by a TRANSIENT host event has not proved that
+        # the untried rungs are unreachable, so it must not be allowed to
+        # cap every future run through the cache. Marked here and cleared on
+        # any ladder that ended for an authoritative reason.
+        _mark_incomplete_ladder(
+            key,
+            (
+                terminated_by
+                if terminated_by in autobatch.TRANSIENT_LADDER_TERMINATIONS
+                else None
+            ),
+        )
+        provenance = "measured"
+
+    if should_cancel():
+        raise autobatch.ProbeCanceled("cancelled before batch selection")
+
+    live = preflight_module._probe_cuda_device(str(getattr(spec, "device", "auto")))
+    free_bytes = int(
+        live.free_bytes
+        if live is not None and live.uuid == cuda_device.uuid
+        else cuda_device.free_bytes
+    )
+    resolved, selection_provenance = autobatch.resolve_batch(
+        spec,
+        records,
+        usable_bytes=free_bytes,
+        maximum=autobatch.MAX_AUTO_BATCH,
+    )
+    # Selection must clear the SAME requirement admission does -- one
+    # function, `preflight.device_requirement_bytes`, so selection and
+    # admission cannot disagree by construction.
+    #
+    # What this scan actually catches, now that a measurement DECIDES at or
+    # below an observed rung: `select_batch` never returns a batch above the
+    # largest observed rung, so on the auto path every candidate here is
+    # at/below a rung and the scan re-checks the number `select_batch`
+    # already cleared -- a no-op, deliberately kept rather than deleted so
+    # the two consumers cannot drift if `select_batch` ever widens. The
+    # extrapolation guard inside `device_requirement_bytes` is what protects
+    # a batch BEYOND the rungs (an explicit user batch), where the measured
+    # side is a fitted guess and `max(analytic, measured)` still applies.
+    # Requirement is monotone in batch, so a downward scan finds the largest
+    # admissible candidate.
+    profile = preflight_module.dataset_profile(spec.derived_dataset_dir)
+    # TWO fractions, deliberately different, do not "fix" this:
+    # auto-selection gates at MEASURED_SAFETY_FRACTION (0.80) while
+    # admission gates an analytic requirement at the policy's CUDA safety
+    # fraction (0.85), so auto sizing can drop a rung that an explicit batch
+    # would be admitted at. That asymmetry is the point. A human who names a
+    # batch has context we do not and gets a clear refusal if they overreach;
+    # a batch WE chose that OOMs three hours in is a silent failure of our
+    # judgement, not theirs, so auto sizing is the more cautious of the two.
+    device_budget = int(free_bytes * autobatch.MEASURED_SAFETY_FRACTION)
+
+    def _requirement_at(batch: int) -> Any:
+        return preflight_module.device_requirement_bytes(
+            preflight_module.analytic_device_peak_bytes(
+                params, profile, batch_size=batch
+            ),
+            records,
+            batch,
+        )
+
+    requirement = _requirement_at(max(1, resolved))
+    if selection_provenance != "explicit":
+        while resolved > 0 and _requirement_at(resolved).bytes > device_budget:
+            resolved -= 1
+        if resolved > 0:
+            requirement = _requirement_at(resolved)
+    if resolved <= 0:
+        floor = _requirement_at(1)
+        raise _BatchResolutionRefused(
+            "SAM3 auto batch sizing refuses this run: batch 1 needs "
+            f"{floor.bytes / GiB:.1f} GiB ({floor.provenance}), but only "
+            f"{free_bytes / GiB:.1f} GiB is free on the selected GPU "
+            f"(usable at {autobatch.MEASURED_SAFETY_FRACTION:.0%} safety). "
+            "Free the device and retry; the measurement has been cached."
+        )
+    # Report the requirement that was ACTUALLY cleared. When `resolved` is
+    # itself an observed rung, that is a measurement; when it falls between
+    # rungs (records at 1, 2, 4 can resolve to 3), the number is the fitted
+    # envelope and must be labelled as extrapolated rather than passed off as
+    # something someone measured.
+    observed_rungs = {record.settings.batch_size for record in records}
+    requirement_basis = "measured" if resolved in observed_rungs else "extrapolated"
+    # One shared envelope: `max(fit(n), every observed peak at batch <= n)`,
+    # the same expression selection and admission use. Re-deriving it here
+    # was the third copy in this branch.
+    selected_envelope = measured_envelope_bytes(records, resolved)
+    resolution = {
+        "requested": int(params.batch),
+        "resolved": int(resolved),
+        # On this path resolution IS what runs: SAM3 has no OOM-halving
+        # ladder after launch, so the two keys always agree. Written anyway
+        # so `effective_batch` means "what trained" on both paths.
+        "effective_batch": int(resolved),
+        "provenance": provenance,
+        "requirement_basis": requirement_basis,
+        "ladder_terminated_by": terminated_by,
+        "fingerprint": key,
+        "degraded_reasons": list(fingerprint.degraded_reasons),
+        # Three keys below can hold the string "measured"; they answer
+        # different questions:
+        #   provenance             -- did we probe this run ("measured") or
+        #                             reuse a cached/explicit answer?
+        #   requirement_provenance -- which CASE of
+        #                             `device_requirement_bytes` decided the
+        #                             requirement we cleared: "analytic" (no
+        #                             records), "measured" (records decided),
+        #                             or "max_extrapolated" (past the rungs,
+        #                             so max() applied)?
+        #   requirement_basis      -- did `resolved` land on a batch size we
+        #                             actually observed, or between rungs?
+        #                             NOTE its "extrapolated" value means
+        #                             BETWEEN rungs (interpolated), which is
+        #                             not the same question as
+        #                             `requirement_measured_extrapolated`,
+        #                             which means PAST the top rung.
+        # `measured_envelope_bytes` is NOT a raw observation: at an observed
+        # rung it can still exceed that rung's peak when the fitted curve is
+        # higher. Named for the envelope it is, not for a measurement it is
+        # not.
+        "measured_envelope_bytes": int(selected_envelope),
+        "requirement_bytes": int(requirement.bytes),
+        "requirement_provenance": requirement.provenance,
+        "requirement_measured_extrapolated": bool(requirement.measured_extrapolated),
+        "free_bytes": free_bytes,
+        "resolved_at_unix_ns": time.time_ns(),
+    }
+    log_cb(
+        f"auto batch: {resolved} (requirement {requirement.bytes / GiB:.1f} GiB "
+        f"[{requirement.provenance}"
+        # No ", extrapolated" suffix: `max_extrapolated` already says it, and
+        # the flag can only be true in that case.
+        + f"] of {free_bytes / GiB:.1f} GiB free; {requirement_basis} envelope "
+        + f"{selected_envelope / GiB:.1f} GiB at batch {resolved}; "
+        f"provenance={provenance}, ladder={terminated_by})"
+    )
+    return int(resolved), resolution
+
+
+def _incomplete_ladders_path() -> Path:
+    """Sibling of the profile store recording ladders that ended early.
+
+    A separate small file rather than a new `MemoryMeasurement` field:
+    `MemoryMeasurement` is a shared, closed schema, and this is a property of
+    a PROBE ATTEMPT, not of any single measurement.
+    """
+
+    store = _store_path()
+    return store.with_name(store.name + ".incomplete.json")
+
+
+_UNREADABLE_LADDER_MARKER = "unreadable_ladder_marker"
+
+
+class _AllLaddersIncomplete(dict):
+    """Sentinel mapping: every fingerprint reads as incomplete.
+
+    Returned when the marker file exists but cannot be trusted. This
+    deliberately fails toward RE-PROBING rather than toward the cache: a
+    truncated or hand-edited marker that read as "nothing is incomplete"
+    would re-arm the permanent-ceiling bug the marker exists to prevent, for
+    every cached workload at once and without a sound. The file self-heals on
+    the next `_mark_incomplete_ladder` write, so the cost is one extra probe.
+
+    EVERY accessor answers for the whole key space, not just the one the
+    current caller happens to use. A shape that answered `get` correctly but
+    let `in`, `bool`, or iteration fall through to the empty `dict` beneath
+    would silently restore the fail-open behaviour for the next person who
+    reached for a different accessor -- which is precisely how "transient
+    became permanent" recurs.
+
+    The enumerating accessors cannot be answered honestly: the sentinel
+    stands for an unbounded key space, so there is no correct list of keys or
+    length. They raise rather than return `0`/`[]`, because those values read
+    as "nothing is incomplete" -- the one meaning this object must never
+    convey.
+    """
+
+    def get(self, key: object, default: object = None) -> object:
+        del key, default
+        return _UNREADABLE_LADDER_MARKER
+
+    def __getitem__(self, key: object) -> str:
+        del key
+        return _UNREADABLE_LADDER_MARKER
+
+    def __contains__(self, key: object) -> bool:
+        del key
+        return True
+
+    def __bool__(self) -> bool:
+        return True
+
+    def _refuse(self, accessor: str) -> None:
+        raise TypeError(
+            f"{accessor} is not answerable on an unreadable ladder marker: it "
+            "stands for every fingerprint, so any enumeration would understate "
+            "it as 'nothing is incomplete'. Test membership, or rebuild the "
+            "marker from an empty mapping."
+        )
+
+    def __iter__(self):
+        self._refuse("iteration")
+
+    def __len__(self) -> int:
+        self._refuse("len()")
+        raise AssertionError("unreachable")
+
+    def keys(self):
+        self._refuse("keys()")
+
+    def items(self):
+        self._refuse("items()")
+
+    def values(self):
+        self._refuse("values()")
+
+
+def _incomplete_ladders() -> dict[str, str]:
+    path = _incomplete_ladders_path()
+    if not path.exists():
+        # Never written, or already cleared: nothing is known to be
+        # incomplete. Distinct from "present but unreadable".
+        return {}
+    try:
+        loaded = json.loads(path.read_text(encoding="utf-8"))
+    except (OSError, ValueError):
+        return _AllLaddersIncomplete()
+    if not isinstance(loaded, dict):
+        return _AllLaddersIncomplete()
+    return {str(k): str(v) for k, v in loaded.items() if isinstance(v, str)}
+
+
+def _mark_incomplete_ladder(key: str, reason: Optional[str]) -> None:
+    """Record (or clear) that this workload's ladder ended for a transient reason."""
+
+    marks = _incomplete_ladders()
+    if isinstance(marks, _AllLaddersIncomplete):
+        # Unreadable: rebuild from empty rather than trying to preserve
+        # entries that could not be read. This is the self-heal, and it must
+        # happen on the CLEAR path too -- otherwise a corrupt marker would
+        # re-probe forever.
+        marks = {}
+        if reason is None:
+            _write_marks(marks)
+            return
+    if reason is None:
+        if marks.pop(key, None) is None:
+            return
+    else:
+        marks[key] = reason
+    _write_marks(marks)
+
+
+def _write_marks(marks: dict[str, str]) -> None:
+    path = _incomplete_ladders_path()
+    try:
+        path.parent.mkdir(parents=True, exist_ok=True)
+        _write_json(path, marks)
+    except OSError:
+        # Best-effort bookkeeping: losing this file costs a re-probe, never
+        # correctness.
+        pass
+
+
+def _fingerprint_key(identity: Any) -> str:
+    """A short, stable, log-safe digest of a `ProfileIdentity`."""
+
+    payload = json.dumps(asdict(identity), sort_keys=True, separators=(",", ":"))
+    return hashlib.sha256(payload.encode("utf-8")).hexdigest()[:16]
+
+
 def train_sam3_lora(
     spec: Any,
     run_dir: str,
@@ -137,10 +790,79 @@ def train_sam3_lora(
     progress_cb = progress_cb or (lambda _epoch, _total: None)
     should_cancel = should_cancel or (lambda: False)
     run_dir_path = Path(run_dir).expanduser().resolve()
-
     try:
         auto_import = bool(getattr(spec.publish_policy, "auto_import", True))
         models_root = get_models_root() if auto_import else None
+    except (OSError, ValueError) as exc:
+        return _result(
+            success=False,
+            message=f"SAM3 resource preflight could not inspect the run: {exc}",
+            failure_kind=ExitKind.HOST_ADMISSION_REFUSAL.value,
+        )
+
+    # --- Batch resolution comes FIRST -------------------------------------
+    # The original ordering bug: preflight ran, spec.json was written, and
+    # immutable containment limits were built BEFORE the child started, while
+    # `build_resource_request` quietly turned `-1` into 1. A child that then
+    # chose batch 2-8 ran under limits, a host estimate, and an accelerator
+    # estimate all admitted for batch 1. Nothing below may observe a
+    # non-positive batch.
+    requested_params = getattr(spec, "sam3_params", None)
+    requested_batch = (
+        int(getattr(requested_params, "batch", 1))
+        if requested_params is not None
+        else 1
+    )
+    resolved_spec = spec
+    batch_resolution: dict[str, Any] = {
+        "requested": requested_batch,
+        "resolved": requested_batch,
+        "effective_batch": requested_batch,
+        "provenance": "explicit",
+        "fingerprint": "",
+        "degraded_reasons": [],
+        "measured_envelope_bytes": 0,
+        "free_bytes": 0,
+        "resolved_at_unix_ns": time.time_ns(),
+    }
+    if requested_params is not None and requested_batch <= 0:
+        try:
+            resolved_batch, batch_resolution = _resolve_measured_batch(
+                spec,
+                run_dir_path,
+                requested_params,
+                env_name=resolve_sam3_env(requested_params.env_name),
+                models_root=models_root,
+                log_cb=log_cb,
+                should_cancel=should_cancel,
+            )
+        except autobatch.ProbeCanceled:
+            # Write no batch_resolution and launch nothing. A ladder that
+            # COMPLETED before the cancel has already cached its records
+            # above, and that is correct: a measurement is a fact about this
+            # hardware, not about whether the user kept waiting.
+            return _result(
+                success=False,
+                canceled=True,
+                failure_kind=ExitKind.CANCELED.value,
+            )
+        except (_BatchResolutionRefused, OSError, ValueError) as exc:
+            return _result(
+                success=False,
+                message=str(exc),
+                failure_kind=ExitKind.HOST_ADMISSION_REFUSAL.value,
+            )
+        resolved_spec = preflight_module.spec_with_batch(spec, resolved_batch)
+        if should_cancel():
+            return _result(
+                success=False,
+                canceled=True,
+                failure_kind=ExitKind.CANCELED.value,
+            )
+
+    spec = resolved_spec
+
+    try:
         initial = preflight_module.assess_preflight(
             spec,
             run_dir=run_dir_path,
@@ -164,29 +886,27 @@ def train_sam3_lora(
     run_dir_path.mkdir(parents=True, exist_ok=True)
     spec_path = run_dir_path / "spec.json"
     diagnostics_path = run_dir_path / "resource_preflight.json"
-    _write_json(spec_path, spec.to_dict())
+    # The ONE mutation inside `sam3_params` is the resolved positive batch.
+    # Provenance is a top-level, output-only block: `_SidecarSpec` does
+    # `Sam3LoraParams(**sam3_data)`, so any extra key inside `sam3_params`
+    # would raise `TypeError` in the child, while an unknown TOP-LEVEL key is
+    # inert (every field is read by `.get`). Written unconditionally on every
+    # run, after resolution, overwriting anything present -- it is not
+    # forgeable input.
+    spec_payload = spec.to_dict()
+    spec_payload["batch_resolution"] = batch_resolution
+    _write_json(spec_path, spec_payload)
+    _write_json(run_dir_path / "batch_resolution.json", batch_resolution)
 
     artifact_path = run_dir_path / "adapters.pt"
     remove_artifact(artifact_path, remove_staging=True)
     params = spec.sam3_params
     env_name = resolve_sam3_env(params.env_name)
-    command = sam3_env_command(
+    command = _sam3_command(
         env_name,
-        [
-            "hydra_suite.training.sam3_lora.cli",
-            "--spec",
-            str(spec_path),
-            "--run-dir",
-            str(run_dir_path),
-        ],
+        ["--spec", str(spec_path), "--run-dir", str(run_dir_path)],
     )
-    child_environment = {
-        **os.environ,
-        **sam3_env_environ(),
-        # Bind the child logical cuda:0 to the exact physical GPU admitted,
-        # probed, and leased by UUID. Never let the runtime choose another GPU.
-        "CUDA_VISIBLE_DEVICES": initial_cuda_device.uuid,
-    }
+    child_environment = _child_environment(initial_cuda_device)
     limits = _memory_limits(initial)
     launch = build_limited_launch(
         command,
@@ -204,6 +924,7 @@ def train_sam3_lora(
     diagnostic: dict[str, Any] = {
         "initial": initial.to_dict(),
         "live": None,
+        "batch_resolution": batch_resolution,
         "containment": _containment_diagnostic(plan),
     }
     _write_json(diagnostics_path, diagnostic)
@@ -276,41 +997,7 @@ def train_sam3_lora(
         )
 
     try:
-        while True:
-            lines, eof, output_error = sidecar.output.drain(
-                float(params.watchdog_poll_seconds)
-            )
-            for raw_line in lines:
-                line = raw_line.rstrip("\r\n")
-                if not line:
-                    continue
-                record = parse_record(line)
-                if record is None:
-                    log_cb(line)
-                else:
-                    dispatch_record(record, log_cb, progress_cb)
-            if output_error is not None:
-                raise output_error
-            process_returncode = sidecar.process.poll()
-            # Root exit transfers control to wait(), which owns final tree
-            # quiescence. A descendant may inherit stdout and hold EOF open.
-            if process_returncode is not None:
-                break
-            if should_cancel():
-                sidecar.cancel(plan.terminate_grace_seconds)
-                remove_artifact(artifact_path, remove_staging=True)
-                return _result(
-                    success=False,
-                    canceled=True,
-                    failure_kind=ExitKind.CANCELED.value,
-                    command=launch.command,
-                    resource_preflight=str(diagnostics_path),
-                    containment=_containment_diagnostic(plan),
-                )
-            if eof:
-                # A workload may deliberately close stdout before it exits.
-                # Once the buffer is at EOF, drain() cannot block for us.
-                time.sleep(float(params.watchdog_poll_seconds))
+        _pump_child_output(sidecar, plan, params, log_cb, progress_cb, should_cancel)
 
         def validate_artifact(result: SupervisedResult) -> None:
             validation_error = validate_completion(artifact_path)
@@ -322,6 +1009,16 @@ def train_sam3_lora(
                 )
 
         supervised = sidecar.wait(post_exit_check=validate_artifact)
+    except _Canceled:
+        remove_artifact(artifact_path, remove_staging=True)
+        return _result(
+            success=False,
+            canceled=True,
+            failure_kind=ExitKind.CANCELED.value,
+            command=launch.command,
+            resource_preflight=str(diagnostics_path),
+            containment=_containment_diagnostic(plan),
+        )
     except _ArtifactInvalid as exc:
         remove_artifact(artifact_path, remove_staging=True)
         return _result(

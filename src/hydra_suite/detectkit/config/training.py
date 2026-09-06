@@ -672,8 +672,11 @@ class DetectTrainingPlan:
                 raise TrainingPlanError("SAM3 training requires a non-empty prompt")
             if self.sam3_params.epochs <= 0:
                 raise TrainingPlanError("sam3.epochs must be positive")
-            if self.sam3_params.batch <= 0:
-                raise TrainingPlanError("sam3.batch must be positive")
+            if self.sam3_params.batch == 0 or self.sam3_params.batch < -1:
+                raise TrainingPlanError(
+                    "sam3.batch must be positive, or -1 to measure it on this "
+                    "machine"
+                )
             if self.sam3_params.grad_accum <= 0:
                 raise TrainingPlanError("sam3.grad_accum must be positive")
             if not (
