@@ -1,7 +1,10 @@
 # Cross-frame crop batching (Option B) — measurement spike
 
-**Status:** measurement complete, both platforms, all stages. No pipeline code
-changed. **Verdict: do not implement.**
+**Status:** stage-level measurement complete on both platforms. **Verdict is
+NOT settled** — see "Correction" below. The stage-level numbers were taken on
+an otherwise-idle GPU, and an end-to-end profile shows the pipeline is
+contention-bound, so the measured ratios do not transfer. No pipeline code
+changed.
 
 ## Question
 
@@ -115,26 +118,107 @@ Because Debug CSVs carry `IdentityEvidence*` probability columns and pose
 keypoint coordinates, **B breaks equivalence byte-identity on identity and
 pose clips on three of the four backends measured.**
 
-## Verdict
+## Correction — the first verdict was wrong, and is retracted
 
-**Do not implement Option B.** Every stage, both platforms, every tier lands
-in a 1.0–1.35× band, mostly within ~2× of the measurement noise floor. Crop
-warp — ~32% of wall per `project_sleap_roundtrip_audit` — does not shrink at
+The first pass concluded "do not implement, ~1.2% end-to-end." **That ceiling
+was wrong.** It anchored on `project_sleap_roundtrip_audit`'s "pose = 4.6% of
+wall", which was measured on a different clip/config. An actual
+`HYDRA_PROFILE=1` run of `ant_cnn_identity` (MPS, gpu tier, 489 frames,
+246.5 s) shows the opposite:
+
+| span | s | % wall | thread |
+|---|---|---|---|
+| `window` (consumer critical path) | 238.5 | 96.8% | tracking-engine-forward |
+| `headtail` | 90.5 | **36.7%** | consumer |
+| `cnn` | 74.1 | **30.1%** | consumer |
+| `pose` | 69.3 | **28.1%** | consumer |
+| `detect` / `run_obb` | 93.4 | 37.9% | **producer — fully hidden** |
+| `backend_forward` (all stages) | 174.6 | 70.8% | consumer |
+| `crop_extract` | 32.0 | 13.0% | consumer |
+
+**Downstream crop consumers are 94.9% of the critical path.** Detection runs
+on the producer thread and is entirely overlapped. So B targets the dominant
+cost, not a 4.6% sliver — the stage the user cares about is exactly the one
+that is slow.
+
+### But the stage-level ratios still cannot be multiplied through
+
+Per-frame head-tail cost, same clip, same tier, same model:
+
+- spike, `SPIKE_NO_POSE=1`, GPU otherwise idle: 831 ms / 32 = **26 ms/frame**
+- pipeline, `HYDRA_PROFILE=1`: 90.5 s / 489 = **185 ms/frame**
+
+**7× slower inside the pipeline.** The pipeline runs the OBB producer thread,
+the consumer thread, and the SLEAP service process concurrently on one device.
+The profile is therefore contention-bound, while the 1.2× was measured with
+zero contention. Under contention, fewer/larger calls could help (less
+interleaving), do nothing (device already saturated), or hurt. Multiplying
+233.9 s × (1 − 1/1.2) assumes an answer that has not been measured.
+
+**No end-to-end percentage should be quoted until an in-pipeline A/B is run.**
+
+### Contention isolation — SLEAP is NOT the co-tenant; the detector is
+
+Rerunning the same clip with `enable_pose_extractor: false`:
+
+| | pose ON | pose OFF |
+|---|---|---|
+| head-tail | 185.1 ms/frame | **187.3 ms/frame** |
+| cnn | 151.5 ms/frame | 140.7 ms/frame |
+| detect (producer thread) | 191.0 ms/frame | 198.2 ms/frame |
+| `window` (consumer) | 487.8 ms/frame | 331.9 ms/frame |
+
+Head-tail is **unchanged** with the SLEAP service process gone, so SLEAP is not
+what inflates it. What remains concurrent is the **OBB producer thread**, doing
+~198 ms/frame of detection on the same device while the consumer runs
+head-tail + CNN. Per-frame GPU work (198 + 187 + 141 = 526 ms) exceeds the
+332 ms consumer window, confirming real overlap — the device is saturated by
+two threads, and the consumer stages pay for it.
+
+This is the crux for Option B: on a device that is **already saturated by a
+concurrent producer**, issuing fewer/larger classifier calls may recover little
+or nothing, because the win B was measured on (per-call launch overhead) is not
+what is costing 185 ms/frame here. It may also be the more valuable finding in
+its own right — a 7× gap between a stage's uncontended and in-pipeline cost is
+a bigger lever than anything cross-frame batching offers.
+
+## What the stage-level data still supports
+
+Every stage, both platforms, every tier lands in a 1.0–1.35× band on an idle
+device, mostly within ~2× of the noise floor. Crop warp does not shrink at
 all, because B only affects the backend forward. Against that, B costs:
 deferring `write_downstream` against `runner.py`'s strict window order, a new
 cancel-path flush invariant, a crop-count-bounded accumulator, a
 pre-extracted-batch parameter for `run_cnn_batch` (it builds its own crops),
 and loss of gate byte-identity on identity + pose clips.
 
-**End-to-end, the ceiling is negligible.** `project_sleap_roundtrip_audit`
-measured pose at 4.6% of wall, so even the best-case 1.35× on pose is ~1.2%
-end-to-end. The classifier gains sit on a similarly small slice.
+## Current judgement (conditional)
 
-**Where to look instead:** crop warp, not the backend forward. It is ~32% of
-wall and B provably does not touch it. Note also that no batch-knob tuning is
-available as a consolation prize — the classifier knobs (64) already exceed
-typical per-frame detection counts and so are inert, and the SLEAP knob is
-inert without accumulation (above).
+**Head-tail-only accumulation is the candidate worth pursuing.** It is the
+single largest consumer stage (36.7% of this profile) AND it is
+**byte-identical under regrouping on all four backends measured** — so it
+carries none of B's gate cost. If a contention-aware in-pipeline A/B confirms
+even 1.15× there, that is a real saving on the dominant stage at zero numeric
+risk.
+
+**CNN and pose accumulation should stay off the table**, and the "small
+differences add up over long runs" argument is precisely why: 10 h × 30 fps ≈
+1M frames × ~17 detections, each carrying 2.2e-3 (CUDA) or 0.048 (CoreML)
+probability drift into Bayes log-compat identity accumulation, plus up to
+1 px pose drift — while simultaneously breaking the byte-identity gate that
+is the only thing protecting runs of that length.
+
+**Open measurements before any implementation decision:**
+
+1. ~~Contention isolation~~ — DONE, above. SLEAP is not the co-tenant; the
+   OBB producer thread is. The 7× uncontended-vs-pipeline gap for head-tail is
+   now the most interesting open question, independent of B.
+2. In-pipeline A/B — apply the crop half of `893cde19` in reverse in a
+   throwaway worktree, rerun with `HYDRA_PROFILE=1`, and compare the
+   `headtail`/`cnn`/`pose` span totals. Span totals isolate the downstream
+   effect even though detection batching confounds wall-clock.
+3. Repeat (2) on CUDA — the long runs in question are CUDA, and CUDA
+   head-tail was 9 ms/frame in the spike vs MPS's 26.
 
 ## Incidental findings
 
