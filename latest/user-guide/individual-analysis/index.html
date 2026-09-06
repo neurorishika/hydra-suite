@@ -865,6 +865,15 @@
 </li>
       
         <li class="md-nav__item">
+  <a href="#older-classifiers-and-crop-preprocessing" class="md-nav__link">
+    <span class="md-ellipsis">
+      Older Classifiers and Crop Preprocessing
+    </span>
+  </a>
+  
+</li>
+      
+        <li class="md-nav__item">
   <a href="#identity-classifiers-and-non-identifying-classes" class="md-nav__link">
     <span class="md-ellipsis">
       Identity Classifiers and Non-Identifying Classes
@@ -1920,6 +1929,15 @@
 </li>
       
         <li class="md-nav__item">
+  <a href="#older-classifiers-and-crop-preprocessing" class="md-nav__link">
+    <span class="md-ellipsis">
+      Older Classifiers and Crop Preprocessing
+    </span>
+  </a>
+  
+</li>
+      
+        <li class="md-nav__item">
   <a href="#identity-classifiers-and-non-identifying-classes" class="md-nav__link">
     <span class="md-ellipsis">
       Identity Classifiers and Non-Identifying Classes
@@ -1999,6 +2017,23 @@
   you to raise the value.</li>
 <li>Method choice should reflect your marker protocol (none/color/apriltag/custom).</li>
 </ul>
+<h2 id="older-classifiers-and-crop-preprocessing">Older Classifiers and Crop Preprocessing<a class="headerlink" href="#older-classifiers-and-crop-preprocessing" title="Permanent link">&para;</a></h2>
+<p>A classifier must see crops shaped the way it was trained. Models published
+since 2026-08-05 record this as a <strong>fit policy</strong> and are handled
+automatically. Models trained before that date carry no such record, so
+TrackerKit assumes the older <code>squash</code> (stretch-to-square) preprocessing and
+logs a warning naming the file the first time it loads.</p>
+<p>If you know what a legacy model was actually trained with, stamp it once so
+the assumption becomes a fact:</p>
+<div class="language-bash highlight"><pre><span></span><code><span id="__span-0-1"><a id="__codelineno-0-1" name="__codelineno-0-1" href="#__codelineno-0-1"></a>python<span class="w"> </span>scripts/stamp_fit_policy.py<span class="w"> </span>/path/to/model.pth<span class="w"> </span>--policy<span class="w"> </span>squash
+</span><span id="__span-0-2"><a id="__codelineno-0-2" name="__codelineno-0-2" href="#__codelineno-0-2"></a><span class="c1"># ... or --policy letterbox if it was trained with the current ClassKit path.</span>
+</span><span id="__span-0-3"><a id="__codelineno-0-3" name="__codelineno-0-3" href="#__codelineno-0-3"></a><span class="c1"># Add --dry-run to preview. The original is backed up alongside as .bak.</span>
+</span></code></pre></div>
+<p>Getting this wrong is not subtle: a mismatched policy leaves much of the
+model's input blank, and identity confidence collapses to near-noise. If
+identity results look uniformly unconfident, check this first -- the
+<a href="../post-processing/#identity-evidence-and-the-quality-breaker">evidence-quality breaker</a>
+will also refuse to act on evidence that bad and will say so in the log.</p>
 <h2 id="identity-classifiers-and-non-identifying-classes">Identity Classifiers and Non-Identifying Classes<a class="headerlink" href="#identity-classifiers-and-non-identifying-classes" title="Permanent link">&para;</a></h2>
 <p>Not every CNN classifier configured for individual analysis feeds identity
 resolution. Only classifiers marked <strong>Unique identifier</strong> in the identity

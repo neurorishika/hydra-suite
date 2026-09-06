@@ -10,7 +10,7 @@
       
       
       
-        <link rel="canonical" href="https://neurorishika.github.io/hydra-suite/latest/superpowers/specs/2026-08-27-identity-subsystem-repair-design/">
+        <link rel="canonical" href="https://neurorishika.github.io/hydra-suite/latest/superpowers/specs/2026-09-06-sam3-evidence-preservation-report/">
       
       
       
@@ -20,7 +20,7 @@
     
     
       
-        <title>Identity Subsystem Repair — Design - HYDRA Suite Docs</title>
+        <title>Step 0 — SAM3 evidence preservation - HYDRA Suite Docs</title>
       
     
     
@@ -74,7 +74,7 @@
     <div data-md-component="skip">
       
         
-        <a href="#identity-subsystem-repair-design" class="md-skip">
+        <a href="#step-0-sam3-evidence-preservation" class="md-skip">
           Skip to content
         </a>
       
@@ -112,7 +112,7 @@
         <div class="md-header__topic" data-md-component="header-topic">
           <span class="md-ellipsis">
             
-              Identity Subsystem Repair — Design
+              Step 0 — SAM3 evidence preservation
             
           </span>
         </div>
@@ -1790,73 +1790,28 @@
     <ul class="md-nav__list" data-md-component="toc" data-md-scrollfix>
       
         <li class="md-nav__item">
-  <a href="#1-problem-diagnosed-adversarially-reviewed" class="md-nav__link">
+  <a href="#what-was-built" class="md-nav__link">
     <span class="md-ellipsis">
-      1. Problem (diagnosed, adversarially reviewed)
+      What was built
     </span>
   </a>
   
-</li>
-      
-        <li class="md-nav__item">
-  <a href="#2-goals-non-goals" class="md-nav__link">
-    <span class="md-ellipsis">
-      2. Goals / non-goals
-    </span>
-  </a>
-  
-</li>
-      
-        <li class="md-nav__item">
-  <a href="#3-design" class="md-nav__link">
-    <span class="md-ellipsis">
-      3. Design
-    </span>
-  </a>
-  
-    <nav class="md-nav" aria-label="3. Design">
+    <nav class="md-nav" aria-label="What was built">
       <ul class="md-nav__list">
         
           <li class="md-nav__item">
-  <a href="#31-fit_policy-r1-r2" class="md-nav__link">
+  <a href="#1-per-epoch-validation-series-val_seriesjsonl" class="md-nav__link">
     <span class="md-ellipsis">
-      3.1 fit_policy (R1, R2)
+      1. Per-epoch validation series (val_series.jsonl)
     </span>
   </a>
   
 </li>
         
           <li class="md-nav__item">
-  <a href="#32-head-first-classifier-crops-r8" class="md-nav__link">
+  <a href="#2-retention-budget-replaces-the-count-cap" class="md-nav__link">
     <span class="md-ellipsis">
-      3.2 Head-first classifier crops (R8)
-    </span>
-  </a>
-  
-</li>
-        
-          <li class="md-nav__item">
-  <a href="#33-pelt-r3-r4-r5" class="md-nav__link">
-    <span class="md-ellipsis">
-      3.3 PELT (R3, R4, R5)
-    </span>
-  </a>
-  
-</li>
-        
-          <li class="md-nav__item">
-  <a href="#34-evidence-honesty-r6-r7" class="md-nav__link">
-    <span class="md-ellipsis">
-      3.4 Evidence honesty (R6, R7)
-    </span>
-  </a>
-  
-</li>
-        
-          <li class="md-nav__item">
-  <a href="#35-verification" class="md-nav__link">
-    <span class="md-ellipsis">
-      3.5 Verification
+      2. Retention budget replaces the count cap
     </span>
   </a>
   
@@ -1864,6 +1819,42 @@
         
       </ul>
     </nav>
+  
+</li>
+      
+        <li class="md-nav__item">
+  <a href="#tests" class="md-nav__link">
+    <span class="md-ellipsis">
+      Tests
+    </span>
+  </a>
+  
+</li>
+      
+        <li class="md-nav__item">
+  <a href="#filesystem-call-audit-on-the-training-path" class="md-nav__link">
+    <span class="md-ellipsis">
+      Filesystem-call audit on the training path
+    </span>
+  </a>
+  
+</li>
+      
+        <li class="md-nav__item">
+  <a href="#measured-per-epoch-validation-cost" class="md-nav__link">
+    <span class="md-ellipsis">
+      Measured per-epoch validation cost
+    </span>
+  </a>
+  
+</li>
+      
+        <li class="md-nav__item">
+  <a href="#not-done-out-of-scope" class="md-nav__link">
+    <span class="md-ellipsis">
+      Not done / out of scope
+    </span>
+  </a>
   
 </li>
       
@@ -1882,7 +1873,7 @@
                   
 
   
-    <a href="https://github.com/neurorishika/hydra-suite/edit/main/docs/superpowers/specs/2026-08-27-identity-subsystem-repair-design.md" title="Edit this page" class="md-content__button md-icon">
+    <a href="https://github.com/neurorishika/hydra-suite/edit/main/docs/superpowers/specs/2026-09-06-sam3-evidence-preservation-report.md" title="Edit this page" class="md-content__button md-icon">
       
       <svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 24 24"><path d="M10 20H6V4h7v5h5v3.1l2-2V8l-6-6H6c-1.1 0-2 .9-2 2v16c0 1.1.9 2 2 2h4zm10.2-7c.1 0 .3.1.4.2l1.3 1.3c.2.2.2.6 0 .8l-1 1-2.1-2.1 1-1c.1-.1.2-.2.4-.2m0 3.9L14.1 23H12v-2.1l6.1-6.1z"/></svg>
     </a>
@@ -1890,133 +1881,161 @@
   
 
 
-<h1 id="identity-subsystem-repair-design">Identity Subsystem Repair — Design<a class="headerlink" href="#identity-subsystem-repair-design" title="Permanent link">&para;</a></h1>
-<p><strong>Status:</strong> approved for planning (2026-08-27). Plan: <code>docs/superpowers/plans/2026-08-27-identity-subsystem-repair.md</code>.</p>
-<h2 id="1-problem-diagnosed-adversarially-reviewed">1. Problem (diagnosed, adversarially reviewed)<a class="headerlink" href="#1-problem-diagnosed-adversarially-reviewed" title="Permanent link">&para;</a></h2>
-<p>Three runs on <code>DEMO/ID</code> (25 colour-tagged <em>O. biroi</em>, frames 9300–10000): identity OFF tracks well (117 final trajectories, median 28 frames); OFFLINE and ONLINE identity produce 689 trajectories, median 7 frames. Root causes, each independently reproduced by a second model:</p>
+<h1 id="step-0-sam3-evidence-preservation">Step 0 — SAM3 evidence preservation<a class="headerlink" href="#step-0-sam3-evidence-preservation" title="Permanent link">&para;</a></h1>
+<p><strong>Status:</strong> implemented, tests green, committed on <code>feat/sam3-evidence-preservation</code>
+(worktree <code>.worktrees/sam3-evidence</code>). Not pushed, not merged.</p>
+<h2 id="what-was-built">What was built<a class="headerlink" href="#what-was-built" title="Permanent link">&para;</a></h2>
+<h3 id="1-per-epoch-validation-series-val_seriesjsonl">1. Per-epoch validation series (<code>val_series.jsonl</code>)<a class="headerlink" href="#1-per-epoch-validation-series-val_seriesjsonl" title="Permanent link">&para;</a></h3>
+<ul>
+<li><code>_evaluate_split(...)</code> — extracted from <code>_evaluate_and_write</code>; returns
+  <code>val_loss_mean</code>, <code>val_batches</code>, <code>val_terms_mean</code> (per-term breakdown averaged over
+  batches, taken from the same <code>loss_dict</code> the terminal path already computes) and
+  <code>elapsed_s</code> (the pass's own measured wall clock).</li>
+<li><code>_record_epoch_validation(...)</code> — called at the end of every epoch except the last;
+  appends one JSON object per line to <code>&lt;run_dir&gt;/val_series.jsonl</code>, and <code>emit_log</code>s the
+  number so it is visible while the run is happening.</li>
+<li>The FINAL epoch's record is appended by the terminal <code>_evaluate_and_write</code> from the
+  <em>same</em> computation that writes <code>val_stats.json</code>, so (a) no epoch is evaluated twice and
+  (b) the last row of the series can never disagree with the terminal artifact.</li>
+<li><code>val_stats.json</code> keeps its historical keys (<code>val_loss_mean</code>, <code>val_batches</code>, <code>note</code>) and
+  gains <code>val_terms_mean</code>. Additive only; <code>train.py:372</code> only checks existence.</li>
+<li><strong>Behaviour preservation is proven, not asserted:</strong> the mid-run pass saves and restores
+  python/numpy/torch/torch.cuda RNG state and restores <code>model.train()</code>, so the next epoch
+  draws exactly the numbers it would have drawn without the call. Train shuffling was
+  already seeded per-epoch (<code>spec.seed + epoch</code>); the restore covers incidental global-RNG
+  consumption inside transforms. Weights, steps, optimizer, scheduler and selection are
+  untouched. Selection remains last-epoch.</li>
+<li>The anti-correlation warning ("do not wire selection onto this series") is stated at
+  both places a future reader would be tempted: the <code>_record_epoch_validation</code> docstring
+  and the <code>_evaluate_split</code> docstring.</li>
+<li>Cadence knob: <code>HYDRA_SAM3_VAL_EVERY</code> (default 1 = every epoch), read via <code>val_cadence()</code>.
+  The effective cadence is stamped into every series record and into <code>val_stats.json</code>, so a
+  cadence gap can never be mistaken for a crash-restart gap.
+  An env var rather than a <code>Sam3LoraParams</code> field, so there is no spec.json / dialog /
+  params-threading ripple. The final epoch is recorded regardless of cadence.</li>
+</ul>
+<h3 id="2-retention-budget-replaces-the-count-cap">2. Retention budget replaces the count cap<a class="headerlink" href="#2-retention-budget-replaces-the-count-cap" title="Permanent link">&para;</a></h3>
+<ul>
+<li><code>KEEP_EPOCH_CHECKPOINTS = 3</code> and <code>prune_epoch_checkpoints</code> are <strong>gone</strong>.</li>
+<li><code>checkpoint_budget_bytes(directory)</code> — <code>CHECKPOINT_BUDGET_FRACTION_OF_FREE</code> (0.25, a
+  policy fraction, not a measurement) × (<code>shutil.disk_usage(dir).free</code> + bytes already
+  held by existing epoch checkpoints, which are reclaimable). No hardcoded byte figure.</li>
+<li><code>plan_checkpoint_retention(paths, *, free_bytes, adapter_bytes, budget_bytes=None)</code> —
+  pure, injectable, returns paths to delete. Adapter size is measured from the files
+  themselves at the call site (<code>max(st_size)</code>), never assumed.</li>
+<li>Policy when the budget binds: keep the FIRST and LAST checkpoints unconditionally, then
+  repeatedly drop the middle-most survivor. Never a sliding window; the earliest epochs —
+  the stall evidence — are never the first casualty, and the checkpoint just written is
+  never deleted.</li>
+<li><strong>Total fail-open contract: no filesystem operation in the retention path may raise.</strong>
+  Measurement AND deletion. Guards stay narrowly scoped to <code>OSError</code>, so a
+  <code>KeyError</code>/<code>TypeError</code> from the planner still surfaces as the logic bug it is.</li>
+<li><code>enforce_checkpoint_budget(directory)</code> applies the plan, deletes each <code>.complete.json</code>
+  marker with its artifact, and <code>emit_log</code>s LOUDLY with the measured numbers that forced
+  the prune. Each deletion is INDEPENDENT: a failure logs and continues rather than
+  aborting the rest, because aborting on the first failure leaves more disk consumed with
+  no compensating benefit -- a partially thinned directory is a valid state for best-effort
+  housekeeping, a dead run is not. The marker is removed only once its artifact is actually
+  gone, so a marker still cannot outlive what it vouches for, and only paths actually
+  deleted are returned/reported.</li>
+<li>The old docstring's rationale (user-supplied epoch counts; disk exhaustion mid-run would
+  destroy the artifact the feature exists to preserve; 200-epoch run on a full disk) is
+  preserved verbatim-in-spirit in the new module-level comment. The mechanism is replaced,
+  the concern is not refuted.</li>
+</ul>
+<h2 id="tests">Tests<a class="headerlink" href="#tests" title="Permanent link">&para;</a></h2>
+<ul>
+<li>Before: <strong>408 passed, 5 skipped</strong> (<code>-k sam3</code>).</li>
+<li>After: <strong>425 passed, 5 skipped</strong>.</li>
+<li>TDD: 19 new tests written first, all 11 observed failing, then implemented. The two old
+  sliding-window tests were rewritten to the new policy (keeping their marker-deletion and
+  safe-on-missing-directory assertions). New coverage: budget-allows-keep-all,
+  thin-middle-keep-ends, never-delete-just-written, budget-is-derived-not-hardcoded,
+  markers+loud-log, missing-dir safety, JSONL append, cadence env parsing (incl. garbage),
+  RNG save/restore present, loss decomposition + elapsed_s recorded, anti-correlation
+  comment present, unmeasurable-budget-retains-everything, stat-failure-skips-pruning, unlink-PermissionError-skips-pruning,
+  one-unlink-failure-does-not-abort-the-others, guards-stay-scoped-to-OSError.
+  The unlink guard was mutation-checked the same way: reverting the loop to its unguarded
+  form fails 2 tests.</li>
+<li>The RNG restore is pinned BEHAVIOURALLY, not by source grep: a stub model plus an
+  <code>_evaluate_split</code> stub that burns the python/numpy/torch streams (both on the success and
+  the raising path). Mutation-checked -- deleting any one of the three restore lines fails
+  2 tests. <strong>Known limit:</strong> <code>torch.cuda.set_rng_state_all</code> is unexercised on this box (no
+  CUDA) and remains read-verified only, until a CUDA run exercises it. <code>import sam3</code> is unavailable on macOS, so the live-model paths are
+  covered by source/stub assertions, as the existing file already does.</li>
+</ul>
+<h2 id="filesystem-call-audit-on-the-training-path">Filesystem-call audit on the training path<a class="headerlink" href="#filesystem-call-audit-on-the-training-path" title="Permanent link">&para;</a></h2>
+<p>The property being asserted is <em>no filesystem operation reachable from
+<code>_write_epoch_checkpoint</code> may raise into <code>run_training</code></em> -- not "the stat calls are
+guarded". Two earlier passes fixed the instance named in review rather than the property,
+which is how the unguarded <code>unlink</code> survived. Every reachable call, and why each is safe:</p>
 <table>
 <thead>
 <tr>
-<th>#</th>
-<th>Finding</th>
-<th>Evidence</th>
+<th>Call</th>
+<th>Status</th>
 </tr>
 </thead>
 <tbody>
 <tr>
-<td>R1</td>
-<td><strong>Train/inference preprocessing drift.</strong> Classifier <code>20260429-105036_…colortag</code> was trained (April) with <code>transforms.Resize((128,128))</code> — an anisotropic <em>squash</em> of wide (~90×250, aspect 2.0–3.2) crops on light-grey substrate. Inference today letterboxes the 148×66 canonical canvas onto a <strong>zero (black) 128×128</strong> (<code>fit.apply_fit</code> → <code>resample.letterbox_fit</code>), leaving 71/128 rows black.</td>
-<td>Rebuilt pipeline input reproduces cached probabilities <strong>bit-exactly</strong> (max diff 0.0). Same weights, same detections: black letterbox → joint max-prob median 0.141, 6.7 distinct labels/frame; squash → <strong>0.946</strong>, 18.6 labels/frame. BGR/RGB, ImageNet norm, MPS numerics, rotation, margin all refuted.</td>
+<td><code>directory.mkdir(parents=True, exist_ok=True)</code></td>
+<td>Pre-existing, deliberately fatal (see below)</td>
 </tr>
 <tr>
-<td>R2</td>
-<td><strong>Nothing detects R1.</strong> Model has no <code>.canonical_meta.json</code>; <code>warn_on_geometry_mismatch</code> treats "unstamped" as fine. Every pre-Aug-2026 checkpoint silently bypasses the only guard. The head/tail orientation model is from the same April era.</td>
-<td><code>canonical_meta.read_canonical_meta</code> → <code>None</code> → silent.</td>
+<td><code>_write_validated_adapter_artifact</code>: <code>temporary.open</code>, <code>torch.save</code>, <code>os.fsync</code>, <code>torch.load</code>, <code>os.replace</code>, <code>os.open</code>/<code>os.fsync</code>/<code>os.close</code> on the dir fd, <code>write_completion_marker</code>, <code>temporary.unlink</code> in <code>finally</code></td>
+<td>Pre-existing, deliberately fatal, unchanged by this branch</td>
 </tr>
 <tr>
-<td>R3</td>
-<td><strong>PELT splitter over-segments ~8×.</strong> <code>detect_identity_changepoints</code> z-scores each label column <em>per trajectory</em> with a <code>col_std &lt; 1e-8 → 1.0</code> guard; trajectories with constant posteriors (std ~1e-4) are rescaled to unit variance and PELT splits float noise.</td>
-<td>Real smoothed evidence: z-scored pen=3 → 679 changepoints; raw pen=3 → 83; true argmax switches 87. On <em>good</em> evidence z-scored still 8× over. A BIC penalty does not fix it (422/318/198).</td>
+<td><code>enforce_checkpoint_budget</code>: <code>directory.is_dir()</code></td>
+<td>Cannot raise -- <code>Path.is_dir()</code> returns <code>False</code> on <code>OSError</code></td>
 </tr>
 <tr>
-<td>R4</td>
-<td><strong>PELT cuts are permanent.</strong> Relink (<code>processing.py:3098</code>) rejects <code>gap &lt; 1</code>; PELT produces <code>gap == 0</code>. 607/689 OFFLINE fragments abut another at <code>end+1</code>.</td>
-<td><code>788 → 689</code> is relink chaining real gaps; no PELT cut is ever undone.</td>
+<td><code>enforce_checkpoint_budget</code>: <code>directory.glob("epoch_*.pt")</code>, <code>path.stat().st_size</code></td>
+<td>Inside the <code>OSError</code> guard -&gt; retain everything, log</td>
 </tr>
 <tr>
-<td>R5</td>
-<td><strong><code>min_fragment_frames</code> deletes rows.</strong> <code>split_trajectories_at_changepoints</code> drops post-split remnants shorter than the floor instead of merging them.</td>
-<td><code>offline.py:269</code>. Latent data loss.</td>
+<td><code>checkpoint_budget_bytes</code>: <code>directory.is_dir()</code></td>
+<td>Cannot raise (as above)</td>
 </tr>
 <tr>
-<td>R6</td>
-<td><strong><code>unknown</code> can never win; <code>identity_unknown_prior</code> is dead.</strong> <code>substrate._factor_log_prob</code> floors each factor at 1e-6 → joint <code>unknown</code> = 1e-12 exactly on every detection.</td>
-<td>15 464/15 464 detections.</td>
+<td><code>checkpoint_budget_bytes</code>: <code>shutil.disk_usage</code>, <code>glob</code>, <code>path.stat()</code></td>
+<td>Inside the <code>OSError</code> guard -&gt; return <code>None</code>, retain everything, log</td>
 </tr>
 <tr>
-<td>R7</td>
-<td><strong>Smoother saturates.</strong> Forward–backward over conditionally-independent emissions turns 0.12 evidence into 0.92 in 10 frames, 0.9999 in 50, so <em>systematically</em> wrong evidence becomes confidently wrong. Nothing checks evidence quality before it drives structure.</td>
-<td>Measured on traj 0 (700/700 frames same wrong label).</td>
+<td><code>plan_checkpoint_retention</code></td>
+<td>Pure; no I/O at all</td>
 </tr>
 <tr>
-<td>R8</td>
-<td><strong>Classifier crops are not head/tail-oriented</strong> while the catalog is ordered (<code>pink_yellow</code> ≠ <code>yellow_pink</code>). Orientation comes from YOLO OBB corner order; <code>headtail.npz</code> (present in cache) is unused by the CNN stage. Stable on 10/11 tracks; one track at 0.47 ordered agreement.</td>
-<td><code>stages/cnn.py</code> → <code>canonical_affine(corners)</code>.</td>
+<td><code>enforce_checkpoint_budget</code>: <code>path.unlink</code>, <code>marker.unlink</code></td>
+<td>Inside per-deletion <code>OSError</code> guards -&gt; log and continue</td>
 </tr>
 </tbody>
 </table>
-<p>Not defects (verified): offline identity does not touch the tracking pass (OFF/OFFLINE forward+backward CSVs md5-identical); ONLINE positions identical because <code>identity_weight=0.0</code> short-circuits at <code>hungarian.py:391</code> — but with weight &gt; 0 the garbage evidence would drive rejoin and KF position resets, so R1 is the top priority.</p>
-<h2 id="2-goals-non-goals">2. Goals / non-goals<a class="headerlink" href="#2-goals-non-goals" title="Permanent link">&para;</a></h2>
-<p><strong>Goals</strong>
-1. A model is always preprocessed the way it was trained: a <code>fit_policy</code> carried by the artifact, honoured by every classifier consumer (identity CNN, head/tail), stamped by training, and loud (warning) when inferred for legacy artifacts.
-2. Fragment solver structural decisions are calibrated: changepoints ≈ real label switches; no cut is irreversible; no rows are dropped.
-3. Evidence can express ignorance (<code>unknown</code> prior live) and a source that is demonstrably uninformative cannot restructure trajectories.
-4. Classifier crops are head-first when the head/tail stage is confident, on both train (already true: <code>dataset/generator.py</code> resolves head-tail &gt; motion &gt; OBB) and inference.</p>
-<p><strong>Non-goals</strong>: retraining the user's models (they become usable without retrain via <code>fit_policy=squash</code>); the ONLINE-vs-OFFLINE 14-fragment partition difference in conflict resolution (follow-up); TensorRT/CoreML export changes; new GUI knobs.</p>
-<h2 id="3-design">3. Design<a class="headerlink" href="#3-design" title="Permanent link">&para;</a></h2>
-<h3 id="31-fit_policy-r1-r2">3.1 <code>fit_policy</code> (R1, R2)<a class="headerlink" href="#31-fit_policy-r1-r2" title="Permanent link">&para;</a></h3>
+<p>The <code>mkdir</code> and artifact-write calls are left fatal ON PURPOSE and are not a regression:
+they <em>are</em> the salvage write, and a run that silently swallowed their failure would believe
+it has a checkpoint it does not have. Retention is different in kind -- it is housekeeping
+that deletes things, so its failure mode must be "keep more than intended", never "end the
+run". That asymmetry is the whole design.</p>
+<h2 id="measured-per-epoch-validation-cost">Measured per-epoch validation cost<a class="headerlink" href="#measured-per-epoch-validation-cost" title="Permanent link">&para;</a></h2>
+<p><strong>Not measured — blocked.</strong> The pass is CUDA-only (<code>sam3</code> cannot be imported on this box)
+and mehek is running a GPU study that I was instructed not to touch.
+Derived estimate from the prior run: 10 epochs / 2h12m ≈ 13.2 min per training epoch over
+588 batches (forward + backward + optimizer). Validation is forward-only over the 147-tile
+valid split, so <strong>order 1–3 min per epoch, ≈8–20% added wall clock</strong> — non-trivial, which
+is what justifies the cadence knob rather than a silent cost.
+The feature is self-measuring: every record carries <code>elapsed_s</code>, so the first real run
+replaces this estimate with a measurement, per epoch, without any further instrumentation.</p>
+<h2 id="not-done-out-of-scope">Not done / out of scope<a class="headerlink" href="#not-done-out-of-scope" title="Permanent link">&para;</a></h2>
 <ul>
-<li><code>ClassifierMetadata.fit_policy: Literal["letterbox","squash","native"]</code>.</li>
-<li>torch checkpoints: read <code>ckpt["fit_policy"]</code>; <strong>absent → <code>"squash"</code></strong> with a one-time <code>WARNING</code> naming the artifact ("pre-2026-08-05 training used anisotropic Resize; assuming squash — re-publish to stamp"). Rationale: every checkpoint produced before <code>3a2163ac</code> was squash-trained; that is the only population that lacks the key.</li>
-<li>multihead manifests: top-level <code>"fit_policy"</code>; absent → same rule.</li>
-<li>YOLO classifiers → <code>"native"</code> (ultralytics applies its own transform; unchanged).</li>
-<li>Layer 2 becomes policy-driven in one shared function: <code>canonicalization/fit.py: fit_crops_for_model(crops, geometry, metadata) -&gt; list[np.ndarray]</code> (numpy) and <code>resample.fit_batch_for_model(crops_chw, model_wh, policy)</code> (torch, CUDA branch). <code>squash</code> = antialiased bilinear resize to <code>(in_w,in_h)</code> (torch <code>F.interpolate(antialias=True)</code>, matching PIL's antialiased <code>Resize</code> far better than cv2 <code>INTER_LINEAR</code>); <code>letterbox</code> = existing zero-fill letterbox (unchanged, byte-identical).</li>
-<li>Training (<code>training/runner.py</code>) writes <code>fit_policy="letterbox"</code> into every checkpoint dict and multihead manifest it publishes. <code>scripts/stamp_fit_policy.py &lt;artifact&gt; --policy {letterbox,squash}</code> stamps existing artifacts (for models trained after <code>3a2163ac</code> but before this change).</li>
-<li><code>warn_on_geometry_mismatch</code> unchanged; the fit-policy warning is the new loud path for unstamped models.</li>
+<li>D15 (does Requirement B apply to YOLO/Ultralytics training?) and the P1/YOLO retention
+  check for the same class of constant — spec follow-ups, deliberately not touched.</li>
+<li>D13 (per-epoch detection-quality metric and stopping on it) — blocked on D12.</li>
+<li>A reused <code>run_dir</code> would accumulate <code>val_series.jsonl</code> rows across attempts (a
+  crashed-then-rerun training appends a second epoch-1 record). Launcher run dirs are
+  per-run, so this is theoretical; no dedup logic was added.</li>
+<li>No end-to-end GPU run of the new code; the validation-series and budget paths have not
+  executed against a live <code>sam3</code> model.</li>
 </ul>
-<h3 id="32-head-first-classifier-crops-r8">3.2 Head-first classifier crops (R8)<a class="headerlink" href="#32-head-first-classifier-crops-r8" title="Permanent link">&para;</a></h3>
-<ul>
-<li><code>extract_classifier_crops</code> / <code>extract_classifier_crops_batch_np</code> gain optional <code>heading_hints: np.ndarray | None</code>, <code>directed_mask: np.ndarray | None</code>. When <code>directed_mask[i]</code> and <code>heading_hints[i]</code> finite, the crop affine uses <code>resolve_directed_angle(theta, hint, True)</code> (head → +x), i.e. <code>canonical_affine</code> rotated by π when the OBB axis points away from the head. Undirected detections keep today's behaviour byte-for-byte.</li>
-<li>Pipeline passes the frame's <code>HeadTailResult</code> into <code>run_cnn_batch</code> (head/tail already runs before CNN). Head/tail stage itself stays undirected (it <em>produces</em> direction).</li>
-</ul>
-<h3 id="33-pelt-r3-r4-r5">3.3 PELT (R3, R4, R5)<a class="headerlink" href="#33-pelt-r3-r4-r5" title="Permanent link">&para;</a></h3>
-<ul>
-<li>Remove per-column z-scoring; PELT runs on raw known-label probabilities in [0,1]. <code>CHANGEPOINT_PENALTY</code> default 3.0 unchanged (calibrated: 83 vs 87 switches on real data).</li>
-<li>Remnants shorter than <code>MIN_FRAGMENT_FRAMES</code> are merged into the preceding segment (or following, for a leading remnant) — never dropped.</li>
-<li>After <code>_iterative_assign</code>, adjacent fragments sharing <code>OriginalTrajectoryID</code> whose final labels are equal (including both unknown) are re-merged under one <code>TrajectoryID</code>. The solver owns undoing its own cuts; relink semantics unchanged.</li>
-</ul>
-<h3 id="34-evidence-honesty-r6-r7">3.4 Evidence honesty (R6, R7)<a class="headerlink" href="#34-evidence-honesty-r6-r7" title="Permanent link">&para;</a></h3>
-<ul>
-<li><code>substrate.map_cnn_to_catalog(..., unknown_prior: float)</code>: after the product-over-factors, known mass is scaled to <code>1 - unknown_prior</code> and <code>unknown</code> gets <code>unknown_prior</code> (config <code>identity_unknown_prior</code>, default 0.05). Evidence cache <code>evidence_schema_version</code> 2 → 3 so stale sidecars are rebuilt.</li>
-<li>Evidence-quality circuit breaker in <code>run_fragment_solver</code>: over all frames with evidence, compute <code>q_conf = frac(max known posterior ≥ 0.5)</code> and <code>q_div = mean distinct argmax labels per frame / min(catalog_known, mean detections per frame)</code>. If <code>q_conf &lt; 0.10</code> <strong>or</strong> <code>q_div &lt; 0.30</code>: log <code>ERROR</code> with both numbers, skip PELT, and write <code>IdentityFinalSource = NONE</code> for all rows (labels still annotated as <code>IdentityFinalSmoothedLabel</code> for inspection). Thresholds are constants in <code>offline.py</code>, not GUI knobs.</li>
-</ul>
-<h3 id="35-verification">3.5 Verification<a class="headerlink" href="#35-verification" title="Permanent link">&para;</a></h3>
-<ul>
-<li>Unit tests per task (see plan).</li>
-<li>Equivalence matrix (MPS here, CUDA on mehek): non-identity clips byte-identical; identity clips (<code>ant_cnn_identity</code>, <code>emi_obb_identity</code>) <strong>expected</strong> to diverge in identity columns (and positions if their configs use <code>identity_weight &gt; 0</code>) — record the delta explicitly, do not paper over.</li>
-<li>Manual acceptance on <code>DEMO/ID/OFFLINE</code>: rerun post-processing; expect final trajectory count within 1.3× of OFF (≤ ~150), ≥ 15 distinct labels/frame in <code>IdentityFinalSmoothedLabel</code>, and the visually verified tracks (30 blue_blue, 36 orange_yellow, 58 orange_green/green_orange) labelled correctly.</li>
-</ul>
-<blockquote>
-<p><strong>Note (updated 2026-08-27, post-Task-9 fix wave — this section is now known-stale relative to the measured gate; not rewritten in place per docs-lifecycle convention, corrected here instead):</strong></p>
-<p><strong>Equivalence-divergence scope was wider than stated above.</strong> The measured MPS
-equivalence matrix (see <code>tools/equivalence/notes/2026-08-27-identity-repair-gate.md</code>)
-found <strong>5</strong> clips diverge, not 2: the 2 named here (<code>ant_cnn_identity</code>,
-<code>emi_obb_identity</code>) plus <code>ant_pose_headtail</code>, <code>ant_obb_sleap</code>, and
-<code>ant_obb_sequential</code>. All 5 share one mechanism, root-caused (with an honest
-correlation-not-causation caveat — the exact unstamped checkpoint no longer exists
-to re-run a counterfactual) in the gate record: they all point at the same shared
-head/tail orientation checkpoint
-(<code>classification/orientation/20260429-104937_efficientnet_b0_obiroi_train1.pth</code>),
-which Step 1 of the same gating session re-stamped with <code>fit_policy=squash</code>. Once
-stamped, Tasks 1-3's fit-policy-aware Layer-2 dispatch computes head/tail
-orientation slightly differently from the <code>main</code> baseline on borderline frames,
-producing π-magnitude θ flips that cascade into small forward/final row-count
-deltas. Positions remain byte-identical (p99 = 0.0) on every clip, confirming the
-Kalman/assignment/detection geometry itself is untouched. Full per-clip evidence:
-the gate record above.</p>
-<p><strong>Measured outcome (2026-08-27): the DEMO/ID acceptance thresholds stated above
-were not fully met.</strong> Final trajectory count came in at <strong>171</strong>, not ≤~150 (a real
-4.0x improvement over OFFLINE's original 689, but short of the plan's specific
-numeric bar); the ≥15 distinct-labels/frame threshold was met (17.09 measured);
-the 30/36/58 track spot-check came in <strong>1/3 correct</strong> (track 58 only — tracks 30
-and 36 both mislabel, converging on the same wrong value <code>blue_pink</code>, a possible
-residual identity-confusion pattern rather than scattered noise). This is
-attributed to residual classifier accuracy on the DEMO/ID colortag catalog, not
-to a mechanism within this plan's scope (fit-policy correctness, PELT calibration,
-evidence honesty, crop orientation) — retraining the classifier, or a dedicated
-ground-truth accuracy evaluation, is a follow-up outside this repair. See the gate
-record for the full measured breakdown and reasoning.</p>
-</blockquote>
 
 
 

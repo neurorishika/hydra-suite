@@ -1943,7 +1943,7 @@
 <li>
 <p><strong>Configure tile sizing</strong> (these control how crowded frames are split):</p>
 </li>
-<li>Set <strong>Object scale in model input</strong> to <code>0.3125, 0.46875, 0.625</code> (the default). These are fractions of the active model input; at 640px they correspond to 200, 300, and 400px.<ul>
+<li>Set <strong>Object scale in model input</strong> to <code>0.05, 0.10, 0.15, 0.20</code> (the default). These are fractions of the active model input; at 640px they correspond to 32, 64, 96, and 128px.<ul>
 <li>A larger fraction means a smaller tile and more aggressive crowd-splitting.</li>
 <li>DetectKit resolves each fraction for the active model input size, so changing model input size does not require translating pixel targets yourself.</li>
 </ul>
@@ -1955,11 +1955,13 @@
 <li>
 <p><strong>Configure negative sampling and merging:</strong></p>
 </li>
-<li>Set <strong>Minimum retained object area</strong> to <code>0.1</code> (default, tiles with &lt; 10% of the object's area are suppressed during slicing).</li>
+<li>Set <strong>Minimum retained object area</strong> to <code>0.25</code> (default, tiles with &lt; 25% of the object's area are suppressed during slicing to avoid training on severely clipped animals).</li>
 <li>Set <strong>Empty-tile sampling fraction</strong> to <code>0.15</code> (default, 15% of background-only tiles are kept, strengthening non-object detection).</li>
 <li>Leave <strong>Mix full frames</strong> checked (default, ensures the model also learns full-frame context).</li>
+<li>Set <strong>Merge threshold</strong> to <code>0.5</code> (default, overlapping predictions from adjacent tiles are merged when IoU exceeds this).</li>
+<li>Leave <strong>Balance multi-scale training loss</strong> enabled. Every tile remains in the epoch, while <code>Balance strength</code> controls inverse-frequency loss weighting: <code>0.5</code> is square-root balancing and <code>1.0</code> gives exact balance among tile-size groups. Full-frame examples retain their normal weight.</li>
 <li>
-<p>Set <strong>Merge threshold</strong> to <code>0.5</code> (default, overlapping predictions from adjacent tiles are merged when IoU exceeds this).</p>
+<p>This balance mode applies to single-process training. Distributed (DDP) runs retain Ultralytics' standard loader and log that balancing was skipped.</p>
 </li>
 <li>
 <p><strong>Choose a different tile strategy only when needed:</strong></p>
@@ -1999,9 +2001,9 @@
 <li>
 <p>If clusters are still merged, check that:</p>
 <ul>
-<li>Object scales match your typical object scale (increase the fractions if tiles are too small).</li>
+<li>Object scales match your typical object scale (decrease the fractions if tiles are too small or fragmented).</li>
 <li>Overlap is not too small (0.2 is typical; lower overlap can miss objects at tile edges).</li>
-<li>Minimum retained object area is not too aggressive (0.1 allows small partial objects).</li>
+<li>Minimum retained object area is not too aggressive (0.25 deliberately rejects severely partial objects).</li>
 </ul>
 </li>
 <li>
@@ -2035,13 +2037,13 @@
 </li>
 <li>Include a note in your delivery that specifies:<ul>
 <li>Geometry mode used (<code>auto_object</code> in this runbook).</li>
-<li>Object scales as model-input fractions (e.g., 0.3125, 0.46875, 0.625).</li>
+<li>Object scales as model-input fractions (e.g., 0.05, 0.10, 0.15, 0.20).</li>
 <li>The label-derived reference body pixel size recorded in the sidecar.</li>
 <li>Overlap and min-area-ratio values.</li>
 </ul>
 </li>
 <li>
-<p>Example note: <em>"Model trained with SAHI labelled-object tiling; object scales 0.3125, 0.46875, 0.625 of model input; overlap 0.2; reference_body_px measured from labels. Sidecar slice_meta.json included."</em></p>
+<p>Example note: <em>"Model trained with SAHI labelled-object tiling; object scales 0.05, 0.10, 0.15, 0.20 of model input; overlap 0.2; reference_body_px measured from labels. Sidecar slice_meta.json included."</em></p>
 </li>
 <li>
 <p><strong>Prepare for TrackerKit inference:</strong></p>
