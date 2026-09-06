@@ -1606,7 +1606,7 @@ class ParameterHelperDialog(BaseDialog):
 
         payload = json.dumps(
             {
-                "objective_version": 5,
+                "objective_version": 6,
                 "cache_path": str(self.detection_cache_path),
                 "cache_signature": _source_signature(
                     self.detection_cache_path, cache_contents_only=True

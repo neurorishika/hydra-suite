@@ -481,16 +481,20 @@ def test_validation_cycle_support_scales_with_track_slots() -> None:
 
 
 def test_lifecycle_maturity_gate_rejects_many_short_observation_fragments() -> None:
-    """Summing short fragments across tracks/regions cannot exercise maturity."""
+    """Summing short fragments across tracks/regions cannot exercise either age."""
 
     core = _optimizer()
-    core.base_params["KALMAN_MATURITY_AGE"] = 1
+    core.base_params["KALMAN_MATURITY_AGE"] = 4
     core.tuning_config["KALMAN_MATURITY_AGE"] = True
-    positions = np.full((80, 1, 2), np.nan, dtype=np.float32)
-    for start in range(0, 80, 4):
-        positions[start : start + 3, 0] = np.column_stack(
-            (np.arange(3, dtype=np.float32), np.zeros(3, dtype=np.float32))
-        )
+    positions = np.full((80, 3, 2), np.nan, dtype=np.float32)
+    for track in range(3):
+        for start in range(0, 80, 4):
+            positions[start : start + 3, track] = np.column_stack(
+                (
+                    track * 100.0 + np.arange(3, dtype=np.float32),
+                    np.zeros(3, dtype=np.float32),
+                )
+            )
 
     evaluations = core._validation_evaluations(
         "candidate", positions, positions.copy(), 1.0
@@ -500,23 +504,62 @@ def test_lifecycle_maturity_gate_rejects_many_short_observation_fragments() -> N
         positions.copy(),
         1.0,
         evaluations,
-        candidate_params={"KALMAN_MATURITY_AGE": 4},
+        candidate_params={"KALMAN_MATURITY_AGE": 8},
     )
 
     assert reason is not None
     assert "KALMAN_MATURITY_AGE" in reason
 
 
-def test_lifecycle_lost_gate_requires_a_bracketed_threshold_length_gap() -> None:
-    """A candidate lost threshold is unexercised until a real lost/rejoin gap."""
+def test_lifecycle_maturity_gate_accepts_baseline_crossing_for_raised_candidate() -> (
+    None
+):
+    """A run that reaches baseline age distinguishes it from a higher candidate age."""
 
     core = _optimizer()
-    core.base_params["LOST_THRESHOLD_FRAMES"] = 1
+    core.base_params["KALMAN_MATURITY_AGE"] = 4
+    core.tuning_config["KALMAN_MATURITY_AGE"] = True
+    positions = np.full((80, 2, 2), np.nan, dtype=np.float32)
+    for track in range(2):
+        for start in range(0, 80, 5):
+            positions[start : start + 4, track] = np.column_stack(
+                (
+                    track * 100.0 + np.arange(4, dtype=np.float32),
+                    np.zeros(4, dtype=np.float32),
+                )
+            )
+
+    evaluations = core._validation_evaluations(
+        "candidate", positions, positions.copy(), 1.0
+    )
+
+    assert (
+        core._validation_temporal_evidence_reason(
+            positions,
+            positions.copy(),
+            1.0,
+            evaluations,
+            candidate_params={"KALMAN_MATURITY_AGE": 8},
+        )
+        is None
+    )
+
+
+def test_lifecycle_lost_gate_requires_a_bracketed_threshold_length_gap() -> None:
+    """A bracketed gap below both thresholds leaves a raised value unexercised."""
+
+    core = _optimizer()
+    core.base_params["LOST_THRESHOLD_FRAMES"] = 4
     core.tuning_config["LOST_THRESHOLD_FRAMES"] = True
+    time = np.arange(80, dtype=np.float32)
     positions = np.stack(
-        [np.arange(80, dtype=np.float32), np.zeros(80, dtype=np.float32)], axis=1
-    )[:, None, :]
-    positions[30:33] = np.nan  # only three missing frames, bracketed by observations
+        [
+            np.column_stack((time, np.zeros_like(time))),
+            np.column_stack((100.0 + time, np.zeros_like(time))),
+        ],
+        axis=1,
+    )
+    positions[30:33, 0] = np.nan  # only three missing frames, bracketed by observations
 
     evaluations = core._validation_evaluations(
         "candidate", positions, positions.copy(), 1.0
@@ -526,12 +569,14 @@ def test_lifecycle_lost_gate_requires_a_bracketed_threshold_length_gap() -> None
         positions.copy(),
         1.0,
         evaluations,
-        candidate_params={"LOST_THRESHOLD_FRAMES": 4},
+        candidate_params={"LOST_THRESHOLD_FRAMES": 8},
     )
     assert reason is not None
     assert "LOST_THRESHOLD_FRAMES" in reason
 
-    positions[30:34] = np.nan  # reaches threshold and has an observed rejoin
+    # Four missing frames cross the baseline loss transition but not the
+    # raised candidate's threshold, so the held-out run distinguishes them.
+    positions[30:34, 0] = np.nan
     evaluations = core._validation_evaluations(
         "candidate", positions, positions.copy(), 1.0
     )
@@ -541,7 +586,7 @@ def test_lifecycle_lost_gate_requires_a_bracketed_threshold_length_gap() -> None
             positions.copy(),
             1.0,
             evaluations,
-            candidate_params={"LOST_THRESHOLD_FRAMES": 4},
+            candidate_params={"LOST_THRESHOLD_FRAMES": 8},
         )
         is None
     )
@@ -552,27 +597,38 @@ def test_production_validation_does_not_promote_unexercised_lifecycle_candidate(
 ) -> None:
     """An otherwise cleaner candidate cannot bypass its maturity evidence gate."""
 
-    time = np.arange(40, dtype=np.float32)
-    smooth = np.stack([time, np.zeros_like(time)], axis=1)[:, None, :]
+    time = np.arange(80, dtype=np.float32)
+    smooth = np.stack(
+        [
+            np.column_stack((track * 100.0 + time, np.zeros_like(time)))
+            for track in range(3)
+        ],
+        axis=1,
+    )
     baseline_backward = smooth.copy()
-    baseline_backward[:, 0, 0] += 1.0
-    fragments = np.full((40, 1, 2), np.nan, dtype=np.float32)
-    for start in range(0, 40, 4):
-        fragments[start : start + 3, 0] = np.column_stack(
-            (np.arange(3, dtype=np.float32), np.zeros(3, dtype=np.float32))
-        )
+    baseline_backward[:, :, 0] += 1.0
+    fragments = np.full((80, 3, 2), np.nan, dtype=np.float32)
+    for track in range(3):
+        for start in range(0, 80, 4):
+            fragments[start : start + 3, track] = np.column_stack(
+                (
+                    track * 100.0 + np.arange(3, dtype=np.float32),
+                    np.zeros(3, dtype=np.float32),
+                )
+            )
     _install_fake_replay(
         monkeypatch,
         (smooth, baseline_backward),
         (fragments, fragments.copy()),
     )
     core = _optimizer()
-    core.base_params["KALMAN_MATURITY_AGE"] = 1
+    core.base_params["MAX_TARGETS"] = 3
+    core.base_params["KALMAN_MATURITY_AGE"] = 4
     core.tuning_config["KALMAN_MATURITY_AGE"] = True
     baseline = _result({}, baseline=True)
-    candidate = _result({"W_POSITION": 2.0, "KALMAN_MATURITY_AGE": 4})
+    candidate = _result({"W_POSITION": 2.0, "KALMAN_MATURITY_AGE": 8})
 
-    core._production_validate_shortlist([baseline, candidate], (0, 39))
+    core._production_validate_shortlist([baseline, candidate], (0, 79))
 
     assert baseline.recommended is True
     assert candidate.recommended is False

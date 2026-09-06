@@ -132,8 +132,10 @@ also contain observed forward/backward motion triplets and robust shared cycle
 observations before it contributes to promotion. Cycle evidence has both an
 absolute shared-observation floor and a horizon/slot-scaled coverage floor.
 When a candidate changes a lifecycle threshold, held-out output must also
-exercise that value: maturity needs a long consecutive observed run, and loss
-needs a threshold-length missing run bracketed by observed states. Otherwise
+exercise a threshold that distinguishes it from baseline: maturity needs a
+consecutive observed run and loss needs a bracketed missing run reaching the
+lower of the baseline/candidate values. A run or gap between those values
+exercises one lifecycle policy while the other remains unchanged. Otherwise
 the current settings are retained.
 
 Cancel, window close, `reject()`, `accept()`, and direct `done()` all request

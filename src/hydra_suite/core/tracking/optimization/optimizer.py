@@ -1206,17 +1206,19 @@ class TrackingOptimizerCore:
                     longest[track_index] = max(longest[track_index], index - start)
         return longest
 
-    def _changed_lifecycle_values(
+    def _changed_lifecycle_thresholds(
         self, candidate_params: Mapping[str, Any] | None
-    ) -> dict[str, int]:
-        """Return candidate lifecycle values that differ from the baseline.
+    ) -> dict[str, tuple[int, int]]:
+        """Return ``(baseline, candidate)`` thresholds for changed lifecycle values.
 
-        These are deliberately based on a candidate's actual replay value, not
-        the largest search bound. A lifecycle control must be observed crossing
-        the threshold it would apply before that candidate can be promoted.
+        A candidate-specific dimension needs evidence that distinguishes the two
+        policies, not necessarily evidence that reaches the more conservative
+        one. The caller therefore requires exposure to the lower of these two
+        values, while preserving the exact candidate/baseline values for
+        diagnostics.
         """
 
-        changed: dict[str, int] = {}
+        changed: dict[str, tuple[int, int]] = {}
         for name in _TEMPORAL_HORIZON_PARAMETERS:
             if candidate_params is None or name not in candidate_params:
                 continue
@@ -1229,7 +1231,9 @@ class TrackingOptimizerCore:
                 continue
             if np.isclose(candidate_value, baseline_value, rtol=0.0, atol=1e-9):
                 continue
-            changed[name] = max(1, int(math.ceil(candidate_value)))
+            baseline_threshold = max(1, int(math.ceil(baseline_value)))
+            candidate_threshold = max(1, int(math.ceil(candidate_value)))
+            changed[name] = (baseline_threshold, candidate_threshold)
         return changed
 
     def _minimum_region_cycle_observations(
@@ -1344,37 +1348,46 @@ class TrackingOptimizerCore:
                 )
 
         # A candidate-specific lifecycle value is evidence-bearing only if the
-        # held-out export reaches its relevant state transition. This is kept
-        # separate from generic motion support because many disjoint three-frame
-        # fragments can produce plenty of triplets without ever maturing a
-        # track, and a boundary gap cannot prove a loss/rejoin transition.
-        lifecycle_values = self._changed_lifecycle_values(candidate_params)
-        maturity_age = lifecycle_values.get("KALMAN_MATURITY_AGE")
-        if maturity_age is not None:
+        # held-out export reaches a threshold on which baseline and candidate
+        # can differ. That is the lower of their two values: a run/gap between
+        # them is precisely the case that exercises one policy while leaving
+        # the other unchanged. This remains separate from generic motion
+        # support because many disjoint three-frame fragments can produce
+        # plenty of triplets without ever maturing a track, and a boundary gap
+        # cannot prove a loss/rejoin transition.
+        lifecycle_thresholds = self._changed_lifecycle_thresholds(candidate_params)
+        maturity_thresholds = lifecycle_thresholds.get("KALMAN_MATURITY_AGE")
+        if maturity_thresholds is not None:
+            baseline_maturity, candidate_maturity = maturity_thresholds
+            required_maturity = min(baseline_maturity, candidate_maturity)
             for direction, positions in (("forward", forward), ("backward", backward)):
                 longest_run = int(
                     np.max(self._longest_consecutive_observed_runs(positions))
                 )
-                if longest_run < maturity_age:
+                if longest_run < required_maturity:
                     return (
                         "held-out lifecycle support is inadequate: candidate "
-                        f"KALMAN_MATURITY_AGE={maturity_age} has no "
-                        f"{maturity_age}-frame consecutive observed run in the "
-                        f"{direction} replay (longest {longest_run})"
+                        f"KALMAN_MATURITY_AGE={candidate_maturity} differs from "
+                        f"baseline {baseline_maturity} but has no "
+                        f"{required_maturity}-frame consecutive observed run in "
+                        f"the {direction} replay (longest {longest_run})"
                     )
 
-        lost_threshold = lifecycle_values.get("LOST_THRESHOLD_FRAMES")
-        if lost_threshold is not None:
+        lost_thresholds = lifecycle_thresholds.get("LOST_THRESHOLD_FRAMES")
+        if lost_thresholds is not None:
+            baseline_lost, candidate_lost = lost_thresholds
+            required_lost = min(baseline_lost, candidate_lost)
             for direction, positions in (("forward", forward), ("backward", backward)):
                 longest_gap = int(
                     np.max(self._longest_bracketed_missing_runs(positions))
                 )
-                if longest_gap < lost_threshold:
+                if longest_gap < required_lost:
                     return (
                         "held-out lifecycle support is inadequate: candidate "
-                        f"LOST_THRESHOLD_FRAMES={lost_threshold} has no "
-                        f"bracketed {lost_threshold}-frame missing run in the "
-                        f"{direction} replay (longest {longest_gap})"
+                        f"LOST_THRESHOLD_FRAMES={candidate_lost} differs from "
+                        f"baseline {baseline_lost} but has no bracketed "
+                        f"{required_lost}-frame missing run in the {direction} "
+                        f"replay (longest {longest_gap})"
                     )
         return None
 
