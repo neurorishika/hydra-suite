@@ -56,6 +56,18 @@ def test_sam3_env_environ_sets_kmp_duplicate_lib_ok():
     assert got["KMP_DUPLICATE_LIB_OK"] == "TRUE"
 
 
+def test_sam3_env_environ_sets_expandable_segments():
+    """The allocator flag is not cosmetic: without it 45% of peak VRAM is
+    caching-allocator fragmentation (measured 12.99 GiB vs 7.13 GiB on two
+    matched full runs), and no short probe can bound the peak, which is what
+    measured auto batch sizing depends on.  Both the training and publish
+    sidecars source their environment here, so this is the single place that
+    guarantees the child gets it regardless of the caller's shell.
+    """
+    got = sam3_env.sam3_env_environ()
+    assert got["PYTORCH_CUDA_ALLOC_CONF"] == "expandable_segments:True"
+
+
 # --------------------------------------------------------------------------
 # probe inversion
 # --------------------------------------------------------------------------

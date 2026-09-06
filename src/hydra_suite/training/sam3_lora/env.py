@@ -69,5 +69,43 @@ def sam3_env_environ() -> Dict[str, str]:
     torch`` aborts with ``OMP Error #15`` (double-linked libomp), observed
     while building the mac env; ``tools/equivalence/run_matrix.sh`` sets the
     same variable for the same reason.
+
+    ``PYTORCH_CUDA_ALLOC_CONF=expandable_segments:True`` removes caching-
+    allocator fragmentation, which MEASURED AT 45% OF PEAK VRAM on a full
+    10-epoch run. Two matched runs, same commit, same corpus (1871 instances,
+    486 train tiles, 1766px), same rank/precision/312-adapter surface, batch 1:
+
+        default allocator (mehek, RTX 6000 Ada)
+            reserved 7.60 -> 8.89 -> 10.22 -> 11.59 -> 12.99 GiB,
+            last new max at step 320 of 2430.
+            Growth 2->2430: +35% reserved but only +2% allocated.
+
+        expandable_segments (courtship, RTX 4090)
+            reserved 6.70 -> ... -> 7.125 GiB,
+            last new max at step 302, then FLAT for 2128 steps across
+            eight epoch boundaries.
+            Growth: +6.4% reserved, +6.2% allocated -- the two move
+            TOGETHER, which is real transient demand, not fragmentation.
+
+    Delta 12.99 - 7.125 = 5.87 GiB (cross-box; same code/data/config).
+
+    This is set here, rather than left to the caller's shell, because the
+    sidecar is launched through ``conda run`` and must get it regardless of
+    who invoked the launcher.
+
+    It also makes measurement possible at all: under the default allocator a
+    30-step probe under-read the full-run peak by 41%, so no short probe could
+    bound it. Under this flag a 30-60 step probe under-reads by only 2.8%,
+    which is what makes measured auto batch sizing tractable. A probe taken
+    WITHOUT this flag does not transfer to a run WITH it, or vice versa --
+    treat the allocator config as part of any VRAM measurement's identity.
+
+    No downside observed across 2466 logged steps: zero allocator warnings,
+    ~3.09 s/step, normal loss descent, zero skipped steps, exit 0. Not
+    measured: a matched same-box throughput baseline, so a few-percent
+    step-time cost is not excluded.
     """
-    return {"KMP_DUPLICATE_LIB_OK": "TRUE"}
+    return {
+        "KMP_DUPLICATE_LIB_OK": "TRUE",
+        "PYTORCH_CUDA_ALLOC_CONF": "expandable_segments:True",
+    }
