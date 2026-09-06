@@ -11,6 +11,7 @@ runner (Task 8), never here.
 
 from __future__ import annotations
 
+import dataclasses
 import json
 import logging
 import os
@@ -23,6 +24,13 @@ from typing import Iterator, NamedTuple
 import cv2
 import numpy as np
 
+from hydra_suite.core.inference.geometry_drift import (
+    GeometrySource,
+    log_drift_verdicts,
+    log_effective_geometry,
+    sidecar_drift_verdicts,
+)
+from hydra_suite.core.inference.semantic.checkpoints import sidecar_for
 from hydra_suite.utils.slice_geometry import (
     clip_polygon_to_tile,
     plan_tiles,
@@ -286,8 +294,17 @@ def build_sam3_coco_dataset(
     seed: int = 42,
     split: SplitConfig | None = None,
     io_limits: DatasetIOLimits = DEFAULT_DATASET_IO_LIMITS,
+    baseline_model_key: str | None = None,
 ) -> dict:
-    """Build a COCO tile dataset with source-independent Python heap use."""
+    """Build a COCO tile dataset with source-independent Python heap use.
+
+    ``baseline_model_key`` names a published SAM3 artifact this run exists to
+    be compared against. Its stamped geometry is read and compared with this
+    build's effective geometry, and any divergence is WARNED about -- never
+    refused, since a deliberate re-scale is legitimate. This is the exact miss
+    that produced the 2026-09-06 confound, where a build at the 0.055 contract
+    default was compared against a checkpoint served at 0.10.
+    """
     source = Path(source_dir).expanduser().resolve()
     out_root = Path(out_dir).expanduser().resolve()
     split_cfg = split or SplitConfig()
@@ -378,6 +395,59 @@ def build_sam3_coco_dataset(
             slice_width=params.slice_width,
             slice_height=params.slice_height,
         )
+
+        # Provenance + drift guard, before a single tile is written. The
+        # 0.055 incident was undetectable because the effective geometry's
+        # SOURCE was never printed: a contract default and a deliberate
+        # choice looked identical in every artifact this build produced.
+        # ``Sam3LoraParams`` is a slots dataclass, so the CLASS attribute is a
+        # member descriptor, not the default -- read the default off the field.
+        _default_fraction = next(
+            field.default
+            for field in dataclasses.fields(Sam3LoraParams)
+            if field.name == "object_tile_fraction"
+        )
+        _fraction_source = (
+            GeometrySource.CONTRACT_DEFAULT
+            if abs(float(params.object_tile_fraction) - float(_default_fraction))
+            <= 1e-12
+            else GeometrySource.EXPLICIT
+        )
+        log_effective_geometry(
+            logger,
+            "SAM3 dataset build",
+            {
+                "geometry_mode": params.geometry_mode,
+                "object_tile_fraction": float(params.object_tile_fraction),
+                "reference_body_px": reference_body_px,
+                "tile_px": [int(tile_w), int(tile_h)],
+                "imgsz": _SAM3_IMGSZ,
+            },
+            {
+                "geometry_mode": GeometrySource.EXPLICIT,
+                "object_tile_fraction": _fraction_source,
+                # Measured from this project's own labels, above.
+                "reference_body_px": GeometrySource.CORPUS_DERIVED,
+                "tile_px": GeometrySource.CORPUS_DERIVED,
+                "imgsz": GeometrySource.CONTRACT_DEFAULT,
+            },
+        )
+        if baseline_model_key:
+            # Report only. A PREFILL verdict is deliberately NOT adopted here:
+            # silently taking the baseline's value would change what this run
+            # trains, which is the opposite of an observability guard.
+            log_drift_verdicts(
+                logger,
+                sidecar_drift_verdicts(
+                    sidecar_for(baseline_model_key),
+                    {
+                        "reference_body_px": reference_body_px,
+                        "object_tile_fraction": float(params.object_tile_fraction),
+                        "train_tile_px": int(tile_w),
+                    },
+                    baseline_label=baseline_model_key,
+                ),
+            )
 
         # Reproduce ``random.shuffle(sorted(stems))`` exactly, but keep the
         # mutable permutation in SQLite rather than a source-sized list.

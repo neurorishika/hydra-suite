@@ -155,8 +155,23 @@ def apply_sahi_profile_override(cfg: Mapping[str, Any], profile: str) -> dict[st
         read_slice_meta,
     )
 
+    from hydra_suite.core.inference.geometry_drift import (
+        GeometrySource,
+        log_effective_geometry,
+    )
+
     requested = str(profile).strip()
     result = dict(cfg)
+    # Record the SOURCE of the serving geometry at the point the user names
+    # it. The values themselves are resolved (and logged) downstream in
+    # ``engine_params._slice_profile_overlay``; what only this call site knows
+    # is that the choice was explicit rather than a default.
+    log_effective_geometry(
+        logger,
+        "SAHI profile selection (--sahi-profile)",
+        {"slice_profile_id": requested},
+        {"slice_profile_id": GeometrySource.EXPLICIT},
+    )
     if requested == "__training__":
         result["slice_profile_id"] = "__training__"
         result.pop("slice_profile_settings", None)
