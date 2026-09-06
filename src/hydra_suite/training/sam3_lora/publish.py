@@ -442,6 +442,26 @@ def _validate_result(
     return result
 
 
+def _require_registered_run(run_id: str) -> None:
+    """Refuse to publish an artifact whose training run was never recorded.
+
+    The published-model registry and the training-run registry are separate
+    files with separate writers. Publishing without a run row produces an
+    artifact with no provenance -- and the fix is never to invent the run row
+    here, which would fabricate the very record that is missing.
+    """
+
+    from ..registry import find_run_record
+
+    if not find_run_record(run_id):
+        raise Sam3PublishError(
+            f"SAM3 publish refused: run {run_id!r} is not registered in the "
+            "training run registry, so the published artifact would have no "
+            "provenance. Publish through TrainingService.run_role_training.",
+            failure_kind=ExitKind.HOST_ADMISSION_REFUSAL.value,
+        )
+
+
 def publish_sam3_model(
     *,
     run_id: str,
@@ -475,6 +495,7 @@ def publish_sam3_model(
             f"SAM3 publish target already exists for run {run_id!r}; refusing "
             "to overwrite a previously published artifact"
         )
+    _require_registered_run(run_id)
     log_cb = log_cb or (lambda _message: None)
     should_cancel = should_cancel or (lambda: False)
     initial = _assess_publish(

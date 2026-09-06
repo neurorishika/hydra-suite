@@ -5,6 +5,7 @@ from __future__ import annotations
 import hashlib
 import json
 import os
+import socket
 import struct
 import threading
 from contextlib import contextmanager
@@ -17,6 +18,8 @@ try:
     import fcntl
 except ImportError:  # pragma: no cover - Windows does not provide fcntl.
     fcntl = None
+
+import psutil
 
 from .contracts import TrainingRunSpec
 
@@ -293,6 +296,95 @@ def new_run_id(role: str) -> str:
     return f"{stamp}_{role}_{tail}"
 
 
+STALE_RUN_STATUS = "interrupted"
+STALE_RUN_MESSAGE = (
+    "Run owner process exited without finalizing this record; reaped as " "interrupted."
+)
+
+
+def _owner_identity() -> dict[str, Any]:
+    """Record who owns a live run so a later reaper can prove it is gone."""
+
+    try:
+        start_time = float(psutil.Process(os.getpid()).create_time())
+    except (psutil.Error, OSError):  # pragma: no cover - platform degradation
+        start_time = 0.0
+    return {
+        "owner_pid": int(os.getpid()),
+        "owner_hostname": socket.gethostname(),
+        "owner_process_start_time": start_time,
+    }
+
+
+def _owner_is_provably_dead(rec: dict[str, Any]) -> bool:
+    """Return True only when this host can *prove* the recorded owner exited.
+
+    Every uncertainty -- a missing field, a foreign host, an unreadable
+    process table -- resolves to False. A run is never reaped on a guess.
+    """
+
+    hostname = rec.get("owner_hostname")
+    pid = rec.get("owner_pid")
+    start_time = rec.get("owner_process_start_time")
+    if not isinstance(hostname, str) or hostname != socket.gethostname():
+        return False
+    if not isinstance(pid, int) or isinstance(pid, bool) or pid <= 0:
+        return False
+    if isinstance(start_time, bool) or not isinstance(start_time, (int, float)):
+        return False
+    try:
+        process = psutil.Process(pid)
+        # PID reuse: a recycled PID has a different creation time, so the
+        # original owner is still provably gone.
+        return abs(float(process.create_time()) - float(start_time)) >= 0.01
+    except psutil.NoSuchProcess:
+        return True
+    except (psutil.Error, OSError):
+        return False
+
+
+def _reap_stale_running_unlocked(reg: dict[str, Any]) -> list[str]:
+    reaped: list[str] = []
+    for rec in reg.get("runs", []):
+        if not isinstance(rec, dict) or rec.get("status") != "running":
+            # "recovery-required" is Defect-B owned state: a live sidecar and
+            # lease may still be held, so reaping it would fake a resolution.
+            continue
+        if not _owner_is_provably_dead(rec):
+            continue
+        rec["status"] = STALE_RUN_STATUS
+        rec["finished_at"] = datetime.now().isoformat(timespec="seconds")
+        rec["error_message"] = STALE_RUN_MESSAGE
+        rec["failure_kind"] = "owner-process-vanished"
+        run_id = rec.get("run_id")
+        if isinstance(run_id, str):
+            reaped.append(run_id)
+    return reaped
+
+
+def reap_stale_running_runs() -> list[str]:
+    """Mark every provably-orphaned ``running`` row terminal; return its ids."""
+
+    with _registry_lock():
+        reg = _load_registry_unlocked()
+        reaped = _reap_stale_running_unlocked(reg)
+        if reaped:
+            _save_registry_unlocked(reg)
+        return reaped
+
+
+def find_run_record(run_id: str) -> dict[str, Any] | None:
+    """Return the registry row for *run_id*, or None when it was never created."""
+
+    if not run_id:
+        return None
+    with _registry_lock():
+        for rec in _load_registry_unlocked().get("runs", []):
+            if isinstance(rec, dict) and rec.get("run_id") == run_id:
+                return rec
+    return None
+
+
 def create_run_record(
     spec: TrainingRunSpec,
     run_id: str,
@@ -303,11 +395,15 @@ def create_run_record(
     """Create and persist initial run record."""
 
     now = datetime.now().isoformat(timespec="seconds")
+    owner = _owner_identity()
     rec = {
         "run_id": run_id,
         "started_at": now,
         "finished_at": "",
         "status": "running",
+        "owner_pid": owner["owner_pid"],
+        "owner_hostname": owner["owner_hostname"],
+        "owner_process_start_time": owner["owner_process_start_time"],
         "role": spec.role.value,
         "dataset_fingerprint": dataset_fp,
         "command": [],
@@ -321,6 +417,10 @@ def create_run_record(
     }
     with _registry_lock():
         reg = _load_registry_unlocked()
+        # Reap first, in the same transaction: a run whose owner process is
+        # provably gone must not stay "running" forever just because nobody
+        # ever opens a reaper by hand.
+        _reap_stale_running_unlocked(reg)
         reg.setdefault("runs", []).append(rec)
         _save_registry_unlocked(reg)
     return rec
