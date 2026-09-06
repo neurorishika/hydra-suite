@@ -1071,8 +1071,15 @@ def prepare_role_dataset(
     sam3_params: "Sam3LoraParams | None" = None,
     seed: int = 42,
     split: SplitConfig | None = None,
+    comparison_baseline: str = "",
 ) -> DatasetBuildResult:
-    """Prepare role-specific dataset from the merged source."""
+    """Prepare role-specific dataset from the merged source.
+
+    ``comparison_baseline`` names a published artifact this dataset exists to
+    be compared against; its stamped geometry is compared with this build's
+    and any divergence is warned about. Empty means "no baseline named", which
+    is the only honest default -- guessing one would warn on correct runs.
+    """
     required = role_min_level(role)
     if required > merged_level:
         raise RuntimeError(
@@ -1140,6 +1147,7 @@ def prepare_role_dataset(
             class_name=class_name,
             seed=seed,
             split=split,
+            baseline_model_key=comparison_baseline or None,
         )
         manifest_path = out_root / "build_manifest.json"
         return DatasetBuildResult(

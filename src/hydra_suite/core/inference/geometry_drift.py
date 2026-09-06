@@ -109,8 +109,8 @@ class GeometryDriftVerdict:
 
     field: str
     status: DriftStatus
-    stamped_value: float | None
-    effective_value: float | None
+    stamped_value: GeometryValue | None
+    effective_value: GeometryValue | None
     tolerance: float = FLOAT_NOISE_TOLERANCE
     baseline_label: str | None = None
 
@@ -123,14 +123,64 @@ class GeometryDriftVerdict:
         return self.status is DriftStatus.PREFILL
 
 
-def _as_float(value: Any) -> float | None:
-    """Coerce like the dialog did: unparseable means "makes no claim"."""
+#: A geometry value is either a scalar or a ``(w, h)`` pair. Tile sizes are
+#: stamped as pairs (``publish_worker.py`` copies the build manifest's
+#: ``tile_px = [w, h]``), so a scalar-only reader would silently report
+#: NO_STAMPED for every real sidecar -- the reader must parse what the writer
+#: writes.
+GeometryValue = float | tuple[float, float]
+
+
+def _as_geometry_value(value: Any) -> GeometryValue | None:
+    """Coerce a stamped or effective geometry value; None means "no claim".
+
+    Scalars coerce like the dialog did (unparseable -> no claim). A 1- or
+    2-element sequence is a tile size: it becomes a ``(w, h)`` pair, which is
+    compared ELEMENT-WISE. A non-square stamp is therefore never silently
+    collapsed to its width -- if a caller serves a square tile where the
+    artifact was trained on a non-square one, that is a real divergence and
+    must read as one.
+    """
     if isinstance(value, bool) or value is None:
+        return None
+    if isinstance(value, (list, tuple)):
+        try:
+            parts = [float(part) for part in value]
+        except (TypeError, ValueError):
+            return None
+        if len(parts) == 1:
+            return (parts[0], parts[0])
+        if len(parts) == 2:
+            return (parts[0], parts[1])
         return None
     try:
         return float(value)
     except (TypeError, ValueError):
         return None
+
+
+def _as_pair(value: GeometryValue) -> tuple[float, float]:
+    """Promote a scalar to a square pair so both sides compare element-wise."""
+    return value if isinstance(value, tuple) else (value, value)
+
+
+def _is_claimed(value: GeometryValue | None) -> bool:
+    """Verbatim dialog semantics (``if sidecar_body_px:``): 0 makes no claim."""
+    if value is None:
+        return False
+    return any(bool(part) for part in _as_pair(value))
+
+
+def _needs_prefill(value: GeometryValue) -> bool:
+    return any(part <= 0 for part in _as_pair(value))
+
+
+def _format_value(value: GeometryValue | None) -> str:
+    if value is None:
+        return "?"
+    if isinstance(value, tuple):
+        return f"{value[0]:g}x{value[1]:g}"
+    return f"{value:g}"
 
 
 def compare_geometry_value(
@@ -148,9 +198,9 @@ def compare_geometry_value(
     effective value of <= 0 is a PREFILL opportunity; otherwise the two are
     compared with ``tolerance``.
     """
-    stamped_value = _as_float(stamped)
-    effective_value = _as_float(effective)
-    if not stamped_value:
+    stamped_value = _as_geometry_value(stamped)
+    effective_value = _as_geometry_value(effective)
+    if not _is_claimed(stamped_value):
         return GeometryDriftVerdict(
             field,
             DriftStatus.NO_STAMPED,
@@ -170,7 +220,7 @@ def compare_geometry_value(
             tolerance,
             baseline_label,
         )
-    if effective_value <= 0:
+    if _needs_prefill(effective_value):
         return GeometryDriftVerdict(
             field,
             DriftStatus.PREFILL,
@@ -181,7 +231,10 @@ def compare_geometry_value(
         )
     status = (
         DriftStatus.MATCH
-        if abs(effective_value - stamped_value) <= tolerance
+        if all(
+            abs(eff - stamp) <= tolerance
+            for eff, stamp in zip(_as_pair(effective_value), _as_pair(stamped_value))
+        )
         else DriftStatus.MISMATCH
     )
     return GeometryDriftVerdict(
@@ -228,8 +281,9 @@ def format_drift_warning(verdict: GeometryDriftVerdict) -> str:
     where = f" ({verdict.baseline_label})" if verdict.baseline_label else ""
     return (
         f"Geometry drift: {verdict.field} is stamped as "
-        f"{verdict.stamped_value:g} on the reference artifact{where}, but "
-        f"this run uses {verdict.effective_value:g}. Train/serve tile scale "
+        f"{_format_value(verdict.stamped_value)} on the reference artifact"
+        f"{where}, but this run uses "
+        f"{_format_value(verdict.effective_value)}. Train/serve tile scale "
         "can diverge silently when these disagree -- verify this is "
         "intentional (e.g. a deliberate re-scale) before trusting a "
         "comparison between them."
@@ -280,7 +334,7 @@ def log_drift_verdicts(
             # so would change what the run trains. Report only.
             logger.info(
                 "Geometry: %s is unset for this run; the reference artifact "
-                "was built at %g (not adopted).",
+                "was built at %s (not adopted).",
                 verdict.field,
-                verdict.stamped_value,
+                _format_value(verdict.stamped_value),
             )

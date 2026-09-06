@@ -395,7 +395,14 @@ class SemanticEscalationDialog(BaseDialog):
             meta.get("reference_body_px"),
             float(self._reference_body.value()),
         )
-        if verdict.should_prefill:
+        # ``reference_body_px`` is a scalar from every publisher we own. The
+        # shared guard also understands [w, h] tile pairs, which a spin box
+        # cannot represent -- ignoring a non-scalar stamp here reproduces the
+        # pre-extraction behaviour, where ``float(a_list)`` raised and the
+        # whole block was skipped.
+        if not isinstance(verdict.stamped_value, float):
+            pass
+        elif verdict.should_prefill:
             self._reference_body.setValue(verdict.stamped_value)
         elif verdict.is_mismatch:
             QMessageBox.warning(

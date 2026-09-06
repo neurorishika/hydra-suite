@@ -97,14 +97,15 @@ class TestSidecarVerdicts:
         meta = {
             "reference_body_px": 80.0,
             "object_tile_fraction": 0.10,
-            "train_tile_px": 800,
+            # The REAL shape publish_worker.py writes: a [w, h] list.
+            "train_tile_px": [800, 800],
         }
         verdicts = sidecar_drift_verdicts(
             meta,
             {
                 "reference_body_px": 80.0,
                 "object_tile_fraction": 0.055,
-                "train_tile_px": 1454,
+                "train_tile_px": [1454, 1454],
             },
             baseline_label="baseline.pt",
         )
@@ -444,3 +445,156 @@ class TestSam3BuilderWiring:
         drift = [r for r in caplog.records if "Geometry drift" in r.getMessage()]
         assert any("object_tile_fraction" in r.getMessage() for r in drift)
         assert all(r.levelno == logging.WARNING for r in drift)
+
+
+class TestTilePxIsAPair:
+    """``publish_worker.py`` stamps ``tile_px`` as a two-element ``[w, h]``.
+
+    A scalar-only reader reported NO_STAMPED for every real sidecar, so the
+    guard was inert -- a test asserting the shape the code assumed rather than
+    the shape the artifact has. Same failure class as the incident, one level
+    down.
+    """
+
+    def test_a_stamped_pair_is_parsed_not_discarded(self):
+        verdict = compare_geometry_value("train_tile_px", [971, 971], [1766, 1766])
+        assert verdict.status is DriftStatus.MISMATCH
+        assert verdict.stamped_value == (971.0, 971.0)
+
+    def test_a_matching_pair_matches(self):
+        assert (
+            compare_geometry_value("train_tile_px", [971, 971], [971, 971]).status
+            is DriftStatus.MATCH
+        )
+
+    def test_a_scalar_is_compared_against_a_pair_as_a_square(self):
+        assert (
+            compare_geometry_value("train_tile_px", [971, 971], 971).status
+            is DriftStatus.MATCH
+        )
+
+    def test_non_square_is_never_collapsed_to_its_width(self):
+        verdict = compare_geometry_value("train_tile_px", [971, 512], 971)
+        assert verdict.status is DriftStatus.MISMATCH
+
+    def test_a_zero_pair_still_makes_no_claim(self):
+        assert (
+            compare_geometry_value("train_tile_px", [0, 0], [971, 971]).status
+            is DriftStatus.NO_STAMPED
+        )
+
+    def test_warning_text_renders_a_pair(self):
+        message = format_drift_warning(
+            compare_geometry_value("train_tile_px", [971, 971], [1766, 1766])
+        )
+        assert "971x971" in message and "1766x1766" in message
+
+    def test_the_sam3_builder_compares_the_shape_the_publisher_writes(
+        self, tmp_path, monkeypatch, caplog
+    ):
+        """End-to-end: a real build vs a sidecar stamped the way publish does."""
+        import hydra_suite.training.sam3_lora.dataset_build as build_mod
+        from tests.test_sam3_dataset_build import _params, _source
+
+        monkeypatch.setattr(
+            build_mod,
+            "sidecar_for",
+            # 512x512 is exactly what _params() builds, so only the deliberate
+            # baseline difference below may be reported.
+            lambda key: {"train_tile_px": [256, 256]},
+        )
+        with caplog.at_level(logging.WARNING):
+            build_mod.build_sam3_coco_dataset(
+                _source(tmp_path / "src", n_frames=2, size=512),
+                tmp_path / "out",
+                _params(),
+                baseline_model_key="baseline-key",
+            )
+        drift = [
+            r.getMessage() for r in caplog.records if "Geometry drift" in r.getMessage()
+        ]
+        assert any("train_tile_px" in message for message in drift)
+        assert any("256x256" in message and "512x512" in message for message in drift)
+
+
+class TestBaselineIsReachable:
+    """The guard is worthless if no caller can name a baseline.
+
+    A plan declares ``comparison_baseline``; it must survive the whole chain
+    down to both dataset builders.
+    """
+
+    def test_a_plan_carries_the_baseline_into_the_preparation_request(self, tmp_path):
+        from hydra_suite.detectkit.config.training import DetectTrainingPlan
+
+        source = tmp_path / "src"
+        (source / "images").mkdir(parents=True)
+        plan = DetectTrainingPlan.from_dict(
+            {
+                "version": 1,
+                "workspace": str(tmp_path / "ws"),
+                "sources": [{"path": str(source), "level": "obb"}],
+                "class_names": ["ant"],
+                "roles": [{"role": "obb_direct", "model": "yolo11n.pt"}],
+                "comparison_baseline": "prior-run.pt",
+            },
+            base_dir=tmp_path,
+        )
+        assert plan.comparison_baseline == "prior-run.pt"
+        assert plan.preparation_request().comparison_baseline == "prior-run.pt"
+        # It must also survive a round-trip, or a saved plan loses the guard.
+        assert plan.to_dict()["comparison_baseline"] == "prior-run.pt"
+
+    def test_it_defaults_to_no_baseline_never_a_guess(self, tmp_path):
+        from hydra_suite.detectkit.config.training import DetectTrainingPlan
+
+        source = tmp_path / "src"
+        (source / "images").mkdir(parents=True)
+        plan = DetectTrainingPlan.from_dict(
+            {
+                "version": 1,
+                "workspace": str(tmp_path / "ws"),
+                "sources": [{"path": str(source), "level": "obb"}],
+                "class_names": ["ant"],
+                "roles": [{"role": "obb_direct", "model": "yolo11n.pt"}],
+            },
+            base_dir=tmp_path,
+        )
+        assert plan.comparison_baseline == ""
+
+    def test_both_orchestrator_entry_points_accept_it(self):
+        import inspect
+
+        from hydra_suite.training.service import TrainingOrchestrator
+
+        for name in ("build_role_dataset", "build_sliced_obb_dataset"):
+            params = inspect.signature(getattr(TrainingOrchestrator, name)).parameters
+            assert "comparison_baseline" in params, name
+            assert params["comparison_baseline"].default == ""
+
+    def test_the_sam3_role_path_reaches_the_builder(self, monkeypatch, tmp_path):
+        """prepare_role_dataset -> build_sam3_coco_dataset, baseline intact."""
+        import hydra_suite.training.sam3_lora.dataset_build as build_mod
+        from hydra_suite.training.contracts import Sam3LoraParams, TrainingRole
+        from hydra_suite.training.dataset_builders import prepare_role_dataset
+        from hydra_suite.training.geometry_levels import GeometryLevel
+
+        seen = {}
+
+        def _fake(*args, **kwargs):
+            seen.update(kwargs)
+            return {}
+
+        monkeypatch.setattr(build_mod, "build_sam3_coco_dataset", _fake)
+        out = tmp_path / "out"
+        out.mkdir()
+        (out / "build_manifest.json").write_text("{}")
+        prepare_role_dataset(
+            TrainingRole.SEMANTIC_SAM3,
+            str(tmp_path / "src"),
+            out,
+            sam3_params=Sam3LoraParams(prompt="ant"),
+            merged_level=GeometryLevel.POLYGON,
+            comparison_baseline="prior-run",
+        )
+        assert seen["baseline_model_key"] == "prior-run"

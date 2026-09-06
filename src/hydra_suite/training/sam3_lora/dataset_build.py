@@ -443,7 +443,9 @@ def build_sam3_coco_dataset(
                     {
                         "reference_body_px": reference_body_px,
                         "object_tile_fraction": float(params.object_tile_fraction),
-                        "train_tile_px": int(tile_w),
+                        # ``publish_worker`` stamps the manifest's ``tile_px``,
+                        # which is a [w, h] pair -- compare the same shape.
+                        "train_tile_px": [int(tile_w), int(tile_h)],
                     },
                     baseline_label=baseline_model_key,
                 ),
