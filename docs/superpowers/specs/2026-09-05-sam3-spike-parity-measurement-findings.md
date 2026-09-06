@@ -33,6 +33,15 @@ CI excludes zero.* `a` = ours, `b` = spike.
 | **source frame (primary)** | 16 | **+0.4375** | **[−0.4375, +1.4375]** | 0.34 | **null — CI includes zero** |
 | tile (secondary) | 576 | +0.0122 | [−0.0035, +0.0295] | 0.21 | null |
 
+**Power caveat — read this before citing the null.** The primary CI's upper
+bound (+1.4375) OVERLAPS the original +1.2–2.0 claim. A null here means the
+comparison FAILS TO DEMONSTRATE the effect at n=16 frames; it does NOT exclude
+the lower half of the claimed band. Absence of evidence, not evidence of
+absence. The programme's premise is called refuted on four INDEPENDENT legs —
+this null, the AP inversion (ours 0.530 > spike 0.472), the scoring-harness
+defect (§ below), and the ~19× training-data confound — and would not be on
+the null alone.
+
 **AP (no threshold matching): ours 0.530, spike 0.472 — ours is better.**
 
 `extras_per_frame_at_target_recall` is **null for both**: 0.9 recall is not
