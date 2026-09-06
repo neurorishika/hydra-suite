@@ -1,0 +1,513 @@
+{
+  "enabled": true,
+  "total_frames": 489,
+  "wall_clock_s": 66.017,
+  "measured_s": 4.5662,
+  "avg_fps": 7.41,
+  "avg_frame_ms": 9.338,
+  "phases": {
+    "initialization": {
+      "total_s": 0.0502,
+      "avg_ms_per_frame": 0.103,
+      "percent_of_wall": 0.08
+    },
+    "batched_detection": {
+      "total_s": 60.6243,
+      "avg_ms_per_frame": 123.976,
+      "percent_of_wall": 91.83
+    },
+    "tracking_loop": {
+      "total_s": 4.5719,
+      "avg_ms_per_frame": 9.349,
+      "percent_of_wall": 6.93
+    },
+    "cleanup": {
+      "total_s": 0.086,
+      "avg_ms_per_frame": 0.176,
+      "percent_of_wall": 0.13
+    }
+  },
+  "categories": {
+    "frame_read": {
+      "total_s": 0.0535,
+      "percent": 1.17,
+      "mean_ms": 0.109,
+      "std_ms": 0.063,
+      "min_ms": 0.065,
+      "max_ms": 0.895,
+      "p50_ms": 0.096,
+      "p95_ms": 0.26,
+      "p99_ms": 0.301
+    },
+    "preprocessing": {
+      "total_s": 0.0001,
+      "percent": 0.0,
+      "mean_ms": 0.0,
+      "std_ms": 0.0,
+      "min_ms": 0.0,
+      "max_ms": 0.0,
+      "p50_ms": 0.0,
+      "p95_ms": 0.0,
+      "p99_ms": 0.0
+    },
+    "roi_prepare": {
+      "total_s": 0.0001,
+      "percent": 0.0,
+      "mean_ms": 0.0,
+      "std_ms": 0.0,
+      "min_ms": 0.0,
+      "max_ms": 0.001,
+      "p50_ms": 0.0,
+      "p95_ms": 0.0,
+      "p99_ms": 0.0
+    },
+    "detection": {
+      "total_s": 0.2644,
+      "percent": 5.79,
+      "mean_ms": 0.541,
+      "std_ms": 0.446,
+      "min_ms": 0.288,
+      "max_ms": 4.174,
+      "p50_ms": 0.482,
+      "p95_ms": 0.613,
+      "p99_ms": 3.824
+    },
+    "features": {
+      "total_s": 0.0607,
+      "percent": 1.33,
+      "mean_ms": 0.124,
+      "std_ms": 0.012,
+      "min_ms": 0.093,
+      "max_ms": 0.177,
+      "p50_ms": 0.128,
+      "p95_ms": 0.139,
+      "p99_ms": 0.143
+    },
+    "kf_predict": {
+      "total_s": 1.7428,
+      "percent": 38.17,
+      "mean_ms": 3.564,
+      "std_ms": 75.727,
+      "min_ms": 0.127,
+      "max_ms": 1676.43,
+      "p50_ms": 0.136,
+      "p95_ms": 0.142,
+      "p99_ms": 0.166
+    },
+    "cost_matrix": {
+      "total_s": 0.3352,
+      "percent": 7.34,
+      "mean_ms": 0.685,
+      "std_ms": 8.455,
+      "min_ms": 0.282,
+      "max_ms": 187.461,
+      "p50_ms": 0.302,
+      "p95_ms": 0.317,
+      "p99_ms": 0.324
+    },
+    "hungarian": {
+      "total_s": 0.0652,
+      "percent": 1.43,
+      "mean_ms": 0.133,
+      "std_ms": 0.04,
+      "min_ms": 0.081,
+      "max_ms": 0.563,
+      "p50_ms": 0.124,
+      "p95_ms": 0.195,
+      "p99_ms": 0.202
+    },
+    "state_update": {
+      "total_s": 0.7076,
+      "percent": 15.5,
+      "mean_ms": 1.447,
+      "std_ms": 0.15,
+      "min_ms": 0.082,
+      "max_ms": 1.838,
+      "p50_ms": 1.448,
+      "p95_ms": 1.668,
+      "p99_ms": 1.739
+    },
+    "kf_update": {
+      "total_s": 1.27,
+      "percent": 27.81,
+      "mean_ms": 2.597,
+      "std_ms": 45.289,
+      "min_ms": 0.117,
+      "max_ms": 1003.063,
+      "p50_ms": 0.545,
+      "p95_ms": 0.631,
+      "p99_ms": 0.759
+    },
+    "individual_dataset": {
+      "total_s": 0.0001,
+      "percent": 0.0,
+      "mean_ms": 0.0,
+      "std_ms": 0.0,
+      "min_ms": 0.0,
+      "max_ms": 0.001,
+      "p50_ms": 0.0,
+      "p95_ms": 0.0,
+      "p99_ms": 0.001
+    },
+    "streaming_payload_build": {
+      "total_s": 0.0665,
+      "percent": 1.46,
+      "mean_ms": 0.136,
+      "std_ms": 0.005,
+      "min_ms": 0.087,
+      "max_ms": 0.16,
+      "p50_ms": 0.136,
+      "p95_ms": 0.144,
+      "p99_ms": 0.146
+    }
+  },
+  "gpu_mode": "off",
+  "spans": {
+    "name": "root",
+    "total_s": 65.37403,
+    "self_s": 0.0,
+    "n_calls": 1,
+    "units": 0.0,
+    "max_s": 65.37403,
+    "first_call_s": 65.37403,
+    "thread": "tracking-engine-forward",
+    "children": [
+      {
+        "name": "inference",
+        "total_s": 60.624004,
+        "self_s": 8e-06,
+        "n_calls": 1,
+        "units": 0.0,
+        "max_s": 60.624004,
+        "first_call_s": 60.624004,
+        "thread": "tracking-engine-forward",
+        "children": [
+          {
+            "name": "batch_pass",
+            "total_s": 60.623997,
+            "self_s": 1.36233,
+            "n_calls": 1,
+            "units": 0.0,
+            "max_s": 60.623997,
+            "first_call_s": 60.623997,
+            "thread": "tracking-engine-forward",
+            "children": [
+              {
+                "name": "open_caches",
+                "total_s": 0.000215,
+                "self_s": 0.000215,
+                "n_calls": 1,
+                "units": 0.0,
+                "max_s": 0.000215,
+                "first_call_s": 0.000215,
+                "thread": "tracking-engine-forward",
+                "children": []
+              },
+              {
+                "name": "window",
+                "total_s": 59.261452,
+                "self_s": 0.1063,
+                "n_calls": 245,
+                "units": 489.0,
+                "max_s": 5.613145,
+                "first_call_s": 5.603686,
+                "thread": "tracking-engine-forward",
+                "children": [
+                  {
+                    "name": "materialize",
+                    "total_s": 0.612251,
+                    "self_s": 0.582158,
+                    "n_calls": 245,
+                    "units": 489.0,
+                    "max_s": 0.004812,
+                    "first_call_s": 0.004812,
+                    "thread": "tracking-engine-forward",
+                    "children": [
+                      {
+                        "name": "enqueue",
+                        "total_s": 0.030093,
+                        "self_s": 0.030093,
+                        "n_calls": 489,
+                        "units": 0.0,
+                        "max_s": 0.00021,
+                        "first_call_s": 8.3e-05,
+                        "thread": "tracking-engine-forward",
+                        "children": []
+                      }
+                    ]
+                  },
+                  {
+                    "name": "headtail",
+                    "total_s": 29.536514,
+                    "self_s": 1.632567,
+                    "n_calls": 489,
+                    "units": 10673.0,
+                    "max_s": 1.429671,
+                    "first_call_s": 1.42673,
+                    "thread": "tracking-engine-forward",
+                    "children": [
+                      {
+                        "name": "crop_extract",
+                        "total_s": 2.476712,
+                        "self_s": 0.4167,
+                        "n_calls": 489,
+                        "units": 0.0,
+                        "max_s": 0.010867,
+                        "first_call_s": 0.00653,
+                        "thread": "tracking-engine-forward",
+                        "children": [
+                          {
+                            "name": "affine_loop",
+                            "total_s": 0.155698,
+                            "self_s": 0.155698,
+                            "n_calls": 489,
+                            "units": 0.0,
+                            "max_s": 0.000772,
+                            "first_call_s": 0.000214,
+                            "thread": "tracking-engine-forward",
+                            "children": []
+                          },
+                          {
+                            "name": "warp_batch",
+                            "total_s": 1.904314,
+                            "self_s": 0.873331,
+                            "n_calls": 489,
+                            "units": 10673.0,
+                            "max_s": 0.009485,
+                            "first_call_s": 0.004732,
+                            "thread": "tracking-engine-forward",
+                            "children": [
+                              {
+                                "name": "frame_to_chw",
+                                "total_s": 1.030983,
+                                "self_s": 1.030983,
+                                "n_calls": 489,
+                                "units": 10673.0,
+                                "max_s": 0.007275,
+                                "first_call_s": 0.001553,
+                                "thread": "tracking-engine-forward",
+                                "children": []
+                              }
+                            ]
+                          }
+                        ]
+                      },
+                      {
+                        "name": "backend_forward",
+                        "total_s": 25.427234,
+                        "self_s": 25.427234,
+                        "n_calls": 489,
+                        "units": 10673.0,
+                        "max_s": 1.420736,
+                        "first_call_s": 1.410937,
+                        "thread": "tracking-engine-forward",
+                        "children": []
+                      }
+                    ]
+                  },
+                  {
+                    "name": "cnn",
+                    "total_s": 28.923664,
+                    "self_s": 1.555688,
+                    "n_calls": 489,
+                    "units": 10673.0,
+                    "max_s": 1.444677,
+                    "first_call_s": 1.397876,
+                    "thread": "tracking-engine-forward",
+                    "children": [
+                      {
+                        "name": "crop_extract",
+                        "total_s": 2.697835,
+                        "self_s": 0.374493,
+                        "n_calls": 489,
+                        "units": 0.0,
+                        "max_s": 0.011264,
+                        "first_call_s": 0.008265,
+                        "thread": "tracking-engine-forward",
+                        "children": [
+                          {
+                            "name": "affine_loop",
+                            "total_s": 0.173389,
+                            "self_s": 0.173389,
+                            "n_calls": 489,
+                            "units": 0.0,
+                            "max_s": 0.001035,
+                            "first_call_s": 0.000278,
+                            "thread": "tracking-engine-forward",
+                            "children": []
+                          },
+                          {
+                            "name": "warp_batch",
+                            "total_s": 2.149954,
+                            "self_s": 0.738397,
+                            "n_calls": 489,
+                            "units": 10673.0,
+                            "max_s": 0.009748,
+                            "first_call_s": 0.007362,
+                            "thread": "tracking-engine-forward",
+                            "children": [
+                              {
+                                "name": "frame_to_chw",
+                                "total_s": 1.411557,
+                                "self_s": 1.411557,
+                                "n_calls": 489,
+                                "units": 10673.0,
+                                "max_s": 0.006985,
+                                "first_call_s": 0.006031,
+                                "thread": "tracking-engine-forward",
+                                "children": []
+                              }
+                            ]
+                          }
+                        ]
+                      },
+                      {
+                        "name": "backend_forward",
+                        "total_s": 24.670141,
+                        "self_s": 24.670141,
+                        "n_calls": 489,
+                        "units": 10673.0,
+                        "max_s": 1.430622,
+                        "first_call_s": 1.385773,
+                        "thread": "tracking-engine-forward",
+                        "children": []
+                      }
+                    ]
+                  },
+                  {
+                    "name": "cache_write",
+                    "total_s": 0.076107,
+                    "self_s": 0.002561,
+                    "n_calls": 489,
+                    "units": 0.0,
+                    "max_s": 0.000415,
+                    "first_call_s": 0.000144,
+                    "thread": "tracking-engine-forward",
+                    "children": [
+                      {
+                        "name": "enqueue",
+                        "total_s": 0.073546,
+                        "self_s": 0.073546,
+                        "n_calls": 489,
+                        "units": 0.0,
+                        "max_s": 0.00041,
+                        "first_call_s": 0.000138,
+                        "thread": "tracking-engine-forward",
+                        "children": []
+                      }
+                    ]
+                  },
+                  {
+                    "name": "assemble_scatter",
+                    "total_s": 0.006616,
+                    "self_s": 0.006616,
+                    "n_calls": 489,
+                    "units": 0.0,
+                    "max_s": 4.1e-05,
+                    "first_call_s": 1.8e-05,
+                    "thread": "tracking-engine-forward",
+                    "children": []
+                  }
+                ]
+              }
+            ]
+          }
+        ]
+      },
+      {
+        "name": "decode",
+        "total_s": 6.896651,
+        "self_s": 6.896651,
+        "n_calls": 245,
+        "units": 489.0,
+        "max_s": 0.253829,
+        "first_call_s": 0.253829,
+        "thread": "pipeline-decode-producer",
+        "children": []
+      },
+      {
+        "name": "detect",
+        "total_s": 11.310597,
+        "self_s": 0.001038,
+        "n_calls": 245,
+        "units": 489.0,
+        "max_s": 0.29564,
+        "first_call_s": 0.29564,
+        "thread": "pipeline-obb-producer",
+        "children": [
+          {
+            "name": "run_obb",
+            "total_s": 11.309559,
+            "self_s": 0.028495,
+            "n_calls": 245,
+            "units": 489.0,
+            "max_s": 0.29563,
+            "first_call_s": 0.29563,
+            "thread": "pipeline-obb-producer",
+            "children": [
+              {
+                "name": "model_execute",
+                "total_s": 11.262377,
+                "self_s": 11.176537,
+                "n_calls": 245,
+                "units": 0.0,
+                "max_s": 0.28647,
+                "first_call_s": 0.28647,
+                "thread": "pipeline-obb-producer",
+                "children": [
+                  {
+                    "name": "extract_raw",
+                    "total_s": 0.08584,
+                    "self_s": 0.08584,
+                    "n_calls": 489,
+                    "units": 0.0,
+                    "max_s": 0.004194,
+                    "first_call_s": 0.004194,
+                    "thread": "pipeline-obb-producer",
+                    "children": []
+                  }
+                ]
+              },
+              {
+                "name": "extract_raw",
+                "total_s": 0.018686,
+                "self_s": 0.018686,
+                "n_calls": 245,
+                "units": 0.0,
+                "max_s": 0.000506,
+                "first_call_s": 0.000506,
+                "thread": "pipeline-obb-producer",
+                "children": []
+              }
+            ]
+          }
+        ]
+      },
+      {
+        "name": "flush",
+        "total_s": 0.746635,
+        "self_s": 0.746635,
+        "n_calls": 978,
+        "units": 0.0,
+        "max_s": 0.05549,
+        "first_call_s": 0.000261,
+        "thread": "Thread-2 (_wrapped)",
+        "children": []
+      }
+    ]
+  },
+  "config": {
+    "detection_method": "yolo_obb",
+    "n_targets": 25,
+    "resize_factor": 1.0,
+    "compute_runtime": "gpu",
+    "start_frame": 0,
+    "end_frame": 488,
+    "backward_mode": false,
+    "preview_mode": false,
+    "batched_detection": false,
+    "density_map_enabled": false,
+    "precompute_enabled": true,
+    "pass_name": "forward"
+  }
+}

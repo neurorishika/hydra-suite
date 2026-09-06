@@ -1,10 +1,74 @@
 # Cross-frame crop batching (Option B) — measurement spike
 
-**Status:** stage-level measurement complete on both platforms. **Verdict is
-NOT settled** — see "Correction" below. The stage-level numbers were taken on
-an otherwise-idle GPU, and an end-to-end profile shows the pipeline is
-contention-bound, so the measured ratios do not transfer. No pipeline code
-changed.
+**Status:** COMPLETE — stage-level microbenchmark, end-to-end profile, and an
+in-pipeline A/B on both platforms. **Verdict: do not implement Option B.** The
+in-pipeline A/B is the decisive evidence and is at the top of this note; the
+earlier sections are kept because the route to the answer matters. No
+production code changed (the A/B patch is env-gated on a throwaway branch).
+
+# THE ANSWER: in-pipeline A/B
+
+Same binary, same clip, same `detection_batch_size`, one env flag
+(`HYDRA_AB_CROSSFRAME=1`) switching the downstream call between per-frame and
+whole-window. 489 frames, `ant_cnn_identity`, `HYDRA_PROFILE=1`.
+
+**B/A ratios (>1 means Option B is SLOWER):**
+
+| | span | CUDA d2/b2 | CUDA d1/b8 | MPS d2/b2 | MPS d1/b8 |
+|---|---|---|---|---|---|
+| | `headtail` | 1.005 | **1.000** | **1.580** | 1.177 |
+| | `cnn` | 0.991 | 0.995 | 0.890 | 1.133 |
+| | `pose` | — | — | 1.092 | 0.813 |
+| | `backend_forward` | 1.000 | 0.995 | 1.165 | 1.060 |
+| | **wall clock** | 0.958 | 0.998 | **1.074** | **1.027** |
+
+**On CUDA, Option B does exactly nothing** — every stage within ±0.5%. The
+`d1/b8` column is the microbenchmark's own g8 condition (8 frames × ~17
+detections = 136 crops in one call vs 8 calls of 17), where the isolated spike
+predicted **1.23×**. In the pipeline it is **1.000**.
+
+**On MPS it is neutral-to-worse**, up to 1.58× slower on head-tail.
+
+The idle-GPU microbenchmark simply does not transfer. What it measured —
+per-call launch overhead — is not what the pipeline is spending time on.
+
+**Numerics, with a real floor:** an A-vs-A rerun is **byte-identical**, so
+everything below is attributable to B alone. B changes **9,413 of 12,225 rows
+(77%)** on MPS — but exclusively in three columns:
+
+| column | rows differing | max abs delta |
+|---|---|---|
+| `IdentityRealtimeEntropy` | 9,253 | 4.0e-06 |
+| `IdentityRealtimeMargin` | 8,997 | 5.2e-06 |
+| `IdentityRealtimeConfidence` | 8,714 | 2.6e-06 |
+
+Positions, angles, track IDs and identity assignments are unchanged. CUDA
+(pose off) is fully byte-identical. So the drift is smaller than the isolated
+microbenchmark suggested (5e-6, not 2.2e-3) — but it is real, it is 100%
+attributable, and it breaks the byte-identity gate for zero measured speed.
+
+## Two findings worth more than Option B
+
+**1. `pipeline_depth` dominates anything batching can do.** Arm A alone, MPS:
+head-tail costs **89.8 s at depth 2 but 31.6 s at depth 1** — the OBB producer
+thread running concurrently on the same device costs ~58 s of consumer time
+(2.8×). Net wall favours *depth 1* on MPS (296.8 s vs 309.8 s) and depth 2 on
+CUDA (66.0 s vs 72.6 s). **`pipeline_depth=2` appears to be a net loss on
+Apple Silicon and a ~9% win on CUDA** — worth a proper per-platform default,
+and a far bigger lever than cross-frame batching.
+
+**2. `detection_batch_size` > 2 is unusable on 4K clips.** At depth 2 the
+frame-buffer admissibility check (`pipeline.py`, `retained_windows =
+queue_bound + 3`) rejects batch 8 on this clip at runtime:
+
+```
+one frame=61074432 bytes, batch=8, live_windows=4,
+estimated=1954381824 bytes exceeds the 536870912-byte pipeline budget
+```
+
+The GUI spinbox offers 1–64 with no indication that anything above 2 will
+abort the run on 4K video. That is a real usability bug: the control's range
+is not the admissible range.
 
 ## Question
 
@@ -192,14 +256,13 @@ cancel-path flush invariant, a crop-count-bounded accumulator, a
 pre-extracted-batch parameter for `run_cnn_batch` (it builds its own crops),
 and loss of gate byte-identity on identity + pose clips.
 
-## Current judgement (conditional)
+## Superseded judgement (kept for the record)
 
-**Head-tail-only accumulation is the candidate worth pursuing.** It is the
-single largest consumer stage (36.7% of this profile) AND it is
-**byte-identical under regrouping on all four backends measured** — so it
-carries none of B's gate cost. If a contention-aware in-pipeline A/B confirms
-even 1.15× there, that is a real saving on the dominant stage at zero numeric
-risk.
+Before the in-pipeline A/B, the conditional judgement here was "head-tail-only
+accumulation is the candidate worth pursuing" — largest consumer stage,
+byte-identical under regrouping. **The A/B killed it:** head-tail is exactly
+1.000 on CUDA and 1.58× SLOWER on MPS. The stage-level 1.23× was an artifact
+of measuring on an idle device.
 
 **CNN and pose accumulation should stay off the table**, and the "small
 differences add up over long runs" argument is precisely why: 10 h × 30 fps ≈
@@ -208,17 +271,12 @@ probability drift into Bayes log-compat identity accumulation, plus up to
 1 px pose drift — while simultaneously breaking the byte-identity gate that
 is the only thing protecting runs of that length.
 
-**Open measurements before any implementation decision:**
+All three planned measurements are now DONE (contention isolation, MPS A/B,
+CUDA A/B) and all three point the same way. See "THE ANSWER" at the top.
 
-1. ~~Contention isolation~~ — DONE, above. SLEAP is not the co-tenant; the
-   OBB producer thread is. The 7× uncontended-vs-pipeline gap for head-tail is
-   now the most interesting open question, independent of B.
-2. In-pipeline A/B — apply the crop half of `893cde19` in reverse in a
-   throwaway worktree, rerun with `HYDRA_PROFILE=1`, and compare the
-   `headtail`/`cnn`/`pose` span totals. Span totals isolate the downstream
-   effect even though detection batching confounds wall-clock.
-3. Repeat (2) on CUDA — the long runs in question are CUDA, and CUDA
-   head-tail was 9 ms/frame in the spike vs MPS's 26.
+The A/B patch lives on branch `spike/crossframe-ab` (env-gated behind
+`HYDRA_AB_CROSSFRAME`), worktrees `.worktrees/ab-crossframe` on both boxes.
+It is a measurement artifact and must not be merged.
 
 ## Incidental findings
 
