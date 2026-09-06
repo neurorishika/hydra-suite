@@ -376,6 +376,54 @@ def test_a_probe_that_ooms_at_batch_one_fails_closed(tmp_path):
     assert not list(tmp_path.glob("*.json")), "a doomed config must not be cached"
 
 
+def test_a_child_allocator_that_contradicts_the_cache_key_is_not_stored(tmp_path):
+    """The fingerprint is computed by the PARENT from `sam3_env_environ()`;
+    the child now reports what it actually ran under. A child that saw the
+    default allocator must not have its measurement filed under an
+    `expandable_segments` key -- that record would be reused by runs it does
+    not describe (42% apart on the same box)."""
+
+    identity = ab.sam3_workload_fingerprint(
+        _spec(tmp_path), cuda_device=_dev(), dataset=_dataset()
+    ).identity
+    assert identity.backend.endswith(f"|{ab.sidecar_alloc_conf_hash()}")
+
+    def step(batch):
+        return {
+            "accelerator_reserved_peak_bytes": batch * GiB,
+            "alloc_conf_hash": ab.sidecar_alloc_conf_hash({}),
+        }
+
+    with pytest.raises(ab.ProbeAllocatorMismatch):
+        ab.run_probe(_spec(tmp_path), tmp_path, step_fn=step, identity=identity)
+    assert not list(tmp_path.glob("*.json")), "a mis-keyed record must not cache"
+
+
+def test_a_matching_or_absent_child_allocator_is_accepted(tmp_path):
+    """The live hash is accepted, and so is a child that reports none: only a
+    hash that CONTRADICTS the key is refused, so an older child or a test
+    double is not retro-invalidated."""
+
+    identity = ab.sam3_workload_fingerprint(
+        _spec(tmp_path), cuda_device=_dev(), dataset=_dataset()
+    ).identity
+
+    def matching(batch):
+        return {
+            "accelerator_reserved_peak_bytes": batch * GiB,
+            "alloc_conf_hash": ab.sidecar_alloc_conf_hash(),
+        }
+
+    def silent(batch):
+        return {"accelerator_reserved_peak_bytes": batch * GiB}
+
+    for step in (matching, silent):
+        ladder = ab.run_probe(
+            _spec(tmp_path), tmp_path, step_fn=step, identity=identity
+        )
+        assert [record.settings.batch_size for record in ladder] == [1, 2, 4, 8]
+
+
 def test_a_host_refusal_stops_the_ladder_rather_than_skipping_it(tmp_path):
     seen = []
 

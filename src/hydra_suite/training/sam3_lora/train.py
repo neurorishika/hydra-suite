@@ -280,6 +280,11 @@ def _run_probe_candidate(
             str(batch),
         ],
     )
+    log_cb(
+        f"auto batch: probing batch {batch} "
+        f"({autobatch.PROBE_STEPS} optimizer steps on the densest tiles, "
+        "plus one model load)"
+    )
     launch = build_limited_launch(
         command,
         _memory_limits(decision),

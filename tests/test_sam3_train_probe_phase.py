@@ -620,11 +620,47 @@ def test_the_safety_fraction_is_applied_exactly_once(tmp_path, monkeypatch):
     ), "batch 1 here would mean the safety fraction was applied twice"
 
 
-def test_the_banner_labels_an_extrapolated_requirement_as_extrapolated(
+def test_every_probe_candidate_announces_itself_before_it_launches(
     tmp_path, monkeypatch
 ):
-    """Records at 1, 2 and 4 can resolve to 3, which nobody measured. Calling
-    a fitted envelope "measured" is the dishonesty this whole task removes."""
+    """The probe path used to be entirely silent.
+
+    `run_probe` logs nothing, the child writes nothing until its last step
+    lands, and `_run_probe_candidate` passes a no-op progress callback, so
+    neither the log nor the GUI showed anything while the ladder ran. Each
+    candidate must at least announce its batch and its step count before it
+    launches; the child adds a heartbeat every ten steps on top of this.
+    """
+
+    harness = _install(monkeypatch, tmp_path)
+
+    _run(harness, _spec(tmp_path, batch=-1))
+
+    announced = [line for line in harness.logs if "probing batch" in line]
+    assert [line for line in announced if "probing batch 1" in line]
+    assert [line for line in announced if "probing batch 2" in line]
+    assert all(str(ab.PROBE_STEPS) in line for line in announced), announced
+    # Announced BEFORE the launch, not after the measurement came back.
+    assert harness.order.index("probe_launch") > 0
+
+
+def test_a_between_rung_batch_is_charged_the_observed_peak_of_the_rung_above(
+    tmp_path, monkeypatch
+):
+    """`select_batch` scans contiguously, so a batch nobody measured (3, with
+    rungs 1, 2 and 4) is reachable -- and its fitted envelope is a guess.
+
+    `device_requirement_bytes` charges such a batch the OBSERVED peak at the
+    next rung above, a guaranteed-safe upper bound by monotonicity. So this
+    ladder (4/6/10 GiB, fitting exactly base 2 + 2 GiB/item) must NOT resolve
+    to 3 on an 11 GiB card: the fit says 8 GiB, which the 0.8 x 11 = 8.8 GiB
+    budget would admit, but the real peak at 4 is 10 GiB. Selection steps down
+    to 2, whose 6 GiB is an observation.
+
+    This is also the one case that makes `_resolve_measured_batch`'s downward
+    scan do real work rather than re-check what `select_batch` already
+    cleared.
+    """
 
     harness = _install(
         monkeypatch,
@@ -637,9 +673,13 @@ def test_the_banner_labels_an_extrapolated_requirement_as_extrapolated(
 
     assert result["success"]
     resolution = json.loads((harness.run_dir / "batch_resolution.json").read_text())
-    assert resolution["resolved"] == 3
-    assert resolution["requirement_basis"] == "extrapolated"
-    assert any("extrapolated" in line for line in harness.logs)
+    assert resolution["resolved"] == 2, (
+        "batch 3 here would mean an unvalidated fit was allowed to decide "
+        "against a 10 GiB observation one rung up"
+    )
+    assert resolution["requirement_basis"] == "measured"
+    assert resolution["requirement_bytes"] == 6 * GiB
+    assert not resolution["requirement_measured_extrapolated"]
 
 
 def test_an_unreadable_ladder_marker_re_probes_rather_than_trusting_the_cache(

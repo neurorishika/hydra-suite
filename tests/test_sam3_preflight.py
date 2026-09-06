@@ -1311,24 +1311,50 @@ def test_a_measurement_at_an_observed_rung_decides_below_the_analytic_estimate(
     assert decision.device_peak_analytic_bytes == analytic
 
 
-def test_a_measurement_between_rungs_still_decides(tmp_path, monkeypatch):
-    """Interpolation is inside the observed range, so it is not the guarded
-    case: records at 1, 2 and 4 decide at batch 3 without the analytic cap."""
+def test_a_between_rung_batch_is_charged_the_observed_peak_above_it(
+    tmp_path, monkeypatch
+):
+    """A batch inside the observed range but not ON a rung still decides
+    without the analytic cap -- but not on the fit.
 
+    With rungs 1, 2 and 4, batch 3's fitted envelope is a guess, so the
+    requirement is raised to the OBSERVED peak at batch 4: a guaranteed-safe
+    upper bound by monotonicity, `true_need(3) <= peak@4`. Charging the fit
+    instead would admit batch 3 on a card that provably cannot hold batch 4.
+    """
+
+    records = _records({1: 4 * pf.GiB, 2: 5 * pf.GiB, 4: 7 * pf.GiB})
     _write_coco(tmp_path)
-    _install_records(
-        monkeypatch, _records({1: 4 * pf.GiB, 2: 5 * pf.GiB, 4: 7 * pf.GiB})
-    )
+    _install_records(monkeypatch, records)
+
+    fitted = pf.measured_envelope_bytes(records, 3)
+    assert fitted < 7 * pf.GiB, "the fit must be the LOWER number here"
 
     decision = _decision(_spec(tmp_path, batch=3))
 
     assert decision.device_peak_provenance == "measured"
     assert not decision.device_peak_measured_extrapolated
-    envelope = pf.measured_envelope_bytes(
-        _records({1: 4 * pf.GiB, 2: 5 * pf.GiB, 4: 7 * pf.GiB}), 3
+    assert _training_phase(decision).accelerator_peak_bytes == 7 * pf.GiB
+    assert 7 * pf.GiB < _legacy_expression(tmp_path, batch=3)
+
+
+def test_a_batch_on_a_rung_is_charged_that_rung_not_the_one_above(
+    tmp_path, monkeypatch
+):
+    """The upper-rung rule must not leak onto observed rungs: batch 2 is an
+    observation and is charged its own envelope, never batch 4's peak."""
+
+    records = _records({1: 4 * pf.GiB, 2: 5 * pf.GiB, 4: 7 * pf.GiB})
+    _write_coco(tmp_path)
+    _install_records(monkeypatch, records)
+
+    decision = _decision(_spec(tmp_path, batch=2))
+
+    assert decision.device_peak_provenance == "measured"
+    assert _training_phase(decision).accelerator_peak_bytes == (
+        pf.measured_envelope_bytes(records, 2)
     )
-    assert _training_phase(decision).accelerator_peak_bytes == envelope
-    assert envelope < _legacy_expression(tmp_path, batch=3)
+    assert _training_phase(decision).accelerator_peak_bytes < 7 * pf.GiB
 
 
 def test_no_records_leaves_the_analytic_estimate_in_charge(tmp_path, monkeypatch):
@@ -1346,6 +1372,39 @@ def test_no_records_leaves_the_analytic_estimate_in_charge(tmp_path, monkeypatch
     assert decision.budget.accelerator_peak_bytes == _legacy_expression(
         tmp_path, batch=2
     )
+
+
+def test_a_sub_steady_measurement_admits_a_dataset_with_a_validation_split(
+    tmp_path, monkeypatch
+):
+    """A measurement below `_DEVICE_STEADY_BYTES` must not raise out of preflight.
+
+    `PhaseEstimate` rejects a peak below its own steady floor. Now that a
+    measurement DECIDES, the ordinary case (real runs reserve 6.9-7.3 GiB,
+    under the 8 GiB resident-weights guess) puts the training AND validation
+    phases' peaks below that analytic steady constant. Clamping only the
+    training phase left `validation` raising `ValueError` -- an unhandled
+    traceback out of the training launch rather than a refusal -- for every
+    project with a valid split, which is most of them.
+
+    Every other measured-record test uses a train-only dataset, so the
+    validation phase is not even constructed there. This one has both splits
+    on purpose.
+    """
+
+    _write_coco(tmp_path)
+    _write_coco(tmp_path, split="valid")
+    _install_records(monkeypatch, _records({1: 6 * pf.GiB}))
+
+    decision = _decision(_spec(tmp_path, batch=1))
+
+    assert decision.dataset.validation_tiles > 0, "the guarded phase must exist"
+    validation = next(
+        phase for phase in decision.request.phases if phase.name == "validation"
+    )
+    assert validation.accelerator_peak_bytes == 6 * pf.GiB
+    assert validation.accelerator_steady_bytes <= validation.accelerator_peak_bytes
+    assert decision.device_peak_provenance == "measured"
 
 
 def test_the_measured_headroom_gate_reads_the_requirement_not_the_budget_peak(
@@ -1559,6 +1618,9 @@ def test_a_batch_beyond_the_observations_is_flagged_extrapolated(tmp_path, monke
     _install_records(monkeypatch, _records({1: 5 * pf.GiB}))
     small = _decision(_spec(tmp_path, batch=2))
     assert small.device_peak_provenance == "max_extrapolated"
+    # The decision-level proof that the ANALYTIC side actually won: provenance
+    # and the flag alone would pass even if the fitted guess had decided.
+    assert small.budget.accelerator_peak_bytes == _legacy_expression(tmp_path, batch=2)
     assert small.device_peak_measured_extrapolated
     assert not _decision(_spec(tmp_path, batch=1)).device_peak_measured_extrapolated
 

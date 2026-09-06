@@ -885,6 +885,13 @@ def _host_peak_bytes() -> int:
     return int(usage) * (1 if sys.platform == "darwin" else 1024)
 
 
+# How often the probe child reports in. Frequent enough that no plausible
+# step time leaves the log silent for long, rare enough not to spam a 30-step
+# run. Deliberately not expressed in seconds: step time varies by card and
+# corpus, and quoting a duration nobody measured on this box would be a guess.
+_PROBE_HEARTBEAT_STEPS = 10
+
+
 def run_probe_measurement(spec: Any, run_dir_path: Path, batch_size: int) -> int:
     """Measure this configuration's device peak at ONE batch size.
 
@@ -903,7 +910,7 @@ def run_probe_measurement(spec: Any, run_dir_path: Path, batch_size: int) -> int
     `OutOfMemoryError` raised inside this process.
     """
 
-    from .autobatch import PROBE_RECORDS_DIRNAME, PROBE_STEPS
+    from .autobatch import PROBE_RECORDS_DIRNAME, PROBE_STEPS, sidecar_alloc_conf_hash
 
     params = spec.sam3_params
     batch_size = max(1, int(batch_size))
@@ -958,6 +965,16 @@ def run_probe_measurement(spec: Any, run_dir_path: Path, batch_size: int) -> int
                 optimizer.zero_grad()
                 steps += 1
                 del batch, model_input, targets, outputs, loss_dict, loss
+                if steps % _PROBE_HEARTBEAT_STEPS == 0 or steps >= PROBE_STEPS:
+                    # The probe path was otherwise SILENT for its whole
+                    # duration: nothing is written until the last step lands,
+                    # and the launcher passes a no-op progress callback, so a
+                    # user watching the log or the GUI saw nothing at all.
+                    emit_log(
+                        f"probe batch {batch_size}: step {steps}/{PROBE_STEPS}, "
+                        f"reserved "
+                        f"{torch.cuda.max_memory_reserved(device) / (1024 ** 3):.2f} GiB"
+                    )
                 if steps >= PROBE_STEPS:
                     break
             if steps >= PROBE_STEPS:
@@ -988,6 +1005,16 @@ def run_probe_measurement(spec: Any, run_dir_path: Path, batch_size: int) -> int
             "accelerator_allocated_peak_bytes": allocated,
             "host_peak_bytes": _host_peak_bytes(),
             "observed_at_unix_ns": time.time_ns(),
+            # What THIS child actually ran under, hashed the same way the
+            # parent hashes it for the fingerprint. The parent computes the
+            # fingerprint from `sam3_env_environ()` -- its own idea of the
+            # child's environment -- so without this a record could be filed
+            # under an "expandable_segments" key by a child that never saw
+            # the flag. Measured on courtship, same box, same 30 steps:
+            # reserved 9.82 GiB without the flag vs 6.89 GiB with it, 42%
+            # apart. In the product path the two always agree; this closes
+            # the gap for any child launched outside `_child_environment`.
+            "alloc_conf_hash": sidecar_alloc_conf_hash(dict(os.environ)),
         }
     )
     emit_log(

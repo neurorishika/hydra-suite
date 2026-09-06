@@ -928,12 +928,43 @@ def device_requirement_bytes(
     analytic = int(analytic_bytes)
     if not records:
         return DeviceRequirement(analytic, "analytic", 0, False, False)
+    rungs = sorted(record.settings.batch_size for record in records)
     measured = measured_envelope_bytes(records, batch_size)
-    extrapolated = batch_size > max(record.settings.batch_size for record in records)
+    extrapolated = batch_size > rungs[-1]
     if not extrapolated:
-        # At or below an observed rung the envelope is anchored by real
+        # At or below the top rung the envelope is anchored by real
         # observations, so it decides -- upward OR downward.
-        return DeviceRequirement(measured, "measured", measured, False, True)
+        #
+        # BETWEEN two rungs (n=3 with rungs 1, 2, 4) the envelope's fitted
+        # term is still a guess, and `select_batch` scans contiguously so n=3
+        # IS reachable on the auto path. There the requirement is raised to
+        # the OBSERVED peak at the next rung ABOVE n, a guaranteed-safe upper
+        # bound by monotonicity (true_need(3) <= peak@4). A batch that IS a
+        # rung is an observation and is charged its own envelope, never the
+        # next rung's -- otherwise every batch below the top would be priced
+        # at the top rung. It costs nothing in
+        # practice: if peak@4 fits, 4 would have been chosen anyway, and if it
+        # does not, picking 3 on an unvalidated fit is exactly the guess this
+        # excludes. `max` rather than a plain substitution so a steep fit can
+        # still raise, never lower, the number.
+        upper = (
+            0
+            if batch_size in rungs
+            else next(
+                (
+                    max(
+                        record.accelerator_reserved_peak_bytes
+                        for record in records
+                        if record.settings.batch_size == rung
+                    )
+                    for rung in rungs
+                    if rung > batch_size
+                ),
+                0,
+            )
+        )
+        requirement = max(measured, upper)
+        return DeviceRequirement(requirement, "measured", requirement, False, True)
     if measured > analytic:
         return DeviceRequirement(measured, "max_extrapolated", measured, True, True)
     return DeviceRequirement(analytic, "max_extrapolated", measured, True, False)
@@ -1142,6 +1173,23 @@ def build_resource_request(
         if probe_floor
         else "measured BF16 model/activation envelope"
     )
+    # `PhaseEstimate` rejects a peak below its own steady floor, and rightly
+    # so. The analytic estimate can never go below the steady constants, but a
+    # MEASURED envelope now decides on its own and legitimately can: a real
+    # SAM3 LoRA run reserved ~6.9 GiB total, under the 8 GiB
+    # `_DEVICE_STEADY_BYTES` guess for resident weights alone. The measurement
+    # is the authority on the whole device envelope, so the analytic steady
+    # guess yields to it -- never the other way round, which would silently
+    # inflate every measured requirement back to the constant it replaced.
+    #
+    # Computed ONCE and shared by the training and validation phases. Clamping
+    # only the training phase left `validation` (built only when the dataset
+    # has a valid split, which is why no test caught it) raising `ValueError`
+    # out of `PhaseEstimate` for every sub-8-GiB measurement -- an unhandled
+    # traceback out of the launch instead of a refusal, on the ordinary case.
+    on_device_steady_bytes = min(
+        device_steady_bytes + lora_training_state, training_device_peak
+    )
     device_envelope_bytes = (
         training_device_peak if probe_floor else _MEASURED_BF16_DEVICE_PEAK_BYTES
     )
@@ -1178,18 +1226,7 @@ def build_resource_request(
                 _TRAIN_HOST_FIXED_BYTES + metadata + lora_cpu_training_state
             ),
             host_peak_bytes=training_host_peak,
-            # `PhaseEstimate` rejects a peak below its own steady floor, and
-            # rightly so. The analytic estimate can never go below the steady
-            # constants, but a MEASURED envelope now decides on its own and
-            # legitimately can: a real SAM3 LoRA run reserved ~6.9 GiB total,
-            # under the 8 GiB `_DEVICE_STEADY_BYTES` guess for resident
-            # weights alone. The measurement is the authority on the whole
-            # device envelope, so the analytic steady guess yields to it --
-            # never the other way round, which would silently inflate every
-            # measured requirement back to the constant it replaced.
-            accelerator_steady_bytes=min(
-                device_steady_bytes + lora_training_state, training_device_peak
-            ),
+            accelerator_steady_bytes=on_device_steady_bytes,
             accelerator_peak_bytes=training_device_peak,
             disk_transient_bytes=2 * lora_artifact,
             dominant_allocations=common_allocations
@@ -1208,7 +1245,7 @@ def build_resource_request(
                     _TRAIN_HOST_FIXED_BYTES + metadata + lora_cpu_training_state
                 ),
                 host_peak_bytes=training_host_peak + lora_reload_copy,
-                accelerator_steady_bytes=device_steady_bytes + lora_training_state,
+                accelerator_steady_bytes=on_device_steady_bytes,
                 accelerator_peak_bytes=validation_device_peak,
                 dominant_allocations=common_allocations
                 + (

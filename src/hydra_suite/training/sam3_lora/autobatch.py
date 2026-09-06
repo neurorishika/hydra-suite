@@ -24,7 +24,7 @@ import time
 from collections.abc import Mapping, Sequence
 from dataclasses import dataclass, field
 from pathlib import Path
-from typing import Callable, Optional
+from typing import Any, Callable, Optional
 
 from hydra_suite.runtime.memory_profiles import (
     MEASURED_SAFETY_FRACTION,
@@ -655,6 +655,48 @@ def _unfingerprinted_identity(spec: TrainingRunSpec) -> ProfileIdentity:
     )
 
 
+class ProbeAllocatorMismatch(ProbeFailedError):
+    """A probe child ran under an allocator config the key does not describe."""
+
+
+def _reject_allocator_mismatch(
+    identity: ProfileIdentity,
+    batch_size: int,
+    peaks: Mapping[str, Any],
+) -> None:
+    """Refuse a record whose child allocator disagrees with its cache key.
+
+    The fingerprint is built by the PARENT from `sam3_env_environ()`, so it
+    describes what the parent BELIEVES the child ran under. The child now
+    reports what it actually saw. In the product path (`train.py` composes
+    `_child_environment` from the same function) these always agree; for any
+    child launched another way they can diverge, and the divergence is worth
+    42% of reserved VRAM (9.82 GiB without `expandable_segments:True` vs
+    6.89 GiB with it, same box, same 30 steps).
+
+    The error direction of a mismatch happens to be safe today -- a
+    default-allocator record OVER-states -- but now that a measurement
+    DECIDES rather than only raising, that safety must not rest on luck.
+    Fail closed: a record we cannot honestly key is not stored at all.
+
+    A child that reports no hash at all is accepted, so an older child or a
+    test double is not retro-invalidated; only a hash that CONTRADICTS the
+    key is refused.
+    """
+
+    reported = peaks.get("alloc_conf_hash")
+    if not reported:
+        return
+    if not identity.backend.endswith(f"|{reported}"):
+        raise ProbeAllocatorMismatch(
+            f"The SAM3 probe child at batch {batch_size} ran under allocator "
+            f"config {reported}, which is not the one its cache key describes "
+            f"({identity.backend}). Nothing was cached: a measurement filed "
+            "under the wrong allocator key would be reused by runs it does "
+            "not describe."
+        )
+
+
 def _measurement(
     spec: TrainingRunSpec,
     identity: ProfileIdentity,
@@ -744,6 +786,7 @@ def run_probe(
                 raise
             terminated_by = LADDER_OOM
             break
+        _reject_allocator_mismatch(resolved_identity, candidate, peaks or {})
         records.append(_measurement(spec, resolved_identity, candidate, peaks))
     if not records:
         raise ProbeFailedError(

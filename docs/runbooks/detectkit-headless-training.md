@@ -196,9 +196,16 @@ the profile fingerprint, so a record taken under the old allocator can never
 be reused.
 
 Be clear-eyed about what that buys you: this is **not** an optimal-batch
-search, and it is not tuned for throughput. The analytic term currently
-dominates on the cards this role targets, so **`-1` will often resolve to
-`1`.** Nothing here promises the largest batch that would fit.
+search, and it is not tuned for throughput. It walks a power-of-two ladder
+(1, 2, 4, 8) and picks the largest rung whose requirement fits at the safety
+margin. Nothing here promises the largest batch that would fit — a batch
+*between* two rungs is charged the observed peak of the rung above it, so it
+is only chosen when that observation also fits.
+
+For a workload that has never been probed, the analytic estimate is all there
+is, and it dominates on the cards this role targets, so a first `-1` run will
+often resolve to `1`. Once records exist, the measurement decides and the
+resolved batch reflects what the card actually did.
 
 **It can also refuse the run.** If batch 1 does not fit in the free VRAM at the
 safety margin, training fails with an explicit refusal naming the requirement
