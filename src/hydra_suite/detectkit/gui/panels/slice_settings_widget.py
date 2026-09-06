@@ -40,7 +40,7 @@ class _TileLayoutPreview(QWidget):
             "build."
         )
         self._mode = "auto_object"
-        self._target_fractions = [0.3125, 0.46875, 0.625]
+        self._target_fractions = [0.05, 0.10, 0.15, 0.20]
         self._slice_wh = (0, 0)
         self._overlap = 0.2
         self._model_input_size = 640

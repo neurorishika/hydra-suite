@@ -14,6 +14,19 @@ from types import SimpleNamespace
 import pytest
 
 
+def test_default_slice_training_profile_uses_relative_scales_and_fragment_floor():
+    from hydra_suite.detectkit.config.training import SliceTrainingConfig
+
+    settings = SliceTrainingConfig()
+
+    assert settings.enabled is False
+    assert settings.object_tile_fraction == 0.10
+    assert settings.min_area_ratio == 0.25
+    assert settings.target_size_fractions == (0.05, 0.10, 0.15, 0.20)
+    assert settings.target_sizes_for(640) == [32.0, 64.0, 96.0, 128.0]
+    assert settings.target_sizes_for(1024) == [51.2, 102.4, 153.6, 204.8]
+
+
 def _plan_payload(tmp_path: Path) -> dict:
     return {
         "version": 1,
@@ -63,6 +76,21 @@ def test_plan_load_resolves_portable_paths_and_preserves_model_tokens(tmp_path):
     assert plan.slice_settings.target_sizes_for(768) == [192.0, 384.0]
     assert plan.hyperparams.epochs == 12
     assert plan.publish_policy.auto_import is False
+
+
+def test_legacy_pixel_slice_targets_are_not_overridden_by_new_defaults(tmp_path):
+    from hydra_suite.detectkit.config.training import load_training_plan
+
+    payload = _plan_payload(tmp_path)
+    slicing = payload["dataset"]["slicing"]
+    slicing.pop("target_size_fractions")
+    slicing["target_sizes"] = [200.0, 300.0, 400.0]
+    config_path = tmp_path / "legacy-slicing.json"
+    config_path.write_text(json.dumps(payload), encoding="utf-8")
+
+    plan = load_training_plan(config_path)
+
+    assert plan.slice_settings.target_fractions() == [0.3125, 0.46875, 0.625]
 
 
 def test_plan_rejects_non_detectkit_roles_and_invalid_split(tmp_path):

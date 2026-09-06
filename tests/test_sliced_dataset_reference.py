@@ -32,6 +32,14 @@ def test_object_major_axes_px_returns_all_majors():
     assert sorted(round(m) for m in majors) == [40, 80]
 
 
+def test_sliced_dataset_defaults_match_the_new_relative_training_profile():
+    params = SliceBuildParams()
+
+    assert params.object_tile_fraction == 0.10
+    assert params.min_area_ratio == 0.25
+    assert params.target_sizes == [32.0, 64.0, 96.0, 128.0]
+
+
 def _write_dataset(root: Path, majors_px):
     for split in ("train", "val"):
         (root / "images" / split).mkdir(parents=True, exist_ok=True)

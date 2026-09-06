@@ -96,13 +96,13 @@ def label_line_for_level(
 class SliceBuildParams:
     geometry_mode: str = "auto_object"
     imgsz: int = 640
-    object_tile_fraction: float = 0.15
+    object_tile_fraction: float = 0.10
     slice_width: int = 0
     slice_height: int = 0
     overlap: float = 0.2
-    min_area_ratio: float = 0.1
+    min_area_ratio: float = 0.25
     negative_tile_fraction: float = 0.15
-    target_sizes: list[float] = field(default_factory=lambda: [200.0, 300.0, 400.0])
+    target_sizes: list[float] = field(default_factory=lambda: [32.0, 64.0, 96.0, 128.0])
     full_frame_mix: bool = True
     reference_body_px: float = 0.0
 

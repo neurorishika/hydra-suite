@@ -167,18 +167,18 @@ class SliceTrainingSettings:
 
     enabled: bool = False
     geometry_mode: str = "auto_object"  # auto_model | auto_object | custom
-    object_tile_fraction: float = 0.15
+    object_tile_fraction: float = 0.10
     reference_body_px: float = 0.0
     slice_width: int = 0
     slice_height: int = 0
     overlap: float = 0.2
-    min_area_ratio: float = 0.1
+    min_area_ratio: float = 0.25
     negative_tile_fraction: float = 0.15
     # ``target_sizes`` is retained for projects written before target scale was
     # expressed relative to the model input. New UI writes fractions; the
     # builder resolves them separately for each selected model input size.
     target_size_fractions: list[float] = field(default_factory=list)
-    target_sizes: list[float] = field(default_factory=lambda: [200.0, 300.0, 400.0])
+    target_sizes: list[float] = field(default_factory=lambda: [32.0, 64.0, 96.0, 128.0])
     full_frame_mix: bool = True
     merge_threshold: float = 0.5
 
