@@ -118,6 +118,31 @@ Examples:
             "Applies to every video in the batch."
         ),
     )
+    inference_autotune_group = track_parser.add_mutually_exclusive_group()
+    inference_autotune_group.add_argument(
+        "--inference-autotune",
+        choices=["off", "record", "automatic"],
+        help=(
+            "Override this run's full-inference throughput tuning policy. "
+            "automatic applies only a fully validated profile; record measures "
+            "without changing configured execution settings."
+        ),
+    )
+    inference_autotune_group.add_argument(
+        "--no-inference-autotune",
+        action="store_true",
+        help="Per-run bypass: keep configured inference execution settings.",
+    )
+    track_parser.add_argument(
+        "--inference-autotune-manual",
+        action="append",
+        default=[],
+        metavar="FIELD",
+        help=(
+            "Keep one tuning coordinate at its configured value. May be "
+            "repeated; for example pose_batch_size or pipeline_depth."
+        ),
+    )
 
     track_parser.add_argument(
         "--gpus",
@@ -293,6 +318,14 @@ def main(argv: list[str] | None = None) -> object:
                 jobs=getattr(args, "jobs", None),
                 threads_per_job=getattr(args, "threads_per_job", None),
                 log_level=str(args.log_level),
+                inference_autotune=(
+                    "off"
+                    if bool(getattr(args, "no_inference_autotune", False))
+                    else getattr(args, "inference_autotune", None)
+                ),
+                inference_autotune_manual=getattr(
+                    args, "inference_autotune_manual", []
+                ),
             )
         except Exception as e:
             logger.error("Tracker CLI failed: %s", e, exc_info=True)

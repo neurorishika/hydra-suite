@@ -86,6 +86,28 @@ def test_setup_panel_wired_in_main_window(main_window):
         not sys.platform.startswith("linux")
     )
     assert main_window._setup_panel.spin_traj_hist.minimum() == -1
+    assert hasattr(main_window._setup_panel, "chk_inference_autotune")
+    assert hasattr(main_window._setup_panel, "lbl_inference_autotune_status")
+
+
+def test_setup_inference_autotune_policy_persists_and_status_is_read_only(main_window):
+    """The one UI control owns policy; runtime outcomes only update its label."""
+    panel = main_window._setup_panel
+    original = panel.chk_inference_autotune.isChecked()
+    try:
+        panel.chk_inference_autotune.setChecked(True)
+        config = main_window._config_orch.build_config_dict()
+
+        assert config["inference_autotune_mode"] == "automatic"
+        assert "validated profile" in panel.lbl_inference_autotune_status.text()
+
+        panel.set_inference_autotune_status("Cache hit — profile abc123")
+        assert panel.chk_inference_autotune.isChecked() is True
+        assert (
+            panel.lbl_inference_autotune_status.text() == "Cache hit — profile abc123"
+        )
+    finally:
+        panel.chk_inference_autotune.setChecked(original)
 
 
 def test_controls_panel_has_wider_minimum_width(main_window):

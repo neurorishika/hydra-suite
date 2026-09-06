@@ -738,6 +738,28 @@ class SetupPanel(QWidget):
         )
         self.chk_realtime_mode.stateChanged.connect(self._sync_realtime_cache_controls)
 
+        # One coordinated control belongs here rather than beside individual
+        # detector/pose batch controls. It is deliberately distinct from the
+        # semantic tracking autotuner: this changes execution strategy only.
+        self.chk_inference_autotune = QCheckBox("Auto-optimize full inference")
+        self.chk_inference_autotune.setChecked(
+            self._config.inference_autotune_mode == "automatic"
+        )
+        self.chk_inference_autotune.setToolTip(
+            "Use a validated, system-specific full-inference throughput profile.\n"
+            "Your saved batch values remain unchanged; they are the fallback and\n"
+            "the baseline for any field marked manual."
+        )
+        self.chk_inference_autotune.toggled.connect(self._on_inference_autotune_toggled)
+        self.lbl_inference_autotune_status = QLabel()
+        self.lbl_inference_autotune_status.setWordWrap(True)
+        self.lbl_inference_autotune_status.setStyleSheet(
+            "color: #8a8a8a; font-size: 10px;"
+        )
+        self.set_inference_autotune_status_for_mode(
+            self._config.inference_autotune_mode
+        )
+
         for perf_checkbox in (
             self.chk_use_cached_detections,
             self.chk_realtime_mode,
@@ -751,6 +773,8 @@ class SetupPanel(QWidget):
         perf_toggle_grid.setVerticalSpacing(6)
         perf_toggle_grid.setContentsMargins(0, 0, 0, 0)
         perf_toggle_grid.addWidget(self.chk_realtime_mode, 0, 0)
+        perf_toggle_grid.addWidget(self.chk_inference_autotune, 1, 0)
+        perf_toggle_grid.addWidget(self.lbl_inference_autotune_status, 2, 0)
         perf_toggle_grid.setColumnStretch(0, 1)
         self._reflow_performance_controls()
         vl_sys.addLayout(self.performance_control_grid)
@@ -902,6 +926,30 @@ class SetupPanel(QWidget):
         self._sync_batch_policy_controls()
         # NOTE: the compute-tier selector is populated at panel construction;
         # _on_runtime_context_changed is called afterward in main_window.py
+
+    def _on_inference_autotune_toggled(self, enabled: bool) -> None:
+        """Persist the one user-facing inference-throughput policy control."""
+        if not getattr(self._main_window, "_restoring_config", False):
+            self._main_window.config.inference_autotune_mode = (
+                "automatic" if enabled else "off"
+            )
+        self.set_inference_autotune_status_for_mode("automatic" if enabled else "off")
+        self.config_changed.emit(self._main_window.config)
+
+    def set_inference_autotune_status_for_mode(self, mode: str) -> None:
+        """Render a non-interactive policy/result summary for the user."""
+        normalized = str(mode).strip().lower()
+        if normalized == "automatic":
+            text = "Enabled — a validated profile may be applied after live admission."
+        elif normalized == "record":
+            text = "Record-only — calibration evidence is saved, but configured values run."
+        else:
+            text = "Off — configured inference values will be used."
+        self.set_inference_autotune_status(text)
+
+    def set_inference_autotune_status(self, status: str) -> None:
+        """Update the read-only result summary without changing the policy."""
+        self.lbl_inference_autotune_status.setText(str(status))
 
     def _create_performance_control_card(self, title: str, widget: QWidget) -> QFrame:
         """Build a compact labeled card for one performance control."""

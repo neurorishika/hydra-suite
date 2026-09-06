@@ -41,6 +41,14 @@ class TrackerConfig:
     # --- Runtime ---
     runtime_tier: str = "gpu"
 
+    # --- Inference throughput autotuner ---
+    # This is intentionally distinct from the semantic tracking autotuner.
+    # Existing projects retain their configured execution settings until they
+    # explicitly opt in.
+    inference_autotune_mode: str = "off"
+    inference_autotune_manual_fields: list[str] = field(default_factory=list)
+    inference_autotune_budget_seconds: float = 120.0
+
     # --- Debug ---
     debug_mode: bool = False
 
@@ -75,6 +83,13 @@ class TrackerConfig:
             "roi_current_mode": self.roi_current_mode,
             "roi_current_zone_type": self.roi_current_zone_type,
             "runtime_tier": self.runtime_tier,
+            "inference_autotune_mode": self.inference_autotune_mode,
+            "inference_autotune_manual_fields": list(
+                self.inference_autotune_manual_fields
+            ),
+            "inference_autotune_budget_seconds": float(
+                self.inference_autotune_budget_seconds
+            ),
             "debug_mode": self.debug_mode,
             "dataset_export_levels": list(self.dataset_export_levels),
             "dataset_dedup_method": self.dataset_dedup_method,
@@ -96,6 +111,13 @@ class TrackerConfig:
                 if v:
                     legacy.add(str(v))
             raw_tier = migrate_runtime_to_tier(legacy) if legacy else "gpu"
+        raw_manual_fields = data.get("inference_autotune_manual_fields", []) or []
+        if isinstance(raw_manual_fields, str):
+            raw_manual_fields = [
+                value.strip() for value in raw_manual_fields.split(",") if value.strip()
+            ]
+        elif not isinstance(raw_manual_fields, (list, tuple, set)):
+            raw_manual_fields = []
         return cls(
             current_video_path=data.get("current_video_path", ""),
             batch_videos=list(data.get("batch_videos", [])),
@@ -107,6 +129,13 @@ class TrackerConfig:
             roi_current_zone_type=data.get("roi_current_zone_type", "include"),
             animals_per_arena=int(data.get("animals_per_arena", 1)),
             runtime_tier=str(raw_tier),
+            inference_autotune_mode=str(data.get("inference_autotune_mode", "off")),
+            inference_autotune_manual_fields=[
+                str(value).strip() for value in raw_manual_fields if str(value).strip()
+            ],
+            inference_autotune_budget_seconds=float(
+                data.get("inference_autotune_budget_seconds", 120.0)
+            ),
             debug_mode=bool(data.get("debug_mode", False)),
             dataset_export_levels=list(
                 data.get("dataset_export_levels", ["polygon", "obb", "aabb"])

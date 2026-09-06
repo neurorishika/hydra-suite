@@ -15,6 +15,7 @@ from __future__ import annotations
 
 import logging
 import math
+from copy import deepcopy
 from dataclasses import dataclass
 from typing import Any, Mapping
 
@@ -532,6 +533,35 @@ def build_engine_params(
     reproducing today's CLI output exactly.
     """
     cfg = config
+    autotune_mode = (
+        str(_cfg_get(cfg, "inference_autotune_mode", default="off")).strip().lower()
+    )
+    if autotune_mode not in {"off", "record", "automatic"}:
+        logger.warning(
+            "Unknown inference_autotune_mode=%r; keeping configured settings.",
+            autotune_mode,
+        )
+        autotune_mode = "off"
+    raw_manual_fields = _cfg_get(cfg, "inference_autotune_manual_fields", default=[])
+    if isinstance(raw_manual_fields, str):
+        raw_manual_fields = [
+            value.strip() for value in raw_manual_fields.split(",") if value.strip()
+        ]
+    elif not isinstance(raw_manual_fields, (list, tuple, set)):
+        raw_manual_fields = []
+    autotune_manual_fields = sorted(
+        {str(value).strip() for value in raw_manual_fields if str(value).strip()}
+    )
+    try:
+        autotune_budget_seconds = float(
+            _cfg_get(cfg, "inference_autotune_budget_seconds", default=120.0)
+        )
+    except (TypeError, ValueError):
+        autotune_budget_seconds = 120.0
+    # A saved project must not turn the bounded production calibration into an
+    # unbounded job. The core coordinator owns the search; this is just the
+    # project-facing safety bound.
+    autotune_budget_seconds = max(1.0, min(120.0, autotune_budget_seconds))
     advanced = dict(advanced_config or _default_advanced_config_fallback())
     advanced["yolo_seq_individual_batch_size"] = int(
         _cfg_get(
@@ -1111,7 +1141,11 @@ def build_engine_params(
         # geometry profiles.  The inference config clamps these values before
         # the tile admission helper applies the final per-model memory bound.
         "SLICE_TILE_BATCH_SIZE": advanced.get("slice_tile_batch_size", 16),
-        "SLICE_TILE_BATCH_AUTOTUNE": advanced.get("slice_tile_batch_autotune", False),
+        "SLICE_TILE_BATCH_AUTOTUNE": (
+            False
+            if autotune_mode == "automatic"
+            else advanced.get("slice_tile_batch_autotune", False)
+        ),
         "SLICE_MEMORY_BUDGET_MIB": advanced.get("slice_memory_budget_mib", 256),
         "SLICE_MERGE_POLICY": advanced.get(
             "slice_merge_policy", SLICE_MERGE_DEFAULTS["merge_policy"]
@@ -1185,6 +1219,11 @@ def build_engine_params(
         ),
         "YOLO_BATCH_SIZE": int(_cfg_get(cfg, "detection_batch_size", default=1)),
         "PIPELINE_DEPTH": int(_cfg_get(cfg, "pipeline_depth", default=2)),
+        # Inference-throughput tuning policy. These fields deliberately do
+        # not participate in the semantic tracking autotuner contract.
+        "INFERENCE_AUTOTUNE_MODE": autotune_mode,
+        "INFERENCE_AUTOTUNE_MANUAL_FIELDS": autotune_manual_fields,
+        "INFERENCE_AUTOTUNE_BUDGET_SECONDS": autotune_budget_seconds,
         "YOLO_SEQ_STAGE2_POW2_PAD": bool(
             _cfg_get(cfg, "yolo_seq_stage2_pow2_pad", default=False)
         ),
@@ -1724,5 +1763,11 @@ def build_engine_params(
     # sole consumer (dataset generator ``.get(...)``) treats absent == None.
     if caller_supplied_output_context:
         params["INDIVIDUAL_DATASET_RUN_ID"] = runtime.individual_dataset_run_id
+
+    # A calibration sidecar needs the complete project-level behavioral
+    # configuration to reproduce forward and post-tracking outputs. This is
+    # private runtime data: it is a detached snapshot and is never emitted by
+    # TrackerKit's JSON project serializer.
+    params["INFERENCE_AUTOTUNE_PROJECT_CONFIG"] = deepcopy(dict(cfg))
 
     return params

@@ -302,6 +302,39 @@ class ConfigOrchestrator:
         self._panels.setup.set_visualization_free(
             get_cfg("visualization_free_mode", default=False)
         )
+        raw_autotune_mode = (
+            str(get_cfg("inference_autotune_mode", default="off")).strip().lower()
+        )
+        autotune_mode = (
+            raw_autotune_mode
+            if raw_autotune_mode in {"off", "record", "automatic"}
+            else "off"
+        )
+        raw_manual_fields = get_cfg("inference_autotune_manual_fields", default=[])
+        if isinstance(raw_manual_fields, str):
+            raw_manual_fields = [
+                value.strip() for value in raw_manual_fields.split(",") if value.strip()
+            ]
+        if not isinstance(raw_manual_fields, (list, tuple, set)):
+            raw_manual_fields = []
+        self._mw.config.inference_autotune_mode = autotune_mode
+        self._mw.config.inference_autotune_manual_fields = sorted(
+            {str(value).strip() for value in raw_manual_fields if str(value).strip()}
+        )
+        try:
+            budget_seconds = float(
+                get_cfg("inference_autotune_budget_seconds", default=120.0)
+            )
+        except (TypeError, ValueError):
+            budget_seconds = 120.0
+        self._mw.config.inference_autotune_budget_seconds = max(
+            1.0, min(120.0, budget_seconds)
+        )
+        panel = self._panels.setup
+        panel.chk_inference_autotune.blockSignals(True)
+        panel.chk_inference_autotune.setChecked(autotune_mode == "automatic")
+        panel.chk_inference_autotune.blockSignals(False)
+        panel.set_inference_autotune_status_for_mode(autotune_mode)
 
     def _load_config_detection(self, get_cfg, get_cfg_time):
         det_method = get_cfg("detection_method", default="background_subtraction")
@@ -1672,6 +1705,13 @@ class ConfigOrchestrator:
                 # === SYSTEM PERFORMANCE ===
                 "resize_factor": self._panels.setup.spin_resize.value(),
                 "use_cached_detections": self._panels.setup.chk_use_cached_detections.isChecked(),
+                "inference_autotune_mode": self._mw.config.inference_autotune_mode,
+                "inference_autotune_manual_fields": list(
+                    self._mw.config.inference_autotune_manual_fields
+                ),
+                "inference_autotune_budget_seconds": float(
+                    self._mw.config.inference_autotune_budget_seconds
+                ),
                 "visualization_free_mode": self._panels.setup.is_visualization_free(),
                 "prompt_open_refinekit_on_tracking_complete": self._panels.postprocess.chk_prompt_open_refinekit.isChecked(),
                 # === DETECTION STRATEGY ===
