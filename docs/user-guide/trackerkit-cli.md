@@ -22,8 +22,18 @@ their own `<stem>_config.json` when present, otherwise the baseline.
 `--keystone-override` (or an explicit `--config` on a multi-video batch)
 forces the baseline onto every video. `--sahi-profile` applies to all.
 
-Videos run one after another in this process. Output per video:
-`<stem>_tracking.csv` (raw) and `<stem>_tracking_forward_processed.csv`.
+Videos run one after another in this process. Output per video depends on
+whether backward tracking is enabled in the config:
+
+- Backward tracking **on**: `<stem>_tracking_forward.csv` and
+  `<stem>_tracking_backward.csv` (the raw per-pass CSVs) plus the merged
+  `<stem>_tracking_final.csv`.
+- Backward tracking **off**: `<stem>_tracking.csv` (raw) and
+  `<stem>_tracking_forward_processed.csv`.
+
+When identity or pose ran, the final CSV also gets a
+`..._with_individual.csv` sibling (e.g. `<stem>_tracking_final_with_individual.csv`)
+carrying the identity and `PoseKpt_*` columns.
 
 ## Parallel across GPUs
 

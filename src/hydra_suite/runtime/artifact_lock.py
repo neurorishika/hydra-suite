@@ -9,11 +9,14 @@ else. It imports no torch/onnx so it is safe on every host.
 
 from __future__ import annotations
 
+import logging
 import os
 import time
 from contextlib import contextmanager
 from pathlib import Path
-from typing import IO, Any, Iterator
+from typing import IO, Any, Iterator, Optional
+
+logger = logging.getLogger(__name__)
 
 fcntl: Any
 try:
@@ -69,6 +72,38 @@ def _unlock(handle: IO[str]) -> None:
         msvcrt.locking(handle.fileno(), msvcrt.LK_UNLCK, 1)
 
 
+def _open_lock_handle(path: Path) -> Optional[IO[str]]:
+    """Open ``path`` for locking, or return ``None`` when the FS refuses.
+
+    A read-only model directory (a shared/mounted checkout, a container image
+    layer) cannot host a ``.lock`` file at all. That must not be fatal: the
+    lock is an optimisation for CONCURRENT builders, and a directory nobody
+    can write to is a directory nobody can build into either. One warning,
+    then unlocked operation -- which is exactly the single-process behaviour
+    that shipped before this lock existed.
+    """
+    try:
+        path.parent.mkdir(parents=True, exist_ok=True)
+    except OSError as exc:
+        logger.warning(
+            "artifact_build_lock: cannot create lock directory %s (%s); "
+            "proceeding WITHOUT a cross-process lock",
+            path.parent,
+            exc,
+        )
+        return None
+    try:
+        return path.open("a+", encoding="utf-8")
+    except OSError as exc:
+        logger.warning(
+            "artifact_build_lock: cannot open lock file %s (%s); "
+            "proceeding WITHOUT a cross-process lock",
+            path,
+            exc,
+        )
+        return None
+
+
 @contextmanager
 def artifact_build_lock(
     target: Path | str, *, timeout_s: float | None = None
@@ -83,10 +118,17 @@ def artifact_build_lock(
     Callers must use double-checked locking: check the artifact, acquire,
     RE-CHECK, then build. The second process that blocked here will find the
     first process's finished artifact on its re-check and skip the build.
+
+    When the environment cannot lock at all -- a read-only directory, or a
+    filesystem whose ``flock`` returns ``ENOLCK``/``EOPNOTSUPP`` (NFS without
+    a lock daemon) -- this DEGRADES to unlocked operation with a single
+    warning rather than raising. Timeout semantics are unchanged otherwise.
     """
     path = lock_path_for(target)
-    path.parent.mkdir(parents=True, exist_ok=True)
-    handle = path.open("a+", encoding="utf-8")
+    handle = _open_lock_handle(path)
+    if handle is None:
+        yield
+        return
     if msvcrt is not None and fcntl is None:  # pragma: no cover - Windows
         handle.seek(0)
         if not handle.read(1):
@@ -96,7 +138,19 @@ def artifact_build_lock(
     locked = False
     try:
         while True:
-            if _try_lock_nonblocking(handle):
+            try:
+                acquired = _try_lock_nonblocking(handle)
+            except OSError as exc:
+                # ENOLCK / EOPNOTSUPP / EACCES: the filesystem has no working
+                # advisory lock. Degrade rather than fail the whole run.
+                logger.warning(
+                    "artifact_build_lock: %s does not support advisory locking "
+                    "(%s); proceeding WITHOUT a cross-process lock",
+                    path,
+                    exc,
+                )
+                break
+            if acquired:
                 locked = True
                 break
             if deadline is not None and time.monotonic() >= deadline:
@@ -104,13 +158,14 @@ def artifact_build_lock(
                     f"timed out after {timeout_s}s waiting for {path}"
                 )
             time.sleep(_POLL_SECONDS)
-        try:
-            handle.seek(0)
-            handle.truncate()
-            handle.write(f"{os.getpid()}\n")
-            handle.flush()
-        except OSError:
-            pass
+        if locked:
+            try:
+                handle.seek(0)
+                handle.truncate()
+                handle.write(f"{os.getpid()}\n")
+                handle.flush()
+            except OSError:
+                pass
         yield
     finally:
         try:

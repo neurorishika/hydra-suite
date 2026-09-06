@@ -427,88 +427,100 @@ def run_batch_fanout(
     halted = False
     cancelled = False
 
-    while pending or running:
-        if should_stop():
-            cancelled = True
-            # Snapshot BEFORE signalling: a child that had already exited on its
-            # own is reported on its own merits, not as a casualty of the stop.
-            already_exited = {id(live): live.proc.poll() for live in running}
-            _stop_children(running, options)
-            for live in running:
-                finished_on_its_own = already_exited.get(id(live)) is not None
-                res = _finish(live, cancelled=not finished_on_its_own)
-                finished[live.spec.index] = res
-                events.job_finished(res)
-            running.clear()
-            break
+    # A raise from anywhere in the scheduling loop (an unexpected bug, a
+    # should_stop callback that throws, KeyboardInterrupt from the parent's
+    # own SIGINT) must not leave GPU children running: they hold whole
+    # devices and would outlive the process that owns them.
+    try:
+        while pending or running:
+            if should_stop():
+                cancelled = True
+                # Snapshot BEFORE signalling: a child that had already exited on its
+                # own is reported on its own merits, not as a casualty of the stop.
+                already_exited = {id(live): live.proc.poll() for live in running}
+                _stop_children(running, options)
+                for live in running:
+                    finished_on_its_own = already_exited.get(id(live)) is not None
+                    res = _finish(live, cancelled=not finished_on_its_own)
+                    finished[live.spec.index] = res
+                    events.job_finished(res)
+                running.clear()
+                break
 
-        # reap
-        for live in list(running):
-            if live.proc.poll() is not None:
-                running.remove(live)
-                free_slots.append(live.gpu)
-                res = _finish(live, cancelled=False)
-                finished[live.spec.index] = res
-                events.job_finished(res)
-                if not res.success:
-                    halted = True
-                    logger.error(
-                        "Fan-out: job %d failed (%s); no further jobs will launch",
-                        live.spec.index,
-                        res.error,
-                    )
+            # reap
+            for live in list(running):
+                if live.proc.poll() is not None:
+                    running.remove(live)
+                    free_slots.append(live.gpu)
+                    res = _finish(live, cancelled=False)
+                    finished[live.spec.index] = res
+                    events.job_finished(res)
+                    if not res.success:
+                        halted = True
+                        logger.error(
+                            "Fan-out: job %d failed (%s); no further jobs will launch",
+                            live.spec.index,
+                            res.error,
+                        )
 
-        # launch
-        while pending and free_slots and not halted:
-            spec = pending.pop(0)
-            gpu = free_slots.pop(0)
-            try:
-                running.append(_launch(spec, gpu, options, run_dir, timestamp, events))
-            except Exception as exc:  # noqa: BLE001
-                # A launch that never got off the ground must not abandon the
-                # children already running: record it, halt new launches, and
-                # let the loop drain the survivors normally.
-                logger.exception(
-                    "Fan-out: could not launch job %d (%s)", spec.index, spec.video_path
-                )
-                free_slots.append(gpu)
+            # launch
+            while pending and free_slots and not halted:
+                spec = pending.pop(0)
+                gpu = free_slots.pop(0)
                 try:
-                    failed_log = _job_log_path(spec, timestamp)
-                except Exception:
-                    failed_log = run_dir / f"job_{spec.index}_not_started.log"
-                res = FanoutJobResult(
-                    spec=spec,
-                    gpu=gpu,
-                    returncode=None,
-                    success=False,
-                    log_path=failed_log,
-                    summary_lines=[],
-                    error=f"launch failed: {exc}",
-                    wall_s=0.0,
-                )
-                finished[spec.index] = res
-                events.job_finished(res)
-                halted = True
+                    running.append(
+                        _launch(spec, gpu, options, run_dir, timestamp, events)
+                    )
+                except Exception as exc:  # noqa: BLE001
+                    # A launch that never got off the ground must not abandon the
+                    # children already running: record it, halt new launches, and
+                    # let the loop drain the survivors normally.
+                    logger.exception(
+                        "Fan-out: could not launch job %d (%s)",
+                        spec.index,
+                        spec.video_path,
+                    )
+                    free_slots.append(gpu)
+                    try:
+                        failed_log = _job_log_path(spec, timestamp)
+                    except Exception:
+                        failed_log = run_dir / f"job_{spec.index}_not_started.log"
+                    res = FanoutJobResult(
+                        spec=spec,
+                        gpu=gpu,
+                        returncode=None,
+                        success=False,
+                        log_path=failed_log,
+                        summary_lines=[],
+                        error=f"launch failed: {exc}",
+                        wall_s=0.0,
+                    )
+                    finished[spec.index] = res
+                    events.job_finished(res)
+                    halted = True
 
-        if not running and (halted or not pending):
-            break
-        time.sleep(options.poll_s)
+            if not running and (halted or not pending):
+                break
+            time.sleep(options.poll_s)
 
-    results: list[FanoutJobResult] = []
-    for spec in specs:
-        if spec.index in finished:
-            results.append(finished[spec.index])
-        else:
-            results.append(
-                FanoutJobResult(
-                    spec=spec,
-                    gpu=None,
-                    returncode=None,
-                    success=False,
-                    log_path=run_dir / f"job_{spec.index}_not_started.log",
-                    summary_lines=[],
-                    error="not started" if not cancelled else "cancelled",
-                    wall_s=0.0,
+        results: list[FanoutJobResult] = []
+        for spec in specs:
+            if spec.index in finished:
+                results.append(finished[spec.index])
+            else:
+                results.append(
+                    FanoutJobResult(
+                        spec=spec,
+                        gpu=None,
+                        returncode=None,
+                        success=False,
+                        log_path=run_dir / f"job_{spec.index}_not_started.log",
+                        summary_lines=[],
+                        error="not started" if not cancelled else "cancelled",
+                        wall_s=0.0,
+                    )
                 )
-            )
-    return FanoutResult(jobs=results, cancelled=cancelled)
+        return FanoutResult(jobs=results, cancelled=cancelled)
+    except BaseException:
+        _stop_children(running, options)
+        raise

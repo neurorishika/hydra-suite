@@ -9,7 +9,6 @@ renamed ``_DirectOnnxSession`` -> ``OnnxSessionRunner``.
 from __future__ import annotations
 
 import logging
-from pathlib import Path
 from typing import Any, Dict, List, Optional, Tuple
 
 import numpy as np
@@ -18,6 +17,7 @@ from hydra_suite.runtime.artifact_lock import artifact_build_lock
 from hydra_suite.runtime.onnx_providers import (
     execution_providers_for,
     has_tensorrt_provider,
+    tensorrt_ep_lock_target,
 )
 from hydra_suite.runtime.resolver import ResolvedBackend
 
@@ -117,8 +117,10 @@ class OnnxSessionRunner:
         providers = execution_providers_for(resolved)
         if has_tensorrt_provider(providers):
             # ORT builds its TRT engine into the shared per-machine cache dir
-            # on first session creation; serialize concurrent builders.
-            with artifact_build_lock(Path(str(model_path)).with_suffix(".trt_ep")):
+            # on first session creation; serialize concurrent builders. The
+            # lock lives in that cache dir (writable by construction), not
+            # beside the model, which may be read-only.
+            with artifact_build_lock(tensorrt_ep_lock_target(model_path)):
                 self._session = ort.InferenceSession(
                     str(model_path), providers=providers
                 )

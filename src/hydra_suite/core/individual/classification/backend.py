@@ -795,6 +795,7 @@ class ClassifierBackend:
         from hydra_suite.runtime.onnx_providers import (
             execution_providers_for,
             has_tensorrt_provider,
+            tensorrt_ep_lock_target,
         )
 
         peer = self._derive_onnx_peer()
@@ -825,7 +826,9 @@ class ClassifierBackend:
             if has_tensorrt_provider(providers):
                 # ORT builds its TRT engine into the shared per-machine cache
                 # dir on first session creation; serialize concurrent builders.
-                with artifact_build_lock(Path(str(peer)).with_suffix(".trt_ep")):
+                # The lock lives in that cache dir (writable by construction),
+                # not beside the model, which may be read-only.
+                with artifact_build_lock(tensorrt_ep_lock_target(peer)):
                     self._model = ort.InferenceSession(str(peer), providers=providers)
             else:
                 self._model = ort.InferenceSession(str(peer), providers=providers)

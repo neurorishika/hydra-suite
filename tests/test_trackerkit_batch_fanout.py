@@ -39,6 +39,7 @@ if mode == "orphan_maker":
     import subprocess
     kid = subprocess.Popen([sys.executable, "-c", "import time; time.sleep(60)"])
     print("GRANDCHILD=%d" % kid.pid, flush=True)
+print("PID=%d" % os.getpid(), flush=True)
 print("2026-01-01 - x - INFO - [track forward] 10% starting", flush=True)
 print("GPU=" + os.environ.get("CUDA_VISIBLE_DEVICES", "<unset>"), flush=True)
 print("OMP=" + os.environ.get("OMP_NUM_THREADS", "<unset>"), flush=True)
@@ -386,6 +387,67 @@ def test_cancel_reports_already_exited_child_as_success(tmp_path):
     assert by_name["a"].success, "a exited cleanly before the signal"
     assert by_name["a"].error is None
     assert by_name["b"].returncode == 130 and not by_name["b"].success
+
+
+@pytest.mark.skipif(os.name == "nt", reason="POSIX signals")
+def test_unexpected_raise_tears_down_running_children(tmp_path):
+    """A raise anywhere in the scheduling loop must not strand GPU children.
+
+    ``should_stop`` throwing on its second call stands in for any unexpected
+    bug (or a KeyboardInterrupt arriving mid-loop): the exception must
+    propagate to the caller AND the running child must be dead, because a
+    stranded child holds a whole GPU that nothing will ever reclaim.
+    """
+    specs = [_spec(tmp_path, "a", mode="trap_sigint")]
+    recorder = _Recorder()
+
+    def _child_pid():
+        for _, line in list(recorder.logs):
+            if line.startswith("PID="):
+                return int(line.split("=", 1)[1])
+        return None
+
+    # Raise only ONCE THE CHILD HAS PRINTED ITS PID. The fake prints it strictly
+    # after installing its SIGINT trap, so this makes the test deterministic:
+    # raising earlier could deliver SIGINT before the trap exists, killing the
+    # child by default handler with no pid ever logged. The wall-clock ceiling
+    # keeps a broken child from hanging the test instead of failing it.
+    deadline = time.monotonic() + 5.0
+
+    def _should_stop():
+        if _child_pid() is not None or time.monotonic() > deadline:
+            raise RuntimeError("scheduler blew up")
+        return False
+
+    with pytest.raises(RuntimeError, match="scheduler blew up"):
+        run_batch_fanout(
+            specs,
+            FanoutOptions(
+                jobs=1,
+                run_dir=tmp_path / "run",
+                child_command=_fake_command,
+                poll_s=0.05,
+                sigint_grace_s=2,
+                term_grace_s=1,
+            ),
+            events=recorder,
+            should_stop=_should_stop,
+        )
+
+    assert recorder.started, "the child must have been launched before the raise"
+    pid = _child_pid()
+    assert pid is not None, "child never reported its pid"
+
+    deadline = time.monotonic() + 3.0
+    gone = False
+    while time.monotonic() < deadline:
+        try:
+            os.kill(pid, 0)
+        except (ProcessLookupError, PermissionError):
+            gone = True
+            break
+        time.sleep(0.05)
+    assert gone, f"child pid {pid} survived the scheduler raise"
 
 
 def test_events_protocol_documents_threading_contract():

@@ -1057,16 +1057,27 @@ class TrackingOrchestrator:
             # If batch mode group is checked, initialize batch processing
             if self._panels.setup.g_batch.isChecked():
                 if self._mw.current_batch_index < 0:
+                    parallel = self._batch_parallel_requested()
                     mode_word = (
-                        "in parallel across GPUs"
-                        if self._batch_parallel_requested()
-                        else "sequentially"
+                        "in parallel across GPUs" if parallel else "sequentially"
+                    )
+                    # The parallel path never writes a per-video config file:
+                    # each child is handed the keystone's parameters (or the
+                    # video's own saved config) directly, so promising a
+                    # configuration file per video would be a lie.
+                    detail = (
+                        "Each video runs as its own child process using the CURRENT "
+                        "parameters (the keystone's config) or its own saved config; "
+                        "a CSV is written next to each video."
+                        if parallel
+                        else "Each video will have its own CSV and configuration file "
+                        "saved in its source directory."
                     )
                     res = QMessageBox.question(
                         self._mw,
                         "Start Batch Process",
                         f"This will process {len(self._mw.batch_videos)} videos {mode_word} using the CURRENT parameters.\n\n"
-                        "Each video will have its own CSV and configuration file saved in its source directory.\n\n"
+                        f"{detail}\n\n"
                         "Continue?",
                         QMessageBox.Yes | QMessageBox.No,
                     )

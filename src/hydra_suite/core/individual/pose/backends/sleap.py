@@ -980,6 +980,15 @@ def auto_export_sleap_model(config: PoseRuntimeConfig, runtime_flavor: str) -> s
     ).encode("utf-8")
     sig = hashlib.sha1(sig_blob).hexdigest()[:16]
     export_dir = model_path.parent / f"{model_path.name}.{runtime}"
+    # FIRST check, BEFORE the lock: a pre-built export needs no build, so it
+    # must never require a lock file. A model directory that is read-only (a
+    # shared/mounted model store) can hold a valid export but cannot host
+    # ``<export>.lock`` -- taking the lock first would make the common
+    # already-exported case depend on write access it does not need.
+    if looks_like_sleap_export_path(str(export_dir), runtime) and artifact_meta_matches(
+        export_dir, sig
+    ):
+        return str(export_dir.resolve())
     # Concurrent fan-out children may all miss the export at once; serialize
     # the build and re-check the artifact meta after the wait (double-checked).
     with artifact_build_lock(export_dir):

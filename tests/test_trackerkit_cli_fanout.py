@@ -169,3 +169,68 @@ def test_jobs_above_gpu_count_is_clamped_to_the_gpus(tmp_path, monkeypatch):
     monkeypatch.setattr(cli, "run_batch_fanout", _fake_fanout)
     assert cli.run_tracking_cli(v, gpus="0-2", jobs=99) == 0
     assert seen == {"jobs": 3}
+
+
+def test_fanout_restores_every_signal_handler_it_installed(tmp_path, monkeypatch):
+    """The CLI traps SIGINT/SIGTERM/SIGHUP so a scheduler kill or a closed
+    terminal tears the GPU children down -- but it must hand the process back
+    exactly as it found it."""
+    import signal
+
+    v = _videos(tmp_path, 2)
+    watched = [signal.SIGINT, signal.SIGTERM]
+    if hasattr(signal, "SIGHUP"):
+        watched.append(signal.SIGHUP)
+    before = {sig: signal.getsignal(sig) for sig in watched}
+    during = {}
+
+    def _fake_fanout(specs, options, **kw):
+        during.update({sig: signal.getsignal(sig) for sig in watched})
+        return _ok_result(specs, tmp_path)
+
+    monkeypatch.setattr(cli, "run_batch_fanout", _fake_fanout)
+
+    assert cli.run_tracking_cli(v, jobs=2) == 0
+
+    # Not vacuous: every watched signal really was trapped for the duration.
+    assert during and all(during[sig] is not before[sig] for sig in watched), during
+    after = {sig: signal.getsignal(sig) for sig in watched}
+    assert after == before, "fan-out leaked a signal handler"
+
+
+def test_fanout_stop_signals_include_term_and_hup():
+    import signal
+
+    signals = cli._fanout_stop_signals()
+    assert signal.SIGINT in signals and signal.SIGTERM in signals
+    if hasattr(signal, "SIGHUP"):
+        assert signal.SIGHUP in signals
+
+
+def test_restore_skips_a_none_previous_handler(monkeypatch):
+    """``signal.getsignal`` returns ``None`` for a handler installed from C.
+
+    ``signal.signal(sig, None)`` raises ``TypeError``, so the restore path must
+    skip those signums instead of blowing up in a ``finally``.
+    """
+    import signal
+
+    from hydra_suite.trackerkit.headless_tracking import (
+        install_stop_signal_handlers,
+        restore_signal_handlers,
+    )
+
+    watched = [signal.SIGINT, signal.SIGTERM]
+    real_signal = signal.signal
+    saved = {sig: signal.getsignal(sig) for sig in watched}
+    try:
+        monkeypatch.setattr(signal, "getsignal", lambda _sig: None)
+        stop_event, previous, installed = install_stop_signal_handlers(watched)
+        assert installed and previous == {sig: None for sig in watched}
+        restore_signal_handlers(previous, installed)  # must not raise
+        assert not stop_event.is_set()
+    finally:
+        monkeypatch.undo()
+        for sig, handler in saved.items():
+            if handler is not None:
+                real_signal(sig, handler)

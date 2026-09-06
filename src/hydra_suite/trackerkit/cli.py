@@ -6,9 +6,8 @@ import json
 import logging
 import signal
 import tempfile
-import threading
 from pathlib import Path
-from typing import Callable, Sequence
+from typing import Sequence
 
 from hydra_suite.runtime.cuda_devices import parse_gpu_selectors, resolve_gpu_selectors
 from hydra_suite.trackerkit.batch_fanout import (
@@ -18,7 +17,11 @@ from hydra_suite.trackerkit.batch_fanout import (
 )
 from hydra_suite.trackerkit.batch_plan import BatchJobSpec, plan_batch_jobs
 from hydra_suite.trackerkit.cli_config import load_tracker_cli_session
-from hydra_suite.trackerkit.headless_tracking import run_headless_tracking_session
+from hydra_suite.trackerkit.headless_tracking import (
+    install_stop_signal_handlers,
+    restore_signal_handlers,
+    run_headless_tracking_session,
+)
 
 logger = logging.getLogger(__name__)
 
@@ -162,30 +165,18 @@ class _CliEvents:
         )
 
 
-def _install_stop_flag() -> tuple[Callable[[], bool], Callable[[], None]]:
-    """Turn SIGINT into a cooperative stop flag for the fan-out scheduler."""
-    stop = threading.Event()
-    try:
-        previous = signal.getsignal(signal.SIGINT)
+def _fanout_stop_signals() -> list[int]:
+    """Signals that must stop a fan-out run.
 
-        def _handler(_signum, _frame):
-            logger.warning("SIGINT received - stopping all fan-out children.")
-            stop.set()
-
-        signal.signal(signal.SIGINT, _handler)
-
-        def _restore() -> None:
-            try:
-                signal.signal(signal.SIGINT, previous)
-            except (ValueError, OSError):
-                pass
-
-    except (ValueError, OSError):
-        # Not the main thread (or no signal support): run without a handler.
-        def _restore() -> None:  # noqa: E704
-            return None
-
-    return stop.is_set, _restore
+    SIGINT alone is not enough: a batch scheduler or ``kill`` sends SIGTERM,
+    and a closed terminal sends SIGHUP. Either would kill the parent outright
+    and strand every GPU child, so both are trapped and turned into the same
+    cooperative stop flag. SIGHUP does not exist on Windows.
+    """
+    signals = [signal.SIGINT, signal.SIGTERM]
+    if hasattr(signal, "SIGHUP"):
+        signals.append(signal.SIGHUP)
+    return signals
 
 
 def _print_fanout_table(result: FanoutResult) -> None:
@@ -213,7 +204,10 @@ def _print_fanout_table(result: FanoutResult) -> None:
 
 def _run_fanout(specs: Sequence[BatchJobSpec], options: FanoutOptions) -> int:
     """The process-per-slot path: one child per video, N at a time."""
-    should_stop, restore = _install_stop_flag()
+    stop_event, previous_handlers, installed = install_stop_signal_handlers(
+        _fanout_stop_signals(),
+        log_message="%s received - stopping all fan-out children.",
+    )
     try:
         logger.info(
             "Tracker CLI fan-out: %d videos, %d slot(s)%s",
@@ -222,9 +216,9 @@ def _run_fanout(specs: Sequence[BatchJobSpec], options: FanoutOptions) -> int:
             f" on GPUs {[g.index for g in options.gpus]}" if options.gpus else "",
         )
         result = run_batch_fanout(
-            specs, options, should_stop=should_stop, events=_CliEvents()
+            specs, options, should_stop=stop_event.is_set, events=_CliEvents()
         )
     finally:
-        restore()
+        restore_signal_handlers(previous_handlers, installed)
     _print_fanout_table(result)
     return 0 if result.success else 1
