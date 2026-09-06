@@ -62,6 +62,7 @@ from hydra_suite.core.inference.semantic.detection_metrics import (
 from hydra_suite.core.inference.semantic.shape_prior import fit_area_band
 
 from .datapoints import RES, _scale_polygons_to_res
+from .protocol import emit_log
 
 # Keys on SAM3's last-stage output dict. Named here rather than inlined so a
 # vendor rename produces one clear failure with a list of what WAS present,
@@ -97,8 +98,12 @@ def _last_stage(query_output: Any) -> Any:
 
 def extract_predictions(
     output: Any, *, target_size: int = RES
-) -> tuple[list[np.ndarray], list[float]]:
-    """Predicted polygons (in ``target_size`` space) and their scores.
+) -> tuple[list[np.ndarray], list[float], bool]:
+    """Predicted polygons (in ``target_size`` space), scores, presence flag.
+
+    The third element says whether the presence multiplication was actually
+    applied. It is returned rather than swallowed because its absence CHANGES
+    THE SCORE DEFINITION -- see the note at the presence lookup below.
 
     Raises ``KeyError`` naming the keys that WERE present when the expected
     ones are missing. On the CUDA box this error message is the only
@@ -118,10 +123,22 @@ def extract_predictions(
     masks = stage[PRED_MASKS_KEY]
     scores_t = logits.sigmoid()[0].max(-1).values
     presence = stage.get(PRESENCE_KEY)
-    if presence is not None:
+    presence_used = presence is not None
+    if presence_used:
         # A per-image scalar: it rescales every query in the tile equally, so
         # within-tile ranking is unchanged and only absolute thresholds move.
         scores_t = scores_t * presence.sigmoid().reshape(-1)[0]
+    # If it is ABSENT, the scores are no longer Meta's postprocessor
+    # definition: cross-tile ordering and therefore the sweep counts and AP
+    # move, while every number still looks perfectly plausible. A vendor
+    # rename of THIS key alone would not trip the `missing` check above, so
+    # the fact is propagated out and recorded per row as `ap_presence_used`
+    # (plus a one-time log). It is deliberately NOT an error: presence is a
+    # per-image scalar, so a run without it is still internally consistent
+    # and a within-run trend -- the only thing this metric claims to be --
+    # and discarding a usable series would cost more than it saves. What is
+    # unacceptable is the definition changing with no trace, and the flag is
+    # that trace, in the DATA rather than only in the docs.
     scores_np = scores_t.detach().float().cpu().numpy().reshape(-1)
     masks_np = masks[0].detach().float().cpu().numpy() > 0.0
 
@@ -138,7 +155,7 @@ def extract_predictions(
             continue
         polygons.append(contour.astype(np.float32) * scale)
         scores.append(float(scores_np[index]))
-    return polygons, scores
+    return polygons, scores, presence_used
 
 
 def count_tile(
@@ -248,6 +265,7 @@ class DetectionQualityAccumulator:
         self._predictions: dict[int, tuple[list[np.ndarray], list[float]]] = {}
         self._error: str | None = None
         self._elapsed = 0.0
+        self._presence_used: bool | None = None
 
     def observe(self, outputs: Any) -> None:
         """Record one batch's per-query outputs, in query order."""
@@ -265,7 +283,20 @@ class DetectionQualityAccumulator:
                 self._cursor += 1
                 if descriptor_index is None:
                     continue
-                self._predictions[descriptor_index] = extract_predictions(query_output)
+                polys, scores, presence_used = extract_predictions(query_output)
+                self._predictions[descriptor_index] = (polys, scores)
+                if self._presence_used is None:
+                    self._presence_used = presence_used
+                    if not presence_used:
+                        emit_log(
+                            "SAM3 validation outputs carry no "
+                            f"{PRESENCE_KEY!r}: AP scores are NOT Meta's "
+                            "postprocessor definition (no presence "
+                            "multiplication). Recorded as "
+                            "ap_presence_used=false; training unaffected."
+                        )
+                else:
+                    self._presence_used = self._presence_used and presence_used
         except Exception as exc:  # noqa: BLE001 - recording must never kill a run
             self._error = f"{type(exc).__name__}: {exc}"
         finally:
@@ -279,6 +310,17 @@ class DetectionQualityAccumulator:
                 raise RuntimeError(self._error)
             if not self._predictions:
                 raise RuntimeError("no positive-query predictions were collected")
+            # An UNDER-run is the dangerous direction and `observe` cannot see
+            # it: a batch that yields fewer queries than planned leaves the
+            # cursor behind, and every LATER prediction is then scored against
+            # the wrong tile's ground truth -- a plausible-looking, silently
+            # wrong AP. Checked here, once, where the whole pass is visible.
+            if self._cursor != len(self._plan):
+                raise RuntimeError(
+                    f"SAM3 validation produced {self._cursor} queries but the "
+                    f"descriptor plan expects {len(self._plan)}; "
+                    "prediction/label alignment cannot be trusted."
+                )
             ground_truth = {
                 index: _tile_ground_truth(self._descriptors[index])
                 for index in self._predictions
@@ -318,6 +360,12 @@ class DetectionQualityAccumulator:
             return {
                 "ap": ap,
                 "ap_tiles": n_tiles,
+                # The raw JSONL should be self-describing: a reader who never
+                # opens the docs still learns this AP is TILE-space (not the
+                # eval harness's frame-merged score) and therefore a
+                # within-run trend, not a cross-corpus comparable number.
+                "ap_scope": "tile",
+                "ap_presence_used": bool(self._presence_used),
                 "ap_elapsed_s": elapsed,
                 # The sweep itself, so the row can be re-scored offline (a
                 # different AP definition, a recall-first operating point)

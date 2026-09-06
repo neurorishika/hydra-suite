@@ -134,7 +134,8 @@ def test_predictions_are_extracted_and_scored_like_metas_postprocessor():
     masks[1, 20:30, 20:30] = True
     output = _stub_output(masks, [0.9, 0.4], presence=0.5)
 
-    polys, scores = dq.extract_predictions(output, target_size=64)
+    polys, scores, presence_used = dq.extract_predictions(output, target_size=64)
+    assert presence_used is True
 
     assert len(polys) == 2 and len(scores) == 2
     # score = sigmoid(logits).max(-1) * sigmoid(presence)
@@ -346,3 +347,98 @@ def test_the_within_run_only_limitation_is_documented_where_it_matters():
     for module in (detection_metrics, detection_quality):
         text = inspect.getsource(module)
         assert "not comparable" in text.lower()
+
+
+# ---------------------------------------------------------------------------
+# Silent-corruption guards (Fable review)
+# ---------------------------------------------------------------------------
+
+
+def test_a_short_query_run_is_loud_rather_than_misaligning_every_later_tile():
+    """An UNDER-run is the dangerous direction: the cursor falls behind and
+    every later prediction is scored against the wrong tile's ground truth,
+    producing a plausible-looking but wrong AP with no error."""
+    from hydra_suite.training.sam3_lora import detection_quality as dq
+
+    descriptors = [_Descriptor([_square(0, 0)], n_neg=0) for _ in range(3)]
+    accumulator = dq.DetectionQualityAccumulator(descriptors)
+
+    masks = np.zeros((1, 32, 32), dtype=bool)
+    masks[0, 4:16, 4:16] = True
+
+    class _ShortOutputs:
+        # Only two of the three planned queries came back.
+        output = [[_stub_output(masks, [0.9])], [_stub_output(masks, [0.9])]]
+
+    accumulator.observe(_ShortOutputs())
+    stats = accumulator.result()
+    assert "ap" not in stats
+    assert "ap_error" in stats
+    assert "2" in stats["ap_error"] and "3" in stats["ap_error"]
+
+
+def test_an_overrun_is_still_loud():
+    from hydra_suite.training.sam3_lora import detection_quality as dq
+
+    descriptors = [_Descriptor([_square(0, 0)], n_neg=0)]
+    accumulator = dq.DetectionQualityAccumulator(descriptors)
+    masks = np.zeros((1, 32, 32), dtype=bool)
+    masks[0, 4:16, 4:16] = True
+
+    class _LongOutputs:
+        output = [[_stub_output(masks, [0.9])], [_stub_output(masks, [0.9])]]
+
+    accumulator.observe(_LongOutputs())
+    assert "ap_error" in accumulator.result()
+
+
+def test_a_dropped_presence_key_is_recorded_not_silently_absorbed():
+    """Losing `presence_logit_dec` CHANGES the score definition. It stays
+    internally consistent (presence is a per-image scalar), so it is recorded
+    as a row flag rather than failing the pass -- but it must leave a trace."""
+    from hydra_suite.training.sam3_lora import detection_quality as dq
+
+    masks = np.zeros((1, 32, 32), dtype=bool)
+    masks[0, 4:16, 4:16] = True
+
+    descriptors = [_Descriptor([_square(100, 100, size=200)], n_neg=0)]
+
+    with_presence = dq.DetectionQualityAccumulator(descriptors)
+
+    class _Outputs:
+        def __init__(self, query):
+            self.output = [[query]]
+
+    with_presence.observe(_Outputs(_stub_output(masks, [0.9], presence=0.8)))
+    assert with_presence.result()["ap_presence_used"] is True
+
+    without = dq.DetectionQualityAccumulator(descriptors)
+    without.observe(_Outputs(_stub_output(masks, [0.9])))
+    assert without.result()["ap_presence_used"] is False
+
+
+def test_extract_predictions_reports_whether_presence_was_applied():
+    from hydra_suite.training.sam3_lora import detection_quality as dq
+
+    masks = np.zeros((1, 32, 32), dtype=bool)
+    masks[0, 4:16, 4:16] = True
+
+    _p, scores, used = dq.extract_predictions(_stub_output(masks, [0.9], presence=0.5))
+    assert used is True and scores == pytest.approx([0.45], abs=1e-4)
+    _p, scores, used = dq.extract_predictions(_stub_output(masks, [0.9]))
+    assert used is False and scores == pytest.approx([0.9], abs=1e-4)
+
+
+def test_the_row_marks_its_own_scope_so_the_raw_jsonl_is_self_describing():
+    from hydra_suite.training.sam3_lora import detection_quality as dq
+
+    masks = np.zeros((1, 32, 32), dtype=bool)
+    masks[0, 4:16, 4:16] = True
+    descriptors = [_Descriptor([_square(100, 100, size=200)], n_neg=0)]
+    accumulator = dq.DetectionQualityAccumulator(descriptors)
+
+    class _Outputs:
+        output = [[_stub_output(masks, [0.9])]]
+
+    accumulator.observe(_Outputs())
+    assert accumulator.result()["ap_scope"] == "tile"
