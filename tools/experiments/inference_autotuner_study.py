@@ -322,12 +322,38 @@ def _selected_cases(matrix: dict[str, Any], labels: set[str]) -> list[dict[str, 
     cases = matrix.get("cases")
     if not isinstance(cases, list) or not cases:
         raise ValueError("Matrix must contain a non-empty 'cases' list")
+    case_labels = [str(case["label"]) for case in cases]
+    if len(set(case_labels)) != len(case_labels):
+        raise ValueError("Matrix case labels must be unique")
     selected = [case for case in cases if not labels or str(case["label"]) in labels]
     if labels:
         missing = labels - {str(case["label"]) for case in selected}
         if missing:
             raise ValueError(f"Unknown case labels: {sorted(missing)}")
     return selected
+
+
+def _case_failure(case: dict[str, Any], result: dict[str, Any]) -> str | None:
+    """Return a study-level failure, including a mismatched expected failure."""
+
+    returncode = int(result["returncode"])
+    expected_failure = bool(case.get("expect_failure", False))
+    if returncode != 0:
+        if not expected_failure:
+            return str(result.get("error_tail", "case failed"))
+        expected_error = str(case.get("expected_error_substring", ""))
+        if expected_error and expected_error not in result.get("error_tail", ""):
+            return (
+                f"Case {case['label']} failed for the wrong reason; "
+                f"expected log text {expected_error!r}."
+            )
+        return None
+    if expected_failure:
+        return (
+            f"Case {case['label']} unexpectedly succeeded; its expected "
+            "admission boundary was not reproduced."
+        )
+    return None
 
 
 def main(argv: list[str] | None = None) -> int:
@@ -348,6 +374,10 @@ def main(argv: list[str] | None = None) -> int:
         return 0
 
     output_root = args.output_root.expanduser().resolve()
+    if output_root.exists() and any(output_root.iterdir()):
+        raise FileExistsError(
+            f"Refusing to overwrite non-empty output root: {output_root}"
+        )
     output_root.mkdir(parents=True, exist_ok=True)
     manifest = {
         "matrix_path": str(matrix_path),
@@ -377,17 +407,10 @@ def main(argv: list[str] | None = None) -> int:
             )
             manifest["results"].append(result)
             _atomic_json(manifest_path, manifest)
-            expected_failure = bool(result.get("expected_failure", False))
-            if result["returncode"] != 0 and not expected_failure:
+            failure = _case_failure(case, result)
+            if failure is not None:
                 failures += 1
-                print(result.get("error_tail", "case failed"), file=sys.stderr)
-            elif result["returncode"] == 0 and expected_failure:
-                failures += 1
-                print(
-                    f"Case {case['label']} unexpectedly succeeded; its expected "
-                    "admission boundary was not reproduced.",
-                    file=sys.stderr,
-                )
+                print(failure, file=sys.stderr)
 
     manifest["finished_at_unix_ns"] = time.time_ns()
     _atomic_json(manifest_path, manifest)

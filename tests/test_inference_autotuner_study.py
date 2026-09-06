@@ -72,8 +72,45 @@ def test_selected_cases_rejects_unknown_label():
 
 
 def test_expected_failure_is_preserved_in_selected_case():
-    matrix = {"cases": [{"label": "boundary", "expect_failure": True}]}
+    matrix = {
+        "cases": [
+            {
+                "label": "boundary",
+                "expect_failure": True,
+                "expected_error_substring": "estimated=",
+            }
+        ]
+    }
 
     selected = study._selected_cases(matrix, {"boundary"})
 
     assert selected[0]["expect_failure"] is True
+    assert selected[0]["expected_error_substring"] == "estimated="
+
+
+def test_selected_cases_rejects_duplicate_labels():
+    matrix = {"cases": [{"label": "same"}, {"label": "same"}]}
+
+    try:
+        study._selected_cases(matrix, set())
+    except ValueError as exc:
+        assert "unique" in str(exc)
+    else:
+        raise AssertionError("duplicate labels would overwrite case evidence")
+
+
+def test_case_failure_requires_the_expected_error_reason():
+    case = {
+        "label": "boundary",
+        "expect_failure": True,
+        "expected_error_substring": "estimated=",
+    }
+
+    assert (
+        study._case_failure(case, {"returncode": 1, "error_tail": "estimated=900"})
+        is None
+    )
+    assert "wrong reason" in study._case_failure(
+        case, {"returncode": 1, "error_tail": "model missing"}
+    )
+    assert "unexpectedly succeeded" in study._case_failure(case, {"returncode": 0})

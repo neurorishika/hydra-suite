@@ -101,7 +101,8 @@
       "video_path": "../equivalence/fixtures/clips/ant_cnn_identity.mp4",
       "runtime": "gpu",
       "config": {"detection_batch_size": 16, "pipeline_depth": 1, "enable_pose_extractor": false, "enable_headtail_orientation": false, "enable_identity_analysis": false, "cnn_classifiers": []},
-      "expect_failure": true
+      "expect_failure": true,
+      "expected_error_substring": "estimated="
     },
     {
       "label": "ant-native-det-b32",
@@ -109,7 +110,8 @@
       "video_path": "../equivalence/fixtures/clips/ant_cnn_identity.mp4",
       "runtime": "gpu",
       "config": {"detection_batch_size": 32, "pipeline_depth": 1, "enable_pose_extractor": false, "enable_headtail_orientation": false, "enable_identity_analysis": false, "cnn_classifiers": []},
-      "expect_failure": true
+      "expect_failure": true,
+      "expected_error_substring": "estimated="
     },
 
     {
