@@ -16,11 +16,19 @@ from PySide6.QtWidgets import QApplication, QDoubleSpinBox, QLabel  # noqa: E402
 from hydra_suite.core.tracking.optimization.optimizer import (  # noqa: E402
     _PARAM_RANGES,
     OptimizationResult,
+    TrackingOptimizerCore,
 )
 from hydra_suite.core.tracking.optimization.parameter_contract import (  # noqa: E402
     tracking_autotune_parameter,
 )
+from hydra_suite.core.tracking.optimization.production_replay import (  # noqa: E402
+    ProductionReplayEvaluator,
+)
 from hydra_suite.trackerkit.config.schemas import TrackerConfig  # noqa: E402
+from hydra_suite.trackerkit.engine_params import (  # noqa: E402
+    RuntimeContext,
+    build_engine_params,
+)
 from hydra_suite.trackerkit.gui.autotune_contract import (  # noqa: E402
     TRACKING_AUTOTUNE_CANDIDATE_KEYS,
     AutotuneCandidateApplicationError,
@@ -278,6 +286,95 @@ def test_apply_candidate_uses_real_qt_precision_before_write(
     assert panels.tracking.spin_kalman_longitudinal_noise.value() == 5.4
 
 
+def test_longitudinal_candidate_replay_matches_applied_engine_params(tmp_path) -> None:
+    """Candidate replay must use the same long-only Kalman change as the GUI."""
+
+    base_params = {
+        "MAX_TARGETS": 1,
+        "REFERENCE_BODY_SIZE": 12.0,
+        "RESIZE_FACTOR": 0.5,
+        "MAX_DISTANCE_MULTIPLIER": 3.0,
+        "MAX_DISTANCE_THRESHOLD": 18.0,
+        "KALMAN_LONGITUDINAL_NOISE_MULTIPLIER": 5.0,
+        "KALMAN_LATERAL_NOISE_MULTIPLIER": 0.2,
+        "KALMAN_ANISOTROPY_RATIO": 25.0,
+    }
+    candidate = {
+        "MAX_DISTANCE_MULTIPLIER": 1.234,
+        "MAX_DISTANCE_THRESHOLD": 999.0,
+        "KALMAN_LONGITUDINAL_NOISE_MULTIPLIER": 7.04,
+        "KALMAN_ANISOTROPY_RATIO": 999.0,
+    }
+    optimizer = TrackingOptimizerCore(
+        "clip.mp4",
+        str(tmp_path / "cache"),
+        0,
+        1,
+        base_params,
+        {
+            "MAX_DISTANCE_MULTIPLIER": True,
+            "KALMAN_LONGITUDINAL_NOISE_MULTIPLIER": True,
+        },
+    )
+
+    lightweight_params = optimizer._candidate_evaluation_params(candidate)
+    effective_keys = (
+        "KALMAN_LONGITUDINAL_NOISE_MULTIPLIER",
+        "KALMAN_LATERAL_NOISE_MULTIPLIER",
+        "KALMAN_ANISOTROPY_RATIO",
+    )
+    expected = {
+        "KALMAN_LONGITUDINAL_NOISE_MULTIPLIER": 7.0,
+        "KALMAN_LATERAL_NOISE_MULTIPLIER": 0.2,
+        "KALMAN_ANISOTROPY_RATIO": 35.0,
+    }
+    assert {key: lightweight_params[key] for key in effective_keys} == expected
+    assert lightweight_params["MAX_DISTANCE_THRESHOLD"] == pytest.approx(7.38)
+
+    captured: dict[str, object] = {}
+
+    class _CapturingEngine:
+        def __init__(self, _video_path, **kwargs) -> None:
+            self.kwargs = kwargs
+
+        def set_parameters(self, params) -> None:
+            captured.update(params)
+
+        def run_tracking(self) -> None:
+            self.kwargs["on_finished"](True, [], [])
+
+    replay = ProductionReplayEvaluator(
+        "clip.mp4",
+        str(tmp_path / "cache"),
+        0,
+        1,
+        engine_factory=_CapturingEngine,
+    )
+    assert replay.run(lightweight_params).success
+    assert {key: captured[key] for key in effective_keys} == expected
+
+    panels = _panels()
+    panels.tracking._kalman_lateral_noise_multiplier = 0.2
+    apply_tracking_autotune_candidate(candidate, panels)
+    # Applying the row does not mutate the hidden lateral setting. The next
+    # production engine build must reproduce both replay's ratio and axes.
+    assert panels.tracking._kalman_lateral_noise_multiplier == 0.2
+    rebuilt = build_engine_params(
+        {
+            "frame_width": 640,
+            "frame_height": 480,
+            "reference_body_size": base_params["REFERENCE_BODY_SIZE"],
+            "max_assignment_distance_multiplier": panels.tracking.spin_max_dist.value(),
+            "kalman_longitudinal_noise_multiplier": panels.tracking.spin_kalman_longitudinal_noise.value(),
+            "kalman_lateral_noise_multiplier": panels.tracking._kalman_lateral_noise_multiplier,
+        },
+        runtime=RuntimeContext(
+            fps=30.0, total_frames=2, frame_width=640, frame_height=480
+        ),
+    )
+    assert {key: rebuilt[key] for key in effective_keys} == expected
+
+
 def test_real_tracking_panel_matches_shared_precision_contract(
     qapp: QApplication,
 ) -> None:
@@ -305,6 +402,11 @@ def test_real_tracking_panel_matches_shared_precision_contract(
                 == tracking_autotune_parameter(key).widget_decimals
             )
 
+        tooltip = panel.spin_kalman_longitudinal_noise.toolTip()
+        assert "lateral multiplier stays fixed" in tooltip
+        assert "anisotropy changes" in tooltip
+        assert "locked" not in tooltip
+
         apply_tracking_autotune_candidate(
             {"W_POSITION": 0.995, "W_AREA": 0.12345678},
             SimpleNamespace(tracking=panel),
@@ -313,6 +415,29 @@ def test_real_tracking_panel_matches_shared_precision_contract(
         assert panel.spin_Wa.value() == 0.1235
     finally:
         panel.close()
+
+
+def test_kalman_autotune_copy_explains_retained_lateral_semantics(
+    qapp: QApplication, tmp_path
+) -> None:
+    dialog = ParameterHelperDialog(
+        video_path="/tmp/video.mp4",
+        detection_cache_path=str(tmp_path / "cache"),
+        start_frame=0,
+        end_frame=10,
+        current_params={
+            "KALMAN_LONGITUDINAL_NOISE_MULTIPLIER": 5.0,
+            "KALMAN_LATERAL_NOISE_MULTIPLIER": 0.1,
+            "KALMAN_ANISOTROPY_RATIO": 50.0,
+        },
+    )
+    try:
+        tooltip = dialog.cb_kalman_long_noise.toolTip()
+        assert "lateral multiplier stays fixed" in tooltip
+        assert "anisotropy" in tooltip
+        assert "Lateral noise is derived automatically" not in tooltip
+    finally:
+        dialog.close()
 
 
 def test_real_detection_panel_matches_shared_threshold_precision_contract(

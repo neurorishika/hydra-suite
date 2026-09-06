@@ -33,9 +33,9 @@ if TYPE_CHECKING:
 # baked in so the panel stays compact; saved-config keys still flow through
 # the runtime params dict so external tests/configs continue to work.
 
-# Kalman lateral noise is auto-derived from longitudinal × anisotropy ratio.
-# Ratio matches the previous default (5.0 / 0.1 = 50) and is treated as a
-# biological constant for body-axis-aligned motion.
+# Kalman lateral noise is a retained expert value. The default relationship
+# (5.0 / 0.1 = 50) initializes an effective anisotropy, but changing the public
+# longitudinal control keeps lateral fixed and changes that effective ratio.
 KALMAN_ANISOTROPY_RATIO_CONST = 50.0
 
 # Pose-rejection knobs: never appeared in the optimizer; defaults are universal.
@@ -335,12 +335,14 @@ class TrackingPanel(QWidget):
         self.spin_kalman_longitudinal_noise.setToolTip(
             "Forward/longitudinal noise multiplier (0.1-20.0).\n"
             "Controls uncertainty along the movement direction.\n"
-            f"Lateral uncertainty is locked at 1/{int(KALMAN_ANISOTROPY_RATIO_CONST)} "
-            "of this value (body-axis anisotropy is biologically fixed).\n"
+            "The retained lateral multiplier stays fixed when this changes, so "
+            "effective forward/lateral anisotropy changes.\n"
+            f"New configurations begin with lateral at 1/{int(KALMAN_ANISOTROPY_RATIO_CONST)} "
+            "of the default forward value.\n"
             "Recommended: 3.0-7.0"
         )
         f_kf.addRow(
-            "Forward/sideways uncertainty (forward scale)",
+            "Forward uncertainty (lateral retained)",
             self.spin_kalman_longitudinal_noise,
         )
 

@@ -75,6 +75,18 @@ TRACKING_AUTOTUNE_CANDIDATE_KEYS = tuple(
     parameter.key for parameter in TRACKING_AUTOTUNE_PARAMETERS
 )
 
+# ``build_engine_params`` derives these engine-only values from the public
+# controls.  Keep the derivation at the candidate/base merge boundary too: a
+# candidate is evaluated before TrackerKit writes it into those controls.
+_MAX_DISTANCE_MULTIPLIER = "MAX_DISTANCE_MULTIPLIER"
+_MAX_DISTANCE_THRESHOLD = "MAX_DISTANCE_THRESHOLD"
+_KALMAN_LONGITUDINAL_NOISE = "KALMAN_LONGITUDINAL_NOISE_MULTIPLIER"
+_KALMAN_LATERAL_NOISE = "KALMAN_LATERAL_NOISE_MULTIPLIER"
+_KALMAN_ANISOTROPY_RATIO = "KALMAN_ANISOTROPY_RATIO"
+_KALMAN_LATERAL_NOISE_FLOOR = 1e-6
+_KALMAN_MIN_ANISOTROPY_RATIO = 1.0
+_DEFAULT_KALMAN_ANISOTROPY_RATIO = 50.0
+
 # Retained as a simple mapping for the core search implementation and external
 # callers that have historically imported ``optimizer._PARAM_RANGES``.
 PARAM_RANGES = {
@@ -141,6 +153,74 @@ def quantize_tracking_autotune_params(
         )
         for key, value in params.items()
     }
+
+
+def merge_tracking_autotune_candidate(
+    base_params: Mapping[str, Any], candidate_params: Mapping[str, Any]
+) -> dict[str, Any]:
+    """Return engine parameters for a public candidate applied to *base_params*.
+
+    Candidate results intentionally contain only public, applyable controls.
+    Engine-only values derived from those controls must be recalculated after
+    the merge, rather than carried forward from an earlier proposal or from
+    the baseline.  This is particularly important for longitudinal Kalman
+    noise: TrackerKit writes only that public control and keeps its hidden
+    lateral multiplier unchanged.  Production subsequently derives the
+    anisotropy ratio from those two effective values, so evaluation must do
+    exactly the same thing.
+
+    The ratio calculation deliberately mirrors ``trackerkit.engine_params``:
+    its lateral denominator has a ``1e-6`` floor and its ratio has a ``1.0``
+    floor.  The fallback covers hand-built/legacy engine mappings which omit
+    the retained hidden lateral key; normal TrackerKit engine params always
+    include it.
+    """
+
+    canonical_candidate = quantize_tracking_autotune_params(candidate_params)
+    merged = dict(base_params)
+    # Do not let historical or engine-only result fields influence replay.
+    # Applying a selected row writes only this public contract, and a restored
+    # candidate must therefore evaluate with the same surface.
+    selected = {
+        key: canonical_candidate[key]
+        for key in TRACKING_AUTOTUNE_CANDIDATE_KEYS
+        if key in canonical_candidate
+    }
+    merged.update(selected)
+
+    if _MAX_DISTANCE_MULTIPLIER in selected:
+        merged[_MAX_DISTANCE_THRESHOLD] = (
+            float(merged[_MAX_DISTANCE_MULTIPLIER])
+            * float(merged.get("REFERENCE_BODY_SIZE", 20.0))
+            * float(merged.get("RESIZE_FACTOR", 1.0))
+        )
+
+    if _KALMAN_LONGITUDINAL_NOISE in selected:
+        longitudinal = float(merged[_KALMAN_LONGITUDINAL_NOISE])
+        if _KALMAN_LATERAL_NOISE in merged:
+            lateral = float(merged[_KALMAN_LATERAL_NOISE])
+        else:
+            # An engine mapping without the retained hidden lateral setting
+            # still has an effective baseline lateral noise through its ratio.
+            baseline_longitudinal = float(
+                base_params.get(_KALMAN_LONGITUDINAL_NOISE, longitudinal)
+            )
+            baseline_ratio = max(
+                float(
+                    base_params.get(
+                        _KALMAN_ANISOTROPY_RATIO,
+                        _DEFAULT_KALMAN_ANISOTROPY_RATIO,
+                    )
+                ),
+                _KALMAN_MIN_ANISOTROPY_RATIO,
+            )
+            lateral = baseline_longitudinal / baseline_ratio
+        merged[_KALMAN_ANISOTROPY_RATIO] = max(
+            _KALMAN_MIN_ANISOTROPY_RATIO,
+            longitudinal / max(lateral, _KALMAN_LATERAL_NOISE_FLOOR),
+        )
+
+    return merged
 
 
 def tracking_autotune_widget_value(

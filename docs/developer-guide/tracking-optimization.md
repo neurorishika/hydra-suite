@@ -94,6 +94,17 @@ exploration across different video FPS. Dynamic ranges are capped at the
 corresponding seconds-control limits so every generated candidate remains
 representable on write-back.
 
+Candidate evaluation uses the same public-control merge that TrackerKit applies.
+Engine-only dependent values are always recalculated after a candidate override:
+changing the public longitudinal Kalman multiplier leaves the retained hidden
+lateral multiplier unchanged and recomputes anisotropy as
+`max(1, longitudinal / max(lateral, 1e-6))`, exactly as the engine builder
+does. Thus tuning longitudinal noise is a long-only production change, not a
+proportional change to both axes. Likewise, a distance-multiplier candidate
+rebuilds its pixel distance threshold from the effective body size. Derived
+fields are not applied directly to hidden widgets; they are only replay-time
+representations of the public candidate.
+
 The selectable dimensions are source- and evidence-aware. Background
 subtraction does not show inert YOLO confidence or IoU controls. For YOLO,
 confidence and IoU are disabled with an explicit reason when the raw cache also

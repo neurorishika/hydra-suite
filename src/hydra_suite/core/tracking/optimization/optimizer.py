@@ -56,6 +56,7 @@ from hydra_suite.core.tracking.optimization.detection_config import (
 )
 from hydra_suite.core.tracking.optimization.parameter_contract import (
     PARAM_RANGES,
+    merge_tracking_autotune_candidate,
     quantize_tracking_autotune_params,
     quantize_tracking_autotune_value,
 )
@@ -933,17 +934,18 @@ class TrackingOptimizerCore:
                 )
 
         # Every proposal is evaluated at the same decimal precision TrackerKit
-        # can later write into its QDoubleSpinBoxes. Derive the pixel threshold
-        # only after canonicalizing the body-length multiplier.
+        # can later write into its QDoubleSpinBoxes. Engine-only dependent
+        # values are derived later by _candidate_evaluation_params so seed,
+        # restart, and Optuna proposals all use one merge contract.
         trial_params = quantize_tracking_autotune_params(trial_params)
-
-        # Derived parameter: MAX_DISTANCE_THRESHOLD from multiplier
-        if "MAX_DISTANCE_MULTIPLIER" in trial_params:
-            trial_params["MAX_DISTANCE_THRESHOLD"] = (
-                trial_params["MAX_DISTANCE_MULTIPLIER"] * scaled_body_size
-            )
-
         return trial_params
+
+    def _candidate_evaluation_params(
+        self, candidate_params: Mapping[str, Any]
+    ) -> Dict[str, Any]:
+        """Build one production-equivalent engine mapping for a candidate."""
+
+        return merge_tracking_autotune_candidate(self.base_params, candidate_params)
 
     def _temporal_validation_horizon(self) -> int:
         """Largest temporal effect horizon represented by the active search."""
@@ -1646,8 +1648,7 @@ class TrackingOptimizerCore:
                     85 + int(15 * index / max(len(shortlist), 1)),
                     f"Production-validating candidate {index + 1}/{len(shortlist)}",
                 )
-            params = dict(self.base_params)
-            params.update(result.params)
+            params = self._candidate_evaluation_params(result.params)
             detection_counts = self._validation_detection_counts(
                 params, start_frame, end_frame
             )
@@ -1863,9 +1864,9 @@ class TrackingOptimizerCore:
 
             trial_params = self._suggest_trial_params(trial, scaled_body_size)
 
-            # Merge into full param set
-            current_params = self.base_params.copy()
-            current_params.update(trial_params)
+            # One canonical merge keeps fast replay, held-out production
+            # replay, preview, and the eventual GUI apply surface aligned.
+            current_params = self._candidate_evaluation_params(trial_params)
 
             # Fast replay only proposes candidates on the training slice.
             # Production replay on held-out frames decides whether one is safe

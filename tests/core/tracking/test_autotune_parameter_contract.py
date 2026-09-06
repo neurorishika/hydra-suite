@@ -5,6 +5,7 @@ import pytest
 
 from hydra_suite.core.tracking.optimization.parameter_contract import (
     canonical_evaluation_params,
+    merge_tracking_autotune_candidate,
     quantize_tracking_autotune_params,
     quantize_tracking_autotune_value,
     tracking_autotune_widget_value,
@@ -52,6 +53,59 @@ def test_candidate_quantization_preserves_integer_frame_storage() -> None:
 def test_fractional_frame_candidate_is_rejected() -> None:
     with pytest.raises(ValueError, match="integer frame count"):
         quantize_tracking_autotune_value("LOST_THRESHOLD_FRAMES", 3.5)
+
+
+def test_candidate_merge_rederives_engine_values_from_public_controls() -> None:
+    base = {
+        "REFERENCE_BODY_SIZE": 12.0,
+        "RESIZE_FACTOR": 0.5,
+        "MAX_DISTANCE_MULTIPLIER": 3.0,
+        "MAX_DISTANCE_THRESHOLD": 18.0,
+        "KALMAN_LONGITUDINAL_NOISE_MULTIPLIER": 5.0,
+        "KALMAN_LATERAL_NOISE_MULTIPLIER": 0.2,
+        "KALMAN_ANISOTROPY_RATIO": 25.0,
+    }
+
+    merged = merge_tracking_autotune_candidate(
+        base,
+        {
+            "MAX_DISTANCE_MULTIPLIER": 1.234,
+            "MAX_DISTANCE_THRESHOLD": 999.0,
+            "KALMAN_LONGITUDINAL_NOISE_MULTIPLIER": 7.04,
+            "KALMAN_ANISOTROPY_RATIO": 999.0,
+        },
+    )
+
+    # The public widgets can represent 1.23 and 7.0, not the raw values.
+    # Engine-only values are rebuilt from that surface and the fixed base.
+    assert merged["MAX_DISTANCE_MULTIPLIER"] == 1.23
+    assert merged["MAX_DISTANCE_THRESHOLD"] == pytest.approx(7.38)
+    assert merged["KALMAN_LONGITUDINAL_NOISE_MULTIPLIER"] == 7.0
+    assert merged["KALMAN_LATERAL_NOISE_MULTIPLIER"] == 0.2
+    assert merged["KALMAN_ANISOTROPY_RATIO"] == 35.0
+
+
+@pytest.mark.parametrize(
+    ("lateral", "expected_ratio"),
+    [
+        (0.0, 7_000_000.0),
+        (-1.0, 7_000_000.0),
+        (10.0, 1.0),
+    ],
+)
+def test_candidate_merge_matches_engine_anisotropy_clamps(
+    lateral: float, expected_ratio: float
+) -> None:
+    merged = merge_tracking_autotune_candidate(
+        {
+            "KALMAN_LONGITUDINAL_NOISE_MULTIPLIER": 5.0,
+            "KALMAN_LATERAL_NOISE_MULTIPLIER": lateral,
+            "KALMAN_ANISOTROPY_RATIO": 50.0,
+        },
+        {"KALMAN_LONGITUDINAL_NOISE_MULTIPLIER": 7.0},
+    )
+
+    assert merged["KALMAN_ANISOTROPY_RATIO"] == expected_ratio
 
 
 def test_canonical_evaluation_params_hashes_ndarray_content() -> None:

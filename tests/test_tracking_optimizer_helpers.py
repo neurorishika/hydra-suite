@@ -127,6 +127,9 @@ def _load_optimizer_module():
     detection_config = importlib.import_module(
         "hydra_suite.core.tracking.optimization.detection_config"
     )
+    parameter_contract = importlib.import_module(
+        "hydra_suite.core.tracking.optimization.parameter_contract"
+    )
     production_replay = importlib.import_module(
         "hydra_suite.core.tracking.optimization.production_replay"
     )
@@ -210,6 +213,7 @@ def _load_optimizer_module():
         "hydra_suite.core.tracking": core_tracking,
         "hydra_suite.core.tracking.optimization": optimization_pkg,
         "hydra_suite.core.tracking.optimization.detection_config": detection_config,
+        "hydra_suite.core.tracking.optimization.parameter_contract": parameter_contract,
         "hydra_suite.core.tracking.optimization.production_replay": production_replay,
         "hydra_suite.core.tracking.optimization.unlabeled_scoring": unlabeled_scoring,
         "hydra_suite.data": data_pkg,

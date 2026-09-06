@@ -3,6 +3,7 @@ from __future__ import annotations
 from pathlib import Path
 
 import numpy as np
+import pytest
 
 from hydra_suite.core.inference.result import OBBResult
 from hydra_suite.core.inference.stages.filtering import filter_for_source
@@ -144,12 +145,18 @@ def test_seed_and_optuna_candidates_are_quantized_before_evaluation() -> None:
             }[name]
 
     assert core._build_seed_trial()["W_POSITION"] == 1.23
-    assert core._suggest_trial_params(_Trial(), scaled_body_size=10.0) == {
+    suggestion = core._suggest_trial_params(_Trial(), scaled_body_size=10.0)
+    assert suggestion == {
         "W_POSITION": 1.23,
         "KALMAN_DAMPING": 0.912,
         "MAX_DISTANCE_MULTIPLIER": 1.23,
-        "MAX_DISTANCE_THRESHOLD": 12.3,
     }
+    # Candidate rows contain only public controls. The shared merge derives
+    # engine-only distance values for every proposal source, including seeds
+    # and restarts that never pass through _suggest_trial_params.
+    assert core._candidate_evaluation_params(suggestion)[
+        "MAX_DISTANCE_THRESHOLD"
+    ] == pytest.approx(1.23)
 
 
 def test_optimizer_normalizes_detection_cache_member_path(tmp_path) -> None:

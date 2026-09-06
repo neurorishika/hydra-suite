@@ -40,6 +40,7 @@ from PySide6.QtWidgets import (
 from hydra_suite.core.tracking.optimization.optimizer import OptimizationResult
 from hydra_suite.core.tracking.optimization.parameter_contract import (
     canonical_evaluation_params,
+    merge_tracking_autotune_candidate,
 )
 from hydra_suite.core.tracking.optimization.production_replay import (
     cache_directory,
@@ -167,13 +168,12 @@ class ParameterHelperDialog(BaseDialog):
         hdr.setStyleSheet("font-size: 12px; color: #9cdcfe; margin-bottom: 4px;")
         left.addWidget(hdr)
 
-        # ── Domain Constraints ────────────────────────────────────────────────
-        # Read-only summary of the physical parameters that are set in the Main
-        # Window tracking tab ("Track Continuity" section).  The optimiser uses
-        # these values as fixed constraints and never tunes them.  If any look
-        # wrong, close this dialog, adjust them in the Main Window, and reopen.
+        # ── Tracking context ─────────────────────────────────────────────────
+        # Read-only summary of the starting values from the Main Window. A
+        # longitudinal candidate retains the hidden lateral Kalman multiplier
+        # and therefore re-derives its effective anisotropy.
         domain_box = QGroupBox(
-            "Physical Constraints  \u2014  read from Main Window (close & adjust there if needed)"
+            "Tracking Context  \u2014  read from Main Window (close & adjust there if needed)"
         )
         domain_box.setStyleSheet(
             "QGroupBox { border: 1px solid #7a5f20; border-radius: 4px;"
@@ -194,16 +194,18 @@ class ParameterHelperDialog(BaseDialog):
             f"\u2002\u2502\u2002"
             f"\u25cf\u00a0Max velocity: <b>{_vel_mult:.1f}\u00d7\u00a0body/frame</b>"
             f"\u2002\u2502\u2002"
-            f"\u25cf\u00a0Motion anisotropy\u00a0(fwd\u00f7lat): <b>{_aniso:.1f}</b>"
+            f"\u25cf\u00a0Baseline anisotropy\u00a0(fwd\u00f7lat): <b>{_aniso:.1f}</b>"
         )
         summary.setTextFormat(Qt.RichText)
         summary.setStyleSheet("font-size: 11px; color: #ffffff; font-weight: normal;")
         summary.setToolTip(
-            "These values come directly from the Main Window tracking tab.\n"
+            "These values are the starting settings from the Main Window tracking tab.\n"
             "Body size         \u2192 REFERENCE_BODY_SIZE \u00d7 RESIZE_FACTOR\n"
             "Max velocity      \u2192 'Max speed' spinbox (Kalman section)\n"
-            "Motion anisotropy \u2192 derived from Longitudinal \u00f7 Lateral noise spinboxes\n\n"
-            "Close this dialog, change those values, then reopen to use different constraints.\n"
+            "Baseline anisotropy \u2192 Longitudinal \u00f7 retained Lateral noise multiplier\n\n"
+            "When longitudinal noise is tuned, the lateral multiplier remains fixed and\n"
+            "the effective forward/lateral anisotropy is recalculated for replay and apply.\n"
+            "Close this dialog, change starting settings, then reopen to use a different baseline.\n"
             "Changing them will invalidate any cached autotune results."
         )
         domain_lay.addWidget(summary)
@@ -474,8 +476,8 @@ class ParameterHelperDialog(BaseDialog):
                         self.cb_kalman_long_noise,
                         "Process noise scale in the heading direction.\n"
                         "Higher = filter allows more forward movement per frame.\n"
-                        "Lateral noise is derived automatically as long / anisotropy ratio.\n"
-                        "Set the anisotropy ratio in the Physical Constraints panel above.",
+                        "The retained lateral multiplier stays fixed when this changes.\n"
+                        "Replay and apply recalculate effective forward/lateral anisotropy from both values.",
                     ),
                     (
                         self.cb_kalman_init_vel,
@@ -1492,16 +1494,7 @@ class ParameterHelperDialog(BaseDialog):
         if row < 0:
             return
         res = self.results[row]
-        preview_params = self.base_params.copy()
-        preview_params.update(res.params)
-
-        # Scale dist
-        if "MAX_DISTANCE_MULTIPLIER" in res.params:
-            ref = preview_params.get("REFERENCE_BODY_SIZE", 20.0)
-            rf = preview_params.get("RESIZE_FACTOR", 1.0)
-            preview_params["MAX_DISTANCE_THRESHOLD"] = (
-                res.params["MAX_DISTANCE_MULTIPLIER"] * ref * rf
-            )
+        preview_params = merge_tracking_autotune_candidate(self.base_params, res.params)
 
         if self.preview_worker and self.preview_worker.isRunning():
             if not self._stop_worker_bounded(self.preview_worker, "preview"):
@@ -1606,7 +1599,7 @@ class ParameterHelperDialog(BaseDialog):
 
         payload = json.dumps(
             {
-                "objective_version": 6,
+                "objective_version": 7,
                 "cache_path": str(self.detection_cache_path),
                 "cache_signature": _source_signature(
                     self.detection_cache_path, cache_contents_only=True
