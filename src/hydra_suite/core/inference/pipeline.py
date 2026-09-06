@@ -412,6 +412,20 @@ class Pipeline:
         # frame-batched above, but crop pixels can no longer scale with the
         # detection window size. ``filter_for_source`` enforces the independent
         # finite per-frame crop cap before reaching this boundary.
+        #
+        # NOTE: this is a caller-side bound, not a limit of the stage functions.
+        # ``run_headtail_batch``/``run_cnn_batch``/``run_pose_batch`` all flatten
+        # a multi-frame ``CropBatch`` and run the backend ONCE over every crop
+        # (see ``stages/pose.py::run_pose_batch``), and the interpolated-crop
+        # post-processing path does exactly that
+        # (``post/interpolated_crops.py::_flush_pose_cnn_window``, bounded by
+        # ``INTERP_POSE_INFERENCE_BATCH_SIZE``). Consequence here: the per-stage
+        # ``batch_size`` knobs (head-tail/CNN 64, pose 64/4) only chunk ONE
+        # frame's detections -- regardless of ``detection_batch_size``, since
+        # this loop runs whatever the window size -- so they are inert for any
+        # frame with fewer detections than the knob. Restoring
+        # cross-frame batching means reintroducing a crop-count-bounded
+        # accumulator here -- the memory bound this loop exists to enforce.
         assembled: list[FrameResult] = []
         for frame, obb in zip(nonempty_frames, nonempty_obbs):
             assembled.extend(
