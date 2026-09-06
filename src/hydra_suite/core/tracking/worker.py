@@ -1541,6 +1541,8 @@ class TrackingEngineCore:
                             output_scale=1.0 / _diag_ds,
                             binary_volume=_dm.binary_volume,
                             progress_callback=_density_progress,
+                            density_frame_indices=_dm.frame_indices,
+                            start_frame_index=start_frame,
                         )
                         logger.info(f"Diagnostic video exported: {_diag_path}")
                     else:

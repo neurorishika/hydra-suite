@@ -5,6 +5,7 @@ Enhanced with Dynamic Bayesian Optimization.
 
 import logging
 import math
+from collections.abc import Mapping
 from typing import Any, Dict
 
 import numpy as np
@@ -166,7 +167,14 @@ def _optimizer_frame_size(video_path, params):
     return tracking_frame_size(params, base_w, base_h)
 
 
-def _filter_cached_detections(det_filter, cache, f_idx, roi_mask):
+def _filter_cached_detections(
+    det_filter,
+    cache,
+    f_idx,
+    roi_mask,
+    *,
+    apply_max_detections: bool = True,
+):
     """Read a frame from detection cache and apply filtering.
 
     Detection caches are always ``OBBResult`` (InferenceRunner-based
@@ -181,7 +189,17 @@ def _filter_cached_detections(det_filter, cache, f_idx, roi_mask):
         inference_config = getattr(det_filter, "inference_config", None)
         if inference_config is None:
             inference_config = inference_config_for_optimizer_params(det_filter.params)
-        filtered_obb, _ = filter_for_source(inference_config, frame_data, roi_mask)
+        if apply_max_detections:
+            # Preserve the ordinary production call shape exactly; the
+            # diagnostic-only pre-cap mode below is intentionally opt-in.
+            filtered_obb, _ = filter_for_source(inference_config, frame_data, roi_mask)
+        else:
+            filtered_obb, _ = filter_for_source(
+                inference_config,
+                frame_data,
+                roi_mask,
+                apply_max_detections=False,
+            )
 
         # Convert OBBResult back to the legacy format expected by the tracking loop.
         meas = np.concatenate(
@@ -474,6 +492,8 @@ _UNLABELED_METRIC_SPECS = (
 
 _VALIDATION_REGION_COUNT = 4
 _MIN_REGION_FRAMES = 3
+_MIN_CYCLE_SHARED_OBSERVATIONS = 3
+_MIN_CYCLE_SHARED_COVERAGE = 0.5
 _TEMPORAL_HORIZON_PARAMETERS = (
     "LOST_THRESHOLD_FRAMES",
     "KALMAN_MATURITY_AGE",
@@ -1054,6 +1074,7 @@ class TrackingOptimizerCore:
                 backward,
                 backward_is_reverse_chronological=False,
                 spatial_scale=body_scale,
+                minimum_shared_observations=_MIN_CYCLE_SHARED_OBSERVATIONS,
             )
         except ValueError:
             slot_alignment = None
@@ -1092,6 +1113,7 @@ class TrackingOptimizerCore:
                         backward_is_reverse_chronological=False,
                         spatial_scale=body_scale,
                         slot_alignment=slot_alignment,
+                        minimum_shared_observations=_MIN_CYCLE_SHARED_OBSERVATIONS,
                     )
                     cycle_loss = min(float(cycle.mean_normalized_error), 10.0)
                     cycle_observation_coverage = float(
@@ -1142,12 +1164,93 @@ class TrackingOptimizerCore:
             )
         return evaluations
 
+    @staticmethod
+    def _longest_consecutive_observed_runs(positions: np.ndarray) -> np.ndarray:
+        """Return each slot's longest run of finite exported observations."""
+
+        observed = np.isfinite(positions).all(axis=2)
+        longest = np.zeros(observed.shape[1], dtype=np.int64)
+        current = np.zeros(observed.shape[1], dtype=np.int64)
+        for frame_observed in observed:
+            current = np.where(frame_observed, current + 1, 0)
+            longest = np.maximum(longest, current)
+        return longest
+
+    @staticmethod
+    def _longest_bracketed_missing_runs(positions: np.ndarray) -> np.ndarray:
+        """Return each slot's longest missing run with observations on both sides.
+
+        A trailing or leading absence cannot prove that the live lifecycle
+        transition and its post-loss rejoin were exercised, so it deliberately
+        does not count here.
+        """
+
+        observed = np.isfinite(positions).all(axis=2)
+        longest = np.zeros(observed.shape[1], dtype=np.int64)
+        for track_index in range(observed.shape[1]):
+            track_observed = observed[:, track_index]
+            index = 0
+            while index < len(track_observed):
+                if track_observed[index]:
+                    index += 1
+                    continue
+                start = index
+                while index < len(track_observed) and not track_observed[index]:
+                    index += 1
+                if (
+                    start > 0
+                    and index < len(track_observed)
+                    and track_observed[start - 1]
+                    and track_observed[index]
+                ):
+                    longest[track_index] = max(longest[track_index], index - start)
+        return longest
+
+    def _changed_lifecycle_values(
+        self, candidate_params: Mapping[str, Any] | None
+    ) -> dict[str, int]:
+        """Return candidate lifecycle values that differ from the baseline.
+
+        These are deliberately based on a candidate's actual replay value, not
+        the largest search bound. A lifecycle control must be observed crossing
+        the threshold it would apply before that candidate can be promoted.
+        """
+
+        changed: dict[str, int] = {}
+        for name in _TEMPORAL_HORIZON_PARAMETERS:
+            if candidate_params is None or name not in candidate_params:
+                continue
+            try:
+                candidate_value = float(candidate_params[name])
+                baseline_value = float(
+                    self.base_params.get(name, self._SEED_DEFAULTS[name])
+                )
+            except (TypeError, ValueError):
+                continue
+            if np.isclose(candidate_value, baseline_value, rtol=0.0, atol=1e-9):
+                continue
+            changed[name] = max(1, int(math.ceil(candidate_value)))
+        return changed
+
+    def _minimum_region_cycle_observations(
+        self, segment_frames: int, track_slots: int
+    ) -> int:
+        """Require both an absolute overlap floor and horizon-scaled support."""
+
+        horizon_frames = min(segment_frames, self._temporal_validation_horizon())
+        scaled_support = math.ceil(
+            horizon_frames * max(1, track_slots) * _MIN_CYCLE_SHARED_COVERAGE
+        )
+        return max(_MIN_CYCLE_SHARED_OBSERVATIONS, scaled_support)
+
     def _validation_temporal_evidence_reason(
         self,
         forward: np.ndarray,
         backward: np.ndarray,
         body_scale: float,
         evaluations: list[CandidateEvaluation],
+        *,
+        candidate_params: Mapping[str, Any] | None = None,
     ) -> str | None:
         """Return why regional production metrics lack real temporal evidence.
 
@@ -1187,6 +1290,92 @@ class TrackingOptimizerCore:
                     f"region {index} has no robust shared forward/backward "
                     "cycle observations"
                 )
+
+        # A positive fractional overlap alone can be two points. That produces
+        # a zero standard error across four regions while providing almost no
+        # evidence that a forward/backward agreement is stable. Reuse one
+        # full-window mapping, then require both an absolute and a
+        # horizon/slot-scaled amount of paired evidence in every region.
+        try:
+            slot_alignment = global_slot_alignment(
+                forward,
+                backward,
+                backward_is_reverse_chronological=False,
+                spatial_scale=body_scale,
+                minimum_shared_observations=_MIN_CYCLE_SHARED_OBSERVATIONS,
+            )
+        except ValueError:
+            return (
+                "held-out temporal support is inadequate: no robust full-window "
+                "forward/backward cycle alignment"
+            )
+        for index, segment in enumerate(segments, start=1):
+            required_shared = self._minimum_region_cycle_observations(
+                segment.frame_count, forward.shape[1]
+            )
+            try:
+                cycle = forward_backward_cycle_consistency(
+                    forward[segment.start : segment.stop],
+                    backward[segment.start : segment.stop],
+                    backward_is_reverse_chronological=False,
+                    spatial_scale=body_scale,
+                    slot_alignment=slot_alignment,
+                    minimum_shared_observations=_MIN_CYCLE_SHARED_OBSERVATIONS,
+                )
+            except ValueError:
+                return (
+                    "held-out temporal support is inadequate: validation "
+                    f"region {index} has no robust shared forward/backward "
+                    "cycle observations"
+                )
+            if cycle.valid_observations < required_shared:
+                return (
+                    "held-out temporal support is inadequate: validation "
+                    f"region {index} requires at least {required_shared} shared "
+                    "forward/backward cycle observations but found "
+                    f"{cycle.valid_observations}"
+                )
+            if cycle.shared_observation_coverage < _MIN_CYCLE_SHARED_COVERAGE:
+                return (
+                    "held-out temporal support is inadequate: validation "
+                    f"region {index} requires at least "
+                    f"{_MIN_CYCLE_SHARED_COVERAGE:.0%} shared forward/backward "
+                    "cycle coverage"
+                )
+
+        # A candidate-specific lifecycle value is evidence-bearing only if the
+        # held-out export reaches its relevant state transition. This is kept
+        # separate from generic motion support because many disjoint three-frame
+        # fragments can produce plenty of triplets without ever maturing a
+        # track, and a boundary gap cannot prove a loss/rejoin transition.
+        lifecycle_values = self._changed_lifecycle_values(candidate_params)
+        maturity_age = lifecycle_values.get("KALMAN_MATURITY_AGE")
+        if maturity_age is not None:
+            for direction, positions in (("forward", forward), ("backward", backward)):
+                longest_run = int(
+                    np.max(self._longest_consecutive_observed_runs(positions))
+                )
+                if longest_run < maturity_age:
+                    return (
+                        "held-out lifecycle support is inadequate: candidate "
+                        f"KALMAN_MATURITY_AGE={maturity_age} has no "
+                        f"{maturity_age}-frame consecutive observed run in the "
+                        f"{direction} replay (longest {longest_run})"
+                    )
+
+        lost_threshold = lifecycle_values.get("LOST_THRESHOLD_FRAMES")
+        if lost_threshold is not None:
+            for direction, positions in (("forward", forward), ("backward", backward)):
+                longest_gap = int(
+                    np.max(self._longest_bracketed_missing_runs(positions))
+                )
+                if longest_gap < lost_threshold:
+                    return (
+                        "held-out lifecycle support is inadequate: candidate "
+                        f"LOST_THRESHOLD_FRAMES={lost_threshold} has no "
+                        f"bracketed {lost_threshold}-frame missing run in the "
+                        f"{direction} replay (longest {longest_gap})"
+                    )
         return None
 
     def _validation_detection_counts(
@@ -1216,7 +1405,11 @@ class TrackingOptimizerCore:
                 [
                     len(
                         _filter_cached_detections(
-                            detector, self.cache, frame, roi_mask
+                            detector,
+                            self.cache,
+                            frame,
+                            roi_mask,
+                            apply_max_detections=False,
                         )[0]
                     )
                     for frame in range(start_frame, end_frame + 1)
@@ -1477,6 +1670,7 @@ class TrackingOptimizerCore:
                 backward.positions,
                 body_scale,
                 evaluations,
+                candidate_params=result.params,
             )
             if temporal_evidence_reason is not None:
                 result.recommendation_reason = "production validation skipped: " + (

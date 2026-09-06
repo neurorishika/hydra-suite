@@ -290,6 +290,8 @@ def filter_with_indices(
     raw: OBBResult,
     config: OBBConfig,
     roi_mask: np.ndarray | None = None,
+    *,
+    apply_max_detections: bool = True,
 ) -> tuple[OBBResult, np.ndarray]:
     """Run the same gates as filter_detections and return (filtered, pre-filter indices).
 
@@ -297,6 +299,10 @@ def filter_with_indices(
     caches so that a threshold edit never invalidates HeadTail/CNN/Pose caches —
     only the OBB detection cache stores pre-filter results; downstream caches are
     keyed by these indices and re-aligned on load_frame.
+
+    ``apply_max_detections=False`` is a diagnostic-only mode for measuring
+    source candidates before the configured final tracking-target cap. The
+    independent hard downstream crop ceiling is still retained.
     """
     n = raw.num_detections
     if n == 0:
@@ -327,7 +333,11 @@ def filter_with_indices(
         keep_nms = _obb_nms(subset, np.arange(len(indices)), config.iou_threshold)
         indices = indices[keep_nms]
         subset = _select(raw, indices)
-    max_detections = _effective_max_detections(config)
+    max_detections = (
+        _effective_max_detections(config)
+        if apply_max_detections
+        else MAX_DOWNSTREAM_CROPS_PER_FRAME
+    )
     if len(indices) > max_detections:
         # H5 parity: keep the LARGEST detections (sort by size) — _obb_geometry:587-588.
         order = np.argsort(raw.sizes[indices])[::-1][:max_detections]
@@ -340,6 +350,8 @@ def filter_for_source(
     config: Any,
     raw: OBBResult,
     roi_mask: np.ndarray | None = None,
+    *,
+    apply_max_detections: bool = True,
 ) -> tuple[OBBResult, np.ndarray]:
     """Detection-source-aware dispatch in front of ``filter_with_indices``.
 
@@ -351,6 +363,9 @@ def filter_for_source(
     also no ``OBBConfig`` to gate with (``config.obb is None``), and bg-sub's
     confidences are NaN, so running the OBB gates would silently drop every
     detection on the confidence comparison.
+
+    ``apply_max_detections=False`` is reserved for source-count diagnostics;
+    normal inference and replay use the default final target cap.
     """
     if config.detection_source == "bgsub":
         indices = np.arange(raw.num_detections, dtype=np.int32)
@@ -363,7 +378,12 @@ def filter_for_source(
             indices = np.ascontiguousarray(order, dtype=np.int32)
             raw = _select(raw, indices)
         return raw, indices
-    return filter_with_indices(raw, config.obb, roi_mask)
+    return filter_with_indices(
+        raw,
+        config.obb,
+        roi_mask,
+        apply_max_detections=apply_max_detections,
+    )
 
 
 def _empty_obb_result(frame_idx: int) -> OBBResult:

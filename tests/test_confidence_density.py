@@ -5,6 +5,7 @@ from scipy.ndimage import gaussian_filter
 from hydra_suite.core.tracking.confidence.confidence_density import (
     DensityRegion,
     accumulate_frame,
+    compute_density_map_from_cache,
     find_regions,
     smooth_and_binarize,
     tag_detections,
@@ -102,6 +103,62 @@ def test_find_regions_two_blobs():
     binary[15:18, 50:64, 50:64] = 1
     regions = find_regions(binary, frame_h=64, frame_w=64)
     assert len(regions) == 2
+
+
+def test_density_cache_regions_keep_absolute_frames_and_break_missing_keys():
+    """Sparse cache keys must not be compressed into a false temporal bridge."""
+
+    detections = _make_detections(1, 8.0, 8.0, 0.0, bbox_diag=4.0)
+    cache = {frame: detections for frame in (100, 101, 102, 104, 105)}
+
+    density_map, raw_grids = compute_density_map_from_cache(
+        cache,
+        frame_h=16,
+        frame_w=16,
+        sigma_scale=0.5,
+        temporal_sigma=0.0,
+        threshold=0.5,
+        downsample_factor=1,
+        min_frame_duration=2,
+        min_area_px=1,
+    )
+
+    assert density_map.frame_indices is not None
+    assert density_map.frame_indices.tolist() == [100, 101, 102, 104, 105]
+    assert raw_grids.shape[0] == 5
+    assert [
+        (region.frame_start, region.frame_end) for region in density_map.regions
+    ] == [
+        (100, 102),
+        (104, 105),
+    ]
+
+
+def test_density_cache_large_absolute_gap_stays_sparse_in_memory():
+    """Absolute cache keys must never create a max-key-sized density volume."""
+
+    detections = _make_detections(1, 8.0, 8.0, 0.0, bbox_diag=4.0)
+    density_map, raw_grids = compute_density_map_from_cache(
+        {7: detections, 2_000_007: detections},
+        frame_h=16,
+        frame_w=16,
+        sigma_scale=0.5,
+        temporal_sigma=0.0,
+        threshold=0.5,
+        downsample_factor=1,
+        min_frame_duration=1,
+        min_area_px=1,
+    )
+
+    assert raw_grids.shape == (2, 16, 16)
+    assert density_map.binary_volume is not None
+    assert density_map.binary_volume.shape == (2, 16, 16)
+    assert [
+        (region.frame_start, region.frame_end) for region in density_map.regions
+    ] == [
+        (7, 7),
+        (2_000_007, 2_000_007),
+    ]
 
 
 def test_tag_detections_labels_correctly():

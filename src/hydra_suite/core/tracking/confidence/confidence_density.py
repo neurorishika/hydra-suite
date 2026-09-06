@@ -162,6 +162,10 @@ class ConfidenceDensityMap:
         Optional uint8 binarised volume, shape ``(T, H, W)``, aligned with
         *frame_grids*.  Populated by :func:`compute_density_map_from_cache` and
         used by :func:`export_diagnostic_video` to draw region contours.
+    frame_indices:
+        Absolute source-video frame index for each row in *frame_grids* and
+        *binary_volume*. Sparse cache keys remain sparse here; callers must not
+        treat row number as a source frame number.
     """
 
     frame_grids: np.ndarray
@@ -169,6 +173,7 @@ class ConfidenceDensityMap:
     frame_h: int
     frame_w: int
     binary_volume: Optional[np.ndarray] = None
+    frame_indices: Optional[np.ndarray] = None
 
 
 # ---------------------------------------------------------------------------
@@ -257,10 +262,86 @@ def accumulate_frame(
 # ---------------------------------------------------------------------------
 
 
+def _contiguous_frame_slices(
+    frame_indices: np.ndarray | None, frame_count: int
+) -> tuple[slice, ...]:
+    """Return row slices separated at missing source-video frames."""
+
+    if frame_indices is None:
+        return (slice(0, frame_count),) if frame_count else ()
+    indices = np.asarray(frame_indices, dtype=np.int64)
+    if indices.ndim != 1 or len(indices) != frame_count:
+        raise ValueError("frame_indices must contain one source frame per density row")
+    if len(indices) > 1 and np.any(np.diff(indices) <= 0):
+        raise ValueError("frame_indices must be strictly increasing")
+    starts = np.r_[0, np.flatnonzero(np.diff(indices) != 1) + 1]
+    stops = np.r_[starts[1:], frame_count]
+    return tuple(slice(int(start), int(stop)) for start, stop in zip(starts, stops))
+
+
+def _smoothed_global_max(frames: np.ndarray, temporal_sigma: float) -> float:
+    """Return the temporal Gaussian maximum without retaining a full output."""
+
+    T = len(frames)
+    if T == 0:
+        return 0.0
+    if int(frames.nbytes) <= _FULL_SMOOTH_MAX_BYTES:
+        return float(gaussian_filter(frames, sigma=(temporal_sigma, 0.0, 0.0)).max())
+
+    radius = int(np.ceil(4.0 * temporal_sigma)) + 1
+    chunk_size = 500
+    global_max = 0.0
+    for chunk_start in range(0, T, chunk_size):
+        chunk_end = min(T, chunk_start + chunk_size)
+        ext_start = max(0, chunk_start - radius)
+        ext_end = min(T, chunk_end + radius)
+        smoothed_chunk = gaussian_filter(
+            frames[ext_start:ext_end], sigma=(temporal_sigma, 0.0, 0.0)
+        )
+        trim_start = chunk_start - ext_start
+        trim_stop = trim_start + (chunk_end - chunk_start)
+        global_max = max(global_max, float(smoothed_chunk[trim_start:trim_stop].max()))
+    return global_max
+
+
+def _binarize_smoothed(
+    frames: np.ndarray,
+    temporal_sigma: float,
+    raw_threshold: float,
+    output: np.ndarray,
+) -> None:
+    """Write thresholded temporal smoothing into a preallocated output volume."""
+
+    T = len(frames)
+    if T == 0:
+        return
+    if int(frames.nbytes) <= _FULL_SMOOTH_MAX_BYTES:
+        smoothed = gaussian_filter(frames, sigma=(temporal_sigma, 0.0, 0.0))
+        output[:] = (smoothed >= raw_threshold).astype(np.uint8)
+        return
+
+    radius = int(np.ceil(4.0 * temporal_sigma)) + 1
+    chunk_size = 500
+    for chunk_start in range(0, T, chunk_size):
+        chunk_end = min(T, chunk_start + chunk_size)
+        ext_start = max(0, chunk_start - radius)
+        ext_end = min(T, chunk_end + radius)
+        smoothed_chunk = gaussian_filter(
+            frames[ext_start:ext_end], sigma=(temporal_sigma, 0.0, 0.0)
+        )
+        trim_start = chunk_start - ext_start
+        trim_stop = trim_start + (chunk_end - chunk_start)
+        output[chunk_start:chunk_end] = (
+            smoothed_chunk[trim_start:trim_stop] >= raw_threshold
+        ).astype(np.uint8)
+
+
 def smooth_and_binarize(
     frames: np.ndarray,
     temporal_sigma: float,
     threshold: float,
+    *,
+    frame_indices: np.ndarray | None = None,
 ) -> np.ndarray:
     """Smooth the density volume temporally, normalise globally, binarize.
 
@@ -274,6 +355,11 @@ def smooth_and_binarize(
     threshold:
         Value in ``[0, 1]`` above which a voxel is marked as 1 after global
         normalisation.
+    frame_indices:
+        Optional absolute source-video frame index for each row. Temporal
+        Gaussian smoothing never crosses a gap in these keys, while the
+        threshold remains normalized against the global maximum across all
+        available cache frames.
 
     Returns
     -------
@@ -285,59 +371,13 @@ def smooth_and_binarize(
     if T == 0:
         return binary
 
-    # For moderate volumes, smoothing once and thresholding in-place is much
-    # faster than the chunked two-pass path while remaining memory-safe.
-    volume_bytes = int(frames.nbytes)
-    if volume_bytes <= _FULL_SMOOTH_MAX_BYTES:
-        smoothed = gaussian_filter(frames, sigma=(temporal_sigma, 0.0, 0.0))
-        global_max = float(smoothed.max())
-        if global_max <= 0.0:
-            return binary
-        return (smoothed >= (threshold * global_max)).astype(np.uint8)
-
-    # Effective Gaussian kernel radius (scipy default truncate=4.0).
-    radius = int(np.ceil(4.0 * temporal_sigma)) + 1
-    chunk_size = 500  # frames per chunk; tunes peak-RAM vs. pass count
-
-    # --- Pass 1: find global max across all smoothed chunks ---
-    # Each slice is a VIEW into `frames` (no copy), so only the
-    # gaussian_filter output — at most (chunk_size + 2*radius, H, W) —
-    # is allocated per iteration instead of the full (T, H, W) volume.
-    global_max = 0.0
-    for chunk_start in range(0, T, chunk_size):
-        chunk_end = min(T, chunk_start + chunk_size)
-        ext_start = max(0, chunk_start - radius)
-        ext_end = min(T, chunk_end + radius)
-        smoothed_chunk = gaussian_filter(
-            frames[ext_start:ext_end], sigma=(temporal_sigma, 0.0, 0.0)
-        )
-        trim_s = chunk_start - ext_start
-        trim_e = trim_s + (chunk_end - chunk_start)
-        chunk_max = float(smoothed_chunk[trim_s:trim_e].max())
-        if chunk_max > global_max:
-            global_max = chunk_max
-
+    runs = _contiguous_frame_slices(frame_indices, T)
+    global_max = max(_smoothed_global_max(frames[run], temporal_sigma) for run in runs)
     if global_max <= 0.0:
         return binary
-
-    # Avoid a second `/` allocation: compare raw values against
-    # threshold * global_max (mathematically equivalent to normalising first).
     raw_threshold = threshold * global_max
-
-    # --- Pass 2: binarize chunk by chunk without retaining the full
-    # smoothed float32 volume in memory ---
-    for chunk_start in range(0, T, chunk_size):
-        chunk_end = min(T, chunk_start + chunk_size)
-        ext_start = max(0, chunk_start - radius)
-        ext_end = min(T, chunk_end + radius)
-        smoothed_chunk = gaussian_filter(
-            frames[ext_start:ext_end], sigma=(temporal_sigma, 0.0, 0.0)
-        )
-        trim_s = chunk_start - ext_start
-        trim_e = trim_s + (chunk_end - chunk_start)
-        binary[chunk_start:chunk_end] = (
-            smoothed_chunk[trim_s:trim_e] >= raw_threshold
-        ).astype(np.uint8)
+    for run in runs:
+        _binarize_smoothed(frames[run], temporal_sigma, raw_threshold, binary[run])
 
     return binary
 
@@ -353,6 +393,8 @@ def find_regions(
     frame_w: int,
     min_frame_duration: int = 3,
     min_area_px: int = 100,
+    *,
+    frame_indices: np.ndarray | None = None,
 ) -> List[DensityRegion]:
     """Find 3-D connected components in a binary (T, H, W) volume.
 
@@ -373,6 +415,11 @@ def find_regions(
     min_area_px:
         Regions whose spatial bounding-box area (width × height, in grid
         pixels) is smaller than this are discarded.  Default 100.
+    frame_indices:
+        Optional contiguous absolute source-video frame numbers corresponding
+        to the time rows in *binary*. This maps region endpoints back to the
+        cache's native timeline. Gaps must be split before calling this
+        function; :func:`compute_density_map_from_cache` does so automatically.
 
     Returns
     -------
@@ -381,6 +428,15 @@ def find_regions(
         occurrence frame then by pixel-space centroid x.  Empty list if no
         foreground voxels exist.
     """
+    if frame_indices is None:
+        indices = None
+    else:
+        indices = np.asarray(frame_indices, dtype=np.int64)
+        if indices.ndim != 1 or len(indices) != len(binary):
+            raise ValueError("frame_indices must contain one value per binary row")
+        if len(indices) > 1 and np.any(np.diff(indices) != 1):
+            raise ValueError("find_regions requires contiguous frame_indices")
+
     if binary.max() == 0:
         return []
 
@@ -407,8 +463,12 @@ def find_regions(
             continue
 
         t_slice, y_slice, x_slice = obj_slices
-        frame_start = t_slice.start
-        frame_end = t_slice.stop - 1
+        frame_start = (
+            int(indices[t_slice.start]) if indices is not None else t_slice.start
+        )
+        frame_end = (
+            int(indices[t_slice.stop - 1]) if indices is not None else t_slice.stop - 1
+        )
         x1 = x_slice.start
         x2 = x_slice.stop - 1
         y1 = y_slice.start
@@ -437,6 +497,35 @@ def find_regions(
     for idx, region in enumerate(regions, start=1):
         region.label = f"region-{idx}"
 
+    return regions
+
+
+def _find_regions_by_frame_runs(
+    binary: np.ndarray,
+    frame_h: int,
+    frame_w: int,
+    min_frame_duration: int,
+    min_area_px: int,
+    frame_indices: np.ndarray,
+) -> List[DensityRegion]:
+    """Label contiguous source-frame runs without connecting missing keys."""
+
+    indices = np.asarray(frame_indices, dtype=np.int64)
+    regions: List[DensityRegion] = []
+    for run in _contiguous_frame_slices(indices, len(binary)):
+        regions.extend(
+            find_regions(
+                binary[run],
+                frame_h=frame_h,
+                frame_w=frame_w,
+                min_frame_duration=min_frame_duration,
+                min_area_px=min_area_px,
+                frame_indices=indices[run],
+            )
+        )
+    regions.sort(key=lambda region: (region.frame_start, region.pixel_bbox[0]))
+    for index, region in enumerate(regions, start=1):
+        region.label = f"region-{index}"
     return regions
 
 
@@ -588,6 +677,7 @@ def _compute_density_map_per_arena(
     diagnostic video keeps working; nothing in the tracking path reads them.
     """
     sorted_frames = sorted(detection_cache.keys())
+    frame_indices = np.asarray(sorted_frames, dtype=np.int64)
     n_total = len(sorted_frames)
     n_arenas = int(arena_layout.n_arenas)
 
@@ -633,14 +723,18 @@ def _compute_density_map_per_arena(
         work *= mask[None, :, :]
 
         binary = smooth_and_binarize(
-            work, temporal_sigma=temporal_sigma, threshold=threshold
+            work,
+            temporal_sigma=temporal_sigma,
+            threshold=threshold,
+            frame_indices=frame_indices,
         )
-        arena_regions = find_regions(
+        arena_regions = _find_regions_by_frame_runs(
             binary,
             frame_h=grid_h,
             frame_w=grid_w,
             min_frame_duration=min_frame_duration,
             min_area_px=min_area_px,
+            frame_indices=frame_indices,
         )
         for r in arena_regions:
             r.arena = arena_id
@@ -680,6 +774,7 @@ def _compute_density_map_per_arena(
         frame_h=grid_h,
         frame_w=grid_w,
         binary_volume=binary_total,
+        frame_indices=frame_indices,
     )
     return cdm, total_grids
 
@@ -759,6 +854,7 @@ def compute_density_map_from_cache(
             regions=[],
             frame_h=grid_h,
             frame_w=grid_w,
+            frame_indices=np.zeros(0, dtype=np.int64),
         )
         return cdm, []
 
@@ -784,6 +880,7 @@ def compute_density_map_from_cache(
         )
 
     sorted_frames = sorted(detection_cache.keys())
+    frame_indices = np.asarray(sorted_frames, dtype=np.int64)
     n_total = len(sorted_frames)
     # Pre-allocate the full (T, grid_h, grid_w) array once and accumulate
     # directly into it — avoids building a Python list then calling np.stack,
@@ -811,18 +908,22 @@ def compute_density_map_from_cache(
         progress_callback(42, "Density map: temporal smoothing...")
 
     binary = smooth_and_binarize(
-        frame_grids, temporal_sigma=temporal_sigma, threshold=threshold
+        frame_grids,
+        temporal_sigma=temporal_sigma,
+        threshold=threshold,
+        frame_indices=frame_indices,
     )
 
     if progress_callback is not None:
         progress_callback(45, "Density map: finding regions...")
 
-    regions = find_regions(
+    regions = _find_regions_by_frame_runs(
         binary,
         frame_h=grid_h,
         frame_w=grid_w,
         min_frame_duration=min_frame_duration,
         min_area_px=min_area_px,
+        frame_indices=frame_indices,
     )
 
     # Scale bounding boxes back to original pixel coordinates.
@@ -845,6 +946,7 @@ def compute_density_map_from_cache(
         frame_h=grid_h,
         frame_w=grid_w,
         binary_volume=binary,
+        frame_indices=frame_indices,
     )
     # Return frame_grids as the second value (a numpy array supports the same
     # [frame_idx] access as the former raw_grids list, so callers are unaffected).
@@ -868,7 +970,7 @@ def _prepare_diag_frame(frame_reader, frame_idx, frame_h, frame_w, cv2):
 
 def _overlay_diag_heatmap(
     frame,
-    frame_idx,
+    density_row,
     density_grids,
     global_max,
     frame_h,
@@ -877,9 +979,9 @@ def _overlay_diag_heatmap(
     cv2,
 ):
     """Apply red heatmap overlay for a single frame."""
-    if frame_idx >= len(density_grids):
+    if density_row is None or density_row >= len(density_grids):
         return frame
-    norm = (density_grids[frame_idx] / global_max).clip(0, 1)
+    norm = (density_grids[density_row] / global_max).clip(0, 1)
     if norm.shape[0] != frame_h or norm.shape[1] != frame_w:
         norm = cv2.resize(norm, (frame_w, frame_h), interpolation=cv2.INTER_LINEAR)
     red_mask = np.zeros((frame_h, frame_w, 3), dtype=np.uint8)
@@ -899,6 +1001,7 @@ def _scaled_region_bbox(r, output_scale):
 def _draw_diag_regions(
     frame,
     frame_idx,
+    density_row,
     regions,
     binary_volume,
     frame_h,
@@ -911,8 +1014,12 @@ def _draw_diag_regions(
     if not active:
         return
 
-    if binary_volume is not None and frame_idx < len(binary_volume):
-        bin_slice = binary_volume[frame_idx]
+    if (
+        binary_volume is not None
+        and density_row is not None
+        and density_row < len(binary_volume)
+    ):
+        bin_slice = binary_volume[density_row]
         if bin_slice.max() > 0:
             bin_out = cv2.resize(
                 bin_slice,
@@ -965,6 +1072,9 @@ def export_diagnostic_video(
     output_scale: float = 1.0,
     binary_volume: Optional[np.ndarray] = None,
     progress_callback: Optional[Callable[[int, str], None]] = None,
+    *,
+    density_frame_indices: Optional[np.ndarray] = None,
+    start_frame_index: int = 0,
 ) -> None:
     """Write diagnostic video with red heatmap overlay on low-confidence zones.
 
@@ -1014,6 +1124,13 @@ def export_diagnostic_video(
     progress_callback:
         Optional callable ``(percent: int, message: str) -> None`` invoked
         periodically to report progress.
+    density_frame_indices:
+        Optional absolute source-video frame index for each density-grid row.
+        When supplied, missing cache rows render without a heatmap rather than
+        assigning an adjacent row's evidence to the wrong source frame.
+    start_frame_index:
+        Absolute source-video frame represented by output row zero. Defaults to
+        zero for backward compatibility with whole-video callers.
     """
     import cv2
 
@@ -1026,13 +1143,34 @@ def export_diagnostic_video(
         else density_grids
     )
     global_max = float(_dg.max()) if len(_dg) > 0 and _dg.max() > 0 else 1.0
+    if density_frame_indices is None:
+        density_row_by_frame = None
+    else:
+        indices = np.asarray(density_frame_indices, dtype=np.int64)
+        if indices.ndim != 1 or len(indices) != len(_dg):
+            raise ValueError(
+                "density_frame_indices must contain one source frame per density row"
+            )
+        if len(indices) > 1 and np.any(np.diff(indices) <= 0):
+            raise ValueError("density_frame_indices must be strictly increasing")
+        density_row_by_frame = {
+            int(source_frame): row for row, source_frame in enumerate(indices)
+        }
 
     try:
         for frame_idx in range(n_frames):
-            frame = _prepare_diag_frame(frame_reader, frame_idx, frame_h, frame_w, cv2)
+            source_frame = start_frame_index + frame_idx
+            density_row = (
+                frame_idx
+                if density_row_by_frame is None
+                else density_row_by_frame.get(source_frame)
+            )
+            frame = _prepare_diag_frame(
+                frame_reader, source_frame, frame_h, frame_w, cv2
+            )
             frame = _overlay_diag_heatmap(
                 frame,
-                frame_idx,
+                density_row,
                 _dg,
                 global_max,
                 frame_h,
@@ -1042,7 +1180,8 @@ def export_diagnostic_video(
             )
             _draw_diag_regions(
                 frame,
-                frame_idx,
+                source_frame,
+                density_row,
                 regions,
                 binary_volume,
                 frame_h,

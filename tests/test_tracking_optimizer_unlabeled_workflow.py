@@ -4,7 +4,12 @@ from pathlib import Path
 
 import numpy as np
 
+from hydra_suite.core.inference.result import OBBResult
+from hydra_suite.core.inference.stages.filtering import filter_for_source
 from hydra_suite.core.tracking.optimization import optimizer as optimizer_module
+from hydra_suite.core.tracking.optimization.detection_config import (
+    inference_config_for_optimizer_params,
+)
 from hydra_suite.core.tracking.optimization.optimizer import (
     OptimizationResult,
     TrackingOptimizerCore,
@@ -336,7 +341,8 @@ def test_detection_excess_uses_native_frame_roi_mask(monkeypatch) -> None:
     params["ROI_MASK"] = np.array([[255, 0], [0, 0]], dtype=np.uint8)
     received_masks: list[np.ndarray] = []
 
-    def _filtered(_detector, _cache, _frame, roi_mask):
+    def _filtered(_detector, _cache, _frame, roi_mask, *, apply_max_detections=True):
+        assert apply_max_detections is False
         received_masks.append(roi_mask.copy())
         return [object()], [], [], [], [], []
 
@@ -355,6 +361,249 @@ def test_detection_excess_uses_native_frame_roi_mask(monkeypatch) -> None:
     assert len(received_masks) == 2
     np.testing.assert_array_equal(received_masks[0], expected)
     np.testing.assert_array_equal(received_masks[1], expected)
+
+
+def _uncapped_detection_obb(frame_idx: int = 0) -> OBBResult:
+    """Four separated source detections that all survive non-count gates."""
+
+    centroids = np.array(
+        [[10.0, 10.0], [40.0, 10.0], [70.0, 10.0], [100.0, 10.0]], np.float32
+    )
+    corners = np.array(
+        [
+            [[5.0, 5.0], [15.0, 5.0], [15.0, 15.0], [5.0, 15.0]],
+            [[35.0, 5.0], [45.0, 5.0], [45.0, 15.0], [35.0, 15.0]],
+            [[65.0, 5.0], [75.0, 5.0], [75.0, 15.0], [65.0, 15.0]],
+            [[95.0, 5.0], [105.0, 5.0], [105.0, 15.0], [95.0, 15.0]],
+        ],
+        np.float32,
+    )
+    return OBBResult(
+        frame_idx=frame_idx,
+        centroids=centroids,
+        angles=np.zeros(4, dtype=np.float32),
+        sizes=np.full(4, 100.0, dtype=np.float32),
+        shapes=np.ones((4, 2), dtype=np.float32),
+        confidences=np.full(4, 0.9, dtype=np.float32),
+        corners=corners,
+        detection_ids=OBBResult.make_detection_ids(frame_idx, 4),
+    )
+
+
+def test_detection_excess_counts_pre_cap_detections_via_production_filter_path() -> (
+    None
+):
+    """Source excess must see candidates that the tracking cap intentionally hides."""
+
+    class _Cache:
+        def read_frame(self, frame_idx):
+            return _uncapped_detection_obb(frame_idx)
+
+    core = _optimizer()
+    core.cache = _Cache()
+    params = {
+        **core.base_params,
+        "DETECTION_METHOD": "yolo_obb",
+        "YOLO_CONFIDENCE_THRESHOLD": 0.0,
+        "YOLO_IOU_THRESHOLD": 1.0,
+        # OBB extraction's production raw cap is 2 * MAX_TARGETS. Four raw
+        # detections are therefore feasible here, while the final replay cap
+        # intentionally exposes only the two requested tracking slots.
+        "MAX_TARGETS": 2,
+    }
+    config = inference_config_for_optimizer_params(params)
+    raw = _uncapped_detection_obb()
+
+    # The production replay stays capped at the requested two targets.
+    capped, _ = filter_for_source(config, raw)
+    assert capped.num_detections == 2
+
+    # The validation safeguard traverses that same source-aware filter path,
+    # but observes the candidates immediately before its final target cap.
+    counts = core._validation_detection_counts(params, 0, 3)
+    assert counts is not None
+    assert counts.tolist() == [4, 4, 4, 4]
+    evaluations = core._validation_evaluations(
+        "candidate",
+        np.zeros((4, 2, 2), dtype=np.float32),
+        np.zeros((4, 2, 2), dtype=np.float32),
+        1.0,
+        detection_counts=counts,
+    )
+    assert all(item.metrics["detection_excess_loss"] > 0 for item in evaluations)
+
+
+def test_validation_rejects_two_shared_cycle_observations_per_region() -> None:
+    """Two coincident frames must not become zero-standard-error evidence."""
+
+    forward = np.full((20, 1, 2), np.nan, dtype=np.float32)
+    backward = forward.copy()
+    for start in range(0, 20, 5):
+        forward[start : start + 3, 0] = np.column_stack(
+            (np.arange(3, dtype=np.float32), np.zeros(3, dtype=np.float32))
+        )
+        backward[start + 1 : start + 4, 0] = np.column_stack(
+            (np.arange(1, 4, dtype=np.float32), np.zeros(3, dtype=np.float32))
+        )
+
+    core = _optimizer()
+    evaluations = core._validation_evaluations("candidate", forward, backward, 1.0)
+    reason = core._validation_temporal_evidence_reason(
+        forward, backward, 1.0, evaluations
+    )
+
+    # Both directions have a real motion triplet and every region has exactly
+    # two shared cycle points. The reporting path itself must now turn that
+    # insufficient overlap into non-evidence rather than a perfect estimate.
+    assert reason is not None
+    assert "shared forward/backward cycle observations" in reason
+
+
+def test_validation_cycle_support_scales_with_track_slots() -> None:
+    """A full-coverage three-point singleton cannot support four track slots."""
+
+    positions = np.full((20, 4, 2), np.nan, dtype=np.float32)
+    for start in range(0, 20, 5):
+        positions[start : start + 3, 0] = np.column_stack(
+            (np.arange(3, dtype=np.float32), np.zeros(3, dtype=np.float32))
+        )
+
+    core = _optimizer()
+    evaluations = core._validation_evaluations(
+        "candidate", positions, positions.copy(), 1.0
+    )
+    reason = core._validation_temporal_evidence_reason(
+        positions, positions.copy(), 1.0, evaluations
+    )
+
+    assert reason is not None
+    assert "requires at least 6 shared forward/backward cycle observations" in reason
+
+
+def test_lifecycle_maturity_gate_rejects_many_short_observation_fragments() -> None:
+    """Summing short fragments across tracks/regions cannot exercise maturity."""
+
+    core = _optimizer()
+    core.base_params["KALMAN_MATURITY_AGE"] = 1
+    core.tuning_config["KALMAN_MATURITY_AGE"] = True
+    positions = np.full((80, 1, 2), np.nan, dtype=np.float32)
+    for start in range(0, 80, 4):
+        positions[start : start + 3, 0] = np.column_stack(
+            (np.arange(3, dtype=np.float32), np.zeros(3, dtype=np.float32))
+        )
+
+    evaluations = core._validation_evaluations(
+        "candidate", positions, positions.copy(), 1.0
+    )
+    reason = core._validation_temporal_evidence_reason(
+        positions,
+        positions.copy(),
+        1.0,
+        evaluations,
+        candidate_params={"KALMAN_MATURITY_AGE": 4},
+    )
+
+    assert reason is not None
+    assert "KALMAN_MATURITY_AGE" in reason
+
+
+def test_lifecycle_lost_gate_requires_a_bracketed_threshold_length_gap() -> None:
+    """A candidate lost threshold is unexercised until a real lost/rejoin gap."""
+
+    core = _optimizer()
+    core.base_params["LOST_THRESHOLD_FRAMES"] = 1
+    core.tuning_config["LOST_THRESHOLD_FRAMES"] = True
+    positions = np.stack(
+        [np.arange(80, dtype=np.float32), np.zeros(80, dtype=np.float32)], axis=1
+    )[:, None, :]
+    positions[30:33] = np.nan  # only three missing frames, bracketed by observations
+
+    evaluations = core._validation_evaluations(
+        "candidate", positions, positions.copy(), 1.0
+    )
+    reason = core._validation_temporal_evidence_reason(
+        positions,
+        positions.copy(),
+        1.0,
+        evaluations,
+        candidate_params={"LOST_THRESHOLD_FRAMES": 4},
+    )
+    assert reason is not None
+    assert "LOST_THRESHOLD_FRAMES" in reason
+
+    positions[30:34] = np.nan  # reaches threshold and has an observed rejoin
+    evaluations = core._validation_evaluations(
+        "candidate", positions, positions.copy(), 1.0
+    )
+    assert (
+        core._validation_temporal_evidence_reason(
+            positions,
+            positions.copy(),
+            1.0,
+            evaluations,
+            candidate_params={"LOST_THRESHOLD_FRAMES": 4},
+        )
+        is None
+    )
+
+
+def test_production_validation_does_not_promote_unexercised_lifecycle_candidate(
+    monkeypatch,
+) -> None:
+    """An otherwise cleaner candidate cannot bypass its maturity evidence gate."""
+
+    time = np.arange(40, dtype=np.float32)
+    smooth = np.stack([time, np.zeros_like(time)], axis=1)[:, None, :]
+    baseline_backward = smooth.copy()
+    baseline_backward[:, 0, 0] += 1.0
+    fragments = np.full((40, 1, 2), np.nan, dtype=np.float32)
+    for start in range(0, 40, 4):
+        fragments[start : start + 3, 0] = np.column_stack(
+            (np.arange(3, dtype=np.float32), np.zeros(3, dtype=np.float32))
+        )
+    _install_fake_replay(
+        monkeypatch,
+        (smooth, baseline_backward),
+        (fragments, fragments.copy()),
+    )
+    core = _optimizer()
+    core.base_params["KALMAN_MATURITY_AGE"] = 1
+    core.tuning_config["KALMAN_MATURITY_AGE"] = True
+    baseline = _result({}, baseline=True)
+    candidate = _result({"W_POSITION": 2.0, "KALMAN_MATURITY_AGE": 4})
+
+    core._production_validate_shortlist([baseline, candidate], (0, 39))
+
+    assert baseline.recommended is True
+    assert candidate.recommended is False
+    assert "KALMAN_MATURITY_AGE" in candidate.recommendation_reason
+
+
+def test_production_validation_does_not_promote_unexercised_lost_threshold(
+    monkeypatch,
+) -> None:
+    """A smooth held-out replay alone cannot validate an unseen loss transition."""
+
+    time = np.arange(40, dtype=np.float32)
+    smooth = np.stack([time, np.zeros_like(time)], axis=1)[:, None, :]
+    baseline_backward = smooth.copy()
+    baseline_backward[:, 0, 0] += 1.0
+    _install_fake_replay(
+        monkeypatch,
+        (smooth, baseline_backward),
+        (smooth, smooth.copy()),
+    )
+    core = _optimizer()
+    core.base_params["LOST_THRESHOLD_FRAMES"] = 1
+    core.tuning_config["LOST_THRESHOLD_FRAMES"] = True
+    baseline = _result({}, baseline=True)
+    candidate = _result({"W_POSITION": 2.0, "LOST_THRESHOLD_FRAMES": 4})
+
+    core._production_validate_shortlist([baseline, candidate], (0, 39))
+
+    assert baseline.recommended is True
+    assert candidate.recommended is False
+    assert "LOST_THRESHOLD_FRAMES" in candidate.recommendation_reason
 
 
 def test_optimizer_caches_native_frame_roi_normalization(monkeypatch) -> None:

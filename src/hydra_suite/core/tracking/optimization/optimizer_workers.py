@@ -38,7 +38,11 @@ from hydra_suite.core.individual.pose.features import (
 from hydra_suite.core.individual.pose.features import (
     load_pose_context_from_params as _pf_load_pose_context,
 )
-from hydra_suite.core.inference.runner import _open_caches, video_signature
+from hydra_suite.core.inference.runner import (
+    _open_caches,
+    frame_space_roi_mask,
+    video_signature,
+)
 from hydra_suite.core.inference.stages.filtering import filter_for_source
 from hydra_suite.core.tracking.arenas import arena_ids_for_meas as _meas_arena_ids
 from hydra_suite.core.tracking.arenas import (
@@ -372,7 +376,11 @@ def run_tracking_preview(
                 self.inference_config = inference_config_for_optimizer_params(p)
 
         det_filter = _ParamsFilter(params)
-        _roi_mask = params.get("ROI_MASK", None)
+        # Cache detections are native-frame coordinates while the dialog's ROI
+        # can be display-space. Match live replay and optimizer filtering before
+        # indexing the mask so preview never rejects/admits detections on a
+        # different geometry than production.
+        _roi_mask = frame_space_roi_mask(params.get("ROI_MASK", None), video_path)
 
         N = params["MAX_TARGETS"]
 

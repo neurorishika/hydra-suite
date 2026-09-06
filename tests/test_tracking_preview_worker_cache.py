@@ -7,6 +7,8 @@ to the pure ``run_tracking_preview`` helper in core; the cache-reading
 internals patched below live in the core module.
 """
 
+import numpy as np
+
 import hydra_suite.core.tracking.optimization.optimizer_workers as ow
 import hydra_suite.trackerkit.gui.workers.param_optimizer_worker as worker_mod
 
@@ -137,3 +139,65 @@ def test_preview_worker_no_longer_imports_legacy_DetectionCache_directly():
     assert (
         "DetectionCache(" not in src
     ), "run_tracking_preview must not construct the legacy DetectionCache"
+
+
+def test_preview_normalizes_display_roi_before_filtering_cached_detections(
+    monkeypatch, tmp_path
+):
+    """Preview filtering must receive native cache-frame ROI coordinates."""
+
+    raw_roi = np.array([[255, 0], [0, 0]], dtype=np.uint8)
+    native_roi = np.array(
+        [[255, 255, 0, 0], [255, 255, 0, 0], [0, 0, 0, 0], [0, 0, 0, 0]],
+        dtype=np.uint8,
+    )
+    received_masks = []
+
+    class _Cap:
+        def __init__(self):
+            self._read = False
+
+        def isOpened(self):
+            return True
+
+        def set(self, *_args):
+            pass
+
+        def get(self, *_args):
+            return 4
+
+        def read(self):
+            if self._read:
+                return False, None
+            self._read = True
+            return True, np.zeros((4, 4, 3), dtype=np.uint8)
+
+        def release(self):
+            pass
+
+    fake_caches = _FakeCaches(_FakeDetectionHandle())
+    monkeypatch.setattr(ow.cv2, "VideoCapture", lambda *_args: _Cap())
+    monkeypatch.setattr(ow, "_open_caches", lambda *_args, **_kwargs: fake_caches)
+    monkeypatch.setattr(ow, "video_signature", lambda _path: "sig")
+    monkeypatch.setattr(
+        ow,
+        "_pf_load_pose_context",
+        lambda _params: (None, [], [], [], False),
+    )
+
+    def _filtered(_filter, _cache, _frame, roi_mask):
+        received_masks.append(roi_mask)
+        return [], [], [], [], [], []
+
+    monkeypatch.setattr(ow, "_preview_filter_cached_detections", _filtered)
+
+    ow.run_tracking_preview(
+        "clip.mp4",
+        str(tmp_path),
+        0,
+        0,
+        {"MAX_TARGETS": 1, "ROI_MASK": raw_roi},
+    )
+
+    assert len(received_masks) == 1
+    np.testing.assert_array_equal(received_masks[0], native_roi)

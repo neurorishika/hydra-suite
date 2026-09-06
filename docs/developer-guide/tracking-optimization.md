@@ -18,7 +18,9 @@ change:
    bypass YOLO-only confidence filtering.
    Candidate confidence-density regions are built from those same filtered
    detections after any ROI mask is resampled to native cache-frame coordinates;
-   raw cached detections are never substituted for density evidence.
+   raw cached detections are never substituted for density evidence. Sparse
+   cache keys retain their absolute video-frame numbers and break temporal
+   smoothing/regions at each missing frame rather than creating a false bridge.
 2. Optuna explores the user-selected parameter dimensions on a chronological
    training slice. Its scalar loss is only a search heuristic. The current
    production settings are also evaluated exactly and are never clamped into
@@ -44,8 +46,9 @@ change:
    a region-local identity swap cannot masquerade as a consistent result.
    Temporal transitions and triplets at region boundaries remain in the
    evidence. Output safeguards also reject clearly pathological proposals:
-   duplicate/colliding slots, excess source detections, and a starved worst
-   track. These safeguards are still not labels or an accuracy claim.
+   duplicate/colliding slots, source detections measured before the final
+   target-count cap, and a starved worst track. These safeguards are still not
+   labels or an accuracy claim.
 5. Candidates receive Pareto fronts rather than being collapsed into a
    user-weighted accuracy claim. A candidate is automatically recommended only
    when it dominates the exact baseline and other baseline-safe candidates, and
@@ -126,7 +129,12 @@ the largest active temporal horizon. A short range can still show proposals,
 but it retains the current settings and explains that held-out validation cannot
 support a recommendation. Frame count alone is not evidence: each region must
 also contain observed forward/backward motion triplets and robust shared cycle
-observations before it contributes to promotion.
+observations before it contributes to promotion. Cycle evidence has both an
+absolute shared-observation floor and a horizon/slot-scaled coverage floor.
+When a candidate changes a lifecycle threshold, held-out output must also
+exercise that value: maturity needs a long consecutive observed run, and loss
+needs a threshold-length missing run bracketed by observed states. Otherwise
+the current settings are retained.
 
 Cancel, window close, `reject()`, `accept()`, and direct `done()` all request
 optimizer and preview cancellation before a terminal dialog transition. The
