@@ -60,9 +60,13 @@ def test_load_coco_split_raises_when_missing(tmp_path):
 
 
 def test_segmentation_to_polygons_keeps_crowd_flagged():
-    # Crowd instances stay in the object list (flagged, not dropped) --
-    # `Object.is_crowd` lets the loss handle them correctly, superseding an
-    # earlier design that dropped them and forced is_exhaustive=False.
+    # Crowd (= sub-floor tile fragment) instances stay in the polygon list,
+    # flagged rather than deleted: this layer makes no supervision decision.
+    # Note the flag is NOT inert -- sam3's loss never reads `Object.is_crowd`,
+    # so `datapoints.select_output_objects` reads it instead, excluding
+    # fragments from the positive query's object_ids_output and marking that
+    # query is_exhaustive=False together. That is the earlier
+    # drop-and-downgrade design restored, minus its row deletion.
     annotations = [
         {"segmentation": [[0, 0, 1, 0, 1, 1]], "iscrowd": 0},
         {"segmentation": [[2, 2, 3, 2, 3, 3]], "iscrowd": 1},

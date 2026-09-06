@@ -4,8 +4,25 @@
 > (recommended) or superpowers:executing-plans to implement this plan task-by-task.
 > Steps use checkbox (`- [ ]`) syntax for tracking.
 
-**Status:** revised 2026-09-05 after an adversarial review found four blocking
-defects (`docs/superpowers/specs/2026-09-05-parity-plan-review.md`). The
+**Status: PREMISE REFUTED — do not resume this plan on its original motivation.**
+The measurement phase (Task 0 Step 6, run 2026-09-05 on `courtship`/`hydra-cuda`,
+committed as `tools/sam3_parity/baseline.json`) returned a **null result** on a
+genuine 16-frame held-out split: paired per-frame difference **+0.4375
+extras/frame, 95 % CI [−0.4375, +1.4375], sign p = 0.34** — the pre-registered
+criterion (CI excludes zero) is **not met**. Excluding the training-contaminated
+frame `f008975` it is +0.0667, CI [−0.600, +0.667]; also null. On AP **ours 0.530
+beats the spike's 0.472.** The comparison is in any case confounded by **~19×
+training data** (the spike's `fold_all` is 3 frames / 108 tiles / 177 instances
+with train and valid byte-identical — no held-out set at all; ours is 62 frames /
+3 286 instances). Task 7 further found the shared recall plateau this plan was
+built to explain is a **defect in the scoring harness**
+(`calibration.match_one_to_one`), not in either model. **RUN A (Task 1 Step 7)
+and RUN B (Task 2 Step 7) were never executed**, and the 312-module surface Task 2
+created has **zero training evidence**. Full record:
+`docs/superpowers/specs/2026-09-05-sam3-spike-parity-measurement-findings.md`.
+
+*Previous status:* revised 2026-09-05 after an adversarial review found four
+blocking defects (`docs/superpowers/specs/2026-09-05-parity-plan-review.md`). The
 revision corrects the spike's actual hyperparameters, replaces an unachievable
 acceptance criterion, fixes an interface that would have wrapped zero modules,
 and rebuilds the measurement methodology. Task 4 is demoted; two tasks are
@@ -28,7 +45,19 @@ named, justified, and individually testable.
 `docs/superpowers/specs/2026-09-04-sam3-spike-vs-build-consolidation.md`
 (earlier design comparison, partially superseded).
 
-## The evidence this plan answers
+## The evidence this plan answers — **SUPERSEDED, NOT A LIVE FINDING**
+
+> **⚠️ The table below is retained for the record only. It has been refuted.**
+> It was measured (a) on 12 frames drawn from *our own training source*, (b) at
+> a sample size where the delta is a 2–3σ effect at best, and (c) **under
+> `calibration.match_one_to_one`, now known to veto 15.9 % (128/805) of ground
+> truth** by testing a vertex-mean "centroid" that falls outside the outline —
+> which both depresses recall and reclassifies correctly-matched ants as
+> "extras" (~65 % of the "extras" here are that bookkeeping artefact).
+> The pre-registered replacement measurement on a genuine held-out split is
+> **null** (see the Status header), and on AP ours is *better*. Superseded by
+> `docs/superpowers/specs/2026-09-05-sam3-spike-parity-measurement-findings.md`.
+> **Do not cite "+1.2–2.0 extras/frame" as a live finding.**
 
 Both checkpoints, same 12 labelled frames, 275 instances, tile fraction 0.1:
 
@@ -43,7 +72,8 @@ Median IoU 0.868 vs 0.863. Recall parity, **+1.2–2.0 extras/frame**, faster
 high-confidence collapse — measured on frames from *our* training source, so
 the comparison already favours us. **This delta is only a 2–3σ effect at the
 available sample size; see Task 0, which must be fixed before it can judge
-anything.**
+anything.** *(Task 0 was fixed and run; it judged the delta **null**. The
+"+1.2–2.0 extras/frame" above is superseded — see the warning box.)*
 
 ## What the spike actually ran (corrected)
 
@@ -176,9 +206,12 @@ and neither `prompt_proj` nor `hs_proj` is there. The interface is:
   `build_sam3_image_model`; update `sizing.py` from the measurement.
 - [ ] **Step 5:** Assert the merge round-trip resolves these paths.
 - [ ] **Step 6:** `-k "sam3"` green. Commit.
-- [ ] **Step 7: RUN A.** Retrain with only this flag changed; re-run Task 0's
-  paired comparison. Record the result either way — a null convicts a
-  different cause and is equally valuable.
+- [ ] **Step 7: RUN A. NOT RUN — SUPERSEDED.** Retrain with only this flag
+  changed; re-run Task 0's paired comparison. Record the result either way — a
+  null convicts a different cause and is equally valuable.
+  *Never executed. The comparison it would feed is refuted (null) and its
+  scorer is defective; re-running it as specified would measure the harness,
+  not the model. See the Status header and the measurement-findings spec.*
 
 ---
 
@@ -233,7 +266,12 @@ functional. Do not spend effort making them "work".
   produces a key-identical stock state dict.
 - [ ] **Step 6:** Assert **308** after the MHA pass and **314** after the
   geometry Linears, under matching flags (text encoder **OFF**, as the spike).
-- [ ] **Step 7: RUN B.** Retrain, re-compare against RUN A.
+- [ ] **Step 7: RUN B. NOT RUN — SUPERSEDED.** Retrain, re-compare against
+  RUN A. *Never executed, so the 312-module surface this task built has zero
+  training evidence. Before any future attempt, fix the scorer (see the
+  measurement-findings spec) — the published manifest now records
+  `adapted_modules` / `adapter_trainable_params`, so such a run would at least
+  be attributable to a surface.*
 
 **Ruling if forward parity cannot be achieved at some call site:** skip that
 site, record it with the failing shapes, proceed. Never ship an attention

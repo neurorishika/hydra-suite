@@ -60,11 +60,31 @@ _PUBLISH_ACTIVE_TENSOR_BYTES = _CHECKPOINT_BYTES
 _PUBLISH_HOST_BYTES = (
     _CHECKPOINT_BYTES + _PUBLISH_ACTIVE_TENSOR_BYTES + _RUNTIME_HOST_ALLOWANCE_BYTES
 )
-# MEASURED on this repo's own configuration (batch 1, rank 16, 1008px SAHI
-# tiles, 206 adapters) via torch.cuda.max_memory_reserved on an RTX 6000 Ada:
-# a steady 7.83 GiB across ~130 optimizer steps and a full shuffle of tiles,
-# including the densest. 12 GiB gives ~53% headroom over that.
+# MEASURED, and RE-MEASURED after the adapter surface changed.
 #
+# 2026-09-04, 206 adapters: 7.83 GiB steady across ~130 optimizer steps and a
+# full shuffle of tiles, including the densest.
+# 2026-09-05, 312 adapters (the current production surface, after SAM3's own
+# attention clone was split): 7.72 GiB. Both via
+# torch.cuda.max_memory_reserved on an RTX 6000 Ada, batch 1, rank 16, 1008px
+# SAHI tiles, bf16, through the real `cli.run_training` on a real prepared
+# dataset -- reserved, not allocated, because reserved is what the card must
+# actually have free. The 314-module spike-parity surface (the same run plus
+# `adapt_scoring_head`, which is NOT production-reachable) measured the same
+# 7.72 GiB.
+#
+# So growing the surface from 206 to 312 modules did NOT move the peak: at
+# rank 16 the adapters are ~11.4M parameters (~0.14 GiB of state) against a
+# frozen base whose activations dominate, and the extra split projections
+# reuse activations the fused kernels were already materialising. 12 GiB keeps
+# ~55% headroom over the current figure, so this constant remains sound -- now
+# for a measured reason rather than an inherited one.
+#
+# The measurements live in the profile store, dated and device-tagged
+# (`runtime/memory_profiles.py`, written by
+# `tools/sam3/measure_bf16_peak.py`). This constant is the coarse admission
+# floor, NOT the measurement: never edit it to "the number someone measured",
+# and never scale it when the surface changes -- re-run the probe.
 # The previous value, 29 GiB, was inherited from the spike's very different
 # setup (batch 4, rank 32, whole-image inputs) and was never a measurement of
 # THIS role. At 3.7x the real figure it refused any card below ~32 GiB --
@@ -361,6 +381,24 @@ def _dataset_profile(dataset_dir: str) -> Sam3DatasetProfile:
                     annotation.get("segmentation")
                 )
             )
+            # TWO CARRIED CAVEATS on this count, recorded rather than changed
+            # (no behaviour change intended here):
+            #
+            # 1. It feeds the MIN_TRAIN_INSTANCES refusal below, and that gate
+            #    has LOOSENED without anyone deciding to loosen it. Lowering
+            #    MIN_RETAINED_AREA_FRAC from 0.5 to 0.25 means fewer tile
+            #    fragments are demoted to `iscrowd`, so fewer rows are excluded
+            #    here and the same dataset now reports MORE train_instances
+            #    than it did before. The threshold is unchanged; what it
+            #    measures is not.
+            # 2. Excluding `iscrowd` rows is "correct by accident", not by
+            #    design. It happens to align with the builder's use of iscrowd
+            #    to mark heavily-clipped fragments that should not be counted
+            #    as trainable instances -- but nothing enforces that meaning,
+            #    and a future producer using iscrowd in its COCO sense
+            #    (genuine crowd regions) would silently change this gate again.
+            #    If either is revisited, re-derive the threshold from what the
+            #    count now means instead of adjusting the count to fit it.
             if is_train and polygons and not annotation.get("iscrowd"):
                 train_instances += 1
     valid_images = valid.get("images", [])

@@ -123,7 +123,7 @@ def test_tile_datapoint_shares_one_image_across_positive_and_negative_queries():
     datapoint = build_tile_datapoint(
         tile,
         "ant",
-        [(polygon, True)],
+        [(polygon, False)],
         ["floor", "food", "wall"],
         counting_transform,
     )
@@ -165,13 +165,13 @@ def test_shared_query_datapoints_preserve_independent_query_targets():
         dtype=np.float32,
     )
     transform = _default_transform()
-    copied = [build_datapoint(tile, "ant", [(polygon, True)], transform)]
+    copied = [build_datapoint(tile, "ant", [(polygon, False)], transform)]
     copied.extend(
         build_negative_datapoint(tile, prompt, transform)
         for prompt in ("floor", "wall")
     )
     shared = build_shared_query_datapoints(
-        tile, "ant", [(polygon, True)], ["floor", "wall"], transform
+        tile, "ant", [(polygon, False)], ["floor", "wall"], transform
     )
 
     copied_batch = collate_datapoints(copied)["input"]
@@ -192,13 +192,12 @@ def test_shared_query_datapoints_preserve_independent_query_targets():
     assert shared[0].images is shared[1].images is shared[2].images
 
 
-def test_tile_datapoint_native_shape_without_importing_full_sam3(monkeypatch):
-    """Exercise our adapter against the Meta dataclass contract with fakes.
+def _install_fake_sam3(monkeypatch):
+    """Install minimal fakes mirroring Meta's inspected dataclass signatures.
 
     The macOS training environment cannot import Meta's package root because
-    its CUDA-only Triton module is unconditional. These fakes mirror the
-    inspected dataclass signatures while the CUDA-only real-package test above
-    remains the authoritative integration check.
+    its CUDA-only Triton module is unconditional; the real-`sam3` tests above
+    remain the authoritative integration check on the CUDA box.
     """
 
     @dataclass
@@ -269,6 +268,18 @@ def test_tile_datapoint_native_shape_without_importing_full_sam3(monkeypatch):
         sys.modules, "sam3.train.transforms.basic_for_api", normalize_module
     )
 
+
+def test_tile_datapoint_native_shape_without_importing_full_sam3(monkeypatch):
+    """Exercise our adapter against the Meta dataclass contract with fakes.
+
+    The macOS training environment cannot import Meta's package root because
+    its CUDA-only Triton module is unconditional. These fakes mirror the
+    inspected dataclass signatures while the CUDA-only real-package test above
+    remains the authoritative integration check.
+    """
+
+    _install_fake_sam3(monkeypatch)
+
     from hydra_suite.training.sam3_lora.datapoints import (
         build_shared_query_datapoints,
         build_tile_datapoint,
@@ -281,7 +292,7 @@ def test_tile_datapoint_native_shape_without_importing_full_sam3(monkeypatch):
     datapoint = build_tile_datapoint(
         tile,
         "ant",
-        [(polygon, True)],
+        [(polygon, False)],
         ["floor", "wall"],
         lambda image: transform_calls.append(image) or "tensor",
     )
@@ -289,7 +300,7 @@ def test_tile_datapoint_native_shape_without_importing_full_sam3(monkeypatch):
     assert len(transform_calls) == 1
     assert len(datapoint.images) == 1
     assert datapoint.images[0].data == "tensor"
-    assert datapoint.images[0].objects[0].is_crowd is True
+    assert datapoint.images[0].objects[0].is_crowd is False
     assert datapoint.raw_images is None
     assert [query.query_text for query in datapoint.find_queries] == [
         "ant",
@@ -307,7 +318,7 @@ def test_tile_datapoint_native_shape_without_importing_full_sam3(monkeypatch):
     shared = build_shared_query_datapoints(
         tile,
         "ant",
-        [(polygon, True)],
+        [(polygon, False)],
         ["floor", "wall"],
         lambda image: shared_transform_calls.append(image) or "shared-tensor",
     )
@@ -322,3 +333,121 @@ def test_tile_datapoint_native_shape_without_importing_full_sam3(monkeypatch):
         [],
         [],
     ]
+
+
+def test_select_output_objects_keeps_every_full_instance_exhaustive():
+    from hydra_suite.training.sam3_lora.datapoints import select_output_objects
+
+    assert select_output_objects([False, False, False]) == ([0, 1, 2], True)
+    assert select_output_objects([]) == ([], True)
+
+
+def test_select_output_objects_excludes_fragments_and_downgrades_the_tile():
+    from hydra_suite.training.sam3_lora.datapoints import select_output_objects
+
+    # index 1 is a sub-floor fragment: it must not be a supervised positive,
+    # and the tile must stop claiming its instance list is complete.
+    assert select_output_objects([False, True, False]) == ([0, 2], False)
+    # A fragment-only tile: present, but never claimed empty.
+    assert select_output_objects([True]) == ([], False)
+
+
+@pytest.mark.parametrize(
+    "flags",
+    [
+        [],
+        [False],
+        [True],
+        [False, True],
+        [True, False],
+        [True, True],
+        [False, False, True, False],
+    ],
+)
+def test_never_drops_an_instance_while_claiming_exhaustive(flags):
+    """The Task-5 anti-requirement, as an invariant.
+
+    Dropping an instance while leaving `is_exhaustive=True` teaches the model
+    "the animal is absent" -- strictly worse than the bug being fixed. The
+    exhaustiveness claim and the emitted instance list must move together.
+    """
+    from hydra_suite.training.sam3_lora.datapoints import select_output_objects
+
+    object_ids, is_exhaustive = select_output_objects(flags)
+    dropped = len(flags) - len(object_ids)
+    assert (dropped == 0) == is_exhaustive
+    assert object_ids == [index for index, flag in enumerate(flags) if not flag]
+
+
+def test_fragment_tile_downgrades_only_the_positive_query(monkeypatch):
+    """Fake-sam3 end-to-end check of the query-level consequences.
+
+    Negatives stay exhaustive on purpose (see `build_tile_datapoint`): a
+    fragment of the positive concept does not falsify "zero shadows here", and
+    keeping them exhaustive retains false-positive pressure on exactly the
+    tiles the positive query gives up.
+    """
+    _install_fake_sam3(monkeypatch)
+
+    from hydra_suite.training.sam3_lora.datapoints import build_tile_datapoint
+
+    tile = np.zeros((20, 10, 3), dtype=np.uint8)
+    full = np.array([[1, 2], [8, 2], [8, 18]], dtype=np.float32)
+    fragment = np.array([[0, 0], [2, 0], [2, 2]], dtype=np.float32)
+
+    datapoint = build_tile_datapoint(
+        tile,
+        "ant",
+        [(full, False), (fragment, True)],
+        ["floor"],
+        lambda image: "tensor",
+    )
+
+    # Both objects still exist on the image -- only the supervision changes.
+    assert len(datapoint.images[0].objects) == 2
+    assert [q.object_ids_output for q in datapoint.find_queries] == [[0], []]
+    assert [q.is_exhaustive for q in datapoint.find_queries] == [False, True]
+
+
+def test_real_collator_accepts_a_non_exhaustive_fragment_tile():
+    """CUDA-box guard for the one contract this Mac cannot verify.
+
+    Fake dataclasses cannot tell us whether Meta's `collate_fn_api` tolerates
+    `object_ids_output=[]` paired with `is_exhaustive=False` (negatives already
+    pair `[]` with `True`, so it is only plausible, not proven). Skips here,
+    runs automatically wherever `sam3` is installed.
+    """
+    pytest.importorskip("sam3", exc_type=ImportError)
+
+    from hydra_suite.training.sam3_lora.dataloader import _default_transform
+    from hydra_suite.training.sam3_lora.datapoints import (
+        build_tile_datapoint,
+        collate_datapoints,
+    )
+
+    tile = np.zeros((RES, RES, 3), dtype=np.uint8)
+    full = np.array(
+        [[100.0, 100.0], [300.0, 100.0], [300.0, 300.0], [100.0, 300.0]],
+        dtype=np.float32,
+    )
+    fragment = np.array(
+        [[0.0, 0.0], [40.0, 0.0], [40.0, 40.0], [0.0, 40.0]], dtype=np.float32
+    )
+    transform = _default_transform()
+
+    mixed = collate_datapoints(
+        [
+            build_tile_datapoint(
+                tile, "ant", [(full, False), (fragment, True)], ["floor"], transform
+            )
+        ]
+    )["input"]
+    assert mixed.find_targets[0].is_exhaustive.tolist() == [False, True]
+    assert mixed.find_targets[0].num_boxes.tolist() == [1, 0]
+
+    # Fragment-only tile: present in the batch, never claimed empty.
+    only = collate_datapoints(
+        [build_tile_datapoint(tile, "ant", [(fragment, True)], [], transform)]
+    )["input"]
+    assert only.find_targets[0].is_exhaustive.tolist() == [False]
+    assert only.find_targets[0].num_boxes.tolist() == [0]

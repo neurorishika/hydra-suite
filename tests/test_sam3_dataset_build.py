@@ -11,6 +11,7 @@ from hydra_suite.training.contracts import Sam3LoraParams, SplitConfig
 from hydra_suite.training.dataset_io import DatasetIOLimits, DatasetLimitError
 from hydra_suite.training.sam3_lora.dataset_build import (
     CURATED_NEGATIVES,
+    MIN_RETAINED_AREA_FRAC,
     _split_frame_stems,
     _tile_frame,
     build_sam3_coco_dataset,
@@ -99,9 +100,10 @@ def test_empty_tiles_are_kept_when_requested(tmp_path):
 
 
 def test_seam_clipped_instances_become_iscrowd(tmp_path):
-    # A polygon straddling a tile seam retains <50% on one side; it must be
-    # marked iscrowd, not dropped -- dropping teaches SAM3 that a visible
-    # half-animal is background.
+    # A polygon straddling a tile seam retaining less than the floor is marked
+    # iscrowd, not dropped -- dropping teaches SAM3 that a visible half-animal
+    # is background. The iscrowd flag is what `datapoints.select_output_objects`
+    # later reads to exclude the fragment AND downgrade the tile together.
     out = tmp_path / "out"
     stats = build_sam3_coco_dataset(
         _source(tmp_path / "src"),
@@ -111,6 +113,105 @@ def test_seam_clipped_instances_become_iscrowd(tmp_path):
     assert stats["crowd_annotations"] >= 0  # key exists and is counted
     data = _load(out, "train")
     assert all(a["iscrowd"] in (0, 1) for a in data["annotations"])
+
+
+def test_retained_area_floor_is_the_chosen_fragment_policy():
+    # Deliberate deviation from the spike (see the constant's comment): the
+    # floor moved 0.5 -> 0.25 so mostly-visible animals stay full positives and
+    # far fewer tiles lose their no-object BCE / FP penalty.
+    assert MIN_RETAINED_AREA_FRAC == 0.25
+
+
+def _crowd_flags(polygon):
+    image = np.zeros((100, 100, 3), dtype=np.uint8)
+    tiles = list(
+        _tile_frame(image, [np.asarray(polygon, dtype=np.float32)], 50, 50, 0.0, False)
+    )
+    return sorted(
+        flag for _rect, _crop, instances in tiles for _poly, flag in instances
+    )
+
+
+def test_sub_floor_seam_fragment_is_flagged_and_its_sibling_is_not():
+    # 20 % on the left tile (below the 0.25 floor -> fragment), 80 % on the
+    # right tile (a normal, fully-supervised positive).
+    assert _crowd_flags([[48, 10], [58, 10], [58, 20], [48, 20]]) == [False, True]
+
+
+def test_above_floor_clip_stays_a_normal_positive():
+    # A clean 50/50 split is well above the floor: neither side is a fragment,
+    # so neither tile is downgraded.
+    assert _crowd_flags([[45, 10], [55, 10], [55, 20], [45, 20]]) == [False, False]
+
+
+def _seam_source(tmp_path, n_frames=3, size=100):
+    """A source whose only animal straddles a tile seam 20/80.
+
+    Below the 0.25 floor on the left tile (a fragment) and well above it on the
+    right (a normal positive), so the downgrade tallies are provably nonzero.
+    """
+    img_dir = tmp_path / "images"
+    lbl_dir = tmp_path / "labels"
+    img_dir.mkdir(parents=True)
+    lbl_dir.mkdir(parents=True)
+    rng = np.random.default_rng(0)
+    poly = np.array([[0.48, 0.10], [0.58, 0.10], [0.58, 0.20], [0.48, 0.20]])
+    for i in range(n_frames):
+        cv2.imwrite(
+            str(img_dir / f"f{i}.jpg"),
+            rng.integers(0, 255, (size, size, 3), dtype=np.uint8),
+        )
+        (lbl_dir / f"f{i}.txt").write_text(
+            "0 " + " ".join(f"{v:.6f}" for v in poly.reshape(-1)) + "\n"
+        )
+    (tmp_path / "classes.txt").write_text("ant\n")
+    return tmp_path
+
+
+def test_downgraded_tile_counts_are_actually_tallied(tmp_path):
+    # Guards the tally itself, not just the manifest keys: every frame yields
+    # exactly one fragment tile (20 % retained) and one full-positive tile.
+    out = tmp_path / "out"
+    stats = build_sam3_coco_dataset(
+        _seam_source(tmp_path / "src", n_frames=3),
+        out,
+        _params(slice_width=50, slice_height=50, tile_overlap=0.0),
+    )
+    manifest = json.loads((out / "build_manifest.json").read_text())
+    counts = manifest["fragment_counts"]
+    assert stats["fragment_annotations"] == 3
+    assert stats["downgraded_tiles"] == 3
+    assert stats["fragment_only_tiles"] == 3
+    for key in ("fragment_annotations", "downgraded_tiles", "fragment_only_tiles"):
+        assert stats[key] == counts["train"][key] + counts["valid"][key]
+
+
+def test_manifest_reports_fragment_and_downgraded_tile_counts(tmp_path):
+    # The M2 risk (nearly half the annotated stream losing FP pressure) must be
+    # visible from the built dataset BEFORE anyone spends GPU hours on it.
+    out = tmp_path / "out"
+    stats = build_sam3_coco_dataset(
+        _source(tmp_path / "src"),
+        out,
+        _params(slice_width=1024, slice_height=1024, tile_overlap=0.0),
+    )
+    manifest = json.loads((out / "build_manifest.json").read_text())
+    assert manifest["min_retained_area_frac"] == MIN_RETAINED_AREA_FRAC
+    counts = manifest["fragment_counts"]
+    for split in ("train", "valid"):
+        assert set(counts[split]) >= {
+            "tiles",
+            "fragment_annotations",
+            "downgraded_tiles",
+            "fragment_only_tiles",
+        }
+        assert counts[split]["fragment_only_tiles"] <= counts[split]["downgraded_tiles"]
+        assert counts[split]["downgraded_tiles"] <= counts[split]["tiles"]
+    assert stats["fragment_annotations"] == stats["crowd_annotations"]
+    assert stats["downgraded_tiles"] == (
+        counts["train"]["downgraded_tiles"] + counts["valid"]["downgraded_tiles"]
+    )
+    assert stats["min_retained_area_frac"] == MIN_RETAINED_AREA_FRAC
 
 
 def test_split_is_deterministic_under_seed(tmp_path):

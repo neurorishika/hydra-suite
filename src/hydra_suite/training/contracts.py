@@ -236,6 +236,15 @@ class Sam3LoraParams:
     adapt_detr_encoder: bool = True
     adapt_detr_decoder: bool = True
     adapt_mask_decoder: bool = True
+    # The text/vision scoring head (`dot_prod_scoring.{prompt_proj,hs_proj}`).
+    # The finetune quality audit (N1) found `prompt_proj` is the research
+    # spike's single biggest mover (lora_B norm 0.174) among modules we never
+    # adapt. That shows the head MOVED, not that it moved toward precision, so
+    # this stays OFF until the paired retrain ("RUN A") validates it. It also
+    # has no `LORA_PARAMS_PER_RANK` coefficient yet -- measure it on a live
+    # `build_sam3_image_model` (CUDA box) and add the key BEFORE enabling,
+    # or preflight's exact estimator-parity check will refuse the run.
+    adapt_scoring_head: bool = False
     # Tiling, mirroring the SAHI sliced-training knobs.
     geometry_mode: str = "auto_object"  # auto_object | auto_model | custom
     object_tile_fraction: float = 0.055

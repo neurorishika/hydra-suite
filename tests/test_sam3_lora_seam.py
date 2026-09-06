@@ -157,6 +157,7 @@ def test_lora_config_all_scopes_uses_explicit_budgeted_prefixes():
     from types import SimpleNamespace
 
     from hydra_suite.training.sam3_lora.lora import (
+        SUBMODULE_PATHS,
         SUBMODULE_PREFIXES,
         lora_config_from_params,
     )
@@ -172,13 +173,26 @@ def test_lora_config_all_scopes_uses_explicit_budgeted_prefixes():
     assert set(config.include_prefixes) == {
         prefix for prefixes in SUBMODULE_PREFIXES.values() for prefix in prefixes
     }
+    # The scoring head is a separate opt-in scope (`adapt_scoring_head`,
+    # default off) carried on `include_module_paths`, never on the prefixes:
+    # every prefix flag being on must still leave it unadapted. See
+    # tests/test_sam3_lora_scopes.py for the surface itself.
     assert "dot_prod_scoring" not in config.include_prefixes
+    assert not any("dot_prod_scoring" in path for path in config.include_module_paths)
+    # `adapt_geometry_encoder` is dual-keyed: a prefix for the encoder's
+    # attention layers plus exact paths for its six plain projections, whose
+    # leaf names match no target suffix. Turning the prefix flags on must
+    # therefore carry exactly those six paths and nothing else.
+    assert set(config.include_module_paths) == set(
+        SUBMODULE_PATHS["adapt_geometry_encoder"]
+    )
 
 
 def test_lora_config_rejects_no_enabled_scope():
     from types import SimpleNamespace
 
     from hydra_suite.training.sam3_lora.lora import (
+        SUBMODULE_PATHS,
         SUBMODULE_PREFIXES,
         lora_config_from_params,
     )

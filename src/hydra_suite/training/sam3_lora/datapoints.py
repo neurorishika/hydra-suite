@@ -49,6 +49,36 @@ def _scale_polygons_to_res(
     return [(poly.astype(np.float32) * scale) for poly in polygons]
 
 
+def select_output_objects(
+    crowd_flags: list[bool] | tuple[bool, ...],
+) -> tuple[list[int], bool]:
+    """Split a tile's instances into supervised positives and an exhaustiveness claim.
+
+    Sub-floor tile fragments (``dataset_build.MIN_RETAINED_AREA_FRAC``, carried
+    here as ``iscrowd``) are excluded from ``object_ids_output`` -- Meta's
+    ``collate_fn_api`` builds every find target exclusively from that list, so an
+    excluded object contributes no box/mask target and the model is not asked to
+    reconstruct a sliver of an animal from a tile seam.
+
+    The exclusion and the exhaustiveness downgrade are computed together, in one
+    place, on purpose. Dropping an instance while still claiming
+    ``is_exhaustive=True`` would teach the model "the animal is absent" there --
+    strictly worse than training the sliver as a full positive, which is the bug
+    this replaces. Callers cannot get one without the other.
+
+    Deviation from the research spike (which trains every truncated instance as a
+    full exhaustive positive) and its cost: a non-exhaustive query has its
+    no-object BCE nullified and is excluded from false-positive penalties, so each
+    downgraded tile stops applying precision pressure on the positive concept --
+    on exactly the seam-adjacent tiles where false positives are most likely. That
+    is the accepted, pre-registered risk of this change.
+
+    Returns ``(object_ids_output, is_exhaustive)``.
+    """
+    object_ids = [index for index, is_crowd in enumerate(crowd_flags) if not is_crowd]
+    return object_ids, len(object_ids) == len(crowd_flags)
+
+
 def _polygon_to_object(polygon: np.ndarray, is_crowd: bool) -> Any:
     """Build one `sam3.train.data.sam3_image_dataset.Object` from a single
     RES-space polygon (already scaled by `_scale_polygons_to_res`).
@@ -93,11 +123,12 @@ def build_datapoint(
     Pass an empty list for a negative query (a prompt that must return
     nothing).
 
-    The query is always exhaustive: every instance in the tile -- crowd or
-    not -- is represented in `instances` (see `dataloader._segmentation_to_
-    polygons`), with crowd instances carrying `Object(is_crowd=True)` rather
-    than being omitted, so there is nothing left unaccounted for that would
-    make an exhaustive claim false.
+    Every instance in the tile -- fragment or not -- is represented in
+    `instances` (see `dataloader._segmentation_to_polygons`) and becomes an
+    `Object`; sub-floor fragments carry `is_crowd=True`. What changes is the
+    supervision: `select_output_objects` excludes fragments from the positive
+    query's `object_ids_output` and marks that query non-exhaustive in the same
+    step, so a tile never both omits an instance and claims completeness.
     """
     return build_tile_datapoint(tile_bgr, prompt, instances, [], transform)
 
@@ -143,16 +174,18 @@ def build_tile_datapoint(
         for polygon, is_crowd in zip(scaled_polygons, crowd_flags)
     ]
 
-    def make_query(query_text: str, object_ids: list[int]) -> Any:
+    def make_query(
+        query_text: str, object_ids: list[int], is_exhaustive: bool = True
+    ) -> Any:
         return FindQueryLoaded(
             query_text=query_text,
             image_id=0,
             # `collate_fn_api` builds every find target exclusively from
             # `object_ids_output`, using entries as positional indices into
             # Image.objects. Negatives therefore use [], while the positive
-            # enumerates every object.
+            # enumerates every non-fragment object (see select_output_objects).
             object_ids_output=object_ids,
-            is_exhaustive=True,
+            is_exhaustive=is_exhaustive,
             query_processing_order=0,
             inference_metadata=InferenceMetadata(
                 coco_image_id=0,
@@ -164,7 +197,15 @@ def build_tile_datapoint(
             ),
         )
 
-    queries = [make_query(positive_prompt, list(range(len(objects))))]
+    positive_ids, positive_exhaustive = select_output_objects(crowd_flags)
+    queries = [make_query(positive_prompt, positive_ids, positive_exhaustive)]
+    # Deviation from "mark the tile non-exhaustive": only the POSITIVE query is
+    # downgraded. A sub-floor fragment of the positive concept does not falsify
+    # "there are zero shadows in this tile", and keeping negatives exhaustive
+    # preserves false-positive pressure on exactly the tiles where the positive
+    # query has given it up -- a direct mitigation of the cost named in
+    # select_output_objects. Cost of the refinement: none on the positive
+    # concept; it only declines to also discard the negatives' supervision.
     queries.extend(make_query(prompt, []) for prompt in negative_prompts)
     datapoint = Datapoint(
         find_queries=queries,

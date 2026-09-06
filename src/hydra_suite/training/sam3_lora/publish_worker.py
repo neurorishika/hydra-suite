@@ -244,8 +244,25 @@ def publish_sam3_artifact(
                 "no adapter-touched tensor changed after consumer-normalized hashing."
             )
 
+        # WHY the adapter surface is stamped, not just the adapt_* flags:
+        # `publish._PARAM_FIELDS` records the boolean scopes, but the SET OF
+        # MODULES a scope reaches can change underneath an unchanged flag. It
+        # did: branch `codex/sam3-spike-parity` took `adapt_geometry_encoder`
+        # from 206 to 312 adapted modules with every flag byte-identical, so
+        # two manifests from either side of that change are indistinguishable
+        # and no retrain is attributable to a surface. Derived here rather
+        # than plumbed from training because `adapter_state_dict` writes
+        # exactly one `lora_A`/`lora_B` pair per `LoraLinear`, so these equal
+        # the sidecar's own `n_adapted` / `actual_trainable_params`
+        # (cli.py) by construction -- with no extra IPC to go stale.
+        adapted_modules = sum(1 for key in adapters if key.endswith(".lora_A"))
+        adapter_trainable_params = sum(
+            int(value.numel()) for value in adapters.values() if torch.is_tensor(value)
+        )
         metadata = {
             "base_variant": "sam3",
+            "adapted_modules": adapted_modules,
+            "adapter_trainable_params": adapter_trainable_params,
             "prompt": getattr(params, "prompt", ""),
             "train_tile_px": build_manifest.get("tile_px"),
             "reference_body_px": build_manifest.get("reference_body_px"),

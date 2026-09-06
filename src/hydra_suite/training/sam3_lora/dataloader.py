@@ -117,21 +117,35 @@ def _segmentation_to_polygons(annotations: list[dict]) -> list[tuple[np.ndarray,
     """Instance polygons, in tile-pixel space (scaled to RES space later,
     inside `build_datapoint`), paired with their `iscrowd` flag.
 
-    Earlier revisions dropped `iscrowd` instances from the object list
-    entirely and forced the tile's query to `is_exhaustive=False` to
-    compensate (COCO's own meaning of `iscrowd` is "present but
-    unannotated", not "absent", so silently omitting it would have taught
-    the model those pixels were background). `Object` does have a
-    first-class `is_crowd` field, so these instances can stay present with
-    `is_crowd=True` instead of being dropped -- but grepping the installed
-    `sam3.train.{loss,matcher,data}` shows nothing in the loss, the matcher,
-    or the collator actually *reads* `is_crowd`; only the COCO loaders and
-    the dataclass definition reference it. It is metadata sam3's own
-    training path does not consume, so these instances behave as ordinary
-    positives, not specially-weighted ones. That is still the right
-    behaviour here (the builder's `MIN_RETAINED_AREA_FRAC` logic only marks
-    tile-clipped instances as crowd, not something that needs loss-level
-    special-casing), it just is not "the loss handles it" -- nothing does.
+    `iscrowd` here means "sub-floor tile fragment" -- an instance that kept
+    less than `dataset_build.MIN_RETAINED_AREA_FRAC` of its original area
+    after being clipped to this tile. Every instance is returned, fragment or
+    not; this function makes no supervision decision.
+
+    History, because the design went out and came back (do not "re-fix" it):
+
+    1. The first revision dropped fragments from the object list AND forced
+       the tile's query to `is_exhaustive=False`. Correct in spirit -- COCO's
+       `iscrowd` means "present but unannotated", not "absent" -- but it also
+       deleted the rows, so the fragment's pixels were gone entirely.
+    2. That was replaced by "keep them as `Object(is_crowd=True)` and let the
+       loss weight them", on the strength of `Object` having a first-class
+       `is_crowd` field. The replacement was wrong: grepping the installed
+       `sam3.train.{loss,matcher,data}` shows nothing in the loss, the matcher
+       or the collator reads `is_crowd` -- only the COCO loaders and the
+       dataclass definition mention it. So a 5 %-visible sliver silently
+       trained as a full, exhaustive, full-quality mask target.
+    3. Current (Task 5). Back to revision 1's *semantics*, without its row
+       deletion: the fragment stays here as a real polygon and becomes a real
+       `Object`, but `datapoints.select_output_objects` excludes it from the
+       positive query's `object_ids_output` and marks that query
+       `is_exhaustive=False` in the same step. The exclusion is supervisory,
+       not physical -- nothing is deleted, and a tile can never omit an
+       instance while claiming its list is complete.
+
+    So `is_crowd` IS consumed now -- by `select_output_objects`, on our side of
+    the boundary. It remains true that sam3's own loss never reads it; that is
+    exactly why the decision has to be made here rather than delegated.
     """
     polygons: list[tuple[np.ndarray, bool]] = []
     for ann in annotations:
