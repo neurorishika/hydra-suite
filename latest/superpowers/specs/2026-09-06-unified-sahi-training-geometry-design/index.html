@@ -1,0 +1,3675 @@
+
+<!doctype html>
+<html lang="en" class="no-js">
+  <head>
+    
+      <meta charset="utf-8">
+      <meta name="viewport" content="width=device-width,initial-scale=1">
+      
+        <meta name="description" content="User and developer documentation for HYDRA Suite">
+      
+      
+      
+        <link rel="canonical" href="https://neurorishika.github.io/hydra-suite/latest/superpowers/specs/2026-09-06-unified-sahi-training-geometry-design/">
+      
+      
+      
+      
+      <link rel="icon" href="../../../assets/images/favicon.png">
+      <meta name="generator" content="mkdocs-1.6.1, mkdocs-material-9.5.43">
+    
+    
+      
+        <title>Unified tiling & calibration geometry: four paths, one contract - HYDRA Suite Docs</title>
+      
+    
+    
+      <link rel="stylesheet" href="../../../assets/stylesheets/main.0253249f.min.css">
+      
+        
+        <link rel="stylesheet" href="../../../assets/stylesheets/palette.06af60db.min.css">
+      
+      
+
+
+    
+    
+      
+    
+    
+      
+        
+        
+        <link rel="preconnect" href="https://fonts.gstatic.com" crossorigin>
+        <link rel="stylesheet" href="https://fonts.googleapis.com/css?family=Roboto:300,300i,400,400i,700,700i%7CRoboto+Mono:400,400i,700,700i&display=fallback">
+        <style>:root{--md-text-font:"Roboto";--md-code-font:"Roboto Mono"}</style>
+      
+    
+    
+      <link rel="stylesheet" href="../../../assets/_mkdocstrings.css">
+    
+    <script>__md_scope=new URL("../../..",location),__md_hash=e=>[...e].reduce(((e,_)=>(e<<5)-e+_.charCodeAt(0)),0),__md_get=(e,_=localStorage,t=__md_scope)=>JSON.parse(_.getItem(t.pathname+"."+e)),__md_set=(e,_,t=localStorage,a=__md_scope)=>{try{t.setItem(a.pathname+"."+e,JSON.stringify(_))}catch(e){}}</script>
+    
+      
+
+    
+    
+    
+  </head>
+  
+  
+    
+    
+      
+    
+    
+    
+    
+    <body dir="ltr" data-md-color-scheme="default" data-md-color-primary="blue" data-md-color-accent="light-blue">
+  
+    
+    <input class="md-toggle" data-md-toggle="drawer" type="checkbox" id="__drawer" autocomplete="off">
+    <input class="md-toggle" data-md-toggle="search" type="checkbox" id="__search" autocomplete="off">
+    <label class="md-overlay" for="__drawer"></label>
+    <div data-md-component="skip">
+      
+        
+        <a href="#unified-tiling-calibration-geometry-four-paths-one-contract" class="md-skip">
+          Skip to content
+        </a>
+      
+    </div>
+    <div data-md-component="announce">
+      
+    </div>
+    
+      <div data-md-color-scheme="default" data-md-component="outdated" hidden>
+        
+      </div>
+    
+    
+      
+
+<header class="md-header" data-md-component="header">
+  <nav class="md-header__inner md-grid" aria-label="Header">
+    <a href="../../.." title="HYDRA Suite Docs" class="md-header__button md-logo" aria-label="HYDRA Suite Docs" data-md-component="logo">
+      
+  
+  <svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 24 24"><path d="M12 8a3 3 0 0 0 3-3 3 3 0 0 0-3-3 3 3 0 0 0-3 3 3 3 0 0 0 3 3m0 3.54C9.64 9.35 6.5 8 3 8v11c3.5 0 6.64 1.35 9 3.54 2.36-2.19 5.5-3.54 9-3.54V8c-3.5 0-6.64 1.35-9 3.54"/></svg>
+
+    </a>
+    <label class="md-header__button md-icon" for="__drawer">
+      
+      <svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 24 24"><path d="M3 6h18v2H3zm0 5h18v2H3zm0 5h18v2H3z"/></svg>
+    </label>
+    <div class="md-header__title" data-md-component="header-title">
+      <div class="md-header__ellipsis">
+        <div class="md-header__topic">
+          <span class="md-ellipsis">
+            HYDRA Suite Docs
+          </span>
+        </div>
+        <div class="md-header__topic" data-md-component="header-topic">
+          <span class="md-ellipsis">
+            
+              Unified tiling &amp; calibration geometry: four paths, one contract
+            
+          </span>
+        </div>
+      </div>
+    </div>
+    
+      
+        <form class="md-header__option" data-md-component="palette">
+  
+    
+    
+    
+    <input class="md-option" data-md-color-media="(prefers-color-scheme: light)" data-md-color-scheme="default" data-md-color-primary="blue" data-md-color-accent="light-blue"  aria-label="Switch to dark mode"  type="radio" name="__palette" id="__palette_0">
+    
+      <label class="md-header__button md-icon" title="Switch to dark mode" for="__palette_1" hidden>
+        <svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 24 24"><path d="m17.75 4.09-2.53 1.94.91 3.06-2.63-1.81-2.63 1.81.91-3.06-2.53-1.94L12.44 4l1.06-3 1.06 3zm3.5 6.91-1.64 1.25.59 1.98-1.7-1.17-1.7 1.17.59-1.98L15.75 11l2.06-.05L18.5 9l.69 1.95zm-2.28 4.95c.83-.08 1.72 1.1 1.19 1.85-.32.45-.66.87-1.08 1.27C15.17 23 8.84 23 4.94 19.07c-3.91-3.9-3.91-10.24 0-14.14.4-.4.82-.76 1.27-1.08.75-.53 1.93.36 1.85 1.19-.27 2.86.69 5.83 2.89 8.02a9.96 9.96 0 0 0 8.02 2.89m-1.64 2.02a12.08 12.08 0 0 1-7.8-3.47c-2.17-2.19-3.33-5-3.49-7.82-2.81 3.14-2.7 7.96.31 10.98 3.02 3.01 7.84 3.12 10.98.31"/></svg>
+      </label>
+    
+  
+    
+    
+    
+    <input class="md-option" data-md-color-media="(prefers-color-scheme: dark)" data-md-color-scheme="slate" data-md-color-primary="blue" data-md-color-accent="light-blue"  aria-label="Switch to light mode"  type="radio" name="__palette" id="__palette_1">
+    
+      <label class="md-header__button md-icon" title="Switch to light mode" for="__palette_0" hidden>
+        <svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 24 24"><path d="M12 7a5 5 0 0 1 5 5 5 5 0 0 1-5 5 5 5 0 0 1-5-5 5 5 0 0 1 5-5m0 2a3 3 0 0 0-3 3 3 3 0 0 0 3 3 3 3 0 0 0 3-3 3 3 0 0 0-3-3m0-7 2.39 3.42C13.65 5.15 12.84 5 12 5s-1.65.15-2.39.42zM3.34 7l4.16-.35A7.2 7.2 0 0 0 5.94 8.5c-.44.74-.69 1.5-.83 2.29zm.02 10 1.76-3.77a7.131 7.131 0 0 0 2.38 4.14zM20.65 7l-1.77 3.79a7.02 7.02 0 0 0-2.38-4.15zm-.01 10-4.14.36c.59-.51 1.12-1.14 1.54-1.86.42-.73.69-1.5.83-2.29zM12 22l-2.41-3.44c.74.27 1.55.44 2.41.44.82 0 1.63-.17 2.37-.44z"/></svg>
+      </label>
+    
+  
+</form>
+      
+    
+    
+      <script>var palette=__md_get("__palette");if(palette&&palette.color){if("(prefers-color-scheme)"===palette.color.media){var media=matchMedia("(prefers-color-scheme: light)"),input=document.querySelector(media.matches?"[data-md-color-media='(prefers-color-scheme: light)']":"[data-md-color-media='(prefers-color-scheme: dark)']");palette.color.media=input.getAttribute("data-md-color-media"),palette.color.scheme=input.getAttribute("data-md-color-scheme"),palette.color.primary=input.getAttribute("data-md-color-primary"),palette.color.accent=input.getAttribute("data-md-color-accent")}for(var[key,value]of Object.entries(palette.color))document.body.setAttribute("data-md-color-"+key,value)}</script>
+    
+    
+    
+      <label class="md-header__button md-icon" for="__search">
+        
+        <svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 24 24"><path d="M9.5 3A6.5 6.5 0 0 1 16 9.5c0 1.61-.59 3.09-1.56 4.23l.27.27h.79l5 5-1.5 1.5-5-5v-.79l-.27-.27A6.52 6.52 0 0 1 9.5 16 6.5 6.5 0 0 1 3 9.5 6.5 6.5 0 0 1 9.5 3m0 2C7 5 5 7 5 9.5S7 14 9.5 14 14 12 14 9.5 12 5 9.5 5"/></svg>
+      </label>
+      <div class="md-search" data-md-component="search" role="dialog">
+  <label class="md-search__overlay" for="__search"></label>
+  <div class="md-search__inner" role="search">
+    <form class="md-search__form" name="search">
+      <input type="text" class="md-search__input" name="query" aria-label="Search" placeholder="Search" autocapitalize="off" autocorrect="off" autocomplete="off" spellcheck="false" data-md-component="search-query" required>
+      <label class="md-search__icon md-icon" for="__search">
+        
+        <svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 24 24"><path d="M9.5 3A6.5 6.5 0 0 1 16 9.5c0 1.61-.59 3.09-1.56 4.23l.27.27h.79l5 5-1.5 1.5-5-5v-.79l-.27-.27A6.52 6.52 0 0 1 9.5 16 6.5 6.5 0 0 1 3 9.5 6.5 6.5 0 0 1 9.5 3m0 2C7 5 5 7 5 9.5S7 14 9.5 14 14 12 14 9.5 12 5 9.5 5"/></svg>
+        
+        <svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 24 24"><path d="M20 11v2H8l5.5 5.5-1.42 1.42L4.16 12l7.92-7.92L13.5 5.5 8 11z"/></svg>
+      </label>
+      <nav class="md-search__options" aria-label="Search">
+        
+        <button type="reset" class="md-search__icon md-icon" title="Clear" aria-label="Clear" tabindex="-1">
+          
+          <svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 24 24"><path d="M19 6.41 17.59 5 12 10.59 6.41 5 5 6.41 10.59 12 5 17.59 6.41 19 12 13.41 17.59 19 19 17.59 13.41 12z"/></svg>
+        </button>
+      </nav>
+      
+        <div class="md-search__suggest" data-md-component="search-suggest"></div>
+      
+    </form>
+    <div class="md-search__output">
+      <div class="md-search__scrollwrap" tabindex="0" data-md-scrollfix>
+        <div class="md-search-result" data-md-component="search-result">
+          <div class="md-search-result__meta">
+            Initializing search
+          </div>
+          <ol class="md-search-result__list" role="presentation"></ol>
+        </div>
+      </div>
+    </div>
+  </div>
+</div>
+    
+    
+      <div class="md-header__source">
+        <a href="https://github.com/neurorishika/hydra-suite" title="Go to repository" class="md-source" data-md-component="source">
+  <div class="md-source__icon md-icon">
+    
+    <svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 448 512"><!--! Font Awesome Free 6.6.0 by @fontawesome - https://fontawesome.com License - https://fontawesome.com/license/free (Icons: CC BY 4.0, Fonts: SIL OFL 1.1, Code: MIT License) Copyright 2024 Fonticons, Inc.--><path d="M439.55 236.05 244 40.45a28.87 28.87 0 0 0-40.81 0l-40.66 40.63 51.52 51.52c27.06-9.14 52.68 16.77 43.39 43.68l49.66 49.66c34.23-11.8 61.18 31 35.47 56.69-26.49 26.49-70.21-2.87-56-37.34L240.22 199v121.85c25.3 12.54 22.26 41.85 9.08 55a34.34 34.34 0 0 1-48.55 0c-17.57-17.6-11.07-46.91 11.25-56v-123c-20.8-8.51-24.6-30.74-18.64-45L142.57 101 8.45 235.14a28.86 28.86 0 0 0 0 40.81l195.61 195.6a28.86 28.86 0 0 0 40.8 0l194.69-194.69a28.86 28.86 0 0 0 0-40.81"/></svg>
+  </div>
+  <div class="md-source__repository">
+    neurorishika/hydra-suite
+  </div>
+</a>
+      </div>
+    
+  </nav>
+  
+</header>
+    
+    <div class="md-container" data-md-component="container">
+      
+      
+        
+          
+            
+<nav class="md-tabs" aria-label="Tabs" data-md-component="tabs">
+  <div class="md-grid">
+    <ul class="md-tabs__list">
+      
+        
+  
+  
+  
+    <li class="md-tabs__item">
+      <a href="../../.." class="md-tabs__link">
+        
+  
+    
+  
+  Home
+
+      </a>
+    </li>
+  
+
+      
+        
+  
+  
+  
+    
+    
+      <li class="md-tabs__item">
+        <a href="../../../getting-started/installation/" class="md-tabs__link">
+          
+  
+  Getting Started
+
+        </a>
+      </li>
+    
+  
+
+      
+        
+  
+  
+  
+    
+    
+      <li class="md-tabs__item">
+        <a href="../../../user-guide/overview/" class="md-tabs__link">
+          
+  
+  User Guide
+
+        </a>
+      </li>
+    
+  
+
+      
+        
+  
+  
+  
+    
+    
+      <li class="md-tabs__item">
+        <a href="../../../developer-guide/architecture/" class="md-tabs__link">
+          
+  
+  Developer Guide
+
+        </a>
+      </li>
+    
+  
+
+      
+        
+  
+  
+  
+    
+    
+      <li class="md-tabs__item">
+        <a href="../../../reference/api-index/" class="md-tabs__link">
+          
+  
+  Reference
+
+        </a>
+      </li>
+    
+  
+
+      
+    </ul>
+  </div>
+</nav>
+          
+        
+      
+      <main class="md-main" data-md-component="main">
+        <div class="md-main__inner md-grid">
+          
+            
+              
+              <div class="md-sidebar md-sidebar--primary" data-md-component="sidebar" data-md-type="navigation" >
+                <div class="md-sidebar__scrollwrap">
+                  <div class="md-sidebar__inner">
+                    
+
+
+  
+
+
+<nav class="md-nav md-nav--primary md-nav--lifted" aria-label="Navigation" data-md-level="0">
+  <label class="md-nav__title" for="__drawer">
+    <a href="../../.." title="HYDRA Suite Docs" class="md-nav__button md-logo" aria-label="HYDRA Suite Docs" data-md-component="logo">
+      
+  
+  <svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 24 24"><path d="M12 8a3 3 0 0 0 3-3 3 3 0 0 0-3-3 3 3 0 0 0-3 3 3 3 0 0 0 3 3m0 3.54C9.64 9.35 6.5 8 3 8v11c3.5 0 6.64 1.35 9 3.54 2.36-2.19 5.5-3.54 9-3.54V8c-3.5 0-6.64 1.35-9 3.54"/></svg>
+
+    </a>
+    HYDRA Suite Docs
+  </label>
+  
+    <div class="md-nav__source">
+      <a href="https://github.com/neurorishika/hydra-suite" title="Go to repository" class="md-source" data-md-component="source">
+  <div class="md-source__icon md-icon">
+    
+    <svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 448 512"><!--! Font Awesome Free 6.6.0 by @fontawesome - https://fontawesome.com License - https://fontawesome.com/license/free (Icons: CC BY 4.0, Fonts: SIL OFL 1.1, Code: MIT License) Copyright 2024 Fonticons, Inc.--><path d="M439.55 236.05 244 40.45a28.87 28.87 0 0 0-40.81 0l-40.66 40.63 51.52 51.52c27.06-9.14 52.68 16.77 43.39 43.68l49.66 49.66c34.23-11.8 61.18 31 35.47 56.69-26.49 26.49-70.21-2.87-56-37.34L240.22 199v121.85c25.3 12.54 22.26 41.85 9.08 55a34.34 34.34 0 0 1-48.55 0c-17.57-17.6-11.07-46.91 11.25-56v-123c-20.8-8.51-24.6-30.74-18.64-45L142.57 101 8.45 235.14a28.86 28.86 0 0 0 0 40.81l195.61 195.6a28.86 28.86 0 0 0 40.8 0l194.69-194.69a28.86 28.86 0 0 0 0-40.81"/></svg>
+  </div>
+  <div class="md-source__repository">
+    neurorishika/hydra-suite
+  </div>
+</a>
+    </div>
+  
+  <ul class="md-nav__list" data-md-scrollfix>
+    
+      
+      
+  
+  
+  
+  
+    <li class="md-nav__item">
+      <a href="../../.." class="md-nav__link">
+        
+  
+  <span class="md-ellipsis">
+    Home
+  </span>
+  
+
+      </a>
+    </li>
+  
+
+    
+      
+      
+  
+  
+  
+  
+    
+    
+    
+      
+      
+        
+      
+    
+    
+    <li class="md-nav__item md-nav__item--nested">
+      
+        
+        
+          
+        
+        <input class="md-nav__toggle md-toggle md-toggle--indeterminate" type="checkbox" id="__nav_2" >
+        
+          
+          <label class="md-nav__link" for="__nav_2" id="__nav_2_label" tabindex="0">
+            
+  
+  <span class="md-ellipsis">
+    Getting Started
+  </span>
+  
+
+            <span class="md-nav__icon md-icon"></span>
+          </label>
+        
+        <nav class="md-nav" data-md-level="1" aria-labelledby="__nav_2_label" aria-expanded="false">
+          <label class="md-nav__title" for="__nav_2">
+            <span class="md-nav__icon md-icon"></span>
+            Getting Started
+          </label>
+          <ul class="md-nav__list" data-md-scrollfix>
+            
+              
+                
+  
+  
+  
+  
+    <li class="md-nav__item">
+      <a href="../../../getting-started/installation/" class="md-nav__link">
+        
+  
+  <span class="md-ellipsis">
+    Installation
+  </span>
+  
+
+      </a>
+    </li>
+  
+
+              
+            
+              
+                
+  
+  
+  
+  
+    <li class="md-nav__item">
+      <a href="../../../getting-started/environments/" class="md-nav__link">
+        
+  
+  <span class="md-ellipsis">
+    Environments and Makefile
+  </span>
+  
+
+      </a>
+    </li>
+  
+
+              
+            
+              
+                
+  
+  
+  
+  
+    <li class="md-nav__item">
+      <a href="../../../getting-started/integrations/" class="md-nav__link">
+        
+  
+  <span class="md-ellipsis">
+    Integrations
+  </span>
+  
+
+      </a>
+    </li>
+  
+
+              
+            
+              
+                
+  
+  
+  
+  
+    <li class="md-nav__item">
+      <a href="../../../getting-started/quickstart-hydra/" class="md-nav__link">
+        
+  
+  <span class="md-ellipsis">
+    Quickstart (TrackerKit)
+  </span>
+  
+
+      </a>
+    </li>
+  
+
+              
+            
+              
+                
+  
+  
+  
+  
+    <li class="md-nav__item">
+      <a href="../../../getting-started/quickstart-posekit/" class="md-nav__link">
+        
+  
+  <span class="md-ellipsis">
+    Quickstart (PoseKit)
+  </span>
+  
+
+      </a>
+    </li>
+  
+
+              
+            
+              
+                
+  
+  
+  
+  
+    <li class="md-nav__item">
+      <a href="../../../getting-started/platforms/" class="md-nav__link">
+        
+  
+  <span class="md-ellipsis">
+    Platform Notes
+  </span>
+  
+
+      </a>
+    </li>
+  
+
+              
+            
+          </ul>
+        </nav>
+      
+    </li>
+  
+
+    
+      
+      
+  
+  
+  
+  
+    
+    
+    
+      
+      
+        
+      
+    
+    
+    <li class="md-nav__item md-nav__item--nested">
+      
+        
+        
+          
+        
+        <input class="md-nav__toggle md-toggle md-toggle--indeterminate" type="checkbox" id="__nav_3" >
+        
+          
+          <label class="md-nav__link" for="__nav_3" id="__nav_3_label" tabindex="0">
+            
+  
+  <span class="md-ellipsis">
+    User Guide
+  </span>
+  
+
+            <span class="md-nav__icon md-icon"></span>
+          </label>
+        
+        <nav class="md-nav" data-md-level="1" aria-labelledby="__nav_3_label" aria-expanded="false">
+          <label class="md-nav__title" for="__nav_3">
+            <span class="md-nav__icon md-icon"></span>
+            User Guide
+          </label>
+          <ul class="md-nav__list" data-md-scrollfix>
+            
+              
+                
+  
+  
+  
+  
+    <li class="md-nav__item">
+      <a href="../../../user-guide/overview/" class="md-nav__link">
+        
+  
+  <span class="md-ellipsis">
+    Overview
+  </span>
+  
+
+      </a>
+    </li>
+  
+
+              
+            
+              
+                
+  
+  
+  
+  
+    <li class="md-nav__item">
+      <a href="../../../user-guide/workflow/" class="md-nav__link">
+        
+  
+  <span class="md-ellipsis">
+    End-to-End Workflow
+  </span>
+  
+
+      </a>
+    </li>
+  
+
+              
+            
+              
+                
+  
+  
+  
+  
+    <li class="md-nav__item">
+      <a href="../../../user-guide/detection-modes/" class="md-nav__link">
+        
+  
+  <span class="md-ellipsis">
+    Detection Modes
+  </span>
+  
+
+      </a>
+    </li>
+  
+
+              
+            
+              
+                
+  
+  
+  
+  
+    <li class="md-nav__item">
+      <a href="../../../user-guide/tracking-and-merging/" class="md-nav__link">
+        
+  
+  <span class="md-ellipsis">
+    Tracking and Merging
+  </span>
+  
+
+      </a>
+    </li>
+  
+
+              
+            
+              
+                
+  
+  
+  
+  
+    <li class="md-nav__item">
+      <a href="../../../user-guide/post-processing/" class="md-nav__link">
+        
+  
+  <span class="md-ellipsis">
+    Post-processing
+  </span>
+  
+
+      </a>
+    </li>
+  
+
+              
+            
+              
+                
+  
+  
+  
+  
+    <li class="md-nav__item">
+      <a href="../../../user-guide/configuration-reference/" class="md-nav__link">
+        
+  
+  <span class="md-ellipsis">
+    Configuration Reference
+  </span>
+  
+
+      </a>
+    </li>
+  
+
+              
+            
+              
+                
+  
+  
+  
+  
+    <li class="md-nav__item">
+      <a href="../../../user-guide/compute-runtimes/" class="md-nav__link">
+        
+  
+  <span class="md-ellipsis">
+    Compute Runtimes
+  </span>
+  
+
+      </a>
+    </li>
+  
+
+              
+            
+              
+                
+  
+  
+  
+  
+    <li class="md-nav__item">
+      <a href="../../../user-guide/outputs-and-csv-schema/" class="md-nav__link">
+        
+  
+  <span class="md-ellipsis">
+    Outputs and CSV Schema
+  </span>
+  
+
+      </a>
+    </li>
+  
+
+              
+            
+              
+                
+  
+  
+  
+  
+    <li class="md-nav__item">
+      <a href="../../../user-guide/dataset-generation/" class="md-nav__link">
+        
+  
+  <span class="md-ellipsis">
+    Dataset Generation
+  </span>
+  
+
+      </a>
+    </li>
+  
+
+              
+            
+              
+                
+  
+  
+  
+  
+    <li class="md-nav__item">
+      <a href="../../../user-guide/individual-analysis/" class="md-nav__link">
+        
+  
+  <span class="md-ellipsis">
+    Individual Analysis
+  </span>
+  
+
+      </a>
+    </li>
+  
+
+              
+            
+              
+                
+  
+  
+  
+  
+    <li class="md-nav__item">
+      <a href="../../../user-guide/posekit/" class="md-nav__link">
+        
+  
+  <span class="md-ellipsis">
+    PoseKit
+  </span>
+  
+
+      </a>
+    </li>
+  
+
+              
+            
+              
+                
+  
+  
+  
+  
+    <li class="md-nav__item">
+      <a href="../../../user-guide/classkit/" class="md-nav__link">
+        
+  
+  <span class="md-ellipsis">
+    ClassKit
+  </span>
+  
+
+      </a>
+    </li>
+  
+
+              
+            
+              
+                
+  
+  
+  
+  
+    <li class="md-nav__item">
+      <a href="../../../user-guide/detectkit/" class="md-nav__link">
+        
+  
+  <span class="md-ellipsis">
+    DetectKit
+  </span>
+  
+
+      </a>
+    </li>
+  
+
+              
+            
+              
+                
+  
+  
+  
+  
+    <li class="md-nav__item">
+      <a href="../../../runbooks/detectkit-headless-training/" class="md-nav__link">
+        
+  
+  <span class="md-ellipsis">
+    DetectKit Headless Training
+  </span>
+  
+
+      </a>
+    </li>
+  
+
+              
+            
+              
+                
+  
+  
+  
+  
+    <li class="md-nav__item">
+      <a href="../../../user-guide/detectkit-semantic-escalation/" class="md-nav__link">
+        
+  
+  <span class="md-ellipsis">
+    DetectKit: Semantic Escalation (SAM3)
+  </span>
+  
+
+      </a>
+    </li>
+  
+
+              
+            
+              
+                
+  
+  
+  
+  
+    <li class="md-nav__item">
+      <a href="../../../user-guide/detectkit-sahi-calibration/" class="md-nav__link">
+        
+  
+  <span class="md-ellipsis">
+    DetectKit: SAHI Calibration Profiles
+  </span>
+  
+
+      </a>
+    </li>
+  
+
+              
+            
+              
+                
+  
+  
+  
+  
+    <li class="md-nav__item">
+      <a href="../../../user-guide/filterkit/" class="md-nav__link">
+        
+  
+  <span class="md-ellipsis">
+    FilterKit
+  </span>
+  
+
+      </a>
+    </li>
+  
+
+              
+            
+              
+                
+  
+  
+  
+  
+    <li class="md-nav__item">
+      <a href="../../../user-guide/refinekit/" class="md-nav__link">
+        
+  
+  <span class="md-ellipsis">
+    RefineKit
+  </span>
+  
+
+      </a>
+    </li>
+  
+
+              
+            
+              
+                
+  
+  
+  
+  
+    <li class="md-nav__item">
+      <a href="../../../user-guide/troubleshooting/" class="md-nav__link">
+        
+  
+  <span class="md-ellipsis">
+    Troubleshooting
+  </span>
+  
+
+      </a>
+    </li>
+  
+
+              
+            
+          </ul>
+        </nav>
+      
+    </li>
+  
+
+    
+      
+      
+  
+  
+  
+  
+    
+    
+    
+      
+      
+        
+      
+    
+    
+    <li class="md-nav__item md-nav__item--nested">
+      
+        
+        
+          
+        
+        <input class="md-nav__toggle md-toggle md-toggle--indeterminate" type="checkbox" id="__nav_4" >
+        
+          
+          <label class="md-nav__link" for="__nav_4" id="__nav_4_label" tabindex="0">
+            
+  
+  <span class="md-ellipsis">
+    Developer Guide
+  </span>
+  
+
+            <span class="md-nav__icon md-icon"></span>
+          </label>
+        
+        <nav class="md-nav" data-md-level="1" aria-labelledby="__nav_4_label" aria-expanded="false">
+          <label class="md-nav__title" for="__nav_4">
+            <span class="md-nav__icon md-icon"></span>
+            Developer Guide
+          </label>
+          <ul class="md-nav__list" data-md-scrollfix>
+            
+              
+                
+  
+  
+  
+  
+    <li class="md-nav__item">
+      <a href="../../../developer-guide/architecture/" class="md-nav__link">
+        
+  
+  <span class="md-ellipsis">
+    Architecture
+  </span>
+  
+
+      </a>
+    </li>
+  
+
+              
+            
+              
+                
+  
+  
+  
+  
+    <li class="md-nav__item">
+      <a href="../../../developer-guide/module-map/" class="md-nav__link">
+        
+  
+  <span class="md-ellipsis">
+    Module Map
+  </span>
+  
+
+      </a>
+    </li>
+  
+
+              
+            
+              
+                
+  
+  
+  
+  
+    <li class="md-nav__item">
+      <a href="../../../developer-guide/data-flow/" class="md-nav__link">
+        
+  
+  <span class="md-ellipsis">
+    Data Flow
+  </span>
+  
+
+      </a>
+    </li>
+  
+
+              
+            
+              
+                
+  
+  
+  
+  
+    <li class="md-nav__item">
+      <a href="../../../developer-guide/tracking-algorithm-deep-dive/" class="md-nav__link">
+        
+  
+  <span class="md-ellipsis">
+    Tracking Algorithm Deep Dive
+  </span>
+  
+
+      </a>
+    </li>
+  
+
+              
+            
+              
+                
+  
+  
+  
+  
+    <li class="md-nav__item">
+      <a href="../../../developer-guide/tracking-optimization/" class="md-nav__link">
+        
+  
+  <span class="md-ellipsis">
+    Tracking Optimization
+  </span>
+  
+
+      </a>
+    </li>
+  
+
+              
+            
+              
+                
+  
+  
+  
+  
+    <li class="md-nav__item">
+      <a href="../../../developer-guide/gpu-backends/" class="md-nav__link">
+        
+  
+  <span class="md-ellipsis">
+    GPU Backends
+  </span>
+  
+
+      </a>
+    </li>
+  
+
+              
+            
+              
+                
+  
+  
+  
+  
+    <li class="md-nav__item">
+      <a href="../../../developer-guide/runtime-integration/" class="md-nav__link">
+        
+  
+  <span class="md-ellipsis">
+    Runtime Integration
+  </span>
+  
+
+      </a>
+    </li>
+  
+
+              
+            
+              
+                
+  
+  
+  
+  
+    <li class="md-nav__item">
+      <a href="../../../developer-guide/resource-containment/" class="md-nav__link">
+        
+  
+  <span class="md-ellipsis">
+    Resource Containment
+  </span>
+  
+
+      </a>
+    </li>
+  
+
+              
+            
+              
+                
+  
+  
+  
+  
+    <li class="md-nav__item">
+      <a href="../../../developer-guide/profiling/" class="md-nav__link">
+        
+  
+  <span class="md-ellipsis">
+    Profiling
+  </span>
+  
+
+      </a>
+    </li>
+  
+
+              
+            
+              
+                
+  
+  
+  
+  
+    <li class="md-nav__item">
+      <a href="../../../developer-guide/dependency-cuda-updates/" class="md-nav__link">
+        
+  
+  <span class="md-ellipsis">
+    CUDA Dependency Updates
+  </span>
+  
+
+      </a>
+    </li>
+  
+
+              
+            
+              
+                
+  
+  
+  
+  
+    <li class="md-nav__item">
+      <a href="../../../developer-guide/performance-tuning/" class="md-nav__link">
+        
+  
+  <span class="md-ellipsis">
+    Performance Tuning
+  </span>
+  
+
+      </a>
+    </li>
+  
+
+              
+            
+              
+                
+  
+  
+  
+  
+    <li class="md-nav__item">
+      <a href="../../../developer-guide/inference-fast-mode/" class="md-nav__link">
+        
+  
+  <span class="md-ellipsis">
+    Inference Fast Mode
+  </span>
+  
+
+      </a>
+    </li>
+  
+
+              
+            
+              
+                
+  
+  
+  
+  
+    <li class="md-nav__item">
+      <a href="../../../developer-guide/confidence-metrics/" class="md-nav__link">
+        
+  
+  <span class="md-ellipsis">
+    Confidence Metrics
+  </span>
+  
+
+      </a>
+    </li>
+  
+
+              
+            
+              
+                
+  
+  
+  
+  
+    <li class="md-nav__item">
+      <a href="../../../developer-guide/extending-detection/" class="md-nav__link">
+        
+  
+  <span class="md-ellipsis">
+    Extending Detection
+  </span>
+  
+
+      </a>
+    </li>
+  
+
+              
+            
+              
+                
+  
+  
+  
+  
+    <li class="md-nav__item">
+      <a href="../../../developer-guide/extending-identity/" class="md-nav__link">
+        
+  
+  <span class="md-ellipsis">
+    Extending Identity
+  </span>
+  
+
+      </a>
+    </li>
+  
+
+              
+            
+              
+                
+  
+  
+  
+  
+    <li class="md-nav__item">
+      <a href="../../../developer-guide/code-health/" class="md-nav__link">
+        
+  
+  <span class="md-ellipsis">
+    Code Health & Auditing
+  </span>
+  
+
+      </a>
+    </li>
+  
+
+              
+            
+              
+                
+  
+  
+  
+  
+    <li class="md-nav__item">
+      <a href="../../../developer-guide/publishing/" class="md-nav__link">
+        
+  
+  <span class="md-ellipsis">
+    Publishing
+  </span>
+  
+
+      </a>
+    </li>
+  
+
+              
+            
+              
+                
+  
+  
+  
+  
+    <li class="md-nav__item">
+      <a href="../../../developer-guide/contributing/" class="md-nav__link">
+        
+  
+  <span class="md-ellipsis">
+    Contributing
+  </span>
+  
+
+      </a>
+    </li>
+  
+
+              
+            
+          </ul>
+        </nav>
+      
+    </li>
+  
+
+    
+      
+      
+  
+  
+  
+  
+    
+    
+    
+      
+      
+        
+      
+    
+    
+    <li class="md-nav__item md-nav__item--nested">
+      
+        
+        
+          
+        
+        <input class="md-nav__toggle md-toggle md-toggle--indeterminate" type="checkbox" id="__nav_5" >
+        
+          
+          <label class="md-nav__link" for="__nav_5" id="__nav_5_label" tabindex="0">
+            
+  
+  <span class="md-ellipsis">
+    Reference
+  </span>
+  
+
+            <span class="md-nav__icon md-icon"></span>
+          </label>
+        
+        <nav class="md-nav" data-md-level="1" aria-labelledby="__nav_5_label" aria-expanded="false">
+          <label class="md-nav__title" for="__nav_5">
+            <span class="md-nav__icon md-icon"></span>
+            Reference
+          </label>
+          <ul class="md-nav__list" data-md-scrollfix>
+            
+              
+                
+  
+  
+  
+  
+    <li class="md-nav__item">
+      <a href="../../../reference/api-index/" class="md-nav__link">
+        
+  
+  <span class="md-ellipsis">
+    API Index
+  </span>
+  
+
+      </a>
+    </li>
+  
+
+              
+            
+              
+                
+  
+  
+  
+  
+    <li class="md-nav__item">
+      <a href="../../../reference/ui-components-hydra/" class="md-nav__link">
+        
+  
+  <span class="md-ellipsis">
+    UI Components (TrackerKit)
+  </span>
+  
+
+      </a>
+    </li>
+  
+
+              
+            
+              
+                
+  
+  
+  
+  
+    <li class="md-nav__item">
+      <a href="../../../reference/ui-components-posekit/" class="md-nav__link">
+        
+  
+  <span class="md-ellipsis">
+    UI Components (PoseKit)
+  </span>
+  
+
+      </a>
+    </li>
+  
+
+              
+            
+              
+                
+  
+  
+  
+  
+    <li class="md-nav__item">
+      <a href="../../../reference/api-app/" class="md-nav__link">
+        
+  
+  <span class="md-ellipsis">
+    API (Launcher)
+  </span>
+  
+
+      </a>
+    </li>
+  
+
+              
+            
+              
+                
+  
+  
+  
+  
+    <li class="md-nav__item">
+      <a href="../../../reference/api-core/" class="md-nav__link">
+        
+  
+  <span class="md-ellipsis">
+    API (Core)
+  </span>
+  
+
+      </a>
+    </li>
+  
+
+              
+            
+              
+                
+  
+  
+  
+  
+    <li class="md-nav__item">
+      <a href="../../../reference/api-data/" class="md-nav__link">
+        
+  
+  <span class="md-ellipsis">
+    API (Data)
+  </span>
+  
+
+      </a>
+    </li>
+  
+
+              
+            
+              
+                
+  
+  
+  
+  
+    <li class="md-nav__item">
+      <a href="../../../reference/api-gui/" class="md-nav__link">
+        
+  
+  <span class="md-ellipsis">
+    API (TrackerKit GUI)
+  </span>
+  
+
+      </a>
+    </li>
+  
+
+              
+            
+              
+                
+  
+  
+  
+  
+    <li class="md-nav__item">
+      <a href="../../../reference/api-widgets/" class="md-nav__link">
+        
+  
+  <span class="md-ellipsis">
+    API (Widgets)
+  </span>
+  
+
+      </a>
+    </li>
+  
+
+              
+            
+              
+                
+  
+  
+  
+  
+    <li class="md-nav__item">
+      <a href="../../../reference/api-posekit/" class="md-nav__link">
+        
+  
+  <span class="md-ellipsis">
+    API (PoseKit)
+  </span>
+  
+
+      </a>
+    </li>
+  
+
+              
+            
+              
+                
+  
+  
+  
+  
+    <li class="md-nav__item">
+      <a href="../../../reference/api-utils/" class="md-nav__link">
+        
+  
+  <span class="md-ellipsis">
+    API (Utils)
+  </span>
+  
+
+      </a>
+    </li>
+  
+
+              
+            
+              
+                
+  
+  
+  
+  
+    <li class="md-nav__item">
+      <a href="../../../reference/cli-reference/" class="md-nav__link">
+        
+  
+  <span class="md-ellipsis">
+    CLI Reference
+  </span>
+  
+
+      </a>
+    </li>
+  
+
+              
+            
+              
+                
+  
+  
+  
+  
+    <li class="md-nav__item">
+      <a href="../../../reference/technical-reference/" class="md-nav__link">
+        
+  
+  <span class="md-ellipsis">
+    Technical Reference (LaTeX)
+  </span>
+  
+
+      </a>
+    </li>
+  
+
+              
+            
+              
+                
+  
+  
+  
+  
+    <li class="md-nav__item">
+      <a href="../../../reference/changelog/" class="md-nav__link">
+        
+  
+  <span class="md-ellipsis">
+    Changelog
+  </span>
+  
+
+      </a>
+    </li>
+  
+
+              
+            
+              
+                
+  
+  
+  
+  
+    <li class="md-nav__item">
+      <a href="../../../reference/faq/" class="md-nav__link">
+        
+  
+  <span class="md-ellipsis">
+    FAQ
+  </span>
+  
+
+      </a>
+    </li>
+  
+
+              
+            
+          </ul>
+        </nav>
+      
+    </li>
+  
+
+    
+  </ul>
+</nav>
+                  </div>
+                </div>
+              </div>
+            
+            
+              
+              <div class="md-sidebar md-sidebar--secondary" data-md-component="sidebar" data-md-type="toc" >
+                <div class="md-sidebar__scrollwrap">
+                  <div class="md-sidebar__inner">
+                    
+
+<nav class="md-nav md-nav--secondary" aria-label="Table of contents">
+  
+  
+  
+    
+  
+  
+    <label class="md-nav__title" for="__toc">
+      <span class="md-nav__icon md-icon"></span>
+      Table of contents
+    </label>
+    <ul class="md-nav__list" data-md-component="toc" data-md-scrollfix>
+      
+        <li class="md-nav__item">
+  <a href="#0-executive-summary-three-findings-that-reshape-the-brief" class="md-nav__link">
+    <span class="md-ellipsis">
+      0. Executive summary — three findings that reshape the brief
+    </span>
+  </a>
+  
+</li>
+      
+        <li class="md-nav__item">
+  <a href="#part-1-what-exists-on-the-yolo-sahi-side" class="md-nav__link">
+    <span class="md-ellipsis">
+      Part 1 — What exists on the YOLO / SAHI side
+    </span>
+  </a>
+  
+    <nav class="md-nav" aria-label="Part 1 — What exists on the YOLO / SAHI side">
+      <ul class="md-nav__list">
+        
+          <li class="md-nav__item">
+  <a href="#11-the-shared-planner-utilsslice_geometrypy" class="md-nav__link">
+    <span class="md-ellipsis">
+      1.1 The shared planner — utils/slice_geometry.py
+    </span>
+  </a>
+  
+</li>
+        
+          <li class="md-nav__item">
+  <a href="#12-the-yolo-sliced-training-builder-trainingsliced_datasetpy" class="md-nav__link">
+    <span class="md-ellipsis">
+      1.2 The YOLO sliced-training builder — training/sliced_dataset.py
+    </span>
+  </a>
+  
+</li>
+        
+          <li class="md-nav__item">
+  <a href="#13-the-sidecar-coreinferenceslice_metapy-v2" class="md-nav__link">
+    <span class="md-ellipsis">
+      1.3 The sidecar — core/inference/slice_meta.py (v2)
+    </span>
+  </a>
+  
+</li>
+        
+          <li class="md-nav__item">
+  <a href="#14-calibration-two-independent-flows-already-exist" class="md-nav__link">
+    <span class="md-ellipsis">
+      1.4 Calibration — two independent flows already exist
+    </span>
+  </a>
+  
+</li>
+        
+          <li class="md-nav__item">
+  <a href="#15-profile-run-path-post-parity-fix" class="md-nav__link">
+    <span class="md-ellipsis">
+      1.5 Profile -&gt; run path (post-parity-fix)
+    </span>
+  </a>
+  
+</li>
+        
+      </ul>
+    </nav>
+  
+</li>
+      
+        <li class="md-nav__item">
+  <a href="#part-2-what-sam3-does-instead-and-the-divergence-table" class="md-nav__link">
+    <span class="md-ellipsis">
+      Part 2 — What SAM3 does instead, and the divergence table
+    </span>
+  </a>
+  
+    <nav class="md-nav" aria-label="Part 2 — What SAM3 does instead, and the divergence table">
+      <ul class="md-nav__list">
+        
+          <li class="md-nav__item">
+  <a href="#21-sam3s-contract-and-builder" class="md-nav__link">
+    <span class="md-ellipsis">
+      2.1 SAM3's contract and builder
+    </span>
+  </a>
+  
+</li>
+        
+          <li class="md-nav__item">
+  <a href="#22-two-corrections-to-the-record" class="md-nav__link">
+    <span class="md-ellipsis">
+      2.2 Two corrections to the record
+    </span>
+  </a>
+  
+</li>
+        
+          <li class="md-nav__item">
+  <a href="#23-divergence-table-every-tiling-knob" class="md-nav__link">
+    <span class="md-ellipsis">
+      2.3 Divergence table — every tiling knob
+    </span>
+  </a>
+  
+</li>
+        
+          <li class="md-nav__item">
+  <a href="#24-where-the-current-code-assumes-ant-like-scale" class="md-nav__link">
+    <span class="md-ellipsis">
+      2.4 Where the current code assumes ant-like scale
+    </span>
+  </a>
+  
+</li>
+        
+          <li class="md-nav__item">
+  <a href="#25-the-four-path-divergence-table" class="md-nav__link">
+    <span class="md-ellipsis">
+      2.5 The four-path divergence table
+    </span>
+  </a>
+  
+</li>
+        
+          <li class="md-nav__item">
+  <a href="#26-the-two-calibration-harnesses-mapped-against-each-other" class="md-nav__link">
+    <span class="md-ellipsis">
+      2.6 The two calibration harnesses, mapped against each other
+    </span>
+  </a>
+  
+</li>
+        
+          <li class="md-nav__item">
+  <a href="#27-does-the-direct-path-share-the-centroid-defect-no-but-it-has-the-inverse-defect" class="md-nav__link">
+    <span class="md-ellipsis">
+      2.7 Does the DIRECT path share the centroid defect? — NO, but it has the INVERSE defect
+    </span>
+  </a>
+  
+</li>
+        
+      </ul>
+    </nav>
+  
+</li>
+      
+        <li class="md-nav__item">
+  <a href="#part-3-the-unification-design" class="md-nav__link">
+    <span class="md-ellipsis">
+      Part 3 — The unification design
+    </span>
+  </a>
+  
+    <nav class="md-nav" aria-label="Part 3 — The unification design">
+      <ul class="md-nav__list">
+        
+          <li class="md-nav__item">
+  <a href="#31-principle-unify-the-contract-and-the-policy-not-the-planner" class="md-nav__link">
+    <span class="md-ellipsis">
+      3.1 Principle: unify the CONTRACT and the POLICY, not the planner
+    </span>
+  </a>
+  
+</li>
+        
+          <li class="md-nav__item">
+  <a href="#32-new-shared-module-utilstiling_planpy-qt-free-imports-only-slice_geometry" class="md-nav__link">
+    <span class="md-ellipsis">
+      3.2 New shared module: utils/tiling_plan.py (Qt-free, imports only slice_geometry)
+    </span>
+  </a>
+  
+</li>
+        
+          <li class="md-nav__item">
+  <a href="#33-multi-scale-for-sam3" class="md-nav__link">
+    <span class="md-ellipsis">
+      3.3 Multi-scale for SAM3
+    </span>
+  </a>
+  
+</li>
+        
+          <li class="md-nav__item">
+  <a href="#34-where-the-two-calibrations-fit" class="md-nav__link">
+    <span class="md-ellipsis">
+      3.4 Where the two calibrations fit
+    </span>
+  </a>
+  
+</li>
+        
+          <li class="md-nav__item">
+  <a href="#35-the-stamping-problem" class="md-nav__link">
+    <span class="md-ellipsis">
+      3.5 THE STAMPING PROBLEM
+    </span>
+  </a>
+  
+</li>
+        
+          <li class="md-nav__item">
+  <a href="#36-calibration-before-run-for-the-scale-set" class="md-nav__link">
+    <span class="md-ellipsis">
+      3.6 Calibration-before-run for the scale set
+    </span>
+  </a>
+  
+</li>
+        
+          <li class="md-nav__item">
+  <a href="#37-decisions-this-forces-on-one-side-for-the-user-not-assumed" class="md-nav__link">
+    <span class="md-ellipsis">
+      3.7 Decisions this forces on one side — for the user, not assumed
+    </span>
+  </a>
+  
+</li>
+        
+          <li class="md-nav__item">
+  <a href="#38-a-shared-calibration-core-p3-p4" class="md-nav__link">
+    <span class="md-ellipsis">
+      3.8 A shared calibration core (P3 + P4)
+    </span>
+  </a>
+  
+</li>
+        
+          <li class="md-nav__item">
+  <a href="#39-the-coupling-direction-a-position-not-a-survey" class="md-nav__link">
+    <span class="md-ellipsis">
+      3.9 THE COUPLING DIRECTION — a position, not a survey
+    </span>
+  </a>
+  
+</li>
+        
+          <li class="md-nav__item">
+  <a href="#310-additional-decisions-this-forces-for-the-user" class="md-nav__link">
+    <span class="md-ellipsis">
+      3.10 Additional decisions this forces — for the user
+    </span>
+  </a>
+  
+</li>
+        
+      </ul>
+    </nav>
+  
+</li>
+      
+        <li class="md-nav__item">
+  <a href="#part-4-ranked-plan-risks-and-the-full-frame-question" class="md-nav__link">
+    <span class="md-ellipsis">
+      Part 4 — Ranked plan, risks, and the full-frame question
+    </span>
+  </a>
+  
+    <nav class="md-nav" aria-label="Part 4 — Ranked plan, risks, and the full-frame question">
+      <ul class="md-nav__list">
+        
+          <li class="md-nav__item">
+  <a href="#41-build-order" class="md-nav__link">
+    <span class="md-ellipsis">
+      4.1 Build order
+    </span>
+  </a>
+  
+</li>
+        
+          <li class="md-nav__item">
+  <a href="#42-top-risks" class="md-nav__link">
+    <span class="md-ellipsis">
+      4.2 Top risks
+    </span>
+  </a>
+  
+</li>
+        
+          <li class="md-nav__item">
+  <a href="#43-will-full-frames-actually-help" class="md-nav__link">
+    <span class="md-ellipsis">
+      4.3 Will full frames actually help?
+    </span>
+  </a>
+  
+</li>
+        
+      </ul>
+    </nav>
+  
+</li>
+      
+        <li class="md-nav__item">
+  <a href="#part-5-one-objective-used-uniformly-requirement" class="md-nav__link">
+    <span class="md-ellipsis">
+      Part 5 — ONE OBJECTIVE, USED UNIFORMLY (requirement)
+    </span>
+  </a>
+  
+    <nav class="md-nav" aria-label="Part 5 — ONE OBJECTIVE, USED UNIFORMLY (requirement)">
+      <ul class="md-nav__list">
+        
+          <li class="md-nav__item">
+  <a href="#51-the-requirement-and-why-this-divergence-is-the-worst-one" class="md-nav__link">
+    <span class="md-ellipsis">
+      5.1 The requirement, and why this divergence is the worst one
+    </span>
+  </a>
+  
+</li>
+        
+          <li class="md-nav__item">
+  <a href="#52-the-two-criteria-a-unified-objective-must-satisfy" class="md-nav__link">
+    <span class="md-ellipsis">
+      5.2 The two criteria a unified objective must satisfy
+    </span>
+  </a>
+  
+</li>
+        
+          <li class="md-nav__item">
+  <a href="#53-candidates-stated-without-a-winner" class="md-nav__link">
+    <span class="md-ellipsis">
+      5.3 Candidates, stated without a winner
+    </span>
+  </a>
+  
+</li>
+        
+          <li class="md-nav__item">
+  <a href="#54-the-decision-is-open-and-keyed-to-a-measurement-in-flight" class="md-nav__link">
+    <span class="md-ellipsis">
+      5.4 The decision is OPEN, and keyed to a measurement in flight
+    </span>
+  </a>
+  
+</li>
+        
+          <li class="md-nav__item">
+  <a href="#55-what-this-means-for-d8" class="md-nav__link">
+    <span class="md-ellipsis">
+      5.5 What this means for D8
+    </span>
+  </a>
+  
+</li>
+        
+      </ul>
+    </nav>
+  
+</li>
+      
+        <li class="md-nav__item">
+  <a href="#part-6-record-per-epoch-validation-unconditionally-requirement" class="md-nav__link">
+    <span class="md-ellipsis">
+      Part 6 — RECORD PER-EPOCH VALIDATION, UNCONDITIONALLY (requirement)
+    </span>
+  </a>
+  
+    <nav class="md-nav" aria-label="Part 6 — RECORD PER-EPOCH VALIDATION, UNCONDITIONALLY (requirement)">
+      <ul class="md-nav__list">
+        
+          <li class="md-nav__item">
+  <a href="#61-the-requirement" class="md-nav__link">
+    <span class="md-ellipsis">
+      6.1 The requirement
+    </span>
+  </a>
+  
+</li>
+        
+          <li class="md-nav__item">
+  <a href="#62-what-exists-today" class="md-nav__link">
+    <span class="md-ellipsis">
+      6.2 What exists today
+    </span>
+  </a>
+  
+</li>
+        
+          <li class="md-nav__item">
+  <a href="#63-why-the-absence-is-itself-the-bug" class="md-nav__link">
+    <span class="md-ellipsis">
+      6.3 Why the absence is itself the bug
+    </span>
+  </a>
+  
+</li>
+        
+          <li class="md-nav__item">
+  <a href="#64-retention-and-the-real-constraint-stated-fairly" class="md-nav__link">
+    <span class="md-ellipsis">
+      6.4 Retention — and the real constraint, stated fairly
+    </span>
+  </a>
+  
+</li>
+        
+          <li class="md-nav__item">
+  <a href="#65-early-stopping-framed-correctly" class="md-nav__link">
+    <span class="md-ellipsis">
+      6.5 Early stopping — framed correctly
+    </span>
+  </a>
+  
+</li>
+        
+          <li class="md-nav__item">
+  <a href="#66-decisions" class="md-nav__link">
+    <span class="md-ellipsis">
+      6.6 Decisions
+    </span>
+  </a>
+  
+</li>
+        
+      </ul>
+    </nav>
+  
+</li>
+      
+    </ul>
+  
+</nav>
+                  </div>
+                </div>
+              </div>
+            
+          
+          
+            <div class="md-content" data-md-component="content">
+              <article class="md-content__inner md-typeset">
+                
+                  
+
+  
+    <a href="https://github.com/neurorishika/hydra-suite/edit/main/docs/superpowers/specs/2026-09-06-unified-sahi-training-geometry-design.md" title="Edit this page" class="md-content__button md-icon">
+      
+      <svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 24 24"><path d="M10 20H6V4h7v5h5v3.1l2-2V8l-6-6H6c-1.1 0-2 .9-2 2v16c0 1.1.9 2 2 2h4zm10.2-7c.1 0 .3.1.4.2l1.3 1.3c.2.2.2.6 0 .8l-1 1-2.1-2.1 1-1c.1-.1.2-.2.4-.2m0 3.9L14.1 23H12v-2.1l6.1-6.1z"/></svg>
+    </a>
+  
+  
+
+
+<h1 id="unified-tiling-calibration-geometry-four-paths-one-contract">Unified tiling &amp; calibration geometry: four paths, one contract<a class="headerlink" href="#unified-tiling-calibration-geometry-four-paths-one-contract" title="Permanent link">&para;</a></h1>
+<p><em>(Originally scoped as "unified SAHI training geometry". Widened twice at the user's direction:
+first to four paths, then to the OBJECTIVE those paths optimise and the evidence a training run
+leaves behind — Parts 5 and 6.)</em></p>
+<p><em>(First widening:
+"We have a parallel sahi calibration inside semantic escalation. We should just unify all
+these paths to have minimal divergences." The document now covers four paths, not two.)</em></p>
+<p><strong>Status:</strong> design proposal, pending review. No implementation.
+<strong>Repo:</strong> <code>/Users/neurorishika/Projects/Rockefeller/Kronauer/multi-animal-tracker</code> @ <code>main</code> (<code>097408af</code>), read-only audit.
+<strong>The four paths.</strong></p>
+<table>
+<thead>
+<tr>
+<th>#</th>
+<th>Path</th>
+<th>Module</th>
+<th>Role</th>
+</tr>
+</thead>
+<tbody>
+<tr>
+<td><strong>P1</strong></td>
+<td>YOLO SAHI sliced TRAINING</td>
+<td><code>training/sliced_dataset.py</code></td>
+<td>builds tiles to train on — <strong>already multi-scale</strong></td>
+</tr>
+<tr>
+<td><strong>P2</strong></td>
+<td>SAM3 LoRA TRAINING</td>
+<td><code>training/sam3_lora/dataset_build.py</code></td>
+<td>builds tiles to train on — <strong>single scale</strong></td>
+</tr>
+<tr>
+<td><strong>P3</strong></td>
+<td>DetectKit DIRECT calibration</td>
+<td><code>core/inference/direct_calibration{,_grid,_sweep}.py</code>, <code>detectkit/gui/dialogs/direct_calibration_*.py</code></td>
+<td>sweeps serving geometry for YOLO detect/obb/segment</td>
+</tr>
+<tr>
+<td><strong>P4</strong></td>
+<td>DetectKit SEMANTIC ESCALATION calibration</td>
+<td><code>core/inference/semantic/{calibration,shape_prior,tiling}.py</code>, <code>detectkit/gui/dialogs/semantic_escalation_dialog.py</code></td>
+<td>sweeps serving geometry for SAM3</td>
+</tr>
+</tbody>
+</table>
+<p>Downstream of P3 and P4: the TrackerKit SAHI inference profiles (<code>core/inference/slice_meta.py</code>
+v2, <code>trackerkit/engine_params.py</code>) that consume a chosen operating point.</p>
+<p><strong>Motivating evidence:</strong> <code>docs/superpowers/specs/2026-09-06-sam3-training-run-and-evaluation.md</code> §10, §11c.
+<strong>Related, already merged:</strong> <code>docs/superpowers/specs/done/2026-09-01-detectkit-sahi-calibration-profiles-design.md</code>,
+<code>docs/superpowers/specs/done/2026-09-05-calibration-profile-headless-parity-{audit,design}.md</code>.</p>
+<p>Every claim below is tagged <strong>[V]</strong> verified by reading the cited line, or <strong>[I]</strong> inferred.
+All paths are under <code>src/hydra_suite/</code> unless noted.</p>
+<hr />
+<h2 id="0-executive-summary-three-findings-that-reshape-the-brief">0. Executive summary — three findings that reshape the brief<a class="headerlink" href="#0-executive-summary-three-findings-that-reshape-the-brief" title="Permanent link">&para;</a></h2>
+<p><strong>F-A. The tile planner is ALREADY shared. The divergence is one layer up.</strong> Both trainers
+call <code>utils/slice_geometry.py</code>: YOLO at <code>training/sliced_dataset.py:21-26</code>, SAM3 at
+<code>training/sam3_lora/dataset_build.py:26-30</code>, and tiled <em>inference</em> at
+<code>core/inference/semantic/tiling.py:20</code> and <code>core/inference/stages/slicing.py:10</code>. <strong>[V]</strong>
+So "unify the tiling geometry interface" is not a rewrite of tile planning. It is a
+unification of the <strong>parameter contract</strong>, the <strong>scale-set policy</strong>, and the <strong>stamping /
+read-back contract</strong> that sit on top of one already-shared planner.</p>
+<p><strong>F-B. YOLO sliced training is ALREADY multi-scale, with full-frame mixing. SAM3 is the
+single-scale outlier.</strong> <code>training/sliced_dataset.py:159-193</code> (<code>_tile_sizes_for_params</code>)
+fans out one square tile size per entry of <code>params.target_sizes</code>, converting each target
+<em>apparent</em> object size to a fraction via <code>target / imgsz</code>; <code>:248-260</code> additionally emits an
+untiled full frame per image when <code>full_frame_mix</code> is true; defaults
+<code>target_sizes = [200.0, 300.0, 400.0]</code>, <code>full_frame_mix = True</code> at
+<code>training/sliced_dataset.py:105-106</code> and <code>detectkit/config/training.py:169-170</code>. <strong>[V]</strong>
+SAM3 resolves exactly ONE <code>(tile_w, tile_h)</code> for the whole dataset at
+<code>training/sam3_lora/dataset_build.py:373-380</code>. <strong>[V]</strong>
+<strong>The user's multi-scale request is therefore mostly a port, not an invention.</strong></p>
+<p><strong>F-C. The task brief's premise that "the CLI ignores calibration profiles" is STALE — it
+was fixed.</strong> <code>_slice_profile_overlay</code> (<code>trackerkit/engine_params.py:363-436</code>) is applied in
+the shared builder at <code>:968-986</code>; <code>apply_sahi_profile_override</code>
+(<code>trackerkit/cli_config.py:143-170</code>) and the <code>--sahi-profile</code> flag (<code>trackerkit/app.py:112</code>,
+<code>:253</code>; <code>trackerkit/cli.py:13, 28, 66-73</code>) close it, and both parity docs are in
+<code>specs/done/</code>. <strong>[V]</strong> This matters: the profile-overlay + sidecar-v2 + <code>--sahi-profile</code>
+path is <strong>the plumbing this design should ride</strong>, not a gap to design around.</p>
+<p>Two gaps from that audit do appear to remain and threaten any stamping design:
+<code>training/model_publish.py:874-879</code> still gates the whole <code>.slice_meta.json</code> sidecar
+copy/merge on <code>slice_geometry</code> being truthy <strong>[V]</strong>, so a publish that passes no training
+geometry silently drops all calibration profiles.</p>
+<p><strong>F-D. There are FOUR paths and FIVE copies of the tile-size formula.</strong> The <code>plan_tiles</code>
+<em>grid</em> is shared by all four <strong>[V]</strong>, but the <em>sizer</em> is not: <code>semantic/tiling.py:123-139</code>
+(<code>resolve_tile_px</code>) reimplements the <code>auto_object</code> branch of <code>tile_size_for_mode</code> inline —
+<code>int(max(64, min(4096, round(reference_body_px / frac))))</code>, numerically identical today, and
+with <strong>no <code>geometry_mode</code> concept at all</strong> (no <code>custom</code>, no <code>auto_model</code>) <strong>[V]</strong>. A change to
+<code>slice_geometry.py:113-137</code> therefore silently fails to reach P4.</p>
+<p><strong>F-E. A train/serve geometry-drift guard ALREADY EXISTS — in exactly one of the four paths,
+and it is trapped inside a Qt dialog.</strong> <code>detectkit/gui/dialogs/semantic_escalation_dialog.py:382-406</code>
+reads the SAM3 sidecar's <code>reference_body_px</code> and <code>object_tile_fraction</code>, prefills when the
+project has none, and raises a modal <code>QMessageBox.warning</code> ("Body Size Mismatch ... verify this
+is intentional") when they disagree — deliberately warn, never refuse <strong>[V]</strong>. This is exactly
+the guard §4.1 recommends building, already written, already reasoned about, in a place no
+headless run and no other path can reach. <strong>It is the single best argument in this document
+that the guard should be built once in core rather than four times.</strong></p>
+<hr />
+<h2 id="part-1-what-exists-on-the-yolo-sahi-side">Part 1 — What exists on the YOLO / SAHI side<a class="headerlink" href="#part-1-what-exists-on-the-yolo-sahi-side" title="Permanent link">&para;</a></h2>
+<h3 id="11-the-shared-planner-utilsslice_geometrypy">1.1 The shared planner — <code>utils/slice_geometry.py</code><a class="headerlink" href="#11-the-shared-planner-utilsslice_geometrypy" title="Permanent link">&para;</a></h3>
+<table>
+<thead>
+<tr>
+<th>Symbol</th>
+<th>Line</th>
+<th>Contract</th>
+</tr>
+</thead>
+<tbody>
+<tr>
+<td><code>MAX_TILES_PER_FRAME = 4096</code></td>
+<td>:20</td>
+<td>Hard ceiling; <code>plan_tiles</code> raises <code>ValueError</code> above it <strong>[V]</strong></td>
+</tr>
+<tr>
+<td><code>SlicePlan</code></td>
+<td>:24</td>
+<td><code>tiles</code>, <code>full_frame</code>, <code>slice_wh</code>, <code>frame_wh</code> <strong>[V]</strong></td>
+</tr>
+<tr>
+<td><code>get_slice_bboxes</code> / <code>_axis_starts</code></td>
+<td>:37-81</td>
+<td>Axis start positions, step <code>= size*(1-overlap)</code> <strong>[V]</strong></td>
+</tr>
+<tr>
+<td><code>tiles_overlap</code></td>
+<td>:83-112</td>
+<td>Overlap detection for merge decisions <strong>[V]</strong></td>
+</tr>
+<tr>
+<td><code>tile_size_for_mode(...)</code></td>
+<td>:113-137</td>
+<td>The one geometry-mode resolver. <code>custom</code> -&gt; <code>slice_w/h</code> or <code>imgsz</code>; <code>auto_object</code> with <code>reference_body_px&gt;0</code> -&gt; <code>round(reference_body_px / clamp(fraction, 0.01, 0.9))</code>, clamped to <code>[64, 4096]</code>, always <strong>square</strong>; else <code>auto_model</code> -&gt; <code>(imgsz, imgsz)</code> <strong>[V]</strong></td>
+</tr>
+<tr>
+<td><code>plan_tiles(frame_hw, w, h, ov_w, ov_h, *, full_frame, roi_mask)</code></td>
+<td>:139-198</td>
+<td>Grid + ROI gating (mask-shape mismatch downgrades to no gating with a warning; an all-empty gate falls back to keeping all tiles) <strong>[V]</strong></td>
+</tr>
+<tr>
+<td><code>polygon_area</code>, <code>clip_polygon_to_tile</code></td>
+<td>:200-...</td>
+<td>Sutherland–Hodgman clip used by both builders <strong>[V]</strong></td>
+</tr>
+</tbody>
+</table>
+<p><strong>Note:</strong> <code>tile_size_for_mode</code> is documented as reproducing <code>stages/slicing.py:_tile_size</code>
+"exactly (semantics are frozen)" (:122-124) <strong>[V]</strong>. Any change here changes inference.</p>
+<h3 id="12-the-yolo-sliced-training-builder-trainingsliced_datasetpy">1.2 The YOLO sliced-training builder — <code>training/sliced_dataset.py</code><a class="headerlink" href="#12-the-yolo-sliced-training-builder-trainingsliced_datasetpy" title="Permanent link">&para;</a></h3>
+<ul>
+<li><code>SliceBuildParams</code> (:95-107) <strong>[V]</strong>, verbatim defaults: <code>geometry_mode="auto_object"</code>,
+  <code>imgsz=640</code>, <code>object_tile_fraction=0.15</code>, <code>slice_width=0</code>, <code>slice_height=0</code>, <code>overlap=0.2</code>,
+  <code>min_area_ratio=0.1</code>, <code>negative_tile_fraction=0.15</code>,
+  <code>target_sizes=[200.0, 300.0, 400.0]</code>, <code>full_frame_mix=True</code>, <code>reference_body_px=0.0</code>.</li>
+<li><code>measure_reference_body_px</code> = <strong>median</strong> <code>minAreaRect</code> major axis over a frame's labels
+  (:57-...); <code>object_major_axes_px</code> (:42-55) <strong>[V]</strong>. Dataset-level reference is the mean of
+  per-frame values accumulated in <code>all_majors</code> -&gt; <code>np.median</code> at :263-267 <strong>[V]</strong>.</li>
+<li>Multi-scale fan-out: <code>_tile_sizes_for_params</code> (:159-193). Only active when
+  <code>geometry_mode == "auto_object"</code> AND <code>reference_body_px &gt; 0</code> AND <code>target_sizes</code> non-empty;
+  otherwise single size. Dedupes identical <code>(w,h)</code> <strong>[V]</strong>.</li>
+<li>Per-tile emission (:230-247): drops a clipped instance below <code>min_area_ratio</code> of its
+  original area (<code>_tile_one_image</code> :114-137) — <strong>[V]</strong> note this is a <em>drop</em>, not a downgrade.
+  Negative (instance-free) tiles are sampled at <code>negative_tile_fraction</code> (:235-236) <strong>[V]</strong>.
+  Tile stems encode the scale: <code>f"{stem}_t{tile_w}x{tile_h}_{ti:04d}"</code> (:237) <strong>[V]</strong>.</li>
+<li>Full-frame mixing (:248-260): whole image written with stem <code>f"{stem}_full"</code> <strong>[V]</strong>.</li>
+<li>Manifest (:270-278) records <code>measured_reference_body_px</code> and a <code>slice_geometry</code> block from
+  <code>_slice_geometry_manifest</code> (:329-347) carrying <code>geometry_mode, imgsz,
+  object_tile_fraction, slice_width, slice_height, overlap, min_area_ratio,
+  negative_tile_fraction, target_sizes, full_frame_mix, reference_body_px</code> <strong>[V]</strong>.</li>
+<li>That manifest block reaches publish via <code>training/service.py:136-151, 222</code>
+  (<code>_slice_geometry_for_publish</code>) -&gt; <code>model_publish.py:805, 874-890, 941-942</code> <strong>[V]</strong>.</li>
+</ul>
+<p><strong>There is no per-scale instance balancing.</strong> Every scale contributes every tile it produces,
+so a small tile size contributes quadratically more tiles (and more instance copies) than a
+large one. <strong>[V by absence — no weighting code in <code>build_sliced_obb_dataset</code>]</strong></p>
+<h3 id="13-the-sidecar-coreinferenceslice_metapy-v2">1.3 The sidecar — <code>core/inference/slice_meta.py</code> (v2)<a class="headerlink" href="#13-the-sidecar-coreinferenceslice_metapy-v2" title="Permanent link">&para;</a></h3>
+<ul>
+<li>Document shape: <code>training_geometry()</code> promoting flat v1 payloads (:50-53); <code>profiles[]</code>
+  with <code>id/name/settings</code>, plus <code>primary_profile_id</code>; <code>normalized_slice_meta</code> never invents a
+  primary (:66-73) <strong>[V, via the merged audit's field table, lines re-checked at :226-248,
+  :287-317, :321-382]</strong>.</li>
+<li><strong><code>_training_values</code> already collapses a multi-scale set to one number</strong> (:287-317): if
+  <code>target_sizes</code> is non-empty and <code>imgsz &gt; 0</code>, the derived prefill fraction is
+  <code>median(target_sizes) / imgsz</code>, clamped to <code>[0.01, 0.9]</code> <strong>[V]</strong>. This is the existing,
+  shipped answer to "what does a multi-scale model prefill?" — see Part 3.5.</li>
+<li><code>profile_evidence_state</code> (:226-248) SHA-256s the checkpoint for a staleness label <strong>[V]</strong>.</li>
+<li><code>resolve_slice_profile_values</code> / <code>slice_meta_to_panel_values</code> (:250-268, :321-382) give the
+  3-rung ladder requested-id -&gt; primary -&gt; <code>__training__</code>, with a <code>resolution</code> field
+  explaining which rung fired <strong>[V]</strong>.</li>
+</ul>
+<h3 id="14-calibration-two-independent-flows-already-exist">1.4 Calibration — two independent flows already exist<a class="headerlink" href="#14-calibration-two-independent-flows-already-exist" title="Permanent link">&para;</a></h3>
+<p><strong>(a) Direct-detector (YOLO/OBB) calibration.</strong> <code>core/inference/direct_calibration_grid.py</code>:
+<code>FRACTION_STEPS = (0.75, 1.0, 1.5)</code>, <code>OVERLAP_STEPS = (0.1, 0.2, 0.3)</code>,
+<code>DEFAULT_MAX_TOTAL_TILES = 20000</code> (:18-20) <strong>[V]</strong>. <code>build_candidate_grid</code> (:59-...) emits a
+<strong>full-frame <code>enabled=False</code> baseline first</strong> (:72-83) then fraction x overlap candidates
+<strong>relative to the model's stamped training geometry</strong> (<code>base_fraction</code>, <code>base_overlap</code>,
+<code>body_px</code> read from <code>training_geometry</code>, :67-72) <strong>[V]</strong>. Candidates carry <code>SLICE_*</code> PARAMS,
+never a hand-built <code>SliceConfig</code> (:34-48, and the module docstring's explicit rationale
+:1-7) <strong>[V]</strong> — this is the property that makes a measured point expressible as TrackerKit
+settings, and it is exactly the property a training-side reuse must preserve.
+Sweep/objective in <code>direct_calibration_sweep.py</code>; job wrapper <code>detectkit/jobs/direct_calibration.py</code>;
+UI <code>detectkit/gui/dialogs/direct_calibration_{wizard,results}.py</code>; the results dialog writes
+profile settings at <code>direct_calibration_results.py:481-507</code> <strong>[V, via merged audit]</strong>.</p>
+<p><strong>(b) Semantic (SAM3-inference) calibration.</strong> <code>core/inference/semantic/tiling.py:26-38</code>:
+<code>SEMANTIC_TILE_FRACTION_SEED = 0.05</code> with an explicit in-code disclaimer that it "was
+back-derived from a single measured-good configuration (1504 px tile at body 80 px) on a
+single dataset, and has no independent grounding ... It exists to prefill the dialog when
+the user skips calibration"; <code>TILE_FRACTION_GRID = (0.03, 0.05, 0.10, None)</code> where <strong><code>None</code>
+means one full-frame pass</strong> — "the right answer on a rig where animals are already large at
+native resolution, where tiling HURTS" <strong>[V]</strong>. <code>DEFAULT_OVERLAP = 0.5</code>,
+<code>DEFAULT_SEAM_MARGIN_PX = 4</code>, <code>DEFAULT_MERGE_IOU = 0.5</code> (:39-41) <strong>[V]</strong>.
+<code>semantic/calibration.py:1-24</code> fits <strong>tile fraction AND confidence</strong> against the user's own
+labelled frames, objective = the missed-vs-to-delete frontier (recall-first), matching gated
+by a per-project fitted <code>shape_prior</code> area band <strong>[V]</strong>.</p>
+<p><strong>This (b) grid is already a per-project, calibration-chosen scale sweep including a
+full-frame arm — for SAM3 inference. It is the single closest existing fit to what the user
+wants for SAM3 <em>training</em>.</strong></p>
+<h3 id="15-profile-run-path-post-parity-fix">1.5 Profile -&gt; run path (post-parity-fix)<a class="headerlink" href="#15-profile-run-path-post-parity-fix" title="Permanent link">&para;</a></h3>
+<p>GUI: <code>detection_panel.py:2643-2765</code> applies <code>slice_meta_to_panel_values</code>. Headless: config
+carries <code>slice_profile_id</code> + <code>slice_profile_settings</code>; <code>engine_params.py:968-986</code> overlays
+them onto the <code>SLICE_*</code> advanced keys, with a hard error for an unresolvable explicit
+<code>--sahi-profile</code> (<code>cli_config.py:143-170</code>) and a log warning when a named profile is missing
+from the sidecar (<code>engine_params.py:402-410</code>) or when confidence differs from the measured
+point (:424-431) <strong>[V]</strong>. <code>build_engine_params</code> is the single Qt-free builder both GUI and
+CLI share, per CLAUDE.md.</p>
+<hr />
+<h2 id="part-2-what-sam3-does-instead-and-the-divergence-table">Part 2 — What SAM3 does instead, and the divergence table<a class="headerlink" href="#part-2-what-sam3-does-instead-and-the-divergence-table" title="Permanent link">&para;</a></h2>
+<h3 id="21-sam3s-contract-and-builder">2.1 SAM3's contract and builder<a class="headerlink" href="#21-sam3s-contract-and-builder" title="Permanent link">&para;</a></h3>
+<ul>
+<li><strong>The 1008 resize happens at datapoint construction, not in the builder.</strong> Tiles are written
+  to disk at native crop size; <code>sam3_lora/datapoints.py:22</code> (<code>RES = PREDICTOR_IMGSZ</code>) and
+  <code>:165-174</code> resize each tile to <code>RES x RES</code> with <code>PILImage.BILINEAR</code> and scale the polygons
+  by <code>[RES/w, RES/h]</code> in the same step. <strong>This is a non-aspect-preserving stretch, not a
+  letterbox</strong>, so partial edge tiles are anisotropically distorted — a fact that matters for
+  multi-scale (more scales means more edge tiles) and is not currently reported. <strong>[V]</strong></li>
+<li><strong>Contract lives in <code>training/contracts.py</code>, NOT in <code>sam3_lora/</code>.</strong> Tiling block at
+  <code>training/contracts.py:248-254</code>, verbatim: comment <code># Tiling, mirroring the SAHI sliced-training
+  knobs.</code>, then <code>geometry_mode: str = "auto_object"</code>, <code>object_tile_fraction: float = 0.055</code>,
+  <code>slice_width: int = 0</code>, <code>slice_height: int = 0</code>, <code>tile_overlap: float = 0.25</code>,
+  <code>keep_empty_tiles: bool = True</code> <strong>[V]</strong>. (The eval spec cites <code>:250</code> for the fraction; the
+  block reads the same.)</li>
+<li><code>dataset_build.py:373-380</code>: <strong>one</strong> <code>tile_size_for_mode(...)</code> call with <code>imgsz=_SAM3_IMGSZ</code>,
+  where <code>_SAM3_IMGSZ = 1008</code> is documented as "SAM3's native training resolution ... used
+  only as the <code>imgsz</code> fallback for auto_model / auto_object geometry modes" (:94-97) <strong>[V]</strong>.</li>
+<li>Reference body px: measured with the <strong>same</strong> <code>measure_reference_body_px</code> imported from the
+  YOLO builder (<code>dataset_build.py:46</code>, used at :336) — but aggregated differently. SAM3 takes
+  a SQL <strong>median over per-frame medians</strong> (<code>:353-369</code>, even counts averaging the two middle
+  rows), while YOLO pools every object's major axis across the whole corpus and takes one
+  global median (<code>sliced_dataset.py:219, 263-267</code>). Different estimator over a different
+  population; they coincide only for a perfectly uniform corpus. <strong>[V]</strong></li>
+<li><code>_tile_frame</code> (:239-278): <code>plan_tiles((h, w), tile_w, tile_h, overlap, overlap)</code>; clipped
+  instances with <code>retained_frac &lt; MIN_RETAINED_AREA_FRAC</code> are <strong>kept as <code>is_crowd=1</code></strong>, not
+  dropped (:270-275), and the tile is downgraded from exhaustive downstream
+  (<code>datapoints.select_output_objects</code>, referenced <code>datapoints.py:57</code>, <code>dataloader.py:121</code>)
+  <strong>[V]</strong>. <code>MIN_RETAINED_AREA_FRAC = 0.25</code> at <code>dataset_build.py:92</code>, with a long rationale at
+  :63-91 explaining it was lowered from 0.5 and that downgrading REMOVES precision pressure
+  from seam-adjacent tiles <strong>[V]</strong>.</li>
+<li><strong>No validation.</strong> <code>Sam3LoraParams</code> is <code>@dataclass(slots=True)</code> with no <code>__post_init__</code>
+  (<code>contracts.py:201</code>); the only external checks are <code>detectkit/config/training.py:710-713</code>
+  (<code>tile_overlap</code> in <code>[0,1)</code>, <code>object_tile_fraction &gt; 0</code>). <strong><code>geometry_mode</code> is never checked
+  against <code>{auto_object, auto_model, custom}</code> anywhere</strong>, and an unknown string falls silently
+  through <code>tile_size_for_mode</code>'s final branch to a 1008x1008 tile. YOLO's inference-side
+  clamp of <code>slice_width/height</code> to 8192 (<code>core/inference/config.py:653-654</code>) has no training-
+  side counterpart. <strong>[V]</strong></li>
+<li><strong>The SAM3 role's <code>imgsz</code> is parsed, validated and threaded into hyperparams
+  (<code>detectkit/config/training.py:291-292</code>, <code>jobs/training.py:295-298</code>) but tiling never reads
+  it</strong> — <code>dataset_build.py:375</code> hardcodes <code>_SAM3_IMGSZ</code>. A plan setting <code>imgsz: 640</code> on a SAM3
+  role silently gets 1008-px geometry. <strong>[V]</strong></li>
+<li>Manifest writes <code>"tile_px": [w, h]</code> and <code>"reference_body_px"</code> (:542-543, :607-608) plus
+  <code>"min_retained_area_frac"</code> (:550, :607) <strong>[V]</strong>.</li>
+<li>Publish: <code>publish_worker.py:262-273</code> stamps <code>train_tile_px</code> (from manifest <code>tile_px</code>),
+  <code>reference_body_px</code>, <code>object_tile_fraction</code>, <code>imgsz = PREDICTOR_IMGSZ</code> into
+  <code>&lt;artifact&gt;.sam3_meta.json</code> (<code>publish_worker.py:176</code>, <code>publish.py:282</code>) <strong>[V]</strong>.
+  <code>publish.py:374-392</code> collapses a <code>[w,h]</code> pair to a scalar, refusing a non-square pair <strong>[V]</strong>.</li>
+<li><strong>Three partial-construction sites reintroduce the silent default</strong>, none logging:
+  <code>detectkit/config/training.py:509-556</code> (YAML plan coerces a field only <code>if name in
+  sam3_values</code>), <code>sam3_lora/cli.py:88-89</code> (<code>Sam3LoraParams(**sam3_data)</code> from <code>spec.json</code>),
+  <code>detectkit/jobs/dataset_preparation_sidecar.py:209</code>. The GUI is total
+  (<code>sam3_training_panel.py:507-543</code> passes every field) but its spin box is <em>seeded</em> from
+  <code>Sam3LoraParams()</code> (:492, :578), so an untouched widget ships 0.055 as if chosen. <strong>[V]</strong></li>
+</ul>
+<h3 id="22-two-corrections-to-the-record">2.2 Two corrections to the record<a class="headerlink" href="#22-two-corrections-to-the-record" title="Permanent link">&para;</a></h3>
+<ol>
+<li><strong><code>train_tile_px</code> has NO reader anywhere in <code>src/</code>.</strong> <code>grep -rn train_tile_px src/ tests/</code>
+   returns only the writer (<code>publish_worker.py:267</code>), a comment (<code>publish.py:378</code>) and three
+   test assertions <strong>[V]</strong>. The eval spec §11d's phrase "since TrackerKit reads
+   <code>train_tile_px</code> back to prefill SAHI" describes an intent, not current behaviour. <strong>The
+   SAM3 stamping loop is open at both ends: nothing validates it in, nothing reads it out.</strong></li>
+<li>Only <code>core/inference/semantic/sam3.py:104-140</code> and <code>semantic/checkpoints.py:268</code> read the
+   <code>.sam3_meta.json</code> sidecar at all, and they use it for a checkpoint-integrity guard, not
+   geometry <strong>[V]</strong>.</li>
+</ol>
+<h3 id="23-divergence-table-every-tiling-knob">2.3 Divergence table — every tiling knob<a class="headerlink" href="#23-divergence-table-every-tiling-knob" title="Permanent link">&para;</a></h3>
+<table>
+<thead>
+<tr>
+<th>Knob</th>
+<th>YOLO (<code>sliced_dataset.py</code> / <code>detectkit/config/training.py</code>)</th>
+<th>SAM3 (<code>training/contracts.py</code> / <code>sam3_lora/dataset_build.py</code>)</th>
+<th>Same meaning?</th>
+<th>Same default?</th>
+</tr>
+</thead>
+<tbody>
+<tr>
+<td><code>geometry_mode</code></td>
+<td>yes, <code>auto_object</code> default (<code>training.py</code> slicing block)</td>
+<td>yes, <code>"auto_object"</code> <code>contracts.py:249</code></td>
+<td><strong>yes</strong> — same <code>tile_size_for_mode</code></td>
+<td><strong>yes</strong></td>
+</tr>
+<tr>
+<td><code>object_tile_fraction</code></td>
+<td>yes, but <strong>overridden</strong> by <code>target_sizes</code> in <code>auto_object</code> (<code>sliced_dataset.py:167-184</code>); DetectKit stores <code>target_sizes</code> and derives <code>target/imgsz</code> (<code>training.py:252</code>)</td>
+<td>yes, <strong>authoritative</strong>, <code>0.055</code> <code>contracts.py:250</code></td>
+<td>same formula, <strong>different authority</strong></td>
+<td><strong>NO</strong> — YOLO effective = <code>median([200,300,400])/imgsz</code>; SAM3 = 0.055</td>
+</tr>
+<tr>
+<td><code>imgsz</code> (fraction denominator)</td>
+<td>model imgsz, user-set per role (<code>jobs/training.py:214</code> <code>target_sizes_for(request.imgsz_for(role))</code>)</td>
+<td>fixed <code>_SAM3_IMGSZ = 1008</code> (:97)</td>
+<td>different constant, same role</td>
+<td><strong>NO</strong></td>
+</tr>
+<tr>
+<td><code>slice_width</code> / <code>slice_height</code></td>
+<td>yes, <code>0</code> = fall back to imgsz</td>
+<td>yes, <code>0</code>, <code>contracts.py:251-252</code></td>
+<td><strong>yes</strong></td>
+<td><strong>yes</strong></td>
+</tr>
+<tr>
+<td>overlap</td>
+<td><code>overlap = 0.2</code> (<code>SliceBuildParams</code>, <code>sliced_dataset.py:102</code>)</td>
+<td><code>tile_overlap = 0.25</code> <code>contracts.py:253</code></td>
+<td>same semantic</td>
+<td><strong>NAME DIVERGES</strong>; SAM3 0.25 vs inference <code>DEFAULT_OVERLAP=0.5</code> (<code>tiling.py:39</code>) and direct-cal <code>OVERLAP_STEPS (0.1,0.2,0.3)</code></td>
+</tr>
+<tr>
+<td><strong><code>target_sizes</code> (multi-scale)</strong></td>
+<td><strong>yes</strong>, <code>[200.0, 300.0, 400.0]</code></td>
+<td><strong>NO — absent entirely</strong></td>
+<td>n/a</td>
+<td>n/a</td>
+</tr>
+<tr>
+<td><strong><code>full_frame_mix</code></strong></td>
+<td><strong>yes</strong>, <code>True</code></td>
+<td><strong>NO — absent entirely</strong></td>
+<td>n/a</td>
+<td>n/a</td>
+</tr>
+<tr>
+<td>empty / negative tiles</td>
+<td><code>negative_tile_fraction = 0.15</code> (a <em>sampling rate</em>)</td>
+<td><code>keep_empty_tiles: bool = True</code> (a <em>boolean</em>)</td>
+<td><strong>NO</strong> — rate vs flag</td>
+<td><strong>NO</strong> (0.15 vs keep-all)</td>
+</tr>
+<tr>
+<td>seam-fragment policy</td>
+<td><code>min_area_ratio = 0.1</code>, fragment <strong>DROPPED</strong> (<code>sliced_dataset.py:135-136</code>)</td>
+<td><code>MIN_RETAINED_AREA_FRAC = 0.25</code>, fragment <strong>KEPT as <code>iscrowd=1</code></strong> + tile exhaustiveness downgraded (<code>dataset_build.py:270-275</code>)</td>
+<td><strong>NO — opposite policies</strong></td>
+<td><strong>NO</strong> (0.1 vs 0.25)</td>
+</tr>
+<tr>
+<td>fragment accounting</td>
+<td>none</td>
+<td><code>downgraded_tiles</code>, <code>fragment_only_tiles</code>, <code>fragment_annotations</code> in <code>SplitCounts</code> (:51-63)</td>
+<td>SAM3-only</td>
+<td>—</td>
+</tr>
+<tr>
+<td><code>reference_body_px</code> estimator</td>
+<td>global median over ALL object majors pooled corpus-wide (<code>sliced_dataset.py:219, 263-267</code>)</td>
+<td>median over PER-FRAME medians (<code>dataset_build.py:353-369</code>)</td>
+<td><strong>NO</strong></td>
+<td>—</td>
+</tr>
+<tr>
+<td>stamped geometry key</td>
+<td><code>slice_geometry{...}</code> -&gt; <code>.slice_meta.json</code> v2 + registry (<code>model_publish.py:874-942</code>)</td>
+<td>flat <code>train_tile_px</code>/<code>reference_body_px</code>/<code>object_tile_fraction</code> -&gt; <code>.sam3_meta.json</code> (<code>publish_worker.py:267-269</code>)</td>
+<td><strong>NO — two sidecar formats</strong></td>
+<td>—</td>
+</tr>
+<tr>
+<td>read back for prefill</td>
+<td><strong>yes</strong> (<code>slice_meta_to_panel_values</code> -&gt; detection panel -&gt; <code>build_engine_params</code>)</td>
+<td><strong>no reader</strong> (§2.2)</td>
+<td><strong>NO</strong></td>
+<td>—</td>
+</tr>
+<tr>
+<td>calibration profiles on the artifact</td>
+<td>yes, <code>profiles[]</code> + <code>primary_profile_id</code></td>
+<td><strong>none</strong></td>
+<td><strong>NO</strong></td>
+<td>—</td>
+</tr>
+<tr>
+<td>role <code>imgsz</code> honoured by tiling</td>
+<td>yes, per-role (<code>jobs/training.py:214</code>)</td>
+<td><strong>no</strong> — parsed then ignored, <code>_SAM3_IMGSZ</code> wins (<code>dataset_build.py:375</code>)</td>
+<td><strong>NO</strong></td>
+<td>—</td>
+</tr>
+<tr>
+<td><code>geometry_mode</code> value validated</td>
+<td>inference side clamps/validates (<code>slice_meta.py:380-381</code>, <code>config.py:653-654</code>)</td>
+<td><strong>never validated</strong>; unknown -&gt; silent 1008x1008</td>
+<td><strong>NO</strong></td>
+<td>—</td>
+</tr>
+<tr>
+<td>guard against baseline-geometry drift</td>
+<td>none, but drift is at least <em>visible</em> via the stamped set</td>
+<td>none — the 0.055 default entered silently (eval spec §10)</td>
+<td>—</td>
+<td>—</td>
+</tr>
+</tbody>
+</table>
+<p><em>(This table is the TRAINER pair only, P1 vs P2. The four-path table is §2.5.)</em></p>
+<p><strong>Divergence count, P1 vs P2: 14 of the 17 knob rows disagree</strong> — the two sides differ in existence,
+meaning, default, or direction. The exceptions are two clean matches (<code>geometry_mode</code> as a
+field; <code>slice_width</code>/<code>slice_height</code>) and one row where both sides are equally unguarded
+(baseline-geometry drift). The underlying <code>plan_tiles</code>/<code>tile_size_for_mode</code> call is shared and
+is not counted as a knob.</p>
+<h3 id="24-where-the-current-code-assumes-ant-like-scale">2.4 Where the current code assumes ant-like scale<a class="headerlink" href="#24-where-the-current-code-assumes-ant-like-scale" title="Permanent link">&para;</a></h3>
+<ul>
+<li><code>sliced_dataset.py:105</code> <code>target_sizes = [200.0, 300.0, 400.0]</code> — absolute apparent pixels,
+  hardcoded, duplicated at <code>detectkit/config/training.py:169</code> and <code>detectkit/gui/models.py:181</code>
+  <strong>[V]</strong>. Three copies of one un-calibrated constant.</li>
+<li><code>detectkit/config/training.py:252</code> divides by a <strong>literal <code>640.0</code></strong> rather than the actual
+  imgsz <strong>[V]</strong> — a second, silently different denominator from <code>target_sizes_for(imgsz)</code> at
+  :254.</li>
+<li><code>contracts.py:250</code> <code>object_tile_fraction = 0.055</code> — the constant that caused the incident <strong>[V]</strong>.
+  Note there are <strong>three</strong> different <code>object_tile_fraction</code> defaults in the tree: 0.055 (SAM3,
+  <code>contracts.py:250</code>), 0.15 (YOLO training, <code>sliced_dataset.py:99</code>), 0.15 (inference,
+  <code>core/inference/config.py:80</code>). <strong>[V]</strong></li>
+<li><code>tiling.py:27-33</code> <code>SEMANTIC_TILE_FRACTION_SEED = 0.05</code>, self-documented as ungrounded <strong>[V]</strong>.</li>
+<li><code>inference_settings.py:200</code> falls back to a literal <code>96</code> body px when <code>target_sizes</code> is empty <strong>[V]</strong>.</li>
+<li><code>dataset_build.py:92</code> <code>MIN_RETAINED_AREA_FRAC = 0.25</code>, justified by ant-corpus reasoning <strong>[V]</strong>.</li>
+<li><code>_SAM3_IMGSZ = 1008</code> is a genuine model constant, not a species assumption <strong>[V]</strong>.</li>
+</ul>
+<h3 id="25-the-four-path-divergence-table">2.5 The four-path divergence table<a class="headerlink" href="#25-the-four-path-divergence-table" title="Permanent link">&para;</a></h3>
+<p><code>—</code> = the knob does not exist on that path. Verdict <code>SAME</code> requires name, unit, meaning AND
+default to agree; <code>MEANING</code> = same concept, divergent name/unit/default; <code>DIVERGE</code> = the paths
+genuinely disagree about behaviour or the knob is missing where it is needed.</p>
+<table>
+<thead>
+<tr>
+<th>#</th>
+<th>Knob</th>
+<th>P1 YOLO train</th>
+<th>P2 SAM3 train</th>
+<th>P3 direct cal</th>
+<th>P4 semantic cal</th>
+<th>Verdict</th>
+</tr>
+</thead>
+<tbody>
+<tr>
+<td>1</td>
+<td>tile-size formula</td>
+<td><code>tile_size_for_mode</code></td>
+<td><code>tile_size_for_mode</code></td>
+<td><code>tile_size_for_mode</code> via <code>SLICE_*</code> params</td>
+<td><strong>reimplemented</strong> <code>resolve_tile_px</code> (<code>tiling.py:123-139</code>)</td>
+<td><strong>DIVERGE</strong> (5th copy)</td>
+</tr>
+<tr>
+<td>2</td>
+<td>tile GRID planner</td>
+<td><code>plan_tiles</code></td>
+<td><code>plan_tiles</code></td>
+<td><code>plan_tiles</code></td>
+<td><code>plan_tiles</code> (<code>tiling.py:198</code>)</td>
+<td><strong>SAME</strong></td>
+</tr>
+<tr>
+<td>3</td>
+<td><code>geometry_mode</code></td>
+<td>yes, <code>auto_object</code></td>
+<td>yes, <code>auto_object</code>, <strong>unvalidated</strong></td>
+<td>yes, carried through candidates (<code>grid.py:70-72</code>)</td>
+<td><strong>absent</strong> — fraction-only, no custom/auto_model</td>
+<td><strong>DIVERGE</strong></td>
+</tr>
+<tr>
+<td>4</td>
+<td>tile fraction — name</td>
+<td><code>object_tile_fraction</code> (overridden by <code>target_sizes</code>)</td>
+<td><code>object_tile_fraction</code></td>
+<td><code>object_tile_fraction</code></td>
+<td><code>tile_fraction</code></td>
+<td><strong>MEANING</strong></td>
+</tr>
+<tr>
+<td>5</td>
+<td>tile fraction — default</td>
+<td><code>0.15</code> (<code>sliced_dataset.py:99</code>), effective = <code>median(target_sizes)/imgsz</code></td>
+<td><code>0.055</code> (<code>contracts.py:250</code>)</td>
+<td>swept: <code>FRACTION_STEPS (0.75, 1.0, 1.5)</code> <strong>x the model's stamped fraction</strong></td>
+<td>seed <code>0.05</code> (<code>tiling.py:34</code>), swept <code>(0.03, 0.05, 0.10, None)</code></td>
+<td><strong>DIVERGE</strong> — 4 unrelated numbers</td>
+</tr>
+<tr>
+<td>6</td>
+<td>fraction denominator</td>
+<td>role <code>imgsz</code> (<code>jobs/training.py:214</code>), and a stray literal <code>640.0</code> (<code>training.py:252</code>)</td>
+<td><code>_SAM3_IMGSZ = 1008</code>, role <code>imgsz</code> ignored</td>
+<td>model <code>imgsz</code> via config</td>
+<td>none — fraction applies to <code>reference_body_px</code> directly</td>
+<td><strong>DIVERGE</strong></td>
+</tr>
+<tr>
+<td>7</td>
+<td><strong>multi-scale scale set</strong></td>
+<td><strong>yes</strong> (<code>target_sizes</code>)</td>
+<td><strong>no</strong></td>
+<td><strong>no</strong> — one geometry per candidate row</td>
+<td><strong>no</strong> — one fraction per point</td>
+<td><strong>DIVERGE</strong></td>
+</tr>
+<tr>
+<td>8</td>
+<td><strong>full-frame arm</strong></td>
+<td><code>full_frame_mix = True</code></td>
+<td><strong>absent</strong></td>
+<td><code>enabled=False</code> candidate, always first (<code>grid.py:72-83</code>)</td>
+<td><code>None</code> sentinel in <code>TILE_FRACTION_GRID</code> (<code>tiling.py:37</code>)</td>
+<td><strong>MEANING</strong> — 3 different encodings of one idea</td>
+</tr>
+<tr>
+<td>9</td>
+<td>overlap — name/default</td>
+<td><code>overlap = 0.2</code></td>
+<td><code>tile_overlap = 0.25</code></td>
+<td>swept <code>OVERLAP_STEPS (0.1, 0.2, 0.3)</code></td>
+<td><code>DEFAULT_OVERLAP = 0.5</code> (<code>tiling.py:39</code>)</td>
+<td><strong>DIVERGE</strong></td>
+</tr>
+<tr>
+<td>10</td>
+<td><code>reference_body_px</code> estimator</td>
+<td>global median, all majors pooled</td>
+<td>median of per-frame medians</td>
+<td>read from the model's stamped geometry (<code>grid.py:71</code>)</td>
+<td>project value, typed/prefilled, mismatch-warned (<code>dialog:382-406</code>)</td>
+<td><strong>DIVERGE</strong></td>
+</tr>
+<tr>
+<td>11</td>
+<td>seam / fragment policy</td>
+<td>drop below <code>min_area_ratio = 0.1</code></td>
+<td>keep as <code>iscrowd</code>, floor <code>0.25</code>, downgrade tile</td>
+<td>n/a (post-merge frame-space scoring)</td>
+<td><strong>drop by <code>seam_margin_px</code>, default 4</strong> (<code>tiling.py:40</code>)</td>
+<td><strong>DIVERGE</strong> — drop vs keep vs margin-drop</td>
+</tr>
+<tr>
+<td>12</td>
+<td>cross-tile merge</td>
+<td>n/a</td>
+<td>n/a</td>
+<td><code>merge_policy/metric/threshold/backend</code>, swept + stamped</td>
+<td><code>merge_iou = 0.5</code> + <code>DEFAULT_CONTAINMENT_OVERLAP = 0.80</code> (<code>tiling.py:41-47</code>)</td>
+<td><strong>DIVERGE</strong></td>
+</tr>
+<tr>
+<td>13</td>
+<td>confidence</td>
+<td>n/a</td>
+<td>n/a</td>
+<td>swept, stamped into the profile</td>
+<td><code>CONFIDENCE_GRID</code> 0.05..0.95 step 0.05 (<code>calibration.py:72</code>)</td>
+<td><strong>MEANING</strong></td>
+</tr>
+<tr>
+<td>14</td>
+<td>empty / negative tiles</td>
+<td><code>negative_tile_fraction = 0.15</code> (rate)</td>
+<td><code>keep_empty_tiles = True</code> (flag)</td>
+<td>n/a</td>
+<td>n/a</td>
+<td><strong>DIVERGE</strong></td>
+</tr>
+<tr>
+<td>15</td>
+<td>tile-count ceiling</td>
+<td><code>MAX_TILES_PER_FRAME = 4096</code></td>
+<td>same</td>
+<td><strong><code>DEFAULT_MAX_TOTAL_TILES = 20000</code></strong> budget, a different quantity (<code>grid.py:20</code>)</td>
+<td><code>MAX_TILES_PER_FRAME</code> only</td>
+<td><strong>MEANING</strong></td>
+</tr>
+<tr>
+<td>16</td>
+<td>matcher admissibility</td>
+<td>n/a</td>
+<td>n/a</td>
+<td><strong>hard IoU &gt;= 0.5</strong> (<code>direct_calibration.py:78, 115</code>)</td>
+<td>area band + <code>match_quality &gt;= 0.1</code> + containment; <strong>IoU route deleted</strong></td>
+<td><strong>DIVERGE — see §2.6</strong></td>
+</tr>
+<tr>
+<td>17</td>
+<td>matched-instance floor</td>
+<td>n/a</td>
+<td>n/a</td>
+<td><code>MIN_MATCHED_INSTANCES = 60</code></td>
+<td><code>MIN_MATCHED_INSTANCES = 20</code></td>
+<td><strong>DIVERGE</strong> (same name, 3x apart)</td>
+</tr>
+<tr>
+<td>18</td>
+<td>localization floor</td>
+<td>n/a</td>
+<td>n/a</td>
+<td><code>MIN_LOCALIZATION = 0.5</code> (mean IoU)</td>
+<td><code>MIN_MEAN_QUALITY = 0.35</code> (shape-aware quality)</td>
+<td><strong>DIVERGE</strong></td>
+</tr>
+<tr>
+<td>19</td>
+<td>recommendation objective</td>
+<td>n/a</td>
+<td>n/a</td>
+<td><strong>F1-balanced Pareto</strong> (<code>RECOMMENDATION_RULE</code>, <code>direct_calibration.py:186-191</code>)</td>
+<td><strong>recall-first lexicographic on tile cost</strong>, <code>MIN_RECALL = 0.90</code>; F1 explicitly rejected</td>
+<td><strong>DIVERGE — contradictory</strong></td>
+</tr>
+<tr>
+<td>20</td>
+<td>class awareness</td>
+<td>per-class labels</td>
+<td>single prompt class</td>
+<td>class-aware matching (<code>direct_calibration.py:113</code>)</td>
+<td>single class, prompt-derived</td>
+<td><strong>MEANING</strong></td>
+</tr>
+<tr>
+<td>21</td>
+<td>shape / size prior</td>
+<td>none</td>
+<td>none</td>
+<td><strong>none</strong></td>
+<td><code>fit_area_band</code>, <code>LOW_MULTIPLIER 0.3</code> / <code>HIGH_MULTIPLIER 2.5</code> (<code>shape_prior.py:44-45</code>)</td>
+<td><strong>DIVERGE</strong></td>
+</tr>
+<tr>
+<td>22</td>
+<td>output of the path</td>
+<td>dataset manifest <code>slice_geometry</code></td>
+<td>manifest <code>tile_px</code> -&gt; <code>.sam3_meta.json</code> (no reader)</td>
+<td><code>.slice_meta.json</code> v2 profile, consumed by GUI + CLI</td>
+<td><code>semantic_escalation_settings</code> + <code>semantic_calibration</code> in DetectKit <strong>project JSON only</strong></td>
+<td><strong>DIVERGE</strong></td>
+</tr>
+<tr>
+<td>23</td>
+<td>operating point reaches a headless run</td>
+<td>via publish + registry</td>
+<td>no</td>
+<td><strong>yes</strong> (<code>--sahi-profile</code>, <code>engine_params.py:968-986</code>)</td>
+<td><strong>no</strong> — project-state only, never a model sidecar</td>
+<td><strong>DIVERGE</strong></td>
+</tr>
+<tr>
+<td>24</td>
+<td>train/serve drift guard</td>
+<td>none</td>
+<td>none</td>
+<td>none</td>
+<td><strong>yes</strong>, but GUI-only modal (<code>dialog:382-406</code>)</td>
+<td><strong>DIVERGE</strong></td>
+</tr>
+</tbody>
+</table>
+<p><strong>Four-path divergence count: 18 DIVERGE + 5 MEANING = 23 of the 24 rows disagree at some
+level.</strong> Exactly <strong>one</strong> row is clean across all four paths: the <code>plan_tiles</code> grid call
+(row 2). Even the shared tile-size formula fails (row 1 — P4 reimplements it). The
+trainer-only count in §2.3 was 14 of 17; widening to four paths roughly doubles it, which is
+the coordinator's expectation confirmed.</p>
+<h3 id="26-the-two-calibration-harnesses-mapped-against-each-other">2.6 The two calibration harnesses, mapped against each other<a class="headerlink" href="#26-the-two-calibration-harnesses-mapped-against-each-other" title="Permanent link">&para;</a></h3>
+<p>Both solve the identical problem — <em>sweep tile geometry and confidence, score against the
+user's own labels, recommend one operating point</em> — for different detector families. They
+share <strong>no code</strong>: not the matcher, not the point record, not the objective, not the
+persistence format.</p>
+<table>
+<thead>
+<tr>
+<th></th>
+<th>P3 direct (<code>direct_calibration.py</code>)</th>
+<th>P4 semantic (<code>semantic/calibration.py</code>)</th>
+</tr>
+</thead>
+<tbody>
+<tr>
+<td>swept axes</td>
+<td>fraction x overlap x confidence x merge threshold</td>
+<td>tile fraction (outer, one inference pass each) x confidence (inner, offline)</td>
+</tr>
+<tr>
+<td>geometry candidates</td>
+<td><strong>relative</strong> to the model's stamped training geometry (<code>grid.py:67-72</code>)</td>
+<td><strong>absolute</strong> grid <code>(0.03, 0.05, 0.10, None)</code> (<code>tiling.py:37</code>)</td>
+</tr>
+<tr>
+<td>matcher</td>
+<td>greedy descending IoU, <strong>hard gate IoU &gt;= 0.5</strong>, class-aware, task-reduced polygon (<code>_as_task_polygon</code>)</td>
+<td>greedy descending <code>match_quality</code>; admissibility = area band AND <code>min_quality</code> AND containment of <code>representative_point</code></td>
+</tr>
+<tr>
+<td>size/shape prior</td>
+<td><strong>none</strong></td>
+<td><code>fit_area_band</code> fitted to the user's labels</td>
+</tr>
+<tr>
+<td>objective</td>
+<td>fastest point within <code>F1_TOLERANCE = 0.01</code> of best F1, on the (misses, extras, seconds) Pareto frontier</td>
+<td>among points clearing <code>MIN_RECALL = 0.90</code>, fewest <code>tiles_per_frame</code>, tie-break highest confidence</td>
+</tr>
+<tr>
+<td>refusal behaviour</td>
+<td>drops failed/undersampled points, still recommends</td>
+<td><strong>explicit typed refusals</strong> with user-facing remedies (no point cleared recall / mistargeted / insufficient data)</td>
+</tr>
+<tr>
+<td>reports duplicates</td>
+<td><strong>yes</strong> (<code>duplicate</code>, to detect bad cross-tile merges)</td>
+<td>no</td>
+</tr>
+<tr>
+<td>task-shape awareness</td>
+<td><strong>yes</strong> (<code>detect</code> reduces both sides to AABB before IoU)</td>
+<td>no — always polygon</td>
+</tr>
+<tr>
+<td>persisted to</td>
+<td>model sidecar <code>.slice_meta.json</code> profile -&gt; GUI + CLI</td>
+<td>DetectKit project JSON only</td>
+</tr>
+</tbody>
+</table>
+<p><strong>What each has that the other lacks</strong> — and these are the concrete unification wins:
+P3 uniquely has task-aware polygon reduction, duplicate accounting, merge-policy sweeping,
+relative (species-agnostic) candidate generation, and a headless consumer. P4 uniquely has a
+fitted shape prior, graded (non-binary) match quality, typed refusals with remedies, and the
+train/serve drift guard.</p>
+<p><strong>Is their scoring even comparable? No.</strong> P3's <code>recall</code> counts a prediction as a match only at
+IoU &gt;= 0.5 against a same-class label; P4's counts it when a representative point is contained
+and a graded quality score clears 0.1. A single model scored by both would post different
+recalls on identical predictions. <strong>No number from one harness may be compared to a number
+from the other</strong>, and today nothing in the UI says so.</p>
+<h3 id="27-does-the-direct-path-share-the-centroid-defect-no-but-it-has-the-inverse-defect">2.7 Does the DIRECT path share the centroid defect? — NO, but it has the INVERSE defect<a class="headerlink" href="#27-does-the-direct-path-share-the-centroid-defect-no-but-it-has-the-inverse-defect" title="Permanent link">&para;</a></h3>
+<p><strong>Answer: no.</strong> <code>b9e92bc7</code> fixed a <em>containment test on the vertex mean</em> — a point that lies
+outside 15.9% of real ant outlines, vetoing near-perfect masks (<code>calibration.py:248-272</code>,
+recall 0.867 -&gt; 0.988 on identical predictions) <strong>[V]</strong>. <code>direct_calibration.py</code> has <strong>no
+centroid, no containment test and no representative point anywhere</strong> <strong>[V, verified by reading
+the whole matcher, :74-142]</strong>. That specific bug cannot exist there.</p>
+<p><strong>But the direct path fails the same underlying phenomenon by the opposite mechanism, and this
+is a live production concern.</strong> Its sole admissibility criterion is a hard <code>IoU &gt;= 0.5</code>
+(<code>:78, :115</code>) — precisely the gate the semantic path measured and then <strong>deleted</strong>, on the
+stated grounds that "SAM3 masks trace legs and antennae at ~1.7x the labelled body-core area"
+so IoU "is still not a hard gate ... it enters the quality score" (<code>calibration.py:17-22</code>)
+<strong>[V]</strong>. The consequence: a prediction whose silhouette is correct but whose <em>extent
+convention</em> differs from the labels' scores <strong>below 0.5, is counted as a MISS and an EXTRA
+simultaneously</strong>, double-penalising the operating point.</p>
+<p><strong>Who is exposed.</strong> <code>_as_task_polygon</code> keeps the full polygon for <code>task="segment"</code> and
+<code>task="obb"</code> (<code>:56-71</code>) <strong>[V]</strong>, and DetectKit runs direct segment models. A segment model
+whose masks trace appendages, or whose labels are body-core boxes, is scored by P3 under
+exactly the convention P4 abandoned — and because <code>recommend_balanced</code> optimises F1
+(<code>:186-191</code>), a systematically depressed recall pushes the recommendation toward
+higher-confidence, fewer-detection operating points. <strong>A silent recommendation bias, not a
+crash.</strong> Severity is unmeasured and must not be asserted: it depends entirely on how a given
+project's labels and model agree about extent, which is per-project and per-species.</p>
+<p><strong>Two further asymmetries worth flagging in the same breath.</strong> (a) P3's objective is F1;
+<code>semantic/calibration.py:9-13</code> rejects F1 with a measurement — "The F1-optimal threshold missed
+4.7 animals/frame where a recall-first one missed 1.0" <strong>[V]</strong>. The two harnesses therefore
+give <em>contradictory</em> advice about what a good operating point is, and the argument against F1
+was never carried across. (b) P3 has no size/shape prior, so the mistargeting failure P4's
+<code>fit_area_band</code> exists to catch — an arena-sized blob or a leg-sized fragment earning recall
+credit — is uncaught on the direct path. <code>MIN_LOCALIZATION = 0.5</code> partially substitutes, but
+it is a mean-IoU floor, not a size gate.</p>
+<p><strong>Recommended framing for the user:</strong> these are three separate decisions (matcher
+admissibility, objective, shape prior), each of which changes recommended operating points on
+one side. None should be changed silently as part of a refactor. See D7-D9.</p>
+<hr />
+<h2 id="part-3-the-unification-design">Part 3 — The unification design<a class="headerlink" href="#part-3-the-unification-design" title="Permanent link">&para;</a></h2>
+<h3 id="31-principle-unify-the-contract-and-the-policy-not-the-planner">3.1 Principle: unify the CONTRACT and the POLICY, not the planner<a class="headerlink" href="#31-principle-unify-the-contract-and-the-policy-not-the-planner" title="Permanent link">&para;</a></h3>
+<p>The planner is already shared and its semantics are frozen against inference
+(<code>slice_geometry.py:122-124</code>). <strong>Nothing in this design changes <code>tile_size_for_mode</code> or
+<code>plan_tiles</code>.</strong> What gets unified is the layer above.</p>
+<h3 id="32-new-shared-module-utilstiling_planpy-qt-free-imports-only-slice_geometry">3.2 New shared module: <code>utils/tiling_plan.py</code> (Qt-free, imports only <code>slice_geometry</code>)<a class="headerlink" href="#32-new-shared-module-utilstiling_planpy-qt-free-imports-only-slice_geometry" title="Permanent link">&para;</a></h3>
+<p>One dataclass and one resolver, consumed by both builders. Proposed shape (names, not code):</p>
+<ul>
+<li><code>ScaleSpec</code> — one requested scale. Exactly one of: <code>target_apparent_px: float</code> (the
+  apparent object size the model should see, in <em>its own</em> input resolution), or
+  <code>object_tile_fraction: float</code>, or <code>custom_wh: tuple[int,int]</code>, or the sentinel
+  <code>FULL_FRAME</code>. Mirrors the existing <code>TILE_FRACTION_GRID</code> convention where <code>None</code> = full
+  frame (<code>tiling.py:37-38</code>) — reuse that sentinel meaning rather than a new one.</li>
+<li><code>TilingContract</code> — <code>geometry_mode</code>, <code>scales: tuple[ScaleSpec, ...]</code>, <code>overlap</code>,
+  <code>reference_body_px</code>, <code>model_imgsz</code>, <code>empty_tile_policy</code>, <code>fragment_policy</code>,
+  <code>max_tiles_per_frame</code>. <strong><code>overlap</code> is the single canonical name</strong>; <code>tile_overlap</code> becomes an
+  alias read at contract-load time for backwards compatibility.</li>
+<li><code>resolve_scales(contract) -&gt; list[TileSize | FULL_FRAME]</code> — one generalisation of
+  <code>sliced_dataset._tile_sizes_for_params</code> (:159-193). Both builders call this. Dedupe and
+  clamping stay exactly where they are today.</li>
+<li><code>ReferenceBodyEstimator</code> — one estimator, resolving the median-vs-mean divergence (§2.3).
+  <strong>Decision for the user, see §3.7 D1.</strong></li>
+</ul>
+<p><code>TilingContract</code> serves all four paths: P1/P2 consume it to emit tiles, P3/P4 consume it to
+<em>enumerate candidates</em> (a calibration candidate becomes one <code>TilingContract</code> with a single
+scale). This is the property <code>direct_calibration_grid.py:1-7</code> already insists on for P3 —
+"Candidates carry <code>SLICE_*</code> PARAMS, never a hand-built <code>SliceConfig</code> ... routing through the
+shared params mapping is what makes a measured point expressible as TrackerKit settings"
+<strong>[V]</strong>. Generalising that rule to all four is the whole unification in one sentence: <strong>every
+path expresses geometry in the same vocabulary, so a point measured anywhere is expressible
+everywhere.</strong></p>
+<p><code>semantic/tiling.py:123-139</code> must be deleted in favour of <code>tile_size_for_mode</code> (row 1 of §2.5).
+That is a pure de-duplication today — the numbers agree — but it is what makes P4 inherit
+<code>geometry_mode</code> and any future change.</p>
+<p>Genuinely model-specific and staying out: SAM3's <code>_SAM3_IMGSZ = 1008</code> (a model input
+constant, passed IN as <code>model_imgsz</code>), YOLO's per-role <code>imgsz</code>, mask-vs-OBB target encoding,
+COCO-vs-YOLO-txt serialisation, <code>iscrowd</code> and exhaustiveness flags, negative-prompt pools.</p>
+<h3 id="33-multi-scale-for-sam3">3.3 Multi-scale for SAM3<a class="headerlink" href="#33-multi-scale-for-sam3" title="Permanent link">&para;</a></h3>
+<p>Port <code>_tile_sizes_for_params</code> semantics via <code>resolve_scales</code>. Concretely, SAM3's
+<code>dataset_build.py:373-380</code> becomes a loop over resolved scales, <code>_tile_frame</code> is called once
+per scale, and the tile id/filename gains the scale token the YOLO builder already uses
+(<code>_t{w}x{h}_</code>, <code>sliced_dataset.py:237</code>) so per-scale provenance survives into the COCO image
+records. Full frame is one more entry in the scale list, emitted with the existing
+<code>plan_tiles(..., full_frame=True)</code> path.</p>
+<p><strong>Cross-scale composition of the seam policy.</strong> This is the subtle part and must be stated:
+<code>retained_frac</code> is computed against the instance's <strong>full frame-space area</strong>
+(<code>dataset_build.py:266-274</code>), not against a per-scale quantity, so the <em>test</em> composes across
+scales unchanged. What does NOT compose is the <em>rate</em>: a small tile size produces
+proportionally more seam crossings, so a naive multi-scale build downgrades a much larger
+share of tiles at the fine end than the coarse end, silently removing precision pressure
+exactly where the eval spec says extras/frame is decided. Mitigations, in order of
+preference: (i) report <code>downgraded_tiles</code> / <code>fragment_only_tiles</code> <strong>per scale</strong> in
+<code>SplitCounts</code> so the cost is visible before training (the existing counters already exist for
+precisely this reason, :51-63); (ii) treat the fragment floor as a per-scale contract value,
+not a module constant; (iii) do NOT auto-tune it — it is a measured-per-project quantity.</p>
+<p><strong>Per-scale instance balancing.</strong> Today, neither builder balances (§1.2). Tile count grows
+~quadratically as tile size shrinks, so an unweighted 3-scale build is dominated by the
+finest scale. Proposal: a <code>per_scale_weight</code> policy in <code>TilingContract</code> with three named
+modes — <code>none</code> (today's behaviour, the default so the change is opt-in),
+<code>equal_tiles</code> (cap each scale at the min tile count across scales),
+<code>equal_instances</code> (cap each scale at the min <em>positive-instance</em> count). Which is right is a
+per-project measurement, not a constant; the build manifest must record the realised per-scale
+counts either way.</p>
+<h3 id="34-where-the-two-calibrations-fit">3.4 Where the two calibrations fit<a class="headerlink" href="#34-where-the-two-calibrations-fit" title="Permanent link">&para;</a></h3>
+<p><code>build_candidate_grid</code> (<code>direct_calibration_grid.py:59-100</code>) is already <strong>relative</strong> to the
+model's stamped training geometry (multiplicative <code>FRACTION_STEPS</code>), which makes it
+species-agnostic by construction and is the right precedent. <strong>[V]</strong>
+<code>semantic/calibration.py</code> already sweeps a tile-fraction grid <em>including a full-frame arm</em>
+against the user's own labels with a recall-first objective. <strong>[V]</strong></p>
+<p><strong>Honest assessment: the existing machinery fits the SERVING side and only partly fits the
+TRAINING side.</strong> Both calibrators sweep an <em>already-trained</em> model over geometries — one
+inference pass per geometry. Choosing a <em>training</em> scale set that way would require one
+training run per candidate set, which is hours-to-days per arm and is not viable as a
+pre-run wizard. So:</p>
+<ul>
+<li><strong>Reuse directly (fits):</strong> choosing the serving geometry / primary profile for a
+  multi-scale model, and choosing SAM3's <em>inference</em> tiling. No change needed beyond giving
+  SAM3 artifacts a <code>.slice_meta.json</code>-shaped profile surface (§3.5).</li>
+<li><strong>Reuse the <em>inputs</em>, not the loop (partial fit):</strong> the training scale set should be
+  derived from the <strong>label-corpus body-size distribution</strong> the builder already measures
+  (<code>measure_reference_body_px</code> / <code>object_major_axes_px</code>, <code>sliced_dataset.py:42-60</code>) — e.g.
+  scales that bracket the observed size distribution's spread — plus the project's frame
+  size. This is a <em>measurement at build time on the user's own corpus</em>, which satisfies
+  "calibrate before run" without a training-per-candidate sweep, and it is what replaces the
+  hardcoded <code>[200, 300, 400]</code>.</li>
+<li><strong>Does not fit, say so plainly:</strong> there is no cheap way to know which training scale set
+  yields the best model without training. The defensible substitute is (a) derive candidates
+  from the corpus, (b) train ONE multi-scale model, (c) let the <em>existing</em> serving
+  calibration pick the operating geometry per project. The eval spec's 2x2 (§11c) is
+  precisely the evidence that a single-scale model cannot survive a serving-geometry change;
+  a multi-scale model plus serving calibration is the structural answer.</li>
+</ul>
+<h3 id="35-the-stamping-problem">3.5 THE STAMPING PROBLEM<a class="headerlink" href="#35-the-stamping-problem" title="Permanent link">&para;</a></h3>
+<p><strong>The answer already exists in shipped code and should be reused rather than re-invented.</strong>
+<code>slice_meta.py:287-317</code> already handles a multi-scale artifact: it stamps the whole
+<code>target_sizes</code> list as training provenance and derives the <code>__training__</code> prefill as
+<code>median(target_sizes) / imgsz</code> <strong>[V]</strong>. The v2 schema's split — <code>training_geometry</code> (what was
+trained, provenance, possibly plural) vs <code>profiles[] + primary_profile_id</code> (what to serve,
+measured, singular) — is exactly the distinction a multi-scale model needs.</p>
+<p>Concrete contract:</p>
+<ol>
+<li><strong>What is stamped.</strong> The full scale set, losslessly: <code>training_geometry.target_sizes</code>
+   (or the richer <code>scales[]</code> from <code>TilingContract</code>), <code>full_frame_mix</code>, <code>reference_body_px</code>,
+   <code>overlap</code>, <code>imgsz</code>, <code>geometry_mode</code>, and the per-scale realised tile/instance counts.
+   Plus, new: <code>scale_range_px = [min, max]</code> apparent size actually trained, which is the
+   number a user and a guard can both reason about. <strong>A multi-scale model must NOT stamp a
+   single <code>object_tile_fraction</code> as if it were the trained geometry</strong> — it may stamp the
+   derived median as a clearly-named <code>prefill_object_tile_fraction</code> only.</li>
+<li><strong>What the panel prefills.</strong> Unchanged ladder, unchanged precedence: an explicit primary
+   calibration profile if one exists; else the derived median-of-set training value with
+   <code>resolution="training"</code> (already implemented, <code>slice_meta.py:321-382</code>). The panel should
+   additionally <em>display</em> the trained scale range, because a user prefilling the median of a
+   3-scale set deserves to know the model also saw 1.5x and 0.5x of it. For a multi-scale
+   model the honest UI statement is "this model was trained at N scales spanning A-B px; the
+   prefill is the median — calibrate to pick the best".</li>
+<li><strong>What the CLI does.</strong> Unchanged: <code>--sahi-profile</code> resolves against the same sidecar,
+   hard-errors on an unresolvable explicit name (<code>cli_config.py:143-170</code>), and
+   <code>_slice_profile_overlay</code> supplies the values (<code>engine_params.py:363-436, 968-986</code>). One
+   addition: when a config names no profile and the model is multi-scale, log the trained
+   scale range and the fact that the median is being used, at WARNING — because that is
+   exactly the class of silent default that caused the 0.055 incident.</li>
+<li><strong>SAM3 specifically.</strong> <code>train_tile_px</code> (scalar, write-only, <code>publish_worker.py:267</code>) is
+   not extensible to a set and has no reader. Either SAM3 artifacts adopt the v2
+   <code>.slice_meta.json</code> surface, or <code>.sam3_meta.json</code> gains an embedded v2-shaped
+   <code>training_geometry</code> block. <strong>User decision D2 (§3.7).</strong></li>
+<li><strong>The guard the incident asks for.</strong> A run that names a comparison baseline must read the
+   baseline artifact's stamped geometry and refuse-or-warn on mismatch. This is cheap, it is
+   the eval spec's own recommendation (§10 "Root cause"), and it is independent of everything
+   else here — it can ship first.</li>
+</ol>
+<h3 id="36-calibration-before-run-for-the-scale-set">3.6 Calibration-before-run for the scale set<a class="headerlink" href="#36-calibration-before-run-for-the-scale-set" title="Permanent link">&para;</a></h3>
+<p>Replace the three hardcoded copies of <code>[200, 300, 400]</code> with a resolver that, at dataset-build
+time, reads the corpus's own measured major-axis distribution
+(<code>object_major_axes_px</code>, already computed) and the project frame size, and proposes a scale
+set bracketing it. The proposal must be <strong>shown and editable</strong> in the DetectKit slice panel
+(<code>detectkit/gui/panels/slice_settings_widget.py:480-511</code> already round-trips
+<code>target_sizes</code> + <code>full_frame_mix</code> <strong>[V]</strong>), and recorded in the manifest with the
+distribution it was derived from. No number in this document is proposed as a default: the
+<em>rule</em> is shared, the <em>values</em> are per-project.</p>
+<h3 id="37-decisions-this-forces-on-one-side-for-the-user-not-assumed">3.7 Decisions this forces on one side — for the user, not assumed<a class="headerlink" href="#37-decisions-this-forces-on-one-side-for-the-user-not-assumed" title="Permanent link">&para;</a></h3>
+<ul>
+<li><strong>D1 — reference-body estimator.</strong> Global median (YOLO) vs mean-of-per-frame-medians
+  (SAM3). Unifying changes one side's stamped <code>reference_body_px</code>, hence its tile size, hence
+  its trained geometry. Non-cosmetic. Recommend global median (more robust, and it is what
+  the <em>inference</em> side's calibration shape-prior is fitted against), but this is the user's call.</li>
+<li><strong>D2 — sidecar unification.</strong> SAM3 adopting <code>.slice_meta.json</code> gives it profiles,
+  <code>--sahi-profile</code>, and the whole shipped handoff for free, but changes an artifact format
+  with a live integrity guard (<code>semantic/sam3.py:104-140</code> <em>refuses to serve</em> a checkpoint
+  whose sidecar is missing or unparseable <strong>[V]</strong> — a migration must not trip that).</li>
+<li><strong>D3 — seam-fragment policy.</strong> YOLO drops sub-floor fragments; SAM3 keeps them as
+  <code>iscrowd</code>. Both are deliberate and documented. Unifying the <em>floor value</em> is easy;
+  unifying the <em>direction</em> would change one trainer's targets. Recommend: share the knob,
+  keep both behaviours selectable, do NOT force convergence.</li>
+<li><strong>D4 — empty-tile policy.</strong> Boolean (SAM3) vs sampling rate (YOLO). A rate generalises the
+  boolean (<code>1.0</code> == keep all), so unify on the rate — but that changes SAM3's contract field
+  name and type.</li>
+<li><strong>D5 — overlap default.</strong> 0.25 (SAM3 training) vs 0.5 (semantic inference) vs 0.2 (v2
+  prefill default, <code>slice_meta.py:305</code>) vs the 0.1/0.2/0.3 sweep. Four values in the tree.
+  Unification means picking one <em>prefill</em>; the real value should come from calibration.</li>
+<li><strong>D5b — validate <code>geometry_mode</code> and honour the role <code>imgsz</code>.</strong> Both are currently silent
+  no-ops on the SAM3 side (§2.1). Fixing them is strictly better behaviour but <em>changes what
+  an existing plan does</em>, so it is a decision, not a cleanup.</li>
+<li><strong>D6 — multi-scale opt-in vs default-on for SAM3.</strong> Default-on changes every future SAM3
+  run's dataset; opt-in leaves the incident class alive by default.</li>
+</ul>
+<h3 id="38-a-shared-calibration-core-p3-p4">3.8 A shared calibration core (P3 + P4)<a class="headerlink" href="#38-a-shared-calibration-core-p3-p4" title="Permanent link">&para;</a></h3>
+<p>Not "merge the two harnesses" — they legitimately differ in what they run (a YOLO executor vs a
+SAM3 labeler) and in what they can prompt. What should be shared is everything between the
+predictions and the recommendation:</p>
+<ul>
+<li><strong>One matcher module</strong> with the admissibility rule as an injected <em>policy</em>, not a hardcoded
+  gate — so <code>hard_iou(0.5)</code> and <code>containment + area_band + graded_quality</code> are two named
+  policies over one greedy one-to-one core. Both current matchers are already
+  greedy-descending-score one-to-one; only the score and the gate differ.</li>
+<li><strong>One point record and one frontier/Pareto utility.</strong> <code>DirectCalibrationPoint</code> and
+  <code>CalibrationPoint</code> describe the same thing.</li>
+<li><strong>One objective module</strong> exposing named rules (<code>f1_balanced</code>, <code>recall_first_cheapest</code>) with
+  the reasoning attached, so choosing between them is a visible per-project decision rather
+  than an accident of which detector family you happen to be calibrating.</li>
+<li><strong>One refusal vocabulary.</strong> P4's typed refusals with remedies are strictly better UX than
+  P3's silent drop; porting them costs nothing behaviourally.</li>
+<li><strong>One persistence target.</strong> P4's result should land on the model artifact as a
+  <code>.slice_meta.json</code>-shaped profile (row 22/23 of §2.5), not only in DetectKit project JSON —
+  that is what gives SAM3 the <code>--sahi-profile</code> headless path P3 already has.</li>
+</ul>
+<p>The shape prior (<code>shape_prior.py</code>) becomes available to P3 as an opt-in policy rather than
+being SAM3-only. Whether to turn it on for direct calibration is D9.</p>
+<h3 id="39-the-coupling-direction-a-position-not-a-survey">3.9 THE COUPLING DIRECTION — a position, not a survey<a class="headerlink" href="#39-the-coupling-direction-a-position-not-a-survey" title="Permanent link">&para;</a></h3>
+<p><strong>Position: TRAINING emits the scale set; CALIBRATION selects within and validates against it.
+The arrow runs training -&gt; calibration, never calibration -&gt; training.</strong></p>
+<p>The reasoning, in order of weight:</p>
+<ol>
+<li><strong>Cost asymmetry is decisive.</strong> A calibration candidate costs one inference pass; a training
+   candidate costs a full training run (hours to days — the 2026-09-06 run was ten epochs
+   overnight). Any design in which calibration <em>chooses</em> a training geometry implies training
+   once per candidate, which is not a pre-run wizard. The direction that fits the cost
+   structure is the only one that can ship.</li>
+<li><strong>A calibration profile is measured on ONE model. A training scale set precedes every
+   model.</strong> Letting a profile fitted to model <em>v1</em> dictate the geometry of model <em>v2</em> bakes v1's
+   idiosyncrasies into the corpus — and, worse, makes the two circularly coupled: v2 trained at
+   v1's best geometry will calibrate to that geometry, confirming it. That is a feedback loop,
+   not evidence.</li>
+<li><strong>The eval spec's 2x2 says the fix belongs in training, not serving.</strong> §11c: the model effect
+   flips sign between geometries; each model wins decisively at its own. A single-scale model is
+   <em>brittle</em> to serving geometry, and no amount of serving calibration repairs brittleness — it
+   only finds the one geometry that works. <strong>Multi-scale training makes the model robust; then
+   calibration picks the cheapest point on a flat-ish surface rather than the only point on a
+   sharp peak.</strong> That is the structural argument for doing both, in that order.</li>
+<li><strong>What training should read instead of a profile:</strong> the <em>corpus</em>, not a prior model. The
+   builder already measures the label body-size distribution (<code>object_major_axes_px</code>); the scale
+   set should bracket that distribution and the project's frame size (§3.6). This is
+   "calibrate before run" honoured with a measurement on the user's own data, at the only point
+   where it is affordable.</li>
+</ol>
+<p><strong>What breaks if they disagree, and what to do about it.</strong> They will disagree — the whole point
+of multi-scale is that serving may prefer a scale near an edge of the trained set, or outside
+it. Three cases, and the design's answer to each:</p>
+<ul>
+<li><strong>Chosen scale INSIDE the trained set</strong> — the intended case. Nothing to do; record which
+  trained scale the profile sits nearest.</li>
+<li><strong>Chosen scale BETWEEN trained scales</strong> — acceptable and expected; that is what multi-scale
+  buys. Record it as interpolating.</li>
+<li><strong>Chosen scale OUTSIDE <code>scale_range_px</code></strong> — this is the 2026-09-06 confound, detected instead
+  of silent. <strong>Warn loudly, never refuse</strong> (following the precedent already set at
+  <code>semantic_escalation_dialog.py:382-406</code>, which deliberately warns because "a deliberate
+  re-scale is legitimate"). The warning must state both numbers and the trained range; a
+  deliberate re-scale is a legitimate user choice, an accidental one is the incident.</li>
+</ul>
+<p>The corollary is a hard rule worth stating on its own: <strong>a calibration recommendation is
+evidence about serving, never an input to a dataset build.</strong> If a project's calibrations keep
+landing outside the trained range, the correct response is to <em>retrain with a scale set that
+covers where calibration keeps going</em> — a human decision, informed by the recorded history,
+made once, not an automatic loop.</p>
+<h3 id="310-additional-decisions-this-forces-for-the-user">3.10 Additional decisions this forces — for the user<a class="headerlink" href="#310-additional-decisions-this-forces-for-the-user" title="Permanent link">&para;</a></h3>
+<ul>
+<li><strong>D7 — direct-path matcher admissibility.</strong> Adopt the semantic path's graded/containment
+  policy for P3 (fixes the inverse defect of §2.7) or keep the hard IoU gate? Adopting it will
+  change recommended profiles for existing projects. <strong>Recommend adopting for <code>segment</code>, where
+  the extent-convention mismatch is real, and offering it as a policy for <code>obb</code>/<code>detect</code>;
+  either way, do not change it silently.</strong></li>
+<li><strong>D8 — one objective or two?</strong> F1-balanced (P3) vs recall-first-cheapest (P4) are
+  contradictory, and P4 has a measurement against F1. Unifying means one side's recommendations
+  move. <strong>Recommend: expose both as named rules, default each path to its current rule so
+  nothing changes on adoption, and surface the choice with its rationale.</strong></li>
+<li><strong>D9 — shape prior for the direct path.</strong> Off today. Turning it on catches mistargeting P3
+  cannot currently see, but changes scores.</li>
+<li><strong>D10 — where a semantic calibration result is persisted.</strong> Moving it from DetectKit project
+  JSON onto the model sidecar is what unlocks headless SAM3 serving parity, and interacts with
+  D2 (sidecar format) and with <code>semantic/sam3.py</code>'s refuse-on-malformed-sidecar guard.</li>
+<li><strong>D11 — the drift guard's severity and location.</strong> Today: GUI-only, modal, warn-never-refuse
+  (P4 only). Shared and headless, it must pick a non-modal channel and a severity. <strong>Recommend
+  warn-never-refuse everywhere, matching the existing precedent</strong> — except for the one case the
+  eval spec identifies, a run that explicitly names a comparison baseline, where refusing is
+  defensible.</li>
+</ul>
+<hr />
+<h2 id="part-4-ranked-plan-risks-and-the-full-frame-question">Part 4 — Ranked plan, risks, and the full-frame question<a class="headerlink" href="#part-4-ranked-plan-risks-and-the-full-frame-question" title="Permanent link">&para;</a></h2>
+<h3 id="41-build-order">4.1 Build order<a class="headerlink" href="#41-build-order" title="Permanent link">&para;</a></h3>
+<p><strong>Step 0 — EVIDENCE PRESERVATION, ahead of everything else (Part 6).</strong> Per-epoch validation
+series recorded unconditionally, and a retention <em>budget</em> replacing <code>KEEP_EPOCH_CHECKPOINTS = 3</code>.
+This is promoted above the drift guard for one reason, and it is not that it is more important:
+<strong>it is the only item whose cost of delay is irreversible.</strong> Every training run that happens
+before it lands destroys evidence that cannot be recovered — the 2026-09-06 run's <code>epoch_001</code>
+and <code>epoch_002</code> are already gone, unmeasured. The drift guard prevents a <em>future</em> mistake and
+loses nothing by waiting a week; a pruned checkpoint is gone. Step 0 also has no design
+dependency on D12 (§5.4) — recording is unconditional — so it can proceed while the metric
+study runs, and it is a precondition for that study ever being repeatable. It changes no
+behaviour, blocks nothing, and is measured in hours.</p>
+<ol>
+<li><strong>ONE shared, Qt-free geometry-drift guard + provenance logging — built once in core, not
+   four times.</strong> Revised in light of all four paths: the guard already exists, correct and
+   well-reasoned, at <code>detectkit/gui/dialogs/semantic_escalation_dialog.py:382-406</code> — but it is
+   inside a Qt dialog, so it cannot serve P1, P2, P3 or any headless run (§0 F-E). The step is
+   therefore <em>extract, then apply four times</em>, not <em>write four guards</em>:
+   (a) lift the compare-stamped-vs-effective logic into <code>core/</code> (near <code>slice_meta.py</code>, which
+   already owns the read side) as a pure function returning a typed verdict, no Qt;
+   (b) re-point the existing dialog at it, preserving today's warn-never-refuse behaviour
+   verbatim so P4's user-visible behaviour does not move;
+   (c) call it at SAM3 and YOLO dataset-build time — including against a named comparison
+   baseline's sidecar, which is the exact miss that produced the 2026-09-06 confound;
+   (d) call it on the serving side where <code>--sahi-profile</code> resolves.
+   Alongside it, log the effective geometry AND its <em>source</em> (explicit / profile / corpus-
+   derived / contract default) at the start of every build and every run — the 0.055 incident
+   was undetectable precisely because the source was never printed.
+   This is still the cheapest item, it is now also the one that most directly demonstrates the
+   unification, and it requires no contract change.</li>
+<li><strong>Fix the sidecar-drop gaps that would silently discard any stamping work</strong>
+   (<code>model_publish.py:874-879</code>, and the TrackerKit import copy noted as F4 in the merged
+   audit). Cheap; otherwise everything below can vanish at publish time.</li>
+<li><strong><code>utils/tiling_plan.py</code> contract + <code>resolve_scales</code>, with YOLO refactored onto it and
+   byte-identical dataset output as the gate.</strong> No behaviour change; pure consolidation.</li>
+<li><strong>SAM3 multi-scale via <code>resolve_scales</code></strong>, opt-in (D6), with per-scale <code>SplitCounts</code>
+   reporting and manifest-recorded realised counts.</li>
+<li><strong>Stamping: multi-scale-aware <code>training_geometry</code> for both, SAM3 onto the v2 surface (D2).</strong></li>
+<li><strong>Corpus-derived scale-set proposal replacing <code>[200,300,400]</code></strong> in all three copies.</li>
+<li><strong>Per-scale balancing modes</strong> — defer; needs measurement to choose, and <code>none</code> is a valid
+   shipping default.</li>
+<li><strong>Deferred entirely:</strong> any attempt to calibrate the <em>training</em> scale set by training
+   multiple arms. Not viable as a wizard (§3.4).</li>
+</ol>
+<p>1b. <strong>Delete the fifth tile-size formula</strong> (<code>semantic/tiling.py:123-139</code> -&gt; <code>tile_size_for_mode</code>).
+   Numerically inert today, and it is the precondition for P4 ever inheriting a shared change.</p>
+<p>Steps 5-8 renumber unchanged. Two additions to the tail:</p>
+<ol>
+<li><strong>Unified objective (D12)</strong> — blocked on the metric-reliability study, not on engineering.
+   When it resolves, it lands as a shared objective module (§3.8) with the chosen rule as the
+   default and the current rules retained as named alternatives.</li>
+<li><strong>Per-epoch detection-quality stopping (D13)</strong> — blocked on 9, and correctly deferred: an
+    inference pass per epoch bought to compute an unreliable signal is a net loss.</li>
+</ol>
+<h3 id="42-top-risks">4.2 Top risks<a class="headerlink" href="#42-top-risks" title="Permanent link">&para;</a></h3>
+<ul>
+<li><strong>R1 — a shared contract silently changes trained geometry.</strong> <code>tile_size_for_mode</code>
+  semantics are frozen against inference (<code>slice_geometry.py:122-124</code>); D1/D4/D5 each shift a
+  default that feeds it. A "refactor" that moves a default by one clamp reproduces exactly the
+  0.055 incident at a larger blast radius. Mitigation: every consolidation step gated on
+  byte-identical built datasets under the old parameters, and defaults preserved per-side
+  until explicitly changed by the user.</li>
+<li><strong>R2 — the multi-scale seam/fragment rate is not scale-invariant</strong> (§3.3). More scales at
+  the fine end means a much larger fraction of downgraded (SAM3) or dropped (YOLO) instances,
+  which moves precision — the exact metric the programme optimises — with no signal in the
+  loss. Mitigation: per-scale counters, surfaced before training starts.</li>
+<li><strong>R3 — stamping ambiguity leaks into serving.</strong> If a multi-scale model stamps a single
+  collapsed fraction into a field consumers read as "the trained geometry", every downstream
+  guard and prefill will confidently assert a geometry the model was never trained at. The
+  median-collapse must be a <em>named prefill</em>, never the provenance. Compounded by R-adjacent:
+  the SAM3 sidecar guard refuses to serve on a malformed sidecar, so a botched migration is a
+  hard outage, not a degradation.</li>
+<li><strong>R3b — anisotropic edge-tile stretch scales with the number of scales.</strong>
+  <code>datapoints.py:165-174</code> stretches every tile to 1008x1008 without preserving aspect, and
+  partial edge tiles are not square. Adding scales multiplies the edge-tile population, so a
+  multi-scale SAM3 dataset contains proportionally more distorted supervision than a
+  single-scale one — with no counter reporting it today. Mitigation: count and report
+  non-square tiles per scale alongside the fragment counters.</li>
+<li><strong>R5 — unifying the calibration harnesses moves recommended operating points.</strong> D7/D8/D9 each
+  change what gets recommended for projects already calibrated. A user who re-opens a saved
+  calibration after the change may see a different recommendation over identical evidence.
+  Mitigation: keep per-path defaults on adoption, version the recommendation rule into the
+  stored profile, and display which rule produced a stored point.</li>
+<li><strong>R6 — resolving the objective (D12) invalidates stored calibration profiles' provenance.</strong>
+  Every <code>.slice_meta.json</code> profile in existence was chosen under a rule that may not be the
+  chosen one. They remain valid <em>settings</em> but their "measured best" claim becomes rule-relative.
+  Mitigation: version the recommendation rule into the profile record (already recommended in
+  §5.5) BEFORE D12 resolves, so old profiles are identifiable rather than silently re-interpreted.</li>
+<li>(R4, lesser) Three duplicated copies of <code>target_sizes</code> defaults plus the literal <code>640.0</code>
+  denominator at <code>training.py:252</code> mean a "single" change is really four.</li>
+</ul>
+<h3 id="43-will-full-frames-actually-help">4.3 Will full frames actually help?<a class="headerlink" href="#43-will-full-frames-actually-help" title="Permanent link">&para;</a></h3>
+<p><strong>Unknown, and this design refuses to assert it.</strong> The arithmetic is real: at
+<code>_SAM3_IMGSZ = 1008</code>, a 4512-px frame presents a 97-px animal at ~21 px, and the eval spec's
+own 2x2 shows a 1.82x scale shift dominating every model difference measured. That argues a
+full-frame arm is <em>at best</em> a weak-supervision signal and <em>at worst</em> teaches the model to
+respond to blobs it can never resolve at serving time. But it is one corpus, one animal size,
+one frame size — the user's own standing principle disqualifies generalising from it. Note
+also that YOLO already ships <code>full_frame_mix = True</code> <strong>[V]</strong>, so on that side the question is
+whether to keep an existing default, not whether to add one; and the semantic inference grid
+already carries a full-frame arm precisely because "on a rig where animals are already large
+at native resolution ... tiling HURTS" (<code>tiling.py:35-38</code>) <strong>[V]</strong>.</p>
+<p><strong>What would need measuring to know.</strong> A controlled ablation, per project, holding
+everything else fixed: same corpus, same seed, same step budget, arms = {tiled scale set} vs
+{tiled scale set + full frames}, evaluated on the <strong>same held-out corpus rendered at each
+serving geometry</strong> (the 2x2 discipline the eval spec established), with the pre-registered
+paired extras/frame statistic plus recall. The decisive covariate is
+<code>apparent_px = reference_body_px * model_imgsz / frame_long_edge</code>; the honest hypothesis is
+that full frames help only when that quantity stays above some resolvability floor, and
+<strong>that floor is the thing to measure, not to guess</strong>. Until measured, full-frame mixing
+should be an explicit, per-project, calibration-informed switch that the manifest records —
+never an unstated default on either side.</p>
+<hr />
+<h2 id="part-5-one-objective-used-uniformly-requirement">Part 5 — ONE OBJECTIVE, USED UNIFORMLY (requirement)<a class="headerlink" href="#part-5-one-objective-used-uniformly-requirement" title="Permanent link">&para;</a></h2>
+<h3 id="51-the-requirement-and-why-this-divergence-is-the-worst-one">5.1 The requirement, and why this divergence is the worst one<a class="headerlink" href="#51-the-requirement-and-why-this-divergence-is-the-worst-one" title="Permanent link">&para;</a></h3>
+<p><strong>Requirement A: one objective function serves all three consumers — calibration
+recommendation, checkpoint selection, and model comparison (within a project, across projects,
+and across species).</strong></p>
+<p>Today there are three, and they are not merely different, they are <em>contradictory</em>:</p>
+<table>
+<thead>
+<tr>
+<th>Consumer</th>
+<th>Objective today</th>
+<th>Where</th>
+</tr>
+</thead>
+<tbody>
+<tr>
+<td>Direct (YOLO) calibration</td>
+<td><strong>maximise F1</strong>, then fastest within <code>F1_TOLERANCE = 0.01</code> on the (misses, extras, seconds) Pareto frontier</td>
+<td><code>direct_calibration.py:186-191, 247-283</code> <strong>[V]</strong></td>
+</tr>
+<tr>
+<td>Semantic (SAM3) calibration</td>
+<td><strong>recall-first</strong>: among points clearing <code>MIN_RECALL = 0.90</code>, fewest <code>tiles_per_frame</code>; <strong>F1 explicitly rejected with a measurement</strong> — "The F1-optimal threshold missed 4.7 animals/frame where a recall-first one missed 1.0"</td>
+<td><code>semantic/calibration.py:9-13, 606-656</code> <strong>[V]</strong></td>
+</tr>
+<tr>
+<td>SAM3 checkpoint selection</td>
+<td><strong>none — always the last epoch</strong>; validation loss is computed once, after <code>adapters.pt</code> is written, and is documented "for reporting ONLY. Never influences checkpoint selection"</td>
+<td><code>sam3_lora/cli.py:762-775, 778-796</code> <strong>[V]</strong></td>
+</tr>
+<tr>
+<td>Model comparison (the eval harness)</td>
+<td>paired extras/frame at a target recall, plus AP, reported side by side</td>
+<td><code>tools/sam3_parity/compare_models.py</code> (per the 2026-09-06 eval spec §11)</td>
+</tr>
+</tbody>
+</table>
+<p><strong>Why this is worse than any tiling divergence.</strong> Every divergence in Part 2 is a difference in
+<em>what runs</em>; those can be reconciled by sharing code, and a shared contract makes them go away.
+A divergence in the objective is a difference in <strong>what "better" means</strong>, and sharing code
+cannot reconcile it — two harnesses that disagree about the goal will keep giving opposite
+advice over identical evidence, correctly, forever. Concretely, today: P3 would recommend an
+operating point that P4's rule rejects as under-recalling, and P4 would recommend one P3's rule
+rejects as sub-optimal F1; both would be "right". And because their <em>matchers</em> also differ
+(§2.6), the recall each reports is not even the same quantity — <strong>no number produced by one
+harness is comparable to a number produced by the other</strong>, which silently invalidates every
+cross-path comparison a user might reasonably make.</p>
+<p>The same logic extends to checkpoint selection and to cross-species comparison. If the metric
+that picks a checkpoint is not the metric that picks an operating point, a run can be tuned to
+win on one and lose on the other. If the metric is not comparable across corpora, "model A is
+better than model B" is not a statement that survives changing the evaluation set — which is
+exactly the trap the 2026-09-06 evaluation fell into.</p>
+<h3 id="52-the-two-criteria-a-unified-objective-must-satisfy">5.2 The two criteria a unified objective must satisfy<a class="headerlink" href="#52-the-two-criteria-a-unified-objective-must-satisfy" title="Permanent link">&para;</a></h3>
+<ol>
+<li><strong>Reproducible separation.</strong> It must distinguish genuinely different models/checkpoints by
+   more than run-to-run noise — i.e. the gap between arms must exceed a bootstrapped confidence
+   interval on the metric itself. A metric that cannot separate is not an objective, it is a
+   number.</li>
+<li><strong>Comparability across corpora.</strong> The same model evaluated on two renderings of the same
+   underlying frames must produce comparable values, otherwise the metric measures the corpus
+   as much as the model.</li>
+</ol>
+<p><strong>Per-tile AP demonstrably fails criterion 2.</strong> The 2026-09-06 eval measured both models at
+<strong>~0.96 on the 1766-px tile corpus and 0.61-0.69 on the 971-px corpus</strong> — the same models, the
+same underlying 16 frames, differing only in how they were cut up. The eval spec states the
+mechanism plainly: the larger-tile corpus is an easier scoring regime (fewer, larger tiles; 147
+vs 576) and "the 0.96 figures must never be compared against the 0.61-0.69 ones". Any tile-level
+metric inherits this, because tiling is a free parameter of the <em>evaluation</em>, not a property of
+the model. <strong>This is the single strongest constraint the unified objective must satisfy, and it
+argues that whatever is chosen must be computed on MERGED FULL FRAMES, not on tiles.</strong></p>
+<h3 id="53-candidates-stated-without-a-winner">5.3 Candidates, stated without a winner<a class="headerlink" href="#53-candidates-stated-without-a-winner" title="Permanent link">&para;</a></h3>
+<table>
+<thead>
+<tr>
+<th>Candidate</th>
+<th>Separation</th>
+<th>Cross-corpus comparability</th>
+<th>Notes</th>
+</tr>
+</thead>
+<tbody>
+<tr>
+<td>AP / area under PR (per tile)</td>
+<td>good in practice</td>
+<td><strong>FAILS</strong> (§5.2)</td>
+<td>disqualified as the <em>unified</em> objective on comparability alone; may survive as a within-corpus diagnostic</td>
+</tr>
+<tr>
+<td>AP on merged full frames</td>
+<td>unmeasured</td>
+<td>plausible — removes the tiling free parameter</td>
+<td>the natural repair of the above; cost is a merge pass per evaluation</td>
+</tr>
+<tr>
+<td>Extras-per-frame at a target recall, on merged full frames</td>
+<td>this is the pre-registered statistic the eval already uses, with paired CIs</td>
+<td>plausible, and it is per-frame by construction</td>
+<td>matches the semantic path's recall-first philosophy; needs a target recall, which is a <strong>per-project</strong> choice, not a constant</td>
+</tr>
+<tr>
+<td>F1 at the best threshold</td>
+<td>good</td>
+<td>plausible</td>
+<td>but <code>semantic/calibration.py:9-13</code> has a measurement against it as an <em>operating-point</em> rule; using it for comparison while rejecting it for selection would be its own incoherence</td>
+</tr>
+<tr>
+<td>Recall at a fixed extras budget</td>
+<td>the dual of the above</td>
+<td>plausible</td>
+<td>arguably the most operator-legible framing ("how many animals do I find, for a fixed amount of clicking")</td>
+</tr>
+</tbody>
+</table>
+<p><strong>No number in this table is proposed as a default, and no target recall or extras budget is
+proposed at all</strong> — both are per-project quantities that depend on animal density, label
+quality and how much proofreading the operator will tolerate. What the unified objective fixes
+is the <em>shape</em> of the question, not its parameters.</p>
+<h3 id="54-the-decision-is-open-and-keyed-to-a-measurement-in-flight">5.4 The decision is OPEN, and keyed to a measurement in flight<a class="headerlink" href="#54-the-decision-is-open-and-keyed-to-a-measurement-in-flight" title="Permanent link">&para;</a></h3>
+<p><strong>D12 — which objective.</strong> Deliberately unresolved here. A metric-reliability study is running
+that bootstraps the AP confidence interval and ranks the candidates by stability; the choice
+should be made on its output, not on this document's reasoning. <em>(Note: no file exists at
+<code>.superpowers/sdd/sam3-metric-reliability.md</code> in this tree as of <code>097408af</code> — the study is
+running outside the repo or has not yet landed. Whoever resolves D12 should attach its result
+here.)</em></p>
+<p><strong>The live possibility that must not be designed away: the whole checkpoint ladder may be
+within noise.</strong> The 2026-09-06 ladder spread was AP 0.5985-0.6379 across four arms, and the
+eval spec already flags that the ordering is <em>non-monotonic</em> in training duration and is "at
+least as consistent with substantial epoch-to-epoch variance in the adapter" as with any real
+effect. If the bootstrap shows the CI on AP is wider than that spread, then:</p>
+<ul>
+<li><strong>Checkpoint selection is unmotivated</strong> — there is nothing to select on, and last-epoch is as
+  defensible as anything else. The correct response is to say so and stop, not to invent a rule.</li>
+<li><strong>The objective question is still answered, for calibration.</strong> Calibration compares operating
+  points of ONE model on ONE corpus, which is a paired within-model comparison with far more
+  favourable noise properties than cross-model comparison. A metric too noisy to rank
+  checkpoints can still be perfectly adequate to rank tile fractions.</li>
+</ul>
+<p>That asymmetry should be stated in whatever ships: <strong>one objective FUNCTION, but the evidence
+needed to act on it differs by consumer</strong>, and the honest position may be "unified for
+calibration, and explicitly declined for checkpoint selection until a study says otherwise".</p>
+<h3 id="55-what-this-means-for-d8">5.5 What this means for D8<a class="headerlink" href="#55-what-this-means-for-d8" title="Permanent link">&para;</a></h3>
+<p>D8 (§3.10) asked whether to keep two recommendation rules or unify. <strong>Requirement A resolves the
+direction: unify.</strong> What it does not resolve is <em>onto what</em> — that is D12. The interim posture
+stands (expose both as named rules, default each path to its current rule so adoption changes
+nothing, record the rule into the stored profile), but it is now explicitly a <strong>bridge</strong>, not a
+destination.</p>
+<hr />
+<h2 id="part-6-record-per-epoch-validation-unconditionally-requirement">Part 6 — RECORD PER-EPOCH VALIDATION, UNCONDITIONALLY (requirement)<a class="headerlink" href="#part-6-record-per-epoch-validation-unconditionally-requirement" title="Permanent link">&para;</a></h2>
+<h3 id="61-the-requirement">6.1 The requirement<a class="headerlink" href="#61-the-requirement" title="Permanent link">&para;</a></h3>
+<p><strong>Requirement B: every training run records a per-epoch validation series, and retains every
+epoch checkpoint, INDEPENDENT of whether anything ever selects on them.</strong></p>
+<p>This is an evidence requirement, not a selection mechanism, and it must not be argued for or
+against on selection grounds.</p>
+<h3 id="62-what-exists-today">6.2 What exists today<a class="headerlink" href="#62-what-exists-today" title="Permanent link">&para;</a></h3>
+<ul>
+<li><code>_evaluate_and_write</code> runs <strong>once</strong>, after the final epoch, strictly after <code>adapters.pt</code> is
+  written, and its docstring states it is "for reporting ONLY. Never influences checkpoint
+  selection" (<code>sam3_lora/cli.py:762-775, 778-796</code>) <strong>[V]</strong>. <strong>The series does not exist.</strong></li>
+<li><code>KEEP_EPOCH_CHECKPOINTS = 3</code> (<code>cli.py:267</code>); <code>prune_epoch_checkpoints</code> deletes all but the
+  newest three after every epoch write (<code>cli.py:270-287, 289-298</code>) <strong>[V]</strong>.</li>
+</ul>
+<h3 id="63-why-the-absence-is-itself-the-bug">6.3 Why the absence is itself the bug<a class="headerlink" href="#63-why-the-absence-is-itself-the-bug" title="Permanent link">&para;</a></h3>
+<p>On the 2026-09-06 run, training loss stopped improving after epoch 2 and ten epochs bought
+nothing measurable over three — <strong>and nothing in the artifacts showed it while the run was
+happening or after it finished.</strong> A single terminal validation number cannot distinguish "the
+model converged" from "the model stalled at epoch 2 and burned eight epochs of GPU time". The
+series is the only artifact that can, and it is the cheapest possible diagnostic: it is a
+number per epoch.</p>
+<p>Worse, the retention cap <strong>has already destroyed evidence</strong>: <code>epoch_001</code> and <code>epoch_002</code> were
+pruned before they could be evaluated, on the very run whose most informative result turned out
+to be that <code>epoch_003</code> was the best of the four surviving arms. The best checkpoint of the run
+may have been deleted, unmeasured, by a constant.</p>
+<h3 id="64-retention-and-the-real-constraint-stated-fairly">6.4 Retention — and the real constraint, stated fairly<a class="headerlink" href="#64-retention-and-the-real-constraint-stated-fairly" title="Permanent link">&para;</a></h3>
+<p>Adapters are ~45.8 MB, so retaining all ten epochs of that run costs ~460 MB — negligible
+against a 3.4 GB published artifact. <strong>But the existing docstring's rationale is not silly and
+must not be dismissed:</strong> it says "epoch counts are user-supplied and disk exhaustion mid-run
+would destroy the very artifact this feature exists to preserve" (<code>cli.py:273-276</code>) <strong>[V]</strong>.
+That is a real failure mode for a 200-epoch run on a full disk.</p>
+<p>So the fix is <strong>not "delete the cap" but "replace a count with a budget"</strong>: retain every epoch
+subject to a disk-space budget, with the budget expressed against measured free space and the
+measured adapter size (both knowable at run start, neither a corpus-derived constant), and log
+loudly whenever the budget forces a prune. A count of 3 is a constant that silently destroys
+evidence; a budget that refuses to fill the disk and <em>says so</em> preserves both properties. If
+the budget cannot hold every epoch, prune by a stated policy (e.g. thin the middle, keep first
+and last) rather than a sliding window that always destroys the early epochs — which is
+precisely the failure that occurred.</p>
+<h3 id="65-early-stopping-framed-correctly">6.5 Early stopping — framed correctly<a class="headerlink" href="#65-early-stopping-framed-correctly" title="Permanent link">&para;</a></h3>
+<p><strong>Early stopping is industry-standard practice and this document does not argue against it.</strong>
+The 2026-09-06 finding that validation loss anti-correlates with held-out AP is an argument
+against <strong>the signal</strong>, not <strong>the technique</strong>.</p>
+<p>The standard-practice answer is already visible in a dependency this repo ships: <strong>Ultralytics
+YOLO stops on <code>fitness</code>, a weighted mAP — a detection-quality metric — not on validation loss.</strong>
+That is the correct shape for SAM3 too: a per-epoch <em>detection-quality</em> evaluation, not a
+per-epoch loss.</p>
+<p><strong>Its cost, stated honestly:</strong> an inference + merge + match pass per epoch. On the 2026-09-06
+validation geometry that is 147 tiles per epoch. Whether that cost is worth paying depends
+entirely on D12 — if the metric cannot separate checkpoints reliably (§5.4), then paying an
+inference pass per epoch to compute an unreliable stopping signal is worse than not paying it.
+<strong>So: record the series unconditionally (Requirement B, cheap, no decision needed); decide
+whether to STOP on it only after the reliability study (D13).</strong></p>
+<p><strong>The historical irony, preserved deliberately.</strong> The original rationale for last-epoch
+selection claimed a val-loss/AP anti-correlation and was dismissed <em>because its fold had
+train == valid</em>. On a genuinely disjoint split, the anti-correlation was measured again. The
+dismissal was methodologically correct at the time and the conclusion still came back. That is
+worth keeping in the record, both as evidence and as a caution: a correct procedural objection
+to a finding is not a refutation of the finding.</p>
+<h3 id="66-decisions">6.6 Decisions<a class="headerlink" href="#66-decisions" title="Permanent link">&para;</a></h3>
+<ul>
+<li><strong>D13 — stop on a per-epoch detection metric?</strong> Keyed to D12. Not before.</li>
+<li><strong>D14 — retention budget policy</strong> (§6.4): budget basis, and the thinning policy when the
+  budget binds. Affects every trainer, not just SAM3 — <strong>P1/YOLO retention should be checked
+  for the same class of constant</strong> before this is called done.</li>
+<li><strong>D15 — does Requirement B apply to YOLO training too?</strong> It should, for the same reasons.
+  Ultralytics writes its own per-epoch <code>results.csv</code>, so the gap may already be closed on that
+  side; <strong>unverified in this audit</strong> and worth confirming rather than assuming.</li>
+</ul>
+
+
+
+
+
+
+
+
+
+
+
+
+                
+              </article>
+            </div>
+          
+          
+<script>var target=document.getElementById(location.hash.slice(1));target&&target.name&&(target.checked=target.name.startsWith("__tabbed_"))</script>
+        </div>
+        
+          <button type="button" class="md-top md-icon" data-md-component="top" hidden>
+  
+  <svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 24 24"><path d="M13 20h-2V8l-5.5 5.5-1.42-1.42L12 4.16l7.92 7.92-1.42 1.42L13 8z"/></svg>
+  Back to top
+</button>
+        
+      </main>
+      
+        <footer class="md-footer">
+  
+  <div class="md-footer-meta md-typeset">
+    <div class="md-footer-meta__inner md-grid">
+      <div class="md-copyright">
+  
+  
+    Made with
+    <a href="https://squidfunk.github.io/mkdocs-material/" target="_blank" rel="noopener">
+      Material for MkDocs
+    </a>
+  
+</div>
+      
+    </div>
+  </div>
+</footer>
+      
+    </div>
+    <div class="md-dialog" data-md-component="dialog">
+      <div class="md-dialog__inner md-typeset"></div>
+    </div>
+    
+    
+    <script id="__config" type="application/json">{"base": "../../..", "features": ["navigation.tabs", "navigation.sections", "navigation.expand", "navigation.top", "content.code.copy", "content.action.edit", "search.suggest", "search.highlight"], "search": "../../../assets/javascripts/workers/search.6ce7567c.min.js", "translations": {"clipboard.copied": "Copied to clipboard", "clipboard.copy": "Copy to clipboard", "search.result.more.one": "1 more on this page", "search.result.more.other": "# more on this page", "search.result.none": "No matching documents", "search.result.one": "1 matching document", "search.result.other": "# matching documents", "search.result.placeholder": "Type to start searching", "search.result.term.missing": "Missing", "select.version": "Select version"}, "version": {"default": "latest", "provider": "mike"}}</script>
+    
+    
+      <script src="../../../assets/javascripts/bundle.83f73b43.min.js"></script>
+      
+    
+  </body>
+</html>

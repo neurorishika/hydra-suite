@@ -1790,9 +1790,9 @@
     <ul class="md-nav__list" data-md-component="toc" data-md-scrollfix>
       
         <li class="md-nav__item">
-  <a href="#the-evidence-this-plan-answers" class="md-nav__link">
+  <a href="#the-evidence-this-plan-answers-superseded-not-a-live-finding" class="md-nav__link">
     <span class="md-ellipsis">
-      The evidence this plan answers
+      The evidence this plan answers — SUPERSEDED, NOT A LIVE FINDING
     </span>
   </a>
   
@@ -1944,8 +1944,29 @@
 (recommended) or superpowers:executing-plans to implement this plan task-by-task.
 Steps use checkbox (<code>- [ ]</code>) syntax for tracking.</p>
 </blockquote>
-<p><strong>Status:</strong> revised 2026-09-05 after an adversarial review found four blocking
-defects (<code>docs/superpowers/specs/2026-09-05-parity-plan-review.md</code>). The
+<p><strong>Status: PREMISE REFUTED — do not resume this plan on its original motivation.</strong>
+The measurement phase (Task 0 Step 6, run 2026-09-05 on <code>courtship</code>/<code>hydra-cuda</code>,
+committed as <code>tools/sam3_parity/baseline.json</code>) returned a <strong>null result</strong> on a
+genuine 16-frame held-out split: paired per-frame difference <strong>+0.4375
+extras/frame, 95 % CI [−0.4375, +1.4375], sign p = 0.34</strong> — the pre-registered
+criterion (CI excludes zero) is <strong>not met</strong>. <strong>Power caveat, stated
+explicitly:</strong> the CI's upper bound (+1.4375) OVERLAPS the original +1.2–2.0
+band, so the null FAILS TO DEMONSTRATE the effect — it does not EXCLUDE its
+lower half. "Refuted" rests on four independent legs, not on the null alone:
+the superseded evidence, the AP inversion, the scoring-harness artefact
+(Task 7), and the ~19× data confound. Excluding the training-contaminated
+frame <code>f008975</code> it is +0.0667, CI [−0.600, +0.667]; also null. On AP <strong>ours 0.530
+beats the spike's 0.472.</strong> The comparison is in any case confounded by <strong>~19×
+training data</strong> (the spike's <code>fold_all</code> is 3 frames / 108 tiles / 177 instances
+with train and valid byte-identical — no held-out set at all; ours is 62 frames /
+3 286 instances). Task 7 further found the shared recall plateau this plan was
+built to explain is a <strong>defect in the scoring harness</strong>
+(<code>calibration.match_one_to_one</code>), not in either model. <strong>RUN A (Task 1 Step 7)
+and RUN B (Task 2 Step 7) were never executed</strong>, and the 312-module surface Task 2
+created has <strong>zero training evidence</strong>. Full record:
+<code>docs/superpowers/specs/2026-09-05-sam3-spike-parity-measurement-findings.md</code>.</p>
+<p><em>Previous status:</em> revised 2026-09-05 after an adversarial review found four
+blocking defects (<code>docs/superpowers/specs/2026-09-05-parity-plan-review.md</code>). The
 revision corrects the spike's actual hyperparameters, replaces an unachievable
 acceptance criterion, fixes an interface that would have wrapped zero modules,
 and rebuilds the measurement methodology. Task 4 is demoted; two tasks are
@@ -1963,7 +1984,20 @@ named, justified, and individually testable.</p>
 (this plan's review — <strong>read it; every correction below traces to a finding</strong>),
 <code>docs/superpowers/specs/2026-09-04-sam3-spike-vs-build-consolidation.md</code>
 (earlier design comparison, partially superseded).</p>
-<h2 id="the-evidence-this-plan-answers">The evidence this plan answers<a class="headerlink" href="#the-evidence-this-plan-answers" title="Permanent link">&para;</a></h2>
+<h2 id="the-evidence-this-plan-answers-superseded-not-a-live-finding">The evidence this plan answers — <strong>SUPERSEDED, NOT A LIVE FINDING</strong><a class="headerlink" href="#the-evidence-this-plan-answers-superseded-not-a-live-finding" title="Permanent link">&para;</a></h2>
+<blockquote>
+<p><strong>⚠️ The table below is retained for the record only. It has been refuted.</strong>
+It was measured (a) on 12 frames drawn from <em>our own training source</em>, (b) at
+a sample size where the delta is a 2–3σ effect at best, and (c) <strong>under
+<code>calibration.match_one_to_one</code>, now known to veto 15.9 % (128/805) of ground
+truth</strong> by testing a vertex-mean "centroid" that falls outside the outline —
+which both depresses recall and reclassifies correctly-matched ants as
+"extras" (~65 % of the "extras" here are that bookkeeping artefact).
+The pre-registered replacement measurement on a genuine held-out split is
+<strong>null</strong> (see the Status header), and on AP ours is <em>better</em>. Superseded by
+<code>docs/superpowers/specs/2026-09-05-sam3-spike-parity-measurement-findings.md</code>.
+<strong>Do not cite "+1.2–2.0 extras/frame" as a live finding.</strong></p>
+</blockquote>
 <p>Both checkpoints, same 12 labelled frames, 275 instances, tile fraction 0.1:</p>
 <table>
 <thead>
@@ -2010,7 +2044,8 @@ named, justified, and individually testable.</p>
 high-confidence collapse — measured on frames from <em>our</em> training source, so
 the comparison already favours us. <strong>This delta is only a 2–3σ effect at the
 available sample size; see Task 0, which must be fixed before it can judge
-anything.</strong></p>
+anything.</strong> <em>(Task 0 was fixed and run; it judged the delta </em><em>null</em><em>. The
+"+1.2–2.0 extras/frame" above is superseded — see the warning box.)</em></p>
 <h2 id="what-the-spike-actually-ran-corrected">What the spike actually ran (corrected)<a class="headerlink" href="#what-the-spike-actually-ran-corrected" title="Permanent link">&para;</a></h2>
 <p>The earlier draft cited <code>full_lora_config.yaml</code>, a <strong>template</strong>. The run that
 produced the shipped checkpoint used
@@ -2127,9 +2162,12 @@ and neither <code>prompt_proj</code> nor <code>hs_proj</code> is there. The inte
   <code>build_sam3_image_model</code>; update <code>sizing.py</code> from the measurement.</li>
 <li class="task-list-item"><label class="task-list-control"><input type="checkbox" disabled/><span class="task-list-indicator"></span></label> <strong>Step 5:</strong> Assert the merge round-trip resolves these paths.</li>
 <li class="task-list-item"><label class="task-list-control"><input type="checkbox" disabled/><span class="task-list-indicator"></span></label> <strong>Step 6:</strong> <code>-k "sam3"</code> green. Commit.</li>
-<li class="task-list-item"><label class="task-list-control"><input type="checkbox" disabled/><span class="task-list-indicator"></span></label> <strong>Step 7: RUN A.</strong> Retrain with only this flag changed; re-run Task 0's
-  paired comparison. Record the result either way — a null convicts a
-  different cause and is equally valuable.</li>
+<li class="task-list-item"><label class="task-list-control"><input type="checkbox" disabled/><span class="task-list-indicator"></span></label> <strong>Step 7: RUN A. NOT RUN — SUPERSEDED.</strong> Retrain with only this flag
+  changed; re-run Task 0's paired comparison. Record the result either way — a
+  null convicts a different cause and is equally valuable.
+  <em>Never executed. The comparison it would feed is refuted (null) and its
+  scorer is defective; re-running it as specified would measure the harness,
+  not the model. See the Status header and the measurement-findings spec.</em></li>
 </ul>
 <hr />
 <h2 id="task-2-reach-the-clone-mha-sites-and-the-geometry-linears">Task 2: Reach the clone-MHA sites and the geometry Linears<a class="headerlink" href="#task-2-reach-the-clone-mha-sites-and-the-geometry-linears" title="Permanent link">&para;</a></h2>
@@ -2201,7 +2239,12 @@ functional. Do not spend effort making them "work".</p>
   produces a key-identical stock state dict.</li>
 <li class="task-list-item"><label class="task-list-control"><input type="checkbox" disabled/><span class="task-list-indicator"></span></label> <strong>Step 6:</strong> Assert <strong>308</strong> after the MHA pass and <strong>314</strong> after the
   geometry Linears, under matching flags (text encoder <strong>OFF</strong>, as the spike).</li>
-<li class="task-list-item"><label class="task-list-control"><input type="checkbox" disabled/><span class="task-list-indicator"></span></label> <strong>Step 7: RUN B.</strong> Retrain, re-compare against RUN A.</li>
+<li class="task-list-item"><label class="task-list-control"><input type="checkbox" disabled/><span class="task-list-indicator"></span></label> <strong>Step 7: RUN B. NOT RUN — SUPERSEDED.</strong> Retrain, re-compare against
+  RUN A. <em>Never executed, so the 312-module surface this task built has zero
+  training evidence. Before any future attempt, fix the scorer (see the
+  measurement-findings spec) — the published manifest now records
+  <code>adapted_modules</code> / <code>adapter_trainable_params</code>, so such a run would at least
+  be attributable to a surface.</em></li>
 </ul>
 <p><strong>Ruling if forward parity cannot be achieved at some call site:</strong> skip that
 site, record it with the failing shapes, proceed. Never ship an attention
@@ -2295,9 +2338,21 @@ and interactions (surface × precision especially) are plausible.</p>
 </ul>
 <hr />
 <h2 id="task-7-new-interrogate-the-shared-recall-plateau">Task 7 (NEW): Interrogate the shared recall plateau<a class="headerlink" href="#task-7-new-interrogate-the-shared-recall-plateau" title="Permanent link">&para;</a></h2>
-<p><strong>m3.</strong> Both models sit at ~0.72 recall and ~5–8 extras/frame. That is a
-<strong>shared ceiling no adapter-surface change will move</strong>, and it may dominate
-everything this plan does.</p>
+<blockquote>
+<p><strong>RESOLVED 2026-09-05 — this task is DONE and its premise below is
+SUPERSEDED. Do not act on the ~0.72 figure.</strong> The ceiling was neither a
+labelling nor a tiling artefact nor a model limit: it was a <strong>scoring-harness
+defect</strong>. <code>calibration.match_one_to_one</code> gated matches on a vertex-mean
+"centroid" that falls outside 15.9 % (128/805) of real ant outlines. Fixed on
+<code>fix/calibration-centroid-matcher</code> (merged <code>b9e92bc7</code>). On IDENTICAL
+predictions the real operating point is <strong>recall 0.9876, extras/tile 0.0347</strong>
+— not 0.72 / 5–8. Both checkpoints moved together (+9.4 and +8.9 points),
+which is what a shared harness defect predicts and a model difference does
+not.</p>
+</blockquote>
+<p><strong>m3 (superseded — retained for provenance).</strong> Both models sit at ~0.72 recall
+and ~5–8 extras/frame. That is a <strong>shared ceiling no adapter-surface change
+will move</strong>, and it may dominate everything this plan does.</p>
 <ul class="task-list">
 <li class="task-list-item"><label class="task-list-control"><input type="checkbox" disabled/><span class="task-list-indicator"></span></label> <strong>Step 1:</strong> Take the ~6.3 missed instances/frame at the best operating
   point and characterise them: are they small, occluded, clustered,

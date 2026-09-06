@@ -1045,6 +1045,48 @@
 </li>
       
         <li class="md-nav__item">
+  <a href="#applying-a-profile-from-trackerkit-track-the-cli" class="md-nav__link">
+    <span class="md-ellipsis">
+      Applying a profile from trackerkit track (the CLI)
+    </span>
+  </a>
+  
+    <nav class="md-nav" aria-label="Applying a profile from trackerkit track (the CLI)">
+      <ul class="md-nav__list">
+        
+          <li class="md-nav__item">
+  <a href="#older-configs-change-too-even-when-they-name-no-profile" class="md-nav__link">
+    <span class="md-ellipsis">
+      Older configs change too, even when they name no profile
+    </span>
+  </a>
+  
+</li>
+        
+          <li class="md-nav__item">
+  <a href="#a-profile-never-overrides-your-saved-confidence-threshold" class="md-nav__link">
+    <span class="md-ellipsis">
+      A profile never overrides your saved confidence threshold
+    </span>
+  </a>
+  
+</li>
+        
+          <li class="md-nav__item">
+  <a href="#known-residual-other-advanced_config-keys-stay-machine-global" class="md-nav__link">
+    <span class="md-ellipsis">
+      Known residual: other advanced_config keys stay machine-global
+    </span>
+  </a>
+  
+</li>
+        
+      </ul>
+    </nav>
+  
+</li>
+      
+        <li class="md-nav__item">
   <a href="#timings-are-local-measurements" class="md-nav__link">
     <span class="md-ellipsis">
       Timings are local measurements
@@ -2010,6 +2052,48 @@
 </li>
       
         <li class="md-nav__item">
+  <a href="#applying-a-profile-from-trackerkit-track-the-cli" class="md-nav__link">
+    <span class="md-ellipsis">
+      Applying a profile from trackerkit track (the CLI)
+    </span>
+  </a>
+  
+    <nav class="md-nav" aria-label="Applying a profile from trackerkit track (the CLI)">
+      <ul class="md-nav__list">
+        
+          <li class="md-nav__item">
+  <a href="#older-configs-change-too-even-when-they-name-no-profile" class="md-nav__link">
+    <span class="md-ellipsis">
+      Older configs change too, even when they name no profile
+    </span>
+  </a>
+  
+</li>
+        
+          <li class="md-nav__item">
+  <a href="#a-profile-never-overrides-your-saved-confidence-threshold" class="md-nav__link">
+    <span class="md-ellipsis">
+      A profile never overrides your saved confidence threshold
+    </span>
+  </a>
+  
+</li>
+        
+          <li class="md-nav__item">
+  <a href="#known-residual-other-advanced_config-keys-stay-machine-global" class="md-nav__link">
+    <span class="md-ellipsis">
+      Known residual: other advanced_config keys stay machine-global
+    </span>
+  </a>
+  
+</li>
+        
+      </ul>
+    </nav>
+  
+</li>
+      
+        <li class="md-nav__item">
   <a href="#timings-are-local-measurements" class="md-nav__link">
     <span class="md-ellipsis">
       Timings are local measurements
@@ -2201,6 +2285,66 @@ tracks with whatever settings are actually in the panel, custom or not.</p>
 or you're opening a project saved from a different model version),
 TrackerKit falls back to the model's primary profile if one is set, and
 says so in the status line; otherwise it falls back to training geometry.</p>
+<h2 id="applying-a-profile-from-trackerkit-track-the-cli">Applying a profile from <code>trackerkit track</code> (the CLI)<a class="headerlink" href="#applying-a-profile-from-trackerkit-track-the-cli" title="Permanent link">&para;</a></h2>
+<p><code>trackerkit track --config &lt;video&gt;_config.json</code> now honours the calibration
+profile named in the saved config: if the config's <code>slice_profile_id</code> points
+at a profile the model's sidecar still carries, the CLI run uses that
+profile's tile size, overlap, object-tile fraction, and merge settings --
+the same values the GUI applied when the config was saved. Previously the
+CLI ignored <code>slice_profile_id</code> entirely and always ran with
+<code>advanced_config.json</code>'s machine-global defaults, so a config saved against
+a calibrated profile in the GUI could silently track with different tiling
+on the command line.</p>
+<p>You can also select a profile explicitly on the command line with
+<code>--sahi-profile &lt;name|id&gt;</code>, overriding whatever the saved config names. This
+flag has <strong>hard-error semantics</strong>: if the name or id you give it does not
+exist in the model's sidecar, the CLI run fails immediately with an error
+rather than falling back to anything. This is deliberately stricter than
+what happens when a config's own saved <code>slice_profile_id</code> can no longer be
+found -- that case falls back to the model's primary profile (or training
+geometry) and only logs a warning, because the config's stale id typically
+means "the model was recalibrated," not "the operator made a typo." An
+explicit <code>--sahi-profile</code> argument is user intent stated on this run, so a
+bad value should stop the run rather than substitute a different profile
+silently.</p>
+<h3 id="older-configs-change-too-even-when-they-name-no-profile">Older configs change too, even when they name no profile<a class="headerlink" href="#older-configs-change-too-even-when-they-name-no-profile" title="Permanent link">&para;</a></h3>
+<p>If your saved config predates calibration profiles, it carries no
+<code>slice_profile_id</code> -- but a CLI run of it can still tile differently than it
+used to. Whenever the config's direct-detection model has <strong>any</strong> sidecar
+attached (every sliced-training publish stamps one, calibration or not),
+<code>trackerkit track</code> now takes the tiling knobs from that sidecar: the model's
+primary profile if one is marked, otherwise the geometry the model was
+trained with. Tile size, overlap, object-tile fraction and trained body size
+therefore come from the model, and the four <code>slice_merge_*</code> knobs are reset
+to their defaults, instead of all of them being read from the local
+machine's <code>advanced_config.json</code>.</p>
+<p>This is intended, and it is the same thing the GUI has always done the moment
+you select that model -- the CLI was the odd one out. But it is a real change
+in what a pre-existing config detects, with no action on your part, so if you
+have headless runs whose output you compare across this upgrade, re-check
+them. To pin an exact operating point instead, open the config in TrackerKit,
+set the tiling you want, and re-save it: the saved settings are then carried
+with the config.</p>
+<h3 id="a-profile-never-overrides-your-saved-confidence-threshold">A profile never overrides your saved confidence threshold<a class="headerlink" href="#a-profile-never-overrides-your-saved-confidence-threshold" title="Permanent link">&para;</a></h3>
+<p>A calibration profile records the confidence threshold it was measured at,
+but applying a profile -- in the GUI or from <code>--sahi-profile</code> -- does
+<strong>not</strong> change <code>yolo_confidence_threshold</code> in a saved config. The config's
+own confidence threshold always wins. If the profile's measured confidence
+disagrees with the config's saved threshold, the CLI logs a warning naming
+both values so the mismatch is visible rather than silent, but it still
+tracks with the config's threshold. If you want to adopt a profile's
+measured confidence, re-select the profile in the GUI and re-save the
+config -- there is no CLI flag that copies the profile's confidence into
+the config for you.</p>
+<h3 id="known-residual-other-advanced_config-keys-stay-machine-global">Known residual: other <code>advanced_config</code> keys stay machine-global<a class="headerlink" href="#known-residual-other-advanced_config-keys-stay-machine-global" title="Permanent link">&para;</a></h3>
+<p>This fix carries only the SAHI/merge/confidence-adjacent knobs a profile
+actually measures (tile size, overlap, object-tile fraction, trained body
+size, and merge policy/metric/threshold/backend) from the named profile
+into a CLI run. Every other key in <code>advanced_config.json</code> -- for example
+<code>obb_seg_*</code> segmentation settings -- is still read from the local
+machine's <code>advanced_config.json</code> and is not part of the saved per-video
+config. Running the same config on a different machine can still pick up
+different values for those keys.</p>
 <h2 id="timings-are-local-measurements">Timings are local measurements<a class="headerlink" href="#timings-are-local-measurements" title="Permanent link">&para;</a></h2>
 <p>Every seconds-per-frame figure calibration reports -- in the candidate-cost
 estimate, the results table, and the recommendation text -- is a
