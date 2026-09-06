@@ -778,11 +778,17 @@ class PoseCacheHandle(_ChunkedHandleMixin, CacheHandle):
         if arrays[3].ndim != 1:
             raise ValueError("pose valid_mask must be one-dimensional")
         arrays = (arrays[0], *_sorted_by_det_index("pose det_indices", *arrays[1:]))
-        keypoint_shape = tuple(int(value) for value in arrays[2].shape[1:])
-        if self._keypoint_shape is None:
-            self._keypoint_shape = keypoint_shape
-        elif keypoint_shape != self._keypoint_shape:
-            raise ValueError("pose keypoint dimensions must remain constant")
+        # A frame with zero detections carries no keypoint geometry: producers
+        # hand back (0, 0, 3) rather than (0, K, 3). Such a frame must neither
+        # DEFINE the run's keypoint shape nor be checked against it -- doing so
+        # latches (0, 3) and makes every subsequent real frame raise. Only
+        # non-empty frames carry a meaningful shape.
+        if arrays[2].shape[0] > 0:
+            keypoint_shape = tuple(int(value) for value in arrays[2].shape[1:])
+            if self._keypoint_shape is None:
+                self._keypoint_shape = keypoint_shape
+            elif keypoint_shape != self._keypoint_shape:
+                raise ValueError("pose keypoint dimensions must remain constant")
         if not self._prepare_frame_write(frame_idx):
             return
         self._append_buffered(frame_idx, arrays)
@@ -792,8 +798,16 @@ class PoseCacheHandle(_ChunkedHandleMixin, CacheHandle):
             return
         frames = [row[0] for row in self._buffer]
         counts = [len(row[1]) for row in self._buffer]
+        # Same rule as write_frame: an empty frame's (0, 0, 3) is not a
+        # keypoint shape. Take the first NON-EMPTY row, else the shape this
+        # writer has already established, else the degenerate default.
         keypoint_shape = next(
-            (row[2].shape[1:] for row in self._buffer if row[2].ndim == 3), (0, 3)
+            (
+                row[2].shape[1:]
+                for row in self._buffer
+                if row[2].ndim == 3 and row[2].shape[0] > 0
+            ),
+            self._keypoint_shape or (0, 3),
         )
         payload = {
             "frame_indices": np.repeat(frames, counts).astype(np.int64),
