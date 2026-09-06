@@ -842,6 +842,44 @@ class DetectionPanel(QWidget):
             "Tile size for auto_object: the reference object spans this "
             "fraction of the tile."
         )
+        # These are execution controls, independent of tile geometry and of
+        # calibrated profiles.  The core admission helper may reduce the
+        # requested batch to fit this memory budget.
+        self.spin_slice_tile_batch = QSpinBox()
+        self.spin_slice_tile_batch.setRange(1, 128)
+        self.spin_slice_tile_batch.setValue(
+            int(advanced.get("slice_tile_batch_size", 16))
+        )
+        self.spin_slice_tile_batch.setToolTip(
+            "Maximum tiles submitted to one model call. The effective batch "
+            "can be lower when the tile memory budget requires it; larger "
+            "batches are not always faster."
+        )
+        self.chk_slice_tile_batch_autotune = QCheckBox("Auto")
+        self.chk_slice_tile_batch_autotune.setChecked(
+            bool(advanced.get("slice_tile_batch_autotune", False))
+        )
+        self.chk_slice_tile_batch_autotune.setToolTip(
+            "Tune the tile batch at runtime. When off, Tiles / call is an "
+            "explicit requested maximum. The tile memory budget always applies."
+        )
+        self.spin_slice_memory_budget = QSpinBox()
+        self.spin_slice_memory_budget.setRange(1, 256)
+        self.spin_slice_memory_budget.setSuffix(" MiB")
+        self.spin_slice_memory_budget.setValue(
+            int(advanced.get("slice_memory_budget_mib", 256))
+        )
+        self.spin_slice_memory_budget.setToolTip(
+            "Maximum memory reserved for the active tile chunk. Lower this "
+            "if tiled inference exhausts available device memory."
+        )
+        self.lbl_slice_tile_batch = _yolo_label("Tiles / call")
+        self.lbl_slice_memory_budget = _yolo_label("Tile memory")
+        self.lbl_slice_batch_admission = QLabel()
+        self.lbl_slice_batch_admission.setToolTip(
+            "The requested limit is admitted at runtime after tile geometry, "
+            "model input size, and memory use are known."
+        )
         self.lbl_slice_overlap = _yolo_label("Tile overlap")
         self.lbl_slice_tile_w = _yolo_label("Tile W (px)")
         self.lbl_slice_tile_h = _yolo_label("Tile H (px)")
@@ -859,6 +897,13 @@ class DetectionPanel(QWidget):
         _slice_params_lay.addWidget(self.spin_slice_tile_h)
         _slice_params_lay.addWidget(self.lbl_slice_object_fraction)
         _slice_params_lay.addWidget(self.spin_slice_object_fraction)
+        _slice_params_lay.addSpacing(10)
+        _slice_params_lay.addWidget(self.lbl_slice_tile_batch)
+        _slice_params_lay.addWidget(self.spin_slice_tile_batch)
+        _slice_params_lay.addWidget(self.chk_slice_tile_batch_autotune)
+        _slice_params_lay.addWidget(self.lbl_slice_memory_budget)
+        _slice_params_lay.addWidget(self.spin_slice_memory_budget)
+        _slice_params_lay.addWidget(self.lbl_slice_batch_admission)
         _slice_params_lay.addStretch(1)
         f_yolo.addWidget(self.row_slice_params, 9, 0, 1, 2)
 
@@ -876,6 +921,29 @@ class DetectionPanel(QWidget):
                 self._mark_slice_profile_custom()
 
             spin.valueChanged.connect(_sync_advanced)
+        self.spin_slice_tile_batch.valueChanged.connect(
+            lambda value: self._main_window.advanced_config.__setitem__(
+                "slice_tile_batch_size", int(value)
+            )
+        )
+        self.spin_slice_memory_budget.valueChanged.connect(
+            lambda value: self._main_window.advanced_config.__setitem__(
+                "slice_memory_budget_mib", int(value)
+            )
+        )
+        self.spin_slice_tile_batch.valueChanged.connect(
+            lambda _value: self._update_slice_batch_admission_label()
+        )
+        self.spin_slice_memory_budget.valueChanged.connect(
+            lambda _value: self._update_slice_batch_admission_label()
+        )
+        self.chk_slice_tile_batch_autotune.toggled.connect(
+            self._on_slice_tile_batch_autotune_toggled
+        )
+        self._on_slice_tile_batch_autotune_toggled(
+            self.chk_slice_tile_batch_autotune.isChecked()
+        )
+        self._update_slice_batch_admission_label()
 
         # ------------------------------------------------------------------
         # Sequential model selectors (right column in direct mode swaps to the
@@ -2350,6 +2418,30 @@ class DetectionPanel(QWidget):
         self._set_widget_visible(
             getattr(self, "spin_slice_object_fraction", None), is_auto_object
         )
+
+    def _update_slice_batch_admission_label(self) -> None:
+        """Describe the runtime-admitted SAHI tile batch without guessing it.
+
+        Admission depends on the resolved tile plan and model input tensor,
+        neither of which is reliably available while editing a setup.  Showing
+        the requested upper bound and budget is therefore more honest than a
+        speculative batch value; the core reduces it further when necessary.
+        """
+        if not hasattr(self, "lbl_slice_batch_admission"):
+            return
+        budget = self.spin_slice_memory_budget.value()
+        if self.chk_slice_tile_batch_autotune.isChecked():
+            text = f"Automatic batch; admitted to {budget} MiB budget"
+        else:
+            requested = self.spin_slice_tile_batch.value()
+            text = f"Up to {requested} tiles/call; admitted to {budget} MiB budget"
+        self.lbl_slice_batch_admission.setText(text)
+
+    def _on_slice_tile_batch_autotune_toggled(self, enabled: bool) -> None:
+        """Persist manual-vs-automatic tile batch intent separately."""
+        self._main_window.advanced_config["slice_tile_batch_autotune"] = bool(enabled)
+        self.spin_slice_tile_batch.setEnabled(not enabled)
+        self._update_slice_batch_admission_label()
 
     def _on_yolo_direct_task_changed(self, _index: object) -> object:
         """Sync the inferred-task label and fixed-angle row to the current task."""

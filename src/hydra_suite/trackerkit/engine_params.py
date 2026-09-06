@@ -1107,6 +1107,12 @@ def build_engine_params(
         "SLICE_WIDTH": advanced.get("slice_width", 0),
         "SLICE_OBJECT_TILE_FRACTION": advanced.get("slice_object_tile_fraction", 0.15),
         "SLICE_TRAINED_BODY_PX": advanced.get("slice_trained_body_px", 0.0),
+        # Execution controls are intentionally independent of calibrated
+        # geometry profiles.  The inference config clamps these values before
+        # the tile admission helper applies the final per-model memory bound.
+        "SLICE_TILE_BATCH_SIZE": advanced.get("slice_tile_batch_size", 16),
+        "SLICE_TILE_BATCH_AUTOTUNE": advanced.get("slice_tile_batch_autotune", False),
+        "SLICE_MEMORY_BUDGET_MIB": advanced.get("slice_memory_budget_mib", 256),
         "SLICE_MERGE_POLICY": advanced.get(
             "slice_merge_policy", SLICE_MERGE_DEFAULTS["merge_policy"]
         ),
