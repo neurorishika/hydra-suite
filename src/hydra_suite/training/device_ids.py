@@ -22,6 +22,27 @@ from typing import Any
 #: looking at their GPU instead of their device string.
 CUDA_DEVICE_FORMS = "'auto', 'cuda', 'cuda:N', or a device ordinal such as '0'"
 
+#: WARNING PERIOD (temporary), shared by EVERY supervisor that classifies a
+#: device string. Both `hydra_suite.training.ultralytics_supervisor._accelerator`
+#: and `hydra_suite.detectkit.sidecars.supervisor._accelerator_for` now
+#: recognise Ultralytics' bare-ordinal GPU convention ("0", "0,1") as CUDA.
+#: Those runs were classified CPU before, so they never faced the accelerator
+#: admission gate. While this flag is True, a bare-ordinal run that the
+#: accelerator gate would REFUSE is instead admitted with a loud warning and
+#: the host-only accounting it had before the widening. Nothing else is
+#: downgraded: a run the PRE-CHANGE evaluation would also have refused (host,
+#: lease, dataset, prelaunch identity) is still refused.
+#:
+#: It lives HERE, next to the parser whose widening created the need, so that
+#: `grep BARE_ORDINAL_ACCELERATOR_GATE_WARNING_PERIOD` reveals every site it
+#: governs and ending the period stays a ONE-LINE change for the whole
+#: codebase rather than two flags to find.
+#:
+#: TO END THE WARNING PERIOD: set this to False (then delete this constant and
+#: the downgrade branches in `_run_ultralytics_once` and in
+#: `ProtectedOperation.run`).
+BARE_ORDINAL_ACCELERATOR_GATE_WARNING_PERIOD = True
+
 
 def normalize_cuda_device(device: Any) -> str:
     """Map Ultralytics' bare-ordinal device convention onto a torch device.
@@ -37,8 +58,7 @@ def normalize_cuda_device(device: Any) -> str:
     helper. Because widening the classification newly subjects always-worked
     runs to the accelerator admission gate, that gate is downgraded to a
     warning for exactly those runs while
-    ``BARE_ORDINAL_ACCELERATOR_GATE_WARNING_PERIOD`` is set in
-    :mod:`hydra_suite.training.ultralytics_supervisor`.
+    ``BARE_ORDINAL_ACCELERATOR_GATE_WARNING_PERIOD`` (defined below) is set.
 
     Normalisation changes only what WE reason about; it never mutates
     ``spec.device`` and never reaches the launch command, which must keep

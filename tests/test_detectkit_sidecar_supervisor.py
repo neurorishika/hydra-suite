@@ -368,3 +368,283 @@ def test_missing_device_telemetry_before_launch_is_still_refused(monkeypatch, tm
 
     assert not outcome.success
     assert not any(str(item).startswith("GPU-") for item in asked)
+
+
+def _bare_ordinal_run(
+    monkeypatch, tmp_path, *, host, gpu_free, device="0", cuda_available=True
+):
+    """One ProtectedOperation through the REAL admission gate.
+
+    Only the observations are faked: `evaluate_resource_request` is the real
+    thing, so the downgrade is exercised against the gate it must not weaken.
+    Returns (outcome, log_lines, launched).
+    """
+
+    from hydra_suite.detectkit.sidecars import supervisor
+    from hydra_suite.detectkit.sidecars.protocol import (
+        Operation,
+        SidecarRequest,
+        SidecarResult,
+        SidecarStatus,
+        read_request,
+        write_result,
+    )
+    from hydra_suite.runtime.resource_budget import AcceleratorKind, ResourceObservation
+    from hydra_suite.training.sam3_lora import preflight
+
+    total_host, available_host = host
+
+    def probe(_device):
+        if not cuda_available:
+            return None
+        return SimpleNamespace(
+            uuid="GPU-pinned",
+            name="GPU",
+            free_bytes=gpu_free,
+            total_bytes=48 * supervisor.GiB,
+        )
+
+    monkeypatch.setattr(preflight, "_probe_cuda_device", probe)
+
+    def fake_probe_resources(kind=AcceleratorKind.CPU, **kwargs):
+        accelerator_probe = kwargs.get("accelerator_probe")
+        if accelerator_probe is None:
+            return ResourceObservation(
+                total_host_bytes=total_host,
+                available_host_bytes=available_host,
+                accelerator_kind=kind,
+            )
+        free, total = accelerator_probe()
+        return ResourceObservation(
+            total_host_bytes=total_host,
+            available_host_bytes=available_host,
+            accelerator_kind=kind,
+            accelerator_name=kwargs.get("accelerator_name") or "GPU",
+            total_accelerator_bytes=total,
+            available_accelerator_bytes=free,
+        )
+
+    monkeypatch.setattr(supervisor, "probe_resources", fake_probe_resources)
+
+    supervised = SimpleNamespace(
+        classified_exit=SimpleNamespace(kind=ExitKind.SUCCESS, message="ok"),
+        peak_tree_rss_bytes=2 * supervisor.GiB,
+        peak_accelerator_bytes=None,
+        dropped_output_lines=0,
+    )
+    launched: list = []
+
+    def fake_sidecar(plan, *, prelaunch_check=None, accelerator_probe=None, **_kwargs):
+        launched.append(plan)
+        if prelaunch_check is not None:
+            prelaunch_check()
+        request_path = Path(plan.launch.command[-3])
+        result_path = Path(plan.launch.command[-1])
+        request = read_request(request_path)
+        write_result(
+            result_path,
+            SidecarResult(
+                request.request_id, request.operation, SidecarStatus.SUCCESS, "ok"
+            ),
+        )
+        return SimpleNamespace(process=None, wait=lambda: supervised)
+
+    monkeypatch.setattr(supervisor, "SupervisedSidecar", fake_sidecar)
+
+    log_lines: list[str] = []
+    outcome = supervisor.ProtectedOperation(
+        SidecarRequest("request", Operation.DATASET_INFERENCE, {}),
+        device=device,
+        cleanup_paths=(tmp_path / "output.npz",),
+    ).run(log=log_lines.append)
+    return outcome, log_lines, launched
+
+
+def test_a_bare_ordinal_device_is_classified_as_cuda_and_probed_by_torch_spelling(
+    monkeypatch,
+):
+    """The bug: "0" fell through to CPU, so every DetectKit `device: "0"` job
+    ran with host-only accounting and no CUDA UUID pin."""
+
+    from hydra_suite.detectkit.sidecars import supervisor
+    from hydra_suite.runtime.resource_budget import AcceleratorKind
+    from hydra_suite.training.sam3_lora import preflight
+
+    observed = SimpleNamespace(
+        uuid="GPU-exact", name="GPU", free_bytes=8, total_bytes=16
+    )
+    asked: list[str] = []
+
+    def probe(device):
+        asked.append(device)
+        return observed
+
+    monkeypatch.setattr(preflight, "_probe_cuda_device", probe)
+
+    kind, uuid, pci, device = supervisor._accelerator_for("0")
+
+    assert kind is AcceleratorKind.CUDA
+    assert uuid == "GPU-exact"
+    assert pci is None
+    assert device is observed
+    # The prober only understands torch spellings; a bare "0" finds nothing.
+    assert asked == ["cuda:0"]
+
+
+def test_a_bare_ordinal_without_cuda_still_returns_cpu_rather_than_raising(
+    monkeypatch,
+):
+    """The hazard the YOLO side hit: recognising "0" must not convert a working
+    CPU job into a hard failure on a box with no CUDA."""
+
+    from hydra_suite.detectkit.sidecars import supervisor
+    from hydra_suite.runtime.resource_budget import AcceleratorKind
+    from hydra_suite.training.sam3_lora import preflight
+
+    asked: list[str] = []
+
+    def absent(device):
+        asked.append(device)
+        return None
+
+    monkeypatch.setattr(preflight, "_probe_cuda_device", absent)
+
+    assert supervisor._accelerator_for("0") == (AcceleratorKind.CPU, None, None, None)
+    assert asked == ["cuda:0"]
+
+
+def test_a_newly_gated_bare_ordinal_run_is_warned_about_not_refused(
+    monkeypatch, tmp_path
+):
+    """Host memory is abundant, device memory is not: the accelerator gate is
+    the ONLY refusal, and it is new to this device string."""
+
+    from hydra_suite.detectkit.sidecars import supervisor
+
+    outcome, log_lines, launched = _bare_ordinal_run(
+        monkeypatch,
+        tmp_path,
+        host=(256 * supervisor.GiB, 200 * supervisor.GiB),
+        gpu_free=1 * supervisor.GiB,
+    )
+
+    assert outcome.success
+    assert launched, "a downgraded run must still launch"
+    warning = "\n".join(log_lines)
+    assert "device=0" in warning
+    assert "FUTURE RELEASE" in warning
+    # It ran as CUDA with a real pin, under the host-only accounting it had
+    # before the widening.
+    assert launched[0].launch.environment["CUDA_VISIBLE_DEVICES"] == "GPU-pinned"
+    assert outcome.telemetry["admission_downgraded"] is True
+    assert any(
+        "FUTURE RELEASE" in item for item in outcome.telemetry["admission_warnings"]
+    )
+
+
+def test_a_pre_existing_host_refusal_is_still_refused_for_a_bare_ordinal(
+    monkeypatch, tmp_path
+):
+    """The scoping argument: only the NEW accelerator refusal is downgraded."""
+
+    from hydra_suite.detectkit.sidecars import supervisor
+
+    outcome, log_lines, launched = _bare_ordinal_run(
+        monkeypatch,
+        tmp_path,
+        host=(8 * supervisor.GiB, 1 * supervisor.GiB),
+        gpu_free=1 * supervisor.GiB,
+    )
+
+    assert not outcome.success
+    assert outcome.failure_kind == ExitKind.HOST_ADMISSION_REFUSAL.value
+    assert launched == []
+    assert outcome.telemetry["admission_downgraded"] is False
+    assert not any("FUTURE RELEASE" in line for line in log_lines)
+
+
+def test_an_ungated_bare_ordinal_run_is_not_stamped_as_downgraded(
+    monkeypatch, tmp_path
+):
+    from hydra_suite.detectkit.sidecars import supervisor
+
+    outcome, log_lines, launched = _bare_ordinal_run(
+        monkeypatch,
+        tmp_path,
+        host=(256 * supervisor.GiB, 200 * supervisor.GiB),
+        gpu_free=40 * supervisor.GiB,
+    )
+
+    assert outcome.success
+    assert launched
+    assert outcome.telemetry["admission_downgraded"] is False
+    assert not any("FUTURE RELEASE" in line for line in log_lines)
+
+
+def test_ending_the_warning_period_is_a_one_line_change(monkeypatch, tmp_path):
+    """The shared flag must actually govern this site too, so it can never
+    quietly become inert here while the YOLO side honours it."""
+
+    from hydra_suite.detectkit.sidecars import supervisor
+
+    monkeypatch.setattr(
+        supervisor, "BARE_ORDINAL_ACCELERATOR_GATE_WARNING_PERIOD", False
+    )
+    outcome, log_lines, launched = _bare_ordinal_run(
+        monkeypatch,
+        tmp_path,
+        host=(256 * supervisor.GiB, 200 * supervisor.GiB),
+        gpu_free=1 * supervisor.GiB,
+    )
+
+    assert not outcome.success
+    assert outcome.failure_kind == ExitKind.HOST_ADMISSION_REFUSAL.value
+    assert launched == []
+    assert not any("FUTURE RELEASE" in line for line in log_lines)
+
+
+def test_the_shared_warning_period_flag_has_exactly_one_definition():
+    """Requirement 3: one grep, every site. `is`-comparing the imported bools
+    would pass trivially (True is True), so this checks the SOURCE: exactly one
+    assignment exists, it lives in the leaf `device_ids`, and both supervisors
+    consume it from there."""
+
+    import hydra_suite
+
+    root = Path(hydra_suite.__file__).parent
+    name = "BARE_ORDINAL_ACCELERATOR_GATE_WARNING_PERIOD"
+    definitions = [
+        path
+        for path in root.rglob("*.py")
+        if any(line.startswith(f"{name} =") for line in path.read_text().splitlines())
+    ]
+    assert definitions == [root / "training" / "device_ids.py"]
+
+    for module in (
+        root / "training" / "ultralytics_supervisor.py",
+        root / "detectkit" / "sidecars" / "supervisor.py",
+    ):
+        text = module.read_text()
+        assert "from hydra_suite.training.device_ids import" in text
+        assert name in text
+
+
+def test_a_multi_gpu_bare_ordinal_announces_the_narrowing(monkeypatch, tmp_path):
+    """device_ids promises both callers announce the single-device narrowing
+    rather than performing it silently."""
+
+    from hydra_suite.detectkit.sidecars import supervisor
+
+    outcome, log_lines, launched = _bare_ordinal_run(
+        monkeypatch,
+        tmp_path,
+        host=(256 * supervisor.GiB, 200 * supervisor.GiB),
+        gpu_free=40 * supervisor.GiB,
+        device="0,1",
+    )
+
+    assert outcome.success
+    assert launched
+    assert any(
+        "names several devices" in line and "cuda:0" in line for line in log_lines
+    )

@@ -23,6 +23,7 @@ from hydra_suite.runtime.resource_budget import (
     AcceleratorKind,
     GiB,
     PhaseEstimate,
+    ResourceObservation,
     ResourcePolicy,
     ResourceRequest,
     WorkLimits,
@@ -34,7 +35,12 @@ from hydra_suite.runtime.resource_limits import (
     build_limited_launch,
 )
 from hydra_suite.runtime.safe_text import bounded_terminal_text
-from hydra_suite.training.device_ids import normalize_cuda_device
+from hydra_suite.training.device_ids import (
+    BARE_ORDINAL_ACCELERATOR_GATE_WARNING_PERIOD,
+    is_bare_ordinal_device,
+    names_several_devices,
+    normalize_cuda_device,
+)
 
 from .protocol import (
     Operation,
@@ -101,18 +107,74 @@ def _containment_limits(budget, observation, accelerator: AcceleratorKind):
 
 
 def _accelerator_for(device: str):
+    """Classify a device string for containment purposes.
+
+    Bare ordinals ("0", "0,1") are Ultralytics' OWN convention and are what
+    DetectKit plans carry; they are CUDA, and are resolved through the shared
+    `normalize_cuda_device` (multi-GPU forms resolve against the FIRST device,
+    because a sidecar pins one physical device by UUID).
+
+    A bare ordinal on a box WITHOUT CUDA still returns CPU rather than raising:
+    raising would turn a run that worked yesterday into a hard failure. Only an
+    explicit ``cuda...`` request raises when the device is absent.
+    """
+
     value = str(device or "auto").strip().lower()
-    if value.startswith("cuda") or (value == "auto" and sys.platform != "darwin"):
+    if value == "mps" or (value == "auto" and sys.platform == "darwin"):
+        return AcceleratorKind.MPS, None, None, None
+    bare_ordinal = is_bare_ordinal_device(value)
+    if value.startswith("cuda") or value == "auto" or bare_ordinal:
         from hydra_suite.training.sam3_lora.preflight import _probe_cuda_device
 
-        observed = _probe_cuda_device(value)
+        observed = _probe_cuda_device(
+            normalize_cuda_device(value) if bare_ordinal else value
+        )
         if observed is not None:
             return AcceleratorKind.CUDA, observed.uuid, None, observed
         if value.startswith("cuda"):
             raise RuntimeError("the requested CUDA device is unavailable")
-    if value == "mps" or (value == "auto" and sys.platform == "darwin"):
-        return AcceleratorKind.MPS, None, None, None
     return AcceleratorKind.CPU, None, None, None
+
+
+def _stamp_admission(telemetry: dict, warnings: list[str]) -> dict:
+    """Record a warning-period downgrade in the DURABLE telemetry record.
+
+    On a downgrade the persisted budget is the host-only one -- correct, that
+    is what containment enforced -- but the run really executed on CUDA with a
+    device pin. Without this stamp a later reader concludes it was host-only.
+    """
+
+    stamped = dict(telemetry or {})
+    stamped["admission_downgraded"] = bool(warnings)
+    stamped["admission_warnings"] = list(warnings)
+    return stamped
+
+
+def _gib(value: int) -> str:
+    return f"{max(0, int(value)) / GiB:.1f} GiB"
+
+
+def _bare_ordinal_gate_warning(device, budget) -> str:
+    """The warning-period notice; see BARE_ORDINAL_ACCELERATOR_GATE_WARNING_PERIOD."""
+
+    return (
+        "WARNING: device=%s is Ultralytics' bare-ordinal convention. It used to "
+        "be classified as CPU for containment (host-only accounting, no CUDA "
+        "pin); it is now correctly classified as CUDA, and under that "
+        "classification the accelerator admission gate WOULD REFUSE this run: "
+        "estimated accelerator peak %s against %s usable of %s available "
+        "device memory. During the warning period the run is allowed to "
+        "proceed with the host-only accounting it had before. THIS "
+        "CONFIGURATION WILL BE REFUSED IN A FUTURE RELEASE -- free device "
+        "memory or select another device. Gate refusals: %s"
+        % (
+            device,
+            _gib(budget.accelerator_peak_bytes),
+            _gib(budget.usable_accelerator_bytes or 0),
+            _gib(budget.available_accelerator_bytes or 0),
+            "; ".join(budget.refusals),
+        )
+    )
 
 
 def _identities(paths: Iterable[Path]) -> tuple[tuple[str, int, int], ...]:
@@ -277,6 +339,14 @@ class ProtectedOperation:
             # supervisor; the `.uuid` equality below is what detects a swap and
             # is kept.
             cuda_probe_device = normalize_cuda_device(self.device)
+            if accelerator is AcceleratorKind.CUDA and names_several_devices(
+                self.device
+            ):
+                log(
+                    f"containment: {self.device} names several devices; accounting "
+                    f"and the device pin resolve against {cuda_probe_device} alone "
+                    "rather than overstating the capacity of the set."
+                )
             estimate = _operation_estimate(self.request.operation, self.input_paths)
             observation = probe_resources(
                 accelerator,
@@ -288,23 +358,64 @@ class ProtectedOperation:
                 ),
             )
             policy = ResourcePolicy()
-            budget = evaluate_resource_request(
-                ResourceRequest(
+
+            def resource_request(accelerator_peak: int) -> ResourceRequest:
+                return ResourceRequest(
                     job_name=f"DetectKit {self.request.operation.value}",
                     phases=(
                         PhaseEstimate(
                             "model-operation",
                             host_peak_bytes=estimate,
-                            accelerator_peak_bytes=(
-                                estimate if cuda is not None else 0
-                            ),
+                            accelerator_peak_bytes=accelerator_peak,
                         ),
                     ),
                     limits=WorkLimits(batch_size=1, workers=0, prefetch_batches=0),
-                ),
+                )
+
+            budget = evaluate_resource_request(
+                resource_request(estimate if cuda is not None else 0),
                 observation,
                 policy,
             )
+            admission_warnings: list[str] = []
+            if (
+                not budget.admitted
+                and BARE_ORDINAL_ACCELERATOR_GATE_WARNING_PERIOD
+                and accelerator is AcceleratorKind.CUDA
+                and is_bare_ordinal_device(self.device)
+            ):
+                # The oracle is the LITERAL pre-change evaluation: this device
+                # string used to classify as CPU, so re-run the admission it
+                # actually faced yesterday -- a CPU observation with no
+                # accelerator estimate. Only if THAT admits is the refusal
+                # newly introduced by the widening; any refusal it reproduces
+                # (host, and every non-admission refusal further down: lease,
+                # dataset, prelaunch identity) is left to refuse untouched.
+                #
+                # It is derived from the SAME observation rather than probed
+                # again: a second psutil reading milliseconds later could show
+                # more free host memory and so admit a genuine HOST refusal,
+                # which is exactly the broad suppression this design forbids.
+                # Sharing one observation means `legacy` and `budget` can
+                # differ ONLY in the accelerator refusal -- which is the whole
+                # scoping argument in one sentence.
+                legacy = evaluate_resource_request(
+                    resource_request(0),
+                    ResourceObservation(
+                        total_host_bytes=observation.total_host_bytes,
+                        available_host_bytes=observation.available_host_bytes,
+                    ),
+                    policy,
+                )
+                if legacy.admitted:
+                    warning = _bare_ordinal_gate_warning(self.device, budget)
+                    admission_warnings.append(warning)
+                    log(warning)
+                    # The swap is load-bearing beyond telemetry: `prelaunch_check`
+                    # compares `budget.accelerator_peak_bytes` against live VRAM,
+                    # so keeping the refused budget would hard-fail every
+                    # downgraded run at launch.
+                    budget = legacy
             if not budget.admitted:
                 self._cleanup()
                 return ProtectedOutcome(
@@ -312,10 +423,21 @@ class ProtectedOperation:
                     False,
                     ExitKind.HOST_ADMISSION_REFUSAL.value,
                     "; ".join(budget.refusals),
-                    telemetry=resource_telemetry(
-                        budget, hard_host_bytes=0, soft_host_bytes=0
+                    telemetry=_stamp_admission(
+                        resource_telemetry(
+                            budget, hard_host_bytes=0, soft_host_bytes=0
+                        ),
+                        admission_warnings,
                     ),
                 )
+
+            def stamped_telemetry(*args, **kwargs) -> dict:
+                """Telemetry that carries the warning-period downgrade, if any."""
+
+                return _stamp_admission(
+                    resource_telemetry(*args, **kwargs), admission_warnings
+                )
+
             soft, hard, mps_ratio = _containment_limits(
                 budget, observation, accelerator
             )
@@ -441,7 +563,7 @@ class ProtectedOperation:
             with self._lock:
                 self._sidecar = None
             if supervised.classified_exit.kind is not ExitKind.SUCCESS:
-                telemetry = resource_telemetry(
+                telemetry = stamped_telemetry(
                     budget,
                     hard_host_bytes=hard,
                     soft_host_bytes=soft,
@@ -486,7 +608,7 @@ class ProtectedOperation:
                     result.message or "DetectKit sidecar failed without a diagnostic.",
                     hard_host_bytes=hard,
                     peak_tree_rss_bytes=supervised.peak_tree_rss_bytes,
-                    telemetry=resource_telemetry(
+                    telemetry=stamped_telemetry(
                         budget,
                         hard_host_bytes=hard,
                         soft_host_bytes=soft,
@@ -503,7 +625,7 @@ class ProtectedOperation:
                 peak_tree_rss_bytes=supervised.peak_tree_rss_bytes,
                 peak_accelerator_bytes=supervised.peak_accelerator_bytes,
                 dropped_output_lines=supervised.dropped_output_lines,
-                telemetry=resource_telemetry(
+                telemetry=stamped_telemetry(
                     budget,
                     hard_host_bytes=hard,
                     soft_host_bytes=soft,

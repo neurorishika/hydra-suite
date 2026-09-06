@@ -43,6 +43,7 @@ from hydra_suite.runtime.resource_limits import (
 )
 from hydra_suite.runtime.safe_text import bounded_terminal_text
 from hydra_suite.training.device_ids import (
+    BARE_ORDINAL_ACCELERATOR_GATE_WARNING_PERIOD,
     is_bare_ordinal_device,
     normalize_cuda_device,
 )
@@ -54,21 +55,14 @@ from hydra_suite.training.yolo_autobatch import (
     resolve_yolo_batch,
 )
 
-#: WARNING PERIOD (temporary). `_accelerator` now recognises Ultralytics' bare
-#: ordinal device convention ("0", "0,1") as CUDA. Those runs were classified
-#: CPU before, so they never faced the accelerator admission gate. While this
-#: flag is True, a bare-ordinal run that the accelerator gate would REFUSE is
-#: instead admitted with a loud warning and host-only accounting -- exactly the
-#: accounting it had before the widening. Nothing else is downgraded: a run the
-#: PRE-CHANGE evaluation would also have refused is still refused.
+#: The warning period is a SHARED, one-line switch defined in
+#: :mod:`hydra_suite.training.device_ids` and imported above; the DetectKit
+#: sidecar supervisor imports the same constant. See that definition for the
+#: scoping argument and for how to end the period.
 #:
-#: The warning re-emits once per rung of the bounded OOM-retry ladder: that is
-#: INTENDED, not a duplicate -- each rung carries a different batch and so a
-#: different estimate, and a later rung may clear the gate on its own.
-#:
-#: TO END THE WARNING PERIOD: set this to False (then delete this constant and
-#: the `_bare_ordinal_gate_warning` branch in `_run_ultralytics_once`).
-BARE_ORDINAL_ACCELERATOR_GATE_WARNING_PERIOD = True
+#: Here the warning re-emits once per rung of the bounded OOM-retry ladder:
+#: that is INTENDED, not a duplicate -- each rung carries a different batch and
+#: so a different estimate, and a later rung may clear the gate on its own.
 
 OUTPUT_MAX_LINES = 512
 OUTPUT_MAX_CHARS = 256 * 1024
