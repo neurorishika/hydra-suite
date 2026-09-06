@@ -9,11 +9,16 @@ renamed ``_DirectOnnxSession`` -> ``OnnxSessionRunner``.
 from __future__ import annotations
 
 import logging
+from pathlib import Path
 from typing import Any, Dict, List, Optional, Tuple
 
 import numpy as np
 
-from hydra_suite.runtime.onnx_providers import execution_providers_for
+from hydra_suite.runtime.artifact_lock import artifact_build_lock
+from hydra_suite.runtime.onnx_providers import (
+    execution_providers_for,
+    has_tensorrt_provider,
+)
 from hydra_suite.runtime.resolver import ResolvedBackend
 
 logger = logging.getLogger(__name__)
@@ -109,10 +114,16 @@ class OnnxSessionRunner:
     ) -> None:
         import onnxruntime as ort
 
-        self._session = ort.InferenceSession(
-            str(model_path),
-            providers=execution_providers_for(resolved),
-        )
+        providers = execution_providers_for(resolved)
+        if has_tensorrt_provider(providers):
+            # ORT builds its TRT engine into the shared per-machine cache dir
+            # on first session creation; serialize concurrent builders.
+            with artifact_build_lock(Path(str(model_path)).with_suffix(".trt_ep")):
+                self._session = ort.InferenceSession(
+                    str(model_path), providers=providers
+                )
+        else:
+            self._session = ort.InferenceSession(str(model_path), providers=providers)
         self.input_name = self._session.get_inputs()[0].name
         self.output_names = [output.name for output in self._session.get_outputs()]
         self.input_hw, self.input_channels = _detect_onnx_input_spec(self._session)

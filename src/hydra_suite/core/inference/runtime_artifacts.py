@@ -52,6 +52,8 @@ from hashlib import sha256
 from pathlib import Path
 from typing import Any
 
+from hydra_suite.runtime.artifact_lock import artifact_build_lock
+
 logger = logging.getLogger(__name__)
 
 # Compute-runtime → direct-executor runtime name.
@@ -717,13 +719,16 @@ def _load_direct_executor(
         else _resolve_imgsz(resolved)
     )
 
-    if _artifact_is_fresh(
-        artifact_path,
-        resolved,
-        imgsz,
-        batch_size=batch_size,
-        enforce_trt_profile=True,
-    ):
+    def _fresh() -> bool:
+        return _artifact_is_fresh(
+            artifact_path,
+            resolved,
+            imgsz,
+            batch_size=batch_size,
+            enforce_trt_profile=True,
+        )
+
+    if _fresh():
         logger.info("Reusing cached %s OBB artifact: %s", runtime, artifact_path.name)
     else:
         if not auto_export:
@@ -735,21 +740,31 @@ def _load_direct_executor(
                 f"auto_export (CUDA box) — refusing to silently fall back to "
                 f"PyTorch (H4)."
             )
-        _export_artifact(
-            pt_path=resolved,
-            artifact_path=artifact_path,
-            runtime=runtime,
-            imgsz=imgsz,
-            batch_size=batch_size,
-        )
-        _write_fresh_marker(
-            artifact_path,
-            resolved,
-            imgsz,
-            batch_size=batch_size,
-            enforce_trt_profile=True,
-        )
-        logger.info("Exported %s OBB artifact: %s", runtime, artifact_path)
+        # Concurrent fan-out children may all miss the cache at once;
+        # serialize the build and re-check after the wait (double-checked).
+        with artifact_build_lock(artifact_path):
+            if _fresh():
+                logger.info(
+                    "Reusing %s OBB artifact built by another process: %s",
+                    runtime,
+                    artifact_path.name,
+                )
+            else:
+                _export_artifact(
+                    pt_path=resolved,
+                    artifact_path=artifact_path,
+                    runtime=runtime,
+                    imgsz=imgsz,
+                    batch_size=batch_size,
+                )
+                _write_fresh_marker(
+                    artifact_path,
+                    resolved,
+                    imgsz,
+                    batch_size=batch_size,
+                    enforce_trt_profile=True,
+                )
+                logger.info("Exported %s OBB artifact: %s", runtime, artifact_path)
 
     class_names = _model_class_names(resolved)
     executor = _create_direct_executor(

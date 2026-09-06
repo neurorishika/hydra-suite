@@ -31,6 +31,19 @@ def _append_provider(providers: list[object], provider: object) -> None:
     providers.append(provider)
 
 
+def has_tensorrt_provider(providers) -> bool:
+    """True when the TensorRT execution provider is in *providers*.
+
+    Session creation with the TensorRT EP triggers an engine build into the
+    shared per-machine cache, so callers use this to decide whether that
+    session needs an ``artifact_build_lock``.
+    """
+    return any(
+        _provider_name(provider) == "TensorrtExecutionProvider"
+        for provider in providers
+    )
+
+
 def _tensorrt_ep_cache_options() -> dict:
     """Provider options that make the ORT TensorRT-EP plan persist across runs.
 
