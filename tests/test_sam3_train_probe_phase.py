@@ -12,6 +12,8 @@ import hashlib
 import json
 from types import SimpleNamespace
 
+import pytest
+
 from hydra_suite.runtime.memory_profiles import (
     MemoryMeasurement,
     MemoryProfileStore,
@@ -719,3 +721,51 @@ def test_the_cached_path_does_not_claim_the_ladder_was_complete(tmp_path, monkey
     resolution = json.loads((harness.run_dir / "batch_resolution.json").read_text())
     assert resolution["provenance"] == "cached"
     assert resolution["ladder_terminated_by"] == "cached"
+
+
+def test_no_accessor_makes_an_unreadable_marker_look_complete():
+    """The `get`-only sentinel of round 2 left `in`, truthiness, and
+    iteration falling through to the empty dict beneath -- silently restoring
+    the fail-open behaviour for the next person who reached for a different
+    accessor. Every accessor must answer for the whole key space, or refuse."""
+
+    sentinel = tr._AllLaddersIncomplete()
+
+    assert sentinel.get("any-fingerprint") is not None
+    assert sentinel.get("any-fingerprint", None) is not None
+    assert sentinel["any-fingerprint"]
+    assert "any-fingerprint" in sentinel
+    assert bool(sentinel) is True
+    assert not (sentinel.get("any-fingerprint") is None)
+
+    # The enumerating accessors cannot be answered honestly -- the sentinel
+    # stands for an unbounded key space -- and must refuse rather than return
+    # a value that reads as "nothing is incomplete".
+    for accessor in (
+        list,
+        len,
+        lambda m: m.keys(),
+        lambda m: m.items(),
+        lambda m: m.values(),
+    ):
+        with pytest.raises(TypeError, match="unreadable ladder marker"):
+            accessor(sentinel)
+
+
+def test_a_corrupt_marker_self_heals_on_an_authoritative_ladder(tmp_path, monkeypatch):
+    """The clear path must rebuild the file from empty, not try to pop a key
+    out of something it could not read -- otherwise a corrupt marker
+    re-probes forever."""
+
+    harness = _install(monkeypatch, tmp_path)
+    marker = tmp_path / "profiles.json.incomplete.json"
+    marker.write_text("{truncated", "utf-8")
+
+    result = _run(harness, _spec(tmp_path, batch=-1))
+
+    assert result["success"]
+    assert json.loads(marker.read_text()) == {}, "the marker must self-heal"
+
+    harness.probe_preflight_batches.clear()
+    _run(harness, _spec(tmp_path, batch=-1))
+    assert harness.probe_preflight_batches == [], "and then allow the cache"

@@ -576,6 +576,9 @@ def _incomplete_ladders_path() -> Path:
     return store.with_name(store.name + ".incomplete.json")
 
 
+_UNREADABLE_LADDER_MARKER = "unreadable_ladder_marker"
+
+
 class _AllLaddersIncomplete(dict):
     """Sentinel mapping: every fingerprint reads as incomplete.
 
@@ -585,11 +588,59 @@ class _AllLaddersIncomplete(dict):
     would re-arm the permanent-ceiling bug the marker exists to prevent, for
     every cached workload at once and without a sound. The file self-heals on
     the next `_mark_incomplete_ladder` write, so the cost is one extra probe.
+
+    EVERY accessor answers for the whole key space, not just the one the
+    current caller happens to use. A shape that answered `get` correctly but
+    let `in`, `bool`, or iteration fall through to the empty `dict` beneath
+    would silently restore the fail-open behaviour for the next person who
+    reached for a different accessor -- which is precisely how "transient
+    became permanent" recurs.
+
+    The enumerating accessors cannot be answered honestly: the sentinel
+    stands for an unbounded key space, so there is no correct list of keys or
+    length. They raise rather than return `0`/`[]`, because those values read
+    as "nothing is incomplete" -- the one meaning this object must never
+    convey.
     """
 
     def get(self, key: object, default: object = None) -> object:
         del key, default
-        return "unreadable_ladder_marker"
+        return _UNREADABLE_LADDER_MARKER
+
+    def __getitem__(self, key: object) -> str:
+        del key
+        return _UNREADABLE_LADDER_MARKER
+
+    def __contains__(self, key: object) -> bool:
+        del key
+        return True
+
+    def __bool__(self) -> bool:
+        return True
+
+    def _refuse(self, accessor: str) -> None:
+        raise TypeError(
+            f"{accessor} is not answerable on an unreadable ladder marker: it "
+            "stands for every fingerprint, so any enumeration would understate "
+            "it as 'nothing is incomplete'. Test membership, or rebuild the "
+            "marker from an empty mapping."
+        )
+
+    def __iter__(self):
+        self._refuse("iteration")
+
+    def __len__(self) -> int:
+        self._refuse("len()")
+        raise AssertionError("unreachable")
+
+    def keys(self):
+        self._refuse("keys()")
+
+    def items(self):
+        self._refuse("items()")
+
+    def values(self):
+        self._refuse("values()")
 
 
 def _incomplete_ladders() -> dict[str, str]:
@@ -611,11 +662,24 @@ def _mark_incomplete_ladder(key: str, reason: Optional[str]) -> None:
     """Record (or clear) that this workload's ladder ended for a transient reason."""
 
     marks = _incomplete_ladders()
+    if isinstance(marks, _AllLaddersIncomplete):
+        # Unreadable: rebuild from empty rather than trying to preserve
+        # entries that could not be read. This is the self-heal, and it must
+        # happen on the CLEAR path too -- otherwise a corrupt marker would
+        # re-probe forever.
+        marks = {}
+        if reason is None:
+            _write_marks(marks)
+            return
     if reason is None:
         if marks.pop(key, None) is None:
             return
     else:
         marks[key] = reason
+    _write_marks(marks)
+
+
+def _write_marks(marks: dict[str, str]) -> None:
     path = _incomplete_ladders_path()
     try:
         path.parent.mkdir(parents=True, exist_ok=True)
