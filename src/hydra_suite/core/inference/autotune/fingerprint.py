@@ -337,7 +337,7 @@ def hydra_code_identity() -> str:
     # any pipeline code change invalidates reuse even without a git checkout.
     digest = hashlib.sha256()
 
-    def visit(node, relative: str = "") -> None:
+    def visit(node: Any, relative: str = "") -> None:
         children = sorted(node.iterdir(), key=lambda item: item.name)
         for child in children:
             name = f"{relative}/{child.name}" if relative else child.name

@@ -38,6 +38,7 @@ MAX_PROFILE_RECORDS = 512
 
 
 def profile_store_root() -> Path:
+    """Return the user-writable root for throughput tuning profiles."""
     return get_data_dir() / "inference_tuning_profiles"
 
 
@@ -102,9 +103,11 @@ class InferenceTuningProfileStore:
     def claim(
         self, key: TuningProfileKey, *, timeout_seconds: float = 0.0
     ) -> SingleFlightClaim:
+        """Return a process-wide single-flight claim for one exact key."""
         return SingleFlightClaim(self._lock_path(key), timeout_seconds=timeout_seconds)
 
     def load(self, key: TuningProfileKey) -> InferenceTuningProfile | None:
+        """Load a valid exact-key profile, treating corruption as a cache miss."""
         path = self._record_path(key)
         if not path.is_file():
             return None
@@ -126,6 +129,7 @@ class InferenceTuningProfileStore:
             return None
 
     def save(self, profile: InferenceTuningProfile) -> None:
+        """Atomically persist one bounded profile after validating its identity."""
         if not isinstance(profile.key, TuningProfileKey):
             raise TypeError("profile.key must be a TuningProfileKey")
         expected_id = profile.key.digest[:24]

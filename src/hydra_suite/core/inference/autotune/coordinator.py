@@ -24,6 +24,8 @@ logger = logging.getLogger(__name__)
 
 @dataclass(frozen=True, slots=True)
 class AutotuneRequest:
+    """All exact-key policy, admission, execution, and callback inputs."""
+
     key: TuningProfileKey
     baseline: InferenceTuningSettings
     planner: CandidatePlanner
@@ -52,6 +54,8 @@ class AutotuneRequest:
 
 @dataclass(frozen=True, slots=True)
 class ResolveResult:
+    """The immutable runtime decision plus any profile evidence used."""
+
     overlay: InferenceRuntimeOverlay
     profile: InferenceTuningProfile | None = None
     key_digest: str | None = None
@@ -72,6 +76,7 @@ class AutotuneCoordinator:
         self.monotonic = monotonic
 
     def resolve(self, request: AutotuneRequest) -> ResolveResult:
+        """Reuse, tune, record, or safely fall back for one run request."""
         if request.mode == "off":
             return ResolveResult(
                 InferenceRuntimeOverlay.baseline(

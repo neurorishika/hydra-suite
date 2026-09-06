@@ -15,6 +15,8 @@ T = TypeVar("T")
 
 @dataclass(frozen=True, slots=True)
 class MeasurementProtocol:
+    """Minimum warmup, repetition, duration, frame, and time-budget contract."""
+
     warmup_calls: int = 3
     warmup_frames: int = 8
     minimum_blocks: int = 5
@@ -34,6 +36,8 @@ class MeasurementProtocol:
 
 @dataclass(frozen=True, slots=True)
 class RobustSummary:
+    """Robust center, dispersion, and bootstrap interval for a sample set."""
+
     median: float
     median_absolute_deviation: float
     confidence_low: float
@@ -68,6 +72,7 @@ def deterministic_block_order(
 
 
 def median_absolute_deviation(values: Iterable[float]) -> float:
+    """Return the median absolute deviation, or zero for an empty sample."""
     samples = tuple(float(value) for value in values)
     if not samples:
         return 0.0
@@ -82,6 +87,7 @@ def bootstrap_median_interval(
     resamples: int = 2_000,
     seed: int = 0,
 ) -> tuple[float, float]:
+    """Estimate a deterministic percentile-bootstrap interval for the median."""
     samples = tuple(float(value) for value in values)
     if not samples:
         return 0.0, 0.0
@@ -119,6 +125,7 @@ def paired_gain_interval(
 
 
 def robust_summary(values: Sequence[float], *, seed: int = 0) -> RobustSummary:
+    """Summarize positive finite throughput samples with robust statistics."""
     samples = tuple(float(value) for value in values)
     if any(not math.isfinite(value) or value <= 0 for value in samples):
         raise ValueError("measurements must be finite and positive")
@@ -135,6 +142,7 @@ def robust_summary(values: Sequence[float], *, seed: int = 0) -> RobustSummary:
 def measurement_complete(
     evidence: CandidateEvidence, protocol: MeasurementProtocol
 ) -> bool:
+    """Return whether evidence satisfies every public measurement minimum."""
     measured_seconds = (
         sum(evidence.stage_seconds_samples)
         if evidence.stage_seconds_samples

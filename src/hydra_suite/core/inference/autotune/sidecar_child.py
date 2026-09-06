@@ -174,7 +174,7 @@ def _run_window(
     writer.start()
     captured: dict[str, Any] = {"success": False, "finished": False}
 
-    def finished(success, _fps, _trajectories):
+    def finished(success: object, _fps: object, _trajectories: object) -> None:
         captured["success"] = bool(success)
         captured["finished"] = True
 

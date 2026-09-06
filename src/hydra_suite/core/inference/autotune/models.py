@@ -186,12 +186,16 @@ class InferenceTuningSettings:
 
 
 class ProfileState(str, Enum):
+    """Whether a stored profile may currently affect a production run."""
+
     PROVISIONAL = "provisional"
     VALIDATED = "validated"
 
 
 @dataclass(frozen=True, slots=True)
 class EquivalenceVerdict:
+    """Bounded correctness metrics for both forward and final outputs."""
+
     passed: bool
     nonzero_rows: bool = True
     row_counts_match: bool = True
@@ -205,6 +209,8 @@ class EquivalenceVerdict:
 
 @dataclass(frozen=True, slots=True)
 class CandidateEvidence:
+    """Measured performance, memory, artifact, and correctness evidence."""
+
     settings: InferenceTuningSettings
     throughput_samples: tuple[float, ...]
     stage_seconds_samples: tuple[float, ...] = ()
@@ -265,6 +271,7 @@ class CandidateEvidence:
 
     @property
     def median_throughput(self) -> float:
+        """Return the candidate's robust central throughput."""
         import statistics
 
         return (
@@ -275,6 +282,7 @@ class CandidateEvidence:
 
     @property
     def median_absolute_deviation(self) -> float:
+        """Return the candidate's within-run throughput dispersion."""
         import statistics
 
         if not self.throughput_samples:
@@ -331,12 +339,14 @@ class InferenceRuntimeOverlay:
     profile_id: str | None = None
 
     def apply(self, config: "InferenceConfig") -> "InferenceConfig":
+        """Apply only the effective values to a detached inference config."""
         return self.effective.apply(config)
 
     @classmethod
     def baseline(
         cls, settings: InferenceTuningSettings, *, status: str, reason: str
     ) -> "InferenceRuntimeOverlay":
+        """Construct a no-override decision using configured settings."""
         return cls(
             requested=settings,
             admitted=settings,
@@ -352,6 +362,7 @@ class InferenceRuntimeOverlay:
 def settings_from_values(
     baseline: InferenceTuningSettings, values: Mapping[str, int]
 ) -> InferenceTuningSettings:
+    """Return an immutable settings vector with named coordinates replaced."""
     result = baseline
     for field_name, value in values.items():
         result = result.with_value(field_name, value)
@@ -361,6 +372,7 @@ def settings_from_values(
 def bounded_evidence(
     values: Iterable[CandidateEvidence], maximum: int = 256
 ) -> tuple[CandidateEvidence, ...]:
+    """Materialize evidence while enforcing the persistent record cap."""
     result = tuple(values)
     if len(result) > maximum:
         raise ValueError("candidate evidence exceeds its cap")
