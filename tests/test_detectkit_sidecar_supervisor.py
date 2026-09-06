@@ -230,3 +230,141 @@ def test_uncertain_sidecar_retains_control_and_outputs_until_recovery(
 
     assert not control_dir.exists()
     assert not output.exists()
+
+
+def _cuda_protected_run(monkeypatch, tmp_path, *, uuid_by_call, device="cuda:0"):
+    """One ProtectedOperation on CUDA; returns (asked, outcome).
+
+    The probe answers by DEVICE STRING, like `nvidia-smi`: a UUID argument
+    finds nothing, because only the CHILD's CUDA_VISIBLE_DEVICES carries the
+    pin.
+    """
+
+    from hydra_suite.detectkit.sidecars import supervisor
+    from hydra_suite.detectkit.sidecars.protocol import (
+        Operation,
+        SidecarRequest,
+        SidecarResult,
+        SidecarStatus,
+        read_request,
+        write_result,
+    )
+    from hydra_suite.runtime.resource_budget import AcceleratorKind
+    from hydra_suite.training.sam3_lora import preflight
+
+    asked: list[str] = []
+
+    def probe(dev):
+        asked.append(dev)
+        uuid = uuid_by_call(len(asked))
+        if uuid is None:
+            return None
+        return SimpleNamespace(
+            uuid=uuid,
+            name="GPU",
+            free_bytes=8 * supervisor.GiB,
+            total_bytes=16 * supervisor.GiB,
+        )
+
+    monkeypatch.setattr(preflight, "_probe_cuda_device", probe)
+    monkeypatch.setattr(
+        supervisor,
+        "_accelerator_for",
+        lambda _device: (
+            AcceleratorKind.CUDA,
+            "GPU-pinned",
+            None,
+            SimpleNamespace(name="GPU"),
+        ),
+    )
+    observation = SimpleNamespace(
+        total_host_bytes=64 * supervisor.GiB,
+        available_host_bytes=48 * supervisor.GiB,
+    )
+    budget = SimpleNamespace(
+        admitted=True,
+        refusals=(),
+        usable_host_bytes=32 * supervisor.GiB,
+        reserved_host_bytes=8 * supervisor.GiB,
+        accelerator_peak_bytes=0,
+    )
+    supervised = SimpleNamespace(
+        classified_exit=SimpleNamespace(kind=ExitKind.SUCCESS, message="ok"),
+        peak_tree_rss_bytes=2 * supervisor.GiB,
+        peak_accelerator_bytes=None,
+        dropped_output_lines=0,
+    )
+
+    def fake_sidecar(plan, *, prelaunch_check=None, accelerator_probe=None, **_kwargs):
+        if prelaunch_check is not None:
+            prelaunch_check()
+        if accelerator_probe is not None:
+            accelerator_probe()
+        request_path = Path(plan.launch.command[-3])
+        result_path = Path(plan.launch.command[-1])
+        request = read_request(request_path)
+        write_result(
+            result_path,
+            SidecarResult(
+                request.request_id, request.operation, SidecarStatus.SUCCESS, "ok"
+            ),
+        )
+        return SimpleNamespace(process=None, wait=lambda: supervised)
+
+    monkeypatch.setattr(supervisor, "probe_resources", lambda *_a, **_k: observation)
+    monkeypatch.setattr(
+        supervisor, "evaluate_resource_request", lambda *_a, **_k: budget
+    )
+    monkeypatch.setattr(supervisor, "resource_telemetry", lambda *_a, **_k: {})
+    monkeypatch.setattr(supervisor, "SupervisedSidecar", fake_sidecar)
+
+    outcome = supervisor.ProtectedOperation(
+        SidecarRequest("request", Operation.DATASET_INFERENCE, {}),
+        device=device,
+        cleanup_paths=(tmp_path / "output.npz",),
+    ).run()
+    return asked, outcome
+
+
+def test_the_parent_reprobes_by_device_string_not_by_the_pinned_uuid(
+    monkeypatch, tmp_path
+):
+    """Same defect as the Ultralytics supervisor, third instance.
+
+    `_probe_cuda_device` resolves a UUID only out of CUDA_VISIBLE_DEVICES, and
+    the parent never sets it -- the pin goes on the CHILD. Asking for the UUID
+    returned None and made both the prelaunch check and the accelerator probe
+    raise unconditionally, so every DetectKit GPU job failed at launch.
+    """
+
+    asked, outcome = _cuda_protected_run(
+        monkeypatch, tmp_path, uuid_by_call=lambda _n: "GPU-pinned"
+    )
+
+    assert outcome.success
+    assert asked, "the parent must re-probe before launching"
+    assert not any(str(item).startswith("GPU-") for item in asked)
+    assert set(asked) == {"cuda:0"}
+
+
+def test_a_device_swap_before_launch_is_still_detected(monkeypatch, tmp_path):
+    """The `.uuid` equality is what detects a swap; probing by string keeps it."""
+
+    asked, outcome = _cuda_protected_run(
+        monkeypatch, tmp_path, uuid_by_call=lambda _n: "GPU-other"
+    )
+
+    assert not outcome.success
+    assert "changed" in outcome.message
+    # It must fail for the RIGHT reason -- a real swap, not a UUID re-probe
+    # that can never resolve.
+    assert not any(str(item).startswith("GPU-") for item in asked)
+
+
+def test_missing_device_telemetry_before_launch_is_still_refused(monkeypatch, tmp_path):
+    asked, outcome = _cuda_protected_run(
+        monkeypatch, tmp_path, uuid_by_call=lambda _n: None
+    )
+
+    assert not outcome.success
+    assert not any(str(item).startswith("GPU-") for item in asked)

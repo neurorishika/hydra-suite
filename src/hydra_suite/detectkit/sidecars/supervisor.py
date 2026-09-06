@@ -34,6 +34,7 @@ from hydra_suite.runtime.resource_limits import (
     build_limited_launch,
 )
 from hydra_suite.runtime.safe_text import bounded_terminal_text
+from hydra_suite.training.device_ids import normalize_cuda_device
 
 from .protocol import (
     Operation,
@@ -268,6 +269,14 @@ class ProtectedOperation:
         try:
             write_request(request_path, self.request)
             accelerator, cuda_uuid, cuda_pci, cuda = _accelerator_for(self.device)
+            # The PARENT re-probes by DEVICE STRING. `_probe_cuda_device`
+            # resolves a UUID only out of CUDA_VISIBLE_DEVICES, which is set on
+            # the CHILD's environment -- so passing `cuda_uuid` made every
+            # re-probe return None and both sites below raise unconditionally,
+            # regardless of free memory. Same defect fixed in the Ultralytics
+            # supervisor; the `.uuid` equality below is what detects a swap and
+            # is kept.
+            cuda_probe_device = normalize_cuda_device(self.device)
             estimate = _operation_estimate(self.request.operation, self.input_paths)
             observation = probe_resources(
                 accelerator,
@@ -359,7 +368,7 @@ class ProtectedOperation:
                         _probe_cuda_device,
                     )
 
-                    current = _probe_cuda_device(cuda_uuid)
+                    current = _probe_cuda_device(cuda_probe_device)
                     if current is None or current.uuid != cuda_uuid:
                         raise RuntimeError("the selected physical CUDA device changed")
                     usable_vram = int(
@@ -379,7 +388,7 @@ class ProtectedOperation:
                     return 0
                 from hydra_suite.training.sam3_lora.preflight import _probe_cuda_device
 
-                current = _probe_cuda_device(cuda_uuid)
+                current = _probe_cuda_device(cuda_probe_device)
                 if current is None or current.uuid != cuda_uuid:
                     raise RuntimeError(
                         "selected CUDA device telemetry became unavailable"
