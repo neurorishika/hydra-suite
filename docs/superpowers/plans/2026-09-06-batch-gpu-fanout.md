@@ -2817,6 +2817,13 @@ clips on MPS therefore have a run-to-run noise floor at or above the 1.25x
 tolerance, so a single 1.30x sample is not a signal. Corroborating: the same
 clip on CUDA measured **0.99x**, and all 48 correctness comparisons are exactly
 zero.
+**Confirmation re-run (same box, same baseline, `ONLY=ant_obb_sleap`):**
+`legacy: 124.924s (4.0 fps) new: 113.797s (4.39 fps) -> new/legacy time ratio =
+0.91x -> PERFORMANCE: EQUIVALENT ✅`, with correctness again exactly zero
+(`pos |Δ| max=0.000e+00`, `theta |Δ| max=0.000e+00`) and a same-code
+`new_a=113.797s` / `new_b=137.554s` spread of 1.21x. Two independent samples of
+the same clip therefore give 1.30x and 0.91x, straddling the tolerance in both
+directions -- the 1.30x was measurement jitter, not a regression.
 
 ### Step 5 — CUDA on mehek (`hydra-cuda`, RTX 6000 Ada, single GPU)
 
