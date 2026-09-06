@@ -179,13 +179,15 @@ def test_tracking_engine_uses_explicit_replay_cache_directory(tmp_path):
     assert core._resolve_profile_path("forward") is None
 
 
-def test_real_production_replay_preserves_cache_and_emits_observations(tmp_path):
+def test_real_production_replay_preserves_cache_and_retains_observations_across_respawn(
+    tmp_path,
+):
     cv2 = pytest.importorskip("cv2")
     video_path = tmp_path / "clip.mp4"
     writer = cv2.VideoWriter(
         str(video_path), cv2.VideoWriter_fourcc(*"mp4v"), 30.0, (32, 32)
     )
-    for _ in range(3):
+    for _ in range(4):
         writer.write(np.zeros((32, 32, 3), dtype=np.uint8))
     writer.release()
 
@@ -198,13 +200,14 @@ def test_real_production_replay_preserves_cache_and_emits_observations(tmp_path)
             "reference_body_size": 4.0,
         },
         runtime=RuntimeContext(
-            fps=30.0, total_frames=3, frame_width=32, frame_height=32
+            fps=30.0, total_frames=4, frame_width=32, frame_height=32
         ),
     )
     params.update(
         {
             "MIN_DETECTION_COUNTS": 1,
             "MIN_DETECTIONS_TO_START": 1,
+            "LOST_THRESHOLD_FRAMES": 1,
             "ENABLE_CONFIDENCE_DENSITY_MAP": False,
             "ENABLE_POSE_EXTRACTOR": False,
         }
@@ -218,29 +221,47 @@ def test_real_production_replay_preserves_cache_and_emits_observations(tmp_path)
         write_mode="fresh",
     )
     assert caches.detection is not None
-    for frame_idx in range(3):
-        center_x = 8.0 + frame_idx
+    for frame_idx in range(4):
+        # Frame 0 bootstraps the lost slot, frame 1 emits the first epoch,
+        # frame 2 marks it lost, and frame 3 takes the Phase-3 respawn path.
+        # The respawn clears trajectories_full, so only replay_observations can
+        # retain both real measurements for replay scoring.
+        if frame_idx == 2:
+            centroids = np.zeros((0, 2), dtype=np.float32)
+            angles = np.zeros(0, dtype=np.float32)
+            sizes = np.zeros(0, dtype=np.float32)
+            shapes = np.zeros((0, 2), dtype=np.float32)
+            confidences = np.zeros(0, dtype=np.float32)
+            corners = np.zeros((0, 4, 2), dtype=np.float32)
+        else:
+            center_x = 8.0 + frame_idx
+            centroids = np.array([[center_x, 8.0]], dtype=np.float32)
+            angles = np.zeros(1, dtype=np.float32)
+            sizes = np.array([16.0], dtype=np.float32)
+            shapes = np.array([[16.0, 1.0]], dtype=np.float32)
+            confidences = np.array([np.nan], dtype=np.float32)
+            corners = np.array(
+                [
+                    [
+                        [center_x - 2, 6.0],
+                        [center_x + 2, 6.0],
+                        [center_x + 2, 10.0],
+                        [center_x - 2, 10.0],
+                    ]
+                ],
+                dtype=np.float32,
+            )
         caches.detection.write_frame(
             frame_idx,
             result=OBBResult(
                 frame_idx=frame_idx,
-                centroids=np.array([[center_x, 8.0]], dtype=np.float32),
-                angles=np.zeros(1, dtype=np.float32),
-                sizes=np.array([16.0], dtype=np.float32),
-                shapes=np.array([[16.0, 1.0]], dtype=np.float32),
-                confidences=np.array([np.nan], dtype=np.float32),
-                corners=np.array(
-                    [
-                        [
-                            [center_x - 2, 6.0],
-                            [center_x + 2, 6.0],
-                            [center_x + 2, 10.0],
-                            [center_x - 2, 10.0],
-                        ]
-                    ],
-                    dtype=np.float32,
-                ),
-                detection_ids=OBBResult.make_detection_ids(frame_idx, 1),
+                centroids=centroids,
+                angles=angles,
+                sizes=sizes,
+                shapes=shapes,
+                confidences=confidences,
+                corners=corners,
+                detection_ids=OBBResult.make_detection_ids(frame_idx, len(centroids)),
             ),
         )
     caches.close()
@@ -250,27 +271,74 @@ def test_real_production_replay_preserves_cache_and_emits_observations(tmp_path)
         if path.is_file()
     }
 
-    evaluator = ProductionReplayEvaluator(str(video_path), str(cache_dir), 0, 2)
+    from hydra_suite.core.tracking.worker import TrackingEngineCore
+
+    replay_instances = []
+
+    class _CapturingReplayCore(TrackingEngineCore):
+        def __init__(self, *args, **kwargs):
+            super().__init__(*args, **kwargs)
+            replay_instances.append(self)
+
+    evaluator = ProductionReplayEvaluator(
+        str(video_path), str(cache_dir), 0, 3, engine_factory=_CapturingReplayCore
+    )
     forward = evaluator.run(params, reverse=False)
     backward = evaluator.run(params, reverse=True)
 
-    # Regression: the cache was produced from the full 0..2 bg-sub range, but
+    # Regression: the cache was produced from the full 0..3 bg-sub range, but
     # held-out validation scores only its tail. The loop gets an unscored
     # pre-roll while the cache key retains full-run provenance.
     heldout = ProductionReplayEvaluator(
-        str(video_path), str(cache_dir), 1, 2, pre_roll_start=0
+        str(video_path), str(cache_dir), 2, 3, pre_roll_start=0
     )
     heldout_forward = heldout.run(params, reverse=False)
 
     assert forward.success and backward.success
     assert heldout_forward.success
-    np.testing.assert_array_equal(heldout_forward.frame_indices, [1, 2])
+    np.testing.assert_array_equal(heldout_forward.frame_indices, [2, 3])
     # The production loop bootstraps a lost slot from its first detection and
     # starts exporting matched observations on the following frame in each
     # direction. The adapter must preserve that behavior rather than filling
     # the bootstrap frame from hidden Kalman state.
+    np.testing.assert_allclose(forward.positions[[1, 3], 0], [[9.0, 8.0], [11.0, 8.0]])
+    assert np.isnan(forward.positions[2, 0]).all()
     assert np.isfinite(forward.positions[:, 0]).all(axis=1).sum() == 2
+    assert [point[3] for point in replay_instances[0].replay_observations[0]] == [1, 3]
+    assert [point[3] for point in replay_instances[0].trajectories_full[0]] == [3]
     assert np.isfinite(backward.positions[:, 0]).all(axis=1).sum() == 2
+
+    # `_cached_detection_iterator` also polls cancellation in normal replay,
+    # so deliberately remove that iterator-level check.  This pins the
+    # per-frame `run_tracking` loop's own poll: after frame 0, cancellation
+    # must stop the core before it consumes frame 1.
+    instances = []
+
+    class _NonPollingReplayCore(TrackingEngineCore):
+        def __init__(self, *args, **kwargs):
+            super().__init__(*args, **kwargs)
+            instances.append(self)
+
+        def _cached_detection_iterator(
+            self, total_frames, start_frame=0, end_frame=None, backward=False
+        ):
+            for relative_idx in range(total_frames):
+                yield None, relative_idx + 1
+
+    def stop_after_first_core_frame():
+        return bool(instances and instances[0].frame_count >= 1)
+
+    cancelled = ProductionReplayEvaluator(
+        str(video_path),
+        str(cache_dir),
+        0,
+        3,
+        engine_factory=_NonPollingReplayCore,
+        should_stop=stop_after_first_core_frame,
+    ).run(params, reverse=False)
+
+    assert not cancelled.success
+    assert instances[0].frame_count == 1
     after = {
         path.relative_to(cache_dir): (path.stat().st_mtime_ns, path.read_bytes())
         for path in cache_dir.rglob("*")
