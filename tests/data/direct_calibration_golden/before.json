@@ -1,0 +1,471 @@
+{
+  "cases": [
+    {
+      "aggregate": {
+        "duplicate": 0,
+        "extra": 1,
+        "f1": 0.0,
+        "frames": 1,
+        "matched": 0,
+        "mean_iou": 0.0,
+        "missed": 1,
+        "precision": 0.0,
+        "recall": 0.0
+      },
+      "name": "d7_extent_convention_inflation_detect",
+      "per_frame": [
+        {
+          "duplicate": 0,
+          "extra": 1,
+          "matched": 0,
+          "mean_iou": 0.0,
+          "missed": 1
+        }
+      ],
+      "task": "detect"
+    },
+    {
+      "aggregate": {
+        "duplicate": 0,
+        "extra": 0,
+        "f1": 0.6666666666666666,
+        "frames": 1,
+        "matched": 1,
+        "mean_iou": 0.6571514423076923,
+        "missed": 1,
+        "precision": 1.0,
+        "recall": 0.5
+      },
+      "name": "d9_blob_spans_two_animals_detect",
+      "per_frame": [
+        {
+          "duplicate": 0,
+          "extra": 0,
+          "matched": 1,
+          "mean_iou": 0.6571514423076923,
+          "missed": 1
+        }
+      ],
+      "task": "detect"
+    },
+    {
+      "aggregate": {
+        "duplicate": 1,
+        "extra": 1,
+        "f1": 0.5,
+        "frames": 1,
+        "matched": 1,
+        "mean_iou": 0.6571514423076923,
+        "missed": 1,
+        "precision": 0.5,
+        "recall": 0.5
+      },
+      "name": "dense_cluster_label_steal_detect",
+      "per_frame": [
+        {
+          "duplicate": 1,
+          "extra": 1,
+          "matched": 1,
+          "mean_iou": 0.6571514423076923,
+          "missed": 1
+        }
+      ],
+      "task": "detect"
+    },
+    {
+      "aggregate": {
+        "duplicate": 0,
+        "extra": 2,
+        "f1": 0.5,
+        "frames": 1,
+        "matched": 1,
+        "mean_iou": 1.0,
+        "missed": 0,
+        "precision": 0.3333333333333333,
+        "recall": 1.0
+      },
+      "name": "degenerate_geometry_detect",
+      "per_frame": [
+        {
+          "duplicate": 0,
+          "extra": 2,
+          "matched": 1,
+          "mean_iou": 1.0,
+          "missed": 0
+        }
+      ],
+      "task": "detect"
+    },
+    {
+      "aggregate": {
+        "duplicate": 0,
+        "extra": 1,
+        "f1": 0.0,
+        "frames": 1,
+        "matched": 0,
+        "mean_iou": 0.0,
+        "missed": 1,
+        "precision": 0.0,
+        "recall": 0.0
+      },
+      "name": "d7_extent_convention_inflation_obb",
+      "per_frame": [
+        {
+          "duplicate": 0,
+          "extra": 1,
+          "matched": 0,
+          "mean_iou": 0.0,
+          "missed": 1
+        }
+      ],
+      "task": "obb"
+    },
+    {
+      "aggregate": {
+        "duplicate": 0,
+        "extra": 0,
+        "f1": 0.6666666666666666,
+        "frames": 1,
+        "matched": 1,
+        "mean_iou": 0.6571514423076923,
+        "missed": 1,
+        "precision": 1.0,
+        "recall": 0.5
+      },
+      "name": "d9_blob_spans_two_animals_obb",
+      "per_frame": [
+        {
+          "duplicate": 0,
+          "extra": 0,
+          "matched": 1,
+          "mean_iou": 0.6571514423076923,
+          "missed": 1
+        }
+      ],
+      "task": "obb"
+    },
+    {
+      "aggregate": {
+        "duplicate": 1,
+        "extra": 1,
+        "f1": 0.5,
+        "frames": 1,
+        "matched": 1,
+        "mean_iou": 0.6571514423076923,
+        "missed": 1,
+        "precision": 0.5,
+        "recall": 0.5
+      },
+      "name": "dense_cluster_label_steal_obb",
+      "per_frame": [
+        {
+          "duplicate": 1,
+          "extra": 1,
+          "matched": 1,
+          "mean_iou": 0.6571514423076923,
+          "missed": 1
+        }
+      ],
+      "task": "obb"
+    },
+    {
+      "aggregate": {
+        "duplicate": 0,
+        "extra": 2,
+        "f1": 0.5,
+        "frames": 1,
+        "matched": 1,
+        "mean_iou": 1.0,
+        "missed": 0,
+        "precision": 0.3333333333333333,
+        "recall": 1.0
+      },
+      "name": "degenerate_geometry_obb",
+      "per_frame": [
+        {
+          "duplicate": 0,
+          "extra": 2,
+          "matched": 1,
+          "mean_iou": 1.0,
+          "missed": 0
+        }
+      ],
+      "task": "obb"
+    },
+    {
+      "aggregate": {
+        "duplicate": 0,
+        "extra": 1,
+        "f1": 0.0,
+        "frames": 1,
+        "matched": 0,
+        "mean_iou": 0.0,
+        "missed": 1,
+        "precision": 0.0,
+        "recall": 0.0
+      },
+      "name": "d7_extent_convention_inflation_segment",
+      "per_frame": [
+        {
+          "duplicate": 0,
+          "extra": 1,
+          "matched": 0,
+          "mean_iou": 0.0,
+          "missed": 1
+        }
+      ],
+      "task": "segment"
+    },
+    {
+      "aggregate": {
+        "duplicate": 0,
+        "extra": 0,
+        "f1": 0.6666666666666666,
+        "frames": 1,
+        "matched": 1,
+        "mean_iou": 0.6571514423076923,
+        "missed": 1,
+        "precision": 1.0,
+        "recall": 0.5
+      },
+      "name": "d9_blob_spans_two_animals_segment",
+      "per_frame": [
+        {
+          "duplicate": 0,
+          "extra": 0,
+          "matched": 1,
+          "mean_iou": 0.6571514423076923,
+          "missed": 1
+        }
+      ],
+      "task": "segment"
+    },
+    {
+      "aggregate": {
+        "duplicate": 1,
+        "extra": 1,
+        "f1": 0.5,
+        "frames": 1,
+        "matched": 1,
+        "mean_iou": 0.6571514423076923,
+        "missed": 1,
+        "precision": 0.5,
+        "recall": 0.5
+      },
+      "name": "dense_cluster_label_steal_segment",
+      "per_frame": [
+        {
+          "duplicate": 1,
+          "extra": 1,
+          "matched": 1,
+          "mean_iou": 0.6571514423076923,
+          "missed": 1
+        }
+      ],
+      "task": "segment"
+    },
+    {
+      "aggregate": {
+        "duplicate": 0,
+        "extra": 2,
+        "f1": 0.5,
+        "frames": 1,
+        "matched": 1,
+        "mean_iou": 1.0,
+        "missed": 0,
+        "precision": 0.3333333333333333,
+        "recall": 1.0
+      },
+      "name": "degenerate_geometry_segment",
+      "per_frame": [
+        {
+          "duplicate": 0,
+          "extra": 2,
+          "matched": 1,
+          "mean_iou": 1.0,
+          "missed": 0
+        }
+      ],
+      "task": "segment"
+    },
+    {
+      "aggregate": {
+        "duplicate": 0,
+        "extra": 0,
+        "f1": 1.0,
+        "frames": 5,
+        "matched": 80,
+        "mean_iou": 0.7418862922365541,
+        "missed": 0,
+        "precision": 1.0,
+        "recall": 1.0
+      },
+      "name": "bulk_easy_matches_detect",
+      "per_frame": [
+        {
+          "duplicate": 0,
+          "extra": 0,
+          "matched": 16,
+          "mean_iou": 0.777954675619688,
+          "missed": 0
+        },
+        {
+          "duplicate": 0,
+          "extra": 0,
+          "matched": 16,
+          "mean_iou": 0.7459171514076295,
+          "missed": 0
+        },
+        {
+          "duplicate": 0,
+          "extra": 0,
+          "matched": 16,
+          "mean_iou": 0.7115836967965976,
+          "missed": 0
+        },
+        {
+          "duplicate": 0,
+          "extra": 0,
+          "matched": 16,
+          "mean_iou": 0.748030312803452,
+          "missed": 0
+        },
+        {
+          "duplicate": 0,
+          "extra": 0,
+          "matched": 16,
+          "mean_iou": 0.7259456245554039,
+          "missed": 0
+        }
+      ],
+      "task": "detect"
+    },
+    {
+      "aggregate": {
+        "duplicate": 0,
+        "extra": 0,
+        "f1": 1.0,
+        "frames": 5,
+        "matched": 80,
+        "mean_iou": 0.7322044796380209,
+        "missed": 0,
+        "precision": 1.0,
+        "recall": 1.0
+      },
+      "name": "bulk_easy_matches_obb",
+      "per_frame": [
+        {
+          "duplicate": 0,
+          "extra": 0,
+          "matched": 16,
+          "mean_iou": 0.7211855373542257,
+          "missed": 0
+        },
+        {
+          "duplicate": 0,
+          "extra": 0,
+          "matched": 16,
+          "mean_iou": 0.7245063817877625,
+          "missed": 0
+        },
+        {
+          "duplicate": 0,
+          "extra": 0,
+          "matched": 16,
+          "mean_iou": 0.7279061940449609,
+          "missed": 0
+        },
+        {
+          "duplicate": 0,
+          "extra": 0,
+          "matched": 16,
+          "mean_iou": 0.7350997984990837,
+          "missed": 0
+        },
+        {
+          "duplicate": 0,
+          "extra": 0,
+          "matched": 16,
+          "mean_iou": 0.7523244865040717,
+          "missed": 0
+        }
+      ],
+      "task": "obb"
+    },
+    {
+      "aggregate": {
+        "duplicate": 0,
+        "extra": 0,
+        "f1": 1.0,
+        "frames": 5,
+        "matched": 80,
+        "mean_iou": 0.7429521722811282,
+        "missed": 0,
+        "precision": 1.0,
+        "recall": 1.0
+      },
+      "name": "bulk_easy_matches_segment",
+      "per_frame": [
+        {
+          "duplicate": 0,
+          "extra": 0,
+          "matched": 16,
+          "mean_iou": 0.7305507830693214,
+          "missed": 0
+        },
+        {
+          "duplicate": 0,
+          "extra": 0,
+          "matched": 16,
+          "mean_iou": 0.7524147227041509,
+          "missed": 0
+        },
+        {
+          "duplicate": 0,
+          "extra": 0,
+          "matched": 16,
+          "mean_iou": 0.7453452752106802,
+          "missed": 0
+        },
+        {
+          "duplicate": 0,
+          "extra": 0,
+          "matched": 16,
+          "mean_iou": 0.7516979418554144,
+          "missed": 0
+        },
+        {
+          "duplicate": 0,
+          "extra": 0,
+          "matched": 16,
+          "mean_iou": 0.7347521385660742,
+          "missed": 0
+        }
+      ],
+      "task": "segment"
+    }
+  ],
+  "generated_at_commit": "5a5dfe178956d5211ac3beca83d79ce35f811f9d",
+  "recommend_balanced_demo": {
+    "candidate_labels": [
+      "synthetic_dense_slow",
+      "synthetic_medium",
+      "synthetic_sparse_dominated",
+      "synthetic_undersampled",
+      "synthetic_failed"
+    ],
+    "chosen_f1": 1.0,
+    "chosen_label": "synthetic_dense_slow",
+    "chosen_seconds_per_frame": 0.9,
+    "explanation": "synthetic_dense_slow: F1 1.000 (best 1.000), 0.90s/frame on this machine and data. Balanced rule: drop failed and undersampled points, keep the Pareto frontier of misses, extras and time, then take the fastest point whose F1 is within 0.01 of the best and whose localization quality is at least 0.5.",
+    "rule_id": "balanced-pareto-fastest-v1",
+    "rule_text": "Balanced rule: drop failed and undersampled points, keep the Pareto frontier of misses, extras and time, then take the fastest point whose F1 is within 0.01 of the best and whose localization quality is at least 0.5."
+  },
+  "scoring_rules": {
+    "area_band": null,
+    "iou_threshold": 0.5,
+    "matcher": "hard IoU >= 0.5, class-aware, descending-IoU greedy one-to-one",
+    "recommender": "recommend_balanced (F1-tolerance + Pareto + fastest)",
+    "recommender_rule_id": "balanced-pareto-fastest-v1"
+  }
+}
