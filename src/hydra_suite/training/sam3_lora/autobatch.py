@@ -26,14 +26,37 @@ from typing import Optional
 from hydra_suite.runtime.memory_profiles import ProfileIdentity
 from hydra_suite.training.contracts import Sam3LoraParams, TrainingRunSpec
 from hydra_suite.training.sam3_lora.env import resolve_sam3_env
+from hydra_suite.training.sam3_lora.preflight import CudaDeviceObservation
 
 OPERATION = "sam3_lora_train"
 
+# Mixed into hashed material whenever a fallback path is taken, so a
+# degraded key can never collide with a healthy one for the same nominal
+# workload (see `Sam3FingerprintResult.degraded_reasons`).
+_DEGRADED_MARKER = "degraded"
+
 # In-process cache of the sidecar-env package hash, keyed on
-# (prefix, conda-meta directory mtime_ns). A fresh `conda install`/`pip
-# install` inside the env changes conda-meta's mtime, so this never needs
-# invalidating by hand.
-_PACKAGE_HASH_CACHE: dict[tuple[str, int], tuple[str, bool]] = {}
+# (prefix, conda-meta mtime_ns, site-packages mtime_ns). A fresh `conda
+# install` or `pip install` inside the env changes one of those two
+# directories' mtimes, so this never needs invalidating by hand.
+_PACKAGE_HASH_CACHE: dict[tuple[str, int, int], str] = {}
+
+
+@dataclass(frozen=True, slots=True)
+class Sam3FingerprintResult:
+    """The cache key plus any reasons it is weaker than a full measurement.
+
+    `degraded_reasons` is non-empty when some part of the identity fell back
+    to a coarser signal (the sidecar env prefix couldn't be resolved, or the
+    checkpoint didn't resolve to a stat-able local file). The reasons are
+    also mixed into the hashed material (see `_DEGRADED_MARKER`), so a
+    degraded key can never collide with a healthy one for the same nominal
+    workload -- callers that additionally want to log the reason(s) loudly
+    at launch can inspect this field without widening `ProfileIdentity`.
+    """
+
+    identity: ProfileIdentity
+    degraded_reasons: tuple[str, ...] = ()
 
 
 @dataclass(frozen=True, slots=True)
@@ -126,66 +149,120 @@ def _conda_run_version_query(env_name: str) -> str:
     return result.stdout.strip()
 
 
+def _site_packages_dir(prefix: Path) -> Optional[Path]:
+    """Find `<prefix>/lib/python3*/site-packages`, without hardcoding a version.
+
+    There is ordinarily exactly one `python3*` directory under `lib/`; if
+    there are zero or several (an unusual/broken env), this returns `None`
+    rather than guessing, and the caller degrades.
+    """
+
+    lib_dir = prefix / "lib"
+    try:
+        candidates = sorted(lib_dir.glob("python3*/site-packages"))
+    except OSError:
+        return None
+    return candidates[0] if len(candidates) == 1 else None
+
+
 def sam3_env_package_hash(prefix: Optional[Path], env_name: str) -> tuple[str, bool]:
     """Return `(hash, degraded)` identifying the sidecar env's packages.
 
-    The primary path is a pure filesystem listing: the sorted filenames of
-    `<prefix>/conda-meta/*.json` (each is a `name-version-build` string), so
-    the hash changes whenever any package in the env -- sam3, torch, the CUDA
-    runtime -- is upgraded. It costs a `listdir`, not a subprocess, and is
-    cached in-process on `(prefix, conda-meta mtime_ns)`.
+    Verified against a real sidecar env on the CUDA box: `sam3`, `torch`, and
+    the whole CUDA stack are **pip-installed** there (visible only as
+    `*.dist-info` under `lib/python3*/site-packages/`), not `conda-meta`
+    entries -- `conda-meta` alone would silently fail to notice a `sam3` or
+    `torch` upgrade, exactly the collision this key exists to prevent. So the
+    primary path hashes the union of two pure filesystem listings:
 
-    Only when the prefix cannot be resolved does this fall back to one
-    `conda run` version query, and it reports `degraded=True` so callers
-    know the key is weaker than the filesystem-listing form (e.g. it will not
-    notice a CUDA runtime bump that doesn't change `sam3`/`torch` versions).
+    - the sorted filenames of `<prefix>/conda-meta/*.json`
+      (`name-version-build` strings, conda-installed packages), and
+    - the sorted filenames of `<prefix>/lib/python3*/site-packages/*.dist-info`
+      (pip-installed packages, e.g. `sam3`, `torch`, `nvidia_cudnn_cu12`).
+
+    Each entry is tagged `conda:<name>` or `pip:<name>` before hashing, so a
+    package moving from one installer to the other also changes the key.
+    Both are `listdir`-class operations (milliseconds), no subprocess. The
+    result is cached in-process on `(prefix, conda-meta mtime_ns,
+    site-packages mtime_ns)`, so a fresh install under either directory
+    invalidates the cache automatically.
+
+    Only when the prefix cannot be resolved, or neither directory yields any
+    entries, does this fall back to one `conda run` version query, and it
+    reports `degraded=True` so callers know the key is weaker than the
+    filesystem-listing form.
     """
 
     if prefix is not None:
         conda_meta = prefix / "conda-meta"
+        site_packages = _site_packages_dir(prefix)
+
         try:
-            mtime_ns = conda_meta.stat().st_mtime_ns
+            conda_mtime = conda_meta.stat().st_mtime_ns
         except OSError:
-            mtime_ns = None
-        if mtime_ns is not None:
-            cache_key = (str(prefix), mtime_ns)
+            conda_mtime = -1
+        try:
+            site_mtime = site_packages.stat().st_mtime_ns if site_packages else -1
+        except OSError:
+            site_mtime = -1
+
+        if conda_mtime != -1 or site_mtime != -1:
+            cache_key = (str(prefix), conda_mtime, site_mtime)
             cached = _PACKAGE_HASH_CACHE.get(cache_key)
             if cached is not None:
-                return cached
-            try:
-                names = sorted(p.name for p in conda_meta.glob("*.json"))
-            except OSError:
-                names = None
-            if names:
-                digest = hashlib.sha256("\n".join(names).encode("utf-8")).hexdigest()
-                value = (digest, False)
-                _PACKAGE_HASH_CACHE[cache_key] = value
-                return value
+                return cached, False
 
-    # Degraded fallback: prefix unresolved or conda-meta unreadable/empty.
+            entries: list[str] = []
+            try:
+                entries.extend(f"conda:{p.name}" for p in conda_meta.glob("*.json"))
+            except OSError:
+                pass
+            if site_packages is not None:
+                try:
+                    entries.extend(
+                        f"pip:{p.name}" for p in site_packages.glob("*.dist-info")
+                    )
+                except OSError:
+                    pass
+
+            if entries:
+                digest = hashlib.sha256(
+                    "\n".join(sorted(entries)).encode("utf-8")
+                ).hexdigest()
+                _PACKAGE_HASH_CACHE[cache_key] = digest
+                return digest, False
+
+    # Degraded fallback: prefix unresolved, or neither listing yielded
+    # anything (broken/empty env layout).
     try:
         probe = _conda_run_version_query(env_name)
     except (OSError, subprocess.SubprocessError):
         probe = f"unresolved:{env_name}"
-    digest = hashlib.sha256(probe.encode("utf-8")).hexdigest()
+    digest = hashlib.sha256(f"{_DEGRADED_MARKER}:{probe}".encode("utf-8")).hexdigest()
     return digest, True
 
 
-def _checkpoint_identity(base_model: str) -> str:
+def _checkpoint_identity(base_model: str) -> tuple[str, bool]:
     """`(size, mtime_ns)` of the resolved checkpoint file, hashed.
 
-    Falls back to hashing the raw `base_model` string (e.g. a bare HF repo
-    id that has no local file yet) so the fingerprint always produces a
-    stable string rather than raising.
+    Returns `(hash, degraded)`. When `base_model` does not resolve to a
+    stat-able local file (e.g. a bare HF repo id with no local checkpoint
+    yet), this is DEGRADED rather than hashing the bare `base_model` string:
+    a plain string hash would be a deterministic function of the repo id
+    alone, so two different upstream revisions published under the same
+    repo id would silently collide -- exactly what the brief forbids as an
+    identity source. The degraded marker is mixed in so that path can never
+    produce a key indistinguishable from a real, stat-backed one.
     """
 
     path = Path(base_model)
     try:
         stat = path.stat()
-        payload = f"file:{stat.st_size}:{stat.st_mtime_ns}"
     except OSError:
-        payload = f"ref:{base_model}"
-    return hashlib.sha256(payload.encode("utf-8")).hexdigest()
+        payload = f"{_DEGRADED_MARKER}:ref:{base_model}"
+        return hashlib.sha256(payload.encode("utf-8")).hexdigest(), True
+    payload = f"file:{stat.st_size}:{stat.st_mtime_ns}"
+    return hashlib.sha256(payload.encode("utf-8")).hexdigest(), False
 
 
 def _adapter_scope(params: Sam3LoraParams) -> str:
@@ -234,15 +311,23 @@ def _dataset_density_hash(dataset: Sam3DatasetDensityProfile) -> str:
 def sam3_workload_fingerprint(
     spec: TrainingRunSpec,
     *,
-    cuda_device,
+    cuda_device: CudaDeviceObservation,
     dataset: Sam3DatasetDensityProfile,
-) -> ProfileIdentity:
+) -> Sam3FingerprintResult:
     """Build the `ProfileIdentity` cache key for one SAM3 LoRA training spec.
 
-    `cuda_device` is the *observed* physical device (an object exposing
-    `.name` and `.total_bytes`, e.g. `CudaDeviceObservation` from
-    `preflight.py`) -- never the requested `"cuda"` string, and never the
-    device UUID (see `device_identity_for`).
+    `cuda_device` is the *observed* physical device (`CudaDeviceObservation`
+    from `preflight.py`, exposing `.name` and `.total_bytes`) -- never the
+    requested `"cuda"` string, and never the device UUID (see
+    `device_identity_for`).
+
+    Returns a `Sam3FingerprintResult` rather than a bare `ProfileIdentity`:
+    when any sub-identity falls back to a degraded signal (the sidecar env
+    prefix couldn't be resolved, or the checkpoint isn't a stat-able local
+    file), that reason is both mixed into the hashed material (so a degraded
+    key can never collide with a healthy one) and surfaced on the result so
+    a caller can log it loudly at launch, without widening `ProfileIdentity`
+    itself (a shared, already-closed schema).
     """
 
     params = spec.sam3_params
@@ -251,9 +336,16 @@ def sam3_workload_fingerprint(
 
     env_name = resolve_sam3_env(params.env_name or None)
     prefix = sam3_env_prefix(env_name)
-    package_hash, _degraded = sam3_env_package_hash(prefix, env_name)
+    package_hash, env_degraded = sam3_env_package_hash(prefix, env_name)
+    checkpoint_hash, checkpoint_degraded = _checkpoint_identity(spec.base_model)
 
-    model_identity = f"{_checkpoint_identity(spec.base_model)}|{package_hash}"
+    degraded_reasons: list[str] = []
+    if env_degraded:
+        degraded_reasons.append("sidecar_env_package_hash_degraded")
+    if checkpoint_degraded:
+        degraded_reasons.append("checkpoint_not_a_stat_able_local_file")
+
+    model_identity = f"{checkpoint_hash}|{package_hash}"
     backend = f"{env_name}|{package_hash}"
     device_identity = device_identity_for(cuda_device.name, cuda_device.total_bytes)
 
@@ -264,7 +356,7 @@ def sam3_workload_fingerprint(
         f"density={_dataset_density_hash(dataset)}"
     )
 
-    return ProfileIdentity(
+    identity = ProfileIdentity(
         operation=OPERATION,
         model_identity=model_identity,
         backend=backend,
@@ -274,4 +366,7 @@ def sam3_workload_fingerprint(
         tiling_mode=params.geometry_mode,
         adapter_scope=_adapter_scope(params),
         adapter_rank=int(params.rank),
+    )
+    return Sam3FingerprintResult(
+        identity=identity, degraded_reasons=tuple(degraded_reasons)
     )

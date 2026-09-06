@@ -23,13 +23,31 @@ from hydra_suite.training.sam3_lora import autobatch as ab
 GiB = 1024**3
 
 
-def _make_conda_meta(tmp_path: Path, env_name: str, packages: list[str]) -> Path:
+def _make_env(
+    tmp_path: Path,
+    env_name: str,
+    conda_packages: tuple[str, ...] = ("sam3-1.0-0", "torch-2.4-cu121"),
+    pip_packages: tuple[str, ...] = (),
+) -> Path:
+    """Build a fake sidecar env prefix with both a conda-meta dir and a
+    lib/python3*/site-packages dir, mirroring the real mehek `sam3-lora` env
+    where sam3/torch/CUDA are pip-installed, not conda-installed.
+    """
+
     prefix = tmp_path / "envs" / env_name
     conda_meta = prefix / "conda-meta"
     conda_meta.mkdir(parents=True)
-    for pkg in packages:
+    for pkg in conda_packages:
         (conda_meta / f"{pkg}.json").write_text("{}")
+    site_packages = prefix / "lib" / "python3.11" / "site-packages"
+    site_packages.mkdir(parents=True)
+    for pkg in pip_packages:
+        (site_packages / f"{pkg}.dist-info").mkdir()
     return prefix
+
+
+# Backward-compatible alias for the old fixture name.
+_make_conda_meta = _make_env
 
 
 def _patch_conda(monkeypatch, prefixes: dict[str, Path]):
@@ -112,12 +130,19 @@ def _fingerprint(tmp_path, monkeypatch, prefix, **kwargs):
         pool=kwargs.get("pool", ("background",)),
     )
     dev = kwargs.get("dev") or _dev()
-    return ab.sam3_workload_fingerprint(spec, cuda_device=dev, dataset=dataset)
+    return ab.sam3_workload_fingerprint(spec, cuda_device=dev, dataset=dataset).identity
 
 
 @pytest.fixture
 def prefix(tmp_path):
-    return _make_conda_meta(tmp_path, "hydra-sam3", ["sam3-1.0-0", "torch-2.4-cu121"])
+    # Conda-meta carries unrelated conda-installed packages; sam3/torch/CUDA
+    # live only as pip dist-info, matching the real mehek `sam3-lora` env.
+    return _make_env(
+        tmp_path,
+        "hydra-sam3",
+        conda_packages=("python-3.11.0-h1234", "pip-24.0-py311"),
+        pip_packages=("sam3-0.1.0", "torch-2.11.0+cu128"),
+    )
 
 
 def test_same_workload_hits_the_cache(tmp_path, monkeypatch, prefix):
@@ -128,8 +153,23 @@ def test_same_workload_hits_the_cache(tmp_path, monkeypatch, prefix):
 
 
 def test_change_sidecar_env_packages_misses_cache(tmp_path, monkeypatch, prefix):
+    """A new conda-meta entry alone changes the key."""
     base = _fingerprint(tmp_path, monkeypatch, prefix)
-    (prefix / "conda-meta" / "sam3-1.1-0.json").write_text("{}")
+    (prefix / "conda-meta" / "some-new-package-1.0-0.json").write_text("{}")
+    mutated = _fingerprint(tmp_path, monkeypatch, prefix)
+    assert base != mutated
+
+
+def test_change_sidecar_env_dist_info_misses_cache(tmp_path, monkeypatch, prefix):
+    """A new pip *.dist-info entry alone changes the key.
+
+    This is the exact scenario the controller found on mehek: sam3/torch/CUDA
+    are pip-installed (dist-info only, no conda-meta entry), so an upgrade
+    there must still miss the cache even though conda-meta is untouched.
+    """
+    base = _fingerprint(tmp_path, monkeypatch, prefix)
+    site_packages = prefix / "lib" / "python3.11" / "site-packages"
+    (site_packages / "torch-2.12.0+cu128.dist-info").mkdir()
     mutated = _fingerprint(tmp_path, monkeypatch, prefix)
     assert base != mutated
 
@@ -143,16 +183,14 @@ def test_change_checkpoint_bytes_misses_cache(tmp_path, monkeypatch, prefix):
 
 
 def test_change_sidecar_env_name_misses_cache(tmp_path, monkeypatch, prefix):
-    other_prefix = _make_conda_meta(
-        tmp_path, "other-env", ["sam3-1.0-0", "torch-2.4-cu121"]
-    )
+    other_prefix = _make_env(tmp_path, "other-env")
     _patch_conda(monkeypatch, {"hydra-sam3": prefix, "other-env": other_prefix})
     spec_a = _spec(tmp_path, env_name="hydra-sam3")
     spec_b = _spec(tmp_path, env_name="other-env", checkpoint=Path(spec_a.base_model))
     dataset = _dataset()
     dev = _dev()
-    a = ab.sam3_workload_fingerprint(spec_a, cuda_device=dev, dataset=dataset)
-    b = ab.sam3_workload_fingerprint(spec_b, cuda_device=dev, dataset=dataset)
+    a = ab.sam3_workload_fingerprint(spec_a, cuda_device=dev, dataset=dataset).identity
+    b = ab.sam3_workload_fingerprint(spec_b, cuda_device=dev, dataset=dataset).identity
     assert a != b
 
 
@@ -232,3 +270,43 @@ def test_package_hash_degrades_when_prefix_unresolvable(monkeypatch):
     digest, degraded = ab.sam3_env_package_hash(None, "hydra-sam3")
     assert degraded is True
     assert isinstance(digest, str) and digest
+
+
+def test_checkpoint_identity_degrades_for_a_bare_repo_id():
+    digest_a, degraded_a = ab._checkpoint_identity("facebook/sam3")
+    digest_b, degraded_b = ab._checkpoint_identity("facebook/sam3-v2")
+    assert degraded_a is True and degraded_b is True
+    # Different repo ids must still differ (it's not a constant sentinel)...
+    assert digest_a != digest_b
+    # ...but two different real revisions published under the SAME repo id
+    # are indistinguishable from a bare string alone -- that's exactly why
+    # this path is degraded rather than treated as a healthy key.
+
+
+def test_fingerprint_reports_degraded_reasons_for_unresolvable_env_and_checkpoint(
+    tmp_path, monkeypatch
+):
+    _patch_conda(monkeypatch, {})  # no envs registered -> prefix unresolvable
+    monkeypatch.setattr(
+        ab, "_conda_run_version_query", lambda env_name: "unresolved-probe"
+    )
+    spec = _spec(tmp_path, checkpoint=Path("facebook/sam3"))
+    result = ab.sam3_workload_fingerprint(spec, cuda_device=_dev(), dataset=_dataset())
+    assert "sidecar_env_package_hash_degraded" in result.degraded_reasons
+    assert "checkpoint_not_a_stat_able_local_file" in result.degraded_reasons
+
+
+def test_degraded_key_never_collides_with_a_healthy_one_for_the_same_workload(
+    tmp_path, monkeypatch, prefix
+):
+    healthy = _fingerprint(tmp_path, monkeypatch, prefix)
+
+    _patch_conda(monkeypatch, {})  # force env resolution to fail
+    monkeypatch.setattr(
+        ab, "_conda_run_version_query", lambda env_name: "unresolved-probe"
+    )
+    spec = _spec(tmp_path, checkpoint=tmp_path / _FIXED_CHECKPOINT_NAME)
+    degraded = ab.sam3_workload_fingerprint(
+        spec, cuda_device=_dev(), dataset=_dataset()
+    ).identity
+    assert healthy != degraded
