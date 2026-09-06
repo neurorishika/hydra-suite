@@ -339,6 +339,8 @@ class MainWindow(QMainWindow):
         self.interp_worker = None
         self.final_media_export_worker = None
         self.preview_detection_worker = None
+        self.batch_fanout_worker = None
+        self.batch_fanout_dialog = None
         self.temporary_files = []  # Track temporary files for cleanup
         self.session_log_handler = None  # Track current session log file handler
         self._individual_dataset_run_id = None

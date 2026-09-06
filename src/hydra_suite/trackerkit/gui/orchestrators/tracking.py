@@ -224,6 +224,21 @@ class TrackingOrchestrator:
         self._mw._pending_video_csv_path = None
         self._mw._pending_video_generation = False
 
+        # The fan-out's children are processes, not threads: cancelling walks
+        # them through SIGINT -> SIGTERM -> SIGKILL with grace periods, so it
+        # gets a long cooperative timeout and is never force-terminated (that
+        # would abandon live children). The worker reference itself is dropped
+        # by the QThread.finished handler, not here.
+        fanout_worker = getattr(self._mw, "batch_fanout_worker", None)
+        if fanout_worker is not None and fanout_worker.isRunning():
+            fanout_worker.cancel()
+            self._request_qthread_stop(
+                fanout_worker,
+                "BatchFanoutWorker",
+                timeout_ms=25000,
+                force_terminate=False,
+            )
+
         # Stop all active workers and subprocess-like threads.
         self._request_qthread_stop(
             getattr(self._mw, "_cache_builder_worker", None),
@@ -1042,10 +1057,15 @@ class TrackingOrchestrator:
             # If batch mode group is checked, initialize batch processing
             if self._panels.setup.g_batch.isChecked():
                 if self._mw.current_batch_index < 0:
+                    mode_word = (
+                        "in parallel across GPUs"
+                        if self._batch_parallel_requested()
+                        else "sequentially"
+                    )
                     res = QMessageBox.question(
                         self._mw,
                         "Start Batch Process",
-                        f"This will process {len(self._mw.batch_videos)} videos sequentially using the CURRENT parameters.\n\n"
+                        f"This will process {len(self._mw.batch_videos)} videos {mode_word} using the CURRENT parameters.\n\n"
                         "Each video will have its own CSV and configuration file saved in its source directory.\n\n"
                         "Continue?",
                         QMessageBox.Yes | QMessageBox.No,
@@ -1072,6 +1092,15 @@ class TrackingOrchestrator:
                 self._mw.current_batch_index = -1  # Reset batch if cancelled
                 return
 
+            if self._batch_parallel_requested():
+                # Parallel fan-out replaces the sequential re-entrant batch loop
+                # entirely: children are headless CLI processes. current_batch_index
+                # goes back to -1 so _finalize_tracking_session_ui's continuation
+                # branch can never fire for this run.
+                self._mw.current_batch_index = -1
+                self.start_batch_fanout()
+                return
+
         video_fp = self._panels.setup.file_line.text()
         if not video_fp:
             QMessageBox.warning(
@@ -1082,6 +1111,173 @@ class TrackingOrchestrator:
             self.start_preview_on_video(video_fp)
         else:
             self.start_tracking_on_video(video_fp, backward_mode=False)
+
+    # ------------------------------------------------------------------
+    # Parallel batch fan-out (one child process per GPU)
+    # ------------------------------------------------------------------
+
+    def _batch_parallel_requested(self) -> bool:
+        """True when Batch AND its Parallel checkbox are both on."""
+        setup = self._panels.setup
+        if not setup.g_batch.isChecked():
+            return False
+        checkbox = getattr(setup, "chk_batch_parallel", None)
+        return checkbox is not None and bool(checkbox.isChecked())
+
+    def _resolve_fanout_options(self):
+        """Build ``FanoutOptions`` from the mirrored Batch › Parallel state.
+
+        Returns ``None`` when the user's GPU selector cannot be resolved (the
+        warning has already been shown).
+        """
+        from hydra_suite.runtime.cuda_devices import (
+            list_cuda_devices,
+            parse_gpu_selectors,
+            resolve_gpu_selectors,
+        )
+        from hydra_suite.trackerkit.batch_fanout import FanoutOptions
+
+        # The GPU line edit only mirrors into config on editingFinished, so a
+        # value typed and left focused would otherwise be silently ignored.
+        try:
+            self._mw._on_batch_parallel_changed()
+        except Exception:
+            logger.debug("Could not refresh batch-parallel config.", exc_info=True)
+        cfg = self._mw.config
+
+        devices = []
+        if list_cuda_devices():
+            try:
+                devices = resolve_gpu_selectors(
+                    parse_gpu_selectors(cfg.batch_parallel_gpus or "auto")
+                )
+            except ValueError as exc:
+                QMessageBox.warning(self._mw, "GPU selection", str(exc))
+                return None
+
+        requested = int(cfg.batch_parallel_jobs or 0)
+        if devices and requested <= 0:
+            # "Unspecified": the scheduler gives one slot per selected GPU.
+            jobs = None
+        else:
+            jobs = max(1, requested or 1)
+            if devices:
+                jobs = min(jobs, len(devices))
+        return FanoutOptions(gpus=devices, jobs=jobs, log_level="INFO")
+
+    def start_batch_fanout(self) -> bool:
+        """Run the whole batch as headless child processes, one per slot."""
+        from hydra_suite.trackerkit.batch_plan import BatchPlanError, plan_batch_jobs
+        from hydra_suite.trackerkit.gui.dialogs.batch_fanout_dialog import (
+            BatchFanoutDialog,
+        )
+        from hydra_suite.trackerkit.gui.workers.batch_fanout_worker import (
+            BatchFanoutWorker,
+        )
+
+        setup = self._panels.setup
+        videos = list(self._mw.batch_videos)
+        try:
+            # The keystone's sidecar was just written by save_config(), so the
+            # planner sees exactly what `trackerkit track --video-list` would.
+            specs = plan_batch_jobs(
+                videos, keystone_override=setup.chk_batch_keystone_override.isChecked()
+            )
+        except BatchPlanError as exc:
+            QMessageBox.warning(self._mw, "Batch cannot start", str(exc))
+            return False
+
+        options = self._resolve_fanout_options()
+        if options is None:
+            return False
+        slots = len(options.gpus) if options.gpus else int(options.jobs or 1)
+
+        # Never leave a previous run's table parented to the window forever.
+        previous = getattr(self._mw, "batch_fanout_dialog", None)
+        if previous is not None:
+            try:
+                previous.close()
+                previous.deleteLater()
+            except Exception:
+                logger.debug(
+                    "Could not release previous fan-out dialog.", exc_info=True
+                )
+            self._mw.batch_fanout_dialog = None
+
+        worker = BatchFanoutWorker(specs, options, parent=self._mw)
+        dialog = BatchFanoutDialog(specs, parent=self._mw)
+        worker.job_started.connect(dialog.on_job_started)
+        worker.job_progress.connect(dialog.on_job_progress)
+        worker.job_finished.connect(dialog.on_job_finished)
+        worker.fanout_finished.connect(dialog.on_fanout_finished)
+        worker.fanout_finished.connect(self._on_batch_fanout_finished)
+        worker.error.connect(dialog.on_fanout_error)
+        worker.error.connect(self._on_batch_fanout_error)
+        # QThread.finished fires AFTER run() returns, which fanout_finished
+        # (emitted from inside execute()) does not: only here is isRunning()
+        # guaranteed false, so only here can the reference actually be dropped.
+        worker.finished.connect(self._on_batch_fanout_thread_finished)
+        dialog.cancel_requested.connect(worker.cancel)
+        self._mw.batch_fanout_worker = worker
+        self._mw.batch_fanout_dialog = dialog
+
+        self._mw._stop_all_requested = False
+        self._mw.btn_start.setText("Stop Tracking")
+        self._mw.progress_bar.setVisible(True)
+        self._mw.progress_label.setVisible(True)
+        # Busy indicator; the per-job bars live in the dialog.
+        self._mw.progress_bar.setRange(0, 0)
+        self._mw.progress_label.setText(
+            f"Parallel batch: {len(specs)} videos on {slots} slot(s)…"
+        )
+        self._mw._apply_ui_state("tracking")
+        dialog.show()
+        worker.start()
+        logger.info(
+            "Parallel batch fan-out started: %d videos, %d slot(s)", len(specs), slots
+        )
+        return True
+
+    def _on_batch_fanout_error(self, message: str) -> None:
+        logger.error("Batch fan-out worker error: %s", message)
+        self._restore_after_fanout()
+        QMessageBox.critical(self._mw, "Parallel batch failed", message)
+
+    def _on_batch_fanout_finished(self, result) -> None:
+        ok = sum(1 for job in result.jobs if job.success)
+        logger.info(
+            "Parallel batch finished: %d/%d succeeded (cancelled=%s)",
+            ok,
+            len(result.jobs),
+            result.cancelled,
+        )
+        self._restore_after_fanout()
+        if not result.cancelled:
+            QMessageBox.information(
+                self._mw,
+                "Batch Complete",
+                f"{ok}/{len(result.jobs)} videos succeeded.\n"
+                "Per-video logs are in each video's <stem>_logs/ folder.",
+            )
+
+    def _on_batch_fanout_thread_finished(self) -> None:
+        self._cleanup_thread_reference("batch_fanout_worker")
+
+    def _restore_after_fanout(self) -> None:
+        """Return the main window to idle. Idempotent: stop_tracking may race it."""
+        self._mw.progress_bar.setRange(0, 100)
+        self._mw.progress_bar.setValue(0)
+        self._mw.progress_bar.setVisible(False)
+        self._mw.progress_label.setVisible(False)
+        self._mw.progress_label.setText("Ready")
+        self._mw._cleanup_session_logging()
+        self._mw._set_ui_controls_enabled(True)
+        self._mw.btn_start.blockSignals(True)
+        self._mw.btn_start.setChecked(False)
+        self._mw.btn_start.blockSignals(False)
+        self._mw.btn_start.setText("Start Full Tracking")
+        self._mw._apply_ui_state("idle" if self._mw.current_video_path else "no_video")
+        self._mw.current_batch_index = -1
 
     def start_preview_on_video(self, video_path):
         """start_preview_on_video method documentation."""
