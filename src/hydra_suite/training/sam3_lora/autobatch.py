@@ -18,6 +18,7 @@ from __future__ import annotations
 
 import hashlib
 import json
+import os
 import subprocess
 import time
 from collections.abc import Mapping, Sequence
@@ -35,7 +36,7 @@ from hydra_suite.runtime.memory_profiles import (
 )
 from hydra_suite.runtime.resource_budget import AcceleratorKind
 from hydra_suite.training.contracts import Sam3LoraParams, TrainingRunSpec
-from hydra_suite.training.sam3_lora.env import resolve_sam3_env
+from hydra_suite.training.sam3_lora.env import resolve_sam3_env, sam3_env_environ
 from hydra_suite.training.sam3_lora.preflight import CudaDeviceObservation
 
 OPERATION = "sam3_lora_train"
@@ -296,6 +297,82 @@ def _adapter_scope(params: Sam3LoraParams) -> str:
     return f"{scope or 'none'}|alpha={int(params.alpha)}"
 
 
+_ALLOC_CONF_ENV_VAR = "PYTORCH_CUDA_ALLOC_CONF"
+
+# Measured on mehek (see task-7 brief): the caching allocator's default
+# growth policy shows a reserved-memory staircase that opens ~35% over 60
+# steps while allocated (live) bytes grow ~2% -- pure fragmentation, not
+# real usage. Under `expandable_segments:True` the staircase does not
+# appear at all out to 120 steps. A measurement taken under one allocator
+# config understates -- never overstates -- what the other needs, so the
+# two configs must never share a cache key.
+_UNSET_ALLOC_CONF_MARKER = "unset"
+
+
+def _normalize_pytorch_alloc_conf(raw: Optional[str]) -> str:
+    """Canonical string form of `PYTORCH_CUDA_ALLOC_CONF` for hashing.
+
+    The setting is a comma-separated `key:value` list whose ORDER carries no
+    semantics -- `a:1,b:2` and `b:2,a:1` configure the allocator identically
+    -- so the pairs are sorted before joining, or two equivalent configs
+    would silently miss each other's cache forever.
+
+    Keys and values are lowercased: PyTorch's own parser is case-sensitive
+    only by accident of how it happens to compare strings, and a user typing
+    `True` vs `true` vs `TRUE` for the same boolean must not fragment the
+    cache into three copies of the same measurement.
+
+    `None` (the variable is unset in the sidecar environment) normalizes to
+    a distinct sentinel, `"unset"`, that can never collide with any set
+    value -- including one that normalizes to the empty string (e.g. the
+    variable set to `""`) or to a config that happens to reproduce PyTorch's
+    compiled-in defaults. Three sidecar states -- unset, explicitly set to a
+    default-equivalent value, and `expandable_segments:True` -- must hash
+    three different ways: unset and "explicitly default" are related but
+    distinguishable (a future PyTorch could change what "default" means),
+    and both differ from the workload this task exists to isolate.
+    """
+
+    if raw is None:
+        return _UNSET_ALLOC_CONF_MARKER
+
+    pairs: list[str] = []
+    for part in raw.split(","):
+        part = part.strip()
+        if not part:
+            continue
+        if ":" in part:
+            key, _, value = part.partition(":")
+            pairs.append(f"{key.strip().lower()}:{value.strip().lower()}")
+        else:
+            pairs.append(part.lower())
+    pairs.sort()
+    return "set:" + ",".join(pairs)
+
+
+def sidecar_alloc_conf_hash(environment: Optional[Mapping[str, str]] = None) -> str:
+    """Sub-hash of the sidecar child's normalised allocator configuration.
+
+    Reads from the SIDECAR environment -- the composed mapping the probe and
+    training children actually run under (`os.environ` overridden by
+    `sam3_env_environ()`, exactly as `train.py`'s `_child_environment`
+    builds it) -- not the parent process's own `os.environ` in isolation.
+    `sam3_env_environ()` does not currently set `PYTORCH_CUDA_ALLOC_CONF`,
+    so today this resolves to the parent's value, but composing the same way
+    `_child_environment` does means a future override there is picked up
+    automatically rather than silently diverging from what the child sees.
+
+    `environment` is accepted for tests; production callers pass nothing and
+    get the live composed environment.
+    """
+
+    if environment is None:
+        environment = {**os.environ, **sam3_env_environ()}
+    raw = environment.get(_ALLOC_CONF_ENV_VAR)
+    normalized = _normalize_pytorch_alloc_conf(raw)
+    return hashlib.sha256(normalized.encode("utf-8")).hexdigest()[:16]
+
+
 def _dataset_density_hash(dataset: Sam3DatasetDensityProfile) -> str:
     """Stable sub-hash of the dataset density profile.
 
@@ -367,6 +444,12 @@ def sam3_workload_fingerprint(
     key can never collide with a healthy one) and surfaced on the result so
     a caller can log it loudly at launch, without widening `ProfileIdentity`
     itself (a shared, already-closed schema).
+
+    `backend` also carries the sidecar's normalised `PYTORCH_CUDA_ALLOC_CONF`
+    (see `sidecar_alloc_conf_hash`): the caching allocator's growth policy is
+    a memory-driving property of the run, not just of the software stack,
+    and a measurement taken under one config understates -- never
+    overstates -- what another config needs.
     """
 
     params = spec.sam3_params
@@ -385,7 +468,8 @@ def sam3_workload_fingerprint(
         degraded_reasons.append("checkpoint_not_a_stat_able_local_file")
 
     model_identity = f"{checkpoint_hash}|{package_hash}"
-    backend = f"{env_name}|{package_hash}"
+    alloc_conf_hash = sidecar_alloc_conf_hash()
+    backend = f"{env_name}|{package_hash}|{alloc_conf_hash}"
     device_identity = device_identity_for(cuda_device.name, cuda_device.total_bytes)
 
     imgsz = int(spec.hyperparams.imgsz)

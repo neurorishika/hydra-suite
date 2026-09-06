@@ -451,3 +451,60 @@ def test_validation_discards_foreign_and_non_monotone_records(tmp_path):
 def test_validation_discards_a_zero_peak_record(tmp_path):
     identity = _identity()
     assert ab.validate_probe_records((_record(identity, 1, 0),), identity) == ()
+
+
+def test_change_allocator_config_misses_cache(tmp_path, monkeypatch, prefix):
+    """Task 7: only the sidecar's PYTORCH_CUDA_ALLOC_CONF changes -> key changes.
+
+    A measurement taken under `expandable_segments:True` understates a
+    default-allocator run by ~31% (measured on mehek); the two must never
+    share a cache key.
+    """
+    monkeypatch.delenv("PYTORCH_CUDA_ALLOC_CONF", raising=False)
+    base = _fingerprint(tmp_path, monkeypatch, prefix)
+    monkeypatch.setenv("PYTORCH_CUDA_ALLOC_CONF", "expandable_segments:True")
+    mutated = _fingerprint(tmp_path, monkeypatch, prefix)
+    assert base != mutated
+
+
+def test_allocator_config_pair_reordering_does_not_change_key(
+    tmp_path, monkeypatch, prefix
+):
+    """Order of comma-separated key:value pairs is not semantically meaningful."""
+    monkeypatch.setenv(
+        "PYTORCH_CUDA_ALLOC_CONF",
+        "expandable_segments:True,garbage_collection_threshold:0.8",
+    )
+    a = _fingerprint(tmp_path, monkeypatch, prefix)
+    monkeypatch.setenv(
+        "PYTORCH_CUDA_ALLOC_CONF",
+        "garbage_collection_threshold:0.8,expandable_segments:True",
+    )
+    b = _fingerprint(tmp_path, monkeypatch, prefix)
+    assert a == b
+
+
+def test_allocator_config_unset_default_and_expandable_all_differ(
+    tmp_path, monkeypatch, prefix
+):
+    """unset, explicitly-default, and expandable_segments:True are three
+    distinct states and must hash three different ways."""
+    monkeypatch.delenv("PYTORCH_CUDA_ALLOC_CONF", raising=False)
+    unset = _fingerprint(tmp_path, monkeypatch, prefix)
+
+    monkeypatch.setenv("PYTORCH_CUDA_ALLOC_CONF", "backend:native")
+    explicit_default = _fingerprint(tmp_path, monkeypatch, prefix)
+
+    monkeypatch.setenv("PYTORCH_CUDA_ALLOC_CONF", "expandable_segments:True")
+    expandable = _fingerprint(tmp_path, monkeypatch, prefix)
+
+    assert len({unset, explicit_default, expandable}) == 3
+
+
+def test_allocator_config_case_insensitive(tmp_path, monkeypatch, prefix):
+    """Case is normalised away, so True/true/TRUE all hash identically."""
+    monkeypatch.setenv("PYTORCH_CUDA_ALLOC_CONF", "expandable_segments:True")
+    a = _fingerprint(tmp_path, monkeypatch, prefix)
+    monkeypatch.setenv("PYTORCH_CUDA_ALLOC_CONF", "EXPANDABLE_SEGMENTS:true")
+    b = _fingerprint(tmp_path, monkeypatch, prefix)
+    assert a == b
