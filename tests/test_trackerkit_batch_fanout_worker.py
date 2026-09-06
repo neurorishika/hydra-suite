@@ -234,3 +234,29 @@ def test_dialog_reject_cancels_the_run_instead_of_closing(app):
     )
     dialog.reject()
     assert fired == [True]
+
+
+# --- close-on-exit guard -----------------------------------------------------
+
+
+def test_close_prompt_counts_a_running_fanout_worker():
+    """Closing the window mid-fan-out must hit the "Tracking In Progress" prompt.
+
+    Without ``batch_fanout_worker`` in that tuple, ``closeEvent`` skips both the
+    prompt and ``stop_tracking()``: the QThread is destroyed while running and
+    the child processes -- started with ``start_new_session`` -- are orphaned
+    still holding their GPUs. ``_has_active_tracking_workers`` only ever does
+    attribute access, so a stub self is a faithful stand-in for MainWindow.
+    """
+    from types import SimpleNamespace
+
+    from hydra_suite.trackerkit.gui.main_window import MainWindow
+
+    idle = SimpleNamespace(batch_fanout_worker=None, csv_writer_thread=None)
+    assert MainWindow._has_active_tracking_workers(idle) is False
+
+    running = SimpleNamespace(
+        batch_fanout_worker=SimpleNamespace(isRunning=lambda: True),
+        csv_writer_thread=None,
+    )
+    assert MainWindow._has_active_tracking_workers(running) is True

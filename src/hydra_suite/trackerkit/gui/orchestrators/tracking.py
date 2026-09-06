@@ -1145,11 +1145,13 @@ class TrackingOrchestrator:
             logger.debug("Could not refresh batch-parallel config.", exc_info=True)
         cfg = self._mw.config
 
+        # One nvidia-smi shell-out, not two: this runs on the GUI thread.
+        available = list_cuda_devices()
         devices = []
-        if list_cuda_devices():
+        if available:
             try:
                 devices = resolve_gpu_selectors(
-                    parse_gpu_selectors(cfg.batch_parallel_gpus or "auto")
+                    parse_gpu_selectors(cfg.batch_parallel_gpus or "auto"), available
                 )
             except ValueError as exc:
                 QMessageBox.warning(self._mw, "GPU selection", str(exc))
@@ -1174,6 +1176,13 @@ class TrackingOrchestrator:
         from hydra_suite.trackerkit.gui.workers.batch_fanout_worker import (
             BatchFanoutWorker,
         )
+
+        active = getattr(self._mw, "batch_fanout_worker", None)
+        if active is not None and active.isRunning():
+            logger.warning(
+                "Parallel batch fan-out is already running; ignoring the start request."
+            )
+            return False
 
         setup = self._panels.setup
         videos = list(self._mw.batch_videos)

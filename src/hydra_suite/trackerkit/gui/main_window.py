@@ -1532,6 +1532,10 @@ class MainWindow(QMainWindow):
             "interp_worker",
             "final_media_export_worker",
             "preview_detection_worker",
+            # A parallel batch owns child PROCESSES started with
+            # start_new_session: closing the window without stopping it would
+            # destroy the QThread mid-run and orphan children holding GPUs.
+            "batch_fanout_worker",
         )
         for attr in worker_attrs:
             worker = getattr(self, attr, None)

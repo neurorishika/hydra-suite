@@ -11,7 +11,9 @@ reports back. Two legs are exercised:
 1. **run to completion** -- both fixture clips must reach OK and the window
    must return to idle with the worker reference released;
 2. **cancel** -- ``stop_tracking()`` a few seconds in must land a cancelled
-   result, kill both children, and restore the same idle UI.
+   result, kill both children, and restore the same idle UI;
+3. **close mid-run** -- ``window.close()`` must hit the "Tracking In Progress"
+   prompt, stop the fan-out, and leave no orphaned child processes.
 
 It is NOT a pytest module (no ``test_`` prefix, lives outside the collected
 tree) because it launches real child tracking processes for ~1 minute.
@@ -178,8 +180,15 @@ def run_leg(app, videos: list[str], *, cancel_after: float | None):
     worker = window.batch_fanout_worker
     assert worker is not None, "worker reference was not stored"
     worker.fanout_finished.connect(lambda r: captured.__setitem__("result", r))
-    _log(f"btn_start text while running: {window.btn_start.text()!r}")
+    _log(
+        f"btn_start text while running: {window.btn_start.text()!r} "
+        f"progress_hidden={window.progress_bar.isHidden()}"
+    )
     assert window.btn_start.text() == "Stop Tracking"
+    # The window is never shown, so isVisible() is False no matter what and
+    # would make the post-run check vacuous. isHidden() tracks the explicit
+    # setVisible() calls, so this pair can actually fail.
+    assert not window.progress_bar.isHidden(), "progress bar was not shown for the run"
 
     if cancel_after is not None:
         QTimer.singleShot(int(cancel_after * 1000), orch.stop_tracking)
@@ -204,7 +213,7 @@ def run_leg(app, videos: list[str], *, cancel_after: float | None):
     )
     _log(
         f"UI after: btn_start={window.btn_start.text()!r} "
-        f"progress_visible={window.progress_bar.isVisible()} "
+        f"progress_hidden={window.progress_bar.isHidden()} "
         f"batch_index={window.current_batch_index} "
         f"worker_ref={window.batch_fanout_worker!r}"
     )
@@ -214,6 +223,70 @@ def run_leg(app, videos: list[str], *, cancel_after: float | None):
     ]
     _log(f"dialog status column: {rows}")
     return window, result, rows
+
+
+def child_pids() -> list[str]:
+    """PIDs of live fan-out children (`python -m hydra_suite.trackerkit.app ...`).
+
+    This process is `python tests/manual/gui_fanout_smoke.py`, so it can never
+    match the pattern itself -- every hit is a child.
+    """
+    import subprocess
+
+    out = subprocess.run(
+        ["pgrep", "-f", "hydra_suite.trackerkit.app"],
+        capture_output=True,
+        text=True,
+        check=False,
+    ).stdout
+    return [line for line in out.split() if line.strip()]
+
+
+def close_leg(app) -> None:
+    """Closing the window mid-run must prompt, stop, and orphan no children.
+
+    MainWindow.closeEvent only prompts when _has_active_tracking_workers()
+    says something is running. A fan-out leaves tracking_worker None, so if
+    batch_fanout_worker is missing from that tuple the close sails straight
+    through: the QThread is destroyed while running and the children -- which
+    are in their OWN session group -- keep holding their GPUs forever.
+    """
+    _, videos = stage_scratch("close")
+    window = build_window(videos)
+    window.btn_start.setChecked(True)
+    window.toggle_tracking(True)
+    worker = window.batch_fanout_worker
+    assert worker is not None, "worker reference was not stored"
+
+    deadline = time.monotonic() + 30.0
+    while not child_pids() and time.monotonic() < deadline:
+        app.processEvents()
+        time.sleep(0.05)
+    launched = child_pids()
+    _log(f"children launched before close: {launched}")
+    check(bool(launched), "at least one child process was running before the close")
+    check(
+        window._has_active_tracking_workers(),
+        "_has_active_tracking_workers() sees the running fan-out",
+    )
+
+    # The "Tracking In Progress" prompt is answered Yes by the shim.
+    _log("calling window.close() mid-run…")
+    window.close()
+
+    drain = time.monotonic() + 30.0
+    while worker.isRunning() and time.monotonic() < drain:
+        app.processEvents()
+        time.sleep(0.05)
+    check(not worker.isRunning(), "the fan-out worker thread was joined by the close")
+
+    settle = time.monotonic() + 15.0
+    while child_pids() and time.monotonic() < settle:
+        app.processEvents()
+        time.sleep(0.1)
+    remaining = child_pids()
+    _log(f"children remaining after close: {remaining}")
+    check(not remaining, f"no orphaned child processes after close (got {remaining})")
 
 
 def check(condition: bool, message: str) -> None:
@@ -242,7 +315,7 @@ def main() -> int:
     check(window.btn_start.text() == "Start Full Tracking", "btn_start restored")
     check(window.batch_fanout_worker is None, "worker reference cleared")
     check(window.current_batch_index == -1, "batch index reset")
-    check(not window.progress_bar.isVisible(), "progress bar hidden")
+    check(window.progress_bar.isHidden(), "progress bar hidden")
     window.close()
 
     _log("")
@@ -263,7 +336,14 @@ def main() -> int:
     check(window2.btn_start.text() == "Start Full Tracking", "btn_start restored")
     check(window2.batch_fanout_worker is None, "worker reference cleared")
     check(window2.current_batch_index == -1, "batch index reset")
+    check(window2.progress_bar.isHidden(), "progress bar hidden")
     window2.close()
+
+    _log("")
+    _log("=" * 70)
+    _log("LEG 3: close the main window mid-run")
+    _log("=" * 70)
+    close_leg(app)
 
     _log("")
     _log(f"suppressed message boxes ({len(boxes)}):")
