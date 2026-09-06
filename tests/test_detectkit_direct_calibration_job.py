@@ -689,8 +689,10 @@ def test_v5_round_trip_carries_recommendation_rule(tmp_path):
 
 
 def test_v4_evidence_loads_as_unknown_rule_without_backfill(tmp_path):
-    """A real v4 payload (no recommendation block) must load successfully as
-    valid settings, report the unknown-rule label, and must NEVER be
+    """A real v4 payload -- WITH a populated frame table and a real preview,
+    so the preview-loading path is actually exercised and cannot pass
+    vacuously -- must load successfully as valid settings (points AND
+    previews intact), report the unknown-rule label, and must NEVER be
     stamped with whatever rule constant happens to be current at load time
     -- that would assert provenance that was never recorded."""
     import json as _json
@@ -702,23 +704,48 @@ def test_v4_evidence_loads_as_unknown_rule_without_backfill(tmp_path):
         load_direct_calibration,
     )
 
+    image_path = tmp_path / "f.png"
+    cv2.imwrite(str(image_path), np.zeros((16, 16, 3), np.uint8))
     evidence_dir = tmp_path / "evidence"
     evidence_dir.mkdir(parents=True)
     # Real v4 shape: provenance/points/frames/previews, no recommendation
-    # block (that field did not exist until v5).
+    # block (that field did not exist until v5). The frame table and
+    # preview are populated so this test would fail if preview loading
+    # were (as it once regressed to being) silently gated on the wrong
+    # version constant.
     v4_payload = {
         "version": 4,
         "partial": False,
         "message": "",
         "provenance": {},
         "points": [],
-        "frames": [],
-        "previews": [],
+        "frames": [
+            {
+                "image_path": {"absolute": str(image_path)},
+                "ground_truth": [[[0.0, 0.0], [1.0, 0.0], [1.0, 1.0]]],
+            }
+        ],
+        "previews": [
+            {
+                "candidate_label": "c",
+                "candidate_index": 0,
+                "merge_threshold": 0.5,
+                "confidence": 0.3,
+                "frames": [
+                    {
+                        "frame_index": 0,
+                        "predictions": [[[0.1, 0.1], [0.9, 0.1], [0.9, 0.9]]],
+                    }
+                ],
+            }
+        ],
     }
     (evidence_dir / "direct_calibration.json").write_text(_json.dumps(v4_payload))
 
     loaded = load_direct_calibration(evidence_dir)
     assert loaded is not None
+    assert len(loaded.previews) == 1
+    assert loaded.previews[0].candidate_label == "c"
     assert loaded.recommendation_rule_id == UNKNOWN_RECOMMENDATION_RULE_ID
     assert loaded.recommendation_rule == UNKNOWN_RECOMMENDATION_RULE_LABEL
     assert loaded.recommendation_rule_id != RECOMMENDATION_RULE_ID
@@ -778,3 +805,56 @@ def test_stamped_rule_id_matches_the_rule_the_recommender_actually_runs(tmp_path
     assert core_direct.RECOMMENDATION_RULE_ID == restored.recommendation_rule_id
     assert core_direct.RECOMMENDATION_RULE in reason
     assert restored.recommendation_rule == core_direct.RECOMMENDATION_RULE
+
+
+def test_v4_evidence_with_real_preview_and_frame_table_survives_load(tmp_path):
+    """A genuine v4 payload -- one WITH a populated frame table and a real
+    preview referencing it -- must still load its previews intact. Gating
+    preview loading on ``version >= EVIDENCE_VERSION`` breaks this the
+    moment EVIDENCE_VERSION advances for reasons (like rule provenance)
+    that have nothing to do with the preview/frame-table format."""
+    import json as _json
+
+    from hydra_suite.detectkit.jobs.direct_calibration import load_direct_calibration
+
+    image_path = tmp_path / "f.png"
+    cv2.imwrite(str(image_path), np.zeros((16, 16, 3), np.uint8))
+    evidence_dir = tmp_path / "evidence"
+    evidence_dir.mkdir(parents=True)
+    v4_payload = {
+        "version": 4,
+        "partial": False,
+        "message": "",
+        "provenance": {},
+        "points": [],
+        "frames": [
+            {
+                "image_path": {"absolute": str(image_path)},
+                "ground_truth": [[[0.0, 0.0], [1.0, 0.0], [1.0, 1.0]]],
+            }
+        ],
+        "previews": [
+            {
+                "candidate_label": "c",
+                "candidate_index": 0,
+                "merge_threshold": 0.5,
+                "confidence": 0.3,
+                "frames": [
+                    {
+                        "frame_index": 0,
+                        "predictions": [[[0.1, 0.1], [0.9, 0.1], [0.9, 0.9]]],
+                    }
+                ],
+            }
+        ],
+    }
+    (evidence_dir / "direct_calibration.json").write_text(_json.dumps(v4_payload))
+
+    loaded = load_direct_calibration(evidence_dir)
+    assert loaded is not None
+    assert len(loaded.previews) == 1
+    preview = loaded.previews[0]
+    assert preview.candidate_label == "c"
+    _path, gt_polygons, pred_polygons = preview.frames[0]
+    assert len(gt_polygons) == 1
+    assert len(pred_polygons) == 1

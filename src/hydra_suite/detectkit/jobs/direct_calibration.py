@@ -341,11 +341,22 @@ EVIDENCE_FILENAME_GZ = "direct_calibration.json.gz"
 # v5: the payload gains a ``recommendation`` block stamping the machine-
 # readable id, human description and effective date of the recommendation
 # RULE (``core.inference.direct_calibration.RECOMMENDATION_RULE_ID``) in
-# effect at save time. v4 profiles remain valid SETTINGS (points/previews
-# load exactly as before) but carry no rule provenance -- they are labelled
-# ``unknown (pre-2026-09-06)`` on load rather than back-filled with the
-# current rule, per R6 (back-filling asserts provenance that never existed).
+# effect at save time. v4 profiles remain valid SETTINGS -- their points AND
+# previews load exactly as before -- but carry no rule provenance -- they
+# are labelled ``unknown (pre-2026-09-06)`` on load rather than back-filled
+# with the current rule, per R6 (back-filling asserts provenance that never
+# existed).
 EVIDENCE_VERSION = 5
+# The frame-table/preview format introduced in v4 (see above) is a
+# DIFFERENT axis of versioning than the overall evidence payload version:
+# EVIDENCE_VERSION will keep incrementing for reasons (new top-level
+# blocks, like v5's ``recommendation``) that have nothing to do with the
+# preview format. Gating preview loading on ``version >= EVIDENCE_VERSION``
+# would silently drop a genuine v4 payload's previews the instant
+# EVIDENCE_VERSION advances past 4 for an unrelated reason. Gate on this
+# constant instead, and only bump it when the frame-table/preview format
+# itself changes shape.
+PREVIEW_FORMAT_VERSION = 4
 _ROUND_NDIGITS = 1
 
 
@@ -604,7 +615,7 @@ def load_direct_calibration(evidence_dir: Path) -> DirectCalibrationOutcome | No
                 _preview_from_dict(evidence_dir, frame_entries, raw)
                 for raw in payload.get("previews", [])
             ]
-            if version >= EVIDENCE_VERSION
+            if version >= PREVIEW_FORMAT_VERSION
             else []
         )
         # v5+ carries real rule provenance; anything older (points/settings
