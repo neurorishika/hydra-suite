@@ -231,11 +231,42 @@ with exactly 5 columns differing — `IdentityRealtimeID`, `...Label`,
 identity columns and does **not** move trajectories, despite these fixtures
 enabling the online decoder and its association-cost addon.
 
-Two gate caveats worth carrying forward: **`ant_cnn_identity_marked` never
-ran** — its config exists but `ant_cnn_identity_marked.mp4` does not, and the
-harness still printed "all clips produced comparable output"; and `fly_obb`
-reported 1.26x perf against a 1.25x tolerance while an unrelated `trackerkit`
-GUI held the machine (other clips: 0.43x/0.85x/1.11x).
+One gate caveat worth carrying forward: `fly_obb` reported 1.26x perf against
+a 1.25x tolerance while an unrelated `trackerkit` GUI held the machine (other
+clips: 0.43x/0.85x/1.11x).
+
+(`ant_cnn_identity_marked` did not run, but that is by design, not a defect:
+`run_matrix.sh:83-87` gates it behind `ONPATH=1` because it deliberately turns
+a feature on, so its EQUIVALENCE line is expected to differ and would poison a
+green gate. Run it with `ONPATH=1 MAIN_SRC=$WT_SRC ...` and read only the
+DETERMINISM line.)
+
+### Identity fixture coverage is one clip
+
+All three identity configs (`ant_cnn_identity`, `_relink`, `_marked`) run the
+**same** `clips/ant_cnn_identity.mp4` (500 frames @25fps, 4512x4512, ~16
+animals). `emi_obb_identity` reads like a second identity fixture but its
+config is `identity_method: none_disabled` with no classifiers, so it executes
+no identity code at all. Every identity claim this gate can make therefore
+rests on one clip and one classifier (the unstamped April colortag model,
+`fit_policy` absent -> squash).
+
+Measured identity quality on that clip (post-slice, `_tracking_final_with
+_individual.csv`, 8105 rows / 500 frames / 126 trajectories):
+
+| Metric | Value |
+|---|---|
+| One label per trajectory | 126/126 (invariant holds) |
+| Simultaneous collisions (same known label on 2 tracks) | **0** |
+| Unlabelled rows | 2101 (25.9%) -- median 4 of 16 animals per frame |
+| Trajectories per identity | median 3, worst 9 |
+| Trajectory length | median 28 of 500 frames |
+| Frame coverage per identity | median 260/500; 3 full, 11 under half |
+| `IdentityFinalConfidence` | median 0.789, 27.9% below 0.5 |
+
+The identity that *is* assigned is trustworthy; the failure is coverage and
+continuity, not mislabelling. That is the retention problem, and it confirms
+this cannot be measured on one clip.
 
 ## 11. Recommended reshape
 

@@ -10,6 +10,38 @@ these paths to have minimal divergences." The document now covers four paths, no
 
 **Status:** design proposal, pending review. No implementation.
 **Repo:** `/Users/neurorishika/Projects/Rockefeller/Kronauer/multi-animal-tracker` @ `main` (`097408af`), read-only audit.
+
+> ## AMENDED 2026-09-06 (second pass) — the YOLO baseline MOVED under this document
+>
+> The audit above was written against `097408af`. Five commits have landed on `main` since,
+> and three of them change the very numbers Part 2 tabulated. **The unification's shared
+> baseline is the NEW defaults, not the ones the audit captured.** Every affected row below
+> is amended in place, keeping the historical value visible (`old -> new`, SHA) because the
+> old numbers are load-bearing for the 2026-09-06 incident narrative.
+>
+> | Commit | What it changed |
+> |---|---|
+> | `4de070f3` feat(detectkit): use safer SAHI training defaults | YOLO `object_tile_fraction` 0.15 -> 0.10; `min_area_ratio` 0.1 -> 0.25; `target_sizes` (200,300,400) -> (32,64,96,128); **new** `target_size_fractions = (0.05,0.10,0.15,0.20)` — scale is now expressed RELATIVE to model input, with a legacy-compat branch |
+> | `306738ec` feat(detectkit): balance multi-scale SAHI loss | new `training/ultralytics_scale_balance.py`; `balance_multiscale_loss = True` + `_power = 0.5`, default-ON; scale-grouped batch sampler + inverse-frequency loss weighting; stamped into the build manifest |
+> | `011a34b2` refactor(semantic): `resolve_tile_px` delegates to `tile_size_for_mode` | **closes F-D / §2.5 row 1** — the 5th copy of the tile-size formula is gone |
+> | `b577ea6c` + `e3058ecb` feat/fix(core): shared train/serve geometry-drift guard | **closes F-E / §2.5 row 24** — the guard left the Qt dialog into `core/inference/geometry_drift.py`, reaches both builders and the serving overlay, and effective geometry + its `GeometrySource` is now logged at every build and run |
+>
+> **Net effect on the counts:** §2.3 goes from *14 of 17* to **17 of 20** rows disagreeing
+> (one row becomes a clean match, three rows are new, one row's content gets worse);
+> §2.5 goes from *23 of 24* to **22 of 25** (rows 1 and 24 resolve to SAME, rows 5 and 11
+> change value, one row is added). **The unification got smaller in two places and larger in
+> three — net, there is more to unify, not less.** Full re-derivation in §2.3, §2.5 and the
+> new §2.8.
+>
+> **What did NOT change and must not be read as changed:** SAM3's
+> `training/contracts.py:264 object_tile_fraction = 0.055` and the inference-side
+> `core/inference/config.py:80 object_tile_fraction = 0.15` are untouched. The tree therefore
+> now holds **three mutually distinct** values (0.055 / 0.10 / 0.15) where §2.4 recorded two
+> distinct values across three sites. That row got *worse*, not better. New decision **D16**.
+>
+> **Do not re-open D7/D8/D9** (§3.10) — they are resolved. New decisions raised by this
+> amendment are numbered **D16-D19** (D13-D15 are taken by §6.6).
+
 **The four paths.**
 
 | # | Path | Module | Role |
@@ -72,6 +104,17 @@ geometry silently drops all calibration profiles.
 with **no `geometry_mode` concept at all** (no `custom`, no `auto_model`) **[V]**. A change to
 `slice_geometry.py:113-137` therefore silently fails to reach P4.
 
+> **SHIPPED `011a34b2` — F-D's fifth copy is gone.** `resolve_tile_px` now delegates to
+> `tile_size_for_mode` with `geometry_mode` pinned internally to `auto_object`, its
+> `None`/no-tiling and NaN guards kept local, pinned byte-identical by the characterization
+> test committed in `a153e86a` (1572 assertions) **[V]**. Four copies remain, all of them the
+> same shared helper. §2.5 row 1 becomes **SAME**. The *residual* divergence is narrower and
+> should still be recorded: P4 still exposes **no `geometry_mode` concept** to its caller
+> (§2.5 row 3 stands), and `resolve_tile_px`'s docstring now states as policy that it
+> "deliberately never reads `SliceTrainingSettings.object_tile_fraction`: the sliced-training
+> optimum and the SAM3 optimum differ by ~3x" **[V]** — a committed claim that one fraction
+> cannot serve both, which is exactly the question D16 puts to the user.
+
 **F-E. A train/serve geometry-drift guard ALREADY EXISTS — in exactly one of the four paths,
 and it is trapped inside a Qt dialog.** `detectkit/gui/dialogs/semantic_escalation_dialog.py:382-406`
 reads the SAM3 sidecar's `reference_body_px` and `object_tile_fraction`, prefills when the
@@ -80,6 +123,22 @@ is intentional") when they disagree — deliberately warn, never refuse **[V]**.
 the guard §4.1 recommends building, already written, already reasoned about, in a place no
 headless run and no other path can reach. **It is the single best argument in this document
 that the guard should be built once in core rather than four times.**
+
+> **SHIPPED `b577ea6c` + `e3058ecb` — F-E is closed, and it closed the way this section
+> argued.** The guard is now `core/inference/geometry_drift.py` (Qt-free, pure, typed
+> verdict); the dialog re-points at it with wording, prefill semantics and the 1e-6 float
+> tolerance preserved verbatim; both dataset builders and the serving-side profile overlay
+> call it; and `log_effective_geometry` now prints the effective geometry **and its
+> `GeometrySource`** (explicit / calibration profile / corpus-derived / contract default) at
+> every build and every run **[V]**. Warn-never-refuse everywhere, which is the posture D11
+> recommended — **D11 is therefore substantially settled by implementation, not by decision**;
+> what remains open in D11 is only the narrow "explicitly-named comparison baseline" case,
+> which the guard supports (`comparison_baseline` is threaded from the plan JSON) but still
+> only warns on. `e3058ecb` also records the failure mode worth remembering: the guard was
+> *inert* because `train_tile_px` is a `[w, h]` LIST and the reader coerced with `float()`,
+> and the test hid it by stamping a scalar — "it asserted the shape the code assumed rather
+> than the shape the artifact has, which is the same failure class as the incident this guard
+> exists to prevent" **[V]**.
 
 ---
 
@@ -102,10 +161,17 @@ that the guard should be built once in core rather than four times.**
 
 ### 1.2 The YOLO sliced-training builder — `training/sliced_dataset.py`
 
-- `SliceBuildParams` (:95-107) **[V]**, verbatim defaults: `geometry_mode="auto_object"`,
-  `imgsz=640`, `object_tile_fraction=0.15`, `slice_width=0`, `slice_height=0`, `overlap=0.2`,
-  `min_area_ratio=0.1`, `negative_tile_fraction=0.15`,
-  `target_sizes=[200.0, 300.0, 400.0]`, `full_frame_mix=True`, `reference_body_px=0.0`.
+- `SliceBuildParams` (:95-109) **[V, re-verified post-amendment]**, verbatim defaults:
+  `geometry_mode="auto_object"`, `imgsz=640`, `object_tile_fraction=0.10` (was `0.15`,
+  `4de070f3`), `slice_width=0`, `slice_height=0`, `overlap=0.2`, `min_area_ratio=0.25`
+  (was `0.1`, `4de070f3`), `negative_tile_fraction=0.15`,
+  `target_sizes=[32.0, 64.0, 96.0, 128.0]` (was `[200.0, 300.0, 400.0]`, `4de070f3`),
+  `full_frame_mix=True`, `reference_body_px=0.0`, **new** `balance_multiscale_loss=True`,
+  `balance_multiscale_loss_power=0.5` (`306738ec`).
+  **The builder is still PIXEL-FED.** Fractions are a DetectKit-config concept only:
+  `detectkit/jobs/training.py:220` resolves them with
+  `slicing.target_sizes_for(request.imgsz_for(role))` before constructing `SliceBuildParams`
+  **[V]**. That layering matters for §3.5 — see the amendment there.
 - `measure_reference_body_px` = **median** `minAreaRect` major axis over a frame's labels
   (:57-...); `object_major_axes_px` (:42-55) **[V]**. Dataset-level reference is the mean of
   per-frame values accumulated in `all_majors` -> `np.median` at :263-267 **[V]**.
@@ -124,9 +190,35 @@ that the guard should be built once in core rather than four times.**
 - That manifest block reaches publish via `training/service.py:136-151, 222`
   (`_slice_geometry_for_publish`) -> `model_publish.py:805, 874-890, 941-942` **[V]**.
 
-**There is no per-scale instance balancing.** Every scale contributes every tile it produces,
-so a small tile size contributes quadratically more tiles (and more instance copies) than a
-large one. **[V by absence — no weighting code in `build_sliced_obb_dataset`]**
+**~~There is no per-scale instance balancing.~~ SUPERSEDED by `306738ec` — there now is, on
+the YOLO side, and it is default-ON.** The observation that motivated the claim still holds
+(a small tile size contributes quadratically more tiles than a large one), but the tree now
+answers it. `training/ultralytics_scale_balance.py` **[V, read in full]**:
+
+- `scale_group_for_path(path)` — groups by the emitted stem: `_full` -> `"full"`,
+  `_t{W}x{H}_{n}` -> `"tile:WxH"` (regex `_t(\d+)x(\d+)_\d+$`), anything else -> `"other"`.
+- `scale_group_weights(paths, power)` — `(mean_count / group_count) ** power` over tile
+  groups only; `full` and `other` are pinned to weight `1.0`, so the configured full-frame
+  mix is preserved rather than re-weighted. `power` is clamped to `[0,1]`; `0.5` =
+  square-root balancing (the default), `1.0` = exact group balance.
+- `ScaleGroupedBatchSampler` — yields **scale-homogeneous** batches, every index exactly once
+  per epoch, deterministic per `seed + epoch`. This is a *sampling-strategy* change as much
+  as a loss change, and the audit's brief did not anticipate it.
+- Installation is by monkeypatch from `training/ultralytics_entrypoint.py:main` — it patches
+  `YOLODataset.__getitem__`/`collate_fn`, `DetectionTrainer.get_dataloader`, and
+  `loss` on `DetectionModel`/`OBBModel`/`SegmentationModel`, gated by sniffing `data=` out of
+  `argv` and reading `slice_geometry.multiscale_loss_balance` from the sliced dataset's
+  `manifest.json`.
+- **No tile is removed or replaced** — the epoch's data exposure is unchanged; only the loss
+  weight and the batch composition move.
+- **DDP silently opts out**: `rank != -1` or `WORLD_SIZE > 1` returns the unmodified loader
+  with a LOGGER warning **[V]**. See new risk R7.
+
+Surfaced in the GUI as "Balance multi-scale training loss" + "Balance strength", visible only
+in `auto_object` mode (`slice_settings_widget.py`), in the plan schema as
+`balance_multiscale_loss{,_power}` (`detectkit/config/training.py`), and stamped into the
+build manifest as `slice_geometry.multiscale_loss_balance{enabled,power}`
+(`sliced_dataset._slice_geometry_manifest`) **[V]**.
 
 ### 1.3 The sidecar — `core/inference/slice_meta.py` (v2)
 
@@ -253,19 +345,30 @@ CLI share, per CLAUDE.md.
    `.sam3_meta.json` sidecar at all, and they use it for a checkpoint-integrity guard, not
    geometry **[V]**.
 
+> **CORRECTION #1 IS NOW STALE — `e3058ecb` gave `train_tile_px` a reader.** The shared
+> geometry-drift guard reads it, and reads it *in the shape the publisher actually writes*:
+> a scalar **or** a `(w, h)` pair, compared element-wise, never collapsed to its width
+> **[V]**. Keep the original finding in the record — it was true, and the fact that the first
+> reader written against it was inert for exactly the shape reason above is the lesson. What
+> remains true: nothing **validates** `train_tile_px` on the way IN, and the guard warns
+> rather than refuses, so the loop is now closed at one end only.
+
 ### 2.3 Divergence table — every tiling knob
 
 | Knob | YOLO (`sliced_dataset.py` / `detectkit/config/training.py`) | SAM3 (`training/contracts.py` / `sam3_lora/dataset_build.py`) | Same meaning? | Same default? |
 |---|---|---|---|---|
 | `geometry_mode` | yes, `auto_object` default (`training.py` slicing block) | yes, `"auto_object"` `contracts.py:249` | **yes** — same `tile_size_for_mode` | **yes** |
-| `object_tile_fraction` | yes, but **overridden** by `target_sizes` in `auto_object` (`sliced_dataset.py:167-184`); DetectKit stores `target_sizes` and derives `target/imgsz` (`training.py:252`) | yes, **authoritative**, `0.055` `contracts.py:250` | same formula, **different authority** | **NO** — YOLO effective = `median([200,300,400])/imgsz`; SAM3 = 0.055 |
+| `object_tile_fraction` | yes, but **overridden** by `target_sizes` in `auto_object` (`sliced_dataset.py:167-184`); DetectKit stores fractions and resolves them per role imgsz (`training.py target_sizes_for`). Default **0.15 -> 0.10** (`4de070f3`) | yes, **authoritative**, `0.055` `contracts.py:264` (UNCHANGED) | same formula, **different authority** | **NO, and now 3 distinct values in the tree** — YOLO train 0.10, SAM3 0.055, inference `config.py:80` 0.15. YOLO *effective* in `auto_object` = `median(0.05,0.10,0.15,0.20) = 0.125`. See **D16** |
 | `imgsz` (fraction denominator) | model imgsz, user-set per role (`jobs/training.py:214` `target_sizes_for(request.imgsz_for(role))`) | fixed `_SAM3_IMGSZ = 1008` (:97) | different constant, same role | **NO** |
 | `slice_width` / `slice_height` | yes, `0` = fall back to imgsz | yes, `0`, `contracts.py:251-252` | **yes** | **yes** |
 | overlap | `overlap = 0.2` (`SliceBuildParams`, `sliced_dataset.py:102`) | `tile_overlap = 0.25` `contracts.py:253` | same semantic | **NAME DIVERGES**; SAM3 0.25 vs inference `DEFAULT_OVERLAP=0.5` (`tiling.py:39`) and direct-cal `OVERLAP_STEPS (0.1,0.2,0.3)` |
-| **`target_sizes` (multi-scale)** | **yes**, `[200.0, 300.0, 400.0]` | **NO — absent entirely** | n/a | n/a |
+| **`target_sizes` (multi-scale)** | **yes**, `[200.0, 300.0, 400.0]` **-> `[32.0, 64.0, 96.0, 128.0]`** (`4de070f3`), now demoted to a legacy-compat field | **NO — absent entirely** | n/a | n/a |
+| **`target_size_fractions` (NEW, `4de070f3`)** | **yes**, `(0.05, 0.10, 0.15, 0.20)` — scales expressed **relative to model input**, resolved per role imgsz; `target_fractions()` falls back to `target_sizes / 640.0` only when fractions are empty, and `from_dict` forces fractions to `()` when a legacy plan omits the key, so an explicit legacy pixel setting is preserved rather than masked | **NO — absent entirely** | n/a | n/a |
+| **multi-scale loss balancing (NEW, `306738ec`)** | **yes, default-ON**: `balance_multiscale_loss=True`, `power=0.5`; scale-homogeneous batches + inverse-frequency loss weight; DDP opts out | **NO — absent entirely** (and SAM3 has no multi-scale to balance yet) | n/a | n/a |
+| **emitted-stem scale token** | `_t{W}x{H}_{n}` / `_full` (`sliced_dataset.py:237, 255`) — was provenance only, **now load-bearing**: `scale_group_for_path` parses it to group batches and weight the loss | tile ids exist but carry no scale token (single scale) | **NO** | — |
 | **`full_frame_mix`** | **yes**, `True` | **NO — absent entirely** | n/a | n/a |
 | empty / negative tiles | `negative_tile_fraction = 0.15` (a *sampling rate*) | `keep_empty_tiles: bool = True` (a *boolean*) | **NO** — rate vs flag | **NO** (0.15 vs keep-all) |
-| seam-fragment policy | `min_area_ratio = 0.1`, fragment **DROPPED** (`sliced_dataset.py:135-136`) | `MIN_RETAINED_AREA_FRAC = 0.25`, fragment **KEPT as `iscrowd=1`** + tile exhaustiveness downgraded (`dataset_build.py:270-275`) | **NO — opposite policies** | **NO** (0.1 vs 0.25) |
+| seam-fragment policy | `min_area_ratio = 0.1` **-> `0.25`** (`4de070f3`), fragment **DROPPED** (`sliced_dataset.py:146-148`) | `MIN_RETAINED_AREA_FRAC = 0.25`, fragment **KEPT as `iscrowd=1`** + tile exhaustiveness downgraded (`dataset_build.py:282`) | **NO — opposite policies, but the MEASUREMENT now agrees** (see verification note below) | **YES, 0.25 both sides** (was 0.1 vs 0.25) |
 | fragment accounting | none | `downgraded_tiles`, `fragment_only_tiles`, `fragment_annotations` in `SplitCounts` (:51-63) | SAM3-only | — |
 | `reference_body_px` estimator | global median over ALL object majors pooled corpus-wide (`sliced_dataset.py:219, 263-267`) | median over PER-FRAME medians (`dataset_build.py:353-369`) | **NO** | — |
 | stamped geometry key | `slice_geometry{...}` -> `.slice_meta.json` v2 + registry (`model_publish.py:874-942`) | flat `train_tile_px`/`reference_body_px`/`object_tile_fraction` -> `.sam3_meta.json` (`publish_worker.py:267-269`) | **NO — two sidecar formats** | — |
@@ -277,27 +380,89 @@ CLI share, per CLAUDE.md.
 
 *(This table is the TRAINER pair only, P1 vs P2. The four-path table is §2.5.)*
 
-**Divergence count, P1 vs P2: 14 of the 17 knob rows disagree** — the two sides differ in existence,
-meaning, default, or direction. The exceptions are two clean matches (`geometry_mode` as a
-field; `slice_width`/`slice_height`) and one row where both sides are equally unguarded
-(baseline-geometry drift). The underlying `plan_tiles`/`tile_size_for_mode` call is shared and
-is not counted as a knob.
+**VERIFIED before recording agreement — do the two `0.25`s mean the same thing?**
+Two identical numbers with different definitions would be worse than an honest divergence, so
+this was checked line by line rather than assumed **[V]**:
+
+| | YOLO `_tile_one_image` (`sliced_dataset.py:137-148`) | SAM3 `_tile_frame` (`dataset_build.py:271-282`) |
+|---|---|---|
+| numerator | `polygon_area(clip_polygon_to_tile(poly_px, tile))` | `polygon_area(clip_polygon_to_tile(poly_px, tile))` |
+| denominator | `polygon_area(poly_px)` — the instance's **full frame-space** area | `polygon_area(poly_px)` — the instance's **full frame-space** area |
+| clipping | shared `clip_polygon_to_tile` (Sutherland-Hodgman, `slice_geometry.py`) | the **same** shared helper |
+| tile rect | integer-clamped `(xi0, yi0, xi1, yi1)` against frame bounds | the **same** integer clamp |
+| degenerate guard | `full_area <= 1e-6` -> skip | `full_area <= 1e-6` -> skip |
+| test | `ratio < min_area_ratio` -> **`continue`** (instance dropped) | `retained_frac < MIN_RETAINED_AREA_FRAC` -> **`is_crowd = True`** (instance kept, tile downgraded) |
+
+**Verdict: same numerator, same denominator, same clipping, same degenerate guard, same
+comparison — the QUANTITY and the THRESHOLD now genuinely agree.** Only the *consequence*
+differs, and it differs deliberately on both sides. So this row moves from "different number,
+different policy" to "**same number, opposite policy**", which is a real improvement: the
+shared floor is now a single value that a unified `TilingContract` can carry, and **D3**
+(share the knob, keep both behaviours selectable) is *strengthened*, not resolved — do not
+read the matching constants as permission to unify the direction. Note also that
+`MIN_RETAINED_AREA_FRAC` remains a module constant on the SAM3 side while YOLO's is a
+per-build parameter; the values coincide today by convergence, not by construction, and
+nothing in the tree keeps them in step. That asymmetry is itself a divergence the unified
+contract must remove.
+
+**Divergence count, P1 vs P2 (amended): 17 of the 20 knob rows disagree** (was 14 of 17 at
+`097408af`; the table gained 3 rows). The arithmetic, stated so it can be checked:
+
+- **Improved but still counted (1):** seam-fragment. The *default* converged (0.1 vs 0.25 ->
+  0.25 both sides) and the *measurement* is verified identical above — but the **policy** is
+  still drop-vs-downgrade, so the row still disagrees. Honest bookkeeping: this is the one
+  row where the headline number now matches and the behaviour still does not.
+- **Newly a clean match (1):** the **drift-guard** row, previously "both sides equally
+  unguarded" (an exception, not a divergence), is now "both sides guarded by the same shared
+  `core/inference/geometry_drift.py`" (`b577ea6c`). It moves from exception to match; the
+  disagree count is unaffected.
+- **New rows (3), all divergences:** `target_size_fractions`, multi-scale loss balancing, and
+  the emitted-stem scale token — all three exist on the YOLO side only.
+- **Widened (1):** `object_tile_fraction` was two distinct values across three sites; it is
+  now three distinct values (0.055 / 0.10 / 0.15). Same row, worse content.
+
+Clean matches remain three: `geometry_mode` as a field, `slice_width`/`slice_height`, and now
+the drift guard. The underlying
+`plan_tiles`/`tile_size_for_mode` call is shared and is not counted as a knob.
 
 ### 2.4 Where the current code assumes ant-like scale
 
-- `sliced_dataset.py:105` `target_sizes = [200.0, 300.0, 400.0]` — absolute apparent pixels,
-  hardcoded, duplicated at `detectkit/config/training.py:169` and `detectkit/gui/models.py:181`
-  **[V]**. Three copies of one un-calibrated constant.
-- `detectkit/config/training.py:252` divides by a **literal `640.0`** rather than the actual
-  imgsz **[V]** — a second, silently different denominator from `target_sizes_for(imgsz)` at
-  :254.
-- `contracts.py:250` `object_tile_fraction = 0.055` — the constant that caused the incident **[V]**.
-  Note there are **three** different `object_tile_fraction` defaults in the tree: 0.055 (SAM3,
-  `contracts.py:250`), 0.15 (YOLO training, `sliced_dataset.py:99`), 0.15 (inference,
-  `core/inference/config.py:80`). **[V]**
+- ~~`sliced_dataset.py:105` `target_sizes = [200.0, 300.0, 400.0]`~~ **AMENDED `4de070f3`.**
+  The absolute-pixel triplet is gone as the *primary* expression: the new primary is
+  `target_size_fractions = (0.05, 0.10, 0.15, 0.20)`, **relative to model input**, and
+  `target_sizes` survives only as `(32, 64, 96, 128)` — those same fractions evaluated at
+  imgsz 640 — for legacy plans. **This is a genuine improvement in cross-species generality
+  and is assessed as a design input in the new §2.8.** But it does NOT remove the constant:
+  the ladder `(0.05, 0.10, 0.15, 0.20)` is still four hardcoded, un-calibrated numbers, now
+  duplicated as *fraction+pixel pairs* at `detectkit/config/training.py` (`SliceTrainingConfig`),
+  `detectkit/gui/models.py` (`SliceTrainingSettings`), `training/sliced_dataset.py`
+  (`SliceBuildParams`, pixels only) and `slice_settings_widget.py`
+  (`_TileLayoutPreview._target_fractions`) **[V]**. §3.6's derive-the-set-from-the-corpus
+  position is therefore **unchanged and still the destination**; the new defaults are safer
+  placeholders, not a calibration.
+- `detectkit/config/training.py` `target_fractions()` divides by a **literal `640.0`**
+  **[V]** — this is no longer a bug. Post-`4de070f3` it is the *documented legacy
+  interpretation* ("older projects stored pixel targets with an implicit 640px model input"),
+  correctly reached only when `target_size_fractions` is empty. What remains is duplication:
+  the identical fallback is implemented twice, in `SliceTrainingConfig.target_fractions` and
+  `SliceTrainingSettings.target_fractions` **[V]**. Folded into R4.
+- `training/contracts.py:264` `object_tile_fraction = 0.055` — the constant that caused the
+  incident, **UNCHANGED by `4de070f3`** **[V]**. The tree now holds **three mutually
+  distinct** defaults: 0.055 (SAM3 training, `contracts.py:264`), **0.10** (YOLO training,
+  `sliced_dataset.py:110`, was 0.15), 0.15 (inference, `core/inference/config.py:80`). The
+  YOLO change therefore moved the SAM3/YOLO gap from 2.7x to **1.8x** without closing it, and
+  simultaneously opened a new 1.5x gap between YOLO training and YOLO inference defaults.
+  **This is the exact quantity behind the 2026-09-06 confound. Decision D16.**
 - `tiling.py:27-33` `SEMANTIC_TILE_FRACTION_SEED = 0.05`, self-documented as ungrounded **[V]**.
 - `inference_settings.py:200` falls back to a literal `96` body px when `target_sizes` is empty **[V]**.
-- `dataset_build.py:92` `MIN_RETAINED_AREA_FRAC = 0.25`, justified by ant-corpus reasoning **[V]**.
+- `dataset_build.py:100` `MIN_RETAINED_AREA_FRAC = 0.25`, justified by ant-corpus reasoning **[V]**.
+  **Amended note:** `4de070f3` moved YOLO's `min_area_ratio` to the same `0.25`. Convergence
+  on a shared value is what the unification wants — but the value that both paths now share
+  is the one whose *only* written justification is ant-corpus reasoning
+  (`dataset_build.py:63-91`). A per-project quantity has been propagated to a second path
+  rather than derived. Not a regression, and not a blocker; it is a widened exposure, and the
+  unified contract must carry this floor as a **per-build, per-project measurable**, never as
+  a module constant on either side (**D18**).
 - `_SAM3_IMGSZ = 1008` is a genuine model constant, not a species assumption **[V]**.
 
 ### 2.5 The four-path divergence table
@@ -308,17 +473,17 @@ genuinely disagree about behaviour or the knob is missing where it is needed.
 
 | # | Knob | P1 YOLO train | P2 SAM3 train | P3 direct cal | P4 semantic cal | Verdict |
 |---|---|---|---|---|---|---|
-| 1 | tile-size formula | `tile_size_for_mode` | `tile_size_for_mode` | `tile_size_for_mode` via `SLICE_*` params | **reimplemented** `resolve_tile_px` (`tiling.py:123-139`) | **DIVERGE** (5th copy) |
+| 1 | tile-size formula | `tile_size_for_mode` | `tile_size_for_mode` | `tile_size_for_mode` via `SLICE_*` params | ~~reimplemented~~ **delegates** to `tile_size_for_mode` (`011a34b2`) | ~~DIVERGE~~ **SAME** — resolved |
 | 2 | tile GRID planner | `plan_tiles` | `plan_tiles` | `plan_tiles` | `plan_tiles` (`tiling.py:198`) | **SAME** |
 | 3 | `geometry_mode` | yes, `auto_object` | yes, `auto_object`, **unvalidated** | yes, carried through candidates (`grid.py:70-72`) | **absent** — fraction-only, no custom/auto_model | **DIVERGE** |
 | 4 | tile fraction — name | `object_tile_fraction` (overridden by `target_sizes`) | `object_tile_fraction` | `object_tile_fraction` | `tile_fraction` | **MEANING** |
-| 5 | tile fraction — default | `0.15` (`sliced_dataset.py:99`), effective = `median(target_sizes)/imgsz` | `0.055` (`contracts.py:250`) | swept: `FRACTION_STEPS (0.75, 1.0, 1.5)` **x the model's stamped fraction** | seed `0.05` (`tiling.py:34`), swept `(0.03, 0.05, 0.10, None)` | **DIVERGE** — 4 unrelated numbers |
+| 5 | tile fraction — default | **`0.10`** (`sliced_dataset.py:110`, was 0.15, `4de070f3`); effective in `auto_object` = `median(target_size_fractions) = 0.125` | `0.055` (`contracts.py:264`, unchanged) | swept: `FRACTION_STEPS (0.75, 1.0, 1.5)` **x the model's stamped fraction** | seed `0.05` (`tiling.py`), swept `(0.03, 0.05, 0.10, None)` | **DIVERGE** — still 4 unrelated numbers; the P1/P2 gap narrowed 2.7x -> 1.8x by coincidence, not by decision (**D16**) |
 | 6 | fraction denominator | role `imgsz` (`jobs/training.py:214`), and a stray literal `640.0` (`training.py:252`) | `_SAM3_IMGSZ = 1008`, role `imgsz` ignored | model `imgsz` via config | none — fraction applies to `reference_body_px` directly | **DIVERGE** |
 | 7 | **multi-scale scale set** | **yes** (`target_sizes`) | **no** | **no** — one geometry per candidate row | **no** — one fraction per point | **DIVERGE** |
 | 8 | **full-frame arm** | `full_frame_mix = True` | **absent** | `enabled=False` candidate, always first (`grid.py:72-83`) | `None` sentinel in `TILE_FRACTION_GRID` (`tiling.py:37`) | **MEANING** — 3 different encodings of one idea |
 | 9 | overlap — name/default | `overlap = 0.2` | `tile_overlap = 0.25` | swept `OVERLAP_STEPS (0.1, 0.2, 0.3)` | `DEFAULT_OVERLAP = 0.5` (`tiling.py:39`) | **DIVERGE** |
 | 10 | `reference_body_px` estimator | global median, all majors pooled | median of per-frame medians | read from the model's stamped geometry (`grid.py:71`) | project value, typed/prefilled, mismatch-warned (`dialog:382-406`) | **DIVERGE** |
-| 11 | seam / fragment policy | drop below `min_area_ratio = 0.1` | keep as `iscrowd`, floor `0.25`, downgrade tile | n/a (post-merge frame-space scoring) | **drop by `seam_margin_px`, default 4** (`tiling.py:40`) | **DIVERGE** — drop vs keep vs margin-drop |
+| 11 | seam / fragment policy | drop below `min_area_ratio = 0.1` **-> `0.25`** (`4de070f3`) | keep as `iscrowd`, floor `0.25`, downgrade tile | n/a (post-merge frame-space scoring) | **drop by `seam_margin_px`, default 4** (`tiling.py:40`) | **DIVERGE** — drop vs keep vs margin-drop |
 | 12 | cross-tile merge | n/a | n/a | `merge_policy/metric/threshold/backend`, swept + stamped | `merge_iou = 0.5` + `DEFAULT_CONTAINMENT_OVERLAP = 0.80` (`tiling.py:41-47`) | **DIVERGE** |
 | 13 | confidence | n/a | n/a | swept, stamped into the profile | `CONFIDENCE_GRID` 0.05..0.95 step 0.05 (`calibration.py:72`) | **MEANING** |
 | 14 | empty / negative tiles | `negative_tile_fraction = 0.15` (rate) | `keep_empty_tiles = True` (flag) | n/a | n/a | **DIVERGE** |
@@ -331,13 +496,22 @@ genuinely disagree about behaviour or the knob is missing where it is needed.
 | 21 | shape / size prior | none | none | **none** | `fit_area_band`, `LOW_MULTIPLIER 0.3` / `HIGH_MULTIPLIER 2.5` (`shape_prior.py:44-45`) | **DIVERGE** |
 | 22 | output of the path | dataset manifest `slice_geometry` | manifest `tile_px` -> `.sam3_meta.json` (no reader) | `.slice_meta.json` v2 profile, consumed by GUI + CLI | `semantic_escalation_settings` + `semantic_calibration` in DetectKit **project JSON only** | **DIVERGE** |
 | 23 | operating point reaches a headless run | via publish + registry | no | **yes** (`--sahi-profile`, `engine_params.py:968-986`) | **no** — project-state only, never a model sidecar | **DIVERGE** |
-| 24 | train/serve drift guard | none | none | none | **yes**, but GUI-only modal (`dialog:382-406`) | **DIVERGE** |
+| 24 | train/serve drift guard | ~~none~~ **calls the shared guard** | ~~none~~ **calls the shared guard** | ~~none~~ **serving overlay calls it** | extracted to core, dialog re-points at it | ~~DIVERGE~~ **SAME** — resolved by `b577ea6c`/`e3058ecb`; one Qt-free `core/inference/geometry_drift.py`, warn-never-refuse, plus `GeometrySource` logging at every build and run |
+| **25** | **multi-scale loss balancing + the `_t{W}x{H}_{n}` scale token** | **yes, default-ON** (`306738ec`); the emitted stem is parsed by `scale_group_for_path` to group batches and weight the loss | no (single scale, no token) | n/a (serving) | n/a (serving) | **DIVERGE** — and the filename convention is now a **cross-path contract**, not just provenance (see §3.3) |
 
-**Four-path divergence count: 18 DIVERGE + 5 MEANING = 23 of the 24 rows disagree at some
-level.** Exactly **one** row is clean across all four paths: the `plan_tiles` grid call
-(row 2). Even the shared tile-size formula fails (row 1 — P4 reimplements it). The
-trainer-only count in §2.3 was 14 of 17; widening to four paths roughly doubles it, which is
-the coordinator's expectation confirmed.
+~~**Four-path divergence count: 18 DIVERGE + 5 MEANING = 23 of the 24 rows disagree at some
+level.** Exactly one row is clean across all four paths.~~ *(Original count, `097408af`.)*
+
+**AMENDED four-path divergence count: 17 DIVERGE + 5 MEANING = 22 of the 25 rows disagree.**
+Rows 1 and 24 became **SAME** (`011a34b2`; `b577ea6c`/`e3058ecb`), row 25 was added and
+diverges, and rows 5 and 11 changed value without changing verdict. **Three** rows are now
+clean across all four paths: the `plan_tiles` grid call (row 2), the tile-size formula
+(row 1 — the fifth copy is gone), and the train/serve drift guard (row 24). The
+trainer-only count in §2.3 is now 17 of 20. **The shape of the finding is unchanged:** the
+four paths now agree about *how to compute a tile* and about *how to notice geometry drift*,
+and still disagree about essentially everything that decides *which* geometry to compute.
+Two of the three closures came from this document's own Step-1 build order, which is the
+intended outcome, not a reason to relax the remaining 22.
 
 ### 2.6 The two calibration harnesses, mapped against each other
 
@@ -409,6 +583,94 @@ it is a mean-IoU floor, not a size gate.
 admissibility, objective, shape prior), each of which changes recommended operating points on
 one side. None should be changed silently as part of a refactor. See D7-D9.
 
+### 2.8 RELATIVE vs ABSOLUTE scale expression — a design position, not a survey
+
+*(New section, added by the 2026-09-06 amendment. `4de070f3` made this concrete on one path;
+the unification has to decide it for all four.)*
+
+**The change.** YOLO training now expresses its scale set as `target_size_fractions`
+(fractions of the active model input) rather than `target_sizes` (absolute apparent pixels).
+`SliceTrainingConfig.target_sizes_for(imgsz)` multiplies by the role's actual imgsz, so
+changing model input size no longer requires the user to re-derive pixel targets **[V]**.
+
+**Position: YES — the unified contract should express every SCALE knob relatively, and it
+should be explicit about WHICH denominator each one is relative to.** This is the same
+principle §3.4 already credits `direct_calibration_grid.py` for (multiplicative
+`FRACTION_STEPS` against the model's stamped geometry, "species-agnostic by construction"),
+and it is what the user's standing rule demands: *"we are not making this app just for one
+video... Measurements are a single datapoint, not trustworthy."* An absolute pixel default is
+a claim about one rig; a fraction is a claim about a model's input budget, which is a
+property of the model.
+
+**But there are TWO different relative forms in the tree, and conflating them would be the
+next incident.** They must be named separately in `TilingContract`:
+
+| Form | Formula | Denominator | Invariant to | NOT invariant to |
+|---|---|---|---|---|
+| `target_size_fraction` (P1, new) | `apparent_px = frac * imgsz` | **model input** | changing imgsz | frame size, animal size |
+| `object_tile_fraction` (P1/P2/P3/P4) | `tile_px = reference_body_px / frac` | **the measured animal** | frame size, animal size, imgsz | the animal-to-tile ratio it asserts |
+
+**Does `object_tile_fraction` already have the property? Yes — and more of it.** Because its
+denominator is a *measured* `reference_body_px`, it is already invariant to both frame size
+and species size: a 5 mm ant and a 40 mm mouse at the same fraction each get a tile in which
+the animal spans the same share of the tile. That is strictly stronger than
+`target_size_fraction`, which is invariant only to imgsz. **The two are related but not
+redundant:** `object_tile_fraction` says "how big is the animal inside its tile"; the tile is
+then resized to imgsz, so `target_size_fraction ~= object_tile_fraction` *only when tiles are
+resized to imgsz without letterboxing*. In the YOLO builder they are two spellings of one
+number (`_tile_sizes_for_params` converts `target/imgsz` into a fraction and calls
+`tile_size_for_mode` **[V]**). Recording both in the contract without stating which is
+authoritative would reproduce the "different authority" row of §2.3 at the contract layer.
+**Recommended: `object_tile_fraction` is the canonical scale unit** (it is the one all four
+paths already speak, and the only one grounded in a measurement of the user's own corpus);
+`target_size_fraction` is a *user-facing spelling* of it, resolved at plan-load time.
+
+**Is the relative form SUFFICIENT for cross-species generality? No — and the spec should say
+so plainly rather than bank the win.** Three residual assumptions survive `4de070f3`:
+
+1. **The ladder is still four hardcoded numbers.** `(0.05, 0.10, 0.15, 0.20)` asserts that
+   useful supervision lives between "animal is 1/20th of the model input" and "animal is
+   1/5th". That span was not derived from any corpus. It is *safer* than `(200, 300, 400)` px
+   — those, at imgsz 640, asserted animals occupying 31-62% of the model input, which is a
+   very large animal — but safer is not calibrated. §3.6 (derive the set from the corpus's
+   own measured major-axis distribution, show it, make it editable, record what it was
+   derived from) is **unchanged and still the destination**.
+2. **`reference_body_px` must exist and be trustworthy.** The relative form's whole
+   generality rests on one measured scalar, and the two builders still measure it with
+   **different estimators** (§2.3, D1). Relative expression makes the estimator choice *more*
+   consequential, not less: everything now scales off it.
+3. **A single scalar assumes a unimodal body-size distribution.** Ants in one arena are
+   near-uniform; a brood-plus-adult corpus, a larval time series, or a two-species assay is
+   not. The multi-scale set is the partial answer, but nothing today *checks* whether the
+   corpus's major-axis distribution is unimodal, and nothing reports its spread. **Cheap and
+   worth doing: record the measured distribution's quantiles in the manifest, not just its
+   median.** That is a measurement, not a default, so it is admissible.
+
+**What breaks if the contract goes fully relative — the honest cost list.**
+
+- **Stamping (§3.5).** The build manifest currently records `target_sizes` in **resolved
+  pixels** plus `imgsz`, and `slice_meta._training_values` recovers a fraction as
+  `median(target_sizes) / imgsz` **[V]**. So provenance is *recoverable today* — but only
+  because `imgsz` happens to be stamped alongside. If a future manifest ever drops `imgsz`,
+  every stamped scale becomes uninterpretable. **The sidecar should record fractions AND the
+  imgsz they were resolved at AND the resolved pixels** — all three, because each answers a
+  different question (what the user asked for / what it meant / what was actually built).
+- **Profiles.** `.slice_meta.json` profiles store a serving `object_tile_fraction`, which is
+  already relative-to-body. No break.
+- **Legacy plans.** Handled, and handled well: `from_dict` forces `target_size_fractions` to
+  `()` when a legacy plan omits the key, so an explicit legacy pixel setting is preserved
+  rather than silently overwritten by the new relative defaults **[V]**. The cost is a
+  permanent two-field contract with a precedence rule, duplicated in two `target_fractions()`
+  implementations (R4).
+- **The `target_sizes` legacy field.** It cannot simply be deleted: it is the only carrier for
+  pre-`4de070f3` projects, and `slice_meta._training_values` reads it off already-published
+  sidecars. **Recommended: keep it read-only-on-load, never write it from the UI, and have
+  the unified contract expose exactly one settable scale field.** Deleting it is a separate,
+  later, migration-gated decision.
+- **The 640.0 literal.** It becomes *correct* under this reading (it is the imgsz the legacy
+  pixels implicitly meant) and must be documented as a legacy constant, never reused as a
+  denominator for anything new.
+
 ---
 
 ## Part 3 — The unification design
@@ -476,14 +738,62 @@ preference: (i) report `downgraded_tiles` / `fragment_only_tiles` **per scale** 
 precisely this reason, :51-63); (ii) treat the fragment floor as a per-scale contract value,
 not a module constant; (iii) do NOT auto-tune it — it is a measured-per-project quantity.
 
-**Per-scale instance balancing.** Today, neither builder balances (§1.2). Tile count grows
-~quadratically as tile size shrinks, so an unweighted 3-scale build is dominated by the
-finest scale. Proposal: a `per_scale_weight` policy in `TilingContract` with three named
-modes — `none` (today's behaviour, the default so the change is opt-in),
-`equal_tiles` (cap each scale at the min tile count across scales),
-`equal_instances` (cap each scale at the min *positive-instance* count). Which is right is a
-per-project measurement, not a constant; the build manifest must record the realised per-scale
-counts either way.
+**Per-scale instance balancing — AMENDED `306738ec`, the proposal below is SUPERSEDED on the
+YOLO side.**
+
+> ~~Proposal: a `per_scale_weight` policy in `TilingContract` with three named modes —
+> `none` (the default, so the change is opt-in), `equal_tiles` (cap each scale at the min
+> tile count), `equal_instances` (cap each scale at the min positive-instance count).~~
+>
+> **What actually shipped is better than what this section proposed, and differs in three
+> ways that the unification must inherit rather than re-decide:**
+> 1. **No data reduction.** The shipped strategy *keeps every tile* and re-weights the loss
+>    inverse-frequency by scale group. The proposal above **capped** — i.e. discarded real
+>    supervision to equalise counts. Re-weighting dominates capping: same balance, no thrown-
+>    away labels, and the fine scale keeps its coverage of crowded regions.
+> 2. **Default-ON, not opt-in.** `balance_multiscale_loss = True`. This contradicts the
+>    proposal's "default so the change is opt-in" and it interacts with **D6** (multi-scale
+>    opt-in vs default-on for SAM3): the YOLO side has now set a precedent for default-on
+>    behaviour change. **D17.**
+> 3. **It is also a SAMPLING change.** `ScaleGroupedBatchSampler` makes every batch
+>    scale-homogeneous. That is not just a loss knob — it changes batch statistics
+>    (BatchNorm, mosaic/mixup interaction, gradient noise) and it is invisible in the name
+>    "loss balance". The unified contract should name it for what it is: a
+>    *scale-grouped sampling + inverse-frequency weighting* policy.
+>
+> The proposal's one surviving requirement stands and is not yet implemented: **the build
+> manifest must record the REALISED per-scale tile and positive-instance counts.** Today the
+> manifest records the balance *settings* (`multiscale_loss_balance{enabled,power}`) but not
+> the counts they were computed over **[V]** — so a reader cannot tell how skewed the build
+> actually was, which is the number that decides whether `power=0.5` was enough.
+
+**Can SAM3 reuse it? Split the module in two, and the answer is yes for one half.**
+
+| Layer | Reusable by SAM3? | Why |
+|---|---|---|
+| `scale_group_for_path`, `scale_group_weights`, `ScaleGroupedBatchSampler` | **YES** — framework-agnostic. They operate on a list of paths and a list of indices; nothing imports torch or Ultralytics at definition time (only `_grouped_loader` does) | pure Python over stems and index lists |
+| `_grouped_loader`, `install_sahi_multiscale_loss_balance` | **NO** | monkeypatches `YOLODataset`/`DetectionTrainer`/`DetectionModel.loss`, builds an `InfiniteDataLoader`, and *sniffs `data=` out of `sys.argv`* to find the manifest. All three are Ultralytics-shaped; SAM3 trains through its own sidecar loop |
+
+**Recommendation:** promote the three pure functions into the shared layer (they belong
+next to `utils/slice_geometry.py`, not inside a file named `ultralytics_*`), and leave the
+installer where it is as one *adapter*. SAM3 would then write a second, small adapter over
+its own dataloader. The pure/adapter split is the same shape as `slice_geometry` (shared
+planner) vs the two builders — the pattern this whole document argues for.
+
+**The filename convention is now a CROSS-PATH CONTRACT, and that is a real coupling.**
+`_t{W}x{H}_{n}` / `_full` was provenance when §1.2 recorded it; `scale_group_for_path` has
+made it a parsed interface. Consequences that must be written down before SAM3 adopts it:
+
+- If SAM3 must emit `_t{W}x{H}_{n}` to reuse the grouping, then **a filename format is a
+  training-behaviour dependency across two trainers**. It is recorded as §2.5 row 25.
+- It is a **silent** interface: a stem that fails the regex falls through to group `"other"`
+  at weight `1.0` — no warning, no count, and the balancing quietly does nothing for those
+  images (new risk **R8**). SAM3's COCO records key on image ids, not stems, so this failure
+  is *more* likely there, not less.
+- **Preferred alternative for the unified design: carry the scale group as DATA, not as a
+  parsed filename** — a `scale_group` field in the manifest / COCO image record, with
+  `scale_group_for_path` retained only as the legacy fallback for datasets already built.
+  That removes the coupling instead of spreading it. **D19.**
 
 ### 3.4 Where the two calibrations fit
 
@@ -527,6 +837,28 @@ measured, singular) — is exactly the distinction a multi-scale model needs.
 
 Concrete contract:
 
+> **AMENDED `4de070f3` — does 3.5 still hold now that the user configures FRACTIONS?
+> Yes, structurally; but the sidecar must record fractions, not only pixels.**
+>
+> The `training_geometry` (plural provenance) vs `profiles[]` (singular measured serving
+> point) split is untouched by the new defaults and remains correct. What changed is where
+> the authoritative number lives. Verified layering **[V]**: the user sets fractions in
+> `SliceTrainingConfig.target_size_fractions`; `detectkit/jobs/training.py:220` resolves them
+> to **pixels** via `target_sizes_for(imgsz_for(role))`; `SliceBuildParams` is pixel-fed;
+> `_slice_geometry_manifest` stamps `target_sizes` (pixels) **and** `imgsz`; and
+> `slice_meta._training_values` recovers `median(target_sizes) / imgsz`.
+>
+> So the round-trip is **lossless today by luck of composition, not by contract** — it works
+> only because `imgsz` is stamped next to the pixels. Three corrections to item 1 below:
+> **(a)** stamp `target_size_fractions` explicitly, as the thing the user actually chose;
+> **(b)** keep the resolved `target_sizes` pixels AND `imgsz`, because "what was actually
+> built" is a different question from "what was asked for" and a guard needs both;
+> **(c)** never let a reader re-derive a fraction from pixels when an explicit fraction is
+> present — that re-derivation is exactly the kind of implicit denominator that put a literal
+> `640.0` in the tree. Also stamp `multiscale_loss_balance{enabled,power}` and the realised
+> per-scale counts (§3.3): a model trained with scale-homogeneous batches and re-weighted
+> loss is a materially different artifact and its sidecar should say so.
+
 1. **What is stamped.** The full scale set, losslessly: `training_geometry.target_sizes`
    (or the richer `scales[]` from `TilingContract`), `full_frame_mix`, `reference_body_px`,
    `overlap`, `imgsz`, `geometry_mode`, and the per-scale realised tile/instance counts.
@@ -557,6 +889,13 @@ Concrete contract:
    else here — it can ship first.
 
 ### 3.6 Calibration-before-run for the scale set
+
+**AMENDED `4de070f3`: still required, and only half-addressed.** The hardcoded set is now
+`(0.05, 0.10, 0.15, 0.20)` expressed relatively instead of `[200, 300, 400]` expressed
+absolutely — a better *unit*, the same *un-calibrated status*, and one more entry. §2.8
+item 1 spells this out. The corpus-derived resolver below is unchanged in intent; it should
+now propose **fractions**, and it should be seeded from the corpus's measured major-axis
+**distribution quantiles**, not only its median.
 
 Replace the three hardcoded copies of `[200, 300, 400]` with a resolver that, at dataset-build
 time, reads the corpus's own measured major-axis distribution
@@ -736,6 +1075,80 @@ made once, not an automatic loop.
   eval spec identifies, a run that explicitly names a comparison baseline, where refusing is
   defensible.
 
+### 3.11 Decisions raised by the 2026-09-06 default changes — for the user
+
+*(New. D13-D15 are taken by §6.6, so these start at D16. Nothing here re-opens D7/D8/D9.)*
+
+**D16 — should SAM3 adopt `object_tile_fraction = 0.10`?**
+
+*The situation.* YOLO training moved 0.15 -> 0.10 (`4de070f3`). SAM3's
+`training/contracts.py:264` is still **0.055**. This is the exact quantity behind the
+2026-09-06 confound: two SAM3 checkpoints each won at their own tile geometry and the model
+effect **flipped sign** — **+3.25 extras/frame at 971 px** versus **-2.81 at 1766 px**, both
+CIs excluding zero. The gap narrowed from 2.7x to 1.8x, by a change made on the other path,
+without anyone deciding that SAM3's number should move.
+
+*Position: **do not adopt 0.10 by spec fiat, and do not adopt it as a matched constant at
+all.*** Three reasons, in order of force:
+
+1. **The user's standing rule forbids it.** 0.10 is not a measured SAM3 optimum; it is a
+   YOLO-side safety adjustment. Copying it across would substitute *numerical agreement* for
+   *evidence* — and a shared wrong number is harder to detect than two honestly different
+   ones, because the drift guard would then report agreement.
+2. **The tree already contains a committed claim that they should differ.**
+   `resolve_tile_px`'s docstring, written on the semantic path, states it "deliberately never
+   reads `SliceTrainingSettings.object_tile_fraction`: the sliced-training optimum and the
+   SAM3 optimum differ by ~3x, so one persisted fraction cannot serve both" **[V]**. That
+   claim is itself under-evidenced, but it is a documented position and adopting 0.10 would
+   silently contradict it. **Whichever way this goes, that docstring must be updated in the
+   same change — two contradictory committed positions is the worst outcome.**
+3. **The structural fix may moot the constant entirely.** §3.4's answer to the confound is
+   *train multi-scale, then let serving calibration choose the operating geometry per
+   project*. A model trained across a scale span does not need its single training fraction
+   to match anyone's; that is the whole point. Spending a measurement campaign on aligning
+   two scalars, when the design intends to replace both with a span plus a calibrated serving
+   point, is effort against the grain of this document.
+
+*What HAS already improved, and should be credited so this is not read as "nothing changed":*
+the shipped drift guard plus `GeometrySource` logging (`b577ea6c`/`e3058ecb`) mean a build at
+0.055 compared against a checkpoint served at 0.10 now **warns, and prints where each number
+came from**. The 2026-09-06 incident's *silence* is fixed. The *divergence* is not.
+
+*What evidence would settle it.* A paired ablation, pre-registered, on a corpus that is not
+the ant corpus if one is available: arms = `{0.055, 0.10}` training fraction **x**
+`{their own serving geometry, the other's serving geometry}` — the 2x2 discipline the eval
+spec established, since a 1x2 is exactly what produced the sign flip. Statistic:
+**extras/frame at a target recall**, paired frame-bootstrap CIs, quoted with labels-per-frame
+density (per D8; AP is not comparable across the two tile geometries — measured 0.96 at
+1766 px vs 0.61-0.69 at 971 px on the same models). Decision rule fixed in advance: adopt a
+shared value only if the interaction term's CI excludes a practically-relevant effect, i.e.
+only if the fraction genuinely does not interact with serving geometry. **Interim posture:
+leave 0.055, make it loud (already done), and prioritise multi-scale SAM3 over aligning the
+scalar.**
+
+**D17 — is default-ON acceptable for a training-behaviour change?**
+`306738ec` shipped `balance_multiscale_loss = True` (and scale-homogeneous batches) as the
+default, so every future YOLO sliced build trains differently from every past one. §3.3
+had proposed the opposite (opt-in). The precedent now cuts against **D6**'s framing for
+SAM3 multi-scale. The user should confirm: (a) is default-ON the house rule for
+strictly-better training changes, and (b) if so, does the sidecar stamp make old and new
+artifacts distinguishable after the fact? (It does for the settings; not yet for the
+realised counts — §3.3.)
+
+**D18 — where does the fragment floor live?** YOLO's `min_area_ratio` is a per-build
+parameter; SAM3's `MIN_RETAINED_AREA_FRAC` is a module constant. They now hold the same value
+(0.25) and the same verified meaning (§2.3), but nothing keeps them in step and only one is
+per-project. Recommend: the unified `TilingContract` carries **one** per-build floor, both
+builders read it, and the SAM3 module constant becomes that field's default. This changes no
+behaviour today and prevents the two from silently drifting apart again. (D3 — drop vs
+downgrade — stays open and separate.)
+
+**D19 — scale group as data or as a filename?** `scale_group_for_path` parses
+`_t{W}x{H}_{n}` / `_full`. Reusing it for SAM3 makes a filename convention a cross-trainer
+contract with a silent failure mode (R8). Recommend carrying `scale_group` explicitly in the
+manifest / COCO image record, with stem-parsing kept only as the legacy fallback. Cheap now,
+expensive after a second consumer exists.
+
 ---
 
 ## Part 4 — Ranked plan, risks, and the full-frame question
@@ -807,6 +1220,14 @@ Steps 5-8 renumber unchanged. Two additions to the tail:
   the fine end means a much larger fraction of downgraded (SAM3) or dropped (YOLO) instances,
   which moves precision — the exact metric the programme optimises — with no signal in the
   loss. Mitigation: per-scale counters, surfaced before training starts.
+  **AMENDED `4de070f3`: this risk INCREASED on the YOLO side.** Raising `min_area_ratio`
+  0.1 -> 0.25 means 2.5x more of the seam-crossing instance area is now required for an
+  instance to survive, so proportionally more instances are dropped — and the drop rate is
+  highest at the finest scale, which is also the scale that produces the most tiles. Moving
+  to a 4-entry scale ladder with a finer minimum compounds it in the same direction. The
+  change is defensible on its own terms (do not train on severely clipped animals) and the
+  runbook says so; but the per-scale counters this risk asks for are **still not
+  implemented** and are now more necessary than when the risk was written.
 - **R3 — stamping ambiguity leaks into serving.** If a multi-scale model stamps a single
   collapsed fraction into a field consumers read as "the trained geometry", every downstream
   guard and prefill will confidently assert a geometry the model was never trained at. The
@@ -829,8 +1250,46 @@ Steps 5-8 renumber unchanged. Two additions to the tail:
   chosen one. They remain valid *settings* but their "measured best" claim becomes rule-relative.
   Mitigation: version the recommendation rule into the profile record (already recommended in
   §5.5) BEFORE D12 resolves, so old profiles are identifiable rather than silently re-interpreted.
-- (R4, lesser) Three duplicated copies of `target_sizes` defaults plus the literal `640.0`
-  denominator at `training.py:252` mean a "single" change is really four.
+  **AMENDED — the ordering this mitigation depends on has EXPIRED.** §3.10 records D8 as
+  decided (recall-first to recommend, AP to compare, F1 retired) and D12 as decided by
+  measurement. Every stored profile in existence therefore *already* predates the chosen
+  rule, and "version it in before D12 resolves" is no longer available. Re-stated mitigation:
+  **rule-versioning must land in the same change as D7/D9**, and un-versioned legacy profiles
+  must be labelled `rule: unknown (pre-2026-09-06)` rather than back-filled with an assumed
+  rule — back-filling would assert provenance that does not exist. The risk itself is not
+  reduced by the amendment; only its remedy changed shape.
+- **R4 — AMENDED, and it got WORSE, not better.** ~~Three duplicated copies of `target_sizes`
+  plus the literal `640.0`.~~ `4de070f3` turned one duplicated field into a duplicated
+  *pair*: `target_size_fractions` **and** `target_sizes` now co-exist at
+  `detectkit/config/training.py`, `detectkit/gui/models.py` and (pixels only)
+  `training/sliced_dataset.py`, with a fourth fraction default in
+  `slice_settings_widget.py::_TileLayoutPreview` **[V]**. The precedence rule
+  ("fractions win; fall back to `target_sizes / 640.0`") is implemented **twice**, in two
+  `target_fractions()` methods that are near-identical but not identical — the GUI copy
+  additionally filters fractions to `(0, 1]` before deciding whether any exist, the config
+  copy validates instead **[V]**. So a "single" change is now really five, and two of the
+  five can disagree about whether a malformed fraction list counts as present. Mitigation
+  unchanged in kind: one shared resolver in the unified contract, both call sites deleted.
+  The `640.0` literal is no longer a defect (it is the correct legacy denominator) but is
+  itself duplicated.
+- **R7 (new) — the same manifest trains differently under DDP.**
+  `install_sahi_multiscale_loss_balance` returns the unmodified loader when `rank != -1` or
+  `WORLD_SIZE > 1`, logging a warning **[V]**. The decision is defensible and documented
+  (a single-process sampler cannot partition scale groups across ranks without changing epoch
+  exposure), but the consequence is that **a build manifest with
+  `multiscale_loss_balance.enabled = true` produces a balanced model single-GPU and an
+  unbalanced one under DDP, with nothing distinguishing the two artifacts afterwards.** For a
+  programme whose whole failure mode is unattributable model differences, that is a
+  first-class hazard. Mitigation: stamp the *realised* balance state (not the requested one)
+  into the sidecar, and treat a DDP run of a balance-enabled plan as a distinct arm in any
+  comparison.
+- **R8 (new) — the scale-group regex fails silently.** `scale_group_for_path` returns
+  `"other"` (weight 1.0, its own batch group) for any stem that does not end in
+  `_t{W}x{H}_{n}` or `_full`. Nothing counts or reports how many images landed in `other`
+  **[V]**. A renamed file, an augmentation that rewrites stems, a future builder that changes
+  the token, or SAM3 adopting the convention imperfectly all degrade balancing to a no-op
+  without a single log line. Mitigation: log the per-group census at install time and warn
+  when `other` is non-empty — and prefer D19 (carry the group as data).
 
 ### 4.3 Will full frames actually help?
 
@@ -855,6 +1314,18 @@ that full frames help only when that quantity stays above some resolvability flo
 **that floor is the thing to measure, not to guess**. Until measured, full-frame mixing
 should be an explicit, per-project, calibration-informed switch that the manifest records —
 never an unstated default on either side.
+
+**AMENDED `306738ec` — the full-frame arm's effective weight is no longer what
+`full_frame_mix` implies.** `scale_group_weights` pins `full` (and `other`) to weight `1.0`
+while *up-weighting* every under-represented tile group **[V]**. The stated intent is
+benign — "full-frame examples remain at weight one, preserving their configured mix" — but
+the mix that is preserved is the *count*, not the *loss share*: because tile groups can be
+weighted above 1.0, the full-frame arm's share of total gradient falls relative to an
+unbalanced run, by an amount that depends on the realised per-scale counts and on `power`.
+Anyone running the ablation this section specifies must therefore hold
+`balance_multiscale_loss` and `power` fixed across arms, and record them, or the full-frame
+comparison is confounded by the balancing policy. One more argument for stamping the
+realised per-scale counts (§3.3).
 
 ---
 
