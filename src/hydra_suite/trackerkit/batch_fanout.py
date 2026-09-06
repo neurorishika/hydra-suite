@@ -287,14 +287,45 @@ def _finish(live: _Live, *, cancelled: bool) -> FanoutJobResult:
     )
 
 
+def _signal_group(proc: subprocess.Popen, sig: int) -> None:
+    """Signal the child's whole session group, falling back to the child alone.
+
+    The child spawns grandchildren -- notably the SLEAP service via ``conda run
+    -n sleap``. Signalling only the child's pid leaves those orphaned on the
+    escalation path, so SIGTERM/SIGKILL go to the process group. This is safe
+    because ``start_new_session=True`` in :func:`_launch` makes that group ours
+    and ours alone; we can never signal the scheduler or an unrelated process.
+    """
+    if os.name != "nt":
+        try:
+            os.killpg(os.getpgid(proc.pid), sig)
+            return
+        except (ProcessLookupError, PermissionError, OSError):
+            pass  # group already gone or not ours: fall back to the child
+    try:
+        if sig == signal.SIGKILL:
+            proc.kill()
+        else:
+            proc.terminate()
+    except Exception:
+        pass
+
+
 def _stop_children(running: list[_Live], options: FanoutOptions) -> None:
     """SIGINT (clean engine stop) -> SIGTERM -> SIGKILL, with grace periods."""
 
     def _alive() -> list[_Live]:
         return [job for job in running if job.proc.poll() is None]
 
+    # SIGINT goes to the child pid ONLY: its handler performs a clean engine
+    # stop and shuts down its own SLEAP service. Broadcasting it to the group
+    # would race that orderly teardown.
     for live in _alive():
         try:
+            # NOTE (Windows): CTRL_BREAK_EVENT is only valid for a child started
+            # with creationflags=CREATE_NEW_PROCESS_GROUP, which _launch does not
+            # set. On nt this would hit the whole console group, scheduler
+            # included. Deployment is macOS/Linux; a Windows port must fix this.
             live.proc.send_signal(
                 signal.SIGINT if os.name != "nt" else signal.CTRL_BREAK_EVENT
             )
@@ -303,19 +334,15 @@ def _stop_children(running: list[_Live], options: FanoutOptions) -> None:
     deadline = time.monotonic() + options.sigint_grace_s
     while _alive() and time.monotonic() < deadline:
         time.sleep(0.05)
+    # Escalation: the child forfeited its clean exit, so take the whole group
+    # down with it rather than leaking grandchildren.
     for live in _alive():
-        try:
-            live.proc.terminate()
-        except Exception:
-            pass
+        _signal_group(live.proc, signal.SIGTERM)
     deadline = time.monotonic() + options.term_grace_s
     while _alive() and time.monotonic() < deadline:
         time.sleep(0.05)
     for live in _alive():
-        try:
-            live.proc.kill()
-        except Exception:
-            pass
+        _signal_group(live.proc, signal.SIGKILL)
     for live in running:
         try:
             live.proc.wait(timeout=5)

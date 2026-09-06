@@ -32,9 +32,13 @@ if mode == "trap_sigint":
     def _h(*_):
         print("SIGINT received - requesting clean stop", flush=True); sys.exit(130)
     signal.signal(signal.SIGINT, _h)
-if mode == "ignore_signals":
+if mode in ("ignore_signals", "orphan_maker"):
     signal.signal(signal.SIGINT, signal.SIG_IGN)
     signal.signal(signal.SIGTERM, signal.SIG_IGN)
+if mode == "orphan_maker":
+    import subprocess
+    kid = subprocess.Popen([sys.executable, "-c", "import time; time.sleep(60)"])
+    print("GRANDCHILD=%d" % kid.pid, flush=True)
 print("2026-01-01 - x - INFO - [track forward] 10% starting", flush=True)
 print("GPU=" + os.environ.get("CUDA_VISIBLE_DEVICES", "<unset>"), flush=True)
 print("OMP=" + os.environ.get("OMP_NUM_THREADS", "<unset>"), flush=True)
@@ -43,7 +47,7 @@ print("2026-01-01 - x - INFO - [post] 90% merging", flush=True)
 if mode == "fail":
     print("2026-01-01 - x - ERROR - Tracker CLI failed for v: boom", flush=True)
     sys.exit(3)
-if mode in ("trap_sigint", "ignore_signals"):
+if mode in ("trap_sigint", "ignore_signals", "orphan_maker"):
     time.sleep(30)
 print("2026-01-01 - x - INFO - Tracker CLI completed: video=%s | rows=5 | avg_fps=9.0" % cfg["name"], flush=True)
 """
@@ -259,6 +263,47 @@ def test_cancel_escalates_to_kill_when_child_ignores_signals(tmp_path):
     assert result.cancelled
     assert result.jobs[0].returncode not in (0, None)
     assert time.monotonic() - t0 < 5.0
+
+
+@pytest.mark.skipif(os.name == "nt", reason="POSIX process groups")
+def test_cancel_kills_orphaned_grandchildren(tmp_path):
+    """The child's SLEAP service is a grandchild: escalation must signal the
+    whole session group, not just the child pid, or it is left orphaned."""
+    specs = [_spec(tmp_path, "a", mode="orphan_maker")]
+    stop = {"flag": False}
+    import threading
+
+    threading.Timer(0.5, lambda: stop.__setitem__("flag", True)).start()
+    result = run_batch_fanout(
+        specs,
+        FanoutOptions(
+            jobs=1,
+            run_dir=tmp_path / "run",
+            child_command=_fake_command,
+            sigint_grace_s=0.3,
+            term_grace_s=0.3,
+        ),
+        should_stop=lambda: stop["flag"],
+    )
+    assert result.cancelled
+    log = result.jobs[0].log_path.read_text()
+    grandchild_pid = int(log.split("GRANDCHILD=")[1].split("\n")[0])
+
+    deadline = time.monotonic() + 3.0
+    while time.monotonic() < deadline:
+        try:
+            os.kill(grandchild_pid, 0)
+        except ProcessLookupError:
+            return  # reaped: the group signal reached it
+        except PermissionError:
+            return  # pid recycled to another owner; no longer ours
+        time.sleep(0.05)
+    # still alive -> orphaned. Clean up so the test does not leak a process.
+    try:
+        os.kill(grandchild_pid, 9)
+    except OSError:
+        pass
+    raise AssertionError(f"grandchild {grandchild_pid} survived cancellation")
 
 
 def test_module_imports_no_qt():
