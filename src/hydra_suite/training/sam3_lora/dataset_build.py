@@ -685,11 +685,17 @@ def build_sam3_coco_dataset(
             crowd_count = 0
             downgraded_tiles = 0
             fragment_only_tiles = 0
-            # R2: a partial edge tile is NOT square, and `datapoints.py`
-            # stretches it anisotropically to RESxRES. Counted on every path
-            # (a single-scale build has edge tiles too); it rides on the
-            # RETURN summary there, because `build_manifest.json` is
-            # byte-frozen by the Task 1 golden.
+            # R2: a non-square tile gets stretched anisotropically to RESxRES
+            # by `datapoints.py`. Edge tiles are NOT the cause -- tiling is
+            # edge-flushed to full tile size (`slice_geometry._axis_starts`),
+            # so every tile this builder cuts is already tile_w x tile_h.
+            # Non-square tiles instead come from: a requested tile size
+            # clamped down to a smaller frame dimension, a custom
+            # (non-square) slice geometry, or the full-frame arm (whose
+            # "tile" is the frame itself, of arbitrary aspect). Counted on
+            # every path (a single-scale build can hit the clamp too); it
+            # rides on the RETURN summary there, because `build_manifest.json`
+            # is byte-frozen by the Task 1 golden.
             non_square_tiles = 0
             with (
                 images_spool.open("w", encoding="utf-8") as image_records,
