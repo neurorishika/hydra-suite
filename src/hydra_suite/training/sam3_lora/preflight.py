@@ -8,7 +8,9 @@ hard backstop when an estimate is wrong.
 
 from __future__ import annotations
 
+import copy
 import csv
+import dataclasses
 import json
 import math
 import os
@@ -155,6 +157,11 @@ class Sam3DatasetProfile:
     raw_metadata_bytes: int
     polygon_count: int
     polygon_vertices: int
+    # Defaulted so `asdict` diagnostics and every existing construction site
+    # stay valid. Consumed by the auto-batch workload fingerprint, which needs
+    # to tell a sparse dataset from a dense one: the max alone is a single
+    # outlier tile, the p95 is what most steps actually pay for.
+    p95_active_instances_per_tile: int = 0
 
     @property
     def tile_count(self) -> int:
@@ -333,6 +340,20 @@ def _active_polygon_count(annotation: object) -> int:
     return len(validated_segmentation_polygons(annotation.get("segmentation")))
 
 
+def _percentile(values: Any, fraction: float) -> int:
+    """Nearest-rank percentile over per-tile instance counts.
+
+    Nearest-rank rather than interpolated: these are small integer counts of
+    instances, and an interpolated 6.4 is not a tile that exists.
+    """
+
+    ordered = sorted(int(value) for value in values)
+    if not ordered:
+        return 0
+    index = max(0, min(len(ordered) - 1, math.ceil(fraction * len(ordered)) - 1))
+    return ordered[index]
+
+
 def _dataset_profile(dataset_dir: str) -> Sam3DatasetProfile:
     root = Path(dataset_dir).expanduser().resolve()
     train, train_bytes = _load_coco(root / "train" / "_annotations.coco.json")
@@ -416,6 +437,7 @@ def _dataset_profile(dataset_dir: str) -> Sam3DatasetProfile:
         validation_present=validation_present,
         train_instances=train_instances,
         max_active_instances_per_tile=max(by_image.values(), default=0),
+        p95_active_instances_per_tile=_percentile(by_image.values(), 0.95),
         max_decoded_tile_bytes=decoded_bytes,
         metadata_bytes=metadata_bytes,
         raw_metadata_bytes=raw_metadata_bytes,
@@ -665,8 +687,25 @@ def build_resource_request(
     *,
     params: Any | None = None,
     negative_prompts: tuple[str, ...] = (),
+    probe_floor: bool = False,
 ) -> ResourceRequest:
-    """Estimate phase peaks from streamed work limits and COCO metadata."""
+    """Estimate phase peaks from streamed work limits and COCO metadata.
+
+    `probe_floor=True` builds the estimate a *measurement probe* is admitted
+    against instead of the one a training run is. The difference is confined
+    to the device side: the inherited `_MEASURED_BF16_DEVICE_PEAK_BYTES` /
+    `_EXTRA_BATCH_DEVICE_BYTES` / `_DEVICE_STEADY_BYTES` envelope is exactly
+    what the probe exists to replace, so gating the probe on it would refuse
+    hardware whose real batch-1 peak fits before it was ever measured.
+    Instead the device requirement becomes a hard floor computed from the
+    checkpoint size, the LoRA state, and ONE tile -- an under-estimate by
+    construction. Beyond that floor the probe child's own contained OOM is
+    the gate, and an OOM inside a contained probe is a measurement, not a
+    failure.
+
+    The host side is deliberately UNCHANGED in form and still scales with
+    `batch_size`, so each candidate is admitted at its own batch.
+    """
 
     params = params if params is not None else getattr(spec, "sam3_params", None)
     if params is None:
@@ -756,13 +795,34 @@ def build_resource_request(
         if getattr(params, "mixed_precision", "bf16") == "fp32"
         else 1.0
     )
-    training_device_peak = (
-        _MEASURED_BF16_DEVICE_PEAK_BYTES * precision_multiplier
-        + max(0, batch_size - 1) * _EXTRA_BATCH_DEVICE_BYTES * precision_multiplier
-        + max(0, lora_training_state - default_lora_training_state)
-        + dense_masks_device
+    one_tile_device_bytes = image_pixels * 3 * 4 + (
+        dataset.max_active_instances_per_tile
+        * image_pixels
+        * _MASK_DEVICE_BYTES_PER_PIXEL
     )
+    if probe_floor:
+        training_device_peak = (
+            _CHECKPOINT_BYTES
+            + lora_training_state
+            + one_tile_device_bytes * precision_multiplier
+        )
+    else:
+        training_device_peak = (
+            _MEASURED_BF16_DEVICE_PEAK_BYTES * precision_multiplier
+            + max(0, batch_size - 1) * _EXTRA_BATCH_DEVICE_BYTES * precision_multiplier
+            + max(0, lora_training_state - default_lora_training_state)
+            + dense_masks_device
+        )
     training_device_peak = int(training_device_peak)
+    device_steady_bytes = _CHECKPOINT_BYTES if probe_floor else _DEVICE_STEADY_BYTES
+    device_envelope_label = (
+        "probe hard floor (checkpoint + LoRA state + one tile)"
+        if probe_floor
+        else "measured BF16 model/activation envelope"
+    )
+    device_envelope_bytes = (
+        training_device_peak if probe_floor else _MEASURED_BF16_DEVICE_PEAK_BYTES
+    )
     validation_device_peak = training_device_peak
     common_allocations = (
         ("descriptor metadata", metadata),
@@ -782,8 +842,8 @@ def build_resource_request(
             host_peak_bytes=_MODEL_LOAD_HOST_BYTES
             + _RUNTIME_HOST_ALLOWANCE_BYTES
             + metadata,
-            accelerator_steady_bytes=_DEVICE_STEADY_BYTES,
-            accelerator_peak_bytes=_DEVICE_STEADY_BYTES,
+            accelerator_steady_bytes=device_steady_bytes,
+            accelerator_peak_bytes=device_steady_bytes,
             dominant_allocations=(
                 ("base checkpoint", _CHECKPOINT_BYTES),
                 ("model construction", _CHECKPOINT_BYTES),
@@ -796,15 +856,12 @@ def build_resource_request(
                 _TRAIN_HOST_FIXED_BYTES + metadata + lora_cpu_training_state
             ),
             host_peak_bytes=training_host_peak,
-            accelerator_steady_bytes=_DEVICE_STEADY_BYTES + lora_training_state,
+            accelerator_steady_bytes=device_steady_bytes + lora_training_state,
             accelerator_peak_bytes=training_device_peak,
             disk_transient_bytes=2 * lora_artifact,
             dominant_allocations=common_allocations
             + (
-                (
-                    "measured BF16 model/activation envelope",
-                    _MEASURED_BF16_DEVICE_PEAK_BYTES,
-                ),
+                (device_envelope_label, device_envelope_bytes),
                 ("LoRA and optimizer state", lora_training_state),
                 ("CPU LoRA training state", lora_cpu_training_state),
             ),
@@ -818,14 +875,11 @@ def build_resource_request(
                     _TRAIN_HOST_FIXED_BYTES + metadata + lora_cpu_training_state
                 ),
                 host_peak_bytes=training_host_peak + lora_reload_copy,
-                accelerator_steady_bytes=_DEVICE_STEADY_BYTES + lora_training_state,
+                accelerator_steady_bytes=device_steady_bytes + lora_training_state,
                 accelerator_peak_bytes=validation_device_peak,
                 dominant_allocations=common_allocations
                 + (
-                    (
-                        "training model/activation envelope",
-                        _MEASURED_BF16_DEVICE_PEAK_BYTES,
-                    ),
+                    (device_envelope_label, device_envelope_bytes),
                     ("CPU LoRA training state", lora_cpu_training_state),
                     ("LoRA reload copy", lora_reload_copy),
                 ),
@@ -890,8 +944,17 @@ def assess_preflight(
     dataset: Optional[Sam3DatasetProfile] = None,
     run_dir: str | Path | None = None,
     models_root: str | Path | None = None,
+    probe_floor: bool = False,
 ) -> Sam3PreflightDecision:
-    """Return the complete initial or lease-held live admission decision."""
+    """Return the complete initial or lease-held live admission decision.
+
+    `probe_floor` swaps ONLY the device estimate for the measurement-probe
+    hard floor (see `build_resource_request`). Every other admission concern
+    -- leases, run-dir writability, dataset validity, prompts, publish policy,
+    credentials, containment limits -- is evaluated identically, because they
+    are the same concerns for a probe as for a training run. Callers should
+    use `assess_probe_preflight` rather than passing this directly.
+    """
 
     params = getattr(spec, "sam3_params", None)
     if params is None:
@@ -925,6 +988,7 @@ def assess_preflight(
         dataset,
         params=params,
         negative_prompts=valid_negative_prompts,
+        probe_floor=probe_floor,
     )
     if cuda_device is _UNSET:
         cuda_device = _probe_cuda_device(str(getattr(spec, "device", "auto")))
@@ -1147,6 +1211,59 @@ def assess_preflight(
         refusals=tuple(refusals),
         warnings=tuple(warnings),
     )
+
+
+def spec_with_batch(spec: Any, batch: int) -> Any:
+    """Return `spec` with `sam3_params.batch` replaced by `batch`.
+
+    A copy, never a mutation: `spec` is the caller's requested configuration
+    and several code paths (diagnostics, the cancelled-result shape, the
+    provenance block's `requested` field) still need to see what was asked
+    for. Falls back to a shallow copy for non-dataclass stand-ins used by
+    tests and callers that pass duck-typed specs.
+    """
+
+    params = getattr(spec, "sam3_params", None)
+    if params is None:
+        return spec
+    try:
+        new_params = dataclasses.replace(params, batch=int(batch))
+    except TypeError:
+        new_params = copy.copy(params)
+        new_params.batch = int(batch)
+    try:
+        return dataclasses.replace(spec, sam3_params=new_params)
+    except TypeError:
+        new_spec = copy.copy(spec)
+        new_spec.sam3_params = new_params
+        return new_spec
+
+
+def assess_probe_preflight(
+    spec: Any,
+    *,
+    batch: int,
+    **kwargs: Any,
+) -> Sam3PreflightDecision:
+    """Admit ONE memory-probe candidate at its own batch size.
+
+    Differs from `assess_preflight` in exactly two ways, and shares
+    everything else by construction (it is the same function underneath):
+
+    1. **Device gate.** The inherited device envelope is not used; a hard
+       floor derived from checkpoint size and tile geometry is. See
+       `build_resource_request(probe_floor=True)`.
+    2. **Host gate.** Unchanged in form, but evaluated at `batch` rather than
+       at the spec's requested value -- host demand scales with batch
+       (decoded tiles, transformed tiles, collated images, dense masks), so
+       every candidate must be admitted at the batch it will actually run.
+
+    A refusal here stops the candidate ladder rather than skipping the
+    candidate: host demand is monotone in batch, so no larger candidate can
+    be admitted once one is refused.
+    """
+
+    return assess_preflight(spec_with_batch(spec, batch), probe_floor=True, **kwargs)
 
 
 def preflight(spec: Any) -> list[str]:

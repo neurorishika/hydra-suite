@@ -214,7 +214,14 @@ class Sam3LoraParams:
     lr: float = 5e-5
     # AP75 plateaus by epoch ~9 (mean .642, sd .040); 40 buys nothing.
     epochs: int = 10
-    # batch 2 OOMs at 1008 px on a 47 GB card; effective batch is batch*accum.
+    # A positive value is the user's explicit choice and is honoured as-is.
+    # `-1` means "measure it": the parent probes this exact workload on this
+    # exact card before launching, and the PROBE is the authority on what
+    # fits -- not a constant carried over from someone else's machine. The
+    # note this comment used to carry ("batch 2 OOMs at 1008 px on a 47 GB
+    # card") was one such inherited observation, from a different rank, a
+    # different adapter surface, and a different dataset density. Effective
+    # batch remains batch * grad_accum.
     batch: int = 1
     grad_accum: int = 8
     mixed_precision: str = "bf16"

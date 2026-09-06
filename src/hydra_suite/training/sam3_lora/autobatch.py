@@ -19,11 +19,21 @@ from __future__ import annotations
 import hashlib
 import json
 import subprocess
+import time
+from collections.abc import Mapping, Sequence
 from dataclasses import dataclass, field
 from pathlib import Path
-from typing import Optional
+from typing import Callable, Optional
 
-from hydra_suite.runtime.memory_profiles import ProfileIdentity
+from hydra_suite.runtime.memory_profiles import (
+    MEASURED_SAFETY_FRACTION,
+    MemoryMeasurement,
+    PressureSettings,
+    ProfileIdentity,
+    records_for,
+    select_batch,
+)
+from hydra_suite.runtime.resource_budget import AcceleratorKind
 from hydra_suite.training.contracts import Sam3LoraParams, TrainingRunSpec
 from hydra_suite.training.sam3_lora.env import resolve_sam3_env
 from hydra_suite.training.sam3_lora.preflight import CudaDeviceObservation
@@ -308,6 +318,35 @@ def _dataset_density_hash(dataset: Sam3DatasetDensityProfile) -> str:
     return hashlib.sha256(payload.encode("utf-8")).hexdigest()[:16]
 
 
+def sam3_dataset_density_profile(
+    spec: TrainingRunSpec,
+) -> Sam3DatasetDensityProfile:
+    """Read the built COCO metadata into the density facts the key needs.
+
+    Metadata only -- it reuses `preflight`'s existing bounded COCO reader and
+    negative-prompt resolution rather than adding a second parser, so the
+    density the fingerprint records is the density admission already saw.
+    """
+
+    from .preflight import _dataset_profile, _resolved_negative_prompts
+
+    params = spec.sam3_params
+    if params is None:
+        raise ValueError("spec.sam3_params is required to profile a SAM3 dataset")
+    profile = _dataset_profile(spec.derived_dataset_dir)
+    prompts = tuple(
+        prompt
+        for prompt in _resolved_negative_prompts(spec.derived_dataset_dir, params)
+        if isinstance(prompt, str)
+    )
+    return Sam3DatasetDensityProfile(
+        max_instances_per_tile=int(profile.max_active_instances_per_tile),
+        p95_instances_per_tile=int(profile.p95_active_instances_per_tile),
+        num_negatives=int(params.num_negatives),
+        negative_prompt_pool=prompts,
+    )
+
+
 def sam3_workload_fingerprint(
     spec: TrainingRunSpec,
     *,
@@ -369,4 +408,236 @@ def sam3_workload_fingerprint(
     )
     return Sam3FingerprintResult(
         identity=identity, degraded_reasons=tuple(degraded_reasons)
+    )
+
+
+# ---------------------------------------------------------------------------
+# Probe half: the candidate ladder, record validation, and batch selection.
+#
+# Still parent-side and still torch-free. The actual measurement happens
+# inside one contained sidecar child per candidate (`cli.py --probe
+# --probe-batch N`); this module only drives the ladder and interprets what
+# the children reported.
+# ---------------------------------------------------------------------------
+
+# The ladder. Powers of two because each rung must be worth a full model
+# reload: a linear ladder would pay that cost for a batch size the curve fit
+# can already extrapolate. 8 is the ceiling because SAM3 LoRA's per-item cost
+# is measured in GiB, so a card that fits 16 is not a card this gate is for.
+MAX_AUTO_BATCH = 8
+PROBE_CANDIDATES: tuple[int, ...] = (1, 2, 4, 8)
+
+# Two full steps THROUGH `optimizer.step()`: the first materialises Adam's
+# lazy exp_avg/exp_avg_sq state, so a one-step probe understates the peak by
+# the whole optimizer state.
+PROBE_STEPS = 2
+
+# Set to "1" to re-measure even when the store already has records for this
+# exact fingerprint (e.g. after a driver upgrade the key does not capture).
+FORCE_PROBE_ENV_VAR = "HYDRA_SAM3_FORCE_PROBE"
+
+PROFILE_SCOPE = "sam3_lora"
+PROBE_RECORDS_DIRNAME = "probe_records"
+
+
+class ProbeFailedError(RuntimeError):
+    """No candidate survived -- not even batch 1. Fail closed, cache nothing."""
+
+
+class ProbeOutOfMemoryError(RuntimeError):
+    """This candidate did not fit. A measurement, not a failure; stops the ladder."""
+
+
+class ProbeCandidateRefused(RuntimeError):
+    """Admission refused this candidate. Host demand is monotone: stop the ladder."""
+
+
+class ProbeCanceled(RuntimeError):
+    """The user cancelled mid-ladder. Merge nothing, write nothing, launch nothing."""
+
+
+def _is_out_of_memory(exc: BaseException) -> bool:
+    """True for our own OOM signal and for torch's, without importing torch.
+
+    `torch.cuda.OutOfMemoryError` subclasses `RuntimeError`, so catching
+    `RuntimeError` here would swallow every unrelated failure and record a
+    broken configuration as "does not fit". Match the type name instead.
+    """
+
+    return isinstance(exc, ProbeOutOfMemoryError) or type(exc).__name__ in (
+        "OutOfMemoryError",
+        "CudaOutOfMemoryError",
+    )
+
+
+def probe_candidates(spec: TrainingRunSpec) -> tuple[int, ...]:
+    """The batch sizes to try, smallest first."""
+
+    del spec  # Reserved: a future dataset-size cap would consult the spec.
+    return tuple(
+        candidate for candidate in PROBE_CANDIDATES if candidate <= MAX_AUTO_BATCH
+    )
+
+
+def _unfingerprinted_identity(spec: TrainingRunSpec) -> ProfileIdentity:
+    """A deliberately non-matching identity for records taken without a key.
+
+    `run_probe` accepts `identity=None` so it can be exercised without conda,
+    a GPU, or a dataset. Records built this way carry an identity that no
+    real fingerprint can equal, so `validate_probe_records` discards them and
+    they can never reach the store by accident.
+    """
+
+    params = spec.sam3_params
+    return ProfileIdentity(
+        operation=OPERATION,
+        model_identity="unfingerprinted",
+        backend="unfingerprinted",
+        device_identity="unfingerprinted",
+        precision=getattr(params, "mixed_precision", "bf16") if params else "bf16",
+        task="unfingerprinted",
+    )
+
+
+def _measurement(
+    spec: TrainingRunSpec,
+    identity: ProfileIdentity,
+    batch_size: int,
+    peaks: Optional[Mapping[str, int]],
+) -> MemoryMeasurement:
+    peaks = peaks or {}
+    imgsz = max(1, int(spec.hyperparams.imgsz))
+    reserved = max(0, int(peaks.get("accelerator_reserved_peak_bytes", 0)))
+    allocated = max(0, int(peaks.get("accelerator_allocated_peak_bytes", 0)))
+    return MemoryMeasurement(
+        identity=identity,
+        settings=PressureSettings(
+            input_width=imgsz, input_height=imgsz, batch_size=batch_size
+        ),
+        accelerator_kind=AcceleratorKind.CUDA,
+        host_peak_bytes=max(0, int(peaks.get("host_peak_bytes", 0))),
+        # Clamped rather than trusted: `MemoryMeasurement` refuses a record
+        # whose allocated peak exceeds its reserved peak, and a child that
+        # reported such a pair is confused, not authoritative.
+        accelerator_allocated_peak_bytes=min(allocated, reserved),
+        accelerator_reserved_peak_bytes=reserved,
+        observed_at_unix_ns=int(peaks.get("observed_at_unix_ns", 0) or time.time_ns()),
+    )
+
+
+def run_probe(
+    spec: TrainingRunSpec,
+    run_dir: str | Path,
+    *,
+    step_fn: Callable[[int], Optional[Mapping[str, int]]],
+    identity: Optional[ProfileIdentity] = None,
+    candidates: Optional[Sequence[int]] = None,
+    should_cancel: Optional[Callable[[], bool]] = None,
+) -> tuple[MemoryMeasurement, ...]:
+    """Walk the candidate ladder, returning one record per surviving candidate.
+
+    `step_fn(batch_size)` performs ONE candidate's measurement and returns its
+    peaks (or `None` when the caller has no peaks to report, e.g. a test
+    fake). In production it launches one fresh contained sidecar per
+    candidate: candidates 2-8 must never run under batch-1 containment, and a
+    model reload costs seconds while wrong containment costs a wedged box.
+
+    The ladder stops -- it does not skip -- on the first candidate that
+    either runs out of memory or is refused admission. Both are monotone in
+    batch size, so nothing larger could have survived either.
+
+    Raises `ProbeFailedError` when nothing survives, including at batch 1:
+    that configuration cannot run on this hardware and must not be cached.
+    """
+
+    del run_dir  # The child owns record I/O; the ladder owns control flow.
+    should_cancel = should_cancel or (lambda: False)
+    resolved_identity = identity or _unfingerprinted_identity(spec)
+    records: list[MemoryMeasurement] = []
+    for candidate in candidates or probe_candidates(spec):
+        if should_cancel():
+            raise ProbeCanceled(f"cancelled before probing batch {candidate}")
+        try:
+            peaks = step_fn(candidate)
+        except ProbeCandidateRefused:
+            break
+        except BaseException as exc:  # noqa: BLE001 - re-raised unless it is an OOM
+            if not _is_out_of_memory(exc):
+                raise
+            break
+        records.append(_measurement(spec, resolved_identity, candidate, peaks))
+    if not records:
+        raise ProbeFailedError(
+            "No SAM3 batch size survived the memory probe, including batch 1. "
+            "This workload does not fit on this device; nothing was cached."
+        )
+    return tuple(records)
+
+
+def validate_probe_records(
+    records: Sequence[MemoryMeasurement],
+    identity: ProfileIdentity,
+) -> tuple[MemoryMeasurement, ...]:
+    """Keep only records that are safe to store and select against.
+
+    A record is discarded (never stored) when it does not belong to
+    `identity`, when its reserved peak is not positive (a measurement that
+    measured nothing), or when it breaks monotonicity -- a larger batch that
+    reports a SMALLER peak than a smaller batch is not a cheaper batch, it is
+    a broken measurement, and storing it would let `select_batch` admit a
+    batch size that never actually fit.
+    """
+
+    ordered = sorted(
+        records_for(records, identity), key=lambda record: record.settings.batch_size
+    )
+    kept: list[MemoryMeasurement] = []
+    highest_peak = 0
+    for record in ordered:
+        reserved = record.accelerator_reserved_peak_bytes
+        if reserved <= 0:
+            continue
+        if record.accelerator_allocated_peak_bytes > reserved:
+            continue
+        if reserved < highest_peak:
+            continue
+        highest_peak = reserved
+        kept.append(record)
+    return tuple(kept)
+
+
+def resolve_batch(
+    spec: TrainingRunSpec,
+    records: Sequence[MemoryMeasurement],
+    *,
+    usable_bytes: int,
+    maximum: int = MAX_AUTO_BATCH,
+) -> tuple[int, str]:
+    """Return `(batch, provenance)` for one run.
+
+    A positive `sam3_params.batch` is the user's explicit choice and is
+    honoured without consulting any measurement. Otherwise the measured
+    records decide.
+
+    `usable_bytes` is **raw free device bytes**. The safety fraction is
+    applied exactly once, inside `select_batch`; pre-multiplying here would
+    discount the budget twice.
+
+    A `0` result is a REFUSAL, never a floor of 1: the records say batch 1
+    does not fit in what is free right now, and launching a run that is
+    measured not to fit wastes minutes of setup to reach a certain OOM.
+    """
+
+    params = spec.sam3_params
+    requested = int(getattr(params, "batch", 1)) if params is not None else 1
+    if requested > 0:
+        return requested, "explicit"
+    return (
+        select_batch(
+            records,
+            usable_bytes=int(usable_bytes),
+            maximum=max(1, int(maximum)),
+            safety_fraction=MEASURED_SAFETY_FRACTION,
+        ),
+        "measured",
     )

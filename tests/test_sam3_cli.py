@@ -311,7 +311,12 @@ def test_adapters_are_injected_before_the_model_moves_to_device():
 
     from hydra_suite.training.sam3_lora import cli
 
-    source = inspect.getsource(cli.run_training)
+    # The stack build now lives in `_build_model_and_loss`, shared verbatim
+    # by `run_training` and by the memory probe -- so this ordering invariant
+    # is asserted once, where both callers get it.
+    source = inspect.getsource(cli._build_model_and_loss)
+    assert "_build_model_and_loss(" in inspect.getsource(cli.run_training)
+    assert "_build_model_and_loss(" in inspect.getsource(cli.run_probe_measurement)
     freeze_at = source.index("model.requires_grad_(False)")
     inject_at = source.index("inject_adapters(model")
     move_at = source.index("model.to(device)")

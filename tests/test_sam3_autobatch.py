@@ -310,3 +310,144 @@ def test_degraded_key_never_collides_with_a_healthy_one_for_the_same_workload(
         spec, cuda_device=_dev(), dataset=_dataset()
     ).identity
     assert healthy != degraded
+
+
+# ---------------------------------------------------------------------------
+# Probe half (Task 3): the candidate ladder, validation, and selection.
+# ---------------------------------------------------------------------------
+
+
+def _identity(precision: str = "bf16"):
+    from hydra_suite.runtime.memory_profiles import ProfileIdentity
+
+    return ProfileIdentity(
+        operation=ab.OPERATION,
+        model_identity="model",
+        backend="env",
+        device_identity="dev|1",
+        precision=precision,
+        task="task",
+    )
+
+
+def _record(identity, batch, reserved, *, allocated=None, host=1):
+    return MemoryMeasurement(
+        identity=identity,
+        settings=PressureSettings(
+            input_width=1008, input_height=1008, batch_size=batch
+        ),
+        accelerator_kind=AcceleratorKind.CUDA,
+        host_peak_bytes=host,
+        accelerator_allocated_peak_bytes=(reserved if allocated is None else allocated),
+        accelerator_reserved_peak_bytes=reserved,
+        observed_at_unix_ns=1,
+    )
+
+
+def test_probe_candidates_are_a_bounded_power_of_two_ladder(tmp_path):
+    assert ab.probe_candidates(_spec(tmp_path)) == (1, 2, 4, 8)
+
+
+def test_probe_stops_at_the_first_oom_and_never_exceeds_it(tmp_path):
+    import torch
+
+    seen = []
+
+    def step(batch):
+        seen.append(batch)
+        if batch >= 4:
+            raise torch.cuda.OutOfMemoryError("out of memory")
+        return {"accelerator_reserved_peak_bytes": batch * GiB}
+
+    records = ab.run_probe(_spec(tmp_path), tmp_path, step_fn=step)
+
+    assert seen == [1, 2, 4], "must stop probing after the first OOM"
+    assert max(r.settings.batch_size for r in records) == 2
+
+
+def test_a_probe_that_ooms_at_batch_one_fails_closed(tmp_path):
+    import torch
+
+    def step(_batch):
+        raise torch.cuda.OutOfMemoryError("out of memory")
+
+    with pytest.raises(ab.ProbeFailedError):
+        ab.run_probe(_spec(tmp_path), tmp_path, step_fn=step)
+    assert not list(tmp_path.glob("*.json")), "a doomed config must not be cached"
+
+
+def test_a_host_refusal_stops_the_ladder_rather_than_skipping_it(tmp_path):
+    seen = []
+
+    def step(batch):
+        seen.append(batch)
+        if batch >= 2:
+            raise ab.ProbeCandidateRefused("host demand exceeds the budget")
+        return {"accelerator_reserved_peak_bytes": GiB}
+
+    records = ab.run_probe(_spec(tmp_path), tmp_path, step_fn=step)
+
+    assert seen == [1, 2]
+    assert [r.settings.batch_size for r in records] == [1]
+
+
+def test_run_probe_checks_cancellation_before_each_candidate(tmp_path):
+    seen = []
+
+    def step(batch):
+        seen.append(batch)
+        return {"accelerator_reserved_peak_bytes": GiB}
+
+    with pytest.raises(ab.ProbeCanceled):
+        ab.run_probe(
+            _spec(tmp_path),
+            tmp_path,
+            step_fn=step,
+            should_cancel=lambda: len(seen) >= 1,
+        )
+    assert seen == [1]
+
+
+def test_explicit_batch_is_honoured_without_probing(tmp_path):
+    batch, provenance = ab.resolve_batch(
+        _spec(tmp_path, params_overrides={"batch": 4}),
+        records=(),
+        usable_bytes=24 * GiB,
+        maximum=8,
+    )
+    assert (batch, provenance) == (4, "explicit")
+
+
+def test_resolve_batch_refuses_rather_than_flooring_at_one(tmp_path):
+    identity = _identity()
+    records = (_record(identity, 1, 20 * GiB),)
+    batch, provenance = ab.resolve_batch(
+        _spec(tmp_path, params_overrides={"batch": -1}),
+        records=records,
+        usable_bytes=2 * GiB,
+        maximum=8,
+    )
+    assert (batch, provenance) == (0, "measured")
+
+
+def test_validation_discards_foreign_and_non_monotone_records(tmp_path):
+    identity = _identity()
+    foreign = _identity(precision="fp32")
+    records = (
+        _record(identity, 1, 10 * GiB),
+        _record(foreign, 2, 12 * GiB),
+        _record(identity, 4, 5 * GiB),  # peak fell as batch grew: impossible
+        _record(identity, 2, 14 * GiB),
+    )
+    kept = ab.validate_probe_records(records, identity)
+    assert [
+        (r.settings.batch_size, r.accelerator_reserved_peak_bytes) for r in kept
+    ] == [
+        (1, 10 * GiB),
+        (2, 14 * GiB),
+    ]
+
+
+def test_validation_discards_a_zero_peak_record(tmp_path):
+    identity = _identity()
+    assert ab.validate_probe_records((_record(identity, 1, 0),), identity) == ()

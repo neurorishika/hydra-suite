@@ -1071,3 +1071,98 @@ def test_token_probe_reads_env_vars_then_the_token_file(tmp_path, monkeypatch):
     assert pf._huggingface_token_present() is False
     monkeypatch.setenv("HF_TOKEN", "hf_yyy")
     assert pf._huggingface_token_present() is True
+
+
+# ---------------------------------------------------------------------------
+# Probe admission (Task 3a): measure first, gate on the measurement later.
+# ---------------------------------------------------------------------------
+
+
+def test_probe_admission_does_not_use_the_fallback_device_envelope(
+    tmp_path, monkeypatch
+):
+    """The inherited device envelope is exactly what the probe exists to
+    replace. Gating the probe on it would refuse hardware whose real batch-1
+    peak fits, before it was ever measured."""
+
+    _write_coco(tmp_path)
+    monkeypatch.setattr(pf, "_MEASURED_BF16_DEVICE_PEAK_BYTES", 10_000 * pf.GiB)
+    monkeypatch.setattr(pf, "_EXTRA_BATCH_DEVICE_BYTES", 10_000 * pf.GiB)
+    monkeypatch.setattr(pf, "_DEVICE_STEADY_BYTES", 10_000 * pf.GiB)
+
+    decision = pf.assess_probe_preflight(
+        _spec(tmp_path, batch=-1),
+        batch=1,
+        cuda_device=_cuda(),
+        observation=_host(),
+    )
+
+    assert decision.admitted, decision.refusals
+    assert decision.budget.limits.batch_size == 1
+
+
+def test_probe_admission_still_refuses_below_the_hard_floor(tmp_path):
+    """The floor is model + LoRA state + one tile -- an under-estimate by
+    construction. A card that cannot hold even that is refused before a probe
+    child is ever launched."""
+
+    _write_coco(tmp_path)
+
+    decision = pf.assess_probe_preflight(
+        _spec(tmp_path, batch=-1),
+        batch=1,
+        cuda_device=_cuda(free_gib=2, total_gib=2),
+    )
+
+    assert not decision.admitted
+
+
+def test_probe_admission_is_evaluated_per_candidate_on_the_host_side(tmp_path):
+    """Host demand scales with batch (decoded tiles, transformed tiles,
+    collated images, dense masks), so each candidate gets its own estimate."""
+
+    _write_coco(tmp_path)
+    spec = _spec(tmp_path, batch=-1)
+
+    small = pf.assess_probe_preflight(
+        spec, batch=1, cuda_device=_cuda(), observation=_host()
+    )
+    large = pf.assess_probe_preflight(
+        spec, batch=8, cuda_device=_cuda(), observation=_host()
+    )
+
+    def _training_host_peak(decision):
+        return next(
+            phase.host_peak_bytes
+            for phase in decision.request.phases
+            if phase.name == "training"
+        )
+
+    assert _training_host_peak(large) > _training_host_peak(small)
+    assert large.budget.limits.batch_size == 8
+
+
+def test_probe_admission_shares_every_other_refusal_with_normal_admission(tmp_path):
+    """Leases, dataset validity, prompts, and publish policy are shared
+    concerns -- factored, not forked."""
+
+    _write_coco(tmp_path)
+
+    decision = pf.assess_probe_preflight(
+        _spec(tmp_path, batch=-1, ack=False),
+        batch=1,
+        cuda_device=_cuda(),
+        observation=_host(),
+    )
+
+    assert not decision.admitted
+    assert any("Label quality" in reason for reason in decision.refusals)
+
+
+def test_dataset_profile_reports_the_p95_instance_density(tmp_path):
+    _write_coco(tmp_path, tiles=20, instances_per_tile=3)
+
+    profile = pf._dataset_profile(str(tmp_path / "dataset"))
+
+    assert profile.max_active_instances_per_tile == 3
+    assert profile.p95_active_instances_per_tile == 3

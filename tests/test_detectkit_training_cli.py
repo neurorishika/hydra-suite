@@ -781,3 +781,54 @@ def test_cli_stays_quiet_when_publishing_is_enabled(tmp_path, capsys):
     )
 
     assert "auto_import is off" not in capsys.readouterr().out
+
+
+def test_a_plan_may_not_supply_batch_resolution(tmp_path):
+    """`batch_resolution` is output-only provenance the parent writes into the
+    resolved `spec.json`. A plan that supplies it would be forging a
+    measurement, so the loader must reject it as an unknown key."""
+
+    import pytest
+
+    from hydra_suite.detectkit.config.training import (
+        TrainingPlanError,
+        load_training_plan,
+    )
+
+    payload = _plan_payload(tmp_path)
+    payload["batch_resolution"] = {"resolved": 64}
+    config_path = tmp_path / "training.json"
+    config_path.write_text(json.dumps(payload), encoding="utf-8")
+
+    with pytest.raises(TrainingPlanError, match="batch_resolution"):
+        load_training_plan(config_path)
+
+
+def test_sam3_batch_accepts_auto_but_still_rejects_zero_and_below_minus_one(tmp_path):
+    """`-1` means "measure it"; the probe is the authority. `0` and `< -1`
+    remain nonsense and must still be refused."""
+
+    import pytest
+
+    from hydra_suite.detectkit.config.training import (
+        TrainingPlanError,
+        load_training_plan,
+    )
+
+    def _load(batch: int):
+        payload = _plan_payload(tmp_path)
+        payload["sources"] = [{"path": "./source", "name": "day-1", "level": "polygon"}]
+        payload["roles"] = [{"role": "semantic_sam3", "model": "sam3"}]
+        payload["sam3"] = {
+            "prompt": "ant",
+            "label_quality_acknowledged": True,
+            "batch": batch,
+        }
+        config_path = tmp_path / "training.json"
+        config_path.write_text(json.dumps(payload), encoding="utf-8")
+        return load_training_plan(config_path)
+
+    assert _load(-1).sam3_params.batch == -1
+    for bad in (0, -2):
+        with pytest.raises(TrainingPlanError, match="sam3.batch"):
+            _load(bad)
