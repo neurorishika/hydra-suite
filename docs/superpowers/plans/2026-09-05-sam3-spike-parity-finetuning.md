@@ -9,7 +9,12 @@ The measurement phase (Task 0 Step 6, run 2026-09-05 on `courtship`/`hydra-cuda`
 committed as `tools/sam3_parity/baseline.json`) returned a **null result** on a
 genuine 16-frame held-out split: paired per-frame difference **+0.4375
 extras/frame, 95 % CI [−0.4375, +1.4375], sign p = 0.34** — the pre-registered
-criterion (CI excludes zero) is **not met**. Excluding the training-contaminated
+criterion (CI excludes zero) is **not met**. **Power caveat, stated
+explicitly:** the CI's upper bound (+1.4375) OVERLAPS the original +1.2–2.0
+band, so the null FAILS TO DEMONSTRATE the effect — it does not EXCLUDE its
+lower half. "Refuted" rests on four independent legs, not on the null alone:
+the superseded evidence, the AP inversion, the scoring-harness artefact
+(Task 7), and the ~19× data confound. Excluding the training-contaminated
 frame `f008975` it is +0.0667, CI [−0.600, +0.667]; also null. On AP **ours 0.530
 beats the spike's 0.472.** The comparison is in any case confounded by **~19×
 training data** (the spike's `fold_all` is 3 frames / 108 tiles / 177 instances
@@ -380,9 +385,20 @@ and interactions (surface × precision especially) are plausible.
 
 ## Task 7 (NEW): Interrogate the shared recall plateau
 
-**m3.** Both models sit at ~0.72 recall and ~5–8 extras/frame. That is a
-**shared ceiling no adapter-surface change will move**, and it may dominate
-everything this plan does.
+> **RESOLVED 2026-09-05 — this task is DONE and its premise below is
+> SUPERSEDED. Do not act on the ~0.72 figure.** The ceiling was neither a
+> labelling nor a tiling artefact nor a model limit: it was a **scoring-harness
+> defect**. `calibration.match_one_to_one` gated matches on a vertex-mean
+> "centroid" that falls outside 15.9 % (128/805) of real ant outlines. Fixed on
+> `fix/calibration-centroid-matcher` (merged `b9e92bc7`). On IDENTICAL
+> predictions the real operating point is **recall 0.9876, extras/tile 0.0347**
+> — not 0.72 / 5–8. Both checkpoints moved together (+9.4 and +8.9 points),
+> which is what a shared harness defect predicts and a model difference does
+> not.
+
+**m3 (superseded — retained for provenance).** Both models sit at ~0.72 recall
+and ~5–8 extras/frame. That is a **shared ceiling no adapter-surface change
+will move**, and it may dominate everything this plan does.
 
 - [ ] **Step 1:** Take the ~6.3 missed instances/frame at the best operating
   point and characterise them: are they small, occluded, clustered,

@@ -89,9 +89,30 @@ _PUBLISH_HOST_BYTES = (
 # So growing the surface from 206 to 312 modules did NOT move the peak: at
 # rank 16 the adapters are ~11.4M parameters (~0.14 GiB of state) against a
 # frozen base whose activations dominate, and the extra split projections
-# reuse activations the fused kernels were already materialising. 12 GiB keeps
-# ~55% headroom over the current figure, so this constant remains sound -- now
-# for a measured reason rather than an inherited one.
+# reuse activations the fused kernels were already materialising.
+#
+# REFUTED 2026-09-06 -- the "~55% headroom, this constant remains sound"
+# claim that stood here was WRONG, and wrong in the unsafe direction. The
+# 7.72 GiB above came from a 30-step probe. A full run at the SAME surface,
+# batch, precision and tile size reached 10.22 GiB by step 70, sat FLAT there
+# for 230 steps across an epoch boundary, then rose to 11.59 and 12.99 GiB
+# within ten steps -- exceeding not just this 12 GiB base but preflight's
+# whole composed `training.accelerator_peak_bytes` (12.364 GiB) by 5.1%.
+# The short probe under-measured by 41%.
+#
+# No OOM followed, but only because `accelerator_safety_fraction` 0.85
+# demands 14.55 GiB free -- slack meant to absorb allocator noise, not to
+# cover a wrong central estimate. The guard held for the wrong reason.
+#
+# Two lessons, both load-bearing:
+#   * A TRUNCATED PROBE IS A LOWER BOUND, never a peak. Only a completed run
+#     bounds it. Do not re-derive this constant from a short probe.
+#   * FLATNESS IS NOT CONVERGENCE. 230 flat steps preceded a 1.37 GiB jump,
+#     so no "stable for K steps" rule can be trusted at any plausible K.
+#     Peak appears to track per-tile CONTENT (instance and mask count), so
+#     the worst case surfaces only when the stream serves the densest tile.
+#
+# See docs/superpowers/specs/2026-09-06-sam3-training-vram-probe-audit.md.
 #
 # The measurements live in the profile store, dated and device-tagged
 # (`runtime/memory_profiles.py`, written by

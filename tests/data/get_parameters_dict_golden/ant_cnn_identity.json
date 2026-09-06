@@ -7,6 +7,7 @@
     "min_aspect_ratio_multiplier": 0.5,
     "pose_sleap_env": "sleap",
     "reference_aspect_ratio": 2.8,
+    "slice_profile_id": "",
     "video_pose_color": [
       255,
       255,
@@ -55,6 +56,10 @@
         ]
       ],
       "confidence": 0.9,
+      "factor_names": [
+        "flat",
+        "flat_1"
+      ],
       "label": "colortag",
       "labels": [
         "blue",
@@ -64,6 +69,7 @@
         "yellow"
       ],
       "model_path": "/Users/neurorishika/Library/Application Support/hydra-suite/models/classification/identity/20260429-105036_classifier_multihead_obiroi_colortag.multihead.json",
+      "non_identifying_classes": [],
       "rel_path": "classification/identity/20260429-105036_classifier_multihead_obiroi_colortag.multihead.json",
       "scoring_mode": "per_head_average",
       "unique_identifier": true,
@@ -227,6 +233,7 @@
   "N_ARENAS": 1,
   "ONLINE_PRIOR_WEIGHT": 0.25,
   "PELT_MODEL": "rbf",
+  "PIPELINE_DEPTH": 2,
   "POSE_BATCH_SIZE": 25,
   "POSE_DIRECTION_ANTERIOR_KEYPOINTS": [],
   "POSE_DIRECTION_POSTERIOR_KEYPOINTS": [],
