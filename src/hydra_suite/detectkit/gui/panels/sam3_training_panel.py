@@ -42,7 +42,11 @@ from hydra_suite.training.sam3_lora.availability import (
     Sam3TrainingAvailability,
     probe_sam3_training_availability,
 )
-from hydra_suite.training.sam3_lora.env import DEFAULT_SAM3_ENV
+from hydra_suite.training.sam3_lora.env import DEFAULT_SAM3_ENV  # noqa: F401
+from hydra_suite.training.sam3_lora.env import resolve_sam3_env
+
+# DEFAULT_SAM3_ENV is re-exported (not otherwise referenced in this module)
+# because tests assert against it as `sam3_training_panel.DEFAULT_SAM3_ENV`.
 from hydra_suite.widgets.workers import BaseWorker
 
 _GEOMETRY_MODES = ("auto_object", "auto_model", "custom")
@@ -254,7 +258,7 @@ class Sam3TrainingPanel(QWidget):
         and can take up to `_AUTO_PROBE_TIMEOUT_S` to return.
         """
         self._probed_once = True
-        env_name = self.env_edit.text().strip() or DEFAULT_SAM3_ENV
+        env_name = self.env_edit.text().strip() or resolve_sam3_env()
         self.env_status_label.setText(f"Checking {env_name!r}...")
         worker = _AvailabilityProbeWorker(env_name, _AUTO_PROBE_TIMEOUT_S, self)
         worker.result.connect(self._on_async_probe_result)
@@ -292,7 +296,7 @@ class Sam3TrainingPanel(QWidget):
         blocks the GUI thread.
         """
         self._probed_once = True
-        env_name = self.env_edit.text().strip() or DEFAULT_SAM3_ENV
+        env_name = self.env_edit.text().strip() or resolve_sam3_env()
         self.env_status_label.setText(f"Checking {env_name!r}...")
         availability: Sam3TrainingAvailability = probe_sam3_training_availability(
             env=env_name, timeout=_AUTO_PROBE_TIMEOUT_S
@@ -322,7 +326,7 @@ class Sam3TrainingPanel(QWidget):
         self.env_group = QGroupBox("Sidecar environment")
         env_layout = QHBoxLayout(self.env_group)
         env_layout.addWidget(QLabel("Conda env"))
-        self.env_edit = QLineEdit(DEFAULT_SAM3_ENV)
+        self.env_edit = QLineEdit(resolve_sam3_env())
         env_layout.addWidget(self.env_edit)
         self.btn_check_env = QPushButton("Check")
         self.btn_check_env.clicked.connect(self.check_availability)
@@ -603,7 +607,7 @@ class Sam3TrainingPanel(QWidget):
         self.tile_overlap_spin.setValue(p.tile_overlap)
         self.chk_keep_empty_tiles.setChecked(p.keep_empty_tiles)
         self.chk_ack.setChecked(p.label_quality_acknowledged)
-        self.env_edit.setText(p.env_name or DEFAULT_SAM3_ENV)
+        self.env_edit.setText(p.env_name or resolve_sam3_env())
 
     def acknowledged(self) -> bool:
         return self.chk_ack.isChecked()
