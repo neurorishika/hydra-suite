@@ -167,6 +167,36 @@ def test_disagreement_is_logged(main_window, caplog):
         row.deleteLater()
 
 
+def test_disagreement_is_logged_once_per_row(main_window, caplog):
+    """to_config runs on every build_config_dict; one warning, not a stream."""
+    row = main_window._identity_panel._add_cnn_classifier_row()
+    try:
+        row.load_from_config({"scoring_mode": "per_head_average"})
+        with caplog.at_level("WARNING"):
+            for _ in range(5):
+                row._effective_scoring_mode(ATOMIC_META)
+        hits = [r for r in caplog.records if "scoring_mode" in r.message]
+        assert len(hits) == 1, f"expected one warning, got {len(hits)}"
+    finally:
+        row.deleteLater()
+
+
+def test_reloading_a_config_re_arms_the_warning(main_window, caplog):
+    """The once-flag must not silence a genuinely new session."""
+    row = main_window._identity_panel._add_cnn_classifier_row()
+    try:
+        row.load_from_config({"scoring_mode": "per_head_average"})
+        with caplog.at_level("WARNING"):
+            row._effective_scoring_mode(ATOMIC_META)
+        caplog.clear()
+        row.load_from_config({"scoring_mode": "per_head_average"})
+        with caplog.at_level("WARNING"):
+            row._effective_scoring_mode(ATOMIC_META)
+        assert [r for r in caplog.records if "scoring_mode" in r.message]
+    finally:
+        row.deleteLater()
+
+
 def test_agreement_is_not_logged(main_window, caplog):
     row = main_window._identity_panel._add_cnn_classifier_row()
     try:
@@ -192,6 +222,18 @@ def _fixture_scoring_modes() -> dict[str, str]:
     }
 
 
+def _registry_scoring_mode(main_window, rel_path_fragment: str) -> str | None:
+    """The host registry's scoring_mode for the fixture's classifier, if known."""
+    try:
+        entries = main_window._identity_panel._cnn_registry_by_path()
+    except Exception:
+        return None
+    for rel_path, meta in entries.items():
+        if rel_path_fragment in rel_path:
+            return str(meta.get("scoring_mode", "") or "")
+    return None
+
+
 def test_gate_config_scoring_mode_survives_load_and_save(main_window):
     expected = _fixture_scoring_modes()
     assert expected, "fixture must define at least one CNN classifier"
@@ -200,6 +242,17 @@ def test_gate_config_scoring_mode_survives_load_and_save(main_window):
         "scoring_mode; with every value at the 'atomic' default it would pass "
         "even with the bug present"
     )
+
+    # This oracle only has teeth where the host registry DISAGREES with the
+    # fixture: the bug re-derived scoring_mode from the registry, so on a
+    # machine whose registry already records per_head_average the test would
+    # pass with the bug present. Skip loudly rather than pass vacuously.
+    registry_mode = _registry_scoring_mode(main_window, "colortag")
+    if registry_mode is not None and registry_mode in expected.values():
+        pytest.skip(
+            "host registry records scoring_mode=%r, matching the fixture; this "
+            "oracle cannot distinguish the bug on this machine" % registry_mode
+        )
 
     config_path = FIXTURES_CONFIG_DIR / "ant_cnn_identity.json"
     main_window._config_orch._load_config_from_file(str(config_path), preset_mode=False)

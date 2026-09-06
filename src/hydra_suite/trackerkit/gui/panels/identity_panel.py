@@ -869,6 +869,9 @@ class IdentityPanel(QWidget):
             # -- derive from the model registry", which is the state for a
             # fresh row and after the user picks a different model.
             self._scoring_mode_override: str | None = None
+            # to_config() runs on every build_config_dict()/get_parameters_dict();
+            # warn once per row rather than on every call.
+            self._scoring_mode_conflict_logged = False
             self.btn_non_identifying = QPushButton("Non-identifying classes…")
             self.btn_non_identifying.setToolTip(
                 "Classes that do not identify an individual (e.g. 'notag').\n"
@@ -982,6 +985,7 @@ class IdentityPanel(QWidget):
             # programmatic setCurrentIndex during a config restore.
             if rel_path and rel_path != "__add_new__":
                 self._scoring_mode_override = None
+                self._scoring_mode_conflict_logged = False
             if rel_path == "__add_new__":
                 self._main_window._identity_panel._handle_add_new_cnn_identity_model()
                 self._populate_model_combo()
@@ -1107,7 +1111,11 @@ class IdentityPanel(QWidget):
             registry_mode = str(meta.get("scoring_mode", "atomic"))
             if not self._scoring_mode_override:
                 return registry_mode
-            if self._scoring_mode_override != registry_mode:
+            if (
+                self._scoring_mode_override != registry_mode
+                and not self._scoring_mode_conflict_logged
+            ):
+                self._scoring_mode_conflict_logged = True
                 logger.warning(
                     "CNN classifier %r: the loaded session pins scoring_mode=%r "
                     "but the model registry records %r; running the session's "
@@ -1166,6 +1174,7 @@ class IdentityPanel(QWidget):
             self._scoring_mode_override = (
                 saved_mode if saved_mode in ("atomic", "per_head_average") else None
             )
+            self._scoring_mode_conflict_logged = False
 
         def set_realtime_batch_cap(self, max_animals: int, realtime_enabled: bool):
             """Apply realtime batch caps for this classifier row."""
