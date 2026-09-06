@@ -190,6 +190,14 @@ RECOMMENDATION_RULE = (
     "frontier of misses, extras and time, then take the fastest point whose F1 "
     "is within 0.01 of the best and whose localization quality is at least 0.5."
 )
+# Stable machine-readable identifier for the rule ``recommend_balanced``
+# currently implements. Bump this (and its effective date) whenever the
+# rule's SELECTION LOGIC changes so persisted profiles stay honest about
+# which rule produced their "measured best" claim. Never reuse an id for a
+# different rule and never back-fill this id onto profiles saved before it
+# existed.
+RECOMMENDATION_RULE_ID = "balanced-pareto-fastest-v1"
+RECOMMENDATION_RULE_EFFECTIVE_DATE = "2026-09-06"
 
 
 @dataclass(frozen=True)

@@ -650,3 +650,131 @@ def test_v3_evidence_file_degrades_cleanly(tmp_path, monkeypatch):
     loaded = job.load_direct_calibration(evidence_dir)
     assert loaded is not None
     assert loaded.previews == []
+
+
+def test_v5_round_trip_carries_recommendation_rule(tmp_path):
+    """A freshly saved (v5) evidence file stamps the rule the recommender
+    actually ran and survives a save/load cycle intact."""
+    from hydra_suite.core.inference.direct_calibration import (
+        RECOMMENDATION_RULE,
+        RECOMMENDATION_RULE_EFFECTIVE_DATE,
+        RECOMMENDATION_RULE_ID,
+    )
+    from hydra_suite.detectkit.jobs.direct_calibration import (
+        EVIDENCE_VERSION,
+        DirectCalibrationOutcome,
+        load_direct_calibration,
+        save_direct_calibration,
+    )
+
+    assert EVIDENCE_VERSION == 5
+
+    request = _request(tmp_path)
+    save_direct_calibration(
+        request.evidence_dir,
+        DirectCalibrationOutcome(points=[_scored_point()]),
+        request,
+    )
+    restored = load_direct_calibration(request.evidence_dir)
+    assert restored is not None
+    # Regression against the CONSTANT, never a literal -- a later task will
+    # change the rule's content, and a hardcoded string here would then
+    # silently assert stale provenance instead of catching the drift.
+    assert restored.recommendation_rule_id == RECOMMENDATION_RULE_ID
+    assert restored.recommendation_rule == RECOMMENDATION_RULE
+    assert (
+        restored.recommendation_rule_effective_date
+        == RECOMMENDATION_RULE_EFFECTIVE_DATE
+    )
+
+
+def test_v4_evidence_loads_as_unknown_rule_without_backfill(tmp_path):
+    """A real v4 payload (no recommendation block) must load successfully as
+    valid settings, report the unknown-rule label, and must NEVER be
+    stamped with whatever rule constant happens to be current at load time
+    -- that would assert provenance that was never recorded."""
+    import json as _json
+
+    from hydra_suite.core.inference.direct_calibration import RECOMMENDATION_RULE_ID
+    from hydra_suite.detectkit.jobs.direct_calibration import (
+        UNKNOWN_RECOMMENDATION_RULE_ID,
+        UNKNOWN_RECOMMENDATION_RULE_LABEL,
+        load_direct_calibration,
+    )
+
+    evidence_dir = tmp_path / "evidence"
+    evidence_dir.mkdir(parents=True)
+    # Real v4 shape: provenance/points/frames/previews, no recommendation
+    # block (that field did not exist until v5).
+    v4_payload = {
+        "version": 4,
+        "partial": False,
+        "message": "",
+        "provenance": {},
+        "points": [],
+        "frames": [],
+        "previews": [],
+    }
+    (evidence_dir / "direct_calibration.json").write_text(_json.dumps(v4_payload))
+
+    loaded = load_direct_calibration(evidence_dir)
+    assert loaded is not None
+    assert loaded.recommendation_rule_id == UNKNOWN_RECOMMENDATION_RULE_ID
+    assert loaded.recommendation_rule == UNKNOWN_RECOMMENDATION_RULE_LABEL
+    assert loaded.recommendation_rule_id != RECOMMENDATION_RULE_ID
+
+
+def test_v3_evidence_also_reports_unknown_rule(tmp_path):
+    """v1-3 keep their existing preview-drop behaviour and, like v4, never
+    have a rule back-filled onto them."""
+    import json as _json
+
+    from hydra_suite.detectkit.jobs.direct_calibration import (
+        UNKNOWN_RECOMMENDATION_RULE_ID,
+        load_direct_calibration,
+    )
+
+    evidence_dir = tmp_path / "evidence"
+    evidence_dir.mkdir(parents=True)
+    old_payload = {
+        "version": 3,
+        "partial": False,
+        "message": "",
+        "provenance": {},
+        "points": [],
+        "previews": [],
+    }
+    (evidence_dir / "direct_calibration.json").write_text(_json.dumps(old_payload))
+    loaded = load_direct_calibration(evidence_dir)
+    assert loaded is not None
+    assert loaded.previews == []
+    assert loaded.recommendation_rule_id == UNKNOWN_RECOMMENDATION_RULE_ID
+
+
+def test_stamped_rule_id_matches_the_rule_the_recommender_actually_runs(tmp_path):
+    """The id persisted at save time must equal the id of the rule
+    ``recommend_balanced`` is actually running right now -- asserted against
+    the shared constant so this test cannot go tautological when a later
+    task changes the rule's content."""
+    from hydra_suite.core.inference import direct_calibration as core_direct
+    from hydra_suite.detectkit.jobs.direct_calibration import (
+        DirectCalibrationOutcome,
+        load_direct_calibration,
+        save_direct_calibration,
+    )
+
+    request = _request(tmp_path)
+    point = _scored_point()
+    save_direct_calibration(
+        request.evidence_dir,
+        DirectCalibrationOutcome(points=[point]),
+        request,
+    )
+    restored = load_direct_calibration(request.evidence_dir)
+    assert restored is not None
+
+    # The rule the recommender actually runs, right now.
+    _chosen, reason = core_direct.recommend_balanced([point])
+    assert core_direct.RECOMMENDATION_RULE_ID == restored.recommendation_rule_id
+    assert core_direct.RECOMMENDATION_RULE in reason
+    assert restored.recommendation_rule == core_direct.RECOMMENDATION_RULE

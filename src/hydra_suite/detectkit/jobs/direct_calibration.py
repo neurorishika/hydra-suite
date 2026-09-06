@@ -23,6 +23,9 @@ from PySide6.QtCore import Signal
 _LOGGER = logging.getLogger(__name__)
 
 from hydra_suite.core.inference.direct_calibration import (
+    RECOMMENDATION_RULE,
+    RECOMMENDATION_RULE_EFFECTIVE_DATE,
+    RECOMMENDATION_RULE_ID,
     CalibrationDetection,
     CalibrationScore,
     DirectCalibrationPoint,
@@ -267,12 +270,26 @@ class DirectCalibrationRequest:
     evidence_dir: Path
 
 
+UNKNOWN_RECOMMENDATION_RULE_ID = "unknown"
+UNKNOWN_RECOMMENDATION_RULE_LABEL = "unknown (pre-2026-09-06)"
+
+
 @dataclass
 class DirectCalibrationOutcome:
     points: list = field(default_factory=list)
     previews: list = field(default_factory=list)
     partial: bool = False
     message: str = ""
+    # Provenance for the recommendation RULE (not a stored recommendation
+    # result -- ``recommend_balanced`` is still re-run live on the loaded
+    # points). Identifies which rule was in effect when this evidence was
+    # saved, so a later rule change cannot silently reinterpret an older
+    # "measured best" as having been produced by the new rule. v4-and-older
+    # evidence predates this field entirely and is labelled unknown rather
+    # than back-filled with the rule current at load time.
+    recommendation_rule_id: str = ""
+    recommendation_rule: str = ""
+    recommendation_rule_effective_date: str = ""
 
 
 @dataclass(frozen=True)
@@ -320,7 +337,15 @@ EVIDENCE_FILENAME_GZ = "direct_calibration.json.gz"
 # an on-screen overlay) and the payload is gzip-compressed on disk. v3 and
 # older previews are DROPPED on load for the same reason v1/v2 previews were
 # dropped when v3 shipped -- they lack the frame table v4 depends on.
-EVIDENCE_VERSION = 4
+#
+# v5: the payload gains a ``recommendation`` block stamping the machine-
+# readable id, human description and effective date of the recommendation
+# RULE (``core.inference.direct_calibration.RECOMMENDATION_RULE_ID``) in
+# effect at save time. v4 profiles remain valid SETTINGS (points/previews
+# load exactly as before) but carry no rule provenance -- they are labelled
+# ``unknown (pre-2026-09-06)`` on load rather than back-filled with the
+# current rule, per R6 (back-filling asserts provenance that never existed).
+EVIDENCE_VERSION = 5
 _ROUND_NDIGITS = 1
 
 
@@ -524,6 +549,11 @@ def save_direct_calibration(
         "points": [_point_to_dict(point) for point in outcome.points],
         "frames": frame_table.entries,
         "previews": previews,
+        "recommendation": {
+            "rule_id": RECOMMENDATION_RULE_ID,
+            "rule": RECOMMENDATION_RULE,
+            "effective_date": RECOMMENDATION_RULE_EFFECTIVE_DATE,
+        },
     }
     fd, tmp_name = tempfile.mkstemp(
         dir=str(evidence_dir), prefix=f".{EVIDENCE_FILENAME_GZ}.", suffix=".tmp"
@@ -577,11 +607,28 @@ def load_direct_calibration(evidence_dir: Path) -> DirectCalibrationOutcome | No
             if version >= EVIDENCE_VERSION
             else []
         )
+        # v5+ carries real rule provenance; anything older (points/settings
+        # are still valid) predates the field entirely and must be labelled
+        # unknown rather than back-filled with whatever rule is current now.
+        if version >= 5:
+            raw_recommendation = payload.get("recommendation") or {}
+            recommendation_rule_id = str(raw_recommendation.get("rule_id", ""))
+            recommendation_rule = str(raw_recommendation.get("rule", ""))
+            recommendation_rule_effective_date = str(
+                raw_recommendation.get("effective_date", "")
+            )
+        else:
+            recommendation_rule_id = UNKNOWN_RECOMMENDATION_RULE_ID
+            recommendation_rule = UNKNOWN_RECOMMENDATION_RULE_LABEL
+            recommendation_rule_effective_date = ""
         return DirectCalibrationOutcome(
             points=points,
             previews=previews,
             partial=bool(payload.get("partial", False)),
             message=str(payload.get("message", "")),
+            recommendation_rule_id=recommendation_rule_id,
+            recommendation_rule=recommendation_rule,
+            recommendation_rule_effective_date=recommendation_rule_effective_date,
         )
     except (
         OSError,
