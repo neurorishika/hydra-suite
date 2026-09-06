@@ -244,10 +244,41 @@ def _digest_stat(path: str, size: int, mtime_ns: int) -> str:
     return digest.hexdigest()
 
 
+@lru_cache(maxsize=128)
+def _digest_directory_stat(root: str, entries: tuple[tuple[str, int, int], ...]) -> str:
+    """Digest a model bundle by relative names and bytes, memoized by its stat set."""
+
+    base = Path(root)
+    digest = hashlib.sha256()
+    for relative, _size, _mtime_ns in entries:
+        encoded_name = relative.encode("utf-8")
+        digest.update(len(encoded_name).to_bytes(8, "big"))
+        digest.update(encoded_name)
+        with (base / relative).open("rb") as stream:
+            for chunk in iter(lambda: stream.read(1024 * 1024), b""):
+                digest.update(chunk)
+    return digest.hexdigest()
+
+
 def model_content_digest(path: str | Path) -> str:
     """Hash model bytes once per size/mtime identity; never persist its path."""
 
     artifact = Path(path).expanduser().resolve()
+    if artifact.is_dir():
+        files = tuple(
+            sorted(
+                (
+                    str(item.relative_to(artifact)),
+                    int(item.stat().st_size),
+                    int(item.stat().st_mtime_ns),
+                )
+                for item in artifact.rglob("*")
+                if item.is_file()
+            )
+        )
+        if not files:
+            raise ValueError(f"model bundle has no files: {artifact}")
+        return _digest_directory_stat(str(artifact), files)
     stat = artifact.stat()
     return _digest_stat(str(artifact), int(stat.st_size), int(stat.st_mtime_ns))
 

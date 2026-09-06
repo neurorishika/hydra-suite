@@ -35,6 +35,42 @@ MAX_PIPELINE_DEPTH = 4
 TRACKER_RAW_OBB_CONFIDENCE_FLOOR = 1e-3
 
 
+@dataclass(frozen=True)
+class InferenceAutotunePolicy:
+    """Qt-free ownership policy for one full-inference tracking run.
+
+    The values control resolution only.  Selected execution values are carried
+    by an immutable runtime overlay and are never written back into a project.
+    """
+
+    mode: Literal["off", "record", "automatic"] = "off"
+    manual_fields: tuple[str, ...] = ()
+    budget_seconds: float = 120.0
+    singleflight_wait_seconds: float = 2.0
+
+    def __post_init__(self) -> None:
+        if self.mode not in {"off", "record", "automatic"}:
+            raise InferenceConfigError(
+                "InferenceAutotunePolicy.mode must be off, record, or automatic"
+            )
+        normalized = tuple(sorted({str(item) for item in self.manual_fields}))
+        if any(not item or len(item) > 256 for item in normalized):
+            raise InferenceConfigError("invalid inference autotune manual field")
+        if not 5.0 <= float(self.budget_seconds) <= 600.0:
+            raise InferenceConfigError(
+                "InferenceAutotunePolicy.budget_seconds must be between 5 and 600"
+            )
+        if not 0.0 <= float(self.singleflight_wait_seconds) <= 30.0:
+            raise InferenceConfigError(
+                "InferenceAutotunePolicy.singleflight_wait_seconds must be between 0 and 30"
+            )
+        object.__setattr__(self, "manual_fields", normalized)
+        object.__setattr__(self, "budget_seconds", float(self.budget_seconds))
+        object.__setattr__(
+            self, "singleflight_wait_seconds", float(self.singleflight_wait_seconds)
+        )
+
+
 def migrate_runtime_to_tier(runtimes: set[str]) -> RuntimeTier:
     """Map legacy per-stage runtime strings to a single pipeline tier.
 
@@ -478,6 +514,9 @@ class InferenceConfig:
     # strict no-op -- today's behavior, where "unknown" is left wherever the
     # per-factor floor product leaves it.
     identity_unknown_prior: float = 0.05
+    inference_autotune: InferenceAutotunePolicy = field(
+        default_factory=InferenceAutotunePolicy
+    )
 
     @staticmethod
     def from_json(path: str) -> "InferenceConfig":
@@ -601,6 +640,20 @@ def _dict_to_config(d: dict[str, Any]) -> InferenceConfig:
         else _default_canonical_geometry()
     )
 
+    autotune_d = d.get("inference_autotune", {})
+    inference_autotune = (
+        InferenceAutotunePolicy(
+            mode=str(autotune_d.get("mode", "off")),
+            manual_fields=tuple(autotune_d.get("manual_fields", ())),
+            budget_seconds=float(autotune_d.get("budget_seconds", 120.0)),
+            singleflight_wait_seconds=float(
+                autotune_d.get("singleflight_wait_seconds", 2.0)
+            ),
+        )
+        if isinstance(autotune_d, dict)
+        else InferenceAutotunePolicy()
+    )
+
     return InferenceConfig(
         obb=obb,
         bgsub=bgsub,
@@ -616,6 +669,7 @@ def _dict_to_config(d: dict[str, Any]) -> InferenceConfig:
         use_cache=d.get("use_cache", True),
         cache_dir=d.get("cache_dir"),
         identity_unknown_prior=float(d.get("identity_unknown_prior", 0.05)),
+        inference_autotune=inference_autotune,
     )
 
 
@@ -1149,6 +1203,29 @@ def build_inference_config_from_params(params: dict) -> InferenceConfig:
 
     batch_size = int(params.get("YOLO_BATCH_SIZE", params.get("BATCH_SIZE", 1)))
 
+    raw_autotune_mode = str(params.get("INFERENCE_AUTOTUNE_MODE", "off")).lower()
+    if raw_autotune_mode not in {"off", "record", "automatic"}:
+        raw_autotune_mode = "off"
+    raw_manual_fields = params.get("INFERENCE_AUTOTUNE_MANUAL_FIELDS", ())
+    if not isinstance(raw_manual_fields, (list, tuple, set, frozenset)):
+        raw_manual_fields = ()
+    inference_autotune = InferenceAutotunePolicy(
+        mode=raw_autotune_mode,
+        manual_fields=tuple(str(item) for item in raw_manual_fields),
+        budget_seconds=_clamped_float(
+            params.get("INFERENCE_AUTOTUNE_BUDGET_SECONDS", 120.0),
+            120.0,
+            5.0,
+            600.0,
+        ),
+        singleflight_wait_seconds=_clamped_float(
+            params.get("INFERENCE_AUTOTUNE_SINGLEFLIGHT_WAIT_SECONDS", 2.0),
+            2.0,
+            0.0,
+            30.0,
+        ),
+    )
+
     return InferenceConfig(
         obb=obb_cfg,
         headtail=headtail_cfg,
@@ -1162,6 +1239,7 @@ def build_inference_config_from_params(params: dict) -> InferenceConfig:
         use_cache=True,
         runtime_tier=runtime_tier,
         identity_unknown_prior=float(params.get("IDENTITY_UNKNOWN_PRIOR", 0.05)),
+        inference_autotune=inference_autotune,
     )
 
 
