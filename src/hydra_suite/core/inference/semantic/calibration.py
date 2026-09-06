@@ -136,6 +136,13 @@ def _contains(poly: np.ndarray, point: np.ndarray) -> bool:
     return cv2.pointPolygonTest(contour, (float(point[0]), float(point[1])), False) >= 0
 
 
+def _is_finite(poly: np.ndarray) -> bool:
+    """True when every vertex coordinate is finite. See ``match_one_to_one``:
+    ``polygon_iou`` and ``cv2`` both raise on NaN/inf, so malformed geometry
+    is filtered rather than allowed to crash a calibration run."""
+    return bool(np.isfinite(np.asarray(poly, dtype=np.float64)).all())
+
+
 def _vertex_mean(poly: np.ndarray) -> np.ndarray:
     """Mean of the polygon's vertices. NOT inside-guaranteed -- see
     ``representative_point``; retained only as the last-resort branch and
@@ -160,7 +167,12 @@ def _pole_of_inaccessibility(pts: np.ndarray) -> np.ndarray | None:
     clipped by the raster edge, which would otherwise make edge pixels look
     interior to the distance transform.
     """
-    if pts.shape[0] < 3:
+    if pts.shape[0] < 3 or not np.isfinite(pts).all():
+        # A non-finite vertex would reach `np.round(...).astype(np.int32)` and
+        # raise (ValueError / OverflowError). Declining here keeps a malformed
+        # polygon a NON-MATCH, which is what the previous vertex-mean
+        # implementation did silently -- introducing a hard crash on a
+        # GUI-reachable path would be a regression, not a fix.
         return None
     lo = np.floor(pts.min(axis=0)) - 1.0
     hi = np.ceil(pts.max(axis=0)) + 1.0
@@ -212,6 +224,13 @@ def representative_point(poly: np.ndarray) -> np.ndarray:
     pts = np.asarray(poly, dtype=np.float64).reshape(-1, 2)
     if pts.shape[0] == 0:
         return np.zeros(2, dtype=np.float64)
+    if not np.isfinite(pts).all():
+        # Same contract as `_pole_of_inaccessibility`'s guard: a polygon with
+        # a NaN/inf vertex has no meaningful interior, so hand back the plain
+        # vertex mean (itself non-finite) and let the containment test fail
+        # the pair, exactly as it did before this function existed. Never
+        # raise: this is reachable from GUI calibration on malformed labels.
+        return _vertex_mean(pts)
     if pts.shape[0] >= 3:
         m = cv2.moments(pts.astype(np.float32).reshape(-1, 1, 2))
         if abs(m["m00"]) > _MIN_MOMENT_AREA:
@@ -245,11 +264,17 @@ def match_one_to_one(
       used to be the mean of polygon vertices, which lies outside 15.9 %
       (128/805) of real ant outlines and so vetoed near-perfect masks. It is
       now ``representative_point``, which is inside by construction.
-    * **overlap** -- IoU >= ``ADMISSIBLE_IOU``. Added deliberately, as a
-      SECOND route rather than a replacement, because fixing the point is
-      necessary but measurably not sufficient: on the same held-out split an
-      area-centroid gate reached recall 0.929 while a plain IoU >= 0.5 rule
-      reached 0.962. The residue is real geometry, not a bug -- SAM3 traces
+    * **overlap** -- IoU >= ``ADMISSIBLE_IOU``. Added as a SECOND route
+      rather than a replacement. The motivating evidence is INDIRECT and the
+      limit is worth stating: on the held-out split an AREA-CENTROID-only
+      gate reached recall 0.929 where a plain IoU >= 0.5 rule reached 0.962.
+      ``representative_point`` is strictly stronger than an area centroid
+      (0/805 of those labels fail to contain it, against 128/805 for the
+      vertex mean), so that 0.929 is a LOWER bound on what containment alone
+      would now achieve, not a measurement of it. See
+      ``tools/sam3_parity/matcher_gate_results.json`` for the arm that
+      measures containment-only under the shipped point directly. The
+      mechanism the route covers is real geometry, not a bug -- SAM3 traces
       legs and antennae, so a correct mask's interior point can sit outside a
       body-core quad and vice versa, at IoU 0.9. Note what this does NOT do:
       it never REJECTS a pair for low IoU, so ``shape_prior``'s commitment
@@ -275,17 +300,32 @@ def match_one_to_one(
     # tie-break would perturb pairings for no stated reason.
     pred_m = [_vertex_mean(p) for p in pred_polys]
     label_m = [_vertex_mean(g) for g in label_polys]
-    admissible = [i for i, p in enumerate(pred_polys) if in_band(p, area_band)]
+    # Non-finite vertices are dropped up front, on BOTH sides. `polygon_iou`
+    # and `cv2` both raise on NaN/inf, and the IoU route below reaches
+    # `polygon_iou` for pairs the old containment-only gate never scored -- so
+    # without this a malformed label would turn a silent non-match into a hard
+    # crash on a GUI-reachable path. A polygon with no finite geometry cannot
+    # be matched to anything, which is exactly what dropping it means.
+    finite_label = [_is_finite(g) for g in label_polys]
+    admissible = [
+        i for i, p in enumerate(pred_polys) if _is_finite(p) and in_band(p, area_band)
+    ]
     pairs: list[tuple[float, int, int]] = []
     for pi in admissible:
         pc = pred_c[pi]
         for gi, gc in enumerate(label_c):
+            if not finite_label[gi]:
+                continue
             contained = _contains(label_polys[gi], pc) or _contains(pred_polys[pi], gc)
-            quality = match_quality(pred_polys[pi], label_polys[gi])
-            if not contained and (
-                polygon_iou(pred_polys[pi], label_polys[gi]) < ADMISSIBLE_IOU
+            if (
+                not contained
+                and polygon_iou(pred_polys[pi], label_polys[gi]) < ADMISSIBLE_IOU
             ):
                 continue
+            # Only AFTER admissibility: `match_quality` is the expensive term
+            # (it computes IoU, area and minAreaRect), and the overwhelming
+            # majority of pred x label pairs are inadmissible.
+            quality = match_quality(pred_polys[pi], label_polys[gi])
             if quality < min_quality:
                 continue
             # Negated so a plain ascending sort puts the BEST pair first,

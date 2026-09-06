@@ -101,7 +101,19 @@ def _sq(cx, cy, side=20.0):
 
 
 def test_dense_cluster_blob_still_cannot_steal_a_neighbours_label():
-    """The reason the gate exists. Widening admissibility must NOT re-open it."""
+    """Widening admissibility must not let a blob earn credit.
+
+    Provenance note, because it is easy to misread this test: the rejections
+    below are done by the AREA BAND and by ``min_quality``, not by
+    containment -- mutation testing confirms deleting containment leaves this
+    passing. It is a regression guard on the OUTCOME (`shape_prior`'s
+    mistargeting fix survives the new IoU route), not evidence for the
+    containment gate. The routes themselves are pinned separately, below.
+
+    The IoU route cannot rescue a blob for a geometric reason: IoU >= 0.5
+    implies min(area) / max(area) >= 0.5, so a region spanning two labels is
+    at least 2x either one and can never reach the threshold.
+    """
     labels = [_sq(100, 100), _sq(130, 100), _sq(160, 100)]
     blob = _sq(130, 100, side=400.0)
     band = fit_area_band(labels)
@@ -163,3 +175,156 @@ def test_property_generated_polygons_always_contain_their_representative_point()
             [cx + radius * np.cos(ang), cy + radius * np.sin(ang)], axis=1
         ).astype(np.float32)
         assert _contains(poly, representative_point(poly)), poly.tolist()
+
+
+# ---------------------------------------------------------------------------
+# The two admissibility routes, pinned INDEPENDENTLY. Mutation testing showed
+# that deleting the IoU route left every other test in the suite passing, so
+# each route below is exercised with the OTHER one disabled.
+# ---------------------------------------------------------------------------
+
+
+def _crescent_pair():
+    """A natural, uncontained, high-IoU pair.
+
+    Found by search over the crescent family and pinned by literal parameters
+    (the properties asserted in the test are the contract, not the numbers):
+    two overlapping arcs whose poles of inaccessibility each land in an arm
+    the other polygon does not cover, while the shared body keeps IoU well
+    above ``ADMISSIBLE_IOU``. This is the geometry the IoU route exists for --
+    a correct mask that traces slightly differently from its label.
+    """
+    a = _arc(100.0, 100.0, 17.1525, 29.5458, 4.7179, 4.7179 + 2.6925, n=48)
+    b = _arc(
+        101.6406,
+        99.6033,
+        17.1525 * 0.9271,
+        29.5458 * 0.9271,
+        4.7179 - 0.5150,
+        4.7179 - 0.5150 + 2.6925 * 1.1429,
+        n=48,
+    )
+    return a, b
+
+
+def test_a_high_iou_pair_matches_with_neither_point_contained():
+    from hydra_suite.core.inference.masks import polygon_iou
+    from hydra_suite.core.inference.semantic.calibration import ADMISSIBLE_IOU
+
+    label, pred = _crescent_pair()
+    # The premise: containment cannot save this pair in EITHER direction.
+    assert not _contains(label, representative_point(pred))
+    assert not _contains(pred, representative_point(label))
+    assert polygon_iou(pred, label) >= ADMISSIBLE_IOU
+    # ... so a match here is the IoU route and nothing else.
+    assert match_one_to_one([pred], [label]) == [(0, 0)]
+
+
+def test_the_iou_route_boundary_is_exactly_admissible_iou(monkeypatch):
+    """Pins ADMISSIBLE_IOU as a VALUE, in both directions.
+
+    Containment is forced off, so admissibility is the IoU route alone and
+    the match/no-match boundary must sit exactly at the constant. Widening
+    the constant (to 0.3, say) would admit pairs this asserts are rejected --
+    which matters, because IoU >= 0.5 is what bounds the area ratio to
+    0.5x-2x and so makes a two-label blob geometrically unable to use this
+    route at all. At 0.3 the bound is 0.3x-3.3x and a blob gets in.
+    """
+    from hydra_suite.core.inference.masks import polygon_iou
+    from hydra_suite.core.inference.semantic import calibration
+
+    monkeypatch.setattr(calibration, "_contains", lambda _poly, _pt: False)
+
+    label = _arc(100.0, 100.0, 17.1525, 29.5458, 4.7179, 4.7179 + 2.6925, n=48)
+    checked_above = checked_below = 0
+    for scale in np.arange(0.60, 1.26, 0.02):
+        pred = _arc(
+            101.6406,
+            99.6033,
+            17.1525 * 0.9271 * scale,
+            29.5458 * 0.9271 * scale,
+            4.7179 - 0.5150,
+            4.7179 - 0.5150 + 2.6925 * 1.1429,
+            n=48,
+        )
+        iou = polygon_iou(pred, label)
+        if abs(iou - calibration.ADMISSIBLE_IOU) < 1e-6:
+            continue  # exactly on the boundary: not a meaningful assertion
+        matched = bool(match_one_to_one([pred], [label]))
+        if iou >= calibration.ADMISSIBLE_IOU:
+            assert matched, f"IoU {iou:.4f} should be admissible"
+            checked_above += 1
+        else:
+            assert not matched, f"IoU {iou:.4f} should NOT be admissible"
+            checked_below += 1
+    assert checked_above > 3 and checked_below > 3
+
+
+def test_the_containment_route_still_admits_a_low_iou_curved_pair(monkeypatch):
+    """Pins the containment route AND the point fix, with the IoU route off.
+
+    Two nearly-coincident curved outlines: IoU is below ADMISSIBLE_IOU, so
+    the overlap route cannot admit them, and the vertex mean of each falls in
+    the OTHER's hollow, so the pre-fix matcher could not either. Only
+    ``representative_point`` + containment admits this pair.
+
+    This is the test that kills two independent mutants: deleting containment
+    (which the pre-existing quality-floor tests do not catch, since they
+    reject on quality regardless), and reverting the representative point to
+    the vertex mean inside ``match_one_to_one`` (which every other test in
+    this file survives, because the IoU route silently rescues them).
+    """
+    from hydra_suite.core.inference.masks import polygon_iou
+    from hydra_suite.core.inference.semantic import calibration
+    from hydra_suite.core.inference.semantic.shape_prior import match_quality
+
+    label = _arc(100.0, 100.0, 23.1741, 28.3131, 2.3608, 2.3608 + 5.1467, n=48)
+    pred = _arc(
+        98.4076,
+        97.4916,
+        23.1741 * 0.9961,
+        28.3131 * 0.9961,
+        2.3608 - 0.0360,
+        2.3608 - 0.0360 + 5.1467 * 0.9961,
+        n=48,
+    )
+    assert polygon_iou(pred, label) < calibration.ADMISSIBLE_IOU
+    assert match_quality(pred, label) > 0.1
+    # The pre-fix point fails in BOTH directions -- this is the 15.9 % case.
+    assert not _contains(label, _vertex_mean(pred))
+    assert not _contains(pred, _vertex_mean(label))
+    # The fixed point succeeds.
+    assert _contains(label, representative_point(pred)) or _contains(
+        pred, representative_point(label)
+    )
+
+    # Disable the IoU route outright, so only containment can admit the pair.
+    # Only calibration's own reference is patched, so `match_quality`'s
+    # internal overlap term is untouched.
+    monkeypatch.setattr(calibration, "polygon_iou", lambda _a, _b: 0.0)
+    assert match_one_to_one([pred], [label]) == [(0, 0)]
+
+
+# ---------------------------------------------------------------------------
+# Non-finite vertices: a GUI-reachable malformed label must NOT crash.
+# ---------------------------------------------------------------------------
+
+
+@pytest.mark.parametrize("bad", [np.nan, np.inf, -np.inf])
+def test_a_non_finite_vertex_never_raises_and_never_matches(bad):
+    poly = np.array(
+        [[0.0, 0.0], [20.0, 0.0], [20.0, bad], [0.0, 20.0]], dtype=np.float64
+    )
+    pt = representative_point(poly)  # must not raise
+    assert pt.shape == (2,)
+    label = _sq(10, 10, side=20.0)
+    # No crash, and a malformed polygon is simply not a find -- the same
+    # outcome the pre-fix vertex mean produced silently.
+    assert match_one_to_one([poly], [label]) == []
+    assert match_one_to_one([label], [poly]) == []
+
+
+def test_all_non_finite_polygon_is_tolerated():
+    poly = np.full((6, 2), np.nan, dtype=np.float64)
+    assert representative_point(poly).shape == (2,)
+    assert match_one_to_one([poly], [_sq(10, 10)]) == []
