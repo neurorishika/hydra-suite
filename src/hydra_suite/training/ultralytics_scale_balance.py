@@ -1,9 +1,17 @@
-"""No-data-reduction SAHI multi-scale loss balancing for Ultralytics trainers.
+"""SAHI multi-scale loss weighting AND scale-grouped batching for Ultralytics.
 
-The sliced dataset contains every emitted tile. Smaller source tiles naturally
-produce more images, which otherwise makes their scale dominate the detector
-loss. This module groups training batches by emitted tile size and applies an
-inverse-frequency loss multiplier. No tile is removed or replaced.
+Two distinct interventions ship together, both default-ON whenever the sliced
+dataset manifest enables them:
+
+1. **Loss weighting** -- an inverse-frequency multiplier per scale group, so the
+   over-represented small-tile scale cannot dominate the detector loss.
+2. **Sampling** -- ``ScaleGroupedBatchSampler`` replaces the training loader's
+   batch sampler so that every batch is scale-HOMOGENEOUS. This changes which
+   images meet each other in a batch; it is not a loss-only change.
+
+No tile is removed or replaced by either. The installer is named for both
+interventions on purpose: it was previously called
+``install_sahi_multiscale_loss_balance``, a name that disclosed only the first.
 """
 
 from __future__ import annotations
@@ -181,12 +189,18 @@ def _grouped_loader(
     return loader
 
 
-def install_sahi_multiscale_loss_balance(argv: Sequence[str] | None = None) -> bool:
-    """Install the optional trainer patches selected by a sliced-data manifest.
+def install_sahi_scale_balance_and_grouped_sampling(
+    argv: Sequence[str] | None = None,
+) -> bool:
+    """Install BOTH the loss weighting and the scale-grouped batch sampler.
 
-    Returns whether balance mode was enabled. DDP is deliberately left on the
-    unmodified loader: a single-process sampler cannot safely partition every
-    scale group across ranks without changing the epoch's data exposure.
+    Formerly ``install_sahi_multiscale_loss_balance`` -- renamed because the old
+    name advertised only the loss weighting while the function also replaces the
+    training loader's batch sampler, making every batch scale-homogeneous.
+
+    Returns whether the interventions were applied. DDP cannot honour the
+    sampler: a single-process sampler cannot partition every scale group across
+    ranks without changing the epoch's data exposure.
     """
 
     settings = _balance_settings_from_argv(argv or sys.argv[1:])
