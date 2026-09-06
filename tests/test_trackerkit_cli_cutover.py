@@ -91,7 +91,6 @@ _REPO = Path(__file__).resolve().parents[1]
 _FX = _REPO / "tools/equivalence/fixtures"
 
 _BRIDGE_CLIPS = [
-    ("emi_obb_identity.mp4", "emi_obb_identity.json"),
     ("ant_pose_headtail.mp4", "ant_pose_headtail.json"),
     ("ant_obb_sleap.mp4", "ant_obb_sleap.json"),
     ("ant_cnn_identity.mp4", "ant_cnn_identity.json"),

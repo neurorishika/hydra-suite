@@ -48,7 +48,6 @@ Clips currently cover (one representative per demo, ~500 frames each):
 
 | clip | path / features exercised |
 |---|---|
-| `emi_obb_identity` | OBB-direct + identity online decoder |
 | `ant_pose_headtail` | OBB + head-tail + SLEAP pose + identity (realtime) |
 | `ant_obb_sleap` | OBB-direct + SLEAP pose + identity-analysis (no head-tail) |
 | `ant_obb_sequential` | **OBB-sequential** (detect stage -> crop -> OBB stage) + SLEAP pose + identity-analysis; reuses the `ant_obb_sleap` clip with `yolo_obb_mode=sequential` and the `detection/20260305-175022_26x_obiroi_v1.pt` + `obb/cropped/20260305-175049_26s_obiroi_obbcrop.pt` model pair |
@@ -78,7 +77,7 @@ arguments or via `ONLY=` (space- or comma-separated):
 bash tools/equivalence/run_matrix.sh ant_pose_headtail worm_bgsub
 ONLY=ant_pose_headtail bash tools/equivalence/run_matrix.sh
 ```
-Clip names: `emi_obb_identity`, `ant_pose_headtail`, `ant_obb_sleap`, `ant_obb_sequential`,
+Clip names: `ant_pose_headtail`, `ant_obb_sleap`, `ant_obb_sequential`,
 `worm_bgsub`, `ant_cnn_identity`, `fly_obb`.
 
 ### ON-path clips (`ONPATH=1`)

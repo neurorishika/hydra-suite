@@ -32,12 +32,11 @@ CLIPS_DIR = HERE / "clips"
 CONFIGS_DIR = HERE / "configs"
 STAGING = HERE / "staging"
 
-RELEASE_TAG = "equiv-fixtures-v2"
+RELEASE_TAG = "equiv-fixtures-v3"
 
 # Clips and the pose skeleton each needs (None when pose is off). The model set
 # is derived from each clip's config, not listed here.
 CLIPS = [
-    {"name": "emi_obb_identity.mp4", "skeleton": None},
     {"name": "ant_pose_headtail.mp4", "skeleton": "ooceraea_biroi.json"},
     {"name": "ant_obb_sleap.mp4", "skeleton": "ooceraea_biroi.json"},
     {"name": "worm_bgsub.mp4", "skeleton": None},
