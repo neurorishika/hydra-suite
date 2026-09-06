@@ -49,7 +49,9 @@ _THREAD_CAP_VARS = (
 @dataclass
 class FanoutOptions:
     gpus: list[CudaDevice] = field(default_factory=list)
-    jobs: int = 1
+    # ``None`` means "unspecified": one slot per GPU when ``gpus`` is set,
+    # otherwise a single slot.
+    jobs: Optional[int] = None
     threads_per_job: Optional[int] = None
     log_level: str = "INFO"
     run_dir: Optional[Path] = None
@@ -402,16 +404,13 @@ def run_batch_fanout(
 
     slots: list[Optional[CudaDevice]]
     if options.gpus:
-        n = max(
-            1,
-            min(
-                int(options.jobs) if options.jobs else len(options.gpus),
-                len(options.gpus),
-            ),
-        )
+        # Unspecified jobs -> one slot per GPU; an explicit jobs is clamped to
+        # the GPU count so two children never share one device.
+        requested = len(options.gpus) if options.jobs is None else int(options.jobs)
+        n = max(1, min(requested, len(options.gpus)))
         slots = list(options.gpus[:n])
     else:
-        slots = [None] * max(1, int(options.jobs))
+        slots = [None] * max(1, int(options.jobs or 1))
 
     run_dir = (
         Path(options.run_dir)

@@ -181,6 +181,26 @@ def test_gpu_slots_pin_each_child(tmp_path):
     ]  # jobs clamped to 2 slots, reused
 
 
+def test_unspecified_jobs_uses_one_slot_per_gpu(tmp_path):
+    """``jobs=None`` means "one slot per GPU", not one slot total."""
+    gpus = [CudaDevice(0, "GPU-aaaa", "x"), CudaDevice(1, "GPU-bbbb", "x")]
+    specs = [_spec(tmp_path, n, sleep=0.3) for n in ("a", "b")]
+    t0 = time.monotonic()
+    result = run_batch_fanout(
+        specs,
+        FanoutOptions(
+            gpus=gpus, jobs=None, run_dir=tmp_path / "run", child_command=_fake_command
+        ),
+    )
+    wall = time.monotonic() - t0
+    assert result.success
+    seen = sorted(
+        r.log_path.read_text().split("GPU=")[1].split("\n")[0] for r in result.jobs
+    )
+    assert seen == ["GPU-aaaa", "GPU-bbbb"]  # both GPUs used, not just the first
+    assert wall < 2.0, f"2 GPUs with jobs=None should overlap; took {wall:.1f}s"
+
+
 def test_concurrency_respects_jobs(tmp_path):
     specs = [_spec(tmp_path, n, sleep=0.6) for n in ("a", "b", "c", "d")]
     t0 = time.monotonic()

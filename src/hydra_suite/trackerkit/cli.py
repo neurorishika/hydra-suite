@@ -23,8 +23,13 @@ from hydra_suite.trackerkit.headless_tracking import run_headless_tracking_sessi
 logger = logging.getLogger(__name__)
 
 
-def fanout_requested(gpus: str | None, jobs: int) -> bool:
-    """The gating rule: fan-out iff --gpus was given or --jobs > 1."""
+def fanout_requested(gpus: str | None, jobs: int | None) -> bool:
+    """The gating rule: fan-out iff --gpus was given or --jobs > 1.
+
+    ``jobs is None`` means "not specified" and is equivalent to 1 here: on its
+    own it never engages fan-out, so the plain ``trackerkit track a.mp4 b.mp4``
+    invocation keeps the in-process sequential path.
+    """
     return bool(str(gpus or "").strip()) or int(jobs or 1) > 1
 
 
@@ -35,7 +40,7 @@ def run_tracking_cli(
     keystone_override: bool = False,
     sahi_profile: str | None = None,
     gpus: str | None = None,
-    jobs: int = 1,
+    jobs: int | None = None,
     threads_per_job: int | None = None,
     log_level: str = "INFO",
 ) -> int:
@@ -62,13 +67,18 @@ def run_tracking_cli(
     if not fanout_requested(gpus, jobs):
         return _run_sequential(specs)
     devices = resolve_gpu_selectors(parse_gpu_selectors(gpus)) if gpus else []
+    # An unspecified --jobs means "one slot per selected GPU" (and 1 with no
+    # GPUs); an explicit --jobs is honoured but never exceeds the GPU count,
+    # because a second job on a GPU would contend for that GPU's memory.
+    if devices and jobs is None:
+        effective_jobs = len(devices)
+    else:
+        effective_jobs = max(1, int(jobs or 1))
+        if devices:
+            effective_jobs = min(effective_jobs, len(devices))
     options = FanoutOptions(
         gpus=devices,
-        jobs=(
-            int(jobs or 1)
-            if not devices
-            else max(1, min(int(jobs or len(devices)), len(devices)))
-        ),
+        jobs=effective_jobs,
         threads_per_job=threads_per_job,
         log_level=log_level,
     )

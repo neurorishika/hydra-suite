@@ -133,11 +133,12 @@ Examples:
     track_parser.add_argument(
         "--jobs",
         type=int,
-        default=1,
+        default=None,
         help=(
-            "Maximum concurrent videos. Defaults to 1 (in-process sequential). "
-            "With --gpus it is clamped to the number of GPUs; without --gpus, "
-            "N>1 runs N children that share the current device visibility."
+            "Maximum concurrent videos. Defaults to one per selected GPU, "
+            "else 1 (in-process sequential). With --gpus it is clamped to the "
+            "number of GPUs; without --gpus, N>1 runs N children that share "
+            "the current device visibility."
         ),
     )
     track_parser.add_argument(
@@ -161,7 +162,8 @@ Examples:
             )
         if not videos and not video_list:
             track_parser.error("provide at least one video path or --video-list")
-        if int(getattr(args, "jobs", 1) or 1) < 1:
+        jobs = getattr(args, "jobs", None)
+        if jobs is not None and int(jobs) < 1:
             track_parser.error("--jobs must be >= 1")
         tpj = getattr(args, "threads_per_job", None)
         if tpj is not None and int(tpj) < 1:
@@ -288,7 +290,7 @@ def main(argv: list[str] | None = None) -> object:
                 keystone_override=bool(args.keystone_override),
                 sahi_profile=getattr(args, "sahi_profile", None),
                 gpus=getattr(args, "gpus", None),
-                jobs=int(getattr(args, "jobs", 1) or 1),
+                jobs=getattr(args, "jobs", None),
                 threads_per_job=getattr(args, "threads_per_job", None),
                 log_level=str(args.log_level),
             )
