@@ -283,12 +283,19 @@ EPOCH_CHECKPOINT_DIRNAME = "checkpoints"
 CHECKPOINT_BUDGET_FRACTION_OF_FREE = 0.25
 
 
-def checkpoint_budget_bytes(directory: Path, *, free_bytes: int | None = None) -> int:
+def checkpoint_budget_bytes(
+    directory: Path, *, free_bytes: int | None = None, log: Any = emit_log
+) -> int | None:
     """Measured retention budget for *directory*, in bytes.
 
     Derived, never hardcoded: a policy fraction of the space this run could
     actually use -- currently free space plus whatever the existing epoch
     checkpoints already occupy (they are reclaimable).
+
+    Fails OPEN: if free space cannot be measured, returns `None` (retain
+    everything) and says so. A failed measurement must never masquerade as a
+    binding budget -- deleting evidence because `disk_usage` raised is the
+    exact failure class this replaced.
     """
     import shutil
 
@@ -296,8 +303,12 @@ def checkpoint_budget_bytes(directory: Path, *, free_bytes: int | None = None) -
     if free_bytes is None:
         try:
             free_bytes = int(shutil.disk_usage(probe).free)
-        except OSError:
-            return 0
+        except OSError as exc:
+            log(
+                "checkpoint retention budget could not be measured "
+                f"({exc}); retaining every epoch checkpoint."
+            )
+            return None
     used = sum(path.stat().st_size for path in directory.glob("epoch_*.pt"))
     return int((free_bytes + used) * CHECKPOINT_BUDGET_FRACTION_OF_FREE)
 
@@ -354,7 +365,9 @@ def enforce_checkpoint_budget(
         return []
     adapter_bytes = max(path.stat().st_size for path in paths)
     if budget_bytes is None:
-        budget_bytes = checkpoint_budget_bytes(directory)
+        budget_bytes = checkpoint_budget_bytes(directory, log=log)
+        if budget_bytes is None:
+            return []
     stale = plan_checkpoint_retention(
         paths,
         free_bytes=0,

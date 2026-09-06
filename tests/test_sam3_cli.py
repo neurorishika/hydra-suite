@@ -558,6 +558,30 @@ def test_enforce_budget_removes_markers_and_logs_loudly(tmp_path):
     assert any("budget" in m.lower() for m in messages)
 
 
+def test_an_unmeasurable_budget_retains_everything(tmp_path):
+    """A failed measurement must never masquerade as a binding budget."""
+    import shutil
+
+    from hydra_suite.training.sam3_lora import cli
+
+    paths = _make_checkpoints(tmp_path, 6)
+
+    def _boom(_path):
+        raise OSError("no such device")
+
+    messages: list[str] = []
+    original = shutil.disk_usage
+    shutil.disk_usage = _boom
+    try:
+        removed = cli.enforce_checkpoint_budget(tmp_path, log=messages.append)
+    finally:
+        shutil.disk_usage = original
+
+    assert removed == []
+    assert all(path.exists() for path in paths)
+    assert any("could not be measured" in m for m in messages)
+
+
 def test_enforce_budget_is_safe_on_a_missing_directory(tmp_path):
     from hydra_suite.training.sam3_lora import cli
 

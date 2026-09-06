@@ -43,6 +43,8 @@
   repeatedly drop the middle-most survivor. Never a sliding window; the earliest epochs —
   the stall evidence — are never the first casualty, and the checkpoint just written is
   never deleted.
+- Fails OPEN: if `disk_usage` raises, the budget is `None`, nothing is deleted, and the
+  reason is logged. A failed measurement must never masquerade as a binding budget.
 - `enforce_checkpoint_budget(directory)` applies the plan, deletes each `.complete.json`
   marker with its artifact, and `emit_log`s LOUDLY with the measured numbers that forced
   the prune.
@@ -53,14 +55,14 @@
 
 ## Tests
 - Before: **408 passed, 5 skipped** (`-k sam3`).
-- After: **417 passed, 5 skipped**.
-- TDD: 11 new tests written first, all 11 observed failing, then implemented. The two old
+- After: **418 passed, 5 skipped**.
+- TDD: 12 new tests written first, all 11 observed failing, then implemented. The two old
   sliding-window tests were rewritten to the new policy (keeping their marker-deletion and
   safe-on-missing-directory assertions). New coverage: budget-allows-keep-all,
   thin-middle-keep-ends, never-delete-just-written, budget-is-derived-not-hardcoded,
   markers+loud-log, missing-dir safety, JSONL append, cadence env parsing (incl. garbage),
   RNG save/restore present, loss decomposition + elapsed_s recorded, anti-correlation
-  comment present. `import sam3` is unavailable on macOS, so the live-model paths are
+  comment present, unmeasurable-budget-retains-everything. `import sam3` is unavailable on macOS, so the live-model paths are
   covered by source/stub assertions, as the existing file already does.
 
 ## Measured per-epoch validation cost
@@ -77,5 +79,8 @@ replaces this estimate with a measurement, per epoch, without any further instru
 - D15 (does Requirement B apply to YOLO/Ultralytics training?) and the P1/YOLO retention
   check for the same class of constant — spec follow-ups, deliberately not touched.
 - D13 (per-epoch detection-quality metric and stopping on it) — blocked on D12.
+- A reused `run_dir` would accumulate `val_series.jsonl` rows across attempts (a
+  crashed-then-rerun training appends a second epoch-1 record). Launcher run dirs are
+  per-run, so this is theoretical; no dedup logic was added.
 - No end-to-end GPU run of the new code; the validation-series and budget paths have not
   executed against a live `sam3` model.
