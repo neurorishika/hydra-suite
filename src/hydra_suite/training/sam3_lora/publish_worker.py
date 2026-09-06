@@ -30,6 +30,7 @@ from hydra_suite.runtime.sam3_checkpoint_guard import (
 )
 from hydra_suite.utils.sam3_constants import PREDICTOR_IMGSZ
 
+from .dataloader import read_sam3_scale_grouping_stamp
 from .lora import (
     _validated_adapter_pairs,
     adapter_touched_keys,
@@ -43,7 +44,39 @@ _RUN_ID = re.compile(r"[A-Za-z0-9][A-Za-z0-9_.-]{0,127}\Z")
 _ATTEMPT_ID = re.compile(r"[0-9a-f]{32}\Z")
 
 
-def _scale_metadata(build_manifest: dict[str, Any]) -> dict[str, Any]:
+def _scale_grouping_metadata(run_dir: "Path | None") -> dict[str, Any]:
+    """The REALISED scale-grouping block for the sidecar, or {} when unknown.
+
+    `build_manifest.json` only ever records what the build REQUESTED (the
+    dataset's tile geometry); it cannot say whether THIS run actually batched
+    scale-grouped, because that decision is made at train time
+    (`scale_grouping_decision`) and only the run directory's
+    `hydra_sam3_scale_grouping.json` stamp -- written on BOTH arms -- knows
+    the answer. Mirrors `service.apply_realised_balance_stamp`'s Ultralytics
+    precedent: what lands here is what the run REALISED, never what it
+    requested to."""
+
+    if run_dir is None:
+        return {}
+    stamp = read_sam3_scale_grouping_stamp(run_dir)
+    if stamp is None:
+        return {}
+    applied = stamp.get("applied") or {}
+    return {
+        "scale_grouped_batching": {
+            "requested": bool(
+                (stamp.get("requested") or {}).get("scale_grouped_batching", False)
+            ),
+            "applied": bool(applied.get("scale_grouped_batching", False)),
+            "reason": str(applied.get("reason", "")),
+            "group_counts": dict(applied.get("group_counts") or {}),
+        }
+    }
+
+
+def _scale_metadata(
+    build_manifest: dict[str, Any], run_dir: "Path | None" = None
+) -> dict[str, Any]:
     """The trained-geometry block for the sidecar, single- or multi-scale."""
     scale_set = build_manifest.get("tile_px_set")
     if not scale_set:
@@ -60,6 +93,7 @@ def _scale_metadata(build_manifest: dict[str, Any]) -> dict[str, Any]:
         "prefill_object_tile_fraction": build_manifest.get(
             "prefill_object_tile_fraction"
         ),
+        **_scale_grouping_metadata(run_dir),
     }
 
 
@@ -292,7 +326,7 @@ def publish_sam3_artifact(
             # `geometry_drift.stamped_tile_px_set` /
             # `stamped_object_tile_fraction`, which accept both shapes so no
             # existing sidecar stops loading.
-            **_scale_metadata(build_manifest),
+            **_scale_metadata(build_manifest, Path(adapters_path).parent),
             "reference_body_px": build_manifest.get("reference_body_px"),
             "imgsz": PREDICTOR_IMGSZ,
             "stripped_keys": stripped_keys(merged),

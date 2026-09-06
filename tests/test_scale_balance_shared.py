@@ -15,6 +15,7 @@ data.
 from __future__ import annotations
 
 import json
+from pathlib import Path
 
 import pytest
 
@@ -196,6 +197,33 @@ def test_realised_stamp_is_written_on_both_arms(tmp_path):
         payload = json.loads(path.read_text())
         assert payload["requested"]["scale_grouped_batching"] is True
         assert payload["applied"]["scale_grouped_batching"] is applied
+
+
+def test_stamp_write_failure_is_logged_not_swallowed(tmp_path, caplog, monkeypatch):
+    """Finding 3: an OSError writing the grouping stamp must not vanish
+    silently -- a training run should not die over it, but it must be
+    visible in the logs."""
+    from hydra_suite.training.sam3_lora import dataloader as dl
+
+    run_dir = tmp_path / "run"
+    run_dir.mkdir()
+
+    def _boom(*args, **kwargs):
+        raise OSError("disk full")
+
+    monkeypatch.setattr(Path, "write_text", _boom)
+    with caplog.at_level("WARNING"):
+        result = dl.write_sam3_scale_grouping_stamp(
+            run_dir,
+            requested=True,
+            applied=True,
+            reason="",
+            group_counts={"tile:727x727": 5},
+        )
+    assert result is None
+    assert any("scale-grouping stamp" in rec.message for rec in caplog.records), [
+        rec.message for rec in caplog.records
+    ]
 
 
 def test_sam3_never_grows_a_distributed_launch():

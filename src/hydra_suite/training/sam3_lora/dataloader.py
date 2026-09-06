@@ -497,4 +497,29 @@ def write_sam3_scale_grouping_stamp(
         target.write_text(json.dumps(payload, indent=2, sort_keys=True) + "\n", "utf-8")
         return target
     except OSError:
+        logger.warning(
+            "Failed to write SAM3 scale-grouping stamp to %s; the run "
+            "continues, but its published sidecar will not be able to say "
+            "whether this run trained grouped or ungrouped.",
+            Path(run_dir) / SCALE_GROUPING_STAMP_FILENAME,
+        )
+        return None
+
+
+def read_sam3_scale_grouping_stamp(run_dir: "str | Path") -> "dict[str, Any] | None":
+    """Return a run's realised scale-grouping stamp, or None when absent/corrupt.
+
+    Mirrors `service.read_realised_balance_stamp`'s Ultralytics counterpart:
+    the requested/applied shape written by
+    `write_sam3_scale_grouping_stamp` is the authority on whether a run
+    actually trained grouped or ungrouped, which a build-manifest-only
+    sidecar can never say.
+    """
+
+    try:
+        data = json.loads(
+            (Path(run_dir) / SCALE_GROUPING_STAMP_FILENAME).read_text(encoding="utf-8")
+        )
+        return data if isinstance(data, dict) else None
+    except (OSError, ValueError):
         return None
