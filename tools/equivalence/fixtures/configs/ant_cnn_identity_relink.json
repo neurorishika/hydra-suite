@@ -4,7 +4,7 @@
   "video_output_enabled": true,
   "video_output_path": "",
   "fps": 10.0,
-  "reference_body_size": 76.81,
+  "reference_body_size": 49.83,
   "start_frame": 0,
   "end_frame": 488,
   "resize_factor": 1.0,
