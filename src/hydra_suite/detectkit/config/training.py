@@ -344,6 +344,10 @@ class DetectTrainingPlan:
     species: str = "species"
     model_tag: str = "train"
     sam3_params: Sam3LoraParams | None = None
+    #: Optional path/registry key of a published artifact this run exists to
+    #: be compared against. Purely observational: the builders warn when the
+    #: geometry diverges and never change what is built.
+    comparison_baseline: str = ""
 
     @classmethod
     def from_dict(
@@ -592,6 +596,7 @@ class DetectTrainingPlan:
             "species",
             "model_tag",
             "sam3",
+            "comparison_baseline",
         }
         unknown_root = sorted(set(root) - known_root)
         if unknown_root:
@@ -632,6 +637,9 @@ class DetectTrainingPlan:
                 root.get("model_tag", "train"), "model_tag", allow_empty=False
             ),
             sam3_params=sam3_params,
+            comparison_baseline=_require_string(
+                root.get("comparison_baseline", ""), "comparison_baseline"
+            ),
         )
         plan.validate()
         return plan
@@ -757,6 +765,7 @@ class DetectTrainingPlan:
             imgsz_by_role=tuple((role.role.value, role.imgsz) for role in self.roles),
             slice_settings=self.slice_settings,
             sam3_params=self.sam3_params,
+            comparison_baseline=self.comparison_baseline,
         )
 
     def role_entries(self, role_dataset_dirs: dict[str, str]):
@@ -792,6 +801,7 @@ class DetectTrainingPlan:
             "species": self.species,
             "model_tag": self.model_tag,
             "sam3": asdict(self.sam3_params) if self.sam3_params else None,
+            "comparison_baseline": self.comparison_baseline,
         }
 
 

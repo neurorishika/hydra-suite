@@ -51,6 +51,11 @@ class DatasetPreparationRequest:
     imgsz_by_role: tuple[tuple[str, int], ...]
     slice_settings: "SliceTrainingConfig"
     sam3_params: Sam3LoraParams | None = None
+    #: A published artifact this training run exists to be compared against.
+    #: Its stamped geometry is checked against what this run actually builds,
+    #: and a divergence is WARNED about -- the exact miss behind the
+    #: 2026-09-06 confound. Empty = no baseline named; never guessed.
+    comparison_baseline: str = ""
 
     def imgsz_for(self, role: TrainingRole) -> int:
         return dict(self.imgsz_by_role).get(role.value, 640)
@@ -158,6 +163,7 @@ def prepare_role_datasets(
                 sam3_params=request.sam3_params,
                 seed=request.seed,
                 split=request.split,
+                comparison_baseline=request.comparison_baseline,
             )
             check_cancelled()
             role_dataset_dirs[role.value] = build.dataset_dir
@@ -222,6 +228,7 @@ def prepare_role_datasets(
                 level=required_level,
                 params=params,
                 seed=request.seed,
+                comparison_baseline=request.comparison_baseline,
             )
             check_cancelled()
             role_source_dir = sliced.dataset_dir

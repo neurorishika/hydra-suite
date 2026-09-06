@@ -25,6 +25,7 @@ from PySide6.QtWidgets import (
     QWidget,
 )
 
+from hydra_suite.core.inference.geometry_drift import compare_geometry_value
 from hydra_suite.core.inference.semantic.checkpoints import (
     CHECKPOINT_SIZE_GB,
     available_models,
@@ -384,26 +385,35 @@ class SemanticEscalationDialog(BaseDialog):
         # independent value (its own labels' median). Train/serve tile scale
         # can silently diverge if they disagree -- warn, but never
         # hard-refuse, since a deliberate re-scale is legitimate.
-        sidecar_body_px = meta.get("reference_body_px")
-        if sidecar_body_px is not None:
-            try:
-                sidecar_body_px = float(sidecar_body_px)
-            except (TypeError, ValueError):
-                sidecar_body_px = None
-        if sidecar_body_px:
-            current_body_px = float(self._reference_body.value())
-            if current_body_px <= 0:
-                self._reference_body.setValue(sidecar_body_px)
-            elif abs(current_body_px - sidecar_body_px) > 1e-6:
-                QMessageBox.warning(
-                    self,
-                    "Body Size Mismatch",
-                    f"This model was trained with reference_body_px="
-                    f"{sidecar_body_px:g}, but this project's Body size (px) "
-                    f"is {current_body_px:g}. Train/serve tile scale can "
-                    "diverge silently if these disagree -- verify this is "
-                    "intentional (e.g. a deliberate re-scale) before running.",
-                )
+        # The comparison itself now lives in ``core.inference.geometry_drift``
+        # so the SAM3/YOLO dataset builders and the headless ``--sahi-profile``
+        # path share one guard instead of this dialog owning the only copy.
+        # The user-facing wording stays HERE: core returns a typed verdict, and
+        # each caller renders its own message from it.
+        verdict = compare_geometry_value(
+            "reference_body_px",
+            meta.get("reference_body_px"),
+            float(self._reference_body.value()),
+        )
+        # ``reference_body_px`` is a scalar from every publisher we own. The
+        # shared guard also understands [w, h] tile pairs, which a spin box
+        # cannot represent -- ignoring a non-scalar stamp here reproduces the
+        # pre-extraction behaviour, where ``float(a_list)`` raised and the
+        # whole block was skipped.
+        if not isinstance(verdict.stamped_value, float):
+            pass
+        elif verdict.should_prefill:
+            self._reference_body.setValue(verdict.stamped_value)
+        elif verdict.is_mismatch:
+            QMessageBox.warning(
+                self,
+                "Body Size Mismatch",
+                f"This model was trained with reference_body_px="
+                f"{verdict.stamped_value:g}, but this project's Body size (px) "
+                f"is {verdict.effective_value:g}. Train/serve tile scale can "
+                "diverge silently if these disagree -- verify this is "
+                "intentional (e.g. a deliberate re-scale) before running.",
+            )
         self._refresh_tile_label()
 
     def prompt(self) -> str:

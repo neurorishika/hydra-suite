@@ -465,12 +465,18 @@ class TrainingOrchestrator:
         level: GeometryLevel,
         params: SliceBuildParams,
         seed: int = 42,
+        comparison_baseline: str = "",
     ) -> DatasetBuildResult:
         """Tile a merged OBB dataset into a sliced dataset for SAHI-usable training."""
         out_root = self.workspace_root / "datasets_sliced"
         out_root.mkdir(parents=True, exist_ok=True)
         return build_sliced_obb_dataset(
-            merged_obb_dataset_dir, out_root, level=level, params=params, seed=int(seed)
+            merged_obb_dataset_dir,
+            out_root,
+            level=level,
+            params=params,
+            seed=int(seed),
+            baseline_model_path=comparison_baseline or None,
         )
 
     def build_role_dataset(
@@ -487,6 +493,7 @@ class TrainingOrchestrator:
         sam3_params: "Sam3LoraParams | None" = None,
         seed: int = 42,
         split: SplitConfig | None = None,
+        comparison_baseline: str = "",
     ) -> DatasetBuildResult:
         """Derive a role-specific dataset (detect, crop-OBB, classify) from a merged OBB dataset."""
         out_root = self.workspace_root / "derived" / role.value
@@ -516,6 +523,7 @@ class TrainingOrchestrator:
             sam3_params=sam3_params,
             seed=seed,
             split=split,
+            comparison_baseline=comparison_baseline,
         )
         report = validate_role_dataset(result.dataset_dir, role)
         result.stats = dict(result.stats)
