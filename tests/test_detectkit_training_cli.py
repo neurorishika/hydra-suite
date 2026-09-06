@@ -25,6 +25,8 @@ def test_default_slice_training_profile_uses_relative_scales_and_fragment_floor(
     assert settings.target_size_fractions == (0.05, 0.10, 0.15, 0.20)
     assert settings.target_sizes_for(640) == [32.0, 64.0, 96.0, 128.0]
     assert settings.target_sizes_for(1024) == [51.2, 102.4, 153.6, 204.8]
+    assert settings.balance_multiscale_loss is True
+    assert settings.balance_multiscale_loss_power == 0.5
 
 
 def _plan_payload(tmp_path: Path) -> dict:

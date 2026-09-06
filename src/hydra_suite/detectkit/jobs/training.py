@@ -214,6 +214,8 @@ def prepare_role_datasets(
                 target_sizes=slicing.target_sizes_for(request.imgsz_for(role)),
                 full_frame_mix=slicing.full_frame_mix,
                 reference_body_px=slicing.reference_body_px,
+                balance_multiscale_loss=slicing.balance_multiscale_loss,
+                balance_multiscale_loss_power=slicing.balance_multiscale_loss_power,
             )
             sliced = orchestrator.build_sliced_obb_dataset(
                 merged.dataset_dir,

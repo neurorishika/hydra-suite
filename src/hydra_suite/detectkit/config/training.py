@@ -171,11 +171,13 @@ class SliceTrainingConfig:
     target_sizes: tuple[float, ...] = (32.0, 64.0, 96.0, 128.0)
     full_frame_mix: bool = True
     merge_threshold: float = 0.5
+    balance_multiscale_loss: bool = True
+    balance_multiscale_loss_power: float = 0.5
 
     @classmethod
     def from_dict(cls, data: dict[str, Any] | None) -> "SliceTrainingConfig":
         values = _require_mapping(data, "dataset.slicing")
-        for name in ("enabled", "full_frame_mix"):
+        for name in ("enabled", "full_frame_mix", "balance_multiscale_loss"):
             if name in values:
                 values[name] = _require_bool(values[name], f"dataset.slicing.{name}")
         if "geometry_mode" in values:
@@ -187,7 +189,12 @@ class SliceTrainingConfig:
         for name in ("object_tile_fraction", "reference_body_px", "overlap"):
             if name in values:
                 values[name] = _require_number(values[name], f"dataset.slicing.{name}")
-        for name in ("min_area_ratio", "negative_tile_fraction", "merge_threshold"):
+        for name in (
+            "min_area_ratio",
+            "negative_tile_fraction",
+            "merge_threshold",
+            "balance_multiscale_loss_power",
+        ):
             if name in values:
                 values[name] = _require_number(values[name], f"dataset.slicing.{name}")
         for name in ("slice_width", "slice_height"):
@@ -227,6 +234,7 @@ class SliceTrainingConfig:
             ("min_area_ratio", self.min_area_ratio),
             ("negative_tile_fraction", self.negative_tile_fraction),
             ("merge_threshold", self.merge_threshold),
+            ("balance_multiscale_loss_power", self.balance_multiscale_loss_power),
         ):
             if not 0.0 <= float(value) <= 1.0:
                 raise TrainingPlanError(

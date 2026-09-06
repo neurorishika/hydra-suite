@@ -9,6 +9,8 @@ def test_slice_settings_defaults_off():
     assert s.min_area_ratio == 0.25
     assert s.target_sizes == [32.0, 64.0, 96.0, 128.0]
     assert s.target_fractions() == [0.05, 0.10, 0.15, 0.20]
+    assert s.balance_multiscale_loss is True
+    assert s.balance_multiscale_loss_power == 0.5
 
 
 def test_relative_target_sizes_resolve_per_model_input():

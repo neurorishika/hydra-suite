@@ -105,6 +105,8 @@ class SliceBuildParams:
     target_sizes: list[float] = field(default_factory=lambda: [32.0, 64.0, 96.0, 128.0])
     full_frame_mix: bool = True
     reference_body_px: float = 0.0
+    balance_multiscale_loss: bool = True
+    balance_multiscale_loss_power: float = 0.5
 
 
 def _timestamp() -> str:
@@ -344,4 +346,8 @@ def _slice_geometry_manifest(params, measured_reference_body_px: float = 0.0) ->
         "target_sizes": list(params.target_sizes),
         "full_frame_mix": params.full_frame_mix,
         "reference_body_px": reference_body_px,
+        "multiscale_loss_balance": {
+            "enabled": params.balance_multiscale_loss,
+            "power": params.balance_multiscale_loss_power,
+        },
     }

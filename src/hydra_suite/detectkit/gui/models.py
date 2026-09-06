@@ -181,6 +181,8 @@ class SliceTrainingSettings:
     target_sizes: list[float] = field(default_factory=lambda: [32.0, 64.0, 96.0, 128.0])
     full_frame_mix: bool = True
     merge_threshold: float = 0.5
+    balance_multiscale_loss: bool = True
+    balance_multiscale_loss_power: float = 0.5
 
     def to_dict(self) -> dict:
         return {
@@ -197,6 +199,8 @@ class SliceTrainingSettings:
             "target_sizes": list(self.target_sizes),
             "full_frame_mix": self.full_frame_mix,
             "merge_threshold": self.merge_threshold,
+            "balance_multiscale_loss": self.balance_multiscale_loss,
+            "balance_multiscale_loss_power": self.balance_multiscale_loss_power,
         }
 
     @staticmethod
@@ -228,6 +232,15 @@ class SliceTrainingSettings:
             ],
             full_frame_mix=bool(d.get("full_frame_mix", base.full_frame_mix)),
             merge_threshold=float(d.get("merge_threshold", base.merge_threshold)),
+            balance_multiscale_loss=bool(
+                d.get("balance_multiscale_loss", base.balance_multiscale_loss)
+            ),
+            balance_multiscale_loss_power=float(
+                d.get(
+                    "balance_multiscale_loss_power",
+                    base.balance_multiscale_loss_power,
+                )
+            ),
         )
 
     def target_fractions(self) -> list[float]:
