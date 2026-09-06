@@ -3,16 +3,18 @@
 from __future__ import annotations
 
 import codecs
+import json
 import os
 import platform
 import select
 import signal
+import socket
 import subprocess
 import threading
 import time
 import uuid
 from collections import deque
-from dataclasses import dataclass, field
+from dataclasses import asdict, dataclass, field, replace
 from enum import Enum
 from pathlib import Path
 from typing import Any, Callable, Optional
@@ -835,6 +837,29 @@ class WorkloadStillOwnedError(RuntimeError):
         super().__init__(message)
 
 
+class ForcedReleaseRefusedError(RuntimeError):
+    """An operator-forced release was refused because the child is still alive."""
+
+    def __init__(self, message: str, live_pids: "tuple[int, ...]") -> None:
+        self.live_pids = tuple(live_pids)
+        super().__init__(message)
+
+
+@dataclass(frozen=True)
+class ForcedReleaseRecord:
+    """Durable audit of one explicit, operator-initiated ownership release."""
+
+    released_at: float
+    operator: str
+    reason: str
+    job_name: str
+    resource_keys: tuple[str, ...]
+    hostname: str
+    releasing_pid: int
+    ownership_was_uncertain: bool
+    audit_path: Optional[str] = None
+
+
 class SupervisedSidecar:
     """Own one limited child, its output pump, and its memory watchdog."""
 
@@ -1201,6 +1226,100 @@ class SupervisedSidecar:
                 except OSError:
                     pass
                 setattr(self, attribute, None)
+
+    def force_release_ownership(
+        self, *, operator: str, reason: str
+    ) -> ForcedReleaseRecord:
+        """Release retained ownership on an explicit operator instruction.
+
+        This is the only path out of :class:`WorkloadStillOwnedError`, and it is
+        deliberately not a weakening of the "never discard an uncertain owner"
+        rule. Automatic teardown still refuses to release on uncertainty; this
+        refuses too whenever the owned tree can still be *proved* alive, and
+        otherwise records who forced the release and why. Uncertainty alone
+        never releases silently -- a human has to say so, in writing.
+        """
+
+        operator = str(operator or "").strip()
+        reason = str(reason or "").strip()
+        if not operator:
+            raise ValueError("a forced ownership release requires a named operator")
+        if not reason:
+            raise ValueError("a forced ownership release requires a stated reason")
+
+        # One last honest attempt: the orphan may have become reapable since
+        # teardown gave up. Never release something a retry could still own.
+        if self.tree is not None and self.process is not None:
+            try:
+                self._terminate_and_reap(0.0)
+            except Exception:  # noqa: BLE001 - probing must not mask liveness
+                pass
+
+        live_pids: tuple[int, ...] = ()
+        ownership_uncertain = False
+        if self.tree is not None:
+            try:
+                live_pids = tuple(
+                    sorted(identity.pid for identity in self.tree.identities())
+                )
+            except Exception:  # noqa: BLE001 - an unreadable tree is uncertain
+                ownership_uncertain = True
+            ownership_uncertain = ownership_uncertain or bool(
+                self.tree.ownership_uncertain
+            )
+        if self.process is not None and self.process.poll() is None:
+            live_pids = tuple(sorted({*live_pids, self.process.pid}))
+        if live_pids:
+            raise ForcedReleaseRefusedError(
+                "refusing to force-release: the owned process tree is still "
+                f"provably alive (PIDs {', '.join(str(p) for p in live_pids)}). "
+                "Terminate those processes first, then force-release.",
+                live_pids,
+            )
+
+        record = ForcedReleaseRecord(
+            released_at=time.time(),
+            operator=operator,
+            reason=reason,
+            job_name=self.plan.job_name,
+            resource_keys=tuple(self._leases.resource_keys),
+            hostname=socket.gethostname(),
+            releasing_pid=os.getpid(),
+            ownership_was_uncertain=ownership_uncertain,
+        )
+        audit_path = self._write_forced_release_audit(record)
+        # Best-effort local teardown; the leases are released regardless, since
+        # the whole point of this call is that the operator has accepted it.
+        try:
+            self._complete_guardian_teardown()
+        except Exception:  # noqa: BLE001
+            pass
+        self._close_unstarted_guardian_fds()
+        if self.watchdog is not None:
+            try:
+                self.watchdog.stop(timeout=1.0)
+            except Exception:  # noqa: BLE001
+                pass
+        self._release_leases()
+        return replace(record, audit_path=audit_path)
+
+    def _write_forced_release_audit(
+        self, record: "ForcedReleaseRecord"
+    ) -> Optional[str]:
+        """Append the audit line next to the leases; never block the release."""
+
+        try:
+            directory = self._leases.leases[0].path.parent
+            directory.mkdir(parents=True, exist_ok=True)
+            path = directory / "forced-releases.jsonl"
+            with path.open("a", encoding="utf-8") as stream:
+                json.dump(asdict(record), stream, sort_keys=True)
+                stream.write("\n")
+                stream.flush()
+                os.fsync(stream.fileno())
+            return str(path)
+        except (OSError, IndexError, TypeError, ValueError):
+            return None
 
     def _release_leases(self) -> None:
         if not self._leases_released:

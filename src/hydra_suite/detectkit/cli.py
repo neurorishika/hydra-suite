@@ -4,6 +4,7 @@ from __future__ import annotations
 
 import argparse
 import json
+import os
 import signal
 import sys
 import threading
@@ -28,7 +29,10 @@ from hydra_suite.detectkit.jobs.training import (
     DatasetPreparationCancelled,
     run_role_entries,
 )
-from hydra_suite.runtime.process_supervisor import WorkloadStillOwnedError
+from hydra_suite.runtime.process_supervisor import (
+    ForcedReleaseRefusedError,
+    WorkloadStillOwnedError,
+)
 from hydra_suite.training import PublishPolicy, TrainingOrchestrator
 from hydra_suite.training.registry import finalize_run_record
 
@@ -58,6 +62,20 @@ def build_parser() -> argparse.ArgumentParser:
         "--no-publish",
         action="store_true",
         help="Keep artifacts in the run workspace without importing them into the local model registry.",
+    )
+    parser.add_argument(
+        "--force-release-ownership",
+        metavar="REASON",
+        help=(
+            "If containment ends with ownership still retained, force-release "
+            "the sidecar leases for the stated reason. Refused while the child "
+            "process tree can still be proved alive."
+        ),
+    )
+    parser.add_argument(
+        "--force-release-operator",
+        metavar="NAME",
+        help="Operator recorded in the forced-release audit (defaults to $USER).",
     )
     parser.add_argument(
         "--resume",
@@ -338,6 +356,92 @@ def run(args: argparse.Namespace) -> int:
                     raise
 
 
+def _force_release_if_requested(
+    args: argparse.Namespace, owned_error: WorkloadStillOwnedError
+) -> int | None:
+    """Honour an explicit ``--force-release-ownership`` request, or decline.
+
+    Returns an exit code when ownership was released, or ``None`` to leave the
+    exact recovery-bearing exception untouched. Never releases implicitly:
+    without the flag, and while the child is provably alive, nothing changes.
+    """
+
+    reason = str(getattr(args, "force_release_ownership", "") or "").strip()
+    if not reason:
+        print(
+            "Ownership is still retained. Re-run with "
+            '--force-release-ownership "<reason>" once you have confirmed the '
+            "orphaned worker is gone.",
+            file=sys.stderr,
+        )
+        return None
+    operator = (
+        str(getattr(args, "force_release_operator", "") or "").strip()
+        or (os.environ.get("USER") or os.environ.get("USERNAME") or "").strip()
+    )
+    if not operator:
+        print(
+            "--force-release-ownership requires --force-release-operator when "
+            "$USER is unset.",
+            file=sys.stderr,
+        )
+        return None
+    try:
+        record = owned_error.sidecar.force_release_ownership(
+            operator=operator, reason=reason
+        )
+    except ForcedReleaseRefusedError as refusal:
+        print(f"Forced release refused: {refusal}", file=sys.stderr)
+        return None
+    except Exception as exc:  # noqa: BLE001 - preserve the owning exception
+        print(f"Forced release failed: {exc}", file=sys.stderr)
+        return None
+    print(
+        f"Ownership force-released by {record.operator}: {record.reason} "
+        f"(audit: {record.audit_path or 'unwritten'})",
+        file=sys.stderr,
+    )
+    # Same precondition as the cancel-success branch above: the child is proven
+    # gone. Without this, a force-released publish leaves its partial artifact
+    # behind and publish_sam3_model refuses the retry with FileExistsError.
+    if owned_error.recovery_cleanup is not None:
+        try:
+            owned_error.recovery_cleanup()
+        except Exception as cleanup_error:  # noqa: BLE001 - workload is safe
+            owned_error.recovery_error = str(cleanup_error)
+            print(
+                "Ownership was force-released, but temporary artifact cleanup "
+                f"failed: {cleanup_error}",
+                file=sys.stderr,
+            )
+    if owned_error.run_id:
+        try:
+            finalize_run_record(
+                owned_error.run_id,
+                status="failed",
+                error_message=(
+                    "Ownership was force-released by "
+                    f"{record.operator}: {record.reason}"
+                ),
+                failure_details={
+                    "failure_kind": "workload-still-owned",
+                    "containment": {
+                        "ownership": "force-released",
+                        "operator": record.operator,
+                        "reason": record.reason,
+                        "ownership_was_uncertain": record.ownership_was_uncertain,
+                    },
+                },
+            )
+        except Exception as registry_error:  # noqa: BLE001 - workload is safe
+            print(
+                "Ownership was force-released, but the run registry could not "
+                f"be finalized: {registry_error}",
+                file=sys.stderr,
+            )
+    return 1
+
+
 def main(argv: list[str] | None = None) -> int:
     parser = build_parser()
     args = parser.parse_args(argv)
@@ -361,7 +465,10 @@ def main(argv: list[str] | None = None) -> int:
             retry_error.registry_update_error = owned_error.registry_update_error
             retry_error.recovery_error = owned_error.recovery_error
             retry_error.recovery_cleanup = owned_error.recovery_cleanup
-            raise
+            forced = _force_release_if_requested(args, retry_error)
+            if forced is None:
+                raise
+            return forced
         except Exception as retry_error:  # noqa: BLE001 - retain exact owner
             owned_error.recovery_error = str(retry_error)
             raise owned_error

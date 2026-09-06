@@ -108,6 +108,21 @@ def _ample_resources(monkeypatch):
     )
 
 
+@pytest.fixture(autouse=True)
+def _registered_run(tmp_path, monkeypatch):
+    """publish_sam3_model refuses a run with no training-run row (Defect A)."""
+
+    monkeypatch.setenv("HYDRA_DATA_DIR", str(tmp_path / "hydra-data"))
+    from hydra_suite.training.registry import get_registry_path
+
+    path = get_registry_path()
+    path.parent.mkdir(parents=True, exist_ok=True)
+    path.write_text(
+        json.dumps({"runs": [{"run_id": "run-1", "status": "running"}]}),
+        encoding="utf-8",
+    )
+
+
 def _inputs(tmp_path: Path):
     base = tmp_path / "base.pt"
     adapters = tmp_path / "adapters.pt"
