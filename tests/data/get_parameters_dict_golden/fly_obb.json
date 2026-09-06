@@ -7,6 +7,7 @@
     "min_aspect_ratio_multiplier": 0.2,
     "pose_sleap_env": "sleap",
     "reference_aspect_ratio": 2.61,
+    "slice_profile_id": "",
     "video_pose_color": [
       255,
       255,
@@ -193,6 +194,7 @@
   "N_ARENAS": 1,
   "ONLINE_PRIOR_WEIGHT": 0.25,
   "PELT_MODEL": "rbf",
+  "PIPELINE_DEPTH": 2,
   "POSE_BATCH_SIZE": 3,
   "POSE_DIRECTION_ANTERIOR_KEYPOINTS": [],
   "POSE_DIRECTION_POSTERIOR_KEYPOINTS": [],
