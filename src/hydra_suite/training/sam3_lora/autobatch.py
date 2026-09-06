@@ -85,6 +85,12 @@ class Sam3DatasetDensityProfile:
     p95_instances_per_tile: int
     num_negatives: int
     negative_prompt_pool: tuple[str, ...] = field(default_factory=tuple)
+    # The RESOLVED tile pixels the build actually wrote, read off
+    # `build_manifest.json` -- not the requested fractions. The tiles are what
+    # the GPU sees. Empty means "single scale" (or an unreadable manifest,
+    # which `sam3_workload_fingerprint` turns into a DEGRADED key rather than
+    # a collision). Defaulted so hand-built profiles stay valid.
+    tile_px_set: tuple[tuple[int, int], ...] = field(default_factory=tuple)
 
 
 def device_identity_for(name: str, total_vram_bytes: int) -> str:
@@ -396,6 +402,33 @@ def _dataset_density_hash(dataset: Sam3DatasetDensityProfile) -> str:
     return hashlib.sha256(payload.encode("utf-8")).hexdigest()[:16]
 
 
+def _manifest_tile_px_set(dataset_dir: str) -> tuple[tuple[int, int], ...]:
+    """Read the built `tile_px_set` off `build_manifest.json`, or `()`.
+
+    Single-scale builds stamp `tile_px` (a pair) and no set; that path
+    deliberately returns `()` so its fingerprint keeps today's shape and no
+    stored probe is invalidated for a run whose geometry did not change.
+    """
+
+    path = Path(dataset_dir) / "build_manifest.json"
+    try:
+        with path.open("r", encoding="utf-8") as handle:
+            manifest = json.load(handle)
+    except (OSError, ValueError):
+        return ()
+    raw = manifest.get("tile_px_set")
+    if not isinstance(raw, list):
+        return ()
+    pairs: list[tuple[int, int]] = []
+    for entry in raw:
+        try:
+            width, height = int(entry[0]), int(entry[1])
+        except (TypeError, ValueError, IndexError, KeyError):
+            return ()
+        pairs.append((width, height))
+    return tuple(pairs)
+
+
 def sam3_dataset_density_profile(
     spec: TrainingRunSpec,
 ) -> Sam3DatasetDensityProfile:
@@ -422,6 +455,7 @@ def sam3_dataset_density_profile(
         p95_instances_per_tile=int(profile.p95_active_instances_per_tile),
         num_negatives=int(params.num_negatives),
         negative_prompt_pool=prompts,
+        tile_px_set=_manifest_tile_px_set(spec.derived_dataset_dir),
     )
 
 
@@ -494,6 +528,39 @@ def sam3_workload_fingerprint(
         f"probe_steps={PROBE_STEPS}|"
         f"density={_dataset_density_hash(dataset)}"
     )
+    # The resolved tile-px SET, and the full-frame arm. `object_tile_fraction`
+    # alone CANNOT separate these workloads: a 4-scale spec and a 1-scale spec
+    # can carry the identical scalar, so without this a multi-scale run
+    # inherits a probe measured on one small tile size. Appended only when the
+    # run actually requested a fan-out, so an unchanged single-scale run keeps
+    # its stored probe (verified by
+    # `test_single_scale_key_is_unchanged_by_the_scale_set_work`).
+    if params.object_tile_fractions or params.full_frame_mix:
+        if dataset.tile_px_set:
+            # Canonicalised (sorted, deduped, int pairs) rather than
+            # f-string-interpolating a list, whose `repr` keys by accident of
+            # ordering and element type.
+            scale_payload = ",".join(
+                f"{int(width)}x{int(height)}"
+                for width, height in sorted(
+                    {(int(w), int(h)) for w, h in dataset.tile_px_set}
+                )
+            )
+        else:
+            # The build's realised set could not be read. Key on the REQUESTED
+            # fractions behind a degraded marker: two different unreadable
+            # multi-scale workloads must not share a probe either, which is
+            # the same failure this task closes.
+            degraded_reasons.append("multiscale_tile_px_set_unreadable")
+            requested = ",".join(
+                format(float(value), ".8g")
+                for value in sorted(params.object_tile_fractions)
+            )
+            scale_payload = f"{_DEGRADED_MARKER}:requested:{requested}"
+        task_payload += (
+            f"|tile_px_set={scale_payload}"
+            f"|full_frame_mix={int(bool(params.full_frame_mix))}"
+        )
 
     identity = ProfileIdentity(
         operation=OPERATION,

@@ -688,3 +688,173 @@ def test_slice_size_is_ignored_outside_custom_geometry(tmp_path, monkeypatch, pr
         params_overrides={"geometry_mode": "auto_object", "slice_width": 4096},
     )
     assert base == mutated
+
+
+# ---------------------------------------------------------------------------
+# Task 6 -- the resolved tile-px SET is part of the workload.
+#
+# The probe is the authority on what fits in VRAM. A fingerprint that cannot
+# tell a single-scale workload from a multi-scale one lets a run reuse a probe
+# measured on different geometry -- and every short probe here has
+# UNDER-reported the full-run peak (7.72 -> 12.99 GiB), so a wrongly reused
+# record is an OOM, not an inefficiency.
+# ---------------------------------------------------------------------------
+
+
+def _multiscale_fingerprint(
+    tmp_path,
+    monkeypatch,
+    prefix,
+    *,
+    fractions=(),
+    full_frame_mix=False,
+    tile_px_set=(),
+    checkpoint=None,
+):
+    _patch_conda(monkeypatch, {"hydra-sam3": prefix})
+    if checkpoint is None:
+        checkpoint = tmp_path / _FIXED_CHECKPOINT_NAME
+        if not checkpoint.exists():
+            checkpoint.write_bytes(b"a")
+    spec = _spec(
+        tmp_path,
+        checkpoint=checkpoint,
+        params_overrides={
+            "object_tile_fractions": tuple(fractions),
+            "full_frame_mix": bool(full_frame_mix),
+        },
+    )
+    dataset = ab.Sam3DatasetDensityProfile(
+        max_instances_per_tile=10,
+        p95_instances_per_tile=6,
+        num_negatives=3,
+        negative_prompt_pool=("background",),
+        tile_px_set=tuple((int(w), int(h)) for w, h in tile_px_set),
+    )
+    return ab.sam3_workload_fingerprint(
+        spec, cuda_device=_dev(), dataset=dataset
+    ).identity
+
+
+def test_multiscale_spec_misses_the_single_scale_probe(tmp_path, monkeypatch, prefix):
+    """The OOM this task exists to prevent: one scale vs four, same scalar."""
+    single = _multiscale_fingerprint(
+        tmp_path, monkeypatch, prefix, tile_px_set=((727, 727),)
+    )
+    multi = _multiscale_fingerprint(
+        tmp_path,
+        monkeypatch,
+        prefix,
+        fractions=(0.03, 0.055, 0.11, 0.22),
+        tile_px_set=((907, 907), (727, 727), (363, 363), (181, 181)),
+    )
+    assert single != multi
+
+
+def test_two_different_scale_sets_miss_each_other(tmp_path, monkeypatch, prefix):
+    a = _multiscale_fingerprint(
+        tmp_path,
+        monkeypatch,
+        prefix,
+        fractions=(0.055, 0.11),
+        tile_px_set=((727, 727), (363, 363)),
+    )
+    b = _multiscale_fingerprint(
+        tmp_path,
+        monkeypatch,
+        prefix,
+        fractions=(0.055, 0.22),
+        tile_px_set=((727, 727), (181, 181)),
+    )
+    assert a != b
+
+
+def test_full_frame_mix_alone_misses_the_cache(tmp_path, monkeypatch, prefix):
+    """Full frames are the largest images in the set; they drive the peak."""
+    off = _multiscale_fingerprint(
+        tmp_path, monkeypatch, prefix, fractions=(0.055,), tile_px_set=((727, 727),)
+    )
+    on = _multiscale_fingerprint(
+        tmp_path,
+        monkeypatch,
+        prefix,
+        fractions=(0.055,),
+        full_frame_mix=True,
+        tile_px_set=((727, 727),),
+    )
+    assert off != on
+
+
+def test_identical_multiscale_specs_share_one_key(tmp_path, monkeypatch, prefix):
+    """Probe reuse must still work -- otherwise the cache is dead weight.
+
+    (Passes before this change too; it is the guard against over-keying.)
+    """
+    kwargs = dict(
+        fractions=(0.03, 0.055),
+        full_frame_mix=True,
+        tile_px_set=((907, 907), (727, 727)),
+    )
+    a = _multiscale_fingerprint(tmp_path, monkeypatch, prefix, **kwargs)
+    b = _multiscale_fingerprint(tmp_path, monkeypatch, prefix, **kwargs)
+    assert a == b
+
+
+def test_scale_set_order_does_not_change_the_key(tmp_path, monkeypatch, prefix):
+    """The set is canonicalised, not f-string-interpolated by accident."""
+    a = _multiscale_fingerprint(
+        tmp_path,
+        monkeypatch,
+        prefix,
+        fractions=(0.03, 0.055),
+        tile_px_set=((907, 907), (727, 727)),
+    )
+    b = _multiscale_fingerprint(
+        tmp_path,
+        monkeypatch,
+        prefix,
+        fractions=(0.055, 0.03),
+        tile_px_set=((727, 727), (907, 907)),
+    )
+    assert a == b
+
+
+def test_unreadable_scale_set_is_degraded_and_still_distinct(
+    tmp_path, monkeypatch, prefix
+):
+    """A multi-scale run whose built set could not be read must NOT collide.
+
+    Two different requested sets with no readable manifest are two different
+    workloads; falling back to a shared marker would recreate the exact bug.
+    """
+    _patch_conda(monkeypatch, {"hydra-sam3": prefix})
+    checkpoint = _checkpoint(tmp_path)
+    dataset = _dataset()
+    results = []
+    for fractions in ((0.03, 0.055), (0.11, 0.22)):
+        spec = _spec(
+            tmp_path,
+            checkpoint=checkpoint,
+            params_overrides={"object_tile_fractions": fractions},
+        )
+        results.append(
+            ab.sam3_workload_fingerprint(spec, cuda_device=_dev(), dataset=dataset)
+        )
+    assert results[0].identity != results[1].identity
+    for result in results:
+        assert "multiscale_tile_px_set_unreadable" in result.degraded_reasons
+
+
+def test_single_scale_key_is_unchanged_by_the_scale_set_work(
+    tmp_path, monkeypatch, prefix
+):
+    """No gratuitous invalidation: today's default run keeps today's key.
+
+    (Characterization -- passes before the change; it is what makes the
+    conditional inclusion above safe for existing stored probes.)
+    """
+    identity = _multiscale_fingerprint(
+        tmp_path, monkeypatch, prefix, tile_px_set=((727, 727),)
+    )
+    assert "tile_px_set=" not in identity.task
+    assert identity.task.startswith("imgsz=1008|overlap=0.25|object_tile_fraction=")
