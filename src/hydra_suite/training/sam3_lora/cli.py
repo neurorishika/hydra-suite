@@ -77,6 +77,7 @@ from .dataloader import (
     grouped_batch_count,
     query_count,
     scale_group_summary,
+    scale_grouping_decision,
     try_build_descriptors,
     write_sam3_scale_grouping_stamp,
 )
@@ -920,17 +921,9 @@ def run_training(spec: Any, run_dir_path: Path) -> bool:
     # the moment `sam3_lora/` gains one -- at which point this must RAISE, not
     # warn, exactly as the Ultralytics installer does).
     group_counts = scale_group_summary(train_descriptors)
-    dataset_has_groups = bool(group_counts.keys() - {"ungrouped"})
-    grouping_requested = str(
-        os.environ.get("HYDRA_SAM3_SCALE_GROUPED_BATCHING", "1")
-    ).strip().lower() not in {"0", "false", "no"}
-    group_by_scale = bool(grouping_requested and dataset_has_groups)
-    if grouping_requested and not dataset_has_groups:
-        grouping_reason = "dataset carries no scale_group records (single-scale build)"
-    elif not grouping_requested:
-        grouping_reason = "disabled via HYDRA_SAM3_SCALE_GROUPED_BATCHING"
-    else:
-        grouping_reason = ""
+    grouping_requested, group_by_scale, grouping_reason = scale_grouping_decision(
+        group_counts, os.environ.get("HYDRA_SAM3_SCALE_GROUPED_BATCHING")
+    )
     write_sam3_scale_grouping_stamp(
         run_dir_path,
         requested=grouping_requested,

@@ -434,6 +434,39 @@ def _grouped_epoch_batches(
         yield from collate_batches(members, batch_size)
 
 
+def scale_grouping_decision(
+    group_counts: "dict[str, int]", env_value: "str | None"
+) -> "tuple[bool, bool, str]":
+    """Return ``(requested, applied, reason)`` for scale-grouped batching.
+
+    Extracted from `run_training` so the decision is testable without CUDA:
+    whether a run was grouped is exactly what the realised stamp exists to make
+    non-confusable afterwards, so it must not be three untested inline lines.
+
+    Grouping is requested by default and declined -- never silently, always
+    with a reason -- when the built dataset carries no `scale_group` records
+    (a single-scale build, which then takes literally today's path).
+    """
+
+    requested = str(
+        env_value if env_value is not None else "1"
+    ).strip().lower() not in {
+        "0",
+        "false",
+        "no",
+    }
+    has_groups = bool(set(group_counts) - {"ungrouped"})
+    if not requested:
+        return False, False, "disabled via HYDRA_SAM3_SCALE_GROUPED_BATCHING"
+    if not has_groups:
+        return (
+            True,
+            False,
+            "dataset carries no scale_group records (single-scale build)",
+        )
+    return True, True, ""
+
+
 def write_sam3_scale_grouping_stamp(
     run_dir: "str | Path",
     *,

@@ -16,6 +16,8 @@ from __future__ import annotations
 
 import json
 
+import pytest
+
 from hydra_suite.training import scale_balance as sb
 from hydra_suite.training import ultralytics_scale_balance as usb
 
@@ -223,3 +225,29 @@ def test_sam3_never_grows_a_distributed_launch():
         "SAM3 gained a distributed launch; scale-grouped batching must now "
         f"RAISE rather than silently fall back to ungrouped: {hits}"
     )
+
+
+@pytest.mark.parametrize(
+    "counts,env,expected",
+    [
+        ({"tile:727x727": 4, "ungrouped": 0}, None, (True, True)),
+        ({"tile:727x727": 4, "ungrouped": 0}, "0", (False, False)),
+        ({"tile:727x727": 4, "ungrouped": 0}, "false", (False, False)),
+        ({"tile:727x727": 4, "ungrouped": 0}, "1", (True, True)),
+        # Single-scale build: requested, but there is nothing to group by.
+        ({"ungrouped": 9}, None, (True, False)),
+        ({}, None, (True, False)),
+    ],
+)
+def test_scale_grouping_decision(counts, env, expected):
+    """The three-line decision `run_training` makes, as a pure function.
+
+    `run_training` itself needs CUDA, so the decision is extracted rather than
+    left inline and untested: whether a run is grouped is exactly the thing the
+    realised stamp exists to make non-confusable.
+    """
+    from hydra_suite.training.sam3_lora import dataloader as dl
+
+    requested, applied, reason = dl.scale_grouping_decision(counts, env)
+    assert (requested, applied) == expected
+    assert bool(reason) is not applied
