@@ -1,0 +1,338 @@
+"""Immutable public contracts for inference throughput tuning.
+
+The tuner never mutates a saved project configuration.  It produces an
+``InferenceRuntimeOverlay`` whose requested, admitted, and effective values
+remain independently observable for the lifetime of the run.
+"""
+
+from __future__ import annotations
+
+import math
+from copy import deepcopy
+from dataclasses import asdict, dataclass, replace
+from enum import Enum
+from typing import TYPE_CHECKING, Any, Iterable, Mapping
+
+if TYPE_CHECKING:
+    from hydra_suite.core.inference.config import InferenceConfig
+
+
+SETTING_FIELDS = (
+    "detection_batch_size",
+    "slice_tile_batch_size",
+    "pose_batch_size",
+    "headtail_batch_size",
+    "pipeline_depth",
+)
+IDENTITY_FIELD_PREFIX = "identity_batch_size:"
+
+
+def _positive_optional(value: int | None, name: str) -> int | None:
+    if value is None:
+        return None
+    value = int(value)
+    if value < 1:
+        raise ValueError(f"{name} must be positive when enabled")
+    return value
+
+
+@dataclass(frozen=True, slots=True)
+class InferenceTuningSettings:
+    """One complete, jointly evaluated inference execution strategy."""
+
+    detection_batch_size: int = 1
+    slice_tile_batch_size: int | None = None
+    pose_batch_size: int | None = None
+    headtail_batch_size: int | None = None
+    identity_batch_sizes: tuple[tuple[str, int], ...] = ()
+    pipeline_depth: int = 2
+
+    def __post_init__(self) -> None:
+        object.__setattr__(
+            self,
+            "detection_batch_size",
+            int(_positive_optional(self.detection_batch_size, "detection_batch_size")),
+        )
+        for name in ("slice_tile_batch_size", "pose_batch_size", "headtail_batch_size"):
+            object.__setattr__(
+                self, name, _positive_optional(getattr(self, name), name)
+            )
+        depth = int(self.pipeline_depth)
+        if not 1 <= depth <= 4:
+            raise ValueError("pipeline_depth must be between one and four")
+        object.__setattr__(self, "pipeline_depth", depth)
+        normalized = tuple(
+            sorted(
+                (str(label), int(value)) for label, value in self.identity_batch_sizes
+            )
+        )
+        if any(not label or value < 1 for label, value in normalized):
+            raise ValueError(
+                "identity batch settings require a label and positive value"
+            )
+        if len({label for label, _ in normalized}) != len(normalized):
+            raise ValueError("identity classifier labels must be unique")
+        object.__setattr__(self, "identity_batch_sizes", normalized)
+
+    @classmethod
+    def from_config(cls, config: "InferenceConfig") -> "InferenceTuningSettings":
+        slice_config = None
+        if config.obb is not None:
+            if config.obb.mode == "direct" and config.obb.direct is not None:
+                slice_config = config.obb.direct.slice
+            elif config.obb.sequential is not None:
+                slice_config = config.obb.sequential.stage1_slice
+        pose_batch = None
+        if config.pose is not None:
+            backend = getattr(config.pose, config.pose.backend, None)
+            pose_batch = getattr(backend, "batch_size", None)
+        return cls(
+            detection_batch_size=config.detection_batch_size,
+            slice_tile_batch_size=(
+                slice_config.tile_batch_size
+                if slice_config is not None and slice_config.enabled
+                else None
+            ),
+            pose_batch_size=pose_batch,
+            headtail_batch_size=(
+                config.headtail.batch_size if config.headtail is not None else None
+            ),
+            identity_batch_sizes=tuple(
+                (phase.label, phase.batch_size) for phase in config.cnn_phases
+            ),
+            pipeline_depth=config.pipeline_depth,
+        )
+
+    def to_dict(self) -> dict[str, Any]:
+        result = asdict(self)
+        result["identity_batch_sizes"] = {
+            label: value for label, value in self.identity_batch_sizes
+        }
+        return result
+
+    @classmethod
+    def from_dict(cls, value: Mapping[str, Any]) -> "InferenceTuningSettings":
+        identities = value.get("identity_batch_sizes", {})
+        if isinstance(identities, Mapping):
+            identity_items = tuple((str(k), int(v)) for k, v in identities.items())
+        else:
+            identity_items = tuple((str(k), int(v)) for k, v in identities)
+        return cls(
+            detection_batch_size=int(value.get("detection_batch_size", 1)),
+            slice_tile_batch_size=value.get("slice_tile_batch_size"),
+            pose_batch_size=value.get("pose_batch_size"),
+            headtail_batch_size=value.get("headtail_batch_size"),
+            identity_batch_sizes=identity_items,
+            pipeline_depth=int(value.get("pipeline_depth", 2)),
+        )
+
+    def field_names(self) -> tuple[str, ...]:
+        names = [name for name in SETTING_FIELDS if getattr(self, name) is not None]
+        names.extend(
+            f"{IDENTITY_FIELD_PREFIX}{label}" for label, _ in self.identity_batch_sizes
+        )
+        return tuple(names)
+
+    def value_for(self, field_name: str) -> int | None:
+        if field_name.startswith(IDENTITY_FIELD_PREFIX):
+            label = field_name[len(IDENTITY_FIELD_PREFIX) :]
+            return dict(self.identity_batch_sizes).get(label)
+        if field_name not in SETTING_FIELDS:
+            raise KeyError(field_name)
+        return getattr(self, field_name)
+
+    def with_value(self, field_name: str, value: int) -> "InferenceTuningSettings":
+        value = int(value)
+        if field_name.startswith(IDENTITY_FIELD_PREFIX):
+            label = field_name[len(IDENTITY_FIELD_PREFIX) :]
+            identities = dict(self.identity_batch_sizes)
+            if label not in identities:
+                raise KeyError(field_name)
+            identities[label] = value
+            return replace(self, identity_batch_sizes=tuple(identities.items()))
+        if field_name not in SETTING_FIELDS:
+            raise KeyError(field_name)
+        if getattr(self, field_name) is None:
+            raise KeyError(f"inactive tuning field: {field_name}")
+        return replace(self, **{field_name: value})
+
+    def apply(self, config: "InferenceConfig") -> "InferenceConfig":
+        """Return a detached config carrying these execution-only values."""
+
+        output = deepcopy(config)
+        output.detection_batch_size = self.detection_batch_size
+        output.pipeline_depth = self.pipeline_depth
+        if output.obb is not None and self.slice_tile_batch_size is not None:
+            if output.obb.mode == "direct" and output.obb.direct is not None:
+                output.obb.direct.slice.tile_batch_size = self.slice_tile_batch_size
+                # The coordinated tuner supersedes the old process-local SAHI tuner.
+                output.obb.direct.slice.tile_batch_autotune = False
+            elif output.obb.sequential is not None:
+                output.obb.sequential.stage1_slice.tile_batch_size = (
+                    self.slice_tile_batch_size
+                )
+                output.obb.sequential.stage1_slice.tile_batch_autotune = False
+        if output.headtail is not None and self.headtail_batch_size is not None:
+            output.headtail.batch_size = self.headtail_batch_size
+        if output.pose is not None and self.pose_batch_size is not None:
+            backend = getattr(output.pose, output.pose.backend, None)
+            if backend is not None:
+                backend.batch_size = self.pose_batch_size
+        identities = dict(self.identity_batch_sizes)
+        for phase in output.cnn_phases:
+            if phase.label in identities:
+                phase.batch_size = identities[phase.label]
+        return output
+
+
+class ProfileState(str, Enum):
+    PROVISIONAL = "provisional"
+    VALIDATED = "validated"
+
+
+@dataclass(frozen=True, slots=True)
+class EquivalenceVerdict:
+    passed: bool
+    nonzero_rows: bool = True
+    row_counts_match: bool = True
+    unmatched_rows: int = 0
+    position_p99: float = 0.0
+    angle_mean: float = 0.0
+    nan_pattern_mismatches: int = 0
+    categorical_mismatches: int = 0
+    details: tuple[str, ...] = ()
+
+
+@dataclass(frozen=True, slots=True)
+class CandidateEvidence:
+    settings: InferenceTuningSettings
+    throughput_samples: tuple[float, ...]
+    stage_seconds_samples: tuple[float, ...] = ()
+    host_peak_bytes: int = 0
+    accelerator_peak_bytes: int = 0
+    queue_high_water_bytes: int = 0
+    frame_buffer_high_water_bytes: int = 0
+    thermal_c_range: tuple[float, float] | None = None
+    warmup_calls: int = 0
+    warmup_frames: int = 0
+    prepare_seconds: float = 0.0
+    steady_state_seconds: float = 0.0
+    artifact_ids: tuple[str, ...] = ()
+    equivalence: EquivalenceVerdict | None = None
+    failure_class: str | None = None
+
+    def __post_init__(self) -> None:
+        if any(not math.isfinite(v) or v <= 0 for v in self.throughput_samples):
+            raise ValueError("throughput samples must be finite and positive")
+        if any(not math.isfinite(v) or v <= 0 for v in self.stage_seconds_samples):
+            raise ValueError("stage samples must be finite and positive")
+        if (
+            min(
+                self.host_peak_bytes,
+                self.accelerator_peak_bytes,
+                self.queue_high_water_bytes,
+                self.frame_buffer_high_water_bytes,
+                self.warmup_calls,
+                self.warmup_frames,
+            )
+            < 0
+        ):
+            raise ValueError(
+                "candidate counters and memory observations must be non-negative"
+            )
+
+    @property
+    def median_throughput(self) -> float:
+        import statistics
+
+        return (
+            statistics.median(self.throughput_samples)
+            if self.throughput_samples
+            else 0.0
+        )
+
+    @property
+    def median_absolute_deviation(self) -> float:
+        import statistics
+
+        if not self.throughput_samples:
+            return 0.0
+        median = self.median_throughput
+        return statistics.median(abs(v - median) for v in self.throughput_samples)
+
+
+@dataclass(frozen=True, slots=True)
+class InferenceTuningProfile:
+    """Persisted evidence for one exact system/model/workload key."""
+
+    profile_id: str
+    key: Any
+    baseline: InferenceTuningSettings
+    requested: InferenceTuningSettings
+    admitted: InferenceTuningSettings
+    selected: InferenceTuningSettings
+    candidates: tuple[CandidateEvidence, ...]
+    state: ProfileState
+    selection_reason: str
+    rejected: tuple[tuple[str, str], ...] = ()
+    calibration_summary: tuple[tuple[str, Any], ...] = ()
+    created_at_unix_ns: int = 0
+    last_validation_unix_ns: int = 0
+    observed_production_throughput: tuple[float, ...] = ()
+
+    def __post_init__(self) -> None:
+        if not self.profile_id or len(self.profile_id) > 128:
+            raise ValueError("profile_id is invalid")
+        if not self.selection_reason or len(self.selection_reason) > 1024:
+            raise ValueError("selection_reason is invalid")
+        if len(self.candidates) > 256 or len(self.rejected) > 256:
+            raise ValueError("profile evidence exceeds its bounded record cap")
+
+
+@dataclass(frozen=True, slots=True)
+class InferenceRuntimeOverlay:
+    """The only mechanism by which a tuner changes one production run."""
+
+    requested: InferenceTuningSettings
+    admitted: InferenceTuningSettings
+    effective: InferenceTuningSettings
+    field_sources: tuple[tuple[str, str], ...]
+    status: str
+    reason: str
+    profile_id: str | None = None
+
+    def apply(self, config: "InferenceConfig") -> "InferenceConfig":
+        return self.effective.apply(config)
+
+    @classmethod
+    def baseline(
+        cls, settings: InferenceTuningSettings, *, status: str, reason: str
+    ) -> "InferenceRuntimeOverlay":
+        return cls(
+            requested=settings,
+            admitted=settings,
+            effective=settings,
+            field_sources=tuple(
+                (field, "configured") for field in settings.field_names()
+            ),
+            status=status,
+            reason=reason,
+        )
+
+
+def settings_from_values(
+    baseline: InferenceTuningSettings, values: Mapping[str, int]
+) -> InferenceTuningSettings:
+    result = baseline
+    for field_name, value in values.items():
+        result = result.with_value(field_name, value)
+    return result
+
+
+def bounded_evidence(
+    values: Iterable[CandidateEvidence], maximum: int = 256
+) -> tuple[CandidateEvidence, ...]:
+    result = tuple(values)
+    if len(result) > maximum:
+        raise ValueError("candidate evidence exceeds its cap")
+    return result
