@@ -8,7 +8,7 @@ from hydra_suite.training.ultralytics_scale_balance import (
     ScaleGroupedBatchSampler,
     _balance_settings_from_argv,
     _grouped_loader,
-    install_sahi_multiscale_loss_balance,
+    install_sahi_scale_balance_and_grouped_sampling,
     scale_group_for_path,
     scale_group_weights,
 )
@@ -108,7 +108,121 @@ def test_installer_wires_the_ultralytics_trainer_only_for_enabled_sliced_data(tm
         encoding="utf-8",
     )
 
-    assert install_sahi_multiscale_loss_balance([f"data={dataset_yaml}"])
+    assert install_sahi_scale_balance_and_grouped_sampling([f"data={dataset_yaml}"])
     assert hasattr(
         DetectionTrainer.get_dataloader, "_hydra_sahi_scale_balance_original"
     )
+
+
+# --- R7: DDP must be loud, and the run must stamp what ACTUALLY happened. ---
+
+
+def _write_enabled_manifest(tmp_path, power=0.5):
+    dataset_yaml = tmp_path / "dataset.yaml"
+    dataset_yaml.write_text("path: .\n", encoding="utf-8")
+    (tmp_path / "manifest.json").write_text(
+        json.dumps(
+            {
+                "type": "sliced_obb",
+                "slice_geometry": {
+                    "multiscale_loss_balance": {"enabled": True, "power": power}
+                },
+            }
+        ),
+        encoding="utf-8",
+    )
+    return dataset_yaml
+
+
+def _argv(tmp_path, dataset_yaml, extra=()):
+    return [
+        f"data={dataset_yaml}",
+        f"project={tmp_path / 'runs'}",
+        "name=exp1",
+        *extra,
+    ]
+
+
+def test_ddp_refuses_to_start_a_scale_grouped_run(tmp_path, monkeypatch):
+    from hydra_suite.training.ultralytics_scale_balance import (
+        DDP_UNGROUPED_OPT_OUT_ENV,
+        ScaleGroupedSamplingUnsupportedError,
+    )
+
+    dataset_yaml = _write_enabled_manifest(tmp_path)
+    monkeypatch.setenv("WORLD_SIZE", "2")
+    monkeypatch.delenv(DDP_UNGROUPED_OPT_OUT_ENV, raising=False)
+
+    with pytest.raises(ScaleGroupedSamplingUnsupportedError) as excinfo:
+        install_sahi_scale_balance_and_grouped_sampling(_argv(tmp_path, dataset_yaml))
+
+    assert DDP_UNGROUPED_OPT_OUT_ENV in str(excinfo.value)
+
+
+def test_multi_gpu_device_argument_alone_triggers_the_refusal(tmp_path, monkeypatch):
+    from hydra_suite.training.ultralytics_scale_balance import (
+        DDP_UNGROUPED_OPT_OUT_ENV,
+        ScaleGroupedSamplingUnsupportedError,
+    )
+
+    dataset_yaml = _write_enabled_manifest(tmp_path)
+    monkeypatch.delenv("WORLD_SIZE", raising=False)
+    monkeypatch.delenv(DDP_UNGROUPED_OPT_OUT_ENV, raising=False)
+
+    with pytest.raises(ScaleGroupedSamplingUnsupportedError):
+        install_sahi_scale_balance_and_grouped_sampling(
+            _argv(tmp_path, dataset_yaml, extra=["device=0,1"])
+        )
+
+
+def test_ddp_opt_out_runs_plain_and_stamps_that_nothing_was_applied(
+    tmp_path, monkeypatch
+):
+    from hydra_suite.training.ultralytics_scale_balance import (
+        DDP_UNGROUPED_OPT_OUT_ENV,
+        read_realised_balance_stamp,
+    )
+
+    dataset_yaml = _write_enabled_manifest(tmp_path)
+    monkeypatch.setenv("WORLD_SIZE", "2")
+    monkeypatch.setenv(DDP_UNGROUPED_OPT_OUT_ENV, "1")
+
+    assert not install_sahi_scale_balance_and_grouped_sampling(
+        _argv(tmp_path, dataset_yaml)
+    )
+
+    stamp = read_realised_balance_stamp(tmp_path / "runs" / "exp1")
+    assert stamp is not None
+    assert stamp["requested"] == {"enabled": True, "power": 0.5}
+    assert stamp["applied"]["scale_grouped_batching"] is False
+    assert stamp["applied"]["multiscale_loss_weighting"] is False
+    assert stamp["world_size"] == 2
+    assert stamp["ddp"] is True
+    assert stamp["ddp_opt_out"] is True
+
+
+def test_single_process_run_stamps_that_both_features_were_applied(
+    tmp_path, monkeypatch
+):
+    from hydra_suite.training.ultralytics_scale_balance import (
+        DDP_UNGROUPED_OPT_OUT_ENV,
+        read_realised_balance_stamp,
+    )
+
+    dataset_yaml = _write_enabled_manifest(tmp_path, power=0.25)
+    monkeypatch.delenv("WORLD_SIZE", raising=False)
+    monkeypatch.delenv(DDP_UNGROUPED_OPT_OUT_ENV, raising=False)
+
+    assert install_sahi_scale_balance_and_grouped_sampling(
+        _argv(tmp_path, dataset_yaml)
+    )
+
+    stamp = read_realised_balance_stamp(tmp_path / "runs" / "exp1")
+    assert stamp is not None
+    assert stamp["applied"] == {
+        "scale_grouped_batching": True,
+        "multiscale_loss_weighting": True,
+        "power": 0.25,
+    }
+    assert stamp["world_size"] == 1
+    assert stamp["ddp"] is False

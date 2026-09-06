@@ -31,10 +31,50 @@ _WEIGHT_KEY = "hydra_sahi_scale_loss_weight"
 _PATCH_ATTR = "_hydra_sahi_scale_balance_original"
 
 DDP_UNGROUPED_OPT_OUT_ENV = "HYDRA_SAHI_DDP_ALLOW_UNGROUPED"
+REALISED_STAMP_FILENAME = "hydra_scale_balance.json"
 
 
 class ScaleGroupedSamplingUnsupportedError(RuntimeError):
     """A run requested scale-grouped batching where it cannot be honoured."""
+
+
+def _run_dir_from_argv(argv: Sequence[str]) -> Path | None:
+    """Return the Ultralytics run directory implied by ``project=``/``name=``."""
+
+    values = {
+        key: str(arg).split("=", 1)[1]
+        for key in ("project", "name")
+        for arg in argv
+        if str(arg).startswith(f"{key}=")
+    }
+    project, name = values.get("project", ""), values.get("name", "")
+    if not project or not name:
+        return None
+    return Path(project).expanduser() / name
+
+
+def write_realised_balance_stamp(run_dir: Path, payload: dict[str, Any]) -> Path | None:
+    """Record what the run ACTUALLY did, never what it requested."""
+
+    try:
+        run_dir.mkdir(parents=True, exist_ok=True)
+        target = run_dir / REALISED_STAMP_FILENAME
+        target.write_text(json.dumps(payload, indent=2, sort_keys=True) + "\n", "utf-8")
+        return target
+    except OSError:
+        return None
+
+
+def read_realised_balance_stamp(run_dir: str | Path) -> dict[str, Any] | None:
+    """Return a run's realised balance stamp, or None when absent/corrupt."""
+
+    try:
+        data = json.loads(
+            (Path(run_dir) / REALISED_STAMP_FILENAME).read_text(encoding="utf-8")
+        )
+        return data if isinstance(data, dict) else None
+    except (OSError, ValueError):
+        return None
 
 
 def _ddp_world_size(argv: Sequence[str]) -> int:
@@ -258,8 +298,33 @@ def install_sahi_scale_balance_and_grouped_sampling(
             "grouped batching or loss weighting (the run is then stamped as "
             "un-balanced and is not comparable with a balanced one)."
         )
-    if world_size > 1:
+    run_dir = _run_dir_from_argv(args)
+    applied = world_size == 1
+
+    def _stamp() -> None:
+        if run_dir is None:
+            return
+        write_realised_balance_stamp(
+            run_dir,
+            {
+                "requested": {"enabled": True, "power": settings["power"]},
+                "applied": {
+                    "scale_grouped_batching": applied,
+                    "multiscale_loss_weighting": applied,
+                    "power": settings["power"] if applied else 0.0,
+                },
+                "world_size": world_size,
+                "ddp": world_size > 1,
+                "ddp_opt_out": opt_out,
+            },
+        )
+
+    if not applied:
+        # Opt-out arm: neither intervention runs, and the stamp says so, so the
+        # artifact is not mistakable for a balanced one later.
+        _stamp()
         return False
+    _stamp()
 
     from ultralytics.data.dataset import YOLODataset
     from ultralytics.models.yolo.detect.train import DetectionTrainer
