@@ -253,6 +253,42 @@ def test_density_admission_refuses_4k_five_minute_read_only_replay():
         )
 
 
+def test_density_estimate_accounts_for_exact_multi_arena_grid_masks():
+    """Arena source-block labels and per-arena masks count toward admission."""
+
+    whole_frame = estimate_density_map_working_set(
+        frame_count=50,
+        frame_h=101,
+        frame_w=100,
+        downsample_factor=8,
+        temporal_sigma=0.0,
+    )
+    two_arenas = estimate_density_map_working_set(
+        frame_count=50,
+        frame_h=101,
+        frame_w=100,
+        downsample_factor=8,
+        temporal_sigma=0.0,
+        multi_arena=True,
+        arena_count=2,
+    )
+    four_arenas = estimate_density_map_working_set(
+        frame_count=50,
+        frame_h=101,
+        frame_w=100,
+        downsample_factor=8,
+        temporal_sigma=0.0,
+        multi_arena=True,
+        arena_count=4,
+    )
+
+    assert whole_frame.arena_mask_bytes == 0
+    assert two_arenas.arena_count == 2
+    assert four_arenas.arena_count == 4
+    assert four_arenas.arena_mask_bytes > two_arenas.arena_mask_bytes > 0
+    assert four_arenas.peak_bytes > two_arenas.peak_bytes > whole_frame.peak_bytes
+
+
 def test_density_compute_cancels_during_accumulation(monkeypatch):
     """Cancellation after one frame stops before another frame is accumulated."""
 
@@ -462,6 +498,52 @@ def test_density_actual_nondivisible_remainder_edge_is_not_clipped_away():
     assert len(edge_map.regions) == 1
     assert all(edge_map.regions[0].contains(frame, 99.0, 50.0) for frame in range(3))
     assert float(edge_raw.max()) >= 0.95 * float(interior_raw.max())
+
+
+def test_density_arena_mask_keeps_source_block_straddling_boundary():
+    """A ceil-grid cell may serve both arenas when its source block straddles."""
+
+    from hydra_suite.core.tracking.arenas import ArenaLayout
+
+    labels = np.ones((100, 100), dtype=np.uint16)
+    labels[:, 50:] = 2
+    layout = ArenaLayout(n_arenas=2, animals_per_arena=1, label_image=labels)
+    masks = density_module._arena_grid_masks_from_source_blocks(
+        layout,
+        frame_h=100,
+        frame_w=100,
+        grid_h=13,
+        grid_w=13,
+        ds=8,
+    )
+    # Cell (6, 6) covers source x/y 48..55 and therefore crosses x=50. It
+    # must be retained for both independently tagged arena pipelines.
+    assert masks[:, 6, 6].tolist() == [True, True]
+    x = np.arange(50, 56, dtype=np.float32)
+    detections = (
+        np.column_stack([x, np.full_like(x, 50.0), np.zeros_like(x)]).astype(
+            np.float32
+        ),
+        np.zeros(len(x), dtype=np.float32),
+        np.full(len(x), 16.0, dtype=np.float32),
+    )
+
+    density_map, _ = compute_density_map_from_cache(
+        {frame: detections for frame in range(3)},
+        frame_h=100,
+        frame_w=100,
+        sigma_scale=0.5,
+        temporal_sigma=0.0,
+        threshold=0.1,
+        downsample_factor=8,
+        min_frame_duration=3,
+        min_area_px=1,
+        arena_layout=layout,
+    )
+
+    arena_two = [region for region in density_map.regions if region.arena == 1]
+    assert len(arena_two) == 1
+    assert all(arena_two[0].contains(frame, 52.0, 50.0) for frame in range(3))
 
 
 def test_tag_detections_labels_correctly():

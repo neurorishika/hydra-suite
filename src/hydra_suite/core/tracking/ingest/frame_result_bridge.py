@@ -6,7 +6,7 @@ These replace the UnifiedPrecompute callback wiring (Task 18 integration).
 
 from __future__ import annotations
 
-from typing import TYPE_CHECKING
+from typing import TYPE_CHECKING, Callable
 
 import numpy as np
 
@@ -258,29 +258,29 @@ def populate_live_tag_store(
     )
 
 
-def build_density_cache_dict(
-    runner,  # InferenceRunner (avoided forward ref for flake8)
-    start_frame: int,
-    end_frame: int,
-) -> dict:
-    """Build the {frame_idx: (meas_arr, confs_arr, sizes_arr)} dict needed by
-    the confidence density map computation, reading from the InferenceRunner's
-    detection cache.
+def _raise_if_density_cache_collection_cancelled(
+    should_stop: Callable[[], bool] | None,
+) -> None:
+    """Abort density collection rather than returning a partial cache dict."""
 
-    Args:
-        runner: An InferenceRunner whose caches are already open (batch pass done).
-        start_frame: First frame index to include.
-        end_frame: Last frame index to include (inclusive).
+    if should_stop is not None and should_stop():
+        from hydra_suite.core.tracking.confidence.confidence_density import (
+            ConfidenceDensityCancelled,
+        )
 
-    Returns:
-        Dict mapping frame_idx → (meas_arr (F, 3), confs_arr (F,), sizes_arr (F,)).
-    """
+        raise ConfidenceDensityCancelled(
+            "confidence-density cache collection cancelled before complete evidence "
+            "was available"
+        )
 
-    result: dict = {}
+
+def _density_detection_cache(runner):
+    """Return runner's valid raw detection cache without loading payload frames."""
+
     if runner.cache_dir is None:
-        return result
+        return None
 
-    # Ensure caches are open
+    # Ensure caches are open.
     if runner._caches is None:
         from hydra_suite.core.inference.runner import _open_caches as _oc
 
@@ -293,23 +293,92 @@ def build_density_cache_dict(
         )
 
     det_cache = runner._caches.detection
-    if det_cache is None:
-        return result
+    if det_cache is None or not det_cache.is_valid():
+        return None
+    return det_cache
 
-    # Query the handle's explicit processed-frame index. For new caches this is
-    # manifest metadata; no payload chunk is loaded until read_frame below.
-    # Legacy monolithic NPZ remains supported by the handle.
-    if not det_cache.is_valid():
+
+def density_cache_covered_frame_count(
+    runner,  # InferenceRunner (avoided forward ref for flake8)
+    start_frame: int,
+    end_frame: int,
+    *,
+    should_stop: Callable[[], bool] | None = None,
+) -> int:
+    """Count covered density frames from cache metadata without payload reads.
+
+    Read-only autotuner replay uses this before materializing candidate-filtered
+    OBBs, so an over-budget density volume is refused without decompressing
+    every requested detection chunk. Real cache handles expose normalized
+    coverage ranges; the iterator fallback keeps lightweight test doubles and
+    legacy-compatible callers working.
+    """
+
+    _raise_if_density_cache_collection_cancelled(should_stop)
+    det_cache = _density_detection_cache(runner)
+    if det_cache is None:
+        return 0
+    start, end = int(start_frame), int(end_frame)
+    # Monolithic legacy NPZs do not carry a compact coverage manifest. Reading
+    # their frame-index payload just to size a replay defeats admission, so use
+    # the requested span as a conservative upper bound. The normal replay
+    # cache-validity pass still verifies actual coverage after this safe
+    # refusal point. Chunked caches expose normalized ranges in their small
+    # manifest and keep the exact count below payload materialization.
+    if getattr(det_cache, "is_legacy", False):
+        count = max(0, end - start + 1)
+    else:
+        ranges = getattr(det_cache, "coverage_ranges", None)
+        if callable(ranges):
+            count = sum(
+                max(0, min(int(last), end) - max(int(first), start) + 1)
+                for first, last in ranges()
+            )
+        else:
+            count = sum(1 for _ in det_cache.iter_covered_frames(start, end))
+    _raise_if_density_cache_collection_cancelled(should_stop)
+    return int(count)
+
+
+def build_density_cache_dict(
+    runner,  # InferenceRunner (avoided forward ref for flake8)
+    start_frame: int,
+    end_frame: int,
+    *,
+    should_stop: Callable[[], bool] | None = None,
+) -> dict:
+    """Build the {frame_idx: (meas_arr, confs_arr, sizes_arr)} dict needed by
+    the confidence density map computation, reading from the InferenceRunner's
+    detection cache.
+
+    Args:
+        runner: An InferenceRunner whose caches are already open (batch pass done).
+        start_frame: First frame index to include.
+        end_frame: Last frame index to include (inclusive).
+        should_stop: Optional cooperative cancellation predicate. A stop raises
+            ``ConfidenceDensityCancelled`` instead of returning partial
+            candidate density evidence.
+
+    Returns:
+        Dict mapping frame_idx → (meas_arr (F, 3), confs_arr (F,), sizes_arr (F,)).
+    """
+
+    _raise_if_density_cache_collection_cancelled(should_stop)
+    result: dict = {}
+    det_cache = _density_detection_cache(runner)
+    if det_cache is None:
         return result
 
     unique_fi = det_cache.iter_covered_frames(start_frame, end_frame)
 
     for fi in unique_fi:
+        _raise_if_density_cache_collection_cancelled(should_stop)
         # Use the same cached-replay prefix as TrackingEngineCore.  In
         # particular, this applies the candidate's source-aware filter and
         # InferenceRunner's native-frame ROI conversion before density regions
         # influence assignment costs.
         obb, _ = runner.load_filtered_obb(fi)
+        _raise_if_density_cache_collection_cancelled(should_stop)
         if obb.num_detections == 0:
             result[fi] = (
                 np.zeros((0, 3), dtype=np.float32),

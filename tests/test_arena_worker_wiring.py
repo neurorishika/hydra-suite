@@ -21,8 +21,10 @@ connections, not just that the interfaces exist:
 from __future__ import annotations
 
 from contextlib import contextmanager
+from types import SimpleNamespace
 
 import numpy as np
+import pytest
 
 from hydra_suite.trackerkit.engine_params import RuntimeContext, build_engine_params
 
@@ -489,6 +491,121 @@ class _CachedOBBRunner:
 
     def close(self):
         pass
+
+
+class _LongReplayVideoCapture:
+    """Metadata-only long clip used to pin replay admission ordering."""
+
+    WIDTH = 100
+    HEIGHT = 100
+    NUM_FRAMES = 100_000
+
+    def __init__(self, *_args, **_kwargs):
+        self._idx = 0
+        self._opened = True
+
+    def isOpened(self):
+        return self._opened
+
+    def read(self):
+        # A successful admission would eventually reach the loop, but this
+        # regression must reject before any frame/detection payload is read.
+        return False, None
+
+    def get(self, prop_id):
+        import hydra_suite.core.tracking.worker as _wm
+
+        if prop_id == _wm.cv2.CAP_PROP_FRAME_COUNT:
+            return self.NUM_FRAMES
+        if prop_id == _wm.cv2.CAP_PROP_FPS:
+            return 30.0
+        if prop_id == _wm.cv2.CAP_PROP_FRAME_WIDTH:
+            return self.WIDTH
+        if prop_id == _wm.cv2.CAP_PROP_FRAME_HEIGHT:
+            return self.HEIGHT
+        if prop_id == _wm.cv2.CAP_PROP_POS_FRAMES:
+            return self._idx
+        return 0
+
+    def set(self, prop_id, value):
+        import hydra_suite.core.tracking.worker as _wm
+
+        if prop_id == _wm.cv2.CAP_PROP_POS_FRAMES:
+            self._idx = int(value)
+        return True
+
+    def release(self):
+        self._opened = False
+
+
+class _PreflightDetectionCache:
+    def is_valid(self):
+        return True
+
+    def coverage_ranges(self):
+        return ((0, _LongReplayVideoCapture.NUM_FRAMES - 1),)
+
+    def iter_covered_frames(self, start_frame, end_frame):
+        return range(int(start_frame), int(end_frame) + 1)
+
+
+class _PreflightOBBRunner(_CachedOBBRunner):
+    """A cache whose filtered payload path is forbidden during admission."""
+
+    instances: list["_PreflightOBBRunner"] = []
+
+    def __init__(self, *_a, **_k):
+        super().__init__()
+        self.cache_dir = "cache"
+        self._caches = SimpleNamespace(detection=_PreflightDetectionCache())
+        self.filtered_loads: list[int] = []
+        type(self).instances.append(self)
+
+    def load_filtered_obb(self, frame_idx):
+        self.filtered_loads.append(int(frame_idx))
+        raise AssertionError("over-budget replay must not materialize filtered OBBs")
+
+
+def test_worker_replay_density_preflight_rejects_before_filtered_cache_load(
+    monkeypatch, tmp_path
+):
+    """The byte guard runs before candidate filtering/decompression begins."""
+
+    import hydra_suite.core.tracking.worker as worker_mod
+    from hydra_suite.core.tracking.confidence.confidence_density import (
+        DensityReplayBudgetExceeded,
+    )
+
+    _PreflightOBBRunner.instances.clear()
+    monkeypatch.setattr(worker_mod, "TrackingProfiler", _FakeProfiler)
+    monkeypatch.setattr(worker_mod.cv2, "VideoCapture", _LongReplayVideoCapture)
+    monkeypatch.setattr(worker_mod, "InferenceRunner", _PreflightOBBRunner)
+
+    worker = worker_mod.TrackingEngineCore(
+        str(tmp_path / "video.mp4"),
+        on_finished=lambda *_a: None,
+        preview_mode=True,
+        use_cached_detections=True,
+        cache_read_only_replay=True,
+        inference_cache_dir=tmp_path / "cache",
+        csv_writer_thread=_CapturingCSVWriter(),
+    )
+    params = _bgsub_arena_params(
+        single_arena=True,
+        DETECTION_METHOD="yolo_obb",
+        TRACKING_WORKFLOW_MODE="non_realtime",
+        RESIZE_FACTOR=1.0,
+        END_FRAME=_LongReplayVideoCapture.NUM_FRAMES - 1,
+        ENABLE_CONFIDENCE_DENSITY_MAP=True,
+        AUTOTUNE_DENSITY_MAX_BYTES=1,
+    )
+    worker.set_parameters(params)
+
+    with pytest.raises(DensityReplayBudgetExceeded):
+        worker.run_tracking()
+
+    assert len(_PreflightOBBRunner.instances) == 1
+    assert _PreflightOBBRunner.instances[0].filtered_loads == []
 
 
 def _capture_density_builder_kwargs(monkeypatch, tmp_path, *, single_arena):

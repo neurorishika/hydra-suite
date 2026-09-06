@@ -65,8 +65,9 @@ class DensityMapMemoryEstimate:
     connected-component labels, and one uint8-per-voxel bookkeeping margin.
     In multi-arena mode those transient phases also include the retained
     aggregate float32/uint8 diagnostic volumes and the per-arena float32 work
-    volume.  Chunked smoothing substitutes its largest extended temporal
-    chunk for a full float32 volume, but labeling remains full-volume.
+    volume, exact source-block labels, and one boolean grid mask per arena.
+    Chunked smoothing substitutes its largest extended temporal chunk for a
+    full float32 volume, but labeling remains full-volume.
     """
 
     frame_count: int
@@ -74,12 +75,14 @@ class DensityMapMemoryEstimate:
     grid_w: int
     voxel_count: int
     timeline_bytes: int
+    arena_mask_bytes: int
     accumulation_peak_bytes: int
     smoothing_peak_bytes: int
     labeling_peak_bytes: int
     peak_bytes: int
     uses_chunked_smoothing: bool
     multi_arena: bool
+    arena_count: int
 
 
 class DensityReplayBudgetExceeded(RuntimeError):
@@ -154,6 +157,7 @@ def estimate_density_map_working_set(
     *,
     temporal_sigma: float = 2.0,
     multi_arena: bool = False,
+    arena_count: int = 1,
 ) -> DensityMapMemoryEstimate:
     """Estimate a conservative peak for density-map arrays without allocating.
 
@@ -163,9 +167,10 @@ def estimate_density_map_working_set(
     output/workspace and threshold temporaries; connected-components need an
     int32 label volume.  Multi-arena maps retain aggregate float32/uint8
     diagnostic volumes plus one float32 work volume while processing each
-    arena.  Above :data:`_FULL_SMOOTH_MAX_BYTES`, the implementation smooths
-    chunks, and this estimate uses the largest extended chunk; labeling is
-    still a full-volume operation.
+    arena, plus exact source-block labels and a bool grid mask for every arena.
+    Above :data:`_FULL_SMOOTH_MAX_BYTES`, the implementation smooths chunks,
+    and this estimate uses the largest extended chunk; labeling is still
+    full-volume.
 
     The returned bound intentionally excludes the caller-owned detection cache
     and arbitrary Python component metadata.  It is an admission guard, not a
@@ -175,6 +180,9 @@ def estimate_density_map_working_set(
     frames = int(frame_count)
     if frames < 0:
         raise ValueError("frame_count must be non-negative")
+    requested_arena_count = int(arena_count)
+    if requested_arena_count < 1:
+        raise ValueError("arena_count must be positive")
     _ds, grid_h, grid_w = _density_grid_shape(frame_h, frame_w, downsample_factor)
     voxels = frames * grid_h * grid_w
     float_bytes = voxels * np.dtype(np.float32).itemsize
@@ -186,14 +194,32 @@ def estimate_density_map_working_set(
     uses_chunked_smoothing = float_bytes > _FULL_SMOOTH_MAX_BYTES
 
     if multi_arena:
+        # `_arena_grid_masks_from_source_blocks` retains one bool mask per
+        # arena. The exact source-frame label image may be resized lazily by
+        # the layout, and a non-divisible source frame creates a padded copy;
+        # reserve a full int64 source-grid margin to avoid depending on the UI
+        # label dtype or cache residency. Its block reshape is a view.
+        padded_h = grid_h * _ds
+        padded_w = grid_w * _ds
+        source_label_pad_bytes = padded_h * padded_w * np.dtype(np.int64).itemsize
+        arena_mask_bytes = (
+            requested_arena_count * grid_h * grid_w * np.dtype(np.bool_).itemsize
+            + source_label_pad_bytes
+        )
         # Aggregate float32 + uint8 diagnostic volumes and one arena's work
         # float32 volume remain resident across every arena iteration.
         retained_bytes = float_bytes * 2 + binary_bytes
-        accumulation = timeline_bytes + retained_bytes
+        accumulation = timeline_bytes + retained_bytes + arena_mask_bytes
         labeling = (
-            timeline_bytes + retained_bytes + binary_bytes + label_bytes + binary_bytes
+            timeline_bytes
+            + retained_bytes
+            + arena_mask_bytes
+            + binary_bytes
+            + label_bytes
+            + binary_bytes
         )
     else:
+        arena_mask_bytes = 0
         retained_bytes = float_bytes
         accumulation = timeline_bytes + retained_bytes
         labeling = (
@@ -213,6 +239,7 @@ def estimate_density_map_working_set(
         smoothing = (
             timeline_bytes
             + retained_bytes
+            + arena_mask_bytes
             + binary_bytes
             + chunk_float_bytes * 2
             + chunk_binary_bytes * 2
@@ -224,6 +251,7 @@ def estimate_density_map_working_set(
         smoothing = (
             timeline_bytes
             + retained_bytes
+            + arena_mask_bytes
             + binary_bytes
             + float_bytes * 2
             + binary_bytes * 2
@@ -236,12 +264,14 @@ def estimate_density_map_working_set(
         grid_w=grid_w,
         voxel_count=voxels,
         timeline_bytes=timeline_bytes,
+        arena_mask_bytes=arena_mask_bytes,
         accumulation_peak_bytes=accumulation,
         smoothing_peak_bytes=smoothing,
         labeling_peak_bytes=labeling,
         peak_bytes=peak,
         uses_chunked_smoothing=uses_chunked_smoothing,
         multi_arena=bool(multi_arena),
+        arena_count=requested_arena_count if multi_arena else 0,
     )
 
 
@@ -264,6 +294,7 @@ def admit_density_map_working_set(
     *,
     temporal_sigma: float = 2.0,
     multi_arena: bool = False,
+    arena_count: int = 1,
     max_working_bytes: int | None = None,
 ) -> DensityMapMemoryEstimate:
     """Return an estimate or raise before a requested density allocation.
@@ -280,6 +311,7 @@ def admit_density_map_working_set(
         downsample_factor,
         temporal_sigma=temporal_sigma,
         multi_arena=multi_arena,
+        arena_count=arena_count,
     )
     if max_working_bytes is None:
         return estimate
@@ -939,6 +971,53 @@ def _scaled_for_grid(meas, sizes, ds):
     return meas, sizes
 
 
+def _arena_grid_masks_from_source_blocks(
+    arena_layout: "ArenaLayout",
+    *,
+    frame_h: int,
+    frame_w: int,
+    grid_h: int,
+    grid_w: int,
+    ds: int,
+    should_stop: Callable[[], bool] | None = None,
+) -> np.ndarray:
+    """Return one exact source-block membership mask per arena grid cell.
+
+    Detection centres map to ``floor(x / ds), floor(y / ds)``. Resizing a
+    source label image to the grid uses a different global transform when the
+    dimensions are not multiples of ``ds`` and can erase a valid arena's
+    signal at a boundary. Each grid cell instead represents its precise source
+    block ``[gx*ds:(gx+1)*ds, gy*ds:(gy+1)*ds]``. A cell crossing an arena wall
+    belongs to both masks; the separately tagged regions still prevent any
+    cross-arena assignment effect.
+    """
+
+    _raise_if_density_cancelled(should_stop)
+    source_labels = arena_layout.label_image_for_size(frame_w, frame_h)
+    if source_labels is None:
+        return np.zeros((int(arena_layout.n_arenas), grid_h, grid_w), dtype=np.bool_)
+    padded_h = int(grid_h) * int(ds)
+    padded_w = int(grid_w) * int(ds)
+    pad_bottom = max(0, padded_h - int(frame_h))
+    pad_right = max(0, padded_w - int(frame_w))
+    padded_labels = (
+        np.pad(
+            source_labels,
+            ((0, pad_bottom), (0, pad_right)),
+            mode="constant",
+            constant_values=0,
+        )
+        if pad_bottom or pad_right
+        else source_labels
+    )
+    source_blocks = padded_labels.reshape(grid_h, ds, grid_w, ds)
+    masks = np.zeros((int(arena_layout.n_arenas), grid_h, grid_w), dtype=np.bool_)
+    for arena_id in range(int(arena_layout.n_arenas)):
+        _raise_if_density_cancelled(should_stop)
+        masks[arena_id] = (source_blocks == (arena_id + 1)).any(axis=(1, 3))
+    return masks
+
+
 def _scale_region_bboxes_to_frame(
     regions: List[DensityRegion],
     *,
@@ -1053,9 +1132,18 @@ def _compute_density_map_per_arena(
                 arena_layout.arena_of_points(meas[:, :2], frame_size=(frame_w, frame_h))
             )
 
-    # Arena label image at grid resolution (nearest-neighbour, cached by the
-    # layout). Labels are 1-based with 0 meaning "outside every arena".
-    grid_labels = arena_layout.label_image_for_size(grid_w, grid_h)
+    # Membership derives from exact source-frame blocks, not a globally
+    # resized label image. See `_arena_grid_masks_from_source_blocks` for why
+    # a cell spanning a wall legitimately belongs to both arenas.
+    arena_grid_masks = _arena_grid_masks_from_source_blocks(
+        arena_layout,
+        frame_h=frame_h,
+        frame_w=frame_w,
+        grid_h=grid_h,
+        grid_w=grid_w,
+        ds=ds,
+        should_stop=should_stop,
+    )
 
     total_grids = np.zeros((n_total, grid_h, grid_w), dtype=np.float32)
     binary_total = np.zeros((n_total, grid_h, grid_w), dtype=np.uint8)
@@ -1085,8 +1173,7 @@ def _compute_density_map_per_arena(
         # Mask to this arena's own pixels: a Gaussian tail that spills over the
         # wall must not be able to seed a region on the other side. float32
         # multiply by an exact 0.0/1.0 mask leaves in-arena values bit-exact.
-        mask = (grid_labels == (arena_id + 1)).astype(np.float32)
-        work *= mask[None, :, :]
+        work *= arena_grid_masks[arena_id][None, :, :]
 
         binary = smooth_and_binarize(
             work,
@@ -1269,6 +1356,7 @@ def compute_density_map_from_cache(
             ds,
             temporal_sigma=temporal_sigma,
             multi_arena=multi_arena,
+            arena_count=int(arena_layout.n_arenas) if multi_arena else 1,
             max_working_bytes=max_working_bytes,
         )
 

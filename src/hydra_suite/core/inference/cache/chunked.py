@@ -272,6 +272,45 @@ def _load_npz_bounded(path: Path, *, max_bytes: int) -> dict[str, np.ndarray]:
         return {name: raw[name] for name in raw.files}
 
 
+def _load_npz_scalar_member(
+    path: Path,
+    name: str,
+    *,
+    archive_metadata: dict[str, tuple[tuple[int, ...], np.dtype]],
+    dtype_kinds: str,
+):
+    """Read one already-inspected scalar NPZ member without materializing peers.
+
+    Legacy caches are monolithic.  Metadata callers need only their cache key,
+    so opening the whole archive through ``np.load(path)`` would unnecessarily
+    allocate every detection payload.  ``_inspect_npz`` has already bounded
+    the archive and checked every NPY header; validate the requested scalar
+    again before asking NumPy to decode that one member.
+    """
+    try:
+        shape, dtype = archive_metadata[name]
+    except KeyError as exc:
+        raise ValueError(f"NPZ member {name!r} is missing") from exc
+    if shape != (1,) or dtype.kind not in dtype_kinds:
+        raise ValueError(f"NPZ member {name!r} must be a scalar {dtype_kinds!r} array")
+    try:
+        with zipfile.ZipFile(path) as archive, archive.open(f"{name}.npy") as member:
+            value = np.load(member, allow_pickle=False)
+    except (
+        zipfile.BadZipFile,
+        EOFError,
+        NotImplementedError,
+        OSError,
+        OverflowError,
+        RuntimeError,
+        ValueError,
+    ) as exc:
+        raise ValueError(f"unable to read NPZ member {name!r}") from exc
+    if value.ndim != 1 or value.size != 1 or value.dtype.kind not in dtype_kinds:
+        raise ValueError(f"NPZ member {name!r} changed while being read")
+    return value[0]
+
+
 def _json_no_duplicate_keys(encoded: str):
     def build(pairs):
         result = {}
@@ -481,31 +520,33 @@ class ChunkedArrayStore:
             archive_metadata = _inspect_npz(
                 self.path, max_uncompressed_bytes=MAX_LEGACY_BYTES
             )
-            raw = _load_npz_bounded(
-                self.path,
-                max_bytes=(
-                    MAX_MANIFEST_BYTES
-                    if _FORMAT_FIELD in archive_metadata
-                    else MAX_LEGACY_BYTES
-                ),
-            )
-            files = set(raw)
-            if _FORMAT_FIELD not in files:
+            if _FORMAT_FIELD not in archive_metadata:
+                # The legacy format is a monolithic payload archive.  Do not
+                # materialize that payload merely to answer a metadata query
+                # such as ``is_legacy`` or ``is_valid``: cache_key.npy is a
+                # bounded scalar, while detections may be hundreds of MiB.
                 self._legacy = True
-                cache_key = raw.get("cache_key")
-                if cache_key is not None:
-                    if cache_key.dtype.kind not in "US":
-                        return
-                    stored_key = str(_scalar(raw, "cache_key"))
+                if "cache_key" in archive_metadata:
+                    stored_key = str(
+                        _load_npz_scalar_member(
+                            self.path,
+                            "cache_key",
+                            archive_metadata=archive_metadata,
+                            dtype_kinds="US",
+                        )
+                    )
                     self._stored_key = stored_key
                     self._valid = (
                         not self.require_key or stored_key == self.key.as_string()
                     )
-                elif self.require_key:
-                    return
-                else:
+                elif not self.require_key:
                     self._valid = True
                 return
+            raw = _load_npz_bounded(
+                self.path,
+                max_bytes=MAX_MANIFEST_BYTES,
+            )
+            files = set(raw)
             if files != {
                 _FORMAT_FIELD,
                 "cache_kind",

@@ -85,6 +85,7 @@ from hydra_suite.core.inference.config import (  # noqa: E402
 from hydra_suite.core.inference.runner import InferenceRunner  # noqa: E402
 from hydra_suite.core.tracking.ingest.frame_result_bridge import (  # noqa: E402
     build_density_cache_dict,
+    density_cache_covered_frame_count,
     evidence_cache_for_cnn_phase_state,
     frame_result_to_meas,
     populate_live_cnn_store,
@@ -1040,6 +1041,10 @@ class TrackingEngineCore:
         bgsub_runner = None  # InferenceRunner for background-subtraction mode
         use_cached_detections = False
         _density_source_signature = None
+        # Read-only replay performs density admission before cache reuse is
+        # deeply validated/materialized. The exact covered-frame count is
+        # retained for the later build so it need not inspect the cache twice.
+        _density_replay_frame_count: int | None = None
 
         # Identity Phase 3, Task 4: resolve the catalog + per-phase calibration
         # ONCE, ahead of the yolo_obb InferenceRunner construction below, so
@@ -1113,6 +1118,50 @@ class TrackingEngineCore:
                 roi_mask=p.get("ROI_MASK"),
                 identity_evidence=_identity_evidence_run_config,
             )
+            if self.cache_read_only_replay and density_map_enabled:
+                # Refuse an unaffordable candidate before ``caches_all_valid``
+                # performs its deep legacy/chunk validation or the density
+                # bridge filters and decompresses OBB payloads. The bridge
+                # reads a compact chunk manifest, or uses the requested span
+                # as a conservative legacy upper bound.
+                from hydra_suite.core.tracking.confidence.confidence_density import (
+                    DEFAULT_AUTOTUNE_DENSITY_MAX_BYTES,
+                    admit_density_map_working_set,
+                )
+
+                _density_preflight_h = int(cap.get(cv2.CAP_PROP_FRAME_HEIGHT))
+                _density_preflight_w = int(cap.get(cv2.CAP_PROP_FRAME_WIDTH))
+                _density_preflight_ds = int(p.get("DENSITY_DOWNSAMPLE_FACTOR", 8))
+                _density_preflight_multi_arena = bool(
+                    self.arena_layout is not None
+                    and not self.arena_layout.is_single_arena
+                    and self.arena_layout.label_image is not None
+                )
+                _density_replay_frame_count = density_cache_covered_frame_count(
+                    inference_runner,
+                    start_frame,
+                    end_frame,
+                    should_stop=self._is_stop_requested,
+                )
+                admit_density_map_working_set(
+                    _density_replay_frame_count,
+                    _density_preflight_h,
+                    _density_preflight_w,
+                    _density_preflight_ds,
+                    temporal_sigma=float(p.get("DENSITY_TEMPORAL_SIGMA", 2.0)),
+                    multi_arena=_density_preflight_multi_arena,
+                    arena_count=(
+                        int(self.arena_layout.n_arenas)
+                        if _density_preflight_multi_arena
+                        else 1
+                    ),
+                    max_working_bytes=int(
+                        p.get(
+                            "AUTOTUNE_DENSITY_MAX_BYTES",
+                            DEFAULT_AUTOTUNE_DENSITY_MAX_BYTES,
+                        )
+                    ),
+                )
             # A density sidecar is valid only for the raw detection generation
             # used by this runner, not merely for the cache directory it shares
             # with past detector/model configurations.
@@ -1436,6 +1485,7 @@ class TrackingEngineCore:
                         DEFAULT_AUTOTUNE_DENSITY_MAX_BYTES,
                         ConfidenceDensityCancelled,
                         DensityReplayBudgetExceeded,
+                        admit_density_map_working_set,
                         compute_density_map_from_cache,
                         export_diagnostic_video,
                         save_regions,
@@ -1444,20 +1494,11 @@ class TrackingEngineCore:
                     _frame_h = int(cap.get(_cv2.CAP_PROP_FRAME_HEIGHT))
                     _frame_w = int(cap.get(_cv2.CAP_PROP_FRAME_WIDTH))
 
-                    # Build {frame_idx: (meas_arr, confs_arr, sizes_arr)} from runner caches
-                    _cache_dict = build_density_cache_dict(
-                        inference_runner, start_frame, end_frame
-                    )
-
-                    def _density_progress(pct, msg):
-                        logger.info(msg)
-                        self._emit_progress(pct, msg)
-
-                    logger.info("Computing confidence density map...")
-                    self._emit_progress(0, "Computing confidence density map...")
-
                     # Compute min_area_px in grid-pixel units from body-size fraction.
                     _density_ds = int(p.get("DENSITY_DOWNSAMPLE_FACTOR", 8))
+                    _density_temporal_sigma = float(
+                        p.get("DENSITY_TEMPORAL_SIGMA", 2.0)
+                    )
                     _body_size_px = float(p.get("REFERENCE_BODY_SIZE", 20.0)) * float(
                         p.get("RESIZE_FACTOR", 1.0)
                     )
@@ -1467,12 +1508,73 @@ class TrackingEngineCore:
                         * _body_size_grid**2
                     )
 
+                    _density_budget = (
+                        int(
+                            p.get(
+                                "AUTOTUNE_DENSITY_MAX_BYTES",
+                                DEFAULT_AUTOTUNE_DENSITY_MAX_BYTES,
+                            )
+                        )
+                        if self.cache_read_only_replay
+                        else None
+                    )
+                    if self.cache_read_only_replay:
+                        # Count cache coverage from manifest metadata before
+                        # filtering/decompressing every OBB frame. An
+                        # over-budget read-only candidate must retain the
+                        # baseline without paying the very allocation cost the
+                        # density admission guard is designed to prevent.
+                        _covered_density_frames = _density_replay_frame_count
+                        if _covered_density_frames is None:
+                            _covered_density_frames = density_cache_covered_frame_count(
+                                inference_runner,
+                                start_frame,
+                                end_frame,
+                                should_stop=self._is_stop_requested,
+                            )
+                        _density_multi_arena = bool(
+                            self.arena_layout is not None
+                            and not self.arena_layout.is_single_arena
+                            and self.arena_layout.label_image is not None
+                        )
+                        admit_density_map_working_set(
+                            _covered_density_frames,
+                            _frame_h,
+                            _frame_w,
+                            _density_ds,
+                            temporal_sigma=_density_temporal_sigma,
+                            multi_arena=_density_multi_arena,
+                            arena_count=(
+                                int(self.arena_layout.n_arenas)
+                                if _density_multi_arena
+                                else 1
+                            ),
+                            max_working_bytes=_density_budget,
+                        )
+
+                    # Build candidate-filtered native-frame detections only
+                    # after replay admission. This remains the exact cached
+                    # replay filter/ROI path used by tracking itself.
+                    _cache_dict = build_density_cache_dict(
+                        inference_runner,
+                        start_frame,
+                        end_frame,
+                        should_stop=self._is_stop_requested,
+                    )
+
+                    def _density_progress(pct, msg):
+                        logger.info(msg)
+                        self._emit_progress(pct, msg)
+
+                    logger.info("Computing confidence density map...")
+                    self._emit_progress(0, "Computing confidence density map...")
+
                     _dm, _raw_grids = compute_density_map_from_cache(
                         detection_cache=_cache_dict,
                         frame_h=_frame_h,
                         frame_w=_frame_w,
                         sigma_scale=float(p.get("DENSITY_GAUSSIAN_SIGMA_SCALE", 1.0)),
-                        temporal_sigma=float(p.get("DENSITY_TEMPORAL_SIGMA", 2.0)),
+                        temporal_sigma=_density_temporal_sigma,
                         threshold=float(p.get("DENSITY_BINARIZE_THRESHOLD", 0.3)),
                         downsample_factor=int(p.get("DENSITY_DOWNSAMPLE_FACTOR", 8)),
                         min_frame_duration=int(p.get("DENSITY_MIN_FRAME_DURATION", 3)),
@@ -1489,16 +1591,7 @@ class TrackingEngineCore:
                         # density evidence or fail validation explicitly.  The
                         # bounded admission guard is intentionally replay-only;
                         # ordinary production tracking remains uncapped here.
-                        max_working_bytes=(
-                            int(
-                                p.get(
-                                    "AUTOTUNE_DENSITY_MAX_BYTES",
-                                    DEFAULT_AUTOTUNE_DENSITY_MAX_BYTES,
-                                )
-                            )
-                            if self.cache_read_only_replay
-                            else None
-                        ),
+                        max_working_bytes=_density_budget,
                         should_stop=self._is_stop_requested,
                     )
                     self._density_regions = _dm.regions
