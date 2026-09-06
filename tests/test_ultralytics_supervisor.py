@@ -567,8 +567,12 @@ def _cuda_device(free_bytes, total_bytes=64 * 1024**3):
     )
 
 
-def _fake_probe(kind, name=None, free=None, total=None):
-    """A `probe_resources` double accepting both call shapes."""
+def _fake_probe_resources(host, gpu_free=None, gpu_total=None):
+    """A `probe_resources` double accepting both call shapes.
+
+    ``host`` is ``(total_host_bytes, available_host_bytes)``; ``gpu_free`` is
+    what a CUDA-kind observation reports as available device memory.
+    """
 
     from hydra_suite.runtime.resource_budget import AcceleratorKind, ResourceObservation
 
@@ -579,8 +583,8 @@ def _fake_probe(kind, name=None, free=None, total=None):
                 available_host_bytes=available_host,
                 accelerator_kind=AcceleratorKind.CUDA,
                 accelerator_name=accelerator_name or "NVIDIA Test",
-                total_accelerator_bytes=total or 64 * 1024**3,
-                available_accelerator_bytes=free,
+                total_accelerator_bytes=gpu_total or 64 * 1024**3,
+                available_accelerator_bytes=gpu_free,
             )
         return ResourceObservation(
             total_host_bytes=total_host,
@@ -588,7 +592,7 @@ def _fake_probe(kind, name=None, free=None, total=None):
             accelerator_kind=AcceleratorKind.CPU,
         )
 
-    total_host, available_host = kind
+    total_host, available_host = host
     return probe
 
 
@@ -605,6 +609,13 @@ def _launch_sidecar(monkeypatch, mod, launched):
 
     class Sidecar:
         def __init__(self, plan, **kwargs):
+            # The real SupervisedSidecar runs this before launching. Swallowing
+            # it would leave the downgrade's `budget = legacy` untested: the
+            # prelaunch accelerator gate is the second place the widening could
+            # newly refuse.
+            check = kwargs.get("prelaunch_check")
+            if check is not None:
+                check()
             launched.append(plan)
             self.process = Process()
             self.output = Output()
@@ -630,7 +641,9 @@ def _bare_ordinal_run(monkeypatch, tmp_path, *, host, gpu_free, device="0"):
     monkeypatch.setattr(
         preflight, "_probe_cuda_device", lambda dev: _cuda_device(gpu_free)
     )
-    monkeypatch.setattr(mod, "probe_resources", _fake_probe(host, free=gpu_free))
+    monkeypatch.setattr(
+        mod, "probe_resources", _fake_probe_resources(host, gpu_free=gpu_free)
+    )
     launched = []
     _launch_sidecar(monkeypatch, mod, launched)
     spec = _spec(tmp_path)
@@ -742,7 +755,7 @@ def test_the_widened_classification_keeps_device_zero_in_the_launch_command(
     monkeypatch.setattr(
         mod,
         "probe_resources",
-        _fake_probe((256 * 1024**3, 200 * 1024**3), free=40 * 1024**3),
+        _fake_probe_resources((256 * 1024**3, 200 * 1024**3), gpu_free=40 * 1024**3),
     )
     launched = []
     _launch_sidecar(monkeypatch, mod, launched)
@@ -776,3 +789,47 @@ def test_a_bare_ordinal_without_cuda_still_returns_cpu_rather_than_raising(
     monkeypatch.setattr(preflight, "_probe_cuda_device", absent)
     assert mod._accelerator("0") == (mod.AcceleratorKind.CPU, None)
     assert asked == ["cuda:0"]
+
+
+def test_ending_the_warning_period_is_a_one_line_change(monkeypatch, tmp_path):
+    """Requirement 4: flipping the named constant must actually restore the
+    refusal, so the flag can never quietly become inert."""
+
+    import hydra_suite.training.ultralytics_supervisor as mod
+
+    monkeypatch.setattr(mod, "BARE_ORDINAL_ACCELERATOR_GATE_WARNING_PERIOD", False)
+    result, log, launched = _bare_ordinal_run(
+        monkeypatch,
+        tmp_path,
+        host=(256 * 1024**3, 200 * 1024**3),
+        gpu_free=1 * 1024**3,
+    )
+
+    assert result["success"] is False
+    assert result["failure_kind"] == ExitKind.HOST_ADMISSION_REFUSAL.value
+    assert launched == []
+    assert result["admission_warnings"] == []
+    assert not any("FUTURE RELEASE" in line for line in log)
+
+
+def test_a_downgraded_run_is_recorded_in_the_durable_telemetry(monkeypatch, tmp_path):
+    """`result["admission_warnings"]` has no consumer in src/; the telemetry
+    dict is what gets persisted, so the downgrade must be stamped there."""
+
+    result, _log, _launched = _bare_ordinal_run(
+        monkeypatch,
+        tmp_path,
+        host=(256 * 1024**3, 200 * 1024**3),
+        gpu_free=1 * 1024**3,
+    )
+    telemetry = result["resource_telemetry"]
+    assert telemetry["admission_downgraded"] is True
+    assert any("FUTURE RELEASE" in item for item in telemetry["admission_warnings"])
+
+    clean, _log2, _launched2 = _bare_ordinal_run(
+        monkeypatch,
+        tmp_path,
+        host=(256 * 1024**3, 200 * 1024**3),
+        gpu_free=40 * 1024**3,
+    )
+    assert clean["resource_telemetry"]["admission_downgraded"] is False

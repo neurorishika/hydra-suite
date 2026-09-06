@@ -29,6 +29,7 @@ from hydra_suite.runtime.resource_budget import (
     AcceleratorKind,
     GiB,
     PhaseEstimate,
+    ResourceObservation,
     ResourcePolicy,
     ResourceRequest,
     WorkLimits,
@@ -58,6 +59,10 @@ from hydra_suite.training.yolo_autobatch import (
 #: instead admitted with a loud warning and host-only accounting -- exactly the
 #: accounting it had before the widening. Nothing else is downgraded: a run the
 #: PRE-CHANGE evaluation would also have refused is still refused.
+#:
+#: The warning re-emits once per rung of the bounded OOM-retry ladder: that is
+#: INTENDED, not a duplicate -- each rung carries a different batch and so a
+#: different estimate, and a later rung may clear the gate on its own.
 #:
 #: TO END THE WARNING PERIOD: set this to False (then delete this constant and
 #: the `_bare_ordinal_gate_warning` branch in `_run_ultralytics_once`).
@@ -97,6 +102,20 @@ def _accelerator(device: str):
         if value.startswith("cuda"):
             raise RuntimeError("the requested CUDA device is unavailable")
     return AcceleratorKind.CPU, None
+
+
+def _stamp_admission(telemetry: dict, warnings: list[str]) -> dict:
+    """Record a warning-period downgrade in the DURABLE telemetry record.
+
+    On a downgrade the persisted budget is the host-only one -- correct, that
+    is what containment enforced -- but the run really executed on CUDA with a
+    device pin. Without this stamp a later reader concludes it was host-only.
+    """
+
+    stamped = dict(telemetry or {})
+    stamped["admission_downgraded"] = bool(warnings)
+    stamped["admission_warnings"] = list(warnings)
+    return stamped
 
 
 def _gib(value: int) -> str:
@@ -240,8 +259,20 @@ def _run_ultralytics_once(
         # THAT admits is the refusal newly introduced by the widening; any
         # refusal it reproduces (host, and every non-admission refusal further
         # down: lease, prelaunch, dataset) is left to refuse untouched.
+        #
+        # It is derived from the SAME observation rather than probed again:
+        # a second psutil reading milliseconds later could show more free host
+        # memory and so admit a genuine HOST refusal, which is exactly the
+        # broad suppression this design forbids. Sharing one observation means
+        # `legacy` and `budget` can differ ONLY in the accelerator refusal --
+        # which is the whole scoping argument in one sentence.
         legacy = evaluate_resource_request(
-            request(0), probe_resources(AcceleratorKind.CPU), policy
+            request(0),
+            ResourceObservation(
+                total_host_bytes=initial.total_host_bytes,
+                available_host_bytes=initial.available_host_bytes,
+            ),
+            policy,
         )
         if legacy.admitted:
             warning = _bare_ordinal_gate_warning(spec.device, budget)
@@ -255,8 +286,9 @@ def _run_ultralytics_once(
             "failure_kind": ExitKind.HOST_ADMISSION_REFUSAL.value,
             "error_message": "; ".join(budget.refusals),
             "admission_warnings": admission_warnings,
-            "resource_telemetry": resource_telemetry(
-                budget, hard_host_bytes=0, soft_host_bytes=0
+            "resource_telemetry": _stamp_admission(
+                resource_telemetry(budget, hard_host_bytes=0, soft_host_bytes=0),
+                admission_warnings,
             ),
         }
     hard = min(budget.usable_host_bytes, estimate)
@@ -334,6 +366,7 @@ def _run_ultralytics_once(
             "success": False,
             "failure_kind": ExitKind.HOST_ADMISSION_REFUSAL.value,
             "error_message": bounded_terminal_text(exc),
+            "admission_warnings": admission_warnings,
         }
     try:
         while sidecar.process is not None and sidecar.process.poll() is None:
@@ -358,6 +391,7 @@ def _run_ultralytics_once(
                     "failure_kind": ExitKind.CANCELED.value,
                     "error_message": "Ultralytics training canceled.",
                     "hard_host_bytes": hard,
+                    "admission_warnings": admission_warnings,
                 }
             if eof:
                 time.sleep(POLL_SECONDS)
@@ -379,15 +413,18 @@ def _run_ultralytics_once(
         "peak_tree_rss_bytes": result.peak_tree_rss_bytes,
         "peak_accelerator_bytes": result.peak_accelerator_bytes,
         "dropped_output_lines": result.dropped_output_lines,
-        "resource_telemetry": resource_telemetry(
-            budget,
-            hard_host_bytes=hard,
-            soft_host_bytes=soft,
-            result=result,
-            effective_parameters={
-                "imgsz": int(spec.hyperparams.imgsz),
-                "cache": bool(spec.hyperparams.cache),
-            },
+        "resource_telemetry": _stamp_admission(
+            resource_telemetry(
+                budget,
+                hard_host_bytes=hard,
+                soft_host_bytes=soft,
+                result=result,
+                effective_parameters={
+                    "imgsz": int(spec.hyperparams.imgsz),
+                    "cache": bool(spec.hyperparams.cache),
+                },
+            ),
+            admission_warnings,
         ),
     }
 
