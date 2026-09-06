@@ -928,6 +928,30 @@
     </span>
   </a>
   
+    <nav class="md-nav" aria-label="Configuration">
+      <ul class="md-nav__list">
+        
+          <li class="md-nav__item">
+  <a href="#batch-size" class="md-nav__link">
+    <span class="md-ellipsis">
+      Batch size
+    </span>
+  </a>
+  
+</li>
+        
+          <li class="md-nav__item">
+  <a href="#sam3-batch" class="md-nav__link">
+    <span class="md-ellipsis">
+      SAM3 batch
+    </span>
+  </a>
+  
+</li>
+        
+      </ul>
+    </nav>
+  
 </li>
       
         <li class="md-nav__item">
@@ -1881,6 +1905,30 @@
     </span>
   </a>
   
+    <nav class="md-nav" aria-label="Configuration">
+      <ul class="md-nav__list">
+        
+          <li class="md-nav__item">
+  <a href="#batch-size" class="md-nav__link">
+    <span class="md-ellipsis">
+      Batch size
+    </span>
+  </a>
+  
+</li>
+        
+          <li class="md-nav__item">
+  <a href="#sam3-batch" class="md-nav__link">
+    <span class="md-ellipsis">
+      SAM3 batch
+    </span>
+  </a>
+  
+</li>
+        
+      </ul>
+    </nav>
+  
 </li>
       
         <li class="md-nav__item">
@@ -2024,14 +2072,190 @@ derivation refuses roles that require unavailable fidelity.</p>
 <p>Publishing is disabled by default for headless plans. Successful checkpoints
 remain in <code>&lt;workspace&gt;/runs/&lt;run-id&gt;/</code>. Enable <code>publish.auto_import</code> only when
 the server's HYDRA model registry is the intended destination.</p>
+<h3 id="batch-size">Batch size<a class="headerlink" href="#batch-size" title="Permanent link">&para;</a></h3>
+<p><code>training.batch</code> defaults to <code>16</code>. Setting it to <code>-1</code> means "let Ultralytics
+size the batch before launch": a short, contained resolution child runs
+Ultralytics' own autobatch, and the number it reports is clamped to
+<code>[1, 64]</code> — <code>64</code> is the largest batch Ultralytics actually profiles rather than
+extrapolates to from a linear fit.</p>
+<p>The resolved value and where it came from land in
+<code>&lt;run_dir&gt;/batch_resolution.json</code>:</p>
+<div class="language-json highlight"><pre><span></span><code><span id="__span-2-1"><a id="__codelineno-2-1" name="__codelineno-2-1" href="#__codelineno-2-1"></a><span class="p">{</span>
+</span><span id="__span-2-2"><a id="__codelineno-2-2" name="__codelineno-2-2" href="#__codelineno-2-2"></a><span class="w">  </span><span class="nt">"requested"</span><span class="p">:</span><span class="w"> </span><span class="mi">-1</span><span class="p">,</span>
+</span><span id="__span-2-3"><a id="__codelineno-2-3" name="__codelineno-2-3" href="#__codelineno-2-3"></a><span class="w">  </span><span class="nt">"resolved"</span><span class="p">:</span><span class="w"> </span><span class="mi">24</span><span class="p">,</span>
+</span><span id="__span-2-4"><a id="__codelineno-2-4" name="__codelineno-2-4" href="#__codelineno-2-4"></a><span class="w">  </span><span class="nt">"provenance"</span><span class="p">:</span><span class="w"> </span><span class="s2">"ultralytics_autobatch"</span><span class="p">,</span>
+</span><span id="__span-2-5"><a id="__codelineno-2-5" name="__codelineno-2-5" href="#__codelineno-2-5"></a><span class="w">  </span><span class="nt">"fingerprint"</span><span class="p">:</span><span class="w"> </span><span class="s2">""</span><span class="p">,</span>
+</span><span id="__span-2-6"><a id="__codelineno-2-6" name="__codelineno-2-6" href="#__codelineno-2-6"></a><span class="w">  </span><span class="nt">"degraded_reasons"</span><span class="p">:</span><span class="w"> </span><span class="p">[],</span>
+</span><span id="__span-2-7"><a id="__codelineno-2-7" name="__codelineno-2-7" href="#__codelineno-2-7"></a><span class="w">  </span><span class="nt">"effective_batch"</span><span class="p">:</span><span class="w"> </span><span class="mi">24</span><span class="p">,</span>
+</span><span id="__span-2-8"><a id="__codelineno-2-8" name="__codelineno-2-8" href="#__codelineno-2-8"></a><span class="w">  </span><span class="nt">"measured_envelope_bytes"</span><span class="p">:</span><span class="w"> </span><span class="mi">0</span><span class="p">,</span>
+</span><span id="__span-2-9"><a id="__codelineno-2-9" name="__codelineno-2-9" href="#__codelineno-2-9"></a><span class="w">  </span><span class="nt">"free_bytes"</span><span class="p">:</span><span class="w"> </span><span class="mi">0</span><span class="p">,</span>
+</span><span id="__span-2-10"><a id="__codelineno-2-10" name="__codelineno-2-10" href="#__codelineno-2-10"></a><span class="w">  </span><span class="nt">"resolved_at_unix_ns"</span><span class="p">:</span><span class="w"> </span><span class="mi">1757030400000000000</span>
+</span><span id="__span-2-11"><a id="__codelineno-2-11" name="__codelineno-2-11" href="#__codelineno-2-11"></a><span class="p">}</span>
+</span></code></pre></div>
+<p>The file shares its <strong>core keys</strong> with the SAM3 block below, which carries
+several more. <code>measured_envelope_bytes</code> and <code>free_bytes</code> stay <code>0</code> on this path
+on purpose: nothing here was measured by HYDRA, so nothing claims to have been.
+<code>degraded_reasons</code> lists anything that made the estimate weaker, such as a
+missing train-label root.</p>
+<p><code>resolved</code> and <code>effective_batch</code> mean different things and can differ:</p>
+<ul>
+<li><code>resolved</code> is what <strong>resolution chose</strong>, written before the run starts so a
+  crash still leaves the provenance behind.</li>
+<li><code>effective_batch</code> is the batch of the <strong>final attempt</strong> — what trained, or,
+  for a run that failed every attempt, the last batch tried. It is <code>null</code>
+  until the bounded OOM-retry ladder settles, at which point the file is
+  rewritten with the settled value. Because that ladder halves the batch in
+  a fresh child on a classified out-of-memory exit, <code>effective_batch</code> can be
+  half or a quarter of <code>resolved</code>. Read this key, not <code>resolved</code>, when you want
+  to know what ran.</li>
+</ul>
+<p><code>provenance</code> is one of <code>explicit</code> (you set a positive batch), <code>ultralytics_autobatch</code>,
+<code>ultralytics_autobatch_clamped</code>, <code>default_non_cuda</code> (Ultralytics only measures on
+CUDA, so off CUDA the default is used unchanged), or <code>fallback</code> (the resolution
+child failed or left no readable report — the default is used and <code>-1</code> is never
+passed on).</p>
+<p>The resolved number is <strong>Ultralytics' estimate</strong>, not a measured peak and not a
+guarantee that the run will fit: it profiles a single step and extrapolates.
+The bounded OOM-retry ladder — which halves the batch in a fresh child on a
+classified out-of-memory exit — is what actually protects the run.</p>
+<p><code>training.batch</code> is <strong>opt-in</strong>: <code>16</code> is a default shared with PoseKit, ClassKit
+and TrackerKit, so omitting <code>training.batch</code> still gives you <code>16</code>. You have to
+write <code>-1</code> to get auto batch.</p>
+<p>Ultralytics device conventions work here: <code>"0"</code>, <code>"0,1"</code> and <code>"cuda:0"</code> all
+reach resolution, as does <code>"auto"</code> on a CUDA host. A multi-GPU value resolves
+against the <strong>first</strong> device only — Ultralytics profiles one device, and sizing
+against the whole set would overstate capacity. The launch command still
+receives the device string exactly as you wrote it.</p>
+<p>Auto batch is not reproducible across machines, because it depends on the GPU
+it measures on. <strong>Set a fixed positive <code>training.batch</code> for byte-reproducible
+runs.</strong></p>
+<h3 id="sam3-batch">SAM3 batch<a class="headerlink" href="#sam3-batch" title="Permanent link">&para;</a></h3>
+<p><code>sam3.batch</code> accepts <code>-1</code> too, but it means something quite different from
+<code>training.batch: -1</code> and is <strong>not</strong> Ultralytics' autobatch.</p>
+<p><code>-1</code> makes HYDRA measure this workload on this card before launching. It walks
+a ladder of contained probe children (batch 1, 2, 4, 8), each a real SAM3 LoRA
+run taken through thirty full optimizer steps on the densest tiles, and records
+the reserved device peak each one reaches. An out-of-memory inside a probe
+child is a <strong>measurement</strong>, not a failure.</p>
+<p>What decides the requirement depends on what has been measured:</p>
+<table>
+<thead>
+<tr>
+<th>Situation</th>
+<th>Requirement</th>
+</tr>
+</thead>
+<tbody>
+<tr>
+<td>No stored record for this workload fingerprint</td>
+<td>the analytic estimate</td>
+</tr>
+<tr>
+<td>Records exist, and the batch is at or below the largest measured rung</td>
+<td>the <strong>measured</strong> envelope, up or down</td>
+</tr>
+<tr>
+<td>Records exist, but the batch is beyond the largest measured rung</td>
+<td><code>max(analytic, measured)</code> — the measured side is a fitted guess there, not an observation</td>
+</tr>
+</tbody>
+</table>
+<p>A measurement used to be allowed only to <strong>raise</strong> the estimate, because a
+short probe under-reported badly (the same run measured 7.34 GiB over two
+steps, 9.93 GiB over sixty, and 12.99 GiB over a full run). That was CUDA
+allocator fragmentation, not the workload: the sidecar now always runs under
+<code>PYTORCH_CUDA_ALLOC_CONF=expandable_segments:True</code>, where a 30-step probe
+under-reads a full run by 2.8% instead of 41%. The allocator config is part of
+the profile fingerprint, so a record taken under the old allocator can never
+be reused.</p>
+<p>Be clear-eyed about what that buys you: this is <strong>not</strong> an optimal-batch
+search, and it is not tuned for throughput. It walks a power-of-two ladder
+(1, 2, 4, 8) and picks the largest rung whose requirement fits at the safety
+margin. Nothing here promises the largest batch that would fit — a batch
+<em>between</em> two rungs is charged the observed peak of the rung above it, so it
+is only chosen when that observation also fits.</p>
+<p>For a workload that has never been probed, the analytic estimate is all there
+is, and it dominates on the cards this role targets, so a first <code>-1</code> run will
+often resolve to <code>1</code>. Once records exist, the measurement decides <strong>at or
+below the largest probed batch</strong>; beyond that the conservative analytic
+estimate still applies, because there the measured side is a fitted guess
+rather than an observation.</p>
+<p><strong>It can also refuse the run.</strong> If batch 1 does not fit in the free VRAM at the
+safety margin, training fails with an explicit refusal naming the requirement
+and the free bytes. The measurement is still cached, so retrying on a quieter
+GPU reuses it rather than re-probing.</p>
+<p><strong>Where the measurements live.</strong> Records are keyed by a workload fingerprint —
+checkpoint, sidecar-env package set, GPU model, precision, LoRA rank and
+adapter scope, tile geometry, dataset density, and the probe protocol itself —
+and stored <strong>globally, across runs</strong>, at
+<code>&lt;HYDRA_DATA_DIR&gt;/memory_profiles/sam3_lora.json</code>. A second run with the same
+fingerprint reuses the cached records and launches no probe. Anything that
+changes the memory changes the key, including bumping the probe step count.</p>
+<p><strong>Escape hatch.</strong> Set <code>HYDRA_SAM3_FORCE_PROBE=1</code> to re-measure even when the
+store already has records for this exact fingerprint — for example after a
+driver upgrade, which the key does not capture.</p>
+<p><strong>Keys.</strong> Every key <code>&lt;run_dir&gt;/batch_resolution.json</code> carries on the SAM3
+path, including the ones shared with the YOLO block:</p>
+<table>
+<thead>
+<tr>
+<th>Key</th>
+<th>Meaning</th>
+</tr>
+</thead>
+<tbody>
+<tr>
+<td><code>fingerprint</code></td>
+<td>The workload key the records were stored under.</td>
+</tr>
+<tr>
+<td><code>provenance</code></td>
+<td><code>measured</code> (we probed this run), <code>cached</code>, or <code>explicit</code>.</td>
+</tr>
+<tr>
+<td><code>requirement_provenance</code></td>
+<td>Which case decided the requirement that was cleared: <code>analytic</code> (no records), <code>measured</code> (records decided at or below an observed rung), or <code>max_extrapolated</code> (past the rungs, so <code>max(analytic, measured)</code> applied).</td>
+</tr>
+<tr>
+<td><code>requirement_basis</code></td>
+<td><code>measured</code> if the chosen batch is a rung we actually observed, <code>extrapolated</code> if it fell between rungs.</td>
+</tr>
+<tr>
+<td><code>requirement_bytes</code></td>
+<td>The requirement the chosen batch cleared.</td>
+</tr>
+<tr>
+<td><code>requirement_measured_extrapolated</code></td>
+<td>Whether the measured side of that requirement was itself extrapolated.</td>
+</tr>
+<tr>
+<td><code>measured_envelope_bytes</code></td>
+<td><code>max(fitted curve, every observed peak at or below this batch)</code>. An envelope, not a raw observation — at an observed rung it can still exceed that rung's peak.</td>
+</tr>
+<tr>
+<td><code>ladder_terminated_by</code></td>
+<td>Why the probe ladder stopped.</td>
+</tr>
+<tr>
+<td><code>degraded_reasons</code></td>
+<td>Anything that weakened the fingerprint, such as a checkpoint that could not be stat'ed.</td>
+</tr>
+<tr>
+<td><code>free_bytes</code></td>
+<td>Free VRAM on the selected GPU at selection time.</td>
+</tr>
+</tbody>
+</table>
+<p>Like YOLO's, SAM3 auto batch is not reproducible across machines. <strong>Set a fixed
+positive <code>sam3.batch</code> for reproducible runs.</strong></p>
 <h2 id="validate-and-prepare">Validate and prepare<a class="headerlink" href="#validate-and-prepare" title="Permanent link">&para;</a></h2>
 <p>Validate the configuration and inspect all resolved paths without creating the
 workspace or reading the dataset:</p>
-<div class="language-bash highlight"><pre><span></span><code><span id="__span-2-1"><a id="__codelineno-2-1" name="__codelineno-2-1" href="#__codelineno-2-1"></a>detectkit<span class="w"> </span>train<span class="w"> </span>--config<span class="w"> </span>training.json<span class="w"> </span>--dry-run
+<div class="language-bash highlight"><pre><span></span><code><span id="__span-3-1"><a id="__codelineno-3-1" name="__codelineno-3-1" href="#__codelineno-3-1"></a>detectkit<span class="w"> </span>train<span class="w"> </span>--config<span class="w"> </span>training.json<span class="w"> </span>--dry-run
 </span></code></pre></div>
 <p>Run source preflight and build the merged, sliced, and role-specific datasets
 without training:</p>
-<div class="language-bash highlight"><pre><span></span><code><span id="__span-3-1"><a id="__codelineno-3-1" name="__codelineno-3-1" href="#__codelineno-3-1"></a>detectkit<span class="w"> </span>train<span class="w"> </span>--config<span class="w"> </span>training.json<span class="w"> </span>--prepare-only
+<div class="language-bash highlight"><pre><span></span><code><span id="__span-4-1"><a id="__codelineno-4-1" name="__codelineno-4-1" href="#__codelineno-4-1"></a>detectkit<span class="w"> </span>train<span class="w"> </span>--config<span class="w"> </span>training.json<span class="w"> </span>--prepare-only
 </span></code></pre></div>
 <p>Each invocation records <code>resolved_training_plan.json</code>, <code>preflight.json</code>, and
 <code>prepared_datasets.json</code> under a unique
@@ -2048,23 +2272,23 @@ updates from jobs that use different workspaces.</p>
 <h2 id="resume-a-run">Resume a run<a class="headerlink" href="#resume-a-run" title="Permanent link">&para;</a></h2>
 <p>For a configuration containing exactly one Ultralytics role, resume from its
 last checkpoint with:</p>
-<div class="language-bash highlight"><pre><span></span><code><span id="__span-4-1"><a id="__codelineno-4-1" name="__codelineno-4-1" href="#__codelineno-4-1"></a>detectkit<span class="w"> </span>train<span class="w"> </span>--config<span class="w"> </span>training.json<span class="w"> </span><span class="se">\</span>
-</span><span id="__span-4-2"><a id="__codelineno-4-2" name="__codelineno-4-2" href="#__codelineno-4-2"></a><span class="w">  </span>--resume<span class="w"> </span>./training-workspace/runs/&lt;run-id&gt;/weights/last.pt
+<div class="language-bash highlight"><pre><span></span><code><span id="__span-5-1"><a id="__codelineno-5-1" name="__codelineno-5-1" href="#__codelineno-5-1"></a>detectkit<span class="w"> </span>train<span class="w"> </span>--config<span class="w"> </span>training.json<span class="w"> </span><span class="se">\</span>
+</span><span id="__span-5-2"><a id="__codelineno-5-2" name="__codelineno-5-2" href="#__codelineno-5-2"></a><span class="w">  </span>--resume<span class="w"> </span>./training-workspace/runs/&lt;run-id&gt;/weights/last.pt
 </span></code></pre></div>
 <p>Resume is deliberately rejected for multi-role and SAM3 plans so a checkpoint
 cannot silently attach to the wrong stage.</p>
 <h2 id="scheduler-example">Scheduler example<a class="headerlink" href="#scheduler-example" title="Permanent link">&para;</a></h2>
 <p>For Slurm, activate the CUDA environment in the batch script and let the
 scheduler capture normal stdout and stderr:</p>
-<div class="language-bash highlight"><pre><span></span><code><span id="__span-5-1"><a id="__codelineno-5-1" name="__codelineno-5-1" href="#__codelineno-5-1"></a><span class="ch">#!/usr/bin/env bash</span>
-</span><span id="__span-5-2"><a id="__codelineno-5-2" name="__codelineno-5-2" href="#__codelineno-5-2"></a><span class="c1">#SBATCH --gres=gpu:1</span>
-</span><span id="__span-5-3"><a id="__codelineno-5-3" name="__codelineno-5-3" href="#__codelineno-5-3"></a><span class="c1">#SBATCH --cpus-per-task=8</span>
-</span><span id="__span-5-4"><a id="__codelineno-5-4" name="__codelineno-5-4" href="#__codelineno-5-4"></a><span class="c1">#SBATCH --output=detectkit-%j.log</span>
-</span><span id="__span-5-5"><a id="__codelineno-5-5" name="__codelineno-5-5" href="#__codelineno-5-5"></a>
-</span><span id="__span-5-6"><a id="__codelineno-5-6" name="__codelineno-5-6" href="#__codelineno-5-6"></a><span class="nb">set</span><span class="w"> </span>-euo<span class="w"> </span>pipefail
-</span><span id="__span-5-7"><a id="__codelineno-5-7" name="__codelineno-5-7" href="#__codelineno-5-7"></a><span class="nb">source</span><span class="w"> </span>~/mambaforge/etc/profile.d/conda.sh
-</span><span id="__span-5-8"><a id="__codelineno-5-8" name="__codelineno-5-8" href="#__codelineno-5-8"></a>conda<span class="w"> </span>activate<span class="w"> </span>hydra-cuda
-</span><span id="__span-5-9"><a id="__codelineno-5-9" name="__codelineno-5-9" href="#__codelineno-5-9"></a>detectkit<span class="w"> </span>train<span class="w"> </span>--config<span class="w"> </span>/shared/experiment/training.json
+<div class="language-bash highlight"><pre><span></span><code><span id="__span-6-1"><a id="__codelineno-6-1" name="__codelineno-6-1" href="#__codelineno-6-1"></a><span class="ch">#!/usr/bin/env bash</span>
+</span><span id="__span-6-2"><a id="__codelineno-6-2" name="__codelineno-6-2" href="#__codelineno-6-2"></a><span class="c1">#SBATCH --gres=gpu:1</span>
+</span><span id="__span-6-3"><a id="__codelineno-6-3" name="__codelineno-6-3" href="#__codelineno-6-3"></a><span class="c1">#SBATCH --cpus-per-task=8</span>
+</span><span id="__span-6-4"><a id="__codelineno-6-4" name="__codelineno-6-4" href="#__codelineno-6-4"></a><span class="c1">#SBATCH --output=detectkit-%j.log</span>
+</span><span id="__span-6-5"><a id="__codelineno-6-5" name="__codelineno-6-5" href="#__codelineno-6-5"></a>
+</span><span id="__span-6-6"><a id="__codelineno-6-6" name="__codelineno-6-6" href="#__codelineno-6-6"></a><span class="nb">set</span><span class="w"> </span>-euo<span class="w"> </span>pipefail
+</span><span id="__span-6-7"><a id="__codelineno-6-7" name="__codelineno-6-7" href="#__codelineno-6-7"></a><span class="nb">source</span><span class="w"> </span>~/mambaforge/etc/profile.d/conda.sh
+</span><span id="__span-6-8"><a id="__codelineno-6-8" name="__codelineno-6-8" href="#__codelineno-6-8"></a>conda<span class="w"> </span>activate<span class="w"> </span>hydra-cuda
+</span><span id="__span-6-9"><a id="__codelineno-6-9" name="__codelineno-6-9" href="#__codelineno-6-9"></a>detectkit<span class="w"> </span>train<span class="w"> </span>--config<span class="w"> </span>/shared/experiment/training.json
 </span></code></pre></div>
 <p><code>SIGINT</code> and <code>SIGTERM</code> request cancellation through the same cancellation path
 used by the GUI. For Ultralytics jobs, DetectKit continues checking for a

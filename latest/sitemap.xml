@@ -189,10 +189,6 @@
          <lastmod>2026-09-06</lastmod>
     </url>
     <url>
-         <loc>https://neurorishika.github.io/hydra-suite/latest/superpowers/plans/2026-09-04-measured-auto-batch-sizing/</loc>
-         <lastmod>2026-09-06</lastmod>
-    </url>
-    <url>
          <loc>https://neurorishika.github.io/hydra-suite/latest/superpowers/plans/2026-09-05-sam3-spike-parity-finetuning/</loc>
          <lastmod>2026-09-06</lastmod>
     </url>
@@ -513,6 +509,10 @@
          <lastmod>2026-09-06</lastmod>
     </url>
     <url>
+         <loc>https://neurorishika.github.io/hydra-suite/latest/superpowers/plans/done/2026-09-04-measured-auto-batch-sizing/</loc>
+         <lastmod>2026-09-06</lastmod>
+    </url>
+    <url>
          <loc>https://neurorishika.github.io/hydra-suite/latest/superpowers/plans/done/2026-09-05-calibration-profile-headless-parity/</loc>
          <lastmod>2026-09-06</lastmod>
     </url>
@@ -830,6 +830,10 @@
     </url>
     <url>
          <loc>https://neurorishika.github.io/hydra-suite/latest/superpowers/specs/done/trackerkit-streaming-individual-analysis-plan/</loc>
+         <lastmod>2026-09-06</lastmod>
+    </url>
+    <url>
+         <loc>https://neurorishika.github.io/hydra-suite/latest/superpowers/specs/notes/2026-09-06-identity-retention-plan-adversarial-audit/</loc>
          <lastmod>2026-09-06</lastmod>
     </url>
     <url>
