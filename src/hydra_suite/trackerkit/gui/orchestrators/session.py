@@ -2228,7 +2228,14 @@ class SessionOrchestrator:
             self._mw.btn_start.setText("Stop Tracking")
             self._mw.btn_preview.setEnabled(False)
             self._mw.start_full()
-            if not (self._mw.tracking_worker and self._mw.tracking_worker.isRunning()):
+            # A parallel batch runs child PROCESSES, so tracking_worker stays
+            # None; without this the button would snap straight back to "Start
+            # Full Tracking" and leave the user no way to stop the fan-out.
+            fanout_worker = getattr(self._mw, "batch_fanout_worker", None)
+            started = bool(
+                self._mw.tracking_worker and self._mw.tracking_worker.isRunning()
+            ) or bool(fanout_worker is not None and fanout_worker.isRunning())
+            if not started:
                 self._mw.btn_start.blockSignals(True)
                 self._mw.btn_start.setChecked(False)
                 self._mw.btn_start.blockSignals(False)

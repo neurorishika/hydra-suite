@@ -1190,7 +1190,13 @@ class TrackingOrchestrator:
         options = self._resolve_fanout_options()
         if options is None:
             return False
-        slots = len(options.gpus) if options.gpus else int(options.jobs or 1)
+        # Mirror run_batch_fanout's own slot arithmetic so the status line
+        # cannot claim more slots than the scheduler will actually open.
+        if options.gpus:
+            requested = len(options.gpus) if options.jobs is None else int(options.jobs)
+            slots = max(1, min(requested, len(options.gpus)))
+        else:
+            slots = max(1, int(options.jobs or 1))
 
         # Never leave a previous run's table parented to the window forever.
         previous = getattr(self._mw, "batch_fanout_dialog", None)

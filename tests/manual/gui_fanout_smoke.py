@@ -3,9 +3,10 @@
 This is the automatable stand-in for "click Start Full Tracking with Batch +
 Parallel ticked": it builds a real ``MainWindow`` under
 ``QT_QPA_PLATFORM=offscreen``, drives the same Setup-panel widgets a user
-would, calls ``TrackingOrchestrator.start_batch_fanout()`` directly (the only
-step a script cannot click), and spins the event loop until the run reports
-back. Two legs are exercised:
+would, then goes through the REAL click path (``toggle_tracking(True)`` ->
+``start_full`` -> ``start_tracking`` -> ``start_batch_fanout``) with the
+confirmation dialog auto-answered, and spins the event loop until the run
+reports back. Two legs are exercised:
 
 1. **run to completion** -- both fixture clips must reach OK and the window
    must return to idle with the worker reference released;
@@ -47,11 +48,11 @@ os.environ["PYTHONPATH"] = (
 if str(SRC) not in sys.path:
     sys.path.insert(0, str(SRC))
 
-# The equivalence fixtures are checked out in the MAIN repo; a worktree's
-# clips/ directory is gitignored and empty.
-MAIN_REPO = Path(
-    "/Users/neurorishika/Projects/Rockefeller/Kronauer/multi-animal-tracker"
-)
+# The equivalence fixture CLIPS are checked out in the main repo only; a
+# worktree's clips/ directory is gitignored and empty. Derive the main repo
+# from the worktree layout (<main>/.worktrees/<name>) so this keeps working
+# after a merge to main, where REPO already IS the main repo.
+MAIN_REPO = REPO.parents[1] if REPO.parent.name == ".worktrees" else REPO
 CLIPS = MAIN_REPO / "tools" / "equivalence" / "fixtures" / "clips"
 CONFIGS = REPO / "tools" / "equivalence" / "fixtures" / "configs"
 VIDEOS = ("fly_obb", "worm_bgsub")
@@ -169,9 +170,11 @@ def run_leg(app, videos: list[str], *, cancel_after: float | None):
     orch = window._tracking_orch
     captured: dict = {}
     assert hasattr(window, "batch_fanout_worker"), "MainWindow is missing the attribute"
-    started = orch.start_batch_fanout()
-    if not started:
-        raise SystemExit("start_batch_fanout() refused to start")
+    # The REAL click path: btn_start -> toggle_tracking -> start_full ->
+    # start_tracking -> start_batch_fanout. The confirmation QMessageBox is
+    # answered by the shim installed in silence_message_boxes().
+    window.btn_start.setChecked(True)
+    window.toggle_tracking(True)
     worker = window.batch_fanout_worker
     assert worker is not None, "worker reference was not stored"
     worker.fanout_finished.connect(lambda r: captured.__setitem__("result", r))
