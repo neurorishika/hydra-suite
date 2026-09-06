@@ -147,6 +147,21 @@ def test_tensorrt_existing_engine_skips_export(fake_loader, tmp_path):
     assert fake_loader["executor"] == 1
 
 
+def test_tensorrt_profile_marker_rejects_an_incompatible_batch_fingerprint(
+    fake_loader, tmp_path
+):
+    """Same source/imgsz is insufficient when the dynamic profile changed."""
+    pt = tmp_path / "model.pt"
+    pt.write_bytes(b"x")
+    engine = ra._artifact_path_for(pt, "tensorrt", batch_size=8)
+    engine.write_bytes(b"prebuilt")
+    ra._write_fresh_marker(engine, pt, ra._DEFAULT_IMGSZ, batch_size=4)
+
+    load_obb_executor(str(pt), "tensorrt", auto_export=True, batch_size=8)
+
+    assert fake_loader["export"] == 1
+
+
 def test_tensorrt_no_auto_export_missing_engine_raises_clear_error(
     fake_loader, tmp_path
 ):
@@ -432,7 +447,9 @@ def test_load_obb_models_receives_tile_batch_when_sliced(monkeypatch):
     monkeypatch.setattr(runnermod, "_probe_model_imgsz", lambda p: 640)
 
     cfg = InferenceConfig(
-        detection_batch_size=2,
+        # A larger frame-window setting must not force a sliced TRT profile
+        # above the chunk that execution can actually admit.
+        detection_batch_size=64,
         obb=OBBConfig(
             mode="direct",
             direct=OBBDirectConfig(
@@ -451,8 +468,52 @@ def test_load_obb_models_receives_tile_batch_when_sliced(monkeypatch):
     from hydra_suite.core.inference.runner import _sliced_tile_batch
 
     expected = _sliced_tile_batch(cfg, (2160, 3840), 640)
-    assert expected > 16, f"test must exercise a >16-tile case, got {expected}"
+    # The grid has more jobs than one request, but the configured tile chunk
+    # remains the realistic engine-profile maximum.
+    assert expected == 16
     assert captured["batch_size"] == expected
+
+
+def _sahi_profile_config(*, budget_mib=256):
+    return InferenceConfig(
+        detection_batch_size=1,
+        obb=OBBConfig(
+            mode="direct",
+            direct=OBBDirectConfig(
+                model_path="m.pt",
+                slice=SliceConfig(
+                    enabled=True,
+                    geometry_mode="auto_model",
+                    # Deliberately greater than the 36-tile grid: this proves
+                    # admission, not the UI request, bounds the engine profile.
+                    tile_batch_size=128,
+                    tile_memory_budget_bytes=budget_mib * 1024 * 1024,
+                ),
+            ),
+        ),
+    )
+
+
+def test_sahi_trt_profile_uses_admissible_cpu_tile_chunk_not_all_frame_jobs():
+    """4512/1024 yields 36 jobs, but a CPU chunk admits only 17 at 256 MiB."""
+    from hydra_suite.core.inference.runner import _sliced_tile_batch
+    from hydra_suite.core.inference.stages.slicing import plan_slices
+
+    cfg = _sahi_profile_config()
+    plan = plan_slices((4512, 4512), cfg.obb.direct.slice, 1024, None)
+    assert plan.jobs_per_frame == 36
+    assert _sliced_tile_batch(cfg, (4512, 4512), 1024, device_tiles=False) == 17
+
+
+def test_sahi_trt_profile_accounts_for_cuda_source_residency_and_budget():
+    """CUDA views avoid the crop copy; explicit budgets still cap the profile."""
+    from hydra_suite.core.inference.runner import _sliced_tile_batch
+
+    ample = _sahi_profile_config()
+    constrained = _sahi_profile_config(budget_mib=64)
+    assert _sliced_tile_batch(ample, (4512, 4512), 1024, device_tiles=True) == 21
+    assert _sliced_tile_batch(constrained, (4512, 4512), 1024, device_tiles=False) == 4
+    assert _sliced_tile_batch(constrained, (4512, 4512), 1024, device_tiles=True) == 5
 
 
 def test_load_obb_models_unchanged_when_slicing_disabled(monkeypatch):

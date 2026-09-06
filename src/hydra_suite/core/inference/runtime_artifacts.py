@@ -48,6 +48,7 @@ from __future__ import annotations
 import json
 import logging
 import shutil
+from hashlib import sha256
 from pathlib import Path
 from typing import Any
 
@@ -322,7 +323,29 @@ def _meta_path(artifact_path: Path) -> Path:
     return artifact_path.with_suffix(f"{artifact_path.suffix}.runtime_meta.json")
 
 
-def _write_fresh_marker(artifact_path: Path, source_pt: Path, imgsz: int) -> None:
+def _trt_profile_fingerprint(batch_size: int) -> str:
+    """Versioned identity for the dynamic TensorRT batch profile.
+
+    The artifact filename contains the maximum batch, but retaining this in
+    metadata makes profile semantics explicit and invalidates pre-admission
+    markers which may name a batch that cannot actually be issued.
+    """
+    profile = {
+        "schema": "sahi-tile-profile-v2",
+        "min_batch": 1,
+        "opt_batch": max(1, int(batch_size)),
+        "max_batch": max(1, int(batch_size)),
+    }
+    return sha256(json.dumps(profile, sort_keys=True).encode("utf-8")).hexdigest()
+
+
+def _write_fresh_marker(
+    artifact_path: Path,
+    source_pt: Path,
+    imgsz: int,
+    *,
+    batch_size: int = _DEFAULT_BATCH_SIZE,
+) -> None:
     """Write a freshness marker recording the source ``.pt`` mtime + build imgsz.
 
     Mirrors legacy ``_write_artifact_meta`` — used so a subsequent load can tell
@@ -337,12 +360,24 @@ def _write_fresh_marker(artifact_path: Path, source_pt: Path, imgsz: int) -> Non
     except Exception:
         source_mtime_ns = 0
     _meta_path(artifact_path).write_text(
-        json.dumps({"source_mtime_ns": source_mtime_ns, "imgsz": int(imgsz)}),
+        json.dumps(
+            {
+                "source_mtime_ns": source_mtime_ns,
+                "imgsz": int(imgsz),
+                "trt_profile_fingerprint": _trt_profile_fingerprint(batch_size),
+            }
+        ),
         encoding="utf-8",
     )
 
 
-def _artifact_is_fresh(artifact_path: Path, source_pt: Path, imgsz: int) -> bool:
+def _artifact_is_fresh(
+    artifact_path: Path,
+    source_pt: Path,
+    imgsz: int,
+    *,
+    batch_size: int = _DEFAULT_BATCH_SIZE,
+) -> bool:
     """Return True when ``artifact_path`` exists and is newer than its source.
 
     Clean analogue of legacy ``_artifact_is_fresh``: a cached artifact is reused
@@ -367,9 +402,11 @@ def _artifact_is_fresh(artifact_path: Path, source_pt: Path, imgsz: int) -> bool
         return False
     if recorded != current:
         return False
-    # Older markers (pre-imgsz tracking) omit "imgsz" -- treat as stale so they
-    # get rebuilt once and gain the field, rather than silently trusting them.
-    return int(data.get("imgsz", -1)) == int(imgsz)
+    # Older markers (pre-imgsz/profile tracking) omit either field -- treat as
+    # stale so an engine sized before tile-chunk admission cannot be reused.
+    return int(data.get("imgsz", -1)) == int(imgsz) and data.get(
+        "trt_profile_fingerprint"
+    ) == _trt_profile_fingerprint(batch_size)
 
 
 # ---------------------------------------------------------------------------
@@ -682,7 +719,7 @@ def _load_direct_executor(
         else _resolve_imgsz(resolved)
     )
 
-    if _artifact_is_fresh(artifact_path, resolved, imgsz):
+    if _artifact_is_fresh(artifact_path, resolved, imgsz, batch_size=batch_size):
         logger.info("Reusing cached %s OBB artifact: %s", runtime, artifact_path.name)
     else:
         if not auto_export:
@@ -701,7 +738,7 @@ def _load_direct_executor(
             imgsz=imgsz,
             batch_size=batch_size,
         )
-        _write_fresh_marker(artifact_path, resolved, imgsz)
+        _write_fresh_marker(artifact_path, resolved, imgsz, batch_size=batch_size)
         logger.info("Exported %s OBB artifact: %s", runtime, artifact_path)
 
     class_names = _model_class_names(resolved)

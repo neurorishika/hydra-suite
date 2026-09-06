@@ -170,15 +170,25 @@ class _CacheSet:
 
 
 def _sliced_tile_batch(
-    config: InferenceConfig, frame_hw: tuple[int, int], imgsz: int
+    config: InferenceConfig,
+    frame_hw: tuple[int, int],
+    imgsz: int,
+    *,
+    device_tiles: bool = False,
 ) -> int:
-    """Exact tiles-per-frame for the configured slice plan (+1 for full-frame pass).
+    """Largest resource-admissible tile chunk for a sliced direct OBB run.
 
-    Bounded by ``slicing.MAX_TILE_CHUNK`` — the SAME cap the sliced path chunks
-    its predict calls with, so the exported engine profile always covers the
-    largest batch that will actually be issued.
+    The TensorRT engine profile must cover the largest *predict call*, not all
+    jobs in a frame.  The streaming sliced path applies the same request cap,
+    memory estimator, budget, and hard limit below.  Keeping the calculation
+    identical prevents an engine from being optimized for an impossible 36+
+    tile batch when execution will only ever submit a smaller admitted chunk.
+
+    ``device_tiles`` describes source residency when it is known: CPU/numpy
+    tiles include their contiguous crop allocation, whereas CUDA views do not.
     """
-    from .stages.slicing import MAX_TILE_CHUNK, plan_slices
+    from .stages.obb import effective_raw_detection_cap
+    from .stages.slicing import MAX_TILE_CHUNK, admitted_tile_chunk_size, plan_slices
 
     slice_cfg = config.obb.direct.slice
     plan = plan_slices(
@@ -193,7 +203,22 @@ def _sliced_tile_batch(
         None,
         ref_object_px=slice_cfg.reference_body_px,
     )
-    return max(1, min(plan.jobs_per_frame, MAX_TILE_CHUNK))
+    requested = min(
+        plan.jobs_per_frame,
+        int(getattr(slice_cfg, "tile_batch_size", MAX_TILE_CHUNK)),
+        MAX_TILE_CHUNK,
+    )
+    return admitted_tile_chunk_size(
+        plan,
+        imgsz=imgsz,
+        device_tiles=device_tiles,
+        requested=requested,
+        byte_budget=int(
+            getattr(slice_cfg, "tile_memory_budget_bytes", 256 * 1024 * 1024)
+        ),
+        task=config.obb.direct.model_task,
+        max_detections=effective_raw_detection_cap(config),
+    )
 
 
 def _probe_frame_hw(video_path: str | None) -> tuple[int, int] | None:
@@ -251,7 +276,15 @@ def _load_obb_for_config(
         frame_hw = _probe_frame_hw(video_path)
         imgsz = _probe_model_imgsz(direct.model_path)
         if frame_hw is not None and imgsz:
-            batch_size = max(batch_size, _sliced_tile_batch(config, frame_hw, imgsz))
+            # Sliced inference submits tile chunks, never a frame window.  Do
+            # not retain a larger detection_batch_size here: it would make TRT
+            # optimize an inadmissible profile that the sliced path cannot use.
+            batch_size = _sliced_tile_batch(
+                config,
+                frame_hw,
+                imgsz,
+                device_tiles=bool(getattr(runtime, "tensor_on_cuda", False)),
+            )
         else:
             logger.warning(
                 "Sliced OBB inference enabled but frame size (%s) and/or model "
