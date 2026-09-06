@@ -28,6 +28,23 @@ because of the anti-correlation claim. Do not add best-checkpoint selection
 or early stopping on val loss without first re-measuring on a fold with a
 genuinely disjoint val split.
 
+That re-measurement HAS since been done (2026-09-06, a real held-out fold, a
+paired frame bootstrap over 16 frames), and it did not rescue val loss: every
+per-query validation signal -- val_loss_mean, loss_ce, loss_bbox, loss_giou,
+loss_mask, loss_dice, presence_loss -- ANTI-correlates with held-out AP
+(Spearman -0.4 to -1.0). Selecting the minimum-loss checkpoint would be worse
+than the always-last-epoch default the paragraph above describes. The ladder
+spread itself is real (epoch_003 - FINAL = +0.0244 AP, Bonferroni CI
+[+0.0079, +0.0437]; P(best) 0.991 vs 0.000), so there IS something to select
+on -- just not the loss.
+
+AP is therefore now ALSO recorded per epoch, in the same `val_series.jsonl`
+row (see `detection_quality` and `ap_cadence`). It still selects nothing.
+Read `detection_quality`'s module docstring before treating it as a rule: the
+evidence is one run, one seed, one corpus, seed variance is unmeasured, and
+the training-time number is tile-space and NMS-free, so it is not even on the
+same scale as the study's. It is a within-run trend, recorded as evidence.
+
 The training set is built and checked for emptiness BEFORE any `sam3` model
 is loaded: an empty dataloader must exit nonzero, never silently train
 nothing and exit 0 -- a zero-initialised LoRA `lora_B` makes an untrained
@@ -444,6 +461,13 @@ def enforce_checkpoint_budget(
 # existing shape so every current reader is unaffected.
 VAL_SERIES_FILENAME = "val_series.jsonl"
 VAL_CADENCE_ENV = "HYDRA_SAM3_VAL_EVERY"
+# Detection quality (AP) rides along on the same pass and lands in the same
+# row, but gets its own knob: the loss half is forward-only, while AP adds
+# CPU-side contour extraction and a 19-point confidence sweep of the matcher.
+# Whoever finds that too expensive must be able to back AP off WITHOUT losing
+# the loss series. Defaults to the loss cadence, so the two stay in step
+# unless someone deliberately separates them.
+AP_CADENCE_ENV = "HYDRA_SAM3_AP_EVERY"
 
 
 def val_cadence(default: int = 1) -> int:
@@ -455,6 +479,27 @@ def val_cadence(default: int = 1) -> int:
     because the terminal evaluation already runs there.
     """
     raw = os.environ.get(VAL_CADENCE_ENV, "")
+    try:
+        value = int(raw)
+    except (TypeError, ValueError):
+        return default
+    return value if value >= 1 else default
+
+
+def ap_cadence() -> int:
+    """Epochs between per-epoch DETECTION-QUALITY (AP) evaluations.
+
+    Defaults to `val_cadence()`. Set `HYDRA_SAM3_AP_EVERY` higher to keep the
+    cheap loss series every epoch while sampling AP less often; the effective
+    value is stamped into every row as `ap_cadence` for the same provenance
+    reason `val_cadence` is.
+
+    RECORDING ONLY. See `detection_quality`'s module docstring: AP is a
+    candidate selection signal from ONE run, ONE seed and ONE corpus, and
+    nothing in this file may select or stop on it.
+    """
+    default = val_cadence()
+    raw = os.environ.get(AP_CADENCE_ENV, "")
     try:
         value = int(raw)
     except (TypeError, ValueError):
@@ -1026,6 +1071,8 @@ def _evaluate_split(
     device: Any,
     autocast_dtype: Any,
     use_bf16: bool,
+    *,
+    with_detection_quality: bool = True,
 ) -> dict[str, Any] | None:
     """Run the validation split and return its loss decomposition.
 
@@ -1034,9 +1081,20 @@ def _evaluate_split(
     batch count, and `elapsed_s` -- the pass's own measured wall clock, so the
     cost of this evidence is itself evidence rather than an estimate.
 
+    When ``with_detection_quality`` is set it ALSO returns a detection-quality
+    block (``ap``, ``ap_tiles``, ``ap_elapsed_s``, ``ap_sweep``, or
+    ``ap_error``), collected from the very same forward pass -- no second
+    inference, so nothing extra can perturb training -- and timed separately
+    so the two costs stay attributable. See `detection_quality` for the four
+    limitations that make AP a within-run trend and not a portable score.
+
     Reporting only. Nothing here may select a checkpoint: a 2026-09-06 study
     measured every per-query validation signal ANTI-correlating with held-out
-    AP, so selecting on it would be actively wrong.
+    AP, so selecting on it would be actively wrong. That study also found AP
+    the most stable signal it measured -- which makes AP a *candidate* for a
+    future selection rule on ONE run, ONE seed and ONE corpus, with seed
+    variance entirely unmeasured. It does not make it a rule, and this
+    function still selects nothing.
 
     Returns `None` when there is no validation split (small datasets skip it
     -- see `dataset_build.py`'s `validation: "none"` case) rather than
@@ -1053,6 +1111,12 @@ def _evaluate_split(
         return None
     n_val_batches = batch_count(query_count(val_descriptors), params.batch)
     val_batches = collate_batches(val_descriptors, params.batch)
+
+    accumulator = None
+    if with_detection_quality:
+        from .detection_quality import DetectionQualityAccumulator
+
+        accumulator = DetectionQualityAccumulator(val_descriptors)
 
     started = time.perf_counter()
     model.eval()
@@ -1075,7 +1139,26 @@ def _evaluate_split(
                         term_totals[key] = term_totals.get(key, 0.0) + float(value)
                     except (TypeError, ValueError):
                         continue
+            # Read the predictions off the SAME forward, before it is freed.
+            # `observe` is self-guarding: it can never raise into the loss
+            # pass, it only records `ap_error`.
+            if accumulator is not None:
+                accumulator.observe(outputs)
             del batch, model_input, targets, outputs, loss_dict, loss
+
+    # The loss pass's own clock EXCLUDES the AP work, which reports its own
+    # `ap_elapsed_s`. Two metrics, two measured costs -- an aggregate number
+    # could not tell anyone whether backing AP off would help.
+    # `result()` runs the confidence sweep, which dominates the AP cost, so it
+    # must finish BEFORE the clock is read -- otherwise subtracting
+    # `ap_elapsed_s` would remove time `elapsed` never contained and the loss
+    # pass would under-report itself by the whole sweep.
+    detection_quality: dict[str, Any] = {}
+    if accumulator is not None:
+        detection_quality = accumulator.result()
+    elapsed = time.perf_counter() - started
+    if detection_quality:
+        elapsed -= min(elapsed, float(detection_quality.get("ap_elapsed_s", 0.0)))
 
     return {
         "val_loss_mean": total_loss / n_val_batches,
@@ -1083,7 +1166,8 @@ def _evaluate_split(
         "val_terms_mean": {
             key: total / n_val_batches for key, total in sorted(term_totals.items())
         },
-        "elapsed_s": time.perf_counter() - started,
+        "elapsed_s": elapsed,
+        **detection_quality,
     }
 
 
@@ -1119,6 +1203,10 @@ def _record_epoch_validation(
     np_state = np.random.get_state()
     cpu_state = torch.get_rng_state()
     cuda_states = torch.cuda.get_rng_state_all() if torch.cuda.is_available() else None
+    # The AP pass rides INSIDE this guard, on the loss pass's own forward --
+    # deliberately not a second, unprotected inference pass.
+    ap_every = ap_cadence()
+    want_ap = epoch_number % ap_every == 0
     try:
         stats = _evaluate_split(
             model,
@@ -1129,6 +1217,7 @@ def _record_epoch_validation(
             device,
             autocast_dtype,
             use_bf16,
+            with_detection_quality=want_ap,
         )
     finally:
         random.setstate(py_state)
@@ -1145,14 +1234,37 @@ def _record_epoch_validation(
     # indistinguishable from a crash-restart gap. An unrecorded env knob that
     # changes what a run measured is a provenance defect this project has
     # already been bitten by (`object_tile_fraction` silently defaulting).
-    record = {"epoch": epoch_number, "val_cadence": val_cadence(), **stats}
+    record = {
+        "epoch": epoch_number,
+        "val_cadence": val_cadence(),
+        "ap_cadence": ap_every,
+        **stats,
+    }
     append_val_record(run_dir_path, record)
     emit_log(
         f"epoch {epoch_number} val_loss_mean={stats['val_loss_mean']:.5f} "
-        f"({stats['val_batches']} batches, {stats['elapsed_s']:.1f}s) "
-        "[recorded as evidence; selection is unchanged]"
+        f"({stats['val_batches']} batches, {stats['elapsed_s']:.1f}s)"
+        + _ap_log_suffix(stats)
+        + " [recorded as evidence; selection is unchanged]"
     )
     return record
+
+
+def _ap_log_suffix(stats: dict[str, Any]) -> str:
+    """Log fragment for the detection-quality half of an epoch's record.
+
+    A failed AP pass logs LOUDLY rather than vanishing: on the CUDA box the
+    run log is the only place a vendor key rename would be noticed before the
+    series is read weeks later.
+    """
+    if "ap_error" in stats:
+        return f"  AP FAILED: {stats['ap_error']} (training unaffected)"
+    if "ap" not in stats:
+        return ""
+    return (
+        f"  ap={stats['ap']:.4f} ({stats.get('ap_tiles', 0)} tiles, "
+        f"{stats.get('ap_elapsed_s', 0.0):.1f}s; within-run trend only)"
+    )
 
 
 def _evaluate_and_write(
@@ -1198,8 +1310,17 @@ def _evaluate_and_write(
     metrics_path = run_dir_path / "val_stats.json"
     metrics_path.write_text(json.dumps(val_stats, indent=2), encoding="utf-8")
     if epoch_number is not None:
+        # The FINAL row always carries AP, whatever the cadence: a series
+        # whose last epoch has no detection-quality number cannot be read
+        # against the always-last-epoch policy it exists to inform.
         append_val_record(
-            run_dir_path, {"epoch": epoch_number, "val_cadence": cadence, **stats}
+            run_dir_path,
+            {
+                "epoch": epoch_number,
+                "val_cadence": cadence,
+                "ap_cadence": ap_cadence(),
+                **stats,
+            },
         )
     return metrics_path
 
