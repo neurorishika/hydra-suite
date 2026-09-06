@@ -30,6 +30,7 @@ from hydra_suite.core.inference.direct_calibration import (
     CalibrationScore,
     DirectCalibrationPoint,
     fit_calibration_area_band,
+    recommend_balanced,
     score_frames,
 )
 from hydra_suite.core.inference.direct_calibration_grid import (
@@ -281,16 +282,29 @@ class DirectCalibrationOutcome:
     previews: list = field(default_factory=list)
     partial: bool = False
     message: str = ""
-    # Provenance for the recommendation RULE (not a stored recommendation
-    # result -- ``recommend_balanced`` is still re-run live on the loaded
-    # points). Identifies which rule was in effect when this evidence was
-    # saved, so a later rule change cannot silently reinterpret an older
-    # "measured best" as having been produced by the new rule. v4-and-older
-    # evidence predates this field entirely and is labelled unknown rather
-    # than back-filled with the rule current at load time.
+    # Provenance for the recommendation RULE. Identifies which rule was in
+    # effect when this evidence was saved, so a later rule change cannot
+    # silently reinterpret an older "measured best" as having been produced
+    # by the new rule. v4-and-older evidence predates this field entirely
+    # and is labelled unknown rather than back-filled with the rule current
+    # at load time.
     recommendation_rule_id: str = ""
     recommendation_rule: str = ""
     recommendation_rule_effective_date: str = ""
+    # The actual WINNER (or refusal) that ``recommend_balanced`` produced at
+    # SAVE time, under ``recommendation_rule_id`` above -- not recomputed.
+    # ``recommendation_pick_recorded`` is False for any payload saved before
+    # this field existed (v5 and older): those profiles carry rule
+    # provenance (or not) but never recorded which row -- if any -- was
+    # actually chosen, so the GUI must say "not recorded" rather than
+    # silently re-deriving a historical pick by re-running a rule (that
+    # would manufacture a record that never existed).
+    recommendation_pick_recorded: bool = False
+    # ``(candidate_index, merge_threshold, confidence)`` of the point that
+    # was picked, or ``None`` if the rule refused (still a recorded fact,
+    # not a missing one, when ``recommendation_pick_recorded`` is True).
+    recommendation_pick_key: tuple | None = None
+    recommendation_pick_reason: str = ""
 
 
 @dataclass(frozen=True)
@@ -347,7 +361,18 @@ EVIDENCE_FILENAME_GZ = "direct_calibration.json.gz"
 # are labelled ``unknown (pre-2026-09-06)`` on load rather than back-filled
 # with the current rule, per R6 (back-filling asserts provenance that never
 # existed).
-EVIDENCE_VERSION = 5
+#
+# v6: the ``recommendation`` block additionally records the actual WINNER
+# (or refusal) ``recommend_balanced`` produced at save time, keyed by
+# ``(candidate_index, merge_threshold, confidence)`` -- never by ``label``,
+# which is not unique (see ``DirectCalibrationPoint``). v5 profiles have
+# rule provenance but never recorded a pick; that is a genuinely different
+# fact from "no rule was recorded at all" (v4-and-older), so it must not be
+# collapsed into the same "unknown" label. Gated on
+# ``RECOMMENDATION_PICK_FORMAT_VERSION`` below, following the same pattern
+# as ``PREVIEW_FORMAT_VERSION``.
+EVIDENCE_VERSION = 6
+RECOMMENDATION_PICK_FORMAT_VERSION = 6
 # The frame-table/preview format introduced in v4 (see above) is a
 # DIFFERENT axis of versioning than the overall evidence payload version:
 # EVIDENCE_VERSION will keep incrementing for reasons (new top-level
@@ -566,6 +591,23 @@ def save_direct_calibration(
         return target
     frame_table = _FrameTable(evidence_dir)
     previews = [_preview_to_dict(frame_table, preview) for preview in outcome.previews]
+    # The winner (or refusal) is computed and PERSISTED here, once, at save
+    # time -- under the rule that is current right now. It is never
+    # recomputed on load (that would silently reinterpret old evidence under
+    # whatever rule happens to be current later) and never reconstructed for
+    # older files that predate this block (see ``RECOMMENDATION_PICK_FORMAT_
+    # VERSION``) -- an absent pick means "not recorded", not "unknown winner
+    # under a known rule".
+    chosen, reason = recommend_balanced(outcome.points)
+    pick = (
+        None
+        if chosen is None
+        else {
+            "candidate_index": int(chosen.candidate_index),
+            "merge_threshold": float(chosen.merge_threshold),
+            "confidence": float(chosen.confidence),
+        }
+    )
     payload = {
         "version": EVIDENCE_VERSION,
         "partial": bool(outcome.partial),
@@ -584,6 +626,8 @@ def save_direct_calibration(
             "rule_id": RECOMMENDATION_RULE_ID,
             "rule": RECOMMENDATION_RULE,
             "effective_date": RECOMMENDATION_RULE_EFFECTIVE_DATE,
+            "pick": pick,
+            "reason": reason,
         },
     }
     fd, tmp_name = tempfile.mkstemp(
@@ -652,6 +696,27 @@ def load_direct_calibration(evidence_dir: Path) -> DirectCalibrationOutcome | No
             recommendation_rule_id = UNKNOWN_RECOMMENDATION_RULE_ID
             recommendation_rule = UNKNOWN_RECOMMENDATION_RULE_LABEL
             recommendation_rule_effective_date = ""
+        # v6+ additionally records the WINNER (or refusal) itself, as
+        # computed at save time -- never recomputed here. v5 profiles have
+        # rule provenance but no pick; that must read as "not recorded",
+        # not be conflated with the v4-and-older "no rule at all" case, and
+        # must never be back-filled by re-running any rule against the
+        # loaded points.
+        recommendation_pick_recorded = False
+        recommendation_pick_key: tuple | None = None
+        recommendation_pick_reason = ""
+        if version >= RECOMMENDATION_PICK_FORMAT_VERSION:
+            raw_recommendation = payload.get("recommendation") or {}
+            if "pick" in raw_recommendation:
+                recommendation_pick_recorded = True
+                raw_pick = raw_recommendation.get("pick")
+                if raw_pick is not None:
+                    recommendation_pick_key = (
+                        int(raw_pick["candidate_index"]),
+                        float(raw_pick["merge_threshold"]),
+                        float(raw_pick["confidence"]),
+                    )
+                recommendation_pick_reason = str(raw_recommendation.get("reason", ""))
         return DirectCalibrationOutcome(
             points=points,
             previews=previews,
@@ -660,6 +725,9 @@ def load_direct_calibration(evidence_dir: Path) -> DirectCalibrationOutcome | No
             recommendation_rule_id=recommendation_rule_id,
             recommendation_rule=recommendation_rule,
             recommendation_rule_effective_date=recommendation_rule_effective_date,
+            recommendation_pick_recorded=recommendation_pick_recorded,
+            recommendation_pick_key=recommendation_pick_key,
+            recommendation_pick_reason=recommendation_pick_reason,
         )
     except (
         OSError,

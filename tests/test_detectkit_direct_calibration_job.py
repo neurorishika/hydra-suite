@@ -672,7 +672,7 @@ def test_v5_round_trip_carries_recommendation_rule(tmp_path):
         save_direct_calibration,
     )
 
-    assert EVIDENCE_VERSION == 5
+    assert EVIDENCE_VERSION == 6
 
     request = _request(tmp_path)
     save_direct_calibration(
@@ -934,3 +934,129 @@ def test_profile_missing_mean_quality_key_loads_as_never_measured(tmp_path):
     _best, reason_zero = core_direct.recommend_balanced([restored_zero])
     assert "Mistargeted" in reason_zero
     assert "never measured" not in reason_zero
+
+
+def test_v6_round_trip_persists_the_pick_made_at_save_time(tmp_path):
+    """The winner ``recommend_balanced`` actually chose at SAVE time is
+    persisted verbatim and survives a save/load cycle -- the dialog must be
+    able to show it without recomputing anything."""
+    from hydra_suite.core.inference import direct_calibration as core_direct
+    from hydra_suite.detectkit.jobs.direct_calibration import (
+        DirectCalibrationOutcome,
+        load_direct_calibration,
+        save_direct_calibration,
+    )
+
+    request = _request(tmp_path)
+    point = _scored_point()
+    chosen, reason = core_direct.recommend_balanced([point])
+    assert chosen is not None  # otherwise this test asserts nothing
+
+    save_direct_calibration(
+        request.evidence_dir,
+        DirectCalibrationOutcome(points=[point]),
+        request,
+    )
+    restored = load_direct_calibration(request.evidence_dir)
+    assert restored is not None
+    assert restored.recommendation_pick_recorded is True
+    assert restored.recommendation_pick_key == (
+        int(chosen.candidate_index),
+        float(chosen.merge_threshold),
+        float(chosen.confidence),
+    )
+    assert restored.recommendation_pick_reason == reason
+
+
+def test_v6_round_trip_persists_a_refusal_as_a_recorded_fact(tmp_path):
+    """When the rule refuses (no eligible point), that refusal is itself
+    persisted -- ``recommendation_pick_recorded`` is True with a ``None``
+    key, distinct from an old file that never recorded a pick at all."""
+    from hydra_suite.core.inference.direct_calibration import (
+        CalibrationScore,
+        DirectCalibrationPoint,
+    )
+    from hydra_suite.detectkit.jobs.direct_calibration import (
+        DirectCalibrationOutcome,
+        load_direct_calibration,
+        save_direct_calibration,
+    )
+
+    request = _request(tmp_path)
+    failing_point = DirectCalibrationPoint(
+        label="too little recall",
+        enabled=True,
+        geometry_mode="auto_object",
+        tile_width=640,
+        tile_height=640,
+        overlap=0.2,
+        object_tile_fraction=0.4,
+        max_detections=64,
+        tiles_per_frame=9,
+        seconds_per_frame=0.4,
+        confidence=0.35,
+        merge_policy="greedy_nmm",
+        merge_metric="ios",
+        merge_threshold=0.5,
+        merge_backend="cv2",
+        score=CalibrationScore(
+            frames=20,
+            matched=5,
+            missed=195,
+            extra=0,
+            duplicate=0,
+            precision=1.0,
+            recall=0.025,
+            f1=0.05,
+            mean_iou=0.81,
+            mean_quality=0.9,
+        ),
+    )
+    save_direct_calibration(
+        request.evidence_dir,
+        DirectCalibrationOutcome(points=[failing_point]),
+        request,
+    )
+    restored = load_direct_calibration(request.evidence_dir)
+    assert restored is not None
+    assert restored.recommendation_pick_recorded is True
+    assert restored.recommendation_pick_key is None
+    assert restored.recommendation_pick_reason
+
+
+def test_v5_evidence_reports_pick_not_recorded_without_backfill(tmp_path):
+    """A real v5 payload (rule provenance present, no ``pick`` key -- the
+    shape saved before this task) must load with
+    ``recommendation_pick_recorded is False`` -- it must NOT be silently
+    back-filled by re-running the current rule against the loaded points."""
+    import json as _json
+
+    from hydra_suite.core.inference.direct_calibration import (
+        RECOMMENDATION_RULE,
+        RECOMMENDATION_RULE_ID,
+    )
+    from hydra_suite.detectkit.jobs.direct_calibration import load_direct_calibration
+
+    evidence_dir = tmp_path / "evidence"
+    evidence_dir.mkdir(parents=True)
+    v5_payload = {
+        "version": 5,
+        "partial": False,
+        "message": "",
+        "provenance": {},
+        "points": [],
+        "frames": [],
+        "previews": [],
+        "recommendation": {
+            "rule_id": RECOMMENDATION_RULE_ID,
+            "rule": RECOMMENDATION_RULE,
+            "effective_date": "2026-09-06",
+        },
+    }
+    (evidence_dir / "direct_calibration.json").write_text(_json.dumps(v5_payload))
+
+    loaded = load_direct_calibration(evidence_dir)
+    assert loaded is not None
+    assert loaded.recommendation_rule_id == RECOMMENDATION_RULE_ID
+    assert loaded.recommendation_pick_recorded is False
+    assert loaded.recommendation_pick_key is None

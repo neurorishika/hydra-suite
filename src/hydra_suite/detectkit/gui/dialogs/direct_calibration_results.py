@@ -56,6 +56,10 @@ from hydra_suite.core.inference.slice_meta import (
     write_slice_meta,
 )
 from hydra_suite.detectkit.gui.canvas import OBBCanvas
+from hydra_suite.detectkit.jobs.direct_calibration import (
+    UNKNOWN_RECOMMENDATION_RULE_ID,
+    UNKNOWN_RECOMMENDATION_RULE_LABEL,
+)
 from hydra_suite.widgets.dialogs import BaseDialog
 
 from ._overlay_helpers import dialog_gt_layer, dialog_pred_layer
@@ -173,6 +177,7 @@ class DirectCalibrationResultsDialog(BaseDialog):
         runtime_tier: str = "",
         evidence_split: str = "",
         label_set_fingerprint: str = "",
+        stored: bool = False,
     ) -> None:
         super().__init__(
             "SAHI calibration results",
@@ -193,9 +198,36 @@ class DirectCalibrationResultsDialog(BaseDialog):
         self._label_set_fingerprint = str(label_set_fingerprint or "")
         self._frame_index = 0
 
-        self._recommended_point, self._recommendation_reason = recommend_balanced(
-            outcome.points
-        )
+        # ``stored`` is an explicit mode, never inferred from the outcome's
+        # fields being empty -- a freshly computed outcome legitimately has
+        # no rule provenance stamped on it yet (that only exists on a
+        # payload once it has been saved and reloaded).
+        #
+        # Fresh mode (the default, unchanged from before this): the live
+        # rule is applied to the live points and shown as such.
+        #
+        # Stored mode: nothing is recomputed at open time. The pick (or "not
+        # recorded") and the rule that produced it are shown EXACTLY as
+        # persisted -- see ``_stored_recommendation_reason``. Re-evaluating
+        # under the current rule is only ever an explicit user action (the
+        # "Re-evaluate" button wired in ``_build_ui``).
+        self._stored_mode = bool(stored)
+        self._reevaluated = False
+        if self._stored_mode:
+            self._recommended_point = (
+                self._find_point_by_pick_key(outcome.recommendation_pick_key)
+                if outcome.recommendation_pick_recorded
+                else None
+            )
+            self._recommendation_reason = self._stored_recommendation_reason()
+            self._active_rule_id = (
+                outcome.recommendation_rule_id or UNKNOWN_RECOMMENDATION_RULE_ID
+            )
+        else:
+            self._recommended_point, self._recommendation_reason = recommend_balanced(
+                outcome.points
+            )
+            self._active_rule_id = RECOMMENDATION_RULE_ID
 
         existing = read_slice_meta(self._model_path)
         self._staged_meta: dict[str, Any] = (
@@ -225,13 +257,18 @@ class DirectCalibrationResultsDialog(BaseDialog):
         container = QWidget()
         outer = QVBoxLayout(container)
 
-        rule_label = QLabel(f"Recommendation rule: {RECOMMENDATION_RULE}")
-        rule_label.setWordWrap(True)
-        outer.addWidget(rule_label)
+        self._lbl_rule = QLabel(self._rule_label_text())
+        self._lbl_rule.setWordWrap(True)
+        outer.addWidget(self._lbl_rule)
 
-        reason_label = QLabel(self._recommendation_reason)
-        reason_label.setWordWrap(True)
-        outer.addWidget(reason_label)
+        self._lbl_reason = QLabel(self._recommendation_reason)
+        self._lbl_reason.setWordWrap(True)
+        outer.addWidget(self._lbl_reason)
+
+        if self._stored_mode:
+            self.btn_reevaluate = QPushButton("Re-evaluate under current rule")
+            self.btn_reevaluate.clicked.connect(self._on_reevaluate_clicked)
+            outer.addWidget(self.btn_reevaluate)
 
         splitter = QSplitter(Qt.Orientation.Vertical)
 
@@ -379,6 +416,77 @@ class DirectCalibrationResultsDialog(BaseDialog):
     # ------------------------------------------------------------------
     # Preview
     # ------------------------------------------------------------------
+
+    def _find_point_by_pick_key(self, key: tuple | None):
+        """Resolve a persisted pick key against the loaded points.
+
+        Keyed by ``(candidate_index, merge_threshold, confidence)``, never
+        by ``label`` -- see ``DirectCalibrationPoint``'s docstring on why
+        labels are not unique. ``None`` means either the rule refused (a
+        recorded fact) or the row it named is no longer present.
+        """
+        if key is None:
+            return None
+        want_index, want_threshold, want_confidence = key
+        for point in self.outcome.points:
+            if int(point.candidate_index) != int(want_index):
+                continue
+            if not _close(float(point.merge_threshold), float(want_threshold)):
+                continue
+            if not _close(float(point.confidence), float(want_confidence)):
+                continue
+            return point
+        return None
+
+    def _stored_recommendation_reason(self) -> str:
+        outcome = self.outcome
+        if not outcome.recommendation_pick_recorded:
+            return (
+                "This saved profile predates recommendation-pick persistence "
+                "-- the original recommendation was never recorded, and it "
+                "is not reconstructed here by re-running any rule against "
+                "the saved evidence (that would manufacture a record that "
+                'never existed). Use "Re-evaluate under current rule" '
+                "below to compute one now, over this same evidence."
+            )
+        rule_label = outcome.recommendation_rule or UNKNOWN_RECOMMENDATION_RULE_LABEL
+        return f"Stored recommendation (rule: {rule_label}): {outcome.recommendation_pick_reason}"
+
+    def _rule_label_text(self) -> str:
+        if self._stored_mode and not self._reevaluated:
+            rule = self.outcome.recommendation_rule or UNKNOWN_RECOMMENDATION_RULE_LABEL
+            return f"Recommendation rule (as saved): {rule}"
+        if self._reevaluated:
+            return (
+                f"Recommendation rule (re-evaluated now, current): "
+                f"{RECOMMENDATION_RULE}"
+            )
+        return f"Recommendation rule: {RECOMMENDATION_RULE}"
+
+    def _on_reevaluate_clicked(self) -> None:
+        """Explicit, user-triggered recomputation under the CURRENT rule.
+
+        Nothing recomputes on its own -- this is the only path that ever
+        overwrites the stored pick's on-screen display, and it makes
+        unmistakably clear that the result is a recomputation over evidence
+        that predates the rule which just produced it.
+        """
+        chosen, reason = recommend_balanced(self.outcome.points)
+        self._recommended_point = chosen
+        stored_rule_label = (
+            self.outcome.recommendation_rule_id or UNKNOWN_RECOMMENDATION_RULE_ID
+        )
+        self._recommendation_reason = (
+            f"Re-evaluated under the CURRENT rule ({RECOMMENDATION_RULE_ID}): "
+            f"{reason} This is a recomputation, not the original recorded "
+            f"pick -- the evidence was saved under rule "
+            f"'{stored_rule_label}', which predates this re-evaluation."
+        )
+        self._reevaluated = True
+        self._active_rule_id = RECOMMENDATION_RULE_ID
+        self._lbl_rule.setText(self._rule_label_text())
+        self._lbl_reason.setText(self._recommendation_reason)
+        self._populate_table()
 
     def _current_point(self):
         row = self.table_rows.currentRow()
@@ -560,8 +668,13 @@ class DirectCalibrationResultsDialog(BaseDialog):
             # Which scoring/recommendation rule produced every number above.
             # Without it, "localization_quality" on a pre-2026-09-06 sidecar
             # and on this one are two different populations wearing one key,
-            # and nothing on the sidecar says so.
-            "recommendation_rule_id": RECOMMENDATION_RULE_ID,
+            # and nothing on the sidecar says so. ``self._active_rule_id`` is
+            # the CURRENT rule in fresh mode, but in stored mode (viewing a
+            # saved profile without re-evaluating) it is the rule the
+            # EVIDENCE was actually scored under -- stamping the live
+            # constant here instead would claim the current rule produced
+            # numbers it never touched.
+            "recommendation_rule_id": self._active_rule_id,
         }
 
     # ------------------------------------------------------------------

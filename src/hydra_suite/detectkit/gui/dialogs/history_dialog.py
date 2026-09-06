@@ -22,6 +22,7 @@ from PySide6.QtWidgets import (
 
 from hydra_suite.core.inference.slice_meta import read_slice_meta, training_geometry
 from hydra_suite.detectkit.jobs.direct_calibration import (
+    load_direct_calibration,
     resolve_calibration_dataset_yaml,
 )
 from hydra_suite.widgets.dialogs import BaseDialog
@@ -198,10 +199,14 @@ class HistoryDialog(BaseDialog):
         self._btn_calibrate = QPushButton("Calibrate for TrackerKit…")
         self._btn_calibrate.setEnabled(False)
         self._btn_calibrate.clicked.connect(self._calibrate_selected)
+        self._btn_view_calibration = QPushButton("View stored calibration…")
+        self._btn_view_calibration.setEnabled(False)
+        self._btn_view_calibration.clicked.connect(self._view_stored_calibration)
         btn_row.addWidget(self._btn_load)
         btn_row.addWidget(self._btn_export)
         btn_row.addWidget(self._btn_delete)
         btn_row.addWidget(self._btn_calibrate)
+        btn_row.addWidget(self._btn_view_calibration)
         layout.addLayout(btn_row)
 
         container = QWidget()
@@ -316,6 +321,11 @@ class HistoryDialog(BaseDialog):
         self._btn_export.setEnabled(has_entry and bool(entry.get("artifact_paths")))
         self._btn_delete.setEnabled(has_entry)
         self._btn_calibrate.setEnabled(has_entry and self._is_calibratable(entry))
+        self._btn_view_calibration.setEnabled(
+            has_entry
+            and self._is_calibratable(entry)
+            and load_direct_calibration(self._evidence_dir()) is not None
+        )
         self._set_detail_text(entry)
 
     @staticmethod
@@ -328,6 +338,63 @@ class HistoryDialog(BaseDialog):
             and bool(_calibration_model_path(entry)[0])
         )
 
+    def _evidence_dir(self) -> Path:
+        """The project-local SAHI-calibration evidence directory.
+
+        Shared by ``_calibrate_selected`` (which writes here) and
+        ``_view_stored_calibration`` (which only reads) -- both must agree
+        on where evidence lives, or "view stored" would look in the wrong
+        place after a calibration was just saved.
+        """
+        return (
+            Path(self._project.project_dir) / ".sahi_calibration"
+            if getattr(self._project, "project_dir", None)
+            else Path(".sahi_calibration")
+        )
+
+    def _view_stored_calibration(self) -> None:
+        """Show the last saved calibration EXACTLY as persisted.
+
+        Read-only in spirit: this loads evidence from disk and displays it
+        in ``stored`` mode (the stored pick and rule, never a live
+        recompute). Saving a profile from here still goes through the
+        dialog's normal staged ``accept()`` path -- nothing about loading
+        for viewing bypasses that.
+        """
+        entry = self._get_selected_entry()
+        if entry is None or not self._is_calibratable(entry):
+            return
+        evidence_dir = self._evidence_dir()
+        outcome = load_direct_calibration(evidence_dir)
+        if outcome is None:
+            QMessageBox.information(
+                self,
+                "SAHI calibration",
+                "No saved calibration evidence was found for this project.",
+            )
+            return
+        model_path, _is_published = _calibration_model_path(entry)
+        role = str(entry.get("role", "") or "")
+        task = _ROLE_TO_TASK.get(role, "obb")
+        geometry, _dataset_yaml = _entry_calibration_context(entry)
+
+        from .direct_calibration_results import DirectCalibrationResultsDialog
+
+        dialog = DirectCalibrationResultsDialog(
+            self,
+            model_path=Path(model_path),
+            outcome=outcome,
+            training_geometry=geometry,
+            previews=outcome.previews,
+            task=task,
+            stored=True,
+        )
+        if dialog.exec():
+            self.detail_label.setText(
+                "<span style='color:#4ec9b0'>Saved profile(s) from the stored "
+                f"calibration to:</span> {Path(model_path).name}"
+            )
+
     def _calibrate_selected(self) -> None:
         entry = self._get_selected_entry()
         if entry is None or not self._is_calibratable(entry):
@@ -337,11 +404,7 @@ class HistoryDialog(BaseDialog):
         task = _ROLE_TO_TASK.get(role, "obb")
         geometry, dataset_yaml = _entry_calibration_context(entry)
         sources = list(getattr(self._project, "sources", []) or [])
-        evidence_dir = (
-            Path(self._project.project_dir) / ".sahi_calibration"
-            if getattr(self._project, "project_dir", None)
-            else Path(".sahi_calibration")
-        )
+        evidence_dir = self._evidence_dir()
         # open_direct_calibration owns the ONLY write: any staged profile is
         # committed atomically inside DirectCalibrationResultsDialog.accept()
         # via write_slice_meta. Publication (including the training-geometry
