@@ -88,6 +88,10 @@ class _BaseDirectOBBExecutor:
         self._input_buffers: OrderedDict[int, tuple] = OrderedDict(
             [(1, (self._pinned_input, self._gpu_input))]
         )
+        # The CUDA dependency below protects the device input.  Pinned host
+        # staging needs a separate ownership fence: a CPU np.copyto is not
+        # ordered by current_stream.wait_event().
+        self._host_staging_events: dict[int, object] = {}
 
     def _input_buffer(self, batch_size: int):
         """Return a bounded pinned-host/CUDA input slot for ``batch_size``."""
@@ -137,6 +141,22 @@ class _BaseDirectOBBExecutor:
     def _wait_input_reusable(self) -> None:
         """Hook for runtimes with a private CUDA execution stream."""
 
+    def _wait_host_staging_reusable(self, pinned) -> None:
+        """Ensure an async H2D copy has consumed ``pinned`` before CPU reuse."""
+        event = self._host_staging_events.get(id(pinned))
+        if event is not None and not event.query():
+            # This is deliberately only an H2D completion fence for this
+            # staging slot, never a TensorRT stream synchronization.
+            event.synchronize()
+
+    def _mark_host_staging_inflight(self, pinned) -> None:
+        """Record completion of the current stream's use of a pinned slot."""
+        import torch
+
+        event = torch.cuda.Event()
+        event.record(torch.cuda.current_stream())
+        self._host_staging_events[id(pinned)] = event
+
     def _preprocess(self, frames: Sequence[np.ndarray]):
         if not frames:
             raise ValueError("direct OBB executor received no frames")
@@ -158,6 +178,7 @@ class _BaseDirectOBBExecutor:
             # This avoids per-call CUDA memory allocations and the associated
             # allocator-induced latency spikes.
             self._wait_input_reusable()
+            self._wait_host_staging_reusable(self._pinned_input)
             lb_frame = self._letterbox(image=frames[0])
             if lb_frame.ndim != 3 or lb_frame.shape[2] != 3:
                 raise ValueError("direct OBB executor expects HxWx3 BGR frames")
@@ -170,6 +191,7 @@ class _BaseDirectOBBExecutor:
             #   PyTorch-CUDA executor: _run_inference runs on the same default stream
             self._gpu_input.copy_(self._pinned_input, non_blocking=True)
             self._gpu_input.mul_(1.0 / 255.0)
+            self._mark_host_staging_inflight(self._pinned_input)
             return self._gpu_input
 
         # Multi-frame path: fill reusable pinned staging directly.  This keeps
@@ -177,6 +199,7 @@ class _BaseDirectOBBExecutor:
         # np.stack and a transient CUDA tensor for every SAHI chunk.
         pinned, gpu = self._input_buffer(len(frames))
         self._wait_input_reusable()
+        self._wait_host_staging_reusable(pinned)
         for index, frame in enumerate(frames):
             lb_frame = self._letterbox(image=frame)
             if lb_frame.ndim != 3 or lb_frame.shape[2] != 3:
@@ -184,6 +207,7 @@ class _BaseDirectOBBExecutor:
             np.copyto(pinned.numpy()[index], lb_frame.transpose(2, 0, 1)[::-1])
         gpu.copy_(pinned, non_blocking=True)
         gpu.mul_(1.0 / 255.0)
+        self._mark_host_staging_inflight(pinned)
         return gpu
 
     def _preprocess_cuda(self, cuda_rgb_hwc: "torch.Tensor") -> "torch.Tensor":
@@ -293,16 +317,17 @@ class _BaseDirectOBBExecutor:
             orig_w,
         ):
             self._dummy_orig = np.empty((orig_h, orig_w, 3), dtype=np.uint8)
-        results = self._postprocess(
-            raw_preds,
-            img_tensor,
-            [self._dummy_orig],
-            conf_thres=conf_thres,
-            classes=classes,
-            max_det=max_det,
-        )
-        self._release_output(raw_preds)
-        return results
+        try:
+            return self._postprocess(
+                raw_preds,
+                img_tensor,
+                [self._dummy_orig],
+                conf_thres=conf_thres,
+                classes=classes,
+                max_det=max_det,
+            )
+        finally:
+            self._release_output(raw_preds)
 
     def _postprocess(
         self,
@@ -440,16 +465,17 @@ class _BaseDirectOBBExecutor:
             img_tensor = self._preprocess(frames)
             orig_frames = list(frames)
         raw_preds = self._run_inference(img_tensor)
-        results = self._postprocess(
-            raw_preds,
-            img_tensor,
-            orig_frames,
-            conf_thres=conf_thres,
-            classes=classes,
-            max_det=max_det,
-        )
-        self._release_output(raw_preds)
-        return results
+        try:
+            return self._postprocess(
+                raw_preds,
+                img_tensor,
+                orig_frames,
+                conf_thres=conf_thres,
+                classes=classes,
+                max_det=max_det,
+            )
+        finally:
+            self._release_output(raw_preds)
 
     def _release_output(self, raw_preds) -> None:
         """Hook called after postprocessing has queued all reads of an output."""

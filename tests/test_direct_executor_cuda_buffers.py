@@ -18,11 +18,20 @@ class _Tensor:
 
 
 class _Event:
-    def __init__(self):
+    def __init__(self, done=True):
         self.recorded = None
+        self.done = done
+        self.synchronized = False
 
     def record(self, stream):
         self.recorded = stream
+
+    def query(self):
+        return self.done
+
+    def synchronize(self):
+        self.synchronized = True
+        self.done = True
 
 
 def _fake_torch(created):
@@ -87,3 +96,41 @@ def test_output_release_records_default_stream_before_reuse(monkeypatch):
     _, event = executor._output_buffers[(1, 9, 10)]
     assert isinstance(event, _Event)
     assert event.recorded == "default"
+
+
+def test_pinned_host_staging_waits_for_h2d_not_tensorrt_stream():
+    executor = object.__new__(_BaseDirectOBBExecutor)
+    pinned = object()
+    pending_h2d = _Event(done=False)
+    executor._host_staging_events = {id(pinned): pending_h2d}
+
+    executor._wait_host_staging_reusable(pinned)
+
+    assert pending_h2d.synchronized
+    # This is intentionally independent of _wait_input_reusable(), which only
+    # protects TensorRT's later read of the CUDA input buffer.
+
+
+def test_output_release_runs_when_postprocess_raises():
+    executor = object.__new__(_BaseDirectOBBExecutor)
+    executor._preprocess = lambda frames: "input"
+    executor._run_inference = lambda image: "raw-output"
+    executor._release_output_calls = []
+    executor._release_output = executor._release_output_calls.append
+
+    def fail(*args, **kwargs):
+        raise RuntimeError("postprocess failed")
+
+    executor._postprocess = fail
+
+    import pytest
+
+    with pytest.raises(RuntimeError, match="postprocess failed"):
+        executor._predict_chunk(
+            [object()],
+            cuda_input=False,
+            conf_thres=0.1,
+            classes=None,
+            max_det=1,
+        )
+    assert executor._release_output_calls == ["raw-output"]
