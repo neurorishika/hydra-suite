@@ -69,6 +69,9 @@ def main():
         task = case["task"]
         frame_pairs = [_frame_pair(f) for f in case["frames"]]
 
+        # Does not run at HEAD by design: ``iou_threshold`` was deleted from
+        # ``match_frame``/``score_frames`` by D7. See the module docstring --
+        # only re-run this from a checkout of ``generated_at_commit``.
         per_frame = [
             match_frame(predictions, labels, iou_threshold=0.5, task=task)
             for predictions, labels in frame_pairs
