@@ -199,7 +199,45 @@ and leaves the commit/lock/revision/swap state machine — which spec §7 names 
 the root flaw — untouched. Several of the plan's own invariants *require* the
 flap to survive.
 
-## 10. Recommended reshape
+## 10. What shipped from this audit (2026-09-06)
+
+F5, F3 and F4-as-a-warning shipped on `fix/identity-honesty-slice`
+(705a5999, 55b85729, 66fc7e77). Recorded here because §11 below is written
+against the pre-fix code.
+
+- **F5 fixed.** `out_conf = probs[out_idx]`: the reported confidence now
+  belongs to the reported label by construction.
+- **F3 fixed, with a caveat.** The bias is now `log1p(strength)` (raises the
+  locked entry) and is applied to a *copy* inside the assignment solve, so it
+  can no longer compound. **It does not, however, protect anything at shipped
+  defaults**: the bias feeds only the Hungarian solve (gated by
+  `display_threshold` 0.6) while revision is decided on the raw posterior
+  against `commit_threshold` 0.85, so a challenger at 0.85 is assigned
+  regardless. Locked and unlocked decoders revise on the identical frame. The
+  fix removes the old harm; it adds no protection. `-log1p(-strength)`
+  (+2.303 nats) *does* block revisions and fails exactly one existing test
+  whose config locks after a single frame — re-evaluate both once an oracle
+  exists.
+- **F4 not fixed, announced.** Retuning needs an oracle. The decoder now warns
+  once per `(margin, threshold)` pair when the gate cannot bind.
+- **3 of the 7 unreachable knobs** (§7b) are now emitted *and* wired through
+  `from_engine_config`, defaults unchanged.
+
+**Gate (MPS, baseline `main` @9ae13148):** `worm_bgsub` and `fly_obb` are
+byte-identical including every keyed column. `ant_cnn_identity` and
+`ant_cnn_identity_relink` have identical positions/θ/row counts/unmatched,
+with exactly 5 columns differing — `IdentityRealtimeID`, `...Label`,
+`...Confidence`, `...Margin`, `...SlotLock`. So the change is confined to the
+identity columns and does **not** move trajectories, despite these fixtures
+enabling the online decoder and its association-cost addon.
+
+Two gate caveats worth carrying forward: **`ant_cnn_identity_marked` never
+ran** — its config exists but `ant_cnn_identity_marked.mp4` does not, and the
+harness still printed "all clips produced comparable output"; and `fly_obb`
+reported 1.26x perf against a 1.25x tolerance while an unrelated `trackerkit`
+GUI held the machine (other clips: 0.43x/0.85x/1.11x).
+
+## 11. Recommended reshape
 
 1. **Fix F5 first.** One-line class of bug, corrupts the shipped CSV, has no
    task, needs no new machinery.
