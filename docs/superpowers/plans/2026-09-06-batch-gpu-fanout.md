@@ -2635,7 +2635,7 @@ git commit -m "docs: TrackerKit CLI page with GPU fan-out; session fields in con
 
 **Files:** none new in `src/`. Create `tools/equivalence/fanout_gate.sh`.
 
-- [ ] **Step 1: Write the fan-out vs sequential gate script**
+- [x] **Step 1: Write the fan-out vs sequential gate script**
 
 ```bash
 #!/usr/bin/env bash
@@ -2679,7 +2679,7 @@ exit $status
 
 Adjust the fixture layout (`clips/`, `configs/`) to whatever `ls tools/equivalence/fixtures` actually shows, and check how `tools/equivalence/runner.py` names its config sidecar so the staged `${clip}_config.json` matches what the CLI expects.
 
-- [ ] **Step 2: Run the gate on MPS (this box)**
+- [x] **Step 2: Run the gate on MPS (this box)**
 
 ```bash
 pkill -f "sleap" || true; pkill -f "hydra_suite.trackerkit.app" || true   # stale sleap/hydra only
@@ -2689,7 +2689,7 @@ OUT=/tmp/fanout_gate bash tools/equivalence/fanout_gate.sh fly_obb worm_bgsub an
 
 Expected: 8 ✅ lines, exit 0. `ant_obb_sleap` proves two concurrent SLEAP service children on one host. If SLEAP CSVs are empty, conda was not active in the shell that launched the parent.
 
-- [ ] **Step 3: Run the gate with thread caps engaged**
+- [x] **Step 3: Run the gate with thread caps engaged**
 
 ```bash
 EXTRA="--threads-per-job 4" OUT=/tmp/fanout_gate_caps bash tools/equivalence/fanout_gate.sh fly_obb worm_bgsub ant_obb_sleap ant_cnn_identity
@@ -2697,7 +2697,7 @@ EXTRA="--threads-per-job 4" OUT=/tmp/fanout_gate_caps bash tools/equivalence/fan
 
 Expected: either 8 ✅ (record in the plan that caps are identity-safe on MPS) or a ❌ on some clip (record which; caps stay opt-in per spec §6). Either outcome is a valid result; write it into `docs/superpowers/specs/2026-09-06-batch-gpu-fanout-design.md` §6 as a dated note.
 
-- [ ] **Step 4: Run the standard MPS equivalence matrix for the lock touches**
+- [x] **Step 4: Run the standard MPS equivalence matrix for the lock touches**
 
 ```bash
 git -C /Users/neurorishika/Projects/Rockefeller/Kronauer/multi-animal-tracker worktree add --detach .worktrees/equiv-base 5977e705 2>/dev/null || true
@@ -2708,7 +2708,7 @@ REPO=$PWD WT=$PWD/.worktrees/batch-fanout MAIN_SRC=$PWD/.worktrees/equiv-base/sr
 
 Expected: every clip EQUIVALENT at its determinism floor with row counts > 1 (baseline = branch base `5977e705`, so the only delta is this branch).
 
-- [ ] **Step 5: CUDA on mehek**
+- [x] **Step 5: CUDA on mehek**
 
 ```bash
 cd /Users/neurorishika/Projects/Rockefeller/Kronauer/multi-animal-tracker/.worktrees/batch-fanout
@@ -2719,7 +2719,7 @@ ssh rutalab@mehek.taild08eb9.ts.net 'cd ~/hydra-suite && git fetch /tmp/fanout.b
 
 Expected: all ✅. The `--gpus 0` run exercises UUID pinning end to end on one physical GPU (the child log's `# gpu=GPU-…` header line proves the pin). Then run the standard matrix with `RUNTIME=cuda` per CLAUDE.md.
 
-- [ ] **Step 6: Record results and commit the gate script**
+- [x] **Step 6: Record results and commit the gate script**
 
 Append a "Verification results (2026-09-XX)" section to the plan with the ✅/❌ lines from steps 2-5 verbatim, then:
 
@@ -2727,6 +2727,171 @@ Append a "Verification results (2026-09-XX)" section to the plan with the ✅/�
 git add tools/equivalence/fanout_gate.sh docs/superpowers/plans/2026-09-06-batch-gpu-fanout.md docs/superpowers/specs/2026-09-06-batch-gpu-fanout-design.md
 git commit -m "test(equivalence): fan-out vs sequential byte-identity gate + recorded results"
 ```
+
+---
+
+## Verification results (2026-09-06)
+
+Branch `feat/batch-gpu-fanout` @ `7da50e2d`; baseline for the standard matrix is
+the branch base `5977e705`. Gate script: `tools/equivalence/fanout_gate.sh`
+(committed in this task). All runs used the fixture clips at 500 frames
+(`ant_cnn_identity` 489) staged through `tools/equivalence/runner.py`'s own
+`build_config`, so each sidecar is exactly what the equivalence harness would
+hand that clip. Both boxes printed `(none set)` for inherited `*_NUM_THREADS`,
+and every gate verified `hydra_suite` resolved inside the tree under test.
+
+### Step 2 — MPS fan-out vs sequential (`--jobs 2`), this box, `hydra-mps`
+
+`OUT=/tmp/fanout_gate bash tools/equivalence/fanout_gate.sh fly_obb worm_bgsub ant_obb_sleap ant_cnn_identity`
+
+```
+4/4 videos succeeded
+✅ 753 child [job N] lines in par.log (children really ran)
+✅ fly_obb_tracking_backward.csv byte-identical (seq=1495 rows, par=1495 rows)
+✅ fly_obb_tracking_final_with_individual.csv byte-identical (seq=1501 rows, par=1501 rows)
+✅ fly_obb_tracking_final.csv byte-identical (seq=1501 rows, par=1501 rows)
+✅ fly_obb_tracking_forward.csv byte-identical (seq=1495 rows, par=1495 rows)
+✅ worm_bgsub_tracking_backward.csv byte-identical (seq=5001 rows, par=5001 rows)
+✅ worm_bgsub_tracking_final_with_individual.csv byte-identical (seq=2707 rows, par=2707 rows)
+✅ worm_bgsub_tracking_final.csv byte-identical (seq=2707 rows, par=2707 rows)
+✅ worm_bgsub_tracking_forward.csv byte-identical (seq=5001 rows, par=5001 rows)
+✅ ant_obb_sleap_tracking_backward.csv byte-identical (seq=12501 rows, par=12501 rows)
+✅ ant_obb_sleap_tracking_final_with_individual.csv byte-identical (seq=11882 rows, par=11882 rows)
+✅ ant_obb_sleap_tracking_final.csv byte-identical (seq=11882 rows, par=11882 rows)
+✅ ant_obb_sleap_tracking_forward.csv byte-identical (seq=12501 rows, par=12501 rows)
+✅ ant_cnn_identity_tracking_backward.csv byte-identical (seq=12226 rows, par=12226 rows)
+✅ ant_cnn_identity_tracking_final_with_individual.csv byte-identical (seq=10202 rows, par=10202 rows)
+✅ ant_cnn_identity_tracking_final.csv byte-identical (seq=10202 rows, par=10202 rows)
+✅ ant_cnn_identity_tracking_forward.csv byte-identical (seq=12226 rows, par=12226 rows)
+### GATE PASSED -- fan-out output is byte-identical to sequential.
+GATE_MPS_EXIT=0
+```
+
+`ant_obb_sleap` and `ant_cnn_identity` both drive SLEAP, and with two slots they
+overlapped, so this is also the two-concurrent-SLEAP-service-children test the
+spec's §5 asks for. The gate compares **four** CSVs per clip, not the two the
+brief listed: the CLI emits `_tracking_forward`, `_tracking_backward`,
+`_tracking_final` and `_tracking_final_with_individual` (the last is the only
+file carrying identity/pose columns, so it is what makes the identity claim
+non-vacuous). `_tracking.csv` / `_tracking_forward_processed.csv` are the
+session's internal raw/final path names and are not what lands on disk here.
+
+### Step 3 — MPS with thread caps (`--threads-per-job 4`)
+
+Identical 16 ✅ lines and `GATE_CAPS_EXIT=0`, i.e. **caps are identity-safe on
+MPS**. Non-vacuous by construction: `build_child_env` uses `setdefault`, and the
+gate printed `(none set)` for the parent's `OMP/MKL/OPENBLAS/NUMEXPR/VECLIB`
+thread variables, so the children genuinely ran capped at 4 threads while the
+sequential run they were compared against was uncapped. Recorded as a dated note
+in spec §6; caps nevertheless **stay opt-in** (one platform only).
+
+### Step 4 — Standard MPS equivalence matrix (`5977e705` vs `7da50e2d`)
+
+`OUT=/tmp/equiv_fanout RUNTIME=mps bash tools/equivalence/run_matrix.sh` — all
+8 fixture clips.
+
+- **48/48 `VERDICT: EQUIVALENT ✅`, 0 `DIFFERENCES`**, across
+  `DETERMINISM new_a vs new_b` and `EQUIVALENCE legacy vs new_a` for
+  `_forward`, `_final` and `_final_with_individual` (the last with
+  `--strict-columns`).
+- Every single comparison printed literally
+  `pos |Δ| (px): max=0.000e+00 mean=0.000e+00 p99=0.000e+00` and
+  `theta |Δ| (rad): max=0.000e+00 mean=0.000e+00`. No θ π-flips appeared: with a
+  modern baseline the orientation anchor makes θ deterministic, so this is exact
+  equality rather than "at the noise floor".
+- `### all clips produced comparable output.` / `MATRIX_EXIT=0`.
+- Provenance (the check that matters): 8 runner lines
+  `branch=HEAD commit=5977e705bd` (legacy) and 16
+  `branch=feat/batch-gpu-fanout commit=7da50e2dca` (new_a + new_b).
+
+PERFORMANCE: 7 of 8 clips within tolerance
+(`ant_pose_headtail` 0.85x, `ant_obb_sequential` 0.93x, `worm_bgsub` 1.01x,
+`worm_bgsub_scaled` 1.02x, `ant_cnn_identity` 1.14x,
+`ant_cnn_identity_relink` 0.97x, `fly_obb` 0.99x); **`ant_obb_sleap` printed
+`new/legacy time ratio = 1.30x -> PERFORMANCE: SLOWER ❌`** (legacy 106.07s vs
+new 138.04s). Not attributed to this branch, on this box's own evidence: the
+two *identical-code* runs of that clip in the same matrix were
+`new_a=138.04s` and `new_b=173.27s`, a **1.26x same-code spread**, and
+`ant_pose_headtail` likewise spread `139.76s`/`170.31s` (1.22x). SLEAP-service
+clips on MPS therefore have a run-to-run noise floor at or above the 1.25x
+tolerance, so a single 1.30x sample is not a signal. Corroborating: the same
+clip on CUDA measured **0.99x**, and all 48 correctness comparisons are exactly
+zero.
+
+### Step 5 — CUDA on mehek (`hydra-cuda`, RTX 6000 Ada, single GPU)
+
+Run twice. The **first** pair of gates ran from `~/hydra-suite` checked out to
+the branch; a concurrent agent then switched that checkout to branch `m2` at
+16:19:42 (git reflog), so the gates were re-run from a **dedicated detached
+worktree** `.worktrees/fanout-cur` @ `7da50e2d` for a result that cannot have
+been contaminated. Both pairs agree.
+
+`--jobs 2`, four clips (isolated worktree):
+
+```
+4/4 videos succeeded
+✅ 753 child [job N] lines in par.log (children really ran)
+✅ fly_obb_tracking_backward.csv byte-identical (seq=1495 rows, par=1495 rows)
+✅ fly_obb_tracking_final.csv byte-identical (seq=1501 rows, par=1501 rows)
+✅ fly_obb_tracking_final_with_individual.csv byte-identical (seq=1501 rows, par=1501 rows)
+✅ fly_obb_tracking_forward.csv byte-identical (seq=1495 rows, par=1495 rows)
+✅ worm_bgsub_tracking_backward.csv byte-identical (seq=5001 rows, par=5001 rows)
+✅ worm_bgsub_tracking_final.csv byte-identical (seq=2725 rows, par=2725 rows)
+✅ worm_bgsub_tracking_final_with_individual.csv byte-identical (seq=2725 rows, par=2725 rows)
+✅ worm_bgsub_tracking_forward.csv byte-identical (seq=5001 rows, par=5001 rows)
+✅ ant_obb_sleap_tracking_backward.csv byte-identical (seq=12501 rows, par=12501 rows)
+✅ ant_obb_sleap_tracking_final.csv byte-identical (seq=11843 rows, par=11843 rows)
+✅ ant_obb_sleap_tracking_final_with_individual.csv byte-identical (seq=11843 rows, par=11843 rows)
+✅ ant_obb_sleap_tracking_forward.csv byte-identical (seq=12501 rows, par=12501 rows)
+✅ ant_cnn_identity_tracking_backward.csv byte-identical (seq=12226 rows, par=12226 rows)
+✅ ant_cnn_identity_tracking_final.csv byte-identical (seq=7957 rows, par=7957 rows)
+✅ ant_cnn_identity_tracking_final_with_individual.csv byte-identical (seq=7957 rows, par=7957 rows)
+✅ ant_cnn_identity_tracking_forward.csv byte-identical (seq=12226 rows, par=12226 rows)
+### GATE PASSED -- fan-out output is byte-identical to sequential.
+GATE1_EXIT=0
+```
+
+`EXTRA="--gpus 0"` on `fly_obb` + `ant_obb_sleap`: 8 ✅, `GATE2_EXIT=0`, and the
+**UUID pin is proven end to end** by the child log headers and the summary
+table:
+
+```
+#  video              gpu           status  wall  log
+1  fly_obb.mp4        GPU-088a4fff  OK      22s   ...
+2  ant_obb_sleap.mp4  GPU-088a4fff  OK      47s   ...
+# gpu=GPU-088a4fff-9dff-dcce-5c6e-b7b29fc28177 command=.../python -m hydra_suite.trackerkit.app ...
+```
+
+`CUDA_VISIBLE_DEVICES` is set to the device **UUID**, not the ordinal. Note the
+gate passes `--jobs 2` while `--gpus 0` names one device, so slots clamp to
+`min(2, 1) = 1` — the table shows the two videos running one at a time, which is
+the documented behaviour, not a scheduling failure.
+
+**CUDA standard matrix** (`MAIN_SRC=.worktrees/fanout-base` @ `5977e705`,
+`WT_SRC=.worktrees/fanout-cur` @ `7da50e2d`, `RUNTIME=cuda`), all 8 clips:
+
+- **48/48 `VERDICT: EQUIVALENT ✅`, 0 `DIFFERENCES`, 0 ❌ of any kind**; every
+  comparison `pos |Δ| max=0.000e+00`, `theta |Δ| max=0.000e+00`.
+- PERFORMANCE **8/8 EQUIVALENT ✅**: 0.97x, 0.99x, 0.98x, 1.01x, 1.01x, 1.01x,
+  1.01x, 0.98x.
+- `### all clips produced comparable output.` / `MATRIX_EXIT=0`.
+- Provenance: legacy runs `commit=5977e705bd`, new runs `commit=7da50e2dca`.
+
+A first CUDA matrix attempt was **discarded as invalid** and none of its numbers
+are quoted: mehek already had a `.worktrees/equiv-base` pinned at an unrelated
+old commit (`81e3736b`) so `git worktree add` failed and `MAIN_SRC` was the wrong
+baseline, and the concurrent `m2` checkout swapped `WT_SRC` mid-run. `grep -E
+"branch=.*commit=" <matrix log>` catches both failures in seconds and should be
+the first thing checked on any matrix log.
+
+### Conclusion
+
+Fan-out output is byte-identical to sequential output on both platforms, with and
+without thread caps, including two concurrent SLEAP service children and a
+UUID-pinned GPU child; and the artifact-lock touches in `runtime_artifacts.py`,
+`pose/backends/sleap.py`, `pose/runtime/onnx_session.py` and
+`classification/backend.py` changed nothing on the standard matrix — 96 of 96
+comparisons across the two platforms are exactly zero.
 
 ---
 

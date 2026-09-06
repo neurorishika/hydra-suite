@@ -241,6 +241,26 @@ sequential run. Caps are therefore **opt-in** (`--threads-per-job`, off by
 default) until the verification below proves identity with caps engaged; if
 identity holds, a follow-up may default them to `cpu_count // jobs`.
 
+**Result (2026-09-06, MPS / `hydra-mps`, Apple Silicon): caps are
+identity-safe on this platform.** `tools/equivalence/fanout_gate.sh` was run
+twice over `fly_obb`, `worm_bgsub`, `ant_obb_sleap`, `ant_cnn_identity` --
+once with `--jobs 2` and once with `--jobs 2 --threads-per-job 4`. Both runs
+produced **16/16 byte-identical CSVs** against the same *uncapped* in-process
+sequential baseline (`_tracking_forward` / `_backward` / `_final` /
+`_final_with_individual` per clip; every row count > 1).
+
+The caps run is **not vacuous**: `build_child_env` applies the cap variables
+with `setdefault`, so a parent that already exported them would silently
+suppress the cap. The gate prints the inherited thread-cap environment before
+running, and on both boxes it printed `(none set)` -- so the children really
+did run with `OMP_NUM_THREADS` / `MKL_NUM_THREADS` / `OPENBLAS_NUM_THREADS` /
+`NUMEXPR_NUM_THREADS` / `NUMBA_NUM_THREADS` = 4 while the sequential run they
+were compared against was uncapped.
+
+Caps nevertheless **stay opt-in**: this is one platform's evidence (the CUDA
+box was gated uncapped only), so defaulting them to `cpu_count // jobs`
+remains a separate change needing its own gate.
+
 ## 7. Verification
 
 1. Unit tests (pytest, `PYTHONPATH=<wt>/src`): planner parity and dedup;
