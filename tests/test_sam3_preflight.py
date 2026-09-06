@@ -849,7 +849,7 @@ def test_negative_cuda_indices_are_rejected(device):
         pf._visible_device_selector(device)
 
 
-@pytest.mark.parametrize("device", ["cpu", "mps", "tpu", "gpu0"])
+@pytest.mark.parametrize("device", ["cpu", "mps", "tpu", "gpu0", "", "   "])
 def test_non_cuda_device_selection_is_rejected_before_gpu_probe(device):
     """SAM3 LoRA training is CUDA-only; only the WORDING of the refusal moved.
 
@@ -867,6 +867,19 @@ def test_non_cuda_device_selection_is_rejected_before_gpu_probe(device):
 @pytest.mark.parametrize("device", ["auto", "cuda", "cuda:0", "0", "1", "0,1"])
 def test_accepted_device_forms_report_no_form_error(device):
     assert pf.sam3_device_form_error(device) is None
+
+
+def test_an_empty_device_is_a_config_error_not_a_silent_auto():
+    """A bare ordinal is intent; an empty device is a mistake.
+
+    The shared parser maps a falsy device onto "auto", which would silently
+    pick GPU 0 that nobody named -- the same silence that let the original
+    misdiagnosis survive four dead runs.
+    """
+
+    message = pf.sam3_device_form_error("")
+    assert message is not None and "empty device" in message
+    assert "Accepted:" in message
 
 
 def _two_gpu_probe():

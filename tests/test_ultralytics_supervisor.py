@@ -833,3 +833,96 @@ def test_a_downgraded_run_is_recorded_in_the_durable_telemetry(monkeypatch, tmp_
         gpu_free=40 * 1024**3,
     )
     assert clean["resource_telemetry"]["admission_downgraded"] is False
+
+
+def _probe_recording_run(monkeypatch, tmp_path, *, uuid_by_call, device="0"):
+    """One real-gate run whose re-probes are recorded; returns (asked, result).
+
+    The probe answers by DEVICE STRING, exactly like `nvidia-smi` does: a UUID
+    argument would find nothing, because the parent's CUDA_VISIBLE_DEVICES is
+    not set to the pin (only the CHILD's environment is).
+    """
+
+    import hydra_suite.training.ultralytics_supervisor as mod
+    from hydra_suite.training.sam3_lora import preflight
+
+    asked = []
+
+    def probe(dev):
+        asked.append(dev)
+        uuid = uuid_by_call(len(asked))
+        if uuid is None:
+            return None
+        observed = _cuda_device(40 * 1024**3)
+        observed.uuid = uuid
+        return observed
+
+    monkeypatch.setattr(preflight, "_probe_cuda_device", probe)
+    monkeypatch.setattr(
+        mod,
+        "probe_resources",
+        _fake_probe_resources((256 * 1024**3, 200 * 1024**3), gpu_free=40 * 1024**3),
+    )
+    launched = []
+    _launch_sidecar(monkeypatch, mod, launched)
+    spec = _spec(tmp_path)
+    spec.device = device
+    spec.hyperparams = TrainingHyperParams(batch=2, imgsz=64, workers=0)
+    result = mod.run_ultralytics_supervised(
+        ["trainer", "device=0"], spec, run_dir=tmp_path
+    )
+    return asked, result
+
+
+def test_the_parent_reprobes_by_device_string_not_by_the_pinned_uuid(
+    monkeypatch, tmp_path
+):
+    """The prelaunch check and the accelerator probe must not ask for a UUID.
+
+    `_probe_cuda_device` resolves a UUID only out of CUDA_VISIBLE_DEVICES, and
+    the parent never sets that -- the pin goes on the CHILD's environment. So
+    a UUID argument returned None and BOTH sites raised unconditionally
+    ("the selected physical CUDA device changed" / "telemetry became
+    unavailable"), no matter how much memory was free. Verified against a real
+    device on the CUDA box.
+    """
+
+    asked, result = _probe_recording_run(
+        monkeypatch, tmp_path, uuid_by_call=lambda _n: "GPU-1111"
+    )
+
+    assert result["success"] is True
+    assert asked, "the parent must re-probe before launching"
+    assert not any(str(item).startswith("GPU-") for item in asked)
+    assert set(asked) == {"cuda:0"}
+
+
+def test_a_device_swap_before_launch_is_still_detected(monkeypatch, tmp_path):
+    """The `.uuid` equality check is what detects a swap; probing by string
+    must not weaken it."""
+
+    _asked, result = _probe_recording_run(
+        monkeypatch,
+        tmp_path,
+        # First call classifies the accelerator and sets the pin; every later
+        # call is a re-probe, and reports a DIFFERENT physical device.
+        uuid_by_call=lambda n: "GPU-1111" if n == 1 else "GPU-2222",
+    )
+
+    assert result["success"] is False
+    assert "the selected physical CUDA device changed" in result["error_message"]
+    # It must fail for the RIGHT reason: a real swap, not a UUID re-probe that
+    # can never resolve. Without this the broken version passes trivially.
+    assert not any(str(item).startswith("GPU-") for item in _asked)
+
+
+def test_missing_device_telemetry_before_launch_is_still_refused(monkeypatch, tmp_path):
+    _asked, result = _probe_recording_run(
+        monkeypatch,
+        tmp_path,
+        uuid_by_call=lambda n: "GPU-1111" if n == 1 else None,
+    )
+
+    assert result["success"] is False
+    assert "CUDA device" in result["error_message"]
+    assert not any(str(item).startswith("GPU-") for item in _asked)

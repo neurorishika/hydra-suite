@@ -299,6 +299,16 @@ def _run_ultralytics_once(
     cuda_uuid = None
     cuda_pci = None
     accelerator_probe = None
+    # The PARENT re-probes by DEVICE STRING, never by UUID. `_probe_cuda_device`
+    # resolves a UUID only out of CUDA_VISIBLE_DEVICES, which is set on the
+    # CHILD's environment below and not on the parent's -- so passing
+    # `cuda_uuid` here made every re-probe return None and both call sites
+    # raise unconditionally ("telemetry became unavailable" / "the selected
+    # physical CUDA device changed"), regardless of memory. Verified against a
+    # real device on the CUDA box. SAM3 already had the right shape: probe by
+    # the device string, then compare the observed `.uuid` to the pinned one --
+    # that equality is what actually detects a device swap, and it is kept.
+    cuda_probe_device = normalize_cuda_device(spec.device)
     if cuda is not None:
         cuda_uuid = cuda.uuid
         environment["CUDA_VISIBLE_DEVICES"] = cuda_uuid
@@ -306,7 +316,7 @@ def _run_ultralytics_once(
         def accelerator_probe() -> int:
             from hydra_suite.training.sam3_lora.preflight import _probe_cuda_device
 
-            current = _probe_cuda_device(cuda_uuid)
+            current = _probe_cuda_device(cuda_probe_device)
             if current is None or current.uuid != cuda_uuid:
                 raise RuntimeError("selected CUDA device telemetry became unavailable")
             return max(0, current.total_bytes - current.free_bytes)
@@ -345,7 +355,7 @@ def _run_ultralytics_once(
         if cuda is not None:
             from hydra_suite.training.sam3_lora.preflight import _probe_cuda_device
 
-            current = _probe_cuda_device(cuda_uuid)
+            current = _probe_cuda_device(cuda_probe_device)
             if current is None or current.uuid != cuda_uuid:
                 raise RuntimeError("the selected physical CUDA device changed")
             if budget.accelerator_peak_bytes > int(

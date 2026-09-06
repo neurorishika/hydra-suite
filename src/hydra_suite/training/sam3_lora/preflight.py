@@ -620,6 +620,14 @@ def sam3_device_form_error(device: Any) -> Optional[str]:
     sat free, purely because their device was the bare ordinal ``"0"``.
     """
 
+    if device is not None and not str(device).strip():
+        # An EMPTY device is a config error, not a spelling. A bare ordinal is
+        # legitimate user intent; silently picking a device nobody named is how
+        # the original misdiagnosis survived four dead runs.
+        return (
+            "SAM3 LoRA training requires a CUDA device; got an empty device. "
+            f"Accepted: {CUDA_DEVICE_FORMS}."
+        )
     value = str(device or "auto").strip()
     normalized = normalize_cuda_device(value)
     if normalized in {"auto", "cuda"} or normalized.startswith("cuda:"):
@@ -635,10 +643,10 @@ def _visible_device_selector(device: str) -> str:
     # plans carry, and the same plan schema feeds a YOLO role and a SAM3 role.
     # Multi-GPU forms resolve against the FIRST device (SAM3 pins one physical
     # device by UUID); `assess_preflight` warns when that narrowing happens.
-    device = normalize_cuda_device(device)
     form_error = sam3_device_form_error(device)
     if form_error is not None:
         raise ValueError(form_error)
+    device = normalize_cuda_device(device)
     if (
         "CUDA_VISIBLE_DEVICES" in os.environ
         and not os.environ["CUDA_VISIBLE_DEVICES"].strip()
