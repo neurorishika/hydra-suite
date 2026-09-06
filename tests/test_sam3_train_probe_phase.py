@@ -809,4 +809,10 @@ def test_selection_never_exceeds_what_the_analytic_estimate_permits(
     )
     resolution = json.loads((harness.run_dir / "batch_resolution.json").read_text())
     assert resolution["requirement_provenance"] == "analytic"
-    assert resolution["requirement_bytes"] > 12 * GiB
+    assert resolution[
+        "requirement_bytes"
+    ] == tr.preflight_module.analytic_device_peak_bytes(
+        _spec(tmp_path, batch=-1).sam3_params,
+        tr.preflight_module.dataset_profile(str(tmp_path / "dataset")),
+        batch_size=1,
+    )

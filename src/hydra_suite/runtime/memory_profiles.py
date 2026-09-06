@@ -246,6 +246,36 @@ def fit_batch_curve(records: Iterable[MemoryMeasurement]) -> tuple[int, int]:
     return base_bytes, slope_bytes
 
 
+def measured_envelope_bytes(
+    records: Iterable[MemoryMeasurement],
+    batch_size: int,
+) -> int:
+    """The measured requirement at `batch_size`: fit, floored by observations.
+
+    `max(fit_batch_curve(records) at n, every observed peak at batch <= n)`.
+    A conservative envelope that never predicts below an observed sample, so
+    a superlinear jump cannot be smoothed away by the linear fit.
+
+    Shared on purpose: `select_batch` and the SAM3 admission estimator both
+    call it, so selection and admission cannot disagree about what a
+    measurement says by construction rather than by inspection.
+    """
+
+    ordered = sorted(records, key=lambda record: record.settings.batch_size)
+    if not ordered:
+        return 0
+    base_bytes, slope_bytes = fit_batch_curve(ordered)
+    observed = max(
+        (
+            record.accelerator_reserved_peak_bytes
+            for record in ordered
+            if record.settings.batch_size <= batch_size
+        ),
+        default=0,
+    )
+    return int(max(base_bytes + slope_bytes * batch_size, observed))
+
+
 def select_batch(
     records: Iterable[MemoryMeasurement],
     *,
@@ -279,25 +309,11 @@ def select_batch(
         return 0
 
     largest_observed = ordered[-1].settings.batch_size
-    base_bytes, slope_bytes = fit_batch_curve(ordered)
     budget = int(usable_bytes * safety_fraction)
 
     best = 0
-    running_observed_peak = 0
-    observed_index = 0
     for candidate in range(1, min(maximum, largest_observed) + 1):
-        while (
-            observed_index < len(ordered)
-            and ordered[observed_index].settings.batch_size <= candidate
-        ):
-            running_observed_peak = max(
-                running_observed_peak,
-                ordered[observed_index].accelerator_reserved_peak_bytes,
-            )
-            observed_index += 1
-        fitted = base_bytes + slope_bytes * candidate
-        requirement = max(fitted, running_observed_peak)
-        if requirement <= budget:
+        if measured_envelope_bytes(ordered, candidate) <= budget:
             best = candidate
         else:
             break

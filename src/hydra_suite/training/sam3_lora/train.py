@@ -515,13 +515,21 @@ def _resolve_measured_batch(
     # analytic estimate already says will not fit -- the identical defect one
     # layer up. Requirement is monotone in batch, so a downward scan finds the
     # largest admissible candidate.
-    dataset_profile = preflight_module._dataset_profile(spec.derived_dataset_dir)
+    profile = preflight_module.dataset_profile(spec.derived_dataset_dir)
+    # TWO fractions, deliberately different, do not "fix" this:
+    # auto-selection gates at MEASURED_SAFETY_FRACTION (0.80) while
+    # admission gates an analytic requirement at the policy's CUDA safety
+    # fraction (0.85), so auto sizing can drop a rung that an explicit batch
+    # would be admitted at. That asymmetry is the point. A human who names a
+    # batch has context we do not and gets a clear refusal if they overreach;
+    # a batch WE chose that OOMs three hours in is a silent failure of our
+    # judgement, not theirs, so auto sizing is the more cautious of the two.
     device_budget = int(free_bytes * autobatch.MEASURED_SAFETY_FRACTION)
 
     def _requirement_at(batch: int) -> Any:
         return preflight_module.device_requirement_bytes(
             preflight_module.analytic_device_peak_bytes(
-                params, dataset_profile, batch_size=batch
+                params, profile, batch_size=batch
             ),
             records,
             batch,
@@ -580,11 +588,12 @@ def _resolve_measured_batch(
         "resolved_at_unix_ns": time.time_ns(),
     }
     log_cb(
-        f"auto batch: {resolved} ({requirement_basis} "
-        f"{selected_peak / GiB:.1f} GiB reserved at batch {resolved}, "
-        f"{selected_peak / max(1, free_bytes):.0%} of "
-        f"{free_bytes / GiB:.1f} GiB free; provenance={provenance}, "
-        f"ladder={terminated_by})"
+        f"auto batch: {resolved} (requirement {requirement.bytes / GiB:.1f} GiB "
+        f"[{requirement.provenance}"
+        + (", extrapolated" if requirement.measured_extrapolated else "")
+        + f"] of {free_bytes / GiB:.1f} GiB free; {requirement_basis} measured "
+        f"{selected_peak / GiB:.1f} GiB reserved at batch {resolved}; "
+        f"provenance={provenance}, ladder={terminated_by})"
     )
     return int(resolved), resolution
 

@@ -51,7 +51,7 @@ def _cuda(*, free_gib=48, total_gib=48, major=8):
         pci_bus_id="00000000:01:00.0",
         name="Test CUDA",
         compute_capability=(major, 0),
-        free_bytes=free_gib * pf.GiB,
+        free_bytes=int(free_gib * pf.GiB),
         total_bytes=total_gib * pf.GiB,
     )
 
@@ -1392,7 +1392,7 @@ def test_the_measured_path_applies_the_safety_fraction_exactly_once(
             available_accelerator_bytes=int(free_gib * pf.GiB),
         )
         return _decision(
-            _spec(tmp_path, batch=1), cuda=_cuda(free_gib=int(free_gib)), host=host
+            _spec(tmp_path, batch=1), cuda=_cuda(free_gib=free_gib), host=host
         )
 
     assert decide(20).admitted
@@ -1426,3 +1426,21 @@ def test_the_probe_floor_never_consults_a_measurement(tmp_path, monkeypatch):
 
     assert decision.budget.accelerator_peak_bytes < 40 * pf.GiB
     assert decision.device_peak_provenance == "probe_floor"
+
+
+def test_the_stamped_analytic_estimate_is_the_one_the_budget_used(
+    tmp_path, monkeypatch
+):
+    """One derivation, not two that happen to agree. A non-trivial dataset so
+    the dense-mask term is non-zero and a drifting duplicate would show."""
+
+    _write_coco(tmp_path, tiles=6, instances_per_tile=9)
+    _install_records(monkeypatch, ())
+
+    for batch in (1, 3):
+        decision = _decision(_spec(tmp_path, batch=batch))
+        assert decision.device_peak_analytic_bytes > 0
+        assert (
+            decision.budget.accelerator_peak_bytes
+            == decision.device_peak_analytic_bytes
+        )

@@ -27,7 +27,7 @@ from hydra_suite.runtime.memory_profiles import (
     MemoryMeasurement,
     MemoryProfileStore,
     ProfileIdentity,
-    fit_batch_curve,
+    measured_envelope_bytes,
     profile_store_path,
     records_for,
 )
@@ -379,7 +379,9 @@ def _percentile(values: Any, fraction: float) -> int:
     return ordered[index]
 
 
-def _dataset_profile(dataset_dir: str) -> Sam3DatasetProfile:
+def dataset_profile(dataset_dir: str) -> Sam3DatasetProfile:
+    """Public seam: the bounded COCO facts the estimator and selection share."""
+
     root = Path(dataset_dir).expanduser().resolve()
     train, train_bytes = _load_coco(root / "train" / "_annotations.coco.json")
     validation_path = root / "valid" / "_annotations.coco.json"
@@ -469,6 +471,10 @@ def _dataset_profile(dataset_dir: str) -> Sam3DatasetProfile:
         polygon_count=polygon_count,
         polygon_vertices=polygon_vertices,
     )
+
+
+# Historical private name, kept so existing callers and tests keep working.
+_dataset_profile = dataset_profile
 
 
 def _instance_count(dataset_dir: str) -> int:
@@ -784,32 +790,6 @@ def analytic_device_peak_bytes(
     )
 
 
-def measured_envelope_bytes(
-    records: Sequence[MemoryMeasurement],
-    batch_size: int,
-) -> int:
-    """The measured requirement at `batch_size`: fit, floored by observations.
-
-    `max(fit_batch_curve(records) at n, every observed peak at batch <= n)` --
-    the same envelope `select_batch` uses, so selection and admission cannot
-    disagree about what a measurement says.
-    """
-
-    ordered = sorted(records, key=lambda record: record.settings.batch_size)
-    if not ordered:
-        return 0
-    base_bytes, slope_bytes = fit_batch_curve(ordered)
-    observed = max(
-        (
-            record.accelerator_reserved_peak_bytes
-            for record in ordered
-            if record.settings.batch_size <= batch_size
-        ),
-        default=0,
-    )
-    return int(max(base_bytes + slope_bytes * batch_size, observed))
-
-
 class DeviceRequirement(NamedTuple):
     """What this configuration needs, and what decided it."""
 
@@ -842,7 +822,7 @@ def device_requirement_bytes(
     10.22 GiB for 230 consecutive steps, across an epoch boundary, before
     rising twice inside ten steps. No "stable for K steps" stopping rule
     catches that. Rare dense tiles and allocator fragmentation are simply not
-    sampled by a short probe, so THE PROBE PRODUCES A LOWER BOUND. The
+    sampled by a short probe, so THE PROBE PRODUCES A LOWER BOUND.
     The cause was later isolated: it is ALLOCATOR FRAGMENTATION, not unlucky
     tile sampling. From 2 to 60 steps under the default CUDA allocator,
     RESERVED grew 35% while ALLOCATED grew 2%; under
@@ -990,7 +970,6 @@ def build_resource_request(
     collated_images = batch_size * image_pixels * 3 * 4
     active_instances = inflight_tiles * dataset.max_active_instances_per_tile
     dense_masks_host = active_instances * image_pixels * _MASK_HOST_BYTES_PER_PIXEL
-    dense_masks_device = active_instances * image_pixels * _MASK_DEVICE_BYTES_PER_PIXEL
     params_per_rank = _lora_params_per_rank(params)
     requested_rank = int(params.rank)
     bounded_rank = min(_MAX_LORA_RANK, max(1, requested_rank))
@@ -1000,7 +979,6 @@ def build_resource_request(
     lora_cpu_training_state = lora_params * _LORA_CPU_TRAINING_BYTES_PER_PARAM
     lora_reload_copy = lora_params * _LORA_RELOAD_BYTES_PER_PARAM
     lora_serialization_copies = lora_params * _LORA_SERIALIZATION_BYTES_PER_PARAM
-    default_lora_training_state = _default_lora_training_state()
     requested_negatives = max(0, int(getattr(params, "num_negatives", 0)))
     selected_negatives = min(
         requested_negatives,
@@ -1058,14 +1036,12 @@ def build_resource_request(
             + one_tile_device_bytes * precision_multiplier
         )
     else:
+        # ONE derivation of the analytic estimate, shared with the
+        # provenance stamp and with batch selection. Duplicating the term
+        # here would let `budget.accelerator_peak_bytes` and
+        # `device_peak_analytic_bytes` drift apart silently.
         training_device_peak = device_requirement_bytes(
-            _analytic_training_device_peak(
-                precision_multiplier=precision_multiplier,
-                batch_size=batch_size,
-                lora_training_state=lora_training_state,
-                default_lora_training_state=default_lora_training_state,
-                dense_masks_device=dense_masks_device,
-            ),
+            analytic_device_peak_bytes(params, dataset, batch_size=batch_size),
             tuple(measured_records),
             batch_size,
         ).bytes
@@ -1230,7 +1206,7 @@ def assess_preflight(
         not configured_pool_shape_error
         and len(configured_negatives_at_entry) > _MAX_NEGATIVE_PROMPT_COUNT
     )
-    dataset = dataset or _dataset_profile(spec.derived_dataset_dir)
+    dataset = dataset or dataset_profile(spec.derived_dataset_dir)
     resolved_negative_prompts = _resolved_negative_prompts(
         spec.derived_dataset_dir, params
     )

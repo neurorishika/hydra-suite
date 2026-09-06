@@ -328,12 +328,12 @@ def sam3_dataset_density_profile(
     density the fingerprint records is the density admission already saw.
     """
 
-    from .preflight import _dataset_profile, _resolved_negative_prompts
+    from .preflight import _resolved_negative_prompts, dataset_profile
 
     params = spec.sam3_params
     if params is None:
         raise ValueError("spec.sam3_params is required to profile a SAM3 dataset")
-    profile = _dataset_profile(spec.derived_dataset_dir)
+    profile = dataset_profile(spec.derived_dataset_dir)
     prompts = tuple(
         prompt
         for prompt in _resolved_negative_prompts(spec.derived_dataset_dir, params)
