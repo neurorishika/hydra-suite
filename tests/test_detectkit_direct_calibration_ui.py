@@ -278,6 +278,88 @@ def test_every_measured_row_including_failures_is_listed(results_dialog):
     assert any("Recommended" in text for text in statuses)
 
 
+def test_match_quality_column_is_distinct_from_localization_iou(results_dialog):
+    """Finding 5: the recommender's ``mean_quality`` floor must be visible
+    to the user as its own column, distinct from the pre-existing
+    ``mean_iou`` column (relabelled "Localization IoU" so it is not
+    confused with the new "Match quality" column)."""
+    dialog = results_dialog
+    header_labels = [
+        dialog.table_rows.horizontalHeaderItem(col).text()
+        for col in range(dialog.table_rows.columnCount())
+    ]
+    assert "Localization IoU" in header_labels
+    assert "Match quality" in header_labels
+    assert dialog.COL_MATCH_QUALITY != dialog.COL_LOCALIZATION_QUALITY
+
+    match_quality_text = dialog.table_rows.item(0, dialog.COL_MATCH_QUALITY).text()
+    localization_text = dialog.table_rows.item(
+        0, dialog.COL_LOCALIZATION_QUALITY
+    ).text()
+    # The fixture never passes ``mean_quality``, so it defaults to a
+    # genuinely measured 0.0 -- rendered as a number, not "never measured".
+    assert match_quality_text == "0.000"
+    assert localization_text == "0.800"
+
+
+def test_never_measured_match_quality_is_labelled_not_a_number(tmp_path):
+    """A profile predating D8 has ``mean_quality is None``; the dialog must
+    say so rather than rendering a misleading numeric 0.000."""
+    from hydra_suite.core.inference.direct_calibration import (
+        CalibrationScore,
+        DirectCalibrationPoint,
+    )
+    from hydra_suite.detectkit.gui.dialogs.direct_calibration_results import (
+        DirectCalibrationResultsDialog,
+    )
+    from hydra_suite.detectkit.jobs.direct_calibration import DirectCalibrationOutcome
+
+    point = DirectCalibrationPoint(
+        label="pre-D8 profile",
+        enabled=True,
+        geometry_mode="auto_object",
+        tile_width=640,
+        tile_height=640,
+        overlap=0.2,
+        object_tile_fraction=0.4,
+        max_detections=64,
+        tiles_per_frame=9,
+        seconds_per_frame=0.4,
+        confidence=0.35,
+        merge_policy="greedy_nmm",
+        merge_metric="ios",
+        merge_threshold=0.5,
+        merge_backend="cv2",
+        score=CalibrationScore(
+            frames=20,
+            matched=200,
+            missed=10,
+            extra=10,
+            duplicate=1,
+            precision=0.9,
+            recall=0.9,
+            f1=0.9,
+            mean_iou=0.8,
+            mean_quality=None,
+        ),
+    )
+    model = tmp_path / "m.pt"
+    model.write_bytes(b"weights")
+    outcome = DirectCalibrationOutcome(points=[point])
+    dialog = DirectCalibrationResultsDialog(
+        None,
+        model_path=model,
+        outcome=outcome,
+        training_geometry={"geometry_mode": "auto_object", "imgsz": 640},
+        previews=[],
+    )
+    try:
+        text = dialog.table_rows.item(0, dialog.COL_MATCH_QUALITY).text()
+        assert text == "never measured"
+    finally:
+        dialog.close()
+
+
 def test_changing_rows_never_runs_the_model(results_dialog, monkeypatch):
     import hydra_suite.core.inference.stages.obb as obb_stage
 

@@ -81,8 +81,9 @@ COL_PRECISION = 14
 COL_RECALL = 15
 COL_F1 = 16
 COL_LOCALIZATION_QUALITY = 17
-COL_FRAMES_INSTANCES = 18
-COL_STATUS = 19
+COL_MATCH_QUALITY = 18
+COL_FRAMES_INSTANCES = 19
+COL_STATUS = 20
 
 _COLUMN_LABELS = [
     "Candidate",
@@ -102,7 +103,15 @@ _COLUMN_LABELS = [
     "Precision",
     "Recall",
     "F1",
-    "Localization quality",
+    # D8: this is ``mean_iou`` -- no longer a gate (``MIN_LOCALIZATION`` was
+    # deleted) and no longer an optimisation target. It is now the mean IoU
+    # over pairs that ``mean_quality``/recall/matched-instance floors
+    # accepted, so it reads LOWER as recall improves -- do not read a drop
+    # here as a regression. "Localization IoU" (not "Localization quality")
+    # so it is not confused with the "Match quality" column, which is the
+    # actual gating quantity (``mean_quality``, D8's recall-first floor).
+    "Localization IoU",
+    "Match quality",
     "Frames / instances",
     "Status",
 ]
@@ -146,6 +155,7 @@ class DirectCalibrationResultsDialog(BaseDialog):
     COL_RECALL = COL_RECALL
     COL_F1 = COL_F1
     COL_LOCALIZATION_QUALITY = COL_LOCALIZATION_QUALITY
+    COL_MATCH_QUALITY = COL_MATCH_QUALITY
     COL_FRAMES_INSTANCES = COL_FRAMES_INSTANCES
     COL_STATUS = COL_STATUS
 
@@ -347,6 +357,15 @@ class DirectCalibrationResultsDialog(BaseDialog):
                 COL_RECALL: f"{point.score.recall:.3f}",
                 COL_F1: f"{point.score.f1:.3f}",
                 COL_LOCALIZATION_QUALITY: f"{point.score.mean_iou:.3f}",
+                # ``None`` means this profile predates the D8 mean-quality
+                # metric (2026-09-06) and quality was never measured -- NOT
+                # that it measured 0. Show that honestly rather than
+                # rendering a bare "0.000".
+                COL_MATCH_QUALITY: (
+                    "never measured"
+                    if point.score.mean_quality is None
+                    else f"{point.score.mean_quality:.3f}"
+                ),
                 COL_FRAMES_INSTANCES: (
                     f"{point.score.frames}f / "
                     f"{point.score.matched + point.score.missed}i"
@@ -527,7 +546,16 @@ class DirectCalibrationResultsDialog(BaseDialog):
             "precision": float(point.score.precision),
             "recall": float(point.score.recall),
             "f1": float(point.score.f1),
+            # NOT a gate and NOT an optimisation target since D8 -- it is
+            # the mean IoU over pairs ``match_quality`` accepted, so it reads
+            # lower as recall improves. See "match_quality" for the D8
+            # gating quantity.
             "localization_quality": float(point.score.mean_iou),
+            "match_quality": (
+                None
+                if point.score.mean_quality is None
+                else float(point.score.mean_quality)
+            ),
         }
 
     # ------------------------------------------------------------------
