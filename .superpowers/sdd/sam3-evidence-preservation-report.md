@@ -45,15 +45,17 @@
   repeatedly drop the middle-most survivor. Never a sliding window; the earliest epochs —
   the stall evidence — are never the first casualty, and the checkpoint just written is
   never deleted.
-- Fails OPEN across the WHOLE measurement: any `OSError` from `disk_usage` **or** from
-  stat-ing the checkpoints returns `None`/`[]`, deletes nothing, and logs why. Two reasons:
-  a failed measurement must never masquerade as a binding budget, and this runs inside
-  `_write_epoch_checkpoint`, so an escaping `OSError` (stat racing an unlink, stale NFS
-  handle) would propagate into `run_training` and kill the run -- the count-based pruner it
-  replaced made no stat calls and could not do that.
+- **Total fail-open contract: no filesystem operation in the retention path may raise.**
+  Measurement AND deletion. Guards stay narrowly scoped to `OSError`, so a
+  `KeyError`/`TypeError` from the planner still surfaces as the logic bug it is.
 - `enforce_checkpoint_budget(directory)` applies the plan, deletes each `.complete.json`
   marker with its artifact, and `emit_log`s LOUDLY with the measured numbers that forced
-  the prune.
+  the prune. Each deletion is INDEPENDENT: a failure logs and continues rather than
+  aborting the rest, because aborting on the first failure leaves more disk consumed with
+  no compensating benefit -- a partially thinned directory is a valid state for best-effort
+  housekeeping, a dead run is not. The marker is removed only once its artifact is actually
+  gone, so a marker still cannot outlive what it vouches for, and only paths actually
+  deleted are returned/reported.
 - The old docstring's rationale (user-supplied epoch counts; disk exhaustion mid-run would
   destroy the artifact the feature exists to preserve; 200-epoch run on a full disk) is
   preserved verbatim-in-spirit in the new module-level comment. The mechanism is replaced,
@@ -61,20 +63,47 @@
 
 ## Tests
 - Before: **408 passed, 5 skipped** (`-k sam3`).
-- After: **422 passed, 5 skipped**.
-- TDD: 16 new tests written first, all 11 observed failing, then implemented. The two old
+- After: **425 passed, 5 skipped**.
+- TDD: 19 new tests written first, all 11 observed failing, then implemented. The two old
   sliding-window tests were rewritten to the new policy (keeping their marker-deletion and
   safe-on-missing-directory assertions). New coverage: budget-allows-keep-all,
   thin-middle-keep-ends, never-delete-just-written, budget-is-derived-not-hardcoded,
   markers+loud-log, missing-dir safety, JSONL append, cadence env parsing (incl. garbage),
   RNG save/restore present, loss decomposition + elapsed_s recorded, anti-correlation
-  comment present, unmeasurable-budget-retains-everything, stat-failure-skips-pruning.
+  comment present, unmeasurable-budget-retains-everything, stat-failure-skips-pruning, unlink-PermissionError-skips-pruning,
+  one-unlink-failure-does-not-abort-the-others, guards-stay-scoped-to-OSError.
+  The unlink guard was mutation-checked the same way: reverting the loop to its unguarded
+  form fails 2 tests.
 - The RNG restore is pinned BEHAVIOURALLY, not by source grep: a stub model plus an
   `_evaluate_split` stub that burns the python/numpy/torch streams (both on the success and
   the raising path). Mutation-checked -- deleting any one of the three restore lines fails
-  2 tests. The `torch.cuda` restore line is unexercised on this box (no CUDA) and remains
-  read-verified only. `import sam3` is unavailable on macOS, so the live-model paths are
+  2 tests. **Known limit:** `torch.cuda.set_rng_state_all` is unexercised on this box (no
+  CUDA) and remains read-verified only, until a CUDA run exercises it. `import sam3` is unavailable on macOS, so the live-model paths are
   covered by source/stub assertions, as the existing file already does.
+
+## Filesystem-call audit on the training path
+
+The property being asserted is *no filesystem operation reachable from
+`_write_epoch_checkpoint` may raise into `run_training`* -- not "the stat calls are
+guarded". Two earlier passes fixed the instance named in review rather than the property,
+which is how the unguarded `unlink` survived. Every reachable call, and why each is safe:
+
+| Call | Status |
+|---|---|
+| `directory.mkdir(parents=True, exist_ok=True)` | Pre-existing, deliberately fatal (see below) |
+| `_write_validated_adapter_artifact`: `temporary.open`, `torch.save`, `os.fsync`, `torch.load`, `os.replace`, `os.open`/`os.fsync`/`os.close` on the dir fd, `write_completion_marker`, `temporary.unlink` in `finally` | Pre-existing, deliberately fatal, unchanged by this branch |
+| `enforce_checkpoint_budget`: `directory.is_dir()` | Cannot raise -- `Path.is_dir()` returns `False` on `OSError` |
+| `enforce_checkpoint_budget`: `directory.glob("epoch_*.pt")`, `path.stat().st_size` | Inside the `OSError` guard -> retain everything, log |
+| `checkpoint_budget_bytes`: `directory.is_dir()` | Cannot raise (as above) |
+| `checkpoint_budget_bytes`: `shutil.disk_usage`, `glob`, `path.stat()` | Inside the `OSError` guard -> return `None`, retain everything, log |
+| `plan_checkpoint_retention` | Pure; no I/O at all |
+| `enforce_checkpoint_budget`: `path.unlink`, `marker.unlink` | Inside per-deletion `OSError` guards -> log and continue |
+
+The `mkdir` and artifact-write calls are left fatal ON PURPOSE and are not a regression:
+they *are* the salvage write, and a run that silently swallowed their failure would believe
+it has a checkpoint it does not have. Retention is different in kind -- it is housekeeping
+that deletes things, so its failure mode must be "keep more than intended", never "end the
+run". That asymmetry is the whole design.
 
 ## Measured per-epoch validation cost
 **Not measured — blocked.** The pass is CUDA-only (`sam3` cannot be imported on this box)

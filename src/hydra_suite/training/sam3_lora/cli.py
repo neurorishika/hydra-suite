@@ -361,8 +361,15 @@ def enforce_checkpoint_budget(
 ) -> list[Path]:
     """Apply `plan_checkpoint_retention` to *directory*, loudly.
 
-    Returns the paths removed (each with its `.complete.json` marker, so a
-    marker never outlives the artifact it vouches for).
+    Returns the paths ACTUALLY removed (each with its `.complete.json`
+    marker, so a marker never outlives the artifact it vouches for).
+
+    Total fail-open contract: NO filesystem operation in this function --
+    measurement or deletion -- may raise. It is called from
+    `_write_epoch_checkpoint` on the training path, and retention is
+    best-effort housekeeping that must never be able to end a run. The guards
+    stay narrowly scoped to `OSError`: a `KeyError`/`TypeError` from
+    `plan_checkpoint_retention` is a logic bug and must still surface.
     """
     if not directory.is_dir():
         return []
@@ -390,19 +397,41 @@ def enforce_checkpoint_budget(
         adapter_bytes=adapter_bytes,
         budget_bytes=budget_bytes,
     )
+    # Deletion is filesystem I/O on the training path, so it carries the SAME
+    # fail-open contract as the measurement above. `missing_ok=True` only
+    # suppresses FileNotFoundError; a PermissionError, a read-only mount, or a
+    # race-losing OSError would otherwise propagate through
+    # `_write_epoch_checkpoint` into `run_training` and kill a multi-hour run.
+    #
+    # Each deletion is INDEPENDENT: a failure logs and moves on rather than
+    # aborting the rest. Aborting on the first failure would leave more disk
+    # consumed with no compensating benefit -- a partially thinned directory is
+    # a valid state for best-effort housekeeping, whereas a dead run is not.
+    # The marker is only removed once its artifact is actually gone, so a
+    # marker can still never outlive the artifact it vouches for.
+    removed: list[Path] = []
     for path in stale:
-        path.unlink(missing_ok=True)
-        path.with_name(path.name + ".complete.json").unlink(missing_ok=True)
-    if stale:
+        try:
+            path.unlink(missing_ok=True)
+        except OSError as exc:
+            log(f"could not delete epoch checkpoint {path.name} ({exc}); keeping it.")
+            continue
+        removed.append(path)
+        marker = path.with_name(path.name + ".complete.json")
+        try:
+            marker.unlink(missing_ok=True)
+        except OSError as exc:
+            log(f"could not delete completion marker {marker.name} ({exc}).")
+    if removed:
         log(
             "CHECKPOINT RETENTION BUDGET BINDING: disk budget "
             f"{budget_bytes / 1e6:.0f} MB holds only "
             f"{max(2, budget_bytes // max(1, adapter_bytes))} of {len(paths)} "
             f"epoch checkpoints (~{adapter_bytes / 1e6:.1f} MB each). Thinned "
             "the middle, kept first and last: deleted "
-            + ", ".join(path.name for path in stale)
+            + ", ".join(path.name for path in removed)
         )
-    return stale
+    return removed
 
 
 # --- Per-epoch validation series ------------------------------------------
