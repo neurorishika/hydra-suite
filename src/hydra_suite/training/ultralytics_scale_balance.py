@@ -30,6 +30,41 @@ _TILE_NAME = re.compile(r"_t(?P<width>\d+)x(?P<height>\d+)_\d+$")
 _WEIGHT_KEY = "hydra_sahi_scale_loss_weight"
 _PATCH_ATTR = "_hydra_sahi_scale_balance_original"
 
+DDP_UNGROUPED_OPT_OUT_ENV = "HYDRA_SAHI_DDP_ALLOW_UNGROUPED"
+
+
+class ScaleGroupedSamplingUnsupportedError(RuntimeError):
+    """A run requested scale-grouped batching where it cannot be honoured."""
+
+
+def _ddp_world_size(argv: Sequence[str]) -> int:
+    """Return the process count this run will train with.
+
+    Two independent signals, because either can be the only one present: the
+    torchrun-style ``WORLD_SIZE`` environment variable, and a comma-separated
+    ``device=`` argument, which is how Ultralytics itself is asked for DDP.
+    """
+
+    try:
+        env_world = int(os.environ.get("WORLD_SIZE", "1") or "1")
+    except ValueError:
+        env_world = 1
+    device_arg = next(
+        (str(arg).split("=", 1)[1] for arg in argv if str(arg).startswith("device=")),
+        "",
+    )
+    device_world = len([part for part in device_arg.split(",") if part.strip()])
+    return max(1, env_world, device_world)
+
+
+def _ddp_opt_out_selected() -> bool:
+    return str(os.environ.get(DDP_UNGROUPED_OPT_OUT_ENV, "")).strip().lower() not in {
+        "",
+        "0",
+        "false",
+        "no",
+    }
+
 
 def scale_group_for_path(path: str | Path) -> str:
     """Return the emitted sliced-dataset scale group for one image path."""
@@ -203,8 +238,27 @@ def install_sahi_scale_balance_and_grouped_sampling(
     ranks without changing the epoch's data exposure.
     """
 
-    settings = _balance_settings_from_argv(argv or sys.argv[1:])
+    args = list(argv or sys.argv[1:])
+    settings = _balance_settings_from_argv(args)
     if settings is None:
+        return False
+
+    world_size = _ddp_world_size(args)
+    opt_out = _ddp_opt_out_selected()
+    if world_size > 1 and not opt_out:
+        raise ScaleGroupedSamplingUnsupportedError(
+            "This dataset manifest requests SAHI scale-grouped batching and "
+            f"multi-scale loss weighting, but the run is distributed (world "
+            f"size {world_size}). A single-process batch sampler cannot "
+            "partition scale groups across ranks, so a DDP run would silently "
+            "train differently from a single-GPU run of the same manifest. "
+            "Either train on one device, or rebuild the dataset with "
+            "multiscale_loss_balance disabled, or set "
+            f"{DDP_UNGROUPED_OPT_OUT_ENV}=1 to run distributed WITHOUT "
+            "grouped batching or loss weighting (the run is then stamped as "
+            "un-balanced and is not comparable with a balanced one)."
+        )
+    if world_size > 1:
         return False
 
     from ultralytics.data.dataset import YOLODataset
@@ -254,11 +308,16 @@ def install_sahi_scale_balance_and_grouped_sampling(
             loader = original_loader(self, dataset_path, batch_size, rank, mode)
             if mode != "train":
                 return loader
-            if rank != -1 or int(os.environ.get("WORLD_SIZE", "1")) > 1:
-                LOGGER.warning(
-                    "SAHI multi-scale loss balance is disabled for DDP training."
+            if rank != -1 or _ddp_world_size(args) > 1:
+                # Backstop only: install() already refused this run. Reaching
+                # here means a DDP rank got the patched trainer anyway, and
+                # silently returning the plain loader is the exact
+                # indistinguishable-artifact failure this guard closes.
+                raise ScaleGroupedSamplingUnsupportedError(
+                    "SAHI scale-grouped batching cannot run under DDP "
+                    f"(rank={rank}). Set {DDP_UNGROUPED_OPT_OUT_ENV}=1 to run "
+                    "distributed without it."
                 )
-                return loader
             loader.close()
             return _grouped_loader(
                 loader.dataset,
