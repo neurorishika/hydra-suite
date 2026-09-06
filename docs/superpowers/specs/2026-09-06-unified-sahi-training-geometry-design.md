@@ -1,6 +1,10 @@
 # Unified tiling & calibration geometry: four paths, one contract
 
-*(Originally scoped as "unified SAHI training geometry". Widened at the user's direction:
+*(Originally scoped as "unified SAHI training geometry". Widened twice at the user's direction:
+first to four paths, then to the OBJECTIVE those paths optimise and the evidence a training run
+leaves behind — Parts 5 and 6.)*
+
+*(First widening:
 "We have a parallel sahi calibration inside semantic escalation. We should just unify all
 these paths to have minimal divergences." The document now covers four paths, not two.)*
 
@@ -690,6 +694,17 @@ made once, not an automatic loop.
 
 ### 4.1 Build order
 
+**Step 0 — EVIDENCE PRESERVATION, ahead of everything else (Part 6).** Per-epoch validation
+series recorded unconditionally, and a retention *budget* replacing `KEEP_EPOCH_CHECKPOINTS = 3`.
+This is promoted above the drift guard for one reason, and it is not that it is more important:
+**it is the only item whose cost of delay is irreversible.** Every training run that happens
+before it lands destroys evidence that cannot be recovered — the 2026-09-06 run's `epoch_001`
+and `epoch_002` are already gone, unmeasured. The drift guard prevents a *future* mistake and
+loses nothing by waiting a week; a pruned checkpoint is gone. Step 0 also has no design
+dependency on D12 (§5.4) — recording is unconditional — so it can proceed while the metric
+study runs, and it is a precondition for that study ever being repeatable. It changes no
+behaviour, blocks nothing, and is measured in hours.
+
 1. **ONE shared, Qt-free geometry-drift guard + provenance logging — built once in core, not
    four times.** Revised in light of all four paths: the guard already exists, correct and
    well-reasoned, at `detectkit/gui/dialogs/semantic_escalation_dialog.py:382-406` — but it is
@@ -724,6 +739,14 @@ made once, not an automatic loop.
 1b. **Delete the fifth tile-size formula** (`semantic/tiling.py:123-139` -> `tile_size_for_mode`).
    Numerically inert today, and it is the precondition for P4 ever inheriting a shared change.
 
+Steps 5-8 renumber unchanged. Two additions to the tail:
+
+9. **Unified objective (D12)** — blocked on the metric-reliability study, not on engineering.
+   When it resolves, it lands as a shared objective module (§3.8) with the chosen rule as the
+   default and the current rules retained as named alternatives.
+10. **Per-epoch detection-quality stopping (D13)** — blocked on 9, and correctly deferred: an
+    inference pass per epoch bought to compute an unreliable signal is a net loss.
+
 ### 4.2 Top risks
 
 - **R1 — a shared contract silently changes trained geometry.** `tile_size_for_mode`
@@ -753,6 +776,11 @@ made once, not an automatic loop.
   calibration after the change may see a different recommendation over identical evidence.
   Mitigation: keep per-path defaults on adoption, version the recommendation rule into the
   stored profile, and display which rule produced a stored point.
+- **R6 — resolving the objective (D12) invalidates stored calibration profiles' provenance.**
+  Every `.slice_meta.json` profile in existence was chosen under a rule that may not be the
+  chosen one. They remain valid *settings* but their "measured best" claim becomes rule-relative.
+  Mitigation: version the recommendation rule into the profile record (already recommended in
+  §5.5) BEFORE D12 resolves, so old profiles are identifiable rather than silently re-interpreted.
 - (R4, lesser) Three duplicated copies of `target_sizes` defaults plus the literal `640.0`
   denominator at `training.py:252` mean a "single" change is really four.
 
@@ -779,3 +807,193 @@ that full frames help only when that quantity stays above some resolvability flo
 **that floor is the thing to measure, not to guess**. Until measured, full-frame mixing
 should be an explicit, per-project, calibration-informed switch that the manifest records —
 never an unstated default on either side.
+
+---
+
+## Part 5 — ONE OBJECTIVE, USED UNIFORMLY (requirement)
+
+### 5.1 The requirement, and why this divergence is the worst one
+
+**Requirement A: one objective function serves all three consumers — calibration
+recommendation, checkpoint selection, and model comparison (within a project, across projects,
+and across species).**
+
+Today there are three, and they are not merely different, they are *contradictory*:
+
+| Consumer | Objective today | Where |
+|---|---|---|
+| Direct (YOLO) calibration | **maximise F1**, then fastest within `F1_TOLERANCE = 0.01` on the (misses, extras, seconds) Pareto frontier | `direct_calibration.py:186-191, 247-283` **[V]** |
+| Semantic (SAM3) calibration | **recall-first**: among points clearing `MIN_RECALL = 0.90`, fewest `tiles_per_frame`; **F1 explicitly rejected with a measurement** — "The F1-optimal threshold missed 4.7 animals/frame where a recall-first one missed 1.0" | `semantic/calibration.py:9-13, 606-656` **[V]** |
+| SAM3 checkpoint selection | **none — always the last epoch**; validation loss is computed once, after `adapters.pt` is written, and is documented "for reporting ONLY. Never influences checkpoint selection" | `sam3_lora/cli.py:762-775, 778-796` **[V]** |
+| Model comparison (the eval harness) | paired extras/frame at a target recall, plus AP, reported side by side | `tools/sam3_parity/compare_models.py` (per the 2026-09-06 eval spec §11) |
+
+**Why this is worse than any tiling divergence.** Every divergence in Part 2 is a difference in
+*what runs*; those can be reconciled by sharing code, and a shared contract makes them go away.
+A divergence in the objective is a difference in **what "better" means**, and sharing code
+cannot reconcile it — two harnesses that disagree about the goal will keep giving opposite
+advice over identical evidence, correctly, forever. Concretely, today: P3 would recommend an
+operating point that P4's rule rejects as under-recalling, and P4 would recommend one P3's rule
+rejects as sub-optimal F1; both would be "right". And because their *matchers* also differ
+(§2.6), the recall each reports is not even the same quantity — **no number produced by one
+harness is comparable to a number produced by the other**, which silently invalidates every
+cross-path comparison a user might reasonably make.
+
+The same logic extends to checkpoint selection and to cross-species comparison. If the metric
+that picks a checkpoint is not the metric that picks an operating point, a run can be tuned to
+win on one and lose on the other. If the metric is not comparable across corpora, "model A is
+better than model B" is not a statement that survives changing the evaluation set — which is
+exactly the trap the 2026-09-06 evaluation fell into.
+
+### 5.2 The two criteria a unified objective must satisfy
+
+1. **Reproducible separation.** It must distinguish genuinely different models/checkpoints by
+   more than run-to-run noise — i.e. the gap between arms must exceed a bootstrapped confidence
+   interval on the metric itself. A metric that cannot separate is not an objective, it is a
+   number.
+2. **Comparability across corpora.** The same model evaluated on two renderings of the same
+   underlying frames must produce comparable values, otherwise the metric measures the corpus
+   as much as the model.
+
+**Per-tile AP demonstrably fails criterion 2.** The 2026-09-06 eval measured both models at
+**~0.96 on the 1766-px tile corpus and 0.61-0.69 on the 971-px corpus** — the same models, the
+same underlying 16 frames, differing only in how they were cut up. The eval spec states the
+mechanism plainly: the larger-tile corpus is an easier scoring regime (fewer, larger tiles; 147
+vs 576) and "the 0.96 figures must never be compared against the 0.61-0.69 ones". Any tile-level
+metric inherits this, because tiling is a free parameter of the *evaluation*, not a property of
+the model. **This is the single strongest constraint the unified objective must satisfy, and it
+argues that whatever is chosen must be computed on MERGED FULL FRAMES, not on tiles.**
+
+### 5.3 Candidates, stated without a winner
+
+| Candidate | Separation | Cross-corpus comparability | Notes |
+|---|---|---|---|
+| AP / area under PR (per tile) | good in practice | **FAILS** (§5.2) | disqualified as the *unified* objective on comparability alone; may survive as a within-corpus diagnostic |
+| AP on merged full frames | unmeasured | plausible — removes the tiling free parameter | the natural repair of the above; cost is a merge pass per evaluation |
+| Extras-per-frame at a target recall, on merged full frames | this is the pre-registered statistic the eval already uses, with paired CIs | plausible, and it is per-frame by construction | matches the semantic path's recall-first philosophy; needs a target recall, which is a **per-project** choice, not a constant |
+| F1 at the best threshold | good | plausible | but `semantic/calibration.py:9-13` has a measurement against it as an *operating-point* rule; using it for comparison while rejecting it for selection would be its own incoherence |
+| Recall at a fixed extras budget | the dual of the above | plausible | arguably the most operator-legible framing ("how many animals do I find, for a fixed amount of clicking") |
+
+**No number in this table is proposed as a default, and no target recall or extras budget is
+proposed at all** — both are per-project quantities that depend on animal density, label
+quality and how much proofreading the operator will tolerate. What the unified objective fixes
+is the *shape* of the question, not its parameters.
+
+### 5.4 The decision is OPEN, and keyed to a measurement in flight
+
+**D12 — which objective.** Deliberately unresolved here. A metric-reliability study is running
+that bootstraps the AP confidence interval and ranks the candidates by stability; the choice
+should be made on its output, not on this document's reasoning. *(Note: no file exists at
+`.superpowers/sdd/sam3-metric-reliability.md` in this tree as of `097408af` — the study is
+running outside the repo or has not yet landed. Whoever resolves D12 should attach its result
+here.)*
+
+**The live possibility that must not be designed away: the whole checkpoint ladder may be
+within noise.** The 2026-09-06 ladder spread was AP 0.5985-0.6379 across four arms, and the
+eval spec already flags that the ordering is *non-monotonic* in training duration and is "at
+least as consistent with substantial epoch-to-epoch variance in the adapter" as with any real
+effect. If the bootstrap shows the CI on AP is wider than that spread, then:
+
+- **Checkpoint selection is unmotivated** — there is nothing to select on, and last-epoch is as
+  defensible as anything else. The correct response is to say so and stop, not to invent a rule.
+- **The objective question is still answered, for calibration.** Calibration compares operating
+  points of ONE model on ONE corpus, which is a paired within-model comparison with far more
+  favourable noise properties than cross-model comparison. A metric too noisy to rank
+  checkpoints can still be perfectly adequate to rank tile fractions.
+
+That asymmetry should be stated in whatever ships: **one objective FUNCTION, but the evidence
+needed to act on it differs by consumer**, and the honest position may be "unified for
+calibration, and explicitly declined for checkpoint selection until a study says otherwise".
+
+### 5.5 What this means for D8
+
+D8 (§3.10) asked whether to keep two recommendation rules or unify. **Requirement A resolves the
+direction: unify.** What it does not resolve is *onto what* — that is D12. The interim posture
+stands (expose both as named rules, default each path to its current rule so adoption changes
+nothing, record the rule into the stored profile), but it is now explicitly a **bridge**, not a
+destination.
+
+---
+
+## Part 6 — RECORD PER-EPOCH VALIDATION, UNCONDITIONALLY (requirement)
+
+### 6.1 The requirement
+
+**Requirement B: every training run records a per-epoch validation series, and retains every
+epoch checkpoint, INDEPENDENT of whether anything ever selects on them.**
+
+This is an evidence requirement, not a selection mechanism, and it must not be argued for or
+against on selection grounds.
+
+### 6.2 What exists today
+
+- `_evaluate_and_write` runs **once**, after the final epoch, strictly after `adapters.pt` is
+  written, and its docstring states it is "for reporting ONLY. Never influences checkpoint
+  selection" (`sam3_lora/cli.py:762-775, 778-796`) **[V]**. **The series does not exist.**
+- `KEEP_EPOCH_CHECKPOINTS = 3` (`cli.py:267`); `prune_epoch_checkpoints` deletes all but the
+  newest three after every epoch write (`cli.py:270-287, 289-298`) **[V]**.
+
+### 6.3 Why the absence is itself the bug
+
+On the 2026-09-06 run, training loss stopped improving after epoch 2 and ten epochs bought
+nothing measurable over three — **and nothing in the artifacts showed it while the run was
+happening or after it finished.** A single terminal validation number cannot distinguish "the
+model converged" from "the model stalled at epoch 2 and burned eight epochs of GPU time". The
+series is the only artifact that can, and it is the cheapest possible diagnostic: it is a
+number per epoch.
+
+Worse, the retention cap **has already destroyed evidence**: `epoch_001` and `epoch_002` were
+pruned before they could be evaluated, on the very run whose most informative result turned out
+to be that `epoch_003` was the best of the four surviving arms. The best checkpoint of the run
+may have been deleted, unmeasured, by a constant.
+
+### 6.4 Retention — and the real constraint, stated fairly
+
+Adapters are ~45.8 MB, so retaining all ten epochs of that run costs ~460 MB — negligible
+against a 3.4 GB published artifact. **But the existing docstring's rationale is not silly and
+must not be dismissed:** it says "epoch counts are user-supplied and disk exhaustion mid-run
+would destroy the very artifact this feature exists to preserve" (`cli.py:273-276`) **[V]**.
+That is a real failure mode for a 200-epoch run on a full disk.
+
+So the fix is **not "delete the cap" but "replace a count with a budget"**: retain every epoch
+subject to a disk-space budget, with the budget expressed against measured free space and the
+measured adapter size (both knowable at run start, neither a corpus-derived constant), and log
+loudly whenever the budget forces a prune. A count of 3 is a constant that silently destroys
+evidence; a budget that refuses to fill the disk and *says so* preserves both properties. If
+the budget cannot hold every epoch, prune by a stated policy (e.g. thin the middle, keep first
+and last) rather than a sliding window that always destroys the early epochs — which is
+precisely the failure that occurred.
+
+### 6.5 Early stopping — framed correctly
+
+**Early stopping is industry-standard practice and this document does not argue against it.**
+The 2026-09-06 finding that validation loss anti-correlates with held-out AP is an argument
+against **the signal**, not **the technique**.
+
+The standard-practice answer is already visible in a dependency this repo ships: **Ultralytics
+YOLO stops on `fitness`, a weighted mAP — a detection-quality metric — not on validation loss.**
+That is the correct shape for SAM3 too: a per-epoch *detection-quality* evaluation, not a
+per-epoch loss.
+
+**Its cost, stated honestly:** an inference + merge + match pass per epoch. On the 2026-09-06
+validation geometry that is 147 tiles per epoch. Whether that cost is worth paying depends
+entirely on D12 — if the metric cannot separate checkpoints reliably (§5.4), then paying an
+inference pass per epoch to compute an unreliable stopping signal is worse than not paying it.
+**So: record the series unconditionally (Requirement B, cheap, no decision needed); decide
+whether to STOP on it only after the reliability study (D13).**
+
+**The historical irony, preserved deliberately.** The original rationale for last-epoch
+selection claimed a val-loss/AP anti-correlation and was dismissed *because its fold had
+train == valid*. On a genuinely disjoint split, the anti-correlation was measured again. The
+dismissal was methodologically correct at the time and the conclusion still came back. That is
+worth keeping in the record, both as evidence and as a caution: a correct procedural objection
+to a finding is not a refutation of the finding.
+
+### 6.6 Decisions
+
+- **D13 — stop on a per-epoch detection metric?** Keyed to D12. Not before.
+- **D14 — retention budget policy** (§6.4): budget basis, and the thinning policy when the
+  budget binds. Affects every trainer, not just SAM3 — **P1/YOLO retention should be checked
+  for the same class of constant** before this is called done.
+- **D15 — does Requirement B apply to YOLO training too?** It should, for the same reasons.
+  Ultralytics writes its own per-epoch `results.csv`, so the gap may already be closed on that
+  side; **unverified in this audit** and worth confirming rather than assuming.
