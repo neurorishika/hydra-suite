@@ -165,10 +165,14 @@ def _pole_of_inaccessibility(pts: np.ndarray) -> np.ndarray | None:
     """
     if pts.shape[0] < 3 or not np.isfinite(pts).all():
         # A non-finite vertex would reach `np.round(...).astype(np.int32)` and
-        # raise (ValueError / OverflowError). Declining here keeps a malformed
-        # polygon a NON-MATCH, which is what the previous vertex-mean
-        # implementation did silently -- introducing a hard crash on a
-        # GUI-reachable path would be a regression, not a fix.
+        # raise (ValueError / OverflowError). Declining here makes a malformed
+        # polygon a NON-MATCH instead.
+        #
+        # Measured against the pre-fix module, NOT assumed: the old vertex-mean
+        # code was silent only for a LABEL-side NaN. A prediction-side NaN
+        # vertex already raised there, and +/-inf raised on both sides. So this
+        # guard is strictly BETTER than the behaviour it replaces, not a
+        # restoration of it -- do not describe it as one.
         return None
     lo = np.floor(pts.min(axis=0)) - 1.0
     hi = np.ceil(pts.max(axis=0)) + 1.0
@@ -285,8 +289,9 @@ def match_one_to_one(
     label_m = [_vertex_mean(g) for g in label_polys]
     # Non-finite vertices are dropped up front, on BOTH sides. This is KEPT
     # after the IoU route's removal on purpose: it is correct defensive
-    # behaviour, and the pre-fix code's silent NaN no-match is not something
-    # to restore. Malformed geometry had TWO crash entrances, not one --
+    # behaviour. Note the pre-fix code was NOT uniformly silent on malformed
+    # geometry -- measured, it raised for a prediction-side NaN and for +/-inf
+    # on either side, and was silent only for a label-side NaN. Malformed geometry had TWO crash entrances, not one --
     # `cv2` raises inside the representative point, and `polygon_iou` raises
     # independently (`utils/polygon_iou.py:59`,
     # "cannot convert float NaN to integer"), which the retired IoU route
