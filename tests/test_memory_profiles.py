@@ -93,6 +93,40 @@ def test_profile_store_round_trip_and_invalidates_schema_and_estimator(tmp_path)
     assert store.load() == ()
 
 
+def test_load_degrades_to_empty_on_malformed_json(tmp_path):
+    path = tmp_path / "profiles.json"
+    path.write_text("{not valid json")
+    assert MemoryProfileStore(path).load() == ()
+
+
+def test_load_degrades_to_empty_on_missing_expected_keys(tmp_path):
+    path = tmp_path / "profiles.json"
+    path.write_text(json.dumps({"schema_version": PROFILE_SCHEMA_VERSION}))
+    assert MemoryProfileStore(path).load() == ()
+
+
+def test_load_degrades_to_empty_on_oversized_file(tmp_path, monkeypatch):
+    path = tmp_path / "profiles.json"
+    path.write_text(
+        json.dumps({"schema_version": PROFILE_SCHEMA_VERSION, "records": []})
+    )
+    monkeypatch.setattr("hydra_suite.runtime.memory_profiles.MAX_PROFILE_BYTES", 4)
+    assert MemoryProfileStore(path).load() == ()
+
+
+def test_load_degrades_to_empty_on_record_missing_identity_or_settings(tmp_path):
+    path = tmp_path / "profiles.json"
+    path.write_text(
+        json.dumps(
+            {
+                "schema_version": PROFILE_SCHEMA_VERSION,
+                "records": [{"settings": {"input_width": 640, "input_height": 640}}],
+            }
+        )
+    )
+    assert MemoryProfileStore(path).load() == ()
+
+
 def test_profile_identity_separates_device_model_precision_and_adapter():
     base = _identity()
     assert (

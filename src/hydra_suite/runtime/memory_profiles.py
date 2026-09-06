@@ -190,17 +190,21 @@ def recommend_batch_size(
 
 
 def records_for(
-    records_or_store: Iterable[MemoryMeasurement],
+    records: Iterable[MemoryMeasurement],
     identity: ProfileIdentity,
 ) -> tuple[MemoryMeasurement, ...]:
-    """Return the subset of `records_or_store` matching `identity` exactly.
+    """Return the subset of `records` matching `identity` exactly.
+
+    `records` must be an iterable of `MemoryMeasurement` (e.g. the tuple
+    returned by `MemoryProfileStore.load()`) — a `MemoryProfileStore`
+    instance itself is not iterable and must be `.load()`-ed first.
 
     Pure and small on purpose: later callers (a training launcher and a
     preflight estimator) both need identity-scoped lookups and must share
     this instead of re-implementing identity matching twice.
     """
 
-    return tuple(record for record in records_or_store if record.identity == identity)
+    return tuple(record for record in records if record.identity == identity)
 
 
 def fit_batch_curve(records: Iterable[MemoryMeasurement]) -> tuple[int, int]:
@@ -432,29 +436,44 @@ class MemoryProfileStore:
         self.path = Path(path)
 
     def load(self) -> tuple[MemoryMeasurement, ...]:
+        """Load stored records, degrading to "measure again" on any corruption.
+
+        A stale or corrupted cache must never crash and must never fabricate
+        a wrong number — any unreadable, undecodable, oversized, or
+        structurally invalid store yields `()`, exactly like a schema or
+        estimator-version mismatch. Only a well-formed store on the current
+        schema/estimator version yields real records.
+        """
+
         if not self.path.exists():
             return ()
-        with self.path.open("rb") as stream:
-            encoded = stream.read(MAX_PROFILE_BYTES + 1)
-        if len(encoded) > MAX_PROFILE_BYTES:
-            raise ValueError("memory profile store exceeds its size cap")
-        raw = json.loads(encoded)
-        if not isinstance(raw, dict) or set(raw) != {"schema_version", "records"}:
-            raise ValueError("memory profile store has invalid fields")
-        if raw["schema_version"] != PROFILE_SCHEMA_VERSION:
+        try:
+            with self.path.open("rb") as stream:
+                encoded = stream.read(MAX_PROFILE_BYTES + 1)
+            if len(encoded) > MAX_PROFILE_BYTES:
+                return ()
+            raw = json.loads(encoded)
+            if not isinstance(raw, dict) or set(raw) != {"schema_version", "records"}:
+                return ()
+            if raw["schema_version"] != PROFILE_SCHEMA_VERSION:
+                return ()
+            records = raw["records"]
+            if not isinstance(records, list) or len(records) > MAX_PROFILE_RECORDS:
+                return ()
+            output = []
+            for record in records:
+                if not isinstance(record, dict):
+                    return ()
+                record = dict(record)
+                identity = ProfileIdentity(**record.pop("identity"))
+                settings = PressureSettings(**record.pop("settings"))
+                record["accelerator_kind"] = AcceleratorKind(record["accelerator_kind"])
+                measurement = MemoryMeasurement(identity, settings, **record)
+                if measurement.estimator_version == ESTIMATOR_VERSION:
+                    output.append(measurement)
+            return tuple(output)
+        except (OSError, ValueError, TypeError, KeyError, AttributeError):
             return ()
-        records = raw["records"]
-        if not isinstance(records, list) or len(records) > MAX_PROFILE_RECORDS:
-            raise ValueError("memory profile record count exceeds its cap")
-        output = []
-        for record in records:
-            identity = ProfileIdentity(**record.pop("identity"))
-            settings = PressureSettings(**record.pop("settings"))
-            record["accelerator_kind"] = AcceleratorKind(record["accelerator_kind"])
-            measurement = MemoryMeasurement(identity, settings, **record)
-            if measurement.estimator_version == ESTIMATOR_VERSION:
-                output.append(measurement)
-        return tuple(output)
 
     def save(self, records: Iterable[MemoryMeasurement]) -> None:
         bounded = tuple(records)
