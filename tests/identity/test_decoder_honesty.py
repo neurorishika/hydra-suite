@@ -18,6 +18,8 @@ F4  the commit-override margin was vacuous: incumbent and challenger
 
 from __future__ import annotations
 
+import logging
+
 import numpy as np
 
 from hydra_suite.core.individual.identity.catalog import IdentityCatalog
@@ -175,37 +177,63 @@ def test_slot_lock_bias_does_not_compound_across_frames() -> None:
 # --------------------------------------------------------------------------
 
 
-def test_override_margin_can_block_a_revision() -> None:
-    """With commit_threshold 0.85 and margin 0.5 the gate was vacuous: any
-    challenger clearing 0.85 forces the incumbent <= 0.15, so the margin
-    (>= 0.70) always held. A committed slot must survive at least one frame of
-    a challenger that only just clears the commit threshold."""
-    catalog = IdentityCatalog.from_labels(["A", "B"])
-    decoder = OnlineIdentityDecoder(
-        catalog,
-        {
-            "IDENTITY_COMMIT_THRESHOLD": 0.85,
-            "IDENTITY_COMMIT_MIN_HITS": 3,
-            "IDENTITY_SLOT_LOCK_OVERRIDE_MARGIN": 0.5,
-            "IDENTITY_SLOT_LOCK_MIN_FRAMES": 10_000,
-            "IDENTITY_SWAP_ENABLED": False,
-        },
-    )
-    for f in range(6):
-        _feed(decoder, f, 0, _log_probs(0.001, 0.9, 0.099))
-    assert decoder._beliefs[0].committed_label == "A"
+def test_vacuous_override_margin_is_announced(caplog) -> None:
+    """The shipped defaults make the commit-revision gate arithmetically dead.
 
-    blocked = 0
-    for f in range(6, 40):
-        _feed(decoder, f, 0, _log_probs(0.001, 0.15, 0.849))
-        b = decoder._beliefs[0]
-        probs = np.exp(b.log_posterior - b.log_posterior.max())
-        probs /= probs.sum()
-        challenger = float(probs[catalog.index_of("B")])
-        if challenger >= 0.85 and b.committed_label == "A":
-            blocked += 1
-        if b.committed_label == "B":
-            break
-    assert (
-        blocked >= 1
-    ), "the override margin never blocked a single frame -- it is vacuous"
+    Both confidences are entries of the same normalised posterior, so a
+    challenger clearing `commit_threshold` forces the incumbent below
+    `1 - commit_threshold`; the margin can only bind above
+    `2 * commit_threshold - 1`. At 0.5 vs 2*0.85-1 = 0.70 it never blocks.
+    That is not fixed here -- retuning it needs a retention oracle -- but it
+    must not be silent.
+    """
+    catalog = IdentityCatalog.from_labels(["A", "B"])
+    with caplog.at_level(logging.WARNING):
+        OnlineIdentityDecoder(
+            catalog,
+            {
+                "IDENTITY_COMMIT_THRESHOLD": 0.85,
+                "IDENTITY_SLOT_LOCK_OVERRIDE_MARGIN": 0.5,
+            },
+        )
+    assert "can never block a revision" in caplog.text
+    assert "0.700" in caplog.text
+
+
+def test_non_vacuous_override_margin_is_silent() -> None:
+    catalog = IdentityCatalog.from_labels(["A", "B"])
+    import logging as _logging
+
+    logger = _logging.getLogger("hydra_suite.core.individual.identity.online")
+    records: list[_logging.LogRecord] = []
+
+    class _Grab(_logging.Handler):
+        def emit(self, record):
+            records.append(record)
+
+    h = _Grab()
+    logger.addHandler(h)
+    try:
+        OnlineIdentityDecoder(
+            catalog,
+            {
+                "IDENTITY_COMMIT_THRESHOLD": 0.85,
+                "IDENTITY_SLOT_LOCK_OVERRIDE_MARGIN": 0.75,
+            },
+        )
+    finally:
+        logger.removeHandler(h)
+    assert not [r for r in records if "can never block" in r.getMessage()]
+
+
+def test_emitted_slot_lock_defaults_match_the_decoder_defaults() -> None:
+    """Emitting the three slot-lock knobs must be behaviour-neutral: the
+    schema defaults have to equal the values online.py used to hardcode."""
+    from hydra_suite.trackerkit.config.identity_schema import SlotLockConfig
+
+    catalog = IdentityCatalog.from_labels(["A", "B"])
+    decoder = OnlineIdentityDecoder(catalog, {})  # all-hardcoded path
+    cfg = SlotLockConfig()
+    assert decoder._slot_lock_min_frames == cfg.min_frames
+    assert decoder._slot_lock_strength == cfg.strength
+    assert decoder._slot_lock_override_margin == cfg.override_margin

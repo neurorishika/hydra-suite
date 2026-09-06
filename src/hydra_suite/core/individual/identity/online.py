@@ -185,6 +185,25 @@ class OnlineIdentityDecoder:
         self._respawn_prior_max_gap: int = int(
             params.get("IDENTITY_RESPAWN_PRIOR_MAX_GAP", 120)
         )
+        # F4: the commit-revision gate compares two entries of the SAME
+        # normalised posterior, so a challenger that clears `commit_threshold`
+        # forces the incumbent below `1 - commit_threshold`. The margin can
+        # therefore only ever block a revision when it exceeds
+        # `2 * commit_threshold - 1`; below that it is arithmetically vacuous
+        # and the only real protection on a committed identity is the commit
+        # threshold itself. Say so rather than presenting a dead guard.
+        vacuous_below = 2.0 * self._commit_threshold - 1.0
+        if self._slot_lock_override_margin <= vacuous_below:
+            log.warning(
+                "Identity commit-override margin %.3f can never block a "
+                "revision at commit threshold %.3f: it would have to exceed "
+                "%.3f (2*threshold-1). The committed identity is protected "
+                "only by the commit threshold itself.",
+                self._slot_lock_override_margin,
+                self._commit_threshold,
+                vacuous_below,
+            )
+
         self._swap_enabled: bool = bool(params.get("IDENTITY_SWAP_ENABLED", True))
         self._swap_min_frames: int = int(params.get("IDENTITY_SWAP_MIN_FRAMES", 8))
         self._swap_conf_margin: float = float(

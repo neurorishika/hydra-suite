@@ -1508,6 +1508,11 @@ def build_engine_params(
         "IDENTITY_TRANSITION_EPSILON": identity_cfg.realtime.transition_epsilon,
         "IDENTITY_UNKNOWN_PRIOR": identity_cfg.realtime.unknown_prior,
         "IDENTITY_REJOIN_THRESHOLD": identity_cfg.realtime.rejoin_threshold,
+        "IDENTITY_SLOT_LOCK_MIN_FRAMES": identity_cfg.realtime.slot_lock.min_frames,
+        "IDENTITY_SLOT_LOCK_STRENGTH": identity_cfg.realtime.slot_lock.strength,
+        "IDENTITY_SLOT_LOCK_OVERRIDE_MARGIN": (
+            identity_cfg.realtime.slot_lock.override_margin
+        ),
         "IDENTITY_SWAP_ENABLED": identity_cfg.realtime.swap_enabled,
         "IDENTITY_SWAP_MIN_FRAMES": identity_cfg.realtime.slot_lock.swap_min_frames,
         "IDENTITY_SWAP_CONF_MARGIN": (identity_cfg.realtime.slot_lock.swap_conf_margin),
