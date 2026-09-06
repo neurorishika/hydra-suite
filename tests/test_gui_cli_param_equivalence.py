@@ -38,7 +38,6 @@ FIXTURES_CONFIG_DIR = REPO_ROOT / "tools" / "equivalence" / "fixtures" / "config
 CLIPS = [
     "fly_obb",
     "worm_bgsub",
-    "emi_obb_identity",
     "ant_pose_headtail",
     "ant_obb_sleap",
     "ant_obb_sequential",

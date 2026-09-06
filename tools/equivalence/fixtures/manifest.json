@@ -1,14 +1,7 @@
 {
-  "release_tag": "equiv-fixtures-v2",
+  "release_tag": "equiv-fixtures-v3",
   "repo": "neurorishika/hydra-suite",
   "clips": [
-    {
-      "name": "emi_obb_identity.mp4",
-      "sha256": "5c6ffa082106f4e51e62dbe4ef1422d20e08b1d89db9964d54890c0c6dea843b",
-      "bytes": 68547756,
-      "config": "configs/emi_obb_identity.json",
-      "skeleton": null
-    },
     {
       "name": "ant_pose_headtail.mp4",
       "sha256": "f296d187ae9b4b63fecad48f4f2766c732939c2f267d937af073e70feaccd5f5",
@@ -32,8 +25,8 @@
     },
     {
       "name": "ant_cnn_identity.mp4",
-      "sha256": "d0f32866700c555a1e826e64eee784e376b9ca9d523c08ffe2de0c18e603bbf8",
-      "bytes": 61457763,
+      "sha256": "19eabaed873d8c7c3bcc029d79cb0994f5b4fdd98ff7e0b9a38b262b4c69a045",
+      "bytes": 91089553,
       "config": "configs/ant_cnn_identity.json",
       "skeleton": "ooceraea_biroi.json"
     },
@@ -47,8 +40,8 @@
   ],
   "models_archive": {
     "name": "models.tar.gz",
-    "sha256": "67f3f91193460487df4a8b4cb70b63077ffc42a5d1c24e33a5b7135893338e57",
-    "bytes": 383707340,
+    "sha256": "dee2011d127897c6bee551bfd6f1b085c58323e24057b7d6ddf9cd02ab520c31",
+    "bytes": 383707316,
     "extract_to": "models_dir"
   },
   "models_contained": [

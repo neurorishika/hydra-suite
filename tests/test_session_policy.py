@@ -152,13 +152,6 @@ ORACLE = {
         "should_export_final_media_videos": False,
         "should_run_interpolated_postpass": True,
     },
-    "emi_obb_identity": {
-        "is_pose_export_enabled": False,
-        "is_pose_inference_enabled": False,
-        "is_headtail_compute_enabled": True,
-        "should_export_final_media_videos": False,
-        "should_run_interpolated_postpass": True,
-    },
     "fly_obb": {
         "is_pose_export_enabled": False,
         "is_pose_inference_enabled": False,

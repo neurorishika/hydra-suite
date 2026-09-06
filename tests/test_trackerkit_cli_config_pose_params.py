@@ -84,7 +84,7 @@ def test_emi_and_sequential_configs_derive_pose_extractor_falsy(tmp_path):
     # SLEAP model is configured) but "enable_pose_extractor" is False in the
     # saved config, so the bridge's is_pose_export_enabled gate keeps pose
     # off for these too.
-    for name in ("emi_obb_identity", "ant_obb_sleap", "ant_obb_sequential"):
+    for name in ("ant_obb_sleap", "ant_obb_sequential"):
         config = _load_fixture_config(name)
         assert config.get("enable_pose_extractor") is False, name
         params = _build_params(config, tmp_path)
