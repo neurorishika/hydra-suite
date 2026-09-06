@@ -351,18 +351,44 @@ class OnlineIdentityDecoder:
             )
             belief.hit_count += 1
 
-    def _apply_slot_lock_bias(self, belief: TrackIdentityBelief) -> None:
-        """Apply soft slot-lock bias toward the locked identity (Phase 2)."""
+    def _slot_lock_biased_probs(self, belief: TrackIdentityBelief) -> np.ndarray:
+        """Posterior with the soft slot-lock bias applied, for assignment only.
+
+        Two properties matter here, both of which the pre-2026-09 version got
+        wrong (audit finding F3):
+
+        1. **Sign.** The bias must *raise* the locked entry. The old code added
+           ``log(strength)``, which for the default strength 0.9 is
+           ``-0.105`` -- it penalised the identity the lock exists to protect.
+           A lock strength in ``[0, 1)`` is now read as a confidence: 0 means
+           no lock, and the bias ``log1p(strength)`` grows monotonically with
+           it -- the locked entry's odds are multiplied by ``1 + strength``,
+           so the default 0.9 is a 1.9x odds boost (+0.642 nats). The
+           magnitude is deliberately mild: it is a tuning choice with no
+           retention oracle behind it, and a strong lock (e.g.
+           ``-log1p(-strength)``, +2.303 nats at 0.9) blocks revisions that
+           today's tests require.
+        2. **Non-persistence.** The old code mutated ``belief.log_posterior``
+           in place, so the bias compounded every frame -- a locked slot fed
+           uninformative evidence decayed below 0.6 in 14 frames instead of 31.
+           The lock is a per-frame preference over the assignment, not a
+           belief update, so it is applied to a copy and discarded.
+        """
+        probs = self._posterior_probs(belief)
         if not belief.slot_lock_label:
-            return
+            return probs
         try:
             lock_idx = self._catalog.index_of(belief.slot_lock_label)
         except KeyError:
-            return
-        # Boost the locked label; renormalise
-        log_bias = np.log(max(belief.slot_lock_strength, 1e-6))
-        belief.log_posterior[lock_idx] += log_bias
-        belief.log_posterior -= np.logaddexp.reduce(belief.log_posterior)
+            return probs
+        strength = float(np.clip(belief.slot_lock_strength, 0.0, 1.0))
+        if strength <= 0.0:
+            return probs
+        log_bias = float(np.log1p(strength))
+        biased = np.log(np.clip(probs, 1e-300, None))
+        biased[lock_idx] += log_bias
+        biased -= np.logaddexp.reduce(biased)
+        return np.exp(biased)
 
     def _posterior_probs(self, belief: TrackIdentityBelief) -> np.ndarray:
         """Return normalised probability vector for a belief."""
@@ -434,10 +460,9 @@ class OnlineIdentityDecoder:
         # would otherwise pin both slots to wrong identities.
         self._detect_and_execute_swaps(visible_slots, frame_idx)
 
-        # Step 3: apply lock bias (post-swap, so the bias follows the new
-        # committed identity)
-        for slot in visible_slots:
-            self._apply_slot_lock_bias(self._beliefs[slot])
+        # Step 3 is no longer a mutation: the slot-lock bias is applied inside
+        # the assignment solve (see `_slot_lock_biased_probs`) so it can never
+        # compound into the stored belief.
 
         # Step 4: uniqueness-constrained visible-slot assignment
         assigned_labels = self._solve_visible_assignment(visible_slots)
@@ -481,12 +506,20 @@ class OnlineIdentityDecoder:
             out_label = belief.committed_label if belief.committed else label
             out_idx = belief.committed_index if belief.committed else cat_idx
 
+            # The reported confidence must be the posterior of the label we
+            # actually report. When a committed slot is outvoted by fresh
+            # evidence, `label`/`cat_idx` describe the *challenger* while
+            # `out_label`/`out_idx` describe the incumbent -- emitting
+            # `confidence` there paired the incumbent's name with the
+            # challenger's number (audit finding F5).
+            out_conf = float(probs[out_idx]) if out_idx > 0 else 0.0
+
             assignments.append(
                 IdentityAssignment(
                     slot_index=slot,
                     label=out_label,
                     catalog_index=out_idx,
-                    confidence=confidence,
+                    confidence=out_conf,
                     entropy=ent,
                     margin=margin,
                     committed=belief.committed,
@@ -508,7 +541,7 @@ class OnlineIdentityDecoder:
         if not visible_slots:
             return {}
         posterior_probs = [
-            self._posterior_probs(self._beliefs[slot]) for slot in visible_slots
+            self._slot_lock_biased_probs(self._beliefs[slot]) for slot in visible_slots
         ]
         idxs = substrate.solve_unique_assignment(
             posterior_probs,
