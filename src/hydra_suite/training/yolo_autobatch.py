@@ -64,20 +64,29 @@ def batch_resolution_block(
     provenance: str,
     degraded_reasons: Sequence[str] = (),
 ) -> dict[str, Any]:
-    """The SAM3 ``batch_resolution`` schema, with honest neutral values.
+    """The core ``batch_resolution`` keys, with honest neutral values.
 
-    The SAM3 side fills ``measured_reserved_bytes``/``free_bytes`` from a real
+    Shares its core keys with the SAM3 block; SAM3 carries extra ones. The
+    SAM3 side fills ``measured_envelope_bytes``/``free_bytes`` from a real
     probe. Nothing here is measured by us, so those stay 0 rather than
     borrowing an authority this path does not have.
+
+    ``resolved`` is what RESOLUTION chose. ``effective_batch`` is the batch of
+    the FINAL attempt -- what trained, or, for a run that failed every attempt,
+    the last batch tried. It starts as ``None`` because it is unknowable
+    until the bounded OOM-retry ladder settles -- that ladder halves the batch
+    in a fresh child, so the two can legitimately differ by 2x or 4x. The
+    supervisor rewrites this file with the settled value once the ladder ends.
     """
 
     return {
         "requested": int(requested),
         "resolved": int(resolved),
+        "effective_batch": None,
         "provenance": str(provenance),
         "fingerprint": "",
         "degraded_reasons": [str(item) for item in degraded_reasons],
-        "measured_reserved_bytes": 0,
+        "measured_envelope_bytes": 0,
         "free_bytes": 0,
         "resolved_at_unix_ns": time.time_ns(),
     }

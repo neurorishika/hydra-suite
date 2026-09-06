@@ -301,6 +301,24 @@ def _run_ultralytics_once(
     }
 
 
+def _write_batch_resolution(
+    run_dir: str | Path,
+    resolution: dict,
+    log_cb: Callable[[str], None] | None,
+) -> None:
+    """Persist ``batch_resolution.json``; never fail a run over provenance."""
+
+    try:
+        target = Path(run_dir)
+        target.mkdir(parents=True, exist_ok=True)
+        (target / BATCH_RESOLUTION_FILENAME).write_text(
+            json.dumps(resolution, indent=2), encoding="utf-8"
+        )
+    except OSError as exc:
+        if log_cb is not None:
+            log_cb(f"auto batch: could not persist the resolution: {exc}")
+
+
 def _command_with_pressure(
     command: Sequence[str], settings: PressureSettings
 ) -> tuple[str, ...]:
@@ -344,6 +362,7 @@ def run_ultralytics_supervised(
 
     requested_batch = int(spec.hyperparams.batch)
     resolved_batch, provenance = requested_batch, "explicit"
+    resolution: dict | None = None
     if requested_batch <= 0:
         # Ask the classification question about the NORMALISED device so a
         # plan written with Ultralytics' `device: "0"` can reach resolution.
@@ -393,15 +412,12 @@ def run_ultralytics_supervised(
         resolution = batch_resolution_block(
             requested_batch, resolved_batch, provenance, degraded
         )
-        try:
-            target = Path(run_dir)
-            target.mkdir(parents=True, exist_ok=True)
-            (target / BATCH_RESOLUTION_FILENAME).write_text(
-                json.dumps(resolution, indent=2), encoding="utf-8"
-            )
-        except OSError as exc:  # provenance is not worth failing a run over
-            if log_cb is not None:
-                log_cb(f"auto batch: could not persist the resolution: {exc}")
+        # Written BEFORE the run so a crash, a kill, or a machine going away
+        # mid-training still leaves the provenance of what was chosen. It is
+        # rewritten once the OOM-retry ladder settles to fill in
+        # `effective_batch`; until then that key is null, which is honest --
+        # nothing has trained yet.
+        _write_batch_resolution(run_dir, resolution, log_cb)
 
     initial = PressureSettings(
         input_width=max(1, int(spec.hyperparams.imgsz)),
@@ -411,8 +427,10 @@ def run_ultralytics_supervised(
         prefetch_batches=2,
     )
     results: list[dict] = []
+    attempted_settings: list[PressureSettings] = []
 
     def launch_fresh(settings: PressureSettings, attempt: int) -> AdaptiveAttemptResult:
+        attempted_settings.append(settings)
         attempt_spec = replace(
             spec,
             hyperparams=replace(
@@ -467,6 +485,15 @@ def run_ultralytics_supervised(
         pressure_order=(PressureField.BATCH_SIZE, PressureField.WORKERS),
     )
     final = results[-1]
+    if run_dir is not None and resolution is not None and attempted_settings:
+        # `resolved` keeps meaning "what resolution chose"; `effective_batch`
+        # records what the last attempt actually trained with. The ladder
+        # halves the batch on a classified OOM, so without this the durable
+        # artifact could claim a batch 2x or 4x larger than the one that ran.
+        # Rewriting (rather than appending a second file) keeps one artifact
+        # per run with one meaning per key.
+        resolution["effective_batch"] = int(attempted_settings[-1].batch_size)
+        _write_batch_resolution(run_dir, resolution, log_cb)
     history = [dict(item) for item in adaptive.adjustments]
     final["retry_history"] = history
     telemetry = dict(final.get("resource_telemetry") or {})

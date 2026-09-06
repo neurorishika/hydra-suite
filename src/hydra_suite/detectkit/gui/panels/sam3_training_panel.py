@@ -392,10 +392,12 @@ class Sam3TrainingPanel(QWidget):
         self.batch_spin.setRange(1, 256)
         self.auto_batch_checkbox = QCheckBox("Auto (measure)")
         self.auto_batch_checkbox.setToolTip(
-            "Measure the largest batch that fits before launch, and refuse "
-            "the run if nothing fits. This is not an optimal-batch search -- "
-            "the measurement is conservative by design and can only raise "
-            "the estimate, never lower it."
+            "Measure this workload on this card, then pick a batch that is "
+            "safe under BOTH the measurement and a conservative estimate. "
+            "This is not an optimal-batch search: it is conservative by "
+            "design, it often chooses 1, and it can refuse the run if "
+            "nothing fits. The measurement can only raise the estimate, "
+            "never lower it."
         )
         self.auto_batch_checkbox.toggled.connect(self._on_auto_batch_toggled)
         batch_row = QHBoxLayout()

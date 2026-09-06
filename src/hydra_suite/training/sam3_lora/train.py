@@ -18,7 +18,7 @@ from typing import Any, Callable, Optional
 
 from hydra_suite.runtime.memory_profiles import (
     MemoryProfileStore,
-    fit_batch_curve,
+    measured_envelope_bytes,
     merge_records,
     profile_store_path,
 )
@@ -479,6 +479,10 @@ def _resolve_measured_batch(
         # selection also depends on how much VRAM happens to be free right
         # now. Cache the fact even if the selection below refuses, so the
         # next attempt on a quieter GPU reuses it rather than re-probing.
+        # Known, deliberate limitation: this read-modify-write is lock-free,
+        # like the ladder marker. Two concurrent probes can lose one side's
+        # records; the failure direction is one extra probe, never a wrong
+        # number, so it is not worth a lock file here.
         store.save(merge_records(stored, records))
         # A ladder cut short by a TRANSIENT host event has not proved that
         # the untried rungs are unreachable, so it must not be allowed to
@@ -555,32 +559,37 @@ def _resolve_measured_batch(
     # rungs (records at 1, 2, 4 can resolve to 3), the number is the fitted
     # envelope and must be labelled as extrapolated rather than passed off as
     # something someone measured.
-    observed_peaks = {
-        record.settings.batch_size: record.accelerator_reserved_peak_bytes
-        for record in records
-    }
-    if resolved in observed_peaks:
-        selected_peak = observed_peaks[resolved]
-        requirement_basis = "measured"
-    else:
-        base_bytes, slope_bytes = fit_batch_curve(records)
-        selected_peak = max(
-            base_bytes + slope_bytes * resolved,
-            max(
-                (peak for batch, peak in observed_peaks.items() if batch <= resolved),
-                default=0,
-            ),
-        )
-        requirement_basis = "extrapolated"
+    observed_rungs = {record.settings.batch_size for record in records}
+    requirement_basis = "measured" if resolved in observed_rungs else "extrapolated"
+    # One shared envelope: `max(fit(n), every observed peak at batch <= n)`,
+    # the same expression selection and admission use. Re-deriving it here
+    # was the third copy in this branch.
+    selected_envelope = measured_envelope_bytes(records, resolved)
     resolution = {
         "requested": int(params.batch),
         "resolved": int(resolved),
+        # On this path resolution IS what runs: SAM3 has no OOM-halving
+        # ladder after launch, so the two keys always agree. Written anyway
+        # so `effective_batch` means "what trained" on both paths.
+        "effective_batch": int(resolved),
         "provenance": provenance,
         "requirement_basis": requirement_basis,
         "ladder_terminated_by": terminated_by,
         "fingerprint": key,
         "degraded_reasons": list(fingerprint.degraded_reasons),
-        "measured_reserved_bytes": int(selected_peak),
+        # Three keys below can hold the string "measured"; they answer
+        # different questions:
+        #   provenance             -- did we probe this run ("measured") or
+        #                             reuse a cached/explicit answer?
+        #   requirement_provenance -- which side of max(analytic, measured)
+        #                             decided the requirement we cleared?
+        #   requirement_basis      -- did `resolved` land on a batch size we
+        #                             actually observed, or between rungs?
+        # `measured_envelope_bytes` is NOT a raw observation: at an observed
+        # rung it can still exceed that rung's peak when the fitted curve is
+        # higher. Named for the envelope it is, not for a measurement it is
+        # not.
+        "measured_envelope_bytes": int(selected_envelope),
         "requirement_bytes": int(requirement.bytes),
         "requirement_provenance": requirement.provenance,
         "requirement_measured_extrapolated": bool(requirement.measured_extrapolated),
@@ -591,8 +600,8 @@ def _resolve_measured_batch(
         f"auto batch: {resolved} (requirement {requirement.bytes / GiB:.1f} GiB "
         f"[{requirement.provenance}"
         + (", extrapolated" if requirement.measured_extrapolated else "")
-        + f"] of {free_bytes / GiB:.1f} GiB free; {requirement_basis} measured "
-        f"{selected_peak / GiB:.1f} GiB reserved at batch {resolved}; "
+        + f"] of {free_bytes / GiB:.1f} GiB free; {requirement_basis} envelope "
+        + f"{selected_envelope / GiB:.1f} GiB at batch {resolved}; "
         f"provenance={provenance}, ladder={terminated_by})"
     )
     return int(resolved), resolution
@@ -772,10 +781,11 @@ def train_sam3_lora(
     batch_resolution: dict[str, Any] = {
         "requested": requested_batch,
         "resolved": requested_batch,
+        "effective_batch": requested_batch,
         "provenance": "explicit",
         "fingerprint": "",
         "degraded_reasons": [],
-        "measured_reserved_bytes": 0,
+        "measured_envelope_bytes": 0,
         "free_bytes": 0,
         "resolved_at_unix_ns": time.time_ns(),
     }
@@ -791,7 +801,10 @@ def train_sam3_lora(
                 should_cancel=should_cancel,
             )
         except autobatch.ProbeCanceled:
-            # Merge nothing, write no batch_resolution, launch nothing.
+            # Write no batch_resolution and launch nothing. A ladder that
+            # COMPLETED before the cancel has already cached its records
+            # above, and that is correct: a measurement is a fact about this
+            # hardware, not about whether the user kept waiting.
             return _result(
                 success=False,
                 canceled=True,

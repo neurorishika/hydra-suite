@@ -271,6 +271,40 @@ def test_a_memory_pressure_retry_halves_from_the_resolved_batch(monkeypatch, tmp
     assert "batch=12" in commands[1]
 
 
+def test_the_effective_batch_records_what_the_oom_ladder_settled_on(
+    monkeypatch, tmp_path
+):
+    """`resolved` is what resolution chose; `effective_batch` is what ran.
+
+    The ladder halves the batch in a fresh child on a classified OOM, so a
+    durable artifact carrying only `resolved` would claim a batch twice the
+    size of the one that actually trained.
+    """
+
+    import json
+
+    _capture_commands(
+        monkeypatch,
+        tmp_path,
+        _auto_spec(tmp_path, -1),
+        child_writes=24,
+        oom_on_attempt=0,
+    )
+    payload = json.loads((tmp_path / "batch_resolution.json").read_text())
+    assert payload["resolved"] == 24
+    assert payload["effective_batch"] == 12
+
+
+def test_the_effective_batch_equals_the_resolved_batch_without_a_retry(
+    monkeypatch, tmp_path
+):
+    import json
+
+    _capture_commands(monkeypatch, tmp_path, _auto_spec(tmp_path, -1), child_writes=24)
+    payload = json.loads((tmp_path / "batch_resolution.json").read_text())
+    assert payload["resolved"] == payload["effective_batch"] == 24
+
+
 def test_a_resolution_failure_still_launches_with_a_positive_batch(
     monkeypatch, tmp_path
 ):

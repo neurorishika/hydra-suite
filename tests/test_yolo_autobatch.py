@@ -164,7 +164,8 @@ def test_the_resolution_block_matches_the_sam3_schema(tmp_path):
         "provenance",
         "fingerprint",
         "degraded_reasons",
-        "measured_reserved_bytes",
+        "effective_batch",
+        "measured_envelope_bytes",
         "free_bytes",
         "resolved_at_unix_ns",
     }
@@ -172,7 +173,9 @@ def test_the_resolution_block_matches_the_sam3_schema(tmp_path):
     assert block["resolved"] == 24
     assert block["provenance"] == "ultralytics_autobatch"
     # Honesty: nothing here was measured, so nothing claims a measured peak.
-    assert block["measured_reserved_bytes"] == 0
+    assert block["measured_envelope_bytes"] == 0
+    # Unknowable until the OOM-retry ladder settles; the supervisor fills it.
+    assert block["effective_batch"] is None
     assert block["free_bytes"] == 0
     assert block["fingerprint"] == ""
     assert block["degraded_reasons"] == []

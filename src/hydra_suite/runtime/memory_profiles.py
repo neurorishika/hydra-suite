@@ -154,9 +154,16 @@ def recommend_batch_size(
     input_width: int,
     input_height: int,
     maximum: int,
-    safety_fraction: float = 0.8,
+    safety_fraction: float = MEASURED_SAFETY_FRACTION,
 ) -> int:
-    """Return a conservative monotonic recommendation from one measured point."""
+    """Return a conservative monotonic recommendation from one measured point.
+
+    The default is `MEASURED_SAFETY_FRACTION`, not a second hardcoded 0.8:
+    there is one safety fraction in this module and this is it. Currently
+    reachable only from tests -- kept rather than deleted because retiring a
+    public helper is a larger decision than pointing its default at the
+    constant it was already duplicating.
+    """
 
     if maximum < 1 or input_width < 1 or input_height < 1:
         raise ValueError("recommendation bounds and input dimensions must be positive")

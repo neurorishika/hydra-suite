@@ -473,9 +473,24 @@ def sam3_workload_fingerprint(
     device_identity = device_identity_for(cuda_device.name, cuda_device.total_bytes)
 
     imgsz = int(spec.hyperparams.imgsz)
+    # `slice_width`/`slice_height` change the tile size -- and therefore the
+    # memory -- but ONLY in custom geometry mode (`tile_size_for_mode`
+    # ignores them otherwise). Hashing them unconditionally would make two
+    # identical auto-mode runs re-probe over a stale, unused number.
+    slice_payload = (
+        f"{int(params.slice_width)}x{int(params.slice_height)}"
+        if params.geometry_mode == "custom"
+        else "mode_derived"
+    )
+    # The probe PROTOCOL is part of the workload: the branch's own evidence is
+    # that step count moves the measured peak by ~35% (2 steps 7.34 GiB vs 60
+    # steps 9.93 GiB). Without this, raising `PROBE_STEPS` would silently
+    # reuse every stored record -- each a stale, lower number -- forever.
     task_payload = (
         f"imgsz={imgsz}|overlap={params.tile_overlap}|"
         f"object_tile_fraction={params.object_tile_fraction}|"
+        f"slice={slice_payload}|"
+        f"probe_steps={PROBE_STEPS}|"
         f"density={_dataset_density_hash(dataset)}"
     )
 

@@ -508,3 +508,63 @@ def test_allocator_config_case_insensitive(tmp_path, monkeypatch, prefix):
     monkeypatch.setenv("PYTORCH_CUDA_ALLOC_CONF", "EXPANDABLE_SEGMENTS:true")
     b = _fingerprint(tmp_path, monkeypatch, prefix)
     assert a == b
+
+
+def test_change_probe_steps_misses_cache(tmp_path, monkeypatch, prefix):
+    """The probe PROTOCOL is part of the workload.
+
+    Two steps measure ~35% less than sixty on the same run (7.34 vs 9.93 GiB),
+    so raising `PROBE_STEPS` without moving the key would silently reuse every
+    stored record as a stale, lower number forever.
+    """
+
+    base = _fingerprint(tmp_path, monkeypatch, prefix)
+    monkeypatch.setattr(ab, "PROBE_STEPS", ab.PROBE_STEPS + 1)
+    mutated = _fingerprint(tmp_path, monkeypatch, prefix)
+    assert base != mutated
+
+
+def test_change_custom_slice_size_misses_cache(tmp_path, monkeypatch, prefix):
+    base = _fingerprint(
+        tmp_path,
+        monkeypatch,
+        prefix,
+        params_overrides={
+            "geometry_mode": "custom",
+            "slice_width": 512,
+            "slice_height": 512,
+        },
+    )
+    mutated = _fingerprint(
+        tmp_path,
+        monkeypatch,
+        prefix,
+        params_overrides={
+            "geometry_mode": "custom",
+            "slice_width": 1024,
+            "slice_height": 512,
+        },
+    )
+    assert base != mutated
+
+
+def test_slice_size_is_ignored_outside_custom_geometry(tmp_path, monkeypatch, prefix):
+    """`tile_size_for_mode` ignores the slice dims unless the mode is custom.
+
+    Hashing them unconditionally would force a re-probe over a stale number
+    that cannot change the tile size, and so cannot change the memory.
+    """
+
+    base = _fingerprint(
+        tmp_path,
+        monkeypatch,
+        prefix,
+        params_overrides={"geometry_mode": "auto_object", "slice_width": 512},
+    )
+    mutated = _fingerprint(
+        tmp_path,
+        monkeypatch,
+        prefix,
+        params_overrides={"geometry_mode": "auto_object", "slice_width": 4096},
+    )
+    assert base == mutated
