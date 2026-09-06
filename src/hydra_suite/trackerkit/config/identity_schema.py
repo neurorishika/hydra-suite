@@ -162,6 +162,11 @@ class IdentityConfig:
                     advanced.get("identity_rejoin_velocity_budget", 1.5)
                 ),
                 rejoin_dist_floor=advanced.get("identity_rejoin_dist_floor", None),
+                min_frames=int(advanced.get("identity_slot_lock_min_frames", 30)),
+                strength=float(advanced.get("identity_slot_lock_strength", 0.9)),
+                override_margin=float(
+                    advanced.get("identity_slot_lock_override_margin", 0.5)
+                ),
             ),
         )
         posthoc = PostHocIdentityConfig(

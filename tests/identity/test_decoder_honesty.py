@@ -65,26 +65,36 @@ def test_committed_row_reports_confidence_of_its_own_label() -> None:
     belief = decoder._beliefs[0]
     assert belief.committed and belief.committed_label == "A"
 
-    # Now push B hard enough to win the assignment but not (yet) the commitment.
-    out = None
+    # Now push B hard enough to win the assignment but not (yet) the
+    # commitment. The invariant is checked on EVERY frame -- asserting only
+    # after the loop lands on a frame where committed == assigned, where the
+    # bug cannot show.
+    saw_divergent_frame = False
     for f in range(6, 30):
         out = _feed(decoder, f, 0, _log_probs(0.001, 0.15, 0.849))[0]
-        if out.label == "A" and out.catalog_index == catalog.index_of("A"):
-            probs = np.exp(belief.log_posterior - belief.log_posterior.max())
-            probs /= probs.sum()
-            if abs(out.confidence - probs[catalog.index_of("B")]) < 1e-12:
-                break
+        probs = np.exp(belief.log_posterior - belief.log_posterior.max())
+        probs /= probs.sum()
+        reported_idx = int(out.catalog_index)
+        assert out.label == catalog.label_of(reported_idx), (
+            f"frame {f}: label {out.label!r} disagrees with catalog_index "
+            f"{reported_idx}"
+        )
+        assert abs(out.confidence - float(probs[reported_idx])) < 1e-12, (
+            f"frame {f}: row says {out.label!r} with confidence "
+            f"{out.confidence:.6f}, but p({out.label}) = "
+            f"{probs[reported_idx]:.6f}"
+        )
+        # The interesting frames: a committed incumbent outvoted by the raw
+        # posterior. That is where the old code paired A's name with B's number.
+        if (
+            out.label == "A"
+            and probs[catalog.index_of("B")] > probs[catalog.index_of("A")]
+        ):
+            saw_divergent_frame = True
 
-    assert out is not None
-    probs = np.exp(belief.log_posterior - belief.log_posterior.max())
-    probs /= probs.sum()
-    reported_idx = int(out.catalog_index)
-    assert out.label == catalog.label_of(
-        reported_idx
-    ), "label and catalog_index disagree"
-    assert abs(out.confidence - float(probs[reported_idx])) < 1e-12, (
-        f"row says {out.label!r} with confidence {out.confidence:.6f}, but "
-        f"p({out.label}) = {probs[reported_idx]:.6f}"
+    assert saw_divergent_frame, (
+        "scenario never produced a committed-but-outvoted frame -- the test "
+        "would pass without ever exercising the defect"
     )
 
 
@@ -122,9 +132,14 @@ def test_slot_lock_raises_the_locked_label() -> None:
     after = decoder._slot_lock_biased_probs(belief)
 
     a = catalog.index_of("A")
-    assert (
-        after[a] > before[a]
-    ), f"slot lock did not raise p(locked): {before[a]:.6f} -> {after[a]:.6f}"
+    # Pin the closed form, not just the direction: a no-op bias (log_bias = 0)
+    # passes a bare `after > before` on a 1-ULP renormalisation artefact.
+    odds = before[a] / (1.0 - before[a]) * (1.0 + 0.9)
+    assert abs(after[a] - odds / (1.0 + odds)) < 1e-12, (
+        f"slot lock magnitude is not (1+strength)x odds: "
+        f"{before[a]:.6f} -> {after[a]:.6f}"
+    )
+    assert after[a] > before[a] + 1e-3
     # and it must not have touched the stored belief
     assert np.allclose(decoder._posterior_probs(belief), before)
 
@@ -166,9 +181,13 @@ def test_slot_lock_bias_does_not_compound_across_frames() -> None:
             f, [0], {0: [IdentityEvidence.from_cnn(f, 1, "cnn", flat)]}
         )
 
-    assert p_a(locked) >= p_a(unlocked) - 1e-9, (
-        f"locked slot decayed FASTER than the unlocked one: "
-        f"{p_a(locked):.6f} < {p_a(unlocked):.6f}"
+    # Equality, not `>=`: the lock must not touch the stored belief in EITHER
+    # direction. `>=` alone still accepts a bias that compounds upward.
+    assert np.allclose(
+        locked._beliefs[0].log_posterior, unlocked._beliefs[0].log_posterior
+    ), (
+        f"the lock mutated the stored belief: locked p(A)={p_a(locked):.6f} "
+        f"vs unlocked p(A)={p_a(unlocked):.6f}"
     )
 
 
@@ -187,6 +206,9 @@ def test_vacuous_override_margin_is_announced(caplog) -> None:
     That is not fixed here -- retuning it needs a retention oracle -- but it
     must not be silent.
     """
+    from hydra_suite.core.individual.identity import online as online_mod
+
+    online_mod._VACUOUS_MARGIN_WARNED.clear()
     catalog = IdentityCatalog.from_labels(["A", "B"])
     with caplog.at_level(logging.WARNING):
         OnlineIdentityDecoder(
@@ -237,3 +259,76 @@ def test_emitted_slot_lock_defaults_match_the_decoder_defaults() -> None:
     assert decoder._slot_lock_min_frames == cfg.min_frames
     assert decoder._slot_lock_strength == cfg.strength
     assert decoder._slot_lock_override_margin == cfg.override_margin
+
+
+def test_slot_lock_changes_an_assignment_when_it_can_bite() -> None:
+    """A no-op bias passed every other test in this file, so pin the one
+    behaviour the lock exists for: a locked slot keeps a label it would
+    otherwise lose to the display gate."""
+    from hydra_suite.core.individual.identity.online import TrackIdentityBelief
+
+    catalog = IdentityCatalog.from_labels(["X", "Y"])
+    decoder = OnlineIdentityDecoder(catalog, {"IDENTITY_DISPLAY_THRESHOLD": 0.6})
+
+    # Raw p(X) = 0.543 is under the 0.6 display gate; boosted by 1.9x odds it
+    # clears it and the locked slot is assigned X.
+    locked = TrackIdentityBelief(
+        slot_index=0, log_posterior=_log_probs(0.007, 0.543, 0.45)
+    )
+    locked.slot_lock_label = "X"
+    locked.slot_lock_strength = 0.9
+    decoder._beliefs[0] = locked
+
+    raw = decoder._posterior_probs(locked)
+    biased = decoder._slot_lock_biased_probs(locked)
+    x = catalog.index_of("X")
+    assert raw[x] < 0.6 <= biased[x], (
+        f"scenario does not straddle the display gate: raw={raw[x]:.3f} "
+        f"biased={biased[x]:.3f}"
+    )
+    assert decoder._solve_visible_assignment([0])[0] == "X"
+
+    # The same belief without the lock falls below the gate and goes
+    # unassigned. That difference is exactly what the lock buys.
+    decoder._beliefs[1] = TrackIdentityBelief(
+        slot_index=1, log_posterior=_log_probs(0.007, 0.543, 0.45)
+    )
+    assert decoder._solve_visible_assignment([1])[1] is None
+
+
+def test_non_vacuous_override_margin_actually_blocks_a_revision() -> None:
+    """`..._is_silent` only proves silence. At commit 0.85 a margin of 0.75
+    needs incumbent <= 0.10 and challenger >= 0.85 -- reachable, so pin that
+    a non-vacuous margin really can block."""
+    catalog = IdentityCatalog.from_labels(["A", "B"])
+    params = {
+        "IDENTITY_COMMIT_THRESHOLD": 0.85,
+        "IDENTITY_COMMIT_MIN_HITS": 3,
+        "IDENTITY_SLOT_LOCK_MIN_FRAMES": 10_000,
+        "IDENTITY_SWAP_ENABLED": False,
+    }
+    strict = OnlineIdentityDecoder(
+        catalog, {**params, "IDENTITY_SLOT_LOCK_OVERRIDE_MARGIN": 0.95}
+    )
+    vacuous = OnlineIdentityDecoder(
+        catalog, {**params, "IDENTITY_SLOT_LOCK_OVERRIDE_MARGIN": 0.5}
+    )
+    for dec in (strict, vacuous):
+        for f in range(6):
+            _feed(dec, f, 0, _log_probs(0.001, 0.9, 0.099))
+        assert dec._beliefs[0].committed_label == "A"
+
+    def frames_to_revise(dec):
+        for f in range(6, 60):
+            _feed(dec, f, 0, _log_probs(0.001, 0.15, 0.849))
+            if dec._beliefs[0].committed_label == "B":
+                return f
+        return None
+
+    vacuous_at = frames_to_revise(vacuous)
+    strict_at = frames_to_revise(strict)
+    assert vacuous_at is not None
+    assert strict_at is None or strict_at > vacuous_at, (
+        f"a 0.95 margin blocked nothing: strict revised at {strict_at}, "
+        f"vacuous at {vacuous_at}"
+    )

@@ -136,6 +136,12 @@ class IdentityAssignment:
     committed: bool
 
 
+# Distinct (override_margin, commit_threshold) pairs already reported as
+# vacuous, so the warning is emitted once per process rather than once per
+# arena decoder.
+_VACUOUS_MARGIN_WARNED: set[tuple[float, float]] = set()
+
+
 class OnlineIdentityDecoder:
     """Online Bayesian identity decoder with uniqueness enforcement.
 
@@ -193,7 +199,14 @@ class OnlineIdentityDecoder:
         # and the only real protection on a committed identity is the commit
         # threshold itself. Say so rather than presenting a dead guard.
         vacuous_below = 2.0 * self._commit_threshold - 1.0
-        if self._slot_lock_override_margin <= vacuous_below:
+        vacuity_key = (self._slot_lock_override_margin, self._commit_threshold)
+        if (
+            self._slot_lock_override_margin <= vacuous_below
+            and vacuity_key not in _VACUOUS_MARGIN_WARNED
+        ):
+            # One decoder is constructed per arena; warn once per distinct
+            # (margin, threshold) pair so a 40-arena run does not emit 40 copies.
+            _VACUOUS_MARGIN_WARNED.add(vacuity_key)
             log.warning(
                 "Identity commit-override margin %.3f can never block a "
                 "revision at commit threshold %.3f: it would have to exceed "
@@ -382,11 +395,26 @@ class OnlineIdentityDecoder:
            A lock strength in ``[0, 1)`` is now read as a confidence: 0 means
            no lock, and the bias ``log1p(strength)`` grows monotonically with
            it -- the locked entry's odds are multiplied by ``1 + strength``,
-           so the default 0.9 is a 1.9x odds boost (+0.642 nats). The
-           magnitude is deliberately mild: it is a tuning choice with no
-           retention oracle behind it, and a strong lock (e.g.
-           ``-log1p(-strength)``, +2.303 nats at 0.9) blocks revisions that
-           today's tests require.
+           so the default 0.9 is a 1.9x odds boost (+0.642 nats).
+
+           **At the shipped defaults this lock does not change any emitted
+           label.** The bias feeds only the Hungarian solve, gated by
+           ``display_threshold`` (0.6); commit revision is decided separately
+           on the RAW posterior against ``commit_threshold`` (0.85). A
+           challenger needs raw p >= 0.737 to be denied assignment under a
+           1.9x boost, but a challenger at 0.85 is assigned regardless -- so
+           the lock can only bite when ``display_threshold`` exceeds ~0.755.
+           What this fix removes is the old harm (a negative, compounding
+           penalty); it does not add protection.
+
+           The magnitude is a tuning choice with no retention oracle behind
+           it. The principled-looking alternative ``-log1p(-strength)``
+           (+2.303 nats at 0.9) DOES block revisions, and fails exactly one
+           existing test -- ``test_online_decoder_revises_committed_identity
+           _after_override``, whose config locks after a single frame
+           (``LOCK_MIN_FRAMES=1``, commit 0.6) and then feeds one 0.98
+           counter-frame. That is a degenerate config, not a strong argument
+           for the mild value; revisit both once a retention oracle exists.
         2. **Non-persistence.** The old code mutated ``belief.log_posterior``
            in place, so the bias compounded every frame -- a locked slot fed
            uninformative evidence decayed below 0.6 in 14 frames instead of 31.
