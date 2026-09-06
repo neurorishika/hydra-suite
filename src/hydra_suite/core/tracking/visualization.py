@@ -108,9 +108,21 @@ def _draw_yolo_obb(overlay, obb_corners, yolo_results):
 
 
 def _draw_track_overlays(
-    overlay, p, trajectories, track_states, ids, continuity, identity_labels=None
+    overlay,
+    p,
+    trajectories,
+    track_states,
+    ids,
+    continuity,
+    current_frame_matches,
+    identity_labels=None,
 ):
-    """Draw per-track circles, orientation arrows, trajectories, and labels."""
+    """Draw observed track markers and historical trajectories.
+
+    ``current_frame_matches`` is deliberately separate from ``track_states``:
+    an occluded track retains its earlier trajectory but has no observation on
+    this frame, so it must not receive a current-frame marker, label, or arrow.
+    """
     colors = p["TRAJECTORY_COLORS"]
     for i, tr in enumerate(trajectories):
         if not tr or track_states[i] == "lost":
@@ -131,11 +143,6 @@ def _draw_track_overlays(
         else:
             col_idx = i % len(colors)
         col = tuple(int(c) for c in colors[col_idx])
-        if p.get("SHOW_CIRCLES"):
-            cv2.circle(overlay, pt, 8, col, -1)
-        if p.get("SHOW_ORIENTATION"):
-            ex, ey = int(x + 20 * math.cos(th)), int(y + 20 * math.sin(th))
-            cv2.line(overlay, pt, (ex, ey), col, 2)
         if p.get("SHOW_TRAJECTORIES"):
             pts = np.array(
                 [(pt[0], pt[1]) for pt in tr if not math.isnan(pt[0])],
@@ -143,6 +150,13 @@ def _draw_track_overlays(
             ).reshape((-1, 1, 2))
             if len(pts) > 1:
                 cv2.polylines(overlay, [pts], isClosed=False, color=col, thickness=2)
+        if i not in current_frame_matches:
+            continue
+        if p.get("SHOW_CIRCLES"):
+            cv2.circle(overlay, pt, 8, col, -1)
+        if p.get("SHOW_ORIENTATION"):
+            ex, ey = int(x + 20 * math.cos(th)), int(y + 20 * math.sin(th))
+            cv2.line(overlay, pt, (ex, ey), col, 2)
         if p.get("SHOW_LABELS") or p.get("SHOW_STATE"):
             if p.get("SHOW_LABELS"):
                 label = (
@@ -176,6 +190,7 @@ def draw_overlays(
     kf_manager=None,
     yolo_results=None,
     obb_corners=None,
+    current_frame_matches=None,
     identity_labels=None,
 ):
     """Draw all tracking overlays on a frame.
@@ -192,6 +207,8 @@ def draw_overlays(
         kf_manager: KalmanFilterManager (for uncertainty ellipses).
         yolo_results: YOLO results object (direct detection mode).
         obb_corners: OBB corners list (cached detection mode).
+        current_frame_matches: Slot indices matched to real detections on this
+            frame. Only these slots receive a current marker, label, or arrow.
         identity_labels: Per-slot identity label strings (or None). When a
             non-empty string is provided for a slot, it is used as the display
             label and drives a stable color assignment so the same identity
@@ -214,7 +231,14 @@ def draw_overlays(
         ]
     ):
         _draw_track_overlays(
-            overlay, p, trajectories, track_states, ids, continuity, identity_labels
+            overlay,
+            p,
+            trajectories,
+            track_states,
+            ids,
+            continuity,
+            set(current_frame_matches or ()),
+            identity_labels,
         )
 
     if p.get("SHOW_FG") and fg is not None:

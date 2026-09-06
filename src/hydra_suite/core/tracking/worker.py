@@ -2857,6 +2857,11 @@ class TrackingEngineCore:
 
                 profiler.tock("features")
 
+                # Rendering must distinguish a real current observation from a
+                # coasted Kalman state. Keep this frame-local evidence separate
+                # from the persistent track state and trajectory history.
+                _current_frame_matches: set[int] = set()
+
                 if detection_initialized and meas:
                     # --- Assignment ---
                     profiler.tick("kf_predict")
@@ -3143,6 +3148,7 @@ class TrackingEngineCore:
                     profiler.tick("state_update")
                     # Identity-rejoin slots count as matched (no trajectory reset)
                     matched = set(rows) | _identity_rejoin_slots
+                    _current_frame_matches.update(matched)
                     unmatched = list(set(range(N)) - matched)
                     for r in matched:
                         missed_frames[r], track_states[r] = 0, "active"
@@ -3763,6 +3769,7 @@ class TrackingEngineCore:
                                 )
                                 local_counts[track_idx] = 0
                                 next_trajectory_id += 1
+                                _current_frame_matches.add(track_idx)
                                 break
 
                     profiler.tock("kf_update")
@@ -4028,6 +4035,7 @@ class TrackingEngineCore:
                         bg_u8,
                         yolo_results,
                         filtered_obb_corners,  # Pass OBB corners for visualization
+                        current_frame_matches=_current_frame_matches,
                         # Derive per-slot identity labels for visualization: prefer the
                         # committed belief label, then the current-frame assignment label.
                         # Falls back to empty string (→ trajectory ID display) when the
@@ -4327,6 +4335,7 @@ class TrackingEngineCore:
         bg,
         yolo_results=None,
         obb_corners=None,
+        current_frame_matches=None,
         identity_labels=None,
     ):
         from hydra_suite.core.tracking.visualization import draw_overlays
@@ -4343,6 +4352,7 @@ class TrackingEngineCore:
             kf_manager=getattr(self, "kf_manager", None),
             yolo_results=yolo_results,
             obb_corners=obb_corners,
+            current_frame_matches=current_frame_matches,
             identity_labels=identity_labels,
         )
 
