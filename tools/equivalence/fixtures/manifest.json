@@ -25,8 +25,8 @@
     },
     {
       "name": "ant_cnn_identity.mp4",
-      "sha256": "19eabaed873d8c7c3bcc029d79cb0994f5b4fdd98ff7e0b9a38b262b4c69a045",
-      "bytes": 91089553,
+      "sha256": "8cc027b01baa371ec0c3d650e1dda9263c48e7002d2890353c693a3e262d4117",
+      "bytes": 66877441,
       "config": "configs/ant_cnn_identity.json",
       "skeleton": "ooceraea_biroi.json"
     },
@@ -40,7 +40,7 @@
   ],
   "models_archive": {
     "name": "models.tar.gz",
-    "sha256": "dee2011d127897c6bee551bfd6f1b085c58323e24057b7d6ddf9cd02ab520c31",
+    "sha256": "a3411efa0e56d381a733bcc15d78a3eff18ed4ddcb4f2c8f31b8e0befe3bbd2c",
     "bytes": 383707316,
     "extract_to": "models_dir"
   },

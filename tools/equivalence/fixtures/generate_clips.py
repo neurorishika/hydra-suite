@@ -73,6 +73,13 @@ CLIPS = [
         note="background_subtraction detection path (DEMO 2)",
     ),
     dict(
+        # PROVENANCE GAP (2026-09-06): the shipped ant_cnn_identity.mp4 is NOT
+        # produced by this entry. It was replaced by hand with a better section
+        # whose source video was not recorded; it arrived as a truncated HEVC
+        # file (header claimed 631 frames, 489 decoded) and was re-encoded here
+        # to a valid 489-frame H.264 clip with the same settings used below.
+        # Re-running this script OVERWRITES the shipped clip with a different
+        # (worse) section. Fix by recording the real source + range here.
         name="ant_cnn_identity",
         video=f"{DEMO}/DEMO 3/ant.mp4",
         config=f"{DEMO}/DEMO 3/ant_config.json",
