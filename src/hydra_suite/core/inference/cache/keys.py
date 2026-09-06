@@ -75,9 +75,10 @@ def detection_cache_key(
     """
     if config.mode == "direct":
         assert config.direct is not None
-        path = config.direct.model_path
-        slice_cfg = config.direct.slice
-        slice_hash = _slice_config_hash(slice_cfg)
+        direct = config.direct
+        path = direct.model_path
+        slice_cfg = direct.slice
+        slice_hash = _direct_raw_config_hash(config)
         if slice_cfg is not None and slice_cfg.enabled and roi_mask is not None:
             # Content-hash the mask (same approach as bgsub's ROI_MASK folding,
             # via _param_repr: sha256 over a contiguous tobytes() with shape+
@@ -98,11 +99,42 @@ def detection_cache_key(
         schema_version=CACHE_SCHEMA_VERSION,
         model_path=path,
         model_mtime=_mtime(path.split("|")[0]),
-        # confidence_threshold/iou excluded — re-applied at tracking time.
-        # Slicing changes which raw detections exist, so it IS folded in (but
-        # only when enabled, so existing non-sliced caches stay valid).
+        # User-facing confidence_threshold/iou stay excluded: replay reapplies
+        # those filters. Every setting that changes raw extraction is folded in
+        # below, including sequential's *second* model signature.
         config_hash=slice_hash,
     )
+
+
+def _direct_raw_config_hash(config: OBBConfig) -> str:
+    """Hash the complete direct-mode raw-extraction contract.
+
+    The cache stores results before the replay-time confidence/IoU filters, but
+    it is *not* a model-agnostic bag of boxes. Classes, raw cap, direct-task
+    conversion, segment geometry, and sliced prediction settings all change
+    which raw OBBs are materialized and must invalidate it.
+    """
+
+    assert config.direct is not None
+    direct = config.direct
+    task = str(direct.model_task)
+    payload = (
+        "direct-raw-v3",
+        _model_signature(direct.model_path),
+        direct.confidence_floor,
+        direct.auto_export,
+        task,
+        direct.fixed_angle_deg if task == "detect" else None,
+        direct.seg_num_angles if task == "segment" else None,
+        direct.seg_crop_size if task == "segment" else None,
+        direct.seg_pad_ratio if task == "segment" else None,
+        direct.seg_mask_threshold if task == "segment" else None,
+        tuple(config.target_classes),
+        config.max_detections,
+        config.raw_detection_cap,
+        _slice_config_hash(direct.slice),
+    )
+    return _sha("|".join(map(str, payload)))
 
 
 def _sequential_config_hash(config: OBBConfig) -> str:
@@ -117,9 +149,13 @@ def _sequential_config_hash(config: OBBConfig) -> str:
     assert config.sequential is not None
     seq = config.sequential
     payload = (
-        "sequential-raw-v2",
+        "sequential-raw-v3",
+        _model_signature(seq.detect_model_path),
+        _model_signature(seq.obb_model_path),
+        seq.auto_export,
         TRACKER_RAW_OBB_CONFIDENCE_FLOOR,
         seq.detect_confidence_threshold,
+        seq.obb_confidence_threshold,
         seq.detect_image_size,
         seq.crop_pad_ratio,
         seq.min_crop_size_px,
@@ -320,3 +356,14 @@ def _mtime(path: str) -> float:
         return os.path.getmtime(path)
     except OSError:
         return 0.0
+
+
+def _model_signature(path: str) -> str:
+    """Stable model signature used when a cache consumes multiple models.
+
+    ``CacheKey.model_mtime`` has one numeric slot for historical reasons. A
+    sequential detector has two independently changing model artifacts, so put
+    both path/mtime signatures into the raw config hash as well.
+    """
+
+    return f"{path}|mtime={_mtime(path):.9f}"

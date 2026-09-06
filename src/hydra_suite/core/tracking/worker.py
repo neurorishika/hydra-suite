@@ -143,6 +143,8 @@ class TrackingEngineCore:
         on_pose_model_resolved=None,
         inference_cache_dir=None,
         cache_read_only_replay=False,
+        inference_cache_provenance_params=None,
+        should_stop=None,
     ):
         self._on_frame = on_frame
         self._on_finished = on_finished
@@ -164,6 +166,15 @@ class TrackingEngineCore:
         # as a read-only evaluator.
         self.inference_cache_dir = inference_cache_dir
         self.cache_read_only_replay = bool(cache_read_only_replay)
+        # Read-only replay can process only a held-out subrange while opening
+        # caches produced from a larger production range. Keep cache-range
+        # provenance separate from loop bounds.
+        self.inference_cache_provenance_params = (
+            dict(inference_cache_provenance_params)
+            if inference_cache_provenance_params is not None
+            else None
+        )
+        self._external_should_stop = should_stop or (lambda: False)
         self.video_writer = None
         self._params_lock = threading.Lock()
         self.parameters = {}
@@ -181,6 +192,10 @@ class TrackingEngineCore:
         # Internal state variables that helper methods depend on
         self.frame_count = 0
         self.trajectories_full = []
+        # Production resets ``trajectories_full`` when a slot respawns, while
+        # its CSV has already emitted earlier-epoch rows. Replay needs the
+        # complete append-only observed history to score production semantics.
+        self._replay_observation_sink = []
 
         # Confidence density regions (computed after pre-detection phase)
         self._density_regions = []
@@ -447,6 +462,40 @@ class TrackingEngineCore:
             except Exception:
                 logger.debug("Failed to stop frame prefetcher", exc_info=True)
 
+    def _is_stop_requested(self) -> bool:
+        """Return cooperative stop state, including a replay cancellation token."""
+
+        if self._stop_requested:
+            return True
+        try:
+            return bool(self._external_should_stop())
+        except Exception:
+            # A cancellation predicate is an optional diagnostic integration;
+            # an error there must not crash an otherwise valid tracking run.
+            logger.exception("Replay cancellation predicate failed; continuing run")
+            return False
+
+    @property
+    def replay_observations(self):
+        """Append-only matched observations for replay consumers.
+
+        These are the real measurements the CSV writer emits, grouped by slot.
+        They intentionally survive lifecycle resets in ``trajectories_full``.
+        """
+
+        return self._replay_observation_sink
+
+    def _cache_provenance_params(self, params):
+        """Overlay cache range provenance on current candidate parameters."""
+
+        resolved = dict(params)
+        provenance = self.inference_cache_provenance_params
+        if provenance is not None:
+            for name in ("START_FRAME", "END_FRAME"):
+                if name in provenance:
+                    resolved[name] = provenance[name]
+        return resolved
+
     def _forward_frame_iterator(self, cap, use_prefetcher=False):
         """Iterate through frames in forward direction.
 
@@ -461,7 +510,7 @@ class TrackingEngineCore:
             self.frame_prefetcher = FramePrefetcher(cap, buffer_size=2)
             self.frame_prefetcher.start()
 
-            while not self._stop_requested:
+            while not self._is_stop_requested():
                 ret, frame = self.frame_prefetcher.read()
                 if not ret:
                     break
@@ -472,7 +521,7 @@ class TrackingEngineCore:
             self.frame_prefetcher = None
         else:
             # Standard synchronous frame reading
-            while not self._stop_requested:
+            while not self._is_stop_requested():
                 ret, frame = cap.read()
                 if not ret:
                     break
@@ -497,13 +546,13 @@ class TrackingEngineCore:
             # Backward mode: iterate from end_frame down to start_frame
             # This matches the cache keys which are actual video frame indices
             for relative_idx in range(total_frames):
-                if self._stop_requested:
+                if self._is_stop_requested():
                     break
                 yield None, relative_idx + 1  # Return None for frame, 1-indexed count
         else:
             # Forward cached mode: iterate from start_frame to end_frame
             for relative_idx in range(total_frames):
-                if self._stop_requested:
+                if self._is_stop_requested():
                     break
                 yield None, relative_idx + 1  # Return None for frame, 1-indexed count
 
@@ -919,6 +968,9 @@ class TrackingEngineCore:
         # TrackingPreviewWorker do not have, and causing parameter divergence.
         track_states, missed_frames = ["lost"] * N, [0] * N
         self.trajectories_full = [[] for _ in range(N)]
+        self._replay_observation_sink = (
+            [[] for _ in range(N)] if self.cache_read_only_replay else []
+        )
         trajectories_pruned = [[] for _ in range(N)]
         position_deques = [
             deque(maxlen=2) for _ in range(N)
@@ -987,6 +1039,7 @@ class TrackingEngineCore:
         inference_runner = None  # InferenceRunner for yolo_obb mode
         bgsub_runner = None  # InferenceRunner for background-subtraction mode
         use_cached_detections = False
+        _density_source_signature = None
 
         # Identity Phase 3, Task 4: resolve the catalog + per-phase calibration
         # ONCE, ahead of the yolo_obb InferenceRunner construction below, so
@@ -1060,6 +1113,19 @@ class TrackingEngineCore:
                 roi_mask=p.get("ROI_MASK"),
                 identity_evidence=_identity_evidence_run_config,
             )
+            # A density sidecar is valid only for the raw detection generation
+            # used by this runner, not merely for the cache directory it shares
+            # with past detector/model configurations.
+            from hydra_suite.core.inference.cache.keys import (
+                detection_cache_key,
+                video_signature,
+                with_video_signature,
+            )
+
+            _density_source_signature = with_video_signature(
+                detection_cache_key(_inference_cfg.obb, p.get("ROI_MASK")),
+                video_signature(self.video_path),
+            ).as_string()
 
             if self.backward_mode or self.cache_read_only_replay:
                 if not inference_runner.caches_all_valid():
@@ -1132,8 +1198,17 @@ class TrackingEngineCore:
                     from hydra_suite.core.tracking.confidence.confidence_density import (
                         load_regions as _load_regions,
                     )
+                    from hydra_suite.core.tracking.confidence.density_artifacts import (
+                        density_regions_cache_path,
+                    )
 
-                    _regions_path = _cache_dir / "confidence_regions.json"
+                    _regions_path = density_regions_cache_path(
+                        _cache_dir,
+                        p,
+                        start_frame,
+                        end_frame,
+                        source_signature=_density_source_signature,
+                    )
                     if _regions_path.exists():
                         self._density_regions = _load_regions(_regions_path)
                         logger.info(
@@ -1174,7 +1249,7 @@ class TrackingEngineCore:
             )
             bgsub_inference_config = InferenceConfig(
                 obb=None,
-                bgsub=BgSubConfig.from_params(p),
+                bgsub=BgSubConfig.from_params(self._cache_provenance_params(p)),
                 runtime_tier=_runtime_tier,
                 detection_batch_size=int(p.get("DETECTION_BATCH_SIZE", 1) or 1),
             )
@@ -1268,7 +1343,7 @@ class TrackingEngineCore:
                             if int(p.get("END_FRAME", -1)) >= 0
                             else None
                         ),
-                        should_stop=lambda: self._stop_requested,
+                        should_stop=self._is_stop_requested,
                     )
             except Exception as _bp_err:
                 profiler.phase_end("batched_detection")
@@ -1323,7 +1398,17 @@ class TrackingEngineCore:
         ):
             profiler.phase_start("confidence_density")
 
-            _regions_path = _cache_dir / "confidence_regions.json"
+            from hydra_suite.core.tracking.confidence.density_artifacts import (
+                density_regions_cache_path,
+            )
+
+            _regions_path = density_regions_cache_path(
+                _cache_dir,
+                p,
+                start_frame,
+                end_frame,
+                source_signature=_density_source_signature,
+            )
             if _regions_path.exists() and not self.cache_read_only_replay:
                 # Regions already computed — just load them.
                 try:
@@ -2099,7 +2184,7 @@ class TrackingEngineCore:
         frame_iterator = iter(frame_iterator)
 
         with profiler.armed():
-            while True:
+            while not self._is_stop_requested():
 
                 params = self.get_current_params()
                 detection_method = params.get(
@@ -3549,6 +3634,8 @@ class TrackingEngineCore:
                         # Update trajectory with actual frame index
                         pt = (meas_x, meas_y, det_theta_out, actual_frame_index)
                         self.trajectories_full[r].append(pt)
+                        if self.cache_read_only_replay:
+                            self._replay_observation_sink[r].append(pt)
                         trajectories_pruned[r].append(pt)
 
                         # Synchronise orientation_last and the KF theta state to the
@@ -4187,7 +4274,9 @@ class TrackingEngineCore:
 
         # === 3. CLEANUP (Identical to Original) ===
         profiler.phase_start("cleanup")
-        stop_requested = bool(self._stop_requested)
+        stop_requested = self._is_stop_requested()
+        if stop_requested:
+            self._stop_requested = True
         # Stop frame prefetcher if still running
         if self.frame_prefetcher is not None:
             self.frame_prefetcher.stop()

@@ -9,11 +9,78 @@ itself and returns only the observed positions that production would export.
 
 from __future__ import annotations
 
+from collections.abc import Mapping
 from dataclasses import dataclass
 from pathlib import Path
 from typing import Any, Callable, Sequence
 
 import numpy as np
+
+_REPLAY_THRESHOLD_TUNING_DIMENSIONS = (
+    "YOLO_CONFIDENCE_THRESHOLD",
+    "YOLO_IOU_THRESHOLD",
+)
+
+
+def disabled_replay_tuning_dimensions(params: Mapping[str, Any]) -> dict[str, str]:
+    """Return tuning dimensions a read-only production replay cannot score.
+
+    Raw OBB caches deliberately preserve detections before the user-facing
+    confidence/IoU filters. Downstream head-tail, CNN, pose, and AprilTag
+    evidence is currently materialized only for the baseline filtered set.
+    Lowering a threshold can therefore admit a raw detection with no evidence;
+    changing NMS/cap membership can also attach locally indexed evidence to the
+    wrong raw detection. A read-only evaluator must not recommend values based
+    on those fabricated inputs.
+
+    The helper is UI-independent so the core optimizer and TrackerKit can
+    surface the same explicit explanation before a run starts.
+    """
+
+    detection_method = (
+        str(params.get("DETECTION_METHOD", "background_subtraction")).strip().lower()
+    )
+    if detection_method != "yolo_obb":
+        reason = (
+            "YOLO confidence/IoU are inactive for the selected detection source; "
+            "read-only replay will not tune inert dimensions."
+        )
+        return {name: reason for name in _REPLAY_THRESHOLD_TUNING_DIMENSIONS}
+
+    downstream_stages: list[str] = []
+    if str(params.get("YOLO_HEADTAIL_MODEL_PATH", "") or "").strip():
+        downstream_stages.append("head-tail")
+    if any(
+        isinstance(item, Mapping) and str(item.get("model_path", "") or "").strip()
+        for item in (params.get("CNN_CLASSIFIERS", []) or [])
+    ):
+        downstream_stages.append("CNN")
+    if bool(params.get("ENABLE_POSE_EXTRACTOR", False)):
+        downstream_stages.append("pose")
+    if bool(params.get("USE_APRILTAGS", False)):
+        downstream_stages.append("AprilTag")
+    if not downstream_stages:
+        return {}
+
+    reason = (
+        "Read-only replay cannot faithfully re-index cached downstream "
+        f"({', '.join(downstream_stages)}) evidence after confidence/IoU filtering "
+        "changes; those tuning dimensions are disabled."
+    )
+    return {name: reason for name in _REPLAY_THRESHOLD_TUNING_DIMENSIONS}
+
+
+def sanitize_replay_tuning_config(
+    tuning_config: Mapping[str, bool], params: Mapping[str, Any]
+) -> tuple[dict[str, bool], dict[str, str]]:
+    """Return a safe copy of selected tuning dimensions and their exclusions."""
+
+    sanitized = {str(name): bool(enabled) for name, enabled in tuning_config.items()}
+    disabled = disabled_replay_tuning_dimensions(params)
+    for name in disabled:
+        if name in sanitized:
+            sanitized[name] = False
+    return sanitized, disabled
 
 
 @dataclass(frozen=True)
@@ -82,15 +149,30 @@ class ProductionReplayEvaluator:
         start_frame: int,
         end_frame: int,
         *,
+        pre_roll_start: int | None = None,
+        cache_provenance_params: Mapping[str, Any] | None = None,
         engine_factory: Callable[..., Any] | None = None,
         should_stop: Callable[[], bool] | None = None,
     ) -> None:
         if end_frame < start_frame:
             raise ValueError("end_frame must be greater than or equal to start_frame")
+        if pre_roll_start is not None and int(pre_roll_start) > int(start_frame):
+            raise ValueError("pre_roll_start must not be after start_frame")
         self.video_path = str(video_path)
         self.detection_cache_path = str(detection_cache_path)
         self.start_frame = int(start_frame)
         self.end_frame = int(end_frame)
+        self.pre_roll_start = (
+            self.start_frame if pre_roll_start is None else max(0, int(pre_roll_start))
+        )
+        # Keep cache provenance independent from the loop/scoring range. The
+        # caller normally passes the full production params; when it does not,
+        # ``run`` snapshots params before it replaces START/END.
+        self._cache_provenance_params = (
+            dict(cache_provenance_params)
+            if cache_provenance_params is not None
+            else None
+        )
         self._engine_factory = engine_factory
         self._should_stop = should_stop or (lambda: False)
 
@@ -109,6 +191,12 @@ class ProductionReplayEvaluator:
             engine_factory = TrackingEngineCore
         else:
             engine_factory = self._engine_factory
+
+        cache_provenance_params = dict(
+            self._cache_provenance_params
+            if self._cache_provenance_params is not None
+            else params
+        )
 
         captured: dict[str, Any] = {
             "finished": False,
@@ -146,12 +234,17 @@ class ProductionReplayEvaluator:
             ),
             inference_cache_dir=cache_directory(self.detection_cache_path),
             cache_read_only_replay=True,
+            inference_cache_provenance_params=cache_provenance_params,
+            # The core checks this token at every frame. Retain the progress
+            # callback below for compatibility with injected engines, but do
+            # not make cancellation depend on its coarse cadence.
+            should_stop=self._should_stop,
         )
         engine_ref["engine"] = engine
         replay_params = dict(params)
         replay_params.update(
             {
-                "START_FRAME": self.start_frame,
+                "START_FRAME": self.pre_roll_start,
                 "END_FRAME": self.end_frame,
                 "VISUALIZATION_FREE_MODE": True,
                 "ENABLE_VIDEO_OUTPUT": False,
@@ -165,8 +258,11 @@ class ProductionReplayEvaluator:
         except Exception as exc:  # production errors become a rejected candidate
             captured["error"] = str(exc)
 
+        observations = getattr(engine, "replay_observations", None)
+        if observations is None:
+            observations = captured["trajectories"]
         frame_indices, positions = trajectories_to_positions(
-            captured["trajectories"],
+            observations,
             start_frame=self.start_frame,
             end_frame=self.end_frame,
             n_tracks=n_tracks,

@@ -79,6 +79,84 @@ def test_production_replay_is_read_only_and_uses_requested_direction(tmp_path):
     assert engine.params["VISUALIZATION_FREE_MODE"] is True
 
 
+def test_production_replay_prerolls_without_scoring_preroll_observations(tmp_path):
+    instances = []
+
+    class FakeEngine:
+        def __init__(self, _video_path, **kwargs):
+            self.kwargs = kwargs
+            self.params = None
+            # Mirrors the engine's append-only replay sink: the first two
+            # points warm state, while only the tail belongs in the score.
+            self.replay_observations = [
+                [
+                    (1.0, 2.0, 0.0, 3),
+                    (2.0, 2.0, 0.0, 4),
+                    (3.0, 2.0, 0.0, 5),
+                    (4.0, 2.0, 0.0, 6),
+                ]
+            ]
+            instances.append(self)
+
+        def set_parameters(self, params):
+            self.params = params
+
+        def run_tracking(self):
+            # The legacy callback contains only the final trajectory epoch.
+            self.kwargs["on_finished"](True, [], [[(4.0, 2.0, 0.0, 6)]])
+
+    evaluator = ProductionReplayEvaluator(
+        "clip.mp4",
+        str(tmp_path / "cache" / "detection.npz"),
+        5,
+        6,
+        pre_roll_start=3,
+        engine_factory=FakeEngine,
+    )
+    result = evaluator.run(
+        {"MAX_TARGETS": 1, "START_FRAME": 0, "END_FRAME": 9}, reverse=False
+    )
+
+    assert result.success
+    np.testing.assert_array_equal(result.frame_indices, [5, 6])
+    np.testing.assert_allclose(result.positions[:, 0], [[3.0, 2.0], [4.0, 2.0]])
+    engine = instances[0]
+    assert engine.params["START_FRAME"] == 3
+    assert engine.params["END_FRAME"] == 6
+    assert engine.kwargs["inference_cache_provenance_params"]["START_FRAME"] == 0
+    assert engine.kwargs["inference_cache_provenance_params"]["END_FRAME"] == 9
+
+
+def test_production_replay_forwards_per_frame_cancellation_token(tmp_path):
+    captured = {}
+
+    class FakeEngine:
+        def __init__(self, _video_path, **kwargs):
+            captured.update(kwargs)
+
+        def set_parameters(self, _params):
+            pass
+
+        def run_tracking(self):
+            captured["on_finished"](True, [], [])
+
+    def should_stop():
+        return True
+
+    evaluator = ProductionReplayEvaluator(
+        "clip.mp4",
+        str(tmp_path / "cache"),
+        0,
+        1,
+        engine_factory=FakeEngine,
+        should_stop=should_stop,
+    )
+
+    evaluator.run({"MAX_TARGETS": 1})
+
+    assert captured["should_stop"] is should_stop
+
+
 def test_production_replay_rejects_missing_target_count(tmp_path):
     evaluator = ProductionReplayEvaluator(
         "clip.mp4", str(tmp_path / "cache"), 0, 1, engine_factory=lambda *_a, **_k: None
@@ -176,7 +254,17 @@ def test_real_production_replay_preserves_cache_and_emits_observations(tmp_path)
     forward = evaluator.run(params, reverse=False)
     backward = evaluator.run(params, reverse=True)
 
+    # Regression: the cache was produced from the full 0..2 bg-sub range, but
+    # held-out validation scores only its tail. The loop gets an unscored
+    # pre-roll while the cache key retains full-run provenance.
+    heldout = ProductionReplayEvaluator(
+        str(video_path), str(cache_dir), 1, 2, pre_roll_start=0
+    )
+    heldout_forward = heldout.run(params, reverse=False)
+
     assert forward.success and backward.success
+    assert heldout_forward.success
+    np.testing.assert_array_equal(heldout_forward.frame_indices, [1, 2])
     # The production loop bootstraps a lost slot from its first detection and
     # starts exporting matched observations on the following frame in each
     # direction. The adapter must preserve that behavior rather than filling
