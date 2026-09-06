@@ -44,6 +44,14 @@ class TileDescriptor:
     positive_prompt: str
     negative_prompts: tuple[str, ...]
     instances: tuple[InstanceDescriptor, ...]
+    # The tile's own pixel dimensions, straight from the COCO image record.
+    # Carried so a consumer can put the tile's polygons into the same RES
+    # space `datapoints.build_tile_datapoint` trains on (edge tiles and
+    # `auto_object` mode are NOT RES x RES) without decoding the image.
+    # Defaulted so hand-built descriptors in tests stay valid; 0 means
+    # "assume already RES-sized", which is what the scaler treats as a no-op.
+    width: int = 0
+    height: int = 0
 
 
 def _default_transform():
@@ -189,6 +197,8 @@ def build_descriptors(
                     )
                     for polygon, is_crowd in instances
                 ),
+                width=int(image_meta.get("width", 0) or 0),
+                height=int(image_meta.get("height", 0) or 0),
             )
         )
 

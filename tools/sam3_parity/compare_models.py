@@ -16,7 +16,10 @@ This module fixes that by:
   that recall value across its own confidence sweep. See
   ``interpolate_extras_at_recall``.
 * Step 4: AP / the full PR curve, which needs no threshold matching at all.
-  See ``average_precision`` / ``precision_recall_curve``.
+  See ``average_precision`` / ``precision_recall_curve``, which now live in
+  ``hydra_suite.core.inference.semantic.detection_metrics`` and are imported
+  back here (the SAM3 training loop records the same AP per epoch and may not
+  depend on a tools script).
 * Step 5: adjudication helpers that split a model's "extra" detections into
   those a human should inspect (not matched to a label AND not matched to
   the other model's own predictions) versus ordinary disagreement, because
@@ -56,6 +59,18 @@ from pathlib import Path
 from typing import Callable, Sequence
 
 import numpy as np
+
+# Step 4's arithmetic (OperatingPoint / PR curve / AP) MOVED to
+# `core/inference/semantic/detection_metrics.py` so the SAM3 training loop can
+# record the same AP per epoch without importing a tools script. Imported back
+# here rather than duplicated: one definition, so this tool's stored baselines
+# and the training series can never drift apart.
+from hydra_suite.core.inference.semantic.detection_metrics import (  # noqa: F401
+    OperatingPoint,
+    _trapezoid,
+    average_precision,
+    precision_recall_curve,
+)
 
 try:  # pragma: no cover - exercised implicitly by whichever branch runs
     from scipy import stats as _scipy_stats
@@ -193,15 +208,6 @@ def paired_comparison(
 # ---------------------------------------------------------------------------
 
 
-@dataclass(frozen=True)
-class OperatingPoint:
-    """One confidence-sweep sample: recall and cost at that confidence."""
-
-    confidence: float
-    recall: float
-    extra_per_frame: float
-
-
 def interpolate_extras_at_recall(
     points: Sequence[OperatingPoint], target_recall: float
 ) -> float | None:
@@ -230,76 +236,6 @@ def interpolate_extras_at_recall(
 # ---------------------------------------------------------------------------
 # Step 4: AP / PR curve
 # ---------------------------------------------------------------------------
-
-
-def precision_recall_curve(
-    points: Sequence[OperatingPoint], *, missed_per_frame: Sequence[float] | None = None
-) -> tuple[np.ndarray, np.ndarray]:
-    """Recall/precision arrays sorted by ascending recall, from
-    per-confidence ``(recall, extra_per_frame)`` pairs, matched-per-frame.
-
-    ``precision`` at a point is derived as ``matched / (matched + extra)``
-    using per-frame-normalised extras and the recall value directly, so it
-    needs no re-derivation of the underlying instance counts: with ``r`` the
-    recall and ``e`` the mean extras/frame at a fixed mean total-labels/frame
-    ``t`` (which cancels out of the ratio), precision = ``r*t / (r*t + e)``.
-    ``t`` is arbitrary and fixed at 1.0 when not supplied via
-    ``missed_per_frame`` (which lets the caller recover it exactly as
-    ``matched_per_frame + missed_per_frame``, with ``matched_per_frame =
-    recall`` in those same units) -- callers that only have recall/extra may
-    pass ``missed_per_frame=None`` and get a precision curve that is
-    monotone-correct but not on an absolute per-frame instance scale.
-    """
-    if missed_per_frame is not None and len(missed_per_frame) != len(points):
-        raise ValueError("missed_per_frame must align 1:1 with points")
-    indexed = sorted(enumerate(points), key=lambda ip: ip[1].recall)
-    order = [i for i, _p in indexed]
-    ordered = [p for _i, p in indexed]
-    recalls = np.array([p.recall for p in ordered], dtype=np.float64)
-    extras = np.array([p.extra_per_frame for p in ordered], dtype=np.float64)
-    if missed_per_frame is not None:
-        missed = np.array([missed_per_frame[i] for i in order], dtype=np.float64)
-        # matched = recall * total, and total = matched + missed, so
-        # total = missed / (1 - recall) when recall < 1.
-        with np.errstate(divide="ignore", invalid="ignore"):
-            total = np.where(recalls < 1.0, missed / (1.0 - recalls), np.nan)
-        matched = recalls * total
-    else:
-        matched = recalls
-    denom = matched + extras
-    precisions = np.divide(matched, denom, out=np.ones_like(matched), where=denom > 0)
-    return recalls, precisions
-
-
-# ``np.trapezoid`` is the numpy >= 2.0 spelling; ``np.trapz`` is the 1.x one
-# (removed in 2.0). The GPU sidecar envs this tool actually runs in are not
-# guaranteed to be on numpy 2 -- courtship's ``hydra-sam3`` is numpy 1.26.4 --
-# so bind whichever exists at import time rather than dying at AP time.
-_trapezoid = getattr(np, "trapezoid", None) or np.trapz
-
-
-def average_precision(recalls: Sequence[float], precisions: Sequence[float]) -> float:
-    """PASCAL-VOC-style AP: integrate the monotone-decreasing precision
-    envelope (each precision replaced by the max precision at that recall or
-    higher) over recall via the trapezoidal rule.
-
-    Recall/precision need not be pre-sorted or de-duplicated; this sorts by
-    recall internally. NaN precision values (recall == 1.0 with no total
-    derivable) are dropped before integrating.
-    """
-    r = np.asarray(recalls, dtype=np.float64)
-    p = np.asarray(precisions, dtype=np.float64)
-    mask = ~np.isnan(p)
-    r, p = r[mask], p[mask]
-    if r.size == 0:
-        return 0.0
-    order = np.argsort(r)
-    r, p = r[order], p[order]
-    # Monotone precision envelope: precision(r) := max(precision(r' >= r)).
-    envelope = np.maximum.accumulate(p[::-1])[::-1]
-    if r.size == 1:
-        return float(envelope[0] * r[0])
-    return float(_trapezoid(envelope, r))
 
 
 # ---------------------------------------------------------------------------
@@ -531,9 +467,7 @@ def source_frame_of(image_path: Path | str) -> str:
     return stem.split("_", 1)[0] if "_" in stem else stem
 
 
-def group_extras_by_frame(
-    per_frame: dict, index: int = 0
-) -> dict[str, float]:
+def group_extras_by_frame(per_frame: dict, index: int = 0) -> dict[str, float]:
     """Sum a ``{image_path: (extras, missed)}`` map up to per-source-frame
     totals of the tuple element at *index* (0 = extras, 1 = missed)."""
     out: dict[str, float] = {}
@@ -676,9 +610,10 @@ def _run_live_comparison(
         # analysis (e.g. dropping a contaminated frame) can be done without
         # a second GPU pass.
         "per_image_extras_missed": {
-            key: {str(path): list(counts) for path, counts in per_model[key][
-                "per_frame"
-            ].items()}
+            key: {
+                str(path): list(counts)
+                for path, counts in per_model[key]["per_frame"].items()
+            }
             for key in ("a", "b")
         },
         "operating_points": {
