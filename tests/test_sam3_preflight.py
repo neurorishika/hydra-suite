@@ -1286,6 +1286,60 @@ def test_a_short_probe_measurement_may_not_lower_the_analytic_estimate(
     assert decision.device_peak_provenance == "analytic"
 
 
+def test_measured_extra_batch_bytes_admits_batch_4_on_a_24gb_card(tmp_path):
+    """Task 8 pin: with `_EXTRA_BATCH_DEVICE_BYTES` measured at 2 GiB, a
+    24 GB card's analytic-only admission (no probe records yet) clears
+    batch 4, not just batch 1.
+
+    Base at b1 is ~12.1 GiB; +2 GiB/item puts b2 at ~14.2 and b4 at ~18.4
+    GiB, both under a 24 GB card's usable budget (0.85 safety -> ~20.4 GiB).
+    b8 (~26.4 GiB) does not fit. This is a regression guard: reverting the
+    constant to its old 18 GiB value pushes b2 alone to ~30 GiB, which
+    would refuse everything past batch 1 on the very same card.
+    """
+
+    _write_coco(tmp_path)
+    cuda = _cuda(free_gib=24, total_gib=24)
+    host = ResourceObservation(
+        total_host_bytes=64 * pf.GiB,
+        available_host_bytes=56 * pf.GiB,
+        accelerator_kind=AcceleratorKind.CUDA,
+        accelerator_name="Test CUDA",
+        total_accelerator_bytes=24 * pf.GiB,
+        available_accelerator_bytes=24 * pf.GiB,
+    )
+
+    decision_b4 = _decision(_spec(tmp_path, batch=4), cuda=cuda, host=host)
+    assert decision_b4.admitted, decision_b4.refusals
+
+    decision_b8 = _decision(_spec(tmp_path, batch=8), cuda=cuda, host=host)
+    assert not decision_b8.admitted
+
+
+def test_reverting_extra_batch_bytes_to_18gib_would_refuse_batch_2(
+    tmp_path, monkeypatch
+):
+    """Companion regression guard: prove the OLD 18 GiB value actually
+    breaks the batch-4 story this branch fixes, so a silent revert of
+    `_EXTRA_BATCH_DEVICE_BYTES` is caught here rather than only in a
+    provenance comment nobody re-reads."""
+
+    _write_coco(tmp_path)
+    monkeypatch.setattr(pf, "_EXTRA_BATCH_DEVICE_BYTES", 18 * pf.GiB)
+    cuda = _cuda(free_gib=24, total_gib=24)
+    host = ResourceObservation(
+        total_host_bytes=64 * pf.GiB,
+        available_host_bytes=56 * pf.GiB,
+        accelerator_kind=AcceleratorKind.CUDA,
+        accelerator_name="Test CUDA",
+        total_accelerator_bytes=24 * pf.GiB,
+        available_accelerator_bytes=24 * pf.GiB,
+    )
+
+    decision_b2 = _decision(_spec(tmp_path, batch=2), cuda=cuda, host=host)
+    assert not decision_b2.admitted
+
+
 def test_a_measurement_above_the_analytic_estimate_raises_the_requirement(
     tmp_path, monkeypatch
 ):
@@ -1338,7 +1392,11 @@ def test_a_batch_beyond_the_observations_is_flagged_extrapolated(tmp_path, monke
     assert decision.device_peak_measured_extrapolated
 
     # The analytic wins here, yet the measured side is still a guess.
-    _install_records(monkeypatch, _records({1: int(7.34 * pf.GiB)}))
+    # `_EXTRA_BATCH_DEVICE_BYTES` is now measured at 2 GiB/item (was an
+    # unmeasured 18 GiB), so the analytic side at batch 2 is only ~14.2 GiB
+    # for this dataset -- a single b1=5 GiB point extrapolates to 10 GiB,
+    # comfortably below it.
+    _install_records(monkeypatch, _records({1: 5 * pf.GiB}))
     small = _decision(_spec(tmp_path, batch=2))
     assert small.device_peak_provenance == "analytic"
     assert small.device_peak_measured_extrapolated

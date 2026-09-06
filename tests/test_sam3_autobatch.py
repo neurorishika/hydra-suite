@@ -459,12 +459,43 @@ def test_change_allocator_config_misses_cache(tmp_path, monkeypatch, prefix):
     A measurement taken under `expandable_segments:True` understates a
     default-allocator run by ~31% (measured on mehek); the two must never
     share a cache key.
+
+    `sam3_env_environ()` now hardcodes `expandable_segments:True` into the
+    sidecar's composed environment, so mutating the parent's `os.environ`
+    no longer moves what the sidecar actually sees. Vary the sidecar
+    composition directly (the seam `sidecar_alloc_conf_hash` actually reads)
+    instead of `os.environ`.
     """
-    monkeypatch.delenv("PYTORCH_CUDA_ALLOC_CONF", raising=False)
+    monkeypatch.setattr(ab, "sam3_env_environ", lambda: {})
     base = _fingerprint(tmp_path, monkeypatch, prefix)
-    monkeypatch.setenv("PYTORCH_CUDA_ALLOC_CONF", "expandable_segments:True")
+    monkeypatch.setattr(
+        ab,
+        "sam3_env_environ",
+        lambda: {"PYTORCH_CUDA_ALLOC_CONF": "expandable_segments:True"},
+    )
     mutated = _fingerprint(tmp_path, monkeypatch, prefix)
     assert base != mutated
+
+
+def test_allocator_config_enforced_hashes_expandable_not_unset(
+    tmp_path, monkeypatch, prefix
+):
+    """Task 8: with enforcement in place, a run TODAY hashes the
+    `expandable_segments:True` state, never the unset state.
+
+    `sam3_env_environ()` unconditionally sets `PYTORCH_CUDA_ALLOC_CONF`, so
+    the parent's `os.environ` cannot make the sidecar see "unset" anymore.
+    This is a meaningful invariant, not an artifact: it is what makes any
+    two measured records comparable -- every measurement taken through the
+    real sidecar today shares one allocator identity.
+    """
+    monkeypatch.delenv("PYTORCH_CUDA_ALLOC_CONF", raising=False)
+    today = _fingerprint(tmp_path, monkeypatch, prefix)
+
+    monkeypatch.setattr(ab, "sam3_env_environ", lambda: {})
+    unset = _fingerprint(tmp_path, monkeypatch, prefix)
+
+    assert today != unset
 
 
 def test_allocator_config_pair_reordering_does_not_change_key(
@@ -488,14 +519,25 @@ def test_allocator_config_unset_default_and_expandable_all_differ(
     tmp_path, monkeypatch, prefix
 ):
     """unset, explicitly-default, and expandable_segments:True are three
-    distinct states and must hash three different ways."""
-    monkeypatch.delenv("PYTORCH_CUDA_ALLOC_CONF", raising=False)
+    distinct states and must hash three different ways.
+
+    `sam3_env_environ()` now hardcodes the sidecar's allocator config, so
+    the parent's `os.environ` no longer selects the sidecar's state; the
+    sidecar composition itself (`ab.sam3_env_environ`) must be varied.
+    """
+    monkeypatch.setattr(ab, "sam3_env_environ", lambda: {})
     unset = _fingerprint(tmp_path, monkeypatch, prefix)
 
-    monkeypatch.setenv("PYTORCH_CUDA_ALLOC_CONF", "backend:native")
+    monkeypatch.setattr(
+        ab, "sam3_env_environ", lambda: {"PYTORCH_CUDA_ALLOC_CONF": "backend:native"}
+    )
     explicit_default = _fingerprint(tmp_path, monkeypatch, prefix)
 
-    monkeypatch.setenv("PYTORCH_CUDA_ALLOC_CONF", "expandable_segments:True")
+    monkeypatch.setattr(
+        ab,
+        "sam3_env_environ",
+        lambda: {"PYTORCH_CUDA_ALLOC_CONF": "expandable_segments:True"},
+    )
     expandable = _fingerprint(tmp_path, monkeypatch, prefix)
 
     assert len({unset, explicit_default, expandable}) == 3

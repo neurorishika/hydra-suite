@@ -791,13 +791,22 @@ def test_selection_never_exceeds_what_the_analytic_estimate_permits(
     """The item-2 guard, run with the REAL analytic estimate (no stub).
 
     A short probe is a lower bound, so measured records can understate the
-    requirement badly. Here they say batch 2 costs 14 GiB on a 48 GiB card,
-    which the measured envelope alone would happily admit -- but the analytic
-    estimate for batch 2 is ~30 GiB, above the 0.8 x 24 GiB budget. Selection
-    must fall back to batch 1 rather than launch a run that OOMs minutes in.
+    requirement badly. Here the probe says batch 2 costs 10 GiB, which the
+    measured envelope alone would happily admit on a 16 GiB free card
+    (0.8 x 16 = 12.8 GiB budget) -- but the (empty-dataset, rank-16) analytic
+    estimate for batch 2 is ~14.0 GiB (base ~12 GiB + 1 extra item x the
+    measured 2 GiB/item `_EXTRA_BATCH_DEVICE_BYTES`), above that budget.
+    Selection must fall back to batch 1 rather than launch a run that OOMs
+    minutes in.
     """
 
-    harness = _install(monkeypatch, tmp_path, stub_analytic=False)
+    harness = _install(
+        monkeypatch,
+        tmp_path,
+        stub_analytic=False,
+        free_bytes=16 * GiB,
+        probe_peaks={1: 6 * GiB, 2: 10 * GiB},
+    )
 
     result = _run(harness, _spec(tmp_path, batch=-1))
 

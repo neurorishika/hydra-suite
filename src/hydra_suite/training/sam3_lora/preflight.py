@@ -133,33 +133,50 @@ _MEASURED_BF16_DEVICE_PEAK_BYTES = 12 * GiB
 # admitting one that OOMs the device after minutes of setup.
 _FP32_DEVICE_PEAK_MULTIPLIER = 2.0
 SUPPORTED_PRECISIONS = ("bf16", "fp32")
-# NOT MEASURED. Inherited, like `_MEASURED_BF16_DEVICE_PEAK_BYTES` was before
-# it was re-measured -- and unlike that constant, this one has never been
-# through a probe.
+# MEASURED, from two independent probes on two different corpora and two
+# different GPU architectures, both under `expandable_segments:True`
+# (>=60 optimizer steps/point, 312 adapters, rank 16, bf16). This constant is
+# LOAD-BEARING ON THE SELECTION PATH, not just on admission: auto batch
+# sizing resolves against `max(analytic, measured)`, and the analytic side of
+# that max is this constant -- every extra item in the batch adds this many
+# bytes to the requirement. It is a SECANT FROM n=1, deliberately, not a
+# fitted slope and not a local marginal, because selection compares a
+# candidate batch size n against the n=1 base:
 #
-# It is also now LOAD-BEARING ON THE SELECTION PATH, not just on admission.
-# Auto batch sizing resolves against `max(analytic, measured)`, and the
-# analytic side of that max is this constant: every extra item in the batch
-# adds 18 GiB to the requirement. The max exists because a short probe
-# under-reports (2 steps 7.34 GiB, 60 steps 9.93 GiB, a full run 12.99 GiB on
-# one mehek dataset -- CUDA allocator fragmentation), so a measurement may
-# only RAISE the estimate, never lower it. That rule is right; the number this
-# floor uses is the part that has no evidence behind it.
+#   Peer (courtship, RTX 4090, 78 frames / 1871 instances -> 486 train
+#   tiles, 1766px):
+#       b1 7.125 GiB, b2 8.434, b4 11.229, b8 18.748 GiB reserved
+#       marginals 1.309 / 1.397 / 1.880 GiB (CONVEX/superlinear)
+#       max secant from n=1: 1.660 GiB
 #
-# What evidence there is says it is several times too large. Probing the same
-# mehek workload at batches 1/2/4 measured 7.34 / 10.16 / 13.98 GiB reserved,
-# i.e. a marginal cost of roughly 2.8 GiB per extra item -- about a sixth of
-# 18 GiB. Under this constant batch 2 "needs" ~30.4 GiB, so auto sizing will
-# resolve to 1 on essentially every card this role targets.
+#   Independent replication (mehek, RTX 6000 Ada, a DIFFERENT corpus --
+#   ws_safe semantic_sam3):
+#       b1 6.930 GiB, b2 8.238, b4 12.811 GiB reserved
+#       marginals 1.308 / 2.287 GiB (also CONVEX)
+#       max secant from n=1: 1.960 GiB
 #
-# DO NOT set this from the figures above. They are one dataset on one card,
-# and baking a single machine's measurement into a source constant is exactly
-# the failure this branch exists to remove. Re-measuring this term PROPERLY --
-# across datasets, tile densities, ranks, precisions and cards, through the
-# same probe machinery that produced `_MEASURED_BF16_DEVICE_PEAK_BYTES` -- is
-# the work that would actually unlock auto batch sizing. Until then the
-# conservative value stands and the feature stays honest about choosing 1.
-_EXTRA_BATCH_DEVICE_BYTES = 18 * GiB
+# The b1->b2 marginal agrees to three decimals across different corpora AND
+# different GPU architectures (1.309 vs 1.308 GiB) -- the strongest single
+# datum here.
+#
+# 2 GiB = the peer's max secant (1.660) + 20%. That headroom is not a generic
+# safety margin: it is almost exactly consumed by the cross-corpus spread
+# already observed (1.66 -> 1.96 GiB, +18%), and at batch 4 on the
+# replication corpus the 2 GiB model clears the measurement by under 1%.
+# Read this as validated on two corpora, with essentially no headroom
+# remaining for a third. What would overturn it: a third corpus whose max
+# secant from n=1 exceeds 2 GiB.
+#
+# Limits of this evidence: one allocator config (expandable_segments,
+# enforced by `sam3_env_environ`), bf16, rank 16, the 312-adapter surface,
+# two corpora, two cards. Every point above is a truncated probe and
+# therefore a LOWER BOUND on the true peak.
+#
+# DO NOT set this from any single machine's numbers -- that is still the
+# rule. The reason this value now stands is that it rests on two independent
+# measurements across corpora and architectures, not that measuring from one
+# box became acceptable.
+_EXTRA_BATCH_DEVICE_BYTES = 2 * GiB
 _DEVICE_STEADY_BYTES = 8 * GiB
 _MASK_DEVICE_BYTES_PER_PIXEL = 16
 _MASK_HOST_BYTES_PER_PIXEL = 5

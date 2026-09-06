@@ -357,9 +357,10 @@ def sidecar_alloc_conf_hash(environment: Optional[Mapping[str, str]] = None) -> 
     training children actually run under (`os.environ` overridden by
     `sam3_env_environ()`, exactly as `train.py`'s `_child_environment`
     builds it) -- not the parent process's own `os.environ` in isolation.
-    `sam3_env_environ()` does not currently set `PYTORCH_CUDA_ALLOC_CONF`,
-    so today this resolves to the parent's value, but composing the same way
-    `_child_environment` does means a future override there is picked up
+    `sam3_env_environ()` now hardcodes `PYTORCH_CUDA_ALLOC_CONF=
+    expandable_segments:True`, so this always resolves to that value
+    regardless of the parent's own `os.environ`; composing the same way
+    `_child_environment` does means any future change there is picked up
     automatically rather than silently diverging from what the child sees.
 
     `environment` is accepted for tests; production callers pass nothing and
