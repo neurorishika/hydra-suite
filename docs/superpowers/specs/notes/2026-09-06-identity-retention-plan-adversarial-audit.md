@@ -139,6 +139,38 @@ means there is still zero coverage of a *stamped* model, which is the repair's
 own open follow-up. `fly_obb`/`worm_bgsub` byte-identity proves only that
 `_identity_online_decoder is None` there.
 
+## 7b. Seven decoder knobs are unreachable and unrecorded
+
+`online.py` reads 14 `IDENTITY_*` keys; `engine_params.py` emits 7. These are
+read but never emitted, so they take a hardcoded default that nothing in the run
+record distinguishes from a deliberate choice — and neither `advanced_config`
+nor a top-level config override reaches `params` (both verified `False`), so a
+user cannot set them even knowing they exist:
+
+```
+IDENTITY_COMMIT_MIN_HITS
+IDENTITY_SLOT_LOCK_MIN_FRAMES / _STRENGTH / _OVERRIDE_MARGIN
+IDENTITY_RESPAWN_PRIOR_STRENGTH / _DECAY / _MAX_GAP
+```
+
+Two are load-bearing on the results above. `IDENTITY_COMMIT_MIN_HITS=5` is the
+actual binding gate on commit latency — tempering evidence 5x does not move
+cold-commit off 5 frames, because the hit count and not the posterior decides.
+`IDENTITY_SLOT_LOCK_STRENGTH=0.9` enters as `log(0.9) < 0`, the F3 sign defect.
+
+Task 4 is the plan's answer to this, but its premise is half wrong: exactly
+these 7 are hardcoded-and-unemitted, while 6 of the keys it lists
+(`..._CAP`, `..._PROB_FLOOR`, `..._EVIDENCE_TAU`, `..._COMMIT_REVISION_MIN_FRAMES`,
+`..._REJOIN_CONFIRM_FRAMES`, `..._SPLIT_ON_REALTIME_SWITCH`) are read by nothing
+— they are new knobs, not existing ones. Task 4's line anchors are also stale
+(`engine_params.py:1411-1443`, not `:1113-1146`).
+
+A precedent worth copying once this is scoped: `core/inference/geometry_drift.py`
+(6b866d78) logs a value **and its source** (explicit / profile / derived /
+contract default) at every build, because a silently-taken default invalidated a
+SAM3 model comparison. Identity needs emit-then-log — there is currently no
+emitted value for which to record a source.
+
 ## 8. Task conflicts
 
 - **8 ↔ 11** — Task 8 edits `_factor_log_prob`, whose result is overwritten 100
