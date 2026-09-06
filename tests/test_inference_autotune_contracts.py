@@ -406,6 +406,36 @@ def test_correctness_gate_rejects_empty_count_nan_and_categorical_changes():
     assert not compare_outputs(empty, empty).passed
 
 
+def test_categorical_and_nan_gates_follow_positional_matches_when_ids_change():
+    baseline = _outputs(identity="A")
+    changed = _outputs(identity="B")
+    changed.forward.loc[0, "DetectionID"] = 99
+    changed.final.loc[0, "DetectionID"] = 99
+
+    verdict = compare_outputs(baseline, changed)
+
+    assert not verdict.passed
+    assert verdict.unmatched_rows == 0
+    assert verdict.categorical_mismatches == 2
+
+    changed_nan = _outputs(identity="A")
+    changed_nan.forward.loc[0, "DetectionID"] = 99
+    changed_nan.final.loc[0, "DetectionID"] = 99
+    changed_nan.forward.loc[0, "PoseNoseX"] = np.nan
+    assert not compare_outputs(baseline, changed_nan).passed
+
+
+def test_identity_confidence_is_not_an_exact_categorical_field():
+    baseline = _outputs()
+    baseline.forward["IdentityRealtimeConfidence"] = [0.75]
+    baseline.final["IdentityRealtimeConfidence"] = [0.75]
+    candidate = CalibrationOutputs(baseline.forward.copy(), baseline.final.copy())
+    candidate.forward["IdentityRealtimeConfidence"] = [0.75001]
+    candidate.final["IdentityRealtimeConfidence"] = [0.75001]
+
+    assert compare_outputs(baseline, candidate).passed
+
+
 def test_randomized_blocks_and_paired_confidence_are_deterministic():
     order = deterministic_block_order((1, 2, 4), 5, seed=7)
     assert order == deterministic_block_order((1, 2, 4), 5, seed=7)

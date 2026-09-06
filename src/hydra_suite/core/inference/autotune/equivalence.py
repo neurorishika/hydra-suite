@@ -4,7 +4,7 @@ from __future__ import annotations
 
 from dataclasses import dataclass
 from pathlib import Path
-from typing import Iterable
+from typing import Any, Iterable
 
 import numpy as np
 import pandas as pd
@@ -36,25 +36,43 @@ class EquivalencePolicy:
 
 
 _CATEGORICAL_TOKENS = (
-    "identity",
     "uniqueidentity",
     "unique_identity",
     "classlabel",
     "class_label",
     "classname",
     "class_name",
-    "headtail",
-    "head_tail",
     "directed",
+)
+
+_IDENTITY_CATEGORICAL_SUFFIXES = (
+    "id",
+    "label",
+    "source",
+    "sources",
+    "committed",
+    "conflictflag",
+    "conflictresolved",
+    "slotlock",
 )
 
 
 def _categorical_columns(columns: Iterable[str]) -> tuple[str, ...]:
-    return tuple(
-        column
-        for column in columns
-        if any(token in column.lower() for token in _CATEGORICAL_TOKENS)
-    )
+    output = []
+    for column in columns:
+        normalized = column.lower().replace("_", "")
+        categorical = any(
+            token.replace("_", "") in normalized for token in _CATEGORICAL_TOKENS
+        )
+        if "identity" in normalized and normalized.endswith(
+            _IDENTITY_CATEGORICAL_SUFFIXES
+        ):
+            categorical = True
+        if "headtail" in normalized and "confidence" not in normalized:
+            categorical = True
+        if categorical:
+            output.append(column)
+    return tuple(output)
 
 
 def _row_key(frame: pd.DataFrame) -> list[str] | None:
@@ -84,7 +102,7 @@ def _aligned(
 
 def _positional(
     reference: pd.DataFrame, candidate: pd.DataFrame, gate: float
-) -> dict[str, float | int]:
+) -> dict[str, Any]:
     required = {"FrameID", "X", "Y"}
     if not required.issubset(reference.columns) or not required.issubset(
         candidate.columns
@@ -94,13 +112,15 @@ def _positional(
             "unmatched": abs(len(reference) - len(candidate)),
             "position_p99": 0.0,
             "angle_mean": 0.0,
+            "pairs": (),
         }
     left = reference.dropna(subset=["X", "Y"])
     right = candidate.dropna(subset=["X", "Y"])
     distances: list[float] = []
     angles: list[float] = []
-    unmatched = 0
+    unmatched = (len(reference) - len(left)) + (len(candidate) - len(right))
     matched = 0
+    pairs: list[tuple[object, object]] = []
     for frame_id in sorted(set(left["FrameID"]) | set(right["FrameID"])):
         a = left[left["FrameID"] == frame_id]
         b = right[right["FrameID"] == frame_id]
@@ -131,6 +151,7 @@ def _positional(
                 continue
             distances.append(distance)
             accepted += 1
+            pairs.append((a.index[row], b.index[col]))
             if theta_a is not None and theta_b is not None:
                 old, new = theta_a[row], theta_b[col]
                 if not (np.isnan(old) or np.isnan(new)):
@@ -143,6 +164,7 @@ def _positional(
         "unmatched": unmatched,
         "position_p99": float(np.percentile(distances, 99)) if distances else 0.0,
         "angle_mean": float(np.mean(angles)) if angles else 0.0,
+        "pairs": tuple(pairs),
     }
 
 
@@ -163,9 +185,14 @@ def _compare_one(
     nan_mismatches = 0
     categorical_mismatches = 0
     if aligned is None:
-        if counts_match:
+        pairs = metrics["pairs"]
+        if len(pairs) == len(reference) == len(candidate):
+            left = reference.loc[[old for old, _new in pairs]].reset_index(drop=True)
+            right = candidate.loc[[new for _old, new in pairs]].reset_index(drop=True)
+            aligned = (left, right)
+        elif counts_match:
             details.append(f"{name}: keyed rows are not aligned")
-    else:
+    if aligned is not None:
         left, right = aligned
         for column in set(left.columns) & set(right.columns):
             left_nan = pd.isna(left[column]).to_numpy()
