@@ -503,20 +503,42 @@ def _resolve_measured_batch(
         if live is not None and live.uuid == cuda_device.uuid
         else cuda_device.free_bytes
     )
-    resolved, _selection_provenance = autobatch.resolve_batch(
+    resolved, selection_provenance = autobatch.resolve_batch(
         spec,
         records,
         usable_bytes=free_bytes,
         maximum=autobatch.MAX_AUTO_BATCH,
     )
-    requirement = max(
-        (record.accelerator_reserved_peak_bytes for record in records), default=0
-    )
+    # Selection must clear the SAME requirement admission does. A short probe
+    # is a lower bound (see `preflight.device_requirement_bytes`), so trusting
+    # the measured envelope alone here could pick a batch whose real peak the
+    # analytic estimate already says will not fit -- the identical defect one
+    # layer up. Requirement is monotone in batch, so a downward scan finds the
+    # largest admissible candidate.
+    dataset_profile = preflight_module._dataset_profile(spec.derived_dataset_dir)
+    device_budget = int(free_bytes * autobatch.MEASURED_SAFETY_FRACTION)
+
+    def _requirement_at(batch: int) -> Any:
+        return preflight_module.device_requirement_bytes(
+            preflight_module.analytic_device_peak_bytes(
+                params, dataset_profile, batch_size=batch
+            ),
+            records,
+            batch,
+        )
+
+    requirement = _requirement_at(max(1, resolved))
+    if selection_provenance != "explicit":
+        while resolved > 0 and _requirement_at(resolved).bytes > device_budget:
+            resolved -= 1
+        if resolved > 0:
+            requirement = _requirement_at(resolved)
     if resolved <= 0:
+        floor = _requirement_at(1)
         raise _BatchResolutionRefused(
-            "SAM3 auto batch sizing refuses this run: the smallest measured "
-            f"configuration needs {requirement / GiB:.1f} GiB reserved, but "
-            f"only {free_bytes / GiB:.1f} GiB is free on the selected GPU "
+            "SAM3 auto batch sizing refuses this run: batch 1 needs "
+            f"{floor.bytes / GiB:.1f} GiB ({floor.provenance}), but only "
+            f"{free_bytes / GiB:.1f} GiB is free on the selected GPU "
             f"(usable at {autobatch.MEASURED_SAFETY_FRACTION:.0%} safety). "
             "Free the device and retry; the measurement has been cached."
         )
@@ -551,6 +573,9 @@ def _resolve_measured_batch(
         "fingerprint": key,
         "degraded_reasons": list(fingerprint.degraded_reasons),
         "measured_reserved_bytes": int(selected_peak),
+        "requirement_bytes": int(requirement.bytes),
+        "requirement_provenance": requirement.provenance,
+        "requirement_measured_extrapolated": bool(requirement.measured_extrapolated),
         "free_bytes": free_bytes,
         "resolved_at_unix_ns": time.time_ns(),
     }

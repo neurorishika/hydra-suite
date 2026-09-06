@@ -20,7 +20,7 @@ import subprocess
 from collections.abc import Sequence
 from dataclasses import asdict, dataclass
 from pathlib import Path
-from typing import Any, Optional
+from typing import Any, NamedTuple, Optional
 
 from hydra_suite.runtime.memory_profiles import (
     MEASURED_SAFETY_FRACTION,
@@ -202,6 +202,7 @@ class Sam3PreflightDecision:
     device_peak_provenance: str = "analytic"
     device_peak_analytic_bytes: int = 0
     device_peak_measured_bytes: int = 0
+    device_peak_measured_extrapolated: bool = False
     device_peak_fingerprint: str = ""
 
     def to_dict(self) -> dict[str, Any]:
@@ -224,6 +225,9 @@ class Sam3PreflightDecision:
             "device_peak_provenance": self.device_peak_provenance,
             "device_peak_analytic_bytes": int(self.device_peak_analytic_bytes),
             "device_peak_measured_bytes": int(self.device_peak_measured_bytes),
+            "device_peak_measured_extrapolated": bool(
+                self.device_peak_measured_extrapolated
+            ),
             "device_peak_fingerprint": self.device_peak_fingerprint,
         }
 
@@ -806,15 +810,29 @@ def measured_envelope_bytes(
     return int(max(base_bytes + slope_bytes * batch_size, observed))
 
 
+class DeviceRequirement(NamedTuple):
+    """What this configuration needs, and what decided it."""
+
+    bytes: int
+    provenance: str
+    measured_bytes: int
+    measured_extrapolated: bool
+
+
 def device_requirement_bytes(
     analytic_bytes: int,
     records: Sequence[MemoryMeasurement],
     batch_size: int,
-) -> tuple[int, str, int]:
+) -> DeviceRequirement:
     """The single authority on device demand: `max(analytic, measured)`.
 
-    Returns `(requirement_bytes, provenance, measured_bytes)` with provenance
-    in `{"analytic", "measured", "extrapolated"}`.
+    `provenance` is WINNER-based (`"analytic"` or `"measured"`): it answers
+    "what set this number", so it never claims a measurement set a number the
+    analytic estimate set. `measured_extrapolated` is a SEPARATE question --
+    was the measured side evaluated past the largest observed rung -- and is
+    reported independently of which side won, because "analytic won over a
+    guess" and "analytic won over a solid observation" deserve very different
+    levels of trust when someone is diagnosing an OOM.
 
     A MEASUREMENT MAY ONLY RAISE THIS NUMBER, NEVER LOWER IT, and the reason
     is empirical, not stylistic. On mehek (2026-09-06, one spec, one card,
@@ -825,7 +843,13 @@ def device_requirement_bytes(
     rising twice inside ten steps. No "stable for K steps" stopping rule
     catches that. Rare dense tiles and allocator fragmentation are simply not
     sampled by a short probe, so THE PROBE PRODUCES A LOWER BOUND. The
-    composed analytic estimate for that same configuration was 12.364 GiB --
+    The cause was later isolated: it is ALLOCATOR FRAGMENTATION, not unlucky
+    tile sampling. From 2 to 60 steps under the default CUDA allocator,
+    RESERVED grew 35% while ALLOCATED grew 2%; under
+    `PYTORCH_CUDA_ALLOC_CONF=expandable_segments:True` the staircase vanishes
+    (6.89 -> 6.91 GiB flat from step 2 to 120). So the probe's number is
+    depressed by an allocator behaviour a short probe cannot observe.
+    The composed analytic estimate for that same configuration was 12.364 GiB --
     far closer to the truth. Replacing the analytic estimate with the
     measurement (which an earlier draft of this task specified) would have
     admitted a run that OOMs minutes in. Do not "simplify" this back to the
@@ -838,13 +862,12 @@ def device_requirement_bytes(
 
     analytic = int(analytic_bytes)
     if not records:
-        return analytic, "analytic", 0
+        return DeviceRequirement(analytic, "analytic", 0, False)
     measured = measured_envelope_bytes(records, batch_size)
+    extrapolated = batch_size > max(record.settings.batch_size for record in records)
     if measured <= analytic:
-        return analytic, "analytic", measured
-    largest_observed = max(record.settings.batch_size for record in records)
-    provenance = "measured" if batch_size <= largest_observed else "extrapolated"
-    return measured, provenance, measured
+        return DeviceRequirement(analytic, "analytic", measured, extrapolated)
+    return DeviceRequirement(measured, "measured", measured, extrapolated)
 
 
 def profile_fingerprint_key(identity: ProfileIdentity) -> str:
@@ -1035,7 +1058,7 @@ def build_resource_request(
             + one_tile_device_bytes * precision_multiplier
         )
     else:
-        training_device_peak, _provenance, _measured = device_requirement_bytes(
+        training_device_peak = device_requirement_bytes(
             _analytic_training_device_peak(
                 precision_multiplier=precision_multiplier,
                 batch_size=batch_size,
@@ -1045,7 +1068,7 @@ def build_resource_request(
             ),
             tuple(measured_records),
             batch_size,
-        )
+        ).bytes
     training_device_peak = int(training_device_peak)
     device_steady_bytes = _CHECKPOINT_BYTES if probe_floor else _DEVICE_STEADY_BYTES
     device_envelope_label = (
@@ -1235,15 +1258,17 @@ def assess_preflight(
         device_peak_provenance = "probe_floor"
         analytic_device_bytes = 0
         measured_device_bytes = 0
+        measured_extrapolated = False
     else:
         analytic_device_bytes = analytic_device_peak_bytes(params, dataset)
-        _requirement, device_peak_provenance, measured_device_bytes = (
-            device_requirement_bytes(
-                analytic_device_bytes,
-                measured_records,
-                max(1, int(getattr(params, "batch", 1))),
-            )
+        requirement = device_requirement_bytes(
+            analytic_device_bytes,
+            measured_records,
+            max(1, int(getattr(params, "batch", 1))),
         )
+        device_peak_provenance = requirement.provenance
+        measured_device_bytes = requirement.measured_bytes
+        measured_extrapolated = requirement.measured_extrapolated
     device_peak_fingerprint = (
         profile_fingerprint_key(measured_records[0].identity)
         if measured_records
@@ -1270,7 +1295,7 @@ def assess_preflight(
     refusals = list(budget.refusals)
     warnings = list(budget.warnings)
 
-    if device_peak_provenance in ("measured", "extrapolated"):
+    if device_peak_provenance == "measured":
         # A measurement is a raw envelope with no margin, so the measured
         # path keeps headroom explicitly. Applied ONCE, against raw free
         # device bytes -- never against `budget.usable_accelerator_bytes`,
@@ -1283,8 +1308,9 @@ def assess_preflight(
         ):
             refusals.append(
                 "The measured device requirement for this workload is "
-                f"{budget.accelerator_peak_bytes / GiB:.1f} GiB "
-                f"({device_peak_provenance}), but only "
+                f"{budget.accelerator_peak_bytes / GiB:.1f} GiB"
+                f"{' (extrapolated past the last measured batch)' if measured_extrapolated else ''}"
+                ", but only "
                 f"{free_device_bytes / GiB:.1f} GiB is free on the selected "
                 f"GPU (usable at {MEASURED_SAFETY_FRACTION:.0%} safety)."
             )
@@ -1488,6 +1514,7 @@ def assess_preflight(
         device_peak_provenance=device_peak_provenance,
         device_peak_analytic_bytes=int(analytic_device_bytes),
         device_peak_measured_bytes=int(measured_device_bytes),
+        device_peak_measured_extrapolated=bool(measured_extrapolated),
         device_peak_fingerprint=device_peak_fingerprint,
     )
 

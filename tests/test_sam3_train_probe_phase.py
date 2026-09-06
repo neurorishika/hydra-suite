@@ -152,6 +152,7 @@ def _install(
     cancel_after=None,
     probe_refusals=(),
     sidecar_factory=None,
+    stub_analytic=True,
 ):
     harness = _Harness()
     probe_peaks = _PROBE_PEAKS if probe_peaks is None else probe_peaks
@@ -159,6 +160,19 @@ def _install(
     store_path = tmp_path / "profiles.json"
     if store_records:
         MemoryProfileStore(store_path).save(store_records)
+
+    # DELIBERATE HARNESS AFFORDANCE. These tests prove ORDERING and flow
+    # (probe -> final preflight -> limits -> launch, refusals, cancellation,
+    # marker behaviour); their fake peaks are stage scenery, not claims about
+    # real memory. Stubbing the analytic device estimate keeps every ordering
+    # assertion literal instead of coupling it to the requirement formula.
+    # The REAL behaviour -- selection must not exceed what the analytic
+    # estimate permits -- is covered un-stubbed by
+    # `test_selection_never_exceeds_what_the_analytic_estimate_permits`.
+    if stub_analytic:
+        monkeypatch.setattr(
+            tr.preflight_module, "analytic_device_peak_bytes", lambda *a, **k: 0
+        )
 
     monkeypatch.setattr(tr, "get_models_root", lambda: tmp_path / "models")
     monkeypatch.setattr(tr, "_store_path", lambda: store_path)
@@ -769,3 +783,30 @@ def test_a_corrupt_marker_self_heals_on_an_authoritative_ladder(tmp_path, monkey
     harness.probe_preflight_batches.clear()
     _run(harness, _spec(tmp_path, batch=-1))
     assert harness.probe_preflight_batches == [], "and then allow the cache"
+
+
+def test_selection_never_exceeds_what_the_analytic_estimate_permits(
+    tmp_path, monkeypatch
+):
+    """The item-2 guard, run with the REAL analytic estimate (no stub).
+
+    A short probe is a lower bound, so measured records can understate the
+    requirement badly. Here they say batch 2 costs 14 GiB on a 48 GiB card,
+    which the measured envelope alone would happily admit -- but the analytic
+    estimate for batch 2 is ~30 GiB, above the 0.8 x 24 GiB budget. Selection
+    must fall back to batch 1 rather than launch a run that OOMs minutes in.
+    """
+
+    harness = _install(monkeypatch, tmp_path, stub_analytic=False)
+
+    result = _run(harness, _spec(tmp_path, batch=-1))
+
+    assert result["success"]
+    spec_on_disk = json.loads((harness.run_dir / "spec.json").read_text())
+    assert spec_on_disk["sam3_params"]["batch"] == 1, (
+        "the measured envelope alone admits batch 2; the analytic estimate "
+        "does not, and the shared requirement function must win"
+    )
+    resolution = json.loads((harness.run_dir / "batch_resolution.json").read_text())
+    assert resolution["requirement_provenance"] == "analytic"
+    assert resolution["requirement_bytes"] > 12 * GiB

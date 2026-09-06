@@ -1322,7 +1322,11 @@ def test_the_measured_envelope_is_never_below_an_observation(tmp_path, monkeypat
     assert decision.device_peak_provenance == "measured"
 
 
-def test_a_batch_beyond_the_observations_is_marked_extrapolated(tmp_path, monkeypatch):
+def test_a_batch_beyond_the_observations_is_flagged_extrapolated(tmp_path, monkeypatch):
+    """Provenance stays winner-based; extrapolation is a separate flag, so a
+    reader can tell "analytic won over a guess" from "analytic won over a
+    solid observation"."""
+
     _write_coco(tmp_path)
     _install_records(monkeypatch, _records({1: 40 * pf.GiB}))
 
@@ -1330,7 +1334,15 @@ def test_a_batch_beyond_the_observations_is_marked_extrapolated(tmp_path, monkey
 
     # fitted: slope 40 GiB/item from a single point -> 80 GiB at batch 2.
     assert decision.budget.accelerator_peak_bytes == 80 * pf.GiB
-    assert decision.device_peak_provenance == "extrapolated"
+    assert decision.device_peak_provenance == "measured"
+    assert decision.device_peak_measured_extrapolated
+
+    # The analytic wins here, yet the measured side is still a guess.
+    _install_records(monkeypatch, _records({1: int(7.34 * pf.GiB)}))
+    small = _decision(_spec(tmp_path, batch=2))
+    assert small.device_peak_provenance == "analytic"
+    assert small.device_peak_measured_extrapolated
+    assert not _decision(_spec(tmp_path, batch=1)).device_peak_measured_extrapolated
 
 
 def test_a_precision_change_misses_the_cache_and_falls_back(tmp_path, monkeypatch):
