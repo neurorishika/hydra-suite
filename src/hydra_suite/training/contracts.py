@@ -218,10 +218,16 @@ class Sam3LoraParams:
     # `-1` means "measure it": the parent probes this exact workload on this
     # exact card before launching, and the PROBE is the authority on what
     # fits -- not a constant carried over from someone else's machine. The
-    # note this comment used to carry ("batch 2 OOMs at 1008 px on a 47 GB
-    # card") was one such inherited observation, from a different rank, a
-    # different adapter surface, and a different dataset density. Effective
-    # batch remains batch * grad_accum.
+    # The note this comment used to carry -- "batch 2 OOMs at 1008 px on a
+    # 47 GB card" -- is MEASURED FALSE against current code. On mehek
+    # (2026-09-06, real semantic_sam3 dataset, sam3-lora env, 312 adapters,
+    # rank 16, 1008 px tiles, bf16), two full optimizer steps on the densest
+    # tiles reserved: batch 1 -> 7.34 GiB, batch 2 -> 10.16 GiB, batch 4 ->
+    # 13.98 GiB. The old claim came from a different rank, a different
+    # adapter surface, and a different dataset density. Do not reinstate it,
+    # and do not replace it with these numbers as a rule either: they are one
+    # dataset on one card, which is precisely why the PROBE, not a comment,
+    # is now the authority. Effective batch remains batch * grad_accum.
     batch: int = 1
     grad_accum: int = 8
     mixed_precision: str = "bf16"

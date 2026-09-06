@@ -440,6 +440,42 @@ PROFILE_SCOPE = "sam3_lora"
 PROBE_RECORDS_DIRNAME = "probe_records"
 
 
+# Why the candidate ladder stopped. Only `host_limit` is TRANSIENT: an
+# unrelated job triggering a cgroup kill says nothing about what this
+# workload needs, so a ladder that ended that way is INCOMPLETE and must not
+# authorise skipping the untried rungs on a later run. `oom` and `refused`
+# are properties of this workload on this hardware and are authoritative;
+# `complete` means every candidate was tried.
+LADDER_COMPLETE = "complete"
+LADDER_OOM = "oom"
+LADDER_REFUSED = "refused"
+LADDER_HOST_LIMIT = "host_limit"
+TRANSIENT_LADDER_TERMINATIONS = frozenset({LADDER_HOST_LIMIT})
+
+
+class ProbeLadder(tuple):
+    """The surviving records, plus WHY the ladder stopped.
+
+    A `tuple` subclass rather than a wrapper object so every caller can keep
+    treating the result as the sequence of records it is; `terminated_by`
+    rides along for the one caller that needs to know whether the ladder was
+    cut short by something transient.
+    """
+
+    terminated_by: str
+
+    def __new__(
+        cls, records: Sequence[MemoryMeasurement], terminated_by: str
+    ) -> "ProbeLadder":
+        ladder = super().__new__(cls, records)
+        ladder.terminated_by = terminated_by
+        return ladder
+
+
+class ProbeHostLimitError(RuntimeError):
+    """The child hit a HOST memory limit -- transient, not a device verdict."""
+
+
 class ProbeFailedError(RuntimeError):
     """No candidate survived -- not even batch 1. Fail closed, cache nothing."""
 
@@ -533,7 +569,7 @@ def run_probe(
     identity: Optional[ProfileIdentity] = None,
     candidates: Optional[Sequence[int]] = None,
     should_cancel: Optional[Callable[[], bool]] = None,
-) -> tuple[MemoryMeasurement, ...]:
+) -> ProbeLadder:
     """Walk the candidate ladder, returning one record per surviving candidate.
 
     `step_fn(batch_size)` performs ONE candidate's measurement and returns its
@@ -544,7 +580,10 @@ def run_probe(
 
     The ladder stops -- it does not skip -- on the first candidate that
     either runs out of memory or is refused admission. Both are monotone in
-    batch size, so nothing larger could have survived either.
+    batch size, so nothing larger could have survived either. The reason is
+    reported on `ProbeLadder.terminated_by`, because a HOST-limit stop is a
+    transient event about the box rather than a verdict about this workload,
+    and must not silently become a permanent batch ceiling.
 
     Raises `ProbeFailedError` when nothing survives, including at batch 1:
     that configuration cannot run on this hardware and must not be cached.
@@ -556,25 +595,34 @@ def run_probe(
     should_cancel = should_cancel or (lambda: False)
     resolved_identity = identity or _unfingerprinted_identity(spec)
     records: list[MemoryMeasurement] = []
+    terminated_by = LADDER_COMPLETE
     for candidate in candidates or probe_candidates(spec):
         if should_cancel():
             raise ProbeCanceled(f"cancelled before probing batch {candidate}")
         try:
             peaks = step_fn(candidate)
-        except ProbeCandidateRefused as exc:
+        except (ProbeCandidateRefused, ProbeHostLimitError) as exc:
             if not records:
-                # A refusal at the FIRST candidate is an admission problem --
-                # a missing credential, unacknowledged labels, an unwritable
-                # run dir -- not "this workload does not fit the GPU".
-                # Reporting the generic no-fit message would send the user
-                # hunting for VRAM they already have. Carry the real reason.
-                raise ProbeFailedError(
-                    "SAM3 memory probe could not be admitted at batch 1: " f"{exc}"
-                ) from exc
+                # A refusal at the FIRST candidate is an admission or
+                # environment problem -- a missing credential, unacknowledged
+                # labels, a busy lease -- not "this workload does not fit the
+                # GPU". Reporting the generic no-fit message would send the
+                # user hunting for VRAM they already have. Carry the real
+                # reason verbatim.
+                raise ProbeFailedError(str(exc)) from exc
+            # Survivors are FACTS about this hardware and workload and are
+            # kept regardless of why the ladder stopped. Only zero survivors
+            # may cache nothing.
+            terminated_by = (
+                LADDER_HOST_LIMIT
+                if isinstance(exc, ProbeHostLimitError)
+                else LADDER_REFUSED
+            )
             break
         except BaseException as exc:  # noqa: BLE001 - re-raised unless it is an OOM
             if not _is_out_of_memory(exc):
                 raise
+            terminated_by = LADDER_OOM
             break
         records.append(_measurement(spec, resolved_identity, candidate, peaks))
     if not records:
@@ -582,7 +630,7 @@ def run_probe(
             "No SAM3 batch size survived the memory probe, including batch 1. "
             "This workload does not fit on this device; nothing was cached."
         )
-    return tuple(records)
+    return ProbeLadder(records, terminated_by)
 
 
 def validate_probe_records(

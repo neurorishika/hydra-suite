@@ -67,7 +67,16 @@ def _spec(tmp_path, **overrides):
 
 
 class _Decision:
-    def __init__(self, *, admitted=True, refusals=()):
+    """Containment deliberately VARIES with batch.
+
+    With one flat set of limits, an implementation that computed a single
+    decision and reused its WorkLimits for every launch would pass -- and
+    "candidates 2-8 must not run under batch-1 containment" is the whole
+    point of the per-candidate admission.
+    """
+
+    def __init__(self, *, admitted=True, refusals=(), batch=1):
+        self.batch = int(batch)
         self.admitted = admitted
         self.refusals = tuple(refusals)
         self.warnings = ()
@@ -80,8 +89,8 @@ class _Decision:
             reserved_host_bytes=8 * GiB,
             usable_host_bytes=40 * GiB,
         )
-        self.containment_soft_host_bytes = 11 * GiB
-        self.containment_hard_host_bytes = 12 * GiB
+        self.containment_soft_host_bytes = (10 + self.batch) * GiB
+        self.containment_hard_host_bytes = (12 + self.batch) * GiB
 
     def to_dict(self):
         return {"admitted": self.admitted, "refusals": list(self.refusals)}
@@ -119,6 +128,7 @@ class _Harness:
         self.probe_launch_limits: list[tuple[int, int]] = []
         self.probe_launch_batches: list[int] = []
         self.training_launches: list[tuple[str, ...]] = []
+        self.training_launch_limits: list[tuple[int, int]] = []
         self.logs: list[str] = []
 
 
@@ -153,15 +163,16 @@ def _install(
 
     def assess(_spec, **_kwargs):
         harness.order.append("final_preflight")
-        harness.final_preflight_batches.append(int(_spec.sam3_params.batch))
-        return _Decision()
+        batch = int(_spec.sam3_params.batch)
+        harness.final_preflight_batches.append(batch)
+        return _Decision(batch=batch)
 
     def assess_probe(_spec, *, batch, **_kwargs):
         harness.order.append("probe")
         harness.probe_preflight_batches.append(int(batch))
         if probe_refusals:
-            return _Decision(admitted=False, refusals=probe_refusals)
-        return _Decision()
+            return _Decision(admitted=False, refusals=probe_refusals, batch=batch)
+        return _Decision(batch=int(batch))
 
     monkeypatch.setattr(tr.preflight_module, "assess_preflight", assess)
     monkeypatch.setattr(tr.preflight_module, "assess_probe_preflight", assess_probe)
@@ -195,6 +206,9 @@ def _install(
         if batch is None:
             harness.order.append("build_limited_launch")
             harness.training_launches.append(tuple(command))
+            harness.training_launch_limits.append(
+                (limits.soft_host_bytes, limits.hard_host_bytes)
+            )
         else:
             harness.order.append("probe_launch")
             harness.probe_launch_batches.append(batch)
@@ -211,6 +225,7 @@ def _install(
             self.output = _Output()
             self.batch = _probe_batch_of(plan.launch.command)
             self.returncode = 0
+            self.forced_kind = None
             self.canceled = False
             if prelaunch_check is not None:
                 prelaunch_check()
@@ -254,7 +269,7 @@ def _install(
             return SimpleNamespace(poll=lambda: self.returncode)
 
         def wait(self, *, post_exit_check=None, **_kwargs):
-            kind = (
+            kind = self.forced_kind or (
                 ExitKind.SUCCESS if self.returncode == 0 else ExitKind.ACCELERATOR_OOM
             )
             result = _supervised(kind, returncode=self.returncode)
@@ -265,7 +280,12 @@ def _install(
         def cancel(self, _grace):
             self.canceled = True
 
-    monkeypatch.setattr(tr, "SupervisedSidecar", sidecar_factory or FakeSidecar)
+    def dispatch(plan, **kwargs):
+        if sidecar_factory is not None:
+            return sidecar_factory(FakeSidecar, plan, **kwargs)
+        return FakeSidecar(plan, **kwargs)
+
+    monkeypatch.setattr(tr, "SupervisedSidecar", dispatch)
 
     def should_cancel():
         if cancel_after is None:
@@ -339,8 +359,15 @@ def test_each_candidate_is_admitted_and_contained_at_its_own_batch(
 
     assert harness.probe_preflight_batches == [1, 2, 4]
     assert harness.probe_launch_batches == [1, 2, 4]
+    # Each candidate is CONTAINED at its own batch, not at batch 1's limits.
+    assert harness.probe_launch_limits == [
+        ((10 + batch) * GiB, (12 + batch) * GiB) for batch in (1, 2, 4)
+    ]
     assert len(harness.training_launches) == 1
     assert "--probe" not in harness.training_launches[0]
+    # ...and training runs under the FINAL decision's limits (batch 2), not
+    # under any probe candidate's.
+    assert harness.training_launch_limits == [(12 * GiB, 14 * GiB)]
 
 
 def test_a_successful_probe_is_cached_even_when_selection_refuses(
@@ -486,7 +513,7 @@ def test_a_busy_lease_during_the_probe_is_a_structured_refusal(tmp_path, monkeyp
 
     from hydra_suite.runtime.resource_lease import ResourceBusyError
 
-    def busy(*_args, **_kwargs):
+    def busy(_fake, *_args, **_kwargs):
         raise ResourceBusyError("cuda:GPU-physical-0", None)
 
     harness = _install(monkeypatch, tmp_path, sidecar_factory=busy)
@@ -497,3 +524,103 @@ def test_a_busy_lease_during_the_probe_is_a_structured_refusal(tmp_path, monkeyp
     assert result["failure_kind"] == ExitKind.HOST_ADMISSION_REFUSAL.value
     assert "probe sidecar launch refused" in result["error_message"]
     assert not MemoryProfileStore(harness.store_path).load()
+
+
+def test_a_busy_lease_at_a_later_candidate_keeps_the_earlier_measurement(
+    tmp_path, monkeypatch
+):
+    """A measurement is a fact about this hardware. Another job grabbing the
+    GPU between candidates is transient, and must not throw away the batch-1
+    fact and force the next attempt to re-probe from scratch."""
+
+    from hydra_suite.runtime.resource_lease import ResourceBusyError
+
+    def factory(fake, plan, **kwargs):
+        if _probe_batch_of(plan.launch.command) == 2:
+            raise ResourceBusyError("cuda:GPU-physical-0", None)
+        return fake(plan, **kwargs)
+
+    harness = _install(monkeypatch, tmp_path, sidecar_factory=factory)
+
+    result = _run(harness, _spec(tmp_path, batch=-1))
+
+    stored = MemoryProfileStore(harness.store_path).load()
+    assert [r.settings.batch_size for r in stored] == [
+        1
+    ], "the batch-1 measurement must survive a transient failure at batch 2"
+    assert result["success"], result.get("error_message")
+    spec_on_disk = json.loads((harness.run_dir / "spec.json").read_text())
+    assert spec_on_disk["sam3_params"]["batch"] == 1
+    assert spec_on_disk["batch_resolution"]["ladder_terminated_by"] == "refused"
+
+
+def test_a_host_limit_stop_does_not_become_a_permanent_batch_ceiling(
+    tmp_path, monkeypatch
+):
+    """A cgroup kill caused by an UNRELATED job says nothing about what this
+    workload needs. Without this, one bad afternoon caps every later run."""
+
+    def factory(fake, plan, **kwargs):
+        sidecar = fake(plan, **kwargs)
+        if _probe_batch_of(plan.launch.command) == 2:
+            sidecar.returncode = 137
+            sidecar.forced_kind = ExitKind.HOST_HARD_LIMIT
+        return sidecar
+
+    harness = _install(monkeypatch, tmp_path, sidecar_factory=factory)
+
+    first = _run(harness, _spec(tmp_path, batch=-1))
+    assert first["success"]
+    resolution = json.loads((harness.run_dir / "batch_resolution.json").read_text())
+    assert resolution["ladder_terminated_by"] == "host_limit"
+    assert [
+        r.settings.batch_size for r in MemoryProfileStore(harness.store_path).load()
+    ] == [1]
+
+    # A second run must RE-PROBE rather than silently inheriting the ceiling.
+    harness.probe_preflight_batches.clear()
+    second = _run(harness, _spec(tmp_path, batch=-1))
+
+    assert second["success"]
+    assert harness.probe_preflight_batches == [
+        1,
+        2,
+    ], "a transient host limit must not authorise skipping the untried rungs"
+
+
+def test_the_safety_fraction_is_applied_exactly_once(tmp_path, monkeypatch):
+    """Peaks and free bytes chosen so single vs double application of the 0.8
+    fraction give DIFFERENT answers: batch 2 needs 14 GiB; 0.8 * 20 = 16 GiB
+    admits it, 0.8 * 0.8 * 20 = 12.8 GiB does not."""
+
+    harness = _install(monkeypatch, tmp_path, free_bytes=20 * GiB)
+
+    result = _run(harness, _spec(tmp_path, batch=-1))
+
+    assert result["success"]
+    spec_on_disk = json.loads((harness.run_dir / "spec.json").read_text())
+    assert (
+        spec_on_disk["sam3_params"]["batch"] == 2
+    ), "batch 1 here would mean the safety fraction was applied twice"
+
+
+def test_the_banner_labels_an_extrapolated_requirement_as_extrapolated(
+    tmp_path, monkeypatch
+):
+    """Records at 1, 2 and 4 can resolve to 3, which nobody measured. Calling
+    a fitted envelope "measured" is the dishonesty this whole task removes."""
+
+    harness = _install(
+        monkeypatch,
+        tmp_path,
+        probe_peaks={1: 4 * GiB, 2: 6 * GiB, 4: 10 * GiB},
+        free_bytes=11 * GiB,
+    )
+
+    result = _run(harness, _spec(tmp_path, batch=-1))
+
+    assert result["success"]
+    resolution = json.loads((harness.run_dir / "batch_resolution.json").read_text())
+    assert resolution["resolved"] == 3
+    assert resolution["requirement_basis"] == "extrapolated"
+    assert any("extrapolated" in line for line in harness.logs)

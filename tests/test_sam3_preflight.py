@@ -1160,9 +1160,36 @@ def test_probe_admission_shares_every_other_refusal_with_normal_admission(tmp_pa
 
 
 def test_dataset_profile_reports_the_p95_instance_density(tmp_path):
-    _write_coco(tmp_path, tiles=20, instances_per_tile=3)
+    """Non-uniform on purpose: with every tile the same density a `return
+    max(...)` stub would pass and the p95 would be untested. One outlier tile
+    of 50 must NOT drag the p95 up with it -- distinguishing the two is the
+    whole reason the fingerprint records both."""
+
+    split_dir = tmp_path / "dataset" / "train"
+    split_dir.mkdir(parents=True, exist_ok=True)
+    densities = [1] * 15 + [2] * 4 + [50]
+    images = [
+        {"id": i + 1, "file_name": f"t{i}.png", "width": 1008, "height": 1008}
+        for i in range(len(densities))
+    ]
+    annotations = []
+    ann_id = 1
+    for image, count in zip(images, densities):
+        for _ in range(count):
+            annotations.append(
+                {
+                    "id": ann_id,
+                    "image_id": image["id"],
+                    "iscrowd": 0,
+                    "segmentation": [[0, 0, 10, 0, 10, 10, 0, 10]],
+                }
+            )
+            ann_id += 1
+    (split_dir / "_annotations.coco.json").write_text(
+        json.dumps({"images": images, "annotations": annotations}), encoding="utf-8"
+    )
 
     profile = pf._dataset_profile(str(tmp_path / "dataset"))
 
-    assert profile.max_active_instances_per_tile == 3
-    assert profile.p95_active_instances_per_tile == 3
+    assert profile.max_active_instances_per_tile == 50
+    assert profile.p95_active_instances_per_tile == 2

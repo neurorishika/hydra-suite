@@ -656,7 +656,19 @@ def run_training(spec: Any, run_dir_path: Path) -> bool:
     device, model, matcher, loss_fn, trainable_params = _build_model_and_loss(params)
 
     grad_accum = max(1, int(params.grad_accum))
-    batch_size = max(1, int(params.batch))
+    # NOT `max(1, ...)`. A silent floor of 1 is the exact bug measured auto
+    # batch sizing exists to kill: the parent resolves `-1` to a positive
+    # value before this process is ever launched, so a non-positive batch
+    # here means someone hand-ran the child against an unresolved spec. Train
+    # at a size nobody chose and the run is worthless and looks fine.
+    batch_size = int(params.batch)
+    if batch_size < 1:
+        raise RuntimeError(
+            f"SAM3 training received batch={batch_size}. A non-positive batch "
+            "is a request to MEASURE one, which only the launcher can do "
+            "(it probes this workload on this card first). Run through "
+            "`train_sam3_lora`, or set a positive batch in the spec."
+        )
     n_batches = batch_count(query_count(train_descriptors), batch_size)
     steps_per_epoch = -(-n_batches // grad_accum)  # ceil division
     total_steps = max(1, steps_per_epoch * params.epochs)
@@ -959,7 +971,7 @@ def run_probe_measurement(spec: Any, run_dir_path: Path, batch_size: int) -> int
             return 1
         reserved = int(torch.cuda.max_memory_reserved(device))
         allocated = int(torch.cuda.max_memory_allocated(device))
-    except torch.OutOfMemoryError as exc:
+    except torch.cuda.OutOfMemoryError as exc:
         emit_log(f"Probe at batch {batch_size} ran out of device memory: {exc}")
         _write({"outcome": "oom", "batch_size": batch_size, "detail": str(exc)})
         return 2

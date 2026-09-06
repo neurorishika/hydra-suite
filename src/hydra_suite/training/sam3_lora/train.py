@@ -18,6 +18,7 @@ from typing import Any, Callable, Optional
 
 from hydra_suite.runtime.memory_profiles import (
     MemoryProfileStore,
+    fit_batch_curve,
     merge_records,
     profile_store_path,
 )
@@ -62,17 +63,16 @@ class _BatchResolutionRefused(RuntimeError):
     """Auto batch sizing could not produce a batch size this run may use."""
 
 
-# Child exits that mean "this candidate did not fit". CUDA OOM is invisible
-# to the supervisor -- it sees exit codes and cgroup kills, not a Python
-# `OutOfMemoryError` -- so the probe child ALSO writes an explicit
-# `{"outcome": "oom"}` record. Both routes are honoured.
-_MEMORY_PRESSURE_KINDS = frozenset(
-    {
-        ExitKind.ACCELERATOR_OOM,
-        ExitKind.HOST_HARD_LIMIT,
-        ExitKind.HOST_SOFT_LIMIT,
-    }
-)
+# CUDA OOM is invisible to the supervisor -- it sees exit codes and cgroup
+# kills, not a Python `OutOfMemoryError` -- so the probe child ALSO writes an
+# explicit `{"outcome": "oom"}` record; both routes are honoured.
+#
+# HOST limit kills are deliberately NOT treated as a device verdict. They are
+# caused by whatever else is running on the box, so a ladder that ends on one
+# is INCOMPLETE: caching its survivors is right, but letting them permanently
+# cap the batch size would turn one bad afternoon into a silent forever
+# ceiling.
+_HOST_LIMIT_KINDS = frozenset({ExitKind.HOST_HARD_LIMIT, ExitKind.HOST_SOFT_LIMIT})
 
 
 def _store_path() -> Path:
@@ -307,7 +307,12 @@ def _run_probe_candidate(
         # is a structured refusal, not an unhandled traceback out of the
         # probe ladder. `ResourceBusyError` is a RuntimeError, not an
         # OSError, so it would not otherwise be caught upstream.
-        raise _BatchResolutionRefused(
+        #
+        # Raised as a CANDIDATE refusal, not a resolution refusal: if earlier
+        # rungs already measured, those measurements are facts about this
+        # hardware and must still be cached. `run_probe` owns the
+        # first-candidate-vs-later distinction.
+        raise autobatch.ProbeCandidateRefused(
             f"SAM3 probe sidecar launch refused at batch {batch}: {exc}"
         ) from exc
     try:
@@ -340,13 +345,22 @@ def _run_probe_candidate(
     kind = supervised.classified_exit.kind
     if outcome == "ok" and kind is ExitKind.SUCCESS:
         return payload
-    if outcome == "oom" or kind in _MEMORY_PRESSURE_KINDS:
+    if kind in _HOST_LIMIT_KINDS:
+        # A HOST cgroup/RLIMIT kill says something about what else is running
+        # on this box right now, not about what this workload needs on this
+        # GPU. Recorded as transient so it can never become a permanent
+        # batch ceiling.
+        raise autobatch.ProbeHostLimitError(
+            f"SAM3 memory probe at batch {batch} was stopped by a host memory "
+            f"limit ({kind.value}); this is transient, not a device verdict."
+        )
+    if outcome == "oom" or kind is ExitKind.ACCELERATOR_OOM:
         raise autobatch.ProbeOutOfMemoryError(
             f"SAM3 memory probe at batch {batch} did not fit "
             f"({outcome or kind.value})."
         )
     tail = "".join(supervised.output_tail).strip() or "(no output)"
-    raise _BatchResolutionRefused(
+    raise autobatch.ProbeCandidateRefused(
         f"SAM3 memory probe at batch {batch} failed without producing a "
         f"measurement ({kind.value}). Child output tail:\n{tail}"
     )
@@ -399,11 +413,22 @@ def _resolve_measured_batch(
     stored = store.load()
     cached = autobatch.validate_probe_records(stored, fingerprint.identity)
     forced = os.environ.get(autobatch.FORCE_PROBE_ENV_VAR) == "1"
+    key = _fingerprint_key(fingerprint.identity)
+    incomplete = _incomplete_ladders()
+    was_incomplete = incomplete.get(key)
 
-    if cached and not forced:
+    if cached and not forced and was_incomplete is None:
         records = cached
         provenance = "cached"
+        terminated_by = autobatch.LADDER_COMPLETE
     else:
+        if cached and was_incomplete is not None:
+            log_cb(
+                "auto batch: re-probing -- the last ladder for this workload "
+                f"stopped early ({was_incomplete}), so its highest measured "
+                "batch is a floor, not a ceiling. Cached records alone would "
+                "have capped this run permanently."
+            )
         run_dir_path.mkdir(parents=True, exist_ok=True)
         spec_path = run_dir_path / "spec.json"
         # The probe children need a spec to load. This is the REQUESTED spec;
@@ -436,6 +461,7 @@ def _resolve_measured_batch(
             # Fail-closed: the ONLY case where a completed probe caches
             # nothing at all.
             raise _BatchResolutionRefused(str(exc)) from exc
+        terminated_by = measured.terminated_by
         # Validate, then merge, then select -- in that order and on purpose.
         records = autobatch.validate_probe_records(measured, fingerprint.identity)
         if not records:
@@ -449,6 +475,18 @@ def _resolve_measured_batch(
         # now. Cache the fact even if the selection below refuses, so the
         # next attempt on a quieter GPU reuses it rather than re-probing.
         store.save(merge_records(stored, records))
+        # A ladder cut short by a TRANSIENT host event has not proved that
+        # the untried rungs are unreachable, so it must not be allowed to
+        # cap every future run through the cache. Marked here and cleared on
+        # any ladder that ended for an authoritative reason.
+        _mark_incomplete_ladder(
+            key,
+            (
+                terminated_by
+                if terminated_by in autobatch.TRANSIENT_LADDER_TERMINATIONS
+                else None
+            ),
+        )
         provenance = "measured"
 
     if should_cancel():
@@ -477,31 +515,89 @@ def _resolve_measured_batch(
             f"(usable at {autobatch.MEASURED_SAFETY_FRACTION:.0%} safety). "
             "Free the device and retry; the measurement has been cached."
         )
-    selected_peak = max(
-        (
-            record.accelerator_reserved_peak_bytes
-            for record in records
-            if record.settings.batch_size <= resolved
-        ),
-        default=requirement,
-    )
+    # Report the requirement that was ACTUALLY cleared. When `resolved` is
+    # itself an observed rung, that is a measurement; when it falls between
+    # rungs (records at 1, 2, 4 can resolve to 3), the number is the fitted
+    # envelope and must be labelled as extrapolated rather than passed off as
+    # something someone measured.
+    observed_peaks = {
+        record.settings.batch_size: record.accelerator_reserved_peak_bytes
+        for record in records
+    }
+    if resolved in observed_peaks:
+        selected_peak = observed_peaks[resolved]
+        requirement_basis = "measured"
+    else:
+        base_bytes, slope_bytes = fit_batch_curve(records)
+        selected_peak = max(
+            base_bytes + slope_bytes * resolved,
+            max(
+                (peak for batch, peak in observed_peaks.items() if batch <= resolved),
+                default=0,
+            ),
+        )
+        requirement_basis = "extrapolated"
     resolution = {
         "requested": int(params.batch),
         "resolved": int(resolved),
         "provenance": provenance,
-        "fingerprint": _fingerprint_key(fingerprint.identity),
+        "requirement_basis": requirement_basis,
+        "ladder_terminated_by": terminated_by,
+        "fingerprint": key,
         "degraded_reasons": list(fingerprint.degraded_reasons),
         "measured_reserved_bytes": int(selected_peak),
         "free_bytes": free_bytes,
         "resolved_at_unix_ns": time.time_ns(),
     }
     log_cb(
-        f"auto batch: {resolved} (measured {selected_peak / GiB:.1f} GiB "
-        f"reserved at batch {resolved}, "
+        f"auto batch: {resolved} ({requirement_basis} "
+        f"{selected_peak / GiB:.1f} GiB reserved at batch {resolved}, "
         f"{selected_peak / max(1, free_bytes):.0%} of "
-        f"{free_bytes / GiB:.1f} GiB free; provenance={provenance})"
+        f"{free_bytes / GiB:.1f} GiB free; provenance={provenance}, "
+        f"ladder={terminated_by})"
     )
     return int(resolved), resolution
+
+
+def _incomplete_ladders_path() -> Path:
+    """Sibling of the profile store recording ladders that ended early.
+
+    A separate small file rather than a new `MemoryMeasurement` field:
+    `MemoryMeasurement` is a shared, closed schema, and this is a property of
+    a PROBE ATTEMPT, not of any single measurement.
+    """
+
+    store = _store_path()
+    return store.with_name(store.name + ".incomplete.json")
+
+
+def _incomplete_ladders() -> dict[str, str]:
+    try:
+        loaded = json.loads(_incomplete_ladders_path().read_text(encoding="utf-8"))
+    except (OSError, ValueError):
+        return {}
+    if not isinstance(loaded, dict):
+        return {}
+    return {str(k): str(v) for k, v in loaded.items() if isinstance(v, str)}
+
+
+def _mark_incomplete_ladder(key: str, reason: Optional[str]) -> None:
+    """Record (or clear) that this workload's ladder ended for a transient reason."""
+
+    marks = _incomplete_ladders()
+    if reason is None:
+        if marks.pop(key, None) is None:
+            return
+    else:
+        marks[key] = reason
+    path = _incomplete_ladders_path()
+    try:
+        path.parent.mkdir(parents=True, exist_ok=True)
+        _write_json(path, marks)
+    except OSError:
+        # Best-effort bookkeeping: losing this file costs a re-probe, never
+        # correctness.
+        pass
 
 
 def _fingerprint_key(identity: Any) -> str:
