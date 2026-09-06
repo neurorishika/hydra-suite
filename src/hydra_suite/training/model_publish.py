@@ -11,8 +11,10 @@ from typing import Any, Iterable
 from hydra_suite.core.canonicalization.geometry import CanonicalGeometry
 from hydra_suite.core.inference.slice_meta import (
     merge_training_geometry,
+    normalized_slice_meta,
     profile_summary,
     read_slice_meta,
+    write_slice_meta,
 )
 
 from .contracts import TrainingRole
@@ -886,12 +888,20 @@ def publish_trained_model(
         # Writing a fresh document here would silently destroy them.
         source_meta = read_slice_meta(src)
         merged_slice_meta = merge_training_geometry(source_meta, dict(slice_geometry))
-        slice_sidecar = dst.with_suffix(dst.suffix + ".slice_meta.json")
-        slice_sidecar.write_text(
-            json.dumps(merged_slice_meta, indent=2),
-            encoding="utf-8",
-        )
+        # write_slice_meta stages a temp file and replaces atomically: a crash
+        # mid-write must not leave a truncated sidecar, which read_slice_meta
+        # reports as None -- silent un-calibration.
+        slice_sidecar = write_slice_meta(dst, merged_slice_meta)
         slice_geom_sidecar_name = slice_sidecar.name
+    elif role in _DIRECT_DETECTOR_ROLES and dst.suffix.lower() == ".pt":
+        # No training geometry to stamp, but the SOURCE may still carry
+        # user-approved calibration profiles. Dropping them here silently
+        # un-calibrated any model registered outside a sliced training run.
+        source_meta = read_slice_meta(src)
+        if source_meta:
+            merged_slice_meta = normalized_slice_meta(source_meta)
+            slice_sidecar = write_slice_meta(dst, merged_slice_meta)
+            slice_geom_sidecar_name = slice_sidecar.name
 
     canonical_meta_sidecar_name: str | None = None
     if canonical_geometry is not None and dst.suffix.lower() == ".pt":
@@ -930,9 +940,9 @@ def publish_trained_model(
         metadata.update(classifier_meta)
     if slice_geometry and role in _DIRECT_DETECTOR_ROLES:
         metadata["slice_geometry"] = dict(slice_geometry)
-        if merged_slice_meta is not None:
-            metadata["slice_profiles"] = profile_summary(merged_slice_meta)
-            verify_profile_summary(dst, metadata["slice_profiles"])
+    if role in _DIRECT_DETECTOR_ROLES and merged_slice_meta is not None:
+        metadata["slice_profiles"] = profile_summary(merged_slice_meta)
+        verify_profile_summary(dst, metadata["slice_profiles"])
         if slice_geom_sidecar_name:
             metadata["slice_meta_sidecar"] = slice_geom_sidecar_name
     if canonical_geometry is not None:

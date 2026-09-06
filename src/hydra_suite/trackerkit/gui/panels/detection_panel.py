@@ -1064,6 +1064,17 @@ class DetectionPanel(QWidget):
             "Higher = fewer detections (may miss animals).\n"
             "Recommended: 0.2-0.4"
         )
+        # The profile-owned SAHI spins above route through _sync_advanced;
+        # confidence is different -- it is the user's global YOLO threshold,
+        # written straight into the config, not into advanced_config. It must
+        # still un-claim the profile: a session that reports "Balanced" while
+        # running a threshold Balanced never measured is a provenance lie.
+        # _mark_slice_profile_custom's own _applying_slice_profile guard makes
+        # this safe against the programmatic setValue in
+        # _apply_slice_meta_values:2740.
+        self.spin_yolo_confidence.valueChanged.connect(
+            lambda _value: self._mark_slice_profile_custom()
+        )
         self.spin_yolo_iou = QDoubleSpinBox()
         self.spin_yolo_iou.setRange(0.01, 1.0)
         self.spin_yolo_iou.setValue(0.7)
@@ -2262,7 +2273,7 @@ class DetectionPanel(QWidget):
             not sequential and self.chk_slice_enabled.isChecked(),
         )
         if not sequential and self.chk_slice_enabled.isChecked():
-            self._on_slice_geometry_changed(self.combo_slice_geometry.currentIndex())
+            self._refresh_slice_param_visibility()
 
         # Sequential-mode controls (right column of the YOLO grid).
         self._set_widget_visible(getattr(self, "row_seq_detect", None), sequential)
@@ -2302,7 +2313,7 @@ class DetectionPanel(QWidget):
         self._set_widget_visible(self.row_slice_geometry, visible)
         self._set_widget_visible(self.row_slice_params, visible)
         if visible:
-            self._on_slice_geometry_changed(self.combo_slice_geometry.currentIndex())
+            self._refresh_slice_param_visibility()
 
     def _on_slice_geometry_changed(self, _index: object) -> None:
         """Reveal only the SAHI parameters that apply to the chosen geometry mode.
@@ -2311,9 +2322,21 @@ class DetectionPanel(QWidget):
         object fraction; auto_model derives the tile from the checkpoint and
         needs nothing. Tile overlap applies to every mode.
         """
+        self._mark_slice_profile_custom()
+        self._refresh_slice_param_visibility()
+
+    def _refresh_slice_param_visibility(self) -> None:
+        """Show the SAHI parameter widgets the current geometry mode uses.
+
+        Split out of ``_on_slice_geometry_changed`` so that purely cosmetic
+        refreshes (a direct/sequential mode switch) do not mark the profile
+        Custom: with the count guard removed that would otherwise claim a
+        user edit that never happened, and "__custom__" resolves merge_* from
+        advanced_config where "__training__" resolves them to defaults -- a
+        real change to what runs.
+        """
         if not hasattr(self, "combo_slice_geometry"):
             return
-        self._mark_slice_profile_custom()
         mode = self.combo_slice_geometry.currentText()
         is_custom = mode == "custom"
         is_auto_object = mode == "auto_object"
@@ -2614,16 +2637,29 @@ class DetectionPanel(QWidget):
             return
         if getattr(self._main_window, "_restoring_config", False):
             return
-        if self.combo_slice_profile.count() <= 1:
+        if self._slice_meta is None:
+            # No sidecar at all: apply_slice_meta_for_model deliberately keeps
+            # ``slice_profile_id`` empty, and there is nothing to be custom
+            # *from*. (This also covers the panel's own construction-time
+            # setValue calls, which run before any model is selected.)
             return
-        custom_index = self.combo_slice_profile.findData("__custom__", Qt.UserRole)
-        if custom_index < 0:
-            self.combo_slice_profile.addItem("Custom", "__custom__")
-            custom_index = self.combo_slice_profile.count() - 1
-        self.combo_slice_profile.blockSignals(True)
-        self.combo_slice_profile.setCurrentIndex(custom_index)
-        self.combo_slice_profile.blockSignals(False)
+        # The id write is UNCONDITIONAL past the two guards above. Gating it on
+        # a populated combo silently discarded user edits for the commonest
+        # sidecar of all -- training geometry with no calibration profiles --
+        # because ``resolve_slice_profile_values`` excludes "__training__" from
+        # the saved-settings rung, so the overlay in build_engine_params then
+        # overwrote the edited spins with the sidecar's training numbers.
         self._main_window.advanced_config["slice_profile_id"] = "__custom__"
+        if self.combo_slice_profile.count() > 1:
+            # Combo manipulation stays guarded: with no profiles the row is
+            # hidden, so a "Custom" entry there would be invisible anyway.
+            custom_index = self.combo_slice_profile.findData("__custom__", Qt.UserRole)
+            if custom_index < 0:
+                self.combo_slice_profile.addItem("Custom", "__custom__")
+                custom_index = self.combo_slice_profile.count() - 1
+            self.combo_slice_profile.blockSignals(True)
+            self.combo_slice_profile.setCurrentIndex(custom_index)
+            self.combo_slice_profile.blockSignals(False)
         self._update_slice_profile_status_label()
 
     def _on_slice_profile_changed(self, _index: int) -> None:
@@ -2654,32 +2690,16 @@ class DetectionPanel(QWidget):
         model's sidecar -- a still-valid id or an explicit training/custom
         request always wins over it.
         """
-        from hydra_suite.core.inference.slice_meta import (
-            available_slice_profiles,
-            slice_meta_to_panel_values,
-            slice_meta_values_from_settings,
-        )
+        from hydra_suite.core.inference.slice_meta import resolve_slice_profile_values
 
         if self._slice_meta is None:
             return
         self._slice_profile_requested_id = profile_id
-        known_ids = {p["id"] for p in available_slice_profiles(self._slice_meta)}
-        # A session saved mid-custom-edit has a complete effective-settings
-        # snapshot. Excluding "__custom__" here made the restore fall through
-        # to the PRIMARY profile, overwrite slice_profile_id with the
-        # primary's id and label the panel with the primary's name -- while
-        # the settings the user actually saved sat unused.
         is_custom_restore = bool(profile_id == "__custom__" and saved_settings)
-        use_saved_settings = is_custom_restore or bool(
-            profile_id
-            and profile_id not in ("__training__", "__custom__")
-            and profile_id not in known_ids
-            and saved_settings
+        values = resolve_slice_profile_values(
+            self._slice_meta, profile_id, saved_settings
         )
-        if use_saved_settings:
-            values = slice_meta_values_from_settings(self._slice_meta, saved_settings)
-        else:
-            values = slice_meta_to_panel_values(self._slice_meta, profile_id)
+        use_saved_settings = values["resolution"] == "saved_settings"
         self._slice_profile_applied_id = values["profile_id"]
         self._slice_profile_applied_name = values["profile_name"]
         if is_custom_restore:

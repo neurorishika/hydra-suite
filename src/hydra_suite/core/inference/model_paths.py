@@ -15,6 +15,39 @@ from functools import lru_cache
 logger = logging.getLogger(__name__)
 
 
+MODEL_METADATA_SIDECAR_SUFFIXES = (
+    ".slice_meta.json",
+    ".canonical_meta.json",
+    ".runtime_meta.json",
+)
+
+
+def copy_model_metadata_sidecars(source, destination) -> None:
+    """Copy inference metadata stored beside a model, preserving its naming.
+
+    Calibration profiles, canonical geometry and runtime stamps are only
+    meaningful beside their weights. Copying a ``.pt`` without them produces
+    a model that silently loses its operating points -- which is what both
+    TrackerKit's import and one branch of publish used to do.
+    """
+    from pathlib import Path as _Path
+
+    src = _Path(source)
+    dst = _Path(destination)
+    pairs = [
+        (
+            src.with_suffix(src.suffix + suffix),
+            dst.with_suffix(dst.suffix + suffix),
+        )
+        for suffix in MODEL_METADATA_SIDECAR_SUFFIXES
+    ]
+    pairs.append((src.with_suffix(".v2meta.json"), dst.with_suffix(".v2meta.json")))
+    for src_sidecar, dst_sidecar in pairs:
+        if src_sidecar.exists():
+            dst_sidecar.parent.mkdir(parents=True, exist_ok=True)
+            shutil.copy2(str(src_sidecar), str(dst_sidecar))
+
+
 # ---------------------------------------------------------------------------
 # Directory helpers
 # ---------------------------------------------------------------------------

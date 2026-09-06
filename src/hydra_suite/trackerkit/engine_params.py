@@ -360,6 +360,85 @@ def _default_advanced_config_fallback() -> dict[str, Any]:
     return load_advanced_tracker_config()
 
 
+def _slice_profile_overlay(
+    cfg: Mapping[str, Any], model_path: str
+) -> dict[str, Any] | None:
+    """Resolve the calibration profile a saved config asks for.
+
+    ``advanced_config.json`` is machine-global and the GUI never writes it
+    back, so before this existed the CLI ran a config's named profile with
+    DEFAULT tile geometry and merge settings -- same config, different
+    detections (design doc F1). The per-video config already carries
+    ``slice_profile_id`` and a full effective-settings snapshot; this reads
+    them through the same ladder the panel uses, so the two cannot drift.
+
+    Scope is deliberate and asymmetric: this supplies only the keys that live
+    *solely* in ``advanced_config``. ``slice_enabled``, ``slice_geometry_mode``
+    and ``yolo_confidence_threshold`` are persisted by ``build_config_dict``
+    and are authoritative from the config -- they already hold whatever the
+    profile put in the widgets when the session was saved, so re-deriving them
+    here could only disagree with what the user saw.
+
+    Returns ``None`` -- "leave advanced_config alone" -- for sequential mode,
+    a missing/corrupt sidecar, or an empty model path. Never raises: this
+    builder is called with model paths that do not exist.
+    """
+    from hydra_suite.core.inference.slice_meta import (
+        read_slice_meta,
+        resolve_slice_profile_values,
+    )
+
+    mode = str(_cfg_get(cfg, "yolo_obb_mode", default="direct")).strip().lower()
+    if mode != "direct" or not model_path:
+        return None
+    meta = read_slice_meta(model_path)
+    if not meta:
+        return None
+    profile_id = str(_cfg_get(cfg, "slice_profile_id", default="") or "")
+    saved = _cfg_get(cfg, "slice_profile_settings", default=None)
+    saved_settings = dict(saved) if isinstance(saved, dict) and saved else None
+    values = resolve_slice_profile_values(meta, profile_id or None, saved_settings)
+
+    if profile_id and profile_id not in ("__training__", "__custom__"):
+        if values.get("resolution") == "primary":
+            logger.warning(
+                "Config names SAHI profile %r, which is not in %s; "
+                "falling back to the primary profile %r.",
+                profile_id,
+                model_path,
+                values.get("profile_name"),
+            )
+    claimed = values.get("confidence_threshold")
+    if claimed is not None:
+        try:
+            claimed_float = float(claimed)
+        except (TypeError, ValueError):
+            # A malformed sidecar must degrade to "no warning", never raise
+            # (Global Constraint: build_engine_params never raises on bad
+            # metadata).
+            claimed_float = None
+        if claimed_float is not None:
+            configured = float(_cfg_get(cfg, "yolo_confidence_threshold", default=0.25))
+            if abs(claimed_float - configured) > 1e-9:
+                # The config wins (design ruling R1) -- but silently running an
+                # operating point the profile never measured is the provenance
+                # lie this whole feature exists to remove.
+                logger.warning(
+                    "SAHI profile %r was measured at confidence %.3f; this "
+                    "config overrides it with %.3f.",
+                    values.get("profile_name"),
+                    claimed_float,
+                    configured,
+                )
+    logger.info(
+        "SAHI calibration: %s (id=%s, resolution=%s)",
+        values.get("profile_name", "?"),
+        values.get("profile_id"),
+        values.get("resolution"),
+    )
+    return values
+
+
 def build_engine_params(
     config: Mapping[str, Any],
     *,
@@ -885,6 +964,34 @@ def build_engine_params(
             _retired_padding,
             _retired_padding,
         )
+
+    # Calibration-profile overlay. Supplies ONLY the advanced_config-only SAHI
+    # keys; SLICE_ENABLED / SLICE_GEOMETRY_MODE / YOLO_CONFIDENCE_THRESHOLD are
+    # persisted config fields and stay untouched (design rulings R1, R2).
+    _profile_values = _slice_profile_overlay(cfg, yolo_direct_path)
+    if _profile_values is not None:
+        advanced["slice_overlap"] = float(_profile_values["overlap"])
+        advanced["slice_object_tile_fraction"] = float(
+            _profile_values["object_tile_fraction"]
+        )
+        advanced["slice_trained_body_px"] = float(_profile_values["trained_body_px"])
+        advanced["slice_width"] = int(_profile_values["slice_width"])
+        advanced["slice_height"] = int(_profile_values["slice_height"])
+        for _key in (
+            "merge_policy",
+            "merge_metric",
+            "merge_threshold",
+            "merge_backend",
+        ):
+            _value = _profile_values[_key]
+            if _key == "merge_threshold" and _value is not None:
+                try:
+                    _value = float(_value)
+                except (TypeError, ValueError):
+                    _value = None
+            advanced[f"slice_{_key}"] = (
+                SLICE_MERGE_DEFAULTS[_key] if _value is None else _value
+            )
 
     params: dict[str, Any] = {
         "ADVANCED_CONFIG": advanced,

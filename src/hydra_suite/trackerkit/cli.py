@@ -10,6 +10,7 @@ from pathlib import Path
 from typing import Any, Sequence
 
 from hydra_suite.trackerkit.cli_config import (
+    apply_sahi_profile_override,
     load_tracker_cli_config,
     load_tracker_cli_session,
 )
@@ -24,6 +25,7 @@ def run_tracking_cli(
     *,
     config_path: str | None = None,
     keystone_override: bool = False,
+    sahi_profile: str | None = None,
 ) -> int:
     """Run one or more TrackerKit sessions from the CLI (direct Qt-free path)."""
 
@@ -60,6 +62,17 @@ def run_tracking_cli(
             effective_config_data = None
             if item.use_keystone_baseline and item.config_path is None:
                 effective_config_data = baseline_config_data or {}
+
+            if sahi_profile:
+                base_cfg = (
+                    effective_config_data
+                    if effective_config_data is not None
+                    else load_tracker_cli_config(item.config_path)
+                )
+                effective_config_data = apply_sahi_profile_override(
+                    base_cfg, sahi_profile
+                )
+
             session = load_tracker_cli_session(
                 item.video_path,
                 config_path=(
@@ -77,10 +90,13 @@ def run_tracking_cli(
 
             # Persist the resolved keystone baseline for provenance/debugging; the
             # direct path consumes ``session`` directly and needs no config file.
+            # Dump the OVERRIDDEN config (``session.config``), not the
+            # pre-override baseline, so the provenance file names the profile
+            # that actually ran.
             if item.use_keystone_baseline and item.config_path is None:
                 keystone_dump = tmpdir_path / f"keystone_config_{index}.json"
                 with open(keystone_dump, "w", encoding="utf-8") as handle:
-                    json.dump(baseline_config_data or {}, handle, indent=2)
+                    json.dump(session.config or {}, handle, indent=2)
 
             result = run_headless_tracking_session(session)
 

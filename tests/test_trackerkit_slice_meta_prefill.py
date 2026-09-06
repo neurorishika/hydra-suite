@@ -38,6 +38,34 @@ def _make_panel_with_sidecar(tmp_path: Path, monkeypatch: pytest.MonkeyPatch):
     return panel, window, model_path
 
 
+def _write_sidecar_with_profile(model_path: Path) -> None:
+    """Write a v2 sidecar whose single profile is primary and claims
+    confidence_threshold: 0.42."""
+    (model_path.parent / (model_path.name + ".slice_meta.json")).write_text(
+        json.dumps(
+            {
+                "schema_version": 2,
+                "training_geometry": {"geometry_mode": "auto_model"},
+                "primary_profile_id": "balanced",
+                "profiles": [
+                    {
+                        "id": "balanced",
+                        "name": "Balanced",
+                        "settings": {
+                            "geometry_mode": "auto_object",
+                            "object_tile_fraction": 0.4,
+                            "overlap": 0.25,
+                            "trained_body_px": 75,
+                            "confidence_threshold": 0.42,
+                        },
+                    }
+                ],
+            }
+        ),
+        encoding="utf-8",
+    )
+
+
 def test_selecting_model_with_sidecar_prefills(tmp_path, monkeypatch):
     panel, mw, model_path = _make_panel_with_sidecar(tmp_path, monkeypatch)
     (model_path.parent / (model_path.name + ".slice_meta.json")).write_text(
@@ -160,4 +188,27 @@ def test_editing_profile_settings_marks_custom_without_writing_model(
     assert panel.combo_slice_profile.currentText() == "Custom"
     assert mw.advanced_config["slice_profile_id"] == "__custom__"
     assert sidecar.read_text(encoding="utf-8") == before
+    mw.close()
+
+
+def test_confidence_edit_marks_profile_custom(tmp_path, monkeypatch):
+    panel, mw, model_path = _make_panel_with_sidecar(tmp_path, monkeypatch)
+    _write_sidecar_with_profile(model_path)
+    panel.apply_slice_meta_for_model(str(model_path))
+    assert mw.advanced_config["slice_profile_id"] != "__custom__"
+
+    panel.spin_yolo_confidence.setValue(0.15)
+
+    assert mw.advanced_config["slice_profile_id"] == "__custom__"
+    assert panel.combo_slice_profile.currentData() == "__custom__"
+    mw.close()
+
+
+def test_applying_a_profile_does_not_mark_custom(tmp_path, monkeypatch):
+    panel, mw, model_path = _make_panel_with_sidecar(tmp_path, monkeypatch)
+    _write_sidecar_with_profile(model_path)  # profile claims confidence 0.42
+    panel.apply_slice_meta_for_model(str(model_path))
+
+    assert panel.spin_yolo_confidence.value() == pytest.approx(0.42)
+    assert mw.advanced_config["slice_profile_id"] != "__custom__"
     mw.close()

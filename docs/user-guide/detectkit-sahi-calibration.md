@@ -187,6 +187,76 @@ or you're opening a project saved from a different model version),
 TrackerKit falls back to the model's primary profile if one is set, and
 says so in the status line; otherwise it falls back to training geometry.
 
+## Applying a profile from `trackerkit track` (the CLI)
+
+`trackerkit track --config <video>_config.json` now honours the calibration
+profile named in the saved config: if the config's `slice_profile_id` points
+at a profile the model's sidecar still carries, the CLI run uses that
+profile's tile size, overlap, object-tile fraction, and merge settings --
+the same values the GUI applied when the config was saved. Previously the
+CLI ignored `slice_profile_id` entirely and always ran with
+`advanced_config.json`'s machine-global defaults, so a config saved against
+a calibrated profile in the GUI could silently track with different tiling
+on the command line.
+
+You can also select a profile explicitly on the command line with
+`--sahi-profile <name|id>`, overriding whatever the saved config names. This
+flag has **hard-error semantics**: if the name or id you give it does not
+exist in the model's sidecar, the CLI run fails immediately with an error
+rather than falling back to anything. This is deliberately stricter than
+what happens when a config's own saved `slice_profile_id` can no longer be
+found -- that case falls back to the model's primary profile (or training
+geometry) and only logs a warning, because the config's stale id typically
+means "the model was recalibrated," not "the operator made a typo." An
+explicit `--sahi-profile` argument is user intent stated on this run, so a
+bad value should stop the run rather than substitute a different profile
+silently.
+
+### Older configs change too, even when they name no profile
+
+If your saved config predates calibration profiles, it carries no
+`slice_profile_id` -- but a CLI run of it can still tile differently than it
+used to. Whenever the config's direct-detection model has **any** sidecar
+attached (every sliced-training publish stamps one, calibration or not),
+`trackerkit track` now takes the tiling knobs from that sidecar: the model's
+primary profile if one is marked, otherwise the geometry the model was
+trained with. Tile size, overlap, object-tile fraction and trained body size
+therefore come from the model, and the four `slice_merge_*` knobs are reset
+to their defaults, instead of all of them being read from the local
+machine's `advanced_config.json`.
+
+This is intended, and it is the same thing the GUI has always done the moment
+you select that model -- the CLI was the odd one out. But it is a real change
+in what a pre-existing config detects, with no action on your part, so if you
+have headless runs whose output you compare across this upgrade, re-check
+them. To pin an exact operating point instead, open the config in TrackerKit,
+set the tiling you want, and re-save it: the saved settings are then carried
+with the config.
+
+### A profile never overrides your saved confidence threshold
+
+A calibration profile records the confidence threshold it was measured at,
+but applying a profile -- in the GUI or from `--sahi-profile` -- does
+**not** change `yolo_confidence_threshold` in a saved config. The config's
+own confidence threshold always wins. If the profile's measured confidence
+disagrees with the config's saved threshold, the CLI logs a warning naming
+both values so the mismatch is visible rather than silent, but it still
+tracks with the config's threshold. If you want to adopt a profile's
+measured confidence, re-select the profile in the GUI and re-save the
+config -- there is no CLI flag that copies the profile's confidence into
+the config for you.
+
+### Known residual: other `advanced_config` keys stay machine-global
+
+This fix carries only the SAHI/merge/confidence-adjacent knobs a profile
+actually measures (tile size, overlap, object-tile fraction, trained body
+size, and merge policy/metric/threshold/backend) from the named profile
+into a CLI run. Every other key in `advanced_config.json` -- for example
+`obb_seg_*` segmentation settings -- is still read from the local
+machine's `advanced_config.json` and is not part of the saved per-video
+config. Running the same config on a different machine can still pick up
+different values for those keys.
+
 ## Timings are local measurements
 
 Every seconds-per-frame figure calibration reports -- in the candidate-cost
