@@ -36,6 +36,10 @@ from typing import Any, Callable, Sequence
 from hydra_suite.runtime.process_supervisor import WorkloadStillOwnedError
 from hydra_suite.runtime.resource_budget import AcceleratorKind
 from hydra_suite.training.contracts import TrainingHyperParams
+from hydra_suite.training.device_ids import (  # noqa: F401  (re-exported)
+    is_bare_ordinal_device,
+    normalize_cuda_device,
+)
 
 #: The largest batch Ultralytics 8.4.x actually PROFILES rather than
 #: extrapolates to. Anything above it is a linear-fit extrapolation, so we
@@ -171,51 +175,6 @@ def _read_child_report(path: Path) -> int | None:
     if isinstance(value, bool) or not isinstance(value, (int, float)):
         return None
     return int(value)
-
-
-def normalize_cuda_device(device: Any) -> str:
-    """Map Ultralytics' bare-ordinal device convention onto a torch device.
-
-    Ultralytics writes GPUs as ``"0"`` / ``"0,1"``. `_accelerator` in
-    :mod:`hydra_suite.training.ultralytics_supervisor` matches ``"mps"``,
-    ``"auto"`` and anything starting with ``"cuda"``, so a bare ``"0"`` falls
-    through to `AcceleratorKind.CPU`.
-
-    That misclassification -- host-only accounting and no CUDA UUID pin for
-    every ``device: "0"`` run -- is now fixed: `_accelerator` recognises bare
-    ordinals through `is_bare_ordinal_device` and resolves them with this same
-    helper. Because widening the classification newly subjects always-worked
-    runs to the accelerator admission gate, that gate is downgraded to a
-    warning for exactly those runs while
-    ``BARE_ORDINAL_ACCELERATOR_GATE_WARNING_PERIOD`` is set in
-    :mod:`hydra_suite.training.ultralytics_supervisor`.
-
-    Normalisation changes only what WE reason about; it never mutates
-    ``spec.device`` and never reaches the launch command, which must keep
-    Ultralytics' own convention.
-
-    Multi-GPU forms resolve against the FIRST device: Ultralytics' autobatch
-    profiles one device, and spreading it across several would overstate
-    capacity.
-    """
-
-    value = str(device or "auto").strip()
-    first = value.split(",")[0].strip()
-    if first.isdigit():
-        return f"cuda:{int(first)}"
-    return value
-
-
-def is_bare_ordinal_device(device: Any) -> bool:
-    """True for Ultralytics' bare-ordinal GPU convention (``"0"``, ``"0,1"``).
-
-    ``"cuda:0"``, ``"cpu"``, ``"mps"`` and ``"auto"`` are all False: those were
-    already classified correctly before bare ordinals were recognised, so they
-    are NOT part of the warning period.
-    """
-
-    first = str(device or "").strip().split(",")[0].strip()
-    return first.isdigit()
 
 
 def child_degraded_reasons(run_dir: Path | None) -> list[str]:

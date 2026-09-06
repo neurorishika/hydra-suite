@@ -849,10 +849,84 @@ def test_negative_cuda_indices_are_rejected(device):
         pf._visible_device_selector(device)
 
 
-@pytest.mark.parametrize("device", ["cpu", "mps"])
+@pytest.mark.parametrize("device", ["cpu", "mps", "tpu", "gpu0"])
 def test_non_cuda_device_selection_is_rejected_before_gpu_probe(device):
-    with pytest.raises(ValueError, match="CUDA"):
+    """SAM3 LoRA training is CUDA-only; only the WORDING of the refusal moved.
+
+    The message must name the real cause and the accepted spellings: the old
+    "No CUDA device is available" sent users to inspect a GPU that was fine.
+    """
+
+    with pytest.raises(ValueError, match="requires a CUDA device"):
         pf._visible_device_selector(device)
+    message = pf.sam3_device_form_error(device)
+    assert message is not None
+    assert "Accepted:" in message and "'0'" in message
+
+
+@pytest.mark.parametrize("device", ["auto", "cuda", "cuda:0", "0", "1", "0,1"])
+def test_accepted_device_forms_report_no_form_error(device):
+    assert pf.sam3_device_form_error(device) is None
+
+
+def _two_gpu_probe():
+    return subprocess.CompletedProcess(
+        [],
+        0,
+        stdout=(
+            "0, GPU-first, 0000:01:00.0, First, 8.9, 49140, 48000, Disabled\n"
+            "1, GPU-second, 0000:02:00.0, Second, 8.9, 49140, 47000, Disabled\n"
+        ),
+        stderr="",
+    )
+
+
+@pytest.mark.parametrize(
+    "ordinal, equivalent", [("0", "cuda:0"), ("1", "cuda:1"), ("0,1", "cuda:0")]
+)
+def test_bare_ordinal_devices_resolve_like_their_cuda_spelling(
+    monkeypatch, ordinal, equivalent
+):
+    """Ultralytics' bare ordinals are what DetectKit plans carry.
+
+    Refusing them killed four real SAM3 runs at preflight on a box with 47 GiB
+    free. A multi-GPU form resolves against the FIRST device.
+    """
+
+    monkeypatch.delenv("CUDA_VISIBLE_DEVICES", raising=False)
+    monkeypatch.delenv("CUDA_DEVICE_ORDER", raising=False)
+    monkeypatch.setattr(pf.subprocess, "run", lambda *_a, **_k: _two_gpu_probe())
+
+    observed = pf._probe_cuda_device(ordinal)
+
+    assert observed is not None
+    assert observed == pf._probe_cuda_device(equivalent)
+
+
+def test_multi_gpu_device_string_warns_that_only_the_first_gpu_is_used(tmp_path):
+    _write_coco(tmp_path)
+    spec = _spec(tmp_path)
+    spec.device = "0,1"
+
+    decision = _decision(spec)
+
+    assert any(
+        "names several GPUs" in warning and "cuda:0" in warning
+        for warning in decision.warnings
+    )
+
+
+def test_bare_ordinal_refusal_names_the_accepted_forms(tmp_path):
+    """A refused SPELLING must not masquerade as absent hardware."""
+
+    _write_coco(tmp_path)
+    spec = _spec(tmp_path)
+    spec.device = "cpu"
+
+    decision = pf.assess_preflight(spec, cuda_device=None, observation=_host())
+
+    assert any("Accepted:" in reason for reason in decision.refusals)
+    assert not any("No CUDA device is available" in r for r in decision.refusals)
 
 
 def test_cuda_visible_remapping_resolves_the_selected_physical_uuid(monkeypatch):

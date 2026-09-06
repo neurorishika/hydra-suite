@@ -429,3 +429,22 @@ def test_the_child_runs_as_a_real_subprocess_and_honours_the_argv_contract(tmp_p
         )
     else:  # no GPU here: it must die at the model/CUDA step, not on its argv
         assert "Traceback" in proc.stderr
+
+
+def test_device_helpers_are_the_shared_ones_not_a_second_parser():
+    """The helpers MOVED to `training.device_ids`; YOLO behaviour is unchanged.
+
+    SAM3's preflight now parses device strings with the same objects, so a
+    plan's ``device: "0"`` cannot mean one thing to a YOLO role and another to
+    a SAM3 role again.
+    """
+
+    from hydra_suite.training import device_ids, ultralytics_supervisor, yolo_autobatch
+    from hydra_suite.training.sam3_lora import preflight
+
+    assert yolo_autobatch.normalize_cuda_device is device_ids.normalize_cuda_device
+    assert yolo_autobatch.is_bare_ordinal_device is device_ids.is_bare_ordinal_device
+    assert (
+        ultralytics_supervisor.normalize_cuda_device is device_ids.normalize_cuda_device
+    )
+    assert preflight.normalize_cuda_device is device_ids.normalize_cuda_device

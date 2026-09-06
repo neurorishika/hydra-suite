@@ -42,13 +42,15 @@ from hydra_suite.runtime.resource_limits import (
     build_limited_launch,
 )
 from hydra_suite.runtime.safe_text import bounded_terminal_text
+from hydra_suite.training.device_ids import (
+    is_bare_ordinal_device,
+    normalize_cuda_device,
+)
 from hydra_suite.training.yolo_autobatch import (
     BATCH_RESOLUTION_FILENAME,
     ResolutionCanceled,
     batch_resolution_block,
     child_degraded_reasons,
-    is_bare_ordinal_device,
-    normalize_cuda_device,
     resolve_yolo_batch,
 )
 

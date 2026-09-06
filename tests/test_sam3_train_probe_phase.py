@@ -900,3 +900,31 @@ def test_selection_never_exceeds_what_the_analytic_estimate_permits(
     assert requirement.measured_extrapolated
     assert not requirement.decided_by_measurement
     assert requirement.measured_bytes == fitted_at_2
+
+
+def test_multi_gpu_device_string_is_announced_at_launch(tmp_path, monkeypatch):
+    """SAM3 pins ONE device by UUID; narrowing "0,1" must not be silent.
+
+    The durable `resource_preflight.json` warning is not enough on its own --
+    the user watching the run must see WHICH GPU it actually took.
+    """
+
+    harness = _install(monkeypatch, tmp_path)
+    spec = _spec(tmp_path, batch=-1)
+    spec.device = "0,1"
+
+    _run(harness, spec)
+
+    announced = [line for line in harness.logs if "names several GPUs" in line]
+    assert len(announced) == 1
+    assert "cuda:0" in announced[0] and "GPU-physical-0" in announced[0]
+
+
+def test_single_device_strings_are_not_announced_as_multi_gpu(tmp_path, monkeypatch):
+    harness = _install(monkeypatch, tmp_path)
+    spec = _spec(tmp_path, batch=-1)
+    spec.device = "0"
+
+    _run(harness, spec)
+
+    assert not any("names several GPUs" in line for line in harness.logs)

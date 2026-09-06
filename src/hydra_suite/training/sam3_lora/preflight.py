@@ -49,6 +49,11 @@ from hydra_suite.training.contracts import (
     SAM3_MAX_NEGATIVE_QUERIES_PER_TILE,
     sam3_prompt_text_error,
 )
+from hydra_suite.training.device_ids import (
+    CUDA_DEVICE_FORMS,
+    names_several_devices,
+    normalize_cuda_device,
+)
 from hydra_suite.utils.sam3_constants import PREDICTOR_IMGSZ
 
 from .polygons import validated_segmentation_polygons
@@ -605,11 +610,35 @@ def _parse_compute_capability(value: str) -> tuple[int, int]:
     return int(major_text), int(minor_text)
 
 
+def sam3_device_form_error(device: Any) -> Optional[str]:
+    """The user-facing reason a device STRING cannot name a SAM3 GPU, or None.
+
+    `_probe_cuda_device` deliberately collapses every failure to ``None``, so
+    on its own it cannot tell "this box has no GPU" from "this spelling was
+    refused". Callers that report a refusal ask this first: five of six SAM3
+    runs on the CUDA box died with "No CUDA device is available" while 47 GiB
+    sat free, purely because their device was the bare ordinal ``"0"``.
+    """
+
+    value = str(device or "auto").strip()
+    normalized = normalize_cuda_device(value)
+    if normalized in {"auto", "cuda"} or normalized.startswith("cuda:"):
+        return None
+    return (
+        f"SAM3 LoRA training requires a CUDA device; got {value!r}. "
+        f"Accepted: {CUDA_DEVICE_FORMS}."
+    )
+
+
 def _visible_device_selector(device: str) -> str:
-    if device not in {"auto", "cuda"} and not device.startswith("cuda:"):
-        raise ValueError(
-            f"SAM3 training requires an explicit CUDA runtime, not {device!r}"
-        )
+    # Bare ordinals ("0", "0,1") are the Ultralytics convention that DetectKit
+    # plans carry, and the same plan schema feeds a YOLO role and a SAM3 role.
+    # Multi-GPU forms resolve against the FIRST device (SAM3 pins one physical
+    # device by UUID); `assess_preflight` warns when that narrowing happens.
+    device = normalize_cuda_device(device)
+    form_error = sam3_device_form_error(device)
+    if form_error is not None:
+        raise ValueError(form_error)
     if (
         "CUDA_VISIBLE_DEVICES" in os.environ
         and not os.environ["CUDA_VISIBLE_DEVICES"].strip()
@@ -1413,6 +1442,15 @@ def assess_preflight(
     refusals = list(budget.refusals)
     warnings = list(budget.warnings)
 
+    if names_several_devices(getattr(spec, "device", "auto")):
+        # SAM3 pins ONE physical device by UUID, so a multi-GPU string is
+        # narrowed rather than honoured. Say so in the durable record.
+        warnings.append(
+            f"device {str(spec.device)!r} names several GPUs; SAM3 pins a single "
+            f"device and resolves it against {normalize_cuda_device(spec.device)} "
+            "alone rather than overstating the capacity of the set."
+        )
+
     if device_peak_decided_by_measurement:
         # A measurement is a raw envelope with no margin, so the measured
         # path keeps headroom explicitly. Applied ONCE, against raw free
@@ -1463,7 +1501,8 @@ def assess_preflight(
 
     if cuda_device is None:
         refusals.append(
-            "No CUDA device is available; SAM3 LoRA training requires CUDA."
+            sam3_device_form_error(getattr(spec, "device", "auto"))
+            or "No CUDA device is available; SAM3 LoRA training requires CUDA."
         )
     elif cuda_device.compute_capability[0] < 8:
         major, minor = cuda_device.compute_capability

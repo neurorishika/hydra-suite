@@ -35,6 +35,7 @@ from hydra_suite.runtime.resource_limits import (
     ProcessMemoryLimits,
     build_limited_launch,
 )
+from hydra_suite.training import device_ids
 
 from ..model_publish import get_models_root
 from . import autobatch
@@ -395,7 +396,18 @@ def _resolve_measured_batch(
     )
     if cuda_device is None:
         raise _BatchResolutionRefused(
-            "No CUDA device is available; SAM3 LoRA training requires CUDA."
+            preflight_module.sam3_device_form_error(getattr(spec, "device", "auto"))
+            or "No CUDA device is available; SAM3 LoRA training requires CUDA."
+        )
+    if device_ids.names_several_devices(getattr(spec, "device", "auto")):
+        # As loud as the other banners. SAM3 pins ONE physical device by UUID,
+        # so a multi-GPU string is narrowed, and a silent narrowing is exactly
+        # how a user concludes both GPUs are in use.
+        log_cb(
+            f"device: {str(spec.device)!r} names several GPUs, but SAM3 pins a "
+            f"single device -- this run uses {cuda_device.name} "
+            f"({device_ids.normalize_cuda_device(spec.device)}, {cuda_device.uuid}) "
+            "alone."
         )
 
     dataset = autobatch.sam3_dataset_density_profile(spec)
