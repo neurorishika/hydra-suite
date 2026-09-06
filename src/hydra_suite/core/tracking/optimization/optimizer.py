@@ -51,6 +51,7 @@ from hydra_suite.core.tracking.optimization.detection_config import (
 )
 from hydra_suite.core.tracking.optimization.production_replay import (
     ProductionReplayEvaluator,
+    sanitize_replay_tuning_config,
 )
 from hydra_suite.core.tracking.optimization.unlabeled_scoring import (
     CandidateEvaluation,
@@ -60,6 +61,8 @@ from hydra_suite.core.tracking.optimization.unlabeled_scoring import (
     build_train_validation_split,
     decide_heldout_baseline_protection,
     forward_backward_cycle_consistency,
+    global_slot_alignment,
+    output_sanity_metrics,
     pareto_ranks,
     partition_temporal_segments,
     recommend_dominating_candidate,
@@ -464,9 +467,29 @@ _PARAM_RANGES: Dict[str, tuple] = {
 
 _UNLABELED_METRIC_SPECS = (
     MetricSpec("cycle_loss", MetricDirection.MINIMIZE),
+    MetricSpec("cycle_observation_coverage", MetricDirection.MAXIMIZE),
     MetricSpec("coverage_loss", MetricDirection.MINIMIZE),
+    MetricSpec("worst_track_coverage_loss", MetricDirection.MINIMIZE),
     MetricSpec("fragmentation_loss", MetricDirection.MINIMIZE),
     MetricSpec("motion_roughness_loss", MetricDirection.MINIMIZE),
+    MetricSpec("collision_loss", MetricDirection.MINIMIZE),
+    MetricSpec("detection_excess_loss", MetricDirection.MINIMIZE),
+)
+
+_VALIDATION_REGION_COUNT = 4
+_MIN_REGION_FRAMES = 3
+_TEMPORAL_HORIZON_PARAMETERS = (
+    "LOST_THRESHOLD_FRAMES",
+    "KALMAN_MATURITY_AGE",
+)
+_PROPOSAL_METRICS = (
+    "cycle_loss",
+    "coverage",
+    "assignment",
+    "fragmentation",
+    "occlusion",
+    "velocity",
+    "crowding",
 )
 
 # Upper real-time limits mirror TrackerKit's seconds-based controls.  Dynamic
@@ -556,12 +579,16 @@ class TrackingOptimizerCore:
         self.start_frame = start_frame
         self.end_frame = end_frame
         self.base_params = base_params
-        self.tuning_config = tuning_config
+        (
+            self.tuning_config,
+            self.disabled_tuning_dimensions,
+        ) = sanitize_replay_tuning_config(tuning_config, base_params)
         self.n_trials = n_trials
         self.n_seeds = max(1, n_seeds)
         self.on_plateau = on_plateau  # "restart" | "stop"
         self.sampler_type = sampler_type  # "auto" | "gp" | "tpe"
         self._stop_requested = False
+        self._search_converged = False
         self.cache = None
 
     # Alias to module-level constant so existing internal references keep working.
@@ -850,17 +877,53 @@ class TrackingOptimizerCore:
 
         return trial_params
 
+    def _temporal_validation_horizon(self) -> int:
+        """Largest temporal effect horizon represented by the active search."""
+
+        horizon = _MIN_REGION_FRAMES
+        for name in _TEMPORAL_HORIZON_PARAMETERS:
+            if not self.tuning_config.get(name):
+                continue
+            _, _, high = self._search_range(name)
+            horizon = max(horizon, int(math.ceil(high)))
+        return horizon
+
+    def _minimum_validation_frames(self) -> int:
+        """Frames needed for four paired regions with usable temporal evidence."""
+
+        return _VALIDATION_REGION_COUNT * self._temporal_validation_horizon()
+
+    def _validation_support_reason(
+        self, validation_bounds: tuple[int, int]
+    ) -> str | None:
+        """Return why a held-out tail is insufficient for temporal promotion."""
+
+        start_frame, end_frame = validation_bounds
+        frame_count = end_frame - start_frame + 1
+        required = self._minimum_validation_frames()
+        if frame_count < required:
+            return (
+                "held-out temporal support is inadequate: requires at least "
+                f"{required} frames for {_VALIDATION_REGION_COUNT} paired regions "
+                f"at a {self._temporal_validation_horizon()}-frame horizon "
+                f"(found {frame_count})"
+            )
+        return None
+
     def _search_and_validation_bounds(
         self,
     ) -> tuple[tuple[int, int], tuple[int, int] | None]:
         """Reserve a chronological tail for held-out production replay."""
 
         frame_count = self.end_frame - self.start_frame + 1
-        if frame_count < 8:
-            return (self.start_frame, self.end_frame), None
+        minimum_validation = self._minimum_validation_frames()
+        minimum_train = max(8, self._temporal_validation_horizon())
         gap_frames = 1 if frame_count >= 12 else 0
+        if frame_count < minimum_train + gap_frames + minimum_validation:
+            return (self.start_frame, self.end_frame), None
+        validation_fraction = max(0.25, minimum_validation / frame_count)
         split = build_train_validation_split(
-            frame_count, validation_fraction=0.25, gap_frames=gap_frames
+            frame_count, validation_fraction=validation_fraction, gap_frames=gap_frames
         )
         train = split.train[0]
         validation = split.validation[0]
@@ -922,41 +985,84 @@ class TrackingOptimizerCore:
         forward: np.ndarray,
         backward: np.ndarray,
         body_scale: float,
+        *,
+        detection_counts: np.ndarray | None = None,
     ) -> list[CandidateEvaluation]:
-        """Build repeated temporal-region measurements for one candidate."""
+        """Build paired region measurements using one global slot alignment.
 
-        segment_count = min(3, len(forward))
+        Temporal events are assigned to the region containing their final
+        frame, so transition/triplet evidence at region boundaries remains in
+        the validation data rather than disappearing with a bare array slice.
+        """
+
+        try:
+            slot_alignment = global_slot_alignment(
+                forward,
+                backward,
+                backward_is_reverse_chronological=False,
+                spatial_scale=body_scale,
+            )
+        except ValueError:
+            slot_alignment = None
+
+        segment_count = min(_VALIDATION_REGION_COUNT, len(forward))
         evaluations: list[CandidateEvaluation] = []
         for index, segment in enumerate(
             partition_temporal_segments(len(forward), segment_count)
         ):
-            forward_segment = forward[segment.start : segment.stop]
-            backward_segment = backward[segment.start : segment.stop]
             forward_quality = trajectory_quality_metrics(
-                forward_segment, spatial_scale=body_scale
+                forward, spatial_scale=body_scale, segment=segment
             )
             backward_quality = trajectory_quality_metrics(
-                backward_segment, spatial_scale=body_scale
+                backward, spatial_scale=body_scale, segment=segment
             )
-            try:
-                cycle_loss = forward_backward_cycle_consistency(
-                    forward_segment,
-                    backward_segment,
-                    backward_is_reverse_chronological=False,
-                    spatial_scale=body_scale,
-                ).mean_normalized_error
-            except ValueError:
-                # No shared observation is strong evidence against automatic
-                # promotion, while remaining finite for deterministic ranking.
+            forward_sanity = output_sanity_metrics(
+                forward,
+                spatial_scale=body_scale,
+                detection_counts=detection_counts,
+                segment=segment,
+            )
+            backward_sanity = output_sanity_metrics(
+                backward,
+                spatial_scale=body_scale,
+                detection_counts=detection_counts,
+                segment=segment,
+            )
+            if slot_alignment is None:
                 cycle_loss = 10.0
+                cycle_observation_coverage = 0.0
+            else:
+                try:
+                    cycle = forward_backward_cycle_consistency(
+                        forward[segment.start : segment.stop],
+                        backward[segment.start : segment.stop],
+                        backward_is_reverse_chronological=False,
+                        spatial_scale=body_scale,
+                        slot_alignment=slot_alignment,
+                    )
+                    cycle_loss = min(float(cycle.mean_normalized_error), 10.0)
+                    cycle_observation_coverage = float(
+                        cycle.shared_observation_coverage
+                    )
+                except ValueError:
+                    # No region-level shared evidence is strong evidence
+                    # against automatic promotion, while remaining finite for
+                    # deterministic ranking and diagnostics.
+                    cycle_loss = 10.0
+                    cycle_observation_coverage = 0.0
             evaluations.append(
                 CandidateEvaluation(
                     candidate_id,
                     {
                         "cycle_loss": min(float(cycle_loss), 10.0),
+                        "cycle_observation_coverage": cycle_observation_coverage,
                         "coverage_loss": max(
                             float(forward_quality.coverage_loss),
                             float(backward_quality.coverage_loss),
+                        ),
+                        "worst_track_coverage_loss": max(
+                            float(forward_sanity.worst_track_coverage_loss),
+                            float(backward_sanity.worst_track_coverage_loss),
                         ),
                         "fragmentation_loss": max(
                             float(forward_quality.fragmentation_loss),
@@ -969,11 +1075,218 @@ class TrackingOptimizerCore:
                             ),
                             10.0,
                         ),
+                        "collision_loss": max(
+                            float(forward_sanity.collision_loss),
+                            float(backward_sanity.collision_loss),
+                        ),
+                        "detection_excess_loss": max(
+                            float(forward_sanity.detection_excess_loss),
+                            float(backward_sanity.detection_excess_loss),
+                        ),
                     },
                     perturbation_id=f"temporal-region-{index + 1}",
                 )
             )
         return evaluations
+
+    def _validation_detection_counts(
+        self, params: Dict[str, Any], start_frame: int, end_frame: int
+    ) -> np.ndarray | None:
+        """Return candidate-filtered source counts as a false-positive risk signal.
+
+        These counts are not labelled false positives.  They are only a
+        conservative guard against promoting a candidate that admits a large
+        excess of source detections.  A diagnostic failure remains neutral so
+        it cannot fabricate a source-level claim when the cache is unavailable
+        in a test or an injected replay implementation.
+        """
+
+        if self.cache is None:
+            return None
+
+        class _ParamsFilter:
+            def __init__(self, values: Dict[str, Any]) -> None:
+                self.params = values
+                self.inference_config = inference_config_for_optimizer_params(values)
+
+        try:
+            detector = _ParamsFilter(params)
+            roi_mask = params.get("ROI_MASK", None)
+            return np.asarray(
+                [
+                    len(
+                        _filter_cached_detections(
+                            detector, self.cache, frame, roi_mask
+                        )[0]
+                    )
+                    for frame in range(start_frame, end_frame + 1)
+                ],
+                dtype=np.int64,
+            )
+        except Exception:
+            logger.warning(
+                "Optimizer: unable to calculate source detection-excess safeguard",
+                exc_info=True,
+            )
+            return None
+
+    def _candidate_change_cost(self, result: OptimizationResult) -> float:
+        """Normalized distance from current settings for deterministic tie breaks."""
+
+        distances: list[float] = []
+        for name, value in result.params.items():
+            if name not in self._PARAM_RANGES:
+                continue
+            ptype, low, high = self._search_range(name)
+            baseline = self.base_params.get(name, self._SEED_DEFAULTS.get(name, low))
+            try:
+                if ptype == "log_float":
+                    if float(value) <= 0 or float(baseline) <= 0:
+                        continue
+                    distance = abs(
+                        np.log(float(value)) - np.log(float(baseline))
+                    ) / max(np.log(float(high)) - np.log(float(low)), 1e-12)
+                else:
+                    distance = abs(float(value) - float(baseline)) / max(
+                        float(high) - float(low), 1e-12
+                    )
+            except (TypeError, ValueError):
+                continue
+            distances.append(float(np.clip(distance, 0.0, 1.0)))
+        return float(np.mean(distances)) if distances else 0.0
+
+    def _select_validation_shortlist(
+        self, candidates: list[OptimizationResult], *, limit: int = 5
+    ) -> list[OptimizationResult]:
+        """Select a normalized, diverse proposal set for expensive replay.
+
+        Proposal composite scores mix quantities with unlike scales, especially
+        cycle loss.  Replay selection therefore normalizes each proposal signal,
+        includes per-metric extremes, then fills remaining slots by metric and
+        parameter-space diversity.  This is a search allocation heuristic, not
+        an accuracy oracle.
+        """
+
+        if limit < 1:
+            raise ValueError("shortlist limit must be positive")
+        if len(candidates) <= limit:
+            return sorted(candidates, key=lambda item: item.candidate_id)
+
+        values = np.asarray(
+            [
+                [
+                    float(item.sub_scores.get(name, item.score))
+                    for name in _PROPOSAL_METRICS
+                ]
+                for item in candidates
+            ],
+            dtype=float,
+        )
+        values[~np.isfinite(values)] = np.nan
+        normalized = np.zeros_like(values)
+        for column in range(values.shape[1]):
+            column_values = values[:, column]
+            finite = column_values[np.isfinite(column_values)]
+            if not finite.size:
+                normalized[:, column] = 1.0
+                continue
+            low = float(np.min(finite))
+            high = float(np.max(finite))
+            if np.isclose(low, high):
+                normalized[:, column] = 0.0
+            else:
+                normalized[:, column] = np.where(
+                    np.isfinite(column_values),
+                    (column_values - low) / (high - low),
+                    1.0,
+                )
+        mean_normalized = np.mean(normalized, axis=1)
+
+        def _best_index(indices: list[int]) -> int:
+            return min(
+                indices,
+                key=lambda index: (
+                    float(mean_normalized[index]),
+                    float(candidates[index].score),
+                    candidates[index].candidate_id,
+                ),
+            )
+
+        selected: list[int] = [_best_index(list(range(len(candidates))))]
+        # Preserve each diagnostic's best observed proposal instead of letting
+        # the historical unnormalized scalar exclude it before replay.
+        for column in range(normalized.shape[1]):
+            if len(selected) >= limit:
+                break
+            best_value = float(np.min(normalized[:, column]))
+            contenders = [
+                index
+                for index in range(len(candidates))
+                if np.isclose(normalized[index, column], best_value)
+            ]
+            choice = _best_index(contenders)
+            if choice not in selected:
+                selected.append(choice)
+
+        while len(selected) < limit:
+            remaining = [
+                index for index in range(len(candidates)) if index not in selected
+            ]
+            if not remaining:
+                break
+
+            def _diversity_key(index: int) -> tuple[float, float, float, str]:
+                metric_distance = min(
+                    float(np.linalg.norm(normalized[index] - normalized[chosen]))
+                    for chosen in selected
+                )
+                parameter_distance = min(
+                    self._proposal_parameter_distance(
+                        candidates[index], candidates[chosen]
+                    )
+                    for chosen in selected
+                )
+                return (
+                    metric_distance + 0.25 * parameter_distance,
+                    -float(mean_normalized[index]),
+                    -float(candidates[index].score),
+                    candidates[index].candidate_id,
+                )
+
+            # ``max`` keeps larger diversity first; reverse the remaining
+            # quality fields so lower normalized loss wins exact ties.
+            selected.append(max(remaining, key=_diversity_key))
+        return [candidates[index] for index in selected]
+
+    def _proposal_parameter_distance(
+        self, left: OptimizationResult, right: OptimizationResult
+    ) -> float:
+        distances: list[float] = []
+        for name in sorted(set(left.params) | set(right.params)):
+            if name not in self._PARAM_RANGES:
+                continue
+            ptype, low, high = self._search_range(name)
+            left_value = left.params.get(
+                name, self.base_params.get(name, self._SEED_DEFAULTS.get(name, low))
+            )
+            right_value = right.params.get(
+                name, self.base_params.get(name, self._SEED_DEFAULTS.get(name, low))
+            )
+            try:
+                if ptype == "log_float":
+                    if float(left_value) <= 0 or float(right_value) <= 0:
+                        continue
+                    distance = abs(
+                        np.log(float(left_value)) - np.log(float(right_value))
+                    ) / max(np.log(float(high)) - np.log(float(low)), 1e-12)
+                else:
+                    distance = abs(float(left_value) - float(right_value)) / max(
+                        float(high) - float(low), 1e-12
+                    )
+            except (TypeError, ValueError):
+                continue
+            distances.append(float(np.clip(distance, 0.0, 1.0)))
+        return float(np.mean(distances)) if distances else 0.0
 
     def _production_validate_shortlist(
         self,
@@ -986,24 +1299,35 @@ class TrackingOptimizerCore:
         baseline.recommended = True
         baseline.recommendation_reason = "current settings retained by default"
         if validation_bounds is None:
-            baseline.recommendation_reason = "current settings retained: frame range is too short for held-out validation"
+            baseline.recommendation_reason = (
+                "current settings retained: frame range is too short for "
+                "adequate held-out temporal validation"
+            )
             return
         if self._stop_requested:
             baseline.recommendation_reason = (
                 "current settings retained: held-out validation was cancelled"
             )
             return
+        support_reason = self._validation_support_reason(validation_bounds)
+        if support_reason is not None:
+            baseline.recommendation_reason = (
+                "current settings retained: " + support_reason
+            )
+            return
 
         # Validate only a bounded shortlist through the much heavier production
         # loop.  The baseline is always included exactly as configured.
         candidates = [result for result in results if not result.is_baseline]
-        shortlist = [baseline, *sorted(candidates, key=lambda item: item.score)[:5]]
+        shortlist = [baseline, *self._select_validation_shortlist(candidates)]
         start_frame, end_frame = validation_bounds
         evaluator = ProductionReplayEvaluator(
             self.video_path,
             self.detection_cache_path,
             start_frame,
             end_frame,
+            pre_roll_start=self.start_frame,
+            cache_provenance_params=self.base_params,
             should_stop=lambda: self._stop_requested,
         )
         all_evaluations: list[CandidateEvaluation] = []
@@ -1018,9 +1342,19 @@ class TrackingOptimizerCore:
                 )
             params = dict(self.base_params)
             params.update(result.params)
+            detection_counts = self._validation_detection_counts(
+                params, start_frame, end_frame
+            )
             forward = evaluator.run(params, reverse=False)
+            if self._stop_requested:
+                break
+            if not forward.success:
+                result.recommendation_reason = "production validation failed" + (
+                    f": {forward.error}" if forward.error else ""
+                )
+                continue
             backward = evaluator.run(params, reverse=True)
-            if not forward.success or not backward.success:
+            if not backward.success:
                 messages = [value for value in (forward.error, backward.error) if value]
                 result.recommendation_reason = "production validation failed" + (
                     f": {'; '.join(messages)}" if messages else ""
@@ -1037,6 +1371,7 @@ class TrackingOptimizerCore:
                     forward.positions,
                     backward.positions,
                     body_scale,
+                    detection_counts=detection_counts,
                 )
             )
             validated_results.append(result)
@@ -1078,7 +1413,14 @@ class TrackingOptimizerCore:
             )
 
         recommendation = recommend_dominating_candidate(
-            scores, baseline.candidate_id, _UNLABELED_METRIC_SPECS
+            scores,
+            baseline.candidate_id,
+            _UNLABELED_METRIC_SPECS,
+            candidate_change_costs={
+                result.candidate_id: self._candidate_change_cost(result)
+                for result in validated_results
+                if not result.is_baseline
+            },
         )
         if recommendation.candidate_id is None:
             baseline.recommendation_reason = (
@@ -1095,6 +1437,7 @@ class TrackingOptimizerCore:
             minimum_improvement=float(
                 self.base_params.get("AUTOTUNE_MIN_HELDOUT_IMPROVEMENT", 0.01)
             ),
+            selection_family_size=max(1, len(validated_results) - 1),
         )
         if not decision.accepted:
             baseline.recommendation_reason = (
@@ -1193,6 +1536,7 @@ class TrackingOptimizerCore:
         def objective(trial):
             nonlocal _no_improve_count, _best_score_seen
             if self._stop_requested:
+                study.stop()
                 raise optuna.TrialPruned()
 
             trial_params = self._suggest_trial_params(trial, scaled_body_size)
@@ -1232,7 +1576,11 @@ class TrackingOptimizerCore:
                             study.enqueue_trial(restart_pt)
                         _no_improve_count = 0
                     else:
-                        self._stop_requested = True
+                        # Convergence is a normal search terminal condition;
+                        # it must not masquerade as an explicit user cancel
+                        # and skip the held-out production validation below.
+                        self._search_converged = True
+                        study.stop()
 
             return score
 

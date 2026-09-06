@@ -11,11 +11,13 @@ from hydra_suite.core.tracking.optimization.unlabeled_scoring import (
     MetricDirection,
     MetricEstimate,
     MetricSpec,
+    TemporalSegment,
     aggregate_candidate_evaluations,
     build_train_validation_split,
     decide_heldout_baseline_protection,
     dominates,
     forward_backward_cycle_consistency,
+    global_slot_alignment,
     pareto_frontier,
     pareto_ranks,
     partition_temporal_segments,
@@ -109,6 +111,59 @@ def test_cycle_consistency_ignores_missing_tracks_and_uses_given_scale() -> None
     assert result.mean_normalized_error == pytest.approx(1.75)
 
 
+def test_cycle_assignment_prioritizes_sufficient_overlap_before_error() -> None:
+    """One-frame accidental matches must not hide longer matched evidence."""
+
+    forward = np.full((12, 2, 2), np.nan)
+    backward = np.full_like(forward, np.nan)
+
+    # Slot zero exists in the first half and slot one in the second.  Each
+    # backwards slot has a long, slightly displaced compatible interval plus
+    # one exact accidental overlap with the other forward slot.  Mean-only
+    # assignment chooses the two one-frame matches and reports zero loss.
+    forward[:6, 0] = np.column_stack([np.arange(6, dtype=float), np.zeros(6)])
+    forward[6:, 1] = np.column_stack([100.0 + np.arange(6, dtype=float), np.zeros(6)])
+    backward[:6, 0] = forward[:6, 0] + np.array([1.0, 0.0])
+    backward[6, 0] = forward[6, 1]
+    backward[5, 1] = forward[5, 0]
+    backward[6:, 1] = forward[6:, 1] + np.array([1.0, 0.0])
+
+    alignment = global_slot_alignment(
+        forward,
+        backward,
+        backward_is_reverse_chronological=False,
+        spatial_scale=1.0,
+    )
+    result = forward_backward_cycle_consistency(
+        forward,
+        backward,
+        backward_is_reverse_chronological=False,
+        spatial_scale=1.0,
+        slot_alignment=alignment,
+    )
+
+    assert alignment.backward_for_forward == (0, 1)
+    assert alignment.shared_observations == 12
+    assert result.valid_observations == 12
+    assert result.mean_normalized_error == pytest.approx(1.0)
+
+
+def test_temporal_region_metrics_keep_transition_evidence_at_block_boundary() -> None:
+    positions = np.zeros((6, 1, 2), dtype=float)
+    positions[3:] = np.nan
+
+    second_region = trajectory_quality_metrics(
+        positions,
+        spatial_scale=1.0,
+        segment=TemporalSegment(3, 6),
+    )
+
+    # The only observed/present transition occurs from frame 2 to frame 3,
+    # exactly at the region boundary.  Scoring a bare 3:6 slice loses it.
+    assert second_region.fragmentation_loss == pytest.approx(1.0 / 3.0)
+    assert second_region.temporal_transition_count == 3
+
+
 def test_trajectory_quality_uses_only_observed_positions_and_penalizes_missingness() -> (
     None
 ):
@@ -190,6 +245,7 @@ def test_aggregation_is_deterministic_and_describes_perturbation_stability() -> 
     assert noisy.metrics["cycle_loss"].mean == pytest.approx(2.0)
     assert noisy.metrics["cycle_loss"].std > stable.metrics["cycle_loss"].std
     assert noisy.mean_relative_spread > stable.mean_relative_spread
+    assert set(noisy.perturbation_metrics) == {"a", "b"}
 
 
 def test_pareto_methods_preserve_metric_monotonicity_without_scalar_tradeoffs() -> None:
@@ -228,6 +284,54 @@ def test_recommendation_never_promotes_a_candidate_that_worsens_a_loss() -> None
     assert rejected.candidate_id is None
     assert accepted.candidate_id == "safe"
     assert "looks_better_by_sum" not in accepted.eligible_candidate_ids
+
+
+def test_shared_cycle_coverage_is_a_non_regression_safeguard() -> None:
+    specs = (
+        MetricSpec("cycle_loss", MetricDirection.MINIMIZE),
+        MetricSpec("cycle_observation_coverage", MetricDirection.MAXIMIZE),
+    )
+    baseline = CandidateScore(
+        "baseline",
+        {
+            "cycle_loss": MetricEstimate(1.0, 0.0, 1),
+            "cycle_observation_coverage": MetricEstimate(1.0, 0.0, 1),
+        },
+        0.0,
+    )
+    sparse = CandidateScore(
+        "sparse",
+        {
+            "cycle_loss": MetricEstimate(0.0, 0.0, 1),
+            "cycle_observation_coverage": MetricEstimate(0.25, 0.0, 1),
+        },
+        0.0,
+    )
+
+    recommendation = recommend_dominating_candidate(
+        (baseline, sparse), "baseline", specs
+    )
+
+    assert recommendation.candidate_id is None
+
+
+def test_recommendation_collapses_metric_equivalent_safe_candidates() -> None:
+    baseline = _score("baseline", 5.0, 5.0)
+    larger_change = _score("larger_change", 4.0, 4.0)
+    smaller_change = _score("smaller_change", 4.0, 4.0)
+
+    recommendation = recommend_dominating_candidate(
+        (baseline, larger_change, smaller_change),
+        "baseline",
+        LOSS_SPECS,
+        candidate_change_costs={"larger_change": 1.0, "smaller_change": 0.1},
+    )
+
+    assert recommendation.candidate_id == "smaller_change"
+    assert set(recommendation.eligible_candidate_ids) == {
+        "larger_change",
+        "smaller_change",
+    }
 
 
 def test_baseline_protection_rejects_uncertain_or_insufficient_heldout_gain() -> None:
@@ -274,6 +378,52 @@ def test_baseline_protection_rejects_uncertain_or_insufficient_heldout_gain() ->
     assert not rejected.accepted
     assert "cycle_loss" in rejected.reason
     assert accepted.accepted
+
+
+def test_baseline_protection_uses_paired_regions_and_requires_enough_evidence() -> None:
+    evaluations = []
+    for index, baseline_cycle in enumerate((0.1, 0.2, 0.3, 0.4), start=1):
+        perturbation_id = f"region-{index}"
+        evaluations.extend(
+            (
+                CandidateEvaluation(
+                    "baseline",
+                    {"cycle_loss": baseline_cycle, "fragment_loss": 1.0},
+                    perturbation_id,
+                ),
+                CandidateEvaluation(
+                    "candidate",
+                    {
+                        "cycle_loss": baseline_cycle - 0.1,
+                        "fragment_loss": 1.0,
+                    },
+                    perturbation_id,
+                ),
+            )
+        )
+    baseline, candidate = aggregate_candidate_evaluations(evaluations, LOSS_SPECS)
+
+    paired = decide_heldout_baseline_protection(
+        baseline,
+        candidate,
+        LOSS_SPECS,
+        primary_metric="cycle_loss",
+        minimum_improvement=0.05,
+    )
+    insufficient = decide_heldout_baseline_protection(
+        aggregate_candidate_evaluations(evaluations[:-2], LOSS_SPECS)[0],
+        aggregate_candidate_evaluations(evaluations[:-2], LOSS_SPECS)[1],
+        LOSS_SPECS,
+        primary_metric="cycle_loss",
+        minimum_improvement=0.05,
+    )
+
+    # The marginal values vary, but each paired region improves by exactly
+    # 0.1.  Treating the two samples as independent spuriously invents error.
+    assert paired.accepted
+    assert paired.conservative_improvements["cycle_loss"] == pytest.approx(0.1)
+    assert not insufficient.accepted
+    assert "insufficient paired" in insufficient.reason
 
 
 def test_inputs_are_validated_instead_of_turning_missing_evidence_into_a_score() -> (
