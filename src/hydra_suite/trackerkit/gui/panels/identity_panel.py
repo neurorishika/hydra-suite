@@ -864,6 +864,14 @@ class IdentityPanel(QWidget):
             )
 
             self._non_identifying_classes: list[str] = []
+            # A saved session's scoring_mode, pinned so reloading a config
+            # reproduces the run it recorded. ``None`` means "no session value
+            # -- derive from the model registry", which is the state for a
+            # fresh row and after the user picks a different model.
+            self._scoring_mode_override: str | None = None
+            # to_config() runs on every build_config_dict()/get_parameters_dict();
+            # warn once per row rather than on every call.
+            self._scoring_mode_conflict_logged = False
             self.btn_non_identifying = QPushButton("Non-identifying classes…")
             self.btn_non_identifying.setToolTip(
                 "Classes that do not identify an individual (e.g. 'notag').\n"
@@ -968,6 +976,16 @@ class IdentityPanel(QWidget):
 
         def _on_model_selected(self, index: int):
             rel_path = self.combo_model.itemData(index)
+            # Drop any pinned session scoring_mode as soon as the USER picks a
+            # model: the pin belongs to the model it was saved against, and a
+            # different model brings its own. Cleared before the early returns
+            # below -- the discovered-model annotation path returns without
+            # reaching _sync_model_ui, and would otherwise keep the old pin.
+            # ``activated`` fires only on user interaction, never on a
+            # programmatic setCurrentIndex during a config restore.
+            if rel_path and rel_path != "__add_new__":
+                self._scoring_mode_override = None
+                self._scoring_mode_conflict_logged = False
             if rel_path == "__add_new__":
                 self._main_window._identity_panel._handle_add_new_cnn_identity_model()
                 self._populate_model_combo()
@@ -1067,9 +1085,46 @@ class IdentityPanel(QWidget):
                 "unique_identifier": self.chk_unique_identifier.isChecked(),
                 "factor_names": [str(f) for f in (meta.get("factor_names") or [])],
                 "non_identifying_classes": list(self._non_identifying_classes),
-                "scoring_mode": str(meta.get("scoring_mode", "atomic")),
+                "scoring_mode": self._effective_scoring_mode(meta),
                 "rel_path": rel_path,
             }
+
+        def _effective_scoring_mode(self, meta: dict) -> str:
+            """Return the scoring_mode this row should run with.
+
+            A saved config's value wins over the registry's. ``scoring_mode``
+            decides how a multi-head classifier's per-factor posteriors are
+            aggregated (atomic tuple compare vs per-head averaging, see
+            ``core/tracking/identity/evidence.py``), so it changes identity
+            assignment. Before this, ``to_config`` always re-derived it from
+            the registry entry and ``load_from_config`` never read it, so a
+            config saying ``per_head_average`` silently RAN as ``atomic`` in
+            the GUI while the CLI (which reads the config,
+            ``core/inference/config.py``) honoured it -- and the next save
+            overwrote the user's value for good.
+
+            The registry stays authoritative for a row the user just pointed
+            at a different model: ``_on_model_selected`` clears the override,
+            so a new model brings its own mode rather than inheriting the
+            previous one's.
+            """
+            registry_mode = str(meta.get("scoring_mode", "atomic"))
+            if not self._scoring_mode_override:
+                return registry_mode
+            if (
+                self._scoring_mode_override != registry_mode
+                and not self._scoring_mode_conflict_logged
+            ):
+                self._scoring_mode_conflict_logged = True
+                logger.warning(
+                    "CNN classifier %r: the loaded session pins scoring_mode=%r "
+                    "but the model registry records %r; running the session's "
+                    "value. Re-select the model to adopt the registry's.",
+                    str(meta.get("classification_label", "") or "cnn_identity"),
+                    self._scoring_mode_override,
+                    registry_mode,
+                )
+            return self._scoring_mode_override
 
         def load_from_config(self, cfg: dict):
             """Populate from a config dict entry."""
@@ -1111,6 +1166,15 @@ class IdentityPanel(QWidget):
             self._non_identifying_classes = [
                 str(c) for c in (cfg.get("non_identifying_classes") or [])
             ]
+            # Pin the session's scoring_mode (see _effective_scoring_mode).
+            # Unknown values are ignored rather than pinned: the backend
+            # rejects anything outside this set
+            # (core/individual/classification/cnn.py).
+            saved_mode = str(cfg.get("scoring_mode", "") or "")
+            self._scoring_mode_override = (
+                saved_mode if saved_mode in ("atomic", "per_head_average") else None
+            )
+            self._scoring_mode_conflict_logged = False
 
         def set_realtime_batch_cap(self, max_animals: int, realtime_enabled: bool):
             """Apply realtime batch caps for this classifier row."""
