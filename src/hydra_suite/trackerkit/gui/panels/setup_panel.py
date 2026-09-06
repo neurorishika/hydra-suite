@@ -336,6 +336,61 @@ class SetupPanel(QWidget):
         self.chk_batch_keystone_override.setChecked(False)
         v_container.addWidget(self.chk_batch_keystone_override)
 
+        # --- Parallel fan-out (one child process per GPU) ---
+        from hydra_suite.runtime.cuda_devices import list_cuda_devices
+
+        cuda_devices = list_cuda_devices()
+        self.chk_batch_parallel = QCheckBox(
+            "Run videos in parallel (one process per GPU)"
+        )
+        self.chk_batch_parallel.setToolTip(
+            "Each video runs as its own headless child process pinned to one\n"
+            "GPU (CUDA_VISIBLE_DEVICES). Output is identical to sequential\n"
+            "batch tracking. No live preview while running."
+        )
+        self.chk_batch_parallel.setChecked(
+            bool(self._main_window.config.batch_parallel)
+        )
+        self.chk_batch_parallel.toggled.connect(
+            self._main_window._on_batch_parallel_changed
+        )
+        v_container.addWidget(self.chk_batch_parallel)
+
+        self.container_batch_parallel = QWidget()
+        h_par = QHBoxLayout(self.container_batch_parallel)
+        h_par.setContentsMargins(0, 0, 0, 0)
+        h_par.addWidget(QLabel("Jobs:"))
+        self.spin_batch_parallel_jobs = QSpinBox()
+        self.spin_batch_parallel_jobs.setRange(1, 64)
+        default_jobs = int(self._main_window.config.batch_parallel_jobs) or max(
+            1, len(cuda_devices)
+        )
+        self.spin_batch_parallel_jobs.setValue(default_jobs)
+        self.spin_batch_parallel_jobs.setToolTip("Maximum videos running at once.")
+        self.spin_batch_parallel_jobs.valueChanged.connect(
+            self._main_window._on_batch_parallel_changed
+        )
+        h_par.addWidget(self.spin_batch_parallel_jobs)
+        self.lbl_batch_parallel_gpus = QLabel("GPUs:")
+        h_par.addWidget(self.lbl_batch_parallel_gpus)
+        self.edit_batch_parallel_gpus = QLineEdit(
+            str(self._main_window.config.batch_parallel_gpus or "auto")
+        )
+        self.edit_batch_parallel_gpus.setPlaceholderText("auto, 0-3, 0,2, or GPU-uuid")
+        self.edit_batch_parallel_gpus.setToolTip(
+            f"{len(cuda_devices)} CUDA device(s) detected by nvidia-smi.\n"
+            "'auto' = all of them."
+        )
+        self.edit_batch_parallel_gpus.editingFinished.connect(
+            self._main_window._on_batch_parallel_changed
+        )
+        h_par.addWidget(self.edit_batch_parallel_gpus)
+        has_cuda = bool(cuda_devices)
+        self.lbl_batch_parallel_gpus.setVisible(has_cuda)
+        self.edit_batch_parallel_gpus.setVisible(has_cuda)
+        self.container_batch_parallel.setVisible(self.chk_batch_parallel.isChecked())
+        v_container.addWidget(self.container_batch_parallel)
+
         vl_batch.addWidget(self.container_batch)
         self.container_batch.setVisible(False)  # Default hidden
 

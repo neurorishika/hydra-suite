@@ -1588,6 +1588,16 @@ class MainWindow(QMainWindow):
             fp, skip_config_load=skip_config_load, _probe=_probe
         )
 
+    def _on_batch_parallel_changed(self, *_args) -> None:
+        """Mirror the Batch › Parallel controls into session state."""
+        panel = self._setup_panel
+        self.config.batch_parallel = bool(panel.chk_batch_parallel.isChecked())
+        self.config.batch_parallel_jobs = int(panel.spin_batch_parallel_jobs.value())
+        self.config.batch_parallel_gpus = (
+            panel.edit_batch_parallel_gpus.text().strip() or "auto"
+        )
+        panel.container_batch_parallel.setVisible(self.config.batch_parallel)
+
     def _on_batch_mode_toggled(self, checked):
         """Handle showing/hiding batch controls and syncing keystone video."""
         self._setup_panel.lbl_batch_warning.setVisible(checked)
