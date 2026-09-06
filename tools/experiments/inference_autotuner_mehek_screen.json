@@ -168,6 +168,14 @@
       "config": {"detection_batch_size": 1, "pipeline_depth": 1, "slice_enabled": true, "slice_geometry_mode": "auto_model", "enable_pose_extractor": false, "enable_headtail_orientation": false, "enable_identity_analysis": false, "cnn_classifiers": []},
       "advanced": {"slice_tile_batch_size": 64, "slice_tile_batch_autotune": false, "slice_memory_budget_mib": 256}
     },
+    {
+      "label": "ant-sahi-current-auto",
+      "config_path": "../equivalence/fixtures/configs/ant_cnn_identity.json",
+      "video_path": "../equivalence/fixtures/clips/ant_cnn_identity.mp4",
+      "runtime": "gpu",
+      "config": {"detection_batch_size": 1, "pipeline_depth": 1, "slice_enabled": true, "slice_geometry_mode": "auto_model", "enable_pose_extractor": false, "enable_headtail_orientation": false, "enable_identity_analysis": false, "cnn_classifiers": []},
+      "advanced": {"slice_tile_batch_size": 16, "slice_tile_batch_autotune": true, "slice_memory_budget_mib": 256}
+    },
 
     {
       "label": "ant-pose-b1",
