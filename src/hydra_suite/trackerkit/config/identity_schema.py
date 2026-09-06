@@ -18,6 +18,15 @@ from typing import Any, Callable
 class SlotLockConfig:
     swap_min_frames: int = 8
     swap_conf_margin: float = 0.2
+    # Defaults below match the values online.py hardcoded before 2026-09-06,
+    # so emitting them is behaviour-neutral. `override_margin` is the
+    # commit-revision gate audited as F4: it can only ever block a revision
+    # when `override_margin > 2 * commit_threshold - 1` (both confidences are
+    # entries of the same normalised simplex). At the shipped defaults
+    # (0.5 vs 2*0.85-1 = 0.70) it is vacuous, and the decoder now says so.
+    min_frames: int = 30
+    strength: float = 0.9
+    override_margin: float = 0.5
     rejoin_velocity_budget: float = 1.5
     rejoin_dist_floor: float | None = None
 
@@ -153,6 +162,11 @@ class IdentityConfig:
                     advanced.get("identity_rejoin_velocity_budget", 1.5)
                 ),
                 rejoin_dist_floor=advanced.get("identity_rejoin_dist_floor", None),
+                min_frames=int(advanced.get("identity_slot_lock_min_frames", 30)),
+                strength=float(advanced.get("identity_slot_lock_strength", 0.9)),
+                override_margin=float(
+                    advanced.get("identity_slot_lock_override_margin", 0.5)
+                ),
             ),
         )
         posthoc = PostHocIdentityConfig(

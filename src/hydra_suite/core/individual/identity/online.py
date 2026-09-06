@@ -136,6 +136,12 @@ class IdentityAssignment:
     committed: bool
 
 
+# Distinct (override_margin, commit_threshold) pairs already reported as
+# vacuous, so the warning is emitted once per process rather than once per
+# arena decoder.
+_VACUOUS_MARGIN_WARNED: set[tuple[float, float]] = set()
+
+
 class OnlineIdentityDecoder:
     """Online Bayesian identity decoder with uniqueness enforcement.
 
@@ -185,6 +191,32 @@ class OnlineIdentityDecoder:
         self._respawn_prior_max_gap: int = int(
             params.get("IDENTITY_RESPAWN_PRIOR_MAX_GAP", 120)
         )
+        # F4: the commit-revision gate compares two entries of the SAME
+        # normalised posterior, so a challenger that clears `commit_threshold`
+        # forces the incumbent below `1 - commit_threshold`. The margin can
+        # therefore only ever block a revision when it exceeds
+        # `2 * commit_threshold - 1`; below that it is arithmetically vacuous
+        # and the only real protection on a committed identity is the commit
+        # threshold itself. Say so rather than presenting a dead guard.
+        vacuous_below = 2.0 * self._commit_threshold - 1.0
+        vacuity_key = (self._slot_lock_override_margin, self._commit_threshold)
+        if (
+            self._slot_lock_override_margin <= vacuous_below
+            and vacuity_key not in _VACUOUS_MARGIN_WARNED
+        ):
+            # One decoder is constructed per arena; warn once per distinct
+            # (margin, threshold) pair so a 40-arena run does not emit 40 copies.
+            _VACUOUS_MARGIN_WARNED.add(vacuity_key)
+            log.warning(
+                "Identity commit-override margin %.3f can never block a "
+                "revision at commit threshold %.3f: it would have to exceed "
+                "%.3f (2*threshold-1). The committed identity is protected "
+                "only by the commit threshold itself.",
+                self._slot_lock_override_margin,
+                self._commit_threshold,
+                vacuous_below,
+            )
+
         self._swap_enabled: bool = bool(params.get("IDENTITY_SWAP_ENABLED", True))
         self._swap_min_frames: int = int(params.get("IDENTITY_SWAP_MIN_FRAMES", 8))
         self._swap_conf_margin: float = float(
@@ -351,18 +383,59 @@ class OnlineIdentityDecoder:
             )
             belief.hit_count += 1
 
-    def _apply_slot_lock_bias(self, belief: TrackIdentityBelief) -> None:
-        """Apply soft slot-lock bias toward the locked identity (Phase 2)."""
+    def _slot_lock_biased_probs(self, belief: TrackIdentityBelief) -> np.ndarray:
+        """Posterior with the soft slot-lock bias applied, for assignment only.
+
+        Two properties matter here, both of which the pre-2026-09 version got
+        wrong (audit finding F3):
+
+        1. **Sign.** The bias must *raise* the locked entry. The old code added
+           ``log(strength)``, which for the default strength 0.9 is
+           ``-0.105`` -- it penalised the identity the lock exists to protect.
+           A lock strength in ``[0, 1)`` is now read as a confidence: 0 means
+           no lock, and the bias ``log1p(strength)`` grows monotonically with
+           it -- the locked entry's odds are multiplied by ``1 + strength``,
+           so the default 0.9 is a 1.9x odds boost (+0.642 nats).
+
+           **At the shipped defaults this lock does not change any emitted
+           label.** The bias feeds only the Hungarian solve, gated by
+           ``display_threshold`` (0.6); commit revision is decided separately
+           on the RAW posterior against ``commit_threshold`` (0.85). A
+           challenger needs raw p >= 0.737 to be denied assignment under a
+           1.9x boost, but a challenger at 0.85 is assigned regardless -- so
+           the lock can only bite when ``display_threshold`` exceeds ~0.755.
+           What this fix removes is the old harm (a negative, compounding
+           penalty); it does not add protection.
+
+           The magnitude is a tuning choice with no retention oracle behind
+           it. The principled-looking alternative ``-log1p(-strength)``
+           (+2.303 nats at 0.9) DOES block revisions, and fails exactly one
+           existing test -- ``test_online_decoder_revises_committed_identity
+           _after_override``, whose config locks after a single frame
+           (``LOCK_MIN_FRAMES=1``, commit 0.6) and then feeds one 0.98
+           counter-frame. That is a degenerate config, not a strong argument
+           for the mild value; revisit both once a retention oracle exists.
+        2. **Non-persistence.** The old code mutated ``belief.log_posterior``
+           in place, so the bias compounded every frame -- a locked slot fed
+           uninformative evidence decayed below 0.6 in 14 frames instead of 31.
+           The lock is a per-frame preference over the assignment, not a
+           belief update, so it is applied to a copy and discarded.
+        """
+        probs = self._posterior_probs(belief)
         if not belief.slot_lock_label:
-            return
+            return probs
         try:
             lock_idx = self._catalog.index_of(belief.slot_lock_label)
         except KeyError:
-            return
-        # Boost the locked label; renormalise
-        log_bias = np.log(max(belief.slot_lock_strength, 1e-6))
-        belief.log_posterior[lock_idx] += log_bias
-        belief.log_posterior -= np.logaddexp.reduce(belief.log_posterior)
+            return probs
+        strength = float(np.clip(belief.slot_lock_strength, 0.0, 1.0))
+        if strength <= 0.0:
+            return probs
+        log_bias = float(np.log1p(strength))
+        biased = np.log(np.clip(probs, 1e-300, None))
+        biased[lock_idx] += log_bias
+        biased -= np.logaddexp.reduce(biased)
+        return np.exp(biased)
 
     def _posterior_probs(self, belief: TrackIdentityBelief) -> np.ndarray:
         """Return normalised probability vector for a belief."""
@@ -434,10 +507,9 @@ class OnlineIdentityDecoder:
         # would otherwise pin both slots to wrong identities.
         self._detect_and_execute_swaps(visible_slots, frame_idx)
 
-        # Step 3: apply lock bias (post-swap, so the bias follows the new
-        # committed identity)
-        for slot in visible_slots:
-            self._apply_slot_lock_bias(self._beliefs[slot])
+        # Step 3 is no longer a mutation: the slot-lock bias is applied inside
+        # the assignment solve (see `_slot_lock_biased_probs`) so it can never
+        # compound into the stored belief.
 
         # Step 4: uniqueness-constrained visible-slot assignment
         assigned_labels = self._solve_visible_assignment(visible_slots)
@@ -481,12 +553,20 @@ class OnlineIdentityDecoder:
             out_label = belief.committed_label if belief.committed else label
             out_idx = belief.committed_index if belief.committed else cat_idx
 
+            # The reported confidence must be the posterior of the label we
+            # actually report. When a committed slot is outvoted by fresh
+            # evidence, `label`/`cat_idx` describe the *challenger* while
+            # `out_label`/`out_idx` describe the incumbent -- emitting
+            # `confidence` there paired the incumbent's name with the
+            # challenger's number (audit finding F5).
+            out_conf = float(probs[out_idx]) if out_idx > 0 else 0.0
+
             assignments.append(
                 IdentityAssignment(
                     slot_index=slot,
                     label=out_label,
                     catalog_index=out_idx,
-                    confidence=confidence,
+                    confidence=out_conf,
                     entropy=ent,
                     margin=margin,
                     committed=belief.committed,
@@ -508,7 +588,7 @@ class OnlineIdentityDecoder:
         if not visible_slots:
             return {}
         posterior_probs = [
-            self._posterior_probs(self._beliefs[slot]) for slot in visible_slots
+            self._slot_lock_biased_probs(self._beliefs[slot]) for slot in visible_slots
         ]
         idxs = substrate.solve_unique_assignment(
             posterior_probs,
