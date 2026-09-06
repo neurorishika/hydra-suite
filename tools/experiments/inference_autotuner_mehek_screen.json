@@ -1,0 +1,354 @@
+{
+  "study": "TrackerKit inference autotuner architecture screening",
+  "host": "mehek",
+  "purpose": "Screen each batching axis independently before a smaller replicated joint search.",
+  "cases": [
+    {
+      "label": "fly-native-det-b1",
+      "config_path": "../equivalence/fixtures/configs/fly_obb.json",
+      "video_path": "../equivalence/fixtures/clips/fly_obb.mp4",
+      "runtime": "gpu",
+      "config": {"detection_batch_size": 1, "pipeline_depth": 2}
+    },
+    {
+      "label": "fly-native-det-b2",
+      "config_path": "../equivalence/fixtures/configs/fly_obb.json",
+      "video_path": "../equivalence/fixtures/clips/fly_obb.mp4",
+      "runtime": "gpu",
+      "config": {"detection_batch_size": 2, "pipeline_depth": 2}
+    },
+    {
+      "label": "fly-native-det-b4",
+      "config_path": "../equivalence/fixtures/configs/fly_obb.json",
+      "video_path": "../equivalence/fixtures/clips/fly_obb.mp4",
+      "runtime": "gpu",
+      "config": {"detection_batch_size": 4, "pipeline_depth": 2}
+    },
+    {
+      "label": "fly-native-det-b8",
+      "config_path": "../equivalence/fixtures/configs/fly_obb.json",
+      "video_path": "../equivalence/fixtures/clips/fly_obb.mp4",
+      "runtime": "gpu",
+      "config": {"detection_batch_size": 8, "pipeline_depth": 2}
+    },
+    {
+      "label": "fly-native-det-b16",
+      "config_path": "../equivalence/fixtures/configs/fly_obb.json",
+      "video_path": "../equivalence/fixtures/clips/fly_obb.mp4",
+      "runtime": "gpu",
+      "config": {"detection_batch_size": 16, "pipeline_depth": 2}
+    },
+    {
+      "label": "fly-native-det-b32",
+      "config_path": "../equivalence/fixtures/configs/fly_obb.json",
+      "video_path": "../equivalence/fixtures/clips/fly_obb.mp4",
+      "runtime": "gpu",
+      "config": {"detection_batch_size": 32, "pipeline_depth": 2}
+    },
+    {
+      "label": "fly-native-det-b64",
+      "config_path": "../equivalence/fixtures/configs/fly_obb.json",
+      "video_path": "../equivalence/fixtures/clips/fly_obb.mp4",
+      "runtime": "gpu",
+      "config": {"detection_batch_size": 64, "pipeline_depth": 2}
+    },
+    {
+      "label": "fly-fast-det-b1",
+      "config_path": "../equivalence/fixtures/configs/fly_obb.json",
+      "video_path": "../equivalence/fixtures/clips/fly_obb.mp4",
+      "runtime": "gpu_fast",
+      "config": {"detection_batch_size": 1, "pipeline_depth": 2}
+    },
+    {
+      "label": "fly-fast-det-b8",
+      "config_path": "../equivalence/fixtures/configs/fly_obb.json",
+      "video_path": "../equivalence/fixtures/clips/fly_obb.mp4",
+      "runtime": "gpu_fast",
+      "config": {"detection_batch_size": 8, "pipeline_depth": 2}
+    },
+    {
+      "label": "fly-fast-det-b16",
+      "config_path": "../equivalence/fixtures/configs/fly_obb.json",
+      "video_path": "../equivalence/fixtures/clips/fly_obb.mp4",
+      "runtime": "gpu_fast",
+      "config": {"detection_batch_size": 16, "pipeline_depth": 2}
+    },
+
+    {
+      "label": "ant-native-det-b1",
+      "config_path": "../equivalence/fixtures/configs/ant_cnn_identity.json",
+      "video_path": "../equivalence/fixtures/clips/ant_cnn_identity.mp4",
+      "runtime": "gpu",
+      "config": {"detection_batch_size": 1, "pipeline_depth": 2, "enable_pose_extractor": false, "enable_headtail_orientation": false, "enable_identity_analysis": false, "cnn_classifiers": []}
+    },
+    {
+      "label": "ant-native-det-b4",
+      "config_path": "../equivalence/fixtures/configs/ant_cnn_identity.json",
+      "video_path": "../equivalence/fixtures/clips/ant_cnn_identity.mp4",
+      "runtime": "gpu",
+      "config": {"detection_batch_size": 4, "pipeline_depth": 2, "enable_pose_extractor": false, "enable_headtail_orientation": false, "enable_identity_analysis": false, "cnn_classifiers": []}
+    },
+    {
+      "label": "ant-native-det-b8",
+      "config_path": "../equivalence/fixtures/configs/ant_cnn_identity.json",
+      "video_path": "../equivalence/fixtures/clips/ant_cnn_identity.mp4",
+      "runtime": "gpu",
+      "config": {"detection_batch_size": 8, "pipeline_depth": 2, "enable_pose_extractor": false, "enable_headtail_orientation": false, "enable_identity_analysis": false, "cnn_classifiers": []}
+    },
+    {
+      "label": "ant-native-det-b16",
+      "config_path": "../equivalence/fixtures/configs/ant_cnn_identity.json",
+      "video_path": "../equivalence/fixtures/clips/ant_cnn_identity.mp4",
+      "runtime": "gpu",
+      "config": {"detection_batch_size": 16, "pipeline_depth": 2, "enable_pose_extractor": false, "enable_headtail_orientation": false, "enable_identity_analysis": false, "cnn_classifiers": []}
+    },
+    {
+      "label": "ant-native-det-b32",
+      "config_path": "../equivalence/fixtures/configs/ant_cnn_identity.json",
+      "video_path": "../equivalence/fixtures/clips/ant_cnn_identity.mp4",
+      "runtime": "gpu",
+      "config": {"detection_batch_size": 32, "pipeline_depth": 2, "enable_pose_extractor": false, "enable_headtail_orientation": false, "enable_identity_analysis": false, "cnn_classifiers": []}
+    },
+
+    {
+      "label": "ant-sahi-tile-b1",
+      "config_path": "../equivalence/fixtures/configs/ant_cnn_identity.json",
+      "video_path": "../equivalence/fixtures/clips/ant_cnn_identity.mp4",
+      "runtime": "gpu",
+      "config": {"detection_batch_size": 1, "pipeline_depth": 1, "slice_enabled": true, "slice_geometry_mode": "auto_model", "enable_pose_extractor": false, "enable_headtail_orientation": false, "enable_identity_analysis": false, "cnn_classifiers": []},
+      "advanced": {"slice_tile_batch_size": 1, "slice_tile_batch_autotune": false, "slice_memory_budget_mib": 256}
+    },
+    {
+      "label": "ant-sahi-tile-b2",
+      "config_path": "../equivalence/fixtures/configs/ant_cnn_identity.json",
+      "video_path": "../equivalence/fixtures/clips/ant_cnn_identity.mp4",
+      "runtime": "gpu",
+      "config": {"detection_batch_size": 1, "pipeline_depth": 1, "slice_enabled": true, "slice_geometry_mode": "auto_model", "enable_pose_extractor": false, "enable_headtail_orientation": false, "enable_identity_analysis": false, "cnn_classifiers": []},
+      "advanced": {"slice_tile_batch_size": 2, "slice_tile_batch_autotune": false, "slice_memory_budget_mib": 256}
+    },
+    {
+      "label": "ant-sahi-tile-b4",
+      "config_path": "../equivalence/fixtures/configs/ant_cnn_identity.json",
+      "video_path": "../equivalence/fixtures/clips/ant_cnn_identity.mp4",
+      "runtime": "gpu",
+      "config": {"detection_batch_size": 1, "pipeline_depth": 1, "slice_enabled": true, "slice_geometry_mode": "auto_model", "enable_pose_extractor": false, "enable_headtail_orientation": false, "enable_identity_analysis": false, "cnn_classifiers": []},
+      "advanced": {"slice_tile_batch_size": 4, "slice_tile_batch_autotune": false, "slice_memory_budget_mib": 256}
+    },
+    {
+      "label": "ant-sahi-tile-b8",
+      "config_path": "../equivalence/fixtures/configs/ant_cnn_identity.json",
+      "video_path": "../equivalence/fixtures/clips/ant_cnn_identity.mp4",
+      "runtime": "gpu",
+      "config": {"detection_batch_size": 1, "pipeline_depth": 1, "slice_enabled": true, "slice_geometry_mode": "auto_model", "enable_pose_extractor": false, "enable_headtail_orientation": false, "enable_identity_analysis": false, "cnn_classifiers": []},
+      "advanced": {"slice_tile_batch_size": 8, "slice_tile_batch_autotune": false, "slice_memory_budget_mib": 256}
+    },
+    {
+      "label": "ant-sahi-tile-b16",
+      "config_path": "../equivalence/fixtures/configs/ant_cnn_identity.json",
+      "video_path": "../equivalence/fixtures/clips/ant_cnn_identity.mp4",
+      "runtime": "gpu",
+      "config": {"detection_batch_size": 1, "pipeline_depth": 1, "slice_enabled": true, "slice_geometry_mode": "auto_model", "enable_pose_extractor": false, "enable_headtail_orientation": false, "enable_identity_analysis": false, "cnn_classifiers": []},
+      "advanced": {"slice_tile_batch_size": 16, "slice_tile_batch_autotune": false, "slice_memory_budget_mib": 256}
+    },
+    {
+      "label": "ant-sahi-tile-b32",
+      "config_path": "../equivalence/fixtures/configs/ant_cnn_identity.json",
+      "video_path": "../equivalence/fixtures/clips/ant_cnn_identity.mp4",
+      "runtime": "gpu",
+      "config": {"detection_batch_size": 1, "pipeline_depth": 1, "slice_enabled": true, "slice_geometry_mode": "auto_model", "enable_pose_extractor": false, "enable_headtail_orientation": false, "enable_identity_analysis": false, "cnn_classifiers": []},
+      "advanced": {"slice_tile_batch_size": 32, "slice_tile_batch_autotune": false, "slice_memory_budget_mib": 256}
+    },
+    {
+      "label": "ant-sahi-tile-b64",
+      "config_path": "../equivalence/fixtures/configs/ant_cnn_identity.json",
+      "video_path": "../equivalence/fixtures/clips/ant_cnn_identity.mp4",
+      "runtime": "gpu",
+      "config": {"detection_batch_size": 1, "pipeline_depth": 1, "slice_enabled": true, "slice_geometry_mode": "auto_model", "enable_pose_extractor": false, "enable_headtail_orientation": false, "enable_identity_analysis": false, "cnn_classifiers": []},
+      "advanced": {"slice_tile_batch_size": 64, "slice_tile_batch_autotune": false, "slice_memory_budget_mib": 256}
+    },
+
+    {
+      "label": "ant-pose-b1",
+      "config_path": "../equivalence/fixtures/configs/ant_pose_headtail.json",
+      "video_path": "../equivalence/fixtures/clips/ant_pose_headtail.mp4",
+      "skeleton_path": "../equivalence/fixtures/ooceraea_biroi.json",
+      "runtime": "gpu",
+      "config": {"detection_batch_size": 8, "pipeline_depth": 2, "pose_batch_size": 1, "headtail_batch_size": 25}
+    },
+    {
+      "label": "ant-pose-b2",
+      "config_path": "../equivalence/fixtures/configs/ant_pose_headtail.json",
+      "video_path": "../equivalence/fixtures/clips/ant_pose_headtail.mp4",
+      "skeleton_path": "../equivalence/fixtures/ooceraea_biroi.json",
+      "runtime": "gpu",
+      "config": {"detection_batch_size": 8, "pipeline_depth": 2, "pose_batch_size": 2, "headtail_batch_size": 25}
+    },
+    {
+      "label": "ant-pose-b4",
+      "config_path": "../equivalence/fixtures/configs/ant_pose_headtail.json",
+      "video_path": "../equivalence/fixtures/clips/ant_pose_headtail.mp4",
+      "skeleton_path": "../equivalence/fixtures/ooceraea_biroi.json",
+      "runtime": "gpu",
+      "config": {"detection_batch_size": 8, "pipeline_depth": 2, "pose_batch_size": 4, "headtail_batch_size": 25}
+    },
+    {
+      "label": "ant-pose-b8",
+      "config_path": "../equivalence/fixtures/configs/ant_pose_headtail.json",
+      "video_path": "../equivalence/fixtures/clips/ant_pose_headtail.mp4",
+      "skeleton_path": "../equivalence/fixtures/ooceraea_biroi.json",
+      "runtime": "gpu",
+      "config": {"detection_batch_size": 8, "pipeline_depth": 2, "pose_batch_size": 8, "headtail_batch_size": 25}
+    },
+    {
+      "label": "ant-pose-b16",
+      "config_path": "../equivalence/fixtures/configs/ant_pose_headtail.json",
+      "video_path": "../equivalence/fixtures/clips/ant_pose_headtail.mp4",
+      "skeleton_path": "../equivalence/fixtures/ooceraea_biroi.json",
+      "runtime": "gpu",
+      "config": {"detection_batch_size": 8, "pipeline_depth": 2, "pose_batch_size": 16, "headtail_batch_size": 25}
+    },
+    {
+      "label": "ant-pose-b25",
+      "config_path": "../equivalence/fixtures/configs/ant_pose_headtail.json",
+      "video_path": "../equivalence/fixtures/clips/ant_pose_headtail.mp4",
+      "skeleton_path": "../equivalence/fixtures/ooceraea_biroi.json",
+      "runtime": "gpu",
+      "config": {"detection_batch_size": 8, "pipeline_depth": 2, "pose_batch_size": 25, "headtail_batch_size": 25}
+    },
+    {
+      "label": "ant-pose-b64",
+      "config_path": "../equivalence/fixtures/configs/ant_pose_headtail.json",
+      "video_path": "../equivalence/fixtures/clips/ant_pose_headtail.mp4",
+      "skeleton_path": "../equivalence/fixtures/ooceraea_biroi.json",
+      "runtime": "gpu",
+      "config": {"detection_batch_size": 8, "pipeline_depth": 2, "pose_batch_size": 64, "headtail_batch_size": 25}
+    },
+
+    {
+      "label": "ant-headtail-b1",
+      "config_path": "../equivalence/fixtures/configs/ant_pose_headtail.json",
+      "video_path": "../equivalence/fixtures/clips/ant_pose_headtail.mp4",
+      "skeleton_path": "../equivalence/fixtures/ooceraea_biroi.json",
+      "runtime": "gpu",
+      "config": {"detection_batch_size": 8, "pipeline_depth": 2, "pose_batch_size": 25, "headtail_batch_size": 1}
+    },
+    {
+      "label": "ant-headtail-b4",
+      "config_path": "../equivalence/fixtures/configs/ant_pose_headtail.json",
+      "video_path": "../equivalence/fixtures/clips/ant_pose_headtail.mp4",
+      "skeleton_path": "../equivalence/fixtures/ooceraea_biroi.json",
+      "runtime": "gpu",
+      "config": {"detection_batch_size": 8, "pipeline_depth": 2, "pose_batch_size": 25, "headtail_batch_size": 4}
+    },
+    {
+      "label": "ant-headtail-b8",
+      "config_path": "../equivalence/fixtures/configs/ant_pose_headtail.json",
+      "video_path": "../equivalence/fixtures/clips/ant_pose_headtail.mp4",
+      "skeleton_path": "../equivalence/fixtures/ooceraea_biroi.json",
+      "runtime": "gpu",
+      "config": {"detection_batch_size": 8, "pipeline_depth": 2, "pose_batch_size": 25, "headtail_batch_size": 8}
+    },
+    {
+      "label": "ant-headtail-b16",
+      "config_path": "../equivalence/fixtures/configs/ant_pose_headtail.json",
+      "video_path": "../equivalence/fixtures/clips/ant_pose_headtail.mp4",
+      "skeleton_path": "../equivalence/fixtures/ooceraea_biroi.json",
+      "runtime": "gpu",
+      "config": {"detection_batch_size": 8, "pipeline_depth": 2, "pose_batch_size": 25, "headtail_batch_size": 16}
+    },
+    {
+      "label": "ant-headtail-b25",
+      "config_path": "../equivalence/fixtures/configs/ant_pose_headtail.json",
+      "video_path": "../equivalence/fixtures/clips/ant_pose_headtail.mp4",
+      "skeleton_path": "../equivalence/fixtures/ooceraea_biroi.json",
+      "runtime": "gpu",
+      "config": {"detection_batch_size": 8, "pipeline_depth": 2, "pose_batch_size": 25, "headtail_batch_size": 25}
+    },
+    {
+      "label": "ant-headtail-b64",
+      "config_path": "../equivalence/fixtures/configs/ant_pose_headtail.json",
+      "video_path": "../equivalence/fixtures/clips/ant_pose_headtail.mp4",
+      "skeleton_path": "../equivalence/fixtures/ooceraea_biroi.json",
+      "runtime": "gpu",
+      "config": {"detection_batch_size": 8, "pipeline_depth": 2, "pose_batch_size": 25, "headtail_batch_size": 64}
+    },
+
+    {
+      "label": "ant-identity-b1",
+      "config_path": "../equivalence/fixtures/configs/ant_cnn_identity.json",
+      "video_path": "../equivalence/fixtures/clips/ant_cnn_identity.mp4",
+      "skeleton_path": "../equivalence/fixtures/ooceraea_biroi.json",
+      "runtime": "gpu",
+      "config": {"detection_batch_size": 8, "pipeline_depth": 2, "pose_batch_size": 25, "headtail_batch_size": 25, "cnn_batch_size": 1}
+    },
+    {
+      "label": "ant-identity-b4",
+      "config_path": "../equivalence/fixtures/configs/ant_cnn_identity.json",
+      "video_path": "../equivalence/fixtures/clips/ant_cnn_identity.mp4",
+      "skeleton_path": "../equivalence/fixtures/ooceraea_biroi.json",
+      "runtime": "gpu",
+      "config": {"detection_batch_size": 8, "pipeline_depth": 2, "pose_batch_size": 25, "headtail_batch_size": 25, "cnn_batch_size": 4}
+    },
+    {
+      "label": "ant-identity-b8",
+      "config_path": "../equivalence/fixtures/configs/ant_cnn_identity.json",
+      "video_path": "../equivalence/fixtures/clips/ant_cnn_identity.mp4",
+      "skeleton_path": "../equivalence/fixtures/ooceraea_biroi.json",
+      "runtime": "gpu",
+      "config": {"detection_batch_size": 8, "pipeline_depth": 2, "pose_batch_size": 25, "headtail_batch_size": 25, "cnn_batch_size": 8}
+    },
+    {
+      "label": "ant-identity-b16",
+      "config_path": "../equivalence/fixtures/configs/ant_cnn_identity.json",
+      "video_path": "../equivalence/fixtures/clips/ant_cnn_identity.mp4",
+      "skeleton_path": "../equivalence/fixtures/ooceraea_biroi.json",
+      "runtime": "gpu",
+      "config": {"detection_batch_size": 8, "pipeline_depth": 2, "pose_batch_size": 25, "headtail_batch_size": 25, "cnn_batch_size": 16}
+    },
+    {
+      "label": "ant-identity-b25",
+      "config_path": "../equivalence/fixtures/configs/ant_cnn_identity.json",
+      "video_path": "../equivalence/fixtures/clips/ant_cnn_identity.mp4",
+      "skeleton_path": "../equivalence/fixtures/ooceraea_biroi.json",
+      "runtime": "gpu",
+      "config": {"detection_batch_size": 8, "pipeline_depth": 2, "pose_batch_size": 25, "headtail_batch_size": 25, "cnn_batch_size": 25}
+    },
+    {
+      "label": "ant-identity-b64",
+      "config_path": "../equivalence/fixtures/configs/ant_cnn_identity.json",
+      "video_path": "../equivalence/fixtures/clips/ant_cnn_identity.mp4",
+      "skeleton_path": "../equivalence/fixtures/ooceraea_biroi.json",
+      "runtime": "gpu",
+      "config": {"detection_batch_size": 8, "pipeline_depth": 2, "pose_batch_size": 25, "headtail_batch_size": 25, "cnn_batch_size": 64}
+    },
+
+    {
+      "label": "fly-depth-1",
+      "config_path": "../equivalence/fixtures/configs/fly_obb.json",
+      "video_path": "../equivalence/fixtures/clips/fly_obb.mp4",
+      "runtime": "gpu",
+      "config": {"detection_batch_size": 8, "pipeline_depth": 1}
+    },
+    {
+      "label": "fly-depth-2",
+      "config_path": "../equivalence/fixtures/configs/fly_obb.json",
+      "video_path": "../equivalence/fixtures/clips/fly_obb.mp4",
+      "runtime": "gpu",
+      "config": {"detection_batch_size": 8, "pipeline_depth": 2}
+    },
+    {
+      "label": "fly-depth-3",
+      "config_path": "../equivalence/fixtures/configs/fly_obb.json",
+      "video_path": "../equivalence/fixtures/clips/fly_obb.mp4",
+      "runtime": "gpu",
+      "config": {"detection_batch_size": 8, "pipeline_depth": 3}
+    },
+    {
+      "label": "fly-depth-4",
+      "config_path": "../equivalence/fixtures/configs/fly_obb.json",
+      "video_path": "../equivalence/fixtures/clips/fly_obb.mp4",
+      "runtime": "gpu",
+      "config": {"detection_batch_size": 8, "pipeline_depth": 4}
+    }
+  ]
+}
