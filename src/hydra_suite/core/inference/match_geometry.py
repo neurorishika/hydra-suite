@@ -159,7 +159,8 @@ def match_one_to_one(
     *,
     area_band: AreaBand | None = None,
     min_quality: float = MIN_MATCH_QUALITY,
-) -> list[tuple[int, int]]:
+    return_admissible: bool = False,
+) -> list[tuple[int, int]] | tuple[list[tuple[int, int]], list[tuple[int, int]]]:
     """Greedy one-to-one pairing by descending match QUALITY.
 
     A pair is admissible when it clears the area band and ``min_quality``
@@ -187,6 +188,16 @@ def match_one_to_one(
     Measured effect of the two changes together, predictions held fixed:
     see ``tools/sam3_parity/matcher_gate_results.json`` and
     docs/superpowers/specs/2026-09-05-sam3-spike-parity-measurement-findings.md
+
+    ``return_admissible`` additionally returns every ADMISSIBLE pair (the
+    pairs that cleared the band, containment and ``min_quality``), not only
+    the greedy one-to-one winners. The direct-calibration path needs this to
+    count cross-tile DUPLICATES -- a prediction that was a legitimate
+    candidate for some label but lost the one-to-one race. Exposing the
+    matcher's own admissibility set is deliberate: recomposing band +
+    containment + quality at the call site would fork the definition, which
+    is the exact failure this module was extracted to prevent. The default
+    return value is unchanged.
     """
     pred_c = [representative_point(p) for p in pred_polys]
     label_c = [representative_point(g) for g in label_polys]
@@ -262,6 +273,8 @@ def match_one_to_one(
         used_p.add(pi)
         used_g.add(gi)
         out.append((pi, gi))
+    if return_admissible:
+        return out, [(pi, gi) for _neg_q, pi, gi in pairs]
     return out
 
 

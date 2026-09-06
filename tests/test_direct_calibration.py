@@ -26,7 +26,7 @@ def test_score_is_class_aware_and_one_to_one_with_duplicate_reporting():
         _box(1, 0, 11, 10),  # same class and object: cross-tile duplicate
         _box(20, 0, 30, 10, class_id=0),  # wrong class
     ]
-    score = match_frame(predictions, labels, iou_threshold=0.5)
+    score = match_frame(predictions, labels)
     assert score.matched == 1
     assert score.missed == 1
     assert score.extra == 2

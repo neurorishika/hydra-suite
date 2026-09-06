@@ -13,6 +13,12 @@ from typing import Iterable, Sequence
 
 import numpy as np
 
+from hydra_suite.core.inference.match_geometry import match_one_to_one
+from hydra_suite.core.inference.shape_prior import (
+    MIN_MATCH_QUALITY,
+    AreaBand,
+    match_quality,
+)
 from hydra_suite.utils.polygon_iou import polygon_iou
 
 
@@ -34,6 +40,7 @@ class FrameCalibrationScore:
     extra: int
     duplicate: int
     mean_iou: float
+    mean_quality: float = 0.0
 
 
 @dataclass(frozen=True)
@@ -49,6 +56,7 @@ class CalibrationScore:
     recall: float
     f1: float
     mean_iou: float
+    mean_quality: float = 0.0
 
 
 def _valid_polygon(value: np.ndarray) -> np.ndarray | None:
@@ -77,19 +85,37 @@ def match_frame(
     predictions: Sequence[CalibrationDetection],
     labels: Sequence[CalibrationDetection],
     *,
-    iou_threshold: float = 0.5,
     task: str = "obb",
+    area_band: AreaBand | None = None,
+    min_quality: float = MIN_MATCH_QUALITY,
 ) -> FrameCalibrationScore:
-    """Score predictions with class-aware, descending-IoU one-to-one matching.
+    """Score predictions with the SHARED containment matcher, class-aware.
 
-    ``iou_threshold`` defaults to 0.5, the documented localization-quality
-    floor used throughout calibration. ``task`` selects how overlap is
-    computed: ``obb``/``segment`` use full polygon IoU; ``detect`` reduces
-    both sides to their axis-aligned bounding box first (see
-    ``_as_task_polygon``).
+    D7 of ``docs/superpowers/plans/2026-09-06-direct-path-scoring-unification.md``:
+    the hard ``IoU >= 0.5`` admissibility gate is GONE. A pair is admissible
+    when it clears the area band, is CONTAINED (either representative point
+    inside the other polygon) and clears ``min_quality``; ranking is by graded
+    ``match_quality``. The gate was removed because a correct silhouette with
+    a different extent convention -- masks trace legs and antennae at ~1.7x
+    the labelled body-core area -- scored as a MISS and an EXTRA at the same
+    time. The matcher itself is ``match_geometry.match_one_to_one``, the very
+    function the semantic path runs; it is called, not reimplemented.
 
-    Duplicate counts are predictions that clear the match threshold against an
-    already matched label. They remain extras for precision/F1, but exposing
+    Two things that are ORTHOGONAL to the matcher and therefore survive:
+
+    * ``task``. Both sides are still reduced by ``_as_task_polygon`` FIRST,
+      before matching, band-fitting or quality, so a ``detect`` model is
+      scored on the axis-aligned shape it can actually express. One reduction
+      applied once, up front, keeps every downstream number in the same
+      geometry.
+    * CLASS-AWARENESS. ``match_one_to_one`` takes flat polygon lists with no
+      notion of class, so predictions and labels are grouped by ``class_id``
+      and matched WITHIN each class, then indices are mapped back. Grouping
+      at the call site rather than teaching the shared function about classes
+      keeps the semantic path's behaviour bit-for-bit untouched.
+
+    Duplicates are predictions that were ADMISSIBLE to some label but lost
+    the one-to-one race. They remain extras for precision/F1, but exposing
     them separately lets the profile chooser identify bad cross-tile merges.
     """
     valid_predictions = [
@@ -110,34 +136,61 @@ def match_frame(
         for index, label, polygon in valid_labels
         if polygon is not None
     ]
-    pairs: list[tuple[float, int, int]] = []
-    duplicate_candidates: set[int] = set()
-    for pred_index, prediction, pred_polygon in valid_predictions:
-        for label_index, label, label_polygon in valid_labels:
-            if prediction.class_id != label.class_id:
-                continue
-            iou = polygon_iou(pred_polygon, label_polygon)
-            if iou >= iou_threshold:
-                pairs.append((iou, pred_index, label_index))
-                duplicate_candidates.add(pred_index)
-    pairs.sort(reverse=True)
+    classes = {prediction.class_id for _i, prediction, _p in valid_predictions} & {
+        label.class_id for _i, label, _p in valid_labels
+    }
     matched_predictions: set[int] = set()
     matched_labels: set[int] = set()
+    admissible_predictions: set[int] = set()
     matched_ious: list[float] = []
-    for iou, pred_index, label_index in pairs:
-        if pred_index in matched_predictions or label_index in matched_labels:
-            continue
-        matched_predictions.add(pred_index)
-        matched_labels.add(label_index)
-        matched_ious.append(iou)
+    matched_qualities: list[float] = []
+    for class_id in sorted(classes):
+        pred_slice = [
+            (index, polygon)
+            for index, prediction, polygon in valid_predictions
+            if prediction.class_id == class_id
+        ]
+        label_slice = [
+            (index, polygon)
+            for index, label, polygon in valid_labels
+            if label.class_id == class_id
+        ]
+        pairs, admissible = match_one_to_one(
+            [polygon for _i, polygon in pred_slice],
+            [polygon for _i, polygon in label_slice],
+            area_band=area_band,
+            min_quality=min_quality,
+            return_admissible=True,
+        )
+        for local_pred, _local_label in admissible:
+            admissible_predictions.add(pred_slice[local_pred][0])
+        for local_pred, local_label in pairs:
+            pred_index, pred_polygon = pred_slice[local_pred]
+            label_index, label_polygon = label_slice[local_label]
+            matched_predictions.add(pred_index)
+            matched_labels.add(label_index)
+            matched_ious.append(polygon_iou(pred_polygon, label_polygon))
+            matched_qualities.append(match_quality(pred_polygon, label_polygon))
     matched = len(matched_predictions)
     extra = max(0, len(valid_predictions) - matched)
     return FrameCalibrationScore(
         matched=matched,
         missed=max(0, len(valid_labels) - len(matched_labels)),
         extra=extra,
-        duplicate=max(0, len(duplicate_candidates - matched_predictions)),
+        duplicate=max(0, len(admissible_predictions - matched_predictions)),
+        # WHAT ``mean_iou`` MEANS NOW: the mean polygon IoU, in task
+        # geometry, over the pairs the matcher accepted -- a REPORTED
+        # localization-quality diagnostic, no longer an admissibility
+        # criterion for anything. Because the 0.5 gate is gone it now
+        # includes sub-0.5 matches, so it will read LOWER than it did while
+        # measuring strictly better recall; that is the metric becoming
+        # honest, not degrading. It is deliberately not the selection
+        # objective either: a systematic extent-convention offset shifts
+        # every configuration's IoU equally, so it ranks configurations
+        # badly while still being the right number to show a human asking
+        # "how tightly do the accepted detections sit on the labels?".
         mean_iou=float(np.mean(matched_ious)) if matched_ious else 0.0,
+        mean_quality=float(np.mean(matched_qualities)) if matched_qualities else 0.0,
     )
 
 
@@ -146,16 +199,26 @@ def score_frames(
         tuple[Sequence[CalibrationDetection], Sequence[CalibrationDetection]]
     ],
     *,
-    iou_threshold: float = 0.5,
     task: str = "obb",
+    area_band: AreaBand | None = None,
+    min_quality: float = MIN_MATCH_QUALITY,
 ) -> CalibrationScore:
     """Aggregate full-frame calibration evidence at one operating point.
 
-    ``iou_threshold`` defaults to the 0.5 localization-quality floor; ``task``
-    is forwarded to ``match_frame`` (see its docstring for ``detect`` handling).
+    ``task`` is forwarded to ``match_frame`` (see its docstring for
+    ``detect`` handling), as is ``area_band`` -- which callers should fit
+    ONCE over the whole label set via ``fit_calibration_area_band`` and
+    thread through every point of a sweep, so the prior is a property of
+    the labels rather than of the operating point being scored.
     """
     scores = [
-        match_frame(predictions, labels, iou_threshold=iou_threshold, task=task)
+        match_frame(
+            predictions,
+            labels,
+            task=task,
+            area_band=area_band,
+            min_quality=min_quality,
+        )
         for predictions, labels in frames
     ]
     matched = sum(score.matched for score in scores)
@@ -178,6 +241,9 @@ def score_frames(
         ),
         mean_iou=(
             float(np.mean([score.mean_iou for score in scores])) if scores else 0.0
+        ),
+        mean_quality=(
+            float(np.mean([score.mean_quality for score in scores])) if scores else 0.0
         ),
     )
 
