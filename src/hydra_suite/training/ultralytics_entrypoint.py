@@ -40,7 +40,7 @@ def main() -> None:
     from ultralytics.utils.tal import TaskAlignedAssigner
 
     from hydra_suite.training.ultralytics_scale_balance import (
-        install_sahi_multiscale_loss_balance,
+        install_sahi_scale_balance_and_grouped_sampling,
     )
 
     if install_mps_task_aligned_assigner_fallback(TaskAlignedAssigner):
@@ -48,7 +48,7 @@ def main() -> None:
             "Hydra compatibility: MPS TaskAlignedAssigner will execute on CPU "
             "to avoid a PyTorch MPS indexing fault."
         )
-    install_sahi_multiscale_loss_balance()
+    install_sahi_scale_balance_and_grouped_sampling()
     entrypoint()
 
 

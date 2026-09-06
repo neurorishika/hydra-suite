@@ -5,7 +5,7 @@ from __future__ import annotations
 import json
 from dataclasses import dataclass, field
 from pathlib import Path
-from typing import Callable
+from typing import Callable, Sequence
 
 from hydra_suite.core.inference.semantic.checkpoints import ensure_checkpoint
 from hydra_suite.runtime.process_supervisor import WorkloadStillOwnedError
@@ -39,6 +39,7 @@ from .registry import (
 from .runner import run_training
 from .sam3_lora.publish import publish_sam3_model
 from .sliced_dataset import SliceBuildParams, build_sliced_obb_dataset
+from .ultralytics_scale_balance import read_realised_balance_stamp
 from .validation import (
     format_validation_report,
     validate_obb_dataset,
@@ -154,6 +155,47 @@ def _slice_geometry_for_publish(spec: TrainingRunSpec) -> dict | None:
     return None
 
 
+def apply_realised_balance_stamp(
+    slice_geometry: dict | None, artifact_paths: Sequence[str]
+) -> dict | None:
+    """Overlay a run's REALISED scale-balance state onto its slice geometry.
+
+    ``slice_geometry`` comes from the dataset manifest and therefore records
+    what the build REQUESTED. Under DDP with the explicit opt-out, the run does
+    not apply grouped batching or loss weighting at all -- publishing the
+    requested block would stamp a balanced model that never was. The trainer
+    writes ``hydra_scale_balance.json`` into its run directory; that file is the
+    authority. The requested values are preserved under ``requested`` rather
+    than discarded.
+    """
+
+    if not slice_geometry or not artifact_paths:
+        return slice_geometry
+    stamp = next(
+        (
+            found
+            for artifact in artifact_paths
+            for run_dir in (Path(artifact).parent.parent,)
+            for found in (read_realised_balance_stamp(run_dir),)
+            if found
+        ),
+        None,
+    )
+    if stamp is None:
+        return slice_geometry
+    applied = stamp.get("applied") or {}
+    result = dict(slice_geometry)
+    result["multiscale_loss_balance"] = {
+        "enabled": bool(applied.get("multiscale_loss_weighting", False)),
+        "power": float(applied.get("power", 0.0) or 0.0),
+        "scale_grouped_batching": bool(applied.get("scale_grouped_batching", False)),
+        "world_size": int(stamp.get("world_size", 1) or 1),
+        "ddp_opt_out": bool(stamp.get("ddp_opt_out", False)),
+        "requested": dict(stamp.get("requested") or {}),
+    }
+    return result
+
+
 def _publish_training_artifacts(
     *,
     spec: TrainingRunSpec,
@@ -219,7 +261,9 @@ def _publish_training_artifacts(
         "training_params": (
             dict(training_params) if isinstance(training_params, dict) else None
         ),
-        "slice_geometry": _slice_geometry_for_publish(spec),
+        "slice_geometry": apply_realised_balance_stamp(
+            _slice_geometry_for_publish(spec), artifact_paths
+        ),
         # Deliberately None, not a gap: every role this function currently
         # publishes for (OBB_DIRECT, DETECT_DIRECT, SEGMENT_DIRECT,
         # SEQ_DETECT, SEQ_CROP_OBB, SEQ_CROP_SEGMENT -- the only roles
