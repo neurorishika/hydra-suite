@@ -6,7 +6,16 @@ from pathlib import Path
 from hydra_suite.core.inference.autotune.integration import (
     TrackingRunContext,
     build_tracking_autotune_request,
+    memory_profile_identity,
+    record_profile_memory_evidence,
     sample_detection_workload,
+)
+from hydra_suite.core.inference.autotune.models import (
+    CandidateEvidence,
+    EquivalenceVerdict,
+    InferenceTuningProfile,
+    InferenceTuningSettings,
+    ProfileState,
 )
 from hydra_suite.core.inference.config import (
     CNNConfig,
@@ -20,6 +29,7 @@ from hydra_suite.core.inference.config import (
     SliceConfig,
 )
 from hydra_suite.core.inference.runner import _load_obb_for_config
+from hydra_suite.runtime.memory_profiles import MemoryProfileStore
 from hydra_suite.runtime.resource_budget import AcceleratorKind, ResourceObservation
 
 
@@ -278,3 +288,65 @@ def test_calibration_uses_one_wide_runtime_profile_without_changing_candidate_ba
 
     assert config.detection_batch_size == 2
     assert captured == {"batch_size": 16, "stage1_batch_size": None}
+
+
+def test_successful_memory_evidence_is_reused_by_exact_key_admission(tmp_path):
+    config = _config(tmp_path)
+    context = TrackingRunContext(
+        video_path=tmp_path / "video.mp4",
+        params={"MAX_TARGETS": 25},
+        frame_width=1200,
+        frame_height=900,
+    )
+    initial = build_tracking_autotune_request(
+        config,
+        context,
+        observation=_observation(),
+        backend="torch",
+        device_identity=("cpu", "CPU", "none", 0),
+        memory_records=(),
+    )
+    selected = InferenceTuningSettings.from_config(config)
+    evidence = CandidateEvidence(
+        selected,
+        (100.0,) * 5,
+        stage_seconds_samples=(0.5,) * 5,
+        measured_frames=128,
+        host_peak_bytes=1024,
+        accelerator_peak_bytes=512,
+        warmup_calls=3,
+        warmup_frames=8,
+        equivalence=EquivalenceVerdict(True),
+        phase="final_validation",
+    )
+    profile = InferenceTuningProfile(
+        initial.key.digest[:24],
+        initial.key,
+        selected,
+        selected,
+        selected,
+        selected,
+        (evidence,),
+        ProfileState.VALIDATED,
+        "kept_current_settings",
+    )
+    memory_store = MemoryProfileStore(tmp_path / "memory.json")
+    record_profile_memory_evidence(profile, store=memory_store)
+
+    records = memory_store.load()
+    rebuilt = build_tracking_autotune_request(
+        config,
+        context,
+        observation=_observation(),
+        backend="torch",
+        device_identity=("cpu", "CPU", "none", 0),
+        memory_records=records,
+    )
+
+    detector_records = dict(rebuilt.planner.context.measured_records)[
+        "detection_batch_size"
+    ]
+    assert detector_records
+    assert detector_records[0].identity == memory_profile_identity(
+        rebuilt.key, "detection_batch_size"
+    )

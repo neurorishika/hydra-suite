@@ -14,6 +14,15 @@ from typing import Any, Callable, Literal, Mapping
 
 from hydra_suite.core.inference.config import InferenceConfig
 from hydra_suite.paths import get_data_dir
+from hydra_suite.runtime.memory_profiles import (
+    MemoryMeasurement,
+    MemoryProfileStore,
+    PressureSettings,
+    ProfileIdentity,
+    merge_records,
+    profile_store_path,
+    records_for,
+)
 from hydra_suite.runtime.resource_budget import (
     AcceleratorKind,
     ResourceObservation,
@@ -36,7 +45,11 @@ from .fingerprint import (
     default_system_fingerprint,
     model_fingerprint,
 )
-from .models import InferenceRuntimeOverlay, InferenceTuningSettings
+from .models import (
+    InferenceRuntimeOverlay,
+    InferenceTuningProfile,
+    InferenceTuningSettings,
+)
 from .search import TrialExecutor
 from .store import InferenceTuningProfileStore
 
@@ -277,6 +290,83 @@ def _enabled_stages(config: InferenceConfig) -> tuple[str, ...]:
     return tuple(stages)
 
 
+def memory_profile_identity(key: TuningProfileKey, field_name: str) -> ProfileIdentity:
+    """Map one coordinate to an exact-key runtime memory-profile identity."""
+
+    return ProfileIdentity(
+        operation=f"inference-autotune:{field_name}",
+        model_identity=f"tuning:{key.digest}",
+        backend=key.software.backend,
+        device_identity=key.accelerator.device_uuid,
+        precision=key.software.precision,
+        task=field_name,
+        tiling_mode="sliced" if key.slice.enabled else "none",
+    )
+
+
+def record_profile_memory_evidence(
+    profile: InferenceTuningProfile,
+    *,
+    store: MemoryProfileStore | None = None,
+) -> None:
+    """Persist successful memory observations outside the throughput store."""
+
+    memory_store = store or MemoryProfileStore(profile_store_path("inference"))
+    if profile.key.accelerator.device_uuid == "mps-unified":
+        accelerator_kind = AcceleratorKind.MPS
+    elif profile.key.accelerator.total_vram_bytes > 0:
+        accelerator_kind = AcceleratorKind.CUDA
+    else:
+        accelerator_kind = AcceleratorKind.CPU
+    incoming = []
+    for evidence in profile.candidates:
+        if (
+            evidence.failure_class is not None
+            or evidence.equivalence is not None
+            and not evidence.equivalence.passed
+        ):
+            continue
+        for field_name in evidence.settings.field_names():
+            value = evidence.settings.value_for(field_name)
+            if value is None:
+                continue
+            incoming.append(
+                MemoryMeasurement(
+                    identity=memory_profile_identity(profile.key, field_name),
+                    settings=PressureSettings(
+                        input_width=profile.key.frame.width,
+                        input_height=profile.key.frame.height,
+                        batch_size=value,
+                        pipeline_depth=evidence.settings.pipeline_depth,
+                        tile_chunk=evidence.settings.slice_tile_batch_size or 1,
+                        crop_batch=max(
+                            (
+                                candidate
+                                for candidate in (
+                                    evidence.settings.pose_batch_size,
+                                    evidence.settings.headtail_batch_size,
+                                    *(
+                                        v
+                                        for _label, v in evidence.settings.identity_batch_sizes
+                                    ),
+                                )
+                                if candidate is not None
+                            ),
+                            default=1,
+                        ),
+                    ),
+                    accelerator_kind=accelerator_kind,
+                    host_peak_bytes=evidence.host_peak_bytes,
+                    accelerator_allocated_peak_bytes=evidence.accelerator_peak_bytes,
+                    accelerator_reserved_peak_bytes=evidence.accelerator_peak_bytes,
+                    queue_high_water_bytes=evidence.queue_high_water_bytes,
+                    observed_at_unix_ns=profile.last_validation_unix_ns,
+                )
+            )
+    if incoming:
+        memory_store.save(merge_records(memory_store.load(), incoming))
+
+
 def _cost_model(
     config: InferenceConfig,
     params: Mapping[str, Any],
@@ -342,6 +432,7 @@ def build_tracking_autotune_request(
     backend: str,
     device_identity: tuple[str, str, str, int],
     trial_executor: TrialExecutor | None = None,
+    memory_records: tuple[MemoryMeasurement, ...] | None = None,
 ) -> AutotuneRequest:
     """Build the exact key and admission plan without loading any models."""
 
@@ -454,6 +545,21 @@ def build_tracking_autotune_request(
         for field in baseline.field_names()
         if field.startswith("identity_batch_size:")
     )
+    available_memory_records = (
+        MemoryProfileStore(profile_store_path("inference")).load()
+        if memory_records is None
+        else tuple(memory_records)
+    )
+    measured_records = tuple(
+        (
+            field_name,
+            records_for(
+                available_memory_records,
+                memory_profile_identity(key, field_name),
+            ),
+        )
+        for field_name in baseline.field_names()
+    )
     planner = CandidatePlanner(
         AdmissionContext(
             observation=observation,
@@ -472,6 +578,7 @@ def build_tracking_autotune_request(
             realtime=context.execution_mode == "realtime",
             coreml_obb=backend == "coreml",
             cached_fields=frozenset(cached_fields),
+            measured_records=measured_records,
         )
     )
     eligible = True
@@ -563,6 +670,11 @@ def resolve_tracking_inference_config(
         result = AutotuneCoordinator(
             profile_store, trial_executor=trial_executor
         ).resolve(request)
+        if result.profile is not None and result.overlay.status in {
+            "calibrated",
+            "recorded",
+        }:
+            record_profile_memory_evidence(result.profile)
         return result.overlay.apply(config), result.overlay, result
     except Exception as exc:
         logger.exception("Inference autotune pre-load resolution failed safely")
