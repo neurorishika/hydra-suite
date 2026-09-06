@@ -696,7 +696,10 @@ def test_dataset_preparation_preserves_merge_reuse_and_slice_routing(qapp):
     assert len(calls["slice"]) == 1
     assert calls["slice"][0][0] == "/tmp/merged"
     assert calls["slice"][0][1]["params"].imgsz == 768
-    assert calls["slice"][0][1]["params"].target_sizes == [240.0, 360.0, 480.0]
+    params = calls["slice"][0][1]["params"]
+    assert params.target_sizes == pytest.approx([38.4, 76.8, 115.2, 153.6])
+    assert params.object_tile_fraction == 0.10
+    assert params.min_area_ratio == 0.25
     assert calls["slice"][0][1]["params"].reference_body_px == 0.0
     assert [source_dir for _, source_dir, _ in calls["role"]] == [
         "/tmp/sliced",

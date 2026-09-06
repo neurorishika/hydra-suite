@@ -158,15 +158,17 @@ class SliceTrainingConfig:
 
     enabled: bool = False
     geometry_mode: str = "auto_object"
-    object_tile_fraction: float = 0.15
+    object_tile_fraction: float = 0.10
     reference_body_px: float = 0.0
     slice_width: int = 0
     slice_height: int = 0
     overlap: float = 0.2
-    min_area_ratio: float = 0.1
+    min_area_ratio: float = 0.25
     negative_tile_fraction: float = 0.15
-    target_size_fractions: tuple[float, ...] = ()
-    target_sizes: tuple[float, ...] = (200.0, 300.0, 400.0)
+    target_size_fractions: tuple[float, ...] = (0.05, 0.10, 0.15, 0.20)
+    # Retained for legacy project compatibility. New defaults are expressed as
+    # fractions above; these are their equivalent apparent sizes at imgsz=640.
+    target_sizes: tuple[float, ...] = (32.0, 64.0, 96.0, 128.0)
     full_frame_mix: bool = True
     merge_threshold: float = 0.5
 
@@ -206,6 +208,11 @@ class SliceTrainingConfig:
                     values["target_sizes"], "dataset.slicing.target_sizes"
                 )
             )
+            # Legacy plans expressed their targets only as pixels at a 640px
+            # input. Preserve that explicit setting rather than masking it
+            # with the new relative defaults.
+            if "target_size_fractions" not in values:
+                values["target_size_fractions"] = ()
         config = _construct_dataclass(cls, values, "dataset.slicing")
         config.validate()
         return config
