@@ -397,6 +397,7 @@ def _point_to_dict(point: DirectCalibrationPoint) -> dict:
             "recall": score.recall,
             "f1": score.f1,
             "mean_iou": score.mean_iou,
+            "mean_quality": score.mean_quality,
         },
     }
 
@@ -413,6 +414,15 @@ def _point_from_dict(raw: dict) -> DirectCalibrationPoint:
         recall=float(score_raw["recall"]),
         f1=float(score_raw["f1"]),
         mean_iou=float(score_raw["mean_iou"]),
+        # ``.get``, not ``[...]``: profiles saved before D8 (2026-09-06)
+        # have no ``mean_quality`` because the quantity did not exist. They
+        # must keep loading -- they are valid SETTINGS -- so the field
+        # defaults to 0.0. Be aware of the consequence: re-running
+        # ``recommend_balanced`` over such a profile refuses it at the
+        # MIN_MEAN_QUALITY floor. That refusal reflects "never measured",
+        # not "measured bad"; the profile's ``recommendation_rule`` already
+        # reads ``unknown (pre-2026-09-06)``, which is the honest signal.
+        mean_quality=float(score_raw.get("mean_quality", 0.0)),
     )
     return DirectCalibrationPoint(
         label=str(raw["label"]),

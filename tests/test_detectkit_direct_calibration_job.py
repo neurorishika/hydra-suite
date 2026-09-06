@@ -327,6 +327,11 @@ def _scored_point(label="Training geometry"):
             recall=0.95,
             f1=0.95,
             mean_iou=0.81,
+            # Set explicitly (not left at the 0.0 default) so this shared
+            # fixture clears D8's MIN_MEAN_QUALITY floor -- otherwise every
+            # test that runs the recommender over it would silently assert
+            # against a refusal.
+            mean_quality=0.72,
         ),
     )
 
@@ -858,3 +863,39 @@ def test_v4_evidence_with_real_preview_and_frame_table_survives_load(tmp_path):
     _path, gt_polygons, pred_polygons = preview.frames[0]
     assert len(gt_polygons) == 1
     assert len(pred_polygons) == 1
+
+
+def test_saved_then_reloaded_points_still_earn_the_same_recommendation(tmp_path):
+    """``mean_quality`` must survive the round trip.
+
+    D8 made ``recommend_balanced`` refuse below ``MIN_MEAN_QUALITY``. If the
+    field were dropped on save (it was, until this test existed), a freshly
+    calibrated profile would be recommended in-memory and then refuse as
+    "Mistargeted" the moment it was reloaded -- with no error anywhere.
+    """
+    from hydra_suite.core.inference import direct_calibration as core_direct
+    from hydra_suite.detectkit.jobs.direct_calibration import (
+        DirectCalibrationOutcome,
+        load_direct_calibration,
+        save_direct_calibration,
+    )
+
+    request = _request(tmp_path)
+    point = _scored_point()
+    live_choice, _live_reason = core_direct.recommend_balanced([point])
+    assert live_choice is not None  # otherwise this test asserts nothing
+
+    save_direct_calibration(
+        request.evidence_dir,
+        DirectCalibrationOutcome(points=[point]),
+        request,
+    )
+    restored = load_direct_calibration(request.evidence_dir)
+    assert restored is not None
+    assert point.score.mean_quality > 0.0
+    assert restored.points[0].score.mean_quality == point.score.mean_quality
+
+    reloaded_choice, _reason = core_direct.recommend_balanced(restored.points)
+    assert (live_choice is None) == (reloaded_choice is None)
+    if live_choice is not None:
+        assert reloaded_choice.label == live_choice.label
