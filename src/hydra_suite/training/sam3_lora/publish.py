@@ -51,7 +51,18 @@ from .env import resolve_sam3_env, sam3_env_command, sam3_env_environ
 
 OUTPUT_MAX_LINES = 512
 OUTPUT_MAX_CHARS = 256 * 1024
-MAX_PROCESSES = 64
+# 512, not 64. The publish sidecar is launched through `conda run`, and the
+# combination of conda's own process tree with numpy/OpenBLAS's thread pool
+# (which sizes itself to the host's core count -- 32 here) exhausts a
+# pids.max of 64 before the worker finishes importing. Measured on mehek
+# (RTX 6000 Ada, 32 cores): `conda run` + this import chain under TasksMax=64
+# dies with "OpenBLAS blas_thread_init: pthread_create failed for thread 31
+# of 32", then "ImportError: numpy._core.multiarray failed to import", then a
+# segfault -- 100% reproducible, and it killed publish after a completed
+# 4.3-hour training run. The same chain succeeds under TasksMax=512, and
+# succeeds under TasksMax=64 when NOT wrapped in `conda run`. 512 matches the
+# limit the training scope already runs under.
+MAX_PROCESSES = 512
 MAX_RESULT_BYTES = 64 * 1024
 MAX_SIDECAR_BYTES = 4 * 1024 * 1024
 MAX_REGISTRY_BYTES = 16 * 1024 * 1024
