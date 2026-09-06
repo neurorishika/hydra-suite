@@ -374,7 +374,7 @@ def test_find_regions_cancels_before_connected_component_labeling(monkeypatch):
     ("grid_bbox", "expected_bbox"),
     [
         ((1, 1, 1, 1), (8, 8, 15, 15)),
-        ((3, 3, 3, 3), (24, 24, 32, 32)),
+        ((4, 4, 4, 4), (32, 32, 32, 32)),
     ],
 )
 def test_density_grid_bboxes_scale_inclusively_and_cover_remainder_edges(
@@ -415,6 +415,53 @@ def test_density_grid_bboxes_scale_inclusively_and_cover_remainder_edges(
 
     assert len(density_map.regions) == expected_count
     assert {region.pixel_bbox for region in density_map.regions} == {expected_bbox}
+
+
+def test_density_actual_nondivisible_grid_keeps_generating_detection_in_region():
+    """Actual density components scale back to include a three-frame source point."""
+
+    detections = _make_detections(1, 82.0, 82.0, 0.0, bbox_diag=4.0)
+    density_map, _ = compute_density_map_from_cache(
+        {frame: detections for frame in range(3)},
+        frame_h=100,
+        frame_w=100,
+        sigma_scale=0.5,
+        temporal_sigma=0.0,
+        threshold=0.5,
+        downsample_factor=8,
+        min_frame_duration=3,
+        min_area_px=1,
+    )
+
+    assert len(density_map.regions) == 1
+    assert all(density_map.regions[0].contains(frame, 82.0, 82.0) for frame in range(3))
+
+
+def test_density_actual_nondivisible_remainder_edge_is_not_clipped_away():
+    """A right-edge source point gets comparable density to an interior point."""
+
+    def _map_at(cx: float, cy: float):
+        detections = _make_detections(1, cx, cy, 0.0, bbox_diag=4.0)
+        return compute_density_map_from_cache(
+            {frame: detections for frame in range(3)},
+            frame_h=100,
+            frame_w=100,
+            sigma_scale=0.5,
+            temporal_sigma=0.0,
+            threshold=0.5,
+            downsample_factor=8,
+            min_frame_duration=3,
+            min_area_px=1,
+        )
+
+    edge_map, edge_raw = _map_at(99.0, 50.0)
+    # Compare equal sub-cell phases: 99 / 8 and 51 / 8 both have the same
+    # fractional x coordinate, so this only measures edge clipping.
+    _interior_map, interior_raw = _map_at(51.0, 50.0)
+
+    assert len(edge_map.regions) == 1
+    assert all(edge_map.regions[0].contains(frame, 99.0, 50.0) for frame in range(3))
+    assert float(edge_raw.max()) >= 0.95 * float(interior_raw.max())
 
 
 def test_tag_detections_labels_correctly():

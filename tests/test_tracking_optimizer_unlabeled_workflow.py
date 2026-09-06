@@ -196,6 +196,38 @@ def test_cancelled_validation_keeps_baseline_without_false_short_range_claim():
     assert "cancelled" in baseline.recommendation_reason
 
 
+def test_baseline_density_admission_failure_keeps_explicit_evidence_reason(
+    monkeypatch,
+):
+    """A replay resource refusal must not be overwritten with a generic failure."""
+
+    class _BudgetRejectedReplay:
+        def __init__(self, _video, _cache, start, end, **_kwargs):
+            self.start = start
+            self.end = end
+
+        def run(self, _params, *, reverse=False):
+            return ProductionReplayResult(
+                False,
+                np.arange(self.start, self.end + 1),
+                np.full((self.end - self.start + 1, 1, 2), np.nan, np.float32),
+                "Held-out autotuner replay lacks required confidence-density "
+                "evidence: AUTOTUNE_DENSITY_MAX_BYTES=512.0 MiB",
+            )
+
+    monkeypatch.setattr(
+        optimizer_module, "ProductionReplayEvaluator", _BudgetRejectedReplay
+    )
+    core = _optimizer()
+    baseline = _result({}, baseline=True)
+
+    core._production_validate_shortlist([baseline], (24, 39))
+
+    assert baseline.recommended is True
+    assert "confidence-density evidence" in baseline.recommendation_reason
+    assert "AUTOTUNE_DENSITY_MAX_BYTES" in baseline.recommendation_reason
+
+
 def test_validation_coverage_is_conservative_across_both_directions():
     positions = np.zeros((6, 1, 2), dtype=np.float32)
     backward = positions.copy()

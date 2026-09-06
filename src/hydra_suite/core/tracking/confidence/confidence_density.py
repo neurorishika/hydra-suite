@@ -115,10 +115,18 @@ def _format_density_bytes(value: int) -> str:
 def _density_grid_shape(
     frame_h: int, frame_w: int, downsample_factor: int
 ) -> tuple[int, int, int]:
-    """Return the effective downsample factor and map dimensions."""
+    """Return the effective factor and ceil-covered density-grid dimensions.
+
+    Grid coordinates are derived by dividing source detection centres by
+    ``ds``.  The grid must therefore retain a final partial cell whenever a
+    source dimension is not divisible by ``ds``; floor division silently
+    clips detections in that source-frame remainder.
+    """
 
     ds = max(1, int(downsample_factor))
-    return ds, max(1, int(frame_h) // ds), max(1, int(frame_w) // ds)
+    source_h = max(1, int(frame_h))
+    source_w = max(1, int(frame_w))
+    return ds, (source_h + ds - 1) // ds, (source_w + ds - 1) // ds
 
 
 def _largest_smoothing_chunk_frames(frame_count: int, temporal_sigma: float) -> int:
@@ -1190,9 +1198,11 @@ def compute_density_map_from_cache(
     threshold:
         Passed through to :func:`smooth_and_binarize`.
     downsample_factor:
-        Internal grids operate at ``(frame_h // factor, frame_w // factor)``
-        resolution.  Detection positions are scaled down before accumulation
-        and region bounding boxes are scaled back up on output.  Default 8.
+        Internal grids operate at ceil-divided ``(frame_h / factor,
+        frame_w / factor)`` resolution, retaining a final partial cell for
+        non-divisible source dimensions. Detection positions are scaled down
+        before accumulation and region bounding boxes are scaled back up on
+        output. Default 8.
     progress_callback:
         Optional callable ``(percent: int, message: str) -> None`` invoked
         periodically to report progress.

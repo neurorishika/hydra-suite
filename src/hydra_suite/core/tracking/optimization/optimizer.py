@@ -1742,9 +1742,15 @@ class TrackingOptimizerCore:
             _cancelled()
             return
         if baseline not in validated_results:
-            baseline.recommendation_reason = (
-                "current settings retained: baseline production validation failed"
-            )
+            failure_detail = str(baseline.recommendation_reason or "")
+            if failure_detail.startswith("production validation failed"):
+                baseline.recommendation_reason = (
+                    "current settings retained: " + failure_detail
+                )
+            else:
+                baseline.recommendation_reason = (
+                    "current settings retained: baseline production validation failed"
+                )
             return
 
         scores = aggregate_candidate_evaluations(
