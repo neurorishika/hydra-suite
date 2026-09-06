@@ -9,6 +9,7 @@ docs/superpowers/specs/2026-07-27-detectkit-sahi-sliced-training-design.md.
 from __future__ import annotations
 
 import json
+import logging
 import os
 import random
 from dataclasses import dataclass, field
@@ -18,6 +19,13 @@ from pathlib import Path
 import cv2
 import numpy as np
 
+from hydra_suite.core.inference.geometry_drift import (
+    GeometrySource,
+    log_drift_verdicts,
+    log_effective_geometry,
+    sidecar_drift_verdicts,
+)
+from hydra_suite.core.inference.slice_meta import read_slice_meta, training_geometry
 from hydra_suite.utils.slice_geometry import (
     clip_polygon_to_tile,
     plan_tiles,
@@ -38,6 +46,8 @@ from .dataset_io import (
     sorted_file_index,
 )
 from .geometry_levels import GeometryLevel
+
+logger = logging.getLogger(__name__)
 
 
 def object_major_axes_px(labels, frame_wh) -> list[float]:
@@ -96,15 +106,17 @@ def label_line_for_level(
 class SliceBuildParams:
     geometry_mode: str = "auto_object"
     imgsz: int = 640
-    object_tile_fraction: float = 0.15
+    object_tile_fraction: float = 0.10
     slice_width: int = 0
     slice_height: int = 0
     overlap: float = 0.2
-    min_area_ratio: float = 0.1
+    min_area_ratio: float = 0.25
     negative_tile_fraction: float = 0.15
-    target_sizes: list[float] = field(default_factory=lambda: [200.0, 300.0, 400.0])
+    target_sizes: list[float] = field(default_factory=lambda: [32.0, 64.0, 96.0, 128.0])
     full_frame_mix: bool = True
     reference_body_px: float = 0.0
+    balance_multiscale_loss: bool = True
+    balance_multiscale_loss_power: float = 0.5
 
 
 def _timestamp() -> str:
@@ -195,8 +207,21 @@ def _tile_sizes_for_params(params, reference_body_px) -> list[tuple[int, int]]:
 
 
 def build_sliced_obb_dataset(
-    merged_obb_dataset_dir, output_root, *, level, params, seed=42
+    merged_obb_dataset_dir,
+    output_root,
+    *,
+    level,
+    params,
+    seed=42,
+    baseline_model_path=None,
 ):
+    """Build the sliced OBB training dataset.
+
+    ``baseline_model_path`` names a published checkpoint this run exists to be
+    compared against; its stamped ``.slice_meta.json`` training geometry is
+    compared with this build's effective geometry and any divergence is
+    WARNED about, never refused (a deliberate re-scale is legitimate).
+    """
     merged_dir = Path(merged_obb_dataset_dir).expanduser().resolve()
     out_root = Path(output_root).expanduser().resolve()
     out_root.mkdir(parents=True, exist_ok=True)
@@ -204,6 +229,62 @@ def build_sliced_obb_dataset(
     for split in ("train", "val", "test"):
         (out_dir / "images" / split).mkdir(parents=True, exist_ok=True)
         (out_dir / "labels" / split).mkdir(parents=True, exist_ok=True)
+
+    # Provenance, printed before a single tile is written: the value alone is
+    # not enough, because the 2026-09-06 incident's silently-defaulted 0.055
+    # was a perfectly plausible-looking number in every artifact.
+    _defaults = SliceBuildParams()
+    log_effective_geometry(
+        logger,
+        "Sliced OBB dataset build",
+        {
+            "geometry_mode": params.geometry_mode,
+            "imgsz": params.imgsz,
+            "object_tile_fraction": params.object_tile_fraction,
+            "overlap": params.overlap,
+            "target_sizes": list(params.target_sizes or []),
+            "full_frame_mix": params.full_frame_mix,
+            "reference_body_px": params.reference_body_px,
+        },
+        {
+            key: (
+                GeometrySource.CONTRACT_DEFAULT
+                if getattr(params, key) == getattr(_defaults, key)
+                else GeometrySource.EXPLICIT
+            )
+            for key in (
+                "geometry_mode",
+                "imgsz",
+                "object_tile_fraction",
+                "overlap",
+                "target_sizes",
+                "full_frame_mix",
+            )
+        }
+        | {
+            # 0.0 here means "measure per frame from this corpus's own labels"
+            # (see ``ref_px`` below); anything else was supplied by the caller.
+            "reference_body_px": (
+                GeometrySource.CORPUS_DERIVED
+                if not params.reference_body_px
+                else GeometrySource.EXPLICIT
+            )
+        },
+    )
+    if baseline_model_path:
+        # Report only -- adopting a baseline value here would change what this
+        # run trains, which an observability guard must never do.
+        log_drift_verdicts(
+            logger,
+            sidecar_drift_verdicts(
+                training_geometry(read_slice_meta(baseline_model_path) or {}),
+                {
+                    "reference_body_px": params.reference_body_px,
+                    "object_tile_fraction": params.object_tile_fraction,
+                },
+                baseline_label=str(baseline_model_path),
+            ),
+        )
 
     rng = random.Random(int(seed))
     counts = {"train": 0, "val": 0, "test": 0, "tiles": 0, "negatives": 0, "objects": 0}
@@ -344,4 +425,8 @@ def _slice_geometry_manifest(params, measured_reference_body_px: float = 0.0) ->
         "target_sizes": list(params.target_sizes),
         "full_frame_mix": params.full_frame_mix,
         "reference_body_px": reference_body_px,
+        "multiscale_loss_balance": {
+            "enabled": params.balance_multiscale_loss,
+            "power": params.balance_multiscale_loss_power,
+        },
     }

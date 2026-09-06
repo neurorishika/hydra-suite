@@ -1987,7 +1987,12 @@ class ConfigOrchestrator:
                 "metric_track_loss": self._panels.dataset.chk_metric_track_loss.isChecked(),
                 "metric_high_uncertainty": self._panels.dataset.chk_metric_high_uncertainty.isChecked(),
                 # === INDIVIDUAL ANALYSIS ===
-                "enable_identity_analysis": self._mw._is_individual_pipeline_enabled(),
+                # The individual pipeline is the YOLO-only infrastructure used
+                # by pose, crops, and identity.  Identity itself has a separate
+                # master UI gate; persisting the pipeline state here previously
+                # made a disabled identity panel look enabled to downstream
+                # consumers such as the final-video renderer.
+                "enable_identity_analysis": self._mw._is_identity_analysis_enabled(),
                 "enable_individual_pipeline": self._mw._is_individual_pipeline_enabled(),
                 "identity_method": self._mw._selected_identity_method(),
                 "use_apriltags": self._mw._identity_config().get(

@@ -5,8 +5,12 @@ def test_slice_settings_defaults_off():
     s = SliceTrainingSettings()
     assert s.enabled is False
     assert s.geometry_mode == "auto_object"
-    assert s.target_sizes == [200.0, 300.0, 400.0]
-    assert s.target_fractions() == [200.0 / 640.0, 300.0 / 640.0, 400.0 / 640.0]
+    assert s.object_tile_fraction == 0.10
+    assert s.min_area_ratio == 0.25
+    assert s.target_sizes == [32.0, 64.0, 96.0, 128.0]
+    assert s.target_fractions() == [0.05, 0.10, 0.15, 0.20]
+    assert s.balance_multiscale_loss is True
+    assert s.balance_multiscale_loss_power == 0.5
 
 
 def test_relative_target_sizes_resolve_per_model_input():

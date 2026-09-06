@@ -354,6 +354,7 @@ When adding a new model/method: choose the stage's backend from `resolved.backen
 
 - **New detector**: implement `detect_objects`-compatible output in `core/detectors/engine.py`
 - **New identity method**: extend `core/individual/analysis.py`; preserve the crop extraction metadata and output contract
+- **New classifier artifact**: must carry `fit_policy` (`letterbox`/`squash`/`native`); preprocess only via `core.canonicalization.fit.fit_crops_for_model`. See `docs/developer-guide/classifier-compatibility.md`
 - **New runtime pipeline**: follow the checklist in `docs/developer-guide/runtime-integration.md`
 
 ### Key Source Files for Auditing Behavior

@@ -40,7 +40,7 @@ class _TileLayoutPreview(QWidget):
             "build."
         )
         self._mode = "auto_object"
-        self._target_fractions = [0.3125, 0.46875, 0.625]
+        self._target_fractions = [0.05, 0.10, 0.15, 0.20]
         self._slice_wh = (0, 0)
         self._overlap = 0.2
         self._model_input_size = 640
@@ -361,6 +361,18 @@ class SliceSettingsGroup(QGroupBox):
             "Overlap threshold used to merge duplicate predictions from neighbouring "
             "tiles during preview inference."
         )
+        self.chk_balance_loss = QCheckBox("Balance multi-scale training loss")
+        self.chk_balance_loss.setToolTip(
+            "Keep every generated tile once per epoch, but normalize the detector "
+            "loss so a scale that creates more tiles cannot dominate training."
+        )
+        self.spin_balance_power = QDoubleSpinBox()
+        self.spin_balance_power.setRange(0.0, 1.0)
+        self.spin_balance_power.setSingleStep(0.1)
+        self.spin_balance_power.setToolTip(
+            "0.5 uses square-root inverse-frequency balancing; 1.0 gives exact "
+            "per-scale balance. Full-frame examples keep their normal weight."
+        )
 
         for control in (
             self.cmb_mode,
@@ -371,6 +383,7 @@ class SliceSettingsGroup(QGroupBox):
             self.spin_min_area,
             self.spin_neg,
             self.spin_merge,
+            self.spin_balance_power,
         ):
             control.setMaximumWidth(210)
 
@@ -394,6 +407,8 @@ class SliceSettingsGroup(QGroupBox):
         add_row(8, "negative", "Empty-tile sampling fraction", self.spin_neg)
         grid.addWidget(self.chk_full, 9, 0, 1, 2)
         add_row(10, "merge", "Merge threshold", self.spin_merge)
+        grid.addWidget(self.chk_balance_loss, 11, 0, 1, 2)
+        add_row(12, "balance_power", "Balance strength", self.spin_balance_power)
 
         self.preview = _TileLayoutPreview()
         outer.addWidget(controls, 0)
@@ -448,12 +463,14 @@ class SliceSettingsGroup(QGroupBox):
             "min_area": True,
             "negative": True,
             "merge": True,
+            "balance_power": mode == "auto_object",
         }
         for key, (label, control) in self._rows.items():
             label.setVisible(visible[key])
             control.setVisible(visible[key])
         self.auto_reference_note.setVisible(mode == "auto_object")
         self.chk_full.setVisible(True)
+        self.chk_balance_loss.setVisible(mode == "auto_object")
         self._refresh_preview()
 
     def _refresh_preview(self, *_args) -> None:
@@ -479,6 +496,8 @@ class SliceSettingsGroup(QGroupBox):
         self.spin_neg.setValue(float(s.negative_tile_fraction))
         self.chk_full.setChecked(bool(s.full_frame_mix))
         self.spin_merge.setValue(float(s.merge_threshold))
+        self.chk_balance_loss.setChecked(bool(s.balance_multiscale_loss))
+        self.spin_balance_power.setValue(float(s.balance_multiscale_loss_power))
         self._reference_body_px = float(s.reference_body_px)
         if s.reference_body_px > 0.0:
             self.auto_reference_note.setText(
@@ -510,4 +529,6 @@ class SliceSettingsGroup(QGroupBox):
             ],
             full_frame_mix=self.chk_full.isChecked(),
             merge_threshold=self.spin_merge.value(),
+            balance_multiscale_loss=self.chk_balance_loss.isChecked(),
+            balance_multiscale_loss_power=self.spin_balance_power.value(),
         )

@@ -872,6 +872,17 @@ class IdentityPanel(QWidget):
             # to_config() runs on every build_config_dict()/get_parameters_dict();
             # warn once per row rather than on every call.
             self._scoring_mode_conflict_logged = False
+            # Config keys this row loaded but does not own (no widget exists).
+            self._passthrough_cfg: dict = {}
+            # A saved session's classification label. It names this
+            # classifier's output columns (CNN_<label>_Class / _Conf), and the
+            # CLI reads it from the config (core/inference/config.py), so
+            # re-deriving it from the registry meant that renaming a model's
+            # classification_label silently renamed an existing session's CSV
+            # columns in the GUI while the CLI kept the old ones. Cleared on a
+            # user model switch, like the scoring_mode pin.
+            self._label_override: str | None = None
+            self._label_conflict_logged = False
             self.btn_non_identifying = QPushButton("Non-identifying classes…")
             self.btn_non_identifying.setToolTip(
                 "Classes that do not identify an individual (e.g. 'notag').\n"
@@ -915,6 +926,16 @@ class IdentityPanel(QWidget):
             self.spin_confidence.setRange(0.0, 1.0)
             self.spin_confidence.setSingleStep(0.05)
             self.spin_confidence.setValue(0.5)
+            # True once this row's threshold was chosen by a user edit or by a
+            # loaded config. A chosen value is never replaced by a model's
+            # recommendation: _update_verification_labels runs on every combo
+            # refresh, and refreshes fire across ALL rows whenever any model is
+            # added or removed (_refresh_cnn_classifier_model_rows), so the
+            # unconditional setValue silently reverted every other row's
+            # threshold -- and the next save persisted the reverted value.
+            self._confidence_pinned = False
+            self._applying_confidence = False
+            self.spin_confidence.valueChanged.connect(self._on_confidence_edited)
             self.spin_window = QSpinBox()
             self.spin_window.setRange(1, 100)
             self.spin_window.setValue(10)
@@ -986,6 +1007,18 @@ class IdentityPanel(QWidget):
             if rel_path and rel_path != "__add_new__":
                 self._scoring_mode_override = None
                 self._scoring_mode_conflict_logged = False
+                self._label_override = None
+                # Echoed CLI-only keys belong to the model they were saved
+                # against. calibration_temperature in particular OVERRIDES the
+                # artifact's own fitted value (core/inference/config.py
+                # _resolve_cnn_temperature), so carrying it across a model
+                # switch would run the new model at the old one's temperature
+                # while _sync_calibration_status displayed the new model's fit.
+                self._passthrough_cfg = {}
+                self._label_conflict_logged = False
+                # The threshold was pinned for the PREVIOUS model; the newly
+                # chosen one gets to offer its own recommendation.
+                self._confidence_pinned = False
             if rel_path == "__add_new__":
                 self._main_window._identity_panel._handle_add_new_cnn_identity_model()
                 self._populate_model_combo()
@@ -1018,6 +1051,48 @@ class IdentityPanel(QWidget):
                 return
             self._main_window._identity_panel._refresh_cnn_classifier_model_rows()
 
+        def _effective_label(self, meta: dict) -> str:
+            """Return the classification label this row should emit.
+
+            Warns once when a pinned session label disagrees with the
+            registry's, matching _effective_scoring_mode: the panel's
+            "Classification label" field shows the REGISTRY's value, so a
+            silent divergence would leave the display and the emitted CSV
+            column names disagreeing with no explanation.
+            """
+            registry_label = str(meta.get("classification_label", "") or "cnn_identity")
+            if not self._label_override:
+                return registry_label
+            if (
+                self._label_override != registry_label
+                and not self._label_conflict_logged
+            ):
+                self._label_conflict_logged = True
+                logger.warning(
+                    "CNN classifier: the loaded session pins label=%r but the "
+                    "model registry records %r; keeping the session's value so "
+                    "its CNN_<label>_* columns stay stable. Re-select the model "
+                    "to adopt the registry's.",
+                    self._label_override,
+                    registry_label,
+                )
+            return self._label_override
+
+        def _on_confidence_edited(self, _value: float) -> None:
+            """A user edit pins the threshold against model recommendations."""
+            if self._applying_confidence:
+                return
+            self._confidence_pinned = True
+
+        def _set_confidence(self, value: float, *, pin: bool) -> None:
+            """Write the threshold without the write itself counting as an edit."""
+            self._applying_confidence = True
+            try:
+                self.spin_confidence.setValue(float(value))
+            finally:
+                self._applying_confidence = False
+            self._confidence_pinned = pin
+
         def _update_verification_labels(self, rel_path: str):
             meta = self._main_window._identity_panel._cnn_registry_entry(rel_path)
             self.lbl_arch.setText(str(meta.get("arch", "\u2014")))
@@ -1035,8 +1110,8 @@ class IdentityPanel(QWidget):
             self.lbl_recommended_confidence.setText(
                 f"{recommended:.0%}" if recommended is not None else "\u2014"
             )
-            if recommended is not None:
-                self.spin_confidence.setValue(recommended)
+            if recommended is not None and not self._confidence_pinned:
+                self._set_confidence(recommended, pin=False)
 
         def _edit_non_identifying(self) -> None:
             """Open the class-marking dialog for the currently selected model."""
@@ -1057,6 +1132,26 @@ class IdentityPanel(QWidget):
             if dlg.exec():
                 self._non_identifying_classes = dlg.selected_marks()
 
+        # Every key ``to_config`` produces. Anything else in a loaded entry is
+        # not the GUI's to own, and is echoed back verbatim on save -- see
+        # ``_passthrough_cfg``.
+        _OWNED_CONFIG_KEYS = frozenset(
+            {
+                "model_path",
+                "label",
+                "labels",
+                "class_names_per_factor",
+                "confidence",
+                "window",
+                "batch_size",
+                "unique_identifier",
+                "factor_names",
+                "non_identifying_classes",
+                "scoring_mode",
+                "rel_path",
+            }
+        )
+
         def to_config(self):
             """Return config dict or None if no model selected."""
             from hydra_suite.trackerkit.gui.main_window import get_models_root_directory
@@ -1067,27 +1162,38 @@ class IdentityPanel(QWidget):
             meta = self._main_window._identity_panel._cnn_registry_entry(rel_path)
             models_root = get_models_root_directory()
             abs_path = os.path.join(models_root, rel_path)
-            label = str(meta.get("classification_label", "") or "cnn_identity")
+            label = self._effective_label(meta)
             cnpf = meta.get("class_names_per_factor") or []
             all_labels: list[str] = []
             for factor_labels in cnpf:
                 for lbl in factor_labels:
                     if lbl and lbl not in all_labels:
                         all_labels.append(str(lbl))
-            return {
-                "model_path": abs_path,
-                "label": label,
-                "labels": all_labels,
-                "class_names_per_factor": [[str(l) for l in fl] for fl in cnpf if fl],
-                "confidence": self.spin_confidence.value(),
-                "window": self.spin_window.value(),
-                "batch_size": self.spin_batch.value(),
-                "unique_identifier": self.chk_unique_identifier.isChecked(),
-                "factor_names": [str(f) for f in (meta.get("factor_names") or [])],
-                "non_identifying_classes": list(self._non_identifying_classes),
-                "scoring_mode": self._effective_scoring_mode(meta),
-                "rel_path": rel_path,
-            }
+            # Keys the CLI reads but the GUI has no widget for -- match_bonus,
+            # mismatch_penalty, calibration_temperature
+            # (core/inference/config.py). Dropping them on save silently reset
+            # a hand-edited config to defaults; they are echoed back instead.
+            # Owned keys below always win over an echoed value.
+            entry: dict = dict(self._passthrough_cfg)
+            entry.update(
+                {
+                    "model_path": abs_path,
+                    "label": label,
+                    "labels": all_labels,
+                    "class_names_per_factor": [
+                        [str(l) for l in fl] for fl in cnpf if fl
+                    ],
+                    "confidence": self.spin_confidence.value(),
+                    "window": self.spin_window.value(),
+                    "batch_size": self.spin_batch.value(),
+                    "unique_identifier": self.chk_unique_identifier.isChecked(),
+                    "factor_names": [str(f) for f in (meta.get("factor_names") or [])],
+                    "non_identifying_classes": list(self._non_identifying_classes),
+                    "scoring_mode": self._effective_scoring_mode(meta),
+                    "rel_path": rel_path,
+                }
+            )
+            return entry
 
         def _effective_scoring_mode(self, meta: dict) -> str:
             """Return the scoring_mode this row should run with.
@@ -1155,7 +1261,7 @@ class IdentityPanel(QWidget):
                     self.combo_model.setCurrentIndex(idx)
                     self._update_verification_labels(rel_path)
             if "confidence" in cfg:
-                self.spin_confidence.setValue(float(cfg["confidence"]))
+                self._set_confidence(float(cfg["confidence"]), pin=True)
             if "window" in cfg:
                 self.spin_window.setValue(int(cfg["window"]))
             if "batch_size" in cfg:
@@ -1170,6 +1276,14 @@ class IdentityPanel(QWidget):
             # Unknown values are ignored rather than pinned: the backend
             # rejects anything outside this set
             # (core/individual/classification/cnn.py).
+            self._passthrough_cfg = {
+                key: value
+                for key, value in cfg.items()
+                if key not in self._OWNED_CONFIG_KEYS
+            }
+            saved_label = str(cfg.get("label", "") or "")
+            self._label_override = saved_label or None
+            self._label_conflict_logged = False
             saved_mode = str(cfg.get("scoring_mode", "") or "")
             self._scoring_mode_override = (
                 saved_mode if saved_mode in ("atomic", "per_head_average") else None

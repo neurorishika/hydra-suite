@@ -30,6 +30,29 @@ Individual analysis tools extract per-track crops and metadata for identity-focu
   you to raise the value.
 - Method choice should reflect your marker protocol (none/color/apriltag/custom).
 
+## Older Classifiers and Crop Preprocessing
+
+A classifier must see crops shaped the way it was trained. Models published
+since 2026-08-05 record this as a **fit policy** and are handled
+automatically. Models trained before that date carry no such record, so
+TrackerKit assumes the older `squash` (stretch-to-square) preprocessing and
+logs a warning naming the file the first time it loads.
+
+If you know what a legacy model was actually trained with, stamp it once so
+the assumption becomes a fact:
+
+```bash
+python scripts/stamp_fit_policy.py /path/to/model.pth --policy squash
+# ... or --policy letterbox if it was trained with the current ClassKit path.
+# Add --dry-run to preview. The original is backed up alongside as .bak.
+```
+
+Getting this wrong is not subtle: a mismatched policy leaves much of the
+model's input blank, and identity confidence collapses to near-noise. If
+identity results look uniformly unconfident, check this first -- the
+[evidence-quality breaker](post-processing.md#identity-evidence-and-the-quality-breaker)
+will also refuse to act on evidence that bad and will say so in the log.
+
 ## Identity Classifiers and Non-Identifying Classes
 
 Not every CNN classifier configured for individual analysis feeds identity

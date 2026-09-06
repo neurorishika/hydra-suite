@@ -383,9 +383,16 @@ def _slice_profile_overlay(
     a missing/corrupt sidecar, or an empty model path. Never raises: this
     builder is called with model paths that do not exist.
     """
+    from hydra_suite.core.inference.geometry_drift import (
+        GeometrySource,
+        log_drift_verdicts,
+        log_effective_geometry,
+        sidecar_drift_verdicts,
+    )
     from hydra_suite.core.inference.slice_meta import (
         read_slice_meta,
         resolve_slice_profile_values,
+        training_geometry,
     )
 
     mode = str(_cfg_get(cfg, "yolo_obb_mode", default="direct")).strip().lower()
@@ -436,6 +443,75 @@ def _slice_profile_overlay(
         values.get("profile_id"),
         values.get("resolution"),
     )
+    # Effective serving geometry AND its source, at every run. The 0.055
+    # incident was undetectable because the source was never printed: a
+    # contract default and a deliberate choice looked identical.
+    # ``resolution`` already distinguishes a measured profile from the
+    # stamped training prefill, so map it rather than inventing provenance.
+    _source = (
+        GeometrySource.CALIBRATION_PROFILE
+        if values.get("resolution") in ("requested", "primary")
+        else GeometrySource.STAMPED_TRAINING
+    )
+    log_effective_geometry(
+        logger,
+        "SAHI serving",
+        {
+            key: values.get(key)
+            for key in (
+                "geometry_mode",
+                "object_tile_fraction",
+                "overlap",
+                "trained_body_px",
+                "slice_width",
+                "slice_height",
+            )
+        },
+        {
+            key: _source
+            for key in (
+                "geometry_mode",
+                "object_tile_fraction",
+                "overlap",
+                "trained_body_px",
+                "slice_width",
+                "slice_height",
+            )
+        },
+    )
+    # Guard the served geometry against what the checkpoint was TRAINED at.
+    # When a profile resolves, its values come from this same sidecar, so a
+    # match is expected by construction; the case worth catching is a
+    # config/profile that serves a different scale from the trained one.
+    # ``build_engine_params`` never raises on bad metadata, and this cannot:
+    # an unparseable stamp degrades to NO_STAMPED and warns about nothing.
+    _stamped = training_geometry(meta)
+    # A RESOLVED calibration profile is a MEASURED, user-approved operating
+    # point, and direct calibration sweeps the fraction multiplicatively
+    # around the trained one (FRACTION_STEPS = 0.75/1.0/1.5), so a calibrated
+    # profile differs from the training stamp BY DESIGN. Warning about it
+    # would fire on the sanctioned workflow and train users to ignore exactly
+    # the warning the 0.055 incident needs them to read. The provenance line
+    # above already records CALIBRATION_PROFILE as the source, which is the
+    # observability this path owes. Guard only the unmeasured resolutions --
+    # the stamped-training prefill and saved/custom settings, which is where
+    # an unnoticed divergence can actually enter.
+    _profile_measured = values.get("resolution") in ("requested", "primary")
+    _effective = {"reference_body_px": values.get("trained_body_px")}
+    if not (_stamped.get("target_sizes") or []):
+        # A multi-scale model's stamped scalar fraction is NOT what the panel
+        # serves -- ``_training_values`` derives the prefill as
+        # median(target_sizes)/imgsz -- so comparing the two would warn on
+        # every multi-scale model by construction. Guard the fraction only for
+        # the single-scale case, where the stamp really is the trained value.
+        _effective["object_tile_fraction"] = values.get("object_tile_fraction")
+    if not _profile_measured:
+        log_drift_verdicts(
+            logger,
+            sidecar_drift_verdicts(
+                _stamped, _effective, baseline_label=str(model_path)
+            ),
+        )
     return values
 
 
@@ -841,6 +917,9 @@ def build_engine_params(
     identity_method = (
         str(_cfg_get(cfg, "identity_method", default="none_disabled")).strip().lower()
     )
+    identity_analysis_enabled = bool(
+        _cfg_get(cfg, "enable_identity_analysis", default=True)
+    ) and identity_method not in ("none_disabled", "none", "")
 
     # Pose block: faithfully replicate the bridge's derivation
     # (gui/orchestrators/config.py:2436-2460). ``ENABLE_POSE_EXTRACTOR`` uses
@@ -1409,7 +1488,7 @@ def build_engine_params(
         "IDENTITY_GATES_TRAJECTORY_STRUCTURE": (
             identity_cfg.posthoc.gates_trajectory_structure
         ),
-        "ENABLE_IDENTITY_ANALYSIS": individual_pipeline_enabled,
+        "ENABLE_IDENTITY_ANALYSIS": identity_analysis_enabled,
         "ENABLE_INDIVIDUAL_PIPELINE": individual_pipeline_enabled,
         "IDENTITY_METHOD": identity_method,
         "USE_APRILTAGS": use_apriltags,

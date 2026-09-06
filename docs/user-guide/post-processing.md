@@ -127,6 +127,40 @@ Relax it only when:
 - crossings are rare,
 - and fragmentation is the main failure mode.
 
+## Identity Evidence and the Quality Breaker
+
+When identity is enabled, the fragment solver can split a trajectory where
+the identity evidence changes (PELT changepoint detection) before assigning
+labels. Two behaviours are worth knowing:
+
+- **The PELT penalty is in probability units.** The signal is the smoothed
+  per-label posterior on the simplex, `[0, 1]`, used raw. Earlier versions
+  z-scored it per trajectory, which made the penalty's units depend on the
+  trajectory and inflated float noise on a flat posterior into unit-variance
+  "signal" -- 660 spurious splits over 128 tracks in one measured run. Because
+  the units are now absolute, a penalty tuned on one video means the same
+  thing on the next.
+
+- **Uninformative evidence is refused, not acted on.** Before splitting, the
+  solver assesses evidence quality: the fraction of detections confident
+  above `EVIDENCE_CONF_LEVEL` (0.5) must reach `EVIDENCE_MIN_CONF_FRAC`
+  (10%), and the distinct-labels-per-frame diversity must reach
+  `EVIDENCE_MIN_DIVERSITY` (0.30) of what is achievable. If either fails, the
+  solver logs an ERROR and refuses to split or assign:
+
+  ```
+  fragment_solver: identity evidence is uninformative (confident=..% of
+  detections, diversity=.. over .. frames) -- refusing to split or assign
+  identities. Check the classifier's fit_policy / preprocessing.
+  ```
+
+  Trajectories are then left intact rather than shredded by a source that
+  does not know anything. The smoothed per-row posterior is still written to
+  `IdentityFinalSmoothedLabel` / `...Confidence` so you can see what the
+  (uninformative) source thought. Seeing this ERROR almost always means the
+  classifier is being fed the wrong crop shape -- see
+  [Older Classifiers and Crop Preprocessing](individual-analysis.md#older-classifiers-and-crop-preprocessing).
+
 ## Related Reading
 
 - [Tracking, Identity Continuity, and Merging](tracking-and-merging.md)

@@ -22,17 +22,19 @@ You have a DetectKit project with:
    - Leave **Tile strategy** at **Fit labelled objects** (the default). DetectKit measures the reference body size from all labels during the build; it is not a manual setting.
 
 4. **Configure tile sizing** (these control how crowded frames are split):
-   - Set **Object scale in model input** to `0.3125, 0.46875, 0.625` (the default). These are fractions of the active model input; at 640px they correspond to 200, 300, and 400px.
+   - Set **Object scale in model input** to `0.05, 0.10, 0.15, 0.20` (the default). These are fractions of the active model input; at 640px they correspond to 32, 64, 96, and 128px.
      - A larger fraction means a smaller tile and more aggressive crowd-splitting.
      - DetectKit resolves each fraction for the active model input size, so changing model input size does not require translating pixel targets yourself.
    - Set **Overlap** to `0.2` (default, creates a 20% border overlap between adjacent tiles to reduce edge artifacts).
    - Use the live tile-layout preview beside the controls to see the resulting grid over the project’s labelled frame sizes at their native dimensions. Click it to cycle through the image-size distribution; all configured object-scale targets are shown together. Before the first build it is explicitly illustrative; afterward it uses the label-derived body measurement.
 
 5. **Configure negative sampling and merging:**
-   - Set **Minimum retained object area** to `0.1` (default, tiles with < 10% of the object's area are suppressed during slicing).
+   - Set **Minimum retained object area** to `0.25` (default, tiles with < 25% of the object's area are suppressed during slicing to avoid training on severely clipped animals).
    - Set **Empty-tile sampling fraction** to `0.15` (default, 15% of background-only tiles are kept, strengthening non-object detection).
    - Leave **Mix full frames** checked (default, ensures the model also learns full-frame context).
    - Set **Merge threshold** to `0.5` (default, overlapping predictions from adjacent tiles are merged when IoU exceeds this).
+   - Leave **Balance multi-scale training loss** enabled. Every tile remains in the epoch, while `Balance strength` controls inverse-frequency loss weighting: `0.5` is square-root balancing and `1.0` gives exact balance among tile-size groups. Full-frame examples retain their normal weight.
+   - This balance mode applies to single-process training. Distributed (DDP) runs retain Ultralytics' standard loader and log that balancing was skipped.
 
 6. **Choose a different tile strategy only when needed:**
    - **Use model input** makes each tile the model input size and hides object-scale controls because labels are not used to set tile size.
@@ -62,9 +64,9 @@ You have a DetectKit project with:
    - Compare the sliced preview output to the non-sliced baseline (turn off the checkbox to disable slicing temporarily).
    - On crowded frames, you should see individual bounding boxes that were previously merged; the model should now separate clusters.
    - If clusters are still merged, check that:
-     - Object scales match your typical object scale (increase the fractions if tiles are too small).
+     - Object scales match your typical object scale (decrease the fractions if tiles are too small or fragmented).
      - Overlap is not too small (0.2 is typical; lower overlap can miss objects at tile edges).
-     - Minimum retained object area is not too aggressive (0.1 allows small partial objects).
+     - Minimum retained object area is not too aggressive (0.25 deliberately rejects severely partial objects).
 
 3. **Run the scale-sweep validation:**
    - Re-run the collaborator's detection-vs-scale curve experiment on validation frames.
@@ -87,10 +89,10 @@ You have a DetectKit project with:
 2. **Document the slicing configuration:**
    - Include a note in your delivery that specifies:
      - Geometry mode used (`auto_object` in this runbook).
-     - Object scales as model-input fractions (e.g., 0.3125, 0.46875, 0.625).
+     - Object scales as model-input fractions (e.g., 0.05, 0.10, 0.15, 0.20).
      - The label-derived reference body pixel size recorded in the sidecar.
      - Overlap and min-area-ratio values.
-   - Example note: *"Model trained with SAHI labelled-object tiling; object scales 0.3125, 0.46875, 0.625 of model input; overlap 0.2; reference_body_px measured from labels. Sidecar slice_meta.json included."*
+   - Example note: *"Model trained with SAHI labelled-object tiling; object scales 0.05, 0.10, 0.15, 0.20 of model input; overlap 0.2; reference_body_px measured from labels. Sidecar slice_meta.json included."*
 
 3. **Prepare for TrackerKit inference:**
    - The `slice_meta.json` sidecar will later be read by TrackerKit's SAHI inference pipeline to auto-configure slicing for validation and production inference.

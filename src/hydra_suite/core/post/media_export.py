@@ -28,6 +28,27 @@ from hydra_suite.utils.video_encoder import VideoEncoder
 logger = logging.getLogger(__name__)
 
 
+def should_show_identity_video_overlay(config) -> bool:
+    """Whether an annotated video may expose identity-derived labels/colors.
+
+    User-mode exports retain a rich CSV as a short-lived intermediate so pose
+    overlays can be rendered.  That file can contain identity columns from an
+    earlier pass, but those columns must not override ``TrajectoryID`` labels
+    when the run's master identity control was disabled.
+    """
+    if config is None:
+        return True
+    enabled = config.get("enable_identity_analysis")
+    if enabled is False:
+        return False
+    method = config.get("identity_method")
+    if method is None:
+        # Preserve the public renderer's historical behavior for callers that
+        # supply only visual configuration.
+        return True
+    return str(method).strip().lower() not in ("", "none", "none_disabled")
+
+
 def scale_trajectories_to_original_space(trajectories_df, resize_factor):
     """Scale trajectory coordinates from resized space back to original video space."""
     if trajectories_df is None or trajectories_df.empty:
@@ -153,10 +174,18 @@ def normalize_video_identity_color_key(value):
     return token
 
 
-def build_video_track_label_array(trajectories_df):
-    """Precompute one overlay label per row using stable identity when available."""
+def build_video_track_label_array(trajectories_df, *, show_identity: bool = True):
+    """Precompute one overlay label per row using stable identity when enabled."""
     if trajectories_df is None or len(trajectories_df) == 0:
         return np.asarray([], dtype=object)
+    if not show_identity:
+        return np.asarray(
+            [
+                format_video_track_label(track_id)
+                for track_id in trajectories_df["TrajectoryID"]
+            ],
+            dtype=object,
+        )
     # Prioritize resolved final identity over raw per-frame classifier evidence (audit S8).
     identity_columns = [
         C.FINAL_LABEL,
@@ -187,10 +216,18 @@ def build_video_track_label_array(trajectories_df):
     return np.asarray(labels, dtype=object)
 
 
-def build_video_track_color_key_array(trajectories_df):
-    """Precompute one color key per row, preferring identity evidence over TrajectoryID."""
+def build_video_track_color_key_array(trajectories_df, *, show_identity: bool = True):
+    """Precompute one color key per row, preferring identity evidence when enabled."""
     if trajectories_df is None or len(trajectories_df) == 0:
         return np.asarray([], dtype=object)
+    if not show_identity:
+        return np.asarray(
+            [
+                f"trajectory:{int(track_id)}"
+                for track_id in trajectories_df["TrajectoryID"]
+            ],
+            dtype=object,
+        )
     # Prioritize resolved final identity over raw per-frame classifier evidence (audit S8).
     identity_columns = [
         C.FINAL_LABEL,
@@ -402,14 +439,21 @@ def get_pose_column_info(params, advanced_config, trajectories_df):
 
 
 def preextract_traj_arrays(
-    trajectories_df, show_pose, pose_column_triplets, show_trails
+    trajectories_df,
+    show_pose,
+    pose_column_triplets,
+    show_trails,
+    *,
+    show_identity: bool = True,
 ):
     """Pre-extract trajectory arrays and index structures for O(1)/O(log N) lookups."""
     _frame_ids = trajectories_df["FrameID"].to_numpy(dtype=np.int32)
     _track_ids = trajectories_df["TrajectoryID"].to_numpy(dtype=np.int32)
     _xs = trajectories_df["X"].to_numpy(dtype=np.float64)
     _ys = trajectories_df["Y"].to_numpy(dtype=np.float64)
-    _label_texts = build_video_track_label_array(trajectories_df)
+    _label_texts = build_video_track_label_array(
+        trajectories_df, show_identity=show_identity
+    )
     _thetas = (
         trajectories_df["Theta"].to_numpy(dtype=np.float64)
         if "Theta" in trajectories_df.columns
@@ -803,6 +847,7 @@ def render_annotated_video(
         cap.set(cv2.CAP_PROP_POS_FRAMES, start_frame)
 
     draw_p = build_video_draw_params(params, config, fps, trajectories_df)
+    show_identity = should_show_identity_video_overlay(config)
     pose_edges, pose_column_triplets, show_pose = get_pose_column_info(
         params, draw_p["advanced_config"], trajectories_df
     )
@@ -818,9 +863,15 @@ def render_annotated_video(
         _track_sorted_row_indices,
         _track_sorted_frame_vals,
     ) = preextract_traj_arrays(
-        trajectories_df, show_pose, pose_column_triplets, draw_p["show_trails"]
+        trajectories_df,
+        show_pose,
+        pose_column_triplets,
+        draw_p["show_trails"],
+        show_identity=show_identity,
     )
-    _color_keys = build_video_track_color_key_array(trajectories_df)
+    _color_keys = build_video_track_color_key_array(
+        trajectories_df, show_identity=show_identity
+    )
     _row_colors = build_precomputed_color_palette(
         draw_p["colors"], _track_ids, _color_keys
     )

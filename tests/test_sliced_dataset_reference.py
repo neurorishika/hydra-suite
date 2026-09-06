@@ -32,6 +32,16 @@ def test_object_major_axes_px_returns_all_majors():
     assert sorted(round(m) for m in majors) == [40, 80]
 
 
+def test_sliced_dataset_defaults_match_the_new_relative_training_profile():
+    params = SliceBuildParams()
+
+    assert params.object_tile_fraction == 0.10
+    assert params.min_area_ratio == 0.25
+    assert params.target_sizes == [32.0, 64.0, 96.0, 128.0]
+    assert params.balance_multiscale_loss is True
+    assert params.balance_multiscale_loss_power == 0.5
+
+
 def _write_dataset(root: Path, majors_px):
     for split in ("train", "val"):
         (root / "images" / split).mkdir(parents=True, exist_ok=True)
@@ -93,6 +103,8 @@ def test_manifest_records_explicit_reference_when_params_set(tmp_path):
         full_frame_mix=False,
         negative_tile_fraction=0.0,
         reference_body_px=123.0,
+        balance_multiscale_loss=False,
+        balance_multiscale_loss_power=1.0,
     )
     out = build_sliced_obb_dataset(
         str(merged),
@@ -102,5 +114,9 @@ def test_manifest_records_explicit_reference_when_params_set(tmp_path):
         seed=1,
     )
     assert out.stats["slice_geometry"]["reference_body_px"] == 123.0
+    assert out.stats["slice_geometry"]["multiscale_loss_balance"] == {
+        "enabled": False,
+        "power": 1.0,
+    }
     # measured is still reported (independent of the explicit override).
     assert out.stats["measured_reference_body_px"] > 0.0

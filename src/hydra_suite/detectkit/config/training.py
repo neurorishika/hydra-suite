@@ -158,22 +158,26 @@ class SliceTrainingConfig:
 
     enabled: bool = False
     geometry_mode: str = "auto_object"
-    object_tile_fraction: float = 0.15
+    object_tile_fraction: float = 0.10
     reference_body_px: float = 0.0
     slice_width: int = 0
     slice_height: int = 0
     overlap: float = 0.2
-    min_area_ratio: float = 0.1
+    min_area_ratio: float = 0.25
     negative_tile_fraction: float = 0.15
-    target_size_fractions: tuple[float, ...] = ()
-    target_sizes: tuple[float, ...] = (200.0, 300.0, 400.0)
+    target_size_fractions: tuple[float, ...] = (0.05, 0.10, 0.15, 0.20)
+    # Retained for legacy project compatibility. New defaults are expressed as
+    # fractions above; these are their equivalent apparent sizes at imgsz=640.
+    target_sizes: tuple[float, ...] = (32.0, 64.0, 96.0, 128.0)
     full_frame_mix: bool = True
     merge_threshold: float = 0.5
+    balance_multiscale_loss: bool = True
+    balance_multiscale_loss_power: float = 0.5
 
     @classmethod
     def from_dict(cls, data: dict[str, Any] | None) -> "SliceTrainingConfig":
         values = _require_mapping(data, "dataset.slicing")
-        for name in ("enabled", "full_frame_mix"):
+        for name in ("enabled", "full_frame_mix", "balance_multiscale_loss"):
             if name in values:
                 values[name] = _require_bool(values[name], f"dataset.slicing.{name}")
         if "geometry_mode" in values:
@@ -185,7 +189,12 @@ class SliceTrainingConfig:
         for name in ("object_tile_fraction", "reference_body_px", "overlap"):
             if name in values:
                 values[name] = _require_number(values[name], f"dataset.slicing.{name}")
-        for name in ("min_area_ratio", "negative_tile_fraction", "merge_threshold"):
+        for name in (
+            "min_area_ratio",
+            "negative_tile_fraction",
+            "merge_threshold",
+            "balance_multiscale_loss_power",
+        ):
             if name in values:
                 values[name] = _require_number(values[name], f"dataset.slicing.{name}")
         for name in ("slice_width", "slice_height"):
@@ -206,6 +215,11 @@ class SliceTrainingConfig:
                     values["target_sizes"], "dataset.slicing.target_sizes"
                 )
             )
+            # Legacy plans expressed their targets only as pixels at a 640px
+            # input. Preserve that explicit setting rather than masking it
+            # with the new relative defaults.
+            if "target_size_fractions" not in values:
+                values["target_size_fractions"] = ()
         config = _construct_dataclass(cls, values, "dataset.slicing")
         config.validate()
         return config
@@ -220,6 +234,7 @@ class SliceTrainingConfig:
             ("min_area_ratio", self.min_area_ratio),
             ("negative_tile_fraction", self.negative_tile_fraction),
             ("merge_threshold", self.merge_threshold),
+            ("balance_multiscale_loss_power", self.balance_multiscale_loss_power),
         ):
             if not 0.0 <= float(value) <= 1.0:
                 raise TrainingPlanError(
@@ -329,6 +344,10 @@ class DetectTrainingPlan:
     species: str = "species"
     model_tag: str = "train"
     sam3_params: Sam3LoraParams | None = None
+    #: Optional path/registry key of a published artifact this run exists to
+    #: be compared against. Purely observational: the builders warn when the
+    #: geometry diverges and never change what is built.
+    comparison_baseline: str = ""
 
     @classmethod
     def from_dict(
@@ -577,6 +596,7 @@ class DetectTrainingPlan:
             "species",
             "model_tag",
             "sam3",
+            "comparison_baseline",
         }
         unknown_root = sorted(set(root) - known_root)
         if unknown_root:
@@ -617,6 +637,9 @@ class DetectTrainingPlan:
                 root.get("model_tag", "train"), "model_tag", allow_empty=False
             ),
             sam3_params=sam3_params,
+            comparison_baseline=_require_string(
+                root.get("comparison_baseline", ""), "comparison_baseline"
+            ),
         )
         plan.validate()
         return plan
@@ -745,6 +768,7 @@ class DetectTrainingPlan:
             imgsz_by_role=tuple((role.role.value, role.imgsz) for role in self.roles),
             slice_settings=self.slice_settings,
             sam3_params=self.sam3_params,
+            comparison_baseline=self.comparison_baseline,
         )
 
     def role_entries(self, role_dataset_dirs: dict[str, str]):
@@ -780,6 +804,7 @@ class DetectTrainingPlan:
             "species": self.species,
             "model_tag": self.model_tag,
             "sam3": asdict(self.sam3_params) if self.sam3_params else None,
+            "comparison_baseline": self.comparison_baseline,
         }
 
 

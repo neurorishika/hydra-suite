@@ -56,7 +56,7 @@ def test_worm_bgsub_config_leaves_individual_pipeline_disabled(tmp_path):
     assert not params.get("CNN_CLASSIFIERS")
 
 
-def test_fly_obb_config_has_no_cnn_classifiers_even_with_individual_pipeline_on(
+def test_fly_obb_config_keeps_individual_pipeline_on_but_identity_off(
     tmp_path,
 ):
     # fly_obb runs YOLO OBB (individual pipeline "on" per the detection-method
@@ -65,7 +65,7 @@ def test_fly_obb_config_has_no_cnn_classifiers_even_with_individual_pipeline_on(
     config = _load_fixture_config("fly_obb")
     params = _build_params(config, tmp_path)
 
-    assert params["ENABLE_IDENTITY_ANALYSIS"]
+    assert not params["ENABLE_IDENTITY_ANALYSIS"]
     assert params["ENABLE_INDIVIDUAL_PIPELINE"]
     assert not params.get("CNN_CLASSIFIERS")
 
