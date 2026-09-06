@@ -333,12 +333,10 @@ def test_tracking_parameter_helper_coalesces_preview_frame_renders(
     dialog.close()
 
 
-def test_tracking_parameter_helper_on_finished_reads_stop_requested_from_core(
+def test_tracking_parameter_helper_on_finished_uses_search_convergence_state(
     qapp: QApplication,
 ) -> None:
-    """Regression test: ``on_finished`` must read ``_stop_requested`` off the
-    ``TrackingOptimizerCore`` (``self.optimizer._core``), not off the QThread
-    wrapper itself, which has no such attribute and raised AttributeError."""
+    """Plateau convergence is distinct from an explicit user cancellation."""
     dialog = ParameterHelperDialog(
         video_path="/tmp/video.mp4",
         detection_cache_path="/tmp/cache.npz",
@@ -350,7 +348,7 @@ def test_tracking_parameter_helper_on_finished_reads_stop_requested_from_core(
 
     dialog.results = [OptimizationResult(params={}, score=1.0, trial_number=0)]
     dialog.optimizer = types.SimpleNamespace(
-        _core=types.SimpleNamespace(_stop_requested=True)
+        search_converged=True,
     )
 
     dialog.on_finished()

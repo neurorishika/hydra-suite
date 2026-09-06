@@ -189,6 +189,18 @@ class TrackingOptimizer(QThread):
     def stop(self):
         self._core.request_stop()
 
+    @property
+    def disabled_tuning_dimensions(self) -> dict[str, str]:
+        """Replay-excluded dimensions surfaced by the core optimizer."""
+
+        return dict(self._core.disabled_tuning_dimensions)
+
+    @property
+    def search_converged(self) -> bool:
+        """Whether plateau policy ended search without user cancellation."""
+
+        return bool(self._core._search_converged)
+
     def run(self):
         try:
             self._core.optimize()

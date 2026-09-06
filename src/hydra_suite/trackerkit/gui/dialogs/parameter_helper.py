@@ -37,9 +37,13 @@ from PySide6.QtWidgets import (
     QWidget,
 )
 
-from hydra_suite.core.tracking.optimization.optimizer import (
-    _PARAM_RANGES,
-    OptimizationResult,
+from hydra_suite.core.tracking.optimization.optimizer import OptimizationResult
+from hydra_suite.core.tracking.optimization.parameter_contract import (
+    canonical_evaluation_params,
+)
+from hydra_suite.core.tracking.optimization.production_replay import (
+    cache_directory,
+    disabled_replay_tuning_dimensions,
 )
 from hydra_suite.trackerkit.gui.autotune_contract import applicable_candidate_params
 from hydra_suite.trackerkit.gui.workers.param_optimizer_worker import (
@@ -86,6 +90,8 @@ def _badge_item(cost: float, display: str) -> QTableWidgetItem:
 class ParameterHelperDialog(BaseDialog):
     """Interactive dialog for auto-tuning core tracking parameters (Kalman, YOLO thresholds, assignment weights) against a detection cache."""
 
+    _WORKER_SHUTDOWN_WAIT_MS = 1_500
+
     def __init__(
         self,
         video_path: str,
@@ -102,10 +108,17 @@ class ParameterHelperDialog(BaseDialog):
             apply_dark_style=True,
         )
         self.video_path = video_path
-        self.detection_cache_path = detection_cache_path
+        # A production run can retain ``detection.npz`` while the optimizer
+        # consumes its containing cache directory. Keep dialog persistence and
+        # worker handoff canonical even when callers use either public form.
+        self.detection_cache_path = str(cache_directory(detection_cache_path))
         self.start_frame = start_frame
         self.end_frame = end_frame
         self.base_params = current_params.copy()
+        self._disabled_tuning_dimensions = disabled_replay_tuning_dimensions(
+            self.base_params
+        )
+        self._terminal_shutdown_started = False
 
         self.results: List[OptimizationResult] = []
         self._last_error: str | None = None
@@ -306,6 +319,40 @@ class ParameterHelperDialog(BaseDialog):
         self.cb_conf.setChecked(True)
         self.cb_iou = QCheckBox("YOLO IOU threshold  (NMS suppression)")
 
+        yolo_source = (
+            str(self.base_params.get("DETECTION_METHOD", "background_subtraction"))
+            .strip()
+            .lower()
+            == "yolo_obb"
+        )
+        disabled_reason = self._disabled_tuning_dimensions.get(
+            "YOLO_CONFIDENCE_THRESHOLD"
+        ) or self._disabled_tuning_dimensions.get("YOLO_IOU_THRESHOLD")
+        if not yolo_source:
+            # The general tracking helper is available for every detection
+            # source. Background subtraction has no meaningful YOLO knobs, so
+            # do not present inert controls merely because the dialog shares a
+            # layout with the YOLO path.
+            for checkbox in (self.cb_conf, self.cb_iou):
+                checkbox.setChecked(False)
+                checkbox.setEnabled(False)
+                checkbox.setVisible(False)
+                checkbox.setToolTip(disabled_reason or "Not used by this source.")
+            note = QLabel(
+                "This detection source does not use YOLO confidence or IoU filtering."
+            )
+            note.setWordWrap(True)
+            note.setStyleSheet("color: #d8d8d8; font-size: 11px;")
+            lay.addWidget(note)
+            lay.addStretch()
+            return w
+
+        if disabled_reason:
+            for checkbox in (self.cb_conf, self.cb_iou):
+                checkbox.setChecked(False)
+                checkbox.setEnabled(False)
+                checkbox.setToolTip(disabled_reason)
+
         lay.addWidget(
             self._checkboxes_in_group(
                 "Detection Filtering",
@@ -325,6 +372,15 @@ class ParameterHelperDialog(BaseDialog):
                 ],
             )
         )
+        if disabled_reason:
+            # ``_checkboxes_in_group`` installs the normal explanatory
+            # tooltips, so apply the replay-fidelity explanation afterwards.
+            for checkbox in (self.cb_conf, self.cb_iou):
+                checkbox.setToolTip(disabled_reason)
+            note = QLabel(disabled_reason)
+            note.setWordWrap(True)
+            note.setStyleSheet("color: #f0c060; font-size: 11px;")
+            lay.addWidget(note)
         lay.addStretch()
         return w
 
@@ -1154,7 +1210,7 @@ class ParameterHelperDialog(BaseDialog):
 
     def get_tuning_config(self) -> Dict[str, bool]:
         """Return a mapping of tracking parameter names to whether each is selected for Optuna optimization."""
-        return {
+        config = {
             "YOLO_CONFIDENCE_THRESHOLD": self.cb_conf.isChecked(),
             "YOLO_IOU_THRESHOLD": self.cb_iou.isChecked(),
             "MAX_DISTANCE_MULTIPLIER": self.cb_dist.isChecked(),
@@ -1170,6 +1226,25 @@ class ParameterHelperDialog(BaseDialog):
             "KALMAN_MATURITY_AGE": self.cb_kalman_maturity.isChecked(),
             "LOST_THRESHOLD_FRAMES": self.cb_lost_thresh.isChecked(),
         }
+        return {
+            key: enabled and key not in self._disabled_tuning_dimensions
+            for key, enabled in config.items()
+        }
+
+    def _apply_disabled_tuning_dimensions(
+        self, disabled_dimensions: Dict[str, str]
+    ) -> None:
+        """Reflect core replay exclusions in the corresponding UI controls."""
+
+        self._disabled_tuning_dimensions = dict(disabled_dimensions)
+        for key, reason in self._disabled_tuning_dimensions.items():
+            attr = self._CB_MAP.get(key)
+            checkbox = getattr(self, attr, None) if attr is not None else None
+            if checkbox is None:
+                continue
+            checkbox.setChecked(False)
+            checkbox.setEnabled(False)
+            checkbox.setToolTip(reason)
 
     # ── Optimization ──────────────────────────────────────────────────────────
 
@@ -1222,6 +1297,24 @@ class ParameterHelperDialog(BaseDialog):
             on_plateau="stop" if self.combo_plateau.currentIndex() == 1 else "restart",
             sampler_type=["auto", "gp", "tpe"][self.combo_sampler.currentIndex()],
         )
+        # The core owns the final safety decision. It can change as replay
+        # support evolves, so surface its actual exclusions rather than relying
+        # only on the dialog's initial source inspection.
+        self._apply_disabled_tuning_dimensions(
+            self.optimizer.disabled_tuning_dimensions
+        )
+        if not any(self.get_tuning_config().values()):
+            self.optimizer = None
+            self.btn_run.setEnabled(True)
+            self.btn_stop.setEnabled(False)
+            self.progress.setVisible(False)
+            QMessageBox.warning(
+                self,
+                "No Replay-Faithful Dimensions",
+                "All selected dimensions are unavailable for faithful read-only replay. "
+                "Choose another tracking parameter or change the detection setup.",
+            )
+            return
         self.optimizer.progress_signal.connect(self.on_progress)
         self.optimizer.result_signal.connect(self.on_results)
         self.optimizer.error_signal.connect(self.on_error)
@@ -1243,6 +1336,8 @@ class ParameterHelperDialog(BaseDialog):
     def on_error(self, msg: str):
         """Surface an optimizer failure loudly instead of letting it disappear
         into a generic 'no results' status once the thread finishes."""
+        if self._terminal_shutdown_started:
+            return
         self._last_error = msg
         QMessageBox.critical(self, "Optimization Error", msg)
 
@@ -1371,14 +1466,14 @@ class ParameterHelperDialog(BaseDialog):
         return "  ".join(parts)
 
     def on_finished(self):
+        if self._terminal_shutdown_started:
+            return
         self.btn_run.setEnabled(True)
         self.btn_stop.setEnabled(False)
         self.progress.setVisible(False)
         n = len(self.results)
         if n > 0:
-            converged = (
-                self.optimizer is not None and self.optimizer._core._stop_requested
-            )
+            converged = self.optimizer is not None and self.optimizer.search_converged
             reason = "Converged (plateau)" if converged else "Search finished"
             recommended = next((r for r in self.results if r.recommended), None)
             decision = (
@@ -1409,8 +1504,11 @@ class ParameterHelperDialog(BaseDialog):
             )
 
         if self.preview_worker and self.preview_worker.isRunning():
-            self.preview_worker.stop()
-            self.preview_worker.wait()
+            if not self._stop_worker_bounded(self.preview_worker, "preview"):
+                self.status_label.setText(
+                    "Previous preview is still stopping; wait a moment before starting another."
+                )
+                return
 
         self.status_label.setText(f"Previewing candidate rank {row + 1}...")
         self._prev_auto_fit_pending = True
@@ -1451,34 +1549,22 @@ class ParameterHelperDialog(BaseDialog):
 
     def _state_path(self) -> Path:
         """Sidecar file next to the detection cache."""
-        return build_autotune_state_path(self.detection_cache_path)
+        return build_autotune_state_path(
+            cache_directory(self.detection_cache_path) / "detection.npz"
+        )
 
     def _compute_state_key(self) -> str:
-        """SHA-256 of base_params (tunable keys + domain constraints) + frame range.
+        """SHA-256 of the full production-replay input and optimizer setup.
 
-        Domain params are physical constraints read from the Main Window that the
-        optimiser never tunes but that change the meaning of the score: body size
-        (via REFERENCE_BODY_SIZE × RESIZE_FACTOR), max velocity, recovery distance,
-        and motion anisotropy.  Changing any of them in the Main Window will
-        invalidate cached results when the dialog is reopened.
+        A saved ranking is meaningful only for the exact fixed parameters that
+        shape a replay, not merely the knobs Optuna can change. The canonical
+        snapshot includes association/identity/density/arena settings and
+        fingerprints ndarray content such as ROI masks.
         """
-        subset = {
-            k: self.base_params[k]
-            for k in sorted(_PARAM_RANGES.keys())
-            if k in self.base_params
-        }
-        domain = {
-            "KALMAN_MAX_VELOCITY_MULTIPLIER": self.base_params.get(
-                "KALMAN_MAX_VELOCITY_MULTIPLIER", 2.0
-            ),
-            "KALMAN_ANISOTROPY_RATIO": self.base_params.get(
-                "KALMAN_ANISOTROPY_RATIO", 10.0
-            ),
-            "REFERENCE_BODY_SIZE": self.base_params.get("REFERENCE_BODY_SIZE", 20.0),
-            "RESIZE_FACTOR": self.base_params.get("RESIZE_FACTOR", 1.0),
-        }
 
-        def _source_signature(path: str | Path) -> object:
+        def _source_signature(
+            path: str | Path, *, cache_contents_only: bool = False
+        ) -> object:
             source = Path(path)
             try:
                 stat = source.stat()
@@ -1489,31 +1575,47 @@ class ParameterHelperDialog(BaseDialog):
                 for member in sorted(source.rglob("*")):
                     if not member.is_file():
                         continue
+                    relative = member.relative_to(source)
+                    if cache_contents_only and not (
+                        relative.name == "cache_set.json"
+                        or relative.suffix == ".npz"
+                        or any(part.endswith(".npz.chunks") for part in relative.parts)
+                    ):
+                        # The cache directory also holds UI state, keyed
+                        # density regions, and optional diagnostics. They are
+                        # mutable *consumers* of the raw cache, not the raw
+                        # cache contract itself. Including one would make the
+                        # state key depend on the sidecar this dialog writes.
+                        continue
                     try:
                         member_stat = member.stat()
                     except OSError:
                         continue
                     members.append(
                         (
-                            str(member.relative_to(source)),
+                            str(relative),
                             member_stat.st_size,
                             member_stat.st_mtime_ns,
                         )
                     )
-                return ("directory", stat.st_mtime_ns, members)
+                # Do not fingerprint the directory mtime: writing an ignored
+                # sidecar still updates it and would invalidate this dialog's
+                # own saved ranking on the next open.
+                return ("directory", members)
             return stat.st_size, stat.st_mtime_ns
 
         payload = json.dumps(
             {
-                "objective_version": 2,
+                "objective_version": 4,
                 "cache_path": str(self.detection_cache_path),
-                "cache_signature": _source_signature(self.detection_cache_path),
+                "cache_signature": _source_signature(
+                    self.detection_cache_path, cache_contents_only=True
+                ),
                 "video_path": str(self.video_path),
                 "video_signature": _source_signature(self.video_path),
                 "start": self.start_frame,
                 "end": self.end_frame,
-                "base_params": subset,
-                "domain_params": domain,
+                "base_params": canonical_evaluation_params(self.base_params),
                 "tuning_config": self.get_tuning_config(),
                 "scoring_weights": self.get_scoring_weights(),
                 "search_settings": {
@@ -1613,6 +1715,9 @@ class ParameterHelperDialog(BaseDialog):
             widget = getattr(self, attr, None)
             if widget is not None and param_key in tuning_cfg:
                 widget.setChecked(bool(tuning_cfg[param_key]))
+        # A persisted old session must not re-enable dimensions the current
+        # replay contract marks as inert or unfaithful.
+        self._apply_disabled_tuning_dimensions(self._disabled_tuning_dimensions)
 
         opt = state.get("opt_settings", {})
         if "n_trials" in opt:
@@ -1671,12 +1776,62 @@ class ParameterHelperDialog(BaseDialog):
             f"Restored {len(restored)} cached results from previous run."
         )
 
+    def _stop_worker_bounded(self, worker: Any, label: str) -> bool:
+        """Request cooperative stop and wait only a bounded time for *worker*."""
+
+        if worker is None or not worker.isRunning():
+            return True
+        worker.stop()
+        stopped = worker.wait(self._WORKER_SHUTDOWN_WAIT_MS)
+        if not stopped:
+            logger.warning(
+                "%s worker did not stop within %d ms during dialog shutdown",
+                label,
+                self._WORKER_SHUTDOWN_WAIT_MS,
+            )
+        return bool(stopped)
+
+    def _shutdown_background_workers(self) -> bool:
+        """Stop optimizer and preview workers without allowing an endless UI wait."""
+
+        optimizer_stopped = self._stop_worker_bounded(self.optimizer, "optimizer")
+        preview_stopped = self._stop_worker_bounded(self.preview_worker, "preview")
+        return optimizer_stopped and preview_stopped
+
+    def _begin_terminal_shutdown(self) -> bool:
+        """Stop workers before a terminal exit, keeping a failed stop retryable."""
+
+        if self._terminal_shutdown_started:
+            return True
+        if not self._shutdown_background_workers():
+            self.status_label.setText(
+                "Stopping background work… this dialog will remain open until it ends."
+            )
+            return False
+        self._terminal_shutdown_started = True
+        return True
+
+    def reject(self) -> None:
+        """Cancel safely even when Qt hides the dialog without a close event."""
+
+        if self._begin_terminal_shutdown():
+            super().reject()
+
+    def accept(self) -> None:
+        """Stop background work before applying a selected candidate and closing."""
+
+        if self._begin_terminal_shutdown():
+            super().accept()
+
+    def done(self, result: int) -> None:
+        """Cover accept/reject and direct Qt ``done`` lifecycle exits."""
+
+        if self._begin_terminal_shutdown():
+            super().done(result)
+
     def closeEvent(self, event) -> None:
+        if not self._begin_terminal_shutdown():
+            event.ignore()
+            return
         self._save_state()
-        if self.optimizer and self.optimizer.isRunning():
-            self.optimizer.stop()
-            self.optimizer.wait()
-        if self.preview_worker and self.preview_worker.isRunning():
-            self.preview_worker.stop()
-            self.preview_worker.wait()
         super().closeEvent(event)

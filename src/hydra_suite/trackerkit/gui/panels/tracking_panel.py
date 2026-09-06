@@ -365,6 +365,7 @@ class TrackingPanel(QWidget):
 
         self.spin_Wp = QDoubleSpinBox()
         self.spin_Wp.setRange(0.0, 10.0)
+        self.spin_Wp.setDecimals(2)
         self.spin_Wp.setValue(1.0)
         self.spin_Wp.setToolTip(
             "Weight for position distance in the assignment cost.\n"
@@ -372,6 +373,7 @@ class TrackingPanel(QWidget):
         )
         self.spin_Wo = QDoubleSpinBox()
         self.spin_Wo.setRange(0.0, 10.0)
+        self.spin_Wo.setDecimals(2)
         self.spin_Wo.setValue(1.0)
         self.spin_Wo.setToolTip(
             "Weight for orientation difference in the assignment cost."
@@ -384,6 +386,7 @@ class TrackingPanel(QWidget):
         self.spin_Wa.setToolTip("Weight for area difference in the assignment cost.")
         self.spin_Wasp = QDoubleSpinBox()
         self.spin_Wasp.setRange(0.0, 10.0)
+        self.spin_Wasp.setDecimals(2)
         self.spin_Wasp.setValue(0.1)
         self.spin_Wasp.setToolTip(
             "Weight for aspect-ratio difference in the assignment cost."

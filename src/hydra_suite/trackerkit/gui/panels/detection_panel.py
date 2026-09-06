@@ -1124,6 +1124,7 @@ class DetectionPanel(QWidget):
         # ------------------------------------------------------------------
         self.spin_yolo_confidence = QDoubleSpinBox()
         self.spin_yolo_confidence.setRange(0.01, 1.0)
+        self.spin_yolo_confidence.setDecimals(2)
         self.spin_yolo_confidence.setValue(0.25)
         self.spin_yolo_confidence.setFixedHeight(30)
         self.spin_yolo_confidence.setToolTip(
@@ -1145,6 +1146,7 @@ class DetectionPanel(QWidget):
         )
         self.spin_yolo_iou = QDoubleSpinBox()
         self.spin_yolo_iou.setRange(0.01, 1.0)
+        self.spin_yolo_iou.setDecimals(2)
         self.spin_yolo_iou.setValue(0.7)
         self.spin_yolo_iou.setFixedHeight(30)
         self.spin_yolo_iou.setToolTip(

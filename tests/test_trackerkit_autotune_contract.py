@@ -4,18 +4,23 @@ import os
 import sys
 from types import SimpleNamespace
 
+import numpy as np
 import pytest
 
 os.environ.setdefault("QT_QPA_PLATFORM", "offscreen")
 
 pytest.importorskip("PySide6")
 
-from PySide6.QtWidgets import QApplication  # noqa: E402
+from PySide6.QtWidgets import QApplication, QDoubleSpinBox, QLabel  # noqa: E402
 
 from hydra_suite.core.tracking.optimization.optimizer import (  # noqa: E402
     _PARAM_RANGES,
     OptimizationResult,
 )
+from hydra_suite.core.tracking.optimization.parameter_contract import (  # noqa: E402
+    tracking_autotune_parameter,
+)
+from hydra_suite.trackerkit.config.schemas import TrackerConfig  # noqa: E402
 from hydra_suite.trackerkit.gui.autotune_contract import (  # noqa: E402
     TRACKING_AUTOTUNE_CANDIDATE_KEYS,
     AutotuneCandidateApplicationError,
@@ -25,9 +30,16 @@ from hydra_suite.trackerkit.gui.autotune_contract import (  # noqa: E402
 from hydra_suite.trackerkit.gui.dialogs.parameter_helper import (  # noqa: E402
     ParameterHelperDialog,
 )
+from hydra_suite.trackerkit.gui.orchestrators import (  # noqa: E402
+    config as config_module,
+)
 from hydra_suite.trackerkit.gui.orchestrators.config import (  # noqa: E402
     ConfigOrchestrator,
 )
+from hydra_suite.trackerkit.gui.panels.detection_panel import (  # noqa: E402
+    DetectionPanel,
+)
+from hydra_suite.trackerkit.gui.panels.tracking_panel import TrackingPanel  # noqa: E402
 
 
 class _Spin:
@@ -47,6 +59,50 @@ class _Spin:
 
     def value(self) -> float:
         return self._value
+
+
+class _TrackingPanelHost:
+    """Minimal MainWindow surface needed to construct a real TrackingPanel."""
+
+    def _set_compact_scroll_layout(self, _layout) -> None:
+        pass
+
+    def _set_compact_section_widget(self, _widget) -> None:
+        pass
+
+    def _create_help_label(self, text: str, **_kwargs) -> QLabel:
+        return QLabel(text)
+
+    def _remember_collapsible_state(self, *_args) -> None:
+        pass
+
+    def _open_parameter_helper(self) -> None:
+        pass
+
+
+class _DetectionPanelHost(_TrackingPanelHost):
+    """Minimal MainWindow surface needed to construct a real DetectionPanel."""
+
+    def __init__(self) -> None:
+        self.advanced_config: dict[str, object] = {}
+
+    def _open_bg_parameter_helper(self) -> None:
+        pass
+
+    def _gpu_fast_obb_is_coreml_only(self) -> bool:
+        return False
+
+    def _update_obb_mode_warning(self) -> None:
+        pass
+
+    def _auto_set_body_size_from_detection(self) -> None:
+        pass
+
+    def _auto_set_aspect_ratio_from_detection(self) -> None:
+        pass
+
+    def _auto_set_margin_from_detection(self) -> None:
+        pass
 
 
 def _panels(*, fps: float = 120.0) -> SimpleNamespace:
@@ -69,6 +125,42 @@ def _panels(*, fps: float = 120.0) -> SimpleNamespace:
             spin_kalman_initial_velocity_retention=_Spin(0.0, 1.0),
             spin_kalman_maturity_age=_Spin(0.001, 8.0),
             spin_lost_thresh=_Spin(0.001, 40.0),
+        ),
+    )
+
+
+def _qt_spin(
+    minimum: float, maximum: float, decimals: int, value: float = 0.0
+) -> QDoubleSpinBox:
+    spin = QDoubleSpinBox()
+    spin.setRange(minimum, maximum)
+    spin.setDecimals(decimals)
+    spin.setValue(value)
+    return spin
+
+
+def _qt_panels(*, fps: float) -> SimpleNamespace:
+    """Real QDoubleSpinBoxes with TrackerKit's production precisions."""
+
+    return SimpleNamespace(
+        setup=SimpleNamespace(spin_fps=_qt_spin(1.0, 240.0, 2, fps)),
+        detection=SimpleNamespace(
+            spin_yolo_confidence=_qt_spin(0.01, 1.0, 2),
+            spin_yolo_iou=_qt_spin(0.01, 1.0, 2),
+        ),
+        tracking=SimpleNamespace(
+            spin_max_dist=_qt_spin(0.1, 20.0, 2),
+            spin_Wp=_qt_spin(0.0, 10.0, 2),
+            spin_Wo=_qt_spin(0.0, 10.0, 2),
+            spin_Wa=_qt_spin(0.0, 2.0, 4),
+            spin_Wasp=_qt_spin(0.0, 10.0, 2),
+            spin_kalman_noise=_qt_spin(0.0, 1.0, 4),
+            spin_kalman_meas=_qt_spin(0.0, 1.0, 4),
+            spin_kalman_damping=_qt_spin(0.5, 0.999, 3),
+            spin_kalman_longitudinal_noise=_qt_spin(0.1, 20.0, 1),
+            spin_kalman_initial_velocity_retention=_qt_spin(0.0, 1.0, 2),
+            spin_kalman_maturity_age=_qt_spin(0.001, 8.0, 4),
+            spin_lost_thresh=_qt_spin(0.001, 40.0, 4),
         ),
     )
 
@@ -105,6 +197,33 @@ def test_orchestrator_applies_candidate_velocity_and_converts_frame_units() -> N
     assert panels.tracking.spin_lost_thresh.value() == pytest.approx(0.2)
 
 
+def test_orchestrator_normalizes_production_cache_member_path(
+    monkeypatch, tmp_path
+) -> None:
+    cache_member = tmp_path / "production-cache" / "detection.npz"
+    main_window = SimpleNamespace(current_detection_cache_path=str(cache_member))
+    panels = SimpleNamespace(
+        setup=SimpleNamespace(csv_line=SimpleNamespace(text=lambda: ""))
+    )
+    orchestrator = ConfigOrchestrator(
+        main_window=main_window,
+        config=object(),
+        panels=panels,
+    )
+    monkeypatch.setattr(
+        config_module,
+        "detection_cache_dir_covers_range",
+        lambda *_args, **_kwargs: True,
+    )
+
+    path, already_valid = orchestrator._find_or_plan_optimizer_cache_path(
+        "video.mp4", {}, 0, 10
+    )
+
+    assert already_valid is True
+    assert path == str(cache_member.parent)
+
+
 def test_apply_candidate_rejects_out_of_range_value_without_partial_write() -> None:
     panels = _panels()
     with pytest.raises(AutotuneCandidateApplicationError, match="W_AREA"):
@@ -132,6 +251,111 @@ def test_apply_candidate_rejects_non_numeric_value_without_partial_write() -> No
         )
 
     assert panels.tracking.spin_Wp.value() == 0.0
+
+
+def test_apply_candidate_uses_real_qt_precision_before_write(
+    qapp: QApplication,
+) -> None:
+    panels = _qt_panels(fps=240.0)
+
+    apply_tracking_autotune_candidate(
+        {
+            "YOLO_CONFIDENCE_THRESHOLD": 0.995,
+            "YOLO_IOU_THRESHOLD": 0.125,
+            "W_AREA": 0.12345678,
+            "KALMAN_DAMPING": 0.91234,
+            "KALMAN_LONGITUDINAL_NOISE_MULTIPLIER": 5.44,
+        },
+        panels,
+    )
+
+    # These are actual QDoubleSpinBox round trips, not mock rounding. In
+    # particular Qt represents 0.995 as 0.99 at two decimals.
+    assert panels.detection.spin_yolo_confidence.value() == 0.99
+    assert panels.detection.spin_yolo_iou.value() == 0.13
+    assert panels.tracking.spin_Wa.value() == 0.1235
+    assert panels.tracking.spin_kalman_damping.value() == 0.912
+    assert panels.tracking.spin_kalman_longitudinal_noise.value() == 5.4
+
+
+def test_real_tracking_panel_matches_shared_precision_contract(
+    qapp: QApplication,
+) -> None:
+    """Exercise production TrackerKit controls, not only precision-matched mocks."""
+
+    panel = TrackingPanel(_TrackingPanelHost(), TrackerConfig())
+    try:
+        widgets = {
+            "MAX_DISTANCE_MULTIPLIER": "spin_max_dist",
+            "W_POSITION": "spin_Wp",
+            "W_ORIENTATION": "spin_Wo",
+            "W_AREA": "spin_Wa",
+            "W_ASPECT": "spin_Wasp",
+            "KALMAN_NOISE_COVARIANCE": "spin_kalman_noise",
+            "KALMAN_MEASUREMENT_NOISE_COVARIANCE": "spin_kalman_meas",
+            "KALMAN_DAMPING": "spin_kalman_damping",
+            "KALMAN_LONGITUDINAL_NOISE_MULTIPLIER": "spin_kalman_longitudinal_noise",
+            "KALMAN_INITIAL_VELOCITY_RETENTION": "spin_kalman_initial_velocity_retention",
+            "KALMAN_MATURITY_AGE": "spin_kalman_maturity_age",
+            "LOST_THRESHOLD_FRAMES": "spin_lost_thresh",
+        }
+        for key, widget_name in widgets.items():
+            assert (
+                getattr(panel, widget_name).decimals()
+                == tracking_autotune_parameter(key).widget_decimals
+            )
+
+        apply_tracking_autotune_candidate(
+            {"W_POSITION": 0.995, "W_AREA": 0.12345678},
+            SimpleNamespace(tracking=panel),
+        )
+        assert panel.spin_Wp.value() == 0.99
+        assert panel.spin_Wa.value() == 0.1235
+    finally:
+        panel.close()
+
+
+def test_real_detection_panel_matches_shared_threshold_precision_contract(
+    qapp: QApplication,
+) -> None:
+    panel = DetectionPanel(_DetectionPanelHost(), TrackerConfig())
+    try:
+        assert (
+            panel.spin_yolo_confidence.decimals()
+            == tracking_autotune_parameter("YOLO_CONFIDENCE_THRESHOLD").widget_decimals
+        )
+        assert (
+            panel.spin_yolo_iou.decimals()
+            == tracking_autotune_parameter("YOLO_IOU_THRESHOLD").widget_decimals
+        )
+    finally:
+        panel.close()
+
+
+@pytest.mark.parametrize(
+    ("fps", "maturity_frames", "lost_frames"),
+    [(30.0, 25, 19), (120.0, 18, 84), (240.0, 7, 9_600)],
+)
+def test_lifecycle_candidate_round_trips_qt_seconds_to_engine_frames(
+    qapp: QApplication,
+    fps: float,
+    maturity_frames: int,
+    lost_frames: int,
+) -> None:
+    panels = _qt_panels(fps=fps)
+
+    apply_tracking_autotune_candidate(
+        {
+            "KALMAN_MATURITY_AGE": maturity_frames,
+            "LOST_THRESHOLD_FRAMES": lost_frames,
+        },
+        panels,
+    )
+
+    assert (
+        round(panels.tracking.spin_kalman_maturity_age.value() * fps) == maturity_frames
+    )
+    assert round(panels.tracking.spin_lost_thresh.value() * fps) == lost_frames
 
 
 @pytest.fixture(scope="module")
@@ -175,8 +399,222 @@ def test_state_key_changes_for_objective_and_search_configuration(
         baseline = dialog._compute_state_key()
         (cache_path / "detection.npz").write_bytes(b"rebuilt cache")
         assert dialog._compute_state_key() != baseline
+
+        baseline = dialog._compute_state_key()
+        dialog.base_params["MAX_TARGETS"] = 4
+        assert dialog._compute_state_key() != baseline
+
+        dialog.base_params["MAX_TARGETS"] = 1
+        dialog.base_params["ASSOCIATION_STAGE1_MOTION_GATE_MULTIPLIER"] = 1.0
+        baseline = dialog._compute_state_key()
+        dialog.base_params["ASSOCIATION_STAGE1_MOTION_GATE_MULTIPLIER"] = 1.5
+        assert dialog._compute_state_key() != baseline
     finally:
         dialog.close()
+
+
+def test_state_key_hashes_ndarray_content_and_fixed_replay_settings(
+    qapp: QApplication, tmp_path
+) -> None:
+    cache_path = tmp_path / "optimizer-cache"
+    cache_path.mkdir()
+    roi_mask = np.array([[0, 1], [1, 0]], dtype=np.uint8)
+    dialog = ParameterHelperDialog(
+        video_path="/tmp/video.mp4",
+        detection_cache_path=str(cache_path / "detection.npz"),
+        start_frame=0,
+        end_frame=20,
+        current_params={
+            "MAX_TARGETS": 2,
+            "ROI_MASK": roi_mask,
+            "ENABLE_CONFIDENCE_DENSITY_MAP": True,
+            "DENSITY_TEMPORAL_SIGMA": 2.0,
+            "ENABLE_POSE_EXTRACTOR": False,
+        },
+    )
+    try:
+        baseline = dialog._compute_state_key()
+        roi_mask[0, 0] = 1
+        assert dialog._compute_state_key() != baseline
+
+        baseline = dialog._compute_state_key()
+        dialog.base_params["DENSITY_TEMPORAL_SIGMA"] = 3.0
+        assert dialog._compute_state_key() != baseline
+    finally:
+        dialog.close()
+
+
+def test_state_persists_across_fresh_dialog_without_hashing_its_sidecar(
+    qapp: QApplication, tmp_path
+) -> None:
+    cache_path = tmp_path / "optimizer-cache"
+    cache_path.mkdir()
+    (cache_path / "detection.npz").write_bytes(b"raw cache contents")
+    current_params = {"MAX_TARGETS": 2, "REFERENCE_BODY_SIZE": 40.0}
+    dialog = ParameterHelperDialog(
+        video_path="/tmp/video.mp4",
+        detection_cache_path=str(cache_path),
+        start_frame=0,
+        end_frame=20,
+        current_params=current_params,
+    )
+    try:
+        dialog.results = [
+            OptimizationResult(params={"W_POSITION": 1.25}, score=0.2, trial_number=1)
+        ]
+        key_before_save = dialog._compute_state_key()
+        dialog._save_state()
+        assert dialog._compute_state_key() == key_before_save
+
+        restored = ParameterHelperDialog(
+            video_path="/tmp/video.mp4",
+            detection_cache_path=str(cache_path / "detection.npz"),
+            start_frame=0,
+            end_frame=20,
+            current_params=current_params,
+        )
+        try:
+            assert len(restored.results) == 1
+            assert restored.results[0].params == {"W_POSITION": 1.25}
+            assert "Restored 1 cached result" in restored.status_label.text()
+        finally:
+            restored.close()
+    finally:
+        dialog.close()
+
+
+def test_background_source_does_not_offer_inert_yolo_dimensions(
+    qapp: QApplication, tmp_path
+) -> None:
+    dialog = ParameterHelperDialog(
+        video_path="/tmp/video.mp4",
+        detection_cache_path=str(tmp_path / "cache"),
+        start_frame=0,
+        end_frame=10,
+        current_params={"DETECTION_METHOD": "background_subtraction"},
+    )
+    try:
+        assert dialog.cb_conf.parent() is None
+        assert dialog.cb_iou.parent() is None
+        assert dialog.get_tuning_config()["YOLO_CONFIDENCE_THRESHOLD"] is False
+        assert dialog.get_tuning_config()["YOLO_IOU_THRESHOLD"] is False
+    finally:
+        dialog.close()
+
+
+def test_yolo_replay_disables_unfaithful_threshold_dimensions(
+    qapp: QApplication, tmp_path
+) -> None:
+    dialog = ParameterHelperDialog(
+        video_path="/tmp/video.mp4",
+        detection_cache_path=str(tmp_path / "cache"),
+        start_frame=0,
+        end_frame=10,
+        current_params={
+            "DETECTION_METHOD": "yolo_obb",
+            "CNN_CLASSIFIERS": [{"model_path": "identity.pt"}],
+        },
+    )
+    try:
+        assert dialog.cb_conf.isEnabled() is False
+        assert dialog.cb_iou.isEnabled() is False
+        assert dialog.cb_conf.isChecked() is False
+        assert "cannot faithfully" in dialog.cb_conf.toolTip()
+        assert dialog.get_tuning_config()["YOLO_CONFIDENCE_THRESHOLD"] is False
+    finally:
+        dialog.close()
+
+
+class _RunningWorker:
+    def __init__(self, *, stop_finishes: bool = True) -> None:
+        self.stop_calls = 0
+        self.wait_calls: list[int] = []
+        self.running = True
+        self.stop_finishes = stop_finishes
+
+    def isRunning(self) -> bool:
+        return self.running
+
+    def stop(self) -> None:
+        self.stop_calls += 1
+
+    def wait(self, timeout_ms: int) -> bool:
+        self.wait_calls.append(timeout_ms)
+        if self.stop_finishes:
+            self.running = False
+        return self.stop_finishes
+
+
+def test_terminal_dialog_paths_stop_workers_with_bounded_wait(
+    qapp: QApplication, tmp_path
+) -> None:
+    dialog = ParameterHelperDialog(
+        video_path="/tmp/video.mp4",
+        detection_cache_path=str(tmp_path / "cache"),
+        start_frame=0,
+        end_frame=10,
+        current_params={},
+    )
+    optimizer = _RunningWorker()
+    preview = _RunningWorker()
+    dialog.optimizer = optimizer
+    dialog.preview_worker = preview
+
+    dialog.reject()
+
+    assert optimizer.stop_calls == preview.stop_calls == 1
+    assert (
+        optimizer.wait_calls == preview.wait_calls == [dialog._WORKER_SHUTDOWN_WAIT_MS]
+    )
+
+    dialog.close()
+
+
+@pytest.mark.parametrize("terminal_action", ["reject", "done"])
+def test_noncooperative_worker_keeps_terminal_dialog_open_until_safe(
+    qapp: QApplication, tmp_path, terminal_action: str
+) -> None:
+    """A failed bounded stop must not hide a dialog that still owns a worker."""
+
+    dialog = ParameterHelperDialog(
+        video_path="/tmp/video.mp4",
+        detection_cache_path=str(tmp_path / "cache"),
+        start_frame=0,
+        end_frame=10,
+        current_params={},
+    )
+    optimizer = _RunningWorker(stop_finishes=False)
+    dialog.optimizer = optimizer
+    dialog.show()
+    qapp.processEvents()
+
+    (
+        getattr(dialog, terminal_action)(0)
+        if terminal_action == "done"
+        else getattr(dialog, terminal_action)()
+    )
+
+    assert dialog.isVisible()
+    assert dialog._terminal_shutdown_started is False
+    assert optimizer.stop_calls >= 1
+    assert optimizer.wait_calls
+    assert set(optimizer.wait_calls) == {dialog._WORKER_SHUTDOWN_WAIT_MS}
+
+    # A worker that finishes after the initial bounded wait must still be able
+    # to update the dialog: the failed terminal request did not suppress its
+    # eventual completion callback.
+    dialog.on_finished()
+    assert "Search finished" in dialog.status_label.text()
+
+    optimizer.stop_finishes = True
+    (
+        getattr(dialog, terminal_action)(0)
+        if terminal_action == "done"
+        else getattr(dialog, terminal_action)()
+    )
+
+    assert dialog._terminal_shutdown_started is True
+    assert dialog.isVisible() is False
 
 
 def test_selected_params_contain_only_applyable_candidate_overrides(

@@ -143,8 +143,9 @@ def detection_cache_dir_covers_range(
     """
     if not path:
         return False
-    p = Path(path)
-    cache_dir = p if p.is_dir() else p.parent
+    from hydra_suite.core.tracking.optimization.production_replay import cache_directory
+
+    cache_dir = cache_directory(path)
     if not cache_dir.is_dir():
         return False
     try:
@@ -3114,6 +3115,9 @@ class ConfigOrchestrator:
         """
         import re
 
+        from hydra_suite.core.tracking.optimization.production_replay import (
+            cache_directory,
+        )
         from hydra_suite.utils.video_artifacts import (
             build_optimizer_detection_cache_path,
             candidate_artifact_base_dirs,
@@ -3131,7 +3135,7 @@ class ConfigOrchestrator:
 
         # 1. Production cache from current session — key-checked by _is_valid.
         if _is_valid(self._mw.current_detection_cache_path):
-            return self._mw.current_detection_cache_path, True
+            return str(cache_directory(self._mw.current_detection_cache_path)), True
 
         csv_dir = (
             os.path.dirname(self._panels.setup.csv_line.text())
@@ -3150,7 +3154,7 @@ class ConfigOrchestrator:
         ):
             candidate_str = str(candidate)
             if _is_valid(candidate_str):
-                return candidate_str, True
+                return str(cache_directory(candidate_str)), True
 
         # 3. Fallback: compute a write-target path for a new detection-only build.
         #    Include the detection method so different methods never share a cache.
