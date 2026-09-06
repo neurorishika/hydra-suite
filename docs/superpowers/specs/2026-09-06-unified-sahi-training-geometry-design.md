@@ -1,7 +1,23 @@
-# Unified SAHI training geometry: multi-scale SAM3, calibrated scale sets, one interface
+# Unified tiling & calibration geometry: four paths, one contract
+
+*(Originally scoped as "unified SAHI training geometry". Widened at the user's direction:
+"We have a parallel sahi calibration inside semantic escalation. We should just unify all
+these paths to have minimal divergences." The document now covers four paths, not two.)*
 
 **Status:** design proposal, pending review. No implementation.
 **Repo:** `/Users/neurorishika/Projects/Rockefeller/Kronauer/multi-animal-tracker` @ `main` (`097408af`), read-only audit.
+**The four paths.**
+
+| # | Path | Module | Role |
+|---|---|---|---|
+| **P1** | YOLO SAHI sliced TRAINING | `training/sliced_dataset.py` | builds tiles to train on — **already multi-scale** |
+| **P2** | SAM3 LoRA TRAINING | `training/sam3_lora/dataset_build.py` | builds tiles to train on — **single scale** |
+| **P3** | DetectKit DIRECT calibration | `core/inference/direct_calibration{,_grid,_sweep}.py`, `detectkit/gui/dialogs/direct_calibration_*.py` | sweeps serving geometry for YOLO detect/obb/segment |
+| **P4** | DetectKit SEMANTIC ESCALATION calibration | `core/inference/semantic/{calibration,shape_prior,tiling}.py`, `detectkit/gui/dialogs/semantic_escalation_dialog.py` | sweeps serving geometry for SAM3 |
+
+Downstream of P3 and P4: the TrackerKit SAHI inference profiles (`core/inference/slice_meta.py`
+v2, `trackerkit/engine_params.py`) that consume a chosen operating point.
+
 **Motivating evidence:** `docs/superpowers/specs/2026-09-06-sam3-training-run-and-evaluation.md` §10, §11c.
 **Related, already merged:** `docs/superpowers/specs/done/2026-09-01-detectkit-sahi-calibration-profiles-design.md`,
 `docs/superpowers/specs/done/2026-09-05-calibration-profile-headless-parity-{audit,design}.md`.
@@ -44,6 +60,22 @@ Two gaps from that audit do appear to remain and threaten any stamping design:
 `training/model_publish.py:874-879` still gates the whole `.slice_meta.json` sidecar
 copy/merge on `slice_geometry` being truthy **[V]**, so a publish that passes no training
 geometry silently drops all calibration profiles.
+
+**F-D. There are FOUR paths and FIVE copies of the tile-size formula.** The `plan_tiles`
+*grid* is shared by all four **[V]**, but the *sizer* is not: `semantic/tiling.py:123-139`
+(`resolve_tile_px`) reimplements the `auto_object` branch of `tile_size_for_mode` inline —
+`int(max(64, min(4096, round(reference_body_px / frac))))`, numerically identical today, and
+with **no `geometry_mode` concept at all** (no `custom`, no `auto_model`) **[V]**. A change to
+`slice_geometry.py:113-137` therefore silently fails to reach P4.
+
+**F-E. A train/serve geometry-drift guard ALREADY EXISTS — in exactly one of the four paths,
+and it is trapped inside a Qt dialog.** `detectkit/gui/dialogs/semantic_escalation_dialog.py:382-406`
+reads the SAM3 sidecar's `reference_body_px` and `object_tile_fraction`, prefills when the
+project has none, and raises a modal `QMessageBox.warning` ("Body Size Mismatch ... verify this
+is intentional") when they disagree — deliberately warn, never refuse **[V]**. This is exactly
+the guard §4.1 recommends building, already written, already reasoned about, in a place no
+headless run and no other path can reach. **It is the single best argument in this document
+that the guard should be built once in core rather than four times.**
 
 ---
 
@@ -239,7 +271,9 @@ CLI share, per CLAUDE.md.
 | `geometry_mode` value validated | inference side clamps/validates (`slice_meta.py:380-381`, `config.py:653-654`) | **never validated**; unknown -> silent 1008x1008 | **NO** | — |
 | guard against baseline-geometry drift | none, but drift is at least *visible* via the stamped set | none — the 0.055 default entered silently (eval spec §10) | — | — |
 
-**Divergence count: 14 of the 17 knob rows disagree** — the two sides differ in existence,
+*(This table is the TRAINER pair only, P1 vs P2. The four-path table is §2.5.)*
+
+**Divergence count, P1 vs P2: 14 of the 17 knob rows disagree** — the two sides differ in existence,
 meaning, default, or direction. The exceptions are two clean matches (`geometry_mode` as a
 field; `slice_width`/`slice_height`) and one row where both sides are equally unguarded
 (baseline-geometry drift). The underlying `plan_tiles`/`tile_size_for_mode` call is shared and
@@ -261,6 +295,115 @@ is not counted as a knob.
 - `inference_settings.py:200` falls back to a literal `96` body px when `target_sizes` is empty **[V]**.
 - `dataset_build.py:92` `MIN_RETAINED_AREA_FRAC = 0.25`, justified by ant-corpus reasoning **[V]**.
 - `_SAM3_IMGSZ = 1008` is a genuine model constant, not a species assumption **[V]**.
+
+### 2.5 The four-path divergence table
+
+`—` = the knob does not exist on that path. Verdict `SAME` requires name, unit, meaning AND
+default to agree; `MEANING` = same concept, divergent name/unit/default; `DIVERGE` = the paths
+genuinely disagree about behaviour or the knob is missing where it is needed.
+
+| # | Knob | P1 YOLO train | P2 SAM3 train | P3 direct cal | P4 semantic cal | Verdict |
+|---|---|---|---|---|---|---|
+| 1 | tile-size formula | `tile_size_for_mode` | `tile_size_for_mode` | `tile_size_for_mode` via `SLICE_*` params | **reimplemented** `resolve_tile_px` (`tiling.py:123-139`) | **DIVERGE** (5th copy) |
+| 2 | tile GRID planner | `plan_tiles` | `plan_tiles` | `plan_tiles` | `plan_tiles` (`tiling.py:198`) | **SAME** |
+| 3 | `geometry_mode` | yes, `auto_object` | yes, `auto_object`, **unvalidated** | yes, carried through candidates (`grid.py:70-72`) | **absent** — fraction-only, no custom/auto_model | **DIVERGE** |
+| 4 | tile fraction — name | `object_tile_fraction` (overridden by `target_sizes`) | `object_tile_fraction` | `object_tile_fraction` | `tile_fraction` | **MEANING** |
+| 5 | tile fraction — default | `0.15` (`sliced_dataset.py:99`), effective = `median(target_sizes)/imgsz` | `0.055` (`contracts.py:250`) | swept: `FRACTION_STEPS (0.75, 1.0, 1.5)` **x the model's stamped fraction** | seed `0.05` (`tiling.py:34`), swept `(0.03, 0.05, 0.10, None)` | **DIVERGE** — 4 unrelated numbers |
+| 6 | fraction denominator | role `imgsz` (`jobs/training.py:214`), and a stray literal `640.0` (`training.py:252`) | `_SAM3_IMGSZ = 1008`, role `imgsz` ignored | model `imgsz` via config | none — fraction applies to `reference_body_px` directly | **DIVERGE** |
+| 7 | **multi-scale scale set** | **yes** (`target_sizes`) | **no** | **no** — one geometry per candidate row | **no** — one fraction per point | **DIVERGE** |
+| 8 | **full-frame arm** | `full_frame_mix = True` | **absent** | `enabled=False` candidate, always first (`grid.py:72-83`) | `None` sentinel in `TILE_FRACTION_GRID` (`tiling.py:37`) | **MEANING** — 3 different encodings of one idea |
+| 9 | overlap — name/default | `overlap = 0.2` | `tile_overlap = 0.25` | swept `OVERLAP_STEPS (0.1, 0.2, 0.3)` | `DEFAULT_OVERLAP = 0.5` (`tiling.py:39`) | **DIVERGE** |
+| 10 | `reference_body_px` estimator | global median, all majors pooled | median of per-frame medians | read from the model's stamped geometry (`grid.py:71`) | project value, typed/prefilled, mismatch-warned (`dialog:382-406`) | **DIVERGE** |
+| 11 | seam / fragment policy | drop below `min_area_ratio = 0.1` | keep as `iscrowd`, floor `0.25`, downgrade tile | n/a (post-merge frame-space scoring) | **drop by `seam_margin_px`, default 4** (`tiling.py:40`) | **DIVERGE** — drop vs keep vs margin-drop |
+| 12 | cross-tile merge | n/a | n/a | `merge_policy/metric/threshold/backend`, swept + stamped | `merge_iou = 0.5` + `DEFAULT_CONTAINMENT_OVERLAP = 0.80` (`tiling.py:41-47`) | **DIVERGE** |
+| 13 | confidence | n/a | n/a | swept, stamped into the profile | `CONFIDENCE_GRID` 0.05..0.95 step 0.05 (`calibration.py:72`) | **MEANING** |
+| 14 | empty / negative tiles | `negative_tile_fraction = 0.15` (rate) | `keep_empty_tiles = True` (flag) | n/a | n/a | **DIVERGE** |
+| 15 | tile-count ceiling | `MAX_TILES_PER_FRAME = 4096` | same | **`DEFAULT_MAX_TOTAL_TILES = 20000`** budget, a different quantity (`grid.py:20`) | `MAX_TILES_PER_FRAME` only | **MEANING** |
+| 16 | matcher admissibility | n/a | n/a | **hard IoU >= 0.5** (`direct_calibration.py:78, 115`) | area band + `match_quality >= 0.1` + containment; **IoU route deleted** | **DIVERGE — see §2.6** |
+| 17 | matched-instance floor | n/a | n/a | `MIN_MATCHED_INSTANCES = 60` | `MIN_MATCHED_INSTANCES = 20` | **DIVERGE** (same name, 3x apart) |
+| 18 | localization floor | n/a | n/a | `MIN_LOCALIZATION = 0.5` (mean IoU) | `MIN_MEAN_QUALITY = 0.35` (shape-aware quality) | **DIVERGE** |
+| 19 | recommendation objective | n/a | n/a | **F1-balanced Pareto** (`RECOMMENDATION_RULE`, `direct_calibration.py:186-191`) | **recall-first lexicographic on tile cost**, `MIN_RECALL = 0.90`; F1 explicitly rejected | **DIVERGE — contradictory** |
+| 20 | class awareness | per-class labels | single prompt class | class-aware matching (`direct_calibration.py:113`) | single class, prompt-derived | **MEANING** |
+| 21 | shape / size prior | none | none | **none** | `fit_area_band`, `LOW_MULTIPLIER 0.3` / `HIGH_MULTIPLIER 2.5` (`shape_prior.py:44-45`) | **DIVERGE** |
+| 22 | output of the path | dataset manifest `slice_geometry` | manifest `tile_px` -> `.sam3_meta.json` (no reader) | `.slice_meta.json` v2 profile, consumed by GUI + CLI | `semantic_escalation_settings` + `semantic_calibration` in DetectKit **project JSON only** | **DIVERGE** |
+| 23 | operating point reaches a headless run | via publish + registry | no | **yes** (`--sahi-profile`, `engine_params.py:968-986`) | **no** — project-state only, never a model sidecar | **DIVERGE** |
+| 24 | train/serve drift guard | none | none | none | **yes**, but GUI-only modal (`dialog:382-406`) | **DIVERGE** |
+
+**Four-path divergence count: 18 DIVERGE + 5 MEANING = 23 of the 24 rows disagree at some
+level.** Exactly **one** row is clean across all four paths: the `plan_tiles` grid call
+(row 2). Even the shared tile-size formula fails (row 1 — P4 reimplements it). The
+trainer-only count in §2.3 was 14 of 17; widening to four paths roughly doubles it, which is
+the coordinator's expectation confirmed.
+
+### 2.6 The two calibration harnesses, mapped against each other
+
+Both solve the identical problem — *sweep tile geometry and confidence, score against the
+user's own labels, recommend one operating point* — for different detector families. They
+share **no code**: not the matcher, not the point record, not the objective, not the
+persistence format.
+
+| | P3 direct (`direct_calibration.py`) | P4 semantic (`semantic/calibration.py`) |
+|---|---|---|
+| swept axes | fraction x overlap x confidence x merge threshold | tile fraction (outer, one inference pass each) x confidence (inner, offline) |
+| geometry candidates | **relative** to the model's stamped training geometry (`grid.py:67-72`) | **absolute** grid `(0.03, 0.05, 0.10, None)` (`tiling.py:37`) |
+| matcher | greedy descending IoU, **hard gate IoU >= 0.5**, class-aware, task-reduced polygon (`_as_task_polygon`) | greedy descending `match_quality`; admissibility = area band AND `min_quality` AND containment of `representative_point` |
+| size/shape prior | **none** | `fit_area_band` fitted to the user's labels |
+| objective | fastest point within `F1_TOLERANCE = 0.01` of best F1, on the (misses, extras, seconds) Pareto frontier | among points clearing `MIN_RECALL = 0.90`, fewest `tiles_per_frame`, tie-break highest confidence |
+| refusal behaviour | drops failed/undersampled points, still recommends | **explicit typed refusals** with user-facing remedies (no point cleared recall / mistargeted / insufficient data) |
+| reports duplicates | **yes** (`duplicate`, to detect bad cross-tile merges) | no |
+| task-shape awareness | **yes** (`detect` reduces both sides to AABB before IoU) | no — always polygon |
+| persisted to | model sidecar `.slice_meta.json` profile -> GUI + CLI | DetectKit project JSON only |
+
+**What each has that the other lacks** — and these are the concrete unification wins:
+P3 uniquely has task-aware polygon reduction, duplicate accounting, merge-policy sweeping,
+relative (species-agnostic) candidate generation, and a headless consumer. P4 uniquely has a
+fitted shape prior, graded (non-binary) match quality, typed refusals with remedies, and the
+train/serve drift guard.
+
+**Is their scoring even comparable? No.** P3's `recall` counts a prediction as a match only at
+IoU >= 0.5 against a same-class label; P4's counts it when a representative point is contained
+and a graded quality score clears 0.1. A single model scored by both would post different
+recalls on identical predictions. **No number from one harness may be compared to a number
+from the other**, and today nothing in the UI says so.
+
+### 2.7 Does the DIRECT path share the centroid defect? — NO, but it has the INVERSE defect
+
+**Answer: no.** `b9e92bc7` fixed a *containment test on the vertex mean* — a point that lies
+outside 15.9% of real ant outlines, vetoing near-perfect masks (`calibration.py:248-272`,
+recall 0.867 -> 0.988 on identical predictions) **[V]**. `direct_calibration.py` has **no
+centroid, no containment test and no representative point anywhere** **[V, verified by reading
+the whole matcher, :74-142]**. That specific bug cannot exist there.
+
+**But the direct path fails the same underlying phenomenon by the opposite mechanism, and this
+is a live production concern.** Its sole admissibility criterion is a hard `IoU >= 0.5`
+(`:78, :115`) — precisely the gate the semantic path measured and then **deleted**, on the
+stated grounds that "SAM3 masks trace legs and antennae at ~1.7x the labelled body-core area"
+so IoU "is still not a hard gate ... it enters the quality score" (`calibration.py:17-22`)
+**[V]**. The consequence: a prediction whose silhouette is correct but whose *extent
+convention* differs from the labels' scores **below 0.5, is counted as a MISS and an EXTRA
+simultaneously**, double-penalising the operating point.
+
+**Who is exposed.** `_as_task_polygon` keeps the full polygon for `task="segment"` and
+`task="obb"` (`:56-71`) **[V]**, and DetectKit runs direct segment models. A segment model
+whose masks trace appendages, or whose labels are body-core boxes, is scored by P3 under
+exactly the convention P4 abandoned — and because `recommend_balanced` optimises F1
+(`:186-191`), a systematically depressed recall pushes the recommendation toward
+higher-confidence, fewer-detection operating points. **A silent recommendation bias, not a
+crash.** Severity is unmeasured and must not be asserted: it depends entirely on how a given
+project's labels and model agree about extent, which is per-project and per-species.
+
+**Two further asymmetries worth flagging in the same breath.** (a) P3's objective is F1;
+`semantic/calibration.py:9-13` rejects F1 with a measurement — "The F1-optimal threshold missed
+4.7 animals/frame where a recall-first one missed 1.0" **[V]**. The two harnesses therefore
+give *contradictory* advice about what a good operating point is, and the argument against F1
+was never carried across. (b) P3 has no size/shape prior, so the mistargeting failure P4's
+`fit_area_band` exists to catch — an arena-sized blob or a leg-sized fragment earning recall
+credit — is uncaught on the direct path. `MIN_LOCALIZATION = 0.5` partially substitutes, but
+it is a mean-IoU floor, not a size gate.
+
+**Recommended framing for the user:** these are three separate decisions (matcher
+admissibility, objective, shape prior), each of which changes recommended operating points on
+one side. None should be changed silently as part of a refactor. See D7-D9.
 
 ---
 
@@ -290,6 +433,19 @@ One dataclass and one resolver, consumed by both builders. Proposed shape (names
   clamping stay exactly where they are today.
 - `ReferenceBodyEstimator` — one estimator, resolving the median-vs-mean divergence (§2.3).
   **Decision for the user, see §3.7 D1.**
+
+`TilingContract` serves all four paths: P1/P2 consume it to emit tiles, P3/P4 consume it to
+*enumerate candidates* (a calibration candidate becomes one `TilingContract` with a single
+scale). This is the property `direct_calibration_grid.py:1-7` already insists on for P3 —
+"Candidates carry `SLICE_*` PARAMS, never a hand-built `SliceConfig` ... routing through the
+shared params mapping is what makes a measured point expressible as TrackerKit settings"
+**[V]**. Generalising that rule to all four is the whole unification in one sentence: **every
+path expresses geometry in the same vocabulary, so a point measured anywhere is expressible
+everywhere.**
+
+`semantic/tiling.py:123-139` must be deleted in favour of `tile_size_for_mode` (row 1 of §2.5).
+That is a pure de-duplication today — the numbers agree — but it is what makes P4 inherit
+`geometry_mode` and any future change.
 
 Genuinely model-specific and staying out: SAM3's `_SAM3_IMGSZ = 1008` (a model input
 constant, passed IN as `model_imgsz`), YOLO's per-role `imgsz`, mask-vs-OBB target encoding,
@@ -433,17 +589,124 @@ distribution it was derived from. No number in this document is proposed as a de
 - **D6 — multi-scale opt-in vs default-on for SAM3.** Default-on changes every future SAM3
   run's dataset; opt-in leaves the incident class alive by default.
 
+### 3.8 A shared calibration core (P3 + P4)
+
+Not "merge the two harnesses" — they legitimately differ in what they run (a YOLO executor vs a
+SAM3 labeler) and in what they can prompt. What should be shared is everything between the
+predictions and the recommendation:
+
+- **One matcher module** with the admissibility rule as an injected *policy*, not a hardcoded
+  gate — so `hard_iou(0.5)` and `containment + area_band + graded_quality` are two named
+  policies over one greedy one-to-one core. Both current matchers are already
+  greedy-descending-score one-to-one; only the score and the gate differ.
+- **One point record and one frontier/Pareto utility.** `DirectCalibrationPoint` and
+  `CalibrationPoint` describe the same thing.
+- **One objective module** exposing named rules (`f1_balanced`, `recall_first_cheapest`) with
+  the reasoning attached, so choosing between them is a visible per-project decision rather
+  than an accident of which detector family you happen to be calibrating.
+- **One refusal vocabulary.** P4's typed refusals with remedies are strictly better UX than
+  P3's silent drop; porting them costs nothing behaviourally.
+- **One persistence target.** P4's result should land on the model artifact as a
+  `.slice_meta.json`-shaped profile (row 22/23 of §2.5), not only in DetectKit project JSON —
+  that is what gives SAM3 the `--sahi-profile` headless path P3 already has.
+
+The shape prior (`shape_prior.py`) becomes available to P3 as an opt-in policy rather than
+being SAM3-only. Whether to turn it on for direct calibration is D9.
+
+### 3.9 THE COUPLING DIRECTION — a position, not a survey
+
+**Position: TRAINING emits the scale set; CALIBRATION selects within and validates against it.
+The arrow runs training -> calibration, never calibration -> training.**
+
+The reasoning, in order of weight:
+
+1. **Cost asymmetry is decisive.** A calibration candidate costs one inference pass; a training
+   candidate costs a full training run (hours to days — the 2026-09-06 run was ten epochs
+   overnight). Any design in which calibration *chooses* a training geometry implies training
+   once per candidate, which is not a pre-run wizard. The direction that fits the cost
+   structure is the only one that can ship.
+2. **A calibration profile is measured on ONE model. A training scale set precedes every
+   model.** Letting a profile fitted to model *v1* dictate the geometry of model *v2* bakes v1's
+   idiosyncrasies into the corpus — and, worse, makes the two circularly coupled: v2 trained at
+   v1's best geometry will calibrate to that geometry, confirming it. That is a feedback loop,
+   not evidence.
+3. **The eval spec's 2x2 says the fix belongs in training, not serving.** §11c: the model effect
+   flips sign between geometries; each model wins decisively at its own. A single-scale model is
+   *brittle* to serving geometry, and no amount of serving calibration repairs brittleness — it
+   only finds the one geometry that works. **Multi-scale training makes the model robust; then
+   calibration picks the cheapest point on a flat-ish surface rather than the only point on a
+   sharp peak.** That is the structural argument for doing both, in that order.
+4. **What training should read instead of a profile:** the *corpus*, not a prior model. The
+   builder already measures the label body-size distribution (`object_major_axes_px`); the scale
+   set should bracket that distribution and the project's frame size (§3.6). This is
+   "calibrate before run" honoured with a measurement on the user's own data, at the only point
+   where it is affordable.
+
+**What breaks if they disagree, and what to do about it.** They will disagree — the whole point
+of multi-scale is that serving may prefer a scale near an edge of the trained set, or outside
+it. Three cases, and the design's answer to each:
+
+- **Chosen scale INSIDE the trained set** — the intended case. Nothing to do; record which
+  trained scale the profile sits nearest.
+- **Chosen scale BETWEEN trained scales** — acceptable and expected; that is what multi-scale
+  buys. Record it as interpolating.
+- **Chosen scale OUTSIDE `scale_range_px`** — this is the 2026-09-06 confound, detected instead
+  of silent. **Warn loudly, never refuse** (following the precedent already set at
+  `semantic_escalation_dialog.py:382-406`, which deliberately warns because "a deliberate
+  re-scale is legitimate"). The warning must state both numbers and the trained range; a
+  deliberate re-scale is a legitimate user choice, an accidental one is the incident.
+
+The corollary is a hard rule worth stating on its own: **a calibration recommendation is
+evidence about serving, never an input to a dataset build.** If a project's calibrations keep
+landing outside the trained range, the correct response is to *retrain with a scale set that
+covers where calibration keeps going* — a human decision, informed by the recorded history,
+made once, not an automatic loop.
+
+### 3.10 Additional decisions this forces — for the user
+
+- **D7 — direct-path matcher admissibility.** Adopt the semantic path's graded/containment
+  policy for P3 (fixes the inverse defect of §2.7) or keep the hard IoU gate? Adopting it will
+  change recommended profiles for existing projects. **Recommend adopting for `segment`, where
+  the extent-convention mismatch is real, and offering it as a policy for `obb`/`detect`;
+  either way, do not change it silently.**
+- **D8 — one objective or two?** F1-balanced (P3) vs recall-first-cheapest (P4) are
+  contradictory, and P4 has a measurement against F1. Unifying means one side's recommendations
+  move. **Recommend: expose both as named rules, default each path to its current rule so
+  nothing changes on adoption, and surface the choice with its rationale.**
+- **D9 — shape prior for the direct path.** Off today. Turning it on catches mistargeting P3
+  cannot currently see, but changes scores.
+- **D10 — where a semantic calibration result is persisted.** Moving it from DetectKit project
+  JSON onto the model sidecar is what unlocks headless SAM3 serving parity, and interacts with
+  D2 (sidecar format) and with `semantic/sam3.py`'s refuse-on-malformed-sidecar guard.
+- **D11 — the drift guard's severity and location.** Today: GUI-only, modal, warn-never-refuse
+  (P4 only). Shared and headless, it must pick a non-modal channel and a severity. **Recommend
+  warn-never-refuse everywhere, matching the existing precedent** — except for the one case the
+  eval spec identifies, a run that explicitly names a comparison baseline, where refusing is
+  defensible.
+
 ---
 
 ## Part 4 — Ranked plan, risks, and the full-frame question
 
 ### 4.1 Build order
 
-1. **Geometry-drift guard + provenance logging (small, independent, highest value/cost).**
-   Read a named comparison baseline's stamped geometry at plan/preflight time and warn-or-
-   refuse on mismatch; log the effective geometry and its *source* (explicit / profile /
-   contract default) at the start of every dataset build. Directly prevents the incident that
-   produced the whole 2026-09-06 confound. Requires no unification.
+1. **ONE shared, Qt-free geometry-drift guard + provenance logging — built once in core, not
+   four times.** Revised in light of all four paths: the guard already exists, correct and
+   well-reasoned, at `detectkit/gui/dialogs/semantic_escalation_dialog.py:382-406` — but it is
+   inside a Qt dialog, so it cannot serve P1, P2, P3 or any headless run (§0 F-E). The step is
+   therefore *extract, then apply four times*, not *write four guards*:
+   (a) lift the compare-stamped-vs-effective logic into `core/` (near `slice_meta.py`, which
+   already owns the read side) as a pure function returning a typed verdict, no Qt;
+   (b) re-point the existing dialog at it, preserving today's warn-never-refuse behaviour
+   verbatim so P4's user-visible behaviour does not move;
+   (c) call it at SAM3 and YOLO dataset-build time — including against a named comparison
+   baseline's sidecar, which is the exact miss that produced the 2026-09-06 confound;
+   (d) call it on the serving side where `--sahi-profile` resolves.
+   Alongside it, log the effective geometry AND its *source* (explicit / profile / corpus-
+   derived / contract default) at the start of every build and every run — the 0.055 incident
+   was undetectable precisely because the source was never printed.
+   This is still the cheapest item, it is now also the one that most directly demonstrates the
+   unification, and it requires no contract change.
 2. **Fix the sidecar-drop gaps that would silently discard any stamping work**
    (`model_publish.py:874-879`, and the TrackerKit import copy noted as F4 in the merged
    audit). Cheap; otherwise everything below can vanish at publish time.
@@ -457,6 +720,9 @@ distribution it was derived from. No number in this document is proposed as a de
    shipping default.
 8. **Deferred entirely:** any attempt to calibrate the *training* scale set by training
    multiple arms. Not viable as a wizard (§3.4).
+
+1b. **Delete the fifth tile-size formula** (`semantic/tiling.py:123-139` -> `tile_size_for_mode`).
+   Numerically inert today, and it is the precondition for P4 ever inheriting a shared change.
 
 ### 4.2 Top risks
 
@@ -482,6 +748,11 @@ distribution it was derived from. No number in this document is proposed as a de
   multi-scale SAM3 dataset contains proportionally more distorted supervision than a
   single-scale one — with no counter reporting it today. Mitigation: count and report
   non-square tiles per scale alongside the fragment counters.
+- **R5 — unifying the calibration harnesses moves recommended operating points.** D7/D8/D9 each
+  change what gets recommended for projects already calibrated. A user who re-opens a saved
+  calibration after the change may see a different recommendation over identical evidence.
+  Mitigation: keep per-path defaults on adoption, version the recommendation rule into the
+  stored profile, and display which rule produced a stored point.
 - (R4, lesser) Three duplicated copies of `target_sizes` defaults plus the literal `640.0`
   denominator at `training.py:252` mean a "single" change is really four.
 
