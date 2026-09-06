@@ -1,0 +1,69 @@
+{
+  "description": "Detector-geometry and joint full-run confirmation cases for the Mehek autotuner study.",
+  "cases": [
+    {
+      "label": "ant2632-native-det-b1",
+      "config_path": "../equivalence/fixtures/configs/ant_pose_headtail.json",
+      "video_path": "../equivalence/fixtures/clips/ant_pose_headtail.mp4",
+      "skeleton_path": "../equivalence/fixtures/ooceraea_biroi.json",
+      "runtime": "gpu",
+      "config": {"detection_batch_size": 1, "pipeline_depth": 1, "enable_pose_extractor": false, "enable_headtail_orientation": false, "enable_identity_analysis": false, "cnn_classifiers": []}
+    },
+    {
+      "label": "ant2632-native-det-b2",
+      "config_path": "../equivalence/fixtures/configs/ant_pose_headtail.json",
+      "video_path": "../equivalence/fixtures/clips/ant_pose_headtail.mp4",
+      "skeleton_path": "../equivalence/fixtures/ooceraea_biroi.json",
+      "runtime": "gpu",
+      "config": {"detection_batch_size": 2, "pipeline_depth": 1, "enable_pose_extractor": false, "enable_headtail_orientation": false, "enable_identity_analysis": false, "cnn_classifiers": []}
+    },
+    {
+      "label": "ant2632-native-det-b4",
+      "config_path": "../equivalence/fixtures/configs/ant_pose_headtail.json",
+      "video_path": "../equivalence/fixtures/clips/ant_pose_headtail.mp4",
+      "skeleton_path": "../equivalence/fixtures/ooceraea_biroi.json",
+      "runtime": "gpu",
+      "config": {"detection_batch_size": 4, "pipeline_depth": 1, "enable_pose_extractor": false, "enable_headtail_orientation": false, "enable_identity_analysis": false, "cnn_classifiers": []}
+    },
+    {
+      "label": "ant2632-native-det-b8",
+      "config_path": "../equivalence/fixtures/configs/ant_pose_headtail.json",
+      "video_path": "../equivalence/fixtures/clips/ant_pose_headtail.mp4",
+      "skeleton_path": "../equivalence/fixtures/ooceraea_biroi.json",
+      "runtime": "gpu",
+      "config": {"detection_batch_size": 8, "pipeline_depth": 1, "enable_pose_extractor": false, "enable_headtail_orientation": false, "enable_identity_analysis": false, "cnn_classifiers": []}
+    },
+    {
+      "label": "ant-pose-manual-baseline",
+      "config_path": "../equivalence/fixtures/configs/ant_pose_headtail.json",
+      "video_path": "../equivalence/fixtures/clips/ant_pose_headtail.mp4",
+      "skeleton_path": "../equivalence/fixtures/ooceraea_biroi.json",
+      "runtime": "gpu",
+      "config": {"detection_batch_size": 1, "pipeline_depth": 2, "pose_batch_size": 25, "headtail_batch_size": 25}
+    },
+    {
+      "label": "ant-pose-tuned",
+      "config_path": "../equivalence/fixtures/configs/ant_pose_headtail.json",
+      "video_path": "../equivalence/fixtures/clips/ant_pose_headtail.mp4",
+      "skeleton_path": "../equivalence/fixtures/ooceraea_biroi.json",
+      "runtime": "gpu",
+      "config": {"detection_batch_size": 4, "pipeline_depth": 1, "pose_batch_size": 4, "headtail_batch_size": 4}
+    },
+    {
+      "label": "ant-identity-manual-baseline",
+      "config_path": "../equivalence/fixtures/configs/ant_cnn_identity.json",
+      "video_path": "../equivalence/fixtures/clips/ant_cnn_identity.mp4",
+      "skeleton_path": "../equivalence/fixtures/ooceraea_biroi.json",
+      "runtime": "gpu",
+      "config": {"detection_batch_size": 1, "pipeline_depth": 2, "pose_batch_size": 25, "headtail_batch_size": 25, "cnn_batch_size": 25}
+    },
+    {
+      "label": "ant-identity-tuned",
+      "config_path": "../equivalence/fixtures/configs/ant_cnn_identity.json",
+      "video_path": "../equivalence/fixtures/clips/ant_cnn_identity.mp4",
+      "skeleton_path": "../equivalence/fixtures/ooceraea_biroi.json",
+      "runtime": "gpu",
+      "config": {"detection_batch_size": 1, "pipeline_depth": 1, "pose_batch_size": 4, "headtail_batch_size": 4, "cnn_batch_size": 8}
+    }
+  ]
+}
