@@ -306,6 +306,75 @@ def test_cancel_kills_orphaned_grandchildren(tmp_path):
     raise AssertionError(f"grandchild {grandchild_pid} survived cancellation")
 
 
+def test_launch_failure_is_contained_and_running_jobs_finish(tmp_path):
+    """An exception while launching must not abandon already-running children."""
+    specs = [
+        _spec(tmp_path, "a", sleep=0.5),
+        _spec(tmp_path, "b"),
+        _spec(tmp_path, "c"),
+        _spec(tmp_path, "d"),
+    ]
+
+    def _flaky_command(spec, config_json):
+        if spec.config["name"] == "b":
+            raise OSError("cannot spawn: simulated fork failure")
+        return _fake_command(spec, config_json)
+
+    rec = _Recorder()
+    result = run_batch_fanout(
+        specs,
+        FanoutOptions(jobs=2, run_dir=tmp_path / "run", child_command=_flaky_command),
+        events=rec,
+    )
+    assert not result.success
+    by_name = {r.spec.config["name"]: r for r in result.jobs}
+    # the child that was already running finished normally
+    assert by_name["a"].success and by_name["a"].returncode == 0
+    # the failed launch is reported, not raised
+    assert by_name["b"].returncode is None and not by_name["b"].success
+    assert by_name["b"].error.startswith("launch failed")
+    # the failure halts further launches
+    assert by_name["c"].error == "not started" and by_name["c"].returncode is None
+    assert by_name["d"].error == "not started"
+    # every job, including the failed launch, was announced as finished
+    assert {r.spec.config["name"] for r in rec.finished} == {"a", "b"}
+
+
+def test_cancel_reports_already_exited_child_as_success(tmp_path):
+    """A child that exited 0 before the stop signal is a success, not cancelled."""
+    specs = [_spec(tmp_path, "a", sleep=0.05), _spec(tmp_path, "b", mode="trap_sigint")]
+    stop = {"flag": False}
+    import threading
+
+    threading.Timer(0.5, lambda: stop.__setitem__("flag", True)).start()
+    result = run_batch_fanout(
+        specs,
+        FanoutOptions(
+            jobs=2,
+            run_dir=tmp_path / "run",
+            child_command=_fake_command,
+            # poll slowly so "a" exits during the sleep and the cancel branch --
+            # not the reap loop -- is what observes it.
+            poll_s=2.0,
+            sigint_grace_s=5,
+        ),
+        should_stop=lambda: stop["flag"],
+    )
+    assert result.cancelled and not result.success
+    by_name = {r.spec.config["name"]: r for r in result.jobs}
+    assert by_name["a"].returncode == 0
+    assert by_name["a"].success, "a exited cleanly before the signal"
+    assert by_name["a"].error is None
+    assert by_name["b"].returncode == 130 and not by_name["b"].success
+
+
+def test_events_protocol_documents_threading_contract():
+    from hydra_suite.trackerkit.batch_fanout import FanoutEvents
+
+    doc = FanoutEvents.__doc__ or ""
+    assert "thread" in doc.lower()
+
+
 def test_module_imports_no_qt():
     import ast
 

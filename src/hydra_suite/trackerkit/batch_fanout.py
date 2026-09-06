@@ -84,6 +84,15 @@ class FanoutResult:
 
 
 class FanoutEvents(Protocol):
+    """Scheduler callbacks. NOT all delivered on the same thread.
+
+    ``job_progress`` and ``job_log`` fire on that job's own log-reader thread
+    (one per running child), while ``job_started`` and ``job_finished`` fire on
+    the thread that called :func:`run_batch_fanout`. Implementations must
+    therefore never touch UI objects directly -- marshal to the GUI thread
+    (e.g. a queued Qt signal) instead.
+    """
+
     def job_started(  # noqa: E704
         self, spec: BatchJobSpec, gpu: Optional[CudaDevice], log_path: Path
     ) -> None: ...
@@ -239,20 +248,43 @@ def _launch(
     )
     if os.name != "nt":
         popen_kwargs["start_new_session"] = True
-    proc = subprocess.Popen(command, **popen_kwargs)
-    live = _Live(
-        spec=spec,
-        gpu=gpu,
-        proc=proc,
-        log_path=log_path,
-        log_handle=log_handle,
-        started_at=time.monotonic(),
-    )
-    live.reader = threading.Thread(
-        target=_pump, args=(live, events), name=f"fanout-log-{spec.index}", daemon=True
-    )
-    live.reader.start()
-    events.job_started(spec, gpu, log_path)
+    # Popen is LAST: everything that can fail has already succeeded, so a raise
+    # before this point cannot leak a process. Anything after it must tear the
+    # process back down rather than abandon it.
+    try:
+        proc = subprocess.Popen(command, **popen_kwargs)
+    except BaseException:
+        log_handle.close()
+        raise
+    try:
+        live = _Live(
+            spec=spec,
+            gpu=gpu,
+            proc=proc,
+            log_path=log_path,
+            log_handle=log_handle,
+            started_at=time.monotonic(),
+        )
+        live.reader = threading.Thread(
+            target=_pump,
+            args=(live, events),
+            name=f"fanout-log-{spec.index}",
+            daemon=True,
+        )
+        live.reader.start()
+        events.job_started(spec, gpu, log_path)
+    except BaseException:
+        # The process is already running; never abandon it.
+        _signal_group(proc, signal.SIGKILL)
+        try:
+            proc.wait(timeout=5)
+        except Exception:
+            pass
+        try:
+            log_handle.close()
+        except Exception:
+            pass
+        raise
     logger.info(
         "Fan-out: launched job %d (%s) on %s -> %s",
         spec.index,
@@ -399,9 +431,13 @@ def run_batch_fanout(
     while pending or running:
         if should_stop():
             cancelled = True
+            # Snapshot BEFORE signalling: a child that had already exited on its
+            # own is reported on its own merits, not as a casualty of the stop.
+            already_exited = {id(live): live.proc.poll() for live in running}
             _stop_children(running, options)
             for live in running:
-                res = _finish(live, cancelled=True)
+                finished_on_its_own = already_exited.get(id(live)) is not None
+                res = _finish(live, cancelled=not finished_on_its_own)
                 finished[live.spec.index] = res
                 events.job_finished(res)
             running.clear()
@@ -427,7 +463,33 @@ def run_batch_fanout(
         while pending and free_slots and not halted:
             spec = pending.pop(0)
             gpu = free_slots.pop(0)
-            running.append(_launch(spec, gpu, options, run_dir, timestamp, events))
+            try:
+                running.append(_launch(spec, gpu, options, run_dir, timestamp, events))
+            except Exception as exc:  # noqa: BLE001
+                # A launch that never got off the ground must not abandon the
+                # children already running: record it, halt new launches, and
+                # let the loop drain the survivors normally.
+                logger.exception(
+                    "Fan-out: could not launch job %d (%s)", spec.index, spec.video_path
+                )
+                free_slots.append(gpu)
+                try:
+                    failed_log = _job_log_path(spec, timestamp)
+                except Exception:
+                    failed_log = run_dir / f"job_{spec.index}_not_started.log"
+                res = FanoutJobResult(
+                    spec=spec,
+                    gpu=gpu,
+                    returncode=None,
+                    success=False,
+                    log_path=failed_log,
+                    summary_lines=[],
+                    error=f"launch failed: {exc}",
+                    wall_s=0.0,
+                )
+                finished[spec.index] = res
+                events.job_finished(res)
+                halted = True
 
         if not running and (halted or not pending):
             break
