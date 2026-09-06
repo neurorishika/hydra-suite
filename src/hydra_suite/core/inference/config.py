@@ -29,6 +29,11 @@ class InferenceConfigError(ValueError):
 MAX_DETECTION_BATCH_SIZE = 64
 MAX_PIPELINE_DEPTH = 4
 
+# Tracker detection caches store permissive raw OBB output and apply the
+# user-facing confidence threshold later in ``filter_for_source``. Keep this
+# value explicit because changing it must also invalidate sequential caches.
+TRACKER_RAW_OBB_CONFIDENCE_FLOOR = 1e-3
+
 
 def migrate_runtime_to_tier(runtimes: set[str]) -> RuntimeTier:
     """Map legacy per-stage runtime strings to a single pipeline tier.
@@ -869,7 +874,13 @@ def build_inference_config_from_params(params: dict) -> InferenceConfig:
                 detect_confidence_threshold=float(
                     params.get("YOLO_SEQ_DETECT_CONF_THRESHOLD", 0.25)
                 ),
-                obb_confidence_threshold=yolo_conf,
+                # Raw detection caches intentionally exclude the user-facing
+                # confidence threshold from their key and re-apply it in
+                # filter_for_source.  Sequential stage 2 must therefore run at
+                # the same permissive floor as direct inference; otherwise a
+                # later preview/autotune trial cannot recover candidates below
+                # the threshold used when the cache was built.
+                obb_confidence_threshold=TRACKER_RAW_OBB_CONFIDENCE_FLOOR,
                 detect_image_size=int(params.get("YOLO_SEQ_DETECT_IMGSZ", 0)),
                 crop_pad_ratio=float(params.get("YOLO_SEQ_CROP_PAD_RATIO", 0.15)),
                 min_crop_size_px=float(params.get("YOLO_SEQ_MIN_CROP_SIZE_PX", 64.0)),

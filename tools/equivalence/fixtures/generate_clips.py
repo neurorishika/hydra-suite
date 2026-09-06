@@ -73,19 +73,23 @@ CLIPS = [
         note="background_subtraction detection path (DEMO 2)",
     ),
     dict(
-        # PROVENANCE GAP (2026-09-06): the shipped ant_cnn_identity.mp4 is NOT
-        # produced by this entry. It was replaced by hand with a better section
-        # whose source video was not recorded; it arrived as a truncated HEVC
-        # file (header claimed 631 frames, 489 decoded) and was re-encoded here
-        # to a valid 489-frame H.264 clip with the same settings used below.
-        # Re-running this script OVERWRITES the shipped clip with a different
-        # (worse) section. Fix by recording the real source + range here.
+        # Re-sourced 2026-09-06: the DEMO 3 section was a poor sample. The
+        # shipped clip is this Libby_Tagged section, located by normalised
+        # frame correlation (0.99916 at source frame 8637; the DEMO 3 source
+        # scored 0.48 across all 18000 of its frames).
+        # NOTE: `config` below is the source recording's own config, which has
+        # identity DISABLED and a different reference_body_size. The portable
+        # fixture config (configs/ant_cnn_identity.json) is hand-tuned on top
+        # of it to enable the colortag classifier, so do NOT regenerate configs
+        # for this entry without re-applying that.
         name="ant_cnn_identity",
-        video=f"{DEMO}/DEMO 3/ant.mp4",
-        config=f"{DEMO}/DEMO 3/ant_config.json",
-        start=0,
-        n=500,
-        note="OBB + CNN multihead identity + headtail + SLEAP pose + pose-dir (DEMO 3)",
+        video="/Users/neurorishika/Projects/Rockefeller/Kronauer/Behavior/"
+        "TrailFollowing/Libby_Tagged/video.mp4",
+        config="/Users/neurorishika/Projects/Rockefeller/Kronauer/Behavior/"
+        "TrailFollowing/Libby_Tagged/video_config.json",
+        start=8637,
+        n=489,
+        note="OBB + CNN multihead identity + headtail + pose-dir (Libby_Tagged)",
     ),
     dict(
         name="fly_obb",

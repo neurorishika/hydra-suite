@@ -1,73 +1,94 @@
-# Tracking Optimization System (Auto-Tuner)
+# Tracking Auto-Tuner
 
-This document details the architecture and implementation of the Bayesian Tracking Optimization system in TrackerKit.
+TrackerKit's tracking auto-tuner is an **unlabeled candidate recommender**. It
+does not estimate ground-truth tracking accuracy and must not describe a result
+as mathematically optimal or “the best” configuration. Without labeled identity
+trajectories, a tracker can be consistently wrong.
 
-## Overview
+## Decision model
 
-The Tracking Optimization system (Auto-Tuner) is designed to solve the "parameter-tuning headache" in multi-animal tracking. Instead of manually adjusting sliders for Kalman filters, association thresholds, and YOLO confidences, users can select a short representative slice of their video and let an automated agent find the mathematically optimal settings.
+The tuner separates cheap proposal generation from the decision to recommend a
+change:
 
-## Core Architecture
+1. Raw detections are cached once. Confidence, IoU, size, aspect, count, source,
+   and ROI filtering are re-applied with the same `filter_for_source` path used
+   by production inference. Background-subtraction detections therefore bypass
+   YOLO-only confidence filtering.
+2. Optuna explores the user-selected parameter dimensions on a chronological
+   training slice. Its scalar loss is only a search heuristic. The current
+   production settings are also evaluated exactly and are never clamped into
+   the search space.
+3. The current settings and a bounded shortlist of proposals are replayed on a
+   held-out tail through `TrackingEngineCore` itself, with the inference cache
+   opened read-only. This is the apply/no-apply evidence; the lightweight search
+   loop is not treated as production-equivalent.
+4. Held-out outputs are compared on explicit lower-is-better losses:
 
-The system follows a **Hybrid Optimization** approach, separating heavy compute (AI detection) from lightweight logic (tracking association).
+   - forward/backward cycle disagreement, normalized by body size and globally
+     aligned for arbitrary startup slot permutations;
+   - missing observations (coverage loss);
+   - present/missing transitions (fragmentation loss);
+   - second-difference motion roughness computed from exported detections, not
+     hidden Kalman posterior positions.
 
-### 1. Phase 1: Detection Caching
-Before optimization begins, the system requires a `DetectionCache` (`.npz`).
-- **Efficiency:** By caching the raw YOLO detections (bounding boxes, confidences, and OBB corners), the optimizer can run hundreds of tracking "trials" without ever re-running the GPU-heavy YOLO model.
-- **Reuse:** The system reuses the same cache used for standard forward/backward tracking passes.
+   Metrics are repeated over several temporal regions to expose instability.
+5. Candidates receive Pareto fronts rather than being collapsed into a
+   user-weighted accuracy claim. A candidate is automatically recommended only
+   when it dominates the exact baseline and other baseline-safe candidates, and
+   its held-out improvement clears an uncertainty-aware margin without a
+   conservative regression on any metric. Otherwise the UI says **Keep current**.
 
-### 2. Phase 2: Bayesian Optimization (Optuna)
-The "brain" of the tuner is powered by **Optuna**.
-- **Strategy:** Unlike a "Grid Search" which tries every combination blindly, the tuner uses a **Tree-structured Parzen Estimator (TPE)**. It analyzes the scores of previous trials to predict which parameter ranges are most likely to yield a better result.
-- **Search Space:** It dynamically constructs a search space based on user-selected checkboxes in the UI.
+The user can still preview and manually choose any proposal. That is an explicit
+human decision, not an automatic accuracy claim.
 
-### 3. Phase 3: Quality Scoring
-Each trial is evaluated using the `FrameQualityScorer`. The "Best" result is determined by minimizing a multi-factor error cost:
-- **Lost Tracks:** Penalizes parameters that cause tracks to terminate prematurely.
-- **Uncertainty:** Penalizes high Kalman filter variance (indicates poor motion prediction).
-- **Assignment Cost:** Penalizes large jumps or poor spatial/orientation matches.
-- **Detection Count Mismatch:** Penalizes YOLO thresholds that result in inconsistent animal counts.
+## Components
 
-## Tunable Parameters
+- `core/tracking/optimization/detection_config.py` builds the source-aware
+  inference configuration shared by cache building, search replay, and preview.
+- `core/tracking/optimization/optimizer.py` owns proposal search, exact baseline
+  evaluation, shortlist orchestration, and result metadata.
+- `core/tracking/optimization/production_replay.py` adapts the production
+  `TrackingEngineCore` into a read-only observed-position evaluator.
+- `core/tracking/optimization/unlabeled_scoring.py` contains the pure NumPy
+  cycle, output-quality, aggregation, Pareto, and baseline-protection logic.
+- `trackerkit/gui/autotune_contract.py` is the single apply contract. It rejects
+  unsupported values before changing any widget and explicitly converts core
+  frame counts to UI seconds using the active FPS.
 
-The system provides granular control over which aspects of the pipeline are optimized:
+## Parameter contract
 
-| Category | Parameter | Description |
-| :--- | :--- | :--- |
-| **Detection** | `YOLO_CONFIDENCE_THRESHOLD` | Sensitivity of animal detection. |
-| | `YOLO_IOU_THRESHOLD` | NMS overlap filtering. |
-| **Movement** | `MAX_DISTANCE_MULTIPLIER` | Max distance an animal can travel per frame. |
-| **Kalman** | `KALMAN_NOISE_COVARIANCE` | Motion smoothing (Process Noise). |
-| | `KALMAN_MEASUREMENT_COVARIANCE` | Responsiveness to detections (Meas Noise). |
-| **Weights** | `W_POSITION`, `W_ORIENTATION` | Relative importance of distance vs direction. |
-| | `W_AREA`, `W_ASPECT` | Relative importance of size/shape consistency. |
+Every core search key must have a corresponding TrackerKit control. The contract
+test fails if an unapplyable search dimension is introduced. Detection
+thresholds and assignment controls use the same supported bounds as the UI.
+Lifecycle values remain integer frame counts in the engine, but their search
+neighborhood is expressed as dimensionless factors around the current duration;
+this preserves comparable real-time exploration across different video FPS.
+Dynamic ranges are capped at the corresponding seconds-control limits so every
+generated candidate remains representable on write-back.
 
-## Key Components
+Sequential YOLO stage 2 runs at a permissive raw confidence floor. The final
+confidence threshold is applied after cache loading, so a trial can recover
+detections below the threshold active when the cache was first built.
+Sequential cache keys include stage-1 confidence, crop geometry, stage-2
+extraction settings, target/count caps, slicing configuration, and any ROI mask
+used for sliced stage 1; changing a raw-generation setting cannot silently reuse
+incompatible detections.
 
-### `TrackingOptimizer` (Threaded)
-Located in `src/hydra_suite/core/tracking/optimizer.py`.
-- Manages the Optuna `study`.
-- Orchestrates the `_run_tracking_pass_cached` loop.
-- Emits progress and results back to the UI.
+## State and cancellation
 
-### `ParameterHelperDialog`
-Located in `src/hydra_suite/trackerkit/gui/dialogs/parameter_helper.py`.
-- Provides the selection grid for parameters.
-- Displays a ranked table of the top trials.
-- Handles the "Preview" logic.
+Saved result rankings are keyed by the cache and video file signatures, frame range, base/domain
+parameters, selected tuning dimensions, proposal weights, trial/seeding settings,
+plateau behavior, sampler, and objective version. Rebuilding an input or changing
+the objective configuration invalidates old rankings. Detection caches and
+production validation replays are read-only.
 
-### `TrackingPreviewWorker`
-- Allows the user to select any result from the optimization table and watch it run in the main TrackerKit window.
-- This provides "human-in-the-loop" verification to ensure the mathematical optimum also looks visually stable.
+For ranges shorter than eight frames, there is not enough data for a held-out
+split. Proposals may still be shown, but automatic recommendation retains the
+current settings and reports that held-out validation was unavailable.
 
-## Workflow for Users
+## Remaining limitation
 
-1.  **Select Range:** Use the `Start Frame` and `End Frame` boxes in the main TrackerKit UI to select a challenging slice (e.g., 200 frames with occlusions).
-2.  **Open Tuner:** Click **"Auto-Tune Tracking Parameters..."** in the Tracking tab.
-3.  **Configure:** Check the parameters that seem problematic (e.g., if tracks are swapping, check `W_POSITION` and `MAX_DISTANCE`).
-4.  **Optimize:** Run the Bayesian search (usually 50 trials take ~10-20 seconds).
-5.  **Preview:** Select the top-ranked result and click **"Preview Selected"**.
-6.  **Apply:** Click **"Apply Best to TrackerKit"** to update all main UI sliders and spin-boxes automatically.
-
-## Integration Details
-
-The system is tightly integrated into `MainWindow` via the `_open_parameter_helper` method. It ensures that when a user applies a result, `_update_parameters_from_ui()` is called to sync the internal tracking engine with the new visual settings.
+Forward/backward agreement and output stability are useful rejection signals,
+not identity or localization oracles. A future labeled evaluation path should be
+added alongside this workflow and should take precedence whenever trustworthy
+annotations become available.

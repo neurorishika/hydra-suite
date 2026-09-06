@@ -1,5 +1,6 @@
 from __future__ import annotations
 
+import importlib
 import types
 
 import numpy as np
@@ -44,9 +45,11 @@ class _StubKalmanFilterManager:
         self.X = np.zeros((n_targets, 5), dtype=np.float32)
         self.P = np.tile(np.eye(5, dtype=np.float32)[None, :, :], (n_targets, 1, 1))
         self.corrected_measurements = []
+        self.predict_count = 0
         _StubKalmanFilterManager.last_instance = self
 
     def predict(self):
+        self.predict_count += 1
         return self.X
 
     def correct(self, track_idx, measurement):
@@ -121,12 +124,23 @@ class _FakeCache:
 
 
 def _load_optimizer_module():
+    detection_config = importlib.import_module(
+        "hydra_suite.core.tracking.optimization.detection_config"
+    )
+    production_replay = importlib.import_module(
+        "hydra_suite.core.tracking.optimization.production_replay"
+    )
+    unlabeled_scoring = importlib.import_module(
+        "hydra_suite.core.tracking.optimization.unlabeled_scoring"
+    )
     hydra_suite_pkg = types.ModuleType("hydra_suite")
     hydra_suite_pkg.__path__ = []
     core_pkg = types.ModuleType("hydra_suite.core")
     core_pkg.__path__ = []
     core_tracking = types.ModuleType("hydra_suite.core.tracking")
     core_tracking.__path__ = []
+    optimization_pkg = types.ModuleType("hydra_suite.core.tracking.optimization")
+    optimization_pkg.__path__ = []
     data_pkg = types.ModuleType("hydra_suite.data")
     data_pkg.__path__ = []
 
@@ -194,6 +208,10 @@ def _load_optimizer_module():
         "hydra_suite": hydra_suite_pkg,
         "hydra_suite.core": core_pkg,
         "hydra_suite.core.tracking": core_tracking,
+        "hydra_suite.core.tracking.optimization": optimization_pkg,
+        "hydra_suite.core.tracking.optimization.detection_config": detection_config,
+        "hydra_suite.core.tracking.optimization.production_replay": production_replay,
+        "hydra_suite.core.tracking.optimization.unlabeled_scoring": unlabeled_scoring,
         "hydra_suite.data": data_pkg,
         "hydra_suite.core.assigners.hungarian": assigner,
         "hydra_suite.core.detectors": core_detectors,
@@ -288,7 +306,7 @@ def test_optimizer_opens_detection_cache_read_only() -> None:
         )
 
     mod._open_caches = _open_caches
-    mod.build_inference_config_from_params = lambda _params: object()
+    mod.inference_config_for_optimizer_params = lambda _params: object()
     mod.video_signature = lambda _path: "video-signature"
     optimizer = mod.TrackingOptimizerCore(
         video_path="dummy.mp4",
@@ -460,6 +478,77 @@ def test_preview_filter_cached_detections_returns_for_obb_result_frame() -> None
     assert headtail_directed == []
 
 
+def test_optimizer_replay_advances_kalman_across_empty_frames() -> None:
+    mod = _load_optimizer_module()
+
+    class SequenceCache:
+        def read_frame(self, frame_idx):
+            if frame_idx != 1:
+                return _make_obb_result()
+            obb = _make_obb_result()
+            keep = np.zeros(0, dtype=np.int64)
+            return type(obb)(
+                frame_idx=frame_idx,
+                centroids=obb.centroids[keep],
+                angles=obb.angles[keep],
+                sizes=obb.sizes[keep],
+                shapes=obb.shapes[keep],
+                confidences=obb.confidences[keep],
+                corners=obb.corners[keep],
+                detection_ids=obb.detection_ids[keep],
+            )
+
+    optimizer = mod.TrackingOptimizerCore("dummy.mp4", "cache-dir", 0, 2, {}, {})
+    optimizer.cache = SequenceCache()
+    optimizer._pose_run_context = (None, [], [], [], False)
+    optimizer._pose_frame_cache = {}
+    optimizer._run_tracking_loop(
+        {
+            "MAX_TARGETS": 1,
+            "REFERENCE_BODY_SIZE": 20.0,
+            "RESIZE_FACTOR": 1.0,
+            "LOST_THRESHOLD_FRAMES": 5,
+        }
+    )
+
+    assert _StubKalmanFilterManager.last_instance.predict_count == 3
+
+
+def test_optimizer_cycle_positions_are_observations_not_hidden_kalman_posteriors() -> (
+    None
+):
+    mod = _load_optimizer_module()
+
+    class OffsetPosteriorKalman(_StubKalmanFilterManager):
+        def correct(self, track_idx, measurement):
+            super().correct(track_idx, measurement)
+            self.X[track_idx, :2] += 100.0
+
+    mod.KalmanFilterManager = OffsetPosteriorKalman
+    optimizer = mod.TrackingOptimizerCore("dummy.mp4", "cache-dir", 0, 1, {}, {})
+    optimizer.cache = _FakeCache()
+    optimizer._pose_run_context = (None, [], [], [], False)
+    optimizer._pose_frame_cache = {}
+
+    _, _, positions = optimizer._run_tracking_loop(
+        {
+            "MAX_TARGETS": 1,
+            "REFERENCE_BODY_SIZE": 20.0,
+            "RESIZE_FACTOR": 1.0,
+            "LOST_THRESHOLD_FRAMES": 5,
+        }
+    )
+
+    # This fixture's probe assigner reports the initial detection as a direct
+    # match; both frames must still expose the measurement, never the +100 KF
+    # posterior injected above.
+    np.testing.assert_allclose(positions[0][0], [10.0, 20.0])
+    np.testing.assert_allclose(positions[1][0], [10.0, 20.0])
+    np.testing.assert_allclose(
+        OffsetPosteriorKalman.last_instance.X[0, :2], [110.0, 120.0]
+    )
+
+
 def test_preview_filter_cached_detections_raises_for_legacy_tuple_frame() -> None:
     from hydra_suite.core.tracking.optimization.optimizer_workers import (
         _preview_filter_cached_detections,
@@ -474,3 +563,120 @@ def test_preview_filter_cached_detections_raises_for_legacy_tuple_frame() -> Non
         assert "OBBResult" in str(exc)
     else:
         raise AssertionError("expected TypeError for legacy tuple cache frame")
+
+
+def _cached_filter_helpers():
+    from hydra_suite.core.tracking.optimization.optimizer import (
+        _filter_cached_detections,
+    )
+    from hydra_suite.core.tracking.optimization.optimizer_workers import (
+        _preview_filter_cached_detections,
+    )
+
+    return _filter_cached_detections, _preview_filter_cached_detections
+
+
+def _assert_cached_filters_match_production(params, raw, roi_mask=None):
+    from hydra_suite.core.inference.stages.filtering import filter_for_source
+    from hydra_suite.core.tracking.optimization.optimizer import (
+        inference_config_for_optimizer_params,
+    )
+
+    config = inference_config_for_optimizer_params(params)
+    expected, _ = filter_for_source(config, raw, roi_mask)
+    for cached_filter in _cached_filter_helpers():
+        result = cached_filter(
+            _ParamsFilter(params), _OBBFrameCache(raw), raw.frame_idx, roi_mask
+        )
+        meas, shapes, confidences, detection_ids, *_ = result
+        np.testing.assert_allclose(
+            np.asarray(meas, dtype=np.float32),
+            np.column_stack((expected.centroids, expected.angles)),
+        )
+        np.testing.assert_allclose(np.asarray(shapes), expected.shapes)
+        np.testing.assert_allclose(np.asarray(confidences), expected.confidences)
+        assert detection_ids == expected.detection_ids.tolist()
+    return expected
+
+
+def _make_filtering_obb(centroids, confidences, sizes, corners):
+    from hydra_suite.core.inference.result import OBBResult
+
+    count = len(centroids)
+    return OBBResult(
+        frame_idx=7,
+        centroids=np.asarray(centroids, dtype=np.float32),
+        angles=np.zeros(count, dtype=np.float32),
+        sizes=np.asarray(sizes, dtype=np.float32),
+        shapes=np.ones((count, 2), dtype=np.float32),
+        confidences=np.asarray(confidences, dtype=np.float32),
+        corners=np.asarray(corners, dtype=np.float32),
+        detection_ids=np.arange(700, 700 + count, dtype=np.int64),
+    )
+
+
+def test_cached_filters_match_production_confidence_and_iou_gates() -> None:
+    raw = _make_filtering_obb(
+        [[20, 20], [100, 100], [102, 100]],
+        [0.2, 0.8, 0.9],
+        [100, 100, 100],
+        [
+            [[15, 15], [25, 15], [25, 25], [15, 25]],
+            [[90, 90], [110, 90], [110, 110], [90, 110]],
+            [[92, 90], [112, 90], [112, 110], [92, 110]],
+        ],
+    )
+    params = {
+        "DETECTION_METHOD": "yolo_obb",
+        "YOLO_CONFIDENCE_THRESHOLD": 0.5,
+        "YOLO_IOU_THRESHOLD": 0.7,
+        "MAX_TARGETS": 4,
+    }
+
+    expected = _assert_cached_filters_match_production(params, raw)
+    assert expected.detection_ids.tolist() == [702]
+
+
+def test_cached_filters_match_production_roi_and_max_count_gates() -> None:
+    raw = _make_filtering_obb(
+        [[10, 10], [30, 30], [50, 50], [90, 90]],
+        [0.9, 0.9, 0.9, 0.9],
+        [10, 30, 20, 100],
+        [
+            [[5, 5], [15, 5], [15, 15], [5, 15]],
+            [[25, 25], [35, 25], [35, 35], [25, 35]],
+            [[45, 45], [55, 45], [55, 55], [45, 55]],
+            [[85, 85], [95, 85], [95, 95], [85, 95]],
+        ],
+    )
+    roi_mask = np.zeros((80, 80), dtype=np.uint8)
+    roi_mask[:60, :60] = 1
+    params = {
+        "DETECTION_METHOD": "yolo_obb",
+        "YOLO_CONFIDENCE_THRESHOLD": 0.0,
+        "YOLO_IOU_THRESHOLD": 1.0,
+        "MAX_TARGETS": 2,
+    }
+
+    expected = _assert_cached_filters_match_production(params, raw, roi_mask)
+    assert expected.detection_ids.tolist() == [701, 702]
+
+
+def test_cached_filters_preserve_bgsub_nan_confidence_detections() -> None:
+    raw = _make_filtering_obb(
+        [[10, 10], [30, 30]],
+        [float("nan"), float("nan")],
+        [10, 30],
+        [
+            [[5, 5], [15, 5], [15, 15], [5, 15]],
+            [[25, 25], [35, 25], [35, 35], [25, 35]],
+        ],
+    )
+    params = {
+        "DETECTION_METHOD": "background_subtraction",
+        "YOLO_CONFIDENCE_THRESHOLD": 0.99,
+        "MAX_TARGETS": 1,
+    }
+
+    expected = _assert_cached_filters_match_production(params, raw)
+    assert expected.detection_ids.tolist() == [700, 701]

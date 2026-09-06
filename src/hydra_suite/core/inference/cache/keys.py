@@ -9,6 +9,7 @@ import numpy as np
 from hydra_suite.core.canonicalization.geometry import CanonicalGeometry
 
 from ..config import (
+    TRACKER_RAW_OBB_CONFIDENCE_FLOOR,
     AprilTagConfig,
     BgSubConfig,
     CNNConfig,
@@ -66,14 +67,11 @@ def detection_cache_key(
     """Cache key for OBB detections.
 
     ``roi_mask`` is folded into the key ONLY when sliced inference is enabled
-    (direct mode + ``slice.enabled``) AND a mask is actually in use. ROI tile
+    (direct slicing or sequential stage-1 slicing) AND a mask is actually in use. ROI tile
     gating drops slice tiles that contain no live ROI pixel, which changes which
     *raw* detections land in the cache (final tracked results are unchanged --
     dropped tiles can only yield detections outside the ROI, which filtering
-    removes anyway). Under any other condition -- slicing disabled, sequential
-    mode, or ``roi_mask is None`` -- the ROI term is omitted, so the key is
-    byte-identical to the pre-ROI-gating key and every existing on-disk cache
-    stays valid.
+    removes anyway). Under any other condition the ROI term is omitted.
     """
     if config.mode == "direct":
         assert config.direct is not None
@@ -92,7 +90,10 @@ def detection_cache_key(
             f"{config.sequential.detect_model_path}|"
             f"{config.sequential.obb_model_path}"
         )
-        slice_hash = ""  # slicing is direct-mode only
+        slice_hash = _sequential_config_hash(config)
+        stage1_slice = config.sequential.stage1_slice
+        if stage1_slice.enabled and roi_mask is not None:
+            slice_hash = _sha(f"{slice_hash}|roi={_param_repr(roi_mask)}")
     return CacheKey(
         schema_version=CACHE_SCHEMA_VERSION,
         model_path=path,
@@ -102,6 +103,39 @@ def detection_cache_key(
         # only when enabled, so existing non-sliced caches stay valid).
         config_hash=slice_hash,
     )
+
+
+def _sequential_config_hash(config: OBBConfig) -> str:
+    """Hash every sequential setting that changes cached raw detections.
+
+    The outer OBB confidence/IoU gates remain excluded because replay reapplies
+    them. Stage-1 confidence and crop/extraction geometry are not final filters:
+    changing any of them changes which raw stage-2 OBBs can exist and therefore
+    must invalidate the cache.
+    """
+
+    assert config.sequential is not None
+    seq = config.sequential
+    payload = (
+        "sequential-raw-v2",
+        TRACKER_RAW_OBB_CONFIDENCE_FLOOR,
+        seq.detect_confidence_threshold,
+        seq.detect_image_size,
+        seq.crop_pad_ratio,
+        seq.min_crop_size_px,
+        seq.enforce_square_crop,
+        seq.stage2_image_size,
+        seq.stage2_task,
+        seq.seg_num_angles,
+        seq.seg_crop_size,
+        seq.seg_pad_ratio,
+        seq.seg_mask_threshold,
+        _slice_config_hash(seq.stage1_slice),
+        tuple(config.target_classes),
+        config.max_detections,
+        config.raw_detection_cap,
+    )
+    return _sha("|".join(map(str, payload)))
 
 
 def _slice_config_hash(slice_cfg: SliceConfig | None) -> str:

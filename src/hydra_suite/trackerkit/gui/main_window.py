@@ -1972,7 +1972,29 @@ class MainWindow(QMainWindow):
 
         recommended_size = self.detected_sizes["recommended_body_size"]
         stats = self.detected_sizes["stats"]
+        previous = self._detection_panel.spin_reference_body_size.value()
         self._detection_panel.spin_reference_body_size.setValue(recommended_size)
+
+        # A materially different value almost always means the DETECTOR
+        # changed, not the animal: the measurement is sqrt(major * minor) over
+        # this model's boxes, so a model that traces the silhouette reports far
+        # less than one whose box swallows legs and antennae. Every body-scaled
+        # gate moves with it, and the object-size window moves as the SQUARE,
+        # so it can silently exclude the detections it is meant to admit.
+        ratio = recommended_size / previous if previous > 0 else 1.0
+        caveat = ""
+        if previous > 0 and not (0.85 <= ratio <= 1.18):
+            caveat = (
+                f"\n\n⚠️ This REPLACED {previous:.1f} px "
+                f"({ratio:.2f}x change).\n"
+                "If you also switched detection models, expect this: the value "
+                "is measured from the model's boxes, and width counts as much "
+                "as length in sqrt(major x minor).\n\n"
+                "Re-check every body-scaled parameter before tracking. The "
+                f"object-size window scales as the SQUARE ({ratio * ratio:.2f}x "
+                "here), so a value carried over from another model can reject "
+                "most of your real detections."
+            )
 
         # Show confirmation with aspect ratio info
         QMessageBox.information(
@@ -1984,7 +2006,8 @@ class MainWindow(QMainWindow):
             f"  • Major axis: {stats['major']['median']:.1f} px\n"
             f"  • Minor axis: {stats['minor']['median']:.1f} px\n"
             f"  • Aspect ratio: {stats['aspect_ratio']['median']:.2f}\n\n"
-            f"All distance/size parameters will now scale relative to this value.",
+            "All distance/size parameters will now scale relative to this "
+            "value." + caveat,
         )
 
     def _auto_set_aspect_ratio_from_detection(self):

@@ -41,6 +41,7 @@ from hydra_suite.core.tracking.optimization.optimizer import (
     _PARAM_RANGES,
     OptimizationResult,
 )
+from hydra_suite.trackerkit.gui.autotune_contract import applicable_candidate_params
 from hydra_suite.trackerkit.gui.workers.param_optimizer_worker import (
     TrackingOptimizer,
     TrackingPreviewWorker,
@@ -147,7 +148,7 @@ class ParameterHelperDialog(BaseDialog):
 
         # Header
         hdr = QLabel(
-            f"Optimizing range: <b>{self.start_frame} – {self.end_frame}</b>"
+            f"Unlabeled recommendation range: <b>{self.start_frame} – {self.end_frame}</b>"
             f"  ({self.end_frame - self.start_frame + 1} frames)"
         )
         hdr.setStyleSheet("font-size: 12px; color: #9cdcfe; margin-bottom: 4px;")
@@ -199,7 +200,7 @@ class ParameterHelperDialog(BaseDialog):
         # Parameter tabs — two tabs: scoring weights first, then all parameter groups
         tab = QTabWidget()
         tab.setStyleSheet("QTabBar::tab { padding: 5px 14px; }")
-        tab.addTab(self._make_scoring_tab(), "⚖  Scoring Weights")
+        tab.addTab(self._make_scoring_tab(), "⚖  Proposal Weights")
         tab.addTab(self._make_params_tab(), "Optimization Parameters")
         left.addWidget(tab)
 
@@ -216,18 +217,19 @@ class ParameterHelperDialog(BaseDialog):
         self.status_label.setStyleSheet("color: #ffffff; font-size: 11px;")
         left.addWidget(self.status_label)
 
-        # Results table — 9 columns: Rank | Score | Cov↑ | Asn↓ | Frg↓ | Occ↓ | Vel↓ | Crd↓ | Key Changes
+        # Unlabeled recommendations expose held-out evidence separately from
+        # the search heuristic used to generate candidates.
         self.table = QTableWidget(0, 9)
         self.table.setHorizontalHeaderLabels(
             [
                 "Rank",
-                "Score",
-                "Cov↑",
-                "Asn↓",
+                "Decision",
+                "Search↓",
+                "Cycle↓",
+                "Coverage↑",
                 "Frg↓",
-                "Occ↓",
-                "Vel↓",
-                "Crd↓",
+                "Rough↓",
+                "Stability↓",
                 "Key Parameter Changes",
             ]
         )
@@ -470,10 +472,12 @@ class ParameterHelperDialog(BaseDialog):
         outer.setSpacing(8)
 
         note = QLabel(
-            "Each weight controls how much that objective influences the composite score.  "
+            "These weights guide fast proposal generation on the training slice; they do not "
+            "define tracking accuracy. Final recommendations require forward/backward agreement, "
+            "stable output metrics, and no held-out regression versus the current settings.  "
+            "Each weight controls the proposal loss.  "
             "Weights are normalised to sum to 1.0 at runtime — use any scale.  "
-            "Set a weight to <b>0</b> to disable that term entirely "
-            "(it is also excluded from the balance-penalty)."
+            "Set a weight to <b>0</b> to disable that proposal term."
         )
         note.setWordWrap(True)
         note.setStyleSheet("color: #ffffff; font-size: 11px;")
@@ -782,13 +786,13 @@ class ParameterHelperDialog(BaseDialog):
         self.combo_sampler.addItems(
             [
                 "Auto (recommended)",
-                "GP — best ≤200 trials",
-                "TPE — best >500 trials",
+                "GP — recommended ≤200 trials",
+                "TPE — recommended >500 trials",
             ]
         )
         self.combo_sampler.setToolTip(
             "Bayesian optimisation algorithm.\n"
-            "Auto: OptunaHub AutoSampler — GP early on, TPE later. Best overall.\n"
+            "Auto: OptunaHub AutoSampler — GP early on, TPE later.\n"
             "GP:   Gaussian Process (Matérn-2.5, ARD, log-EI). Fastest convergence\n"
             "      for 50–200 trials; requires scipy + torch.\n"
             "TPE:  Multivariate Tree-structured Parzen Estimator. Robust fallback;\n"
@@ -1122,7 +1126,7 @@ class ParameterHelperDialog(BaseDialog):
         self.btn_preview = QPushButton("▶  Preview Selected")
         self.btn_preview.setEnabled(False)
         self.btn_preview.setToolTip(
-            "Run the selected parameter set on the optimised frame range\n"
+            "Run the selected candidate on the chosen frame range\n"
             "and show the result in the preview panel on the right."
         )
         self.btn_preview.clicked.connect(self.run_preview)
@@ -1130,7 +1134,7 @@ class ParameterHelperDialog(BaseDialog):
         self.btn_apply = QPushButton("✔  Apply Selected")
         self.btn_apply.setEnabled(False)
         self.btn_apply.setToolTip(
-            "Write the selected parameter set back into the MAT setup tab and close."
+            "Write the selected candidate settings back into the MAT setup tab and close."
         )
         self.btn_apply.clicked.connect(self._apply_selected)
         self.btn_apply.setStyleSheet(
@@ -1256,53 +1260,67 @@ class ParameterHelperDialog(BaseDialog):
             rank_item.setFlags(rank_item.flags() & ~Qt.ItemIsEditable)
             self.table.setItem(i, 0, rank_item)
 
-            # Composite score (colour-coded, lower=better)
+            if res.recommended and res.is_baseline:
+                decision = "KEEP CURRENT"
+            elif res.recommended:
+                decision = "RECOMMENDED"
+            elif res.pareto_rank is not None:
+                decision = f"Pareto {res.pareto_rank}"
+            else:
+                decision = "Proposal"
+            decision_item = QTableWidgetItem(decision)
+            decision_item.setToolTip(res.recommendation_reason)
+            decision_item.setFlags(decision_item.flags() & ~Qt.ItemIsEditable)
+            self.table.setItem(i, 1, decision_item)
+
+            # Search loss is proposal-generation evidence, not an accuracy score.
             score_item = QTableWidgetItem(f"{res.score:.4f}")
             score_item.setTextAlignment(Qt.AlignCenter)
             score_item.setBackground(QBrush(_score_to_color(min(res.score / 0.8, 1.0))))
             score_item.setForeground(QBrush(QColor(255, 255, 255)))
             score_item.setFlags(score_item.flags() & ~Qt.ItemIsEditable)
-            self.table.setItem(i, 1, score_item)
+            score_item.setToolTip("Fast training-slice proposal loss; lower is better.")
+            self.table.setItem(i, 2, score_item)
 
-            # Sub-score badges  (columns 2-7)
+            # Held-out production replay metrics (columns 3-7).
             ss = res.sub_scores
-            cov_cost = ss.get("coverage", 1.0)
-            cov_pct = 1.0 - cov_cost  # higher = better for display
-            self.table.setItem(i, 2, _badge_item(cov_cost, f"{cov_pct:.0%}"))
+            cycle = ss.get("cycle_loss", 1.0)
             self.table.setItem(
                 i,
                 3,
-                _badge_item(
-                    ss.get("assignment", 1.0), f"{ss.get('assignment', 1.0):.2f}"
-                ),
+                _badge_item(cycle, f"{cycle:.2f}"),
             )
-            self.table.setItem(
-                i,
-                4,
-                _badge_item(
-                    ss.get("fragmentation", 1.0), f"{ss.get('fragmentation', 1.0):.2f}"
-                ),
-            )
+            cov_cost = ss.get("coverage_loss", ss.get("coverage", 1.0))
+            cov_pct = 1.0 - cov_cost
+            self.table.setItem(i, 4, _badge_item(cov_cost, f"{cov_pct:.0%}"))
+            frag = ss.get("fragmentation_loss", ss.get("fragmentation", 1.0))
             self.table.setItem(
                 i,
                 5,
-                _badge_item(
-                    ss.get("occlusion", 1.0), f"{ss.get('occlusion', 1.0):.2f}"
-                ),
+                _badge_item(frag, f"{frag:.2f}"),
             )
+            roughness = ss.get("motion_roughness_loss", ss.get("velocity", 1.0))
             self.table.setItem(
                 i,
                 6,
-                _badge_item(ss.get("velocity", 1.0), f"{ss.get('velocity', 1.0):.2f}"),
+                _badge_item(roughness, f"{roughness:.2f}"),
             )
+            stability = res.mean_relative_spread
             self.table.setItem(
                 i,
                 7,
-                _badge_item(ss.get("crowding", 0.0), f"{ss.get('crowding', 0.0):.2f}"),
+                _badge_item(
+                    min(stability if stability is not None else 1.0, 1.0),
+                    f"{stability:.2f}" if stability is not None else "—",
+                ),
             )
 
             # Key parameter changes vs base
-            changes = self._format_changes(res.params)
+            changes = (
+                "Current settings"
+                if res.is_baseline
+                else self._format_changes(res.params)
+            )
             chg_item = QTableWidgetItem(changes)
             chg_item.setFlags(chg_item.flags() & ~Qt.ItemIsEditable)
             chg_item.setToolTip(changes.replace("  ", "\n"))
@@ -1362,7 +1380,13 @@ class ParameterHelperDialog(BaseDialog):
                 self.optimizer is not None and self.optimizer._core._stop_requested
             )
             reason = "Converged (plateau)" if converged else "Search finished"
-            self.status_label.setText(f"{reason}. {n} trials. Lower score is better.")
+            recommended = next((r for r in self.results if r.recommended), None)
+            decision = (
+                " Current settings retained."
+                if recommended is not None and recommended.is_baseline
+                else " A held-out candidate is recommended."
+            )
+            self.status_label.setText(f"{reason}. {max(0, n - 1)} proposals.{decision}")
         elif self._last_error:
             self.status_label.setText(f"Optimization failed: {self._last_error}")
         else:
@@ -1388,7 +1412,7 @@ class ParameterHelperDialog(BaseDialog):
             self.preview_worker.stop()
             self.preview_worker.wait()
 
-        self.status_label.setText(f"Previewing Rank {row + 1}...")
+        self.status_label.setText(f"Previewing candidate rank {row + 1}...")
         self._prev_auto_fit_pending = True
         self.preview_worker = TrackingPreviewWorker(
             self.video_path,
@@ -1399,27 +1423,28 @@ class ParameterHelperDialog(BaseDialog):
         )
         self.preview_worker.frame_signal.connect(self._on_preview_frame_received)
         self.preview_worker.finished_signal.connect(
-            lambda: self.status_label.setText(f"Preview of rank {row + 1} finished.")
+            lambda: self.status_label.setText(
+                f"Preview of candidate rank {row + 1} finished."
+            )
         )
         self.preview_worker.start()
 
     def _apply_selected(self):
-        """Apply the currently-selected table row (not always rank 1) to MAT."""
+        """Apply the currently-selected candidate row (not always rank 1) to MAT."""
         row = self.table.currentRow()
         if row < 0:
-            row = 0  # fallback to best
+            row = 0  # fallback to the first-ranked candidate
         self._selected_row_to_apply = row
         self.accept()
 
     def get_selected_params(self) -> Dict[str, Any]:
         row = getattr(self, "_selected_row_to_apply", self.table.currentRow())
         if 0 <= row < len(self.results):
-            # Return the full merged set (base snapshot + tuned overrides) so the
-            # caller gets exactly the params that produced this result, not just
-            # the tuned subset.  The base snapshot also has correct non-tunable
-            # values (REFERENCE_BODY_SIZE, RESIZE_FACTOR, etc.) from the time the
-            # dialog was opened, preventing any precision or staleness issues.
-            return {**self.base_params, **self.results[row].params}
+            # The result contains only the candidate overrides. Returning a
+            # historical base snapshot would overwrite controls that changed
+            # while the dialog was open, and could include core-only fields that
+            # TrackerKit cannot apply.
+            return applicable_candidate_params(self.results[row].params)
         return {}
 
     # ── Persistence ───────────────────────────────────────────────────────────
@@ -1452,13 +1477,51 @@ class ParameterHelperDialog(BaseDialog):
             "REFERENCE_BODY_SIZE": self.base_params.get("REFERENCE_BODY_SIZE", 20.0),
             "RESIZE_FACTOR": self.base_params.get("RESIZE_FACTOR", 1.0),
         }
+
+        def _source_signature(path: str | Path) -> object:
+            source = Path(path)
+            try:
+                stat = source.stat()
+            except OSError:
+                return None
+            if source.is_dir():
+                members = []
+                for member in sorted(source.rglob("*")):
+                    if not member.is_file():
+                        continue
+                    try:
+                        member_stat = member.stat()
+                    except OSError:
+                        continue
+                    members.append(
+                        (
+                            str(member.relative_to(source)),
+                            member_stat.st_size,
+                            member_stat.st_mtime_ns,
+                        )
+                    )
+                return ("directory", stat.st_mtime_ns, members)
+            return stat.st_size, stat.st_mtime_ns
+
         payload = json.dumps(
             {
+                "objective_version": 2,
                 "cache_path": str(self.detection_cache_path),
+                "cache_signature": _source_signature(self.detection_cache_path),
+                "video_path": str(self.video_path),
+                "video_signature": _source_signature(self.video_path),
                 "start": self.start_frame,
                 "end": self.end_frame,
                 "base_params": subset,
                 "domain_params": domain,
+                "tuning_config": self.get_tuning_config(),
+                "scoring_weights": self.get_scoring_weights(),
+                "search_settings": {
+                    "n_trials": self.spin_trials.value(),
+                    "n_seeds": self.spin_seeds.value(),
+                    "plateau": self.combo_plateau.currentIndex(),
+                    "sampler": self.combo_sampler.currentIndex(),
+                },
             },
             sort_keys=True,
             default=str,
@@ -1510,6 +1573,13 @@ class ParameterHelperDialog(BaseDialog):
                     "score": res.score,
                     "trial_number": res.trial_number,
                     "sub_scores": res.sub_scores,
+                    "candidate_id": res.candidate_id,
+                    "is_baseline": res.is_baseline,
+                    "pareto_rank": res.pareto_rank,
+                    "recommended": res.recommended,
+                    "recommendation_reason": res.recommendation_reason,
+                    "validation_metrics": res.validation_metrics,
+                    "mean_relative_spread": res.mean_relative_spread,
                 }
                 for res in self.results
             ]
@@ -1584,7 +1654,16 @@ class ParameterHelperDialog(BaseDialog):
                 score=float(d.get("score", 1.0)),
                 trial_number=int(d.get("trial_number", 0)),
                 sub_scores=d.get("sub_scores", {}),
+                candidate_id=d.get("candidate_id"),
+                is_baseline=bool(d.get("is_baseline", False)),
             )
+            r.pareto_rank = d.get("pareto_rank")
+            r.recommended = bool(d.get("recommended", False))
+            r.recommendation_reason = str(
+                d.get("recommendation_reason", "restored candidate")
+            )
+            r.validation_metrics = d.get("validation_metrics", {})
+            r.mean_relative_spread = d.get("mean_relative_spread")
             restored.append(r)
 
         self.on_results(restored)

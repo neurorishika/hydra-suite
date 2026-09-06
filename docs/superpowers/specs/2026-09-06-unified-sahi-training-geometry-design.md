@@ -1061,6 +1061,16 @@ made once, not an automatic loop.
 > confound demonstrated.
 
 
+> **SUPERSEDED for D7, D8 and D9 — read the RESOLVED block above instead.**
+> The three bullets below are the PRE-RULING analysis, kept for provenance only.
+> Their recommendations were NOT what shipped: the D8 bullet in particular
+> recommends defaulting each path to its current rule "so nothing changes",
+> and the opposite was decided and implemented (recall-first everywhere, F1
+> retired as a target). Implemented on branch `feat/direct-scoring-unification`
+> with a measured before/after gate at
+> `tests/data/direct_calibration_golden/ATTRIBUTION.md`.
+> D10 and D11 below remain genuinely OPEN.
+
 - **D7 — direct-path matcher admissibility.** Adopt the semantic path's graded/containment
   policy for P3 (fixes the inverse defect of §2.7) or keep the hard IoU gate? Adopting it will
   change recommended profiles for existing projects. **Recommend adopting for `segment`, where

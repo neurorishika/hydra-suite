@@ -327,6 +327,11 @@ def _scored_point(label="Training geometry"):
             recall=0.95,
             f1=0.95,
             mean_iou=0.81,
+            # Set explicitly (not left at the 0.0 default) so this shared
+            # fixture clears D8's MIN_MEAN_QUALITY floor -- otherwise every
+            # test that runs the recommender over it would silently assert
+            # against a refusal.
+            mean_quality=0.72,
         ),
     )
 
@@ -650,3 +655,282 @@ def test_v3_evidence_file_degrades_cleanly(tmp_path, monkeypatch):
     loaded = job.load_direct_calibration(evidence_dir)
     assert loaded is not None
     assert loaded.previews == []
+
+
+def test_v5_round_trip_carries_recommendation_rule(tmp_path):
+    """A freshly saved (v5) evidence file stamps the rule the recommender
+    actually ran and survives a save/load cycle intact."""
+    from hydra_suite.core.inference.direct_calibration import (
+        RECOMMENDATION_RULE,
+        RECOMMENDATION_RULE_EFFECTIVE_DATE,
+        RECOMMENDATION_RULE_ID,
+    )
+    from hydra_suite.detectkit.jobs.direct_calibration import (
+        EVIDENCE_VERSION,
+        DirectCalibrationOutcome,
+        load_direct_calibration,
+        save_direct_calibration,
+    )
+
+    assert EVIDENCE_VERSION == 5
+
+    request = _request(tmp_path)
+    save_direct_calibration(
+        request.evidence_dir,
+        DirectCalibrationOutcome(points=[_scored_point()]),
+        request,
+    )
+    restored = load_direct_calibration(request.evidence_dir)
+    assert restored is not None
+    # Regression against the CONSTANT, never a literal -- a later task will
+    # change the rule's content, and a hardcoded string here would then
+    # silently assert stale provenance instead of catching the drift.
+    assert restored.recommendation_rule_id == RECOMMENDATION_RULE_ID
+    assert restored.recommendation_rule == RECOMMENDATION_RULE
+    assert (
+        restored.recommendation_rule_effective_date
+        == RECOMMENDATION_RULE_EFFECTIVE_DATE
+    )
+
+
+def test_v4_evidence_loads_as_unknown_rule_without_backfill(tmp_path):
+    """A real v4 payload -- WITH a populated frame table and a real preview,
+    so the preview-loading path is actually exercised and cannot pass
+    vacuously -- must load successfully as valid settings (points AND
+    previews intact), report the unknown-rule label, and must NEVER be
+    stamped with whatever rule constant happens to be current at load time
+    -- that would assert provenance that was never recorded."""
+    import json as _json
+
+    from hydra_suite.core.inference.direct_calibration import RECOMMENDATION_RULE_ID
+    from hydra_suite.detectkit.jobs.direct_calibration import (
+        UNKNOWN_RECOMMENDATION_RULE_ID,
+        UNKNOWN_RECOMMENDATION_RULE_LABEL,
+        load_direct_calibration,
+    )
+
+    image_path = tmp_path / "f.png"
+    cv2.imwrite(str(image_path), np.zeros((16, 16, 3), np.uint8))
+    evidence_dir = tmp_path / "evidence"
+    evidence_dir.mkdir(parents=True)
+    # Real v4 shape: provenance/points/frames/previews, no recommendation
+    # block (that field did not exist until v5). The frame table and
+    # preview are populated so this test would fail if preview loading
+    # were (as it once regressed to being) silently gated on the wrong
+    # version constant.
+    v4_payload = {
+        "version": 4,
+        "partial": False,
+        "message": "",
+        "provenance": {},
+        "points": [],
+        "frames": [
+            {
+                "image_path": {"absolute": str(image_path)},
+                "ground_truth": [[[0.0, 0.0], [1.0, 0.0], [1.0, 1.0]]],
+            }
+        ],
+        "previews": [
+            {
+                "candidate_label": "c",
+                "candidate_index": 0,
+                "merge_threshold": 0.5,
+                "confidence": 0.3,
+                "frames": [
+                    {
+                        "frame_index": 0,
+                        "predictions": [[[0.1, 0.1], [0.9, 0.1], [0.9, 0.9]]],
+                    }
+                ],
+            }
+        ],
+    }
+    (evidence_dir / "direct_calibration.json").write_text(_json.dumps(v4_payload))
+
+    loaded = load_direct_calibration(evidence_dir)
+    assert loaded is not None
+    assert len(loaded.previews) == 1
+    assert loaded.previews[0].candidate_label == "c"
+    assert loaded.recommendation_rule_id == UNKNOWN_RECOMMENDATION_RULE_ID
+    assert loaded.recommendation_rule == UNKNOWN_RECOMMENDATION_RULE_LABEL
+    assert loaded.recommendation_rule_id != RECOMMENDATION_RULE_ID
+
+
+def test_v3_evidence_also_reports_unknown_rule(tmp_path):
+    """v1-3 keep their existing preview-drop behaviour and, like v4, never
+    have a rule back-filled onto them."""
+    import json as _json
+
+    from hydra_suite.detectkit.jobs.direct_calibration import (
+        UNKNOWN_RECOMMENDATION_RULE_ID,
+        load_direct_calibration,
+    )
+
+    evidence_dir = tmp_path / "evidence"
+    evidence_dir.mkdir(parents=True)
+    old_payload = {
+        "version": 3,
+        "partial": False,
+        "message": "",
+        "provenance": {},
+        "points": [],
+        "previews": [],
+    }
+    (evidence_dir / "direct_calibration.json").write_text(_json.dumps(old_payload))
+    loaded = load_direct_calibration(evidence_dir)
+    assert loaded is not None
+    assert loaded.previews == []
+    assert loaded.recommendation_rule_id == UNKNOWN_RECOMMENDATION_RULE_ID
+
+
+def test_stamped_rule_id_matches_the_rule_the_recommender_actually_runs(tmp_path):
+    """The id persisted at save time must equal the id of the rule
+    ``recommend_balanced`` is actually running right now -- asserted against
+    the shared constant so this test cannot go tautological when a later
+    task changes the rule's content."""
+    from hydra_suite.core.inference import direct_calibration as core_direct
+    from hydra_suite.detectkit.jobs.direct_calibration import (
+        DirectCalibrationOutcome,
+        load_direct_calibration,
+        save_direct_calibration,
+    )
+
+    request = _request(tmp_path)
+    point = _scored_point()
+    save_direct_calibration(
+        request.evidence_dir,
+        DirectCalibrationOutcome(points=[point]),
+        request,
+    )
+    restored = load_direct_calibration(request.evidence_dir)
+    assert restored is not None
+
+    # The rule the recommender actually runs, right now.
+    _chosen, reason = core_direct.recommend_balanced([point])
+    assert core_direct.RECOMMENDATION_RULE_ID == restored.recommendation_rule_id
+    assert core_direct.RECOMMENDATION_RULE in reason
+    assert restored.recommendation_rule == core_direct.RECOMMENDATION_RULE
+
+
+def test_v4_evidence_with_real_preview_and_frame_table_survives_load(tmp_path):
+    """A genuine v4 payload -- one WITH a populated frame table and a real
+    preview referencing it -- must still load its previews intact. Gating
+    preview loading on ``version >= EVIDENCE_VERSION`` breaks this the
+    moment EVIDENCE_VERSION advances for reasons (like rule provenance)
+    that have nothing to do with the preview/frame-table format."""
+    import json as _json
+
+    from hydra_suite.detectkit.jobs.direct_calibration import load_direct_calibration
+
+    image_path = tmp_path / "f.png"
+    cv2.imwrite(str(image_path), np.zeros((16, 16, 3), np.uint8))
+    evidence_dir = tmp_path / "evidence"
+    evidence_dir.mkdir(parents=True)
+    v4_payload = {
+        "version": 4,
+        "partial": False,
+        "message": "",
+        "provenance": {},
+        "points": [],
+        "frames": [
+            {
+                "image_path": {"absolute": str(image_path)},
+                "ground_truth": [[[0.0, 0.0], [1.0, 0.0], [1.0, 1.0]]],
+            }
+        ],
+        "previews": [
+            {
+                "candidate_label": "c",
+                "candidate_index": 0,
+                "merge_threshold": 0.5,
+                "confidence": 0.3,
+                "frames": [
+                    {
+                        "frame_index": 0,
+                        "predictions": [[[0.1, 0.1], [0.9, 0.1], [0.9, 0.9]]],
+                    }
+                ],
+            }
+        ],
+    }
+    (evidence_dir / "direct_calibration.json").write_text(_json.dumps(v4_payload))
+
+    loaded = load_direct_calibration(evidence_dir)
+    assert loaded is not None
+    assert len(loaded.previews) == 1
+    preview = loaded.previews[0]
+    assert preview.candidate_label == "c"
+    _path, gt_polygons, pred_polygons = preview.frames[0]
+    assert len(gt_polygons) == 1
+    assert len(pred_polygons) == 1
+
+
+def test_saved_then_reloaded_points_still_earn_the_same_recommendation(tmp_path):
+    """``mean_quality`` must survive the round trip.
+
+    D8 made ``recommend_balanced`` refuse below ``MIN_MEAN_QUALITY``. If the
+    field were dropped on save (it was, until this test existed), a freshly
+    calibrated profile would be recommended in-memory and then refuse as
+    "Mistargeted" the moment it was reloaded -- with no error anywhere.
+    """
+    from hydra_suite.core.inference import direct_calibration as core_direct
+    from hydra_suite.detectkit.jobs.direct_calibration import (
+        DirectCalibrationOutcome,
+        load_direct_calibration,
+        save_direct_calibration,
+    )
+
+    request = _request(tmp_path)
+    point = _scored_point()
+    live_choice, _live_reason = core_direct.recommend_balanced([point])
+    assert live_choice is not None  # otherwise this test asserts nothing
+
+    save_direct_calibration(
+        request.evidence_dir,
+        DirectCalibrationOutcome(points=[point]),
+        request,
+    )
+    restored = load_direct_calibration(request.evidence_dir)
+    assert restored is not None
+    assert point.score.mean_quality > 0.0
+    assert restored.points[0].score.mean_quality == point.score.mean_quality
+
+    reloaded_choice, _reason = core_direct.recommend_balanced(restored.points)
+    assert (live_choice is None) == (reloaded_choice is None)
+    if live_choice is not None:
+        assert reloaded_choice.label == live_choice.label
+
+
+def test_profile_missing_mean_quality_key_loads_as_never_measured(tmp_path):
+    """Finding 4: a profile saved before D8 (2026-09-06) has no
+    ``mean_quality`` key at all. Reloading it must NOT collapse the
+    missing measurement to ``0.0`` -- that would make ``recommend_balanced``
+    reject it with a "mistargeted" claim about geometry that was never
+    actually measured. It must reload as ``None`` (never measured), and
+    stay distinguishable from a profile with a genuine, measured 0.0.
+    """
+    from hydra_suite.core.inference import direct_calibration as core_direct
+    from hydra_suite.detectkit.jobs.direct_calibration import (
+        _point_from_dict,
+        _point_to_dict,
+    )
+
+    point = _scored_point()
+    raw = _point_to_dict(point)
+    del raw["score"]["mean_quality"]  # simulate a pre-D8 saved profile
+    restored = _point_from_dict(raw)
+    assert restored.score.mean_quality is None
+
+    _best, reason = core_direct.recommend_balanced([restored])
+    assert "never measured" in reason
+    assert "Mistargeted" not in reason
+
+    # Contrast: a genuine, measured 0.0 must still read as mistargeting.
+    raw_zero = _point_to_dict(point)
+    raw_zero["score"]["mean_quality"] = 0.0
+    restored_zero = _point_from_dict(raw_zero)
+    assert restored_zero.score.mean_quality == 0.0
+
+    _best, reason_zero = core_direct.recommend_balanced([restored_zero])
+    assert "Mistargeted" in reason_zero
+    assert "never measured" not in reason_zero

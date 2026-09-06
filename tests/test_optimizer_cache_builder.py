@@ -10,8 +10,11 @@ def test_cache_build_worker_uses_run_batch_pass(monkeypatch, tmp_path):
     calls = {}
 
     class _FakeRunner:
-        def __init__(self, cfg, cache_dir=None, video_path=None, cache_only=False):
+        def __init__(
+            self, cfg, cache_dir=None, video_path=None, cache_only=False, roi_mask=None
+        ):
             calls["cache_dir"] = cache_dir
+            calls["roi_mask"] = roi_mask
 
         def run_batch_pass(
             self,
@@ -30,14 +33,14 @@ def test_cache_build_worker_uses_run_batch_pass(monkeypatch, tmp_path):
 
     monkeypatch.setattr(ow, "InferenceRunner", _FakeRunner, raising=False)
     monkeypatch.setattr(
-        ow, "build_inference_config_from_params", lambda p: object(), raising=False
+        ow, "inference_config_for_optimizer_params", lambda p: object(), raising=False
     )
 
     emitted = []
     worker = ow.DetectionCacheBuildWorker(
         video_path="v.mp4",
         cache_dir=str(tmp_path),
-        params={},
+        params={"ROI_MASK": "roi-mask"},
         start_frame=0,
         end_frame=1,
     )
@@ -46,5 +49,6 @@ def test_cache_build_worker_uses_run_batch_pass(monkeypatch, tmp_path):
     worker.run()
     assert calls.get("ran") is True
     assert calls.get("closed") is True
+    assert calls["roi_mask"] == "roi-mask"
     assert emitted and emitted[-1][0] is True
     assert emitted[-1][1] == str(tmp_path)

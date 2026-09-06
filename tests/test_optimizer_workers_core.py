@@ -141,7 +141,10 @@ def _patch_cache_open(monkeypatch, fake_handle):
         ow, "video_signature", lambda video_path: ("sig", video_path), raising=False
     )
     monkeypatch.setattr(
-        ow, "build_inference_config_from_params", lambda p: object(), raising=False
+        ow,
+        "inference_config_for_optimizer_params",
+        lambda p: type("Config", (), {"detection_source": "bgsub"})(),
+        raising=False,
     )
 
 
@@ -208,7 +211,10 @@ def test_run_tracking_preview_handles_missing_cache_gracefully(monkeypatch, tmp_
         ow, "video_signature", lambda video_path: ("sig", video_path), raising=False
     )
     monkeypatch.setattr(
-        ow, "build_inference_config_from_params", lambda p: object(), raising=False
+        ow,
+        "inference_config_for_optimizer_params",
+        lambda p: type("Config", (), {"detection_source": "bgsub"})(),
+        raising=False,
     )
     monkeypatch.setattr(ow.cv2, "VideoCapture", lambda *_a, **_k: _FakeCap(n_frames=5))
 

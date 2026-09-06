@@ -9,9 +9,11 @@ from pathlib import Path
 import numpy as np
 
 from hydra_suite.core.inference.cache.keys import video_signature
-from hydra_suite.core.inference.config import build_inference_config_from_params
 from hydra_suite.core.inference.result import OBBResult
 from hydra_suite.core.inference.runner import _open_caches
+from hydra_suite.core.tracking.optimization.detection_config import (
+    inference_config_for_optimizer_params,
+)
 from hydra_suite.trackerkit.gui.orchestrators.config import (
     detection_cache_dir_covers_range,
 )
@@ -32,7 +34,7 @@ def _make_obb_result(frame_idx: int) -> OBBResult:
 
 def _write_modern_detection_cache_dir(cache_dir: Path, params: dict, frames: range):
     """Populate the atomic cache-set layout written by ``InferenceRunner``."""
-    cfg = build_inference_config_from_params(params)
+    cfg = inference_config_for_optimizer_params(params)
     caches = _open_caches(
         cfg,
         cache_dir,

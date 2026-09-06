@@ -207,7 +207,7 @@ class TrackingPanel(QWidget):
             "background-color: #0e639c; color: white; font-weight: bold; padding: 5px; margin-top: 5px;"
         )
         self.btn_param_helper.setToolTip(
-            "Run automated bayesian search to find optimal tracking parameters for your video."
+            "Run an automated Bayesian search to rank tracking-setting candidates for your video."
         )
         vbox.addWidget(self.btn_param_helper)
 
@@ -290,9 +290,11 @@ class TrackingPanel(QWidget):
 
         # Age-dependent velocity damping (compact pair: maturity time + retention)
         self.spin_kalman_maturity_age = QDoubleSpinBox()
-        self.spin_kalman_maturity_age.setRange(0.01, 2.0)
+        # The auto-tuner explores up to 4× the current duration, so expand the
+        # historical 2-second ceiling to keep every proposal representable.
+        self.spin_kalman_maturity_age.setRange(0.001, 8.0)
         self.spin_kalman_maturity_age.setSingleStep(0.02)
-        self.spin_kalman_maturity_age.setDecimals(2)
+        self.spin_kalman_maturity_age.setDecimals(4)
         self.spin_kalman_maturity_age.setValue(0.17)
         self.spin_kalman_maturity_age.setToolTip(
             "Time for a track to reach maturity (seconds).\n"
@@ -375,7 +377,7 @@ class TrackingPanel(QWidget):
             "Weight for orientation difference in the assignment cost."
         )
         self.spin_Wa = QDoubleSpinBox()
-        self.spin_Wa.setRange(0.0, 1.0)
+        self.spin_Wa.setRange(0.0, 2.0)
         self.spin_Wa.setSingleStep(0.001)
         self.spin_Wa.setDecimals(4)
         self.spin_Wa.setValue(0.001)
@@ -808,9 +810,11 @@ class TrackingPanel(QWidget):
         self._configure_form_layout(f_lifecycle)
 
         self.spin_lost_thresh = QDoubleSpinBox()
-        self.spin_lost_thresh.setRange(0.01, 10.0)
+        # The auto-tuner explores up to 4× the current duration. Preserve the
+        # historical 10-second range plus that exploration neighborhood.
+        self.spin_lost_thresh.setRange(0.001, 40.0)
         self.spin_lost_thresh.setSingleStep(0.05)
-        self.spin_lost_thresh.setDecimals(2)
+        self.spin_lost_thresh.setDecimals(4)
         self.spin_lost_thresh.setValue(0.33)
         self.spin_lost_thresh.setToolTip(
             "Time without detection before track is terminated (seconds).\n"

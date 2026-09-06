@@ -46,6 +46,10 @@ from hydra_suite.trackerkit.engine_params import (
     build_roi_mask,
     n_arenas_from_shapes,
 )
+from hydra_suite.trackerkit.gui.autotune_contract import (
+    AutotuneCandidateApplicationError,
+    apply_tracking_autotune_candidate,
+)
 from hydra_suite.trackerkit.gui.panels.tracking_panel import (
     DENSITY_BINARIZE_THRESHOLD_CONST,
     DENSITY_DOWNSAMPLE_FACTOR_CONST,
@@ -144,10 +148,12 @@ def detection_cache_dir_covers_range(
     if not cache_dir.is_dir():
         return False
     try:
-        from hydra_suite.core.inference.config import build_inference_config_from_params
         from hydra_suite.core.inference.runner import _open_caches, video_signature
+        from hydra_suite.core.tracking.optimization.detection_config import (
+            inference_config_for_optimizer_params,
+        )
 
-        _cfg = build_inference_config_from_params(params)
+        _cfg = inference_config_for_optimizer_params(params)
         caches = _open_caches(
             _cfg,
             cache_dir,
@@ -3202,44 +3208,8 @@ class ConfigOrchestrator:
         self._mw._cache_builder_worker.start()
 
     def _apply_optimized_params(self, new_params):
-        """Apply optimized parameter values from the helper dialog to UI widgets."""
-        _direct_mappings = [
-            ("YOLO_CONFIDENCE_THRESHOLD", self._panels.detection.spin_yolo_confidence),
-            ("YOLO_IOU_THRESHOLD", self._panels.detection.spin_yolo_iou),
-            ("MAX_DISTANCE_MULTIPLIER", self._panels.tracking.spin_max_dist),
-            ("KALMAN_NOISE_COVARIANCE", self._panels.tracking.spin_kalman_noise),
-            (
-                "KALMAN_MEASUREMENT_NOISE_COVARIANCE",
-                self._panels.tracking.spin_kalman_meas,
-            ),
-            ("W_POSITION", self._panels.tracking.spin_Wp),
-            ("W_ORIENTATION", self._panels.tracking.spin_Wo),
-            ("W_AREA", self._panels.tracking.spin_Wa),
-            ("W_ASPECT", self._panels.tracking.spin_Wasp),
-            ("KALMAN_DAMPING", self._panels.tracking.spin_kalman_damping),
-            (
-                "KALMAN_MAX_VELOCITY_MULTIPLIER",
-                self._panels.tracking.spin_kalman_max_velocity,
-            ),
-            (
-                "KALMAN_LONGITUDINAL_NOISE_MULTIPLIER",
-                self._panels.tracking.spin_kalman_longitudinal_noise,
-            ),
-        ]
-        for key, widget in _direct_mappings:
-            if key in new_params:
-                widget.setValue(new_params[key])
-
-        # Frame-count-to-seconds conversions
-        _opt_fps = self._panels.setup.spin_fps.value()
-        if "KALMAN_MATURITY_AGE" in new_params:
-            self._panels.tracking.spin_kalman_maturity_age.setValue(
-                new_params["KALMAN_MATURITY_AGE"] / _opt_fps
-            )
-        if "LOST_THRESHOLD_FRAMES" in new_params:
-            self._panels.tracking.spin_lost_thresh.setValue(
-                new_params["LOST_THRESHOLD_FRAMES"] / _opt_fps
-            )
+        """Apply a selected auto-tuner candidate to the matching UI controls."""
+        apply_tracking_autotune_candidate(new_params, self._panels)
 
     def _open_parameter_helper(self):
         """Open the tracking parameter selection helper dialog."""
@@ -3298,11 +3268,15 @@ class ConfigOrchestrator:
         if dialog.exec() == QDialog.Accepted:
             new_params = dialog.get_selected_params()
             if new_params:
-                self._apply_optimized_params(new_params)
+                try:
+                    self._apply_optimized_params(new_params)
+                except AutotuneCandidateApplicationError as exc:
+                    QMessageBox.warning(self._mw, "Candidate Not Applied", str(exc))
+                    return
                 QMessageBox.information(
                     self._mw,
                     "Parameters Applied",
-                    "The optimized parameters have been applied to the UI.",
+                    "The selected candidate settings have been applied to the UI.",
                 )
 
     # ── BG-subtraction auto-tuner ─────────────────────────────────────────

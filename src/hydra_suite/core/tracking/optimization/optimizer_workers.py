@@ -38,16 +38,16 @@ from hydra_suite.core.individual.pose.features import (
 from hydra_suite.core.individual.pose.features import (
     load_pose_context_from_params as _pf_load_pose_context,
 )
-from hydra_suite.core.inference.api import (
-    apply_detection_filter as _apply_detection_filter,
-)
-from hydra_suite.core.inference.config import build_inference_config_from_params
 from hydra_suite.core.inference.runner import _open_caches, video_signature
+from hydra_suite.core.inference.stages.filtering import filter_for_source
 from hydra_suite.core.tracking.arenas import arena_ids_for_meas as _meas_arena_ids
 from hydra_suite.core.tracking.arenas import (
     arena_layout_from_params,
     check_slot_arena_covers_all_slots,
     tracking_frame_size,
+)
+from hydra_suite.core.tracking.optimization.detection_config import (
+    inference_config_for_optimizer_params,
 )
 
 logger = logging.getLogger(__name__)
@@ -57,24 +57,18 @@ def _preview_filter_cached_detections(det_filter, cache, f_idx, roi_mask):
     """Read a frame from cache and apply detection filtering for preview.
 
     Detection caches are always ``OBBResult`` (InferenceRunner-based
-    builder); filtering is applied via ``apply_detection_filter`` from
-    ``core/inference/api``.
+    builder).  Preview replays the same source-aware production filter as
+    scoring and ``InferenceRunner.load_frame``.
     """
     frame_data = cache.read_frame(f_idx)
 
     from hydra_suite.core.inference.result import OBBResult as _OBBResult
 
     if isinstance(frame_data, _OBBResult):
-        from hydra_suite.core.inference.config import OBBConfig
-
-        conf_threshold = 0.0
-        if hasattr(det_filter, "params"):
-            conf_threshold = float(det_filter.params.get("DETECTION_CONFIDENCE", 0.0))
-        elif hasattr(det_filter, "confidence_threshold"):
-            conf_threshold = float(det_filter.confidence_threshold)
-
-        _cfg = OBBConfig(confidence_threshold=conf_threshold)
-        filtered_obb = _apply_detection_filter(frame_data, _cfg)
+        inference_config = getattr(det_filter, "inference_config", None)
+        if inference_config is None:
+            inference_config = inference_config_for_optimizer_params(det_filter.params)
+        filtered_obb, _ = filter_for_source(inference_config, frame_data, roi_mask)
         meas = np.concatenate(
             [filtered_obb.centroids, filtered_obb.angles[:, None]], axis=1
         ).tolist()
@@ -142,7 +136,8 @@ def _preview_process_matched_tracks(
     _det_pose_kpts,
     track_pose_prototypes,
 ):
-    """Correct KF state for matched tracks and update prototypes (preview)."""
+    """Correct matched tracks and return their real current observations."""
+    observations = {}
     for r, c in zip(matched_r, matched_c):
         m = np.asarray(meas[c], dtype=np.float32)
         _pose_d = (
@@ -170,11 +165,13 @@ def _preview_process_matched_tracks(
             )
         kf_manager.correct(r, m_cor)
         orientation_last[r] = _pf_normalize_theta(float(kf_manager.X[r, 2]))
+        observations[r] = (float(m[0]), float(m[1]), float(theta_cor))
 
     for r, c in zip(matched_r, matched_c):
         proto = _det_pose_kpts[c] if c < len(_det_pose_kpts) else None
         if proto is not None:
             track_pose_prototypes[r] = np.asarray(proto, dtype=np.float32).copy()
+    return observations
 
 
 def _preview_init_free_detections(
@@ -196,12 +193,12 @@ def _preview_init_free_detections(
     next_trajectory_id,
 ):
     """Assign free detections to lost track slots (preview worker)."""
-    newly_initialized: set = set()
+    newly_initialized: dict[int, tuple[float, float, float]] = {}
     existing_matched = set(matched_r)
     for d_idx in free_dets:
         for r in range(N):
             if (
-                r not in existing_matched | newly_initialized
+                r not in existing_matched | set(newly_initialized)
                 and track_states[r] == "lost"
             ):
                 m = np.asarray(meas[d_idx], dtype=np.float32)
@@ -232,7 +229,7 @@ def _preview_init_free_detections(
                 tracking_continuity[r] = 0
                 trajectory_ids[r] = next_trajectory_id
                 next_trajectory_id += 1
-                newly_initialized.add(r)
+                newly_initialized[r] = (float(m[0]), float(m[1]), float(theta_cor))
                 proto = _det_pose_kpts[d_idx] if d_idx < len(_det_pose_kpts) else None
                 if proto is not None:
                     track_pose_prototypes[r] = np.asarray(
@@ -246,7 +243,6 @@ def _preview_render_tracks(
     display,
     N,
     track_states,
-    kf_manager,
     trail,
     trajectory_ids,
     traj_colors,
@@ -254,20 +250,23 @@ def _preview_render_tracks(
     show_orientation,
     show_trails,
     show_labels,
+    current_observations,
 ):
-    """Render tracking overlay on the display frame."""
+    """Render trails plus markers for real current-frame observations only."""
     for r in range(N):
         if track_states[r] == "lost":
             continue
         col = traj_colors[r % len(traj_colors)]
-        x, y = float(kf_manager.X[r, 0]), float(kf_manager.X[r, 1])
-        theta = float(kf_manager.X[r, 2])
-        if not (math.isfinite(x) and math.isfinite(y)):
-            continue
-        pt = (int(x), int(y))
         if show_trails and len(trail[r]) > 1:
             pts = np.array(list(trail[r]), dtype=np.int32).reshape(-1, 1, 2)
             cv2.polylines(display, [pts], isClosed=False, color=col, thickness=2)
+        observation = current_observations.get(r)
+        if observation is None:
+            continue
+        x, y, theta = observation
+        if not (math.isfinite(x) and math.isfinite(y)):
+            continue
+        pt = (int(x), int(y))
         if show_circles:
             cv2.circle(display, pt, 7, col, -1)
         if show_orientation:
@@ -286,6 +285,16 @@ def _preview_render_tracks(
                 1,
                 cv2.LINE_AA,
             )
+
+
+def _preview_update_trails(trail, track_states, current_observations):
+    """Append only real observations to preview trails and clear lost slots."""
+    for r, (x, y, _theta) in current_observations.items():
+        if math.isfinite(x) and math.isfinite(y):
+            trail[r].append((int(x), int(y)))
+    for r, state in enumerate(track_states):
+        if state == "lost":
+            trail[r].clear()
 
 
 def run_tracking_preview(
@@ -317,7 +326,7 @@ def run_tracking_preview(
     # must never have close() called on it: DetectionCacheHandle.close()
     # flushes its (empty, since we never write) buffer and would clobber
     # the on-disk cache with zero frames (see optimizer._open_and_validate_cache).
-    cfg = build_inference_config_from_params(params)
+    cfg = inference_config_for_optimizer_params(params)
     caches = _open_caches(
         cfg,
         Path(detection_cache_path),
@@ -356,12 +365,12 @@ def run_tracking_preview(
                 int(cap.get(cv2.CAP_PROP_FRAME_HEIGHT)),
             )
 
-        # Correction 21: _ParamsFilter is a lightweight shim that exposes .params
-        # so _preview_filter_cached_detections can read DETECTION_CONFIDENCE from
-        # it regardless of whether the cache returns OBBResult or a legacy 12-tuple.
+        # Carries the exact source-aware config used to open this cache, so each
+        # replayed frame runs through the production filtering dispatcher.
         class _ParamsFilter:
             def __init__(self, p):
                 self.params = p
+                self.inference_config = inference_config_for_optimizer_params(p)
 
         det_filter = _ParamsFilter(params)
         _roi_mask = params.get("ROI_MASK", None)
@@ -526,7 +535,7 @@ def run_tracking_preview(
                         meas_arena=_meas_arena,
                     )
                 )
-                _preview_process_matched_tracks(
+                current_observations = _preview_process_matched_tracks(
                     matched_r,
                     matched_c,
                     meas,
@@ -557,11 +566,13 @@ def run_tracking_preview(
                     trajectory_ids,
                     next_trajectory_id,
                 )
+                current_observations.update(newly_initialized)
             else:
-                matched_r, matched_c, newly_initialized = [], [], set()
+                matched_r, matched_c, newly_initialized = [], [], {}
+                current_observations = {}
 
             # --- State management ---
-            matched_r_set = set(matched_r) | newly_initialized
+            matched_r_set = set(matched_r) | set(newly_initialized)
             for r in matched_r:
                 missed_frames[r] = 0
                 track_states[r] = "active"
@@ -577,21 +588,14 @@ def run_tracking_preview(
             for r, c in zip(matched_r, matched_c):
                 last_shape_info[r] = shapes[c]
 
-            # Update trails
-            for r in range(N):
-                if track_states[r] != "lost":
-                    x, y = float(kf_manager.X[r, 0]), float(kf_manager.X[r, 1])
-                    if math.isfinite(x) and math.isfinite(y):
-                        trail[r].append((int(x), int(y)))
-                else:
-                    trail[r].clear()
+            # Trails represent genuine measurements only, never a coasted KF state.
+            _preview_update_trails(trail, track_states, current_observations)
 
             display = cv2.resize(frame, (0, 0), fx=resize_f, fy=resize_f)
             _preview_render_tracks(
                 display,
                 N,
                 track_states,
-                kf_manager,
                 trail,
                 trajectory_ids,
                 traj_colors,
@@ -599,6 +603,7 @@ def run_tracking_preview(
                 show_orientation,
                 show_trails,
                 show_labels,
+                current_observations,
             )
 
             rgb = cv2.cvtColor(display, cv2.COLOR_BGR2RGB)

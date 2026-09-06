@@ -17,8 +17,9 @@ Task 10 deleted ``_flush_pose_batch``/``_flush_cnn_batch`` outright and
 replaced them with ``_flush_pose_cnn_window``, which calls
 ``extract_canonical_crops_batch`` then ``run_pose_batch``/``run_cnn_batch``
 per CNN phase -- the exact same stage functions ``Pipeline`` calls
-(``pipeline.py:367-387``), so the Layer2-fit guarantee is now structural
-(shared code, not a parallel re-implementation) rather than something this
+(``pipeline.py::Pipeline._process_downstream_frame``), so the Layer2-fit
+guarantee is now structural (shared code, not a parallel re-implementation)
+rather than something this
 module needs to re-verify numerically. What Task 12's wiring must still
 prove is that ``_flush_pose_cnn_window`` actually delegates to those shared
 functions (not a resurrected raw-crop path) and stamps the resulting rows

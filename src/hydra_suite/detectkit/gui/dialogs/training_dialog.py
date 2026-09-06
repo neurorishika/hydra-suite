@@ -1237,6 +1237,21 @@ QTabBar::tab:selected {
         self.chk_cache = QCheckBox("Cache")
         g.addWidget(self.chk_cache, 2, 4, 1, 2)
 
+        # Publish policy. Historically this was a hardcoded
+        # `PublishPolicy(auto_import=True)` in `_start_training` -- the same
+        # choice CLI/JSON runs default to False for (`detectkit/config/
+        # training.py`). Rather than silently unifying the two (a GUI user
+        # plausibly does expect the trained model to appear), the GUI's
+        # existing default is preserved here and simply made visible/
+        # inspectable as a checkbox instead of a hidden literal.
+        self.chk_auto_import = QCheckBox("Auto-import trained model")
+        self.chk_auto_import.setChecked(True)
+        self.chk_auto_import.setToolTip(
+            "Import the trained artifact into the model registry as soon as "
+            "training finishes, so History can select/export it immediately."
+        )
+        g.addWidget(self.chk_auto_import, 2, 6, 1, 2)
+
         # Row 2: per-role imgsz
         self.spin_imgsz_obb_direct = QSpinBox()
         self.spin_imgsz_obb_direct.setRange(64, 2048)
@@ -1759,6 +1774,7 @@ QTabBar::tab:selected {
         self.spin_patience.setValue(proj.patience)
         self.spin_workers.setValue(proj.workers)
         self.chk_cache.setChecked(proj.cache)
+        self.chk_auto_import.setChecked(getattr(proj, "auto_import", True))
 
         self.spin_imgsz_obb_direct.setValue(proj.imgsz_obb_direct)
         self.spin_imgsz_detect_direct.setValue(proj.imgsz_detect_direct)
@@ -1832,6 +1848,7 @@ QTabBar::tab:selected {
         proj.patience = self.spin_patience.value()
         proj.workers = self.spin_workers.value()
         proj.cache = self.chk_cache.isChecked()
+        proj.auto_import = self.chk_auto_import.isChecked()
 
         proj.imgsz_obb_direct = self.spin_imgsz_obb_direct.value()
         proj.imgsz_detect_direct = self.spin_imgsz_detect_direct.value()
@@ -2982,9 +2999,13 @@ QTabBar::tab:selected {
                     enabled=self.aug_group.isChecked(),
                     args=aug_args,
                 ),
-                # Preserve the GUI's existing behavior: successful artifacts
-                # are imported so History can export or select them later.
-                publish_policy=PublishPolicy(auto_import=True, auto_select=False),
+                # Now an explicit, inspectable checkbox (default True,
+                # preserving the GUI's historical behavior) instead of a
+                # hardcoded literal -- see the checkbox definition for why
+                # this intentionally differs from the CLI/JSON default.
+                publish_policy=PublishPolicy(
+                    auto_import=self.chk_auto_import.isChecked(), auto_select=False
+                ),
                 species=(self._project.species or "").strip() or "species",
                 model_tag=(self._project.model_tag or "").strip() or "train",
                 sam3_params=sam3_params,
