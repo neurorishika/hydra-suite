@@ -288,6 +288,38 @@ def sidecar_for(model_key: str) -> dict | None:
     return loaded if isinstance(loaded, dict) else None
 
 
+def sidecar_path_for(model_key: str) -> Path | None:
+    """The on-disk sidecar FILE for *model_key*, or ``None``.
+
+    The companion of :func:`sidecar_for` for writers (D10). Two independent
+    resolutions of "the sidecar" exist in the tree -- the registry's recorded
+    ``sidecar_path`` and ``semantic/sam3.py``'s
+    ``checkpoint.with_name(name + ".sam3_meta.json")`` -- and a writer that
+    targeted the wrong one would persist a calibration serving never reads.
+    They are the same file by construction (``publish.py:_artifact_paths``);
+    this function returns the registry path only when it AGREES with the
+    checkpoint-adjacent one, because serving reads the latter.
+
+    ``None`` for a stock variant (ships no sidecar), an unknown key, a
+    missing file, or a disagreement between the two resolutions.
+    """
+    data = _load_registry()
+    entries = data.get("entries") if isinstance(data.get("entries"), dict) else {}
+    meta = entries.get(model_key)
+    if not isinstance(meta, dict):
+        return None
+    sidecar_path = meta.get("sidecar_path")
+    stored_path = meta.get("stored_path")
+    if not sidecar_path or not stored_path:
+        return None
+    path = Path(sidecar_path)
+    expected = Path(stored_path)
+    expected = expected.with_name(expected.name + ".sam3_meta.json")
+    if path != expected or not path.is_file():
+        return None
+    return path
+
+
 def resolve_checkpoint(
     key: str = DEFAULT_VARIANT, cache_dir: Path | None = None
 ) -> Path:

@@ -1061,6 +1061,34 @@ made once, not an automatic loop.
 > confound demonstrated.
 
 
+> ## RESOLVED 2026-09-07 — D10 decided and implemented.
+>
+> Branch `feat/d10-d11-calibration-persistence`. No longer open; the D10
+> bullet further down is pre-ruling analysis only.
+>
+> **D10 — a semantic calibration result is persisted on the MODEL SIDECAR.**
+> Shipped as `core/inference/semantic/calibration_record.py`: one named block
+> `serving_calibration` on `<checkpoint>.sam3_meta.json`, reusing the
+> `scale_grouped_batching` shape convention (a single named dict of plain
+> JSON fields) rather than inventing a new top-level key family. The writer
+> is strictly ADDITIVE read-modify-write and refuses (returns False, never
+> raises, never truncates) on a missing/corrupt/non-object sidecar — because
+> `semantic/sam3.py` REFUSES TO SERVE on a malformed sidecar, so a partial
+> rewrite would be a hard outage for every published model. The BACK-COMPAT
+> READER ships in the SAME COMMIT: `serving_calibration()` treats an absent
+> block as "no claim", and `geometry_drift.stamped_tile_px_set` continues to
+> read the scalar `train_tile_px: 971` that both already-published
+> checkpoints carry. **Nothing on disk is backfilled or migrated** — new
+> persistence applies going forward. A project whose calibration lives only
+> in DetectKit project JSON keeps working and is reported through
+> `resolve_serving_calibration` as `CalibrationOrigin.PROJECT_LEGACY`
+> (surfaced in the dialog's status line), never silently copied onto a
+> sidecar. `preview_artifact` is deliberately NOT carried onto the sidecar: a
+> project-relative path would dangle on any other machine. Scope difference,
+> recorded on purpose: the sidecar block is PER MODEL and the project copy is
+> PER PROJECT, so two projects calibrating one model are last-write-wins on
+> the sidecar while each keeps its own project record.
+>
 > **SUPERSEDED for D7, D8 and D9 — read the RESOLVED block above instead.**
 > The three bullets below are the PRE-RULING analysis, kept for provenance only.
 > Their recommendations were NOT what shipped: the D8 bullet in particular
