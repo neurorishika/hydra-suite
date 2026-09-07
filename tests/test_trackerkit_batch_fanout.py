@@ -35,7 +35,7 @@ if mode == "trap_sigint":
 if mode in ("ignore_signals", "orphan_maker"):
     signal.signal(signal.SIGINT, signal.SIG_IGN)
     signal.signal(signal.SIGTERM, signal.SIG_IGN)
-if mode == "orphan_maker":
+if mode in ("orphan_maker", "orphan_then_crash", "orphan_then_exit0"):
     import subprocess
     kid = subprocess.Popen([sys.executable, "-c", "import time; time.sleep(60)"])
     print("GRANDCHILD=%d" % kid.pid, flush=True)
@@ -45,6 +45,10 @@ print("GPU=" + os.environ.get("CUDA_VISIBLE_DEVICES", "<unset>"), flush=True)
 print("OMP=" + os.environ.get("OMP_NUM_THREADS", "<unset>"), flush=True)
 time.sleep(sleep)
 print("2026-01-01 - x - INFO - [post] 90% merging", flush=True)
+if mode == "orphan_then_crash":
+    os._exit(3)
+if mode == "orphan_then_exit0":
+    os._exit(0)
 if mode == "fail":
     print("2026-01-01 - x - ERROR - Tracker CLI failed for v: boom", flush=True)
     sys.exit(3)
@@ -325,6 +329,85 @@ def test_cancel_kills_orphaned_grandchildren(tmp_path):
     except OSError:
         pass
     raise AssertionError(f"grandchild {grandchild_pid} survived cancellation")
+
+
+def _grandchild_pid(log_path: Path) -> int:
+    text = log_path.read_text()
+    assert "GRANDCHILD=" in text, text
+    return int(text.split("GRANDCHILD=")[1].split("\n")[0])
+
+
+def _assert_pid_reaped(pid: int, what: str, timeout: float = 3.0) -> None:
+    """Fail (after cleaning up) unless *pid* disappears within *timeout*."""
+    deadline = time.monotonic() + timeout
+    while time.monotonic() < deadline:
+        try:
+            os.kill(pid, 0)
+        except (ProcessLookupError, PermissionError):
+            return
+        time.sleep(0.05)
+    try:
+        os.kill(pid, 9)
+    except OSError:
+        pass
+    raise AssertionError(f"{what}: pid {pid} survived")
+
+
+@pytest.mark.skipif(os.name == "nt", reason="POSIX process groups")
+def test_child_that_exits_on_its_own_does_not_strand_its_group(tmp_path):
+    """A child that dies by itself (crash/OOM/traceback) is reaped by poll(),
+    never signalled -- so its SLEAP-service grandchild outlives the batch
+    unless ``_finish`` takes the whole session group down."""
+    specs = [_spec(tmp_path, "a", mode="orphan_then_crash", sleep=0.2)]
+    result = run_batch_fanout(
+        specs,
+        FanoutOptions(
+            jobs=1,
+            run_dir=tmp_path / "run",
+            child_command=_fake_command,
+            poll_s=0.05,
+        ),
+    )
+    assert result.jobs[0].returncode == 3 and not result.success
+    _assert_pid_reaped(
+        _grandchild_pid(result.jobs[0].log_path),
+        "grandchild of a child that exited on its own",
+    )
+
+
+@pytest.mark.skipif(os.name == "nt", reason="POSIX process groups")
+def test_cancel_reaps_group_of_a_child_that_already_exited(tmp_path):
+    """On cancel, a child already in the ``already_exited`` snapshot is skipped
+    by ``_stop_children`` (it is not ``_alive()``), so its group must be reaped
+    on the terminal transition itself."""
+    specs = [
+        _spec(tmp_path, "a", mode="orphan_then_exit0", sleep=0.2),
+        _spec(tmp_path, "b", sleep=5.0),
+    ]
+    stop = {"flag": False}
+    import threading
+
+    threading.Timer(0.4, lambda: stop.__setitem__("flag", True)).start()
+    result = run_batch_fanout(
+        specs,
+        FanoutOptions(
+            jobs=2,
+            run_dir=tmp_path / "run",
+            child_command=_fake_command,
+            # Poll slowly so "a" is observed by the CANCEL branch, not the reap.
+            poll_s=1.0,
+            sigint_grace_s=0.5,
+            term_grace_s=0.5,
+        ),
+        should_stop=lambda: stop["flag"],
+    )
+    assert result.cancelled
+    by_name = {r.spec.config["name"]: r for r in result.jobs}
+    assert by_name["a"].returncode == 0 and by_name["a"].success
+    _assert_pid_reaped(
+        _grandchild_pid(by_name["a"].log_path),
+        "grandchild of an already-exited child at cancel time",
+    )
 
 
 def test_launch_failure_is_contained_and_running_jobs_finish(tmp_path):

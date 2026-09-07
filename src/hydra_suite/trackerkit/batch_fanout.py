@@ -297,7 +297,44 @@ def _launch(
     return live
 
 
+def _reap_process_group(proc: subprocess.Popen) -> None:
+    """Take down whatever is left of a terminal child's session group.
+
+    ``start_new_session=True`` in :func:`_launch` makes the child a session
+    leader, so its pgid IS its pid -- and ``killpg`` still reaches the group
+    after ``poll()`` has reaped the leader itself. Without this, a child that
+    dies on its own (crash, OOM-kill, ``os._exit``) leaves its grandchildren --
+    notably the SLEAP service spawned via ``conda run -n sleap`` -- running
+    forever, because ``_stop_children`` only ever signals children that are
+    still ``_alive()``.
+
+    ``ProcessLookupError`` on the first signal means the group is already empty,
+    which is the normal, orderly case.
+    """
+    if os.name == "nt":  # pragma: no cover - POSIX-only process groups
+        return
+    pid = proc.pid
+    try:
+        os.killpg(pid, signal.SIGTERM)
+    except (ProcessLookupError, PermissionError, OSError):
+        return  # nothing left in the group (the usual clean exit)
+    deadline = time.monotonic() + 1.0
+    while time.monotonic() < deadline:
+        try:
+            os.killpg(pid, 0)
+        except (ProcessLookupError, PermissionError, OSError):
+            return
+        time.sleep(0.02)
+    try:
+        os.killpg(pid, signal.SIGKILL)
+    except (ProcessLookupError, PermissionError, OSError):
+        pass
+
+
 def _finish(live: _Live, *, cancelled: bool) -> FanoutJobResult:
+    # BEFORE the reader join: a surviving grandchild holds the inherited stdout
+    # pipe open, so the reader thread cannot see EOF until the group is gone.
+    _reap_process_group(live.proc)
     if live.reader is not None:
         live.reader.join(timeout=5)
     try:
@@ -332,7 +369,10 @@ def _signal_group(proc: subprocess.Popen, sig: int) -> None:
     """
     if os.name != "nt":
         try:
-            os.killpg(os.getpgid(proc.pid), sig)
+            # ``proc.pid`` IS the pgid (start_new_session=True), and unlike
+            # ``os.getpgid(pid)`` it still works once poll() has reaped the
+            # leader -- so an already-exited child's group is still reachable.
+            os.killpg(proc.pid, sig)
             return
         except (ProcessLookupError, PermissionError, OSError):
             pass  # group already gone or not ours: fall back to the child
