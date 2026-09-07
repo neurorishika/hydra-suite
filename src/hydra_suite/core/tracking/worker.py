@@ -15,7 +15,7 @@ from pathlib import Path
 import cv2
 import numpy as np
 
-from hydra_suite.core.assigners.hungarian import TrackAssigner
+from hydra_suite.core.assigners.hungarian import HARD_REJECT_COST, TrackAssigner
 from hydra_suite.core.filters.kalman import KalmanFilterManager
 from hydra_suite.core.individual.geometry import (
     build_detection_direction_overrides as _pf_build_direction_overrides,
@@ -3307,6 +3307,7 @@ class TrackingEngineCore:
                     # distorting the cost matrix (which can push assignments to
                     # wrong detections farther away).
                     if _density_flags is not None and np.any(_density_flags):
+                        _density_hard_blocked = None
                         _density_factor = float(
                             params.get("DENSITY_CONSERVATIVE_FACTOR", 0.7)
                         )
@@ -3327,8 +3328,13 @@ class TrackingEngineCore:
                             )
                             # Block long-range matches to density-region detections.
                             _flagged_cols = np.where(_density_flags)[0]
+                            _density_hard_blocked = np.zeros(cost.shape, dtype=bool)
                             for _c in _flagged_cols:
-                                cost[_raw_dist[:, _c] >= _density_max_dist, _c] = 1e9
+                                _blocked = _raw_dist[:, _c] >= _density_max_dist
+                                cost[_blocked, _c] = HARD_REJECT_COST
+                                _density_hard_blocked[_blocked, _c] = True
+                    else:
+                        _density_hard_blocked = None
 
                     profiler.tock("cost_matrix")
                     profiler.tick("hungarian")
@@ -3367,6 +3373,7 @@ class TrackingEngineCore:
                             committed_slot_identities=_committed_slot_identities,
                             missed_frames=missed_frames,
                             meas_arena=meas_arena,
+                            hard_blocked=_density_hard_blocked,
                         )
                     )
                     respawned_matches = {r for r in rows if track_states[r] == "lost"}
@@ -3948,6 +3955,18 @@ class TrackingEngineCore:
                                         if self.arena_layout.is_single_arena
                                         else self._slot_arena
                                     ),
+                                ):
+                                    continue
+                                # A free detection may cold-start a lost slot
+                                # past ordinary distance culls, but must never
+                                # bypass density's explicit hard-association
+                                # block. `_assign_respawn` applies the same
+                                # predicate; keeping it here prevents a
+                                # rejected phase-3 pair from immediately being
+                                # re-created by the final bootstrap fallback.
+                                if (
+                                    _density_hard_blocked is not None
+                                    and _density_hard_blocked[track_idx, d_idx]
                                 ):
                                     continue
                                 # Diagnostic: log slot reuse distance
