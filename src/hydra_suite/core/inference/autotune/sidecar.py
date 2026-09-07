@@ -57,9 +57,15 @@ class SidecarTrialSpec:
     resource_probe: RuntimeResourceProbe
     start_frame: int
     end_frame: int
-    budget_seconds: float = 120.0
-    per_trial_timeout_seconds: float = 45.0
-    maximum_frames: int = 128
+    budget_seconds: float = 600.0
+    # The validator's ceiling: a cold TensorRT engine build can take most of it.
+    per_trial_timeout_seconds: float = 120.0
+    # Per-PHASE frame cap, divided across MEASUREMENT_BLOCKS blocks by
+    # _frames_for_block. 640 gives each of the five blocks >= 128 frames, which
+    # is what amortizes a model load. Distinct from
+    # MeasurementProtocol.maximum_frames, which is the per-candidate COMPLETION
+    # threshold and must stay at the per-block value.
+    maximum_frames: int = 640
     runtime_artifact_batch_size: int | None = None
 
     def __post_init__(self) -> None:
@@ -69,8 +75,8 @@ class SidecarTrialSpec:
             raise ValueError("calibration budget must be between 5 and 600 seconds")
         if not 5 <= self.per_trial_timeout_seconds <= 120:
             raise ValueError("trial timeout must be between 5 and 120 seconds")
-        if not 8 <= self.maximum_frames <= 128:
-            raise ValueError("calibration frame cap must be between 8 and 128")
+        if not 8 <= self.maximum_frames <= 2048:
+            raise ValueError("calibration frame cap must be between 8 and 2048")
         if self.runtime_artifact_batch_size is not None and not (
             1 <= self.runtime_artifact_batch_size <= 64
         ):

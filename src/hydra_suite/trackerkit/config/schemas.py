@@ -47,7 +47,7 @@ class TrackerConfig:
     # explicitly opt in.
     inference_autotune_mode: str = "off"
     inference_autotune_manual_fields: list[str] = field(default_factory=list)
-    inference_autotune_budget_seconds: float = 120.0
+    inference_autotune_budget_seconds: float = 600.0
 
     # --- Debug ---
     debug_mode: bool = False
@@ -134,7 +134,7 @@ class TrackerConfig:
                 str(value).strip() for value in raw_manual_fields if str(value).strip()
             ],
             inference_autotune_budget_seconds=float(
-                data.get("inference_autotune_budget_seconds", 120.0)
+                data.get("inference_autotune_budget_seconds", 600.0)
             ),
             debug_mode=bool(data.get("debug_mode", False)),
             dataset_export_levels=list(

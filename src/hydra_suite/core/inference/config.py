@@ -45,7 +45,7 @@ class InferenceAutotunePolicy:
 
     mode: Literal["off", "record", "automatic"] = "off"
     manual_fields: tuple[str, ...] = ()
-    budget_seconds: float = 120.0
+    budget_seconds: float = 600.0
     singleflight_wait_seconds: float = 2.0
 
     def __post_init__(self) -> None:
@@ -661,7 +661,7 @@ def _dict_to_config(d: dict[str, Any]) -> InferenceConfig:
         InferenceAutotunePolicy(
             mode=str(autotune_d.get("mode", "off")),
             manual_fields=tuple(autotune_d.get("manual_fields", ())),
-            budget_seconds=float(autotune_d.get("budget_seconds", 120.0)),
+            budget_seconds=float(autotune_d.get("budget_seconds", 600.0)),
             singleflight_wait_seconds=float(
                 autotune_d.get("singleflight_wait_seconds", 2.0)
             ),
@@ -1230,8 +1230,8 @@ def build_inference_config_from_params(params: dict) -> InferenceConfig:
         mode=raw_autotune_mode,
         manual_fields=tuple(str(item) for item in raw_manual_fields),
         budget_seconds=_clamped_float(
-            params.get("INFERENCE_AUTOTUNE_BUDGET_SECONDS", 120.0),
-            120.0,
+            params.get("INFERENCE_AUTOTUNE_BUDGET_SECONDS", 600.0),
+            600.0,
             5.0,
             600.0,
         ),

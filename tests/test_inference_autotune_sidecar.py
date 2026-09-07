@@ -102,7 +102,7 @@ def test_request_stages_roi_as_relative_non_pickle_payload(tmp_path):
     assert payload["params"]["ROI_MASK"] == {"__hydra_npy__": "ROI_MASK.npy"}
     restored = np.load(request.parent / "arrays" / "ROI_MASK.npy", allow_pickle=False)
     np.testing.assert_array_equal(restored, np.ones((2, 3), dtype=np.uint8))
-    assert payload["maximum_frames"] == 26
+    assert payload["maximum_frames"] == 128
 
 
 def test_array_params_round_trip_by_key(tmp_path):
@@ -203,7 +203,7 @@ def test_array_param_key_cannot_escape_array_dir_on_write(tmp_path):
         )
 
 
-def test_measurement_blocks_share_one_128_frame_cap(tmp_path):
+def test_measurement_blocks_share_one_640_frame_cap(tmp_path):
     observation, probe = _resources()
     spec = SidecarTrialSpec(
         video_path=tmp_path / "video.mp4",
@@ -225,8 +225,8 @@ def test_measurement_blocks_share_one_128_frame_cap(tmp_path):
         )
         caps.append(json.loads(request.read_text())["maximum_frames"])
 
-    assert caps == [26, 26, 26, 25, 25]
-    assert sum(caps) == 128
+    assert caps == [128, 128, 128, 128, 128]
+    assert sum(caps) == 640
 
 
 def test_final_validation_uses_dedicated_selected_runtime_profile(tmp_path):

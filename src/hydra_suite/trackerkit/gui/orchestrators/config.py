@@ -323,12 +323,12 @@ class ConfigOrchestrator:
         )
         try:
             budget_seconds = float(
-                get_cfg("inference_autotune_budget_seconds", default=120.0)
+                get_cfg("inference_autotune_budget_seconds", default=600.0)
             )
         except (TypeError, ValueError):
-            budget_seconds = 120.0
+            budget_seconds = 600.0
         self._mw.config.inference_autotune_budget_seconds = max(
-            5.0, min(120.0, budget_seconds)
+            5.0, min(600.0, budget_seconds)
         )
         panel = self._panels.setup
         panel.chk_inference_autotune.blockSignals(True)
