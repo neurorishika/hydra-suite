@@ -125,12 +125,21 @@ def make_roi_params(video_path: Path) -> dict[str, Any]:
     config = json.loads((fixtures_root / "configs/fly_obb.json").read_text())
 
     probe = probe_video(str(video_path))
+    # Production ROI shapes recognize ONLY "circle" or "polygon" (see
+    # engine_params._fill_shape); there is no "rectangle" type, and geometry
+    # is read from "params", never "points". A rectangle is represented as a
+    # 4-point polygon, matching every real emitter in arena_geometry.py.
     config["roi_shapes"] = [
         {
             "mode": "include",
             "arena_id": 0,
-            "type": "rectangle",
-            "points": [[0, 0], [probe.width, probe.height]],
+            "type": "polygon",
+            "params": [
+                [0, 0],
+                [probe.width, 0],
+                [probe.width, probe.height],
+                [0, probe.height],
+            ],
         }
     ]
     return build_tracking_parameters(config, video_probe=probe)

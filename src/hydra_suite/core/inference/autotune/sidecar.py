@@ -145,7 +145,14 @@ def _json_value(value: Any, *, array_dir: Path, key: str = "") -> Any:
             raise TypeError("array parameters require a key to be serialized")
         array_dir.mkdir(parents=True, exist_ok=True)
         name = f"{key}.npy"
-        np.save(array_dir / name, value, allow_pickle=False)
+        # Symmetric guard to the read-side path-escape check below: a key
+        # containing a path separator or ".." must never be able to stage a
+        # file outside array_dir.
+        resolved_array_dir = array_dir.resolve()
+        target = (resolved_array_dir / name).resolve()
+        if target.parent != resolved_array_dir:
+            raise ValueError(f"invalid array parameter key: {key!r}")
+        np.save(target, value, allow_pickle=False)
         return {"__hydra_npy__": name}
     if isinstance(value, Mapping):
         return {

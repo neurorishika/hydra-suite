@@ -38,6 +38,15 @@ pytestmark = pytest.mark.sidecar_e2e
 @pytest.mark.skipif(not CLIP.exists(), reason="equivalence fixtures not fetched")
 def test_sidecar_child_completes_on_a_project_with_an_roi(tmp_path):
     params = make_roi_params(CLIP)
+    # A malformed ROI shape rasterizes to an all-zero ARENA_LABELS (every
+    # pixel gated out as outside-ROI), which fails ~400 lines downstream
+    # with an opaque "calibration tracking pass produced no rows". Assert
+    # the fixture's ROI actually rasterized to something non-degenerate
+    # BEFORE the child is launched, so a future regression here fails loud
+    # and immediately.
+    arena_labels = params.get("ARENA_LABELS")
+    assert arena_labels is not None, "expected ARENA_LABELS in ROI fixture params"
+    assert arena_labels.any(), "ARENA_LABELS is all-zero -- ROI rasterized to nothing"
     observation, probe = _resource_probe()
     spec = SidecarTrialSpec(
         video_path=CLIP,

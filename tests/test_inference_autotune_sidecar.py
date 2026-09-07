@@ -180,6 +180,29 @@ def test_legacy_roi_only_request_still_restores(tmp_path):
     assert restored["N_ARENAS"] == 1
 
 
+def test_array_param_key_cannot_escape_array_dir_on_write(tmp_path):
+    """A key containing a path separator must not stage a file outside arrays/."""
+    observation, probe = _resources()
+    spec = SidecarTrialSpec(
+        video_path=tmp_path / "video.mp4",
+        params={"../escape": np.ones((2, 2), dtype=np.uint8)},
+        observation=observation,
+        resource_probe=probe,
+        start_frame=0,
+        end_frame=20,
+    )
+
+    with pytest.raises(ValueError, match="invalid array parameter key"):
+        write_sidecar_request(
+            tmp_path / "ipc",
+            spec,
+            _settings(),
+            phase="full",
+            field_name=None,
+            block_index=0,
+        )
+
+
 def test_measurement_blocks_share_one_128_frame_cap(tmp_path):
     observation, probe = _resources()
     spec = SidecarTrialSpec(
