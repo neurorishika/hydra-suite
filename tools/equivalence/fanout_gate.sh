@@ -377,16 +377,26 @@ if [ "$INHERIT" = "1" ]; then
   # (the same encode run 2-way concurrent: 3794061 B). A size comparison
   # therefore measures encoder contention -- which the fan-out leg has and the
   # sequential leg does not -- rather than anything about the pipeline.
-  # Compare what a lossy encoder DOES preserve exactly.
+  # Compare what a lossy encoder DOES preserve exactly: frame count / geometry
+  # / fps, PLUS actual pixel content. Geometry alone is pixel-blind -- an
+  # overlay silently dropped on one leg (wrong track colours, no boxes at
+  # all) still probes identical (frames, WxH, fps) and passes. Sample a
+  # handful of frames, downscale to 64x64 grayscale (bitrate-robust: it
+  # washes out the encoder's per-run compression noise) and require the mean
+  # absolute difference stays below a tight threshold.
   python - "$OUT" "$keystone" "${ENTRIES[@]}" <<'PY'
 import sys
 from pathlib import Path
 
 import cv2
+import numpy as np
 
 out = Path(sys.argv[1])
 keystone = sys.argv[2]
 entries = sys.argv[3:]
+
+N_SAMPLES = 5
+MAE_THRESHOLD = 4.0 / 255.0
 
 
 def probe(path):
@@ -404,12 +414,55 @@ def probe(path):
         cap.release()
 
 
+def sampled_frame_maes(path_a, path_b, n_frames):
+    """Mean absolute difference (0-1 scale) at up to N_SAMPLES evenly spaced
+    frame indices, each downscaled to 64x64 grayscale. Returns None if either
+    leg fails to decode any sampled frame."""
+    n_samples = min(N_SAMPLES, n_frames)
+    if n_samples <= 0:
+        return []
+    if n_samples == 1:
+        indices = [0]
+    else:
+        indices = sorted(
+            {round(i * (n_frames - 1) / (n_samples - 1)) for i in range(n_samples)}
+        )
+    cap_a = cv2.VideoCapture(str(path_a))
+    cap_b = cv2.VideoCapture(str(path_b))
+    try:
+        if not cap_a.isOpened() or not cap_b.isOpened():
+            return None
+        results = []
+        for idx in indices:
+            cap_a.set(cv2.CAP_PROP_POS_FRAMES, idx)
+            cap_b.set(cv2.CAP_PROP_POS_FRAMES, idx)
+            ok_a, frame_a = cap_a.read()
+            ok_b, frame_b = cap_b.read()
+            if not ok_a or not ok_b:
+                return None
+            gray_a = cv2.resize(
+                cv2.cvtColor(frame_a, cv2.COLOR_BGR2GRAY), (64, 64),
+                interpolation=cv2.INTER_AREA,
+            ).astype(np.float64)
+            gray_b = cv2.resize(
+                cv2.cvtColor(frame_b, cv2.COLOR_BGR2GRAY), (64, 64),
+                interpolation=cv2.INTER_AREA,
+            ).astype(np.float64)
+            mae = float(np.abs(gray_a - gray_b).mean()) / 255.0
+            results.append((idx, mae))
+        return results
+    finally:
+        cap_a.release()
+        cap_b.release()
+
+
 rels = [f"renders/{keystone}_CUSTOM.mp4"] + [
     f"{entry.split('|')[0]}_tracking.mp4" for entry in entries[1:]
 ]
 status = 0
 for rel in rels:
-    a, b = probe(out / "seq" / rel), probe(out / "par" / rel)
+    path_a, path_b = out / "seq" / rel, out / "par" / rel
+    a, b = probe(path_a), probe(path_b)
     if a is None or b is None:
         print(f"❌ {rel}: unreadable (seq={a}, par={b})")
         status = 1
@@ -420,7 +473,22 @@ for rel in rels:
         print(f"❌ {rel}: zero frames on both legs")
         status = 1
     else:
-        print(f"✅ {rel}: {a[0]} frames, {a[1]}x{a[2]} @ {a[3]} fps on both legs")
+        maes = sampled_frame_maes(path_a, path_b, a[0])
+        if maes is None:
+            print(f"❌ {rel}: could not decode sampled frames for content comparison")
+            status = 1
+        elif any(mae >= MAE_THRESHOLD for _, mae in maes):
+            bad = ", ".join(
+                f"frame {idx} MAE={mae:.4f}" for idx, mae in maes if mae >= MAE_THRESHOLD
+            )
+            print(f"❌ {rel}: {a[0]} frames, {a[1]}x{a[2]} @ {a[3]} fps match, "
+                  f"but sampled-frame content differs -- {bad} (>= {MAE_THRESHOLD:.4f})")
+            status = 1
+        else:
+            worst = max((mae for _, mae in maes), default=0.0)
+            print(f"✅ {rel}: {a[0]} frames, {a[1]}x{a[2]} @ {a[3]} fps on both legs; "
+                  f"{len(maes)} sampled frames, max content MAE={worst:.4f} "
+                  f"(< {MAE_THRESHOLD:.4f})")
 sys.exit(status)
 PY
   [ $? -eq 0 ] || status=1
