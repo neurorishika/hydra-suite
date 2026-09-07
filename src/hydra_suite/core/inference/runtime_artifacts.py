@@ -47,6 +47,7 @@ from __future__ import annotations
 
 import json
 import logging
+import os
 import shutil
 from hashlib import sha256
 from pathlib import Path
@@ -143,6 +144,20 @@ def _export_artifact(
     """
     from ultralytics import YOLO
 
+    # A rebuild INVALIDATES whatever is at ``artifact_path`` right now, so the
+    # freshness marker must go FIRST. ``_fresh()`` is checked once outside the
+    # build lock as a fast path; leaving the marker in place would let a sibling
+    # fan-out child pass that check and load an artifact that is mid-replacement.
+    try:
+        _meta_path(artifact_path).unlink()
+    except FileNotFoundError:
+        pass
+    except OSError:  # pragma: no cover - read-only artifact dir
+        logger.warning(
+            "Could not clear the freshness marker for %s before rebuilding it",
+            artifact_path,
+        )
+
     base_model = YOLO(str(pt_path))
     # CoreML does not use the CBC direct executor, so skip the raw-head override.
     if runtime != "coreml":
@@ -196,14 +211,56 @@ def _export_artifact(
     if not out_path.exists():
         raise ArtifactExportError(f"Export produced no output file: {out_path}")
     if out_path != artifact_path:
-        if out_path.is_dir():
-            # .mlpackage is a directory — use copytree.
-            if artifact_path.exists():
-                shutil.rmtree(str(artifact_path))
-            shutil.copytree(str(out_path), str(artifact_path))
-        else:
-            shutil.copy2(str(out_path), str(artifact_path))
+        _install_artifact_atomically(out_path, artifact_path)
+    # NOTE: when ultralytics exported straight onto ``artifact_path`` (the
+    # CoreML case, where the artifact name IS the export name) there is no copy
+    # to make atomic — that export is in-place by construction.
     return artifact_path
+
+
+def _remove_path(path: Path) -> None:
+    """Best-effort delete of a file or directory."""
+    try:
+        if path.is_dir() and not path.is_symlink():
+            shutil.rmtree(str(path), ignore_errors=True)
+        else:
+            path.unlink()
+    except (FileNotFoundError, OSError):
+        pass
+
+
+def _install_artifact_atomically(source: Path, artifact_path: Path) -> None:
+    """Publish *source* as *artifact_path* without ever exposing a partial file.
+
+    Concurrent fan-out children can be LOADING ``artifact_path`` while another
+    rebuilds it (per-video sidecars differing in imgsz resolve to the same
+    artifact filename). ``shutil.copy2`` truncates the file under the reader;
+    staging beside it and renaming makes the swap atomic, so a reader sees
+    either the whole old artifact or the whole new one — never a prefix.
+    """
+    staging = artifact_path.parent / f".{artifact_path.name}.tmp-{os.getpid()}"
+    _remove_path(staging)
+    try:
+        if source.is_dir():
+            shutil.copytree(str(source), str(staging))
+        else:
+            shutil.copy2(str(source), str(staging))
+        if artifact_path.is_dir():
+            # os.replace refuses a non-empty directory target (.mlpackage):
+            # move the old one aside, swap the new one in, then delete it.
+            displaced = (
+                artifact_path.parent / f".{artifact_path.name}.old-{os.getpid()}"
+            )
+            _remove_path(displaced)
+            os.rename(str(artifact_path), str(displaced))
+            try:
+                os.rename(str(staging), str(artifact_path))
+            finally:
+                _remove_path(displaced)
+        else:
+            os.replace(str(staging), str(artifact_path))
+    finally:
+        _remove_path(staging)
 
 
 def _force_raw_head(base_model: Any) -> None:

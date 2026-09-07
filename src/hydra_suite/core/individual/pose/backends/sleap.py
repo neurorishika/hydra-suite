@@ -6,6 +6,7 @@ from __future__ import annotations
 
 import hashlib
 import logging
+import os
 import shutil
 import time
 from multiprocessing import shared_memory
@@ -955,6 +956,24 @@ def _attempt_sleap_cli_export(
     return False, last_err
 
 
+def _swap_export_dir_into_place(staging_dir: Path, export_dir: Path) -> None:
+    """Rename *staging_dir* onto *export_dir*, deleting whatever was there.
+
+    ``os.replace`` refuses a non-empty directory target, so the old export is
+    moved aside first. The window in which ``export_dir`` does not exist is two
+    renames wide, and a reader that already opened files inside the old export
+    keeps them (POSIX unlink semantics).
+    """
+    displaced = export_dir.parent / f"{export_dir.name}.old-{os.getpid()}"
+    shutil.rmtree(displaced, ignore_errors=True)
+    if export_dir.exists():
+        os.rename(str(export_dir), str(displaced))
+    try:
+        os.rename(str(staging_dir), str(export_dir))
+    finally:
+        shutil.rmtree(displaced, ignore_errors=True)
+
+
 def auto_export_sleap_model(config: PoseRuntimeConfig, runtime_flavor: str) -> str:
     runtime = str(runtime_flavor or "native").strip().lower()
     if runtime not in {"onnx", "tensorrt"}:
@@ -996,9 +1015,15 @@ def auto_export_sleap_model(config: PoseRuntimeConfig, runtime_flavor: str) -> s
             str(export_dir), runtime
         ) and artifact_meta_matches(export_dir, sig):
             return str(export_dir.resolve())
-        if export_dir.exists():
-            shutil.rmtree(export_dir, ignore_errors=True)
-        export_dir.mkdir(parents=True, exist_ok=True)
+        # Build into a private staging dir and swap it in with a rename. The old
+        # code rmtree'd ``export_dir`` and exported into it in place: a sibling
+        # fan-out child whose config differs (batch/input_hw) would delete the
+        # export another child is LOADING, and leave a half-built directory
+        # visible for the whole export. Renaming makes the swap atomic, and a
+        # failed export now leaves the previous good export intact.
+        staging_dir = export_dir.parent / f"{export_dir.name}.tmp-{os.getpid()}"
+        shutil.rmtree(staging_dir, ignore_errors=True)
+        staging_dir.mkdir(parents=True, exist_ok=True)
 
         logger.info(
             "Exporting SLEAP model for %s runtime: %s -> %s",
@@ -1015,7 +1040,7 @@ def auto_export_sleap_model(config: PoseRuntimeConfig, runtime_flavor: str) -> s
         sleap_env = str(config.sleap_env or "").strip()
         ok, err = _attempt_sleap_cli_export(
             model_dir=model_path,
-            export_dir=export_dir,
+            export_dir=staging_dir,
             runtime_flavor=runtime,
             sleap_env=sleap_env,
             input_hw=input_hw,
@@ -1024,16 +1049,20 @@ def auto_export_sleap_model(config: PoseRuntimeConfig, runtime_flavor: str) -> s
         if not ok and not sleap_env:
             ok, err = _attempt_sleap_python_export(
                 model_dir=model_path,
-                export_dir=export_dir,
+                export_dir=staging_dir,
                 runtime_flavor=runtime,
                 batch_size=int(max(1, config.sleap_batch)),
                 max_instances=int(max(1, config.sleap_max_instances)),
             )
-        if not ok or not looks_like_sleap_export_path(str(export_dir), runtime):
+        if not ok or not looks_like_sleap_export_path(str(staging_dir), runtime):
+            shutil.rmtree(staging_dir, ignore_errors=True)
             raise RuntimeError(
                 f"SLEAP auto-export failed for runtime '{runtime}'. {err}"
             )
-        write_artifact_meta(export_dir, sig)
+        # The meta lives INSIDE the directory, so it must be written before the
+        # swap or the published export would momentarily have no signature.
+        write_artifact_meta(staging_dir, sig)
+        _swap_export_dir_into_place(staging_dir, export_dir)
         return str(export_dir.resolve())
 
 
