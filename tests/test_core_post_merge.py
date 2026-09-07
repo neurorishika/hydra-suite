@@ -35,6 +35,21 @@ def test_rescale_coordinates_divides_by_resize_factor():
     assert out["X"].tolist() == [20.0, 40.0]
 
 
+def test_rescale_coordinates_empty_dataframe_returns_unchanged():
+    df = pd.DataFrame()
+    out = rescale_coordinates(df, resize_factor=0.5)
+    assert isinstance(out, pd.DataFrame)
+    assert out.empty
+
+
+def test_rescale_coordinates_missing_xy_columns_returns_unchanged():
+    df = pd.DataFrame({"TrajectoryID": [0, 0], "FrameID": [0, 1]})
+    out = rescale_coordinates(df, resize_factor=0.5)
+    assert isinstance(out, pd.DataFrame)
+    assert "X" not in out.columns
+    assert out["TrajectoryID"].tolist() == [0, 0]
+
+
 def test_merge_reports_progress_and_returns_dataframe():
     seen = []
     merged = merge_trajectories(
