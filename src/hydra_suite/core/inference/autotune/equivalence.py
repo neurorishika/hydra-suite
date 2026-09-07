@@ -103,18 +103,35 @@ def _row_key(frame: pd.DataFrame) -> list[str] | None:
     return None
 
 
+def _key_strings(frame: pd.DataFrame, key: list[str]) -> np.ndarray:
+    """Key columns rendered NaN-safely as strings.
+
+    ``NaN == NaN`` is False, so comparing raw key values made the aligner
+    reject a frame against *itself* whenever a row key was NaN -- and a lost
+    track carries a NaN ``DetectionID``, which is ordinary output. Rendering
+    through ``string`` + ``fillna`` (the convention already used by the exact
+    comparisons below) makes two missing keys agree.
+    """
+
+    return np.column_stack(
+        [frame[column].astype("string").fillna("<nan>").to_numpy() for column in key]
+    )
+
+
 def _aligned(
     reference: pd.DataFrame, candidate: pd.DataFrame
 ) -> tuple[pd.DataFrame, pd.DataFrame] | None:
     key = _row_key(reference)
     if key is None or any(column not in candidate.columns for column in key):
         return None
-    left = reference.sort_values(key).reset_index(drop=True)
-    right = candidate.sort_values(key).reset_index(drop=True)
-    if (
-        len(left) != len(right)
-        or not (left[key].to_numpy() == right[key].to_numpy()).all()
-    ):
+    # ``kind="stable"`` so rows sharing a key (three lost tracks in one frame
+    # all key on ``(frame, NaN)``) keep their input order on both sides rather
+    # than relying on pandas' default sort happening to be stable.
+    left = reference.sort_values(key, kind="stable").reset_index(drop=True)
+    right = candidate.sort_values(key, kind="stable").reset_index(drop=True)
+    if len(left) != len(right):
+        return None
+    if not (_key_strings(left, key) == _key_strings(right, key)).all():
         return None
     return left, right
 
@@ -128,6 +145,79 @@ def _wrapped_abs_delta(old: float, new: float) -> float:
 
     delta = (float(old) - float(new) + np.pi) % (2 * np.pi) - np.pi
     return float(abs(delta))
+
+
+def _nan_position_pairs(
+    reference: pd.DataFrame, candidate: pd.DataFrame
+) -> tuple[list[tuple[object, object]], int]:
+    """Pair NaN-position rows by KEY instead of by distance.
+
+    A lost or coasting track exports a row with NaN ``X``/``Y``. Those rows are
+    ordinary output, but they cannot take part in a distance-based Hungarian
+    pairing, so the gate used to count every one of them as *unmatched* on both
+    sides -- which made two byte-identical files compare as different and made
+    the A-vs-A determinism floor unreachable on any real project.
+
+    Semantics chosen here:
+
+    * rows are grouped by the row key (``FrameID`` + the row identifier),
+      rendered NaN-safely;
+    * within a key group each side is sorted by the stringified tuple of all
+      shared columns and paired positionally. Two NaN-position rows in the same
+      frame with identical content are genuinely indistinguishable -- the CSV
+      carries no order -- so multiset equality is the strongest observable
+      semantics, and because a sorted elementwise comparison of two differing
+      multisets must differ somewhere, nothing real is masked;
+    * leftovers on either side are **unmatched**. A row that is NaN on one side
+      and positioned on the other therefore fails: its NaN half has no partner
+      here, and its positioned half is a surplus row in the Hungarian pass;
+    * the returned pairs feed :func:`_mandatory_exact_mismatches` (so
+      ``TrackID``/``TrajectoryID``/``State``/``ArenaID`` are still compared
+      exactly on these rows) but never feed ``distances``, so the p99
+      population is unchanged by this pairing.
+
+    Without a usable row key the rows stay unmatched, as before -- this
+    function only ever narrows the unmatched count when it can prove a
+    key-level correspondence.
+    """
+
+    if reference.empty and candidate.empty:
+        return [], 0
+    key = _row_key(reference)
+    if key is None or any(column not in candidate.columns for column in key):
+        return [], len(reference) + len(candidate)
+
+    shared = [column for column in reference.columns if column in candidate.columns]
+
+    def _grouped(frame: pd.DataFrame) -> dict[tuple[str, ...], list[object]]:
+        if frame.empty:
+            return {}
+        keys = _key_strings(frame, key)
+        order = (
+            frame[shared].astype("string").fillna("<nan>").agg("\x1f".join, axis=1)
+            if shared
+            else pd.Series("", index=frame.index)
+        )
+        groups: dict[tuple[str, ...], list[tuple[str, object]]] = {}
+        for position, index in enumerate(frame.index):
+            groups.setdefault(tuple(keys[position]), []).append(
+                (str(order.iloc[position]), index)
+            )
+        return {
+            group: [index for _token, index in sorted(rows, key=lambda item: item[0])]
+            for group, rows in groups.items()
+        }
+
+    left_groups = _grouped(reference)
+    right_groups = _grouped(candidate)
+    pairs: list[tuple[object, object]] = []
+    unmatched = 0
+    for group in set(left_groups) | set(right_groups):
+        lefts = left_groups.get(group, [])
+        rights = right_groups.get(group, [])
+        pairs.extend(zip(lefts, rights))
+        unmatched += abs(len(lefts) - len(rights))
+    return pairs, unmatched
 
 
 def _positional(
@@ -145,13 +235,17 @@ def _positional(
             "angle_samples": (),
             "pairs": (),
         }
-    left = reference.dropna(subset=["X", "Y"])
-    right = candidate.dropna(subset=["X", "Y"])
+    left_positioned = reference[["X", "Y"]].notna().all(axis=1).to_numpy()
+    right_positioned = candidate[["X", "Y"]].notna().all(axis=1).to_numpy()
+    left = reference[left_positioned]
+    right = candidate[right_positioned]
     distances: list[float] = []
     angle_samples: list[tuple[object, object, float]] = []
-    unmatched = (len(reference) - len(left)) + (len(candidate) - len(right))
-    matched = 0
-    pairs: list[tuple[object, object]] = []
+    nan_pairs, unmatched = _nan_position_pairs(
+        reference[~left_positioned], candidate[~right_positioned]
+    )
+    matched = len(nan_pairs)
+    pairs: list[tuple[object, object]] = list(nan_pairs)
     for frame_id in sorted(set(left["FrameID"]) | set(right["FrameID"])):
         a = left[left["FrameID"] == frame_id]
         b = right[right["FrameID"] == frame_id]

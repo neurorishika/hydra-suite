@@ -12,6 +12,7 @@ Two gates are exercised here:
 from __future__ import annotations
 
 import numpy as np
+import pandas as pd
 import pytest
 
 from hydra_suite.core.inference.autotune.equivalence import (
@@ -189,3 +190,138 @@ def test_pi_flip_without_a_headtail_marker_still_raises_the_floor():
 
     assert floor.angle_max == pytest.approx(np.pi)
     assert not floor.passed
+
+
+# ---------------------------------------------------------------------------
+# Task 10b: NaN-position rows (lost/coasting tracks) are ordinary output.
+#
+# Two defects made byte-identical files compare as different:
+#   * ``_positional`` matches by nearest (X, Y) and cannot match a NaN-position
+#     row, so every such row was counted as *unmatched* on BOTH sides;
+#   * ``_aligned`` compared key columns with ``==``, which is False for a NaN
+#     ``DetectionID`` even against itself, so keyed alignment returned ``None``
+#     -- silently disabling the NaN-pattern and heuristic-categorical checks on
+#     every real tracking output.
+# ---------------------------------------------------------------------------
+
+
+def _frame_with_lost_rows():
+    """A frame shaped like a real forward CSV: 2 tracked rows + 3 lost rows.
+
+    Mirrors ``fly_obb``'s forward output exactly -- lost tracks carry NaN
+    ``X``/``Y``/``Theta`` *and* a NaN ``DetectionID`` (the row key), three of
+    them sharing one FrameID.
+    """
+
+    return equivalence_frame(
+        rows=5,
+        frame_ids=[2, 2, 2, 2, 2],
+        detection_ids=[np.nan, np.nan, np.nan, 30001, 30002],
+        track_ids=[0, 1, 2, 3, 4],
+        x=[np.nan, np.nan, np.nan, 498.8, 120.0],
+        y=[np.nan, np.nan, np.nan, 302.9, 88.0],
+        theta=[np.nan, np.nan, np.nan, 5.98, 1.25],
+        state=["lost", "lost", "lost", "active", "active"],
+    )
+
+
+def test_identical_outputs_with_nan_position_rows_compare_equal():
+    """RED before Task 10b: two byte-identical outputs must pass the gate.
+
+    This is the determinism-floor case. ``fly_obb``'s A-vs-A repeat produced
+    ``passed=False, unmatched=6`` on files ``filecmp`` reported as identical,
+    which aborted every calibration with
+    ``baseline_nondeterministic_beyond_contract``.
+    """
+
+    frame = _frame_with_lost_rows()
+
+    verdict = compare_outputs(
+        equivalence_outputs(frame),
+        equivalence_outputs(frame.copy()),
+        for_determinism_floor=True,
+    )
+
+    assert verdict.unmatched_rows == 0
+    assert verdict.nan_pattern_mismatches == 0
+    assert verdict.categorical_mismatches == 0
+    # No "keyed rows are not aligned" either -- the aligner must survive a NaN
+    # row key, or the NaN-pattern and categorical checks never run at all.
+    assert verdict.details == ()
+    assert verdict.passed
+
+
+def test_nan_position_row_with_changed_trackid_still_fails():
+    """Excluding NaN rows from the *distance* population must not excuse them."""
+
+    base = _frame_with_lost_rows()
+    changed = base.copy()
+    changed.loc[1, "TrackID"] = 99
+
+    verdict = compare_outputs(equivalence_outputs(base), equivalence_outputs(changed))
+
+    assert not verdict.passed
+    assert any("TrackID" in detail for detail in verdict.details)
+
+
+def test_nan_position_row_with_changed_state_still_fails():
+    """``State`` is mandatory-exact on NaN-position rows too."""
+
+    base = _frame_with_lost_rows()
+    changed = base.copy()
+    changed.loc[0, "State"] = "confirmed"
+
+    verdict = compare_outputs(equivalence_outputs(base), equivalence_outputs(changed))
+
+    assert not verdict.passed
+    assert any("State" in detail for detail in verdict.details)
+
+
+def test_row_nan_on_one_side_only_is_a_genuine_difference():
+    """A track lost on one run and tracked on the other must fail the gate."""
+
+    base = _frame_with_lost_rows()
+    changed = base.copy()
+    changed.loc[2, ["X", "Y", "Theta"]] = [400.0, 400.0, 0.5]
+
+    verdict = compare_outputs(equivalence_outputs(base), equivalence_outputs(changed))
+
+    assert not verdict.passed
+    assert verdict.unmatched_rows > 0 or verdict.nan_pattern_mismatches > 0
+
+
+def test_nan_rows_do_not_perturb_the_position_p99():
+    """The p99 population must be exactly the non-NaN rows -- no more, no less.
+
+    The gate is percentile-based, so anything entering or leaving the distance
+    population moves p99. NaN rows must leave it entirely (they already did,
+    via ``dropna``); this pins that they also do not sneak back in as
+    zero-distance pairs, which would drag the percentile down.
+    """
+
+    real = equivalence_frame(
+        rows=4,
+        frame_ids=[9, 9, 9, 9],
+        detection_ids=[0, 1, 2, 3],
+        track_ids=[1, 2, 3, 4],
+        x=[0.0, 10.0, 20.0, 30.0],
+        y=[0.0, 0.0, 0.0, 0.0],
+    )
+    shifted = real.copy()
+    shifted["X"] = [0.0, 10.0, 20.0, 30.3]
+
+    without_nan = compare_outputs(
+        equivalence_outputs(real), equivalence_outputs(shifted)
+    )
+
+    # Pad with NaN-position rows ONLY -- adding the real rows of
+    # ``_frame_with_lost_rows`` would legitimately enlarge the population.
+    lost = _frame_with_lost_rows().iloc[:3].copy()
+    padded_real = pd.concat([real, lost], ignore_index=True)
+    padded_shifted = pd.concat([shifted, lost.copy()], ignore_index=True)
+    with_nan = compare_outputs(
+        equivalence_outputs(padded_real), equivalence_outputs(padded_shifted)
+    )
+
+    assert without_nan.position_p99 > 0.0
+    assert with_nan.position_p99 == without_nan.position_p99
