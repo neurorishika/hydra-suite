@@ -440,6 +440,29 @@ def test_kalman_autotune_copy_explains_retained_lateral_semantics(
         dialog.close()
 
 
+def test_autotune_change_summary_and_damping_copy_match_control_precision(
+    qapp: QApplication, tmp_path
+) -> None:
+    """The concise result row must not hide apply-time parameter precision."""
+
+    dialog = ParameterHelperDialog(
+        video_path="/tmp/video.mp4",
+        detection_cache_path=str(tmp_path / "cache"),
+        start_frame=0,
+        end_frame=10,
+        current_params={"MAX_DISTANCE_MULTIPLIER": 1.0, "W_AREA": 0.1},
+    )
+    try:
+        summary = dialog._format_changes(
+            {"MAX_DISTANCE_MULTIPLIER": 1.234, "W_AREA": 0.1234}
+        )
+        assert "Dist:1.23▲" in summary
+        assert "Wa:0.1234▲" in summary
+        assert "0.50–0.999" in dialog.cb_kalman_damp.toolTip()
+    finally:
+        dialog.close()
+
+
 def test_real_detection_panel_matches_shared_threshold_precision_contract(
     qapp: QApplication,
 ) -> None:
@@ -587,9 +610,13 @@ def test_state_persists_across_fresh_dialog_without_hashing_its_sidecar(
         current_params=current_params,
     )
     try:
-        dialog.results = [
-            OptimizationResult(params={"W_POSITION": 1.25}, score=0.2, trial_number=1)
-        ]
+        stale_result = OptimizationResult(
+            params={"W_POSITION": 1.25}, score=0.2, trial_number=1
+        )
+        # A partial legacy sidecar could retain a front number without the
+        # held-out metric payload. It remains ineligible for Apply.
+        stale_result.pareto_rank = 1
+        dialog.results = [stale_result]
         key_before_save = dialog._compute_state_key()
         dialog._save_state()
         assert dialog._compute_state_key() == key_before_save
@@ -605,6 +632,15 @@ def test_state_persists_across_fresh_dialog_without_hashing_its_sidecar(
             assert len(restored.results) == 1
             assert restored.results[0].params == {"W_POSITION": 1.25}
             assert "Restored 1 cached result" in restored.status_label.text()
+            # Older sidecars can contain fast-loop-only proposal rows.  They
+            # remain inspectable, but must not regain Apply merely because
+            # restoration repopulates the table.
+            assert restored.table.item(0, 3).text() == "—"
+            assert "not production-validated" in restored.table.item(0, 3).toolTip()
+            assert restored.btn_apply.isEnabled() is False
+            assert restored.btn_preview.isEnabled() is True
+            assert "inspection" in restored.btn_preview.text().lower()
+            assert restored.get_selected_params() == {}
         finally:
             restored.close()
     finally:
@@ -846,21 +882,146 @@ def test_selected_params_contain_only_applyable_candidate_overrides(
         current_params={"KALMAN_MAX_VELOCITY_MULTIPLIER": 2.0},
     )
     try:
-        dialog.results = [
-            OptimizationResult(
-                params={
-                    "KALMAN_INITIAL_VELOCITY_RETENTION": 0.4,
-                    "KALMAN_YOUNG_GATE_MULTIPLIER": 3.0,
-                    "MAX_DISTANCE_THRESHOLD": 100.0,
-                },
-                score=0.1,
-                trial_number=1,
-            )
-        ]
+        result = OptimizationResult(
+            params={
+                "KALMAN_INITIAL_VELOCITY_RETENTION": 0.4,
+                "KALMAN_YOUNG_GATE_MULTIPLIER": 3.0,
+                "MAX_DISTANCE_THRESHOLD": 100.0,
+            },
+            score=0.1,
+            trial_number=1,
+        )
+        result.pareto_rank = 1
+        result.validation_metrics = {
+            "cycle_loss": {"mean": 0.1},
+            "coverage_loss": {"mean": 0.2},
+            "fragmentation_loss": {"mean": 0.1},
+            "motion_roughness_loss": {"mean": 0.1},
+        }
+        result.mean_relative_spread = 0.05
+        dialog.results = [result]
         dialog._selected_row_to_apply = 0
 
         assert dialog.get_selected_params() == {
             "KALMAN_INITIAL_VELOCITY_RETENTION": 0.4
         }
+    finally:
+        dialog.close()
+
+
+def test_results_keep_unvalidated_proposals_inspectable_but_not_applyable(
+    qapp: QApplication, tmp_path
+) -> None:
+    """Only baseline or actual held-out evidence can enable Apply.
+
+    The deliberately attractive fast-loop values on ``proposal`` must never
+    appear in columns advertised as held-out production metrics.
+    """
+
+    dialog = ParameterHelperDialog(
+        video_path="/tmp/video.mp4",
+        detection_cache_path=str(tmp_path / "cache"),
+        start_frame=0,
+        end_frame=10,
+        current_params={"W_POSITION": 1.0},
+    )
+    baseline = OptimizationResult(
+        params={}, score=0.3, trial_number=-1, is_baseline=True
+    )
+    baseline.pareto_rank = 1
+    baseline.validation_metrics = {
+        "cycle_loss": {"mean": 0.31},
+        "coverage_loss": {"mean": 0.20},
+        "fragmentation_loss": {"mean": 0.12},
+        "motion_roughness_loss": {"mean": 0.08},
+    }
+    baseline.mean_relative_spread = 0.04
+    baseline.sub_scores = {
+        "cycle_loss": 0.31,
+        "coverage_loss": 0.20,
+        "fragmentation_loss": 0.12,
+        "motion_roughness_loss": 0.08,
+    }
+    proposal = OptimizationResult(
+        params={"W_POSITION": 2.0},
+        score=0.001,
+        trial_number=1,
+        # These are search-loop values.  Production validation has not run.
+        sub_scores={
+            "cycle_loss": 0.00,
+            "coverage_loss": 0.00,
+            "fragmentation_loss": 0.00,
+            "motion_roughness_loss": 0.00,
+        },
+    )
+    # A partially restored row with values but no Pareto/front decision is
+    # likewise not production-validated.
+    proposal.validation_metrics = {"cycle_loss": {"mean": 0.00}}
+    corrupt = OptimizationResult(params={"W_POSITION": 1.8}, score=0.05, trial_number=2)
+    corrupt.pareto_rank = 1
+    corrupt.validation_metrics = {
+        "cycle_loss": {"mean": 0.02},
+        "coverage_loss": {"mean": 0.10},
+        "fragmentation_loss": {"mean": 0.02},
+        "motion_roughness_loss": {"mean": 0.02},
+    }
+    corrupt.mean_relative_spread = float("nan")
+    validated = OptimizationResult(
+        params={"W_POSITION": 1.4}, score=0.2, trial_number=3
+    )
+    validated.pareto_rank = 1
+    validated.validation_metrics = {
+        "cycle_loss": {"mean": 0.11},
+        "coverage_loss": {"mean": 0.25},
+        "fragmentation_loss": {"mean": 0.05},
+        "motion_roughness_loss": {"mean": 0.03},
+    }
+    validated.mean_relative_spread = 0.02
+    # Use deliberately contradictory fast-loop values to prove the rendered
+    # metric cells are based on production evidence for validated rows too.
+    validated.sub_scores = {
+        "cycle_loss": 0.90,
+        "coverage_loss": 0.90,
+        "fragmentation_loss": 0.90,
+        "motion_roughness_loss": 0.90,
+    }
+
+    try:
+        dialog.on_results([baseline, proposal, corrupt, validated])
+
+        # The initially selected baseline is always safe to keep/apply.
+        assert dialog.btn_apply.isEnabled() is True
+        assert dialog.btn_preview.isEnabled() is True
+
+        # A fast-loop proposal must not masquerade as held-out evidence.
+        for row in (1, 2):
+            for column in range(3, 8):
+                item = dialog.table.item(row, column)
+                assert item.text() == "—"
+                assert "not production-validated" in item.toolTip()
+
+        # A validated row renders the actual production means, rather than
+        # the contradictory proposal-loop values above.
+        assert dialog.table.item(3, 3).text() == "0.11"
+        assert dialog.table.item(3, 4).text() == "75%"
+        assert dialog.table.item(3, 5).text() == "0.05"
+        assert dialog.table.item(3, 6).text() == "0.03"
+
+        dialog.table.selectRow(1)
+        assert dialog.btn_apply.isEnabled() is False
+        assert dialog.btn_preview.isEnabled() is True
+        assert "inspection" in dialog.btn_preview.text().lower()
+        assert "not held-out evidence" in dialog.btn_preview.toolTip()
+        dialog._apply_selected()
+        assert not hasattr(dialog, "_selected_row_to_apply")
+        assert dialog.get_selected_params() == {}
+        assert "not production-validated" in dialog.status_label.text()
+
+        dialog.table.selectRow(2)
+        assert dialog.btn_apply.isEnabled() is False
+
+        dialog.table.selectRow(3)
+        assert dialog.btn_apply.isEnabled() is True
+        assert dialog.get_selected_params() == {"W_POSITION": 1.4}
     finally:
         dialog.close()

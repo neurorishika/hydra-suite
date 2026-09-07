@@ -1,8 +1,9 @@
 """Qt wrappers for the pure tracking parameter-optimizer helpers (which live
 Qt-free in ``core/tracking/optimization/optimizer_workers``).
 
-DetectionCacheBuildWorker — builds an InferenceRunner detection cache for a
-    frame range via ``InferenceRunner.run_batch_pass``.
+DetectionCacheBuildWorker — prepares the full InferenceRunner replay-evidence
+    cache for a frame range via ``InferenceRunner.run_batch_pass``, including
+    configured downstream evidence stages.
 TrackingPreviewWorker — emits preview frames using cached detections by
     delegating to ``run_tracking_preview`` and translating its frame/stop
     callbacks into Qt signals.
@@ -28,9 +29,12 @@ logger = logging.getLogger(__name__)
 
 
 class DetectionCacheBuildWorker(QThread):
-    """Phase-1-only worker: runs InferenceRunner.run_batch_pass over a frame
-    range to populate an InferenceRunner detection cache for the Bayesian
-    optimizer. No Kalman/CSV/pose stages.
+    """Prepare full replay evidence over a frame range for the optimizer.
+
+    ``InferenceRunner.run_batch_pass`` includes configured downstream
+    head-tail, CNN, pose, and AprilTag stages so held-out replay sees the same
+    evidence contract as production. It deliberately does not run Kalman
+    tracking or write a tracking CSV.
     """
 
     progress_signal = Signal(int, str)
@@ -73,7 +77,7 @@ class DetectionCacheBuildWorker(QThread):
 
             def _progress_cb(processed, range_total):
                 pct = int(processed * 100 / range_total) if range_total else 0
-                self.progress_signal.emit(pct, f"Building detection cache: {pct}%")
+                self.progress_signal.emit(pct, f"Preparing replay evidence: {pct}%")
 
             runner.run_batch_pass(
                 Path(self.video_path),
@@ -86,7 +90,7 @@ class DetectionCacheBuildWorker(QThread):
                 self.progress_signal.emit(0, "Cancelled.")
                 self.finished_signal.emit(False, "")
                 return
-            logger.info("DetectionCacheBuild: cache saved to %s", self.cache_dir)
+            logger.info("Replay evidence cache prepared at %s", self.cache_dir)
             self.finished_signal.emit(True, str(self.cache_dir))
         except Exception:
             logger.exception("DetectionCacheBuild error")

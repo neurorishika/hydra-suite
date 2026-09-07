@@ -92,6 +92,12 @@ class ParameterHelperDialog(BaseDialog):
     """Interactive dialog for auto-tuning core tracking parameters (Kalman, YOLO thresholds, assignment weights) against a detection cache."""
 
     _WORKER_SHUTDOWN_WAIT_MS = 1_500
+    _REQUIRED_HELDOUT_METRICS = (
+        "cycle_loss",
+        "coverage_loss",
+        "fragmentation_loss",
+        "motion_roughness_loss",
+    )
 
     def __init__(
         self,
@@ -261,6 +267,7 @@ class ParameterHelperDialog(BaseDialog):
         self.table.setSelectionBehavior(QTableWidget.SelectRows)
         self.table.setAlternatingRowColors(True)
         self.table.verticalHeader().setDefaultSectionSize(36)
+        self.table.itemSelectionChanged.connect(self._update_selected_result_actions)
         left.addWidget(self.table, stretch=1)
 
         # Bottom buttons
@@ -473,7 +480,7 @@ class ParameterHelperDialog(BaseDialog):
                     ),
                     (
                         self.cb_kalman_damp,
-                        "Velocity friction per frame (range 0.70–0.999).\n"
+                        "Velocity friction per frame (range 0.50–0.999).\n"
                         "High (≈0.99): velocity persists → KF overshoots when animals stop.\n"
                         "Low (≈0.75): velocity decays quickly → less look-ahead, but more agile.",
                     ),
@@ -1285,6 +1292,7 @@ class ParameterHelperDialog(BaseDialog):
         # previous run's success (self.results / self._last_error would
         # otherwise still hold the prior run's data).
         self.results = []
+        self.__dict__.pop("_selected_row_to_apply", None)
         self._last_error = None
         self._optimization_cancel_requested = False
 
@@ -1368,6 +1376,9 @@ class ParameterHelperDialog(BaseDialog):
         if self._terminal_shutdown_started or self._optimization_cancel_requested:
             return
         self.results = results
+        # A newly received (or restored) result set must not retain the row
+        # that a previous dialog action intended to apply.
+        self.__dict__.pop("_selected_row_to_apply", None)
         n_show = min(len(results), 50)
         self.table.setRowCount(n_show)
 
@@ -1400,38 +1411,13 @@ class ParameterHelperDialog(BaseDialog):
             score_item.setToolTip("Fast training-slice proposal loss; lower is better.")
             self.table.setItem(i, 2, score_item)
 
-            # Held-out production replay metrics (columns 3-7).
-            ss = res.sub_scores
-            cycle = ss.get("cycle_loss", 1.0)
-            self.table.setItem(
-                i,
-                3,
-                _badge_item(cycle, f"{cycle:.2f}"),
-            )
-            cov_cost = ss.get("coverage_loss", ss.get("coverage", 1.0))
-            cov_pct = 1.0 - cov_cost
-            self.table.setItem(i, 4, _badge_item(cov_cost, f"{cov_pct:.0%}"))
-            frag = ss.get("fragmentation_loss", ss.get("fragmentation", 1.0))
-            self.table.setItem(
-                i,
-                5,
-                _badge_item(frag, f"{frag:.2f}"),
-            )
-            roughness = ss.get("motion_roughness_loss", ss.get("velocity", 1.0))
-            self.table.setItem(
-                i,
-                6,
-                _badge_item(roughness, f"{roughness:.2f}"),
-            )
-            stability = res.mean_relative_spread
-            self.table.setItem(
-                i,
-                7,
-                _badge_item(
-                    min(stability if stability is not None else 1.0, 1.0),
-                    f"{stability:.2f}" if stability is not None else "—",
-                ),
-            )
+            # Held-out production replay metrics (columns 3-7).  A proposal
+            # loop can calculate similarly named fast-slice diagnostics, but
+            # those are not held-out evidence.  Never fall back to them here.
+            if self._is_production_validated(res):
+                self._set_production_metric_items(i, res)
+            else:
+                self._set_unvalidated_metric_items(i, res)
 
             # Key parameter changes vs base
             changes = (
@@ -1445,10 +1431,182 @@ class ParameterHelperDialog(BaseDialog):
             self.table.setItem(i, 8, chg_item)
 
         if results:
-            self.btn_apply.setEnabled(True)
-            self.btn_preview.setEnabled(True)
             self.table.selectRow(0)
             self._save_state()
+        self._update_selected_result_actions()
+
+    @classmethod
+    def _is_production_validated(cls, result: OptimizationResult) -> bool:
+        """Whether a row has the held-out evidence needed for promotion."""
+
+        if result.pareto_rank is None or not isinstance(
+            result.validation_metrics, dict
+        ):
+            return False
+        means = [
+            cls._production_metric_mean(result, metric_name)
+            for metric_name in cls._REQUIRED_HELDOUT_METRICS
+        ]
+        if any(value is None or not np.isfinite(value) for value in means):
+            return False
+        try:
+            return bool(np.isfinite(float(result.mean_relative_spread)))
+        except (TypeError, ValueError):
+            return False
+
+    @classmethod
+    def _is_applyable_result(cls, result: OptimizationResult) -> bool:
+        """Current settings are always safe; proposals require held-out evidence."""
+
+        return result.is_baseline or cls._is_production_validated(result)
+
+    def _result_for_row(self, row: int) -> OptimizationResult | None:
+        if 0 <= row < len(self.results):
+            return self.results[row]
+        return None
+
+    @staticmethod
+    def _unvalidated_metric_tooltip(result: OptimizationResult) -> str:
+        if result.is_baseline:
+            return (
+                "Held-out production validation was unavailable for current settings; "
+                "no held-out metric is shown."
+            )
+        return (
+            "This proposal is not production-validated. Fast search-loop values "
+            "are intentionally not shown as held-out evidence."
+        )
+
+    @staticmethod
+    def _unvalidated_metric_item(tooltip: str) -> QTableWidgetItem:
+        item = QTableWidgetItem("—")
+        item.setTextAlignment(Qt.AlignCenter)
+        item.setToolTip(tooltip)
+        item.setFlags(item.flags() & ~Qt.ItemIsEditable)
+        return item
+
+    @staticmethod
+    def _production_metric_mean(
+        result: OptimizationResult, metric_name: str
+    ) -> float | None:
+        """Read a serialized production mean without falling back to search data."""
+
+        if not isinstance(result.validation_metrics, dict):
+            return None
+        metric = result.validation_metrics.get(metric_name)
+        value = metric.get("mean") if isinstance(metric, dict) else metric
+        try:
+            return float(value)
+        except (TypeError, ValueError):
+            return None
+
+    def _set_unvalidated_metric_items(
+        self, row: int, result: OptimizationResult
+    ) -> None:
+        tooltip = self._unvalidated_metric_tooltip(result)
+        for column in range(3, 8):
+            self.table.setItem(row, column, self._unvalidated_metric_item(tooltip))
+
+    def _set_production_metric_items(
+        self, row: int, result: OptimizationResult
+    ) -> None:
+        """Render only means emitted by held-out production validation."""
+
+        metric_cells = (
+            (3, "cycle_loss", lambda value: f"{value:.2f}", lambda value: value),
+            (
+                4,
+                "coverage_loss",
+                lambda value: f"{1.0 - value:.0%}",
+                lambda value: value,
+            ),
+            (
+                5,
+                "fragmentation_loss",
+                lambda value: f"{value:.2f}",
+                lambda value: value,
+            ),
+            (
+                6,
+                "motion_roughness_loss",
+                lambda value: f"{value:.2f}",
+                lambda value: value,
+            ),
+        )
+        for column, metric_name, formatter, cost in metric_cells:
+            value = self._production_metric_mean(result, metric_name)
+            if value is None:
+                self.table.setItem(
+                    row,
+                    column,
+                    self._unvalidated_metric_item(
+                        "Held-out production validation did not provide this metric."
+                    ),
+                )
+                continue
+            self.table.setItem(row, column, _badge_item(cost(value), formatter(value)))
+
+        stability = result.mean_relative_spread
+        if stability is None:
+            self.table.setItem(
+                row,
+                7,
+                self._unvalidated_metric_item(
+                    "Held-out production validation did not provide a stability estimate."
+                ),
+            )
+            return
+        self.table.setItem(
+            row,
+            7,
+            _badge_item(min(float(stability), 1.0), f"{float(stability):.2f}"),
+        )
+
+    def _update_selected_result_actions(self) -> None:
+        """Keep promotion controls aligned with the row currently selected."""
+
+        if self._terminal_shutdown_started or self._optimization_cancel_requested:
+            self.btn_apply.setEnabled(False)
+            self.btn_preview.setEnabled(False)
+            return
+
+        result = self._result_for_row(self.table.currentRow())
+        if result is None:
+            self.btn_apply.setEnabled(False)
+            self.btn_preview.setEnabled(False)
+            return
+
+        validated = self._is_production_validated(result)
+        applyable = self._is_applyable_result(result)
+        self.btn_apply.setEnabled(applyable)
+        if applyable:
+            self.btn_apply.setToolTip(
+                "Write the selected candidate settings back into the MAT setup tab and close."
+            )
+        else:
+            self.btn_apply.setToolTip(
+                "Only current settings or a production-validated candidate can be applied."
+            )
+
+        self.btn_preview.setEnabled(True)
+        if validated:
+            self.btn_preview.setText("▶  Preview Selected")
+            self.btn_preview.setToolTip(
+                "Run the selected production-validated candidate on the chosen frame range "
+                "and show the result in the preview panel on the right."
+            )
+        elif result.is_baseline:
+            self.btn_preview.setText("▶  Preview Current Settings (inspection)")
+            self.btn_preview.setToolTip(
+                "Run the current settings for inspection. Held-out production evidence "
+                "was not available for this result."
+            )
+        else:
+            self.btn_preview.setText("▶  Preview Proposal (inspection)")
+            self.btn_preview.setToolTip(
+                "Run this proposal for inspection only. It is not held-out evidence "
+                "and cannot be applied until production validation succeeds."
+            )
 
     # ── Helpers ───────────────────────────────────────────────────────────────
 
@@ -1457,12 +1615,12 @@ class ParameterHelperDialog(BaseDialog):
         labels = {
             "YOLO_CONFIDENCE_THRESHOLD": ("Conf", ".2f"),
             "YOLO_IOU_THRESHOLD": ("IOU", ".2f"),
-            "MAX_DISTANCE_MULTIPLIER": ("Dist", ".1f"),
+            "MAX_DISTANCE_MULTIPLIER": ("Dist", ".2f"),
             "KALMAN_NOISE_COVARIANCE": ("ProcN", ".4f"),
             "KALMAN_MEASUREMENT_NOISE_COVARIANCE": ("MeasN", ".4f"),
             "W_POSITION": ("Wp", ".2f"),
             "W_ORIENTATION": ("Wo", ".2f"),
-            "W_AREA": ("Wa", ".2f"),
+            "W_AREA": ("Wa", ".4f"),
             "W_ASPECT": ("Wasp", ".2f"),
             "KALMAN_DAMPING": ("Damp", ".3f"),
             "KALMAN_LONGITUDINAL_NOISE_MULTIPLIER": ("LongQ", ".1f"),
@@ -1506,11 +1664,14 @@ class ParameterHelperDialog(BaseDialog):
             converged = self.optimizer is not None and self.optimizer.search_converged
             reason = "Converged (plateau)" if converged else "Search finished"
             recommended = next((r for r in self.results if r.recommended), None)
-            decision = (
-                " Current settings retained."
-                if recommended is not None and recommended.is_baseline
-                else " A held-out candidate is recommended."
-            )
+            if recommended is not None and recommended.is_baseline:
+                decision = " Current settings retained."
+            elif recommended is not None:
+                decision = " A held-out candidate is recommended."
+            elif any(self._is_production_validated(result) for result in self.results):
+                decision = " No candidate is recommended from held-out evidence."
+            else:
+                decision = " Proposals are available for inspection only."
             self.status_label.setText(f"{reason}. {max(0, n - 1)} proposals.{decision}")
         elif self._last_error:
             self.status_label.setText(f"Optimization failed: {self._last_error}")
@@ -1521,9 +1682,9 @@ class ParameterHelperDialog(BaseDialog):
         if self._terminal_shutdown_started or self._optimization_cancel_requested:
             return
         row = self.table.currentRow()
-        if row < 0:
+        res = self._result_for_row(row)
+        if res is None:
             return
-        res = self.results[row]
         preview_params = merge_tracking_autotune_candidate(self.base_params, res.params)
 
         if self.preview_worker and self.preview_worker.isRunning():
@@ -1533,7 +1694,14 @@ class ParameterHelperDialog(BaseDialog):
                 )
                 return
 
-        self.status_label.setText(f"Previewing candidate rank {row + 1}...")
+        inspection_suffix = (
+            " (inspection only; not held-out evidence)"
+            if not self._is_production_validated(res)
+            else ""
+        )
+        self.status_label.setText(
+            f"Previewing candidate rank {row + 1}{inspection_suffix}..."
+        )
         self._prev_auto_fit_pending = True
         self.preview_worker = TrackingPreviewWorker(
             self.video_path,
@@ -1557,6 +1725,13 @@ class ParameterHelperDialog(BaseDialog):
         row = self.table.currentRow()
         if row < 0:
             row = 0  # fallback to the first-ranked candidate
+        result = self._result_for_row(row)
+        if result is None or not self._is_applyable_result(result):
+            self.btn_apply.setEnabled(False)
+            self.status_label.setText(
+                "Selected proposal is not production-validated and cannot be applied."
+            )
+            return
         self._selected_row_to_apply = row
         self.accept()
 
@@ -1564,12 +1739,13 @@ class ParameterHelperDialog(BaseDialog):
         if self._terminal_shutdown_started or self._optimization_cancel_requested:
             return {}
         row = getattr(self, "_selected_row_to_apply", self.table.currentRow())
-        if 0 <= row < len(self.results):
+        result = self._result_for_row(row)
+        if result is not None and self._is_applyable_result(result):
             # The result contains only the candidate overrides. Returning a
             # historical base snapshot would overwrite controls that changed
             # while the dialog was open, and could include core-only fields that
             # TrackerKit cannot apply.
-            return applicable_candidate_params(self.results[row].params)
+            return applicable_candidate_params(result.params)
         return {}
 
     # ── Persistence ───────────────────────────────────────────────────────────

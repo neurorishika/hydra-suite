@@ -3156,7 +3156,9 @@ class ConfigOrchestrator:
             if _is_valid(candidate_str):
                 return str(cache_directory(candidate_str)), True
 
-        # 3. Fallback: compute a write-target path for a new detection-only build.
+        # 3. Fallback: compute a write-target path for a replay-evidence
+        #    preparation pass. It persists raw detections and every configured
+        #    downstream stage needed by production-faithful replay.
         #    Include the detection method so different methods never share a cache.
         if detection_method == "yolo_obb":
             model_raw = os.path.splitext(
@@ -3182,11 +3184,11 @@ class ConfigOrchestrator:
     def _build_optimizer_detection_cache(
         self, video_path: str, cache_path: str, params: dict
     ):
-        """Spin up a DetectionCacheBuildWorker and show progress in the main window.
+        """Prepare replay evidence in the background and show progress.
 
         ``cache_path`` is used as the InferenceRunner cache **directory**
-        (it holds ``detection.npz`` plus a cache key), not a legacy
-        single-file ``DetectionCache``.
+        (it holds ``detection.npz`` plus configured downstream evidence and
+        cache keys), not a legacy single-file ``DetectionCache``.
         """
         from hydra_suite.trackerkit.gui.workers.param_optimizer_worker import (
             DetectionCacheBuildWorker,
@@ -3208,7 +3210,7 @@ class ConfigOrchestrator:
         self._mw.progress_bar.setVisible(True)
         self._mw.progress_label.setVisible(True)
         self._mw.progress_bar.setValue(0)
-        self._mw.progress_label.setText("Building detection cache for optimizer...")
+        self._mw.progress_label.setText("Preparing replay evidence for optimizer...")
         self._mw._cache_builder_worker.start()
 
     def _apply_optimized_params(self, new_params):
@@ -3253,12 +3255,13 @@ class ConfigOrchestrator:
         if not already_valid:
             res = QMessageBox.question(
                 self._mw,
-                "Detection Required",
-                "No detection cache covering frames "
+                "Replay Evidence Required",
+                "No replay-evidence cache covering frames "
                 f"{start_frame}\u2013{end_frame} was found.\n\n"
-                "Run a quick detection-only scan now?\n"
-                "(No config save, no pose inference, no CSV output \u2014 "
-                "detections only.)",
+                "Prepare production-faithful replay evidence now?\n"
+                "(This runs raw detection and any configured head-tail, CNN, "
+                "pose, or AprilTag stages. No configuration save or tracking "
+                "CSV output.)",
                 QMessageBox.Yes | QMessageBox.No,
             )
             if res == QMessageBox.Yes:
