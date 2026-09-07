@@ -23,6 +23,7 @@ from hydra_suite.training.contracts import (
     sam3_prompt_text_error,
 )
 from hydra_suite.utils.slice_geometry import (
+    DEFAULT_MIN_AREA_RATIO,
     LEGACY_TARGET_SIZE_IMGSZ,
     target_fractions_from,
 )
@@ -168,7 +169,7 @@ class SliceTrainingConfig:
     slice_width: int = 0
     slice_height: int = 0
     overlap: float = 0.2
-    min_area_ratio: float = 0.25
+    min_area_ratio: float = DEFAULT_MIN_AREA_RATIO
     negative_tile_fraction: float = 0.15
     target_size_fractions: tuple[float, ...] = (0.05, 0.10, 0.15, 0.20)
     # Retained for legacy project compatibility. New defaults are expressed as

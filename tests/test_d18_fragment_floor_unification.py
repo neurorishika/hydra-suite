@@ -13,8 +13,13 @@ behaviour today). They pin two things the unification must hold:
    stays open and separate; unifying it would be an accidental regression).
 """
 
+import re
+from pathlib import Path
+
 import numpy as np
 
+from hydra_suite.detectkit.config.training import SliceTrainingConfig
+from hydra_suite.detectkit.gui.models import SliceTrainingSettings
 from hydra_suite.training.contracts import Sam3LoraParams
 from hydra_suite.training.sam3_lora.dataset_build import (
     MIN_RETAINED_AREA_FRAC,
@@ -57,6 +62,46 @@ def test_both_builder_params_track_a_custom_shared_value():
         )
     finally:
         slice_geometry_module.DEFAULT_MIN_AREA_RATIO = original
+
+
+def test_detectkit_config_surfaces_also_default_from_the_shared_constant():
+    """The coordinator's fix-round finding: config surfaces that FEED the
+    builders (DetectKit CLI plan + GUI project settings) must default from
+    the same shared constant too, or changing it silently stops reaching
+    what the GUI/CLI actually send -- the exact divergence D18 exists to
+    prevent, just relocated one layer up.
+    """
+    assert SliceTrainingConfig().min_area_ratio == DEFAULT_MIN_AREA_RATIO
+    assert SliceTrainingSettings().min_area_ratio == DEFAULT_MIN_AREA_RATIO
+
+
+def test_no_new_hardcoded_min_area_ratio_default_creeps_in():
+    """Future-proofing, by construction rather than by enumeration.
+
+    Greps every ``*.py`` under ``src/`` for a dataclass-style field default
+    of the form ``min_area_ratio: float = <literal>`` and asserts every
+    match's RHS is a NAME (``DEFAULT_MIN_AREA_RATIO`` or the historical
+    ``MIN_RETAINED_AREA_FRAC`` alias defined in terms of it), never a bare
+    numeric literal. A newly added dataclass field or function parameter
+    that hardcodes e.g. ``0.25`` or ``0.3`` directly will fail this test
+    without needing to be named here individually. This is NOT airtight --
+    it only catches the ``min_area_ratio: float = ...`` spelling, so a
+    renamed field or a value set via ``field(default=...)`` would slip past
+    -- but it is cheap and catches the exact shape this bug had twice.
+    """
+    src_root = Path(__file__).resolve().parents[1] / "src"
+    pattern = re.compile(r"min_area_ratio\s*:\s*float\s*=\s*([^\s,)#]+)")
+    offenders = []
+    for path in src_root.rglob("*.py"):
+        text = path.read_text(encoding="utf-8")
+        for match in pattern.finditer(text):
+            rhs = match.group(1)
+            if not re.fullmatch(r"[A-Za-z_][A-Za-z0-9_.]*", rhs):
+                offenders.append(f"{path}: {match.group(0)!r}")
+    assert offenders == [], (
+        "found a min_area_ratio default that is not a named reference to "
+        f"the shared constant: {offenders}"
+    )
 
 
 def _sub_floor_seam_polygon():
