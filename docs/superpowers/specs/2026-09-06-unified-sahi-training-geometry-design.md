@@ -1159,11 +1159,45 @@ builders read it, and the SAM3 module constant becomes that field's default. Thi
 behaviour today and prevents the two from silently drifting apart again. (D3 — drop vs
 downgrade — stays open and separate.)
 
+> **RESOLVED (fix/d18-unified-fragment-floor).** No standalone `TilingContract` dataclass
+> exists in the tree, so the "one per-build floor" lives where the code's existing pattern
+> already puts shared tiling defaults: a new `DEFAULT_MIN_AREA_RATIO = 0.25` constant in
+> `utils/slice_geometry.py` — the module both builders already import for tile planning
+> (`plan_tiles`, `resolve_scales`, etc.), Qt-free and dependency-light. Each builder keeps
+> its own per-build dataclass field (`sliced_dataset.SliceBuildParams.min_area_ratio`,
+> `training/contracts.py Sam3LoraParams.min_area_ratio`, mirroring how `object_tile_fraction`,
+> `tile_overlap`, etc. are already duplicated per-role rather than merged into one struct),
+> but both fields now default from the one shared constant instead of each hard-coding
+> `0.25` independently. `dataset_build.py`'s `MIN_RETAINED_AREA_FRAC` module constant
+> becomes `DEFAULT_MIN_AREA_RATIO` (same value) and the builder's tiling functions
+> (`_tile_frame`, `_scaled_frame_jobs`) now read `params.min_area_ratio` instead of the
+> module global, so a per-project override actually reaches the measurement. The drop-vs-
+> downgrade policy split (D3) is untouched: YOLO's `_tile_one_image` still drops a sub-floor
+> instance; SAM3's `_tile_frame` still keeps it and flags `is_crowd`. Guarded by
+> `tests/test_d18_fragment_floor_unification.py` (characterization, not fail-first — D18 is
+> explicitly behaviour-neutral): one test pins both dataclasses' field defaults to the same
+> upstream constant, one proves the policy divergence survives. Existing
+> `tests/test_sam3_dataset_build.py` and `tests/test_sliced_dataset.py` pass unmodified.
+
 **D19 — scale group as data or as a filename?** `scale_group_for_path` parses
 `_t{W}x{H}_{n}` / `_full`. Reusing it for SAM3 makes a filename convention a cross-trainer
 contract with a silent failure mode (R8). Recommend carrying `scale_group` explicitly in the
 manifest / COCO image record, with stem-parsing kept only as the legacy fallback. Cheap now,
 expensive after a second consumer exists.
+
+> **RESOLVED — already satisfied by the multi-scale SAM3 port, merged `50cb5b94`.**
+> Verified directly in this tree: `dataset_build.py` writes `record["scale_group"] =
+> scale_group` onto the COCO image record for every multi-scale emission, and
+> `dataloader.py`'s `_load_dataset` reads it straight back as data —
+> `scale_group=str(image_meta.get("scale_group", "") or ""),` — with no filename parsing on
+> that path. `scale_group_for_path` (in `training/scale_balance.py`, re-exported by
+> `training/ultralytics_scale_balance.py`) is imported only by the Ultralytics/YOLO
+> scale-balance path and by tests (`test_ultralytics_scale_balance.py`,
+> `test_scale_balance_shared.py`, `test_sam3_multiscale_build.py` — the last uses it only to
+> cross-check the emitted filename token against the `scale_group` DATA field, not as SAM3's
+> source of truth). That is exactly the "legacy fallback" surface the recommendation
+> anticipated: a real residual, confined to the YOLO/Ultralytics side, that a stem-parse
+> failure there cannot corrupt because SAM3 never round-trips through it.
 
 ---
 

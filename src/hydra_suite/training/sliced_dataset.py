@@ -27,6 +27,7 @@ from hydra_suite.core.inference.geometry_drift import (
 )
 from hydra_suite.core.inference.slice_meta import read_slice_meta, training_geometry
 from hydra_suite.utils.slice_geometry import (
+    DEFAULT_MIN_AREA_RATIO,
     clip_polygon_to_tile,
     plan_tiles,
     polygon_area,
@@ -110,7 +111,12 @@ class SliceBuildParams:
     slice_width: int = 0
     slice_height: int = 0
     overlap: float = 0.2
-    min_area_ratio: float = 0.25
+    # D18: this is the ONE fragment floor both the YOLO and SAM3 builders
+    # apply (see `utils.slice_geometry.DEFAULT_MIN_AREA_RATIO`); each keeps a
+    # private per-build field (a different dataclass, a different training
+    # role), but both default to the same module constant so they cannot
+    # silently drift out of step.
+    min_area_ratio: float = DEFAULT_MIN_AREA_RATIO
     negative_tile_fraction: float = 0.15
     target_sizes: list[float] = field(default_factory=lambda: [32.0, 64.0, 96.0, 128.0])
     full_frame_mix: bool = True

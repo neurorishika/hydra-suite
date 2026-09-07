@@ -6,6 +6,8 @@ from dataclasses import asdict, dataclass, field
 from enum import Enum
 from typing import Any
 
+from hydra_suite.utils.slice_geometry import DEFAULT_MIN_AREA_RATIO
+
 
 class TrainingRole(str, Enum):
     """Canonical training roles supported by MAT."""
@@ -283,6 +285,13 @@ class Sam3LoraParams:
     slice_height: int = 0  # custom mode only
     tile_overlap: float = 0.25
     keep_empty_tiles: bool = True
+    # D18: the fragment floor, now a per-build parameter here instead of the
+    # module constant `dataset_build.MIN_RETAINED_AREA_FRAC` (which becomes
+    # this field's default). Same value and measurement as the YOLO
+    # builder's `SliceBuildParams.min_area_ratio`; the POLICY below the floor
+    # differs and stays that way (SAM3 downgrades to `is_crowd`, YOLO drops
+    # the instance -- D3, deliberately not unified here).
+    min_area_ratio: float = DEFAULT_MIN_AREA_RATIO
     # Provenance does not survive a review (see the design's ordering
     # dependency), so the user must affirm the labels are good before SAM3
     # learns them -- including its own accepted output. Preflight refuses

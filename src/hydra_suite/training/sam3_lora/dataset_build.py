@@ -32,6 +32,7 @@ from hydra_suite.core.inference.geometry_drift import (
 )
 from hydra_suite.core.inference.semantic.checkpoints import sidecar_for
 from hydra_suite.utils.slice_geometry import (
+    DEFAULT_MIN_AREA_RATIO,
     clip_polygon_to_tile,
     plan_tiles,
     polygon_area,
@@ -144,7 +145,17 @@ CURATED_NEGATIVES = ("background", "shadow", "debris")
 # cost a tile its precision pressure. The build manifest reports how many
 # tiles were actually downgraded so the size of that cost is visible before
 # anyone trains.
-MIN_RETAINED_AREA_FRAC = 0.25
+#
+# D18: this used to be the sole source of truth (a module constant with no
+# per-project override); it is now just this field's DEFAULT. The live value
+# for any given build is ``Sam3LoraParams.min_area_ratio`` -- both builders
+# read a per-build field, and this module constant and the YOLO builder's
+# ``SliceBuildParams.min_area_ratio`` share one upstream default,
+# ``utils.slice_geometry.DEFAULT_MIN_AREA_RATIO``, so they cannot silently
+# drift apart. Kept as a module-level name (rather than deleted) because it
+# is still a meaningful "the shipped default" constant referenced by tests,
+# docstrings, and the manifest's historical field name.
+MIN_RETAINED_AREA_FRAC = DEFAULT_MIN_AREA_RATIO
 
 # SAM3's native training resolution (see the design's "1008 px OOMs at batch
 # 2" note); used only as the `imgsz` fallback for auto_model / auto_object
@@ -298,6 +309,7 @@ def _tile_frame(
     tile_h: int,
     overlap: float,
     keep_empty_tiles: bool,
+    min_area_ratio: float = MIN_RETAINED_AREA_FRAC,
 ) -> Iterator[
     tuple[tuple[int, int, int, int], np.ndarray, list[tuple[np.ndarray, bool]]]
 ]:
@@ -305,6 +317,9 @@ def _tile_frame(
 
     Returns a list of (tile_rect, tile_image, [(tile_local_poly, is_crowd)]).
     Tiles with zero instances are omitted unless ``keep_empty_tiles``.
+    ``min_area_ratio`` is the D18 fragment floor (per-build, see
+    ``Sam3LoraParams.min_area_ratio``); it defaults to the module constant
+    for callers that predate threading it through explicitly.
     """
     frame_h, frame_w = img.shape[:2]
     plan = plan_tiles((frame_h, frame_w), tile_w, tile_h, overlap, overlap)
@@ -326,7 +341,7 @@ def _tile_frame(
             local[:, 0] -= xi0
             local[:, 1] -= yi0
             retained_frac = polygon_area(clipped) / full_area
-            is_crowd = retained_frac < MIN_RETAINED_AREA_FRAC
+            is_crowd = retained_frac < min_area_ratio
             instances.append((local, is_crowd))
         if instances or keep_empty_tiles:
             yield (xi0, yi0, xi1, yi1), crop, instances
@@ -372,6 +387,7 @@ def _scaled_frame_jobs(
     overlap: float,
     keep_empty_tiles: bool,
     full_frame_mix: bool,
+    min_area_ratio: float = MIN_RETAINED_AREA_FRAC,
 ) -> Iterator[tuple[str, str, tuple[int, int] | None, np.ndarray, list]]:
     """Yield ``(file_name, scale_group, tile_px, crop, instances)`` per emission.
 
@@ -392,7 +408,15 @@ def _scaled_frame_jobs(
         # is re-raised with the scale named while the tiles stay STREAMED
         # (materializing a scale's tiles would undo this builder's
         # source-independent heap discipline).
-        tiles = _tile_frame(img, labels_px, tile_w, tile_h, overlap, keep_empty_tiles)
+        tiles = _tile_frame(
+            img,
+            labels_px,
+            tile_w,
+            tile_h,
+            overlap,
+            keep_empty_tiles,
+            min_area_ratio=min_area_ratio,
+        )
         tile_idx = 0
         while True:
             try:
@@ -730,6 +754,7 @@ def build_sam3_coco_dataset(
                             overlap=params.tile_overlap,
                             keep_empty_tiles=params.keep_empty_tiles,
                             full_frame_mix=params.full_frame_mix,
+                            min_area_ratio=params.min_area_ratio,
                         )
                     else:
                         jobs = (
@@ -742,6 +767,7 @@ def build_sam3_coco_dataset(
                                     tile_h,
                                     params.tile_overlap,
                                     params.keep_empty_tiles,
+                                    min_area_ratio=params.min_area_ratio,
                                 )
                             )
                         )
@@ -915,7 +941,7 @@ def build_sam3_coco_dataset(
                     "prompt": params.prompt,
                     "negative_prompts": negatives,
                     "selected_class": selected_class,
-                    "min_retained_area_frac": MIN_RETAINED_AREA_FRAC,
+                    "min_retained_area_frac": params.min_area_ratio,
                     # Makes the M2 cost of the fragment policy auditable before
                     # any GPU time is spent: how many tiles gave up their
                     # no-object BCE and false-positive penalty, and how many
@@ -974,7 +1000,7 @@ def build_sam3_coco_dataset(
                 train_counts.fragment_only_tiles + valid_counts.fragment_only_tiles
             ),
             "non_square_tiles": int(train_non_square + valid_non_square),
-            "min_retained_area_frac": MIN_RETAINED_AREA_FRAC,
+            "min_retained_area_frac": params.min_area_ratio,
             **(
                 {
                     "tile_px_set": [[int(w), int(h)] for w, h in scale_set],
