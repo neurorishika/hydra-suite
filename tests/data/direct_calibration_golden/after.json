@@ -680,7 +680,7 @@
         "frames": 5,
         "matched": 80,
         "mean_iou": 0.7418862922365541,
-        "mean_quality": 0.834771562840346,
+        "mean_quality": 0.8347715628403456,
         "missed": 0,
         "precision": 1.0,
         "recall": 1.0
@@ -865,8 +865,8 @@
       "task": "segment"
     }
   ],
-  "generated_at_commit": "1efaf026cfa818eea4d07c5f781195278059373c",
-  "hydra_suite_package_root": "/Users/neurorishika/Projects/Rockefeller/Kronauer/multi-animal-tracker/.worktrees/direct-scoring/src/hydra_suite",
+  "generated_at_commit": "fd9d10f0850f0357f932f83ac4c70bd4fed2ab20",
+  "hydra_suite_package_root": "/Users/neurorishika/Projects/Rockefeller/Kronauer/multi-animal-tracker/.worktrees/d8-agg/src/hydra_suite",
   "recommend_balanced_demo": {
     "candidate_labels": [
       "synthetic_best_slow",
