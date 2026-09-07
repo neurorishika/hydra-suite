@@ -1245,7 +1245,6 @@ class TrackingEngineCore:
             precompute_enabled=individual_data_precompute_enabled,
             pass_name="backward" if self.backward_mode else "forward",
         )
-        profiler.phase_end("initialization")
 
         # Initialize detection.
         # For YOLO OBB: InferenceRunner owns detection, caching, and all per-frame
@@ -1656,6 +1655,18 @@ class TrackingEngineCore:
                     logger.info(
                         "Preview mode: bg-sub runner has no cache (cache_dir=None)."
                     )
+
+        # Every InferenceRunner construction above loads models (and can spawn a
+        # SLEAP service or load a TensorRT engine), and the autotune preflight
+        # above that runs a whole bounded calibration.  Both are setup, not
+        # steady-state work, so the "initialization" phase must close HERE --
+        # after them and before the first measured phase.  `steady = wall -
+        # initialization - cleanup` is consumed by the inference autotuner both
+        # in the calibration child (sidecar_child._profile_times) and for
+        # production throughput regression detection (see the store update at
+        # the end of this method); ending the phase earlier billed model loading
+        # and calibration to steady time and made every such number dishonest.
+        profiler.phase_end("initialization")
 
         # === RUN BATCHED INFERENCE PHASE (if applicable) ===
         # For YOLO OBB: InferenceRunner.run_batch_pass() when caches are not yet valid.
