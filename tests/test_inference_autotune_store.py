@@ -10,6 +10,8 @@ around the `ProfileState` enumeration for the amended state description.
 
 from __future__ import annotations
 
+import json
+
 from hydra_suite.core.inference.autotune.coordinator import (
     AutotuneCoordinator,
     AutotuneRequest,
@@ -23,7 +25,9 @@ from hydra_suite.core.inference.autotune.models import (
 from hydra_suite.core.inference.autotune.search import TrialObservation
 from hydra_suite.core.inference.autotune.store import InferenceTuningProfileStore
 
-from .autotune_helpers import _key, _planner, _settings
+from .autotune_helpers import _key, _planner
+from .autotune_helpers import _profile as _validated_profile
+from .autotune_helpers import _settings
 
 
 class _NeverCompletesExecutor:
@@ -252,3 +256,22 @@ def test_save_incomplete_never_overwrites_a_validated_record(tmp_path):
     assert record.state is ProfileState.VALIDATED
     assert record.selected == validated.selected
     assert result.overlay.status in {"fallback", "cancelled"}
+
+
+def test_profile_written_under_a_previous_schema_version_is_a_miss(tmp_path):
+    """Carried from Task 5: a profile admitted by a superseded correctness
+    gate (e.g. the pre-remediation ID-blind, mean-angle equivalence check)
+    must be treated as absent evidence, never silently migrated back to
+    life -- ``load`` and ``observe_production_throughput`` both gate on the
+    current ``TUNING_SCHEMA_VERSION``.
+    """
+    store = InferenceTuningProfileStore(tmp_path)
+    profile = _validated_profile()
+    store.save(profile)
+    path = store._record_path(profile.key)
+    raw = json.loads(path.read_text())
+    raw["schema_version"] = raw["schema_version"] - 1
+    path.write_text(json.dumps(raw))
+
+    assert store.load(profile.key) is None
+    assert store.observe_production_throughput(profile.profile_id, 100.0) is None

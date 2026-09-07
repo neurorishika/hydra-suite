@@ -383,9 +383,15 @@ def test_down_admission_excludes_stage_only_evidence_but_admits_full_evidence(
 
 
 def test_manual_field_precedence_over_cached_profile(tmp_path):
+    # S3: the coordinator no longer splices a manual field's baseline value
+    # into a cached ``selected`` at reuse time -- the profile key now folds
+    # in the baseline plus which fields were manually pinned, so a cache hit
+    # can only happen against a profile whose search already held
+    # ``pose_batch_size`` fixed at the same value (1). Splicing a different
+    # cached value in here would build a joint vector nobody measured.
     key = _key()
     baseline = _settings(det=1, pose=1)
-    selected = _settings(det=4, pose=4)
+    selected = _settings(det=4, pose=1)
     evidence = CandidateEvidence(
         selected,
         (120.0,) * 5,

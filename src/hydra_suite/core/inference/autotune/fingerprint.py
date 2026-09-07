@@ -17,7 +17,7 @@ from typing import Any, Iterable, Mapping
 from hydra_suite import __version__ as hydra_version
 from hydra_suite.runtime.resource_budget import ESTIMATOR_VERSION
 
-TUNING_SCHEMA_VERSION = 1
+TUNING_SCHEMA_VERSION = 2
 SEARCH_POLICY_VERSION = "inference-coordinate-v1"
 
 
@@ -163,6 +163,15 @@ class TuningProfileKey:
     slice: SliceFingerprint
     pipeline: PipelineFingerprint
     workload: WorkloadFingerprint
+    # S3: identifies the starting point (and, folded into the same digest,
+    # which fields were manually pinned) of the search that produced this
+    # profile. Two projects with different baselines -- or one that pins a
+    # field the other leaves free -- searched different spaces; without this
+    # a cache hit can lower (or raise) a setting nobody ever measured for the
+    # requesting project. Defaults to "" only for structural compatibility
+    # with call sites that build a key without a baseline in scope (e.g. unit
+    # fixtures); production keys always pass an explicit digest.
+    baseline_digest: str = ""
 
     def __post_init__(self) -> None:
         roles = [model.role for model in self.models]
@@ -207,6 +216,7 @@ class TuningProfileKey:
                     ),
                 }
             ),
+            baseline_digest=str(value.get("baseline_digest", "")),
         )
 
     @property
@@ -215,6 +225,35 @@ class TuningProfileKey:
             self.to_dict(), sort_keys=True, separators=(",", ":"), allow_nan=False
         ).encode("utf-8")
         return hashlib.sha256(encoded).hexdigest()
+
+
+def compute_baseline_digest(
+    baseline: Any, manual_field_names: Iterable[str] = ()
+) -> str:
+    """Digest a starting point plus which fields the search held fixed.
+
+    ``baseline`` is duck-typed as an ``InferenceTuningSettings`` (or
+    compatible) -- it must expose ``field_names()`` and ``value_for(name)``.
+    Not importing the concrete type here avoids a fingerprint -> models
+    import edge that the rest of this module doesn't otherwise need.
+
+    Two profiles are only interchangeable if they were tuned from the same
+    starting settings *and* searched the same coordinate space: a project
+    that pins ``pose_batch_size`` never explored it, so its winner is not
+    evidence for a project that left it free (S3).
+    """
+
+    pairs = sorted(
+        (str(name), baseline.value_for(name)) for name in baseline.field_names()
+    )
+    manual = sorted({str(name) for name in manual_field_names})
+    encoded = json.dumps(
+        {"baseline": pairs, "manual_fields": manual},
+        sort_keys=True,
+        separators=(",", ":"),
+        allow_nan=False,
+    ).encode("utf-8")
+    return hashlib.sha256(encoded).hexdigest()
 
 
 def count_bucket(value: int | float) -> int:

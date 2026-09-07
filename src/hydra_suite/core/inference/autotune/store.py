@@ -207,6 +207,18 @@ class InferenceTuningProfileStore:
             if len(encoded) > MAX_PROFILE_BYTES:
                 return None
             raw = json.loads(encoded)
+            if (
+                not isinstance(raw, dict)
+                or raw.get("schema_version") != TUNING_SCHEMA_VERSION
+            ):
+                # A record from a superseded schema (e.g. the pre-remediation
+                # ID-blind, mean-angle correctness gate) must be treated as
+                # absent evidence here too, never migrated in place: its
+                # winner was admitted under rules this store no longer
+                # trusts. ``load()`` already gates on this; this second read
+                # path bypassed it before and could otherwise resurrect a
+                # stale winner via production-throughput evidence alone.
+                return None
             profile = _profile_from_dict(raw["profile"])
             if profile.profile_id != profile_id:
                 return None
@@ -310,9 +322,14 @@ def _candidate_from_dict(value: Mapping[str, Any]) -> CandidateEvidence:
     if raw.get("equivalence") is not None:
         verdict = dict(raw["equivalence"])
         verdict["details"] = tuple(verdict.get("details", ()))
-        if "angle_mean" in verdict:  # legacy profiles predate the per-row max gate
-            verdict.setdefault("angle_max", verdict.pop("angle_mean"))
-            verdict.pop("angle_mean", None)
+        # No legacy-field remap here on purpose: a profile serialized under
+        # the pre-remediation ``angle_mean`` (mean, not per-row max) gate
+        # predates the current TUNING_SCHEMA_VERSION and is already rejected
+        # by the schema-version checks in ``load()`` and
+        # ``observe_production_throughput()`` before this function ever
+        # runs. Migrating the field in place here would silently resurrect a
+        # winner admitted under a broken correctness gate instead of forcing
+        # a fresh, correctly-gated calibration.
         raw["equivalence"] = EquivalenceVerdict(**verdict)
     for name in (
         "throughput_samples",

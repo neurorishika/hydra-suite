@@ -338,11 +338,14 @@ class AutotuneCoordinator:
         *,
         status: str,
     ) -> ResolveResult:
+        # S3: no manual-field splice here. The profile key now folds in the
+        # requesting baseline (fingerprint.compute_baseline_digest) and the
+        # names of any manually-pinned fields, so a cache hit already means
+        # ``profile.selected`` matches this request's manual pins exactly --
+        # they were fixed at the same values during the search that produced
+        # this profile. Splicing today's baseline value in here would build
+        # a joint vector that was never actually measured together.
         selected = profile.selected
-        for field_name in request.manual_fields:
-            selected = selected.with_value(
-                field_name, request.baseline.value_for(field_name)
-            )
         successful = tuple(
             evidence.settings
             for evidence in profile.candidates

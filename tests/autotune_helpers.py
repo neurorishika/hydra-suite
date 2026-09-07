@@ -13,6 +13,7 @@ child e2e anchor) needs. Later tasks add more helpers here as they need them
 
 from __future__ import annotations
 
+from dataclasses import replace
 from pathlib import Path
 from typing import Any
 
@@ -51,15 +52,17 @@ from hydra_suite.runtime.resource_budget import (
 )
 
 
-def _key() -> TuningProfileKey:
+def _key(**overrides: Any) -> TuningProfileKey:
     """A representative, internally-consistent ``TuningProfileKey``.
 
     Lifted from ``tests/test_inference_autotune_search.py::_key`` -- the
     exact fingerprint values don't matter for most tests, only that the
-    tuple is well-formed and stable across calls.
+    tuple is well-formed and stable across calls. ``overrides`` are applied
+    via ``dataclasses.replace`` (e.g. ``_key(baseline_digest="...")`` or
+    ``_key(workload=WorkloadFingerprint(...))``).
     """
 
-    return TuningProfileKey(
+    key = TuningProfileKey(
         SchemaFingerprint(),
         SystemFingerprint("host", "linux", "cpu", 8, 32 * 1024**3),
         AcceleratorFingerprint("gpu", "gpu", "8.9", 1_000),
@@ -73,6 +76,7 @@ def _key() -> TuningProfileKey:
         PipelineFingerprint(("detector", "pose"), "forward", "batch", ()),
         WorkloadFingerprint(8, 8, 8, 8, 8, ("10x10",)),
     )
+    return replace(key, **overrides) if overrides else key
 
 
 def _settings(
@@ -126,6 +130,40 @@ def _planner(
             ),
             cached_fields=cached_fields,
         )
+    )
+
+
+def _profile(key: TuningProfileKey | None = None) -> InferenceTuningProfile:
+    """A representative VALIDATED ``InferenceTuningProfile`` for ``key``.
+
+    ``selected`` differs from ``baseline`` in ``detection_batch_size`` so
+    tests can tell a reused/tuned vector apart from the baseline fallback.
+    """
+
+    key = key or _key()
+    baseline = _settings(det=1)
+    selected = _settings(det=4)
+    evidence = CandidateEvidence(
+        selected,
+        (100.0,) * 5,
+        stage_seconds_samples=(0.5,) * 5,
+        warmup_calls=3,
+        warmup_frames=8,
+        accelerator_peak_bytes=1024,
+        equivalence=EquivalenceVerdict(True),
+    )
+    return InferenceTuningProfile(
+        profile_id=key.digest[:24],
+        key=key,
+        baseline=baseline,
+        requested=baseline,
+        admitted=selected,
+        selected=selected,
+        candidates=(evidence,),
+        state=ProfileState.VALIDATED,
+        selection_reason="validated_throughput_gain",
+        created_at_unix_ns=1,
+        last_validation_unix_ns=1,
     )
 
 

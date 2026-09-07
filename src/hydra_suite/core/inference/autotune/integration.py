@@ -41,6 +41,7 @@ from .fingerprint import (
     SliceFingerprint,
     TuningProfileKey,
     WorkloadFingerprint,
+    compute_baseline_digest,
     default_software_fingerprint,
     default_system_fingerprint,
     model_fingerprint,
@@ -440,6 +441,12 @@ def build_tracking_autotune_request(
     params = context.params
     policy = config.inference_autotune
     baseline = InferenceTuningSettings.from_config(config)
+    # S3: computed here, before the key, so the key can fold in both the
+    # baseline settings and which fields this project pins manually -- a
+    # project that pins a field searched a different space than one that
+    # left it free.
+    manual_fields = frozenset(policy.manual_fields) & frozenset(baseline.field_names())
+    baseline_digest = compute_baseline_digest(baseline, manual_fields)
     models = _model_fingerprints(config, params, backend=backend)
     slice_key = _slice_fingerprint(
         config, params, context.frame_width, context.frame_height
@@ -526,6 +533,7 @@ def build_tracking_autotune_request(
             cache_mask,
         ),
         workload=workload,
+        baseline_digest=baseline_digest,
     )
 
     frame_bytes = context.frame_width * context.frame_height * context.channels
@@ -621,7 +629,6 @@ def build_tracking_autotune_request(
         # entry. Leave `eligible` alone: record mode must still calibrate.
         allow_cached_reuse = False
 
-    manual_fields = frozenset(policy.manual_fields) & frozenset(baseline.field_names())
     shares = params.get("INFERENCE_AUTOTUNE_STAGE_SHARES", {})
     stage_shares = (
         tuple((str(name), float(value)) for name, value in shares.items())
