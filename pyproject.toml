@@ -217,6 +217,7 @@ markers = [
     "slow: Tests that take a long time to run",
     "integration: Integration tests",
     "unit: Unit tests",
+    "sidecar_e2e: end-to-end sidecar child subprocess runs (slow, needs fixtures)",
 ]
 filterwarnings = [
     "error",
