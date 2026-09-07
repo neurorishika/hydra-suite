@@ -42,6 +42,12 @@ class FrameCalibrationScore:
     duplicate: int
     mean_iou: float
     mean_quality: float = 0.0
+    # The RAW quality SAMPLE behind ``mean_quality`` -- one entry per matched
+    # pair -- kept so ``score_frames`` can pool across frames the way the
+    # semantic path does instead of averaging per-frame means. A zero-match
+    # frame carries an EMPTY tuple and therefore contributes nothing; its
+    # ``mean_quality`` of 0.0 is a display default, never a sample.
+    quality_sample: tuple[float, ...] = ()
 
 
 @dataclass(frozen=True)
@@ -233,6 +239,7 @@ def match_frame(
         # "how tightly do the accepted detections sit on the labels?".
         mean_iou=float(np.mean(matched_ious)) if matched_ious else 0.0,
         mean_quality=float(np.mean(matched_qualities)) if matched_qualities else 0.0,
+        quality_sample=tuple(matched_qualities),
     )
 
 
@@ -263,6 +270,7 @@ def score_frames(
         )
         for predictions, labels in frames
     ]
+    quality_pool = [q for score in scores for q in score.quality_sample]
     matched = sum(score.matched for score in scores)
     missed = sum(score.missed for score in scores)
     extra = sum(score.extra for score in scores)
@@ -284,9 +292,25 @@ def score_frames(
         mean_iou=(
             float(np.mean([score.mean_iou for score in scores])) if scores else 0.0
         ),
-        mean_quality=(
-            float(np.mean([score.mean_quality for score in scores])) if scores else 0.0
-        ),
+        # POOLED PER MATCHED PAIR across every frame, exactly as the semantic
+        # path does (semantic/calibration.py accumulates one ``qualities``
+        # list over the whole evidence set). This used to average per-frame
+        # means, which is a DIFFERENT statistic to the one MIN_MEAN_QUALITY
+        # was calibrated on: it weighted a 1-match frame as heavily as a
+        # 16-match frame, and -- because ``match_frame`` reports 0.0 for a
+        # frame that matched nothing -- injected a hard zero for every
+        # zero-match frame. Near the floor that flipped good geometry into a
+        # "Mistargeted" refusal on arithmetic. Absence of evidence is not
+        # evidence of bad geometry, so a zero-match frame now contributes NO
+        # sample; it still costs recall through ``missed``, which is where
+        # that failure honestly belongs. An entirely empty sample reads 0.0
+        # (measured, nothing matched) -- NOT ``None``, which is reserved for
+        # "this profile predates the metric".
+        #
+        # ``mean_iou`` above is deliberately left as a mean of per-frame
+        # means: it gates nothing, and the semantic path reports a MEDIAN
+        # IoU, so unifying it would be a different change than this one.
+        mean_quality=(float(np.mean(quality_pool)) if quality_pool else 0.0),
     )
 
 

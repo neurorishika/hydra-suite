@@ -253,6 +253,23 @@ def test_staged_payloads_isolate_each_ruling():
         stage_b["recommend_balanced_demo"]["rule_id"]
         != stage_c["recommend_balanced_demo"]["rule_id"]
     )
-    # The persistence-only follow-up (c -> after) changes no behaviour.
-    assert aggregates(stage_c) == aggregates(after)
-    assert stage_c["recommend_balanced_demo"] == after["recommend_balanced_demo"]
+    # Stage (d): pooling mean_quality per matched pair. On THIS corpus every
+    # count, every mean_iou and the whole recommender demo are unchanged --
+    # the frozen cases are single-frame or have identical per-frame match
+    # counts, so the two aggregations coincide up to floating-point
+    # reassociation. Asserting "equal except a tolerance on mean_quality"
+    # is the precise claim ATTRIBUTION.md stage (d) makes; the behavioural
+    # evidence for the change lives in tests/test_direct_calibration.py.
+    stage_d = json.loads((DATA_DIR / "stage_d_pooled_quality.json").read_text())
+    for before_case, after_case in zip(aggregates(stage_c), aggregates(stage_d)):
+        assert {k: v for k, v in before_case.items() if k != "mean_quality"} == {
+            k: v for k, v in after_case.items() if k != "mean_quality"
+        }
+        assert before_case["mean_quality"] == pytest.approx(
+            after_case["mean_quality"], abs=1e-12
+        )
+    assert stage_c["recommend_balanced_demo"] == stage_d["recommend_balanced_demo"]
+
+    # (d) and ``after`` are the SAME tree, so they must agree exactly.
+    assert aggregates(stage_d) == aggregates(after)
+    assert stage_d["recommend_balanced_demo"] == after["recommend_balanced_demo"]

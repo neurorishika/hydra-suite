@@ -19,7 +19,8 @@ opens `before.json` should find the explanation in the same directory.
 | `stage_a_d7_matcher.json` | Corpus scored at `5700e7ec` — D7 matcher only, no area band. |
 | `stage_b_d7_d9.json` | Corpus scored at `8c7d2230` — D7 + D9 band. |
 | `stage_c_d7_d9_d8.json` | Corpus scored at `546b9989` — D7 + D9 + D8 recommender. |
-| `after.json` | Corpus scored at HEAD (`1efaf026`). Reproduced by a standing test. |
+| `stage_d_pooled_quality.json` | Corpus scored at `b796931d` — quality pooled per matched pair (this stage). |
+| `after.json` | Corpus scored at HEAD. Reproduced by a standing test. |
 
 Each payload carries `generated_at_commit` and `hydra_suite_package_root`. All four
 shas are distinct and match the intended stage — that is the check that makes this
@@ -34,7 +35,8 @@ shadowed by an editable install; `--expect-src` refuses to run when it is).
 | (a) | `5700e7ec` | **D7** — shared containment matcher (representative point + containment, quality ranking), hard IoU gate removed |
 | (b) | `8c7d2230` | **D9** — one shared `AreaBand` fitted over the label set, pooled per evidence set |
 | (c) | `546b9989` | **D8** — recall-first recommendation with quality floors; F1 retired as an optimisation target |
-| after | `1efaf026` | persistence-only follow-up (`mean_quality` survives a profile reload) |
+| (d) | `b796931d` | **D8 aggregation fix** — `mean_quality` pooled per matched pair; a zero-match frame contributes no sample |
+| after | `fd9d10f0` | same `src/` tree as (d) — the intervening commit touched only `tests/data/`, so the payload is stamped `fd9d10f0` while the code it scores is `b796931d` |
 
 Verified: `(c)` and `after` produce **byte-identical case scores and an identical
 recommender demo** — `1efaf026` changes no scoring behaviour, as its message claims.
@@ -197,6 +199,81 @@ refused and the demo would have reported a construction artifact instead of the 
 The legacy recommender ignores `mean_quality` entirely, so this does not change what
 the legacy rule would have chosen — comparability holds.
 
+### Stage (d) — the D8 quality floor now gates the quantity it was calibrated on
+
+`MIN_MEAN_QUALITY = 0.35` was documented as "taken from the semantic path", and it was
+— but until this stage it gated a **differently aggregated statistic**. The semantic
+path (`core/inference/semantic/calibration.py`) accumulates ONE `qualities` list over
+the whole evidence set, i.e. it pools **per matched pair**. `score_frames` averaged
+**per-frame means**, and `match_frame` reports `mean_quality = 0.0` for a frame that
+matched nothing, so every zero-match frame injected a hard zero.
+
+Two consequences, both arithmetic rather than geometric:
+
+- a frame with 1 match weighed as much as a frame with 16;
+- a configuration that missed one whole frame out of twenty was charged a 0.0 quality
+  sample for it *on top of* the recall it already lost. Worked example (not corpus
+  data): 20 frames x 2 labels with one all-missed frame gives recall 0.95 — clearing
+  the 0.90 floor — while `mean_quality` is dragged 0.694 -> 0.660. At a floor of 0.35
+  the same mechanism flips a good configuration into the **"Mistargeted"** refusal,
+  which is a positive claim *about detection geometry* produced by aggregation.
+
+Absence of evidence is not evidence of bad geometry, so a zero-match frame now
+contributes **no sample**. It still costs recall through `missed`, which is where that
+failure belongs. An entirely empty sample reads a measured `0.0` — never `None`, which
+is reserved for "this profile predates the metric" — so a configuration that matches
+nothing anywhere is refused at the **recall** floor, and an evidence-poor one at the
+**matched-instances** floor (`MIN_MATCHED_INSTANCES = 60`), never vacuously admitted.
+
+`MIN_RECALL`, `MIN_MATCHED_INSTANCES` and `MIN_MEAN_QUALITY` are all **unchanged**.
+`f1` is still computed and still reported, and still appears nowhere in the objective.
+
+The per-frame averaging is **pre-existing** — it predates the D7/D9/D8 branch. That
+branch's contribution was making it *load-bearing*, by putting a semantically
+calibrated floor on top of it.
+
+#### What moved on this corpus: essentially nothing, and that is the honest result
+
+| | (c)/(after, pre-fix) | (d) pooled |
+| --- | --- | --- |
+| every case's matched / missed / extra / duplicate | unchanged | unchanged |
+| every case's `mean_iou` | unchanged | unchanged |
+| `mean_quality`, 23 of 24 cases | unchanged | unchanged |
+| `bulk_easy_matches_detect` `mean_quality` | 0.834771562840346 | **0.8347715628403456** |
+| `recommend_balanced_demo` (chosen, recall, quality, F1, explanation) | unchanged | unchanged |
+
+The single moved number is a **4.4e-16 floating-point reassociation** — one ULP — from
+summing 80 samples once instead of averaging five 16-sample frame means. Nothing else
+in the payload differs.
+
+That is a property of the frozen corpus, not evidence that the change is inert. Every
+non-`bulk` case has exactly **one frame**, where the two aggregations are identically
+equal, and the three `bulk_easy_matches_*` cases have five frames with an identical
+16 matches each, where the weighted and unweighted means coincide. **The corpus cannot
+exercise this defect**: it contains no case with heterogeneous per-frame match counts
+and no case with a zero-match frame alongside a matched one, and a case cannot be added
+(`test_before_json_case_names_match_corpus_case_names` freezes the name set against the
+frozen `before.json`).
+
+The behavioural evidence therefore lives in fail-first unit tests rather than in this
+corpus:
+
+- `tests/test_direct_calibration.py::test_mean_quality_pools_per_matched_pair_not_per_frame`
+  — two frames with 2 and 1 matches; pooled 0.7165 vs the old per-frame 0.3583. FAILED
+  before the fix.
+- `tests/test_direct_calibration.py::test_a_zero_match_frame_contributes_no_quality_sample`
+  — a matched frame plus an all-missed one; the pooled mean equals the matched frame's
+  quality instead of half of it, while `missed` still records the miss. FAILED before
+  the fix.
+- `tests/test_direct_calibration.py::test_an_empty_quality_sample_cannot_pass_the_recommender`
+  — an empty sample is refused at the recall floor (not reported as "Mistargeted"), and
+  a well-targeted but evidence-poor point is refused at the matched-instances floor.
+  This one **passed before the fix too**; it is a standing guard against the empty-sample
+  hole the fix could have opened, not evidence of the fix.
+
+`after.json` was regenerated for this stage. That is a deliberate, reported act: the
+only difference is the one ULP above. **`before.json` is untouched.**
+
 ## What this gate does NOT establish
 
 Read this before quoting any number above.
@@ -217,6 +294,9 @@ Read this before quoting any number above.
    hand-chosen number of predictions; "precision 0.9259 -> 0.9519" reflects the same
    10 miss+extra flips already attributed to D7, not a separate finding.
 7. **`mean_iou` is not comparable across the boundary** — see the population note above.
+   It is also still aggregated as a mean of per-frame means after stage (d): pooling was
+   applied to `mean_quality` only, because that is the number a floor gates, and the
+   semantic path reports a *median* IoU rather than a pooled mean.
 8. **Nothing here speaks to the semantic path.** The semantic path's behaviour is
    equivalence-bound across Task 1 and is covered by
    `tests/test_semantic_calibration.py`, unmodified.

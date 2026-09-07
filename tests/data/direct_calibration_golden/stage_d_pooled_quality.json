@@ -865,7 +865,7 @@
       "task": "segment"
     }
   ],
-  "generated_at_commit": "fd9d10f0850f0357f932f83ac4c70bd4fed2ab20",
+  "generated_at_commit": "b796931d94cff170cb0b995f08c794e549d483b1",
   "hydra_suite_package_root": "/Users/neurorishika/Projects/Rockefeller/Kronauer/multi-animal-tracker/.worktrees/d8-agg/src/hydra_suite",
   "recommend_balanced_demo": {
     "candidate_labels": [
@@ -893,5 +893,5 @@
     "recommender": "recall-first-quality-floors-v1",
     "recommender_rule_id": "recall-first-quality-floors-v1"
   },
-  "stage": "after"
+  "stage": "d_pooled_quality"
 }
