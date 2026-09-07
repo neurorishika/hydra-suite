@@ -49,6 +49,7 @@ from hydra_suite.core.tracking.arenas import arena_ids_for_meas as _meas_arena_i
 from hydra_suite.core.tracking.arenas import (
     arena_layout_from_params,
     check_slot_arena_covers_all_slots,
+    free_detection_can_bootstrap_slot,
     tracking_frame_size,
 )
 from hydra_suite.core.tracking.optimization.detection_config import (
@@ -267,11 +268,17 @@ def _respawn_free_detections(
     detection_directed_mask,
     detection_directed_heading,
     _det_pose_kpts,
+    meas_arena=None,
+    slot_arena=None,
 ):
     """Assign free detections to lost track slots (Phase-3 respawn)."""
     for d_idx in free_dets:
         for track_idx in range(N):
             if track_states[track_idx] == "lost":
+                if not free_detection_can_bootstrap_slot(
+                    d_idx, track_idx, meas_arena, slot_arena
+                ):
+                    continue
                 _pose_d_f = (
                     bool(detection_directed_mask[d_idx])
                     if d_idx < len(detection_directed_mask)
@@ -2074,9 +2081,10 @@ class TrackingOptimizerCore:
         # STRUCTURALLY, so single-arena optimizer runs are unchanged.
         _arena_layout = arena_layout_from_params(params)
         check_slot_arena_covers_all_slots(_arena_layout, params["MAX_TARGETS"])
-        assigner.set_track_arena(
+        _slot_arena = (
             None if _arena_layout.is_single_arena else _arena_layout.slot_arena
         )
+        assigner.set_track_arena(_slot_arena)
         _arena_frame_size = None
         if not _arena_layout.is_single_arena:
             _arena_frame_size = _optimizer_frame_size(self.video_path, params)
@@ -2336,6 +2344,8 @@ class TrackingOptimizerCore:
                     detection_directed_mask,
                     detection_directed_heading,
                     _det_pose_kpts,
+                    meas_arena=_meas_arena,
+                    slot_arena=_slot_arena,
                 )
             elif detection_initialized:
                 kf_manager.predict()

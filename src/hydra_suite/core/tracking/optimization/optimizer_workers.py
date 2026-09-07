@@ -48,6 +48,7 @@ from hydra_suite.core.tracking.arenas import arena_ids_for_meas as _meas_arena_i
 from hydra_suite.core.tracking.arenas import (
     arena_layout_from_params,
     check_slot_arena_covers_all_slots,
+    free_detection_can_bootstrap_slot,
     tracking_frame_size,
 )
 from hydra_suite.core.tracking.optimization.detection_config import (
@@ -196,6 +197,8 @@ def _preview_init_free_detections(
     tracking_continuity,
     trajectory_ids,
     next_trajectory_id,
+    meas_arena=None,
+    slot_arena=None,
 ):
     """Assign free detections to lost track slots (preview worker)."""
     newly_initialized: dict[int, tuple[float, float, float]] = {}
@@ -206,6 +209,10 @@ def _preview_init_free_detections(
                 r not in existing_matched | set(newly_initialized)
                 and track_states[r] == "lost"
             ):
+                if not free_detection_can_bootstrap_slot(
+                    d_idx, r, meas_arena, slot_arena
+                ):
+                    continue
                 m = np.asarray(meas[d_idx], dtype=np.float32)
                 _pose_d = (
                     bool(detection_directed_mask[d_idx])
@@ -357,9 +364,10 @@ def run_tracking_preview(
         # single-arena keeps the assigner's original ungated path.
         _arena_layout = arena_layout_from_params(params)
         check_slot_arena_covers_all_slots(_arena_layout, params["MAX_TARGETS"])
-        assigner.set_track_arena(
+        _slot_arena = (
             None if _arena_layout.is_single_arena else _arena_layout.slot_arena
         )
+        assigner.set_track_arena(_slot_arena)
         _arena_frame_size = None
         if not _arena_layout.is_single_arena:
             _arena_frame_size = tracking_frame_size(
@@ -572,6 +580,8 @@ def run_tracking_preview(
                     tracking_continuity,
                     trajectory_ids,
                     next_trajectory_id,
+                    meas_arena=_meas_arena,
+                    slot_arena=_slot_arena,
                 )
                 current_observations.update(newly_initialized)
             else:

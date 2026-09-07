@@ -44,6 +44,7 @@ from hydra_suite.core.individual.pose.features import (
 from hydra_suite.core.tracking.arenas import (
     arena_layout_from_params,
     check_slot_arena_covers_all_slots,
+    free_detection_can_bootstrap_slot,
 )
 from hydra_suite.core.tracking.confidence.density import get_density_region_flags
 from hydra_suite.core.tracking.features.live_features import (
@@ -3929,30 +3930,24 @@ class TrackingEngineCore:
                         # arena and therefore bootstraps nothing, mirroring the
                         # assigner's treatment of it. Single-arena runs skip the
                         # gate entirely, so their behaviour is byte-identical.
-                        _det_arena = None
-                        if not self.arena_layout.is_single_arena:
-                            if d_idx >= len(meas_arena):
-                                # `raise`, not a silent fall-through to None: a
-                                # short `meas_arena` would disable this gate and
-                                # silently restore the cross-arena bootstrap it
-                                # exists to prevent. Same contract as the
-                                # slot_arena length check above.
-                                raise RuntimeError(
-                                    "meas_arena is shorter than the detection list "
-                                    f"({len(meas_arena)} <= d_idx={d_idx}); the "
-                                    "free-detection bootstrap cannot be arena-gated "
-                                    "and would assign a detection to a foreign "
-                                    "arena's slot."
-                                )
-                            _det_arena = int(meas_arena[d_idx])
                         for track_idx in range(N):
                             if (
                                 track_states[track_idx] == "lost"
                                 and track_idx not in _committed_slots_set
                             ):
-                                if (
-                                    _det_arena is not None
-                                    and int(self._slot_arena[track_idx]) != _det_arena
+                                if not free_detection_can_bootstrap_slot(
+                                    d_idx,
+                                    track_idx,
+                                    (
+                                        None
+                                        if self.arena_layout.is_single_arena
+                                        else meas_arena
+                                    ),
+                                    (
+                                        None
+                                        if self.arena_layout.is_single_arena
+                                        else self._slot_arena
+                                    ),
                                 ):
                                     continue
                                 # Diagnostic: log slot reuse distance
