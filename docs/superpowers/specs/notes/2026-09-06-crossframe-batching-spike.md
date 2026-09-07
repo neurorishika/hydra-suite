@@ -47,15 +47,35 @@ Positions, angles, track IDs and identity assignments are unchanged. CUDA
 microbenchmark suggested (5e-6, not 2.2e-3) — but it is real, it is 100%
 attributable, and it breaks the byte-identity gate for zero measured speed.
 
-## Two findings worth more than Option B
+## Two follow-on questions raised by the A/B
 
-**1. `pipeline_depth` dominates anything batching can do.** Arm A alone, MPS:
-head-tail costs **89.8 s at depth 2 but 31.6 s at depth 1** — the OBB producer
-thread running concurrently on the same device costs ~58 s of consumer time
-(2.8×). Net wall favours *depth 1* on MPS (296.8 s vs 309.8 s) and depth 2 on
-CUDA (66.0 s vs 72.6 s). **`pipeline_depth=2` appears to be a net loss on
-Apple Silicon and a ~9% win on CUDA** — worth a proper per-platform default,
-and a far bigger lever than cross-frame batching.
+**1. `pipeline_depth` — measured properly, the current default is already
+right.** The first read of this ("depth 2 is a net loss on MPS") came from
+comparing depth 1 / batch 8 against depth 2 / batch 2 — the depth and the
+batch varied together. **Re-run at constant `detection_batch_size=2`, 2–3
+reps per cell:**
+
+| | depth 1 | depth 2 | d2/d1 |
+|---|---|---|---|
+| **CUDA wall** (median of 3) | 72.0 s | **63.5 s** | **0.881** |
+| CUDA reps | 71.9 / 72.0 / 72.3 | 63.5 / 63.9 / 63.2 | — |
+| **MPS wall** (median of 2) | 152.6 s | 148.8 s | 0.975 |
+| MPS reps | 150.5 / 154.8 | 152.9 / 144.7 | — |
+
+**CUDA: depth 2 is a real 12% win**, with reps tight to ±0.4 s. **MPS: no
+significant difference** — the reps overlap, so 0.975 is noise. Output is
+**byte-identical across depths on both platforms** (and depth-1 rep-to-rep is
+byte-identical, giving a clean floor).
+
+So `pipeline_depth=2` is correct on CUDA and harmless on MPS. **No change
+warranted — no per-platform default needed.**
+
+Methodological note: the *span totals* look alarming at depth 2 (MPS head-tail
+44.3 s vs 18.6 s, 2.37×) because two threads are running concurrently and each
+stage's wall-time inflates while it waits on the shared device. That is what
+overlap looks like; it is not a cost. **For concurrent pipelines, wall clock is
+the only honest metric — per-stage span totals are not additive and must not be
+compared across depths.**
 
 **2. `detection_batch_size` > 2 is unusable on 4K clips.** At depth 2 the
 frame-buffer admissibility check (`pipeline.py`, `retained_windows =
