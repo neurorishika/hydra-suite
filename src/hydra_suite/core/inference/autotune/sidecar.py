@@ -230,6 +230,9 @@ def write_sidecar_request(
         "start_frame": int(spec.start_frame),
         "end_frame": int(spec.end_frame),
         "maximum_frames": _frames_for_block(spec.maximum_frames, block_index),
+        # The child places its single contiguous window using the block index
+        # and the block count, so the five blocks stripe across the clip.
+        "measurement_blocks": MEASUREMENT_BLOCKS,
         "output_dir": "output",
     }
     encoded = json.dumps(

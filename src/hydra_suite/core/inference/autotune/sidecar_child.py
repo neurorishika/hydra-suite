@@ -75,25 +75,24 @@ def _header(identity_method: str, n_arenas: int) -> list[str]:
     return columns
 
 
-def _representative_windows(
-    start: int, end: int, maximum_frames: int
-) -> tuple[tuple[int, int], ...]:
+def _block_window(
+    start: int, end: int, frames: int, block_index: int, blocks: int
+) -> tuple[int, int]:
+    """One contiguous window per block, striped across the clip.
+
+    Splitting a block into sub-windows means paying a model load per
+    sub-window, which swamps the batch effect being measured.  Spread the
+    blocks across the clip instead: representativeness is already provided
+    by the five interleaved measurement blocks.
+    """
+
     total = end - start + 1
-    if total <= maximum_frames:
-        return ((start, end),)
-    per_window = max(8, maximum_frames // 3)
-    per_window = min(per_window, total)
-    starts = (
-        start,
-        max(start, start + (total - per_window) // 2),
-        max(start, end - per_window + 1),
-    )
-    output = []
-    for item in starts:
-        window = (item, min(end, item + per_window - 1))
-        if window not in output:
-            output.append(window)
-    return tuple(output)
+    span = min(int(frames), total)
+    if blocks <= 1 or total <= span:
+        return (start, start + span - 1)
+    stride = (total - span) // (blocks - 1)
+    offset = start + stride * (int(block_index) % int(blocks))
+    return (offset, offset + span - 1)
 
 
 def _profile_times(video_path: Path) -> tuple[float, float, dict[str, float]]:
@@ -329,7 +328,15 @@ def run(request_path: Path) -> None:
     start = int(request["start_frame"])
     end = int(request["end_frame"])
     maximum_frames = int(request["maximum_frames"])
-    windows = _representative_windows(start, end, maximum_frames)
+    windows = (
+        _block_window(
+            start,
+            end,
+            maximum_frames,
+            block_index=int(request.get("block_index", 0)),
+            blocks=int(request.get("measurement_blocks", 1)),
+        ),
+    )
     # Warm allocator/framework state with at least eight real frames and try to
     # provide three detector calls. The 128-frame cap wins for very large batch
     # values; those candidates report the smaller count and cannot be promoted.

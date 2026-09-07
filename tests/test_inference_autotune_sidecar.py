@@ -16,7 +16,7 @@ from hydra_suite.core.inference.autotune.sidecar import (
     restore_sidecar_params,
     write_sidecar_request,
 )
-from hydra_suite.core.inference.autotune.sidecar_child import _representative_windows
+from hydra_suite.core.inference.autotune.sidecar_child import _block_window
 from hydra_suite.runtime.resource_budget import AcceleratorKind, ResourceObservation
 
 
@@ -290,12 +290,30 @@ def test_request_rejects_arbitrary_python_objects(tmp_path):
         )
 
 
-def test_representative_windows_are_bounded_early_middle_late():
-    windows = _representative_windows(10, 1009, 120)
-    assert len(windows) == 3
+def test_measurement_windows_are_large_enough_to_amortize_model_load():
+    """One contiguous window per block, at least 128 frames when available.
+
+    Splitting a block into sub-windows costs one full model load per
+    sub-window, which swamps the batch effect the tuner is trying to
+    measure.  Representativeness comes from striping the five blocks
+    across the clip, not from splitting each block.
+    """
+
+    window = _block_window(0, 999, 128, block_index=0, blocks=5)
+    assert window[1] - window[0] + 1 == 128
+
+
+def test_block_windows_are_striped_across_the_clip():
+    windows = [_block_window(10, 1009, 128, block_index=i, blocks=5) for i in range(5)]
+
     assert windows[0][0] == 10
     assert windows[-1][1] == 1009
-    assert sum(end - start + 1 for start, end in windows) <= 120
+    assert all(end - start + 1 == 128 for start, end in windows)
+    assert len(set(windows)) == 5
+
+
+def test_block_window_clamps_to_a_short_range():
+    assert _block_window(4, 19, 128, block_index=3, blocks=5) == (4, 19)
 
 
 def test_oom_adaptation_is_two_retries_and_never_mislabels_reduced_result(
