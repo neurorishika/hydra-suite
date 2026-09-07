@@ -11,6 +11,7 @@ its warn-never-refuse semantics preserved verbatim.
 
 from __future__ import annotations
 
+import dataclasses
 import logging
 from pathlib import Path
 
@@ -83,7 +84,9 @@ class TestCompareGeometryValue:
     def test_verdict_is_immutable_and_carries_no_prose(self):
         verdict = compare_geometry_value("object_tile_fraction", 0.10, 0.055)
         assert isinstance(verdict, GeometryDriftVerdict)
-        with pytest.raises(Exception):
+        # Narrow: a frozen dataclass raises FrozenInstanceError specifically.
+        # `Exception` here would also pass on a typo in the attribute name.
+        with pytest.raises(dataclasses.FrozenInstanceError):
             verdict.field = "other"  # type: ignore[misc]
         # A typed verdict, not a pre-formatted string a GUI would have to parse.
         assert not any(
@@ -347,16 +350,25 @@ class TestSlicedBuilderWiring:
         (tmp_path / "baseline.pt.slice_meta.json").write_text(
             json.dumps({"object_tile_fraction": 0.10})
         )
+        # D11: naming a comparison baseline turns a divergence from a warning
+        # into a refusal -- the run exists to be compared against that
+        # artifact, and diverging geometry makes the comparison invalid.
+        # The warning is still emitted, so nothing is lost by refusing.
+        from hydra_suite.core.inference.geometry_drift import GeometryDriftRefusal
+
         with caplog.at_level(logging.WARNING):
-            build_sliced_obb_dataset(
-                merged,
-                tmp_path / "out",
-                level=GeometryLevel.OBB,
-                params=SliceBuildParams(object_tile_fraction=0.055),
-                baseline_model_path=baseline,
-            )
+            with pytest.raises(GeometryDriftRefusal) as excinfo:
+                build_sliced_obb_dataset(
+                    merged,
+                    tmp_path / "out",
+                    level=GeometryLevel.OBB,
+                    params=SliceBuildParams(object_tile_fraction=0.055),
+                    baseline_model_path=baseline,
+                )
         assert "Geometry drift" in caplog.text
         assert "0.055" in caplog.text
+        assert "0.055" in str(excinfo.value)
+        assert "comparison baseline" in str(excinfo.value)
 
     def test_the_baseline_never_changes_what_is_built(self, tmp_path):
         """Warn-never-refuse also means never-adopt: a PREFILL is report-only."""
@@ -413,9 +425,7 @@ class TestSam3BuilderWiring:
     def test_builder_accepts_a_named_comparison_baseline(self):
         import inspect
 
-        from hydra_suite.training.sam3_lora.dataset_build import (
-            build_sam3_coco_dataset,
-        )
+        from hydra_suite.training.sam3_lora.dataset_build import build_sam3_coco_dataset
 
         params = inspect.signature(build_sam3_coco_dataset).parameters
         assert "baseline_model_key" in params
@@ -433,7 +443,12 @@ class TestSam3BuilderWiring:
             "sidecar_for",
             lambda key: {"reference_body_px": 80.0, "object_tile_fraction": 0.10},
         )
-        with caplog.at_level(logging.INFO):
+        # D11: a named baseline refuses on divergence. The provenance logging
+        # and the drift WARNING are still emitted first, so every assertion
+        # below about the log survives the refusal.
+        from hydra_suite.core.inference.geometry_drift import GeometryDriftRefusal
+
+        with caplog.at_level(logging.INFO), pytest.raises(GeometryDriftRefusal):
             build_mod.build_sam3_coco_dataset(
                 _source(tmp_path / "src", n_frames=2, size=512),
                 tmp_path / "out",
@@ -503,7 +518,9 @@ class TestTilePxIsAPair:
             # baseline difference below may be reported.
             lambda key: {"train_tile_px": [256, 256]},
         )
-        with caplog.at_level(logging.WARNING):
+        from hydra_suite.core.inference.geometry_drift import GeometryDriftRefusal
+
+        with caplog.at_level(logging.WARNING), pytest.raises(GeometryDriftRefusal):
             build_mod.build_sam3_coco_dataset(
                 _source(tmp_path / "src", n_frames=2, size=512),
                 tmp_path / "out",

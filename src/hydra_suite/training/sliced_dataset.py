@@ -21,7 +21,7 @@ import numpy as np
 
 from hydra_suite.core.inference.geometry_drift import (
     GeometrySource,
-    log_drift_verdicts,
+    enforce_drift_verdicts,
     log_effective_geometry,
     sidecar_drift_verdicts,
 )
@@ -259,9 +259,14 @@ def build_sliced_obb_dataset(
         },
     )
     if baseline_model_path:
-        # Report only -- adopting a baseline value here would change what this
-        # run trains, which an observability guard must never do.
-        log_drift_verdicts(
+        # Adopting a baseline value here would change what this run trains,
+        # which an observability guard must never do.
+        #
+        # D11: warn everywhere, refuse ONLY against a named comparison
+        # baseline. `baseline_model_path` is set only when the user asked for
+        # one, so a geometry divergence here invalidates the comparison the
+        # run exists to make.
+        enforce_drift_verdicts(
             logger,
             sidecar_drift_verdicts(
                 training_geometry(read_slice_meta(baseline_model_path) or {}),
@@ -271,6 +276,7 @@ def build_sliced_obb_dataset(
                 },
                 baseline_label=str(baseline_model_path),
             ),
+            comparison_baseline=str(baseline_model_path),
         )
 
     rng = random.Random(int(seed))
