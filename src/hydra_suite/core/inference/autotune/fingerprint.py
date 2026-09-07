@@ -482,6 +482,15 @@ def default_software_fingerprint(
     precision: str,
     hydra_commit: str | None = None,
     driver: str = "unknown",
+    # NOTE (Task 9 remediation): SoftwareFingerprint is a member of
+    # TuningProfileKey (see its `software` field), so preferring
+    # _torch_cuda_version()/_torch_cudnn_version() over the pip-metadata
+    # fallback changes `cuda`/`cudnn` from "absent" to a real value for
+    # every conda-managed CUDA install. That flips the digest of every
+    # existing CUDA profile on such a box, so every validated profile
+    # invalidates and re-calibrates exactly once on upgrade to this fix.
+    # Desirable (the profile's software identity was always wrong before),
+    # but a one-time, user-visible re-calibration cost worth knowing about.
     cuda: str = "unknown",
     cudnn: str = "unknown",
 ) -> SoftwareFingerprint:

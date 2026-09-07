@@ -13,6 +13,10 @@ from hydra_suite.core.inference.autotune.candidates import (
     CandidatePlanner,
     MemoryCostModel,
 )
+from hydra_suite.core.inference.autotune.coordinator import (
+    AutotuneCoordinator,
+    AutotuneRequest,
+)
 from hydra_suite.core.inference.autotune.equivalence import (
     CalibrationOutputs,
     compare_outputs,
@@ -283,20 +287,95 @@ def test_a_no_op_overlay_does_not_disable_the_tile_batch_autotuner(status, reaso
 
 @pytest.mark.parametrize("status", ["calibrated", "cache_hit", "cache_hit_after_wait"])
 def test_an_active_override_overlay_disables_the_tile_batch_autotuner(status):
-    """An overlay that actually supersedes slice_tile_batch_size must still
-    disable the process-local SAHI tuner -- the coordinated tuner owns it."""
-    settings = _settings()
+    """An overlay whose effective settings actually differ from the
+    requested baseline (a real tuner override -- e.g. resource admission
+    succeeded and picked a different slice_tile_batch_size, mirroring
+    ``coordinator._reuse``) must still disable the process-local SAHI
+    tuner -- the coordinated tuner owns it. The gate is
+    ``effective != requested``, not ``status`` alone (round-1 review
+    IMPORTANT 1): a "calibrated"/"cache_hit" status with admission FAILURE
+    keeps ``effective == requested`` and must NOT disable it -- see
+    ``test_admission_failure_on_a_cache_hit_does_not_disable_the_tile_batch_autotuner``.
+    """
+    requested = _settings()
+    effective_settings = requested.with_value("slice_tile_batch_size", 4)
     overlay = InferenceRuntimeOverlay(
-        requested=settings,
-        admitted=settings,
-        effective=settings,
-        field_sources=tuple((f, "tuned") for f in settings.field_names()),
+        requested=requested,
+        admitted=effective_settings,
+        effective=effective_settings,
+        field_sources=tuple((f, "tuned") for f in requested.field_names()),
         status=status,
         reason="tuned",
     )
     config = _obb_config(tile_batch_autotune=True)
     effective = overlay.apply(config)
     assert effective.obb.direct.slice.tile_batch_autotune is False
+
+
+def _always_failing_planner() -> CandidatePlanner:
+    """A ``CandidatePlanner`` whose ``admit()`` rejects every settings vector,
+    including the baseline -- ``down_admit`` therefore always falls back with
+    ``admitted=False``."""
+    observation = ResourceObservation(
+        total_host_bytes=1,
+        available_host_bytes=1,
+        accelerator_kind=AcceleratorKind.CUDA,
+        accelerator_name="gpu",
+        total_accelerator_bytes=1,
+        available_accelerator_bytes=1,
+    )
+    return CandidatePlanner(
+        AdmissionContext(
+            observation,
+            frame_bytes=1,
+            crop_count_p95=8,
+            hard_maxima=(("detection_batch_size", 4),),
+            # A host cost that dwarfs any possible usable_host budget, so
+            # every candidate (including the baseline) fails admission.
+            cost=MemoryCostModel(fixed_host_bytes=10**12),
+            policy=ResourcePolicy(
+                reserve_host_bytes=0,
+                reserve_host_fraction=0,
+                accelerator_safety_fraction=1,
+            ),
+        )
+    )
+
+
+def test_admission_failure_on_a_cache_hit_does_not_disable_the_tile_batch_autotuner(
+    tmp_path,
+):
+    """IMPORTANT 1 (round 1 review): ``coordinator._reuse`` keeps
+    ``status="cache_hit"`` even when live resource admission fails --
+    ``effective`` then falls back to the requested baseline verbatim (a pure
+    no-op, reason starting with "baseline fallback: ..."). Gating
+    ``disable_tile_autotune`` on status alone (the original Task 9 fix)
+    missed this: it would still kill the process-local SAHI tuner for a run
+    that changed nothing.
+    """
+    key = _key()
+    profile = _profile(key)
+    store = InferenceTuningProfileStore(tmp_path)
+    store.save(profile)
+
+    baseline = _settings(detection_batch_size=1)
+    request = AutotuneRequest(
+        key,
+        baseline,
+        _always_failing_planner(),
+        mode="automatic",
+    )
+
+    result = AutotuneCoordinator(store).resolve(request)
+    overlay = result.overlay
+
+    assert overlay.status == "cache_hit"
+    assert overlay.reason.startswith("baseline fallback:")
+    assert overlay.effective == overlay.requested == baseline
+
+    config = _obb_config(tile_batch_autotune=True)
+    effective_config = overlay.apply(config)
+    assert effective_config.obb.direct.slice.tile_batch_autotune is True
 
 
 def test_candidate_generation_is_bounded_and_crop_values_canonicalize_to_density():

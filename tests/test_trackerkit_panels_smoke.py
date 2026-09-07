@@ -127,6 +127,31 @@ def test_setup_inference_autotune_policy_persists_and_status_is_read_only(main_w
         panel.combo_inference_autotune.setCurrentIndex(original_index)
 
 
+def test_setup_inference_autotune_combo_signal_is_actually_connected(main_window):
+    """IMPORTANT 2 (round 1 review): the previous test only ever called
+    ``_on_inference_autotune_mode_changed`` by hand, so a severed
+    ``currentIndexChanged.connect(...)`` in ``setup_panel.py`` would still
+    pass it. Drive the combo box the way a real user does -- an unblocked
+    ``setCurrentIndex`` -- and observe the persisted config change through
+    that signal alone, so a disconnected wire fails this test.
+    """
+    panel = main_window._setup_panel
+    original_index = panel.combo_inference_autotune.currentIndex()
+    try:
+        record_index = panel.combo_inference_autotune.findData("record")
+        assert record_index >= 0
+        panel.combo_inference_autotune.setCurrentIndex(record_index)
+        config = main_window._config_orch.build_config_dict()
+        assert config["inference_autotune_mode"] == "record"
+
+        automatic_index = panel.combo_inference_autotune.findData("automatic")
+        panel.combo_inference_autotune.setCurrentIndex(automatic_index)
+        config = main_window._config_orch.build_config_dict()
+        assert config["inference_autotune_mode"] == "automatic"
+    finally:
+        panel.combo_inference_autotune.setCurrentIndex(original_index)
+
+
 def test_setup_inference_autotune_budget_spinbox_persists(main_window):
     """The bounded calibration-time budget (previously widget-less) must be
     both visible and persisted through the config dict."""

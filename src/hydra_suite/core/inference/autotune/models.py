@@ -362,19 +362,21 @@ class InferenceRuntimeOverlay:
     reason: str
     profile_id: str | None = None
 
-    #: Statuses where ``effective`` actually carries a coordinated-tuner
-    #: value distinct from the configured baseline. Every other status
-    #: reuses the configured settings verbatim and must not disable the
-    #: process-local SAHI tile-batch tuner as a side effect.
-    _ACTIVE_OVERRIDE_STATUSES = frozenset(
-        {"calibrated", "cache_hit", "cache_hit_after_wait"}
-    )
-
     def apply(self, config: "InferenceConfig") -> "InferenceConfig":
-        """Apply only the effective values to a detached inference config."""
+        """Apply only the effective values to a detached inference config.
+
+        Only disable the process-local SAHI tile-batch tuner when this
+        overlay actually overrides the configured baseline
+        (``effective != requested``). Gating on ``status`` alone is not
+        sufficient: ``coordinator._reuse`` can keep ``status="calibrated"``/
+        ``"cache_hit"`` even when live resource admission fails, in which
+        case ``effective`` falls back to the requested baseline verbatim
+        (reason starts with "baseline fallback: ...") -- that overlay is a
+        pure no-op and must not kill tile autotuning either.
+        """
         return self.effective.apply(
             config,
-            disable_tile_autotune=self.status in self._ACTIVE_OVERRIDE_STATUSES,
+            disable_tile_autotune=self.effective != self.requested,
         )
 
     @classmethod
