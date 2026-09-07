@@ -88,10 +88,24 @@ class AutotuneCoordinator:
         cached = self.store.load(request.key)
         if (
             request.allow_cached_reuse
+            and request.mode != "record"
             and cached is not None
             and cached.state is ProfileState.VALIDATED
         ):
             return self._reuse(request, cached, status="cache_hit")
+        if (
+            request.mode == "record"
+            and cached is not None
+            and cached.state is ProfileState.VALIDATED
+        ):
+            return ResolveResult(
+                InferenceRuntimeOverlay.baseline(
+                    request.baseline,
+                    status="recorded",
+                    reason="validated profile already recorded; record-only mode kept configured settings",
+                ),
+                cached,
+            )
         if not request.eligible:
             return ResolveResult(
                 InferenceRuntimeOverlay.baseline(
@@ -125,10 +139,24 @@ class AutotuneCoordinator:
             cached = self.store.load(request.key)
             if (
                 request.allow_cached_reuse
+                and request.mode != "record"
                 and cached is not None
                 and cached.state is ProfileState.VALIDATED
             ):
                 return self._reuse(request, cached, status="cache_hit_after_wait")
+            if (
+                request.mode == "record"
+                and cached is not None
+                and cached.state is ProfileState.VALIDATED
+            ):
+                return ResolveResult(
+                    InferenceRuntimeOverlay.baseline(
+                        request.baseline,
+                        status="recorded",
+                        reason="validated profile already recorded; record-only mode kept configured settings",
+                    ),
+                    cached,
+                )
             try:
                 protocol = MeasurementProtocol(budget_seconds=request.budget_seconds)
                 search = CoordinateSearch(

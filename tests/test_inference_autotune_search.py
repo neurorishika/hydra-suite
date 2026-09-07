@@ -47,6 +47,8 @@ from hydra_suite.runtime.resource_budget import (
     ResourcePolicy,
 )
 
+from .autotune_helpers import record_mode_request_with_validated_cache
+
 
 def _key():
     return TuningProfileKey(
@@ -412,6 +414,16 @@ def test_record_only_persists_but_does_not_apply(tmp_path):
     assert stored.state is ProfileState.VALIDATED
     assert dict(stored.calibration_summary)["candidate_count"] == len(stored.candidates)
     assert dict(stored.calibration_summary)["detections_p95_bucket"] == 8
+
+
+def test_record_mode_never_applies_even_on_a_cache_hit(tmp_path):
+    """Run 2 with a VALIDATED profile in the cache must still keep baseline."""
+    store, request = record_mode_request_with_validated_cache(tmp_path)
+    result = AutotuneCoordinator(store, trial_executor=ExplodingExecutor()).resolve(
+        request
+    )
+    assert result.overlay.status == "recorded"
+    assert result.overlay.effective == request.baseline
 
 
 def test_search_status_reports_incumbent_field_and_budget() -> None:

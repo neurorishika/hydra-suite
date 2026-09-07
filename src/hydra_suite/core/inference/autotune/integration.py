@@ -615,6 +615,12 @@ def build_tracking_autotune_request(
             eligible = False
             eligibility_reason = f"baseline admission failed: {admission.reason}"
 
+    if policy.mode == "record":
+        # Record mode must persist a validated profile but never apply it,
+        # on any run -- including a run that hits an already-validated cache
+        # entry. Leave `eligible` alone: record mode must still calibrate.
+        allow_cached_reuse = False
+
     manual_fields = frozenset(policy.manual_fields) & frozenset(baseline.field_names())
     shares = params.get("INFERENCE_AUTOTUNE_STAGE_SHARES", {})
     stage_shares = (

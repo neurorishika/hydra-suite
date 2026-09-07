@@ -16,6 +16,12 @@ from __future__ import annotations
 from pathlib import Path
 from typing import Any
 
+from hydra_suite.core.inference.autotune.candidates import (
+    AdmissionContext,
+    CandidatePlanner,
+    MemoryCostModel,
+)
+from hydra_suite.core.inference.autotune.coordinator import AutotuneRequest
 from hydra_suite.core.inference.autotune.device import RuntimeResourceProbe
 from hydra_suite.core.inference.autotune.fingerprint import (
     AcceleratorFingerprint,
@@ -30,8 +36,19 @@ from hydra_suite.core.inference.autotune.fingerprint import (
     TuningProfileKey,
     WorkloadFingerprint,
 )
-from hydra_suite.core.inference.autotune.models import InferenceTuningSettings
-from hydra_suite.runtime.resource_budget import AcceleratorKind, ResourceObservation
+from hydra_suite.core.inference.autotune.models import (
+    CandidateEvidence,
+    EquivalenceVerdict,
+    InferenceTuningProfile,
+    InferenceTuningSettings,
+    ProfileState,
+)
+from hydra_suite.core.inference.autotune.store import InferenceTuningProfileStore
+from hydra_suite.runtime.resource_budget import (
+    AcceleratorKind,
+    ResourceObservation,
+    ResourcePolicy,
+)
 
 
 def _key() -> TuningProfileKey:
@@ -71,6 +88,44 @@ def _settings(
         pose_batch_size=pose,
         identity_batch_sizes=(("animal", identity),),
         pipeline_depth=2,
+    )
+
+
+def _planner(
+    *, free: int = 10_000, cost=None, cached_fields=frozenset()
+) -> CandidatePlanner:
+    """A representative ``CandidatePlanner``.
+
+    Lifted from ``tests/test_inference_autotune_search.py::_planner``.
+    """
+
+    observation = ResourceObservation(
+        total_host_bytes=100_000,
+        available_host_bytes=100_000,
+        accelerator_kind=AcceleratorKind.CUDA,
+        accelerator_name="gpu",
+        total_accelerator_bytes=10_000,
+        available_accelerator_bytes=free,
+    )
+    return CandidatePlanner(
+        AdmissionContext(
+            observation,
+            frame_bytes=1,
+            crop_count_p95=8,
+            hard_maxima=(
+                ("detection_batch_size", 4),
+                ("pose_batch_size", 4),
+                ("identity_batch_size:animal", 8),
+                ("pipeline_depth", 2),
+            ),
+            cost=cost or MemoryCostModel(),
+            policy=ResourcePolicy(
+                reserve_host_bytes=0,
+                reserve_host_fraction=0,
+                accelerator_safety_fraction=1,
+            ),
+            cached_fields=cached_fields,
+        )
     )
 
 
@@ -143,3 +198,52 @@ def make_roi_params(video_path: Path) -> dict[str, Any]:
         }
     ]
     return build_tracking_parameters(config, video_probe=probe)
+
+
+def record_mode_request_with_validated_cache(
+    tmp_path: Path,
+) -> tuple[InferenceTuningProfileStore, AutotuneRequest]:
+    """A record-mode request whose store already holds a VALIDATED profile.
+
+    ``selected`` differs from ``baseline`` in ``detection_batch_size`` so a
+    test can prove a record-mode cache hit keeps the *baseline* effective
+    settings rather than silently applying the tuned vector (finding B2:
+    record mode must never apply, on any run).
+
+    Modeled on the construction in
+    ``tests/test_inference_autotune_search.py::test_record_only_persists_but_does_not_apply``
+    (run-1 coverage); this helper covers run 2 -- a cache hit.
+    """
+
+    key = _key()
+    baseline = _settings(det=1)
+    selected = _settings(det=4)
+    profile = InferenceTuningProfile(
+        key.digest[:24],
+        key,
+        baseline,
+        baseline,
+        selected,
+        selected,
+        (
+            CandidateEvidence(
+                selected,
+                (120.0,) * 5,
+                stage_seconds_samples=(0.5,) * 5,
+                warmup_calls=3,
+                warmup_frames=8,
+                equivalence=EquivalenceVerdict(True),
+            ),
+        ),
+        ProfileState.VALIDATED,
+        "winner",
+    )
+    store = InferenceTuningProfileStore(tmp_path)
+    store.save(profile)
+    request = AutotuneRequest(
+        key,
+        baseline,
+        _planner(),
+        mode="record",
+    )
+    return store, request
