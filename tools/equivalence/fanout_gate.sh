@@ -28,7 +28,16 @@
 #               GUI batch flow and the branch the plain leg never executes), and
 #               that sidecar has video_output_enabled=true so the per-video
 #               annotated overlay -- the one output that IS taken from the
-#               inherited config -- is actually exercised.
+#               inherited config -- is actually exercised. The keystone's render
+#               path is deliberately NON-DEFAULT (<stage>/renders/<clip>_CUSTOM.mp4):
+#               a leg that stages it at the default <stage>/<clip>_tracking.mp4 is
+#               structurally blind to a planner that "retargets" a path the user
+#               chose, because the retarget lands on the very name being checked.
+#   STAGE_MODELS 1 = copy each leg's YOLO checkpoints into its own staging dir and
+#               point the sidecar at those copies, so derived runtime artifacts
+#               (.mlpackage/.engine) do NOT already exist when the fan-out starts.
+#               Both children then race the SAME first-run export, which is the
+#               only way the artifact build lock is exercised end to end.
 set -uo pipefail
 
 HERE="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"
@@ -45,6 +54,7 @@ CLIPS_DIR="${CLIPS_DIR:-$FIXTURES/clips}"
 OUT="${OUT:-/tmp/fanout_gate}"
 JOBS="${JOBS:-2}"
 INHERIT="${INHERIT:-0}"
+STAGE_MODELS="${STAGE_MODELS:-0}"
 EXTRA="${EXTRA:-}"
 RUNTIME="${RUNTIME:-auto}"
 
@@ -100,6 +110,7 @@ echo "### clips     = $CLIPS_DIR"
 echo "### out       = $OUT"
 echo "### jobs      = $JOBS   extra = '${EXTRA:-<none>}'"
 echo "### inherit   = $INHERIT (1 = keystone-only sidecar + annotated video)"
+echo "### models    = $STAGE_MODELS (1 = per-leg checkpoint copies, no prebuilt artifacts)"
 echo "### clips under test: ${WANT[*]}"
 
 # A stale __pycache__ (especially a numba @jit(cache=True) entry left by another
@@ -124,7 +135,7 @@ mkdir -p "$OUT/seq" "$OUT/par"
 # equivalence harness would hand this clip: blanked paths filled in, side
 # outputs disabled, and the runtime tier injected (the fixture configs carry no
 # runtime_tier, and loading one without it raises the migration error).
-python - "$OUT" "$RUNTIME" "$HERE" "$INHERIT" "${ENTRIES[@]}" <<'PY'
+python - "$OUT" "$RUNTIME" "$HERE" "$INHERIT" "$STAGE_MODELS" "${ENTRIES[@]}" <<'PY'
 import json
 import shutil
 import sys
@@ -134,9 +145,47 @@ out = Path(sys.argv[1])
 runtime = sys.argv[2]
 sys.path.insert(0, sys.argv[3])
 inherit = sys.argv[4] == "1"
+stage_models = sys.argv[5] == "1"
 import runner  # noqa: E402
 
-for index, entry in enumerate(sys.argv[5:]):
+# The checkpoint keys a staged copy must follow. Derived runtime artifacts
+# (.mlpackage/.engine + freshness marker) are written BESIDE the checkpoint, so
+# copying it into the leg's own dir is what makes the fan-out's children race a
+# genuinely absent artifact instead of reusing one the fixtures already carry.
+_MODEL_KEYS = (
+    "yolo_model_path",
+    "yolo_obb_direct_model_path",
+    "yolo_detect_model_path",
+    "yolo_crop_obb_model_path",
+    "yolo_headtail_model_path",
+)
+
+
+def _stage_models_into(cfg_path: Path, stage: Path) -> None:
+    from hydra_suite.core.inference.model_paths import resolve_model_path
+
+    data = json.loads(cfg_path.read_text(encoding="utf-8"))
+    models_dir = stage / "models"
+    models_dir.mkdir(parents=True, exist_ok=True)
+    copied = {}
+    for key in _MODEL_KEYS:
+        raw = str(data.get(key, "") or "").strip()
+        if not raw:
+            continue
+        source = Path(str(resolve_model_path(raw)))
+        if not source.is_file():
+            continue
+        if str(source) not in copied:
+            dest = models_dir / source.name
+            shutil.copy2(source, dest)
+            copied[str(source)] = str(dest)
+        data[key] = copied[str(source)]
+    cfg_path.write_text(json.dumps(data, indent=2), encoding="utf-8")
+    for src, dst in copied.items():
+        print(f"    staged model copy {Path(dst).relative_to(out)} <- {src}")
+
+
+for index, entry in enumerate(sys.argv[6:]):
     name, video, config, skeleton = entry.split("|")
     source = Path(video)
     if not source.is_file():
@@ -165,12 +214,19 @@ for index, entry in enumerate(sys.argv[5:]):
             # per-video output to get wrong.
             data = json.loads(dest.read_text(encoding="utf-8"))
             data["video_output_enabled"] = True
-            data["video_output_path"] = str(stage / f"{name}_tracking.mp4")
+            # NON-DEFAULT on purpose. The default <stage>/<name>_tracking.mp4 is
+            # exactly where a retargeting planner would send it, so staging it
+            # there cannot tell "honoured the user's path" from "overwrote it".
+            renders = stage / "renders"
+            renders.mkdir(parents=True, exist_ok=True)
+            data["video_output_path"] = str(renders / f"{name}_CUSTOM.mp4")
             dest.write_text(json.dumps(data, indent=2), encoding="utf-8")
             print(f"    staged {mode}/{name}.mp4 + {name}_config.json (KEYSTONE,"
-                  " video_output_enabled=true)")
+                  f" video_output_path=renders/{name}_CUSTOM.mp4)")
         else:
             print(f"    staged {mode}/{name}.mp4 + {name}_config.json")
+        if stage_models:
+            _stage_models_into(dest, stage)
 PY
 if [ $? -ne 0 ]; then echo "!! staging failed" >&2; exit 2; fi
 
@@ -265,28 +321,97 @@ for entry in "${ENTRIES[@]}"; do
 done
 
 if [ "$INHERIT" = "1" ]; then
+  keystone="${ENTRIES[0]%%|*}"
   echo
-  echo "== side outputs: every clip must render its OWN annotated video =="
-  # Pre-fix, an inheriting video kept the KEYSTONE's absolute video_output_path,
-  # so all N children rendered into one file: the keystone's mp4 was written N
-  # times (concurrently, in the fan-out) and no other clip had one at all.
+  echo "== side outputs: the keystone keeps ITS path, borrowers get their own =="
+  # Two distinct failures live here:
+  #  * an inheriting video that kept the KEYSTONE's absolute video_output_path
+  #    -- all N children render into one file, concurrently, and no other clip
+  #    gets an overlay at all;
+  #  * a planner that "retargets" the keystone's OWN chosen path back to the
+  #    default beside the video -- silently discarding the render location the
+  #    user asked for, and diverging seq (which keeps it) from par (whose child
+  #    re-plans its job config and loses it).
+  # The CSVs are byte-identical under BOTH, which is why they are checked here.
   for mode in seq par; do
-    for entry in "${ENTRIES[@]}"; do
+    custom="$OUT/$mode/renders/${keystone}_CUSTOM.mp4"
+    if [ -s "$custom" ]; then
+      echo "✅ $mode/renders/${keystone}_CUSTOM.mp4 ($(wc -c < "$custom" | tr -d ' ') bytes) -- keystone path honoured"
+    else
+      echo "❌ $mode/renders/${keystone}_CUSTOM.mp4 missing or empty -- the keystone's own render path was discarded"
+      ls -l "$OUT/$mode/renders/" 2>/dev/null || echo "   (no renders/ dir at all)"
+      status=1
+    fi
+    default_mp4="$OUT/$mode/${keystone}_tracking.mp4"
+    if [ -e "$default_mp4" ]; then
+      echo "❌ $mode/${keystone}_tracking.mp4 exists -- the keystone rendered to the DEFAULT path, not the one it names"
+      status=1
+    else
+      echo "✅ $mode: keystone did not render to the default ${keystone}_tracking.mp4"
+    fi
+    for entry in "${ENTRIES[@]:1}"; do
       clip="${entry%%|*}"
       mp4="$OUT/$mode/${clip}_tracking.mp4"
       if [ -s "$mp4" ]; then
-        echo "✅ $mode/${clip}_tracking.mp4 ($(wc -c < "$mp4" | tr -d ' ') bytes)"
+        echo "✅ $mode/${clip}_tracking.mp4 ($(wc -c < "$mp4" | tr -d ' ') bytes) -- borrower renders beside its own video"
       else
         echo "❌ $mode/${clip}_tracking.mp4 missing or empty -- no overlay of its own"
         status=1
       fi
     done
+    borrowers=$(( ${#ENTRIES[@]} - 1 ))
     produced=$(ls "$OUT/$mode/"*_tracking.mp4 2>/dev/null | wc -l | tr -d ' ')
-    if [ "$produced" -eq "${#ENTRIES[@]}" ]; then
-      echo "✅ $mode: ${#ENTRIES[@]} clips -> $produced distinct annotated videos"
+    if [ "$produced" -eq "$borrowers" ]; then
+      echo "✅ $mode: $borrowers borrowers -> $produced distinct annotated videos"
     else
-      echo "❌ $mode: ${#ENTRIES[@]} clips -> $produced annotated videos (paths collided)"
+      echo "❌ $mode: $borrowers borrowers -> $produced annotated videos beside the clips (paths collided)"
       ls -l "$OUT/$mode/"*.mp4 2>/dev/null || true
+      status=1
+    fi
+  done
+  seq_bytes=""; par_bytes=""
+  [ -f "$OUT/seq/renders/${keystone}_CUSTOM.mp4" ] &&
+    seq_bytes=$(wc -c < "$OUT/seq/renders/${keystone}_CUSTOM.mp4" | tr -d ' ')
+  [ -f "$OUT/par/renders/${keystone}_CUSTOM.mp4" ] &&
+    par_bytes=$(wc -c < "$OUT/par/renders/${keystone}_CUSTOM.mp4" | tr -d ' ')
+  if [ -n "$seq_bytes" ] && [ "$seq_bytes" = "$par_bytes" ]; then
+    echo "✅ keystone custom render: same size on both legs (${seq_bytes} bytes)"
+  else
+    echo "❌ keystone custom render: seq='${seq_bytes:-<missing>}' par='${par_bytes:-<missing>}' bytes -- the legs rendered differently"
+    status=1
+  fi
+fi
+
+if [ "$STAGE_MODELS" = "1" ]; then
+  echo
+  echo "== first-run artifact build: the racing children must publish ONE artifact =="
+  # With per-leg checkpoint copies, par/ starts with no derived artifact at all,
+  # so both children miss the cache at once and contend for artifact_build_lock.
+  for mode in seq par; do
+    art_dir="$OUT/$mode/models"
+    arts=$(ls -d "$art_dir"/*.mlpackage "$art_dir"/*.engine "$art_dir"/*.onnx 2>/dev/null | wc -l | tr -d ' ')
+    if [ "$arts" -ge 1 ]; then
+      echo "✅ $mode: $arts derived artifact(s) under models/"
+      for art in "$art_dir"/*.mlpackage "$art_dir"/*.engine "$art_dir"/*.onnx; do
+        [ -e "$art" ] || continue
+        marker="${art}.runtime_meta.json"
+        if [ -f "$marker" ]; then
+          echo "✅ $mode: freshness marker present for $(basename "$art")"
+        else
+          echo "❌ $mode: NO freshness marker for $(basename "$art") -- a partial build was published"
+          status=1
+        fi
+      done
+    else
+      echo "❌ $mode: no derived artifact was built under models/ -- this leg never exported"
+      status=1
+    fi
+    leftovers=$(ls -d "$art_dir"/.*.tmp-* "$art_dir"/.*.old-* 2>/dev/null | wc -l | tr -d ' ')
+    if [ "$leftovers" -eq 0 ]; then
+      echo "✅ $mode: no staging/displaced artifact leftovers"
+    else
+      echo "❌ $mode: $leftovers staging/displaced leftover(s) under models/ -- an install did not finish"
+      ls -ld "$art_dir"/.*.tmp-* "$art_dir"/.*.old-* 2>/dev/null || true
       status=1
     fi
   done
