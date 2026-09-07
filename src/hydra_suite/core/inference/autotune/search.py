@@ -118,6 +118,7 @@ class CoordinateSearch:
             determinism_floor=None,
             deadline=deadline,
             should_cancel=should_cancel,
+            rejected=rejected,
         )
         baseline_evidence, baseline_outputs = baseline_measurements.get(
             baseline, (None, ())
@@ -193,6 +194,7 @@ class CoordinateSearch:
                     deadline=deadline,
                     should_cancel=should_cancel,
                     seed_offset=pass_index * 10_000 + field_index * 100,
+                    rejected=rejected,
                 )
                 screen_evidence = [
                     item[0]
@@ -228,6 +230,7 @@ class CoordinateSearch:
                     deadline=deadline,
                     should_cancel=should_cancel,
                     seed_offset=50_000 + pass_index * 10_000 + field_index * 100,
+                    rejected=rejected,
                 )
                 evidence.extend(item[0] for item in full.values())
                 candidates = []
@@ -299,6 +302,7 @@ class CoordinateSearch:
             deadline=deadline,
             should_cancel=should_cancel,
             seed_offset=90_000,
+            rejected=rejected,
         ).get(incumbent)
         if (
             final is None
@@ -354,6 +358,7 @@ class CoordinateSearch:
         deadline: float,
         should_cancel: Callable[[], bool],
         seed_offset: int = 0,
+        rejected: list[tuple[str, str]] | None = None,
     ) -> dict[
         InferenceTuningSettings,
         tuple[CandidateEvidence, tuple[CalibrationOutputs, ...]],
@@ -390,6 +395,19 @@ class CoordinateSearch:
                 item.outputs for item in successful if item.outputs is not None
             )
             if len(successful) < self.protocol.minimum_blocks:
+                # Never drop a candidate silently: an unrecorded `continue`
+                # here is indistinguishable from a candidate that was never
+                # proposed, which is how the detector search space quietly
+                # collapsed to its small batches.
+                if rejected is not None:
+                    rejected.append(
+                        (
+                            self._label(candidate),
+                            "measurement_incomplete: "
+                            f"blocks={len(successful)}/"
+                            f"{self.protocol.minimum_blocks}",
+                        )
+                    )
                 continue
             verdict = None
             if reference is not None:
@@ -460,6 +478,20 @@ class CoordinateSearch:
                 ),
             )
             if not measurement_complete(evidence, self.protocol):
+                if rejected is not None:
+                    rejected.append(
+                        (
+                            self._label(candidate),
+                            "measurement_incomplete: "
+                            f"warmup_calls={evidence.warmup_calls}/"
+                            f"{self.protocol.warmup_calls} "
+                            f"warmup_frames={evidence.warmup_frames}/"
+                            f"{self.protocol.warmup_frames} "
+                            f"blocks={len(evidence.throughput_samples)}/"
+                            f"{self.protocol.minimum_blocks} "
+                            f"measured_frames={evidence.measured_frames}",
+                        )
+                    )
                 continue
             output[candidate] = (evidence, outputs)
         return output

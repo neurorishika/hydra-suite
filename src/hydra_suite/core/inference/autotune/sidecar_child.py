@@ -95,6 +95,24 @@ def _block_window(
     return (offset, offset + span - 1)
 
 
+def _warmup_plan(required_calls: int, batch: int, *, available: int) -> tuple[int, int]:
+    """Size warmup from the required call count, not from a fixed cap.
+
+    The previous ``warmup_calls = min(3, ceil(frames / batch))`` capped the
+    frame budget so that any detector batch >= 13 could only ever report two
+    calls, failed ``measure.measurement_complete``, and was dropped from the
+    search without a rejection record.  Scale the frame count with the batch
+    instead, and report the real (possibly short) call count so a clip that
+    genuinely cannot supply the frames is *recorded* as rejected rather than
+    silently pruned.
+    """
+
+    batch = max(1, int(batch))
+    required_calls = max(1, int(required_calls))
+    frames = min(int(available), max(8, required_calls * batch))
+    return frames, math.ceil(frames / batch)
+
+
 def _profile_times(video_path: Path) -> tuple[float, float, dict[str, float]]:
     log_dir = video_path.parent / f"{video_path.stem}_logs"
     path = log_dir / "tracking_profile_forward.json"
@@ -337,13 +355,10 @@ def run(request_path: Path) -> None:
             blocks=int(request.get("measurement_blocks", 1)),
         ),
     )
-    # Warm allocator/framework state with at least eight real frames and try to
-    # provide three detector calls. The 128-frame cap wins for very large batch
-    # values; those candidates report the smaller count and cannot be promoted.
-    warmup_frames = min(
-        maximum_frames,
-        end - start + 1,
-        max(8, 3 * settings.detection_batch_size),
+    warmup_frames, warmup_calls = _warmup_plan(
+        int(request.get("warmup_calls", 3)),
+        settings.detection_batch_size,
+        available=end - start + 1,
     )
     _run_window(
         video_path=private_video,
@@ -354,7 +369,6 @@ def run(request_path: Path) -> None:
         start=start,
         end=start + warmup_frames - 1,
     )
-    warmup_calls = min(3, math.ceil(warmup_frames / settings.detection_batch_size))
 
     forwards = []
     finals = []

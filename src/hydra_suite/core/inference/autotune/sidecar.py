@@ -31,6 +31,7 @@ from hydra_suite.runtime.resource_limits import (
 
 from .device import RuntimeResourceProbe, cuda_used_memory_bytes
 from .equivalence import CalibrationOutputs
+from .measure import MeasurementProtocol
 from .models import InferenceTuningSettings
 from .search import TrialObservation
 
@@ -40,6 +41,9 @@ SIDECAR_SCHEMA_VERSION = 1
 MAX_REQUEST_BYTES = 2 * 1024 * 1024
 MAX_RESULT_BYTES = 2 * 1024 * 1024
 MEASUREMENT_BLOCKS = 5
+# The child has no MeasurementProtocol; the warmup-call minimum it must satisfy
+# travels in the request so there is exactly one source of truth for it.
+DEFAULT_WARMUP_CALLS = MeasurementProtocol().warmup_calls
 
 
 def _frames_for_block(maximum_frames: int, block_index: int) -> int:
@@ -57,6 +61,7 @@ class SidecarTrialSpec:
     resource_probe: RuntimeResourceProbe
     start_frame: int
     end_frame: int
+    warmup_calls: int = DEFAULT_WARMUP_CALLS
     budget_seconds: float = 600.0
     # The validator's ceiling: a cold TensorRT engine build can take most of it.
     per_trial_timeout_seconds: float = 120.0
@@ -239,6 +244,7 @@ def write_sidecar_request(
         # The child places its single contiguous window using the block index
         # and the block count, so the five blocks stripe across the clip.
         "measurement_blocks": MEASUREMENT_BLOCKS,
+        "warmup_calls": int(spec.warmup_calls),
         "output_dir": "output",
     }
     encoded = json.dumps(

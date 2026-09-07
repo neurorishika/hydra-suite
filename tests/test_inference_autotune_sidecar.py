@@ -364,3 +364,48 @@ def test_oom_adaptation_is_two_retries_and_never_mislabels_reduced_result(
     assert cached.settings == reduced
     assert cached.failure_class is None
     assert attempted == [8, 4, 2]
+
+
+def test_warmup_scales_with_the_detector_batch_size():
+    """Warmup must reach the protocol's call minimum at any batch size.
+
+    Capping warmup calls at ``min(3, ...)`` meant any detector batch >= 13
+    reported 2 calls, failed ``measurement_complete``, and was dropped.
+    """
+
+    from hydra_suite.core.inference.autotune.sidecar_child import _warmup_plan
+
+    for batch in (1, 2, 8, 16, 32):
+        frames, calls = _warmup_plan(3, batch, available=4096)
+        assert calls >= 3, (batch, frames, calls)
+        assert frames <= 4096
+
+
+def test_warmup_plan_reports_the_shortfall_on_a_short_clip():
+    from hydra_suite.core.inference.autotune.sidecar_child import _warmup_plan
+
+    frames, calls = _warmup_plan(3, 32, available=40)
+    assert frames == 40
+    assert calls == 2
+
+
+def test_sidecar_request_carries_the_warmup_call_minimum(tmp_path):
+    observation, probe = _resources()
+    spec = SidecarTrialSpec(
+        video_path=tmp_path / "video.mp4",
+        params={},
+        observation=observation,
+        resource_probe=probe,
+        start_frame=0,
+        end_frame=1000,
+    )
+    request = write_sidecar_request(
+        tmp_path / "ipc",
+        spec,
+        _settings(),
+        phase="full",
+        field_name=None,
+        block_index=0,
+    )
+
+    assert json.loads(request.read_text())["warmup_calls"] == 3

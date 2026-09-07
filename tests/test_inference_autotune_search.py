@@ -76,7 +76,7 @@ def _settings(det=1, pose=1, identity=1):
     )
 
 
-def _planner(*, free=10_000, cost=None, cached_fields=frozenset()):
+def _planner(*, free=10_000, cost=None, cached_fields=frozenset(), det_max=4):
     observation = ResourceObservation(
         total_host_bytes=100_000,
         available_host_bytes=100_000,
@@ -91,7 +91,7 @@ def _planner(*, free=10_000, cost=None, cached_fields=frozenset()):
             frame_bytes=1,
             crop_count_p95=8,
             hard_maxima=(
-                ("detection_batch_size", 4),
+                ("detection_batch_size", det_max),
                 ("pose_batch_size", 4),
                 ("identity_batch_size:animal", 8),
                 ("pipeline_depth", 2),
@@ -461,3 +461,73 @@ def test_concurrent_fresh_processes_create_one_profile_and_one_trial_set(tmp_pat
     assert len(counter.read_text(encoding="utf-8").splitlines()) == 10
     records = list((tmp_path / "profiles").glob("*.json"))
     assert len(records) == 1
+
+
+class WarmupStarvedExecutor:
+    """Detector batches at or above 16 cannot reach the warmup-call minimum."""
+
+    def run(self, settings, *, phase, field_name, block_index, should_cancel):
+        starved = settings.detection_batch_size >= 16
+        return TrialObservation(
+            settings,
+            100.0 + settings.detection_batch_size,
+            0.5,
+            _outputs(),
+            warmup_calls=2 if starved else 3,
+            warmup_frames=8,
+        )
+
+
+def test_large_batch_candidates_are_rejected_with_a_reason_not_dropped():
+    """A candidate that cannot satisfy the warmup minimum appears in rejected.
+
+    Before this guard, ``_measure`` dropped an incomplete candidate with a
+    bare ``continue``: it produced no evidence and no rejection record, so
+    the real detector search space silently collapsed to the small batches.
+    """
+
+    result = CoordinateSearch(_planner(det_max=16), WarmupStarvedExecutor()).run(
+        _settings(),
+        stage_shares={"detection_batch_size": 1.0},
+    )
+
+    starved = [
+        (label, reason)
+        for label, reason in result.rejected
+        if label.startswith("detection_batch_size=16,")
+    ]
+    assert starved, f"batch-16 candidate vanished; rejected={result.rejected}"
+    assert any("measurement_incomplete" in reason for _label, reason in starved)
+
+
+def test_an_admitting_nothing_search_says_why_rather_than_going_quiet():
+    """If no candidate can complete, the baseline gate reports the reason.
+
+    This is the guard against a mis-set ``MeasurementProtocol.maximum_frames``:
+    when nothing satisfies the protocol the search must fail loudly with a
+    recorded reason, not return "kept_current_settings" as if it had measured.
+    """
+
+    class NeverCompletes(WarmupStarvedExecutor):
+        def run(self, settings, *, phase, field_name, block_index, should_cancel):
+            observation = super().run(
+                settings,
+                phase=phase,
+                field_name=field_name,
+                block_index=block_index,
+                should_cancel=should_cancel,
+            )
+            return TrialObservation(
+                observation.settings,
+                observation.throughput,
+                0.5,
+                observation.outputs,
+                warmup_calls=1,
+                warmup_frames=8,
+            )
+
+    result = CoordinateSearch(_planner(), NeverCompletes()).run(_settings())
+
+    assert not result.completed
+    assert result.reason == "baseline_measurement_incomplete"
+    assert any("measurement_incomplete" in reason for _label, reason in result.rejected)
