@@ -49,6 +49,7 @@ import json
 import logging
 import os
 import shutil
+import tempfile
 from hashlib import sha256
 from pathlib import Path
 from typing import Any
@@ -142,8 +143,6 @@ def _export_artifact(
     This function only runs on a machine with ultralytics (and, for TRT, a CUDA
     device); the tests inject a fake in its place.
     """
-    from ultralytics import YOLO
-
     # A rebuild INVALIDATES whatever is at ``artifact_path`` right now, so the
     # freshness marker must go FIRST. ``_fresh()`` is checked once outside the
     # build lock as a fast path; leaving the marker in place would let a sibling
@@ -157,6 +156,43 @@ def _export_artifact(
             "Could not clear the freshness marker for %s before rebuilding it",
             artifact_path,
         )
+
+    if runtime == "coreml":
+        # ultralytics names the CoreML export after the ``.pt`` it was handed and
+        # writes it BESIDE that file -- which, for the real checkpoint, is
+        # character-for-character ``artifact_path``. Exporting from the
+        # checkpoint therefore builds the .mlpackage IN PLACE, exposing a
+        # half-written directory to any concurrent reader (fan-out children all
+        # load the same artifact) and bypassing the atomic installer entirely.
+        # Export from a scratch COPY instead: ``out_path != artifact_path``, so
+        # the finished directory is published by the same swap the TRT path uses.
+        with tempfile.TemporaryDirectory(prefix="hydra-artifact-export-") as scratch:
+            scratch_pt = Path(scratch) / pt_path.name
+            shutil.copy2(str(pt_path), str(scratch_pt))
+            out_path = _run_ultralytics_export(
+                scratch_pt, runtime=runtime, imgsz=imgsz, batch_size=batch_size
+            )
+            # INSIDE the with-block: the scratch dir owns ``out_path``.
+            _install_artifact_atomically(out_path, artifact_path)
+        return artifact_path
+
+    out_path = _run_ultralytics_export(
+        pt_path, runtime=runtime, imgsz=imgsz, batch_size=batch_size
+    )
+    if out_path != artifact_path:
+        _install_artifact_atomically(out_path, artifact_path)
+    return artifact_path
+
+
+def _run_ultralytics_export(
+    pt_path: Path, *, runtime: str, imgsz: int, batch_size: int
+) -> Path:
+    """Run ultralytics' exporter on *pt_path* and return the file it produced.
+
+    Where that file lands is ultralytics' choice (beside the source ``.pt``);
+    publishing it at the artifact path is the caller's job.
+    """
+    from ultralytics import YOLO
 
     base_model = YOLO(str(pt_path))
     # CoreML does not use the CBC direct executor, so skip the raw-head override.
@@ -210,12 +246,7 @@ def _export_artifact(
     out_path = Path(export_path).expanduser().resolve()
     if not out_path.exists():
         raise ArtifactExportError(f"Export produced no output file: {out_path}")
-    if out_path != artifact_path:
-        _install_artifact_atomically(out_path, artifact_path)
-    # NOTE: when ultralytics exported straight onto ``artifact_path`` (the
-    # CoreML case, where the artifact name IS the export name) there is no copy
-    # to make atomic — that export is in-place by construction.
-    return artifact_path
+    return out_path
 
 
 def _remove_path(path: Path) -> None:
@@ -702,7 +733,10 @@ def _load_coreml_executor(
         else _resolve_imgsz(resolved)
     )
 
-    if _artifact_is_fresh(artifact_path, resolved, imgsz):
+    def _fresh() -> bool:
+        return _artifact_is_fresh(artifact_path, resolved, imgsz)
+
+    if _fresh():
         logger.info("Reusing cached CoreML artifact: %s", artifact_path.name)
     else:
         if not auto_export:
@@ -711,15 +745,27 @@ def _load_coreml_executor(
                 f"for {resolved.name} and auto_export=False. "
                 "Provide a prebuilt .mlpackage or enable auto_export."
             )
-        _export_artifact(
-            pt_path=resolved,
-            artifact_path=artifact_path,
-            runtime="coreml",
-            imgsz=imgsz,
-            batch_size=_DEFAULT_BATCH_SIZE,
-        )
-        _write_fresh_marker(artifact_path, resolved, imgsz)
-        logger.info("Exported CoreML artifact: %s", artifact_path)
+        # Same contract as ``_load_direct_executor``: concurrent fan-out
+        # children on an Apple host (the gpu_fast tier resolves every non-bgsub
+        # stage to CoreML there) all miss the cache at once. Serialize the
+        # build and re-check after the wait (double-checked locking), so the
+        # second child reuses the first's artifact instead of racing it.
+        with artifact_build_lock(artifact_path):
+            if _fresh():
+                logger.info(
+                    "Reusing CoreML artifact built by another process: %s",
+                    artifact_path.name,
+                )
+            else:
+                _export_artifact(
+                    pt_path=resolved,
+                    artifact_path=artifact_path,
+                    runtime="coreml",
+                    imgsz=imgsz,
+                    batch_size=_DEFAULT_BATCH_SIZE,
+                )
+                _write_fresh_marker(artifact_path, resolved, imgsz)
+                logger.info("Exported CoreML artifact: %s", artifact_path)
 
     return _CoreMLBatchExecutor(_load_torch_model(str(artifact_path)))
 
