@@ -74,6 +74,66 @@ make env-remove-mps     # Apple Silicon
 make env-remove-cuda    # NVIDIA CUDA
 ```
 
+## Fresh-box conda/mamba initialisation (non-interactive shells)
+
+Two things a first-time provisioning session must get right that are easy to
+miss because they only bite in a **non-interactive** shell (e.g. a spawned
+subprocess, `ssh host 'cmd'`, or a service worker) rather than an interactive
+login shell:
+
+1. **conda's init block must sit above Ubuntu's interactivity guard** in
+   `~/.bashrc` — the guard is the line that looks like
+   `case $- in *i*) ;; *) return;; esac`. If conda's `>>> conda initialize >>>`
+   block is *below* that guard, a non-interactive shell returns before conda
+   ever gets onto `PATH`. The SLEAP service launches `conda run -n sleap`
+   from exactly such a shell; if `conda` is unreachable there, the run does
+   not error loudly — it produces **empty CSVs**, which then falsely compare
+   as `EQUIVALENT` against a baseline in `tools/equivalence/`. Verify with
+   `ssh <host> 'conda run -n sleap python -c "import sleap"'` — no
+   `source ~/.bashrc` first — to prove the non-interactive path actually
+   works.
+2. **`MAMBA_ROOT_PREFIX` must be set before `mamba.sh` is sourced.** Without
+   it, mamba prints an 11-line `WARNING` block to **stdout** on every
+   non-interactive shell invocation. This is invisible in an interactive
+   terminal but corrupts the SAM3 sidecar's stdout protocol, which parses the
+   child process's stdout line-by-line for `@@HYDRA_SAM3_PROGRESS@@` records.
+
+Both were found missing on a from-scratch Ubuntu box during provisioning
+(2026-09-07); the fix is in `~/.bashrc`, not in this repo, since it's a
+per-machine shell-init concern.
+
+## SAM3 training prerequisite: Hugging Face authentication
+
+`make setup-sam3-train` / `tools/setup_sam3_train_env.sh` build the `sam3`
+package and its dependencies, but SAM3 LoRA training itself additionally
+needs a Hugging Face credential on the machine that runs it — this is
+**separate from and not satisfied by** copying a local `sam3.pt` checkpoint.
+`build_sam3_image_model` fetches the model config from the **gated**
+`facebook/sam3` Hugging Face repo at build time, so on a fresh box with no
+credential, training (and even the auto-batch probe) refuses to start:
+
+```bash
+hf auth login      # paste a token from a HF account that has accepted the
+                    # licence at https://huggingface.co/facebook/sam3
+# or: export HF_TOKEN=... / HUGGING_FACE_HUB_TOKEN=...
+```
+
+`src/hydra_suite/training/sam3_lora/preflight.py` checks for this up front
+and refuses with a message that already names the fix (`hf auth login`) —
+if you see a bare `GatedRepoError: 401` instead, you are hitting the
+credential check too late in the pipeline; file that as a regression.
+
+## SAM3 environment recipe — use the script, not prose
+
+The canonical, tested recipe for the `sam3` training sidecar env is
+`tools/setup_sam3_train_env.sh` (invoked by `make setup-sam3-train`). Do not
+re-derive or re-copy the pip install list into other docs — it drifts. Two
+of its pins are load-bearing and easy to accidentally drop if hand-rolling
+the env instead of running the script: `scipy<1.14` and
+`opencv-python-headless<4.12` — both would otherwise pull in `numpy>=2`,
+silently breaking the `numpy<2` pin the whole env exists to hold. See the
+comments in that script for the full rationale per pin.
+
 ### Other useful targets
 
 ```bash

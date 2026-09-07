@@ -25,17 +25,23 @@ mamba create -n sleap python=3.13 -y
 conda activate sleap
 ```
 
-Choose one install profile:
+Choose one install profile. **Pin `sleap==1.6.2`** — an unpinned
+`pip install "sleap[nn,...]"` currently resolves `sleap-nn` to 0.3.3, which
+breaks the pipeline's shared-memory transport to the SLEAP service (fails
+with `AttributeError` from `sleap_nn.data.utils.imread_`). `sleap==1.6.2`
+pulls in the working `sleap-nn 0.1.3`; verified on a fresh Ubuntu/RTX 4090
+box (python 3.11.16, numpy 2.4.6, torch 2.14.0+cu130) on 2026-09-07. Do not
+remove the pin without re-verifying against a fresh sleap-nn release.
 
 ```bash
 # CPU + ONNX CPU export/runtime support
-pip install "sleap[nn,nn-export]"
+pip install "sleap[nn,nn-export]==1.6.2"
 
 # GPU + ONNX GPU export/runtime support
-pip install "sleap[nn,nn-export-gpu]"
+pip install "sleap[nn,nn-export-gpu]==1.6.2"
 
 # GPU + TensorRT export/runtime support
-pip install "sleap[nn,nn-export-gpu,nn-tensorrt]"
+pip install "sleap[nn,nn-export-gpu,nn-tensorrt]==1.6.2"
 ```
 
 ### Compatibility Matrix

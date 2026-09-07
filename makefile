@@ -127,7 +127,15 @@ install-cuda:
 	fi
 	$(call reset_onnxruntime_packages)
 	$(call reset_tensorrt_packages)
-	$(UV_PIP) install $(UV_PIP_PYTHON) -v -r requirements-cuda$(CUDA_MAJOR).txt
+	@# requirements-cuda*.txt adds --extra-index-url .../whl/cuXXX. uv's default
+	@# --index-strategy first-index then resolves EVERY package (not just torch)
+	@# against that index first; the pytorch index only ships iopath==0.1.9, so
+	@# uv concludes sam2>=1.1.0 (needs iopath>=0.1.10) is unsatisfiable and the
+	@# whole install aborts. --index-strategy unsafe-best-match makes uv
+	@# consider all indexes for every package, which is what CPU/MPS installs
+	@# already get implicitly (they have no extra index). Do not remove this
+	@# thinking it's a no-op: without it, install-cuda fails on a clean box.
+	$(UV_PIP) install $(UV_PIP_PYTHON) --index-strategy unsafe-best-match -v -r requirements-cuda$(CUDA_MAJOR).txt
 	@$(MAKE) install-apriltag-fork
 	@$(MAKE) install-sam3-clip
 	@$(MAKE) configure-cuda-ort
@@ -161,7 +169,8 @@ env-update-cuda:
 	fi
 	$(call reset_onnxruntime_packages)
 	$(call reset_tensorrt_packages)
-	$(UV_PIP) install $(UV_PIP_PYTHON) -v -r requirements-cuda$(CUDA_MAJOR).txt --upgrade
+	@# Same --extra-index-url/iopath-vs-sam2 defect as install-cuda; see comment there.
+	$(UV_PIP) install $(UV_PIP_PYTHON) --index-strategy unsafe-best-match -v -r requirements-cuda$(CUDA_MAJOR).txt --upgrade
 	@$(MAKE) install-apriltag-fork
 	@$(MAKE) install-sam3-clip
 	@if [ -n "$$CONDA_PREFIX" ]; then \

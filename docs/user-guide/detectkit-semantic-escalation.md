@@ -286,18 +286,12 @@ SAM3_TRAIN_PLATFORM=cuda13`, or run `tools/setup_sam3_train_env.sh
 [cpu|mps|cuda12|cuda13]` directly). It's idempotent — safe to re-run, and
 reuses the env if it already exists.
 
-The manual recipe it runs (verified on macOS; swap the `torch`/`torchvision`
-install line for a CUDA wheel on a GPU box):
-
-```bash
-conda create -n hydra-sam3 python=3.12 'numpy<2'
-conda run -n hydra-sam3 pip install torch torchvision
-conda run -n hydra-sam3 pip install 'setuptools<81'
-conda run -n hydra-sam3 pip install einops torchmetrics 'scipy<1.14' decord iopath \
-    opencv-python-headless pillow platformdirs pandas numba pycocotools psutil
-conda run -n hydra-sam3 pip install git+https://github.com/facebookresearch/sam3.git
-conda run -n hydra-sam3 pip install --no-deps -e /path/to/hydra-suite
-```
+`tools/setup_sam3_train_env.sh` is the authoritative recipe — read it rather
+than the copy that used to live here, which drifted out of sync (it was
+missing the `opencv-python-headless<4.12` pin, found the hard way while
+provisioning a fresh CUDA box). The pin rationale is documented immediately
+below and in comments in the script itself; if you need to hand-run the
+steps for some reason, copy them from the script, not from this page.
 
 #### Hugging Face access is required on every training machine
 
@@ -367,6 +361,9 @@ Four of these pins are not obvious, and were found the hard way:
   `pip install scipy` (pulled in by `torchmetrics`) silently drags numpy back
   above the `numpy<2` pin `sam3` needs. Pin it explicitly in the same
   `pip install` as `torchmetrics` so they resolve together.
+- **`opencv-python-headless<4.12`** — same failure class as scipy above:
+  opencv 4.12+ requires `numpy>=2`, so an unpinned `pip install
+  opencv-python-headless` silently breaks the `numpy<2` pin too.
 - **`pandas`/`numba`** — training's in-env CLI runs as
   `python -m hydra_suite.training.sam3_lora.cli`, and importing
   `hydra_suite` this way eagerly imports `hydra_suite.training.service`,
