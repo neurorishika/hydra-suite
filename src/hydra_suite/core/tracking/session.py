@@ -219,7 +219,10 @@ class TrackingSessionCore:
             detected_properties_cache_path=self.paths.get(
                 "detected_properties_cache_path"
             ),
-            inference_cache_dir=str(build_inference_cache_dir(video_path)),
+            inference_cache_dir=str(
+                self.paths.get("inference_cache_dir")
+                or build_inference_cache_dir(video_path)
+            ),
         )
 
         # Set by _run_interp_crops; consumed by _run_final_media_export when the

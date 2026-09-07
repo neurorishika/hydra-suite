@@ -310,6 +310,14 @@ def _run_window(
             "raw_csv_path": str(raw_csv),
             "final_csv_path": str(run_root / "final.csv"),
             "detection_cache_path": str(cache_dir),
+            # The engine writes CNN/detection artifacts under this trial's
+            # private cache_dir (run_root/inference-cache), not the
+            # production ``.inference_cache_<stem>/`` directory that
+            # build_inference_cache_dir(video_path) would derive. Without
+            # this override, TrackingSessionCore.pose_state points post-
+            # tracking at production's cache -- a different directory than
+            # the one this trial just wrote to (S8).
+            "inference_cache_dir": str(cache_dir),
             "individual_properties_cache_path": getattr(
                 engine, "individual_properties_cache_path", None
             ),
