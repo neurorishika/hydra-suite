@@ -46,11 +46,18 @@ class AutotuneRequest:
     stage_shares: tuple[tuple[str, float], ...] = ()
     should_cancel: Callable[[], bool] = lambda: False
     status_callback: Callable[[str], None] = lambda _message: None
-    # S5: threaded straight from TrackingRunContext.contention_detected (see
-    # integration.py's eligibility chain) independent of `eligible` -- a
-    # request can in principle reach calibration with this set (contention
-    # arising mid-calibration, not just at preflight) and a failed attempt
-    # under contention must never be written as a negative cache.
+    # S5: DEFENSE-IN-DEPTH, NOT CURRENTLY A LIVE PATH. Threaded straight from
+    # TrackingRunContext.contention_detected (integration.py's eligibility
+    # chain). In the real builder (build_tracking_autotune_request), a True
+    # value here ALWAYS also forces `eligible=False`, and `resolve()` returns
+    # at the `not request.eligible` check before ever reaching the search
+    # loop or `_save_incomplete` -- there is no re-sampling of contention
+    # during calibration, so a request with `contention_detected=True` and
+    # `eligible=True` cannot occur through production wiring today. The
+    # `_save_incomplete` gate on this flag exists only to guard against a
+    # *future* caller (e.g. mid-calibration contention re-sampling, which is
+    # explicitly out of scope here) wiring the two independently -- it is
+    # not exercised by any production code path right now.
     contention_detected: bool = False
 
     def __post_init__(self) -> None:
@@ -293,7 +300,20 @@ class AutotuneCoordinator:
         key defers instead of re-running the whole (bounded but expensive)
         search. Never applies settings to a production run -- ``resolve``
         only ever returns a baseline overlay for an INCOMPLETE record.
+
+        Must never clobber real evidence: a PROVISIONAL or VALIDATED record
+        at this exact key may still be the best available knowledge (e.g. a
+        VALIDATED profile demoted to PROVISIONAL by a density-bucket
+        mismatch) even though *this* attempt could not finish. A timeout
+        teaches us nothing that invalidates that prior evidence, so it is
+        left untouched -- only a missing record or an existing INCOMPLETE
+        record (refreshing the timestamp/reason) is overwritten here. The
+        caller's returned overlay/status is unaffected either way: this
+        method only controls what -- if anything -- gets persisted.
         """
+        existing = self.store.load(request.key)
+        if existing is not None and existing.state is not ProfileState.INCOMPLETE:
+            return
         now = time.time_ns()
         profile = InferenceTuningProfile(
             profile_id=request.key.digest[:24],
