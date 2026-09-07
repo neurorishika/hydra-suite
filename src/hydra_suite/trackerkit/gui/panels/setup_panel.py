@@ -742,16 +742,56 @@ class SetupPanel(QWidget):
         # One coordinated control belongs here rather than beside individual
         # detector/pose batch controls. It is deliberately distinct from the
         # semantic tracking autotuner: this changes execution strategy only.
-        self.chk_inference_autotune = QCheckBox("Auto-optimize full inference")
-        self.chk_inference_autotune.setChecked(
-            self._config.inference_autotune_mode == "automatic"
+        #
+        # Three-state, not a checkbox: "record" persists a validated profile
+        # for later reuse but never applies it to this run (safe at any
+        # time since Task 3 -- it never applies even on a cache hit). A
+        # boolean checkbox cannot represent that state without destroying it
+        # on the next toggle, which made "record" unreachable from the GUI.
+        self.combo_inference_autotune = QComboBox()
+        self.combo_inference_autotune.setToolTip(
+            "Off — use your configured inference values as-is.\n"
+            "Record only — measure and save a validated profile for this "
+            "system/model/workload, but still run with configured values.\n"
+            "Automatic — use a validated, system-specific full-inference "
+            "throughput profile once one exists (live-admitted; your saved "
+            "batch values remain the fallback and the baseline for any "
+            "field marked manual)."
         )
-        self.chk_inference_autotune.setToolTip(
-            "Use a validated, system-specific full-inference throughput profile.\n"
-            "Your saved batch values remain unchanged; they are the fallback and\n"
-            "the baseline for any field marked manual."
+        for label, mode in (
+            ("Off", "off"),
+            ("Record only (measure, don't apply)", "record"),
+            ("Automatic (apply a validated profile)", "automatic"),
+        ):
+            self.combo_inference_autotune.addItem(label, mode)
+        self._set_inference_autotune_combo_mode(self._config.inference_autotune_mode)
+        self.combo_inference_autotune.currentIndexChanged.connect(
+            self._on_inference_autotune_mode_changed
         )
-        self.chk_inference_autotune.toggled.connect(self._on_inference_autotune_toggled)
+
+        self.spin_inference_autotune_budget = QDoubleSpinBox()
+        self.spin_inference_autotune_budget.setRange(5.0, 600.0)
+        self.spin_inference_autotune_budget.setSingleStep(5.0)
+        self.spin_inference_autotune_budget.setSuffix(" s")
+        self.spin_inference_autotune_budget.setDecimals(0)
+        self.spin_inference_autotune_budget.setKeyboardTracking(False)
+        self.spin_inference_autotune_budget.setValue(
+            float(self._config.inference_autotune_budget_seconds)
+        )
+        self.spin_inference_autotune_budget.setToolTip(
+            "Bounded calibration time budget (5-600s) for Record/Automatic "
+            "modes. A one-time cost per new system/model/workload "
+            "combination; validated profiles are reused after that."
+        )
+        self.spin_inference_autotune_budget.valueChanged.connect(
+            self._on_inference_autotune_budget_changed
+        )
+        self._inference_autotune_budget_row = QHBoxLayout()
+        self._inference_autotune_budget_row.setContentsMargins(0, 0, 0, 0)
+        self._inference_autotune_budget_row.addWidget(QLabel("Calibration budget"))
+        self._inference_autotune_budget_row.addWidget(
+            self.spin_inference_autotune_budget
+        )
         self.lbl_inference_autotune_status = QLabel()
         self.lbl_inference_autotune_status.setWordWrap(True)
         self.lbl_inference_autotune_status.setStyleSheet(
@@ -785,9 +825,10 @@ class SetupPanel(QWidget):
         perf_toggle_grid.setVerticalSpacing(6)
         perf_toggle_grid.setContentsMargins(0, 0, 0, 0)
         perf_toggle_grid.addWidget(self.chk_realtime_mode, 0, 0)
-        perf_toggle_grid.addWidget(self.chk_inference_autotune, 1, 0)
-        perf_toggle_grid.addWidget(self.lbl_inference_autotune_status, 2, 0)
-        perf_toggle_grid.addWidget(self.btn_continue_inference_settings, 3, 0)
+        perf_toggle_grid.addWidget(self.combo_inference_autotune, 1, 0)
+        perf_toggle_grid.addLayout(self._inference_autotune_budget_row, 2, 0)
+        perf_toggle_grid.addWidget(self.lbl_inference_autotune_status, 3, 0)
+        perf_toggle_grid.addWidget(self.btn_continue_inference_settings, 4, 0)
         perf_toggle_grid.setColumnStretch(0, 1)
         self._reflow_performance_controls()
         vl_sys.addLayout(self.performance_control_grid)
@@ -940,14 +981,37 @@ class SetupPanel(QWidget):
         # NOTE: the compute-tier selector is populated at panel construction;
         # _on_runtime_context_changed is called afterward in main_window.py
 
-    def _on_inference_autotune_toggled(self, enabled: bool) -> None:
-        """Persist the one user-facing inference-throughput policy control."""
+    def _on_inference_autotune_mode_changed(self, _index: int) -> None:
+        """Persist the one user-facing inference-throughput policy control.
+
+        Three states -- "off"/"record"/"automatic" -- round-trip losslessly
+        through this combo box, unlike the boolean checkbox it replaced
+        (which could only represent on/off and destroyed "record" on the
+        next toggle).
+        """
+        mode = str(self.combo_inference_autotune.currentData() or "off")
         if not getattr(self._main_window, "_restoring_config", False):
-            self._main_window.config.inference_autotune_mode = (
-                "automatic" if enabled else "off"
-            )
-        self.set_inference_autotune_status_for_mode("automatic" if enabled else "off")
+            self._main_window.config.inference_autotune_mode = mode
+        self.set_inference_autotune_status_for_mode(mode)
         self.config_changed.emit(self._main_window.config)
+
+    def _on_inference_autotune_budget_changed(self, value: float) -> None:
+        """Persist the bounded calibration time budget (5-600s)."""
+        if not getattr(self._main_window, "_restoring_config", False):
+            self._main_window.config.inference_autotune_budget_seconds = float(value)
+        self.config_changed.emit(self._main_window.config)
+
+    def _set_inference_autotune_combo_mode(self, mode: str) -> None:
+        """Select the combo entry for ``mode`` without emitting a signal."""
+        normalized = str(mode).strip().lower()
+        if normalized not in {"off", "record", "automatic"}:
+            normalized = "off"
+        index = self.combo_inference_autotune.findData(normalized)
+        if index < 0:
+            index = 0
+        self.combo_inference_autotune.blockSignals(True)
+        self.combo_inference_autotune.setCurrentIndex(index)
+        self.combo_inference_autotune.blockSignals(False)
 
     def set_inference_autotune_status_for_mode(self, mode: str) -> None:
         """Render a non-interactive policy/result summary for the user."""

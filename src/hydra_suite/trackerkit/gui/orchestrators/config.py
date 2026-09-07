@@ -331,9 +331,12 @@ class ConfigOrchestrator:
             5.0, min(600.0, budget_seconds)
         )
         panel = self._panels.setup
-        panel.chk_inference_autotune.blockSignals(True)
-        panel.chk_inference_autotune.setChecked(autotune_mode == "automatic")
-        panel.chk_inference_autotune.blockSignals(False)
+        panel._set_inference_autotune_combo_mode(autotune_mode)
+        panel.spin_inference_autotune_budget.blockSignals(True)
+        panel.spin_inference_autotune_budget.setValue(
+            self._mw.config.inference_autotune_budget_seconds
+        )
+        panel.spin_inference_autotune_budget.blockSignals(False)
         panel.set_inference_autotune_status_for_mode(autotune_mode)
 
     def _load_config_detection(self, get_cfg, get_cfg_time):
