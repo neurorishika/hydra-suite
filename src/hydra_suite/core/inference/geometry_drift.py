@@ -20,9 +20,15 @@ This module is the extraction of (1) plus the fix for (2). It is pure and
 Qt-free so every path -- both dataset builders, the serving-side
 ``--sahi-profile`` resolution, and the dialog itself -- can share one guard.
 
-**Warn, never refuse.** A deliberate re-scale is legitimate; refusing would
-break valid workflows. The guard's only job is to make a silent divergence
-loud. Nothing here raises, and callers are expected to log, not abort.
+**Warn, never refuse -- with exactly one exception (D11).** A deliberate
+re-scale is legitimate; refusing would break valid workflows, so the guard's
+job is to make a silent divergence loud and callers are expected to log, not
+abort. ``compare_geometry_value``, ``sidecar_drift_verdicts`` and
+``log_drift_verdicts`` never raise. The single exception is
+``enforce_drift_verdicts(..., comparison_baseline=<name>)``: a run that
+EXPLICITLY NAMES a baseline is asking for that comparison to be guaranteed,
+and there a MISMATCH or an UNREADABLE stamp raises ``GeometryDriftRefusal``.
+With no baseline named, that function is a pure warn as well.
 
 The verdict is a typed record, never pre-formatted prose: a GUI renders a
 modal from its fields and a CLI renders a log line from the same fields,
@@ -529,3 +535,72 @@ def log_drift_verdicts(
                 verdict.field,
                 _format_value(verdict.stamped_value),
             )
+
+
+class GeometryDriftRefusal(RuntimeError):
+    """Raised ONLY when a run that named a comparison baseline has drifted.
+
+    D11. The house rule stays warn-never-refuse on every surface -- a
+    deliberate re-scale is legitimate and refusing would break valid
+    workflows. The single exception the eval spec identifies is a run that
+    EXPLICITLY NAMES a comparison baseline: naming one is a request that the
+    comparison be guaranteed, and a 2026-09-06-shaped divergence makes the
+    comparison meaningless rather than merely surprising. Nothing raises this
+    unless a caller passed a non-empty ``comparison_baseline``.
+    """
+
+
+#: The verdicts that make a NAMED-BASELINE comparison unsupportable.
+#:
+#: UNREADABLE is here on purpose, and it is the one judgment call in D11: it
+#: means the guard is DISABLED for that field, so the run is unverified on
+#: exactly the quantity it named a baseline to compare. NO_STAMPED is
+#: deliberately NOT here -- "no claim was made" must never refuse, or every
+#: comparison against an older unstamped artifact breaks. Keeping the two on
+#: opposite sides of this line is what gives the distinction observable
+#: teeth instead of leaving it a label.
+REFUSING_STATUSES: frozenset[DriftStatus] = frozenset(
+    {DriftStatus.MISMATCH, DriftStatus.UNREADABLE}
+)
+
+
+def refusing_verdicts(
+    verdicts: Sequence[GeometryDriftVerdict],
+) -> tuple[GeometryDriftVerdict, ...]:
+    """The subset of *verdicts* that would refuse under a named baseline."""
+    return tuple(v for v in verdicts if v.status in REFUSING_STATUSES)
+
+
+def enforce_drift_verdicts(
+    logger: logging.Logger,
+    verdicts: Sequence[GeometryDriftVerdict],
+    *,
+    comparison_baseline: str | None = None,
+) -> None:
+    """Warn on every surface; refuse ONLY against a named comparison baseline.
+
+    Always logs exactly what :func:`log_drift_verdicts` logs, so no caller
+    loses a warning by adopting this function. Then, and only if
+    *comparison_baseline* is a non-empty name, raises
+    :class:`GeometryDriftRefusal` listing EVERY offending field -- not just
+    the first, since a run reporting one divergence and hiding a second is
+    how the original confound survived.
+
+    ``comparison_baseline`` defaults to ``""`` throughout the training stack,
+    so an unset field reads as "no baseline named" and behaviour is
+    unchanged.
+    """
+    log_drift_verdicts(logger, verdicts)
+    baseline = (comparison_baseline or "").strip()
+    if not baseline:
+        return
+    offenders = refusing_verdicts(verdicts)
+    if not offenders:
+        return
+    detail = "; ".join(format_drift_warning(v) for v in offenders)
+    raise GeometryDriftRefusal(
+        f"This run names {baseline!r} as its comparison baseline, so its "
+        f"geometry must be verifiable against it -- and it is not: {detail} "
+        "Re-run without naming a baseline if the divergence is deliberate; "
+        "the guard only refuses when a comparison was explicitly claimed."
+    )

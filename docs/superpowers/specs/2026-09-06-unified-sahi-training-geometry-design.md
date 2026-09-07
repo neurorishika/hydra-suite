@@ -1061,10 +1061,10 @@ made once, not an automatic loop.
 > confound demonstrated.
 
 
-> ## RESOLVED 2026-09-07 — D10 decided and implemented.
+> ## RESOLVED 2026-09-07 — D10 and D11 decided and implemented.
 >
-> Branch `feat/d10-d11-calibration-persistence`. No longer open; the D10
-> bullet further down is pre-ruling analysis only.
+> Branch `feat/d10-d11-calibration-persistence`. No longer open; the D10 and
+> D11 bullets further down are pre-ruling analysis only.
 >
 > **D10 — a semantic calibration result is persisted on the MODEL SIDECAR.**
 > Shipped as `core/inference/semantic/calibration_record.py`: one named block
@@ -1089,6 +1089,31 @@ made once, not an automatic loop.
 > PER PROJECT, so two projects calibrating one model are last-write-wins on
 > the sidecar while each keeps its own project record.
 >
+> **D11 — warn everywhere; refuse only against an explicitly named comparison
+> baseline.** The guard is `core/inference/geometry_drift.py` (already Qt-free
+> and already called from four headless sites); D11 adds
+> `GeometryDriftRefusal` + `enforce_drift_verdicts(...,
+> comparison_baseline=...)`. With no baseline named the behaviour is
+> unchanged: warn, never refuse, on every surface. With a baseline named the
+> run refuses on **MISMATCH and UNREADABLE**, and never on NO_STAMPED.
+> *That is the one judgment call here:* naming a baseline is a request that
+> the comparison be guaranteed, and UNREADABLE means the guard cannot verify
+> the very thing the run named — the 2026-09-06 shape exactly — while
+> NO_STAMPED must not refuse or every comparison against an older unstamped
+> artifact breaks. This also gives the deliberate NO_STAMPED/UNREADABLE
+> distinction observable teeth instead of collapsing it.
+> **Reachability, stated plainly.** The two call sites that actually name a
+> baseline (`training/sliced_dataset.py:255`,
+> `training/sam3_lora/dataset_build.py:604`) were under another agent's file
+> lock (D18) when this landed, so the refuse arm ships in core WITHOUT its
+> natural caller: swapping their `log_drift_verdicts` for
+> `enforce_drift_verdicts(..., comparison_baseline=...)` is a two-line
+> follow-up. Separately, `comparison_baseline` exists in
+> `detectkit/config/training.py` and flows to those builders, but **no
+> DetectKit training GUI widget sets it**, so a GUI-launched build cannot
+> reach the refuse arm today either. Both gaps are deferred items, not
+> silent omissions.
+
 > **SUPERSEDED for D7, D8 and D9 — read the RESOLVED block above instead.**
 > The three bullets below are the PRE-RULING analysis, kept for provenance only.
 > Their recommendations were NOT what shipped: the D8 bullet in particular
