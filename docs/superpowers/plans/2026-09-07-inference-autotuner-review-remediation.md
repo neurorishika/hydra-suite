@@ -1105,3 +1105,114 @@ The branch is merge-ready only when **all** of the following hold. Any unchecked
 - [ ] Docs page exists; spec and plan moved to `done/` in the merge commit.
 
 **CUDA is no longer blocked.** `courtship` (RTX 4090, `hydra-cuda` working, repo present) can run the correctness gates today once four orphaned SLEAP services are cleared; `firebrat` (idle RTX 4090) is the clean-timing box but needs a `make setup-cuda` first. `mehek` stays untouched. Until Task 12's boxes are checked this branch is **not merge-ready**, regardless of how green MPS looks — `automatic` mode is CUDA-only by policy (`integration.py:606-611`), so CUDA is the *only* platform where this feature affects production at all.
+
+---
+
+## MPS gate results
+
+**Date:** 2026-09-07 · **Branch:** `codex/trackerkit-inference-autotuner` · **Branch HEAD under test:** `095e1863` · **Baseline:** local `main` at the merge base `0d4d4cae` (NOT the `legacy/main` tag — legacy-vs-branch conflates ~40 merged features with this one, and the no-op claim needs attribution to this branch alone) · **Box:** Apple Silicon, `hydra-mps`, `RUNTIME=mps` · **Harness commit:** `3366e4d8`
+
+All numbers below are `tools/equivalence/compare.py` output: `pos |Δ| p99` (px), `θ |Δ| max` (rad), row counts, unmatched. Every CSV was checked for `wc -l > 1` before any verdict was read; no comparison in this section rests on a header-only file. Raw logs: `/tmp/equiv_noop.log`, `/tmp/equiv_noop2.log`, `/tmp/equiv_baseAA.log`, `/tmp/equiv_3a.log`, `/tmp/equiv_3a2.log`.
+
+### 1. The no-op proof — autotune OFF, `0d4d4cae` vs `095e1863`
+
+`EQUIVALENCE legacy vs new_a`, per clip, per CSV kind:
+
+| clip | forward (p99 / θmax / rows / unmatched) | final | final_with_individual |
+|---|---|---|---|
+| `ant_pose_headtail` | 0.000e+00 / 0.000e+00 / 12500=12500 / 0 | 0 / 0 / 9096=9096 / 0 | 0 / 0 / 9096=9096 (55 cols) / 0 |
+| `worm_bgsub` | 0 / 0 / 5000=5000 / 0 | 0 / 0 / 2706=2706 / 0 | 0 / 0 / 2706=2706 / 0 |
+| `worm_bgsub_scaled` | 0 / 0 / 5000=5000 / 0 | 0 / 0 / 1002=1002 / 0 | 0 / 0 / 1002=1002 / 0 |
+| `ant_cnn_identity` | 0 / 0 / 12225=12225 / 0 | 0 / 0 / 10201=10201 / 0 | 0 / 0 / 10201=10201 (73 cols) / 0 |
+| `ant_cnn_identity_relink` | 0 / 0 / 12225=12225 / 0 | 0 / 0 / **10221 vs 10213** / **8** ❌ | same ❌ |
+| `fly_obb` | 0 / 0 / 1494=1494 / 0 | 0 / 0 / 1500=1500 / 0 | 0 / 0 / 1500=1500 / 0 |
+| `fly_obb_roi` (new) | 0 / 0 / 1494=1494 / 0 | 0 / 0 / 1500=1500 / 0 | 0 / 0 / 1500=1500 / 0 |
+
+Every matched row is bit-for-bit identical: `pos max`, `pos mean`, `pos p99`, `θ max` and `θ mean` are all exactly `0.000e+00` on every clip and every CSV kind. Not "within tolerance" — zero.
+
+**The one red line is not this branch.** `ant_cnn_identity_relink`'s final CSV differs by 8 rows. Re-running that clip with `MAIN_SRC = WT_SRC = 0d4d4cae/src` — i.e. all three runs on the *baseline* tree, branch code absent entirely — reproduces the identical 10221-vs-10213 / 8-unmatched split (`/tmp/equiv_baseAA.log`). In the 3a leg the same clip produced the split in the *opposite direction* (`new_a` 10213, `new_b` 10221) with both runs on the same tree and the same settings. It is pre-existing run-order-dependent nondeterminism in that clip's relink/stitch postprocessing, independent of source tree and of settings. The 10213 rows common to both are byte-identical. **Not attributable to this branch; pre-existing bug, worth its own investigation.**
+
+**Not measured:** `ant_obb_sleap` and `ant_obb_sequential`. Not run to completion in this session (throughput on a contended box). They are **not** covered by the numbers above and must not be read as passing.
+
+### 2. Harness defect found while doing this
+
+`run_matrix.sh`'s `cmp()` calls `note_failure` only for compare.py exit code 2 ("no data"), never for exit code 1 ("real differences"). The no-op matrix printed two `VERDICT: DIFFERENCES ❌` lines and still exited **0** with "all clips produced comparable output." A red verdict does not fail the matrix. Left unchanged here (out of scope, and changing it mid-measurement would have muddied attribution), but it means **the matrix's exit code is not a gate** — someone must read the verdicts.
+
+### 3a. The settings question — the headline number
+
+Both sides `INFERENCE_AUTOTUNE_MODE=off`, same source tree, second/third runs forced to a tuned vector via `runner.py`'s `--*-batch-size` / `--pipeline-depth`. No key, no cache, no autotune code in the path.
+
+**The vector was verified live, not merely echoed into `equiv_config.json`.** Resolving each config through `build_tracking_parameters → build_inference_config_from_params → InferenceTuningSettings.from_config` — the exact object the tuner mutates — shows the change reaching the pipeline:
+
+- `fly_obb`: `{det 1, depth 2}` → `{det 8, depth 4}`
+- `ant_pose_headtail`: `{det 1, pose 25, headtail 25, depth 2}` → `{det 2, pose 8, headtail 8, depth 2}`
+- `ant_cnn_identity`: `{det 1, pose 25, headtail 25, identity{colortag: 8}, depth 2}` → `{det 2, pose 8, headtail 8, identity{colortag: 32}, depth 2}`
+
+`SETTINGS default vs tuned`, per clip:
+
+| clip | tuned vector | forward p99 / θmax | final p99 / θmax | rows |
+|---|---|---|---|---|
+| `worm_bgsub` | det 8, depth 4 | 0.000e+00 / 0.000e+00 | 0 / 0 | 5000, 2706 identical |
+| `worm_bgsub_scaled` | det 8, depth 4 | 0 / 0 | 0 / 0 | 5000, 1002 identical |
+| `fly_obb` | det 8, depth 4 | **6.104e-05 / 3.815e-06** | 0 / **3.815e-06** | 1494, 1500 identical, 0 unmatched |
+| `fly_obb_roi` | det 8, depth 4 | **6.104e-05 / 3.815e-06** | 0 / **3.815e-06** | 1494, 1500 identical, 0 unmatched |
+| `ant_cnn_identity` | det 2, pose/ht 8, cnn 32, depth 2 | 0 / 0 | 0 / 0 | 12225, 10201 identical; identity columns (73 cols) identical |
+| `ant_cnn_identity_relink` | same | 0 / 0 | 0 / 0 | identical |
+| `ant_pose_headtail` | det 2, pose/ht 8, depth 2 | 1.221e-04 / **9.360e-02** | 0 / **9.360e-02** | 12500, 9096 identical, 0 unmatched |
+
+**Verdict: tuned settings are NOT universally output-neutral on MPS, and one clip exceeds the tuner's own tolerance.**
+
+- bg-sub and CNN-identity clips: exactly zero. Batch size and pipeline depth are bit-exact there.
+- YOLO-OBB (`fly_obb`, `fly_obb_roi`): nonzero but float-noise — `pos p99 = 6.1e-05 px` against a 0.5 px tolerance (~8000× inside), `θ max = 3.8e-06 rad` against 0.05 rad (~13000× inside). Batching YOLO changes results at the last few ULPs. Real, tiny, and comfortably admissible.
+- **`ant_pose_headtail`: `θ max = 9.360e-02 rad` (≈5.4°) — ABOVE the autotuner's `EquivalencePolicy.angle_max_tolerance` of 0.05 rad.** Positions are exactly 0 and `θ mean` is 3.2e-05, so this is a handful of rows, not a systematic shift. Changing `pose_batch_size` / `headtail_batch_size` from 25 to 8 flips head/tail orientation on some rows. This is the tuner's gate *working* — it would reject that candidate — but it is direct evidence that **pose batch size is not output-neutral**, so pose batch fields must never be admitted on evidence weaker than the full equivalence gate. Note `compare.py` still printed `EQUIVALENT ✅` for this clip because its criterion is `θ mean`, not `θ max`; only the max exposes it.
+
+**Also found (pre-existing, correct behaviour):** the first 3a attempt used `det 8 / depth 4` on the large-frame ant clips and every tuned run **died** with `ValueError: Inference pipeline frame buffer is not resource-admissible: one frame=61074432 bytes, batch=8, live_windows=6, estimated=2931572736 bytes exceeds the 536870912-byte pipeline budget`. That guard is in `core/inference/pipeline.py` (untouched by this branch). It is not a defect and not tuner-reachable: `CandidatePlanner.admit` uses `retained_windows = pipeline_depth + 2`, which equals the pipeline's `queue_bound + 3`, so the planner rejects exactly the vectors the pipeline rejects. The two formulas agree. The vector was re-chosen to the largest admissible one for those clips (`det 2 / depth 2`) and the table above reports that run.
+
+### 3b. The plumbing question — unsatisfiable on MPS by policy
+
+`tools/equivalence/autotune_plumbing_probe.py`, profile seeded **in process** by wrapping the live `build_tracking_autotune_request`, so the key matches by construction (`profile_seeded: true`, key digest `78c0388e03dd5f2e…`, `selected.detection_batch_size = 4` vs `baseline = 1`). Real tracking run on `fly_obb`, `automatic` mode. The worker's own line:
+
+```
+Inference throughput autotuner: status=deferred_due_to_contention profile=None
+  requested={'detection_batch_size': 1, ..., 'pipeline_depth': 2}
+  admitted  ={'detection_batch_size': 1, ..., 'pipeline_depth': 2}
+  effective ={'detection_batch_size': 1, ..., 'pipeline_depth': 2}
+  reason=automatic inference tuning is validated only for CUDA
+```
+
+`eligible=false`, `allow_cached_reuse=false`. `integration.py` refuses `automatic` on any non-CUDA accelerator *before* the store is consulted, so `AutotuneCoordinator.resolve` can never reach its `cache_hit` branch here. **`status=cache_hit` with `effective != requested` is unreachable on MPS.** It was not forced by patching `accelerator_kind` — that would have tested a fiction. **This assertion belongs to Task 12 (CUDA).**
+
+Consequence worth stating plainly: **on MPS this branch cannot change effective settings in any mode.** The no-op proof in §1 therefore *is* the MPS merge criterion, and §3a measures the pipeline's batch-invariance rather than the tuner's behaviour.
+
+### Carried from Task 5 — the angular determinism floor
+
+Measured with the **autotuner's own** gate (`autotune/equivalence.py`, per-row angular max after head/tail-flip exclusion), not `compare.py`'s `θ mean`, via `tools/equivalence/autotune_determinism_floor.py` over the A-vs-A pair of every clip:
+
+| clip | angular floor (rad) | tolerance | tunable? | pos p99 |
+|---|---|---|---|---|
+| `ant_pose_headtail` | **0.000e+00** | 0.05 | yes | 0.000e+00 |
+| `fly_obb` | **0.000e+00** | 0.05 | yes | 0.000e+00 |
+| `fly_obb_roi` | **0.000e+00** | 0.05 | yes | 0.000e+00 |
+| `worm_bgsub` | 0.000e+00 | 0.05 | yes | 0.000e+00 |
+| `worm_bgsub_scaled` | 0.000e+00 | 0.05 | yes | 0.000e+00 |
+| `ant_cnn_identity` | 0.000e+00 | 0.05 | yes | 0.000e+00 |
+| `ant_cnn_identity_relink` | 0.000e+00 | 0.05 | yes | 0.000e+00 |
+
+**No clip's own determinism run exceeds 0.05 rad — every clip measured is tunable, and the Task 5 risk did not materialize on MPS.** The gate was not softened. `ant_obb_sequential` was not measured (see §1). Caveat on the tool's other columns: its `unmatched_rows` / `passed` fields count forward-CSV rows with NaN X/Y that never positionally match, and for streaming-pose clips the forward slot is a synthetic empty frame; only `angle_max` and `position_p99` are meaningful here, and those are the numbers the carried requirement asks for.
+
+### Carried from Task 8 — S8 has NO coverage from this task
+
+The S8 fix (post-tracking consumes the trial's own cache directory, not production's) is exercised only by the **sidecar calibration child**. Neither leg reaches it: 3a runs with `mode=off` (no autotune code in the path at all) and 3b is refused before calibration starts. No pose or identity clip in this matrix exercised the sidecar path, because on MPS *nothing* does. **S8 remains empirically unverified. Task 12 (CUDA) is its only opportunity.** Stated explicitly rather than implied by silence.
+
+### Performance
+
+`PERF_TOLERANCE=1.25`, new/legacy wall-clock, autotune-off matrix: `worm_bgsub` 1.02x ✅, `worm_bgsub_scaled` 1.07x ✅, `ant_cnn_identity_relink` 0.91x ✅, `fly_obb` 0.92x ✅, `fly_obb_roi` 1.00x ✅, `ant_pose_headtail` **1.28x ❌**, `ant_cnn_identity` **1.39x ❌**.
+
+Both red numbers are contended-box artifacts, not regressions. The box carried `load average 7.8–11.8` throughout from non-hydra system processes (`StorageManagement` ~83% CPU, a `Storage` extension ~59%, `WindowServer` ~57%, a long-running `top`), none of which may be killed under this repo's process rules, plus an idle `detectkit` GUI (PID 67394) left untouched. Legacy and new ran under nonstationary load, so the ratio is noise in either direction — and `ant_cnn_identity_relink`, the *same clip and video* as `ant_cnn_identity`, came in at 0.91x in the same matrix. `perfcmp` does not feed `FAILED_CLIPS`, so these did not fail the matrix. Reported as red rather than silently dropped; a clean-box re-measurement is the way to settle them.
+
+### What a reader should conclude
+
+1. With the feature off, this branch is a **bit-exact no-op** on 7 clips (the 8th red line is reproduced on the baseline tree alone). Two OBB/SLEAP clips are unmeasured.
+2. The ROI coverage hole that let B1 ship is now closed by a fixture proven to produce detections (row counts identical to the non-ROI clip).
+3. Tuned settings are bit-exact on bg-sub and CNN-identity, float-noise on YOLO-OBB, and **exceed the tuner's angular tolerance on the pose/head-tail clip** — pose batch size is the field to distrust.
+4. **Nothing here validates the tuner itself.** `automatic` is CUDA-only by policy; on MPS the apply path is provably dead. Task 12 is not a formality — it is the only test of this feature that can exist.
