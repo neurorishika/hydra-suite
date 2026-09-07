@@ -68,6 +68,7 @@ if [ "$FIXTURES" = "1" ]; then
     "ant_cnn_identity|$FX/clips/ant_cnn_identity.mp4|$FX/configs/ant_cnn_identity.json|$FX/ooceraea_biroi.json"
     "ant_cnn_identity_relink|$FX/clips/ant_cnn_identity.mp4|$FX/configs/ant_cnn_identity_relink.json|$FX/ooceraea_biroi.json"
     "fly_obb|$FX/clips/fly_obb.mp4|$FX/configs/fly_obb.json|"
+    "fly_obb_roi|$FX/clips/fly_obb.mp4|$FX/configs/fly_obb_roi.json|"
   )
   # ON-path clips: configs that deliberately turn a feature ON, so their
   # legacy-vs-new EQUIVALENCE line is EXPECTED to differ and means nothing.
@@ -120,12 +121,55 @@ if [ -n "$_only" ]; then
   echo "### subset: $_only"
 fi
 
-run() {  # src outdir config video label skeleton
+# ---------------------------------------------------------------------------
+# AUTOTUNE=1: the "do tuned settings perturb tracking output?" leg.
+#
+# This does NOT enable the autotuner. INFERENCE_AUTOTUNE_MODE stays "off" for
+# every run in this leg, on purpose: a committed seed profile can never hit the
+# tuning cache (hydra_code_identity hashes all package sources, so the key moves
+# with every edit), so an "automatic" leg would silently compare defaults
+# against defaults and print a meaningless green. Instead the SECOND and THIRD
+# runs get the tuned vector forced directly into their config via runner.py's
+# --*-batch-size / --pipeline-depth flags. No key, no cache, no autotune code in
+# the path -- just "default settings vs the settings the tuner could pick".
+#
+# The printed lines therefore mean:
+#   DETERMINISM  new_a vs new_b  -> noise floor of the TUNED configuration
+#   EQUIVALENCE  legacy vs new_a -> default settings vs tuned settings
+# and MAIN_SRC should equal WT_SRC so the only variable is the settings vector.
+#
+# TUNED_* are overridable; the defaults are the largest values on the tuner's
+# own geometric candidate ladder (candidates.py::geometric_values) that a real
+# MPS run could plausibly select.
+AUTOTUNE=${AUTOTUNE:-0}
+TUNED_DETECTION_BATCH=${TUNED_DETECTION_BATCH:-8}
+TUNED_PIPELINE_DEPTH=${TUNED_PIPELINE_DEPTH:-4}
+TUNED_POSE_BATCH=${TUNED_POSE_BATCH:-8}
+TUNED_HEADTAIL_BATCH=${TUNED_HEADTAIL_BATCH:-8}
+TUNED_CNN_BATCH=${TUNED_CNN_BATCH:-8}
+TUNED_ARGS=()
+if [ "$AUTOTUNE" = "1" ]; then
+  TUNED_ARGS=(
+    --detection-batch-size "$TUNED_DETECTION_BATCH"
+    --pipeline-depth "$TUNED_PIPELINE_DEPTH"
+    --pose-batch-size "$TUNED_POSE_BATCH"
+    --headtail-batch-size "$TUNED_HEADTAIL_BATCH"
+    --cnn-batch-size "$TUNED_CNN_BATCH"
+  )
+  echo "### AUTOTUNE leg: tuned vector = ${TUNED_ARGS[*]}"
+  if [ "$MAIN_SRC" != "$WT_SRC" ]; then
+    echo "!! AUTOTUNE=1 with MAIN_SRC != WT_SRC compares TWO variables at once" >&2
+    echo "   (source tree AND settings). Set MAIN_SRC=WT_SRC." >&2
+    exit 2
+  fi
+fi
+
+run() {  # src outdir config video label skeleton [extra runner args...]
   local skel_arg=()
   [ -n "${6:-}" ] && skel_arg=(--skeleton "$6")
   PYTHONPATH="$1" python "$WT/tools/equivalence/runner.py" \
     --orig-config "$3" --video "$4" --outdir "$2" --runtime "$RUNTIME" --label "$5" \
-    ${skel_arg[@]+"${skel_arg[@]}"}
+    ${skel_arg[@]+"${skel_arg[@]}"} "${@:7}"
 }
 
 # Clips whose comparison could not be trusted. A harness that prints a green
@@ -179,9 +223,26 @@ cmp() {  # a b title clip [extra compare.py args...]
 # Performance gate: the new pipeline must not be meaningfully slower than legacy.
 # Compares wall-clock/fps from each run's meta.json. PERF_TOLERANCE is the max
 # allowed new/legacy time ratio (default 1.25 = new may be up to 25% slower).
+DET_TITLE="DETERMINISM  new_a vs new_b"
+EQV_TITLE="EQUIVALENCE  legacy vs new_a"
+if [ "$AUTOTUNE" = "1" ]; then
+  DET_TITLE="DETERMINISM  tuned_a vs tuned_b"
+  EQV_TITLE="SETTINGS     default vs tuned"
+fi
+
 PERF_TOLERANCE=${PERF_TOLERANCE:-1.25}
+# Under AUTOTUNE=1 both sides are the SAME source tree; the ratio is
+# default-settings vs tuned-settings throughput, i.e. the very thing the tuner
+# is supposed to change. It is informational there, never a gate -- and on MPS
+# larger batches are measured to be SLOWER (docs/developer-guide/
+# performance-tuning.md), so a red line here is an expected reading, not a
+# regression.
+PERF_LABEL="PERFORMANCE  legacy vs new_a (tolerance ${PERF_TOLERANCE}x)"
+if [ "$AUTOTUNE" = "1" ]; then
+  PERF_LABEL="PERFORMANCE  default vs tuned (INFORMATIONAL -- not a gate)"
+fi
 perfcmp() {  # legacy_meta new_meta
-  echo "--- PERFORMANCE  legacy vs new_a (tolerance ${PERF_TOLERANCE}x) ---"
+  echo "--- $PERF_LABEL ---"
   if [ ! -f "$1" ] || [ ! -f "$2" ]; then
     echo "  (missing meta.json)"; return
   fi
@@ -209,8 +270,10 @@ for entry in "${VIDEOS[@]}"; do
   run "$MAIN_SRC" "$base/legacy" "$config" "$video" "legacy" "$skeleton" \
     || { echo "!! legacy run FAILED"; note_failure "$name" "legacy run exited non-zero"; }
   run "$WT_SRC"   "$base/new_a"  "$config" "$video" "new_a"  "$skeleton" \
+    ${TUNED_ARGS[@]+"${TUNED_ARGS[@]}"} \
     || { echo "!! new_a run FAILED";  note_failure "$name" "new_a run exited non-zero"; }
   run "$WT_SRC"   "$base/new_b"  "$config" "$video" "new_b"  "$skeleton" \
+    ${TUNED_ARGS[@]+"${TUNED_ARGS[@]}"} \
     || { echo "!! new_b run FAILED";  note_failure "$name" "new_b run exited non-zero"; }
 
   stem=$(basename "$video"); stem=${stem%.*}
@@ -218,10 +281,10 @@ for entry in "${VIDEOS[@]}"; do
     echo; echo ">>> $name : $kind"
     cmp "$base/new_a/${stem}_tracking_${kind}.csv" \
         "$base/new_b/${stem}_tracking_${kind}.csv" \
-        "DETERMINISM  new_a vs new_b" "$name"
+        "$DET_TITLE" "$name"
     cmp "$base/legacy/${stem}_tracking_${kind}.csv" \
         "$base/new_a/${stem}_tracking_${kind}.csv" \
-        "EQUIVALENCE  legacy vs new_a" "$name"
+        "$EQV_TITLE" "$name"
   done
 
   # The rich per-individual CSV is the ONLY export carrying the identity
@@ -236,10 +299,10 @@ for entry in "${VIDEOS[@]}"; do
   echo; echo ">>> $name : final_with_individual (identity columns)"
   cmp "$base/new_a/${stem}_tracking_final_with_individual.csv" \
       "$base/new_b/${stem}_tracking_final_with_individual.csv" \
-      "DETERMINISM  new_a vs new_b" "$name" --strict-columns
+      "$DET_TITLE" "$name" --strict-columns
   cmp "$base/legacy/${stem}_tracking_final_with_individual.csv" \
       "$base/new_a/${stem}_tracking_final_with_individual.csv" \
-      "EQUIVALENCE  legacy vs new_a" "$name" --strict-columns
+      "$EQV_TITLE" "$name" --strict-columns
 
   echo; echo ">>> $name : performance"
   perfcmp "$base/legacy/meta.json" "$base/new_a/meta.json"
