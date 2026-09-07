@@ -453,11 +453,13 @@ def test_open_parameter_helper_detection_prompt_uses_main_window_parent(
     orchestrator._open_parameter_helper()
 
     assert captured["parent"] is main_window
-    assert captured["title"] == "Detection Required"
+    assert captured["title"] == "Replay Evidence Required"
     assert (
-        "No detection cache covering frames 10\u2013100 was found."
+        "No replay-evidence cache covering frames 10\u2013100 was found."
         in captured["message"]
     )
+    assert "production-faithful replay evidence" in captured["message"]
+    assert "head-tail, CNN, pose, or AprilTag" in captured["message"]
 
 
 def test_setup_video_file_adds_recent_video_to_main_window_store(monkeypatch) -> None:

@@ -499,10 +499,13 @@ class _LongReplayVideoCapture:
     WIDTH = 100
     HEIGHT = 100
     NUM_FRAMES = 100_000
+    instances: list["_LongReplayVideoCapture"] = []
 
     def __init__(self, *_args, **_kwargs):
         self._idx = 0
         self._opened = True
+        self.released = False
+        type(self).instances.append(self)
 
     def isOpened(self):
         return self._opened
@@ -536,6 +539,7 @@ class _LongReplayVideoCapture:
 
     def release(self):
         self._opened = False
+        self.released = True
 
 
 class _PreflightDetectionCache:
@@ -559,24 +563,24 @@ class _PreflightOBBRunner(_CachedOBBRunner):
         self.cache_dir = "cache"
         self._caches = SimpleNamespace(detection=_PreflightDetectionCache())
         self.filtered_loads: list[int] = []
+        self.closed = False
         type(self).instances.append(self)
 
     def load_filtered_obb(self, frame_idx):
         self.filtered_loads.append(int(frame_idx))
         raise AssertionError("over-budget replay must not materialize filtered OBBs")
 
+    def close(self):
+        self.closed = True
 
-def test_worker_replay_density_preflight_rejects_before_filtered_cache_load(
-    monkeypatch, tmp_path
-):
-    """The byte guard runs before candidate filtering/decompression begins."""
+
+def _make_density_preflight_worker(monkeypatch, tmp_path, *, should_stop=None):
+    """Return a replay whose density admission must end before payload reads."""
 
     import hydra_suite.core.tracking.worker as worker_mod
-    from hydra_suite.core.tracking.confidence.confidence_density import (
-        DensityReplayBudgetExceeded,
-    )
 
     _PreflightOBBRunner.instances.clear()
+    _LongReplayVideoCapture.instances.clear()
     monkeypatch.setattr(worker_mod, "TrackingProfiler", _FakeProfiler)
     monkeypatch.setattr(worker_mod.cv2, "VideoCapture", _LongReplayVideoCapture)
     monkeypatch.setattr(worker_mod, "InferenceRunner", _PreflightOBBRunner)
@@ -589,23 +593,66 @@ def test_worker_replay_density_preflight_rejects_before_filtered_cache_load(
         cache_read_only_replay=True,
         inference_cache_dir=tmp_path / "cache",
         csv_writer_thread=_CapturingCSVWriter(),
+        should_stop=should_stop,
     )
-    params = _bgsub_arena_params(
-        single_arena=True,
-        DETECTION_METHOD="yolo_obb",
-        TRACKING_WORKFLOW_MODE="non_realtime",
-        RESIZE_FACTOR=1.0,
-        END_FRAME=_LongReplayVideoCapture.NUM_FRAMES - 1,
-        ENABLE_CONFIDENCE_DENSITY_MAP=True,
-        AUTOTUNE_DENSITY_MAX_BYTES=1,
+    worker.set_parameters(
+        _bgsub_arena_params(
+            single_arena=True,
+            DETECTION_METHOD="yolo_obb",
+            TRACKING_WORKFLOW_MODE="non_realtime",
+            RESIZE_FACTOR=1.0,
+            END_FRAME=_LongReplayVideoCapture.NUM_FRAMES - 1,
+            ENABLE_CONFIDENCE_DENSITY_MAP=True,
+            AUTOTUNE_DENSITY_MAX_BYTES=1,
+        )
     )
-    worker.set_parameters(params)
+    return worker
+
+
+def test_worker_replay_density_preflight_rejects_before_filtered_cache_load(
+    monkeypatch, tmp_path
+):
+    """The byte guard runs before candidate filtering/decompression begins."""
+
+    from hydra_suite.core.tracking.confidence.confidence_density import (
+        DensityReplayBudgetExceeded,
+    )
+
+    worker = _make_density_preflight_worker(monkeypatch, tmp_path)
 
     with pytest.raises(DensityReplayBudgetExceeded):
         worker.run_tracking()
 
     assert len(_PreflightOBBRunner.instances) == 1
-    assert _PreflightOBBRunner.instances[0].filtered_loads == []
+    runner = _PreflightOBBRunner.instances[0]
+    assert runner.filtered_loads == []
+    assert runner.closed
+    assert len(_LongReplayVideoCapture.instances) == 1
+    assert _LongReplayVideoCapture.instances[0].released
+
+
+def test_worker_replay_density_preflight_cancellation_releases_resources(
+    monkeypatch, tmp_path
+):
+    """Early cancellation takes the same resource-safe path as refusal."""
+
+    from hydra_suite.core.tracking.confidence.confidence_density import (
+        ConfidenceDensityCancelled,
+    )
+
+    worker = _make_density_preflight_worker(
+        monkeypatch,
+        tmp_path,
+        should_stop=lambda: True,
+    )
+
+    with pytest.raises(ConfidenceDensityCancelled):
+        worker.run_tracking()
+
+    assert len(_PreflightOBBRunner.instances) == 1
+    assert _PreflightOBBRunner.instances[0].closed
+    assert len(_LongReplayVideoCapture.instances) == 1
+    assert _LongReplayVideoCapture.instances[0].released
 
 
 def _capture_density_builder_kwargs(monkeypatch, tmp_path, *, single_arena):

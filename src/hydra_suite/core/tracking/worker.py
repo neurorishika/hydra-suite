@@ -1129,39 +1129,60 @@ class TrackingEngineCore:
                     admit_density_map_working_set,
                 )
 
-                _density_preflight_h = int(cap.get(cv2.CAP_PROP_FRAME_HEIGHT))
-                _density_preflight_w = int(cap.get(cv2.CAP_PROP_FRAME_WIDTH))
-                _density_preflight_ds = int(p.get("DENSITY_DOWNSAMPLE_FACTOR", 8))
-                _density_preflight_multi_arena = bool(
-                    self.arena_layout is not None
-                    and not self.arena_layout.is_single_arena
-                    and self.arena_layout.label_image is not None
-                )
-                _density_replay_frame_count = density_cache_covered_frame_count(
-                    inference_runner,
-                    start_frame,
-                    end_frame,
-                    should_stop=self._is_stop_requested,
-                )
-                admit_density_map_working_set(
-                    _density_replay_frame_count,
-                    _density_preflight_h,
-                    _density_preflight_w,
-                    _density_preflight_ds,
-                    temporal_sigma=float(p.get("DENSITY_TEMPORAL_SIGMA", 2.0)),
-                    multi_arena=_density_preflight_multi_arena,
-                    arena_count=(
-                        int(self.arena_layout.n_arenas)
-                        if _density_preflight_multi_arena
-                        else 1
-                    ),
-                    max_working_bytes=int(
-                        p.get(
-                            "AUTOTUNE_DENSITY_MAX_BYTES",
-                            DEFAULT_AUTOTUNE_DENSITY_MAX_BYTES,
+                try:
+                    _density_preflight_h = int(cap.get(cv2.CAP_PROP_FRAME_HEIGHT))
+                    _density_preflight_w = int(cap.get(cv2.CAP_PROP_FRAME_WIDTH))
+                    _density_preflight_ds = int(p.get("DENSITY_DOWNSAMPLE_FACTOR", 8))
+                    _density_preflight_multi_arena = bool(
+                        self.arena_layout is not None
+                        and not self.arena_layout.is_single_arena
+                        and self.arena_layout.label_image is not None
+                    )
+                    _density_replay_frame_count = density_cache_covered_frame_count(
+                        inference_runner,
+                        start_frame,
+                        end_frame,
+                        should_stop=self._is_stop_requested,
+                    )
+                    admit_density_map_working_set(
+                        _density_replay_frame_count,
+                        _density_preflight_h,
+                        _density_preflight_w,
+                        _density_preflight_ds,
+                        temporal_sigma=float(p.get("DENSITY_TEMPORAL_SIGMA", 2.0)),
+                        multi_arena=_density_preflight_multi_arena,
+                        arena_count=(
+                            int(self.arena_layout.n_arenas)
+                            if _density_preflight_multi_arena
+                            else 1
+                        ),
+                        max_working_bytes=int(
+                            p.get(
+                                "AUTOTUNE_DENSITY_MAX_BYTES",
+                                DEFAULT_AUTOTUNE_DENSITY_MAX_BYTES,
+                            )
+                        ),
+                    )
+                except Exception:
+                    # This admission runs before the worker's normal cleanup
+                    # section. Close the read-only cache and capture here so a
+                    # failed, rejected, or cancelled replay never leaks either
+                    # resource. Bare re-raise preserves the original reason.
+                    try:
+                        inference_runner.close()
+                    except Exception:
+                        logger.debug(
+                            "Failed to close replay cache after density preflight",
+                            exc_info=True,
                         )
-                    ),
-                )
+                    try:
+                        cap.release()
+                    except Exception:
+                        logger.debug(
+                            "Failed to release capture after density preflight",
+                            exc_info=True,
+                        )
+                    raise
             # A density sidecar is valid only for the raw detection generation
             # used by this runner, not merely for the cache directory it shares
             # with past detector/model configurations.
@@ -1518,20 +1539,20 @@ class TrackingEngineCore:
                         if self.cache_read_only_replay
                         else None
                     )
-                    if self.cache_read_only_replay:
-                        # Count cache coverage from manifest metadata before
-                        # filtering/decompressing every OBB frame. An
-                        # over-budget read-only candidate must retain the
-                        # baseline without paying the very allocation cost the
-                        # density admission guard is designed to prevent.
-                        _covered_density_frames = _density_replay_frame_count
-                        if _covered_density_frames is None:
-                            _covered_density_frames = density_cache_covered_frame_count(
-                                inference_runner,
-                                start_frame,
-                                end_frame,
-                                should_stop=self._is_stop_requested,
-                            )
+                    if (
+                        self.cache_read_only_replay
+                        and _density_replay_frame_count is None
+                    ):
+                        # Future read-only callers that reach density evidence
+                        # without the early YOLO preflight retain its bounded
+                        # behavior. Ordinary replay reuses the already-admitted
+                        # count and does not repeat this work.
+                        _covered_density_frames = density_cache_covered_frame_count(
+                            inference_runner,
+                            start_frame,
+                            end_frame,
+                            should_stop=self._is_stop_requested,
+                        )
                         _density_multi_arena = bool(
                             self.arena_layout is not None
                             and not self.arena_layout.is_single_arena
