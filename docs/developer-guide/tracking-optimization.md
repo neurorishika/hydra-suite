@@ -21,6 +21,15 @@ change:
    raw cached detections are never substituted for density evidence. Sparse
    cache keys retain their absolute video-frame numbers and break temporal
    smoothing/regions at each missing frame rather than creating a false bridge.
+   A cache prepared from the dialog runs raw detection and every configured
+   downstream head-tail, CNN, pose, and AprilTag stage needed for
+   production-faithful replay; it is not a detection-only shortcut.
+   Read-only density replay is admitted only when a conservative estimate of
+   its raw, smoothing, binary, labeling, and arena-mask buffers fits
+   `AUTOTUNE_DENSITY_MAX_BYTES` (512 MiB by default). Legacy monolithic caches
+   use the requested span as a conservative count without loading their payload.
+   An over-budget or cancelled build is explicit missing validation evidence,
+   never a silent no-density fallback.
 2. Optuna explores the user-selected parameter dimensions on a chronological
    training slice. Its scalar loss is only a search heuristic. The current
    production settings are also evaluated exactly and are never clamped into
@@ -54,9 +63,12 @@ change:
    when it dominates the exact baseline and other baseline-safe candidates, and
    its held-out improvement clears an uncertainty-aware margin without a
    conservative regression on any metric. Otherwise the UI says **Keep current**.
+   Proposals without complete finite held-out metrics remain inspection-only and
+   cannot be applied or persisted as a recommendation.
 
-The user can still preview and manually choose any proposal. That is an explicit
-human decision, not an automatic accuracy claim.
+The user can still preview any proposal for inspection. Applying settings is
+limited to current settings or a production-validated candidate; neither action
+is an automatic accuracy claim.
 
 ## Components
 
@@ -120,7 +132,11 @@ detections below the threshold active when the cache was first built.
 Sequential cache keys include stage-1 confidence, crop geometry, stage-2
 extraction settings, target/count caps, slicing configuration, and any ROI mask
 used for sliced stage 1; changing a raw-generation setting cannot silently reuse
-incompatible detections.
+incompatible detections. Direct, sequential, and background-subtraction raw
+keys also include `emit_native_geometry`: compact tracking caches do not
+serialize native polygons, so a configuration that requires them bypasses raw
+cache reads and writes and recomputes live instead of mistaking a polygon-free
+cache hit for export-ready evidence.
 
 ## State and cancellation
 
@@ -144,10 +160,11 @@ observations before it contributes to promotion. Cycle evidence has both an
 absolute shared-observation floor and a horizon/slot-scaled coverage floor.
 When a candidate changes a lifecycle threshold, held-out output must also
 exercise a threshold that distinguishes it from baseline: maturity needs a
-consecutive observed run and loss needs a bracketed missing run reaching the
-lower of the baseline/candidate values. A run or gap between those values
-exercises one lifecycle policy while the other remains unchanged. Otherwise
-the current settings are retained.
+consecutive observed run one frame longer than the lower baseline/candidate
+age (a newly bootstrapped track starts at continuity zero), and loss needs a
+bracketed missing run reaching the lower value. A run or gap between those
+values exercises one lifecycle policy while the other remains unchanged.
+Otherwise the current settings are retained.
 
 Cancel, window close, `reject()`, `accept()`, and direct `done()` all request
 optimizer and preview cancellation before a terminal dialog transition. The
@@ -155,7 +172,9 @@ dialog waits only a bounded time. If a worker has not stopped, the dialog stays
 open with a stopping status and may retry once the worker cooperates; it never
 destroys a live Qt thread. Plateau stopping is separate from explicit user
 cancellation: only the former sets search convergence, and a plateau-converged
-search still performs held-out validation.
+search still performs held-out validation. An explicit cancellation discards
+partial proposals and held-out state without ranking, emitting, saving,
+previewing, or enabling an apply action from that stale evidence.
 
 ## Remaining limitation
 
