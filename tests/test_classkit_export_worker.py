@@ -18,6 +18,15 @@ from hydra_suite.classkit.core.export.splits import (
 from hydra_suite.classkit.jobs.task_workers import ExportWorker
 
 
+@pytest.fixture()
+def qapp():
+    import sys
+
+    from PySide6.QtWidgets import QApplication
+
+    return QApplication.instance() or QApplication(sys.argv)
+
+
 def _run_worker_and_collect_error(worker: ExportWorker) -> list[str]:
     errors: list[str] = []
     worker.signals.error.connect(errors.append)
@@ -253,6 +262,12 @@ def test_multihead_export_worker_filters_unknown_factor_labels(
 
     class _FakeExportWorker:
         def __init__(self, *args, **kwargs) -> None:
+            # Mirror every kwarg onto the instance: MultiHeadExportWorker reads
+            # split_strategy/val_fraction/test_fraction off `self` when building
+            # its per-factor sub-workers, and a missing attribute there is
+            # swallowed by the run() try/except into a silent error signal.
+            for key, value in kwargs.items():
+                setattr(self, key, value)
             self.image_paths = list(kwargs.get("image_paths") or [])
             self.labels = list(kwargs.get("labels") or [])
             self.class_names = dict(kwargs.get("class_names") or {})

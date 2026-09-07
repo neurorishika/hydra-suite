@@ -105,7 +105,9 @@ class TestRunWithBusyDialog:
 
         _spin(qapp, lambda: bool(finished))
 
-        assert errors == ["boom"]
+        # BaseWorker routes failures through bounded_terminal_text(), which
+        # prefixes the exception type (include_exception_type defaults True).
+        assert errors == ["RuntimeError: boom"]
         assert not task.dialog.isVisible()
 
     def test_determinate_mode_relays_progress_values(self, qapp):

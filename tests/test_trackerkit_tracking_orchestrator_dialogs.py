@@ -621,6 +621,14 @@ def test_start_tracking_on_video_restores_csv_and_worker_imports(
     panels = SimpleNamespace(setup=setup_panel, tracking=tracking_panel)
 
     main_window = SimpleNamespace(
+        # Pre-flight guards the orchestrator runs before launching: identity
+        # needs an evidence source, arenas must not overlap. These tests run
+        # identity-off with a single clean arena.
+        _is_identity_analysis_enabled=lambda: False,
+        arena_panel=SimpleNamespace(
+            can_track=lambda: (True, ""),
+            blocking_pairs=lambda: [],
+        ),
         tracking_worker=None,
         _stop_all_requested=False,
         _pending_finish_after_interp=False,
@@ -743,6 +751,14 @@ def test_start_preview_on_video_uses_tracking_worker_when_cache_is_valid(
     )
 
     main_window = SimpleNamespace(
+        # Pre-flight guards the orchestrator runs before launching: identity
+        # needs an evidence source, arenas must not overlap. These tests run
+        # identity-off with a single clean arena.
+        _is_identity_analysis_enabled=lambda: False,
+        arena_panel=SimpleNamespace(
+            can_track=lambda: (True, ""),
+            blocking_pairs=lambda: [],
+        ),
         tracking_worker=None,
         _stop_all_requested=False,
         _pending_finish_after_interp=False,
@@ -839,6 +855,14 @@ def test_start_preview_on_video_downgrades_auxiliary_runtimes(
     )
 
     main_window = SimpleNamespace(
+        # Pre-flight guards the orchestrator runs before launching: identity
+        # needs an evidence source, arenas must not overlap. These tests run
+        # identity-off with a single clean arena.
+        _is_identity_analysis_enabled=lambda: False,
+        arena_panel=SimpleNamespace(
+            can_track=lambda: (True, ""),
+            blocking_pairs=lambda: [],
+        ),
         tracking_worker=None,
         _stop_all_requested=False,
         _pending_finish_after_interp=False,

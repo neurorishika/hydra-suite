@@ -14,6 +14,7 @@ class _FakeWorker:
     """Lightweight stand-in exposing only the attributes the helper reads."""
 
     backward_mode = False
+    cache_read_only_replay = False
 
     def __init__(self, video_path, video_output_path=None):
         self.video_path = video_path
