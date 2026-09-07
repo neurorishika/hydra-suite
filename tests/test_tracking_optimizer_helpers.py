@@ -292,37 +292,26 @@ def test_optimizer_replay_uses_directed_heading_for_assignment_and_kf() -> None:
     assert corrected[2] == np.float32(1.25)
 
 
-def _install_cache_validation_probe(
+def _install_cache_admission_probe(
     mod,
     *,
     all_valid: bool = True,
     covers_range: bool = True,
     missing_frames: list[int] | None = None,
 ):
-    """Install a cache-only production-replay probe and return its call log."""
+    """Install the shared replay-admission result and return its call log."""
 
-    calls: list[tuple[str, object]] = []
+    calls: list[tuple[object, ...]] = []
 
-    class _CacheValidationProbe:
-        def __init__(self, *args, **kwargs):
-            calls.append(("init", (args, kwargs)))
+    def _admit(cache_path, video_path, params, start_frame, end_frame):
+        calls.append((cache_path, video_path, params, start_frame, end_frame))
+        return types.SimpleNamespace(
+            cache_set_valid=all_valid,
+            detection_range_covered=covers_range,
+            missing_frames=tuple(missing_frames or []),
+        )
 
-        def caches_all_valid(self):
-            calls.append(("all_valid", None))
-            return all_valid
-
-        def detection_cache_covers_range(self, start_frame, end_frame):
-            calls.append(("covers", (start_frame, end_frame)))
-            return covers_range
-
-        def detection_cache_missing_frames(self, start_frame, end_frame):
-            calls.append(("missing", (start_frame, end_frame)))
-            return missing_frames or []
-
-        def close(self):
-            calls.append(("close", None))
-
-    mod.InferenceRunner = _CacheValidationProbe
+    mod.inspect_replay_cache_admission = _admit
     return calls
 
 
@@ -355,7 +344,7 @@ def test_optimizer_opens_full_replay_cache_read_only() -> None:
     mod._open_caches = _open_caches
     mod.inference_config_for_optimizer_params = lambda _params: object()
     mod.video_signature = lambda _path: "video-signature"
-    probe_calls = _install_cache_validation_probe(mod)
+    admission_calls = _install_cache_admission_probe(mod)
     optimizer = mod.TrackingOptimizerCore(
         video_path="dummy.mp4",
         detection_cache_path="cache-dir",
@@ -367,15 +356,14 @@ def test_optimizer_opens_full_replay_cache_read_only() -> None:
 
     assert optimizer._open_and_validate_cache()
     assert cache_calls[0][1]["read_only"] is True
-    assert [name for name, _value in probe_calls] == [
-        "init",
-        "all_valid",
-        "covers",
-        "close",
+    assert len(admission_calls) == 1
+    cache_path, video_path, admission_params, start_frame, end_frame = admission_calls[
+        0
     ]
-    _probe_args, probe_kwargs = probe_calls[0][1]
-    assert probe_kwargs["cache_only"] is True
-    assert probe_kwargs["video_path"] == "dummy.mp4"
+    assert str(cache_path) == "cache-dir"
+    assert video_path == "dummy.mp4"
+    assert admission_params == {}
+    assert (start_frame, end_frame) == (2, 4)
 
 
 def test_optimizer_rejects_missing_downstream_replay_evidence_before_search() -> None:
@@ -385,7 +373,7 @@ def test_optimizer_rejects_missing_downstream_replay_evidence_before_search() ->
     errors = []
     mod._open_caches = _record_direct_cache_open(direct_open_calls)
     mod.inference_config_for_optimizer_params = lambda _params: object()
-    probe_calls = _install_cache_validation_probe(mod, all_valid=False)
+    admission_calls = _install_cache_admission_probe(mod, all_valid=False)
     optimizer = mod.TrackingOptimizerCore(
         "dummy.mp4", "cache-dir", 2, 4, {}, {}, error_cb=errors.append
     )
@@ -394,7 +382,7 @@ def test_optimizer_rejects_missing_downstream_replay_evidence_before_search() ->
     assert direct_open_calls == []
     assert optimizer.cache is None
     assert "Every enabled inference stage" in errors[0]
-    assert [name for name, _value in probe_calls] == ["init", "all_valid", "close"]
+    assert len(admission_calls) == 1
 
 
 def test_optimizer_rejects_corrupt_downstream_replay_evidence_before_search() -> None:
@@ -403,7 +391,7 @@ def test_optimizer_rejects_corrupt_downstream_replay_evidence_before_search() ->
     errors = []
     mod._open_caches = _record_direct_cache_open(direct_open_calls)
     mod.inference_config_for_optimizer_params = lambda _params: object()
-    probe_calls = _install_cache_validation_probe(mod, all_valid=False)
+    admission_calls = _install_cache_admission_probe(mod, all_valid=False)
     optimizer = mod.TrackingOptimizerCore(
         "dummy.mp4", "cache-dir", 2, 4, {}, {}, error_cb=errors.append
     )
@@ -412,7 +400,7 @@ def test_optimizer_rejects_corrupt_downstream_replay_evidence_before_search() ->
     assert direct_open_calls == []
     assert optimizer.cache is None
     assert "Replay evidence cache is incomplete or incompatible" in errors[0]
-    assert [name for name, _value in probe_calls] == ["init", "all_valid", "close"]
+    assert len(admission_calls) == 1
 
 
 def test_optimizer_rejects_mixed_downstream_replay_coverage_before_search() -> None:
@@ -421,7 +409,7 @@ def test_optimizer_rejects_mixed_downstream_replay_coverage_before_search() -> N
     errors = []
     mod._open_caches = _record_direct_cache_open(direct_open_calls)
     mod.inference_config_for_optimizer_params = lambda _params: object()
-    probe_calls = _install_cache_validation_probe(mod, all_valid=False)
+    admission_calls = _install_cache_admission_probe(mod, all_valid=False)
     optimizer = mod.TrackingOptimizerCore(
         "dummy.mp4", "cache-dir", 2, 4, {}, {}, error_cb=errors.append
     )
@@ -430,7 +418,7 @@ def test_optimizer_rejects_mixed_downstream_replay_coverage_before_search() -> N
     assert direct_open_calls == []
     assert optimizer.cache is None
     assert "Replay evidence cache is incomplete or incompatible" in errors[0]
-    assert [name for name, _value in probe_calls] == ["init", "all_valid", "close"]
+    assert len(admission_calls) == 1
 
 
 def test_optimizer_rejects_requested_range_after_full_cache_admission() -> None:
@@ -439,7 +427,7 @@ def test_optimizer_rejects_requested_range_after_full_cache_admission() -> None:
     errors = []
     mod._open_caches = _record_direct_cache_open(direct_open_calls)
     mod.inference_config_for_optimizer_params = lambda _params: object()
-    probe_calls = _install_cache_validation_probe(
+    admission_calls = _install_cache_admission_probe(
         mod, covers_range=False, missing_frames=[3]
     )
     optimizer = mod.TrackingOptimizerCore(
@@ -449,13 +437,7 @@ def test_optimizer_rejects_requested_range_after_full_cache_admission() -> None:
     assert not optimizer._open_and_validate_cache()
     assert direct_open_calls == []
     assert "Missing: [3]" in errors[0]
-    assert [name for name, _value in probe_calls] == [
-        "init",
-        "all_valid",
-        "covers",
-        "missing",
-        "close",
-    ]
+    assert len(admission_calls) == 1
 
 
 def test_optimizer_replay_skips_directed_pose_heading_when_pose_is_weak() -> None:

@@ -128,48 +128,27 @@ def detection_cache_dir_covers_range(
     start_frame: int,
     end_frame: int,
 ) -> bool:
-    """Return True iff *path* names a modern detection cache (directory or
-    the ``detection.npz`` file inside one) that is key-compatible with
-    *params* and covers ``start_frame..end_frame``.
+    """Return True iff *path* names a complete modern replay cache set.
+
+    ``path`` may be the cache directory or its ``detection.npz`` member.  In
+    addition to detection key/range compatibility, every configured
+    downstream evidence member must have a matching key, generation, and
+    coverage.  Otherwise the optimizer must prepare fresh full evidence
+    instead of falsely skipping that preparation and immediately failing its
+    read-only production validation.
 
     Only the modern ``InferenceRunner`` cache-directory layout (built by
     ``DetectionCacheBuildWorker``) is recognized -- there is no legacy
-    single-file fallback. Method/model compatibility is enforced entirely by
-    the stored ``cache_key`` (see ``DetectionCacheHandle.is_valid``) -- a
-    cache built for a different detection method or model simply fails the
-    key check and is treated as not covering the range. A non-existent path,
-    or one whose containing directory doesn't exist, returns False rather
-    than raising.
+    single-file fallback. A non-existent path, or one whose containing
+    directory doesn't exist, returns False rather than raising.
     """
-    if not path:
-        return False
-    from hydra_suite.core.tracking.optimization.production_replay import cache_directory
+    from hydra_suite.core.tracking.optimization.production_replay import (
+        inspect_replay_cache_admission,
+    )
 
-    cache_dir = cache_directory(path)
-    if not cache_dir.is_dir():
-        return False
-    try:
-        from hydra_suite.core.inference.runner import _open_caches, video_signature
-        from hydra_suite.core.tracking.optimization.detection_config import (
-            inference_config_for_optimizer_params,
-        )
-
-        _cfg = inference_config_for_optimizer_params(params)
-        caches = _open_caches(
-            _cfg,
-            cache_dir,
-            video_signature(video_path),
-            params.get("ROI_MASK", None),
-            read_only=True,
-        )
-        handle = caches.detection
-        return (
-            caches.set_manifest_valid
-            and handle is not None
-            and handle.covers_frame_range(start_frame, end_frame)
-        )
-    except Exception:
-        return False
+    return inspect_replay_cache_admission(
+        path, video_path, params, start_frame, end_frame
+    ).ready
 
 
 class ConfigOrchestrator:

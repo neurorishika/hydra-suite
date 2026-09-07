@@ -421,6 +421,33 @@ def _warn_geometry_mismatch(model_path: str, session_geometry) -> None:
         logger.warning(message)
 
 
+def cache_set_is_fully_reusable(caches: _CacheSet) -> bool:
+    """Whether every configured cache member is key-valid and coextensive.
+
+    This is deliberately independent of :class:`InferenceRunner` construction:
+    callers that only decide whether to prepare/reuse replay evidence must not
+    initialize an OBB backend merely to inspect cache metadata.  It is the
+    pure cache-set portion of ``InferenceRunner.caches_all_valid()``.
+    """
+
+    handles = caches.all_handles()
+    if (
+        not caches.set_manifest_valid
+        or not handles
+        or not all(handle.is_reusable() for handle in handles)
+    ):
+        return False
+    if caches.generation_id is not None and any(
+        handle._store.generation_id != caches.generation_id for handle in handles
+    ):
+        return False
+    # A child crash can publish detection chunks before a downstream stage
+    # finishes. Matching keys alone must not turn that honest partial cache
+    # into a reusable complete pass.
+    reference = caches.detection.coverage_ranges() if caches.detection else ()
+    return all(handle.coverage_ranges() == reference for handle in handles)
+
+
 def _load_all_models(
     config: InferenceConfig,
     runtime: RuntimeContext,
@@ -997,22 +1024,7 @@ class InferenceRunner:
             self._roi_mask,
             read_only=True,
         )
-        handles = caches.all_handles()
-        if (
-            not caches.set_manifest_valid
-            or not handles
-            or not all(h.is_reusable() for h in handles)
-        ):
-            return False
-        if caches.generation_id is not None and any(
-            h._store.generation_id != caches.generation_id for h in handles
-        ):
-            return False
-        # A child crash can publish detection chunks before a downstream stage
-        # finishes. Matching keys alone must not turn that honest partial cache
-        # into a reusable complete pass.
-        reference = caches.detection.coverage_ranges() if caches.detection else ()
-        return all(h.coverage_ranges() == reference for h in handles)
+        return cache_set_is_fully_reusable(caches)
 
     def detection_cache_covers_range(self, start_frame: int, end_frame: int) -> bool:
         """Return True iff the detection cache spans every frame in the range.

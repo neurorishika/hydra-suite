@@ -9,6 +9,7 @@ itself and returns only the observed positions that production would export.
 
 from __future__ import annotations
 
+import logging
 from collections.abc import Mapping
 from dataclasses import dataclass
 from pathlib import Path
@@ -19,6 +20,8 @@ import numpy as np
 from hydra_suite.core.tracking.confidence.confidence_density import (
     ConfidenceDensityCancelled,
 )
+
+logger = logging.getLogger(__name__)
 
 _REPLAY_THRESHOLD_TUNING_DIMENSIONS = (
     "YOLO_CONFIDENCE_THRESHOLD",
@@ -116,6 +119,92 @@ def cache_directory(cache_path: str | Path) -> Path:
     # also safe to normalize; a non-existent optimizer build target remains a
     # directory so it can be created by ``InferenceRunner``.
     return path.parent if path.name == "detection.npz" or path.is_file() else path
+
+
+@dataclass(frozen=True)
+class ReplayCacheAdmission:
+    """Read-only compatibility result for a production replay cache set.
+
+    A detection member alone cannot support production-faithful replay: every
+    enabled downstream member must have the matching cache key, generation,
+    and coverage.  ``detection_range_covered`` is intentionally separate so a
+    complete cache set for a different clip span is reported honestly.
+    """
+
+    cache_set_valid: bool
+    detection_range_covered: bool
+    missing_frames: tuple[int, ...] = ()
+    error: str | None = None
+
+    @property
+    def ready(self) -> bool:
+        """Whether this cache can replay the requested evidence window."""
+
+        return self.cache_set_valid and self.detection_range_covered
+
+
+def inspect_replay_cache_admission(
+    cache_path: str | Path,
+    video_path: str | Path,
+    params: Mapping[str, Any],
+    start_frame: int,
+    end_frame: int,
+) -> ReplayCacheAdmission:
+    """Inspect a full production replay cache set without running inference.
+
+    This is the single admission contract for TrackerKit's cache-preparation
+    shortcut and the optimizer core.  It opens only cache handles and applies
+    the same pure cache-set predicate as ``InferenceRunner.caches_all_valid``;
+    metadata probing must not initialize an OBB/TRT backend for each candidate
+    cache directory the GUI scans.
+    """
+
+    if not cache_path:
+        return ReplayCacheAdmission(False, False, error="No replay cache path")
+
+    cache_dir = cache_directory(cache_path)
+    if not cache_dir.is_dir():
+        return ReplayCacheAdmission(
+            False, False, error=f"Replay cache directory does not exist: {cache_dir}"
+        )
+
+    try:
+        from hydra_suite.core.inference.runner import (
+            _open_caches,
+            cache_set_is_fully_reusable,
+            video_signature,
+        )
+        from hydra_suite.core.tracking.optimization.detection_config import (
+            inference_config_for_optimizer_params,
+        )
+
+        config = inference_config_for_optimizer_params(dict(params))
+        caches = _open_caches(
+            config,
+            cache_dir,
+            video_signature(str(video_path)),
+            params.get("ROI_MASK", None),
+            read_only=True,
+        )
+        if not cache_set_is_fully_reusable(caches):
+            return ReplayCacheAdmission(False, False)
+
+        detection = caches.detection
+        if detection is None:
+            return ReplayCacheAdmission(False, False)
+        range_covered = bool(detection.covers_frame_range(start_frame, end_frame))
+        missing = (
+            tuple(
+                int(frame)
+                for frame in detection.get_missing_frames(start_frame, end_frame)
+            )
+            if not range_covered
+            else ()
+        )
+        return ReplayCacheAdmission(True, range_covered, missing)
+    except Exception as exc:
+        logger.warning("Unable to inspect replay evidence cache", exc_info=True)
+        return ReplayCacheAdmission(False, False, error=str(exc))
 
 
 def trajectories_to_positions(
