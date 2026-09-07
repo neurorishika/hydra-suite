@@ -690,3 +690,34 @@ def test_export_stages_the_artifact_and_clears_the_marker_first(tmp_path, monkey
         assert Path(dst).parent == artifact.parent
     # No staging leftovers.
     assert sorted(p.name for p in tmp_path.iterdir() if p.name.startswith(".")) == []
+
+
+def test_failed_directory_swap_restores_the_previous_artifact(tmp_path, monkeypatch):
+    """The publish must never be the thing that destroys the only good copy."""
+    import os
+
+    from hydra_suite.core.inference import runtime_artifacts as ra
+
+    source = tmp_path / "fresh.mlpackage"
+    source.mkdir()
+    (source / "weights").write_bytes(b"NEW")
+    artifact = tmp_path / "model.mlpackage"
+    artifact.mkdir()
+    (artifact / "weights").write_bytes(b"OLD")
+
+    real_rename = os.rename
+    calls = {"n": 0}
+
+    def _flaky_rename(src, dst):
+        calls["n"] += 1
+        if calls["n"] == 2:  # staging -> artifact_path
+            raise OSError("simulated cross-device failure")
+        return real_rename(src, dst)
+
+    monkeypatch.setattr(ra.os, "rename", _flaky_rename)
+    with pytest.raises(OSError):
+        ra._install_artifact_atomically(source, artifact)
+
+    assert (artifact / "weights").read_bytes() == b"OLD"
+    leftovers = [p.name for p in tmp_path.iterdir() if p.name.startswith(".")]
+    assert leftovers == [], leftovers

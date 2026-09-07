@@ -85,6 +85,15 @@ against the *physical* list, never against the parent's own
 pinned by UUID: `CUDA_VISIBLE_DEVICES=<uuid>`. When `nvidia-smi` is absent
 (MPS/CPU hosts) it returns `[]` and any `--gpus` request is an error.
 
+**Amended 2026-09-07 (fix wave, I2):** that last decision now lives in one pure
+`batch_fanout.decide_gpu_slots(selectors, devices, host_has_cuda)` shared by the
+CLI and the GUI, and it distinguishes three cases: no devices on a CUDA-capable
+host is an error naming `nvidia-smi` (it is missing/masked/timing out, and
+running unpinned would put every child on `cuda:0`); on a host with no CUDA at
+all an explicitly named device is still an error, but `auto` is best-effort and
+runs unpinned. The GUI previously swallowed the whole resolution when
+`nvidia-smi` returned nothing.
+
 ### 4.3 `trackerkit/batch_fanout.py` — scheduler (Qt-free)
 
 ```python

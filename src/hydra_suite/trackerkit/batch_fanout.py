@@ -486,6 +486,10 @@ def _stop_children(running: list[_Live], options: FanoutOptions) -> None:
             live.proc.wait(timeout=5)
         except Exception:
             pass
+        # Same guarantee as the terminal transition in _finish: on the
+        # scheduler-raise path _finish is never called, so reap the group here
+        # too rather than leave grandchildren behind.
+        _reap_process_group(live.proc)
 
 
 def run_batch_fanout(

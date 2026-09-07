@@ -177,3 +177,33 @@ def test_failed_reexport_leaves_the_previous_export_intact(tmp_path, monkeypatch
         "model.onnx",
         "model.onnx.lock",
     ]
+
+
+def test_failed_export_swap_restores_the_previous_export(tmp_path, monkeypatch):
+    """A failed rename must not leave the model with no export at all."""
+    import os
+
+    import hydra_suite.core.individual.pose.backends.sleap as sleap_mod
+
+    export_dir = tmp_path / "model.onnx"
+    export_dir.mkdir()
+    (export_dir / "model.onnx").write_bytes(b"OLD-EXPORT")
+    staging = tmp_path / "model.onnx.tmp-test"
+    staging.mkdir()
+    (staging / "model.onnx").write_bytes(b"NEW-EXPORT")
+
+    real_rename = os.rename
+    calls = {"n": 0}
+
+    def _flaky_rename(src, dst):
+        calls["n"] += 1
+        if calls["n"] == 2:  # staging -> export_dir
+            raise OSError("simulated cross-device failure")
+        return real_rename(src, dst)
+
+    monkeypatch.setattr(sleap_mod.os, "rename", _flaky_rename)
+    with pytest.raises(OSError):
+        sleap_mod._swap_export_dir_into_place(staging, export_dir)
+
+    assert (export_dir / "model.onnx").read_bytes() == b"OLD-EXPORT"
+    assert not list(tmp_path.glob("*.old-*"))

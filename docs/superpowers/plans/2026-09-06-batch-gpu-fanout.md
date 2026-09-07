@@ -2905,11 +2905,13 @@ comparisons across the two platforms are exactly zero.
 ## Fix wave (2026-09-07)
 
 Adversarial review of `4661e0b6` (findings in `/tmp/batch-fanout-adversarial/adversarial-findings.md`;
-full write-up in `/tmp/batch-fanout-adversarial/fix-wave-report.md`). Seven commits,
-`4661e0b6` → `4c635bdf`: C1 stranded grandchildren, C2 shared `video_output_path`,
+full write-up in `/tmp/batch-fanout-adversarial/fix-wave-report.md`). Nine commits,
+`4661e0b6` → `HEAD`: C1 stranded grandchildren, C2 shared `video_output_path`,
 I2 GUI silently unpinned, I3 in-place artifact rebuild, I4 lock-test PYTHONPATH,
-I5 window-close budget, plus the minor folds and this gate leg. No inference
-numerics changed.
+I5 window-close budget, plus the minor folds, this gate leg, and a self-review
+follow-up that fixes a defect introduced by the I3 fix itself (a `finally` that
+deleted the displaced good artifact when the swap-in rename failed). No
+inference numerics changed.
 
 ### Why the original gates missed C2
 

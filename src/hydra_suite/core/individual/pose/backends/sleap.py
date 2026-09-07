@@ -966,12 +966,25 @@ def _swap_export_dir_into_place(staging_dir: Path, export_dir: Path) -> None:
     """
     displaced = export_dir.parent / f"{export_dir.name}.old-{os.getpid()}"
     shutil.rmtree(displaced, ignore_errors=True)
-    if export_dir.exists():
+    had_previous = export_dir.exists()
+    if had_previous:
         os.rename(str(export_dir), str(displaced))
     try:
         os.rename(str(staging_dir), str(export_dir))
-    finally:
-        shutil.rmtree(displaced, ignore_errors=True)
+    except BaseException:
+        # The previous export is now the ONLY copy: restore it rather than let
+        # this "safer" publish be what deletes it.
+        if had_previous:
+            try:
+                os.rename(str(displaced), str(export_dir))
+            except OSError:
+                logger.error(
+                    "Could not restore the SLEAP export at %s; it is at %s",
+                    export_dir,
+                    displaced,
+                )
+        raise
+    shutil.rmtree(displaced, ignore_errors=True)
 
 
 def auto_export_sleap_model(config: PoseRuntimeConfig, runtime_flavor: str) -> str:

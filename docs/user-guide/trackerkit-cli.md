@@ -50,6 +50,11 @@ service it starts) sees exactly one GPU. Output is identical to the sequential
 run. Rules:
 
 - Fan-out engages only when `--gpus` is given or `--jobs > 1`.
+- `--gpus auto` is best effort: on a host with no CUDA at all it simply runs
+  unpinned. A GPU named explicitly (`--gpus 0`) that `nvidia-smi` does not
+  report is an error, as is *any* selection on a CUDA-capable host whose
+  `nvidia-smi` reports nothing -- there, running unpinned would put every child
+  on `cuda:0`.
 - `--jobs` defaults to one slot per selected GPU when `--gpus` is given
   (else 1, which stays sequential and in-process), and is clamped to the
   number of selected GPUs.

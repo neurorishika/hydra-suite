@@ -255,8 +255,20 @@ def _install_artifact_atomically(source: Path, artifact_path: Path) -> None:
             os.rename(str(artifact_path), str(displaced))
             try:
                 os.rename(str(staging), str(artifact_path))
-            finally:
-                _remove_path(displaced)
+            except BaseException:
+                # The old artifact is now the ONLY copy: put it back before
+                # propagating, or this "safer" publish would be the thing that
+                # destroyed it.
+                try:
+                    os.rename(str(displaced), str(artifact_path))
+                except OSError:
+                    logger.error(
+                        "Could not restore %s after a failed swap; it is at %s",
+                        artifact_path,
+                        displaced,
+                    )
+                raise
+            _remove_path(displaced)
         else:
             os.replace(str(staging), str(artifact_path))
     finally:
