@@ -1,5 +1,7 @@
 from __future__ import annotations
 
+import os
+
 from hydra_suite.core.inference.autotune.device import probe_runtime_resources
 from hydra_suite.runtime.resource_budget import AcceleratorKind
 
@@ -52,8 +54,18 @@ def test_cuda_probe_uses_most_conservative_free_memory_sample():
 
 
 def test_cuda_probe_targets_the_process_visible_physical_device(monkeypatch):
+    """The probe must target the same physical GPU nvidia-smi and CUDA agree on.
+
+    nvidia-smi always enumerates by PCI bus order; CUDA defaults to
+    FASTEST_FIRST. Targeting a bare ordinal (the pre-S7 fallback) is only
+    correct if both orderings happen to agree -- an assumption this test used
+    to leave unverified. The probe now normalizes CUDA_DEVICE_ORDER itself
+    (S7), so this asserts that normalization actually happens, not just that
+    an already-UUID CUDA_VISIBLE_DEVICES value is echoed back unchanged.
+    """
     commands = []
     monkeypatch.setenv("CUDA_VISIBLE_DEVICES", "GPU-visible,1")
+    monkeypatch.delenv("CUDA_DEVICE_ORDER", raising=False)
 
     def query(command):
         commands.append(command)
@@ -68,6 +80,35 @@ def test_cuda_probe_targets_the_process_visible_physical_device(monkeypatch):
     )
 
     assert all("--id=GPU-visible" in command for command in commands)
+    assert os.environ["CUDA_DEVICE_ORDER"] == "PCI_BUS_ID"
+
+
+def test_cuda_probe_targets_ordinal_zero_consistently_when_unrestricted(monkeypatch):
+    """No CUDA_VISIBLE_DEVICES set -> ordinal fallback, but now order-normalized.
+
+    Before S7 this fell back to nvidia-smi ``--id=0`` with no guarantee CUDA's
+    own ordinal 0 (FASTEST_FIRST by default) named the same physical device.
+    Normalizing CUDA_DEVICE_ORDER here removes that ambiguity for the rest of
+    the process's life, since this probe runs before any CUDA context exists.
+    """
+    commands = []
+    monkeypatch.delenv("CUDA_VISIBLE_DEVICES", raising=False)
+    monkeypatch.delenv("CUDA_DEVICE_ORDER", raising=False)
+
+    def query(command):
+        commands.append(command)
+        return "GPU-zero, A, 8.0, 10000, 9500, 0, 40, Not Active, 1, bus\n"
+
+    probe_runtime_resources(
+        "cuda",
+        query=query,
+        sample_count=2,
+        sample_interval_seconds=0,
+        host_probe=lambda: (10_000, 9_000),
+    )
+
+    assert all("--id=0" in command for command in commands)
+    assert os.environ["CUDA_DEVICE_ORDER"] == "PCI_BUS_ID"
 
 
 def test_cpu_and_mps_never_claim_a_separate_memory_pool():

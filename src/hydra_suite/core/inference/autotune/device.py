@@ -108,6 +108,15 @@ def probe_runtime_resources(
             thermal_throttled=False,
         )
 
+    # nvidia-smi always enumerates by PCI bus order; CUDA itself defaults to
+    # FASTEST_FIRST. Without CUDA_DEVICE_ORDER=PCI_BUS_ID, an ordinal selector
+    # (here or in whatever later initializes a CUDA context) can address a
+    # different physical GPU than nvidia-smi's same ordinal. This probe runs
+    # before any model/CUDA-context load (module docstring), so setting the
+    # order here -- and only if unset, respecting an explicit override --
+    # makes every ordinal used by this process consistent between nvidia-smi
+    # and CUDA for the remainder of the process's life (S7).
+    os.environ.setdefault("CUDA_DEVICE_ORDER", "PCI_BUS_ID")
     visible = os.environ.get("CUDA_VISIBLE_DEVICES", "").split(",", 1)[0].strip()
     device_selector = visible if visible and visible != "-1" else "0"
     command = (
