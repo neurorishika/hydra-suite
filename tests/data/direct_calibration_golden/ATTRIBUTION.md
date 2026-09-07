@@ -36,7 +36,7 @@ shadowed by an editable install; `--expect-src` refuses to run when it is).
 | (b) | `8c7d2230` | **D9** — one shared `AreaBand` fitted over the label set, pooled per evidence set |
 | (c) | `546b9989` | **D8** — recall-first recommendation with quality floors; F1 retired as an optimisation target |
 | (d) | `b796931d` | **D8 aggregation fix** — `mean_quality` pooled per matched pair; a zero-match frame contributes no sample |
-| after | `b796931d` | same tree as (d) |
+| after | `fd9d10f0` | same `src/` tree as (d) — the intervening commit touched only `tests/data/`, so the payload is stamped `fd9d10f0` while the code it scores is `b796931d` |
 
 Verified: `(c)` and `after` produce **byte-identical case scores and an identical
 recommender demo** — `1efaf026` changes no scoring behaviour, as its message claims.
