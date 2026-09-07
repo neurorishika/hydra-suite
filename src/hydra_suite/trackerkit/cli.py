@@ -9,10 +9,12 @@ import tempfile
 from pathlib import Path
 from typing import Sequence
 
-from hydra_suite.runtime.cuda_devices import parse_gpu_selectors, resolve_gpu_selectors
+from hydra_suite.runtime.cuda_devices import list_cuda_devices, parse_gpu_selectors
 from hydra_suite.trackerkit.batch_fanout import (
     FanoutOptions,
     FanoutResult,
+    decide_gpu_slots,
+    host_has_cuda,
     run_batch_fanout,
 )
 from hydra_suite.trackerkit.batch_plan import BatchJobSpec, plan_batch_jobs
@@ -69,7 +71,13 @@ def run_tracking_cli(
         raise ValueError("No videos were resolved for tracking.")
     if not fanout_requested(gpus, jobs):
         return _run_sequential(specs)
-    devices = resolve_gpu_selectors(parse_gpu_selectors(gpus)) if gpus else []
+    devices = (
+        decide_gpu_slots(
+            parse_gpu_selectors(gpus), list_cuda_devices(), host_has_cuda()
+        )
+        if gpus
+        else []
+    )
     # An unspecified --jobs means "one slot per selected GPU" (and 1 with no
     # GPUs); an explicit --jobs is honoured but never exceeds the GPU count,
     # because a second job on a GPU would contend for that GPU's memory.

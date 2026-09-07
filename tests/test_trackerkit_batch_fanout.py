@@ -16,6 +16,7 @@ from hydra_suite.runtime.cuda_devices import CudaDevice
 from hydra_suite.trackerkit.batch_fanout import (
     FanoutOptions,
     build_child_env,
+    decide_gpu_slots,
     default_child_command,
     parse_progress_line,
     parse_summary_line,
@@ -608,3 +609,36 @@ def test_two_runs_in_the_same_second_do_not_share_a_log_file(tmp_path):
     assert "job1" in a.name and "job1" in b.name
     for log in (a, b):
         assert log.read_text().count("# trackerkit fan-out job") == 1
+
+
+# --- GPU slot decision (shared by the CLI and the GUI) ----------------------
+
+_GPUS = [CudaDevice(0, "GPU-aaaa", "x"), CudaDevice(1, "GPU-bbbb", "x")]
+
+
+def test_decide_gpu_slots_resolves_selectors_against_visible_devices():
+    assert decide_gpu_slots(["1"], _GPUS, host_has_cuda=True) == [_GPUS[1]]
+    assert decide_gpu_slots(["auto"], _GPUS, host_has_cuda=True) == _GPUS
+
+
+def test_decide_gpu_slots_no_request_is_unpinned():
+    assert decide_gpu_slots([], _GPUS, host_has_cuda=True) == []
+    assert decide_gpu_slots([], [], host_has_cuda=False) == []
+
+
+def test_decide_gpu_slots_aborts_when_smi_is_blind_on_a_cuda_host():
+    """nvidia-smi missing or timing out on a CUDA host must NOT silently run
+    unpinned: every child would fall back to cuda:0 and contend for one GPU."""
+    with pytest.raises(ValueError) as exc:
+        decide_gpu_slots(["auto"], [], host_has_cuda=True)
+    assert "nvidia-smi" in str(exc.value)
+    with pytest.raises(ValueError):
+        decide_gpu_slots(["0"], [], host_has_cuda=True)
+
+
+def test_decide_gpu_slots_on_a_non_cuda_host():
+    # "auto" is best-effort: nothing to pin to, so run unpinned.
+    assert decide_gpu_slots(["auto"], [], host_has_cuda=False) == []
+    # An explicit device the host does not have stays an error.
+    with pytest.raises(ValueError):
+        decide_gpu_slots(["0"], [], host_has_cuda=False)

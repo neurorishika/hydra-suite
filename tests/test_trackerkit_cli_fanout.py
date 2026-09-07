@@ -101,13 +101,22 @@ def test_fanout_exit_code_1_when_any_job_fails(tmp_path, monkeypatch, capsys):
 
 def test_gpus_on_host_without_cuda_is_an_error(tmp_path, monkeypatch):
     v = _videos(tmp_path, 1)
-    monkeypatch.setattr(
-        cli,
-        "resolve_gpu_selectors",
-        lambda sel: (_ for _ in ()).throw(ValueError("no CUDA")),
-    )
+    monkeypatch.setattr(cli, "list_cuda_devices", lambda: [])
+    monkeypatch.setattr(cli, "host_has_cuda", lambda: False)
     with pytest.raises(ValueError):
         cli.run_tracking_cli(v, gpus="0")
+
+
+def test_gpus_aborts_when_nvidia_smi_is_blind_on_a_cuda_host(tmp_path, monkeypatch):
+    """nvidia-smi missing/timing out on a CUDA host must not run unpinned."""
+    v = _videos(tmp_path, 1)
+    monkeypatch.setattr(cli, "list_cuda_devices", lambda: [])
+    monkeypatch.setattr(cli, "host_has_cuda", lambda: True)
+    monkeypatch.setattr(
+        cli, "run_batch_fanout", lambda *a, **k: pytest.fail("must not launch")
+    )
+    with pytest.raises(ValueError, match="nvidia-smi"):
+        cli.run_tracking_cli(v, gpus="auto")
 
 
 def _ok_result(specs, tmp_path):
@@ -137,7 +146,7 @@ def test_gpus_without_jobs_uses_one_slot_per_gpu(tmp_path, monkeypatch):
         seen["gpus"] = len(options.gpus)
         return _ok_result(specs, tmp_path)
 
-    monkeypatch.setattr(cli, "resolve_gpu_selectors", lambda sel: _three_gpus())
+    monkeypatch.setattr(cli, "list_cuda_devices", _three_gpus)
     monkeypatch.setattr(cli, "run_batch_fanout", _fake_fanout)
     assert cli.run_tracking_cli(v, gpus="0-2") == 0
     assert seen == {"jobs": 3, "gpus": 3}
@@ -151,7 +160,7 @@ def test_jobs_caps_below_gpu_count(tmp_path, monkeypatch):
         seen["jobs"] = options.jobs
         return _ok_result(specs, tmp_path)
 
-    monkeypatch.setattr(cli, "resolve_gpu_selectors", lambda sel: _three_gpus())
+    monkeypatch.setattr(cli, "list_cuda_devices", _three_gpus)
     monkeypatch.setattr(cli, "run_batch_fanout", _fake_fanout)
     assert cli.run_tracking_cli(v, gpus="0-2", jobs=2) == 0
     assert seen == {"jobs": 2}
@@ -165,7 +174,7 @@ def test_jobs_above_gpu_count_is_clamped_to_the_gpus(tmp_path, monkeypatch):
         seen["jobs"] = options.jobs
         return _ok_result(specs, tmp_path)
 
-    monkeypatch.setattr(cli, "resolve_gpu_selectors", lambda sel: _three_gpus())
+    monkeypatch.setattr(cli, "list_cuda_devices", _three_gpus)
     monkeypatch.setattr(cli, "run_batch_fanout", _fake_fanout)
     assert cli.run_tracking_cli(v, gpus="0-2", jobs=99) == 0
     assert seen == {"jobs": 3}

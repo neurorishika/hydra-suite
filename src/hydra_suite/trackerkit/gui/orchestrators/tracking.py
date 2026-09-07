@@ -1144,9 +1144,12 @@ class TrackingOrchestrator:
         from hydra_suite.runtime.cuda_devices import (
             list_cuda_devices,
             parse_gpu_selectors,
-            resolve_gpu_selectors,
         )
-        from hydra_suite.trackerkit.batch_fanout import FanoutOptions
+        from hydra_suite.trackerkit.batch_fanout import (
+            FanoutOptions,
+            decide_gpu_slots,
+            host_has_cuda,
+        )
 
         # The GPU line edit only mirrors into config on editingFinished, so a
         # value typed and left focused would otherwise be silently ignored.
@@ -1157,16 +1160,18 @@ class TrackingOrchestrator:
         cfg = self._mw.config
 
         # One nvidia-smi shell-out, not two: this runs on the GUI thread.
-        available = list_cuda_devices()
-        devices = []
-        if available:
-            try:
-                devices = resolve_gpu_selectors(
-                    parse_gpu_selectors(cfg.batch_parallel_gpus or "auto"), available
-                )
-            except ValueError as exc:
-                QMessageBox.warning(self._mw, "GPU selection", str(exc))
-                return None
+        # The decision itself is the CLI's, so the two paths cannot drift: an
+        # empty device list used to be swallowed here and the batch ran with N
+        # UNPINNED children, all of which pin cuda:0.
+        try:
+            devices = decide_gpu_slots(
+                parse_gpu_selectors(cfg.batch_parallel_gpus or "auto"),
+                list_cuda_devices(),
+                host_has_cuda(),
+            )
+        except ValueError as exc:
+            QMessageBox.warning(self._mw, "GPU selection", str(exc))
+            return None
 
         requested = int(cfg.batch_parallel_jobs or 0)
         if devices and requested <= 0:

@@ -26,7 +26,7 @@ from datetime import datetime
 from pathlib import Path
 from typing import Callable, Mapping, Optional, Protocol, Sequence, TextIO
 
-from hydra_suite.runtime.cuda_devices import CudaDevice
+from hydra_suite.runtime.cuda_devices import CudaDevice, resolve_gpu_selectors
 from hydra_suite.trackerkit.batch_plan import BatchJobSpec
 from hydra_suite.utils.video_artifacts import (
     build_video_log_dir,
@@ -117,6 +117,64 @@ class NullEvents:
     def job_log(self, spec, line) -> None: ...  # noqa: E704
 
     def job_finished(self, result) -> None: ...  # noqa: E704
+
+
+def host_has_cuda() -> bool:
+    """True when THIS host can run CUDA, independently of ``nvidia-smi``.
+
+    Imported lazily: ``gpu_utils`` pulls in torch, and this module is otherwise
+    import-cheap. Used only to tell "no GPUs because there are none" apart from
+    "no GPUs because nvidia-smi is broken".
+    """
+    try:
+        from hydra_suite.utils.gpu_utils import CUDA_AVAILABLE, TORCH_CUDA_AVAILABLE
+
+        return bool(CUDA_AVAILABLE or TORCH_CUDA_AVAILABLE)
+    except Exception:  # noqa: BLE001 - a missing torch just means "no CUDA"
+        return False
+
+
+def decide_gpu_slots(
+    selectors: Sequence[str],
+    devices: Sequence[CudaDevice],
+    host_has_cuda: bool,
+) -> list[CudaDevice]:
+    """Turn a user GPU selection into the devices to pin children to.
+
+    Pure (availability is injected) and shared by the CLI and the GUI so the two
+    cannot drift: the GUI used to guard the whole resolution with ``if
+    available:`` and silently run UNPINNED whenever ``nvidia-smi`` returned
+    nothing -- on a CUDA host every child then falls back to ``cuda:0`` and
+    contends for one device, which is exactly what the pinning exists to
+    prevent.
+
+    - no selectors: no request, run unpinned;
+    - devices visible: resolve the selectors against them (raises on an unknown
+      or duplicated selector);
+    - nothing visible on a CUDA-capable host: ``nvidia-smi`` is missing, masked
+      or timing out -- refuse;
+    - nothing visible on a host with no CUDA at all: ``auto`` is best-effort and
+      runs unpinned, while an explicitly named device is still an error.
+
+    Raises ``ValueError``; callers surface it (CLI: propagate, GUI: warn+abort).
+    """
+    wanted = [str(sel).strip() for sel in selectors if str(sel).strip()]
+    if not wanted:
+        return []
+    if devices:
+        return resolve_gpu_selectors(wanted, devices)
+    if host_has_cuda:
+        raise ValueError(
+            "nvidia-smi listed no GPUs, but this host has CUDA available to "
+            "torch -- nvidia-smi is missing, masked or timing out. Refusing to "
+            "run unpinned: every child would fall back to cuda:0 and contend "
+            "for the same device. Fix nvidia-smi or clear the GPU selection."
+        )
+    if wanted == ["auto"]:
+        return []
+    raise ValueError(
+        "no CUDA devices visible to nvidia-smi; --gpus needs an NVIDIA host"
+    )
 
 
 def parse_progress_line(line: str) -> Optional[tuple[int, str]]:

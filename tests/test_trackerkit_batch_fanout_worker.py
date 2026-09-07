@@ -260,3 +260,67 @@ def test_close_prompt_counts_a_running_fanout_worker():
         csv_writer_thread=None,
     )
     assert MainWindow._has_active_tracking_workers(running) is True
+
+
+# --- GPU resolution on the GUI thread ---------------------------------------
+
+
+def _orchestrator(gpus: str, jobs: int = 0):
+    from types import SimpleNamespace
+
+    from hydra_suite.trackerkit.gui.orchestrators.tracking import TrackingOrchestrator
+
+    config = SimpleNamespace(batch_parallel_gpus=gpus, batch_parallel_jobs=jobs)
+    main_window = SimpleNamespace(
+        config=config, _on_batch_parallel_changed=lambda: None
+    )
+    return TrackingOrchestrator(main_window, config, SimpleNamespace())
+
+
+def _patch_devices(monkeypatch, devices, has_cuda):
+    import hydra_suite.runtime.cuda_devices as cuda_mod
+    import hydra_suite.trackerkit.batch_fanout as fanout_mod
+
+    monkeypatch.setattr(cuda_mod, "list_cuda_devices", lambda **_kw: list(devices))
+    monkeypatch.setattr(fanout_mod, "host_has_cuda", lambda: has_cuda)
+
+
+def _capture_warnings(monkeypatch):
+    from types import SimpleNamespace
+
+    import hydra_suite.trackerkit.gui.orchestrators.tracking as tracking_mod
+
+    shown: list[tuple] = []
+    monkeypatch.setattr(
+        tracking_mod,
+        "QMessageBox",
+        SimpleNamespace(warning=lambda *args: shown.append(args)),
+    )
+    return shown
+
+
+def test_gui_aborts_when_nvidia_smi_is_blind_on_a_cuda_host(monkeypatch):
+    """The GUI used to guard the whole resolution with ``if available:`` and
+    silently run UNPINNED -- N children all pinning cuda:0 -- whenever
+    nvidia-smi timed out or was missing on a CUDA host."""
+    _patch_devices(monkeypatch, [], has_cuda=True)
+    shown = _capture_warnings(monkeypatch)
+    assert _orchestrator("auto")._resolve_fanout_options() is None
+    assert shown and "nvidia-smi" in shown[0][2]
+
+
+def test_gui_runs_unpinned_on_a_host_with_no_cuda_at_all(monkeypatch):
+    _patch_devices(monkeypatch, [], has_cuda=False)
+    shown = _capture_warnings(monkeypatch)
+    options = _orchestrator("auto", jobs=2)._resolve_fanout_options()
+    assert options is not None and options.gpus == [] and options.jobs == 2
+    assert not shown
+
+
+def test_gui_pins_the_selected_devices(monkeypatch):
+    devices = [CudaDevice(0, "GPU-aaaa", "x"), CudaDevice(1, "GPU-bbbb", "x")]
+    _patch_devices(monkeypatch, devices, has_cuda=True)
+    _capture_warnings(monkeypatch)
+    options = _orchestrator("1")._resolve_fanout_options()
+    assert options is not None and options.gpus == [devices[1]]
+    assert options.jobs is None  # unspecified: one slot per selected GPU
