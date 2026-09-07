@@ -202,6 +202,15 @@ def _run_window(
     session_config.update(
         {
             "enable_backward_tracking": False,
+            # The calibration window is a short slice (<= maximum_frames, e.g.
+            # 32 frames) picked for throughput measurement, not a full run.
+            # Real trajectory-quality postprocessing (e.g. MIN_TRAJECTORY_LENGTH
+            # derived from min_trajectory_length_seconds * fps, commonly >> 32
+            # frames) would filter every trajectory out of a window this short,
+            # silently producing an empty final_df that write_base_final_csv
+            # drops without raising. Force the permissive branch in
+            # TrackingSessionCore._postprocess_csv instead.
+            "enable_postprocessing": False,
             "enable_dataset_generation": False,
             "enable_individual_dataset": False,
             "enable_individual_image_save": False,
