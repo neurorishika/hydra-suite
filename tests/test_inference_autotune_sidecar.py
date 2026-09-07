@@ -78,6 +78,35 @@ def test_candidate_param_overlay_is_detached_complete_and_disables_recursion():
     assert output["INFERENCE_AUTOTUNE_ARTIFACT_BATCH_SIZE"] == 32
 
 
+def test_s6_cached_detection_replay_is_deferred_not_fixed():
+    """S6 (deferred): trials always run the detector even when production
+    is replaying a cached one, so pose/identity screens are timed against
+    detector-dominated wall time.
+
+    This is intentionally NOT un-forced. Un-forcing it is only safe if the
+    trial can read production's detection cache for replay while still
+    writing its OWN result caches under its private run root (spec:470 --
+    "no candidate outputs contaminate production result caches"). It cannot:
+    every sidecar trial window (``sidecar_child.py:_run_window``) creates a
+    brand-new, empty ``run_root/inference-cache`` directory and passes THAT
+    single path as both ``detection_cache_path`` (read) and the engine's
+    write target. Production's actual cache directory is never threaded
+    into ``SidecarTrialSpec``/the sidecar request at all -- only summary
+    detection *counts* are (``INFERENCE_AUTOTUNE_DETECTION_COUNTS``, set in
+    ``core/tracking/worker.py``). Setting ``USE_CACHED_DETECTIONS: True``
+    today would make a trial "replay" its own empty private cache (zero
+    detections, not a timing fix) or -- if wired to read production's cache
+    -- risk writing candidate result-cache artifacts back into it, which the
+    spec forbids outright. Recording this as the safer of two bad options
+    per the controlling ruling; see task-8-report.md for the full argument.
+    """
+
+    output = apply_settings_to_params(
+        {"RESULT_CACHE_STAGE_MASK": ("detector",)}, _settings()
+    )
+    assert output["USE_CACHED_DETECTIONS"] is False
+
+
 def test_request_stages_roi_as_relative_non_pickle_payload(tmp_path):
     observation, probe = _resources()
     spec = SidecarTrialSpec(
