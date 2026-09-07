@@ -140,7 +140,12 @@ def _run_window(
 ]:
     run_root = root / label
     run_root.mkdir(parents=True, exist_ok=False)
-    raw_csv = run_root / "forward.csv"
+    # NOTE: must not already contain "forward" -- run_post_tracking derives its
+    # output stem via os.path.splitext(raw_csv_path) and appends
+    # "_forward_processed" itself when backward tracking is disabled (see
+    # TrackingSessionCore.run_post_tracking). Naming this "forward.csv" produced
+    # a doubled "forward_forward_processed.csv" that was never written.
+    raw_csv = run_root / "trial.csv"
     cache_dir = run_root / "inference-cache"
     cache_dir.mkdir()
     run_params = dict(params)
