@@ -55,41 +55,78 @@ class SweepCounts:
 
 
 def precision_recall_curve(
-    points: Sequence[OperatingPoint], *, missed_per_frame: Sequence[float] | None = None
+    points: Sequence[OperatingPoint],
+    *,
+    missed_per_frame: Sequence[float] | None = None,
+    matched_per_frame: Sequence[float] | None = None,
 ) -> tuple[np.ndarray, np.ndarray]:
-    """Recall/precision arrays sorted by ascending recall, from
-    per-confidence ``(recall, extra_per_frame)`` pairs, matched-per-frame.
+    """Recall/precision arrays sorted by ascending recall.
 
-    ``precision`` at a point is derived as ``matched / (matched + extra)``
-    using per-frame-normalised extras and the recall value directly, so it
-    needs no re-derivation of the underlying instance counts: with ``r`` the
-    recall and ``e`` the mean extras/frame at a fixed mean total-labels/frame
-    ``t`` (which cancels out of the ratio), precision = ``r*t / (r*t + e)``.
-    ``t`` is arbitrary and fixed at 1.0 when not supplied via
-    ``missed_per_frame`` (which lets the caller recover it exactly as
-    ``matched_per_frame + missed_per_frame``, with ``matched_per_frame =
-    recall`` in those same units) -- callers that only have recall/extra may
-    pass ``missed_per_frame=None`` and get a precision curve that is
-    monotone-correct but not on an absolute per-frame instance scale.
+    ``precision`` at a point is ``matched / (matched + extra)`` in
+    per-frame-normalised units (the arbitrary per-frame scale cancels out of
+    the ratio). There are three ways to supply ``matched``, in decreasing
+    order of preference:
+
+    * ``matched_per_frame`` -- the EXACT matched instance counts, per frame,
+      aligned 1:1 with ``points``. No inversion, no singularity. Callers that
+      hold raw counts (``average_precision_from_counts``) must use this.
+    * ``missed_per_frame`` -- the legacy path, which recovers the scale by
+      inverting ``total = missed / (1 - recall)``. That inversion is SINGULAR
+      at ``recall == 1`` (``missed == 0``), which is precisely where a
+      detector found everything. Because ``total`` (the ground-truth count
+      per frame) is a property of the corpus and not of the confidence
+      threshold, it is constant across the sweep, so the full-recall points
+      borrow the total recovered from the sweep's other points. Only if NO
+      point has ``recall < 1`` does the scale stay unrecoverable; precision
+      is then NaN there and ``average_precision`` drops it.
+    * neither -- precision is monotone-correct but not on an absolute
+      per-frame instance scale (``total`` is fixed at 1.0).
+
+    HISTORY. Before the ``matched_per_frame`` path existed, a full-recall
+    point produced ``total = 0/0 = NaN``, hence ``denom = NaN``, and
+    ``np.divide(..., where=denom > 0)`` left the ``out=ones`` default in
+    place because ``NaN > 0`` is False. Precision was therefore silently
+    **1.0** exactly where the detector was at its most over-predicting; the
+    monotone envelope then pinned the whole curve at 1.0 and AP degenerated
+    to ``max(recall) - min(recall)``. That is a real measured defect, not a
+    hypothetical: a 10-epoch SAM3 run scored its worst epoch 0.986.
     """
     if missed_per_frame is not None and len(missed_per_frame) != len(points):
         raise ValueError("missed_per_frame must align 1:1 with points")
+    if matched_per_frame is not None and len(matched_per_frame) != len(points):
+        raise ValueError("matched_per_frame must align 1:1 with points")
     indexed = sorted(enumerate(points), key=lambda ip: ip[1].recall)
     order = [i for i, _p in indexed]
     ordered = [p for _i, p in indexed]
     recalls = np.array([p.recall for p in ordered], dtype=np.float64)
     extras = np.array([p.extra_per_frame for p in ordered], dtype=np.float64)
-    if missed_per_frame is not None:
+    if matched_per_frame is not None:
+        matched = np.array([matched_per_frame[i] for i in order], dtype=np.float64)
+    elif missed_per_frame is not None:
         missed = np.array([missed_per_frame[i] for i in order], dtype=np.float64)
         # matched = recall * total, and total = matched + missed, so
         # total = missed / (1 - recall) when recall < 1.
         with np.errstate(divide="ignore", invalid="ignore"):
             total = np.where(recalls < 1.0, missed / (1.0 - recalls), np.nan)
+        # `total` is the ground-truth count per frame -- a corpus property,
+        # identical at every confidence -- so the singular (recall == 1)
+        # entries take the value the non-singular ones agree on.
+        finite = np.isfinite(total)
+        if finite.any():
+            total = np.where(finite, total, float(np.median(total[finite])))
         matched = recalls * total
     else:
         matched = recalls
     denom = matched + extras
-    precisions = np.divide(matched, denom, out=np.ones_like(matched), where=denom > 0)
+    with np.errstate(invalid="ignore"):
+        precisions = np.divide(
+            matched, denom, out=np.ones_like(matched), where=denom > 0
+        )
+    # Never let an unrecoverable scale masquerade as perfect precision: the
+    # `where=` mask above skips NaN denominators and would leave the 1.0
+    # default behind. NaN is the honest answer, and `average_precision`
+    # drops it.
+    precisions = np.where(np.isnan(matched), np.nan, precisions)
     return recalls, precisions
 
 
@@ -151,8 +188,12 @@ def average_precision_from_counts(
         )
         for c in usable
     ]
-    missed_per_frame = [c.missed / frames for c in usable]
+    # EXACT counts, straight through: precision = matched / (matched +
+    # extras) and recall = matched / (matched + missed) are both directly
+    # available here, so there is nothing to invert and nothing to be
+    # singular at full recall.
+    matched_per_frame = [c.matched / frames for c in usable]
     recalls, precisions = precision_recall_curve(
-        points, missed_per_frame=missed_per_frame
+        points, matched_per_frame=matched_per_frame
     )
     return average_precision(recalls, precisions)

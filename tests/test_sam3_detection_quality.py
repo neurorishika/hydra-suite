@@ -569,3 +569,163 @@ def test_a_short_batch_dimension_is_still_caught_at_batch_eight():
     stats = accumulator.result()
     assert "ap" not in stats
     assert "6" in stats["ap_error"] and "8" in stats["ap_error"]
+
+
+# ---------------------------------------------------------------------------
+# AP at full recall (regression: the singular missed/(1-recall) inversion)
+# ---------------------------------------------------------------------------
+
+# The confidence sweep of a real 10-epoch SAM3 run's epoch 1, reconstructed
+# from its recorded endpoints: recall reaches EXACTLY 1.0 at confidence 0.05
+# (matched=771, missed=0) while emitting 3360 extras against 771 ground-truth
+# instances, and decays to matched=11 at confidence 0.95. The stored AP was
+# 0.9857328145265889 == 760/771 == 1 - 11/771 -- i.e. exactly
+# max(recall) - min(recall), the signature of a precision curve pinned at 1.0.
+_EPOCH1_MATCHED = [
+    771,
+    771,
+    760,
+    700,
+    640,
+    580,
+    520,
+    460,
+    400,
+    340,
+    290,
+    240,
+    200,
+    160,
+    120,
+    90,
+    60,
+    30,
+    11,
+]
+_EPOCH1_EXTRAS = [
+    3360,
+    2500,
+    1800,
+    1300,
+    950,
+    700,
+    520,
+    390,
+    290,
+    215,
+    160,
+    120,
+    90,
+    66,
+    48,
+    34,
+    22,
+    12,
+    4,
+]
+_EPOCH1_GT = 771
+
+
+def _sweep_counts(matched, extras, gt=_EPOCH1_GT):
+    from hydra_suite.core.inference.semantic.detection_metrics import SweepCounts
+
+    return [
+        SweepCounts(
+            confidence=round(0.05 * (i + 1), 2), matched=m, extras=e, missed=gt - m
+        )
+        for i, (m, e) in enumerate(zip(matched, extras))
+    ]
+
+
+def test_full_recall_point_does_not_inflate_ap():
+    """A sweep containing a ``missed == 0`` point must still score honestly.
+
+    Pre-fix this returned 0.9857328145265889 (== 760/771), because the
+    full-recall point's precision silently defaulted to 1.0 and the monotone
+    envelope carried that 1.0 across the whole curve.
+    """
+    from hydra_suite.core.inference.semantic.detection_metrics import (
+        average_precision_from_counts,
+    )
+
+    ap = average_precision_from_counts(
+        _sweep_counts(_EPOCH1_MATCHED, _EPOCH1_EXTRAS), 100
+    )
+    assert np.isfinite(ap)
+    # 3360 extras against 771 labels at the full-recall point: precision there
+    # is 771/4131 ~ 0.187, and no point on this sweep exceeds ~0.73.
+    assert 0.0 < ap < 0.75
+    assert ap != pytest.approx(760 / 771, abs=1e-9)
+
+
+def test_over_predicting_sweep_scores_worse_than_a_precise_one():
+    """The property that actually failed: extras must cost something.
+
+    Both sweeps reach recall 1.0; the sloppy one pays ~10x the extras at
+    every confidence. Pre-fix both collapsed to ``max(recall) - min(recall)``
+    and scored IDENTICALLY, so a mere finiteness check would not catch it.
+    """
+    from hydra_suite.core.inference.semantic.detection_metrics import (
+        average_precision_from_counts,
+    )
+
+    precise = _sweep_counts(_EPOCH1_MATCHED, [e // 10 for e in _EPOCH1_EXTRAS])
+    sloppy = _sweep_counts(_EPOCH1_MATCHED, _EPOCH1_EXTRAS)
+    ap_precise = average_precision_from_counts(precise, 100)
+    ap_sloppy = average_precision_from_counts(sloppy, 100)
+    assert ap_precise > ap_sloppy
+    # And not merely by a rounding margin.
+    assert ap_precise - ap_sloppy > 0.1
+
+
+def test_counts_path_matches_missed_path_without_full_recall():
+    """No behaviour change where the old inversion was non-singular.
+
+    Every sweep whose recall never reaches 1.0 keeps the AP it always had --
+    which is what lets a stored series be read as "only the exact-k/GT
+    epochs were corrupted".
+    """
+    from hydra_suite.core.inference.semantic.detection_metrics import (
+        OperatingPoint,
+        average_precision,
+        average_precision_from_counts,
+        precision_recall_curve,
+    )
+
+    counts = _sweep_counts(_EPOCH1_MATCHED[2:], _EPOCH1_EXTRAS[2:])  # drops recall==1
+    frames = 100
+    points = [
+        OperatingPoint(
+            confidence=c.confidence,
+            recall=c.matched / (c.matched + c.missed),
+            extra_per_frame=c.extras / frames,
+        )
+        for c in counts
+    ]
+    recalls, precisions = precision_recall_curve(
+        points, missed_per_frame=[c.missed / frames for c in counts]
+    )
+    assert average_precision_from_counts(counts, frames) == pytest.approx(
+        average_precision(recalls, precisions), rel=1e-12
+    )
+
+
+def test_missed_only_path_recovers_the_scale_at_full_recall():
+    """The shared curve helper is fixed for the ``missed_per_frame`` caller too.
+
+    ``total`` is a corpus property, so the full-recall point borrows it from
+    the rest of the sweep rather than defaulting to precision 1.0.
+    """
+    from hydra_suite.core.inference.semantic.detection_metrics import (
+        OperatingPoint,
+        precision_recall_curve,
+    )
+
+    points = [
+        OperatingPoint(confidence=0.9, recall=0.5, extra_per_frame=5.0),
+        OperatingPoint(confidence=0.1, recall=1.0, extra_per_frame=30.0),
+    ]
+    _recalls, precisions = precision_recall_curve(points, missed_per_frame=[5.0, 0.0])
+    # total = 10/frame; at full recall matched=10, extras=30 -> 0.25.
+    assert precisions[0] == pytest.approx(0.5)
+    assert precisions[1] == pytest.approx(0.25)
