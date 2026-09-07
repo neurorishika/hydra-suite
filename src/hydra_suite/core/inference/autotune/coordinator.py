@@ -261,6 +261,11 @@ class AutotuneCoordinator:
             if evidence.failure_class is None
             and evidence.equivalence is not None
             and evidence.equivalence.passed
+            # search.py: "stage screens never authorize a winner" -- a
+            # stage-only pass (or the "unknown"/pre-remediation default) must
+            # never down-admit a production setting either. Only evidence
+            # that actually ran the full pipeline may authorize a winner.
+            and evidence.phase == "full"
         )
         decision = request.planner.down_admit(selected, successful, request.baseline)
         effective = decision.settings if decision.admitted else request.baseline

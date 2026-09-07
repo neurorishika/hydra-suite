@@ -282,6 +282,7 @@ def test_cache_hit_down_admits_only_validated_settings_and_does_not_mutate_store
             warmup_calls=3,
             warmup_frames=8,
             equivalence=EquivalenceVerdict(True),
+            phase="full",
         )
         for settings in (selected, smaller)
     )
@@ -308,6 +309,77 @@ def test_cache_hit_down_admits_only_validated_settings_and_does_not_mutate_store
     assert result.overlay.status == "cache_hit"
     assert result.overlay.effective.detection_batch_size == 2
     assert store.load(key).selected.detection_batch_size == 4
+
+
+def test_down_admission_excludes_stage_only_evidence_but_admits_full_evidence(
+    tmp_path,
+):
+    """S4: `search.py` states plainly "stage screens never authorize a
+    winner" -- down-admission must honor that too. A stage-phase candidate
+    that would otherwise be the largest fitting setting must be ignored;
+    a full-phase candidate that fits must still be admitted.
+    """
+    key = _key()
+    baseline = _settings(det=1)
+    selected = _settings(det=4)
+    stage_only = _settings(det=3)  # would fit (300 <= 350) but never ran full
+    full_evidence = _settings(det=2)  # fits (200 <= 350) and ran full
+    evidence = (
+        CandidateEvidence(
+            selected,
+            (100.0,) * 5,
+            stage_seconds_samples=(0.5,) * 5,
+            accelerator_peak_bytes=400,
+            warmup_calls=3,
+            warmup_frames=8,
+            equivalence=EquivalenceVerdict(True),
+            phase="full",
+        ),
+        CandidateEvidence(
+            stage_only,
+            (100.0,) * 5,
+            stage_seconds_samples=(0.5,) * 5,
+            accelerator_peak_bytes=300,
+            warmup_calls=3,
+            warmup_frames=8,
+            equivalence=EquivalenceVerdict(True),
+            phase="stage",
+        ),
+        CandidateEvidence(
+            full_evidence,
+            (100.0,) * 5,
+            stage_seconds_samples=(0.5,) * 5,
+            accelerator_peak_bytes=200,
+            warmup_calls=3,
+            warmup_frames=8,
+            equivalence=EquivalenceVerdict(True),
+            phase="full",
+        ),
+    )
+    profile = InferenceTuningProfile(
+        key.digest[:24],
+        key,
+        baseline,
+        baseline,
+        selected,
+        selected,
+        evidence,
+        ProfileState.VALIDATED,
+        "winner",
+    )
+    store = InferenceTuningProfileStore(tmp_path)
+    store.save(profile)
+    planner = _planner(
+        free=350,
+        cost=MemoryCostModel(detector_frame_accelerator_bytes=100),
+    )
+    result = AutotuneCoordinator(store, trial_executor=ExplodingExecutor()).resolve(
+        AutotuneRequest(key, baseline, planner, mode="automatic")
+    )
+    # A bug that includes stage-only evidence would admit det=3 here (300 <=
+    # 350, the largest of ALL successful evidence). The fix must skip it and
+    # admit the largest FULL-phase evidence that fits: det=2.
+    assert result.overlay.effective.detection_batch_size == 2
 
 
 def test_manual_field_precedence_over_cached_profile(tmp_path):
