@@ -18,6 +18,9 @@ _SIDECAR_IMPORTS = (
     "hydra_suite.core.inference.shape_prior",
     "hydra_suite.core.inference.match_geometry",
     "hydra_suite.core.inference.semantic.calibration",
+    # D10: the calibration sidecar record is read on the serving side, so it
+    # must stay importable from the slim sam3-lora env too.
+    "hydra_suite.core.inference.semantic.calibration_record",
     "hydra_suite.training.sam3_lora.detection_quality",
 )
 # NOT "sklearn" itself: coremltools imports sklearn on some dev machines, so

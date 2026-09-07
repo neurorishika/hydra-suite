@@ -29,12 +29,18 @@ from hydra_suite.core.inference.geometry_drift import (
     compare_geometry_value,
     stamped_object_tile_fraction,
 )
+from hydra_suite.core.inference.semantic.calibration_record import (
+    CalibrationOrigin,
+    resolve_serving_calibration,
+    write_serving_calibration,
+)
 from hydra_suite.core.inference.semantic.checkpoints import (
     CHECKPOINT_SIZE_GB,
     available_models,
     available_variants,
     probe_checkpoint,
     sidecar_for,
+    sidecar_path_for,
 )
 from hydra_suite.core.inference.semantic.tiling import (
     DEFAULT_MERGE_IOU,
@@ -92,9 +98,17 @@ class SemanticEscalationDialog(BaseDialog):
             _saved_value(saved, "area_min_px2", 0.0, float),
             _saved_value(saved, "area_max_px2", 0.0, float),
         )
-        self._saved_calibration = dict(
-            getattr(project, "semantic_calibration", {}) or {}
+        # D10: a calibration now lives on the MODEL SIDECAR, which is what a
+        # headless serving run can see. The project's own copy is still
+        # written and is still read here as the LEGACY path, so a project
+        # calibrated before this change keeps working -- it is reported as
+        # legacy-only, never silently migrated onto the sidecar (that would
+        # rewrite a user's artifacts behind their back).
+        record, self._calibration_origin = resolve_serving_calibration(
+            sidecar_for(str(saved.get("variant", ""))),
+            getattr(project, "semantic_calibration", {}) or {},
         )
+        self._saved_calibration = dict(record or {})
         self.calibration_points = self._restore_calibration_points(
             self._saved_calibration
         )
@@ -536,7 +550,16 @@ class SemanticEscalationDialog(BaseDialog):
                 Path(self._project.project_dir), self.calibration_preview_frames
             )
         self._saved_calibration = saved
+        # Per-PROJECT record, unchanged: this is what the dialog restores and
+        # what an existing project already relies on.
         self._project.semantic_calibration = dict(self._saved_calibration)
+        # Per-MODEL record (D10). Additive read-modify-write of the published
+        # artifact's sidecar, so a headless SAM3 run sees the same operating
+        # point. A stock variant has no sidecar and this is a logged no-op.
+        # Note the scope difference: two projects calibrating one model are
+        # last-write-wins HERE, while each keeps its own project copy.
+        if write_serving_calibration(sidecar_path_for(self.selected_variant()), saved):
+            self._calibration_origin = CalibrationOrigin.SIDECAR
         self._persist_settings()
         self._refresh_saved_calibration_ui()
 
@@ -557,9 +580,14 @@ class SemanticEscalationDialog(BaseDialog):
         if available and not self._status.text():
             created = str(self._saved_calibration.get("created_at", ""))[:10]
             when = f" from {created}" if created else ""
+            # State WHERE it lives: a legacy project-only calibration is
+            # invisible to a headless serving run, and the user cannot know
+            # that unless it is said.
+            where = getattr(self, "_calibration_origin", None)
+            origin = f" [{where.label}]" if where is not None else ""
             self.set_status(
                 f"Saved calibration{when}: {len(self.calibration_points)} "
-                "measured operating point(s)."
+                f"measured operating point(s).{origin}"
             )
 
     def _show_calibration_results(
