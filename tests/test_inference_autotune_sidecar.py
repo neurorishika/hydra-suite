@@ -9,9 +9,11 @@ from hydra_suite.core.inference.autotune.device import RuntimeResourceProbe
 from hydra_suite.core.inference.autotune.models import InferenceTuningSettings
 from hydra_suite.core.inference.autotune.search import TrialObservation
 from hydra_suite.core.inference.autotune.sidecar import (
+    MAX_REQUEST_BYTES,
     ContainedTrialExecutor,
     SidecarTrialSpec,
     apply_settings_to_params,
+    restore_sidecar_params,
     write_sidecar_request,
 )
 from hydra_suite.core.inference.autotune.sidecar_child import _representative_windows
@@ -97,10 +99,85 @@ def test_request_stages_roi_as_relative_non_pickle_payload(tmp_path):
     )
 
     payload = json.loads(request.read_text(encoding="utf-8"))
-    assert payload["params"]["ROI_MASK"] == {"__hydra_roi_npy__": "roi.npy"}
-    restored = np.load(request.parent / "roi.npy", allow_pickle=False)
+    assert payload["params"]["ROI_MASK"] == {"__hydra_npy__": "ROI_MASK.npy"}
+    restored = np.load(request.parent / "arrays" / "ROI_MASK.npy", allow_pickle=False)
     np.testing.assert_array_equal(restored, np.ones((2, 3), dtype=np.uint8))
     assert payload["maximum_frames"] == 26
+
+
+def test_array_params_round_trip_by_key(tmp_path):
+    """Every ndarray param survives the request round-trip, not just ROI_MASK."""
+    observation, probe = _resources()
+    labels = np.arange(6, dtype=np.uint16).reshape(2, 3)
+    mask = labels > 0
+    spec = SidecarTrialSpec(
+        video_path=tmp_path / "video.mp4",
+        params={"ARENA_LABELS": labels, "ROI_MASK": mask, "N_ARENAS": 1},
+        observation=observation,
+        resource_probe=probe,
+        start_frame=0,
+        end_frame=20,
+    )
+
+    request = write_sidecar_request(
+        tmp_path / "ipc",
+        spec,
+        _settings(),
+        phase="full",
+        field_name=None,
+        block_index=0,
+    )
+
+    payload = json.loads(request.read_text(encoding="utf-8"))
+    restored = restore_sidecar_params(payload["params"], request.parent)
+    np.testing.assert_array_equal(restored["ARENA_LABELS"], labels)
+    assert restored["ARENA_LABELS"].dtype == labels.dtype
+    np.testing.assert_array_equal(restored["ROI_MASK"], mask)
+    assert restored["N_ARENAS"] == 1
+
+
+def test_array_params_do_not_inflate_json_request_size(tmp_path):
+    """MAX_REQUEST_BYTES bounds the JSON only; arrays live in sidecar .npy files."""
+    observation, probe = _resources()
+    # A 4K-resolution arena-label map (~16 MB as uint16), well past MAX_REQUEST_BYTES.
+    labels = np.zeros((2160, 3840), dtype=np.uint16)
+    spec = SidecarTrialSpec(
+        video_path=tmp_path / "video.mp4",
+        params={"ARENA_LABELS": labels},
+        observation=observation,
+        resource_probe=probe,
+        start_frame=0,
+        end_frame=20,
+    )
+
+    request = write_sidecar_request(
+        tmp_path / "ipc",
+        spec,
+        _settings(),
+        phase="full",
+        field_name=None,
+        block_index=0,
+    )
+
+    assert request.stat().st_size < MAX_REQUEST_BYTES
+    restored = restore_sidecar_params(
+        json.loads(request.read_text(encoding="utf-8"))["params"], request.parent
+    )
+    np.testing.assert_array_equal(restored["ARENA_LABELS"], labels)
+
+
+def test_legacy_roi_only_request_still_restores(tmp_path):
+    """A request staged by an older build (ROI-only, no arrays/ dir) still loads."""
+    root = tmp_path / "ipc"
+    root.mkdir()
+    roi = np.ones((2, 3), dtype=np.uint8)
+    np.save(root / "roi.npy", roi, allow_pickle=False)
+    legacy_params = {"ROI_MASK": {"__hydra_roi_npy__": "roi.npy"}, "N_ARENAS": 1}
+
+    restored = restore_sidecar_params(legacy_params, root)
+
+    np.testing.assert_array_equal(restored["ROI_MASK"], roi)
+    assert restored["N_ARENAS"] == 1
 
 
 def test_measurement_blocks_share_one_128_frame_cap(tmp_path):

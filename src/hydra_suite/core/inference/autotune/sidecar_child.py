@@ -20,6 +20,7 @@ from hydra_suite.core.inference.autotune.models import InferenceTuningSettings
 from hydra_suite.core.inference.autotune.sidecar import (
     MAX_REQUEST_BYTES,
     SIDECAR_SCHEMA_VERSION,
+    restore_sidecar_params,
 )
 from hydra_suite.core.tracking.session import SessionCallbacks, TrackingSessionCore
 from hydra_suite.core.tracking.worker import TrackingEngineCore
@@ -41,16 +42,7 @@ def _read_request(path: Path) -> dict[str, Any]:
 
 
 def _restore_params(value: Any, root: Path) -> Any:
-    if isinstance(value, dict):
-        if set(value) == {"__hydra_roi_npy__"}:
-            path = (root / str(value["__hydra_roi_npy__"])).resolve()
-            if path.parent != root.resolve() or path.suffix != ".npy":
-                raise ValueError("invalid staged ROI reference")
-            return np.load(path, allow_pickle=False)
-        return {str(key): _restore_params(item, root) for key, item in value.items()}
-    if isinstance(value, list):
-        return [_restore_params(item, root) for item in value]
-    return value
+    return restore_sidecar_params(value, root)
 
 
 def _header(identity_method: str, n_arenas: int) -> list[str]:

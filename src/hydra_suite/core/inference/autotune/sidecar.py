@@ -133,7 +133,7 @@ def apply_settings_to_params(
     return result
 
 
-def _json_value(value: Any, *, roi_path: Path, key: str = "") -> Any:
+def _json_value(value: Any, *, array_dir: Path, key: str = "") -> Any:
     if value is None or isinstance(value, (bool, int, float, str)):
         return value
     if isinstance(value, Path):
@@ -141,20 +141,53 @@ def _json_value(value: Any, *, roi_path: Path, key: str = "") -> Any:
     if isinstance(value, np.generic):
         return value.item()
     if isinstance(value, np.ndarray):
-        if key != "ROI_MASK":
-            raise TypeError(f"non-ROI arrays are not valid sidecar params: {key}")
-        np.save(roi_path, value, allow_pickle=False)
-        return {"__hydra_roi_npy__": roi_path.name}
+        if not key:
+            raise TypeError("array parameters require a key to be serialized")
+        array_dir.mkdir(parents=True, exist_ok=True)
+        name = f"{key}.npy"
+        np.save(array_dir / name, value, allow_pickle=False)
+        return {"__hydra_npy__": name}
     if isinstance(value, Mapping):
         return {
-            str(item_key): _json_value(item, roi_path=roi_path, key=str(item_key))
+            str(item_key): _json_value(item, array_dir=array_dir, key=str(item_key))
             for item_key, item in value.items()
         }
     if isinstance(value, (list, tuple)):
-        return [_json_value(item, roi_path=roi_path, key=key) for item in value]
+        return [_json_value(item, array_dir=array_dir, key=key) for item in value]
     raise TypeError(
         f"unsupported sidecar parameter type for {key}: {type(value).__name__}"
     )
+
+
+def restore_sidecar_params(value: Any, root: Path) -> Any:
+    """Restore ndarray params staged by ``_json_value`` under ``root``.
+
+    Accepts both the current per-key ``arrays/`` layout (``__hydra_npy__``)
+    and the legacy ROI-only layout (``__hydra_roi_npy__``, staged directly
+    under ``root``), so an in-flight request written by an older build still
+    loads.
+    """
+
+    if isinstance(value, Mapping):
+        if set(value) == {"__hydra_npy__"}:
+            array_dir = (root / "arrays").resolve()
+            path = (array_dir / str(value["__hydra_npy__"])).resolve()
+            if path.parent != array_dir or path.suffix != ".npy":
+                raise ValueError("invalid staged array reference")
+            return np.load(path, allow_pickle=False)
+        if set(value) == {"__hydra_roi_npy__"}:
+            resolved_root = root.resolve()
+            path = (resolved_root / str(value["__hydra_roi_npy__"])).resolve()
+            if path.parent != resolved_root or path.suffix != ".npy":
+                raise ValueError("invalid staged ROI reference")
+            return np.load(path, allow_pickle=False)
+        return {
+            str(item_key): restore_sidecar_params(item, root)
+            for item_key, item in value.items()
+        }
+    if isinstance(value, list):
+        return [restore_sidecar_params(item, root) for item in value]
+    return value
 
 
 def write_sidecar_request(
@@ -166,10 +199,10 @@ def write_sidecar_request(
     field_name: str | None,
     block_index: int,
 ) -> Path:
-    """Stage bounded JSON IPC and a separate non-pickled ROI payload."""
+    """Stage bounded JSON IPC and separate non-pickled ndarray payloads."""
 
     root.mkdir(parents=True, exist_ok=False)
-    roi_path = root / "roi.npy"
+    array_dir = root / "arrays"
     params = apply_settings_to_params(
         spec.params,
         settings,
@@ -182,7 +215,7 @@ def write_sidecar_request(
     payload = {
         "schema_version": SIDECAR_SCHEMA_VERSION,
         "video_path": str(Path(spec.video_path).expanduser().resolve()),
-        "params": _json_value(params, roi_path=roi_path),
+        "params": _json_value(params, array_dir=array_dir),
         "settings": settings.to_dict(),
         "phase": str(phase),
         "field_name": field_name,
