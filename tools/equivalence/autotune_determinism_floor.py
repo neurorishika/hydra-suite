@@ -14,6 +14,15 @@ a property of the clip, not a bug to be papered over by loosening the gate.
 Point this at a ``run_matrix.sh`` output root; it reads each clip's
 ``new_a``/``new_b`` directories (the two same-tree repeats).
 
+**Read ``angle_max_rad`` and ``position_p99``; treat ``passed``/``unmatched_rows``
+as diagnostics, not a verdict.** ``compare_outputs`` matches rows by nearest
+(X, Y) and cannot match a row whose X/Y is NaN -- a lost or coasting track --
+so it reports those as unmatched and fails, even for two BYTE-IDENTICAL files.
+That is not this tool misreporting: it is the shipped behaviour that makes the
+tuner abort real calibration with ``baseline_nondeterministic_beyond_contract``
+(see the plan's "MPS gate results" section). ``passed=False`` with
+``angle_max=0.0`` and ``position_p99=0.0`` is that defect, not clip noise.
+
 Usage::
 
     PYTHONPATH=src python tools/equivalence/autotune_determinism_floor.py \
