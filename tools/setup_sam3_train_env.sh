@@ -75,8 +75,12 @@ conda run -n "$SAM3_ENV_NAME" pip install 'setuptools<81'
 echo "Installing sam3's training dependencies (declared + the transitive ones it misses)..."
 # scipy>=1.14 requires numpy>=2.0 and breaks the numpy<2 pin sam3 needs, so
 # it must be pinned below that regardless of what else asks for a newer one.
+# opencv-python-headless>=4.12 has the same failure mode (requires numpy>=2),
+# so it is pinned the same way. Install every pin in ONE pip invocation so
+# the resolver satisfies them together; installing one at a time lets a
+# later package pull numpy 2 back in transitively.
 conda run -n "$SAM3_ENV_NAME" pip install einops torchmetrics 'scipy<1.14' decord iopath \
-    opencv-python-headless pillow platformdirs pandas numba pycocotools psutil
+    'opencv-python-headless<4.12' pillow platformdirs pandas numba pycocotools psutil
 
 echo "Installing Meta's sam3 from source (not on PyPI)..."
 conda run -n "$SAM3_ENV_NAME" pip install git+https://github.com/facebookresearch/sam3.git
