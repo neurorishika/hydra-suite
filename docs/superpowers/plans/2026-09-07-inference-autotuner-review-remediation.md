@@ -1128,7 +1128,7 @@ All numbers below are `tools/equivalence/compare.py` output: `pos |Δ| p99` (px)
 | `fly_obb` | 0 / 0 / 1494=1494 / 0 | 0 / 0 / 1500=1500 / 0 | 0 / 0 / 1500=1500 / 0 |
 | `fly_obb_roi` (new) | 0 / 0 / 1494=1494 / 0 | 0 / 0 / 1500=1500 / 0 | 0 / 0 / 1500=1500 / 0 |
 
-Every matched row is bit-for-bit identical: `pos max`, `pos mean`, `pos p99`, `θ max` and `θ mean` are all exactly `0.000e+00` on every clip and every CSV kind. Not "within tolerance" — zero.
+Every matched row is bit-for-bit identical: `pos max`, `pos mean`, `pos p99`, `θ max` and `θ mean` are all exactly `0.000e+00` on every clip and every CSV kind. Not "within tolerance" — zero. **Confirmed at the byte level**, not merely numerically: `cmp` on all 21 legacy/new_a CSV pairs reports byte-identical files for 19 of 21; the 2 that differ are `ant_cnn_identity_relink`'s `final` and `final_with_individual`, i.e. exactly the pre-existing nondeterminism below.
 
 **The one red line is not this branch.** `ant_cnn_identity_relink`'s final CSV differs by 8 rows. Re-running that clip with `MAIN_SRC = WT_SRC = 0d4d4cae/src` — i.e. all three runs on the *baseline* tree, branch code absent entirely — reproduces the identical 10221-vs-10213 / 8-unmatched split (`/tmp/equiv_baseAA.log`). In the 3a leg the same clip produced the split in the *opposite direction* (`new_a` 10213, `new_b` 10221) with both runs on the same tree and the same settings. It is pre-existing run-order-dependent nondeterminism in that clip's relink/stitch postprocessing, independent of source tree and of settings. The 10213 rows common to both are byte-identical. **Not attributable to this branch; pre-existing bug, worth its own investigation.**
 
@@ -1164,7 +1164,7 @@ Both sides `INFERENCE_AUTOTUNE_MODE=off`, same source tree, second/third runs fo
 
 - bg-sub and CNN-identity clips: exactly zero. Batch size and pipeline depth are bit-exact there.
 - YOLO-OBB (`fly_obb`, `fly_obb_roi`): nonzero but float-noise — `pos p99 = 6.1e-05 px` against a 0.5 px tolerance (~8000× inside), `θ max = 3.8e-06 rad` against 0.05 rad (~13000× inside). Batching YOLO changes results at the last few ULPs. Real, tiny, and comfortably admissible.
-- **`ant_pose_headtail`: `θ max = 9.360e-02 rad` (≈5.4°) — ABOVE the autotuner's `EquivalencePolicy.angle_max_tolerance` of 0.05 rad.** Positions are exactly 0 and `θ mean` is 3.2e-05, so this is a handful of rows, not a systematic shift. Changing `pose_batch_size` / `headtail_batch_size` from 25 to 8 flips head/tail orientation on some rows. This is the tuner's gate *working* — it would reject that candidate — but it is direct evidence that **pose batch size is not output-neutral**, so pose batch fields must never be admitted on evidence weaker than the full equivalence gate. Note `compare.py` still printed `EQUIVALENT ✅` for this clip because its criterion is `θ mean`, not `θ max`; only the max exposes it.
+- **`ant_pose_headtail`: `θ max = 9.360e-02 rad` (≈5.4°) — ABOVE the autotuner's `EquivalencePolicy.angle_max_tolerance` of 0.05 rad.** Localised precisely: **exactly 1 row of 9096**, at **FrameID 63** — *inside* the 128-frame calibration window, so the tuner's gate would in fact see it and reject the candidate. Attribution is not fully isolated: the vector moved `detection_batch_size` 1→2 *and* `pose_batch_size`/`headtail_batch_size` 25→8 together. `fly_obb`'s pure detection-batch change (1→8) produced only 3.8e-06 rad, so the pose/head-tail batch is the **likely** cause, but a single-variable run was not done. Direct evidence that **pose batch size is probably not output-neutral**; pose batch fields must never be admitted on evidence weaker than the full equivalence gate. Note `compare.py` still printed `EQUIVALENT ✅` for this clip because its criterion is `θ mean`, not `θ max`; only the max exposes it.
 
 **Also found (pre-existing, correct behaviour):** the first 3a attempt used `det 8 / depth 4` on the large-frame ant clips and every tuned run **died** with `ValueError: Inference pipeline frame buffer is not resource-admissible: one frame=61074432 bytes, batch=8, live_windows=6, estimated=2931572736 bytes exceeds the 536870912-byte pipeline budget`. That guard is in `core/inference/pipeline.py` (untouched by this branch). It is not a defect and not tuner-reachable: `CandidatePlanner.admit` uses `retained_windows = pipeline_depth + 2`, which equals the pipeline's `queue_bound + 3`, so the planner rejects exactly the vectors the pipeline rejects. The two formulas agree. The vector was re-chosen to the largest admissible one for those clips (`det 2 / depth 2`) and the table above reports that run.
 
@@ -1200,9 +1200,35 @@ Measured with the **autotuner's own** gate (`autotune/equivalence.py`, per-row a
 
 **No clip's own determinism run exceeds 0.05 rad — every clip measured is tunable, and the Task 5 risk did not materialize on MPS.** The gate was not softened. `ant_obb_sequential` was not measured (see §1). Caveat on the tool's other columns: its `unmatched_rows` / `passed` fields count forward-CSV rows with NaN X/Y that never positionally match, and for streaming-pose clips the forward slot is a synthetic empty frame; only `angle_max` and `position_p99` are meaningful here, and those are the numbers the carried requirement asks for.
 
-### Carried from Task 8 — S8 has NO coverage from this task
+### CORRECTION + NEW BLOCKER — `record` mode DOES calibrate on MPS, and the tuner can never tune anything
 
-The S8 fix (post-tracking consumes the trial's own cache directory, not production's) is exercised only by the **sidecar calibration child**. Neither leg reaches it: 3a runs with `mode=off` (no autotune code in the path at all) and 3b is refused before calibration starts. No pose or identity clip in this matrix exercised the sidecar path, because on MPS *nothing* does. **S8 remains empirically unverified. Task 12 (CUDA) is its only opportunity.** Stated explicitly rather than implied by silence.
+Two claims made earlier in this section were **wrong** and are corrected here rather than edited away.
+
+**Correction 1: `record` mode is eligible on MPS.** The CUDA-only refusal in `integration.py` is scoped to `elif policy.mode == "automatic" and ... not CUDA`. `record` falls through to `planner.admit(baseline)` and gets `eligible=True`; only `allow_cached_reuse` is forced off. `worker.py:226` always passes a real `ContainedTrialExecutor`. So a record-mode run on MPS *does* launch the sidecar calibration child on real video. Verified empirically: a `record` run on `fly_obb_roi` logged `Optimizing inference (bounded calibration)` and `Optimizing inference — baseline; incumbent detection_batch_size=1,pipeline_depth=2; 0.0/600s`. **This is the sidecar path, and it runs on this platform.** "On MPS *nothing* exercises the sidecar" and "Task 12 is the only test of this feature that can exist" were both false.
+
+**Correction 2 (BLOCKER): the tuner's determinism floor fails on byte-identical output, so calibration always aborts.** That same record run ended:
+
+```
+status=fallback  effective == requested == baseline
+reason=baseline_nondeterministic_beyond_contract
+```
+
+`search.py:141` returns that reason when `compare_outputs(baseline_run_1, baseline_run_2, for_determinism_floor=True).passed` is False. Feeding that function **two byte-identical CSV pairs** (verified with `filecmp.cmp(..., shallow=False) == True`) returns:
+
+```
+passed=False  unmatched=6  position_p99=0.0  angle_max=0.0
+details: "forward: keyed rows are not aligned", "forward: 6 unmatched positional rows"
+```
+
+Root cause: `_positional` matches rows by nearest (X, Y) and **cannot match a row whose X/Y is NaN** — a lost or coasting track. `fly_obb`'s forward CSV has 1494 rows of which exactly **3** have NaN X/Y; 3 per side × 2 sides = the 6 unmatched. `_compare_one` requires `unmatched_rows == 0`, so the verdict fails on a perfectly deterministic baseline, and `len(pairs) != len(reference)` additionally trips "keyed rows are not aligned".
+
+**Consequence: any project whose forward output contains even one NaN-position row — i.e. essentially every real tracking run — can never pass the tuner's own determinism floor, so the search aborts before evaluating a single candidate and the feature is a permanent no-op.** This is platform-independent: it is arithmetic in `equivalence.py`, not a device behaviour, so CUDA will hit it identically. It is also why my `autotune_determinism_floor.py` printed `passed=False` for all 7 clips; I initially dismissed that as a tool artifact, and **that dismissal was wrong** — it was the product reporting its own defect. `angle_max` and `position_p99` in that table remain correct.
+
+Fix direction (not implemented here): exclude NaN-position rows from the unmatched count symmetrically, or match them by row key instead of position, in `_positional`/`_compare_one`.
+
+### Carried from Task 8 — S8 still has no coverage, for a different reason
+
+The S8 fix (post-tracking consumes the trial's own cache directory, not production's) is exercised only inside the **sidecar calibration child's trial**. 3a runs with `mode=off` (no autotune code in the path at all) and 3b is refused before calibration starts. The `record` run above *did* reach the sidecar — but it aborted at the baseline determinism floor **before running any trial**, so it never got as far as the code S8 touches. **S8 remains empirically unverified.** It cannot be verified on any platform until the determinism-floor blocker above is fixed, because no trial ever executes. Stated explicitly rather than implied by silence.
 
 ### Performance
 
@@ -1215,4 +1241,4 @@ Both red numbers are contended-box artifacts, not regressions. The box carried `
 1. With the feature off, this branch is a **bit-exact no-op** on 7 clips (the 8th red line is reproduced on the baseline tree alone). Two OBB/SLEAP clips are unmeasured.
 2. The ROI coverage hole that let B1 ship is now closed by a fixture proven to produce detections (row counts identical to the non-ROI clip).
 3. Tuned settings are bit-exact on bg-sub and CNN-identity, float-noise on YOLO-OBB, and **exceed the tuner's angular tolerance on the pose/head-tail clip** — pose batch size is the field to distrust.
-4. **Nothing here validates the tuner itself.** `automatic` is CUDA-only by policy; on MPS the apply path is provably dead. Task 12 is not a formality — it is the only test of this feature that can exist.
+4. **Nothing here validates the tuner itself, and one run showed the tuner cannot work at all.** `automatic` is CUDA-only by policy, so the *apply* path is dead on MPS. But `record` mode does calibrate here, and doing so surfaced a platform-independent blocker: the tuner's own determinism floor fails on byte-identical output whenever the forward CSV contains a NaN-position row, so calibration aborts before evaluating any candidate. **Fix that before Task 12 runs, or CUDA will measure the same permanent no-op.**
