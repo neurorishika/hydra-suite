@@ -144,3 +144,120 @@ def test_planner_does_not_mutate_returned_configs_across_jobs(tmp_path):
     specs = plan_batch_jobs([a, b])
     specs[0].config["nested"]["v"] = 99
     assert specs[1].config["nested"]["v"] == 1
+
+
+# --- Borrowed-config output paths -------------------------------------------
+# A config that did NOT come from the video's own sidecar carries the
+# KEYSTONE's absolute output paths. ``video_output_path`` is consumed by
+# ``core/tracking/session.py::_run_annotated_video``, so leaving it alone makes
+# every video in the batch render its overlay into ONE file.
+
+
+def _sidecar_cfg(directory: Path, name: str) -> dict:
+    """What the GUI's save_config writes: absolute per-video output paths."""
+    return {
+        "k": name,
+        "file_path": str(directory / f"{name}.mp4"),
+        "csv_path": str(directory / f"{name}_tracking.csv"),
+        "video_output_enabled": True,
+        "video_output_path": str(directory / f"{name}_tracking.mp4"),
+    }
+
+
+def test_inheriting_videos_render_beside_their_own_video(tmp_path):
+    a = _mk_video(tmp_path, "a", _sidecar_cfg(tmp_path, "a"))
+    b = _mk_video(tmp_path, "b")  # no sidecar: inherits the keystone
+    c = _mk_video(tmp_path, "c")  # ditto
+    specs = plan_batch_jobs([a, b, c])
+    assert [s.provenance for s in specs] == [
+        "own-sidecar",
+        "keystone-baseline",
+        "keystone-baseline",
+    ]
+    outs = [s.config["video_output_path"] for s in specs]
+    assert len(set(outs)) == 3, outs
+    for spec, name in zip(specs, ("a", "b", "c")):
+        assert spec.config["video_output_path"] == str(
+            tmp_path / f"{name}_tracking.mp4"
+        )
+        assert spec.config["csv_path"] == str(tmp_path / f"{name}_tracking.csv")
+        assert spec.config["file_path"] == spec.video_path
+        assert spec.config["video_output_enabled"] is True
+
+
+def test_explicit_config_batch_renders_beside_each_video(tmp_path):
+    a = _mk_video(tmp_path, "a")
+    b = _mk_video(tmp_path, "b")
+    explicit = tmp_path / "explicit.json"
+    explicit.write_text(json.dumps(_sidecar_cfg(tmp_path, "keystone")))
+    specs = plan_batch_jobs([a, b], explicit_config_path=str(explicit))
+    outs = [s.config["video_output_path"] for s in specs]
+    assert outs == [
+        str(tmp_path / "a_tracking.mp4"),
+        str(tmp_path / "b_tracking.mp4"),
+    ]
+
+
+def test_keystone_override_rewrites_paths_for_every_borrower(tmp_path):
+    a = _mk_video(tmp_path, "a", _sidecar_cfg(tmp_path, "a"))
+    b = _mk_video(tmp_path, "b", _sidecar_cfg(tmp_path, "b"))
+    specs = plan_batch_jobs([a, b], keystone_override=True)
+    # b's own sidecar is ignored under override: it runs the keystone config,
+    # but must still render to its own file.
+    assert specs[1].config["k"] == "a"
+    assert specs[1].config["video_output_path"] == str(tmp_path / "b_tracking.mp4")
+
+
+def test_own_sidecar_paths_are_left_exactly_as_written(tmp_path):
+    cfg = _sidecar_cfg(tmp_path, "b")
+    cfg["video_output_path"] = str(tmp_path / "custom_name.mp4")
+    a = _mk_video(tmp_path, "a", _sidecar_cfg(tmp_path, "a"))
+    b = _mk_video(tmp_path, "b", cfg)
+    specs = plan_batch_jobs([a, b])
+    assert specs[1].config["video_output_path"] == str(tmp_path / "custom_name.mp4")
+
+
+def test_absent_output_keys_are_never_invented(tmp_path):
+    """A config with no ``video_output_path`` must not gain one: that would
+    start rendering a video the sequential path never rendered."""
+    a = _mk_video(tmp_path, "a", {"k": "keystone", "video_output_enabled": True})
+    b = _mk_video(tmp_path, "b")
+    specs = plan_batch_jobs([a, b])
+    assert "video_output_path" not in specs[0].config
+    assert "video_output_path" not in specs[1].config
+
+
+def test_planner_rejects_two_videos_rendering_to_one_mp4(tmp_path):
+    cfg_a = _sidecar_cfg(tmp_path, "a")
+    cfg_b = _sidecar_cfg(tmp_path, "b")
+    cfg_a["video_output_path"] = cfg_b["video_output_path"] = str(
+        tmp_path / "shared.mp4"
+    )
+    a = _mk_video(tmp_path, "a", cfg_a)
+    b = _mk_video(tmp_path, "b", cfg_b)
+    with pytest.raises(BatchPlanError):
+        plan_batch_jobs([a, b])
+
+
+def test_divergence_from_the_reference_loop_is_exactly_the_output_paths(tmp_path):
+    """The pre-refactor sequential loop had this same latent bug, so the parity
+    oracle would only stay green by reproducing it. This documents the ONE
+    deliberate divergence and pins its blast radius to the three keys that
+    name per-video side outputs -- none of which reach the tracking engine
+    (``build_engine_params`` never reads them and the session derives its CSV
+    paths from the video path), so tracking output is unchanged.
+    """
+    a = _mk_video(tmp_path, "a", _sidecar_cfg(tmp_path, "a"))
+    b = _mk_video(tmp_path, "b")
+    ref = _reference_loop([a, b])
+    specs = plan_batch_jobs([a, b])
+    assert [s.video_path for s in specs] == [v for v, _ in ref]
+    for (_, ref_cfg), spec in zip(ref, specs):
+        differing = {
+            key
+            for key in set(ref_cfg) | set(spec.config)
+            if ref_cfg.get(key) != spec.config.get(key)
+        }
+        assert differing <= {"file_path", "csv_path", "video_output_path"}, differing
+    # ...and the reference loop really does collide, which is what we fixed.
+    assert len({cfg.get("video_output_path") for _, cfg in ref}) == 1

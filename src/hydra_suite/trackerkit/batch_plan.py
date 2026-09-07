@@ -52,6 +52,64 @@ def _reject_collisions(video_paths: Sequence[str]) -> None:
         seen_raw_csv[raw_key] = video
 
 
+# The per-video side-output keys a borrowed config carries over from the
+# keystone. NOT consumed by the tracking engine: ``build_engine_params`` never
+# reads them and ``load_tracker_cli_session`` derives the raw/final CSV paths
+# from the video path itself, so rewriting them cannot change tracking output.
+# ``video_output_path`` IS consumed, by ``CoreTrackingSession._run_annotated_video``.
+_SIDE_OUTPUT_KEYS = ("file_path", "csv_path", "video_output_path")
+
+
+def _retarget_side_outputs(cfg: dict[str, Any], video_path: str) -> dict[str, Any]:
+    """Point a BORROWED config's side-output paths at *video_path*.
+
+    A config that did not come from this video's own sidecar holds the
+    keystone's ABSOLUTE output paths. Left alone, every video in a
+    keystone-inherited batch renders its annotated overlay into the keystone's
+    one mp4 -- N concurrent writers, one corrupt file, and no overlay for any
+    other video. The pre-refactor sequential loop had the same latent bug; the
+    GUI's own sequential batch did not, because it re-derived the path per
+    video.
+
+    Only keys that are ALREADY present are rewritten: inventing
+    ``video_output_path`` would make a config that never rendered a video start
+    rendering one.
+    """
+    if not cfg:
+        return cfg
+    csv_path, video_output_path = _default_output_paths(video_path)
+    values = {
+        "file_path": video_path,
+        "csv_path": csv_path,
+        "video_output_path": video_output_path,
+    }
+    for key in _SIDE_OUTPUT_KEYS:
+        if key in cfg:
+            cfg[key] = values[key]
+    return cfg
+
+
+def _reject_render_collisions(specs: Sequence[BatchJobSpec]) -> None:
+    """Belt and braces: two videos must never render into one annotated mp4.
+
+    Only jobs that will actually render are compared -- the same predicate
+    ``_run_annotated_video`` uses -- so a stale, disabled path cannot block a
+    run that would never have written it.
+    """
+    seen: dict[str, str] = {}
+    for spec in specs:
+        path = str(spec.config.get("video_output_path", "") or "").strip()
+        if not path or not spec.config.get("video_output_enabled", False):
+            continue
+        key = os.path.realpath(path)
+        if key in seen:
+            raise BatchPlanError(
+                f"two videos would render the same annotated video {path}: "
+                f"{spec.video_path} and {seen[key]}"
+            )
+        seen[key] = spec.video_path
+
+
 def plan_batch_jobs(
     video_paths: Sequence[str],
     *,
@@ -104,19 +162,22 @@ def plan_batch_jobs(
         if sahi_profile:
             cfg = apply_sahi_profile_override(cfg, sahi_profile)
         cfg = deepcopy(dict(cfg))
+        if provenance != "own-sidecar":
+            cfg = _retarget_side_outputs(cfg, item.video_path)
         if index == 1:
-            baseline = (
-                deepcopy(load_tracker_cli_config(item.config_path))
-                if item.config_path
-                else deepcopy(cfg)
-            )
+            # The keystone's own resolved dict IS the baseline; a video that
+            # inherits it necessarily has no config file of its own, which can
+            # only happen when the keystone had none either (build_batch_video_plan
+            # hands every later video the keystone's path when there is one).
+            baseline = deepcopy(cfg)
         specs.append(
             BatchJobSpec(
                 index=index,
                 video_path=item.video_path,
-                config_path=item.config_path if not inherits else None,
+                config_path=item.config_path,
                 config=cfg,
                 provenance=provenance,
             )
         )
+    _reject_render_collisions(specs)
     return specs

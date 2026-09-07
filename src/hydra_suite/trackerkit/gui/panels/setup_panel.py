@@ -345,8 +345,10 @@ class SetupPanel(QWidget):
         )
         self.chk_batch_parallel.setToolTip(
             "Each video runs as its own headless child process pinned to one\n"
-            "GPU (CUDA_VISIBLE_DEVICES). Output is identical to sequential\n"
-            "batch tracking. No live preview while running."
+            "GPU (CUDA_VISIBLE_DEVICES). Tracking CSVs are byte-identical to\n"
+            "sequential batch tracking, and each video's annotated overlay is\n"
+            "written beside that video. Final-media and individual-dataset\n"
+            "export are skipped. No live preview while running."
         )
         self.chk_batch_parallel.setChecked(
             bool(self._main_window.config.batch_parallel)
