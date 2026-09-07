@@ -109,6 +109,59 @@ class FanoutEvents(Protocol):
     def job_finished(self, result: FanoutJobResult) -> None: ...  # noqa: E704
 
 
+class LiveChildRegistry:
+    """The pids of the children currently running, readable from any thread.
+
+    ``run_batch_fanout`` owns its ``running`` list on the scheduler thread, so
+    nobody else can see it. That is fine for the cooperative stop, which the
+    scheduler performs itself -- but a caller that has ALREADY waited out the
+    stop budget (the GUI's close path) has no way to reach the survivors, and
+    proceeding without one orphans children that still hold their GPUs.
+
+    Registration is bounded by the child's lifetime: a pid is added when it is
+    launched and dropped the moment it is reaped, so ``kill_all`` can never
+    signal a recycled pid belonging to somebody else.
+    """
+
+    def __init__(self) -> None:
+        self._lock = threading.Lock()
+        self._pids: set[int] = set()
+
+    def add(self, pid: int) -> None:
+        with self._lock:
+            self._pids.add(int(pid))
+
+    def discard(self, pid: int) -> None:
+        with self._lock:
+            self._pids.discard(int(pid))
+
+    def pids(self) -> list[int]:
+        with self._lock:
+            return sorted(self._pids)
+
+    def kill_all(self) -> list[int]:
+        """SIGKILL every live child's whole session group; return the pids hit.
+
+        No grace period and no escalation ladder: this is the last resort, for
+        a caller that has already spent the cooperative budget. The group --
+        not the pid -- because the child spawns grandchildren (the SLEAP
+        service via ``conda run``), and killing only the leader would leave
+        those running.
+        """
+        killed: list[int] = []
+        for pid in self.pids():
+            if os.name == "nt":  # pragma: no cover - POSIX-only process groups
+                break
+            try:
+                os.killpg(pid, signal.SIGKILL)
+                killed.append(pid)
+            except (ProcessLookupError, PermissionError, OSError):
+                # Already gone: the normal case for a child that exited while
+                # the caller was deciding.
+                self.discard(pid)
+        return killed
+
+
 class NullEvents:
     def job_started(self, spec, gpu, log_path) -> None: ...  # noqa: E704
 
@@ -289,6 +342,7 @@ def _launch(
     run_dir: Path,
     timestamp: str,
     events: FanoutEvents,
+    child_registry: Optional["LiveChildRegistry"] = None,
 ) -> _Live:
     config_json = run_dir / f"job_{spec.index}_config.json"
     config_json.write_text(json.dumps(spec.config, indent=2), encoding="utf-8")
@@ -322,6 +376,11 @@ def _launch(
     except BaseException:
         log_handle.close()
         raise
+    # Register IMMEDIATELY: from the instant Popen returns there is a process
+    # to kill, and anything between here and the caller's bookkeeping is a
+    # window in which a hard kill from another thread would miss it.
+    if child_registry is not None:
+        child_registry.add(proc.pid)
     try:
         live = _Live(
             spec=spec,
@@ -350,6 +409,10 @@ def _launch(
             log_handle.close()
         except Exception:
             pass
+        # This pid is dead and never became a job the caller knows about, so it
+        # must leave the registry with it.
+        if child_registry is not None:
+            child_registry.discard(proc.pid)
         raise
     logger.info(
         "Fan-out: launched job %d (%s) on %s -> %s",
@@ -498,8 +561,13 @@ def run_batch_fanout(
     *,
     events: Optional[FanoutEvents] = None,
     should_stop: Optional[Callable[[], bool]] = None,
+    child_registry: Optional[LiveChildRegistry] = None,
 ) -> FanoutResult:
-    """Run every spec as a child process across the configured slots."""
+    """Run every spec as a child process across the configured slots.
+
+    ``child_registry``, when given, is kept in step with the live children so a
+    caller on another thread can hard-kill them (see :class:`LiveChildRegistry`).
+    """
     events = events or NullEvents()
     should_stop = should_stop or (lambda: False)
     specs = list(specs)
@@ -538,6 +606,11 @@ def run_batch_fanout(
     halted = False
     cancelled = False
 
+    def _forget(live: _Live) -> None:
+        """Drop a reaped child from the registry (pid reuse safety)."""
+        if child_registry is not None:
+            child_registry.discard(live.proc.pid)
+
     # A raise from anywhere in the scheduling loop (an unexpected bug, a
     # should_stop callback that throws, KeyboardInterrupt from the parent's
     # own SIGINT) must not leave GPU children running: they hold whole
@@ -553,6 +626,7 @@ def run_batch_fanout(
                 for live in running:
                     finished_on_its_own = already_exited.get(id(live)) is not None
                     res = _finish(live, cancelled=not finished_on_its_own)
+                    _forget(live)
                     finished[live.spec.index] = res
                     events.job_finished(res)
                 running.clear()
@@ -564,6 +638,7 @@ def run_batch_fanout(
                     running.remove(live)
                     free_slots.append(live.gpu)
                     res = _finish(live, cancelled=False)
+                    _forget(live)
                     finished[live.spec.index] = res
                     events.job_finished(res)
                     if not res.success:
@@ -580,7 +655,15 @@ def run_batch_fanout(
                 gpu = free_slots.pop(0)
                 try:
                     running.append(
-                        _launch(spec, gpu, options, run_dir, timestamp, events)
+                        _launch(
+                            spec,
+                            gpu,
+                            options,
+                            run_dir,
+                            timestamp,
+                            events,
+                            child_registry=child_registry,
+                        )
                     )
                 except Exception as exc:  # noqa: BLE001
                     # A launch that never got off the ground must not abandon the
@@ -643,4 +726,6 @@ def run_batch_fanout(
         return outcome
     except BaseException:
         _stop_children(running, options)
+        for live in running:
+            _forget(live)
         raise

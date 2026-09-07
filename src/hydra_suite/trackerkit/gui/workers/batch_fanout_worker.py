@@ -21,6 +21,7 @@ from hydra_suite.runtime.cuda_devices import CudaDevice
 from hydra_suite.trackerkit.batch_fanout import (
     FanoutJobResult,
     FanoutOptions,
+    LiveChildRegistry,
     run_batch_fanout,
 )
 from hydra_suite.trackerkit.batch_plan import BatchJobSpec
@@ -54,6 +55,7 @@ class BatchFanoutWorker(BaseWorker):
         self._specs = list(specs)
         self._options = options
         self._stop = threading.Event()
+        self._children = LiveChildRegistry()
         self.result = None
 
     @property
@@ -76,6 +78,17 @@ class BatchFanoutWorker(BaseWorker):
 
     def should_stop(self) -> bool:
         return self._stop.is_set() or self.isInterruptionRequested()
+
+    def kill_children_now(self) -> list[int]:
+        """SIGKILL every live child's process group; return the pids signalled.
+
+        The escape hatch for a caller that has already spent the cooperative
+        stop budget and must proceed anyway -- closing the window while these
+        processes live would orphan them, still holding their GPUs. Callable
+        from the GUI thread while ``execute`` runs on the worker thread: the
+        registry is the only shared state and it is lock-guarded.
+        """
+        return self._children.kill_all()
 
     # --- FanoutEvents (called from scheduler / log-reader threads) ---------
     def job_started_cb(
@@ -107,7 +120,11 @@ class BatchFanoutWorker(BaseWorker):
     def execute(self) -> None:
         events = _EventAdapter(self)
         self.result = run_batch_fanout(
-            self._specs, self._options, events=events, should_stop=self.should_stop
+            self._specs,
+            self._options,
+            events=events,
+            should_stop=self.should_stop,
+            child_registry=self._children,
         )
         self.fanout_finished.emit(self.result)
 

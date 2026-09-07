@@ -92,6 +92,10 @@ logger = logging.getLogger(__name__)
 
 _HEADTAIL_USAGE_ROLE_ALIASES = {"headtail", "head_tail"}
 
+# After a SIGKILL to every child's group the scheduler only has to reap them,
+# so this is a short courtesy join, not a stop budget.
+_FANOUT_KILL_JOIN_MS = 5_000
+
 
 class MainWindow(QMainWindow):
     """
@@ -1526,17 +1530,52 @@ class MainWindow(QMainWindow):
             except Exception:
                 still_running = False
             if still_running:
-                QMessageBox.warning(
+                # First refusal: the children may simply need a moment. A
+                # SECOND close attempt means waiting has not worked, and a
+                # window that can never be closed is its own failure -- so
+                # offer the hard way out, explicitly, rather than silently
+                # refusing forever.
+                if not getattr(self, "_fanout_close_warned", False):
+                    self._fanout_close_warned = True
+                    QMessageBox.warning(
+                        self,
+                        "Parallel batch still stopping",
+                        "The parallel batch has not finished stopping yet.\n\n"
+                        "Closing now would orphan its child processes, which "
+                        "still hold their GPUs. The window will stay open -- "
+                        "wait for the fan-out window to report every job as "
+                        "finished, then close again.\n\n"
+                        "If it still will not stop, close a second time to "
+                        "force-kill the children.",
+                    )
+                    event.ignore()
+                    return
+                reply = QMessageBox.question(
                     self,
-                    "Parallel batch still stopping",
-                    "The parallel batch has not finished stopping yet.\n\n"
-                    "Closing now would orphan its child processes, which still "
-                    "hold their GPUs. The window will stay open -- wait for the "
-                    "fan-out window to report every job as finished, then close "
-                    "again.",
+                    "Children are still stopping",
+                    "The parallel batch's child processes have still not "
+                    "stopped.\n\nClose anyway? They will be KILLED, so the "
+                    "videos they were tracking will have no final output.",
+                    QMessageBox.Yes | QMessageBox.No,
+                    QMessageBox.No,
                 )
-                event.ignore()
-                return
+                if reply != QMessageBox.Yes:
+                    event.ignore()
+                    return
+                try:
+                    fanout_worker.cancel()
+                    killed = fanout_worker.kill_children_now()
+                    logger.warning(
+                        "Force-killed %d fan-out child process group(s) on close: %s",
+                        len(killed),
+                        killed,
+                    )
+                    # The children are gone, so the scheduler's waits unblock
+                    # almost at once; give the thread that moment rather than
+                    # tearing it down mid-reap.
+                    fanout_worker.wait(_FANOUT_KILL_JOIN_MS)
+                except Exception:
+                    logger.exception("Error force-killing fan-out children on close.")
 
         self._save_ui_settings()
         tail = getattr(self, "_status_log_tail", None)

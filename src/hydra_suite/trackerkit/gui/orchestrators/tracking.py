@@ -1285,6 +1285,9 @@ class TrackingOrchestrator:
         dialog.cancel_requested.connect(worker.cancel)
         self._mw.batch_fanout_worker = worker
         self._mw.batch_fanout_dialog = dialog
+        # A new batch gets a fresh close budget: the "close again to force-kill"
+        # escalation must not carry over from a previous, unrelated fan-out.
+        self._mw._fanout_close_warned = False
 
         self._mw._stop_all_requested = False
         self._mw.btn_start.setText("Stop Tracking")

@@ -117,10 +117,11 @@ def test_execute_runs_the_scheduler_and_emits_the_result(app, monkeypatch):
 
     seen = {}
 
-    def _fake_run(specs, options, *, events, should_stop):
+    def _fake_run(specs, options, *, events, should_stop, child_registry=None):
         seen["specs"] = list(specs)
         seen["options"] = options
         seen["should_stop"] = should_stop
+        seen["child_registry"] = child_registry
         events.job_started(specs[0], None, Path("/tmp/l.log"))
         events.job_progress(specs[0], 10, "x")
         events.job_log(specs[0], "line")
@@ -142,6 +143,8 @@ def test_execute_runs_the_scheduler_and_emits_the_result(app, monkeypatch):
 
     assert seen["specs"][0].index == 1
     assert seen["should_stop"]() is False
+    # The scheduler must be handed the registry the escape hatch reads.
+    assert seen["child_registry"] is worker._children
     assert worker.result == "SENTINEL-RESULT"
     assert [e[0] for e in emitted] == [
         "started",
@@ -389,3 +392,219 @@ def test_close_is_refused_while_the_fanout_is_still_stopping(monkeypatch):
 
     assert events == ["stop_tracking", "ignore"], events
     assert warnings, "the user was not told why the window stayed open"
+
+
+def test_kill_children_now_sigkills_every_live_child_group(app, tmp_path):
+    """The escape hatch must reach the children the scheduler owns.
+
+    ``run_batch_fanout`` keeps its ``running`` list on the scheduler thread, so
+    the GUI thread has no handle on the survivors after the stop budget expires.
+    The registry is that handle; without it "close anyway" would orphan
+    processes still holding their GPUs.
+    """
+    import signal
+    import subprocess
+    import sys
+    import time
+
+    worker = BatchFanoutWorker([_spec(1)], FanoutOptions())
+
+    # A child in its OWN session (exactly how _launch starts one) that itself
+    # spawns a grandchild -- the case a pid-only kill would leave behind.
+    script = (
+        "import subprocess, sys, time\n"
+        "kid = subprocess.Popen([sys.executable, '-c', 'import time; time.sleep(120)'])\n"
+        "print(kid.pid, flush=True)\n"
+        "time.sleep(120)\n"
+    )
+    proc = subprocess.Popen(
+        [sys.executable, "-c", script],
+        stdout=subprocess.PIPE,
+        text=True,
+        start_new_session=True,
+    )
+    try:
+        grandchild = int(proc.stdout.readline().strip())
+        worker._children.add(proc.pid)
+        assert worker._children.pids() == [proc.pid]
+
+        killed = worker.kill_children_now()
+
+        assert killed == [proc.pid]
+        assert proc.wait(timeout=10) is not None
+        # The grandchild went with the group, not just the leader.
+        deadline = time.monotonic() + 10
+        while time.monotonic() < deadline:
+            try:
+                os.kill(grandchild, 0)
+            except ProcessLookupError:
+                break
+            time.sleep(0.05)
+        else:  # pragma: no cover - only on a regression
+            os.kill(grandchild, signal.SIGKILL)
+            raise AssertionError("the grandchild survived the group kill")
+    finally:
+        try:
+            proc.kill()
+        except Exception:
+            pass
+
+
+def test_registry_forgets_a_child_once_it_is_reaped(tmp_path):
+    """A pid must leave the registry when its child does: signalling a recycled
+    pid would hit an unrelated process group."""
+    from hydra_suite.trackerkit.batch_fanout import LiveChildRegistry, run_batch_fanout
+
+    registry = LiveChildRegistry()
+    video = tmp_path / "v.mp4"
+    video.write_bytes(b"\x00")
+    spec = BatchJobSpec(
+        index=1,
+        video_path=str(video),
+        config_path=None,
+        config={},
+        provenance="own-sidecar",
+    )
+    seen: list[list[int]] = []
+
+    class _Events:
+        def job_started(self, spec, gpu, log_path):
+            seen.append(registry.pids())
+
+        def job_progress(self, spec, percent, message):
+            pass
+
+        def job_log(self, spec, line):
+            pass
+
+        def job_finished(self, result):
+            pass
+
+    result = run_batch_fanout(
+        [spec],
+        FanoutOptions(
+            jobs=1,
+            run_dir=str(tmp_path / "run"),
+            child_command=lambda s, c: ["true"],
+        ),
+        events=_Events(),
+        child_registry=registry,
+    )
+
+    assert result.success, result.jobs[0].error
+    assert seen and seen[0], "the child was never registered while it ran"
+    assert registry.pids() == [], "a reaped child stayed in the registry"
+
+
+def test_second_close_offers_to_kill_the_children_and_then_proceeds(monkeypatch):
+    """A window that can never be closed is its own failure: after the first
+    refusal, a second attempt must offer the hard way out."""
+    from types import SimpleNamespace
+
+    import hydra_suite.trackerkit.gui.main_window as mw_mod
+    from hydra_suite.trackerkit.gui.main_window import MainWindow
+
+    answers = iter([1, 1])  # "stop tracking and exit?" then "close anyway?"
+    asked: list = []
+    monkeypatch.setattr(
+        mw_mod,
+        "QMessageBox",
+        SimpleNamespace(
+            question=lambda *a, **k: (asked.append(a[1]), next(answers))[1],
+            warning=lambda *a: None,
+            Yes=1,
+            No=2,
+        ),
+    )
+    monkeypatch.setattr(
+        mw_mod,
+        "QApplication",
+        SimpleNamespace(
+            setOverrideCursor=lambda *a: None, restoreOverrideCursor=lambda *a: None
+        ),
+    )
+
+    events: list[str] = []
+    worker = SimpleNamespace(
+        isRunning=lambda: True,
+        cancel=lambda: events.append("cancel"),
+        kill_children_now=lambda: (events.append("kill"), [4242])[1],
+        wait=lambda ms: events.append(f"wait({ms})"),
+    )
+    stub = SimpleNamespace(
+        _has_active_tracking_workers=lambda: True,
+        _tracking_orch=SimpleNamespace(
+            stop_tracking=lambda: events.append("stop_tracking")
+        ),
+        batch_fanout_worker=worker,
+        _save_ui_settings=lambda: events.append("saved"),
+        _status_log_tail=None,
+        # The first close attempt already happened.
+        _fanout_close_warned=True,
+    )
+    event = SimpleNamespace(
+        ignore=lambda: events.append("ignore"), accept=lambda: events.append("accept")
+    )
+
+    # The stub is not a real QWidget, so falling through to QWidget.closeEvent
+    # raises -- which is itself the proof that the close PROCEEDED rather than
+    # being refused. Everything asserted below happened before that point.
+    with pytest.raises(TypeError, match="SimpleNamespace"):
+        MainWindow.closeEvent(stub, event)
+
+    assert "Children are still stopping" in asked
+    assert events[:1] == ["stop_tracking"]
+    assert "cancel" in events and "kill" in events
+    assert events.index("cancel") < events.index("kill")
+    assert "saved" in events, "the close did not proceed after the kill"
+    assert "ignore" not in events
+
+
+def test_second_close_answered_no_keeps_the_window_open(monkeypatch):
+    """Declining the force-kill must leave everything exactly as it was."""
+    from types import SimpleNamespace
+
+    import hydra_suite.trackerkit.gui.main_window as mw_mod
+    from hydra_suite.trackerkit.gui.main_window import MainWindow
+
+    answers = iter([1, 2])  # yes to "stop and exit", NO to "close anyway"
+    monkeypatch.setattr(
+        mw_mod,
+        "QMessageBox",
+        SimpleNamespace(
+            question=lambda *a, **k: next(answers),
+            warning=lambda *a: None,
+            Yes=1,
+            No=2,
+        ),
+    )
+    monkeypatch.setattr(
+        mw_mod,
+        "QApplication",
+        SimpleNamespace(
+            setOverrideCursor=lambda *a: None, restoreOverrideCursor=lambda *a: None
+        ),
+    )
+
+    events: list[str] = []
+    worker = SimpleNamespace(
+        isRunning=lambda: True,
+        cancel=lambda: events.append("cancel"),
+        kill_children_now=lambda: events.append("kill") or [],
+        wait=lambda ms: None,
+    )
+    stub = SimpleNamespace(
+        _has_active_tracking_workers=lambda: True,
+        _tracking_orch=SimpleNamespace(stop_tracking=lambda: None),
+        batch_fanout_worker=worker,
+        _save_ui_settings=lambda: events.append("saved"),
+        _status_log_tail=None,
+        _fanout_close_warned=True,
+    )
+    event = SimpleNamespace(
+        ignore=lambda: events.append("ignore"), accept=lambda: events.append("accept")
+    )
+
+    MainWindow.closeEvent(stub, event)
+
+    assert events == ["ignore"], events
