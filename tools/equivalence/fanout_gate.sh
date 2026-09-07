@@ -23,6 +23,12 @@
 #   RUNTIME     cpu|mps|cuda|gpu|gpu_fast|... (default: auto-detect, as run_matrix)
 #   JOBS        --jobs value for the fan-out run (default 2)
 #   EXTRA       extra flags for the fan-out run, e.g. "--threads-per-job 4" or "--gpus 0"
+#   INHERIT     1 = keystone-inheritance leg: ONLY the first clip gets a sidecar
+#               (the rest inherit it through plan_batch_jobs, which is the default
+#               GUI batch flow and the branch the plain leg never executes), and
+#               that sidecar has video_output_enabled=true so the per-video
+#               annotated overlay -- the one output that IS taken from the
+#               inherited config -- is actually exercised.
 set -uo pipefail
 
 HERE="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"
@@ -38,6 +44,7 @@ FIXTURES="${FIXTURES:-$ROOT/tools/equivalence/fixtures}"
 CLIPS_DIR="${CLIPS_DIR:-$FIXTURES/clips}"
 OUT="${OUT:-/tmp/fanout_gate}"
 JOBS="${JOBS:-2}"
+INHERIT="${INHERIT:-0}"
 EXTRA="${EXTRA:-}"
 RUNTIME="${RUNTIME:-auto}"
 
@@ -92,6 +99,7 @@ echo "### runtime   = $RUNTIME"
 echo "### clips     = $CLIPS_DIR"
 echo "### out       = $OUT"
 echo "### jobs      = $JOBS   extra = '${EXTRA:-<none>}'"
+echo "### inherit   = $INHERIT (1 = keystone-only sidecar + annotated video)"
 echo "### clips under test: ${WANT[*]}"
 
 # A stale __pycache__ (especially a numba @jit(cache=True) entry left by another
@@ -116,7 +124,8 @@ mkdir -p "$OUT/seq" "$OUT/par"
 # equivalence harness would hand this clip: blanked paths filled in, side
 # outputs disabled, and the runtime tier injected (the fixture configs carry no
 # runtime_tier, and loading one without it raises the migration error).
-python - "$OUT" "$RUNTIME" "$HERE" "${ENTRIES[@]}" <<'PY'
+python - "$OUT" "$RUNTIME" "$HERE" "$INHERIT" "${ENTRIES[@]}" <<'PY'
+import json
 import shutil
 import sys
 from pathlib import Path
@@ -124,9 +133,10 @@ from pathlib import Path
 out = Path(sys.argv[1])
 runtime = sys.argv[2]
 sys.path.insert(0, sys.argv[3])
+inherit = sys.argv[4] == "1"
 import runner  # noqa: E402
 
-for entry in sys.argv[4:]:
+for index, entry in enumerate(sys.argv[5:]):
     name, video, config, skeleton = entry.split("|")
     source = Path(video)
     if not source.is_file():
@@ -141,8 +151,26 @@ for entry in sys.argv[4:]:
         cfg = runner.build_config(
             config, link, stage, runtime, skeleton=(skeleton or None)
         )
-        shutil.move(str(cfg), str(stage / f"{name}_config.json"))
-        print(f"    staged {mode}/{name}.mp4 + {name}_config.json")
+        if inherit and index > 0:
+            # No sidecar: this video must inherit the keystone's config through
+            # the planner. That branch is what the plain leg never executes.
+            Path(cfg).unlink()
+            print(f"    staged {mode}/{name}.mp4 (no sidecar: inherits keystone)")
+            continue
+        dest = stage / f"{name}_config.json"
+        shutil.move(str(cfg), str(dest))
+        if inherit:
+            # runner.build_config force-disables every side output; re-enable the
+            # annotated video on the KEYSTONE so the inherited-config path has a
+            # per-video output to get wrong.
+            data = json.loads(dest.read_text(encoding="utf-8"))
+            data["video_output_enabled"] = True
+            data["video_output_path"] = str(stage / f"{name}_tracking.mp4")
+            dest.write_text(json.dumps(data, indent=2), encoding="utf-8")
+            print(f"    staged {mode}/{name}.mp4 + {name}_config.json (KEYSTONE,"
+                  " video_output_enabled=true)")
+        else:
+            print(f"    staged {mode}/{name}.mp4 + {name}_config.json")
 PY
 if [ $? -ne 0 ]; then echo "!! staging failed" >&2; exit 2; fi
 
@@ -235,6 +263,34 @@ for entry in "${ENTRIES[@]}"; do
     fi
   done
 done
+
+if [ "$INHERIT" = "1" ]; then
+  echo
+  echo "== side outputs: every clip must render its OWN annotated video =="
+  # Pre-fix, an inheriting video kept the KEYSTONE's absolute video_output_path,
+  # so all N children rendered into one file: the keystone's mp4 was written N
+  # times (concurrently, in the fan-out) and no other clip had one at all.
+  for mode in seq par; do
+    for entry in "${ENTRIES[@]}"; do
+      clip="${entry%%|*}"
+      mp4="$OUT/$mode/${clip}_tracking.mp4"
+      if [ -s "$mp4" ]; then
+        echo "✅ $mode/${clip}_tracking.mp4 ($(wc -c < "$mp4" | tr -d ' ') bytes)"
+      else
+        echo "❌ $mode/${clip}_tracking.mp4 missing or empty -- no overlay of its own"
+        status=1
+      fi
+    done
+    produced=$(ls "$OUT/$mode/"*_tracking.mp4 2>/dev/null | wc -l | tr -d ' ')
+    if [ "$produced" -eq "${#ENTRIES[@]}" ]; then
+      echo "✅ $mode: ${#ENTRIES[@]} clips -> $produced distinct annotated videos"
+    else
+      echo "❌ $mode: ${#ENTRIES[@]} clips -> $produced annotated videos (paths collided)"
+      ls -l "$OUT/$mode/"*.mp4 2>/dev/null || true
+      status=1
+    fi
+  done
+fi
 
 echo
 if [ "$status" -eq 0 ]; then
