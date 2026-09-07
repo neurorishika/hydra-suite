@@ -1197,6 +1197,17 @@ class TrackingOrchestrator:
 
         setup = self._panels.setup
         videos = list(self._mw.batch_videos)
+        # The CLI refuses a missing video up front (cli.run_tracking_cli); without
+        # the same check here a stale batch entry fails INSIDE a child, halting
+        # the batch with the cause buried in a per-job log.
+        missing = [video for video in videos if not Path(video).is_file()]
+        if missing:
+            QMessageBox.warning(
+                self._mw,
+                "Batch cannot start",
+                "These batch videos no longer exist:\n\n" + "\n".join(missing),
+            )
+            return False
         try:
             # The keystone's sidecar was just written by save_config(), so the
             # planner sees exactly what `trackerkit track --video-list` would.

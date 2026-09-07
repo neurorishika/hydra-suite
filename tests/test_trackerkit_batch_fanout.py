@@ -557,3 +557,54 @@ def test_module_imports_no_qt():
             assert not any(
                 n.startswith(("PySide6", "PyQt")) for n in names
             ), module.__file__
+
+
+def test_temp_run_dir_is_removed_on_success_and_kept_on_failure(tmp_path, monkeypatch):
+    """One temp dir of effective configs was leaked per fan-out run."""
+    import tempfile
+
+    import hydra_suite.trackerkit.batch_fanout as bf
+
+    created: list[str] = []
+    real_mkdtemp = tempfile.mkdtemp
+
+    def _mkdtemp(*args, **kwargs):
+        kwargs["dir"] = str(tmp_path)
+        path = real_mkdtemp(*args, **kwargs)
+        created.append(path)
+        return path
+
+    monkeypatch.setattr(bf.tempfile, "mkdtemp", _mkdtemp)
+
+    ok = run_batch_fanout(
+        [_spec(tmp_path, "a")], FanoutOptions(jobs=1, child_command=_fake_command)
+    )
+    assert ok.success
+    assert created and not Path(created[-1]).exists()
+
+    bad = run_batch_fanout(
+        [_spec(tmp_path, "b", mode="fail")],
+        FanoutOptions(jobs=1, child_command=_fake_command),
+    )
+    assert not bad.success
+    kept = Path(created[-1])
+    assert kept.is_dir(), "a failed run must keep its effective configs"
+    assert (kept / "job_1_config.json").exists()
+
+
+def test_two_runs_in_the_same_second_do_not_share_a_log_file(tmp_path):
+    """The timestamp used to have 1 s resolution, so a second fan-out of the
+    same video appended into the first run's log."""
+    first = run_batch_fanout(
+        [_spec(tmp_path, "a")],
+        FanoutOptions(jobs=1, run_dir=tmp_path / "r1", child_command=_fake_command),
+    )
+    second = run_batch_fanout(
+        [_spec(tmp_path, "a")],
+        FanoutOptions(jobs=1, run_dir=tmp_path / "r2", child_command=_fake_command),
+    )
+    a, b = first.jobs[0].log_path, second.jobs[0].log_path
+    assert a != b, a
+    assert "job1" in a.name and "job1" in b.name
+    for log in (a, b):
+        assert log.read_text().count("# trackerkit fan-out job") == 1

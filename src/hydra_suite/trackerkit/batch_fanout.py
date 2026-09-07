@@ -14,6 +14,7 @@ import json
 import logging
 import os
 import re
+import shutil
 import signal
 import subprocess
 import sys
@@ -169,7 +170,12 @@ def default_child_command(
 def _job_log_path(spec: BatchJobSpec, timestamp: str) -> Path:
     base = choose_writable_artifact_base_dir(spec.video_path)
     log_dir = build_video_log_dir(spec.video_path, artifact_base_dir=base, create=True)
-    return log_dir / f"{Path(spec.video_path).stem}_fanout_{timestamp}.log"
+    # The timestamp has 1 s resolution, so it alone lets two fan-outs of the
+    # same video append into one file; the pid + job index make it unique.
+    return (
+        log_dir / f"{Path(spec.video_path).stem}_fanout_{timestamp}"
+        f"_p{os.getpid()}_job{spec.index}.log"
+    )
 
 
 def _command_for_log(command: Sequence[str]) -> str:
@@ -452,13 +458,16 @@ def run_batch_fanout(
     else:
         slots = [None] * max(1, int(options.jobs or 1))
 
+    owns_run_dir = not options.run_dir
     run_dir = (
         Path(options.run_dir)
         if options.run_dir
         else Path(tempfile.mkdtemp(prefix="trackerkit-fanout-"))
     )
     run_dir.mkdir(parents=True, exist_ok=True)
-    timestamp = datetime.now().strftime("%Y%m%d_%H%M%S")
+    # Microseconds, not seconds: two fan-outs launched from the same GUI within
+    # one second would otherwise share (and append to) one per-job log file.
+    timestamp = datetime.now().strftime("%Y%m%d_%H%M%S_%f")
 
     pending = list(specs)
     running: list[_Live] = []
@@ -560,7 +569,16 @@ def run_batch_fanout(
                         wall_s=0.0,
                     )
                 )
-        return FanoutResult(jobs=results, cancelled=cancelled)
+        outcome = FanoutResult(jobs=results, cancelled=cancelled)
+        if owns_run_dir:
+            # The effective per-job configs are provenance for a run that went
+            # wrong; a clean run has nothing to explain, so don't leak a temp
+            # dir per fan-out.
+            if outcome.success:
+                shutil.rmtree(run_dir, ignore_errors=True)
+            else:
+                logger.info("Fan-out: effective job configs kept at %s", run_dir)
+        return outcome
     except BaseException:
         _stop_children(running, options)
         raise
