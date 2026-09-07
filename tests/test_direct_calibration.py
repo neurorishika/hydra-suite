@@ -1,6 +1,7 @@
 from __future__ import annotations
 
 import numpy as np
+import pytest
 
 from hydra_suite.core.inference.direct_calibration import (
     CalibrationDetection,
@@ -342,3 +343,101 @@ def test_unfittable_labels_yield_no_band_and_admit_everything():
 
     assert fit_calibration_area_band([]) is None
     assert fit_calibration_area_band([[]]) is None
+
+
+# --------------------------------------------------------------------------
+# D8 quality-floor aggregation: the floor must gate the quantity it was
+# calibrated on (semantic/calibration.py pools per MATCHED PAIR across
+# frames; the direct path used to average PER-FRAME MEANS, which weights a
+# 1-match frame the same as a 16-match frame and injected a hard 0.0 for
+# every zero-match frame).
+# --------------------------------------------------------------------------
+def _quality_frames():
+    """Two frames with DIFFERENT match counts and different qualities."""
+    return [
+        (
+            [_box(0, 0, 10, 10), _box(20, 0, 30, 10)],
+            [_box(0, 0, 10, 10), _box(20, 0, 30, 10)],
+        ),
+        ([_box(0, 30, 13, 43)], [_box(0, 30, 10, 40)]),
+    ]
+
+
+def test_mean_quality_pools_per_matched_pair_not_per_frame():
+    frames = _quality_frames()
+    per_frame = [match_frame(p, ls) for p, ls in frames]
+    assert [s.matched for s in per_frame] == [2, 1]
+    pooled = sum(s.mean_quality * s.matched for s in per_frame) / sum(
+        s.matched for s in per_frame
+    )
+    naive = sum(s.mean_quality for s in per_frame) / len(per_frame)
+    assert abs(pooled - naive) > 1e-6, "fixture must separate the two aggregations"
+    assert score_frames(frames).mean_quality == pytest.approx(pooled)
+
+
+def test_a_zero_match_frame_contributes_no_quality_sample():
+    """Absence of evidence is not evidence of bad geometry.
+
+    A frame where nothing matched used to inject a hard 0.0 into the mean,
+    dragging a good configuration under MIN_MEAN_QUALITY on arithmetic
+    rather than on geometry.
+    """
+    matched_frame = ([_box(0, 30, 13, 43)], [_box(0, 30, 10, 40)])
+    empty_frame = ([_box(500, 500, 510, 510)], [_box(0, 0, 10, 10)])
+    only = match_frame(*matched_frame)
+    assert only.matched == 1
+    assert match_frame(*empty_frame).matched == 0
+    both = score_frames([matched_frame, empty_frame])
+    assert both.missed == 1  # the zero-match frame still costs recall
+    assert both.mean_quality == pytest.approx(only.mean_quality)
+
+
+def test_matching_nothing_anywhere_scores_zero_quality_not_a_vacuous_pass():
+    """An empty sample set must not sneak past the quality floor."""
+    score = score_frames(
+        [
+            ([_box(500, 500, 510, 510)], [_box(0, 0, 10, 10)]),
+            ([_box(600, 600, 610, 610)], [_box(0, 0, 10, 10)]),
+        ]
+    )
+    assert score.matched == 0
+    assert score.mean_quality == 0.0
+    assert score.mean_quality is not None  # None means NEVER MEASURED
+
+
+def test_an_empty_quality_sample_cannot_pass_the_recommender():
+    """The companion to the pooling change, at the recommender.
+
+    Pooling per matched pair means a configuration with NO matched pairs has
+    an EMPTY quality sample, reported as 0.0. That must never become a
+    vacuous pass, and it must not be reported as a geometry claim either:
+    with nothing matched there is no recall, so the RECALL floor refuses
+    first and the "Mistargeted" verdict is never reached. Evidence-poor but
+    genuinely matching configurations are caught by the MATCHED-INSTANCES
+    floor instead.
+    """
+    for label, matched, missed in (
+        ("matched_nothing", 0, 200),
+        ("nothing_labelled_either", 0, 0),
+    ):
+        best, reason = recommend_balanced(
+            [_point(label, 0.1, matched=matched, missed=missed, mean_quality=0.0)]
+        )
+        assert best is None, label
+        assert "recall" in reason
+        assert "Mistargeted" not in reason
+
+    thin, thin_reason = recommend_balanced(
+        [
+            _point(
+                "well_targeted_but_tiny",
+                0.1,
+                matched=MIN_MATCHED_INSTANCES - 1,
+                missed=0,
+                extra=0,
+                mean_quality=0.7,
+            )
+        ]
+    )
+    assert thin is None
+    assert "matched instances" in thin_reason
