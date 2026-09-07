@@ -26,7 +26,7 @@ import numpy as np
 
 from hydra_suite.core.inference.geometry_drift import (
     GeometrySource,
-    log_drift_verdicts,
+    enforce_drift_verdicts,
     log_effective_geometry,
     sidecar_drift_verdicts,
 )
@@ -626,10 +626,16 @@ def build_sam3_coco_dataset(
             logger, "SAM3 dataset build", _geometry_values, _geometry_sources
         )
         if baseline_model_key:
-            # Report only. A PREFILL verdict is deliberately NOT adopted here:
-            # silently taking the baseline's value would change what this run
-            # trains, which is the opposite of an observability guard.
-            log_drift_verdicts(
+            # A PREFILL verdict is deliberately NOT adopted here: silently
+            # taking the baseline's value would change what this run trains,
+            # which is the opposite of an observability guard.
+            #
+            # D11: warn everywhere, refuse ONLY against a named comparison
+            # baseline. `baseline_model_key` is set only when the user asked
+            # for one, so reaching here means the run exists to be compared
+            # against that artifact -- and a geometry divergence makes the
+            # comparison invalid rather than merely noteworthy.
+            enforce_drift_verdicts(
                 logger,
                 sidecar_drift_verdicts(
                     sidecar_for(baseline_model_key),
@@ -652,6 +658,7 @@ def build_sam3_coco_dataset(
                     },
                     baseline_label=baseline_model_key,
                 ),
+                comparison_baseline=baseline_model_key,
             )
 
         # Reproduce ``random.shuffle(sorted(stems))`` exactly, but keep the
