@@ -29,10 +29,24 @@ class CalibrationOutputs:
 
 @dataclass(frozen=True, slots=True)
 class EquivalencePolicy:
+    """Correctness tolerances for a candidate-vs-reference comparison.
+
+    ``exact_categorical`` governs the *heuristic* categorical columns only.
+    The columns in :data:`_MANDATORY_EXACT_COLUMNS` are always compared
+    exactly -- no construction site may switch track-identity checking off.
+    """
+
     position_p99_tolerance: float = 0.5
-    angle_mean_tolerance: float = 0.05
+    angle_max_tolerance: float = 0.05
     match_gate: float = 2.0
     exact_categorical: bool = True
+
+
+# Always compared exactly, independent of the token heuristics below: a
+# Hungarian identity swap keeps row counts, keys and XY identical, so track
+# identity is only caught by an exact comparison against the positionally
+# matched row.
+_MANDATORY_EXACT_COLUMNS = ("TrackID", "TrajectoryID", "State", "ArenaID")
 
 
 _CATEGORICAL_TOKENS = (
@@ -57,18 +71,23 @@ _IDENTITY_CATEGORICAL_SUFFIXES = (
 )
 
 
+def _is_headtail_column(column: str) -> bool:
+    normalized = column.lower().replace("_", "")
+    return "headtail" in normalized and "confidence" not in normalized
+
+
 def _categorical_columns(columns: Iterable[str]) -> tuple[str, ...]:
     output = []
     for column in columns:
         normalized = column.lower().replace("_", "")
-        categorical = any(
+        categorical = column in _MANDATORY_EXACT_COLUMNS or any(
             token.replace("_", "") in normalized for token in _CATEGORICAL_TOKENS
         )
         if "identity" in normalized and normalized.endswith(
             _IDENTITY_CATEGORICAL_SUFFIXES
         ):
             categorical = True
-        if "headtail" in normalized and "confidence" not in normalized:
+        if _is_headtail_column(column):
             categorical = True
         if categorical:
             output.append(column)
@@ -100,6 +119,17 @@ def _aligned(
     return left, right
 
 
+def _wrapped_abs_delta(old: float, new: float) -> float:
+    """Absolute angular difference wrapped to ``[0, pi]``.
+
+    Wrapping first means 0 rad and 2*pi rad agree instead of reading as a
+    2*pi-sized divergence.
+    """
+
+    delta = (float(old) - float(new) + np.pi) % (2 * np.pi) - np.pi
+    return float(abs(delta))
+
+
 def _positional(
     reference: pd.DataFrame, candidate: pd.DataFrame, gate: float
 ) -> dict[str, Any]:
@@ -111,13 +141,14 @@ def _positional(
             "matched": min(len(reference), len(candidate)),
             "unmatched": abs(len(reference) - len(candidate)),
             "position_p99": 0.0,
-            "angle_mean": 0.0,
+            "angle_max": 0.0,
+            "angle_samples": (),
             "pairs": (),
         }
     left = reference.dropna(subset=["X", "Y"])
     right = candidate.dropna(subset=["X", "Y"])
     distances: list[float] = []
-    angles: list[float] = []
+    angle_samples: list[tuple[object, object, float]] = []
     unmatched = (len(reference) - len(left)) + (len(candidate) - len(right))
     matched = 0
     pairs: list[tuple[object, object]] = []
@@ -155,17 +186,119 @@ def _positional(
             if theta_a is not None and theta_b is not None:
                 old, new = theta_a[row], theta_b[col]
                 if not (np.isnan(old) or np.isnan(new)):
-                    delta = abs(old - new) % (2 * np.pi)
-                    angles.append(float(min(delta, 2 * np.pi - delta)))
+                    angle_samples.append(
+                        (a.index[row], b.index[col], _wrapped_abs_delta(old, new))
+                    )
         matched += accepted
         unmatched += len(pa) + len(pb) - 2 * accepted
     return {
         "matched": matched,
         "unmatched": unmatched,
         "position_p99": float(np.percentile(distances, 99)) if distances else 0.0,
-        "angle_mean": float(np.mean(angles)) if angles else 0.0,
+        "angle_max": (
+            float(max(sample[2] for sample in angle_samples)) if angle_samples else 0.0
+        ),
+        "angle_samples": tuple(angle_samples),
         "pairs": tuple(pairs),
     }
+
+
+def _mandatory_exact_mismatches(
+    reference: pd.DataFrame,
+    candidate: pd.DataFrame,
+    *,
+    pairs: tuple[tuple[object, object], ...],
+    aligned: tuple[pd.DataFrame, pd.DataFrame] | None,
+    name: str,
+) -> tuple[int, list[str]]:
+    """Compare the always-exact identity columns on positionally matched rows.
+
+    The positional (Hungarian XY) pairing is preferred over the keyed
+    alignment: when ``TrackID`` is itself the row key the keyed alignment makes
+    it equal by construction, which is exactly the identity swap this check
+    exists to catch. The keyed alignment is the fallback for outputs without
+    X/Y columns.
+    """
+
+    if pairs:
+        left = reference.loc[[old for old, _new in pairs]].reset_index(drop=True)
+        right = candidate.loc[[new for _old, new in pairs]].reset_index(drop=True)
+    elif aligned is not None:
+        left, right = aligned
+    else:
+        return 0, []
+
+    mismatches = 0
+    details: list[str] = []
+    for column in _MANDATORY_EXACT_COLUMNS:
+        if column not in left.columns:
+            continue
+        if column not in right.columns:
+            mismatches += len(left)
+            details.append(f"{name}: mandatory column {column} missing from candidate")
+            continue
+        old = left[column].astype("string").fillna("<nan>")
+        new = right[column].astype("string").fillna("<nan>")
+        differing = (old != new).to_numpy()
+        count = int(np.count_nonzero(differing))
+        if not count:
+            continue
+        mismatches += count
+        first = int(np.flatnonzero(differing)[0])
+        frame_id = (
+            left["FrameID"].iloc[first] if "FrameID" in left.columns else "<unknown>"
+        )
+        details.append(
+            f"{name}: {column} differs on {count} row(s); "
+            f"first differing FrameID={frame_id}"
+        )
+    return mismatches, details
+
+
+def _headtail_flip_pairs(
+    reference: pd.DataFrame,
+    candidate: pd.DataFrame,
+    pairs: tuple[tuple[object, object], ...],
+) -> frozenset[tuple[object, object]]:
+    """Pairs whose head/tail categorical column differs between the two runs.
+
+    These rows are the repository's documented bistable head/tail pi-flip noise
+    floor. They are already rejected by the exact categorical check, so removing
+    them from the *measured determinism floor's* angular statistic loses no
+    coverage -- and it stops one bistable row from setting the floor to pi and
+    thereby disarming the angle gate for every later candidate.
+    """
+
+    columns = [
+        column
+        for column in reference.columns
+        if _is_headtail_column(column) and column in candidate.columns
+    ]
+    if not columns or not pairs:
+        return frozenset()
+    flipped = set()
+    for old_index, new_index in pairs:
+        for column in columns:
+            old = reference.at[old_index, column]
+            new = candidate.at[new_index, column]
+            if pd.isna(old) and pd.isna(new):
+                continue
+            if pd.isna(old) or pd.isna(new) or old != new:
+                flipped.add((old_index, new_index))
+                break
+    return frozenset(flipped)
+
+
+def _angle_max(
+    samples: tuple[tuple[object, object, float], ...],
+    excluded: frozenset[tuple[object, object]],
+) -> float:
+    kept = [
+        delta
+        for old_index, new_index, delta in samples
+        if (old_index, new_index) not in excluded
+    ]
+    return float(max(kept)) if kept else 0.0
 
 
 def _compare_one(
@@ -176,6 +309,7 @@ def _compare_one(
     position_limit: float,
     angle_limit: float,
     name: str,
+    exclude_headtail_flip_rows: bool = False,
 ) -> EquivalenceVerdict:
     details = []
     nonzero = len(reference) > 0 and len(candidate) > 0
@@ -201,12 +335,28 @@ def _compare_one(
             nan_mismatches += int(np.count_nonzero(left_nan != right_nan))
         if policy.exact_categorical:
             for column in _categorical_columns(left.columns):
+                if column in _MANDATORY_EXACT_COLUMNS:
+                    # Owned by _mandatory_exact_mismatches, which compares them
+                    # against the positional pairing; counting them here too
+                    # would double-count and muddy the rejection reason.
+                    continue
                 if column not in right.columns:
                     categorical_mismatches += len(left)
                     continue
                 old = left[column].astype("string").fillna("<nan>")
                 new = right[column].astype("string").fillna("<nan>")
                 categorical_mismatches += int((old != new).sum())
+    mandatory_mismatches, mandatory_details = _mandatory_exact_mismatches(
+        reference, candidate, pairs=metrics["pairs"], aligned=aligned, name=name
+    )
+    categorical_mismatches += mandatory_mismatches
+    details.extend(mandatory_details)
+    excluded_pairs = (
+        _headtail_flip_pairs(reference, candidate, metrics["pairs"])
+        if exclude_headtail_flip_rows
+        else frozenset()
+    )
+    angle_max = _angle_max(metrics["angle_samples"], excluded_pairs)
     if not nonzero:
         details.append(f"{name}: empty output")
     if not counts_match:
@@ -225,6 +375,11 @@ def _compare_one(
         details.append(f"{name}: {nan_mismatches} NaN-pattern mismatches")
     if categorical_mismatches:
         details.append(f"{name}: {categorical_mismatches} categorical mismatches")
+    if angle_max > angle_limit:
+        details.append(
+            f"{name}: angular per-row max {angle_max:.6f} rad "
+            f"exceeds limit {angle_limit:.6f} rad"
+        )
     passed = bool(
         nonzero
         and counts_match
@@ -232,7 +387,7 @@ def _compare_one(
         and int(metrics["matched"]) > 0
         and int(metrics["unmatched"]) == 0
         and float(metrics["position_p99"]) <= position_limit
-        and float(metrics["angle_mean"]) <= angle_limit
+        and angle_max <= angle_limit
         and nan_mismatches == 0
         and categorical_mismatches == 0
     )
@@ -242,7 +397,7 @@ def _compare_one(
         row_counts_match=counts_match,
         unmatched_rows=int(metrics["unmatched"]),
         position_p99=float(metrics["position_p99"]),
-        angle_mean=float(metrics["angle_mean"]),
+        angle_max=angle_max,
         nan_pattern_mismatches=nan_mismatches,
         categorical_mismatches=categorical_mismatches,
         details=tuple(details),
@@ -255,8 +410,14 @@ def compare_outputs(
     *,
     determinism_floor: EquivalenceVerdict | None = None,
     policy: EquivalencePolicy | None = None,
+    for_determinism_floor: bool = False,
 ) -> EquivalenceVerdict:
-    """Gate both forward-rich and final tracking outputs."""
+    """Gate both forward-rich and final tracking outputs.
+
+    Set ``for_determinism_floor`` for the A-vs-A repeat comparison whose metrics
+    become the measured floor: it excludes known-bistable head/tail rows from
+    the angular statistic (see :func:`_headtail_flip_pairs`).
+    """
 
     policy = policy or EquivalencePolicy()
     position_limit = max(
@@ -264,8 +425,8 @@ def compare_outputs(
         determinism_floor.position_p99 if determinism_floor is not None else 0.0,
     )
     angle_limit = max(
-        policy.angle_mean_tolerance,
-        determinism_floor.angle_mean if determinism_floor is not None else 0.0,
+        policy.angle_max_tolerance,
+        determinism_floor.angle_max if determinism_floor is not None else 0.0,
     )
     verdicts = (
         _compare_one(
@@ -275,6 +436,7 @@ def compare_outputs(
             position_limit=position_limit,
             angle_limit=angle_limit,
             name="forward",
+            exclude_headtail_flip_rows=for_determinism_floor,
         ),
         _compare_one(
             reference.final,
@@ -283,6 +445,7 @@ def compare_outputs(
             position_limit=position_limit,
             angle_limit=angle_limit,
             name="final",
+            exclude_headtail_flip_rows=for_determinism_floor,
         ),
     )
     return EquivalenceVerdict(
@@ -291,7 +454,7 @@ def compare_outputs(
         row_counts_match=all(item.row_counts_match for item in verdicts),
         unmatched_rows=sum(item.unmatched_rows for item in verdicts),
         position_p99=max(item.position_p99 for item in verdicts),
-        angle_mean=max(item.angle_mean for item in verdicts),
+        angle_max=max(item.angle_max for item in verdicts),
         nan_pattern_mismatches=sum(item.nan_pattern_mismatches for item in verdicts),
         categorical_mismatches=sum(item.categorical_mismatches for item in verdicts),
         details=tuple(detail for item in verdicts for detail in item.details),

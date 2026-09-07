@@ -136,6 +136,7 @@ class CoordinateSearch:
             baseline_outputs[0],
             baseline_outputs[1],
             policy=self.equivalence_policy,
+            for_determinism_floor=True,
         )
         if not determinism_floor.passed:
             return SearchResult(
@@ -517,7 +518,7 @@ class CoordinateSearch:
             row_counts_match=all(item.row_counts_match for item in verdicts),
             unmatched_rows=max(item.unmatched_rows for item in verdicts),
             position_p99=max(item.position_p99 for item in verdicts),
-            angle_mean=max(item.angle_mean for item in verdicts),
+            angle_max=max(item.angle_max for item in verdicts),
             nan_pattern_mismatches=sum(
                 item.nan_pattern_mismatches for item in verdicts
             ),

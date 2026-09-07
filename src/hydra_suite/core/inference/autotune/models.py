@@ -201,7 +201,7 @@ class EquivalenceVerdict:
     row_counts_match: bool = True
     unmatched_rows: int = 0
     position_p99: float = 0.0
-    angle_mean: float = 0.0
+    angle_max: float = 0.0
     nan_pattern_mismatches: int = 0
     categorical_mismatches: int = 0
     details: tuple[str, ...] = ()

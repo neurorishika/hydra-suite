@@ -310,6 +310,9 @@ def _candidate_from_dict(value: Mapping[str, Any]) -> CandidateEvidence:
     if raw.get("equivalence") is not None:
         verdict = dict(raw["equivalence"])
         verdict["details"] = tuple(verdict.get("details", ()))
+        if "angle_mean" in verdict:  # legacy profiles predate the per-row max gate
+            verdict.setdefault("angle_max", verdict.pop("angle_mean"))
+            verdict.pop("angle_mean", None)
         raw["equivalence"] = EquivalenceVerdict(**verdict)
     for name in (
         "throughput_samples",

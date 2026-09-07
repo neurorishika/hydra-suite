@@ -247,3 +247,57 @@ def record_mode_request_with_validated_cache(
         mode="record",
     )
     return store, request
+
+
+def equivalence_frame(
+    rows: int = 1,
+    *,
+    frame_ids: "Any | None" = None,
+    detection_ids: "Any | None" = None,
+    track_ids: "Any | None" = None,
+    x: "Any" = 1.0,
+    y: "Any" = 2.0,
+    theta: "Any" = 0.0,
+    state: "Any" = "confirmed",
+    extra: "dict[str, Any] | None" = None,
+    drop: "tuple[str, ...]" = (),
+):
+    """A minimal tracking-CSV-shaped frame for correctness-gate tests.
+
+    Column names match the real exported schema the gate sees (``FrameID``,
+    ``DetectionID``, ``TrackID``, ``State``, ``X``, ``Y``, ``Theta``) so tests
+    exercise the production code paths rather than invented names.
+    """
+
+    import pandas as pd
+
+    def _column(value, default_range=False):
+        if value is None and default_range:
+            return list(range(rows))
+        if isinstance(value, (list, tuple)):
+            return list(value)
+        return [value] * rows
+
+    data: "dict[str, Any]" = {
+        "FrameID": _column(frame_ids, default_range=True),
+        "DetectionID": _column(detection_ids, default_range=True),
+        "TrackID": _column(track_ids if track_ids is not None else 1),
+        "State": _column(state),
+        "X": _column(x),
+        "Y": _column(y),
+        "Theta": _column(theta),
+    }
+    for name in drop:
+        data.pop(name, None)
+    if extra:
+        for name, value in extra.items():
+            data[name] = _column(value)
+    return pd.DataFrame(data)
+
+
+def equivalence_outputs(frame):
+    """Wrap one frame as both the forward and final calibration outputs."""
+
+    from hydra_suite.core.inference.autotune.equivalence import CalibrationOutputs
+
+    return CalibrationOutputs(frame.copy(), frame.copy())
