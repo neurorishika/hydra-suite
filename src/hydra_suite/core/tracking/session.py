@@ -718,7 +718,28 @@ class TrackingSessionCore:
                 if final_df is None or cb.should_stop():
                     return self._stopped_result()
                 with span(N.WRITE):
-                    _save_trajectories_to_csv(final_df, final_csv)
+                    final_csv_written = _save_trajectories_to_csv(final_df, final_csv)
+                if not final_csv_written:
+                    # write_base_final_csv (called via _save_trajectories_to_csv)
+                    # returns False -- without raising -- when postprocessing
+                    # emptied the frame. Report that honestly instead of
+                    # proceeding as if final_csv exists: every step below
+                    # (rich export, dataset generation, media export) reads
+                    # from final_csv, and the previous behaviour reported
+                    # success=True with a final_csv_path that was never
+                    # written to disk.
+                    return SessionResult(
+                        success=False,
+                        final_csv_path=None,
+                        rich_export_path=None,
+                        media_paths=[],
+                        dataset_result=None,
+                        summary_lines=[],
+                        error=(
+                            "post-processing produced no trajectories to write "
+                            f"to {final_csv}"
+                        ),
+                    )
 
                 # Computed ONCE: whether identity resolution happens here (no
                 # postpass) or is deferred to the relink step below (Task 6 --
