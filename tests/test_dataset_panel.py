@@ -193,6 +193,9 @@ def test_export_level_refresh_cannot_skip_identity_config_loading(tmp_path):
             raise RuntimeError("panel not ready")
 
     orch._panels = SimpleNamespace(dataset=_BoomDataset())
+    # _load_config_from_file flags a programmatic restore on the main window
+    # so model-selection signals are not mistaken for user intent.
+    orch._mw = SimpleNamespace(_restoring_config=False)
     for name in (
         "_load_config_file_paths",
         "_load_config_reference_params",
