@@ -217,10 +217,24 @@ A validated record contains:
 - TensorRT preparation artifact IDs and preparation seconds;
 - selection reason, rejected candidates and bounded failure classes;
 - creation/last-validation timestamps and observed production throughput; and
-- state: `provisional` or `validated`.
+- state: `provisional`, `validated`, or `incomplete`.
 
 Only `validated` records can alter a production run. A provisional record may
 reduce the next search space but never overrides the baseline.
+
+An `incomplete` record is a negative cache: written when a calibration
+attempt cannot finish (`budget_expired`, `timeout`, or
+`baseline_measurement_incomplete`), carrying the failure reason
+(`invalidation_reason`) and the attempt timestamp (`last_validation_unix_ns`).
+Like `provisional`, it never applies settings to a production run -- while
+`now - last_validation_unix_ns` is under the retry TTL (24h), the coordinator
+returns a baseline overlay with status `deferred_due_to_prior_failure` and the
+recorded reason, without launching a fresh search. This applies under every
+mode, including `record`, so a project that genuinely cannot calibrate does
+not re-burn its entire tuning budget on every run. Once the TTL elapses,
+calibration is retried as normal. An `incomplete` record is never written for
+an attempt where live contention was detected -- a transient GPU neighbour
+must not buy a 24-hour lockout.
 
 Store records under `get_data_dir()`, with a small versioned size/record cap.
 Writes use a per-key interprocess lock, write/fsync to a private temporary file,

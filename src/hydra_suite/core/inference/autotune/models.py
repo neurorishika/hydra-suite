@@ -190,6 +190,17 @@ class ProfileState(str, Enum):
 
     PROVISIONAL = "provisional"
     VALIDATED = "validated"
+    # S5: a negative-cache marker. Written when calibration could not
+    # complete (budget_expired/timeout/baseline_measurement_incomplete) so a
+    # project that cannot finish calibration doesn't re-burn the entire
+    # tuning budget on every run. Never applies settings to a production
+    # run; the coordinator short-circuits to a baseline "fallback"-style
+    # overlay (status="deferred_due_to_prior_failure") while
+    # ``now - last_validation_unix_ns < INCOMPLETE_RETRY_SECONDS``, then
+    # retries calibration as normal. Never written for a run where
+    # ``contention_detected`` was true -- a transient GPU neighbour must not
+    # buy a 24-hour lockout.
+    INCOMPLETE = "incomplete"
 
 
 @dataclass(frozen=True, slots=True)

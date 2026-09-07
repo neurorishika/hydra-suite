@@ -21,6 +21,13 @@ from .store import InferenceTuningProfileStore
 
 logger = logging.getLogger(__name__)
 
+# S5: how long a negative-cache (ProfileState.INCOMPLETE) record blocks a
+# fresh calibration attempt for the same exact key. 24h keeps a project that
+# genuinely cannot calibrate from re-burning the full tuning budget on every
+# run, while still retrying automatically once a day (e.g. after a driver
+# update or a config change lands).
+INCOMPLETE_RETRY_SECONDS = 24.0 * 60.0 * 60.0
+
 
 @dataclass(frozen=True, slots=True)
 class AutotuneRequest:
@@ -39,6 +46,12 @@ class AutotuneRequest:
     stage_shares: tuple[tuple[str, float], ...] = ()
     should_cancel: Callable[[], bool] = lambda: False
     status_callback: Callable[[str], None] = lambda _message: None
+    # S5: threaded straight from TrackingRunContext.contention_detected (see
+    # integration.py's eligibility chain) independent of `eligible` -- a
+    # request can in principle reach calibration with this set (contention
+    # arising mid-calibration, not just at preflight) and a failed attempt
+    # under contention must never be written as a negative cache.
+    contention_detected: bool = False
 
     def __post_init__(self) -> None:
         if self.mode not in {"off", "record", "automatic"}:
@@ -103,6 +116,28 @@ class AutotuneCoordinator:
                     request.baseline,
                     status="recorded",
                     reason="validated profile already recorded; record-only mode kept configured settings",
+                ),
+                cached,
+            )
+        if (
+            cached is not None
+            and cached.state is ProfileState.INCOMPLETE
+            and (time.time_ns() - cached.last_validation_unix_ns)
+            < INCOMPLETE_RETRY_SECONDS * 1e9
+        ):
+            # S5: negative cache. Applies to every mode, including record --
+            # otherwise a record-only run on a project that cannot calibrate
+            # burns the full budget every single time too. Surface WHY in
+            # telemetry (`reason`) rather than a silent no-op.
+            reason = (
+                cached.invalidation_reason
+                or "a prior calibration attempt did not complete"
+            )
+            return ResolveResult(
+                InferenceRuntimeOverlay.baseline(
+                    request.baseline,
+                    status="deferred_due_to_prior_failure",
+                    reason=reason,
                 ),
                 cached,
             )
@@ -182,6 +217,16 @@ class AutotuneCoordinator:
                     )
                 )
             if not result.completed:
+                if (
+                    result.reason
+                    in {
+                        "budget_expired",
+                        "timeout",
+                        "baseline_measurement_incomplete",
+                    }
+                    and not request.contention_detected
+                ):
+                    self._save_incomplete(request, result.reason)
                 return ResolveResult(
                     InferenceRuntimeOverlay.baseline(
                         request.baseline,
@@ -242,6 +287,29 @@ class AutotuneCoordinator:
                     profile,
                 )
             return self._reuse(request, profile, status="calibrated")
+
+    def _save_incomplete(self, request: AutotuneRequest, reason: str) -> None:
+        """S5: persist a negative-cache record so the next run at this exact
+        key defers instead of re-running the whole (bounded but expensive)
+        search. Never applies settings to a production run -- ``resolve``
+        only ever returns a baseline overlay for an INCOMPLETE record.
+        """
+        now = time.time_ns()
+        profile = InferenceTuningProfile(
+            profile_id=request.key.digest[:24],
+            key=request.key,
+            baseline=request.baseline,
+            requested=request.baseline,
+            admitted=request.baseline,
+            selected=request.baseline,
+            candidates=(),
+            state=ProfileState.INCOMPLETE,
+            selection_reason=reason,
+            created_at_unix_ns=now,
+            last_validation_unix_ns=now,
+            invalidation_reason=reason,
+        )
+        self.store.save(profile)
 
     def _reuse(
         self,

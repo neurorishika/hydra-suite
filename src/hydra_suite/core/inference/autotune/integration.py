@@ -642,6 +642,11 @@ def build_tracking_autotune_request(
         stage_shares=stage_shares,
         should_cancel=context.should_cancel,
         status_callback=context.status_callback,
+        # S5: threaded independent of `eligible` -- contention already makes
+        # the request ineligible up front, but the coordinator also needs
+        # this to gate whether a mid-calibration failure may be written as a
+        # negative cache (a transient GPU neighbour must not buy a 24h lockout).
+        contention_detected=context.contention_detected,
     )
 
 
