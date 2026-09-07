@@ -3067,8 +3067,8 @@ but no perf number should be read off these runs.
 | `tests/test_trackerkit_batch_fanout_worker.py` | 16 passed |
 | `tests/test_trackerkit_cli_fanout.py` | 14 passed |
 | `tests/test_artifact_lock.py` | 8 passed (also with `env -u PYTHONPATH`) |
-| `tests/test_inference_obb_artifacts.py` | 27 passed, 1 skipped |
-| `tests/test_sleap_export_crop_normalization.py` | 7 passed |
+| `tests/test_inference_obb_artifacts.py` | 28 passed, 1 skipped |
+| `tests/test_sleap_export_crop_normalization.py` | 8 passed |
 | `tests/test_runtime_api_sleap_export.py` | 11 passed |
 | `tests/test_sleap_export_predict_worker.py` | 1 passed |
 | `tests/test_cuda_devices.py` | 10 passed |
