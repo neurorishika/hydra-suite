@@ -9,6 +9,7 @@ the final atomic registry transaction.
 from __future__ import annotations
 
 import json
+import logging
 import math
 import os
 import re
@@ -48,6 +49,8 @@ from hydra_suite.runtime.safe_text import bounded_terminal_text
 from hydra_suite.training.contracts import sam3_prompt_text_error
 
 from .env import resolve_sam3_env, sam3_env_command, sam3_env_environ
+
+logger = logging.getLogger(__name__)
 
 OUTPUT_MAX_LINES = 512
 OUTPUT_MAX_CHARS = 256 * 1024
@@ -804,7 +807,51 @@ def publish_sam3_model(
         )
         raise
     shutil.rmtree(control_dir, ignore_errors=True)
-    return f"sam3_finetuned/{artifact_path.name}", str(artifact_path)
+    published_key = f"sam3_finetuned/{artifact_path.name}"
+    _backlink_run_record(
+        run_id=run_id,
+        published_key=published_key,
+        artifact_path=artifact_path,
+    )
+    return published_key, str(artifact_path)
+
+
+def _backlink_run_record(
+    *, run_id: str, published_key: str, artifact_path: Path
+) -> None:
+    """Stamp the published artifact onto its training-run row.
+
+    The published-model registry (``model_registry.json``) and the training-run
+    registry (``registry.json``) are separate files with separate writers
+    (see ``_require_registered_run``). A publish that succeeds here must not
+    leave the run row silently pointing at nothing -- that is exactly the
+    one-directional gap this closes. This goes through the SAME locked writer
+    (``update_run_record``) every other registry mutation uses, so it is not a
+    second competing writer, and a caller that publishes outside the normal
+    ``TrainingService.run_role_training`` flow (e.g. a deferred/manual
+    republish) still gets the backlink. A failure here must never fail an
+    otherwise-successful publish; it is logged instead.
+    """
+
+    try:
+        from ..registry import update_run_record
+
+        update_run_record(
+            run_id,
+            {
+                "published_model_path": str(artifact_path),
+                "published_registry_entry": published_key,
+            },
+        )
+    except Exception:  # noqa: BLE001 - publish itself already succeeded
+        logger.exception(
+            "SAM3 publish for run %r succeeded, but stamping the backlink "
+            "(published_model_path=%r) onto the training-run registry failed. "
+            "model_registry.json now has an entry whose run row does not "
+            "reflect it.",
+            run_id,
+            str(artifact_path),
+        )
 
 
 @contextmanager
