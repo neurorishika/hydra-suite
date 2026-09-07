@@ -392,6 +392,10 @@ def test_close_is_refused_while_the_fanout_is_still_stopping(monkeypatch):
 
     assert events == ["stop_tracking", "ignore"], events
     assert warnings, "the user was not told why the window stayed open"
+    # The refusal MUST arm the escalation, or the second attempt warns again and
+    # the window is unclosable forever -- which is the whole reason the escape
+    # hatch exists.
+    assert stub._fanout_close_warned is True
 
 
 def test_kill_children_now_sigkills_every_live_child_group(app, tmp_path):

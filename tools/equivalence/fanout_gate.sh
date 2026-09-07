@@ -471,9 +471,9 @@ if [ "$STAGE_MODELS" = "1" ]; then
     status=1
   else
     # shellcheck disable=SC2086
-    exported=$(grep -h -c "Exported .*artifact" $child_logs | paste -sd+ - | bc)
+    exported=$(grep -h -c "Exported .*artifact" $child_logs | awk '{s+=$1} END {print s+0}')
     # shellcheck disable=SC2086
-    waited=$(grep -h -c "built by another process" $child_logs | paste -sd+ - | bc)
+    waited=$(grep -h -c "built by another process" $child_logs | awk '{s+=$1} END {print s+0}')
     if [ "${exported:-0}" -eq 1 ]; then
       echo "✅ par: exactly 1 child exported the artifact (the other waited on the lock)"
     else
