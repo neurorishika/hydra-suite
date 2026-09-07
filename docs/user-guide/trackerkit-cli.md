@@ -22,6 +22,15 @@ their own `<stem>_config.json` when present, otherwise the baseline.
 `--keystone-override` (or an explicit `--config` on a multi-video batch)
 forces the baseline onto every video. `--sahi-profile` applies to all.
 
+Side-output retargeting: a video's own `<stem>_config.json` is used verbatim,
+including whatever `video_output_path` it names. A video that inherits the
+keystone's config instead of having its own, or any video in a **multi-video**
+batch run with an explicit `--config`, gets its side-output paths (annotated
+video, CSV, `file_path`) re-derived beside its own video -- otherwise every
+inheriting or `--config`-driven video in the batch would collide on the one
+render path the config names. A **single** video run with `--config` is the
+one case that is not a batch, so it keeps whatever paths that config says.
+
 Videos run one after another in this process. Output per video depends on
 whether backward tracking is enabled in the config:
 
