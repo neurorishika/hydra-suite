@@ -54,11 +54,16 @@ def test_initialization_phase_closes_after_model_load_and_autotune_preflight():
 
     import hydra_suite.core.tracking.worker as worker_module
 
-    source = Path(worker_module.__file__).read_text(encoding="utf-8")
+    whole = Path(worker_module.__file__).read_text(encoding="utf-8")
+    # Scope to run_tracking: `InferenceRunner(` also appears in docstrings and
+    # comments further down the file, and a future helper added below this
+    # method must not break the assertion.
+    body_start = whole.index('profiler.phase_start("initialization")')
+    body_end = whole.index('profiler.phase_start("tracking_loop")')
+    source = whole[body_start:body_end]
+
     boundary = source.index('profiler.phase_end("initialization")')
 
-    # The three runner constructions in run_tracking (not the docstring
-    # mentions further down the file).
     constructions = [
         source.rindex("inference_runner = InferenceRunner("),
         source.rindex("bgsub_runner = InferenceRunner("),

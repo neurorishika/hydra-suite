@@ -531,3 +531,42 @@ def test_an_admitting_nothing_search_says_why_rather_than_going_quiet():
     assert not result.completed
     assert result.reason == "baseline_measurement_incomplete"
     assert any("measurement_incomplete" in reason for _label, reason in result.rejected)
+
+
+def test_a_per_trial_timeout_is_recorded_as_a_rejection_with_its_class():
+    """An executor-side failure must be named, not silently dropped.
+
+    ``ContainedTrialExecutor._run_once`` turns a per-trial timeout (and an
+    OOM, and a crashed child) into a ``TrialObservation`` carrying a
+    ``failure_class``. Those never reach ``measurement_complete`` -- they are
+    filtered out as unsuccessful first -- so the block-count exit is the one
+    that has to report them.
+    """
+
+    class TimingOutExecutor:
+        def run(self, settings, *, phase, field_name, block_index, should_cancel):
+            if settings.detection_batch_size >= 4:
+                return TrialObservation(
+                    settings, 0.0, 0.0, None, failure_class="timeout"
+                )
+            return TrialObservation(
+                settings,
+                100.0 + settings.detection_batch_size,
+                0.5,
+                _outputs(),
+                warmup_calls=3,
+                warmup_frames=8,
+            )
+
+    result = CoordinateSearch(_planner(), TimingOutExecutor()).run(
+        _settings(),
+        stage_shares={"detection_batch_size": 1.0},
+    )
+
+    timed_out = [
+        (label, reason)
+        for label, reason in result.rejected
+        if label.startswith("detection_batch_size=4,")
+    ]
+    assert timed_out, f"timed-out candidate vanished; rejected={result.rejected}"
+    assert any("failures=timeout" in reason for _label, reason in timed_out)

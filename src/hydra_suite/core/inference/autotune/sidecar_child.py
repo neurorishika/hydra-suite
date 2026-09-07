@@ -138,6 +138,83 @@ def _profile_times(video_path: Path) -> tuple[float, float, dict[str, float]]:
         return 0.0, 0.0, {}
 
 
+def calibration_run_params(
+    params: dict[str, Any], *, start: int, end: int
+) -> dict[str, Any]:
+    """Engine params for one calibration window.
+
+    THE ONLY postprocessing knob this relaxes is MIN_TRAJECTORY_LENGTH, and
+    only as an upper bound: a window cannot contain a trajectory longer than
+    itself, and MIN_TRAJECTORY_LENGTH (= min_trajectory_length_seconds * fps)
+    can exceed the window, in which case it filters every trajectory out and
+    leaves an empty final_df that write_base_final_csv drops without raising.
+    At the production window size (128 frames per block, from
+    _frames_for_block(640, i)) this clamp is a no-op for any typical
+    configured value, so calibration postprocessing IS production
+    postprocessing.
+
+    MAX_VELOCITY_BREAK, MAX_OCCLUSION_GAP and MAX_VELOCITY_ZSCORE keep their
+    production values. Setting enable_postprocessing=False instead -- as this
+    pass used to -- takes the permissive branch in
+    TrackingSessionCore._postprocess_csv, which relaxes all four at once, so
+    the equivalence gate (CalibrationOutputs.from_csvs) would be comparing
+    outputs from a pipeline that is not production.
+    """
+
+    window_frames = int(end) - int(start) + 1
+    run_params = dict(params)
+    run_params.update(
+        {
+            "START_FRAME": int(start),
+            "END_FRAME": int(end),
+            "ENABLE_PROFILING": True,
+            "INFERENCE_AUTOTUNE_MODE": "off",
+            "USE_CACHED_DETECTIONS": False,
+            "DEBUG_MODE": True,
+            "MIN_TRAJECTORY_LENGTH": min(
+                int(params.get("MIN_TRAJECTORY_LENGTH", 10) or 1),
+                window_frames,
+            ),
+        }
+    )
+    return run_params
+
+
+def calibration_session_config(
+    project_config: dict[str, Any], identity_method: str
+) -> dict[str, Any]:
+    """Post-tracking session config for one calibration window.
+
+    Postprocessing runs exactly as the project configured it (see
+    :func:`calibration_run_params` for why that matters to the equivalence
+    gate). Only disposable side effects -- media, datasets, backward
+    tracking -- are switched off.
+    """
+
+    session_config = dict(project_config)
+    session_config.update(
+        {
+            "enable_backward_tracking": False,
+            "enable_postprocessing": bool(
+                project_config.get("enable_postprocessing", True)
+            ),
+            "enable_dataset_generation": False,
+            "enable_individual_dataset": False,
+            "enable_individual_image_save": False,
+            "final_media_export_videos_enabled": False,
+            "video_output_enabled": False,
+            "interpolation_method": str(
+                project_config.get("interpolation_method", "none")
+            ),
+            "heading_flip_max_burst": int(
+                project_config.get("heading_flip_max_burst", 3)
+            ),
+            "identity_method": identity_method,
+        }
+    )
+    return session_config
+
+
 def _run_window(
     *,
     video_path: Path,
@@ -147,6 +224,7 @@ def _run_window(
     label: str,
     start: int,
     end: int,
+    postprocess: bool = True,
 ) -> tuple[
     pd.DataFrame,
     pd.DataFrame,
@@ -165,33 +243,7 @@ def _run_window(
     raw_csv = run_root / "trial.csv"
     cache_dir = run_root / "inference-cache"
     cache_dir.mkdir()
-    run_params = dict(params)
-    run_params.update(
-        {
-            "START_FRAME": int(start),
-            "END_FRAME": int(end),
-            "ENABLE_PROFILING": True,
-            "INFERENCE_AUTOTUNE_MODE": "off",
-            "USE_CACHED_DETECTIONS": False,
-            "DEBUG_MODE": True,
-            # THE ONE postprocessing knob a calibration window relaxes.
-            # MIN_TRAJECTORY_LENGTH (= min_trajectory_length_seconds * fps) is
-            # far longer than any window, so it filters every trajectory out
-            # and leaves an empty final_df that write_base_final_csv drops
-            # without raising. Clamping it to the window length is NOT enough:
-            # measured on the fly_obb fixture, an 8-frame window yields six
-            # trajectories of 1-5 rows each (tracks are born and lost inside
-            # the window), so even min(configured, window) removed 6/6.
-            #
-            # MAX_VELOCITY_BREAK, MAX_OCCLUSION_GAP and MAX_VELOCITY_ZSCORE
-            # keep their PRODUCTION values. Previously this pass set
-            # enable_postprocessing=False, whose permissive branch in
-            # TrackingSessionCore._postprocess_csv relaxed all four at once,
-            # so the equivalence gate (CalibrationOutputs.from_csvs) was
-            # comparing outputs from a pipeline that was not production.
-            "MIN_TRAJECTORY_LENGTH": 1,
-        }
-    )
+    run_params = calibration_run_params(params, start=start, end=end)
     identity_method = str(
         project_config.get(
             "identity_method", run_params.get("IDENTITY_METHOD", "none_disabled")
@@ -231,34 +283,25 @@ def _run_window(
     if forward.empty:
         raise RuntimeError("calibration tracking pass produced no rows")
 
-    session_config = dict(project_config)
-    session_config.update(
-        {
-            "enable_backward_tracking": False,
-            # Postprocessing runs exactly as the project configured it. The
-            # permissive branch in TrackingSessionCore._postprocess_csv also
-            # relaxes MAX_VELOCITY_BREAK, MAX_OCCLUSION_GAP and
-            # MAX_VELOCITY_ZSCORE, which would make the equivalence gate
-            # compare outputs from a pipeline that is not production; the
-            # window-length clamp on MIN_TRAJECTORY_LENGTH above is the
-            # narrowest accommodation the short window actually needs.
-            "enable_postprocessing": bool(
-                project_config.get("enable_postprocessing", True)
-            ),
-            "enable_dataset_generation": False,
-            "enable_individual_dataset": False,
-            "enable_individual_image_save": False,
-            "final_media_export_videos_enabled": False,
-            "video_output_enabled": False,
-            "interpolation_method": str(
-                project_config.get("interpolation_method", "none")
-            ),
-            "heading_flip_max_burst": int(
-                project_config.get("heading_flip_max_burst", 3)
-            ),
-            "identity_method": identity_method,
-        }
-    )
+    if not postprocess:
+        # The warmup window exists to warm allocator/framework state through
+        # the tracking engine; its outputs are discarded by the caller and it
+        # is not part of the measured region. Running post-tracking on it is
+        # pure waste -- and, with production postprocessing restored, it is
+        # structurally guaranteed to be empty for any small batch, because the
+        # warmup window (max(8, warmup_calls * batch) frames) is shorter than
+        # a production MIN_TRAJECTORY_LENGTH.
+        steady, prepare, phase_seconds = _profile_times(video_path)
+        return (
+            forward,
+            forward.iloc[0:0],
+            steady,
+            max(prepare, float(engine.inference_runtime_artifact_prepare_seconds)),
+            phase_seconds,
+            tuple(engine.inference_runtime_artifact_ids),
+        )
+
+    session_config = calibration_session_config(project_config, identity_method)
     service = TrackingSessionCore(
         video_path=str(video_path),
         config=session_config,
@@ -280,6 +323,18 @@ def _run_window(
     if not result.success or not result.final_csv_path:
         raise RuntimeError(result.error or "calibration post-tracking pass failed")
     final_path = Path(result.rich_export_path or result.final_csv_path)
+    if not final_path.exists():
+        # write_base_final_csv drops an empty final_df without raising, so the
+        # file is simply absent. Fail with the reason instead of the opaque
+        # FileNotFoundError that pandas would raise three lines down: the
+        # parent classifies a non-zero child exit and records the candidate as
+        # rejected, so this must be legible, not a stack trace.
+        raise RuntimeError(
+            "calibration window produced no post-processed trajectories "
+            f"(window={int(end) - int(start) + 1} frames, "
+            f"MIN_TRAJECTORY_LENGTH={run_params.get('MIN_TRAJECTORY_LENGTH')}); "
+            "every trajectory was filtered out by post-processing"
+        )
     final = pd.read_csv(final_path)
     if final.empty:
         raise RuntimeError("calibration final tracking output produced no rows")
@@ -385,6 +440,7 @@ def run(request_path: Path) -> None:
         label="warmup",
         start=start,
         end=start + warmup_frames - 1,
+        postprocess=False,
     )
 
     forwards = []

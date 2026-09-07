@@ -398,14 +398,25 @@ class CoordinateSearch:
                 # Never drop a candidate silently: an unrecorded `continue`
                 # here is indistinguishable from a candidate that was never
                 # proposed, which is how the detector search space quietly
-                # collapsed to its small batches.
+                # collapsed to its small batches. This is also the arrival
+                # point for every executor-side failure -- a per-trial
+                # `timeout`, an `accelerator-oom`, a crashed child -- so the
+                # observed failure classes are named in the reason.
                 if rejected is not None:
+                    failures = sorted(
+                        {
+                            str(item.failure_class)
+                            for item in samples
+                            if item.failure_class
+                        }
+                    )
                     rejected.append(
                         (
                             self._label(candidate),
                             "measurement_incomplete: "
                             f"blocks={len(successful)}/"
-                            f"{self.protocol.minimum_blocks}",
+                            f"{self.protocol.minimum_blocks}"
+                            + (f" failures={','.join(failures)}" if failures else ""),
                         )
                     )
                 continue

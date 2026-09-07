@@ -54,8 +54,14 @@ def test_sidecar_child_completes_on_a_project_with_an_roi(tmp_path):
         observation=observation,
         resource_probe=probe,
         start_frame=0,
-        end_frame=31,
-        maximum_frames=32,
+        # A PRODUCTION-SIZED window. maximum_frames is deliberately left at
+        # its default (640, divided across five blocks by _frames_for_block),
+        # so this block measures 128 frames -- the same size a real
+        # calibration uses, and long enough that the fixture's configured
+        # MIN_TRAJECTORY_LENGTH (min_trajectory_length_seconds 0.33 * 100 fps
+        # = 33) applies unclamped. A short window here would have made the
+        # test green only because postprocessing had been relaxed.
+        end_frame=499,
     )
 
     # This is the exact call ``ContainedTrialExecutor._run_once`` makes: a

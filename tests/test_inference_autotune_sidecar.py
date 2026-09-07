@@ -409,3 +409,60 @@ def test_sidecar_request_carries_the_warmup_call_minimum(tmp_path):
     )
 
     assert json.loads(request.read_text())["warmup_calls"] == 3
+
+
+def test_calibration_keeps_production_postprocessing_and_its_knobs():
+    """Calibration must postprocess like production, not via the permissive branch.
+
+    Fast guard (no video, no subprocess) for the most consequential behaviour
+    in this file: re-adding ``enable_postprocessing: False`` passed the whole
+    unit suite and was pinned only by the fixture-gated e2e test.
+    ``TrackingSessionCore._postprocess_csv``'s permissive branch relaxes
+    MAX_VELOCITY_BREAK, MAX_OCCLUSION_GAP and MAX_VELOCITY_ZSCORE as well, so
+    disabling postprocessing makes the equivalence gate compare outputs from a
+    pipeline that is not production.
+    """
+
+    from hydra_suite.core.inference.autotune.sidecar_child import (
+        calibration_run_params,
+        calibration_session_config,
+    )
+
+    session = calibration_session_config({}, "none_disabled")
+    assert session["enable_postprocessing"] is True
+
+    params = {
+        "MIN_TRAJECTORY_LENGTH": 33,
+        "MAX_VELOCITY_BREAK": 100.0,
+        "MAX_OCCLUSION_GAP": 30,
+        "MAX_VELOCITY_ZSCORE": 3.0,
+    }
+    run_params = calibration_run_params(params, start=0, end=127)
+    # The three knobs the permissive branch would have relaxed are untouched.
+    assert run_params["MAX_VELOCITY_BREAK"] == 100.0
+    assert run_params["MAX_OCCLUSION_GAP"] == 30
+    assert run_params["MAX_VELOCITY_ZSCORE"] == 3.0
+
+
+def test_min_trajectory_length_is_clamped_to_the_window_not_to_one():
+    """The clamp is an upper bound, and a no-op at the production window size."""
+
+    from hydra_suite.core.inference.autotune.sidecar_child import calibration_run_params
+
+    # Production block size is 128 frames (_frames_for_block(640, i)), so the
+    # clamp must not touch a typical configured value.
+    assert (
+        calibration_run_params({"MIN_TRAJECTORY_LENGTH": 33}, start=0, end=127)[
+            "MIN_TRAJECTORY_LENGTH"
+        ]
+        == 33
+    )
+    # Only a window shorter than the configured minimum is clamped, and then
+    # to the window -- never to a constant 1, which would let dozens of
+    # trivially-matching short fragments dilute the gate's position p99.
+    assert (
+        calibration_run_params({"MIN_TRAJECTORY_LENGTH": 33}, start=0, end=15)[
+            "MIN_TRAJECTORY_LENGTH"
+        ]
+        == 16
+    )
