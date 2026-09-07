@@ -15,6 +15,7 @@ space the detections are actually in.
 
 from __future__ import annotations
 
+import types
 from collections import deque
 
 import numpy as np
@@ -213,6 +214,36 @@ def test_single_arena_optimizer_run_stays_structurally_ungated(monkeypatch, tmp_
     ]
 
 
+def test_optimizer_crowding_uses_only_within_arena_slot_pairs():
+    """Image-space overlap at an arena wall is not a cross-arena collision.
+
+    Slots 0/1 are genuinely crowded in arena 0. Slot 2 sits close to them in
+    image coordinates but belongs to arena 1, while slot 3 is far away. The
+    old global six-pair metric both counted those two foreign pairs and diluted
+    the one real crowding event by six rather than the two valid arena pairs.
+    """
+
+    kf = types.SimpleNamespace(
+        X=np.array([[0.0, 0.0], [0.0, 0.0], [5.0, 0.0], [30.0, 0.0]], dtype=np.float32)
+    )
+    states = ["active"] * 4
+
+    arena_aware = opt_mod._accumulate_crowding_metric(
+        4,
+        states,
+        kf,
+        10.0,
+        opt_mod._crowding_pair_count(4, np.array([0, 0, 1, 1], dtype=np.int32)),
+        slot_arena=np.array([0, 0, 1, 1], dtype=np.int32),
+    )
+    single_arena = opt_mod._accumulate_crowding_metric(
+        4, states, kf, 10.0, opt_mod._crowding_pair_count(4)
+    )
+
+    assert arena_aware == pytest.approx(0.5)  # 1 crowded pair / 2 valid pairs
+    assert single_arena == pytest.approx(1.0 / 3.0)  # legacy 2 / 6 global pairs
+
+
 def test_optimizer_refuses_a_layout_that_does_not_cover_every_slot(
     monkeypatch, tmp_path
 ):
@@ -243,8 +274,6 @@ def test_optimizer_refuses_a_layout_that_does_not_cover_every_slot(
 
 
 def _run_preview(monkeypatch, tmp_path, *, single_arena):
-    import types
-
     import hydra_suite.core.tracking.optimization.optimizer_workers as ow
 
     monkeypatch.setattr(ow, "TrackAssigner", _ArenaProbeAssigner)

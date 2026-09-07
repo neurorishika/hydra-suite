@@ -382,24 +382,57 @@ def _accumulate_velocity_metrics(
             _prev_vecs.pop(r, None)
 
 
+def _crowding_pair_count(N: int, slot_arena: np.ndarray | None = None) -> int:
+    """Return the static pair population that may legitimately crowd.
+
+    Track slots have fixed arena ownership in multi-arena runs.  Cross-arena
+    slots can overlap in image coordinates near a shared wall, but they can
+    never describe two animals competing in one arena.  Their pairs must not
+    dilute or create the fast-search crowding signal.  ``None`` deliberately
+    retains the original single-arena denominator.
+    """
+
+    if slot_arena is None:
+        return max(int(N) * (int(N) - 1) // 2, 1)
+
+    labels = np.asarray(slot_arena, dtype=np.int32).reshape(-1)
+    if labels.shape[0] != int(N):
+        raise RuntimeError(
+            "slot_arena must have one label per slot for arena-aware crowding"
+        )
+    valid_labels = labels[labels >= 0]
+    if valid_labels.size < 2:
+        return 1
+    _, counts = np.unique(valid_labels, return_counts=True)
+    return max(sum(int(count) * (int(count) - 1) // 2 for count in counts), 1)
+
+
 def _accumulate_crowding_metric(
     N,
     track_states,
     kf_manager,
     _body_size,
     _n_pairs,
+    *,
+    slot_arena: np.ndarray | None = None,
 ):
-    """Compute per-frame crowding violation for active track pairs."""
+    """Compute per-frame crowding violation for valid active track pairs."""
     active_slots = [r for r in range(N) if track_states[r] == "active"]
     if len(active_slots) < 2:
         return 0.0
     frame_crowd = 0.0
     for _ci in range(len(active_slots)):
         for _cj in range(_ci + 1, len(active_slots)):
+            left_slot = active_slots[_ci]
+            right_slot = active_slots[_cj]
+            if slot_arena is not None and (
+                int(slot_arena[left_slot]) < 0
+                or int(slot_arena[left_slot]) != int(slot_arena[right_slot])
+            ):
+                continue
             _d = float(
                 np.linalg.norm(
-                    kf_manager.X[active_slots[_ci], :2]
-                    - kf_manager.X[active_slots[_cj], :2]
+                    kf_manager.X[left_slot, :2] - kf_manager.X[right_slot, :2]
                 )
             )
             if _d < _body_size:
@@ -2179,8 +2212,9 @@ class TrackingOptimizerCore:
             params.get("REFERENCE_BODY_SIZE", 20.0) * params.get("RESIZE_FACTOR", 1.0),
             5.0,
         )
-        _n_pairs = max(N * (N - 1) // 2, 1)
-
+        # Fixed for the full replay; never recompute grouping/normalization in
+        # the per-frame, per-trial proposal hot loop.
+        _n_pairs = _crowding_pair_count(N, _slot_arena)
         _w_cov, _w_asn, _w_frg, _w_occ, _w_vel, _w_crd = _normalise_scoring_weights(
             params
         )
@@ -2451,6 +2485,7 @@ class TrackingOptimizerCore:
                 kf_manager,
                 _body_size,
                 _n_pairs,
+                slot_arena=_slot_arena,
             )
 
             # Record only current-frame observations.  Production output uses
