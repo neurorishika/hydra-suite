@@ -15,12 +15,16 @@ space the detections are actually in.
 
 from __future__ import annotations
 
+import types
+from collections import deque
+
 import numpy as np
 import pytest
 
 cv2 = pytest.importorskip("cv2")
 
 import hydra_suite.core.tracking.optimization.optimizer as opt_mod  # noqa: E402
+import hydra_suite.core.tracking.optimization.optimizer_workers as preview_mod  # noqa: E402
 from hydra_suite.core.inference.result import OBBResult  # noqa: E402
 from hydra_suite.trackerkit.engine_params import (  # noqa: E402
     RuntimeContext,
@@ -210,6 +214,36 @@ def test_single_arena_optimizer_run_stays_structurally_ungated(monkeypatch, tmp_
     ]
 
 
+def test_optimizer_crowding_uses_only_within_arena_slot_pairs():
+    """Image-space overlap at an arena wall is not a cross-arena collision.
+
+    Slots 0/1 are genuinely crowded in arena 0. Slot 2 sits close to them in
+    image coordinates but belongs to arena 1, while slot 3 is far away. The
+    old global six-pair metric both counted those two foreign pairs and diluted
+    the one real crowding event by six rather than the two valid arena pairs.
+    """
+
+    kf = types.SimpleNamespace(
+        X=np.array([[0.0, 0.0], [0.0, 0.0], [5.0, 0.0], [30.0, 0.0]], dtype=np.float32)
+    )
+    states = ["active"] * 4
+
+    arena_aware = opt_mod._accumulate_crowding_metric(
+        4,
+        states,
+        kf,
+        10.0,
+        opt_mod._crowding_pair_count(4, np.array([0, 0, 1, 1], dtype=np.int32)),
+        slot_arena=np.array([0, 0, 1, 1], dtype=np.int32),
+    )
+    single_arena = opt_mod._accumulate_crowding_metric(
+        4, states, kf, 10.0, opt_mod._crowding_pair_count(4)
+    )
+
+    assert arena_aware == pytest.approx(0.5)  # 1 crowded pair / 2 valid pairs
+    assert single_arena == pytest.approx(1.0 / 3.0)  # legacy 2 / 6 global pairs
+
+
 def test_optimizer_refuses_a_layout_that_does_not_cover_every_slot(
     monkeypatch, tmp_path
 ):
@@ -240,8 +274,6 @@ def test_optimizer_refuses_a_layout_that_does_not_cover_every_slot(
 
 
 def _run_preview(monkeypatch, tmp_path, *, single_arena):
-    import types
-
     import hydra_suite.core.tracking.optimization.optimizer_workers as ow
 
     monkeypatch.setattr(ow, "TrackAssigner", _ArenaProbeAssigner)
@@ -294,3 +326,118 @@ def test_single_arena_preview_stays_structurally_ungated(monkeypatch, tmp_path):
     assert all(c is None for c in calls["assign_meas_arena"]), calls[
         "assign_meas_arena"
     ]
+
+
+# ---------------------------------------------------------------------------
+# Free-detection bootstrap -- assignment's arena gate leaves these residual
+# detections for the lightweight loops below, so those loops need their own
+# gate.  Drive both actual helpers rather than only asserting a forwarded
+# argument: the old code really did initialise global slot 0 here.
+# ---------------------------------------------------------------------------
+
+
+class _BootstrapKF:
+    def __init__(self, n_slots: int):
+        self.X = np.zeros((n_slots, 5), dtype=np.float32)
+        self.initialized: list[int] = []
+
+    def initialize_filter(self, slot: int, state: np.ndarray) -> None:
+        self.initialized.append(int(slot))
+        self.X[slot] = state
+
+
+def _bootstrap_state(n_slots: int = 4):
+    return {
+        "kf": _BootstrapKF(n_slots),
+        "states": ["lost"] * n_slots,
+        "missed": [7] * n_slots,
+        "continuity": [3] * n_slots,
+        "trajectory_ids": list(range(n_slots)),
+        "orientation": [None] * n_slots,
+        "last_shape": [None] * n_slots,
+        "prototypes": [None] * n_slots,
+    }
+
+
+@pytest.mark.parametrize(
+    ("det_arena", "expected_slot"),
+    [
+        (1, 2),  # the only free detection belongs in arena 1, not global slot 0
+        (-1, None),  # outside every labelled arena must bootstrap no slot
+    ],
+)
+def test_optimizer_free_detection_bootstrap_respects_arena(det_arena, expected_slot):
+    state = _bootstrap_state()
+    next_id = opt_mod._respawn_free_detections(
+        free_dets=[0],
+        N=4,
+        meas=[[80.0, 20.0, 0.0]],
+        shapes=[(10.0, 1.2)],
+        track_states=state["states"],
+        missed_frames=state["missed"],
+        tracking_continuity=state["continuity"],
+        trajectory_ids=state["trajectory_ids"],
+        next_trajectory_id=4,
+        orientation_last=state["orientation"],
+        last_shape_info=state["last_shape"],
+        track_pose_prototypes=state["prototypes"],
+        track_avg_step=np.zeros(4, dtype=np.float32),
+        kf_manager=state["kf"],
+        detection_directed_mask=[False],
+        detection_directed_heading=[np.nan],
+        _det_pose_kpts=[None],
+        meas_arena=np.array([det_arena], dtype=np.int32),
+        slot_arena=np.array([0, 0, 1, 1], dtype=np.int32),
+    )
+
+    expected_initialised = [] if expected_slot is None else [expected_slot]
+    assert state["kf"].initialized == expected_initialised
+    assert [i for i, value in enumerate(state["states"]) if value == "active"] == (
+        expected_initialised
+    )
+    assert next_id == 4 + len(expected_initialised)
+
+
+@pytest.mark.parametrize(
+    ("det_arena", "expected_slot"),
+    [
+        (1, 2),
+        (-1, None),
+    ],
+)
+def test_preview_free_detection_bootstrap_respects_arena(det_arena, expected_slot):
+    state = _bootstrap_state()
+    initialized, next_id = preview_mod._preview_init_free_detections(
+        free_dets=[0],
+        N=4,
+        meas=[[80.0, 20.0, 0.0]],
+        detection_directed_mask=[False],
+        detection_directed_heading=[np.nan],
+        kf_manager=state["kf"],
+        orientation_last=state["orientation"],
+        track_states=state["states"],
+        trail=[deque() for _ in range(4)],
+        matched_r=[],
+        _det_pose_kpts=[None],
+        track_pose_prototypes=state["prototypes"],
+        missed_frames=state["missed"],
+        tracking_continuity=state["continuity"],
+        trajectory_ids=state["trajectory_ids"],
+        next_trajectory_id=4,
+        meas_arena=np.array([det_arena], dtype=np.int32),
+        slot_arena=np.array([0, 0, 1, 1], dtype=np.int32),
+    )
+
+    expected_initialised = [] if expected_slot is None else [expected_slot]
+    assert state["kf"].initialized == expected_initialised
+    assert sorted(initialized) == expected_initialised
+    assert [i for i, value in enumerate(state["states"]) if value == "active"] == (
+        expected_initialised
+    )
+    assert next_id == 4 + len(expected_initialised)
+
+
+def test_free_detection_bootstrap_keeps_single_arena_path_ungated():
+    from hydra_suite.core.tracking.arenas import free_detection_can_bootstrap_slot
+
+    assert free_detection_can_bootstrap_slot(999, 999, None, None)

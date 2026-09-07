@@ -154,3 +154,46 @@ def arena_ids_for_meas(layout: ArenaLayout, meas, frame_size=None):
         return np.zeros(0, dtype=np.int32)
     xy = np.asarray([[m[0], m[1]] for m in meas], dtype=np.float32)
     return layout.arena_of_points(xy, frame_size=frame_size)
+
+
+def free_detection_can_bootstrap_slot(
+    detection_index: int,
+    slot_index: int,
+    meas_arena: np.ndarray | None,
+    slot_arena: np.ndarray | None,
+) -> bool:
+    """Whether a free detection may initialise a lost track slot.
+
+    The ordinary assignment phases reject cross-arena edges, but their
+    residual ``free_dets`` bootstrap loop is deliberately simple: it chooses
+    the first eligible lost slot.  That loop therefore needs this same arena
+    predicate everywhere it is replayed (production, optimizer, and preview)
+    or a detection can initialise a slot that the next assignment frame is
+    forbidden to match.
+
+    ``None`` for both arrays is the structural single-arena path and remains
+    unconditionally eligible.  In a multi-arena run an outside detection has
+    arena id ``-1`` and is eligible for no slot.  Partial arena metadata is a
+    programming error rather than a fail-open cross-arena bootstrap.
+    """
+    if meas_arena is None and slot_arena is None:
+        return True
+    if meas_arena is None or slot_arena is None:
+        raise RuntimeError(
+            "free-detection bootstrap requires both measurement and slot arena "
+            "labels for a multi-arena run"
+        )
+
+    if not 0 <= int(detection_index) < len(meas_arena):
+        raise RuntimeError(
+            "meas_arena is shorter than the detection list; the free-detection "
+            "bootstrap cannot be arena-gated"
+        )
+    if not 0 <= int(slot_index) < len(slot_arena):
+        raise RuntimeError(
+            "slot_arena is shorter than the track-slot list; the free-detection "
+            "bootstrap cannot be arena-gated"
+        )
+
+    detection_arena = int(meas_arena[detection_index])
+    return detection_arena >= 0 and int(slot_arena[slot_index]) == detection_arena

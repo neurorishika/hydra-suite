@@ -213,6 +213,93 @@ def test_detection_key_sequential_encodes_both_models():
     assert "/det.pt" in k.model_path and "/obb.pt" in k.model_path
 
 
+def test_direct_raw_output_contract_changes_detection_cache_key():
+    """Every direct-mode setting that changes raw OBB extraction must invalidate.
+
+    Confidence/IoU intentionally remain absent: they are replay-time filters.
+    """
+    base = _obb_direct()
+    assert base.direct is not None
+    detect_a = _obb_direct()
+    detect_b = _obb_direct()
+    assert detect_a.direct is not None and detect_b.direct is not None
+    detect_a.direct.model_task = detect_b.direct.model_task = "detect"
+    detect_b.direct.fixed_angle_deg = 17.0
+    assert detection_cache_key(detect_a) != detection_cache_key(detect_b)
+
+    segment_a = _obb_direct()
+    assert segment_a.direct is not None
+    segment_a.direct.model_task = "segment"
+    for attr, value in [
+        ("seg_num_angles", 48),
+        ("seg_crop_size", 96),
+        ("seg_pad_ratio", 0.3),
+        ("seg_mask_threshold", 0.7),
+    ]:
+        changed = _obb_direct()
+        assert changed.direct is not None
+        changed.direct.model_task = "segment"
+        setattr(changed.direct, attr, value)
+        assert detection_cache_key(segment_a) != detection_cache_key(changed), attr
+
+    classes = _obb_direct()
+    classes.target_classes = [1, 3]
+    assert detection_cache_key(base) != detection_cache_key(classes)
+
+    cap = _obb_direct()
+    cap.raw_detection_cap = 17
+    assert detection_cache_key(base) != detection_cache_key(cap)
+
+
+@pytest.mark.parametrize("mode", ["direct", "sequential"])
+def test_native_geometry_export_changes_obb_detection_cache_key(mode: str) -> None:
+    """Polygon export needs a live extraction, not a polygon-free cache hit."""
+
+    if mode == "direct":
+        base = _obb_direct()
+        export = _obb_direct()
+    else:
+        base = OBBConfig(
+            mode="sequential",
+            sequential=OBBSequentialConfig(
+                detect_model_path="/det.pt", obb_model_path="/obb.pt"
+            ),
+        )
+        export = OBBConfig(
+            mode="sequential",
+            sequential=OBBSequentialConfig(
+                detect_model_path="/det.pt", obb_model_path="/obb.pt"
+            ),
+        )
+    export.emit_native_geometry = True
+
+    assert detection_cache_key(base) != detection_cache_key(export)
+
+
+def test_sequential_second_model_signature_invalidates_detection_key(monkeypatch):
+    cfg = OBBConfig(
+        mode="sequential",
+        sequential=OBBSequentialConfig(
+            detect_model_path="/det.pt",
+            obb_model_path="/obb.pt",
+        ),
+    )
+
+    def _mtime(path):
+        return 10.0 if path == "/det.pt" else 20.0
+
+    monkeypatch.setattr("hydra_suite.core.inference.cache.keys._mtime", _mtime)
+    first = detection_cache_key(cfg)
+
+    def _changed_mtime(path):
+        return 10.0 if path == "/det.pt" else 21.0
+
+    monkeypatch.setattr("hydra_suite.core.inference.cache.keys._mtime", _changed_mtime)
+    second = detection_cache_key(cfg)
+
+    assert first != second
+
+
 # ---- detection_cache_key: SliceConfig folding (Task 9) ----
 
 
@@ -236,10 +323,10 @@ def test_disabled_slice_key_equals_no_slice_baseline():
     assert base.config_hash == other.config_hash
 
 
-def test_disabled_slice_key_matches_pre_change_baseline():
-    """The exact byte-parity requirement: disabled slice => config_hash == ''."""
+def test_disabled_slice_key_retains_raw_extraction_contract():
+    """Disabled slicing is inert, but raw extraction still has a full key."""
     k = detection_cache_key(_obb_direct_slice(SliceConfig()))
-    assert k.config_hash == ""
+    assert k.config_hash
 
 
 def test_enabling_slice_changes_key():
@@ -376,11 +463,11 @@ def test_roi_folds_into_key_only_when_slicing_enabled_and_mask_present():
 
 
 def test_roi_ignored_when_slicing_disabled_key_is_byte_identical():
-    """(c) slicing DISABLED + any ROI == today's disabled key (== '')."""
+    """(c) slicing DISABLED + any ROI leaves the raw contract unchanged."""
     disabled = _obb_direct_slice(SliceConfig(enabled=False))
     baseline = detection_cache_key(disabled).config_hash
     with_mask = detection_cache_key(disabled, _roi(corner_zero=True)).config_hash
-    assert baseline == with_mask == ""
+    assert baseline == with_mask
 
 
 def test_roi_identical_masks_give_identical_keys():
@@ -448,6 +535,14 @@ def test_bgsub_key_stable_for_same_params():
     assert bgsub_detection_cache_key(
         BgSubConfig.from_params(params)
     ) == bgsub_detection_cache_key(BgSubConfig.from_params(dict(params)))
+
+
+def test_native_geometry_export_changes_bgsub_detection_cache_key() -> None:
+    base = BgSubConfig.from_params({"THRESHOLD_VALUE": 25})
+    export = BgSubConfig.from_params({"THRESHOLD_VALUE": 25})
+    export.emit_native_geometry = True
+
+    assert bgsub_detection_cache_key(base) != bgsub_detection_cache_key(export)
 
 
 def test_bgsub_key_video_bound():

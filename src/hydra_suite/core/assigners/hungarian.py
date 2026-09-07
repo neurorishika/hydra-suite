@@ -27,6 +27,12 @@ except ImportError:
 
 logger = logging.getLogger(__name__)
 
+# ``1e9`` is the shared raw-distance/density reject value after a cost matrix
+# has been built. A separate ``hard_blocked`` mask distinguishes density's
+# absolute no-association policy from ordinary cold-start distance culls:
+# lost slots may bootstrap past the latter but never the former.
+HARD_REJECT_COST = 1e9
+
 
 @njit(cache=True, fastmath=True)
 def _compute_cost_matrix_numba_core(
@@ -1084,6 +1090,7 @@ class TrackAssigner:
         _MAX_DIST=None,
         _assigned_dets=None,
         meas_arena: np.ndarray | None = None,
+        hard_blocked: np.ndarray | None = None,
     ) -> tuple:
         """Phase 3: respawn lost tracks with unassigned detections.
 
@@ -1101,6 +1108,8 @@ class TrackAssigner:
         M = _M if _M is not None else cost.shape[1]
         MAX_DIST = _MAX_DIST if _MAX_DIST is not None else p["MAX_DISTANCE_THRESHOLD"]
         assigned_dets: set = _assigned_dets if _assigned_dets is not None else set()
+        if hard_blocked is not None and hard_blocked.shape != cost.shape:
+            raise ValueError("hard_blocked must have the same shape as cost")
 
         ta = self.track_arena
         gate = (
@@ -1205,9 +1214,13 @@ class TrackAssigner:
         # Proximity-based respawn for uncommitted lost slots.
         # No proximity-to-active guard: in dense colonies every detection is
         # near some active track, so any such guard would silently block all
-        # phase-3 respawns.  The MAX_DIST ceiling on best_c_val below is the
-        # only gate needed — if the detection is genuinely close to an active
-        # track it will have been matched in phases 1-2 and won't appear here.
+        # phase-3 respawns.  The MAX_DIST ceiling on best_c_val, together with
+        # density's explicit hard-block mask, is the only gate needed — if the
+        # detection is genuinely close to an active track it will have been
+        # matched in phases 1-2 and won't appear here.  Do not apply the mask
+        # to identity-only rejoin above: that path has its own identity
+        # threshold, arena gate, and lifecycle-aware motion budget and
+        # deliberately permits evidence-backed long-occlusion re-ID.
         unassigned = [
             j
             for j in range(M)
@@ -1222,6 +1235,8 @@ class TrackAssigner:
             best_r, best_c_val = None, 1e6
             for r in remaining_uncommitted:
                 if gate and meas_arena[c] != ta[r]:
+                    continue
+                if hard_blocked is not None and bool(hard_blocked[r, c]):
                     continue
                 last_pos = kf_manager.X[r, :2]
                 dist = float(np.linalg.norm(meas[c][:2] - last_pos))
@@ -1249,6 +1264,7 @@ class TrackAssigner:
         committed_slot_identities: Dict[int, str] | None = None,
         missed_frames: list | None = None,
         meas_arena: np.ndarray | None = None,
+        hard_blocked: np.ndarray | None = None,
     ) -> object:
         """
         Drop-in replacement for track assignment logic.
@@ -1276,7 +1292,7 @@ class TrackAssigner:
             tracking_continuity,
             kf_manager,
         )
-        cost[raw_dist_mat >= per_track_gate[:, None]] = 1e9
+        cost[raw_dist_mat >= per_track_gate[:, None]] = HARD_REJECT_COST
 
         # Split tracks by state
         est = [
@@ -1364,6 +1380,7 @@ class TrackAssigner:
             _MAX_DIST=MAX_DIST,
             _assigned_dets=assigned_dets,
             meas_arena=meas_arena,
+            hard_blocked=hard_blocked,
         )
         all_assignments.extend(zip(ph3_rows, ph3_cols))
 

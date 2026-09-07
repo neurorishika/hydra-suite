@@ -5,6 +5,7 @@ Enhanced with Dynamic Bayesian Optimization.
 
 import logging
 import math
+from collections.abc import Mapping
 from typing import Any, Dict
 
 import numpy as np
@@ -38,19 +39,33 @@ from hydra_suite.core.individual.pose.features import (
 # of the legacy flat DetectionCache. Building and reading must derive their
 # InferenceConfig from the SAME params so the cache key matches; a mismatch
 # makes the handle read back as empty.
-from hydra_suite.core.inference.runner import _open_caches, video_signature
+from hydra_suite.core.inference.runner import (
+    _open_caches,
+    frame_space_roi_mask,
+    video_signature,
+)
 from hydra_suite.core.inference.stages.filtering import filter_for_source
 from hydra_suite.core.tracking.arenas import arena_ids_for_meas as _meas_arena_ids
 from hydra_suite.core.tracking.arenas import (
     arena_layout_from_params,
     check_slot_arena_covers_all_slots,
+    free_detection_can_bootstrap_slot,
     tracking_frame_size,
 )
 from hydra_suite.core.tracking.optimization.detection_config import (
     inference_config_for_optimizer_params,
 )
+from hydra_suite.core.tracking.optimization.parameter_contract import (
+    PARAM_RANGES,
+    merge_tracking_autotune_candidate,
+    quantize_tracking_autotune_params,
+    quantize_tracking_autotune_value,
+)
 from hydra_suite.core.tracking.optimization.production_replay import (
     ProductionReplayEvaluator,
+    cache_directory,
+    inspect_replay_cache_admission,
+    sanitize_replay_tuning_config,
 )
 from hydra_suite.core.tracking.optimization.unlabeled_scoring import (
     CandidateEvaluation,
@@ -60,6 +75,8 @@ from hydra_suite.core.tracking.optimization.unlabeled_scoring import (
     build_train_validation_split,
     decide_heldout_baseline_protection,
     forward_backward_cycle_consistency,
+    global_slot_alignment,
+    output_sanity_metrics,
     pareto_ranks,
     partition_temporal_segments,
     recommend_dominating_candidate,
@@ -153,7 +170,14 @@ def _optimizer_frame_size(video_path, params):
     return tracking_frame_size(params, base_w, base_h)
 
 
-def _filter_cached_detections(det_filter, cache, f_idx, roi_mask):
+def _filter_cached_detections(
+    det_filter,
+    cache,
+    f_idx,
+    roi_mask,
+    *,
+    apply_max_detections: bool = True,
+):
     """Read a frame from detection cache and apply filtering.
 
     Detection caches are always ``OBBResult`` (InferenceRunner-based
@@ -168,7 +192,17 @@ def _filter_cached_detections(det_filter, cache, f_idx, roi_mask):
         inference_config = getattr(det_filter, "inference_config", None)
         if inference_config is None:
             inference_config = inference_config_for_optimizer_params(det_filter.params)
-        filtered_obb, _ = filter_for_source(inference_config, frame_data, roi_mask)
+        if apply_max_detections:
+            # Preserve the ordinary production call shape exactly; the
+            # diagnostic-only pre-cap mode below is intentionally opt-in.
+            filtered_obb, _ = filter_for_source(inference_config, frame_data, roi_mask)
+        else:
+            filtered_obb, _ = filter_for_source(
+                inference_config,
+                frame_data,
+                roi_mask,
+                apply_max_detections=False,
+            )
 
         # Convert OBBResult back to the legacy format expected by the tracking loop.
         meas = np.concatenate(
@@ -235,11 +269,17 @@ def _respawn_free_detections(
     detection_directed_mask,
     detection_directed_heading,
     _det_pose_kpts,
+    meas_arena=None,
+    slot_arena=None,
 ):
     """Assign free detections to lost track slots (Phase-3 respawn)."""
     for d_idx in free_dets:
         for track_idx in range(N):
             if track_states[track_idx] == "lost":
+                if not free_detection_can_bootstrap_slot(
+                    d_idx, track_idx, meas_arena, slot_arena
+                ):
+                    continue
                 _pose_d_f = (
                     bool(detection_directed_mask[d_idx])
                     if d_idx < len(detection_directed_mask)
@@ -342,24 +382,57 @@ def _accumulate_velocity_metrics(
             _prev_vecs.pop(r, None)
 
 
+def _crowding_pair_count(N: int, slot_arena: np.ndarray | None = None) -> int:
+    """Return the static pair population that may legitimately crowd.
+
+    Track slots have fixed arena ownership in multi-arena runs.  Cross-arena
+    slots can overlap in image coordinates near a shared wall, but they can
+    never describe two animals competing in one arena.  Their pairs must not
+    dilute or create the fast-search crowding signal.  ``None`` deliberately
+    retains the original single-arena denominator.
+    """
+
+    if slot_arena is None:
+        return max(int(N) * (int(N) - 1) // 2, 1)
+
+    labels = np.asarray(slot_arena, dtype=np.int32).reshape(-1)
+    if labels.shape[0] != int(N):
+        raise RuntimeError(
+            "slot_arena must have one label per slot for arena-aware crowding"
+        )
+    valid_labels = labels[labels >= 0]
+    if valid_labels.size < 2:
+        return 1
+    _, counts = np.unique(valid_labels, return_counts=True)
+    return max(sum(int(count) * (int(count) - 1) // 2 for count in counts), 1)
+
+
 def _accumulate_crowding_metric(
     N,
     track_states,
     kf_manager,
     _body_size,
     _n_pairs,
+    *,
+    slot_arena: np.ndarray | None = None,
 ):
-    """Compute per-frame crowding violation for active track pairs."""
+    """Compute per-frame crowding violation for valid active track pairs."""
     active_slots = [r for r in range(N) if track_states[r] == "active"]
     if len(active_slots) < 2:
         return 0.0
     frame_crowd = 0.0
     for _ci in range(len(active_slots)):
         for _cj in range(_ci + 1, len(active_slots)):
+            left_slot = active_slots[_ci]
+            right_slot = active_slots[_cj]
+            if slot_arena is not None and (
+                int(slot_arena[left_slot]) < 0
+                or int(slot_arena[left_slot]) != int(slot_arena[right_slot])
+            ):
+                continue
             _d = float(
                 np.linalg.norm(
-                    kf_manager.X[active_slots[_ci], :2]
-                    - kf_manager.X[active_slots[_cj], :2]
+                    kf_manager.X[left_slot, :2] - kf_manager.X[right_slot, :2]
                 )
             )
             if _d < _body_size:
@@ -444,30 +517,53 @@ def _compute_composite_score(
     return composite, sub_scores
 
 
-# Canonical search-space bounds — module-level so they can be imported externally.
-_PARAM_RANGES: Dict[str, tuple] = {
-    "YOLO_CONFIDENCE_THRESHOLD": ("float", 0.01, 1.0),
-    "YOLO_IOU_THRESHOLD": ("float", 0.01, 1.0),
-    "MAX_DISTANCE_MULTIPLIER": ("float", 0.1, 20.0),
-    "KALMAN_NOISE_COVARIANCE": ("log_float", 0.0001, 1.0),
-    "KALMAN_MEASUREMENT_NOISE_COVARIANCE": ("log_float", 0.0001, 1.0),
-    "W_POSITION": ("float", 0.0, 10.0),
-    "W_ORIENTATION": ("float", 0.0, 10.0),
-    "W_AREA": ("float", 0.0, 2.0),
-    "W_ASPECT": ("float", 0.0, 10.0),
-    "KALMAN_DAMPING": ("float", 0.5, 0.999),
-    "KALMAN_LONGITUDINAL_NOISE_MULTIPLIER": ("float", 0.1, 20.0),
-    "KALMAN_INITIAL_VELOCITY_RETENTION": ("float", 0.0, 1.0),
-    "LOST_THRESHOLD_FRAMES": ("int", 2, 25),
-    "KALMAN_MATURITY_AGE": ("int", 1, 20),
-}
+# Backwards-compatible module export. The typed lower-layer parameter contract
+# is the source of truth for bounds and Qt-representable precision.
+_PARAM_RANGES: Dict[str, tuple] = dict(PARAM_RANGES)
 
 _UNLABELED_METRIC_SPECS = (
     MetricSpec("cycle_loss", MetricDirection.MINIMIZE),
+    MetricSpec("cycle_observation_coverage", MetricDirection.MAXIMIZE),
     MetricSpec("coverage_loss", MetricDirection.MINIMIZE),
+    MetricSpec("worst_track_coverage_loss", MetricDirection.MINIMIZE),
     MetricSpec("fragmentation_loss", MetricDirection.MINIMIZE),
     MetricSpec("motion_roughness_loss", MetricDirection.MINIMIZE),
+    MetricSpec("collision_loss", MetricDirection.MINIMIZE),
+    MetricSpec("detection_excess_loss", MetricDirection.MINIMIZE),
 )
+
+_VALIDATION_REGION_COUNT = 4
+_MIN_REGION_FRAMES = 3
+_MIN_CYCLE_SHARED_OBSERVATIONS = 3
+_MIN_CYCLE_SHARED_COVERAGE = 0.5
+_TEMPORAL_HORIZON_PARAMETERS = (
+    "LOST_THRESHOLD_FRAMES",
+    "KALMAN_MATURITY_AGE",
+)
+_PROPOSAL_METRICS = (
+    "cycle_loss",
+    "coverage",
+    "assignment",
+    "fragmentation",
+    "occlusion",
+    "velocity",
+    "crowding",
+)
+
+# This is a search-allocation term only, not a held-out promotion metric.  The
+# saturating transform prevents an outlying cycle loss from dominating the
+# native replay composite before the diverse production shortlist can inspect
+# it.
+_PROPOSAL_CYCLE_TERM_WEIGHT = 0.25
+
+
+def _bounded_cycle_proposal_penalty(cycle_loss: float) -> float:
+    """Map a non-negative cycle loss monotonically into ``[0, weight)``."""
+
+    if not np.isfinite(cycle_loss) or cycle_loss < 0:
+        raise ValueError("cycle_loss must be finite and non-negative")
+    return float(_PROPOSAL_CYCLE_TERM_WEIGHT * cycle_loss / (1.0 + cycle_loss))
+
 
 # Upper real-time limits mirror TrackerKit's seconds-based controls.  Dynamic
 # frame ranges are capped here so every generated candidate remains applyable.
@@ -552,17 +648,31 @@ class TrackingOptimizerCore:
         self._result_cb = result_cb
         self._error_cb = error_cb
         self.video_path = video_path
-        self.detection_cache_path = detection_cache_path
+        # TrackerKit historically stores the member file from a production
+        # cache (``.../detection.npz``), whereas optimizer/preview readers
+        # consume the cache directory. Normalize the public boundary once so
+        # all core callers support either valid form.
+        self.detection_cache_path = str(cache_directory(detection_cache_path))
         self.start_frame = start_frame
         self.end_frame = end_frame
         self.base_params = base_params
-        self.tuning_config = tuning_config
+        (
+            self.tuning_config,
+            self.disabled_tuning_dimensions,
+        ) = sanitize_replay_tuning_config(tuning_config, base_params)
         self.n_trials = n_trials
         self.n_seeds = max(1, n_seeds)
         self.on_plateau = on_plateau  # "restart" | "stop"
         self.sampler_type = sampler_type  # "auto" | "gp" | "tpe"
         self._stop_requested = False
+        self._search_converged = False
         self.cache = None
+        # ROI is fixed over an optimization run, while every proposal repeatedly
+        # filters cached native-frame detections. Resolve it lazily once rather
+        # than reopening the video for each forward/backward proposal replay.
+        self._native_roi_mask_source_id: int | None = None
+        self._native_roi_mask: np.ndarray | None = None
+        self._native_roi_mask_initialized = False
 
     # Alias to module-level constant so existing internal references keep working.
     _PARAM_RANGES = _PARAM_RANGES  # type: ignore[assignment]
@@ -619,30 +729,100 @@ class TrackingOptimizerCore:
     def request_stop(self):
         self._stop_requested = True
 
+    def _release_optimization_resources(self) -> None:
+        """Drop read-only replay references after every optimization terminal path.
+
+        The cache handle must not be ``close()``d because its generic close path
+        flushes the write buffer even for a read-only optimizer reader. Clearing
+        our references is both safe for the cache and deterministic for a
+        completed, failed, or cancelled search.
+        """
+
+        self.cache = None
+        self._pose_frame_cache = None
+
+    def _frame_space_roi_mask_for_params(
+        self, params: Dict[str, Any]
+    ) -> np.ndarray | None:
+        """Return the cached native-frame ROI for a fixed evaluation contract."""
+
+        raw_mask = params.get("ROI_MASK", None)
+        source_id = id(raw_mask)
+        if (
+            not self._native_roi_mask_initialized
+            or self._native_roi_mask_source_id != source_id
+        ):
+            self._native_roi_mask = frame_space_roi_mask(raw_mask, self.video_path)
+            self._native_roi_mask_source_id = source_id
+            self._native_roi_mask_initialized = True
+        return self._native_roi_mask
+
     # ------------------------------------------------------------------
     # run() helpers
     # ------------------------------------------------------------------
 
     def _open_and_validate_cache(self) -> bool:
-        """Open the InferenceRunner detection cache and validate compatibility.
+        """Open and validate the complete production replay cache set.
 
-        ``self.detection_cache_path`` is the cache **directory** written by
-        ``DetectionCacheBuildWorker``. The handle is opened read-only here: it
-        must never have ``close()`` called on it, because
+        ``self.detection_cache_path`` is normalized to the cache **directory**
+        written by ``DetectionCacheBuildWorker``. A short-lived cache-only
+        ``InferenceRunner`` first admits the complete cache set. The retained
+        detection member is then opened read-only for proposal replay: it must
+        never have ``close()`` called on it, because
         ``DetectionCacheHandle.close()`` flushes its (empty, since we never
         write) buffer and would clobber the on-disk cache with zero frames.
 
         Returns True if the cache is ready for use, False on failure
         (after emitting appropriate error signals).
         """
-        try:
-            from pathlib import Path
 
+        def _reject(msg: str) -> bool:
+            if self._progress_cb is not None:
+                self._progress_cb(0, f"Error: {msg}")
+            if self._error_cb is not None:
+                self._error_cb(msg)
+            return False
+
+        # Do not leave a prior run's reader reachable if this invocation is
+        # rejected before the new one can be installed.
+        self.cache = None
+        try:
             _cfg = inference_config_for_optimizer_params(self.base_params)
             _roi_mask = self.base_params.get("ROI_MASK", None)
+            _cache_dir = cache_directory(self.detection_cache_path)
+
+            # This is shared with TrackerKit's cache-preparation shortcut so
+            # neither layer can accept a detection-only cache when production
+            # replay also needs downstream evidence.
+            admission = inspect_replay_cache_admission(
+                _cache_dir,
+                self.video_path,
+                self.base_params,
+                self.start_frame,
+                self.end_frame,
+            )
+            if not admission.cache_set_valid:
+                return _reject(
+                    "Replay evidence cache is incomplete or incompatible with the "
+                    "current parameters. Every enabled inference stage must have a "
+                    "matching cache with identical coverage. Rebuild the full replay "
+                    "evidence cache and try again."
+                )
+
+            if not admission.detection_range_covered:
+                missing = list(admission.missing_frames)
+                return _reject(
+                    f"Replay evidence cache does not cover frames "
+                    f"{self.start_frame}-{self.end_frame}. Missing: {missing}. "
+                    "Rebuild the full replay evidence cache for this frame range "
+                    "and try again."
+                )
+
+            # The lightweight proposal loop only needs the read-only detection
+            # member once the full evidence set has been admitted above.
             caches = _open_caches(
                 _cfg,
-                Path(self.detection_cache_path),
+                _cache_dir,
                 video_signature(self.video_path),
                 _roi_mask,
                 read_only=True,
@@ -653,38 +833,14 @@ class TrackingOptimizerCore:
                 or self.cache is None
                 or not self.cache.is_valid()
             ):
-                msg = (
-                    "Detection cache is incompatible with the current parameters "
-                    "(e.g. detection method/model or ROI mask changed since it was "
-                    "built). Rebuild the cache and try again."
+                return _reject(
+                    "Replay detection cache became incompatible while it was being "
+                    "opened. Rebuild the full replay evidence cache and try again."
                 )
-                if self._progress_cb is not None:
-                    self._progress_cb(0, f"Error: {msg}")
-                if self._error_cb is not None:
-                    self._error_cb(msg)
-                return False
+            return True
         except Exception as e:
-            logger.exception("Optimizer: failed to open detection cache")
-            msg = f"Error loading detection cache: {e}"
-            if self._progress_cb is not None:
-                self._progress_cb(0, msg)
-            if self._error_cb is not None:
-                self._error_cb(msg)
-            return False
-
-        if not self.cache.covers_frame_range(self.start_frame, self.end_frame):
-            missing = self.cache.get_missing_frames(self.start_frame, self.end_frame)
-            msg = (
-                f"Detection cache does not cover frames "
-                f"{self.start_frame}-{self.end_frame}. Missing: {missing}. "
-                "Rebuild the detection cache for this frame range and try again."
-            )
-            if self._progress_cb is not None:
-                self._progress_cb(0, f"Error: {msg}")
-            if self._error_cb is not None:
-                self._error_cb(msg)
-            return False
-        return True
+            logger.exception("Optimizer: failed to validate replay evidence cache")
+            return _reject(f"Error loading replay evidence cache: {e}")
 
     def _preload_pose_data(self) -> None:
         """Pre-load pose keypoints into memory so per-trial loops stay fast."""
@@ -766,7 +922,13 @@ class TrackingOptimizerCore:
                 continue
             ptype, low, high = self._search_range(key)
             raw = self.base_params.get(key, self._SEED_DEFAULTS.get(key, low))
-            value = int(raw) if ptype == "int" else float(raw)
+            try:
+                value = quantize_tracking_autotune_value(key, raw)
+            except ValueError:
+                # The exact baseline is evaluated separately. An invalid
+                # external production value must not be silently rounded into
+                # a different seed candidate.
+                continue
             if low <= value <= high and not (ptype == "log_float" and value <= 0):
                 seed_params[key] = value
         return seed_params
@@ -807,7 +969,7 @@ class TrackingOptimizerCore:
                 center = float(base_val) if base_val is not None else (low + high) / 2.0
                 sigma = scale * (high - low)
                 pt[key] = int(np.clip(round(rng.normal(center, sigma)), low, high))
-        return pt
+        return quantize_tracking_autotune_params(pt)
 
     def _random_from_ranges(self, rng) -> dict:
         """Uniform-random point across the full search space (used for plateau restarts)."""
@@ -822,7 +984,7 @@ class TrackingOptimizerCore:
                 pt[key] = float(rng.uniform(low, high))
             else:  # int
                 pt[key] = int(rng.integers(low, high + 1))
-        return pt
+        return quantize_tracking_autotune_params(pt)
 
     def _suggest_trial_params(self, trial, scaled_body_size: float) -> Dict[str, Any]:
         """Use the Optuna trial to suggest values for all enabled parameters."""
@@ -842,13 +1004,65 @@ class TrackingOptimizerCore:
                     name, float(low), float(high), log=ptype == "log_float"
                 )
 
-        # Derived parameter: MAX_DISTANCE_THRESHOLD from multiplier
-        if "MAX_DISTANCE_MULTIPLIER" in trial_params:
-            trial_params["MAX_DISTANCE_THRESHOLD"] = (
-                trial_params["MAX_DISTANCE_MULTIPLIER"] * scaled_body_size
-            )
-
+        # Every proposal is evaluated at the same decimal precision TrackerKit
+        # can later write into its QDoubleSpinBoxes. Engine-only dependent
+        # values are derived later by _candidate_evaluation_params so seed,
+        # restart, and Optuna proposals all use one merge contract.
+        trial_params = quantize_tracking_autotune_params(trial_params)
         return trial_params
+
+    def _candidate_evaluation_params(
+        self, candidate_params: Mapping[str, Any]
+    ) -> Dict[str, Any]:
+        """Build one production-equivalent engine mapping for a candidate."""
+
+        return merge_tracking_autotune_candidate(self.base_params, candidate_params)
+
+    @staticmethod
+    def _scoring_slot_arena(params: Mapping[str, Any]) -> np.ndarray | None:
+        """Return fixed multi-arena labels for grouped scoring safeguards.
+
+        The production tracker assigns every slot to one arena for its full
+        lifetime.  Proposal and held-out scoring must retain that same
+        membership when aligning replayed slots or comparing collision pairs.
+        ``None`` deliberately preserves the single-arena scoring path.
+        """
+        layout = arena_layout_from_params(params)
+        check_slot_arena_covers_all_slots(layout, int(params["MAX_TARGETS"]))
+        return None if layout.is_single_arena else layout.slot_arena
+
+    def _temporal_validation_horizon(self) -> int:
+        """Largest temporal effect horizon represented by the active search."""
+
+        horizon = _MIN_REGION_FRAMES
+        for name in _TEMPORAL_HORIZON_PARAMETERS:
+            if not self.tuning_config.get(name):
+                continue
+            _, _, high = self._search_range(name)
+            horizon = max(horizon, int(math.ceil(high)))
+        return horizon
+
+    def _minimum_validation_frames(self) -> int:
+        """Frames needed for four paired regions with usable temporal evidence."""
+
+        return _VALIDATION_REGION_COUNT * self._temporal_validation_horizon()
+
+    def _validation_support_reason(
+        self, validation_bounds: tuple[int, int]
+    ) -> str | None:
+        """Return why a held-out tail is insufficient for temporal promotion."""
+
+        start_frame, end_frame = validation_bounds
+        frame_count = end_frame - start_frame + 1
+        required = self._minimum_validation_frames()
+        if frame_count < required:
+            return (
+                "held-out temporal support is inadequate: requires at least "
+                f"{required} frames for {_VALIDATION_REGION_COUNT} paired regions "
+                f"at a {self._temporal_validation_horizon()}-frame horizon "
+                f"(found {frame_count})"
+            )
+        return None
 
     def _search_and_validation_bounds(
         self,
@@ -856,11 +1070,14 @@ class TrackingOptimizerCore:
         """Reserve a chronological tail for held-out production replay."""
 
         frame_count = self.end_frame - self.start_frame + 1
-        if frame_count < 8:
-            return (self.start_frame, self.end_frame), None
+        minimum_validation = self._minimum_validation_frames()
+        minimum_train = max(8, self._temporal_validation_horizon())
         gap_frames = 1 if frame_count >= 12 else 0
+        if frame_count < minimum_train + gap_frames + minimum_validation:
+            return (self.start_frame, self.end_frame), None
+        validation_fraction = max(0.25, minimum_validation / frame_count)
         split = build_train_validation_split(
-            frame_count, validation_fraction=0.25, gap_frames=gap_frames
+            frame_count, validation_fraction=validation_fraction, gap_frames=gap_frames
         )
         train = split.train[0]
         validation = split.validation[0]
@@ -900,21 +1117,28 @@ class TrackingOptimizerCore:
             * float(params.get("RESIZE_FACTOR", 1.0)),
             1e-6,
         )
+        slot_arena = self._scoring_slot_arena(params)
         try:
             cycle = forward_backward_cycle_consistency(
                 forward,
                 backward,
                 backward_is_reverse_chronological=False,
                 spatial_scale=body_scale,
+                slot_arena=slot_arena,
             )
             cycle_loss = min(float(cycle.mean_normalized_error), 10.0)
         except ValueError:
             cycle_loss = 10.0
         sub_scores = dict(sub_scores)
         sub_scores["cycle_loss"] = cycle_loss
-        # A non-negative weighted sum is used only to guide Optuna.  Unlike the
-        # old standard-deviation bonus, worsening either term cannot improve it.
-        return float(forward_score + 0.25 * cycle_loss), sub_scores
+        # This bounded, monotonic penalty only guides Optuna.  Unlike the old
+        # unbounded weighted term, a pathological cycle result cannot dominate
+        # the native replay composite or exclude diverse candidates upstream of
+        # held-out production validation.
+        return (
+            float(forward_score + _bounded_cycle_proposal_penalty(cycle_loss)),
+            sub_scores,
+        )
 
     @staticmethod
     def _validation_evaluations(
@@ -922,41 +1146,91 @@ class TrackingOptimizerCore:
         forward: np.ndarray,
         backward: np.ndarray,
         body_scale: float,
+        *,
+        detection_counts: np.ndarray | None = None,
+        slot_arena: np.ndarray | None = None,
     ) -> list[CandidateEvaluation]:
-        """Build repeated temporal-region measurements for one candidate."""
+        """Build paired region measurements using one global slot alignment.
 
-        segment_count = min(3, len(forward))
+        Temporal events are assigned to the region containing their final
+        frame, so transition/triplet evidence at region boundaries remains in
+        the validation data rather than disappearing with a bare array slice.
+        """
+
+        try:
+            slot_alignment = global_slot_alignment(
+                forward,
+                backward,
+                backward_is_reverse_chronological=False,
+                spatial_scale=body_scale,
+                minimum_shared_observations=_MIN_CYCLE_SHARED_OBSERVATIONS,
+                slot_arena=slot_arena,
+            )
+        except ValueError:
+            slot_alignment = None
+
+        segment_count = min(_VALIDATION_REGION_COUNT, len(forward))
         evaluations: list[CandidateEvaluation] = []
         for index, segment in enumerate(
             partition_temporal_segments(len(forward), segment_count)
         ):
-            forward_segment = forward[segment.start : segment.stop]
-            backward_segment = backward[segment.start : segment.stop]
             forward_quality = trajectory_quality_metrics(
-                forward_segment, spatial_scale=body_scale
+                forward, spatial_scale=body_scale, segment=segment
             )
             backward_quality = trajectory_quality_metrics(
-                backward_segment, spatial_scale=body_scale
+                backward, spatial_scale=body_scale, segment=segment
             )
-            try:
-                cycle_loss = forward_backward_cycle_consistency(
-                    forward_segment,
-                    backward_segment,
-                    backward_is_reverse_chronological=False,
-                    spatial_scale=body_scale,
-                ).mean_normalized_error
-            except ValueError:
-                # No shared observation is strong evidence against automatic
-                # promotion, while remaining finite for deterministic ranking.
+            forward_sanity = output_sanity_metrics(
+                forward,
+                spatial_scale=body_scale,
+                detection_counts=detection_counts,
+                segment=segment,
+                slot_arena=slot_arena,
+            )
+            backward_sanity = output_sanity_metrics(
+                backward,
+                spatial_scale=body_scale,
+                detection_counts=detection_counts,
+                segment=segment,
+                slot_arena=slot_arena,
+            )
+            if slot_alignment is None:
                 cycle_loss = 10.0
+                cycle_observation_coverage = 0.0
+            else:
+                try:
+                    cycle = forward_backward_cycle_consistency(
+                        forward[segment.start : segment.stop],
+                        backward[segment.start : segment.stop],
+                        backward_is_reverse_chronological=False,
+                        spatial_scale=body_scale,
+                        slot_alignment=slot_alignment,
+                        minimum_shared_observations=_MIN_CYCLE_SHARED_OBSERVATIONS,
+                        slot_arena=slot_arena,
+                    )
+                    cycle_loss = min(float(cycle.mean_normalized_error), 10.0)
+                    cycle_observation_coverage = float(
+                        cycle.shared_observation_coverage
+                    )
+                except ValueError:
+                    # No region-level shared evidence is strong evidence
+                    # against automatic promotion, while remaining finite for
+                    # deterministic ranking and diagnostics.
+                    cycle_loss = 10.0
+                    cycle_observation_coverage = 0.0
             evaluations.append(
                 CandidateEvaluation(
                     candidate_id,
                     {
                         "cycle_loss": min(float(cycle_loss), 10.0),
+                        "cycle_observation_coverage": cycle_observation_coverage,
                         "coverage_loss": max(
                             float(forward_quality.coverage_loss),
                             float(backward_quality.coverage_loss),
+                        ),
+                        "worst_track_coverage_loss": max(
+                            float(forward_sanity.worst_track_coverage_loss),
+                            float(backward_sanity.worst_track_coverage_loss),
                         ),
                         "fragmentation_loss": max(
                             float(forward_quality.fragmentation_loss),
@@ -969,11 +1243,457 @@ class TrackingOptimizerCore:
                             ),
                             10.0,
                         ),
+                        "collision_loss": max(
+                            float(forward_sanity.collision_loss),
+                            float(backward_sanity.collision_loss),
+                        ),
+                        "detection_excess_loss": max(
+                            float(forward_sanity.detection_excess_loss),
+                            float(backward_sanity.detection_excess_loss),
+                        ),
                     },
                     perturbation_id=f"temporal-region-{index + 1}",
                 )
             )
         return evaluations
+
+    @staticmethod
+    def _longest_consecutive_observed_runs(positions: np.ndarray) -> np.ndarray:
+        """Return each slot's longest run of finite exported observations."""
+
+        observed = np.isfinite(positions).all(axis=2)
+        longest = np.zeros(observed.shape[1], dtype=np.int64)
+        current = np.zeros(observed.shape[1], dtype=np.int64)
+        for frame_observed in observed:
+            current = np.where(frame_observed, current + 1, 0)
+            longest = np.maximum(longest, current)
+        return longest
+
+    @staticmethod
+    def _longest_bracketed_missing_runs(positions: np.ndarray) -> np.ndarray:
+        """Return each slot's longest missing run with observations on both sides.
+
+        A trailing or leading absence cannot prove that the live lifecycle
+        transition and its post-loss rejoin were exercised, so it deliberately
+        does not count here.
+        """
+
+        observed = np.isfinite(positions).all(axis=2)
+        longest = np.zeros(observed.shape[1], dtype=np.int64)
+        for track_index in range(observed.shape[1]):
+            track_observed = observed[:, track_index]
+            index = 0
+            while index < len(track_observed):
+                if track_observed[index]:
+                    index += 1
+                    continue
+                start = index
+                while index < len(track_observed) and not track_observed[index]:
+                    index += 1
+                if (
+                    start > 0
+                    and index < len(track_observed)
+                    and track_observed[start - 1]
+                    and track_observed[index]
+                ):
+                    longest[track_index] = max(longest[track_index], index - start)
+        return longest
+
+    def _changed_lifecycle_thresholds(
+        self, candidate_params: Mapping[str, Any] | None
+    ) -> dict[str, tuple[int, int]]:
+        """Return ``(baseline, candidate)`` thresholds for changed lifecycle values.
+
+        A candidate-specific dimension needs evidence that distinguishes the two
+        policies, not necessarily evidence that reaches the more conservative
+        one. The caller therefore requires exposure to the lower of these two
+        values, while preserving the exact candidate/baseline values for
+        diagnostics.
+        """
+
+        changed: dict[str, tuple[int, int]] = {}
+        for name in _TEMPORAL_HORIZON_PARAMETERS:
+            if candidate_params is None or name not in candidate_params:
+                continue
+            try:
+                candidate_value = float(candidate_params[name])
+                baseline_value = float(
+                    self.base_params.get(name, self._SEED_DEFAULTS[name])
+                )
+            except (TypeError, ValueError):
+                continue
+            if np.isclose(candidate_value, baseline_value, rtol=0.0, atol=1e-9):
+                continue
+            baseline_threshold = max(1, int(math.ceil(baseline_value)))
+            candidate_threshold = max(1, int(math.ceil(candidate_value)))
+            changed[name] = (baseline_threshold, candidate_threshold)
+        return changed
+
+    def _minimum_region_cycle_observations(
+        self, segment_frames: int, track_slots: int
+    ) -> int:
+        """Require both an absolute overlap floor and horizon-scaled support."""
+
+        horizon_frames = min(segment_frames, self._temporal_validation_horizon())
+        scaled_support = math.ceil(
+            horizon_frames * max(1, track_slots) * _MIN_CYCLE_SHARED_COVERAGE
+        )
+        return max(_MIN_CYCLE_SHARED_OBSERVATIONS, scaled_support)
+
+    def _validation_temporal_evidence_reason(
+        self,
+        forward: np.ndarray,
+        backward: np.ndarray,
+        body_scale: float,
+        evaluations: list[CandidateEvaluation],
+        *,
+        candidate_params: Mapping[str, Any] | None = None,
+        slot_arena: np.ndarray | None = None,
+    ) -> str | None:
+        """Return why regional production metrics lack real temporal evidence.
+
+        Frame count establishes only the *opportunity* to observe transitions.
+        Promotion also needs sufficient fully observed motion-triplet support
+        in both replay directions and robust cycle overlap in every paired
+        region.  The corresponding candidate evaluations stay finite for
+        diagnostics, but their neutral/sentinel values must not become
+        statistical evidence.
+        """
+
+        segments = partition_temporal_segments(len(forward), len(evaluations))
+        # A 3-frame metric needs one triplet.  For a larger tuned lifecycle
+        # horizon, require enough consecutive observations to actually cover
+        # that horizon rather than accepting one isolated smooth blip.
+        required_motion_triplets = max(1, self._temporal_validation_horizon() - 2)
+        for index, (segment, evaluation) in enumerate(
+            zip(segments, evaluations, strict=True), start=1
+        ):
+            for direction, positions in (
+                ("forward", forward),
+                ("backward", backward),
+            ):
+                quality = trajectory_quality_metrics(
+                    positions, spatial_scale=body_scale, segment=segment
+                )
+                if quality.valid_motion_triplets < required_motion_triplets:
+                    return (
+                        "held-out temporal support is inadequate: validation "
+                        f"region {index} requires at least {required_motion_triplets} "
+                        "observed motion-triplet(s) but found "
+                        f"{quality.valid_motion_triplets} in the {direction} replay"
+                    )
+            if evaluation.metrics["cycle_observation_coverage"] <= 0.0:
+                return (
+                    "held-out temporal support is inadequate: validation "
+                    f"region {index} has no robust shared forward/backward "
+                    "cycle observations"
+                )
+
+        # A positive fractional overlap alone can be two points. That produces
+        # a zero standard error across four regions while providing almost no
+        # evidence that a forward/backward agreement is stable. Reuse one
+        # full-window mapping, then require both an absolute and a
+        # horizon/slot-scaled amount of paired evidence in every region.
+        try:
+            slot_alignment = global_slot_alignment(
+                forward,
+                backward,
+                backward_is_reverse_chronological=False,
+                spatial_scale=body_scale,
+                minimum_shared_observations=_MIN_CYCLE_SHARED_OBSERVATIONS,
+                slot_arena=slot_arena,
+            )
+        except ValueError:
+            return (
+                "held-out temporal support is inadequate: no robust full-window "
+                "forward/backward cycle alignment"
+            )
+        for index, segment in enumerate(segments, start=1):
+            required_shared = self._minimum_region_cycle_observations(
+                segment.frame_count, forward.shape[1]
+            )
+            try:
+                cycle = forward_backward_cycle_consistency(
+                    forward[segment.start : segment.stop],
+                    backward[segment.start : segment.stop],
+                    backward_is_reverse_chronological=False,
+                    spatial_scale=body_scale,
+                    slot_alignment=slot_alignment,
+                    minimum_shared_observations=_MIN_CYCLE_SHARED_OBSERVATIONS,
+                    slot_arena=slot_arena,
+                )
+            except ValueError:
+                return (
+                    "held-out temporal support is inadequate: validation "
+                    f"region {index} has no robust shared forward/backward "
+                    "cycle observations"
+                )
+            if cycle.valid_observations < required_shared:
+                return (
+                    "held-out temporal support is inadequate: validation "
+                    f"region {index} requires at least {required_shared} shared "
+                    "forward/backward cycle observations but found "
+                    f"{cycle.valid_observations}"
+                )
+            if cycle.shared_observation_coverage < _MIN_CYCLE_SHARED_COVERAGE:
+                return (
+                    "held-out temporal support is inadequate: validation "
+                    f"region {index} requires at least "
+                    f"{_MIN_CYCLE_SHARED_COVERAGE:.0%} shared forward/backward "
+                    "cycle coverage"
+                )
+
+        # A candidate-specific lifecycle value is evidence-bearing only if the
+        # held-out export reaches a threshold on which baseline and candidate
+        # can differ. That is the lower of their two values: a run/gap between
+        # them is precisely the case that exercises one policy while leaving
+        # the other unchanged. This remains separate from generic motion
+        # support because many disjoint three-frame fragments can produce
+        # plenty of triplets without ever maturing a track, and a boundary gap
+        # cannot prove a loss/rejoin transition.
+        lifecycle_thresholds = self._changed_lifecycle_thresholds(candidate_params)
+        maturity_thresholds = lifecycle_thresholds.get("KALMAN_MATURITY_AGE")
+        if maturity_thresholds is not None:
+            baseline_maturity, candidate_maturity = maturity_thresholds
+            # Bootstrap creates an active track with continuity zero and the
+            # first later association tests maturity before incrementing it.
+            # Consequently an age-T lifecycle policy first has an observable
+            # effect on the (T + 1)th exported observation.
+            required_maturity = min(baseline_maturity, candidate_maturity) + 1
+            for direction, positions in (("forward", forward), ("backward", backward)):
+                longest_run = int(
+                    np.max(self._longest_consecutive_observed_runs(positions))
+                )
+                if longest_run < required_maturity:
+                    return (
+                        "held-out lifecycle support is inadequate: candidate "
+                        f"KALMAN_MATURITY_AGE={candidate_maturity} differs from "
+                        f"baseline {baseline_maturity} but has no "
+                        f"{required_maturity}-frame consecutive observed run in "
+                        f"the {direction} replay (longest {longest_run})"
+                    )
+
+        lost_thresholds = lifecycle_thresholds.get("LOST_THRESHOLD_FRAMES")
+        if lost_thresholds is not None:
+            baseline_lost, candidate_lost = lost_thresholds
+            required_lost = min(baseline_lost, candidate_lost)
+            for direction, positions in (("forward", forward), ("backward", backward)):
+                longest_gap = int(
+                    np.max(self._longest_bracketed_missing_runs(positions))
+                )
+                if longest_gap < required_lost:
+                    return (
+                        "held-out lifecycle support is inadequate: candidate "
+                        f"LOST_THRESHOLD_FRAMES={candidate_lost} differs from "
+                        f"baseline {baseline_lost} but has no bracketed "
+                        f"{required_lost}-frame missing run in the {direction} "
+                        f"replay (longest {longest_gap})"
+                    )
+        return None
+
+    def _validation_detection_counts(
+        self, params: Dict[str, Any], start_frame: int, end_frame: int
+    ) -> np.ndarray | None:
+        """Return candidate-filtered source counts as a false-positive risk signal.
+
+        These counts are not labelled false positives.  They are only a
+        conservative guard against promoting a candidate that admits a large
+        excess of source detections.  A diagnostic failure remains neutral so
+        it cannot fabricate a source-level claim when the cache is unavailable
+        in a test or an injected replay implementation.
+        """
+
+        if self.cache is None:
+            return None
+
+        class _ParamsFilter:
+            def __init__(self, values: Dict[str, Any]) -> None:
+                self.params = values
+                self.inference_config = inference_config_for_optimizer_params(values)
+
+        try:
+            detector = _ParamsFilter(params)
+            roi_mask = self._frame_space_roi_mask_for_params(params)
+            counts: list[int] = []
+            for frame in range(start_frame, end_frame + 1):
+                if self._stop_requested:
+                    return None
+                counts.append(
+                    len(
+                        _filter_cached_detections(
+                            detector,
+                            self.cache,
+                            frame,
+                            roi_mask,
+                            apply_max_detections=False,
+                        )[0]
+                    )
+                )
+            return np.asarray(counts, dtype=np.int64)
+        except Exception:
+            logger.warning(
+                "Optimizer: unable to calculate source detection-excess safeguard",
+                exc_info=True,
+            )
+            return None
+
+    def _candidate_change_cost(self, result: OptimizationResult) -> float:
+        """Normalized distance from current settings for deterministic tie breaks."""
+
+        distances: list[float] = []
+        for name, value in result.params.items():
+            if name not in self._PARAM_RANGES:
+                continue
+            ptype, low, high = self._search_range(name)
+            baseline = self.base_params.get(name, self._SEED_DEFAULTS.get(name, low))
+            try:
+                if ptype == "log_float":
+                    if float(value) <= 0 or float(baseline) <= 0:
+                        continue
+                    distance = abs(
+                        np.log(float(value)) - np.log(float(baseline))
+                    ) / max(np.log(float(high)) - np.log(float(low)), 1e-12)
+                else:
+                    distance = abs(float(value) - float(baseline)) / max(
+                        float(high) - float(low), 1e-12
+                    )
+            except (TypeError, ValueError):
+                continue
+            distances.append(float(np.clip(distance, 0.0, 1.0)))
+        return float(np.mean(distances)) if distances else 0.0
+
+    def _select_validation_shortlist(
+        self, candidates: list[OptimizationResult], *, limit: int = 5
+    ) -> list[OptimizationResult]:
+        """Select a normalized, diverse proposal set for expensive replay.
+
+        Proposal composite scores mix quantities with unlike scales, especially
+        cycle loss.  Replay selection therefore normalizes each proposal signal,
+        includes per-metric extremes, then fills remaining slots by metric and
+        parameter-space diversity.  This is a search allocation heuristic, not
+        an accuracy oracle.
+        """
+
+        if limit < 1:
+            raise ValueError("shortlist limit must be positive")
+        if len(candidates) <= limit:
+            return sorted(candidates, key=lambda item: item.candidate_id)
+
+        values = np.asarray(
+            [
+                [
+                    float(item.sub_scores.get(name, item.score))
+                    for name in _PROPOSAL_METRICS
+                ]
+                for item in candidates
+            ],
+            dtype=float,
+        )
+        values[~np.isfinite(values)] = np.nan
+        normalized = np.zeros_like(values)
+        for column in range(values.shape[1]):
+            column_values = values[:, column]
+            finite = column_values[np.isfinite(column_values)]
+            if not finite.size:
+                normalized[:, column] = 1.0
+                continue
+            low = float(np.min(finite))
+            high = float(np.max(finite))
+            if np.isclose(low, high):
+                normalized[:, column] = 0.0
+            else:
+                normalized[:, column] = np.where(
+                    np.isfinite(column_values),
+                    (column_values - low) / (high - low),
+                    1.0,
+                )
+        mean_normalized = np.mean(normalized, axis=1)
+
+        def _best_index(indices: list[int]) -> int:
+            return min(
+                indices,
+                key=lambda index: (
+                    float(mean_normalized[index]),
+                    float(candidates[index].score),
+                    candidates[index].candidate_id,
+                ),
+            )
+
+        selected: list[int] = [_best_index(list(range(len(candidates))))]
+        # Preserve each diagnostic's best observed proposal instead of letting
+        # the historical unnormalized scalar exclude it before replay.
+        for column in range(normalized.shape[1]):
+            if len(selected) >= limit:
+                break
+            best_value = float(np.min(normalized[:, column]))
+            contenders = [
+                index
+                for index in range(len(candidates))
+                if np.isclose(normalized[index, column], best_value)
+            ]
+            choice = _best_index(contenders)
+            if choice not in selected:
+                selected.append(choice)
+
+        while len(selected) < limit:
+            remaining = [
+                index for index in range(len(candidates)) if index not in selected
+            ]
+            if not remaining:
+                break
+
+            def _diversity_key(index: int) -> tuple[float, float, float, str]:
+                metric_distance = min(
+                    float(np.linalg.norm(normalized[index] - normalized[chosen]))
+                    for chosen in selected
+                )
+                parameter_distance = min(
+                    self._proposal_parameter_distance(
+                        candidates[index], candidates[chosen]
+                    )
+                    for chosen in selected
+                )
+                return (
+                    metric_distance + 0.25 * parameter_distance,
+                    -float(mean_normalized[index]),
+                    -float(candidates[index].score),
+                    candidates[index].candidate_id,
+                )
+
+            # ``max`` keeps larger diversity first; reverse the remaining
+            # quality fields so lower normalized loss wins exact ties.
+            selected.append(max(remaining, key=_diversity_key))
+        return [candidates[index] for index in selected]
+
+    def _proposal_parameter_distance(
+        self, left: OptimizationResult, right: OptimizationResult
+    ) -> float:
+        distances: list[float] = []
+        for name in sorted(set(left.params) | set(right.params)):
+            if name not in self._PARAM_RANGES:
+                continue
+            ptype, low, high = self._search_range(name)
+            left_value = left.params.get(
+                name, self.base_params.get(name, self._SEED_DEFAULTS.get(name, low))
+            )
+            right_value = right.params.get(
+                name, self.base_params.get(name, self._SEED_DEFAULTS.get(name, low))
+            )
+            try:
+                if ptype == "log_float":
+                    if float(left_value) <= 0 or float(right_value) <= 0:
+                        continue
+                    distance = abs(
+                        np.log(float(left_value)) - np.log(float(right_value))
+                    ) / max(np.log(float(high)) - np.log(float(low)), 1e-12)
+                else:
+                    distance = abs(float(left_value) - float(right_value)) / max(
+                        float(high) - float(low), 1e-12
+                    )
+            except (TypeError, ValueError):
+                continue
+            distances.append(float(np.clip(distance, 0.0, 1.0)))
+        return float(np.mean(distances)) if distances else 0.0
 
     def _production_validate_shortlist(
         self,
@@ -985,42 +1705,79 @@ class TrackingOptimizerCore:
         baseline = next(result for result in results if result.is_baseline)
         baseline.recommended = True
         baseline.recommendation_reason = "current settings retained by default"
-        if validation_bounds is None:
-            baseline.recommendation_reason = "current settings retained: frame range is too short for held-out validation"
-            return
-        if self._stop_requested:
+
+        def _cancelled() -> None:
+            baseline.recommended = True
             baseline.recommendation_reason = (
                 "current settings retained: held-out validation was cancelled"
+            )
+
+        if validation_bounds is None:
+            baseline.recommendation_reason = (
+                "current settings retained: frame range is too short for "
+                "adequate held-out temporal validation"
+            )
+            return
+        if self._stop_requested:
+            _cancelled()
+            return
+        support_reason = self._validation_support_reason(validation_bounds)
+        if support_reason is not None:
+            baseline.recommendation_reason = (
+                "current settings retained: " + support_reason
             )
             return
 
         # Validate only a bounded shortlist through the much heavier production
         # loop.  The baseline is always included exactly as configured.
         candidates = [result for result in results if not result.is_baseline]
-        shortlist = [baseline, *sorted(candidates, key=lambda item: item.score)[:5]]
+        shortlist = [baseline, *self._select_validation_shortlist(candidates)]
         start_frame, end_frame = validation_bounds
         evaluator = ProductionReplayEvaluator(
             self.video_path,
             self.detection_cache_path,
             start_frame,
             end_frame,
+            pre_roll_start=self.start_frame,
+            cache_provenance_params=self.base_params,
             should_stop=lambda: self._stop_requested,
         )
         all_evaluations: list[CandidateEvaluation] = []
         validated_results: list[OptimizationResult] = []
         for index, result in enumerate(shortlist):
             if self._stop_requested:
-                break
+                _cancelled()
+                return
             if self._progress_cb is not None:
                 self._progress_cb(
                     85 + int(15 * index / max(len(shortlist), 1)),
                     f"Production-validating candidate {index + 1}/{len(shortlist)}",
                 )
-            params = dict(self.base_params)
-            params.update(result.params)
+            if self._stop_requested:
+                _cancelled()
+                return
+            params = self._candidate_evaluation_params(result.params)
+            slot_arena = self._scoring_slot_arena(params)
+            detection_counts = self._validation_detection_counts(
+                params, start_frame, end_frame
+            )
+            if self._stop_requested:
+                _cancelled()
+                return
             forward = evaluator.run(params, reverse=False)
+            if self._stop_requested:
+                _cancelled()
+                return
+            if not forward.success:
+                result.recommendation_reason = "production validation failed" + (
+                    f": {forward.error}" if forward.error else ""
+                )
+                continue
             backward = evaluator.run(params, reverse=True)
-            if not forward.success or not backward.success:
+            if self._stop_requested:
+                _cancelled()
+                return
+            if not backward.success:
                 messages = [value for value in (forward.error, backward.error) if value]
                 result.recommendation_reason = "production validation failed" + (
                     f": {'; '.join(messages)}" if messages else ""
@@ -1031,28 +1788,54 @@ class TrackingOptimizerCore:
                 * float(params.get("RESIZE_FACTOR", 1.0)),
                 1e-6,
             )
-            all_evaluations.extend(
-                self._validation_evaluations(
-                    result.candidate_id,
-                    forward.positions,
-                    backward.positions,
-                    body_scale,
-                )
+            evaluations = self._validation_evaluations(
+                result.candidate_id,
+                forward.positions,
+                backward.positions,
+                body_scale,
+                detection_counts=detection_counts,
+                slot_arena=slot_arena,
             )
+            temporal_evidence_reason = self._validation_temporal_evidence_reason(
+                forward.positions,
+                backward.positions,
+                body_scale,
+                evaluations,
+                candidate_params=result.params,
+                slot_arena=slot_arena,
+            )
+            if temporal_evidence_reason is not None:
+                result.recommendation_reason = "production validation skipped: " + (
+                    temporal_evidence_reason
+                )
+                if result.is_baseline:
+                    baseline.recommendation_reason = "current settings retained: " + (
+                        temporal_evidence_reason
+                    )
+                    return
+                continue
+            all_evaluations.extend(evaluations)
             validated_results.append(result)
 
+        if self._stop_requested:
+            _cancelled()
+            return
         if self._progress_cb is not None:
             self._progress_cb(100, "Held-out production validation complete")
 
         if self._stop_requested:
-            baseline.recommendation_reason = (
-                "current settings retained: held-out validation was cancelled"
-            )
+            _cancelled()
             return
         if baseline not in validated_results:
-            baseline.recommendation_reason = (
-                "current settings retained: baseline production validation failed"
-            )
+            failure_detail = str(baseline.recommendation_reason or "")
+            if failure_detail.startswith("production validation failed"):
+                baseline.recommendation_reason = (
+                    "current settings retained: " + failure_detail
+                )
+            else:
+                baseline.recommendation_reason = (
+                    "current settings retained: baseline production validation failed"
+                )
             return
 
         scores = aggregate_candidate_evaluations(
@@ -1078,7 +1861,14 @@ class TrackingOptimizerCore:
             )
 
         recommendation = recommend_dominating_candidate(
-            scores, baseline.candidate_id, _UNLABELED_METRIC_SPECS
+            scores,
+            baseline.candidate_id,
+            _UNLABELED_METRIC_SPECS,
+            candidate_change_costs={
+                result.candidate_id: self._candidate_change_cost(result)
+                for result in validated_results
+                if not result.is_baseline
+            },
         )
         if recommendation.candidate_id is None:
             baseline.recommendation_reason = (
@@ -1095,6 +1885,7 @@ class TrackingOptimizerCore:
             minimum_improvement=float(
                 self.base_params.get("AUTOTUNE_MIN_HELDOUT_IMPROVEMENT", 0.01)
             ),
+            selection_family_size=max(1, len(validated_results) - 1),
         )
         if not decision.accepted:
             baseline.recommendation_reason = (
@@ -1110,12 +1901,27 @@ class TrackingOptimizerCore:
     # ------------------------------------------------------------------
 
     def optimize(self):
+        """Run a search and release its read-only replay state on every exit."""
+
+        try:
+            return self._optimize()
+        finally:
+            self._release_optimization_resources()
+
+    def _optimize(self):
+        """Implementation of :meth:`optimize` with cancellation-safe exits."""
+
+        self._search_converged = False
+        if self._stop_requested:
+            return []
         if not self._open_and_validate_cache():
             # Explicitly push an empty result set so a stale result list from a
             # previous successful run in the same dialog session isn't left
             # showing as if this run had produced (or reused) results.
-            if self._result_cb is not None:
+            if not self._stop_requested and self._result_cb is not None:
                 self._result_cb([])
+            return []
+        if self._stop_requested:
             return []
 
         optuna.logging.set_verbosity(optuna.logging.WARNING)
@@ -1131,6 +1937,8 @@ class TrackingOptimizerCore:
         scaled_body_size = ref_size * resize_f
 
         self._preload_pose_data()
+        if self._stop_requested:
+            return []
 
         search_bounds, validation_bounds = self._search_and_validation_bounds()
         search_start, search_end = search_bounds
@@ -1143,13 +1951,17 @@ class TrackingOptimizerCore:
                 dict(self.base_params), search_start, search_end
             )
         except Exception as exc:
+            if self._stop_requested:
+                return []
             logger.exception("Optimizer: exact baseline evaluation failed")
             if self._error_cb is not None:
                 self._error_cb(f"Baseline evaluation failed: {exc}")
-            self.cache = None
-            self._pose_frame_cache = None
             if self._result_cb is not None:
                 self._result_cb([])
+            return []
+        if self._stop_requested:
+            # The replay loop is cooperative and can return partial maps after
+            # a stop request. They are never valid baseline evidence.
             return []
         results.append(
             OptimizationResult(
@@ -1192,14 +2004,21 @@ class TrackingOptimizerCore:
 
         def objective(trial):
             nonlocal _no_improve_count, _best_score_seen
-            if self._stop_requested:
+
+            def _cancel_trial() -> None:
+                study.stop()
                 raise optuna.TrialPruned()
 
-            trial_params = self._suggest_trial_params(trial, scaled_body_size)
+            if self._stop_requested:
+                _cancel_trial()
 
-            # Merge into full param set
-            current_params = self.base_params.copy()
-            current_params.update(trial_params)
+            trial_params = self._suggest_trial_params(trial, scaled_body_size)
+            if self._stop_requested:
+                _cancel_trial()
+
+            # One canonical merge keeps fast replay, held-out production
+            # replay, preview, and the eventual GUI apply surface aligned.
+            current_params = self._candidate_evaluation_params(trial_params)
 
             # Fast replay only proposes candidates on the training slice.
             # Production replay on held-out frames decides whether one is safe
@@ -1207,17 +2026,37 @@ class TrackingOptimizerCore:
             score, sub_scores = self._proposal_score(
                 current_params, search_start, search_end
             )
+            # Re-check immediately after scoring. A stop can arrive while the
+            # forward/backward replay drains, leaving a deliberately partial
+            # score that must not be appended, shown as progress, or ranked.
+            if self._stop_requested:
+                _cancel_trial()
 
-            results.append(
-                OptimizationResult(trial_params, score, trial.number, sub_scores)
+            trial_result = OptimizationResult(
+                trial_params, score, trial.number, sub_scores
             )
+            if self._stop_requested:
+                _cancel_trial()
+            results.append(trial_result)
+            if self._stop_requested:
+                results.pop()
+                _cancel_trial()
             pct = int(((trial.number + 1) / max(self.n_trials, 1)) * 85)
             if self._progress_cb is not None:
+                if self._stop_requested:
+                    results.pop()
+                    _cancel_trial()
                 self._progress_cb(
                     int(pct),
                     f"Proposal {trial.number + 1}/{self.n_trials} "
                     f"(search loss: {score:.3f})",
                 )
+            if self._stop_requested:
+                # A callback itself can synchronously request cancellation.
+                # Remove the just-recorded trial before Optuna observes it.
+                if results and results[-1] is trial_result:
+                    results.pop()
+                _cancel_trial()
 
             # Plateau detection
             if score < _best_score_seen:
@@ -1232,13 +2071,19 @@ class TrackingOptimizerCore:
                             study.enqueue_trial(restart_pt)
                         _no_improve_count = 0
                     else:
-                        self._stop_requested = True
+                        # Convergence is a normal search terminal condition;
+                        # it must not masquerade as an explicit user cancel
+                        # and skip the held-out production validation below.
+                        self._search_converged = True
+                        study.stop()
 
             return score
 
         try:
             study.optimize(objective, n_trials=self.n_trials)
         except Exception as e:
+            if self._stop_requested:
+                return []
             # Optuna's default catch=() means ANY exception raised inside a
             # trial (e.g. the very first one, before any result is appended)
             # aborts the whole study immediately. Surface this loudly instead
@@ -1248,7 +2093,13 @@ class TrackingOptimizerCore:
             if self._error_cb is not None:
                 self._error_cb(f"Optimization trial failed: {e}")
 
+        if self._stop_requested:
+            return []
         self._production_validate_shortlist(results, validation_bounds)
+        if self._stop_requested:
+            # Held-out replay can also observe a late explicit stop. Discard
+            # all partially validated/ranked state rather than emitting it.
+            return []
         # Put the conservative recommendation first.  Remaining rows are a
         # transparent shortlist: production-validated Pareto fronts first,
         # then the search heuristic used only to generate proposals.
@@ -1260,11 +2111,8 @@ class TrackingOptimizerCore:
                 item.score,
             )
         )
-        # Do not call self.cache.close(): it was opened read-only and
-        # DetectionCacheHandle.close() flushes its (empty) write buffer,
-        # which would clobber the on-disk cache with zero frames.
-        self.cache = None
-        self._pose_frame_cache = None  # free memory after optimization
+        if self._stop_requested:
+            return []
         if self._result_cb is not None:
             self._result_cb(results)
         return results
@@ -1311,13 +2159,14 @@ class TrackingOptimizerCore:
         # STRUCTURALLY, so single-arena optimizer runs are unchanged.
         _arena_layout = arena_layout_from_params(params)
         check_slot_arena_covers_all_slots(_arena_layout, params["MAX_TARGETS"])
-        assigner.set_track_arena(
+        _slot_arena = (
             None if _arena_layout.is_single_arena else _arena_layout.slot_arena
         )
+        assigner.set_track_arena(_slot_arena)
         _arena_frame_size = None
         if not _arena_layout.is_single_arena:
             _arena_frame_size = _optimizer_frame_size(self.video_path, params)
-        _roi_mask = params.get("ROI_MASK", None)
+        _roi_mask = self._frame_space_roi_mask_for_params(params)
 
         (
             _pose_anterior,
@@ -1346,8 +2195,9 @@ class TrackingOptimizerCore:
             params.get("REFERENCE_BODY_SIZE", 20.0) * params.get("RESIZE_FACTOR", 1.0),
             5.0,
         )
-        _n_pairs = max(N * (N - 1) // 2, 1)
-
+        # Fixed for the full replay; never recompute grouping/normalization in
+        # the per-frame, per-trial proposal hot loop.
+        _n_pairs = _crowding_pair_count(N, _slot_arena)
         _w_cov, _w_asn, _w_frg, _w_occ, _w_vel, _w_crd = _normalise_scoring_weights(
             params
         )
@@ -1573,6 +2423,8 @@ class TrackingOptimizerCore:
                     detection_directed_mask,
                     detection_directed_heading,
                     _det_pose_kpts,
+                    meas_arena=_meas_arena,
+                    slot_arena=_slot_arena,
                 )
             elif detection_initialized:
                 kf_manager.predict()
@@ -1616,6 +2468,7 @@ class TrackingOptimizerCore:
                 kf_manager,
                 _body_size,
                 _n_pairs,
+                slot_arena=_slot_arena,
             )
 
             # Record only current-frame observations.  Production output uses

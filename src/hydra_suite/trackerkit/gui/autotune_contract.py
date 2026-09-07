@@ -12,24 +12,10 @@ import math
 from collections.abc import Mapping
 from typing import Any
 
-# These optimizer outputs each have a corresponding TrackerKit control. The
-# regression suite keeps this contract equal to the core search space so a new
-# core tunable cannot become an unapplied GUI result.
-TRACKING_AUTOTUNE_CANDIDATE_KEYS = (
-    "YOLO_CONFIDENCE_THRESHOLD",
-    "YOLO_IOU_THRESHOLD",
-    "MAX_DISTANCE_MULTIPLIER",
-    "W_POSITION",
-    "W_ORIENTATION",
-    "W_AREA",
-    "W_ASPECT",
-    "KALMAN_NOISE_COVARIANCE",
-    "KALMAN_MEASUREMENT_NOISE_COVARIANCE",
-    "KALMAN_DAMPING",
-    "KALMAN_LONGITUDINAL_NOISE_MULTIPLIER",
-    "KALMAN_INITIAL_VELOCITY_RETENTION",
-    "KALMAN_MATURITY_AGE",
-    "LOST_THRESHOLD_FRAMES",
+from hydra_suite.core.tracking.optimization.parameter_contract import (
+    TRACKING_AUTOTUNE_CANDIDATE_KEYS,
+    quantize_tracking_autotune_params,
+    tracking_autotune_widget_value,
 )
 
 _DIRECT_WIDGETS = {
@@ -97,24 +83,24 @@ def _validate_widget_value(key: str, widget: Any, value: float) -> None:
         )
 
 
-def _numeric_candidate_value(key: str, value: Any) -> float:
-    try:
-        return float(value)
-    except (TypeError, ValueError) as exc:
-        raise AutotuneCandidateApplicationError(
-            f"{key} is not numeric and cannot be applied."
-        ) from exc
-
-
 def apply_tracking_autotune_candidate(params: Mapping[str, Any], panels: Any) -> None:
-    """Apply a selected candidate without implicit unit conversion or clamping.
+    """Apply a selected candidate without implicit clamping or partial writes.
 
     The optimizer stores ``KALMAN_MATURITY_AGE`` and
     ``LOST_THRESHOLD_FRAMES`` as frame counts; TrackerKit's UI stores the same
-    controls in seconds. Values are validated before any widget is changed, so
-    an unsupported candidate cannot partially apply or silently clamp.
+    controls in seconds. The lower-layer typed contract first quantizes every
+    candidate to the same fixed precision supported by those controls. Values
+    are then validated before any widget is changed, so an unsupported
+    candidate cannot partially apply or silently clamp.
     """
-    candidate = applicable_candidate_params(params)
+    try:
+        candidate = quantize_tracking_autotune_params(
+            applicable_candidate_params(params)
+        )
+    except ValueError as exc:
+        raise AutotuneCandidateApplicationError(
+            f"{exc} and cannot be applied."
+        ) from exc
     fps = _valid_fps(panels) if any(key in candidate for key in _FRAME_WIDGETS) else 1.0
     updates: list[tuple[Any, float, str]] = []
 
@@ -123,17 +109,17 @@ def apply_tracking_autotune_candidate(params: Mapping[str, Any], panels: Any) ->
             updates.append(
                 (
                     _widget(panels, section_name, widget_name),
-                    _numeric_candidate_value(key, candidate[key]),
+                    float(tracking_autotune_widget_value(key, candidate[key])),
                     key,
                 )
             )
     for key, (section_name, widget_name) in _FRAME_WIDGETS.items():
         if key in candidate:
-            frames = _numeric_candidate_value(key, candidate[key])
+            frames = candidate[key]
             updates.append(
                 (
                     _widget(panels, section_name, widget_name),
-                    frames / fps,
+                    float(tracking_autotune_widget_value(key, frames, fps=fps)),
                     f"{key} ({frames:g} frames at {fps:g} FPS)",
                 )
             )

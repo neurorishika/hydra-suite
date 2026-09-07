@@ -290,6 +290,40 @@ def test_legacy_detection_npz_retains_read_parity(tmp_path):
     assert reader.read_frame(6) is None
 
 
+def test_legacy_metadata_queries_defer_monolithic_payload_load(tmp_path, monkeypatch):
+    path = tmp_path / "detection.npz"
+    result = _obb(4, 1)
+    _npz_save(
+        path,
+        _key(),
+        frame_indices=np.asarray([4], np.int32),
+        written_frames=np.asarray([4], np.int32),
+        centroids=result.centroids,
+        angles=result.angles,
+        sizes=result.sizes,
+        shapes=result.shapes,
+        confidences=result.confidences,
+        corners=result.corners,
+        detection_ids=result.detection_ids,
+        class_ids=result.class_ids,
+    )
+    full_loads: list[Path] = []
+    original_load = chunked._load_npz_bounded
+
+    def record_full_load(path_arg, *, max_bytes):
+        full_loads.append(Path(path_arg))
+        return original_load(path_arg, max_bytes=max_bytes)
+
+    monkeypatch.setattr(chunked, "_load_npz_bounded", record_full_load)
+    reader = DetectionCacheHandle(path, _key(), read_only=True)
+
+    assert reader.is_valid()
+    assert reader.is_legacy
+    assert full_loads == []
+    assert reader.is_reusable()
+    assert full_loads == [path]
+
+
 def test_all_legacy_downstream_npz_types_retain_read_parity(tmp_path):
     key = _key()
     common = {

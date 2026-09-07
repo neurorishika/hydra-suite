@@ -126,9 +126,11 @@ class _FakeCap:
         pass
 
 
-def _patch_cache_open(monkeypatch, fake_handle):
+def _patch_cache_open(monkeypatch, fake_handle, calls=None):
     def _open_read_only(cfg, cache_dir, video_sig, roi_mask=None, *, read_only=False):
         assert read_only is True
+        if calls is not None:
+            calls["cache_dir"] = cache_dir
         return _FakeCaches(fake_handle)
 
     monkeypatch.setattr(
@@ -169,6 +171,25 @@ def test_run_tracking_preview_honors_immediate_stop_check(monkeypatch, tmp_path)
     assert emitted == []
     assert fake_handle.read_frames == []
     assert fake_handle.closed is False
+
+
+def test_preview_normalizes_detection_cache_member_path(monkeypatch, tmp_path):
+    fake_handle = _FakeDetectionHandle()
+    calls = {}
+    _patch_cache_open(monkeypatch, fake_handle, calls)
+    monkeypatch.setattr(ow.cv2, "VideoCapture", lambda *_a, **_k: _FakeCap(n_frames=1))
+    cache_member = tmp_path / "cache" / "detection.npz"
+
+    ow.run_tracking_preview(
+        video_path="v.mp4",
+        detection_cache_path=str(cache_member),
+        start_frame=0,
+        end_frame=0,
+        params={"MAX_TARGETS": 1},
+        stop_check=lambda: True,
+    )
+
+    assert calls["cache_dir"] == cache_member.parent
 
 
 def test_run_tracking_preview_stops_after_n_frames(monkeypatch, tmp_path):

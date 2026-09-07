@@ -68,6 +68,24 @@ def test_identical_params_produce_identical_key():
     )
 
 
+def test_frame_range_is_part_of_bgsub_cache_provenance():
+    """A cache built from a full adaptive-history range must not be mistaken
+    for one whose forward detector started at the held-out tail.
+
+    Replay keeps this provenance range separate from the tracking loop bounds;
+    cache keys still encode it so a genuinely different forward history cannot
+    be reused accidentally.
+    """
+    full = _base_params()
+    tail = _base_params()
+    tail["START_FRAME"] = 400
+    tail["END_FRAME"] = 500
+    assert (
+        bgsub_detection_cache_key(BgSubConfig.from_params(full)).config_hash
+        != bgsub_detection_cache_key(BgSubConfig.from_params(tail)).config_hash
+    )
+
+
 def test_key_params_all_exist_in_codebase_naming():
     """Guard against re-introducing param names nothing else uses."""
     from hydra_suite.core.inference.cache.keys import _BGSUB_KEY_PARAMS

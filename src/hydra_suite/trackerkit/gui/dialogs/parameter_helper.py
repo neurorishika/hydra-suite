@@ -37,9 +37,14 @@ from PySide6.QtWidgets import (
     QWidget,
 )
 
-from hydra_suite.core.tracking.optimization.optimizer import (
-    _PARAM_RANGES,
-    OptimizationResult,
+from hydra_suite.core.tracking.optimization.optimizer import OptimizationResult
+from hydra_suite.core.tracking.optimization.parameter_contract import (
+    canonical_evaluation_params,
+    merge_tracking_autotune_candidate,
+)
+from hydra_suite.core.tracking.optimization.production_replay import (
+    cache_directory,
+    disabled_replay_tuning_dimensions,
 )
 from hydra_suite.trackerkit.gui.autotune_contract import applicable_candidate_params
 from hydra_suite.trackerkit.gui.workers.param_optimizer_worker import (
@@ -86,6 +91,14 @@ def _badge_item(cost: float, display: str) -> QTableWidgetItem:
 class ParameterHelperDialog(BaseDialog):
     """Interactive dialog for auto-tuning core tracking parameters (Kalman, YOLO thresholds, assignment weights) against a detection cache."""
 
+    _WORKER_SHUTDOWN_WAIT_MS = 1_500
+    _REQUIRED_HELDOUT_METRICS = (
+        "cycle_loss",
+        "coverage_loss",
+        "fragmentation_loss",
+        "motion_roughness_loss",
+    )
+
     def __init__(
         self,
         video_path: str,
@@ -102,10 +115,18 @@ class ParameterHelperDialog(BaseDialog):
             apply_dark_style=True,
         )
         self.video_path = video_path
-        self.detection_cache_path = detection_cache_path
+        # A production run can retain ``detection.npz`` while the optimizer
+        # consumes its containing cache directory. Keep dialog persistence and
+        # worker handoff canonical even when callers use either public form.
+        self.detection_cache_path = str(cache_directory(detection_cache_path))
         self.start_frame = start_frame
         self.end_frame = end_frame
         self.base_params = current_params.copy()
+        self._disabled_tuning_dimensions = disabled_replay_tuning_dimensions(
+            self.base_params
+        )
+        self._terminal_shutdown_started = False
+        self._optimization_cancel_requested = False
 
         self.results: List[OptimizationResult] = []
         self._last_error: str | None = None
@@ -125,6 +146,10 @@ class ParameterHelperDialog(BaseDialog):
 
         self.setMinimumSize(1200, 740)
         self.setup_ui()
+        # Apply the replay contract before state restoration too: a fresh
+        # dialog has no sidecar for ``_load_state`` to sanitize, but must
+        # never offer a bootstrap dimension whose held-out evidence is absent.
+        self._apply_disabled_tuning_dimensions(self._disabled_tuning_dimensions)
         self._load_state()
 
     # ── UI construction ───────────────────────────────────────────────────────
@@ -154,13 +179,12 @@ class ParameterHelperDialog(BaseDialog):
         hdr.setStyleSheet("font-size: 12px; color: #9cdcfe; margin-bottom: 4px;")
         left.addWidget(hdr)
 
-        # ── Domain Constraints ────────────────────────────────────────────────
-        # Read-only summary of the physical parameters that are set in the Main
-        # Window tracking tab ("Track Continuity" section).  The optimiser uses
-        # these values as fixed constraints and never tunes them.  If any look
-        # wrong, close this dialog, adjust them in the Main Window, and reopen.
+        # ── Tracking context ─────────────────────────────────────────────────
+        # Read-only summary of the starting values from the Main Window. A
+        # longitudinal candidate retains the hidden lateral Kalman multiplier
+        # and therefore re-derives its effective anisotropy.
         domain_box = QGroupBox(
-            "Physical Constraints  \u2014  read from Main Window (close & adjust there if needed)"
+            "Tracking Context  \u2014  read from Main Window (close & adjust there if needed)"
         )
         domain_box.setStyleSheet(
             "QGroupBox { border: 1px solid #7a5f20; border-radius: 4px;"
@@ -181,16 +205,18 @@ class ParameterHelperDialog(BaseDialog):
             f"\u2002\u2502\u2002"
             f"\u25cf\u00a0Max velocity: <b>{_vel_mult:.1f}\u00d7\u00a0body/frame</b>"
             f"\u2002\u2502\u2002"
-            f"\u25cf\u00a0Motion anisotropy\u00a0(fwd\u00f7lat): <b>{_aniso:.1f}</b>"
+            f"\u25cf\u00a0Baseline anisotropy\u00a0(fwd\u00f7lat): <b>{_aniso:.1f}</b>"
         )
         summary.setTextFormat(Qt.RichText)
         summary.setStyleSheet("font-size: 11px; color: #ffffff; font-weight: normal;")
         summary.setToolTip(
-            "These values come directly from the Main Window tracking tab.\n"
+            "These values are the starting settings from the Main Window tracking tab.\n"
             "Body size         \u2192 REFERENCE_BODY_SIZE \u00d7 RESIZE_FACTOR\n"
             "Max velocity      \u2192 'Max speed' spinbox (Kalman section)\n"
-            "Motion anisotropy \u2192 derived from Longitudinal \u00f7 Lateral noise spinboxes\n\n"
-            "Close this dialog, change those values, then reopen to use different constraints.\n"
+            "Baseline anisotropy \u2192 Longitudinal \u00f7 retained Lateral noise multiplier\n\n"
+            "When longitudinal noise is tuned, the lateral multiplier remains fixed and\n"
+            "the effective forward/lateral anisotropy is recalculated for replay and apply.\n"
+            "Close this dialog, change starting settings, then reopen to use a different baseline.\n"
             "Changing them will invalidate any cached autotune results."
         )
         domain_lay.addWidget(summary)
@@ -241,6 +267,7 @@ class ParameterHelperDialog(BaseDialog):
         self.table.setSelectionBehavior(QTableWidget.SelectRows)
         self.table.setAlternatingRowColors(True)
         self.table.verticalHeader().setDefaultSectionSize(36)
+        self.table.itemSelectionChanged.connect(self._update_selected_result_actions)
         left.addWidget(self.table, stretch=1)
 
         # Bottom buttons
@@ -306,6 +333,40 @@ class ParameterHelperDialog(BaseDialog):
         self.cb_conf.setChecked(True)
         self.cb_iou = QCheckBox("YOLO IOU threshold  (NMS suppression)")
 
+        yolo_source = (
+            str(self.base_params.get("DETECTION_METHOD", "background_subtraction"))
+            .strip()
+            .lower()
+            == "yolo_obb"
+        )
+        disabled_reason = self._disabled_tuning_dimensions.get(
+            "YOLO_CONFIDENCE_THRESHOLD"
+        ) or self._disabled_tuning_dimensions.get("YOLO_IOU_THRESHOLD")
+        if not yolo_source:
+            # The general tracking helper is available for every detection
+            # source. Background subtraction has no meaningful YOLO knobs, so
+            # do not present inert controls merely because the dialog shares a
+            # layout with the YOLO path.
+            for checkbox in (self.cb_conf, self.cb_iou):
+                checkbox.setChecked(False)
+                checkbox.setEnabled(False)
+                checkbox.setVisible(False)
+                checkbox.setToolTip(disabled_reason or "Not used by this source.")
+            note = QLabel(
+                "This detection source does not use YOLO confidence or IoU filtering."
+            )
+            note.setWordWrap(True)
+            note.setStyleSheet("color: #d8d8d8; font-size: 11px;")
+            lay.addWidget(note)
+            lay.addStretch()
+            return w
+
+        if disabled_reason:
+            for checkbox in (self.cb_conf, self.cb_iou):
+                checkbox.setChecked(False)
+                checkbox.setEnabled(False)
+                checkbox.setToolTip(disabled_reason)
+
         lay.addWidget(
             self._checkboxes_in_group(
                 "Detection Filtering",
@@ -325,6 +386,15 @@ class ParameterHelperDialog(BaseDialog):
                 ],
             )
         )
+        if disabled_reason:
+            # ``_checkboxes_in_group`` installs the normal explanatory
+            # tooltips, so apply the replay-fidelity explanation afterwards.
+            for checkbox in (self.cb_conf, self.cb_iou):
+                checkbox.setToolTip(disabled_reason)
+            note = QLabel(disabled_reason)
+            note.setWordWrap(True)
+            note.setStyleSheet("color: #f0c060; font-size: 11px;")
+            lay.addWidget(note)
         lay.addStretch()
         return w
 
@@ -410,7 +480,7 @@ class ParameterHelperDialog(BaseDialog):
                     ),
                     (
                         self.cb_kalman_damp,
-                        "Velocity friction per frame (range 0.70–0.999).\n"
+                        "Velocity friction per frame (range 0.50–0.999).\n"
                         "High (≈0.99): velocity persists → KF overshoots when animals stop.\n"
                         "Low (≈0.75): velocity decays quickly → less look-ahead, but more agile.",
                     ),
@@ -418,8 +488,8 @@ class ParameterHelperDialog(BaseDialog):
                         self.cb_kalman_long_noise,
                         "Process noise scale in the heading direction.\n"
                         "Higher = filter allows more forward movement per frame.\n"
-                        "Lateral noise is derived automatically as long / anisotropy ratio.\n"
-                        "Set the anisotropy ratio in the Physical Constraints panel above.",
+                        "The retained lateral multiplier stays fixed when this changes.\n"
+                        "Replay and apply recalculate effective forward/lateral anisotropy from both values.",
                     ),
                     (
                         self.cb_kalman_init_vel,
@@ -1154,7 +1224,7 @@ class ParameterHelperDialog(BaseDialog):
 
     def get_tuning_config(self) -> Dict[str, bool]:
         """Return a mapping of tracking parameter names to whether each is selected for Optuna optimization."""
-        return {
+        config = {
             "YOLO_CONFIDENCE_THRESHOLD": self.cb_conf.isChecked(),
             "YOLO_IOU_THRESHOLD": self.cb_iou.isChecked(),
             "MAX_DISTANCE_MULTIPLIER": self.cb_dist.isChecked(),
@@ -1170,6 +1240,25 @@ class ParameterHelperDialog(BaseDialog):
             "KALMAN_MATURITY_AGE": self.cb_kalman_maturity.isChecked(),
             "LOST_THRESHOLD_FRAMES": self.cb_lost_thresh.isChecked(),
         }
+        return {
+            key: enabled and key not in self._disabled_tuning_dimensions
+            for key, enabled in config.items()
+        }
+
+    def _apply_disabled_tuning_dimensions(
+        self, disabled_dimensions: Dict[str, str]
+    ) -> None:
+        """Reflect core replay exclusions in the corresponding UI controls."""
+
+        self._disabled_tuning_dimensions = dict(disabled_dimensions)
+        for key, reason in self._disabled_tuning_dimensions.items():
+            attr = self._CB_MAP.get(key)
+            checkbox = getattr(self, attr, None) if attr is not None else None
+            if checkbox is None:
+                continue
+            checkbox.setChecked(False)
+            checkbox.setEnabled(False)
+            checkbox.setToolTip(reason)
 
     # ── Optimization ──────────────────────────────────────────────────────────
 
@@ -1203,7 +1292,9 @@ class ParameterHelperDialog(BaseDialog):
         # previous run's success (self.results / self._last_error would
         # otherwise still hold the prior run's data).
         self.results = []
+        self.__dict__.pop("_selected_row_to_apply", None)
         self._last_error = None
+        self._optimization_cancel_requested = False
 
         # Merge current scoring weights into base_params so the optimizer's
         # _run_tracking_loop picks them up via params.get("SCORE_WEIGHT_*").
@@ -1222,6 +1313,24 @@ class ParameterHelperDialog(BaseDialog):
             on_plateau="stop" if self.combo_plateau.currentIndex() == 1 else "restart",
             sampler_type=["auto", "gp", "tpe"][self.combo_sampler.currentIndex()],
         )
+        # The core owns the final safety decision. It can change as replay
+        # support evolves, so surface its actual exclusions rather than relying
+        # only on the dialog's initial source inspection.
+        self._apply_disabled_tuning_dimensions(
+            self.optimizer.disabled_tuning_dimensions
+        )
+        if not any(self.get_tuning_config().values()):
+            self.optimizer = None
+            self.btn_run.setEnabled(True)
+            self.btn_stop.setEnabled(False)
+            self.progress.setVisible(False)
+            QMessageBox.warning(
+                self,
+                "No Replay-Faithful Dimensions",
+                "All selected dimensions are unavailable for faithful read-only replay. "
+                "Choose another tracking parameter or change the detection setup.",
+            )
+            return
         self.optimizer.progress_signal.connect(self.on_progress)
         self.optimizer.result_signal.connect(self.on_results)
         self.optimizer.error_signal.connect(self.on_error)
@@ -1229,13 +1338,26 @@ class ParameterHelperDialog(BaseDialog):
         self.optimizer.start()
 
     def _stop_optimization(self):
+        # Latch cancellation before waking the worker. Qt can still deliver a
+        # result/progress signal queued just before the core observes stop;
+        # such partial/stale evidence must never resurrect Apply or preview.
+        self._optimization_cancel_requested = True
+        self.results = []
+        self.table.setRowCount(0)
+        self.btn_preview.setEnabled(False)
+        self.btn_apply.setEnabled(False)
         if self.optimizer and self.optimizer.isRunning():
             self.optimizer.stop()
         self.btn_stop.setEnabled(False)
+        self.status_label.setText(
+            "Cancelling search; partial results will be discarded…"
+        )
 
     @Slot(int, str)
     def on_progress(self, val: int, msg: str):
         """Update the progress bar and status label with the optimizer's current trial progress."""
+        if self._terminal_shutdown_started or self._optimization_cancel_requested:
+            return
         self.progress.setValue(val)
         self.status_label.setText(msg)
 
@@ -1243,13 +1365,20 @@ class ParameterHelperDialog(BaseDialog):
     def on_error(self, msg: str):
         """Surface an optimizer failure loudly instead of letting it disappear
         into a generic 'no results' status once the thread finishes."""
+        if self._terminal_shutdown_started or self._optimization_cancel_requested:
+            return
         self._last_error = msg
         QMessageBox.critical(self, "Optimization Error", msg)
 
     @Slot(list)
     def on_results(self, results: List[OptimizationResult]):
         """Populate the results table with ranked optimization trials and colour-coded sub-score badges."""
+        if self._terminal_shutdown_started or self._optimization_cancel_requested:
+            return
         self.results = results
+        # A newly received (or restored) result set must not retain the row
+        # that a previous dialog action intended to apply.
+        self.__dict__.pop("_selected_row_to_apply", None)
         n_show = min(len(results), 50)
         self.table.setRowCount(n_show)
 
@@ -1282,38 +1411,13 @@ class ParameterHelperDialog(BaseDialog):
             score_item.setToolTip("Fast training-slice proposal loss; lower is better.")
             self.table.setItem(i, 2, score_item)
 
-            # Held-out production replay metrics (columns 3-7).
-            ss = res.sub_scores
-            cycle = ss.get("cycle_loss", 1.0)
-            self.table.setItem(
-                i,
-                3,
-                _badge_item(cycle, f"{cycle:.2f}"),
-            )
-            cov_cost = ss.get("coverage_loss", ss.get("coverage", 1.0))
-            cov_pct = 1.0 - cov_cost
-            self.table.setItem(i, 4, _badge_item(cov_cost, f"{cov_pct:.0%}"))
-            frag = ss.get("fragmentation_loss", ss.get("fragmentation", 1.0))
-            self.table.setItem(
-                i,
-                5,
-                _badge_item(frag, f"{frag:.2f}"),
-            )
-            roughness = ss.get("motion_roughness_loss", ss.get("velocity", 1.0))
-            self.table.setItem(
-                i,
-                6,
-                _badge_item(roughness, f"{roughness:.2f}"),
-            )
-            stability = res.mean_relative_spread
-            self.table.setItem(
-                i,
-                7,
-                _badge_item(
-                    min(stability if stability is not None else 1.0, 1.0),
-                    f"{stability:.2f}" if stability is not None else "—",
-                ),
-            )
+            # Held-out production replay metrics (columns 3-7).  A proposal
+            # loop can calculate similarly named fast-slice diagnostics, but
+            # those are not held-out evidence.  Never fall back to them here.
+            if self._is_production_validated(res):
+                self._set_production_metric_items(i, res)
+            else:
+                self._set_unvalidated_metric_items(i, res)
 
             # Key parameter changes vs base
             changes = (
@@ -1327,10 +1431,182 @@ class ParameterHelperDialog(BaseDialog):
             self.table.setItem(i, 8, chg_item)
 
         if results:
-            self.btn_apply.setEnabled(True)
-            self.btn_preview.setEnabled(True)
             self.table.selectRow(0)
             self._save_state()
+        self._update_selected_result_actions()
+
+    @classmethod
+    def _is_production_validated(cls, result: OptimizationResult) -> bool:
+        """Whether a row has the held-out evidence needed for promotion."""
+
+        if result.pareto_rank is None or not isinstance(
+            result.validation_metrics, dict
+        ):
+            return False
+        means = [
+            cls._production_metric_mean(result, metric_name)
+            for metric_name in cls._REQUIRED_HELDOUT_METRICS
+        ]
+        if any(value is None or not np.isfinite(value) for value in means):
+            return False
+        try:
+            return bool(np.isfinite(float(result.mean_relative_spread)))
+        except (TypeError, ValueError):
+            return False
+
+    @classmethod
+    def _is_applyable_result(cls, result: OptimizationResult) -> bool:
+        """Current settings are always safe; proposals require held-out evidence."""
+
+        return result.is_baseline or cls._is_production_validated(result)
+
+    def _result_for_row(self, row: int) -> OptimizationResult | None:
+        if 0 <= row < len(self.results):
+            return self.results[row]
+        return None
+
+    @staticmethod
+    def _unvalidated_metric_tooltip(result: OptimizationResult) -> str:
+        if result.is_baseline:
+            return (
+                "Held-out production validation was unavailable for current settings; "
+                "no held-out metric is shown."
+            )
+        return (
+            "This proposal is not production-validated. Fast search-loop values "
+            "are intentionally not shown as held-out evidence."
+        )
+
+    @staticmethod
+    def _unvalidated_metric_item(tooltip: str) -> QTableWidgetItem:
+        item = QTableWidgetItem("—")
+        item.setTextAlignment(Qt.AlignCenter)
+        item.setToolTip(tooltip)
+        item.setFlags(item.flags() & ~Qt.ItemIsEditable)
+        return item
+
+    @staticmethod
+    def _production_metric_mean(
+        result: OptimizationResult, metric_name: str
+    ) -> float | None:
+        """Read a serialized production mean without falling back to search data."""
+
+        if not isinstance(result.validation_metrics, dict):
+            return None
+        metric = result.validation_metrics.get(metric_name)
+        value = metric.get("mean") if isinstance(metric, dict) else metric
+        try:
+            return float(value)
+        except (TypeError, ValueError):
+            return None
+
+    def _set_unvalidated_metric_items(
+        self, row: int, result: OptimizationResult
+    ) -> None:
+        tooltip = self._unvalidated_metric_tooltip(result)
+        for column in range(3, 8):
+            self.table.setItem(row, column, self._unvalidated_metric_item(tooltip))
+
+    def _set_production_metric_items(
+        self, row: int, result: OptimizationResult
+    ) -> None:
+        """Render only means emitted by held-out production validation."""
+
+        metric_cells = (
+            (3, "cycle_loss", lambda value: f"{value:.2f}", lambda value: value),
+            (
+                4,
+                "coverage_loss",
+                lambda value: f"{1.0 - value:.0%}",
+                lambda value: value,
+            ),
+            (
+                5,
+                "fragmentation_loss",
+                lambda value: f"{value:.2f}",
+                lambda value: value,
+            ),
+            (
+                6,
+                "motion_roughness_loss",
+                lambda value: f"{value:.2f}",
+                lambda value: value,
+            ),
+        )
+        for column, metric_name, formatter, cost in metric_cells:
+            value = self._production_metric_mean(result, metric_name)
+            if value is None:
+                self.table.setItem(
+                    row,
+                    column,
+                    self._unvalidated_metric_item(
+                        "Held-out production validation did not provide this metric."
+                    ),
+                )
+                continue
+            self.table.setItem(row, column, _badge_item(cost(value), formatter(value)))
+
+        stability = result.mean_relative_spread
+        if stability is None:
+            self.table.setItem(
+                row,
+                7,
+                self._unvalidated_metric_item(
+                    "Held-out production validation did not provide a stability estimate."
+                ),
+            )
+            return
+        self.table.setItem(
+            row,
+            7,
+            _badge_item(min(float(stability), 1.0), f"{float(stability):.2f}"),
+        )
+
+    def _update_selected_result_actions(self) -> None:
+        """Keep promotion controls aligned with the row currently selected."""
+
+        if self._terminal_shutdown_started or self._optimization_cancel_requested:
+            self.btn_apply.setEnabled(False)
+            self.btn_preview.setEnabled(False)
+            return
+
+        result = self._result_for_row(self.table.currentRow())
+        if result is None:
+            self.btn_apply.setEnabled(False)
+            self.btn_preview.setEnabled(False)
+            return
+
+        validated = self._is_production_validated(result)
+        applyable = self._is_applyable_result(result)
+        self.btn_apply.setEnabled(applyable)
+        if applyable:
+            self.btn_apply.setToolTip(
+                "Write the selected candidate settings back into the MAT setup tab and close."
+            )
+        else:
+            self.btn_apply.setToolTip(
+                "Only current settings or a production-validated candidate can be applied."
+            )
+
+        self.btn_preview.setEnabled(True)
+        if validated:
+            self.btn_preview.setText("▶  Preview Selected")
+            self.btn_preview.setToolTip(
+                "Run the selected production-validated candidate on the chosen frame range "
+                "and show the result in the preview panel on the right."
+            )
+        elif result.is_baseline:
+            self.btn_preview.setText("▶  Preview Current Settings (inspection)")
+            self.btn_preview.setToolTip(
+                "Run the current settings for inspection. Held-out production evidence "
+                "was not available for this result."
+            )
+        else:
+            self.btn_preview.setText("▶  Preview Proposal (inspection)")
+            self.btn_preview.setToolTip(
+                "Run this proposal for inspection only. It is not held-out evidence "
+                "and cannot be applied until production validation succeeds."
+            )
 
     # ── Helpers ───────────────────────────────────────────────────────────────
 
@@ -1339,12 +1615,12 @@ class ParameterHelperDialog(BaseDialog):
         labels = {
             "YOLO_CONFIDENCE_THRESHOLD": ("Conf", ".2f"),
             "YOLO_IOU_THRESHOLD": ("IOU", ".2f"),
-            "MAX_DISTANCE_MULTIPLIER": ("Dist", ".1f"),
+            "MAX_DISTANCE_MULTIPLIER": ("Dist", ".2f"),
             "KALMAN_NOISE_COVARIANCE": ("ProcN", ".4f"),
             "KALMAN_MEASUREMENT_NOISE_COVARIANCE": ("MeasN", ".4f"),
             "W_POSITION": ("Wp", ".2f"),
             "W_ORIENTATION": ("Wo", ".2f"),
-            "W_AREA": ("Wa", ".2f"),
+            "W_AREA": ("Wa", ".4f"),
             "W_ASPECT": ("Wasp", ".2f"),
             "KALMAN_DAMPING": ("Damp", ".3f"),
             "KALMAN_LONGITUDINAL_NOISE_MULTIPLIER": ("LongQ", ".1f"),
@@ -1371,21 +1647,31 @@ class ParameterHelperDialog(BaseDialog):
         return "  ".join(parts)
 
     def on_finished(self):
+        if self._terminal_shutdown_started:
+            return
         self.btn_run.setEnabled(True)
         self.btn_stop.setEnabled(False)
         self.progress.setVisible(False)
+        if self._optimization_cancel_requested:
+            self.results = []
+            self.table.setRowCount(0)
+            self.btn_apply.setEnabled(False)
+            self.btn_preview.setEnabled(False)
+            self.status_label.setText("Search cancelled. No results were retained.")
+            return
         n = len(self.results)
         if n > 0:
-            converged = (
-                self.optimizer is not None and self.optimizer._core._stop_requested
-            )
+            converged = self.optimizer is not None and self.optimizer.search_converged
             reason = "Converged (plateau)" if converged else "Search finished"
             recommended = next((r for r in self.results if r.recommended), None)
-            decision = (
-                " Current settings retained."
-                if recommended is not None and recommended.is_baseline
-                else " A held-out candidate is recommended."
-            )
+            if recommended is not None and recommended.is_baseline:
+                decision = " Current settings retained."
+            elif recommended is not None:
+                decision = " A held-out candidate is recommended."
+            elif any(self._is_production_validated(result) for result in self.results):
+                decision = " No candidate is recommended from held-out evidence."
+            else:
+                decision = " Proposals are available for inspection only."
             self.status_label.setText(f"{reason}. {max(0, n - 1)} proposals.{decision}")
         elif self._last_error:
             self.status_label.setText(f"Optimization failed: {self._last_error}")
@@ -1393,26 +1679,29 @@ class ParameterHelperDialog(BaseDialog):
             self.status_label.setText("Search finished with no results.")
 
     def run_preview(self):
-        row = self.table.currentRow()
-        if row < 0:
+        if self._terminal_shutdown_started or self._optimization_cancel_requested:
             return
-        res = self.results[row]
-        preview_params = self.base_params.copy()
-        preview_params.update(res.params)
-
-        # Scale dist
-        if "MAX_DISTANCE_MULTIPLIER" in res.params:
-            ref = preview_params.get("REFERENCE_BODY_SIZE", 20.0)
-            rf = preview_params.get("RESIZE_FACTOR", 1.0)
-            preview_params["MAX_DISTANCE_THRESHOLD"] = (
-                res.params["MAX_DISTANCE_MULTIPLIER"] * ref * rf
-            )
+        row = self.table.currentRow()
+        res = self._result_for_row(row)
+        if res is None:
+            return
+        preview_params = merge_tracking_autotune_candidate(self.base_params, res.params)
 
         if self.preview_worker and self.preview_worker.isRunning():
-            self.preview_worker.stop()
-            self.preview_worker.wait()
+            if not self._stop_worker_bounded(self.preview_worker, "preview"):
+                self.status_label.setText(
+                    "Previous preview is still stopping; wait a moment before starting another."
+                )
+                return
 
-        self.status_label.setText(f"Previewing candidate rank {row + 1}...")
+        inspection_suffix = (
+            " (inspection only; not held-out evidence)"
+            if not self._is_production_validated(res)
+            else ""
+        )
+        self.status_label.setText(
+            f"Previewing candidate rank {row + 1}{inspection_suffix}..."
+        )
         self._prev_auto_fit_pending = True
         self.preview_worker = TrackingPreviewWorker(
             self.video_path,
@@ -1431,54 +1720,54 @@ class ParameterHelperDialog(BaseDialog):
 
     def _apply_selected(self):
         """Apply the currently-selected candidate row (not always rank 1) to MAT."""
+        if self._terminal_shutdown_started or self._optimization_cancel_requested:
+            return
         row = self.table.currentRow()
         if row < 0:
             row = 0  # fallback to the first-ranked candidate
+        result = self._result_for_row(row)
+        if result is None or not self._is_applyable_result(result):
+            self.btn_apply.setEnabled(False)
+            self.status_label.setText(
+                "Selected proposal is not production-validated and cannot be applied."
+            )
+            return
         self._selected_row_to_apply = row
         self.accept()
 
     def get_selected_params(self) -> Dict[str, Any]:
+        if self._terminal_shutdown_started or self._optimization_cancel_requested:
+            return {}
         row = getattr(self, "_selected_row_to_apply", self.table.currentRow())
-        if 0 <= row < len(self.results):
+        result = self._result_for_row(row)
+        if result is not None and self._is_applyable_result(result):
             # The result contains only the candidate overrides. Returning a
             # historical base snapshot would overwrite controls that changed
             # while the dialog was open, and could include core-only fields that
             # TrackerKit cannot apply.
-            return applicable_candidate_params(self.results[row].params)
+            return applicable_candidate_params(result.params)
         return {}
 
     # ── Persistence ───────────────────────────────────────────────────────────
 
     def _state_path(self) -> Path:
         """Sidecar file next to the detection cache."""
-        return build_autotune_state_path(self.detection_cache_path)
+        return build_autotune_state_path(
+            cache_directory(self.detection_cache_path) / "detection.npz"
+        )
 
     def _compute_state_key(self) -> str:
-        """SHA-256 of base_params (tunable keys + domain constraints) + frame range.
+        """SHA-256 of the full production-replay input and optimizer setup.
 
-        Domain params are physical constraints read from the Main Window that the
-        optimiser never tunes but that change the meaning of the score: body size
-        (via REFERENCE_BODY_SIZE × RESIZE_FACTOR), max velocity, recovery distance,
-        and motion anisotropy.  Changing any of them in the Main Window will
-        invalidate cached results when the dialog is reopened.
+        A saved ranking is meaningful only for the exact fixed parameters that
+        shape a replay, not merely the knobs Optuna can change. The canonical
+        snapshot includes association/identity/density/arena settings and
+        fingerprints ndarray content such as ROI masks.
         """
-        subset = {
-            k: self.base_params[k]
-            for k in sorted(_PARAM_RANGES.keys())
-            if k in self.base_params
-        }
-        domain = {
-            "KALMAN_MAX_VELOCITY_MULTIPLIER": self.base_params.get(
-                "KALMAN_MAX_VELOCITY_MULTIPLIER", 2.0
-            ),
-            "KALMAN_ANISOTROPY_RATIO": self.base_params.get(
-                "KALMAN_ANISOTROPY_RATIO", 10.0
-            ),
-            "REFERENCE_BODY_SIZE": self.base_params.get("REFERENCE_BODY_SIZE", 20.0),
-            "RESIZE_FACTOR": self.base_params.get("RESIZE_FACTOR", 1.0),
-        }
 
-        def _source_signature(path: str | Path) -> object:
+        def _source_signature(
+            path: str | Path, *, cache_contents_only: bool = False
+        ) -> object:
             source = Path(path)
             try:
                 stat = source.stat()
@@ -1489,31 +1778,47 @@ class ParameterHelperDialog(BaseDialog):
                 for member in sorted(source.rglob("*")):
                     if not member.is_file():
                         continue
+                    relative = member.relative_to(source)
+                    if cache_contents_only and not (
+                        relative.name == "cache_set.json"
+                        or relative.suffix == ".npz"
+                        or any(part.endswith(".npz.chunks") for part in relative.parts)
+                    ):
+                        # The cache directory also holds UI state, keyed
+                        # density regions, and optional diagnostics. They are
+                        # mutable *consumers* of the raw cache, not the raw
+                        # cache contract itself. Including one would make the
+                        # state key depend on the sidecar this dialog writes.
+                        continue
                     try:
                         member_stat = member.stat()
                     except OSError:
                         continue
                     members.append(
                         (
-                            str(member.relative_to(source)),
+                            str(relative),
                             member_stat.st_size,
                             member_stat.st_mtime_ns,
                         )
                     )
-                return ("directory", stat.st_mtime_ns, members)
+                # Do not fingerprint the directory mtime: writing an ignored
+                # sidecar still updates it and would invalidate this dialog's
+                # own saved ranking on the next open.
+                return ("directory", members)
             return stat.st_size, stat.st_mtime_ns
 
         payload = json.dumps(
             {
-                "objective_version": 2,
+                "objective_version": 8,
                 "cache_path": str(self.detection_cache_path),
-                "cache_signature": _source_signature(self.detection_cache_path),
+                "cache_signature": _source_signature(
+                    self.detection_cache_path, cache_contents_only=True
+                ),
                 "video_path": str(self.video_path),
                 "video_signature": _source_signature(self.video_path),
                 "start": self.start_frame,
                 "end": self.end_frame,
-                "base_params": subset,
-                "domain_params": domain,
+                "base_params": canonical_evaluation_params(self.base_params),
                 "tuning_config": self.get_tuning_config(),
                 "scoring_weights": self.get_scoring_weights(),
                 "search_settings": {
@@ -1558,6 +1863,8 @@ class ParameterHelperDialog(BaseDialog):
 
     def _save_state(self):
         """Write tuning settings + results to the sidecar JSON file."""
+        if self._optimization_cancel_requested:
+            return
         try:
             tuning_cfg = self.get_tuning_config()
             opt_settings = {
@@ -1613,6 +1920,9 @@ class ParameterHelperDialog(BaseDialog):
             widget = getattr(self, attr, None)
             if widget is not None and param_key in tuning_cfg:
                 widget.setChecked(bool(tuning_cfg[param_key]))
+        # A persisted old session must not re-enable dimensions the current
+        # replay contract marks as inert or unfaithful.
+        self._apply_disabled_tuning_dimensions(self._disabled_tuning_dimensions)
 
         opt = state.get("opt_settings", {})
         if "n_trials" in opt:
@@ -1671,12 +1981,62 @@ class ParameterHelperDialog(BaseDialog):
             f"Restored {len(restored)} cached results from previous run."
         )
 
+    def _stop_worker_bounded(self, worker: Any, label: str) -> bool:
+        """Request cooperative stop and wait only a bounded time for *worker*."""
+
+        if worker is None or not worker.isRunning():
+            return True
+        worker.stop()
+        stopped = worker.wait(self._WORKER_SHUTDOWN_WAIT_MS)
+        if not stopped:
+            logger.warning(
+                "%s worker did not stop within %d ms during dialog shutdown",
+                label,
+                self._WORKER_SHUTDOWN_WAIT_MS,
+            )
+        return bool(stopped)
+
+    def _shutdown_background_workers(self) -> bool:
+        """Stop optimizer and preview workers without allowing an endless UI wait."""
+
+        optimizer_stopped = self._stop_worker_bounded(self.optimizer, "optimizer")
+        preview_stopped = self._stop_worker_bounded(self.preview_worker, "preview")
+        return optimizer_stopped and preview_stopped
+
+    def _begin_terminal_shutdown(self) -> bool:
+        """Stop workers before a terminal exit, keeping a failed stop retryable."""
+
+        if self._terminal_shutdown_started:
+            return True
+        if not self._shutdown_background_workers():
+            self.status_label.setText(
+                "Stopping background work… this dialog will remain open until it ends."
+            )
+            return False
+        self._terminal_shutdown_started = True
+        return True
+
+    def reject(self) -> None:
+        """Cancel safely even when Qt hides the dialog without a close event."""
+
+        if self._begin_terminal_shutdown():
+            super().reject()
+
+    def accept(self) -> None:
+        """Stop background work before applying a selected candidate and closing."""
+
+        if self._begin_terminal_shutdown():
+            super().accept()
+
+    def done(self, result: int) -> None:
+        """Cover accept/reject and direct Qt ``done`` lifecycle exits."""
+
+        if self._begin_terminal_shutdown():
+            super().done(result)
+
     def closeEvent(self, event) -> None:
+        if not self._begin_terminal_shutdown():
+            event.ignore()
+            return
         self._save_state()
-        if self.optimizer and self.optimizer.isRunning():
-            self.optimizer.stop()
-            self.optimizer.wait()
-        if self.preview_worker and self.preview_worker.isRunning():
-            self.preview_worker.stop()
-            self.preview_worker.wait()
         super().closeEvent(event)

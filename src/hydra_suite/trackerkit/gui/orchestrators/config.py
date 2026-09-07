@@ -128,47 +128,27 @@ def detection_cache_dir_covers_range(
     start_frame: int,
     end_frame: int,
 ) -> bool:
-    """Return True iff *path* names a modern detection cache (directory or
-    the ``detection.npz`` file inside one) that is key-compatible with
-    *params* and covers ``start_frame..end_frame``.
+    """Return True iff *path* names a complete modern replay cache set.
+
+    ``path`` may be the cache directory or its ``detection.npz`` member.  In
+    addition to detection key/range compatibility, every configured
+    downstream evidence member must have a matching key, generation, and
+    coverage.  Otherwise the optimizer must prepare fresh full evidence
+    instead of falsely skipping that preparation and immediately failing its
+    read-only production validation.
 
     Only the modern ``InferenceRunner`` cache-directory layout (built by
     ``DetectionCacheBuildWorker``) is recognized -- there is no legacy
-    single-file fallback. Method/model compatibility is enforced entirely by
-    the stored ``cache_key`` (see ``DetectionCacheHandle.is_valid``) -- a
-    cache built for a different detection method or model simply fails the
-    key check and is treated as not covering the range. A non-existent path,
-    or one whose containing directory doesn't exist, returns False rather
-    than raising.
+    single-file fallback. A non-existent path, or one whose containing
+    directory doesn't exist, returns False rather than raising.
     """
-    if not path:
-        return False
-    p = Path(path)
-    cache_dir = p if p.is_dir() else p.parent
-    if not cache_dir.is_dir():
-        return False
-    try:
-        from hydra_suite.core.inference.runner import _open_caches, video_signature
-        from hydra_suite.core.tracking.optimization.detection_config import (
-            inference_config_for_optimizer_params,
-        )
+    from hydra_suite.core.tracking.optimization.production_replay import (
+        inspect_replay_cache_admission,
+    )
 
-        _cfg = inference_config_for_optimizer_params(params)
-        caches = _open_caches(
-            _cfg,
-            cache_dir,
-            video_signature(video_path),
-            params.get("ROI_MASK", None),
-            read_only=True,
-        )
-        handle = caches.detection
-        return (
-            caches.set_manifest_valid
-            and handle is not None
-            and handle.covers_frame_range(start_frame, end_frame)
-        )
-    except Exception:
-        return False
+    return inspect_replay_cache_admission(
+        path, video_path, params, start_frame, end_frame
+    ).ready
 
 
 class ConfigOrchestrator:
@@ -3114,6 +3094,9 @@ class ConfigOrchestrator:
         """
         import re
 
+        from hydra_suite.core.tracking.optimization.production_replay import (
+            cache_directory,
+        )
         from hydra_suite.utils.video_artifacts import (
             build_optimizer_detection_cache_path,
             candidate_artifact_base_dirs,
@@ -3131,7 +3114,7 @@ class ConfigOrchestrator:
 
         # 1. Production cache from current session — key-checked by _is_valid.
         if _is_valid(self._mw.current_detection_cache_path):
-            return self._mw.current_detection_cache_path, True
+            return str(cache_directory(self._mw.current_detection_cache_path)), True
 
         csv_dir = (
             os.path.dirname(self._panels.setup.csv_line.text())
@@ -3150,9 +3133,11 @@ class ConfigOrchestrator:
         ):
             candidate_str = str(candidate)
             if _is_valid(candidate_str):
-                return candidate_str, True
+                return str(cache_directory(candidate_str)), True
 
-        # 3. Fallback: compute a write-target path for a new detection-only build.
+        # 3. Fallback: compute a write-target path for a replay-evidence
+        #    preparation pass. It persists raw detections and every configured
+        #    downstream stage needed by production-faithful replay.
         #    Include the detection method so different methods never share a cache.
         if detection_method == "yolo_obb":
             model_raw = os.path.splitext(
@@ -3178,11 +3163,11 @@ class ConfigOrchestrator:
     def _build_optimizer_detection_cache(
         self, video_path: str, cache_path: str, params: dict
     ):
-        """Spin up a DetectionCacheBuildWorker and show progress in the main window.
+        """Prepare replay evidence in the background and show progress.
 
         ``cache_path`` is used as the InferenceRunner cache **directory**
-        (it holds ``detection.npz`` plus a cache key), not a legacy
-        single-file ``DetectionCache``.
+        (it holds ``detection.npz`` plus configured downstream evidence and
+        cache keys), not a legacy single-file ``DetectionCache``.
         """
         from hydra_suite.trackerkit.gui.workers.param_optimizer_worker import (
             DetectionCacheBuildWorker,
@@ -3204,7 +3189,7 @@ class ConfigOrchestrator:
         self._mw.progress_bar.setVisible(True)
         self._mw.progress_label.setVisible(True)
         self._mw.progress_bar.setValue(0)
-        self._mw.progress_label.setText("Building detection cache for optimizer...")
+        self._mw.progress_label.setText("Preparing replay evidence for optimizer...")
         self._mw._cache_builder_worker.start()
 
     def _apply_optimized_params(self, new_params):
@@ -3249,12 +3234,13 @@ class ConfigOrchestrator:
         if not already_valid:
             res = QMessageBox.question(
                 self._mw,
-                "Detection Required",
-                "No detection cache covering frames "
+                "Replay Evidence Required",
+                "No replay-evidence cache covering frames "
                 f"{start_frame}\u2013{end_frame} was found.\n\n"
-                "Run a quick detection-only scan now?\n"
-                "(No config save, no pose inference, no CSV output \u2014 "
-                "detections only.)",
+                "Prepare production-faithful replay evidence now?\n"
+                "(This runs raw detection and any configured head-tail, CNN, "
+                "pose, or AprilTag stages. No configuration save or tracking "
+                "CSV output.)",
                 QMessageBox.Yes | QMessageBox.No,
             )
             if res == QMessageBox.Yes:

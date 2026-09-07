@@ -38,17 +38,23 @@ from hydra_suite.core.individual.pose.features import (
 from hydra_suite.core.individual.pose.features import (
     load_pose_context_from_params as _pf_load_pose_context,
 )
-from hydra_suite.core.inference.runner import _open_caches, video_signature
+from hydra_suite.core.inference.runner import (
+    _open_caches,
+    frame_space_roi_mask,
+    video_signature,
+)
 from hydra_suite.core.inference.stages.filtering import filter_for_source
 from hydra_suite.core.tracking.arenas import arena_ids_for_meas as _meas_arena_ids
 from hydra_suite.core.tracking.arenas import (
     arena_layout_from_params,
     check_slot_arena_covers_all_slots,
+    free_detection_can_bootstrap_slot,
     tracking_frame_size,
 )
 from hydra_suite.core.tracking.optimization.detection_config import (
     inference_config_for_optimizer_params,
 )
+from hydra_suite.core.tracking.optimization.production_replay import cache_directory
 
 logger = logging.getLogger(__name__)
 
@@ -191,6 +197,8 @@ def _preview_init_free_detections(
     tracking_continuity,
     trajectory_ids,
     next_trajectory_id,
+    meas_arena=None,
+    slot_arena=None,
 ):
     """Assign free detections to lost track slots (preview worker)."""
     newly_initialized: dict[int, tuple[float, float, float]] = {}
@@ -201,6 +209,10 @@ def _preview_init_free_detections(
                 r not in existing_matched | set(newly_initialized)
                 and track_states[r] == "lost"
             ):
+                if not free_detection_can_bootstrap_slot(
+                    d_idx, r, meas_arena, slot_arena
+                ):
+                    continue
                 m = np.asarray(meas[d_idx], dtype=np.float32)
                 _pose_d = (
                     bool(detection_directed_mask[d_idx])
@@ -319,8 +331,6 @@ def run_tracking_preview(
     to this function and wires ``frame_cb``/``stop_check`` to its own
     signal/flag.
     """
-    from pathlib import Path
-
     cap = cv2.VideoCapture(video_path)
     # Open the InferenceRunner detection cache read-only. This handle
     # must never have close() called on it: DetectionCacheHandle.close()
@@ -329,7 +339,7 @@ def run_tracking_preview(
     cfg = inference_config_for_optimizer_params(params)
     caches = _open_caches(
         cfg,
-        Path(detection_cache_path),
+        cache_directory(detection_cache_path),
         video_signature(video_path),
         params.get("ROI_MASK", None),
         read_only=True,
@@ -354,9 +364,10 @@ def run_tracking_preview(
         # single-arena keeps the assigner's original ungated path.
         _arena_layout = arena_layout_from_params(params)
         check_slot_arena_covers_all_slots(_arena_layout, params["MAX_TARGETS"])
-        assigner.set_track_arena(
+        _slot_arena = (
             None if _arena_layout.is_single_arena else _arena_layout.slot_arena
         )
+        assigner.set_track_arena(_slot_arena)
         _arena_frame_size = None
         if not _arena_layout.is_single_arena:
             _arena_frame_size = tracking_frame_size(
@@ -373,7 +384,11 @@ def run_tracking_preview(
                 self.inference_config = inference_config_for_optimizer_params(p)
 
         det_filter = _ParamsFilter(params)
-        _roi_mask = params.get("ROI_MASK", None)
+        # Cache detections are native-frame coordinates while the dialog's ROI
+        # can be display-space. Match live replay and optimizer filtering before
+        # indexing the mask so preview never rejects/admits detections on a
+        # different geometry than production.
+        _roi_mask = frame_space_roi_mask(params.get("ROI_MASK", None), video_path)
 
         N = params["MAX_TARGETS"]
 
@@ -565,6 +580,8 @@ def run_tracking_preview(
                     tracking_continuity,
                     trajectory_ids,
                     next_trajectory_id,
+                    meas_arena=_meas_arena,
+                    slot_arena=_slot_arena,
                 )
                 current_observations.update(newly_initialized)
             else:

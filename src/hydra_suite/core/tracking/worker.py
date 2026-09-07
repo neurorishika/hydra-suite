@@ -44,6 +44,7 @@ from hydra_suite.core.individual.pose.features import (
 from hydra_suite.core.tracking.arenas import (
     arena_layout_from_params,
     check_slot_arena_covers_all_slots,
+    free_detection_can_bootstrap_slot,
 )
 from hydra_suite.core.tracking.confidence.density import get_density_region_flags
 from hydra_suite.core.tracking.features.live_features import (
@@ -75,6 +76,12 @@ from hydra_suite.utils.video_encoder import VideoEncoder
 
 logger = logging.getLogger(__name__)
 
+# Density policy is carried by the explicit ``hard_blocked`` matrix passed to
+# TrackAssigner. This numerical sentinel only keeps those pairs out of the
+# ordinary assignment solve; keep it local so the tracking worker's lightweight
+# import boundary does not depend on a private assigner implementation detail.
+_DENSITY_REJECT_COST = 1e9
+
 # Task 18: USE_NEW_INFERENCE_PIPELINE feature flag removed — new InferenceRunner
 # pipeline is now the permanent path.  The legacy env-var toggle has been dropped.
 from hydra_suite.core.inference.config import (  # noqa: E402
@@ -85,6 +92,7 @@ from hydra_suite.core.inference.config import (  # noqa: E402
 from hydra_suite.core.inference.runner import InferenceRunner  # noqa: E402
 from hydra_suite.core.tracking.ingest.frame_result_bridge import (  # noqa: E402
     build_density_cache_dict,
+    density_cache_covered_frame_count,
     evidence_cache_for_cnn_phase_state,
     frame_result_to_meas,
     populate_live_cnn_store,
@@ -143,6 +151,8 @@ class TrackingEngineCore:
         on_pose_model_resolved=None,
         inference_cache_dir=None,
         cache_read_only_replay=False,
+        inference_cache_provenance_params=None,
+        should_stop=None,
     ):
         self._on_frame = on_frame
         self._on_finished = on_finished
@@ -164,6 +174,15 @@ class TrackingEngineCore:
         # as a read-only evaluator.
         self.inference_cache_dir = inference_cache_dir
         self.cache_read_only_replay = bool(cache_read_only_replay)
+        # Read-only replay can process only a held-out subrange while opening
+        # caches produced from a larger production range. Keep cache-range
+        # provenance separate from loop bounds.
+        self.inference_cache_provenance_params = (
+            dict(inference_cache_provenance_params)
+            if inference_cache_provenance_params is not None
+            else None
+        )
+        self._external_should_stop = should_stop or (lambda: False)
         self.video_writer = None
         self._params_lock = threading.Lock()
         self.parameters = {}
@@ -181,6 +200,10 @@ class TrackingEngineCore:
         # Internal state variables that helper methods depend on
         self.frame_count = 0
         self.trajectories_full = []
+        # Production resets ``trajectories_full`` when a slot respawns, while
+        # its CSV has already emitted earlier-epoch rows. Replay needs the
+        # complete append-only observed history to score production semantics.
+        self._replay_observation_sink = []
 
         # Confidence density regions (computed after pre-detection phase)
         self._density_regions = []
@@ -447,6 +470,40 @@ class TrackingEngineCore:
             except Exception:
                 logger.debug("Failed to stop frame prefetcher", exc_info=True)
 
+    def _is_stop_requested(self) -> bool:
+        """Return cooperative stop state, including a replay cancellation token."""
+
+        if self._stop_requested:
+            return True
+        try:
+            return bool(self._external_should_stop())
+        except Exception:
+            # A cancellation predicate is an optional diagnostic integration;
+            # an error there must not crash an otherwise valid tracking run.
+            logger.exception("Replay cancellation predicate failed; continuing run")
+            return False
+
+    @property
+    def replay_observations(self):
+        """Append-only matched observations for replay consumers.
+
+        These are the real measurements the CSV writer emits, grouped by slot.
+        They intentionally survive lifecycle resets in ``trajectories_full``.
+        """
+
+        return self._replay_observation_sink
+
+    def _cache_provenance_params(self, params):
+        """Overlay cache range provenance on current candidate parameters."""
+
+        resolved = dict(params)
+        provenance = self.inference_cache_provenance_params
+        if provenance is not None:
+            for name in ("START_FRAME", "END_FRAME"):
+                if name in provenance:
+                    resolved[name] = provenance[name]
+        return resolved
+
     def _forward_frame_iterator(self, cap, use_prefetcher=False):
         """Iterate through frames in forward direction.
 
@@ -461,7 +518,7 @@ class TrackingEngineCore:
             self.frame_prefetcher = FramePrefetcher(cap, buffer_size=2)
             self.frame_prefetcher.start()
 
-            while not self._stop_requested:
+            while not self._is_stop_requested():
                 ret, frame = self.frame_prefetcher.read()
                 if not ret:
                     break
@@ -472,7 +529,7 @@ class TrackingEngineCore:
             self.frame_prefetcher = None
         else:
             # Standard synchronous frame reading
-            while not self._stop_requested:
+            while not self._is_stop_requested():
                 ret, frame = cap.read()
                 if not ret:
                     break
@@ -497,13 +554,13 @@ class TrackingEngineCore:
             # Backward mode: iterate from end_frame down to start_frame
             # This matches the cache keys which are actual video frame indices
             for relative_idx in range(total_frames):
-                if self._stop_requested:
+                if self._is_stop_requested():
                     break
                 yield None, relative_idx + 1  # Return None for frame, 1-indexed count
         else:
             # Forward cached mode: iterate from start_frame to end_frame
             for relative_idx in range(total_frames):
-                if self._stop_requested:
+                if self._is_stop_requested():
                     break
                 yield None, relative_idx + 1  # Return None for frame, 1-indexed count
 
@@ -919,6 +976,9 @@ class TrackingEngineCore:
         # TrackingPreviewWorker do not have, and causing parameter divergence.
         track_states, missed_frames = ["lost"] * N, [0] * N
         self.trajectories_full = [[] for _ in range(N)]
+        self._replay_observation_sink = (
+            [[] for _ in range(N)] if self.cache_read_only_replay else []
+        )
         trajectories_pruned = [[] for _ in range(N)]
         position_deques = [
             deque(maxlen=2) for _ in range(N)
@@ -987,6 +1047,11 @@ class TrackingEngineCore:
         inference_runner = None  # InferenceRunner for yolo_obb mode
         bgsub_runner = None  # InferenceRunner for background-subtraction mode
         use_cached_detections = False
+        _density_source_signature = None
+        # Read-only replay performs density admission before cache reuse is
+        # deeply validated/materialized. The exact covered-frame count is
+        # retained for the later build so it need not inspect the cache twice.
+        _density_replay_frame_count: int | None = None
 
         # Identity Phase 3, Task 4: resolve the catalog + per-phase calibration
         # ONCE, ahead of the yolo_obb InferenceRunner construction below, so
@@ -1060,6 +1125,84 @@ class TrackingEngineCore:
                 roi_mask=p.get("ROI_MASK"),
                 identity_evidence=_identity_evidence_run_config,
             )
+            if self.cache_read_only_replay and density_map_enabled:
+                # Refuse an unaffordable candidate before ``caches_all_valid``
+                # performs its deep legacy/chunk validation or the density
+                # bridge filters and decompresses OBB payloads. The bridge
+                # reads a compact chunk manifest, or uses the requested span
+                # as a conservative legacy upper bound.
+                from hydra_suite.core.tracking.confidence.confidence_density import (
+                    DEFAULT_AUTOTUNE_DENSITY_MAX_BYTES,
+                    admit_density_map_working_set,
+                )
+
+                try:
+                    _density_preflight_h = int(cap.get(cv2.CAP_PROP_FRAME_HEIGHT))
+                    _density_preflight_w = int(cap.get(cv2.CAP_PROP_FRAME_WIDTH))
+                    _density_preflight_ds = int(p.get("DENSITY_DOWNSAMPLE_FACTOR", 8))
+                    _density_preflight_multi_arena = bool(
+                        self.arena_layout is not None
+                        and not self.arena_layout.is_single_arena
+                        and self.arena_layout.label_image is not None
+                    )
+                    _density_replay_frame_count = density_cache_covered_frame_count(
+                        inference_runner,
+                        start_frame,
+                        end_frame,
+                        should_stop=self._is_stop_requested,
+                    )
+                    admit_density_map_working_set(
+                        _density_replay_frame_count,
+                        _density_preflight_h,
+                        _density_preflight_w,
+                        _density_preflight_ds,
+                        temporal_sigma=float(p.get("DENSITY_TEMPORAL_SIGMA", 2.0)),
+                        multi_arena=_density_preflight_multi_arena,
+                        arena_count=(
+                            int(self.arena_layout.n_arenas)
+                            if _density_preflight_multi_arena
+                            else 1
+                        ),
+                        max_working_bytes=int(
+                            p.get(
+                                "AUTOTUNE_DENSITY_MAX_BYTES",
+                                DEFAULT_AUTOTUNE_DENSITY_MAX_BYTES,
+                            )
+                        ),
+                    )
+                except Exception:
+                    # This admission runs before the worker's normal cleanup
+                    # section. Close the read-only cache and capture here so a
+                    # failed, rejected, or cancelled replay never leaks either
+                    # resource. Bare re-raise preserves the original reason.
+                    try:
+                        inference_runner.close()
+                    except Exception:
+                        logger.debug(
+                            "Failed to close replay cache after density preflight",
+                            exc_info=True,
+                        )
+                    try:
+                        cap.release()
+                    except Exception:
+                        logger.debug(
+                            "Failed to release capture after density preflight",
+                            exc_info=True,
+                        )
+                    raise
+            # A density sidecar is valid only for the raw detection generation
+            # used by this runner, not merely for the cache directory it shares
+            # with past detector/model configurations.
+            from hydra_suite.core.inference.cache.keys import (
+                detection_cache_key,
+                video_signature,
+                with_video_signature,
+            )
+
+            _density_source_signature = with_video_signature(
+                detection_cache_key(_inference_cfg.obb, p.get("ROI_MASK")),
+                video_signature(self.video_path),
+            ).as_string()
 
             if self.backward_mode or self.cache_read_only_replay:
                 if not inference_runner.caches_all_valid():
@@ -1132,8 +1275,17 @@ class TrackingEngineCore:
                     from hydra_suite.core.tracking.confidence.confidence_density import (
                         load_regions as _load_regions,
                     )
+                    from hydra_suite.core.tracking.confidence.density_artifacts import (
+                        density_regions_cache_path,
+                    )
 
-                    _regions_path = _cache_dir / "confidence_regions.json"
+                    _regions_path = density_regions_cache_path(
+                        _cache_dir,
+                        p,
+                        start_frame,
+                        end_frame,
+                        source_signature=_density_source_signature,
+                    )
                     if _regions_path.exists():
                         self._density_regions = _load_regions(_regions_path)
                         logger.info(
@@ -1174,7 +1326,7 @@ class TrackingEngineCore:
             )
             bgsub_inference_config = InferenceConfig(
                 obb=None,
-                bgsub=BgSubConfig.from_params(p),
+                bgsub=BgSubConfig.from_params(self._cache_provenance_params(p)),
                 runtime_tier=_runtime_tier,
                 detection_batch_size=int(p.get("DETECTION_BATCH_SIZE", 1) or 1),
             )
@@ -1268,7 +1420,7 @@ class TrackingEngineCore:
                             if int(p.get("END_FRAME", -1)) >= 0
                             else None
                         ),
-                        should_stop=lambda: self._stop_requested,
+                        should_stop=self._is_stop_requested,
                     )
             except Exception as _bp_err:
                 profiler.phase_end("batched_detection")
@@ -1323,7 +1475,17 @@ class TrackingEngineCore:
         ):
             profiler.phase_start("confidence_density")
 
-            _regions_path = _cache_dir / "confidence_regions.json"
+            from hydra_suite.core.tracking.confidence.density_artifacts import (
+                density_regions_cache_path,
+            )
+
+            _regions_path = density_regions_cache_path(
+                _cache_dir,
+                p,
+                start_frame,
+                end_frame,
+                source_signature=_density_source_signature,
+            )
             if _regions_path.exists() and not self.cache_read_only_replay:
                 # Regions already computed — just load them.
                 try:
@@ -1348,6 +1510,10 @@ class TrackingEngineCore:
                     import cv2 as _cv2
 
                     from hydra_suite.core.tracking.confidence.confidence_density import (
+                        DEFAULT_AUTOTUNE_DENSITY_MAX_BYTES,
+                        ConfidenceDensityCancelled,
+                        DensityReplayBudgetExceeded,
+                        admit_density_map_working_set,
                         compute_density_map_from_cache,
                         export_diagnostic_video,
                         save_regions,
@@ -1356,20 +1522,11 @@ class TrackingEngineCore:
                     _frame_h = int(cap.get(_cv2.CAP_PROP_FRAME_HEIGHT))
                     _frame_w = int(cap.get(_cv2.CAP_PROP_FRAME_WIDTH))
 
-                    # Build {frame_idx: (meas_arr, confs_arr, sizes_arr)} from runner caches
-                    _cache_dict = build_density_cache_dict(
-                        inference_runner, start_frame, end_frame
-                    )
-
-                    def _density_progress(pct, msg):
-                        logger.info(msg)
-                        self._emit_progress(pct, msg)
-
-                    logger.info("Computing confidence density map...")
-                    self._emit_progress(0, "Computing confidence density map...")
-
                     # Compute min_area_px in grid-pixel units from body-size fraction.
                     _density_ds = int(p.get("DENSITY_DOWNSAMPLE_FACTOR", 8))
+                    _density_temporal_sigma = float(
+                        p.get("DENSITY_TEMPORAL_SIGMA", 2.0)
+                    )
                     _body_size_px = float(p.get("REFERENCE_BODY_SIZE", 20.0)) * float(
                         p.get("RESIZE_FACTOR", 1.0)
                     )
@@ -1379,12 +1536,73 @@ class TrackingEngineCore:
                         * _body_size_grid**2
                     )
 
+                    _density_budget = (
+                        int(
+                            p.get(
+                                "AUTOTUNE_DENSITY_MAX_BYTES",
+                                DEFAULT_AUTOTUNE_DENSITY_MAX_BYTES,
+                            )
+                        )
+                        if self.cache_read_only_replay
+                        else None
+                    )
+                    if (
+                        self.cache_read_only_replay
+                        and _density_replay_frame_count is None
+                    ):
+                        # Future read-only callers that reach density evidence
+                        # without the early YOLO preflight retain its bounded
+                        # behavior. Ordinary replay reuses the already-admitted
+                        # count and does not repeat this work.
+                        _covered_density_frames = density_cache_covered_frame_count(
+                            inference_runner,
+                            start_frame,
+                            end_frame,
+                            should_stop=self._is_stop_requested,
+                        )
+                        _density_multi_arena = bool(
+                            self.arena_layout is not None
+                            and not self.arena_layout.is_single_arena
+                            and self.arena_layout.label_image is not None
+                        )
+                        admit_density_map_working_set(
+                            _covered_density_frames,
+                            _frame_h,
+                            _frame_w,
+                            _density_ds,
+                            temporal_sigma=_density_temporal_sigma,
+                            multi_arena=_density_multi_arena,
+                            arena_count=(
+                                int(self.arena_layout.n_arenas)
+                                if _density_multi_arena
+                                else 1
+                            ),
+                            max_working_bytes=_density_budget,
+                        )
+
+                    # Build candidate-filtered native-frame detections only
+                    # after replay admission. This remains the exact cached
+                    # replay filter/ROI path used by tracking itself.
+                    _cache_dict = build_density_cache_dict(
+                        inference_runner,
+                        start_frame,
+                        end_frame,
+                        should_stop=self._is_stop_requested,
+                    )
+
+                    def _density_progress(pct, msg):
+                        logger.info(msg)
+                        self._emit_progress(pct, msg)
+
+                    logger.info("Computing confidence density map...")
+                    self._emit_progress(0, "Computing confidence density map...")
+
                     _dm, _raw_grids = compute_density_map_from_cache(
                         detection_cache=_cache_dict,
                         frame_h=_frame_h,
                         frame_w=_frame_w,
                         sigma_scale=float(p.get("DENSITY_GAUSSIAN_SIGMA_SCALE", 1.0)),
-                        temporal_sigma=float(p.get("DENSITY_TEMPORAL_SIGMA", 2.0)),
+                        temporal_sigma=_density_temporal_sigma,
                         threshold=float(p.get("DENSITY_BINARIZE_THRESHOLD", 0.3)),
                         downsample_factor=int(p.get("DENSITY_DOWNSAMPLE_FACTOR", 8)),
                         min_frame_duration=int(p.get("DENSITY_MIN_FRAME_DURATION", 3)),
@@ -1397,6 +1615,12 @@ class TrackingEngineCore:
                         # path structurally -- see
                         # `compute_density_map_from_cache`'s dispatch.
                         arena_layout=self.arena_layout,
+                        # Candidate replay must either use candidate-specific
+                        # density evidence or fail validation explicitly.  The
+                        # bounded admission guard is intentionally replay-only;
+                        # ordinary production tracking remains uncapped here.
+                        max_working_bytes=_density_budget,
+                        should_stop=self._is_stop_requested,
                     )
                     self._density_regions = _dm.regions
 
@@ -1456,6 +1680,8 @@ class TrackingEngineCore:
                             output_scale=1.0 / _diag_ds,
                             binary_volume=_dm.binary_volume,
                             progress_callback=_density_progress,
+                            density_frame_indices=_dm.frame_indices,
+                            start_frame_index=start_frame,
                         )
                         logger.info(f"Diagnostic video exported: {_diag_path}")
                     else:
@@ -1472,7 +1698,38 @@ class TrackingEngineCore:
                     if start_frame > 0:
                         cap.set(_cv2.CAP_PROP_POS_FRAMES, start_frame)
 
-                except Exception:
+                except ConfidenceDensityCancelled:
+                    # Do not turn a cancelled density build into an empty map:
+                    # the production replay must end so held-out validation
+                    # reports cancellation rather than scoring partial evidence.
+                    logger.info("Confidence density map generation cancelled")
+                    raise
+                except DensityReplayBudgetExceeded as exc:
+                    message = (
+                        "Held-out autotuner replay lacks required "
+                        f"confidence-density evidence: {exc}"
+                    )
+                    logger.warning(message)
+                    self._emit_warning(
+                        "Autotuner Density Evidence Unavailable", message
+                    )
+                    # ProductionReplayEvaluator converts this into a rejected
+                    # candidate result.  Continuing with [] would silently
+                    # evaluate different assignment semantics.
+                    raise
+                except Exception as exc:
+                    if self.cache_read_only_replay:
+                        message = (
+                            "Held-out autotuner replay failed while building "
+                            f"candidate confidence-density evidence: {exc}"
+                        )
+                        logger.exception(message)
+                        self._emit_warning(
+                            "Autotuner Density Evidence Unavailable", message
+                        )
+                        # Candidate replay has no valid fallback: an empty map
+                        # is not candidate-specific evidence.
+                        raise
                     logger.exception(
                         "Confidence density map generation failed (non-fatal)"
                     )
@@ -2099,7 +2356,7 @@ class TrackingEngineCore:
         frame_iterator = iter(frame_iterator)
 
         with profiler.armed():
-            while True:
+            while not self._is_stop_requested():
 
                 params = self.get_current_params()
                 detection_method = params.get(
@@ -3056,6 +3313,7 @@ class TrackingEngineCore:
                     # distorting the cost matrix (which can push assignments to
                     # wrong detections farther away).
                     if _density_flags is not None and np.any(_density_flags):
+                        _density_hard_blocked = None
                         _density_factor = float(
                             params.get("DENSITY_CONSERVATIVE_FACTOR", 0.7)
                         )
@@ -3076,8 +3334,13 @@ class TrackingEngineCore:
                             )
                             # Block long-range matches to density-region detections.
                             _flagged_cols = np.where(_density_flags)[0]
+                            _density_hard_blocked = np.zeros(cost.shape, dtype=bool)
                             for _c in _flagged_cols:
-                                cost[_raw_dist[:, _c] >= _density_max_dist, _c] = 1e9
+                                _blocked = _raw_dist[:, _c] >= _density_max_dist
+                                cost[_blocked, _c] = _DENSITY_REJECT_COST
+                                _density_hard_blocked[_blocked, _c] = True
+                    else:
+                        _density_hard_blocked = None
 
                     profiler.tock("cost_matrix")
                     profiler.tick("hungarian")
@@ -3116,6 +3379,7 @@ class TrackingEngineCore:
                             committed_slot_identities=_committed_slot_identities,
                             missed_frames=missed_frames,
                             meas_arena=meas_arena,
+                            hard_blocked=_density_hard_blocked,
                         )
                     )
                     respawned_matches = {r for r in rows if track_states[r] == "lost"}
@@ -3549,6 +3813,8 @@ class TrackingEngineCore:
                         # Update trajectory with actual frame index
                         pt = (meas_x, meas_y, det_theta_out, actual_frame_index)
                         self.trajectories_full[r].append(pt)
+                        if self.cache_read_only_replay:
+                            self._replay_observation_sink[r].append(pt)
                         trajectories_pruned[r].append(pt)
 
                         # Synchronise orientation_last and the KF theta state to the
@@ -3677,30 +3943,36 @@ class TrackingEngineCore:
                         # arena and therefore bootstraps nothing, mirroring the
                         # assigner's treatment of it. Single-arena runs skip the
                         # gate entirely, so their behaviour is byte-identical.
-                        _det_arena = None
-                        if not self.arena_layout.is_single_arena:
-                            if d_idx >= len(meas_arena):
-                                # `raise`, not a silent fall-through to None: a
-                                # short `meas_arena` would disable this gate and
-                                # silently restore the cross-arena bootstrap it
-                                # exists to prevent. Same contract as the
-                                # slot_arena length check above.
-                                raise RuntimeError(
-                                    "meas_arena is shorter than the detection list "
-                                    f"({len(meas_arena)} <= d_idx={d_idx}); the "
-                                    "free-detection bootstrap cannot be arena-gated "
-                                    "and would assign a detection to a foreign "
-                                    "arena's slot."
-                                )
-                            _det_arena = int(meas_arena[d_idx])
                         for track_idx in range(N):
                             if (
                                 track_states[track_idx] == "lost"
                                 and track_idx not in _committed_slots_set
                             ):
+                                if not free_detection_can_bootstrap_slot(
+                                    d_idx,
+                                    track_idx,
+                                    (
+                                        None
+                                        if self.arena_layout.is_single_arena
+                                        else meas_arena
+                                    ),
+                                    (
+                                        None
+                                        if self.arena_layout.is_single_arena
+                                        else self._slot_arena
+                                    ),
+                                ):
+                                    continue
+                                # A free detection may cold-start a lost slot
+                                # past ordinary distance culls, but must never
+                                # bypass density's explicit hard-association
+                                # block. `_assign_respawn` applies the same
+                                # predicate; keeping it here prevents a
+                                # rejected phase-3 pair from immediately being
+                                # re-created by the final bootstrap fallback.
                                 if (
-                                    _det_arena is not None
-                                    and int(self._slot_arena[track_idx]) != _det_arena
+                                    _density_hard_blocked is not None
+                                    and _density_hard_blocked[track_idx, d_idx]
                                 ):
                                     continue
                                 # Diagnostic: log slot reuse distance
@@ -4187,7 +4459,9 @@ class TrackingEngineCore:
 
         # === 3. CLEANUP (Identical to Original) ===
         profiler.phase_start("cleanup")
-        stop_requested = bool(self._stop_requested)
+        stop_requested = self._is_stop_requested()
+        if stop_requested:
+            self._stop_requested = True
         # Stop frame prefetcher if still running
         if self.frame_prefetcher is not None:
             self.frame_prefetcher.stop()
