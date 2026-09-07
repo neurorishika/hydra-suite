@@ -191,6 +191,59 @@ def test_publish_uses_host_only_containment_then_registers(monkeypatch, tmp_path
     assert plan.launch.limits.hard_host_bytes > plan.launch.limits.soft_host_bytes
 
 
+def test_successful_publish_backlinks_the_run_registry(monkeypatch, tmp_path):
+    """A publish that succeeds must stamp the run row, not just the model
+    registry -- this is the provenance link ``_require_registered_run``
+    depends on staying meaningful in the other direction."""
+
+    monkeypatch.setattr(pub, "SupervisedSidecar", _SuccessfulSidecar)
+
+    key, artifact = _publish(tmp_path)
+
+    from hydra_suite.training.registry import load_registry
+
+    record = next(rec for rec in load_registry()["runs"] if rec["run_id"] == "run-1")
+    assert record["published_model_path"] == str(artifact)
+    assert record["published_registry_entry"] == key
+
+
+def test_failed_publish_does_not_backlink_the_run_registry(monkeypatch, tmp_path):
+    class HardLimitSidecar(_SuccessfulSidecar):
+        def wait(self, *, post_exit_check):
+            return _result(ExitKind.HOST_HARD_LIMIT, returncode=-9)
+
+    monkeypatch.setattr(pub, "SupervisedSidecar", HardLimitSidecar)
+
+    with pytest.raises(pub.Sam3PublishError):
+        _publish(tmp_path)
+
+    from hydra_suite.training.registry import load_registry
+
+    record = next(rec for rec in load_registry()["runs"] if rec["run_id"] == "run-1")
+    assert not record.get("published_model_path")
+    assert not record.get("published_registry_entry")
+
+
+def test_backlink_failure_does_not_fail_an_otherwise_successful_publish(
+    monkeypatch, tmp_path, caplog
+):
+    import hydra_suite.training.registry as registry
+
+    monkeypatch.setattr(pub, "SupervisedSidecar", _SuccessfulSidecar)
+    monkeypatch.setattr(
+        registry,
+        "update_run_record",
+        lambda *_a, **_k: (_ for _ in ()).throw(RuntimeError("registry unreachable")),
+    )
+
+    # Must not raise even though the backlink write blew up, and it must say so.
+    with caplog.at_level("ERROR"):
+        key, artifact = _publish(tmp_path)
+    assert key == "sam3_finetuned/run-1.pt"
+    assert Path(artifact).exists()
+    assert any("backlink" in message for message in caplog.messages)
+
+
 def test_sidecar_hard_limit_classification_is_preserved(monkeypatch, tmp_path):
     class HardLimitSidecar(_SuccessfulSidecar):
         def wait(self, *, post_exit_check):
