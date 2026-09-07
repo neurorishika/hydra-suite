@@ -2902,6 +2902,176 @@ comparisons across the two platforms are exactly zero.
 
 ---
 
+## Fix wave (2026-09-07)
+
+Adversarial review of `4661e0b6` (findings in `/tmp/batch-fanout-adversarial/adversarial-findings.md`;
+full write-up in `/tmp/batch-fanout-adversarial/fix-wave-report.md`). Seven commits,
+`4661e0b6` → `4c635bdf`: C1 stranded grandchildren, C2 shared `video_output_path`,
+I2 GUI silently unpinned, I3 in-place artifact rebuild, I4 lock-test PYTHONPATH,
+I5 window-close budget, plus the minor folds and this gate leg. No inference
+numerics changed.
+
+### Why the original gates missed C2
+
+`fanout_gate.sh` wrote a per-video sidecar for EVERY clip, so every job was
+"own-sidecar" and the planner's keystone-baseline branch — the default GUI batch
+flow — was never executed; `runner.py`'s `DISABLE` block also forces
+`video_output_enabled` off, so the annotated video (the one output actually taken
+from the inherited config) was invisible. `INHERIT=1` fixes both: a sidecar for
+the FIRST clip only (with `video_output_enabled: true`), the rest inherit, and
+the gate additionally asserts that every clip rendered its own
+`<stem>_tracking.mp4` beside its own video in BOTH legs.
+
+### RED evidence for C2 (MPS, `INHERIT=1`, `fly_obb worm_bgsub`, planner reverted to pre-C2)
+
+```
+== side outputs: every clip must render its OWN annotated video ==
+✅ seq/fly_obb_tracking.mp4 (53680063 bytes)
+❌ seq/worm_bgsub_tracking.mp4 missing or empty -- no overlay of its own
+❌ seq: 2 clips -> 1 annotated videos (paths collided)
+✅ par/fly_obb_tracking.mp4 (6922411 bytes)
+❌ par/worm_bgsub_tracking.mp4 missing or empty -- no overlay of its own
+❌ par: 2 clips -> 1 annotated videos (paths collided)
+### GATE FAILED
+```
+
+Note the byte counts: in the sequential leg `fly_obb_tracking.mp4` is **53.7 MB**
+— that is the *worm* render, which overwrote the keystone's own overlay (the fly
+render is 6.9 MB, as the fan-out leg shows, where the race went the other way).
+The 8 CSV comparisons were ✅ throughout, which is exactly why this shipped.
+
+### MPS — default leg (`fly_obb worm_bgsub ant_obb_sleap`, `--jobs 2`, `hydra-mps`)
+
+`rc=0` both legs, `3/3 videos succeeded`, 526 child `[job N]` lines.
+
+```
+✅ fly_obb_tracking_backward.csv byte-identical (seq=1495 rows, par=1495 rows)
+✅ fly_obb_tracking_final_with_individual.csv byte-identical (seq=1501 rows, par=1501 rows)
+✅ fly_obb_tracking_final.csv byte-identical (seq=1501 rows, par=1501 rows)
+✅ fly_obb_tracking_forward.csv byte-identical (seq=1495 rows, par=1495 rows)
+✅ worm_bgsub_tracking_backward.csv byte-identical (seq=5001 rows, par=5001 rows)
+✅ worm_bgsub_tracking_final_with_individual.csv byte-identical (seq=2707 rows, par=2707 rows)
+✅ worm_bgsub_tracking_final.csv byte-identical (seq=2707 rows, par=2707 rows)
+✅ worm_bgsub_tracking_forward.csv byte-identical (seq=5001 rows, par=5001 rows)
+✅ ant_obb_sleap_tracking_backward.csv byte-identical (seq=12501 rows, par=12501 rows)
+✅ ant_obb_sleap_tracking_final_with_individual.csv byte-identical (seq=11882 rows, par=11882 rows)
+✅ ant_obb_sleap_tracking_final.csv byte-identical (seq=11882 rows, par=11882 rows)
+✅ ant_obb_sleap_tracking_forward.csv byte-identical (seq=12501 rows, par=12501 rows)
+### GATE PASSED -- fan-out output is byte-identical to sequential.
+```
+
+### MPS — INHERIT leg (keystone-only sidecar + annotated video)
+
+`rc=0` both legs, `3/3 videos succeeded`, 678 child `[job N]` lines. The
+inheriting clips run the fly-OBB keystone config, so their row counts differ from
+the default leg by construction — what matters is seq == par, and that all three
+overlays exist.
+
+```
+✅ fly_obb_tracking_backward.csv byte-identical (seq=1495 rows, par=1495 rows)
+✅ fly_obb_tracking_final_with_individual.csv byte-identical (seq=1501 rows, par=1501 rows)
+✅ fly_obb_tracking_final.csv byte-identical (seq=1501 rows, par=1501 rows)
+✅ fly_obb_tracking_forward.csv byte-identical (seq=1495 rows, par=1495 rows)
+✅ worm_bgsub_tracking_backward.csv byte-identical (seq=1495 rows, par=1495 rows)
+✅ worm_bgsub_tracking_final_with_individual.csv byte-identical (seq=480 rows, par=480 rows)
+✅ worm_bgsub_tracking_final.csv byte-identical (seq=480 rows, par=480 rows)
+✅ worm_bgsub_tracking_forward.csv byte-identical (seq=1474 rows, par=1474 rows)
+✅ ant_obb_sleap_tracking_backward.csv byte-identical (seq=1495 rows, par=1495 rows)
+✅ ant_obb_sleap_tracking_final_with_individual.csv byte-identical (seq=1089 rows, par=1089 rows)
+✅ ant_obb_sleap_tracking_final.csv byte-identical (seq=1089 rows, par=1089 rows)
+✅ ant_obb_sleap_tracking_forward.csv byte-identical (seq=1495 rows, par=1495 rows)
+
+== side outputs: every clip must render its OWN annotated video ==
+✅ seq/fly_obb_tracking.mp4 (6922411 bytes)
+✅ seq/worm_bgsub_tracking.mp4 (53680063 bytes)
+✅ seq/ant_obb_sleap_tracking.mp4 (172692960 bytes)
+✅ seq: 3 clips -> 3 distinct annotated videos
+✅ par/fly_obb_tracking.mp4 (6922411 bytes)
+✅ par/worm_bgsub_tracking.mp4 (53680063 bytes)
+✅ par/ant_obb_sleap_tracking.mp4 (172692960 bytes)
+✅ par: 3 clips -> 3 distinct annotated videos
+### GATE PASSED -- fan-out output is byte-identical to sequential.
+```
+
+Each clip's overlay is byte-for-byte the same size in `seq` and `par`.
+
+### CUDA (mehek, `hydra-cuda`, RTX 6000 Ada) — default leg, `--jobs 2`
+
+Dedicated detached worktree `~/hydra-suite/.worktrees/fanout-fixwave` @ `4c635bdf`
+(transported as a git bundle over scp); `FIXTURES` pointed at the main checkout's
+fixtures (clips and models are gitignored). `rc=0` both legs, `3/3 videos
+succeeded`, 526 child `[job N]` lines.
+
+```
+✅ fly_obb_tracking_backward.csv byte-identical (seq=1495 rows, par=1495 rows)
+✅ fly_obb_tracking_final.csv byte-identical (seq=1501 rows, par=1501 rows)
+✅ fly_obb_tracking_final_with_individual.csv byte-identical (seq=1501 rows, par=1501 rows)
+✅ fly_obb_tracking_forward.csv byte-identical (seq=1495 rows, par=1495 rows)
+✅ worm_bgsub_tracking_backward.csv byte-identical (seq=5001 rows, par=5001 rows)
+✅ worm_bgsub_tracking_final.csv byte-identical (seq=2725 rows, par=2725 rows)
+✅ worm_bgsub_tracking_final_with_individual.csv byte-identical (seq=2725 rows, par=2725 rows)
+✅ worm_bgsub_tracking_forward.csv byte-identical (seq=5001 rows, par=5001 rows)
+✅ ant_obb_sleap_tracking_backward.csv byte-identical (seq=12501 rows, par=12501 rows)
+✅ ant_obb_sleap_tracking_final.csv byte-identical (seq=11843 rows, par=11843 rows)
+✅ ant_obb_sleap_tracking_final_with_individual.csv byte-identical (seq=11843 rows, par=11843 rows)
+✅ ant_obb_sleap_tracking_forward.csv byte-identical (seq=12501 rows, par=12501 rows)
+### GATE PASSED -- fan-out output is byte-identical to sequential.
+```
+
+### CUDA (mehek) — INHERIT leg, `--jobs 2 --gpus 0`
+
+`rc=0` both legs, `3/3 videos succeeded`, 678 child `[job N]` lines, every child
+header showing `# gpu=GPU-088a4fff-9dff-dcce-5c6e-b7b29fc28177` (the UUID pin,
+not an ordinal).
+
+```
+✅ fly_obb_tracking_backward.csv byte-identical (seq=1495 rows, par=1495 rows)
+✅ fly_obb_tracking_final.csv byte-identical (seq=1501 rows, par=1501 rows)
+✅ fly_obb_tracking_final_with_individual.csv byte-identical (seq=1501 rows, par=1501 rows)
+✅ fly_obb_tracking_forward.csv byte-identical (seq=1495 rows, par=1495 rows)
+✅ worm_bgsub_tracking_backward.csv byte-identical (seq=1480 rows, par=1480 rows)
+✅ worm_bgsub_tracking_final.csv byte-identical (seq=503 rows, par=503 rows)
+✅ worm_bgsub_tracking_final_with_individual.csv byte-identical (seq=503 rows, par=503 rows)
+✅ worm_bgsub_tracking_forward.csv byte-identical (seq=1492 rows, par=1492 rows)
+✅ ant_obb_sleap_tracking_backward.csv byte-identical (seq=1495 rows, par=1495 rows)
+✅ ant_obb_sleap_tracking_final.csv byte-identical (seq=1089 rows, par=1089 rows)
+✅ ant_obb_sleap_tracking_final_with_individual.csv byte-identical (seq=1089 rows, par=1089 rows)
+✅ ant_obb_sleap_tracking_forward.csv byte-identical (seq=1495 rows, par=1495 rows)
+
+== side outputs: every clip must render its OWN annotated video ==
+✅ seq/fly_obb_tracking.mp4 (4311711 bytes)
+✅ seq/worm_bgsub_tracking.mp4 (6383494 bytes)
+✅ seq/ant_obb_sleap_tracking.mp4 (52679380 bytes)
+✅ seq: 3 clips -> 3 distinct annotated videos
+✅ par/fly_obb_tracking.mp4 (4311711 bytes)
+✅ par/worm_bgsub_tracking.mp4 (6383494 bytes)
+✅ par/ant_obb_sleap_tracking.mp4 (52679380 bytes)
+✅ par: 3 clips -> 3 distinct annotated videos
+### GATE PASSED -- fan-out output is byte-identical to sequential.
+```
+
+**Honesty note:** mehek was concurrently running an unrelated SAM3 LoRA training
+job (~20 GB of 49 GB VRAM, GPU at 100%) throughout both CUDA legs. It was left
+running (never a sleap/hydra process of ours). The gate asserts byte-identity
+only — it makes no timing claim — so contention does not affect these verdicts,
+but no perf number should be read off these runs.
+
+### Fix-wave test summary (all `hydra-mps`, one file at a time)
+
+| file | result |
+| --- | --- |
+| `tests/test_trackerkit_batch_fanout.py` | 25 passed |
+| `tests/test_trackerkit_batch_plan.py` | 16 passed |
+| `tests/test_trackerkit_batch_fanout_worker.py` | 16 passed |
+| `tests/test_trackerkit_cli_fanout.py` | 14 passed |
+| `tests/test_artifact_lock.py` | 8 passed (also with `env -u PYTHONPATH`) |
+| `tests/test_inference_obb_artifacts.py` | 27 passed, 1 skipped |
+| `tests/test_sleap_export_crop_normalization.py` | 7 passed |
+| `tests/test_runtime_api_sleap_export.py` | 11 passed |
+| `tests/test_sleap_export_predict_worker.py` | 1 passed |
+| `tests/test_cuda_devices.py` | 10 passed |
+| `tests/test_trackerkit_config_schema_fanout.py` | 4 passed |
+
 ## Self-review notes
 
 - Spec §4.1 planner → Task 3; §4.2 devices → Task 2; §4.3 scheduler → Task 4; §4.4 locks → Task 1; §4.5 CLI → Task 5; §4.6 schema → Task 6; §4.7 GUI → Tasks 6-7; §4.8 docs → Task 8; §5 SLEAP → covered by inheritance (no code) and gated in Task 9 step 2; §6 thread caps → Task 9 step 3; §7 verification → Task 9.
