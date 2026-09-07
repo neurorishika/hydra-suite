@@ -1,0 +1,222 @@
+{
+  "clip": "ant_pose_headtail.mp4",
+  "config": "ant_pose_headtail.json",
+  "tier": "gpu",
+  "device": "cuda:0",
+  "gpu": "NVIDIA GeForce RTX 4090",
+  "cudnn_benchmark": false,
+  "cudnn_deterministic": false,
+  "frames_with_detections": 32,
+  "detections_per_frame": [
+    18,
+    18,
+    17,
+    18,
+    18,
+    18,
+    18,
+    18,
+    18,
+    18,
+    16,
+    17,
+    17,
+    17,
+    17,
+    17,
+    17,
+    17,
+    16,
+    18,
+    18,
+    18,
+    18,
+    19,
+    19,
+    19,
+    20,
+    20,
+    20,
+    20,
+    20,
+    20
+  ],
+  "median_dets_per_frame": 18.0,
+  "stages_enabled": {
+    "headtail": true,
+    "cnn": 0,
+    "pose": false
+  },
+  "batch_knobs": {
+    "headtail": 256,
+    "cnn": [],
+    "pose": null,
+    "detection_batch_size": 1
+  },
+  "results": [
+    {
+      "group_size": 1,
+      "n_groups": 32,
+      "total_crops": 579,
+      "warp": {
+        "per_frame_s": [
+          0.054686210001818836,
+          0.054531487985514104,
+          0.054861662996700034
+        ],
+        "accumulated_s": [
+          0.05466327499016188,
+          0.054463095002574846,
+          0.0548498629941605
+        ]
+      },
+      "headtail": {
+        "per_frame_s": [
+          0.26838647498516366,
+          0.26478183901053853,
+          0.2844431079865899
+        ],
+        "accumulated_s": [
+          0.278011434013024,
+          0.2632463409972843,
+          0.2984689159784466
+        ],
+        "agreement": {
+          "determinism_floor": {
+            "n": 579,
+            "flips": 0,
+            "max_abs_prob_delta": 0.0
+          },
+          "per_frame_vs_accumulated": {
+            "n": 579,
+            "flips": 0,
+            "max_abs_prob_delta": 0.0
+          }
+        }
+      }
+    },
+    {
+      "group_size": 4,
+      "n_groups": 8,
+      "total_crops": 579,
+      "warp": {
+        "per_frame_s": [
+          0.07159313999000005,
+          0.056599896983243525,
+          0.08701111999107525
+        ],
+        "accumulated_s": [
+          0.0601913999998942,
+          0.059445832011988387,
+          0.06602088702493347
+        ]
+      },
+      "headtail": {
+        "per_frame_s": [
+          0.2883039890148211,
+          0.2660513189912308,
+          0.2924057040072512
+        ],
+        "accumulated_s": [
+          0.22843461099546403,
+          0.22379483198164962,
+          0.23821017798036337
+        ],
+        "agreement": {
+          "determinism_floor": {
+            "n": 579,
+            "flips": 0,
+            "max_abs_prob_delta": 0.0
+          },
+          "per_frame_vs_accumulated": {
+            "n": 579,
+            "flips": 0,
+            "max_abs_prob_delta": 0.0
+          }
+        }
+      }
+    },
+    {
+      "group_size": 8,
+      "n_groups": 4,
+      "total_crops": 579,
+      "warp": {
+        "per_frame_s": [
+          0.07215289099258371,
+          0.06284495300496928,
+          0.07296796701848507
+        ],
+        "accumulated_s": [
+          0.07621247600764036,
+          0.06401807800284587,
+          0.08419244000106119
+        ]
+      },
+      "headtail": {
+        "per_frame_s": [
+          0.2727324400038924,
+          0.2665530529920943,
+          0.2784798849897925
+        ],
+        "accumulated_s": [
+          0.22324499301612377,
+          0.2135919870052021,
+          0.25230227402062155
+        ],
+        "agreement": {
+          "determinism_floor": {
+            "n": 579,
+            "flips": 0,
+            "max_abs_prob_delta": 0.0
+          },
+          "per_frame_vs_accumulated": {
+            "n": 579,
+            "flips": 0,
+            "max_abs_prob_delta": 0.0
+          }
+        }
+      }
+    },
+    {
+      "group_size": 16,
+      "n_groups": 2,
+      "total_crops": 579,
+      "warp": {
+        "per_frame_s": [
+          0.06695011700503528,
+          0.056815488991560414,
+          0.07722338099847548
+        ],
+        "accumulated_s": [
+          0.06228504900354892,
+          0.05890051799360663,
+          0.06619787201634608
+        ]
+      },
+      "headtail": {
+        "per_frame_s": [
+          0.27577040798496455,
+          0.2693337709933985,
+          0.29184372900635935
+        ],
+        "accumulated_s": [
+          0.23466817100415938,
+          0.23069791801390238,
+          0.2441995599947404
+        ],
+        "agreement": {
+          "determinism_floor": {
+            "n": 579,
+            "flips": 0,
+            "max_abs_prob_delta": 0.0
+          },
+          "per_frame_vs_accumulated": {
+            "n": 579,
+            "flips": 0,
+            "max_abs_prob_delta": 0.0
+          }
+        }
+      }
+    }
+  ]
+}

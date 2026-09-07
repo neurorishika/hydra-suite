@@ -78,6 +78,29 @@ more available memory cannot reduce a recommendation, and a larger input cannot
 increase it. Profiles remain admission evidence only; they cannot raise a hard
 limit or bypass a live reserve check.
 
+## Frame-buffer admission (`detection_batch_size` ceiling)
+
+Before the first window is decoded, `Pipeline` checks that the retained
+decoded frames fit a fixed budget and raises otherwise:
+
+```
+estimated = frame_bytes * detection_batch_size * retained_windows
+retained_windows = queue_bound + 3   if pipeline_depth >= 2
+                 = 1                 if pipeline_depth == 1
+```
+
+The consequence is resolution-dependent and surprises people: on 4K video
+(about 61 MB per decoded frame) at the default `pipeline_depth=2`, any
+`detection_batch_size` above 2 aborts the run, even though the GUI spin box
+offers up to 64. At `pipeline_depth=1` only one window is retained, so larger
+windows are admissible.
+
+This is deliberate containment, not a bug in the check — an unbounded window
+on a long 4K clip is a multi-gigabyte resident buffer. It is documented here
+because the control's range is wider than the admissible range, so the failure
+arrives at run time rather than when the value is chosen. See
+[Performance Tuning](performance-tuning.md).
+
 ## Platform enforcement
 
 ### Linux

@@ -1,0 +1,232 @@
+{
+  "clip": "ant_pose_headtail.mp4",
+  "config": "ant_pose_headtail.json",
+  "tier": "gpu",
+  "device": "mps",
+  "gpu": "cpu",
+  "cudnn_benchmark": false,
+  "cudnn_deterministic": false,
+  "frames_with_detections": 16,
+  "detections_per_frame": [
+    18,
+    18,
+    17,
+    18,
+    18,
+    18,
+    18,
+    18,
+    18,
+    18,
+    17,
+    17,
+    17,
+    17,
+    17,
+    17
+  ],
+  "median_dets_per_frame": 18.0,
+  "stages_enabled": {
+    "headtail": true,
+    "cnn": 0,
+    "pose": true
+  },
+  "batch_knobs": {
+    "headtail": 64,
+    "cnn": [],
+    "pose_sleap": 64,
+    "sleap_env": "sleap",
+    "detection_batch_size": 1
+  },
+  "results": [
+    {
+      "group_size": 1,
+      "n_groups": 16,
+      "total_crops": 281,
+      "warp": {
+        "per_frame_s": [
+          0.10229104105383158,
+          0.09034662507474422,
+          0.10304649919271469
+        ],
+        "accumulated_s": [
+          0.07917300052940845,
+          0.07592004258185625,
+          0.08126229140907526
+        ]
+      },
+      "headtail": {
+        "per_frame_s": [
+          0.3453527083620429,
+          0.3330952087417245,
+          0.3456969168037176
+        ],
+        "accumulated_s": [
+          0.3653846252709627,
+          0.35540645848959684,
+          0.37970654107630253
+        ],
+        "agreement": {
+          "determinism_floor": {
+            "n": 281,
+            "flips": 0,
+            "max_abs_prob_delta": 0.0
+          },
+          "per_frame_vs_accumulated": {
+            "n": 281,
+            "flips": 0,
+            "max_abs_prob_delta": 0.0
+          }
+        }
+      },
+      "pose": {
+        "per_frame_s": [
+          1.1838677497580647,
+          0.8412595000118017,
+          1.2607583329081535
+        ],
+        "accumulated_s": [
+          1.0426043746992946,
+          0.9916818747296929,
+          1.0744492504745722
+        ],
+        "agreement": {
+          "determinism_floor": {
+            "n": 281,
+            "max_abs_px_delta": 0.0
+          },
+          "per_frame_vs_accumulated": {
+            "n": 281,
+            "max_abs_px_delta": 0.0
+          }
+        }
+      }
+    },
+    {
+      "group_size": 4,
+      "n_groups": 4,
+      "total_crops": 281,
+      "warp": {
+        "per_frame_s": [
+          0.10037508327513933,
+          0.09838608279824257,
+          0.11415783315896988
+        ],
+        "accumulated_s": [
+          0.10256333276629448,
+          0.09144758433103561,
+          0.10892195720225573
+        ]
+      },
+      "headtail": {
+        "per_frame_s": [
+          0.397424915805459,
+          0.3912824997678399,
+          0.40297737531363964
+        ],
+        "accumulated_s": [
+          0.35478783305734396,
+          0.35165395867079496,
+          0.3921511247754097
+        ],
+        "agreement": {
+          "determinism_floor": {
+            "n": 281,
+            "flips": 0,
+            "max_abs_prob_delta": 0.0
+          },
+          "per_frame_vs_accumulated": {
+            "n": 281,
+            "flips": 0,
+            "max_abs_prob_delta": 0.0
+          }
+        }
+      },
+      "pose": {
+        "per_frame_s": [
+          1.0636812914162874,
+          1.0249833753332496,
+          1.132112874649465
+        ],
+        "accumulated_s": [
+          0.8342152498662472,
+          0.7700469167903066,
+          0.8840464996173978
+        ],
+        "agreement": {
+          "determinism_floor": {
+            "n": 281,
+            "max_abs_px_delta": 0.0
+          },
+          "per_frame_vs_accumulated": {
+            "n": 281,
+            "max_abs_px_delta": 0.0
+          }
+        }
+      }
+    },
+    {
+      "group_size": 8,
+      "n_groups": 2,
+      "total_crops": 281,
+      "warp": {
+        "per_frame_s": [
+          0.11196054145693779,
+          0.11045224964618683,
+          0.1137825408950448
+        ],
+        "accumulated_s": [
+          0.09801958315074444,
+          0.08680666517466307,
+          0.114954917691648
+        ]
+      },
+      "headtail": {
+        "per_frame_s": [
+          0.4086810825392604,
+          0.40289841685444117,
+          0.4160950407385826
+        ],
+        "accumulated_s": [
+          0.3067160826176405,
+          0.30156445875763893,
+          0.3096159156411886
+        ],
+        "agreement": {
+          "determinism_floor": {
+            "n": 281,
+            "flips": 0,
+            "max_abs_prob_delta": 0.0
+          },
+          "per_frame_vs_accumulated": {
+            "n": 281,
+            "flips": 0,
+            "max_abs_prob_delta": 0.0
+          }
+        }
+      },
+      "pose": {
+        "per_frame_s": [
+          0.8858559997752309,
+          0.7922753747552633,
+          0.9131138753145933
+        ],
+        "accumulated_s": [
+          0.6552258748561144,
+          0.6444647507742047,
+          0.6731147905811667
+        ],
+        "agreement": {
+          "determinism_floor": {
+            "n": 281,
+            "max_abs_px_delta": 0.0
+          },
+          "per_frame_vs_accumulated": {
+            "n": 281,
+            "max_abs_px_delta": 0.0
+          }
+        }
+      }
+    }
+  ]
+}
