@@ -24,8 +24,8 @@ from hydra_suite.core.canonicalization.geometry import (
 from hydra_suite.core.inference.cache import open_detection_cache_reader
 from hydra_suite.core.inference.cache.store import DetectionCacheHandle
 
+from ....utils.heading_flips import _fix_heading_flips
 from ....utils.video_encoder import VideoEncoder
-from ...post.processing import _fix_heading_flips
 from ..geometry import ellipse_axes_from_area, ellipse_to_obb_corners
 from .naming import build_detection_image_filename, build_interpolated_image_filename
 

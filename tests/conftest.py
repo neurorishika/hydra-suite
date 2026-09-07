@@ -90,3 +90,30 @@ def direct_obb_fixture():
     rng = np.random.default_rng(0)
     frames = [rng.integers(0, 255, (480, 640, 3), dtype=np.uint8) for _ in range(2)]
     return frames, models, config, runtime
+
+
+@pytest.fixture(autouse=True)
+def _neutralize_leaked_training_flags():
+    """Never let a leaked "training is running" widget hang the whole suite.
+
+    Several GUI tests drive ``_resume_training``/``_start_training`` with a fake
+    worker and leave the dialog with ``_training_running = True``. That dialog
+    stays alive as a top-level widget for the rest of the pytest process, and
+    DetectKit's ``TrainingDialog.closeEvent`` refuses to close while training by
+    raising a modal ``QMessageBox``. Any later test that closes every top-level
+    widget (a fixture several kits copy) then blocks forever -- pytest-timeout
+    dumps stacks and ``os._exit``s, so every remaining test silently never runs.
+
+    Clearing the flag is enough to make ``closeEvent`` non-blocking; widget
+    lifetimes are deliberately left alone.
+    """
+    yield
+    qtwidgets = sys.modules.get("PySide6.QtWidgets")
+    if qtwidgets is None:
+        return
+    app = qtwidgets.QApplication.instance()
+    if app is None:
+        return
+    for widget in app.topLevelWidgets():
+        if getattr(widget, "_training_running", False):
+            widget._training_running = False
