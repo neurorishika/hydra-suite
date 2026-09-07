@@ -369,17 +369,61 @@ if [ "$INHERIT" = "1" ]; then
       status=1
     fi
   done
-  seq_bytes=""; par_bytes=""
-  [ -f "$OUT/seq/renders/${keystone}_CUSTOM.mp4" ] &&
-    seq_bytes=$(wc -c < "$OUT/seq/renders/${keystone}_CUSTOM.mp4" | tr -d ' ')
-  [ -f "$OUT/par/renders/${keystone}_CUSTOM.mp4" ] &&
-    par_bytes=$(wc -c < "$OUT/par/renders/${keystone}_CUSTOM.mp4" | tr -d ' ')
-  if [ -n "$seq_bytes" ] && [ "$seq_bytes" = "$par_bytes" ]; then
-    echo "✅ keystone custom render: same size on both legs (${seq_bytes} bytes)"
-  else
-    echo "❌ keystone custom render: seq='${seq_bytes:-<missing>}' par='${par_bytes:-<missing>}' bytes -- the legs rendered differently"
-    status=1
-  fi
+  echo
+  echo "-- every render: same content on both legs --"
+  # NOT byte size. macOS renders through h264_videotoolbox, which is provably
+  # nondeterministic (two identical serial encodes of the same 300 frames:
+  # 4005825 B both, but DIFFERENT md5) and whose bitrate is load-sensitive
+  # (the same encode run 2-way concurrent: 3794061 B). A size comparison
+  # therefore measures encoder contention -- which the fan-out leg has and the
+  # sequential leg does not -- rather than anything about the pipeline.
+  # Compare what a lossy encoder DOES preserve exactly.
+  python - "$OUT" "$keystone" "${ENTRIES[@]}" <<'PY'
+import sys
+from pathlib import Path
+
+import cv2
+
+out = Path(sys.argv[1])
+keystone = sys.argv[2]
+entries = sys.argv[3:]
+
+
+def probe(path):
+    cap = cv2.VideoCapture(str(path))
+    try:
+        if not cap.isOpened():
+            return None
+        return (
+            int(cap.get(cv2.CAP_PROP_FRAME_COUNT)),
+            int(cap.get(cv2.CAP_PROP_FRAME_WIDTH)),
+            int(cap.get(cv2.CAP_PROP_FRAME_HEIGHT)),
+            round(float(cap.get(cv2.CAP_PROP_FPS)), 3),
+        )
+    finally:
+        cap.release()
+
+
+rels = [f"renders/{keystone}_CUSTOM.mp4"] + [
+    f"{entry.split('|')[0]}_tracking.mp4" for entry in entries[1:]
+]
+status = 0
+for rel in rels:
+    a, b = probe(out / "seq" / rel), probe(out / "par" / rel)
+    if a is None or b is None:
+        print(f"❌ {rel}: unreadable (seq={a}, par={b})")
+        status = 1
+    elif a != b:
+        print(f"❌ {rel}: seq{a} != par{b} -- the legs rendered DIFFERENT video")
+        status = 1
+    elif a[0] <= 0:
+        print(f"❌ {rel}: zero frames on both legs")
+        status = 1
+    else:
+        print(f"✅ {rel}: {a[0]} frames, {a[1]}x{a[2]} @ {a[3]} fps on both legs")
+sys.exit(status)
+PY
+  [ $? -eq 0 ] || status=1
 fi
 
 if [ "$STAGE_MODELS" = "1" ]; then
@@ -415,6 +459,34 @@ if [ "$STAGE_MODELS" = "1" ]; then
       status=1
     fi
   done
+
+  # "One artifact survives" is ALSO what two racing exporters leave behind --
+  # the atomic installer tidies up after the loser. The only direct evidence
+  # that the build lock engaged is in the children's own logs: exactly one of
+  # them exported, and at least one found the artifact on its re-check inside
+  # the lock.
+  child_logs=$(ls "$OUT/par/"*_logs/*_fanout_*.log 2>/dev/null)
+  if [ -z "$child_logs" ]; then
+    echo "❌ par: no child logs to check for the artifact build lock"
+    status=1
+  else
+    # shellcheck disable=SC2086
+    exported=$(grep -h -c "Exported .*artifact" $child_logs | paste -sd+ - | bc)
+    # shellcheck disable=SC2086
+    waited=$(grep -h -c "built by another process" $child_logs | paste -sd+ - | bc)
+    if [ "${exported:-0}" -eq 1 ]; then
+      echo "✅ par: exactly 1 child exported the artifact (the other waited on the lock)"
+    else
+      echo "❌ par: ${exported:-0} children exported the artifact -- the build lock did not serialize them"
+      status=1
+    fi
+    if [ "${waited:-0}" -ge 1 ]; then
+      echo "✅ par: $waited child(ren) reused the artifact built by another process"
+    else
+      echo "❌ par: no child hit the double-check inside the lock -- the race was never exercised"
+      status=1
+    fi
+  fi
 fi
 
 echo
