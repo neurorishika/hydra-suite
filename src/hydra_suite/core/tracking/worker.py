@@ -15,7 +15,7 @@ from pathlib import Path
 import cv2
 import numpy as np
 
-from hydra_suite.core.assigners.hungarian import HARD_REJECT_COST, TrackAssigner
+from hydra_suite.core.assigners.hungarian import TrackAssigner
 from hydra_suite.core.filters.kalman import KalmanFilterManager
 from hydra_suite.core.individual.geometry import (
     build_detection_direction_overrides as _pf_build_direction_overrides,
@@ -75,6 +75,12 @@ from hydra_suite.utils.video_artifacts import (
 from hydra_suite.utils.video_encoder import VideoEncoder
 
 logger = logging.getLogger(__name__)
+
+# Density policy is carried by the explicit ``hard_blocked`` matrix passed to
+# TrackAssigner. This numerical sentinel only keeps those pairs out of the
+# ordinary assignment solve; keep it local so the tracking worker's lightweight
+# import boundary does not depend on a private assigner implementation detail.
+_DENSITY_REJECT_COST = 1e9
 
 # Task 18: USE_NEW_INFERENCE_PIPELINE feature flag removed — new InferenceRunner
 # pipeline is now the permanent path.  The legacy env-var toggle has been dropped.
@@ -3331,7 +3337,7 @@ class TrackingEngineCore:
                             _density_hard_blocked = np.zeros(cost.shape, dtype=bool)
                             for _c in _flagged_cols:
                                 _blocked = _raw_dist[:, _c] >= _density_max_dist
-                                cost[_blocked, _c] = HARD_REJECT_COST
+                                cost[_blocked, _c] = _DENSITY_REJECT_COST
                                 _density_hard_blocked[_blocked, _c] = True
                     else:
                         _density_hard_blocked = None
