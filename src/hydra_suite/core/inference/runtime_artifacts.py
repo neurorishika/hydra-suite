@@ -47,10 +47,14 @@ from __future__ import annotations
 
 import json
 import logging
+import os
 import shutil
+import tempfile
 from hashlib import sha256
 from pathlib import Path
 from typing import Any
+
+from hydra_suite.runtime.artifact_lock import artifact_build_lock
 
 logger = logging.getLogger(__name__)
 
@@ -139,6 +143,55 @@ def _export_artifact(
     This function only runs on a machine with ultralytics (and, for TRT, a CUDA
     device); the tests inject a fake in its place.
     """
+    # A rebuild INVALIDATES whatever is at ``artifact_path`` right now, so the
+    # freshness marker must go FIRST. ``_fresh()`` is checked once outside the
+    # build lock as a fast path; leaving the marker in place would let a sibling
+    # fan-out child pass that check and load an artifact that is mid-replacement.
+    try:
+        _meta_path(artifact_path).unlink()
+    except FileNotFoundError:
+        pass
+    except OSError:  # pragma: no cover - read-only artifact dir
+        logger.warning(
+            "Could not clear the freshness marker for %s before rebuilding it",
+            artifact_path,
+        )
+
+    if runtime == "coreml":
+        # ultralytics names the CoreML export after the ``.pt`` it was handed and
+        # writes it BESIDE that file -- which, for the real checkpoint, is
+        # character-for-character ``artifact_path``. Exporting from the
+        # checkpoint therefore builds the .mlpackage IN PLACE, exposing a
+        # half-written directory to any concurrent reader (fan-out children all
+        # load the same artifact) and bypassing the atomic installer entirely.
+        # Export from a scratch COPY instead: ``out_path != artifact_path``, so
+        # the finished directory is published by the same swap the TRT path uses.
+        with tempfile.TemporaryDirectory(prefix="hydra-artifact-export-") as scratch:
+            scratch_pt = Path(scratch) / pt_path.name
+            shutil.copy2(str(pt_path), str(scratch_pt))
+            out_path = _run_ultralytics_export(
+                scratch_pt, runtime=runtime, imgsz=imgsz, batch_size=batch_size
+            )
+            # INSIDE the with-block: the scratch dir owns ``out_path``.
+            _install_artifact_atomically(out_path, artifact_path)
+        return artifact_path
+
+    out_path = _run_ultralytics_export(
+        pt_path, runtime=runtime, imgsz=imgsz, batch_size=batch_size
+    )
+    if out_path != artifact_path:
+        _install_artifact_atomically(out_path, artifact_path)
+    return artifact_path
+
+
+def _run_ultralytics_export(
+    pt_path: Path, *, runtime: str, imgsz: int, batch_size: int
+) -> Path:
+    """Run ultralytics' exporter on *pt_path* and return the file it produced.
+
+    Where that file lands is ultralytics' choice (beside the source ``.pt``);
+    publishing it at the artifact path is the caller's job.
+    """
     from ultralytics import YOLO
 
     base_model = YOLO(str(pt_path))
@@ -193,15 +246,64 @@ def _export_artifact(
     out_path = Path(export_path).expanduser().resolve()
     if not out_path.exists():
         raise ArtifactExportError(f"Export produced no output file: {out_path}")
-    if out_path != artifact_path:
-        if out_path.is_dir():
-            # .mlpackage is a directory — use copytree.
-            if artifact_path.exists():
-                shutil.rmtree(str(artifact_path))
-            shutil.copytree(str(out_path), str(artifact_path))
+    return out_path
+
+
+def _remove_path(path: Path) -> None:
+    """Best-effort delete of a file or directory."""
+    try:
+        if path.is_dir() and not path.is_symlink():
+            shutil.rmtree(str(path), ignore_errors=True)
         else:
-            shutil.copy2(str(out_path), str(artifact_path))
-    return artifact_path
+            path.unlink()
+    except (FileNotFoundError, OSError):
+        pass
+
+
+def _install_artifact_atomically(source: Path, artifact_path: Path) -> None:
+    """Publish *source* as *artifact_path* without ever exposing a partial file.
+
+    Concurrent fan-out children can be LOADING ``artifact_path`` while another
+    rebuilds it (per-video sidecars differing in imgsz resolve to the same
+    artifact filename). ``shutil.copy2`` truncates the file under the reader;
+    staging beside it and renaming makes the swap atomic, so a reader sees
+    either the whole old artifact or the whole new one — never a prefix.
+    """
+    staging = artifact_path.parent / f".{artifact_path.name}.tmp-{os.getpid()}"
+    _remove_path(staging)
+    try:
+        if source.is_dir():
+            shutil.copytree(str(source), str(staging))
+        else:
+            shutil.copy2(str(source), str(staging))
+        if artifact_path.is_dir():
+            # os.replace refuses a non-empty directory target (.mlpackage):
+            # move the old one aside, swap the new one in, then delete it.
+            displaced = (
+                artifact_path.parent / f".{artifact_path.name}.old-{os.getpid()}"
+            )
+            _remove_path(displaced)
+            os.rename(str(artifact_path), str(displaced))
+            try:
+                os.rename(str(staging), str(artifact_path))
+            except BaseException:
+                # The old artifact is now the ONLY copy: put it back before
+                # propagating, or this "safer" publish would be the thing that
+                # destroyed it.
+                try:
+                    os.rename(str(displaced), str(artifact_path))
+                except OSError:
+                    logger.error(
+                        "Could not restore %s after a failed swap; it is at %s",
+                        artifact_path,
+                        displaced,
+                    )
+                raise
+            _remove_path(displaced)
+        else:
+            os.replace(str(staging), str(artifact_path))
+    finally:
+        _remove_path(staging)
 
 
 def _force_raw_head(base_model: Any) -> None:
@@ -631,7 +733,10 @@ def _load_coreml_executor(
         else _resolve_imgsz(resolved)
     )
 
-    if _artifact_is_fresh(artifact_path, resolved, imgsz):
+    def _fresh() -> bool:
+        return _artifact_is_fresh(artifact_path, resolved, imgsz)
+
+    if _fresh():
         logger.info("Reusing cached CoreML artifact: %s", artifact_path.name)
     else:
         if not auto_export:
@@ -640,15 +745,27 @@ def _load_coreml_executor(
                 f"for {resolved.name} and auto_export=False. "
                 "Provide a prebuilt .mlpackage or enable auto_export."
             )
-        _export_artifact(
-            pt_path=resolved,
-            artifact_path=artifact_path,
-            runtime="coreml",
-            imgsz=imgsz,
-            batch_size=_DEFAULT_BATCH_SIZE,
-        )
-        _write_fresh_marker(artifact_path, resolved, imgsz)
-        logger.info("Exported CoreML artifact: %s", artifact_path)
+        # Same contract as ``_load_direct_executor``: concurrent fan-out
+        # children on an Apple host (the gpu_fast tier resolves every non-bgsub
+        # stage to CoreML there) all miss the cache at once. Serialize the
+        # build and re-check after the wait (double-checked locking), so the
+        # second child reuses the first's artifact instead of racing it.
+        with artifact_build_lock(artifact_path):
+            if _fresh():
+                logger.info(
+                    "Reusing CoreML artifact built by another process: %s",
+                    artifact_path.name,
+                )
+            else:
+                _export_artifact(
+                    pt_path=resolved,
+                    artifact_path=artifact_path,
+                    runtime="coreml",
+                    imgsz=imgsz,
+                    batch_size=_DEFAULT_BATCH_SIZE,
+                )
+                _write_fresh_marker(artifact_path, resolved, imgsz)
+                logger.info("Exported CoreML artifact: %s", artifact_path)
 
     return _CoreMLBatchExecutor(_load_torch_model(str(artifact_path)))
 
@@ -717,13 +834,16 @@ def _load_direct_executor(
         else _resolve_imgsz(resolved)
     )
 
-    if _artifact_is_fresh(
-        artifact_path,
-        resolved,
-        imgsz,
-        batch_size=batch_size,
-        enforce_trt_profile=True,
-    ):
+    def _fresh() -> bool:
+        return _artifact_is_fresh(
+            artifact_path,
+            resolved,
+            imgsz,
+            batch_size=batch_size,
+            enforce_trt_profile=True,
+        )
+
+    if _fresh():
         logger.info("Reusing cached %s OBB artifact: %s", runtime, artifact_path.name)
     else:
         if not auto_export:
@@ -735,21 +855,31 @@ def _load_direct_executor(
                 f"auto_export (CUDA box) — refusing to silently fall back to "
                 f"PyTorch (H4)."
             )
-        _export_artifact(
-            pt_path=resolved,
-            artifact_path=artifact_path,
-            runtime=runtime,
-            imgsz=imgsz,
-            batch_size=batch_size,
-        )
-        _write_fresh_marker(
-            artifact_path,
-            resolved,
-            imgsz,
-            batch_size=batch_size,
-            enforce_trt_profile=True,
-        )
-        logger.info("Exported %s OBB artifact: %s", runtime, artifact_path)
+        # Concurrent fan-out children may all miss the cache at once;
+        # serialize the build and re-check after the wait (double-checked).
+        with artifact_build_lock(artifact_path):
+            if _fresh():
+                logger.info(
+                    "Reusing %s OBB artifact built by another process: %s",
+                    runtime,
+                    artifact_path.name,
+                )
+            else:
+                _export_artifact(
+                    pt_path=resolved,
+                    artifact_path=artifact_path,
+                    runtime=runtime,
+                    imgsz=imgsz,
+                    batch_size=batch_size,
+                )
+                _write_fresh_marker(
+                    artifact_path,
+                    resolved,
+                    imgsz,
+                    batch_size=batch_size,
+                    enforce_trt_profile=True,
+                )
+                logger.info("Exported %s OBB artifact: %s", runtime, artifact_path)
 
     class_names = _model_class_names(resolved)
     executor = _create_direct_executor(

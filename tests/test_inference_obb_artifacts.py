@@ -619,3 +619,105 @@ def test_load_obb_models_unchanged_when_slicing_disabled(monkeypatch):
 
     _load_obb_for_config(cfg, _RT(), video_path="v.mp4")
     assert captured["batch_size"] == 2  # window depth, exactly as before
+
+
+# --- Concurrent rebuild safety (fan-out siblings share one artifact path) ----
+
+
+def test_export_stages_the_artifact_and_clears_the_marker_first(tmp_path, monkeypatch):
+    """A rebuild must never expose a partial artifact or a stale fresh marker.
+
+    Two fan-out children whose sidecars differ (imgsz / batch) resolve to the
+    SAME artifact filename, so one can be rebuilding while the other loads it.
+    The old code cleared the marker only AFTER the export and copied straight
+    onto ``artifact_path``, truncating the file under the reader.
+    """
+    import sys
+    import types
+
+    from hydra_suite.core.inference import runtime_artifacts as ra
+
+    pt_path = tmp_path / "model.pt"
+    pt_path.write_bytes(b"source")
+    artifact = tmp_path / "model_b1.engine"
+    artifact.write_bytes(b"OLD-ARTIFACT-BYTES")
+    ra._write_fresh_marker(artifact, pt_path, 640, batch_size=1)
+    assert ra._meta_path(artifact).exists()
+
+    seen = {}
+
+    class _FakeYOLO:
+        def __init__(self, path):
+            self.path = path
+
+        def export(self, **kwargs):
+            # Mid-export state, as a concurrent reader would observe it.
+            seen["artifact_bytes"] = artifact.read_bytes()
+            seen["marker_exists"] = ra._meta_path(artifact).exists()
+            out = tmp_path / "runs" / "model.engine"
+            out.parent.mkdir(exist_ok=True)
+            out.write_bytes(b"NEW-ARTIFACT-BYTES")
+            return str(out)
+
+    monkeypatch.setitem(
+        sys.modules, "ultralytics", types.SimpleNamespace(YOLO=_FakeYOLO)
+    )
+    copies = []
+    real_copy2 = ra.shutil.copy2
+
+    def _spy_copy2(src, dst, *args, **kwargs):
+        copies.append((str(src), str(dst)))
+        return real_copy2(src, dst, *args, **kwargs)
+
+    monkeypatch.setattr(ra.shutil, "copy2", _spy_copy2)
+
+    ra._export_artifact(
+        pt_path=pt_path,
+        artifact_path=artifact,
+        runtime="tensorrt",
+        imgsz=640,
+        batch_size=1,
+    )
+
+    assert seen["artifact_bytes"] == b"OLD-ARTIFACT-BYTES"
+    assert seen["marker_exists"] is False, "a stale marker survived into the rebuild"
+    assert artifact.read_bytes() == b"NEW-ARTIFACT-BYTES"
+    # Copied to a STAGING path beside the artifact, never onto it: the publish
+    # itself is a same-directory rename, which is atomic.
+    assert copies, "the export was not copied into place at all"
+    for _src, dst in copies:
+        assert dst != str(artifact), "copied straight onto the artifact"
+        assert Path(dst).parent == artifact.parent
+    # No staging leftovers.
+    assert sorted(p.name for p in tmp_path.iterdir() if p.name.startswith(".")) == []
+
+
+def test_failed_directory_swap_restores_the_previous_artifact(tmp_path, monkeypatch):
+    """The publish must never be the thing that destroys the only good copy."""
+    import os
+
+    from hydra_suite.core.inference import runtime_artifacts as ra
+
+    source = tmp_path / "fresh.mlpackage"
+    source.mkdir()
+    (source / "weights").write_bytes(b"NEW")
+    artifact = tmp_path / "model.mlpackage"
+    artifact.mkdir()
+    (artifact / "weights").write_bytes(b"OLD")
+
+    real_rename = os.rename
+    calls = {"n": 0}
+
+    def _flaky_rename(src, dst):
+        calls["n"] += 1
+        if calls["n"] == 2:  # staging -> artifact_path
+            raise OSError("simulated cross-device failure")
+        return real_rename(src, dst)
+
+    monkeypatch.setattr(ra.os, "rename", _flaky_rename)
+    with pytest.raises(OSError):
+        ra._install_artifact_atomically(source, artifact)
+
+    assert (artifact / "weights").read_bytes() == b"OLD"
+    leftovers = [p.name for p in tmp_path.iterdir() if p.name.startswith(".")]
+    assert leftovers == [], leftovers

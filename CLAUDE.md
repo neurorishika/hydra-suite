@@ -148,6 +148,8 @@ refinekit      # RefineKit interactive proofreading
 detectkit      # DetectKit detection tool
 ```
 
+`trackerkit track --video-list x.txt --gpus auto` fans a batch out one child process per GPU (see `docs/user-guide/trackerkit-cli.md`); fan-out engages only with `--gpus` or `--jobs > 1`, so the plain CLI path stays byte-identical.
+
 ## Code Quality
 
 ```bash

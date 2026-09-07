@@ -119,6 +119,38 @@ Examples:
         ),
     )
 
+    track_parser.add_argument(
+        "--gpus",
+        type=str,
+        default=None,
+        help=(
+            "Run videos as parallel child processes, one per listed GPU. "
+            "Accepts ordinals (0,1,2), ranges (0-8), GPU- UUID prefixes, or "
+            "'auto' for every GPU nvidia-smi reports. Each child sees exactly "
+            "one GPU via CUDA_VISIBLE_DEVICES. NVIDIA hosts only."
+        ),
+    )
+    track_parser.add_argument(
+        "--jobs",
+        type=int,
+        default=None,
+        help=(
+            "Maximum concurrent videos. Defaults to one per selected GPU, "
+            "else 1 (in-process sequential). With --gpus it is clamped to the "
+            "number of GPUs; without --gpus, N>1 runs N children that share "
+            "the current device visibility."
+        ),
+    )
+    track_parser.add_argument(
+        "--threads-per-job",
+        type=int,
+        default=None,
+        help=(
+            "Opt-in CPU thread cap per child (sets OMP/MKL/OPENBLAS/NUMBA "
+            "*_NUM_THREADS when not already set). Off by default."
+        ),
+    )
+
     args = parser.parse_args(argv)
 
     if args.command == "track":
@@ -130,6 +162,12 @@ Examples:
             )
         if not videos and not video_list:
             track_parser.error("provide at least one video path or --video-list")
+        jobs = getattr(args, "jobs", None)
+        if jobs is not None and int(jobs) < 1:
+            track_parser.error("--jobs must be >= 1")
+        tpj = getattr(args, "threads_per_job", None)
+        if tpj is not None and int(tpj) < 1:
+            track_parser.error("--threads-per-job must be >= 1")
 
     return args
 
@@ -251,6 +289,10 @@ def main(argv: list[str] | None = None) -> object:
                 config_path=args.config,
                 keystone_override=bool(args.keystone_override),
                 sahi_profile=getattr(args, "sahi_profile", None),
+                gpus=getattr(args, "gpus", None),
+                jobs=getattr(args, "jobs", None),
+                threads_per_job=getattr(args, "threads_per_job", None),
+                log_level=str(args.log_level),
             )
         except Exception as e:
             logger.error("Tracker CLI failed: %s", e, exc_info=True)

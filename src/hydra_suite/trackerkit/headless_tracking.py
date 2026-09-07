@@ -12,7 +12,7 @@ import logging
 import os
 import signal
 import threading
-from typing import Any, Callable
+from typing import Any, Callable, Sequence
 
 import pandas as pd
 
@@ -178,36 +178,54 @@ def _run_engine_pass(
     return True, list(captured["fps_list"]), raw_df, analysis_cache_paths
 
 
-def _install_sigint_stop() -> tuple[threading.Event, Any, bool]:
-    """Install a SIGINT handler that sets a stop event. Returns (event, prev, installed).
+def install_stop_signal_handlers(
+    signals: Sequence[int] | None = None,
+    *,
+    log_message: str = "%s received - requesting clean stop of tracking session.",
+) -> tuple[threading.Event, dict[int, Any], bool]:
+    """Install stop-flag handlers for *signals*. Returns (event, previous, installed).
+
+    ``signals`` defaults to ``[SIGINT]``. The fan-out CLI additionally traps
+    SIGTERM/SIGHUP so a scheduler kill or a closed terminal tears the GPU
+    children down instead of stranding them.
 
     ``signal.signal`` only works on the main thread; under a pytest worker it
-    raises ``ValueError`` — in that case we skip installation and the session
-    simply never self-cancels (fine for tests).
+    raises ``ValueError`` — in that case we skip installation and the caller
+    simply never self-cancels (fine for tests). Only the signums whose handler
+    was actually installed appear in the returned ``previous`` mapping, so
+    :func:`restore_signal_handlers` can never restore one we did not touch.
     """
     stop_event = threading.Event()
-    previous = None
-    installed = False
-    try:
-        previous = signal.getsignal(signal.SIGINT)
+    previous: dict[int, Any] = {}
+    for signum in list(signals) if signals is not None else [signal.SIGINT]:
 
-        def _handler(_signum, _frame):
-            logger.warning(
-                "SIGINT received - requesting clean stop of tracking session."
-            )
+        def _handler(signum_received, _frame):
+            logger.warning(log_message, signal.Signals(signum_received).name)
             stop_event.set()
 
-        signal.signal(signal.SIGINT, _handler)
-        installed = True
-    except (ValueError, OSError):
-        installed = False
-    return stop_event, previous, installed
-
-
-def _restore_sigint(previous: Any, installed: bool) -> None:
-    if installed and previous is not None:
         try:
-            signal.signal(signal.SIGINT, previous)
+            prior = signal.getsignal(signum)
+            signal.signal(signum, _handler)
+        except (ValueError, OSError):
+            continue
+        previous[signum] = prior
+    return stop_event, previous, bool(previous)
+
+
+def restore_signal_handlers(previous: dict[int, Any] | None, installed: bool) -> None:
+    """Put back the handlers :func:`install_stop_signal_handlers` replaced.
+
+    A ``None`` previous handler means ``getsignal`` could not describe it (a
+    handler installed from C, or a monkeypatched ``getsignal``); restoring
+    ``None`` would raise ``TypeError``, so those signums are left alone.
+    """
+    if not installed or not previous:
+        return
+    for signum, prior in previous.items():
+        if prior is None:
+            continue
+        try:
+            signal.signal(signum, prior)
         except (ValueError, OSError):
             pass
 
@@ -222,10 +240,10 @@ def run_headless_tracking_session(
     ``should_stop`` overrides the built-in SIGINT flag (used by tests / GUI reuse).
     """
     if should_stop is None:
-        stop_event, previous_handler, installed = _install_sigint_stop()
+        stop_event, previous_handlers, installed = install_stop_signal_handlers()
         effective_should_stop: Callable[[], bool] = stop_event.is_set
     else:
-        stop_event, previous_handler, installed = None, None, False
+        stop_event, previous_handlers, installed = None, None, False
         effective_should_stop = should_stop
 
     try:
@@ -338,4 +356,4 @@ def run_headless_tracking_session(
             "final_csv": result.final_csv_path,
         }
     finally:
-        _restore_sigint(previous_handler, installed)
+        restore_signal_handlers(previous_handlers, installed)

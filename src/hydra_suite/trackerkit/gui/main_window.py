@@ -92,6 +92,47 @@ logger = logging.getLogger(__name__)
 
 _HEADTAIL_USAGE_ROLE_ALIASES = {"headtail", "head_tail"}
 
+# After a SIGKILL to every child's group the scheduler only has to reap them,
+# so this is a short courtesy join, not a stop budget.
+_FANOUT_KILL_JOIN_MS = 3_000
+
+
+def _offer_to_kill_fanout_children(parent, fanout_worker) -> bool:
+    """Ask to force-kill a still-running fan-out's children.
+
+    Returns True when the caller should proceed with closing (the user
+    confirmed the kill), False when the close must be refused. A plain
+    function (not a method) so it stays callable with a stub ``self`` in
+    tests that never construct a real MainWindow.
+    """
+    reply = QMessageBox.question(
+        parent,
+        "Children are still stopping",
+        "The parallel batch's child processes have still not "
+        "stopped.\n\nClose anyway? They will be KILLED, so the "
+        "videos they were tracking will have no final output.",
+        QMessageBox.Yes | QMessageBox.No,
+        QMessageBox.No,
+    )
+    if reply != QMessageBox.Yes:
+        return False
+    try:
+        fanout_worker.cancel()
+        killed = fanout_worker.kill_children_now()
+        logger.warning(
+            "Force-killed %d fan-out child process group(s) on close: %s",
+            len(killed),
+            killed,
+        )
+        # The children are gone, so the scheduler's waits unblock almost at
+        # once; give the thread a short, bounded moment rather than tearing
+        # it down mid-reap -- and rather than paying another full stop
+        # budget, since there is nothing left worth waiting on.
+        fanout_worker.wait(_FANOUT_KILL_JOIN_MS)
+    except Exception:
+        logger.exception("Error force-killing fan-out children on close.")
+    return True
+
 
 class MainWindow(QMainWindow):
     """
@@ -339,6 +380,8 @@ class MainWindow(QMainWindow):
         self.interp_worker = None
         self.final_media_export_worker = None
         self.preview_detection_worker = None
+        self.batch_fanout_worker = None
+        self.batch_fanout_dialog = None
         self.temporary_files = []  # Track temporary files for cleanup
         self.session_log_handler = None  # Track current session log file handler
         self._individual_dataset_run_id = None
@@ -1495,23 +1538,91 @@ class MainWindow(QMainWindow):
     def closeEvent(self, event) -> None:
         """Stop active workers cleanly, then persist UI layout state on close."""
         if self._has_active_tracking_workers():
-            reply = QMessageBox.question(
-                self,
-                "Tracking In Progress",
-                "Tracking is currently running. Stop tracking and exit?",
-                QMessageBox.Yes | QMessageBox.No,
-                QMessageBox.No,
-            )
-            if reply != QMessageBox.Yes:
-                event.ignore()
-                return
-            QApplication.setOverrideCursor(Qt.WaitCursor)
+            fanout_worker = getattr(self, "batch_fanout_worker", None)
+            fanout_running = False
             try:
-                self._tracking_orch.stop_tracking()
+                fanout_running = fanout_worker is not None and fanout_worker.isRunning()
             except Exception:
-                logger.exception("Error during stop_tracking on close.")
-            finally:
-                QApplication.restoreOverrideCursor()
+                fanout_running = False
+
+            if fanout_running and getattr(self, "_fanout_close_warned", False):
+                # Second (or later) close attempt while the fan-out is still
+                # stopping. The first attempt already paid one full stop
+                # budget (fanout_stop_timeout_ms: 25-120 s) before refusing
+                # and arming this flag -- do not make the user pay it again
+                # just to reach the kill prompt. Ask first; only run
+                # stop_tracking() (for whatever else may be running) once the
+                # fan-out itself has nothing left to wait on.
+                if not _offer_to_kill_fanout_children(self, fanout_worker):
+                    event.ignore()
+                    return
+                QApplication.setOverrideCursor(Qt.WaitCursor)
+                try:
+                    self._tracking_orch.stop_tracking()
+                except Exception:
+                    logger.exception("Error during stop_tracking on close.")
+                finally:
+                    QApplication.restoreOverrideCursor()
+            else:
+                reply = QMessageBox.question(
+                    self,
+                    "Tracking In Progress",
+                    "Tracking is currently running. Stop tracking and exit?",
+                    QMessageBox.Yes | QMessageBox.No,
+                    QMessageBox.No,
+                )
+                if reply != QMessageBox.Yes:
+                    event.ignore()
+                    return
+                QApplication.setOverrideCursor(Qt.WaitCursor)
+                try:
+                    self._tracking_orch.stop_tracking()
+                except Exception:
+                    logger.exception("Error during stop_tracking on close.")
+                finally:
+                    QApplication.restoreOverrideCursor()
+
+                # A fan-out that outlived its stop budget still owns child
+                # PROCESSES started with start_new_session. Proceeding to
+                # super().closeEvent() destroys the QThread and orphans
+                # them, still holding their GPUs -- so keep the window open
+                # instead.
+                still_running = False
+                try:
+                    still_running = (
+                        fanout_worker is not None and fanout_worker.isRunning()
+                    )
+                except Exception:
+                    still_running = False
+                if still_running:
+                    if not getattr(self, "_fanout_close_warned", False):
+                        # First refusal: the children may simply need a
+                        # moment. A SECOND close attempt means waiting has
+                        # not worked, and a window that can never be closed
+                        # is its own failure -- so offer the hard way out,
+                        # explicitly, rather than silently refusing forever.
+                        self._fanout_close_warned = True
+                        QMessageBox.warning(
+                            self,
+                            "Parallel batch still stopping",
+                            "The parallel batch has not finished stopping yet.\n\n"
+                            "Closing now would orphan its child processes, which "
+                            "still hold their GPUs. The window will stay open -- "
+                            "wait for the fan-out window to report every job as "
+                            "finished, then close again.\n\n"
+                            "If it still will not stop, close a second time to "
+                            "force-kill the children.",
+                        )
+                        event.ignore()
+                        return
+                    # Rare race: the fan-out was reported not running when
+                    # this closeEvent started but is running again by the
+                    # time stop_tracking() returns, and the flag was already
+                    # armed from an earlier attempt. Offer the same kill
+                    # hatch here rather than silently orphaning it.
+                    if not _offer_to_kill_fanout_children(self, fanout_worker):
+                        event.ignore()
+                        return
 
         self._save_ui_settings()
         tail = getattr(self, "_status_log_tail", None)
@@ -1530,6 +1641,10 @@ class MainWindow(QMainWindow):
             "interp_worker",
             "final_media_export_worker",
             "preview_detection_worker",
+            # A parallel batch owns child PROCESSES started with
+            # start_new_session: closing the window without stopping it would
+            # destroy the QThread mid-run and orphan children holding GPUs.
+            "batch_fanout_worker",
         )
         for attr in worker_attrs:
             worker = getattr(self, attr, None)
@@ -1587,6 +1702,16 @@ class MainWindow(QMainWindow):
         self._config_orch._setup_video_file(
             fp, skip_config_load=skip_config_load, _probe=_probe
         )
+
+    def _on_batch_parallel_changed(self, *_args) -> None:
+        """Mirror the Batch › Parallel controls into session state."""
+        panel = self._setup_panel
+        self.config.batch_parallel = bool(panel.chk_batch_parallel.isChecked())
+        self.config.batch_parallel_jobs = int(panel.spin_batch_parallel_jobs.value())
+        self.config.batch_parallel_gpus = (
+            panel.edit_batch_parallel_gpus.text().strip() or "auto"
+        )
+        panel.container_batch_parallel.setVisible(self.config.batch_parallel)
 
     def _on_batch_mode_toggled(self, checked):
         """Handle showing/hiding batch controls and syncing keystone video."""

@@ -6,6 +6,7 @@ from __future__ import annotations
 
 import hashlib
 import logging
+import os
 import shutil
 import time
 from multiprocessing import shared_memory
@@ -43,6 +44,7 @@ from hydra_suite.core.individual.pose.utils import (
     empty_pose_result,
     summarize_keypoints,
 )
+from hydra_suite.runtime.artifact_lock import artifact_build_lock
 from hydra_suite.runtime.resolver import ResolvedBackend
 
 logger = logging.getLogger(__name__)
@@ -414,9 +416,15 @@ class SleapExportedBackend:
                     return self._ort_trt_ep_fallback()
                 onnx_path = onnx_siblings[0]
                 rebuilt = model_path  # rebuild in-place
-                if _build_trt_engine_from_onnx(
-                    onnx_path, rebuilt, fixed_hw=self._input_hw
-                ):
+                # Serialize concurrent rebuilds of the same engine file. No
+                # ``.exists()`` short-circuit here: ``rebuilt`` already exists
+                # and failed to deserialize, so skipping the build would just
+                # re-fail.
+                with artifact_build_lock(rebuilt):
+                    built = _build_trt_engine_from_onnx(
+                        onnx_path, rebuilt, fixed_hw=self._input_hw
+                    )
+                if built:
                     try:
                         return _DirectTensorRTEngine(rebuilt)
                     except Exception as build_exc:  # incl. ImportError
@@ -432,9 +440,13 @@ class SleapExportedBackend:
         if is_onnx:
             # No .trt engine exists yet — attempt to build one beside the .onnx
             engine_path = model_path.with_suffix(".trt")
-            if _build_trt_engine_from_onnx(
-                model_path, engine_path, fixed_hw=self._input_hw
-            ):
+            # Serialize concurrent builders; the process that waited finds the
+            # engine already on disk and skips the (multi-minute) build.
+            with artifact_build_lock(engine_path):
+                built = engine_path.exists() or _build_trt_engine_from_onnx(
+                    model_path, engine_path, fixed_hw=self._input_hw
+                )
+            if built:
                 try:
                     engine = _DirectTensorRTEngine(engine_path)
                     # Update model_path so the next warmup / profile reflects it
@@ -944,6 +956,37 @@ def _attempt_sleap_cli_export(
     return False, last_err
 
 
+def _swap_export_dir_into_place(staging_dir: Path, export_dir: Path) -> None:
+    """Rename *staging_dir* onto *export_dir*, deleting whatever was there.
+
+    ``os.replace`` refuses a non-empty directory target, so the old export is
+    moved aside first. The window in which ``export_dir`` does not exist is two
+    renames wide, and a reader that already opened files inside the old export
+    keeps them (POSIX unlink semantics).
+    """
+    displaced = export_dir.parent / f"{export_dir.name}.old-{os.getpid()}"
+    shutil.rmtree(displaced, ignore_errors=True)
+    had_previous = export_dir.exists()
+    if had_previous:
+        os.rename(str(export_dir), str(displaced))
+    try:
+        os.rename(str(staging_dir), str(export_dir))
+    except BaseException:
+        # The previous export is now the ONLY copy: restore it rather than let
+        # this "safer" publish be what deletes it.
+        if had_previous:
+            try:
+                os.rename(str(displaced), str(export_dir))
+            except OSError:
+                logger.error(
+                    "Could not restore the SLEAP export at %s; it is at %s",
+                    export_dir,
+                    displaced,
+                )
+        raise
+    shutil.rmtree(displaced, ignore_errors=True)
+
+
 def auto_export_sleap_model(config: PoseRuntimeConfig, runtime_flavor: str) -> str:
     runtime = str(runtime_flavor or "native").strip().lower()
     if runtime not in {"onnx", "tensorrt"}:
@@ -969,47 +1012,71 @@ def auto_export_sleap_model(config: PoseRuntimeConfig, runtime_flavor: str) -> s
     ).encode("utf-8")
     sig = hashlib.sha1(sig_blob).hexdigest()[:16]
     export_dir = model_path.parent / f"{model_path.name}.{runtime}"
+    # FIRST check, BEFORE the lock: a pre-built export needs no build, so it
+    # must never require a lock file. A model directory that is read-only (a
+    # shared/mounted model store) can hold a valid export but cannot host
+    # ``<export>.lock`` -- taking the lock first would make the common
+    # already-exported case depend on write access it does not need.
     if looks_like_sleap_export_path(str(export_dir), runtime) and artifact_meta_matches(
         export_dir, sig
     ):
         return str(export_dir.resolve())
-    if export_dir.exists():
-        shutil.rmtree(export_dir, ignore_errors=True)
-    export_dir.mkdir(parents=True, exist_ok=True)
+    # Concurrent fan-out children may all miss the export at once; serialize
+    # the build and re-check the artifact meta after the wait (double-checked).
+    with artifact_build_lock(export_dir):
+        if looks_like_sleap_export_path(
+            str(export_dir), runtime
+        ) and artifact_meta_matches(export_dir, sig):
+            return str(export_dir.resolve())
+        # Build into a private staging dir and swap it in with a rename. The old
+        # code rmtree'd ``export_dir`` and exported into it in place: a sibling
+        # fan-out child whose config differs (batch/input_hw) would delete the
+        # export another child is LOADING, and leave a half-built directory
+        # visible for the whole export. Renaming makes the swap atomic, and a
+        # failed export now leaves the previous good export intact.
+        staging_dir = export_dir.parent / f"{export_dir.name}.tmp-{os.getpid()}"
+        shutil.rmtree(staging_dir, ignore_errors=True)
+        staging_dir.mkdir(parents=True, exist_ok=True)
 
-    logger.info(
-        "Exporting SLEAP model for %s runtime: %s -> %s",
-        runtime,
-        model_path,
-        export_dir,
-    )
-    if input_hw is not None:
         logger.info(
-            "SLEAP export input size hint: %dx%d",
-            int(input_hw[0]),
-            int(input_hw[1]),
+            "Exporting SLEAP model for %s runtime: %s -> %s",
+            runtime,
+            model_path,
+            export_dir,
         )
-    sleap_env = str(config.sleap_env or "").strip()
-    ok, err = _attempt_sleap_cli_export(
-        model_dir=model_path,
-        export_dir=export_dir,
-        runtime_flavor=runtime,
-        sleap_env=sleap_env,
-        input_hw=input_hw,
-        batch_size=int(max(1, config.sleap_batch)),
-    )
-    if not ok and not sleap_env:
-        ok, err = _attempt_sleap_python_export(
+        if input_hw is not None:
+            logger.info(
+                "SLEAP export input size hint: %dx%d",
+                int(input_hw[0]),
+                int(input_hw[1]),
+            )
+        sleap_env = str(config.sleap_env or "").strip()
+        ok, err = _attempt_sleap_cli_export(
             model_dir=model_path,
-            export_dir=export_dir,
+            export_dir=staging_dir,
             runtime_flavor=runtime,
+            sleap_env=sleap_env,
+            input_hw=input_hw,
             batch_size=int(max(1, config.sleap_batch)),
-            max_instances=int(max(1, config.sleap_max_instances)),
         )
-    if not ok or not looks_like_sleap_export_path(str(export_dir), runtime):
-        raise RuntimeError(f"SLEAP auto-export failed for runtime '{runtime}'. {err}")
-    write_artifact_meta(export_dir, sig)
-    return str(export_dir.resolve())
+        if not ok and not sleap_env:
+            ok, err = _attempt_sleap_python_export(
+                model_dir=model_path,
+                export_dir=staging_dir,
+                runtime_flavor=runtime,
+                batch_size=int(max(1, config.sleap_batch)),
+                max_instances=int(max(1, config.sleap_max_instances)),
+            )
+        if not ok or not looks_like_sleap_export_path(str(staging_dir), runtime):
+            shutil.rmtree(staging_dir, ignore_errors=True)
+            raise RuntimeError(
+                f"SLEAP auto-export failed for runtime '{runtime}'. {err}"
+            )
+        # The meta lives INSIDE the directory, so it must be written before the
+        # swap or the published export would momentarily have no signature.
+        write_artifact_meta(staging_dir, sig)
+        _swap_export_dir_into_place(staging_dir, export_dir)
+        return str(export_dir.resolve())
 
 
 def share_crop_to_shm(index: int, crop: np.ndarray):

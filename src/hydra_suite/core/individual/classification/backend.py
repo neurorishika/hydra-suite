@@ -791,7 +791,12 @@ class ClassifierBackend:
     def _load_onnx(self) -> None:
         import onnxruntime as ort
 
-        from hydra_suite.runtime.onnx_providers import execution_providers_for
+        from hydra_suite.runtime.artifact_lock import artifact_build_lock
+        from hydra_suite.runtime.onnx_providers import (
+            execution_providers_for,
+            has_tensorrt_provider,
+            tensorrt_ep_lock_target,
+        )
 
         peer = self._derive_onnx_peer()
         providers = execution_providers_for(self._resolved)
@@ -818,7 +823,15 @@ class ClassifierBackend:
             for p in providers
         )
         try:
-            self._model = ort.InferenceSession(str(peer), providers=providers)
+            if has_tensorrt_provider(providers):
+                # ORT builds its TRT engine into the shared per-machine cache
+                # dir on first session creation; serialize concurrent builders.
+                # The lock lives in that cache dir (writable by construction),
+                # not beside the model, which may be read-only.
+                with artifact_build_lock(tensorrt_ep_lock_target(peer)):
+                    self._model = ort.InferenceSession(str(peer), providers=providers)
+            else:
+                self._model = ort.InferenceSession(str(peer), providers=providers)
         except Exception as gpu_exc:
             if is_gpu_requested and _looks_like_cuda_alloc_failure(gpu_exc):
                 logger.warning(

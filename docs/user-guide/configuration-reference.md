@@ -96,6 +96,20 @@ the body-scaled parameters.
 | `identity_method` | identity mode selector | enum |
 | `individual_output_format` | crop export image format | `png/jpeg` |
 
+## Batch Session State
+
+These fields live on the TrackerKit GUI session (`TrackerConfig`), not the
+per-video engine config — they never get written into `<stem>_config.json`
+and have no effect on tracking output, only on how a batch is launched. See
+[TrackerKit command line](trackerkit-cli.md) for the equivalent `--gpus`
+/ `--jobs` / `--threads-per-job` CLI flags.
+
+| Key | Meaning | Typical Range |
+|---|---|---|
+| `batch_parallel` | Fan a batch out one child process per GPU instead of running sequentially in-process | `true` / `false` (default `false`) |
+| `batch_parallel_jobs` | Max concurrent videos; `0` = one per selected GPU (or 1 without GPUs) | `0 - 64` (default `0`, auto) |
+| `batch_parallel_gpus` | GPU selector: ordinals, ranges, UUID prefixes, or `auto` for every GPU `nvidia-smi` reports | string (default `"auto"`) |
+
 ## Configuration Behavior Notes
 
 - Not all keys affect both detection modes.
