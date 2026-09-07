@@ -174,6 +174,22 @@ def _run_window(
             "INFERENCE_AUTOTUNE_MODE": "off",
             "USE_CACHED_DETECTIONS": False,
             "DEBUG_MODE": True,
+            # THE ONE postprocessing knob a calibration window relaxes.
+            # MIN_TRAJECTORY_LENGTH (= min_trajectory_length_seconds * fps) is
+            # far longer than any window, so it filters every trajectory out
+            # and leaves an empty final_df that write_base_final_csv drops
+            # without raising. Clamping it to the window length is NOT enough:
+            # measured on the fly_obb fixture, an 8-frame window yields six
+            # trajectories of 1-5 rows each (tracks are born and lost inside
+            # the window), so even min(configured, window) removed 6/6.
+            #
+            # MAX_VELOCITY_BREAK, MAX_OCCLUSION_GAP and MAX_VELOCITY_ZSCORE
+            # keep their PRODUCTION values. Previously this pass set
+            # enable_postprocessing=False, whose permissive branch in
+            # TrackingSessionCore._postprocess_csv relaxed all four at once,
+            # so the equivalence gate (CalibrationOutputs.from_csvs) was
+            # comparing outputs from a pipeline that was not production.
+            "MIN_TRAJECTORY_LENGTH": 1,
         }
     )
     identity_method = str(
@@ -219,15 +235,16 @@ def _run_window(
     session_config.update(
         {
             "enable_backward_tracking": False,
-            # The calibration window is a short slice (<= maximum_frames, e.g.
-            # 32 frames) picked for throughput measurement, not a full run.
-            # Real trajectory-quality postprocessing (e.g. MIN_TRAJECTORY_LENGTH
-            # derived from min_trajectory_length_seconds * fps, commonly >> 32
-            # frames) would filter every trajectory out of a window this short,
-            # silently producing an empty final_df that write_base_final_csv
-            # drops without raising. Force the permissive branch in
-            # TrackingSessionCore._postprocess_csv instead.
-            "enable_postprocessing": False,
+            # Postprocessing runs exactly as the project configured it. The
+            # permissive branch in TrackingSessionCore._postprocess_csv also
+            # relaxes MAX_VELOCITY_BREAK, MAX_OCCLUSION_GAP and
+            # MAX_VELOCITY_ZSCORE, which would make the equivalence gate
+            # compare outputs from a pipeline that is not production; the
+            # window-length clamp on MIN_TRAJECTORY_LENGTH above is the
+            # narrowest accommodation the short window actually needs.
+            "enable_postprocessing": bool(
+                project_config.get("enable_postprocessing", True)
+            ),
             "enable_dataset_generation": False,
             "enable_individual_dataset": False,
             "enable_individual_image_save": False,
