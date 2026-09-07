@@ -273,13 +273,55 @@ class _TileLayoutPreview(QWidget):
 
 
 class SliceSettingsGroup(QGroupBox):
-    """SAHI settings that reveal only controls relevant to the geometry mode."""
+    """SAHI settings that reveal only controls relevant to the geometry mode.
+
+    One widget, two backends. ``backend="yolo"`` is the historical YOLO
+    sliced-training/preview contract and is unchanged. ``backend="sam3"``
+    drives SAM3 LoRA tiling, which shares the scale-set semantics exactly
+    (``target_size_fraction`` and ``object_tile_fraction`` are the SAME
+    quantity for a square tile resized to the model input) but differs in
+    three ways that are enforced structurally here rather than by
+    convention:
+
+    * SAM3 runs at 1008 px, not 640, so SAM3 mode emits NO pixel list at
+      all. ``resolve_scales`` takes no pixel parameter, so SAM3 structurally
+      consumes only fractions; a 640-anchored ``target_sizes`` would be a
+      silent 1.575x shift.
+    * Controls with no field on ``Sam3LoraParams`` (empty-tile sampling
+      fraction, preview merge threshold, multi-scale loss balancing, and the
+      enable toggle) are hidden in SAM3 mode -- nothing they set could reach
+      SAM3 training.
+    * ``min_area_ratio`` stays live in BOTH modes but means something
+      different below the floor (YOLO drops the instance; SAM3 marks it
+      ``iscrowd`` and downgrades exhaustiveness -- decision D3, deliberately
+      not unified). Only the label/tooltip is mode-specific.
+
+    The two accessor pairs are mode-gated by construction
+    (``to_settings``/``load_from`` are YOLO-only; ``to_sam3_tiling``/
+    ``load_sam3_tiling`` are SAM3-only) so the two independent
+    ``full_frame_mix`` fields can never be cross-assigned.
+    """
 
     _DEFAULT_MODEL_INPUT_SIZE = 640
+    _SAM3_MODEL_INPUT_SIZE = 1008
 
-    def __init__(self, parent=None) -> None:
-        super().__init__("Sliced dataset / inference (SAHI)", parent)
-        self._model_input_size = self._DEFAULT_MODEL_INPUT_SIZE
+    def __init__(self, parent=None, *, backend: str = "yolo") -> None:
+        if backend not in ("yolo", "sam3"):
+            raise ValueError(f"unknown slice-settings backend: {backend!r}")
+        super().__init__(
+            (
+                "Tiling (SAHI geometry)"
+                if backend == "sam3"
+                else "Sliced dataset / inference (SAHI)"
+            ),
+            parent,
+        )
+        self._backend = backend
+        self._model_input_size = (
+            self._SAM3_MODEL_INPUT_SIZE
+            if backend == "sam3"
+            else self._DEFAULT_MODEL_INPUT_SIZE
+        )
         self._reference_body_px = 0.0
         outer = QHBoxLayout(self)
         outer.setContentsMargins(16, 18, 16, 14)
@@ -338,9 +380,23 @@ class SliceSettingsGroup(QGroupBox):
         self.spin_min_area = QDoubleSpinBox()
         self.spin_min_area.setRange(0.0, 1.0)
         self.spin_min_area.setSingleStep(0.05)
+        # Same number, different consequence below the floor (D3): YOLO drops
+        # the fragment outright; SAM3 keeps it but marks it `iscrowd`, which
+        # downgrades that tile's exhaustiveness. Load-bearing in both modes,
+        # so only the wording is mode-specific -- never the behaviour.
         self.spin_min_area.setToolTip(
-            "Minimum fraction of a labelled object's original area that must lie in a "
-            "tile to keep that label. For example, 0.10 keeps labels with at least 10%."
+            (
+                "Minimum fraction of a labelled object's original area that must lie "
+                "in a tile for that label to stay a full training target. Below this "
+                "floor SAM3 keeps the fragment but marks it 'is_crowd', which "
+                "downgrades the tile's exhaustiveness rather than dropping the label."
+            )
+            if backend == "sam3"
+            else (
+                "Minimum fraction of a labelled object's original area that must lie "
+                "in a tile to keep that label. For example, 0.10 keeps labels with at "
+                "least 10%."
+            )
         )
         self.spin_neg = QDoubleSpinBox()
         self.spin_neg.setRange(0.0, 1.0)
@@ -353,6 +409,25 @@ class SliceSettingsGroup(QGroupBox):
         self.chk_full.setToolTip(
             "Include unsliced full-frame examples alongside tiles so the model retains "
             "global context."
+        )
+
+        # SAM3-only controls. `object_tile_fraction` is the SCALAR fallback
+        # used whenever the scale set is empty or the geometry mode is not
+        # `auto_object`; it is never derived from the median of the set, so an
+        # untouched SAM3 build keeps the contract default exactly.
+        self.spin_object_fraction = QDoubleSpinBox()
+        self.spin_object_fraction.setDecimals(4)
+        self.spin_object_fraction.setRange(0.0, 1.0)
+        self.spin_object_fraction.setSingleStep(0.001)
+        self.spin_object_fraction.setToolTip(
+            "Single-scale object size as a fraction of the 1008px SAM3 input. Used "
+            "when no scale set is listed above, or when the tile strategy is not "
+            "'Fit labelled objects'."
+        )
+        self.chk_keep_empty = QCheckBox("Keep empty tiles")
+        self.chk_keep_empty.setToolTip(
+            "Keep tiles that contain no labelled object. SAM3 uses them as negative "
+            "evidence rather than sampling a fraction of them."
         )
         self.spin_merge = QDoubleSpinBox()
         self.spin_merge.setRange(0.0, 1.0)
@@ -374,6 +449,15 @@ class SliceSettingsGroup(QGroupBox):
             "per-scale balance. Full-frame examples keep their normal weight."
         )
 
+        if backend == "sam3":
+            # Match the `Sam3LoraParams` contract exactly, or a
+            # set_params -> params() round trip silently clamps.
+            self.spin_overlap.setDecimals(3)
+            self.spin_overlap.setRange(0.0, 1.0)
+            self.spin_overlap.setSingleStep(0.01)
+            self.spin_w.setRange(0, 100000)
+            self.spin_h.setRange(0, 100000)
+
         for control in (
             self.cmb_mode,
             self.txt_targets,
@@ -384,6 +468,7 @@ class SliceSettingsGroup(QGroupBox):
             self.spin_neg,
             self.spin_merge,
             self.spin_balance_power,
+            self.spin_object_fraction,
         ):
             control.setMaximumWidth(210)
 
@@ -409,6 +494,13 @@ class SliceSettingsGroup(QGroupBox):
         add_row(10, "merge", "Merge threshold", self.spin_merge)
         grid.addWidget(self.chk_balance_loss, 11, 0, 1, 2)
         add_row(12, "balance_power", "Balance strength", self.spin_balance_power)
+        add_row(
+            13,
+            "object_fraction",
+            "Single-scale object fraction",
+            self.spin_object_fraction,
+        )
+        grid.addWidget(self.chk_keep_empty, 14, 0, 1, 2)
 
         self.preview = _TileLayoutPreview()
         outer.addWidget(controls, 0)
@@ -420,6 +512,7 @@ class SliceSettingsGroup(QGroupBox):
             self.spin_w.valueChanged,
             self.spin_h.valueChanged,
             self.spin_overlap.valueChanged,
+            self.spin_object_fraction.valueChanged,
         ):
             signal.connect(self._refresh_preview)
         self._refresh_mode_controls()
@@ -450,10 +543,17 @@ class SliceSettingsGroup(QGroupBox):
                 continue
             if 0.0 < value <= 1.0:
                 fractions.append(value)
+        if self._backend == "sam3":
+            # NEVER fall back to the YOLO default set here. `Sam3LoraParams
+            # .object_tile_fractions` defaults to EMPTY, which means "use the
+            # scalar" -- one accidental fallback would silently turn every
+            # default SAM3 build multi-scale and break the single-scale golden.
+            return fractions
         return fractions or SliceTrainingSettings().target_fractions()
 
     def _refresh_mode_controls(self) -> None:
         mode = str(self.cmb_mode.currentData() or "auto_object")
+        sam3 = self._backend == "sam3"
         visible = {
             "mode": True,
             "targets": mode == "auto_object",
@@ -461,22 +561,32 @@ class SliceSettingsGroup(QGroupBox):
             "height": mode == "custom",
             "overlap": True,
             "min_area": True,
-            "negative": True,
-            "merge": True,
-            "balance_power": mode == "auto_object",
+            # No `negative_tile_fraction` / `merge_threshold` /
+            # `balance_multiscale_loss*` field exists on `Sam3LoraParams`, so
+            # in SAM3 mode these controls could not reach training at all.
+            "negative": not sam3,
+            "merge": not sam3,
+            "balance_power": (not sam3) and mode == "auto_object",
+            "object_fraction": sam3,
         }
         for key, (label, control) in self._rows.items():
             label.setVisible(visible[key])
             control.setVisible(visible[key])
         self.auto_reference_note.setVisible(mode == "auto_object")
         self.chk_full.setVisible(True)
-        self.chk_balance_loss.setVisible(mode == "auto_object")
+        self.chk_keep_empty.setVisible(sam3)
+        # SAM3 always tiles; there is no enable toggle on its contract.
+        self.chk_enabled.setVisible(not sam3)
+        self.chk_balance_loss.setVisible((not sam3) and mode == "auto_object")
         self._refresh_preview()
 
     def _refresh_preview(self, *_args) -> None:
+        fractions = self._target_fractions()
+        if self._backend == "sam3" and not fractions:
+            fractions = [self.spin_object_fraction.value()]
         self.preview.set_settings(
             mode=str(self.cmb_mode.currentData() or "auto_object"),
-            target_fractions=self._target_fractions(),
+            target_fractions=fractions,
             slice_width=self.spin_w.value(),
             slice_height=self.spin_h.value(),
             overlap=self.spin_overlap.value(),
@@ -485,6 +595,7 @@ class SliceSettingsGroup(QGroupBox):
         )
 
     def load_from(self, s: SliceTrainingSettings) -> None:
+        self._require_backend("yolo", "load_from")
         self.chk_enabled.setChecked(bool(s.enabled))
         index = self.cmb_mode.findData(s.geometry_mode)
         self.cmb_mode.setCurrentIndex(index if index >= 0 else 0)
@@ -510,6 +621,7 @@ class SliceSettingsGroup(QGroupBox):
         self._refresh_mode_controls()
 
     def to_settings(self) -> SliceTrainingSettings:
+        self._require_backend("yolo", "to_settings")
         fractions = self._target_fractions()
         return SliceTrainingSettings(
             enabled=self.chk_enabled.isChecked(),
@@ -532,3 +644,68 @@ class SliceSettingsGroup(QGroupBox):
             balance_multiscale_loss=self.chk_balance_loss.isChecked(),
             balance_multiscale_loss_power=self.spin_balance_power.value(),
         )
+
+    # -- backend gating ---------------------------------------------------
+
+    def _require_backend(self, backend: str, method: str) -> None:
+        if self._backend != backend:
+            raise RuntimeError(
+                f"{method}() is only valid on a {backend!r} SliceSettingsGroup; "
+                f"this one is {self._backend!r}."
+            )
+
+    @property
+    def backend(self) -> str:
+        """Which training path this widget is wired to (``yolo`` or ``sam3``)."""
+        return self._backend
+
+    # -- SAM3 accessors ---------------------------------------------------
+
+    def load_sam3_tiling(
+        self,
+        *,
+        geometry_mode: str,
+        object_tile_fraction: float,
+        object_tile_fractions,
+        full_frame_mix: bool,
+        slice_width: int,
+        slice_height: int,
+        tile_overlap: float,
+        keep_empty_tiles: bool,
+        min_area_ratio: float,
+    ) -> None:
+        """Load SAM3 tiling values (primitives, so the widget stays contract-free)."""
+        self._require_backend("sam3", "load_sam3_tiling")
+        index = self.cmb_mode.findData(geometry_mode)
+        self.cmb_mode.setCurrentIndex(index if index >= 0 else 0)
+        self.spin_object_fraction.setValue(float(object_tile_fraction))
+        fractions = [float(value) for value in object_tile_fractions]
+        self.txt_targets.setText(self._format_fractions(fractions) if fractions else "")
+        self.chk_full.setChecked(bool(full_frame_mix))
+        self.spin_w.setValue(int(slice_width))
+        self.spin_h.setValue(int(slice_height))
+        self.spin_overlap.setValue(float(tile_overlap))
+        self.chk_keep_empty.setChecked(bool(keep_empty_tiles))
+        self.spin_min_area.setValue(float(min_area_ratio))
+        self._refresh_mode_controls()
+
+    def to_sam3_tiling(self) -> dict:
+        """Return the SAM3 tiling kwargs for ``Sam3LoraParams``.
+
+        Deliberately emits NO pixel list: ``resolve_scales`` takes no pixel
+        parameter, so SAM3 consumes only fractions. A ``target_sizes``-style
+        list computed at 640 would be a silent 1.575x shift against SAM3's
+        1008px input.
+        """
+        self._require_backend("sam3", "to_sam3_tiling")
+        return {
+            "geometry_mode": str(self.cmb_mode.currentData() or "auto_object"),
+            "object_tile_fraction": self.spin_object_fraction.value(),
+            "object_tile_fractions": tuple(self._target_fractions()),
+            "full_frame_mix": self.chk_full.isChecked(),
+            "slice_width": self.spin_w.value(),
+            "slice_height": self.spin_h.value(),
+            "tile_overlap": self.spin_overlap.value(),
+            "keep_empty_tiles": self.chk_keep_empty.isChecked(),
+            "min_area_ratio": self.spin_min_area.value(),
+        }

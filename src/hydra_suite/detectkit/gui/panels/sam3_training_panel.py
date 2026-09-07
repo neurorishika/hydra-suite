@@ -49,7 +49,8 @@ from hydra_suite.training.sam3_lora.env import resolve_sam3_env
 # because tests assert against it as `sam3_training_panel.DEFAULT_SAM3_ENV`.
 from hydra_suite.widgets.workers import BaseWorker
 
-_GEOMETRY_MODES = ("auto_object", "auto_model", "custom")
+from .slice_settings_widget import SliceSettingsGroup
+
 _PRECISIONS = ("bf16",)
 
 # Kept short: the probe spawns a `conda run` subprocess, and the panel must
@@ -453,11 +454,6 @@ class Sam3TrainingPanel(QWidget):
         self.chk_adapt_mask_decoder = QCheckBox("Mask decoder")
         # Headless-only scope; see the params builder for why it has no widget.
         self._adapt_scoring_head = False
-        # Multi-scale tiling has no widget yet (D16 is open, so the panel must
-        # not imply a recommended set). Carried through verbatim so loading a
-        # hand-written multi-scale spec is not silently reset to single-scale.
-        self._object_tile_fractions: tuple[float, ...] = ()
-        self._full_frame_mix = False
         for chk in (
             self.chk_adapt_vision_encoder,
             self.chk_adapt_text_encoder,
@@ -469,30 +465,13 @@ class Sam3TrainingPanel(QWidget):
             adapt_form.addRow(chk)
         layout.addWidget(adapt_group)
 
-        tiling_group = QGroupBox("Tiling")
-        tiling_form = QFormLayout(tiling_group)
-        self.geometry_mode_combo = QComboBox()
-        self.geometry_mode_combo.addItems(_GEOMETRY_MODES)
-        tiling_form.addRow("Geometry mode", self.geometry_mode_combo)
-        self.object_tile_fraction_spin = QDoubleSpinBox()
-        self.object_tile_fraction_spin.setDecimals(4)
-        self.object_tile_fraction_spin.setRange(0.0, 1.0)
-        self.object_tile_fraction_spin.setSingleStep(0.001)
-        tiling_form.addRow("Object tile fraction", self.object_tile_fraction_spin)
-        self.slice_width_spin = QSpinBox()
-        self.slice_width_spin.setRange(0, 100000)
-        tiling_form.addRow("Slice width (custom)", self.slice_width_spin)
-        self.slice_height_spin = QSpinBox()
-        self.slice_height_spin.setRange(0, 100000)
-        tiling_form.addRow("Slice height (custom)", self.slice_height_spin)
-        self.tile_overlap_spin = QDoubleSpinBox()
-        self.tile_overlap_spin.setDecimals(3)
-        self.tile_overlap_spin.setRange(0.0, 1.0)
-        self.tile_overlap_spin.setSingleStep(0.01)
-        tiling_form.addRow("Tile overlap", self.tile_overlap_spin)
-        self.chk_keep_empty_tiles = QCheckBox("Keep empty tiles")
-        tiling_form.addRow(self.chk_keep_empty_tiles)
-        layout.addWidget(tiling_group)
+        # The SAHI scale-set UI is SHARED with the YOLO training dialog rather
+        # than duplicated: `target_size_fraction` and `object_tile_fraction`
+        # are the same quantity, so a scale set ports across as the identity
+        # map on fractions. The widget's `sam3` backend hides what SAM3 has no
+        # contract field for and emits no 640-anchored pixel list.
+        self.slice_group = SliceSettingsGroup(backend="sam3")
+        layout.addWidget(self.slice_group)
 
         ack_group = QGroupBox("Label quality")
         ack_layout = QVBoxLayout(ack_group)
@@ -561,14 +540,7 @@ class Sam3TrainingPanel(QWidget):
             # the round-trip so loading a spec that enables it -- e.g. one
             # written by hand for that retrain -- is not silently reset here.
             adapt_scoring_head=self._adapt_scoring_head,
-            object_tile_fractions=self._object_tile_fractions,
-            full_frame_mix=self._full_frame_mix,
-            geometry_mode=self.geometry_mode_combo.currentText(),
-            object_tile_fraction=self.object_tile_fraction_spin.value(),
-            slice_width=self.slice_width_spin.value(),
-            slice_height=self.slice_height_spin.value(),
-            tile_overlap=self.tile_overlap_spin.value(),
-            keep_empty_tiles=self.chk_keep_empty_tiles.isChecked(),
+            **self.slice_group.to_sam3_tiling(),
             label_quality_acknowledged=self.chk_ack.isChecked(),
             env_name=self.env_edit.text().strip(),
         )
@@ -605,18 +577,17 @@ class Sam3TrainingPanel(QWidget):
         self.chk_adapt_detr_decoder.setChecked(p.adapt_detr_decoder)
         self.chk_adapt_mask_decoder.setChecked(p.adapt_mask_decoder)
         self._adapt_scoring_head = bool(p.adapt_scoring_head)
-        self._object_tile_fractions = tuple(
-            float(value) for value in p.object_tile_fractions
+        self.slice_group.load_sam3_tiling(
+            geometry_mode=p.geometry_mode,
+            object_tile_fraction=p.object_tile_fraction,
+            object_tile_fractions=p.object_tile_fractions,
+            full_frame_mix=p.full_frame_mix,
+            slice_width=p.slice_width,
+            slice_height=p.slice_height,
+            tile_overlap=p.tile_overlap,
+            keep_empty_tiles=p.keep_empty_tiles,
+            min_area_ratio=p.min_area_ratio,
         )
-        self._full_frame_mix = bool(p.full_frame_mix)
-        idx = self.geometry_mode_combo.findText(p.geometry_mode)
-        if idx >= 0:
-            self.geometry_mode_combo.setCurrentIndex(idx)
-        self.object_tile_fraction_spin.setValue(p.object_tile_fraction)
-        self.slice_width_spin.setValue(p.slice_width)
-        self.slice_height_spin.setValue(p.slice_height)
-        self.tile_overlap_spin.setValue(p.tile_overlap)
-        self.chk_keep_empty_tiles.setChecked(p.keep_empty_tiles)
         self.chk_ack.setChecked(p.label_quality_acknowledged)
         self.env_edit.setText(p.env_name or resolve_sam3_env())
 
