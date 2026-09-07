@@ -502,13 +502,16 @@ def test_registry_forgets_a_child_once_it_is_reaped(tmp_path):
 
 def test_second_close_offers_to_kill_the_children_and_then_proceeds(monkeypatch):
     """A window that can never be closed is its own failure: after the first
-    refusal, a second attempt must offer the hard way out."""
+    refusal, a second attempt must offer the hard way out -- and must offer it
+    BEFORE paying another full stop_tracking() budget, not after: the kill
+    prompt must appear, and cancel()+kill_children_now() must run, before
+    stop_tracking() is ever called."""
     from types import SimpleNamespace
 
     import hydra_suite.trackerkit.gui.main_window as mw_mod
     from hydra_suite.trackerkit.gui.main_window import MainWindow
 
-    answers = iter([1, 1])  # "stop tracking and exit?" then "close anyway?"
+    answers = iter([1])  # "close anyway?" -- the only question asked this time
     asked: list = []
     monkeypatch.setattr(
         mw_mod,
@@ -557,9 +560,14 @@ def test_second_close_offers_to_kill_the_children_and_then_proceeds(monkeypatch)
         MainWindow.closeEvent(stub, event)
 
     assert "Children are still stopping" in asked
-    assert events[:1] == ["stop_tracking"]
-    assert "cancel" in events and "kill" in events
-    assert events.index("cancel") < events.index("kill")
+    assert "cancel" in events and "kill" in events and "stop_tracking" in events
+    # The kill happens first -- the whole point of N3 is that the user never
+    # pays a second full stop budget just to reach the escape hatch.
+    assert events.index("cancel") < events.index("kill") < events.index("stop_tracking")
+    assert any(e.startswith("wait(") for e in events)
+    assert events.index("kill") < events.index(
+        next(e for e in events if e.startswith("wait("))
+    )
     assert "saved" in events, "the close did not proceed after the kill"
     assert "ignore" not in events
 
@@ -571,7 +579,7 @@ def test_second_close_answered_no_keeps_the_window_open(monkeypatch):
     import hydra_suite.trackerkit.gui.main_window as mw_mod
     from hydra_suite.trackerkit.gui.main_window import MainWindow
 
-    answers = iter([1, 2])  # yes to "stop and exit", NO to "close anyway"
+    answers = iter([2])  # NO to "close anyway" -- the only question asked
     monkeypatch.setattr(
         mw_mod,
         "QMessageBox",
@@ -612,3 +620,92 @@ def test_second_close_answered_no_keeps_the_window_open(monkeypatch):
     MainWindow.closeEvent(stub, event)
 
     assert events == ["ignore"], events
+
+
+def test_starting_a_new_batch_resets_the_close_warned_flag(app, monkeypatch, tmp_path):
+    """A fresh batch must not inherit the escalation from an unrelated prior
+    run: if a previous fan-out left ``_fanout_close_warned`` armed (e.g. it
+    got force-killed on close), starting a NEW batch must clear it -- or a
+    single innocuous close click on the new, healthy run would jump straight
+    to the "children are still stopping, kill them?" prompt with nothing
+    actually stuck."""
+    from types import SimpleNamespace
+
+    import hydra_suite.trackerkit.batch_plan as batch_plan_mod
+    import hydra_suite.trackerkit.gui.dialogs.batch_fanout_dialog as dialog_mod
+    import hydra_suite.trackerkit.gui.workers.batch_fanout_worker as worker_mod
+    from hydra_suite.trackerkit.gui.orchestrators.tracking import TrackingOrchestrator
+
+    video = tmp_path / "v.mp4"
+    video.write_bytes(b"\x00")
+
+    class _FakeSignal:
+        def connect(self, *_a, **_kw):
+            pass
+
+    class _FakeWorker:
+        def __init__(self, *_a, **_kw):
+            self.job_started = _FakeSignal()
+            self.job_progress = _FakeSignal()
+            self.job_finished = _FakeSignal()
+            self.fanout_finished = _FakeSignal()
+            self.error = _FakeSignal()
+            self.finished = _FakeSignal()
+
+        def cancel(self):
+            pass
+
+        def isRunning(self):
+            return False
+
+        def start(self):
+            pass
+
+    class _FakeDialog:
+        def __init__(self, *_a, **_kw):
+            self.cancel_requested = _FakeSignal()
+
+        def show(self):
+            pass
+
+        def __getattr__(self, _name):
+            # Any on_job_started/on_job_progress/... slot connect target:
+            # a no-op is fine, nothing here ever fires the signals for real.
+            return lambda *_a, **_kw: None
+
+    monkeypatch.setattr(worker_mod, "BatchFanoutWorker", _FakeWorker)
+    monkeypatch.setattr(dialog_mod, "BatchFanoutDialog", _FakeDialog)
+    monkeypatch.setattr(
+        batch_plan_mod,
+        "plan_batch_jobs",
+        lambda videos, keystone_override=False: [_spec(1)],
+    )
+    _patch_devices(monkeypatch, [], has_cuda=False)
+
+    setup = SimpleNamespace(
+        g_batch=SimpleNamespace(isChecked=lambda: True),
+        chk_batch_parallel=SimpleNamespace(isChecked=lambda: True),
+        chk_batch_keystone_override=SimpleNamespace(isChecked=lambda: False),
+    )
+    config = SimpleNamespace(batch_parallel_gpus="auto", batch_parallel_jobs=0)
+    main_window = SimpleNamespace(
+        config=config,
+        batch_videos=[str(video)],
+        batch_fanout_worker=None,
+        batch_fanout_dialog=None,
+        # The prior (unrelated) run left the escalation armed.
+        _fanout_close_warned=True,
+        _on_batch_parallel_changed=lambda: None,
+        btn_start=SimpleNamespace(setText=lambda *_a: None),
+        progress_bar=SimpleNamespace(
+            setVisible=lambda *_a: None, setRange=lambda *_a: None
+        ),
+        progress_label=SimpleNamespace(
+            setVisible=lambda *_a: None, setText=lambda *_a: None
+        ),
+        _apply_ui_state=lambda *_a: None,
+    )
+    orch = TrackingOrchestrator(main_window, config, SimpleNamespace(setup=setup))
+
+    assert orch.start_batch_fanout() is True
+    assert main_window._fanout_close_warned is False
