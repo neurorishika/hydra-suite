@@ -7,10 +7,29 @@ import os
 import subprocess
 import sys
 import time
+from pathlib import Path
 
 import pytest
 
+import hydra_suite
 from hydra_suite.runtime.artifact_lock import ArtifactLockTimeout, artifact_build_lock
+
+
+def _holder_env() -> dict:
+    """Env for a subprocess holder that must import THIS ``hydra_suite``.
+
+    A subprocess does not inherit conftest's ``sys.path`` insert, so without
+    this the holders silently import whatever ``hydra_suite`` is installed --
+    or none at all -- and these two tests (the only ones that catch a "lock
+    file created but flock never taken" mutation) fail or pass vacuously
+    depending on how pytest was invoked.
+    """
+    src_root = str(Path(hydra_suite.__file__).resolve().parents[1])
+    existing = os.environ.get("PYTHONPATH", "")
+    return {
+        **os.environ,
+        "PYTHONPATH": (src_root + os.pathsep + existing) if existing else src_root,
+    }
 
 
 def test_lock_file_lives_beside_target(tmp_path):
@@ -41,6 +60,7 @@ def test_second_process_blocks_until_first_releases(tmp_path):
         [sys.executable, "-c", holder, str(target)],
         stdout=subprocess.PIPE,
         text=True,
+        env=_holder_env(),
     )
     assert proc.stdout.readline().strip() == "LOCKED"
     t0 = time.monotonic()
@@ -63,6 +83,7 @@ def test_timeout_raises_when_held_elsewhere(tmp_path):
         [sys.executable, "-c", holder, str(target)],
         stdout=subprocess.PIPE,
         text=True,
+        env=_holder_env(),
     )
     assert proc.stdout.readline().strip() == "LOCKED"
     with pytest.raises(ArtifactLockTimeout):

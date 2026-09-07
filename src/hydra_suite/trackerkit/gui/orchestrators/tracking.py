@@ -61,6 +61,26 @@ def compute_capped_preview_range(
     return start_frame + max_frames - 1, True
 
 
+# A fan-out's cooperative stop is bounded by _stop_children: sigint_grace +
+# term_grace GLOBALLY, then up to 5 s waiting on each child and 5 s joining each
+# log reader. A fixed 25 s ceiling is therefore blown by three stubborn children.
+_FANOUT_STOP_PER_JOB_S = 10.0
+_FANOUT_STOP_CEILING_S = 120.0
+
+
+def fanout_stop_timeout_ms(n_jobs: int, options) -> int:
+    """Join budget for stopping a fan-out, scaled by the number of jobs.
+
+    Capped so a wedged worker can never hang the GUI indefinitely; the caller
+    must handle the "still running when the budget expired" case rather than
+    proceeding into teardown, which would orphan the children.
+    """
+    sigint = float(getattr(options, "sigint_grace_s", 10.0) or 0.0)
+    term = float(getattr(options, "term_grace_s", 5.0) or 0.0)
+    budget = sigint + term + _FANOUT_STOP_PER_JOB_S * max(1, int(n_jobs))
+    return int(min(budget, _FANOUT_STOP_CEILING_S) * 1000)
+
+
 class TrackingOrchestrator:
     """Owns the tracking lifecycle: start, stop, merge, export, finalize."""
 
@@ -235,7 +255,10 @@ class TrackingOrchestrator:
             self._request_qthread_stop(
                 fanout_worker,
                 "BatchFanoutWorker",
-                timeout_ms=25000,
+                timeout_ms=fanout_stop_timeout_ms(
+                    len(getattr(fanout_worker, "specs", ()) or ()),
+                    getattr(fanout_worker, "options", None),
+                ),
                 force_terminate=False,
             )
 

@@ -56,6 +56,16 @@ class BatchFanoutWorker(BaseWorker):
         self._stop = threading.Event()
         self.result = None
 
+    @property
+    def specs(self) -> list[BatchJobSpec]:
+        """The jobs this fan-out was asked to run (read-only)."""
+        return list(self._specs)
+
+    @property
+    def options(self) -> FanoutOptions:
+        """The scheduler options, including the stop grace periods."""
+        return self._options
+
     # --- cancellation -----------------------------------------------------
     def cancel(self) -> None:
         self._stop.set()

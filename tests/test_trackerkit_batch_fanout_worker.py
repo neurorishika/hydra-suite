@@ -324,3 +324,68 @@ def test_gui_pins_the_selected_devices(monkeypatch):
     options = _orchestrator("1")._resolve_fanout_options()
     assert options is not None and options.gpus == [devices[1]]
     assert options.jobs is None  # unspecified: one slot per selected GPU
+
+
+# --- Window-close budget ----------------------------------------------------
+
+
+def test_fanout_stop_timeout_scales_with_jobs_and_is_capped():
+    """25 s flat was blown by three stubborn children: `_stop_children` spends
+    sigint_grace + term_grace globally and then up to 5 s wait + 5 s reader join
+    PER CHILD."""
+    from hydra_suite.trackerkit.gui.orchestrators.tracking import fanout_stop_timeout_ms
+
+    options = FanoutOptions(sigint_grace_s=10.0, term_grace_s=5.0)
+    assert fanout_stop_timeout_ms(1, options) == 25_000
+    assert fanout_stop_timeout_ms(4, options) == 55_000
+    assert fanout_stop_timeout_ms(0, options) == 25_000  # at least one job
+    assert fanout_stop_timeout_ms(64, options) == 120_000  # capped
+    assert fanout_stop_timeout_ms(2, None) == 35_000  # defaults when unknown
+
+
+def test_close_is_refused_while_the_fanout_is_still_stopping(monkeypatch):
+    """After the stop budget expires, closeEvent used to fall through to
+    super().closeEvent() -- destroying the QThread and orphaning children that
+    still hold GPUs."""
+    from types import SimpleNamespace
+
+    import hydra_suite.trackerkit.gui.main_window as mw_mod
+    from hydra_suite.trackerkit.gui.main_window import MainWindow
+
+    warnings: list = []
+    monkeypatch.setattr(
+        mw_mod,
+        "QMessageBox",
+        SimpleNamespace(
+            question=lambda *a, **k: 1,
+            warning=lambda *a: warnings.append(a),
+            Yes=1,
+            No=2,
+        ),
+    )
+    monkeypatch.setattr(
+        mw_mod,
+        "QApplication",
+        SimpleNamespace(
+            setOverrideCursor=lambda *a: None, restoreOverrideCursor=lambda *a: None
+        ),
+    )
+
+    events: list[str] = []
+    stub = SimpleNamespace(
+        _has_active_tracking_workers=lambda: True,
+        _tracking_orch=SimpleNamespace(
+            stop_tracking=lambda: events.append("stop_tracking")
+        ),
+        batch_fanout_worker=SimpleNamespace(isRunning=lambda: True),
+        _save_ui_settings=lambda: events.append("saved"),
+        _status_log_tail=None,
+    )
+    event = SimpleNamespace(
+        ignore=lambda: events.append("ignore"), accept=lambda: events.append("accept")
+    )
+
+    MainWindow.closeEvent(stub, event)
+
+    assert events == ["stop_tracking", "ignore"], events
+    assert warnings, "the user was not told why the window stayed open"

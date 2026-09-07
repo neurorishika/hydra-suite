@@ -1515,6 +1515,29 @@ class MainWindow(QMainWindow):
             finally:
                 QApplication.restoreOverrideCursor()
 
+            # A fan-out that outlived its stop budget still owns child PROCESSES
+            # started with start_new_session. Proceeding to super().closeEvent()
+            # destroys the QThread and orphans them, still holding their GPUs --
+            # so keep the window open instead.
+            fanout_worker = getattr(self, "batch_fanout_worker", None)
+            still_running = False
+            try:
+                still_running = fanout_worker is not None and fanout_worker.isRunning()
+            except Exception:
+                still_running = False
+            if still_running:
+                QMessageBox.warning(
+                    self,
+                    "Parallel batch still stopping",
+                    "The parallel batch has not finished stopping yet.\n\n"
+                    "Closing now would orphan its child processes, which still "
+                    "hold their GPUs. The window will stay open -- wait for the "
+                    "fan-out window to report every job as finished, then close "
+                    "again.",
+                )
+                event.ignore()
+                return
+
         self._save_ui_settings()
         tail = getattr(self, "_status_log_tail", None)
         if tail is not None:
