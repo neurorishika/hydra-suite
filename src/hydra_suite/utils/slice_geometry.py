@@ -24,6 +24,20 @@ MAX_TILES_PER_FRAME = 4096
 # reusing this denominator there would shift every scale by 1.575x.
 LEGACY_TARGET_SIZE_IMGSZ = 640.0
 
+# The one fragment floor shared by every tile-based dataset builder (YOLO's
+# ``SliceBuildParams.min_area_ratio`` and SAM3's per-build
+# ``Sam3LoraParams.min_area_ratio``): the minimum fraction of an instance's
+# full-frame area that must survive a tile clip for that instance to still
+# count as a genuine detection at that tile, rather than an unreconstructable
+# fragment. Both builders measure and apply this THE SAME WAY (frame-space
+# polygon-area ratio); they differ only in what happens below the floor
+# (YOLO drops the instance, SAM3 downgrades it to `is_crowd` — that policy
+# split is deliberate and stays separate, see the unified-SAHI design doc's
+# D3/D18). This module constant is the one place the *default value* lives;
+# each builder's dataclass field defaults to it so a future change to one
+# cannot silently diverge from the other without also changing this line.
+DEFAULT_MIN_AREA_RATIO = 0.25
+
 
 @dataclass
 class SlicePlan:

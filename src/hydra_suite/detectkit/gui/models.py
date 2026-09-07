@@ -9,6 +9,7 @@ from typing import Any
 
 from hydra_suite.data.project_bundle import write_json_atomic
 from hydra_suite.utils.slice_geometry import (
+    DEFAULT_MIN_AREA_RATIO,
     LEGACY_TARGET_SIZE_IMGSZ,
     target_fractions_from,
 )
@@ -176,7 +177,7 @@ class SliceTrainingSettings:
     slice_width: int = 0
     slice_height: int = 0
     overlap: float = 0.2
-    min_area_ratio: float = 0.25
+    min_area_ratio: float = DEFAULT_MIN_AREA_RATIO
     negative_tile_fraction: float = 0.15
     # ``target_sizes`` is retained for projects written before target scale was
     # expressed relative to the model input. New UI writes fractions; the
