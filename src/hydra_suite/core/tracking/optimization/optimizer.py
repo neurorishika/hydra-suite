@@ -40,6 +40,7 @@ from hydra_suite.core.individual.pose.features import (
 # InferenceConfig from the SAME params so the cache key matches; a mismatch
 # makes the handle read back as empty.
 from hydra_suite.core.inference.runner import (
+    InferenceRunner,
     _open_caches,
     frame_space_roi_mask,
     video_signature,
@@ -728,25 +729,75 @@ class TrackingOptimizerCore:
     # ------------------------------------------------------------------
 
     def _open_and_validate_cache(self) -> bool:
-        """Open the InferenceRunner detection cache and validate compatibility.
+        """Open and validate the complete production replay cache set.
 
         ``self.detection_cache_path`` is normalized to the cache **directory**
-        written by ``DetectionCacheBuildWorker``. The handle is opened
-        read-only here: it must never have ``close()`` called on it, because
+        written by ``DetectionCacheBuildWorker``. A short-lived cache-only
+        ``InferenceRunner`` first admits the complete cache set. The retained
+        detection member is then opened read-only for proposal replay: it must
+        never have ``close()`` called on it, because
         ``DetectionCacheHandle.close()`` flushes its (empty, since we never
         write) buffer and would clobber the on-disk cache with zero frames.
 
         Returns True if the cache is ready for use, False on failure
         (after emitting appropriate error signals).
         """
-        try:
-            from pathlib import Path
 
+        def _reject(msg: str) -> bool:
+            if self._progress_cb is not None:
+                self._progress_cb(0, f"Error: {msg}")
+            if self._error_cb is not None:
+                self._error_cb(msg)
+            return False
+
+        # Do not leave a prior run's reader reachable if this invocation is
+        # rejected before the new one can be installed.
+        self.cache = None
+        cache_probe: InferenceRunner | None = None
+        try:
             _cfg = inference_config_for_optimizer_params(self.base_params)
             _roi_mask = self.base_params.get("ROI_MASK", None)
+            _cache_dir = cache_directory(self.detection_cache_path)
+
+            # A detection-only check is insufficient: a candidate replay also
+            # consumes every configured downstream stage (head-tail, pose,
+            # CNN, AprilTag, etc.).  Let the production cache contract verify
+            # matching keys, generation, and identical coverage for every
+            # enabled member before search can spend trials on incomplete
+            # evidence.  ``cache_only`` avoids loading those stage backends.
+            cache_probe = InferenceRunner(
+                _cfg,
+                cache_dir=_cache_dir,
+                video_path=self.video_path,
+                cache_only=True,
+                roi_mask=_roi_mask,
+            )
+            if not cache_probe.caches_all_valid():
+                return _reject(
+                    "Replay evidence cache is incomplete or incompatible with the "
+                    "current parameters. Every enabled inference stage must have a "
+                    "matching cache with identical coverage. Rebuild the full replay "
+                    "evidence cache and try again."
+                )
+
+            if not cache_probe.detection_cache_covers_range(
+                self.start_frame, self.end_frame
+            ):
+                missing = cache_probe.detection_cache_missing_frames(
+                    self.start_frame, self.end_frame
+                )
+                return _reject(
+                    f"Replay evidence cache does not cover frames "
+                    f"{self.start_frame}-{self.end_frame}. Missing: {missing}. "
+                    "Rebuild the full replay evidence cache for this frame range "
+                    "and try again."
+                )
+
+            # The lightweight proposal loop only needs the read-only detection
+            # member once the full evidence set has been admitted above.
             caches = _open_caches(
                 _cfg,
-                Path(self.detection_cache_path),
+                _cache_dir,
                 video_signature(self.video_path),
                 _roi_mask,
                 read_only=True,
@@ -757,38 +808,23 @@ class TrackingOptimizerCore:
                 or self.cache is None
                 or not self.cache.is_valid()
             ):
-                msg = (
-                    "Detection cache is incompatible with the current parameters "
-                    "(e.g. detection method/model or ROI mask changed since it was "
-                    "built). Rebuild the cache and try again."
+                return _reject(
+                    "Replay detection cache became incompatible while it was being "
+                    "opened. Rebuild the full replay evidence cache and try again."
                 )
-                if self._progress_cb is not None:
-                    self._progress_cb(0, f"Error: {msg}")
-                if self._error_cb is not None:
-                    self._error_cb(msg)
-                return False
+            return True
         except Exception as e:
-            logger.exception("Optimizer: failed to open detection cache")
-            msg = f"Error loading detection cache: {e}"
-            if self._progress_cb is not None:
-                self._progress_cb(0, msg)
-            if self._error_cb is not None:
-                self._error_cb(msg)
-            return False
-
-        if not self.cache.covers_frame_range(self.start_frame, self.end_frame):
-            missing = self.cache.get_missing_frames(self.start_frame, self.end_frame)
-            msg = (
-                f"Detection cache does not cover frames "
-                f"{self.start_frame}-{self.end_frame}. Missing: {missing}. "
-                "Rebuild the detection cache for this frame range and try again."
-            )
-            if self._progress_cb is not None:
-                self._progress_cb(0, f"Error: {msg}")
-            if self._error_cb is not None:
-                self._error_cb(msg)
-            return False
-        return True
+            logger.exception("Optimizer: failed to validate replay evidence cache")
+            return _reject(f"Error loading replay evidence cache: {e}")
+        finally:
+            if cache_probe is not None:
+                try:
+                    cache_probe.close()
+                except Exception:
+                    logger.warning(
+                        "Optimizer: failed to close cache-validation probe",
+                        exc_info=True,
+                    )
 
     def _preload_pose_data(self) -> None:
         """Pre-load pose keypoints into memory so per-trial loops stay fast."""
