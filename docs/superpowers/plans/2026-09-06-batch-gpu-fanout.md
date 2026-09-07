@@ -3074,6 +3074,170 @@ but no perf number should be read off these runs.
 | `tests/test_cuda_devices.py` | 10 passed |
 | `tests/test_trackerkit_config_schema_fanout.py` | 4 passed |
 
+## Fix wave 3 (2026-09-07)
+
+Adversarial re-review of `4661e0b6 -> da4dd3ea` raised N1 (`_retarget_side_outputs`
+also fired on `explicit` provenance), N2 (`_load_coreml_executor` exported
+unlocked and in place), gate hardening, and the I5 escape hatch. Commits
+`04169ca8`, `e8d5ab22`, `409ff8fb`, `4ad86454`, `7dca1c86`.
+
+**mehek is NOT required for this wave.** The CUDA CSV path is unchanged: N1 only
+moves side-output paths (`file_path`/`csv_path`/`video_output_path` — none of
+which the engine reads), and for the fan-out child the re-plan has
+`len(plan) == 1`, so the branch it now takes is the one that leaves the config
+alone. N2 touches the CoreML loader only (Apple-only; the TRT loader already had
+the lock). I5 is GUI-only. Nothing here can change a CUDA number.
+
+### Why the previous INHERIT leg was blind to N1
+
+It staged the keystone at the DEFAULT `<stage>/<clip>_tracking.mp4` — exactly
+where a retargeting planner sends a borrowed config — so "honoured the user's
+path" and "overwrote it with the default" produced the same filename. The
+keystone now renders to `<stage>/renders/<clip>_CUSTOM.mp4`.
+
+### RED evidence for N1 (MPS, `INHERIT=1`, `fly_obb worm_bgsub`, planner at `da4dd3ea`)
+
+All eight CSVs byte-identical — the CSVs cannot see this bug — and then:
+
+```
+== side outputs: the keystone keeps ITS path, borrowers get their own ==
+✅ seq/renders/fly_obb_CUSTOM.mp4 (6922411 bytes) -- keystone path honoured
+✅ seq: keystone did not render to the default fly_obb_tracking.mp4
+✅ seq/worm_bgsub_tracking.mp4 (53680063 bytes) -- borrower renders beside its own video
+✅ seq: 1 borrowers -> 1 distinct annotated videos
+❌ par/renders/fly_obb_CUSTOM.mp4 missing or empty -- the keystone's own render path was discarded
+❌ par/fly_obb_tracking.mp4 exists -- the keystone rendered to the DEFAULT path, not the one it names
+✅ par/worm_bgsub_tracking.mp4 (53680063 bytes) -- borrower renders beside its own video
+❌ par: 1 borrowers -> 2 annotated videos beside the clips (paths collided)
+❌ keystone custom render: seq='6922411' par='<missing>' bytes -- the legs rendered differently
+### GATE FAILED -- see the ❌ lines above.
+```
+
+### Render byte size is NOT an invariant on macOS (measured)
+
+The first `gpu_fast` leg failed only on `❌ keystone custom render: seq='6922411'
+par='6260151' bytes`, with every CSV byte-identical. Direct measurement of
+`h264_videotoolbox` on the same 300 frames of `fly_obb.mp4`:
+
+| condition | bytes | md5 |
+| --- | --- | --- |
+| serial run 1 | 4005825 | `b7344dd0…` |
+| serial run 2 | 4005825 | `e67608b7…` |
+| 2-way concurrent, run 1 | 3794061 | `ec804f37…` |
+| 2-way concurrent, run 2 | 3794061 | `a9551180…` |
+
+The encoder is byte-nondeterministic even for identical input, and its bitrate is
+load-sensitive. The fan-out leg has encoder contention and the sequential leg does
+not, so size equality measures the encoder, not the pipeline. Size identity was
+requested for this gate; it was **replaced** with frame-count/geometry/fps
+identity — what a lossy encoder does preserve — for the keystone AND every
+borrower (a borrower's size difference previously slipped through a bare
+non-empty check). On the failing run those matched exactly
+(`500 frames, 1200x1200 @ 100.0 fps` and `500 frames, 1920x1200 @ 5.0 fps`),
+confirming the ❌ was the encoder.
+
+### MPS — default leg (`fly_obb worm_bgsub ant_obb_sleap`, `--jobs 2`, `hydra-mps`)
+
+```
+✅ fly_obb_tracking_backward.csv byte-identical (seq=1495 rows, par=1495 rows)
+✅ fly_obb_tracking_final_with_individual.csv byte-identical (seq=1501 rows, par=1501 rows)
+✅ fly_obb_tracking_final.csv byte-identical (seq=1501 rows, par=1501 rows)
+✅ fly_obb_tracking_forward.csv byte-identical (seq=1495 rows, par=1495 rows)
+✅ worm_bgsub_tracking_backward.csv byte-identical (seq=5001 rows, par=5001 rows)
+✅ worm_bgsub_tracking_final_with_individual.csv byte-identical (seq=2707 rows, par=2707 rows)
+✅ worm_bgsub_tracking_final.csv byte-identical (seq=2707 rows, par=2707 rows)
+✅ worm_bgsub_tracking_forward.csv byte-identical (seq=5001 rows, par=5001 rows)
+✅ ant_obb_sleap_tracking_backward.csv byte-identical (seq=12501 rows, par=12501 rows)
+✅ ant_obb_sleap_tracking_final_with_individual.csv byte-identical (seq=11882 rows, par=11882 rows)
+✅ ant_obb_sleap_tracking_final.csv byte-identical (seq=11882 rows, par=11882 rows)
+✅ ant_obb_sleap_tracking_forward.csv byte-identical (seq=12501 rows, par=12501 rows)
+### GATE PASSED -- fan-out output is byte-identical to sequential.
+```
+
+### MPS — INHERIT leg with a custom keystone render (`fly_obb worm_bgsub ant_obb_sleap`)
+
+Twelve CSVs byte-identical (as above, INHERIT row counts), then:
+
+```
+== side outputs: the keystone keeps ITS path, borrowers get their own ==
+✅ seq/renders/fly_obb_CUSTOM.mp4 (6922411 bytes) -- keystone path honoured
+✅ seq: keystone did not render to the default fly_obb_tracking.mp4
+✅ seq/worm_bgsub_tracking.mp4 (53680063 bytes) -- borrower renders beside its own video
+✅ seq/ant_obb_sleap_tracking.mp4 (172692960 bytes) -- borrower renders beside its own video
+✅ seq: 2 borrowers -> 2 distinct annotated videos
+✅ par/renders/fly_obb_CUSTOM.mp4 (6922411 bytes) -- keystone path honoured
+✅ par: keystone did not render to the default fly_obb_tracking.mp4
+✅ par/worm_bgsub_tracking.mp4 (53680063 bytes) -- borrower renders beside its own video
+✅ par/ant_obb_sleap_tracking.mp4 (172692960 bytes) -- borrower renders beside its own video
+✅ par: 2 borrowers -> 2 distinct annotated videos
+
+-- every render: same content on both legs --
+✅ renders/fly_obb_CUSTOM.mp4: 500 frames, 1200x1200 @ 100.0 fps on both legs
+✅ worm_bgsub_tracking.mp4: 500 frames, 1920x1200 @ 5.0 fps on both legs
+✅ ant_obb_sleap_tracking.mp4: 500 frames, 4512x4512 @ 25.0 fps on both legs
+### GATE PASSED -- fan-out output is byte-identical to sequential.
+```
+
+### MPS — `gpu_fast` (CoreML) INHERIT leg from a fresh artifact state (`--jobs 2`)
+
+`STAGE_MODELS=1` copies the checkpoint into each leg's own staging dir and
+repoints the sidecar, so `par/` starts with NO `.mlpackage` and both children
+miss the cache at once. Under INHERIT, `worm_bgsub` borrows `fly_obb`'s config,
+so both children load the same OBB model — which is what makes them race.
+
+```
+✅ fly_obb_tracking_backward.csv byte-identical (seq=1495 rows, par=1495 rows)
+✅ fly_obb_tracking_final_with_individual.csv byte-identical (seq=1501 rows, par=1501 rows)
+✅ fly_obb_tracking_final.csv byte-identical (seq=1501 rows, par=1501 rows)
+✅ fly_obb_tracking_forward.csv byte-identical (seq=1495 rows, par=1495 rows)
+✅ worm_bgsub_tracking_backward.csv byte-identical (seq=1480 rows, par=1480 rows)
+✅ worm_bgsub_tracking_final_with_individual.csv byte-identical (seq=489 rows, par=489 rows)
+✅ worm_bgsub_tracking_final.csv byte-identical (seq=489 rows, par=489 rows)
+✅ worm_bgsub_tracking_forward.csv byte-identical (seq=1474 rows, par=1474 rows)
+
+-- every render: same content on both legs --
+✅ renders/fly_obb_CUSTOM.mp4: 500 frames, 1200x1200 @ 100.0 fps on both legs
+✅ worm_bgsub_tracking.mp4: 500 frames, 1920x1200 @ 5.0 fps on both legs
+
+== first-run artifact build: the racing children must publish ONE artifact ==
+✅ seq: 1 derived artifact(s) under models/
+✅ seq: freshness marker present for 20260503-171130_26x_fly_train7.mlpackage
+✅ seq: no staging/displaced artifact leftovers
+✅ par: 1 derived artifact(s) under models/
+✅ par: freshness marker present for 20260503-171130_26x_fly_train7.mlpackage
+✅ par: no staging/displaced artifact leftovers
+✅ par: exactly 1 child exported the artifact (the other waited on the lock)
+✅ par: 1 child(ren) reused the artifact built by another process
+### GATE PASSED -- fan-out output is byte-identical to sequential.
+```
+
+The last two lines are the only direct end-to-end evidence for N2: "one artifact
+survives" is also what two racing exporters leave behind, because the atomic
+installer tidies up after the loser. In the children's own logs, job 2 logged
+`Exported CoreML artifact` once and job 1 logged
+`Reusing CoreML artifact built by another process` once — the double-check
+inside the lock did its job.
+
+### Fix-wave-3 test summary (all `hydra-mps`, one file at a time)
+
+| file | result |
+| --- | --- |
+| `tests/test_trackerkit_batch_plan.py` | 18 passed (+2 new, both RED at `da4dd3ea`) |
+| `tests/test_obb_coreml_export.py` | 12 passed (+3 new, all RED pre-N2) |
+| `tests/test_trackerkit_batch_fanout_worker.py` | 20 passed (+4 new, 3 RED pre-I5) |
+| `tests/test_trackerkit_batch_fanout.py` | 25 passed |
+| `tests/test_trackerkit_cli_fanout.py` | 14 passed |
+| `tests/test_trackerkit_cli_config.py` | 10 passed |
+| `tests/test_inference_obb_artifacts.py` | 28 passed, 1 skipped |
+| `tests/test_artifact_lock.py` | 8 passed |
+| `tests/test_coreml_determinism.py` | 2 passed |
+| `tests/test_sleap_export_crop_normalization.py` | 8 passed |
+
+No existing test pinned the in-place CoreML export, so none had to be relaxed.
+`test_execute_runs_the_scheduler_and_emits_the_result`'s fake scheduler was
+updated for the new `child_registry` kwarg (and now asserts the worker passes
+its own registry).
+
 ## Self-review notes
 
 - Spec §4.1 planner → Task 3; §4.2 devices → Task 2; §4.3 scheduler → Task 4; §4.4 locks → Task 1; §4.5 CLI → Task 5; §4.6 schema → Task 6; §4.7 GUI → Tasks 6-7; §4.8 docs → Task 8; §5 SLEAP → covered by inheritance (no code) and gated in Task 9 step 2; §6 thread caps → Task 9 step 3; §7 verification → Task 9.
