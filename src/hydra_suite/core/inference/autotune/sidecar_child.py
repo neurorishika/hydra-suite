@@ -15,7 +15,6 @@ from typing import Any
 import numpy as np
 import pandas as pd
 
-from hydra_suite.core.individual.identity import columns as C
 from hydra_suite.core.inference.autotune.models import InferenceTuningSettings
 from hydra_suite.core.inference.autotune.sidecar import (
     MAX_REQUEST_BYTES,
@@ -24,7 +23,7 @@ from hydra_suite.core.inference.autotune.sidecar import (
 )
 from hydra_suite.core.tracking.session import SessionCallbacks, TrackingSessionCore
 from hydra_suite.core.tracking.worker import TrackingEngineCore
-from hydra_suite.data.csv_writer import CSVWriterThread
+from hydra_suite.data.csv_writer import CSVWriterThread, build_tracking_csv_header
 
 
 def _read_request(path: Path) -> dict[str, Any]:
@@ -43,36 +42,6 @@ def _read_request(path: Path) -> dict[str, Any]:
 
 def _restore_params(value: Any, root: Path) -> Any:
     return restore_sidecar_params(value, root)
-
-
-def _header(identity_method: str, n_arenas: int) -> list[str]:
-    columns = [
-        "TrackID",
-        "TrajectoryID",
-        "Index",
-        "X",
-        "Y",
-        "Theta",
-        "FrameID",
-        "State",
-        "DetectionConfidence",
-        "AssignmentConfidence",
-        "PositionUncertainty",
-        "DetectionID",
-        *C.identity_realtime_columns(),
-    ]
-    if identity_method.strip().lower() == "apriltags":
-        columns.extend(
-            (
-                "DetectedTagID",
-                "DetectedTagLabel",
-                "DetectedTagConf",
-                "DetectedTagHamming",
-            )
-        )
-    if n_arenas > 1:
-        columns.append("arena_id")
-    return columns
 
 
 def _block_window(
@@ -251,7 +220,9 @@ def _run_window(
     )
     writer = CSVWriterThread(
         str(raw_csv),
-        header=_header(identity_method, int(run_params.get("N_ARENAS", 1))),
+        header=build_tracking_csv_header(
+            identity_method, int(run_params.get("N_ARENAS", 1))
+        ),
     )
     writer.start()
     captured: dict[str, Any] = {"success": False, "finished": False}

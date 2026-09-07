@@ -1141,9 +1141,13 @@ def build_engine_params(
         # geometry profiles.  The inference config clamps these values before
         # the tile admission helper applies the final per-model memory bound.
         "SLICE_TILE_BATCH_SIZE": advanced.get("slice_tile_batch_size", 16),
+        # "automatic" tuning is only ever eligible on CUDA (integration.py's
+        # eligibility gate); on CPU/MPS it never applies, so forcing the
+        # process-local SAHI tuner off here would silently disable it for no
+        # benefit (see models.py's InferenceRuntimeOverlay no-op-status fix).
         "SLICE_TILE_BATCH_AUTOTUNE": (
             False
-            if autotune_mode == "automatic"
+            if autotune_mode == "automatic" and detect_platform().has_cuda
             else advanced.get("slice_tile_batch_autotune", False)
         ),
         "SLICE_MEMORY_BUDGET_MIB": advanced.get("slice_memory_budget_mib", 256),
@@ -1224,6 +1228,20 @@ def build_engine_params(
         "INFERENCE_AUTOTUNE_MODE": autotune_mode,
         "INFERENCE_AUTOTUNE_MANUAL_FIELDS": autotune_manual_fields,
         "INFERENCE_AUTOTUNE_BUDGET_SECONDS": autotune_budget_seconds,
+        # Advanced-config-only escape hatch (no GUI widget, like the SAHI
+        # slice_merge_* knobs above) -- InferenceAutotunePolicy reads this
+        # key and previously had no producer at all, so it silently always
+        # took its 2.0s default.
+        "INFERENCE_AUTOTUNE_SINGLEFLIGHT_WAIT_SECONDS": advanced.get(
+            "inference_autotune_singleflight_wait_seconds", 2.0
+        ),
+        # Manual stage-share override (advanced-config only, like the knob
+        # above). Empty/absent falls back to the measured baseline's own
+        # stage shares (CoordinateSearch._measure) -- previously always
+        # empty because nothing produced this key.
+        "INFERENCE_AUTOTUNE_STAGE_SHARES": advanced.get(
+            "inference_autotune_stage_shares", {}
+        ),
         "YOLO_SEQ_STAGE2_POW2_PAD": bool(
             _cfg_get(cfg, "yolo_seq_stage2_pow2_pad", default=False)
         ),

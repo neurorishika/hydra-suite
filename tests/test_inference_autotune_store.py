@@ -345,3 +345,42 @@ def test_a_measured_density_change_still_demotes_to_provisional(tmp_path):
     record = store.load(key)
     assert record is not None
     assert record.state is ProfileState.PROVISIONAL
+
+
+def test_orphaned_locks_older_than_the_retention_window_are_pruned(tmp_path):
+    """``hydra_code_identity`` mints a new key (and lock file) on every code
+    edit; locks/ has no record cap, so it must self-prune stale orphans
+    (no matching record) once they're old enough that no in-flight claim
+    could still hold them.
+    """
+    import os
+    import time
+
+    store = InferenceTuningProfileStore(tmp_path)
+    locks_dir = tmp_path / "locks"
+    locks_dir.mkdir(parents=True)
+
+    stale_orphan = locks_dir / ("a" * 24 + ".lock")
+    stale_orphan.write_text("{}", encoding="utf-8")
+    old_time = time.time() - 8 * 24 * 60 * 60
+    os.utime(stale_orphan, (old_time, old_time))
+
+    fresh_orphan = locks_dir / ("b" * 24 + ".lock")
+    fresh_orphan.write_text("{}", encoding="utf-8")
+
+    # A lock with a matching record must survive regardless of age.
+    key = _key()
+    profile = _validated_profile(key)
+    store.save(profile)
+    matching_lock = locks_dir / f"{key.digest}.lock"
+    matching_lock.write_text("{}", encoding="utf-8")
+    os.utime(matching_lock, (old_time, old_time))
+
+    # Trigger the prune path via a second save (prune runs before each write).
+    store.save(
+        replace(profile, last_validation_unix_ns=profile.last_validation_unix_ns + 1)
+    )
+
+    assert not stale_orphan.exists()
+    assert fresh_orphan.exists()
+    assert matching_lock.exists()

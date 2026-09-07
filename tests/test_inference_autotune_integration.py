@@ -141,14 +141,18 @@ def test_tensorrt_profile_identity_is_part_of_every_compiled_detector_key(tmp_pa
     assert by_role["headtail"].tensorrt_profile_id == "none"
 
 
-def test_streaming_drops_inert_detector_batch_and_depth_coordinates(tmp_path):
+def test_realtime_drops_inert_detector_batch_and_depth_coordinates(tmp_path):
+    """``execution_mode`` only ever reaches "batch"/"realtime" from
+    worker.py (plus "cache_replay" wired from cache_read_only_replay) --
+    a since-removed "streaming" value was never producible and is now gone
+    from the ExecutionMode vocabulary entirely."""
     config = _config(tmp_path)
     context = TrackingRunContext(
         video_path=tmp_path / "video.mp4",
         params={"INFERENCE_AUTOTUNE_MODE": "record", "MAX_TARGETS": 25},
         frame_width=1200,
         frame_height=900,
-        execution_mode="streaming",
+        execution_mode="realtime",
     )
     request = build_tracking_autotune_request(
         config,
@@ -162,6 +166,33 @@ def test_streaming_drops_inert_detector_batch_and_depth_coordinates(tmp_path):
     assert "pipeline_depth" in request.planner.context.cached_fields
     assert request.planner.values_for("detection_batch_size", request.baseline) == ()
     assert request.planner.values_for("pipeline_depth", request.baseline) == ()
+
+
+def test_cache_replay_is_ineligible_and_never_searches(tmp_path):
+    """A result-cache-hit run must still resolve (not be skipped/silent) --
+    it's reported as an honest ineligible overlay, never a bare "off"."""
+    config = _config(tmp_path)
+    context = TrackingRunContext(
+        video_path=tmp_path / "video.mp4",
+        params={"INFERENCE_AUTOTUNE_MODE": "automatic", "MAX_TARGETS": 25},
+        frame_width=1200,
+        frame_height=900,
+        execution_mode="cache_replay",
+    )
+    request = build_tracking_autotune_request(
+        config,
+        context,
+        observation=_observation(),
+        backend="torch",
+        device_identity=("cpu", "CPU", "none", 0),
+    )
+
+    assert not request.eligible
+    assert not request.allow_cached_reuse
+    assert (
+        request.eligibility_reason
+        == "all inference stages are satisfied by reusable caches"
+    )
 
 
 def test_realtime_is_ineligible_and_never_searches(tmp_path):
@@ -350,3 +381,37 @@ def test_successful_memory_evidence_is_reused_by_exact_key_admission(tmp_path):
     assert detector_records[0].identity == memory_profile_identity(
         rebuilt.key, "detection_batch_size"
     )
+
+
+def test_worker_resolves_cache_replay_instead_of_skipping_the_preflight(
+    tmp_path, monkeypatch
+):
+    """Task 9: cache_read_only_replay used to skip inference-autotune
+    resolution entirely (the outer guard excluded it), so a result-cache-hit
+    run was silently invisible to autotune observability. It must now
+    resolve to an honest, ineligible "cache_replay" overlay instead."""
+    monkeypatch.setenv("HYDRA_DATA_DIR", str(tmp_path / "hydra_data"))
+    from hydra_suite.core.inference.config import InferenceAutotunePolicy
+    from hydra_suite.core.tracking import worker as worker_mod
+
+    config = _config(tmp_path)
+    config.inference_autotune = InferenceAutotunePolicy(mode="automatic")
+    video_path = tmp_path / "video.mp4"
+    video_path.write_bytes(b"not a real video")
+
+    _effective, overlay, _result = worker_mod._resolve_inference_autotune_before_load(
+        config,
+        {"MAX_TARGETS": 25},
+        video_path=str(video_path),
+        frame_width=100,
+        frame_height=100,
+        start_frame=0,
+        end_frame=10,
+        realtime=False,
+        should_cancel=lambda: False,
+        cache_read_only_replay=True,
+    )
+
+    assert overlay is not None
+    assert overlay.status == "deferred_due_to_contention"
+    assert overlay.reason == "all inference stages are satisfied by reusable caches"

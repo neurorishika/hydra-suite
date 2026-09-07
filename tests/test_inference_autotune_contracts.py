@@ -41,6 +41,7 @@ from hydra_suite.core.inference.autotune.measure import (
 from hydra_suite.core.inference.autotune.models import (
     CandidateEvidence,
     EquivalenceVerdict,
+    InferenceRuntimeOverlay,
     InferenceTuningProfile,
     InferenceTuningSettings,
     ProfileState,
@@ -51,8 +52,11 @@ from hydra_suite.core.inference.config import (
     CNNConfig,
     HeadTailConfig,
     InferenceConfig,
+    OBBConfig,
+    OBBDirectConfig,
     PoseConfig,
     PoseYOLOConfig,
+    SliceConfig,
 )
 from hydra_suite.runtime.memory_profiles import (
     MemoryMeasurement,
@@ -241,6 +245,58 @@ def test_overlay_settings_apply_without_mutating_requested_config():
     assert effective.headtail.batch_size == 4
     assert effective.cnn_phases[0].batch_size == 4
     assert effective.pose.yolo.batch_size == 4
+
+
+def _obb_config(*, tile_batch_autotune: bool) -> InferenceConfig:
+    return InferenceConfig(
+        obb=OBBConfig(
+            direct=OBBDirectConfig(
+                model_path="obb.pt",
+                slice=SliceConfig(
+                    enabled=True, tile_batch_autotune=tile_batch_autotune
+                ),
+            )
+        ),
+        detection_batch_size=1,
+        pipeline_depth=2,
+    )
+
+
+@pytest.mark.parametrize(
+    "status,reason",
+    [
+        ("recorded", "validated profile already recorded"),
+        ("kept_current_settings", "no manual field changed"),
+        ("fallback", "calibration failed"),
+        ("disabled", "automatic inference tuning is disabled"),
+    ],
+)
+def test_a_no_op_overlay_does_not_disable_the_tile_batch_autotuner(status, reason):
+    """record/kept_current/fallback/disabled overlays must not silently kill
+    SAHI tuning: they reuse the configured baseline verbatim."""
+    settings = _settings()
+    overlay = InferenceRuntimeOverlay.baseline(settings, status=status, reason=reason)
+    config = _obb_config(tile_batch_autotune=True)
+    effective = overlay.apply(config)
+    assert effective.obb.direct.slice.tile_batch_autotune is True
+
+
+@pytest.mark.parametrize("status", ["calibrated", "cache_hit", "cache_hit_after_wait"])
+def test_an_active_override_overlay_disables_the_tile_batch_autotuner(status):
+    """An overlay that actually supersedes slice_tile_batch_size must still
+    disable the process-local SAHI tuner -- the coordinated tuner owns it."""
+    settings = _settings()
+    overlay = InferenceRuntimeOverlay(
+        requested=settings,
+        admitted=settings,
+        effective=settings,
+        field_sources=tuple((f, "tuned") for f in settings.field_names()),
+        status=status,
+        reason="tuned",
+    )
+    config = _obb_config(tile_batch_autotune=True)
+    effective = overlay.apply(config)
+    assert effective.obb.direct.slice.tile_batch_autotune is False
 
 
 def test_candidate_generation_is_bounded_and_crop_values_canonicalize_to_density():

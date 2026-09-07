@@ -345,9 +345,14 @@ def test_block_window_clamps_to_a_short_range():
     assert _block_window(4, 19, 128, block_index=3, blocks=5) == (4, 19)
 
 
-def test_oom_adaptation_is_two_retries_and_never_mislabels_reduced_result(
+def test_oom_is_an_honest_failure_never_substituted_from_an_out_of_band_probe(
     tmp_path, monkeypatch
 ):
+    """An OOM'd candidate must return its own honest failure -- never splice
+    in a measurement taken while probing a different, reduced settings
+    vector. Substituting a later query's block_index for a measurement taken
+    out-of-turn (mid-cascade, for a different candidate) would silently
+    break the measurement protocol's paired-block structure."""
     observation, probe = _resources()
     executor = ContainedTrialExecutor(
         SidecarTrialSpec(
@@ -379,20 +384,25 @@ def test_oom_adaptation_is_two_retries_and_never_mislabels_reduced_result(
         should_cancel=lambda: False,
     )
 
-    assert attempted == [8, 4, 2]
+    # No speculative reduced-pressure retry: exactly one attempt, for the
+    # requested settings, and nothing else.
+    assert attempted == [8]
     assert result.settings == requested
     assert result.failure_class == "accelerator-oom"
+
+    # A later, independent query for the reduced settings at the same
+    # block_index must be measured fresh -- never served from a stale cache.
     reduced = requested.with_value("detection_batch_size", 2)
-    cached = executor.run(
+    fresh = executor.run(
         reduced,
         phase="stage",
         field_name="detection_batch_size",
         block_index=0,
         should_cancel=lambda: False,
     )
-    assert cached.settings == reduced
-    assert cached.failure_class is None
-    assert attempted == [8, 4, 2]
+    assert fresh.settings == reduced
+    assert fresh.failure_class is None
+    assert attempted == [8, 2]
 
 
 def test_warmup_scales_with_the_detector_batch_size():

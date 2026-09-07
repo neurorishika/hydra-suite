@@ -115,6 +115,7 @@ def _resolve_inference_autotune_before_load(
     status_callback=lambda _message: None,
     cache_dir=None,
     use_cached_detections: bool = False,
+    cache_read_only_replay: bool = False,
 ):
     """Resolve a run overlay before ``InferenceRunner`` can load any model."""
 
@@ -168,7 +169,11 @@ def _resolve_inference_autotune_before_load(
         frame_height=max(1, int(frame_height)),
         channels=3,
         decoder_mode="nvdec" if config.runtime_tier == "gpu_fast" else "opencv",
-        execution_mode="realtime" if realtime else "batch",
+        execution_mode=(
+            "cache_replay"
+            if cache_read_only_replay
+            else ("realtime" if realtime else "batch")
+        ),
         start_frame=start_frame,
         end_frame=end_frame,
         cached_fields=cached_fields,
@@ -1312,7 +1317,7 @@ class TrackingEngineCore:
                 self._emit_finished(False, [], [])
                 return
 
-            if not self.backward_mode and not self.cache_read_only_replay:
+            if not self.backward_mode:
                 if _inference_cfg.inference_autotune.mode != "off":
                     self._emit_progress(0, "Optimizing inference (bounded calibration)")
                 # S1: the preflight below builds a request (AutotuneRequest.
@@ -1346,6 +1351,7 @@ class TrackingEngineCore:
                         status_callback=lambda message: self._emit_progress(0, message),
                         cache_dir=self._resolve_cache_dir(),
                         use_cached_detections=self.use_cached_detections,
+                        cache_read_only_replay=self.cache_read_only_replay,
                     )
                 except Exception as _autotune_preflight_err:
                     logger.exception(

@@ -156,8 +156,18 @@ class InferenceTuningSettings:
             raise KeyError(f"inactive tuning field: {field_name}")
         return replace(self, **{field_name: value})
 
-    def apply(self, config: "InferenceConfig") -> "InferenceConfig":
-        """Return a detached config carrying these execution-only values."""
+    def apply(
+        self, config: "InferenceConfig", *, disable_tile_autotune: bool = True
+    ) -> "InferenceConfig":
+        """Return a detached config carrying these execution-only values.
+
+        ``disable_tile_autotune`` must only be true when this call is actually
+        overriding ``slice_tile_batch_size`` with a coordinated-tuner value
+        (i.e. overlays with status ``calibrated``/``cache_hit``/
+        ``cache_hit_after_wait``). No-op overlays (record, kept-current,
+        fallback, disabled, ...) reuse the configured baseline value and must
+        not silently disable the process-local SAHI tile-batch tuner.
+        """
 
         output = deepcopy(config)
         output.detection_batch_size = self.detection_batch_size
@@ -165,13 +175,16 @@ class InferenceTuningSettings:
         if output.obb is not None and self.slice_tile_batch_size is not None:
             if output.obb.mode == "direct" and output.obb.direct is not None:
                 output.obb.direct.slice.tile_batch_size = self.slice_tile_batch_size
-                # The coordinated tuner supersedes the old process-local SAHI tuner.
-                output.obb.direct.slice.tile_batch_autotune = False
+                if disable_tile_autotune:
+                    # The coordinated tuner supersedes the old process-local
+                    # SAHI tuner.
+                    output.obb.direct.slice.tile_batch_autotune = False
             elif output.obb.sequential is not None:
                 output.obb.sequential.stage1_slice.tile_batch_size = (
                     self.slice_tile_batch_size
                 )
-                output.obb.sequential.stage1_slice.tile_batch_autotune = False
+                if disable_tile_autotune:
+                    output.obb.sequential.stage1_slice.tile_batch_autotune = False
         if output.headtail is not None and self.headtail_batch_size is not None:
             output.headtail.batch_size = self.headtail_batch_size
         if output.pose is not None and self.pose_batch_size is not None:
@@ -349,9 +362,20 @@ class InferenceRuntimeOverlay:
     reason: str
     profile_id: str | None = None
 
+    #: Statuses where ``effective`` actually carries a coordinated-tuner
+    #: value distinct from the configured baseline. Every other status
+    #: reuses the configured settings verbatim and must not disable the
+    #: process-local SAHI tile-batch tuner as a side effect.
+    _ACTIVE_OVERRIDE_STATUSES = frozenset(
+        {"calibrated", "cache_hit", "cache_hit_after_wait"}
+    )
+
     def apply(self, config: "InferenceConfig") -> "InferenceConfig":
         """Apply only the effective values to a detached inference config."""
-        return self.effective.apply(config)
+        return self.effective.apply(
+            config,
+            disable_tile_autotune=self.status in self._ACTIVE_OVERRIDE_STATUSES,
+        )
 
     @classmethod
     def baseline(

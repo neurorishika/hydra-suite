@@ -322,9 +322,6 @@ class ContainedTrialExecutor:
     def __init__(self, spec: SidecarTrialSpec) -> None:
         self.spec = spec
         self._started = time.monotonic()
-        self._adapted: dict[
-            tuple[InferenceTuningSettings, str, int], TrialObservation
-        ] = {}
 
     def run(
         self,
@@ -335,10 +332,6 @@ class ContainedTrialExecutor:
         block_index: int,
         should_cancel: Callable[[], bool],
     ) -> TrialObservation:
-        cache_key = (settings, phase, block_index)
-        adapted = self._adapted.pop(cache_key, None)
-        if adapted is not None:
-            return adapted
         first = self._run_once(
             settings,
             phase=phase,
@@ -346,27 +339,18 @@ class ContainedTrialExecutor:
             block_index=block_index,
             should_cancel=should_cancel,
         )
-        if first.failure_class not in {"accelerator-oom", "host-soft-limit"}:
-            return first
-        current = settings
-        for _attempt in range(2):
-            reduced = self._reduce_pressure(current, field_name)
-            if reduced is None:
-                break
-            retry = self._run_once(
-                reduced,
-                phase=phase,
-                field_name=field_name,
-                block_index=block_index,
-                should_cancel=should_cancel,
-            )
-            self._adapted[(reduced, phase, block_index)] = retry
-            if retry.failure_class not in {"accelerator-oom", "host-soft-limit"}:
-                break
-            current = reduced
-        # Never attribute a reduced retry's output to the unsafe requested
-        # vector. The coordinate search may consume the exact reduced result
-        # later, but this candidate remains an honest failure.
+        # This candidate is an honest, unambiguous failure. A previous
+        # implementation ran an extra reduced-pressure probe here and cached
+        # its (successful) result for a LATER query of the reduced settings
+        # vector at the "same" block_index. That broke the measurement
+        # protocol's paired-block structure: `deterministic_block_order`
+        # interleaves candidates so every candidate's sample for a given
+        # block is measured at a matching point in the schedule (same
+        # wall-clock/thermal/contention conditions); splicing in a
+        # measurement taken out-of-turn, while probing a DIFFERENT failed
+        # candidate, silently violated that pairing. If the coordinate
+        # search independently wants to evaluate a reduced settings vector,
+        # it measures it itself, in its own correct block position.
         return first
 
     def _run_once(
@@ -498,35 +482,3 @@ class ContainedTrialExecutor:
             outputs=None,
             failure_class=failure_class,
         )
-
-    @staticmethod
-    def _reduce_pressure(
-        settings: InferenceTuningSettings, field_name: str | None
-    ) -> InferenceTuningSettings | None:
-        preferred = [field_name] if field_name else []
-        preferred.extend(
-            name
-            for name in (
-                "detection_batch_size",
-                "slice_tile_batch_size",
-                "pose_batch_size",
-                "headtail_batch_size",
-                *(
-                    name
-                    for name in settings.field_names()
-                    if name.startswith("identity_batch_size:")
-                ),
-                "pipeline_depth",
-            )
-            if name not in preferred
-        )
-        for name in preferred:
-            if name is None:
-                continue
-            try:
-                value = settings.value_for(name)
-            except KeyError:
-                continue
-            if value is not None and value > 1:
-                return settings.with_value(name, max(1, value // 2))
-        return None

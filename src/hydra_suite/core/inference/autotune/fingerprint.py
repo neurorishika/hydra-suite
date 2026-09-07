@@ -430,6 +430,36 @@ def _first_installed_version(names: tuple[str, ...]) -> str:
     return "absent"
 
 
+def _torch_cuda_version() -> str:
+    """Return the CUDA toolkit version torch was built against, if any.
+
+    ``nvidia-cuda-runtime-cu1x`` pip-metadata lookups read "absent" on a
+    conda-managed CUDA install (the common case in this lab) even though
+    CUDA is fully present and in use -- torch always knows its own build's
+    CUDA version regardless of how CUDA itself was installed.
+    """
+    try:
+        import torch
+
+        version = torch.version.cuda
+        return str(version) if version else "absent"
+    except ImportError:
+        return "absent"
+
+
+def _torch_cudnn_version() -> str:
+    """Return the loaded cuDNN version via torch, if any (see ``_torch_cuda_version``)."""
+    try:
+        import torch
+
+        if not torch.backends.cudnn.is_available():
+            return "absent"
+        version = torch.backends.cudnn.version()
+        return str(version) if version else "absent"
+    except ImportError:
+        return "absent"
+
+
 def default_system_fingerprint(*, total_host_bytes: int) -> SystemFingerprint:
     stable_host = hashlib.sha256(
         f"{socket.gethostname()}|{platform.node()}".encode("utf-8")
@@ -457,6 +487,20 @@ def default_software_fingerprint(
 ) -> SoftwareFingerprint:
     """Collect versions without importing model frameworks before admission."""
 
+    resolved_cuda = str(cuda)
+    if resolved_cuda == "unknown":
+        resolved_cuda = _torch_cuda_version()
+        if resolved_cuda == "absent":
+            resolved_cuda = _first_installed_version(
+                ("nvidia-cuda-runtime-cu13", "nvidia-cuda-runtime-cu12")
+            )
+    resolved_cudnn = str(cudnn)
+    if resolved_cudnn == "unknown":
+        resolved_cudnn = _torch_cudnn_version()
+        if resolved_cudnn == "absent":
+            resolved_cudnn = _first_installed_version(
+                ("nvidia-cudnn-cu13", "nvidia-cudnn-cu12")
+            )
     return SoftwareFingerprint(
         hydra_version=str(hydra_version),
         hydra_commit=str(hydra_commit or hydra_code_identity()),
@@ -464,18 +508,8 @@ def default_software_fingerprint(
         backend=_text(backend, "backend"),
         precision=_text(precision, "precision"),
         driver=str(driver),
-        cuda=(
-            str(cuda)
-            if str(cuda) != "unknown"
-            else _first_installed_version(
-                ("nvidia-cuda-runtime-cu13", "nvidia-cuda-runtime-cu12")
-            )
-        ),
-        cudnn=(
-            str(cudnn)
-            if str(cudnn) != "unknown"
-            else _first_installed_version(("nvidia-cudnn-cu13", "nvidia-cudnn-cu12"))
-        ),
+        cuda=resolved_cuda,
+        cudnn=resolved_cudnn,
         tensorrt=_package_version("tensorrt"),
         pytorch=_package_version("torch"),
         ultralytics=_package_version("ultralytics"),

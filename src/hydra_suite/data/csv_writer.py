@@ -7,7 +7,52 @@ import logging
 import queue
 import threading
 
+from hydra_suite.core.individual.identity import columns as C
+
 logger = logging.getLogger(__name__)
+
+
+def build_tracking_csv_header(
+    identity_method: str = "none_disabled", n_arenas: int = 1
+) -> list[str]:
+    """Build the raw tracking CSV header. Confidence columns are always emitted.
+
+    ``arena_id`` is appended ONLY when ``n_arenas > 1`` -- an unconditional
+    column would change the CSV contract (and column-count) for every existing
+    single-arena user, and `tools/equivalence/compare.py` bails out entirely
+    when the column lists differ, which would fail the byte-identity gate on
+    schema grounds alone for single-arena runs.
+
+    Shared by both the TrackerKit CLI (``trackerkit.headless_tracking``) and
+    the inference-autotune sidecar child process, so the two never drift.
+    """
+    base_cols = [
+        "TrackID",
+        "TrajectoryID",
+        "Index",
+        "X",
+        "Y",
+        "Theta",
+        "FrameID",
+        "State",
+        "DetectionConfidence",
+        "AssignmentConfidence",
+        "PositionUncertainty",
+        "DetectionID",
+    ]
+    header = list(base_cols) + C.identity_realtime_columns()
+    if str(identity_method).strip().lower() == "apriltags":
+        header.extend(
+            [
+                "DetectedTagID",
+                "DetectedTagLabel",
+                "DetectedTagConf",
+                "DetectedTagHamming",
+            ]
+        )
+    if int(n_arenas) > 1:
+        header.append("arena_id")
+    return header
 
 
 class CSVWriterThread(threading.Thread):

@@ -56,7 +56,7 @@ from .store import InferenceTuningProfileStore
 
 logger = logging.getLogger(__name__)
 
-ExecutionMode = Literal["batch", "streaming", "realtime", "cache_replay"]
+ExecutionMode = Literal["batch", "realtime", "cache_replay"]
 
 
 @dataclass(frozen=True, slots=True)
@@ -84,12 +84,7 @@ class TrackingRunContext:
             raise ValueError(
                 "tracking autotune context requires positive frame geometry"
             )
-        if self.execution_mode not in {
-            "batch",
-            "streaming",
-            "realtime",
-            "cache_replay",
-        }:
+        if self.execution_mode not in {"batch", "realtime", "cache_replay"}:
             raise ValueError("unknown inference execution mode")
 
 
@@ -548,7 +543,7 @@ def build_tracking_autotune_request(
 
     frame_bytes = context.frame_width * context.frame_height * context.channels
     cached_fields = set(context.cached_fields)
-    if context.execution_mode in {"streaming", "realtime"}:
+    if context.execution_mode == "realtime":
         cached_fields.update(("detection_batch_size", "pipeline_depth"))
     if context.execution_mode == "cache_replay":
         cached_fields.update(baseline.field_names())

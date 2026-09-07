@@ -35,6 +35,12 @@ except ImportError:  # pragma: no cover - POSIX
 
 MAX_PROFILE_BYTES = 4 * 1024 * 1024
 MAX_PROFILE_RECORDS = 512
+# ``hydra_code_identity`` hashes all package sources, so every code edit
+# mints a new key and therefore a new lock file under locks/ -- unlike
+# records, locks are never capped by count. Prune orphans (no matching
+# record) once they are old enough that no in-flight claim could plausibly
+# still reference them.
+LOCK_ORPHAN_MIN_AGE_SECONDS = 7 * 24 * 60 * 60
 
 
 def profile_store_root() -> Path:
@@ -317,7 +323,39 @@ class InferenceTuningProfileStore:
                     path.unlink(missing_ok=True)
         except OSError:
             # Retention is best-effort; the record itself still gets an atomic write.
+            pass
+        self._prune_orphaned_locks()
+
+    def _prune_orphaned_locks(self) -> None:
+        """Delete stale lock files with no matching record.
+
+        A lock file is safe to remove once it is orphaned (no record for its
+        key digest exists) *and* old enough (mtime older than
+        ``LOCK_ORPHAN_MIN_AGE_SECONDS``) that no reasonable in-flight
+        ``claim()`` could still be holding it -- claims rewrite the lock file
+        (seek+truncate+write) on acquisition, so a genuinely active claim's
+        mtime is recent.
+        """
+        locks_dir = self.root / "locks"
+        try:
+            lock_paths = list(locks_dir.glob("*.lock"))
+        except OSError:
             return
+        if not lock_paths:
+            return
+        now = time.time()
+        for lock_path in lock_paths:
+            try:
+                digest = lock_path.stem
+                record_path = self.root / f"{digest}.json"
+                if record_path.exists():
+                    continue
+                age_seconds = now - lock_path.stat().st_mtime
+                if age_seconds < LOCK_ORPHAN_MIN_AGE_SECONDS:
+                    continue
+                lock_path.unlink(missing_ok=True)
+            except OSError:
+                continue
 
 
 def _profile_to_dict(profile: InferenceTuningProfile) -> dict[str, Any]:
