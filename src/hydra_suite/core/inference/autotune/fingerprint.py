@@ -128,6 +128,12 @@ class WorkloadFingerprint:
     crops_p50_bucket: int
     crops_p95_bucket: int
     canonical_crop_geometries: tuple[str, ...]
+    # S2: True when this bucket was never actually measured -- run 1 has no
+    # detection cache, so the workload falls back to bucket(MAX_TARGETS). A
+    # key built from an estimate must be re-keyed by the first real
+    # production sample instead of demoted as if reality had "changed" from
+    # a measurement that never happened.
+    density_is_estimated: bool = False
 
     @classmethod
     def from_counts(
@@ -136,6 +142,8 @@ class WorkloadFingerprint:
         detections: Iterable[int],
         crops: Iterable[int],
         canonical_crop_geometries: Iterable[str],
+        *,
+        density_is_estimated: bool = False,
     ) -> "WorkloadFingerprint":
         det = tuple(int(v) for v in detections)
         crop = tuple(int(v) for v in crops)
@@ -148,6 +156,7 @@ class WorkloadFingerprint:
             canonical_crop_geometries=tuple(
                 sorted(map(str, canonical_crop_geometries))
             ),
+            density_is_estimated=bool(density_is_estimated),
         )
 
 

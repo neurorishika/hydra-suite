@@ -11,11 +11,13 @@ around the `ProfileState` enumeration for the amended state description.
 from __future__ import annotations
 
 import json
+from dataclasses import replace
 
 from hydra_suite.core.inference.autotune.coordinator import (
     AutotuneCoordinator,
     AutotuneRequest,
 )
+from hydra_suite.core.inference.autotune.fingerprint import WorkloadFingerprint
 from hydra_suite.core.inference.autotune.models import (
     CandidateEvidence,
     EquivalenceVerdict,
@@ -27,7 +29,7 @@ from hydra_suite.core.inference.autotune.store import InferenceTuningProfileStor
 
 from .autotune_helpers import _key, _planner
 from .autotune_helpers import _profile as _validated_profile
-from .autotune_helpers import _settings
+from .autotune_helpers import _settings, _store_with_validated_profile
 
 
 class _NeverCompletesExecutor:
@@ -275,3 +277,71 @@ def test_profile_written_under_a_previous_schema_version_is_a_miss(tmp_path):
 
     assert store.load(profile.key) is None
     assert store.observe_production_throughput(profile.profile_id, 100.0) is None
+
+
+def test_run_one_profile_survives_its_own_production_density_sample(tmp_path):
+    """S2: the first run's own density sample must re-key the profile, not
+    demote it -- the key's density was never measured (run 1 has no
+    detection cache yet), so it cannot have "changed".
+    """
+    store, key = _store_with_validated_profile(tmp_path, keyed_on_max_targets=True)
+    detection_counts = (7,) * 9 + (9,)
+
+    state = store.observe_production_throughput(
+        key.digest[:24],
+        1.0,
+        detection_counts=detection_counts,
+        crop_counts=detection_counts,
+    )
+
+    assert state is ProfileState.VALIDATED
+    corrected_workload = WorkloadFingerprint.from_counts(
+        key.workload.configured_target_count,
+        detection_counts,
+        detection_counts,
+        key.workload.canonical_crop_geometries,
+        density_is_estimated=False,
+    )
+    reloaded = store.load(replace(key, workload=corrected_workload))
+    assert reloaded is not None
+    assert reloaded.state is ProfileState.VALIDATED
+    assert reloaded.selected == store.load(key).selected
+
+
+def test_run_one_reload_under_original_key_still_available_for_the_next_cold_video(
+    tmp_path,
+):
+    """The re-keyed save must not destroy the run-1 fallback entry -- the
+    very next brand-new video also has no cache yet and needs it.
+    """
+    store, key = _store_with_validated_profile(tmp_path, keyed_on_max_targets=True)
+    detection_counts = (7,) * 9 + (9,)
+
+    store.observe_production_throughput(
+        key.digest[:24],
+        1.0,
+        detection_counts=detection_counts,
+        crop_counts=detection_counts,
+    )
+
+    assert store.load(key) is not None
+    assert store.load(key).state is ProfileState.VALIDATED
+
+
+def test_a_measured_density_change_still_demotes_to_provisional(tmp_path):
+    """S2 must not weaken the genuine-drift path: a key whose density WAS
+    measured (density_is_estimated=False) still demotes on a real mismatch.
+    """
+    store, key = _store_with_validated_profile(tmp_path, keyed_on_max_targets=False)
+
+    state = store.observe_production_throughput(
+        key.digest[:24],
+        1.0,
+        detection_counts=(1, 2, 3),
+        crop_counts=(1, 2, 3),
+    )
+
+    assert state is ProfileState.PROVISIONAL
+    record = store.load(key)
+    assert record is not None
+    assert record.state is ProfileState.PROVISIONAL

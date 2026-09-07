@@ -452,11 +452,20 @@ def build_tracking_autotune_request(
         config, params, context.frame_width, context.frame_height
     )
     configured_targets = max(1, int(params.get("MAX_TARGETS", 1)))
-    detection_counts = _counts(
-        params.get("INFERENCE_AUTOTUNE_DETECTION_COUNTS"), configured_targets
-    )
+    raw_detection_counts = params.get("INFERENCE_AUTOTUNE_DETECTION_COUNTS")
+    detection_counts = _counts(raw_detection_counts, configured_targets)
     crop_counts = _counts(
         params.get("INFERENCE_AUTOTUNE_CROP_COUNTS"), configured_targets
+    )
+    # S2: run 1 of a brand-new video has no detection cache yet, so
+    # ``_counts`` falls back to bucket(MAX_TARGETS) instead of a real
+    # measurement. Mark that on the key so the production-observation path
+    # (store.observe_production_throughput) can re-key the profile once real
+    # density arrives, rather than treating the fallback as a "measurement"
+    # that later "changed".
+    density_is_estimated = not (
+        isinstance(raw_detection_counts, (list, tuple))
+        and len(raw_detection_counts) > 0
     )
     canonical_w, canonical_h = map(int, config.canonical.canvas_wh)
     workload = WorkloadFingerprint.from_counts(
@@ -464,6 +473,7 @@ def build_tracking_autotune_request(
         detection_counts,
         crop_counts,
         (f"{canonical_w}x{canonical_h}",),
+        density_is_estimated=density_is_estimated,
     )
     device_uuid, device_model, capability, total_vram = device_identity
     detector_method = str(params.get("DETECTION_METHOD", config.detection_source))

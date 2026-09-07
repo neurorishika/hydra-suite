@@ -233,16 +233,40 @@ class InferenceTuningProfileStore:
             history = (*current.observed_production_throughput, float(throughput))[-64:]
             state = current.state
             invalidation_reason = current.invalidation_reason
+            rekeyed_profile: InferenceTuningProfile | None = None
             if detection_counts:
-                observed_workload = WorkloadFingerprint.from_counts(
-                    current.key.workload.configured_target_count,
-                    detection_counts,
-                    crop_counts or detection_counts,
-                    current.key.workload.canonical_crop_geometries,
+                observed_workload = replace(
+                    WorkloadFingerprint.from_counts(
+                        current.key.workload.configured_target_count,
+                        detection_counts,
+                        crop_counts or detection_counts,
+                        current.key.workload.canonical_crop_geometries,
+                    ),
+                    density_is_estimated=False,
                 )
                 if observed_workload != current.key.workload:
-                    state = ProfileState.PROVISIONAL
-                    invalidation_reason = "production workload density bucket changed"
+                    if current.key.workload.density_is_estimated:
+                        # S2: run 1 has no detection cache yet, so the key's
+                        # density bucket was a MAX_TARGETS fallback, never a
+                        # measurement. The first real sample corrects the
+                        # key instead of demoting a profile that was never
+                        # actually wrong -- it was just provisional about its
+                        # own workload identity. The original fallback-keyed
+                        # record is left in place (untouched) so the next
+                        # brand-new video, which also has no cache yet, still
+                        # gets a warm start from it.
+                        rekeyed_key = replace(current.key, workload=observed_workload)
+                        rekeyed_profile = replace(
+                            current,
+                            key=rekeyed_key,
+                            profile_id=rekeyed_key.digest[:24],
+                            observed_production_throughput=tuple(history),
+                        )
+                    else:
+                        state = ProfileState.PROVISIONAL
+                        invalidation_reason = (
+                            "production workload density bucket changed"
+                        )
             comparable = [
                 item
                 for item in current.candidates
@@ -260,6 +284,14 @@ class InferenceTuningProfileStore:
             ):
                 state = ProfileState.PROVISIONAL
                 invalidation_reason = "production throughput regressed by more than 15%"
+            if rekeyed_profile is not None:
+                rekeyed_profile = replace(
+                    rekeyed_profile,
+                    state=state,
+                    invalidation_reason=invalidation_reason,
+                )
+                self.save(rekeyed_profile)
+                return rekeyed_profile.state
             self.save(
                 replace(
                     current,

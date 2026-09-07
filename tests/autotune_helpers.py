@@ -167,6 +167,26 @@ def _profile(key: TuningProfileKey | None = None) -> InferenceTuningProfile:
     )
 
 
+def _store_with_validated_profile(
+    tmp_path: Path, *, keyed_on_max_targets: bool = False
+) -> tuple[InferenceTuningProfileStore, TuningProfileKey]:
+    """A store holding one VALIDATED profile, optionally keyed run-1-style.
+
+    ``keyed_on_max_targets=True`` mirrors run 1 of a brand-new video: no
+    detection cache exists yet, so the workload bucket is the
+    ``MAX_TARGETS`` fallback rather than a measurement (S2).
+    """
+
+    workload = WorkloadFingerprint.from_counts(
+        8, (8,), (8,), ("10x10",), density_is_estimated=keyed_on_max_targets
+    )
+    key = _key(workload=workload)
+    profile = _profile(key)
+    store = InferenceTuningProfileStore(tmp_path)
+    store.save(profile)
+    return store, key
+
+
 def _resource_probe(
     *, accelerator_kind: AcceleratorKind = AcceleratorKind.CPU
 ) -> tuple[ResourceObservation, RuntimeResourceProbe]:
