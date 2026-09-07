@@ -261,3 +261,72 @@ def test_divergence_from_the_reference_loop_is_exactly_the_output_paths(tmp_path
         assert differing <= {"file_path", "csv_path", "video_output_path"}, differing
     # ...and the reference loop really does collide, which is what we fixed.
     assert len({cfg.get("video_output_path") for _, cfg in ref}) == 1
+
+
+def test_single_video_explicit_config_keeps_its_own_output_path(tmp_path):
+    """``trackerkit track v.mp4 --config c.json`` must honour c.json's paths.
+
+    There is no batch here and nothing to disambiguate: the user named a render
+    path explicitly, and retargeting it to the default beside the video throws
+    away the one instruction they gave.
+    """
+    video = _mk_video(tmp_path, "myvideo")
+    cfg = {
+        "file_path": str(video),
+        "csv_path": str(tmp_path / "CUSTOM.csv"),
+        "video_output_enabled": True,
+        "video_output_path": str(tmp_path / "renders" / "CUSTOM_RENDER.mp4"),
+    }
+    explicit = tmp_path / "cfg.json"
+    explicit.write_text(json.dumps(cfg))
+
+    specs = plan_batch_jobs([video], explicit_config_path=str(explicit))
+
+    assert len(specs) == 1
+    assert specs[0].provenance == "explicit"
+    assert specs[0].config["video_output_path"] == cfg["video_output_path"]
+    assert specs[0].config["csv_path"] == cfg["csv_path"]
+    assert specs[0].config["file_path"] == cfg["file_path"]
+
+
+def _replan_as_child(directory: Path, spec):
+    """Exactly what a fan-out child does: re-plan the job config it was given.
+
+    ``_launch`` writes ``spec.config`` to ``job_<N>_config.json`` and runs
+    ``track <video> --config job_<N>_config.json``, so the child runs the
+    planner a SECOND time over the parent's already-resolved config.
+    """
+    job_cfg = directory / f"job_{spec.index}_config.json"
+    job_cfg.write_text(json.dumps(spec.config))
+    return plan_batch_jobs([spec.video_path], explicit_config_path=str(job_cfg))[0]
+
+
+def test_child_replan_of_a_job_config_is_idempotent(tmp_path):
+    """The parent's plan is the contract; the child's re-plan must not edit it.
+
+    Otherwise a fan-out silently renders somewhere the sequential run did not,
+    while the CSVs -- which are derived from the video path, not from these
+    keys -- stay byte-identical and hide it.
+    """
+    # (a) every video has its OWN sidecar, and the keystone's sidecar names a
+    #     non-default csv/render path (the case the user chose deliberately).
+    own = tmp_path / "own"
+    (own / "renders").mkdir(parents=True)
+    cfg_a = _sidecar_cfg(own, "a")
+    cfg_a["csv_path"] = str(own / "renders" / "a_CUSTOM.csv")
+    cfg_a["video_output_path"] = str(own / "renders" / "a_CUSTOM.mp4")
+    a = _mk_video(own, "a", cfg_a)
+    b = _mk_video(own, "b", _sidecar_cfg(own, "b"))
+    for spec in plan_batch_jobs([a, b]):
+        assert _replan_as_child(own, spec).config == spec.config, spec.index
+
+    # (b) only the keystone has a sidecar; every later video inherits it.
+    inherit = tmp_path / "inherit"
+    (inherit / "renders").mkdir(parents=True)
+    cfg_k = _sidecar_cfg(inherit, "k")
+    cfg_k["csv_path"] = str(inherit / "renders" / "k_CUSTOM.csv")
+    cfg_k["video_output_path"] = str(inherit / "renders" / "k_CUSTOM.mp4")
+    k = _mk_video(inherit, "k", cfg_k)
+    m = _mk_video(inherit, "m")
+    for spec in plan_batch_jobs([k, m]):
+        assert _replan_as_child(inherit, spec).config == spec.config, spec.index

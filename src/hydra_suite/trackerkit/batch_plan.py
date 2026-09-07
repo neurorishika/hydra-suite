@@ -63,13 +63,18 @@ _SIDE_OUTPUT_KEYS = ("file_path", "csv_path", "video_output_path")
 def _retarget_side_outputs(cfg: dict[str, Any], video_path: str) -> dict[str, Any]:
     """Point a BORROWED config's side-output paths at *video_path*.
 
-    A config that did not come from this video's own sidecar holds the
-    keystone's ABSOLUTE output paths. Left alone, every video in a
-    keystone-inherited batch renders its annotated overlay into the keystone's
-    one mp4 -- N concurrent writers, one corrupt file, and no overlay for any
-    other video. The pre-refactor sequential loop had the same latent bug; the
-    GUI's own sequential batch did not, because it re-derived the path per
-    video.
+    A config borrowed from ANOTHER video holds that video's ABSOLUTE output
+    paths. Left alone, every video in a keystone-inherited batch renders its
+    annotated overlay into the keystone's one mp4 -- N concurrent writers, one
+    corrupt file, and no overlay for any other video. The pre-refactor
+    sequential loop had the same latent bug; the GUI's own sequential batch did
+    not, because it re-derived the path per video.
+
+    "Borrowed" is the whole justification, so it is also the whole scope: see
+    the call site for the two provenances that qualify. A config the user
+    named for THIS video -- its own sidecar, or a ``--config`` on a
+    single-video run -- is not borrowed from anyone, and rewriting its paths
+    would discard the render location the user asked for.
 
     Only keys that are ALREADY present are rewritten: inventing
     ``video_output_path`` would make a config that never rendered a video start
@@ -120,9 +125,11 @@ def plan_batch_jobs(
     """Resolve one ``BatchJobSpec`` per video with today's keystone rules.
 
     Semantics are exactly the pre-refactor ``cli.run_tracking_cli`` loop:
-    video 1's resolved config (pre-SAHI-override when it came from a file)
-    becomes the keystone baseline; a video with no config of its own inherits
-    the baseline; ``sahi_profile`` is applied to every video.
+    video 1's resolved config becomes the keystone baseline; a video with no
+    config of its own inherits the baseline; ``sahi_profile`` is applied to
+    every video. The one deliberate divergence is that a config a video
+    BORROWED from another gets its side-output paths retargeted -- see
+    ``_retarget_side_outputs`` and the guard at its call site.
     """
     videos = [str(v).strip() for v in video_paths if str(v).strip()]
     if not videos:
@@ -162,7 +169,20 @@ def plan_batch_jobs(
         if sahi_profile:
             cfg = apply_sahi_profile_override(cfg, sahi_profile)
         cfg = deepcopy(dict(cfg))
-        if provenance != "own-sidecar":
+        # Retarget only a config this video BORROWED from another video:
+        #  * "keystone-baseline" -- always borrowed, by definition;
+        #  * "explicit" on a MULTI-video batch -- one --config shared by every
+        #    video, so at most one of them can own its paths.
+        # An "explicit" config on a SINGLE video is not borrowed: the user
+        # named that config for that video, and rewriting its paths would (a)
+        # throw away the render location they asked for and (b) make the
+        # fan-out child's re-plan of its own job config -- which arrives as
+        # ``track <video> --config job_N.json``, i.e. explicit, len(plan) == 1
+        # -- overwrite the parent's decision, so an own-sidecar batch's
+        # renders diverge from sequential while its CSVs stay identical.
+        if provenance == "keystone-baseline" or (
+            provenance == "explicit" and len(plan) > 1
+        ):
             cfg = _retarget_side_outputs(cfg, item.video_path)
         if index == 1:
             # The keystone's own resolved dict IS the baseline; a video that
