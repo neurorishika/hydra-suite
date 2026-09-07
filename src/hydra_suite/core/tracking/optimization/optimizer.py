@@ -966,6 +966,19 @@ class TrackingOptimizerCore:
 
         return merge_tracking_autotune_candidate(self.base_params, candidate_params)
 
+    @staticmethod
+    def _scoring_slot_arena(params: Mapping[str, Any]) -> np.ndarray | None:
+        """Return fixed multi-arena labels for grouped scoring safeguards.
+
+        The production tracker assigns every slot to one arena for its full
+        lifetime.  Proposal and held-out scoring must retain that same
+        membership when aligning replayed slots or comparing collision pairs.
+        ``None`` deliberately preserves the single-arena scoring path.
+        """
+        layout = arena_layout_from_params(params)
+        check_slot_arena_covers_all_slots(layout, int(params["MAX_TARGETS"]))
+        return None if layout.is_single_arena else layout.slot_arena
+
     def _temporal_validation_horizon(self) -> int:
         """Largest temporal effect horizon represented by the active search."""
 
@@ -1052,12 +1065,14 @@ class TrackingOptimizerCore:
             * float(params.get("RESIZE_FACTOR", 1.0)),
             1e-6,
         )
+        slot_arena = self._scoring_slot_arena(params)
         try:
             cycle = forward_backward_cycle_consistency(
                 forward,
                 backward,
                 backward_is_reverse_chronological=False,
                 spatial_scale=body_scale,
+                slot_arena=slot_arena,
             )
             cycle_loss = min(float(cycle.mean_normalized_error), 10.0)
         except ValueError:
@@ -1081,6 +1096,7 @@ class TrackingOptimizerCore:
         body_scale: float,
         *,
         detection_counts: np.ndarray | None = None,
+        slot_arena: np.ndarray | None = None,
     ) -> list[CandidateEvaluation]:
         """Build paired region measurements using one global slot alignment.
 
@@ -1096,6 +1112,7 @@ class TrackingOptimizerCore:
                 backward_is_reverse_chronological=False,
                 spatial_scale=body_scale,
                 minimum_shared_observations=_MIN_CYCLE_SHARED_OBSERVATIONS,
+                slot_arena=slot_arena,
             )
         except ValueError:
             slot_alignment = None
@@ -1116,12 +1133,14 @@ class TrackingOptimizerCore:
                 spatial_scale=body_scale,
                 detection_counts=detection_counts,
                 segment=segment,
+                slot_arena=slot_arena,
             )
             backward_sanity = output_sanity_metrics(
                 backward,
                 spatial_scale=body_scale,
                 detection_counts=detection_counts,
                 segment=segment,
+                slot_arena=slot_arena,
             )
             if slot_alignment is None:
                 cycle_loss = 10.0
@@ -1135,6 +1154,7 @@ class TrackingOptimizerCore:
                         spatial_scale=body_scale,
                         slot_alignment=slot_alignment,
                         minimum_shared_observations=_MIN_CYCLE_SHARED_OBSERVATIONS,
+                        slot_arena=slot_arena,
                     )
                     cycle_loss = min(float(cycle.mean_normalized_error), 10.0)
                     cycle_observation_coverage = float(
@@ -1276,6 +1296,7 @@ class TrackingOptimizerCore:
         evaluations: list[CandidateEvaluation],
         *,
         candidate_params: Mapping[str, Any] | None = None,
+        slot_arena: np.ndarray | None = None,
     ) -> str | None:
         """Return why regional production metrics lack real temporal evidence.
 
@@ -1328,6 +1349,7 @@ class TrackingOptimizerCore:
                 backward_is_reverse_chronological=False,
                 spatial_scale=body_scale,
                 minimum_shared_observations=_MIN_CYCLE_SHARED_OBSERVATIONS,
+                slot_arena=slot_arena,
             )
         except ValueError:
             return (
@@ -1346,6 +1368,7 @@ class TrackingOptimizerCore:
                     spatial_scale=body_scale,
                     slot_alignment=slot_alignment,
                     minimum_shared_observations=_MIN_CYCLE_SHARED_OBSERVATIONS,
+                    slot_arena=slot_arena,
                 )
             except ValueError:
                 return (
@@ -1682,6 +1705,7 @@ class TrackingOptimizerCore:
                 _cancelled()
                 return
             params = self._candidate_evaluation_params(result.params)
+            slot_arena = self._scoring_slot_arena(params)
             detection_counts = self._validation_detection_counts(
                 params, start_frame, end_frame
             )
@@ -1718,6 +1742,7 @@ class TrackingOptimizerCore:
                 backward.positions,
                 body_scale,
                 detection_counts=detection_counts,
+                slot_arena=slot_arena,
             )
             temporal_evidence_reason = self._validation_temporal_evidence_reason(
                 forward.positions,
@@ -1725,6 +1750,7 @@ class TrackingOptimizerCore:
                 body_scale,
                 evaluations,
                 candidate_params=result.params,
+                slot_arena=slot_arena,
             )
             if temporal_evidence_reason is not None:
                 result.recommendation_reason = "production validation skipped: " + (

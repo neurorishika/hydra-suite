@@ -261,6 +261,37 @@ def test_validation_regions_reuse_one_full_window_slot_alignment() -> None:
     assert evaluations[1].metrics["cycle_loss"] > 5.0
 
 
+def test_validation_regions_keep_cross_arena_complementary_slots_as_non_evidence() -> (
+    None
+):
+    """Held-out regional scoring must inherit the fixed arena slot mapping."""
+
+    forward = np.full((20, 2, 2), np.nan, dtype=np.float32)
+    backward = np.full_like(forward, np.nan)
+    forward[:10, 0] = np.column_stack(
+        (np.arange(10, dtype=np.float32), np.zeros(10, dtype=np.float32))
+    )
+    forward[10:, 1] = np.column_stack(
+        (100.0 + np.arange(10, dtype=np.float32), np.zeros(10, dtype=np.float32))
+    )
+    backward[:10, 1] = forward[:10, 0]
+    backward[10:, 0] = forward[10:, 1]
+
+    unconstrained = TrackingOptimizerCore._validation_evaluations(
+        "candidate", forward, backward, 1.0
+    )
+    constrained = TrackingOptimizerCore._validation_evaluations(
+        "candidate",
+        forward,
+        backward,
+        1.0,
+        slot_arena=np.array([0, 1], dtype=np.int32),
+    )
+
+    assert all(item.metrics["cycle_observation_coverage"] > 0 for item in unconstrained)
+    assert all(item.metrics["cycle_observation_coverage"] == 0 for item in constrained)
+
+
 def test_validation_regions_reject_single_observation_cycle_evidence() -> None:
     """A globally valid slot mapping must not make one-frame blocks perfect."""
 

@@ -266,6 +266,7 @@ def forward_backward_cycle_consistency(
     spatial_scale: float | None = None,
     slot_alignment: SlotAlignment | None = None,
     minimum_shared_observations: int = 2,
+    slot_arena: Sequence[int] | NDArray[np.integer] | None = None,
 ) -> CycleConsistency:
     """Measure forward/backward disagreement after aligning time direction.
 
@@ -274,10 +275,13 @@ def forward_backward_cycle_consistency(
     forward slots with an overlap-first Hungarian assignment, then the same
     pooled normalized errors are reported.  This removes arbitrary bootstrap
     slot labels without hiding a time-varying identity swap or letting a
-    one-frame coincidence replace longer evidence.  Pairs with insufficient
-    overlap cannot contribute evidence.  With no supplied scale, a robust
-    inter-track distance (then temporal displacement) is inferred; it falls
-    back to one for a stationary singleton track.
+    one-frame coincidence replace longer evidence.  When ``slot_arena`` is
+    supplied, alignment is additionally restricted to the fixed arena of each
+    track slot; a replayed slot must never earn cycle evidence by borrowing a
+    complementary slot in another arena. Pairs with insufficient overlap
+    cannot contribute evidence.  With no supplied scale, a robust inter-track
+    distance (then temporal displacement) is inferred; it falls back to one
+    for a stationary singleton track.
     """
 
     forward = _validated_positions(forward_positions, "forward_positions")
@@ -290,6 +294,7 @@ def forward_backward_cycle_consistency(
         backward = backward[::-1]
 
     shared_count = _validated_minimum_shared_observations(minimum_shared_observations)
+    arena_labels = _validated_slot_arena(slot_arena, forward.shape[1])
     scale = _resolve_spatial_scale(forward, spatial_scale)
     alignment = slot_alignment or global_slot_alignment(
         forward,
@@ -297,6 +302,7 @@ def forward_backward_cycle_consistency(
         backward_is_reverse_chronological=False,
         spatial_scale=scale,
         minimum_shared_observations=shared_count,
+        slot_arena=arena_labels,
     )
     if not np.isclose(scale, alignment.spatial_scale, rtol=1e-9, atol=1e-12):
         raise ValueError("slot_alignment spatial_scale does not match this score")
@@ -306,6 +312,7 @@ def forward_backward_cycle_consistency(
         alignment,
         scale,
         minimum_shared_observations=shared_count,
+        slot_arena=arena_labels,
     )
     available_observations = min(
         int(np.count_nonzero(np.isfinite(forward).all(axis=2))),
@@ -333,13 +340,16 @@ def global_slot_alignment(
     backward_is_reverse_chronological: bool = True,
     spatial_scale: float | None = None,
     minimum_shared_observations: int = 2,
+    slot_arena: Sequence[int] | NDArray[np.integer] | None = None,
 ) -> SlotAlignment:
     """Find one robust, full-window forward/backward slot mapping.
 
     Assignment first maximises the number of sufficiently shared observations,
     then minimises the same pooled normalized error reported by
     :func:`forward_backward_cycle_consistency`.  This prevents two accidental
-    one-frame matches from replacing a longer, informative pairing.
+    one-frame matches from replacing a longer, informative pairing. Optional
+    fixed arena labels only permit mappings within the same arena, matching
+    the production assigner's static slot membership.
     """
 
     forward = _validated_positions(forward_positions, "forward_positions")
@@ -351,12 +361,14 @@ def global_slot_alignment(
     if backward_is_reverse_chronological:
         backward = backward[::-1]
     shared_count = _validated_minimum_shared_observations(minimum_shared_observations)
+    arena_labels = _validated_slot_arena(slot_arena, forward.shape[1])
     scale = _resolve_spatial_scale(forward, spatial_scale)
     mapping, shared_observations = _robust_global_slot_mapping(
         forward,
         backward,
         scale,
         minimum_shared_observations=shared_count,
+        slot_arena=arena_labels,
     )
     available_observations = min(
         int(np.count_nonzero(np.isfinite(forward).all(axis=2))),
@@ -454,13 +466,17 @@ def output_sanity_metrics(
     detection_counts: Sequence[int] | NDArray[np.integer] | None = None,
     segment: TemporalSegment | None = None,
     collision_distance_fraction: float = 0.5,
+    slot_arena: Sequence[int] | NDArray[np.integer] | None = None,
 ) -> OutputSanityMetrics:
     """Calculate output-pathology safeguards for one complete or regional slice.
 
     ``detection_counts`` are source detections after the candidate's production
     filtering contract.  An excess is a useful false-positive *risk signal*,
     not a labelled false-positive rate.  If counts are unavailable, that
-    signal is neutral rather than invented from unlabelled tracks.
+    signal is neutral rather than invented from unlabelled tracks. With fixed
+    multi-arena slot labels, collision comparisons are restricted to slots in
+    the same arena: spatially adjacent animals separated by a real arena
+    boundary are not duplicate output evidence.
     """
 
     observed_positions = _validated_positions(positions, "positions")
@@ -472,6 +488,7 @@ def output_sanity_metrics(
     region_positions = observed_positions[selected.start : selected.stop]
     observed = np.isfinite(region_positions).all(axis=2)
     track_count = observed.shape[1]
+    arena_labels = _validated_slot_arena(slot_arena, track_count)
     per_track_coverage = np.mean(observed, axis=0)
     worst_track_coverage_loss = float(1.0 - np.min(per_track_coverage))
 
@@ -482,6 +499,11 @@ def output_sanity_metrics(
         present = np.flatnonzero(visible)
         for left_offset, left_track in enumerate(present):
             for right_track in present[left_offset + 1 :]:
+                if (
+                    arena_labels is not None
+                    and arena_labels[left_track] != arena_labels[right_track]
+                ):
+                    continue
                 comparable_pairs += 1
                 distance = float(np.linalg.norm(frame[left_track] - frame[right_track]))
                 collision_count += int(distance < threshold)
@@ -917,6 +939,33 @@ def _validated_positions(values: NDArray[np.floating], name: str) -> FloatArray:
     return positions
 
 
+def _validated_slot_arena(
+    values: Sequence[int] | NDArray[np.integer] | None,
+    track_count: int,
+) -> NDArray[np.int64] | None:
+    """Validate fixed per-slot arena labels for optional grouped metrics."""
+    if values is None:
+        return None
+    try:
+        numeric = np.asarray(values, dtype=np.float64)
+        labels = np.asarray(values, dtype=np.int64)
+    except (TypeError, ValueError, OverflowError) as exc:
+        raise ValueError(
+            "slot_arena must contain finite non-negative integers"
+        ) from exc
+    if labels.ndim != 1 or labels.shape[0] != track_count:
+        raise ValueError("slot_arena must contain one label per track slot")
+    if (
+        numeric.ndim != 1
+        or numeric.shape[0] != track_count
+        or not np.isfinite(numeric).all()
+        or np.any(numeric != labels)
+        or np.any(labels < 0)
+    ):
+        raise ValueError("slot_arena must contain finite non-negative integers")
+    return labels
+
+
 def _resolve_spatial_scale(
     positions: FloatArray, supplied_scale: float | None
 ) -> float:
@@ -948,6 +997,7 @@ def _robust_global_slot_mapping(
     scale: float,
     *,
     minimum_shared_observations: int,
+    slot_arena: NDArray[np.int64] | None = None,
 ) -> tuple[tuple[int | None, ...], int]:
     """Lexicographically maximise overlap, then minimise pooled cycle error."""
 
@@ -956,6 +1006,11 @@ def _robust_global_slot_mapping(
     total_errors = np.full((track_count, track_count), np.inf, dtype=float)
     for forward_track in range(track_count):
         for backward_track in range(track_count):
+            if (
+                slot_arena is not None
+                and slot_arena[forward_track] != slot_arena[backward_track]
+            ):
+                continue
             valid = np.isfinite(forward[:, forward_track]).all(axis=1) & np.isfinite(
                 backward[:, backward_track]
             ).all(axis=1)
@@ -1022,6 +1077,7 @@ def _errors_for_slot_alignment(
     scale: float,
     *,
     minimum_shared_observations: int,
+    slot_arena: NDArray[np.int64] | None = None,
 ) -> tuple[FloatArray, int]:
     """Return the pooled errors for a precomputed full-window slot mapping."""
 
@@ -1034,6 +1090,11 @@ def _errors_for_slot_alignment(
             continue
         if backward_track >= backward.shape[1]:
             raise ValueError("slot_alignment references an unavailable backward slot")
+        if (
+            slot_arena is not None
+            and slot_arena[forward_track] != slot_arena[backward_track]
+        ):
+            raise ValueError("slot_alignment maps slots across fixed arena labels")
         valid = np.isfinite(forward[:, forward_track]).all(axis=1) & np.isfinite(
             backward[:, backward_track]
         ).all(axis=1)

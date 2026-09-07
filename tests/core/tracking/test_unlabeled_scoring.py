@@ -18,6 +18,7 @@ from hydra_suite.core.tracking.optimization.unlabeled_scoring import (
     dominates,
     forward_backward_cycle_consistency,
     global_slot_alignment,
+    output_sanity_metrics,
     pareto_frontier,
     pareto_ranks,
     partition_temporal_segments,
@@ -171,6 +172,67 @@ def test_cycle_assignment_can_leave_a_slot_unmatched_for_far_more_overlap() -> N
 
     assert alignment.backward_for_forward == (0, None)
     assert alignment.shared_observations == 100
+
+
+def test_cycle_alignment_never_borrows_complementary_visibility_across_arenas() -> None:
+    """Static arena membership forbids a deceptively perfect cross-map.
+
+    Each forward slot is only observed while the *other* backward slot is
+    visible.  An unconstrained global Hungarian alignment reports a perfect
+    permutation, even though production can never transfer a slot between
+    arenas.  Arena-constrained scoring must retain this as missing evidence.
+    """
+
+    forward = np.full((20, 2, 2), np.nan)
+    backward = np.full_like(forward, np.nan)
+    forward[:10, 0] = np.column_stack((np.arange(10, dtype=float), np.zeros(10)))
+    forward[10:, 1] = np.column_stack(
+        (100.0 + np.arange(10, dtype=float), np.zeros(10))
+    )
+    backward[:10, 1] = forward[:10, 0]
+    backward[10:, 0] = forward[10:, 1]
+
+    unconstrained = global_slot_alignment(
+        forward,
+        backward,
+        backward_is_reverse_chronological=False,
+        spatial_scale=1.0,
+    )
+    assert unconstrained.backward_for_forward == (1, 0)
+    assert unconstrained.shared_observations == 20
+
+    with pytest.raises(ValueError, match="no position"):
+        global_slot_alignment(
+            forward,
+            backward,
+            backward_is_reverse_chronological=False,
+            spatial_scale=1.0,
+            slot_arena=np.array([0, 1], dtype=np.int32),
+        )
+    with pytest.raises(ValueError, match="across fixed arena"):
+        forward_backward_cycle_consistency(
+            forward,
+            backward,
+            backward_is_reverse_chronological=False,
+            spatial_scale=1.0,
+            slot_alignment=unconstrained,
+            slot_arena=np.array([0, 1], dtype=np.int32),
+        )
+
+
+def test_cross_arena_boundary_neighbours_are_not_collision_evidence() -> None:
+    positions = np.zeros((4, 2, 2), dtype=float)
+    positions[:, 1, 0] = 0.1
+
+    ungrouped = output_sanity_metrics(positions, spatial_scale=1.0)
+    grouped = output_sanity_metrics(
+        positions,
+        spatial_scale=1.0,
+        slot_arena=np.array([0, 1], dtype=np.int32),
+    )
+
+    assert ungrouped.collision_loss == pytest.approx(1.0)
+    assert grouped.collision_loss == 0.0
 
 
 def test_temporal_region_metrics_keep_transition_evidence_at_block_boundary() -> None:
