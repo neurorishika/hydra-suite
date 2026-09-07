@@ -1,0 +1,2612 @@
+
+<!doctype html>
+<html lang="en" class="no-js">
+  <head>
+    
+      <meta charset="utf-8">
+      <meta name="viewport" content="width=device-width,initial-scale=1">
+      
+        <meta name="description" content="User and developer documentation for HYDRA Suite">
+      
+      
+      
+        <link rel="canonical" href="https://neurorishika.github.io/hydra-suite/latest/superpowers/specs/2026-09-06-trackerkit-inference-autotuner-design/">
+      
+      
+      
+      
+      <link rel="icon" href="../../../assets/images/favicon.png">
+      <meta name="generator" content="mkdocs-1.6.1, mkdocs-material-9.5.43">
+    
+    
+      
+        <title>TrackerKit system-specific inference throughput autotuner - HYDRA Suite Docs</title>
+      
+    
+    
+      <link rel="stylesheet" href="../../../assets/stylesheets/main.0253249f.min.css">
+      
+        
+        <link rel="stylesheet" href="../../../assets/stylesheets/palette.06af60db.min.css">
+      
+      
+
+
+    
+    
+      
+    
+    
+      
+        
+        
+        <link rel="preconnect" href="https://fonts.gstatic.com" crossorigin>
+        <link rel="stylesheet" href="https://fonts.googleapis.com/css?family=Roboto:300,300i,400,400i,700,700i%7CRoboto+Mono:400,400i,700,700i&display=fallback">
+        <style>:root{--md-text-font:"Roboto";--md-code-font:"Roboto Mono"}</style>
+      
+    
+    
+      <link rel="stylesheet" href="../../../assets/_mkdocstrings.css">
+    
+    <script>__md_scope=new URL("../../..",location),__md_hash=e=>[...e].reduce(((e,_)=>(e<<5)-e+_.charCodeAt(0)),0),__md_get=(e,_=localStorage,t=__md_scope)=>JSON.parse(_.getItem(t.pathname+"."+e)),__md_set=(e,_,t=localStorage,a=__md_scope)=>{try{t.setItem(a.pathname+"."+e,JSON.stringify(_))}catch(e){}}</script>
+    
+      
+
+    
+    
+    
+  </head>
+  
+  
+    
+    
+      
+    
+    
+    
+    
+    <body dir="ltr" data-md-color-scheme="default" data-md-color-primary="blue" data-md-color-accent="light-blue">
+  
+    
+    <input class="md-toggle" data-md-toggle="drawer" type="checkbox" id="__drawer" autocomplete="off">
+    <input class="md-toggle" data-md-toggle="search" type="checkbox" id="__search" autocomplete="off">
+    <label class="md-overlay" for="__drawer"></label>
+    <div data-md-component="skip">
+      
+        
+        <a href="#trackerkit-system-specific-inference-throughput-autotuner" class="md-skip">
+          Skip to content
+        </a>
+      
+    </div>
+    <div data-md-component="announce">
+      
+    </div>
+    
+      <div data-md-color-scheme="default" data-md-component="outdated" hidden>
+        
+      </div>
+    
+    
+      
+
+<header class="md-header" data-md-component="header">
+  <nav class="md-header__inner md-grid" aria-label="Header">
+    <a href="../../.." title="HYDRA Suite Docs" class="md-header__button md-logo" aria-label="HYDRA Suite Docs" data-md-component="logo">
+      
+  
+  <svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 24 24"><path d="M12 8a3 3 0 0 0 3-3 3 3 0 0 0-3-3 3 3 0 0 0-3 3 3 3 0 0 0 3 3m0 3.54C9.64 9.35 6.5 8 3 8v11c3.5 0 6.64 1.35 9 3.54 2.36-2.19 5.5-3.54 9-3.54V8c-3.5 0-6.64 1.35-9 3.54"/></svg>
+
+    </a>
+    <label class="md-header__button md-icon" for="__drawer">
+      
+      <svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 24 24"><path d="M3 6h18v2H3zm0 5h18v2H3zm0 5h18v2H3z"/></svg>
+    </label>
+    <div class="md-header__title" data-md-component="header-title">
+      <div class="md-header__ellipsis">
+        <div class="md-header__topic">
+          <span class="md-ellipsis">
+            HYDRA Suite Docs
+          </span>
+        </div>
+        <div class="md-header__topic" data-md-component="header-topic">
+          <span class="md-ellipsis">
+            
+              TrackerKit system-specific inference throughput autotuner
+            
+          </span>
+        </div>
+      </div>
+    </div>
+    
+      
+        <form class="md-header__option" data-md-component="palette">
+  
+    
+    
+    
+    <input class="md-option" data-md-color-media="(prefers-color-scheme: light)" data-md-color-scheme="default" data-md-color-primary="blue" data-md-color-accent="light-blue"  aria-label="Switch to dark mode"  type="radio" name="__palette" id="__palette_0">
+    
+      <label class="md-header__button md-icon" title="Switch to dark mode" for="__palette_1" hidden>
+        <svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 24 24"><path d="m17.75 4.09-2.53 1.94.91 3.06-2.63-1.81-2.63 1.81.91-3.06-2.53-1.94L12.44 4l1.06-3 1.06 3zm3.5 6.91-1.64 1.25.59 1.98-1.7-1.17-1.7 1.17.59-1.98L15.75 11l2.06-.05L18.5 9l.69 1.95zm-2.28 4.95c.83-.08 1.72 1.1 1.19 1.85-.32.45-.66.87-1.08 1.27C15.17 23 8.84 23 4.94 19.07c-3.91-3.9-3.91-10.24 0-14.14.4-.4.82-.76 1.27-1.08.75-.53 1.93.36 1.85 1.19-.27 2.86.69 5.83 2.89 8.02a9.96 9.96 0 0 0 8.02 2.89m-1.64 2.02a12.08 12.08 0 0 1-7.8-3.47c-2.17-2.19-3.33-5-3.49-7.82-2.81 3.14-2.7 7.96.31 10.98 3.02 3.01 7.84 3.12 10.98.31"/></svg>
+      </label>
+    
+  
+    
+    
+    
+    <input class="md-option" data-md-color-media="(prefers-color-scheme: dark)" data-md-color-scheme="slate" data-md-color-primary="blue" data-md-color-accent="light-blue"  aria-label="Switch to light mode"  type="radio" name="__palette" id="__palette_1">
+    
+      <label class="md-header__button md-icon" title="Switch to light mode" for="__palette_0" hidden>
+        <svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 24 24"><path d="M12 7a5 5 0 0 1 5 5 5 5 0 0 1-5 5 5 5 0 0 1-5-5 5 5 0 0 1 5-5m0 2a3 3 0 0 0-3 3 3 3 0 0 0 3 3 3 3 0 0 0 3-3 3 3 0 0 0-3-3m0-7 2.39 3.42C13.65 5.15 12.84 5 12 5s-1.65.15-2.39.42zM3.34 7l4.16-.35A7.2 7.2 0 0 0 5.94 8.5c-.44.74-.69 1.5-.83 2.29zm.02 10 1.76-3.77a7.131 7.131 0 0 0 2.38 4.14zM20.65 7l-1.77 3.79a7.02 7.02 0 0 0-2.38-4.15zm-.01 10-4.14.36c.59-.51 1.12-1.14 1.54-1.86.42-.73.69-1.5.83-2.29zM12 22l-2.41-3.44c.74.27 1.55.44 2.41.44.82 0 1.63-.17 2.37-.44z"/></svg>
+      </label>
+    
+  
+</form>
+      
+    
+    
+      <script>var palette=__md_get("__palette");if(palette&&palette.color){if("(prefers-color-scheme)"===palette.color.media){var media=matchMedia("(prefers-color-scheme: light)"),input=document.querySelector(media.matches?"[data-md-color-media='(prefers-color-scheme: light)']":"[data-md-color-media='(prefers-color-scheme: dark)']");palette.color.media=input.getAttribute("data-md-color-media"),palette.color.scheme=input.getAttribute("data-md-color-scheme"),palette.color.primary=input.getAttribute("data-md-color-primary"),palette.color.accent=input.getAttribute("data-md-color-accent")}for(var[key,value]of Object.entries(palette.color))document.body.setAttribute("data-md-color-"+key,value)}</script>
+    
+    
+    
+      <label class="md-header__button md-icon" for="__search">
+        
+        <svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 24 24"><path d="M9.5 3A6.5 6.5 0 0 1 16 9.5c0 1.61-.59 3.09-1.56 4.23l.27.27h.79l5 5-1.5 1.5-5-5v-.79l-.27-.27A6.52 6.52 0 0 1 9.5 16 6.5 6.5 0 0 1 3 9.5 6.5 6.5 0 0 1 9.5 3m0 2C7 5 5 7 5 9.5S7 14 9.5 14 14 12 14 9.5 12 5 9.5 5"/></svg>
+      </label>
+      <div class="md-search" data-md-component="search" role="dialog">
+  <label class="md-search__overlay" for="__search"></label>
+  <div class="md-search__inner" role="search">
+    <form class="md-search__form" name="search">
+      <input type="text" class="md-search__input" name="query" aria-label="Search" placeholder="Search" autocapitalize="off" autocorrect="off" autocomplete="off" spellcheck="false" data-md-component="search-query" required>
+      <label class="md-search__icon md-icon" for="__search">
+        
+        <svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 24 24"><path d="M9.5 3A6.5 6.5 0 0 1 16 9.5c0 1.61-.59 3.09-1.56 4.23l.27.27h.79l5 5-1.5 1.5-5-5v-.79l-.27-.27A6.52 6.52 0 0 1 9.5 16 6.5 6.5 0 0 1 3 9.5 6.5 6.5 0 0 1 9.5 3m0 2C7 5 5 7 5 9.5S7 14 9.5 14 14 12 14 9.5 12 5 9.5 5"/></svg>
+        
+        <svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 24 24"><path d="M20 11v2H8l5.5 5.5-1.42 1.42L4.16 12l7.92-7.92L13.5 5.5 8 11z"/></svg>
+      </label>
+      <nav class="md-search__options" aria-label="Search">
+        
+        <button type="reset" class="md-search__icon md-icon" title="Clear" aria-label="Clear" tabindex="-1">
+          
+          <svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 24 24"><path d="M19 6.41 17.59 5 12 10.59 6.41 5 5 6.41 10.59 12 5 17.59 6.41 19 12 13.41 17.59 19 19 17.59 13.41 12z"/></svg>
+        </button>
+      </nav>
+      
+        <div class="md-search__suggest" data-md-component="search-suggest"></div>
+      
+    </form>
+    <div class="md-search__output">
+      <div class="md-search__scrollwrap" tabindex="0" data-md-scrollfix>
+        <div class="md-search-result" data-md-component="search-result">
+          <div class="md-search-result__meta">
+            Initializing search
+          </div>
+          <ol class="md-search-result__list" role="presentation"></ol>
+        </div>
+      </div>
+    </div>
+  </div>
+</div>
+    
+    
+      <div class="md-header__source">
+        <a href="https://github.com/neurorishika/hydra-suite" title="Go to repository" class="md-source" data-md-component="source">
+  <div class="md-source__icon md-icon">
+    
+    <svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 448 512"><!--! Font Awesome Free 6.6.0 by @fontawesome - https://fontawesome.com License - https://fontawesome.com/license/free (Icons: CC BY 4.0, Fonts: SIL OFL 1.1, Code: MIT License) Copyright 2024 Fonticons, Inc.--><path d="M439.55 236.05 244 40.45a28.87 28.87 0 0 0-40.81 0l-40.66 40.63 51.52 51.52c27.06-9.14 52.68 16.77 43.39 43.68l49.66 49.66c34.23-11.8 61.18 31 35.47 56.69-26.49 26.49-70.21-2.87-56-37.34L240.22 199v121.85c25.3 12.54 22.26 41.85 9.08 55a34.34 34.34 0 0 1-48.55 0c-17.57-17.6-11.07-46.91 11.25-56v-123c-20.8-8.51-24.6-30.74-18.64-45L142.57 101 8.45 235.14a28.86 28.86 0 0 0 0 40.81l195.61 195.6a28.86 28.86 0 0 0 40.8 0l194.69-194.69a28.86 28.86 0 0 0 0-40.81"/></svg>
+  </div>
+  <div class="md-source__repository">
+    neurorishika/hydra-suite
+  </div>
+</a>
+      </div>
+    
+  </nav>
+  
+</header>
+    
+    <div class="md-container" data-md-component="container">
+      
+      
+        
+          
+            
+<nav class="md-tabs" aria-label="Tabs" data-md-component="tabs">
+  <div class="md-grid">
+    <ul class="md-tabs__list">
+      
+        
+  
+  
+  
+    <li class="md-tabs__item">
+      <a href="../../.." class="md-tabs__link">
+        
+  
+    
+  
+  Home
+
+      </a>
+    </li>
+  
+
+      
+        
+  
+  
+  
+    
+    
+      <li class="md-tabs__item">
+        <a href="../../../getting-started/installation/" class="md-tabs__link">
+          
+  
+  Getting Started
+
+        </a>
+      </li>
+    
+  
+
+      
+        
+  
+  
+  
+    
+    
+      <li class="md-tabs__item">
+        <a href="../../../user-guide/overview/" class="md-tabs__link">
+          
+  
+  User Guide
+
+        </a>
+      </li>
+    
+  
+
+      
+        
+  
+  
+  
+    
+    
+      <li class="md-tabs__item">
+        <a href="../../../developer-guide/architecture/" class="md-tabs__link">
+          
+  
+  Developer Guide
+
+        </a>
+      </li>
+    
+  
+
+      
+        
+  
+  
+  
+    
+    
+      <li class="md-tabs__item">
+        <a href="../../../reference/api-index/" class="md-tabs__link">
+          
+  
+  Reference
+
+        </a>
+      </li>
+    
+  
+
+      
+    </ul>
+  </div>
+</nav>
+          
+        
+      
+      <main class="md-main" data-md-component="main">
+        <div class="md-main__inner md-grid">
+          
+            
+              
+              <div class="md-sidebar md-sidebar--primary" data-md-component="sidebar" data-md-type="navigation" >
+                <div class="md-sidebar__scrollwrap">
+                  <div class="md-sidebar__inner">
+                    
+
+
+  
+
+
+<nav class="md-nav md-nav--primary md-nav--lifted" aria-label="Navigation" data-md-level="0">
+  <label class="md-nav__title" for="__drawer">
+    <a href="../../.." title="HYDRA Suite Docs" class="md-nav__button md-logo" aria-label="HYDRA Suite Docs" data-md-component="logo">
+      
+  
+  <svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 24 24"><path d="M12 8a3 3 0 0 0 3-3 3 3 0 0 0-3-3 3 3 0 0 0-3 3 3 3 0 0 0 3 3m0 3.54C9.64 9.35 6.5 8 3 8v11c3.5 0 6.64 1.35 9 3.54 2.36-2.19 5.5-3.54 9-3.54V8c-3.5 0-6.64 1.35-9 3.54"/></svg>
+
+    </a>
+    HYDRA Suite Docs
+  </label>
+  
+    <div class="md-nav__source">
+      <a href="https://github.com/neurorishika/hydra-suite" title="Go to repository" class="md-source" data-md-component="source">
+  <div class="md-source__icon md-icon">
+    
+    <svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 448 512"><!--! Font Awesome Free 6.6.0 by @fontawesome - https://fontawesome.com License - https://fontawesome.com/license/free (Icons: CC BY 4.0, Fonts: SIL OFL 1.1, Code: MIT License) Copyright 2024 Fonticons, Inc.--><path d="M439.55 236.05 244 40.45a28.87 28.87 0 0 0-40.81 0l-40.66 40.63 51.52 51.52c27.06-9.14 52.68 16.77 43.39 43.68l49.66 49.66c34.23-11.8 61.18 31 35.47 56.69-26.49 26.49-70.21-2.87-56-37.34L240.22 199v121.85c25.3 12.54 22.26 41.85 9.08 55a34.34 34.34 0 0 1-48.55 0c-17.57-17.6-11.07-46.91 11.25-56v-123c-20.8-8.51-24.6-30.74-18.64-45L142.57 101 8.45 235.14a28.86 28.86 0 0 0 0 40.81l195.61 195.6a28.86 28.86 0 0 0 40.8 0l194.69-194.69a28.86 28.86 0 0 0 0-40.81"/></svg>
+  </div>
+  <div class="md-source__repository">
+    neurorishika/hydra-suite
+  </div>
+</a>
+    </div>
+  
+  <ul class="md-nav__list" data-md-scrollfix>
+    
+      
+      
+  
+  
+  
+  
+    <li class="md-nav__item">
+      <a href="../../.." class="md-nav__link">
+        
+  
+  <span class="md-ellipsis">
+    Home
+  </span>
+  
+
+      </a>
+    </li>
+  
+
+    
+      
+      
+  
+  
+  
+  
+    
+    
+    
+      
+      
+        
+      
+    
+    
+    <li class="md-nav__item md-nav__item--nested">
+      
+        
+        
+          
+        
+        <input class="md-nav__toggle md-toggle md-toggle--indeterminate" type="checkbox" id="__nav_2" >
+        
+          
+          <label class="md-nav__link" for="__nav_2" id="__nav_2_label" tabindex="0">
+            
+  
+  <span class="md-ellipsis">
+    Getting Started
+  </span>
+  
+
+            <span class="md-nav__icon md-icon"></span>
+          </label>
+        
+        <nav class="md-nav" data-md-level="1" aria-labelledby="__nav_2_label" aria-expanded="false">
+          <label class="md-nav__title" for="__nav_2">
+            <span class="md-nav__icon md-icon"></span>
+            Getting Started
+          </label>
+          <ul class="md-nav__list" data-md-scrollfix>
+            
+              
+                
+  
+  
+  
+  
+    <li class="md-nav__item">
+      <a href="../../../getting-started/installation/" class="md-nav__link">
+        
+  
+  <span class="md-ellipsis">
+    Installation
+  </span>
+  
+
+      </a>
+    </li>
+  
+
+              
+            
+              
+                
+  
+  
+  
+  
+    <li class="md-nav__item">
+      <a href="../../../getting-started/environments/" class="md-nav__link">
+        
+  
+  <span class="md-ellipsis">
+    Environments and Makefile
+  </span>
+  
+
+      </a>
+    </li>
+  
+
+              
+            
+              
+                
+  
+  
+  
+  
+    <li class="md-nav__item">
+      <a href="../../../getting-started/integrations/" class="md-nav__link">
+        
+  
+  <span class="md-ellipsis">
+    Integrations
+  </span>
+  
+
+      </a>
+    </li>
+  
+
+              
+            
+              
+                
+  
+  
+  
+  
+    <li class="md-nav__item">
+      <a href="../../../getting-started/quickstart-hydra/" class="md-nav__link">
+        
+  
+  <span class="md-ellipsis">
+    Quickstart (TrackerKit)
+  </span>
+  
+
+      </a>
+    </li>
+  
+
+              
+            
+              
+                
+  
+  
+  
+  
+    <li class="md-nav__item">
+      <a href="../../../getting-started/quickstart-posekit/" class="md-nav__link">
+        
+  
+  <span class="md-ellipsis">
+    Quickstart (PoseKit)
+  </span>
+  
+
+      </a>
+    </li>
+  
+
+              
+            
+              
+                
+  
+  
+  
+  
+    <li class="md-nav__item">
+      <a href="../../../getting-started/platforms/" class="md-nav__link">
+        
+  
+  <span class="md-ellipsis">
+    Platform Notes
+  </span>
+  
+
+      </a>
+    </li>
+  
+
+              
+            
+          </ul>
+        </nav>
+      
+    </li>
+  
+
+    
+      
+      
+  
+  
+  
+  
+    
+    
+    
+      
+      
+        
+      
+    
+    
+    <li class="md-nav__item md-nav__item--nested">
+      
+        
+        
+          
+        
+        <input class="md-nav__toggle md-toggle md-toggle--indeterminate" type="checkbox" id="__nav_3" >
+        
+          
+          <label class="md-nav__link" for="__nav_3" id="__nav_3_label" tabindex="0">
+            
+  
+  <span class="md-ellipsis">
+    User Guide
+  </span>
+  
+
+            <span class="md-nav__icon md-icon"></span>
+          </label>
+        
+        <nav class="md-nav" data-md-level="1" aria-labelledby="__nav_3_label" aria-expanded="false">
+          <label class="md-nav__title" for="__nav_3">
+            <span class="md-nav__icon md-icon"></span>
+            User Guide
+          </label>
+          <ul class="md-nav__list" data-md-scrollfix>
+            
+              
+                
+  
+  
+  
+  
+    <li class="md-nav__item">
+      <a href="../../../user-guide/overview/" class="md-nav__link">
+        
+  
+  <span class="md-ellipsis">
+    Overview
+  </span>
+  
+
+      </a>
+    </li>
+  
+
+              
+            
+              
+                
+  
+  
+  
+  
+    <li class="md-nav__item">
+      <a href="../../../user-guide/workflow/" class="md-nav__link">
+        
+  
+  <span class="md-ellipsis">
+    End-to-End Workflow
+  </span>
+  
+
+      </a>
+    </li>
+  
+
+              
+            
+              
+                
+  
+  
+  
+  
+    <li class="md-nav__item">
+      <a href="../../../user-guide/detection-modes/" class="md-nav__link">
+        
+  
+  <span class="md-ellipsis">
+    Detection Modes
+  </span>
+  
+
+      </a>
+    </li>
+  
+
+              
+            
+              
+                
+  
+  
+  
+  
+    <li class="md-nav__item">
+      <a href="../../../user-guide/tracking-and-merging/" class="md-nav__link">
+        
+  
+  <span class="md-ellipsis">
+    Tracking and Merging
+  </span>
+  
+
+      </a>
+    </li>
+  
+
+              
+            
+              
+                
+  
+  
+  
+  
+    <li class="md-nav__item">
+      <a href="../../../user-guide/post-processing/" class="md-nav__link">
+        
+  
+  <span class="md-ellipsis">
+    Post-processing
+  </span>
+  
+
+      </a>
+    </li>
+  
+
+              
+            
+              
+                
+  
+  
+  
+  
+    <li class="md-nav__item">
+      <a href="../../../user-guide/configuration-reference/" class="md-nav__link">
+        
+  
+  <span class="md-ellipsis">
+    Configuration Reference
+  </span>
+  
+
+      </a>
+    </li>
+  
+
+              
+            
+              
+                
+  
+  
+  
+  
+    <li class="md-nav__item">
+      <a href="../../../user-guide/compute-runtimes/" class="md-nav__link">
+        
+  
+  <span class="md-ellipsis">
+    Compute Runtimes
+  </span>
+  
+
+      </a>
+    </li>
+  
+
+              
+            
+              
+                
+  
+  
+  
+  
+    <li class="md-nav__item">
+      <a href="../../../user-guide/outputs-and-csv-schema/" class="md-nav__link">
+        
+  
+  <span class="md-ellipsis">
+    Outputs and CSV Schema
+  </span>
+  
+
+      </a>
+    </li>
+  
+
+              
+            
+              
+                
+  
+  
+  
+  
+    <li class="md-nav__item">
+      <a href="../../../user-guide/dataset-generation/" class="md-nav__link">
+        
+  
+  <span class="md-ellipsis">
+    Dataset Generation
+  </span>
+  
+
+      </a>
+    </li>
+  
+
+              
+            
+              
+                
+  
+  
+  
+  
+    <li class="md-nav__item">
+      <a href="../../../user-guide/individual-analysis/" class="md-nav__link">
+        
+  
+  <span class="md-ellipsis">
+    Individual Analysis
+  </span>
+  
+
+      </a>
+    </li>
+  
+
+              
+            
+              
+                
+  
+  
+  
+  
+    <li class="md-nav__item">
+      <a href="../../../user-guide/posekit/" class="md-nav__link">
+        
+  
+  <span class="md-ellipsis">
+    PoseKit
+  </span>
+  
+
+      </a>
+    </li>
+  
+
+              
+            
+              
+                
+  
+  
+  
+  
+    <li class="md-nav__item">
+      <a href="../../../user-guide/classkit/" class="md-nav__link">
+        
+  
+  <span class="md-ellipsis">
+    ClassKit
+  </span>
+  
+
+      </a>
+    </li>
+  
+
+              
+            
+              
+                
+  
+  
+  
+  
+    <li class="md-nav__item">
+      <a href="../../../user-guide/detectkit/" class="md-nav__link">
+        
+  
+  <span class="md-ellipsis">
+    DetectKit
+  </span>
+  
+
+      </a>
+    </li>
+  
+
+              
+            
+              
+                
+  
+  
+  
+  
+    <li class="md-nav__item">
+      <a href="../../../runbooks/detectkit-headless-training/" class="md-nav__link">
+        
+  
+  <span class="md-ellipsis">
+    DetectKit Headless Training
+  </span>
+  
+
+      </a>
+    </li>
+  
+
+              
+            
+              
+                
+  
+  
+  
+  
+    <li class="md-nav__item">
+      <a href="../../../user-guide/detectkit-semantic-escalation/" class="md-nav__link">
+        
+  
+  <span class="md-ellipsis">
+    DetectKit: Semantic Escalation (SAM3)
+  </span>
+  
+
+      </a>
+    </li>
+  
+
+              
+            
+              
+                
+  
+  
+  
+  
+    <li class="md-nav__item">
+      <a href="../../../user-guide/detectkit-sahi-calibration/" class="md-nav__link">
+        
+  
+  <span class="md-ellipsis">
+    DetectKit: SAHI Calibration Profiles
+  </span>
+  
+
+      </a>
+    </li>
+  
+
+              
+            
+              
+                
+  
+  
+  
+  
+    <li class="md-nav__item">
+      <a href="../../../user-guide/filterkit/" class="md-nav__link">
+        
+  
+  <span class="md-ellipsis">
+    FilterKit
+  </span>
+  
+
+      </a>
+    </li>
+  
+
+              
+            
+              
+                
+  
+  
+  
+  
+    <li class="md-nav__item">
+      <a href="../../../user-guide/refinekit/" class="md-nav__link">
+        
+  
+  <span class="md-ellipsis">
+    RefineKit
+  </span>
+  
+
+      </a>
+    </li>
+  
+
+              
+            
+              
+                
+  
+  
+  
+  
+    <li class="md-nav__item">
+      <a href="../../../user-guide/troubleshooting/" class="md-nav__link">
+        
+  
+  <span class="md-ellipsis">
+    Troubleshooting
+  </span>
+  
+
+      </a>
+    </li>
+  
+
+              
+            
+          </ul>
+        </nav>
+      
+    </li>
+  
+
+    
+      
+      
+  
+  
+  
+  
+    
+    
+    
+      
+      
+        
+      
+    
+    
+    <li class="md-nav__item md-nav__item--nested">
+      
+        
+        
+          
+        
+        <input class="md-nav__toggle md-toggle md-toggle--indeterminate" type="checkbox" id="__nav_4" >
+        
+          
+          <label class="md-nav__link" for="__nav_4" id="__nav_4_label" tabindex="0">
+            
+  
+  <span class="md-ellipsis">
+    Developer Guide
+  </span>
+  
+
+            <span class="md-nav__icon md-icon"></span>
+          </label>
+        
+        <nav class="md-nav" data-md-level="1" aria-labelledby="__nav_4_label" aria-expanded="false">
+          <label class="md-nav__title" for="__nav_4">
+            <span class="md-nav__icon md-icon"></span>
+            Developer Guide
+          </label>
+          <ul class="md-nav__list" data-md-scrollfix>
+            
+              
+                
+  
+  
+  
+  
+    <li class="md-nav__item">
+      <a href="../../../developer-guide/architecture/" class="md-nav__link">
+        
+  
+  <span class="md-ellipsis">
+    Architecture
+  </span>
+  
+
+      </a>
+    </li>
+  
+
+              
+            
+              
+                
+  
+  
+  
+  
+    <li class="md-nav__item">
+      <a href="../../../developer-guide/module-map/" class="md-nav__link">
+        
+  
+  <span class="md-ellipsis">
+    Module Map
+  </span>
+  
+
+      </a>
+    </li>
+  
+
+              
+            
+              
+                
+  
+  
+  
+  
+    <li class="md-nav__item">
+      <a href="../../../developer-guide/data-flow/" class="md-nav__link">
+        
+  
+  <span class="md-ellipsis">
+    Data Flow
+  </span>
+  
+
+      </a>
+    </li>
+  
+
+              
+            
+              
+                
+  
+  
+  
+  
+    <li class="md-nav__item">
+      <a href="../../../developer-guide/tracking-algorithm-deep-dive/" class="md-nav__link">
+        
+  
+  <span class="md-ellipsis">
+    Tracking Algorithm Deep Dive
+  </span>
+  
+
+      </a>
+    </li>
+  
+
+              
+            
+              
+                
+  
+  
+  
+  
+    <li class="md-nav__item">
+      <a href="../../../developer-guide/tracking-optimization/" class="md-nav__link">
+        
+  
+  <span class="md-ellipsis">
+    Tracking Optimization
+  </span>
+  
+
+      </a>
+    </li>
+  
+
+              
+            
+              
+                
+  
+  
+  
+  
+    <li class="md-nav__item">
+      <a href="../../../developer-guide/gpu-backends/" class="md-nav__link">
+        
+  
+  <span class="md-ellipsis">
+    GPU Backends
+  </span>
+  
+
+      </a>
+    </li>
+  
+
+              
+            
+              
+                
+  
+  
+  
+  
+    <li class="md-nav__item">
+      <a href="../../../developer-guide/runtime-integration/" class="md-nav__link">
+        
+  
+  <span class="md-ellipsis">
+    Runtime Integration
+  </span>
+  
+
+      </a>
+    </li>
+  
+
+              
+            
+              
+                
+  
+  
+  
+  
+    <li class="md-nav__item">
+      <a href="../../../developer-guide/resource-containment/" class="md-nav__link">
+        
+  
+  <span class="md-ellipsis">
+    Resource Containment
+  </span>
+  
+
+      </a>
+    </li>
+  
+
+              
+            
+              
+                
+  
+  
+  
+  
+    <li class="md-nav__item">
+      <a href="../../../developer-guide/profiling/" class="md-nav__link">
+        
+  
+  <span class="md-ellipsis">
+    Profiling
+  </span>
+  
+
+      </a>
+    </li>
+  
+
+              
+            
+              
+                
+  
+  
+  
+  
+    <li class="md-nav__item">
+      <a href="../../../developer-guide/dependency-cuda-updates/" class="md-nav__link">
+        
+  
+  <span class="md-ellipsis">
+    CUDA Dependency Updates
+  </span>
+  
+
+      </a>
+    </li>
+  
+
+              
+            
+              
+                
+  
+  
+  
+  
+    <li class="md-nav__item">
+      <a href="../../../developer-guide/performance-tuning/" class="md-nav__link">
+        
+  
+  <span class="md-ellipsis">
+    Performance Tuning
+  </span>
+  
+
+      </a>
+    </li>
+  
+
+              
+            
+              
+                
+  
+  
+  
+  
+    <li class="md-nav__item">
+      <a href="../../../developer-guide/inference-fast-mode/" class="md-nav__link">
+        
+  
+  <span class="md-ellipsis">
+    Inference Fast Mode
+  </span>
+  
+
+      </a>
+    </li>
+  
+
+              
+            
+              
+                
+  
+  
+  
+  
+    <li class="md-nav__item">
+      <a href="../../../developer-guide/confidence-metrics/" class="md-nav__link">
+        
+  
+  <span class="md-ellipsis">
+    Confidence Metrics
+  </span>
+  
+
+      </a>
+    </li>
+  
+
+              
+            
+              
+                
+  
+  
+  
+  
+    <li class="md-nav__item">
+      <a href="../../../developer-guide/extending-detection/" class="md-nav__link">
+        
+  
+  <span class="md-ellipsis">
+    Extending Detection
+  </span>
+  
+
+      </a>
+    </li>
+  
+
+              
+            
+              
+                
+  
+  
+  
+  
+    <li class="md-nav__item">
+      <a href="../../../developer-guide/extending-identity/" class="md-nav__link">
+        
+  
+  <span class="md-ellipsis">
+    Extending Identity
+  </span>
+  
+
+      </a>
+    </li>
+  
+
+              
+            
+              
+                
+  
+  
+  
+  
+    <li class="md-nav__item">
+      <a href="../../../developer-guide/code-health/" class="md-nav__link">
+        
+  
+  <span class="md-ellipsis">
+    Code Health & Auditing
+  </span>
+  
+
+      </a>
+    </li>
+  
+
+              
+            
+              
+                
+  
+  
+  
+  
+    <li class="md-nav__item">
+      <a href="../../../developer-guide/publishing/" class="md-nav__link">
+        
+  
+  <span class="md-ellipsis">
+    Publishing
+  </span>
+  
+
+      </a>
+    </li>
+  
+
+              
+            
+              
+                
+  
+  
+  
+  
+    <li class="md-nav__item">
+      <a href="../../../developer-guide/contributing/" class="md-nav__link">
+        
+  
+  <span class="md-ellipsis">
+    Contributing
+  </span>
+  
+
+      </a>
+    </li>
+  
+
+              
+            
+          </ul>
+        </nav>
+      
+    </li>
+  
+
+    
+      
+      
+  
+  
+  
+  
+    
+    
+    
+      
+      
+        
+      
+    
+    
+    <li class="md-nav__item md-nav__item--nested">
+      
+        
+        
+          
+        
+        <input class="md-nav__toggle md-toggle md-toggle--indeterminate" type="checkbox" id="__nav_5" >
+        
+          
+          <label class="md-nav__link" for="__nav_5" id="__nav_5_label" tabindex="0">
+            
+  
+  <span class="md-ellipsis">
+    Reference
+  </span>
+  
+
+            <span class="md-nav__icon md-icon"></span>
+          </label>
+        
+        <nav class="md-nav" data-md-level="1" aria-labelledby="__nav_5_label" aria-expanded="false">
+          <label class="md-nav__title" for="__nav_5">
+            <span class="md-nav__icon md-icon"></span>
+            Reference
+          </label>
+          <ul class="md-nav__list" data-md-scrollfix>
+            
+              
+                
+  
+  
+  
+  
+    <li class="md-nav__item">
+      <a href="../../../reference/api-index/" class="md-nav__link">
+        
+  
+  <span class="md-ellipsis">
+    API Index
+  </span>
+  
+
+      </a>
+    </li>
+  
+
+              
+            
+              
+                
+  
+  
+  
+  
+    <li class="md-nav__item">
+      <a href="../../../reference/ui-components-hydra/" class="md-nav__link">
+        
+  
+  <span class="md-ellipsis">
+    UI Components (TrackerKit)
+  </span>
+  
+
+      </a>
+    </li>
+  
+
+              
+            
+              
+                
+  
+  
+  
+  
+    <li class="md-nav__item">
+      <a href="../../../reference/ui-components-posekit/" class="md-nav__link">
+        
+  
+  <span class="md-ellipsis">
+    UI Components (PoseKit)
+  </span>
+  
+
+      </a>
+    </li>
+  
+
+              
+            
+              
+                
+  
+  
+  
+  
+    <li class="md-nav__item">
+      <a href="../../../reference/api-app/" class="md-nav__link">
+        
+  
+  <span class="md-ellipsis">
+    API (Launcher)
+  </span>
+  
+
+      </a>
+    </li>
+  
+
+              
+            
+              
+                
+  
+  
+  
+  
+    <li class="md-nav__item">
+      <a href="../../../reference/api-core/" class="md-nav__link">
+        
+  
+  <span class="md-ellipsis">
+    API (Core)
+  </span>
+  
+
+      </a>
+    </li>
+  
+
+              
+            
+              
+                
+  
+  
+  
+  
+    <li class="md-nav__item">
+      <a href="../../../reference/api-data/" class="md-nav__link">
+        
+  
+  <span class="md-ellipsis">
+    API (Data)
+  </span>
+  
+
+      </a>
+    </li>
+  
+
+              
+            
+              
+                
+  
+  
+  
+  
+    <li class="md-nav__item">
+      <a href="../../../reference/api-gui/" class="md-nav__link">
+        
+  
+  <span class="md-ellipsis">
+    API (TrackerKit GUI)
+  </span>
+  
+
+      </a>
+    </li>
+  
+
+              
+            
+              
+                
+  
+  
+  
+  
+    <li class="md-nav__item">
+      <a href="../../../reference/api-widgets/" class="md-nav__link">
+        
+  
+  <span class="md-ellipsis">
+    API (Widgets)
+  </span>
+  
+
+      </a>
+    </li>
+  
+
+              
+            
+              
+                
+  
+  
+  
+  
+    <li class="md-nav__item">
+      <a href="../../../reference/api-posekit/" class="md-nav__link">
+        
+  
+  <span class="md-ellipsis">
+    API (PoseKit)
+  </span>
+  
+
+      </a>
+    </li>
+  
+
+              
+            
+              
+                
+  
+  
+  
+  
+    <li class="md-nav__item">
+      <a href="../../../reference/api-utils/" class="md-nav__link">
+        
+  
+  <span class="md-ellipsis">
+    API (Utils)
+  </span>
+  
+
+      </a>
+    </li>
+  
+
+              
+            
+              
+                
+  
+  
+  
+  
+    <li class="md-nav__item">
+      <a href="../../../reference/cli-reference/" class="md-nav__link">
+        
+  
+  <span class="md-ellipsis">
+    CLI Reference
+  </span>
+  
+
+      </a>
+    </li>
+  
+
+              
+            
+              
+                
+  
+  
+  
+  
+    <li class="md-nav__item">
+      <a href="../../../reference/technical-reference/" class="md-nav__link">
+        
+  
+  <span class="md-ellipsis">
+    Technical Reference (LaTeX)
+  </span>
+  
+
+      </a>
+    </li>
+  
+
+              
+            
+              
+                
+  
+  
+  
+  
+    <li class="md-nav__item">
+      <a href="../../../reference/changelog/" class="md-nav__link">
+        
+  
+  <span class="md-ellipsis">
+    Changelog
+  </span>
+  
+
+      </a>
+    </li>
+  
+
+              
+            
+              
+                
+  
+  
+  
+  
+    <li class="md-nav__item">
+      <a href="../../../reference/faq/" class="md-nav__link">
+        
+  
+  <span class="md-ellipsis">
+    FAQ
+  </span>
+  
+
+      </a>
+    </li>
+  
+
+              
+            
+          </ul>
+        </nav>
+      
+    </li>
+  
+
+    
+  </ul>
+</nav>
+                  </div>
+                </div>
+              </div>
+            
+            
+              
+              <div class="md-sidebar md-sidebar--secondary" data-md-component="sidebar" data-md-type="toc" >
+                <div class="md-sidebar__scrollwrap">
+                  <div class="md-sidebar__inner">
+                    
+
+<nav class="md-nav md-nav--secondary" aria-label="Table of contents">
+  
+  
+  
+    
+  
+  
+    <label class="md-nav__title" for="__toc">
+      <span class="md-nav__icon md-icon"></span>
+      Table of contents
+    </label>
+    <ul class="md-nav__list" data-md-component="toc" data-md-scrollfix>
+      
+        <li class="md-nav__item">
+  <a href="#decision" class="md-nav__link">
+    <span class="md-ellipsis">
+      Decision
+    </span>
+  </a>
+  
+</li>
+      
+        <li class="md-nav__item">
+  <a href="#why-this-architecture" class="md-nav__link">
+    <span class="md-ellipsis">
+      Why this architecture
+    </span>
+  </a>
+  
+</li>
+      
+        <li class="md-nav__item">
+  <a href="#goals" class="md-nav__link">
+    <span class="md-ellipsis">
+      Goals
+    </span>
+  </a>
+  
+</li>
+      
+        <li class="md-nav__item">
+  <a href="#non-goals" class="md-nav__link">
+    <span class="md-ellipsis">
+      Non-goals
+    </span>
+  </a>
+  
+</li>
+      
+        <li class="md-nav__item">
+  <a href="#relationship-to-the-tracking-auto-tuner" class="md-nav__link">
+    <span class="md-ellipsis">
+      Relationship to the tracking auto-tuner
+    </span>
+  </a>
+  
+</li>
+      
+        <li class="md-nav__item">
+  <a href="#architecture" class="md-nav__link">
+    <span class="md-ellipsis">
+      Architecture
+    </span>
+  </a>
+  
+    <nav class="md-nav" aria-label="Architecture">
+      <ul class="md-nav__list">
+        
+          <li class="md-nav__item">
+  <a href="#component-boundaries" class="md-nav__link">
+    <span class="md-ellipsis">
+      Component boundaries
+    </span>
+  </a>
+  
+</li>
+        
+      </ul>
+    </nav>
+  
+</li>
+      
+        <li class="md-nav__item">
+  <a href="#ownership-and-compatibility" class="md-nav__link">
+    <span class="md-ellipsis">
+      Ownership and compatibility
+    </span>
+  </a>
+  
+</li>
+      
+        <li class="md-nav__item">
+  <a href="#persistent-identity" class="md-nav__link">
+    <span class="md-ellipsis">
+      Persistent identity
+    </span>
+  </a>
+  
+</li>
+      
+        <li class="md-nav__item">
+  <a href="#stored-profile" class="md-nav__link">
+    <span class="md-ellipsis">
+      Stored profile
+    </span>
+  </a>
+  
+</li>
+      
+        <li class="md-nav__item">
+  <a href="#candidate-admission" class="md-nav__link">
+    <span class="md-ellipsis">
+      Candidate admission
+    </span>
+  </a>
+  
+</li>
+      
+        <li class="md-nav__item">
+  <a href="#measurement-protocol" class="md-nav__link">
+    <span class="md-ellipsis">
+      Measurement protocol
+    </span>
+  </a>
+  
+    <nav class="md-nav" aria-label="Measurement protocol">
+      <ul class="md-nav__list">
+        
+          <li class="md-nav__item">
+  <a href="#eligibility" class="md-nav__link">
+    <span class="md-ellipsis">
+      Eligibility
+    </span>
+  </a>
+  
+</li>
+        
+          <li class="md-nav__item">
+  <a href="#representative-work" class="md-nav__link">
+    <span class="md-ellipsis">
+      Representative work
+    </span>
+  </a>
+  
+</li>
+        
+          <li class="md-nav__item">
+  <a href="#warmup-and-timing" class="md-nav__link">
+    <span class="md-ellipsis">
+      Warmup and timing
+    </span>
+  </a>
+  
+</li>
+        
+      </ul>
+    </nav>
+  
+</li>
+      
+        <li class="md-nav__item">
+  <a href="#search-and-selection" class="md-nav__link">
+    <span class="md-ellipsis">
+      Search and selection
+    </span>
+  </a>
+  
+</li>
+      
+        <li class="md-nav__item">
+  <a href="#correctness-gate" class="md-nav__link">
+    <span class="md-ellipsis">
+      Correctness gate
+    </span>
+  </a>
+  
+</li>
+      
+        <li class="md-nav__item">
+  <a href="#failure-containment-and-live-reuse" class="md-nav__link">
+    <span class="md-ellipsis">
+      Failure containment and live reuse
+    </span>
+  </a>
+  
+</li>
+      
+        <li class="md-nav__item">
+  <a href="#tensorrt-artifact-policy" class="md-nav__link">
+    <span class="md-ellipsis">
+      TensorRT artifact policy
+    </span>
+  </a>
+  
+</li>
+      
+        <li class="md-nav__item">
+  <a href="#first-run-and-future-run-behavior" class="md-nav__link">
+    <span class="md-ellipsis">
+      First-run and future-run behavior
+    </span>
+  </a>
+  
+</li>
+      
+        <li class="md-nav__item">
+  <a href="#observability" class="md-nav__link">
+    <span class="md-ellipsis">
+      Observability
+    </span>
+  </a>
+  
+</li>
+      
+        <li class="md-nav__item">
+  <a href="#verification-requirements-for-implementation" class="md-nav__link">
+    <span class="md-ellipsis">
+      Verification requirements for implementation
+    </span>
+  </a>
+  
+    <nav class="md-nav" aria-label="Verification requirements for implementation">
+      <ul class="md-nav__list">
+        
+          <li class="md-nav__item">
+  <a href="#unit-and-property-tests" class="md-nav__link">
+    <span class="md-ellipsis">
+      Unit and property tests
+    </span>
+  </a>
+  
+</li>
+        
+          <li class="md-nav__item">
+  <a href="#integration-tests" class="md-nav__link">
+    <span class="md-ellipsis">
+      Integration tests
+    </span>
+  </a>
+  
+</li>
+        
+          <li class="md-nav__item">
+  <a href="#real-equivalenceperformance-gates" class="md-nav__link">
+    <span class="md-ellipsis">
+      Real equivalence/performance gates
+    </span>
+  </a>
+  
+</li>
+        
+      </ul>
+    </nav>
+  
+</li>
+      
+        <li class="md-nav__item">
+  <a href="#rollout" class="md-nav__link">
+    <span class="md-ellipsis">
+      Rollout
+    </span>
+  </a>
+  
+</li>
+      
+    </ul>
+  
+</nav>
+                  </div>
+                </div>
+              </div>
+            
+          
+          
+            <div class="md-content" data-md-component="content">
+              <article class="md-content__inner md-typeset">
+                
+                  
+
+  
+    <a href="https://github.com/neurorishika/hydra-suite/edit/main/docs/superpowers/specs/2026-09-06-trackerkit-inference-autotuner-design.md" title="Edit this page" class="md-content__button md-icon">
+      
+      <svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 24 24"><path d="M10 20H6V4h7v5h5v3.1l2-2V8l-6-6H6c-1.1 0-2 .9-2 2v16c0 1.1.9 2 2 2h4zm10.2-7c.1 0 .3.1.4.2l1.3 1.3c.2.2.2.6 0 .8l-1 1-2.1-2.1 1-1c.1-.1.2-.2.4-.2m0 3.9L14.1 23H12v-2.1l6.1-6.1z"/></svg>
+    </a>
+  
+  
+
+
+<h1 id="trackerkit-system-specific-inference-throughput-autotuner">TrackerKit system-specific inference throughput autotuner<a class="headerlink" href="#trackerkit-system-specific-inference-throughput-autotuner" title="Permanent link">&para;</a></h1>
+<p><strong>Date:</strong> 2026-09-06
+<strong>Status:</strong> Proposed; experimentally specified, not implemented
+<strong>Scope:</strong> TrackerKit full-run local inference
+<strong>Evidence:</strong> <a href="../notes/2026-09-06-trackerkit-inference-autotuner-mehek-study/">Mehek measurement study</a></p>
+<h2 id="decision">Decision<a class="headerlink" href="#decision" title="Permanent link">&para;</a></h2>
+<p>Add one coordinated, persistent inference autotuner around <code>InferenceRunner</code>.
+It owns these throughput controls when automatic mode is enabled:</p>
+<ul>
+<li>detector frames per call (<code>detection_batch_size</code>);</li>
+<li>sliced-detector tiles per call (<code>slice_tile_batch_size</code>);</li>
+<li>pose crops per call (<code>pose_batch_size</code>);</li>
+<li>head-tail crops per call (<code>headtail_batch_size</code>);</li>
+<li>each identity classifier's crops per call; and</li>
+<li><code>pipeline_depth</code>, because it changes both overlap and the safe frame-batch
+  envelope.</li>
+</ul>
+<p>The tuner will not choose each field independently and will not maximize batch
+size. It will analytically prune unsafe candidates, screen stage-local
+candidates on representative real work, perform bounded coordinate search in
+the complete pipeline, reject output changes beyond the determinism floor, and
+persist only a fully validated profile for the exact system/model/workload
+signature.</p>
+<p>The optimization objective is lexicographic:</p>
+<ol>
+<li>preserve output semantics and resource safety;</li>
+<li>maximize median steady-state full-run throughput; then</li>
+<li>among candidates within 2% of the fastest, choose the one with lower peak
+   memory, lower batch/depth, and lower preparation cost, in that order.</li>
+</ol>
+<p>"Keep the current settings" is a successful result. Automatic means no user
+must choose batch values; it does not promise that every model combination has
+a faster setting.</p>
+<h2 id="why-this-architecture">Why this architecture<a class="headerlink" href="#why-this-architecture" title="Permanent link">&para;</a></h2>
+<p>Mehek invalidated four simpler designs:</p>
+<ul>
+<li>largest-fit failed because 1200 px detector batch 4 beat 8 and 16, 2632 px
+  batch 1 beat all larger choices, and SAHI batch 1 beat batch 2;</li>
+<li>independent stage tuning failed because the composed depth-1 ant profiles
+  regressed 4-13% end to end;</li>
+<li>model-forward-only timing failed because the existing SAHI microtuner was
+  11.5% slower and used 9.1x the VRAM of the best manual result; and</li>
+<li>output invariance failed because SAHI batching changed detection counts and
+  identity batching changed a categorical identity beyond a zero-noise
+  same-setting determinism floor.</li>
+</ul>
+<p>The only ant change that survived the joint gate was pose batch 4 plus
+head-tail batch 4 at the existing depth 2, improving median throughput about
+2.3%. The identity pipeline correctly retained its manual settings.</p>
+<h2 id="goals">Goals<a class="headerlink" href="#goals" title="Permanent link">&para;</a></h2>
+<ul>
+<li>On the first eligible full run for an unknown signature, select safe,
+  near-optimal settings without manual batch experimentation.</li>
+<li>Reuse the selection across future processes on the same system.</li>
+<li>Preserve existing inference semantics within the repository's equivalence
+  contract, with stricter exact gates for categorical outputs.</li>
+<li>Never use OOM as ordinary search control flow in the main runner.</li>
+<li>Bound calibration time, memory, candidate count, disk use, and retries.</li>
+<li>Explain the effective values, evidence, cache status, and fallback reason.</li>
+</ul>
+<h2 id="non-goals">Non-goals<a class="headerlink" href="#non-goals" title="Permanent link">&para;</a></h2>
+<ul>
+<li>A universal batch constant transferable across systems.</li>
+<li>Changing model accuracy thresholds, slice geometry, crop geometry, target
+  count, tracking gates, or postprocessing behavior.</li>
+<li>Tuning realtime preview; realtime keeps its existing batch-1 constraints.</li>
+<li>Tuning CoreML OBB batching; CoreML remains fixed at batch 1.</li>
+<li>Consuming calibration predictions as production results in v1.</li>
+<li>Making CPU/MPS policy claims from the Mehek CUDA measurements. The
+  architecture supports backend-specific policies, but every backend needs its
+  own evidence and profile.</li>
+</ul>
+<h2 id="relationship-to-the-tracking-auto-tuner">Relationship to the tracking auto-tuner<a class="headerlink" href="#relationship-to-the-tracking-auto-tuner" title="Permanent link">&para;</a></h2>
+<p>TrackerKit already has a tracking auto-tuner under
+<code>hydra_suite.core.tracking.optimization</code>. It recommends semantic detection,
+assignment, and Kalman parameters using held-out trajectory-quality evidence,
+then applies representable values through
+<code>trackerkit.gui.autotune_contract</code>. That is a separate product and objective.</p>
+<p>This design is named the <strong>Inference Throughput Autotuner</strong> in code, logs, and
+UI. It changes execution strategy only and must not:</p>
+<ul>
+<li>add batch/depth fields to <code>TRACKING_AUTOTUNE_CANDIDATE_KEYS</code>;</li>
+<li>write its result through the tracking candidate UI contract;</li>
+<li>claim an accuracy or trajectory-quality improvement; or</li>
+<li>search semantic thresholds to recover throughput or equivalence.</li>
+</ul>
+<p>The two systems may share read-only inference/result caches and common runtime
+profiling primitives, but their keys, evidence, stores, recommendations, and UI
+actions remain separate. If both are requested, semantic tracking parameters
+are resolved first; their resulting detection/count workload signature then
+keys throughput tuning.</p>
+<h2 id="architecture">Architecture<a class="headerlink" href="#architecture" title="Permanent link">&para;</a></h2>
+<div class="language-text highlight"><pre><span></span><code><span id="__span-0-1"><a id="__codelineno-0-1" name="__codelineno-0-1" href="#__codelineno-0-1"></a>TrackerKit / CLI
+</span><span id="__span-0-2"><a id="__codelineno-0-2" name="__codelineno-0-2" href="#__codelineno-0-2"></a>       |
+</span><span id="__span-0-3"><a id="__codelineno-0-3" name="__codelineno-0-3" href="#__codelineno-0-3"></a>       v
+</span><span id="__span-0-4"><a id="__codelineno-0-4" name="__codelineno-0-4" href="#__codelineno-0-4"></a>InferenceRunner -- explicit/manual ownership check
+</span><span id="__span-0-5"><a id="__codelineno-0-5" name="__codelineno-0-5" href="#__codelineno-0-5"></a>       |
+</span><span id="__span-0-6"><a id="__codelineno-0-6" name="__codelineno-0-6" href="#__codelineno-0-6"></a>       v
+</span><span id="__span-0-7"><a id="__codelineno-0-7" name="__codelineno-0-7" href="#__codelineno-0-7"></a>AutotuneCoordinator (Qt-free, core/inference)
+</span><span id="__span-0-8"><a id="__codelineno-0-8" name="__codelineno-0-8" href="#__codelineno-0-8"></a>       |
+</span><span id="__span-0-9"><a id="__codelineno-0-9" name="__codelineno-0-9" href="#__codelineno-0-9"></a>       +--&gt; WorkloadFingerprint --&gt; persistent profile lookup
+</span><span id="__span-0-10"><a id="__codelineno-0-10" name="__codelineno-0-10" href="#__codelineno-0-10"></a>       |                               |
+</span><span id="__span-0-11"><a id="__codelineno-0-11" name="__codelineno-0-11" href="#__codelineno-0-11"></a>       |                         hit --+--&gt; live down-admission
+</span><span id="__span-0-12"><a id="__codelineno-0-12" name="__codelineno-0-12" href="#__codelineno-0-12"></a>       |                               |
+</span><span id="__span-0-13"><a id="__codelineno-0-13" name="__codelineno-0-13" href="#__codelineno-0-13"></a>       +--&gt; CandidatePlanner &lt;---------+ miss/stale
+</span><span id="__span-0-14"><a id="__codelineno-0-14" name="__codelineno-0-14" href="#__codelineno-0-14"></a>       |        |
+</span><span id="__span-0-15"><a id="__codelineno-0-15" name="__codelineno-0-15" href="#__codelineno-0-15"></a>       |        +--&gt; analytic + measured memory admission
+</span><span id="__span-0-16"><a id="__codelineno-0-16" name="__codelineno-0-16" href="#__codelineno-0-16"></a>       |        +--&gt; bounded candidate sets
+</span><span id="__span-0-17"><a id="__codelineno-0-17" name="__codelineno-0-17" href="#__codelineno-0-17"></a>       |
+</span><span id="__span-0-18"><a id="__codelineno-0-18" name="__codelineno-0-18" href="#__codelineno-0-18"></a>       +--&gt; contained calibration sidecar under heavy-job lease
+</span><span id="__span-0-19"><a id="__codelineno-0-19" name="__codelineno-0-19" href="#__codelineno-0-19"></a>       |        +--&gt; warmup and randomized stage screening
+</span><span id="__span-0-20"><a id="__codelineno-0-20" name="__codelineno-0-20" href="#__codelineno-0-20"></a>       |        +--&gt; full-pipeline coordinate trials
+</span><span id="__span-0-21"><a id="__codelineno-0-21" name="__codelineno-0-21" href="#__codelineno-0-21"></a>       |        +--&gt; determinism/equivalence gate
+</span><span id="__span-0-22"><a id="__codelineno-0-22" name="__codelineno-0-22" href="#__codelineno-0-22"></a>       |
+</span><span id="__span-0-23"><a id="__codelineno-0-23" name="__codelineno-0-23" href="#__codelineno-0-23"></a>       +--&gt; atomic validated-profile promotion
+</span><span id="__span-0-24"><a id="__codelineno-0-24" name="__codelineno-0-24" href="#__codelineno-0-24"></a>       |
+</span><span id="__span-0-25"><a id="__codelineno-0-25" name="__codelineno-0-25" href="#__codelineno-0-25"></a>       v
+</span><span id="__span-0-26"><a id="__codelineno-0-26" name="__codelineno-0-26" href="#__codelineno-0-26"></a>InferenceRunner with an immutable runtime overlay
+</span></code></pre></div>
+<h3 id="component-boundaries">Component boundaries<a class="headerlink" href="#component-boundaries" title="Permanent link">&para;</a></h3>
+<p>The implementation belongs under a focused
+<code>hydra_suite.core.inference.autotune</code> package, not in TrackerKit's
+<code>MainWindow</code>. Suggested modules are:</p>
+<ul>
+<li><code>fingerprint.py</code>: stable hardware, software, model, and workload identity;</li>
+<li><code>candidates.py</code>: candidate generation and analytical admission;</li>
+<li><code>measure.py</code>: warmup, synchronized timing, resource telemetry, and robust
+  statistics;</li>
+<li><code>equivalence.py</code>: calibration-output and determinism comparison;</li>
+<li><code>search.py</code>: bounded coordinate/beam search;</li>
+<li><code>store.py</code>: schema validation, locking, atomic promotion, and invalidation;</li>
+<li><code>sidecar.py</code>: contained child protocol; and</li>
+<li><code>coordinator.py</code>: policy and the one public resolve operation.</li>
+</ul>
+<p>TrackerKit supplies typed configuration and displays progress/results. Core
+owns the algorithm. Runtime supplies backend resolution, resource leases,
+process supervision, resource budgets, and measured memory profiles. No lower
+layer imports from TrackerKit.</p>
+<p>Use the existing <code>MemoryProfileStore</code> and measured-envelope functions for
+memory evidence. Do not put throughput winners into that store: performance
+trials need distributions, equivalence verdicts, and a wider fingerprint, so
+they require a distinct <code>InferenceTuningProfileStore</code>.</p>
+<h2 id="ownership-and-compatibility">Ownership and compatibility<a class="headerlink" href="#ownership-and-compatibility" title="Permanent link">&para;</a></h2>
+<p>Resolution precedence is field-specific:</p>
+<ol>
+<li>an explicit CLI override or a field marked manual in the project config;</li>
+<li>a validated compatible automatic profile;</li>
+<li>a newly validated automatic result; or</li>
+<li>the existing safe configured/default value.</li>
+</ol>
+<p>The tuner produces an immutable runtime overlay. It does not rewrite project
+JSON, advanced config, or the user's batch widgets. Logs and UI show requested,
+admitted, and effective values separately.</p>
+<p>Existing configs retain their explicit settings until the user enables
+automatic inference tuning. New TrackerKit configs may default to automatic
+mode after shadow rollout passes. A single "Auto-optimize full inference"
+control is preferable to six independent auto checkboxes; advanced users may
+mark individual fields manual without disabling the remaining search.</p>
+<h2 id="persistent-identity">Persistent identity<a class="headerlink" href="#persistent-identity" title="Permanent link">&para;</a></h2>
+<p>Cache reuse requires an exact <code>TuningProfileKey</code>. Paths and Python object IDs
+are not identities. Model files use content digests, preferably supplied by the
+model registry and otherwise computed once and memoized by size/mtime.</p>
+<table>
+<thead>
+<tr>
+<th>Key group</th>
+<th>Required fields</th>
+</tr>
+</thead>
+<tbody>
+<tr>
+<td>Schema</td>
+<td>tuning schema, search-policy version, memory-estimator version</td>
+</tr>
+<tr>
+<td>System</td>
+<td>stable host ID, OS/architecture, CPU model/logical count, host-memory class</td>
+</tr>
+<tr>
+<td>Accelerator</td>
+<td>physical device UUID, model, compute capability, total VRAM</td>
+</tr>
+<tr>
+<td>Software</td>
+<td>Hydra version/commit, Python ABI, backend, precision, driver, CUDA, cuDNN, TensorRT, PyTorch, Ultralytics, and SLEAP runtime versions when active</td>
+</tr>
+<tr>
+<td>Models</td>
+<td>ordered stage roles and SHA-256 digests for direct/stage-1/stage-2 detector, pose, head-tail, and every identity classifier; model input/crop sizes; TensorRT profile identity</td>
+</tr>
+<tr>
+<td>Frame/decode</td>
+<td>width, height, channels/pixel format, resize factor, decoder/backend mode</td>
+</tr>
+<tr>
+<td>Detector semantics</td>
+<td>detection method/task, class selection, confidence/IoU, maximum detections, direct versus sequential mode</td>
+</tr>
+<tr>
+<td>Slice semantics</td>
+<td>enabled flag, resolved tile width/height, overlap, full-frame mode, ROI-gating mode, reference-body geometry</td>
+</tr>
+<tr>
+<td>Pipeline</td>
+<td>ordered enabled stage set, tracking direction/mode, result-cache stage mask</td>
+</tr>
+<tr>
+<td>Workload</td>
+<td>configured target count, observed detections/crops p50 and p95 bucket, canonical crop geometries</td>
+</tr>
+</tbody>
+</table>
+<p>Do not key by video pathname: future videos with the same semantic workload
+should reuse the profile. On a hit, compare the first production windows'
+density with the stored bucket. A bucket mismatch makes the profile
+provisional and triggers a bounded revalidation rather than silent reuse.</p>
+<p>Current free VRAM, utilization, temperature, and other-process load are dynamic
+admission inputs, not cache-key fields.</p>
+<h2 id="stored-profile">Stored profile<a class="headerlink" href="#stored-profile" title="Permanent link">&para;</a></h2>
+<p>A validated record contains:</p>
+<ul>
+<li>the full key and a stable profile ID;</li>
+<li>baseline, requested, admitted, and selected settings;</li>
+<li>candidate medians, median absolute deviations, confidence intervals,
+  measurement counts, warmup counts, and stage/full-pipeline timing;</li>
+<li>host RSS, accelerator peak, queue/frame-buffer high-water marks, and thermal
+  range;</li>
+<li>calibration frame/density summary without video paths or pixels;</li>
+<li>determinism-floor and candidate-equivalence verdicts;</li>
+<li>TensorRT preparation artifact IDs and preparation seconds;</li>
+<li>selection reason, rejected candidates and bounded failure classes;</li>
+<li>creation/last-validation timestamps and observed production throughput; and</li>
+<li>state: <code>provisional</code> or <code>validated</code>.</li>
+</ul>
+<p>Only <code>validated</code> records can alter a production run. A provisional record may
+reduce the next search space but never overrides the baseline.</p>
+<p>Store records under <code>get_data_dir()</code>, with a small versioned size/record cap.
+Writes use a per-key interprocess lock, write/fsync to a private temporary file,
+and atomic replace. Corruption, an unknown schema, or partial data degrades to
+a cache miss. Concurrent runners use single-flight tuning; a waiter may use the
+current baseline rather than block indefinitely.</p>
+<h2 id="candidate-admission">Candidate admission<a class="headerlink" href="#candidate-admission" title="Permanent link">&para;</a></h2>
+<p>Admission happens before loading candidate-specific models or allocating
+candidate buffers.</p>
+<ol>
+<li>Resolve the backend and fixed constraints. CoreML/realtime OBB yields only
+   batch 1. A cached detection/result stage removes its unused knob from the
+   search.</li>
+<li>Apply existing hard limits and compute the live decoded-frame requirement
+   from frame bytes, detection batch, and retained windows implied by pipeline
+   depth. Reject a candidate that exceeds the existing frame-buffer budget.</li>
+<li>Estimate tile/crop inputs, preprocessing outputs, raw predictions, queues,
+   and backend workspaces with all enabled models resident.</li>
+<li>Combine analytical floors with exact-key <code>MemoryProfileStore</code> observations;
+   never extrapolate above the largest successful observed setting.</li>
+<li>Admit against live free resources once, with the runtime's canonical safety
+   fraction. A cache hit repeats this step and may choose a smaller previously
+   validated equivalent setting.</li>
+</ol>
+<p>Candidate sets are geometric and bounded, always including the current value:</p>
+<ul>
+<li>frame/tile batches: <code>1, 2, 4, ... admitted_max</code> plus current and admitted
+  maximum;</li>
+<li>crop batches: the same set, capped by the observed p95 crops per frame and
+  including that p95/count boundary; and</li>
+<li>depth: legal values 1-4 that remain admitted with the incumbent frame batch.</li>
+</ul>
+<p>Values above the actual crop-count ceiling are canonicalized to the smallest
+equivalent value. Requested and effective values remain distinct in telemetry.</p>
+<h2 id="measurement-protocol">Measurement protocol<a class="headerlink" href="#measurement-protocol" title="Permanent link">&para;</a></h2>
+<h3 id="eligibility">Eligibility<a class="headerlink" href="#eligibility" title="Permanent link">&para;</a></h3>
+<p>Do not tune while another accelerator job is active, when free memory is below
+the baseline requirement, or when the device is already thermally throttled.
+Sample utilization/free memory several times rather than trusting one instant.
+If eligibility fails, use a compatible down-admitted cached profile or the
+baseline and report <code>deferred_due_to_contention</code>.</p>
+<p>The default calibration budget is 120 seconds per unknown signature. Preparing
+the baseline artifact required by the already-selected runtime is reported
+separately and does not consume that budget; optional candidate-only artifact
+work does. Budget expiry keeps the incumbent; it never promotes the best
+incomplete observation. Higher-value fields are measured first, ranked by
+incumbent profiler wall-time share. This lets an expensive low-share identity
+sweep be skipped without blocking detector tuning.</p>
+<h3 id="representative-work">Representative work<a class="headerlink" href="#representative-work" title="Permanent link">&para;</a></h3>
+<p>Use normal stage APIs on real frames from the input, including preprocessing,
+crop/tile extraction, merge/NMS, transfers, and output conversion. Do not time
+only backend <code>predict</code>. Use bounded early/middle/late windows when seeking is
+available. Do not retain an unbounded decoded-frame set; reread or spool a
+bounded window and account for decoder timing separately.</p>
+<p>The calibration sidecar loads the full active model combination so residency
+and scheduling match production. Candidate predictions are disposable and
+never enter production caches in v1.</p>
+<h3 id="warmup-and-timing">Warmup and timing<a class="headerlink" href="#warmup-and-timing" title="Permanent link">&para;</a></h3>
+<ul>
+<li>Warm every backend/candidate for at least three backend calls and eight
+  representative frames before measurement.</li>
+<li>Synchronize CUDA around measured spans.</li>
+<li>Measure at least five randomized/interleaved blocks. Continue until each
+  candidate accumulates at least two seconds in its affected stage or reaches
+  the 128-frame/120-second cap.</li>
+<li>Record stage-inclusive time and full-pipeline frames/second separately from
+  initialization, engine preparation, decode, and final export.</li>
+<li>Use paired medians, MAD, and a bootstrap 95% confidence interval. Do not use
+  a single fastest sample.</li>
+</ul>
+<p>Grouped candidate order is forbidden because compilation, allocator growth,
+temperature, and clocks drift over a run. Use a deterministic seeded block
+order so a failure is reproducible.</p>
+<h2 id="search-and-selection">Search and selection<a class="headerlink" href="#search-and-selection" title="Permanent link">&para;</a></h2>
+<p>The search is a bounded coordinate beam, not a Cartesian product:</p>
+<ol>
+<li>Run the current settings twice to establish a determinism floor and an
+   incumbent full-pipeline distribution.</li>
+<li>Rank tunable fields by their profiler share.</li>
+<li>For one field at a time, hold every other incumbent value fixed and run the
+   admitted stage-inclusive screen.</li>
+<li>Keep at most the two fastest equivalent mutations plus the incumbent.</li>
+<li>Replay those mutations through the full forward pipeline from identical
+   initial tracking state. Reject any correctness failure.</li>
+<li>Accept a mutation only when its median throughput gain is at least 2% and
+   the paired 95% confidence interval excludes regression. Otherwise keep the
+   incumbent.</li>
+<li>Continue with the next field against the updated incumbent.</li>
+<li>Make one second pass over accepted fields and their nearest rejected
+   neighbors to catch interactions. Stop after two passes or budget expiry.</li>
+<li>Re-run the final vector in a fresh sidecar. Promote it only after that run
+   passes admission, equivalence, and the full-pipeline performance gate.</li>
+</ol>
+<p>Within a 2% near-optimal confidence band, prefer lower peak memory, then lower
+batch/depth. This selected 1200 px detector batch 4 over larger values, pose
+batch 4 over 8, and avoids meaningless values above a per-frame crop ceiling.</p>
+<p>Pipeline depth is treated like every other coordinate against the full current
+incumbent. It is never selected on a detector-only microbenchmark and then
+blindly composed with pose/identity settings; Mehek showed that loses useful
+overlap.</p>
+<h2 id="correctness-gate">Correctness gate<a class="headerlink" href="#correctness-gate" title="Permanent link">&para;</a></h2>
+<p>The baseline duplicate defines the backend's determinism floor on the exact
+calibration sample. A candidate may not exceed that floor plus these public
+limits:</p>
+<ul>
+<li>every output CSV has a non-zero row count;</li>
+<li>detection/tracking row counts match and positional matching has zero
+  unmatched rows;</li>
+<li>position p99 is at most the existing 0.5 px tolerance and angular mean at
+  most 0.05 rad, unless the measured determinism floor is larger;</li>
+<li>pose keypoint presence/NaN patterns and categorical head-tail results match;</li>
+<li>identity class, unique identity key, class-label, and NaN patterns match
+  exactly by default; and</li>
+<li>both forward-rich output and final tracking output pass.</li>
+</ul>
+<p>The exact categorical default is intentional: Mehek changed one identity row
+at batch 8 while same-setting repeats were exact. A future user-selectable
+"numerically equivalent" policy may relax geometry, but must never be the
+silent default for identity.</p>
+<p>If a faster candidate fails correctness, record the rejection and continue.
+The tuner must not modify thresholds to make it pass.</p>
+<h2 id="failure-containment-and-live-reuse">Failure containment and live reuse<a class="headerlink" href="#failure-containment-and-live-reuse" title="Permanent link">&para;</a></h2>
+<p>Every unknown candidate runs in a fresh supervised child under the canonical
+heavy-job lease. Recognized accelerator OOM or host soft-limit exits may reduce
+one pressure field and retry at most twice using the existing bounded-adaptation
+machinery. A crash, timeout, NaN output, corrupt output, or correctness failure
+is not retried as an OOM and is never promoted.</p>
+<p>The production runner never explores an unsafe setting. After a cache hit it:</p>
+<ol>
+<li>resolves current free memory and contention;</li>
+<li>checks the stored peak plus safety reserve;</li>
+<li>uses the stored selected value if admitted;</li>
+<li>otherwise steps down only through previously successful/equivalent settings;</li>
+<li>otherwise falls back to the baseline; and</li>
+<li>records the down-admission reason without overwriting the validated winner.</li>
+</ol>
+<p>If production throughput is more than 15% below the stored distribution for
+three comparable windows, mark the record provisional and revalidate on a
+later idle run; do not start a disruptive search in the middle of tracking.</p>
+<h2 id="tensorrt-artifact-policy">TensorRT artifact policy<a class="headerlink" href="#tensorrt-artifact-policy" title="Permanent link">&para;</a></h2>
+<p>Engine preparation is not a timing candidate and is never hidden inside a
+trial. The coordinator reports separate <code>prepare_seconds</code> and
+<code>steady_state_seconds</code>.</p>
+<ul>
+<li>Reuse compatible immutable batch-profile artifacts when present.</li>
+<li>Serialize builds by source digest, TensorRT/runtime fingerprint, input size,
+  task, precision, and optimization profile.</li>
+<li>Build in a private temporary directory and atomically promote the final
+  profile. Candidate builds must not share generic intermediate <code>.onnx</code> or
+  <code>.engine</code> paths.</li>
+<li>On an unknown profile range, build at most one wide dynamic calibration
+  engine spanning admitted candidates, benchmark candidates within it, then
+  build/validate a dedicated selected profile only if the predicted benefit
+  justifies the second build.</li>
+<li>The dedicated engine's final full-pipeline result is authoritative because
+  TensorRT optimization-profile choice can change both performance and
+  numerics.</li>
+<li>Never compile all candidate profiles speculatively. Mehek measured 255-310
+  seconds for a single cold profile versus about four seconds on a hot hit.</li>
+</ul>
+<p>Engine artifacts and tuning profiles have separate identities and lifecycles.
+Removing an engine invalidates only profiles that require it; changing a
+tuning policy does not delete otherwise valid engines.</p>
+<h2 id="first-run-and-future-run-behavior">First-run and future-run behavior<a class="headerlink" href="#first-run-and-future-run-behavior" title="Permanent link">&para;</a></h2>
+<p>On a cache miss, TrackerKit shows a bounded "Optimizing inference" phase with
+the incumbent, current field, elapsed/budget time, and an option to continue
+with current settings. Cancellation leaves model/result caches untouched and
+does not promote a partial profile.</p>
+<p>After validation, the first run uses the winner for its production pass. The
+UI reports one-time calibration and artifact preparation separately so a
+steady-state gain is not misrepresented as a faster first completion. Future
+processes perform a profile lookup and live admission only.</p>
+<p>Target cache-hit overhead is under 50 ms excluding model hashing on first
+registry discovery. A hit never repeats calibration. The current SAHI tuner's
+process-local dictionary does not meet this requirement and should be replaced
+or delegated to the coordinator when automatic mode is active.</p>
+<h2 id="observability">Observability<a class="headerlink" href="#observability" title="Permanent link">&para;</a></h2>
+<p>Every run records a bounded, path-free summary containing:</p>
+<ul>
+<li>cache hit/miss/stale/deferred status and profile ID;</li>
+<li>fingerprint digest and invalidation reason;</li>
+<li>per-field requested, admitted, and effective values;</li>
+<li>baseline/selected throughput, confidence, peak memory, and preparation time;</li>
+<li>candidate rejection reasons, including equivalence details; and</li>
+<li>live down-admission or fallback reason.</li>
+</ul>
+<p>Detailed calibration logs remain in the normal run log directory. Profile
+records never contain video paths, pixels, animal identities, or model paths.</p>
+<h2 id="verification-requirements-for-implementation">Verification requirements for implementation<a class="headerlink" href="#verification-requirements-for-implementation" title="Permanent link">&para;</a></h2>
+<h3 id="unit-and-property-tests">Unit and property tests<a class="headerlink" href="#unit-and-property-tests" title="Permanent link">&para;</a></h3>
+<ul>
+<li>stable fingerprint construction and one-field invalidation for every key
+  category;</li>
+<li>manual/automatic precedence and immutable runtime overlays;</li>
+<li>bounded candidate generation, count canonicalization, and frame-window
+  admission;</li>
+<li>measured-envelope use without double-applying safety fractions;</li>
+<li>paired statistics, tie-breaking, sequential stopping, and deterministic
+  randomized order;</li>
+<li>output gates for row count, geometry, NaN pattern, pose, head-tail, and
+  categorical identity;</li>
+<li>corrupt/oversized/old-schema stores degrade to misses;</li>
+<li>atomic promotion, concurrent single-flight locking, cancellation, and stale
+  lock recovery;</li>
+<li>recognized OOM reduction and the two-retry cap; and</li>
+<li>cache-hit down-admission without mutating the stored winner.</li>
+</ul>
+<h3 id="integration-tests">Integration tests<a class="headerlink" href="#integration-tests" title="Permanent link">&para;</a></h3>
+<ul>
+<li>fake stages whose independent optima conflict, proving the full-pipeline
+  gate wins;</li>
+<li>a faster candidate with changed categorical output is rejected;</li>
+<li>cache miss writes one validated profile and a second fresh process uses it
+  without trials;</li>
+<li>model digest, frame geometry, slice geometry, runtime version, or density
+  bucket changes cause miss/revalidation;</li>
+<li>concurrent runners create one TensorRT build and one tuning profile;</li>
+<li>cold TensorRT preparation and hot inference are reported separately; and</li>
+<li>no candidate outputs contaminate production result caches.</li>
+</ul>
+<h3 id="real-equivalenceperformance-gates">Real equivalence/performance gates<a class="headerlink" href="#real-equivalenceperformance-gates" title="Permanent link">&para;</a></h3>
+<p>Use <code>tools/equivalence/</code> with non-empty row-count assertions. Compare both the
+forward-rich and final tracking CSVs. At minimum cover detection-only, sliced
+detection, pose/head-tail, CNN identity, sequential OBB, and a result-cache hit.
+Risky implementation changes require both MPS and CUDA verification unless the
+implementation plan explicitly narrows platform scope.</p>
+<p>Mehek's results are regression evidence, not permanent absolute thresholds:</p>
+<ul>
+<li>the 1200 px native detector search should find batch 4's clear &gt;=10% gain
+  over batch 1 without selecting 8/16;</li>
+<li>the 4512 px SAHI search must not prefer batch 2 over batch 1;</li>
+<li>the 4512 px frame-batch 16/32 candidates must be pruned before inference;</li>
+<li>the pose pipeline must reject the depth-1 composition and may accept the
+  depth-2 pose/head-tail batch-4 vector only if the confidence gate passes; and</li>
+<li>the identity pipeline must retain the baseline when alternatives regress or
+  change a categorical identity.</li>
+</ul>
+<h2 id="rollout">Rollout<a class="headerlink" href="#rollout" title="Permanent link">&para;</a></h2>
+<ol>
+<li><strong>Record-only:</strong> generate profiles and decisions but never alter runtime
+   settings. Compare predicted winners with offline equivalence and throughput.</li>
+<li><strong>Opt-in automatic:</strong> apply validated profiles only when explicitly enabled;
+   retain all manual controls and a per-run bypass.</li>
+<li><strong>Default for new CUDA configs:</strong> only after cache concurrency, artifact
+   locking, cancellation, and equivalence gates pass on multiple CUDA systems.</li>
+<li><strong>Backend expansion:</strong> validate and version separate candidate policies for
+   MPS and CPU before enabling them by default.</li>
+</ol>
+<p>Do not ship a partial version that persists independent stage winners without
+the full-pipeline and correctness gates; Mehek directly demonstrated that such
+a tuner can be slower and can change results.</p>
+
+
+
+
+
+
+
+
+
+
+
+
+                
+              </article>
+            </div>
+          
+          
+<script>var target=document.getElementById(location.hash.slice(1));target&&target.name&&(target.checked=target.name.startsWith("__tabbed_"))</script>
+        </div>
+        
+          <button type="button" class="md-top md-icon" data-md-component="top" hidden>
+  
+  <svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 24 24"><path d="M13 20h-2V8l-5.5 5.5-1.42-1.42L12 4.16l7.92 7.92-1.42 1.42L13 8z"/></svg>
+  Back to top
+</button>
+        
+      </main>
+      
+        <footer class="md-footer">
+  
+  <div class="md-footer-meta md-typeset">
+    <div class="md-footer-meta__inner md-grid">
+      <div class="md-copyright">
+  
+  
+    Made with
+    <a href="https://squidfunk.github.io/mkdocs-material/" target="_blank" rel="noopener">
+      Material for MkDocs
+    </a>
+  
+</div>
+      
+    </div>
+  </div>
+</footer>
+      
+    </div>
+    <div class="md-dialog" data-md-component="dialog">
+      <div class="md-dialog__inner md-typeset"></div>
+    </div>
+    
+    
+    <script id="__config" type="application/json">{"base": "../../..", "features": ["navigation.tabs", "navigation.sections", "navigation.expand", "navigation.top", "content.code.copy", "content.action.edit", "search.suggest", "search.highlight"], "search": "../../../assets/javascripts/workers/search.6ce7567c.min.js", "translations": {"clipboard.copied": "Copied to clipboard", "clipboard.copy": "Copy to clipboard", "search.result.more.one": "1 more on this page", "search.result.more.other": "# more on this page", "search.result.none": "No matching documents", "search.result.one": "1 matching document", "search.result.other": "# matching documents", "search.result.placeholder": "Type to start searching", "search.result.term.missing": "Missing", "select.version": "Select version"}, "version": {"default": "latest", "provider": "mike"}}</script>
+    
+    
+      <script src="../../../assets/javascripts/bundle.83f73b43.min.js"></script>
+      
+    
+  </body>
+</html>

@@ -1,0 +1,2425 @@
+
+<!doctype html>
+<html lang="en" class="no-js">
+  <head>
+    
+      <meta charset="utf-8">
+      <meta name="viewport" content="width=device-width,initial-scale=1">
+      
+        <meta name="description" content="User and developer documentation for HYDRA Suite">
+      
+      
+      
+        <link rel="canonical" href="https://neurorishika.github.io/hydra-suite/latest/superpowers/specs/notes/2026-09-06-crossframe-batching-spike/">
+      
+      
+      
+      
+      <link rel="icon" href="../../../../assets/images/favicon.png">
+      <meta name="generator" content="mkdocs-1.6.1, mkdocs-material-9.5.43">
+    
+    
+      
+        <title>Cross-frame crop batching (Option B) — measurement spike - HYDRA Suite Docs</title>
+      
+    
+    
+      <link rel="stylesheet" href="../../../../assets/stylesheets/main.0253249f.min.css">
+      
+        
+        <link rel="stylesheet" href="../../../../assets/stylesheets/palette.06af60db.min.css">
+      
+      
+
+
+    
+    
+      
+    
+    
+      
+        
+        
+        <link rel="preconnect" href="https://fonts.gstatic.com" crossorigin>
+        <link rel="stylesheet" href="https://fonts.googleapis.com/css?family=Roboto:300,300i,400,400i,700,700i%7CRoboto+Mono:400,400i,700,700i&display=fallback">
+        <style>:root{--md-text-font:"Roboto";--md-code-font:"Roboto Mono"}</style>
+      
+    
+    
+      <link rel="stylesheet" href="../../../../assets/_mkdocstrings.css">
+    
+    <script>__md_scope=new URL("../../../..",location),__md_hash=e=>[...e].reduce(((e,_)=>(e<<5)-e+_.charCodeAt(0)),0),__md_get=(e,_=localStorage,t=__md_scope)=>JSON.parse(_.getItem(t.pathname+"."+e)),__md_set=(e,_,t=localStorage,a=__md_scope)=>{try{t.setItem(a.pathname+"."+e,JSON.stringify(_))}catch(e){}}</script>
+    
+      
+
+    
+    
+    
+  </head>
+  
+  
+    
+    
+      
+    
+    
+    
+    
+    <body dir="ltr" data-md-color-scheme="default" data-md-color-primary="blue" data-md-color-accent="light-blue">
+  
+    
+    <input class="md-toggle" data-md-toggle="drawer" type="checkbox" id="__drawer" autocomplete="off">
+    <input class="md-toggle" data-md-toggle="search" type="checkbox" id="__search" autocomplete="off">
+    <label class="md-overlay" for="__drawer"></label>
+    <div data-md-component="skip">
+      
+        
+        <a href="#cross-frame-crop-batching-option-b-measurement-spike" class="md-skip">
+          Skip to content
+        </a>
+      
+    </div>
+    <div data-md-component="announce">
+      
+    </div>
+    
+      <div data-md-color-scheme="default" data-md-component="outdated" hidden>
+        
+      </div>
+    
+    
+      
+
+<header class="md-header" data-md-component="header">
+  <nav class="md-header__inner md-grid" aria-label="Header">
+    <a href="../../../.." title="HYDRA Suite Docs" class="md-header__button md-logo" aria-label="HYDRA Suite Docs" data-md-component="logo">
+      
+  
+  <svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 24 24"><path d="M12 8a3 3 0 0 0 3-3 3 3 0 0 0-3-3 3 3 0 0 0-3 3 3 3 0 0 0 3 3m0 3.54C9.64 9.35 6.5 8 3 8v11c3.5 0 6.64 1.35 9 3.54 2.36-2.19 5.5-3.54 9-3.54V8c-3.5 0-6.64 1.35-9 3.54"/></svg>
+
+    </a>
+    <label class="md-header__button md-icon" for="__drawer">
+      
+      <svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 24 24"><path d="M3 6h18v2H3zm0 5h18v2H3zm0 5h18v2H3z"/></svg>
+    </label>
+    <div class="md-header__title" data-md-component="header-title">
+      <div class="md-header__ellipsis">
+        <div class="md-header__topic">
+          <span class="md-ellipsis">
+            HYDRA Suite Docs
+          </span>
+        </div>
+        <div class="md-header__topic" data-md-component="header-topic">
+          <span class="md-ellipsis">
+            
+              Cross-frame crop batching (Option B) — measurement spike
+            
+          </span>
+        </div>
+      </div>
+    </div>
+    
+      
+        <form class="md-header__option" data-md-component="palette">
+  
+    
+    
+    
+    <input class="md-option" data-md-color-media="(prefers-color-scheme: light)" data-md-color-scheme="default" data-md-color-primary="blue" data-md-color-accent="light-blue"  aria-label="Switch to dark mode"  type="radio" name="__palette" id="__palette_0">
+    
+      <label class="md-header__button md-icon" title="Switch to dark mode" for="__palette_1" hidden>
+        <svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 24 24"><path d="m17.75 4.09-2.53 1.94.91 3.06-2.63-1.81-2.63 1.81.91-3.06-2.53-1.94L12.44 4l1.06-3 1.06 3zm3.5 6.91-1.64 1.25.59 1.98-1.7-1.17-1.7 1.17.59-1.98L15.75 11l2.06-.05L18.5 9l.69 1.95zm-2.28 4.95c.83-.08 1.72 1.1 1.19 1.85-.32.45-.66.87-1.08 1.27C15.17 23 8.84 23 4.94 19.07c-3.91-3.9-3.91-10.24 0-14.14.4-.4.82-.76 1.27-1.08.75-.53 1.93.36 1.85 1.19-.27 2.86.69 5.83 2.89 8.02a9.96 9.96 0 0 0 8.02 2.89m-1.64 2.02a12.08 12.08 0 0 1-7.8-3.47c-2.17-2.19-3.33-5-3.49-7.82-2.81 3.14-2.7 7.96.31 10.98 3.02 3.01 7.84 3.12 10.98.31"/></svg>
+      </label>
+    
+  
+    
+    
+    
+    <input class="md-option" data-md-color-media="(prefers-color-scheme: dark)" data-md-color-scheme="slate" data-md-color-primary="blue" data-md-color-accent="light-blue"  aria-label="Switch to light mode"  type="radio" name="__palette" id="__palette_1">
+    
+      <label class="md-header__button md-icon" title="Switch to light mode" for="__palette_0" hidden>
+        <svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 24 24"><path d="M12 7a5 5 0 0 1 5 5 5 5 0 0 1-5 5 5 5 0 0 1-5-5 5 5 0 0 1 5-5m0 2a3 3 0 0 0-3 3 3 3 0 0 0 3 3 3 3 0 0 0 3-3 3 3 0 0 0-3-3m0-7 2.39 3.42C13.65 5.15 12.84 5 12 5s-1.65.15-2.39.42zM3.34 7l4.16-.35A7.2 7.2 0 0 0 5.94 8.5c-.44.74-.69 1.5-.83 2.29zm.02 10 1.76-3.77a7.131 7.131 0 0 0 2.38 4.14zM20.65 7l-1.77 3.79a7.02 7.02 0 0 0-2.38-4.15zm-.01 10-4.14.36c.59-.51 1.12-1.14 1.54-1.86.42-.73.69-1.5.83-2.29zM12 22l-2.41-3.44c.74.27 1.55.44 2.41.44.82 0 1.63-.17 2.37-.44z"/></svg>
+      </label>
+    
+  
+</form>
+      
+    
+    
+      <script>var palette=__md_get("__palette");if(palette&&palette.color){if("(prefers-color-scheme)"===palette.color.media){var media=matchMedia("(prefers-color-scheme: light)"),input=document.querySelector(media.matches?"[data-md-color-media='(prefers-color-scheme: light)']":"[data-md-color-media='(prefers-color-scheme: dark)']");palette.color.media=input.getAttribute("data-md-color-media"),palette.color.scheme=input.getAttribute("data-md-color-scheme"),palette.color.primary=input.getAttribute("data-md-color-primary"),palette.color.accent=input.getAttribute("data-md-color-accent")}for(var[key,value]of Object.entries(palette.color))document.body.setAttribute("data-md-color-"+key,value)}</script>
+    
+    
+    
+      <label class="md-header__button md-icon" for="__search">
+        
+        <svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 24 24"><path d="M9.5 3A6.5 6.5 0 0 1 16 9.5c0 1.61-.59 3.09-1.56 4.23l.27.27h.79l5 5-1.5 1.5-5-5v-.79l-.27-.27A6.52 6.52 0 0 1 9.5 16 6.5 6.5 0 0 1 3 9.5 6.5 6.5 0 0 1 9.5 3m0 2C7 5 5 7 5 9.5S7 14 9.5 14 14 12 14 9.5 12 5 9.5 5"/></svg>
+      </label>
+      <div class="md-search" data-md-component="search" role="dialog">
+  <label class="md-search__overlay" for="__search"></label>
+  <div class="md-search__inner" role="search">
+    <form class="md-search__form" name="search">
+      <input type="text" class="md-search__input" name="query" aria-label="Search" placeholder="Search" autocapitalize="off" autocorrect="off" autocomplete="off" spellcheck="false" data-md-component="search-query" required>
+      <label class="md-search__icon md-icon" for="__search">
+        
+        <svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 24 24"><path d="M9.5 3A6.5 6.5 0 0 1 16 9.5c0 1.61-.59 3.09-1.56 4.23l.27.27h.79l5 5-1.5 1.5-5-5v-.79l-.27-.27A6.52 6.52 0 0 1 9.5 16 6.5 6.5 0 0 1 3 9.5 6.5 6.5 0 0 1 9.5 3m0 2C7 5 5 7 5 9.5S7 14 9.5 14 14 12 14 9.5 12 5 9.5 5"/></svg>
+        
+        <svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 24 24"><path d="M20 11v2H8l5.5 5.5-1.42 1.42L4.16 12l7.92-7.92L13.5 5.5 8 11z"/></svg>
+      </label>
+      <nav class="md-search__options" aria-label="Search">
+        
+        <button type="reset" class="md-search__icon md-icon" title="Clear" aria-label="Clear" tabindex="-1">
+          
+          <svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 24 24"><path d="M19 6.41 17.59 5 12 10.59 6.41 5 5 6.41 10.59 12 5 17.59 6.41 19 12 13.41 17.59 19 19 17.59 13.41 12z"/></svg>
+        </button>
+      </nav>
+      
+        <div class="md-search__suggest" data-md-component="search-suggest"></div>
+      
+    </form>
+    <div class="md-search__output">
+      <div class="md-search__scrollwrap" tabindex="0" data-md-scrollfix>
+        <div class="md-search-result" data-md-component="search-result">
+          <div class="md-search-result__meta">
+            Initializing search
+          </div>
+          <ol class="md-search-result__list" role="presentation"></ol>
+        </div>
+      </div>
+    </div>
+  </div>
+</div>
+    
+    
+      <div class="md-header__source">
+        <a href="https://github.com/neurorishika/hydra-suite" title="Go to repository" class="md-source" data-md-component="source">
+  <div class="md-source__icon md-icon">
+    
+    <svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 448 512"><!--! Font Awesome Free 6.6.0 by @fontawesome - https://fontawesome.com License - https://fontawesome.com/license/free (Icons: CC BY 4.0, Fonts: SIL OFL 1.1, Code: MIT License) Copyright 2024 Fonticons, Inc.--><path d="M439.55 236.05 244 40.45a28.87 28.87 0 0 0-40.81 0l-40.66 40.63 51.52 51.52c27.06-9.14 52.68 16.77 43.39 43.68l49.66 49.66c34.23-11.8 61.18 31 35.47 56.69-26.49 26.49-70.21-2.87-56-37.34L240.22 199v121.85c25.3 12.54 22.26 41.85 9.08 55a34.34 34.34 0 0 1-48.55 0c-17.57-17.6-11.07-46.91 11.25-56v-123c-20.8-8.51-24.6-30.74-18.64-45L142.57 101 8.45 235.14a28.86 28.86 0 0 0 0 40.81l195.61 195.6a28.86 28.86 0 0 0 40.8 0l194.69-194.69a28.86 28.86 0 0 0 0-40.81"/></svg>
+  </div>
+  <div class="md-source__repository">
+    neurorishika/hydra-suite
+  </div>
+</a>
+      </div>
+    
+  </nav>
+  
+</header>
+    
+    <div class="md-container" data-md-component="container">
+      
+      
+        
+          
+            
+<nav class="md-tabs" aria-label="Tabs" data-md-component="tabs">
+  <div class="md-grid">
+    <ul class="md-tabs__list">
+      
+        
+  
+  
+  
+    <li class="md-tabs__item">
+      <a href="../../../.." class="md-tabs__link">
+        
+  
+    
+  
+  Home
+
+      </a>
+    </li>
+  
+
+      
+        
+  
+  
+  
+    
+    
+      <li class="md-tabs__item">
+        <a href="../../../../getting-started/installation/" class="md-tabs__link">
+          
+  
+  Getting Started
+
+        </a>
+      </li>
+    
+  
+
+      
+        
+  
+  
+  
+    
+    
+      <li class="md-tabs__item">
+        <a href="../../../../user-guide/overview/" class="md-tabs__link">
+          
+  
+  User Guide
+
+        </a>
+      </li>
+    
+  
+
+      
+        
+  
+  
+  
+    
+    
+      <li class="md-tabs__item">
+        <a href="../../../../developer-guide/architecture/" class="md-tabs__link">
+          
+  
+  Developer Guide
+
+        </a>
+      </li>
+    
+  
+
+      
+        
+  
+  
+  
+    
+    
+      <li class="md-tabs__item">
+        <a href="../../../../reference/api-index/" class="md-tabs__link">
+          
+  
+  Reference
+
+        </a>
+      </li>
+    
+  
+
+      
+    </ul>
+  </div>
+</nav>
+          
+        
+      
+      <main class="md-main" data-md-component="main">
+        <div class="md-main__inner md-grid">
+          
+            
+              
+              <div class="md-sidebar md-sidebar--primary" data-md-component="sidebar" data-md-type="navigation" >
+                <div class="md-sidebar__scrollwrap">
+                  <div class="md-sidebar__inner">
+                    
+
+
+  
+
+
+<nav class="md-nav md-nav--primary md-nav--lifted" aria-label="Navigation" data-md-level="0">
+  <label class="md-nav__title" for="__drawer">
+    <a href="../../../.." title="HYDRA Suite Docs" class="md-nav__button md-logo" aria-label="HYDRA Suite Docs" data-md-component="logo">
+      
+  
+  <svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 24 24"><path d="M12 8a3 3 0 0 0 3-3 3 3 0 0 0-3-3 3 3 0 0 0-3 3 3 3 0 0 0 3 3m0 3.54C9.64 9.35 6.5 8 3 8v11c3.5 0 6.64 1.35 9 3.54 2.36-2.19 5.5-3.54 9-3.54V8c-3.5 0-6.64 1.35-9 3.54"/></svg>
+
+    </a>
+    HYDRA Suite Docs
+  </label>
+  
+    <div class="md-nav__source">
+      <a href="https://github.com/neurorishika/hydra-suite" title="Go to repository" class="md-source" data-md-component="source">
+  <div class="md-source__icon md-icon">
+    
+    <svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 448 512"><!--! Font Awesome Free 6.6.0 by @fontawesome - https://fontawesome.com License - https://fontawesome.com/license/free (Icons: CC BY 4.0, Fonts: SIL OFL 1.1, Code: MIT License) Copyright 2024 Fonticons, Inc.--><path d="M439.55 236.05 244 40.45a28.87 28.87 0 0 0-40.81 0l-40.66 40.63 51.52 51.52c27.06-9.14 52.68 16.77 43.39 43.68l49.66 49.66c34.23-11.8 61.18 31 35.47 56.69-26.49 26.49-70.21-2.87-56-37.34L240.22 199v121.85c25.3 12.54 22.26 41.85 9.08 55a34.34 34.34 0 0 1-48.55 0c-17.57-17.6-11.07-46.91 11.25-56v-123c-20.8-8.51-24.6-30.74-18.64-45L142.57 101 8.45 235.14a28.86 28.86 0 0 0 0 40.81l195.61 195.6a28.86 28.86 0 0 0 40.8 0l194.69-194.69a28.86 28.86 0 0 0 0-40.81"/></svg>
+  </div>
+  <div class="md-source__repository">
+    neurorishika/hydra-suite
+  </div>
+</a>
+    </div>
+  
+  <ul class="md-nav__list" data-md-scrollfix>
+    
+      
+      
+  
+  
+  
+  
+    <li class="md-nav__item">
+      <a href="../../../.." class="md-nav__link">
+        
+  
+  <span class="md-ellipsis">
+    Home
+  </span>
+  
+
+      </a>
+    </li>
+  
+
+    
+      
+      
+  
+  
+  
+  
+    
+    
+    
+      
+      
+        
+      
+    
+    
+    <li class="md-nav__item md-nav__item--nested">
+      
+        
+        
+          
+        
+        <input class="md-nav__toggle md-toggle md-toggle--indeterminate" type="checkbox" id="__nav_2" >
+        
+          
+          <label class="md-nav__link" for="__nav_2" id="__nav_2_label" tabindex="0">
+            
+  
+  <span class="md-ellipsis">
+    Getting Started
+  </span>
+  
+
+            <span class="md-nav__icon md-icon"></span>
+          </label>
+        
+        <nav class="md-nav" data-md-level="1" aria-labelledby="__nav_2_label" aria-expanded="false">
+          <label class="md-nav__title" for="__nav_2">
+            <span class="md-nav__icon md-icon"></span>
+            Getting Started
+          </label>
+          <ul class="md-nav__list" data-md-scrollfix>
+            
+              
+                
+  
+  
+  
+  
+    <li class="md-nav__item">
+      <a href="../../../../getting-started/installation/" class="md-nav__link">
+        
+  
+  <span class="md-ellipsis">
+    Installation
+  </span>
+  
+
+      </a>
+    </li>
+  
+
+              
+            
+              
+                
+  
+  
+  
+  
+    <li class="md-nav__item">
+      <a href="../../../../getting-started/environments/" class="md-nav__link">
+        
+  
+  <span class="md-ellipsis">
+    Environments and Makefile
+  </span>
+  
+
+      </a>
+    </li>
+  
+
+              
+            
+              
+                
+  
+  
+  
+  
+    <li class="md-nav__item">
+      <a href="../../../../getting-started/integrations/" class="md-nav__link">
+        
+  
+  <span class="md-ellipsis">
+    Integrations
+  </span>
+  
+
+      </a>
+    </li>
+  
+
+              
+            
+              
+                
+  
+  
+  
+  
+    <li class="md-nav__item">
+      <a href="../../../../getting-started/quickstart-hydra/" class="md-nav__link">
+        
+  
+  <span class="md-ellipsis">
+    Quickstart (TrackerKit)
+  </span>
+  
+
+      </a>
+    </li>
+  
+
+              
+            
+              
+                
+  
+  
+  
+  
+    <li class="md-nav__item">
+      <a href="../../../../getting-started/quickstart-posekit/" class="md-nav__link">
+        
+  
+  <span class="md-ellipsis">
+    Quickstart (PoseKit)
+  </span>
+  
+
+      </a>
+    </li>
+  
+
+              
+            
+              
+                
+  
+  
+  
+  
+    <li class="md-nav__item">
+      <a href="../../../../getting-started/platforms/" class="md-nav__link">
+        
+  
+  <span class="md-ellipsis">
+    Platform Notes
+  </span>
+  
+
+      </a>
+    </li>
+  
+
+              
+            
+          </ul>
+        </nav>
+      
+    </li>
+  
+
+    
+      
+      
+  
+  
+  
+  
+    
+    
+    
+      
+      
+        
+      
+    
+    
+    <li class="md-nav__item md-nav__item--nested">
+      
+        
+        
+          
+        
+        <input class="md-nav__toggle md-toggle md-toggle--indeterminate" type="checkbox" id="__nav_3" >
+        
+          
+          <label class="md-nav__link" for="__nav_3" id="__nav_3_label" tabindex="0">
+            
+  
+  <span class="md-ellipsis">
+    User Guide
+  </span>
+  
+
+            <span class="md-nav__icon md-icon"></span>
+          </label>
+        
+        <nav class="md-nav" data-md-level="1" aria-labelledby="__nav_3_label" aria-expanded="false">
+          <label class="md-nav__title" for="__nav_3">
+            <span class="md-nav__icon md-icon"></span>
+            User Guide
+          </label>
+          <ul class="md-nav__list" data-md-scrollfix>
+            
+              
+                
+  
+  
+  
+  
+    <li class="md-nav__item">
+      <a href="../../../../user-guide/overview/" class="md-nav__link">
+        
+  
+  <span class="md-ellipsis">
+    Overview
+  </span>
+  
+
+      </a>
+    </li>
+  
+
+              
+            
+              
+                
+  
+  
+  
+  
+    <li class="md-nav__item">
+      <a href="../../../../user-guide/workflow/" class="md-nav__link">
+        
+  
+  <span class="md-ellipsis">
+    End-to-End Workflow
+  </span>
+  
+
+      </a>
+    </li>
+  
+
+              
+            
+              
+                
+  
+  
+  
+  
+    <li class="md-nav__item">
+      <a href="../../../../user-guide/detection-modes/" class="md-nav__link">
+        
+  
+  <span class="md-ellipsis">
+    Detection Modes
+  </span>
+  
+
+      </a>
+    </li>
+  
+
+              
+            
+              
+                
+  
+  
+  
+  
+    <li class="md-nav__item">
+      <a href="../../../../user-guide/tracking-and-merging/" class="md-nav__link">
+        
+  
+  <span class="md-ellipsis">
+    Tracking and Merging
+  </span>
+  
+
+      </a>
+    </li>
+  
+
+              
+            
+              
+                
+  
+  
+  
+  
+    <li class="md-nav__item">
+      <a href="../../../../user-guide/post-processing/" class="md-nav__link">
+        
+  
+  <span class="md-ellipsis">
+    Post-processing
+  </span>
+  
+
+      </a>
+    </li>
+  
+
+              
+            
+              
+                
+  
+  
+  
+  
+    <li class="md-nav__item">
+      <a href="../../../../user-guide/configuration-reference/" class="md-nav__link">
+        
+  
+  <span class="md-ellipsis">
+    Configuration Reference
+  </span>
+  
+
+      </a>
+    </li>
+  
+
+              
+            
+              
+                
+  
+  
+  
+  
+    <li class="md-nav__item">
+      <a href="../../../../user-guide/compute-runtimes/" class="md-nav__link">
+        
+  
+  <span class="md-ellipsis">
+    Compute Runtimes
+  </span>
+  
+
+      </a>
+    </li>
+  
+
+              
+            
+              
+                
+  
+  
+  
+  
+    <li class="md-nav__item">
+      <a href="../../../../user-guide/outputs-and-csv-schema/" class="md-nav__link">
+        
+  
+  <span class="md-ellipsis">
+    Outputs and CSV Schema
+  </span>
+  
+
+      </a>
+    </li>
+  
+
+              
+            
+              
+                
+  
+  
+  
+  
+    <li class="md-nav__item">
+      <a href="../../../../user-guide/dataset-generation/" class="md-nav__link">
+        
+  
+  <span class="md-ellipsis">
+    Dataset Generation
+  </span>
+  
+
+      </a>
+    </li>
+  
+
+              
+            
+              
+                
+  
+  
+  
+  
+    <li class="md-nav__item">
+      <a href="../../../../user-guide/individual-analysis/" class="md-nav__link">
+        
+  
+  <span class="md-ellipsis">
+    Individual Analysis
+  </span>
+  
+
+      </a>
+    </li>
+  
+
+              
+            
+              
+                
+  
+  
+  
+  
+    <li class="md-nav__item">
+      <a href="../../../../user-guide/posekit/" class="md-nav__link">
+        
+  
+  <span class="md-ellipsis">
+    PoseKit
+  </span>
+  
+
+      </a>
+    </li>
+  
+
+              
+            
+              
+                
+  
+  
+  
+  
+    <li class="md-nav__item">
+      <a href="../../../../user-guide/classkit/" class="md-nav__link">
+        
+  
+  <span class="md-ellipsis">
+    ClassKit
+  </span>
+  
+
+      </a>
+    </li>
+  
+
+              
+            
+              
+                
+  
+  
+  
+  
+    <li class="md-nav__item">
+      <a href="../../../../user-guide/detectkit/" class="md-nav__link">
+        
+  
+  <span class="md-ellipsis">
+    DetectKit
+  </span>
+  
+
+      </a>
+    </li>
+  
+
+              
+            
+              
+                
+  
+  
+  
+  
+    <li class="md-nav__item">
+      <a href="../../../../runbooks/detectkit-headless-training/" class="md-nav__link">
+        
+  
+  <span class="md-ellipsis">
+    DetectKit Headless Training
+  </span>
+  
+
+      </a>
+    </li>
+  
+
+              
+            
+              
+                
+  
+  
+  
+  
+    <li class="md-nav__item">
+      <a href="../../../../user-guide/detectkit-semantic-escalation/" class="md-nav__link">
+        
+  
+  <span class="md-ellipsis">
+    DetectKit: Semantic Escalation (SAM3)
+  </span>
+  
+
+      </a>
+    </li>
+  
+
+              
+            
+              
+                
+  
+  
+  
+  
+    <li class="md-nav__item">
+      <a href="../../../../user-guide/detectkit-sahi-calibration/" class="md-nav__link">
+        
+  
+  <span class="md-ellipsis">
+    DetectKit: SAHI Calibration Profiles
+  </span>
+  
+
+      </a>
+    </li>
+  
+
+              
+            
+              
+                
+  
+  
+  
+  
+    <li class="md-nav__item">
+      <a href="../../../../user-guide/filterkit/" class="md-nav__link">
+        
+  
+  <span class="md-ellipsis">
+    FilterKit
+  </span>
+  
+
+      </a>
+    </li>
+  
+
+              
+            
+              
+                
+  
+  
+  
+  
+    <li class="md-nav__item">
+      <a href="../../../../user-guide/refinekit/" class="md-nav__link">
+        
+  
+  <span class="md-ellipsis">
+    RefineKit
+  </span>
+  
+
+      </a>
+    </li>
+  
+
+              
+            
+              
+                
+  
+  
+  
+  
+    <li class="md-nav__item">
+      <a href="../../../../user-guide/troubleshooting/" class="md-nav__link">
+        
+  
+  <span class="md-ellipsis">
+    Troubleshooting
+  </span>
+  
+
+      </a>
+    </li>
+  
+
+              
+            
+          </ul>
+        </nav>
+      
+    </li>
+  
+
+    
+      
+      
+  
+  
+  
+  
+    
+    
+    
+      
+      
+        
+      
+    
+    
+    <li class="md-nav__item md-nav__item--nested">
+      
+        
+        
+          
+        
+        <input class="md-nav__toggle md-toggle md-toggle--indeterminate" type="checkbox" id="__nav_4" >
+        
+          
+          <label class="md-nav__link" for="__nav_4" id="__nav_4_label" tabindex="0">
+            
+  
+  <span class="md-ellipsis">
+    Developer Guide
+  </span>
+  
+
+            <span class="md-nav__icon md-icon"></span>
+          </label>
+        
+        <nav class="md-nav" data-md-level="1" aria-labelledby="__nav_4_label" aria-expanded="false">
+          <label class="md-nav__title" for="__nav_4">
+            <span class="md-nav__icon md-icon"></span>
+            Developer Guide
+          </label>
+          <ul class="md-nav__list" data-md-scrollfix>
+            
+              
+                
+  
+  
+  
+  
+    <li class="md-nav__item">
+      <a href="../../../../developer-guide/architecture/" class="md-nav__link">
+        
+  
+  <span class="md-ellipsis">
+    Architecture
+  </span>
+  
+
+      </a>
+    </li>
+  
+
+              
+            
+              
+                
+  
+  
+  
+  
+    <li class="md-nav__item">
+      <a href="../../../../developer-guide/module-map/" class="md-nav__link">
+        
+  
+  <span class="md-ellipsis">
+    Module Map
+  </span>
+  
+
+      </a>
+    </li>
+  
+
+              
+            
+              
+                
+  
+  
+  
+  
+    <li class="md-nav__item">
+      <a href="../../../../developer-guide/data-flow/" class="md-nav__link">
+        
+  
+  <span class="md-ellipsis">
+    Data Flow
+  </span>
+  
+
+      </a>
+    </li>
+  
+
+              
+            
+              
+                
+  
+  
+  
+  
+    <li class="md-nav__item">
+      <a href="../../../../developer-guide/tracking-algorithm-deep-dive/" class="md-nav__link">
+        
+  
+  <span class="md-ellipsis">
+    Tracking Algorithm Deep Dive
+  </span>
+  
+
+      </a>
+    </li>
+  
+
+              
+            
+              
+                
+  
+  
+  
+  
+    <li class="md-nav__item">
+      <a href="../../../../developer-guide/tracking-optimization/" class="md-nav__link">
+        
+  
+  <span class="md-ellipsis">
+    Tracking Optimization
+  </span>
+  
+
+      </a>
+    </li>
+  
+
+              
+            
+              
+                
+  
+  
+  
+  
+    <li class="md-nav__item">
+      <a href="../../../../developer-guide/gpu-backends/" class="md-nav__link">
+        
+  
+  <span class="md-ellipsis">
+    GPU Backends
+  </span>
+  
+
+      </a>
+    </li>
+  
+
+              
+            
+              
+                
+  
+  
+  
+  
+    <li class="md-nav__item">
+      <a href="../../../../developer-guide/runtime-integration/" class="md-nav__link">
+        
+  
+  <span class="md-ellipsis">
+    Runtime Integration
+  </span>
+  
+
+      </a>
+    </li>
+  
+
+              
+            
+              
+                
+  
+  
+  
+  
+    <li class="md-nav__item">
+      <a href="../../../../developer-guide/resource-containment/" class="md-nav__link">
+        
+  
+  <span class="md-ellipsis">
+    Resource Containment
+  </span>
+  
+
+      </a>
+    </li>
+  
+
+              
+            
+              
+                
+  
+  
+  
+  
+    <li class="md-nav__item">
+      <a href="../../../../developer-guide/profiling/" class="md-nav__link">
+        
+  
+  <span class="md-ellipsis">
+    Profiling
+  </span>
+  
+
+      </a>
+    </li>
+  
+
+              
+            
+              
+                
+  
+  
+  
+  
+    <li class="md-nav__item">
+      <a href="../../../../developer-guide/dependency-cuda-updates/" class="md-nav__link">
+        
+  
+  <span class="md-ellipsis">
+    CUDA Dependency Updates
+  </span>
+  
+
+      </a>
+    </li>
+  
+
+              
+            
+              
+                
+  
+  
+  
+  
+    <li class="md-nav__item">
+      <a href="../../../../developer-guide/performance-tuning/" class="md-nav__link">
+        
+  
+  <span class="md-ellipsis">
+    Performance Tuning
+  </span>
+  
+
+      </a>
+    </li>
+  
+
+              
+            
+              
+                
+  
+  
+  
+  
+    <li class="md-nav__item">
+      <a href="../../../../developer-guide/inference-fast-mode/" class="md-nav__link">
+        
+  
+  <span class="md-ellipsis">
+    Inference Fast Mode
+  </span>
+  
+
+      </a>
+    </li>
+  
+
+              
+            
+              
+                
+  
+  
+  
+  
+    <li class="md-nav__item">
+      <a href="../../../../developer-guide/confidence-metrics/" class="md-nav__link">
+        
+  
+  <span class="md-ellipsis">
+    Confidence Metrics
+  </span>
+  
+
+      </a>
+    </li>
+  
+
+              
+            
+              
+                
+  
+  
+  
+  
+    <li class="md-nav__item">
+      <a href="../../../../developer-guide/extending-detection/" class="md-nav__link">
+        
+  
+  <span class="md-ellipsis">
+    Extending Detection
+  </span>
+  
+
+      </a>
+    </li>
+  
+
+              
+            
+              
+                
+  
+  
+  
+  
+    <li class="md-nav__item">
+      <a href="../../../../developer-guide/extending-identity/" class="md-nav__link">
+        
+  
+  <span class="md-ellipsis">
+    Extending Identity
+  </span>
+  
+
+      </a>
+    </li>
+  
+
+              
+            
+              
+                
+  
+  
+  
+  
+    <li class="md-nav__item">
+      <a href="../../../../developer-guide/code-health/" class="md-nav__link">
+        
+  
+  <span class="md-ellipsis">
+    Code Health & Auditing
+  </span>
+  
+
+      </a>
+    </li>
+  
+
+              
+            
+              
+                
+  
+  
+  
+  
+    <li class="md-nav__item">
+      <a href="../../../../developer-guide/publishing/" class="md-nav__link">
+        
+  
+  <span class="md-ellipsis">
+    Publishing
+  </span>
+  
+
+      </a>
+    </li>
+  
+
+              
+            
+              
+                
+  
+  
+  
+  
+    <li class="md-nav__item">
+      <a href="../../../../developer-guide/contributing/" class="md-nav__link">
+        
+  
+  <span class="md-ellipsis">
+    Contributing
+  </span>
+  
+
+      </a>
+    </li>
+  
+
+              
+            
+          </ul>
+        </nav>
+      
+    </li>
+  
+
+    
+      
+      
+  
+  
+  
+  
+    
+    
+    
+      
+      
+        
+      
+    
+    
+    <li class="md-nav__item md-nav__item--nested">
+      
+        
+        
+          
+        
+        <input class="md-nav__toggle md-toggle md-toggle--indeterminate" type="checkbox" id="__nav_5" >
+        
+          
+          <label class="md-nav__link" for="__nav_5" id="__nav_5_label" tabindex="0">
+            
+  
+  <span class="md-ellipsis">
+    Reference
+  </span>
+  
+
+            <span class="md-nav__icon md-icon"></span>
+          </label>
+        
+        <nav class="md-nav" data-md-level="1" aria-labelledby="__nav_5_label" aria-expanded="false">
+          <label class="md-nav__title" for="__nav_5">
+            <span class="md-nav__icon md-icon"></span>
+            Reference
+          </label>
+          <ul class="md-nav__list" data-md-scrollfix>
+            
+              
+                
+  
+  
+  
+  
+    <li class="md-nav__item">
+      <a href="../../../../reference/api-index/" class="md-nav__link">
+        
+  
+  <span class="md-ellipsis">
+    API Index
+  </span>
+  
+
+      </a>
+    </li>
+  
+
+              
+            
+              
+                
+  
+  
+  
+  
+    <li class="md-nav__item">
+      <a href="../../../../reference/ui-components-hydra/" class="md-nav__link">
+        
+  
+  <span class="md-ellipsis">
+    UI Components (TrackerKit)
+  </span>
+  
+
+      </a>
+    </li>
+  
+
+              
+            
+              
+                
+  
+  
+  
+  
+    <li class="md-nav__item">
+      <a href="../../../../reference/ui-components-posekit/" class="md-nav__link">
+        
+  
+  <span class="md-ellipsis">
+    UI Components (PoseKit)
+  </span>
+  
+
+      </a>
+    </li>
+  
+
+              
+            
+              
+                
+  
+  
+  
+  
+    <li class="md-nav__item">
+      <a href="../../../../reference/api-app/" class="md-nav__link">
+        
+  
+  <span class="md-ellipsis">
+    API (Launcher)
+  </span>
+  
+
+      </a>
+    </li>
+  
+
+              
+            
+              
+                
+  
+  
+  
+  
+    <li class="md-nav__item">
+      <a href="../../../../reference/api-core/" class="md-nav__link">
+        
+  
+  <span class="md-ellipsis">
+    API (Core)
+  </span>
+  
+
+      </a>
+    </li>
+  
+
+              
+            
+              
+                
+  
+  
+  
+  
+    <li class="md-nav__item">
+      <a href="../../../../reference/api-data/" class="md-nav__link">
+        
+  
+  <span class="md-ellipsis">
+    API (Data)
+  </span>
+  
+
+      </a>
+    </li>
+  
+
+              
+            
+              
+                
+  
+  
+  
+  
+    <li class="md-nav__item">
+      <a href="../../../../reference/api-gui/" class="md-nav__link">
+        
+  
+  <span class="md-ellipsis">
+    API (TrackerKit GUI)
+  </span>
+  
+
+      </a>
+    </li>
+  
+
+              
+            
+              
+                
+  
+  
+  
+  
+    <li class="md-nav__item">
+      <a href="../../../../reference/api-widgets/" class="md-nav__link">
+        
+  
+  <span class="md-ellipsis">
+    API (Widgets)
+  </span>
+  
+
+      </a>
+    </li>
+  
+
+              
+            
+              
+                
+  
+  
+  
+  
+    <li class="md-nav__item">
+      <a href="../../../../reference/api-posekit/" class="md-nav__link">
+        
+  
+  <span class="md-ellipsis">
+    API (PoseKit)
+  </span>
+  
+
+      </a>
+    </li>
+  
+
+              
+            
+              
+                
+  
+  
+  
+  
+    <li class="md-nav__item">
+      <a href="../../../../reference/api-utils/" class="md-nav__link">
+        
+  
+  <span class="md-ellipsis">
+    API (Utils)
+  </span>
+  
+
+      </a>
+    </li>
+  
+
+              
+            
+              
+                
+  
+  
+  
+  
+    <li class="md-nav__item">
+      <a href="../../../../reference/cli-reference/" class="md-nav__link">
+        
+  
+  <span class="md-ellipsis">
+    CLI Reference
+  </span>
+  
+
+      </a>
+    </li>
+  
+
+              
+            
+              
+                
+  
+  
+  
+  
+    <li class="md-nav__item">
+      <a href="../../../../reference/technical-reference/" class="md-nav__link">
+        
+  
+  <span class="md-ellipsis">
+    Technical Reference (LaTeX)
+  </span>
+  
+
+      </a>
+    </li>
+  
+
+              
+            
+              
+                
+  
+  
+  
+  
+    <li class="md-nav__item">
+      <a href="../../../../reference/changelog/" class="md-nav__link">
+        
+  
+  <span class="md-ellipsis">
+    Changelog
+  </span>
+  
+
+      </a>
+    </li>
+  
+
+              
+            
+              
+                
+  
+  
+  
+  
+    <li class="md-nav__item">
+      <a href="../../../../reference/faq/" class="md-nav__link">
+        
+  
+  <span class="md-ellipsis">
+    FAQ
+  </span>
+  
+
+      </a>
+    </li>
+  
+
+              
+            
+          </ul>
+        </nav>
+      
+    </li>
+  
+
+    
+  </ul>
+</nav>
+                  </div>
+                </div>
+              </div>
+            
+            
+              
+              <div class="md-sidebar md-sidebar--secondary" data-md-component="sidebar" data-md-type="toc" >
+                <div class="md-sidebar__scrollwrap">
+                  <div class="md-sidebar__inner">
+                    
+
+<nav class="md-nav md-nav--secondary" aria-label="Table of contents">
+  
+  
+  
+    
+  
+  
+</nav>
+                  </div>
+                </div>
+              </div>
+            
+          
+          
+            <div class="md-content" data-md-component="content">
+              <article class="md-content__inner md-typeset">
+                
+                  
+
+  
+    <a href="https://github.com/neurorishika/hydra-suite/edit/main/docs/superpowers/specs/notes/2026-09-06-crossframe-batching-spike.md" title="Edit this page" class="md-content__button md-icon">
+      
+      <svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 24 24"><path d="M10 20H6V4h7v5h5v3.1l2-2V8l-6-6H6c-1.1 0-2 .9-2 2v16c0 1.1.9 2 2 2h4zm10.2-7c.1 0 .3.1.4.2l1.3 1.3c.2.2.2.6 0 .8l-1 1-2.1-2.1 1-1c.1-.1.2-.2.4-.2m0 3.9L14.1 23H12v-2.1l6.1-6.1z"/></svg>
+    </a>
+  
+  
+
+
+<h1 id="cross-frame-crop-batching-option-b-measurement-spike">Cross-frame crop batching (Option B) — measurement spike<a class="headerlink" href="#cross-frame-crop-batching-option-b-measurement-spike" title="Permanent link">&para;</a></h1>
+<p><strong>Status:</strong> COMPLETE — stage-level microbenchmark, end-to-end profile, and an
+in-pipeline A/B on both platforms. <strong>Verdict: do not implement Option B.</strong> The
+in-pipeline A/B is the decisive evidence and is at the top of this note; the
+earlier sections are kept because the route to the answer matters. No
+production code changed (the A/B patch is env-gated on a throwaway branch).</p>
+<h1 id="the-answer-in-pipeline-ab">THE ANSWER: in-pipeline A/B<a class="headerlink" href="#the-answer-in-pipeline-ab" title="Permanent link">&para;</a></h1>
+<p>Same binary, same clip, same <code>detection_batch_size</code>, one env flag
+(<code>HYDRA_AB_CROSSFRAME=1</code>) switching the downstream call between per-frame and
+whole-window. 489 frames, <code>ant_cnn_identity</code>, <code>HYDRA_PROFILE=1</code>.</p>
+<p><strong>B/A ratios (&gt;1 means Option B is SLOWER):</strong></p>
+<table>
+<thead>
+<tr>
+<th></th>
+<th>span</th>
+<th>CUDA d2/b2</th>
+<th>CUDA d1/b8</th>
+<th>MPS d2/b2</th>
+<th>MPS d1/b8</th>
+</tr>
+</thead>
+<tbody>
+<tr>
+<td></td>
+<td><code>headtail</code></td>
+<td>1.005</td>
+<td><strong>1.000</strong></td>
+<td><strong>1.580</strong></td>
+<td>1.177</td>
+</tr>
+<tr>
+<td></td>
+<td><code>cnn</code></td>
+<td>0.991</td>
+<td>0.995</td>
+<td>0.890</td>
+<td>1.133</td>
+</tr>
+<tr>
+<td></td>
+<td><code>pose</code></td>
+<td>—</td>
+<td>—</td>
+<td>1.092</td>
+<td>0.813</td>
+</tr>
+<tr>
+<td></td>
+<td><code>backend_forward</code></td>
+<td>1.000</td>
+<td>0.995</td>
+<td>1.165</td>
+<td>1.060</td>
+</tr>
+<tr>
+<td></td>
+<td><strong>wall clock</strong></td>
+<td>0.958</td>
+<td>0.998</td>
+<td><strong>1.074</strong></td>
+<td><strong>1.027</strong></td>
+</tr>
+</tbody>
+</table>
+<p><strong>On CUDA, Option B does exactly nothing</strong> — every stage within ±0.5%. The
+<code>d1/b8</code> column is the microbenchmark's own g8 condition (8 frames × ~17
+detections = 136 crops in one call vs 8 calls of 17), where the isolated spike
+predicted <strong>1.23×</strong>. In the pipeline it is <strong>1.000</strong>.</p>
+<p><strong>On MPS it is neutral-to-worse</strong>, up to 1.58× slower on head-tail.</p>
+<p>The idle-GPU microbenchmark simply does not transfer. What it measured —
+per-call launch overhead — is not what the pipeline is spending time on.</p>
+<p><strong>Numerics, with a real floor:</strong> an A-vs-A rerun is <strong>byte-identical</strong>, so
+everything below is attributable to B alone. B changes <strong>9,413 of 12,225 rows
+(77%)</strong> on MPS — but exclusively in three columns:</p>
+<table>
+<thead>
+<tr>
+<th>column</th>
+<th>rows differing</th>
+<th>max abs delta</th>
+</tr>
+</thead>
+<tbody>
+<tr>
+<td><code>IdentityRealtimeEntropy</code></td>
+<td>9,253</td>
+<td>4.0e-06</td>
+</tr>
+<tr>
+<td><code>IdentityRealtimeMargin</code></td>
+<td>8,997</td>
+<td>5.2e-06</td>
+</tr>
+<tr>
+<td><code>IdentityRealtimeConfidence</code></td>
+<td>8,714</td>
+<td>2.6e-06</td>
+</tr>
+</tbody>
+</table>
+<p>Positions, angles, track IDs and identity assignments are unchanged. CUDA
+(pose off) is fully byte-identical. So the drift is smaller than the isolated
+microbenchmark suggested (5e-6, not 2.2e-3) — but it is real, it is 100%
+attributable, and it breaks the byte-identity gate for zero measured speed.</p>
+<h2 id="two-follow-on-questions-raised-by-the-ab">Two follow-on questions raised by the A/B<a class="headerlink" href="#two-follow-on-questions-raised-by-the-ab" title="Permanent link">&para;</a></h2>
+<p><strong>1. <code>pipeline_depth</code> — measured properly, the current default is already
+right.</strong> The first read of this ("depth 2 is a net loss on MPS") came from
+comparing depth 1 / batch 8 against depth 2 / batch 2 — the depth and the
+batch varied together. <strong>Re-run at constant <code>detection_batch_size=2</code>, 2–3
+reps per cell:</strong></p>
+<table>
+<thead>
+<tr>
+<th></th>
+<th>depth 1</th>
+<th>depth 2</th>
+<th>d2/d1</th>
+</tr>
+</thead>
+<tbody>
+<tr>
+<td><strong>CUDA wall</strong> (median of 3)</td>
+<td>72.0 s</td>
+<td><strong>63.5 s</strong></td>
+<td><strong>0.881</strong></td>
+</tr>
+<tr>
+<td>CUDA reps</td>
+<td>71.9 / 72.0 / 72.3</td>
+<td>63.5 / 63.9 / 63.2</td>
+<td>—</td>
+</tr>
+<tr>
+<td><strong>MPS wall</strong> (median of 2)</td>
+<td>152.6 s</td>
+<td>148.8 s</td>
+<td>0.975</td>
+</tr>
+<tr>
+<td>MPS reps</td>
+<td>150.5 / 154.8</td>
+<td>152.9 / 144.7</td>
+<td>—</td>
+</tr>
+</tbody>
+</table>
+<p><strong>CUDA: depth 2 is a real 12% win</strong>, with reps tight to ±0.4 s. <strong>MPS: no
+significant difference</strong> — the reps overlap, so 0.975 is noise. Output is
+<strong>byte-identical across depths on both platforms</strong> (and depth-1 rep-to-rep is
+byte-identical, giving a clean floor).</p>
+<p>So <code>pipeline_depth=2</code> is correct on CUDA and harmless on MPS. <strong>No change
+warranted — no per-platform default needed.</strong></p>
+<p>Methodological note: the <em>span totals</em> look alarming at depth 2 (MPS head-tail
+44.3 s vs 18.6 s, 2.37×) because two threads are running concurrently and each
+stage's wall-time inflates while it waits on the shared device. That is what
+overlap looks like; it is not a cost. <strong>For concurrent pipelines, wall clock is
+the only honest metric — per-stage span totals are not additive and must not be
+compared across depths.</strong></p>
+<p><strong>2. <code>detection_batch_size</code> &gt; 2 is unusable on 4K clips.</strong> At depth 2 the
+frame-buffer admissibility check (<code>pipeline.py</code>, <code>retained_windows =
+queue_bound + 3</code>) rejects batch 8 on this clip at runtime:</p>
+<div class="language-text highlight"><pre><span></span><code><span id="__span-0-1"><a id="__codelineno-0-1" name="__codelineno-0-1" href="#__codelineno-0-1"></a>one frame=61074432 bytes, batch=8, live_windows=4,
+</span><span id="__span-0-2"><a id="__codelineno-0-2" name="__codelineno-0-2" href="#__codelineno-0-2"></a>estimated=1954381824 bytes exceeds the 536870912-byte pipeline budget
+</span></code></pre></div>
+<p>The GUI spinbox offers 1–64 with no indication that anything above 2 will
+abort the run on 4K video. That is a real usability bug: the control's range
+is not the admissible range.</p>
+<h2 id="question">Question<a class="headerlink" href="#question" title="Permanent link">&para;</a></h2>
+<p><code>Pipeline._process_downstream_frame</code> hands the batch stage functions exactly
+one frame at a time (<code>frames = [frame]</code>), a deliberate crop-memory bound
+introduced by <code>893cde19</code>. <strong>Option B</strong> would reintroduce cross-frame crop
+accumulation via an independent, crop-count-bounded accumulator, decoupled
+from <code>detection_batch_size</code>. Is the speedup worth the cache-ordering and
+numerics cost?</p>
+<p>Two specific hypotheses motivated it:</p>
+<ol>
+<li><strong>SLEAP pose round-trip</strong> — <code>project_sleap_gpu_mehek</code> concluded "pose
+   slowness = per-frame service round-trip overhead; lever = batch frames per
+   request."</li>
+<li><strong>CoreML classifier 7.8×</strong> — <code>2026-07-03-tensorrt-coreml-cross-frame-batching-design.md</code>
+   measured a 7.8× per-frame speedup from batched CoreML classification.</li>
+</ol>
+<p><strong>Both are refuted below.</strong></p>
+<h2 id="method">Method<a class="headerlink" href="#method" title="Permanent link">&para;</a></h2>
+<p><code>tools/spikes/crossframe_batching/spike_crossframe.py</code> builds the REAL stages
+from a real fixture config + clip (<code>build_tracking_parameters</code> →
+<code>build_inference_config_from_params</code> → <code>InferenceRunner</code>), runs detection ONCE
+to fix the inputs, then calls the REAL batch stage functions two ways over the
+SAME detections:</p>
+<ul>
+<li><strong>per_frame</strong>   — <code>run_*_batch([f], [obb])</code> once per frame  (today)</li>
+<li><strong>accumulated</strong> — <code>run_*_batch(frames, obbs)</code> once per group (Option B)</li>
+</ul>
+<p><code>torch.cuda.synchronize()</code> around every timing; warmup then median of N.
+Numeric agreement is reported harness-style: an accumulated-vs-accumulated
+DETERMINISM floor first, then per_frame vs accumulated against it.</p>
+<p>Hardware: <code>courtship</code> RTX 4090 (torch 2.11.0+cu128, sleap-nn 0.1.3 in a
+purpose-built <code>sleap-nn</code> env) and this Apple Silicon box (<code>hydra-mps</code>,
+sleap-nn 0.1.3). Clips <code>ant_cnn_identity</code> (HT + multi-head identity CNN,
+~17 det/frame) and <code>ant_pose_headtail</code> (HT + SLEAP pose, ~18 det/frame).</p>
+<h2 id="results-best-speedup-per-stage-per_frame-accumulated">Results — best speedup per stage (per_frame / accumulated)<a class="headerlink" href="#results-best-speedup-per-stage-per_frame-accumulated" title="Permanent link">&para;</a></h2>
+<table>
+<thead>
+<tr>
+<th>platform</th>
+<th>tier</th>
+<th>backend</th>
+<th>stage</th>
+<th>best</th>
+<th>numerics vs 0.0 floor</th>
+</tr>
+</thead>
+<tbody>
+<tr>
+<td>CUDA</td>
+<td>gpu</td>
+<td>torch</td>
+<td>head-tail</td>
+<td><strong>1.23×</strong></td>
+<td>0.0 — byte-identical</td>
+</tr>
+<tr>
+<td>CUDA</td>
+<td>gpu</td>
+<td>torch</td>
+<td>CNN</td>
+<td><strong>1.18×</strong></td>
+<td>Δprob 2.2e-3, 0 argmax flips</td>
+</tr>
+<tr>
+<td>CUDA</td>
+<td>gpu_fast</td>
+<td>ONNX/TRT</td>
+<td>HT + CNN</td>
+<td>0.94–1.11× (noise)</td>
+<td>0.0 — byte-identical</td>
+</tr>
+<tr>
+<td>CUDA</td>
+<td>gpu</td>
+<td>sleap-nn service</td>
+<td><strong>pose</strong></td>
+<td><strong>1.04×</strong></td>
+<td>Δ up to <strong>1.045 px</strong></td>
+</tr>
+<tr>
+<td>MPS</td>
+<td>gpu</td>
+<td>torch</td>
+<td>head-tail</td>
+<td><strong>1.31×</strong></td>
+<td>0.0 — byte-identical</td>
+</tr>
+<tr>
+<td>MPS</td>
+<td>gpu</td>
+<td>torch</td>
+<td>CNN</td>
+<td><strong>1.14×</strong></td>
+<td>Δprob 1.4e-6</td>
+</tr>
+<tr>
+<td>MPS</td>
+<td>gpu_fast</td>
+<td><strong>CoreML</strong></td>
+<td>head-tail</td>
+<td><strong>1.15×</strong></td>
+<td>0.0 — byte-identical</td>
+</tr>
+<tr>
+<td>MPS</td>
+<td>gpu_fast</td>
+<td><strong>CoreML</strong></td>
+<td>CNN</td>
+<td><strong>1.15×</strong></td>
+<td>Δprob <strong>0.048</strong>, 0 argmax flips</td>
+</tr>
+<tr>
+<td>MPS</td>
+<td>gpu</td>
+<td>sleap-nn service</td>
+<td><strong>pose</strong></td>
+<td>1.09× @ batch 4, <strong>1.35×</strong> @ batch 64</td>
+<td>0.0</td>
+</tr>
+<tr>
+<td>both</td>
+<td>all</td>
+<td>—</td>
+<td><strong>crop warp</strong></td>
+<td>~1.0×</td>
+<td>n/a</td>
+</tr>
+</tbody>
+</table>
+<h3 id="noise-floor-read-every-row-with-this">Noise floor — read every row with this<a class="headerlink" href="#noise-floor-read-every-row-with-this" title="Permanent link">&para;</a></h3>
+<p>Group 1 is a null arm: both sides do identical work by construction, so its
+deviation from 1.00× IS the noise. Across all runs it reads <strong>0.93–1.29×</strong>.
+Absolute times for identical work swung up to 40% between runs (clock/thermal
+ramp; the arms run sequentially, biasing whichever runs second). One MPS row
+is a visible outlier (head-tail g4 @ pose-batch 4 read 3.46× — a contaminated
+sample, not a real effect). <strong>Treat anything under ~1.15× as unproven.</strong></p>
+<h2 id="the-two-motivating-hypotheses-tested">The two motivating hypotheses, tested<a class="headerlink" href="#the-two-motivating-hypotheses-tested" title="Permanent link">&para;</a></h2>
+<p><strong>1. SLEAP round-trip — REFUTED.</strong> Cross-frame pose accumulation buys
+<strong>1.01–1.04×</strong> on the RTX 4090 at either SLEAP batch setting. Batching frames
+per request is not the lever the earlier audit assumed. On MPS pose reaches
+1.35×, but only with <code>PoseSLEAPConfig.batch_size</code> raised 4 → 64 <em>and</em> group-8
+accumulation; at the default batch it is 1.04–1.09×.</p>
+<p><strong>The knob alone is inert — it is not a separate cheap win.</strong> Compare the
+per_frame arm (what the pipeline does today) at batch 4 vs 64:</p>
+<table>
+<thead>
+<tr>
+<th></th>
+<th>g1</th>
+<th>g4</th>
+<th>g8</th>
+</tr>
+</thead>
+<tbody>
+<tr>
+<td>MPS per_frame, batch 4</td>
+<td>975 ms</td>
+<td>919 ms</td>
+<td>817 ms</td>
+</tr>
+<tr>
+<td>MPS per_frame, batch 64</td>
+<td>1184 ms</td>
+<td>1064 ms</td>
+<td>886 ms</td>
+</tr>
+<tr>
+<td>CUDA per_frame, batch 4</td>
+<td>288 ms</td>
+<td>285 ms</td>
+<td>281 ms</td>
+</tr>
+<tr>
+<td>CUDA per_frame, batch 64</td>
+<td>292 ms</td>
+<td>288 ms</td>
+<td>299 ms</td>
+</tr>
+</tbody>
+</table>
+<p>Flat or slower. With ~18 crops per frame, 5 chunks of 4 costs the same as 1
+chunk of 18 — which is itself further evidence that chunk/round-trip count is
+cheap. The knob only does anything once accumulation has already produced a
+144-crop call, i.e. it is a multiplier on B, not an alternative to it.</p>
+<p><strong>2. CoreML 7.8× — REFUTED as an argument for B.</strong> (CoreML genuinely ran:
+<code>.mlpackage</code> artifacts are present for both the orientation and identity
+models, and CNN's Δprob of 0.048 vs 1.4e-6 on the torch-MPS tier confirms a
+different backend was exercised.) Measured CoreML classifier
+gain from cross-frame accumulation is <strong>1.15×</strong>, not 7.8×. The original 7.8×
+came from fixing a call-count bug (<code>_forward_coreml</code> looping per crop instead
+of one batched <code>predict()</code>), and that fix already shipped — today's per-frame
+call already batches all ~17 of a frame's crops. Accumulating <em>more</em> on top of
+an already-batched call adds ~15%, which is the same ~15% every other backend
+shows. There is no Apple-specific windfall left to collect.</p>
+<h2 id="numerics-three-findings">Numerics — three findings<a class="headerlink" href="#numerics-three-findings" title="Permanent link">&para;</a></h2>
+<ul>
+<li><strong>Head-tail is byte-identical</strong> under regrouping on every platform/tier
+  (0 flips, Δ=0.0, 1000+ predictions). The θ π-flip worry is <strong>dead</strong>.</li>
+<li><strong>Pose is byte-identical on MPS</strong>; on CUDA five of six rows are ≤0.001 px
+  but <strong>one row (batch 64, group 4) drifts 1.045 px</strong> on a keypoint against a
+  0.0 determinism floor — outlier-class, not systematic, but real.</li>
+<li><strong>CNN drift is backend-dependent and worst on CoreML</strong>: Δprob 1.4e-6
+  (torch-MPS) → 2.2e-3 (torch-CUDA) → <strong>0.048 (CoreML)</strong>, always with 0 argmax
+  flips. 0.048 is ~5 percentage points on a probability.</li>
+</ul>
+<p>Because Debug CSVs carry <code>IdentityEvidence*</code> probability columns and pose
+keypoint coordinates, <strong>B breaks equivalence byte-identity on identity and
+pose clips on three of the four backends measured.</strong></p>
+<h2 id="correction-the-first-verdict-was-wrong-and-is-retracted">Correction — the first verdict was wrong, and is retracted<a class="headerlink" href="#correction-the-first-verdict-was-wrong-and-is-retracted" title="Permanent link">&para;</a></h2>
+<p>The first pass concluded "do not implement, ~1.2% end-to-end." <strong>That ceiling
+was wrong.</strong> It anchored on <code>project_sleap_roundtrip_audit</code>'s "pose = 4.6% of
+wall", which was measured on a different clip/config. An actual
+<code>HYDRA_PROFILE=1</code> run of <code>ant_cnn_identity</code> (MPS, gpu tier, 489 frames,
+246.5 s) shows the opposite:</p>
+<table>
+<thead>
+<tr>
+<th>span</th>
+<th>s</th>
+<th>% wall</th>
+<th>thread</th>
+</tr>
+</thead>
+<tbody>
+<tr>
+<td><code>window</code> (consumer critical path)</td>
+<td>238.5</td>
+<td>96.8%</td>
+<td>tracking-engine-forward</td>
+</tr>
+<tr>
+<td><code>headtail</code></td>
+<td>90.5</td>
+<td><strong>36.7%</strong></td>
+<td>consumer</td>
+</tr>
+<tr>
+<td><code>cnn</code></td>
+<td>74.1</td>
+<td><strong>30.1%</strong></td>
+<td>consumer</td>
+</tr>
+<tr>
+<td><code>pose</code></td>
+<td>69.3</td>
+<td><strong>28.1%</strong></td>
+<td>consumer</td>
+</tr>
+<tr>
+<td><code>detect</code> / <code>run_obb</code></td>
+<td>93.4</td>
+<td>37.9%</td>
+<td><strong>producer — fully hidden</strong></td>
+</tr>
+<tr>
+<td><code>backend_forward</code> (all stages)</td>
+<td>174.6</td>
+<td>70.8%</td>
+<td>consumer</td>
+</tr>
+<tr>
+<td><code>crop_extract</code></td>
+<td>32.0</td>
+<td>13.0%</td>
+<td>consumer</td>
+</tr>
+</tbody>
+</table>
+<p><strong>Downstream crop consumers are 94.9% of the critical path.</strong> Detection runs
+on the producer thread and is entirely overlapped. So B targets the dominant
+cost, not a 4.6% sliver — the stage the user cares about is exactly the one
+that is slow.</p>
+<h3 id="but-the-stage-level-ratios-still-cannot-be-multiplied-through">But the stage-level ratios still cannot be multiplied through<a class="headerlink" href="#but-the-stage-level-ratios-still-cannot-be-multiplied-through" title="Permanent link">&para;</a></h3>
+<p>Per-frame head-tail cost, same clip, same tier, same model:</p>
+<ul>
+<li>spike, <code>SPIKE_NO_POSE=1</code>, GPU otherwise idle: 831 ms / 32 = <strong>26 ms/frame</strong></li>
+<li>pipeline, <code>HYDRA_PROFILE=1</code>: 90.5 s / 489 = <strong>185 ms/frame</strong></li>
+</ul>
+<p><strong>7× slower inside the pipeline.</strong> The pipeline runs the OBB producer thread,
+the consumer thread, and the SLEAP service process concurrently on one device.
+The profile is therefore contention-bound, while the 1.2× was measured with
+zero contention. Under contention, fewer/larger calls could help (less
+interleaving), do nothing (device already saturated), or hurt. Multiplying
+233.9 s × (1 − 1/1.2) assumes an answer that has not been measured.</p>
+<p><strong>No end-to-end percentage should be quoted until an in-pipeline A/B is run.</strong></p>
+<h3 id="contention-isolation-sleap-is-not-the-co-tenant-the-detector-is">Contention isolation — SLEAP is NOT the co-tenant; the detector is<a class="headerlink" href="#contention-isolation-sleap-is-not-the-co-tenant-the-detector-is" title="Permanent link">&para;</a></h3>
+<p>Rerunning the same clip with <code>enable_pose_extractor: false</code>:</p>
+<table>
+<thead>
+<tr>
+<th></th>
+<th>pose ON</th>
+<th>pose OFF</th>
+</tr>
+</thead>
+<tbody>
+<tr>
+<td>head-tail</td>
+<td>185.1 ms/frame</td>
+<td><strong>187.3 ms/frame</strong></td>
+</tr>
+<tr>
+<td>cnn</td>
+<td>151.5 ms/frame</td>
+<td>140.7 ms/frame</td>
+</tr>
+<tr>
+<td>detect (producer thread)</td>
+<td>191.0 ms/frame</td>
+<td>198.2 ms/frame</td>
+</tr>
+<tr>
+<td><code>window</code> (consumer)</td>
+<td>487.8 ms/frame</td>
+<td>331.9 ms/frame</td>
+</tr>
+</tbody>
+</table>
+<p>Head-tail is <strong>unchanged</strong> with the SLEAP service process gone, so SLEAP is not
+what inflates it. What remains concurrent is the <strong>OBB producer thread</strong>, doing
+~198 ms/frame of detection on the same device while the consumer runs
+head-tail + CNN. Per-frame GPU work (198 + 187 + 141 = 526 ms) exceeds the
+332 ms consumer window, confirming real overlap — the device is saturated by
+two threads, and the consumer stages pay for it.</p>
+<p>This is the crux for Option B: on a device that is <strong>already saturated by a
+concurrent producer</strong>, issuing fewer/larger classifier calls may recover little
+or nothing, because the win B was measured on (per-call launch overhead) is not
+what is costing 185 ms/frame here. It may also be the more valuable finding in
+its own right — a 7× gap between a stage's uncontended and in-pipeline cost is
+a bigger lever than anything cross-frame batching offers.</p>
+<h2 id="what-the-stage-level-data-still-supports">What the stage-level data still supports<a class="headerlink" href="#what-the-stage-level-data-still-supports" title="Permanent link">&para;</a></h2>
+<p>Every stage, both platforms, every tier lands in a 1.0–1.35× band on an idle
+device, mostly within ~2× of the noise floor. Crop warp does not shrink at
+all, because B only affects the backend forward. Against that, B costs:
+deferring <code>write_downstream</code> against <code>runner.py</code>'s strict window order, a new
+cancel-path flush invariant, a crop-count-bounded accumulator, a
+pre-extracted-batch parameter for <code>run_cnn_batch</code> (it builds its own crops),
+and loss of gate byte-identity on identity + pose clips.</p>
+<h2 id="superseded-judgement-kept-for-the-record">Superseded judgement (kept for the record)<a class="headerlink" href="#superseded-judgement-kept-for-the-record" title="Permanent link">&para;</a></h2>
+<p>Before the in-pipeline A/B, the conditional judgement here was "head-tail-only
+accumulation is the candidate worth pursuing" — largest consumer stage,
+byte-identical under regrouping. <strong>The A/B killed it:</strong> head-tail is exactly
+1.000 on CUDA and 1.58× SLOWER on MPS. The stage-level 1.23× was an artifact
+of measuring on an idle device.</p>
+<p><strong>CNN and pose accumulation should stay off the table</strong>, and the "small
+differences add up over long runs" argument is precisely why: 10 h × 30 fps ≈
+1M frames × ~17 detections, each carrying 2.2e-3 (CUDA) or 0.048 (CoreML)
+probability drift into Bayes log-compat identity accumulation, plus up to
+1 px pose drift — while simultaneously breaking the byte-identity gate that
+is the only thing protecting runs of that length.</p>
+<p>All three planned measurements are now DONE (contention isolation, MPS A/B,
+CUDA A/B) and all three point the same way. See "THE ANSWER" at the top.</p>
+<p>The A/B patch lives on branch <code>spike/crossframe-ab</code> (env-gated behind
+<code>HYDRA_AB_CROSSFRAME</code>), worktrees <code>.worktrees/ab-crossframe</code> on both boxes.
+It is a measurement artifact and must not be merged.</p>
+<h2 id="incidental-findings">Incidental findings<a class="headerlink" href="#incidental-findings" title="Permanent link">&para;</a></h2>
+<ul>
+<li><strong><code>POSE_SLEAP_ENV</code> and <code>pose_sleap_batch</code> are dead keys.</strong>
+  <code>build_inference_config_from_params</code> constructs <code>PoseSLEAPConfig</code> with only
+  <code>model_path</code> and <code>POSE_BATCH_SIZE</code> (<code>config.py:1097-1100</code>), so <code>conda_env</code>
+  is always the <code>"sleap"</code> default no matter what the config says. Same class
+  as the <code>DETECTION_BATCH_SIZE</code> dead key. The spike works around it by
+  mutating the built config.</li>
+<li><strong><code>pip install "sleap[nn,nn-export-gpu]"</code> unpinned installs sleap-nn 0.3.3,
+  which breaks the pipeline's shared-memory transport</strong> (<code>findDecoder
+  imread_('inmem_crop_000000')</code>). The working version is sleap-nn 0.1.3 via
+  <code>sleap==1.6.2</code>. <code>docs/getting-started/integrations.md</code> gives the unpinned
+  command.</li>
+<li>On courtship, <code>sleap[nn,nn-export-gpu]</code> pulls torch cu130, which the box's
+  535 driver cannot run — reinstall torch/torchvision from the cu128 index.</li>
+<li>The equivalence clips are gitignored, so <strong>a git worktree contains no
+  fixtures</strong>; a first run silently measured 0 detections and would have
+  reported meaningless ratios. The harness now aborts loudly on 0 frames or 0
+  detections.</li>
+</ul>
+<h2 id="reproducing">Reproducing<a class="headerlink" href="#reproducing" title="Permanent link">&para;</a></h2>
+<div class="language-bash highlight"><pre><span></span><code><span id="__span-1-1"><a id="__codelineno-1-1" name="__codelineno-1-1" href="#__codelineno-1-1"></a>conda<span class="w"> </span>activate<span class="w"> </span>hydra-cuda<span class="w">          </span><span class="c1"># or hydra-mps</span>
+</span><span id="__span-1-2"><a id="__codelineno-1-2" name="__codelineno-1-2" href="#__codelineno-1-2"></a><span class="nb">export</span><span class="w"> </span><span class="nv">PYTHONPATH</span><span class="o">=</span><span class="nv">$PWD</span>/src<span class="w"> </span><span class="nv">KMP_DUPLICATE_LIB_OK</span><span class="o">=</span>TRUE
+</span><span id="__span-1-3"><a id="__codelineno-1-3" name="__codelineno-1-3" href="#__codelineno-1-3"></a>python<span class="w"> </span>tools/spikes/crossframe_batching/spike_crossframe.py<span class="w"> </span><span class="se">\</span>
+</span><span id="__span-1-4"><a id="__codelineno-1-4" name="__codelineno-1-4" href="#__codelineno-1-4"></a><span class="w">  </span>--config<span class="w"> </span>&lt;fixtures&gt;/configs/ant_cnn_identity.json<span class="w"> </span><span class="se">\</span>
+</span><span id="__span-1-5"><a id="__codelineno-1-5" name="__codelineno-1-5" href="#__codelineno-1-5"></a><span class="w">  </span>--clip<span class="w">   </span>&lt;fixtures&gt;/clips/ant_cnn_identity.mp4<span class="w"> </span><span class="se">\</span>
+</span><span id="__span-1-6"><a id="__codelineno-1-6" name="__codelineno-1-6" href="#__codelineno-1-6"></a><span class="w">  </span>--tier<span class="w"> </span>gpu<span class="w"> </span>--frames<span class="w"> </span><span class="m">32</span><span class="w"> </span>--groups<span class="w"> </span><span class="m">1</span><span class="w"> </span><span class="m">2</span><span class="w"> </span><span class="m">4</span><span class="w"> </span><span class="m">8</span><span class="w"> </span>--repeats<span class="w"> </span><span class="m">5</span><span class="w"> </span>--warmup<span class="w"> </span><span class="m">2</span><span class="w"> </span><span class="se">\</span>
+</span><span id="__span-1-7"><a id="__codelineno-1-7" name="__codelineno-1-7" href="#__codelineno-1-7"></a><span class="w">  </span>--skeleton<span class="w"> </span>&lt;skeletons&gt;/ooceraea_biroi.json<span class="w"> </span>--out<span class="w"> </span>results.json
+</span></code></pre></div>
+<p>Point <code>--clip</code>/<code>--config</code> at the PRIMARY checkout's fixtures (absolute paths).
+Env overrides: <code>SPIKE_NO_POSE=1</code>, <code>SPIKE_CLS_BATCH=&lt;n&gt;</code>,
+<code>SPIKE_POSE_BATCH=&lt;n&gt;</code>, <code>SPIKE_SLEAP_ENV=&lt;env&gt;</code>.</p>
+<p><code>--skeleton</code> is required for SLEAP configs: the fixture configs carry
+<code>pose_skeleton_file: ""</code> and <code>runner.py</code>'s <code>load_pose_model</code> call passes no
+<code>keypoint_names</code> override — the pre-existing main breakage recorded in
+<code>project_main_pose_sleap_breakage</code>.</p>
+<p>Raw JSON reports: <code>tools/spikes/crossframe_batching/results/</code>.</p>
+
+
+
+
+
+
+
+
+
+
+
+
+                
+              </article>
+            </div>
+          
+          
+<script>var target=document.getElementById(location.hash.slice(1));target&&target.name&&(target.checked=target.name.startsWith("__tabbed_"))</script>
+        </div>
+        
+          <button type="button" class="md-top md-icon" data-md-component="top" hidden>
+  
+  <svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 24 24"><path d="M13 20h-2V8l-5.5 5.5-1.42-1.42L12 4.16l7.92 7.92-1.42 1.42L13 8z"/></svg>
+  Back to top
+</button>
+        
+      </main>
+      
+        <footer class="md-footer">
+  
+  <div class="md-footer-meta md-typeset">
+    <div class="md-footer-meta__inner md-grid">
+      <div class="md-copyright">
+  
+  
+    Made with
+    <a href="https://squidfunk.github.io/mkdocs-material/" target="_blank" rel="noopener">
+      Material for MkDocs
+    </a>
+  
+</div>
+      
+    </div>
+  </div>
+</footer>
+      
+    </div>
+    <div class="md-dialog" data-md-component="dialog">
+      <div class="md-dialog__inner md-typeset"></div>
+    </div>
+    
+    
+    <script id="__config" type="application/json">{"base": "../../../..", "features": ["navigation.tabs", "navigation.sections", "navigation.expand", "navigation.top", "content.code.copy", "content.action.edit", "search.suggest", "search.highlight"], "search": "../../../../assets/javascripts/workers/search.6ce7567c.min.js", "translations": {"clipboard.copied": "Copied to clipboard", "clipboard.copy": "Copy to clipboard", "search.result.more.one": "1 more on this page", "search.result.more.other": "# more on this page", "search.result.none": "No matching documents", "search.result.one": "1 matching document", "search.result.other": "# matching documents", "search.result.placeholder": "Type to start searching", "search.result.term.missing": "Missing", "select.version": "Select version"}, "version": {"default": "latest", "provider": "mike"}}</script>
+    
+    
+      <script src="../../../../assets/javascripts/bundle.83f73b43.min.js"></script>
+      
+    
+  </body>
+</html>

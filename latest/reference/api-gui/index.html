@@ -3058,6 +3058,33 @@
   
 </li>
         
+          <li class="md-nav__item">
+  <a href="#hydra_suite.trackerkit.gui.dialogs.parameter_helper.ParameterHelperDialog.reject" class="md-nav__link">
+    <span class="md-ellipsis">
+      <code class="doc-symbol doc-symbol-toc doc-symbol-method"></code>&nbsp;reject
+    </span>
+  </a>
+  
+</li>
+        
+          <li class="md-nav__item">
+  <a href="#hydra_suite.trackerkit.gui.dialogs.parameter_helper.ParameterHelperDialog.accept" class="md-nav__link">
+    <span class="md-ellipsis">
+      <code class="doc-symbol doc-symbol-toc doc-symbol-method"></code>&nbsp;accept
+    </span>
+  </a>
+  
+</li>
+        
+          <li class="md-nav__item">
+  <a href="#hydra_suite.trackerkit.gui.dialogs.parameter_helper.ParameterHelperDialog.done" class="md-nav__link">
+    <span class="md-ellipsis">
+      <code class="doc-symbol doc-symbol-toc doc-symbol-method"></code>&nbsp;done
+    </span>
+  </a>
+  
+</li>
+        
       </ul>
     </nav>
   
@@ -4666,6 +4693,33 @@
   
 </li>
         
+          <li class="md-nav__item">
+  <a href="#hydra_suite.trackerkit.gui.dialogs.parameter_helper.ParameterHelperDialog.reject" class="md-nav__link">
+    <span class="md-ellipsis">
+      <code class="doc-symbol doc-symbol-toc doc-symbol-method"></code>&nbsp;reject
+    </span>
+  </a>
+  
+</li>
+        
+          <li class="md-nav__item">
+  <a href="#hydra_suite.trackerkit.gui.dialogs.parameter_helper.ParameterHelperDialog.accept" class="md-nav__link">
+    <span class="md-ellipsis">
+      <code class="doc-symbol doc-symbol-toc doc-symbol-method"></code>&nbsp;accept
+    </span>
+  </a>
+  
+</li>
+        
+          <li class="md-nav__item">
+  <a href="#hydra_suite.trackerkit.gui.dialogs.parameter_helper.ParameterHelperDialog.done" class="md-nav__link">
+    <span class="md-ellipsis">
+      <code class="doc-symbol doc-symbol-toc doc-symbol-method"></code>&nbsp;done
+    </span>
+  </a>
+  
+</li>
+        
       </ul>
     </nav>
   
@@ -6253,17 +6307,17 @@ it did not affect live tracking.</p>
 
     <div class="doc doc-contents ">
 
-        <p>Return True iff <em>path</em> names a modern detection cache (directory or
-the <code>detection.npz</code> file inside one) that is key-compatible with
-<em>params</em> and covers <code>start_frame..end_frame</code>.</p>
+        <p>Return True iff <em>path</em> names a complete modern replay cache set.</p>
+<p><code>path</code> may be the cache directory or its <code>detection.npz</code> member.  In
+addition to detection key/range compatibility, every configured
+downstream evidence member must have a matching key, generation, and
+coverage.  Otherwise the optimizer must prepare fresh full evidence
+instead of falsely skipping that preparation and immediately failing its
+read-only production validation.</p>
 <p>Only the modern <code>InferenceRunner</code> cache-directory layout (built by
 <code>DetectionCacheBuildWorker</code>) is recognized -- there is no legacy
-single-file fallback. Method/model compatibility is enforced entirely by
-the stored <code>cache_key</code> (see <code>DetectionCacheHandle.is_valid</code>) -- a
-cache built for a different detection method or model simply fails the
-key check and is treated as not covering the range. A non-existent path,
-or one whose containing directory doesn't exist, returns False rather
-than raising.</p>
+single-file fallback. A non-existent path, or one whose containing
+directory doesn't exist, returns False rather than raising.</p>
 
     </div>
 
@@ -7770,6 +7824,57 @@ into a generic 'no results' status once the thread finishes.</p>
     <div class="doc doc-contents ">
 
         <p>Populate the results table with ranked optimization trials and colour-coded sub-score badges.</p>
+
+    </div>
+
+</div>
+
+<div class="doc doc-object doc-function">
+
+
+<h4 id="hydra_suite.trackerkit.gui.dialogs.parameter_helper.ParameterHelperDialog.reject" class="doc doc-heading">
+<code class="doc-symbol doc-symbol-heading doc-symbol-method"></code>            <code class="highlight language-python"><span class="n">reject</span><span class="p">()</span></code>
+
+<a href="#hydra_suite.trackerkit.gui.dialogs.parameter_helper.ParameterHelperDialog.reject" class="headerlink" title="Permanent link">&para;</a></h4>
+
+
+    <div class="doc doc-contents ">
+
+        <p>Cancel safely even when Qt hides the dialog without a close event.</p>
+
+    </div>
+
+</div>
+
+<div class="doc doc-object doc-function">
+
+
+<h4 id="hydra_suite.trackerkit.gui.dialogs.parameter_helper.ParameterHelperDialog.accept" class="doc doc-heading">
+<code class="doc-symbol doc-symbol-heading doc-symbol-method"></code>            <code class="highlight language-python"><span class="n">accept</span><span class="p">()</span></code>
+
+<a href="#hydra_suite.trackerkit.gui.dialogs.parameter_helper.ParameterHelperDialog.accept" class="headerlink" title="Permanent link">&para;</a></h4>
+
+
+    <div class="doc doc-contents ">
+
+        <p>Stop background work before applying a selected candidate and closing.</p>
+
+    </div>
+
+</div>
+
+<div class="doc doc-object doc-function">
+
+
+<h4 id="hydra_suite.trackerkit.gui.dialogs.parameter_helper.ParameterHelperDialog.done" class="doc doc-heading">
+<code class="doc-symbol doc-symbol-heading doc-symbol-method"></code>            <code class="highlight language-python"><span class="n">done</span><span class="p">(</span><span class="n">result</span><span class="p">)</span></code>
+
+<a href="#hydra_suite.trackerkit.gui.dialogs.parameter_helper.ParameterHelperDialog.done" class="headerlink" title="Permanent link">&para;</a></h4>
+
+
+    <div class="doc doc-contents ">
+
+        <p>Cover accept/reject and direct Qt <code>done</code> lifecycle exits.</p>
 
     </div>
 

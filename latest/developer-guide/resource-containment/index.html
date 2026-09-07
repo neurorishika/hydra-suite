@@ -1253,6 +1253,15 @@
 </li>
       
         <li class="md-nav__item">
+  <a href="#frame-buffer-admission-detection_batch_size-ceiling" class="md-nav__link">
+    <span class="md-ellipsis">
+      Frame-buffer admission (detection_batch_size ceiling)
+    </span>
+  </a>
+  
+</li>
+      
+        <li class="md-nav__item">
   <a href="#platform-enforcement" class="md-nav__link">
     <span class="md-ellipsis">
       Platform enforcement
@@ -1917,6 +1926,15 @@
 </li>
       
         <li class="md-nav__item">
+  <a href="#frame-buffer-admission-detection_batch_size-ceiling" class="md-nav__link">
+    <span class="md-ellipsis">
+      Frame-buffer admission (detection_batch_size ceiling)
+    </span>
+  </a>
+  
+</li>
+      
+        <li class="md-nav__item">
   <a href="#platform-enforcement" class="md-nav__link">
     <span class="md-ellipsis">
       Platform enforcement
@@ -2068,6 +2086,23 @@ Recommendations scale conservatively from measured peaks and are monotonic:
 more available memory cannot reduce a recommendation, and a larger input cannot
 increase it. Profiles remain admission evidence only; they cannot raise a hard
 limit or bypass a live reserve check.</p>
+<h2 id="frame-buffer-admission-detection_batch_size-ceiling">Frame-buffer admission (<code>detection_batch_size</code> ceiling)<a class="headerlink" href="#frame-buffer-admission-detection_batch_size-ceiling" title="Permanent link">&para;</a></h2>
+<p>Before the first window is decoded, <code>Pipeline</code> checks that the retained
+decoded frames fit a fixed budget and raises otherwise:</p>
+<div class="language-text highlight"><pre><span></span><code><span id="__span-0-1"><a id="__codelineno-0-1" name="__codelineno-0-1" href="#__codelineno-0-1"></a>estimated = frame_bytes * detection_batch_size * retained_windows
+</span><span id="__span-0-2"><a id="__codelineno-0-2" name="__codelineno-0-2" href="#__codelineno-0-2"></a>retained_windows = queue_bound + 3   if pipeline_depth &gt;= 2
+</span><span id="__span-0-3"><a id="__codelineno-0-3" name="__codelineno-0-3" href="#__codelineno-0-3"></a>                 = 1                 if pipeline_depth == 1
+</span></code></pre></div>
+<p>The consequence is resolution-dependent and surprises people: on 4K video
+(about 61 MB per decoded frame) at the default <code>pipeline_depth=2</code>, any
+<code>detection_batch_size</code> above 2 aborts the run, even though the GUI spin box
+offers up to 64. At <code>pipeline_depth=1</code> only one window is retained, so larger
+windows are admissible.</p>
+<p>This is deliberate containment, not a bug in the check — an unbounded window
+on a long 4K clip is a multi-gigabyte resident buffer. It is documented here
+because the control's range is wider than the admissible range, so the failure
+arrives at run time rather than when the value is chosen. See
+<a href="../performance-tuning/">Performance Tuning</a>.</p>
 <h2 id="platform-enforcement">Platform enforcement<a class="headerlink" href="#platform-enforcement" title="Permanent link">&para;</a></h2>
 <h3 id="linux">Linux<a class="headerlink" href="#linux" title="Permanent link">&para;</a></h3>
 <p>When a delegated user cgroup v2 manager is available, use a transient systemd

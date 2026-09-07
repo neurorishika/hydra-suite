@@ -1,0 +1,2478 @@
+
+<!doctype html>
+<html lang="en" class="no-js">
+  <head>
+    
+      <meta charset="utf-8">
+      <meta name="viewport" content="width=device-width,initial-scale=1">
+      
+        <meta name="description" content="User and developer documentation for HYDRA Suite">
+      
+      
+      
+        <link rel="canonical" href="https://neurorishika.github.io/hydra-suite/latest/superpowers/plans/2026-09-06-multiscale-sam3-training/">
+      
+      
+      
+      
+      <link rel="icon" href="../../../assets/images/favicon.png">
+      <meta name="generator" content="mkdocs-1.6.1, mkdocs-material-9.5.43">
+    
+    
+      
+        <title>Multi-scale SAHI training for SAM3 — porting the YOLO scale set - HYDRA Suite Docs</title>
+      
+    
+    
+      <link rel="stylesheet" href="../../../assets/stylesheets/main.0253249f.min.css">
+      
+        
+        <link rel="stylesheet" href="../../../assets/stylesheets/palette.06af60db.min.css">
+      
+      
+
+
+    
+    
+      
+    
+    
+      
+        
+        
+        <link rel="preconnect" href="https://fonts.gstatic.com" crossorigin>
+        <link rel="stylesheet" href="https://fonts.googleapis.com/css?family=Roboto:300,300i,400,400i,700,700i%7CRoboto+Mono:400,400i,700,700i&display=fallback">
+        <style>:root{--md-text-font:"Roboto";--md-code-font:"Roboto Mono"}</style>
+      
+    
+    
+      <link rel="stylesheet" href="../../../assets/_mkdocstrings.css">
+    
+    <script>__md_scope=new URL("../../..",location),__md_hash=e=>[...e].reduce(((e,_)=>(e<<5)-e+_.charCodeAt(0)),0),__md_get=(e,_=localStorage,t=__md_scope)=>JSON.parse(_.getItem(t.pathname+"."+e)),__md_set=(e,_,t=localStorage,a=__md_scope)=>{try{t.setItem(a.pathname+"."+e,JSON.stringify(_))}catch(e){}}</script>
+    
+      
+
+    
+    
+    
+  </head>
+  
+  
+    
+    
+      
+    
+    
+    
+    
+    <body dir="ltr" data-md-color-scheme="default" data-md-color-primary="blue" data-md-color-accent="light-blue">
+  
+    
+    <input class="md-toggle" data-md-toggle="drawer" type="checkbox" id="__drawer" autocomplete="off">
+    <input class="md-toggle" data-md-toggle="search" type="checkbox" id="__search" autocomplete="off">
+    <label class="md-overlay" for="__drawer"></label>
+    <div data-md-component="skip">
+      
+        
+        <a href="#multi-scale-sahi-training-for-sam3-porting-the-yolo-scale-set" class="md-skip">
+          Skip to content
+        </a>
+      
+    </div>
+    <div data-md-component="announce">
+      
+    </div>
+    
+      <div data-md-color-scheme="default" data-md-component="outdated" hidden>
+        
+      </div>
+    
+    
+      
+
+<header class="md-header" data-md-component="header">
+  <nav class="md-header__inner md-grid" aria-label="Header">
+    <a href="../../.." title="HYDRA Suite Docs" class="md-header__button md-logo" aria-label="HYDRA Suite Docs" data-md-component="logo">
+      
+  
+  <svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 24 24"><path d="M12 8a3 3 0 0 0 3-3 3 3 0 0 0-3-3 3 3 0 0 0-3 3 3 3 0 0 0 3 3m0 3.54C9.64 9.35 6.5 8 3 8v11c3.5 0 6.64 1.35 9 3.54 2.36-2.19 5.5-3.54 9-3.54V8c-3.5 0-6.64 1.35-9 3.54"/></svg>
+
+    </a>
+    <label class="md-header__button md-icon" for="__drawer">
+      
+      <svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 24 24"><path d="M3 6h18v2H3zm0 5h18v2H3zm0 5h18v2H3z"/></svg>
+    </label>
+    <div class="md-header__title" data-md-component="header-title">
+      <div class="md-header__ellipsis">
+        <div class="md-header__topic">
+          <span class="md-ellipsis">
+            HYDRA Suite Docs
+          </span>
+        </div>
+        <div class="md-header__topic" data-md-component="header-topic">
+          <span class="md-ellipsis">
+            
+              Multi-scale SAHI training for SAM3 — porting the YOLO scale set
+            
+          </span>
+        </div>
+      </div>
+    </div>
+    
+      
+        <form class="md-header__option" data-md-component="palette">
+  
+    
+    
+    
+    <input class="md-option" data-md-color-media="(prefers-color-scheme: light)" data-md-color-scheme="default" data-md-color-primary="blue" data-md-color-accent="light-blue"  aria-label="Switch to dark mode"  type="radio" name="__palette" id="__palette_0">
+    
+      <label class="md-header__button md-icon" title="Switch to dark mode" for="__palette_1" hidden>
+        <svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 24 24"><path d="m17.75 4.09-2.53 1.94.91 3.06-2.63-1.81-2.63 1.81.91-3.06-2.53-1.94L12.44 4l1.06-3 1.06 3zm3.5 6.91-1.64 1.25.59 1.98-1.7-1.17-1.7 1.17.59-1.98L15.75 11l2.06-.05L18.5 9l.69 1.95zm-2.28 4.95c.83-.08 1.72 1.1 1.19 1.85-.32.45-.66.87-1.08 1.27C15.17 23 8.84 23 4.94 19.07c-3.91-3.9-3.91-10.24 0-14.14.4-.4.82-.76 1.27-1.08.75-.53 1.93.36 1.85 1.19-.27 2.86.69 5.83 2.89 8.02a9.96 9.96 0 0 0 8.02 2.89m-1.64 2.02a12.08 12.08 0 0 1-7.8-3.47c-2.17-2.19-3.33-5-3.49-7.82-2.81 3.14-2.7 7.96.31 10.98 3.02 3.01 7.84 3.12 10.98.31"/></svg>
+      </label>
+    
+  
+    
+    
+    
+    <input class="md-option" data-md-color-media="(prefers-color-scheme: dark)" data-md-color-scheme="slate" data-md-color-primary="blue" data-md-color-accent="light-blue"  aria-label="Switch to light mode"  type="radio" name="__palette" id="__palette_1">
+    
+      <label class="md-header__button md-icon" title="Switch to light mode" for="__palette_0" hidden>
+        <svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 24 24"><path d="M12 7a5 5 0 0 1 5 5 5 5 0 0 1-5 5 5 5 0 0 1-5-5 5 5 0 0 1 5-5m0 2a3 3 0 0 0-3 3 3 3 0 0 0 3 3 3 3 0 0 0 3-3 3 3 0 0 0-3-3m0-7 2.39 3.42C13.65 5.15 12.84 5 12 5s-1.65.15-2.39.42zM3.34 7l4.16-.35A7.2 7.2 0 0 0 5.94 8.5c-.44.74-.69 1.5-.83 2.29zm.02 10 1.76-3.77a7.131 7.131 0 0 0 2.38 4.14zM20.65 7l-1.77 3.79a7.02 7.02 0 0 0-2.38-4.15zm-.01 10-4.14.36c.59-.51 1.12-1.14 1.54-1.86.42-.73.69-1.5.83-2.29zM12 22l-2.41-3.44c.74.27 1.55.44 2.41.44.82 0 1.63-.17 2.37-.44z"/></svg>
+      </label>
+    
+  
+</form>
+      
+    
+    
+      <script>var palette=__md_get("__palette");if(palette&&palette.color){if("(prefers-color-scheme)"===palette.color.media){var media=matchMedia("(prefers-color-scheme: light)"),input=document.querySelector(media.matches?"[data-md-color-media='(prefers-color-scheme: light)']":"[data-md-color-media='(prefers-color-scheme: dark)']");palette.color.media=input.getAttribute("data-md-color-media"),palette.color.scheme=input.getAttribute("data-md-color-scheme"),palette.color.primary=input.getAttribute("data-md-color-primary"),palette.color.accent=input.getAttribute("data-md-color-accent")}for(var[key,value]of Object.entries(palette.color))document.body.setAttribute("data-md-color-"+key,value)}</script>
+    
+    
+    
+      <label class="md-header__button md-icon" for="__search">
+        
+        <svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 24 24"><path d="M9.5 3A6.5 6.5 0 0 1 16 9.5c0 1.61-.59 3.09-1.56 4.23l.27.27h.79l5 5-1.5 1.5-5-5v-.79l-.27-.27A6.52 6.52 0 0 1 9.5 16 6.5 6.5 0 0 1 3 9.5 6.5 6.5 0 0 1 9.5 3m0 2C7 5 5 7 5 9.5S7 14 9.5 14 14 12 14 9.5 12 5 9.5 5"/></svg>
+      </label>
+      <div class="md-search" data-md-component="search" role="dialog">
+  <label class="md-search__overlay" for="__search"></label>
+  <div class="md-search__inner" role="search">
+    <form class="md-search__form" name="search">
+      <input type="text" class="md-search__input" name="query" aria-label="Search" placeholder="Search" autocapitalize="off" autocorrect="off" autocomplete="off" spellcheck="false" data-md-component="search-query" required>
+      <label class="md-search__icon md-icon" for="__search">
+        
+        <svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 24 24"><path d="M9.5 3A6.5 6.5 0 0 1 16 9.5c0 1.61-.59 3.09-1.56 4.23l.27.27h.79l5 5-1.5 1.5-5-5v-.79l-.27-.27A6.52 6.52 0 0 1 9.5 16 6.5 6.5 0 0 1 3 9.5 6.5 6.5 0 0 1 9.5 3m0 2C7 5 5 7 5 9.5S7 14 9.5 14 14 12 14 9.5 12 5 9.5 5"/></svg>
+        
+        <svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 24 24"><path d="M20 11v2H8l5.5 5.5-1.42 1.42L4.16 12l7.92-7.92L13.5 5.5 8 11z"/></svg>
+      </label>
+      <nav class="md-search__options" aria-label="Search">
+        
+        <button type="reset" class="md-search__icon md-icon" title="Clear" aria-label="Clear" tabindex="-1">
+          
+          <svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 24 24"><path d="M19 6.41 17.59 5 12 10.59 6.41 5 5 6.41 10.59 12 5 17.59 6.41 19 12 13.41 17.59 19 19 17.59 13.41 12z"/></svg>
+        </button>
+      </nav>
+      
+        <div class="md-search__suggest" data-md-component="search-suggest"></div>
+      
+    </form>
+    <div class="md-search__output">
+      <div class="md-search__scrollwrap" tabindex="0" data-md-scrollfix>
+        <div class="md-search-result" data-md-component="search-result">
+          <div class="md-search-result__meta">
+            Initializing search
+          </div>
+          <ol class="md-search-result__list" role="presentation"></ol>
+        </div>
+      </div>
+    </div>
+  </div>
+</div>
+    
+    
+      <div class="md-header__source">
+        <a href="https://github.com/neurorishika/hydra-suite" title="Go to repository" class="md-source" data-md-component="source">
+  <div class="md-source__icon md-icon">
+    
+    <svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 448 512"><!--! Font Awesome Free 6.6.0 by @fontawesome - https://fontawesome.com License - https://fontawesome.com/license/free (Icons: CC BY 4.0, Fonts: SIL OFL 1.1, Code: MIT License) Copyright 2024 Fonticons, Inc.--><path d="M439.55 236.05 244 40.45a28.87 28.87 0 0 0-40.81 0l-40.66 40.63 51.52 51.52c27.06-9.14 52.68 16.77 43.39 43.68l49.66 49.66c34.23-11.8 61.18 31 35.47 56.69-26.49 26.49-70.21-2.87-56-37.34L240.22 199v121.85c25.3 12.54 22.26 41.85 9.08 55a34.34 34.34 0 0 1-48.55 0c-17.57-17.6-11.07-46.91 11.25-56v-123c-20.8-8.51-24.6-30.74-18.64-45L142.57 101 8.45 235.14a28.86 28.86 0 0 0 0 40.81l195.61 195.6a28.86 28.86 0 0 0 40.8 0l194.69-194.69a28.86 28.86 0 0 0 0-40.81"/></svg>
+  </div>
+  <div class="md-source__repository">
+    neurorishika/hydra-suite
+  </div>
+</a>
+      </div>
+    
+  </nav>
+  
+</header>
+    
+    <div class="md-container" data-md-component="container">
+      
+      
+        
+          
+            
+<nav class="md-tabs" aria-label="Tabs" data-md-component="tabs">
+  <div class="md-grid">
+    <ul class="md-tabs__list">
+      
+        
+  
+  
+  
+    <li class="md-tabs__item">
+      <a href="../../.." class="md-tabs__link">
+        
+  
+    
+  
+  Home
+
+      </a>
+    </li>
+  
+
+      
+        
+  
+  
+  
+    
+    
+      <li class="md-tabs__item">
+        <a href="../../../getting-started/installation/" class="md-tabs__link">
+          
+  
+  Getting Started
+
+        </a>
+      </li>
+    
+  
+
+      
+        
+  
+  
+  
+    
+    
+      <li class="md-tabs__item">
+        <a href="../../../user-guide/overview/" class="md-tabs__link">
+          
+  
+  User Guide
+
+        </a>
+      </li>
+    
+  
+
+      
+        
+  
+  
+  
+    
+    
+      <li class="md-tabs__item">
+        <a href="../../../developer-guide/architecture/" class="md-tabs__link">
+          
+  
+  Developer Guide
+
+        </a>
+      </li>
+    
+  
+
+      
+        
+  
+  
+  
+    
+    
+      <li class="md-tabs__item">
+        <a href="../../../reference/api-index/" class="md-tabs__link">
+          
+  
+  Reference
+
+        </a>
+      </li>
+    
+  
+
+      
+    </ul>
+  </div>
+</nav>
+          
+        
+      
+      <main class="md-main" data-md-component="main">
+        <div class="md-main__inner md-grid">
+          
+            
+              
+              <div class="md-sidebar md-sidebar--primary" data-md-component="sidebar" data-md-type="navigation" >
+                <div class="md-sidebar__scrollwrap">
+                  <div class="md-sidebar__inner">
+                    
+
+
+  
+
+
+<nav class="md-nav md-nav--primary md-nav--lifted" aria-label="Navigation" data-md-level="0">
+  <label class="md-nav__title" for="__drawer">
+    <a href="../../.." title="HYDRA Suite Docs" class="md-nav__button md-logo" aria-label="HYDRA Suite Docs" data-md-component="logo">
+      
+  
+  <svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 24 24"><path d="M12 8a3 3 0 0 0 3-3 3 3 0 0 0-3-3 3 3 0 0 0-3 3 3 3 0 0 0 3 3m0 3.54C9.64 9.35 6.5 8 3 8v11c3.5 0 6.64 1.35 9 3.54 2.36-2.19 5.5-3.54 9-3.54V8c-3.5 0-6.64 1.35-9 3.54"/></svg>
+
+    </a>
+    HYDRA Suite Docs
+  </label>
+  
+    <div class="md-nav__source">
+      <a href="https://github.com/neurorishika/hydra-suite" title="Go to repository" class="md-source" data-md-component="source">
+  <div class="md-source__icon md-icon">
+    
+    <svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 448 512"><!--! Font Awesome Free 6.6.0 by @fontawesome - https://fontawesome.com License - https://fontawesome.com/license/free (Icons: CC BY 4.0, Fonts: SIL OFL 1.1, Code: MIT License) Copyright 2024 Fonticons, Inc.--><path d="M439.55 236.05 244 40.45a28.87 28.87 0 0 0-40.81 0l-40.66 40.63 51.52 51.52c27.06-9.14 52.68 16.77 43.39 43.68l49.66 49.66c34.23-11.8 61.18 31 35.47 56.69-26.49 26.49-70.21-2.87-56-37.34L240.22 199v121.85c25.3 12.54 22.26 41.85 9.08 55a34.34 34.34 0 0 1-48.55 0c-17.57-17.6-11.07-46.91 11.25-56v-123c-20.8-8.51-24.6-30.74-18.64-45L142.57 101 8.45 235.14a28.86 28.86 0 0 0 0 40.81l195.61 195.6a28.86 28.86 0 0 0 40.8 0l194.69-194.69a28.86 28.86 0 0 0 0-40.81"/></svg>
+  </div>
+  <div class="md-source__repository">
+    neurorishika/hydra-suite
+  </div>
+</a>
+    </div>
+  
+  <ul class="md-nav__list" data-md-scrollfix>
+    
+      
+      
+  
+  
+  
+  
+    <li class="md-nav__item">
+      <a href="../../.." class="md-nav__link">
+        
+  
+  <span class="md-ellipsis">
+    Home
+  </span>
+  
+
+      </a>
+    </li>
+  
+
+    
+      
+      
+  
+  
+  
+  
+    
+    
+    
+      
+      
+        
+      
+    
+    
+    <li class="md-nav__item md-nav__item--nested">
+      
+        
+        
+          
+        
+        <input class="md-nav__toggle md-toggle md-toggle--indeterminate" type="checkbox" id="__nav_2" >
+        
+          
+          <label class="md-nav__link" for="__nav_2" id="__nav_2_label" tabindex="0">
+            
+  
+  <span class="md-ellipsis">
+    Getting Started
+  </span>
+  
+
+            <span class="md-nav__icon md-icon"></span>
+          </label>
+        
+        <nav class="md-nav" data-md-level="1" aria-labelledby="__nav_2_label" aria-expanded="false">
+          <label class="md-nav__title" for="__nav_2">
+            <span class="md-nav__icon md-icon"></span>
+            Getting Started
+          </label>
+          <ul class="md-nav__list" data-md-scrollfix>
+            
+              
+                
+  
+  
+  
+  
+    <li class="md-nav__item">
+      <a href="../../../getting-started/installation/" class="md-nav__link">
+        
+  
+  <span class="md-ellipsis">
+    Installation
+  </span>
+  
+
+      </a>
+    </li>
+  
+
+              
+            
+              
+                
+  
+  
+  
+  
+    <li class="md-nav__item">
+      <a href="../../../getting-started/environments/" class="md-nav__link">
+        
+  
+  <span class="md-ellipsis">
+    Environments and Makefile
+  </span>
+  
+
+      </a>
+    </li>
+  
+
+              
+            
+              
+                
+  
+  
+  
+  
+    <li class="md-nav__item">
+      <a href="../../../getting-started/integrations/" class="md-nav__link">
+        
+  
+  <span class="md-ellipsis">
+    Integrations
+  </span>
+  
+
+      </a>
+    </li>
+  
+
+              
+            
+              
+                
+  
+  
+  
+  
+    <li class="md-nav__item">
+      <a href="../../../getting-started/quickstart-hydra/" class="md-nav__link">
+        
+  
+  <span class="md-ellipsis">
+    Quickstart (TrackerKit)
+  </span>
+  
+
+      </a>
+    </li>
+  
+
+              
+            
+              
+                
+  
+  
+  
+  
+    <li class="md-nav__item">
+      <a href="../../../getting-started/quickstart-posekit/" class="md-nav__link">
+        
+  
+  <span class="md-ellipsis">
+    Quickstart (PoseKit)
+  </span>
+  
+
+      </a>
+    </li>
+  
+
+              
+            
+              
+                
+  
+  
+  
+  
+    <li class="md-nav__item">
+      <a href="../../../getting-started/platforms/" class="md-nav__link">
+        
+  
+  <span class="md-ellipsis">
+    Platform Notes
+  </span>
+  
+
+      </a>
+    </li>
+  
+
+              
+            
+          </ul>
+        </nav>
+      
+    </li>
+  
+
+    
+      
+      
+  
+  
+  
+  
+    
+    
+    
+      
+      
+        
+      
+    
+    
+    <li class="md-nav__item md-nav__item--nested">
+      
+        
+        
+          
+        
+        <input class="md-nav__toggle md-toggle md-toggle--indeterminate" type="checkbox" id="__nav_3" >
+        
+          
+          <label class="md-nav__link" for="__nav_3" id="__nav_3_label" tabindex="0">
+            
+  
+  <span class="md-ellipsis">
+    User Guide
+  </span>
+  
+
+            <span class="md-nav__icon md-icon"></span>
+          </label>
+        
+        <nav class="md-nav" data-md-level="1" aria-labelledby="__nav_3_label" aria-expanded="false">
+          <label class="md-nav__title" for="__nav_3">
+            <span class="md-nav__icon md-icon"></span>
+            User Guide
+          </label>
+          <ul class="md-nav__list" data-md-scrollfix>
+            
+              
+                
+  
+  
+  
+  
+    <li class="md-nav__item">
+      <a href="../../../user-guide/overview/" class="md-nav__link">
+        
+  
+  <span class="md-ellipsis">
+    Overview
+  </span>
+  
+
+      </a>
+    </li>
+  
+
+              
+            
+              
+                
+  
+  
+  
+  
+    <li class="md-nav__item">
+      <a href="../../../user-guide/workflow/" class="md-nav__link">
+        
+  
+  <span class="md-ellipsis">
+    End-to-End Workflow
+  </span>
+  
+
+      </a>
+    </li>
+  
+
+              
+            
+              
+                
+  
+  
+  
+  
+    <li class="md-nav__item">
+      <a href="../../../user-guide/detection-modes/" class="md-nav__link">
+        
+  
+  <span class="md-ellipsis">
+    Detection Modes
+  </span>
+  
+
+      </a>
+    </li>
+  
+
+              
+            
+              
+                
+  
+  
+  
+  
+    <li class="md-nav__item">
+      <a href="../../../user-guide/tracking-and-merging/" class="md-nav__link">
+        
+  
+  <span class="md-ellipsis">
+    Tracking and Merging
+  </span>
+  
+
+      </a>
+    </li>
+  
+
+              
+            
+              
+                
+  
+  
+  
+  
+    <li class="md-nav__item">
+      <a href="../../../user-guide/post-processing/" class="md-nav__link">
+        
+  
+  <span class="md-ellipsis">
+    Post-processing
+  </span>
+  
+
+      </a>
+    </li>
+  
+
+              
+            
+              
+                
+  
+  
+  
+  
+    <li class="md-nav__item">
+      <a href="../../../user-guide/configuration-reference/" class="md-nav__link">
+        
+  
+  <span class="md-ellipsis">
+    Configuration Reference
+  </span>
+  
+
+      </a>
+    </li>
+  
+
+              
+            
+              
+                
+  
+  
+  
+  
+    <li class="md-nav__item">
+      <a href="../../../user-guide/compute-runtimes/" class="md-nav__link">
+        
+  
+  <span class="md-ellipsis">
+    Compute Runtimes
+  </span>
+  
+
+      </a>
+    </li>
+  
+
+              
+            
+              
+                
+  
+  
+  
+  
+    <li class="md-nav__item">
+      <a href="../../../user-guide/outputs-and-csv-schema/" class="md-nav__link">
+        
+  
+  <span class="md-ellipsis">
+    Outputs and CSV Schema
+  </span>
+  
+
+      </a>
+    </li>
+  
+
+              
+            
+              
+                
+  
+  
+  
+  
+    <li class="md-nav__item">
+      <a href="../../../user-guide/dataset-generation/" class="md-nav__link">
+        
+  
+  <span class="md-ellipsis">
+    Dataset Generation
+  </span>
+  
+
+      </a>
+    </li>
+  
+
+              
+            
+              
+                
+  
+  
+  
+  
+    <li class="md-nav__item">
+      <a href="../../../user-guide/individual-analysis/" class="md-nav__link">
+        
+  
+  <span class="md-ellipsis">
+    Individual Analysis
+  </span>
+  
+
+      </a>
+    </li>
+  
+
+              
+            
+              
+                
+  
+  
+  
+  
+    <li class="md-nav__item">
+      <a href="../../../user-guide/posekit/" class="md-nav__link">
+        
+  
+  <span class="md-ellipsis">
+    PoseKit
+  </span>
+  
+
+      </a>
+    </li>
+  
+
+              
+            
+              
+                
+  
+  
+  
+  
+    <li class="md-nav__item">
+      <a href="../../../user-guide/classkit/" class="md-nav__link">
+        
+  
+  <span class="md-ellipsis">
+    ClassKit
+  </span>
+  
+
+      </a>
+    </li>
+  
+
+              
+            
+              
+                
+  
+  
+  
+  
+    <li class="md-nav__item">
+      <a href="../../../user-guide/detectkit/" class="md-nav__link">
+        
+  
+  <span class="md-ellipsis">
+    DetectKit
+  </span>
+  
+
+      </a>
+    </li>
+  
+
+              
+            
+              
+                
+  
+  
+  
+  
+    <li class="md-nav__item">
+      <a href="../../../runbooks/detectkit-headless-training/" class="md-nav__link">
+        
+  
+  <span class="md-ellipsis">
+    DetectKit Headless Training
+  </span>
+  
+
+      </a>
+    </li>
+  
+
+              
+            
+              
+                
+  
+  
+  
+  
+    <li class="md-nav__item">
+      <a href="../../../user-guide/detectkit-semantic-escalation/" class="md-nav__link">
+        
+  
+  <span class="md-ellipsis">
+    DetectKit: Semantic Escalation (SAM3)
+  </span>
+  
+
+      </a>
+    </li>
+  
+
+              
+            
+              
+                
+  
+  
+  
+  
+    <li class="md-nav__item">
+      <a href="../../../user-guide/detectkit-sahi-calibration/" class="md-nav__link">
+        
+  
+  <span class="md-ellipsis">
+    DetectKit: SAHI Calibration Profiles
+  </span>
+  
+
+      </a>
+    </li>
+  
+
+              
+            
+              
+                
+  
+  
+  
+  
+    <li class="md-nav__item">
+      <a href="../../../user-guide/filterkit/" class="md-nav__link">
+        
+  
+  <span class="md-ellipsis">
+    FilterKit
+  </span>
+  
+
+      </a>
+    </li>
+  
+
+              
+            
+              
+                
+  
+  
+  
+  
+    <li class="md-nav__item">
+      <a href="../../../user-guide/refinekit/" class="md-nav__link">
+        
+  
+  <span class="md-ellipsis">
+    RefineKit
+  </span>
+  
+
+      </a>
+    </li>
+  
+
+              
+            
+              
+                
+  
+  
+  
+  
+    <li class="md-nav__item">
+      <a href="../../../user-guide/troubleshooting/" class="md-nav__link">
+        
+  
+  <span class="md-ellipsis">
+    Troubleshooting
+  </span>
+  
+
+      </a>
+    </li>
+  
+
+              
+            
+          </ul>
+        </nav>
+      
+    </li>
+  
+
+    
+      
+      
+  
+  
+  
+  
+    
+    
+    
+      
+      
+        
+      
+    
+    
+    <li class="md-nav__item md-nav__item--nested">
+      
+        
+        
+          
+        
+        <input class="md-nav__toggle md-toggle md-toggle--indeterminate" type="checkbox" id="__nav_4" >
+        
+          
+          <label class="md-nav__link" for="__nav_4" id="__nav_4_label" tabindex="0">
+            
+  
+  <span class="md-ellipsis">
+    Developer Guide
+  </span>
+  
+
+            <span class="md-nav__icon md-icon"></span>
+          </label>
+        
+        <nav class="md-nav" data-md-level="1" aria-labelledby="__nav_4_label" aria-expanded="false">
+          <label class="md-nav__title" for="__nav_4">
+            <span class="md-nav__icon md-icon"></span>
+            Developer Guide
+          </label>
+          <ul class="md-nav__list" data-md-scrollfix>
+            
+              
+                
+  
+  
+  
+  
+    <li class="md-nav__item">
+      <a href="../../../developer-guide/architecture/" class="md-nav__link">
+        
+  
+  <span class="md-ellipsis">
+    Architecture
+  </span>
+  
+
+      </a>
+    </li>
+  
+
+              
+            
+              
+                
+  
+  
+  
+  
+    <li class="md-nav__item">
+      <a href="../../../developer-guide/module-map/" class="md-nav__link">
+        
+  
+  <span class="md-ellipsis">
+    Module Map
+  </span>
+  
+
+      </a>
+    </li>
+  
+
+              
+            
+              
+                
+  
+  
+  
+  
+    <li class="md-nav__item">
+      <a href="../../../developer-guide/data-flow/" class="md-nav__link">
+        
+  
+  <span class="md-ellipsis">
+    Data Flow
+  </span>
+  
+
+      </a>
+    </li>
+  
+
+              
+            
+              
+                
+  
+  
+  
+  
+    <li class="md-nav__item">
+      <a href="../../../developer-guide/tracking-algorithm-deep-dive/" class="md-nav__link">
+        
+  
+  <span class="md-ellipsis">
+    Tracking Algorithm Deep Dive
+  </span>
+  
+
+      </a>
+    </li>
+  
+
+              
+            
+              
+                
+  
+  
+  
+  
+    <li class="md-nav__item">
+      <a href="../../../developer-guide/tracking-optimization/" class="md-nav__link">
+        
+  
+  <span class="md-ellipsis">
+    Tracking Optimization
+  </span>
+  
+
+      </a>
+    </li>
+  
+
+              
+            
+              
+                
+  
+  
+  
+  
+    <li class="md-nav__item">
+      <a href="../../../developer-guide/gpu-backends/" class="md-nav__link">
+        
+  
+  <span class="md-ellipsis">
+    GPU Backends
+  </span>
+  
+
+      </a>
+    </li>
+  
+
+              
+            
+              
+                
+  
+  
+  
+  
+    <li class="md-nav__item">
+      <a href="../../../developer-guide/runtime-integration/" class="md-nav__link">
+        
+  
+  <span class="md-ellipsis">
+    Runtime Integration
+  </span>
+  
+
+      </a>
+    </li>
+  
+
+              
+            
+              
+                
+  
+  
+  
+  
+    <li class="md-nav__item">
+      <a href="../../../developer-guide/resource-containment/" class="md-nav__link">
+        
+  
+  <span class="md-ellipsis">
+    Resource Containment
+  </span>
+  
+
+      </a>
+    </li>
+  
+
+              
+            
+              
+                
+  
+  
+  
+  
+    <li class="md-nav__item">
+      <a href="../../../developer-guide/profiling/" class="md-nav__link">
+        
+  
+  <span class="md-ellipsis">
+    Profiling
+  </span>
+  
+
+      </a>
+    </li>
+  
+
+              
+            
+              
+                
+  
+  
+  
+  
+    <li class="md-nav__item">
+      <a href="../../../developer-guide/dependency-cuda-updates/" class="md-nav__link">
+        
+  
+  <span class="md-ellipsis">
+    CUDA Dependency Updates
+  </span>
+  
+
+      </a>
+    </li>
+  
+
+              
+            
+              
+                
+  
+  
+  
+  
+    <li class="md-nav__item">
+      <a href="../../../developer-guide/performance-tuning/" class="md-nav__link">
+        
+  
+  <span class="md-ellipsis">
+    Performance Tuning
+  </span>
+  
+
+      </a>
+    </li>
+  
+
+              
+            
+              
+                
+  
+  
+  
+  
+    <li class="md-nav__item">
+      <a href="../../../developer-guide/inference-fast-mode/" class="md-nav__link">
+        
+  
+  <span class="md-ellipsis">
+    Inference Fast Mode
+  </span>
+  
+
+      </a>
+    </li>
+  
+
+              
+            
+              
+                
+  
+  
+  
+  
+    <li class="md-nav__item">
+      <a href="../../../developer-guide/confidence-metrics/" class="md-nav__link">
+        
+  
+  <span class="md-ellipsis">
+    Confidence Metrics
+  </span>
+  
+
+      </a>
+    </li>
+  
+
+              
+            
+              
+                
+  
+  
+  
+  
+    <li class="md-nav__item">
+      <a href="../../../developer-guide/extending-detection/" class="md-nav__link">
+        
+  
+  <span class="md-ellipsis">
+    Extending Detection
+  </span>
+  
+
+      </a>
+    </li>
+  
+
+              
+            
+              
+                
+  
+  
+  
+  
+    <li class="md-nav__item">
+      <a href="../../../developer-guide/extending-identity/" class="md-nav__link">
+        
+  
+  <span class="md-ellipsis">
+    Extending Identity
+  </span>
+  
+
+      </a>
+    </li>
+  
+
+              
+            
+              
+                
+  
+  
+  
+  
+    <li class="md-nav__item">
+      <a href="../../../developer-guide/code-health/" class="md-nav__link">
+        
+  
+  <span class="md-ellipsis">
+    Code Health & Auditing
+  </span>
+  
+
+      </a>
+    </li>
+  
+
+              
+            
+              
+                
+  
+  
+  
+  
+    <li class="md-nav__item">
+      <a href="../../../developer-guide/publishing/" class="md-nav__link">
+        
+  
+  <span class="md-ellipsis">
+    Publishing
+  </span>
+  
+
+      </a>
+    </li>
+  
+
+              
+            
+              
+                
+  
+  
+  
+  
+    <li class="md-nav__item">
+      <a href="../../../developer-guide/contributing/" class="md-nav__link">
+        
+  
+  <span class="md-ellipsis">
+    Contributing
+  </span>
+  
+
+      </a>
+    </li>
+  
+
+              
+            
+          </ul>
+        </nav>
+      
+    </li>
+  
+
+    
+      
+      
+  
+  
+  
+  
+    
+    
+    
+      
+      
+        
+      
+    
+    
+    <li class="md-nav__item md-nav__item--nested">
+      
+        
+        
+          
+        
+        <input class="md-nav__toggle md-toggle md-toggle--indeterminate" type="checkbox" id="__nav_5" >
+        
+          
+          <label class="md-nav__link" for="__nav_5" id="__nav_5_label" tabindex="0">
+            
+  
+  <span class="md-ellipsis">
+    Reference
+  </span>
+  
+
+            <span class="md-nav__icon md-icon"></span>
+          </label>
+        
+        <nav class="md-nav" data-md-level="1" aria-labelledby="__nav_5_label" aria-expanded="false">
+          <label class="md-nav__title" for="__nav_5">
+            <span class="md-nav__icon md-icon"></span>
+            Reference
+          </label>
+          <ul class="md-nav__list" data-md-scrollfix>
+            
+              
+                
+  
+  
+  
+  
+    <li class="md-nav__item">
+      <a href="../../../reference/api-index/" class="md-nav__link">
+        
+  
+  <span class="md-ellipsis">
+    API Index
+  </span>
+  
+
+      </a>
+    </li>
+  
+
+              
+            
+              
+                
+  
+  
+  
+  
+    <li class="md-nav__item">
+      <a href="../../../reference/ui-components-hydra/" class="md-nav__link">
+        
+  
+  <span class="md-ellipsis">
+    UI Components (TrackerKit)
+  </span>
+  
+
+      </a>
+    </li>
+  
+
+              
+            
+              
+                
+  
+  
+  
+  
+    <li class="md-nav__item">
+      <a href="../../../reference/ui-components-posekit/" class="md-nav__link">
+        
+  
+  <span class="md-ellipsis">
+    UI Components (PoseKit)
+  </span>
+  
+
+      </a>
+    </li>
+  
+
+              
+            
+              
+                
+  
+  
+  
+  
+    <li class="md-nav__item">
+      <a href="../../../reference/api-app/" class="md-nav__link">
+        
+  
+  <span class="md-ellipsis">
+    API (Launcher)
+  </span>
+  
+
+      </a>
+    </li>
+  
+
+              
+            
+              
+                
+  
+  
+  
+  
+    <li class="md-nav__item">
+      <a href="../../../reference/api-core/" class="md-nav__link">
+        
+  
+  <span class="md-ellipsis">
+    API (Core)
+  </span>
+  
+
+      </a>
+    </li>
+  
+
+              
+            
+              
+                
+  
+  
+  
+  
+    <li class="md-nav__item">
+      <a href="../../../reference/api-data/" class="md-nav__link">
+        
+  
+  <span class="md-ellipsis">
+    API (Data)
+  </span>
+  
+
+      </a>
+    </li>
+  
+
+              
+            
+              
+                
+  
+  
+  
+  
+    <li class="md-nav__item">
+      <a href="../../../reference/api-gui/" class="md-nav__link">
+        
+  
+  <span class="md-ellipsis">
+    API (TrackerKit GUI)
+  </span>
+  
+
+      </a>
+    </li>
+  
+
+              
+            
+              
+                
+  
+  
+  
+  
+    <li class="md-nav__item">
+      <a href="../../../reference/api-widgets/" class="md-nav__link">
+        
+  
+  <span class="md-ellipsis">
+    API (Widgets)
+  </span>
+  
+
+      </a>
+    </li>
+  
+
+              
+            
+              
+                
+  
+  
+  
+  
+    <li class="md-nav__item">
+      <a href="../../../reference/api-posekit/" class="md-nav__link">
+        
+  
+  <span class="md-ellipsis">
+    API (PoseKit)
+  </span>
+  
+
+      </a>
+    </li>
+  
+
+              
+            
+              
+                
+  
+  
+  
+  
+    <li class="md-nav__item">
+      <a href="../../../reference/api-utils/" class="md-nav__link">
+        
+  
+  <span class="md-ellipsis">
+    API (Utils)
+  </span>
+  
+
+      </a>
+    </li>
+  
+
+              
+            
+              
+                
+  
+  
+  
+  
+    <li class="md-nav__item">
+      <a href="../../../reference/cli-reference/" class="md-nav__link">
+        
+  
+  <span class="md-ellipsis">
+    CLI Reference
+  </span>
+  
+
+      </a>
+    </li>
+  
+
+              
+            
+              
+                
+  
+  
+  
+  
+    <li class="md-nav__item">
+      <a href="../../../reference/technical-reference/" class="md-nav__link">
+        
+  
+  <span class="md-ellipsis">
+    Technical Reference (LaTeX)
+  </span>
+  
+
+      </a>
+    </li>
+  
+
+              
+            
+              
+                
+  
+  
+  
+  
+    <li class="md-nav__item">
+      <a href="../../../reference/changelog/" class="md-nav__link">
+        
+  
+  <span class="md-ellipsis">
+    Changelog
+  </span>
+  
+
+      </a>
+    </li>
+  
+
+              
+            
+              
+                
+  
+  
+  
+  
+    <li class="md-nav__item">
+      <a href="../../../reference/faq/" class="md-nav__link">
+        
+  
+  <span class="md-ellipsis">
+    FAQ
+  </span>
+  
+
+      </a>
+    </li>
+  
+
+              
+            
+          </ul>
+        </nav>
+      
+    </li>
+  
+
+    
+  </ul>
+</nav>
+                  </div>
+                </div>
+              </div>
+            
+            
+              
+              <div class="md-sidebar md-sidebar--secondary" data-md-component="sidebar" data-md-type="toc" >
+                <div class="md-sidebar__scrollwrap">
+                  <div class="md-sidebar__inner">
+                    
+
+<nav class="md-nav md-nav--secondary" aria-label="Table of contents">
+  
+  
+  
+    
+  
+  
+    <label class="md-nav__title" for="__toc">
+      <span class="md-nav__icon md-icon"></span>
+      Table of contents
+    </label>
+    <ul class="md-nav__list" data-md-component="toc" data-md-scrollfix>
+      
+        <li class="md-nav__item">
+  <a href="#global-constraints" class="md-nav__link">
+    <span class="md-ellipsis">
+      Global Constraints
+    </span>
+  </a>
+  
+</li>
+      
+        <li class="md-nav__item">
+  <a href="#current-state-mapped-2026-09-06-fileline-verified-against-e29838cb" class="md-nav__link">
+    <span class="md-ellipsis">
+      Current state (mapped 2026-09-06, file:line verified against e29838cb)
+    </span>
+  </a>
+  
+    <nav class="md-nav" aria-label="Current state (mapped 2026-09-06, file:line verified against e29838cb)">
+      <ul class="md-nav__list">
+        
+          <li class="md-nav__item">
+  <a href="#yolo-multi-scale-as-it-actually-works" class="md-nav__link">
+    <span class="md-ellipsis">
+      YOLO multi-scale, as it actually works
+    </span>
+  </a>
+  
+</li>
+        
+          <li class="md-nav__item">
+  <a href="#sam3-tiling-as-it-works-today-exactly-one-scale" class="md-nav__link">
+    <span class="md-ellipsis">
+      SAM3 tiling, as it works today — exactly ONE scale
+    </span>
+  </a>
+  
+</li>
+        
+          <li class="md-nav__item">
+  <a href="#where-a-scale-set-would-enter" class="md-nav__link">
+    <span class="md-ellipsis">
+      Where a scale set would enter
+    </span>
+  </a>
+  
+</li>
+        
+      </ul>
+    </nav>
+  
+</li>
+      
+        <li class="md-nav__item">
+  <a href="#the-denominator-the-crux-stated-once" class="md-nav__link">
+    <span class="md-ellipsis">
+      THE DENOMINATOR — the crux, stated once
+    </span>
+  </a>
+  
+</li>
+      
+        <li class="md-nav__item">
+  <a href="#task-1-freeze-the-before-gate-a-byte-identical-sam3-dataset-golden" class="md-nav__link">
+    <span class="md-ellipsis">
+      Task 1 — Freeze the before-gate: a byte-identical SAM3 dataset golden
+    </span>
+  </a>
+  
+</li>
+      
+        <li class="md-nav__item">
+  <a href="#task-2-resolve_scales-in-the-shared-layer-pure-no-behaviour-change" class="md-nav__link">
+    <span class="md-ellipsis">
+      Task 2 — resolve_scales in the shared layer (pure, no behaviour change)
+    </span>
+  </a>
+  
+</li>
+      
+        <li class="md-nav__item">
+  <a href="#task-3-sam3-builds-a-scale-set-behaviour-preserving-at-one-scale" class="md-nav__link">
+    <span class="md-ellipsis">
+      Task 3 — SAM3 builds a scale SET (behaviour-preserving at one scale)
+    </span>
+  </a>
+  
+</li>
+      
+        <li class="md-nav__item">
+  <a href="#task-4-stamp-the-scale-set-not-a-collapsed-scalar-35" class="md-nav__link">
+    <span class="md-ellipsis">
+      Task 4 — Stamp the SCALE SET, not a collapsed scalar (§3.5)
+    </span>
+  </a>
+  
+</li>
+      
+        <li class="md-nav__item">
+  <a href="#task-5-scale-grouped-batching-for-sam3-or-an-explicit-refusal" class="md-nav__link">
+    <span class="md-ellipsis">
+      Task 5 — Scale-grouped batching for SAM3, or an explicit refusal
+    </span>
+  </a>
+  
+</li>
+      
+        <li class="md-nav__item">
+  <a href="#task-6-autobatch-fingerprint-must-include-the-whole-scale-set" class="md-nav__link">
+    <span class="md-ellipsis">
+      Task 6 — Autobatch fingerprint must include the whole scale set
+    </span>
+  </a>
+  
+</li>
+      
+        <li class="md-nav__item">
+  <a href="#task-7-per-scale-counters-including-the-non-square-count-r2-r3b" class="md-nav__link">
+    <span class="md-ellipsis">
+      Task 7 — Per-scale counters, including the non-square count (R2 + R3b)
+    </span>
+  </a>
+  
+</li>
+      
+        <li class="md-nav__item">
+  <a href="#task-8-the-measured-after-gate-mehek-cuda" class="md-nav__link">
+    <span class="md-ellipsis">
+      Task 8 — The measured after-gate (mehek, CUDA)
+    </span>
+  </a>
+  
+    <nav class="md-nav" aria-label="Task 8 — The measured after-gate (mehek, CUDA)">
+      <ul class="md-nav__list">
+        
+          <li class="md-nav__item">
+  <a href="#cost-estimate-arithmetic-to-be-replaced-by-task-8s-measurement" class="md-nav__link">
+    <span class="md-ellipsis">
+      Cost estimate — arithmetic, to be replaced by Task 8's measurement
+    </span>
+  </a>
+  
+</li>
+        
+      </ul>
+    </nav>
+  
+</li>
+      
+        <li class="md-nav__item">
+  <a href="#out-of-scope-named-so-no-implementer-wanders-in" class="md-nav__link">
+    <span class="md-ellipsis">
+      Out of scope — named so no implementer wanders in
+    </span>
+  </a>
+  
+</li>
+      
+        <li class="md-nav__item">
+  <a href="#what-could-not-be-determined-from-the-code-and-must-be-measured-or-decided" class="md-nav__link">
+    <span class="md-ellipsis">
+      What could NOT be determined from the code, and must be measured or decided
+    </span>
+  </a>
+  
+</li>
+      
+    </ul>
+  
+</nav>
+                  </div>
+                </div>
+              </div>
+            
+          
+          
+            <div class="md-content" data-md-component="content">
+              <article class="md-content__inner md-typeset">
+                
+                  
+
+  
+    <a href="https://github.com/neurorishika/hydra-suite/edit/main/docs/superpowers/plans/2026-09-06-multiscale-sam3-training.md" title="Edit this page" class="md-content__button md-icon">
+      
+      <svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 24 24"><path d="M10 20H6V4h7v5h5v3.1l2-2V8l-6-6H6c-1.1 0-2 .9-2 2v16c0 1.1.9 2 2 2h4zm10.2-7c.1 0 .3.1.4.2l1.3 1.3c.2.2.2.6 0 .8l-1 1-2.1-2.1 1-1c.1-.1.2-.2.4-.2m0 3.9L14.1 23H12v-2.1l6.1-6.1z"/></svg>
+    </a>
+  
+  
+
+
+<h1 id="multi-scale-sahi-training-for-sam3-porting-the-yolo-scale-set">Multi-scale SAHI training for SAM3 — porting the YOLO scale set<a class="headerlink" href="#multi-scale-sahi-training-for-sam3-porting-the-yolo-scale-set" title="Permanent link">&para;</a></h1>
+<p><strong>Spec:</strong> <code>docs/superpowers/specs/2026-09-06-unified-sahi-training-geometry-design.md</code>
+(§3.3 multi-scale for SAM3, §3.5 stamping, §4.2 R2/R3/R3b, §4.3 full frames)
+<strong>Status:</strong> pending implementation
+<strong>Base:</strong> local <code>main</code> @ <code>e29838cb</code>
+<strong>User direction (verbatim):</strong> <em>"the sahi training needs to become like the sahi training we
+do for yolo models — multi scale multi level (a variety of tile sizes including mixed full
+frames). It would increase the dataset size but it would make it more robust."</em></p>
+<blockquote>
+<p><strong>WARNING — stale spec text.</strong> The spec still carries pre-ruling bullets for <strong>D7-D11</strong>
+<em>below</em> their RESOLVED block. Those are SUPERSEDED. Nothing in this plan depends on them.
+Separately, spec §3.3 says full frames arrive via <code>plan_tiles(..., full_frame=True)</code>. That
+is <strong>inaccurate against the code</strong>: the YOLO builder emits full frames in a separate branch
+(<code>training/sliced_dataset.py:329-342</code>) and <code>SlicePlan.full_frame</code> is never set by it. Follow
+the code, not §3.3's sentence.</p>
+</blockquote>
+<h2 id="global-constraints">Global Constraints<a class="headerlink" href="#global-constraints" title="Permanent link">&para;</a></h2>
+<ul>
+<li>Work in a git worktree branched from local HEAD (<code>git worktree add .worktrees/&lt;n&gt; -b &lt;b&gt; HEAD</code>).
+  Never push. Commit as the configured git user, no <code>Co-Authored-By: Claude</code> trailer.</li>
+<li>Never <code>git stash</code> bare, never <code>git clean -fdx</code>, never <code>rm -rf</code>.</li>
+<li>Tests: <code>PYTHONPATH=&lt;worktree&gt;/src python -m pytest tests/test_sam3_*.py tests/test_slice*.py</code>.
+  The whole suite hangs on <code>main</code> (classkit modal) — batch per file.</li>
+<li>SAM3 training is <strong>CUDA-only</strong> and runs in a sidecar conda env; any task that needs a real
+  train step runs on <code>mehek</code> (<code>rutalab@mehek.taild08eb9.ts.net</code>, env <code>hydra-cuda</code> + the SAM3
+  sidecar env). Dataset-build tasks are testable on this box with no GPU.</li>
+<li><strong><code>tile_size_for_mode</code> semantics are frozen</strong> (<code>utils/slice_geometry.py:122-124</code>). This work
+  adds a loop <em>around</em> it; it must not touch the formula, its clamps, or its rounding (R1).</li>
+<li><strong>Default = today's behaviour.</strong> A one-element scale set must produce a <strong>byte-identical</strong>
+  dataset tree to the current builder. Multi-scale is opt-in for this change (D6/D17 stay
+  open, see Out of scope).</li>
+<li><strong>D16 must remain open.</strong> Three fractions are live in the tree — SAM3 training <code>0.055</code>
+  (<code>training/contracts.py:264</code>), YOLO training <code>0.10</code> (<code>detectkit/config/training.py:161</code>,
+  <code>training/sliced_dataset.py:109</code>), inference <code>0.15</code> (<code>core/inference/config.py:85</code>). This
+  plan ships a <em>configurable</em> scale set and <strong>must not</strong> change SAM3's default fraction or
+  bake a recommended set into code. The pre-registered 2x2 ablation decides that later.</li>
+</ul>
+<hr />
+<h2 id="current-state-mapped-2026-09-06-fileline-verified-against-e29838cb">Current state (mapped 2026-09-06, file:line verified against <code>e29838cb</code>)<a class="headerlink" href="#current-state-mapped-2026-09-06-fileline-verified-against-e29838cb" title="Permanent link">&para;</a></h2>
+<h3 id="yolo-multi-scale-as-it-actually-works">YOLO multi-scale, as it actually works<a class="headerlink" href="#yolo-multi-scale-as-it-actually-works" title="Permanent link">&para;</a></h3>
+<ul>
+<li>User-facing knob: <code>SliceTrainingConfig.target_size_fractions = (0.05, 0.10, 0.15, 0.20)</code>
+  (<code>detectkit/config/training.py:168</code>), validated to <code>(0, 1]</code> (<code>:243-246</code>). Legacy absolute
+  <code>target_sizes = (32, 64, 96, 128)</code> (<code>:170-172</code>) is demoted: <code>target_fractions()</code> (<code>:264-267</code>)
+  prefers the fractions and only falls back to <code>target_sizes / 640.0</code>; supplying <code>target_sizes</code>
+  without fractions explicitly blanks the fractions (<code>:220-222</code>). The GUI mirror is
+  <code>detectkit/gui/models.py:180,254</code> (same <code>/640.0</code> fallback at <code>:258-260</code>).</li>
+<li>Resolution to pixels: <code>target_sizes_for(imgsz)</code> = <code>fraction * imgsz</code> (<code>training.py:269-271</code>),
+  called once per role at <code>detectkit/jobs/training.py:220</code> with <code>request.imgsz_for(role)</code>.</li>
+<li>Tiling fan-out: <code>SliceBuildParams.target_sizes</code> (pixels, <code>training/sliced_dataset.py:115</code>)
+  → <code>_tile_sizes_for_params</code> (<code>:171-206</code>) converts each back with <code>frac = target / imgsz</code>
+  (<code>:185</code>) and calls <code>tile_size_for_mode(object_tile_fraction=frac)</code> (<code>:186-193</code>), deduping
+  sizes. The scalar <code>params.object_tile_fraction</code> is used <strong>only</strong> when the fan-out is empty
+  (<code>:198-206</code>).</li>
+<li>Dataset multiplication: the per-image loop tiles once per resolved size
+  (<code>:302-327</code>); tiles are named <code>{stem}_t{W}x{H}_{i:04d}</code> (<code>:318</code>) — a <strong>parsed interface</strong>,
+  not just provenance (below). Negative tiles are sampled at <code>negative_tile_fraction=0.15</code>
+  (<code>:114</code>, <code>:316-317</code>).</li>
+<li>Mixed full frames: a separate branch, one un-tiled copy per image named <code>{stem}_full</code>
+  (<code>:329-342</code>), gated on <code>full_frame_mix=True</code> (<code>:116</code>). It is <strong>not</strong> <code>SlicePlan.full_frame</code>.</li>
+<li>Scale balancing (shipped <code>306738ec</code>, hardened <code>4baab88c</code>):
+  <code>training/ultralytics_scale_balance.py</code> — <code>scale_group_for_path</code> (<code>:109-118</code>) parses
+  <code>_t{W}x{H}_</code> / <code>_full</code>; <code>scale_group_weights</code> (<code>:121-143</code>) inverse-frequency weights with
+  <code>full</code>/<code>other</code> pinned to 1.0; <code>ScaleGroupedBatchSampler</code> (<code>:146-192</code>) makes batches
+  scale-homogeneous. Installed from the manifest by
+  <code>install_sahi_scale_balance_and_grouped_sampling</code> (<code>:265</code>), which <strong>raises</strong>
+  <code>ScaleGroupedSamplingUnsupportedError</code> when <code>world_size &gt; 1</code> unless
+  <code>HYDRA_SAHI_DDP_ALLOW_UNGROUPED=1</code> (<code>:284-300</code>), and always writes a realised stamp
+  (<code>:302-325</code>, <code>REALISED_STAMP_FILENAME</code>), carried onto the published sidecar by
+  <code>training/service.py:~186-196</code> + <code>apply_realised_balance_stamp</code>.</li>
+<li>Manifest: <code>_slice_geometry_manifest</code> (<code>sliced_dataset.py:410-432</code>) stamps <code>target_sizes</code>
+  (pixels) + <code>imgsz</code> + <code>multiscale_loss_balance{enabled,power}</code>. It does <strong>not</strong> stamp
+  <code>target_size_fractions</code> (spec §3.5 amendment (a) — still unimplemented) and does not stamp
+  realised per-scale counts (§3.3 surviving requirement — still unimplemented).</li>
+</ul>
+<h3 id="sam3-tiling-as-it-works-today-exactly-one-scale">SAM3 tiling, as it works today — exactly ONE scale<a class="headerlink" href="#sam3-tiling-as-it-works-today-exactly-one-scale" title="Permanent link">&para;</a></h3>
+<ul>
+<li><code>Sam3LoraParams.object_tile_fraction = 0.055</code>, <code>geometry_mode="auto_object"</code>,
+  <code>tile_overlap=0.25</code>, <code>keep_empty_tiles=True</code> (<code>training/contracts.py:262-267</code>).</li>
+<li>One tile size for the whole build: <code>tile_size_for_mode(...)</code> called <strong>once</strong>, outside every
+  loop, at <code>training/sam3_lora/dataset_build.py:390-397</code>, with <code>imgsz=_SAM3_IMGSZ</code> (<code>:105</code>,
+  1008) which is inert because the <code>auto_object</code> branch fires whenever <code>reference_body_px &gt; 0</code>.</li>
+<li><code>reference_body_px</code> is the <strong>mean of the middle 1-2 per-frame medians</strong> (<code>:369-388</code>) — a
+  different estimator from YOLO's global median over all majors
+  (<code>sliced_dataset.py:344-348</code>); spec D1, out of scope here but must not be perturbed.</li>
+<li><code>_tile_frame</code> (<code>:247-285</code>) plans tiles for one <code>(tile_w, tile_h)</code> and clips polygons;
+  <code>retained_frac &lt; MIN_RETAINED_AREA_FRAC</code> downgrades an instance to <code>iscrowd</code>
+  (<code>:280-282</code>) rather than dropping it (YOLO drops below <code>min_area_ratio</code>).</li>
+<li><code>_build_split</code> (<code>:493-556</code>) writes <code>{stem}_tile{idx:03d}.jpg</code> — <strong>no scale token</strong> — plus
+  COCO <code>images</code>/<code>annotations</code> records keyed on integer image ids.</li>
+<li>No full-frame arm anywhere in the SAM3 builder.</li>
+<li>Manifest: <code>build_manifest.json</code> fields at <code>:608-628</code> — <code>tile_px: [w, h]</code>,
+  <code>reference_body_px</code>, <code>object_tile_fraction</code>, <code>tile_overlap</code>, <code>fragment_counts</code> per split.</li>
+<li>Every tile is stretched to <code>RES</code>x<code>RES</code> = 1008 with <strong>no aspect preservation</strong>
+  (<code>sam3_lora/datapoints.py:165-171</code>) — the R3b mechanism.</li>
+<li>Training loop: hand-rolled. <code>dataloader.build_descriptors</code> (<code>:166</code>) →
+  <code>shuffled_batches</code> / <code>collate_batches</code> (<code>:284-332</code>). <strong>No <code>torch.utils.data.DataLoader</code>, no
+  sampler object, no <code>DistributedSampler</code>.</strong> <code>train.py:395-411</code> pins exactly one CUDA device
+  by UUID and <em>logs</em> that a multi-GPU device string is narrowed to one. Epoch count is fixed
+  (<code>cli.py:944 for epoch in range(params.epochs)</code>), so steps/epoch ∝ dataset size
+  (<code>cli.py:910,940</code>).</li>
+</ul>
+<h3 id="where-a-scale-set-would-enter">Where a scale set would enter<a class="headerlink" href="#where-a-scale-set-would-enter" title="Permanent link">&para;</a></h3>
+<p>Exactly one place in the builder: <code>dataset_build.py:390-397</code> becomes a resolved <strong>list</strong> of
+<code>(w, h)</code>, and <code>_build_split</code>'s inner loop (<code>:527-534</code>) iterates scales × <code>_tile_frame</code>.
+Everything downstream (<code>tile_px</code>, publish, sidecar, drift guard) is scalar-shaped and is the
+real work — see Tasks 4-6.</p>
+<hr />
+<h2 id="the-denominator-the-crux-stated-once">THE DENOMINATOR — the crux, stated once<a class="headerlink" href="#the-denominator-the-crux-stated-once" title="Permanent link">&para;</a></h2>
+<p><code>object_tile_fraction</code> is relative to <strong>measured body size</strong> (<code>tile_px = ref_px / frac</code>,
+<code>slice_geometry.py:130-134</code>). <code>target_size_fraction</code> is relative to <strong>model input size</strong>
+(<code>target_px = frac * imgsz</code>, <code>training.py:269-271</code>).</p>
+<p>They are <strong>numerically the same number</strong> for a square tile that is resized to the model input:
+apparent = ref·imgsz/tile, so apparent/imgsz = ref/tile. The YOLO builder relies on precisely
+this identity — it divides the pixel target by <code>imgsz</code> and feeds the result straight in as
+<code>object_tile_fraction</code> (<code>sliced_dataset.py:185-190</code>). <strong>So porting a YOLO scale set to SAM3 is
+the identity map on fractions</strong>: <code>{0.05, 0.10, 0.15, 0.20}</code> means the same geometry on both
+sides. Do not "convert".</p>
+<p>What breaks if the two are conflated:</p>
+<ol>
+<li><strong>Absolute <code>target_sizes</code> are anchored to 640.</strong> <code>target_fractions()</code> divides by a literal
+   <code>640.0</code> (<code>training.py:267</code>, <code>gui/models.py:260</code>). SAM3's input is <strong>1008</strong>
+   (<code>dataset_build.py:105</code>, <code>datapoints.py</code> <code>RES</code>). Feeding SAM3 a legacy pixel list through
+   the YOLO fallback shifts every scale by 1008/640 = <strong>1.575x</strong> — the same class of silent
+   geometry drift as the 0.055 incident, and it would look like a plausible number in every
+   artifact. <strong>SAM3 must consume FRACTIONS only, never a pixel list, and must never divide by
+   an imgsz it did not itself use.</strong></li>
+<li><strong>The identity assumes resize-to-input.</strong> Edge tiles are not square (<code>plan_tiles</code> flushes
+   the last tile to the edge, <code>slice_geometry.py:41-45</code>, and the builder further clips to the
+   frame, <code>dataset_build.py:264-267</code>), and <code>datapoints.py:167-168</code> stretches anisotropically.
+   For those tiles the apparent size differs per axis and <code>object_tile_fraction</code> no longer
+   equals the realised <code>target_size_fraction</code>. This is R3b and it is why Task 7 counts them.</li>
+<li><strong>The two knobs are on different UI surfaces.</strong> SAM3's is a single spin box
+   (<code>gui/panels/sam3_training_panel.py:472-476,560,604</code>); the YOLO set lives in
+   <code>gui/panels/slice_settings_widget.py:526</code>, which already collapses the set to
+   <code>median(fractions)</code> for its own scalar (<code>:517</code>). A shared widget is <em>not</em> in scope; a
+   shared <em>vocabulary</em> is (Task 2).</li>
+</ol>
+<hr />
+<h2 id="task-1-freeze-the-before-gate-a-byte-identical-sam3-dataset-golden">Task 1 — Freeze the before-gate: a byte-identical SAM3 dataset golden<a class="headerlink" href="#task-1-freeze-the-before-gate-a-byte-identical-sam3-dataset-golden" title="Permanent link">&para;</a></h2>
+<p>Build a committed characterization golden for the <strong>current single-scale</strong> builder, before any
+production code changes.</p>
+<ul>
+<li>Deterministic tiny corpus (a handful of synthetic frames with polygon labels, generated from
+  a committed seed/script), built through <code>build_sam3_coco_dataset</code> at today's defaults.</li>
+<li>Golden = the tree hash of the output: sorted relative paths + SHA-256 of every tile image and
+  of <code>train/valid</code> COCO json (with <code>created_at</code> and absolute <code>source</code> normalised out) +
+  <code>build_manifest.json</code> minus the same volatile keys.</li>
+<li>Commit the golden under <code>tests/data/sam3_multiscale_golden/</code> with a short <code>ATTRIBUTION.md</code>
+  recording the commit it was produced at.</li>
+</ul>
+<p><strong>Verification:</strong> a new <code>tests/test_sam3_multiscale_gate.py::test_single_scale_golden</code> passes at
+this commit and is re-run unchanged after every later task. This is R1's own mitigation and it
+is what makes "multi-scale did X" a <strong>measured</strong> claim rather than an asserted one.</p>
+<p><strong>What silently goes wrong without it:</strong> a scale-set refactor that changes tile ordering,
+naming, or the dedup rule produces a <em>plausible</em> dataset that trains differently, and nothing
+in the tree would notice. The hash notices.</p>
+<h2 id="task-2-resolve_scales-in-the-shared-layer-pure-no-behaviour-change">Task 2 — <code>resolve_scales</code> in the shared layer (pure, no behaviour change)<a class="headerlink" href="#task-2-resolve_scales-in-the-shared-layer-pure-no-behaviour-change" title="Permanent link">&para;</a></h2>
+<p>Add to <code>utils/slice_geometry.py</code> (or a new Qt-free <code>utils/tiling_plan.py</code> beside it — pick one
+and state why in the PR; the module must import nothing from <code>training/</code> or <code>core/</code>):</p>
+<div class="language-text highlight"><pre><span></span><code><span id="__span-0-1"><a id="__codelineno-0-1" name="__codelineno-0-1" href="#__codelineno-0-1"></a>resolve_scales(*, geometry_mode, imgsz, reference_body_px, fractions, slice_width,
+</span><span id="__span-0-2"><a id="__codelineno-0-2" name="__codelineno-0-2" href="#__codelineno-0-2"></a>               slice_height) -&gt; list[tuple[int, int]]
+</span></code></pre></div>
+<p>carrying <code>_tile_sizes_for_params</code>'s exact semantics: clamp each fraction into <code>[0.01, 0.9]</code> via
+<code>tile_size_for_mode</code>, dedupe <strong>preserving first-seen order</strong>, and fall back to the single
+<code>geometry_mode</code> size when <code>fractions</code> is empty or <code>reference_body_px &lt;= 0</code>.</p>
+<p>Then make <code>training/sliced_dataset.py:_tile_sizes_for_params</code> a thin caller of it (converting
+its pixel <code>target_sizes</code> to fractions at the call site, as it already does at <code>:185</code>). <strong>Do not
+change the SAM3 builder in this task.</strong></p>
+<p><strong>Verification:</strong> existing <code>tests/test_sliced_dataset.py</code> + <code>tests/test_slice_geometry*.py</code> pass
+<strong>unmodified</strong>; a new property test asserts <code>resolve_scales</code> output equals the old
+<code>_tile_sizes_for_params</code> output over a grid of (fractions, ref_px, imgsz) including the
+degenerate cases (empty list, ref 0, duplicate fractions that collapse after rounding,
+fractions outside the clamp).</p>
+<p><strong>Silent failure it prevents:</strong> a second copy of the tile-size formula. The spec records five
+copies already; a sixth is how the two sides drift apart again.</p>
+<h2 id="task-3-sam3-builds-a-scale-set-behaviour-preserving-at-one-scale">Task 3 — SAM3 builds a scale SET (behaviour-preserving at one scale)<a class="headerlink" href="#task-3-sam3-builds-a-scale-set-behaviour-preserving-at-one-scale" title="Permanent link">&para;</a></h2>
+<p>In <code>training/contracts.py</code>, add to <code>Sam3LoraParams</code>:</p>
+<ul>
+<li><code>object_tile_fractions: tuple[float, ...] = ()</code> — <strong>empty means "use the scalar
+  <code>object_tile_fraction</code>"</strong>, so today's default is bit-for-bit unchanged (D6/D16 stay open).</li>
+<li><code>full_frame_mix: bool = False</code> — SAM3 has no full-frame arm today; default-off keeps that
+  true. (Spec §4.3 refuses to assert full frames help; the switch must be explicit and
+  recorded, never an unstated default.)</li>
+<li>Validation in <code>detectkit/config/training.py</code> beside the existing
+  <code>object_tile_fraction &lt;= 0.0</code> check (<code>:738</code>): every entry in <code>(0, 1]</code>, list length capped
+  (mirror <code>dataset_preparation_sidecar.py:146-151</code>'s <code>MAX_CLASSES</code> cap).</li>
+</ul>
+<p>In <code>dataset_build.py</code>: replace the single <code>tile_size_for_mode</code> call (<code>:390-397</code>) with
+<code>resolve_scales(...)</code>; loop <code>_tile_frame</code> over the resolved sizes inside <code>_build_split</code>
+(<code>:527-534</code>); emit the <strong>full-frame arm</strong> as its own pass when <code>full_frame_mix</code> (mirroring
+<code>sliced_dataset.py:329-342</code>, i.e. the whole image with frame-space polygons, not
+<code>plan_tiles(full_frame=True)</code>).</p>
+<p><strong>Fork on set-emptiness — this is mandatory, not stylistic.</strong> With <code>object_tile_fractions=()</code>
+the builder takes literally today's path: legacy <code>{stem}_tile{idx:03d}.jpg</code> names, no
+<code>scale_group</code> field, identical COCO records. Only when a set is supplied do tile names become
+<code>{stem}_t{W}x{H}_{idx:04d}.jpg</code> / <code>{stem}_full.jpg</code> (matching <code>sliced_dataset.py:318</code>) and does
+each COCO <code>images</code> record gain — per D19 — a <code>scale_group</code> and <code>tile_px: [w,h]</code> field, with the
+filename token demoted to a legacy fallback. Without the fork, Task 1's gate is unpassable: the
+name appears in the COCO <code>file_name</code> too, so a rename changes the tree hash twice over.</p>
+<p><strong>Verification:</strong>
+- Task 1's golden <strong>still passes byte-identically</strong> with <code>object_tile_fractions=()</code>. If it does
+  not, the loop changed something and the task is not done.
+- New test: a 2-fraction build produces tiles from both sizes, with per-scale tile counts equal
+  to <code>len(plan_tiles(...).tiles)</code> per scale, no stem collisions, and every COCO image record
+  carrying a <code>scale_group</code> that matches its filename token.
+- New test: duplicate fractions that resolve to the same tile size produce <strong>one</strong> copy of
+  those tiles (the dedup in Task 2), not two — a duplicated-supervision bug that no downstream
+  counter would ever reveal.
+- New test: an existing image-stem collision guard (<code>dataset_build.py:355-363</code>) still fires.</p>
+<h2 id="task-4-stamp-the-scale-set-not-a-collapsed-scalar-35">Task 4 — Stamp the SCALE SET, not a collapsed scalar (§3.5)<a class="headerlink" href="#task-4-stamp-the-scale-set-not-a-collapsed-scalar-35" title="Permanent link">&para;</a></h2>
+<p><strong>Producers of the collapsed value today:</strong>
+- <code>dataset_build.py:423,614,680</code> — <code>tile_px: [w, h]</code> in the log, the manifest, and the return.
+- <code>publish_worker.py:267-269</code> — sidecar <code>train_tile_px = build_manifest["tile_px"]</code>,
+  <code>object_tile_fraction = build_manifest["object_tile_fraction"]</code>. Note its <code>build_manifest</code>
+  arg is <strong>not</strong> a re-read of <code>build_manifest.json</code>: it is the parent's request payload
+  (<code>publish.py:407-412</code> → <code>publish_cli.py:55</code>), which <code>publish.py:374-401</code> has already
+  <strong>collapsed to a scalar</strong>. Verified on a real sidecar: <code>train_tile_px: 971</code> (scalar),
+  <code>object_tile_fraction: 0.1</code>. The comments at <code>geometry_drift.py:126-129</code> and
+  <code>dataset_build.py:446-447</code> claiming the sidecar carries a <code>[w,h]</code> pair are therefore
+  <strong>stale</strong>; fix them in this task.
+- <code>sliced_dataset.py:410-432</code> — the YOLO manifest (<code>target_sizes</code> + <code>imgsz</code>).</p>
+<p><strong>Consumers, and exactly what each expects:</strong>
+- <code>publish.py:374-400</code> — <strong>HARD RAISES</strong> on a <code>tile_px</code> that is not a number or a 2-element
+  numeric pair, and raises again if the pair is non-square. A list-of-sizes stamp makes
+  <strong>every SAM3 publish fail</strong>. This is the single hardest break and must be handled here.
+- <code>core/inference/geometry_drift.py:_as_geometry_value</code> (<code>:130-155</code>) — parses a scalar or a 1/2
+  element sequence; <strong>any longer sequence returns <code>None</code>, i.e. <code>NO_STAMPED</code></strong>. So a scale-set
+  stamp does not error, it <strong>silently disables the drift guard</strong> — the exact failure mode the
+  module was written to end. It handles <code>float | tuple[float,float]</code> element-wise; it <strong>cannot
+  carry a set</strong> without a new comparison rule.
+  Callers: <code>sliced_dataset.py:274-287</code>, <code>dataset_build.py:436-455</code>.
+- <code>core/inference/slice_meta.py:_training_values</code> (<code>:286-317</code>) — already multi-scale-aware for
+  YOLO: stamps the whole <code>target_sizes</code> list and derives the prefill as
+  <code>median(target_sizes)/imgsz</code>. This is the shape to reuse.
+- <code>direct_calibration_grid.py:67</code> — <code>base_fraction = training_geometry["object_tile_fraction"]
+  or 0.15</code>, then multiplicative <code>FRACTION_STEPS</code>. A collapsed median here is acceptable <strong>only
+  if it is named as a prefill</strong>.
+- GUI prefill: <code>semantic_escalation_dialog.py:635-643</code>, <code>trackerkit .../detection_panel.py:2876,2921</code>.</p>
+<p><strong>The change:</strong>
+1. Manifest gains <code>tile_px_set: [[w,h], ...]</code>, <code>object_tile_fractions: [...]</code>,
+   <code>full_frame_mix</code>, <code>scale_range_px: [min, max]</code>, and <strong>per-scale realised counts</strong>
+   (tiles, annotations, <code>downgraded_tiles</code>, <code>fragment_only_tiles</code>, non-square tiles — Task 7).
+   <code>tile_px</code> / <code>object_tile_fraction</code> are <strong>retained</strong> as the single-scale values when the set
+   has one entry, and for a multi-scale build are written as the <strong>median</strong>, under the new
+   explicit key <code>prefill_object_tile_fraction</code> / <code>prefill_tile_px</code> — the legacy scalar keys are
+   then <strong>omitted</strong>, not filled with the median.
+2. <strong>Items 1 and 2 must land in the SAME commit.</strong> Omitting the legacy scalar keys before the
+   publish guard understands the new ones leaves an intermediate state in which <strong>every</strong>
+   multi-scale publish raises.
+   <code>publish.py</code>'s guard is extended to accept the new keys and to raise a <em>specific</em> message
+   for a multi-scale artifact whose consumer surface has not been updated — never to silently
+   halve or median-collapse.
+3. <code>geometry_drift.py</code> gains an explicit set-valued comparison (<code>MISMATCH</code> when the sets
+   differ, <code>MATCH</code> when equal, and a distinct verdict for "stamped a set, serving a scalar
+   inside the set" — that is <em>not</em> a mismatch, and it is <em>not</em> a match either).
+4. <strong>Which sidecar surface carries it is D2 and is a USER DECISION.</strong> Either SAM3 artifacts
+   adopt the v2 <code>.slice_meta.json</code> surface, or <code>.sam3_meta.json</code> gains an embedded v2-shaped
+   <code>training_geometry</code> block. <strong>Do not pick one; implement behind whichever the user rules for,
+   and stop and ask if no ruling exists.</strong> Note the hazard either way: the SAM3 serving path
+   <strong>refuses to serve on a malformed sidecar</strong>, so a shape change without a back-compat reader
+   is a hard outage for already-published models, not a degradation.</p>
+<p><strong>Verification:</strong> a single-scale build's sidecar is <strong>unchanged</strong> (round-trip test against a
+committed real-sidecar fixture); a multi-scale build's sidecar carries the full set and
+<strong>no</strong> bare <code>object_tile_fraction</code>; <code>publish_sam3_model</code> succeeds for both; a drift-guard test
+asserts a set-vs-set match, a set-vs-different-set mismatch, and — the regression that matters
+— that a 4-element stamp <strong>never</strong> reads as <code>NO_STAMPED</code>.</p>
+<h2 id="task-5-scale-grouped-batching-for-sam3-or-an-explicit-refusal">Task 5 — Scale-grouped batching for SAM3, or an explicit refusal<a class="headerlink" href="#task-5-scale-grouped-batching-for-sam3-or-an-explicit-refusal" title="Permanent link">&para;</a></h2>
+<p>Promote the three framework-agnostic functions out of <code>ultralytics_scale_balance.py</code>
+(<code>scale_group_for_path</code>, <code>scale_group_weights</code>, <code>ScaleGroupedBatchSampler</code>) into the shared
+layer, leaving the Ultralytics installer as one adapter (spec §3.3's table). Then either:</p>
+<p>(a) add a small SAM3 adapter over <code>dataloader.collate_epoch_batches</code> (<code>dataloader.py:322-332</code>,
+which shuffles descriptor indices and flushes every <code>batch_size</code> <strong>queries</strong>, not tiles —
+<code>:297-320</code>) that groups by the COCO record's <code>scale_group</code>, <strong>preferred</strong>, because grouping then
+reads a field rather than parsing a filename; or
+(b) explicitly decline grouping for SAM3 in this change and record that decision in the
+manifest as <code>scale_grouped_batching: false</code>.</p>
+<p>Whichever ships, the run must write a <strong>realised</strong> stamp in the shape <code>4baab88c</code> established
+(<code>REALISED_STAMP_FILENAME</code>, requested-vs-applied blocks) so a grouped and an ungrouped SAM3 run
+are never confusable afterwards.</p>
+<p><strong>The DDP answer, so nobody ports the hazard by reflex:</strong> SAM3 training is <strong>single-process,
+single-GPU by construction</strong> — a grep for
+<code>DataLoader|DistributedSampler|torch.distributed|init_process_group|spawn|world_size|local_rank|DDP</code>
+across <code>training/sam3_lora/</code> returns <strong>zero matches</strong>; <code>train.py</code> launches exactly one sidecar
+child (probe <code>:303</code>, train <code>:968</code>) via <code>python -m ...sam3_lora.cli</code>, with no <code>torchrun</code> and no
+rank plumbing; and <code>train.py:402-411</code> pins one device by UUID and loudly narrows a multi-GPU
+device string. <code>install_sahi_scale_balance_and_grouped_sampling</code> has exactly one caller in the
+tree, <code>training/ultralytics_entrypoint.py:42-51</code>, and is <strong>not</strong> imported by any SAM3 module. So SAM3 <strong>does not
+inherit R7's DDP hazard today</strong>. It inherits the <em>rule</em>: if SAM3 ever grows multi-device
+training, an ungrouped fallback must raise, not warn. Encode that as an assertion now
+(a test that fails the moment <code>sam3_lora/</code> gains a distributed launch), not as a comment.</p>
+<p><strong>A SAM3-specific reason grouping matters more here than on the YOLO side:</strong> the SAM3 collator
+pads to the batch's max instance count, and marginal VRAM per item is superlinear
+(1.31 → 1.40 → 1.88 GiB). Coarse tiles hold many more instances than fine ones, so a
+scale-<em>heterogeneous</em> batch is padded to the coarse tile's instance count — multi-scale
+without grouping raises peak VRAM for reasons that have nothing to do with tile pixels.
+<strong>This is a hypothesis from the batch-scaling measurement, not a measurement of mixed batches;
+Task 8 measures it.</strong></p>
+<p><strong>Verification:</strong> grouping unit tests on synthetic path/record lists (including the R8 case —
+a stem that fails the regex must be <em>counted and warned</em>, never silently weighted 1.0);
+a test that the realised stamp is written on both arms.</p>
+<h2 id="task-6-autobatch-fingerprint-must-include-the-whole-scale-set">Task 6 — Autobatch fingerprint must include the whole scale set<a class="headerlink" href="#task-6-autobatch-fingerprint-must-include-the-whole-scale-set" title="Permanent link">&para;</a></h2>
+<p><code>sam3_workload_fingerprint</code> (<code>autobatch.py:428-512</code>) hashes <code>object_tile_fraction=</code> into the
+task payload (<code>:492</code>) but <strong>never the resolved tile pixels</strong> — <code>slice_width</code>/<code>slice_height</code> are
+hashed only in <code>geometry_mode == "custom"</code>, otherwise the literal <code>"mode_derived"</code> is used
+(<code>:483-489</code>). The only other scale-sensitive term is the density hash
+(<code>_dataset_density_hash</code>, <code>:377-397</code>: max/p95 instances per tile, negatives). With a scale set
+the key becomes <strong>wrong</strong>: a list f-string-interpolated at <code>:492</code> keys distinctly by accident of
+its <code>repr</code> (order-sensitive, type-unvalidated), and two builds with different sets but the same
+scalar collide — a stale VRAM probe reused across geometries. Given the measured history here — every
+short probe <em>under</em>-reported the full-run peak (7.72 → 12.99 GiB) and the flatness-then-jump
+shape defeats any early-stopping rule — a wrongly-reused probe is an OOM, not an inefficiency.</p>
+<p>Include the resolved <code>tile_px_set</code> (not the fractions — the tiles are what the GPU sees) and
+<code>full_frame_mix</code> in the fingerprint. Full frames are the largest images in the set and will
+dominate the peak; if the probe samples the dataset, it must sample the <strong>coarsest</strong> scale and
+the full-frame arm, not a uniform sample.</p>
+<p><strong>Verification:</strong> two specs differing only in <code>object_tile_fractions</code> produce different
+fingerprints; a spec with an unchanged single scale produces the <strong>same</strong> fingerprint as before
+this change (no gratuitous cache invalidation for existing runs).</p>
+<h2 id="task-7-per-scale-counters-including-the-non-square-count-r2-r3b">Task 7 — Per-scale counters, including the non-square count (R2 + R3b)<a class="headerlink" href="#task-7-per-scale-counters-including-the-non-square-count-r2-r3b" title="Permanent link">&para;</a></h2>
+<p><code>SplitCounts</code> (<code>dataset_build.py:~51-63</code>) becomes per-scale: for each scale, <code>tiles</code>,
+<code>annotations</code>, <code>fragment_annotations</code>, <code>downgraded_tiles</code>, <code>fragment_only_tiles</code>, <strong>and a new
+<code>non_square_tiles</code></strong> (tiles whose clipped crop is not <code>W == H</code>, i.e. those anisotropically
+stretched to 1008x1008 by <code>datapoints.py:167-168</code>). Aggregate totals are retained for
+back-compat. Log the table <strong>before</strong> any GPU time is spent, in the shape
+<code>log_effective_geometry</code> already uses (<code>dataset_build.py:415-434</code>).</p>
+<p>Why this is not optional: <code>retained_frac</code> is measured against the instance's <strong>full frame-space
+area</strong> (<code>:277-280</code>), so the <em>test</em> composes across scales — but the <em>rate</em> does not. Fine tiles
+cross far more seams, so a multi-scale build downgrades a much larger share of instances at the
+fine end, removing precision pressure exactly where the eval spec decides extras/frame. Adding
+scales likewise multiplies the edge-tile population, so a 4-scale dataset carries
+proportionally more distorted supervision than a 1-scale one — <strong>with no counter reporting it
+today</strong>. Neither effect appears in the loss.</p>
+<p><strong>Verification:</strong> a synthetic frame whose dimensions are not a multiple of the tile step
+produces a known, asserted <code>non_square_tiles</code> count per scale; a frame with an instance
+straddling a seam produces the expected <code>downgraded_tiles</code> at the fine scale and zero at the
+coarse one.</p>
+<h2 id="task-8-the-measured-after-gate-mehek-cuda">Task 8 — The measured after-gate (mehek, CUDA)<a class="headerlink" href="#task-8-the-measured-after-gate-mehek-cuda" title="Permanent link">&para;</a></h2>
+<p>Only after Tasks 1-7. On <code>mehek</code>, with the SAM3 sidecar env:</p>
+<ol>
+<li><strong>Dataset arm (no GPU needed, run anywhere):</strong> build the same real corpus at (i) today's
+   single scale, (ii) a 2-scale set, (iii) a 4-scale set. Record actual tile counts, per-scale
+   fragment/non-square counts, and on-disk size. This is the <em>measured</em> dataset multiplier —
+   the estimate below is arithmetic and must not be reported as a result.</li>
+<li><strong>VRAM arm:</strong> run the autobatch probe on each, with <code>expandable_segments</code> on, recording
+   <strong>reserved and allocated</strong> (a default-allocator probe gets the <em>curvature</em> wrong, not just
+   the level). Compare grouped vs ungrouped batches at the same batch size to test Task 5's
+   padding hypothesis.</li>
+<li><strong>Wall-clock arm:</strong> one short run (fixed small epoch count) per arm to get s/step and
+   confirm steps/epoch scales as <code>tiles / batch</code> (<code>cli.py:910,940</code>).</li>
+</ol>
+<p>Commit the numbers as <code>docs/superpowers/specs/</code>-side evidence with the arms, seeds, and the
+commit sha. <strong>Attribution must be measured, not asserted:</strong> report the dataset multiplier, the
+VRAM delta, and the wall-clock delta as three separate numbers, because they do not move
+together.</p>
+<h3 id="cost-estimate-arithmetic-to-be-replaced-by-task-8s-measurement">Cost estimate — arithmetic, to be replaced by Task 8's measurement<a class="headerlink" href="#cost-estimate-arithmetic-to-be-replaced-by-task-8s-measurement" title="Permanent link">&para;</a></h3>
+<p>Tiles/frame ∝ (frame/tile)² and tile = ref/frac, so tiles ∝ frac² asymptotically; edge-flushing
+(<code>slice_geometry.py:41-45</code>) inflates that at coarse scales. Computed with the repo's own
+planner for the measured run's geometry (4512x4512 frame, ref 97 px, overlap 0.25):</p>
+<table>
+<thead>
+<tr>
+<th>scale set</th>
+<th>tile px</th>
+<th>tiles/frame</th>
+<th>vs today</th>
+</tr>
+</thead>
+<tbody>
+<tr>
+<td><code>{0.055}</code> (today)</td>
+<td>1764</td>
+<td>16</td>
+<td>1.0x</td>
+</tr>
+<tr>
+<td><code>{0.055, 0.11}</code></td>
+<td>1764, 882</td>
+<td>65</td>
+<td><strong>4.1x</strong></td>
+</tr>
+<tr>
+<td><code>{0.05,0.10,0.15,0.20}</code> (the YOLO set)</td>
+<td>1940, 970, 647, 485</td>
+<td>295</td>
+<td><strong>18.4x</strong></td>
+</tr>
+</tbody>
+</table>
+<p>Two amplifiers: SAM3 keeps <strong>every</strong> empty tile (<code>keep_empty_tiles=True</code>,
+<code>contracts.py:266</code>) where YOLO samples negatives at 0.15, so SAM3's multiplier is the raw tile
+multiplier; and <code>MAX_TILES_PER_FRAME = 4096</code> (<code>slice_geometry.py:20</code>) is checked <strong>per scale</strong> —
+<code>plan_tiles</code> raises, and the YOLO builder swallows that with <code>except ValueError: continue</code>
+(<code>sliced_dataset.py:307-308</code>), which for SAM3 would silently drop an entire scale. <strong>Make SAM3
+refuse loudly instead.</strong></p>
+<p>Consequences, against the measured single-scale baseline (auto-batch 8, 18.9 of 47.1 GiB,
+~10 epochs):
+- <strong>VRAM: roughly flat.</strong> Every tile is stretched to 1008x1008 regardless of source tile size,
+  so per-item cost does not depend on the scale. The two things that <em>can</em> move it are the
+  full-frame arm (also 1008 after stretch — so also flat) and batch instance-count padding
+  (Task 5's hypothesis). Expect batch 8 to still fit; <strong>verify, do not assume</strong>.
+- <strong>Wall-clock: linear in tiles.</strong> <code>query_count = tiles x (1 + num_negatives)</code>
+  (<code>dataloader.py:293-295</code>) → <code>n_batches</code> (<code>cli.py:908</code>) → <code>steps_per_epoch</code> (<code>:909</code>) →
+  <code>total_steps</code> (<code>:910</code>), with <code>params.epochs</code> a fixed hyperparameter (<code>:944</code>). So an 18.4x
+  dataset is an ~18.4x longer run at the same epoch count — days, not hours. Two riders:
+  <code>warmup_steps = min(50, total_steps // 4)</code> (<code>:911</code>) pins at 50, so the warmup <em>fraction</em>
+  shrinks by the same factor and the LR schedule is not the same schedule; and per-epoch
+  validation + checkpoint writes (<code>:1022-1024</code>, <code>:1112-1113</code>) scale too. <strong>This is the single biggest practical finding in this plan.</strong>
+  Mitigations to choose between explicitly (not silently): a smaller/coarser scale set
+  (<code>{0.055, 0.11}</code> at 4.1x is the pragmatic first port), a reduced epoch count at fixed
+  <em>step</em> budget, or per-scale negative-tile sampling ported from YOLO's
+  <code>negative_tile_fraction</code>. Do not pick one without measuring.</p>
+<h2 id="out-of-scope-named-so-no-implementer-wanders-in">Out of scope — named so no implementer wanders in<a class="headerlink" href="#out-of-scope-named-so-no-implementer-wanders-in" title="Permanent link">&para;</a></h2>
+<ul>
+<li><strong>D16</strong> (should SAM3 adopt 0.10?). This plan ships a configurable set and changes <strong>no</strong>
+  default fraction. The 2x2 ablation decides it later.</li>
+<li><strong>D6 / D17</strong> (multi-scale default-ON for SAM3). Ships opt-in; the YOLO precedent for
+  default-on is noted, not followed.</li>
+<li><strong>D1</strong> (reference-body estimator: SAM3's mean-of-middle-medians vs YOLO's global median).
+  Do not touch <code>dataset_build.py:369-388</code> — it changes the tile size of every existing build.</li>
+<li><strong>D3/D4/D5</strong> (seam-fragment policy, empty-tile policy, overlap defaults), the corpus-derived
+  scale-set <em>resolver</em> of §3.6 (this plan takes a user-supplied set), the unified
+  <code>TilingContract</code>, the calibration harnesses, and the full-frame <em>efficacy</em> question (§4.3).</li>
+<li>Any change to <code>tile_size_for_mode</code>, and any GUI redesign beyond the minimum needed to enter a
+  scale set in <code>sam3_training_panel.py</code>.</li>
+</ul>
+<h2 id="what-could-not-be-determined-from-the-code-and-must-be-measured-or-decided">What could NOT be determined from the code, and must be measured or decided<a class="headerlink" href="#what-could-not-be-determined-from-the-code-and-must-be-measured-or-decided" title="Permanent link">&para;</a></h2>
+<ul>
+<li><strong>Whether multi-scale actually improves SAM3.</strong> No evidence in the tree either way. The user's
+  "more robust" is the hypothesis this plan makes testable; it is not established.</li>
+<li><strong>Whether full frames help SAM3.</strong> Spec §4.3 refuses to assert it: at 1008 input, a 97-px
+  animal in a 4512-px frame is ~21 px. Ships off by default, per-project switch.</li>
+<li><strong>Whether the collator's padding actually rises for scale-heterogeneous batches.</strong> Inferred
+  from the batch-scaling measurement, not measured on mixed batches. Task 8 arm 2.</li>
+<li><strong>D2 — which sidecar surface carries the scale set.</strong> A user decision; the plan is written to
+  accept either.</li>
+<li><strong>The right scale set for this corpus.</strong> Deliberately not proposed. Three fractions exist in
+  the tree for three different reasons and none of them was calibrated for SAM3 training.</li>
+</ul>
+
+
+
+
+
+
+
+
+
+
+
+
+                
+              </article>
+            </div>
+          
+          
+<script>var target=document.getElementById(location.hash.slice(1));target&&target.name&&(target.checked=target.name.startsWith("__tabbed_"))</script>
+        </div>
+        
+          <button type="button" class="md-top md-icon" data-md-component="top" hidden>
+  
+  <svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 24 24"><path d="M13 20h-2V8l-5.5 5.5-1.42-1.42L12 4.16l7.92 7.92-1.42 1.42L13 8z"/></svg>
+  Back to top
+</button>
+        
+      </main>
+      
+        <footer class="md-footer">
+  
+  <div class="md-footer-meta md-typeset">
+    <div class="md-footer-meta__inner md-grid">
+      <div class="md-copyright">
+  
+  
+    Made with
+    <a href="https://squidfunk.github.io/mkdocs-material/" target="_blank" rel="noopener">
+      Material for MkDocs
+    </a>
+  
+</div>
+      
+    </div>
+  </div>
+</footer>
+      
+    </div>
+    <div class="md-dialog" data-md-component="dialog">
+      <div class="md-dialog__inner md-typeset"></div>
+    </div>
+    
+    
+    <script id="__config" type="application/json">{"base": "../../..", "features": ["navigation.tabs", "navigation.sections", "navigation.expand", "navigation.top", "content.code.copy", "content.action.edit", "search.suggest", "search.highlight"], "search": "../../../assets/javascripts/workers/search.6ce7567c.min.js", "translations": {"clipboard.copied": "Copied to clipboard", "clipboard.copy": "Copy to clipboard", "search.result.more.one": "1 more on this page", "search.result.more.other": "# more on this page", "search.result.none": "No matching documents", "search.result.one": "1 matching document", "search.result.other": "# matching documents", "search.result.placeholder": "Type to start searching", "search.result.term.missing": "Missing", "select.version": "Select version"}, "version": {"default": "latest", "provider": "mike"}}</script>
+    
+    
+      <script src="../../../assets/javascripts/bundle.83f73b43.min.js"></script>
+      
+    
+  </body>
+</html>

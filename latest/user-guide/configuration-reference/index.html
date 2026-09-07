@@ -778,6 +778,21 @@
     </span>
   </a>
   
+    <nav class="md-nav" aria-label="Detection">
+      <ul class="md-nav__list">
+        
+          <li class="md-nav__item">
+  <a href="#reference_body_size-is-detector-dependent" class="md-nav__link">
+    <span class="md-ellipsis">
+      reference_body_size is detector-dependent
+    </span>
+  </a>
+  
+</li>
+        
+      </ul>
+    </nav>
+  
 </li>
       
         <li class="md-nav__item">
@@ -1926,6 +1941,21 @@
     </span>
   </a>
   
+    <nav class="md-nav" aria-label="Detection">
+      <ul class="md-nav__list">
+        
+          <li class="md-nav__item">
+  <a href="#reference_body_size-is-detector-dependent" class="md-nav__link">
+    <span class="md-ellipsis">
+      reference_body_size is detector-dependent
+    </span>
+  </a>
+  
+</li>
+        
+      </ul>
+    </nav>
+  
 </li>
       
         <li class="md-nav__item">
@@ -2053,7 +2083,7 @@
 </tr>
 <tr>
 <td><code>reference_body_size</code></td>
-<td>Body-size anchor (pixels @ resize=1)</td>
+<td>Body-size anchor (pixels @ resize=1) — see the caveat below</td>
 <td>experiment-specific</td>
 </tr>
 <tr>
@@ -2103,6 +2133,50 @@
 </tr>
 </tbody>
 </table>
+<h3 id="reference_body_size-is-detector-dependent"><code>reference_body_size</code> is detector-dependent<a class="headerlink" href="#reference_body_size-is-detector-dependent" title="Permanent link">&para;</a></h3>
+<p>It is not a property of your animal. It is the <strong>geometric mean</strong> of the
+detection box axes, <code>sqrt(major x minor)</code>, measured from <em>whichever detector
+produced the boxes</em>. Two models on the same footage can disagree sharply:</p>
+<table>
+<thead>
+<tr>
+<th>Detector</th>
+<th>major</th>
+<th>minor</th>
+<th>aspect</th>
+<th><code>reference_body_size</code></th>
+</tr>
+</thead>
+<tbody>
+<tr>
+<td>YOLO-OBB detect</td>
+<td>115.4</td>
+<td>51.0</td>
+<td>2.30</td>
+<td><strong>76.5</strong></td>
+</tr>
+<tr>
+<td>Segmentation</td>
+<td>91.0</td>
+<td>25.7</td>
+<td>3.46</td>
+<td><strong>47.9</strong></td>
+</tr>
+</tbody>
+</table>
+<p>Those are real measurements from the same 489 frames. The box <em>lengths</em>
+differ by only 21% — which is all you see when you eyeball an overlay — but
+the <em>widths</em> differ 2x, and a geometric mean weights width exactly as much as
+length. A segmentation model traces the silhouette; a detection model's box
+swallows legs and antennae.</p>
+<p><strong>Never carry the value across a model change.</strong> Every body-scaled gate moves
+with it, and the object-size window moves as the <em>square</em>. Carrying 49.83
+onto the OBB model above turns the window into 390–3900 px² while that
+model's median detection is 5852 px² — <strong>1.8% of real detections survive</strong>,
+versus 93.5% at the correct 76.81. Tracking still runs, and the equivalence
+gate still reports EQUIVALENT, because nothing checks that the fixture is
+detecting anything. Re-run Auto-Set after any detector change and re-check
+the body-scaled parameters.</p>
 <h2 id="tracking">Tracking<a class="headerlink" href="#tracking" title="Permanent link">&para;</a></h2>
 <table>
 <thead>

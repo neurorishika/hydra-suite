@@ -1333,6 +1333,75 @@
   
 </li>
       
+        <li class="md-nav__item">
+  <a href="#batching-what-has-actually-been-measured" class="md-nav__link">
+    <span class="md-ellipsis">
+      Batching: what has actually been measured
+    </span>
+  </a>
+  
+    <nav class="md-nav" aria-label="Batching: what has actually been measured">
+      <ul class="md-nav__list">
+        
+          <li class="md-nav__item">
+  <a href="#downstream-stages-are-the-critical-path-not-detection" class="md-nav__link">
+    <span class="md-ellipsis">
+      Downstream stages are the critical path, not detection
+    </span>
+  </a>
+  
+</li>
+        
+          <li class="md-nav__item">
+  <a href="#cross-frame-crop-batching-does-not-help" class="md-nav__link">
+    <span class="md-ellipsis">
+      Cross-frame crop batching does not help
+    </span>
+  </a>
+  
+</li>
+        
+          <li class="md-nav__item">
+  <a href="#the-per-stage-batch_size-knobs-are-mostly-inert" class="md-nav__link">
+    <span class="md-ellipsis">
+      The per-stage batch_size knobs are mostly inert
+    </span>
+  </a>
+  
+</li>
+        
+          <li class="md-nav__item">
+  <a href="#pipeline_depth-is-already-correct" class="md-nav__link">
+    <span class="md-ellipsis">
+      pipeline_depth is already correct
+    </span>
+  </a>
+  
+</li>
+        
+          <li class="md-nav__item">
+  <a href="#detection_batch_size-has-a-hard-resolution-dependent-ceiling" class="md-nav__link">
+    <span class="md-ellipsis">
+      detection_batch_size has a hard, resolution-dependent ceiling
+    </span>
+  </a>
+  
+</li>
+        
+      </ul>
+    </nav>
+  
+</li>
+      
+        <li class="md-nav__item">
+  <a href="#measuring-performance-changes" class="md-nav__link">
+    <span class="md-ellipsis">
+      Measuring performance changes
+    </span>
+  </a>
+  
+</li>
+      
     </ul>
   
 </nav>
@@ -1892,6 +1961,75 @@
   
 </li>
       
+        <li class="md-nav__item">
+  <a href="#batching-what-has-actually-been-measured" class="md-nav__link">
+    <span class="md-ellipsis">
+      Batching: what has actually been measured
+    </span>
+  </a>
+  
+    <nav class="md-nav" aria-label="Batching: what has actually been measured">
+      <ul class="md-nav__list">
+        
+          <li class="md-nav__item">
+  <a href="#downstream-stages-are-the-critical-path-not-detection" class="md-nav__link">
+    <span class="md-ellipsis">
+      Downstream stages are the critical path, not detection
+    </span>
+  </a>
+  
+</li>
+        
+          <li class="md-nav__item">
+  <a href="#cross-frame-crop-batching-does-not-help" class="md-nav__link">
+    <span class="md-ellipsis">
+      Cross-frame crop batching does not help
+    </span>
+  </a>
+  
+</li>
+        
+          <li class="md-nav__item">
+  <a href="#the-per-stage-batch_size-knobs-are-mostly-inert" class="md-nav__link">
+    <span class="md-ellipsis">
+      The per-stage batch_size knobs are mostly inert
+    </span>
+  </a>
+  
+</li>
+        
+          <li class="md-nav__item">
+  <a href="#pipeline_depth-is-already-correct" class="md-nav__link">
+    <span class="md-ellipsis">
+      pipeline_depth is already correct
+    </span>
+  </a>
+  
+</li>
+        
+          <li class="md-nav__item">
+  <a href="#detection_batch_size-has-a-hard-resolution-dependent-ceiling" class="md-nav__link">
+    <span class="md-ellipsis">
+      detection_batch_size has a hard, resolution-dependent ceiling
+    </span>
+  </a>
+  
+</li>
+        
+      </ul>
+    </nav>
+  
+</li>
+      
+        <li class="md-nav__item">
+  <a href="#measuring-performance-changes" class="md-nav__link">
+    <span class="md-ellipsis">
+      Measuring performance changes
+    </span>
+  </a>
+  
+</li>
+      
     </ul>
   
 </nav>
@@ -1918,10 +2056,13 @@
 <h1 id="performance-tuning">Performance Tuning<a class="headerlink" href="#performance-tuning" title="Permanent link">&para;</a></h1>
 <h2 id="highest-impact-controls">Highest-Impact Controls<a class="headerlink" href="#highest-impact-controls" title="Permanent link">&para;</a></h2>
 <ul>
-<li><code>resize_factor</code>: dominant speed/accuracy tradeoff.</li>
+<li><code>resize_factor</code>: dominant speed/accuracy tradeoff (bg-sub only; see
+  <code>Scale is a bgsub-only knob</code> in the tracking docs).</li>
 <li>Visualization/overlay toggles: large runtime impact in GUI mode.</li>
 <li>Detection mode and model size: major compute driver.</li>
-<li>Batch sizing/device selection: critical for YOLO throughput.</li>
+<li>Device selection (<code>runtime_tier</code>): critical for throughput.</li>
+<li>Batch sizing: far less impactful than it looks — see
+  <a href="#batching-what-has-actually-been-measured">Batching: what has actually been measured</a>.</li>
 </ul>
 <h2 id="throughput-strategies">Throughput Strategies<a class="headerlink" href="#throughput-strategies" title="Permanent link">&para;</a></h2>
 <ul>
@@ -1935,6 +2076,74 @@
 <li>Validate on representative frames before full-scale runs.</li>
 <li>Keep session logs and config snapshots for regression comparisons.</li>
 </ul>
+<h2 id="batching-what-has-actually-been-measured">Batching: what has actually been measured<a class="headerlink" href="#batching-what-has-actually-been-measured" title="Permanent link">&para;</a></h2>
+<p>A 2026-09-06 measurement programme (harness and raw data in
+<code>tools/spikes/crossframe_batching/</code>, full write-up in
+<code>docs/superpowers/specs/notes/2026-09-06-crossframe-batching-spike.md</code>)
+tested the batching knobs end to end on CUDA (RTX 4090) and Apple Silicon.
+The results are mostly negative, and the negatives are worth knowing before
+anyone spends time here again.</p>
+<h3 id="downstream-stages-are-the-critical-path-not-detection">Downstream stages are the critical path, not detection<a class="headerlink" href="#downstream-stages-are-the-critical-path-not-detection" title="Permanent link">&para;</a></h3>
+<p>On a clip with head-tail + identity CNN + pose enabled, the downstream crop
+consumers are <strong>~95% of the critical path</strong>. Detection runs on the pipeline's
+producer thread and is almost entirely overlapped. Tuning the detector for
+throughput on such a clip buys little; the classifier and pose stages are
+where the time goes.</p>
+<h3 id="cross-frame-crop-batching-does-not-help">Cross-frame crop batching does not help<a class="headerlink" href="#cross-frame-crop-batching-does-not-help" title="Permanent link">&para;</a></h3>
+<p><code>Pipeline</code> hands the batch stage functions one frame at a time. Grouping a
+whole window into a single downstream call was measured with an in-pipeline
+A/B (same binary, one env flag):</p>
+<ul>
+<li><strong>CUDA: no effect at all</strong> — every stage within +/-0.5%.</li>
+<li><strong>Apple Silicon: neutral to worse</strong> — up to 1.58x slower on head-tail.</li>
+</ul>
+<p>An isolated microbenchmark of the same stage functions on an idle GPU
+predicted a 1.2-1.35x win. It did not survive contact with the pipeline. Do
+not reintroduce cross-frame accumulation on the strength of a stage
+microbenchmark.</p>
+<h3 id="the-per-stage-batch_size-knobs-are-mostly-inert">The per-stage <code>batch_size</code> knobs are mostly inert<a class="headerlink" href="#the-per-stage-batch_size-knobs-are-mostly-inert" title="Permanent link">&para;</a></h3>
+<p><code>HeadTailConfig.batch_size</code>, <code>CNNConfig.batch_size</code> and <code>PoseYOLOConfig.batch_size</code>
+default to 64, which already exceeds the per-frame detection count in typical
+recordings. They chunk a single frame's detections, so on a frame with fewer
+detections than the knob they do nothing. Raising them is not a tuning lever.</p>
+<h3 id="pipeline_depth-is-already-correct"><code>pipeline_depth</code> is already correct<a class="headerlink" href="#pipeline_depth-is-already-correct" title="Permanent link">&para;</a></h3>
+<p>Measured at constant <code>detection_batch_size</code>, with repeats:</p>
+<ul>
+<li><strong>CUDA: depth 2 is a real ~12% win</strong> over depth 1.</li>
+<li><strong>Apple Silicon: no significant difference.</strong></li>
+</ul>
+<p>Output is byte-identical across depths on both platforms. The default of 2 is
+right; no per-platform override is needed.</p>
+<h3 id="detection_batch_size-has-a-hard-resolution-dependent-ceiling"><code>detection_batch_size</code> has a hard, resolution-dependent ceiling<a class="headerlink" href="#detection_batch_size-has-a-hard-resolution-dependent-ceiling" title="Permanent link">&para;</a></h3>
+<p>The GUI exposes 1-64, but the pipeline's frame-buffer admission check rejects
+large windows on high-resolution video <strong>at run time</strong>, aborting the run:</p>
+<div class="language-text highlight"><pre><span></span><code><span id="__span-0-1"><a id="__codelineno-0-1" name="__codelineno-0-1" href="#__codelineno-0-1"></a>Inference pipeline frame buffer is not resource-admissible:
+</span><span id="__span-0-2"><a id="__codelineno-0-2" name="__codelineno-0-2" href="#__codelineno-0-2"></a>one frame=61074432 bytes, batch=8, live_windows=4,
+</span><span id="__span-0-3"><a id="__codelineno-0-3" name="__codelineno-0-3" href="#__codelineno-0-3"></a>estimated=1954381824 bytes exceeds the 536870912-byte pipeline budget
+</span></code></pre></div>
+<p>At <code>pipeline_depth=2</code> the pipeline retains <code>queue_bound + 3</code> windows, so on a
+4K clip (about 61 MB per decoded frame) anything above batch 2 is
+inadmissible. At <code>pipeline_depth=1</code> only one window is retained, so batch 8
+fits. <strong>The control's range is not the admissible range</strong> — pick the batch
+with the frame size and depth in mind, or expect a run-time abort. See
+<a href="../resource-containment/">Resource admission</a>.</p>
+<h2 id="measuring-performance-changes">Measuring performance changes<a class="headerlink" href="#measuring-performance-changes" title="Permanent link">&para;</a></h2>
+<p>Two rules, both learned the hard way in the programme above:</p>
+<ul>
+<li><strong>Benchmark in the pipeline, not in isolation.</strong> A stage measured on an idle
+  device can be off by 7x from its in-pipeline cost, because the pipeline runs
+  the producer thread, the consumer thread and any service process on the same
+  device. Use an env-gated flag so one binary serves both arms.</li>
+<li><strong>For a concurrent pipeline, wall clock is the only honest metric.</strong>
+  Per-stage span totals are not additive across threads: at <code>pipeline_depth=2</code>
+  a stage's span inflates while it waits on the shared device, which looks
+  like a regression but is just overlap. Compare <code>wall_clock_s</code>, and always
+  include an A-vs-A repeat to establish the noise floor before believing any
+  A-vs-B difference.</li>
+</ul>
+<p><code>HYDRA_PROFILE=1</code> writes a span tree next to the video
+(<code>&lt;stem&gt;_logs/tracking_profile_forward.json</code>). See
+<a href="../profiling/">Profiling</a>.</p>
 
 
 
