@@ -1315,27 +1315,64 @@ class TrackingEngineCore:
             if not self.backward_mode and not self.cache_read_only_replay:
                 if _inference_cfg.inference_autotune.mode != "off":
                     self._emit_progress(0, "Optimizing inference (bounded calibration)")
-                (
-                    _inference_cfg,
-                    self.inference_autotune_overlay,
-                    self.inference_autotune_result,
-                ) = _resolve_inference_autotune_before_load(
-                    _inference_cfg,
-                    p,
-                    video_path=str(self.video_path),
-                    frame_width=int(cap.get(cv2.CAP_PROP_FRAME_WIDTH) or 1),
-                    frame_height=int(cap.get(cv2.CAP_PROP_FRAME_HEIGHT) or 1),
-                    start_frame=int(start_frame),
-                    end_frame=int(end_frame),
-                    realtime=effective_realtime_tracking_mode,
-                    should_cancel=lambda: (
-                        self._stop_requested
-                        or self._inference_autotune_cancel_requested
-                    ),
-                    status_callback=lambda message: self._emit_progress(0, message),
-                    cache_dir=self._resolve_cache_dir(),
-                    use_cached_detections=self.use_cached_detections,
-                )
+                # S1: the preflight below builds a request (AutotuneRequest.
+                # __post_init__ raises for a manual field the project lacks)
+                # and probes live device state (probe_runtime_resources can
+                # raise FileNotFoundError/ValueError for a missing/malformed
+                # nvidia-smi) BEFORE resolve_tracking_inference_config's own
+                # internal envelope is ever reached. Without this try/except,
+                # either failure kills the whole tracking run. Mirror the
+                # same fallback envelope integration.py already has around
+                # resolve_tracking_inference_config: leave _inference_cfg
+                # untouched and degrade to a "fallback" overlay.
+                try:
+                    (
+                        _inference_cfg,
+                        self.inference_autotune_overlay,
+                        self.inference_autotune_result,
+                    ) = _resolve_inference_autotune_before_load(
+                        _inference_cfg,
+                        p,
+                        video_path=str(self.video_path),
+                        frame_width=int(cap.get(cv2.CAP_PROP_FRAME_WIDTH) or 1),
+                        frame_height=int(cap.get(cv2.CAP_PROP_FRAME_HEIGHT) or 1),
+                        start_frame=int(start_frame),
+                        end_frame=int(end_frame),
+                        realtime=effective_realtime_tracking_mode,
+                        should_cancel=lambda: (
+                            self._stop_requested
+                            or self._inference_autotune_cancel_requested
+                        ),
+                        status_callback=lambda message: self._emit_progress(0, message),
+                        cache_dir=self._resolve_cache_dir(),
+                        use_cached_detections=self.use_cached_detections,
+                    )
+                except Exception as _autotune_preflight_err:
+                    logger.exception(
+                        "Inference throughput autotuner preflight failed safely"
+                    )
+                    from hydra_suite.core.inference.autotune.coordinator import (
+                        ResolveResult,
+                    )
+                    from hydra_suite.core.inference.autotune.models import (
+                        InferenceRuntimeOverlay,
+                        InferenceTuningSettings,
+                    )
+
+                    _baseline_settings = InferenceTuningSettings.from_config(
+                        _inference_cfg
+                    )
+                    self.inference_autotune_overlay = InferenceRuntimeOverlay.baseline(
+                        _baseline_settings,
+                        status="fallback",
+                        reason=(
+                            "pre-load resolution failed: "
+                            f"{type(_autotune_preflight_err).__name__}"
+                        ),
+                    )
+                    self.inference_autotune_result = ResolveResult(
+                        self.inference_autotune_overlay
+                    )
                 if self.inference_autotune_overlay is not None:
                     logger.info(
                         "Inference throughput autotuner: status=%s profile=%s "

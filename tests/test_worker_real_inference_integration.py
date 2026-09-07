@@ -504,6 +504,68 @@ def test_autotune_overlay_resolves_before_runner_loads_models(monkeypatch, tmp_p
     assert calls == ["resolve", ("runner", 4)]
 
 
+def test_preflight_probe_failure_does_not_kill_the_run(monkeypatch, tmp_path):
+    """S1: an unguarded preflight (probe/request construction) must not raise
+    all the way out of run_tracking() -- it must degrade to a fallback overlay
+    and let the run proceed with the originally-built config untouched, the
+    same envelope ``resolve_tracking_inference_config`` already has inside
+    ``integration.py``.
+    """
+    import hydra_suite.core.tracking.worker as worker_mod
+
+    calls = []
+
+    def resolve(_config, _params, **_kwargs):
+        calls.append("resolve")
+        # Mirrors a missing nvidia-smi (device.py FileNotFoundError) or an
+        # AutotuneRequest.__post_init__ ValueError for a manual field the
+        # project lacks -- both currently unguarded at this call site.
+        raise FileNotFoundError("nvidia-smi")
+
+    class _ProbeRunner:
+        def __init__(self, config, *_args, **_kwargs):
+            calls.append(("runner", config.detection_batch_size))
+
+        def caches_all_valid(self):
+            return False
+
+        def detection_cache_covers_range(self, *_args):
+            return False
+
+        def run_batch_pass(self, *_args, **_kwargs):
+            raise _StopAfterDispatch("runner constructed")
+
+        def close(self):
+            pass
+
+    monkeypatch.setattr(worker_mod, "TrackingProfiler", _FakeProfiler)
+    monkeypatch.setattr(worker_mod.cv2, "VideoCapture", _FakeVideoCapture)
+    monkeypatch.setattr(worker_mod, "InferenceRunner", _ProbeRunner)
+    monkeypatch.setattr(worker_mod, "_resolve_inference_autotune_before_load", resolve)
+    worker = worker_mod.TrackingEngineCore(
+        str(tmp_path / "video.mp4"),
+        on_finished=lambda *_args: None,
+        use_cached_detections=False,
+    )
+    worker.set_parameters(
+        _dispatch_params(INFERENCE_AUTOTUNE_MODE="automatic", YOLO_BATCH_SIZE=1)
+    )
+
+    try:
+        worker.run_tracking()
+    except _StopAfterDispatch:
+        pass
+    except Exception as exc:  # pragma: no cover - the assertion below is the
+        # real failure signal, but a bare pytest.fail loses the traceback.
+        raise AssertionError(
+            f"preflight failure must not escape run_tracking(): {exc!r}"
+        ) from exc
+
+    assert calls == ["resolve", ("runner", 1)]
+    assert worker.inference_autotune_overlay is not None
+    assert worker.inference_autotune_overlay.status == "fallback"
+
+
 def test_autotune_cancel_request_keeps_tracking_stop_flag_clear(tmp_path):
     import hydra_suite.core.tracking.worker as worker_mod
 
