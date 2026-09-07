@@ -87,6 +87,7 @@ _REFERENCE_KWARGS = dict(
     slice_height=768,
     tile_overlap=0.3,
     keep_empty_tiles=False,
+    min_area_ratio=0.4,
     label_quality_acknowledged=True,
     env_name="hydra-sam3-custom-env",
 )

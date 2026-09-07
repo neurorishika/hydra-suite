@@ -555,6 +555,7 @@ class DetectTrainingPlan:
                 "lr",
                 "object_tile_fraction",
                 "tile_overlap",
+                "min_area_ratio",
                 "host_reserve_gb",
                 "host_reserve_fraction",
                 "cuda_safety_fraction",
