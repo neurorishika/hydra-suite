@@ -542,6 +542,39 @@ def _default_canonical_geometry() -> CanonicalGeometry:
     return canonical_geometry_from_params({})
 
 
+def clamp_frame_range(
+    start_frame: int,
+    end_frame: int | None,
+    total_video_frames: int | None,
+) -> tuple[int, int]:
+    """Resolve and clamp a requested ``(start_frame, end_frame)`` pair.
+
+    The one place both ``TrackingWorker.run_tracking`` (the ``track`` CLI/GUI
+    path) and ``calibrate_cli.run_calibrate_cli`` (the ``calibrate`` CLI
+    path) must derive frame bounds identically: an unclamped
+    ``start_frame``/``end_frame`` carried by a stale or hand-edited config
+    (out of range for the video actually being processed) would otherwise
+    make the two paths fingerprint different ``(start_frame, end_frame)``
+    pairs -- and therefore different ``calibration_key_digest`` values -- so
+    a calibration writes a profile under a key ``track`` never looks up.
+
+    ``end_frame=None`` means "to the end of the video". ``total_video_frames``
+    falsy (0/None, e.g. an unseekable stream) disables clamping entirely,
+    matching the pre-existing ``TrackingWorker`` behaviour.
+    """
+    resolved_end = (
+        end_frame
+        if end_frame is not None
+        else ((total_video_frames - 1) if total_video_frames else 0)
+    )
+    resolved_start = int(start_frame)
+    resolved_end = int(resolved_end)
+    if total_video_frames:
+        resolved_start = max(0, min(resolved_start, total_video_frames - 1))
+        resolved_end = max(resolved_start, min(resolved_end, total_video_frames - 1))
+    return resolved_start, resolved_end
+
+
 @dataclass
 class InferenceConfig:
     # Exactly one detection source must be set. OBB is the YOLO path; bgsub is

@@ -88,6 +88,7 @@ from hydra_suite.core.inference.config import (  # noqa: E402
     BgSubConfig,
     InferenceConfig,
     build_inference_config_from_params,
+    clamp_frame_range,
 )
 from hydra_suite.core.inference.runner import InferenceRunner  # noqa: E402
 from hydra_suite.core.tracking.ingest.frame_result_bridge import (  # noqa: E402
@@ -857,16 +858,12 @@ class TrackingEngineCore:
         if total_video_frames <= 0:
             total_video_frames = None
 
-        # Get frame range parameters early (before video writer init)
-        start_frame = p.get("START_FRAME", 0)
-        end_frame = p.get("END_FRAME", None)
-        if end_frame is None:
-            end_frame = total_video_frames - 1 if total_video_frames else 0
-
-        # Validate frame range
-        if total_video_frames:
-            start_frame = max(0, min(start_frame, total_video_frames - 1))
-            end_frame = max(start_frame, min(end_frame, total_video_frames - 1))
+        # Get frame range parameters early (before video writer init). Clamp
+        # via the shared helper so ``track`` and ``calibrate`` derive
+        # identical bounds for the same config -- see ``clamp_frame_range``.
+        start_frame, end_frame = clamp_frame_range(
+            p.get("START_FRAME", 0), p.get("END_FRAME", None), total_video_frames
+        )
 
         # Set total_frames to the range we'll actually process
         total_frames = end_frame - start_frame + 1
