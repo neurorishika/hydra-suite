@@ -66,7 +66,8 @@ Calibration is also declined, in any mode, when:
 ## The calibration budget
 
 `InferenceAutotunePolicy.budget_seconds` must be between **5 and 7200 seconds**
-(`MINIMUM_/MAXIMUM_CALIBRATION_BUDGET_SECONDS` in `autotune/models.py`; default
+(`MINIMUM_/MAXIMUM_CALIBRATION_BUDGET_SECONDS` in `core/inference/config.py`,
+re-exported from `autotune/models.py`; default
 still 600). The ceiling is arithmetic. At a measured ~20 s per measurement
 block and five blocks per candidate vector, one batch-size field costs ~410 s to
 screen plus ~300 s to confirm; the joint search covers detection, pose,
