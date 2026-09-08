@@ -1310,14 +1310,16 @@ def build_inference_config_from_params(params: dict) -> InferenceConfig:
 
     batch_size = int(params.get("YOLO_BATCH_SIZE", params.get("BATCH_SIZE", 1)))
 
-    raw_autotune_mode = str(params.get("INFERENCE_AUTOTUNE_MODE", "off")).lower()
-    if raw_autotune_mode not in {"off", "record", "automatic"}:
-        raw_autotune_mode = "off"
+    # A policy built from params never measures on its own -- whether a run
+    # applies a tuned profile is APPLY_TUNED_INFERENCE (the caller's own
+    # decision), not something derived from a config file. "calibrate" is
+    # only ever set explicitly by session.calibrate's caller.
+    autotune_mode = "lookup"
     raw_manual_fields = params.get("INFERENCE_AUTOTUNE_MANUAL_FIELDS", ())
     if not isinstance(raw_manual_fields, (list, tuple, set, frozenset)):
         raw_manual_fields = ()
     inference_autotune = InferenceAutotunePolicy(
-        mode=raw_autotune_mode,
+        mode=autotune_mode,
         manual_fields=tuple(str(item) for item in raw_manual_fields),
         budget_seconds=_clamped_float(
             params.get(

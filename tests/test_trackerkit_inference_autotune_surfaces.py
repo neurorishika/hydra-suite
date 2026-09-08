@@ -20,13 +20,13 @@ from hydra_suite.trackerkit.gui.orchestrators.tracking import TrackingOrchestrat
 
 def test_tracker_config_round_trips_inference_autotune_policy() -> None:
     config = TrackerConfig(
-        inference_autotune_mode="automatic",
+        apply_tuned_inference=True,
         inference_autotune_manual_fields=["pose_batch_size", "pipeline_depth"],
     )
 
     restored = TrackerConfig.from_dict(config.to_dict())
 
-    assert restored.inference_autotune_mode == "automatic"
+    assert restored.apply_tuned_inference is True
     assert restored.inference_autotune_manual_fields == [
         "pose_batch_size",
         "pipeline_depth",
@@ -34,7 +34,7 @@ def test_tracker_config_round_trips_inference_autotune_policy() -> None:
 
 
 def test_legacy_tracker_config_keeps_throughput_tuner_disabled() -> None:
-    assert TrackerConfig.from_dict({}).inference_autotune_mode == "off"
+    assert TrackerConfig.from_dict({}).apply_tuned_inference is False
     assert TrackerConfig.from_dict({}).inference_autotune_manual_fields == []
 
 
@@ -46,7 +46,7 @@ def test_engine_params_carry_inference_autotune_policy_without_mutating_batches(
         config_data={
             "detection_batch_size": 8,
             "pipeline_depth": 3,
-            "inference_autotune_mode": "automatic",
+            "apply_tuned_inference": True,
             "inference_autotune_manual_fields": ["pose_batch_size"],
         },
         video_probe=TrackerCliVideoProbe(fps=20.0, total_frames=50, width=5, height=5),
@@ -54,21 +54,26 @@ def test_engine_params_carry_inference_autotune_policy_without_mutating_batches(
 
     assert session.params["YOLO_BATCH_SIZE"] == 8
     assert session.params["PIPELINE_DEPTH"] == 3
-    assert session.params["INFERENCE_AUTOTUNE_MODE"] == "automatic"
+    assert session.params["APPLY_TUNED_INFERENCE"] is True
     assert session.params["INFERENCE_AUTOTUNE_MANUAL_FIELDS"] == ["pose_batch_size"]
     assert session.params["INFERENCE_AUTOTUNE_BUDGET_SECONDS"] == 4500.0
     assert session.params["INFERENCE_AUTOTUNE_PROJECT_CONFIG"] == {
         "detection_batch_size": 8,
         "pipeline_depth": 3,
-        "inference_autotune_mode": "automatic",
+        "apply_tuned_inference": True,
         "inference_autotune_manual_fields": ["pose_batch_size"],
     }
     assert session.params["INFERENCE_AUTOTUNE_PROJECT_CONFIG"] is not session.config
 
 
 def test_cli_autotune_override_has_explicit_precedence_and_preserves_manuals() -> None:
+    """``mode`` still speaks the CLI's own off/record/automatic vocabulary
+    (``--inference-autotune``, owned by a later task -- see app.py); this
+    test exercises that the override translates it into the config-level
+    ``apply_tuned_inference`` boolean rather than persisting the mode
+    string."""
     original = {
-        "inference_autotune_mode": "record",
+        "apply_tuned_inference": False,
         "inference_autotune_manual_fields": ["pose_batch_size"],
     }
 
@@ -78,8 +83,8 @@ def test_cli_autotune_override_has_explicit_precedence_and_preserves_manuals() -
         manual_fields=["pipeline_depth", "pose_batch_size"],
     )
 
-    assert original["inference_autotune_mode"] == "record"
-    assert overridden["inference_autotune_mode"] == "automatic"
+    assert original["apply_tuned_inference"] is False
+    assert overridden["apply_tuned_inference"] is True
     assert overridden["inference_autotune_manual_fields"] == [
         "pipeline_depth",
         "pose_batch_size",
@@ -207,7 +212,7 @@ def test_calibration_budget_above_600s_survives_the_live_params_path(tmp_path) -
     session = load_tracker_cli_session(
         str(tmp_path / "subject.mp4"),
         config_data={
-            "inference_autotune_mode": "record",
+            "apply_tuned_inference": True,
             "inference_autotune_budget_seconds": 3000.0,
         },
         video_probe=TrackerCliVideoProbe(fps=20.0, total_frames=50, width=5, height=5),

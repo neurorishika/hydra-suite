@@ -48,7 +48,7 @@ class TrackerConfig:
     # This is intentionally distinct from the semantic tracking autotuner.
     # Existing projects retain their configured execution settings until they
     # explicitly opt in.
-    inference_autotune_mode: str = "off"
+    apply_tuned_inference: bool = False
     inference_autotune_manual_fields: list[str] = field(default_factory=list)
     inference_autotune_budget_seconds: float = DEFAULT_CALIBRATION_BUDGET_SECONDS
 
@@ -86,7 +86,7 @@ class TrackerConfig:
             "roi_current_mode": self.roi_current_mode,
             "roi_current_zone_type": self.roi_current_zone_type,
             "runtime_tier": self.runtime_tier,
-            "inference_autotune_mode": self.inference_autotune_mode,
+            "apply_tuned_inference": bool(self.apply_tuned_inference),
             "inference_autotune_manual_fields": list(
                 self.inference_autotune_manual_fields
             ),
@@ -132,7 +132,13 @@ class TrackerConfig:
             roi_current_zone_type=data.get("roi_current_zone_type", "include"),
             animals_per_arena=int(data.get("animals_per_arena", 1)),
             runtime_tier=str(raw_tier),
-            inference_autotune_mode=str(data.get("inference_autotune_mode", "off")),
+            apply_tuned_inference=bool(
+                data.get(
+                    "apply_tuned_inference",
+                    str(data.get("inference_autotune_mode", "off")).strip().lower()
+                    in {"automatic", "record"},
+                )
+            ),
             inference_autotune_manual_fields=[
                 str(value).strip() for value in raw_manual_fields if str(value).strip()
             ],

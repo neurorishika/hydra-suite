@@ -124,10 +124,10 @@ fi
 # ---------------------------------------------------------------------------
 # AUTOTUNE=1: the "do tuned settings perturb tracking output?" leg.
 #
-# This does NOT enable the autotuner. INFERENCE_AUTOTUNE_MODE stays "off" for
+# This does NOT enable the autotuner. APPLY_TUNED_INFERENCE stays false for
 # every run in this leg, on purpose: a committed seed profile can never hit the
 # tuning cache (hydra_code_identity hashes all package sources, so the key moves
-# with every edit), so an "automatic" leg would silently compare defaults
+# with every edit), so an "apply" leg would silently compare defaults
 # against defaults and print a meaningless green. Instead the SECOND and THIRD
 # runs get the tuned vector forced directly into their config via runner.py's
 # --*-batch-size / --pipeline-depth flags. No key, no cache, no autotune code in

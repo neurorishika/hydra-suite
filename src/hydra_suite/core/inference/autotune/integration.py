@@ -681,14 +681,10 @@ def resolve_tracking_inference_config(
     """Resolve and apply a detached overlay before production model loading."""
 
     baseline = InferenceTuningSettings.from_config(config)
-    if config.inference_autotune.mode == "off":
-        overlay = InferenceRuntimeOverlay.baseline(
-            baseline,
-            status="disabled",
-            reason="automatic inference tuning is disabled",
-        )
-        result = ResolveResult(overlay)
-        return config, overlay, result
+    # "off" is no longer a policy value ``mode`` can hold -- whether to
+    # consult the store at all is the caller's decision (APPLY_TUNED_INFERENCE
+    # for a run; see worker.py's guard immediately before this function is
+    # ever reached).
     try:
         request = build_tracking_autotune_request(
             config,

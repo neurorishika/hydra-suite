@@ -138,7 +138,7 @@ def calibration_run_params(
             "START_FRAME": int(start),
             "END_FRAME": int(end),
             "ENABLE_PROFILING": True,
-            "INFERENCE_AUTOTUNE_MODE": "off",
+            "APPLY_TUNED_INFERENCE": False,
             "USE_CACHED_DETECTIONS": False,
             "DEBUG_MODE": True,
             "MIN_TRAJECTORY_LENGTH": min(

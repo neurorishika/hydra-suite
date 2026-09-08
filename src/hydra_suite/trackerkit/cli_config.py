@@ -225,6 +225,12 @@ def apply_inference_autotune_override(
     from TrackerKit's semantic tracking autotuner.  A CLI policy must win over
     project policy, while named manual fields preserve the configured values
     for those coordinates when automatic inference tuning is active.
+
+    ``mode`` still speaks the CLI's own ``off``/``record``/``automatic``
+    vocabulary (the ``--inference-autotune`` flag; a later task owns
+    renaming it) but is translated here into the config-level
+    ``apply_tuned_inference`` boolean -- ``record``/``automatic`` both mean
+    "apply a tuned profile if one is available", ``off`` means don't.
     """
     result = deepcopy(dict(cfg))
     if mode is not None:
@@ -233,7 +239,7 @@ def apply_inference_autotune_override(
             raise ValueError(
                 "inference autotune mode must be one of: off, record, automatic"
             )
-        result["inference_autotune_mode"] = normalized_mode
+        result["apply_tuned_inference"] = normalized_mode in {"record", "automatic"}
     if manual_fields:
         existing = result.get("inference_autotune_manual_fields", []) or []
         if isinstance(existing, str):

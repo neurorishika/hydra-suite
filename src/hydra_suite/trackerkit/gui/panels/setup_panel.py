@@ -95,7 +95,8 @@ class SetupPanel(QWidget):
             "Select preset optimized for your organism.\n"
             "Custom: Your personal saved defaults (if exists)"
         )
-        # NOTE: _populate_preset_combo() is called after panel construction in main_window.py
+        # NOTE: _populate_preset_combo() is called after panel construction in
+        # main_window.py
 
         self.btn_load_preset = QPushButton("Load Preset")
         self.btn_load_preset.clicked.connect(self._main_window._load_selected_preset)
@@ -768,7 +769,15 @@ class SetupPanel(QWidget):
             ("Automatic (apply a validated profile)", "automatic"),
         ):
             self.combo_inference_autotune.addItem(label, mode)
-        self._set_inference_autotune_combo_mode(self._config.inference_autotune_mode)
+        # NOTE: TrackerConfig now stores one boolean (`apply_tuned_inference`)
+        # rather than the old off/record/automatic string -- "record" (measure
+        # without applying) no longer round-trips through this widget. This
+        # combo is interim plumbing pending a later GUI task's Calibrate
+        # button + apply-checkbox redesign; it is kept alive here only so this
+        # panel does not crash against the renamed config field.
+        self._set_inference_autotune_combo_mode(
+            "automatic" if self._config.apply_tuned_inference else "off"
+        )
         self.combo_inference_autotune.currentIndexChanged.connect(
             self._on_inference_autotune_mode_changed
         )
@@ -816,7 +825,7 @@ class SetupPanel(QWidget):
             self.inference_autotune_continue_requested.emit
         )
         self.set_inference_autotune_status_for_mode(
-            self._config.inference_autotune_mode
+            "automatic" if self._config.apply_tuned_inference else "off"
         )
 
         for perf_checkbox in (
@@ -998,7 +1007,10 @@ class SetupPanel(QWidget):
         """
         mode = str(self.combo_inference_autotune.currentData() or "off")
         if not getattr(self._main_window, "_restoring_config", False):
-            self._main_window.config.inference_autotune_mode = mode
+            self._main_window.config.apply_tuned_inference = mode in {
+                "record",
+                "automatic",
+            }
         self.set_inference_autotune_status_for_mode(mode)
         self.config_changed.emit(self._main_window.config)
 

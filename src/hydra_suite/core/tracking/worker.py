@@ -119,7 +119,13 @@ def _resolve_inference_autotune_before_load(
 ):
     """Resolve a run overlay before ``InferenceRunner`` can load any model."""
 
-    if config.inference_autotune.mode == "off":
+    # ``config.inference_autotune.mode`` is now always "lookup" when built
+    # from params (mode is no longer a policy value) -- so it can never gate
+    # this. Whether a run consults the store at all is the caller's own
+    # decision, carried by APPLY_TUNED_INFERENCE. Without this guard, a
+    # project with tuning disabled would fall through and construct a
+    # ContainedTrialExecutor, i.e. silently start calibrating mid-run.
+    if not bool(params.get("APPLY_TUNED_INFERENCE", False)):
         return config, None, None
     from hydra_suite.core.inference.autotune.device import probe_runtime_resources
     from hydra_suite.core.inference.autotune.integration import (
@@ -990,9 +996,9 @@ class TrackingEngineCore:
         # Create profiler early so initialization timing is captured.
         # The profiler is configured with metadata later, once all params are known.
         _profiling_export_enabled = bool(p.get("ENABLE_PROFILING", False))
-        _profiling_enabled = _profiling_export_enabled or str(
-            p.get("INFERENCE_AUTOTUNE_MODE", "off")
-        ).strip().lower() in {"automatic", "record"}
+        _profiling_enabled = _profiling_export_enabled or bool(
+            p.get("APPLY_TUNED_INFERENCE", False)
+        )
         profiler = TrackingProfiler(enabled=_profiling_enabled)
         profiler.phase_start("initialization")
 
@@ -1041,7 +1047,8 @@ class TrackingEngineCore:
             self.video_writer = VideoEncoder(out_path, fps=fps, width=w, height=h)
 
         # Determine if we should use batched detection
-        # Batching is only used for YOLO in full tracking mode (not preview, not backward)
+        # Batching is only used for YOLO in full tracking mode (not preview, not
+        # backward)
         detection_method = p.get("DETECTION_METHOD", "background_subtraction")
         advanced_config = p.get("ADVANCED_CONFIG", {})
         realtime_tracking_mode_requested = bool(
@@ -2038,7 +2045,9 @@ class TrackingEngineCore:
                         self._emit_progress(50, "Exporting confidence density video...")
 
                         # Output at reduced resolution for speed.
-                        _diag_ds = 4  # 4× downsample for diagnostic video (independent of density grid ds)
+                        # 4× downsample for diagnostic video (independent of density
+                        # grid ds)
+                        _diag_ds = 4
                         _out_w = max(1, _frame_w // _diag_ds)
                         _out_h = max(1, _frame_h // _diag_ds)
 
@@ -2464,7 +2473,8 @@ class TrackingEngineCore:
             if not self.backward_mode:
                 # Phase 2 of batched detection OR Cached Reuse: only read frames if we need visualization OR individual analysis
                 # Update condition: Check for NOT visualization_free_mode (since ENABLE_VISUALIZATION isn't used)
-                # Also check self.video_output_path (since ENABLE_VIDEO_OUTPUT isn't reliably in params)
+                # Also check self.video_output_path (since ENABLE_VIDEO_OUTPUT isn't
+                # reliably in params)
                 needs_frames = (
                     not p.get("VISUALIZATION_FREE_MODE", False)
                     or (self.video_output_path is not None)
@@ -2481,7 +2491,8 @@ class TrackingEngineCore:
                         "Forward Cached: Using cached detections with frame reading"
                     )
                 else:
-                    # No visualization or individual analysis - skip frame reading entirely
+                    # No visualization or individual analysis - skip frame reading
+                    # entirely
                     frame_iterator = self._cached_detection_iterator(
                         total_frames, start_frame, end_frame, backward=False
                     )
@@ -2891,7 +2902,8 @@ class TrackingEngineCore:
                 # Get detections either from cache or by detection
                 if use_cached_detections and inference_runner is not None:
                     # Load per-frame results from InferenceRunner caches (YOLO OBB path).
-                    # All filtering (ROI, confidence, IOU) was applied during the batch pass.
+                    # All filtering (ROI, confidence, IOU) was applied during the batch
+                    # pass.
                     _frame_result = inference_runner.load_frame(actual_frame_index)
                     if (
                         _frame_result is not None
@@ -3087,7 +3099,8 @@ class TrackingEngineCore:
                         (float(_obb.shapes[i, 0]), float(_obb.shapes[i, 1]))
                         for i in range(_obb.num_detections)
                     ]
-                    # bg-sub confidences are NaN by design (legacy); do NOT gate on them.
+                    # bg-sub confidences are NaN by design (legacy); do NOT gate on
+                    # them.
                     detection_confidences = [
                         float(_obb.confidences[i]) for i in range(_obb.num_detections)
                     ]
@@ -3213,7 +3226,8 @@ class TrackingEngineCore:
                     # No frame and no cached detections - skip this iteration
                     if not use_cached_detections:
                         logger.warning(
-                            f"Frame {self.frame_count}: No frame available and no cached detections"
+                            f"Frame {
+                                self.frame_count}: No frame available and no cached detections"
                         )
                         continue
 
@@ -3488,7 +3502,8 @@ class TrackingEngineCore:
                     overlay = frame.copy()
 
                     # Apply ROI visualization - draw cyan boundary for all detection methods
-                    # The actual masking for background subtraction happens earlier in the pipeline
+                    # The actual masking for background subtraction happens earlier in
+                    # the pipeline
                     if ROI_mask_current is not None:
                         # Compute ROI contours once and cache (mask is static).
                         if _roi_contours_cache is None:
@@ -3540,7 +3555,8 @@ class TrackingEngineCore:
                     )
                     _det_tag_ids = build_detection_tag_id_list(_tag_det_map, len(meas))
 
-                    # The Assigner now takes the kf_manager directly to access X and S_inv
+                    # The Assigner now takes the kf_manager directly to access X and
+                    # S_inv
                     association_data = {
                         "detection_confidences": detection_confidences,
                         "detection_crop_quality": detection_crop_quality,
@@ -3564,7 +3580,8 @@ class TrackingEngineCore:
                         except Exception:
                             _cnn_frame_preds_all[_label] = []
 
-                    # Build Bayesian identity cost terms when the online decoder is active.
+                    # Build Bayesian identity cost terms when the online decoder is
+                    # active.
                     if _identity_online_decoder is not None:
                         try:
                             _cat = _identity_online_decoder._catalog
@@ -3589,7 +3606,8 @@ class TrackingEngineCore:
                                     _log_like = _cat.apriltag_log_prior(
                                         _tid, _tag_label_map
                                     )
-                                # CNN contribution (identity-providing phases only, summed in log-space)
+                                # CNN contribution (identity-providing phases only,
+                                # summed in log-space)
                                 for _state in _cnn_phase_states:
                                     if not _state.get("is_identity_provider", False):
                                         continue
@@ -3799,7 +3817,8 @@ class TrackingEngineCore:
                                     f"VEL_GATE={_vel_gate:.1f}"
                                 )
 
-                    # Confidence metrics are always computed (the opt-out toggle was retired).
+                    # Confidence metrics are always computed (the opt-out toggle was
+                    # retired).
                     if True:
                         # Compute assignment confidence for matched pairs
                         matched_pairs = list(zip(rows, cols))
@@ -3837,7 +3856,8 @@ class TrackingEngineCore:
                                 IdentityEvidence,
                             )
 
-                            # Only clear uncommitted respawns; identity-rejoin slots keep beliefs
+                            # Only clear uncommitted respawns; identity-rejoin slots
+                            # keep beliefs
                             for _r in respawned_matches:
                                 _identity_online_decoder.clear_slot(
                                     _r,
@@ -3983,7 +4003,8 @@ class TrackingEngineCore:
                     # --- KF Update & State Update ---
                     profiler.tock("state_update")
                     profiler.tick("kf_update")
-                    # Identity-rejoin pairs use the same KF correct path but skip hard reset
+                    # Identity-rejoin pairs use the same KF correct path but skip hard
+                    # reset
                     for r, c in list(zip(rows, cols)) + list(identity_rejoin_pairs):
                         meas_x = float(meas[c][0])
                         meas_y = float(meas[c][1])
@@ -4274,7 +4295,8 @@ class TrackingEngineCore:
                                 track_states[r],
                             ]
 
-                            # Confidence values are always computed and emitted (unmatched = 0).
+                            # Confidence values are always computed and emitted
+                            # (unmatched = 0).
                             det_conf = 0.0
                             assign_conf = 0.0
                             pos_uncertainty = (
@@ -4292,7 +4314,8 @@ class TrackingEngineCore:
                             if tag_obs_cache is not None:
                                 row_data.extend([float("nan")] * 4)
 
-                            # Emitted only when n_arenas > 1 (see matched-row comment above).
+                            # Emitted only when n_arenas > 1 (see matched-row comment
+                            # above).
                             if not self.arena_layout.is_single_arena:
                                 row_data.append(int(self._slot_arena[r]))
 
@@ -4454,7 +4477,8 @@ class TrackingEngineCore:
                     # No detections this frame — still advance the KF so predictions
                     # don't freeze and costs are computed from a fresh prior on the next
                     # detection frame.  Mark all tracks as occluded/lost and write NaN
-                    # CSV rows so every frame has an entry (required by post-processing).
+                    # CSV rows so every frame has an entry (required by
+                    # post-processing).
                     profiler.tick("kf_predict")
                     self.kf_manager.predict()
                     profiler.tock("kf_predict")
@@ -4488,7 +4512,8 @@ class TrackingEngineCore:
                             # Add detection-level AprilTag columns (NaN — no detection)
                             if tag_obs_cache is not None:
                                 row_data.extend([float("nan")] * 4)
-                            # Emitted only when n_arenas > 1 (see matched-row comment above).
+                            # Emitted only when n_arenas > 1 (see matched-row comment
+                            # above).
                             if not self.arena_layout.is_single_arena:
                                 row_data.append(int(self._slot_arena[r]))
                             self.csv_writer_thread.enqueue(row_data)
@@ -4498,7 +4523,8 @@ class TrackingEngineCore:
                 profiler.tick("individual_dataset")
                 if individual_generator is not None and meas:
                     # Get track and trajectory IDs for matched detections
-                    # cols contains the detection indices that were matched to tracks (rows)
+                    # cols contains the detection indices that were matched to tracks
+                    # (rows)
                     matched_track_ids = []
                     matched_traj_ids = []
 
@@ -4558,7 +4584,8 @@ class TrackingEngineCore:
                     )
 
                     # Motion-based velocity fallback: derive (vx, vy) per detection from
-                    # the two most-recent positions stored in each track's position_deque.
+                    # the two most-recent positions stored in each track's
+                    # position_deque.
                     _velocities_for_dataset = None
                     if matched_track_ids and "position_deques" in locals():
                         _vel_list = []
@@ -4625,7 +4652,8 @@ class TrackingEngineCore:
                             canonical_affines=_canon_for_dataset,
                         )
                     elif shapes:
-                        # Background subtraction - compute ellipse params from filtered shapes
+                        # Background subtraction - compute ellipse params from filtered
+                        # shapes
                         ellipse_params = []
                         for shape in shapes:
                             area, aspect_ratio = shape[0], shape[1]
@@ -4670,12 +4698,14 @@ class TrackingEngineCore:
                         if use_cached_detections:
                             if use_batched_detection:
                                 status_text = (
-                                    f"Tracking (batched): Frame {self.frame_count}/{total_frames} "
+                                    f"Tracking (batched): Frame {
+                                        self.frame_count}/{total_frames} "
                                     f"(abs {actual_frame_index})"
                                 )
                             else:
                                 status_text = (
-                                    f"Tracking (cached): Frame {self.frame_count}/{total_frames} "
+                                    f"Tracking (cached): Frame {
+                                        self.frame_count}/{total_frames} "
                                     f"(abs {actual_frame_index})"
                                 )
                         else:
@@ -4715,7 +4745,8 @@ class TrackingEngineCore:
                         # Derive per-slot identity labels for visualization: prefer the
                         # committed belief label, then the current-frame assignment label.
                         # Falls back to empty string (→ trajectory ID display) when the
-                        # online decoder is not active or no label has been assigned yet.
+                        # online decoder is not active or no label has been assigned
+                        # yet.
                         identity_labels=(
                             [
                                 (

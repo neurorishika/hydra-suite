@@ -432,7 +432,7 @@ def make_request_inputs(
     )
     context = TrackingRunContext(
         video_path=tmp_path / "video.mp4",
-        params={"INFERENCE_AUTOTUNE_MODE": "automatic", "MAX_TARGETS": 25},
+        params={"APPLY_TUNED_INFERENCE": True, "MAX_TARGETS": 25},
         frame_width=1200,
         frame_height=900,
         execution_mode=execution_mode,

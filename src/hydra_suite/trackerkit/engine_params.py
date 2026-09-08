@@ -538,15 +538,6 @@ def build_engine_params(
     reproducing today's CLI output exactly.
     """
     cfg = config
-    autotune_mode = (
-        str(_cfg_get(cfg, "inference_autotune_mode", default="off")).strip().lower()
-    )
-    if autotune_mode not in {"off", "record", "automatic"}:
-        logger.warning(
-            "Unknown inference_autotune_mode=%r; keeping configured settings.",
-            autotune_mode,
-        )
-        autotune_mode = "off"
     raw_manual_fields = _cfg_get(cfg, "inference_autotune_manual_fields", default=[])
     if isinstance(raw_manual_fields, str):
         raw_manual_fields = [
@@ -1153,15 +1144,13 @@ def build_engine_params(
         # geometry profiles.  The inference config clamps these values before
         # the tile admission helper applies the final per-model memory bound.
         "SLICE_TILE_BATCH_SIZE": advanced.get("slice_tile_batch_size", 16),
-        # "automatic" tuning is only ever eligible on CUDA (integration.py's
-        # eligibility gate); on CPU/MPS it never applies, so forcing the
-        # process-local SAHI tuner off here would silently disable it for no
-        # benefit (see models.py's InferenceRuntimeOverlay no-op-status fix).
-        "SLICE_TILE_BATCH_AUTOTUNE": (
-            False
-            if autotune_mode == "automatic" and detect_platform().has_cuda
-            else advanced.get("slice_tile_batch_autotune", False)
-        ),
+        # The process-local SAHI tuner is never pre-empted by platform or
+        # policy here -- InferenceTuningSettings.apply (models.py:186-198)
+        # disables it itself, and only when the overlay status shows a
+        # coordinated tile value was actually supplied (models.py:399). This
+        # keeps the process-local tuner active for the normal state (no
+        # profile yet) on every platform.
+        "SLICE_TILE_BATCH_AUTOTUNE": advanced.get("slice_tile_batch_autotune", False),
         "SLICE_MEMORY_BUDGET_MIB": advanced.get("slice_memory_budget_mib", 256),
         "SLICE_MERGE_POLICY": advanced.get(
             "slice_merge_policy", SLICE_MERGE_DEFAULTS["merge_policy"]
@@ -1237,7 +1226,9 @@ def build_engine_params(
         "PIPELINE_DEPTH": int(_cfg_get(cfg, "pipeline_depth", default=2)),
         # Inference-throughput tuning policy. These fields deliberately do
         # not participate in the semantic tracking autotuner contract.
-        "INFERENCE_AUTOTUNE_MODE": autotune_mode,
+        "APPLY_TUNED_INFERENCE": bool(
+            _cfg_get(cfg, "apply_tuned_inference", default=False)
+        ),
         "INFERENCE_AUTOTUNE_MANUAL_FIELDS": autotune_manual_fields,
         "INFERENCE_AUTOTUNE_BUDGET_SECONDS": autotune_budget_seconds,
         # Advanced-config-only escape hatch (no GUI widget, like the SAHI

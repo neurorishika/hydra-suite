@@ -96,8 +96,13 @@ def test_setup_panel_wired_in_main_window(main_window):
 def test_setup_inference_autotune_policy_persists_and_status_is_read_only(main_window):
     """The one UI control owns policy; runtime outcomes only update its label.
 
-    All three modes -- including "record", previously unreachable from a
-    boolean checkbox -- must round-trip losslessly through the combo box.
+    ``TrackerConfig`` now stores one boolean (``apply_tuned_inference``); the
+    combo box's "record" and "automatic" entries both persist as ``True`` --
+    they no longer round-trip as distinct values (see
+    ``.superpowers/sdd/2026-09-08-oneclick-inference-calibration``: "record"
+    is retired, "calibrate without applying" is now expressed by calibrating
+    and leaving apply off). This test still exercises the status-label text
+    for both, since that copy is unchanged, but persists the boolean.
     """
     panel = main_window._setup_panel
     original_index = panel.combo_inference_autotune.currentIndex()
@@ -107,7 +112,7 @@ def test_setup_inference_autotune_policy_persists_and_status_is_read_only(main_w
             panel.combo_inference_autotune.currentIndex()
         )
         config = main_window._config_orch.build_config_dict()
-        assert config["inference_autotune_mode"] == "record"
+        assert config["apply_tuned_inference"] is True
         assert "Record-only" in panel.lbl_inference_autotune_status.text()
 
         panel._set_inference_autotune_combo_mode("automatic")
@@ -115,7 +120,7 @@ def test_setup_inference_autotune_policy_persists_and_status_is_read_only(main_w
             panel.combo_inference_autotune.currentIndex()
         )
         config = main_window._config_orch.build_config_dict()
-        assert config["inference_autotune_mode"] == "automatic"
+        assert config["apply_tuned_inference"] is True
         assert "validated profile" in panel.lbl_inference_autotune_status.text()
 
         panel.set_inference_autotune_status("Cache hit — profile abc123")
@@ -134,20 +139,29 @@ def test_setup_inference_autotune_combo_signal_is_actually_connected(main_window
     pass it. Drive the combo box the way a real user does -- an unblocked
     ``setCurrentIndex`` -- and observe the persisted config change through
     that signal alone, so a disconnected wire fails this test.
+
+    "off" is the only combo entry that persists ``apply_tuned_inference`` as
+    ``False``; "record" and "automatic" both persist ``True``.
     """
     panel = main_window._setup_panel
     original_index = panel.combo_inference_autotune.currentIndex()
     try:
+        off_index = panel.combo_inference_autotune.findData("off")
+        assert off_index >= 0
+        panel.combo_inference_autotune.setCurrentIndex(off_index)
+        config = main_window._config_orch.build_config_dict()
+        assert config["apply_tuned_inference"] is False
+
         record_index = panel.combo_inference_autotune.findData("record")
         assert record_index >= 0
         panel.combo_inference_autotune.setCurrentIndex(record_index)
         config = main_window._config_orch.build_config_dict()
-        assert config["inference_autotune_mode"] == "record"
+        assert config["apply_tuned_inference"] is True
 
         automatic_index = panel.combo_inference_autotune.findData("automatic")
         panel.combo_inference_autotune.setCurrentIndex(automatic_index)
         config = main_window._config_orch.build_config_dict()
-        assert config["inference_autotune_mode"] == "automatic"
+        assert config["apply_tuned_inference"] is True
     finally:
         panel.combo_inference_autotune.setCurrentIndex(original_index)
 

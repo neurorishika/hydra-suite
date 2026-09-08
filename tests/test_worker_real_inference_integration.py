@@ -493,7 +493,7 @@ def test_autotune_overlay_resolves_before_runner_loads_models(monkeypatch, tmp_p
         use_cached_detections=False,
     )
     worker.set_parameters(
-        _dispatch_params(INFERENCE_AUTOTUNE_MODE="automatic", YOLO_BATCH_SIZE=1)
+        _dispatch_params(APPLY_TUNED_INFERENCE=True, YOLO_BATCH_SIZE=1)
     )
 
     try:
@@ -548,7 +548,7 @@ def test_preflight_probe_failure_does_not_kill_the_run(monkeypatch, tmp_path):
         use_cached_detections=False,
     )
     worker.set_parameters(
-        _dispatch_params(INFERENCE_AUTOTUNE_MODE="automatic", YOLO_BATCH_SIZE=1)
+        _dispatch_params(APPLY_TUNED_INFERENCE=True, YOLO_BATCH_SIZE=1)
     )
 
     try:
@@ -739,7 +739,7 @@ def test_preview_never_launches_a_calibration(monkeypatch, tmp_path):
         preview_mode=True,
     )
     worker.set_parameters(
-        _dispatch_params(INFERENCE_AUTOTUNE_MODE="automatic", YOLO_BATCH_SIZE=1)
+        _dispatch_params(APPLY_TUNED_INFERENCE=True, YOLO_BATCH_SIZE=1)
     )
 
     try:
@@ -799,7 +799,7 @@ def test_backward_enabled_project_is_not_calibrated(monkeypatch, tmp_path):
         on_finished=lambda *_args: None,
         use_cached_detections=False,
     )
-    params = _dispatch_params(INFERENCE_AUTOTUNE_MODE="automatic", YOLO_BATCH_SIZE=1)
+    params = _dispatch_params(APPLY_TUNED_INFERENCE=True, YOLO_BATCH_SIZE=1)
     params["INFERENCE_AUTOTUNE_PROJECT_CONFIG"] = {"enable_backward_tracking": True}
     worker.set_parameters(params)
 

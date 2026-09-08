@@ -57,7 +57,7 @@ def test_candidate_param_overlay_is_detached_complete_and_disables_recursion():
             {"label": "color", "batch_size": 1},
             {"label": "behavior", "batch_size": 3},
         ],
-        "INFERENCE_AUTOTUNE_MODE": "automatic",
+        "APPLY_TUNED_INFERENCE": True,
         "SLICE_TILE_BATCH_AUTOTUNE": True,
     }
 
@@ -66,7 +66,7 @@ def test_candidate_param_overlay_is_detached_complete_and_disables_recursion():
     )
 
     assert source["CNN_CLASSIFIERS"][0]["batch_size"] == 1
-    assert output["INFERENCE_AUTOTUNE_MODE"] == "off"
+    assert output["APPLY_TUNED_INFERENCE"] is False
     assert output["YOLO_BATCH_SIZE"] == 4
     assert output["PIPELINE_DEPTH"] == 3
     assert output["SLICE_TILE_BATCH_SIZE"] == 2

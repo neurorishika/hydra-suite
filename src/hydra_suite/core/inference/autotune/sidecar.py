@@ -137,7 +137,7 @@ def apply_settings_to_params(
     """Return candidate engine params without mutating the session snapshot."""
 
     result = deepcopy(dict(params))
-    result["INFERENCE_AUTOTUNE_MODE"] = "off"
+    result["APPLY_TUNED_INFERENCE"] = False
     result["YOLO_BATCH_SIZE"] = settings.detection_batch_size
     result["PIPELINE_DEPTH"] = settings.pipeline_depth
     if runtime_artifact_batch_size is not None:

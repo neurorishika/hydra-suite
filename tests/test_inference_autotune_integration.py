@@ -406,7 +406,7 @@ def test_worker_resolves_cache_replay_instead_of_skipping_the_preflight(
 
     _effective, overlay, _result = worker_mod._resolve_inference_autotune_before_load(
         config,
-        {"MAX_TARGETS": 25},
+        {"MAX_TARGETS": 25, "APPLY_TUNED_INFERENCE": True},
         video_path=str(video_path),
         frame_width=100,
         frame_height=100,
