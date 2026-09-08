@@ -703,6 +703,14 @@ class FakeCalibrationExecutor:
     satisfied, and the fixed density is what lets a test prove
     ``CandidateEvidence.detection_counts`` (and the S2 bridge it feeds) carry
     real measured density rather than the ``MAX_TARGETS`` fallback.
+
+    ``frame_counts`` is the true per-frame density for the whole measured
+    window, INCLUDING zero-detection frames (e.g. ``(2, 0, 3)`` is a
+    3-frame window where the middle frame produced nothing) -- so
+    ``measured_frames`` (``len(frame_counts)``, the window length) and the
+    forward CSV (only rows for frames with ``count > 0``, matching how a
+    real tracking pass writes no row for an empty frame) stay consistent
+    with each other, exactly like a real sidecar trial.
     """
 
     def __init__(self, frame_counts: tuple[int, ...] = (2, 3, 2)) -> None:
@@ -726,7 +734,7 @@ class FakeCalibrationExecutor:
             outputs,
             warmup_calls=3,
             warmup_frames=8,
-            measured_frames=len(frame_ids),
+            measured_frames=len(self.frame_counts),
         )
 
 

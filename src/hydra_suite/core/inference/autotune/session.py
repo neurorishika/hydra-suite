@@ -252,20 +252,33 @@ def _close_density_bridge(result) -> None:
     gets a warm start. Calibration has already measured real density in its
     own trials, so there is no reason to make the user pay a whole extra
     tracking run before a cached run can find anything.
+
+    Every step -- including reading ``profile.key``/``profile.candidates`` --
+    is inside the ``try``: a bridge-closing failure must never propagate out
+    of a successful ``calibrate()`` call and destroy the minutes-long
+    calibration the user just waited for.
     """
 
-    from hydra_suite.core.inference.autotune.store import InferenceTuningProfileStore
-
-    profile = getattr(result, "profile", None)
-    if profile is None or not profile.key.workload.density_is_estimated:
-        return
-    counts = _measured_density_from(profile)
-    if not counts:
-        return
     try:
+        profile = getattr(result, "profile", None)
+        if profile is None or not profile.key.workload.density_is_estimated:
+            return
+        candidate = _authoritative_candidate(profile)
+        counts = candidate.detection_counts if candidate is not None else ()
+        if not counts:
+            logger.warning(
+                "Calibration density bridge not closed: the winning candidate "
+                "(profile_id=%s) carries no measured detection counts",
+                getattr(profile, "profile_id", "?"),
+            )
+            return
+        from hydra_suite.core.inference.autotune.store import (
+            InferenceTuningProfileStore,
+        )
+
         InferenceTuningProfileStore().observe_production_throughput(
             profile.profile_id,
-            _median_throughput_of(profile),
+            candidate.median_throughput,
             detection_counts=counts,
             crop_counts=counts,
         )
@@ -273,24 +286,23 @@ def _close_density_bridge(result) -> None:
         logger.warning("Could not close the calibration density bridge", exc_info=True)
 
 
-def _measured_density_from(profile) -> tuple[int, ...]:
-    """Real per-frame density measured by the winning candidate's own trials.
+def _authoritative_candidate(profile):
+    """The most authoritative evidence for the winning settings vector.
 
-    Reads ``CandidateEvidence.detection_counts`` off the candidate matching
-    ``profile.selected`` -- the settings the search actually validated and
-    persisted -- rather than any candidate that happened to run.
+    ``search.py`` records the SAME settings vector at multiple phases
+    (``baseline``, ``stage``, ``full``, ``final_validation``) -- e.g. every
+    run where the winner equals the baseline. Two other call sites already
+    treat phase as load-bearing for exactly this reason:
+    ``coordinator.py``'s ``_reuse`` trusts only a ``full`` measurement to
+    authorize a winner, and ``store.py``'s regression check filters to
+    ``{"full", "final_validation", "baseline"}`` and takes the LAST (most
+    recent, most authoritative) match. This mirrors that pattern instead of
+    taking the first candidate that happens to match -- which, for a
+    baseline-wins outcome, would silently be the LEAST validated evidence.
     """
 
-    for candidate in profile.candidates:
-        if candidate.settings == profile.selected and candidate.detection_counts:
-            return candidate.detection_counts
-    return ()
-
-
-def _median_throughput_of(profile) -> float:
-    """The selected candidate's robust central throughput, if one was measured."""
-
-    for candidate in profile.candidates:
-        if candidate.settings == profile.selected:
-            return candidate.median_throughput
-    return 0.0
+    matches = [c for c in profile.candidates if c.settings == profile.selected]
+    authoritative = [c for c in matches if c.phase in {"final_validation", "full"}]
+    if authoritative:
+        return authoritative[-1]
+    return matches[-1] if matches else None

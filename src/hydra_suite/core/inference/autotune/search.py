@@ -79,24 +79,36 @@ def _observed_detection_counts(
 
     Counts rows per distinct ``FrameID`` in the forward output each
     successful trial already produced -- the same one-count-per-frame rule
-    ``sample_detection_workload`` applies to a production detection cache.
+    ``sample_detection_workload`` applies to a production detection cache
+    (``integration.py:99-142``), whose own comment is explicit: "Both
+    zero-detection and populated frames contribute to the signature." The
+    forward CSV only emits a row for a frame that produced at least one
+    detection, so a frame with zero detections is invisible to a plain
+    ``value_counts()`` over ``FrameID`` -- it must be zero-filled from
+    ``item.measured_frames`` (the trial's own count of frames it processed)
+    or the resulting density is biased upward relative to what a later
+    cache-based run computes for the same video, and the bridge this feeds
+    would close on the wrong key.
+
     Calibration trials write to a private, per-trial cache dir (S8), so this
     is the only place real measured density can be read from afterward; it
     is what lets ``session.calibrate`` close the store's estimated/measured
     two-record bridge without a whole extra tracking run.
     """
 
-    counts: dict[int, int] = {}
+    counts: list[int] = []
     for item in successful:
         outputs = item.outputs
-        if outputs is None or "FrameID" not in outputs.forward.columns:
-            continue
-        for frame, count in outputs.forward["FrameID"].value_counts().items():
-            frame = int(frame)
-            if frame not in counts and len(counts) >= maximum_frames:
-                continue
-            counts[frame] = int(count)
-    return tuple(counts[frame] for frame in sorted(counts))
+        per_frame: dict[int, int] = {}
+        if outputs is not None and "FrameID" in outputs.forward.columns:
+            for frame, count in outputs.forward["FrameID"].value_counts().items():
+                per_frame[int(frame)] = int(count)
+        zero_frames = max(item.measured_frames - len(per_frame), 0)
+        counts.extend(per_frame.values())
+        counts.extend([0] * zero_frames)
+        if len(counts) >= maximum_frames:
+            break
+    return tuple(counts[:maximum_frames])
 
 
 class TrialExecutor(Protocol):
