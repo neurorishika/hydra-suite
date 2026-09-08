@@ -7,6 +7,8 @@ is reused for a request that never made the same comparison -- see
 
 from __future__ import annotations
 
+import sys
+
 from hydra_suite.core.inference.autotune.fingerprint import compute_baseline_digest
 
 from .autotune_helpers import _key, _settings
@@ -44,3 +46,71 @@ def test_manual_field_set_order_does_not_matter():
     a = compute_baseline_digest(baseline, ("pose_batch_size", "detection_batch_size"))
     b = compute_baseline_digest(baseline, ("detection_batch_size", "pose_batch_size"))
     assert a == b
+
+
+# ---- a probe that raises must not take the whole autotuner down -------------
+
+
+def test_a_raising_cudnn_probe_degrades_to_absent(monkeypatch):
+    """``torch.backends.cudnn.version()`` raises on a cuDNN version mismatch.
+
+    Measured on a real CUDA box: PyTorch compiled against cuDNN (9, 19, 0)
+    with runtime (9, 1x) makes that call raise ``RuntimeError`` -- while CUDA
+    tracking itself works fine (that host produced a full byte-identical
+    equivalence matrix). The probe caught only ``ImportError``, so the
+    exception propagated out of ``default_software_fingerprint`` and killed
+    the entire autotune preflight: the tuner could never run on such a host,
+    degrading to a "fallback" overlay on every run with an opaque reason.
+
+    A fingerprint FIELD is not worth a feature. An unreadable probe reads
+    "absent" -- which is itself a fingerprint value, so two hosts that differ
+    here still get different profiles only when something else differs. That
+    is the same trade ``_torch_cuda_version`` already documents.
+    """
+
+    import types
+
+    from hydra_suite.core.inference.autotune import fingerprint as fingerprint_mod
+
+    class _Raises:
+        @staticmethod
+        def is_available():
+            return True
+
+        @staticmethod
+        def version():
+            raise RuntimeError(
+                "cuDNN version incompatibility: PyTorch was compiled against "
+                "(9, 19, 0) but found runtime version (9, 12, 0)"
+            )
+
+    fake_torch = types.SimpleNamespace(
+        backends=types.SimpleNamespace(cudnn=_Raises()),
+        version=types.SimpleNamespace(cuda="12.8"),
+    )
+    monkeypatch.setitem(sys.modules, "torch", fake_torch)
+
+    assert fingerprint_mod._torch_cudnn_version() == "absent"
+    # And the fingerprint it feeds must still be constructible.
+    software = fingerprint_mod.default_software_fingerprint(
+        backend="torch",
+        precision="fp16",
+        driver="unknown",
+        cuda="12.8",
+        cudnn="unknown",
+    )
+    assert software.cudnn
+
+
+def test_a_raising_cuda_version_probe_degrades_to_absent(monkeypatch):
+    import types
+
+    from hydra_suite.core.inference.autotune import fingerprint as fingerprint_mod
+
+    class _Boom:
+        def __getattr__(self, _name):
+            raise RuntimeError("torch.version is unavailable")
+
+    fake_torch = types.SimpleNamespace(version=_Boom())
+    monkeypatch.setitem(sys.modules, "torch", fake_torch)
+    assert fingerprint_mod._torch_cuda_version() == "absent"

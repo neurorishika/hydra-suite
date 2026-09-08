@@ -449,7 +449,11 @@ def _torch_cuda_version() -> str:
 
         version = torch.version.cuda
         return str(version) if version else "absent"
-    except ImportError:
+    except Exception:
+        # Broad on purpose: this is a FINGERPRINT FIELD, and a field is not
+        # worth the feature. Anything this probe raises must read "absent"
+        # rather than propagate -- see _torch_cudnn_version for the real
+        # incident that motivated widening both.
         return "absent"
 
 
@@ -462,7 +466,15 @@ def _torch_cudnn_version() -> str:
             return "absent"
         version = torch.backends.cudnn.version()
         return str(version) if version else "absent"
-    except ImportError:
+    except Exception:
+        # MEASURED INCIDENT: on a CUDA box whose torch was compiled against
+        # cuDNN (9, 19, 0) but which loads runtime (9, 12, 0),
+        # ``torch.backends.cudnn.version()`` raises RuntimeError -- while CUDA
+        # tracking on that same host is completely healthy (it produced a full
+        # byte-identical equivalence matrix). Catching only ImportError let
+        # that RuntimeError escape default_software_fingerprint and kill the
+        # whole autotune preflight, so the tuner degraded to a "fallback"
+        # overlay on EVERY run and could never calibrate on that host.
         return "absent"
 
 
