@@ -692,3 +692,61 @@ def test_realtime_yolo_obb_threads_roi_mask_into_run_realtime(monkeypatch, tmp_p
         calls.get("roi_mask") is not None
     ), "run_realtime must be called with a non-None roi_mask when ROI_MASK is configured"
     np.testing.assert_array_equal(calls["roi_mask"], roi_mask)
+
+
+def test_preview_never_launches_a_calibration(monkeypatch, tmp_path):
+    """S3: Preview is a look, not a workload -- it must be ineligible.
+
+    Preview forces ``effective_realtime_tracking_mode=False``, which made
+    ``execution_mode="batch"`` and therefore eligible: a user on
+    ``automatic``/``record`` who clicked Preview paid a full calibration
+    budget before seeing a frame, and the preview's own START/END range
+    became the calibration range for a profile whose key carries no frame
+    range -- which was then applied to the full run.
+    """
+    import hydra_suite.core.tracking.worker as worker_mod
+
+    calls = []
+
+    def resolve(_config, _params, **_kwargs):
+        calls.append("resolve")
+        raise AssertionError("preview must not reach the autotune preflight")
+
+    class _ProbeRunner:
+        def __init__(self, config, *_args, **_kwargs):
+            calls.append(("runner", config.detection_batch_size))
+
+        def caches_all_valid(self):
+            return False
+
+        def detection_cache_covers_range(self, *_args):
+            return False
+
+        def run_batch_pass(self, *_args, **_kwargs):
+            raise _StopAfterDispatch("runner constructed")
+
+        def close(self):
+            pass
+
+    monkeypatch.setattr(worker_mod, "TrackingProfiler", _FakeProfiler)
+    monkeypatch.setattr(worker_mod.cv2, "VideoCapture", _FakeVideoCapture)
+    monkeypatch.setattr(worker_mod, "InferenceRunner", _ProbeRunner)
+    monkeypatch.setattr(worker_mod, "_resolve_inference_autotune_before_load", resolve)
+    worker = worker_mod.TrackingEngineCore(
+        str(tmp_path / "video.mp4"),
+        on_finished=lambda *_args: None,
+        use_cached_detections=False,
+        preview_mode=True,
+    )
+    worker.set_parameters(
+        _dispatch_params(INFERENCE_AUTOTUNE_MODE="automatic", YOLO_BATCH_SIZE=1)
+    )
+
+    try:
+        worker.run_tracking()
+    except _StopAfterDispatch:
+        pass
+
+    assert "resolve" not in calls, "preview launched a calibration"
+    # The run still proceeds, at the project's own batch size.
+    assert ("runner", 1) in calls

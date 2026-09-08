@@ -18,6 +18,7 @@ import pandas as pd
 from hydra_suite.core.inference.autotune.models import InferenceTuningSettings
 from hydra_suite.core.inference.autotune.sidecar import (
     MAX_REQUEST_BYTES,
+    MEASUREMENT_STARTED_MARKER,
     SIDECAR_SCHEMA_VERSION,
     restore_sidecar_params,
 )
@@ -421,6 +422,14 @@ def run(request_path: Path) -> None:
         end=start + warmup_frames - 1,
         postprocess=False,
     )
+    # The warmup window is what loads (and, on a cold TensorRT/CoreML store,
+    # BUILDS) the runtime artifact. Tell the parent the build is behind us so
+    # it stops counting it against the per-trial measurement timeout (B3).
+    # Best-effort: a parent with no build allowance never looks at this.
+    try:
+        (request_root / MEASUREMENT_STARTED_MARKER).touch()
+    except OSError:
+        pass
 
     forwards = []
     finals = []

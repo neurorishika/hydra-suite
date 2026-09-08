@@ -129,6 +129,7 @@ def _resolve_inference_autotune_before_load(
         sample_detection_workload,
     )
     from hydra_suite.core.inference.autotune.sidecar import (
+        ARTIFACT_BUILD_ALLOWANCE_SECONDS,
         ContainedTrialExecutor,
         SidecarTrialSpec,
     )
@@ -217,6 +218,17 @@ def _resolve_inference_autotune_before_load(
             budget_seconds=config.inference_autotune.budget_seconds,
             runtime_artifact_batch_size=(
                 artifact_batch_size if resolved.backend == "tensorrt" else None
+            ),
+            # B3: the accelerated tiers build their engine INSIDE the child.
+            # The spec's own figure for a cold TensorRT profile build is
+            # 255-310 s, which alone exceeds the 120 s per-trial measurement
+            # cap -- so without this the baseline trial could never complete
+            # and the tuner could not start on TensorRT at all. Grant the
+            # build its own window; torch tiers keep the default 0.
+            artifact_build_allowance_seconds=(
+                ARTIFACT_BUILD_ALLOWANCE_SECONDS
+                if resolved.backend in ("tensorrt", "coreml")
+                else 0.0
             ),
         )
     )
@@ -1317,7 +1329,15 @@ class TrackingEngineCore:
                 self._emit_finished(False, [], [])
                 return
 
-            if not self.backward_mode:
+            # S3: Preview is never calibrated. Preview forces
+            # effective_realtime_tracking_mode=False, which made
+            # execution_mode="batch" and therefore ELIGIBLE -- so a user on
+            # ``automatic``/``record`` who clicked Preview paid up to a full
+            # calibration budget before seeing a single frame. Worse, the
+            # preview's START/END range became the calibration range and the
+            # resulting profile (whose key carries no frame range) was then
+            # applied to the full run. A preview is a look, not a workload.
+            if not self.backward_mode and not self.preview_mode:
                 if _inference_cfg.inference_autotune.mode != "off":
                     self._emit_progress(0, "Optimizing inference (bounded calibration)")
                 # S1: the preflight below builds a request (AutotuneRequest.

@@ -47,6 +47,16 @@ SIDECAR_SCHEMA_VERSION = 1
 MAX_REQUEST_BYTES = 2 * 1024 * 1024
 MAX_RESULT_BYTES = 2 * 1024 * 1024
 MEASUREMENT_BLOCKS = 5
+# Written by the child (next to its request) the instant its runtime artifact
+# is ready and the measured region starts. The parent uses it to stop counting
+# a cold artifact build against the per-trial measurement timeout.
+MEASUREMENT_STARTED_MARKER = "measurement-started"
+# Wall clock granted to a cold accelerated-artifact build, on top of (and
+# before) the per-trial measurement timeout. Sized from the spec's measured
+# cold TensorRT profile build (255-310 s) with headroom; it is a CEILING, not
+# a spend -- a warm store returns in milliseconds and the trial proceeds
+# immediately. The overall calibration budget still bounds everything.
+ARTIFACT_BUILD_ALLOWANCE_SECONDS = 420.0
 # The child has no MeasurementProtocol; the warmup-call minimum it must satisfy
 # travels in the request so there is exactly one source of truth for it.
 DEFAULT_WARMUP_CALLS = MeasurementProtocol().warmup_calls
@@ -69,8 +79,20 @@ class SidecarTrialSpec:
     end_frame: int
     warmup_calls: int = DEFAULT_WARMUP_CALLS
     budget_seconds: float = DEFAULT_CALIBRATION_BUDGET_SECONDS
-    # The validator's ceiling: a cold TensorRT engine build can take most of it.
+    # The MEASUREMENT window only. A cold accelerated-artifact build does not
+    # count against it -- see artifact_build_allowance_seconds.
     per_trial_timeout_seconds: float = 120.0
+    # Extra wall clock granted BEFORE the child reports that measurement has
+    # started. B3: the spec's own figure for a cold TensorRT profile build is
+    # 255-310 s, and the wide calibration engine is built inside the child --
+    # nothing prebuilds it. Under a flat 120 s cap the baseline trial could
+    # never complete, every block failed, the search returned
+    # baseline_measurement_incomplete and the key was negative-cached for 24 h,
+    # so on TensorRT the tuner could not start at all. The build is now
+    # excluded from the timed window rather than squeezed into it. 0 (the
+    # default, and what every torch tier uses) reproduces the old behaviour
+    # exactly.
+    artifact_build_allowance_seconds: float = 0.0
     # Per-PHASE frame cap, divided across MEASUREMENT_BLOCKS blocks by
     # _frames_for_block. 640 gives each of the five blocks >= 128 frames, which
     # is what amortizes a model load. Distinct from
@@ -94,6 +116,10 @@ class SidecarTrialSpec:
             )
         if not 5 <= self.per_trial_timeout_seconds <= 120:
             raise ValueError("trial timeout must be between 5 and 120 seconds")
+        if not 0 <= self.artifact_build_allowance_seconds <= 900:
+            raise ValueError(
+                "artifact build allowance must be between 0 and 900 seconds"
+            )
         if not 8 <= self.maximum_frames <= 2048:
             raise ValueError("calibration frame cap must be between 8 and 2048")
         if self.runtime_artifact_batch_size is not None and not (
@@ -474,16 +500,29 @@ class ContainedTrialExecutor:
                 ),
             )
             timeout = min(self.spec.per_trial_timeout_seconds, max(0.1, remaining))
-            deadline = time.monotonic() + timeout
+            allowance = float(self.spec.artifact_build_allowance_seconds)
+            # The child touches this the moment its artifact is loaded/built
+            # and the measured region begins. Until then the trial is spending
+            # build time, which is not what per_trial_timeout_seconds bounds.
+            started_marker = request.parent / MEASUREMENT_STARTED_MARKER
+            deadline = time.monotonic() + min(timeout + allowance, max(0.1, remaining))
+            measuring = allowance <= 0.0
             while sidecar.process is not None and sidecar.process.poll() is None:
                 if should_cancel():
                     sidecar.cancel()
                     sidecar = None
                     return self._failure(settings, "cancelled")
+                if not measuring and started_marker.exists():
+                    # Build finished: restart the measurement clock, still
+                    # bounded by whatever is left of the overall budget.
+                    measuring = True
+                    deadline = time.monotonic() + min(timeout, max(0.1, remaining))
                 if time.monotonic() >= deadline:
                     sidecar.cancel()
                     sidecar = None
-                    return self._failure(settings, "timeout")
+                    return self._failure(
+                        settings, "timeout" if measuring else "artifact_build_timeout"
+                    )
                 time.sleep(0.05)
             supervised = sidecar.wait(timeout=10.0)
             sidecar = None

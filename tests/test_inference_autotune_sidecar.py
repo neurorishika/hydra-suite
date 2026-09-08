@@ -505,3 +505,68 @@ def test_min_trajectory_length_is_clamped_to_the_window_not_to_one():
         ]
         == 16
     )
+
+
+# ---- B3: a cold artifact build must not guarantee a trial timeout ----------
+
+
+def test_artifact_build_is_excluded_from_the_measurement_timeout():
+    """The 120 s cap bounds MEASUREMENT, not a cold TensorRT engine build.
+
+    The spec's own figure for a cold TRT profile build is 255-310 s and the
+    wide calibration engine is built inside the child -- nothing prebuilds it.
+    Under a flat 120 s cap the baseline trial could never complete, every
+    block failed, the search returned ``baseline_measurement_incomplete`` and
+    the key was negative-cached for 24 h: on TensorRT the tuner could not
+    start at all.
+    """
+
+    from hydra_suite.core.inference.autotune.sidecar import (
+        ARTIFACT_BUILD_ALLOWANCE_SECONDS,
+        MEASUREMENT_STARTED_MARKER,
+    )
+
+    assert ARTIFACT_BUILD_ALLOWANCE_SECONDS > 310.0, (
+        "the allowance must exceed the spec's cold TensorRT build figure, "
+        "or it re-creates the guaranteed failure it exists to remove"
+    )
+    # The marker name is a contract between parent and child.
+    from hydra_suite.core.inference.autotune import sidecar_child
+
+    assert sidecar_child.MEASUREMENT_STARTED_MARKER == MEASUREMENT_STARTED_MARKER
+
+
+def test_build_allowance_defaults_to_zero_so_torch_tiers_are_unchanged(tmp_path):
+    from hydra_suite.core.inference.autotune.sidecar import SidecarTrialSpec
+
+    from .autotune_helpers import _resource_probe
+
+    observation, probe = _resource_probe()
+    spec = SidecarTrialSpec(
+        video_path=tmp_path / "v.mp4",
+        params={},
+        observation=observation,
+        resource_probe=probe,
+        start_frame=0,
+        end_frame=99,
+    )
+    assert spec.artifact_build_allowance_seconds == 0.0
+
+
+@pytest.mark.parametrize("allowance", [-1.0, 901.0])
+def test_an_out_of_range_build_allowance_is_rejected(tmp_path, allowance):
+    from hydra_suite.core.inference.autotune.sidecar import SidecarTrialSpec
+
+    from .autotune_helpers import _resource_probe
+
+    observation, probe = _resource_probe()
+    with pytest.raises(ValueError, match="artifact build allowance"):
+        SidecarTrialSpec(
+            video_path=tmp_path / "v.mp4",
+            params={},
+            observation=observation,
+            resource_probe=probe,
+            start_frame=0,
+            end_frame=99,
+            artifact_build_allowance_seconds=allowance,
+        )
