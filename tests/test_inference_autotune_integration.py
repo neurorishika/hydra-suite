@@ -81,7 +81,6 @@ def test_tracking_request_fingerprints_every_model_and_path_free_geometry(tmp_pa
     context = TrackingRunContext(
         video_path=tmp_path / "private-name.mp4",
         params={
-            "INFERENCE_AUTOTUNE_MODE": "record",
             "MAX_TARGETS": 25,
             "RESIZE_FACTOR": 0.5,
             "INFERENCE_AUTOTUNE_DETECTION_COUNTS": [12, 25, 17],
@@ -149,7 +148,7 @@ def test_realtime_drops_inert_detector_batch_and_depth_coordinates(tmp_path):
     config = _config(tmp_path)
     context = TrackingRunContext(
         video_path=tmp_path / "video.mp4",
-        params={"INFERENCE_AUTOTUNE_MODE": "record", "MAX_TARGETS": 25},
+        params={"MAX_TARGETS": 25},
         frame_width=1200,
         frame_height=900,
         execution_mode="realtime",
@@ -174,7 +173,7 @@ def test_cache_replay_is_ineligible_and_never_searches(tmp_path):
     config = _config(tmp_path)
     context = TrackingRunContext(
         video_path=tmp_path / "video.mp4",
-        params={"INFERENCE_AUTOTUNE_MODE": "automatic", "MAX_TARGETS": 25},
+        params={"MAX_TARGETS": 25},
         frame_width=1200,
         frame_height=900,
         execution_mode="cache_replay",
@@ -202,7 +201,7 @@ def test_realtime_is_ineligible_and_never_searches(tmp_path):
     config = _config(tmp_path)
     context = TrackingRunContext(
         video_path=tmp_path / "video.mp4",
-        params={"INFERENCE_AUTOTUNE_MODE": "automatic", "MAX_TARGETS": 25},
+        params={"MAX_TARGETS": 25},
         frame_width=1200,
         frame_height=900,
         execution_mode="realtime",
@@ -218,50 +217,6 @@ def test_realtime_is_ineligible_and_never_searches(tmp_path):
     assert not request.eligible
     assert request.eligibility_reason == "realtime inference is not tunable"
     assert request.planner.admit(request.baseline).settings.detection_batch_size == 1
-
-
-def test_automatic_and_record_modes_are_both_eligible_to_measure(
-    tmp_path,
-):
-    config = _config(tmp_path)
-    automatic = TrackingRunContext(
-        video_path=tmp_path / "video.mp4",
-        params={"INFERENCE_AUTOTUNE_MODE": "automatic", "MAX_TARGETS": 25},
-        frame_width=100,
-        frame_height=100,
-        execution_mode="batch",
-    )
-    record = TrackingRunContext(
-        video_path=automatic.video_path,
-        params={**automatic.params, "INFERENCE_AUTOTUNE_MODE": "record"},
-        frame_width=100,
-        frame_height=100,
-        execution_mode="batch",
-    )
-
-    config.inference_autotune = InferenceAutotunePolicy(mode="calibrate")
-
-    auto_request = build_tracking_autotune_request(
-        config,
-        automatic,
-        observation=_observation(),
-        backend="torch",
-        device_identity=("cpu", "CPU", "none", 0),
-    )
-    config.inference_autotune = InferenceAutotunePolicy(mode="calibrate")
-    record_request = build_tracking_autotune_request(
-        config,
-        record,
-        observation=_observation(),
-        backend="torch",
-        device_identity=("cpu", "CPU", "none", 0),
-    )
-
-    # Non-CUDA no longer blocks eligibility -- only realtime, cache_replay,
-    # contention, thermal throttling, or failed baseline admission block
-    # measuring (see test_inference_autotune_eligibility_split.py).
-    assert auto_request.eligible
-    assert record_request.eligible
 
 
 def test_core_inference_policy_roundtrip_and_legacy_default(tmp_path):

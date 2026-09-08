@@ -1000,10 +1000,13 @@ class SetupPanel(QWidget):
     def _on_inference_autotune_mode_changed(self, _index: int) -> None:
         """Persist the one user-facing inference-throughput policy control.
 
-        Three states -- "off"/"record"/"automatic" -- round-trip losslessly
-        through this combo box, unlike the boolean checkbox it replaced
-        (which could only represent on/off and destroyed "record" on the
-        next toggle).
+        Interim shim: ``TrackerConfig`` now stores one boolean
+        (``apply_tuned_inference``), not a three-way mode string. "Record
+        only" and "Automatic" both persist as ``apply_tuned_inference=True``
+        and no longer round-trip as distinct values -- only "Off" maps to
+        ``False``. This combo box is replaced by a Calibrate button plus an
+        apply checkbox in a later task; until then it stays alive only to
+        drive that one boolean.
         """
         mode = str(self.combo_inference_autotune.currentData() or "off")
         if not getattr(self._main_window, "_restoring_config", False):
