@@ -341,14 +341,10 @@ class ConfigOrchestrator:
             min(MAXIMUM_CALIBRATION_BUDGET_SECONDS, budget_seconds),
         )
         panel = self._panels.setup
-        display_mode = "automatic" if apply_tuned_inference else "off"
-        panel._set_inference_autotune_combo_mode(display_mode)
-        panel.spin_inference_autotune_budget.blockSignals(True)
-        panel.spin_inference_autotune_budget.setValue(
-            self._mw.config.inference_autotune_budget_seconds
-        )
-        panel.spin_inference_autotune_budget.blockSignals(False)
-        panel.set_inference_autotune_status_for_mode(display_mode)
+        panel.chk_apply_tuned_inference.blockSignals(True)
+        panel.chk_apply_tuned_inference.setChecked(apply_tuned_inference)
+        panel.chk_apply_tuned_inference.blockSignals(False)
+        panel.set_inference_autotune_status_for_checkbox(apply_tuned_inference)
 
     def _load_config_detection(self, get_cfg, get_cfg_time):
         det_method = get_cfg("detection_method", default="background_subtraction")

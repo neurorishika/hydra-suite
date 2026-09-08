@@ -119,9 +119,6 @@ def test_gui_status_displays_effective_runtime_overlay() -> None:
     captured = []
 
     class Setup:
-        def set_inference_autotune_calibration_active(self, _active):
-            pass
-
         def set_inference_autotune_status(self, text):
             captured.append(text)
 
@@ -148,34 +145,12 @@ def test_gui_status_displays_effective_runtime_overlay() -> None:
     assert "detection_batch_size=4" in captured[0]
 
 
-def test_gui_continue_action_cancels_only_calibration() -> None:
-    calls = []
-
-    class Worker:
-        def cancel_inference_autotune(self):
-            calls.append("cancel")
-
-    class Setup:
-        def set_inference_autotune_calibration_active(self, active):
-            calls.append(("active", active))
-
-        def set_inference_autotune_status(self, text):
-            calls.append(("status", text))
-
-    class MainWindow:
-        tracking_worker = Worker()
-
-    orchestrator = object.__new__(TrackingOrchestrator)
-    orchestrator._mw = MainWindow()
-    orchestrator._panels = type("Panels", (), {"setup": Setup()})()
-
-    orchestrator.continue_with_current_inference_settings()
-
-    assert calls == [
-        "cancel",
-        ("active", False),
-        ("status", "Continuing with configured inference settings…"),
-    ]
+def test_gui_no_continue_escape_hatch_remains() -> None:
+    """The interim "Continue with current settings" escape hatch existed
+    only to interrupt calibration a tracking run should never have been
+    doing. A run never calibrates now (only the explicit Calibrate…
+    dialog does), so the method is gone."""
+    assert not hasattr(TrackingOrchestrator, "continue_with_current_inference_settings")
 
 
 def test_run_summary_includes_fingerprint_even_without_promoted_profile() -> None:
