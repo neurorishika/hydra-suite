@@ -248,7 +248,7 @@ PERF_LABEL="PERFORMANCE  legacy vs new_a (tolerance ${PERF_TOLERANCE}x)"
 if [ "$AUTOTUNE" = "1" ]; then
   PERF_LABEL="PERFORMANCE  default vs tuned (INFORMATIONAL -- not a gate)"
 fi
-perfcmp() {  # legacy_meta new_meta
+perfcmp() {  # legacy_meta new_meta clip
   echo "--- $PERF_LABEL ---"
   if [ ! -f "$1" ] || [ ! -f "$2" ]; then
     echo "  (missing meta.json)"; return
@@ -263,9 +263,22 @@ print(f"  legacy: {lt}s ({lf} fps)   new: {nt}s ({nf} fps)")
 if not lt or not nt:
     print("  (no timing recorded)"); raise SystemExit(0)
 ratio = nt / lt
-verdict = "EQUIVALENT ✅" if ratio <= tol else "SLOWER ❌"
+ok = ratio <= tol
+verdict = "EQUIVALENT ✅" if ok else "SLOWER ❌"
 print(f"  new/legacy time ratio = {ratio:.2f}x  ->  PERFORMANCE: {verdict}")
+# Exit non-zero on a red verdict so the caller can fail the matrix. This
+# printed "SLOWER ❌" and exited 0 for the entire life of the harness -- the
+# same defect as cmp()'s swallowed rc=1. A gate that cannot fail is not a gate.
+raise SystemExit(0 if ok else 1)
 PY
+  rc=$?
+  # Under AUTOTUNE=1 both sides are the same source tree and the ratio IS the
+  # thing the tuner changes (and on MPS a larger batch is measured slower), so
+  # a red line there is an expected reading, not a regression -- informational,
+  # exactly as PERF_LABEL says. Everywhere else it fails the matrix.
+  if [ "$rc" != "0" ] && [ "$AUTOTUNE" != "1" ]; then
+    note_failure "${3:-?}" "PERFORMANCE -- new is slower than legacy beyond ${PERF_TOLERANCE}x"
+  fi
 }
 
 for entry in "${VIDEOS[@]}"; do
@@ -312,7 +325,7 @@ for entry in "${VIDEOS[@]}"; do
       "$EQV_TITLE" "$name" --strict-columns
 
   echo; echo ">>> $name : performance"
-  perfcmp "$base/legacy/meta.json" "$base/new_a/meta.json"
+  perfcmp "$base/legacy/meta.json" "$base/new_a/meta.json" "$name"
 done
 echo; echo "### done. outputs under $OUT/$RUNTIME/"
 echo
