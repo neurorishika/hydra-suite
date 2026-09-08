@@ -4092,7 +4092,19 @@ def _fragment_unique_identity_sources(frag_df: pd.DataFrame) -> dict[str, str]:
     ]
     if not keys:
         return {}
-    dominant_key = max(set(keys), key=keys.count)
+    # `max` over an unordered `set` of strings picks an ARBITRARY element
+    # among equally-frequent keys, and CPython's per-process string hash
+    # seed changes that pick from run to run. The chosen key becomes the
+    # fragment's `identity_sources`, which gates relink candidates via
+    # `identity_sources_conflict` -- so an arbitrary pick made tracklet
+    # relinking (and therefore the final CSV) nondeterministic across
+    # processes. MEASURED on ant_cnn_identity_relink: 20 fragments have a
+    # tied dominant key and the run collapsed 171 fragments into 164 or
+    # 165 trajectories purely as a function of PYTHONHASHSEED.
+    # `sorted` makes the tie-break lexicographic and reproducible; `max`
+    # returns the FIRST maximal element, so ties resolve to the
+    # lexicographically smallest key.
+    dominant_key = max(sorted(set(keys)), key=keys.count)
     return _parse_unique_identity_key(dominant_key)
 
 
