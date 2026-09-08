@@ -750,3 +750,63 @@ def test_preview_never_launches_a_calibration(monkeypatch, tmp_path):
     assert "resolve" not in calls, "preview launched a calibration"
     # The run still proceeds, at the project's own batch size.
     assert ("runner", 1) in calls
+
+
+def test_backward_enabled_project_is_not_calibrated(monkeypatch, tmp_path):
+    """A run with a backward pass must decline tuning, not break the run.
+
+    The backward pass replays the forward pass's detection cache, but the
+    autotuner only runs on the forward pass -- so backward re-resolves at the
+    project's UNTUNED batch size. Now that the batch size is part of the cache
+    key (it must be), that is a key miss and backward refuses with "Cached
+    tracking replay requires valid inference caches". Measured on courtship:
+    forward promoted det=4 and completed, then the whole run failed in
+    backward.
+
+    Declining is the fail-safe. The real fix is to propagate the forward
+    pass's effective vector to the backward pass.
+    """
+    import hydra_suite.core.tracking.worker as worker_mod
+
+    calls = []
+
+    def resolve(_config, _params, **_kwargs):
+        calls.append("resolve")
+        raise AssertionError("a backward-enabled project must not be calibrated")
+
+    class _ProbeRunner:
+        def __init__(self, config, *_args, **_kwargs):
+            calls.append(("runner", config.detection_batch_size))
+
+        def caches_all_valid(self):
+            return False
+
+        def detection_cache_covers_range(self, *_args):
+            return False
+
+        def run_batch_pass(self, *_args, **_kwargs):
+            raise _StopAfterDispatch("runner constructed")
+
+        def close(self):
+            pass
+
+    monkeypatch.setattr(worker_mod, "TrackingProfiler", _FakeProfiler)
+    monkeypatch.setattr(worker_mod.cv2, "VideoCapture", _FakeVideoCapture)
+    monkeypatch.setattr(worker_mod, "InferenceRunner", _ProbeRunner)
+    monkeypatch.setattr(worker_mod, "_resolve_inference_autotune_before_load", resolve)
+    worker = worker_mod.TrackingEngineCore(
+        str(tmp_path / "video.mp4"),
+        on_finished=lambda *_args: None,
+        use_cached_detections=False,
+    )
+    params = _dispatch_params(INFERENCE_AUTOTUNE_MODE="automatic", YOLO_BATCH_SIZE=1)
+    params["INFERENCE_AUTOTUNE_PROJECT_CONFIG"] = {"enable_backward_tracking": True}
+    worker.set_parameters(params)
+
+    try:
+        worker.run_tracking()
+    except _StopAfterDispatch:
+        pass
+
+    assert "resolve" not in calls, "a backward-enabled project was calibrated"
+    assert ("runner", 1) in calls, "the run must still proceed, untuned"

@@ -1337,7 +1337,42 @@ class TrackingEngineCore:
             # preview's START/END range became the calibration range and the
             # resulting profile (whose key carries no frame range) was then
             # applied to the full run. A preview is a look, not a workload.
-            if not self.backward_mode and not self.preview_mode:
+            # A run with a BACKWARD pass cannot be tuned today. The backward
+            # pass replays the forward pass's detection cache, but the
+            # autotuner only runs on the forward pass (this very gate), so
+            # backward re-resolves at the project's UNTUNED batch size. Now
+            # that the batch size is part of the cache key (it must be -- see
+            # cache/keys.py), that is a key miss, and backward refuses with
+            # "Cached tracking replay requires valid inference caches".
+            # MEASURED on courtship: forward promoted det=4 and completed;
+            # the backward pass then failed the whole run.
+            #
+            # Declining to tune is the fail-safe: a run that does not get
+            # faster beats a run that does not finish. This costs yield on
+            # every backward-enabled project and should be REPLACED by
+            # propagating the forward pass's effective vector to the backward
+            # pass -- which is the real fix, and is not a three-line change
+            # because the GUI and headless paths build their params
+            # differently.
+            _project_config = p.get("INFERENCE_AUTOTUNE_PROJECT_CONFIG") or {}
+            _backward_enabled = bool(
+                isinstance(_project_config, dict)
+                and _project_config.get("enable_backward_tracking")
+            )
+            if not self.backward_mode and not self.preview_mode and _backward_enabled:
+                if _inference_cfg.inference_autotune.mode != "off":
+                    logger.warning(
+                        "Inference throughput autotuner declined: this project "
+                        "enables backward tracking, whose pass replays the "
+                        "forward detection cache at the project's own batch "
+                        "size. Tuning the forward pass would leave that cache "
+                        "unreadable and fail the run."
+                    )
+                    self._emit_progress(
+                        0,
+                        "Inference tuning skipped (backward tracking enabled)",
+                    )
+            if not self.backward_mode and not self.preview_mode and not _backward_enabled:
                 if _inference_cfg.inference_autotune.mode != "off":
                     self._emit_progress(0, "Optimizing inference (bounded calibration)")
                 # S1: the preflight below builds a request (AutotuneRequest.
