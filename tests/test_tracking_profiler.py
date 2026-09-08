@@ -69,6 +69,6 @@ def test_initialization_phase_closes_after_model_load_and_autotune_preflight():
         source.rindex("bgsub_runner = InferenceRunner("),
     ]
     assert max(constructions) < boundary
-    assert source.index(") = _resolve_inference_autotune_before_load(") < boundary
+    assert source.index(") = _autotune_session.lookup(") < boundary
     # ... and still before the first measured phase.
     assert boundary < source.index('profiler.phase_start("batched_detection")')

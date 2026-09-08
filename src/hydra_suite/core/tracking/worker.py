@@ -1198,10 +1198,31 @@ class TrackingEngineCore:
                     from hydra_suite.core.inference.autotune.applied_vector import (
                         read_applied_vector,
                     )
+                    from hydra_suite.core.inference.autotune.models import (
+                        InferenceTuningSettings,
+                    )
 
                     _forward_vector = read_applied_vector(self._resolve_cache_dir())
                     if _forward_vector is not None:
-                        _inference_cfg = _forward_vector.apply(_inference_cfg)
+                        # Only disable the process-local SAHI tile-batch tuner
+                        # when the forward pass's recorded vector actually
+                        # overrode this project's own baseline -- mirroring
+                        # InferenceRuntimeOverlay.apply()'s
+                        # ``effective != requested`` guard (models.py). Both
+                        # passes build from the same project config, so the
+                        # baseline computed here agrees with the forward
+                        # pass's own baseline. Without this, a persisted
+                        # untuned (baseline) vector would still disable SAHI's
+                        # own tuner on every backward pass.
+                        _backward_baseline = InferenceTuningSettings.from_config(
+                            _inference_cfg
+                        )
+                        _inference_cfg = _forward_vector.apply(
+                            _inference_cfg,
+                            disable_tile_autotune=(
+                                _forward_vector != _backward_baseline
+                            ),
+                        )
                         logger.info(
                             "Backward pass reusing the forward pass's inference "
                             "vector: %s",

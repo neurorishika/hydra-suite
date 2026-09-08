@@ -822,3 +822,144 @@ def test_backward_enabled_project_is_tuned_and_propagates_vector(monkeypatch, tm
     recovered = read_applied_vector(cache_dir)
     assert recovered is not None, "the forward pass must persist its applied vector"
     assert recovered.detection_batch_size == 4
+
+
+def test_backward_pass_applies_the_persisted_forward_vector(monkeypatch, tmp_path):
+    """The backward branch itself (worker.py's ``if self.backward_mode:``)
+    must apply a persisted forward vector to the config the InferenceRunner
+    is actually constructed with -- not just prove the forward pass writes
+    the sidecar (test_backward_enabled_project_is_tuned_and_propagates_vector)
+    or that the cache-key arithmetic agrees in isolation
+    (test_applying_the_forward_vector_reproduces_the_forward_cache_key).
+    """
+    import hydra_suite.core.tracking.worker as worker_mod
+    from hydra_suite.core.inference.autotune.applied_vector import write_applied_vector
+    from hydra_suite.core.inference.autotune.models import InferenceTuningSettings
+
+    calls = []
+
+    class _ProbeRunner:
+        def __init__(self, config, *_args, **_kwargs):
+            calls.append(
+                (
+                    config.detection_batch_size,
+                    config.obb.direct.slice.tile_batch_autotune,
+                )
+            )
+            raise _StopAfterDispatch("runner constructed")
+
+    monkeypatch.setattr(worker_mod, "TrackingProfiler", _FakeProfiler)
+    monkeypatch.setattr(worker_mod.cv2, "VideoCapture", _FakeVideoCapture)
+    monkeypatch.setattr(worker_mod, "InferenceRunner", _ProbeRunner)
+
+    cache_dir = tmp_path / "cache"
+    cache_dir.mkdir()
+    # A vector that actually overrides the project baseline: detection batch
+    # promoted from the configured 1 -> 4, exactly as measured on courtship.
+    write_applied_vector(
+        cache_dir,
+        InferenceTuningSettings(detection_batch_size=4, slice_tile_batch_size=32),
+    )
+
+    worker = worker_mod.TrackingEngineCore(
+        str(tmp_path / "video.mp4"),
+        on_finished=lambda *_args: None,
+        use_cached_detections=True,
+        backward_mode=True,
+        inference_cache_dir=str(cache_dir),
+        detection_cache_path=str(cache_dir / "forward_cache"),
+    )
+    params = _dispatch_params(
+        APPLY_TUNED_INFERENCE=True,
+        YOLO_BATCH_SIZE=1,
+        SLICE_ENABLED=True,
+        SLICE_TILE_BATCH_AUTOTUNE=True,
+    )
+    worker.set_parameters(params)
+
+    try:
+        worker.run_tracking()
+    except _StopAfterDispatch:
+        pass
+
+    assert calls, "the backward InferenceRunner must have been constructed"
+    batch_size, tile_batch_autotune = calls[0]
+    assert batch_size == 4, "backward must run at the forward pass's batch size"
+    # Finding 1: the persisted vector DID override the baseline (1 -> 4), so
+    # disabling the process-local SAHI tile-batch tuner here is correct.
+    assert tile_batch_autotune is False
+
+
+def test_backward_pass_untuned_vector_does_not_disable_sahi_tuning(
+    monkeypatch, tmp_path
+):
+    """Regression for review Finding 1.
+
+    ``InferenceTuningSettings.apply`` defaults ``disable_tile_autotune=True``
+    unconditionally. A persisted vector that equals the project's own
+    baseline (an untuned forward pass -- nothing was actually promoted) must
+    NOT disable the process-local SAHI tile-batch tuner on the backward
+    pass; the backward branch must gate that on
+    ``forward_vector != baseline``, mirroring
+    ``InferenceRuntimeOverlay.apply()``'s ``effective != requested`` guard.
+    Without this, every backward pass on a SAHI-enabled project would
+    silently disable SAHI's own tile autotuning, even when nothing was
+    tuned.
+    """
+    import hydra_suite.core.tracking.worker as worker_mod
+    from hydra_suite.core.inference.autotune.applied_vector import write_applied_vector
+    from hydra_suite.core.inference.autotune.models import InferenceTuningSettings
+
+    calls = []
+
+    class _ProbeRunner:
+        def __init__(self, config, *_args, **_kwargs):
+            calls.append(
+                (
+                    config.detection_batch_size,
+                    config.obb.direct.slice.tile_batch_autotune,
+                )
+            )
+            raise _StopAfterDispatch("runner constructed")
+
+    monkeypatch.setattr(worker_mod, "TrackingProfiler", _FakeProfiler)
+    monkeypatch.setattr(worker_mod.cv2, "VideoCapture", _FakeVideoCapture)
+    monkeypatch.setattr(worker_mod, "InferenceRunner", _ProbeRunner)
+
+    cache_dir = tmp_path / "cache"
+    cache_dir.mkdir()
+    # An untuned forward pass: the persisted vector is exactly the project's
+    # own configured baseline (YOLO_BATCH_SIZE=1 below).
+    write_applied_vector(
+        cache_dir,
+        InferenceTuningSettings(detection_batch_size=1, slice_tile_batch_size=16),
+    )
+
+    worker = worker_mod.TrackingEngineCore(
+        str(tmp_path / "video.mp4"),
+        on_finished=lambda *_args: None,
+        use_cached_detections=True,
+        backward_mode=True,
+        inference_cache_dir=str(cache_dir),
+        detection_cache_path=str(cache_dir / "forward_cache"),
+    )
+    params = _dispatch_params(
+        APPLY_TUNED_INFERENCE=True,
+        YOLO_BATCH_SIZE=1,
+        SLICE_ENABLED=True,
+        SLICE_TILE_BATCH_AUTOTUNE=True,
+    )
+    worker.set_parameters(params)
+
+    try:
+        worker.run_tracking()
+    except _StopAfterDispatch:
+        pass
+
+    assert calls, "the backward InferenceRunner must have been constructed"
+    batch_size, tile_batch_autotune = calls[0]
+    assert batch_size == 1
+    assert tile_batch_autotune is True, (
+        "an untuned (baseline) forward vector must not disable SAHI's own "
+        "tile-batch tuner on the backward pass"
+    )
