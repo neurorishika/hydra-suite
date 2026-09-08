@@ -5,6 +5,7 @@ from __future__ import annotations
 import json
 import logging
 import os
+import re
 import shutil
 import sys
 import tempfile
@@ -329,6 +330,47 @@ def read_sidecar_result(
     )
 
 
+# Diagnostics are persisted into the profile store, so they must never carry an
+# absolute home path (user name, machine layout) into a shared artifact.
+_HOME_PATTERN = re.compile(r"(?:/home|/Users)/[^/\s'\"]+")
+
+MAX_FAILURE_DETAIL_CHARS = 2000
+MAX_FAILURE_DETAIL_LINES = 12
+
+
+def redact_diagnostic(text: str) -> str:
+    """Bound and de-identify child diagnostics before they are stored."""
+
+    value = str(text or "").strip()
+    if not value:
+        return ""
+    value = _HOME_PATTERN.sub("~", value)
+    try:
+        value = value.replace(str(Path.home()), "~")
+    except (RuntimeError, OSError):  # pragma: no cover - no home directory
+        pass
+    if len(value) > MAX_FAILURE_DETAIL_CHARS:
+        value = "..." + value[-(MAX_FAILURE_DETAIL_CHARS - 3) :]
+    return value
+
+
+def summarize_child_failure(supervised: Any) -> str:
+    """Classified message plus the tail of the child's own output, bounded."""
+
+    parts = [str(getattr(supervised.classified_exit, "message", "") or "").strip()]
+    returncode = getattr(supervised, "returncode", None)
+    if returncode is not None:
+        parts.append(f"returncode={returncode}")
+    tail = tuple(getattr(supervised, "output_tail", ()) or ())
+    if tail:
+        kept = [line.rstrip() for line in tail[-MAX_FAILURE_DETAIL_LINES:]]
+        dropped = int(getattr(supervised, "dropped_output_lines", 0) or 0)
+        if dropped:
+            kept.insert(0, f"(+{dropped} earlier output lines dropped)")
+        parts.append("child output tail: " + " / ".join(item for item in kept if item))
+    return redact_diagnostic("; ".join(item for item in parts if item))
+
+
 class ContainedTrialExecutor:
     """Execute every trial in a fresh supervised process and private cache root."""
 
@@ -446,7 +488,20 @@ class ContainedTrialExecutor:
             supervised = sidecar.wait(timeout=10.0)
             sidecar = None
             if supervised.classified_exit.kind is not ExitKind.SUCCESS:
-                return self._failure(settings, supervised.classified_exit.kind.value)
+                # The child's own output is the ONLY evidence of why a trial
+                # died. Discarding it (the previous behaviour) made a broken
+                # cuDNN install and a genuinely bad candidate look identical:
+                # both surfaced as the bare word "ordinary-failure" with an
+                # empty `rejected` list.
+                detail = summarize_child_failure(supervised)
+                logger.warning(
+                    "Inference tuning trial failed (%s): %s",
+                    supervised.classified_exit.kind.value,
+                    detail,
+                )
+                return self._failure(
+                    settings, supervised.classified_exit.kind.value, detail
+                )
             return read_sidecar_result(
                 request_root,
                 settings,
@@ -486,7 +541,9 @@ class ContainedTrialExecutor:
 
     @staticmethod
     def _failure(
-        settings: InferenceTuningSettings, failure_class: str
+        settings: InferenceTuningSettings,
+        failure_class: str,
+        detail: str = "",
     ) -> TrialObservation:
         return TrialObservation(
             settings=settings,
@@ -494,4 +551,5 @@ class ContainedTrialExecutor:
             stage_seconds=0.0,
             outputs=None,
             failure_class=failure_class,
+            failure_detail=redact_diagnostic(detail),
         )

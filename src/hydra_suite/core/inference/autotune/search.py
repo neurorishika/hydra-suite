@@ -20,6 +20,24 @@ from .measure import (
 from .models import CandidateEvidence, EquivalenceVerdict, InferenceTuningSettings
 
 
+def _failure_details(samples: Sequence["TrialObservation"]) -> str:
+    """Append the first distinct failure diagnostics, bounded for the store."""
+
+    seen: list[str] = []
+    for item in samples:
+        detail = (item.failure_detail or "").strip()
+        if detail and detail not in seen:
+            seen.append(detail)
+        if len(seen) >= 2:
+            break
+    if not seen:
+        return ""
+    joined = " | ".join(seen)
+    if len(joined) > 600:
+        joined = joined[:597] + "..."
+    return f" detail={joined}"
+
+
 @dataclass(frozen=True, slots=True)
 class TrialObservation:
     settings: InferenceTuningSettings
@@ -38,6 +56,11 @@ class TrialObservation:
     artifact_ids: tuple[str, ...] = ()
     stage_shares: tuple[tuple[str, float], ...] = ()
     failure_class: str | None = None
+    # Bounded, home-path-redacted diagnostic text for a FAILED trial only.
+    # Without it, a crashed sidecar surfaced as the bare word
+    # "ordinary-failure" with the child's traceback discarded, so a broken
+    # environment was indistinguishable from a broken candidate.
+    failure_detail: str = ""
 
     def __post_init__(self) -> None:
         if self.failure_class is None and (
@@ -569,7 +592,8 @@ class CoordinateSearch:
                             "measurement_incomplete: "
                             f"blocks={len(successful)}/"
                             f"{self.protocol.minimum_blocks}"
-                            + (f" failures={','.join(failures)}" if failures else ""),
+                            + (f" failures={','.join(failures)}" if failures else "")
+                            + _failure_details(samples),
                         )
                     )
                 continue
