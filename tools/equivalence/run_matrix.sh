@@ -214,9 +214,16 @@ cmp() {  # a b title clip [extra compare.py args...]
   fi
   python "$WT/tools/equivalence/compare.py" "$1" "$2" "${@:5}"
   rc=$?
-  # compare.py: 0 = equivalent, 1 = real differences, 2 = no data
+  # compare.py: 0 = equivalent, 1 = real differences, 2 = no data.
+  # BOTH non-zero codes must fail the matrix. Only rc=2 used to, so a red
+  # "DIFFERENCES ❌" verdict left the harness exiting 0 -- the matrix that
+  # certifies every other claim in this repo could not itself say no. A red
+  # DETERMINISM leg is a failure too: it means the noise floor is not a floor,
+  # and every EQUIVALENCE reading taken against it is uninterpretable.
   if [ "$rc" = "2" ]; then
     note_failure "${4:-?}" "$3 -- compare.py reported NO DATA"
+  elif [ "$rc" != "0" ]; then
+    note_failure "${4:-?}" "$3 -- compare.py reported DIFFERENCES (rc=$rc)"
   fi
 }
 
