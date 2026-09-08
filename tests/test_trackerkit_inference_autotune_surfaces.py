@@ -192,3 +192,27 @@ def test_run_summary_includes_fingerprint_even_without_promoted_profile() -> Non
     assert summary["fingerprint_digest"] == "a" * 64
     assert summary["requested"] == runtime.to_dict()
     assert summary["status"] == "fallback"
+
+
+def test_calibration_budget_above_600s_survives_the_live_params_path(tmp_path) -> None:
+    """A budget the project asked for must reach the search, not be clamped.
+
+    A live calibration configured for 3000 s expired at 600.6 s because
+    ``InferenceAutotunePolicy`` -- not the sidecar validator -- was the clamp
+    that actually binds on this path, and it clamped SILENTLY: the run was
+    indistinguishable from one that had only asked for 600 s.
+    """
+    from hydra_suite.core.inference.config import build_inference_config_from_params
+
+    session = load_tracker_cli_session(
+        str(tmp_path / "subject.mp4"),
+        config_data={
+            "inference_autotune_mode": "record",
+            "inference_autotune_budget_seconds": 3000.0,
+        },
+        video_probe=TrackerCliVideoProbe(fps=20.0, total_frames=50, width=5, height=5),
+    )
+
+    assert session.params["INFERENCE_AUTOTUNE_BUDGET_SECONDS"] == 3000.0
+    config = build_inference_config_from_params(session.params)
+    assert config.inference_autotune.budget_seconds == 3000.0

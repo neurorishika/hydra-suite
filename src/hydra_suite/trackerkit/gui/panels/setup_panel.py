@@ -1003,7 +1003,7 @@ class SetupPanel(QWidget):
         self.config_changed.emit(self._main_window.config)
 
     def _on_inference_autotune_budget_changed(self, value: float) -> None:
-        """Persist the bounded calibration time budget (5-600s)."""
+        """Persist the bounded calibration time budget (5-7200s)."""
         if not getattr(self._main_window, "_restoring_config", False):
             self._main_window.config.inference_autotune_budget_seconds = float(value)
         self.config_changed.emit(self._main_window.config)
