@@ -215,3 +215,34 @@ def test_no_improvement_is_reported_as_success_not_failure():
         {"status": "unavailable", "reason": "no profile"}
     )
     assert "unchanged" in describe_calibration_outcome({"status": "cancelled"})
+
+
+def test_effective_vector_is_shown_for_unavailable_and_deferred_statuses():
+    """InferenceRuntimeOverlay.baseline() always populates ``effective`` with
+    the real baseline vector, and both of these statuses are reachable during
+    a real tracking run (coordinator.resolve resolves runs with intent
+    "lookup"). The user must still see what settings are in force even when
+    no validated profile applies.
+    """
+    from hydra_suite.trackerkit.gui.dialogs.calibration import (
+        describe_calibration_outcome,
+    )
+
+    effective = {"detection_batch_size": 4, "pipeline_depth": 2}
+
+    unavailable_text = describe_calibration_outcome(
+        {"status": "unavailable", "reason": "no profile", "effective": effective}
+    )
+    assert "No validated profile matches" in unavailable_text
+    assert "detection_batch_size=4" in unavailable_text
+    assert "pipeline_depth=2" in unavailable_text
+
+    deferred_text = describe_calibration_outcome(
+        {
+            "status": "deferred_due_to_prior_failure",
+            "reason": "prior attempt failed",
+            "effective": effective,
+        }
+    )
+    assert "detection_batch_size=4" in deferred_text
+    assert "pipeline_depth=2" in deferred_text

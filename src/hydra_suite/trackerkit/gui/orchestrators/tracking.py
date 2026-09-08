@@ -18,6 +18,7 @@ from PySide6.QtGui import QImage, QPixmap
 from PySide6.QtWidgets import QApplication, QMessageBox
 
 from hydra_suite.trackerkit.cli_config import legacy_detection_runtime_fields
+from hydra_suite.trackerkit.gui.dialogs.calibration import describe_calibration_outcome
 from hydra_suite.trackerkit.gui.orchestrators.config import _get_video_config_path
 from hydra_suite.trackerkit.gui.workers.session_worker import SessionWorker
 from hydra_suite.trackerkit.headless_tracking import build_tracking_csv_header
@@ -155,10 +156,7 @@ class TrackingOrchestrator:
 
         from hydra_suite.core.inference.config import build_inference_config_from_params
         from hydra_suite.trackerkit.calibrate_cli import derive_context_inputs
-        from hydra_suite.trackerkit.gui.dialogs.calibration import (
-            CalibrationDialog,
-            describe_calibration_outcome,
-        )
+        from hydra_suite.trackerkit.gui.dialogs.calibration import CalibrationDialog
 
         params = self._mw.get_parameters_dict()
         inference_config = build_inference_config_from_params(params)
@@ -792,10 +790,6 @@ class TrackingOrchestrator:
         if isinstance(tuning, dict):
             # Same mapping the Calibrate dialog uses, so the label never says
             # one thing after calibrating and another during a real run.
-            from hydra_suite.trackerkit.gui.dialogs.calibration import (
-                describe_calibration_outcome,
-            )
-
             self._panels.setup.set_inference_autotune_status(
                 describe_calibration_outcome(tuning)
             )

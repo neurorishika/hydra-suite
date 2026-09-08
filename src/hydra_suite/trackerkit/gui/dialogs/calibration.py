@@ -51,16 +51,8 @@ def describe_calibration_outcome(payload: dict) -> str:
             "systems (on MPS, cross-frame batching has measured up to 1.58x "
             "slower)." + profile_text
         )
+    values = _format_effective_vector(payload.get("effective"))
     if status in _SUCCESS_STATUSES:
-        effective = payload.get("effective")
-        values = ""
-        if isinstance(effective, dict):
-            compact = ", ".join(
-                f"{name}={value}"
-                for name, value in effective.items()
-                if value not in (None, {}, [], ())
-            )
-            values = f" Effective: {compact}." if compact else ""
         return (f"Validated profile in use ({reason}).{profile_text}{values}").strip()
     # "unavailable" is the status coordinator.resolve emits when no profile
     # can be used for this key (coordinator.py:135, :152). Verified against
@@ -69,8 +61,28 @@ def describe_calibration_outcome(payload: dict) -> str:
         return (
             "No validated profile matches this video, model, and settings. "
             f"Your configured inference values are used unchanged ({reason})."
+            f"{values}"
         )
-    return f"{status.replace('_', ' ').capitalize()} — {reason}.{profile_text}"
+    return (
+        f"{status.replace('_', ' ').capitalize()} — {reason}.{profile_text}{values}"
+    ).strip()
+
+
+def _format_effective_vector(effective: object) -> str:
+    """Render ``effective`` as a compact ``" Effective: k=v, ..."`` suffix.
+
+    Returns "" if ``effective`` is not a populated dict. Shared by every
+    branch of :func:`describe_calibration_outcome` so the same values are
+    formatted identically regardless of outcome status.
+    """
+    if not isinstance(effective, dict):
+        return ""
+    compact = ", ".join(
+        f"{name}={value}"
+        for name, value in effective.items()
+        if value not in (None, {}, [], ())
+    )
+    return f" Effective: {compact}." if compact else ""
 
 
 class CalibrationDialog(BaseDialog):
