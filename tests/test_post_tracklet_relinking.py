@@ -385,3 +385,39 @@ def test_relink_refuses_long_gap_jump_even_when_velocity_extrapolates() -> None:
     relinked = relink_trajectories_with_pose(df, params)
 
     assert relinked["TrajectoryID"].nunique() == 2
+
+
+def test_dominant_identity_key_tie_break_is_deterministic() -> None:
+    """A tie for the most frequent ``UniqueIdentityKey`` must resolve the same
+    way in every process.
+
+    ``max(set(keys), key=keys.count)`` picked an arbitrary element among
+    equally-frequent keys, and CPython's per-process string hash seed changed
+    that pick from run to run.  The picked key becomes the fragment's
+    ``identity_sources``, which gates relink candidates -- so the whole final
+    CSV was nondeterministic.  Measured on the ``ant_cnn_identity_relink``
+    fixture: 171 fragments collapsed into 164 or 165 trajectories purely as a
+    function of ``PYTHONHASHSEED``.
+
+    Ties now resolve to the lexicographically smallest key.  This test is a
+    real RED/GREEN guard: it fails on the unsorted implementation for some
+    hash seeds (the pick is arbitrary, so a single seed cannot be relied on),
+    and it pins the documented tie-break rule so a future refactor cannot
+    reintroduce an unordered pick.
+    """
+    keys = [
+        "cnn:colortag:flat=yellow|cnn:colortag:flat_1=orange",
+        "cnn:colortag:flat=blue|cnn:colortag:flat_1=pink",
+        "cnn:colortag:flat=green|cnn:colortag:flat_1=yellow",
+    ]
+    # Every key appears exactly twice: a three-way tie.
+    frag_df = pd.DataFrame({"UniqueIdentityKey": keys * 2})
+
+    resolved = processing_mod._fragment_unique_identity_sources(frag_df)
+
+    # min(keys) == the "blue|pink" token; `max` returns the FIRST maximal
+    # element of the sorted set, so that is the documented winner.
+    assert resolved == {
+        "cnn:colortag:flat": "blue",
+        "cnn:colortag:flat_1": "pink",
+    }

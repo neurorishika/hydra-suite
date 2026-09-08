@@ -84,7 +84,11 @@ def identity_class_columns(
 
     # New behavior: longest-match against full roster
     all_labels_list = [str(lbl) for lbl in all_labels if str(lbl).strip()]
-    all_possible_labels = list(set(heads) | set(all_labels_list))
+    # sorted(), not list(): the longest-match loop below breaks ties with a
+    # strict `>`, so two equal-length matching labels would otherwise be
+    # resolved by set iteration order -- i.e. by the per-process string
+    # hash seed. Same defect class as the relink dominant-key pick.
+    all_possible_labels = sorted(set(heads) | set(all_labels_list))
 
     for col in columns:
         name = str(col)
