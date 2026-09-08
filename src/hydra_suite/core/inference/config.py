@@ -1250,6 +1250,13 @@ def build_inference_config_from_params(params: dict) -> InferenceConfig:
                 backend="sleap",
                 sleap=PoseSLEAPConfig(
                     model_path=sleap_model_path,
+                    # POSE_SLEAP_ENV selects the conda env the SLEAP service is
+                    # spawned under (`conda run -n <env>`). Omitting it here made
+                    # the knob inert: the dataclass default always won.
+                    conda_env=(
+                        str(params.get("POSE_SLEAP_ENV", "sleap") or "").strip()
+                        or "sleap"
+                    ),
                     batch_size=int(params.get("POSE_BATCH_SIZE", 4)),
                 ),
                 **common_pose_kwargs,
