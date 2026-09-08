@@ -63,6 +63,12 @@ _REFERENCE_KWARGS = dict(
     dropout=0.2,
     lr=1e-4,
     epochs=7,
+    # Early stopping: non-default on both sides so the round trip is
+    # meaningful. `patience` defaults to 0 (disabled); 4 proves the GUI spin
+    # and the JSON plan agree on an ENABLED run, which is the case that can
+    # actually change what a run does.
+    patience=4,
+    min_delta=0.02,
     batch=2,
     grad_accum=4,
     mixed_precision="bf16",

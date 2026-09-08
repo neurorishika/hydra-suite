@@ -547,6 +547,7 @@ class DetectTrainingPlan:
                 "num_negatives",
                 "slice_width",
                 "slice_height",
+                "patience",
             ):
                 if name in sam3_values:
                     sam3_values[name] = _require_int(sam3_values[name], f"sam3.{name}")
@@ -561,6 +562,7 @@ class DetectTrainingPlan:
                 "cuda_safety_fraction",
                 "host_limit_headroom_fraction",
                 "watchdog_poll_seconds",
+                "min_delta",
             ):
                 if name in sam3_values:
                     sam3_values[name] = _require_number(
@@ -755,6 +757,12 @@ class DetectTrainingPlan:
                 )
             if self.sam3_params.watchdog_poll_seconds <= 0.0:
                 raise TrainingPlanError("sam3.watchdog_poll_seconds must be positive")
+            # 0 is the valid "never stop early" value, so only NEGATIVE is an
+            # error -- refusing 0 would make the disabled default unwritable.
+            if self.sam3_params.patience < 0:
+                raise TrainingPlanError("sam3.patience must not be negative")
+            if self.sam3_params.min_delta < 0.0:
+                raise TrainingPlanError("sam3.min_delta must not be negative")
             if not 0.0 <= self.sam3_params.tile_overlap < 1.0:
                 raise TrainingPlanError("sam3.tile_overlap must be in [0, 1)")
             if self.sam3_params.object_tile_fraction <= 0.0:

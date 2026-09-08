@@ -329,13 +329,39 @@ def test_the_ap_pass_runs_inside_the_existing_rng_guard():
 
 
 def test_nothing_selects_or_stops_on_the_recorded_metric():
+    """AP is recorded and drives NOTHING -- not selection, not stopping.
+
+    This test used to forbid the substrings "early_stop"/"patience" anywhere
+    in `cli`. That was a proxy for the real invariant and it stopped being
+    usable on 2026-09-08, when a user decision added early stopping on
+    `val_loss_mean` (off by default). It is NOT weakened here: the invariant
+    it was protecting -- that the detection-quality numbers select and stop
+    nothing -- is now asserted directly against the stopping rule's own
+    inputs and against the training loop, which is a STRONGER statement than
+    a substring ban that a variable rename would have defeated.
+    """
     import inspect
 
     from hydra_suite.training.sam3_lora import cli
 
     source = inspect.getsource(cli)
-    for forbidden in ("best_ap", "early_stop", "patience"):
-        assert forbidden not in source, f"{forbidden}: recording only, no selection"
+    # Checkpoint selection: still nothing, on any metric.
+    assert "best_ap" not in source, "recording only, no selection"
+
+    # The stopping rule's entire input is one already-computed loss number.
+    # No AP, no sweep, no F1 can reach it.
+    tracker_source = inspect.getsource(cli.EarlyStopTracker)
+    for forbidden in ("ap", "sweep", "f1", "iou", "recall", "precision"):
+        assert (
+            f'"{forbidden}"' not in tracker_source
+            and f"'{forbidden}'" not in tracker_source
+        ), f"{forbidden}: the stopping rule must read val_loss_mean only"
+    assert "val_loss_mean" in tracker_source
+
+    # And the loop feeds it val_loss_mean, from the record it already wrote.
+    loop = inspect.getsource(cli.run_training)
+    assert 'record["val_loss_mean"]' in loop
+    assert "early_stop.observe(" in loop
 
 
 def test_the_within_run_only_limitation_is_documented_where_it_matters():
