@@ -237,6 +237,15 @@ class EquivalenceVerdict:
     unmatched_rows: int = 0
     position_p99: float = 0.0
     angle_max: float = 0.0
+    # The pose product. ``pose_batch_size`` is a tuned coordinate, so the
+    # columns a pose batch can move must be reachable by the gate (B1):
+    # keypoint XY get the body-position treatment (same pixel units, so the
+    # same p99 budget and the same hard match gate), and every remaining
+    # tolerance-compared numeric column -- keypoint/detection/identity
+    # confidences, quality scores -- rolls up into ``numeric_max``.
+    keypoint_p99: float = 0.0
+    keypoints_over_gate: int = 0
+    numeric_max: float = 0.0
     nan_pattern_mismatches: int = 0
     categorical_mismatches: int = 0
     details: tuple[str, ...] = ()

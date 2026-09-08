@@ -712,6 +712,9 @@ class CoordinateSearch:
             unmatched_rows=max(item.unmatched_rows for item in verdicts),
             position_p99=max(item.position_p99 for item in verdicts),
             angle_max=max(item.angle_max for item in verdicts),
+            keypoint_p99=max(item.keypoint_p99 for item in verdicts),
+            keypoints_over_gate=sum(item.keypoints_over_gate for item in verdicts),
+            numeric_max=max(item.numeric_max for item in verdicts),
             nan_pattern_mismatches=sum(
                 item.nan_pattern_mismatches for item in verdicts
             ),

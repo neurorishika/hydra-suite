@@ -599,7 +599,18 @@ def test_categorical_and_nan_gates_follow_positional_matches_when_ids_change():
     assert not compare_outputs(baseline, changed_nan).passed
 
 
-def test_identity_confidence_is_not_an_exact_categorical_field():
+def test_identity_confidence_is_numeric_not_an_exact_categorical_field():
+    """A confidence is compared as a NUMBER, under a tolerance -- not as a string.
+
+    This test used to assert that a drifting confidence *passed*, which is
+    what left the whole confidence product ungated (B1) while
+    ``pose_batch_size`` was a tuned coordinate. The surviving intent is
+    narrower and still worth pinning: the column must not be swept into the
+    exact-string categorical set (where 0.75 and 0.750000 would differ for
+    formatting reasons alone). So it must fail on the *numeric* budget and
+    contribute nothing to ``categorical_mismatches``.
+    """
+
     baseline = _outputs()
     baseline.forward["IdentityRealtimeConfidence"] = [0.75]
     baseline.final["IdentityRealtimeConfidence"] = [0.75]
@@ -607,7 +618,19 @@ def test_identity_confidence_is_not_an_exact_categorical_field():
     candidate.forward["IdentityRealtimeConfidence"] = [0.75001]
     candidate.final["IdentityRealtimeConfidence"] = [0.75001]
 
-    assert compare_outputs(baseline, candidate).passed
+    verdict = compare_outputs(baseline, candidate)
+    assert not verdict.passed
+    assert verdict.categorical_mismatches == 0
+    assert verdict.numeric_max == pytest.approx(1e-5)
+    assert all(
+        "IdentityRealtimeConfidence" in detail and "|delta|" in detail
+        for detail in verdict.details
+    )
+
+    # An identical value is still identical: the numeric budget does not
+    # reject a run against itself.
+    same = CalibrationOutputs(baseline.forward.copy(), baseline.final.copy())
+    assert compare_outputs(baseline, same).passed
 
 
 def test_randomized_blocks_and_paired_confidence_are_deterministic():

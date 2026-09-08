@@ -40,6 +40,17 @@ class EquivalencePolicy:
     angle_max_tolerance: float = 0.05
     match_gate: float = 2.0
     exact_categorical: bool = True
+    # Keypoints are positions in the same pixel units as X/Y, so they carry
+    # the body-position budget verbatim -- the same p99 and the same hard
+    # ``match_gate``.
+    keypoint_p99_tolerance: float = 0.5
+    # Every other tolerance-compared numeric column (confidences, quality
+    # scores, per-row counters). MEASURED FLOOR: an A-vs-A repeat of
+    # ``ant_pose_headtail`` on MPS (12500 forward + 9096 final rows) has
+    # ``max|delta| == 0.0`` exactly on every numeric column, so this is a
+    # CSV-round-trip guard rather than a substantive budget. A platform whose
+    # own repeat is noisier widens it through ``determinism_floor``.
+    numeric_max_tolerance: float = 1e-6
 
 
 # Always compared exactly, independent of the token heuristics below: a
@@ -92,6 +103,108 @@ def _categorical_columns(columns: Iterable[str]) -> tuple[str, ...]:
         if categorical:
             output.append(column)
     return tuple(output)
+
+
+# Columns whose comparison is owned by the positional (Hungarian) pass and
+# must NOT be double-counted by the numeric families below.
+_POSITIONAL_COLUMNS = ("X", "Y", "Theta")
+
+_KEYPOINT_PREFIX = "PoseKpt_"
+
+
+def _keypoint_pairs(columns: Iterable[str]) -> tuple[tuple[str, str, str], ...]:
+    """``(name, x_column, y_column)`` for every exported pose keypoint.
+
+    The exporter writes ``PoseKpt_<keypoint>_X`` / ``_Y`` / ``_Conf``. Only
+    complete X/Y pairs are returned: a keypoint present on one axis only is
+    a schema difference, which the column-set check already rejects.
+    """
+
+    available = set(columns)
+    output = []
+    for column in columns:
+        if not column.startswith(_KEYPOINT_PREFIX) or not column.endswith("_X"):
+            continue
+        partner = column[: -len("_X")] + "_Y"
+        if partner in available:
+            output.append((column[len(_KEYPOINT_PREFIX) : -len("_X")], column, partner))
+    return tuple(sorted(output))
+
+
+def _is_angular_column(column: str) -> bool:
+    """Columns carrying an angle in radians, compared with pi-wrapping.
+
+    ``Theta`` is excluded: the positional pass already compares it against
+    the Hungarian-matched partner. ``HeadTail*`` columns are excluded because
+    ``_categorical_columns`` claims them for an exact comparison, which is
+    strictly stronger than a tolerance.
+    """
+
+    normalized = column.lower().replace("_", "")
+    if normalized == "theta" or _is_headtail_column(column):
+        return False
+    return normalized.endswith("rad") or normalized.startswith("heading")
+
+
+def _numeric_families(
+    reference: pd.DataFrame, candidate: pd.DataFrame
+) -> tuple[tuple[tuple[str, str, str], ...], tuple[str, ...], tuple[str, ...]]:
+    """Split the shared numeric columns into (keypoints, angular, scalar).
+
+    The default is INVERTED relative to the pre-B1 gate: a shared numeric
+    column is compared unless something else already owns it. Previously a
+    column was compared only if a name heuristic opted it in, which left
+    every ``PoseKpt_*`` and every confidence ungated while
+    ``pose_batch_size`` was a tuned coordinate.
+    """
+
+    shared = [column for column in reference.columns if column in candidate.columns]
+    numeric = [
+        column
+        for column in shared
+        if pd.api.types.is_numeric_dtype(reference[column])
+        and pd.api.types.is_numeric_dtype(candidate[column])
+    ]
+    owned = set(_POSITIONAL_COLUMNS) | set(_MANDATORY_EXACT_COLUMNS)
+    owned |= set(_categorical_columns(shared))
+    keypoints = tuple(
+        item for item in _keypoint_pairs(numeric) if item[1] not in owned
+    )
+    keypoint_columns = {column for _name, x, y in keypoints for column in (x, y)}
+    angular = tuple(
+        column
+        for column in numeric
+        if column not in owned
+        and column not in keypoint_columns
+        and _is_angular_column(column)
+    )
+    scalar = tuple(
+        column
+        for column in numeric
+        if column not in owned
+        and column not in keypoint_columns
+        and column not in angular
+    )
+    return keypoints, angular, scalar
+
+
+def _exactly_compared_columns(
+    left: pd.DataFrame, right: pd.DataFrame
+) -> tuple[str, ...]:
+    """Shared columns compared as exact strings: categoricals + every non-numeric.
+
+    Sorted for a deterministic ``details`` order.
+    """
+
+    shared = [column for column in left.columns if column in right.columns]
+    selected = set(_categorical_columns(shared))
+    for column in shared:
+        if not (
+            pd.api.types.is_numeric_dtype(left[column])
+            and pd.api.types.is_numeric_dtype(right[column])
+        ):
+            selected.add(column)
+    return tuple(sorted(selected))
 
 
 def _row_key(frame: pd.DataFrame) -> list[str] | None:
@@ -367,6 +480,111 @@ def _mandatory_exact_mismatches(
     return mismatches, details
 
 
+def _paired_frames(
+    reference: pd.DataFrame,
+    candidate: pd.DataFrame,
+    *,
+    pairs: tuple[tuple[object, object], ...],
+    aligned: tuple[pd.DataFrame, pd.DataFrame] | None,
+) -> tuple[pd.DataFrame, pd.DataFrame] | None:
+    """The two frames row-aligned by the positional pairing, else the keyed one.
+
+    Same preference order as :func:`_mandatory_exact_mismatches`: the
+    Hungarian pairing is authoritative because a key-based alignment can make
+    the very column under test equal by construction.
+    """
+
+    if pairs:
+        left = reference.loc[[old for old, _new in pairs]].reset_index(drop=True)
+        right = candidate.loc[[new for _old, new in pairs]].reset_index(drop=True)
+        return left, right
+    return aligned
+
+
+def _numeric_mismatches(
+    left: pd.DataFrame,
+    right: pd.DataFrame,
+    *,
+    policy: EquivalencePolicy,
+    keypoint_limit: float,
+    angle_limit: float,
+    numeric_limit: float,
+    name: str,
+) -> tuple[float, int, float, list[str]]:
+    """Compare the pose/confidence product on already-paired rows.
+
+    Returns ``(keypoint_p99, keypoints_over_gate, numeric_max, details)``.
+    Rows where either side is NaN are skipped: the NaN-pattern check already
+    rejects a one-sided NaN, and two NaNs carry no numeric information.
+    """
+
+    keypoints, angular, scalar = _numeric_families(left, right)
+    details: list[str] = []
+    keypoint_samples: list[float] = []
+    over_gate = 0
+    numeric_max = 0.0
+
+    for keypoint, x_column, y_column in keypoints:
+        old_x = left[x_column].to_numpy(float)
+        old_y = left[y_column].to_numpy(float)
+        new_x = right[x_column].to_numpy(float)
+        new_y = right[y_column].to_numpy(float)
+        usable = ~(
+            np.isnan(old_x) | np.isnan(old_y) | np.isnan(new_x) | np.isnan(new_y)
+        )
+        if not usable.any():
+            continue
+        distance = np.hypot(old_x[usable] - new_x[usable], old_y[usable] - new_y[usable])
+        keypoint_samples.extend(distance.tolist())
+        beyond = int(np.count_nonzero(distance > policy.match_gate))
+        if beyond:
+            over_gate += beyond
+            details.append(
+                f"{name}: keypoint {keypoint} moved beyond the {policy.match_gate:g}px "
+                f"match gate on {beyond} row(s) (max {float(distance.max()):.6g}px)"
+            )
+
+    keypoint_p99 = (
+        float(np.percentile(keypoint_samples, 99)) if keypoint_samples else 0.0
+    )
+    if keypoint_p99 > keypoint_limit:
+        details.append(
+            f"{name}: keypoint positional p99 {keypoint_p99:.6g}px exceeds limit "
+            f"{keypoint_limit:.6g}px"
+        )
+
+    for column in angular:
+        old = left[column].to_numpy(float)
+        new = right[column].to_numpy(float)
+        usable = ~(np.isnan(old) | np.isnan(new))
+        if not usable.any():
+            continue
+        # (-pi, pi] wrapping, so 0 rad and 2*pi rad agree.
+        delta = np.abs((old[usable] - new[usable] + np.pi) % (2 * np.pi) - np.pi)
+        worst = float(delta.max())
+        if worst > angle_limit:
+            details.append(
+                f"{name}: {column} angular per-row max {worst:.6g} rad exceeds limit "
+                f"{angle_limit:.6g} rad"
+            )
+
+    for column in scalar:
+        old = left[column].to_numpy(float)
+        new = right[column].to_numpy(float)
+        usable = ~(np.isnan(old) | np.isnan(new))
+        if not usable.any():
+            continue
+        worst = float(np.abs(old[usable] - new[usable]).max())
+        numeric_max = max(numeric_max, worst)
+        if worst > numeric_limit:
+            details.append(
+                f"{name}: {column} per-row max |delta| {worst:.6g} exceeds limit "
+                f"{numeric_limit:.6g}"
+            )
+
+    return keypoint_p99, over_gate, numeric_max, details
+
+
 def _headtail_flip_pairs(
     reference: pd.DataFrame,
     candidate: pd.DataFrame,
@@ -420,6 +638,8 @@ def _compare_one(
     policy: EquivalencePolicy,
     position_limit: float,
     angle_limit: float,
+    keypoint_limit: float,
+    numeric_limit: float,
     name: str,
     exclude_headtail_flip_rows: bool = False,
 ) -> EquivalenceVerdict:
@@ -446,7 +666,14 @@ def _compare_one(
             right_nan = pd.isna(right[column]).to_numpy()
             nan_mismatches += int(np.count_nonzero(left_nan != right_nan))
         if policy.exact_categorical:
-            for column in _categorical_columns(left.columns):
+            # Every shared NON-numeric column is compared exactly, on top of
+            # the token-matched categorical set. Before B1 the string product
+            # was opt-in by name heuristic, which left PoseQualityState,
+            # PoseQualityFlags, PoseSource and HeadingMethod free to change
+            # while pose_batch_size was tuned. Numeric columns get a
+            # tolerance (see _numeric_mismatches); non-numeric ones have no
+            # meaningful tolerance, so exact is the only honest rule.
+            for column in _exactly_compared_columns(left, right):
                 if column in _MANDATORY_EXACT_COLUMNS:
                     # Owned by _mandatory_exact_mismatches, which compares them
                     # against the positional pairing; counting them here too
@@ -463,6 +690,26 @@ def _compare_one(
     )
     categorical_mismatches += mandatory_mismatches
     details.extend(mandatory_details)
+    keypoint_p99 = 0.0
+    keypoints_over_gate = 0
+    numeric_max = 0.0
+    product_details: list[str] = []
+    product = _paired_frames(
+        reference, candidate, pairs=metrics["pairs"], aligned=aligned
+    )
+    if product is not None:
+        keypoint_p99, keypoints_over_gate, numeric_max, product_details = (
+            _numeric_mismatches(
+                product[0],
+                product[1],
+                policy=policy,
+                keypoint_limit=keypoint_limit,
+                angle_limit=angle_limit,
+                numeric_limit=numeric_limit,
+                name=name,
+            )
+        )
+        details.extend(product_details)
     excluded_pairs = (
         _headtail_flip_pairs(reference, candidate, metrics["pairs"])
         if exclude_headtail_flip_rows
@@ -502,6 +749,10 @@ def _compare_one(
         and angle_max <= angle_limit
         and nan_mismatches == 0
         and categorical_mismatches == 0
+        # Every pose-product failure -- keypoint p99, keypoint match gate,
+        # angular columns, scalar columns -- records a detail line naming the
+        # column, so an empty list is exactly "the product agreed".
+        and not product_details
     )
     return EquivalenceVerdict(
         passed=passed,
@@ -510,6 +761,9 @@ def _compare_one(
         unmatched_rows=int(metrics["unmatched"]),
         position_p99=float(metrics["position_p99"]),
         angle_max=angle_max,
+        keypoint_p99=keypoint_p99,
+        keypoints_over_gate=keypoints_over_gate,
+        numeric_max=numeric_max,
         nan_pattern_mismatches=nan_mismatches,
         categorical_mismatches=categorical_mismatches,
         details=tuple(details),
@@ -540,6 +794,17 @@ def compare_outputs(
         policy.angle_max_tolerance,
         determinism_floor.angle_max if determinism_floor is not None else 0.0,
     )
+    # The pose product widens with the measured floor exactly as positions and
+    # angles do: a platform whose own A-vs-A repeat moves a keypoint must not
+    # then reject itself.
+    keypoint_limit = max(
+        policy.keypoint_p99_tolerance,
+        determinism_floor.keypoint_p99 if determinism_floor is not None else 0.0,
+    )
+    numeric_limit = max(
+        policy.numeric_max_tolerance,
+        determinism_floor.numeric_max if determinism_floor is not None else 0.0,
+    )
     verdicts = (
         _compare_one(
             reference.forward,
@@ -547,6 +812,8 @@ def compare_outputs(
             policy=policy,
             position_limit=position_limit,
             angle_limit=angle_limit,
+            keypoint_limit=keypoint_limit,
+            numeric_limit=numeric_limit,
             name="forward",
             exclude_headtail_flip_rows=for_determinism_floor,
         ),
@@ -556,6 +823,8 @@ def compare_outputs(
             policy=policy,
             position_limit=position_limit,
             angle_limit=angle_limit,
+            keypoint_limit=keypoint_limit,
+            numeric_limit=numeric_limit,
             name="final",
             exclude_headtail_flip_rows=for_determinism_floor,
         ),
@@ -567,6 +836,9 @@ def compare_outputs(
         unmatched_rows=sum(item.unmatched_rows for item in verdicts),
         position_p99=max(item.position_p99 for item in verdicts),
         angle_max=max(item.angle_max for item in verdicts),
+        keypoint_p99=max(item.keypoint_p99 for item in verdicts),
+        keypoints_over_gate=sum(item.keypoints_over_gate for item in verdicts),
+        numeric_max=max(item.numeric_max for item in verdicts),
         nan_pattern_mismatches=sum(item.nan_pattern_mismatches for item in verdicts),
         categorical_mismatches=sum(item.categorical_mismatches for item in verdicts),
         details=tuple(detail for item in verdicts for detail in item.details),

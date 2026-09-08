@@ -17,7 +17,13 @@ from typing import Any, Iterable, Mapping
 from hydra_suite import __version__ as hydra_version
 from hydra_suite.runtime.resource_budget import ESTIMATOR_VERSION
 
-TUNING_SCHEMA_VERSION = 2
+# 3: EquivalenceVerdict grew the pose-product fields (keypoint_p99,
+#    keypoints_over_gate, numeric_max). A profile stored under version 2 was
+#    admitted by a gate that compared no keypoint and no confidence column at
+#    all (B1), so it must be discarded rather than migrated -- exactly the
+#    reasoning already recorded for the pre-remediation ``angle_mean`` field
+#    in ``store._evidence_from_dict``.
+TUNING_SCHEMA_VERSION = 3
 SEARCH_POLICY_VERSION = "inference-coordinate-v1"
 
 
