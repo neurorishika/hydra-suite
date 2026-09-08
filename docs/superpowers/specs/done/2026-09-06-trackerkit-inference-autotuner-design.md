@@ -1,7 +1,7 @@
 # TrackerKit system-specific inference throughput autotuner
 
 **Date:** 2026-09-06
-**Status:** Proposed; experimentally specified, not implemented
+**Status:** Shipped — merged to main (69404d16).
 **Scope:** TrackerKit full-run local inference
 **Evidence:** [Mehek measurement study](notes/2026-09-06-trackerkit-inference-autotuner-mehek-study.md)
 

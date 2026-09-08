@@ -26,6 +26,11 @@
 - **Commit style:** conventional commits, one per task minimum. Commit as the configured git user (no Claude Co-Authored-By trailer).
 - **Docs lifecycle:** the spec stays in `docs/superpowers/specs/` until merge; on merge, `git mv` both spec and this plan into the matching `done/` subfolders in the merge commit.
 
+**Status:** Shipped — merged to main (69404d16). The step checkboxes below were not
+maintained during execution; completion evidence is the merged `src/` artifacts, the
+96/96 equivalence verdicts recorded under "Final gate results", and the task reports
+referenced there — not the checkbox state.
+
 ---
 
 ## File Structure
