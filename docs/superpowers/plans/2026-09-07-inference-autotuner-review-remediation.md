@@ -1244,3 +1244,93 @@ Both red numbers are contended-box artifacts, not regressions. The box carried `
 2. The ROI coverage hole that let B1 ship is now closed by a fixture proven to produce detections (row counts identical to the non-ROI clip).
 3. Tuned settings are bit-exact on bg-sub and CNN-identity, float-noise on YOLO-OBB, and **exceed the tuner's angular tolerance on the pose/head-tail clip** — pose batch size is the field to distrust.
 4. **Nothing here validates the tuner itself, and one run showed the tuner cannot work at all.** `automatic` is CUDA-only by policy, so the *apply* path is dead on MPS. But `record` mode does calibrate here, and doing so surfaced a platform-independent blocker: the tuner's own determinism floor fails on byte-identical output whenever the forward CSV contains a NaN-position row, so calibration aborts before evaluating any candidate. **Fix that before Task 12 runs, or CUDA will measure the same permanent no-op.**
+
+---
+
+### Task 10c (2026-09-07, `28c09f0a`, MPS) — a real `record`-mode calibration STILL aborts, for a NEW reason
+
+Two live `record`-mode runs on `fly_obb` (500 frames, `runtime=mps`, budget 600 s,
+`hydra-mps`, log `commit=28c09f0ae9`). **The fixture had to be switched from
+`tracking_workflow_mode: realtime` to `offline`** — `integration.py:604` declares
+realtime runs ineligible (`"realtime inference is not tunable"`), so the shipped
+`fly_obb_roi.json`/`fly_obb.json` as-is would never calibrate.
+
+Both runs ended:
+
+```
+Inference throughput autotuner: status=fallback profile=None
+  requested={'detection_batch_size': 1, ..., 'pipeline_depth': 2}
+  admitted =same   effective=same
+  reason=baseline_nondeterministic_beyond_contract
+```
+
+**Task 10b's NaN fix was necessary but not sufficient.** A wrapper around
+`search.compare_outputs` captured the sidecar's own A-vs-A frames — the pair the
+floor actually judges, which nothing before had ever looked at:
+
+```
+FLOOR#1 passed=False unmatched=1122 pos_p99=0.0 angle_max=0.0 categorical=288
+details=['forward: keyed rows are not aligned',
+         'forward: TrackID differs on 96 row(s); first differing FrameID=96',
+         'forward: TrajectoryID differs on 96 row(s); first differing FrameID=96',
+         'forward: 564 unmatched positional rows',
+         'forward: 192 categorical mismatches',
+         'final: keyed rows are not aligned',
+         'final: TrajectoryID differs on 96 row(s); first differing FrameID=96',
+         'final: 558 unmatched positional rows',
+         'final: 96 categorical mismatches']
+shapes fwd a=(378, 21) b=(378, 21) | final a=(375, 21) b=(375, 21)
+```
+
+**Root cause — the "A-vs-A" pair is not A-vs-A. The two sides are different
+segments of the video.**
+
+| side | forward FrameID range | final FrameID range | rows | NaN-X rows |
+| --- | --- | --- | --- | --- |
+| `baseline_outputs[0]` (block 0) | 2 – 127 | 3 – 127 | 378 | 3 |
+| `baseline_outputs[1]` (block 1) | 95 – 220 | 96 – 220 | 378 | 3 |
+
+`sidecar_child._block_window` deliberately **stripes** each measurement block
+across the clip ("Spread the blocks across the clip instead"): for
+`total=500, span=128, blocks=5` the windows are `(0,127) (93,220) (186,313)
+(279,406) (372,499)`. `search.run` then compares `baseline_outputs[0]` against
+`baseline_outputs[1]` with `for_determinism_floor=True`. Those are frames
+0–127 vs frames 93–220 — non-overlapping except for 33 frames, in which track
+numbering legitimately differs. `pos_p99 = 0.0` and `angle_max = 0.0` because
+nothing geometric is even comparable; the verdict is carried entirely by
+`keyed rows are not aligned` + 1122 unmatched rows.
+
+The same defect poisons the **candidate** gate, not just the floor:
+`reference = baseline_outputs[0]` (block 0's window) is compared against every
+candidate output, four fifths of which come from blocks 1–4's *other* windows.
+So even with the floor bypassed, no candidate could pass the correctness gate.
+
+**This is arithmetic, not device behaviour — CUDA will reproduce it exactly.**
+Striping is right for throughput representativeness and wrong for output
+comparison; the two purposes need decoupling (e.g. a fixed comparison window
+run once per candidate, separate from the striped timing blocks).
+
+**Measured facts from the runs**
+
+1. Determinism floor: **still FAILS** (new cause, above).
+2. Candidates evaluated: **zero**. The search returns at `search.py:141` before
+   the first mutation is proposed. No admitted, no rejected, no reasons.
+3. Profile persisted: **none**. `inference_tuning_profiles/` contains only
+   `locks/` (2 lock files, no record). `baseline_nondeterministic_beyond_contract`
+   is not in S5's negative-cache list, so every run re-pays the calibration cost
+   for nothing.
+4. Record mode applied nothing — `requested == admitted == effective == baseline`
+   (`detection_batch_size=1, pipeline_depth=2`), consistent with Task 3's
+   guarantee. But it is *vacuously* consistent: nothing was ever selected.
+5. Wall clock: run 1 total 115.7 s for 500 frames (4.32 fps), of which the
+   calibration abort took **≈ 75–85 s** (bracketed by polls: still calibrating at
+   59 s, at frame 45 of the main pass at 93 s). Diag run: process start →
+   floor verdict = **112 s** including imports and model load. Against a
+   **600 s** budget — the budget was never the binding constraint.
+6. **S8: NOT exercised.** No trial ran past the baseline blocks, and `fly_obb`
+   has neither pose nor identity, so the pose/identity cache path has **zero**
+   coverage from this run. S8 remains empirically unverified on every platform.
+
+Artifacts: `/tmp/task10c_record.log`, `/tmp/task10c_diag.log`,
+`/tmp/task10c_floor/floor1_{a,b}_{forward,final}.csv`,
+`/tmp/task10c_floor_diag.py`.
