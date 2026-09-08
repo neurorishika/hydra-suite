@@ -2,6 +2,7 @@
 
 from __future__ import annotations
 
+import logging
 import math
 import time
 from dataclasses import dataclass
@@ -70,6 +71,15 @@ class SearchResult:
     rejected: tuple[tuple[str, str], ...]
     completed: bool
     reason: str
+    # Which coordinate fields the search actually got to before it stopped.
+    # A budget exhaustion is otherwise indistinguishable from "there was
+    # nothing to tune", which is exactly how two rounds were spent chasing a
+    # silent timeout.
+    searched_fields: tuple[str, ...] = ()
+    unsearched_fields: tuple[str, ...] = ()
+
+
+logger = logging.getLogger(__name__)
 
 
 class CoordinateSearch:
@@ -182,18 +192,21 @@ class CoordinateSearch:
         shares = dict(stage_shares or baseline_evidence.stage_shares)
         field_names.sort(key=lambda field: (-float(shares.get(field, 0.0)), field))
         accepted_fields: list[str] = []
+        searched_fields: list[str] = []
 
         for pass_index in range(2):
             changed_this_pass = False
             fields = field_names if pass_index == 0 else accepted_fields
             for field_index, field_name in enumerate(tuple(fields)):
                 if self._expired(deadline, should_cancel):
-                    return SearchResult(
+                    return self._exhausted(
                         baseline,
-                        tuple(evidence),
-                        tuple(rejected),
-                        False,
+                        evidence,
+                        rejected,
                         "cancelled" if should_cancel() else "budget_expired",
+                        searched=searched_fields,
+                        planned=field_names,
+                        started=started,
                     )
                 values = self.planner.values_for(field_name, incumbent)
                 mutations = tuple(
@@ -206,6 +219,8 @@ class CoordinateSearch:
                         field_name, incumbent, mutations
                     )
                 if not mutations:
+                    if field_name not in searched_fields:
+                        searched_fields.append(field_name)
                     continue
                 self._status(
                     status_callback,
@@ -259,6 +274,8 @@ class CoordinateSearch:
                         )
                         continue
                     contenders.append(item)
+                if field_name not in searched_fields:
+                    searched_fields.append(field_name)
                 fastest_screened = sorted(
                     contenders,
                     key=lambda item: item.median_throughput,
@@ -337,12 +354,14 @@ class CoordinateSearch:
                 break
 
         if self._expired(deadline, should_cancel):
-            return SearchResult(
+            return self._exhausted(
                 baseline,
-                tuple(evidence),
-                tuple(rejected),
-                False,
+                evidence,
+                rejected,
                 "cancelled" if should_cancel() else "budget_expired",
+                searched=searched_fields,
+                planned=field_names,
+                started=started,
             )
         self._status(status_callback, started, "final confirmation", incumbent)
         final = self._measure(
@@ -398,6 +417,47 @@ class CoordinateSearch:
             else "validated_throughput_gain"
         )
         return SearchResult(incumbent, tuple(evidence), tuple(rejected), True, reason)
+
+    def _exhausted(
+        self,
+        baseline: InferenceTuningSettings,
+        evidence: Sequence[CandidateEvidence],
+        rejected: Sequence[tuple[str, str]],
+        reason: str,
+        *,
+        searched: Sequence[str],
+        planned: Sequence[str],
+        started: float,
+    ) -> SearchResult:
+        """Stop loudly.
+
+        A budget exhaustion used to degrade to "no profile" with nothing said
+        and nothing recorded beyond the bare token, so it looked identical to a
+        clip with nothing to tune. Name the elapsed time and both field lists,
+        in the log and on the result, so the next reader sees the shape of what
+        was and was not measured.
+        """
+        searched_fields = tuple(searched)
+        unsearched_fields = tuple(
+            field for field in planned if field not in searched_fields
+        )
+        logger.warning(
+            "inference calibration stopped early (%s) after %.1fs: "
+            "searched=%s; NOT searched=%s",
+            reason,
+            self.monotonic() - started,
+            ", ".join(searched_fields) or "<none>",
+            ", ".join(unsearched_fields) or "<none>",
+        )
+        return SearchResult(
+            baseline,
+            tuple(evidence),
+            tuple(rejected),
+            False,
+            reason,
+            searched_fields,
+            unsearched_fields,
+        )
 
     def _determinism_duplicate(
         self,

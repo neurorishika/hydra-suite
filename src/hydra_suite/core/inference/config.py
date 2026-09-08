@@ -720,12 +720,39 @@ def _clamped_int(raw: Any, default: int, lo: int, hi: int) -> int:
     return v if lo <= v <= hi else default
 
 
-def _clamped_float(raw: Any, default: float, lo: float, hi: float) -> float:
+def _clamped_float(
+    raw: Any, default: float, lo: float, hi: float, *, name: str | None = None
+) -> float:
+    """Coerce ``raw`` into ``[lo, hi]``, falling back to ``default`` -- loudly.
+
+    A silent fallback here downgraded an explicit 3000 s calibration budget to
+    600 s with no diagnostic whatsoever, which made the resulting timeout look
+    like the tuner's fault for a full round of investigation. Any rejected
+    value that was actually supplied is now reported at WARNING with both the
+    requested and the effective number.
+    """
     try:
         v = float(raw)
     except (TypeError, ValueError):
+        if raw is not None:
+            logger.warning(
+                "%s: %r is not a number; using %g instead",
+                name or "config value",
+                raw,
+                default,
+            )
         return default
-    return v if math.isfinite(v) and lo <= v <= hi else default
+    if math.isfinite(v) and lo <= v <= hi:
+        return v
+    logger.warning(
+        "%s: requested %g is outside [%g, %g]; using %g instead",
+        name or "config value",
+        v,
+        lo,
+        hi,
+        default,
+    )
+    return default
 
 
 def _slice_config_from_params(
@@ -1258,6 +1285,7 @@ def build_inference_config_from_params(params: dict) -> InferenceConfig:
             DEFAULT_CALIBRATION_BUDGET_SECONDS,
             MINIMUM_CALIBRATION_BUDGET_SECONDS,
             MAXIMUM_CALIBRATION_BUDGET_SECONDS,
+            name="INFERENCE_AUTOTUNE_BUDGET_SECONDS",
         ),
         singleflight_wait_seconds=_clamped_float(
             params.get("INFERENCE_AUTOTUNE_SINGLEFLIGHT_WAIT_SECONDS", 2.0),

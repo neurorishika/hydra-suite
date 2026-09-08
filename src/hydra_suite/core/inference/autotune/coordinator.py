@@ -17,7 +17,7 @@ from .models import (
     InferenceTuningSettings,
     ProfileState,
 )
-from .search import CoordinateSearch, TrialExecutor
+from .search import CoordinateSearch, SearchResult, TrialExecutor
 from .store import InferenceTuningProfileStore
 
 logger = logging.getLogger(__name__)
@@ -238,7 +238,7 @@ class AutotuneCoordinator:
                     }
                     and not request.contention_detected
                 ):
-                    self._save_incomplete(request, result.reason)
+                    self._save_incomplete(request, result.reason, result)
                 return ResolveResult(
                     InferenceRuntimeOverlay.baseline(
                         request.baseline,
@@ -300,7 +300,12 @@ class AutotuneCoordinator:
                 )
             return self._reuse(request, profile, status="calibrated")
 
-    def _save_incomplete(self, request: AutotuneRequest, reason: str) -> None:
+    def _save_incomplete(
+        self,
+        request: AutotuneRequest,
+        reason: str,
+        result: SearchResult | None = None,
+    ) -> None:
         """S5: persist a negative-cache record so the next run at this exact
         key defers instead of re-running the whole (bounded but expensive)
         search. Never applies settings to a production run -- ``resolve``
@@ -330,6 +335,16 @@ class AutotuneCoordinator:
             candidates=(),
             state=ProfileState.INCOMPLETE,
             selection_reason=reason,
+            # Which fields were reached before the stop. Without this an
+            # INCOMPLETE record cannot be told apart from "nothing to tune".
+            calibration_summary=(
+                (
+                    ("searched_fields", tuple(result.searched_fields)),
+                    ("unsearched_fields", tuple(result.unsearched_fields)),
+                )
+                if result is not None
+                else ()
+            ),
             created_at_unix_ns=now,
             last_validation_unix_ns=now,
             invalidation_reason=reason,

@@ -29,6 +29,7 @@ from hydra_suite.core.inference.autotune.fingerprint import (
     TuningProfileKey,
     WorkloadFingerprint,
 )
+from hydra_suite.core.inference.autotune.measure import MeasurementProtocol
 from hydra_suite.core.inference.autotune.models import (
     CandidateEvidence,
     EquivalenceVerdict,
@@ -819,3 +820,52 @@ def test_screened_losers_never_reach_full_pipeline_confirmation():
     )
     assert result.completed
     assert result.selected.detection_batch_size == 1
+
+
+def test_budget_exhaustion_names_the_fields_it_did_and_did_not_search(caplog):
+    """A stop must say what it measured; silence is what cost two rounds."""
+    baseline = _settings()
+    clock = {"t": 0.0}
+
+    def monotonic():
+        clock["t"] += 9.0
+        return clock["t"]
+
+    with caplog.at_level("WARNING"):
+        result = CoordinateSearch(
+            _planner(),
+            ConflictingExecutor(),
+            protocol=MeasurementProtocol(budget_seconds=400.0),
+            monotonic=monotonic,
+        ).run(
+            baseline,
+            stage_shares={
+                "detection_batch_size": 0.7,
+                "pose_batch_size": 0.2,
+                "identity_batch_size:animal": 0.1,
+            },
+        )
+
+    assert not result.completed
+    assert result.reason == "budget_expired"
+    assert result.searched_fields
+    assert result.unsearched_fields
+    assert not set(result.searched_fields) & set(result.unsearched_fields)
+    assert any(
+        "stopped early (budget_expired)" in record.getMessage()
+        for record in caplog.records
+    )
+
+
+def test_clamped_budget_is_reported_not_swallowed(caplog):
+    from hydra_suite.core.inference.config import _clamped_float
+
+    with caplog.at_level("WARNING"):
+        value = _clamped_float(
+            9_999_999.0, 600.0, 5.0, 7200.0, name="INFERENCE_AUTOTUNE_BUDGET_SECONDS"
+        )
+    assert value == 600.0
+    joined = " ".join(record.getMessage() for record in caplog.records)
+    assert "INFERENCE_AUTOTUNE_BUDGET_SECONDS" in joined
+    assert "9999999" in joined.replace(",", "") or "1e+07" in joined
+    assert "600" in joined
