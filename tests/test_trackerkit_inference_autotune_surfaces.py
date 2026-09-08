@@ -140,7 +140,10 @@ def test_gui_status_displays_effective_runtime_overlay() -> None:
         }
     )
 
-    assert "Cache hit" in captured[0]
+    # The label now states the user-meaningful outcome rather than echoing
+    # the raw coordinator status; it shares describe_calibration_outcome with
+    # the Calibrate dialog so the two can never disagree.
+    assert "Validated profile in use" in captured[0]
     assert "abc123" in captured[0]
     assert "detection_batch_size=4" in captured[0]
 

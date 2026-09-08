@@ -62,7 +62,10 @@ def describe_calibration_outcome(payload: dict) -> str:
             )
             values = f" Effective: {compact}." if compact else ""
         return (f"Validated profile in use ({reason}).{profile_text}{values}").strip()
-    if status in {"unavailable", "no_profile", "lookup_miss"}:
+    # "unavailable" is the status coordinator.resolve emits when no profile
+    # can be used for this key (coordinator.py:135, :152). Verified against
+    # the coordinator's status vocabulary -- not guessed.
+    if status == "unavailable":
         return (
             "No validated profile matches this video, model, and settings. "
             f"Your configured inference values are used unchanged ({reason})."

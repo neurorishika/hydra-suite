@@ -133,6 +133,19 @@ class TrackingOrchestrator:
             )
             return
 
+        # A cancelled worker can outlive its dialog (reject() waits only 5s).
+        # Without this, reopening would start a second concurrent measurement
+        # AND overwrite _calibration_dialog, losing the only handle to the
+        # first one -- so nothing would block tracking any more either.
+        if self._calibration_is_active():
+            QMessageBox.warning(
+                self._mw,
+                "Calibration in progress",
+                "A calibration is still running. Wait for it to finish "
+                "before starting another one.",
+            )
+            return
+
         video_path = str(self._mw.current_video_path or "").strip()
         if not video_path:
             QMessageBox.warning(
@@ -777,21 +790,14 @@ class TrackingOrchestrator:
             return
         tuning = stats.get("inference_autotune")
         if isinstance(tuning, dict):
-            status = str(tuning.get("status", "unknown")).replace("_", " ")
-            reason = str(tuning.get("reason", "")).strip()
-            effective = tuning.get("effective", {})
-            values = ""
-            if isinstance(effective, dict):
-                compact = ", ".join(
-                    f"{name}={value}"
-                    for name, value in effective.items()
-                    if value not in (None, {}, [], ())
-                )
-                values = f" Effective: {compact}." if compact else ""
-            profile = str(tuning.get("profile_id") or "").strip()
-            profile_text = f" Profile {profile}." if profile else ""
+            # Same mapping the Calibrate dialog uses, so the label never says
+            # one thing after calibrating and another during a real run.
+            from hydra_suite.trackerkit.gui.dialogs.calibration import (
+                describe_calibration_outcome,
+            )
+
             self._panels.setup.set_inference_autotune_status(
-                f"{status.capitalize()} — {reason}.{profile_text}{values}"
+                describe_calibration_outcome(tuning)
             )
         phase = str(stats.get("phase", "tracking"))
         is_precompute = phase == "individual_precompute"

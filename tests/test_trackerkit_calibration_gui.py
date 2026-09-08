@@ -63,6 +63,34 @@ def test_calibration_dialog_subclasses_basedialog():
     assert issubclass(CalibrationDialog, BaseDialog)
 
 
+def test_calibration_dialog_actually_constructs(qapp):
+    """issubclass proves nothing: a bad BaseDialog call crashes on first click."""
+    from hydra_suite.trackerkit.gui.dialogs.calibration import CalibrationDialog
+
+    dialog = CalibrationDialog(
+        params={},
+        config=object(),
+        video_path="/tmp/v.mp4",
+        frame_width=64,
+        frame_height=48,
+        start_frame=0,
+        end_frame=10,
+        realtime=False,
+        cache_dir=None,
+        use_cached_detections=False,
+        default_budget_seconds=60.0,
+    )
+    try:
+        assert dialog.spin_budget.value() == 60.0
+        assert dialog.lbl_status is not None
+        assert dialog.btn_start.isEnabled()
+        assert not dialog.btn_cancel.isEnabled()
+        assert dialog.is_calibration_running() is False
+        assert dialog.result_payload is None
+    finally:
+        dialog.deleteLater()
+
+
 def _build_autotune_context_kwargs(module) -> set[str]:
     """Keyword names the module passes to ``build_autotune_context``."""
     import ast
