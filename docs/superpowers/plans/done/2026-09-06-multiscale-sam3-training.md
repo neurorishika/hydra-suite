@@ -2,7 +2,8 @@
 
 **Spec:** `docs/superpowers/specs/2026-09-06-unified-sahi-training-geometry-design.md`
 (§3.3 multi-scale for SAM3, §3.5 stamping, §4.2 R2/R3/R3b, §4.3 full frames)
-**Status:** pending implementation
+**Status:** Shipped — merged to main (`50cb5b94`). Tasks 1-7 implemented; Task 8's measured
+GPU gate ran on `firebrat` (RTX 4090) with no OOM. See the Task 8 Results subsection below.
 **Base:** local `main` @ `e29838cb`
 **User direction (verbatim):** *"the sahi training needs to become like the sahi training we
 do for yolo models — multi scale multi level (a variety of tile sizes including mixed full
@@ -400,7 +401,48 @@ commit sha. **Attribution must be measured, not asserted:** report the dataset m
 VRAM delta, and the wall-clock delta as three separate numbers, because they do not move
 together.
 
-### Cost estimate — arithmetic, to be replaced by Task 8's measurement
+### Task 8 — Results (measured on `firebrat`, RTX 4090 24 GB, one corpus)
+
+**Status: COMPLETE.** Ran on GPU (`firebrat`, CUDA, sidecar `sam3-lora`), three arms — A
+single-scale, B multi-scale `{0.055, 0.11}` grouped, C multi-scale `{0.055, 0.11}`
+ungrouped — 1 epoch each, corpus `20260827_222150-sam3-ant` (single YOLO-seg source, class
+`ant`), seed 42, `imgsz=1008`. **No OOM on any arm.** Full detail, per-scale tables, and raw
+artifact paths: `task-8-gate-report.md` / `task-8-gate-results.json` in the
+`2026-09-06-multiscale-sam3-training` SDD ledger (not tracked in this repo — ledger is
+gitignored `.superpowers/`).
+
+**Every number below is corpus-relative** — one 78-image, one-species corpus, one card. Do
+not treat any ratio here as a general constant.
+
+- **Dataset multiplier: measured 6.44x tiles, not the 4.1x predicted below.** The 4.1x
+  arithmetic assumed a 4512x4512 frame at reference body 97 px (tiles 1764/882 px); this
+  corpus actually resolves to 1862/931 px tiles, so the fine scale fans out harder than the
+  estimate. The prediction's *direction* held (fine scale dominates the multiplier); its
+  *magnitude* was 57% low.
+- **VRAM: roughly flat, as predicted.** Resolved batch 4 on all arms (13.2-13.3 GiB of 22.0
+  GiB free). Training-loop peak reserved: A 11.99 GiB, B (grouped) 12.20 GiB, C (ungrouped)
+  12.63 GiB. Task 5's padding hypothesis is supported but the effect is small: **ungrouped
+  costs +0.43 GiB (+3.5%) over grouped** at the same batch size and dataset.
+- **Wall-clock: linear in tiles, as predicted.** Epoch ratio multi/single = 6.51x against a
+  measured tile ratio of 6.44x. **Grouping is wall-clock-neutral**: grouped vs ungrouped
+  epoch times differ by 0.06%.
+- **Verified on hardware, not assumed:** the autobatch fingerprint genuinely differs between
+  single- and multi-scale builds (both the density hash and the new `tile_px_set` suffix);
+  the realised requested-vs-applied stamp landed correctly on all three arms; and
+  `expandable_segments:True` was confirmed live via `/proc/<pid>/environ` of the sidecar
+  child, not just assumed from the parent's env.
+- **`non_square_tiles = 0` on this corpus** (both single- and multi-scale builds) — this
+  corpus's frames tile evenly at both resolved sizes. The R2/R3b counter is therefore
+  **unexercised here, not disproven**; its non-zero path is covered by the committed
+  synthetic unit test, not by this gate.
+- **The 4-scale (18.4x) arm was deliberately not run** — the pre-flight ruling called it
+  out of the GPU window available for this gate. It remains a gap in this evidence, not an
+  accidental omission.
+
+### Cost estimate — arithmetic, superseded by Task 8's measurement above for the 2-scale row
+
+(Kept for the reasoning and the un-run 4-scale/18.4x extrapolation, which Task 8 did not
+measure. For the 2-scale row, use the measured 6.44x above, not the 4.1x below.)
 
 Tiles/frame ∝ (frame/tile)² and tile = ref/frac, so tiles ∝ frac² asymptotically; edge-flushing
 (`slice_geometry.py:41-45`) inflates that at coarse scales. Computed with the repo's own
