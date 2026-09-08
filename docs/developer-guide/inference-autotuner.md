@@ -65,8 +65,19 @@ Calibration is also declined, in any mode, when:
 
 ## The calibration budget
 
-`InferenceAutotunePolicy.budget_seconds` must be between **5 and 600 seconds**
-(default 600). It is a wall-clock deadline on the whole search: when it expires
+`InferenceAutotunePolicy.budget_seconds` must be between **5 and 7200 seconds**
+(`MINIMUM_/MAXIMUM_CALIBRATION_BUDGET_SECONDS` in `autotune/models.py`; default
+still 600). The ceiling is arithmetic. At a measured ~20 s per measurement
+block and five blocks per candidate vector, one batch-size field costs ~410 s to
+screen plus ~300 s to confirm; the joint search covers detection, pose,
+head/tail, per-head identity batch sizes and pipeline depth over two passes,
+which is ~3650 s for the first pass and ~6100 s for both. A 600 s ceiling makes
+the full search space arithmetically unreachable on a real clip -- every run
+ends in `budget_expired` -- so 600 remains the default but no longer the
+maximum. Per-trial cost is clip- and model-dependent, so these figures are
+orders of magnitude, not guarantees.
+
+It is a wall-clock deadline on the whole search: when it expires
 the search returns the baseline with reason `budget_expired` and writes an
 `INCOMPLETE` profile so the next run does not re-burn the budget (retry after
 `INCOMPLETE_RETRY_SECONDS` = 24 h; never written when contention was detected).
@@ -74,6 +85,13 @@ the search returns the baseline with reason `budget_expired` and writes an
 Within that budget each measurement obeys `MeasurementProtocol` (`measure.py`):
 at least 3 warmup calls over ≥ 8 frames, ≥ 5 measured blocks, and a stage is
 complete once it has run ≥ 2.0 s **or** ≥ 128 frames.
+
+A screened candidate whose paired bootstrap gain interval against the incumbent
+lies entirely **below zero** is rejected immediately with reason
+`screened_slower_than_incumbent: <candidate> fps vs incumbent <incumbent> fps`
+and never pays for a full-pipeline confirmation: the confirmation gate exists to
+admit winners, and a candidate that measurably lost the screen can only ever be
+rejected by it. Every candidate that could still win is confirmed as before.
 
 A candidate is only accepted if its median throughput beats the incumbent by at
 least **2 %** *and* the lower bound of the paired bootstrap gain interval is

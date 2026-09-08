@@ -235,8 +235,32 @@ class CoordinateSearch:
                     for settings, item in screened.items()
                     if item[0].equivalence is None or not item[0].equivalence.passed
                 )
+                # A candidate whose screened throughput is below the
+                # incumbent's by more than the measured noise can only ever be
+                # rejected by the full-pipeline gate, so pay for the screen and
+                # stop.  The gate exists to admit winners, not to expensively
+                # reject losers -- confirmation is preserved for every
+                # candidate that could still win.
+                contenders = []
+                for item in screen_evidence:
+                    _low, high = paired_gain_interval(
+                        incumbent_evidence.throughput_samples,
+                        item.throughput_samples,
+                        seed=self.protocol.random_seed + field_index + pass_index,
+                    )
+                    if high < 0.0:
+                        rejected.append(
+                            (
+                                self._label(item.settings),
+                                "screened_slower_than_incumbent: "
+                                f"{item.median_throughput:.2f} fps vs incumbent "
+                                f"{incumbent_evidence.median_throughput:.2f} fps",
+                            )
+                        )
+                        continue
+                    contenders.append(item)
                 fastest_screened = sorted(
-                    screen_evidence,
+                    contenders,
                     key=lambda item: item.median_throughput,
                     reverse=True,
                 )[:2]

@@ -770,3 +770,52 @@ def test_every_candidate_block_is_compared_not_only_block_zero():
 
     assert result.selected.detection_batch_size == 1
     assert result.rejected
+
+
+class SlowScreenExecutor(ConflictingExecutor):
+    """Every detection mutation screens slower than the incumbent."""
+
+    def run(self, settings, *, phase, field_name, block_index, should_cancel):
+        if field_name == "detection_batch_size":
+            throughput = {1: 100.0, 2: 70.0, 4: 60.0}[settings.detection_batch_size]
+            self.calls.append((phase, field_name, block_index, settings))
+            return TrialObservation(settings, throughput, 0.5, _outputs())
+        return super().run(
+            settings,
+            phase=phase,
+            field_name=field_name,
+            block_index=block_index,
+            should_cancel=should_cancel,
+        )
+
+
+def test_screened_losers_never_reach_full_pipeline_confirmation():
+    baseline = _settings()
+    executor = SlowScreenExecutor()
+    result = CoordinateSearch(_planner(), executor).run(
+        baseline,
+        stage_shares={
+            "detection_batch_size": 0.7,
+            "pose_batch_size": 0.2,
+            "identity_batch_size:animal": 0.1,
+        },
+    )
+    detection_full = [
+        call
+        for call in executor.calls
+        if call[0] == "full" and call[1] == "detection_batch_size"
+    ]
+    assert detection_full == []
+    reasons = [reason for _, reason in result.rejected]
+    slower = [
+        reason for reason in reasons if "screened_slower_than_incumbent" in reason
+    ]
+    assert len(slower) >= 2
+    assert any("70.00" in reason and "100.00" in reason for reason in slower)
+    assert any("60.00" in reason and "100.00" in reason for reason in slower)
+    # A genuinely faster field still earns its full-pipeline confirmation.
+    assert any(
+        call[0] == "full" and call[1] == "pose_batch_size" for call in executor.calls
+    )
+    assert result.completed
+    assert result.selected.detection_batch_size == 1

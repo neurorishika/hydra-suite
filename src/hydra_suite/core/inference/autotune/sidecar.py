@@ -32,7 +32,12 @@ from hydra_suite.runtime.resource_limits import (
 from .device import RuntimeResourceProbe, cuda_used_memory_bytes
 from .equivalence import CalibrationOutputs
 from .measure import MeasurementProtocol
-from .models import InferenceTuningSettings
+from .models import (
+    DEFAULT_CALIBRATION_BUDGET_SECONDS,
+    MAXIMUM_CALIBRATION_BUDGET_SECONDS,
+    MINIMUM_CALIBRATION_BUDGET_SECONDS,
+    InferenceTuningSettings,
+)
 from .search import TrialObservation
 
 logger = logging.getLogger(__name__)
@@ -62,7 +67,7 @@ class SidecarTrialSpec:
     start_frame: int
     end_frame: int
     warmup_calls: int = DEFAULT_WARMUP_CALLS
-    budget_seconds: float = 600.0
+    budget_seconds: float = DEFAULT_CALIBRATION_BUDGET_SECONDS
     # The validator's ceiling: a cold TensorRT engine build can take most of it.
     per_trial_timeout_seconds: float = 120.0
     # Per-PHASE frame cap, divided across MEASUREMENT_BLOCKS blocks by
@@ -76,8 +81,16 @@ class SidecarTrialSpec:
     def __post_init__(self) -> None:
         if self.start_frame < 0 or self.end_frame < self.start_frame:
             raise ValueError("invalid calibration frame range")
-        if not 5 <= self.budget_seconds <= 600:
-            raise ValueError("calibration budget must be between 5 and 600 seconds")
+        if not (
+            MINIMUM_CALIBRATION_BUDGET_SECONDS
+            <= self.budget_seconds
+            <= MAXIMUM_CALIBRATION_BUDGET_SECONDS
+        ):
+            raise ValueError(
+                "calibration budget must be between "
+                f"{MINIMUM_CALIBRATION_BUDGET_SECONDS:g} and "
+                f"{MAXIMUM_CALIBRATION_BUDGET_SECONDS:g} seconds"
+            )
         if not 5 <= self.per_trial_timeout_seconds <= 120:
             raise ValueError("trial timeout must be between 5 and 120 seconds")
         if not 8 <= self.maximum_frames <= 2048:

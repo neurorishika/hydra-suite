@@ -21,6 +21,9 @@ from .fingerprint import (
     WorkloadFingerprint,
 )
 from .models import (
+    DEFAULT_CALIBRATION_BUDGET_SECONDS,
+    MAXIMUM_CALIBRATION_BUDGET_SECONDS,
+    MINIMUM_CALIBRATION_BUDGET_SECONDS,
     CandidateEvidence,
     EquivalenceVerdict,
     InferenceRuntimeOverlay,
@@ -32,6 +35,9 @@ from .store import InferenceTuningProfileStore
 
 __all__ = [
     "AcceleratorFingerprint",
+    "DEFAULT_CALIBRATION_BUDGET_SECONDS",
+    "MAXIMUM_CALIBRATION_BUDGET_SECONDS",
+    "MINIMUM_CALIBRATION_BUDGET_SECONDS",
     "AdmissionContext",
     "AdmissionDecision",
     "AutotuneCoordinator",

@@ -31,6 +31,10 @@ from PySide6.QtWidgets import (
     QWidget,
 )
 
+from hydra_suite.core.inference.autotune.models import (
+    MAXIMUM_CALIBRATION_BUDGET_SECONDS,
+    MINIMUM_CALIBRATION_BUDGET_SECONDS,
+)
 from hydra_suite.trackerkit.config.schemas import TrackerConfig
 
 if TYPE_CHECKING:
@@ -770,7 +774,9 @@ class SetupPanel(QWidget):
         )
 
         self.spin_inference_autotune_budget = QDoubleSpinBox()
-        self.spin_inference_autotune_budget.setRange(5.0, 600.0)
+        self.spin_inference_autotune_budget.setRange(
+            MINIMUM_CALIBRATION_BUDGET_SECONDS, MAXIMUM_CALIBRATION_BUDGET_SECONDS
+        )
         self.spin_inference_autotune_budget.setSingleStep(5.0)
         self.spin_inference_autotune_budget.setSuffix(" s")
         self.spin_inference_autotune_budget.setDecimals(0)
@@ -779,7 +785,8 @@ class SetupPanel(QWidget):
             float(self._config.inference_autotune_budget_seconds)
         )
         self.spin_inference_autotune_budget.setToolTip(
-            "Bounded calibration time budget (5-600s) for Record/Automatic "
+            "Bounded calibration time budget (5-7200s, default 600s) for "
+            "Record/Automatic "
             "modes. A one-time cost per new system/model/workload "
             "combination; validated profiles are reused after that."
         )

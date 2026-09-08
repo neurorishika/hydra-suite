@@ -22,6 +22,11 @@ from typing import Any, Mapping
 import cv2
 import numpy as np
 
+from hydra_suite.core.inference.autotune.models import (
+    DEFAULT_CALIBRATION_BUDGET_SECONDS,
+    MAXIMUM_CALIBRATION_BUDGET_SECONDS,
+    MINIMUM_CALIBRATION_BUDGET_SECONDS,
+)
 from hydra_suite.core.inference.model_paths import (
     resolve_model_path,
     resolve_pose_model_path,
@@ -554,14 +559,21 @@ def build_engine_params(
     )
     try:
         autotune_budget_seconds = float(
-            _cfg_get(cfg, "inference_autotune_budget_seconds", default=600.0)
+            _cfg_get(
+                cfg,
+                "inference_autotune_budget_seconds",
+                default=DEFAULT_CALIBRATION_BUDGET_SECONDS,
+            )
         )
     except (TypeError, ValueError):
-        autotune_budget_seconds = 600.0
+        autotune_budget_seconds = DEFAULT_CALIBRATION_BUDGET_SECONDS
     # A saved project must not turn the bounded production calibration into an
     # unbounded job. The core coordinator owns the search; this is just the
     # project-facing safety bound.
-    autotune_budget_seconds = max(5.0, min(600.0, autotune_budget_seconds))
+    autotune_budget_seconds = max(
+        MINIMUM_CALIBRATION_BUDGET_SECONDS,
+        min(MAXIMUM_CALIBRATION_BUDGET_SECONDS, autotune_budget_seconds),
+    )
     advanced = dict(advanced_config or _default_advanced_config_fallback())
     advanced["yolo_seq_individual_batch_size"] = int(
         _cfg_get(

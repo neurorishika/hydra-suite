@@ -11,6 +11,7 @@ from .candidates import CandidatePlanner
 from .fingerprint import TuningProfileKey
 from .measure import MeasurementProtocol
 from .models import (
+    DEFAULT_CALIBRATION_BUDGET_SECONDS,
     InferenceRuntimeOverlay,
     InferenceTuningProfile,
     InferenceTuningSettings,
@@ -38,7 +39,7 @@ class AutotuneRequest:
     planner: CandidatePlanner
     mode: str = "off"  # off, record, automatic
     manual_fields: frozenset[str] = frozenset()
-    budget_seconds: float = 600.0
+    budget_seconds: float = DEFAULT_CALIBRATION_BUDGET_SECONDS
     singleflight_wait_seconds: float = 2.0
     eligible: bool = True
     allow_cached_reuse: bool = True

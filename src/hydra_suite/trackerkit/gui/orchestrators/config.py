@@ -25,6 +25,11 @@ from PySide6.QtWidgets import (
     QVBoxLayout,
 )
 
+from hydra_suite.core.inference.autotune.models import (
+    DEFAULT_CALIBRATION_BUDGET_SECONDS,
+    MAXIMUM_CALIBRATION_BUDGET_SECONDS,
+    MINIMUM_CALIBRATION_BUDGET_SECONDS,
+)
 from hydra_suite.core.inference.config import migrate_runtime_to_tier
 from hydra_suite.core.inference.model_paths import (
     _normalize_usage_role,
@@ -323,12 +328,16 @@ class ConfigOrchestrator:
         )
         try:
             budget_seconds = float(
-                get_cfg("inference_autotune_budget_seconds", default=600.0)
+                get_cfg(
+                    "inference_autotune_budget_seconds",
+                    default=DEFAULT_CALIBRATION_BUDGET_SECONDS,
+                )
             )
         except (TypeError, ValueError):
-            budget_seconds = 600.0
+            budget_seconds = DEFAULT_CALIBRATION_BUDGET_SECONDS
         self._mw.config.inference_autotune_budget_seconds = max(
-            5.0, min(600.0, budget_seconds)
+            MINIMUM_CALIBRATION_BUDGET_SECONDS,
+            min(MAXIMUM_CALIBRATION_BUDGET_SECONDS, budget_seconds),
         )
         panel = self._panels.setup
         panel._set_inference_autotune_combo_mode(autotune_mode)
