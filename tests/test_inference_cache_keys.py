@@ -750,3 +750,73 @@ def test_open_caches_non_sliced_key_unchanged_with_or_without_mask():
 
 # Silence unused-import warnings (np is implicitly required by OBBResult fixtures)
 _ = np
+
+
+# ---- batch size folds into every stage key (B2, pre-existing production bug) ----
+#
+# The stage cache keys carried NO batch size, so a project config that
+# hand-sets detection_batch_size / POSE_BATCH_SIZE / HEADTAIL_BATCH_SIZE / a
+# CNN batch_size wrote its detections and pose under the SAME key as the
+# default run, and the next run with "Use cached detections" replayed them.
+# Batching demonstrably changes the numbers (Task 12 measured det=4 vs det=1
+# at <=1px on CUDA), and unlike confidence/IoU a batch size is NOT re-applied
+# at tracking time -- so by the key module's own stated principle it belongs
+# in the hash.
+#
+# Folded only when the value is NON-DEFAULT, following the precedent already
+# set for slicing and ROI: every existing cache written at the default batch
+# keeps its key and stays valid.
+
+
+def test_default_detection_batch_keeps_the_pre_change_key():
+    assert detection_cache_key(_obb_direct_slice(SliceConfig())).config_hash == ""
+    assert (
+        detection_cache_key(_obb_direct_slice(SliceConfig()), batch_size=1).config_hash
+        == ""
+    )
+
+
+def test_non_default_detection_batch_changes_the_key():
+    one = detection_cache_key(_obb_direct(), batch_size=1)
+    four = detection_cache_key(_obb_direct(), batch_size=4)
+    assert one.config_hash != four.config_hash
+    assert detection_cache_key(_obb_direct(), batch_size=4).config_hash == (
+        four.config_hash
+    )
+
+
+@pytest.mark.parametrize(
+    "key_fn, config_fn, default, other",
+    [
+        (headtail_cache_key, _ht_config, 64, 8),
+        (cnn_cache_key, _cnn_config, 64, 8),
+        (pose_cache_key, _pose_config, 64, 25),
+    ],
+)
+def test_stage_batch_size_folds_in_only_when_non_default(
+    key_fn, config_fn, default, other
+):
+    from dataclasses import replace
+
+    geometry = _GEOM_A
+    base = config_fn()
+    # The pose batch lives on the per-backend sub-config; the others carry it
+    # directly. Poke it wherever it actually lives.
+    def _with_batch(config, value):
+        if hasattr(config, "batch_size"):
+            return replace(config, batch_size=value)
+        return replace(config, yolo=replace(config.yolo, batch_size=value))
+
+    def _batch_of(config):
+        return getattr(config, "batch_size", None) or config.yolo.batch_size
+
+    assert _batch_of(base) == default, "fixture drifted from the schema default"
+
+    at_default = key_fn(base, geometry)
+    at_other = key_fn(_with_batch(base, other), geometry)
+    assert at_default.config_hash != at_other.config_hash
+
+    # Byte-parity for the default: an existing cache is not invalidated.
+    assert key_fn(_with_batch(base, default), geometry).config_hash == (
+        at_default.config_hash
+    )

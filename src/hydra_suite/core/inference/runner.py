@@ -551,7 +551,12 @@ def _open_caches(
     detection_key = (
         # roi_mask is folded into the OBB key ONLY when slicing is enabled (see
         # detection_cache_key); None / disabled slicing => byte-identical key.
-        detection_cache_key(config.obb, roi_mask)
+        # detection_batch_size is folded in ONLY when it is not 1 (see
+        # _batch_term), so every cache written at the default batch keeps its
+        # key. A hand-set batch used to write its detections under the SAME
+        # key as a batch-1 run, and the next "Use cached detections" run
+        # replayed them (B2).
+        detection_cache_key(config.obb, roi_mask, config.detection_batch_size)
         if config.detection_source == "obb"
         else bgsub_detection_cache_key(config.bgsub)
     )

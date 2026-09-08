@@ -98,3 +98,105 @@ def test_sidecar_child_completes_on_a_project_with_an_roi(tmp_path):
     assert result["measured_frames"] > 0
     forward = request.parent / str(result["forward_csv"])
     assert forward.exists() and len(forward.read_text().splitlines()) > 1
+
+
+def _tree_digest(root: Path) -> dict[str, str]:
+    """``{relative path: sha256}`` for every file under ``root``."""
+
+    import hashlib
+
+    output = {}
+    for path in sorted(root.rglob("*")):
+        if path.is_file():
+            output[str(path.relative_to(root))] = hashlib.sha256(
+                path.read_bytes()
+            ).hexdigest()
+    return output
+
+
+@pytest.mark.skipif(not CLIP.exists(), reason="equivalence fixtures not fetched")
+def test_a_trial_leaves_the_shared_video_directory_byte_unchanged(tmp_path):
+    """B2: a throwaway trial must not touch the user's shared artifacts.
+
+    No stage cache key contains a batch size (``cache/keys.py``), so a
+    detection or pose product written by a tuned trial into the production
+    ``.inference_cache_<stem>/`` would be replayed verbatim by the next OFF
+    run with "Use cached detections" -- and the 9/9 byte-identical OFF proof
+    could never have caught it, because ``tools/equivalence/runner.py`` forces
+    the cache off.
+
+    Isolation, not key-widening, is the fix: a trial is throwaway, so it gets
+    a private cache directory discarded with the trial. This test is the
+    proof, and it is deliberately blunt -- it hashes EVERY file in the video's
+    own directory, so a leak through a path nobody thought to enumerate fails
+    it just as loudly as the cache directory itself.
+    """
+
+    import shutil
+
+    video_dir = tmp_path / "project"
+    video_dir.mkdir()
+    clip = video_dir / CLIP.name
+    shutil.copy2(CLIP, clip)
+
+    # Pre-populate the shared artifacts a real project would already have, so
+    # the test can distinguish "not written" from "overwritten with the same
+    # bytes" and from "deleted".
+    cache_dir = video_dir / f".inference_cache_{clip.stem}"
+    cache_dir.mkdir()
+    (cache_dir / "detection.npz").write_bytes(b"production detections")
+    (cache_dir / "detection_identity_evidence_batch_deadbeef.npz").write_bytes(
+        b"production identity evidence"
+    )
+    log_dir = video_dir / f"{clip.stem}_logs"
+    log_dir.mkdir()
+    (log_dir / "tracking_profile_forward.json").write_text('{"wall_clock_s": 123.0}')
+
+    before = _tree_digest(video_dir)
+
+    params = make_roi_params(clip)
+    observation, probe = _resource_probe()
+    spec = SidecarTrialSpec(
+        video_path=clip,
+        params=params,
+        observation=observation,
+        resource_probe=probe,
+        start_frame=0,
+        # A production-sized window, for the same reason the test above uses
+        # one: a short window is filtered out entirely by the fixture's
+        # MIN_TRAJECTORY_LENGTH and the child fails before it can write
+        # anything anywhere.
+        end_frame=499,
+    )
+    request = write_sidecar_request(
+        tmp_path / "ipc",
+        spec,
+        _settings(),
+        phase="full",
+        field_name=None,
+        block_index=0,
+    )
+    env = dict(os.environ)
+    env["PYTHONPATH"] = str(SRC_ROOT)
+    proc = subprocess.run(
+        [
+            sys.executable,
+            "-m",
+            "hydra_suite.core.inference.autotune.sidecar_child",
+            "--request",
+            str(request),
+        ],
+        capture_output=True,
+        text=True,
+        timeout=600,
+        env=env,
+    )
+    assert proc.returncode == 0, f"child failed:\n{proc.stderr[-4000:]}"
+
+    after = _tree_digest(video_dir)
+    added = sorted(set(after) - set(before))
+    removed = sorted(set(before) - set(after))
+    changed = sorted(name for name in set(before) & set(after) if before[name] != after[name])
+    assert not added, f"trial created shared files: {added}"
+    assert not removed, f"trial deleted shared files: {removed}"
+    assert not changed, f"trial rewrote shared files: {changed}"
