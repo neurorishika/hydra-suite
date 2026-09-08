@@ -274,3 +274,32 @@ def test_check_availability_uses_the_env_edit_value(qapp, monkeypatch):
     panel.env_edit.setText("hydra-sam3-custom")
     panel.check_availability()
     assert seen["env"] == "hydra-sam3-custom"
+
+
+def test_early_stop_controls_live_in_the_optimisation_group(qapp):
+    """The patience/min-delta spins exist, default to OFF, and round-trip.
+
+    Fail-first: neither widget exists at 97c0e68b. They sit in the SAM3 tab's
+    Optimisation group (next to Epochs, which they modify) rather than being
+    cross-wired to the dialog's project-level YOLO `patience` spin, which has
+    different storage, a 1-500 range with no "off", and a different training
+    path.
+    """
+    import hydra_suite.detectkit.gui.panels.sam3_training_panel as mod
+    from hydra_suite.training.contracts import Sam3LoraParams
+
+    panel = mod.Sam3TrainingPanel()
+    # The Optimisation group owns them (same parent as the Epochs spin).
+    assert panel.patience_spin.parent() is panel.epochs_spin.parent()
+    assert panel.min_delta_spin.parent() is panel.epochs_spin.parent()
+    # 0 must be selectable -- it is how early stopping is disabled.
+    assert panel.patience_spin.minimum() == 0
+    # Defaults track the contract, which is disabled.
+    assert panel.params().patience == 0
+    assert panel.params().patience == Sam3LoraParams().patience
+    assert panel.params().min_delta == Sam3LoraParams().min_delta
+
+    panel.set_params(Sam3LoraParams(prompt="ant", patience=4, min_delta=0.02))
+    assert panel.patience_spin.value() == 4
+    assert panel.params().patience == 4
+    assert panel.params().min_delta == pytest.approx(0.02)

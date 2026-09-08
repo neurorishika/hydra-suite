@@ -38,6 +38,17 @@ spread itself is real (epoch_003 - FINAL = +0.0244 AP, Bonferroni CI
 [+0.0079, +0.0437]; P(best) 0.991 vs 0.000), so there IS something to select
 on -- just not the loss.
 
+EARLY STOPPING (2026-09-08, a user decision that supersedes the "do not add
+early stopping on val loss" sentence above): a run MAY now stop early on
+`val_loss_mean` via `Sam3LoraParams.patience`/`min_delta`, defaulting to OFF
+(patience 0). Read the distinction carefully, because the anti-correlation
+result above still stands and is not contradicted: early stopping decides
+WHEN TO STOP SPENDING GPU TIME, it does not SELECT a checkpoint. Selection is
+still always the last epoch. Nothing restores the argmin of the loss curve --
+that is the thing the study says would be worse. The best epoch's checkpoint
+is merely retained (never pruned) so a future study could revisit it by hand.
+See `EarlyStopTracker`.
+
 AP is therefore now ALSO recorded per epoch, in the same `val_series.jsonl`
 row (see `detection_quality` and `ap_cadence`). It still selects nothing.
 Read `detection_quality`'s module docstring before treating it as a rule: the
@@ -347,6 +358,7 @@ def plan_checkpoint_retention(
     free_bytes: int,
     adapter_bytes: int,
     budget_bytes: int | None = None,
+    protected: Any = (),
 ) -> list[Path]:
     """Decide which epoch checkpoints must go, given a MEASURED budget.
 
@@ -355,7 +367,17 @@ def plan_checkpoint_retention(
     unconditionally, then repeatedly drop the middle-most survivor until the
     remainder fits. That preserves both ends of the loss curve -- the shape a
     stall analysis reads -- instead of a window that keeps only the tail.
+
+    ``protected`` is a set of file NAMES that may never be deleted, whatever
+    the budget says. Early stopping puts the BEST epoch in there: cutting a
+    run short and then pruning the very checkpoint the stop was justified by
+    would be strictly worse than not stopping. Protection can therefore push
+    the retained set OVER budget -- deliberately, because the budget exists
+    to stop a run filling a disk with salvage, not to license destroying the
+    one artifact the run is about. Empty by default, so a run with early
+    stopping disabled prunes exactly as it did before.
     """
+    protected_names = {str(name) for name in protected}
     ordered = sorted(paths, key=lambda path: path.name)
     if len(ordered) <= 2 or adapter_bytes <= 0:
         return []
@@ -370,9 +392,27 @@ def plan_checkpoint_retention(
     removed: list[Path] = []
     kept = list(ordered)
     while len(kept) > max_keep:
-        # Middle-most of the interior span; endpoints are never candidates.
-        removed.append(kept.pop(len(kept) // 2))
+        # Middle-most of the interior span; endpoints are never candidates,
+        # and neither is anything explicitly protected. Scan outward from the
+        # middle so the choice stays "middle-most eligible" rather than
+        # silently degrading to "first eligible".
+        index = _middle_most_eligible(kept, protected_names)
+        if index is None:
+            # Everything left is an endpoint or protected: stop, over budget
+            # and loudly so (the caller logs what it kept).
+            break
+        removed.append(kept.pop(index))
     return sorted(removed, key=lambda path: path.name)
+
+
+def _middle_most_eligible(kept: list[Path], protected_names: set[str]) -> int | None:
+    """Index of the interior, unprotected checkpoint closest to the middle."""
+    middle = len(kept) // 2
+    for offset in range(len(kept)):
+        for index in (middle - offset, middle + offset) if offset else (middle,):
+            if 0 < index < len(kept) - 1 and kept[index].name not in protected_names:
+                return index
+    return None
 
 
 def enforce_checkpoint_budget(
@@ -380,6 +420,7 @@ def enforce_checkpoint_budget(
     *,
     budget_bytes: int | None = None,
     log: Any = emit_log,
+    protected: Any = (),
 ) -> list[Path]:
     """Apply `plan_checkpoint_retention` to *directory*, loudly.
 
@@ -418,6 +459,7 @@ def enforce_checkpoint_budget(
         free_bytes=0,
         adapter_bytes=adapter_bytes,
         budget_bytes=budget_bytes,
+        protected=protected,
     )
     # Deletion is filesystem I/O on the training path, so it carries the SAME
     # fail-open contract as the measurement above. `missing_ok=True` only
@@ -523,8 +565,149 @@ def append_val_record(run_dir_path: Path, record: dict[str, Any]) -> Path:
     return path
 
 
+# --- Early stopping --------------------------------------------------------
+#
+# Stops on the `val_loss_mean` series recorded above, which is ALREADY
+# computed every (cadenced) epoch. No new forward pass, no new metric, no
+# retained per-frame data -- the stopping rule reads a number the run was
+# going to write anyway, so enabling it can only ever REMOVE compute.
+#
+# The user's 2026-09-08 decision, recorded here because the surrounding code
+# used to prohibit exactly this: stop on `val_loss_mean` with `patience` +
+# `min_delta`, matching the Ultralytics `patience` semantics this repo
+# already uses for YOLO. AP and the confidence sweep stay as DIAGNOSTICS --
+# they remain recorded (they are the only way to notice on a future dataset
+# that val_loss is misbehaving) and they select nothing.
+#
+# What this does NOT change: checkpoint selection is still LAST epoch.
+# `adapters.pt` is written from the weights the run stopped on, not from the
+# best epoch -- the 2026-09-06 study measured per-query validation signals
+# ANTI-correlating with held-out AP, so restoring the argmin would be a
+# selection rule that study says is wrong. Early stopping only decides WHEN
+# to stop paying for more epochs. The best epoch's checkpoint is retained
+# (see `plan_checkpoint_retention`'s `protected`) so it can be recovered by
+# hand if a later study justifies selecting it.
+EARLY_STOP_FILENAME = "early_stop.json"
+
+
+class EarlyStopTracker:
+    """Patience/min-delta stopping rule over a `val_loss_mean` series.
+
+    Pure and disk-free: `observe` takes one epoch's number and its already
+    computed loss and returns whether the run should stop. That is what makes
+    the rule testable without CUDA, a model, or a dataset.
+
+    Semantics, stated because every ambiguity here is a silent behaviour
+    difference:
+
+    * An epoch improves only if it beats the best so far by MORE than
+      `min_delta`. Exactly `min_delta` is NOT an improvement.
+    * `best_value`/`best_epoch` advance only on a qualifying improvement, so
+      a slow drift smaller than `min_delta` per epoch cannot creep the
+      baseline along and defeat the patience counter.
+    * Patience counts EVALUATED epochs, not calendar epochs. With
+      `HYDRA_SAM3_VAL_EVERY > 1` a patience of 3 is 3 validations, which is
+      3 * cadence epochs; the effective cadence is stamped into the artifact
+      so a reader never has to guess which one a run used.
+    * A non-finite loss is never an improvement (it counts against patience)
+      but never becomes the best either.
+    * `patience == 0` disables the rule entirely: `observe` still tracks the
+      best epoch (free, and useful evidence) but never returns True.
+    """
+
+    def __init__(self, patience: int, min_delta: float) -> None:
+        self.patience = max(0, int(patience))
+        self.min_delta = max(0.0, float(min_delta))
+        self.best_epoch: int | None = None
+        self.best_value: float | None = None
+        self.epochs_without_improvement = 0
+        self.observations = 0
+        self.stopped_at_epoch: int | None = None
+
+    @property
+    def enabled(self) -> bool:
+        """Whether this tracker may ever stop a run."""
+        return self.patience > 0
+
+    def observe(self, epoch_number: int, value: Any) -> bool:
+        """Record one evaluated epoch; return True when the run should stop."""
+        self.observations += 1
+        try:
+            loss = float(value)
+        except (TypeError, ValueError):
+            loss = math.nan
+        improved = math.isfinite(loss) and (
+            self.best_value is None or loss < self.best_value - self.min_delta
+        )
+        if improved:
+            self.best_value = loss
+            self.best_epoch = int(epoch_number)
+            self.epochs_without_improvement = 0
+        else:
+            self.epochs_without_improvement += 1
+        if self.enabled and self.epochs_without_improvement >= self.patience:
+            self.stopped_at_epoch = int(epoch_number)
+            return True
+        return False
+
+    def protected_checkpoint_names(self) -> tuple[str, ...]:
+        """Checkpoint filenames retention must never prune."""
+        if self.best_epoch is None:
+            return ()
+        return (epoch_checkpoint_name(self.best_epoch),)
+
+    def summary(self, *, final_epoch: int) -> dict[str, Any]:
+        """The record written to `early_stop.json` -- why the run ended."""
+        return {
+            "patience": self.patience,
+            "min_delta": self.min_delta,
+            "enabled": self.enabled,
+            "stopped_early": self.stopped_at_epoch is not None,
+            "stopped_at_epoch": self.stopped_at_epoch,
+            "final_epoch": int(final_epoch),
+            "best_epoch": self.best_epoch,
+            "best_val_loss_mean": self.best_value,
+            "best_checkpoint": (
+                epoch_checkpoint_name(self.best_epoch)
+                if self.best_epoch is not None
+                else None
+            ),
+            "evaluated_epochs": self.observations,
+            "epochs_without_improvement": self.epochs_without_improvement,
+            "val_cadence": val_cadence(),
+            "monitor": "val_loss_mean",
+            "note": (
+                "Early stopping decides WHEN to stop. Checkpoint selection is "
+                "unchanged: adapters.pt is the final epoch's weights, not "
+                "best_epoch's. best_checkpoint is retained under "
+                f"{EPOCH_CHECKPOINT_DIRNAME}/ for manual recovery."
+            ),
+        }
+
+
+def write_early_stop_record(run_dir_path: Path, record: dict[str, Any]) -> Path:
+    """Persist the stopping rule's outcome next to the validation series."""
+    path = run_dir_path / EARLY_STOP_FILENAME
+    path.write_text(json.dumps(record, indent=2, sort_keys=True), encoding="utf-8")
+    return path
+
+
+def epoch_checkpoint_name(epoch_number: int) -> str:
+    """Filename this run uses for *epoch_number*'s salvage checkpoint.
+
+    One definition, so retention protection and the writer can never disagree
+    about which file the "best epoch" is.
+    """
+    return f"epoch_{int(epoch_number):03d}.pt"
+
+
 def _write_epoch_checkpoint(
-    model: Any, run_dir_path: Path, epoch_number: int, torch_module: Any
+    model: Any,
+    run_dir_path: Path,
+    epoch_number: int,
+    torch_module: Any,
+    *,
+    protected: Any = (),
 ) -> Path:
     """Persist this epoch's adapters as salvage, atomically.
 
@@ -534,9 +717,9 @@ def _write_epoch_checkpoint(
     """
     directory = run_dir_path / EPOCH_CHECKPOINT_DIRNAME
     directory.mkdir(parents=True, exist_ok=True)
-    target = directory / f"epoch_{epoch_number:03d}.pt"
+    target = directory / epoch_checkpoint_name(epoch_number)
     _write_validated_adapter_artifact(adapter_state_dict(model), target, torch_module)
-    enforce_checkpoint_budget(directory)
+    enforce_checkpoint_budget(directory, protected=protected)
     return target
 
 
@@ -976,6 +1159,23 @@ def run_training(spec: Any, run_dir_path: Path) -> bool:
     )
     optimizer.zero_grad()
 
+    # Early stopping reads the val_loss series recorded below -- a number this
+    # run already computes. Disabled unless the plan asks for it (patience 0).
+    early_stop = EarlyStopTracker(
+        getattr(params, "patience", 0), getattr(params, "min_delta", 0.0)
+    )
+    if early_stop.enabled:
+        emit_log(
+            f"early stopping ARMED on val_loss_mean: patience="
+            f"{early_stop.patience} evaluated epochs, min_delta="
+            f"{early_stop.min_delta} (val cadence {val_cadence()}). "
+            "Checkpoint selection is unchanged (last epoch); the best "
+            "epoch's checkpoint is retained."
+        )
+    warned_no_validation = False
+    final_epoch = params.epochs
+    final_val_record: dict[str, Any] | None = None
+
     for epoch in range(params.epochs):
         model.train()
         # Tile descriptors reshuffle every epoch (seeded from spec.seed +
@@ -1057,15 +1257,22 @@ def run_training(spec: Any, run_dir_path: Path) -> bool:
 
         # Salvage checkpoint, skipped on the final epoch because the real
         # artifact is written moments later from the same weights.
+        should_stop = False
         if epoch + 1 < params.epochs:
-            saved = _write_epoch_checkpoint(model, run_dir_path, epoch + 1, torch)
+            saved = _write_epoch_checkpoint(
+                model,
+                run_dir_path,
+                epoch + 1,
+                torch,
+                protected=early_stop.protected_checkpoint_names(),
+            )
             emit_log(f"epoch {epoch} checkpoint: {saved}")
             # Record the validation series as it happens. The final epoch is
             # deliberately excluded here: the terminal `_evaluate_and_write`
             # below appends it from the same computation, so no epoch is
             # evaluated twice.
             if (epoch + 1) % val_cadence() == 0:
-                _record_epoch_validation(
+                record = _record_epoch_validation(
                     model,
                     spec,
                     params,
@@ -1077,12 +1284,59 @@ def run_training(spec: Any, run_dir_path: Path) -> bool:
                     run_dir_path,
                     epoch + 1,
                 )
+                if record is None:
+                    # No validation split (see `dataset_build.py`'s
+                    # `validation: "none"`), so the stopping rule has nothing
+                    # to read. Say so ONCE and loudly rather than letting the
+                    # user believe patience is protecting them.
+                    if early_stop.enabled and not warned_no_validation:
+                        warned_no_validation = True
+                        emit_log(
+                            "EARLY STOPPING CANNOT FIRE: this dataset has no "
+                            "validation split, so there is no val_loss_mean "
+                            "to monitor. The run will train all "
+                            f"{params.epochs} epochs."
+                        )
+                else:
+                    final_val_record = record
+                    should_stop = early_stop.observe(epoch + 1, record["val_loss_mean"])
 
         emit_progress(epoch + 1, params.epochs)
+        if should_stop:
+            final_epoch = epoch + 1
+            emit_log(
+                f"EARLY STOP at epoch {final_epoch}: {early_stop.patience} "
+                "consecutive evaluated epochs without a val_loss_mean "
+                f"improvement > {early_stop.min_delta}. Best was epoch "
+                f"{early_stop.best_epoch} at {early_stop.best_value:.5f} "
+                f"(checkpoint {epoch_checkpoint_name(early_stop.best_epoch)} "
+                "retained). Skipping "
+                f"{params.epochs - final_epoch} remaining epoch(s)."
+            )
+            # Close the progress bar: the parent tracks completion by exit
+            # code and artifact, but a bar frozen at 6/10 reads as a hang.
+            emit_progress(params.epochs, params.epochs)
+            break
 
     # Keep adapters in memory until validation completes. A failed evaluation,
     # kill, or parent death must not expose a seemingly completed artifact.
     adapters = adapter_state_dict(model)
+    # On an early stop the epoch we ended on was ALREADY evaluated a moment
+    # ago, and its record is already in the series. Reuse it rather than
+    # paying for a second pass over the same weights -- but only when it
+    # carries the detection-quality block, because the series' final row is
+    # contracted to always have one. When the AP cadence skipped that epoch we
+    # re-evaluate: one extra pass, at stop time only, never per-epoch.
+    reusable = (
+        final_val_record
+        if (
+            early_stop.stopped_at_epoch is not None
+            and final_val_record is not None
+            and final_val_record.get("epoch") == final_epoch
+            and ("ap" in final_val_record or "ap_error" in final_val_record)
+        )
+        else None
+    )
     _evaluate_and_write(
         model,
         spec,
@@ -1093,8 +1347,13 @@ def run_training(spec: Any, run_dir_path: Path) -> bool:
         autocast_dtype,
         True,
         run_dir_path,
-        params.epochs,
+        final_epoch,
+        precomputed=reusable,
     )
+    if early_stop.enabled:
+        write_early_stop_record(
+            run_dir_path, early_stop.summary(final_epoch=final_epoch)
+        )
     artifact_path = run_dir_path / "adapters.pt"
     _write_validated_adapter_artifact(adapters, artifact_path, torch)
     return True
@@ -1223,12 +1482,18 @@ def _record_epoch_validation(
 ) -> dict[str, Any] | None:
     """Evaluate the validation split mid-run and append it to the series.
 
-    EVIDENCE ONLY -- if you are here to wire best-checkpoint selection or
-    early stopping onto this series, don't. Selection stays last-epoch: a
-    2026-09-06 study on a genuinely disjoint fold measured every per-query
-    validation signal ANTI-correlating with held-out AP, so choosing the
-    minimum of this curve would pick a worse detector. The series exists to
-    distinguish "converged" from "stalled at epoch 2", nothing else.
+    SELECTION IS STILL FORBIDDEN HERE. If you are here to wire
+    best-checkpoint selection onto this series, don't: a 2026-09-06 study on
+    a genuinely disjoint fold measured every per-query validation signal
+    ANTI-correlating with held-out AP, so choosing the minimum of this curve
+    would pick a worse detector.
+
+    What this series IS now allowed to drive, since 2026-09-08, is the
+    STOPPING decision -- `EarlyStopTracker` reads `val_loss_mean` from the
+    caller to decide whether more epochs are worth paying for. That is a
+    different question from which checkpoint to keep, and it is off by
+    default. The series also still does its original job: distinguishing
+    "converged" from "stalled at epoch 2".
 
     Provably behaviour-preserving: the model is returned to `train()` and
     every RNG stream is restored, so the next epoch draws exactly the numbers
@@ -1283,7 +1548,7 @@ def _record_epoch_validation(
         f"epoch {epoch_number} val_loss_mean={stats['val_loss_mean']:.5f} "
         f"({stats['val_batches']} batches, {stats['elapsed_s']:.1f}s)"
         + _ap_log_suffix(stats)
-        + " [recorded as evidence; selection is unchanged]"
+        + " [recorded as evidence; checkpoint selection is unchanged]"
     )
     return record
 
@@ -1316,6 +1581,8 @@ def _evaluate_and_write(
     use_bf16: bool,
     run_dir_path: Path,
     epoch_number: int | None = None,
+    *,
+    precomputed: dict[str, Any] | None = None,
 ) -> Path | None:
     """Compute real validation-set loss, for reporting ONLY.
 
@@ -1328,11 +1595,33 @@ def _evaluate_and_write(
     Writes `val_stats.json` in its historical shape (`val_loss_mean`,
     `val_batches`, `note`) plus the additive per-term breakdown, and appends
     the SAME computation as the final entry of `val_series.jsonl`, so the
-    series' last row and the terminal artifact can never disagree and the
-    final epoch is never evaluated twice.
+    series' last row and the terminal artifact can never disagree. On a run
+    that reaches its last epoch, that epoch is never evaluated twice (the
+    mid-run recorder deliberately skips it). On an EARLY STOP the guarantee
+    is conditional -- see `precomputed` below.
+
+    `precomputed` passes in a record this run ALREADY produced for the same
+    epoch on the same weights (the early-stop path: the epoch it stopped on
+    was validated moments earlier). It is then written to `val_stats.json`
+    without a second forward pass, and NO extra series row is appended --
+    the mid-run record already landed, so appending would duplicate the
+    epoch rather than close the series.
+
+    When the AP cadence (`HYDRA_SAM3_AP_EVERY`) skipped the stop epoch, the
+    mid-run record carries no detection-quality block, so it cannot be
+    reused: the series' final row is contracted to always have one. That case
+    -- and only that case -- evaluates the stop epoch a second time and leaves
+    TWO rows for it in the series (a loss-only one, then the AP-bearing final
+    one). Expected, not a defect; the cost is one pass at stop time, never
+    per-epoch.
     """
-    stats = _evaluate_split(
-        model, spec, params, matcher, loss_fn, device, autocast_dtype, use_bf16
+    reused = precomputed is not None
+    stats = (
+        precomputed
+        if reused
+        else _evaluate_split(
+            model, spec, params, matcher, loss_fn, device, autocast_dtype, use_bf16
+        )
     )
     if stats is None:
         return None
@@ -1347,7 +1636,7 @@ def _evaluate_and_write(
     }
     metrics_path = run_dir_path / "val_stats.json"
     metrics_path.write_text(json.dumps(val_stats, indent=2), encoding="utf-8")
-    if epoch_number is not None:
+    if epoch_number is not None and not reused:
         # The FINAL row always carries AP, whatever the cadence: a series
         # whose last epoch has no detection-quality number cannot be read
         # against the always-last-epoch policy it exists to inform.

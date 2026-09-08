@@ -415,6 +415,39 @@ class Sam3TrainingPanel(QWidget):
         self.precision_combo = QComboBox()
         self.precision_combo.addItems(_PRECISIONS)
         opt_form.addRow("Mixed precision", self.precision_combo)
+        # Early stopping lives HERE, in the Optimisation group of the shared
+        # training dialog's SAM3 tab, next to Epochs -- because it is a
+        # modifier on Epochs ("train up to N, but stop sooner if val_loss
+        # stops improving") and is read with it. It is deliberately NOT wired
+        # to the dialog's existing project-level `patience` spin: that one is
+        # the Ultralytics/YOLO knob, stored on the project, ranged 1-500 with
+        # no "off", and it drives a different training path. Sharing one
+        # widget between two contracts is exactly the GUI/CLI divergence the
+        # parity guard exists to catch.
+        self.patience_spin = QSpinBox()
+        self.patience_spin.setRange(0, 500)
+        self.patience_spin.setToolTip(
+            "Stop training after this many consecutive VALIDATED epochs with "
+            "no improvement in val_loss_mean. 0 disables early stopping "
+            "(the default; a run then trains all its epochs, exactly as "
+            "before this control existed). 3 is a reasonable starting point. "
+            "Counted in validations, so with HYDRA_SAM3_VAL_EVERY > 1 each "
+            "unit is that many epochs. Costs nothing: val_loss_mean is "
+            "already computed every epoch."
+        )
+        opt_form.addRow("Early stop patience (0 = off)", self.patience_spin)
+        self.min_delta_spin = QDoubleSpinBox()
+        self.min_delta_spin.setRange(0.0, 1.0)
+        self.min_delta_spin.setDecimals(4)
+        self.min_delta_spin.setSingleStep(0.001)
+        self.min_delta_spin.setToolTip(
+            "An epoch counts as an improvement only if it beats the best "
+            "val_loss_mean so far by MORE than this. The between-seed sd of "
+            "val_loss_mean measured 0.0224 across three seeds, so the 0.005 "
+            "default sits well inside noise and will not fire spuriously. "
+            "Ignored when patience is 0."
+        )
+        opt_form.addRow("Early stop min delta", self.min_delta_spin)
         layout.addWidget(opt_group)
 
         safety_group = QGroupBox("Resource safety")
@@ -517,6 +550,8 @@ class Sam3TrainingPanel(QWidget):
             dropout=self.dropout_spin.value(),
             lr=self.lr_spin.value(),
             epochs=self.epochs_spin.value(),
+            patience=self.patience_spin.value(),
+            min_delta=self.min_delta_spin.value(),
             batch=(
                 -1 if self.auto_batch_checkbox.isChecked() else self.batch_spin.value()
             ),
@@ -554,6 +589,8 @@ class Sam3TrainingPanel(QWidget):
         self.dropout_spin.setValue(p.dropout)
         self.lr_spin.setValue(p.lr)
         self.epochs_spin.setValue(p.epochs)
+        self.patience_spin.setValue(p.patience)
+        self.min_delta_spin.setValue(p.min_delta)
         if p.batch == -1:
             self.auto_batch_checkbox.setChecked(True)
         else:

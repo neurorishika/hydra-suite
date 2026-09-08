@@ -301,6 +301,25 @@ class Sam3LoraParams:
     # `resolve_sam3_env`'s default (`DEFAULT_SAM3_ENV`, or `HYDRA_SAM3_ENV`);
     # travels with the spec so a run's env choice is recorded.
     env_name: str = ""
+    # Early stopping on the per-epoch `val_loss_mean` series that
+    # `sam3_lora/cli.py` already records (no new per-epoch compute). Same
+    # `patience` semantics as the Ultralytics knob used for YOLO training:
+    # stop after this many CONSECUTIVE evaluated epochs with no improvement.
+    #
+    # 0 means NEVER stop early, and that is the default deliberately: a plan
+    # written before this field existed must train exactly as it did. Enabling
+    # is a per-run choice, not a repo-wide policy -- suggested starting point
+    # is 3.
+    #
+    # These are per-run PARAMETERS, never module constants (D18's lesson: a
+    # baked threshold becomes dataset-specific and then needs a code edit).
+    patience: int = 0
+    # An epoch improves only if it beats the best so far by MORE than this.
+    # 0.005 is well inside noise: the between-seed sd of `val_loss_mean`
+    # measured 0.0224 across three seeds on the 2026-09 corpus, so this cannot
+    # fire on seed noise alone. One corpus, three seeds -- which is exactly
+    # why it stays tunable rather than becoming a constant.
+    min_delta: float = 0.005
 
 
 @dataclass(slots=True)
