@@ -690,12 +690,31 @@ def _compare_one(
     )
     categorical_mismatches += mandatory_mismatches
     details.extend(mandatory_details)
+    excluded_pairs = (
+        _headtail_flip_pairs(reference, candidate, metrics["pairs"])
+        if exclude_headtail_flip_rows
+        else frozenset()
+    )
     keypoint_p99 = 0.0
     keypoints_over_gate = 0
     numeric_max = 0.0
     product_details: list[str] = []
+    # The measured determinism floor must exclude the repository's documented
+    # bistable head/tail pi-flip rows from the NUMERIC families too, not just
+    # from the angular statistic. A flipped row relabels which keypoint is the
+    # head, so its keypoint XY and its PoseKpt_*_Conf legitimately swap -- and
+    # a floor computed over those rows would come back with
+    # numeric_max ~ 1.0, which
+    # ``numeric_limit = max(policy, floor.numeric_max)`` would then hand to
+    # EVERY later candidate as a budget. That is exactly the disarm bug
+    # already fixed once for the angle gate
+    # (test_determinism_floor_is_not_disarmed_by_a_bistable_pi_flip), one
+    # family over.
+    product_pairs = tuple(
+        pair for pair in metrics["pairs"] if pair not in excluded_pairs
+    )
     product = _paired_frames(
-        reference, candidate, pairs=metrics["pairs"], aligned=aligned
+        reference, candidate, pairs=product_pairs, aligned=aligned
     )
     if product is not None:
         keypoint_p99, keypoints_over_gate, numeric_max, product_details = (
@@ -710,11 +729,6 @@ def _compare_one(
             )
         )
         details.extend(product_details)
-    excluded_pairs = (
-        _headtail_flip_pairs(reference, candidate, metrics["pairs"])
-        if exclude_headtail_flip_rows
-        else frozenset()
-    )
     angle_max = _angle_max(metrics["angle_samples"], excluded_pairs)
     if not nonzero:
         details.append(f"{name}: empty output")

@@ -249,3 +249,56 @@ def test_non_numeric_pose_columns_are_compared_exactly(column, value):
     )
     assert not verdict.passed
     assert verdict.categorical_mismatches > 0
+
+
+# --- the floor must not be disarmed by a bistable pi-flip, in ANY family ----
+
+
+def test_a_bistable_flip_does_not_disarm_the_numeric_or_keypoint_floor():
+    """The head/tail pi-flip exclusion must cover the new families too.
+
+    A flipped row relabels which keypoint is the head, so its keypoint XY and
+    its ``PoseKpt_*_Conf`` legitimately swap. If those rows entered the
+    MEASURED FLOOR, the floor would come back with ``numeric_max`` near 1.0
+    and ``numeric_limit = max(policy, floor.numeric_max)`` would hand that
+    budget to every later candidate -- the whole numeric gate, disarmed by one
+    bistable row. This is
+    ``test_determinism_floor_is_not_disarmed_by_a_bistable_pi_flip`` one
+    family over; MPS could not surface it because its A-vs-A repeat has zero
+    flips, but the repo documents flips on CUDA head/tail clips.
+    """
+
+    rows = 6
+    reference = _pose_frame(rows)
+    reference["HeadTailAngleRad"] = [0.0] * rows
+    repeat = reference.copy()
+    # Row 0 flips: the head/tail marker changes and, with it, the keypoint
+    # geometry and confidences that the flip relabels.
+    repeat.loc[0, "HeadTailAngleRad"] = np.pi
+    repeat.loc[0, "PoseKpt_clypeus_X"] = repeat.loc[0, "PoseKpt_tip_of_gaster_X"]
+    repeat.loc[0, "PoseKpt_clypeus_Y"] = repeat.loc[0, "PoseKpt_tip_of_gaster_Y"]
+    repeat.loc[0, "PoseKpt_clypeus_Conf"] = 0.01
+    repeat.loc[0, "PoseMeanConf"] = 0.01
+
+    floor = compare_outputs(
+        equivalence_outputs(reference),
+        equivalence_outputs(repeat),
+        for_determinism_floor=True,
+    )
+    assert floor.numeric_max == 0.0, (
+        "a bistable flip row leaked into the measured numeric floor; it would "
+        "become the budget for every later candidate"
+    )
+    assert floor.keypoint_p99 == 0.0
+    assert floor.keypoints_over_gate == 0
+
+    # And the floor so measured must NOT then admit a real confidence drift.
+    candidate = _pose_frame(rows)
+    candidate["HeadTailAngleRad"] = [0.0] * rows
+    candidate["PoseMeanConf"] = candidate["PoseMeanConf"] + 0.2
+    verdict = compare_outputs(
+        equivalence_outputs(reference),
+        equivalence_outputs(candidate),
+        determinism_floor=floor,
+    )
+    assert not verdict.passed

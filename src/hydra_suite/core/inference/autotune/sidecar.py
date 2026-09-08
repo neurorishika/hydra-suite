@@ -505,7 +505,13 @@ class ContainedTrialExecutor:
             # and the measured region begins. Until then the trial is spending
             # build time, which is not what per_trial_timeout_seconds bounds.
             started_marker = request.parent / MEASUREMENT_STARTED_MARKER
-            deadline = time.monotonic() + min(timeout + allowance, max(0.1, remaining))
+            # ``remaining`` is the calibration budget left at trial start, so
+            # it is the HARD ceiling for this trial no matter how the build /
+            # measurement windows divide it up. Without pinning it here, a
+            # build of B seconds followed by a fresh full ``timeout`` would
+            # overrun the budget by up to ``timeout``.
+            hard_deadline = time.monotonic() + max(0.1, remaining)
+            deadline = min(time.monotonic() + timeout + allowance, hard_deadline)
             measuring = allowance <= 0.0
             while sidecar.process is not None and sidecar.process.poll() is None:
                 if should_cancel():
@@ -516,7 +522,7 @@ class ContainedTrialExecutor:
                     # Build finished: restart the measurement clock, still
                     # bounded by whatever is left of the overall budget.
                     measuring = True
-                    deadline = time.monotonic() + min(timeout, max(0.1, remaining))
+                    deadline = min(time.monotonic() + timeout, hard_deadline)
                 if time.monotonic() >= deadline:
                     sidecar.cancel()
                     sidecar = None
