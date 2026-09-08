@@ -1345,3 +1345,60 @@ entered the overlap having seen 95 frames, side B at its own frame 0). Geometry
 is bit-identical wherever it is comparable, so the pipeline is deterministic and
 decoupling the comparison window from the striped timing blocks should clear the
 floor outright.
+
+---
+
+## Final gate results (HEAD `c8f3f02a`)
+
+### Torch-tier equivalence re-gate (autotuner OFF, base `0d4d4cae` vs branch `3f0b3ea4`)
+
+| Platform | Result | Notes |
+|---|---|---|
+| MPS | **54/54 ✅** | 9 clips; `ant_obb_sleap` 1.28x ❌ was contention from a concurrent 166 MB transfer, 1.06x ✅ on idle re-measure |
+| CUDA (courtship) | **36/36 ✅** | `ant_pose_headtail`, `ant_cnn_identity(_relink)` failed identically on **both** trees — that box's env named `sleap` is TF 1.4.1 with no torch. Box config, no branch signal. |
+
+Zero differences on both platforms: pos p99 `0.000e+00`, θ max `0.000e+00`, 0 unmatched,
+identical row counts. Determinism floor was exactly zero (no π-flips), so this is exact
+rather than "at the floor". `ant_obb_sleap` and `ant_obb_sequential` — previously
+unmeasured anywhere — are now covered.
+
+`gpu_fast` proven separately: CoreML on MPS 12/12 EQUIVALENT (old artifact location vs the
+new `RuntimeArtifactStore`); TensorRT on courtship `fly_obb` 6/6 EQUIVALENT.
+
+### CUDA tuner yield under the post-B1 gate (`fly_obb`, courtship, idle)
+
+**Promoted vector: the baseline itself (`det=1, depth=2`). Gain: none.**
+Completed in 360.6 s against the 4500 s budget; 12 candidates, 7680 frames, `state: validated`.
+
+| candidate | fps | vs base | refused because |
+|---|---|---|---|
+| det=2 | 102.08 | **1.15x** | `DetectionConfidence` Δ 0.00766, `AssignmentConfidence` Δ 9.0e-5 |
+| det=4 | 102.30 | **1.15x** | same + `DetectionID` Δ 1 |
+| det=8 | 103.55 | **1.17x** | same + `DetectionID` Δ 1 |
+| det=16 | 98.27 | 1.11x | Δ 0.00486, Δ 6.9e-5 |
+
+All against `numeric_max_tolerance` 1e-6 — three to four orders over. All four had
+`position_p99` 0.0064–0.0069 px, `keypoint_p99` 0.0, 0 categorical differences, 0 unmatched:
+**all four would have passed the pre-B1 gate.** Every `pipeline_depth` candidate was
+byte-identical (`numeric_max` 0.0) but offered no gain.
+
+**Conclusion: on this CUDA workload the feature is correct but inert** — the only lever with
+speed changes the output, and the lever that preserves output has nothing to give. `fly_obb`
+has no pose, identity, or slicing, so those coordinates were inactive and their yield is
+untested.
+
+### The budget arithmetic, corrected
+
+The original "600 s budget, full search space" pairing was **arithmetically impossible**: a
+full joint pass costs ~2150 s post-short-circuit (measured: baseline 101 s + detection screen
+424 s + depth screen 273 s + validation 80 s = 885 s for the measured subset), and the
+worst case — every field within noise, so every field confirms, which is CUDA — is
+`101 + 4×424 + 273 + 5×300 + 80 = 3650 s`. Default set to **4500 s**, max 7200 s. No
+tolerable default covers a two-pass multi-winner search (~5650 s); that now surfaces as a
+loud, persisted stop rather than silently producing nothing.
+
+### Open decision for a human
+
+`DetectionConfidence`/`AssignmentConfidence` are gated at 1e-6 by the inverted default from
+the B1 fix. That single tolerance is the difference between ~15% on CUDA and zero yield.
+It is **not** the same knob as the deliberate 0.5 px geometry tolerance chosen earlier.
