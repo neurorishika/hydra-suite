@@ -605,8 +605,15 @@ def sam3_workload_fingerprint(
 
 # The ladder. Powers of two because each rung must be worth a full model
 # reload: a linear ladder would pay that cost for a batch size the curve fit
-# can already extrapolate. 8 is the ceiling because SAM3 LoRA's per-item cost
-# is measured in GiB, so a card that fits 16 is not a card this gate is for.
+# can already extrapolate. 8 is the ceiling not because larger batches don't
+# fit on some cards (measured: batch 8 uses only 18.9 of 47.1 GiB free on a
+# 48 GB card) but because throughput is flat in batch size — measured
+# 2.53 -> 2.69 items/s from batch 1 -> 8 on a 24 GB card, i.e. +6.3% for a
+# 2.4x increase in VRAM, already plateauing over the last few rungs. Per-item
+# VRAM cost is also lumpy, not smooth (marginal reserved GiB/item measured as
+# 1.23, 1.37, 1.33, 3.23, 0.78 across batches 1-8), so extrapolating past the
+# measured region risks OOMing a multi-hour run for a throughput gain that is
+# within noise of zero. See `.superpowers/max-auto-batch-ceiling-report.md`.
 MAX_AUTO_BATCH = 8
 PROBE_CANDIDATES: tuple[int, ...] = (1, 2, 4, 8)
 
