@@ -463,6 +463,57 @@ def make_request_inputs(
     }
 
 
+def make_tensorrt_context(
+    tmp_path: Path | None = None,
+    *,
+    backend: str = "tensorrt",
+    available_accelerator_bytes: int = 48 * 1024**3,
+):
+    """An ``AutotuneContext`` for exercising ``session.calibration_key_digest``.
+
+    Built on ``make_request_inputs`` (CUDA, direct-OBB-with-slice config) so
+    the resulting context has a real ``detection_batch_size``/
+    ``slice_tile_batch_size`` candidate space to derive ``artifact_batch_size``
+    from. ``backend="tensorrt"`` (the default) makes
+    ``session.calibration_key_digest`` reach ``_model_fingerprints``'s
+    ``tensorrt_profile_fingerprint`` call; pass ``backend="torch"`` for the
+    non-TensorRT comparison.
+    """
+
+    import tempfile
+
+    from hydra_suite.core.inference.autotune.device import RuntimeResourceProbe
+    from hydra_suite.core.inference.autotune.session import AutotuneContext
+
+    tmp_path = tmp_path or Path(tempfile.mkdtemp())
+    inputs = make_request_inputs(
+        tmp_path,
+        available_accelerator_bytes=available_accelerator_bytes,
+    )
+    probe = RuntimeResourceProbe(
+        inputs["observation"],
+        "gpu-uuid",
+        "GPU",
+        "8.9",
+        None,
+        "driver",
+        False,
+        False,
+    )
+    # ``ctx.params`` must be the SAME dict object as ``run_context.params``
+    # (as ``build_autotune_context`` constructs it) so mutating one is
+    # visible through the other -- ``calibrate``/``calibration_key_digest``
+    # rely on this to fold the artifact batch size into the fingerprint.
+    return AutotuneContext(
+        config=inputs["config"],
+        run_context=inputs["context"],
+        params=inputs["context"].params,
+        backend=backend,
+        probe=probe,
+        device_identity=inputs["device_identity"],
+    )
+
+
 class _FakeProfileStore:
     """In-memory ``InferenceTuningProfileStore`` stand-in for intent tests.
 

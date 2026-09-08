@@ -113,6 +113,48 @@ def build_autotune_context(
     )
 
 
+def calibration_key_digest(ctx: AutotuneContext) -> str:
+    """The profile-key digest this context will calibrate and look up under.
+
+    Mirrors ``calibrate``'s ``artifact_batch_size`` derivation (via
+    ``static_max_for``, not live-memory-filtered ``values_for``) so this
+    exercises the exact same ``tensorrt_profile_id`` path a real calibration
+    run would produce -- including on the TensorRT backend, where that value
+    feeds ``_model_fingerprints`` (see ``integration.py``).
+    """
+
+    from hydra_suite.core.inference.autotune.integration import (
+        build_tracking_autotune_request,
+    )
+
+    preflight = build_tracking_autotune_request(
+        ctx.config,
+        ctx.run_context,
+        observation=ctx.probe.observation,
+        backend=ctx.backend,
+        device_identity=ctx.device_identity,
+    )
+    artifact_batch_size = max(
+        (
+            preflight.planner.static_max_for(field, preflight.baseline)
+            for field in ("detection_batch_size", "slice_tile_batch_size")
+        ),
+        default=preflight.baseline.detection_batch_size,
+    )
+    if ctx.backend == "tensorrt":
+        ctx.params["INFERENCE_AUTOTUNE_TENSORRT_PROFILE_BATCH_SIZE"] = (
+            artifact_batch_size
+        )
+    request = build_tracking_autotune_request(
+        ctx.config,
+        ctx.run_context,
+        observation=ctx.probe.observation,
+        backend=ctx.backend,
+        device_identity=ctx.device_identity,
+    )
+    return request.key.digest
+
+
 def lookup(ctx: AutotuneContext):
     """Find and apply a validated profile. Never measures, never claims a lock."""
 
@@ -152,9 +194,8 @@ def calibrate(ctx: AutotuneContext, *, budget_seconds: float):
     )
     artifact_batch_size = max(
         (
-            value
+            preflight.planner.static_max_for(field, preflight.baseline)
             for field in ("detection_batch_size", "slice_tile_batch_size")
-            for value in preflight.planner.values_for(field, preflight.baseline)
         ),
         default=preflight.baseline.detection_batch_size,
     )
