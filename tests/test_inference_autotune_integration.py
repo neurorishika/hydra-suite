@@ -239,7 +239,7 @@ def test_automatic_and_record_modes_are_both_eligible_to_measure(
         execution_mode="batch",
     )
 
-    config.inference_autotune = InferenceAutotunePolicy(mode="automatic")
+    config.inference_autotune = InferenceAutotunePolicy(mode="calibrate")
 
     auto_request = build_tracking_autotune_request(
         config,
@@ -248,7 +248,7 @@ def test_automatic_and_record_modes_are_both_eligible_to_measure(
         backend="torch",
         device_identity=("cpu", "CPU", "none", 0),
     )
-    config.inference_autotune = InferenceAutotunePolicy(mode="record")
+    config.inference_autotune = InferenceAutotunePolicy(mode="calibrate")
     record_request = build_tracking_autotune_request(
         config,
         record,
@@ -267,7 +267,7 @@ def test_automatic_and_record_modes_are_both_eligible_to_measure(
 def test_core_inference_policy_roundtrip_and_legacy_default(tmp_path):
     config = _config(tmp_path)
     config.inference_autotune = InferenceAutotunePolicy(
-        mode="automatic",
+        mode="calibrate",
         manual_fields=("pipeline_depth", "pose_batch_size"),
         budget_seconds=90,
     )
@@ -281,7 +281,7 @@ def test_core_inference_policy_roundtrip_and_legacy_default(tmp_path):
     raw.pop("inference_autotune")
     path.write_text(json.dumps(raw), encoding="utf-8")
     legacy = InferenceConfig.from_json(str(path))
-    assert legacy.inference_autotune.mode == "off"
+    assert legacy.inference_autotune.mode == "lookup"
 
 
 def test_existing_detection_cache_supplies_zero_inclusive_density(
@@ -400,7 +400,7 @@ def test_worker_resolves_cache_replay_instead_of_skipping_the_preflight(
     from hydra_suite.core.tracking import worker as worker_mod
 
     config = _config(tmp_path)
-    config.inference_autotune = InferenceAutotunePolicy(mode="automatic")
+    config.inference_autotune = InferenceAutotunePolicy(mode="calibrate")
     video_path = tmp_path / "video.mp4"
     video_path.write_bytes(b"not a real video")
 

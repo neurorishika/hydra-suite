@@ -37,7 +37,7 @@ class AutotuneRequest:
     key: TuningProfileKey
     baseline: InferenceTuningSettings
     planner: CandidatePlanner
-    mode: str = "off"  # off, record, automatic
+    mode: str = "lookup"  # lookup, calibrate
     manual_fields: frozenset[str] = frozenset()
     budget_seconds: float = DEFAULT_CALIBRATION_BUDGET_SECONDS
     singleflight_wait_seconds: float = 2.0
@@ -62,8 +62,8 @@ class AutotuneRequest:
     contention_detected: bool = False
 
     def __post_init__(self) -> None:
-        if self.mode not in {"off", "record", "automatic"}:
-            raise ValueError("autotune mode must be off, record, or automatic")
+        if self.mode not in {"lookup", "calibrate"}:
+            raise ValueError("autotune mode must be lookup or calibrate")
         unknown = self.manual_fields - set(self.baseline.field_names())
         if unknown:
             raise ValueError(
@@ -97,57 +97,44 @@ class AutotuneCoordinator:
         self.monotonic = monotonic
 
     def resolve(self, request: AutotuneRequest) -> ResolveResult:
-        """Reuse, tune, record, or safely fall back for one run request."""
-        if request.mode == "off":
-            return ResolveResult(
-                InferenceRuntimeOverlay.baseline(
-                    request.baseline,
-                    status="disabled",
-                    reason="automatic inference tuning is disabled",
-                )
-            )
+        """Apply a validated profile, or measure one when explicitly asked."""
         cached = self.store.load(request.key)
         if (
             request.allow_cached_reuse
-            and request.mode != "record"
             and cached is not None
             and cached.state is ProfileState.VALIDATED
         ):
             return self._reuse(request, cached, status="cache_hit")
-        if (
-            request.mode == "record"
-            and cached is not None
-            and cached.state is ProfileState.VALIDATED
-        ):
+        if request.mode == "lookup":
+            # A run never measures. Terminating here -- BEFORE the eligibility
+            # and negative-cache branches -- keeps "no profile yet" a single,
+            # honest status instead of leaking calibration-only vocabulary
+            # ("deferred_due_to_contention") into a run that was never going
+            # to calibrate anyway.
+            if (
+                cached is not None
+                and cached.state is ProfileState.INCOMPLETE
+                and (time.time_ns() - cached.last_validation_unix_ns)
+                < INCOMPLETE_RETRY_SECONDS * 1e9
+            ):
+                reason = (
+                    cached.invalidation_reason
+                    or "a prior calibration attempt did not complete"
+                )
+                return ResolveResult(
+                    InferenceRuntimeOverlay.baseline(
+                        request.baseline,
+                        status="deferred_due_to_prior_failure",
+                        reason=reason,
+                    ),
+                    cached,
+                )
             return ResolveResult(
                 InferenceRuntimeOverlay.baseline(
                     request.baseline,
-                    status="recorded",
-                    reason="validated profile already recorded; record-only mode kept configured settings",
-                ),
-                cached,
-            )
-        if (
-            cached is not None
-            and cached.state is ProfileState.INCOMPLETE
-            and (time.time_ns() - cached.last_validation_unix_ns)
-            < INCOMPLETE_RETRY_SECONDS * 1e9
-        ):
-            # S5: negative cache. Applies to every mode, including record --
-            # otherwise a record-only run on a project that cannot calibrate
-            # burns the full budget every single time too. Surface WHY in
-            # telemetry (`reason`) rather than a silent no-op.
-            reason = (
-                cached.invalidation_reason
-                or "a prior calibration attempt did not complete"
-            )
-            return ResolveResult(
-                InferenceRuntimeOverlay.baseline(
-                    request.baseline,
-                    status="deferred_due_to_prior_failure",
-                    reason=reason,
-                ),
-                cached,
+                    status="unavailable",
+                    reason="no validated profile for this configuration",
+                )
             )
         if not request.eligible:
             return ResolveResult(
@@ -182,24 +169,10 @@ class AutotuneCoordinator:
             cached = self.store.load(request.key)
             if (
                 request.allow_cached_reuse
-                and request.mode != "record"
                 and cached is not None
                 and cached.state is ProfileState.VALIDATED
             ):
                 return self._reuse(request, cached, status="cache_hit_after_wait")
-            if (
-                request.mode == "record"
-                and cached is not None
-                and cached.state is ProfileState.VALIDATED
-            ):
-                return ResolveResult(
-                    InferenceRuntimeOverlay.baseline(
-                        request.baseline,
-                        status="recorded",
-                        reason="validated profile already recorded; record-only mode kept configured settings",
-                    ),
-                    cached,
-                )
             try:
                 protocol = MeasurementProtocol(budget_seconds=request.budget_seconds)
                 search = CoordinateSearch(
@@ -301,15 +274,6 @@ class AutotuneCoordinator:
                 last_validation_unix_ns=now,
             )
             self.store.save(profile)
-            if request.mode == "record":
-                return ResolveResult(
-                    InferenceRuntimeOverlay.baseline(
-                        request.baseline,
-                        status="recorded",
-                        reason="validated profile recorded; record-only mode kept configured settings",
-                    ),
-                    profile,
-                )
             return self._reuse(request, profile, status="calibrated")
 
     def _save_incomplete(

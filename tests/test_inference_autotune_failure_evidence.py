@@ -67,7 +67,7 @@ def test_a_raising_calibration_persists_an_incomplete_record(tmp_path, monkeypat
     assert store.load(key) is None
 
     monkeypatch.setattr(CoordinateSearch, "run", _raising_search)
-    request = AutotuneRequest(key, _settings(det=1), _planner(), mode="automatic")
+    request = AutotuneRequest(key, _settings(det=1), _planner(), mode="calibrate")
     coordinator = AutotuneCoordinator(store, trial_executor=_ExplodingExecutor())
 
     result = coordinator.resolve(request)
@@ -98,7 +98,7 @@ def test_a_raising_calibration_under_contention_records_nothing(tmp_path, monkey
         key,
         _settings(det=1),
         _planner(),
-        mode="automatic",
+        mode="calibrate",
         contention_detected=True,
     )
 

@@ -383,7 +383,8 @@ def _cost_model(
             if role == "detector.direct":
                 path = config.obb.direct.model_path  # type: ignore[union-attr]
             elif role == "detector.stage1":
-                path = config.obb.sequential.detect_model_path  # type: ignore[union-attr]
+                # type: ignore[union-attr]
+                path = config.obb.sequential.detect_model_path
             elif role == "detector.stage2":
                 path = config.obb.sequential.obb_model_path  # type: ignore[union-attr]
             elif role == "headtail":
@@ -394,7 +395,8 @@ def _cost_model(
                     item.model_path for item in config.cnn_phases if item.label == label
                 )
             else:
-                backend = getattr(config.pose, config.pose.backend)  # type: ignore[union-attr]
+                # type: ignore[union-attr]
+                backend = getattr(config.pose, config.pose.backend)
                 path = backend.model_path
             artifact = Path(path)
             if artifact.is_file():
@@ -703,10 +705,7 @@ def resolve_tracking_inference_config(
             profile_store, trial_executor=trial_executor
         ).resolve(request)
         result = replace(result, key_digest=request.key.digest)
-        if result.profile is not None and result.overlay.status in {
-            "calibrated",
-            "recorded",
-        }:
+        if result.profile is not None and result.overlay.status == "calibrated":
             record_profile_memory_evidence(result.profile)
         return result.overlay.apply(config), result.overlay, result
     except Exception as exc:

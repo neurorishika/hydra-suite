@@ -13,6 +13,8 @@ child e2e anchor) needs. Later tasks add more helpers here as they need them
 
 from __future__ import annotations
 
+import time
+from contextlib import contextmanager
 from dataclasses import replace
 from pathlib import Path
 from typing import Any
@@ -22,7 +24,10 @@ from hydra_suite.core.inference.autotune.candidates import (
     CandidatePlanner,
     MemoryCostModel,
 )
-from hydra_suite.core.inference.autotune.coordinator import AutotuneRequest
+from hydra_suite.core.inference.autotune.coordinator import (
+    AutotuneCoordinator,
+    AutotuneRequest,
+)
 from hydra_suite.core.inference.autotune.device import RuntimeResourceProbe
 from hydra_suite.core.inference.autotune.fingerprint import (
     AcceleratorFingerprint,
@@ -258,18 +263,17 @@ def make_roi_params(video_path: Path) -> dict[str, Any]:
     return build_tracking_parameters(config, video_probe=probe)
 
 
-def record_mode_request_with_validated_cache(
+def calibrate_request_with_validated_cache(
     tmp_path: Path,
 ) -> tuple[InferenceTuningProfileStore, AutotuneRequest]:
-    """A record-mode request whose store already holds a VALIDATED profile.
+    """A calibrate-mode request whose store already holds a VALIDATED profile.
 
     ``selected`` differs from ``baseline`` in ``detection_batch_size`` so a
-    test can prove a record-mode cache hit keeps the *baseline* effective
-    settings rather than silently applying the tuned vector (finding B2:
-    record mode must never apply, on any run).
+    test can prove a calibrate-mode cache hit is served from the store
+    (``cache_hit``) rather than re-measuring.
 
     Modeled on the construction in
-    ``tests/test_inference_autotune_search.py::test_record_only_persists_but_does_not_apply``
+    ``tests/test_inference_autotune_search.py::test_calibrate_persists_a_validated_profile``
     (run-1 coverage); this helper covers run 2 -- a cache hit.
     """
 
@@ -302,7 +306,7 @@ def record_mode_request_with_validated_cache(
         key,
         baseline,
         _planner(),
-        mode="record",
+        mode="calibrate",
     )
     return store, request
 
@@ -457,3 +461,124 @@ def make_request_inputs(
         "backend": "torch",
         "device_identity": ("cpu", "CPU", "none", 0),
     }
+
+
+class _FakeProfileStore:
+    """In-memory ``InferenceTuningProfileStore`` stand-in for intent tests.
+
+    Records every ``save``/``claim`` call so a test can assert a ``lookup``
+    request never writes to, or single-flight-claims, the store -- a lookup
+    is read-only by construction, and this is how that gets proven rather
+    than assumed.
+    """
+
+    def __init__(self, profile: InferenceTuningProfile | None = None) -> None:
+        self._profile = profile
+        self.saves: list[InferenceTuningProfile] = []
+        self.claims: list[TuningProfileKey] = []
+
+    def load(self, key: TuningProfileKey) -> InferenceTuningProfile | None:
+        return self._profile
+
+    def save(self, profile: InferenceTuningProfile) -> None:
+        self.saves.append(profile)
+        self._profile = profile
+
+    @contextmanager
+    def claim(self, key: TuningProfileKey, *, timeout_seconds: float = 2.0):
+        self.claims.append(key)
+
+        class _Claim:
+            acquired = True
+
+        yield _Claim()
+
+
+class _StubExecutor:
+    """A trivial always-succeeds trial executor for intent tests that only
+    care about which branch ``resolve`` took, not about search dynamics."""
+
+    def run(self, settings, *, phase, field_name, block_index, should_cancel):
+        from hydra_suite.core.inference.autotune.search import TrialObservation
+
+        return TrialObservation(
+            settings,
+            100.0,
+            0.5,
+            equivalence_outputs(equivalence_frame()),
+            warmup_calls=3,
+            warmup_frames=8,
+            measured_frames=10,
+        )
+
+
+_UNSET = object()
+
+
+def make_incomplete_profile(
+    key: TuningProfileKey | None = None,
+) -> InferenceTuningProfile:
+    """An INCOMPLETE (negative-cache) profile, freshly timestamped so it
+    still falls inside the 24h retry window."""
+
+    key = key or _key()
+    baseline = _settings()
+    now = time.time_ns()
+    return InferenceTuningProfile(
+        profile_id=key.digest[:24],
+        key=key,
+        baseline=baseline,
+        requested=baseline,
+        admitted=baseline,
+        selected=baseline,
+        candidates=(),
+        state=ProfileState.INCOMPLETE,
+        selection_reason="budget_expired",
+        created_at_unix_ns=now,
+        last_validation_unix_ns=now,
+        invalidation_reason="a prior calibration attempt did not complete",
+    )
+
+
+def make_request(
+    *, mode: str = "lookup", eligible: bool = True, **overrides: Any
+) -> AutotuneRequest:
+    """A representative ``AutotuneRequest`` for the given ``mode``."""
+
+    fields = {
+        "key": _key(),
+        "baseline": _settings(),
+        "planner": _planner(),
+        "mode": mode,
+        "eligible": eligible,
+    }
+    fields.update(overrides)
+    return AutotuneRequest(**fields)
+
+
+def make_coordinator(
+    *,
+    trial_executor: Any = _UNSET,
+    cached_state: ProfileState | None = None,
+    cached_profile: InferenceTuningProfile | None = None,
+) -> tuple[AutotuneCoordinator, _FakeProfileStore]:
+    """An ``AutotuneCoordinator`` wired to a ``_FakeProfileStore``.
+
+    ``cached_profile`` wins if given; otherwise ``cached_state`` builds a
+    representative VALIDATED or INCOMPLETE profile. ``trial_executor``
+    defaults to a working stub -- pass ``None`` explicitly to exercise the
+    "no executor configured" path.
+    """
+
+    profile = cached_profile
+    if profile is None and cached_state is not None:
+        if cached_state is ProfileState.VALIDATED:
+            profile = _profile()
+        elif cached_state is ProfileState.INCOMPLETE:
+            profile = make_incomplete_profile()
+        else:
+            raise ValueError(f"unsupported cached_state: {cached_state!r}")
+    store = _FakeProfileStore(profile)
+    executor = _StubExecutor() if trial_executor is _UNSET else trial_executor
+    coordinator = AutotuneCoordinator(store, trial_executor=executor)
+    return coordinator, store

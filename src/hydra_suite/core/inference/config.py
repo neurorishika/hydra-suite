@@ -91,15 +91,15 @@ class InferenceAutotunePolicy:
     by an immutable runtime overlay and are never written back into a project.
     """
 
-    mode: Literal["off", "record", "automatic"] = "off"
+    mode: Literal["lookup", "calibrate"] = "lookup"
     manual_fields: tuple[str, ...] = ()
     budget_seconds: float = DEFAULT_CALIBRATION_BUDGET_SECONDS
     singleflight_wait_seconds: float = 2.0
 
     def __post_init__(self) -> None:
-        if self.mode not in {"off", "record", "automatic"}:
+        if self.mode not in {"lookup", "calibrate"}:
             raise InferenceConfigError(
-                "InferenceAutotunePolicy.mode must be off, record, or automatic"
+                "InferenceAutotunePolicy.mode must be lookup or calibrate"
             )
         normalized = tuple(sorted({str(item) for item in self.manual_fields}))
         if any(not item or len(item) > 256 for item in normalized):
@@ -713,7 +713,7 @@ def _dict_to_config(d: dict[str, Any]) -> InferenceConfig:
     autotune_d = d.get("inference_autotune", {})
     inference_autotune = (
         InferenceAutotunePolicy(
-            mode=str(autotune_d.get("mode", "off")),
+            mode=str(autotune_d.get("mode", "lookup")),
             manual_fields=tuple(autotune_d.get("manual_fields", ())),
             budget_seconds=float(
                 autotune_d.get("budget_seconds", DEFAULT_CALIBRATION_BUDGET_SECONDS)
