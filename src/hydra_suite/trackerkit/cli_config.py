@@ -149,15 +149,14 @@ def apply_sahi_profile_override(cfg: Mapping[str, Any], profile: str) -> dict[st
     running a different one is the exact failure this feature exists to
     remove.
     """
+    from hydra_suite.core.inference.geometry_drift import (
+        GeometrySource,
+        log_effective_geometry,
+    )
     from hydra_suite.core.inference.model_paths import resolve_model_path
     from hydra_suite.core.inference.slice_meta import (
         available_slice_profiles,
         read_slice_meta,
-    )
-
-    from hydra_suite.core.inference.geometry_drift import (
-        GeometrySource,
-        log_effective_geometry,
     )
 
     requested = str(profile).strip()
@@ -211,6 +210,40 @@ def apply_sahi_profile_override(cfg: Mapping[str, Any], profile: str) -> dict[st
     # the id we just set (rung 3 beats a missing id, and an explicit override
     # must beat both).
     result.pop("slice_profile_settings", None)
+    return result
+
+
+def apply_inference_autotune_override(
+    cfg: Mapping[str, Any],
+    *,
+    mode: str | None = None,
+    manual_fields: list[str] | tuple[str, ...] | None = None,
+) -> dict[str, Any]:
+    """Apply explicit CLI ownership to inference throughput tuning only.
+
+    This is intentionally separate from ``apply_sahi_profile_override`` and
+    from TrackerKit's semantic tracking autotuner.  A CLI policy must win over
+    project policy, while named manual fields preserve the configured values
+    for those coordinates when automatic inference tuning is active.
+    """
+    result = deepcopy(dict(cfg))
+    if mode is not None:
+        normalized_mode = str(mode).strip().lower()
+        if normalized_mode not in {"off", "record", "automatic"}:
+            raise ValueError(
+                "inference autotune mode must be one of: off, record, automatic"
+            )
+        result["inference_autotune_mode"] = normalized_mode
+    if manual_fields:
+        existing = result.get("inference_autotune_manual_fields", []) or []
+        if isinstance(existing, str):
+            existing = [item.strip() for item in existing.split(",") if item.strip()]
+        elif not isinstance(existing, (list, tuple, set)):
+            existing = []
+        merged = [*existing, *manual_fields]
+        result["inference_autotune_manual_fields"] = sorted(
+            {str(field).strip() for field in merged if str(field).strip()}
+        )
     return result
 
 

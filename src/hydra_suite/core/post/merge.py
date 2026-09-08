@@ -75,6 +75,12 @@ def rescale_coordinates(resolved_trajectories, *, resize_factor):
     """Scale coordinates back to original video space."""
     if not isinstance(resolved_trajectories, pd.DataFrame):
         return resolved_trajectories
+    if (
+        resolved_trajectories.empty
+        or "X" not in resolved_trajectories.columns
+        or "Y" not in resolved_trajectories.columns
+    ):
+        return resolved_trajectories
     logger.info(
         f"Pre-scaling (resize_factor={resize_factor:.3f}): "
         f"X range [{resolved_trajectories['X'].min():.1f}, {resolved_trajectories['X'].max():.1f}], "

@@ -40,7 +40,7 @@ def test_coreml_runtimes_set():
     assert "coreml" in _COREML_RUNTIMES
 
 
-def test_load_obb_executor_coreml_missing_no_autoexport(tmp_path):
+def test_load_obb_executor_coreml_missing_no_autoexport(tmp_path, monkeypatch):
     """coreml + auto_export=False + no .mlpackage → ArtifactExportError."""
     import hydra_suite.core.inference.runtime_artifacts as ra
     from hydra_suite.core.inference.runtime_artifacts import (
@@ -58,13 +58,16 @@ def test_load_obb_executor_coreml_missing_no_autoexport(tmp_path):
 
         return _M()
 
-    monkeypatch_orig_load = ra._load_torch_model
-    ra._load_torch_model = fake_load_torch
-    try:
-        with pytest.raises(ArtifactExportError, match="auto_export=False"):
-            load_obb_executor(str(pt_file), "coreml", auto_export=False)
-    finally:
-        ra._load_torch_model = monkeypatch_orig_load
+    monkeypatch.setattr(ra, "_load_torch_model", fake_load_torch)
+    monkeypatch.setattr(
+        ra,
+        "_runtime_artifact_store_for",
+        lambda source: ra.RuntimeArtifactStore(
+            Path(source).parent / ".test-runtime-artifacts"
+        ),
+    )
+    with pytest.raises(ArtifactExportError, match="auto_export=False"):
+        load_obb_executor(str(pt_file), "coreml", auto_export=False)
 
 
 def test_load_obb_executor_coreml_auto_export(tmp_path, monkeypatch):
@@ -95,6 +98,13 @@ def test_load_obb_executor_coreml_auto_export(tmp_path, monkeypatch):
 
     monkeypatch.setattr(ra, "_load_torch_model", fake_load_torch)
     monkeypatch.setattr(ra, "_export_artifact", fake_export)
+    monkeypatch.setattr(
+        ra,
+        "_runtime_artifact_store_for",
+        lambda source: ra.RuntimeArtifactStore(
+            Path(source).parent / ".test-runtime-artifacts"
+        ),
+    )
 
     result = load_obb_executor(str(pt_file), "coreml", auto_export=True)
     assert calls["export"] == 1
@@ -103,8 +113,8 @@ def test_load_obb_executor_coreml_auto_export(tmp_path, monkeypatch):
     assert isinstance(result, ra._CoreMLBatchExecutor)
     assert isinstance(result._model, _FakeModel)
     assert result.names == {0: "ant"}  # attribute delegation
-    mlpackage = tmp_path / "model.mlpackage"
-    assert mlpackage.exists()
+    assert calls["load"][-1].endswith(".mlpackage")
+    assert ".test-runtime-artifacts" in calls["load"][-1]
 
 
 def test_load_obb_executor_coreml_imgsz_override(tmp_path, monkeypatch):
@@ -133,6 +143,13 @@ def test_load_obb_executor_coreml_imgsz_override(tmp_path, monkeypatch):
     monkeypatch.setattr(ra, "_load_torch_model", fake_load_torch)
     monkeypatch.setattr(ra, "_export_artifact", fake_export)
     monkeypatch.setattr(ra, "_resolve_imgsz", lambda pt_path: 160)
+    monkeypatch.setattr(
+        ra,
+        "_runtime_artifact_store_for",
+        lambda source: ra.RuntimeArtifactStore(
+            Path(source).parent / ".test-runtime-artifacts"
+        ),
+    )
 
     load_obb_executor(str(pt_file), "coreml", auto_export=True, imgsz_override=128)
     assert calls["export_imgsz"] == [128]

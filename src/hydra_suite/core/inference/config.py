@@ -35,6 +35,96 @@ MAX_PIPELINE_DEPTH = 4
 TRACKER_RAW_OBB_CONFIDENCE_FLOOR = 1e-3
 
 
+# Calibration budget bounds, set from measurement rather than taste.
+#
+# Measured on `fly_obb` (MPS, ~19.2 fps baseline) AFTER screened losers stopped
+# paying for a full-pipeline confirmation -- a completed record-mode search:
+#
+#     baseline (5 blocks + same-window duplicate)   6 trials   101 s
+#     detection_batch_size screen (4 mutations x5) 20 trials   424 s  (21.2 s/trial)
+#     pipeline_depth screen (3 mutations x5)       15 trials   273 s  (18.2 s/trial)
+#     final validation                              5 trials    80 s
+#                                                             ------
+#     completed search                             46 trials   885 s
+#
+# A field pays for a full-pipeline confirmation whenever it has at least one
+# CONTENDER -- a candidate that is not CONFIDENTLY slower than the incumbent.
+# That is not the same as "a candidate that wins".  MPS is the cheap case, not
+# the representative one: every batch there is decisively slower, so every
+# candidate short-circuits and no confirmation is ever paid.  On CUDA this
+# repo has measured batch effects at ~1.000 -- dead in the noise -- so nothing
+# is confidently slower and EVERY field goes to confirmation.
+#
+# The default is therefore set from that worst case, one full coordinate pass
+# over the default search space (detection, pose, head/tail, one identity batch
+# size, pipeline_depth) with every field confirmed:
+#
+#     101  baseline
+#   4x424  batch-size screens          = 1696
+#     273  pipeline_depth screen
+#   5x300  full-pipeline confirmations = 1500   <- zero on MPS, all five on CUDA
+#      80  final validation
+#   -----
+#    3650 s
+#
+# DEFAULT = 4500 s: that worst case with ~23 % headroom for a slower clip.  A
+# default that cannot finish the pass is a broken default, because every
+# calibration then times out and produces nothing.  A second pass only runs if
+# a field is ACCEPTED (gain >= 2 %), which a within-noise field never is, so
+# the pass-0 figure is the binding one.  The 7200 s MAXIMUM covers a two-pass
+# search in which fields genuinely win (~5650 s); no tolerable default does,
+# and that case must raise the budget explicitly -- visibly, since an early
+# stop now names the fields it never reached.
+#
+# Per-trial cost is clip- and model-dependent, so all of these are orders of
+# magnitude, not guarantees.
+MINIMUM_CALIBRATION_BUDGET_SECONDS = 5.0
+MAXIMUM_CALIBRATION_BUDGET_SECONDS = 7200.0
+DEFAULT_CALIBRATION_BUDGET_SECONDS = 4500.0
+
+
+@dataclass(frozen=True)
+class InferenceAutotunePolicy:
+    """Qt-free ownership policy for one full-inference tracking run.
+
+    The values control resolution only.  Selected execution values are carried
+    by an immutable runtime overlay and are never written back into a project.
+    """
+
+    mode: Literal["off", "record", "automatic"] = "off"
+    manual_fields: tuple[str, ...] = ()
+    budget_seconds: float = DEFAULT_CALIBRATION_BUDGET_SECONDS
+    singleflight_wait_seconds: float = 2.0
+
+    def __post_init__(self) -> None:
+        if self.mode not in {"off", "record", "automatic"}:
+            raise InferenceConfigError(
+                "InferenceAutotunePolicy.mode must be off, record, or automatic"
+            )
+        normalized = tuple(sorted({str(item) for item in self.manual_fields}))
+        if any(not item or len(item) > 256 for item in normalized):
+            raise InferenceConfigError("invalid inference autotune manual field")
+        if not (
+            MINIMUM_CALIBRATION_BUDGET_SECONDS
+            <= float(self.budget_seconds)
+            <= MAXIMUM_CALIBRATION_BUDGET_SECONDS
+        ):
+            raise InferenceConfigError(
+                "InferenceAutotunePolicy.budget_seconds must be between "
+                f"{MINIMUM_CALIBRATION_BUDGET_SECONDS:g} and "
+                f"{MAXIMUM_CALIBRATION_BUDGET_SECONDS:g}"
+            )
+        if not 0.0 <= float(self.singleflight_wait_seconds) <= 30.0:
+            raise InferenceConfigError(
+                "InferenceAutotunePolicy.singleflight_wait_seconds must be between 0 and 30"
+            )
+        object.__setattr__(self, "manual_fields", normalized)
+        object.__setattr__(self, "budget_seconds", float(self.budget_seconds))
+        object.__setattr__(
+            self, "singleflight_wait_seconds", float(self.singleflight_wait_seconds)
+        )
+
+
 def migrate_runtime_to_tier(runtimes: set[str]) -> RuntimeTier:
     """Map legacy per-stage runtime strings to a single pipeline tier.
 
@@ -468,6 +558,11 @@ class InferenceConfig:
     canonical: CanonicalGeometry = field(default_factory=_default_canonical_geometry)
     detection_batch_size: int = 1
     pipeline_depth: int = 2
+    # Transient calibration-only override: execution still uses the candidate
+    # batch, while TensorRT loads one wide profile covering every admitted
+    # candidate. Normal production configs leave this unset and therefore
+    # prepare the dedicated selected profile.
+    runtime_artifact_batch_size: int | None = None
     runtime_tier: RuntimeTier = "gpu"
     realtime: bool = False
     use_cache: bool = True
@@ -478,6 +573,9 @@ class InferenceConfig:
     # strict no-op -- today's behavior, where "unknown" is left wherever the
     # per-factor floor product leaves it.
     identity_unknown_prior: float = 0.05
+    inference_autotune: InferenceAutotunePolicy = field(
+        default_factory=InferenceAutotunePolicy
+    )
 
     @staticmethod
     def from_json(path: str) -> "InferenceConfig":
@@ -493,6 +591,7 @@ class InferenceConfig:
     def __post_init__(self) -> None:
         self._validate_pipeline_depth()
         self._validate_detection_batch_size()
+        self._validate_runtime_artifact_batch_size()
         self._validate_detection_source()
 
     def _validate_pipeline_depth(self) -> None:
@@ -513,6 +612,16 @@ class InferenceConfig:
             raise InferenceConfigError(
                 "detection_batch_size must be between 1 and "
                 f"{MAX_DETECTION_BATCH_SIZE}, got {self.detection_batch_size}"
+            )
+
+    def _validate_runtime_artifact_batch_size(self) -> None:
+        value = self.runtime_artifact_batch_size
+        if value is not None and (
+            type(value) is not int or not 1 <= value <= MAX_DETECTION_BATCH_SIZE
+        ):
+            raise InferenceConfigError(
+                "runtime_artifact_batch_size must be unset or between 1 and "
+                f"{MAX_DETECTION_BATCH_SIZE}, got {value}"
             )
 
     def _validate_detection_source(self) -> None:
@@ -601,6 +710,22 @@ def _dict_to_config(d: dict[str, Any]) -> InferenceConfig:
         else _default_canonical_geometry()
     )
 
+    autotune_d = d.get("inference_autotune", {})
+    inference_autotune = (
+        InferenceAutotunePolicy(
+            mode=str(autotune_d.get("mode", "off")),
+            manual_fields=tuple(autotune_d.get("manual_fields", ())),
+            budget_seconds=float(
+                autotune_d.get("budget_seconds", DEFAULT_CALIBRATION_BUDGET_SECONDS)
+            ),
+            singleflight_wait_seconds=float(
+                autotune_d.get("singleflight_wait_seconds", 2.0)
+            ),
+        )
+        if isinstance(autotune_d, dict)
+        else InferenceAutotunePolicy()
+    )
+
     return InferenceConfig(
         obb=obb,
         bgsub=bgsub,
@@ -611,11 +736,13 @@ def _dict_to_config(d: dict[str, Any]) -> InferenceConfig:
         canonical=canonical,
         detection_batch_size=d.get("detection_batch_size", 1),
         pipeline_depth=d.get("pipeline_depth", 2),
+        runtime_artifact_batch_size=d.get("runtime_artifact_batch_size"),
         runtime_tier=raw_tier,
         realtime=d.get("realtime", False),
         use_cache=d.get("use_cache", True),
         cache_dir=d.get("cache_dir"),
         identity_unknown_prior=float(d.get("identity_unknown_prior", 0.05)),
+        inference_autotune=inference_autotune,
     )
 
 
@@ -627,12 +754,39 @@ def _clamped_int(raw: Any, default: int, lo: int, hi: int) -> int:
     return v if lo <= v <= hi else default
 
 
-def _clamped_float(raw: Any, default: float, lo: float, hi: float) -> float:
+def _clamped_float(
+    raw: Any, default: float, lo: float, hi: float, *, name: str | None = None
+) -> float:
+    """Coerce ``raw`` into ``[lo, hi]``, falling back to ``default`` -- loudly.
+
+    A silent fallback here downgraded an explicit 3000 s calibration budget to
+    600 s with no diagnostic whatsoever, which made the resulting timeout look
+    like the tuner's fault for a full round of investigation. Any rejected
+    value that was actually supplied is now reported at WARNING with both the
+    requested and the effective number.
+    """
     try:
         v = float(raw)
     except (TypeError, ValueError):
+        if raw is not None:
+            logger.warning(
+                "%s: %r is not a number; using %g instead",
+                name or "config value",
+                raw,
+                default,
+            )
         return default
-    return v if math.isfinite(v) and lo <= v <= hi else default
+    if math.isfinite(v) and lo <= v <= hi:
+        return v
+    logger.warning(
+        "%s: requested %g is outside [%g, %g]; using %g instead",
+        name or "config value",
+        v,
+        lo,
+        hi,
+        default,
+    )
+    return default
 
 
 def _slice_config_from_params(
@@ -1149,6 +1303,33 @@ def build_inference_config_from_params(params: dict) -> InferenceConfig:
 
     batch_size = int(params.get("YOLO_BATCH_SIZE", params.get("BATCH_SIZE", 1)))
 
+    raw_autotune_mode = str(params.get("INFERENCE_AUTOTUNE_MODE", "off")).lower()
+    if raw_autotune_mode not in {"off", "record", "automatic"}:
+        raw_autotune_mode = "off"
+    raw_manual_fields = params.get("INFERENCE_AUTOTUNE_MANUAL_FIELDS", ())
+    if not isinstance(raw_manual_fields, (list, tuple, set, frozenset)):
+        raw_manual_fields = ()
+    inference_autotune = InferenceAutotunePolicy(
+        mode=raw_autotune_mode,
+        manual_fields=tuple(str(item) for item in raw_manual_fields),
+        budget_seconds=_clamped_float(
+            params.get(
+                "INFERENCE_AUTOTUNE_BUDGET_SECONDS", DEFAULT_CALIBRATION_BUDGET_SECONDS
+            ),
+            DEFAULT_CALIBRATION_BUDGET_SECONDS,
+            MINIMUM_CALIBRATION_BUDGET_SECONDS,
+            MAXIMUM_CALIBRATION_BUDGET_SECONDS,
+            name="INFERENCE_AUTOTUNE_BUDGET_SECONDS",
+        ),
+        singleflight_wait_seconds=_clamped_float(
+            params.get("INFERENCE_AUTOTUNE_SINGLEFLIGHT_WAIT_SECONDS", 2.0),
+            2.0,
+            0.0,
+            30.0,
+            name="INFERENCE_AUTOTUNE_SINGLEFLIGHT_WAIT_SECONDS",
+        ),
+    )
+
     return InferenceConfig(
         obb=obb_cfg,
         headtail=headtail_cfg,
@@ -1158,10 +1339,16 @@ def build_inference_config_from_params(params: dict) -> InferenceConfig:
         canonical=canonical,
         detection_batch_size=batch_size,
         pipeline_depth=int(params.get("PIPELINE_DEPTH", 2)),
+        runtime_artifact_batch_size=(
+            int(params["INFERENCE_AUTOTUNE_ARTIFACT_BATCH_SIZE"])
+            if params.get("INFERENCE_AUTOTUNE_ARTIFACT_BATCH_SIZE")
+            else None
+        ),
         realtime=False,
         use_cache=True,
         runtime_tier=runtime_tier,
         identity_unknown_prior=float(params.get("IDENTITY_UNKNOWN_PRIOR", 0.05)),
+        inference_autotune=inference_autotune,
     )
 
 

@@ -16,58 +16,17 @@ from typing import Any, Callable, Sequence
 
 import pandas as pd
 
-from hydra_suite.core.individual.identity import columns as C
 from hydra_suite.core.tracking.session import (
     SessionCallbacks,
     SessionResult,
     TrackingSessionCore,
 )
 from hydra_suite.core.tracking.worker import TrackingEngineCore
-from hydra_suite.data.csv_writer import CSVWriterThread
+from hydra_suite.data.csv_writer import CSVWriterThread, build_tracking_csv_header
 from hydra_suite.trackerkit.cli_config import TrackerCliSession
 from hydra_suite.trackerkit.tracking_cache import plan_tracking_cache
 
 logger = logging.getLogger(__name__)
-
-
-def build_tracking_csv_header(
-    identity_method: str = "none_disabled", n_arenas: int = 1
-) -> list[str]:
-    """Build the raw tracking CSV header. Confidence columns are always emitted.
-
-    ``arena_id`` is appended ONLY when ``n_arenas > 1`` -- an unconditional
-    column would change the CSV contract (and column-count) for every existing
-    single-arena user, and `tools/equivalence/compare.py` bails out entirely
-    when the column lists differ, which would fail the byte-identity gate on
-    schema grounds alone for single-arena runs.
-    """
-    base_cols = [
-        "TrackID",
-        "TrajectoryID",
-        "Index",
-        "X",
-        "Y",
-        "Theta",
-        "FrameID",
-        "State",
-        "DetectionConfidence",
-        "AssignmentConfidence",
-        "PositionUncertainty",
-        "DetectionID",
-    ]
-    header = list(base_cols) + C.identity_realtime_columns()
-    if str(identity_method).strip().lower() == "apriltags":
-        header.extend(
-            [
-                "DetectedTagID",
-                "DetectedTagLabel",
-                "DetectedTagConf",
-                "DetectedTagHamming",
-            ]
-        )
-    if int(n_arenas) > 1:
-        header.append("arena_id")
-    return header
 
 
 def _read_raw_trajectories(raw_csv_path: str) -> pd.DataFrame | None:

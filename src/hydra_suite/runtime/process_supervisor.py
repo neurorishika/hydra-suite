@@ -1151,7 +1151,16 @@ class SupervisedSidecar:
             time.sleep(0.02)
         if self.tree.is_alive():
             self.tree.kill()
-        kill_deadline = time.monotonic() + 2.0
+        # SIGKILL is delivered to the whole process GROUP (and, under the
+        # systemd backend, to the scope unit) by OwnedProcessTree._signal, so
+        # a reparented grandchild -- e.g. the SLEAP service, which is spawned
+        # through `conda run` and leaves the child's immediate subtree -- is
+        # signalled. What it is NOT is instant: such a grandchild can sit in
+        # an uninterruptible CUDA/driver call well past two seconds. A fixed
+        # 2s reap window declared it "survived SIGKILL" and raised
+        # WorkloadStillOwnedError while the kill was in fact still landing.
+        # Give the reap at least as long as the caller's own terminate grace.
+        kill_deadline = time.monotonic() + max(2.0, float(grace_seconds))
         while self.tree.is_alive() and time.monotonic() < kill_deadline:
             time.sleep(0.02)
         if self.process.poll() is None:

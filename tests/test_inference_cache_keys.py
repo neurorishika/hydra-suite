@@ -3,6 +3,7 @@ import pytest
 import torch
 
 from hydra_suite.core.canonicalization.geometry import CanonicalGeometry
+from hydra_suite.core.inference.cache import keys as keys_mod
 from hydra_suite.core.inference.cache.base import CACHE_SCHEMA_VERSION, CacheKey
 from hydra_suite.core.inference.cache.keys import (
     apriltag_cache_key,
@@ -418,6 +419,11 @@ def test_sequential_key_changes_with_raw_stage_settings():
         ("merge_threshold", 0.5, 0.7),
         ("merge_backend", "cv2", "gpu"),
         ("perform_standard_pred", False, True),
+        # tile_batch_size is a TUNED coordinate (InferenceTuningSettings writes
+        # obb.direct.slice.tile_batch_size). It was silently absent from both
+        # the hash and this list, so a sliced cache written at the default 16
+        # was replayed under a tuned 32.
+        ("tile_batch_size", 16, 32),
     ],
 )
 def test_every_output_affecting_slice_field_is_in_the_hash(
@@ -750,3 +756,106 @@ def test_open_caches_non_sliced_key_unchanged_with_or_without_mask():
 
 # Silence unused-import warnings (np is implicitly required by OBBResult fixtures)
 _ = np
+
+
+# ---- batch size folds into every stage key (B2, pre-existing production bug) ----
+#
+# The stage cache keys carried NO batch size, so a project config that
+# hand-sets detection_batch_size / POSE_BATCH_SIZE / HEADTAIL_BATCH_SIZE / a
+# CNN batch_size wrote its detections and pose under the SAME key as the
+# default run, and the next run with "Use cached detections" replayed them.
+# Batching demonstrably changes the numbers (Task 12 measured det=4 vs det=1
+# at <=1px on CUDA), and unlike confidence/IoU a batch size is NOT re-applied
+# at tracking time -- so by the key module's own stated principle it belongs
+# in the hash.
+#
+# Folded only when the value is NON-DEFAULT, following the precedent already
+# set for slicing and ROI: every existing cache written at the default batch
+# keeps its key and stays valid.
+
+
+def test_default_detection_batch_keeps_the_pre_change_key():
+    """The default batch appends NO term, so no existing cache is invalidated.
+
+    The pre-change key is whatever the direct raw-extraction contract hashes to
+    -- on this base that is ``_direct_raw_config_hash`` (main folds the full
+    direct contract in, so it is non-empty even with slicing off). The
+    invariant this test guards is unchanged: ``batch_size=1`` must add nothing.
+    """
+
+    pre_change = keys_mod._direct_raw_config_hash(_obb_direct_slice(SliceConfig()))
+    assert (
+        detection_cache_key(_obb_direct_slice(SliceConfig())).config_hash == pre_change
+    )
+    assert (
+        detection_cache_key(_obb_direct_slice(SliceConfig()), batch_size=1).config_hash
+        == pre_change
+    )
+
+
+def test_non_default_detection_batch_changes_the_key():
+    one = detection_cache_key(_obb_direct(), batch_size=1)
+    four = detection_cache_key(_obb_direct(), batch_size=4)
+    assert one.config_hash != four.config_hash
+    assert detection_cache_key(_obb_direct(), batch_size=4).config_hash == (
+        four.config_hash
+    )
+
+
+@pytest.mark.parametrize(
+    "key_fn, config_fn, default, other",
+    [
+        (headtail_cache_key, _ht_config, 64, 8),
+        (cnn_cache_key, _cnn_config, 64, 8),
+        (pose_cache_key, _pose_config, 64, 25),
+    ],
+)
+def test_stage_batch_size_folds_in_only_when_non_default(
+    key_fn, config_fn, default, other
+):
+    from dataclasses import replace
+
+    geometry = _GEOM_A
+    base = config_fn()
+
+    # The pose batch lives on the per-backend sub-config; the others carry it
+    # directly. Poke it wherever it actually lives.
+    def _with_batch(config, value):
+        if hasattr(config, "batch_size"):
+            return replace(config, batch_size=value)
+        return replace(config, yolo=replace(config.yolo, batch_size=value))
+
+    def _batch_of(config):
+        return getattr(config, "batch_size", None) or config.yolo.batch_size
+
+    assert _batch_of(base) == default, "fixture drifted from the schema default"
+
+    at_default = key_fn(base, geometry)
+    at_other = key_fn(_with_batch(base, other), geometry)
+    assert at_default.config_hash != at_other.config_hash
+
+    # Byte-parity for the default: an existing cache is not invalidated.
+    assert key_fn(_with_batch(base, default), geometry).config_hash == (
+        at_default.config_hash
+    )
+
+
+def test_default_tile_batch_keeps_the_pre_change_sliced_key():
+    """Byte-parity for the default: no existing sliced cache is invalidated."""
+
+    base = detection_cache_key(_obb_direct_slice(SliceConfig(enabled=True)))
+    explicit = detection_cache_key(
+        _obb_direct_slice(SliceConfig(enabled=True, tile_batch_size=16))
+    )
+    assert base.config_hash == explicit.config_hash
+    # And with slicing DISABLED the tile batch is inert: a non-default value
+    # must not perturb the key (it changes nothing about raw extraction).
+    disabled_default = detection_cache_key(
+        _obb_direct_slice(SliceConfig(enabled=False))
+    ).config_hash
+    assert (
+        detection_cache_key(
+            _obb_direct_slice(SliceConfig(enabled=False, tile_batch_size=32))
+        ).config_hash
+        == disabled_default
+    )

@@ -48,6 +48,8 @@ def run_tracking_cli(
     jobs: int | None = None,
     threads_per_job: int | None = None,
     log_level: str = "INFO",
+    inference_autotune: str | None = None,
+    inference_autotune_manual: Sequence[str] | None = None,
 ) -> int:
     """Run one or more TrackerKit sessions from the CLI (direct Qt-free path)."""
 
@@ -66,6 +68,8 @@ def run_tracking_cli(
         explicit_config_path=config_path,
         keystone_override=keystone_override,
         sahi_profile=sahi_profile,
+        inference_autotune=inference_autotune,
+        inference_autotune_manual=inference_autotune_manual,
     )
     if not specs:
         raise ValueError("No videos were resolved for tracking.")

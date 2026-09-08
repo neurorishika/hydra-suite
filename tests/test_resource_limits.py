@@ -87,6 +87,51 @@ def test_cuda_launch_requires_one_resolver_supplied_physical_identity():
     assert launch.accelerator_pci_bus_id is None
 
 
+def test_cuda_launch_pins_the_child_to_the_probed_physical_device():
+    """The probed UUID and the child's visible device must be the same GPU (S7)."""
+    limits = ProcessMemoryLimits(soft_host_bytes=100, hard_host_bytes=200)
+    launch = build_limited_launch(
+        ["python"],
+        limits,
+        accelerator_kind="cuda",
+        accelerator_device_uuid="GPU-abc123",
+        environment={"UNRELATED": "kept"},
+    )
+    env = dict(launch.environment)
+    assert env["CUDA_VISIBLE_DEVICES"] == "GPU-abc123"
+    assert env["CUDA_DEVICE_ORDER"] == "PCI_BUS_ID"
+    assert env["UNRELATED"] == "kept"
+
+
+def test_cuda_launch_pins_by_pci_bus_id_when_no_uuid_is_available():
+    limits = ProcessMemoryLimits(soft_host_bytes=100, hard_host_bytes=200)
+    launch = build_limited_launch(
+        ["python"],
+        limits,
+        accelerator_kind="cuda",
+        accelerator_pci_bus_id="00000000:01:00.0",
+        environment={},
+    )
+    env = dict(launch.environment)
+    assert env["CUDA_VISIBLE_DEVICES"] == "00000000:01:00.0"
+    assert env["CUDA_DEVICE_ORDER"] == "PCI_BUS_ID"
+
+
+def test_non_cuda_launches_do_not_gain_cuda_pinning_env():
+    limits = ProcessMemoryLimits(
+        soft_host_bytes=100, hard_host_bytes=200, mps_high_watermark_ratio=0.7
+    )
+    launch = build_limited_launch(
+        ["python"],
+        limits,
+        accelerator_kind="mps",
+        environment={},
+    )
+    env = dict(launch.environment)
+    assert "CUDA_VISIBLE_DEVICES" not in env
+    assert "CUDA_DEVICE_ORDER" not in env
+
+
 def test_rlimit_launch_documents_virtual_memory_and_sets_mps_before_exec():
     launch = build_limited_launch(
         ["python", "work.py"],

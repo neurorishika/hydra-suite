@@ -15,12 +15,18 @@ from __future__ import annotations
 
 import logging
 import math
+from copy import deepcopy
 from dataclasses import dataclass
 from typing import Any, Mapping
 
 import cv2
 import numpy as np
 
+from hydra_suite.core.inference.autotune.models import (
+    DEFAULT_CALIBRATION_BUDGET_SECONDS,
+    MAXIMUM_CALIBRATION_BUDGET_SECONDS,
+    MINIMUM_CALIBRATION_BUDGET_SECONDS,
+)
 from hydra_suite.core.inference.model_paths import (
     resolve_model_path,
     resolve_pose_model_path,
@@ -532,6 +538,42 @@ def build_engine_params(
     reproducing today's CLI output exactly.
     """
     cfg = config
+    autotune_mode = (
+        str(_cfg_get(cfg, "inference_autotune_mode", default="off")).strip().lower()
+    )
+    if autotune_mode not in {"off", "record", "automatic"}:
+        logger.warning(
+            "Unknown inference_autotune_mode=%r; keeping configured settings.",
+            autotune_mode,
+        )
+        autotune_mode = "off"
+    raw_manual_fields = _cfg_get(cfg, "inference_autotune_manual_fields", default=[])
+    if isinstance(raw_manual_fields, str):
+        raw_manual_fields = [
+            value.strip() for value in raw_manual_fields.split(",") if value.strip()
+        ]
+    elif not isinstance(raw_manual_fields, (list, tuple, set)):
+        raw_manual_fields = []
+    autotune_manual_fields = sorted(
+        {str(value).strip() for value in raw_manual_fields if str(value).strip()}
+    )
+    try:
+        autotune_budget_seconds = float(
+            _cfg_get(
+                cfg,
+                "inference_autotune_budget_seconds",
+                default=DEFAULT_CALIBRATION_BUDGET_SECONDS,
+            )
+        )
+    except (TypeError, ValueError):
+        autotune_budget_seconds = DEFAULT_CALIBRATION_BUDGET_SECONDS
+    # A saved project must not turn the bounded production calibration into an
+    # unbounded job. The core coordinator owns the search; this is just the
+    # project-facing safety bound.
+    autotune_budget_seconds = max(
+        MINIMUM_CALIBRATION_BUDGET_SECONDS,
+        min(MAXIMUM_CALIBRATION_BUDGET_SECONDS, autotune_budget_seconds),
+    )
     advanced = dict(advanced_config or _default_advanced_config_fallback())
     advanced["yolo_seq_individual_batch_size"] = int(
         _cfg_get(
@@ -1111,7 +1153,15 @@ def build_engine_params(
         # geometry profiles.  The inference config clamps these values before
         # the tile admission helper applies the final per-model memory bound.
         "SLICE_TILE_BATCH_SIZE": advanced.get("slice_tile_batch_size", 16),
-        "SLICE_TILE_BATCH_AUTOTUNE": advanced.get("slice_tile_batch_autotune", False),
+        # "automatic" tuning is only ever eligible on CUDA (integration.py's
+        # eligibility gate); on CPU/MPS it never applies, so forcing the
+        # process-local SAHI tuner off here would silently disable it for no
+        # benefit (see models.py's InferenceRuntimeOverlay no-op-status fix).
+        "SLICE_TILE_BATCH_AUTOTUNE": (
+            False
+            if autotune_mode == "automatic" and detect_platform().has_cuda
+            else advanced.get("slice_tile_batch_autotune", False)
+        ),
         "SLICE_MEMORY_BUDGET_MIB": advanced.get("slice_memory_budget_mib", 256),
         "SLICE_MERGE_POLICY": advanced.get(
             "slice_merge_policy", SLICE_MERGE_DEFAULTS["merge_policy"]
@@ -1185,6 +1235,25 @@ def build_engine_params(
         ),
         "YOLO_BATCH_SIZE": int(_cfg_get(cfg, "detection_batch_size", default=1)),
         "PIPELINE_DEPTH": int(_cfg_get(cfg, "pipeline_depth", default=2)),
+        # Inference-throughput tuning policy. These fields deliberately do
+        # not participate in the semantic tracking autotuner contract.
+        "INFERENCE_AUTOTUNE_MODE": autotune_mode,
+        "INFERENCE_AUTOTUNE_MANUAL_FIELDS": autotune_manual_fields,
+        "INFERENCE_AUTOTUNE_BUDGET_SECONDS": autotune_budget_seconds,
+        # Advanced-config-only escape hatch (no GUI widget, like the SAHI
+        # slice_merge_* knobs above) -- InferenceAutotunePolicy reads this
+        # key and previously had no producer at all, so it silently always
+        # took its 2.0s default.
+        "INFERENCE_AUTOTUNE_SINGLEFLIGHT_WAIT_SECONDS": advanced.get(
+            "inference_autotune_singleflight_wait_seconds", 2.0
+        ),
+        # Manual stage-share override (advanced-config only, like the knob
+        # above). Empty/absent falls back to the measured baseline's own
+        # stage shares (CoordinateSearch._measure) -- previously always
+        # empty because nothing produced this key.
+        "INFERENCE_AUTOTUNE_STAGE_SHARES": advanced.get(
+            "inference_autotune_stage_shares", {}
+        ),
         "YOLO_SEQ_STAGE2_POW2_PAD": bool(
             _cfg_get(cfg, "yolo_seq_stage2_pow2_pad", default=False)
         ),
@@ -1724,5 +1793,11 @@ def build_engine_params(
     # sole consumer (dataset generator ``.get(...)``) treats absent == None.
     if caller_supplied_output_context:
         params["INDIVIDUAL_DATASET_RUN_ID"] = runtime.individual_dataset_run_id
+
+    # A calibration sidecar needs the complete project-level behavioral
+    # configuration to reproduce forward and post-tracking outputs. This is
+    # private runtime data: it is a detached snapshot and is never emitted by
+    # TrackerKit's JSON project serializer.
+    params["INFERENCE_AUTOTUNE_PROJECT_CONFIG"] = deepcopy(dict(cfg))
 
     return params

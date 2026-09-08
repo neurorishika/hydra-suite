@@ -443,6 +443,143 @@ def test_forward_invalid_caches_triggers_batch_pass(monkeypatch, tmp_path):
     ), "forward run with invalid caches must call run_batch_pass"
 
 
+def test_autotune_overlay_resolves_before_runner_loads_models(monkeypatch, tmp_path):
+    """The production runner must see only the detached effective config."""
+    import copy
+
+    import hydra_suite.core.tracking.worker as worker_mod
+
+    calls = []
+
+    def resolve(config, _params, **_kwargs):
+        from hydra_suite.core.inference.autotune.coordinator import ResolveResult
+        from hydra_suite.core.inference.autotune.models import (
+            InferenceRuntimeOverlay,
+            InferenceTuningSettings,
+        )
+
+        calls.append("resolve")
+        effective = copy.deepcopy(config)
+        effective.detection_batch_size = 4
+        baseline = InferenceTuningSettings.from_config(config)
+        overlay = InferenceRuntimeOverlay.baseline(
+            baseline, status="fallback", reason="test"
+        )
+        return effective, overlay, ResolveResult(overlay)
+
+    class _ProbeRunner:
+        def __init__(self, config, *_args, **_kwargs):
+            calls.append(("runner", config.detection_batch_size))
+
+        def caches_all_valid(self):
+            return False
+
+        def detection_cache_covers_range(self, *_args):
+            return False
+
+        def run_batch_pass(self, *_args, **_kwargs):
+            raise _StopAfterDispatch("runner constructed")
+
+        def close(self):
+            pass
+
+    monkeypatch.setattr(worker_mod, "TrackingProfiler", _FakeProfiler)
+    monkeypatch.setattr(worker_mod.cv2, "VideoCapture", _FakeVideoCapture)
+    monkeypatch.setattr(worker_mod, "InferenceRunner", _ProbeRunner)
+    monkeypatch.setattr(worker_mod, "_resolve_inference_autotune_before_load", resolve)
+    worker = worker_mod.TrackingEngineCore(
+        str(tmp_path / "video.mp4"),
+        on_finished=lambda *_args: None,
+        use_cached_detections=False,
+    )
+    worker.set_parameters(
+        _dispatch_params(INFERENCE_AUTOTUNE_MODE="automatic", YOLO_BATCH_SIZE=1)
+    )
+
+    try:
+        worker.run_tracking()
+    except _StopAfterDispatch:
+        pass
+
+    assert calls == ["resolve", ("runner", 4)]
+
+
+def test_preflight_probe_failure_does_not_kill_the_run(monkeypatch, tmp_path):
+    """S1: an unguarded preflight (probe/request construction) must not raise
+    all the way out of run_tracking() -- it must degrade to a fallback overlay
+    and let the run proceed with the originally-built config untouched, the
+    same envelope ``resolve_tracking_inference_config`` already has inside
+    ``integration.py``.
+    """
+    import hydra_suite.core.tracking.worker as worker_mod
+
+    calls = []
+
+    def resolve(_config, _params, **_kwargs):
+        calls.append("resolve")
+        # Mirrors a missing nvidia-smi (device.py FileNotFoundError) or an
+        # AutotuneRequest.__post_init__ ValueError for a manual field the
+        # project lacks -- both currently unguarded at this call site.
+        raise FileNotFoundError("nvidia-smi")
+
+    class _ProbeRunner:
+        def __init__(self, config, *_args, **_kwargs):
+            calls.append(("runner", config.detection_batch_size))
+
+        def caches_all_valid(self):
+            return False
+
+        def detection_cache_covers_range(self, *_args):
+            return False
+
+        def run_batch_pass(self, *_args, **_kwargs):
+            raise _StopAfterDispatch("runner constructed")
+
+        def close(self):
+            pass
+
+    monkeypatch.setattr(worker_mod, "TrackingProfiler", _FakeProfiler)
+    monkeypatch.setattr(worker_mod.cv2, "VideoCapture", _FakeVideoCapture)
+    monkeypatch.setattr(worker_mod, "InferenceRunner", _ProbeRunner)
+    monkeypatch.setattr(worker_mod, "_resolve_inference_autotune_before_load", resolve)
+    worker = worker_mod.TrackingEngineCore(
+        str(tmp_path / "video.mp4"),
+        on_finished=lambda *_args: None,
+        use_cached_detections=False,
+    )
+    worker.set_parameters(
+        _dispatch_params(INFERENCE_AUTOTUNE_MODE="automatic", YOLO_BATCH_SIZE=1)
+    )
+
+    try:
+        worker.run_tracking()
+    except _StopAfterDispatch:
+        pass
+    except Exception as exc:  # pragma: no cover - the assertion below is the
+        # real failure signal, but a bare pytest.fail loses the traceback.
+        raise AssertionError(
+            f"preflight failure must not escape run_tracking(): {exc!r}"
+        ) from exc
+
+    assert calls == ["resolve", ("runner", 1)]
+    assert worker.inference_autotune_overlay is not None
+    assert worker.inference_autotune_overlay.status == "fallback"
+
+
+def test_autotune_cancel_request_keeps_tracking_stop_flag_clear(tmp_path):
+    import hydra_suite.core.tracking.worker as worker_mod
+
+    worker = worker_mod.TrackingEngineCore(
+        str(tmp_path / "video.mp4"),
+        on_finished=lambda *_args: None,
+    )
+
+    worker.cancel_inference_autotune()
+
+    assert worker._inference_autotune_cancel_requested is True
+    assert worker._stop_requested is False
+
+
 def test_forward_valid_caches_skips_batch_pass(monkeypatch, tmp_path):
     """Real run_tracking(): forward, cache reuse enabled, caches valid & covering →
     run_batch_pass is SKIPPED and the cached replay path (load_frame) is used instead.
@@ -555,3 +692,121 @@ def test_realtime_yolo_obb_threads_roi_mask_into_run_realtime(monkeypatch, tmp_p
         calls.get("roi_mask") is not None
     ), "run_realtime must be called with a non-None roi_mask when ROI_MASK is configured"
     np.testing.assert_array_equal(calls["roi_mask"], roi_mask)
+
+
+def test_preview_never_launches_a_calibration(monkeypatch, tmp_path):
+    """S3: Preview is a look, not a workload -- it must be ineligible.
+
+    Preview forces ``effective_realtime_tracking_mode=False``, which made
+    ``execution_mode="batch"`` and therefore eligible: a user on
+    ``automatic``/``record`` who clicked Preview paid a full calibration
+    budget before seeing a frame, and the preview's own START/END range
+    became the calibration range for a profile whose key carries no frame
+    range -- which was then applied to the full run.
+    """
+    import hydra_suite.core.tracking.worker as worker_mod
+
+    calls = []
+
+    def resolve(_config, _params, **_kwargs):
+        calls.append("resolve")
+        raise AssertionError("preview must not reach the autotune preflight")
+
+    class _ProbeRunner:
+        def __init__(self, config, *_args, **_kwargs):
+            calls.append(("runner", config.detection_batch_size))
+
+        def caches_all_valid(self):
+            return False
+
+        def detection_cache_covers_range(self, *_args):
+            return False
+
+        def run_batch_pass(self, *_args, **_kwargs):
+            raise _StopAfterDispatch("runner constructed")
+
+        def close(self):
+            pass
+
+    monkeypatch.setattr(worker_mod, "TrackingProfiler", _FakeProfiler)
+    monkeypatch.setattr(worker_mod.cv2, "VideoCapture", _FakeVideoCapture)
+    monkeypatch.setattr(worker_mod, "InferenceRunner", _ProbeRunner)
+    monkeypatch.setattr(worker_mod, "_resolve_inference_autotune_before_load", resolve)
+    worker = worker_mod.TrackingEngineCore(
+        str(tmp_path / "video.mp4"),
+        on_finished=lambda *_args: None,
+        use_cached_detections=False,
+        preview_mode=True,
+    )
+    worker.set_parameters(
+        _dispatch_params(INFERENCE_AUTOTUNE_MODE="automatic", YOLO_BATCH_SIZE=1)
+    )
+
+    try:
+        worker.run_tracking()
+    except _StopAfterDispatch:
+        pass
+
+    assert "resolve" not in calls, "preview launched a calibration"
+    # The run still proceeds, at the project's own batch size.
+    assert ("runner", 1) in calls
+
+
+def test_backward_enabled_project_is_not_calibrated(monkeypatch, tmp_path):
+    """A run with a backward pass must decline tuning, not break the run.
+
+    The backward pass replays the forward pass's detection cache, but the
+    autotuner only runs on the forward pass -- so backward re-resolves at the
+    project's UNTUNED batch size. Now that the batch size is part of the cache
+    key (it must be), that is a key miss and backward refuses with "Cached
+    tracking replay requires valid inference caches". Measured on courtship:
+    forward promoted det=4 and completed, then the whole run failed in
+    backward.
+
+    Declining is the fail-safe. The real fix is to propagate the forward
+    pass's effective vector to the backward pass.
+    """
+    import hydra_suite.core.tracking.worker as worker_mod
+
+    calls = []
+
+    def resolve(_config, _params, **_kwargs):
+        calls.append("resolve")
+        raise AssertionError("a backward-enabled project must not be calibrated")
+
+    class _ProbeRunner:
+        def __init__(self, config, *_args, **_kwargs):
+            calls.append(("runner", config.detection_batch_size))
+
+        def caches_all_valid(self):
+            return False
+
+        def detection_cache_covers_range(self, *_args):
+            return False
+
+        def run_batch_pass(self, *_args, **_kwargs):
+            raise _StopAfterDispatch("runner constructed")
+
+        def close(self):
+            pass
+
+    monkeypatch.setattr(worker_mod, "TrackingProfiler", _FakeProfiler)
+    monkeypatch.setattr(worker_mod.cv2, "VideoCapture", _FakeVideoCapture)
+    monkeypatch.setattr(worker_mod, "InferenceRunner", _ProbeRunner)
+    monkeypatch.setattr(worker_mod, "_resolve_inference_autotune_before_load", resolve)
+    worker = worker_mod.TrackingEngineCore(
+        str(tmp_path / "video.mp4"),
+        on_finished=lambda *_args: None,
+        use_cached_detections=False,
+    )
+    params = _dispatch_params(INFERENCE_AUTOTUNE_MODE="automatic", YOLO_BATCH_SIZE=1)
+    params["INFERENCE_AUTOTUNE_PROJECT_CONFIG"] = {"enable_backward_tracking": True}
+    worker.set_parameters(params)
+
+    try:
+        worker.run_tracking()
+    except _StopAfterDispatch:
+        pass
+
+    assert "resolve" not in calls, "a backward-enabled project was calibrated"
+    assert ("runner", 1) in calls, "the run must still proceed, untuned"

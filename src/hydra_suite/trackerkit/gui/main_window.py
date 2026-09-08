@@ -928,6 +928,9 @@ class MainWindow(QMainWindow):
             config=self.config,
             panels=self._panels_bundle(),
         )
+        self._setup_panel.inference_autotune_continue_requested.connect(
+            self._tracking_orch.continue_with_current_inference_settings
+        )
         from hydra_suite.trackerkit.gui.orchestrators.config import ConfigOrchestrator
 
         self._config_orch = ConfigOrchestrator(

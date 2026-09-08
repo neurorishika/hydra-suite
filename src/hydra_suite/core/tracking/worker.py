@@ -101,6 +101,220 @@ from hydra_suite.core.tracking.ingest.frame_result_bridge import (  # noqa: E402
 )
 
 
+def _resolve_inference_autotune_before_load(
+    config: InferenceConfig,
+    params: dict,
+    *,
+    video_path: str,
+    frame_width: int,
+    frame_height: int,
+    start_frame: int,
+    end_frame: int,
+    realtime: bool,
+    should_cancel,
+    status_callback=lambda _message: None,
+    cache_dir=None,
+    use_cached_detections: bool = False,
+    cache_read_only_replay: bool = False,
+):
+    """Resolve a run overlay before ``InferenceRunner`` can load any model."""
+
+    if config.inference_autotune.mode == "off":
+        return config, None, None
+    from hydra_suite.core.inference.autotune.device import probe_runtime_resources
+    from hydra_suite.core.inference.autotune.integration import (
+        TrackingRunContext,
+        build_tracking_autotune_request,
+        resolve_tracking_inference_config,
+        sample_detection_workload,
+    )
+    from hydra_suite.core.inference.autotune.sidecar import (
+        ARTIFACT_BUILD_ALLOWANCE_SECONDS,
+        ContainedTrialExecutor,
+        SidecarTrialSpec,
+    )
+    from hydra_suite.runtime.resolver import RuntimeResolver, detect_platform
+    from hydra_suite.runtime.resource_budget import AcceleratorKind
+
+    platform_info = detect_platform()
+    resolved = RuntimeResolver(config.runtime_tier, platform_info).resolve("obb")
+    kind = {
+        "cuda": AcceleratorKind.CUDA,
+        "mps": AcceleratorKind.MPS,
+        "cpu": AcceleratorKind.CPU,
+    }[resolved.device]
+    probe = probe_runtime_resources(kind)
+    ephemeral_params = dict(params)
+    ephemeral_params["INFERENCE_AUTOTUNE_DRIVER_VERSION"] = probe.driver_version
+    prior_counts = ()
+    if cache_dir:
+        prior_counts = sample_detection_workload(
+            cache_dir,
+            start_frame=start_frame,
+            end_frame=end_frame,
+        )
+        if (
+            prior_counts
+            and "INFERENCE_AUTOTUNE_DETECTION_COUNTS" not in ephemeral_params
+        ):
+            ephemeral_params["INFERENCE_AUTOTUNE_DETECTION_COUNTS"] = prior_counts
+            ephemeral_params["INFERENCE_AUTOTUNE_CROP_COUNTS"] = prior_counts
+    cached_fields = frozenset()
+    if use_cached_detections and prior_counts:
+        cached_fields = frozenset(("detection_batch_size", "slice_tile_batch_size"))
+        ephemeral_params["RESULT_CACHE_STAGE_MASK"] = ("detector",)
+    context = TrackingRunContext(
+        video_path=video_path,
+        params=ephemeral_params,
+        frame_width=max(1, int(frame_width)),
+        frame_height=max(1, int(frame_height)),
+        channels=3,
+        decoder_mode="nvdec" if config.runtime_tier == "gpu_fast" else "opencv",
+        execution_mode=(
+            "cache_replay"
+            if cache_read_only_replay
+            else ("realtime" if realtime else "batch")
+        ),
+        start_frame=start_frame,
+        end_frame=end_frame,
+        cached_fields=cached_fields,
+        contention_detected=probe.contention_detected,
+        thermal_throttled=probe.thermal_throttled,
+        should_cancel=should_cancel,
+        status_callback=status_callback,
+    )
+    preflight = build_tracking_autotune_request(
+        config,
+        context,
+        observation=probe.observation,
+        backend=resolved.backend,
+        device_identity=(
+            probe.device_uuid,
+            probe.device_model,
+            probe.compute_capability,
+            int(probe.observation.total_accelerator_bytes or 0),
+        ),
+    )
+    artifact_batch_size = max(
+        (
+            value
+            for field in ("detection_batch_size", "slice_tile_batch_size")
+            for value in preflight.planner.values_for(field, preflight.baseline)
+        ),
+        default=preflight.baseline.detection_batch_size,
+    )
+    if resolved.backend == "tensorrt":
+        ephemeral_params["INFERENCE_AUTOTUNE_TENSORRT_PROFILE_BATCH_SIZE"] = (
+            artifact_batch_size
+        )
+    executor = ContainedTrialExecutor(
+        SidecarTrialSpec(
+            video_path=video_path,
+            params=ephemeral_params,
+            observation=probe.observation,
+            resource_probe=probe,
+            start_frame=start_frame,
+            end_frame=end_frame,
+            budget_seconds=config.inference_autotune.budget_seconds,
+            runtime_artifact_batch_size=(
+                artifact_batch_size if resolved.backend == "tensorrt" else None
+            ),
+            # B3: the accelerated tiers build their engine INSIDE the child.
+            # The spec's own figure for a cold TensorRT profile build is
+            # 255-310 s, which alone exceeds the 120 s per-trial measurement
+            # cap -- so without this the baseline trial could never complete
+            # and the tuner could not start on TensorRT at all. Grant the
+            # build its own window; torch tiers keep the default 0.
+            artifact_build_allowance_seconds=(
+                ARTIFACT_BUILD_ALLOWANCE_SECONDS
+                if resolved.backend in ("tensorrt", "coreml")
+                else 0.0
+            ),
+        )
+    )
+    effective, overlay, result = resolve_tracking_inference_config(
+        config,
+        context,
+        observation=probe.observation,
+        backend=resolved.backend,
+        device_identity=(
+            probe.device_uuid,
+            probe.device_model,
+            probe.compute_capability,
+            int(probe.observation.total_accelerator_bytes or 0),
+        ),
+        trial_executor=executor,
+    )
+    return effective, overlay, result
+
+
+def _inference_autotune_stats(overlay, result) -> dict:
+    """Build one bounded, path-free run summary for logs, CLI, and GUI."""
+
+    summary = {
+        "status": overlay.status,
+        "profile_id": overlay.profile_id,
+        "fingerprint_digest": getattr(result, "key_digest", None),
+        "reason": overlay.reason,
+        "requested": overlay.requested.to_dict(),
+        "admitted": overlay.admitted.to_dict(),
+        "effective": overlay.effective.to_dict(),
+        "field_sources": dict(overlay.field_sources),
+    }
+    profile = getattr(result, "profile", None)
+    if profile is None:
+        return summary
+    baseline = next(
+        (item for item in profile.candidates if item.phase == "baseline"), None
+    )
+    selected = next(
+        (
+            item
+            for item in reversed(profile.candidates)
+            if item.settings == profile.selected
+            and item.phase in {"final_validation", "full"}
+        ),
+        None,
+    )
+    selected_evidence = tuple(
+        item for item in profile.candidates if item.settings == profile.selected
+    )
+    summary.update(
+        {
+            "profile_state": profile.state.value,
+            "invalidation_reason": profile.invalidation_reason,
+            "baseline_throughput": (
+                baseline.median_throughput if baseline is not None else None
+            ),
+            "selected_throughput": (
+                selected.median_throughput if selected is not None else None
+            ),
+            "throughput_confidence_95": (
+                selected.throughput_confidence_95 if selected is not None else None
+            ),
+            "peak_host_bytes": max(
+                (item.host_peak_bytes for item in selected_evidence), default=0
+            ),
+            "peak_accelerator_bytes": max(
+                (item.accelerator_peak_bytes for item in selected_evidence), default=0
+            ),
+            "preparation_seconds": sum(
+                item.prepare_seconds for item in profile.candidates
+            ),
+            "artifact_ids": sorted(
+                {
+                    artifact
+                    for item in profile.candidates
+                    for artifact in item.artifact_ids
+                }
+            ),
+            "rejected_candidates": list(profile.rejected),
+            "calibration_summary": dict(profile.calibration_summary),
+        }
+    )
+    return summary
+
+
 def _classify_cache_runtime_string(params: dict, stage: str = "cnn") -> str:
     """Derive the classify cache-key runtime string from ``RUNTIME_TIER``.
 
@@ -196,6 +410,11 @@ class TrackingEngineCore:
         self._inference_progress_start_time = None
         self._inference_progress_times = deque(maxlen=30)
         self._stop_requested = False
+        self._inference_autotune_cancel_requested = False
+        self.inference_autotune_overlay = None
+        self.inference_autotune_result = None
+        self.inference_runtime_artifact_ids = ()
+        self.inference_runtime_artifact_prepare_seconds = 0.0
 
         # Internal state variables that helper methods depend on
         self.frame_count = 0
@@ -504,6 +723,10 @@ class TrackingEngineCore:
                     resolved[name] = provenance[name]
         return resolved
 
+    def cancel_inference_autotune(self) -> None:
+        """Skip the remaining calibration without stopping production tracking."""
+        self._inference_autotune_cancel_requested = True
+
     def _forward_frame_iterator(self, cap, use_prefetcher=False):
         """Iterate through frames in forward direction.
 
@@ -761,11 +984,15 @@ class TrackingEngineCore:
         # === 1. INITIALIZATION (Identical to Original) ===
         gc.collect()
         self._stop_requested = False
+        self._inference_autotune_cancel_requested = False
         p = self.get_current_params()
 
         # Create profiler early so initialization timing is captured.
         # The profiler is configured with metadata later, once all params are known.
-        _profiling_enabled = bool(p.get("ENABLE_PROFILING", False))
+        _profiling_export_enabled = bool(p.get("ENABLE_PROFILING", False))
+        _profiling_enabled = _profiling_export_enabled or str(
+            p.get("INFERENCE_AUTOTUNE_MODE", "off")
+        ).strip().lower() in {"automatic", "record"}
         profiler = TrackingProfiler(enabled=_profiling_enabled)
         profiler.phase_start("initialization")
 
@@ -1036,7 +1263,6 @@ class TrackingEngineCore:
             precompute_enabled=individual_data_precompute_enabled,
             pass_name="backward" if self.backward_mode else "forward",
         )
-        profiler.phase_end("initialization")
 
         # Initialize detection.
         # For YOLO OBB: InferenceRunner owns detection, caching, and all per-frame
@@ -1104,6 +1330,135 @@ class TrackingEngineCore:
                 self._emit_finished(False, [], [])
                 return
 
+            # S3: Preview is never calibrated. Preview forces
+            # effective_realtime_tracking_mode=False, which made
+            # execution_mode="batch" and therefore ELIGIBLE -- so a user on
+            # ``automatic``/``record`` who clicked Preview paid up to a full
+            # calibration budget before seeing a single frame. Worse, the
+            # preview's START/END range became the calibration range and the
+            # resulting profile (whose key carries no frame range) was then
+            # applied to the full run. A preview is a look, not a workload.
+            # A run with a BACKWARD pass cannot be tuned today. The backward
+            # pass replays the forward pass's detection cache, but the
+            # autotuner only runs on the forward pass (this very gate), so
+            # backward re-resolves at the project's UNTUNED batch size. Now
+            # that the batch size is part of the cache key (it must be -- see
+            # cache/keys.py), that is a key miss, and backward refuses with
+            # "Cached tracking replay requires valid inference caches".
+            # MEASURED on courtship: forward promoted det=4 and completed;
+            # the backward pass then failed the whole run.
+            #
+            # Declining to tune is the fail-safe: a run that does not get
+            # faster beats a run that does not finish. This costs yield on
+            # every backward-enabled project and should be REPLACED by
+            # propagating the forward pass's effective vector to the backward
+            # pass -- which is the real fix, and is not a three-line change
+            # because the GUI and headless paths build their params
+            # differently.
+            _project_config = p.get("INFERENCE_AUTOTUNE_PROJECT_CONFIG") or {}
+            _backward_enabled = bool(
+                isinstance(_project_config, dict)
+                and _project_config.get("enable_backward_tracking")
+            )
+            if not self.backward_mode and not self.preview_mode and _backward_enabled:
+                if _inference_cfg.inference_autotune.mode != "off":
+                    logger.warning(
+                        "Inference throughput autotuner declined: this project "
+                        "enables backward tracking, whose pass replays the "
+                        "forward detection cache at the project's own batch "
+                        "size. Tuning the forward pass would leave that cache "
+                        "unreadable and fail the run."
+                    )
+                    self._emit_progress(
+                        0,
+                        "Inference tuning skipped (backward tracking enabled)",
+                    )
+            if (
+                not self.backward_mode
+                and not self.preview_mode
+                and not _backward_enabled
+            ):
+                if _inference_cfg.inference_autotune.mode != "off":
+                    self._emit_progress(0, "Optimizing inference (bounded calibration)")
+                # S1: the preflight below builds a request (AutotuneRequest.
+                # __post_init__ raises for a manual field the project lacks)
+                # and probes live device state (probe_runtime_resources can
+                # raise FileNotFoundError/ValueError for a missing/malformed
+                # nvidia-smi) BEFORE resolve_tracking_inference_config's own
+                # internal envelope is ever reached. Without this try/except,
+                # either failure kills the whole tracking run. Mirror the
+                # same fallback envelope integration.py already has around
+                # resolve_tracking_inference_config: leave _inference_cfg
+                # untouched and degrade to a "fallback" overlay.
+                try:
+                    (
+                        _inference_cfg,
+                        self.inference_autotune_overlay,
+                        self.inference_autotune_result,
+                    ) = _resolve_inference_autotune_before_load(
+                        _inference_cfg,
+                        p,
+                        video_path=str(self.video_path),
+                        frame_width=int(cap.get(cv2.CAP_PROP_FRAME_WIDTH) or 1),
+                        frame_height=int(cap.get(cv2.CAP_PROP_FRAME_HEIGHT) or 1),
+                        start_frame=int(start_frame),
+                        end_frame=int(end_frame),
+                        realtime=effective_realtime_tracking_mode,
+                        should_cancel=lambda: (
+                            self._stop_requested
+                            or self._inference_autotune_cancel_requested
+                        ),
+                        status_callback=lambda message: self._emit_progress(0, message),
+                        cache_dir=self._resolve_cache_dir(),
+                        use_cached_detections=self.use_cached_detections,
+                        cache_read_only_replay=self.cache_read_only_replay,
+                    )
+                except Exception as _autotune_preflight_err:
+                    logger.exception(
+                        "Inference throughput autotuner preflight failed safely"
+                    )
+                    from hydra_suite.core.inference.autotune.coordinator import (
+                        ResolveResult,
+                    )
+                    from hydra_suite.core.inference.autotune.models import (
+                        InferenceRuntimeOverlay,
+                        InferenceTuningSettings,
+                    )
+
+                    _baseline_settings = InferenceTuningSettings.from_config(
+                        _inference_cfg
+                    )
+                    self.inference_autotune_overlay = InferenceRuntimeOverlay.baseline(
+                        _baseline_settings,
+                        status="fallback",
+                        reason=(
+                            "pre-load resolution failed: "
+                            f"{type(_autotune_preflight_err).__name__}"
+                        ),
+                    )
+                    self.inference_autotune_result = ResolveResult(
+                        self.inference_autotune_overlay
+                    )
+                if self.inference_autotune_overlay is not None:
+                    logger.info(
+                        "Inference throughput autotuner: status=%s profile=%s "
+                        "requested=%s admitted=%s effective=%s reason=%s",
+                        self.inference_autotune_overlay.status,
+                        self.inference_autotune_overlay.profile_id,
+                        self.inference_autotune_overlay.requested.to_dict(),
+                        self.inference_autotune_overlay.admitted.to_dict(),
+                        self.inference_autotune_overlay.effective.to_dict(),
+                        self.inference_autotune_overlay.reason,
+                    )
+                    self._emit_stats(
+                        {
+                            "inference_autotune": _inference_autotune_stats(
+                                self.inference_autotune_overlay,
+                                self.inference_autotune_result,
+                            )
+                        }
+                    )
+
             _cache_dir = self._resolve_cache_dir()
             if not self.cache_read_only_replay:
                 _cache_dir.mkdir(parents=True, exist_ok=True)
@@ -1124,6 +1479,13 @@ class TrackingEngineCore:
                 # forward cache. None / non-sliced runs => key unchanged.
                 roi_mask=p.get("ROI_MASK"),
                 identity_evidence=_identity_evidence_run_config,
+                runtime_overlay=self.inference_autotune_overlay,
+            )
+            self.inference_runtime_artifact_ids = tuple(
+                getattr(inference_runner, "runtime_artifact_ids", ())
+            )
+            self.inference_runtime_artifact_prepare_seconds = float(
+                getattr(inference_runner, "runtime_artifact_prepare_seconds", 0.0)
             )
             if self.cache_read_only_replay and density_map_enabled:
                 # Refuse an unaffordable candidate before ``caches_all_valid``
@@ -1396,6 +1758,18 @@ class TrackingEngineCore:
                     logger.info(
                         "Preview mode: bg-sub runner has no cache (cache_dir=None)."
                     )
+
+        # Every InferenceRunner construction above loads models (and can spawn a
+        # SLEAP service or load a TensorRT engine), and the autotune preflight
+        # above that runs a whole bounded calibration.  Both are setup, not
+        # steady-state work, so the "initialization" phase must close HERE --
+        # after them and before the first measured phase.  `steady = wall -
+        # initialization - cleanup` is consumed by the inference autotuner both
+        # in the calibration child (sidecar_child._profile_times) and for
+        # production throughput regression detection (see the store update at
+        # the end of this method); ending the phase earlier billed model loading
+        # and calibration to steady time and made every such number dishonest.
+        profiler.phase_end("initialization")
 
         # === RUN BATCHED INFERENCE PHASE (if applicable) ===
         # For YOLO OBB: InferenceRunner.run_batch_pass() when caches are not yet valid.
@@ -4580,8 +4954,56 @@ class TrackingEngineCore:
         # Use a direction suffix so forward and backward profiles are kept separate.
         _dir_tag = "backward" if self.backward_mode else "forward"
         profile_export_path = self._resolve_profile_path(_dir_tag)
-        if profile_export_path is not None and not stop_requested:
+        if (
+            _profiling_export_enabled
+            and profile_export_path is not None
+            and not stop_requested
+        ):
             profiler.export_summary(profile_export_path)
+
+        if (
+            not stop_requested
+            and self.inference_autotune_overlay is not None
+            and self.inference_autotune_overlay.profile_id
+            and getattr(profiler, "enabled", False)
+        ):
+            try:
+                from hydra_suite.core.inference.autotune.store import (
+                    InferenceTuningProfileStore,
+                )
+
+                _summary = profiler.get_summary()
+                _wall = float(_summary.get("wall_clock_s", 0.0))
+                _phases = _summary.get("phases", {})
+                _prepare = float(_phases.get("initialization", {}).get("total_s", 0.0))
+                _cleanup = float(_phases.get("cleanup", {}).get("total_s", 0.0))
+                _steady = max(0.0, _wall - _prepare - _cleanup)
+                _frames = int(_summary.get("total_frames", 0))
+                if _steady > 0 and _frames > 0:
+                    from hydra_suite.core.inference.autotune.integration import (
+                        sample_detection_workload,
+                    )
+
+                    _workload_counts = sample_detection_workload(
+                        self._resolve_cache_dir(),
+                        start_frame=int(p.get("START_FRAME", 0)),
+                        end_frame=(
+                            int(p.get("END_FRAME", -1))
+                            if int(p.get("END_FRAME", -1)) >= 0
+                            else None
+                        ),
+                    )
+                    InferenceTuningProfileStore().observe_production_throughput(
+                        self.inference_autotune_overlay.profile_id,
+                        _frames / _steady,
+                        detection_counts=_workload_counts or None,
+                        crop_counts=_workload_counts or None,
+                    )
+            except Exception:
+                logger.warning(
+                    "Could not update inference autotune production evidence",
+                    exc_info=True,
+                )
 
         logger.info("Tracking worker finished. Emitting raw trajectory data.")
 

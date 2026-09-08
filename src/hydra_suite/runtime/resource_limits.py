@@ -163,6 +163,17 @@ def build_limited_launch(
         raise ValueError("MPS jobs require an explicit allocator high-watermark ratio")
     selected = backend or select_limit_backend()
     child_env = dict(os.environ if environment is None else environment)
+    if accelerator_kind is AcceleratorKind.CUDA:
+        # Pin the child to the exact physical GPU the resolver probed. The
+        # UUID form (``GPU-<uuid>``) is ordering-independent -- unlike a bare
+        # ordinal, it cannot be reinterpreted under a different device
+        # enumeration order. CUDA_DEVICE_ORDER=PCI_BUS_ID additionally makes
+        # nvidia-smi and CUDA agree on ordinal numbering for anything in the
+        # child that still indexes by ordinal (S7).
+        child_env["CUDA_VISIBLE_DEVICES"] = str(
+            accelerator_device_uuid or accelerator_pci_bus_id
+        )
+        child_env["CUDA_DEVICE_ORDER"] = "PCI_BUS_ID"
     bootstrap = [
         python_executable or sys.executable,
         "-m",

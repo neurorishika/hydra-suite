@@ -86,6 +86,84 @@ def test_setup_panel_wired_in_main_window(main_window):
         not sys.platform.startswith("linux")
     )
     assert main_window._setup_panel.spin_traj_hist.minimum() == -1
+    assert hasattr(main_window._setup_panel, "combo_inference_autotune")
+    assert hasattr(main_window._setup_panel, "spin_inference_autotune_budget")
+    assert hasattr(main_window._setup_panel, "lbl_inference_autotune_status")
+    assert hasattr(main_window._setup_panel, "btn_continue_inference_settings")
+    assert not main_window._setup_panel.btn_continue_inference_settings.isVisible()
+
+
+def test_setup_inference_autotune_policy_persists_and_status_is_read_only(main_window):
+    """The one UI control owns policy; runtime outcomes only update its label.
+
+    All three modes -- including "record", previously unreachable from a
+    boolean checkbox -- must round-trip losslessly through the combo box.
+    """
+    panel = main_window._setup_panel
+    original_index = panel.combo_inference_autotune.currentIndex()
+    try:
+        panel._set_inference_autotune_combo_mode("record")
+        panel._on_inference_autotune_mode_changed(
+            panel.combo_inference_autotune.currentIndex()
+        )
+        config = main_window._config_orch.build_config_dict()
+        assert config["inference_autotune_mode"] == "record"
+        assert "Record-only" in panel.lbl_inference_autotune_status.text()
+
+        panel._set_inference_autotune_combo_mode("automatic")
+        panel._on_inference_autotune_mode_changed(
+            panel.combo_inference_autotune.currentIndex()
+        )
+        config = main_window._config_orch.build_config_dict()
+        assert config["inference_autotune_mode"] == "automatic"
+        assert "validated profile" in panel.lbl_inference_autotune_status.text()
+
+        panel.set_inference_autotune_status("Cache hit — profile abc123")
+        assert panel.combo_inference_autotune.currentData() == "automatic"
+        assert (
+            panel.lbl_inference_autotune_status.text() == "Cache hit — profile abc123"
+        )
+    finally:
+        panel.combo_inference_autotune.setCurrentIndex(original_index)
+
+
+def test_setup_inference_autotune_combo_signal_is_actually_connected(main_window):
+    """IMPORTANT 2 (round 1 review): the previous test only ever called
+    ``_on_inference_autotune_mode_changed`` by hand, so a severed
+    ``currentIndexChanged.connect(...)`` in ``setup_panel.py`` would still
+    pass it. Drive the combo box the way a real user does -- an unblocked
+    ``setCurrentIndex`` -- and observe the persisted config change through
+    that signal alone, so a disconnected wire fails this test.
+    """
+    panel = main_window._setup_panel
+    original_index = panel.combo_inference_autotune.currentIndex()
+    try:
+        record_index = panel.combo_inference_autotune.findData("record")
+        assert record_index >= 0
+        panel.combo_inference_autotune.setCurrentIndex(record_index)
+        config = main_window._config_orch.build_config_dict()
+        assert config["inference_autotune_mode"] == "record"
+
+        automatic_index = panel.combo_inference_autotune.findData("automatic")
+        panel.combo_inference_autotune.setCurrentIndex(automatic_index)
+        config = main_window._config_orch.build_config_dict()
+        assert config["inference_autotune_mode"] == "automatic"
+    finally:
+        panel.combo_inference_autotune.setCurrentIndex(original_index)
+
+
+def test_setup_inference_autotune_budget_spinbox_persists(main_window):
+    """The bounded calibration-time budget (previously widget-less) must be
+    both visible and persisted through the config dict."""
+    panel = main_window._setup_panel
+    original = panel.spin_inference_autotune_budget.value()
+    try:
+        panel.spin_inference_autotune_budget.setValue(45.0)
+        panel._on_inference_autotune_budget_changed(45.0)
+        config = main_window._config_orch.build_config_dict()
+        assert config["inference_autotune_budget_seconds"] == 45.0
+    finally:
+        panel.spin_inference_autotune_budget.setValue(original)
 
 
 def test_controls_panel_has_wider_minimum_width(main_window):

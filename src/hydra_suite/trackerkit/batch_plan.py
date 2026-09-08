@@ -15,6 +15,7 @@ from typing import Any, Sequence
 
 from hydra_suite.trackerkit.cli_config import (
     _default_output_paths,
+    apply_inference_autotune_override,
     apply_sahi_profile_override,
     load_tracker_cli_config,
 )
@@ -121,6 +122,8 @@ def plan_batch_jobs(
     explicit_config_path: str | None = None,
     keystone_override: bool = False,
     sahi_profile: str | None = None,
+    inference_autotune: str | None = None,
+    inference_autotune_manual: Sequence[str] | None = None,
 ) -> list[BatchJobSpec]:
     """Resolve one ``BatchJobSpec`` per video with today's keystone rules.
 
@@ -168,6 +171,16 @@ def plan_batch_jobs(
             provenance = "own-sidecar"
         if sahi_profile:
             cfg = apply_sahi_profile_override(cfg, sahi_profile)
+        # Applied HERE, beside the SAHI profile, rather than in the sequential
+        # loop: the planner is the single place both the in-process loop and
+        # the per-GPU fan-out children read their effective config from, so a
+        # CLI autotune policy reaches a fanned-out child by construction.
+        if inference_autotune is not None or inference_autotune_manual:
+            cfg = apply_inference_autotune_override(
+                cfg,
+                mode=inference_autotune,
+                manual_fields=tuple(inference_autotune_manual or ()),
+            )
         cfg = deepcopy(dict(cfg))
         # Retarget only a config this video BORROWED from another video:
         #  * "keystone-baseline" -- always borrowed, by definition;

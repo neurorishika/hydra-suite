@@ -217,10 +217,24 @@ A validated record contains:
 - TensorRT preparation artifact IDs and preparation seconds;
 - selection reason, rejected candidates and bounded failure classes;
 - creation/last-validation timestamps and observed production throughput; and
-- state: `provisional` or `validated`.
+- state: `provisional`, `validated`, or `incomplete`.
 
 Only `validated` records can alter a production run. A provisional record may
 reduce the next search space but never overrides the baseline.
+
+An `incomplete` record is a negative cache: written when a calibration
+attempt cannot finish (`budget_expired`, `timeout`, or
+`baseline_measurement_incomplete`), carrying the failure reason
+(`invalidation_reason`) and the attempt timestamp (`last_validation_unix_ns`).
+Like `provisional`, it never applies settings to a production run -- while
+`now - last_validation_unix_ns` is under the retry TTL (24h), the coordinator
+returns a baseline overlay with status `deferred_due_to_prior_failure` and the
+recorded reason, without launching a fresh search. This applies under every
+mode, including `record`, so a project that genuinely cannot calibrate does
+not re-burn its entire tuning budget on every run. Once the TTL elapses,
+calibration is retried as normal. An `incomplete` record is never written for
+an attempt where live contention was detected -- a transient GPU neighbour
+must not buy a 24-hour lockout.
 
 Store records under `get_data_dir()`, with a small versioned size/record cap.
 Writes use a per-key interprocess lock, write/fsync to a private temporary file,
@@ -344,9 +358,22 @@ limits:
 - every output CSV has a non-zero row count;
 - detection/tracking row counts match and positional matching has zero
   unmatched rows;
-- position p99 is at most the existing 0.5 px tolerance and angular mean at
-  most 0.05 rad, unless the measured determinism floor is larger;
+- position p99 is at most the existing 0.5 px tolerance and the angular
+  **per-row max** (wrapped to `(-pi, pi]`) at most 0.05 rad, unless the
+  measured determinism floor is larger. The angular statistic is a per-row max
+  rather than a mean because a mean dilutes: one pi-flip in 100 rows averages
+  to 0.031 rad and passes a 0.05 rad mean gate. Because a per-row max would
+  otherwise let a single bistable head/tail pi-flip in the A-vs-A baseline set
+  the measured floor to pi -- disarming the angle gate entirely -- the floor's
+  angular statistic excludes rows whose head/tail column differs between the
+  two baseline runs; those rows are already rejected by the exact categorical
+  check, so no coverage is lost;
 - pose keypoint presence/NaN patterns and categorical head-tail results match;
+- track identity is exact: `TrackID`, `TrajectoryID`, `State` and `ArenaID` are
+  compared against the *positionally matched* row and any difference rejects
+  the candidate, naming the column and the first differing `FrameID`. This is
+  mandatory and is not governed by the categorical-policy switch -- a Hungarian
+  identity swap preserves row counts, keys and XY and is otherwise invisible;
 - identity class, unique identity key, class-label, and NaN patterns match
   exactly by default; and
 - both forward-rich output and final tracking output pass.

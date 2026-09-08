@@ -128,6 +128,7 @@ nav:
   - CUDA Dependency Updates: developer-guide/dependency-cuda-updates.md
   - Performance Tuning: developer-guide/performance-tuning.md
   - Inference Fast Mode: developer-guide/inference-fast-mode.md
+  - Inference Autotuner: developer-guide/inference-autotuner.md
   - Confidence Metrics: developer-guide/confidence-metrics.md
   - Extending Detection: developer-guide/extending-detection.md
   - Extending Identity: developer-guide/extending-identity.md

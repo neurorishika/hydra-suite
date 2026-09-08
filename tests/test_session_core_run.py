@@ -56,6 +56,41 @@ def test_forward_only_writes_final_csv(tmp_path):
     assert any("Trajectories:" in ln for ln in result.summary_lines)
 
 
+def test_postprocessing_that_empties_the_frame_reports_failure_not_success(tmp_path):
+    """write_base_final_csv returns False (no raise) on an empty frame; the
+    session must not report success=True with a final_csv_path that was
+    never written (carried-over Task 2 finding)."""
+    raw = tmp_path / "clip.csv"
+    _write_raw_csv(str(raw))
+    config = dict(_config())
+    config["enable_postprocessing"] = True
+    core = TrackingSessionCore(
+        video_path=str(tmp_path / "clip.mp4"),
+        config=config,
+        params={
+            "FPS": 30.0,
+            "RESIZE_FACTOR": 1.0,
+            # Exceeds the 3-row window -> every trajectory is filtered out,
+            # leaving an empty (but non-None) final_df.
+            "MIN_TRAJECTORY_LENGTH": 1000,
+            "MAX_VELOCITY_BREAK": float("inf"),
+            "MAX_OCCLUSION_GAP": 0,
+            "MAX_VELOCITY_ZSCORE": 0.0,
+        },
+        paths={
+            "raw_csv_path": str(raw),
+            "detection_cache_path": str(tmp_path / "d.npz"),
+        },
+    )
+    result = core.run_post_tracking(pd.read_csv(str(raw)))
+    assert isinstance(result, SessionResult)
+    assert result.success is False
+    assert result.final_csv_path is None
+    assert result.error is not None
+    forward_processed = tmp_path / "clip_forward_processed.csv"
+    assert not forward_processed.exists()
+
+
 def test_should_stop_between_stages_yields_unsuccessful_result(tmp_path):
     raw = tmp_path / "clip.csv"
     _write_raw_csv(str(raw))

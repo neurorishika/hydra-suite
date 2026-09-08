@@ -17,6 +17,7 @@ from hydra_suite.utils.profiling import span
 if TYPE_CHECKING:
     from hydra_suite.core.individual.identity.cache import IdentityEvidenceCache
     from hydra_suite.core.individual.identity.catalog import IdentityCatalog
+    from hydra_suite.core.inference.autotune.models import InferenceRuntimeOverlay
 
     from .config import PoseConfig
     from .identity_evidence_config import IdentityEvidenceRunConfig
@@ -321,6 +322,7 @@ def _load_obb_for_config(
     from .stages.obb import load_obb_models
 
     batch_size = config.detection_batch_size
+    artifact_batch_size = config.runtime_artifact_batch_size
     direct = config.obb.direct if config.obb is not None else None
     sequential = config.obb.sequential if config.obb is not None else None
     slice_cfg = getattr(direct, "slice", None) if direct is not None else None
@@ -353,7 +355,11 @@ def _load_obb_for_config(
                 imgsz,
                 batch_size,
             )
-        return load_obb_models(config.obb, runtime, batch_size=batch_size)
+        return load_obb_models(
+            config.obb,
+            runtime,
+            batch_size=max(batch_size, artifact_batch_size or batch_size),
+        )
 
     if stage1_slice_cfg is not None and stage1_slice_cfg.enabled:
         frame_hw = _probe_frame_hw(video_path)
@@ -376,8 +382,10 @@ def _load_obb_for_config(
             return load_obb_models(
                 config.obb,
                 runtime,
-                batch_size=batch_size,
-                stage1_batch_size=stage1_batch_size,
+                batch_size=max(batch_size, artifact_batch_size or batch_size),
+                stage1_batch_size=max(
+                    stage1_batch_size, artifact_batch_size or stage1_batch_size
+                ),
             )
         logger.warning(
             "Sliced sequential stage-1 enabled but frame size (%s) and/or "
@@ -388,7 +396,11 @@ def _load_obb_for_config(
             batch_size,
         )
 
-    return load_obb_models(config.obb, runtime, batch_size=batch_size)
+    return load_obb_models(
+        config.obb,
+        runtime,
+        batch_size=max(batch_size, artifact_batch_size or batch_size),
+    )
 
 
 def _pose_config_model_path(pose_config: PoseConfig) -> str:
@@ -539,7 +551,12 @@ def _open_caches(
     detection_key = (
         # roi_mask is folded into the OBB key ONLY when slicing is enabled (see
         # detection_cache_key); None / disabled slicing => byte-identical key.
-        detection_cache_key(config.obb, roi_mask)
+        # detection_batch_size is folded in ONLY when it is not 1 (see
+        # _batch_term), so every cache written at the default batch keeps its
+        # key. A hand-set batch used to write its detections under the SAME
+        # key as a batch-1 run, and the next "Use cached detections" run
+        # replayed them (B2).
+        detection_cache_key(config.obb, roi_mask, config.detection_batch_size)
         if config.detection_source == "obb"
         else bgsub_detection_cache_key(config.bgsub)
     )
@@ -932,12 +949,17 @@ class InferenceRunner:
         cache_only: bool = False,
         roi_mask: "np.ndarray | None" = None,
         identity_evidence: "IdentityEvidenceRunConfig | None" = None,
+        runtime_overlay: "InferenceRuntimeOverlay | None" = None,
     ) -> None:
         from hydra_suite.utils.profiling_process import maybe_arm_process_recorder
 
         maybe_arm_process_recorder()
 
         self.config = config
+        # Immutable per-run evidence of requested/admitted/effective execution
+        # values. The runner consumes the already-resolved config and never
+        # mutates or persists this overlay.
+        self.runtime_overlay = runtime_overlay
         self.cache_dir = cache_dir
         self.cache_only = cache_only
         # Arena ROI mask for sliced-inference tile gating. It is the single
@@ -965,6 +987,16 @@ class InferenceRunner:
             self.runtime,
             cache_only=cache_only,
             video_path=self._video_path,
+        )
+        self.runtime_artifact_ids = (
+            self._models.obb.runtime_artifact_ids
+            if self._models.obb is not None
+            else ()
+        )
+        self.runtime_artifact_prepare_seconds = (
+            self._models.obb.runtime_artifact_prepare_seconds
+            if self._models.obb is not None
+            else 0.0
         )
         self._caches: _CacheSet | None = None
         # True when self._caches was opened for WRITING (realtime persistence);

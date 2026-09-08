@@ -61,8 +61,39 @@ def with_video_signature(key: CacheKey, sig: str) -> CacheKey:
     return replace(key, config_hash=_sha(f"{key.config_hash}|vid={sig}"))
 
 
+def _default_field(config_type: type, name: str, fallback: int) -> int:
+    """The value ``name`` carries on ``config_type`` when the user set nothing."""
+
+    field = getattr(config_type, "__dataclass_fields__", {}).get(name)
+    default = getattr(field, "default", None) if field is not None else None
+    return int(default) if isinstance(default, int) else int(fallback)
+
+
+def _default_batch_size(config: object) -> int:
+    """The ``batch_size`` a stage config carries when the user set nothing."""
+
+    return _default_field(type(config), "batch_size", 1)
+
+
+def _batch_term(batch_size: int, default: int) -> str:
+    """A key fragment for a NON-DEFAULT batch size, else the empty string.
+
+    Batching changes the numbers a stage produces (a tuned det=4 was measured
+    at <=1px from det=1 on CUDA), and unlike confidence/IoU a batch size is
+    NOT re-applied at replay time -- so by this module's own stated principle
+    it must invalidate the cache. Folding it in only when it is non-default
+    follows the precedent set for slicing and ROI: every cache ever written at
+    the default batch keeps its key and stays valid, so no user's existing
+    cache is thrown away by this fix.
+    """
+
+    return "" if int(batch_size) == int(default) else f"|batch={int(batch_size)}"
+
+
 def detection_cache_key(
-    config: OBBConfig, roi_mask: np.ndarray | None = None
+    config: OBBConfig,
+    roi_mask: np.ndarray | None = None,
+    batch_size: int = 1,
 ) -> CacheKey:
     """Cache key for OBB detections.
 
@@ -102,7 +133,11 @@ def detection_cache_key(
         # User-facing confidence_threshold/iou stay excluded: replay reapplies
         # those filters. Every setting that changes raw extraction is folded in
         # below, including sequential's *second* model signature.
-        config_hash=slice_hash,
+        # Slicing changes which raw detections exist, so it IS folded in (but
+        # only when enabled, so existing non-sliced caches stay valid).
+        # detection_batch_size is folded in the same way -- only when it is
+        # not 1, so a default-batch cache keeps config_hash == "".
+        config_hash=slice_hash + _batch_term(batch_size, 1),
     )
 
 
@@ -210,6 +245,16 @@ def _slice_config_hash(slice_cfg: SliceConfig | None) -> str:
             slice_cfg.perform_standard_pred,
         )
     )
+    # tile_batch_size is a TUNED coordinate (InferenceTuningSettings writes
+    # obb.direct.slice.tile_batch_size), and it changes the raw detections the
+    # same way detection_batch_size does -- so a sliced cache written at the
+    # default 16 could be replayed under a tuned 32. Folded in only when it is
+    # non-default, exactly as the other batch sizes are, so every existing
+    # sliced cache keeps its key.
+    payload += _batch_term(
+        slice_cfg.tile_batch_size,
+        _default_field(type(slice_cfg), "tile_batch_size", 16),
+    )
     return _sha(payload)
 
 
@@ -302,7 +347,9 @@ def bgsub_detection_cache_key(config: BgSubConfig) -> CacheKey:
 
 
 def headtail_cache_key(config: HeadTailConfig, geometry: CanonicalGeometry) -> CacheKey:
-    config_hash = canonical_geometry_key(geometry)
+    config_hash = canonical_geometry_key(geometry) + _batch_term(
+        config.batch_size, _default_batch_size(config)
+    )
     return CacheKey(
         schema_version=CACHE_SCHEMA_VERSION,
         model_path=config.model_path,
@@ -318,26 +365,30 @@ def cnn_cache_key(config: CNNConfig, geometry: CanonicalGeometry) -> CacheKey:
         model_mtime=_mtime(config.model_path),
         # calibration_temperature, scoring_mode excluded; canonical geometry
         # IS included -- it changes what pixels the classifier actually sees.
-        config_hash=canonical_geometry_key(geometry),
+        config_hash=canonical_geometry_key(geometry)
+        + _batch_term(config.batch_size, _default_batch_size(config)),
     )
 
 
 def pose_cache_key(config: PoseConfig, geometry: CanonicalGeometry) -> CacheKey:
     if config.backend == "yolo":
         assert config.yolo is not None
-        path = config.yolo.model_path
+        backend_config = config.yolo
     elif config.backend == "vitpose":
         assert config.vitpose is not None
-        path = config.vitpose.model_path
+        backend_config = config.vitpose
     else:
         assert config.sleap is not None
-        path = config.sleap.model_path
+        backend_config = config.sleap
+    # The pose batch size lives on the per-backend sub-config, and each
+    # backend has its own default (yolo 64, sleap/vitpose 4).
+    path = backend_config.model_path
     # background_color was dropped from PoseConfig: it was always (0, 0, 0)
     # (never populated by from_parameters), so removing it does not change
     # any hash produced by any existing config in practice.
     config_hash = _sha(
         f"{config.suppress_foreign_regions}|{canonical_geometry_key(geometry)}"
-    )
+    ) + _batch_term(backend_config.batch_size, _default_batch_size(backend_config))
     return CacheKey(
         schema_version=CACHE_SCHEMA_VERSION,
         model_path=path,

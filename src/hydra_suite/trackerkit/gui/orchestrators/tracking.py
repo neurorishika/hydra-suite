@@ -359,6 +359,18 @@ class TrackingOrchestrator:
             return
         self._mw.progress_bar.setValue(percentage)
         self._mw.progress_label.setText(status_text)
+        if str(status_text).startswith("Optimizing inference"):
+            self._panels.setup.set_inference_autotune_calibration_active(True)
+
+    def continue_with_current_inference_settings(self) -> None:
+        """Cancel calibration while allowing the configured production run."""
+        worker = getattr(self._mw, "tracking_worker", None)
+        if worker is not None and hasattr(worker, "cancel_inference_autotune"):
+            worker.cancel_inference_autotune()
+        self._panels.setup.set_inference_autotune_calibration_active(False)
+        self._panels.setup.set_inference_autotune_status(
+            "Continuing with configured inference settings…"
+        )
 
     def on_pose_exported_model_resolved(self, artifact_path: str) -> None:
         """Update pose exported-model UI/config when runtime resolves an artifact path."""
@@ -659,6 +671,25 @@ class TrackingOrchestrator:
         """Update real-time tracking statistics."""
         if self._mw._stop_all_requested:
             return
+        tuning = stats.get("inference_autotune")
+        if isinstance(tuning, dict):
+            self._panels.setup.set_inference_autotune_calibration_active(False)
+            status = str(tuning.get("status", "unknown")).replace("_", " ")
+            reason = str(tuning.get("reason", "")).strip()
+            effective = tuning.get("effective", {})
+            values = ""
+            if isinstance(effective, dict):
+                compact = ", ".join(
+                    f"{name}={value}"
+                    for name, value in effective.items()
+                    if value not in (None, {}, [], ())
+                )
+                values = f" Effective: {compact}." if compact else ""
+            profile = str(tuning.get("profile_id") or "").strip()
+            profile_text = f" Profile {profile}." if profile else ""
+            self._panels.setup.set_inference_autotune_status(
+                f"{status.capitalize()} — {reason}.{profile_text}{values}"
+            )
         phase = str(stats.get("phase", "tracking"))
         is_precompute = phase == "individual_precompute"
 

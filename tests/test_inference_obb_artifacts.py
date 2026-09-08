@@ -82,6 +82,15 @@ def fake_loader(monkeypatch):
     monkeypatch.setattr(ra, "_load_torch_model", fake_load_torch)
     monkeypatch.setattr(ra, "_export_artifact", fake_export)
     monkeypatch.setattr(ra, "_create_direct_executor", fake_executor_factory)
+    # Runtime artifacts live in a user cache, not beside a source checkpoint.
+    # Keep the legacy selection tests isolated from a pre-existing local cache.
+    monkeypatch.setattr(
+        ra,
+        "_runtime_artifact_store_for",
+        lambda source: ra.RuntimeArtifactStore(
+            Path(source).parent / ".test-runtime-artifacts"
+        ),
+    )
     return counters
 
 
@@ -292,6 +301,13 @@ def test_tensorrt_export_uses_dynamic_profile_when_batch_size_gt_one(
     fake_ultra.YOLO = _FakeExportYOLO
     monkeypatch.setitem(sys.modules, "ultralytics", fake_ultra)
     monkeypatch.setattr(ra, "_create_direct_executor", lambda **kw: object())
+    monkeypatch.setattr(
+        ra,
+        "_runtime_artifact_store_for",
+        lambda source: ra.RuntimeArtifactStore(
+            Path(source).parent / ".test-runtime-artifacts"
+        ),
+    )
 
     pt = tmp_path / "model.pt"
     pt.write_bytes(b"x")

@@ -31,6 +31,10 @@ from PySide6.QtWidgets import (
     QWidget,
 )
 
+from hydra_suite.core.inference.autotune.models import (
+    MAXIMUM_CALIBRATION_BUDGET_SECONDS,
+    MINIMUM_CALIBRATION_BUDGET_SECONDS,
+)
 from hydra_suite.trackerkit.config.schemas import TrackerConfig
 
 if TYPE_CHECKING:
@@ -41,6 +45,7 @@ class SetupPanel(QWidget):
     """Preset picker, video/batch file selection, ROI, and display options."""
 
     config_changed: Signal = Signal(object)
+    inference_autotune_continue_requested: Signal = Signal()
 
     def __init__(
         self,
@@ -738,6 +743,82 @@ class SetupPanel(QWidget):
         )
         self.chk_realtime_mode.stateChanged.connect(self._sync_realtime_cache_controls)
 
+        # One coordinated control belongs here rather than beside individual
+        # detector/pose batch controls. It is deliberately distinct from the
+        # semantic tracking autotuner: this changes execution strategy only.
+        #
+        # Three-state, not a checkbox: "record" persists a validated profile
+        # for later reuse but never applies it to this run (safe at any
+        # time since Task 3 -- it never applies even on a cache hit). A
+        # boolean checkbox cannot represent that state without destroying it
+        # on the next toggle, which made "record" unreachable from the GUI.
+        self.combo_inference_autotune = QComboBox()
+        self.combo_inference_autotune.setToolTip(
+            "Off — use your configured inference values as-is.\n"
+            "Record only — measure and save a validated profile for this "
+            "system/model/workload, but still run with configured values.\n"
+            "Automatic — use a validated, system-specific full-inference "
+            "throughput profile once one exists (live-admitted; your saved "
+            "batch values remain the fallback and the baseline for any "
+            "field marked manual)."
+        )
+        for label, mode in (
+            ("Off", "off"),
+            ("Record only (measure, don't apply)", "record"),
+            ("Automatic (apply a validated profile)", "automatic"),
+        ):
+            self.combo_inference_autotune.addItem(label, mode)
+        self._set_inference_autotune_combo_mode(self._config.inference_autotune_mode)
+        self.combo_inference_autotune.currentIndexChanged.connect(
+            self._on_inference_autotune_mode_changed
+        )
+
+        self.spin_inference_autotune_budget = QDoubleSpinBox()
+        self.spin_inference_autotune_budget.setRange(
+            MINIMUM_CALIBRATION_BUDGET_SECONDS, MAXIMUM_CALIBRATION_BUDGET_SECONDS
+        )
+        self.spin_inference_autotune_budget.setSingleStep(5.0)
+        self.spin_inference_autotune_budget.setSuffix(" s")
+        self.spin_inference_autotune_budget.setDecimals(0)
+        self.spin_inference_autotune_budget.setKeyboardTracking(False)
+        self.spin_inference_autotune_budget.setValue(
+            float(self._config.inference_autotune_budget_seconds)
+        )
+        self.spin_inference_autotune_budget.setToolTip(
+            "Bounded calibration time budget (5-7200s, default 4500s) for "
+            "Record/Automatic "
+            "modes. A one-time cost per new system/model/workload "
+            "combination; validated profiles are reused after that."
+        )
+        self.spin_inference_autotune_budget.valueChanged.connect(
+            self._on_inference_autotune_budget_changed
+        )
+        self._inference_autotune_budget_row = QHBoxLayout()
+        self._inference_autotune_budget_row.setContentsMargins(0, 0, 0, 0)
+        self._inference_autotune_budget_row.addWidget(QLabel("Calibration budget"))
+        self._inference_autotune_budget_row.addWidget(
+            self.spin_inference_autotune_budget
+        )
+        self.lbl_inference_autotune_status = QLabel()
+        self.lbl_inference_autotune_status.setWordWrap(True)
+        self.lbl_inference_autotune_status.setStyleSheet(
+            "color: #8a8a8a; font-size: 10px;"
+        )
+        self.btn_continue_inference_settings = QPushButton(
+            "Continue with current settings"
+        )
+        self.btn_continue_inference_settings.setToolTip(
+            "Cancel only the bounded calibration and continue this tracking run "
+            "with your configured inference values."
+        )
+        self.btn_continue_inference_settings.setVisible(False)
+        self.btn_continue_inference_settings.clicked.connect(
+            self.inference_autotune_continue_requested.emit
+        )
+        self.set_inference_autotune_status_for_mode(
+            self._config.inference_autotune_mode
+        )
+
         for perf_checkbox in (
             self.chk_use_cached_detections,
             self.chk_realtime_mode,
@@ -751,6 +832,10 @@ class SetupPanel(QWidget):
         perf_toggle_grid.setVerticalSpacing(6)
         perf_toggle_grid.setContentsMargins(0, 0, 0, 0)
         perf_toggle_grid.addWidget(self.chk_realtime_mode, 0, 0)
+        perf_toggle_grid.addWidget(self.combo_inference_autotune, 1, 0)
+        perf_toggle_grid.addLayout(self._inference_autotune_budget_row, 2, 0)
+        perf_toggle_grid.addWidget(self.lbl_inference_autotune_status, 3, 0)
+        perf_toggle_grid.addWidget(self.btn_continue_inference_settings, 4, 0)
         perf_toggle_grid.setColumnStretch(0, 1)
         self._reflow_performance_controls()
         vl_sys.addLayout(self.performance_control_grid)
@@ -902,6 +987,58 @@ class SetupPanel(QWidget):
         self._sync_batch_policy_controls()
         # NOTE: the compute-tier selector is populated at panel construction;
         # _on_runtime_context_changed is called afterward in main_window.py
+
+    def _on_inference_autotune_mode_changed(self, _index: int) -> None:
+        """Persist the one user-facing inference-throughput policy control.
+
+        Three states -- "off"/"record"/"automatic" -- round-trip losslessly
+        through this combo box, unlike the boolean checkbox it replaced
+        (which could only represent on/off and destroyed "record" on the
+        next toggle).
+        """
+        mode = str(self.combo_inference_autotune.currentData() or "off")
+        if not getattr(self._main_window, "_restoring_config", False):
+            self._main_window.config.inference_autotune_mode = mode
+        self.set_inference_autotune_status_for_mode(mode)
+        self.config_changed.emit(self._main_window.config)
+
+    def _on_inference_autotune_budget_changed(self, value: float) -> None:
+        """Persist the bounded calibration time budget (5-7200s)."""
+        if not getattr(self._main_window, "_restoring_config", False):
+            self._main_window.config.inference_autotune_budget_seconds = float(value)
+        self.config_changed.emit(self._main_window.config)
+
+    def _set_inference_autotune_combo_mode(self, mode: str) -> None:
+        """Select the combo entry for ``mode`` without emitting a signal."""
+        normalized = str(mode).strip().lower()
+        if normalized not in {"off", "record", "automatic"}:
+            normalized = "off"
+        index = self.combo_inference_autotune.findData(normalized)
+        if index < 0:
+            index = 0
+        self.combo_inference_autotune.blockSignals(True)
+        self.combo_inference_autotune.setCurrentIndex(index)
+        self.combo_inference_autotune.blockSignals(False)
+
+    def set_inference_autotune_status_for_mode(self, mode: str) -> None:
+        """Render a non-interactive policy/result summary for the user."""
+        normalized = str(mode).strip().lower()
+        if normalized == "automatic":
+            text = "Enabled — a validated profile may be applied after live admission."
+        elif normalized == "record":
+            text = "Record-only — calibration evidence is saved, but configured values run."
+        else:
+            text = "Off — configured inference values will be used."
+        self.set_inference_autotune_status(text)
+
+    def set_inference_autotune_status(self, status: str) -> None:
+        """Update the read-only result summary without changing the policy."""
+        self.lbl_inference_autotune_status.setText(str(status))
+
+    def set_inference_autotune_calibration_active(self, active: bool) -> None:
+        """Show the one-run calibration escape hatch only while it is useful."""
+        self.btn_continue_inference_settings.setEnabled(bool(active))
+        self.btn_continue_inference_settings.setVisible(bool(active))
 
     def _create_performance_control_card(self, title: str, widget: QWidget) -> QFrame:
         """Build a compact labeled card for one performance control."""
