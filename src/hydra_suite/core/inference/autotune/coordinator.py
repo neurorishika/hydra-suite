@@ -230,6 +230,10 @@ class AutotuneCoordinator:
                         "budget_expired",
                         "timeout",
                         "baseline_measurement_incomplete",
+                        # A baseline that cannot reproduce itself costs a full
+                        # baseline measurement to discover and yields nothing.
+                        # Left uncached, every run re-pays it forever.
+                        "baseline_nondeterministic_beyond_contract",
                     }
                     and not request.contention_detected
                 ):

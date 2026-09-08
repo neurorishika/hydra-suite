@@ -384,3 +384,103 @@ def test_orphaned_locks_older_than_the_retention_window_are_pruned(tmp_path):
     assert not stale_orphan.exists()
     assert fresh_orphan.exists()
     assert matching_lock.exists()
+
+
+# ---------------------------------------------------------------------------
+# A baseline that fails the determinism floor is just as expensive as a budget
+# expiry -- it costs a full baseline measurement (five blocks plus the
+# same-window duplicate) and teaches the same lesson: this project cannot
+# calibrate right now. Without a negative-cache record it re-pays that cost on
+# every single run, forever, and stores nothing. (Task 10d.)
+# ---------------------------------------------------------------------------
+
+
+class _NondeterministicBaselineExecutor:
+    """Every trial emits different geometry, so no A-vs-A pair can agree."""
+
+    def __init__(self):
+        self.calls = 0
+
+    def run(self, settings, *, phase, field_name, block_index, should_cancel):
+        import pandas as pd
+
+        from hydra_suite.core.inference.autotune.equivalence import CalibrationOutputs
+
+        self.calls += 1
+        frame = pd.DataFrame(
+            {
+                "FrameID": [0, 1],
+                "DetectionID": [0, 10_000],
+                "X": [1.0 + 1000.0 * self.calls, 1.0],
+                "Y": [2.0, 2.0],
+                "Theta": [0.0, 0.0],
+                "UniqueIdentityKey": ["A", "A"],
+            }
+        )
+        return TrialObservation(
+            settings,
+            100.0,
+            0.5,
+            CalibrationOutputs(frame.copy(), frame.copy()),
+            warmup_calls=3,
+            warmup_frames=8,
+        )
+
+
+def test_nondeterministic_baseline_is_negative_cached(tmp_path):
+    store = InferenceTuningProfileStore(tmp_path)
+    key = _key()
+    baseline = _settings()
+    request = AutotuneRequest(
+        key, baseline, _planner(), mode="record", budget_seconds=30.0
+    )
+
+    first = AutotuneCoordinator(
+        store, trial_executor=_NondeterministicBaselineExecutor()
+    ).resolve(request)
+    assert first.overlay.reason == "baseline_nondeterministic_beyond_contract"
+
+    record = store.load(key)
+    assert record is not None
+    assert record.state is ProfileState.INCOMPLETE
+    assert record.invalidation_reason == "baseline_nondeterministic_beyond_contract"
+
+    second = AutotuneCoordinator(store, trial_executor=_NeverCalledExecutor()).resolve(
+        request
+    )
+    assert second.overlay.status == "deferred_due_to_prior_failure"
+
+
+def test_nondeterministic_baseline_is_not_cached_under_contention(tmp_path):
+    store = InferenceTuningProfileStore(tmp_path)
+    key = _key()
+    request = AutotuneRequest(
+        key,
+        _settings(),
+        _planner(),
+        mode="automatic",
+        budget_seconds=30.0,
+        contention_detected=True,
+    )
+
+    AutotuneCoordinator(
+        store, trial_executor=_NondeterministicBaselineExecutor()
+    ).resolve(request)
+
+    assert store.load(key) is None
+
+
+def test_nondeterministic_baseline_never_overwrites_a_provisional_record(tmp_path):
+    store = InferenceTuningProfileStore(tmp_path)
+    key = _key()
+    baseline = _settings()
+    store.save(_profile(key, baseline, state=ProfileState.PROVISIONAL))
+    request = AutotuneRequest(
+        key, baseline, _planner(), mode="automatic", budget_seconds=30.0
+    )
+
+    AutotuneCoordinator(
+        store, trial_executor=_NondeterministicBaselineExecutor()
+    ).resolve(request)
+
+    assert store.load(key).state is ProfileState.PROVISIONAL

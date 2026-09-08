@@ -536,7 +536,10 @@ def test_concurrent_fresh_processes_create_one_profile_and_one_trial_set(tmp_pat
     statuses = {queue.get(timeout=2), queue.get(timeout=2)}
     assert "calibrated" in statuses
     assert statuses <= {"calibrated", "cache_hit", "cache_hit_after_wait"}
-    assert len(counter.read_text(encoding="utf-8").splitlines()) == 10
+    # 5 baseline blocks + 1 same-window determinism duplicate + 5 final
+    # validation blocks. Exactly ONE calibration ran: the second process
+    # waited on the lock and reused the record.
+    assert len(counter.read_text(encoding="utf-8").splitlines()) == 11
     records = list((tmp_path / "profiles").glob("*.json"))
     assert len(records) == 1
 
@@ -648,3 +651,122 @@ def test_a_per_trial_timeout_is_recorded_as_a_rejection_with_its_class():
     ]
     assert timed_out, f"timed-out candidate vanished; rejected={result.rejected}"
     assert any("failures=timeout" in reason for _label, reason in timed_out)
+
+
+# ---------------------------------------------------------------------------
+# Block-window pairing (Task 10d)
+#
+# `sidecar_child._block_window` stripes each measurement block across the clip,
+# so block i and block j cover DIFFERENT frames. Any comparison that pairs two
+# different block indices is therefore comparing different video segments, not
+# the same work run twice. These tests pin the pairing contract: the
+# determinism duplicate reuses its partner's block index, and every candidate
+# block is compared against the baseline block with the SAME index.
+# ---------------------------------------------------------------------------
+
+
+def _striped_outputs(block_index, identity="A", *, x=1.0):
+    """Outputs whose frames depend on the block, exactly as striping produces."""
+
+    base = int(block_index) * 100
+    data = pd.DataFrame(
+        {
+            "FrameID": [base, base + 1],
+            "DetectionID": [0, 10_000],
+            "X": [x, x],
+            "Y": [2.0, 2.0],
+            "Theta": [0.0, 0.0],
+            "UniqueIdentityKey": [identity, identity],
+        }
+    )
+    return CalibrationOutputs(data.copy(), data.copy())
+
+
+class StripedWindowExecutor:
+    """Deterministic pipeline whose output window is a function of the block."""
+
+    def __init__(self):
+        self.calls = []
+
+    def _throughput(self, settings, phase, field_name):
+        if field_name == "detection_batch_size" or phase in {
+            "final_validation",
+            "baseline",
+        }:
+            return 100.0 * settings.detection_batch_size
+        return 100.0
+
+    def run(self, settings, *, phase, field_name, block_index, should_cancel):
+        self.calls.append((phase, field_name, block_index, settings))
+        return TrialObservation(
+            settings,
+            self._throughput(settings, phase, field_name),
+            0.5,
+            _striped_outputs(block_index),
+            warmup_calls=3,
+            warmup_frames=8,
+            accelerator_peak_bytes=settings.detection_batch_size,
+        )
+
+
+def test_determinism_floor_never_compares_two_different_block_windows():
+    """A striped, perfectly deterministic pipeline must clear the floor."""
+
+    executor = StripedWindowExecutor()
+    result = CoordinateSearch(_planner(), executor).run(
+        _settings(),
+        stage_shares={"detection_batch_size": 1.0},
+    )
+
+    assert result.reason != "baseline_nondeterministic_beyond_contract"
+    assert result.completed
+    # And the search actually got as far as evaluating candidates.
+    assert any(phase == "stage" for phase, _f, _b, _s in executor.calls)
+
+
+def test_determinism_duplicate_reuses_its_partner_block_index_and_phase():
+    executor = StripedWindowExecutor()
+    CoordinateSearch(_planner(), executor).run(
+        _settings(),
+        stage_shares={"detection_batch_size": 1.0},
+    )
+
+    baseline_blocks = [
+        block for phase, _f, block, _s in executor.calls if phase == "baseline"
+    ]
+    # Five striped blocks plus one duplicate of the reference block.
+    assert len(baseline_blocks) == 6
+    assert sorted(baseline_blocks) == [0, 0, 1, 2, 3, 4]
+
+
+class BlockThreeDivergenceExecutor(StripedWindowExecutor):
+    """A candidate that is wrong only in block 3 must still be rejected."""
+
+    def run(self, settings, *, phase, field_name, block_index, should_cancel):
+        observation = super().run(
+            settings,
+            phase=phase,
+            field_name=field_name,
+            block_index=block_index,
+            should_cancel=should_cancel,
+        )
+        if settings.detection_batch_size > 1 and block_index == 3:
+            return TrialObservation(
+                observation.settings,
+                observation.throughput,
+                observation.stage_seconds,
+                _striped_outputs(block_index, identity="B", x=900.0),
+                warmup_calls=3,
+                warmup_frames=8,
+            )
+        return observation
+
+
+def test_every_candidate_block_is_compared_not_only_block_zero():
+    result = CoordinateSearch(_planner(), BlockThreeDivergenceExecutor()).run(
+        _settings(),
+        stage_shares={"detection_batch_size": 1.0},
+    )
+
+    assert result.selected.detection_batch_size == 1
+    assert result.rejected

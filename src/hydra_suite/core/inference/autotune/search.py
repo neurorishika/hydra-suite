@@ -121,9 +121,15 @@ class CoordinateSearch:
             rejected=rejected,
         )
         baseline_evidence, baseline_outputs = baseline_measurements.get(
-            baseline, (None, ())
+            baseline, (None, {})
         )
-        if baseline_evidence is None or len(baseline_outputs) < 2:
+        # The baseline must cover EVERY block index, because every later
+        # comparison is paired by block index: candidate block i is judged
+        # against baseline block i. A missing baseline block would leave a
+        # candidate block with no partner, which is an undefined comparison,
+        # not a passing one.
+        required_blocks = set(range(self.protocol.minimum_blocks))
+        if baseline_evidence is None or not required_blocks.issubset(baseline_outputs):
             return SearchResult(
                 baseline,
                 tuple(evidence),
@@ -132,9 +138,30 @@ class CoordinateSearch:
                 "baseline_measurement_incomplete",
             )
         evidence.append(baseline_evidence)
+        # `sidecar_child._block_window` stripes the blocks across the clip, so
+        # block 0 and block 1 cover DIFFERENT frames. Comparing them is not an
+        # A-vs-A determinism check -- it is a comparison of two different video
+        # segments, which can only ever fail. The duplicate must re-run the
+        # reference block's own window, in the same phase, so the only thing
+        # that differs between the pair is the run itself.
+        reference_block = min(baseline_outputs)
+        duplicate = self._determinism_duplicate(
+            baseline,
+            block_index=reference_block,
+            deadline=deadline,
+            should_cancel=should_cancel,
+        )
+        if duplicate is None:
+            return SearchResult(
+                baseline,
+                tuple(evidence),
+                tuple(rejected),
+                False,
+                "baseline_measurement_incomplete",
+            )
         determinism_floor = compare_outputs(
-            baseline_outputs[0],
-            baseline_outputs[1],
+            baseline_outputs[reference_block],
+            duplicate,
             policy=self.equivalence_policy,
             for_determinism_floor=True,
         )
@@ -146,7 +173,7 @@ class CoordinateSearch:
                 False,
                 "baseline_nondeterministic_beyond_contract",
             )
-        reference = baseline_outputs[0]
+        reference = baseline_outputs
         incumbent = baseline
         incumbent_evidence = baseline_evidence
         field_names = [
@@ -235,7 +262,7 @@ class CoordinateSearch:
                 )
                 evidence.extend(item[0] for item in full.values())
                 candidates = []
-                full_incumbent = full.get(incumbent, (incumbent_evidence, ()))[0]
+                full_incumbent = full.get(incumbent, (incumbent_evidence, {}))[0]
                 for settings in finalists:
                     candidate = full.get(settings)
                     if candidate is None:
@@ -348,13 +375,43 @@ class CoordinateSearch:
         )
         return SearchResult(incumbent, tuple(evidence), tuple(rejected), True, reason)
 
+    def _determinism_duplicate(
+        self,
+        baseline: InferenceTuningSettings,
+        *,
+        block_index: int,
+        deadline: float,
+        should_cancel: Callable[[], bool],
+    ) -> CalibrationOutputs | None:
+        """Re-run one baseline block to get a true same-window A-vs-A pair.
+
+        This is a correctness-only trial: its timing is deliberately NOT folded
+        into the baseline evidence, which stays at exactly ``minimum_blocks``
+        samples drawn from the striped schedule.
+        """
+
+        if self._expired(deadline, should_cancel):
+            return None
+        observation = self.executor.run(
+            baseline,
+            phase="baseline",
+            field_name=None,
+            block_index=int(block_index),
+            should_cancel=should_cancel,
+        )
+        if observation.settings != baseline:
+            raise ValueError("trial executor returned evidence for another candidate")
+        if observation.failure_class is not None:
+            return None
+        return observation.outputs
+
     def _measure(
         self,
         settings: Sequence[InferenceTuningSettings],
         *,
         phase: str,
         field_name: str | None,
-        reference: CalibrationOutputs | None,
+        reference: Mapping[int, CalibrationOutputs] | None,
         determinism_floor: EquivalenceVerdict | None,
         deadline: float,
         should_cancel: Callable[[], bool],
@@ -362,12 +419,12 @@ class CoordinateSearch:
         rejected: list[tuple[str, str]] | None = None,
     ) -> dict[
         InferenceTuningSettings,
-        tuple[CandidateEvidence, tuple[CalibrationOutputs, ...]],
+        tuple[CandidateEvidence, dict[int, CalibrationOutputs]],
     ]:
         settings = tuple(dict.fromkeys(settings))
-        observations: dict[InferenceTuningSettings, list[TrialObservation]] = {
-            item: [] for item in settings
-        }
+        observations: dict[
+            InferenceTuningSettings, list[tuple[int, TrialObservation]]
+        ] = {item: [] for item in settings}
         orders = deterministic_block_order(
             settings,
             self.protocol.minimum_blocks,
@@ -388,13 +445,19 @@ class CoordinateSearch:
                     raise ValueError(
                         "trial executor returned evidence for another candidate"
                     )
-                observations[candidate].append(observation)
+                observations[candidate].append((block_index, observation))
         output = {}
-        for candidate, samples in observations.items():
+        for candidate, block_samples in observations.items():
+            samples = [item for _block, item in block_samples]
             successful = [item for item in samples if item.failure_class is None]
-            outputs = tuple(
-                item.outputs for item in successful if item.outputs is not None
-            )
+            # Outputs are keyed by the block index that produced them: the
+            # block index IS the frame window, so it is the only honest key to
+            # pair comparisons on.
+            outputs = {
+                block: item.outputs
+                for block, item in block_samples
+                if item.failure_class is None and item.outputs is not None
+            }
             if len(successful) < self.protocol.minimum_blocks:
                 # Never drop a candidate silently: an unrecorded `continue`
                 # here is indistinguishable from a candidate that was never
@@ -423,16 +486,33 @@ class CoordinateSearch:
                 continue
             verdict = None
             if reference is not None:
-                verdicts = tuple(
-                    compare_outputs(
-                        reference,
-                        item,
-                        determinism_floor=determinism_floor,
-                        policy=self.equivalence_policy,
+                verdicts = []
+                for block in sorted(outputs):
+                    partner = reference.get(block)
+                    if partner is None:
+                        # Never silently skip a block: an unpaired block is an
+                        # unjudged block, and passing on the strength of the
+                        # blocks that happened to have partners would let real
+                        # divergence through.
+                        verdicts.append(
+                            EquivalenceVerdict(
+                                False,
+                                details=(
+                                    f"no baseline output for block {block}; "
+                                    "correctness is unjudged",
+                                ),
+                            )
+                        )
+                        continue
+                    verdicts.append(
+                        compare_outputs(
+                            partner,
+                            outputs[block],
+                            determinism_floor=determinism_floor,
+                            policy=self.equivalence_policy,
+                        )
                     )
-                    for item in outputs
-                )
-                verdict = self._combine_verdicts(verdicts)
+                verdict = self._combine_verdicts(tuple(verdicts))
             thermal = [
                 item.thermal_c for item in successful if item.thermal_c is not None
             ]

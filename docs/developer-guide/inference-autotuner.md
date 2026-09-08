@@ -118,9 +118,15 @@ gate would admit nothing.
 
 ### The determinism floor
 
-Before any candidate is evaluated, the baseline is measured **twice** and the
-two outputs are compared with `for_determinism_floor=True` (which additionally
-excludes known-bistable head/tail rows from the angular statistic). That
+Before any candidate is evaluated, the baseline's **reference block is run a
+second time at the same frame window**, and that duplicate is compared against
+the original with `for_determinism_floor=True` (which additionally excludes
+known-bistable head/tail rows from the angular statistic). The same-window
+requirement is not incidental: the five measurement blocks are *striped* across
+the clip (`sidecar_child._block_window`) so the timing is representative, which
+means block 0 and block 1 cover different frames and comparing them would
+measure the clip, not the pipeline. For the same reason every candidate block is
+compared against the baseline block carrying the **same block index**. That
 comparison is the measured noise floor: the candidate gate's limits are then
 `max(policy tolerance, floor)`, so a project whose own output is noisier than
 the tolerance is not judged against an unattainable bar.
@@ -131,7 +137,9 @@ If the floor comparison itself fails, the search aborts immediately with
 status=fallback  reason=baseline_nondeterministic_beyond_contract
 ```
 
-and the configured settings are used unchanged.
+and the configured settings are used unchanged. That abort is negative-cached
+(an `INCOMPLETE` record), so a project that cannot reproduce itself does not
+re-pay the baseline measurement on every run.
 
 ## Profiles
 
