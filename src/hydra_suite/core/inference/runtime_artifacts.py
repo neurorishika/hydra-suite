@@ -57,7 +57,6 @@ from hashlib import sha256
 from pathlib import Path
 from typing import Any, Callable, Iterator
 
-
 logger = logging.getLogger(__name__)
 
 # Compute-runtime → direct-executor runtime name.

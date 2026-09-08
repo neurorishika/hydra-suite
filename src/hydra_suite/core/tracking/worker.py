@@ -722,6 +722,7 @@ class TrackingEngineCore:
                 if name in provenance:
                     resolved[name] = provenance[name]
         return resolved
+
     def cancel_inference_autotune(self) -> None:
         """Skip the remaining calibration without stopping production tracking."""
         self._inference_autotune_cancel_requested = True
@@ -1372,7 +1373,11 @@ class TrackingEngineCore:
                         0,
                         "Inference tuning skipped (backward tracking enabled)",
                     )
-            if not self.backward_mode and not self.preview_mode and not _backward_enabled:
+            if (
+                not self.backward_mode
+                and not self.preview_mode
+                and not _backward_enabled
+            ):
                 if _inference_cfg.inference_autotune.mode != "off":
                     self._emit_progress(0, "Optimizing inference (bounded calibration)")
                 # S1: the preflight below builds a request (AutotuneRequest.

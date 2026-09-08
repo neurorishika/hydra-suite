@@ -252,7 +252,8 @@ def _slice_config_hash(slice_cfg: SliceConfig | None) -> str:
     # non-default, exactly as the other batch sizes are, so every existing
     # sliced cache keeps its key.
     payload += _batch_term(
-        slice_cfg.tile_batch_size, _default_field(type(slice_cfg), "tile_batch_size", 16)
+        slice_cfg.tile_batch_size,
+        _default_field(type(slice_cfg), "tile_batch_size", 16),
     )
     return _sha(payload)
 
@@ -387,9 +388,7 @@ def pose_cache_key(config: PoseConfig, geometry: CanonicalGeometry) -> CacheKey:
     # any hash produced by any existing config in practice.
     config_hash = _sha(
         f"{config.suppress_foreign_regions}|{canonical_geometry_key(geometry)}"
-    ) + _batch_term(
-        backend_config.batch_size, _default_batch_size(backend_config)
-    )
+    ) + _batch_term(backend_config.batch_size, _default_batch_size(backend_config))
     return CacheKey(
         schema_version=CACHE_SCHEMA_VERSION,
         model_path=path,

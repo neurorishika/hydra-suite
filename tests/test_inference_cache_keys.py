@@ -3,6 +3,7 @@ import pytest
 import torch
 
 from hydra_suite.core.canonicalization.geometry import CanonicalGeometry
+from hydra_suite.core.inference.cache import keys as keys_mod
 from hydra_suite.core.inference.cache.base import CACHE_SCHEMA_VERSION, CacheKey
 from hydra_suite.core.inference.cache.keys import (
     apriltag_cache_key,
@@ -774,10 +775,21 @@ _ = np
 
 
 def test_default_detection_batch_keeps_the_pre_change_key():
-    assert detection_cache_key(_obb_direct_slice(SliceConfig())).config_hash == ""
+    """The default batch appends NO term, so no existing cache is invalidated.
+
+    The pre-change key is whatever the direct raw-extraction contract hashes to
+    -- on this base that is ``_direct_raw_config_hash`` (main folds the full
+    direct contract in, so it is non-empty even with slicing off). The
+    invariant this test guards is unchanged: ``batch_size=1`` must add nothing.
+    """
+
+    pre_change = keys_mod._direct_raw_config_hash(_obb_direct_slice(SliceConfig()))
+    assert (
+        detection_cache_key(_obb_direct_slice(SliceConfig())).config_hash == pre_change
+    )
     assert (
         detection_cache_key(_obb_direct_slice(SliceConfig()), batch_size=1).config_hash
-        == ""
+        == pre_change
     )
 
 
@@ -805,6 +817,7 @@ def test_stage_batch_size_folds_in_only_when_non_default(
 
     geometry = _GEOM_A
     base = config_fn()
+
     # The pose batch lives on the per-backend sub-config; the others carry it
     # directly. Poke it wherever it actually lives.
     def _with_batch(config, value):
@@ -835,10 +848,14 @@ def test_default_tile_batch_keeps_the_pre_change_sliced_key():
         _obb_direct_slice(SliceConfig(enabled=True, tile_batch_size=16))
     )
     assert base.config_hash == explicit.config_hash
-    # And a disabled slice still hashes to "" regardless of the tile batch.
+    # And with slicing DISABLED the tile batch is inert: a non-default value
+    # must not perturb the key (it changes nothing about raw extraction).
+    disabled_default = detection_cache_key(
+        _obb_direct_slice(SliceConfig(enabled=False))
+    ).config_hash
     assert (
         detection_cache_key(
             _obb_direct_slice(SliceConfig(enabled=False, tile_batch_size=32))
         ).config_hash
-        == ""
+        == disabled_default
     )
