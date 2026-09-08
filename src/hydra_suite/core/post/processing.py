@@ -1149,12 +1149,17 @@ def _apply_merge_candidates(
     min_length,
     identity_disagree_min_run=5,
     identity_drives_splits: bool = True,
+    *,
+    should_stop=None,
 ):
+    """Apply compatible merge candidates, or return ``None`` when cancelled."""
     used_forward = set()
     used_backward = set()
     result_trajectories = []
     merge_candidates.sort(key=lambda x: (-x[2], -x[4]))
     for fi, bi, agreeing, total_common, identity_agreeing in merge_candidates:
+        if should_stop is not None and should_stop():
+            return None
         if fi in used_forward or bi in used_backward:
             continue
         used_forward.add(fi)
@@ -1171,7 +1176,10 @@ def _apply_merge_candidates(
             min_length,
             identity_disagree_min_run=identity_disagree_min_run,
             identity_drives_splits=identity_drives_splits,
+            should_stop=should_stop,
         )
+        if merged_segments is None:
+            return None
         result_trajectories.extend(merged_segments)
     for fi, fwd in enumerate(forward_dfs):
         if fi not in used_forward:
@@ -1306,7 +1314,14 @@ def _resolve_trajectories_single_arena(
         MIN_LENGTH,
         identity_disagree_min_run=IDENTITY_DISAGREE_MIN_RUN,
         identity_drives_splits=IDENTITY_GATES_TRAJECTORY_STRUCTURE,
+        should_stop=should_stop,
     )
+    if result_trajectories is None or (should_stop is not None and should_stop()):
+        # ``merge_trajectories`` checks its callback immediately after this
+        # resolver returns and converts this empty result into its canonical
+        # cancellation result (None).  Do not continue with cleanup or emit a
+        # partial trajectory set after a user requested Stop.
+        return []
 
     # Note: Filtering by MIN_LENGTH is deferred until after stitching
     # to allow small fragments to be reconnected.
@@ -1462,6 +1477,8 @@ def resolve_trajectories(
 
     resolved: list = []
     for arena in all_arenas:
+        if should_stop is not None and should_stop():
+            return []
         fwd = [t for t, a in zip(forward_trajs, fwd_arenas) if a == arena]
         bwd = [t for t, a in zip(backward_trajs, bwd_arenas) if a == arena]
         if not fwd and not bwd:
@@ -1837,7 +1854,9 @@ def _compute_identity_disagree_frames(
     agreement_distance: float,
     min_run: int,
     identity_drives_splits: bool = True,
-) -> frozenset:
+    *,
+    should_stop=None,
+) -> frozenset | None:
     """Return the set of frames that belong to a sustained identity-disagree run.
 
     A frame qualifies when forward and backward positions agree spatially AND both
@@ -1853,7 +1872,9 @@ def _compute_identity_disagree_frames(
         return frozenset()
     common = sorted(set(t1_by_frame.keys()).intersection(t2_by_frame.keys()))
     candidates: list[int] = []
-    for frame in common:
+    for index, frame in enumerate(common):
+        if index % 64 == 0 and should_stop is not None and should_stop():
+            return None
         r1, r2 = t1_by_frame[frame], t2_by_frame[frame]
         x1, y1 = r1.get("X"), r1.get("Y")
         x2, y2 = r2.get("X"), r2.get("Y")
@@ -2020,6 +2041,8 @@ def _conservative_merge(
     min_length,
     identity_disagree_min_run=5,
     identity_drives_splits: bool = True,
+    *,
+    should_stop=None,
 ):
     """
     Conservatively merge two trajectories.
@@ -2045,7 +2068,10 @@ def _conservative_merge(
         agreement_distance,
         identity_disagree_min_run,
         identity_drives_splits=identity_drives_splits,
+        should_stop=should_stop,
     )
+    if identity_disagree_frames is None:
+        return None
 
     # Build trajectory segments using state machine
     # State: "merged" = building single merged segment
@@ -2060,7 +2086,9 @@ def _conservative_merge(
     split_t1_segment = []
     split_t2_segment = []
 
-    for frame in all_frames:
+    for index, frame in enumerate(all_frames):
+        if index % 64 == 0 and should_stop is not None and should_stop():
+            return None
         classification, data = _classify_frame_pair(
             t1_by_frame,
             t2_by_frame,

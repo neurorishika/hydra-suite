@@ -15,6 +15,7 @@ import os
 
 import pandas as pd
 
+from hydra_suite.core.post import processing
 from hydra_suite.core.post.processing import (
     process_trajectories,
     process_trajectories_from_csv,
@@ -212,3 +213,62 @@ def test_resolve_trajectories_should_stop_polled_and_short_circuits():
     # over every trajectory pair.
     assert true_calls["n"] <= 10
     assert true_calls["n"] < false_calls["n"]
+
+
+def test_resolve_trajectories_stops_while_applying_merge_candidates(monkeypatch):
+    """Cancellation after candidate discovery must not process later candidates."""
+    forward, backward = _spaced_forward_backward(n=2)
+    candidates = [(0, 0, 20, 20, 0), (1, 1, 20, 20, 0)]
+    stop = {"requested": False}
+    applied: list[tuple[int, int]] = []
+
+    monkeypatch.setattr(
+        processing,
+        "_find_merge_candidates",
+        lambda *_args: list(candidates),
+    )
+
+    def _merge_once(first, second, *_args, **_kwargs):
+        applied.append(
+            (int(first["TrajectoryID"].iloc[0]), int(second["TrajectoryID"].iloc[0]))
+        )
+        stop["requested"] = True
+        return [first.copy()]
+
+    monkeypatch.setattr(processing, "_conservative_merge", _merge_once)
+
+    result = processing.resolve_trajectories(
+        forward,
+        backward,
+        params={
+            "AGREEMENT_DISTANCE": 15.0,
+            "MIN_OVERLAP_FRAMES": 5,
+            "MIN_TRAJECTORY_LENGTH": 1,
+        },
+        should_stop=lambda: stop["requested"],
+    )
+
+    assert applied == [(0, 100)]
+    assert result == []
+
+
+def test_conservative_merge_polls_during_a_long_candidate():
+    """One long candidate must also honour Stop before it finishes merging."""
+    first = _make_traj_df(0, 0.0, n=130)
+    second = _make_traj_df(1, 0.0, n=130)
+    calls = {"n": 0}
+
+    def _stop_after_two_polls():
+        calls["n"] += 1
+        return calls["n"] >= 3
+
+    result = processing._conservative_merge(
+        first,
+        second,
+        agreement_distance=15.0,
+        min_length=1,
+        should_stop=_stop_after_two_polls,
+    )
+
+    assert result is None
+    assert calls["n"] == 3

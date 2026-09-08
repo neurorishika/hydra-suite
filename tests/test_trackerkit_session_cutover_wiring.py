@@ -211,6 +211,26 @@ def test_stop_tracking_invokes_session_worker_stop_mechanism(tmp_path, monkeypat
     assert "session_worker" in cleaned
 
 
+def test_stop_tracking_never_force_terminates_session_worker(tmp_path, monkeypatch):
+    """Stopping Python post-processing must wait for cooperative cancellation."""
+    orch, mw, raw = _orchestrator(tmp_path)
+    stop_options: dict[str, object] = {}
+
+    def _record_stop(_worker, worker_name, **kwargs):
+        if worker_name == "SessionWorker":
+            stop_options.update(kwargs)
+
+    monkeypatch.setattr(orch, "_request_qthread_stop", _record_stop)
+    monkeypatch.setattr(orch, "_stop_csv_writer", lambda timeout_sec=2.0: None)
+    monkeypatch.setattr(orch, "_cleanup_thread_reference", lambda _attr: None)
+    _populate_stop_tracking_attrs(mw, session_worker=object())
+
+    orch.stop_tracking()
+
+    assert stop_options["force_terminate"] is False
+    assert stop_options["timeout_ms"] == 3000
+
+
 def test_on_session_finished_early_returns_when_stop_all_requested(qapp, tmp_path):
     """Finding 1: after Stop, a late finished_signal must not finalize/summarize."""
     orch, mw, raw = _orchestrator(tmp_path)

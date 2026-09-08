@@ -294,7 +294,11 @@ class TrackingOrchestrator:
         self._request_qthread_stop(
             getattr(self._mw, "session_worker", None),
             "SessionWorker",
-            timeout_ms=1200,
+            # SessionWorker runs Python/pandas work. Killing its QThread
+            # asynchronously can leave native resources in an invalid state;
+            # its merge path polls should_stop cooperatively instead.
+            timeout_ms=3000,
+            force_terminate=False,
         )
         self._stop_csv_writer()
 
