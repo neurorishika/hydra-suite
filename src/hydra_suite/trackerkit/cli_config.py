@@ -216,7 +216,7 @@ def apply_sahi_profile_override(cfg: Mapping[str, Any], profile: str) -> dict[st
 def apply_inference_autotune_override(
     cfg: Mapping[str, Any],
     *,
-    mode: str | None = None,
+    apply: bool | None = None,
     manual_fields: list[str] | tuple[str, ...] | None = None,
 ) -> dict[str, Any]:
     """Apply explicit CLI ownership to inference throughput tuning only.
@@ -226,20 +226,14 @@ def apply_inference_autotune_override(
     project policy, while named manual fields preserve the configured values
     for those coordinates when automatic inference tuning is active.
 
-    ``mode`` still speaks the CLI's own ``off``/``record``/``automatic``
-    vocabulary (the ``--inference-autotune`` flag; a later task owns
-    renaming it) but is translated here into the config-level
-    ``apply_tuned_inference`` boolean -- ``record``/``automatic`` both mean
-    "apply a tuned profile if one is available", ``off`` means don't.
+    ``apply`` speaks the same vocabulary as the config field it sets --
+    ``TrackerConfig.apply_tuned_inference`` / the ``--apply-tuned-inference``
+    / ``--no-apply-tuned-inference`` CLI flags. The old ``off``/``record``/
+    ``automatic`` mode vocabulary is retired.
     """
     result = deepcopy(dict(cfg))
-    if mode is not None:
-        normalized_mode = str(mode).strip().lower()
-        if normalized_mode not in {"off", "record", "automatic"}:
-            raise ValueError(
-                "inference autotune mode must be one of: off, record, automatic"
-            )
-        result["apply_tuned_inference"] = normalized_mode in {"record", "automatic"}
+    if apply is not None:
+        result["apply_tuned_inference"] = bool(apply)
     if manual_fields:
         existing = result.get("inference_autotune_manual_fields", []) or []
         if isinstance(existing, str):

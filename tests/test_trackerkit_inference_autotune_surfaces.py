@@ -67,11 +67,9 @@ def test_engine_params_carry_inference_autotune_policy_without_mutating_batches(
 
 
 def test_cli_autotune_override_has_explicit_precedence_and_preserves_manuals() -> None:
-    """``mode`` still speaks the CLI's own off/record/automatic vocabulary
-    (``--inference-autotune``, owned by a later task -- see app.py); this
-    test exercises that the override translates it into the config-level
-    ``apply_tuned_inference`` boolean rather than persisting the mode
-    string."""
+    """``apply`` speaks the same boolean vocabulary as the config field it
+    sets (``TrackerConfig.apply_tuned_inference`` / ``--apply-tuned-inference``
+    -- the old off/record/automatic mode vocabulary is retired)."""
     original = {
         "apply_tuned_inference": False,
         "inference_autotune_manual_fields": ["pose_batch_size"],
@@ -79,7 +77,7 @@ def test_cli_autotune_override_has_explicit_precedence_and_preserves_manuals() -
 
     overridden = apply_inference_autotune_override(
         original,
-        mode="automatic",
+        apply=True,
         manual_fields=["pipeline_depth", "pose_batch_size"],
     )
 
@@ -91,14 +89,14 @@ def test_cli_autotune_override_has_explicit_precedence_and_preserves_manuals() -
     ]
 
 
-def test_cli_autotune_flags_support_record_and_per_run_bypass() -> None:
-    record = parse_arguments(["track", "video.mp4", "--inference-autotune", "record"])
-    bypass = parse_arguments(["track", "video.mp4", "--no-inference-autotune"])
+def test_cli_autotune_flags_support_apply_and_per_run_bypass() -> None:
+    applied = parse_arguments(["track", "video.mp4", "--apply-tuned-inference"])
+    bypass = parse_arguments(["track", "video.mp4", "--no-apply-tuned-inference"])
+    unset = parse_arguments(["track", "video.mp4"])
 
-    assert record.inference_autotune == "record"
-    assert record.no_inference_autotune is False
-    assert bypass.inference_autotune is None
-    assert bypass.no_inference_autotune is True
+    assert applied.apply_tuned_inference is True
+    assert bypass.apply_tuned_inference is False
+    assert unset.apply_tuned_inference is None
 
 
 def test_cli_autotune_manual_field_can_be_repeated() -> None:
@@ -106,8 +104,7 @@ def test_cli_autotune_manual_field_can_be_repeated() -> None:
         [
             "track",
             "video.mp4",
-            "--inference-autotune",
-            "automatic",
+            "--apply-tuned-inference",
             "--inference-autotune-manual",
             "pose_batch_size",
             "--inference-autotune-manual",
