@@ -31,6 +31,12 @@ from .models import (
     InferenceTuningSettings,
     ProfileState,
 )
+from .session import (  # noqa: F401
+    AutotuneContext,
+    build_autotune_context,
+    calibrate,
+    lookup,
+)
 from .store import InferenceTuningProfileStore
 
 __all__ = [
@@ -40,6 +46,7 @@ __all__ = [
     "MINIMUM_CALIBRATION_BUDGET_SECONDS",
     "AdmissionContext",
     "AdmissionDecision",
+    "AutotuneContext",
     "AutotuneCoordinator",
     "AutotuneRequest",
     "CandidateEvidence",
@@ -62,4 +69,7 @@ __all__ = [
     "SystemFingerprint",
     "TuningProfileKey",
     "WorkloadFingerprint",
+    "build_autotune_context",
+    "calibrate",
+    "lookup",
 ]
