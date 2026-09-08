@@ -13,22 +13,19 @@ from dataclasses import asdict, dataclass, replace
 from enum import Enum
 from typing import TYPE_CHECKING, Any, Iterable, Mapping
 
+# The budget bounds are DEFINED in core.inference.config -- that module owns
+# InferenceAutotunePolicy, which is the clamp on the live path, and it is a leaf
+# module, whereas importing autotune.models from it would cycle through
+# candidates -> pipeline -> config. Re-exported here so autotune's own callers
+# keep one import site.
+from hydra_suite.core.inference.config import (  # noqa: F401
+    DEFAULT_CALIBRATION_BUDGET_SECONDS,
+    MAXIMUM_CALIBRATION_BUDGET_SECONDS,
+    MINIMUM_CALIBRATION_BUDGET_SECONDS,
+)
+
 if TYPE_CHECKING:
     from hydra_suite.core.inference.config import InferenceConfig
-
-
-# Calibration budget bounds.  The ceiling is arithmetic, not taste: at the
-# measured per-trial cost of a real clip (~20 s per measurement block, five
-# blocks per candidate vector) a single batch-size field costs ~410 s to screen
-# plus ~300 s to confirm, and the spec's joint search covers detection, pose,
-# head/tail, per-head identity batch sizes and pipeline depth over two passes.
-# That is ~3650 s for the first pass and ~6100 s including the second.  A
-# ceiling below that makes the full search space arithmetically unreachable --
-# every run would end in ``budget_expired``.  The DEFAULT stays at 600 s; this
-# is only the highest value a project is allowed to ask for.
-MINIMUM_CALIBRATION_BUDGET_SECONDS = 5.0
-MAXIMUM_CALIBRATION_BUDGET_SECONDS = 7200.0
-DEFAULT_CALIBRATION_BUDGET_SECONDS = 600.0
 
 
 SETTING_FIELDS = (

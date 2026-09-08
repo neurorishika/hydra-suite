@@ -35,6 +35,20 @@ MAX_PIPELINE_DEPTH = 4
 TRACKER_RAW_OBB_CONFIDENCE_FLOOR = 1e-3
 
 
+# Calibration budget bounds.  The ceiling is arithmetic, not taste: at the
+# measured per-trial cost of a real clip (~20 s per measurement block, five
+# blocks per candidate vector) a single batch-size field costs ~410 s to screen
+# plus ~300 s to confirm, and the spec's joint search covers detection, pose,
+# head/tail, per-head identity batch sizes and pipeline depth over two passes.
+# That is ~3650 s for the first pass and ~6100 s including the second.  A
+# ceiling below that makes the full search space arithmetically unreachable --
+# every run would end in ``budget_expired``.  The DEFAULT stays at 600 s; this
+# is only the highest value a project is allowed to ask for.
+MINIMUM_CALIBRATION_BUDGET_SECONDS = 5.0
+MAXIMUM_CALIBRATION_BUDGET_SECONDS = 7200.0
+DEFAULT_CALIBRATION_BUDGET_SECONDS = 600.0
+
+
 @dataclass(frozen=True)
 class InferenceAutotunePolicy:
     """Qt-free ownership policy for one full-inference tracking run.
@@ -45,7 +59,7 @@ class InferenceAutotunePolicy:
 
     mode: Literal["off", "record", "automatic"] = "off"
     manual_fields: tuple[str, ...] = ()
-    budget_seconds: float = 600.0
+    budget_seconds: float = DEFAULT_CALIBRATION_BUDGET_SECONDS
     singleflight_wait_seconds: float = 2.0
 
     def __post_init__(self) -> None:
@@ -56,9 +70,15 @@ class InferenceAutotunePolicy:
         normalized = tuple(sorted({str(item) for item in self.manual_fields}))
         if any(not item or len(item) > 256 for item in normalized):
             raise InferenceConfigError("invalid inference autotune manual field")
-        if not 5.0 <= float(self.budget_seconds) <= 600.0:
+        if not (
+            MINIMUM_CALIBRATION_BUDGET_SECONDS
+            <= float(self.budget_seconds)
+            <= MAXIMUM_CALIBRATION_BUDGET_SECONDS
+        ):
             raise InferenceConfigError(
-                "InferenceAutotunePolicy.budget_seconds must be between 5 and 600"
+                "InferenceAutotunePolicy.budget_seconds must be between "
+                f"{MINIMUM_CALIBRATION_BUDGET_SECONDS:g} and "
+                f"{MAXIMUM_CALIBRATION_BUDGET_SECONDS:g}"
             )
         if not 0.0 <= float(self.singleflight_wait_seconds) <= 30.0:
             raise InferenceConfigError(
@@ -661,7 +681,9 @@ def _dict_to_config(d: dict[str, Any]) -> InferenceConfig:
         InferenceAutotunePolicy(
             mode=str(autotune_d.get("mode", "off")),
             manual_fields=tuple(autotune_d.get("manual_fields", ())),
-            budget_seconds=float(autotune_d.get("budget_seconds", 600.0)),
+            budget_seconds=float(
+                autotune_d.get("budget_seconds", DEFAULT_CALIBRATION_BUDGET_SECONDS)
+            ),
             singleflight_wait_seconds=float(
                 autotune_d.get("singleflight_wait_seconds", 2.0)
             ),
@@ -1230,10 +1252,12 @@ def build_inference_config_from_params(params: dict) -> InferenceConfig:
         mode=raw_autotune_mode,
         manual_fields=tuple(str(item) for item in raw_manual_fields),
         budget_seconds=_clamped_float(
-            params.get("INFERENCE_AUTOTUNE_BUDGET_SECONDS", 600.0),
-            600.0,
-            5.0,
-            600.0,
+            params.get(
+                "INFERENCE_AUTOTUNE_BUDGET_SECONDS", DEFAULT_CALIBRATION_BUDGET_SECONDS
+            ),
+            DEFAULT_CALIBRATION_BUDGET_SECONDS,
+            MINIMUM_CALIBRATION_BUDGET_SECONDS,
+            MAXIMUM_CALIBRATION_BUDGET_SECONDS,
         ),
         singleflight_wait_seconds=_clamped_float(
             params.get("INFERENCE_AUTOTUNE_SINGLEFLIGHT_WAIT_SECONDS", 2.0),
