@@ -608,8 +608,13 @@ def build_tracking_autotune_request(
     #                          forward pass's batch size, so refusing to apply
     #                          that same vector is what made backward runs abort.
     #
-    # Only a baseline that does not fit in memory blocks both: a vector we cannot
-    # admit is not one we can safely apply either.
+    # Nothing here blocks applying. Baseline admission failure blocks only
+    # measuring: at apply time, `_reuse` re-admits independently via
+    # `planner.down_admit(selected, successful, baseline)`, which considers
+    # {selected, baseline, *successful_equivalent} and can select a smaller,
+    # already equivalence-proven vector that fits when the configured
+    # baseline does not. Refusing to apply here would discard that rescue
+    # and force the very baseline that just failed to fit.
     eligible = True
     allow_cached_reuse = True
     eligibility_reason = None
@@ -629,7 +634,6 @@ def build_tracking_autotune_request(
         admission = planner.admit(baseline)
         if not admission.admitted:
             eligible = False
-            allow_cached_reuse = False
             eligibility_reason = f"baseline admission failed: {admission.reason}"
 
     shares = params.get("INFERENCE_AUTOTUNE_STAGE_SHARES", {})

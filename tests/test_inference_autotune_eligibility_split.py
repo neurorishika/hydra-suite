@@ -37,10 +37,16 @@ def test_cache_replay_may_apply_but_may_not_calibrate():
     assert request.allow_cached_reuse is True
 
 
-def test_failed_baseline_admission_blocks_both():
-    """If the baseline vector does not fit in memory, applying it is unsafe too."""
+def test_failed_baseline_admission_blocks_calibration_but_not_apply():
+    """If the configured baseline does not fit in memory, measuring is refused --
+    but applying stays permitted. At apply time `_reuse` re-admits independently
+    via `planner.down_admit(selected, successful, baseline)`, which can rescue a
+    memory-tight run with a smaller, already equivalence-proven validated vector
+    that fits when the baseline does not. Refusing to apply here would discard
+    that rescue and force the very baseline that just failed admission -- the
+    worst available outcome."""
     request = build_tracking_autotune_request(
         **make_request_inputs(available_accelerator_bytes=1)
     )
     assert request.eligible is False
-    assert request.allow_cached_reuse is False
+    assert request.allow_cached_reuse is True

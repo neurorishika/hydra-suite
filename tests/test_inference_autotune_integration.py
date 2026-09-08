@@ -220,7 +220,7 @@ def test_realtime_is_ineligible_and_never_searches(tmp_path):
     assert request.planner.admit(request.baseline).settings.detection_batch_size == 1
 
 
-def test_automatic_backend_without_evidence_falls_back_but_record_mode_can_measure(
+def test_automatic_and_record_modes_are_both_eligible_to_measure(
     tmp_path,
 ):
     config = _config(tmp_path)
@@ -257,9 +257,9 @@ def test_automatic_backend_without_evidence_falls_back_but_record_mode_can_measu
         device_identity=("cpu", "CPU", "none", 0),
     )
 
-    # Non-CUDA no longer blocks eligibility on its own -- only realtime,
-    # cache_replay, contention, thermal throttling, or failed baseline
-    # admission do (see test_inference_autotune_eligibility_split.py).
+    # Non-CUDA no longer blocks eligibility -- only realtime, cache_replay,
+    # contention, thermal throttling, or failed baseline admission block
+    # measuring (see test_inference_autotune_eligibility_split.py).
     assert auto_request.eligible
     assert record_request.eligible
 
