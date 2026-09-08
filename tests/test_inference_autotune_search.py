@@ -851,6 +851,21 @@ def test_budget_exhaustion_names_the_fields_it_did_and_did_not_search(caplog):
     assert result.searched_fields
     assert result.unsearched_fields
     assert not set(result.searched_fields) & set(result.unsearched_fields)
+    # The honesty claim is stronger than "non-empty and disjoint": a field the
+    # deadline cut off MID-SCREEN produced no verdict for any of its
+    # candidates, so it must not be reported as searched. Every searched field
+    # must have left evidence behind.
+    judged = {
+        label.split(",")[0].split("=")[0] for label, _reason in result.rejected
+    } | {
+        name
+        for item in result.evidence
+        for name in (item.settings.field_names())
+        if item.settings.value_for(name) != baseline.value_for(name)
+    }
+    for field in result.searched_fields:
+        assert field in judged, f"{field} reported as searched with no evidence"
+
     assert any(
         "stopped early (budget_expired)" in record.getMessage()
         for record in caplog.records

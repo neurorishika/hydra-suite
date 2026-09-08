@@ -47,25 +47,40 @@ TRACKER_RAW_OBB_CONFIDENCE_FLOOR = 1e-3
 #                                                             ------
 #     completed search                             46 trials   885 s
 #
-# Projecting ONE full coordinate pass over the default search space -- detection,
-# pose, head/tail and one identity batch size (4 fields at the measured
-# ~424 s screen each) plus pipeline_depth (273 s) -- gives
-# 101 + 4*424 + 273 + 80 = ~2150 s when nothing wins, plus ~300 s for each
-# field that does win and therefore earns its confirmation.  The DEFAULT is set
-# to cover that pass with one winning field and headroom: a default that cannot
-# finish a single field is a broken default, because every calibration then
-# times out and produces nothing.
+# A field pays for a full-pipeline confirmation whenever it has at least one
+# CONTENDER -- a candidate that is not CONFIDENTLY slower than the incumbent.
+# That is not the same as "a candidate that wins".  MPS is the cheap case, not
+# the representative one: every batch there is decisively slower, so every
+# candidate short-circuits and no confirmation is ever paid.  On CUDA this
+# repo has measured batch effects at ~1.000 -- dead in the noise -- so nothing
+# is confidently slower and EVERY field goes to confirmation.
 #
-# It deliberately does NOT cover a full TWO-pass search in which several fields
-# win (~5650 s).  No tolerable default does.  That case must raise the budget
-# explicitly -- and it is now visible when it happens, because an early stop
-# logs at WARNING and names the fields it did not reach.
+# The default is therefore set from that worst case, one full coordinate pass
+# over the default search space (detection, pose, head/tail, one identity batch
+# size, pipeline_depth) with every field confirmed:
 #
-# The MAXIMUM covers that two-pass worst case with margin.  Per-trial cost is
-# clip- and model-dependent, so all of these are orders of magnitude.
+#     101  baseline
+#   4x424  batch-size screens          = 1696
+#     273  pipeline_depth screen
+#   5x300  full-pipeline confirmations = 1500   <- zero on MPS, all five on CUDA
+#      80  final validation
+#   -----
+#    3650 s
+#
+# DEFAULT = 4500 s: that worst case with ~23 % headroom for a slower clip.  A
+# default that cannot finish the pass is a broken default, because every
+# calibration then times out and produces nothing.  A second pass only runs if
+# a field is ACCEPTED (gain >= 2 %), which a within-noise field never is, so
+# the pass-0 figure is the binding one.  The 7200 s MAXIMUM covers a two-pass
+# search in which fields genuinely win (~5650 s); no tolerable default does,
+# and that case must raise the budget explicitly -- visibly, since an early
+# stop now names the fields it never reached.
+#
+# Per-trial cost is clip- and model-dependent, so all of these are orders of
+# magnitude, not guarantees.
 MINIMUM_CALIBRATION_BUDGET_SECONDS = 5.0
 MAXIMUM_CALIBRATION_BUDGET_SECONDS = 7200.0
-DEFAULT_CALIBRATION_BUDGET_SECONDS = 2700.0
+DEFAULT_CALIBRATION_BUDGET_SECONDS = 4500.0
 
 
 @dataclass(frozen=True)
@@ -1311,6 +1326,7 @@ def build_inference_config_from_params(params: dict) -> InferenceConfig:
             2.0,
             0.0,
             30.0,
+            name="INFERENCE_AUTOTUNE_SINGLEFLIGHT_WAIT_SECONDS",
         ),
     )
 

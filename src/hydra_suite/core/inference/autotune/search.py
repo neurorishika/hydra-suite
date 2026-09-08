@@ -274,7 +274,12 @@ class CoordinateSearch:
                         )
                         continue
                     contenders.append(item)
-                if field_name not in searched_fields:
+                # Only a screen that actually completed counts as searched.
+                # `_measure` returns {} when the deadline fires mid-screen, and
+                # a cut-off field whose candidates never reached `rejected`
+                # would otherwise be reported as measured -- corrupting the very
+                # honesty signal this record exists to provide.
+                if screened and field_name not in searched_fields:
                     searched_fields.append(field_name)
                 fastest_screened = sorted(
                     contenders,

@@ -425,7 +425,11 @@ def _profile_from_dict(value: object) -> InferenceTuningProfile:
     raw["state"] = ProfileState(raw["state"])
     raw["rejected"] = tuple(tuple(item) for item in raw.get("rejected", ()))
     raw["calibration_summary"] = tuple(
-        tuple(item) for item in raw.get("calibration_summary", ())
+        # JSON has no tuples: a value round-trips as a list, so a summary
+        # entry like searched_fields would come back unequal to what was
+        # saved. Restore sequence values to tuples.
+        (name, tuple(value) if isinstance(value, list) else value)
+        for name, value in raw.get("calibration_summary", ())
     )
     raw["observed_production_throughput"] = tuple(
         raw.get("observed_production_throughput", ())

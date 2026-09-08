@@ -67,16 +67,20 @@ Calibration is also declined, in any mode, when:
 
 `InferenceAutotunePolicy.budget_seconds` must be between **5 and 7200 seconds**
 (`MINIMUM_/MAXIMUM_CALIBRATION_BUDGET_SECONDS` in `core/inference/config.py`,
-re-exported from `autotune/models.py`; default **2700**). The ceiling is arithmetic. At a measured ~20 s per measurement
+re-exported from `autotune/models.py`; default **4500**). The ceiling is arithmetic. At a measured ~20 s per measurement
 block and five blocks per candidate vector, one batch-size field costs ~410 s to
 screen; with screened losers short-circuited a completed `fly_obb` search
 measured 885 s (baseline 101 s, detection screen 424 s, depth screen 273 s,
-final validation 80 s). One full coordinate pass over the default search space
-projects to ~2150 s plus ~300 s per winning field, which is where the 2700 s
-default comes from -- a default that cannot finish a single field is a broken
-default, since every calibration then times out and produces nothing. The
-7200 s maximum covers the two-pass worst case (~5650 s) that no tolerable
-default could. Per-trial cost is clip- and model-dependent, so these figures
+final validation 80 s) with **zero** confirmations, because on MPS every
+candidate is decisively slower and short-circuits. That is the cheap case, not
+the representative one: a field pays for a confirmation whenever it has a
+candidate that is not *confidently* slower, and on CUDA batch effects measure
+~1.000 -- dead in the noise -- so every field confirms. The default is set from
+that worst case: 101 + 4x424 + 273 + 5x300 + 80 = **~3650 s**, so the default is
+**4500 s** with ~23 % headroom. A second pass runs only if a field is accepted
+(gain >= 2 %), which a within-noise field never is, so pass 0 binds. The 7200 s
+maximum covers the two-pass case in which fields genuinely win (~5650 s), which
+no tolerable default could. Per-trial cost is clip- and model-dependent, so these figures
 are orders of magnitude, not guarantees.
 
 An early stop is loud: the search logs the elapsed time and the fields it did

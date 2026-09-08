@@ -56,7 +56,7 @@ def test_engine_params_carry_inference_autotune_policy_without_mutating_batches(
     assert session.params["PIPELINE_DEPTH"] == 3
     assert session.params["INFERENCE_AUTOTUNE_MODE"] == "automatic"
     assert session.params["INFERENCE_AUTOTUNE_MANUAL_FIELDS"] == ["pose_batch_size"]
-    assert session.params["INFERENCE_AUTOTUNE_BUDGET_SECONDS"] == 2700.0
+    assert session.params["INFERENCE_AUTOTUNE_BUDGET_SECONDS"] == 4500.0
     assert session.params["INFERENCE_AUTOTUNE_PROJECT_CONFIG"] == {
         "detection_batch_size": 8,
         "pipeline_depth": 3,
