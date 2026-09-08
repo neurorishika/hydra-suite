@@ -599,16 +599,16 @@ def test_categorical_and_nan_gates_follow_positional_matches_when_ids_change():
     assert not compare_outputs(baseline, changed_nan).passed
 
 
-def test_identity_confidence_is_numeric_not_an_exact_categorical_field():
-    """A confidence is compared as a NUMBER, under a tolerance -- not as a string.
+def test_identity_confidence_is_reported_only_not_an_exact_categorical_field():
+    """``IdentityRealtimeConfidence`` is reported-only, and never a string.
 
-    This test used to assert that a drifting confidence *passed*, which is
-    what left the whole confidence product ungated (B1) while
-    ``pose_batch_size`` was a tuned coordinate. The surviving intent is
-    narrower and still worth pinning: the column must not be swept into the
-    exact-string categorical set (where 0.75 and 0.750000 would differ for
-    formatting reasons alone). So it must fail on the *numeric* budget and
-    contribute nothing to ``categorical_mismatches``.
+    Two claims, both narrow. It must not be swept into the exact-string
+    categorical set (where 0.75 and 0.750000 would differ for formatting
+    reasons alone). And it carries no decision: the decision it feeds is
+    ``IdentityRealtimeCommitted``, which IS compared exactly -- so a drifting
+    confidence, on its own, is not evidence that anything changed. It is
+    enumerated in ``_REPORTED_ONLY_COLUMNS``; see that block for why an
+    enumerated exemption was preferred to a hand-picked tolerance.
     """
 
     baseline = _outputs()
@@ -619,18 +619,16 @@ def test_identity_confidence_is_numeric_not_an_exact_categorical_field():
     candidate.final["IdentityRealtimeConfidence"] = [0.75001]
 
     verdict = compare_outputs(baseline, candidate)
-    assert not verdict.passed
+    assert verdict.passed
     assert verdict.categorical_mismatches == 0
-    assert verdict.numeric_max == pytest.approx(1e-5)
-    assert all(
-        "IdentityRealtimeConfidence" in detail and "|delta|" in detail
-        for detail in verdict.details
-    )
 
-    # An identical value is still identical: the numeric budget does not
-    # reject a run against itself.
-    same = CalibrationOutputs(baseline.forward.copy(), baseline.final.copy())
-    assert compare_outputs(baseline, same).passed
+    # But its decision shadow is exact: flip that and the gate rejects.
+    committed = CalibrationOutputs(baseline.forward.copy(), baseline.final.copy())
+    committed.forward["IdentityRealtimeCommitted"] = ["A"]
+    committed.final["IdentityRealtimeCommitted"] = ["A"]
+    baseline.forward["IdentityRealtimeCommitted"] = ["B"]
+    baseline.final["IdentityRealtimeCommitted"] = ["B"]
+    assert not compare_outputs(baseline, committed).passed
 
 
 def test_randomized_blocks_and_paired_confidence_are_deterministic():

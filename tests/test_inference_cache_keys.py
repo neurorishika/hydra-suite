@@ -418,6 +418,11 @@ def test_sequential_key_changes_with_raw_stage_settings():
         ("merge_threshold", 0.5, 0.7),
         ("merge_backend", "cv2", "gpu"),
         ("perform_standard_pred", False, True),
+        # tile_batch_size is a TUNED coordinate (InferenceTuningSettings writes
+        # obb.direct.slice.tile_batch_size). It was silently absent from both
+        # the hash and this list, so a sliced cache written at the default 16
+        # was replayed under a tuned 32.
+        ("tile_batch_size", 16, 32),
     ],
 )
 def test_every_output_affecting_slice_field_is_in_the_hash(
@@ -819,4 +824,21 @@ def test_stage_batch_size_folds_in_only_when_non_default(
     # Byte-parity for the default: an existing cache is not invalidated.
     assert key_fn(_with_batch(base, default), geometry).config_hash == (
         at_default.config_hash
+    )
+
+
+def test_default_tile_batch_keeps_the_pre_change_sliced_key():
+    """Byte-parity for the default: no existing sliced cache is invalidated."""
+
+    base = detection_cache_key(_obb_direct_slice(SliceConfig(enabled=True)))
+    explicit = detection_cache_key(
+        _obb_direct_slice(SliceConfig(enabled=True, tile_batch_size=16))
+    )
+    assert base.config_hash == explicit.config_hash
+    # And a disabled slice still hashes to "" regardless of the tile batch.
+    assert (
+        detection_cache_key(
+            _obb_direct_slice(SliceConfig(enabled=False, tile_batch_size=32))
+        ).config_hash
+        == ""
     )

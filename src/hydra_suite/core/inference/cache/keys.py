@@ -61,11 +61,18 @@ def with_video_signature(key: CacheKey, sig: str) -> CacheKey:
     return replace(key, config_hash=_sha(f"{key.config_hash}|vid={sig}"))
 
 
+def _default_field(config_type: type, name: str, fallback: int) -> int:
+    """The value ``name`` carries on ``config_type`` when the user set nothing."""
+
+    field = getattr(config_type, "__dataclass_fields__", {}).get(name)
+    default = getattr(field, "default", None) if field is not None else None
+    return int(default) if isinstance(default, int) else int(fallback)
+
+
 def _default_batch_size(config: object) -> int:
     """The ``batch_size`` a stage config carries when the user set nothing."""
 
-    field = getattr(type(config), "__dataclass_fields__", {}).get("batch_size")
-    return int(getattr(field, "default", 1)) if field is not None else 1
+    return _default_field(type(config), "batch_size", 1)
 
 
 def _batch_term(batch_size: int, default: int) -> str:
@@ -237,6 +244,15 @@ def _slice_config_hash(slice_cfg: SliceConfig | None) -> str:
             slice_cfg.merge_backend,
             slice_cfg.perform_standard_pred,
         )
+    )
+    # tile_batch_size is a TUNED coordinate (InferenceTuningSettings writes
+    # obb.direct.slice.tile_batch_size), and it changes the raw detections the
+    # same way detection_batch_size does -- so a sliced cache written at the
+    # default 16 could be replayed under a tuned 32. Folded in only when it is
+    # non-default, exactly as the other batch sizes are, so every existing
+    # sliced cache keeps its key.
+    payload += _batch_term(
+        slice_cfg.tile_batch_size, _default_field(type(slice_cfg), "tile_batch_size", 16)
     )
     return _sha(payload)
 

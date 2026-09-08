@@ -109,6 +109,74 @@ def _categorical_columns(columns: Iterable[str]) -> tuple[str, ...]:
 # must NOT be double-counted by the numeric families below.
 _POSITIONAL_COLUMNS = ("X", "Y", "Theta")
 
+
+# --- reported-only columns: NaN/presence-gated, not value-compared -----------
+#
+# These carry no decision. They are written once, exported, max-merged and
+# zero-filled for interpolated rows -- nothing downstream branches on their
+# value. Every decision they could conceivably influence is caught
+# INDEPENDENTLY and EXACTLY by their categorical shadow plus the structural
+# checks: row counts, ``unmatched_rows == 0``, and exact TrackID / TrajectoryID
+# / State / IdentityRealtimeCommitted / IdentityFinalLabel / PoseQualityState.
+# A threshold crossing or an assignment flip therefore cannot hide here.
+#
+# This is an EXPLICIT, ENUMERATED exemption, not a return to the pre-B1 hole:
+# the default is still "a shared column is compared", and every member is
+# listed by name with a reason. Membership is never inferred from a name token
+# -- that heuristic is exactly how ``HeadTailClassifierConf`` ended up
+# string-compared.
+#
+# WHY NOT A TOLERANCE: the alternative was to derive a budget from a
+# batch-VARYING determinism floor. Measured on courtship, the batch-induced
+# drift of DetectionConfidence is NON-MONOTONE in batch -- det=2: 0.00766,
+# det=4: 0.00894, det=8: 0.00811, det=16: 0.00486. A floor taken from the
+# natural first perturbation (det=2) would reject det=8 (the fastest vector)
+# and admit det=16 (slower), purely on which perturbation happened to measure
+# it. It is also circular: the tuned coordinate would be certifying itself.
+# And ``numeric_max`` is a single scalar spanning pixels, counts and
+# probabilities, so one budget cannot be right for all of them.
+_REPORTED_ONLY_COLUMNS = frozenset(
+    {
+        # A per-frame SLOT INDEX (frame_idx * STRIDE + slot), not a measurement.
+        # Every consumer tests equality only WITHIN a run, and forward/backward
+        # share a batch size, so a global slot shift preserves every equality.
+        # tools/equivalence/compare.py -- the repository's certified
+        # byte-identity gate -- uses it purely as a grouping id and never
+        # compares its value.
+        "DetectionID",
+        # Detector/assigner scores. The decisions they feed (which detections
+        # survive, which track takes which detection) are already pinned by row
+        # counts, 0 unmatched, and exact TrackID/TrajectoryID/State.
+        "DetectionConfidence",
+        "AssignmentConfidence",
+        "PositionUncertainty",
+        # Realtime identity scores. The decision is IdentityRealtimeCommitted,
+        # which is compared EXACTLY.
+        "IdentityRealtimeConfidence",
+        "IdentityRealtimeMargin",
+        "IdentityRealtimeEntropy",
+        # Pose quality score. Its decision is PoseQualityState, exact.
+        "PoseQualityScore",
+        # Pure aggregates of the per-keypoint confidences below. Their integer
+        # shadow PoseNumValid (and PoseNumKeypoints) stays value-compared, so a
+        # pose run that actually lost keypoints is still rejected.
+        "PoseMeanConf",
+        "PoseValidFraction",
+    }
+)
+
+
+def _is_reported_only(column: str) -> bool:
+    """Reported-only columns: per-keypoint confidences plus the named set.
+
+    ``PoseKpt_<name>_Conf`` is matched structurally (exporter-owned prefix and
+    suffix), not by a substring token.
+    """
+
+    if column in _REPORTED_ONLY_COLUMNS:
+        return True
+    return column.startswith(_KEYPOINT_PREFIX) and column.endswith("_Conf")
+
 _KEYPOINT_PREFIX = "PoseKpt_"
 
 
@@ -184,6 +252,7 @@ def _numeric_families(
         if column not in owned
         and column not in keypoint_columns
         and column not in angular
+        and not _is_reported_only(column)
     )
     return keypoints, angular, scalar
 
@@ -713,8 +782,15 @@ def _compare_one(
     product_pairs = tuple(
         pair for pair in metrics["pairs"] if pair not in excluded_pairs
     )
-    product = _paired_frames(
-        reference, candidate, pairs=product_pairs, aligned=aligned
+    # If EVERY positional pair was a head/tail flip, ``product_pairs`` is
+    # empty and _paired_frames would fall back to the KEYED alignment -- which
+    # re-admits exactly the rows just excluded and re-inflates the floor. That
+    # is the same shape as the disarm bug above. The keyed fallback is only
+    # legitimate when there was no positional pairing to begin with.
+    product = (
+        _paired_frames(reference, candidate, pairs=product_pairs, aligned=aligned)
+        if (product_pairs or not metrics["pairs"])
+        else None
     )
     if product is not None:
         keypoint_p99, keypoints_over_gate, numeric_max, product_details = (
