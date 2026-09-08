@@ -359,3 +359,101 @@ def equivalence_outputs(frame):
     from hydra_suite.core.inference.autotune.equivalence import CalibrationOutputs
 
     return CalibrationOutputs(frame.copy(), frame.copy())
+
+
+def make_request_inputs(
+    tmp_path: Path | None = None,
+    *,
+    kind: AcceleratorKind = AcceleratorKind.CUDA,
+    execution_mode: str = "batch",
+    available_accelerator_bytes: int = 48 * 1024**3,
+) -> dict[str, Any]:
+    """Keyword arguments for ``build_tracking_autotune_request``.
+
+    Defaults to a CUDA batch context with an admissible baseline; override
+    ``kind``/``execution_mode``/``available_accelerator_bytes`` to exercise
+    the eligibility-split cases. Follows the construction pattern in
+    ``tests/test_inference_autotune_integration.py`` (``_config``/
+    ``TrackingRunContext``/``build_tracking_autotune_request``) rather than
+    inventing a new one.
+    """
+
+    import tempfile
+
+    from hydra_suite.core.inference.autotune.integration import TrackingRunContext
+    from hydra_suite.core.inference.config import (
+        CNNConfig,
+        HeadTailConfig,
+        InferenceConfig,
+        OBBConfig,
+        OBBDirectConfig,
+        PoseConfig,
+        PoseYOLOConfig,
+        SliceConfig,
+    )
+
+    tmp_path = tmp_path or Path(tempfile.mkdtemp())
+
+    def _model(name: str, payload: bytes) -> str:
+        path = tmp_path / name
+        path.write_bytes(payload)
+        return str(path)
+
+    detector = _model("detector.pt", b"detector")
+    headtail = _model("headtail.pt", b"headtail")
+    pose = _model("pose.pt", b"pose")
+    identity = _model("identity.pt", b"identity")
+    config = InferenceConfig(
+        obb=OBBConfig(
+            mode="direct",
+            direct=OBBDirectConfig(
+                detector,
+                slice=SliceConfig(
+                    enabled=True,
+                    geometry_mode="custom",
+                    slice_width=512,
+                    slice_height=384,
+                    tile_batch_size=2,
+                ),
+            ),
+            target_classes=[0],
+            max_detections=25,
+        ),
+        headtail=HeadTailConfig(headtail, batch_size=8),
+        cnn_phases=[CNNConfig("color", identity, batch_size=8)],
+        pose=PoseConfig(backend="yolo", yolo=PoseYOLOConfig(pose, batch_size=8)),
+        detection_batch_size=2,
+        pipeline_depth=2,
+        runtime_tier="cpu",
+    )
+    context = TrackingRunContext(
+        video_path=tmp_path / "video.mp4",
+        params={"INFERENCE_AUTOTUNE_MODE": "automatic", "MAX_TARGETS": 25},
+        frame_width=1200,
+        frame_height=900,
+        execution_mode=execution_mode,
+    )
+    if kind is AcceleratorKind.CUDA:
+        observation = ResourceObservation(
+            total_host_bytes=64 * 1024**3,
+            available_host_bytes=48 * 1024**3,
+            accelerator_kind=kind,
+            accelerator_name="accelerator",
+            total_accelerator_bytes=48 * 1024**3,
+            available_accelerator_bytes=available_accelerator_bytes,
+        )
+    else:
+        # MPS uses unified host memory and CPU has no separate accelerator
+        # pool -- neither may carry total/available_accelerator_bytes.
+        observation = ResourceObservation(
+            total_host_bytes=64 * 1024**3,
+            available_host_bytes=48 * 1024**3,
+            accelerator_kind=kind,
+        )
+    return {
+        "config": config,
+        "context": context,
+        "observation": observation,
+        "backend": "torch",
+        "device_identity": ("cpu", "CPU", "none", 0),
+    }

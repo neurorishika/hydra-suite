@@ -598,16 +598,26 @@ def build_tracking_autotune_request(
             measured_records=measured_records,
         )
     )
+    # Two DIFFERENT permissions, deliberately no longer computed together.
+    #
+    #   eligible            -- may we MEASURE? Expensive, environment-sensitive,
+    #                          and meaningless under contention or replay.
+    #   allow_cached_reuse  -- may we APPLY an already-validated profile? Nearly
+    #                          free, and for a cache_replay (backward) pass it is
+    #                          REQUIRED: the detection cache was written at the
+    #                          forward pass's batch size, so refusing to apply
+    #                          that same vector is what made backward runs abort.
+    #
+    # Only a baseline that does not fit in memory blocks both: a vector we cannot
+    # admit is not one we can safely apply either.
     eligible = True
     allow_cached_reuse = True
     eligibility_reason = None
     if context.execution_mode == "realtime":
         eligible = False
-        allow_cached_reuse = False
         eligibility_reason = "realtime inference is not tunable"
     elif context.execution_mode == "cache_replay":
         eligible = False
-        allow_cached_reuse = False
         eligibility_reason = "all inference stages are satisfied by reusable caches"
     elif context.contention_detected:
         eligible = False
@@ -615,24 +625,12 @@ def build_tracking_autotune_request(
     elif context.thermal_throttled:
         eligible = False
         eligibility_reason = "accelerator is thermally throttled"
-    elif (
-        policy.mode == "automatic"
-        and observation.accelerator_kind is not AcceleratorKind.CUDA
-    ):
-        eligible = False
-        allow_cached_reuse = False
-        eligibility_reason = "automatic inference tuning is validated only for CUDA"
     else:
         admission = planner.admit(baseline)
         if not admission.admitted:
             eligible = False
+            allow_cached_reuse = False
             eligibility_reason = f"baseline admission failed: {admission.reason}"
-
-    if policy.mode == "record":
-        # Record mode must persist a validated profile but never apply it,
-        # on any run -- including a run that hits an already-validated cache
-        # entry. Leave `eligible` alone: record mode must still calibrate.
-        allow_cached_reuse = False
 
     shares = params.get("INFERENCE_AUTOTUNE_STAGE_SHARES", {})
     stage_shares = (

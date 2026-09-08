@@ -188,7 +188,10 @@ def test_cache_replay_is_ineligible_and_never_searches(tmp_path):
     )
 
     assert not request.eligible
-    assert not request.allow_cached_reuse
+    # A cache_replay (backward) pass MUST apply the forward pass's vector --
+    # the detection cache was written at that batch size, so refusing to
+    # apply it is what made backward runs abort. See eligibility-split tests.
+    assert request.allow_cached_reuse
     assert (
         request.eligibility_reason
         == "all inference stages are satisfied by reusable caches"
@@ -254,8 +257,10 @@ def test_automatic_backend_without_evidence_falls_back_but_record_mode_can_measu
         device_identity=("cpu", "CPU", "none", 0),
     )
 
-    assert not auto_request.eligible
-    assert "validated only for CUDA" in (auto_request.eligibility_reason or "")
+    # Non-CUDA no longer blocks eligibility on its own -- only realtime,
+    # cache_replay, contention, thermal throttling, or failed baseline
+    # admission do (see test_inference_autotune_eligibility_split.py).
+    assert auto_request.eligible
     assert record_request.eligible
 
 
