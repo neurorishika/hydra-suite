@@ -174,6 +174,12 @@ def calibrate(ctx: AutotuneContext, *, budget_seconds: float):
             runtime_artifact_batch_size=(
                 artifact_batch_size if ctx.backend == "tensorrt" else None
             ),
+            # B3: the accelerated tiers build their engine INSIDE the child.
+            # The spec's own figure for a cold TensorRT profile build is
+            # 255-310 s, which alone exceeds the 120 s per-trial measurement
+            # cap -- so without this the baseline trial could never complete
+            # and the tuner could not start on TensorRT at all. Grant the
+            # build its own window; torch tiers keep the default 0.
             artifact_build_allowance_seconds=(
                 ARTIFACT_BUILD_ALLOWANCE_SECONDS
                 if ctx.backend in ("tensorrt", "coreml")
