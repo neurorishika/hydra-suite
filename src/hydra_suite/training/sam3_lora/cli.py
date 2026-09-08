@@ -1595,8 +1595,10 @@ def _evaluate_and_write(
     Writes `val_stats.json` in its historical shape (`val_loss_mean`,
     `val_batches`, `note`) plus the additive per-term breakdown, and appends
     the SAME computation as the final entry of `val_series.jsonl`, so the
-    series' last row and the terminal artifact can never disagree and the
-    final epoch is never evaluated twice.
+    series' last row and the terminal artifact can never disagree. On a run
+    that reaches its last epoch, that epoch is never evaluated twice (the
+    mid-run recorder deliberately skips it). On an EARLY STOP the guarantee
+    is conditional -- see `precomputed` below.
 
     `precomputed` passes in a record this run ALREADY produced for the same
     epoch on the same weights (the early-stop path: the epoch it stopped on
@@ -1604,6 +1606,14 @@ def _evaluate_and_write(
     without a second forward pass, and NO extra series row is appended --
     the mid-run record already landed, so appending would duplicate the
     epoch rather than close the series.
+
+    When the AP cadence (`HYDRA_SAM3_AP_EVERY`) skipped the stop epoch, the
+    mid-run record carries no detection-quality block, so it cannot be
+    reused: the series' final row is contracted to always have one. That case
+    -- and only that case -- evaluates the stop epoch a second time and leaves
+    TWO rows for it in the series (a loss-only one, then the AP-bearing final
+    one). Expected, not a defect; the cost is one pass at stop time, never
+    per-epoch.
     """
     reused = precomputed is not None
     stats = (
