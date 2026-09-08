@@ -351,15 +351,15 @@ def test_worker_resolves_cache_replay_instead_of_skipping_the_preflight(
     run was silently invisible to autotune observability. It must now
     resolve to an honest, ineligible "cache_replay" overlay instead."""
     monkeypatch.setenv("HYDRA_DATA_DIR", str(tmp_path / "hydra_data"))
+    from hydra_suite.core.inference.autotune import session as autotune_session
     from hydra_suite.core.inference.config import InferenceAutotunePolicy
-    from hydra_suite.core.tracking import worker as worker_mod
 
     config = _config(tmp_path)
     config.inference_autotune = InferenceAutotunePolicy(mode="calibrate")
     video_path = tmp_path / "video.mp4"
     video_path.write_bytes(b"not a real video")
 
-    _effective, overlay, _result = worker_mod._resolve_inference_autotune_before_load(
+    ctx = autotune_session.build_autotune_context(
         config,
         {"MAX_TARGETS": 25, "APPLY_TUNED_INFERENCE": True},
         video_path=str(video_path),
@@ -371,6 +371,7 @@ def test_worker_resolves_cache_replay_instead_of_skipping_the_preflight(
         should_cancel=lambda: False,
         cache_read_only_replay=True,
     )
+    _effective, overlay, _result = autotune_session.lookup(ctx)
 
     assert overlay is not None
     assert overlay.status == "deferred_due_to_contention"

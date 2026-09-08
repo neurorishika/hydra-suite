@@ -101,159 +101,6 @@ from hydra_suite.core.tracking.ingest.frame_result_bridge import (  # noqa: E402
 )
 
 
-def _resolve_inference_autotune_before_load(
-    config: InferenceConfig,
-    params: dict,
-    *,
-    video_path: str,
-    frame_width: int,
-    frame_height: int,
-    start_frame: int,
-    end_frame: int,
-    realtime: bool,
-    should_cancel,
-    status_callback=lambda _message: None,
-    cache_dir=None,
-    use_cached_detections: bool = False,
-    cache_read_only_replay: bool = False,
-):
-    """Resolve a run overlay before ``InferenceRunner`` can load any model."""
-
-    # ``config.inference_autotune.mode`` is now always "lookup" when built
-    # from params (mode is no longer a policy value) -- so it can never gate
-    # this. Whether a run consults the store at all is the caller's own
-    # decision, carried by APPLY_TUNED_INFERENCE. Without this guard, a
-    # project with tuning disabled would fall through and construct a
-    # ContainedTrialExecutor, i.e. silently start calibrating mid-run.
-    if not bool(params.get("APPLY_TUNED_INFERENCE", False)):
-        return config, None, None
-    from hydra_suite.core.inference.autotune.device import probe_runtime_resources
-    from hydra_suite.core.inference.autotune.integration import (
-        TrackingRunContext,
-        build_tracking_autotune_request,
-        resolve_tracking_inference_config,
-        sample_detection_workload,
-    )
-    from hydra_suite.core.inference.autotune.sidecar import (
-        ARTIFACT_BUILD_ALLOWANCE_SECONDS,
-        ContainedTrialExecutor,
-        SidecarTrialSpec,
-    )
-    from hydra_suite.runtime.resolver import RuntimeResolver, detect_platform
-    from hydra_suite.runtime.resource_budget import AcceleratorKind
-
-    platform_info = detect_platform()
-    resolved = RuntimeResolver(config.runtime_tier, platform_info).resolve("obb")
-    kind = {
-        "cuda": AcceleratorKind.CUDA,
-        "mps": AcceleratorKind.MPS,
-        "cpu": AcceleratorKind.CPU,
-    }[resolved.device]
-    probe = probe_runtime_resources(kind)
-    ephemeral_params = dict(params)
-    ephemeral_params["INFERENCE_AUTOTUNE_DRIVER_VERSION"] = probe.driver_version
-    prior_counts = ()
-    if cache_dir:
-        prior_counts = sample_detection_workload(
-            cache_dir,
-            start_frame=start_frame,
-            end_frame=end_frame,
-        )
-        if (
-            prior_counts
-            and "INFERENCE_AUTOTUNE_DETECTION_COUNTS" not in ephemeral_params
-        ):
-            ephemeral_params["INFERENCE_AUTOTUNE_DETECTION_COUNTS"] = prior_counts
-            ephemeral_params["INFERENCE_AUTOTUNE_CROP_COUNTS"] = prior_counts
-    cached_fields = frozenset()
-    if use_cached_detections and prior_counts:
-        cached_fields = frozenset(("detection_batch_size", "slice_tile_batch_size"))
-        ephemeral_params["RESULT_CACHE_STAGE_MASK"] = ("detector",)
-    context = TrackingRunContext(
-        video_path=video_path,
-        params=ephemeral_params,
-        frame_width=max(1, int(frame_width)),
-        frame_height=max(1, int(frame_height)),
-        channels=3,
-        decoder_mode="nvdec" if config.runtime_tier == "gpu_fast" else "opencv",
-        execution_mode=(
-            "cache_replay"
-            if cache_read_only_replay
-            else ("realtime" if realtime else "batch")
-        ),
-        start_frame=start_frame,
-        end_frame=end_frame,
-        cached_fields=cached_fields,
-        contention_detected=probe.contention_detected,
-        thermal_throttled=probe.thermal_throttled,
-        should_cancel=should_cancel,
-        status_callback=status_callback,
-    )
-    preflight = build_tracking_autotune_request(
-        config,
-        context,
-        observation=probe.observation,
-        backend=resolved.backend,
-        device_identity=(
-            probe.device_uuid,
-            probe.device_model,
-            probe.compute_capability,
-            int(probe.observation.total_accelerator_bytes or 0),
-        ),
-    )
-    artifact_batch_size = max(
-        (
-            value
-            for field in ("detection_batch_size", "slice_tile_batch_size")
-            for value in preflight.planner.values_for(field, preflight.baseline)
-        ),
-        default=preflight.baseline.detection_batch_size,
-    )
-    if resolved.backend == "tensorrt":
-        ephemeral_params["INFERENCE_AUTOTUNE_TENSORRT_PROFILE_BATCH_SIZE"] = (
-            artifact_batch_size
-        )
-    executor = ContainedTrialExecutor(
-        SidecarTrialSpec(
-            video_path=video_path,
-            params=ephemeral_params,
-            observation=probe.observation,
-            resource_probe=probe,
-            start_frame=start_frame,
-            end_frame=end_frame,
-            budget_seconds=config.inference_autotune.budget_seconds,
-            runtime_artifact_batch_size=(
-                artifact_batch_size if resolved.backend == "tensorrt" else None
-            ),
-            # B3: the accelerated tiers build their engine INSIDE the child.
-            # The spec's own figure for a cold TensorRT profile build is
-            # 255-310 s, which alone exceeds the 120 s per-trial measurement
-            # cap -- so without this the baseline trial could never complete
-            # and the tuner could not start on TensorRT at all. Grant the
-            # build its own window; torch tiers keep the default 0.
-            artifact_build_allowance_seconds=(
-                ARTIFACT_BUILD_ALLOWANCE_SECONDS
-                if resolved.backend in ("tensorrt", "coreml")
-                else 0.0
-            ),
-        )
-    )
-    effective, overlay, result = resolve_tracking_inference_config(
-        config,
-        context,
-        observation=probe.observation,
-        backend=resolved.backend,
-        device_identity=(
-            probe.device_uuid,
-            probe.device_model,
-            probe.compute_capability,
-            int(probe.observation.total_accelerator_bytes or 0),
-        ),
-        trial_executor=executor,
-    )
-    return effective, overlay, result
-
-
 def _inference_autotune_stats(overlay, result) -> dict:
     """Build one bounded, path-free run summary for logs, CLI, and GUI."""
 
@@ -416,7 +263,6 @@ class TrackingEngineCore:
         self._inference_progress_start_time = None
         self._inference_progress_times = deque(maxlen=30)
         self._stop_requested = False
-        self._inference_autotune_cancel_requested = False
         self.inference_autotune_overlay = None
         self.inference_autotune_result = None
         self.inference_runtime_artifact_ids = ()
@@ -729,10 +575,6 @@ class TrackingEngineCore:
                     resolved[name] = provenance[name]
         return resolved
 
-    def cancel_inference_autotune(self) -> None:
-        """Skip the remaining calibration without stopping production tracking."""
-        self._inference_autotune_cancel_requested = True
-
     def _forward_frame_iterator(self, cap, use_prefetcher=False):
         """Iterate through frames in forward direction.
 
@@ -990,7 +832,6 @@ class TrackingEngineCore:
         # === 1. INITIALIZATION (Identical to Original) ===
         gc.collect()
         self._stop_requested = False
-        self._inference_autotune_cancel_requested = False
         p = self.get_current_params()
 
         # Create profiler early so initialization timing is captured.
@@ -1337,134 +1178,135 @@ class TrackingEngineCore:
                 self._emit_finished(False, [], [])
                 return
 
-            # S3: Preview is never calibrated. Preview forces
+            # S3: Preview is never calibrated/looked-up. Preview forces
             # effective_realtime_tracking_mode=False, which made
-            # execution_mode="batch" and therefore ELIGIBLE -- so a user on
-            # ``automatic``/``record`` who clicked Preview paid up to a full
-            # calibration budget before seeing a single frame. Worse, the
-            # preview's START/END range became the calibration range and the
-            # resulting profile (whose key carries no frame range) was then
-            # applied to the full run. A preview is a look, not a workload.
-            # A run with a BACKWARD pass cannot be tuned today. The backward
-            # pass replays the forward pass's detection cache, but the
-            # autotuner only runs on the forward pass (this very gate), so
-            # backward re-resolves at the project's UNTUNED batch size. Now
-            # that the batch size is part of the cache key (it must be -- see
-            # cache/keys.py), that is a key miss, and backward refuses with
-            # "Cached tracking replay requires valid inference caches".
-            # MEASURED on courtship: forward promoted det=4 and completed;
-            # the backward pass then failed the whole run.
-            #
-            # Declining to tune is the fail-safe: a run that does not get
-            # faster beats a run that does not finish. This costs yield on
-            # every backward-enabled project and should be REPLACED by
-            # propagating the forward pass's effective vector to the backward
-            # pass -- which is the real fix, and is not a three-line change
-            # because the GUI and headless paths build their params
-            # differently.
-            _project_config = p.get("INFERENCE_AUTOTUNE_PROJECT_CONFIG") or {}
-            _backward_enabled = bool(
-                isinstance(_project_config, dict)
-                and _project_config.get("enable_backward_tracking")
-            )
-            if not self.backward_mode and not self.preview_mode and _backward_enabled:
-                if _inference_cfg.inference_autotune.mode != "off":
-                    logger.warning(
-                        "Inference throughput autotuner declined: this project "
-                        "enables backward tracking, whose pass replays the "
-                        "forward detection cache at the project's own batch "
-                        "size. Tuning the forward pass would leave that cache "
-                        "unreadable and fail the run."
-                    )
-                    self._emit_progress(
-                        0,
-                        "Inference tuning skipped (backward tracking enabled)",
-                    )
-            if (
-                not self.backward_mode
-                and not self.preview_mode
-                and not _backward_enabled
-            ):
-                if _inference_cfg.inference_autotune.mode != "off":
-                    self._emit_progress(0, "Optimizing inference (bounded calibration)")
-                # S1: the preflight below builds a request (AutotuneRequest.
-                # __post_init__ raises for a manual field the project lacks)
-                # and probes live device state (probe_runtime_resources can
-                # raise FileNotFoundError/ValueError for a missing/malformed
-                # nvidia-smi) BEFORE resolve_tracking_inference_config's own
-                # internal envelope is ever reached. Without this try/except,
-                # either failure kills the whole tracking run. Mirror the
-                # same fallback envelope integration.py already has around
-                # resolve_tracking_inference_config: leave _inference_cfg
-                # untouched and degrade to a "fallback" overlay.
-                try:
-                    (
-                        _inference_cfg,
-                        self.inference_autotune_overlay,
-                        self.inference_autotune_result,
-                    ) = _resolve_inference_autotune_before_load(
-                        _inference_cfg,
-                        p,
-                        video_path=str(self.video_path),
-                        frame_width=int(cap.get(cv2.CAP_PROP_FRAME_WIDTH) or 1),
-                        frame_height=int(cap.get(cv2.CAP_PROP_FRAME_HEIGHT) or 1),
-                        start_frame=int(start_frame),
-                        end_frame=int(end_frame),
-                        realtime=effective_realtime_tracking_mode,
-                        should_cancel=lambda: (
-                            self._stop_requested
-                            or self._inference_autotune_cancel_requested
-                        ),
-                        status_callback=lambda message: self._emit_progress(0, message),
-                        cache_dir=self._resolve_cache_dir(),
-                        use_cached_detections=self.use_cached_detections,
-                        cache_read_only_replay=self.cache_read_only_replay,
-                    )
-                except Exception as _autotune_preflight_err:
-                    logger.exception(
-                        "Inference throughput autotuner preflight failed safely"
-                    )
-                    from hydra_suite.core.inference.autotune.coordinator import (
-                        ResolveResult,
-                    )
-                    from hydra_suite.core.inference.autotune.models import (
-                        InferenceRuntimeOverlay,
-                        InferenceTuningSettings,
+            # execution_mode="batch" and therefore ELIGIBLE -- so a user who
+            # clicked Preview would otherwise pay for a profile lookup before
+            # seeing a single frame, and the preview's START/END range would
+            # leak into the fingerprint. A preview is a look, not a workload.
+            if p.get("APPLY_TUNED_INFERENCE", False) and not self.preview_mode:
+                if self.backward_mode:
+                    # The forward pass wrote a detection cache keyed on the
+                    # batch size it actually ran at. Re-resolving a lookup
+                    # independently here can select a DIFFERENT profile and
+                    # miss that cache key outright -- MEASURED on courtship:
+                    # forward promoted det=4, backward re-resolved at the
+                    # project's untuned size, and the whole run aborted with
+                    # "Cached tracking replay requires valid inference
+                    # caches". Applying the forward pass's own recorded
+                    # vector guarantees cache-key agreement between passes.
+                    from hydra_suite.core.inference.autotune.applied_vector import (
+                        read_applied_vector,
                     )
 
-                    _baseline_settings = InferenceTuningSettings.from_config(
-                        _inference_cfg
-                    )
-                    self.inference_autotune_overlay = InferenceRuntimeOverlay.baseline(
-                        _baseline_settings,
-                        status="fallback",
-                        reason=(
-                            "pre-load resolution failed: "
-                            f"{type(_autotune_preflight_err).__name__}"
-                        ),
-                    )
-                    self.inference_autotune_result = ResolveResult(
-                        self.inference_autotune_overlay
-                    )
-                if self.inference_autotune_overlay is not None:
-                    logger.info(
-                        "Inference throughput autotuner: status=%s profile=%s "
-                        "requested=%s admitted=%s effective=%s reason=%s",
-                        self.inference_autotune_overlay.status,
-                        self.inference_autotune_overlay.profile_id,
-                        self.inference_autotune_overlay.requested.to_dict(),
-                        self.inference_autotune_overlay.admitted.to_dict(),
-                        self.inference_autotune_overlay.effective.to_dict(),
-                        self.inference_autotune_overlay.reason,
-                    )
-                    self._emit_stats(
-                        {
-                            "inference_autotune": _inference_autotune_stats(
-                                self.inference_autotune_overlay,
-                                self.inference_autotune_result,
+                    _forward_vector = read_applied_vector(self._resolve_cache_dir())
+                    if _forward_vector is not None:
+                        _inference_cfg = _forward_vector.apply(_inference_cfg)
+                        logger.info(
+                            "Backward pass reusing the forward pass's inference "
+                            "vector: %s",
+                            _forward_vector.to_dict(),
+                        )
+                else:
+                    self._emit_progress(0, "Applying tuned inference profile")
+                    # S1: the preflight below builds a request (AutotuneRequest.
+                    # __post_init__ raises for a manual field the project
+                    # lacks) and probes live device state
+                    # (probe_runtime_resources can raise
+                    # FileNotFoundError/ValueError for a missing/malformed
+                    # nvidia-smi) BEFORE resolve_tracking_inference_config's
+                    # own internal envelope is ever reached. Without this
+                    # try/except, either failure kills the whole tracking
+                    # run. Mirror the same fallback envelope integration.py
+                    # already has around resolve_tracking_inference_config:
+                    # leave _inference_cfg untouched and degrade to a
+                    # "fallback" overlay.
+                    try:
+                        from hydra_suite.core.inference.autotune import (
+                            session as _autotune_session,
+                        )
+
+                        _autotune_ctx = _autotune_session.build_autotune_context(
+                            _inference_cfg,
+                            p,
+                            video_path=str(self.video_path),
+                            frame_width=int(cap.get(cv2.CAP_PROP_FRAME_WIDTH) or 1),
+                            frame_height=int(cap.get(cv2.CAP_PROP_FRAME_HEIGHT) or 1),
+                            start_frame=int(start_frame),
+                            end_frame=int(end_frame),
+                            realtime=effective_realtime_tracking_mode,
+                            cache_dir=self._resolve_cache_dir(),
+                            use_cached_detections=self.use_cached_detections,
+                            cache_read_only_replay=self.cache_read_only_replay,
+                            should_cancel=lambda: self._stop_requested,
+                            status_callback=lambda message: self._emit_progress(
+                                0, message
+                            ),
+                        )
+                        (
+                            _inference_cfg,
+                            self.inference_autotune_overlay,
+                            self.inference_autotune_result,
+                        ) = _autotune_session.lookup(_autotune_ctx)
+                    except Exception as _autotune_preflight_err:
+                        logger.exception(
+                            "Inference throughput autotuner preflight failed safely"
+                        )
+                        from hydra_suite.core.inference.autotune.coordinator import (
+                            ResolveResult,
+                        )
+                        from hydra_suite.core.inference.autotune.models import (
+                            InferenceRuntimeOverlay,
+                            InferenceTuningSettings,
+                        )
+
+                        _baseline_settings = InferenceTuningSettings.from_config(
+                            _inference_cfg
+                        )
+                        self.inference_autotune_overlay = (
+                            InferenceRuntimeOverlay.baseline(
+                                _baseline_settings,
+                                status="fallback",
+                                reason=(
+                                    "pre-load resolution failed: "
+                                    f"{type(_autotune_preflight_err).__name__}"
+                                ),
                             )
-                        }
-                    )
+                        )
+                        self.inference_autotune_result = ResolveResult(
+                            self.inference_autotune_overlay
+                        )
+                    if self.inference_autotune_overlay is not None:
+                        logger.info(
+                            "Inference throughput autotuner: status=%s profile=%s "
+                            "requested=%s admitted=%s effective=%s reason=%s",
+                            self.inference_autotune_overlay.status,
+                            self.inference_autotune_overlay.profile_id,
+                            self.inference_autotune_overlay.requested.to_dict(),
+                            self.inference_autotune_overlay.admitted.to_dict(),
+                            self.inference_autotune_overlay.effective.to_dict(),
+                            self.inference_autotune_overlay.reason,
+                        )
+                        self._emit_stats(
+                            {
+                                "inference_autotune": _inference_autotune_stats(
+                                    self.inference_autotune_overlay,
+                                    self.inference_autotune_result,
+                                )
+                            }
+                        )
+                        # Persist the vector this forward pass is about to run
+                        # at, so a later backward pass (a separate
+                        # invocation in the GUI, sharing no in-memory state)
+                        # can apply the same vector instead of re-resolving.
+                        from hydra_suite.core.inference.autotune.applied_vector import (
+                            write_applied_vector,
+                        )
+
+                        write_applied_vector(
+                            self._resolve_cache_dir(),
+                            self.inference_autotune_overlay.effective,
+                        )
 
             _cache_dir = self._resolve_cache_dir()
             if not self.cache_read_only_replay:
