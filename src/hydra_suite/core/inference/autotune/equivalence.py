@@ -118,17 +118,35 @@ def _key_strings(frame: pd.DataFrame, key: list[str]) -> np.ndarray:
     )
 
 
+def _stable_key_sort(frame: pd.DataFrame, key: list[str]) -> pd.DataFrame:
+    """``frame`` sorted by ``key``, stably, with a NaN-safe composite ordering.
+
+    The ordering is lexicographic on the rendered key rather than numeric --
+    irrelevant here, because both sides are permuted by the same rule and the
+    aligner only needs a deterministic correspondence, not a meaningful order.
+    """
+
+    tokens = pd.Series(
+        ["\x1f".join(row) for row in _key_strings(frame, key)], index=frame.index
+    )
+    order = tokens.sort_values(kind="stable").index
+    return frame.loc[order].reset_index(drop=True)
+
+
 def _aligned(
     reference: pd.DataFrame, candidate: pd.DataFrame
 ) -> tuple[pd.DataFrame, pd.DataFrame] | None:
     key = _row_key(reference)
     if key is None or any(column not in candidate.columns for column in key):
         return None
-    # ``kind="stable"`` so rows sharing a key (three lost tracks in one frame
-    # all key on ``(frame, NaN)``) keep their input order on both sides rather
-    # than relying on pandas' default sort happening to be stable.
-    left = reference.sort_values(key, kind="stable").reset_index(drop=True)
-    right = candidate.sort_values(key, kind="stable").reset_index(drop=True)
+    # Sort on ONE composite key column: ``sort_values(kind=...)`` is documented
+    # to apply only when sorting by a single label, so a multi-column sort could
+    # not be pinned to a stable algorithm. Rows sharing a key (three lost tracks
+    # in one frame all key on ``(frame, NaN)``) must keep their input order on
+    # both sides. The NaN-position pairing below does not rely on this -- it
+    # sorts by content explicitly.
+    left = _stable_key_sort(reference, key)
+    right = _stable_key_sort(candidate, key)
     if len(left) != len(right):
         return None
     if not (_key_strings(left, key) == _key_strings(right, key)).all():
