@@ -785,7 +785,7 @@ class SetupPanel(QWidget):
             float(self._config.inference_autotune_budget_seconds)
         )
         self.spin_inference_autotune_budget.setToolTip(
-            "Bounded calibration time budget (5-7200s, default 600s) for "
+            "Bounded calibration time budget (5-7200s, default 2700s) for "
             "Record/Automatic "
             "modes. A one-time cost per new system/model/workload "
             "combination; validated profiles are reused after that."

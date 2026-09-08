@@ -35,18 +35,37 @@ MAX_PIPELINE_DEPTH = 4
 TRACKER_RAW_OBB_CONFIDENCE_FLOOR = 1e-3
 
 
-# Calibration budget bounds.  The ceiling is arithmetic, not taste: at the
-# measured per-trial cost of a real clip (~20 s per measurement block, five
-# blocks per candidate vector) a single batch-size field costs ~410 s to screen
-# plus ~300 s to confirm, and the spec's joint search covers detection, pose,
-# head/tail, per-head identity batch sizes and pipeline depth over two passes.
-# That is ~3650 s for the first pass and ~6100 s including the second.  A
-# ceiling below that makes the full search space arithmetically unreachable --
-# every run would end in ``budget_expired``.  The DEFAULT stays at 600 s; this
-# is only the highest value a project is allowed to ask for.
+# Calibration budget bounds, set from measurement rather than taste.
+#
+# Measured on `fly_obb` (MPS, ~19.2 fps baseline) AFTER screened losers stopped
+# paying for a full-pipeline confirmation -- a completed record-mode search:
+#
+#     baseline (5 blocks + same-window duplicate)   6 trials   101 s
+#     detection_batch_size screen (4 mutations x5) 20 trials   424 s  (21.2 s/trial)
+#     pipeline_depth screen (3 mutations x5)       15 trials   273 s  (18.2 s/trial)
+#     final validation                              5 trials    80 s
+#                                                             ------
+#     completed search                             46 trials   885 s
+#
+# Projecting ONE full coordinate pass over the default search space -- detection,
+# pose, head/tail and one identity batch size (4 fields at the measured
+# ~424 s screen each) plus pipeline_depth (273 s) -- gives
+# 101 + 4*424 + 273 + 80 = ~2150 s when nothing wins, plus ~300 s for each
+# field that does win and therefore earns its confirmation.  The DEFAULT is set
+# to cover that pass with one winning field and headroom: a default that cannot
+# finish a single field is a broken default, because every calibration then
+# times out and produces nothing.
+#
+# It deliberately does NOT cover a full TWO-pass search in which several fields
+# win (~5650 s).  No tolerable default does.  That case must raise the budget
+# explicitly -- and it is now visible when it happens, because an early stop
+# logs at WARNING and names the fields it did not reach.
+#
+# The MAXIMUM covers that two-pass worst case with margin.  Per-trial cost is
+# clip- and model-dependent, so all of these are orders of magnitude.
 MINIMUM_CALIBRATION_BUDGET_SECONDS = 5.0
 MAXIMUM_CALIBRATION_BUDGET_SECONDS = 7200.0
-DEFAULT_CALIBRATION_BUDGET_SECONDS = 600.0
+DEFAULT_CALIBRATION_BUDGET_SECONDS = 2700.0
 
 
 @dataclass(frozen=True)

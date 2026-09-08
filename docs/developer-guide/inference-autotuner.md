@@ -67,16 +67,24 @@ Calibration is also declined, in any mode, when:
 
 `InferenceAutotunePolicy.budget_seconds` must be between **5 and 7200 seconds**
 (`MINIMUM_/MAXIMUM_CALIBRATION_BUDGET_SECONDS` in `core/inference/config.py`,
-re-exported from `autotune/models.py`; default
-still 600). The ceiling is arithmetic. At a measured ~20 s per measurement
+re-exported from `autotune/models.py`; default **2700**). The ceiling is arithmetic. At a measured ~20 s per measurement
 block and five blocks per candidate vector, one batch-size field costs ~410 s to
-screen plus ~300 s to confirm; the joint search covers detection, pose,
-head/tail, per-head identity batch sizes and pipeline depth over two passes,
-which is ~3650 s for the first pass and ~6100 s for both. A 600 s ceiling makes
-the full search space arithmetically unreachable on a real clip -- every run
-ends in `budget_expired` -- so 600 remains the default but no longer the
-maximum. Per-trial cost is clip- and model-dependent, so these figures are
-orders of magnitude, not guarantees.
+screen; with screened losers short-circuited a completed `fly_obb` search
+measured 885 s (baseline 101 s, detection screen 424 s, depth screen 273 s,
+final validation 80 s). One full coordinate pass over the default search space
+projects to ~2150 s plus ~300 s per winning field, which is where the 2700 s
+default comes from -- a default that cannot finish a single field is a broken
+default, since every calibration then times out and produces nothing. The
+7200 s maximum covers the two-pass worst case (~5650 s) that no tolerable
+default could. Per-trial cost is clip- and model-dependent, so these figures
+are orders of magnitude, not guarantees.
+
+An early stop is loud: the search logs the elapsed time and the fields it did
+and did not reach at WARNING, and the INCOMPLETE record carries
+`searched_fields`/`unsearched_fields` in its `calibration_summary`. A rejected
+budget value is also reported at WARNING with the requested and effective
+numbers -- it is not clamped but replaced by the default, so a silent fallback
+once turned an explicit 3000 s into 600 s.
 
 It is a wall-clock deadline on the whole search: when it expires
 the search returns the baseline with reason `budget_expired` and writes an

@@ -5,7 +5,10 @@ from __future__ import annotations
 from dataclasses import dataclass, field
 from typing import Any
 
-from hydra_suite.core.inference.config import migrate_runtime_to_tier
+from hydra_suite.core.inference.config import (
+    DEFAULT_CALIBRATION_BUDGET_SECONDS,
+    migrate_runtime_to_tier,
+)
 from hydra_suite.trackerkit.engine_params import n_arenas_from_shapes
 
 
@@ -47,7 +50,7 @@ class TrackerConfig:
     # explicitly opt in.
     inference_autotune_mode: str = "off"
     inference_autotune_manual_fields: list[str] = field(default_factory=list)
-    inference_autotune_budget_seconds: float = 600.0
+    inference_autotune_budget_seconds: float = DEFAULT_CALIBRATION_BUDGET_SECONDS
 
     # --- Debug ---
     debug_mode: bool = False
@@ -134,7 +137,10 @@ class TrackerConfig:
                 str(value).strip() for value in raw_manual_fields if str(value).strip()
             ],
             inference_autotune_budget_seconds=float(
-                data.get("inference_autotune_budget_seconds", 600.0)
+                data.get(
+                    "inference_autotune_budget_seconds",
+                    DEFAULT_CALIBRATION_BUDGET_SECONDS,
+                )
             ),
             debug_mode=bool(data.get("debug_mode", False)),
             dataset_export_levels=list(
