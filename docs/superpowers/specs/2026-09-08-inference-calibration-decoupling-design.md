@@ -94,33 +94,43 @@ than a wrong answer.
 
 ### 2. Fingerprint agreement
 
-The key is built from an *ephemeral* params dict mutated at `worker.py:147-165`. Four
-things differ between "calibrate now" and "track later", not the one the first draft of
-this spec identified:
+The key is built from an *ephemeral* params dict mutated at `worker.py:147-165`.
 
-**(a) `density_is_estimated`** (`fingerprint.py:142`) is a raw boolean inside the digest
-(`:198-199`, `:238-242`). Fresh-video calibration stores `True`; a later cached run
-computes `False`. Always a miss. Remove it from `WorkloadKey`; keep it as a field on
-`InferenceTuningProfile`.
+**(a) Density is already handled — do NOT remove `density_is_estimated` from the key.**
+An earlier draft of this spec proposed exactly that. It would have deleted a working
+mechanism. The S2 design is a deliberate **two-record bridge**:
 
-**(b) The density buckets themselves.** `integration.py:449-454`: with no cache,
-`detection_counts == crop_counts == (MAX_TARGETS,)`, so all four p50/p95 buckets collapse
-to `bucket(MAX_TARGETS)`. With a cache they are distinct measured values. `MAX_TARGETS=12`
-(bucket 16) against a real p50 of 8 (bucket 8) misses even with (a) fixed. Removing the
-flag is necessary but **not sufficient** — the fresh-then-track case is precisely the one
-this feature exists to serve.
+1. With no detection cache, `_counts` falls back to `(MAX_TARGETS,)`
+   (`integration.py:450-463`), so all four p50/p95 buckets collapse to
+   `bucket(MAX_TARGETS)` and the key carries `density_is_estimated=True`.
+2. At the end of a run, `observe_production_throughput` (`store.py:243-299`) sees real
+   counts, builds the measured `WorkloadFingerprint`, and — *because* the key says the
+   old one was an estimate — writes a **second** record under the measured key
+   (`store.py:293-300`), deliberately leaving the estimated-key record in place so "the
+   next brand-new video, which also has no cache yet, still gets a warm start from it"
+   (`store.py:263-266`).
+3. A later run that does have a cache computes the measured key and hits record 2.
 
-Resolution: calibration seeds the workload from its own measured first block rather than
-from `MAX_TARGETS`, and persists under the *measured* key. Where no measurement exists
-yet, lookup falls back to a `MAX_TARGETS`-keyed probe and then the measured key, applying
-whichever hits.
+So the flag is load-bearing *as a key component*: it is what distinguishes "re-key this,
+it was never measured" from "demote this, reality changed". Removing it turns every
+first-run density correction into a spurious regression demotion.
 
-**(c) The S2 rekey reads the flag off the key.** `store.py:254` is
-`if current.key.workload.density_is_estimated:`; the rekey-on-first-real-sample block
-(`:243-270`) must be rewired to read the profile field instead. This is not a field move,
-it is a rewrite of that block.
+The consequence for this design is that the **bridge must keep running**, which makes
+§5's profiler-gate fix load-bearing rather than incidental: if
+`observe_production_throughput` stops firing, record 2 is never written and every cached
+run misses forever.
 
-**(d) TensorRT profile id depends on live free memory.** `worker.py:198-209` computes
+Calibration should additionally **close the bridge in one shot** rather than waiting for
+a subsequent run: after a successful search, the calibrate path calls
+`observe_production_throughput` with the density its own trials measured, producing both
+the estimated-key and measured-key records immediately. One click then serves the
+cache-less first run *and* every cached run afterwards.
+
+**(b) `RESULT_CACHE_STAGE_MASK`** genuinely changes the optimum — a replayed detector
+stage does not run — and stays in the key. Calibration mirrors the project's current
+cache-reuse setting, so a project yields one profile per cache mode.
+
+**(c) TensorRT profile id depends on live free memory.** `worker.py:198-209` computes
 `artifact_batch_size = max(planner.values_for(...))` **after** the preflight key, mutating
 the same dict object, and `values_for` filters through `admit`, which reads live
 `available_host_bytes` / `available_accelerator_bytes` (`candidates.py:199-227`). That
@@ -131,7 +141,7 @@ maximum for those fields, independent of the live observation, so the key is
 reproducible. Fixture-based tests will not catch this — they pin the observation — so it
 needs a dedicated test that varies free memory and asserts digest stability.
 
-Underpinning all four: **one shared context builder**, `build_autotune_context(...)`,
+Underpinning all three: **one shared context builder**, `build_autotune_context(...)`,
 called by both the calibrate entry point and the run-time lookup, fed from the same
 `build_engine_params` output. The caller must also reproduce worker's own derivations of
 `end_frame`, `effective_realtime_tracking_mode` (`worker.py:1124-1128`) and
@@ -281,9 +291,13 @@ determinism floor, and profile sections.
 ## Testing
 
 - **Fingerprint agreement** — one params dict and video, run through the calibrate path
-  and the lookup path, produce an identical `key.digest`. Cases: cache-absent vs
-  cache-present (must agree once (a) and (b) are fixed), `RESULT_CACHE_STAGE_MASK` set
-  (must differ), and **free memory varied on a TensorRT-backed context (must agree)**.
+  and the lookup path with the same cache state, produce an identical `key.digest`.
+  Cases: `RESULT_CACHE_STAGE_MASK` set (must *differ*, by design), and **free memory
+  varied on a TensorRT-backed context (must agree)**.
+- **The two-record bridge, end to end** — calibrate with no detection cache, assert both
+  an estimated-key and a measured-key record exist; then assert a cache-less run and a
+  cache-present run each hit one of them. This is the test that proves "one click, then
+  every later run just works", and it is the whole feature.
 - **Lookup purity** — with `trial_executor=None` and a fake store: no `claim()`, no
   profile `save()`, no executor construction, for both hit and miss.
 - **Backward propagation** — a forward pass that applies a non-baseline vector writes it
@@ -315,14 +329,18 @@ determinism floor, and profile sections.
 ## Consequences
 
 - A tracking run's duration no longer depends on whether a profile exists.
-- The `WorkloadKey` change bumps `TUNING_SCHEMA_VERSION`. `store.py:128` returns `None`
-  for a stale schema rather than crashing, but stale files are only reclaimed by the
-  512-record mtime cap (`:311-326`); add a schema-mismatch unlink.
-- For an editable dev checkout, `hydra_code_identity()` (`fingerprint.py:382`) already
-  invalidates profiles on any source edit, so the bump costs nothing. For a **non-editable
-  install** the identity comes from `HYDRA_BUILD_COMMIT` or `direct_url.json`
-  (`:385-394`) and is stable — so for the "one stable install, one rig, many videos" case
-  this design targets, the bump is a real one-time recalibration.
+- **No key-schema change is required.** Because `density_is_estimated` stays in the key
+  (§2a), `WorkloadFingerprint` is untouched and `TUNING_SCHEMA_VERSION` does not move, so
+  existing stored profiles remain valid. This is a direct improvement over the first
+  draft, which would have invalidated every record for no gain.
+- Stale-schema records are still only reclaimed by the 512-record mtime cap
+  (`store.py:311-326`); `store.py:128` returns `None` rather than crashing. Adding a
+  schema-mismatch unlink is a cheap independent tidy-up, not a requirement here.
+- For an editable dev checkout, `hydra_code_identity()` (`fingerprint.py:382`)
+  invalidates profiles on any source edit, so this branch's own code changes will
+  invalidate local profiles once. For a **non-editable install** the identity comes from
+  `HYDRA_BUILD_COMMIT` or `direct_url.json` (`:385-394`) and is stable across videos —
+  which is the "one stable install, one rig, many videos" case this design targets.
 - Profiles remain sensitive to video geometry, detector thresholds, and slice geometry.
   Reuse works across videos on the same rig with the same configuration.
 - The `record` concept disappears: calibrating without applying is Calibrate with the
