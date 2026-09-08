@@ -217,11 +217,23 @@ class AutotuneCoordinator:
                 )
             except Exception as exc:
                 logger.exception("Inference throughput calibration failed safely")
+                # A search that raises has still SPENT the whole budget. The
+                # measured case: an identity clip ran 4608s against a 4500s
+                # budget, the deadline fired mid-trial, teardown could not reap
+                # the child tree, and WorkloadStillOwnedError escaped -- so
+                # `search.run` never returned, the `not result.completed`
+                # branch below never ran, and NOTHING was persisted. Every
+                # later run then re-paid the same 76 minutes to fail the same
+                # way. A raising search is exactly the case that most needs a
+                # loud, persisted stop, so record one here too.
+                reason = f"calibration failed: {type(exc).__name__}"
+                if not request.contention_detected:
+                    self._save_incomplete(request, reason)
                 return ResolveResult(
                     InferenceRuntimeOverlay.baseline(
                         request.baseline,
                         status="fallback",
-                        reason=f"calibration failed: {type(exc).__name__}",
+                        reason=reason,
                     )
                 )
             if not result.completed:
