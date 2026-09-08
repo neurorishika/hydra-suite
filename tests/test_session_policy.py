@@ -159,6 +159,16 @@ ORACLE = {
         "should_export_final_media_videos": False,
         "should_run_interpolated_postpass": False,
     },
+    # Same config as fly_obb except for `roi_shapes` (a full-frame include
+    # polygon); none of these five predicates reads roi_shapes, so the pinned
+    # values are necessarily identical to fly_obb's.
+    "fly_obb_roi": {
+        "is_pose_export_enabled": False,
+        "is_pose_inference_enabled": False,
+        "is_headtail_compute_enabled": False,
+        "should_export_final_media_videos": False,
+        "should_run_interpolated_postpass": False,
+    },
     "worm_bgsub": {
         "is_pose_export_enabled": False,
         "is_pose_inference_enabled": False,
