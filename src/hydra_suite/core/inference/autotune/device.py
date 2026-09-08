@@ -7,6 +7,7 @@ cannot authorize disruptive calibration.
 
 from __future__ import annotations
 
+import logging
 import os
 import platform
 import subprocess
@@ -15,6 +16,8 @@ from dataclasses import dataclass
 from typing import Callable
 
 from hydra_suite.runtime.resource_budget import AcceleratorKind, ResourceObservation
+
+logger = logging.getLogger(__name__)
 
 MiB = 1024**2
 
@@ -32,6 +35,87 @@ class RuntimeResourceProbe:
     utilization_samples: tuple[float, ...] = ()
     free_memory_samples_bytes: tuple[int, ...] = ()
     temperature_range_c: tuple[float, float] | None = None
+
+
+# NVML clock-throttle reason bits (nvml.h, ``nvmlClocksThrottleReasons*``).
+# Only these mean "the GPU is being held below its requested clocks by a
+# power/thermal/slowdown condition", which is the only thing that can corrupt a
+# throughput measurement.  The deliberately EXCLUDED bits are:
+#   0x001 GpuIdle                  -- the opposite of throttling; a genuinely
+#                                     idle GPU sets it, which is exactly when
+#                                     calibration should be allowed to run
+#   0x002 ApplicationsClocksSetting-- an administrator's fixed clock policy: a
+#                                     stable, deliberate ceiling, not noise
+#   0x100 DisplayClockSetting      -- a display-mode constraint, likewise stable
+_THROTTLE_ACTIVE_BITS = (
+    0x004  # SwPowerCap
+    | 0x008  # HwSlowdown
+    | 0x010  # SyncBoost
+    | 0x020  # SwThermalSlowdown
+    | 0x040  # HwThermalSlowdown
+    | 0x080  # HwPowerBrakeSlowdown
+)
+
+# Textual forms.  Older drivers (and the per-reason
+# ``clocks_throttle_reasons.<name>`` queries) answer in words; driver 580+
+# answers ``clocks_throttle_reasons.active`` with a hex bitmask.  Both must be
+# understood, because pinning either one alone is what broke this probe.
+_THROTTLE_INACTIVE_WORDS = frozenset(
+    {"", "not active", "notactive", "0", "0x0", "false", "no", "none", "n/a", "[n/a]"}
+)
+_THROTTLE_ACTIVE_WORDS = (
+    "sw power cap",
+    "hw slowdown",
+    "sync boost",
+    "sw thermal",
+    "hw thermal",
+    "hw power brake",
+    "swpower",
+    "hwslowdown",
+    "thermal",
+    "powerbrake",
+)
+
+
+def throttle_reason_is_active(raw: str) -> bool:
+    """Decide whether one ``clocks_throttle_reasons.active`` sample is throttling.
+
+    Handles BOTH driver representations and fails toward *not* throttled.
+
+    A previous version string-matched a small set of "inactive" words. Driver
+    580.x returns a hex bitmask (``0x0000000000000000`` when idle-and-fine,
+    ``0x0000000000000001`` when merely GpuIdle), neither of which was in that
+    set -- so every modern CUDA host classified as permanently throttled and
+    ``automatic`` tuning deferred forever on a completely idle GPU. An
+    unreadable sensor must not silently disable the feature, so anything this
+    function cannot parse is reported as NOT throttled; the cost of a wrong
+    "not throttled" is one noisy measurement that the paired-block statistics
+    and the correctness gate already defend against, while the cost of a wrong
+    "throttled" is the entire feature never running.
+    """
+
+    value = str(raw or "").strip().lower()
+    if value in _THROTTLE_INACTIVE_WORDS:
+        return False
+    try:
+        bits = int(value, 16) if value.startswith("0x") else int(value)
+    except ValueError:
+        pass
+    else:
+        return bool(bits & _THROTTLE_ACTIVE_BITS)
+    # Not a number: a worded reason list. "Active" alone (no reason named) is
+    # the legacy per-reason answer and is taken at face value.
+    if any(word in value for word in _THROTTLE_ACTIVE_WORDS):
+        return True
+    if value == "active":
+        return True
+    logger.warning(
+        "Unrecognized nvidia-smi clocks_throttle_reasons.active value %r; "
+        "treating the accelerator as NOT thermally throttled so tuning is not "
+        "disabled by an unreadable sensor.",
+        raw,
+    )
+    return False
 
 
 def _host_memory() -> tuple[int, int]:
@@ -153,8 +237,7 @@ def probe_runtime_resources(
     contention = max(utilization) >= 10.0 or used_peak >= max(
         1024**3, total_bytes // 10
     )
-    inactive_tokens = {"not active", "0", "false", "no", "none"}
-    throttled = any(value not in inactive_tokens for value in throttle)
+    throttled = any(throttle_reason_is_active(value) for value in throttle)
     observation = ResourceObservation(
         total_host_bytes=int(total_host),
         available_host_bytes=int(available_host),
