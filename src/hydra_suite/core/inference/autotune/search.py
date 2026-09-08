@@ -72,6 +72,33 @@ class TrialObservation:
             raise ValueError("successful trial observations require positive timing")
 
 
+def _observed_detection_counts(
+    successful: Sequence["TrialObservation"], *, maximum_frames: int = 512
+) -> tuple[int, ...]:
+    """Real per-frame detection density measured by this candidate's trials.
+
+    Counts rows per distinct ``FrameID`` in the forward output each
+    successful trial already produced -- the same one-count-per-frame rule
+    ``sample_detection_workload`` applies to a production detection cache.
+    Calibration trials write to a private, per-trial cache dir (S8), so this
+    is the only place real measured density can be read from afterward; it
+    is what lets ``session.calibrate`` close the store's estimated/measured
+    two-record bridge without a whole extra tracking run.
+    """
+
+    counts: dict[int, int] = {}
+    for item in successful:
+        outputs = item.outputs
+        if outputs is None or "FrameID" not in outputs.forward.columns:
+            continue
+        for frame, count in outputs.forward["FrameID"].value_counts().items():
+            frame = int(frame)
+            if frame not in counts and len(counts) >= maximum_frames:
+                continue
+            counts[frame] = int(count)
+    return tuple(counts[frame] for frame in sorted(counts))
+
+
 class TrialExecutor(Protocol):
     """Each call executes one warmed measurement block in a fresh sidecar."""
 
@@ -653,6 +680,7 @@ class CoordinateSearch:
                 warmup_frames=min(item.warmup_frames for item in successful),
                 prepare_seconds=sum(item.prepare_seconds for item in successful),
                 steady_state_seconds=sum(item.stage_seconds for item in successful),
+                detection_counts=_observed_detection_counts(successful),
                 artifact_ids=tuple(
                     sorted(
                         {

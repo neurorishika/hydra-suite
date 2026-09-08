@@ -633,3 +633,179 @@ def make_coordinator(
     executor = _StubExecutor() if trial_executor is _UNSET else trial_executor
     coordinator = AutotuneCoordinator(store, trial_executor=executor)
     return coordinator, store
+
+
+class _SpyProfileStore(InferenceTuningProfileStore):
+    """A throwaway, on-disk ``InferenceTuningProfileStore`` that records saves.
+
+    Task 9 (S2 bridge closure): wraps the REAL store rather than duck-typing
+    a fake, because ``session._close_density_bridge`` exercises
+    ``store.observe_production_throughput`` end to end -- that is the exact
+    logic under test. A fake would either have to reimplement it (risking
+    drift from the real bridging rules in ``store.py``) or would silently
+    swallow the call via ``_close_density_bridge``'s broad ``except
+    Exception``, hiding a real failure as a false pass. Subclassing keeps
+    that logic real while still letting a test see every persisted record.
+    """
+
+    def __init__(self, root: Path) -> None:
+        super().__init__(root)
+        self.saved: list[InferenceTuningProfile] = []
+
+    def save(self, profile: InferenceTuningProfile) -> None:
+        self.saved.append(profile)
+        super().save(profile)
+
+
+def fake_store(monkeypatch: Any, tmp_path: Path | None = None) -> _SpyProfileStore:
+    """Wire every default-constructed store in ``session``/``integration`` to
+    ONE throwaway, spy-wrapped ``InferenceTuningProfileStore``.
+
+    ``session.calibrate`` (via ``integration.resolve_tracking_inference_config``)
+    and ``session._close_density_bridge`` each construct a bare
+    ``InferenceTuningProfileStore()`` when no store is injected -- there is no
+    store-injection seam on the session entry points, by design (worker.py
+    never has one to give them). Rather than adding one for a test-only need,
+    monkeypatch the class both modules resolve at call time so every fresh
+    construction lands on the same instance: the two-record bridge this
+    exercises only makes sense if both the ``calibrated`` write and the
+    ``observe_production_throughput`` write land in the same place.
+    """
+
+    import tempfile
+
+    from hydra_suite.core.inference.autotune import integration
+    from hydra_suite.core.inference.autotune import store as store_module
+
+    root = (
+        Path(tempfile.mkdtemp(prefix="autotune-fake-store-"))
+        if tmp_path is None
+        else tmp_path
+    )
+    spy = _SpyProfileStore(root)
+    monkeypatch.setattr(
+        store_module, "InferenceTuningProfileStore", lambda *_a, **_k: spy
+    )
+    monkeypatch.setattr(
+        integration, "InferenceTuningProfileStore", lambda *_a, **_k: spy
+    )
+    return spy
+
+
+class FakeCalibrationExecutor:
+    """Deterministic, sidecar-free trial executor for ``session.calibrate``.
+
+    Every trial returns the same fixed throughput and forward-CSV outputs
+    regardless of settings/phase/block, shaped like ``frame_counts`` real
+    per-frame detections -- following the ``FixedExecutor``/
+    ``ConflictingExecutor`` pattern in ``test_inference_autotune_search.py``.
+    Identical outputs across every call keep the correctness gate trivially
+    satisfied, and the fixed density is what lets a test prove
+    ``CandidateEvidence.detection_counts`` (and the S2 bridge it feeds) carry
+    real measured density rather than the ``MAX_TARGETS`` fallback.
+    """
+
+    def __init__(self, frame_counts: tuple[int, ...] = (2, 3, 2)) -> None:
+        self.frame_counts = frame_counts
+        self.calls: list[tuple[str, str | None, int]] = []
+
+    def run(self, settings, *, phase, field_name, block_index, should_cancel):
+        from hydra_suite.core.inference.autotune.search import TrialObservation
+
+        self.calls.append((phase, field_name, block_index))
+        frame_ids = [
+            frame for frame, count in enumerate(self.frame_counts) for _ in range(count)
+        ]
+        outputs = equivalence_outputs(
+            equivalence_frame(rows=len(frame_ids), frame_ids=frame_ids)
+        )
+        return TrialObservation(
+            settings,
+            100.0,
+            0.5,
+            outputs,
+            warmup_calls=3,
+            warmup_frames=8,
+            measured_frames=len(frame_ids),
+        )
+
+
+def make_calibration_context(
+    monkeypatch: Any,
+    tmp_path: Path | None = None,
+    *,
+    cache_dir: Path | None = None,
+    measured_counts: tuple[int, ...] = (),
+    frame_counts: tuple[int, ...] = (2, 3, 2),
+    mode: str = "calibrate",
+):
+    """A CPU-tier ``AutotuneContext`` wired for ``session.calibrate``/``lookup``.
+
+    ``cache_dir=None`` reproduces run 1 of a brand-new video (S2): no
+    detection cache exists yet, so ``build_autotune_context`` keys the
+    request on the ``MAX_TARGETS`` fallback (``density_is_estimated=True``).
+    ``cache_dir=<path>`` with ``measured_counts`` reproduces a later run WITH
+    a cache: ``open_detection_cache_reader`` is faked to yield exactly
+    ``measured_counts`` (one entry per frame) -- the same technique
+    ``test_existing_detection_cache_supplies_zero_inclusive_density`` uses in
+    ``test_inference_autotune_integration.py`` -- so no real ``.npz`` cache
+    file is written.
+
+    Also monkeypatches ``session.calibrate``'s sidecar-spawning
+    ``ContainedTrialExecutor`` with :class:`FakeCalibrationExecutor` (density
+    ``frame_counts``), so ``session.calibrate`` can run end to end against
+    this context without a real video or a real sidecar child process.
+    """
+
+    import tempfile
+    from dataclasses import replace as _replace
+
+    from hydra_suite.core.inference.autotune import sidecar as sidecar_module
+    from hydra_suite.core.inference.autotune.session import build_autotune_context
+    from hydra_suite.core.inference.config import InferenceAutotunePolicy
+
+    tmp_path = tmp_path or Path(tempfile.mkdtemp(prefix="autotune-calib-ctx-"))
+    inputs = make_request_inputs(tmp_path, kind=AcceleratorKind.CPU)
+    context = inputs["context"]
+    inputs["config"] = _replace(
+        inputs["config"],
+        inference_autotune=InferenceAutotunePolicy(mode=mode, budget_seconds=60.0),
+    )
+
+    if cache_dir is not None and measured_counts:
+
+        class _Reader:
+            def is_valid(self) -> bool:
+                return True
+
+            def iter_arrays(self):
+                written = list(range(len(measured_counts)))
+                frame_indices = [
+                    frame
+                    for frame, count in enumerate(measured_counts)
+                    for _ in range(count)
+                ]
+                yield {"written_frames": written, "frame_indices": frame_indices}
+
+        monkeypatch.setattr(
+            "hydra_suite.core.inference.cache.open_detection_cache_reader",
+            lambda _path: _Reader(),
+        )
+
+    executor = FakeCalibrationExecutor(frame_counts)
+    monkeypatch.setattr(
+        sidecar_module, "ContainedTrialExecutor", lambda *_a, **_k: executor
+    )
+
+    end_frame = max(len(measured_counts) - 1, 0) if measured_counts else 9
+    return build_autotune_context(
+        inputs["config"],
+        dict(context.params),
+        video_path=str(context.video_path),
+        frame_width=context.frame_width,
+        frame_height=context.frame_height,
+        start_frame=0,
+        end_frame=end_frame,
+        realtime=False,
+        cache_dir=cache_dir,
+    )

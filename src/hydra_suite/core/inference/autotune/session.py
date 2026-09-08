@@ -9,10 +9,13 @@ two is the whole correctness argument for this feature.
 
 from __future__ import annotations
 
+import logging
 from dataclasses import dataclass
 from typing import Any, Callable
 
 from hydra_suite.core.inference.config import InferenceConfig
+
+logger = logging.getLogger(__name__)
 
 
 @dataclass(frozen=True, slots=True)
@@ -228,7 +231,7 @@ def calibrate(ctx: AutotuneContext, *, budget_seconds: float):
             ),
         )
     )
-    return resolve_tracking_inference_config(
+    effective, overlay, result = resolve_tracking_inference_config(
         ctx.config,
         ctx.run_context,
         observation=ctx.probe.observation,
@@ -236,3 +239,58 @@ def calibrate(ctx: AutotuneContext, *, budget_seconds: float):
         device_identity=ctx.device_identity,
         trial_executor=executor,
     )
+    _close_density_bridge(result)
+    return effective, overlay, result
+
+
+def _close_density_bridge(result) -> None:
+    """Write the measured-key twin of an estimate-keyed profile immediately.
+
+    The store already re-keys an estimated-density profile on the first real
+    production sample (``store.observe_production_throughput``), deliberately
+    leaving the estimated record in place so the next brand-new video still
+    gets a warm start. Calibration has already measured real density in its
+    own trials, so there is no reason to make the user pay a whole extra
+    tracking run before a cached run can find anything.
+    """
+
+    from hydra_suite.core.inference.autotune.store import InferenceTuningProfileStore
+
+    profile = getattr(result, "profile", None)
+    if profile is None or not profile.key.workload.density_is_estimated:
+        return
+    counts = _measured_density_from(profile)
+    if not counts:
+        return
+    try:
+        InferenceTuningProfileStore().observe_production_throughput(
+            profile.profile_id,
+            _median_throughput_of(profile),
+            detection_counts=counts,
+            crop_counts=counts,
+        )
+    except Exception:
+        logger.warning("Could not close the calibration density bridge", exc_info=True)
+
+
+def _measured_density_from(profile) -> tuple[int, ...]:
+    """Real per-frame density measured by the winning candidate's own trials.
+
+    Reads ``CandidateEvidence.detection_counts`` off the candidate matching
+    ``profile.selected`` -- the settings the search actually validated and
+    persisted -- rather than any candidate that happened to run.
+    """
+
+    for candidate in profile.candidates:
+        if candidate.settings == profile.selected and candidate.detection_counts:
+            return candidate.detection_counts
+    return ()
+
+
+def _median_throughput_of(profile) -> float:
+    """The selected candidate's robust central throughput, if one was measured."""
+
+    for candidate in profile.candidates:
+        if candidate.settings == profile.selected:
+            return candidate.median_throughput
+    return 0.0
