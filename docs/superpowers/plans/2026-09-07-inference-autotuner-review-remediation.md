@@ -1334,3 +1334,14 @@ run once per candidate, separate from the striped timing blocks).
 Artifacts: `/tmp/task10c_record.log`, `/tmp/task10c_diag.log`,
 `/tmp/task10c_floor/floor1_{a,b}_{forward,final}.csv`,
 `/tmp/task10c_floor_diag.py`.
+
+**The window mismatch is the ENTIRE failure.** On the 33-frame overlap
+(FrameID 95–127, 99 rows a side), joining the two sides on
+`(FrameID, X, Y, Theta)` rounded to 6 dp matches **96 of 99** rows; the 3 that do
+not join are exactly the 3 NaN-position rows per side. The only columns that
+differ on the joined rows are `TrackID`, `TrajectoryID`, `Index`,
+`AssignmentConfidence`, `PositionUncertainty` — all run-history dependent (side A
+entered the overlap having seen 95 frames, side B at its own frame 0). Geometry
+is bit-identical wherever it is comparable, so the pipeline is deterministic and
+decoupling the comparison window from the striped timing blocks should clear the
+floor outright.
