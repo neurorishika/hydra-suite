@@ -1,3 +1,6 @@
+import os
+import shutil
+
 import numpy as np
 import pytest
 import torch
@@ -859,3 +862,192 @@ def test_default_tile_batch_keeps_the_pre_change_sliced_key():
         ).config_hash
         == disabled_default
     )
+
+
+def test_obb_detection_key_is_identical_for_the_same_model_at_two_paths(tmp_path):
+    """config_hash must NOT carry the model path (keys.py _model_signature)."""
+    a = tmp_path / "one" / "obb.pt"
+    b = tmp_path / "two" / "obb.pt"
+    a.parent.mkdir(parents=True)
+    b.parent.mkdir(parents=True)
+    a.write_bytes(b"obb-weights")
+    shutil.copy2(a, b)
+    os.utime(b, (1, 1))
+    key_a = detection_cache_key(_obb_direct(path=str(a)), None)
+    key_b = detection_cache_key(_obb_direct(path=str(b)), None)
+    assert key_a.as_string() == key_b.as_string()
+
+
+def test_sequential_obb_key_is_identical_for_the_same_pair_at_two_paths(tmp_path):
+    def _pair(root):
+        root.mkdir(parents=True, exist_ok=True)
+        (root / "detect.pt").write_bytes(b"d")
+        (root / "obb.pt").write_bytes(b"o")
+        return OBBConfig(
+            mode="sequential",
+            sequential=OBBSequentialConfig(
+                detect_model_path=str(root / "detect.pt"),
+                obb_model_path=str(root / "obb.pt"),
+            ),
+        )
+
+    key_a = detection_cache_key(_pair(tmp_path / "one"), None)
+    key_b = detection_cache_key(_pair(tmp_path / "two"), None)
+    assert key_a.as_string() == key_b.as_string()
+
+
+def test_sequential_key_changes_when_either_model_changes(tmp_path):
+    root = tmp_path / "m"
+    root.mkdir()
+    detect, obb = root / "detect.pt", root / "obb.pt"
+    detect.write_bytes(b"d")
+    obb.write_bytes(b"o")
+
+    def _cfg():
+        return OBBConfig(
+            mode="sequential",
+            sequential=OBBSequentialConfig(
+                detect_model_path=str(detect), obb_model_path=str(obb)
+            ),
+        )
+
+    base = detection_cache_key(_cfg(), None).as_string()
+    obb.write_bytes(b"o2")
+    # model_content_id is memoized on (realpath, size, mtime_ns); the rewrite
+    # changes size AND mtime_ns, so the memo entry is a miss, not a stale hit.
+    assert detection_cache_key(_cfg(), None).as_string() != base
+
+
+def test_v4_cache_on_disk_is_rejected_and_rebuilt(tmp_path):
+    """Fix M4: a literal-string comparison is tautological -- it proves nothing
+    about the actual store. Exercise the real handle path: write a v4-shaped
+    on-disk cache, then prove the store treats it as unusable (rejected) and a
+    v5 write follows (rebuilt), per spec section 7b.6 item 3.
+    """
+    import dataclasses
+
+    from hydra_suite.core.inference.cache.store import DetectionCacheHandle
+
+    cache_dir = tmp_path / ".inference_cache_clip"
+    cache_dir.mkdir()
+    path = cache_dir / "detection.npz"
+    result = materialize_tensors(_raw())
+    v5_key = CacheKey(
+        schema_version=CACHE_SCHEMA_VERSION, model_id="sha256:aa", config_hash="bb"
+    )
+    v4_key = dataclasses.replace(v5_key, schema_version=4)
+
+    stale = DetectionCacheHandle(path=path, key=v4_key, write_mode="fresh")
+    stale.write_frame(result.frame_idx, result=result)
+    stale.close()
+
+    rejected = DetectionCacheHandle(
+        path=path, key=v5_key, read_only=True, write_mode="auto"
+    )
+    assert not rejected.is_reusable(), "a v4 on-disk cache must not validate at v5"
+    rejected.close()  # read_only close is a disk no-op (store.py:223-225)
+
+    fresh = DetectionCacheHandle(path=path, key=v5_key, write_mode="fresh")
+    fresh.write_frame(result.frame_idx, result=result)
+    fresh.close()
+    rebuilt = DetectionCacheHandle(path=path, key=v5_key, read_only=True)
+    assert rebuilt.is_reusable(), "a fresh v5 write must be usable"
+    rebuilt.close()
+
+
+def test_cache_written_at_one_path_is_reusable_from_a_copy_at_another_path(tmp_path):
+    """Fix Z7: no existing test in this task proves the actual Goal-4
+    property AT THE HANDLE LEVEL -- that a cache produced against a model at
+    path A validates against the SAME model's bytes copied to path B in a
+    simulated fresh process (a different machine, in practice). Every other
+    test here proves the KEY STRING is path-independent; this proves the
+    on-disk cache built from that key is actually reusable end to end.
+    """
+    import shutil
+
+    from hydra_suite.core.inference import content_id
+    from hydra_suite.core.inference.cache.store import DetectionCacheHandle
+
+    model_a = tmp_path / "box_a" / "obb.pt"
+    model_a.parent.mkdir(parents=True)
+    model_a.write_bytes(b"obb-weights" * 1000)
+
+    key_a = detection_cache_key(_obb_direct(path=str(model_a)), None)
+    cache_dir = tmp_path / ".inference_cache_clip"
+    cache_dir.mkdir()
+    path = cache_dir / "detection.npz"
+    result = materialize_tensors(_raw())
+    writer = DetectionCacheHandle(path=path, key=key_a, write_mode="fresh")
+    writer.write_frame(result.frame_idx, result=result)
+    writer.close()
+
+    # Simulate a fresh process on a different machine: drop the in-process
+    # memoization AND rebuild the key from a COPY of the same bytes at a
+    # different path with a different mtime.
+    content_id.model_content_id.cache_clear()
+    model_b = tmp_path / "box_b" / "nested" / "obb.pt"
+    model_b.parent.mkdir(parents=True)
+    shutil.copy2(model_a, model_b)
+    os.utime(model_b, (1, 1))
+    key_b = detection_cache_key(_obb_direct(path=str(model_b)), None)
+
+    reader = DetectionCacheHandle(path=path, key=key_b, read_only=True)
+    assert (
+        reader.is_reusable()
+    ), "identical bytes at a different path must reuse the cache"
+    reader.close()
+
+
+def test_cache_written_at_one_path_is_not_reusable_after_one_byte_changes(tmp_path):
+    """Fix Z7 (negative case): the copy-at-a-different-path test above proves
+    portability; this proves it isn't achieved by accidentally ignoring model
+    content altogether -- a genuinely different model at the new path must
+    NOT validate."""
+    from hydra_suite.core.inference import content_id
+    from hydra_suite.core.inference.cache.store import DetectionCacheHandle
+
+    model_a = tmp_path / "box_a" / "obb.pt"
+    model_a.parent.mkdir(parents=True)
+    model_a.write_bytes(b"obb-weights" * 1000)
+
+    key_a = detection_cache_key(_obb_direct(path=str(model_a)), None)
+    cache_dir = tmp_path / ".inference_cache_clip"
+    cache_dir.mkdir()
+    path = cache_dir / "detection.npz"
+    result = materialize_tensors(_raw())
+    writer = DetectionCacheHandle(path=path, key=key_a, write_mode="fresh")
+    writer.write_frame(result.frame_idx, result=result)
+    writer.close()
+
+    content_id.model_content_id.cache_clear()
+    model_c = tmp_path / "box_c" / "obb.pt"
+    model_c.parent.mkdir(parents=True)
+    model_c.write_bytes(b"different-obb-weights" * 1000)
+    key_c = detection_cache_key(_obb_direct(path=str(model_c)), None)
+
+    reader = DetectionCacheHandle(path=path, key=key_c, read_only=True)
+    assert not reader.is_reusable(), "genuinely different model bytes must not validate"
+    reader.close()
+
+
+def test_keys_module_reexports_content_id_video_signature_not_a_shadow():
+    """Fix Z1: keys.py must import content_id.video_signature, not redefine
+    its own — a same-named local def would silently shadow it and F811 is
+    disabled in .flake8's extend-ignore, so nothing else would catch this."""
+    from hydra_suite.core.inference import content_id
+
+    assert keys_mod.video_signature is content_id.video_signature
+
+
+def test_keys_module_video_signature_is_mtime_invariant_through_the_reexport(tmp_path):
+    """Exercise the touched-mtime-invariance property THROUGH keys_mod's
+    re-exported name specifically (not content_id directly), so a future
+    reintroduction of a local mtime-based def in keys.py fails here even if
+    it somehow also passed the identity check above."""
+    import os
+
+    v = tmp_path / "clip.mp4"
+    v.write_bytes(b"\x00" * (1 << 20))
+    first = keys_mod.video_signature(str(v))
+    os.utime(v, (1, 1))
+    assert keys_mod.video_signature(str(v)) == first
