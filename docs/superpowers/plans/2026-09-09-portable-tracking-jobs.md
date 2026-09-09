@@ -4017,7 +4017,7 @@ Run the Task 4 Step 14 recipe at the branch tip on `firebrat`. **Confirm `courts
 
 The equivalence harness forces `use_cached_detections: False` (`tools/equivalence/runner.py:154`), so it exercises **zero** cache reuse. This step is the one that proves a remote cache hits locally.
 
-**Fix C3 — "the runner reports a cache hit" was never a real, checkable signal.** There is no "cache hit" log line anywhere in the codebase (grepped; only comments reference the concept). The step as originally drafted had no executable acceptance criterion for the single most important claim in this whole plan. Use the REAL probes that exist instead: `InferenceRunner.caches_all_valid()` (`runner.py:1043`), `InferenceRunner.detection_cache_missing_frames()` (`runner.py:1076`), and `cache_set_is_fully_reusable()` (`runner.py:430`).
+**Fix C3 — "the runner reports a cache hit" was never a real, checkable signal.** There is no "cache hit" log line anywhere in the codebase (grepped; only comments reference the concept). The step as originally drafted had no executable acceptance criterion for the single most important claim in this whole plan. Use the REAL probes that exist instead: `InferenceRunner.caches_all_valid()` (`runner.py:1043`), `InferenceRunner.detection_cache_missing_frames()` (`runner.py:1076`), and `cache_set_is_fully_reusable(caches)` (`runner.py:430` -- a MODULE-LEVEL function taking a `_CacheSet`, NOT a method; `caches_all_valid()` is already its runner-level wrapper, so the probe uses that).
 
 ```bash
 # All invocations use the worktree's src explicitly (fix M13 — bare `trackerkit`
@@ -4073,27 +4073,37 @@ os.environ["HYDRA_CONFIG_DIR"] = str(job_dir / "config")
 os.chdir(job_dir)
 
 from hydra_suite.trackerkit.cli_config import load_tracker_cli_session
+from hydra_suite.core.inference.config import build_inference_config_from_params
 from hydra_suite.core.inference.runner import InferenceRunner
+from hydra_suite.utils.video_artifacts import build_inference_cache_dir
 
 sidecar = job_dir / "videos" / f"{Path(video_relpath).stem}_config.json"
 session = load_tracker_cli_session(str(job_dir / video_relpath), config_path=str(sidecar))
-runner = InferenceRunner(session.params, video_path=str(job_dir / video_relpath))
+# InferenceRunner takes an InferenceConfig, NOT the raw params dict, and
+# caches_all_valid() returns False outright unless cache_dir is supplied --
+# which would fake a FAIL. Build both exactly as worker.py:1328 does.
+params = session.params
+runner = InferenceRunner(
+    build_inference_config_from_params(params),
+    cache_dir=build_inference_cache_dir(str(job_dir / video_relpath)),
+    video_path=str(job_dir / video_relpath),
+    cache_only=True,  # read-only probe: never write or recompute
+    roi_mask=params.get("ROI_MASK"),
+)
 
 if not runner.caches_all_valid():
     print("FAIL: caches_all_valid() is False -- the key is still carrying "
           "something machine-local; debug before merging.")
     sys.exit(1)
 
-missing = runner.detection_cache_missing_frames()
+# detection_cache_missing_frames REQUIRES the frame range (runner.py:1076);
+# calling it bare is a TypeError.
+start_frame = int(params.get("START_FRAME", 0) or 0)
+end_frame = int(params.get("END_FRAME", 0) or 0)
+missing = runner.detection_cache_missing_frames(start_frame, end_frame)
 if missing:
     print(f"FAIL: {len(missing)} frames report missing from the detection "
           f"cache: {missing[:10]}...")
-    sys.exit(1)
-
-if not runner.cache_set_is_fully_reusable():
-    print("FAIL: cache_set_is_fully_reusable() is False despite "
-          "caches_all_valid()/no missing frames -- inspect which stage's "
-          "cache_key mismatches.")
     sys.exit(1)
 
 print("CACHE FULLY REUSABLE")
