@@ -9,6 +9,8 @@ environment variable overrides:
 
     HYDRA_CONFIG_DIR  — override config directory (presets, skeletons, advanced config)
     HYDRA_DATA_DIR    — override data directory (models, training runs)
+    HYDRA_MODELS_DIR  — override ONLY the models root, leaving engine artifacts
+                        and calibration profiles on the host data dir
     HYDRA_PROJECTS_DIR — override default projects directory (browse/open default)
 
 Bundled read-only assets are accessed via *importlib.resources*.
@@ -126,7 +128,21 @@ def get_app_data_dir(app_name: str) -> Path:
 
 
 def get_models_dir() -> Path:
-    """Return (and create) the models directory."""
+    """Return (and create) the models directory.
+
+    ``HYDRA_MODELS_DIR`` relocates ONLY the models root, independently of
+    ``HYDRA_DATA_DIR``. That separation is what lets a portable tracking job
+    supply its own models (``HYDRA_MODELS_DIR=<job>/models``) while engine
+    artifacts, calibration profiles and training runs stay on the host's data
+    dir -- the former travel with the experiment, the latter are host-specific
+    and must never be shipped. Read per call (never cached) so tests and
+    ``run.sh`` can set it through the environment.
+    """
+    override = os.environ.get("HYDRA_MODELS_DIR")
+    if override:
+        path = Path(override).expanduser()
+        path.mkdir(parents=True, exist_ok=True)
+        return path
     p = _user_data_dir() / "models"
     p.mkdir(parents=True, exist_ok=True)
     return p
@@ -226,6 +242,9 @@ def print_paths() -> None:
     override_proj = os.environ.get("HYDRA_PROJECTS_DIR")
     if override_proj:
         print(f"  (HYDRA_PROJECTS_DIR override active: {override_proj})")
+    override_models = os.environ.get("HYDRA_MODELS_DIR")
+    if override_models:
+        print(f"  (HYDRA_MODELS_DIR override active: {override_models})")
 
 
 # ---------------------------------------------------------------------------
