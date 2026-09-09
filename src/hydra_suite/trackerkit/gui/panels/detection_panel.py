@@ -876,26 +876,44 @@ class DetectionPanel(QWidget):
         self.lbl_slice_tile_w = _yolo_label("Tile W (px)")
         self.lbl_slice_tile_h = _yolo_label("Tile H (px)")
         self.lbl_slice_object_fraction = _yolo_label("Object tile fraction")
+        # Two lines, split by what the controls MEAN rather than by width:
+        # tile geometry (what gets cut) above, execution (how those tiles are
+        # submitted, and the memory budget that clamps them) below. One row
+        # carrying both was too wide to read, and it implied the batch size was
+        # a geometry property, which it is not -- the coordinated autotuner
+        # searches it, while geometry is a fixed input to the fingerprint.
         self.row_slice_params = QWidget()
-        _slice_params_lay = QHBoxLayout(self.row_slice_params)
-        _slice_params_lay.setContentsMargins(0, 0, 0, 0)
-        _slice_params_lay.setSpacing(6)
-        _slice_params_lay.addWidget(self.lbl_slice_overlap)
-        _slice_params_lay.addWidget(self.spin_slice_overlap)
-        _slice_params_lay.addSpacing(10)
-        _slice_params_lay.addWidget(self.lbl_slice_tile_w)
-        _slice_params_lay.addWidget(self.spin_slice_tile_w)
-        _slice_params_lay.addWidget(self.lbl_slice_tile_h)
-        _slice_params_lay.addWidget(self.spin_slice_tile_h)
-        _slice_params_lay.addWidget(self.lbl_slice_object_fraction)
-        _slice_params_lay.addWidget(self.spin_slice_object_fraction)
-        _slice_params_lay.addSpacing(10)
-        _slice_params_lay.addWidget(self.lbl_slice_tile_batch)
-        _slice_params_lay.addWidget(self.spin_slice_tile_batch)
-        _slice_params_lay.addWidget(self.lbl_slice_memory_budget)
-        _slice_params_lay.addWidget(self.spin_slice_memory_budget)
-        _slice_params_lay.addWidget(self.lbl_slice_batch_admission)
-        _slice_params_lay.addStretch(1)
+        _slice_params_outer = QVBoxLayout(self.row_slice_params)
+        _slice_params_outer.setContentsMargins(0, 0, 0, 0)
+        _slice_params_outer.setSpacing(4)
+
+        _slice_geometry_lay = QHBoxLayout()
+        _slice_geometry_lay.setContentsMargins(0, 0, 0, 0)
+        _slice_geometry_lay.setSpacing(6)
+        _slice_geometry_lay.addWidget(self.lbl_slice_overlap)
+        _slice_geometry_lay.addWidget(self.spin_slice_overlap)
+        _slice_geometry_lay.addSpacing(10)
+        _slice_geometry_lay.addWidget(self.lbl_slice_tile_w)
+        _slice_geometry_lay.addWidget(self.spin_slice_tile_w)
+        _slice_geometry_lay.addWidget(self.lbl_slice_tile_h)
+        _slice_geometry_lay.addWidget(self.spin_slice_tile_h)
+        _slice_geometry_lay.addWidget(self.lbl_slice_object_fraction)
+        _slice_geometry_lay.addWidget(self.spin_slice_object_fraction)
+        _slice_geometry_lay.addStretch(1)
+        _slice_params_outer.addLayout(_slice_geometry_lay)
+
+        _slice_execution_lay = QHBoxLayout()
+        _slice_execution_lay.setContentsMargins(0, 0, 0, 0)
+        _slice_execution_lay.setSpacing(6)
+        _slice_execution_lay.addWidget(self.lbl_slice_tile_batch)
+        _slice_execution_lay.addWidget(self.spin_slice_tile_batch)
+        _slice_execution_lay.addWidget(self.lbl_slice_memory_budget)
+        _slice_execution_lay.addWidget(self.spin_slice_memory_budget)
+        _slice_execution_lay.addSpacing(10)
+        _slice_execution_lay.addWidget(self.lbl_slice_batch_admission)
+        _slice_execution_lay.addStretch(1)
+        _slice_params_outer.addLayout(_slice_execution_lay)
+
         f_yolo.addWidget(self.row_slice_params, 9, 0, 1, 2)
 
         for key, spin in (
