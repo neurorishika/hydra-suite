@@ -1338,46 +1338,25 @@ class TrackingEngineCore:
             # preview's START/END range became the calibration range and the
             # resulting profile (whose key carries no frame range) was then
             # applied to the full run. A preview is a look, not a workload.
-            # A run with a BACKWARD pass cannot be tuned today. The backward
-            # pass replays the forward pass's detection cache, but the
-            # autotuner only runs on the forward pass (this very gate), so
-            # backward re-resolves at the project's UNTUNED batch size. Now
-            # that the batch size is part of the cache key (it must be -- see
-            # cache/keys.py), that is a key miss, and backward refuses with
-            # "Cached tracking replay requires valid inference caches".
-            # MEASURED on courtship: forward promoted det=4 and completed;
-            # the backward pass then failed the whole run.
+            # HISTORY: a backward-enabled project used to decline tuning here.
+            # The backward pass replays the forward pass's detection cache, the
+            # autotuner only runs on the forward pass, and the batch size is
+            # part of the cache key (it must be -- see cache/keys.py), so
+            # backward re-resolving at the project's UNTUNED batch size was a
+            # key miss and the run died with "Cached tracking replay requires
+            # valid inference caches". MEASURED on courtship: forward promoted
+            # det=4 and completed; the backward pass then failed the whole run.
             #
-            # Declining to tune is the fail-safe: a run that does not get
-            # faster beats a run that does not finish. This costs yield on
-            # every backward-enabled project and should be REPLACED by
-            # propagating the forward pass's effective vector to the backward
-            # pass -- which is the real fix, and is not a three-line change
-            # because the GUI and headless paths build their params
-            # differently.
-            _project_config = p.get("INFERENCE_AUTOTUNE_PROJECT_CONFIG") or {}
-            _backward_enabled = bool(
-                isinstance(_project_config, dict)
-                and _project_config.get("enable_backward_tracking")
-            )
-            if not self.backward_mode and not self.preview_mode and _backward_enabled:
-                if _inference_cfg.inference_autotune.mode != "off":
-                    logger.warning(
-                        "Inference throughput autotuner declined: this project "
-                        "enables backward tracking, whose pass replays the "
-                        "forward detection cache at the project's own batch "
-                        "size. Tuning the forward pass would leave that cache "
-                        "unreadable and fail the run."
-                    )
-                    self._emit_progress(
-                        0,
-                        "Inference tuning skipped (backward tracking enabled)",
-                    )
-            if (
-                not self.backward_mode
-                and not self.preview_mode
-                and not _backward_enabled
-            ):
+            # That was never a tuning problem -- the backward pass performs no
+            # inference at all (it is cache_only). It was a cache-key LOOKUP
+            # mismatch, and the fix is below: the forward pass records the
+            # effective execution vector beside the caches it writes
+            # (``write_replay_vector``), and a replay pass resolves its keys
+            # from that record (``load_replay_vector``) instead of re-deriving
+            # them from the configured batch sizes. Backward therefore cannot
+            # disagree with forward by construction, so a backward-enabled
+            # project now tunes normally.
+            if not self.backward_mode and not self.preview_mode:
                 if _inference_cfg.inference_autotune.mode != "off":
                     self._emit_progress(0, "Optimizing inference (bounded calibration)")
                 # S1: the preflight below builds a request (AutotuneRequest.
@@ -1462,6 +1441,30 @@ class TrackingEngineCore:
             _cache_dir = self._resolve_cache_dir()
             if not self.cache_read_only_replay:
                 _cache_dir.mkdir(parents=True, exist_ok=True)
+
+            # ── Effective-vector record: written by forward, read by replay ──
+            # Batch sizes are folded into the cache keys, so a replay pass must
+            # resolve the key the FORWARD pass actually wrote, not the one the
+            # project's configured batch sizes would produce. Read what was
+            # written rather than re-deriving it.
+            from hydra_suite.core.inference.autotune.replay_vector import (
+                load_replay_vector,
+                write_replay_vector,
+            )
+
+            _replay_vector = None
+            if self.backward_mode or self.cache_read_only_replay:
+                _replay_vector = load_replay_vector(_cache_dir)
+                if _replay_vector is not None:
+                    # No record => resolve at the configured vector, exactly as
+                    # before this record existed (every pre-existing cache).
+                    _inference_cfg = _replay_vector.apply(_inference_cfg)
+                    logger.info(
+                        "Replay pass: resolving inference caches at the vector "
+                        "the forward pass recorded (%s, status=%s)",
+                        _replay_vector.effective.to_dict(),
+                        _replay_vector.status,
+                    )
             # Backward (replay) passes only call load_frame / caches_all_valid —
             # they never invoke run_realtime or run_batch_pass.  Skip loading
             # HeadTail, CNN, Pose (incl. SLEAP), and AprilTag backends in that
@@ -1481,6 +1484,17 @@ class TrackingEngineCore:
                 identity_evidence=_identity_evidence_run_config,
                 runtime_overlay=self.inference_autotune_overlay,
             )
+            if not (
+                self.backward_mode or self.cache_read_only_replay or self.preview_mode
+            ):
+                # A forward pass owns the cache directory. Record the vector it
+                # is about to write under -- and CLEAR any stale record when it
+                # overrides nothing, so an untuned rerun cannot leave a tuned
+                # record pointing at a default-batch cache. Written only after
+                # the runner constructs: a construction failure (e.g. an
+                # unloadable model) writes no caches, so it must leave no
+                # record either.
+                write_replay_vector(_cache_dir, self.inference_autotune_overlay)
             self.inference_runtime_artifact_ids = tuple(
                 getattr(inference_runner, "runtime_artifact_ids", ())
             )
@@ -1570,7 +1584,13 @@ class TrackingEngineCore:
                 if not inference_runner.caches_all_valid():
                     logger.error(
                         "Cached tracking replay requires valid inference caches. "
-                        "Please run forward tracking first."
+                        "Please run forward tracking first. (recorded forward "
+                        "execution vector: %s)",
+                        (
+                            _replay_vector.effective.to_dict()
+                            if _replay_vector is not None
+                            else "none — resolved at the configured batch sizes"
+                        ),
                     )
                     inference_runner.close()
                     cap.release()
