@@ -626,6 +626,7 @@ def build_tracking_autotune_request(
     # and a future caller may legitimately want to refuse reuse.
     allow_cached_reuse = True
     eligibility_reason = None
+    ineligible_status = "not_tunable"
     if context.execution_mode == "realtime":
         eligible = False
         eligibility_reason = "realtime inference is not tunable"
@@ -634,9 +635,11 @@ def build_tracking_autotune_request(
         eligibility_reason = "all inference stages are satisfied by reusable caches"
     elif context.contention_detected:
         eligible = False
+        ineligible_status = "deferred_due_to_contention"
         eligibility_reason = "another accelerator job is active"
     elif context.thermal_throttled:
         eligible = False
+        ineligible_status = "deferred_due_to_contention"
         eligibility_reason = "accelerator is thermally throttled"
     else:
         admission = planner.admit(baseline)
@@ -661,6 +664,7 @@ def build_tracking_autotune_request(
         eligible=eligible,
         allow_cached_reuse=allow_cached_reuse,
         eligibility_reason=eligibility_reason,
+        ineligible_status=ineligible_status,
         stage_shares=stage_shares,
         should_cancel=context.should_cancel,
         status_callback=context.status_callback,

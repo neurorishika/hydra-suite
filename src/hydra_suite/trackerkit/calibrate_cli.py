@@ -180,19 +180,15 @@ def run_calibrate_cli(
         f"(profile={overlay.profile_id}, reason={overlay.reason})"
     )
     print(f"Effective vector: {overlay.effective.to_dict()}")
-    # I5 (GUI parity): the detection-cache mask is part of the pipeline
-    # fingerprint, so this profile is only findable by runs in the same cache
-    # mode. Say which one, so a later miss is explicable.
-    if ctx.run_context.cached_fields:
+    # GUI parity (dialogs/calibration._format_cache_mode): a run that replays
+    # every stage from cache performs no inference, so it neither needs nor
+    # can have a profile. Read the execution mode, not ``cached_fields``,
+    # which has been an unconditional empty set since 01948492.
+    if ctx.run_context.execution_mode == "cache_replay":
         print(
-            "Cache mode: covers runs that REUSE the detection cache "
-            "(cached detections on)."
-        )
-    else:
-        print(
-            "Cache mode: covers runs with NO detection cache. With "
-            "detection-cache reuse enabled, calibrate again after this "
-            "video's first tracking run."
+            "This run replays every inference stage from its caches, so there "
+            "is nothing to measure. Disable detection-cache reuse to "
+            "calibrate fresh inference."
         )
 
     return 0 if status in _SUCCESS_STATUSES else 1

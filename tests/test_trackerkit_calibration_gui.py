@@ -137,10 +137,10 @@ def test_worker_forwards_realtime_rather_than_hardcoding_false(monkeypatch):
     captured = {}
 
     class _Ctx:
-        # The worker reports the cache mode it calibrated in (I5), so the
-        # stub context needs the field that carries it.
+        # The worker reports whether the run it calibrated would replay
+        # every stage from cache, so the stub context needs that field.
         class run_context:  # noqa: N801 - stand-in namespace
-            cached_fields = frozenset()
+            execution_mode = "batch"
 
     def fake_build(config, params, **kwargs):
         captured.update(kwargs)
@@ -261,43 +261,43 @@ def test_effective_vector_is_shown_for_unavailable_and_deferred_statuses():
     assert "pipeline_depth=2" in deferred_text
 
 
-def test_status_label_names_the_detection_cache_mode():
-    """I5: ``RESULT_CACHE_STAGE_MASK`` is part of ``PipelineFingerprint`` and
-    ``use_cached_detections`` also decides ``cached_fields``, so a profile
-    covers exactly ONE cache mode. The density bridge re-keys only
-    ``workload``, so it cannot close that gap -- and synthesising a masked
-    twin record would be dishonest (the masked key implies a different,
-    smaller search space the winning vector was never validated under).
+def test_status_label_explains_a_replaying_run_and_invents_nothing_otherwise():
+    """A run that replays every stage performs no inference, so it neither
+    needs nor can have a profile (``execution_mode`` is in the key and
+    ``cache_replay`` freezes every field). The label must say that and give
+    the one action that changes it.
 
-    So the label must SAY which mode it covers, making a run-2 miss
-    explicable rather than mysterious.
+    The note it replaces was keyed on ``cached_fields``, an unconditional
+    empty set since ``01948492``: it therefore ALWAYS claimed "covers runs
+    with NO detection cache" and always advised calibrating again after the
+    first tracking run -- the exact action that produces the refusal.
     """
     from hydra_suite.trackerkit.gui.dialogs.calibration import (
         describe_calibration_outcome,
     )
 
-    fresh = describe_calibration_outcome(
+    replaying = describe_calibration_outcome(
         {
-            "status": "calibrated",
-            "reason": "measured",
-            "profile_id": "abc",
-            "effective": {"detection_batch_size": 4},
-            "cached_detections": False,
+            "status": "not_tunable",
+            "reason": "all inference stages are satisfied by reusable caches",
+            "cache_replay": True,
         }
     )
-    assert "NO detection cache" in fresh
-    assert "calibrate again" in fresh
+    assert "nothing to measure" in replaying
+    assert "Use cached detections" in replaying
+    assert "contention" not in replaying
 
-    cached = describe_calibration_outcome(
+    measured = describe_calibration_outcome(
         {
             "status": "calibrated",
             "reason": "measured",
             "profile_id": "abc",
             "effective": {"detection_batch_size": 4},
-            "cached_detections": True,
+            "cache_replay": False,
         }
     )
-    assert "REUSE the detection cache" in cached
+    assert "detection_batch_size=4" in measured
+    assert "detection cache" not in measured
 
     # A payload with no cache-mode information must not invent one.
     silent = describe_calibration_outcome(
@@ -314,7 +314,7 @@ def test_gui_worker_reports_the_cache_mode_it_calibrated_in(monkeypatch, tmp_pat
 
     class _Ctx:
         class run_context:  # noqa: N801 - stand-in namespace
-            cached_fields = frozenset({"detection_batch_size"})
+            execution_mode = "cache_replay"
 
     class _Overlay:
         status = "calibrated"
@@ -345,4 +345,4 @@ def test_gui_worker_reports_the_cache_mode_it_calibrated_in(monkeypatch, tmp_pat
     worker.completed.connect(payloads.append)
     worker.execute()
 
-    assert payloads and payloads[0]["cached_detections"] is True
+    assert payloads and payloads[0]["cache_replay"] is True

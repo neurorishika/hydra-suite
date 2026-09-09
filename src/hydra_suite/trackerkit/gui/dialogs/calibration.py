@@ -61,6 +61,8 @@ def describe_calibration_outcome(payload: dict) -> str:
     # "unavailable" is the status coordinator.resolve emits when no profile
     # can be used for this key (coordinator.py:135, :152). Verified against
     # the coordinator's status vocabulary -- not guessed.
+    if status == "not_tunable":
+        return f"Nothing to calibrate here — {reason}.{cache_mode}"
     if status == "unavailable":
         return (
             "No validated profile matches this video, model, and settings. "
@@ -74,32 +76,25 @@ def describe_calibration_outcome(payload: dict) -> str:
 
 
 def _format_cache_mode(payload: dict) -> str:
-    """Name the detection-cache mode this profile is keyed for.
+    """Say what a full-cache-replay outcome means, and what to do about it.
 
-    ``RESULT_CACHE_STAGE_MASK`` and ``cached_fields`` are both part of the
-    pipeline fingerprint / search space, so a profile measured WITHOUT a
-    detection cache is not the profile a cache-reusing run looks up. The
-    density bridge (``store.py``) re-keys only ``workload``, not the cache
-    mask, so it cannot close that gap -- and synthesising a masked twin
-    record would be dishonest, since the winning vector was never validated
-    under the masked (smaller) search space.
+    ``execution_mode`` is part of the profile key, and a ``cache_replay`` run
+    freezes every tuning field, so such a run neither needs nor can have a
+    profile -- it performs no inference at all. The one actionable thing to
+    say is how to calibrate fresh inference instead.
 
-    So the label SAYS which mode it covers. A user who then gets a miss on
-    run 2 has an explicable result and a clear action (calibrate again),
-    rather than a mysterious one.
+    This replaces a note keyed on ``cached_fields``, which has been an
+    unconditional empty set since ``01948492``: it therefore always claimed
+    the profile covered runs with NO detection cache, and advised calibrating
+    again after the first tracking run -- the exact action that produces the
+    refusal.
     """
-    cached = payload.get("cached_detections")
-    if cached is None:
+    if not payload.get("cache_replay"):
         return ""
-    if cached:
-        return (
-            " This profile covers runs that REUSE the detection cache "
-            "(cached detections on)."
-        )
     return (
-        " This profile covers runs with NO detection cache. With "
-        "'Use cached detections' enabled, calibrate again after this "
-        "video's first tracking run."
+        " This run replays every inference stage from its caches, so there is "
+        "nothing to measure. Untick 'Use cached detections' to calibrate "
+        "fresh inference."
     )
 
 

@@ -90,3 +90,79 @@ def test_calibrate_asks_the_coordinator_to_measure(monkeypatch):
     policy = seen["config"].inference_autotune
     assert policy.mode == "calibrate"
     assert policy.budget_seconds == 123.0
+
+
+def test_a_detection_cache_alone_does_not_declare_the_run_untunable(
+    monkeypatch, tmp_path
+):
+    """Density evidence is not proof that a run will replay every stage.
+
+    ``sample_detection_workload`` reads detection.npz with no config, video
+    signature or ROI mask, so it cannot check the cache KEY and never sees
+    the headtail/cnn/pose siblings. Treating "reuse ticked and a detection
+    cache exists" as full replay froze every tuning field AND changed the
+    profile key, so such a video became permanently untunable -- while a run
+    whose caches are not actually reusable still does full fresh inference at
+    the baseline. Only the worker's own predicate
+    (``cache_set_is_fully_reusable``) may make that call.
+    """
+    from hydra_suite.core.inference.autotune.integration import (
+        build_tracking_autotune_request,
+    )
+    from tests.autotune_helpers import make_calibration_context
+
+    cache_dir = tmp_path / "cache"
+    cache_dir.mkdir()
+    ctx = make_calibration_context(
+        monkeypatch,
+        tmp_path,
+        cache_dir=cache_dir,
+        measured_counts=(2, 3, 2),
+        use_cached_detections=True,
+    )
+
+    assert ctx.run_context.execution_mode == "batch"
+
+    request = build_tracking_autotune_request(
+        ctx.config,
+        ctx.run_context,
+        observation=ctx.probe.observation,
+        backend=ctx.backend,
+        device_identity=ctx.device_identity,
+    )
+    assert request.eligible
+    # The measured density must still reach the key -- only the replay
+    # classification changed.
+    assert not request.key.workload.density_is_estimated
+
+
+def test_a_replaying_run_reports_not_tunable_rather_than_contention(
+    monkeypatch, tmp_path
+):
+    """ "Deferred due to contention" promises a retry will work. A cache
+    replay is not a temporary condition, and pairing that headline with
+    "all inference stages are satisfied by reusable caches" contradicted
+    itself in one sentence."""
+    from hydra_suite.core.inference.autotune.integration import (
+        build_tracking_autotune_request,
+    )
+    from tests.autotune_helpers import make_calibration_context
+
+    ctx = make_calibration_context(monkeypatch, tmp_path, cache_dir=None)
+    replay_context = _replace_execution_mode(ctx.run_context, "cache_replay")
+
+    request = build_tracking_autotune_request(
+        ctx.config,
+        replay_context,
+        observation=ctx.probe.observation,
+        backend=ctx.backend,
+        device_identity=ctx.device_identity,
+    )
+    assert not request.eligible
+    assert request.ineligible_status == "not_tunable"
+
+
+def _replace_execution_mode(run_context, mode: str):
+    from dataclasses import replace
+
+    return replace(run_context, execution_mode=mode)

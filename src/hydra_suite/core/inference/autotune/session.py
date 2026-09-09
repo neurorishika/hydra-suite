@@ -80,6 +80,51 @@ def derive_artifact_batch_size(
     return max(sizes, default=preflight.baseline.detection_batch_size)
 
 
+def _cache_set_fully_reusable(config, cache_dir, video_path: str, params: dict) -> bool:
+    """Whether a run reusing ``cache_dir`` would REALLY replay every stage.
+
+    ``prior_counts`` alone cannot answer this: ``sample_detection_workload``
+    opens detection.npz with no config, video signature or ROI mask, so it
+    cannot check the cache KEY and never sees the headtail/cnn/pose siblings.
+    Treating "the box is ticked and a detection.npz exists" as full replay
+    made every video that had ever produced one permanently untunable --
+    ``execution_mode`` is part of the profile key AND ``cache_replay`` freezes
+    every tuning field, so no profile can exist under that key, while a run
+    whose caches turn out NOT reusable does full fresh inference at the
+    untuned baseline. That is the state the Calibrate button reported as
+    "deferred ... all inference stages are satisfied by reusable caches".
+
+    So ask the same question the worker's ``caches_all_valid`` asks, by the
+    same model-free route ``production_replay.evaluate_replay_cache`` uses.
+    Any failure answers False: an unnecessary ``batch`` classification only
+    costs a measurement the run may not need, while a wrong ``cache_replay``
+    silently disables tuning for that video forever.
+    """
+
+    if not cache_dir:
+        return False
+    try:
+        from pathlib import Path as _Path
+
+        from hydra_suite.core.inference.runner import (
+            _open_caches,
+            cache_set_is_fully_reusable,
+            video_signature,
+        )
+
+        caches = _open_caches(
+            config,
+            _Path(cache_dir),
+            video_signature(str(video_path)),
+            params.get("ROI_MASK", None),
+            read_only=True,
+        )
+        return bool(cache_set_is_fully_reusable(caches))
+    except Exception:
+        logger.debug("Cache-reuse probe failed; treating the run as tunable")
+        return False
+
+
 def build_autotune_context(
     config: InferenceConfig,
     params: dict,
@@ -150,7 +195,11 @@ def build_autotune_context(
         if cache_read_only_replay
         else ("realtime" if realtime else "batch")
     )
-    if use_cached_detections and prior_counts:
+    if (
+        use_cached_detections
+        and prior_counts
+        and _cache_set_fully_reusable(config, cache_dir, video_path, params)
+    ):
         execution_mode = "cache_replay"
     run_context = TrackingRunContext(
         video_path=video_path,

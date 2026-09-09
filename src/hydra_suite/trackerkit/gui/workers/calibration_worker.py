@@ -85,9 +85,11 @@ class CalibrationWorker(BaseWorker):
                 "reason": overlay.reason,
                 "profile_id": overlay.profile_id,
                 "effective": overlay.effective.to_dict(),
-                # I5: the cache mask is part of the pipeline fingerprint, so
-                # this profile only covers runs in the SAME cache mode. Report
-                # which one, so a later miss is explicable.
-                "cached_detections": bool(ctx.run_context.cached_fields),
+                # The execution mode is part of the pipeline fingerprint, so
+                # a fully-cache-replaying run is a different (untunable) key.
+                # Read the mode itself: ``cached_fields`` is an unconditional
+                # empty set, so the old ``bool(cached_fields)`` was always
+                # False and the label always disagreed with reality.
+                "cache_replay": ctx.run_context.execution_mode == "cache_replay",
             }
         )

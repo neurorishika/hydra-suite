@@ -127,24 +127,28 @@ run would survive and the backward pass would apply a vector that this
 forward pass never ran at. Cache-read-only replay passes do not write it:
 they produced no cache, so whatever run did still owns the sidecar.
 
-### A profile covers ONE detection-cache mode
+### Cache reuse: a fully replaying run is untunable, not mis-keyed
 
-`RESULT_CACHE_STAGE_MASK` is part of `PipelineFingerprint`, and
-`use_cached_detections` also decides `cached_fields` — i.e. which coordinates
-are searched at all. A profile calibrated on a fresh video (no detection
-cache) is therefore **not** the profile a cache-reusing run looks up.
+`execution_mode` is part of `PipelineFingerprint`, and a `cache_replay` run
+freezes every tuning coordinate. Such a run performs no inference at all, so
+it neither needs nor can have a profile — the honest answer is `not_tunable`,
+not a cache-mode caveat on some other profile.
 
-With detection-cache reuse enabled (the GUI default), a project needs a
-**second Calibrate after its first tracking run**: run 1 hits the profile you
-just measured, and every run from 2 onward — once a detection cache exists —
-keys differently and misses until you calibrate again in that mode.
+What matters is *when* that classification is made. The reuse REQUEST is not
+evidence: `sample_detection_workload` opens `detection.npz` with no config,
+video signature or ROI mask, so it can neither check the cache key nor see the
+head-tail/CNN/pose siblings. Classifying on the request alone made every video
+that had ever produced a detection cache permanently untunable, while a run
+whose caches were not actually reusable still did full fresh inference at the
+untuned baseline. `build_autotune_context` therefore flips to `cache_replay`
+only when `cache_set_is_fully_reusable` agrees — the same predicate
+`InferenceRunner.caches_all_valid` uses, reached by the model-free route in
+`optimization/production_replay.py`. Any probe failure answers "tunable": a
+needless measurement is cheap, a wrong `cache_replay` is permanent.
 
-The two-record density bridge below does not close this gap: it re-keys only
-`workload`, not the cache mask. Synthesising a masked twin record would be
-dishonest — the masked key implies a different (smaller) search space, and the
-unmasked winning vector was never validated under it. Instead, the GUI's
-calibration status label and the CLI's printed summary both **name the cache
-mode the profile covers**, so a miss is explicable rather than mysterious.
+Earlier guidance here told users to **calibrate again after the first tracking
+run**. That advice was self-defeating — calibrating with reuse enabled is
+exactly what produced the refusal — and it is retired.
 
 ### The two-record density bridge
 
