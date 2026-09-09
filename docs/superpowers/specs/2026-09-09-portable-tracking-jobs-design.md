@@ -1,6 +1,9 @@
 # Portable tracking jobs: stage anywhere, run anywhere, sync back
 
 **Status:** design proposal, approved in brainstorming (approach A), pending implementation plan.
+
+> ## AMENDED 2026-09-09 — path-independent cache keys scoped IN (user decision)
+> The first draft left pulled `.inference_cache_<stem>/` as a record only because the cache key embeds the absolute model path. The user wants remote caches to be usable locally without regeneration, so §7b makes model identity and video identity content-based and bumps the cache schema. Goal 4 and §17 updated accordingly. Headless dataset/media export stays a follow-up (§17 item 1).
 **Repo:** `/Users/neurorishika/Projects/Rockefeller/Kronauer/multi-animal-tracker` @ `main` (`8678c5b6`).
 
 ## 1. Problem
@@ -18,7 +21,7 @@ Machines share nothing except `ssh`/`rsync`.
 1. `trackerkit job pack` turns a tracking config (single video or `--video-list` batch) into a self-contained job directory: manifest, referenced models with sidecars and registry entries, config snapshot, videos, and a generated runner.
 2. `trackerkit job push` / `pull` move the job to and from a remote over `rsync` over `ssh`, incrementally.
 3. `trackerkit job run` executes the job on the compute box with **zero registration**: the job directory supplies the models root and the config root; the host keeps its own data dir.
-4. `pull` places every artifact the run produced back beside the original video, including `.inference_cache_<stem>/`. **Caveat, verified:** the detection cache key embeds the absolute resolved model path and compares it exactly (`core/inference/cache/base.py:36-48`, `cache/keys.py:93-140`), so a cache written under `<job>/models/...` is a **record only** on the staging machine; it will not be reused by a local backward pass or rerun until the cache key is made path-independent (§17 item 1). The spec does not change the cache key.
+4. `pull` places every artifact the run produced back beside the original video, including `.inference_cache_<stem>/`, **and those caches are reusable locally**: a backward pass, a rerun, a parameter-optimizer session or a replay session on the staging machine hits the cache produced on the compute box. This requires the cache key to identify models and videos by content rather than by absolute path and mtime (§7b).
 5. The set of files a job needs is **derived from the engine parameter builder**, so new model roles cannot be forgotten silently.
 6. Configs become portable by construction: the two save-side leaks (`color_tag_model_path`, `cnn_classifiers[].model_path`) are fixed at the source.
 
@@ -244,6 +247,64 @@ Read per call like the other overrides (no caching), so tests monkeypatch `os.en
 
 Everything that already routes through `get_models_dir()` (registry path, `get_models_root_directory()`, SAM3 checkpoints) follows automatically. `get_data_dir()`-rooted stores (`runtime-artifacts`, `inference_tuning_profiles`, `training/runs`, `vitpose-assets`) stay on the host. The plan includes a grep gate: no module may compute `get_data_dir() / "models"` directly.
 
+## 7b. Path-independent cache keys
+
+### 7b.1 What is wrong today (verified)
+
+`CacheKey` (`core/inference/cache/base.py:22-48`) is `(schema_version, model_path, model_mtime, config_hash)`. Every cache on disk stores `key.as_string()` and is accepted only on exact string equality (`cache/store.py:67`, `cache/chunked.py:540,580,1124`). The ingredients that break across machines:
+
+| Ingredient | Where | Why it breaks |
+|---|---|---|
+| `model_path` = absolute resolved path (`"detect|obb"` joined for sequential) | `keys.py:110-131,355,364,394` | `<job>/models/obb/x.pt` on the remote vs `~/Library/.../models/obb/x.pt` locally |
+| `model_mtime` = `os.path.getmtime` | `keys.py:419-423` | survives `copy2`/`rsync -a` by accident, not by contract |
+| `video_signature` = `f"{size}:{st_mtime_ns}"` | `keys.py:36-49`, folded via `with_video_signature` | nanosecond mtime survives only with rsync protocol ≥31 on both ends (this Mac 3.4.3, mehek 3.2.7: OK today; USB, `cp`, SMB, older rsync: broken) |
+
+Everything else in the keys (canonical geometry, ROI mask sha, batch terms, stage params) is already content-based. Consumers that fold the video signature (`runner.py:543,975`, `cache/reuse.py:63-67`, density regions `worker.py:1434`, optimizer `optimizer.py:826`/`optimizer_workers.py:343`, `production_replay.py:185`, identity evidence `base_signature`, `parameter_helper.py:1818`) all call the one `video_signature()` function, so fixing it there fixes them uniformly.
+
+### 7b.2 New definition
+
+```python
+@dataclass(frozen=True)
+class CacheKey:
+    schema_version: int
+    model_id: str      # content identity, see below; sentinel strings unchanged
+    config_hash: str
+    def as_string(self): return f"v{self.schema_version}|{self.model_id}|{self.config_hash}"
+    def matches(self, other): return self.as_string() == other.as_string()
+```
+
+`model_mtime` is removed. `model_path` becomes `model_id`:
+
+- **File model** (`.pt`, `.pth`, `.onnx`, ClassKit checkpoint): `sha256:<hex>` of the file bytes. Sidecars are **not** hashed: the SAHI/canonical sidecars' content already flows into `config_hash` through the stage config (slice profile, geometry), so hashing them again would only add spurious misses when a sidecar is re-stamped.
+- **Directory model** (pose SLEAP/ViTPose/YOLO dirs): `dirsha256:<hex>` over the sorted list of `(relative_path, sha256(file))` for every file the artifact fingerprint already considers (`core/individual/pose/artifacts.py:14-31`), excluding `.hydra-runtime-artifacts/`.
+- **Sequential OBB**: `sha256:<detect>|sha256:<obb>` (same join as today).
+- **Sentinels** `"background_subtraction"` and `""` (AprilTag) unchanged.
+- ClassKit multi-head bundles: `model_id` of the selected checkpoint only, as today; sibling heads travel with it and are covered by `discover_multihead_model_bundle` at pack time.
+
+`video_signature(path)` becomes `f"{size}:{sha256(head 8 MiB ‖ tail 8 MiB)[:32]}"`. Size plus the first and last 8 MiB catches every realistic replacement (re-encode, trim, different clip with the same name) without reading a 50 GB file; hashing 16 MiB costs ~30 ms. Symlinks are followed as today.
+
+### 7b.3 Cost control
+
+Hashing a 100 MB `.pt` costs ~0.3 s. `model_id` is computed once per process per `(realpath, size, mtime_ns)` through an in-process LRU (`functools.lru_cache` keyed on that triple), so mtime still serves as a **local** fast-path hint but never reaches the key. The optimizer and preview paths that rebuild keys many times per session therefore pay once.
+
+### 7b.4 Schema bump and migration
+
+`CACHE_SCHEMA_VERSION` 4 → 5. Every existing cache is invalidated once. No converter: caches are derived data and regenerate. The `v5` comment in `base.py` records the reason (path-independent identity for portable jobs).
+
+### 7b.5 What does not change
+
+- Which frames, arrays and dtypes are cached. This is a key change only.
+- `config_hash` composition. ROI, geometry, batch terms, stage params are untouched.
+- The read-only-handle rule from the detection-cache-wipe fix (read the stored key first when a cache is "ignored") still applies; the stored key is just a different string.
+- Tracking output. The equivalence gate must show byte-identical CSVs before and after, on MPS and CUDA, with caches cleared on both sides (a stale `__pycache__` or an old `v4` cache is the known trap; see memory on poisoned numba caches).
+
+### 7b.6 Tests specific to this change
+
+1. Key invariance: the same model copied to a different absolute path with a different mtime yields an identical `as_string()`; a one-byte change yields a different one. Same for pose directories and for a video with touched mtime vs re-encoded content.
+2. Round trip: pack a fixture job, run it into the job tree, `pull`, then run the same config locally in resume mode and assert the runner reports a cache hit for every stage (detection, head/tail, pose, CNN) with zero recomputed frames.
+3. Schema bump: a `v4` cache is rejected and rebuilt, and the rebuilt key starts with `v5|sha256:`.
+4. Memoization: hashing a model twice in one process reads the file once (count `open` calls via a fake).
+
 ## 8. Push and pull: transport
 
 Both are thin wrappers over `rsync` over `ssh`; the tool never implements file transfer itself. Remote target syntax is `[user@]host:/abs/path/to/jobs/<job_id>`. The tool checks `rsync` is on PATH locally and remotely, and fails with the install hint otherwise.
@@ -419,7 +480,7 @@ Unit (no network, tmp dirs, `HYDRA_*` monkeypatched):
 
 Integration (manual, in the plan's acceptance section): pack `fly_obb` and `ant_pose_headtail` fixtures on this Mac, push to mehek, run, pull, and diff the pulled `_tracking.csv` against a native run on mehek with the same config: identical rows (same host, same models, same config).
 
-Equivalence gate: the only change touching the tracking path is the save-side relativization, which is a load-side no-op. Run the MPS subset (`fly_obb worm_bgsub`) before and after as the delta gate.
+Equivalence gate: two changes touch the tracking path, the save-side relativization (a load-side no-op) and the cache-key redefinition (§7b, key-only). Run the **full** matrix on MPS and CUDA with `.inference_cache_*` and `__pycache__` cleared on both sides; acceptance is byte-identical CSVs at the determinism floor. Then run the §7b.6 round-trip test against mehek as the acceptance proof for Goal 4.
 
 ## 16. Documentation
 
@@ -430,9 +491,8 @@ Equivalence gate: the only change touching the tracking path is the save-side re
 
 ## 17. Follow-ups (explicitly out of scope)
 
-1. **Path-independent detection cache key.** Replace `model_path` in `CacheKey` with the models-root-relative key plus the model file sha256 (and drop `model_mtime`), so a cache pulled from a job is reusable by local backward passes and reruns. Changes every cache key on disk once and needs the equivalence gate on both platforms; until it lands, Goal 4's caches are a record only.
-2. Close the headless export-dir gap (§6.6) under the byte-identity harness.
-3. GUI "Package job…" action in TrackerKit calling `pack_job` through a `BaseWorker`.
-4. `job clean` and retention policy.
-5. Unify the duplicated sidecar-path formula (`session_plan.py:20-26` vs `orchestrators/config.py:97-103`) into `session_plan.get_video_config_path`.
-6. Registry-name references in configs (instead of relative paths) belong to the deferred model-registry unification spec and are not needed for portability.
+1. **Headless CLI dataset/media export** (user-requested follow-up). Close the gap in §6.6: derive `DATASET_OUTPUT_DIR`, `FINAL_MEDIA_EXPORT_VIDEO_OUTPUT_DIR`, `INDIVIDUAL_DATASET_OUTPUT_DIR` in `cli_config.py` exactly as the GUI does (`orchestrators/config.py:2241-2252`, `<video_dir>/<stem>_datasets/<subfolder>`), so a job run on a compute box emits active-learning, oriented-video and individual-crop exports beside the video and `pull` brings them home through the structural output discovery of §10 without further change. Gated by the byte-identity harness because it changes CLI engine params; until then `pack` keeps warning when an export stage is enabled.
+2. GUI "Package job…" action in TrackerKit calling `pack_job` through a `BaseWorker`.
+3. `job clean` and retention policy.
+4. Unify the duplicated sidecar-path formula (`session_plan.py:20-26` vs `orchestrators/config.py:97-103`) into `session_plan.get_video_config_path`.
+5. Registry-name references in configs (instead of relative paths) belong to the deferred model-registry unification spec and are not needed for portability.
