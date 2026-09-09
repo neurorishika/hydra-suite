@@ -253,6 +253,152 @@ Examples:
     # subparser, so passing either is an "unrecognized arguments" SystemExit
     # from argparse itself -- a loud rejection, not a silent ignore.
 
+    job_parser = subparsers.add_parser(
+        "job",
+        help="Package, move, run and retrieve a portable tracking job",
+        allow_abbrev=False,
+    )
+    job_subparsers = job_parser.add_subparsers(dest="job_command")
+
+    job_pack = job_subparsers.add_parser(
+        "pack", allow_abbrev=False, help="Package a video/config batch into a job dir"
+    )
+    job_pack.add_argument("job_dir", type=str)
+    job_pack.add_argument("videos", nargs="*", default=[])
+    job_pack.add_argument("--video-list", type=str)
+    job_pack.add_argument("--config", type=str)
+    job_pack.add_argument("--keystone-override", action="store_true")
+    job_pack.add_argument("--sahi-profile", type=str)
+    pack_autotune_group = job_pack.add_mutually_exclusive_group()
+    pack_autotune_group.add_argument(
+        "--apply-tuned-inference",
+        dest="apply_tuned_inference",
+        action="store_true",
+        default=None,
+    )
+    pack_autotune_group.add_argument(
+        "--no-apply-tuned-inference",
+        dest="apply_tuned_inference",
+        action="store_false",
+    )
+    job_pack.add_argument(
+        "--inference-autotune-manual", action="append", default=[], metavar="FIELD"
+    )
+    job_pack.add_argument("--job-name", type=str, default=None)
+    job_pack.add_argument("--copy-videos", action="store_true")
+    pack_shared_group = job_pack.add_mutually_exclusive_group()
+    pack_shared_group.add_argument("--no-shared", action="store_true")
+    pack_shared_group.add_argument("--shared-only", action="store_true")
+    # Deliberately NO --gpus / --jobs / --threads-per-job: they describe the
+    # COMPUTE BOX, not the experiment, and belong to `job run`. Not
+    # registering them makes passing one an "unrecognized arguments"
+    # SystemExit from argparse itself -- a loud rejection, not a silent
+    # ignore. Same reasoning as the calibrate subparser above.
+    # Fix X8: --force alone only allows repacking a non-empty job_dir
+    # (clears models/config, removes only the OLD manifest's own
+    # video/sidecar pack artifacts). It does NOT authorize discarding
+    # pulled outputs sitting under videos/ -- that needs the separate,
+    # explicit --discard-outputs.
+    job_pack.add_argument("--force", action="store_true")
+    job_pack.add_argument("--discard-outputs", action="store_true")
+
+    job_verify = job_subparsers.add_parser(
+        "verify", allow_abbrev=False, help="Offline integrity check for a packed job"
+    )
+    job_verify.add_argument("job_dir", type=str)
+    job_verify.add_argument("--fast", action="store_true")
+
+    job_shared_root = job_subparsers.add_parser(
+        "shared-root",
+        allow_abbrev=False,
+        help="Manage the host shared-root mount table",
+    )
+    shared_root_subparsers = job_shared_root.add_subparsers(dest="shared_root_command")
+    shared_root_add = shared_root_subparsers.add_parser("add", allow_abbrev=False)
+    shared_root_add.add_argument("alias", type=str)
+    shared_root_add.add_argument("path", type=str)
+    shared_root_subparsers.add_parser("list", allow_abbrev=False)
+
+    job_push = job_subparsers.add_parser(
+        "push", allow_abbrev=False, help="rsync a packed job to a compute box"
+    )
+    job_push.add_argument("job_dir", type=str)
+    job_push.add_argument("target", type=str)
+    job_push.add_argument("--remote-bootstrap", type=str, default="")
+
+    job_pull = job_subparsers.add_parser(
+        "pull", allow_abbrev=False, help="rsync outputs back beside their origin videos"
+    )
+    job_pull.add_argument("target", type=str)
+    job_pull.add_argument("job_dir", type=str)
+    job_pull.add_argument("--dry-run", action="store_true")
+    job_pull.add_argument("--no-caches", action="store_true")
+    job_pull.add_argument("--overwrite", action="store_true")
+    # Fix A5: still-running guard is ON by default.
+    job_pull.add_argument("--force", action="store_true", default=False)
+
+    job_preflight = job_subparsers.add_parser(
+        "preflight",
+        allow_abbrev=False,
+        help="Host checks + shared-root materialization",
+    )
+    job_preflight.add_argument("job_dir", type=str)
+    job_preflight.add_argument(
+        "--shared-root", action="append", default=[], metavar="ALIAS=PATH"
+    )
+    job_preflight.add_argument("--allow-tier-fallback", action="store_true")
+    job_preflight.add_argument("--fast", action="store_true")
+
+    job_run = job_subparsers.add_parser(
+        "run", allow_abbrev=False, help="Run a packed job locally or on a remote box"
+    )
+    job_run.add_argument("target", type=str)
+    job_run.add_argument("--gpus", type=str, default=None)
+    job_run.add_argument("--jobs", type=int, default=None)
+    job_run.add_argument("--threads-per-job", type=int, default=None)
+    job_run.add_argument("--detach", action="store_true")
+    job_run.add_argument("--calibrate", action="store_true")
+    job_run.add_argument("--allow-tier-fallback", action="store_true")
+    job_run.add_argument(
+        "--shared-root", action="append", default=[], metavar="ALIAS=PATH"
+    )
+    # Fix A2b: default must be "" -- an empty bootstrap fails loudly against
+    # a box where trackerkit is not on a bare ssh PATH, rather than silently
+    # mis-scheduling.
+    job_run.add_argument("--remote-bootstrap", type=str, default="")
+    job_run.add_argument(
+        "--budget-seconds", type=float, default=DEFAULT_CALIBRATION_BUDGET_SECONDS
+    )
+    # Deliberately NO --sahi-profile / --apply-tuned-inference /
+    # --inference-autotune-manual: fixed at pack time and always forwarded
+    # from track_args.
+
+    job_calibrate = job_subparsers.add_parser(
+        "calibrate", allow_abbrev=False, help="Run calibration for a packed job"
+    )
+    job_calibrate.add_argument("target", type=str)
+    job_calibrate.add_argument(
+        "--inference-autotune-manual", action="append", default=[], metavar="FIELD"
+    )
+    job_calibrate.add_argument("--remote-bootstrap", type=str, default="")
+    job_calibrate.add_argument(
+        "--budget-seconds", type=float, default=DEFAULT_CALIBRATION_BUDGET_SECONDS
+    )
+
+    job_status = job_subparsers.add_parser(
+        "status", allow_abbrev=False, help="Show a job's manifest summary + run history"
+    )
+    job_status.add_argument("target", type=str)
+    job_status.add_argument("--remote-bootstrap", type=str, default="")
+
+    # Hidden: appends one JSON line to logs/runs.jsonl. Fix Y2 -- add_parser
+    # does NOT accept metavar=; help=argparse.SUPPRESS is the kwarg that
+    # hides a subparser from -h while leaving it fully callable.
+    job_record_run = job_subparsers.add_parser("_record-run", help=argparse.SUPPRESS)
+    job_record_run.add_argument("--started", type=str, required=True)
+    job_record_run.add_argument("--exit-code", type=int, required=True)
+    job_record_run.add_argument("argv", nargs=argparse.REMAINDER)
+
     return parser
 
 
@@ -307,6 +453,21 @@ def parse_arguments(argv: list[str] | None = None) -> object:
                 f"{MINIMUM_CALIBRATION_BUDGET_SECONDS:g} and "
                 f"{MAXIMUM_CALIBRATION_BUDGET_SECONDS:g}"
             )
+
+    if args.command == "job":
+        job_parser = subcommands["job"]
+        job_subcommands = _subparser_choices(job_parser)
+        job_command = getattr(args, "job_command", None)
+        if job_command == "pack":
+            pack_parser = job_subcommands["pack"]
+            videos = list(getattr(args, "videos", []) or [])
+            video_list = getattr(args, "video_list", None)
+            if videos and video_list:
+                pack_parser.error(
+                    "use either explicit video paths or --video-list, not both"
+                )
+            if not videos and not video_list:
+                pack_parser.error("provide at least one video path or --video-list")
 
     return args
 
@@ -457,6 +618,17 @@ def main(argv: list[str] | None = None) -> object:
             )
         except Exception as e:
             logger.error("Tracker calibration failed: %s", e, exc_info=True)
+            print(f"Error: {e}")
+            sys.exit(1)
+        sys.exit(exit_code)
+
+    if args.command == "job":
+        from hydra_suite.trackerkit.job_cli import run_job_cli
+
+        try:
+            exit_code = run_job_cli(args)
+        except Exception as e:
+            logger.error("Tracker job CLI failed: %s", e, exc_info=True)
             print(f"Error: {e}")
             sys.exit(1)
         sys.exit(exit_code)
