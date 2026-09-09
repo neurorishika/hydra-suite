@@ -1465,13 +1465,6 @@ class TrackingEngineCore:
                         _replay_vector.effective.to_dict(),
                         _replay_vector.status,
                     )
-            elif not self.preview_mode:
-                # A forward pass owns the cache directory. Record the vector it
-                # is about to write under -- and CLEAR any stale record when it
-                # overrides nothing, so an untuned rerun cannot leave a tuned
-                # record pointing at a default-batch cache.
-                write_replay_vector(_cache_dir, self.inference_autotune_overlay)
-
             # Backward (replay) passes only call load_frame / caches_all_valid —
             # they never invoke run_realtime or run_batch_pass.  Skip loading
             # HeadTail, CNN, Pose (incl. SLEAP), and AprilTag backends in that
@@ -1491,6 +1484,17 @@ class TrackingEngineCore:
                 identity_evidence=_identity_evidence_run_config,
                 runtime_overlay=self.inference_autotune_overlay,
             )
+            if not (
+                self.backward_mode or self.cache_read_only_replay or self.preview_mode
+            ):
+                # A forward pass owns the cache directory. Record the vector it
+                # is about to write under -- and CLEAR any stale record when it
+                # overrides nothing, so an untuned rerun cannot leave a tuned
+                # record pointing at a default-batch cache. Written only after
+                # the runner constructs: a construction failure (e.g. an
+                # unloadable model) writes no caches, so it must leave no
+                # record either.
+                write_replay_vector(_cache_dir, self.inference_autotune_overlay)
             self.inference_runtime_artifact_ids = tuple(
                 getattr(inference_runner, "runtime_artifact_ids", ())
             )

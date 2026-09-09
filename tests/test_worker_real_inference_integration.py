@@ -752,52 +752,82 @@ def test_preview_never_launches_a_calibration(monkeypatch, tmp_path):
     assert ("runner", 1) in calls
 
 
-def test_backward_enabled_project_is_not_calibrated(monkeypatch, tmp_path):
-    """A run with a backward pass must decline tuning, not break the run.
+def _tuned_overlay(effective: int):
+    """An overlay that promotes detection_batch_size, as calibration would."""
+    from hydra_suite.core.inference.autotune.models import (
+        InferenceRuntimeOverlay,
+        InferenceTuningSettings,
+    )
 
-    The backward pass replays the forward pass's detection cache, but the
-    autotuner only runs on the forward pass -- so backward re-resolves at the
-    project's UNTUNED batch size. Now that the batch size is part of the cache
-    key (it must be), that is a key miss and backward refuses with "Cached
-    tracking replay requires valid inference caches". Measured on courtship:
-    forward promoted det=4 and completed, then the whole run failed in
-    backward.
+    return InferenceRuntimeOverlay(
+        requested=InferenceTuningSettings(detection_batch_size=1),
+        admitted=InferenceTuningSettings(detection_batch_size=effective),
+        effective=InferenceTuningSettings(detection_batch_size=effective),
+        field_sources=(("detection_batch_size", "calibrated"),),
+        status="calibrated",
+        reason="measured",
+    )
 
-    Declining is the fail-safe. The real fix is to propagate the forward
-    pass's effective vector to the backward pass.
+
+class _BatchProbeRunner:
+    """Records the batch size the config carried at construction."""
+
+    seen: list = []
+
+    def __init__(self, config, *_args, **_kwargs):
+        type(self).seen.append(config.detection_batch_size)
+
+    def caches_all_valid(self):
+        return False
+
+    def detection_cache_covers_range(self, *_args):
+        return False
+
+    def detection_cache_missing_frames(self, *_args, **_kwargs):
+        return []
+
+    def run_batch_pass(self, *_args, **_kwargs):
+        raise _StopAfterDispatch("runner constructed")
+
+    def close(self):
+        pass
+
+
+def test_backward_enabled_project_is_calibrated_and_records_its_vector(
+    monkeypatch, tmp_path
+):
+    """A backward-enabled project tunes, and the forward pass records what it ran.
+
+    It used to DECLINE: the backward pass replays the forward pass's detection
+    cache, the batch size is part of the cache key, and backward re-resolved at
+    the project's UNTUNED batch size -- a key miss that failed the run
+    ("Cached tracking replay requires valid inference caches"; measured on
+    courtship, forward promoted det=4). That is a cache-key LOOKUP mismatch,
+    not a tuning problem -- the backward pass runs no inference at all. So the
+    forward pass now records its effective vector beside the caches it writes,
+    and the backward pass (below) reads it.
     """
     import hydra_suite.core.tracking.worker as worker_mod
+    from hydra_suite.core.inference.autotune.replay_vector import load_replay_vector
 
     calls = []
+    overlay = _tuned_overlay(4)
 
-    def resolve(_config, _params, **_kwargs):
+    def resolve(config, _params, **_kwargs):
         calls.append("resolve")
-        raise AssertionError("a backward-enabled project must not be calibrated")
+        return overlay.apply(config), overlay, None
 
-    class _ProbeRunner:
-        def __init__(self, config, *_args, **_kwargs):
-            calls.append(("runner", config.detection_batch_size))
-
-        def caches_all_valid(self):
-            return False
-
-        def detection_cache_covers_range(self, *_args):
-            return False
-
-        def run_batch_pass(self, *_args, **_kwargs):
-            raise _StopAfterDispatch("runner constructed")
-
-        def close(self):
-            pass
-
+    _BatchProbeRunner.seen = []
+    cache_dir = tmp_path / "cache"
     monkeypatch.setattr(worker_mod, "TrackingProfiler", _FakeProfiler)
     monkeypatch.setattr(worker_mod.cv2, "VideoCapture", _FakeVideoCapture)
-    monkeypatch.setattr(worker_mod, "InferenceRunner", _ProbeRunner)
+    monkeypatch.setattr(worker_mod, "InferenceRunner", _BatchProbeRunner)
     monkeypatch.setattr(worker_mod, "_resolve_inference_autotune_before_load", resolve)
     worker = worker_mod.TrackingEngineCore(
         str(tmp_path / "video.mp4"),
         on_finished=lambda *_args: None,
         use_cached_detections=False,
+        inference_cache_dir=str(cache_dir),
     )
     params = _dispatch_params(INFERENCE_AUTOTUNE_MODE="automatic", YOLO_BATCH_SIZE=1)
     params["INFERENCE_AUTOTUNE_PROJECT_CONFIG"] = {"enable_backward_tracking": True}
@@ -808,5 +838,78 @@ def test_backward_enabled_project_is_not_calibrated(monkeypatch, tmp_path):
     except _StopAfterDispatch:
         pass
 
-    assert "resolve" not in calls, "a backward-enabled project was calibrated"
-    assert ("runner", 1) in calls, "the run must still proceed, untuned"
+    assert "resolve" in calls, "a backward-enabled project must now be calibrated"
+    assert _BatchProbeRunner.seen == [4], "the forward pass must run the tuned batch"
+    record = load_replay_vector(cache_dir)
+    assert record is not None, "the forward pass must record its effective vector"
+    assert record.effective.detection_batch_size == 4
+
+
+def test_backward_pass_resolves_the_tuned_forward_vector(monkeypatch, tmp_path):
+    """Backward reads what forward wrote, not what the project configures.
+
+    The params here are the project's own UNTUNED ones (batch 1) -- exactly
+    what the GUI and headless builders produce for the backward pass. Without
+    the record it would resolve at batch 1 and miss the tuned cache key.
+    """
+    import hydra_suite.core.tracking.worker as worker_mod
+    from hydra_suite.core.inference.autotune.replay_vector import write_replay_vector
+
+    cache_dir = tmp_path / "cache"
+    cache_dir.mkdir()
+    write_replay_vector(cache_dir, _tuned_overlay(4))
+
+    _BatchProbeRunner.seen = []
+    monkeypatch.setattr(worker_mod, "TrackingProfiler", _FakeProfiler)
+    monkeypatch.setattr(worker_mod.cv2, "VideoCapture", _FakeVideoCapture)
+    monkeypatch.setattr(worker_mod, "InferenceRunner", _BatchProbeRunner)
+    worker = worker_mod.TrackingEngineCore(
+        str(tmp_path / "video.mp4"),
+        on_finished=lambda *_args: None,
+        backward_mode=True,
+        detection_cache_path=str(cache_dir),
+        inference_cache_dir=str(cache_dir),
+        use_cached_detections=True,
+    )
+    worker.set_parameters(_dispatch_params(YOLO_BATCH_SIZE=1))
+
+    try:
+        worker.run_tracking()
+    except _StopAfterDispatch:
+        pass
+
+    assert _BatchProbeRunner.seen == [
+        4
+    ], "backward must resolve the cache keys the forward pass wrote"
+
+
+def test_backward_pass_without_a_record_is_unchanged(monkeypatch, tmp_path):
+    """No record => the configured batch, exactly as before this record existed.
+
+    Every cache written before the record existed must stay readable.
+    """
+    import hydra_suite.core.tracking.worker as worker_mod
+
+    cache_dir = tmp_path / "cache"
+    cache_dir.mkdir()
+
+    _BatchProbeRunner.seen = []
+    monkeypatch.setattr(worker_mod, "TrackingProfiler", _FakeProfiler)
+    monkeypatch.setattr(worker_mod.cv2, "VideoCapture", _FakeVideoCapture)
+    monkeypatch.setattr(worker_mod, "InferenceRunner", _BatchProbeRunner)
+    worker = worker_mod.TrackingEngineCore(
+        str(tmp_path / "video.mp4"),
+        on_finished=lambda *_args: None,
+        backward_mode=True,
+        detection_cache_path=str(cache_dir),
+        inference_cache_dir=str(cache_dir),
+        use_cached_detections=True,
+    )
+    worker.set_parameters(_dispatch_params(YOLO_BATCH_SIZE=1))
+
+    try:
+        worker.run_tracking()
+    except _StopAfterDispatch:
+        pass
+
+    assert _BatchProbeRunner.seen == [1]
