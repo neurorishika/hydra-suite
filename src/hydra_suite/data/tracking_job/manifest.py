@@ -3,6 +3,7 @@
 from __future__ import annotations
 
 import dataclasses
+import subprocess
 from dataclasses import dataclass, field
 from pathlib import Path
 from typing import Any
@@ -11,6 +12,22 @@ from ..project_bundle import write_json_atomic
 
 SUPPORTED_JOB_VERSION = 1
 JOB_MANIFEST_FILENAME = "hydra_job.json"
+
+
+def _current_git_sha() -> str:
+    """Best-effort git SHA of the running checkout; "" if not a git repo or
+    git is unavailable (e.g. a pip-installed hydra-suite with no .git)."""
+    try:
+        result = subprocess.run(
+            ["git", "rev-parse", "HEAD"],
+            cwd=Path(__file__).resolve().parent,
+            capture_output=True,
+            text=True,
+            timeout=5,
+        )
+        return result.stdout.strip() if result.returncode == 0 else ""
+    except (OSError, subprocess.SubprocessError):
+        return ""
 
 
 class TrackingJobError(ValueError):
