@@ -31,7 +31,7 @@ Plus two pre-existing bugs found while anchoring. **Do not fix them in this bran
 
 ## Global Constraints
 
-- **Baselines to protect** (measured on `hydra-mps` @ `8f9688e0`): `tests/test_inference_cache_keys.py tests/test_inference_cache_chunked.py` = **111 passed**; `tests/test_gui_cli_param_equivalence.py tests/test_get_parameters_dict_characterization.py tests/test_paths.py` = **27 passed**. Any task reducing these without an explicit, justified deletion is a regression.
+- **Baselines to protect** (measured on `hydra-mps` @ `8f9688e0`): `tests/test_inference_cache_keys.py tests/test_inference_cache_chunked.py` = **111 passed**; `tests/test_gui_cli_param_equivalence.py tests/test_get_parameters_dict_characterization.py tests/test_paths.py` = **27 passed**. **Task 1's `HYDRA_MODELS_DIR` work landed on this branch at `3d4e2625`, before this fix wave** — it added `tests/test_paths_models_dir_override.py` (8 tests) as a *separate* file, so `test_paths.py` itself is still 19 tests, unchanged. The current, up-to-date protected count for this group is therefore **`tests/test_gui_cli_param_equivalence.py tests/test_get_parameters_dict_characterization.py tests/test_paths.py tests/test_paths_models_dir_override.py` = 35 passed** (27 + the 8 new ones), verified by collection on this worktree. Any task reducing these without an explicit, justified deletion is a regression.
 - **Run the FULL relevant suite every task**, never a subset chosen by apparent relevance — the reflective contract guards (`test_get_parameters_dict_characterization.py`, the new Task 3 guard) break on ANY field addition. This is memory `feedback_run_contract_guards_after_field_additions`.
 - **Dependency direction is a hard gate.** `src/hydra_suite/data/tracking_job/` must import ONLY from `data`, `core`, `training.model_publish`, `paths`, and the stdlib. It must never import `trackerkit`, `classkit`, `detectkit`, `posekit`, `refinekit`, `filterkit`, `widgets`, or PySide6. Task 5 adds an automated test asserting this.
 - **Never import from `legacy/`.**
@@ -41,7 +41,7 @@ Plus two pre-existing bugs found while anchoring. **Do not fix them in this bran
 - Format before every commit: `make format`. Lint gate: `make lint` (fix B7: **`make lint-moderate` DOES NOT EXIST** — `Makefile:421,427,440,446` define only `lint`, `lint-fix`, `lint-strict`, `lint-report`. A commit step chained `make lint-moderate && git commit` would never reach the commit).
 - Activate the env first: `conda activate hydra-mps`. **An agent executing this plan gets a fresh shell per Bash call, so `conda activate` does NOT persist** — either put every command of a step inside ONE fenced block (as most steps here do) or prefix each command with `conda run --no-capture-output -n hydra-mps` (fix B14; Task 13 uses the latter throughout). Before any heavy run, kill stale `sleap`/`hydra` processes; **never** touch a process that is not sleap/hydra.
 - Commit after every task. Do not squash tasks together.
-- **Never invoke bare `trackerkit` (or bare `hydra`) from inside this worktree for any acceptance/E2E step.** Verified: `hydra_suite.__file__` resolves to MAIN's editable install here, not `.worktrees/portable-jobs/src` — a bare console-script invocation silently exercises unmodified `main` code and reports false confidence about the branch under test. Every acceptance/CLI-smoke command in this plan must instead be `PYTHONPATH=<worktree>/src python -m hydra_suite.trackerkit.app job ...` (this matches the repo's known PYTHONPATH gotcha, memory `feedback_equivalence_pythonpath_gotcha`). The equivalence fixture clips (`tools/equivalence/fixtures/clips/*.mp4`) are also gitignored and absent from a fresh worktree — run `bash tools/equivalence/fixtures/fetch_fixtures.sh` before any step that references them.
+- **Never invoke bare `trackerkit` (or bare `hydra`) from inside this worktree for any acceptance/E2E step.** Verified: `hydra_suite.__file__` resolves to MAIN's editable install here, not `.worktrees/portable-jobs/src` — a bare console-script invocation silently exercises unmodified `main` code and reports false confidence about the branch under test. Every acceptance/CLI-smoke command in this plan must instead be `PYTHONPATH=<worktree>/src python -m hydra_suite.trackerkit.app job ...` (this matches the repo's known PYTHONPATH gotcha, memory `feedback_equivalence_pythonpath_gotcha`). The equivalence fixture clips (`tools/equivalence/fixtures/clips/*.mp4`) are gitignored, but on this box they are already present in this worktree (verified: `tools/equivalence/fixtures/clips/*.mp4` exist here) — `fetch_fixtures.sh` is a no-op unless working from a genuinely fresh clone/worktree that lacks them.
 - **Verification box is `firebrat`** (`rutalab@firebrat`, RTX 4090 idle, conda at `~/miniforge3`, envs `hydra-cuda` + `sleap`, rsync 3.2.7, 1.6 TB free, equivalence fixtures already present at `~/hydra-suite/tools/equivalence/fixtures/`). **`courtship` is running a live `trackerkit` job — do not use it and do not kill anything on it.**
 
 ---
@@ -71,17 +71,21 @@ Plus two pre-existing bugs found while anchoring. **Do not fix them in this bran
 
 ---
 
-### Task 1: `HYDRA_MODELS_DIR` override
+### Task 1: `HYDRA_MODELS_DIR` override, and `get_platform_config_dir()`
 
-**Files:**
-- Modify: `src/hydra_suite/paths.py:1-16` (docstring), `:128-132` (`get_models_dir`), `:202-228` (`print_paths`)
-- Test: `tests/test_paths_models_dir_override.py` (create)
+**Status: the `HYDRA_MODELS_DIR` override is DONE — already committed on this branch at `3d4e2625`** ("feat(paths): HYDRA_MODELS_DIR relocates the models root independently of the data dir"). Verified in source: `src/hydra_suite/paths.py` has the `HYDRA_MODELS_DIR` docstring line, `get_models_dir()` reads `os.environ.get("HYDRA_MODELS_DIR")` per call and `expanduser()`s it, `print_paths()` reports it, and `tests/test_paths_models_dir_override.py` exists with the 8 tests below (all collected and, per that commit's own gate, passing). `docs/getting-started/installation.md` has the table row. **Do not redo Steps 1-7 below** — they are kept verbatim only as the historical record of what `3d4e2625` implemented; skip straight to the "Remaining work" step.
+
+Original Steps 1-7 (already done, do not re-run as if pending):
+
+**Files (already modified):**
+- `src/hydra_suite/paths.py:1-16` (docstring), `:128-132` (`get_models_dir`), `:202-228` (`print_paths`)
+- `tests/test_paths_models_dir_override.py` (created)
 
 **Interfaces:**
 - Consumes: nothing.
 - Produces: `get_models_dir()` honours `$HYDRA_MODELS_DIR`. Everything routing through it (`model_paths.get_models_root_directory()`, `model_publish.get_models_root()`, `_registry_path()`, SAM3 checkpoint root) follows automatically.
 
-- [ ] **Step 1: Write the failing test**
+- [x] **Step 1: Write the failing test**
 
 Create `tests/test_paths_models_dir_override.py`:
 
@@ -151,12 +155,12 @@ def test_print_paths_reports_the_override(tmp_path, monkeypatch, capsys):
     assert "HYDRA_MODELS_DIR" in capsys.readouterr().out
 ```
 
-- [ ] **Step 2: Run test to verify it fails**
+- [x] **Step 2: Run test to verify it fails**
 
 Run: `conda activate hydra-mps && python -m pytest tests/test_paths_models_dir_override.py -v`
 Expected: FAIL — `get_models_dir()` returns the data-dir path, ignoring the env var.
 
-- [ ] **Step 3: Implement**
+- [x] **Step 3: Implement**
 
 In `src/hydra_suite/paths.py`, replace `get_models_dir` (currently `:128-132`):
 
@@ -186,7 +190,77 @@ Add `HYDRA_MODELS_DIR` to the module docstring's override list (`:1-16`), and in
     print(f"  HYDRA_MODELS_DIR: {os.environ.get('HYDRA_MODELS_DIR', '(unset)')}")
 ```
 
-**Fix X1a — add `get_platform_config_dir()`, a config-dir resolver that ignores `HYDRA_CONFIG_DIR` entirely.** Task 6's preflight (`shared_roots` check) needs to distinguish "the host has no config-dir override" from "read whatever `HYDRA_CONFIG_DIR` currently points at" — and inside `run.sh`, `HYDRA_CONFIG_DIR` has already been redirected to the job's own snapshot, so at that point it is not a usable signal for "the host's real platformdirs default" at all. Add, beside `_user_config_dir()` (`:38-49`):
+- [x] **Step 4: Run tests to verify they pass**
+
+Run: `python -m pytest tests/test_paths_models_dir_override.py tests/test_paths.py -v`
+Expected: all PASS.
+
+- [x] **Step 5: Grep gate — no module may bypass `get_models_dir()`**
+
+Run:
+```bash
+grep -rn 'get_data_dir()[[:space:]]*/[[:space:]]*"models"' src/ && echo "VIOLATION" || echo "clean"
+```
+Expected: `clean`. (Known non-violations, do not touch: `paths_migrate.py:31` uses `repo_root / "models"` as a migration *source*; `posekit/gui/main_window.py:4608` uses a SLEAP training-run root; ClassKit/DetectKit `artifacts/models` are per-project.)
+
+- [x] **Step 6: Document**
+
+In `docs/getting-started/installation.md`, in the environment-variable table (near the existing `HYDRA_DATA_DIR`/`HYDRA_CONFIG_DIR` rows), add:
+
+```markdown
+| `HYDRA_MODELS_DIR` | Relocates only the models root (`model_registry.json` + published models), leaving engine artifacts and calibration profiles on the host data dir. Set automatically by a packed job's `run.sh`. |
+```
+
+- [x] **Step 7: Commit**
+
+```bash
+make format
+git add src/hydra_suite/paths.py tests/test_paths_models_dir_override.py docs/getting-started/installation.md
+git commit -m "feat(paths): HYDRA_MODELS_DIR relocates the models root independently of the data dir"
+```
+
+Committed at `3d4e2625`. End of the already-done historical record.
+
+---
+
+**Remaining work for Task 1 — `get_platform_config_dir()` (fix Y3, round 7).** This is the only piece of Task 1 not yet on the branch. Task 10's fix X1 (`preflight.py`) imports `get_platform_config_dir` from `hydra_suite.paths`; without it, `preflight.py` fails to import at all, breaking every downstream task that touches preflight. Task 6's `shared_roots` preflight check needs to distinguish "the host has no config-dir override" from "read whatever `HYDRA_CONFIG_DIR` currently points at" — and inside `run.sh`, `HYDRA_CONFIG_DIR` has already been redirected to the job's own snapshot, so at that point it is not a usable signal for "the host's real platformdirs default" at all.
+
+**Files:**
+- Modify: `src/hydra_suite/paths.py` (add `get_platform_config_dir()` beside `_user_config_dir()`, verified at `:38-49`)
+- Test: `tests/test_paths.py` (add cases; do not create a new file — this is a one-function addition to an already-tested module)
+
+- [ ] **Step 8: Write the failing test**
+
+Add to `tests/test_paths.py`:
+
+```python
+def test_get_platform_config_dir_ignores_override(tmp_path, monkeypatch):
+    from hydra_suite import paths
+
+    monkeypatch.setenv("HYDRA_CONFIG_DIR", str(tmp_path / "job_config_snapshot"))
+    real = paths.get_platform_config_dir()
+    assert real != tmp_path / "job_config_snapshot"
+    assert real.is_dir()
+
+
+def test_get_platform_config_dir_matches_platformdirs_default(tmp_path, monkeypatch):
+    from platformdirs import user_config_dir
+
+    from hydra_suite import paths
+
+    monkeypatch.delenv("HYDRA_CONFIG_DIR", raising=False)
+    expected = Path(user_config_dir(paths.APP_NAME, paths.APP_AUTHOR))
+    assert paths.get_platform_config_dir() == expected
+```
+
+- [ ] **Step 9: Run test to verify it fails**
+
+Run: `conda activate hydra-mps && python -m pytest tests/test_paths.py -k platform_config_dir -v`
+Expected: FAIL — `AttributeError: module 'hydra_suite.paths' has no attribute 'get_platform_config_dir'`.
+
+- [ ] **Step 10: Implement**
+
+In `src/hydra_suite/paths.py`, add beside `_user_config_dir()` (`:38-49`):
 
 ```python
 def get_platform_config_dir() -> Path:
@@ -205,33 +279,17 @@ def get_platform_config_dir() -> Path:
 
 This is a thin, deliberate duplication of `_user_config_dir()`'s else-branch — not a refactor of `_user_config_dir()` itself, since every other caller of `_user_config_dir()` legitimately wants the override-aware behaviour.
 
-- [ ] **Step 4: Run tests to verify they pass**
+- [ ] **Step 11: Run tests to verify they pass**
 
-Run: `python -m pytest tests/test_paths_models_dir_override.py tests/test_paths.py -v`
-Expected: all PASS.
+Run: `python -m pytest tests/test_paths.py tests/test_paths_models_dir_override.py -v`
+Expected: all PASS — **21 tests in `test_paths.py`** (19 existing + 2 new), 8 in the override file, 35 total across the four-file baseline group in Global Constraints.
 
-- [ ] **Step 5: Grep gate — no module may bypass `get_models_dir()`**
-
-Run:
-```bash
-grep -rn 'get_data_dir()[[:space:]]*/[[:space:]]*"models"' src/ && echo "VIOLATION" || echo "clean"
-```
-Expected: `clean`. (Known non-violations, do not touch: `paths_migrate.py:31` uses `repo_root / "models"` as a migration *source*; `posekit/gui/main_window.py:4608` uses a SLEAP training-run root; ClassKit/DetectKit `artifacts/models` are per-project.)
-
-- [ ] **Step 6: Document**
-
-In `docs/getting-started/installation.md`, in the environment-variable table (near the existing `HYDRA_DATA_DIR`/`HYDRA_CONFIG_DIR` rows), add:
-
-```markdown
-| `HYDRA_MODELS_DIR` | Relocates only the models root (`model_registry.json` + published models), leaving engine artifacts and calibration profiles on the host data dir. Set automatically by a packed job's `run.sh`. |
-```
-
-- [ ] **Step 7: Commit**
+- [ ] **Step 12: Commit**
 
 ```bash
 make format
-git add src/hydra_suite/paths.py tests/test_paths_models_dir_override.py docs/getting-started/installation.md
-git commit -m "feat(paths): HYDRA_MODELS_DIR relocates the models root independently of the data dir"
+git add src/hydra_suite/paths.py tests/test_paths.py
+git commit -m "feat(paths): add get_platform_config_dir(), an override-blind platformdirs config resolver"
 ```
 
 ---
@@ -1065,12 +1123,19 @@ def test_multihead_manifest_content_id_notices_a_retrained_head(tmp_path):
     manifest = _write_multihead_manifest(tmp_path)
     before = content_id.model_content_id(str(manifest))
     assert before.startswith("multihead:")
+    # Minor fix (round-7): capture the manifest's OWN file_content_id BEFORE
+    # the head rewrite, so the assertion below is a real before/after
+    # comparison, not the tautological `x == x` the previous draft had
+    # (`file_content_id(str(manifest)) == file_content_id(str(manifest))`,
+    # which is trivially true regardless of whether the manifest bytes
+    # actually changed and proves nothing).
+    manifest_only_id_before = content_id.file_content_id(str(manifest))
     (tmp_path / "clf_flat.pth").write_bytes(b"retrained_head")
     after = content_id.model_content_id(str(manifest))  # NOTE: no cache_clear() here
     assert after != before
     # The manifest bytes alone are unchanged -- proves the composite is
     # actually reading the head, not just re-hashing the manifest file.
-    assert content_id.file_content_id(str(manifest)) == content_id.file_content_id(str(manifest))
+    assert content_id.file_content_id(str(manifest)) == manifest_only_id_before
 
 
 def test_multihead_manifest_content_id_is_path_independent(tmp_path):
@@ -1909,7 +1974,7 @@ For every file above: grep it for `CacheKey(`, `model_path=`, `model_mtime=`, an
 
 **`tests/test_inference_cache_keys.py` needs actual rewrites, not renames — itemized:**
 
-- `test_detection_key_changes_with_model_path` (`:192`) — currently uses `/a.pt` and `/b.pt`, which don't exist on disk, so under content identity both resolve to the SAME missing-model sentinel and the keys become spuriously EQUAL (this is exactly the M5 bug this task also fixes). Rewrite to create two real temp files with **different bytes** and assert the keys differ.
+- `test_detection_key_changes_with_model_path` (`:192`) — currently uses `/a.pt` and `/b.pt`, which don't exist on disk. **Minor fix (round-7) — corrected rationale for the rewrite (the original rationale was wrong): under the missing-model sentinel, `/a.pt` and `/b.pt` already hash their DIFFERENT paths and so already produce DIFFERENT sentinel ids — even before fix M5, and certainly after it (fix M5 fixes a different bug: two DIFFERENT missing paths spuriously colliding onto the SAME sentinel value, which is not what two distinct nonexistent paths do here). The real problem with the current test is that it never exercises real content-based hashing at all — it only ever exercises the missing-model-sentinel fallback path, which is path-keyed, not content-keyed, so the test would "pass" whether or not sha256 content identity works correctly (and would fail to catch a bug where two files with the SAME bytes at different paths wrongly get different keys, since it never has two paths with equal content to compare). The rewrite itself is still correct and necessary — create two real temp files with **different bytes** and assert the keys differ — but for the right reason: to actually exercise the content-hashing code path this task builds, not to avoid a same-sentinel collision that was never the failure mode here.
 - `test_detection_key_stable_with_threshold` (`:198`) — reads `.model_path` off the built key; that attribute no longer exists. Rewrite to read `.model_id`.
 - `test_detection_key_sequential_encodes_both_models` (`:205`) — asserts substrings of the two absolute paths appear in the key string; under content identity the key contains sha256 hex, not paths. Rewrite to assert the key changes when either model's **bytes** change (mirrors the new `test_sequential_key_changes_when_either_model_changes` above), not to assert path substrings.
 - `test_sequential_second_model_signature_invalidates_detection_key` (`:280`) — monkeypatches `keys._mtime`, which Step 5 deletes entirely. Rewrite to monkeypatch nothing and instead rewrite the second model file's bytes on disk, asserting the key changes (the real content-based path).
@@ -2028,9 +2093,21 @@ Record the result in the plan's Acceptance Log below. If any clip diverges, STOP
 
 - [ ] **Step 14: Same gate on firebrat (CUDA)**
 
+**Fix Y7 (round-7) — `git fetch && git checkout <this-branch-sha>` cannot work as written: `feat/portable-tracking-jobs` (and the `TASK3_TIP` sha it names) exist ONLY in this local worktree/clone, never pushed anywhere firebrat's `git fetch` can reach — and even local `main` is ahead of `origin/main`, so "just fetch" is never sufficient for a branch built on top of it. Verified: `git branch -r --contains feat/portable-tracking-jobs` and `git ls-remote origin feat/portable-tracking-jobs` both come back empty from this worktree. The transport step below MUST run before `git fetch` on firebrat, every time this branch's tip changes (i.e. before Step 14 here, and again before Task 13 Step 3, which reuses this recipe verbatim).** Chosen mechanism: a **git bundle**, not `git push origin`, per this plan's own "do not push" instruction (this plan/branch is worked in an isolated local worktree and is not to touch `origin` autonomously) and per the existing precedent for this exact box class (memory `project_pose_cnn_batched_detection_slowdown`'s "mehek git-bundle transport recipe"). Run from THIS worktree (`.worktrees/portable-jobs`), local machine, before ssh'ing in:
+
+```bash
+# On THIS machine, from the worktree:
+cd /Users/neurorishika/Projects/Rockefeller/Kronauer/multi-animal-tracker/.worktrees/portable-jobs
+git bundle create /tmp/portable-jobs.bundle feat/portable-tracking-jobs
+scp /tmp/portable-jobs.bundle firebrat:/tmp/portable-jobs.bundle
+ssh firebrat 'cd ~/hydra-suite && git fetch /tmp/portable-jobs.bundle feat/portable-tracking-jobs:refs/heads/feat/portable-tracking-jobs'
+```
+
+Only after that succeeds does the `ssh firebrat` session below have a local `feat/portable-tracking-jobs` ref to check out — `git checkout <this-branch-sha>` (a bare sha, detached) then resolves because the bundle fetch already made the sha reachable, without firebrat's `origin` remote ever needing to know about this branch.
+
 ```bash
 ssh firebrat
-cd ~/hydra-suite && git fetch && git checkout <this-branch-sha>
+cd ~/hydra-suite && git checkout <this-branch-sha>
 source ~/miniforge3/etc/profile.d/conda.sh && conda activate hydra-cuda
 find . -name '__pycache__' -type d -prune -exec rm -rf {} +
 # Fix C1 (round-5 CRITICAL): this is a FRESH ssh session -- $TASK3_TIP from
@@ -3213,6 +3290,7 @@ Create `tests/test_tracking_job_pack.py`:
 import json
 import os
 import stat
+from pathlib import Path
 
 import pytest
 
@@ -3307,6 +3385,53 @@ def test_run_sh_is_executable(tmp_path, staging):
     _pack(tmp_path, staging)
     mode = (tmp_path / "job" / "run.sh").stat().st_mode
     assert mode & stat.S_IXUSR
+
+
+# Fix Y1 (round-7): the round-6 `eval "$TRACKERKIT track --video-list
+# videos.txt $(printf '%q ' "$@")"` form is broken with ZERO passthrough
+# args -- `printf '%q ' "$@"` on an empty "$@" still emits one `''` token,
+# and `eval` re-parses that as a real, bogus empty positional, so
+# `parse_arguments` sees `track --video-list videos.txt ''` and raises
+# ("use either explicit video paths or --video-list, not both") before a
+# single frame runs. This must be a REAL executed test -- monkeypatching
+# `subprocess.run` (as the `job run` unit tests do) never invokes the actual
+# bash template, so it cannot see this bug class at all.
+def test_run_sh_track_invocation_has_no_stray_empty_positional_with_zero_args(
+    tmp_path, staging
+):
+    import subprocess
+    import sys
+
+    _pack(tmp_path, staging)
+    job = tmp_path / "job"
+
+    # An argv-dumping stub standing in for `trackerkit`: writes its argv
+    # (one JSON list per invocation) to argv_dump.jsonl and always exits 0,
+    # so run.sh's own preflight/track/`_record-run` calls all "succeed"
+    # without needing a real engine.
+    stub = tmp_path / "trackerkit_stub.py"
+    stub.write_text(
+        "import json, sys\n"
+        "with open(sys.argv[0] + '.dump', 'a') as f:\n"
+        "    f.write(json.dumps(sys.argv[1:]) + '\\n')\n"
+        "sys.exit(0)\n"
+    )
+    dump = Path(str(stub) + ".dump")
+
+    env = dict(os.environ)
+    env["HYDRA_JOB_TRACKERKIT"] = f"{sys.executable} {stub}"
+    env["HYDRA_JOB_SKIP_PREFLIGHT"] = "1"  # isolate the `track` + `_record-run` calls
+
+    result = subprocess.run(
+        ["bash", str(job / "run.sh")], cwd=job, env=env, capture_output=True, text=True
+    )
+    assert result.returncode == 0, result.stderr
+
+    lines = dump.read_text().strip().splitlines()
+    assert len(lines) == 2, lines  # track, then job _record-run
+    track_argv = json.loads(lines[0])
+    assert track_argv == ["track", "--video-list", "videos.txt"], track_argv
+    assert "" not in track_argv, "run.sh must never pass an empty positional to track"
 
 
 def test_video_is_symlinked_by_default(tmp_path, staging):
@@ -3687,17 +3812,39 @@ START="$(date -u +%FT%TZ)"
 # Minor fix (round-6): `job_cli.py` builds this value with Python's
 # `shlex.quote(sys.executable)` so a space-containing interpreter path
 # survives -- but `shlex.quote` produces POSIX shell-syntax quoting (wrapping
-# quotes as literal characters), and every use of `$TRACKERKIT` below was
-# UNQUOTED (`$TRACKERKIT job preflight .`). Bash word-splits an unquoted
-# variable on whitespace WITHOUT re-parsing embedded quote characters as
-# syntax -- they stay literal -- so a quoted path with a space would word-
-# split into two bogus tokens (one carrying a stray leading/trailing quote
-# character) instead of being treated as one argument. The fix is symmetric:
-# `shlex.quote` on the Python side is only meaningful if bash actually
-# RE-PARSES the resulting string as shell syntax, which requires invoking it
-# through `eval` rather than a bare unquoted expansion. Every `$TRACKERKIT`
-# invocation below therefore uses `eval "$TRACKERKIT ...`
-TRACKERKIT="${HYDRA_JOB_TRACKERKIT:-trackerkit}"
+# quotes as literal characters), and a bare unquoted expansion word-splits on
+# whitespace WITHOUT re-parsing embedded quote characters as syntax -- they
+# stay literal -- so a quoted path with a space would word-split into two
+# bogus tokens (one carrying a stray leading/trailing quote character)
+# instead of being treated as one argument.
+#
+# Fix Y1 (round-7, REPLACES the round-6 `eval` fix below -- that fix was
+# itself the bug): `eval "$TRACKERKIT track --video-list videos.txt
+# $(printf '%q ' "$@")"` is broken with ZERO passthrough args. Verified by
+# running it: bash's `printf '%q ' "$@"` on an EMPTY "$@" still emits one
+# token, a literal `'' ` (an empty-but-quoted string), not nothing -- `"$@"`
+# only expands to "nothing" when it is NOT first flattened through a command
+# substitution that itself always produces at least the joining space.
+# `eval` then re-parses that `''` as a real empty positional argument, so
+# `trackerkit track --video-list videos.txt ''` runs, and the REAL parser
+# (`parse_arguments`) rejects it: `error: use either explicit video paths or
+# --video-list, not both` -> SystemExit 2. Every `job run` with no extra
+# flags -- the common case, exercised by Task 13's acceptance runs -- would
+# therefore die before the first frame.
+#
+# The actual fix does not need `eval` for the ARGV path at all. `eval` is
+# only needed to turn ONE trusted, pre-quoted string (the interpreter
+# invocation itself, which may be a multi-word `conda run -n hydra-mps
+# trackerkit`-style string) into multiple argv words; it must never be used
+# on `"$@"`, which is untrusted job-runtime argv and bash already knows how
+# to pass through byte-for-byte via a real array and `"${TK[@]}"`.
+TRACKERKIT_STR="${HYDRA_JOB_TRACKERKIT:-trackerkit}"
+#   eval only on the trusted interpreter string -> build an array once:
+eval "TK=($TRACKERKIT_STR)"
+#   From here on, every invocation is "${TK[@]}" ... "$@" -- no eval, no
+#   printf %q, no re-quoting. "$@" with zero elements now correctly expands
+#   to NOTHING (this is the whole point of using an array + native "$@"
+#   passthrough instead of round-tripping args through a string).
 
 # Fix W1d (round-5 correction): preflight runs BEFORE `set +e`, so a failing
 # preflight ABORTS under `set -euo pipefail` instead of printing and letting
@@ -3729,20 +3876,23 @@ else
   # NOTE: this is the ONLY preflight for a hand-run ./run.sh, so it carries no
   # --shared-root/--allow-tier-fallback overrides; those flags only exist on
   # `trackerkit job run`/`trackerkit job preflight`, never on run.sh itself.
-  # Minor fix (round-6): `eval`, not a bare unquoted expansion -- see the
-  # comment above TRACKERKIT= for why. `job preflight .` has no arguments
-  # that could themselves contain spaces, so no `printf %q` quoting is
-  # needed here.
-  eval "$TRACKERKIT job preflight ."
+  # Fix Y1: array expansion, NOT eval -- "${TK[@]}" is already the correctly
+  # word-split interpreter invocation; `job preflight .` has no arguments
+  # that could themselves contain spaces, so this is a plain literal tail.
+  "${TK[@]}" job preflight .
 fi
 
 set +e
-# Minor fix (round-6): `eval` re-parses $TRACKERKIT's embedded shell-quoting
-# correctly (see comment above TRACKERKIT=). "$@" is re-quoted element-wise
-# via `printf %q` before being spliced into the eval'd string, so a video
-# path or any other forwarded argument containing a space survives BOTH the
-# eval re-parse and the original word-splitting problem this fix exists for.
-eval "$TRACKERKIT track --video-list videos.txt $(printf '%q ' "$@")" 2>&1 | tee -a logs/run.log
+# Fix Y1: "${TK[@]}" ... "$@" passes the job's own extra argv through
+# NATIVELY -- no string round-trip, no printf %q, no eval. This is what
+# makes a ZERO-argument "$@" expand to truly nothing (the round-6 `eval
+# "... $(printf '%q ' "$@")"` form could not do this: printf on an empty
+# "$@" still emits one `''` token, which eval then re-parsed as a real,
+# bogus empty positional -- see the comment above TRACKERKIT_STR= for the
+# full empirical trace). A video path or any other forwarded argument
+# containing a space survives untouched, exactly as bash's own "$@"
+# semantics guarantee, with no re-quoting step to get wrong.
+"${TK[@]}" track --video-list videos.txt "$@" 2>&1 | tee -a logs/run.log
 CODE=${PIPESTATUS[0]}
 set -e
 # Fix A2d: this whole script runs under `set -euo pipefail`. If `_record-run`
@@ -3751,7 +3901,7 @@ set -e
 # $CODE -- the run's REAL exit code -- with _record-run's exit code, silently
 # masking a tracking failure as a bookkeeping failure or vice versa. Make the
 # record step non-fatal and always preserve and exit with the run's own $CODE.
-eval "$TRACKERKIT job _record-run --started $(printf %q "$START") --exit-code $(printf %q "$CODE") -- $(printf '%q ' "$@")" || \
+"${TK[@]}" job _record-run --started "$START" --exit-code "$CODE" -- "$@" || \
   echo "run.sh: WARNING: failed to append to logs/runs.jsonl (exit $?); run's own exit code $CODE is unaffected" >&2
 exit "$CODE"
 '''
@@ -3972,7 +4122,13 @@ ROLE_TO_CONFIG_KEY: dict[str, str | tuple[str, ...]] = {
     # to the single matching alias (`"yolo"` -> `pose_yolo_model_dir`,
     # `"sleap"` -> `pose_sleap_model_dir`, `"vitpose"` ->
     # `pose_vitpose_model_dir`); the other two backend-specific aliases are
-    # left completely untouched, preserving whatever they already held.
+    # NOT simply left holding whatever the source config had -- fix Y6
+    # (round-7): fix X6 (below this table) blanks every inactive-role key
+    # in ABSOLUTE_PATH_FORBIDDEN_KEYS's model-path subset to "", because an
+    # untouched stale absolute path there fails verify_job's unconditional
+    # absolute-path check. X6 is the ONE rule for inactive keys; earlier text
+    # in this task said "left untouched", which directly contradicted X6 --
+    # X6 wins, everywhere.
     "POSE_MODEL_DIR": (
         "pose_model_dir",
         "pose_yolo_model_dir",
@@ -3996,9 +4152,14 @@ ROLE_TO_CONFIG_KEY: dict[str, str | tuple[str, ...]] = {
 # `YOLO_CROP_OBB_MODEL_PATH` when it is "sequential". It never gets a job key
 # of its own, because it never names a model the mode-specific key does not
 # already name. When neither role is present for this video (bgsub detection),
-# `yolo_model_path` is left untouched -- there is no model to point it at, and
-# verify_job's absolute-path check then applies to whatever the source config
-# had. Concretely, when building `model_keys`:
+# there is no model for `yolo_model_path` to point at -- Fix Y6 (round-7):
+# fix X6 blanks it to "" in this case too (it is in
+# ABSOLUTE_PATH_FORBIDDEN_KEYS, same as every other model-path key), it is
+# NOT left holding a stale absolute value from the source config. A bgsub
+# config that still carries a stale absolute `yolo_model_path` from a
+# previous detect-mode configuration must still pack cleanly; leaving it
+# untouched would make verify_job reject that config unconditionally, with
+# no way to ever pack it. Concretely, when building `model_keys`:
 #
 #     obb_role = (
 #         "YOLO_OBB_DIRECT_MODEL_PATH"
@@ -4011,7 +4172,7 @@ ROLE_TO_CONFIG_KEY: dict[str, str | tuple[str, ...]] = {
 LEGACY_ALIAS_CONFIG_KEYS = ("yolo_model_path",)
 ```
 
-2. `PlannedVideo.planned_models: list[PlannedModel]` (already defined, Task 5/6) is what `job_cli.py` (Task 11) builds from `iter_model_references`; `_rewrite_config` derives its `model_keys` argument from `ROLE_TO_CONFIG_KEY[role]` for each `PlannedModel.role`. **Fix V6 (resolving the earlier draft's self-contradiction): for a tuple-valued role, `model_keys` is populated for ONLY the alias(es) matching this video's active backend — never a blind fan-out to every key in the tuple.** `POSE_MODEL_DIR` is currently the only tuple-valued role, so concretely: `pack.py` reads `config.get("pose_model_type", "")` for the video being rewritten and maps it to the single matching alias (`"yolo"` -> `pose_yolo_model_dir`, `"sleap"` -> `pose_sleap_model_dir`, `"vitpose"` -> `pose_vitpose_model_dir`), PLUS the always-present legacy `pose_model_dir` bridge — the other two backend-specific aliases in the tuple are left completely untouched, exactly as the "Minor fix" note above this table already specifies (that note is the one true rule; any other wording in this task that says "expand every key in the tuple" is the earlier draft's contradiction and is corrected by this paragraph, not by it). This preserves provenance in the sidecar: an inactive backend's alias key still shows whatever the source config already had for it, not a job key for a model that video never loads. `color_tag_model_path` is deliberately **absent** from `ROLE_TO_CONFIG_KEY` — Task 3 never yields `COLOR_TAG_MODEL_PATH` as a reference, so pack never rewrites or ships it; it stays whatever the source config had (which Task 2's save-side relativization already made portable-by-construction, or leaves alone if it points outside the models root).
+2. `PlannedVideo.planned_models: list[PlannedModel]` (already defined, Task 5/6) is what `job_cli.py` (Task 11) builds from `iter_model_references`; `_rewrite_config` derives its `model_keys` argument from `ROLE_TO_CONFIG_KEY[role]` for each `PlannedModel.role`. **Fix V6 (resolving the earlier draft's self-contradiction): for a tuple-valued role, `model_keys` is populated for ONLY the alias(es) matching this video's active backend — never a blind fan-out to every key in the tuple.** `POSE_MODEL_DIR` is currently the only tuple-valued role, so concretely: `pack.py` reads `config.get("pose_model_type", "")` for the video being rewritten and maps it to the single matching alias (`"yolo"` -> `pose_yolo_model_dir`, `"sleap"` -> `pose_sleap_model_dir`, `"vitpose"` -> `pose_vitpose_model_dir`), PLUS the always-present legacy `pose_model_dir` bridge — the other two backend-specific aliases in the tuple are NOT left holding whatever the source config had. **Fix Y6 (round-7) — this paragraph and the "Minor fix" note above this table were themselves the self-contradiction round-7 review caught: both said "left completely untouched," which directly conflicts with fix X6 below (which blanks every inactive-role `ABSOLUTE_PATH_FORBIDDEN_KEYS` model-path key, including these two).** X6 is the one rule: `_rewrite_config` populates `model_keys` for only the active alias(es) as this paragraph originally said, AND separately, in the same pass, blanks the inactive aliases to `""` per X6 -- the two are not in tension once X6 is applied uniformly to every inactive model-path key across all three families (OBB mode, head-tail, pose backend) and to `yolo_model_path`. This keeps the sidecar internally consistent with the X6 rule: an inactive backend's alias key is blanked to `""`, never a stray job key for a model that video never loads and never a leftover absolute source-machine path either. `color_tag_model_path` is deliberately **absent** from `ROLE_TO_CONFIG_KEY` — Task 3 never yields `COLOR_TAG_MODEL_PATH` as a reference, so pack never rewrites or ships it; it stays whatever the source config had (which Task 2's save-side relativization already made portable-by-construction, or leaves alone if it points outside the models root).
 
 `model_keys` therefore maps a subset of config keys (`yolo_obb_direct_model_path`, `yolo_detect_model_path`, `yolo_crop_obb_model_path`, `yolo_headtail_model_path`, `pose_model_dir` plus exactly one of `pose_yolo_model_dir`/`pose_sleap_model_dir`/`pose_vitpose_model_dir` per video, and the legacy `yolo_model_path` alias — but **not** `color_tag_model_path`) to its job key. Only single-valued roles are unconditional; `POSE_MODEL_DIR` is always active-backend-only.
 
@@ -4028,7 +4189,26 @@ Every video gets a sidecar regardless of provenance, so the remote needs no keys
 
 `requirements`: `min_hydra_suite_version` from the running build.
 
-**Fix W12 — "selects the SLEAP backend via the service path" was never a defined, checkable rule.** `pack_job` computes `conda_envs = [cfg["pose_sleap_env"]]` (deduped across videos, empty list when none apply) for any keystone `PlannedVideo.config` where `str(cfg.get("pose_model_type", "")).strip().lower() == "sleap"` **and** `is_pose_inference_enabled(cfg)` is true (`core/tracking/session_policy.py:29-32`, Core layer — importable from `pack.py`'s Data layer) — i.e. `detection_method == "yolo_obb"`, `enable_pose_extractor` truthy, AND `pose_model_dir` non-empty. This is a strict superset check, not "pose_model_type == sleap alone": a config with `pose_model_type: SLEAP` but no `pose_model_dir` (or a non-`yolo_obb` `detection_method`, or `enable_pose_extractor: False`) never reaches `is_pose_inference_enabled`, so pose inference — and therefore the SLEAP service, and therefore the `sleap` conda env — never actually runs for it, and `conda_envs` correctly stays empty. This is deliberately the SAME predicate the run itself uses to decide whether pose inference is live at all, so `requirements.conda_envs` can never claim a dependency the run doesn't actually have, or omit one it does.
+**Fix W12 — "selects the SLEAP backend via the service path" was never a defined, checkable rule.** `pack_job` computes `conda_envs` (deduped across videos, empty list when none apply) for any keystone `PlannedVideo.config` where `str(cfg.get("pose_model_type", "")).strip().lower() == "sleap"` **and** `is_pose_inference_enabled(cfg)` is true (`core/tracking/session_policy.py:29-32`, Core layer — importable from `pack.py`'s Data layer) — i.e. `detection_method == "yolo_obb"`, `enable_pose_extractor` truthy, AND `pose_model_dir` non-empty. This is a strict superset check, not "pose_model_type == sleap alone": a config with `pose_model_type: SLEAP` but no `pose_model_dir` (or a non-`yolo_obb` `detection_method`, or `enable_pose_extractor: False`) never reaches `is_pose_inference_enabled`, so pose inference — and therefore the SLEAP service, and therefore the `sleap` conda env — never actually runs for it, and `conda_envs` correctly stays empty. This is deliberately the SAME predicate the run itself uses to decide whether pose inference is live at all, so `requirements.conda_envs` can never claim a dependency the run doesn't actually have, or omit one it does.
+
+**Fix Y8 (round-7) — the env NAME itself, `[cfg["pose_sleap_env"]]`, mis-derives whenever `pose_sleap_env` is absent, empty, or a placeholder — `pack_job` must mirror `engine_params.py`'s OWN defaulting exactly, not read the raw config key.** Verified at `engine_params.py:995-998`:
+
+```python
+pose_sleap_env = str(_cfg_get(cfg, "pose_sleap_env", default="sleap")).strip()
+if not pose_sleap_env or pose_sleap_env.lower().startswith("no sleap envs"):
+    pose_sleap_env = "sleap"
+```
+
+A config missing the `pose_sleap_env` key entirely (a perfectly normal fixture/staging config — nothing requires the key to be present) or holding `""`/a `"no sleap envs…"` GUI placeholder resolves, at RUN time, to the env named `"sleap"`. But `conda_envs = [cfg["pose_sleap_env"]]` — plain dict subscripting on the raw key — either raises `KeyError` (absent key: `pack_job` would crash at pack time on any such config, not silently mis-derive) or, if `pack.py` instead used `cfg.get("pose_sleap_env", "")`, would append `""` to `conda_envs` (an empty-string env name, never `"sleap"`) so preflight check 3 (`conda_envs` — every required env exists) passes vacuously (an empty string is never checked against `conda env list` meaningfully, or worse causes a preflight false-pass depending on how the emptiness is handled) and the run then fails only when the SLEAP service actually tries to `conda run -n sleap` — deep into the remote run, long after pack/push/preflight all reported success. Fix: `pack_job` computes `conda_envs` using the SAME defaulting logic as `engine_params.py:995-998`, verbatim (inlined, not imported — `engine_params.py` lives in the `trackerkit` app layer, and `pack.py` is Data, same layering boundary fix W6/X5a already established):
+
+```python
+raw_sleap_env = str(cfg.get("pose_sleap_env", "") or "").strip()
+if not raw_sleap_env or raw_sleap_env.lower().startswith("no sleap envs"):
+    raw_sleap_env = "sleap"
+conda_envs = [raw_sleap_env]  # only reached when the W12 gate above is true
+```
+
+Add `test_conda_envs_defaults_to_sleap_when_key_is_absent`: a `packed_job`-shaped SLEAP-active config (satisfies the W12 gate) with `pose_sleap_env` OMITTED entirely (not set to `""` — genuinely absent from the dict, the shape a real staging config that never touched the SLEAP-env combo box takes); `pack_job` must succeed (not raise `KeyError`) and `manifest.requirements["conda_envs"] == ["sleap"]`. Add `test_conda_envs_defaults_to_sleap_for_the_placeholder_value`: same gate, `pose_sleap_env: "no sleap envs found"`; assert `conda_envs == ["sleap"]`, not `["no sleap envs found"]`. The existing `packed_job_needing_sleap` fixture (Task 10) sets `pose_sleap_env` explicitly and therefore never exercised either defaulting branch — these two new tests close that gap; do not modify `packed_job_needing_sleap` itself, since it correctly tests the explicit-value path.
 
 **Fix W6 — `requirements.runtime_tier` must come from the RESOLVED tier, never the raw config dict.** All three Task 13 acceptance fixtures (`fly_obb.json`, `ant_pose_headtail.json`, `ant_cnn_identity.json` — grepped, verified: none has a `runtime_tier` key) have no `runtime_tier` key at all, and `build_engine_params` defaults an absent one to `"gpu"` (`engine_params.py:800-805`, `trackerkit` — app layer). A naive `cfg.get("runtime_tier", "")` inside `pack_job` would stamp `requirements.runtime_tier = ""` on every one of them, which means nothing to preflight's check 4 — silently wrong in whichever direction that check treats falsy values. But `pack.py` is Data layer and `build_engine_params` is `trackerkit` (app layer); `pack_job` calling it directly would violate the one-way dependency-direction rule Task 3's contract guard tests. So the RESOLUTION happens in the caller, not in `pack.py`: **`job_cli.py` (Task 11), which already builds a session from the keystone config to walk `iter_model_references`, resolves the tier via that same session/`build_engine_params` call and passes it explicitly as `track_args["runtime_tier"]`** — this is not new plumbing, it is the SAME pattern the Task 7/Task 10 test fixtures already use (`track_args={"video_list": "videos.txt", "runtime_tier": "cpu"}`, shown throughout Task 10's `packed_job*` fixtures above). `pack_job` itself only ever does `requirements.runtime_tier = track_args.get("runtime_tier", "gpu")` — reading a value the caller already resolved, with the same `"gpu"` fallback `build_engine_params` uses, never re-deriving it and never importing `trackerkit`.
 
@@ -4078,7 +4258,7 @@ then, for every model regardless of kind: **for every model with a non-empty `fi
 
 Resolution: **pack blanks every inactive-role key in `ABSOLUTE_PATH_FORBIDDEN_KEYS`'s model-path subset, rather than requiring verify to special-case them.** This mirrors the existing precedent for `color_tag_model_path` (correction 2, above: relativized/nulled on save regardless of whether anything reads it, because a config field with no live consumer for THIS job carries zero information the remote needs) and is simpler than teaching `verify_job` a parallel "is this role active" computation that would have to reproduce `iter_model_references`'s own gating logic a second time, in a different layer, and risk drifting out of sync with it. Concretely, in the SAME per-video loop that calls `_rewrite_config` (Task 7): after computing `active_roles = {ref.role for ref in iter_model_references(params_for_this_video)}` (`job_cli.py` already computes this set to drive packing — Task 11), for every key in the model-path subset of `ABSOLUTE_PATH_FORBIDDEN_KEYS` whose corresponding role is NOT in `active_roles`, set `out[key] = ""` in `_rewrite_config` regardless of what the source config held (only if it's not already handled by an active rewrite). `verify_job`'s check is UNCHANGED and stays strict on every key — this is the "keep it consistent" fix, not a weakening of the gate: after packing, every sidecar's inactive-role keys are always empty, so the existing unconditional verify check is trivially satisfied without knowing which roles were active. `pose_model_dir` legacy alias key follows the same rule via whichever of the three backend-specific keys it maps to.
 
-Add `test_pack_blanks_an_inactive_role_absolute_path`: a config with `yolo_obb_mode: "direct"`, a real `yolo_obb_direct_model_path`, AND a stale absolute `yolo_crop_obb_model_path` (the sequential-mode key, inactive because mode is `direct`) pointing at a file that exists on the staging host but is never referenced by `iter_model_references` for this config; assert `pack_job` succeeds, the sidecar's `yolo_crop_obb_model_path == ""`, and `verify_job(job_dir) == []`. A second case does the same for `pose_sleap_model_dir` (stale, absolute) while `pose_yolo_model_dir` is the active pose backend.
+Add `test_pack_blanks_an_inactive_role_absolute_path`: a config with `yolo_obb_mode: "direct"`, a real `yolo_obb_direct_model_path`, AND a stale absolute `yolo_crop_obb_model_path` (the sequential-mode key, inactive because mode is `direct`) pointing at a file that exists on the staging host but is never referenced by `iter_model_references` for this config; assert `pack_job` succeeds, the sidecar's `yolo_crop_obb_model_path == ""`, and `verify_job(job_dir) == []`. A second case does the same for `pose_sleap_model_dir` (stale, absolute) while `pose_yolo_model_dir` is the active pose backend. **Add a third case (fix Y6, round-7) for the `yolo_model_path` legacy alias under bgsub detection — the earlier-in-this-task prose about it once said "left untouched", which directly contradicted X6 and would make such a config unpackable forever:** a config using bgsub detection (no `yolo_obb_direct_model_path`/`yolo_crop_obb_model_path` role active at all — `iter_model_references` yields neither `YOLO_OBB_DIRECT_MODEL_PATH` nor `YOLO_CROP_OBB_MODEL_PATH` for it) with a stale absolute `yolo_model_path` left over from a previous non-bgsub configuration; assert `pack_job` succeeds, the sidecar's `yolo_model_path == ""`, and `verify_job(job_dir) == []`.
 
 **Fix M15 — `registry_entry_present` must actually be set.** It is declared on `JobModel` with a `False` default and nothing in this plan as originally written ever set it, so it would always read `False` even for a model that has a real `model_registry.json` entry. `pack_job` sets it explicitly: for each `JobModel` it builds, `registry_entry_present = (model.key in {key for key, _ in registry_entries})` — i.e. true iff the model's job-relative key is one of the keys `write_registry_subset` (Task 6) actually wrote an entry for.
 
@@ -4427,7 +4607,22 @@ def _manifest(shared=None):
                 key="obb/x.pt", roles=["R"], origin_path="/h/x.pt", kind="file",
                 sha256="ab", size_bytes=1,
                 sidecars=["obb/x.pt.slice_meta.json"],
-            )
+            ),
+            # Minor fix (round-7): a directory model, so build_push_input_list's
+            # models-root-relative `files[]` prefixing is actually exercised --
+            # without one, a bug that emitted `files[]` entries WITHOUT the
+            # `models/` prefix (rsync would then look for them at the wrong
+            # path relative to the push source root and silently omit them)
+            # had no test able to catch it.
+            JobModel(
+                key="pose/SLEAP/run", roles=["POSE_MODEL_DIR"],
+                origin_path="/h/pose/SLEAP/run", kind="directory",
+                files=["pose/SLEAP/run/best.ckpt", "pose/SLEAP/run/training_config.json"],
+                file_digests={
+                    "pose/SLEAP/run/best.ckpt": "cd",
+                    "pose/SLEAP/run/training_config.json": "ef",
+                },
+            ),
         ],
         config_snapshot={
             "advanced_config": "config/advanced_config.json",
@@ -4456,6 +4651,14 @@ def test_push_list_is_inputs_only():
         "config/presets/.seeded", "config/skeletons/.seeded",
         "models/model_registry.json",
         "models/obb/x.pt", "models/obb/x.pt.slice_meta.json",
+        # Minor fix (round-7): the directory model's `files[]` -- these are
+        # already models-root-relative on JobModel (verified: fix M8's
+        # `file_digests["pose/SLEAP/run/best.ckpt"]` example uses the same
+        # convention), so build_push_input_list must prefix them with
+        # "models/" exactly like every other model entry, never emit them
+        # bare (which would make rsync look in the wrong place entirely).
+        "models/pose/SLEAP/run/best.ckpt",
+        "models/pose/SLEAP/run/training_config.json",
         "videos/a.mp4", "videos/a_config.json",
     }
 
@@ -4540,6 +4743,19 @@ Expected: FAIL — module missing.
 `pull_job`: fetch `logs/` first (including `runs.jsonl`), then **check the run actually finished (fix A5)**, then list, then `plan_pull`, then check collisions (sha256 compare; refuse with `code=5` listing **every** collision before touching anything unless `overwrite`), then rsync the output set, then copy/hardlink into the mapped destinations, then **merge** (not append — see fix M12/§5 below) a `pull_history` entry into the **local** manifest. `--dry-run` prints the destination map and returns before any transfer.
 
 **Minor fix — the `logs/` fetch on a job that was pushed but never run must not be treated as a transfer failure.** `rsync` exits `23` ("partial transfer due to error") when the SOURCE `logs/` directory doesn't exist yet (nothing has ever written to it — `run.sh` is what first does `mkdir -p logs`). `pull_job` must tolerate rc `23` specifically for the `logs/` fetch step (treat it as "no logs yet", not a hard failure) — any OTHER non-zero rc from that same rsync call still raises `TrackingJobError`. This is what makes the fix A5 running-check's own "skipped entirely when `run_log` does not exist at all" clause reachable in practice for a genuinely never-run job, rather than the pull dying one step earlier on the logs fetch itself.
+
+**Fix Y4 (round-7) — the `logs/` fetch must be a plain recursive rsync, NEVER routed through `build_rsync_argv(..., files_from=...)`.** The Task 9 prose above said only "rsync the remote `logs/` first" without naming the mechanism; the only fetch helper this task defines is `build_rsync_argv(source, destination, *, files_from, extra=())`, and if the logs/ fetch is implemented by calling that helper with a `files_from` manifest listing `logs/run.log` and `logs/runs.jsonl`, it silently fails: `rsync --files-from=LIST` treats every line in `LIST` as an exact, individual transfer item — it does **not** recurse into a directory entry, and more importantly it never discovers files that are not already named in `LIST` ahead of time. That is fine for `push_job` (Task 9's `build_push_input_list` enumerates the manifest's own known files up front) but wrong for `pull_job`'s `logs/` fetch, whose entire job is to discover whatever `run.sh` happened to write on the remote — `run.log` and `runs.jsonl` are not "already known" the way pushed inputs are. Concretely: if `pull_job` built a `files_from` list containing `["logs/run.log", "logs/runs.jsonl"]` and passed it to `build_rsync_argv`, and the REMOTE `logs/` directory is genuinely a directory (not a bare pair of files at the rsync root), `--files-from` entries are resolved relative to the rsync source root and copied as individual files — this can work by accident if the paths are named exactly right, but it is fragile and, worse, means a THIRD file `run.sh` might write into `logs/` in the future (or any file this task's own author didn't anticipate) is silently never pulled, with no error. Fix: the `logs/` fetch is its own **separate, explicit, plain-recursive rsync call**, not built through `build_rsync_argv`'s `files_from` mechanism at all:
+
+```python
+logs_argv = ["rsync", "-a", f"{remote_logs_path}/", str(job_dir / "logs") + "/"]
+result = runner(logs_argv, capture_output=True, text=True)
+if result.returncode not in (0, 23):  # 23 = "no logs yet", tolerated per the fix above
+    raise TrackingJobError(f"failed to fetch logs/: {' '.join(logs_argv)}\n{result.stderr}", code=4)
+```
+
+`-a` (archive) recurses into `logs/` and transfers everything under it — `run.log`, `runs.jsonl`, and any future file — with no advance enumeration required, which is exactly what "discover whatever the remote run wrote" needs and `--files-from` structurally cannot provide. Add `test_pull_logs_fetch_transfers_both_run_log_and_runs_jsonl`: a fake runner that, when it sees an argv starting with `["rsync", "-a"]` and ending in `.../logs/`, actually copies a fixture `logs/run.log` + `logs/runs.jsonl` pair from a fake "remote" tmp dir into the `destination` argv element (simulating what real rsync would do), then asserts BOTH files exist under `job_dir / "logs"` after `pull_job` returns (or raises past the running-check, whichever the fixture's `run.log`/`runs.jsonl` contents dictate) — proving the fetch step is a real recursive copy, not a `files_from` call that happens to name the same two files.
+
+**Fix Y5 (round-7) — `pull_job`'s step order MUST be pinned explicitly: fetch `logs/` → running-check → THEN read the local manifest (collision detection, `plan_pull`, `pull_history` all need the local manifest, and none of them may run first).** Left implicit, the "natural" order an implementer reaches for is manifest-first (it is needed by nearly everything else `pull_job` does), which silently defeats fix A5: if `pull_job` reads `job_dir / "hydra_job.json"` before the running-check, a `dest/` fixture that has `logs/` but no `hydra_job.json` (exactly the "first pull ever, running-check should fire first" shape in the tests below) raises a bare `FileNotFoundError` from the manifest read, not `TrackingJobError` — the running-check code is never reached, so the guard reads as tested and passing while actually being dead on this input shape. **The order is a hard requirement, not an implementation detail:** (1) fetch `logs/` (tolerating rc 23 per the fix above), (2) run the fix A5 running-check using ONLY `job_dir / "logs"` (never touches the manifest), (3) only after the running-check passes (or `force=True` bypassed it), read `job_dir / "hydra_job.json"` for collision detection / `plan_pull` / `pull_history`. A job dir that has never been pulled into before therefore has no local manifest on disk yet for a first `pull` — `pull_job` creates/writes it fresh at the end of a successful run (mirroring `push_job`, which never requires a pre-existing local manifest either); the running-check's own precondition (`run_log.is_file()`) is the only gate on step 2, so step 3 is unreached on the still-running path and a missing local manifest there is a non-issue.
 
 **Fix A5 — nothing currently stops `pull` from grabbing a job that is still running.** `run.sh` appends to `logs/runs.jsonl` only at exit (Fix A2d's `_record-run` call, which runs after `run.sh`'s own `track` invocation finishes), and it `tee -a`s to `logs/run.log` continuously WHILE running. Caches self-protect key-wise, but a partial `<stem>_tracking.csv` — the file the run was in the middle of writing when `pull` grabbed it — would be pulled and placed beside the origin looking exactly like a completed result, with no marker distinguishing it. Immediately after fetching `logs/`, before `plan_pull` or any output transfer, check:
 
@@ -4639,27 +4855,45 @@ def test_pull_refuses_a_job_that_looks_still_running(tmp_path):
 
 def test_pull_force_bypasses_the_running_check(tmp_path):
     """--force must still allow pulling a genuinely in-progress job on
-    purpose (e.g. to inspect partial CSVs while a long run is ongoing)."""
-    from hydra_suite.data.tracking_job.transport import pull_job
+    purpose (e.g. to inspect partial CSVs while a long run is ongoing).
 
-    dest_logs = tmp_path / "dest" / "logs"
+    Fix Y5 (round-7): the round-6 version of this test only asserted a
+    forbidden SUBSTRING was absent from whatever exception (if any) came
+    out, catching `Exception` broadly -- so a completely different failure
+    (e.g. a bare `FileNotFoundError` from `pull_job` reading a local
+    manifest that this fixture never created) would ALSO satisfy the
+    assertion, without --force having been exercised at all. Fixed: the
+    fixture supplies a real, minimal local manifest (matching fix Y5's
+    pinned step order, where the manifest is read only AFTER the
+    running-check) so a force=True, dry_run=True pull can run to actual
+    completion, and the test asserts NO exception is raised and a
+    PullReport comes back -- proving the bypass, not merely the absence of
+    one particular error string.
+    """
+    from hydra_suite.data.tracking_job.manifest import JobManifest
+    from hydra_suite.data.tracking_job.transport import pull_job, PullReport
+
+    dest = tmp_path / "dest"
+    dest_logs = dest / "logs"
     dest_logs.mkdir(parents=True)
     (dest_logs / "run.log").write_text("still going...\n")
+    # A minimal, valid, zero-video local manifest -- enough for pull_job to
+    # get past the (post-running-check) manifest read and plan_pull with an
+    # empty video set, all the way to the dry-run report.
+    manifest = JobManifest(
+        job_id="j", created_at="t", created_on={}, keystone={}, videos=[], models=[],
+    )
+    manifest.write(dest / "hydra_job.json")
 
     def succeeding_runner(argv, **kwargs):
         return subprocess.CompletedProcess(argv, 0, stdout="", stderr="")
 
-    # Should proceed past the running-check (may still fail later for other
-    # reasons in a fuller fixture; this test only asserts the running-check
-    # itself is bypassed, not full pull success).
-    try:
-        pull_job(
-            "host:/remote", tmp_path / "dest",
-            include_caches=True, overwrite=False, dry_run=True, force=True,
-            runner=succeeding_runner,
-        )
-    except Exception as exc:  # noqa: BLE001 -- only the running-check message is forbidden
-        assert "refusing to pull a partial result" not in str(exc)
+    report = pull_job(
+        "host:/remote", dest,
+        include_caches=True, overwrite=False, dry_run=True, force=True,
+        runner=succeeding_runner,
+    )
+    assert isinstance(report, PullReport)
 ```
 
 **Fix M12 — destination-side failure policy, fully specified (was unspecified).** `pull_job` never said what happens when the *destination* side is broken, only when the pulled bytes are broken. **Clarifying the apparent contradiction (fix B12d).** There are TWO distinct classes and they do NOT share an exit path:
@@ -5427,7 +5661,7 @@ Includes fix A1a's .multihead.json head-shipping and fix M9/B2's unconditional
 skeleton snapshot."
 ```
 
-`_record-run` is a hidden subcommand appending one JSON line to `logs/runs.jsonl` (`started_at, finished_at, hostname, exit_code, hydra_suite_version, git_sha, argv, host_advanced_config_used`). The last field is `bool(os.environ.get("HYDRA_JOB_HOST_ADVANCED_CONFIG_USED"))` (minor fix — see `run.sh`'s corresponding export above): since `pull` never fetches `config/` back, this is the only record that survives the round trip telling the local machine the run used a different `advanced_config.json` than the one it pushed. Add `metavar=argparse.SUPPRESS` so it stays out of help, and register its trailing argv capture with `nargs=argparse.REMAINDER` (minor fix) — without it, argparse tries to parse `run.sh`'s forwarded `"$@"` (which can contain flags like `--gpus auto`) against `_record-run`'s own option strings and errors out instead of passing them through verbatim. **Fix W3b: `finished_at = datetime.now(timezone.utc).isoformat(timespec="microseconds")`, computed by `_record-run` itself at write time — never derived from `run.sh`'s `$START` (which is second-truncated and is `started_at`, a different field) and never second-truncated.** This is what makes `transport.py`'s `_last_runs_jsonl_timestamp` comparable at all to a real (fractional-second) filesystem `st_mtime` on `logs/run.log` — see the Task 9 "still running" guard fix above.
+`_record-run` is a hidden subcommand appending one JSON line to `logs/runs.jsonl` (`started_at, finished_at, hostname, exit_code, hydra_suite_version, git_sha, argv, host_advanced_config_used`). The last field is `bool(os.environ.get("HYDRA_JOB_HOST_ADVANCED_CONFIG_USED"))` (minor fix — see `run.sh`'s corresponding export above): since `pull` never fetches `config/` back, this is the only record that survives the round trip telling the local machine the run used a different `advanced_config.json` than the one it pushed. **Fix Y2 (round-7) — `add_parser("_record-run", metavar=argparse.SUPPRESS)` does not exist as an option: `_SubParsersAction.add_parser` forwards unrecognized kwargs straight to `ArgumentParser.__init__`, which has no `metavar` parameter** — verified by running it: `TypeError: ArgumentParser.__init__() got an unexpected keyword argument 'metavar'`, raised at `build_parser()` construction time, which breaks EVERY `trackerkit` invocation, not just `job _record-run`. Use `help=argparse.SUPPRESS` instead (`add_parser`'s `help=` kwarg is the one that is popped before the rest are forwarded to `ArgumentParser.__init__`, and `argparse.SUPPRESS` there is exactly what hides a subparser from `-h` while leaving it fully callable): `job_subparsers.add_parser("_record-run", help=argparse.SUPPRESS)`. This is the SAME pattern used correctly at `job_pack = job_subparsers.add_parser("pack", allow_abbrev=False, help="...")` above (Step 3) — only the value of `help=` differs. Register its trailing argv capture with `nargs=argparse.REMAINDER` (minor fix) — without it, argparse tries to parse `run.sh`'s forwarded `"$@"` (which can contain flags like `--gpus auto`) against `_record-run`'s own option strings and errors out instead of passing them through verbatim. Add `test_record_run_parser_is_hidden_but_callable`: build the parser, assert `"_record-run"` does not appear in `parser.format_help()`, and assert `build_parser().parse_args(["job", "_record-run", "--started", "x", "--exit-code", "0", "--", "--gpus", "auto"])` succeeds without raising. Grep the whole plan for any other `add_parser(..., metavar=` occurrence and fix identically — none found elsewhere as of this fix wave (verified: `grep -n "add_parser(" docs/superpowers/plans/2026-09-09-portable-tracking-jobs.md` shows only the `job` top-level and `pack` subparsers, both already using `help=`, not `metavar=`). **Fix W3b: `finished_at = datetime.now(timezone.utc).isoformat(timespec="microseconds")`, computed by `_record-run` itself at write time — never derived from `run.sh`'s `$START` (which is second-truncated and is `started_at`, a different field) and never second-truncated.** This is what makes `transport.py`'s `_last_runs_jsonl_timestamp` comparable at all to a real (fractional-second) filesystem `st_mtime` on `logs/run.log` — see the Task 9 "still running" guard fix above.
 
 `push`/`pull`/`status` dispatch is thin glue over Task 9's `transport.py` and Task 5's manifest: `push` parses its target with `parse_remote`, calls `push_job(job_dir, target, runner=subprocess.run)`, then (fix A2b, fix (c) above) runs `ssh <host> '<bootstrap>; cd <path> && trackerkit job verify .'` through the same `--remote-bootstrap` and surfaces a non-zero verify as a push failure. `pull` parses its target and calls `pull_job(target, job_dir, include_caches=not args.no_caches, overwrite=args.overwrite, dry_run=args.dry_run, force=args.force)` (fix A5), printing `PullReport.skipped` and returning non-zero when non-empty. `status` reads the local manifest summary plus the tail of `logs/runs.jsonl`, or the same over ssh (with `--remote-bootstrap`) for a remote target.
 
@@ -5461,9 +5695,11 @@ remote     -> ssh <host> '<remote_bootstrap> cd <path> &&
 A one-off `--shared-root` given to `job run` is therefore no longer dead: it reaches the ONE preflight that actually runs (`job run`'s own, with the flag), and `run.sh`'s self-preflight is skipped rather than silently re-failing without it. `--allow-tier-fallback` is threaded the same way. Add `test_job_run_forwards_shared_root_and_sets_skip_preflight` (local branch): monkeypatch `preflight_job` to capture its kwargs and `subprocess.run` to capture its `env`, call `job run <job> --shared-root labnas=/mnt/lab --allow-tier-fallback`, and assert both `preflight_job(shared_root_overrides={"labnas": "/mnt/lab"}, allow_tier_fallback=True, ...)` and `env["HYDRA_JOB_SKIP_PREFLIGHT"] == "1"`. Add `test_job_run_remote_command_includes_shared_root_flag_and_skip_preflight`: assert the constructed ssh command string contains both `--shared-root labnas=/mnt/lab` before the `&&` and `HYDRA_JOB_SKIP_PREFLIGHT=1` immediately before `./run.sh`.
 
 **Fix V-minor — `--detach`'s `nohup … &` wrapper must redirect stdout/stderr explicitly, or it double-writes alongside `run.sh`'s own logging.** `run.sh` already does `... | tee -a logs/run.log` internally (Task 7's runner spec) — that is the durable, structured log a detached run is meant to be checked via `job status`/`logs/run.log` later. `nohup` with no redirect specified defaults to appending combined output to `./nohup.out` in the CWD the `ssh`/`subprocess` invocation runs from, which is a SECOND, redundant copy of the same output living in a different, undocumented file that nothing in this plan ever names, checks, or cleans up — worse, for the remote branch that CWD is wherever the ssh session's shell starts (not necessarily the job dir, depending on `--remote-bootstrap`), so `nohup.out` can land somewhere the user never thinks to look. Fix: the `--detach` wrapper explicitly redirects to `/dev/null` since `run.sh`'s own `tee -a logs/run.log` is already the durable record: `nohup ./run.sh {shlex.join(passthrough)} >/dev/null 2>&1 &` (local) / `nohup ./run.sh {shlex.join(passthrough)} >/dev/null 2>&1 &` appended inside the remote `ssh` command string (after the `&&` chain, before the closing quote). No `nohup.out` is ever created by either branch.
+
+**Minor fix (round-7) — the REMOTE `ssh ... 'bootstrap && cd path && nohup ./run.sh ... >/dev/null 2>&1 &'` invocation also needs its STDIN closed, or the ssh session itself can hang waiting for input that never arrives.** Redirecting the backgrounded `run.sh`'s own stdout/stderr does not touch the parent `ssh` client's stdin — a non-interactive `ssh host 'cmd &'` without `-f` or an explicit `</dev/null` can still block on the local end until the remote shell's own stdin is closed, which it normally is only when the ssh session itself exits (and it won't, because the backgrounded job keeps the remote shell's job table non-empty in some sshd configurations). Fix: append `</dev/null` to the full remote command string (`ssh host 'bootstrap && cd path && nohup ./run.sh ... >/dev/null 2>&1 & disown' </dev/null`, or equivalently invoke with `ssh -f host '...'` which backgrounds the ssh client itself after authentication). `job_cli.py`'s `--detach` remote branch (Task 11) uses `</dev/null` on the `subprocess.run(["ssh", ...])` call's `stdin=subprocess.DEVNULL` — the Python equivalent of shell's `</dev/null` — rather than relying on shell redirection inside the remote command string, since that is the one guaranteed to close the LOCAL ssh client's own stdin regardless of what the remote shell does.
 `subprocess.run(["./run.sh", *passthrough])` for the local-dir branch MUST pass `cwd=job_dir` (minor fix) — `run.sh` itself resolves its own location via `BASH_SOURCE`, but the parent Python process's CWD is whatever the user invoked `trackerkit job run` from, and without `cwd=job_dir` a relative job path argument on the CLI would still work by luck (bash resolves `./run.sh` against the argv path, not CWD) while anything inside `run.sh` that assumes CWD == job root during the brief window before its own `cd "$JOB"` would not. `track_args` recorded at pack time are **always** forwarded.
 
-**Fix V3 — the local branch of `job run` must ITSELF export `HYDRA_JOB_TRACKERKIT`, or `run.sh`'s PATH-independence (fix A2a) is dead code on every dev machine.** `run.sh` reads `TRACKERKIT="${HYDRA_JOB_TRACKERKIT:-trackerkit}"` (line 3539) — it only ever *consumes* the variable, nothing in this plan as written ever *sets* it for the local-dir path. `job_cli.py`'s local branch runs a bare `subprocess.run(["./run.sh", *passthrough], cwd=job_dir, check=False)` with no `env=` override, so the child inherits the parent's environment unchanged and `HYDRA_JOB_TRACKERKIT` is simply absent — `run.sh` falls back to bare `trackerkit`, exactly the failure this plan's own Global Constraint calls out: in any dev worktree, `trackerkit` on `$PATH` resolves to MAIN's editable install (`pip install -e` registers one console-script entry point per environment; a worktree checkout is not a separate install), not this worktree's checked-out code. Two concrete failures follow: (1) `trackerkit job preflight .` invoked from inside `run.sh` (there is no such invocation inside `run.sh` itself, but `job_cli.py`'s own remote branch chains `trackerkit job preflight . && ./run.sh` over ssh with the SAME PATH-resolution problem for the ssh session, covered separately by fix A2b's `--remote-bootstrap`) would hit `argparse: invalid choice: 'job'` if MAIN predates the `job` subcommand; (2) even where `job` exists on MAIN, `trackerkit track` inside `run.sh` runs MAIN's tracking code — silently different cache-key/detection logic from the worktree the job was packed and is being verified from, which defeats the entire portable-jobs feature for local testing (every "run this locally to verify Goal-N" acceptance step in Task 13 would actually be exercising MAIN, not the branch under test).
+**Fix V3 — the local branch of `job run` must ITSELF export `HYDRA_JOB_TRACKERKIT`, or `run.sh`'s PATH-independence (fix A2a) is dead code on every dev machine.** `run.sh` reads `TRACKERKIT_STR="${HYDRA_JOB_TRACKERKIT:-trackerkit}"` (Task 7's runner template) — it only ever *consumes* the variable, nothing in this plan as written ever *sets* it for the local-dir path. `job_cli.py`'s local branch runs a bare `subprocess.run(["./run.sh", *passthrough], cwd=job_dir, check=False)` with no `env=` override, so the child inherits the parent's environment unchanged and `HYDRA_JOB_TRACKERKIT` is simply absent — `run.sh` falls back to bare `trackerkit`, exactly the failure this plan's own Global Constraint calls out: in any dev worktree, `trackerkit` on `$PATH` resolves to MAIN's editable install (`pip install -e` registers one console-script entry point per environment; a worktree checkout is not a separate install), not this worktree's checked-out code. Two concrete failures follow: (1) `trackerkit job preflight .` invoked from inside `run.sh` (there is no such invocation inside `run.sh` itself, but `job_cli.py`'s own remote branch chains `trackerkit job preflight . && ./run.sh` over ssh with the SAME PATH-resolution problem for the ssh session, covered separately by fix A2b's `--remote-bootstrap`) would hit `argparse: invalid choice: 'job'` if MAIN predates the `job` subcommand; (2) even where `job` exists on MAIN, `trackerkit track` inside `run.sh` runs MAIN's tracking code — silently different cache-key/detection logic from the worktree the job was packed and is being verified from, which defeats the entire portable-jobs feature for local testing (every "run this locally to verify Goal-N" acceptance step in Task 13 would actually be exercising MAIN, not the branch under test).
 
 Fix: `job_cli.py`'s local branch (Task 11) sets `HYDRA_JOB_TRACKERKIT` explicitly before invoking `run.sh`:
 
@@ -5946,7 +6182,7 @@ Run the Task 4 Step 13 recipe again at the branch tip. Expected: every clip EQUI
 
 - [ ] **Step 3: CUDA equivalence matrix on firebrat**
 
-Run the Task 4 Step 14 recipe at the branch tip on `firebrat`. **Confirm `courtship` is still not to be touched.** Expected: same acceptance.
+Run the Task 4 Step 14 recipe at the branch tip on `firebrat`, **including its fix Y7 git-bundle transport step first** (the branch has moved since Step 14 was last run, so the bundle must be re-created and re-fetched, not assumed still current on firebrat). **Confirm `courtship` is still not to be touched.** Expected: same acceptance.
 
 - [ ] **Step 4: The Goal-4 round trip — the only proof that matters**
 
@@ -6109,10 +6345,29 @@ cd /Users/neurorishika/Projects/Rockefeller/Kronauer/multi-animal-tracker/.workt
 
 # 7. Fix W2 -- the SECOND probe run per job, in --local mode: no HYDRA_*
 #    overrides, original video path (pull already landed it/its refreshed
-#    cache beside the origin, per command 2's assertion), original fixture
-#    config. This is the actual Goal-4 proof -- a LOCAL run against the
-#    LOCAL models root and the ORIGINAL config reusing the pulled cache.
-#    Both this AND command 6 must print CACHE FULLY REUSABLE for every job.
+#    cache beside the origin, per command 2's assertion). This proves KEY
+#    PORTABILITY (the same cache key the job snapshot's config produces on
+#    firebrat is reproduced locally, on this machine, at this path) -- it
+#    does NOT prove "a local `trackerkit track` run reuses the cache", and
+#    the wording must not claim that.
+#
+#    Minor fix (round-7): use the PACKED sidecar config
+#    (/tmp/jobs/<name>_config.json, written earlier in this step) here, NOT
+#    tools/equivalence/fixtures/configs/*.json directly. The ORIGINAL
+#    fixture configs for ant_pose_headtail/ant_cnn_identity have
+#    pose_skeleton_file: "" -- fix X3a's pack-time guard already refuses to
+#    PACK a pose-enabled video with no skeleton, and a real local `track`
+#    run against the untouched fixture config would fail at SLEAP
+#    construction ("SLEAP backend requires keypoint_names") before it ever
+#    got near the cache. The probe script itself doesn't build a full
+#    session (fix B1), so it wouldn't visibly fail on the bare fixture
+#    config -- but "it doesn't crash" there is not evidence of anything;
+#    it would only be proving the probe's own narrow cache-key check
+#    against a config that could never actually run. The
+#    /tmp/jobs/<name>_config.json files already carry the real, resolved
+#    skeleton path (written above, same block that materializes them for
+#    `job pack`), so using them here keeps the probe's input consistent
+#    with what actually got packed and pushed.
 cd /Users/neurorishika/Projects/Rockefeller/Kronauer/multi-animal-tracker/.worktrees/portable-jobs && \
   PYTHONPATH=$PWD/src conda run --no-capture-output -n hydra-mps \
     python tools/equivalence/probe_cache_hit.py --local \
@@ -6121,12 +6376,12 @@ cd /Users/neurorishika/Projects/Rockefeller/Kronauer/multi-animal-tracker/.workt
 cd /Users/neurorishika/Projects/Rockefeller/Kronauer/multi-animal-tracker/.worktrees/portable-jobs && \
   PYTHONPATH=$PWD/src conda run --no-capture-output -n hydra-mps \
     python tools/equivalence/probe_cache_hit.py --local \
-      /tmp/jobs/src/ant_pose_headtail.mp4 tools/equivalence/fixtures/configs/ant_pose_headtail.json
+      /tmp/jobs/src/ant_pose_headtail.mp4 /tmp/jobs/ant_pose_headtail_config.json
 
 cd /Users/neurorishika/Projects/Rockefeller/Kronauer/multi-animal-tracker/.worktrees/portable-jobs && \
   PYTHONPATH=$PWD/src conda run --no-capture-output -n hydra-mps \
     python tools/equivalence/probe_cache_hit.py --local \
-      /tmp/jobs/src/ant_cnn_identity.mp4 tools/equivalence/fixtures/configs/ant_cnn_identity.json
+      /tmp/jobs/src/ant_cnn_identity.mp4 /tmp/jobs/ant_cnn_identity_config.json
 ```
 
 Assert, and paste the evidence:
@@ -6145,7 +6400,7 @@ Assert, and paste the evidence:
    reads `build_inference_cache_dir(<job>/videos/fly_obb.mp4)` — i.e.
    `/tmp/jobs/fly/videos/.inference_cache_fly_obb/`, the copy inside the job
    that `pull` also refreshes. Check both exist.
-3. **The cache hits — executable probe, not a log-scrape** (commands 6 AND 7 above; the script is specified below), for **all three** jobs including `identity`. Fix W2: command 6 alone only proves firebrat-path -> /tmp/jobs-path independence (both env-pinned to the job snapshot); command 7's `--local` invocation, with no `HYDRA_*` overrides and against the ORIGINAL fixture config and ORIGINAL video path, is the actual proof of spec Goal 4 ("the pulled cache is reusable by a local run against the local models root and the original config"). Both must print `CACHE FULLY REUSABLE` for every job.
+3. **The cache hits — executable probe, not a log-scrape** (commands 6 AND 7 above; the script is specified below), for **all three** jobs including `identity`. Fix W2: command 6 alone only proves firebrat-path -> /tmp/jobs-path independence (both env-pinned to the job snapshot); command 7's `--local` invocation, with no `HYDRA_*` overrides and against ORIGINAL/packed-sidecar config and the ORIGINAL video path, proves **cache-key portability** — the same key is reproduced on this machine, at this path, with no `HYDRA_*` overrides in effect (minor fix, round-7: state this precisely; it is NOT proof that a real local `trackerkit track` run reuses the cache end-to-end, since the probe never constructs a session — see fix B1/V5 below). Both must print `CACHE FULLY REUSABLE` for every job.
 4. The pulled `_tracking.csv` from firebrat is row-identical to a native firebrat run of the same config, for the `fly` AND the `pose` jobs — see Step 4c for the exact commands and, critically, the row-content assertion on the pose job.
 
 **Fix C3 — "the runner reports a cache hit" was never a real, checkable signal.** There is no "cache hit" log line anywhere in the codebase (grepped; only comments reference the concept). Use the REAL probes that exist instead.
@@ -6208,13 +6463,20 @@ Fix W2 -- that first form alone does NOT prove what spec Goal 4 actually
 promises. Goal 4 says the pulled cache is reusable by a LOCAL run against the
 LOCAL models root and the ORIGINAL config -- i.e. with NO HYDRA_* overrides
 at all, run.sh's env-pinning trick and the job's sidecar config never even in
-the picture. The `--local` form is that second, real proof: it takes the
-video's un-pinned local host path (pull lands outputs BESIDE THE ORIGIN, e.g.
-/tmp/jobs/src/fly_obb.mp4, per Task 13 Step 4 command 2) and the ORIGINAL
-fixture config path (tools/equivalence/fixtures/configs/fly_obb.json, not the
-job's sidecar), leaves HYDRA_MODELS_DIR/HYDRA_CONFIG_DIR exactly as the
-ambient shell has them, and does not chdir anywhere. `build_inference_cache_dir`
-resolves the SAME .inference_cache_<stem>/ that pull refreshed beside the
+the picture. The `--local` form is the probe's second check, proving
+**cache-key portability**: it takes the video's un-pinned local host path
+(pull lands outputs BESIDE THE ORIGIN, e.g. /tmp/jobs/src/fly_obb.mp4, per
+Task 13 Step 4 command 2) and a config path -- the ORIGINAL fixture config
+(tools/equivalence/fixtures/configs/fly_obb.json, not the job's sidecar) for
+fly_obb, or the PACKED sidecar (/tmp/jobs/<name>_config.json, minor fix
+round-7) for the two pose-enabled jobs, since their original fixture configs
+carry `pose_skeleton_file: ""` and fix X3a's pack-time guard would refuse to
+pack that shape at all -- leaves HYDRA_MODELS_DIR/HYDRA_CONFIG_DIR exactly as
+the ambient shell has them, and does not chdir anywhere. Because the probe
+never constructs a `TrackingWorker`/session (fix B1), this proves the cache
+KEY reproduces correctly outside any job-scoped env override, not that a
+real local `trackerkit track` invocation would itself hit the cache end to
+end. `build_inference_cache_dir` resolves the SAME .inference_cache_<stem>/ that pull refreshed beside the
 origin clip, because it is a pure function of `video_path`. BOTH invocations
 must print "CACHE FULLY REUSABLE" for Goal 4 to be considered proven for a
 given job; the first form alone only proves path-independence, not that a
