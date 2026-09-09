@@ -3459,7 +3459,7 @@ fi
 cd "$JOB"
 mkdir -p logs
 START="$(date -u +%FT%TZ)"
-set +e
+
 # Fix A2a: `trackerkit` must NOT be assumed to be on PATH. `ssh host 'cmd'`
 # (non-interactive, non-login) does not source the shell profile that puts a
 # conda env's entry points on PATH -- verified on firebrat: even
@@ -3471,16 +3471,22 @@ set +e
 # invocation; the default keeps today's behavior for a shell where it IS on
 # PATH (e.g. an already-activated interactive session).
 TRACKERKIT="${HYDRA_JOB_TRACKERKIT:-trackerkit}"
-# Fix W1d: run.sh is spec §9.1's "executable contract" -- a hand-run
-# ./run.sh (not routed through job_cli.py's `job run`) must get the same
-# truncated-video protection `job run` gets by calling preflight itself
-# first. `job preflight .` runs from $JOB (we already cd'd above) so shared
-# aliases resolve from HYDRA_HOST_CONFIG_DIR exactly as check 6 describes.
-# A preflight failure aborts BEFORE track ever touches a possibly-truncated
-# video; it is deliberately not wrapped in `set +e`/tee -- its own exit code
-# should propagate untouched, and its own diagnostics belong in
-# logs/preflight.json (Task 10), not interleaved into logs/run.log.
+
+# Fix W1d (round-5 correction): preflight runs BEFORE `set +e`, so a failing
+# preflight ABORTS under `set -euo pipefail` instead of printing and letting
+# `track` proceed onto a truncated video. The previous revision placed this
+# call after `set +e` while its comment claimed the opposite, which made the
+# whole hand-run protection inert -- exactly the case W1d exists for.
+# `job preflight .` runs from $JOB (we already cd'd) so shared aliases resolve
+# from HYDRA_HOST_CONFIG_DIR as check 6 describes, and its diagnostics land in
+# logs/preflight.json rather than interleaved into logs/run.log.
+# NOTE: `job run` also chains preflight before ./run.sh, so a remote run
+# preflights twice. That is deliberate and cheap (the signature check reads
+# 16 MiB per video; only model hashing repeats, seconds) -- run.sh cannot
+# assume it was invoked through job_cli.py.
 $TRACKERKIT job preflight .
+
+set +e
 $TRACKERKIT track --video-list videos.txt "$@" 2>&1 | tee -a logs/run.log
 CODE=${PIPESTATUS[0]}
 set -e
@@ -4723,6 +4729,14 @@ Checks, in order, all executed (spec §9.4):
 8. `disk` — free space under `videos/` >= 1.5x total video bytes, counting shared videos' sizes for caches but not for the videos themselves. **Minor fix:** `preflight.py` must call `shutil.disk_usage(...)` through the MODULE (`import shutil; shutil.disk_usage(...)`), never `from shutil import disk_usage` bound to a local name — `test_insufficient_disk_fails` monkeypatches the attribute on the `shutil` module object itself (`monkeypatch.setattr(shutil, "disk_usage", ...)`), which only intercepts lookups that go through `shutil.disk_usage` at call time; a `from shutil import disk_usage` import would have already bound the ORIGINAL function into `preflight.py`'s own namespace at import time, and the monkeypatch would silently not apply, making the test measure the real filesystem instead of the fake tiny one.
 
 Write the result to `logs/preflight.json`.
+
+**Exit-code contract (round-5 minor 2).** `trackerkit job preflight` MUST exit
+non-zero (code 3, per §13) whenever `PreflightResult.ok` is False. Both the
+`job run` ssh chain (`… job preflight . && ./run.sh …`) and `run.sh`'s own
+self-preflight under `set -euo pipefail` rely on that exit code to abort before
+`track` touches a possibly-truncated video. A preflight that prints failures but
+exits 0 silently disarms both protections. Add a CLI test asserting the exit
+code for a failing job.
 
 The `HYDRA_HOST_CONFIG_DIR` fallback matters: `run.sh` sets it to `${HYDRA_CONFIG_DIR:-}`, which is **empty** on any host using defaults, so an empty value must mean "the platformdirs config dir", not "no table".
 
