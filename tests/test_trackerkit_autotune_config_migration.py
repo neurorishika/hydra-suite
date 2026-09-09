@@ -35,9 +35,9 @@ def test_roundtrip_emits_only_the_new_key():
 
 
 @pytest.mark.parametrize("apply_tuned", [True, False])
-def test_tile_batch_autotune_is_independent_of_the_apply_flag(apply_tuned):
-    """The process-local SAHI tuner is disabled by the overlay when a coordinated
-    tile value is actually applied -- never pre-emptively by platform or policy."""
+def test_the_retired_tile_batch_autotune_key_is_never_emitted(apply_tuned):
+    """The process-local SAHI tile-batch tuner is gone: Calibrate is the only
+    "make it faster automatically" control, so no key is emitted for it."""
     rt = RuntimeContext(fps=100.0, total_frames=500, frame_width=640, frame_height=480)
     params = build_engine_params({"apply_tuned_inference": apply_tuned}, runtime=rt)
-    assert params["SLICE_TILE_BATCH_AUTOTUNE"] is False  # advanced default
+    assert "SLICE_TILE_BATCH_AUTOTUNE" not in params

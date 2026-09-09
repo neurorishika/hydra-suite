@@ -1144,13 +1144,6 @@ def build_engine_params(
         # geometry profiles.  The inference config clamps these values before
         # the tile admission helper applies the final per-model memory bound.
         "SLICE_TILE_BATCH_SIZE": advanced.get("slice_tile_batch_size", 16),
-        # The process-local SAHI tuner is never pre-empted by platform or
-        # policy here -- InferenceTuningSettings.apply (models.py:186-198)
-        # disables it itself, and only when the overlay status shows a
-        # coordinated tile value was actually supplied (models.py:399). This
-        # keeps the process-local tuner active for the normal state (no
-        # profile yet) on every platform.
-        "SLICE_TILE_BATCH_AUTOTUNE": advanced.get("slice_tile_batch_autotune", False),
         "SLICE_MEMORY_BUDGET_MIB": advanced.get("slice_memory_budget_mib", 256),
         "SLICE_MERGE_POLICY": advanced.get(
             "slice_merge_policy", SLICE_MERGE_DEFAULTS["merge_policy"]

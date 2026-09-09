@@ -952,7 +952,7 @@ def test_a_baseline_vector_applies_as_a_no_op(tmp_path):
     config = build_inference_config_from_params(params)
     baseline = InferenceTuningSettings.from_config(config)
 
-    applied = baseline.apply(config, disable_tile_autotune=False)
+    applied = baseline.apply(config)
 
     # Full dataclass equality, not just a round-trip of the tuning fields:
     # the claim is that the config the backward pass reaches is the one it

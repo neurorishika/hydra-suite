@@ -121,9 +121,12 @@ class TrackingOrchestrator:
         (``core/inference/autotune/device.py``), so nothing below the GUI
         can detect an overlapping tracking run, and a calibration measured
         against one would silently produce a confidently wrong profile.
-        Refuse to open while a track is running; the dialog itself is
-        application-modal, so it symmetrically blocks starting a track
-        while calibration is in progress.
+        Refuse to open while a track is running. The reverse direction is
+        NOT guaranteed by modality: ``BaseDialog`` calls ``setModal(True)``
+        with a parent, which Qt treats as *window*-modal (it blocks only the
+        parent window), not application-modal. The actual guarantee that a
+        track cannot start during calibration is the explicit
+        ``_calibration_is_active()`` check in ``start_full``.
         """
         if self._tracking_is_active():
             QMessageBox.warning(

@@ -149,10 +149,8 @@ def apply_settings_to_params(
             result["YOLO_SEQ_STAGE1_SLICE_TILE_BATCH_SIZE"] = (
                 settings.slice_tile_batch_size
             )
-            result["YOLO_SEQ_STAGE1_SLICE_TILE_BATCH_AUTOTUNE"] = False
         else:
             result["SLICE_TILE_BATCH_SIZE"] = settings.slice_tile_batch_size
-            result["SLICE_TILE_BATCH_AUTOTUNE"] = False
     if settings.headtail_batch_size is not None:
         result["HEADTAIL_BATCH_SIZE"] = settings.headtail_batch_size
     if settings.pose_batch_size is not None:

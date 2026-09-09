@@ -251,14 +251,12 @@ def test_overlay_settings_apply_without_mutating_requested_config():
     assert effective.pose.yolo.batch_size == 4
 
 
-def _obb_config(*, tile_batch_autotune: bool) -> InferenceConfig:
+def _obb_config() -> InferenceConfig:
     return InferenceConfig(
         obb=OBBConfig(
             direct=OBBDirectConfig(
                 model_path="obb.pt",
-                slice=SliceConfig(
-                    enabled=True, tile_batch_autotune=tile_batch_autotune
-                ),
+                slice=SliceConfig(enabled=True, tile_batch_size=16),
             )
         ),
         detection_batch_size=1,
@@ -275,28 +273,19 @@ def _obb_config(*, tile_batch_autotune: bool) -> InferenceConfig:
         ("disabled", "automatic inference tuning is disabled"),
     ],
 )
-def test_a_no_op_overlay_does_not_disable_the_tile_batch_autotuner(status, reason):
-    """record/kept_current/fallback/disabled overlays must not silently kill
-    SAHI tuning: they reuse the configured baseline verbatim."""
+def test_a_no_op_overlay_leaves_the_configured_tile_batch_alone(status, reason):
+    """record/kept_current/fallback/disabled overlays reuse the configured
+    baseline verbatim, so the explicit Tiles / call value survives."""
     settings = _settings()
     overlay = InferenceRuntimeOverlay.baseline(settings, status=status, reason=reason)
-    config = _obb_config(tile_batch_autotune=True)
+    config = _obb_config()
     effective = overlay.apply(config)
-    assert effective.obb.direct.slice.tile_batch_autotune is True
+    assert effective.obb.direct.slice.tile_batch_size == settings.slice_tile_batch_size
 
 
 @pytest.mark.parametrize("status", ["calibrated", "cache_hit", "cache_hit_after_wait"])
-def test_an_active_override_overlay_disables_the_tile_batch_autotuner(status):
-    """An overlay whose effective settings actually differ from the
-    requested baseline (a real tuner override -- e.g. resource admission
-    succeeded and picked a different slice_tile_batch_size, mirroring
-    ``coordinator._reuse``) must still disable the process-local SAHI
-    tuner -- the coordinated tuner owns it. The gate is
-    ``effective != requested``, not ``status`` alone (round-1 review
-    IMPORTANT 1): a "calibrated"/"cache_hit" status with admission FAILURE
-    keeps ``effective == requested`` and must NOT disable it -- see
-    ``test_admission_failure_on_a_cache_hit_does_not_disable_the_tile_batch_autotuner``.
-    """
+def test_an_active_override_overlay_supplies_its_tile_batch_size(status):
+    """A real tuner override installs its coordinated slice_tile_batch_size."""
     requested = _settings()
     effective_settings = requested.with_value("slice_tile_batch_size", 4)
     overlay = InferenceRuntimeOverlay(
@@ -307,9 +296,9 @@ def test_an_active_override_overlay_disables_the_tile_batch_autotuner(status):
         status=status,
         reason="tuned",
     )
-    config = _obb_config(tile_batch_autotune=True)
+    config = _obb_config()
     effective = overlay.apply(config)
-    assert effective.obb.direct.slice.tile_batch_autotune is False
+    assert effective.obb.direct.slice.tile_batch_size == 4
 
 
 def _always_failing_planner() -> CandidatePlanner:
@@ -342,16 +331,13 @@ def _always_failing_planner() -> CandidatePlanner:
     )
 
 
-def test_admission_failure_on_a_cache_hit_does_not_disable_the_tile_batch_autotuner(
+def test_admission_failure_on_a_cache_hit_falls_back_to_the_baseline(
     tmp_path,
 ):
-    """IMPORTANT 1 (round 1 review): ``coordinator._reuse`` keeps
-    ``status="cache_hit"`` even when live resource admission fails --
-    ``effective`` then falls back to the requested baseline verbatim (a pure
-    no-op, reason starting with "baseline fallback: ..."). Gating
-    ``disable_tile_autotune`` on status alone (the original Task 9 fix)
-    missed this: it would still kill the process-local SAHI tuner for a run
-    that changed nothing.
+    """``coordinator._reuse`` keeps ``status="cache_hit"`` even when live
+    resource admission fails -- ``effective`` then falls back to the
+    requested baseline verbatim (a pure no-op, reason starting with
+    "baseline fallback: ..."), so applying it changes nothing.
     """
     key = _key()
     profile = _profile(key)
@@ -373,9 +359,12 @@ def test_admission_failure_on_a_cache_hit_does_not_disable_the_tile_batch_autotu
     assert overlay.reason.startswith("baseline fallback:")
     assert overlay.effective == overlay.requested == baseline
 
-    config = _obb_config(tile_batch_autotune=True)
+    config = _obb_config()
     effective_config = overlay.apply(config)
-    assert effective_config.obb.direct.slice.tile_batch_autotune is True
+    assert (
+        effective_config.obb.direct.slice.tile_batch_size
+        == baseline.slice_tile_batch_size
+    )
 
 
 def test_candidate_generation_is_bounded_and_crop_values_canonicalize_to_density():

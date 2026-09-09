@@ -1135,33 +1135,6 @@ def test_predict_is_chunked_to_a_bounded_tile_count():
     assert max(sizes) <= 4  # bounded by tiles-per-frame (the TRT engine profile)
 
 
-def test_tile_batch_autotune_does_not_change_detector_output():
-    """Timing probes are discarded; the normal ordered tile pass is unchanged."""
-
-    class _Model:
-        imgsz = 256
-        overrides = {"imgsz": 256}
-
-        def predict(self, source, **kw):
-            n = source.shape[0] if hasattr(source, "shape") else len(source)
-            return [
-                types.SimpleNamespace(obb=_FakeOBBN([(32.0, 32.0, 16.0, 8.0)]))
-                for _ in range(n)
-            ]
-
-    frame = np.zeros((512, 512, 3), np.uint8)
-    fixed = _direct_cfg(True, overlap_height_ratio=0.0, overlap_width_ratio=0.0)
-    auto = _direct_cfg(True, overlap_height_ratio=0.0, overlap_width_ratio=0.0)
-    auto.direct.slice.tile_batch_autotune = True
-    fixed_result = run_direct_sliced([frame], _Model(), fixed, _FakeRuntime())[0]
-    auto_result = run_direct_sliced([frame], _Model(), auto, _FakeRuntime())[0]
-    for field in ("centroids", "angles", "sizes", "shapes", "confidences", "corners"):
-        np.testing.assert_allclose(
-            getattr(auto_result, field), getattr(fixed_result, field)
-        )
-    np.testing.assert_array_equal(auto_result.detection_ids, fixed_result.detection_ids)
-
-
 def test_streaming_sliced_path_releases_previous_tile_chunk_before_predict():
     """The generator and run_obb consumer together retain at most one tile chunk."""
     tile_batch_size = 4

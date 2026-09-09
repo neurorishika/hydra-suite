@@ -82,7 +82,6 @@ def test_tile_execution_controls_forward_to_core_slice_params():
     advanced.update(
         {
             "slice_tile_batch_size": 7,
-            "slice_tile_batch_autotune": True,
             "slice_memory_budget_mib": 96,
         }
     )
@@ -93,7 +92,7 @@ def test_tile_execution_controls_forward_to_core_slice_params():
     )
 
     assert params["SLICE_TILE_BATCH_SIZE"] == 7
-    assert params["SLICE_TILE_BATCH_AUTOTUNE"] is True
+    assert "SLICE_TILE_BATCH_AUTOTUNE" not in params
     assert params["SLICE_MEMORY_BUDGET_MIB"] == 96
 
 

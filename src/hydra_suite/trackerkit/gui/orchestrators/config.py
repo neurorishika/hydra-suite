@@ -457,7 +457,6 @@ class ConfigOrchestrator:
             "slice_width": panel.spin_slice_tile_w.value(),
             "slice_height": panel.spin_slice_tile_h.value(),
             "tile_batch_size": panel.spin_slice_tile_batch.value(),
-            "tile_batch_autotune": panel.chk_slice_tile_batch_autotune.isChecked(),
             "memory_budget_mib": panel.spin_slice_memory_budget.value(),
             "confidence_threshold": panel.spin_yolo_confidence.value(),
             "merge_policy": advanced.get("slice_merge_policy"),
@@ -509,6 +508,12 @@ class ConfigOrchestrator:
         # sidecar (see apply_slice_meta_for_model / _apply_slice_meta_values).
         saved_slice_settings = get_cfg("slice_profile_settings", default=None)
         if isinstance(saved_slice_settings, dict) and saved_slice_settings:
+            saved_slice_settings = dict(saved_slice_settings)
+            # Retired knob: the process-local SAHI tile-batch tuner is gone,
+            # and there is nothing to migrate it to (its replacement is the
+            # Calibrate action, not a setting). Drop it silently so an old
+            # session falls back to its explicit "Tiles / call" value.
+            saved_slice_settings.pop("tile_batch_autotune", None)
             self._mw.advanced_config["_slice_profile_saved_settings"] = dict(
                 saved_slice_settings
             )
@@ -524,9 +529,6 @@ class ConfigOrchestrator:
                 except (TypeError, ValueError):
                     value = default
                 self._mw.advanced_config[key] = max(1, min(maximum, value))
-            self._mw.advanced_config["slice_tile_batch_autotune"] = bool(
-                saved_slice_settings.get("tile_batch_autotune", False)
-            )
             for spin, key in (
                 (
                     self._panels.detection.spin_slice_tile_batch,
@@ -540,9 +542,6 @@ class ConfigOrchestrator:
                 spin.blockSignals(True)
                 spin.setValue(self._mw.advanced_config[key])
                 spin.blockSignals(False)
-            self._panels.detection.chk_slice_tile_batch_autotune.setChecked(
-                self._mw.advanced_config["slice_tile_batch_autotune"]
-            )
             self._panels.detection._update_slice_batch_admission_label()
         else:
             self._mw.advanced_config.pop("_slice_profile_saved_settings", None)
@@ -2632,6 +2631,10 @@ class ConfigOrchestrator:
                 with open(config_path, "r") as f:
                     user_config = json.load(f)
                 default_config.update(user_config)
+                # Retired knob (the process-local SAHI tile-batch tuner);
+                # dropped silently so it cannot linger as a stale key that
+                # nothing reads and _save_advanced_config would re-persist.
+                default_config.pop("slice_tile_batch_autotune", None)
                 logger.info(f"Loaded advanced config from {config_path}")
             except Exception as e:
                 logger.warning(f"Could not load advanced config: {e}")

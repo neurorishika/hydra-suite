@@ -40,87 +40,6 @@ class Region:
     frame_idx: int
 
 
-def _autotune_tile_chunk_size(
-    *,
-    frames,
-    plan,
-    chunk_size: int,
-    slice_cfg,
-    model,
-    model_path: str | None,
-    runtime,
-    imgsz: int,
-    device_frames: bool,
-    task: str,
-    max_detections: int,
-    predict,
-) -> int:
-    """Probe one bounded tile batch, preserving explicit user batch overrides."""
-    if not getattr(slice_cfg, "tile_batch_autotune", False):
-        return chunk_size
-    try:
-        from .slicing import estimated_prediction_job_bytes, iter_tile_job_chunks
-        from .tile_batch_autotune import (
-            TileBatchAutotuneKey,
-            select_tile_batch_size,
-            stable_artifact_identity,
-            stable_device_identity,
-            synchronized_timer,
-        )
-
-        # One frame is sufficient to benchmark the exact tile shape without
-        # retaining an inference-window worth of pixels.
-        sample = next(
-            iter_tile_job_chunks(
-                frames[:1], plan, device_tiles=device_frames, chunk_size=chunk_size
-            )
-        )
-        images = [image for _, image in sample]
-        if not images:
-            return chunk_size
-        resolved = getattr(runtime, "resolved", None)
-        backend = str(getattr(resolved, "backend", None) or type(model).__name__)
-        tile_w, tile_h = plan.slice_wh
-        frame_w, frame_h = plan.frame_wh
-        source_pixels = max(
-            tile_w * tile_h,
-            frame_w * frame_h if plan.full_frame else 0,
-        )
-        per_job_bytes = estimated_prediction_job_bytes(
-            imgsz=imgsz,
-            task=task,
-            max_detections=max_detections,
-            source_bytes=0 if device_frames else source_pixels * 3,
-        )
-        key = TileBatchAutotuneKey(
-            artifact=stable_artifact_identity(model_path, model),
-            backend=backend,
-            device=stable_device_identity(str(getattr(runtime, "device", "unknown"))),
-            imgsz=int(imgsz),
-            tile_wh=tuple(plan.slice_wh),
-            full_frame=bool(plan.full_frame),
-            task=task,
-            # Admission details are part of the key even when model-input
-            # accounting changes independently of geometry.
-            per_job_bytes=per_job_bytes,
-            byte_budget=int(getattr(slice_cfg, "tile_memory_budget_bytes", 0)),
-            admitted_max=int(chunk_size),
-        )
-        clock = synchronized_timer(str(getattr(runtime, "device", "")))
-
-        def benchmark(size: int) -> float:
-            start = clock()
-            predict(images[:size], size)
-            return clock() - start
-
-        selected = select_tile_batch_size(key, benchmark=benchmark)
-        return chunk_size if selected is None else selected
-    except Exception:
-        # The normal admitted batch remains correct if a backend lacks a
-        # reliable timer or cannot safely issue probe predictions.
-        return chunk_size
-
-
 class RegionSource:
     """Base for OBB region planners.
 
@@ -415,7 +334,6 @@ class Grid(RegionSource):
             effective_raw_detection_cap,
         )
         from .slicing import (
-            MAX_TILE_CHUNK,
             _predict_tiles,
             admitted_tile_chunk_size,
             iter_tile_job_chunks,
@@ -436,14 +354,7 @@ class Grid(RegionSource):
         )
         self._plan = plan
         explicit_batch = getattr(slice_cfg, "tile_batch_size", None)
-        requested = min(
-            plan.jobs_per_frame,
-            (
-                MAX_TILE_CHUNK
-                if getattr(slice_cfg, "tile_batch_autotune", False)
-                else int(explicit_batch)
-            ),
-        )
+        requested = min(plan.jobs_per_frame, int(explicit_batch))
         byte_budget = int(
             getattr(slice_cfg, "tile_memory_budget_bytes", 256 * 1024 * 1024)
         )
@@ -457,28 +368,6 @@ class Grid(RegionSource):
             max_detections=effective_raw_detection_cap(config),
         )
         letterbox = device_frames and not isinstance(model, DirectExecutorAdapter)
-        chunk_size = _autotune_tile_chunk_size(
-            frames=frames,
-            plan=plan,
-            chunk_size=chunk_size,
-            slice_cfg=slice_cfg,
-            model=model,
-            model_path=getattr(config.direct, "model_path", None),
-            runtime=runtime,
-            imgsz=imgsz,
-            device_frames=device_frames,
-            task=self.task(config),
-            max_detections=effective_raw_detection_cap(config),
-            predict=lambda images, size: _predict_tiles(
-                images,
-                model,
-                config,
-                runtime,
-                imgsz,
-                letterbox=letterbox,
-                chunk_size=size,
-            ),
-        )
 
         for chunk in iter_tile_job_chunks(
             frames,
@@ -1036,12 +925,7 @@ class SlicedStage1Proposals(Stage1Proposals):
             _resolve_imgsz,
             effective_raw_detection_cap,
         )
-        from .slicing import (
-            MAX_TILE_CHUNK,
-            admitted_tile_chunk_size,
-            iter_tile_job_chunks,
-            plan_slices,
-        )
+        from .slicing import admitted_tile_chunk_size, iter_tile_job_chunks, plan_slices
 
         seq = config.sequential
         slice_cfg = seq.stage1_slice
@@ -1057,14 +941,7 @@ class SlicedStage1Proposals(Stage1Proposals):
             ref_object_px=slice_cfg.reference_body_px,
         )
         explicit_batch = getattr(slice_cfg, "tile_batch_size", None)
-        requested = min(
-            plan.jobs_per_frame,
-            (
-                MAX_TILE_CHUNK
-                if getattr(slice_cfg, "tile_batch_autotune", False)
-                else int(explicit_batch)
-            ),
-        )
+        requested = min(plan.jobs_per_frame, int(explicit_batch))
         candidate_cap = effective_raw_detection_cap(config)
         chunk_size = admitted_tile_chunk_size(
             plan,
@@ -1080,29 +957,6 @@ class SlicedStage1Proposals(Stage1Proposals):
         stage1_kwargs: dict[str, Any] = {}
         if seq.detect_image_size > 0:
             stage1_kwargs["imgsz"] = seq.detect_image_size
-        chunk_size = _autotune_tile_chunk_size(
-            frames=frames,
-            plan=plan,
-            chunk_size=chunk_size,
-            slice_cfg=slice_cfg,
-            model=model,
-            model_path=getattr(seq, "detect_model_path", None),
-            runtime=runtime,
-            imgsz=imgsz,
-            device_frames=device_frames,
-            task="detect",
-            max_detections=candidate_cap,
-            predict=lambda images, _size: model.predict(
-                images,
-                conf=seq.detect_confidence_threshold,
-                iou=1.0,
-                classes=config.target_classes or None,
-                verbose=False,
-                device=runtime.device,
-                max_det=candidate_cap,
-                **stage1_kwargs,
-            ),
-        )
         boxes_by_frame = [np.zeros((0, 4), dtype=np.float64) for _ in frames]
         scores_by_frame = [np.zeros(0, dtype=np.float64) for _ in frames]
 
