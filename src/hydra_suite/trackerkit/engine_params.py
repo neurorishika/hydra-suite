@@ -15,9 +15,10 @@ from __future__ import annotations
 
 import logging
 import math
+import os
 from copy import deepcopy
 from dataclasses import dataclass
-from typing import Any, Mapping
+from typing import Any, Iterator, Mapping
 
 import cv2
 import numpy as np
@@ -1792,3 +1793,119 @@ def build_engine_params(
     params["INFERENCE_AUTOTUNE_PROJECT_CONFIG"] = deepcopy(dict(cfg))
 
     return params
+
+
+# --- Portable-job model reference derivation -------------------------------
+#
+# These four tuples are the CLASSIFICATION of every path-bearing engine param
+# key. `tests/test_engine_params_model_reference_contract.py` fails if a new
+# key ends in _PATH/_DIR/_FILE and is not in exactly one of them, which is what
+# makes `trackerkit job pack` impossible to silently forget when a new model
+# role is added.
+#
+# GOVERNING PRINCIPLE: gate on what core actually loads, not on the GUI's
+# enable flag. Verified against real source:
+#   - core/inference/config.py:1224 builds a CNNConfig for EVERY entry in
+#     CNN_CLASSIFIERS, unconditionally — no ENABLE_IDENTITY_ANALYSIS check.
+#   - core/inference/runner.py:509 loads all of them.
+#   - core/tracking/worker.py:955 derives whether the identity phase runs from
+#     bool(p.get("CNN_CLASSIFIERS", [])), never from the enable flag.
+#   - core/inference/config.py:1227-1233 logs an error and CONTINUES when a
+#     listed model file is missing, rather than refusing to run.
+# So CNN_CLASSIFIERS ships whenever the list is non-empty, full stop. Gating
+# it on ENABLE_IDENTITY_ANALYSIS would under-ship relative to what core loads
+# and cause silent divergence between the packed job and the remote run.
+# COLOR_TAG_MODEL_PATH is dead (no consumer in src/hydra_suite/core/; GUI field
+# is setVisible(False)) and lives in NON_MODEL_PATH_PARAM_KEYS — never yielded.
+
+MODEL_FILE_PARAM_KEYS = (
+    "YOLO_OBB_DIRECT_MODEL_PATH",
+    "YOLO_DETECT_MODEL_PATH",
+    "YOLO_CROP_OBB_MODEL_PATH",
+    "YOLO_HEADTAIL_MODEL_PATH",
+)
+MODEL_DIR_PARAM_KEYS = ("POSE_MODEL_DIR",)
+# param key -> the dict key holding the path inside each list entry
+MODEL_LIST_PARAM_KEYS = {"CNN_CLASSIFIERS": "model_path"}
+NON_MODEL_PATH_PARAM_KEYS = (
+    # Alias of whichever OBB key the mode selected; never a distinct artifact.
+    "YOLO_MODEL_PATH",
+    # Dead: no consumer anywhere in src/hydra_suite/core/ (grepped); the GUI
+    # field is setVisible(False) at trackerkit/gui/panels/identity_panel.py:143.
+    # Real colour-tag identity runs through ClassKit multi-head classifiers via
+    # CNN_CLASSIFIERS. Never yielded as a reference, even when populated.
+    "COLOR_TAG_MODEL_PATH",
+    # Legacy singular bridge; always equals COLOR_TAG_MODEL_PATH (see :1023).
+    # Equally dead; kept classified for the contract guard only.
+    "CNN_CLASSIFIER_MODEL_PATH",
+    # Always "" today.
+    "POSE_EXPORTED_MODEL_PATH",
+    # A config asset, shipped by the config snapshot, not the models root.
+    "POSE_SKELETON_FILE",
+    # Output destinations, not inputs.
+    "DATASET_OUTPUT_DIR",
+    "FINAL_MEDIA_EXPORT_VIDEO_OUTPUT_DIR",
+    "INDIVIDUAL_DATASET_OUTPUT_DIR",
+    "INDIVIDUAL_PROPERTIES_CACHE_PATH",
+)
+
+
+@dataclass(frozen=True)
+class ModelReference:
+    """One model artifact a run will actually load."""
+
+    role: str
+    path: str
+    kind: str  # "file" | "directory"
+
+
+def iter_model_references(params: Mapping[str, Any]) -> Iterator[ModelReference]:
+    """Yield every model artifact the run described by ``params`` will load.
+
+    Enablement gating matters, but it must track core's own decision, not the
+    GUI's enable flags: ``build_engine_params`` emits POSE_MODEL_DIR and both
+    non-selected YOLO mode keys REGARDLESS of whether the stage runs (only
+    head-tail is gated in build_engine_params, at :823-843), and CNN_CLASSIFIERS
+    is never gated on ENABLE_IDENTITY_ANALYSIS anywhere in core (see the module
+    comment above). Filtering on "non-empty string" alone would ship models
+    that are never loaded; filtering CNN_CLASSIFIERS on the identity flag would
+    under-ship models core loads anyway. COLOR_TAG_MODEL_PATH is never yielded.
+    """
+    obb_mode = str(params.get("YOLO_OBB_MODE", "direct") or "direct").lower()
+    live_files: list[str] = []
+    if params.get("DETECTION_METHOD") != "background_subtraction":
+        if obb_mode == "sequential":
+            live_files += ["YOLO_DETECT_MODEL_PATH", "YOLO_CROP_OBB_MODEL_PATH"]
+        else:
+            live_files.append("YOLO_OBB_DIRECT_MODEL_PATH")
+    live_files.append("YOLO_HEADTAIL_MODEL_PATH")  # already "" when disabled
+
+    for key in live_files:
+        value = str(params.get(key, "") or "").strip()
+        if value:
+            yield ModelReference(role=key, path=value, kind="file")
+
+    if params.get("ENABLE_POSE_EXTRACTOR"):
+        for key in MODEL_DIR_PARAM_KEYS:
+            value = str(params.get(key, "") or "").strip()
+            if value:
+                # Fix A3: POSE_MODEL_DIR is a directory for the SLEAP backend
+                # but a FILE for YOLO-pose/ViTPose (pose/backends/yolo.py:64-65,
+                # pose/backends/vitpose.py:206 both do model_path.with_suffix(...)
+                # on it; the fixture ant_pose_headtail.json:238 sets it to
+                # "YOLO-pose/....pt", not a directory). "kind" must be derived
+                # from what's actually on disk at reference time, never assumed
+                # from which tuple the key lives in.
+                yield ModelReference(
+                    role=key,
+                    path=value,
+                    kind="directory" if os.path.isdir(value) else "file",
+                )
+
+    # CNN classifiers: gated ONLY on the list being non-empty — never on
+    # ENABLE_IDENTITY_ANALYSIS. See the module-level comment for why.
+    for key, field in MODEL_LIST_PARAM_KEYS.items():
+        for entry in params.get(key, []) or []:
+            value = str((entry or {}).get(field, "") or "").strip()
+            if value:
+                yield ModelReference(role=key, path=value, kind="file")
