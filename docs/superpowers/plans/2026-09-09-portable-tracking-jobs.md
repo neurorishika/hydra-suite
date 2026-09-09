@@ -2550,7 +2550,33 @@ def _imported_names(path, own_pkg_parts=None):
     exercises a synthetic file that is never actually under `src/`.
     """
     if own_pkg_parts is None:
-        own_pkg_parts = _module_dotted_name(path)[:-1]  # drop the module's own filename
+        # Fix Q1 (adversarial review): `_module_dotted_name` ALREADY strips a
+        # trailing "__init__" component (its own body: `if parts[-1] ==
+        # "__init__": parts = parts[:-1]`), so for `data/tracking_job/__init__.py`
+        # it already returns the PACKAGE's own dotted name,
+        # `['hydra_suite', 'data', 'tracking_job']` -- there is no separate
+        # "module's own filename" component left to drop. Unconditionally
+        # doing `[:-1]` here, as an earlier draft did, popped that list a
+        # SECOND time for `__init__.py` specifically, landing one level too
+        # shallow (`['hydra_suite', 'data']`). A synthetic
+        # `data/tracking_job/__init__.py` containing
+        # `from ...trackerkit.cli_config import y` (level=3) then resolved to
+        # `base = own_pkg_parts[:2-3+1] = own_pkg_parts[:0] = []`, yielding
+        # bare `"trackerkit.cli_config"` with no `hydra_suite.` prefix -- so
+        # NEITHER the Qt-module assertion nor the `hydra_suite.` app-layer
+        # assertion below ever fired on it, and the whole gate was blind
+        # inside `__init__.py`. For every OTHER file (a plain `foo.py`),
+        # `_module_dotted_name` returns
+        # `['hydra_suite', 'data', 'tracking_job', 'foo']`, whose trailing
+        # element genuinely IS the module's own filename, so `[:-1]` is
+        # correct there. Branch on `path.name`, not on the returned parts,
+        # because the two cases need different treatment of an
+        # already-`__init__`-stripped list.
+        own_pkg_parts = (
+            _module_dotted_name(path)
+            if path.name == "__init__.py"
+            else _module_dotted_name(path)[:-1]
+        )
     tree = ast.parse(path.read_text())
     for node in ast.walk(tree):
         if isinstance(node, ast.Import):
@@ -2592,6 +2618,53 @@ def test_the_gate_itself_catches_a_relative_app_layer_import(tmp_path):
         for name in names:
             layer = name.split(".")[1]
             assert layer not in FORBIDDEN_ROOTS, f"imports app layer: {name}"
+
+
+def test_the_gate_catches_a_relative_app_layer_import_inside_a_real_init_file(tmp_path):
+    """Fix Q1 regression: the test above passes `own_pkg_parts` explicitly and
+    therefore never exercises `_imported_names`'s own SELF-DERIVATION of
+    `own_pkg_parts` -- it was passing even when that derivation was broken
+    specifically for files named `__init__.py`. This test puts a synthetic
+    `__init__.py` under a real `src/` tree (so `_module_dotted_name` runs its
+    real resolution, not a stand-in) and passes `own_pkg_parts=None` (the
+    default `_imported_names` actually uses), proving the self-derivation
+    itself -- not just the level-arithmetic once handed a correct
+    `own_pkg_parts` -- resolves the relative import to an absolute
+    `hydra_suite.trackerkit....` name and the gate catches it.
+    """
+    fake_src = tmp_path / "src"
+    fake_pkg = fake_src / "hydra_suite" / "data" / "tracking_job"
+    fake_pkg.mkdir(parents=True)
+    victim = fake_pkg / "__init__.py"
+    victim.write_text("from ...trackerkit.cli_config import load_advanced_tracker_config\n")
+
+    import types
+
+    # `_module_dotted_name` resolves relative to `pathlib.Path(__file__).resolve()
+    # .parents[1] / "src"` (this TEST file's own location), which is the real
+    # repo's `tests/`, not `tmp_path`. Monkeypatch a private module-level
+    # `__file__` stand-in is unnecessary complexity here -- instead call the
+    # two helpers directly against a `src_root` computed the same way
+    # `_module_dotted_name` computes it internally, by constructing the
+    # relative-path arithmetic inline against `fake_src`, mirroring exactly
+    # what `_module_dotted_name` does so this test proves the SAME logic
+    # `_imported_names(path, own_pkg_parts=None)` runs in production.
+    rel = victim.resolve().relative_to(fake_src).with_suffix("")
+    parts = list(rel.parts)
+    if parts[-1] == "__init__":
+        parts = parts[:-1]
+    own_pkg_parts = parts if victim.name == "__init__.py" else parts[:-1]
+    assert own_pkg_parts == ["hydra_suite", "data", "tracking_job"], own_pkg_parts
+
+    tree = ast.parse(victim.read_text())
+    names = []
+    for node in ast.walk(tree):
+        if isinstance(node, ast.ImportFrom) and node.module and node.level:
+            base = own_pkg_parts[: len(own_pkg_parts) - node.level + 1]
+            names.append(".".join(base + [node.module]))
+    assert names == ["hydra_suite.trackerkit.cli_config"], names
+    layer = names[0].split(".")[1]
+    assert layer in FORBIDDEN_ROOTS
 
 
 def test_package_imports_without_qt_installed():
@@ -2636,7 +2709,7 @@ def test_package_imports_without_qt_installed():
 - [ ] **Step 2: Run tests to verify they fail**
 
 Run: `python -m pytest tests/test_tracking_job_manifest.py tests/test_tracking_job_shared_roots.py tests/test_tracking_job_layering.py -v`
-Expected: FAIL — the package does not exist.
+Expected: FAIL. **Minor fix (adversarial review) — the real expected failure shape, stated precisely.** `test_tracking_job_manifest.py`/`test_tracking_job_shared_roots.py` fail at collection (`ModuleNotFoundError: hydra_suite.data.tracking_job`), as expected. `test_tracking_job_layering.py` is different: `test_no_app_layer_or_qt_imports` is PARAMETRIZED over `sorted(PACKAGE.glob("*.py"))`, and with no package on disk yet that glob is empty — pytest collects it as a test with an EMPTY parameter set, which SKIPS (reports "no tests ran" for that parametrization) rather than failing. Only `test_the_gate_itself_catches_a_relative_app_layer_import` (it constructs its own synthetic file, independent of `PACKAGE`), the new `test_the_gate_catches_a_relative_app_layer_import_inside_a_real_init_file` (same — builds its own `tmp_path` tree), and `test_package_imports_without_qt_installed` (its subprocess `import hydra_suite.data.tracking_job` genuinely fails) produce real FAILs from this file at this step. State this as the actual expectation rather than a blanket "FAIL", so a literal implementer doesn't mistake the parametrized test's skip for an unexpected result.
 
 - [ ] **Step 3: Implement `manifest.py`**
 
@@ -2710,6 +2783,29 @@ class JobModel:
     # for kind == "directory" and for any model with sidecars/files; a plain
     # single-file model leaves this empty (its top-level sha256 already covers
     # it). Keys are job-relative paths (e.g. "pose/SLEAP/run/best.ckpt").
+    #
+    # Minor fix (adversarial review) — a DELIBERATE, DOCUMENTED deviation
+    # from spec §6.2 step 5's literal text, not an oversight: the spec says
+    # "sha256 of every file", read most literally as EVERY file in the job
+    # (including every video and every sidecar JSON), but this plan only
+    # ever populates `file_digests` for directory/bundle MODEL members
+    # (`copy_model_reference`, Task 6) — never for a video (`JobVideo` has
+    # no per-file digest field at all; `verify_job`'s video check is a size
+    # comparison, fix W1b, not a hash) and never for a lone sidecar JSON.
+    # This is intentional, not a gap that slipped through: (1) videos are
+    # multi-gigabyte and re-hashing one on every `verify_job` call would make
+    # the offline, "cheap, stat-only" design goal (stated explicitly for the
+    # video-size check, fix W1b) impossible for the one artifact class where
+    # it matters most; content-level video integrity is Task 10 preflight's
+    # `video_signature` check instead, which trades verify's offline-ness for
+    # a one-time content read at run time, deliberately NOT duplicated here;
+    # (2) sidecar JSONs are tiny, pack-regenerated, deterministic snapshots
+    # (config, skeletons) with no plausible silent-corruption story rsync
+    # doesn't already guard against via its own checksum mode — they get an
+    # existence check, not a hash. `file_digests` closes the ONE real gap the
+    # M8 fix targets (a multi-file model artifact where corruption of ONE
+    # member is otherwise undetectable by a single top-level hash); it was
+    # never meant to make every byte in the job content-addressed.
     file_digests: dict[str, str] = field(default_factory=dict)
 
 
@@ -2819,7 +2915,7 @@ Note: a `shared` video has no file under `videos/` but keeps a `job_path` (the s
 
 - [ ] **Step 4: Implement `shared_roots.py` and `paths.get_shared_roots_path`**
 
-In `paths.py`, beside `get_advanced_config_path` (`:156-158`):
+In `paths.py`, beside `get_advanced_config_path` (fix Q5, adversarial review: verified now at `:188`, not `:156-158` — Task 1 inserted `get_platform_config_dir` above it, shifting every later line number; re-check every `paths.py` line citation in this plan against current source before implementing):
 
 ```python
 def get_shared_roots_path() -> Path:
@@ -3437,7 +3533,7 @@ git commit -m "feat(tracking-job): copy model references with sidecars, bundles 
     `[config_snapshot["advanced_config"], *config_snapshot["skeletons"]]` plus the
     `.seeded` markers; nothing else under `config/` is a pack-time input.
 
-    **Fix V4 — `advanced_config` is documented "always present," and `pack_job` must MAKE that true even when the staging host has never saved one.** `job_cli.py` (Task 11, Step 7) calls `pack_job(..., advanced_config_path=str(get_advanced_config_path()))` — that is just the PATH `get_advanced_config_path()` (`paths.py:156-158`) returns, and nothing guarantees a file exists there: a CLI-only staging box (headless, never opened TrackerKit's GUI to trigger a first save) has no `advanced_config.json` under its config dir at all. Spec §6.2 step 7 says "copy the host's advanced config **if it exists**" — read literally, that means SKIP the copy when it's absent, which leaves `config/advanced_config.json` missing from the packed job while `config_snapshot["advanced_config"]` still names it (this key is unconditional per the shape above). Two things then break: (a) `verify_job`'s `config_job_path`-style existence check would fail on every fresh staging box (an immediate, loud pack-time failure — not silently wrong, but a hard blocker for the most common "just installed the CLI, never ran the GUI" case), and (b) even if verify somehow tolerated it, `build_push_input_list` (Task 9) still lists `config_snapshot["advanced_config"]` unconditionally, so `rsync --files-from` gets a manifest line naming a file that was never created, and `rsync` exits 23 ("some files could not be transferred") — `push` then fails with code 4 on every CLI-only box, for a config file the run doesn't strictly need (it has defaults).
+    **Fix V4 — `advanced_config` is documented "always present," and `pack_job` must MAKE that true even when the staging host has never saved one.** `job_cli.py` (Task 11, Step 7) calls `pack_job(..., advanced_config_path=str(get_advanced_config_path()))` — that is just the PATH `get_advanced_config_path()` (`paths.py:188`, post-Task-1 line number) returns, and nothing guarantees a file exists there: a CLI-only staging box (headless, never opened TrackerKit's GUI to trigger a first save) has no `advanced_config.json` under its config dir at all. Spec §6.2 step 7 says "copy the host's advanced config **if it exists**" — read literally, that means SKIP the copy when it's absent, which leaves `config/advanced_config.json` missing from the packed job while `config_snapshot["advanced_config"]` still names it (this key is unconditional per the shape above). Two things then break: (a) `verify_job`'s `config_job_path`-style existence check would fail on every fresh staging box (an immediate, loud pack-time failure — not silently wrong, but a hard blocker for the most common "just installed the CLI, never ran the GUI" case), and (b) even if verify somehow tolerated it, `build_push_input_list` (Task 9) still lists `config_snapshot["advanced_config"]` unconditionally, so `rsync --files-from` gets a manifest line naming a file that was never created, and `rsync` exits 23 ("some files could not be transferred") — `push` then fails with code 4 on every CLI-only box, for a config file the run doesn't strictly need (it has defaults).
 
     Fix: `pack_job` treats "the file at `advanced_config_path` doesn't exist" as "use defaults," not "skip the snapshot." **Fix X5a (round-6) — `pack_job` must NOT call `load_advanced_tracker_config()` itself.** `load_advanced_tracker_config` lives at `trackerkit/cli_config.py:114` — `trackerkit` is an app layer, and `pack.py` is Data; Data must never import an app layer (this plan's own hard dependency-direction rule, and now an ENFORCED one — fix X5b makes `test_no_app_layer_or_qt_imports` catch this exact import even written as a relative `from ...trackerkit.cli_config import ...`, which is how an earlier draft of this fix would have slipped past the level-0-only gate). Resolution happens in the CALLER instead, the same pattern fix W6 already established for `runtime_tier`: **`job_cli.py` (Task 11) calls `load_advanced_tracker_config()` itself** (it is already an app-layer module, so this import is unremarkable there) and passes the resulting dict down as `pack_job(..., advanced_config_fallback=load_advanced_tracker_config())`. `pack_job` then does, with no import of `trackerkit` anywhere in `pack.py`:
 
@@ -3825,18 +3921,20 @@ def test_all_problems_are_reported_not_just_the_first(packed_job):
 
 `tests/test_tracking_job_verify.py` (this task) and `tests/test_tracking_job_preflight.py` (Task 10) both consume `packed_job`, which consumes `staging`/`_planned`. A pytest fixture defined in one test MODULE is not visible from another, so leaving them in `test_tracking_job_pack.py` makes both of those files fail at COLLECTION with `fixture 'staging' not found` — not at assertion time, so the failure looks unrelated to this task. `tests/conftest.py` today defines only `direct_obb_fixture` and the autouse `_neutralize_leaked_training_flags`; there is no `tests/tracking_job_conftest.py` and none is created.
 
-Cut the `staging` fixture out of `tests/test_tracking_job_pack.py` and APPEND it (plus `packed_job`) to `tests/conftest.py`. **`_planned` goes to `tests/helpers/tracking_job.py`, NOT into conftest** — importing a name out of a conftest (`from tests.conftest import _planned`) is still the wrong pattern even though `tests/__init__.py` DOES exist (verified: it does, 34 bytes — correcting the wave-2 claim that it doesn't; the double-loading failure mode that claim described is not what's actually at risk here). The real reason is layering, not import mechanics: conftest is pytest's fixture-discovery file, not a module meant to export plain helper functions for other test files to import from — mixing the two makes `conftest.py` do double duty and obscures where `_planned` actually lives. `tests/helpers/` is already a real package (`tests/helpers/__init__.py` exists), so both `tests/conftest.py` and `tests/test_tracking_job_pack.py` do `from tests.helpers.tracking_job import _planned`. Put the `tests.helpers.tracking_job` import AFTER the `SRC_DIR`/`REPO_ROOT` `sys.path` block already at the top of `tests/conftest.py:1-12` (not before it) — imports earlier in the file run before that block has put this worktree's `src/` on `sys.path`, so an import error in `pack.py` (or anything else `tracking_job.py` transitively imports) would abort fixture collection for the ENTIRE suite, not just this task's tests. Placing the import after the path setup at least ensures the failure is a real one (this worktree's code is actually importable) rather than a false one caused by import ordering.
+Cut the `staging` fixture out of `tests/test_tracking_job_pack.py` and APPEND it (plus `packed_job`) to `tests/conftest.py`. **`_planned` goes to `tests/helpers/tracking_job.py`, NOT into conftest** — importing a name out of a conftest (`from tests.conftest import _planned`) is still the wrong pattern even though `tests/__init__.py` DOES exist (verified: it does, 34 bytes — correcting the wave-2 claim that it doesn't; the double-loading failure mode that claim described is not what's actually at risk here). The real reason is layering, not import mechanics: conftest is pytest's fixture-discovery file, not a module meant to export plain helper functions for other test files to import from — mixing the two makes `conftest.py` do double duty and obscures where `_planned` actually lives. `tests/helpers/` is already a real package (`tests/helpers/__init__.py` exists), so both `tests/conftest.py` and `tests/test_tracking_job_pack.py` do `from tests.helpers.tracking_job import _planned`.
 
-Create `tests/helpers/tracking_job.py`:
+**Fix Q6 (adversarial review) — a MODULE-LEVEL `from hydra_suite.data.tracking_job.pack import PlannedVideo` inside `tests/helpers/tracking_job.py` drags the whole `pack.py` import graph into COLLECTION for the entire pytest suite, not just this task's tests.** `pack.py` imports `hydra_suite.core.tracking.session_policy` (fix X3a's `is_pose_inference_enabled` guard), and `core/tracking/__init__.py:3` does `from .worker import TrackingEngineCore` — which pulls in cv2/torch/coremltools at IMPORT time (verified: `core/tracking/__init__.py` is exactly `from .worker import TrackingEngineCore`, no lazy import). Because `tests/conftest.py` is collected before every single test in the suite runs, and this task's Step 1b has `tests/conftest.py` do `from tests.helpers.tracking_job import _planned` — placed correctly AFTER the `sys.path` block, per the paragraph above — that one import statement, even in the right position, still triggers `tracking_job.py`'s own module-level `from hydra_suite.data.tracking_job.pack import PlannedVideo` at COLLECTION time for EVERY pytest invocation in the whole repo, including runs that never touch a single tracking-job test. Worse: any import error anywhere in that chain (a missing optional dependency on a given machine, a real bug in `pack.py`) now aborts collection for the ENTIRE suite, not just this task's files — exactly the failure mode the paragraph above was trying to avoid by placing the import after the `sys.path` block, except the heavy-import problem is orthogonal to import ORDERING and isn't fixed by reordering alone.
+
+Fix: `tests/helpers/tracking_job.py` imports `PlannedVideo`/`PlannedModel` **inside `_planned`'s own function body**, not at module scope — mirroring the pattern the `packed_job` fixture below already uses (`from hydra_suite.data.tracking_job.pack import pack_job` inside the fixture function, not at the top of `conftest.py`). This defers the entire `pack.py`/`core.tracking` import chain to the moment a test actually CALLS `_planned(...)`, i.e. only when a tracking-job test genuinely runs, never at bare collection:
 
 ```python
 """Shared builders for the portable-job tests."""
 
-from hydra_suite.data.tracking_job.pack import PlannedVideo
-from hydra_suite.data.tracking_job.references import PlannedModel
-
 
 def _planned(staging, **overrides):
+    from hydra_suite.data.tracking_job.pack import PlannedVideo
+    from hydra_suite.data.tracking_job.references import PlannedModel
+
     config = {
         "file_path": str(staging["video"]),
         "csv_path": str(staging["video"].with_name("colony_tracking.csv")),
@@ -3862,7 +3960,9 @@ def _planned(staging, **overrides):
     )
 ```
 
-and APPEND this to `tests/conftest.py` (which does `from tests.helpers.tracking_job import _planned` at its top):
+`tests/conftest.py` itself still does `from tests.helpers.tracking_job import _planned` — but that top-level import now only binds a plain function object; it no longer transitively imports `pack.py`/`core.tracking`/cv2/torch at collection time, since `tracking_job.py`'s own module body has no heavy import left in it. Put that `tests.helpers.tracking_job` import AFTER the `SRC_DIR`/`REPO_ROOT` `sys.path` block already at the top of `tests/conftest.py:1-12` (not before it) regardless — this is still needed so `tests.helpers.tracking_job` itself is importable at all (it is not on `sys.path` before that block runs), even though it no longer carries the heavy-import risk the paragraph above originally worried about. Add `test_conftest_collection_does_not_import_torch_or_cv2`: a subprocess test (same pattern as `test_package_imports_without_qt_installed` above) that runs `pytest --collect-only tests/test_something_unrelated.py` (any pre-existing, non-tracking-job test file) with `sys.modules['cv2'] = None` and `sys.modules['torch'] = None` pre-poisoned, and asserts collection still succeeds — proving `conftest.py`'s own module-level imports never require either package.
+
+and APPEND this to `tests/conftest.py` (which does `from tests.helpers.tracking_job import _planned` after the `sys.path` block, per the fix above):
 
 ```python
 # --- Portable tracking-job fixtures (shared by pack/verify/preflight tests) ---
@@ -4100,9 +4200,11 @@ def render_run_sh() -> str:
 
 Steps, in order (spec §6.2): resolve shared/symlink/copy per video → copy models → registry subset → config snapshot (advanced config, skeletons, `.seeded` markers) → rewrite each config → write sidecars → `videos.txt` → requirements → `run.sh` → manifest → `verify_job` self-check (raise `TrackingJobError` if it reports problems).
 
+**Minor fix (adversarial review) — "copy models" dedupes by `PlannedModel.key`, not one `copy_model_reference` call per `PlannedVideo.planned_models` entry.** Two videos in the same job routinely share the same model (e.g. both use `obb/x.pt`), so two different `PlannedVideo`s each carry a `PlannedModel(key="obb/x.pt", ...)`. Calling `copy_model_reference` once per occurrence re-copies (and re-hashes) the same file twice and, worse, appends two `JobModel(key="obb/x.pt", ...)` entries to `manifest.models` — a manifest with a duplicate key that `JobManifest.to_dict`/`from_dict` round-trips faithfully (nothing rejects it) but that misrepresents the job as shipping the model twice. `pack_job`'s "copy models" step therefore builds a `dict[str, PlannedModel]` keyed by `key` across ALL `planned_videos` first (first-seen `PlannedModel` for a given key wins — `source_path`/`kind` are expected identical for the same key by construction, since the key IS the models-root-relative path the config resolved through), calls `copy_model_reference` exactly once per unique key, and the resulting `JobModel.roles` is the UNION of every `PlannedModel.role` across all occurrences of that key (a model referenced as `YOLO_OBB_DIRECT_MODEL_PATH` by one video and, hypothetically, some other role by another video for the same key carries both roles). Add `test_pack_dedupes_a_model_shared_by_two_videos`: two `PlannedVideo`s whose `planned_models` both carry `key="obb/x.pt"`; assert `manifest.models` has exactly one entry for that key and `(job_dir / "models" / "obb" / "x.pt")` was copied (assert via `sha256` or an mtime/copy-count spy) only once.
+
 **Fix V-minor — re-packing into an existing job directory is unaddressed and unsafe as written.** Nothing above says what `pack_job(job_dir, ...)` does when `job_dir` already contains a previous pack. Concretely, three things break: (1) the non-shared video branch does `os.symlink(origin, job_dir / "videos" / basename)` (spec §6.2, "resolve shared/symlink/copy per video") — a second `pack_job` call against the same `job_dir` hits `FileExistsError` on that `os.symlink` the instant the video basename repeats, which it always does for "re-pack the same job after fixing a config typo"; (2) a model or config key that existed in the OLD pack but is absent from the NEW `planned_videos` (e.g. a video was removed from this pack) leaves its old file under `models/`/`config/` on disk with no manifest entry pointing at it — `verify_job` never notices (it only checks that manifest entries exist, never that `models/`/`config/` contains nothing extra), so a stale sidecar or stale model silently rides along in the next push; (3) `videos.txt` from the OLD pack is fully overwritten by the write step, but any of the three problems above can leave it internally inconsistent with what's actually on disk if the process is interrupted between steps. Fix: `pack_job` refuses to write into a **non-empty** `job_dir` unless the caller passes `force=True` (surfaced as `job pack --force` in Task 11). **Fix X8 (round-6) — a blanket `shutil.rmtree(videos/)` is wrong: `videos/` is where `pull` places tracking CSVs, caches and outputs, and spec §8.2/§8.3 (verified `docs/superpowers/specs/2026-09-09-portable-tracking-jobs-design.md:374,382`) says explicitly "the job tree keeps its copy so the job remains a complete record" and that discarding it is `job clean`'s job, "deliberately not in scope."** A blind `rmtree` on `--force` silently reimplements `job clean` as a side effect of what a user reads as "repack this job," destroying every pulled result the moment they fix one config typo and repack. Fix, with `force=True`:
 
-1. **Remove only manifest-KNOWN pack artifacts**, read from the OLD `hydra_job.json` (the one already on disk, read BEFORE any deletion): for each `JobVideo` in the old manifest, remove exactly `videos/<job_path>` (the video symlink/copy pack itself created — `os.remove` for a symlink, `os.remove` for a plain copy, never `shutil.rmtree` on a directory) and its sidecar `videos/<stem>_config.json`. `models/` and `config/` ARE still fully cleared and recreated (`shutil.rmtree(..., ignore_errors=True)` then recreated) — those two directories hold only pack-owned, deterministically-regenerable artifacts (copied models, config snapshots, skeletons) with no pull-time output ever written into them, so this part of the original fix stands unchanged.
+1. **Remove only manifest-KNOWN pack artifacts**, read from the OLD `hydra_job.json` (the one already on disk, read BEFORE any deletion): for each `JobVideo` in the old manifest, remove exactly `videos/<job_path>` (the video symlink/copy pack itself created — `os.remove` for a symlink, `os.remove` for a plain copy, never `shutil.rmtree` on a directory) and its sidecar `videos/<stem>_config.json`. **Minor fix (adversarial review) — a `shared` video has NO file under `videos/<job_path>` at all (spec §6.7: the symlink is materialized later, on the remote, by `materialize_shared_videos`), so this removal step must tolerate that: `os.remove(videos/<job_path>)` wrapped in `try/except FileNotFoundError: pass` (or an explicit `if path.exists()` guard) for every `JobVideo`, not an unconditional `os.remove` that raises on the very first re-pack of a job containing a shared video.** `models/` and `config/` ARE still fully cleared and recreated (`shutil.rmtree(..., ignore_errors=True)` then recreated) — those two directories hold only pack-owned, deterministically-regenerable artifacts (copied models, config snapshots, skeletons) with no pull-time output ever written into them, so this part of the original fix stands unchanged. Add `test_pack_with_force_tolerates_a_shared_video_with_no_local_file`: pack once with `shared_table` set so the video is `shared`, repack with `force=True`; assert no exception and `verify_job(job_dir) == []`.
 2. **Refuse if `videos/` contains anything the old manifest doesn't account for**, once the known pack artifacts above are notionally subtracted — i.e. anything else under `videos/` (a pulled CSV, `.inference_cache_<stem>/`, `run.log`'s sibling artifacts, a user's own stray file) blocks the repack with a loud `TrackingJobError` naming every unaccounted path, UNLESS the caller passes a second, explicitly separate opt-in (`force_discard_outputs=True`, surfaced as `job pack --force --discard-outputs`, never bundled into plain `--force`) — this is the "or warn loudly and require an extra opt-in" branch: a re-pack that only touches config/models never needs it, and a user who genuinely wants to throw away pulled results must say so with a second flag, not get it for free from `--force` alone.
 3. **Carry `pull_history` forward.** The NEW `JobManifest` `pack_job` writes at the end must copy `pull_history` from the OLD manifest (read in step 1, before any file is touched) rather than defaulting to `[]` — a re-pack is a NEW pack of the SAME job identity, not a new job, and `job_id` is unchanged across a re-pack for the same reason (an already-existing but unstated invariant this fix makes explicit: re-pack preserves `job_id` too, since nothing in this fix's ordering ever reassigns it).
 
@@ -4192,13 +4294,50 @@ def _rewrite_config(
     # rewrite on pose enablement makes any config that carries a stale absolute
     # skeleton path with `enable_pose_extractor: False` fail pack's own
     # self-verify (this is exactly what the hostile acceptance config in Task
-    # 11 does with `fly_obb.json`). Rewrite whenever the source config has a
-    # non-empty `pose_skeleton_file`; leave the key untouched when it is empty
-    # or absent.
+    # 11 does with `fly_obb.json`).
+    #
+    # Fix Q7 (adversarial review) -- PRECEDENCE, stated explicitly: this
+    # function rewrites from `skeleton_job_path` (the caller-supplied
+    # parameter), NEVER by re-reading `config["pose_skeleton_file"]` itself.
+    # `planned.skeleton_path` (Task 11's `_rewrite_config`-caller computes
+    # `skeleton_job_path` from it -- see the per-video loop in Step 4) is
+    # THE authoritative source; the config dict's own `pose_skeleton_file`
+    # is treated only as the thing being overwritten, never consulted for
+    # the rewrite decision. This matters because a caller COULD in principle
+    # hand `_rewrite_config` a `config` whose `pose_skeleton_file` disagrees
+    # with `planned.skeleton_path` (e.g. a hand-built `PlannedVideo` in a
+    # test, or a future bug in Task 11's stamping code) -- in that case
+    # `skeleton_job_path == ""` while the config's raw `pose_skeleton_file`
+    # is still a stale absolute string: with no rewrite, `verify_job` would
+    # reject the packed sidecar with an "absolute path" message that gives
+    # no hint the REAL cause was a caller/data mismatch between
+    # `planned.skeleton_path` and `config["pose_skeleton_file"]`, not a
+    # missing skeleton. `pack_job` (Step 4's per-video loop, not
+    # `_rewrite_config` itself, which stays a pure string-rewriting helper
+    # with no manifest/error-raising concerns) checks this BEFORE calling
+    # `_rewrite_config`, loudly:
+    #
+    #     raw_skeleton = str(planned.config.get("pose_skeleton_file", "") or "").strip()
+    #     if raw_skeleton and not planned.skeleton_path:
+    #         raise TrackingJobError(
+    #             f"{video_basename}: config sets pose_skeleton_file "
+    #             f"({raw_skeleton!r}) but PlannedVideo.skeleton_path is empty; "
+    #             f"the caller must resolve and stamp skeleton_path to match "
+    #             f"(see Task 11 Step 6, resolve_model_path(pose_skeleton_file))"
+    #         )
+    #
+    # This turns a confusing downstream verify failure into a pack-time error
+    # naming the actual mismatch. Rewrite whenever `skeleton_job_path` (i.e.
+    # `planned.skeleton_path`) is non-empty; leave the key untouched when it
+    # is empty (which, given the check above, only happens when the source
+    # config's `pose_skeleton_file` was ALSO empty -- the two are guaranteed
+    # consistent by the time `_rewrite_config` runs).
     if skeleton_job_path:
         out["pose_skeleton_file"] = skeleton_job_path
     return out, redirected
 ```
+
+Add `test_skeleton_path_config_mismatch_raises`: build a `PlannedVideo` directly (bypassing `_planned`'s normal consistency) with `config={"pose_skeleton_file": "/host/some/skeleton.json", ...}` but `skeleton_path=""`; assert `pack_job` raises `TrackingJobError` naming both the video and the mismatch, not a bare `verify_job` "absolute path" failure.
 
 **Fix X3a — `pack_job` must refuse to pack a pose-enabled video with no skeleton, or the packed job dies on the remote at model load with no warning here.** `_rewrite_config`'s skeleton handling above only rewrites a path that IS present; nothing checks that one exists when pose inference is actually enabled. If `is_pose_inference_enabled(cfg)` (`core/tracking/session_policy.py:29` — Core, safe to import from `pack.py`, same layering already used for `content_id`/`model_paths`) is true and the resolved `pose_skeleton_file` is empty, `core/inference/stages/pose.py:145-148` later yields empty `keypoint_names`, and `core/individual/pose/api.py:105` raises `"SLEAP backend requires keypoint_names"` — deep inside a remote `trackerkit track` run, in `logs/run.log`, long after `pack`/`push`/`preflight` all reported success. `pack_job` (in the same per-video loop that calls `_rewrite_config`) must instead raise `TrackingJobError(code=2)` **at pack time**, naming the offending video's `file_path`:
 
@@ -4212,7 +4351,34 @@ if is_pose_inference_enabled(config) and not str(config.get("pose_skeleton_file"
     )
 ```
 
-This check runs BEFORE `_rewrite_config`, on the SOURCE config (so it also catches the case an already-portable `pose_skeleton_file` is job-relative but doesn't resolve to a real file — `_rewrite_config` only rewrites strings, it never verifies the file exists). Add `test_pack_pose_enabled_no_skeleton_raises`: a config with `enable_pose_extractor: true`, pose backend `sleap`, and `pose_skeleton_file: ""`; assert `pack_job` raises `TrackingJobError` naming the video, and that no partial `job_dir` is left in a state `verify_job` would call clean (mirrors the existing "pack fails loudly, not silently" pattern used throughout this task for other config-shape violations).
+This check runs BEFORE `_rewrite_config`, on the SOURCE config. **Fix Q5 (adversarial review) — correcting this section's own prose: the check above only tests EMPTINESS of `pose_skeleton_file` (`not str(...).strip()`), never resolution.** An earlier draft of this paragraph claimed it "also catches the case an already-portable `pose_skeleton_file` is job-relative but doesn't resolve to a real file" — that is false as the guard is written: a non-empty string, portable or not, resolvable or not, passes this specific check unconditionally. (A job-relative-but-broken skeleton path is instead caught later, by `verify_job`'s "every referenced `config/skeletons/*` exists" check, which runs as part of `pack_job`'s own self-verify at the end of Step 4 — so the end-to-end guarantee "pack cannot produce a job whose skeleton is missing" still holds, just via a different check than this paragraph originally credited.) This paragraph's claim is corrected, not the code.
+
+**Fix Q5 — `test_pack_pose_enabled_no_skeleton_raises` as originally specified cannot actually trigger the guard.** `is_pose_inference_enabled` (`core/tracking/session_policy.py:29-32`) requires ALL THREE of: `detection_method == "yolo_obb"` (`is_individual_pipeline_enabled`), `enable_pose_extractor` truthy, AND a non-empty `pose_model_dir` — a config setting only `enable_pose_extractor: true` and a pose backend leaves `is_pose_inference_enabled(config)` `False` (missing `detection_method`/`pose_model_dir`), so `pack_job`'s guard silently no-ops and the test as originally described would fail (no `TrackingJobError` raised), inviting a later implementer to "fix" this by loosening the very predicate the plan mandates matching. The test must set the FULL key set the predicate actually reads:
+
+```python
+def test_pack_pose_enabled_no_skeleton_raises(tmp_path, staging):
+    from hydra_suite.data.tracking_job.manifest import TrackingJobError
+
+    planned = _planned(
+        staging,
+        config={
+            "detection_method": "yolo_obb",
+            "enable_pose_extractor": True,
+            "pose_model_dir": "pose/SLEAP/run",
+            "pose_model_type": "sleap",
+            "pose_skeleton_file": "",
+        },
+    )
+    with pytest.raises(TrackingJobError) as excinfo:
+        pack_job(
+            tmp_path / "job", [planned], registry_entries=[],
+            advanced_config_path=str(staging["advanced"]), track_args={}, shared_table={},
+        )
+    assert "colony.mp4" in str(excinfo.value)
+    assert not (tmp_path / "job" / "hydra_job.json").exists()
+```
+
+(no partial `job_dir` is left in a state `verify_job` would call clean — mirrors the existing "pack fails loudly, not silently" pattern used throughout this task for other config-shape violations).
 
 **Fix X3b — Task 13's own three acceptance fixtures must inject the same skeleton `run_matrix.sh` does, or the pose/identity jobs never even get past `job pack` under fix X3a (by design — that is the guard doing its job), and neither acceptance job would ever run.** All three fixture configs (`fly_obb.json`, `ant_pose_headtail.json`, `ant_cnn_identity.json`) ship with `pose_skeleton_file: ""`; `tools/equivalence/run_matrix.sh:63-68` supplies the real skeleton (`$FX/ooceraea_biroi.json`) as a SEPARATE table column that `tools/equivalence/runner.py` injects into the in-memory config before running — `job pack` (Task 13 Step 4) instead passes the raw fixture config file straight through `--config`, so `ant_pose_headtail` and `ant_cnn_identity` (both pose-enabled) would fail fix X3a's new guard immediately, and Step 4's acceptance evidence for both would never be collected. Before packing those two jobs, materialize a config with the skeleton filled in, mirroring what the equivalence runner does for the SAME fixture:
 
@@ -4303,8 +4469,21 @@ ROLE_TO_CONFIG_KEY: dict[str, str | tuple[str, ...]] = {
     # against the inactive backend keys. Only rewrite the key(s) matching
     # the video's ACTIVE `pose_model_type` (plus the always-present legacy
     # `pose_model_dir` bridge), not all four unconditionally: `pack.py`
-    # reads `config.get("pose_model_type", "")` for that video and maps it
-    # to the single matching alias (`"yolo"` -> `pose_yolo_model_dir`,
+    # mirrors `engine_params.py:975-978`'s OWN defaulting exactly (minor
+    # fix, adversarial review) --
+    # `str(config.get("pose_model_type", "yolo")).strip().lower()`, then
+    # falls back to `"yolo"` again if the lowercased result isn't one of
+    # `{"yolo", "sleap", "vitpose"}` -- rather than reading the raw key
+    # as-is. A raw `config.get("pose_model_type", "")` (no default, no
+    # lowercasing) means an ABSENT key, or a differently-cased value like
+    # `"SLEAP"`, matches none of the three alias branches, so `model_keys`
+    # populates none of the pose-alias keys at all -- the run still works
+    # (`engine_params.py:985`'s own runtime lookup falls back to the legacy
+    # `pose_model_dir` when the active alias is empty), but the sidecar's
+    # provenance is then wrong: a config that plainly targets SLEAP shows
+    # `pose_sleap_model_dir: ""` with no active-alias key populated at all.
+    # `pack.py` maps the resolved (lowercased, defaulted) type to the single
+    # matching alias (`"yolo"` -> `pose_yolo_model_dir`,
     # `"sleap"` -> `pose_sleap_model_dir`, `"vitpose"` ->
     # `pose_vitpose_model_dir`); the other two backend-specific aliases are
     # NOT simply left holding whatever the source config had -- fix Y6
@@ -4357,7 +4536,7 @@ ROLE_TO_CONFIG_KEY: dict[str, str | tuple[str, ...]] = {
 LEGACY_ALIAS_CONFIG_KEYS = ("yolo_model_path",)
 ```
 
-2. `PlannedVideo.planned_models: list[PlannedModel]` (already defined, Task 5/6) is what `job_cli.py` (Task 11) builds from `iter_model_references`; `_rewrite_config` derives its `model_keys` argument from `ROLE_TO_CONFIG_KEY[role]` for each `PlannedModel.role`. **Fix V6 (resolving the earlier draft's self-contradiction): for a tuple-valued role, `model_keys` is populated for ONLY the alias(es) matching this video's active backend — never a blind fan-out to every key in the tuple.** `POSE_MODEL_DIR` is currently the only tuple-valued role, so concretely: `pack.py` reads `config.get("pose_model_type", "")` for the video being rewritten and maps it to the single matching alias (`"yolo"` -> `pose_yolo_model_dir`, `"sleap"` -> `pose_sleap_model_dir`, `"vitpose"` -> `pose_vitpose_model_dir`), PLUS the always-present legacy `pose_model_dir` bridge — the other two backend-specific aliases in the tuple are NOT left holding whatever the source config had. **Fix Y6 (round-7) — this paragraph and the "Minor fix" note above this table were themselves the self-contradiction round-7 review caught: both said "left completely untouched," which directly conflicts with fix X6 below (which blanks every inactive-role `ABSOLUTE_PATH_FORBIDDEN_KEYS` model-path key, including these two).** X6 is the one rule: `_rewrite_config` populates `model_keys` for only the active alias(es) as this paragraph originally said, AND separately, in the same pass, blanks the inactive aliases to `""` per X6 -- the two are not in tension once X6 is applied uniformly to every inactive model-path key across all three families (OBB mode, head-tail, pose backend) and to `yolo_model_path`. This keeps the sidecar internally consistent with the X6 rule: an inactive backend's alias key is blanked to `""`, never a stray job key for a model that video never loads and never a leftover absolute source-machine path either. `color_tag_model_path` is deliberately **absent** from `ROLE_TO_CONFIG_KEY` — Task 3 never yields `COLOR_TAG_MODEL_PATH` as a reference, so pack never rewrites or ships it; it stays whatever the source config had (which Task 2's save-side relativization already made portable-by-construction, or leaves alone if it points outside the models root).
+2. `PlannedVideo.planned_models: list[PlannedModel]` (already defined, Task 5/6) is what `job_cli.py` (Task 11) builds from `iter_model_references`; `_rewrite_config` derives its `model_keys` argument from `ROLE_TO_CONFIG_KEY[role]` for each `PlannedModel.role`. **Fix V6 (resolving the earlier draft's self-contradiction): for a tuple-valued role, `model_keys` is populated for ONLY the alias(es) matching this video's active backend — never a blind fan-out to every key in the tuple.** `POSE_MODEL_DIR` is currently the only tuple-valued role, so concretely: `pack.py` reads `config.get("pose_model_type", "")` for the video being rewritten and maps it to the single matching alias (`"yolo"` -> `pose_yolo_model_dir`, `"sleap"` -> `pose_sleap_model_dir`, `"vitpose"` -> `pose_vitpose_model_dir`), PLUS the always-present legacy `pose_model_dir` bridge — the other two backend-specific aliases in the tuple are NOT left holding whatever the source config had. **Fix Y6 (round-7) — this paragraph and the "Minor fix" note above this table were themselves the self-contradiction round-7 review caught: both said "left completely untouched," which directly conflicts with fix X6 below (which blanks every inactive-role `ABSOLUTE_PATH_FORBIDDEN_KEYS` model-path key, including these two).** X6 is the one rule: `_rewrite_config` populates `model_keys` for only the active alias(es) as this paragraph originally said, AND separately, in the same pass, blanks the inactive aliases to `""` per X6 -- the two are not in tension once X6 is applied uniformly to every inactive model-path key across all three families (OBB mode, head-tail, pose backend) and to `yolo_model_path`. This keeps the sidecar internally consistent with the X6 rule: an inactive backend's alias key is blanked to `""`, never a stray job key for a model that video never loads and never a leftover absolute source-machine path either. `color_tag_model_path` is deliberately **absent** from `ROLE_TO_CONFIG_KEY` — Task 3 never yields `COLOR_TAG_MODEL_PATH` as a reference, so pack never rewrites or ships a MODEL for it. **Fix Q2 (adversarial review) — but it is NOT "left whatever the source config had".** It is in `ABSOLUTE_PATH_FORBIDDEN_KEYS` (below), the GUI field that sets it is `setVisible(False)` (Task 2's own framing: `trackerkit/gui/panels/identity_panel.py:143`, so a user has no way to clear a stale absolute value even if they wanted to), and Task 2 only relativizes paths that fall *under the models root* — an out-of-root absolute value is untouched at save time. A config holding one would therefore pack "successfully" and then fail `verify_job`'s own unconditional absolute-path check immediately after, with no way to ever pack it (the same failure mode X6 exists to close for every other inactive model-path key). `pack.py` blanks `color_tag_model_path` to `""` unconditionally in the SAME per-video pass that applies the X6 inactive-role blanking — it is dead (Task 2's own correction 2: zero consumers in `core/`), so, exactly like an inactive-role key, it carries zero information the remote needs. Add `test_pack_blanks_color_tag_model_path_even_when_out_of_root`: a config with an absolute, out-of-models-root `color_tag_model_path`; assert `pack_job` succeeds, the sidecar's `color_tag_model_path == ""`, and `verify_job(job_dir) == []`. The earlier prose in this task and in Task 2 describing `color_tag_model_path` as "stays whatever the source config had" / "left alone if it points outside the models root" is superseded by this fix — pack.py, not the GUI save path, is what makes every packed config self-verify.
 
 `model_keys` therefore maps a subset of config keys (`yolo_obb_direct_model_path`, `yolo_detect_model_path`, `yolo_crop_obb_model_path`, `yolo_headtail_model_path`, `pose_model_dir` plus exactly one of `pose_yolo_model_dir`/`pose_sleap_model_dir`/`pose_vitpose_model_dir` per video, and the legacy `yolo_model_path` alias — but **not** `color_tag_model_path`) to its job key. Only single-valued roles are unconditional; `POSE_MODEL_DIR` is always active-backend-only.
 
@@ -4367,6 +4546,49 @@ LEGACY_ALIAS_CONFIG_KEYS = ("yolo_model_path",)
 - **`job_cli.py` (Task 11) supplies the CNN PER-ENTRY map** as `PlannedVideo.cnn_model_keys`, because matching a `cnn_classifiers[]` list entry to its `PlannedModel` is a per-entry association that only the code that walked `iter_model_references` for that video observed.
 
 There is no third option and no "or whatever the caller prefers".
+
+**Minor fix (adversarial review) — no test in this task exercises the `cnn_classifiers[].model_path` rewrite end-to-end, and it is the one rewrite whose lookup (`_normalize_model_path` → `resolve_model_path`) depends on `HYDRA_MODELS_DIR` at pack time.** Every other rewrite in this task's test suite (OBB, head-tail, pose, skeleton) is exercised by at least one `test_tracking_job_pack.py` test; the CNN per-entry rewrite is described in prose (this section) but never actually packed-and-asserted. Add `test_pack_rewrites_cnn_classifiers_model_path`:
+
+```python
+def test_pack_rewrites_cnn_classifiers_model_path(tmp_path, staging, monkeypatch):
+    head = staging["models"] / "classification" / "identity" / "head_a.pth"
+    head.parent.mkdir(parents=True)
+    head.write_bytes(b"h")
+    # `_normalize_model_path` -> `resolve_model_path` resolves a
+    # models-root-relative config value against HYDRA_MODELS_DIR; pin it to
+    # this fixture's own models root so the lookup is deterministic here
+    # regardless of what's configured on the machine running the test.
+    monkeypatch.setenv("HYDRA_MODELS_DIR", str(staging["models"]))
+    planned = _planned(
+        staging,
+        config={
+            "cnn_classifiers": [
+                {"model_path": str(head), "species": "ant"},
+            ]
+        },
+        planned_models=[
+            PlannedModel(
+                role="YOLO_OBB_DIRECT_MODEL_PATH",
+                source_path=str(staging["models"] / "obb" / "x.pt"),
+                kind="file", key="obb/x.pt",
+            ),
+            PlannedModel(
+                role="CNN_CLASSIFIERS", source_path=str(head), kind="file",
+                key="classification/identity/head_a.pth",
+            ),
+        ],
+        cnn_model_keys={
+            str(head.expanduser().resolve()): "classification/identity/head_a.pth"
+        },
+    )
+    manifest = _pack(tmp_path, staging, planned=planned)
+    sidecar = json.loads((tmp_path / "job" / "videos" / "colony_config.json").read_text())
+    assert sidecar["cnn_classifiers"][0]["model_path"] == "classification/identity/head_a.pth"
+    assert sidecar["cnn_classifiers"][0]["species"] == "ant"  # non-path keys survive untouched
+    assert verify_job(tmp_path / "job") == []
+```
+
+This proves the rewrite fires, leaves sibling dict keys alone, and that the resulting sidecar passes `verify_job`'s unconditional `cnn_classifiers[].model_path` absolute-path check — the one path through `_rewrite_config` this task's test suite would otherwise ship entirely unverified.
 
 `_rewrite_config` must also rewrite `yolo_model_path` (the legacy alias `engine_params.py:815` falls back to) whenever it is present and non-empty and its value resolves under the models root — otherwise a legacy config carrying only the alias key ships an absolute path untouched.
 
@@ -4393,9 +4615,44 @@ if not raw_sleap_env or raw_sleap_env.lower().startswith("no sleap envs"):
 conda_envs = [raw_sleap_env]  # only reached when the W12 gate above is true
 ```
 
-Add `test_conda_envs_defaults_to_sleap_when_key_is_absent`: a `packed_job`-shaped SLEAP-active config (satisfies the W12 gate) with `pose_sleap_env` OMITTED entirely (not set to `""` — genuinely absent from the dict, the shape a real staging config that never touched the SLEAP-env combo box takes); `pack_job` must succeed (not raise `KeyError`) and `manifest.requirements["conda_envs"] == ["sleap"]`. Add `test_conda_envs_defaults_to_sleap_for_the_placeholder_value`: same gate, `pose_sleap_env: "no sleap envs found"`; assert `conda_envs == ["sleap"]`, not `["no sleap envs found"]`. The existing `packed_job_needing_sleap` fixture (Task 10) sets `pose_sleap_env` explicitly and therefore never exercised either defaulting branch — these two new tests close that gap; do not modify `packed_job_needing_sleap` itself, since it correctly tests the explicit-value path.
+**Fix Q5 (adversarial review) — both tests below must supply the FULL key set `is_pose_inference_enabled` requires, PLUS a real skeleton (else fix X3a's guard raises first, before `conda_envs` is ever computed) PLUS a `POSE_MODEL_DIR` `PlannedModel` (else fix X6 blanks `pose_model_dir` to `""` in the rewritten sidecar while `requirements.conda_envs` would still claim `sleap` — internally inconsistent, and the gate itself reads `pose_model_dir` non-empty to begin with).** Add `test_conda_envs_defaults_to_sleap_when_key_is_absent`:
+
+```python
+def test_conda_envs_defaults_to_sleap_when_key_is_absent(tmp_path, staging):
+    planned = _planned(
+        staging,
+        config={
+            "detection_method": "yolo_obb",
+            "enable_pose_extractor": True,
+            "pose_model_dir": "pose/SLEAP/run",
+            "pose_model_type": "sleap",
+            "pose_skeleton_file": str(staging["skeleton"]),
+            # pose_sleap_env genuinely ABSENT -- not set to "", the shape a
+            # real staging config that never touched the SLEAP-env combo box
+            # takes.
+        },
+        planned_models=[
+            PlannedModel(
+                role="YOLO_OBB_DIRECT_MODEL_PATH",
+                source_path=str(staging["models"] / "obb" / "x.pt"),
+                kind="file", key="obb/x.pt",
+            ),
+            PlannedModel(
+                role="POSE_MODEL_DIR",
+                source_path=str(staging["models"] / "obb"),  # any real directory
+                kind="directory", key="pose/SLEAP/run",
+            ),
+        ],
+    )
+    manifest = _pack(tmp_path, staging, planned=planned)
+    assert manifest.requirements["conda_envs"] == ["sleap"]
+```
+
+Add `test_conda_envs_defaults_to_sleap_for_the_placeholder_value`: identical setup, with `"pose_sleap_env": "no sleap envs found"` added to `config`; assert `conda_envs == ["sleap"]`, not `["no sleap envs found"]`. Both must succeed (not raise `KeyError`, and not raise fix X3a's missing-skeleton guard). The existing `packed_job_needing_sleap` fixture (Task 10) sets `pose_sleap_env` explicitly and therefore never exercised either defaulting branch — these two new tests close that gap; do not modify `packed_job_needing_sleap` itself, since it correctly tests the explicit-value path.
 
 **Fix W6 — `requirements.runtime_tier` must come from the RESOLVED tier, never the raw config dict.** All three Task 13 acceptance fixtures (`fly_obb.json`, `ant_pose_headtail.json`, `ant_cnn_identity.json` — grepped, verified: none has a `runtime_tier` key) have no `runtime_tier` key at all, and `build_engine_params` defaults an absent one to `"gpu"` (`engine_params.py:800-805`, `trackerkit` — app layer). A naive `cfg.get("runtime_tier", "")` inside `pack_job` would stamp `requirements.runtime_tier = ""` on every one of them, which means nothing to preflight's check 4 — silently wrong in whichever direction that check treats falsy values. But `pack.py` is Data layer and `build_engine_params` is `trackerkit` (app layer); `pack_job` calling it directly would violate the one-way dependency-direction rule Task 3's contract guard tests. So the RESOLUTION happens in the caller, not in `pack.py`: **`job_cli.py` (Task 11), which already builds a session from the keystone config to walk `iter_model_references`, resolves the tier via that same session/`build_engine_params` call and passes it explicitly as `track_args["runtime_tier"]`** — this is not new plumbing, it is the SAME pattern the Task 7/Task 10 test fixtures already use (`track_args={"video_list": "videos.txt", "runtime_tier": "cpu"}`, shown throughout Task 10's `packed_job*` fixtures above). `pack_job` itself only ever does `requirements.runtime_tier = track_args.get("runtime_tier", "gpu")` — reading a value the caller already resolved, with the same `"gpu"` fallback `build_engine_params` uses, never re-deriving it and never importing `trackerkit`.
+
+**Minor fix (adversarial review) — this paragraph's own citation is imprecise.** This task's `_pack`/`packed_job` fixtures (Step 1/Step 1b, above) pass `track_args={"video_list": "videos.txt"}` with NO `runtime_tier` key at all — they exercise the `"gpu"` fallback branch, not the `"cpu"`-resolved branch this paragraph describes. It is Task 10's `packed_job*` fixtures (built on top of this task's `packed_job`, extended with `"runtime_tier": "cpu"`) that show the resolved-tier shape. Both are intentional and correct for what each task is testing — Task 7 proves the fallback, Task 10 proves an explicit CPU-tier job preflights correctly against the `cpu` tier's own requirements — this is not a bug, just a citation correction: "shown throughout Task 10's `packed_job*` fixtures above" should not be read as also describing this task's own `track_args`.
 
 Basename collisions across different source directories raise `TrackingJobError` naming **both** origins.
 
@@ -4441,11 +4698,27 @@ then, for every model regardless of kind: **for every model with a non-empty `fi
 
 **Fix X6 — `verify_job` forbids an absolute path on EVERY key in `ABSOLUTE_PATH_FORBIDDEN_KEYS`, but `_rewrite_config`/`copy_model_reference` only rewrite the ACTIVE roles `iter_model_references` yields — so a config whose INACTIVE role still holds an external absolute path (common after switching detect mode or pose backend on the staging host, since the GUI/CLI never clears a stale field when you flip modes) packs "successfully," then fails pack's own self-verify immediately after.** Concretely: `yolo_detect_model_path`/`yolo_crop_obb_model_path` for the non-selected `YOLO_OBB_MODE` pair (Task 3's "gate on `YOLO_OBB_MODE`" rule means the unselected key is never yielded, by design); `yolo_headtail_model_path` when head-tail is off; `pose_yolo_model_dir`/`pose_sleap_model_dir`/`pose_vitpose_model_dir` for the two non-selected pose backends (only the active one is gated in via the pose-stage-live check). None of these three families are hypothetical — switching `YOLO_OBB_MODE` from `direct` to `sequential`, or switching a pose backend from `sleap` to `yolo`, is an ordinary staging-host workflow that leaves the PREVIOUS mode's model path sitting in the config, still absolute, still present.
 
-Resolution: **pack blanks every inactive-role key in `ABSOLUTE_PATH_FORBIDDEN_KEYS`'s model-path subset, rather than requiring verify to special-case them.** This mirrors the existing precedent for `color_tag_model_path` (correction 2, above: relativized/nulled on save regardless of whether anything reads it, because a config field with no live consumer for THIS job carries zero information the remote needs) and is simpler than teaching `verify_job` a parallel "is this role active" computation that would have to reproduce `iter_model_references`'s own gating logic a second time, in a different layer, and risk drifting out of sync with it. Concretely, in the SAME per-video loop that calls `_rewrite_config` (Task 7): after computing `active_roles = {ref.role for ref in iter_model_references(params_for_this_video)}` (`job_cli.py` already computes this set to drive packing — Task 11), for every key in the model-path subset of `ABSOLUTE_PATH_FORBIDDEN_KEYS` whose corresponding role is NOT in `active_roles`, set `out[key] = ""` in `_rewrite_config` regardless of what the source config held (only if it's not already handled by an active rewrite). `verify_job`'s check is UNCHANGED and stays strict on every key — this is the "keep it consistent" fix, not a weakening of the gate: after packing, every sidecar's inactive-role keys are always empty, so the existing unconditional verify check is trivially satisfied without knowing which roles were active. `pose_model_dir` legacy alias key follows the same rule via whichever of the three backend-specific keys it maps to.
+Resolution: **pack blanks every inactive-role key in `ABSOLUTE_PATH_FORBIDDEN_KEYS`'s model-path subset, rather than requiring verify to special-case them.** This mirrors the existing precedent for `color_tag_model_path` (fix Q2, above: blanked unconditionally regardless of whether anything reads it, because a config field with no live consumer for THIS job carries zero information the remote needs) and is simpler than teaching `verify_job` a parallel "is this role active" computation that would have to reproduce `iter_model_references`'s own gating logic a second time, in a different layer, and risk drifting out of sync with it.
+
+**Fix Q3 (adversarial review) — `active_roles` as originally written (`{ref.role for ref in iter_model_references(params_for_this_video)}`) is layer-illegal inside `pack.py`.** `iter_model_references` is defined at `trackerkit/engine_params.py:1862` — `trackerkit` is an app layer, and `pack.py` is Data (this plan's own hard dependency-direction rule, and now an ENFORCED one via the Task 5 layering gate: `test_no_app_layer_or_qt_imports` would fail the instant `pack.py` imported it, exactly as it already does for `load_advanced_tracker_config`/`build_engine_params`/`_default_output_paths` elsewhere in this task, per fixes X5a/W6/W10). The only legal derivation lives entirely inside data the caller already handed `pack_job`: `PlannedVideo.planned_models` (Task 5/6) is exactly the set of `PlannedModel`s `job_cli.py` built from walking `iter_model_references` for that video — so, concretely, in the SAME per-video loop that calls `_rewrite_config` (Task 7):
+
+```python
+active_roles = {model.role for model in planned.planned_models}
+```
+
+`iter_model_references` is never called or imported by `pack.py` anywhere — `job_cli.py` (Task 11) is the only place that ever calls it, exactly once per video, and `PlannedVideo.planned_models` is how that result reaches `pack.py` at all. Then, for every key in the model-path subset of `ABSOLUTE_PATH_FORBIDDEN_KEYS` whose corresponding role is NOT in `active_roles`, set `out[key] = ""` in `_rewrite_config` **whenever that key is already present in the config dict** (minor fix, adversarial review: `if key in out: out[key] = ""`, not an unconditional `out[key] = ""` for every key in the subset regardless of presence — a blank-only-if-present write is behaviourally identical for every consumer, since `_cfg_get`/`.get(key, "")` treat an absent key and an explicit `""` identically everywhere downstream, but it stops `pack.py` from INJECTING keys the source config never had at all, e.g. stamping `pose_vitpose_model_dir: ""` into a sidecar for a config that never once mentioned ViTPose — cleaner provenance, same behavior) (only if it's not already handled by an active rewrite). `verify_job`'s check is UNCHANGED and stays strict on every key — this is the "keep it consistent" fix, not a weakening of the gate: after packing, every sidecar's inactive-role keys are always empty, so the existing unconditional verify check is trivially satisfied without knowing which roles were active. `pose_model_dir` legacy alias key follows the same rule via whichever of the three backend-specific keys it maps to. Add `test_active_roles_derivation_never_imports_trackerkit`: the same file-scoped AST check fix X5a already adds for `pack.py` (reusing `test_tracking_job_layering.py`'s `_imported_names`) also asserts `"engine_params"` and `"iter_model_references"` never appear as an imported name/attribute in `pack.py`'s source.
 
 Add `test_pack_blanks_an_inactive_role_absolute_path`: a config with `yolo_obb_mode: "direct"`, a real `yolo_obb_direct_model_path`, AND a stale absolute `yolo_crop_obb_model_path` (the sequential-mode key, inactive because mode is `direct`) pointing at a file that exists on the staging host but is never referenced by `iter_model_references` for this config; assert `pack_job` succeeds, the sidecar's `yolo_crop_obb_model_path == ""`, and `verify_job(job_dir) == []`. A second case does the same for `pose_sleap_model_dir` (stale, absolute) while `pose_yolo_model_dir` is the active pose backend. **Add a third case (fix Y6, round-7) for the `yolo_model_path` legacy alias under bgsub detection — the earlier-in-this-task prose about it once said "left untouched", which directly contradicted X6 and would make such a config unpackable forever:** a config using bgsub detection (no `yolo_obb_direct_model_path`/`yolo_crop_obb_model_path` role active at all — `iter_model_references` yields neither `YOLO_OBB_DIRECT_MODEL_PATH` nor `YOLO_CROP_OBB_MODEL_PATH` for it) with a stale absolute `yolo_model_path` left over from a previous non-bgsub configuration; assert `pack_job` succeeds, the sidecar's `yolo_model_path == ""`, and `verify_job(job_dir) == []`.
 
 **Fix M15 — `registry_entry_present` must actually be set.** It is declared on `JobModel` with a `False` default and nothing in this plan as originally written ever set it, so it would always read `False` even for a model that has a real `model_registry.json` entry. `pack_job` sets it explicitly: for each `JobModel` it builds, `registry_entry_present = (model.key in {key for key, _ in registry_entries})` — i.e. true iff the model's job-relative key is one of the keys `write_registry_subset` (Task 6) actually wrote an entry for.
+
+**Fix Q4 (adversarial review) — `registry_entries` is an `Iterable`-typed parameter (`iter_registry_entries()` at `training/model_publish.py:743` is a generator: it YIELDS), and this task's body consumes it TWICE — once inside `write_registry_subset(shipped_keys, entries, destination)` (Task 6, which iterates `entries` to build the subset dict) and again here for M15's `{key for key, _ in registry_entries}`.** A generator is exhausted after its first full iteration; whichever of the two consumes it second sees an EMPTY iterable, with no exception raised — `write_registry_subset` would silently write `{"schema_version": 2, "entries": {}}` (an empty registry subset shipped for every job, even one whose models genuinely have registry provenance) if it ran second, or every `JobModel.registry_entry_present` would silently read `False` regardless of the real answer if M15's comprehension ran second. Task 11's caller (Step 7) already passes `registry_entries=list(iter_registry_entries())`, which happens to dodge this for that ONE call site — but `pack_job`'s own signature accepts any `Iterable[tuple[str, dict]]`, every unit test in this task passes a plain `list` too (masking the bug in tests the same way the real call site masks it), and nothing enforces "always a list" at the boundary `pack_job` itself controls. Fix: `pack_job` materializes its own `registry_entries` parameter to a `list` ONCE, at the very top of the function body, before either consumer runs:
+
+```python
+registry_entries = list(registry_entries)
+```
+
+This makes `pack_job` correct regardless of what kind of iterable a future caller passes, rather than relying on every present and future call site independently remembering to pre-materialize. Add `test_pack_job_accepts_a_registry_entries_generator`: call `_pack(tmp_path, staging, registry_entries=(e for e in [("obb/x.pt", {"species": "ant", "source_path": "/host/a.pt"})]))` (a genuine one-shot generator, not a list) and assert both that `models/model_registry.json` contains the `obb/x.pt` entry AND that the returned manifest's `models[0].registry_entry_present is True` — proving neither consumer starved the other.
 
 **Minor note (round-6) — `registry_entry_present: false` is informational metadata, not a functional gap.** Grepped: nothing in `engine_params.py`, `core/inference/`, or any pose/CNN backend reads `model_registry.json` at RUNTIME — the registry is written at training time and read by GUI/CLI tooling that lists or picks models, never consulted while actually resolving or loading a model path during tracking. So a packed job with `registry_entry_present: false` on every model (the common case for models trained before this branch existed, or copied in from elsewhere) tracks identically to one where it's `true` — the field exists purely so a future reader (or `job status`) can flag "this job's models have no registry provenance" without that meaning anything is broken. Recorded here so a future contributor chasing "why does registry_entry_present matter" doesn't go looking for a runtime consumer that does not exist.
 
