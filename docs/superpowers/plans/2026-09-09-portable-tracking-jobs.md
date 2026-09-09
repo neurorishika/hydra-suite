@@ -1495,6 +1495,15 @@ def file_content_id(path: str | os.PathLike[str] | None) -> str:
 def directory_content_id(path: str | os.PathLike[str] | None) -> str:
     """``"dirsha256:<hex>"`` over sorted ``(relpath, sha256)`` of every member.
 
+    MEASURED COST OF THIS DEVIATION (round-8, on the real fixture SLEAP run
+    dir ``pose/SLEAP/20260214-224154_unet_ant_single_instance``, 94.7 MB):
+    whole-tree 82.6 ms vs artifacts.py-allowlist 69.8 ms -- a 12.8 ms delta,
+    because ``best.ckpt`` alone is 94 MB and the extra ``.slp``/``.csv``
+    members total 0.4 MB. Memoized once per process, so this is immaterial
+    against ``PERF_TOLERANCE=1.25``. Round-8 review raised the allowlist as a
+    PERF concern; it was measured and rejected on the numbers. Do not
+    re-litigate without a new measurement.
+
     DEVIATION FROM SPEC §7b.2: the spec says to reuse the artifact-fingerprint
     file SET (``core/individual/pose/artifacts.py``'s selection). This hashes
     every file under the directory instead and excludes only
