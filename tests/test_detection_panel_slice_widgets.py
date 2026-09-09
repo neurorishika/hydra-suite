@@ -234,10 +234,10 @@ def test_slice_tile_execution_controls_sync_and_explain_admission(monkeypatch):
     assert window.advanced_config["slice_memory_budget_mib"] == 48
     assert "7 tiles/call" in panel.lbl_slice_batch_admission.text()
     assert "48 MiB" in panel.lbl_slice_batch_admission.text()
-    panel.chk_slice_tile_batch_autotune.setChecked(True)
-    assert window.advanced_config["slice_tile_batch_autotune"] is True
-    assert panel.spin_slice_tile_batch.isEnabled() is False
-    assert "automatic batch" in panel.lbl_slice_batch_admission.text().lower()
+    # The retired "Auto" tile-batch checkbox is gone: Tiles / call is always
+    # an explicit requested maximum, and the label always says so.
+    assert not hasattr(panel, "chk_slice_tile_batch_autotune")
+    assert panel.spin_slice_tile_batch.isEnabled() is True
     window.close()
 
 

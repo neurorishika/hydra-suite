@@ -61,14 +61,10 @@ class ReplayVector:
     def apply(self, config: "InferenceConfig") -> "InferenceConfig":
         """Return a detached config carrying the recorded execution vector.
 
-        Mirrors :meth:`InferenceRuntimeOverlay.apply` exactly, including its
-        ``disable_tile_autotune`` rule, so the replay's config is the same
-        object the forward pass built.
+        Mirrors :meth:`InferenceRuntimeOverlay.apply` exactly, so the
+        replay's config is the same object the forward pass built.
         """
-        return self.effective.apply(
-            config,
-            disable_tile_autotune=self.effective != self.requested,
-        )
+        return self.effective.apply(config)
 
 
 def replay_vector_path(cache_dir: str | os.PathLike[str]) -> Path:

@@ -204,15 +204,9 @@ def _admitted_sliced_tile_batch(
         None,
         ref_object_px=slice_cfg.reference_body_px,
     )
-    # Autotune begins from the same largest legal/admitted chunk as runtime;
-    # a persisted manual value is intentionally ignored in that mode.
     requested = min(
         plan.jobs_per_frame,
-        (
-            MAX_TILE_CHUNK
-            if getattr(slice_cfg, "tile_batch_autotune", False)
-            else int(getattr(slice_cfg, "tile_batch_size", MAX_TILE_CHUNK))
-        ),
+        int(getattr(slice_cfg, "tile_batch_size", MAX_TILE_CHUNK)),
     )
     return admitted_tile_chunk_size(
         plan,

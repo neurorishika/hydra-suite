@@ -551,18 +551,18 @@ def test_sahi_trt_profile_accounts_for_cuda_source_residency_and_budget():
 
 
 @pytest.mark.parametrize("persisted_batch", [1, 16])
-def test_sahi_trt_profile_autotune_ignores_persisted_manual_tile_batch(
-    persisted_batch,
-):
+def test_sahi_trt_profile_honors_the_explicit_persisted_tile_batch(persisted_batch):
+    """The engine profile follows the requested batch, capped by admission."""
     from hydra_suite.core.inference.runner import _sliced_tile_batch
 
     cfg = _sahi_profile_config()
     cfg.obb.direct.slice.tile_batch_size = persisted_batch
-    cfg.obb.direct.slice.tile_batch_autotune = True
 
-    # Runtime autotune starts from MAX_TILE_CHUNK, then applies the same 256 MiB
-    # admission, so the stale/manual value of one cannot undersize the engine.
-    assert _sliced_tile_batch(cfg, (4512, 4512), 1024, device_tiles=False) == 17
+    # The explicit request is the upper bound; the 256 MiB admission may only
+    # reduce it (16 survives here, 1 stays 1).
+    assert _sliced_tile_batch(cfg, (4512, 4512), 1024, device_tiles=False) == min(
+        persisted_batch, 17
+    )
 
 
 def test_load_sequential_stage1_sliced_model_uses_its_admitted_tile_chunk(

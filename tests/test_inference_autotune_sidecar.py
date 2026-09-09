@@ -58,7 +58,6 @@ def test_candidate_param_overlay_is_detached_complete_and_disables_recursion():
             {"label": "behavior", "batch_size": 3},
         ],
         "APPLY_TUNED_INFERENCE": True,
-        "SLICE_TILE_BATCH_AUTOTUNE": True,
     }
 
     output = apply_settings_to_params(
@@ -70,7 +69,7 @@ def test_candidate_param_overlay_is_detached_complete_and_disables_recursion():
     assert output["YOLO_BATCH_SIZE"] == 4
     assert output["PIPELINE_DEPTH"] == 3
     assert output["SLICE_TILE_BATCH_SIZE"] == 2
-    assert output["SLICE_TILE_BATCH_AUTOTUNE"] is False
+    assert "SLICE_TILE_BATCH_AUTOTUNE" not in output
     assert output["POSE_BATCH_SIZE"] == 8
     assert output["HEADTAIL_BATCH_SIZE"] == 4
     assert [item["batch_size"] for item in output["CNN_CLASSIFIERS"]] == [16, 3]

@@ -855,14 +855,6 @@ class DetectionPanel(QWidget):
             "can be lower when the tile memory budget requires it; larger "
             "batches are not always faster."
         )
-        self.chk_slice_tile_batch_autotune = QCheckBox("Auto")
-        self.chk_slice_tile_batch_autotune.setChecked(
-            bool(advanced.get("slice_tile_batch_autotune", False))
-        )
-        self.chk_slice_tile_batch_autotune.setToolTip(
-            "Tune the tile batch at runtime. When off, Tiles / call is an "
-            "explicit requested maximum. The tile memory budget always applies."
-        )
         self.spin_slice_memory_budget = QSpinBox()
         self.spin_slice_memory_budget.setRange(1, 256)
         self.spin_slice_memory_budget.setSuffix(" MiB")
@@ -900,7 +892,6 @@ class DetectionPanel(QWidget):
         _slice_params_lay.addSpacing(10)
         _slice_params_lay.addWidget(self.lbl_slice_tile_batch)
         _slice_params_lay.addWidget(self.spin_slice_tile_batch)
-        _slice_params_lay.addWidget(self.chk_slice_tile_batch_autotune)
         _slice_params_lay.addWidget(self.lbl_slice_memory_budget)
         _slice_params_lay.addWidget(self.spin_slice_memory_budget)
         _slice_params_lay.addWidget(self.lbl_slice_batch_admission)
@@ -936,12 +927,6 @@ class DetectionPanel(QWidget):
         )
         self.spin_slice_memory_budget.valueChanged.connect(
             lambda _value: self._update_slice_batch_admission_label()
-        )
-        self.chk_slice_tile_batch_autotune.toggled.connect(
-            self._on_slice_tile_batch_autotune_toggled
-        )
-        self._on_slice_tile_batch_autotune_toggled(
-            self.chk_slice_tile_batch_autotune.isChecked()
         )
         self._update_slice_batch_admission_label()
 
@@ -2495,18 +2480,9 @@ class DetectionPanel(QWidget):
         if not hasattr(self, "lbl_slice_batch_admission"):
             return
         budget = self.spin_slice_memory_budget.value()
-        if self.chk_slice_tile_batch_autotune.isChecked():
-            text = f"Automatic batch; admitted to {budget} MiB budget"
-        else:
-            requested = self.spin_slice_tile_batch.value()
-            text = f"Up to {requested} tiles/call; admitted to {budget} MiB budget"
+        requested = self.spin_slice_tile_batch.value()
+        text = f"Up to {requested} tiles/call; admitted to {budget} MiB budget"
         self.lbl_slice_batch_admission.setText(text)
-
-    def _on_slice_tile_batch_autotune_toggled(self, enabled: bool) -> None:
-        """Persist manual-vs-automatic tile batch intent separately."""
-        self._main_window.advanced_config["slice_tile_batch_autotune"] = bool(enabled)
-        self.spin_slice_tile_batch.setEnabled(not enabled)
-        self._update_slice_batch_admission_label()
 
     def _on_yolo_direct_task_changed(self, _index: object) -> object:
         """Sync the inferred-task label and fixed-angle row to the current task."""

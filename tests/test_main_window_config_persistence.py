@@ -1954,7 +1954,6 @@ def test_slice_config_persists_and_reloads(monkeypatch, qapp, tmp_path):
     window._detection_panel.combo_slice_geometry.setCurrentText("custom")
     window._detection_panel.spin_slice_tile_batch.setValue(7)
     window._detection_panel.spin_slice_memory_budget.setValue(96)
-    window._detection_panel.chk_slice_tile_batch_autotune.setChecked(True)
 
     config_path = tmp_path / "slice_roundtrip.json"
     assert window.save_config(preset_mode=True, preset_path=str(config_path))
@@ -1962,7 +1961,7 @@ def test_slice_config_persists_and_reloads(monkeypatch, qapp, tmp_path):
     assert saved["slice_enabled"] is True
     assert saved["slice_geometry_mode"] == "custom"
     assert saved["slice_profile_settings"]["tile_batch_size"] == 7
-    assert saved["slice_profile_settings"]["tile_batch_autotune"] is True
+    assert "tile_batch_autotune" not in saved["slice_profile_settings"]
     assert saved["slice_profile_settings"]["memory_budget_mib"] == 96
     window.close()
 
@@ -1971,19 +1970,34 @@ def test_slice_config_persists_and_reloads(monkeypatch, qapp, tmp_path):
     assert reloaded._detection_panel.chk_slice_enabled.isChecked() is True
     assert reloaded._detection_panel.combo_slice_geometry.currentText() == "custom"
     assert reloaded._detection_panel.spin_slice_tile_batch.value() == 7
-    assert reloaded._detection_panel.chk_slice_tile_batch_autotune.isChecked() is True
     assert reloaded._detection_panel.spin_slice_memory_budget.value() == 96
     reloaded.close()
 
+    # A pre-retirement session still carries the "Auto" tile-batch key. It is
+    # dropped silently -- no warning, no stale advanced_config entry -- and
+    # the explicit Tiles / call value is what survives.
+    legacy_auto = dict(saved)
+    legacy_auto["slice_profile_settings"] = dict(saved["slice_profile_settings"])
+    legacy_auto["slice_profile_settings"]["tile_batch_autotune"] = True
+    legacy_auto_path = tmp_path / "slice_roundtrip_legacy_auto.json"
+    legacy_auto_path.write_text(json.dumps(legacy_auto), encoding="utf-8")
+    legacy_auto_window = _make_main_window(monkeypatch)
+    legacy_auto_window._load_config_from_file(str(legacy_auto_path), preset_mode=True)
+    assert legacy_auto_window._detection_panel.spin_slice_tile_batch.value() == 7
+    assert "slice_tile_batch_autotune" not in legacy_auto_window.advanced_config
+    assert "tile_batch_autotune" not in legacy_auto_window.advanced_config.get(
+        "_slice_profile_saved_settings", {}
+    )
+    legacy_auto_window.close()
+
     # Older sessions have a slice snapshot but no tile execution controls.
     # They must retain the established manual/default behavior.
-    for key in ("tile_batch_size", "tile_batch_autotune", "memory_budget_mib"):
+    for key in ("tile_batch_size", "memory_budget_mib"):
         saved["slice_profile_settings"].pop(key)
     config_path.write_text(json.dumps(saved), encoding="utf-8")
     legacy = _make_main_window(monkeypatch)
     legacy._load_config_from_file(str(config_path), preset_mode=True)
     assert legacy._detection_panel.spin_slice_tile_batch.value() == 16
-    assert legacy._detection_panel.chk_slice_tile_batch_autotune.isChecked() is False
     assert legacy._detection_panel.spin_slice_memory_budget.value() == 256
     legacy.close()
 
