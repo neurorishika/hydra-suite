@@ -980,7 +980,7 @@ An agent picking up 4b or 4c should read the prior sub-task's commit(s) rather t
 
 **This is the only slice that can break byte-identity. It ships alone, with its own full equivalence matrix on both platforms.**
 
-**Scope decision (user-confirmed):** DetectKit migrates onto the same content-based `CacheKey`. Its sidecar payload shape (`operations.py:21-35`, which pins the exact field-name set) is bumped so old payloads are rejected loudly rather than misread. **Correction:** this is not an on-disk file format — `operations.py` is the in-process, parent→sidecar-process IPC payload used to hand a cache key across a subprocess boundary within one run, not a value read back from disk in a later session. So "sidecars written before v5 must be regenerated" overstates the blast radius: there is no persisted-on-disk artifact from a prior run that this would orphan. The rejection is still correct (a stale in-flight payload from an old, unrestarted sidecar process should fail loudly rather than being silently misread as v5), but soften the message accordingly — see the corrected wording in Step 6.
+**Scope decision (user-confirmed):** DetectKit migrates onto the same content-based `CacheKey`. Its sidecar payload shape (`operations.py:21-35`, which pins the exact field-name set) is bumped so old payloads are rejected loudly rather than misread. **Correction:** this is not an on-disk file format — `operations.py` is the in-process, parent→sidecar-process IPC payload used to hand a cache key across a subprocess boundary within one run, not a value read back from disk in a later session. So "sidecars written before v5 must be regenerated" overstates the blast radius: there is no persisted-on-disk artifact from a prior run that this would orphan. The rejection is still correct, but not for the reason originally stated. **Minor fix — "an old, unrestarted sidecar process" is not actually possible and the message should not claim it.** `detectkit/sidecars/supervisor.py:257-258`'s `ProtectedOperation` is "one synchronously executed sidecar" spawned fresh per request — there is no long-lived sidecar process that could persist across a code change and send a stale payload. The real cause of a mismatched payload shape is **code-version skew between the parent and sidecar interpreter** (e.g. the sidecar's Python environment/installed package still has the old `hydra_suite` on its path while the parent process has the new one — plausible in a dev checkout with multiple envs, or a partially-updated install). Reword the rejection message accordingly — see the corrected wording in Step 6.
 
 **Deliberately unchanged:** `core/individual/pose/artifacts.py:71` `path_fingerprint_token` embeds the resolved absolute path, but it guards *export-artifact validity* (ONNX/TensorRT/CoreML reuse) which is host-local by design (spec §2 non-goal) and feeds **no** `CacheKey`. Leave it. Verified: its only consumers are `pose/backends/{sleap,vitpose,yolo}.py` artifact signatures.
 
@@ -1355,6 +1355,79 @@ def test_v4_cache_on_disk_is_rejected_and_rebuilt(tmp_path):
     rebuilt = DetectionCacheHandle(path=path, key=v5_key, read_only=True)
     assert rebuilt.is_reusable(), "a fresh v5 write must be usable"
     rebuilt.close()
+
+
+def test_cache_written_at_one_path_is_reusable_from_a_copy_at_another_path(tmp_path):
+    """Fix Z7: no existing test in this task proves the actual Goal-4
+    property AT THE HANDLE LEVEL -- that a cache produced against a model at
+    path A validates against the SAME model's bytes copied to path B in a
+    simulated fresh process (a different machine, in practice). Every other
+    test here proves the KEY STRING is path-independent; this proves the
+    on-disk cache built from that key is actually reusable end to end.
+    """
+    import shutil
+
+    from hydra_suite.core.inference.cache.store import DetectionCacheHandle
+    from hydra_suite.core.inference import content_id
+
+    model_a = tmp_path / "box_a" / "obb.pt"
+    model_a.parent.mkdir(parents=True)
+    model_a.write_bytes(b"obb-weights" * 1000)
+
+    key_a = detection_cache_key(_obb_direct(path=str(model_a)), None)
+    cache_dir = tmp_path / ".inference_cache_clip"
+    cache_dir.mkdir()
+    path = cache_dir / "detection.npz"
+    result = materialize_tensors(_raw())
+    writer = DetectionCacheHandle(path=path, key=key_a, write_mode="fresh")
+    writer.write_frame(result.frame_idx, result=result)
+    writer.close()
+
+    # Simulate a fresh process on a different machine: drop the in-process
+    # memoization AND rebuild the key from a COPY of the same bytes at a
+    # different path with a different mtime.
+    content_id.model_content_id.cache_clear()
+    model_b = tmp_path / "box_b" / "nested" / "obb.pt"
+    model_b.parent.mkdir(parents=True)
+    shutil.copy2(model_a, model_b)
+    os.utime(model_b, (1, 1))
+    key_b = detection_cache_key(_obb_direct(path=str(model_b)), None)
+
+    reader = DetectionCacheHandle(path=path, key=key_b, read_only=True)
+    assert reader.is_reusable(), "identical bytes at a different path must reuse the cache"
+    reader.close()
+
+
+def test_cache_written_at_one_path_is_not_reusable_after_one_byte_changes(tmp_path):
+    """Fix Z7 (negative case): the copy-at-a-different-path test above proves
+    portability; this proves it isn't achieved by accidentally ignoring model
+    content altogether -- a genuinely different model at the new path must
+    NOT validate."""
+    from hydra_suite.core.inference.cache.store import DetectionCacheHandle
+    from hydra_suite.core.inference import content_id
+
+    model_a = tmp_path / "box_a" / "obb.pt"
+    model_a.parent.mkdir(parents=True)
+    model_a.write_bytes(b"obb-weights" * 1000)
+
+    key_a = detection_cache_key(_obb_direct(path=str(model_a)), None)
+    cache_dir = tmp_path / ".inference_cache_clip"
+    cache_dir.mkdir()
+    path = cache_dir / "detection.npz"
+    result = materialize_tensors(_raw())
+    writer = DetectionCacheHandle(path=path, key=key_a, write_mode="fresh")
+    writer.write_frame(result.frame_idx, result=result)
+    writer.close()
+
+    content_id.model_content_id.cache_clear()
+    model_c = tmp_path / "box_c" / "obb.pt"
+    model_c.parent.mkdir(parents=True)
+    model_c.write_bytes(b"different-obb-weights" * 1000)
+    key_c = detection_cache_key(_obb_direct(path=str(model_c)), None)
+
+    reader = DetectionCacheHandle(path=path, key=key_c, read_only=True)
+    assert not reader.is_reusable(), "genuinely different model bytes must not validate"
+    reader.close()
 ```
 
 `CacheKey` and `CACHE_SCHEMA_VERSION` are already imported at the top of that file (`:26`), as are `OBBConfig`/`OBBSequentialConfig` (`:24-25`) and `materialize_tensors`/`_raw` (`:31-41`); only `os` and `shutil` are new.
@@ -1436,6 +1509,19 @@ def directory_content_id(path: str | os.PathLike[str] | None) -> str:
     strictly safer (it can only over-invalidate, never silently miss a real
     content change), and the fingerprint subset is itself an
     implementation detail of a different, unrelated consumer.
+
+    KNOWN LIVE COST of this deviation, not theoretical (fix V5, exercised at
+    Task 13's Step 8-ish real-run check): a SLEAP-directory model means
+    hashing EVERY file under the training-run tree, including
+    ``labels_*.slp`` and ``viz/*.png`` — non-model members that can change
+    (a log, a lockfile written during inference) without the actual model
+    weights changing, which over-invalidates a pulled cache for reasons
+    unrelated to model identity, and costs a full-tree hash once per fresh
+    process where the pre-v5 path-based key paid nothing. If this shows up
+    as a real PERF-gate or false-invalidation problem (see Task 13's
+    self-diagnosing SLEAP-directory check), the fallback is the narrower
+    ``core/individual/pose/artifacts.py`` fingerprint selection this
+    docstring deviates from — not implemented here, kept as an escape hatch.
     """
     if not path:
         return ""
@@ -1522,8 +1608,11 @@ def _stat_hint(path: str) -> tuple[object, ...]:
         except (OSError, ValueError):
             # Unparseable manifest: fall through with base_hint only -- the
             # manifest-only hint is still correct, just not head-aware; this
-            # matches _multihead_manifest_content_id's own OSError handling
-            # (it also degrades to "" on an unreadable manifest).
+            # matches _multihead_manifest_content_id's own (OSError, ValueError)
+            # handling (fix Z6: it degrades to file_content_id(manifest) on an
+            # unreadable/malformed manifest, not "" -- a non-empty id here is
+            # still important so a manifest-only-but-valid file keeps a stable,
+            # non-sentinel identity even when head resolution can't happen).
             head_stats = []
         base_hint = base_hint + tuple(sorted(head_stats))
     return base_hint
@@ -1555,12 +1644,25 @@ def _multihead_manifest_content_id(manifest_path: Path) -> str:
     classifier actually uses (``tools/equivalence/fixtures/configs/
     ant_cnn_identity.json:235``).
     """
+    # Fix Z6: `_stat_hint` above catches `(OSError, ValueError)` and guards
+    # the manifest actually being a dict; this function must be at least as
+    # defensive, because unlike `_stat_hint` (a memo-key helper only), an
+    # UNCAUGHT exception here propagates out of `model_content_id` ->
+    # `cnn_cache_key` -> `_open_caches`, aborting the whole run BEFORE model
+    # loading ever gets a chance to raise the proper `ClassifierFormatError`
+    # for the same malformed manifest. A truncated/corrupted
+    # `.multihead.json` raises `json.JSONDecodeError` (a `ValueError`), not
+    # `OSError` -- catching only `OSError` lets it escape uncaught. A
+    # syntactically valid but non-dict JSON document (e.g. a bare `[]` or a
+    # number) makes `data.get(...)` raise `AttributeError`.
     import json
 
     try:
         data = json.loads(manifest_path.read_text(encoding="utf-8"))
-    except OSError:
-        return ""
+        if not isinstance(data, dict):
+            return file_content_id(manifest_path)
+    except (OSError, ValueError):
+        return file_content_id(manifest_path)
     manifest_id = file_content_id(manifest_path)
     base = manifest_path.parent
     head_ids = []
@@ -1582,7 +1684,23 @@ def _content_id_for_hint(hint: tuple[object, ...]) -> str:
     real = hint[0]
     p = Path(real)
     if p.is_dir():
-        return directory_content_id(real)
+        dir_id = directory_content_id(real)
+        if not dir_id:
+            # Minor fix: directory_content_id() returns "" on ANY member
+            # OSError (e.g. a permission-denied file partway through the
+            # tree) for a directory that genuinely EXISTS -- silently
+            # producing an empty content id for a real model directory.
+            # Log loudly rather than let this degrade quietly and unnoticed.
+            import logging
+
+            logging.getLogger(__name__).warning(
+                "directory_content_id() returned empty for an existing "
+                "directory %s -- a member file likely raised OSError during "
+                "the walk; the resulting content id is empty rather than "
+                "reflecting the directory's real contents",
+                real,
+            )
+        return dir_id
     if p.name.lower().endswith(".multihead.json"):
         multihead_id = _multihead_manifest_content_id(p)
         if multihead_id:
@@ -1713,7 +1831,33 @@ def _model_signature(path: str) -> str:
     return model_content_id(path)
 ```
 
-Import `model_content_id` and `video_signature` from `..content_id`. Re-export `video_signature` from `keys` so existing importers (`runner.py:33`, `worker.py:1430`, `optimizer.py:45`, `optimizer_workers.py:44`, `production_replay.py:175`, and `core/inference/autotune/session.py:112,118` — omitted from the original importer list, must be included) keep working unchanged.
+**Fix Z1 (CRITICAL) — DELETE the existing `def video_signature` at `keys.py:36-51` in this same step.** That old function is a `(size, mtime_ns)`-based stub that predates `content_id.py`; it is NOT superseded automatically just because `content_id.video_signature` now exists elsewhere. `keys.py` currently defines its own `video_signature` (verified: `keys.py:36-51`); simply adding `from ..content_id import video_signature` alongside the pre-existing `def video_signature` is a **name collision, not a re-export** — whichever definition appears LATER in the file wins at import time, and nothing enforces which one that is. Do it wrong and `F811` (redefinition) will NOT catch it: `.flake8`'s `extend-ignore` disables F811. Every caller that imports `video_signature` from `keys`/`runner` rather than `content_id` directly — `runner.py:33`, `worker.py:1430`, `optimizer.py:45`, `optimizer_workers.py:44`, `production_replay.py:175`, `core/inference/autotune/session.py:112,118` — would silently keep getting the OLD mtime-based signature, and every video-bound cache stays machine-local. The correct sequence: (1) delete lines 36-51 of `keys.py` entirely; (2) add `from ..content_id import model_content_id, video_signature` to `keys.py`'s imports so the name is re-exported for those callers. Do NOT leave both definitions in the file under any circumstance.
+
+**Add this guard test to `tests/test_inference_cache_keys.py`** (which already imports `from hydra_suite.core.inference.cache import keys as keys_mod` at line 6) so the shadowing can never silently come back:
+
+```python
+def test_keys_module_reexports_content_id_video_signature_not_a_shadow():
+    """Fix Z1: keys.py must import content_id.video_signature, not redefine
+    its own — a same-named local def would silently shadow it and F811 is
+    disabled in .flake8's extend-ignore, so nothing else would catch this."""
+    from hydra_suite.core.inference import content_id
+
+    assert keys_mod.video_signature is content_id.video_signature
+
+
+def test_keys_module_video_signature_is_mtime_invariant_through_the_reexport(tmp_path):
+    """Exercise the touched-mtime-invariance property THROUGH keys_mod's
+    re-exported name specifically (not content_id directly), so a future
+    reintroduction of a local mtime-based def in keys.py fails here even if
+    it somehow also passed the identity check above."""
+    import os
+
+    v = tmp_path / "clip.mp4"
+    v.write_bytes(b"\x00" * (1 << 20))
+    first = keys_mod.video_signature(str(v))
+    os.utime(v, (1, 1))
+    assert keys_mod.video_signature(str(v)) == first
+```
 
 In each builder, replace the `model_path=` / `model_mtime=` pair with a single `model_id=`:
 
@@ -1750,14 +1894,19 @@ git add src/hydra_suite/core/inference/content_id.py \
         src/hydra_suite/core/inference/cache/keys.py \
         src/hydra_suite/core/inference/cache/reuse.py \
         src/hydra_suite/core/inference/cache/reader.py \
-        tests/test_cache_content_identity.py
+        tests/test_cache_content_identity.py \
+        tests/test_inference_cache_keys.py
 git commit -m "feat(cache): content-based model/video identity primitives, CacheKey schema v5 (4a)"
 ```
-This is a real, separately-reviewable checkpoint: the primitives exist and are tested, but nothing downstream (DetectKit, the other cache builders' call sites) has been touched yet, so `tests/test_inference_cache_keys.py` etc. still reference the OLD `CacheKey` shape and will fail until 4c. That is expected at this checkpoint — do not "fix" it here.
+**Fix Z4 — `tests/test_inference_cache_keys.py` is staged and committed HERE, not deferred to 4c.** Step 1 adds five new tests to that file (the OBB two-path tests plus, per fix Z1 above, the `keys_mod.video_signature` re-export guard), so it is a file Step 1 edited within 4a's own scope — leaving it unstaged would mean `make format` at this checkpoint silently reformats an uncommitted file, and a fresh agent picking up 4b or 4c and reading "the prior sub-task's commit(s)" would not see Step 1's tests at all. Note this file will receive FURTHER edits in 4c (Step 8's itemized rewrites of its pre-existing tests) — that is expected; 4a commits only the additions Step 1 made, 4c commits the rest of that same file's changes on top. This is a real, separately-reviewable checkpoint: the primitives exist and are tested (Step 1's five new tests plus the OBB regressions pass at this point; the file's OTHER, pre-existing tests — the ones Step 8 rewrites — still fail until 4c, which is expected and not a regression to "fix" here).
 
 - [ ] **Step 6: Migrate DetectKit**
 
-`detectkit/jobs/prediction_cache.py:31-61` (function range corrected — it is `:31-61`, not `:31-66`) — replace the absolute-path identity. **`source_path` here is a DATASET DIRECTORY, not a video file**: `detectkit/gui/panels/dataset_panel.py:394` does `Path(source_path)/"images"`, so calling `video_signature(source_path)` directly hits `IsADirectoryError`, which `video_signature`'s `except OSError` swallows into `""` — every source in a DetectKit project would then collapse onto the same identity, silently defeating cache invalidation across sources. Dispatch on what `source_path` actually is:
+`detectkit/jobs/prediction_cache.py:31-61` (function range corrected — it is `:31-61`, not `:31-66`) — replace the absolute-path identity. **Add the import** (the current file imports nothing from `content_id`): `from hydra_suite.core.inference.content_id import directory_content_id, model_content_id, video_signature`.
+
+**Fix Z5 — preserve `expanduser()`, and note what happens to the `"models"` list.** The current implementation (`prediction_cache.py:37,47`) resolves every path through `Path(path).expanduser().resolve()` before using it — both for the model paths and for `source_path` — so a `~/models/x.pt`-style config path resolves correctly. The rewrite below must keep calling `model_content_id`/`_source_content_id` on **expanduser()'d** paths (`str(Path(path).expanduser())` is enough; `model_content_id`/`directory_content_id` already realpath internally via `_stat_hint`, so a further `.resolve()` is redundant but harmless) — passing the raw, un-expanded path through would hit the missing-model sentinel for every `~/`-prefixed configured model, silently breaking DetectKit caching for exactly the layout `HYDRA_DATA_DIR`/`HYDRA_CONFIG_DIR` encourage. Also note explicitly: the old `encoded` payload carried a `"models"` list of `(path, mtime_ns, size)` tuples that is now dropped in favor of folding each model's `model_content_id` directly into `model_id` (below) — this is harmless, not an oversight, because `cache_path_for` (`prediction_cache.py:63-66`) hashes `key.as_string()`, which already includes `model_id`; do not attempt to preserve the old `"models"` key in `encoded`.
+
+**`source_path` here is a DATASET DIRECTORY, not a video file**: `detectkit/gui/panels/dataset_panel.py:394` does `Path(source_path)/"images"`, so calling `video_signature(source_path)` directly hits `IsADirectoryError`, which `video_signature`'s `except OSError` swallows into `""` — every source in a DetectKit project would then collapse onto the same identity, silently defeating cache invalidation across sources. Dispatch on what `source_path` actually is:
 
 ```python
     def _source_content_id(source_path: str) -> str:
@@ -1809,8 +1958,14 @@ This is a real, separately-reviewable checkpoint: the primitives exist and are t
             return f"imgset:{hashlib.sha256(blob).hexdigest()}"
         return video_signature(source_path)
 
+    # Fix Z5: expanduser() BEFORE hashing, same as the old implementation did
+    # for both model_paths and source_path (prediction_cache.py:37,47) — a
+    # raw "~/models/x.pt" path fails Path.is_file()/is_dir() and would
+    # otherwise fall through to the missing-model sentinel.
     identities = [
-        (model_content_id(path), path) for path in model_paths if path
+        (model_content_id(str(Path(path).expanduser())), path)
+        for path in model_paths
+        if path
     ]
     model_id = "|".join(identity for identity, _ in identities)
     encoded = json.dumps(
@@ -1818,7 +1973,7 @@ This is a real, separately-reviewable checkpoint: the primitives exist and are t
             # The SOURCE (image/video file OR dataset directory) is identified
             # by content too, so a prediction cache survives the project
             # moving on disk. See _source_content_id above for the dispatch.
-            "source": _source_content_id(str(source_path)),
+            "source": _source_content_id(str(Path(source_path).expanduser())),
             "settings": settings,
         },
         sort_keys=True,
@@ -1836,8 +1991,10 @@ This is a real, separately-reviewable checkpoint: the primitives exist and are t
     if set(raw) != {"schema_version", "model_id", "config_hash"}:
         raise ValueError(
             "cache_key has invalid fields; this is the in-process sidecar IPC "
-            "payload shape, not an on-disk format — an old, unrestarted "
-            "sidecar process is sending a pre-v5 payload and must be restarted"
+            "payload shape, not an on-disk format — a pre-v5 shaped payload "
+            "means the parent and sidecar interpreters are running mismatched "
+            "hydra_suite code versions, not a stale unrestarted process (the "
+            "sidecar is spawned fresh per request, never long-lived)"
         )
     return CacheKey(
         schema_version=int(raw["schema_version"]),
@@ -1953,7 +2110,7 @@ At `:1768`, above the `_source_signature` closure:
 
 - [ ] **Step 8: Update every test file that constructs `CacheKey` / uses `model_mtime` — full enumeration**
 
-This is a breaking dataclass-shape change (`model_path`+`model_mtime` → `model_id`). 14 test files construct `CacheKey` or otherwise depend on the old shape. Fix ALL of them in this step, not a representative subset:
+This is a breaking dataclass-shape change (`model_path`+`model_mtime` → `model_id`). **Fix Z2 — the enumeration below is 17 files, not 14: the original 14-file list plus 3 files it missed because Step 8's own grep instruction never checked `.model_path` (only `.model_mtime`).** Verified survivors NOT in the original 14 and NOT in Step 11's run list: `tests/test_vitpose_pose_config.py:25` (`assert key.model_path == str(p)`), `tests/test_bgsub_cache_keys.py:102` (`assert key.model_path == "background_subtraction"`), `tests/test_inference_cache_reuse.py:174` (`assert key.model_path == "background_subtraction"`). Fix ALL 17 in this step, not a representative subset:
 
 1. `tests/test_inference_cache_keys.py` — see the itemized rewrites below; several need REWRITING, not just renaming.
 2. `tests/test_inference_cache_chunked.py:30,432` — positional `CacheKey(...)` with 4 fields; make it 3 (`schema_version, model_id, config_hash`).
@@ -1969,8 +2126,11 @@ This is a breaking dataclass-shape change (`model_path`+`model_mtime` → `model
 12. `tests/core/post/test_interpolated_crops_size_lookup.py` — cache-key-gated crop lookup; update.
 13. `tests/identity/test_evidence_stage_runner.py` — stage runner constructs a `CacheKey` for its input cache; update.
 14. `tests/refinekit/test_overlay_modern_cache.py` — RefineKit's own cache-key construction; update.
+15. `tests/test_vitpose_pose_config.py:25` — `assert key.model_path == str(p)`; rewrite to assert `key.model_id == model_content_id(str(p))` (or the appropriate content-based expectation for that fixture).
+16. `tests/test_bgsub_cache_keys.py:102` — `assert key.model_path == "background_subtraction"`; rename attribute access to `.model_id` (the bgsub sentinel value itself is unchanged, per Step 5).
+17. `tests/test_inference_cache_reuse.py:174` — `assert key.model_path == "background_subtraction"`; same rename as #16.
 
-For every file above: grep it for `CacheKey(`, `model_path=`, `model_mtime=`, and `.model_mtime`; replace with `model_id=` (computed via `model_content_id`/`video_signature` as appropriate for that test's fixtures, never a literal path string).
+For every file above: grep it for `CacheKey(`, `model_path=`, `model_mtime=`, `.model_mtime`, **and `.model_path`** (fix Z2 — the original grep instruction omitted `.model_path`, which is exactly how files #15-17 above were missed); replace with `model_id=`/`.model_id` (computed via `model_content_id`/`video_signature` as appropriate for that test's fixtures, never a literal path string).
 
 **`tests/test_inference_cache_keys.py` needs actual rewrites, not renames — itemized:**
 
@@ -1982,6 +2142,7 @@ For every file above: grep it for `CacheKey(`, `model_path=`, `model_mtime=`, an
 - `test_cache_key_matches_only_when_schema_version_matches` (`:161`) — still valid in spirit; rewrite the fixture `CacheKey(...)` calls to the 3-field shape, semantics unchanged.
 - `test_cnn_and_headtail_keys_differ_across_schema_v3_v4` (`:135`) — rename to `..._v4_v5` (schema is now 4→5 territory conceptually, but the ACTUAL assertion — that two different schema versions never produce string-equal keys — is unchanged and should use `CACHE_SCHEMA_VERSION` and `CACHE_SCHEMA_VERSION - 1` rather than hardcoded 3/4 literals so it doesn't silently rot again at the next bump).
 - `tests/test_inference_cache_keys.py:132`'s `CACHE_SCHEMA_VERSION == 4` assertion — change to `5`.
+- **Fix Z2 — five more anchors in this same file the original itemization missed** (found via the corrected `.model_path` grep above): `:536` (`test_bgsub_key_changes_with_detection_params` — `k1.model_path == "background_subtraction"` → `.model_id`), `:576-577` (`test_bgsub_key_stable_for_same_params` region — `k_a.model_path == k.model_path` and `k_a.model_mtime == k.model_mtime`; the second assertion has no `model_id` equivalent and must simply be deleted, not renamed — `model_mtime` no longer exists on `CacheKey` at all), `:609` (`test_headtail_key_stable_with_threshold` — `k1.model_path == k2.model_path` → `.model_id`), `:625` (`test_cnn_key_stable_with_calibration_temperature` — same rename), `:682` (`test_apriltag_key_has_empty_model_path` — `k.model_path == ""` → `k.model_id == ""`; the apriltag sentinel itself, per Step 5, is unchanged as `model_id=""`).
 
 - [ ] **Step 9: Run the cache suites**
 
@@ -1999,9 +2160,10 @@ Expected: PASS, and the `test_inference_cache_keys.py` + `test_inference_cache_c
 Run:
 ```bash
 grep -rn 'model_mtime' src/ tests/ && echo "VIOLATION" || echo "clean"
-grep -rn 'CacheKey(' src/ | grep -v 'model_id' && echo "CHECK THESE" || echo "clean"
+grep -rn '\.model_path\b' src/ tests/ && echo "VIOLATION" || echo "clean"
+grep -rnA3 'CacheKey(' src/ | grep -B3 -v 'model_id' | grep 'CacheKey(' && echo "CHECK THESE" || echo "clean"
 ```
-Expected: `clean` for the first. Every `CacheKey(` construction must name `model_id`.
+**Fix Z2 — the original single-line `grep -v 'model_id'` gate can NEVER print clean and is not a usable gate as written.** Every multi-line `CacheKey(` constructor in `keys.py` (verified: `:129,341,353,362,392,407`) has `model_id=` on the FOLLOWING line, not the same line as `CacheKey(` — `grep -v 'model_id'` matches per-LINE, so it always flags these real, correct constructions as "CHECK THESE", making the gate noisy on every run regardless of correctness (a false-positive gate that always fires is worse than no gate: nobody re-reads the same six false positives every time). Use `grep -A3` to pull the next 3 lines and only flag a `CacheKey(` block where none of those lines contain `model_id`, as above. Also add `.model_path` as its own gate (fix Z2) since the attribute no longer exists on `CacheKey` at all after Step 4 — any survivor is a bug, not a matter of naming style.
 
 - [ ] **Step 11: Run every file enumerated in Step 8 explicitly — not a `-k` filter**
 
@@ -2024,8 +2186,12 @@ python -m pytest \
   tests/core/post/test_interpolated_crops_size_lookup.py \
   tests/identity/test_evidence_stage_runner.py \
   tests/refinekit/test_overlay_modern_cache.py \
+  tests/test_vitpose_pose_config.py \
+  tests/test_bgsub_cache_keys.py \
+  tests/test_inference_cache_reuse.py \
   -v
 ```
+(Fix Z2: the last three files above are the `.model_path` survivors Step 8's items #15-17 add; they were missing from this run list in the same way they were missing from the original 14-file enumeration.)
 Expected: no `TypeError: __init__() got an unexpected keyword argument`, no `AttributeError` on `.model_path`/`.model_mtime`, all PASS. THEN also run the full suite as a final catch-all for any construction site this enumeration missed: `python -m pytest tests/ -q 2>&1 | tail -30` and diff the failure set against the pre-task baseline (memory `project_test_suite_batching_chunk_boundary_trap`: compare failure SETS, not raw counts).
 
 - [ ] **Step 12: Commit (sub-task 4c — everything else: the 14-file test migration + the `parameter_helper.py` comment)**
@@ -2051,6 +2217,8 @@ migration and the equivalence gate below."
 **Fix A7 — the baseline commit for this gate, and why it must NOT be `8f9688e0`.** This task declares "Consumes: nothing from earlier tasks", but it runs FOURTH in execution order, after Tasks 1-3 have already landed real behavior changes (Task 2's save/load path relativization, Task 3's `iter_model_references`). Baselining Step 13/14 against `8f9688e0` (the branch root, before ANY task) compares "everything through Task 4" against "nothing" in one shot — if a divergence appears, there is no way to tell whether Task 1, 2, 3, or 4 caused it, which defeats the entire point of running each task's own equivalence gate separately (this is exactly the attribution principle CLAUDE.md's equivalence section states: "so each slice's effect is isolated, not conflated"). Since this task is NOT reordered to run first (the task order above is unchanged), the correct baseline is **the commit at the tip of Task 3** (i.e., `HEAD` immediately before Task 4's own commits begin) — not `8f9688e0`. Record that commit SHA in the Acceptance Log entry for this step (e.g. `git rev-parse HEAD` run right before Task 4 Step 1). Tasks 1-3's own gates (already run at the end of each of those tasks) are what isolates their individual effects; this step isolates Task 4's.
 
 - [ ] **Step 13: BEFORE/AFTER equivalence gate on MPS (blocking)**
+
+**What this gate proves, precisely (and what it doesn't).** Every fixture config in `tools/equivalence/fixtures/configs/` sets `enable_backward_tracking: true`, and `trackerkit/headless_tracking.py:248` runs the backward pass against the SAME `detection_cache_path` the forward pass just wrote — so this matrix DOES exercise a same-process, same-path write-then-read cache-key round trip (forward writes the v5 cache, backward reads it back and must find it reusable), on real configs including `.multihead.json`-based CNN keys and `dirsha256`-based pose-directory keys. Concretely this proves: (a) key computation doesn't crash or diverge on any real fixture config, (b) same-path write→read reuse via the forward→backward handoff, and (c) no perf regression (`PERF_TOLERANCE`). It does **not** prove cross-path/cross-machine portability — no fixture here ever copies a model to a second path and rebuilds the key against it. That property is covered separately: the handle-level unit tests added at fix Z7 (`test_cache_written_at_one_path_is_reusable_from_a_copy_at_another_path` and its negative counterpart, in Step 1), and the end-to-end round trip in Task 13. Do not read a green result here as proof of portability by itself.
 
 Caches and JIT state MUST be cleared on both sides — a stale `v4` cache or a poisoned `__pycache__` fakes a result (memories `feedback_numba_jit_cache_poisons_equivalence`, `project_merge_candidate_parity_done`).
 
@@ -2080,6 +2248,12 @@ if [ "$TASK3_TIP" = "$(git rev-parse HEAD)" ]; then
 fi
 case "$TASK3_TIP" in *PASTE*|"") echo "FATAL: TASK3_TIP not filled in" >&2; exit 1;; esac
 
+# Minor fix: this path can survive from an earlier/aborted gate run and
+# make `worktree add` fail outright; clear it first, every time.
+git -C /Users/neurorishika/Projects/Rockefeller/Kronauer/multi-animal-tracker \
+    worktree remove --force .worktrees/equiv-base 2>/dev/null; \
+git -C /Users/neurorishika/Projects/Rockefeller/Kronauer/multi-animal-tracker \
+    worktree prune
 git -C /Users/neurorishika/Projects/Rockefeller/Kronauer/multi-animal-tracker \
     worktree add --detach .worktrees/equiv-base "$TASK3_TIP"
 REPO=$PWD WT=$PWD \
@@ -2119,6 +2293,8 @@ case "$TASK3_TIP" in *PASTE*|"") echo "FATAL: TASK3_TIP not filled in" >&2; exit
 if [ "$TASK3_TIP" = "$(git rev-parse HEAD)" ]; then
   echo "FATAL: TASK3_TIP == HEAD -- the gate would be tautological." >&2; exit 1
 fi
+# Minor fix: same as Step 13 -- clear a surviving path from an earlier run.
+git worktree remove --force .worktrees/equiv-base 2>/dev/null; git worktree prune
 git worktree add --detach .worktrees/equiv-base "$TASK3_TIP"
 REPO=$PWD WT=$PWD MAIN_SRC=$PWD/.worktrees/equiv-base/src WT_SRC=$PWD/src \
   OUT=/tmp/equiv_jobs RUNTIME=cuda nohup bash tools/equivalence/run_matrix.sh \
@@ -6881,3 +7057,5 @@ Fill in as gates are run. A gate with no pasted output is not a passed gate.
 12. **`ant_cnn_identity`'s characterization golden pins this machine's absolute classifier path.** `tests/data/get_parameters_dict_golden/ant_cnn_identity.json` carries `/Users/neurorishika/Library/Application Support/hydra-suite/models/classification/identity/20260429-105036_classifier_multihead_obiroi_colortag.multihead.json`, and `CNN_CLASSIFIERS` is absent from `HOST_DEPENDENT_DROPPED_KEYS` (`tests/test_get_parameters_dict_characterization.py:269-274`). That test therefore cannot pass on any other host. Either add `CNN_CLASSIFIERS` to the dropped set with the same ndarray-style normalization the model-path keys get, or regenerate the golden with a relativized path. Noted in Task 2 Step 6 so an agent does not misdiagnose it as a Task 2 regression; out of scope to fix here because it changes a committed characterization golden.
 13. **`verify_job`'s directory-model branch trusts `file_digests` alone.** After fix B4 a directory model's integrity rests entirely on its per-member digests; there is no top-level roll-up, so a member ADDED to the job after packing (not present in `file_digests`) is not detected. Adding a "no unexpected files under `models/<key>/`" check would close it. Not done here because it needs a decision about whether host-written scratch files inside a pose-run directory are legitimate.
 14. ~~The layering gate does not see relative imports.~~ **FIXED (fix X5b, round-6).** `test_no_app_layer_or_qt_imports` (Task 5) now resolves `node.level` against the module's own package path (`_imported_names`'s `own_pkg_parts` resolution) before applying `FORBIDDEN_ROOTS`, so a relative `from ...trackerkit import z` inside `data/tracking_job/` is caught exactly like the absolute form. `test_the_gate_itself_catches_a_relative_app_layer_import` proves the resolution formula against a synthetic file. This closes the hole X5 found live: `pack_job` calling `load_advanced_tracker_config()` via a relative import (fix X5a) would otherwise have passed this gate green.
+15. **Task 4 introduces a SECOND, incompatible content-identity primitive.** `core/inference/autotune/fingerprint.py:292-340` already has `model_content_digest` (sha256 of a file, or a dir hashed by relative-name with its own exclusions and its own empty-dir behaviour, `lru_cache`d on stat) — a different function with different directory semantics than `content_id.model_content_id`/`directory_content_id`. The autotune subsystem and the cache-key subsystem now each compute "model content identity" their own way, with no shared test proving they agree (or a documented reason they must differ). Consolidate onto one primitive, or explicitly document why autotune's fingerprinting needs different semantics (e.g. different exclusion rules) — not done here because it is a second migration outside Task 4's declared file list and risks its own byte-identity blast radius.
+16. **Dead code: `if real and real != "None"` in `_content_id_for_hint`'s missing-model-sentinel branch.** `model_content_id(None)` and `model_content_id("")` both return early (`if not path: return ""`) before `_stat_hint`/`_content_id_for_hint` are ever reached, so `real` (which is `hint[0]`, always a non-empty string or the literal string `"None"` only if some caller passed the STRING `"None"` rather than the value `None`) cannot be falsy at this point in the normal call graph. Either remove the dead `real and` half of the condition, or add a one-line comment explaining the (currently unverified) scenario it guards against, so a future reader doesn't have to re-derive whether it's reachable.
