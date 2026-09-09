@@ -1949,9 +1949,27 @@ conda activate hydra-mps
 pkill -f 'sleap|hydra' || true   # ONLY sleap/hydra; never other processes
 find . -name '__pycache__' -type d -prune -exec rm -rf {} +
 rm -rf /tmp/equiv_jobs
-# Fix A7: TASK3_TIP is the commit immediately before Task 4's own commits --
-# NOT 8f9688e0 -- so this gate isolates Task 4's effect from Tasks 1-3's.
-TASK3_TIP="$(git rev-parse HEAD)"   # run this BEFORE Task 4 Step 1, record it
+# Fix C1 (round-5 CRITICAL): TASK3_TIP MUST be a literal sha recorded BEFORE
+# Task 4a's first commit. The previous revision computed it with
+# `git rev-parse HEAD` INSIDE this block -- but this block runs AFTER 4a/4b/4c
+# have committed, so HEAD was Task 4's own tip: MAIN_SRC and WT_SRC pointed at
+# the SAME code and every clip compared EQUIVALENT by construction. That made
+# the only gate protecting the byte-identity-critical slice completely
+# tautological. Paste the sha; do not compute it here.
+#
+#   BEFORE starting Task 4a, run:  git rev-parse HEAD
+#   and paste the result on the next line.
+TASK3_TIP="<PASTE the sha printed before Task 4a started>"
+
+# Guard: refuse to run a gate that compares a tree against itself.
+if [ "$TASK3_TIP" = "$(git rev-parse HEAD)" ]; then
+  echo "FATAL: TASK3_TIP == HEAD -- baseline and current are the same tree." >&2
+  echo "This gate would report EQUIVALENT for every clip while proving" >&2
+  echo "nothing. Record the pre-Task-4 sha and rerun." >&2
+  exit 1
+fi
+case "$TASK3_TIP" in *PASTE*|"") echo "FATAL: TASK3_TIP not filled in" >&2; exit 1;; esac
+
 git -C /Users/neurorishika/Projects/Rockefeller/Kronauer/multi-animal-tracker \
     worktree add --detach .worktrees/equiv-base "$TASK3_TIP"
 REPO=$PWD WT=$PWD \
@@ -1970,8 +1988,15 @@ ssh firebrat
 cd ~/hydra-suite && git fetch && git checkout <this-branch-sha>
 source ~/miniforge3/etc/profile.d/conda.sh && conda activate hydra-cuda
 find . -name '__pycache__' -type d -prune -exec rm -rf {} +
-# Fix A7: use the SAME $TASK3_TIP recorded on the Mac in Step 13, not
-# 8f9688e0 -- see that step's note on why the baseline must isolate Task 4.
+# Fix C1 (round-5 CRITICAL): this is a FRESH ssh session -- $TASK3_TIP from
+# Step 13 does NOT carry over. An unset variable expands to "" and
+# `git worktree add --detach ... ""` fails, so the CUDA gate would never run
+# at all. Paste the SAME literal sha recorded before Task 4a started.
+TASK3_TIP="<PASTE the same sha used in Step 13>"
+case "$TASK3_TIP" in *PASTE*|"") echo "FATAL: TASK3_TIP not filled in" >&2; exit 1;; esac
+if [ "$TASK3_TIP" = "$(git rev-parse HEAD)" ]; then
+  echo "FATAL: TASK3_TIP == HEAD -- the gate would be tautological." >&2; exit 1
+fi
 git worktree add --detach .worktrees/equiv-base "$TASK3_TIP"
 REPO=$PWD WT=$PWD MAIN_SRC=$PWD/.worktrees/equiv-base/src WT_SRC=$PWD/src \
   OUT=/tmp/equiv_jobs RUNTIME=cuda nohup bash tools/equivalence/run_matrix.sh \
