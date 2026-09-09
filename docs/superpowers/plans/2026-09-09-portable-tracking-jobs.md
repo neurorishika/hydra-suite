@@ -50,7 +50,7 @@ Plus two pre-existing bugs found while anchoring. **Do not fix them in this bran
 
 | File | Responsibility |
 |---|---|
-| `src/hydra_suite/paths.py` | + `HYDRA_MODELS_DIR` override on `get_models_dir()`; + `print_paths()` line (Task 1) |
+| `src/hydra_suite/paths.py` | + `HYDRA_MODELS_DIR` override on `get_models_dir()`; + `print_paths()` line; + `get_platform_config_dir()` (Task 1) |
 | `src/hydra_suite/trackerkit/engine_params.py` | + load-side `resolve_model_path` for colour tag (Task 2); + `iter_model_references` and the four key tuples (Task 3) |
 | `src/hydra_suite/trackerkit/gui/orchestrators/config.py` | save-side relativization of `color_tag_model_path` and `cnn_classifiers[].model_path` (Task 2) |
 | `src/hydra_suite/core/inference/cache/base.py` | `CacheKey` → `(schema_version, model_id, config_hash)`; `CACHE_SCHEMA_VERSION = 5` (Task 4) |
@@ -185,6 +185,25 @@ Add `HYDRA_MODELS_DIR` to the module docstring's override list (`:1-16`), and in
 ```python
     print(f"  HYDRA_MODELS_DIR: {os.environ.get('HYDRA_MODELS_DIR', '(unset)')}")
 ```
+
+**Fix X1a — add `get_platform_config_dir()`, a config-dir resolver that ignores `HYDRA_CONFIG_DIR` entirely.** Task 6's preflight (`shared_roots` check) needs to distinguish "the host has no config-dir override" from "read whatever `HYDRA_CONFIG_DIR` currently points at" — and inside `run.sh`, `HYDRA_CONFIG_DIR` has already been redirected to the job's own snapshot, so at that point it is not a usable signal for "the host's real platformdirs default" at all. Add, beside `_user_config_dir()` (`:38-49`):
+
+```python
+def get_platform_config_dir() -> Path:
+    """The platformdirs config dir, ignoring ``HYDRA_CONFIG_DIR`` entirely.
+
+    Used when a caller has an explicit, separate signal that no config-dir
+    override applies (e.g. ``run.sh``'s ``HYDRA_HOST_CONFIG_DIR=""``, which
+    means "the host used its default config dir before job env redirection
+    took over") and needs the REAL platformdirs path, not whatever
+    ``HYDRA_CONFIG_DIR`` happens to be set to right now.
+    """
+    p = Path(user_config_dir(APP_NAME, APP_AUTHOR))
+    p.mkdir(parents=True, exist_ok=True)
+    return p
+```
+
+This is a thin, deliberate duplication of `_user_config_dir()`'s else-branch — not a refactor of `_user_config_dir()` itself, since every other caller of `_user_config_dir()` legitimately wants the override-aware behaviour.
 
 - [ ] **Step 4: Run tests to verify they pass**
 
@@ -2244,14 +2263,45 @@ FORBIDDEN_ROOTS = {
 FORBIDDEN_MODULES = {"PySide6", "PyQt5", "PyQt6", "qtpy"}
 
 
-def _imported_names(path):
+def _module_dotted_name(path):
+    """This file's own fully-qualified module name, e.g. 'hydra_suite.data.tracking_job.pack'."""
+    src_root = pathlib.Path(__file__).resolve().parents[1] / "src"
+    rel = path.resolve().relative_to(src_root).with_suffix("")
+    parts = list(rel.parts)
+    if parts[-1] == "__init__":
+        parts = parts[:-1]
+    return parts
+
+
+def _imported_names(path, own_pkg_parts=None):
+    """Fix X5b: resolve RELATIVE imports to an absolute dotted path before
+    yielding, so `from ...trackerkit.cli_config import x` inside
+    data/tracking_job/pack.py is checked exactly like an absolute
+    `from hydra_suite.trackerkit.cli_config import x` would be. The plan's
+    own generated code (e.g. `_normalize_model_path`'s import of
+    `core.inference.model_paths`) uses relative imports throughout
+    data/tracking_job/ -- a level==0-only gate is blind to every one of them,
+    which is exactly how a relative `from ...trackerkit import ...` import
+    would have passed this test green. `own_pkg_parts` overrides the
+    real-source-tree-derived package path -- used only by
+    `test_the_gate_itself_catches_a_relative_app_layer_import` below, which
+    exercises a synthetic file that is never actually under `src/`.
+    """
+    if own_pkg_parts is None:
+        own_pkg_parts = _module_dotted_name(path)[:-1]  # drop the module's own filename
     tree = ast.parse(path.read_text())
     for node in ast.walk(tree):
         if isinstance(node, ast.Import):
             for alias in node.names:
                 yield alias.name
-        elif isinstance(node, ast.ImportFrom) and node.module and node.level == 0:
-            yield node.module
+        elif isinstance(node, ast.ImportFrom) and node.module:
+            if node.level == 0:
+                yield node.module
+            else:
+                # level=1 means "this package"; each extra level pops one
+                # more trailing component off the module's own package path.
+                base = own_pkg_parts[: len(own_pkg_parts) - node.level + 1]
+                yield ".".join(base + [node.module])
 
 
 @pytest.mark.parametrize("path", sorted(PACKAGE.glob("*.py")), ids=lambda p: p.name)
@@ -2262,6 +2312,24 @@ def test_no_app_layer_or_qt_imports(path):
         if name.startswith("hydra_suite."):
             layer = name.split(".")[1]
             assert layer not in FORBIDDEN_ROOTS, f"{path.name} imports app layer: {name}"
+
+
+def test_the_gate_itself_catches_a_relative_app_layer_import(tmp_path):
+    """A regression test FOR the gate: a relative import of an app layer
+    must fail, proving `_imported_names`'s level-resolution actually works
+    and this isn't just re-testing the (already-passing) absolute-import
+    case.
+    """
+    victim = tmp_path / "victim.py"
+    victim.write_text("from ...trackerkit.cli_config import load_advanced_tracker_config\n")
+    names = list(
+        _imported_names(victim, own_pkg_parts=["hydra_suite", "data", "tracking_job"])
+    )
+    assert names == ["hydra_suite.trackerkit.cli_config"], names
+    with pytest.raises(AssertionError, match="app layer"):
+        for name in names:
+            layer = name.split(".")[1]
+            assert layer not in FORBIDDEN_ROOTS, f"imports app layer: {name}"
 
 
 def test_package_imports_without_qt_installed():
@@ -2790,7 +2858,15 @@ def test_bundle_head_sidecar_is_recorded_so_it_gets_pushed(tmp_path):
     head_b = src / "head_b.pth"
     head_a.write_bytes(b"a")
     head_b.write_bytes(b"b")
-    (src / "head_b.pth.v2meta.json").write_text('{"fit_policy": "letterbox"}')
+    # Fix X9 (round-6): the real convention is `.with_suffix(".v2meta.json")`
+    # (REPLACES the model's own suffix), not an appended
+    # "<name>.pth.v2meta.json" -- verified core/inference/model_paths.py:44
+    # (`src.with_suffix(".v2meta.json")`) and
+    # core/individual/classification/backend.py:288, which is the actual
+    # reader. The original test wrote and asserted a name the real code never
+    # produces or looks for, so it proved nothing about the file
+    # copy_model_metadata_sidecars/backend.py actually round-trip.
+    (src / "head_b.v2meta.json").write_text('{"fit_policy": "letterbox"}')
     planned = PlannedModel(
         role="CNN_CLASSIFIERS", source_path=str(head_a), kind="file",
         key="classification/identity/head_a.pth",
@@ -2798,7 +2874,7 @@ def test_bundle_head_sidecar_is_recorded_so_it_gets_pushed(tmp_path):
     )
     models_root = tmp_path / "job" / "models"
     record = copy_model_reference(planned, models_root)
-    assert "classification/identity/head_b.pth.v2meta.json" in record.sidecars
+    assert "classification/identity/head_b.v2meta.json" in record.sidecars
 
 
 def test_missing_source_fails_with_the_role_and_the_path(tmp_path):
@@ -3077,7 +3153,7 @@ git commit -m "feat(tracking-job): copy model references with sidecars, bundles 
 - Consumes: `JobManifest`/`JobVideo`/`JobModel` (Task 5), `PlannedModel`/`copy_model_reference`/`write_registry_subset` (Task 6).
 - Produces:
   - `PlannedVideo` frozen dataclass: `video_path: str`, `config: dict`, `config_provenance: str`, `planned_models: list[PlannedModel]`, `skeleton_path: str`, **`cnn_model_keys: dict[str, str]`** (fix B5 — see "the CNN rewrite rule" below; defaults to `field(default_factory=dict)`).
-  - `pack_job(job_dir, planned_videos, *, registry_entries, advanced_config_path, track_args, shared_table, copy_videos=False, shared_mode="auto", job_name=None, force=False) -> JobManifest` (`force` — fix V-minor, see the re-pack-safety note below Step 4's ordered-steps list: required to pack into a non-empty `job_dir`)
+  - `pack_job(job_dir, planned_videos, *, registry_entries, advanced_config_path, advanced_config_fallback=None, track_args, shared_table, copy_videos=False, shared_mode="auto", job_name=None, force=False, force_discard_outputs=False) -> JobManifest` (`force` — fix V-minor/X8, see the re-pack-safety note below Step 4's ordered-steps list: required to pack into a non-empty `job_dir`; `force_discard_outputs` — fix X8, a SEPARATE opt-in from `force`, required in addition when `videos/` holds pulled outputs the old manifest doesn't account for; `advanced_config_fallback` — fix X5a, see Fix V4 below: the CALLER's already-resolved `load_advanced_tracker_config()` dict, used only when `advanced_config_path` doesn't exist on disk, so `pack.py` itself never imports `trackerkit`; every fixture/test whose `advanced_config_path` already points at a real file leaves this `None` and never touches the fallback branch)
   - `ROLE_TO_CONFIG_KEY: dict[str, str | tuple[str, ...]]` and `LEGACY_ALIAS_CONFIG_KEYS: tuple[str, ...]` — module-level in `pack.py` (fix B-minor: these were consumed by Task 11 but never listed as produced by this task, so Task 11 had nothing to import).
   - `render_run_sh() -> str`
   - `verify_job(job_dir, *, fast: bool = False) -> list[str]` — returns problems; empty means valid. **`fast=True` skips every sha256 computation** (both the top-level `models[].sha256`/`size_bytes` comparison and the per-member `file_digests` walk), degrading those to existence-only checks. Every other check is unchanged. This exists because Task 10's `preflight_job(..., fast=True)` runs `verify_job` as its first check; without threading `fast` through, `fast` would be entirely defeated — verify would hash every model anyway (fix B-minor).
@@ -3101,7 +3177,29 @@ git commit -m "feat(tracking-job): copy model references with sidecars, bundles 
 
     **Fix V4 — `advanced_config` is documented "always present," and `pack_job` must MAKE that true even when the staging host has never saved one.** `job_cli.py` (Task 11, Step 7) calls `pack_job(..., advanced_config_path=str(get_advanced_config_path()))` — that is just the PATH `get_advanced_config_path()` (`paths.py:156-158`) returns, and nothing guarantees a file exists there: a CLI-only staging box (headless, never opened TrackerKit's GUI to trigger a first save) has no `advanced_config.json` under its config dir at all. Spec §6.2 step 7 says "copy the host's advanced config **if it exists**" — read literally, that means SKIP the copy when it's absent, which leaves `config/advanced_config.json` missing from the packed job while `config_snapshot["advanced_config"]` still names it (this key is unconditional per the shape above). Two things then break: (a) `verify_job`'s `config_job_path`-style existence check would fail on every fresh staging box (an immediate, loud pack-time failure — not silently wrong, but a hard blocker for the most common "just installed the CLI, never ran the GUI" case), and (b) even if verify somehow tolerated it, `build_push_input_list` (Task 9) still lists `config_snapshot["advanced_config"]` unconditionally, so `rsync --files-from` gets a manifest line naming a file that was never created, and `rsync` exits 23 ("some files could not be transferred") — `push` then fails with code 4 on every CLI-only box, for a config file the run doesn't strictly need (it has defaults).
 
-    Fix: `pack_job` treats "the file at `advanced_config_path` doesn't exist" as "use defaults," not "skip the snapshot." When `Path(advanced_config_path).exists()` is `False`, `pack_job` calls `load_advanced_tracker_config()` (`trackerkit/cli_config.py:114-129`, verified signature `load_advanced_tracker_config() -> dict[str, Any]` — it already handles a missing file internally by starting from `_default_advanced_config()` and returning that) and writes ITS RETURN VALUE to `config/advanced_config.json` via `write_json_atomic`, instead of `shutil.copy`ing a source file that isn't there. When the file DOES exist, `pack_job` still does the plain `shutil.copy` (the on-disk bytes are what the staging user actually configured; re-deriving via `load_advanced_tracker_config()` would silently normalize/drop any keys that function's `_default_advanced_config().update(...)` merge doesn't round-trip). Either way, `config/advanced_config.json` exists after `pack_job` returns, `config_snapshot["advanced_config"]` is never a lie, and `verify_job`/`build_push_input_list` need no special-casing. Add `test_pack_job_synthesizes_advanced_config_when_the_host_has_none`: call `pack_job(..., advanced_config_path=str(tmp_path / "does_not_exist.json"))` and assert `(job_dir / "config" / "advanced_config.json").is_file()` and that its parsed JSON matches `load_advanced_tracker_config()`'s keys.
+    Fix: `pack_job` treats "the file at `advanced_config_path` doesn't exist" as "use defaults," not "skip the snapshot." **Fix X5a (round-6) — `pack_job` must NOT call `load_advanced_tracker_config()` itself.** `load_advanced_tracker_config` lives at `trackerkit/cli_config.py:114` — `trackerkit` is an app layer, and `pack.py` is Data; Data must never import an app layer (this plan's own hard dependency-direction rule, and now an ENFORCED one — fix X5b makes `test_no_app_layer_or_qt_imports` catch this exact import even written as a relative `from ...trackerkit.cli_config import ...`, which is how an earlier draft of this fix would have slipped past the level-0-only gate). Resolution happens in the CALLER instead, the same pattern fix W6 already established for `runtime_tier`: **`job_cli.py` (Task 11) calls `load_advanced_tracker_config()` itself** (it is already an app-layer module, so this import is unremarkable there) and passes the resulting dict down as `pack_job(..., advanced_config_fallback=load_advanced_tracker_config())`. `pack_job` then does, with no import of `trackerkit` anywhere in `pack.py`:
+
+    ```python
+    src = Path(advanced_config_path)
+    if src.exists():
+        # On-disk bytes are what the staging user actually configured;
+        # re-deriving would silently normalize/drop keys a merge doesn't
+        # round-trip, so a plain copy is the only faithful choice.
+        shutil.copy(src, job_dir / "config" / "advanced_config.json")
+    elif advanced_config_fallback is not None:
+        write_json_atomic(
+            job_dir / "config" / "advanced_config.json", advanced_config_fallback
+        )
+    else:
+        raise TrackingJobError(
+            f"advanced_config_path {src} does not exist and no "
+            f"advanced_config_fallback was supplied; the caller must resolve "
+            f"load_advanced_tracker_config() itself (pack.py never imports "
+            f"trackerkit) before calling pack_job"
+        )
+    ```
+
+    Either way, `config/advanced_config.json` exists after `pack_job` returns, `config_snapshot["advanced_config"]` is never a lie, and `verify_job`/`build_push_input_list` need no special-casing. Add `test_pack_job_synthesizes_advanced_config_when_the_host_has_none`: call `pack_job(..., advanced_config_path=str(tmp_path / "does_not_exist.json"), advanced_config_fallback={"adv": "fallback"})` and assert `(job_dir / "config" / "advanced_config.json").is_file()` and that its parsed JSON equals the passed-in `advanced_config_fallback` dict exactly (not a re-derived one — proving `pack.py` used the CALLER's dict, not its own `trackerkit` call). Add `test_pack_py_module_has_no_trackerkit_import`: grep `pack.py`'s own AST (reuse `test_tracking_job_layering.py`'s `_imported_names`) and assert `"trackerkit"` never appears — a second, file-scoped belt-and-braces check alongside the general layering gate.
 
     **Minor fix — basename collisions under `config/skeletons/`.** Skeletons are copied by BASENAME (`config/skeletons/<name>.json`), and two different videos in the same job can point at two DIFFERENT skeleton files that happen to share a filename (e.g. two labs both naming their skeleton `skeleton.json`). Copying the second over the first would silently make one video's skeleton wrong on the remote, with `verify_job` unable to catch it (the file exists; it's just the wrong bytes). Detect this at pack time: if two distinct source `pose_skeleton_file` paths resolve to the same `config/skeletons/<name>.json` target AND their content differs (compare via `content_id.file_content_id`, not just presence), raise `TrackingJobError(code=2)` naming both source paths — fail loudly at pack, not silently on the remote.
 
@@ -3585,6 +3683,20 @@ START="$(date -u +%FT%TZ)"
 # `--remote-bootstrap`, or a local override) inject a fully-qualified
 # invocation; the default keeps today's behavior for a shell where it IS on
 # PATH (e.g. an already-activated interactive session).
+#
+# Minor fix (round-6): `job_cli.py` builds this value with Python's
+# `shlex.quote(sys.executable)` so a space-containing interpreter path
+# survives -- but `shlex.quote` produces POSIX shell-syntax quoting (wrapping
+# quotes as literal characters), and every use of `$TRACKERKIT` below was
+# UNQUOTED (`$TRACKERKIT job preflight .`). Bash word-splits an unquoted
+# variable on whitespace WITHOUT re-parsing embedded quote characters as
+# syntax -- they stay literal -- so a quoted path with a space would word-
+# split into two bogus tokens (one carrying a stray leading/trailing quote
+# character) instead of being treated as one argument. The fix is symmetric:
+# `shlex.quote` on the Python side is only meaningful if bash actually
+# RE-PARSES the resulting string as shell syntax, which requires invoking it
+# through `eval` rather than a bare unquoted expansion. Every `$TRACKERKIT`
+# invocation below therefore uses `eval "$TRACKERKIT ...`
 TRACKERKIT="${HYDRA_JOB_TRACKERKIT:-trackerkit}"
 
 # Fix W1d (round-5 correction): preflight runs BEFORE `set +e`, so a failing
@@ -3595,14 +3707,42 @@ TRACKERKIT="${HYDRA_JOB_TRACKERKIT:-trackerkit}"
 # `job preflight .` runs from $JOB (we already cd'd) so shared aliases resolve
 # from HYDRA_HOST_CONFIG_DIR as check 6 describes, and its diagnostics land in
 # logs/preflight.json rather than interleaved into logs/run.log.
-# NOTE: `job run` also chains preflight before ./run.sh, so a remote run
-# preflights twice. That is deliberate and cheap (the signature check reads
-# 16 MiB per video; only model hashing repeats, seconds) -- run.sh cannot
-# assume it was invoked through job_cli.py.
-$TRACKERKIT job preflight .
+#
+# Fix X2: this self-preflight is deliberately FLAG-LESS -- it never sees a
+# one-off `--shared-root ALIAS=PATH` or `--allow-tier-fallback` the caller may
+# have passed to `trackerkit job run`. A non-persisted alias override cannot
+# be threaded through an `ssh ... && ./run.sh` chain as a CLI flag without
+# re-parsing job_cli's own argv inside bash, and `job run` (both the local and
+# the ssh-chained remote branch, fix M7) already runs `preflight_job` itself,
+# WITH those flags, immediately before invoking run.sh. Re-running a
+# flag-less preflight here would then fail on the exact alias/tier state the
+# first preflight just proved workable -- silently making --shared-root and
+# --allow-tier-fallback dead for every `job run` path. So `job run` sets
+# HYDRA_JOB_SKIP_PREFLIGHT=1 in run.sh's environment once ITS OWN preflight
+# (with the caller's flags) has already passed; run.sh honors it here and
+# skips straight to `track`. A hand-run `./run.sh` (no `job run` wrapper, the
+# case W1d protects) never has this variable set, so it always gets the
+# flag-less self-preflight -- the hand-run protection stays intact.
+if [ "${HYDRA_JOB_SKIP_PREFLIGHT:-0}" = "1" ]; then
+  echo "run.sh: skipping self-preflight (already run by 'trackerkit job run' with its flags)"
+else
+  # NOTE: this is the ONLY preflight for a hand-run ./run.sh, so it carries no
+  # --shared-root/--allow-tier-fallback overrides; those flags only exist on
+  # `trackerkit job run`/`trackerkit job preflight`, never on run.sh itself.
+  # Minor fix (round-6): `eval`, not a bare unquoted expansion -- see the
+  # comment above TRACKERKIT= for why. `job preflight .` has no arguments
+  # that could themselves contain spaces, so no `printf %q` quoting is
+  # needed here.
+  eval "$TRACKERKIT job preflight ."
+fi
 
 set +e
-$TRACKERKIT track --video-list videos.txt "$@" 2>&1 | tee -a logs/run.log
+# Minor fix (round-6): `eval` re-parses $TRACKERKIT's embedded shell-quoting
+# correctly (see comment above TRACKERKIT=). "$@" is re-quoted element-wise
+# via `printf %q` before being spliced into the eval'd string, so a video
+# path or any other forwarded argument containing a space survives BOTH the
+# eval re-parse and the original word-splitting problem this fix exists for.
+eval "$TRACKERKIT track --video-list videos.txt $(printf '%q ' "$@")" 2>&1 | tee -a logs/run.log
 CODE=${PIPESTATUS[0]}
 set -e
 # Fix A2d: this whole script runs under `set -euo pipefail`. If `_record-run`
@@ -3611,7 +3751,7 @@ set -e
 # $CODE -- the run's REAL exit code -- with _record-run's exit code, silently
 # masking a tracking failure as a bookkeeping failure or vice versa. Make the
 # record step non-fatal and always preserve and exit with the run's own $CODE.
-$TRACKERKIT job _record-run --started "$START" --exit-code "$CODE" -- "$@" || \
+eval "$TRACKERKIT job _record-run --started $(printf %q "$START") --exit-code $(printf %q "$CODE") -- $(printf '%q ' "$@")" || \
   echo "run.sh: WARNING: failed to append to logs/runs.jsonl (exit $?); run's own exit code $CODE is unaffected" >&2
 exit "$CODE"
 '''
@@ -3625,7 +3765,13 @@ def render_run_sh() -> str:
 
 Steps, in order (spec §6.2): resolve shared/symlink/copy per video → copy models → registry subset → config snapshot (advanced config, skeletons, `.seeded` markers) → rewrite each config → write sidecars → `videos.txt` → requirements → `run.sh` → manifest → `verify_job` self-check (raise `TrackingJobError` if it reports problems).
 
-**Fix V-minor — re-packing into an existing job directory is unaddressed and unsafe as written.** Nothing above says what `pack_job(job_dir, ...)` does when `job_dir` already contains a previous pack. Concretely, three things break: (1) the non-shared video branch does `os.symlink(origin, job_dir / "videos" / basename)` (spec §6.2, "resolve shared/symlink/copy per video") — a second `pack_job` call against the same `job_dir` hits `FileExistsError` on that `os.symlink` the instant the video basename repeats, which it always does for "re-pack the same job after fixing a config typo"; (2) a model or config key that existed in the OLD pack but is absent from the NEW `planned_videos` (e.g. a video was removed from this pack) leaves its old file under `models/`/`config/` on disk with no manifest entry pointing at it — `verify_job` never notices (it only checks that manifest entries exist, never that `models/`/`config/` contains nothing extra), so a stale sidecar or stale model silently rides along in the next push; (3) `videos.txt` from the OLD pack is fully overwritten by the write step, but any of the three problems above can leave it internally inconsistent with what's actually on disk if the process is interrupted between steps. Fix: `pack_job` refuses to write into a **non-empty** `job_dir` unless the caller passes `force=True` (surfaced as `job pack --force` in Task 11); with `force=True`, `pack_job` clears `videos/`, `models/`, and `config/` (each via `shutil.rmtree(..., ignore_errors=True)` then recreated) BEFORE the "resolve shared/symlink/copy per video" step runs, so every artifact in the new pack is written fresh with no possibility of a stale leftover or a symlink collision. `job_dir / "logs"` (run history) and `job_dir / "hydra_job.json"` (only overwritten at the very end, once the new pack is known to be valid) are deliberately NOT cleared — a re-pack should not discard the record of prior runs. An empty or non-existent `job_dir` (the common case — `job pack` creating a job for the first time) needs no `--force` and is unaffected by this fix. Add `test_pack_into_a_nonempty_job_dir_without_force_refuses` (asserts `TrackingJobError`, no partial writes) and `test_pack_with_force_clears_stale_artifacts` (pack once with two videos, pack again with `force=True` and only one of them, assert the removed video's `config/`-snapshot and `videos/` entries are gone and `verify_job` still passes clean).
+**Fix V-minor — re-packing into an existing job directory is unaddressed and unsafe as written.** Nothing above says what `pack_job(job_dir, ...)` does when `job_dir` already contains a previous pack. Concretely, three things break: (1) the non-shared video branch does `os.symlink(origin, job_dir / "videos" / basename)` (spec §6.2, "resolve shared/symlink/copy per video") — a second `pack_job` call against the same `job_dir` hits `FileExistsError` on that `os.symlink` the instant the video basename repeats, which it always does for "re-pack the same job after fixing a config typo"; (2) a model or config key that existed in the OLD pack but is absent from the NEW `planned_videos` (e.g. a video was removed from this pack) leaves its old file under `models/`/`config/` on disk with no manifest entry pointing at it — `verify_job` never notices (it only checks that manifest entries exist, never that `models/`/`config/` contains nothing extra), so a stale sidecar or stale model silently rides along in the next push; (3) `videos.txt` from the OLD pack is fully overwritten by the write step, but any of the three problems above can leave it internally inconsistent with what's actually on disk if the process is interrupted between steps. Fix: `pack_job` refuses to write into a **non-empty** `job_dir` unless the caller passes `force=True` (surfaced as `job pack --force` in Task 11). **Fix X8 (round-6) — a blanket `shutil.rmtree(videos/)` is wrong: `videos/` is where `pull` places tracking CSVs, caches and outputs, and spec §8.2/§8.3 (verified `docs/superpowers/specs/2026-09-09-portable-tracking-jobs-design.md:374,382`) says explicitly "the job tree keeps its copy so the job remains a complete record" and that discarding it is `job clean`'s job, "deliberately not in scope."** A blind `rmtree` on `--force` silently reimplements `job clean` as a side effect of what a user reads as "repack this job," destroying every pulled result the moment they fix one config typo and repack. Fix, with `force=True`:
+
+1. **Remove only manifest-KNOWN pack artifacts**, read from the OLD `hydra_job.json` (the one already on disk, read BEFORE any deletion): for each `JobVideo` in the old manifest, remove exactly `videos/<job_path>` (the video symlink/copy pack itself created — `os.remove` for a symlink, `os.remove` for a plain copy, never `shutil.rmtree` on a directory) and its sidecar `videos/<stem>_config.json`. `models/` and `config/` ARE still fully cleared and recreated (`shutil.rmtree(..., ignore_errors=True)` then recreated) — those two directories hold only pack-owned, deterministically-regenerable artifacts (copied models, config snapshots, skeletons) with no pull-time output ever written into them, so this part of the original fix stands unchanged.
+2. **Refuse if `videos/` contains anything the old manifest doesn't account for**, once the known pack artifacts above are notionally subtracted — i.e. anything else under `videos/` (a pulled CSV, `.inference_cache_<stem>/`, `run.log`'s sibling artifacts, a user's own stray file) blocks the repack with a loud `TrackingJobError` naming every unaccounted path, UNLESS the caller passes a second, explicitly separate opt-in (`force_discard_outputs=True`, surfaced as `job pack --force --discard-outputs`, never bundled into plain `--force`) — this is the "or warn loudly and require an extra opt-in" branch: a re-pack that only touches config/models never needs it, and a user who genuinely wants to throw away pulled results must say so with a second flag, not get it for free from `--force` alone.
+3. **Carry `pull_history` forward.** The NEW `JobManifest` `pack_job` writes at the end must copy `pull_history` from the OLD manifest (read in step 1, before any file is touched) rather than defaulting to `[]` — a re-pack is a NEW pack of the SAME job identity, not a new job, and `job_id` is unchanged across a re-pack for the same reason (an already-existing but unstated invariant this fix makes explicit: re-pack preserves `job_id` too, since nothing in this fix's ordering ever reassigns it).
+
+`job_dir / "logs"` (run history) and `job_dir / "hydra_job.json"` (only overwritten at the very end, once the new pack is known to be valid) are, as before, never cleared directly — `hydra_job.json` is simply overwritten with the new manifest object that now carries the OLD `pull_history` forward. An empty or non-existent `job_dir` (the common case — `job pack` creating a job for the first time) needs no `--force` and is unaffected by this fix. Add `test_pack_into_a_nonempty_job_dir_without_force_refuses` (asserts `TrackingJobError`, no partial writes); `test_pack_with_force_clears_stale_artifacts` (pack once with two videos, pack again with `force=True` and only one of them, assert the removed video's `config/`-snapshot and `videos/` entries are gone and `verify_job` still passes clean); `test_pack_with_force_preserves_pulled_outputs` (pack, then simulate a `pull` by writing a fake `videos/colony_tracking_final.csv` and `.inference_cache_colony/detection.npz` directly into the job dir, then repack with `force=True` and NO `--discard-outputs`; assert `TrackingJobError` naming both stray paths and that neither file was touched); `test_pack_with_force_discard_outputs_removes_them` (same setup, repack with both `force=True, force_discard_outputs=True`; assert success and the stray files are gone); `test_pack_with_force_carries_pull_history_forward` (pack, hand-write a `pull_history` entry into `hydra_job.json`, repack with `force=True`, assert the new manifest's `pull_history` still contains that entry and `job_id` is unchanged).
 
 **Fix W1 — the "resolve shared/symlink/copy per video" step ALWAYS computes `signature`.** Whichever branch a video takes (shared-alias reference, symlink, or `copy_videos=True` real copy), `pack_job` calls `content_id.video_signature(planned.video_path)` — `planned.video_path` is still the ORIGIN path at this point in the pipeline, before any job-relative rewriting — and passes the result as `JobVideo(..., signature=...)`. This is not conditional on `entry.shared` being set. `size_bytes` is likewise always `os.path.getsize(planned.video_path)` at pack time, recorded on `JobVideo.size_bytes` regardless of branch (it already was; this fix only closes the `signature` gap). `content_id.video_signature` is a Task 4 primitive and `pack.py` is in the Data layer, so importing it (`from ...core.inference import content_id`) does not cross a forbidden layering boundary — this mirrors the existing `_normalize_model_path` import of `core.inference.model_paths` two sections above.
 
@@ -3718,6 +3864,39 @@ def _rewrite_config(
         out["pose_skeleton_file"] = skeleton_job_path
     return out, redirected
 ```
+
+**Fix X3a — `pack_job` must refuse to pack a pose-enabled video with no skeleton, or the packed job dies on the remote at model load with no warning here.** `_rewrite_config`'s skeleton handling above only rewrites a path that IS present; nothing checks that one exists when pose inference is actually enabled. If `is_pose_inference_enabled(cfg)` (`core/tracking/session_policy.py:29` — Core, safe to import from `pack.py`, same layering already used for `content_id`/`model_paths`) is true and the resolved `pose_skeleton_file` is empty, `core/inference/stages/pose.py:145-148` later yields empty `keypoint_names`, and `core/individual/pose/api.py:105` raises `"SLEAP backend requires keypoint_names"` — deep inside a remote `trackerkit track` run, in `logs/run.log`, long after `pack`/`push`/`preflight` all reported success. `pack_job` (in the same per-video loop that calls `_rewrite_config`) must instead raise `TrackingJobError(code=2)` **at pack time**, naming the offending video's `file_path`:
+
+```python
+from hydra_suite.core.tracking.session_policy import is_pose_inference_enabled
+
+if is_pose_inference_enabled(config) and not str(config.get("pose_skeleton_file", "") or "").strip():
+    raise TrackingJobError(
+        f"{video_basename}: pose inference is enabled but pose_skeleton_file is empty; "
+        f"pack cannot produce a job that will fail at remote model load"
+    )
+```
+
+This check runs BEFORE `_rewrite_config`, on the SOURCE config (so it also catches the case an already-portable `pose_skeleton_file` is job-relative but doesn't resolve to a real file — `_rewrite_config` only rewrites strings, it never verifies the file exists). Add `test_pack_pose_enabled_no_skeleton_raises`: a config with `enable_pose_extractor: true`, pose backend `sleap`, and `pose_skeleton_file: ""`; assert `pack_job` raises `TrackingJobError` naming the video, and that no partial `job_dir` is left in a state `verify_job` would call clean (mirrors the existing "pack fails loudly, not silently" pattern used throughout this task for other config-shape violations).
+
+**Fix X3b — Task 13's own three acceptance fixtures must inject the same skeleton `run_matrix.sh` does, or the pose/identity jobs never even get past `job pack` under fix X3a (by design — that is the guard doing its job), and neither acceptance job would ever run.** All three fixture configs (`fly_obb.json`, `ant_pose_headtail.json`, `ant_cnn_identity.json`) ship with `pose_skeleton_file: ""`; `tools/equivalence/run_matrix.sh:63-68` supplies the real skeleton (`$FX/ooceraea_biroi.json`) as a SEPARATE table column that `tools/equivalence/runner.py` injects into the in-memory config before running — `job pack` (Task 13 Step 4) instead passes the raw fixture config file straight through `--config`, so `ant_pose_headtail` and `ant_cnn_identity` (both pose-enabled) would fail fix X3a's new guard immediately, and Step 4's acceptance evidence for both would never be collected. Before packing those two jobs, materialize a config with the skeleton filled in, mirroring what the equivalence runner does for the SAME fixture:
+
+```bash
+PYTHONPATH=$PWD/src conda run --no-capture-output -n hydra-mps python - <<'PY'
+import json
+from pathlib import Path
+
+fx = Path("tools/equivalence/fixtures")
+skel = str((fx / "ooceraea_biroi.json").resolve())
+for name in ("ant_pose_headtail", "ant_cnn_identity"):
+    cfg_path = fx / "configs" / f"{name}.json"
+    cfg = json.loads(cfg_path.read_text())
+    cfg["pose_skeleton_file"] = skel
+    (Path("/tmp/jobs") / f"{name}_config.json").write_text(json.dumps(cfg))
+PY
+```
+
+then pack `ant_pose_headtail`/`ant_cnn_identity` with `--config /tmp/jobs/ant_pose_headtail_config.json` / `--config /tmp/jobs/ant_cnn_identity_config.json` respectively (`fly_obb` is pose-disabled and keeps its original `--config` invocation unchanged, since fix X3a's guard is a no-op for it). The materialized configs are written under `/tmp/jobs/`, never back into the tracked `tools/equivalence/fixtures/configs/` — this is a per-run acceptance artifact, not a fixture change.
 
 where `_normalize_model_path` is the ONE normalization both sides of the CNN
 lookup use, defined in `pack.py`:
@@ -3893,9 +4072,17 @@ for model in manifest.models:
 
 then, for every model regardless of kind: **for every model with a non-empty `file_digests` (directory models and bundles — fix M8), every listed job-relative member path exists AND its sha256 matches**, so a corrupted single file inside a multi-file pose/bundle artifact is caught (a top-level directory sha256 alone cannot pinpoint or even always detect this depending on hash construction — checking members individually is the actual §6.2 step 5 requirement); every `sidecars[]` exists; every non-`shared` `videos[].job_path` exists (symlink target on the staging machine, regular file on the remote); **and its actual size on disk (`os.path.getsize`, following a symlink) equals `videos[].size_bytes` (fix W1b)** — this is the offline, cheap (stat-only, no content read) catch for the exact failure mode that let a truncated push both verify AND run: `rsync --partial` deliberately leaves a truncated `.mp4` at the destination path on interruption, so the file *exists* but its size no longer matches what pack recorded from the origin. A mismatch is reported as `f"video {video.job_path}: size on disk ({actual}) != manifest size_bytes ({video.size_bytes})"`. (The full content `signature` comparison — which needs to read bytes, not just `stat` — is Task 10 preflight's job, not verify's; verify stays offline and cheap by design.); every `config_job_path` exists; no sidecar has an absolute value (or a `..`) in `ABSOLUTE_PATH_FORBIDDEN_KEYS`, including each `cnn_classifiers[].model_path`; every referenced `config/skeletons/*` exists; `videos.txt` lines all exist **except lines belonging to a `shared` video (fix V2, below)** and the first equals `keystone["video"]`; every manifest relpath passes `validate_job_relpath`.
 
-**Fix V2 — a `shared` video's `videos.txt` line, and its `job_path`, must be exempt from BOTH existence checks, not just the size check.** At pack time (spec §6.7) a `shared` video has no file under `videos/` at all — that symlink is materialized later, on the remote, by Task 10's `materialize_shared_videos`. The "every non-`shared` `videos[].job_path` exists" wording above already exempts shared entries from the per-model existence/size loop, but the *separate* `videos.txt` line-existence check must apply the same exemption or it fails on every shared job: `pack_job` writes `videos/colony.mp4` as the line for a shared video exactly as it does for a copied/symlinked one (the runner needs a job-relative path regardless of provenance), so a naive "every line names a file that exists on disk" check reads that line as broken immediately after packing. Concretely: build a `{job_path -> JobVideo}` map from `manifest.videos`, and for each `videos.txt` line, resolve it to the matching `JobVideo` and skip the on-disk-existence check (but still require the line to be a valid job-relative video the manifest actually knows about) when `video.shared is not None`. Without this fix, `pack_job`'s own self-verify (Step 5's "`verify_job` self-check, raise `TrackingJobError` if it reports problems") raises for every `shared` job at pack time, which means `packed_job_shared` (Task 10's fixture, defined below) raises at fixture setup and every Task 10 shared test in `tests/test_tracking_job_preflight.py` errors before its body runs — not a subtle edge case, a total block on shared-video support ever working. Add `test_a_packed_shared_job_verifies_clean` to `tests/test_tracking_job_verify.py`: pack a job with `shared_table={"labnas": str(video.parent)}` (same shape as the `packed_job_shared` fixture) and assert `verify_job(job_dir) == []`.
+**Fix V2 — a `shared` video's `videos.txt` line, and its `job_path`, must be exempt from BOTH existence checks, not just the size check.** At pack time (spec §6.7) a `shared` video has no file under `videos/` at all — that symlink is materialized later, on the remote, by Task 10's `materialize_shared_videos`. The "every non-`shared` `videos[].job_path` exists" wording above already exempts shared entries from the per-model existence/size loop, but the *separate* `videos.txt` line-existence check must apply the same exemption or it fails on every shared job: `pack_job` writes `videos/colony.mp4` as the line for a shared video exactly as it does for a copied/symlinked one (the runner needs a job-relative path regardless of provenance), so a naive "every line names a file that exists on disk" check reads that line as broken immediately after packing. Concretely: build a `{job_path -> JobVideo}` map from `manifest.videos`, and for each `videos.txt` line, resolve it to the matching `JobVideo` and skip the on-disk-existence check (but still require the line to be a valid job-relative video the manifest actually knows about) when `video.shared is not None`. Without this fix, `pack_job`'s own self-verify (Step 5's "`verify_job` self-check, raise `TrackingJobError` if it reports problems") raises for every `shared` job at pack time, which means `packed_job_shared` (Task 10's fixture, defined below) raises at fixture setup and every Task 10 shared test in `tests/test_tracking_job_preflight.py` errors before its body runs — not a subtle edge case, a total block on shared-video support ever working. (Fix V2 note, round-6: `test_a_packed_shared_job_verifies_clean` itself is deferred to Task 10 — see the "Fix V2 note" callout earlier above (Task 7), which is the authoritative statement of where that test lives; an earlier draft named it here too, which would have collided with a fixture (`packed_job_shared`) that does not exist until Task 10.)
+
+**Fix X6 — `verify_job` forbids an absolute path on EVERY key in `ABSOLUTE_PATH_FORBIDDEN_KEYS`, but `_rewrite_config`/`copy_model_reference` only rewrite the ACTIVE roles `iter_model_references` yields — so a config whose INACTIVE role still holds an external absolute path (common after switching detect mode or pose backend on the staging host, since the GUI/CLI never clears a stale field when you flip modes) packs "successfully," then fails pack's own self-verify immediately after.** Concretely: `yolo_detect_model_path`/`yolo_crop_obb_model_path` for the non-selected `YOLO_OBB_MODE` pair (Task 3's "gate on `YOLO_OBB_MODE`" rule means the unselected key is never yielded, by design); `yolo_headtail_model_path` when head-tail is off; `pose_yolo_model_dir`/`pose_sleap_model_dir`/`pose_vitpose_model_dir` for the two non-selected pose backends (only the active one is gated in via the pose-stage-live check). None of these three families are hypothetical — switching `YOLO_OBB_MODE` from `direct` to `sequential`, or switching a pose backend from `sleap` to `yolo`, is an ordinary staging-host workflow that leaves the PREVIOUS mode's model path sitting in the config, still absolute, still present.
+
+Resolution: **pack blanks every inactive-role key in `ABSOLUTE_PATH_FORBIDDEN_KEYS`'s model-path subset, rather than requiring verify to special-case them.** This mirrors the existing precedent for `color_tag_model_path` (correction 2, above: relativized/nulled on save regardless of whether anything reads it, because a config field with no live consumer for THIS job carries zero information the remote needs) and is simpler than teaching `verify_job` a parallel "is this role active" computation that would have to reproduce `iter_model_references`'s own gating logic a second time, in a different layer, and risk drifting out of sync with it. Concretely, in the SAME per-video loop that calls `_rewrite_config` (Task 7): after computing `active_roles = {ref.role for ref in iter_model_references(params_for_this_video)}` (`job_cli.py` already computes this set to drive packing — Task 11), for every key in the model-path subset of `ABSOLUTE_PATH_FORBIDDEN_KEYS` whose corresponding role is NOT in `active_roles`, set `out[key] = ""` in `_rewrite_config` regardless of what the source config held (only if it's not already handled by an active rewrite). `verify_job`'s check is UNCHANGED and stays strict on every key — this is the "keep it consistent" fix, not a weakening of the gate: after packing, every sidecar's inactive-role keys are always empty, so the existing unconditional verify check is trivially satisfied without knowing which roles were active. `pose_model_dir` legacy alias key follows the same rule via whichever of the three backend-specific keys it maps to.
+
+Add `test_pack_blanks_an_inactive_role_absolute_path`: a config with `yolo_obb_mode: "direct"`, a real `yolo_obb_direct_model_path`, AND a stale absolute `yolo_crop_obb_model_path` (the sequential-mode key, inactive because mode is `direct`) pointing at a file that exists on the staging host but is never referenced by `iter_model_references` for this config; assert `pack_job` succeeds, the sidecar's `yolo_crop_obb_model_path == ""`, and `verify_job(job_dir) == []`. A second case does the same for `pose_sleap_model_dir` (stale, absolute) while `pose_yolo_model_dir` is the active pose backend.
 
 **Fix M15 — `registry_entry_present` must actually be set.** It is declared on `JobModel` with a `False` default and nothing in this plan as originally written ever set it, so it would always read `False` even for a model that has a real `model_registry.json` entry. `pack_job` sets it explicitly: for each `JobModel` it builds, `registry_entry_present = (model.key in {key for key, _ in registry_entries})` — i.e. true iff the model's job-relative key is one of the keys `write_registry_subset` (Task 6) actually wrote an entry for.
+
+**Minor note (round-6) — `registry_entry_present: false` is informational metadata, not a functional gap.** Grepped: nothing in `engine_params.py`, `core/inference/`, or any pose/CNN backend reads `model_registry.json` at RUNTIME — the registry is written at training time and read by GUI/CLI tooling that lists or picks models, never consulted while actually resolving or loading a model path during tracking. So a packed job with `registry_entry_present: false` on every model (the common case for models trained before this branch existed, or copied in from elsewhere) tracks identically to one where it's `true` — the field exists purely so a future reader (or `job status`) can flag "this job's models have no registry provenance" without that meaning anything is broken. Recorded here so a future contributor chasing "why does registry_entry_present matter" doesn't go looking for a runtime consumer that does not exist.
 
 `shared` entries are **not** checked here — verify is offline and mount-agnostic; preflight (Task 10) checks them.
 
@@ -3972,12 +4159,27 @@ def _manifest(**video_overrides):
 
 
 # Every artifact the pipeline is known to produce today (spec section 10).
+# Fix X4: the original list used invented names ("colony_tracking.csv",
+# "colony_tracking_with_individual.csv") that headless_tracking.py never
+# writes. Verified real names: with enable_backward_tracking (the fixtures'
+# default), headless_tracking.py:221-224 writes raw `<stem>_tracking_forward
+# .csv`/`<stem>_tracking_backward.csv`; cli_config.py:325 names the
+# post-processing intermediate `<stem>_tracking_forward_processed.csv`; the
+# Debug-mode terminal files are `<stem>_tracking_final.csv` (bare) and
+# `<stem>_tracking_final_with_individual.csv` (rich export, RICH_EXPORT_SUFFIX
+# appended per core/tracking/session.py -- also the name run_matrix.sh:320
+# compares); the User-mode terminal file is `<stem>_tracks.csv`
+# (core/tracking/session.py:812, `user_tracks_path`). Both terminal-file
+# families are listed since a job's mode (User/Debug) is a config choice, not
+# a fixed pipeline output.
 KNOWN_ARTIFACTS = [
-    "videos/colony_tracking.csv",
-    "videos/colony_tracking.mp4",
+    "videos/colony_tracking_forward.csv",
+    "videos/colony_tracking_backward.csv",
     "videos/colony_tracking_forward_processed.csv",
+    "videos/colony_tracking_final.csv",
+    "videos/colony_tracking_final_with_individual.csv",
     "videos/colony_tracks.csv",
-    "videos/colony_tracking_with_individual.csv",
+    "videos/colony_tracking.mp4",
     "videos/colony_logs/run.log",
     "videos/.inference_cache_colony/detection.npz",
     "videos/.inference_cache_colony/opt/trial_0.npz",
@@ -4475,7 +4677,7 @@ The per-video skip cases:
 
 `pull_job` therefore returns a report that separates "hard failures preventing any pull" (still `code=5`, still pre-flight-checked before ANY transfer starts, e.g. collisions and completely absent local mounts for `overwrite=False`) from "per-video skips with reasons" (origin/mount unavailable — printed clearly, pull continues for unaffected videos). Never a silent skip either way — every skip has a reported reason string.
 
-**Fix — `pull_history` MERGES, it does not merely append (spec §5).** Since the remote never mutates `hydra_job.json` (Global Constraint) but multiple pulls can happen from different pull-capable machines, appending blindly would let two pulls of the SAME `runs.jsonl` entries double-count in `pull_history`. `pull_job` merges by keying on `(run started_at, job_relpath)` — an entry already present (matching key) is left alone; only genuinely new entries are appended.
+**Fix — `pull_history` MERGES, it does not merely append (spec §5). Round-6 correction: the merge key must match the REAL entry shape.** Spec §5's actual `pull_history` entry (verified `docs/superpowers/specs/2026-09-09-portable-tracking-jobs-design.md:146-147`) is `{"pulled_at": "…", "files": N, "bytes": N}` — there is no `job_relpath` field and no `started_at` field on a pull-history entry (`started_at` is a field of a *separate* structure, the `runs.jsonl` run record `pull` fetches alongside outputs, not of the `pull_history` entry itself); a merge key of `(run started_at, job_relpath)` cannot be built from this shape at all. The double-count risk the ORIGINAL draft was reacting to is real but was mis-described: a `pull` invocation that is retried after crashing partway through (e.g. network drop after transfer completes but before `hydra_job.json` is rewritten) could otherwise append a second, near-duplicate entry for what is really the same physical pull. Fix: `pull_job` merges on the entry's own `pulled_at` timestamp — an entry with a `pulled_at` already present in `manifest.pull_history` is left alone (skip-append); this makes a retried pull that re-reaches the manifest-write step with the SAME already-recorded `pulled_at` (the timestamp is captured once, at the start of the pull, and carried through any retry of the write step) idempotent, while two genuinely separate pulls (different `pulled_at`) both land as distinct entries, which is the correct history to keep.
 
 **Fix — `created_on.git_sha` provenance (no helper currently exists in `src/`).** The manifest's `created_on` dict needs a `git_sha` field but there is no existing helper anywhere in `src/hydra_suite/` that reads the running checkout's commit. Add a small helper in `manifest.py`:
 
@@ -4868,7 +5070,7 @@ Checks, in order, all executed (spec §9.4):
 3. `conda_envs` — every required env exists. The caller injects the env list (a `conda env list` subprocess in the CLI) so the core stays testable and subprocess-free.
 4. `runtime_tier` — requested tier in `available_tiers`; otherwise report the fallback the resolver would take and fail unless `allow_tier_fallback`.
 5. `models` — every file hashes to the manifest sha256, and every `file_digests` member hashes to its recorded digest (skipped when `fast`). **Check 1 must call `verify_job(job_dir, fast=fast)`**, not bare `verify_job(job_dir)`; otherwise `fast` is defeated because verify re-hashes everything anyway (fix B-minor).
-6. `shared_roots` — resolve each alias (overrides first, then the **host** table, read from `HYDRA_HOST_CONFIG_DIR` when set — that's the `run.sh` path, where `HYDRA_CONFIG_DIR` has already been redirected to the job's own `config/` — **or from `HYDRA_CONFIG_DIR` directly when `HYDRA_HOST_CONFIG_DIR` is unset**, which is the "preflight invoked directly on a host, not via run.sh" path (e.g. `trackerkit job preflight <job>` run interactively before ever exporting the job's env), so that path doesn't wrongly read the job's own (still-job-scoped) config dir as if it were the host's; falling back to the platformdirs default only if neither is set — never the job snapshot), check existence and readability, compare `size_bytes` and `signature`, then materialize `videos/<basename>` as a symlink (replace an existing **symlink**, never a regular file). Failures here are reported under check name `shared_roots`.
+6. `shared_roots` — resolve each alias (overrides first, then the **host** table, resolved by testing `HYDRA_HOST_CONFIG_DIR` for **presence, not truthiness** — the three cases are distinct and must be handled separately: (a) present and non-empty → that directory IS the host config dir, read `shared_roots.json` from it; (b) present but **empty string** — this is `run.sh`'s own signal (`export HYDRA_HOST_CONFIG_DIR="${HYDRA_CONFIG_DIR:-}"`) that the host had no `HYDRA_CONFIG_DIR` override at launch, i.e. it uses the platformdirs default — read `shared_roots.json` from `paths.get_platform_config_dir()` (Fix X1a, Task 1), which deliberately ignores `HYDRA_CONFIG_DIR` since by the time `run.sh`'s self-preflight runs, `HYDRA_CONFIG_DIR` has ALREADY been redirected to the job's own `config/` snapshot; (c) absent entirely — `trackerkit job preflight <job>` invoked directly, never through `run.sh` — fall back to `HYDRA_CONFIG_DIR` if set, else the platformdirs default (today's `load_shared_roots()` default resolution is correct here, since no redirection has happened at all); never the job snapshot in any case), check existence and readability, compare `size_bytes` and `signature`, then materialize `videos/<basename>` as a symlink (replace an existing **symlink**, never a regular file). Failures here are reported under check name `shared_roots`.
 7. `video_signature` (fix W1c — new check). For **every** `manifest.videos[]` entry, shared or not, resolve `videos/<job_path>` to its actual bytes on disk — following the shared symlink `shared_roots` just materialized for a `shared` entry, or the existing symlink/regular file `pack_job` created for a non-shared one — and compare `content_id.video_signature(resolved_path)` against the recorded `video.signature`. A mismatch (or the resolved path being unreadable) is reported under check name `video_signature`, naming the video's `job_path`. This is what actually proves Goal-4-adjacent claim "the video that runs is the video that was packed": a `size_bytes` match (verify, offline) is necessary but not sufficient — two different re-encodes of the same clip can coincidentally land on the same byte count — so the content signature is the check that closes W1 end-to-end for BOTH shared videos (already checked here, redundantly with check 6's own signature comparison — check 6 keeps its signature comparison too, since it runs first and gates whether materialization even makes sense to report as `shared_roots`-scoped; check 7 then re-verifies signature against whatever ended up on disk, covering the non-shared population check 6 never touches) and pushed non-shared videos (the actual W1 gap: a `videos/<name>.mp4` that `rsync --partial` truncated is, after materialization, just a regular file whose `content_id.video_signature` no longer matches what `pack_job` recorded from the origin).
 8. `disk` — free space under `videos/` >= 1.5x total video bytes, counting shared videos' sizes for caches but not for the videos themselves. **Minor fix:** `preflight.py` must call `shutil.disk_usage(...)` through the MODULE (`import shutil; shutil.disk_usage(...)`), never `from shutil import disk_usage` bound to a local name — `test_insufficient_disk_fails` monkeypatches the attribute on the `shutil` module object itself (`monkeypatch.setattr(shutil, "disk_usage", ...)`), which only intercepts lookups that go through `shutil.disk_usage` at call time; a `from shutil import disk_usage` import would have already bound the ORIGINAL function into `preflight.py`'s own namespace at import time, and the monkeypatch would silently not apply, making the test measure the real filesystem instead of the fake tiny one.
 
@@ -4882,20 +5084,35 @@ self-preflight under `set -euo pipefail` rely on that exit code to abort before
 exits 0 silently disarms both protections. Add a CLI test asserting the exit
 code for a failing job.
 
-The `HYDRA_HOST_CONFIG_DIR` fallback matters: `run.sh` sets it to `${HYDRA_CONFIG_DIR:-}`, which is **empty** on any host using defaults, so an empty value must mean "the platformdirs config dir", not "no table".
+**Fix X1 (supersedes the prior "empty means platformdirs" one-liner and the prior V-minor code block below — both were still keyed on TRUTHINESS, which is exactly what silently swallows `run.sh`'s empty-string signal and aborts every shared-video run).** `run.sh` sets `export HYDRA_HOST_CONFIG_DIR="${HYDRA_CONFIG_DIR:-}"` — on any host using platformdirs defaults (the common case), `HYDRA_CONFIG_DIR` was never set, so this exports `HYDRA_HOST_CONFIG_DIR=""`: **present in the environment, but the empty string**, which Python's `os.environ.get("HYDRA_HOST_CONFIG_DIR")` returns as `""`, and `"" or os.environ.get("HYDRA_CONFIG_DIR")` then falls through to `HYDRA_CONFIG_DIR` — which by the time `run.sh`'s self-preflight runs has ALREADY been redirected to `$JOB/config` (`export HYDRA_CONFIG_DIR="$JOB/config"`, two lines above). That is the job snapshot, which by design never contains `shared_roots.json` (a shared-root table is host identity, not job content) — every alias then reports unknown, check 6 fails, preflight exits 3, and `run.sh`'s `set -euo pipefail` aborts the whole run. **This is not a corner case — it is what happens on every default-configured host, for every job with a shared video.**
 
-**Fix V-minor — make the "read the host table, not the job's" rule concrete code, not just prose.** `load_shared_roots(path=None)` (Task 5) resolves its own default via `get_shared_roots_path()` -> `paths.py`'s `_user_config_dir()`, which reads `HYDRA_CONFIG_DIR` **at call time**. Inside `run.sh`, `HYDRA_CONFIG_DIR` has ALREADY been redirected to the job's own `config/` snapshot (Task 7's env-pinning) before `trackerkit job preflight .` ever runs — that job snapshot has no `shared_roots.json` (it was never part of `config_snapshot`, by design: a shared-root table is host identity, not job content). So a bare `shared_roots.load_shared_roots()` call inside `preflight_job`, relying on the module's own default resolution, would silently read (and find nothing in) the JOB's config dir instead of the HOST's real table — check 6 would then report every alias as unknown even when the host genuinely has it configured. `preflight_job` must therefore never call `load_shared_roots()` bare; it builds the explicit host path itself:
+**Fix X1b — test presence, not truthiness, and route the "empty" case through `paths.get_platform_config_dir()` (Fix X1a), never through `HYDRA_CONFIG_DIR`.** `load_shared_roots(path=None)` (Task 5) resolves its own default via `get_shared_roots_path()` -> `paths.py`'s `_user_config_dir()`, which reads `HYDRA_CONFIG_DIR` **at call time** — inside `run.sh` that is already the job's redirected dir, so a bare `load_shared_roots()` call is just as broken as the truthiness fallthrough above. `preflight_job` must distinguish three cases by testing for the KEY's presence in `os.environ`, not by testing its value's truthiness (`preflight.py` adds `from ...paths import get_platform_config_dir` alongside its existing `from ...paths import ...`-style imports, the same relative-import convention `shared_roots.py` already uses for `get_shared_roots_path`):
 
 ```python
-_host_cfg = os.environ.get("HYDRA_HOST_CONFIG_DIR") or os.environ.get("HYDRA_CONFIG_DIR")
-host_table = (
-    load_shared_roots(Path(_host_cfg) / "shared_roots.json")
-    if _host_cfg
-    else load_shared_roots()  # neither var set -> the platformdirs default, correctly
-)
+_HOST_CFG_VAR = "HYDRA_HOST_CONFIG_DIR"
+
+if _HOST_CFG_VAR in os.environ:
+    _host_cfg = os.environ[_HOST_CFG_VAR]
+    if _host_cfg:
+        # (a) run.sh, host had an HYDRA_CONFIG_DIR override at launch.
+        host_table = load_shared_roots(Path(_host_cfg) / "shared_roots.json")
+    else:
+        # (b) run.sh, host used the platformdirs default — HYDRA_CONFIG_DIR
+        # has already been redirected to the job's own config/, so it must
+        # NOT be consulted here.
+        host_table = load_shared_roots(get_platform_config_dir() / "shared_roots.json")
+else:
+    # (c) invoked directly, never through run.sh (e.g. interactive
+    # `trackerkit job preflight <job>`) — no redirection has happened, so
+    # HYDRA_CONFIG_DIR (or its own platformdirs default) is correct as-is.
+    host_table = load_shared_roots()
 ```
 
-The `if _host_cfg else load_shared_roots()` branch is what makes the "or from `HYDRA_CONFIG_DIR` directly when `HYDRA_HOST_CONFIG_DIR` is unset... falling back to the platformdirs default only if neither is set" rule above literally true: when `_host_cfg` is falsy (both vars unset, e.g. `trackerkit job preflight` invoked on a fresh interactive shell), the bare `load_shared_roots()` call's own default resolution IS the platformdirs path — that is the one case where relying on the module default is correct, precisely because no redirection has happened at all. Add `test_preflight_reads_the_host_shared_roots_table_not_the_job_snapshot`: set `HYDRA_CONFIG_DIR` (monkeypatched) to a job-snapshot-shaped tmp dir with no `shared_roots.json`, set `HYDRA_HOST_CONFIG_DIR` to a SEPARATE tmp dir that DOES have one with a real alias, and assert `preflight_job` resolves that alias successfully (not "unknown alias").
+`preflight_job` must therefore never call `load_shared_roots()` bare except in branch (c). Add three tests, each reproducing one real invocation shape exactly (not the isolation fixture's shortcut of pointing both vars at the same dir):
+
+- `test_preflight_reads_the_host_shared_roots_table_not_the_job_snapshot` — `HYDRA_CONFIG_DIR` set to a job-snapshot-shaped tmp dir with no `shared_roots.json`, `HYDRA_HOST_CONFIG_DIR` set to a SEPARATE tmp dir that DOES have one with a real alias; assert the alias resolves (branch a).
+- `test_preflight_run_sh_empty_host_config_dir_reads_platformdirs_default` — reproduces `run.sh`'s EXACT env: `HYDRA_HOST_CONFIG_DIR=""` (present, empty) plus `HYDRA_CONFIG_DIR=<job>/config` (redirected, job-snapshot-shaped, no `shared_roots.json`); monkeypatch `platformdirs.user_config_dir` (or `paths.user_config_dir`, whichever `get_platform_config_dir()` calls) to a tmp dir that DOES have a real `shared_roots.json` with the alias; assert the alias resolves, not "unknown alias" (branch b — this is the one X1 exists to fix).
+- `test_preflight_direct_invocation_no_host_config_dir_reads_config_dir` — `HYDRA_HOST_CONFIG_DIR` absent (`monkeypatch.delenv(..., raising=False)`), `HYDRA_CONFIG_DIR` set to a tmp dir with a real `shared_roots.json`; assert the alias resolves (branch c).
 
 **Minor fix — restore the "offer to persist" behaviour spec §6.7 step 1 describes and the original draft silently dropped.** A one-off `--shared-root ALIAS=PATH` given to `job run`/`job preflight` should, after a successful preflight run that used it, prompt (interactively, when stdout is a tty and `--yes`/`--no-input` wasn't passed) to save the alias into the host's persistent `shared_roots.json` table via `shared_roots.py` (Task 5), so the next invocation doesn't need to repeat the override. In `job_cli.py` (Task 11), after `preflight_job(..., shared_root_overrides=parsed_overrides)` returns `ok=True`, for each override alias not already present in the persisted table: prompt `Save shared-root alias 'labnas' -> '/mnt/lab' for future jobs? [y/N]` and call `shared_roots.save_alias(alias, path)` on yes. Non-interactive/CI invocations skip the prompt and leave the override one-off, as before.
 
@@ -5074,6 +5291,14 @@ After the `calibrate` subparser block (ends `:254`), add nested subparsers mirro
     # them makes passing one an "unrecognized arguments" SystemExit from
     # argparse itself -- a loud rejection, not a silent ignore. Same reasoning
     # as the calibrate subparser above.
+    # Fix X8: --force alone only allows repacking a non-empty job_dir (clears
+    # models/config, removes only the OLD manifest's own video/sidecar pack
+    # artifacts). It does NOT authorize discarding pulled outputs sitting
+    # under videos/ -- that needs the separate, explicit --discard-outputs,
+    # so a plain "fix my config typo and repack" can never silently eat a
+    # pulled result.
+    job_pack.add_argument("--force", action="store_true")
+    job_pack.add_argument("--discard-outputs", action="store_true")
 ```
 
 `job run` registers `--gpus/--jobs/--threads-per-job/--detach/--calibrate/--allow-tier-fallback/--shared-root/--remote-bootstrap` (fix A2b — required for any remote target, see below) and deliberately **omits** `--sahi-profile/--apply-tuned-inference/--inference-autotune-manual`. `job calibrate` and `job status` also register `--remote-bootstrap` for the same reason (default `""`).
@@ -5184,7 +5409,7 @@ skeleton_path = str(resolve_model_path(raw_skeleton)) if raw_skeleton else ""
 **Fix B2 — why there is no `enable_pose_extractor` check here.** An earlier draft computed `skeleton_path` only when pose was enabled, which is self-defeating and would have made Task 11 Step 7's hostile acceptance case fail at pack time, before a single assertion ran: `tools/equivalence/fixtures/configs/fly_obb.json` has `enable_pose_extractor: False`, the hostile config then sets an absolute `pose_skeleton_file`, so a pose-gated computation yields `""` → Task 7's `_rewrite_config` skips the rewrite (`if skeleton_job_path:`) → the sidecar keeps the absolute path → `verify_job` rejects it (`pose_skeleton_file` is in `ABSOLUTE_PATH_FORBIDDEN_KEYS` **unconditionally**) → `pack_job`'s own self-verify raises. Snapshotting + rewriting whenever the value is non-empty is both simpler and the only rule consistent with what verify actually enforces. A stale skeleton path in a pose-disabled config costs one small JSON file in the job; leaving it absolute costs the whole pack.
 
 Without this step at all, a pose-enabled job silently ships with no skeleton and every pose-merge/export consumer breaks on the remote with no loud error at pack time.
-7. `pack_job(...)` with `registry_entries=list(iter_registry_entries())`, `advanced_config_path=str(get_advanced_config_path())`, `shared_table=load_shared_roots()`.
+7. `pack_job(...)` with `registry_entries=list(iter_registry_entries())`, `advanced_config_path=str(get_advanced_config_path())`, `advanced_config_fallback=load_advanced_tracker_config()` (fix X5a — `job_cli.py` is the app-layer caller, so THIS is where `trackerkit.cli_config.load_advanced_tracker_config` is imported and called; `pack.py` never imports it), `shared_table=load_shared_roots()`, `force=args.force`, `force_discard_outputs=args.discard_outputs` (fix X8 — `--discard-outputs` alone, without `--force`, is meaningless since `pack_job` only even looks at `videos/`'s contents on the force path; `job pack` does not reject that combination, it is simply a no-op flag in that case).
 8. **Warn** (spec §6.6) when any export stage is enabled in a config: the CLI leaves `DATASET_OUTPUT_DIR`, `FINAL_MEDIA_EXPORT_VIDEO_OUTPUT_DIR` and `INDIVIDUAL_DATASET_OUTPUT_DIR` at `None` (`cli_config.py:293-295`), so those exports produce nothing on the remote. Point at follow-up §17.1.
 
 - [ ] **Sub-task 11a checkpoint: commit `pack` end to end (fix A8)**
@@ -5218,17 +5443,22 @@ Includes fix A5's pull-while-running guard (--force) and fix A2b's
 --remote-bootstrap for push's post-push remote verify."
 ```
 
-**Fix M7 — `run` against a remote target MUST run preflight over ssh BEFORE `./run.sh`, or §6.7 (shared-root materialization) is defeated for the primary workflow.** The original draft only ran `preflight_job` for the LOCAL-dir case and, for remote, went straight to `ssh <host> 'cd <path> && ./run.sh …'`. That means a `shared` video is never materialized (symlinked into `videos/`) on the compute box before `run.sh` invokes `trackerkit track`, so the primary "shared NAS mount, don't copy the video" workflow (spec §6.7) silently fails on first use for every remote run — the only path that actually exercises it in production. Both branches now run preflight first:
+**Fix M7 — `run` against a remote target MUST run preflight over ssh BEFORE `./run.sh`, or §6.7 (shared-root materialization) is defeated for the primary workflow.** The original draft only ran `preflight_job` for the LOCAL-dir case and, for remote, went straight to `ssh <host> 'cd <path> && ./run.sh …'`. That means a `shared` video is never materialized (symlinked into `videos/`) on the compute box before `run.sh` invokes `trackerkit track`, so the primary "shared NAS mount, don't copy the video" workflow (spec §6.7) silently fails on first use for every remote run — the only path that actually exercises it in production. Both branches now run preflight first, **forwarding `--shared-root`/`--allow-tier-fallback` to THIS preflight call** (they are `job run`'s own flags, parsed by `job_cli.py` — not passed through to `run.sh`, which never sees them, per fix X2), and then set `HYDRA_JOB_SKIP_PREFLIGHT=1` so run.sh's own flag-less self-preflight (Task 7, fix X2) does not immediately re-run the SAME checks without those flags and fail on the exact alias/tier gap the first preflight just cleared:
 
 ```
-local dir  -> preflight_job(job_dir, ...) locally, then
-              subprocess.run(["./run.sh", *passthrough], cwd=job_dir, check=False)
-remote     -> ssh <host> '<remote_bootstrap> cd <path> && trackerkit job preflight . && ./run.sh …'
+local dir  -> preflight_job(job_dir, shared_root_overrides=.., allow_tier_fallback=..) locally, then
+              subprocess.run(["./run.sh", *passthrough], cwd=job_dir, check=False,
+                              env={**os.environ, "HYDRA_JOB_TRACKERKIT": ..., "HYDRA_JOB_SKIP_PREFLIGHT": "1"})
+remote     -> ssh <host> '<remote_bootstrap> cd <path> &&
+              trackerkit job preflight . [--shared-root ALIAS=PATH ...] [--allow-tier-fallback] &&
+              HYDRA_JOB_SKIP_PREFLIGHT=1 ./run.sh …'
               (single ssh invocation; preflight's non-zero exit short-circuits
               the && before run.sh ever starts, so a materialization failure is
               reported before any tracking begins), wrapped in `nohup … &`
               under --detach.
 ```
+
+A one-off `--shared-root` given to `job run` is therefore no longer dead: it reaches the ONE preflight that actually runs (`job run`'s own, with the flag), and `run.sh`'s self-preflight is skipped rather than silently re-failing without it. `--allow-tier-fallback` is threaded the same way. Add `test_job_run_forwards_shared_root_and_sets_skip_preflight` (local branch): monkeypatch `preflight_job` to capture its kwargs and `subprocess.run` to capture its `env`, call `job run <job> --shared-root labnas=/mnt/lab --allow-tier-fallback`, and assert both `preflight_job(shared_root_overrides={"labnas": "/mnt/lab"}, allow_tier_fallback=True, ...)` and `env["HYDRA_JOB_SKIP_PREFLIGHT"] == "1"`. Add `test_job_run_remote_command_includes_shared_root_flag_and_skip_preflight`: assert the constructed ssh command string contains both `--shared-root labnas=/mnt/lab` before the `&&` and `HYDRA_JOB_SKIP_PREFLIGHT=1` immediately before `./run.sh`.
 
 **Fix V-minor — `--detach`'s `nohup … &` wrapper must redirect stdout/stderr explicitly, or it double-writes alongside `run.sh`'s own logging.** `run.sh` already does `... | tee -a logs/run.log` internally (Task 7's runner spec) — that is the durable, structured log a detached run is meant to be checked via `job status`/`logs/run.log` later. `nohup` with no redirect specified defaults to appending combined output to `./nohup.out` in the CWD the `ssh`/`subprocess` invocation runs from, which is a SECOND, redundant copy of the same output living in a different, undocumented file that nothing in this plan ever names, checks, or cleans up — worse, for the remote branch that CWD is wherever the ssh session's shell starts (not necessarily the job dir, depending on `--remote-bootstrap`), so `nohup.out` can land somewhere the user never thinks to look. Fix: the `--detach` wrapper explicitly redirects to `/dev/null` since `run.sh`'s own `tee -a logs/run.log` is already the durable record: `nohup ./run.sh {shlex.join(passthrough)} >/dev/null 2>&1 &` (local) / `nohup ./run.sh {shlex.join(passthrough)} >/dev/null 2>&1 &` appended inside the remote `ssh` command string (after the `&&` chain, before the closing quote). No `nohup.out` is ever created by either branch.
 `subprocess.run(["./run.sh", *passthrough])` for the local-dir branch MUST pass `cwd=job_dir` (minor fix) — `run.sh` itself resolves its own location via `BASH_SOURCE`, but the parent Python process's CWD is whatever the user invoked `trackerkit job run` from, and without `cwd=job_dir` a relative job path argument on the CLI would still work by luck (bash resolves `./run.sh` against the argv path, not CWD) while anything inside `run.sh` that assumes CWD == job root during the brief window before its own `cd "$JOB"` would not. `track_args` recorded at pack time are **always** forwarded.
@@ -5242,6 +5472,13 @@ env = dict(os.environ)
 env.setdefault(
     "HYDRA_JOB_TRACKERKIT", f"{shlex.quote(sys.executable)} -m hydra_suite.trackerkit.app"
 )
+# Fix X2: this env-based `subprocess.run` ONLY runs after `preflight_job(...)`
+# (above, with the caller's --shared-root/--allow-tier-fallback) has already
+# returned ok=True -- so it is safe, and required, to tell run.sh's own
+# flag-less self-preflight to skip: it would otherwise re-run the SAME checks
+# without those flags and fail on the exact gap the local preflight just
+# cleared.
+env["HYDRA_JOB_SKIP_PREFLIGHT"] = "1"
 subprocess.run(["./run.sh", *passthrough], cwd=job_dir, check=False, env=env)
 ```
 
@@ -5254,7 +5491,19 @@ Add `test_job_run_local_sets_hydra_job_trackerkit` (Task 11 or Task 13's CLI tes
 Every remote-target subcommand (`run`, `calibrate`, `status`) therefore takes a `--remote-bootstrap TEXT` option: a shell fragment prepended, verbatim and semicolon-terminated, to the remote command before `cd <path>`. Default: `""` (empty — preserves today's behavior for a login-ish remote shell where `trackerkit` genuinely is on PATH; most boxes are not that, so an empty default will visibly fail rather than silently mis-schedule, which is the safer failure). The constructed remote command becomes:
 
 ```python
-remote_cmd = f"{bootstrap} cd {shlex.quote(remote_path)} && trackerkit job preflight . && ./run.sh {shlex.join(passthrough)}"
+# Fix X2: forward the caller's --shared-root/--allow-tier-fallback into THIS
+# preflight (the one that actually runs and gates ./run.sh), and tell
+# run.sh's own flag-less self-preflight to skip -- otherwise it re-runs the
+# SAME checks without those flags immediately afterward and fails on the
+# exact gap this preflight just cleared.
+preflight_flags = "".join(f" --shared-root {shlex.quote(a)}={shlex.quote(p)}" for a, p in shared_root_overrides.items())
+if allow_tier_fallback:
+    preflight_flags += " --allow-tier-fallback"
+remote_cmd = (
+    f"{bootstrap} cd {shlex.quote(remote_path)} && "
+    f"trackerkit job preflight .{preflight_flags} && "
+    f"HYDRA_JOB_SKIP_PREFLIGHT=1 ./run.sh {shlex.join(passthrough)}"
+)
 ```
 
 where `bootstrap` is `args.remote_bootstrap.rstrip()` plus a trailing `; ` if non-empty (so `source ... && conda activate ...` — itself `&&`-joined — cannot short-circuit the rest of the chained command by being read as the LHS of the following `&&`). The value used against firebrat for Task 13's acceptance run is:
@@ -5265,7 +5514,7 @@ where `bootstrap` is `args.remote_bootstrap.rstrip()` plus a trailing `; ` if no
 
 recorded here so Task 13's acceptance commands use it verbatim rather than re-discovering it. `run.sh` itself does not need `conda activate` (Fix A2a already makes it PATH-independent via `HYDRA_JOB_TRACKERKIT`), but the ssh session invoking `trackerkit job preflight` *before* `run.sh` starts does — the bootstrap covers exactly that gap.
 
-Task 13 Step 5 must name this actual command (`<bootstrap>; cd <path> && trackerkit job preflight . && ./run.sh …` via one `ssh` invocation) rather than describing preflight and run as separate, un-chained steps.
+Task 13 Step 5 must name this actual command (`<bootstrap>; cd <path> && trackerkit job preflight . [--shared-root ...] [--allow-tier-fallback] && HYDRA_JOB_SKIP_PREFLIGHT=1 ./run.sh …` via one `ssh` invocation) rather than describing preflight and run as separate, un-chained steps.
 
 `calibrate`: run `trackerkit calibrate` inside the job environment (`HYDRA_MODELS_DIR`, `HYDRA_CONFIG_DIR`, `cd <job>`) against the keystone video, forwarding `track_args["inference_autotune_manual"]` verbatim; for a remote target this goes through the same `--remote-bootstrap` prefix as `run`.
 
@@ -5407,10 +5656,45 @@ from hydra_suite.trackerkit.cli_config import (
 _PROBE = TrackerCliVideoProbe(fps=30.0, total_frames=1, width=64, height=64)
 
 
-def test_packed_sidecar_resolves_identically_to_staging(packed_job, monkeypatch):
+def _staging_params(staging, monkeypatch):
+    """The STAGING-side engine params: same config, resolved against the
+    staging models root (never the packed job's). This is the "expected"
+    side of the fix X7 equality check below.
+    """
+    monkeypatch.setenv("HYDRA_MODELS_DIR", str(staging["models"]))
+    monkeypatch.delenv("HYDRA_CONFIG_DIR", raising=False)
+    config = {
+        "file_path": str(staging["video"]),
+        "yolo_obb_direct_model_path": "obb/x.pt",
+        "pose_skeleton_file": str(staging["skeleton"]),
+    }
+    session = load_tracker_cli_session(
+        str(staging["video"]), config_data=config, video_probe=_PROBE
+    )
+    return session.params
+
+
+def test_packed_sidecar_resolves_identically_to_staging(packed_job, staging, monkeypatch):
+    # Fix X7 (round-6): the original assertion only checked CONTAINMENT
+    # (resolved path lies somewhere inside <job>/models) -- that passes even
+    # when the sidecar resolves to the WRONG model that happens to live
+    # inside the job root (a legacy `yolo_model_path` alias, or a pose
+    # backend mix-up that ships model B but the sidecar's role still points
+    # at model A's job-relative slot). Spec §15.4 requires the sidecar's
+    # resolved params equal the staging-side params KEY FOR KEY. Since the
+    # two sides resolve against DIFFERENT absolute roots (staging models dir
+    # vs. <job>/models), "equal" means: for every role key, the path
+    # RELATIVE TO ITS OWN MODELS ROOT is identical on both sides -- that is
+    # the actual portable invariant (same model, same role, same relative
+    # slot), not merely "somewhere under models/".
+    staging_params = _staging_params(staging, monkeypatch)
+
     monkeypatch.setenv("HYDRA_MODELS_DIR", str(packed_job / "models"))
     monkeypatch.setenv("HYDRA_CONFIG_DIR", str(packed_job / "config"))
     monkeypatch.chdir(packed_job)
+
+    def _relative_to_root(value, root):
+        return os.path.relpath(os.path.abspath(value), os.path.abspath(str(root)))
 
     for sidecar in packed_job.glob("videos/*_config.json"):
         video_relpath = json.loads(sidecar.read_text())["file_path"]
@@ -5419,24 +5703,44 @@ def test_packed_sidecar_resolves_identically_to_staging(packed_job, monkeypatch)
         )
         params = session.params
         for role_key in ("YOLO_OBB_DIRECT_MODEL_PATH", "POSE_MODEL_DIR"):
-            value = params.get(role_key, "")
-            if value:
-                assert os.path.commonpath(
-                    [os.path.abspath(value), os.path.abspath(str(packed_job / "models"))]
-                ) == os.path.abspath(str(packed_job / "models")), (
-                    f"{role_key} resolved outside <job>/models: {value}"
-                )
-        for entry in params.get("CNN_CLASSIFIERS", []) or []:
-            path = entry.get("model_path", "")
-            if path:
-                assert os.path.abspath(path).startswith(
-                    os.path.abspath(str(packed_job / "models"))
-                ), f"CNN_CLASSIFIERS entry resolved outside <job>/models: {path}"
+            staged_value = staging_params.get(role_key, "")
+            packed_value = params.get(role_key, "")
+            assert bool(staged_value) == bool(packed_value), (
+                f"{role_key}: staging has {staged_value!r}, packed sidecar has "
+                f"{packed_value!r} -- presence must match"
+            )
+            if not staged_value:
+                continue
+            assert os.path.commonpath(
+                [os.path.abspath(packed_value), os.path.abspath(str(packed_job / "models"))]
+            ) == os.path.abspath(str(packed_job / "models")), (
+                f"{role_key} resolved outside <job>/models: {packed_value}"
+            )
+            assert _relative_to_root(staged_value, staging["models"]) == _relative_to_root(
+                packed_value, packed_job / "models"
+            ), (
+                f"{role_key} resolved to a DIFFERENT model: staging picked "
+                f"{_relative_to_root(staged_value, staging['models'])!r}, packed sidecar "
+                f"picked {_relative_to_root(packed_value, packed_job / 'models')!r}"
+            )
+        staged_cnn = {
+            entry.get("factor_name", i): _relative_to_root(entry.get("model_path", ""), staging["models"])
+            for i, entry in enumerate(staging_params.get("CNN_CLASSIFIERS", []) or [])
+            if entry.get("model_path")
+        }
+        packed_cnn = {
+            entry.get("factor_name", i): _relative_to_root(entry.get("model_path", ""), packed_job / "models")
+            for i, entry in enumerate(params.get("CNN_CLASSIFIERS", []) or [])
+            if entry.get("model_path")
+        }
+        assert staged_cnn == packed_cnn, (
+            f"CNN_CLASSIFIERS resolved differently: staging={staged_cnn} packed={packed_cnn}"
+        )
 ```
 The signature above is verified against `cli_config.py:304-310`:
 `load_tracker_cli_session(video_path: str, *, config_path=None, config_data=None, video_probe=None, advanced_config=None)`. **This same `(real video path + injected `TrackerCliVideoProbe`)` shape applies EVERYWHERE this plan calls `load_tracker_cli_session` on a fixture job** — there is no variant that accepts `None`.
 
-The load-bearing assertion is: point `HYDRA_MODELS_DIR`/`HYDRA_CONFIG_DIR` at the packed job, CWD at the job root, load each sidecar, and prove every resolved model path lands inside `<job>/models`, matching what the staging-side `params` used for that role.
+The load-bearing assertion is: point `HYDRA_MODELS_DIR`/`HYDRA_CONFIG_DIR` at the packed job, CWD at the job root, load each sidecar, and prove every resolved model path (compared to the STAGING-side session built against the staging models root, key for key — fix X7) lands inside `<job>/models` AND names the SAME model, for that role.
 
 **(b) §6.5's characterization test must call the GUI's real `build_config_dict`, not just `make_model_path_relative`.** Testing the helper alone (as Task 2's tests do) proves the helper works, not that the GUI calls it on every relevant field.
 
@@ -5671,6 +5975,26 @@ mkdir -p /tmp/jobs/src && cp \
   /Users/neurorishika/Projects/Rockefeller/Kronauer/multi-animal-tracker/.worktrees/portable-jobs/tools/equivalence/fixtures/clips/ant_pose_headtail.mp4 \
   /Users/neurorishika/Projects/Rockefeller/Kronauer/multi-animal-tracker/.worktrees/portable-jobs/tools/equivalence/fixtures/clips/ant_cnn_identity.mp4 \
   /tmp/jobs/src/
+# Fix X3b: ant_pose_headtail and ant_cnn_identity are pose-enabled but ship
+# with pose_skeleton_file: "" -- run_matrix.sh injects the real skeleton as a
+# separate table column at run time; job pack has no such column, so we
+# materialize the same skeleton into a real config file first (fix X3a's new
+# pack-time guard would otherwise refuse both, correctly).
+cd /Users/neurorishika/Projects/Rockefeller/Kronauer/multi-animal-tracker/.worktrees/portable-jobs && \
+  PYTHONPATH=$PWD/src conda run --no-capture-output -n hydra-mps python - <<'PY'
+import json
+from pathlib import Path
+
+fx = Path("tools/equivalence/fixtures")
+skel = str((fx / "ooceraea_biroi.json").resolve())
+Path("/tmp/jobs").mkdir(parents=True, exist_ok=True)
+for name in ("ant_pose_headtail", "ant_cnn_identity"):
+    cfg_path = fx / "configs" / f"{name}.json"
+    cfg = json.loads(cfg_path.read_text())
+    cfg["pose_skeleton_file"] = skel
+    (Path("/tmp/jobs") / f"{name}_config.json").write_text(json.dumps(cfg))
+PY
+
 cd /Users/neurorishika/Projects/Rockefeller/Kronauer/multi-animal-tracker/.worktrees/portable-jobs && \
   PYTHONPATH=$PWD/src conda run --no-capture-output -n hydra-mps \
     python -m hydra_suite.trackerkit.app job pack /tmp/jobs/fly \
@@ -5681,13 +6005,13 @@ cd /Users/neurorishika/Projects/Rockefeller/Kronauer/multi-animal-tracker/.workt
   PYTHONPATH=$PWD/src conda run --no-capture-output -n hydra-mps \
     python -m hydra_suite.trackerkit.app job pack /tmp/jobs/pose \
       /tmp/jobs/src/ant_pose_headtail.mp4 \
-      --config tools/equivalence/fixtures/configs/ant_pose_headtail.json
+      --config /tmp/jobs/ant_pose_headtail_config.json
 
 cd /Users/neurorishika/Projects/Rockefeller/Kronauer/multi-animal-tracker/.worktrees/portable-jobs && \
   PYTHONPATH=$PWD/src conda run --no-capture-output -n hydra-mps \
     python -m hydra_suite.trackerkit.app job pack /tmp/jobs/identity \
       /tmp/jobs/src/ant_cnn_identity.mp4 \
-      --config tools/equivalence/fixtures/configs/ant_cnn_identity.json
+      --config /tmp/jobs/ant_cnn_identity_config.json
 
 # Assert the multihead heads actually shipped (fix A1a/A1c evidence, not just
 # the manifest): every factor_models[].path resolved beside the manifest.
@@ -5812,7 +6136,7 @@ Assert, and paste the evidence:
    ssh rutalab@firebrat 'sha256sum ~/.local/share/hydra-suite/models/model_registry.json 2>/dev/null || echo "ABSENT"'
    ```
    Run it before step 2 (push) and again after step 4 (run); the two lines must match exactly. **Minor note on what this check does and does not prove:** `run.sh` sets `HYDRA_MODELS_DIR="$JOB/models"` unconditionally, so the HOST registry at `~/.local/share/hydra-suite/models/model_registry.json` is architecturally unreachable from this run regardless of whether the run/preflight code is correct — no code path in this plan reads or writes it while `HYDRA_MODELS_DIR` is pinned to the job. This check is therefore closer to tautological than a positive proof of "zero registration behavior": it would pass even if a future regression introduced a `HYDRA_MODELS_DIR`-unaware model-registration call elsewhere, as long as that call also happened to read `HYDRA_MODELS_DIR` correctly. Keep it (a hash mismatch here WOULD be a real, loud bug), but don't over-read a pass as proof the registration code path was exercised and found safe — it wasn't exercised at all.
-2. Every artifact from the §10 table landed **beside the ORIGIN clip** (`/tmp/jobs/src/`, per command 1) on the Mac, including `.inference_cache_<stem>/`. **Minor fix — do not expect `<stem>_tracking.mp4` among them.** All three fixture configs (`fly_obb.json`, `ant_pose_headtail.json`, `ant_cnn_identity.json` — grepped, verified) have `"video_output_path": ""`, and `core/tracking/session.py:653` only renders the overlay video when `video_output_path` is non-empty. So the expected artifact set for this run is the CSVs (`_tracking.csv`, `_tracking_with_individual.csv`/`_tracks.csv` per Debug/User mode), `run.log`, and `.inference_cache_<stem>/` — never a rendered `.mp4`. If a rendered video WERE desired for this acceptance run, a fixture would need `video_output_path` set at pack time (Task 7's redirect/default-name rewrite already handles that case); none of the three does, so none should be checked for:
+2. Every artifact from the §10 table landed **beside the ORIGIN clip** (`/tmp/jobs/src/`, per command 1) on the Mac, including `.inference_cache_<stem>/`. **Minor fix — do not expect `<stem>_tracking.mp4` among them, and use the REAL CSV names (fix X4).** All three fixture configs (`fly_obb.json`, `ant_pose_headtail.json`, `ant_cnn_identity.json` — grepped, verified) have `"video_output_path": ""`, and `core/tracking/session.py:653` only renders the overlay video when `video_output_path` is non-empty. All three also have `enable_backward_tracking: true`, so `headless_tracking.py:221-224` writes `<stem>_tracking_forward.csv`/`<stem>_tracking_backward.csv` as the raw passes (never `<stem>_tracking.csv` — that name is the pre-backward-split default `_default_output_paths` computes and is never what actually lands on disk once backward tracking is on), plus `<stem>_tracking_forward_processed.csv` (post-processing intermediate) and the mode-dependent terminal file(s): Debug mode writes `<stem>_tracking_final.csv` and `<stem>_tracking_final_with_individual.csv`; User mode writes `<stem>_tracks.csv` instead (`core/tracking/session.py:812`, `user_tracks_path`). So the expected artifact set for this run is those CSVs (not `_tracking.csv`/`_tracking_with_individual.csv`, which this pipeline never writes), `run.log`, and `.inference_cache_<stem>/` — never a rendered `.mp4`. If a rendered video WERE desired for this acceptance run, a fixture would need `video_output_path` set at pack time (Task 7's redirect/default-name rewrite already handles that case); none of the three does, so none should be checked for:
    ```bash
    ls -la /tmp/jobs/src/ && ls -la /tmp/jobs/src/.inference_cache_fly_obb/
    ```
@@ -6078,28 +6402,35 @@ ssh rutalab@firebrat "set -e
       --video /tmp/native_pose/videos/ant_pose_headtail.mp4 \
       --config /tmp/native_pose/videos/ant_pose_headtail_config.json"
 
-# Fix W5 -- the forward `<stem>_tracking.csv` NEVER carries pose columns.
-# Verified: data/csv_writer.py's build_tracking_csv_header (the forward-pass
+# Fix W5/X4 -- the raw pass CSVs (`<stem>_tracking_forward.csv`/
+# `<stem>_tracking_backward.csv`) NEVER carry pose columns. Verified:
+# data/csv_writer.py's build_tracking_csv_header (the forward/backward-pass
 # CSV writer) has no pose fields at all. Pose columns only exist in the
-# terminal, POST-PROCESSED csv, and the column contract differs by mode
-# (core/tracking/session.py:349/386/811 default DEBUG_MODE=True, and none of
-# the three fixture configs override it, so every job in this acceptance run
-# is Debug mode):
-#   - Debug mode: `<stem>_with_individual.csv` (core/post/rich_export.py:31
-#     RICH_EXPORT_SUFFIX = "_with_individual"), columns
+# terminal, POST-PROCESSED csv, and both the FILE NAME and the column
+# contract differ by mode (core/tracking/session.py:349/386/811 default
+# DEBUG_MODE=True, and none of the three fixture configs override it, so
+# every job in this acceptance run is Debug mode):
+#   - Debug mode: `<stem>_tracking_final_with_individual.csv`
+#     (core/post/rich_export.py:31 RICH_EXPORT_SUFFIX = "_with_individual",
+#     appended to the `_tracking_final` terminal stem), columns
 #     `PoseKpt_<name>_X` / `_Y` / `_Conf` (capitalized -- core/post/
 #     trajectory_writer.py:12-13 _POSE_PREFIX="PoseKpt_", _POSE_X_SUFFIX="_X").
-#   - User mode: `<stem>_tracks.csv`, columns `<name>_x` / `_y` / `_conf`
+#   - User mode: `<stem>_tracks.csv` (core/tracking/session.py:812
+#     user_tracks_path), columns `<name>_x` / `_y` / `_conf`
 #     (lowercase -- trajectory_writer.py:192-203 derives these FROM the
 #     PoseKpt_*_X/_Y/_Conf columns for the clean export).
 # This acceptance run compares Debug-mode output on both sides (pulled and
-# native), so it asserts on the `_with_individual.csv` file and the
-# capitalized PoseKpt_ column names -- NOT the forward `_tracking.csv` and
-# NOT the lowercase `_x`/`_y` names a User-mode run would use.
+# native), so it asserts on the `_tracking_final_with_individual.csv` file
+# and the capitalized PoseKpt_ column names -- NOT the raw forward/backward
+# CSVs and NOT the lowercase `_x`/`_y` names a User-mode run would use.
+# fly_obb has no cnn_classifiers/pose (fix A1c), so its Debug-mode terminal
+# file is the bare `<stem>_tracking_final.csv` (no rich-export sibling is
+# guaranteed to carry meaningful extra columns for it, so the bare file is
+# the correct comparison target).
 
 # Then, on the Mac, compare the PULLED csv against the native one for EACH job:
-scp rutalab@firebrat:/tmp/native_fly/videos/fly_obb_tracking.csv /tmp/native_fly_obb_tracking.csv
-scp rutalab@firebrat:/tmp/native_pose/videos/ant_pose_headtail_tracking_with_individual.csv /tmp/native_pose_headtail_tracking_with_individual.csv
+scp rutalab@firebrat:/tmp/native_fly/videos/fly_obb_tracking_final.csv /tmp/native_fly_obb_tracking_final.csv
+scp rutalab@firebrat:/tmp/native_pose/videos/ant_pose_headtail_tracking_final_with_individual.csv /tmp/native_pose_headtail_tracking_final_with_individual.csv
 python - <<'PY'
 import numpy as np
 import pandas as pd
@@ -6133,24 +6464,41 @@ def compare(pulled_path, native_path, pose_columns=None, theta_columns=None):
     theta_columns = set(theta_columns or ())
     strict_cols = [c for c in a.columns if c not in theta_columns]
     pd.testing.assert_frame_equal(a[strict_cols], b[strict_cols])
+    # Minor fix (round-6): mirror tools/equivalence/compare_caches.py:28-30's
+    # ang_diff EXACTLY -- wrap the raw difference into [0, 2pi) mod 2pi FIRST
+    # (`d = |a-b| % 2pi; min(d, 2pi-d)`), THEN take the modpi residual
+    # (`min(raw, |pi-raw|)`) the harness applies at compare_caches.py:96-98.
+    # Skipping the 2pi wrap makes a heading straddling +-pi (e.g. a=3.13,
+    # b=-3.13, true difference ~0.02 rad) compute a raw diff of ~6.26 rad and
+    # falsely fail -- exactly the case this acceptance run's own clips can hit
+    # near a wraparound frame. Also guard the all-NaN case explicitly:
+    # np.nanmax on an all-NaN column returns nan, and `nan < 1e-6` is False,
+    # so an all-NaN theta column would silently FAIL a check that should
+    # instead say plainly that the column never had data.
     for col in theta_columns:
-        raw = (a[col].to_numpy() - b[col].to_numpy())
-        residual = np.minimum(np.abs(raw), np.abs(np.pi - np.abs(raw)))
-        worst = float(np.nanmax(residual)) if len(residual) else 0.0
+        a_theta = a[col].to_numpy(dtype=float)
+        b_theta = b[col].to_numpy(dtype=float)
+        assert not (np.isnan(a_theta).all() and np.isnan(b_theta).all()), (
+            f"theta column {col!r} is entirely NaN on both sides -- nothing to compare"
+        )
+        d = np.abs(a_theta - b_theta) % (2 * np.pi)
+        ang_diff = np.minimum(d, 2 * np.pi - d)
+        residual = np.minimum(ang_diff, np.abs(np.pi - ang_diff))
+        worst = float(np.nanmax(residual))
         assert worst < 1e-6, (
             f"theta column {col!r} differs by more than the documented pure "
             f"180-degree flip noise floor: worst modpi residual {worst:.3e} rad"
         )
     print(f"ROW-IDENTICAL (theta allowing documented pi-flips) + non-empty: {len(a)} rows ({pulled_path})")
 
-compare("/tmp/jobs/fly/videos/fly_obb_tracking.csv", "/tmp/native_fly_obb_tracking.csv")
+compare("/tmp/jobs/fly/videos/fly_obb_tracking_final.csv", "/tmp/native_fly_obb_tracking_final.csv")
 # Don't hardcode a specific keypoint name -- inspect the pulled Debug
 # `_with_individual.csv`'s own header for whatever PoseKpt_<name>_X/_Y/_Conf
 # columns this run's skeleton actually produced (case-aware: capital
 # X/Y/Conf, the Debug-mode contract, not the User-mode lowercase one) and
 # assert on THOSE, so this check is self-verifying regardless of which
 # skeleton the fixture ends up using.
-_pulled = pd.read_csv("/tmp/jobs/pose/videos/ant_pose_headtail_tracking_with_individual.csv")
+_pulled = pd.read_csv("/tmp/jobs/pose/videos/ant_pose_headtail_tracking_final_with_individual.csv")
 _pose_cols = [
     c for c in _pulled.columns
     if c.startswith("PoseKpt_") and (c.endswith("_X") or c.endswith("_Y") or c.endswith("_Conf"))
@@ -6162,8 +6510,8 @@ assert _pose_cols, (
     "trusting any row comparison"
 )
 compare(
-    "/tmp/jobs/pose/videos/ant_pose_headtail_tracking_with_individual.csv",
-    "/tmp/native_pose_headtail_tracking_with_individual.csv",
+    "/tmp/jobs/pose/videos/ant_pose_headtail_tracking_final_with_individual.csv",
+    "/tmp/native_pose_headtail_tracking_final_with_individual.csv",
     pose_columns=_pose_cols,
     # Fix V-minor: "Theta" (core/post/trajectory_writer.py:128 reads
     # df["Theta"]) gets the documented pure-180-degree-flip allowance;
@@ -6184,7 +6532,7 @@ ssh rutalab@firebrat "$BOOTSTRAP
   cd /home/rutalab/jobs/pose && PYTHONPATH=\$HOME/hydra-suite/src \
   python -c \"
 from pathlib import Path
-from hydra_suite.data.tracking_job.content_id import directory_content_id
+from hydra_suite.core.inference.content_id import directory_content_id
 p = sorted(Path('models/pose').glob('*/*'))[0]
 print('BEFORE', p, directory_content_id(p))
 \"" | tee /tmp/sleap_dir_before.txt
@@ -6196,7 +6544,7 @@ ssh rutalab@firebrat "$BOOTSTRAP
   cd /home/rutalab/jobs/pose && PYTHONPATH=\$HOME/hydra-suite/src \
   python -c \"
 from pathlib import Path
-from hydra_suite.data.tracking_job.content_id import directory_content_id
+from hydra_suite.core.inference.content_id import directory_content_id
 p = sorted(Path('models/pose').glob('*/*'))[0]
 print('AFTER', p, directory_content_id(p))
 \"" | tee /tmp/sleap_dir_after.txt
@@ -6233,7 +6581,7 @@ ssh rutalab@firebrat 'source ~/miniforge3/etc/profile.d/conda.sh && cd ~/hydra-s
 
 Then: pack a video that lives under `/Volumes/lab`, confirm the manifest records `shared`, the push list omits the video, preflight materializes the symlink on firebrat, the run completes, and pull maps outputs beside the origin.
 
-**Name the actual command (fix M7).** "The run completes" is not a command. `job run rutalab@firebrat:/home/rutalab/jobs/<name>` internally chains `ssh rutalab@firebrat 'cd /home/rutalab/jobs/<name> && trackerkit job preflight . && ./run.sh …'` as ONE ssh invocation, so preflight's materialization of the shared symlink happens immediately before `run.sh` on the same connection — this is the step that actually exercises §6.7 for the primary remote workflow (a bare `./run.sh` without a preceding preflight, which the plan used to describe, would leave the shared video unmaterialized and `trackerkit track` would fail on a missing file). Paste the ssh session's preflight output showing the `shared_roots` check passing and the symlink being created, immediately followed by the tracking run's own log output, both from the SAME `job run` invocation.
+**Name the actual command (fix M7/X2).** "The run completes" is not a command. `job run rutalab@firebrat:/home/rutalab/jobs/<name>` internally chains `ssh rutalab@firebrat 'cd /home/rutalab/jobs/<name> && trackerkit job preflight . [--shared-root ...] [--allow-tier-fallback] && HYDRA_JOB_SKIP_PREFLIGHT=1 ./run.sh …'` as ONE ssh invocation, so preflight's materialization of the shared symlink happens immediately before `run.sh` on the same connection, and `run.sh`'s own flag-less self-preflight is skipped rather than re-running the same checks a second time without the flags that just made them pass — this is the step that actually exercises §6.7 for the primary remote workflow (a bare `./run.sh` without a preceding preflight, which the plan used to describe, would leave the shared video unmaterialized and `trackerkit track` would fail on a missing file). Paste the ssh session's preflight output showing the `shared_roots` check passing and the symlink being created, immediately followed by the tracking run's own log output, both from the SAME `job run` invocation.
 
 - [ ] **Step 6: Record everything in the Acceptance Log**
 
@@ -6270,4 +6618,4 @@ Fill in as gates are run. A gate with no pasted output is not a passed gate.
 11. **`CLAUDE.md`'s pre-PR checklist references a nonexistent `make lint-moderate`.** Discovered while applying fix B7: `Makefile:421,427,440,446` define only `lint`, `lint-fix`, `lint-strict`, `lint-report`, yet `CLAUDE.md`'s "Pre-PR checklist" tells contributors to run `make lint-moderate`. Anyone chaining it with `&&` (as this plan used to) silently never reaches the next command. **Do not fix `CLAUDE.md` in this branch** — it is unrelated to portable jobs and touching agent configuration from inside a feature branch is out of scope. File it as a standalone one-line correction.
 12. **`ant_cnn_identity`'s characterization golden pins this machine's absolute classifier path.** `tests/data/get_parameters_dict_golden/ant_cnn_identity.json` carries `/Users/neurorishika/Library/Application Support/hydra-suite/models/classification/identity/20260429-105036_classifier_multihead_obiroi_colortag.multihead.json`, and `CNN_CLASSIFIERS` is absent from `HOST_DEPENDENT_DROPPED_KEYS` (`tests/test_get_parameters_dict_characterization.py:269-274`). That test therefore cannot pass on any other host. Either add `CNN_CLASSIFIERS` to the dropped set with the same ndarray-style normalization the model-path keys get, or regenerate the golden with a relativized path. Noted in Task 2 Step 6 so an agent does not misdiagnose it as a Task 2 regression; out of scope to fix here because it changes a committed characterization golden.
 13. **`verify_job`'s directory-model branch trusts `file_digests` alone.** After fix B4 a directory model's integrity rests entirely on its per-member digests; there is no top-level roll-up, so a member ADDED to the job after packing (not present in `file_digests`) is not detected. Adding a "no unexpected files under `models/<key>/`" check would close it. Not done here because it needs a decision about whether host-written scratch files inside a pose-run directory are legitimate.
-14. **The layering gate does not see relative imports.** `test_no_app_layer_or_qt_imports` (Task 5) filters `ast.ImportFrom` on `node.level == 0`, so every `from ...core.x import y` inside `data/tracking_job/` is invisible to it — and so would `from ...trackerkit import z` be. Pre-existing hole in the gate as designed, surfaced while templating `_normalize_model_path`'s relative import in Task 7. Closing it means resolving `node.level` against the module's own package path before applying `FORBIDDEN_ROOTS`; left out of this branch because it would need its own before/after check against the whole package.
+14. ~~The layering gate does not see relative imports.~~ **FIXED (fix X5b, round-6).** `test_no_app_layer_or_qt_imports` (Task 5) now resolves `node.level` against the module's own package path (`_imported_names`'s `own_pkg_parts` resolution) before applying `FORBIDDEN_ROOTS`, so a relative `from ...trackerkit import z` inside `data/tracking_job/` is caught exactly like the absolute form. `test_the_gate_itself_catches_a_relative_app_layer_import` proves the resolution formula against a synthetic file. This closes the hole X5 found live: `pack_job` calling `load_advanced_tracker_config()` via a relative import (fix X5a) would otherwise have passed this gate green.
