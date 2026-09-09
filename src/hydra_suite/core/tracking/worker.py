@@ -1181,7 +1181,18 @@ class TrackingEngineCore:
             # clicked Preview would otherwise pay for a profile lookup before
             # seeing a single frame, and the preview's START/END range would
             # leak into the fingerprint. A preview is a look, not a workload.
-            if p.get("APPLY_TUNED_INFERENCE", False) and not self.preview_mode:
+            # I3: the APPLY_TUNED_INFERENCE flag gates LOOKUP -- deciding
+            # whether to consult a stored profile -- and nothing else. It must
+            # NOT gate the backward pass's read of the forward pass's recorded
+            # vector, nor the forward pass's write of it. When it did, a
+            # forward pass with apply ON could tune to det=4 and write a det=4
+            # detection cache, the user could then untick "Apply tuned
+            # inference profile", and the backward pass would silently skip
+            # the whole block, resolve at the configured det=1, miss the cache
+            # key and abort with "Cached tracking replay requires valid
+            # inference caches" -- the exact failure this propagation exists
+            # to prevent, reachable by toggling one checkbox between passes.
+            if not self.preview_mode:
                 if self.backward_mode:
                     # The forward pass wrote a detection cache keyed on the
                     # batch size it actually ran at. Re-resolving a lookup
@@ -1225,7 +1236,7 @@ class TrackingEngineCore:
                             "vector: %s",
                             _forward_vector.to_dict(),
                         )
-                else:
+                elif p.get("APPLY_TUNED_INFERENCE", False):
                     self._emit_progress(0, "Applying tuned inference profile")
                     # S1: the preflight below builds a request (AutotuneRequest.
                     # __post_init__ raises for a manual field the project
@@ -1313,18 +1324,38 @@ class TrackingEngineCore:
                                 )
                             }
                         )
-                        # Persist the vector this forward pass is about to run
-                        # at, so a later backward pass (a separate
-                        # invocation in the GUI, sharing no in-memory state)
-                        # can apply the same vector instead of re-resolving.
-                        from hydra_suite.core.inference.autotune.applied_vector import (
-                            write_applied_vector,
-                        )
+                # Persist the vector this forward pass is about to run at, so
+                # a later backward pass (a separate invocation in the GUI,
+                # sharing no in-memory state) can apply the same vector
+                # instead of re-resolving.
+                #
+                # UNCONDITIONAL for every non-preview forward pass, including
+                # apply-OFF: a stale sidecar left behind by an earlier tuned
+                # run would otherwise describe a vector this pass did not run
+                # at, and the backward pass would apply it over an untuned
+                # detection cache. With apply off the recorded vector is
+                # simply the project's own baseline, which
+                # ``InferenceTuningSettings.apply`` re-applies as a no-op --
+                # so byte-identity with tuning off is preserved.
+                #
+                # Skipped for a read-only replay: it produced no cache, so
+                # whatever run did produce one still owns the sidecar.
+                if not self.backward_mode and not self.cache_read_only_replay:
+                    from hydra_suite.core.inference.autotune.applied_vector import (
+                        write_applied_vector,
+                    )
+                    from hydra_suite.core.inference.autotune.models import (
+                        InferenceTuningSettings,
+                    )
 
-                        write_applied_vector(
-                            self._resolve_cache_dir(),
-                            self.inference_autotune_overlay.effective,
-                        )
+                    write_applied_vector(
+                        self._resolve_cache_dir(),
+                        (
+                            self.inference_autotune_overlay.effective
+                            if self.inference_autotune_overlay is not None
+                            else InferenceTuningSettings.from_config(_inference_cfg)
+                        ),
+                    )
 
             _cache_dir = self._resolve_cache_dir()
             if not self.cache_read_only_replay:

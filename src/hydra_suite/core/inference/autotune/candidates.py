@@ -131,7 +131,9 @@ class CandidatePlanner:
                 output.append(value)
         return tuple(output)
 
-    def static_max_for(self, field: str, baseline: InferenceTuningSettings) -> int:
+    def static_max_for(
+        self, field: str, baseline: InferenceTuningSettings
+    ) -> int | None:
         """Largest candidate value for *field*, ignoring live memory admission.
 
         ``values_for`` filters through ``admit()``, which reads the live
@@ -142,7 +144,10 @@ class CandidatePlanner:
         When ``candidate_space`` returns empty (no current value, or a
         cached field), falls back to the baseline's current value for
         *field* so a cached field cannot contribute a bogus artifact batch
-        size to the key.
+        size to the key. That fallback is ``None`` for a field the project
+        does not have at all (e.g. ``slice_tile_batch_size`` on any
+        non-SAHI project), hence the ``int | None`` return -- callers that
+        aggregate several fields MUST drop ``None`` before comparing.
         """
         return max(
             self.candidate_space(field, baseline),

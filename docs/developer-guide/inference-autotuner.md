@@ -118,6 +118,34 @@ absent (e.g. a cache written before this feature existed), the backward pass
 falls back to the project's configured values, which is exactly the
 pre-existing behaviour for an untuned forward pass.
 
+Every non-preview **forward** pass writes this sidecar, including one that ran
+with "Apply tuned inference profile" **off** — in which case the recorded
+vector is simply the project's own baseline. `APPLY_TUNED_INFERENCE` gates
+*lookup* (whether a stored profile is consulted), not the propagation. If the
+write were skipped when apply was off, a stale sidecar from an earlier tuned
+run would survive and the backward pass would apply a vector that this
+forward pass never ran at. Cache-read-only replay passes do not write it:
+they produced no cache, so whatever run did still owns the sidecar.
+
+### A profile covers ONE detection-cache mode
+
+`RESULT_CACHE_STAGE_MASK` is part of `PipelineFingerprint`, and
+`use_cached_detections` also decides `cached_fields` — i.e. which coordinates
+are searched at all. A profile calibrated on a fresh video (no detection
+cache) is therefore **not** the profile a cache-reusing run looks up.
+
+With detection-cache reuse enabled (the GUI default), a project needs a
+**second Calibrate after its first tracking run**: run 1 hits the profile you
+just measured, and every run from 2 onward — once a detection cache exists —
+keys differently and misses until you calibrate again in that mode.
+
+The two-record density bridge below does not close this gap: it re-keys only
+`workload`, not the cache mask. Synthesising a masked twin record would be
+dishonest — the masked key implies a different (smaller) search space, and the
+unmasked winning vector was never validated under it. Instead, the GUI's
+calibration status label and the CLI's printed summary both **name the cache
+mode the profile covers**, so a miss is explicable rather than mysterious.
+
 ### The two-record density bridge
 
 One calibration writes **two** profile records, so both a cache-less first run

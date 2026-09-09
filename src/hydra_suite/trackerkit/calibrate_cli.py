@@ -15,7 +15,7 @@ from __future__ import annotations
 import logging
 from dataclasses import dataclass
 from pathlib import Path
-from typing import Any
+from typing import Any, Sequence
 
 logger = logging.getLogger(__name__)
 
@@ -82,6 +82,7 @@ def run_calibrate_cli(
     *,
     config_path: str | None = None,
     budget_seconds: float,
+    inference_autotune_manual: Sequence[str] | None = None,
 ) -> int:
     """Measure and persist a validated inference profile for one video/config.
 
@@ -93,7 +94,11 @@ def run_calibrate_cli(
     """
     from hydra_suite.core.inference.autotune import session as autotune_session
     from hydra_suite.core.inference.config import build_inference_config_from_params
-    from hydra_suite.trackerkit.cli_config import load_tracker_cli_session
+    from hydra_suite.trackerkit.cli_config import (
+        apply_inference_autotune_override,
+        load_tracker_cli_config,
+        load_tracker_cli_session,
+    )
 
     video = str(video_path).strip()
     if not video:
@@ -103,7 +108,22 @@ def run_calibrate_cli(
     if config_path and not Path(config_path).is_file():
         raise FileNotFoundError(f"Config not found: {config_path}")
 
-    session = load_tracker_cli_session(video, config_path=config_path)
+    # I4: manual fields feed ``compute_baseline_digest`` ->
+    # ``key.baseline_digest``, so they are part of the profile key. ``track``
+    # merges them into its config through ``apply_inference_autotune_override``
+    # (batch_plan.py); calibrate must merge them the SAME way through the SAME
+    # helper, or the key it writes under is not the key ``track
+    # --inference-autotune-manual ...`` looks up.
+    if inference_autotune_manual:
+        config_data = apply_inference_autotune_override(
+            load_tracker_cli_config(config_path),
+            manual_fields=tuple(inference_autotune_manual),
+        )
+        session = load_tracker_cli_session(
+            video, config_path=config_path, config_data=config_data
+        )
+    else:
+        session = load_tracker_cli_session(video, config_path=config_path)
     params = session.params
     probe = session.video_probe
 
@@ -160,5 +180,19 @@ def run_calibrate_cli(
         f"(profile={overlay.profile_id}, reason={overlay.reason})"
     )
     print(f"Effective vector: {overlay.effective.to_dict()}")
+    # I5 (GUI parity): the detection-cache mask is part of the pipeline
+    # fingerprint, so this profile is only findable by runs in the same cache
+    # mode. Say which one, so a later miss is explicable.
+    if ctx.run_context.cached_fields:
+        print(
+            "Cache mode: covers runs that REUSE the detection cache "
+            "(cached detections on)."
+        )
+    else:
+        print(
+            "Cache mode: covers runs with NO detection cache. With "
+            "detection-cache reuse enabled, calibrate again after this "
+            "video's first tracking run."
+        )
 
     return 0 if status in _SUCCESS_STATUSES else 1

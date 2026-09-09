@@ -315,6 +315,21 @@ class _FakeVideoCapture:
         self._opened = False
 
 
+def _a_real_model_file(tmp_path) -> str:
+    """A detector path that actually EXISTS on disk.
+
+    ``build_autotune_context`` now derives the artifact batch size itself,
+    which reaches ``_model_fingerprints`` -> ``model_content_digest`` and so
+    stats/hashes the detector. The default param leaves the detector at a
+    bare repo-relative filename that is not present in a checkout, which
+    previously went unnoticed only because these tests monkeypatch
+    ``session.lookup`` and nothing else touched the model.
+    """
+    path = tmp_path / "detector.pt"
+    path.write_bytes(b"detector")
+    return str(path)
+
+
 def _dispatch_params(**overrides):
     p = {
         "MAX_TARGETS": 1,
@@ -494,7 +509,11 @@ def test_autotune_overlay_resolves_before_runner_loads_models(monkeypatch, tmp_p
         use_cached_detections=False,
     )
     worker.set_parameters(
-        _dispatch_params(APPLY_TUNED_INFERENCE=True, YOLO_BATCH_SIZE=1)
+        _dispatch_params(
+            APPLY_TUNED_INFERENCE=True,
+            YOLO_BATCH_SIZE=1,
+            YOLO_OBB_DIRECT_MODEL_PATH=_a_real_model_file(tmp_path),
+        )
     )
 
     try:
@@ -550,7 +569,11 @@ def test_preflight_probe_failure_does_not_kill_the_run(monkeypatch, tmp_path):
         use_cached_detections=False,
     )
     worker.set_parameters(
-        _dispatch_params(APPLY_TUNED_INFERENCE=True, YOLO_BATCH_SIZE=1)
+        _dispatch_params(
+            APPLY_TUNED_INFERENCE=True,
+            YOLO_BATCH_SIZE=1,
+            YOLO_OBB_DIRECT_MODEL_PATH=_a_real_model_file(tmp_path),
+        )
     )
 
     try:
@@ -729,7 +752,11 @@ def test_preview_never_launches_a_calibration(monkeypatch, tmp_path):
         preview_mode=True,
     )
     worker.set_parameters(
-        _dispatch_params(APPLY_TUNED_INFERENCE=True, YOLO_BATCH_SIZE=1)
+        _dispatch_params(
+            APPLY_TUNED_INFERENCE=True,
+            YOLO_BATCH_SIZE=1,
+            YOLO_OBB_DIRECT_MODEL_PATH=_a_real_model_file(tmp_path),
+        )
     )
 
     try:
@@ -807,7 +834,11 @@ def test_backward_enabled_project_is_tuned_and_propagates_vector(monkeypatch, tm
         use_cached_detections=False,
         inference_cache_dir=str(cache_dir),
     )
-    params = _dispatch_params(APPLY_TUNED_INFERENCE=True, YOLO_BATCH_SIZE=1)
+    params = _dispatch_params(
+        APPLY_TUNED_INFERENCE=True,
+        YOLO_BATCH_SIZE=1,
+        YOLO_OBB_DIRECT_MODEL_PATH=_a_real_model_file(tmp_path),
+    )
     params["INFERENCE_AUTOTUNE_PROJECT_CONFIG"] = {"enable_backward_tracking": True}
     worker.set_parameters(params)
 
@@ -963,3 +994,150 @@ def test_backward_pass_untuned_vector_does_not_disable_sahi_tuning(
         "an untuned (baseline) forward vector must not disable SAHI's own "
         "tile-batch tuner on the backward pass"
     )
+
+
+def test_apply_off_forward_pass_refreshes_a_stale_applied_vector(monkeypatch, tmp_path):
+    """I3: a stale sidecar must not survive an apply-OFF forward pass.
+
+    Reachable in one checkbox: forward with apply ON tunes to det=4 and
+    writes BOTH the sidecar and a det=4 detection cache; the user unticks
+    "Apply tuned inference profile"; the next forward pass runs at the
+    configured det=1 but -- while the whole block was gated on
+    APPLY_TUNED_INFERENCE -- left the det=4 sidecar in place, so the backward
+    pass applied a vector no forward pass had run at.
+
+    Every non-preview forward pass must leave the sidecar describing ITSELF.
+    With apply off that is simply the project's own baseline.
+    """
+    import hydra_suite.core.inference.autotune.session as autotune_session
+    import hydra_suite.core.tracking.worker as worker_mod
+    from hydra_suite.core.inference.autotune.applied_vector import (
+        read_applied_vector,
+        write_applied_vector,
+    )
+    from hydra_suite.core.inference.autotune.models import InferenceTuningSettings
+
+    # RECORDED, not raised: worker.py wraps the whole preflight in a broad
+    # ``except Exception`` that degrades to a baseline "fallback" overlay, so
+    # a raising guard would be swallowed and this test would pass even if
+    # lookup ran unconditionally.
+    lookup_calls = []
+
+    def _must_not_run(*_args, **_kwargs):
+        lookup_calls.append("called")
+        raise AssertionError("apply is OFF: no profile lookup may happen")
+
+    class _ProbeRunner:
+        def __init__(self, config, *_args, **_kwargs):
+            raise _StopAfterDispatch("runner constructed")
+
+    monkeypatch.setattr(worker_mod, "TrackingProfiler", _FakeProfiler)
+    monkeypatch.setattr(worker_mod.cv2, "VideoCapture", _FakeVideoCapture)
+    monkeypatch.setattr(worker_mod, "InferenceRunner", _ProbeRunner)
+    monkeypatch.setattr(autotune_session, "lookup", _must_not_run)
+    monkeypatch.setattr(autotune_session, "build_autotune_context", _must_not_run)
+
+    cache_dir = tmp_path / "cache"
+    cache_dir.mkdir()
+    write_applied_vector(cache_dir, InferenceTuningSettings(detection_batch_size=4))
+
+    worker = worker_mod.TrackingEngineCore(
+        str(tmp_path / "video.mp4"),
+        on_finished=lambda *_args: None,
+        use_cached_detections=False,
+        inference_cache_dir=str(cache_dir),
+    )
+    worker.set_parameters(
+        _dispatch_params(APPLY_TUNED_INFERENCE=False, YOLO_BATCH_SIZE=1)
+    )
+
+    try:
+        worker.run_tracking()
+    except _StopAfterDispatch:
+        pass
+
+    assert not lookup_calls, "apply is OFF: no profile lookup may happen"
+    recovered = read_applied_vector(cache_dir)
+    assert recovered is not None
+    assert recovered.detection_batch_size == 1, (
+        "an apply-OFF forward pass must overwrite the stale det=4 sidecar "
+        f"with the vector it actually ran at, got {recovered.to_dict()!r}"
+    )
+
+
+def test_apply_off_backward_pass_still_reuses_the_forward_vector(monkeypatch, tmp_path):
+    """I3: the BACKWARD READ must not be gated on APPLY_TUNED_INFERENCE.
+
+    The spec gates *lookup* on that flag, not the cross-pass propagation.
+    When the read was gated too, a user who tuned the forward pass and then
+    unticked the box got a backward pass resolving at the configured det=1,
+    missing the det=4 cache key, and aborting with "Cached tracking replay
+    requires valid inference caches".
+    """
+    import hydra_suite.core.tracking.worker as worker_mod
+    from hydra_suite.core.inference.autotune.applied_vector import write_applied_vector
+    from hydra_suite.core.inference.autotune.models import InferenceTuningSettings
+
+    calls = []
+
+    class _ProbeRunner:
+        def __init__(self, config, *_args, **_kwargs):
+            calls.append(config.detection_batch_size)
+            raise _StopAfterDispatch("runner constructed")
+
+    monkeypatch.setattr(worker_mod, "TrackingProfiler", _FakeProfiler)
+    monkeypatch.setattr(worker_mod.cv2, "VideoCapture", _FakeVideoCapture)
+    monkeypatch.setattr(worker_mod, "InferenceRunner", _ProbeRunner)
+
+    cache_dir = tmp_path / "cache"
+    cache_dir.mkdir()
+    write_applied_vector(cache_dir, InferenceTuningSettings(detection_batch_size=4))
+
+    worker = worker_mod.TrackingEngineCore(
+        str(tmp_path / "video.mp4"),
+        on_finished=lambda *_args: None,
+        use_cached_detections=True,
+        backward_mode=True,
+        inference_cache_dir=str(cache_dir),
+        detection_cache_path=str(cache_dir / "forward_cache"),
+    )
+    # Apply is OFF -- the user unticked the box between the two passes.
+    worker.set_parameters(
+        _dispatch_params(APPLY_TUNED_INFERENCE=False, YOLO_BATCH_SIZE=1)
+    )
+
+    try:
+        worker.run_tracking()
+    except _StopAfterDispatch:
+        pass
+
+    assert calls, "the backward InferenceRunner must have been constructed"
+    assert calls[0] == 4, (
+        "backward must still run at the forward pass's recorded batch size, "
+        f"got {calls[0]}"
+    )
+
+
+def test_a_baseline_vector_applies_as_a_no_op(tmp_path):
+    """The byte-identity argument for writing the sidecar with apply OFF.
+
+    With apply off the recorded vector IS the project's baseline, so a
+    backward pass that reads and applies it must reach a config equal to the
+    one it would have used had no sidecar existed.
+    """
+    from hydra_suite.core.inference.autotune.models import InferenceTuningSettings
+    from hydra_suite.core.inference.config import build_inference_config_from_params
+
+    params = _dispatch_params(APPLY_TUNED_INFERENCE=False, YOLO_BATCH_SIZE=1)
+    params["YOLO_OBB_DIRECT_MODEL_PATH"] = str(tmp_path / "model.pt")
+    params["YOLO_OBB_MODE"] = "direct"
+    config = build_inference_config_from_params(params)
+    baseline = InferenceTuningSettings.from_config(config)
+
+    applied = baseline.apply(config, disable_tile_autotune=False)
+
+    # Full dataclass equality, not just a round-trip of the tuning fields:
+    # the claim is that the config the backward pass reaches is the one it
+    # would have used had no sidecar existed at all.
+    assert applied == config
+    assert InferenceTuningSettings.from_config(applied) == baseline

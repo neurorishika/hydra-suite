@@ -371,12 +371,20 @@ def make_request_inputs(
     kind: AcceleratorKind = AcceleratorKind.CUDA,
     execution_mode: str = "batch",
     available_accelerator_bytes: int = 48 * 1024**3,
+    sliced: bool = True,
 ) -> dict[str, Any]:
     """Keyword arguments for ``build_tracking_autotune_request``.
 
     Defaults to a CUDA batch context with an admissible baseline; override
     ``kind``/``execution_mode``/``available_accelerator_bytes`` to exercise
-    the eligibility-split cases. Follows the construction pattern in
+    the eligibility-split cases.
+
+    ``sliced=False`` drops the ``SliceConfig`` entirely, modelling every
+    NON-SAHI project (``fly_obb``, ``worm_bgsub``, any bgsub or plain
+    direct-OBB project). That leaves ``slice_tile_batch_size=None`` on the
+    baseline settings -- the shape that made ``session.calibrate`` raise
+    ``TypeError`` on every such project while the whole suite stayed green,
+    because every fixture here was sliced. Follows the construction pattern in
     ``tests/test_inference_autotune_integration.py`` (``_config``/
     ``TrackingRunContext``/``build_tracking_autotune_request``) rather than
     inventing a new one.
@@ -412,12 +420,16 @@ def make_request_inputs(
             mode="direct",
             direct=OBBDirectConfig(
                 detector,
-                slice=SliceConfig(
-                    enabled=True,
-                    geometry_mode="custom",
-                    slice_width=512,
-                    slice_height=384,
-                    tile_batch_size=2,
+                slice=(
+                    SliceConfig(
+                        enabled=True,
+                        geometry_mode="custom",
+                        slice_width=512,
+                        slice_height=384,
+                        tile_batch_size=2,
+                    )
+                    if sliced
+                    else None
                 ),
             ),
             target_classes=[0],
@@ -483,7 +495,11 @@ def make_tensorrt_context(
     import tempfile
 
     from hydra_suite.core.inference.autotune.device import RuntimeResourceProbe
-    from hydra_suite.core.inference.autotune.session import AutotuneContext
+    from hydra_suite.core.inference.autotune.session import (
+        TENSORRT_PROFILE_BATCH_PARAM,
+        AutotuneContext,
+        derive_artifact_batch_size,
+    )
 
     tmp_path = tmp_path or Path(tempfile.mkdtemp())
     inputs = make_request_inputs(
@@ -502,8 +518,22 @@ def make_tensorrt_context(
     )
     # ``ctx.params`` must be the SAME dict object as ``run_context.params``
     # (as ``build_autotune_context`` constructs it) so mutating one is
-    # visible through the other -- ``calibrate``/``calibration_key_digest``
-    # rely on this to fold the artifact batch size into the fingerprint.
+    # visible through the other -- the artifact batch size is folded into
+    # the fingerprint through exactly that aliasing.
+    #
+    # The batch size comes from the REAL production helper, and the TensorRT
+    # param is injected here the same way ``build_autotune_context`` injects
+    # it, so this fixture cannot drift from production by hand-copying a
+    # value.
+    artifact_batch_size = derive_artifact_batch_size(
+        inputs["config"],
+        inputs["context"],
+        probe=probe,
+        backend=backend,
+        device_identity=inputs["device_identity"],
+    )
+    if backend == "tensorrt":
+        inputs["context"].params[TENSORRT_PROFILE_BATCH_PARAM] = artifact_batch_size
     return AutotuneContext(
         config=inputs["config"],
         run_context=inputs["context"],
@@ -511,6 +541,7 @@ def make_tensorrt_context(
         backend=backend,
         probe=probe,
         device_identity=inputs["device_identity"],
+        artifact_batch_size=artifact_batch_size,
     )
 
 
@@ -746,6 +777,7 @@ def make_calibration_context(
     measured_counts: tuple[int, ...] = (),
     frame_counts: tuple[int, ...] = (2, 3, 2),
     mode: str = "calibrate",
+    sliced: bool = True,
 ):
     """A CPU-tier ``AutotuneContext`` wired for ``session.calibrate``/``lookup``.
 
@@ -773,7 +805,7 @@ def make_calibration_context(
     from hydra_suite.core.inference.config import InferenceAutotunePolicy
 
     tmp_path = tmp_path or Path(tempfile.mkdtemp(prefix="autotune-calib-ctx-"))
-    inputs = make_request_inputs(tmp_path, kind=AcceleratorKind.CPU)
+    inputs = make_request_inputs(tmp_path, kind=AcceleratorKind.CPU, sliced=sliced)
     context = inputs["context"]
     inputs["config"] = _replace(
         inputs["config"],

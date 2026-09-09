@@ -28,6 +28,56 @@ class AutotuneContext:
     backend: str
     probe: Any  # RuntimeResourceProbe
     device_identity: tuple[str, str, str, int]
+    # Derived ONCE in ``build_autotune_context`` and consumed by both entry
+    # points. Deliberately has NO default: a hand-built context that skipped
+    # the derivation would make ``lookup`` and ``calibrate`` agree at the
+    # merely-configured batch size, silently keying every TensorRT profile
+    # under the wrong ``tensorrt_profile_id`` -- the exact divergence this
+    # field exists to make impossible.
+    artifact_batch_size: int
+
+
+TENSORRT_PROFILE_BATCH_PARAM = "INFERENCE_AUTOTUNE_TENSORRT_PROFILE_BATCH_SIZE"
+
+
+def derive_artifact_batch_size(
+    config: InferenceConfig,
+    run_context,
+    *,
+    probe,
+    backend: str,
+    device_identity: tuple[str, str, str, int],
+) -> int:
+    """Largest batch any candidate could ask a runtime artifact to serve.
+
+    Uses ``static_max_for`` (not the live-memory-filtered ``values_for``) so
+    the value cannot drift with free memory. ``static_max_for`` returns
+    ``None`` for a field the project does not have -- ``slice_tile_batch_size``
+    is ``None`` on every non-SAHI project (``InferenceTuningSettings
+    .from_config``) -- so ``None`` must be filtered out before ``max``, or
+    every non-sliced project raises ``TypeError``.
+    """
+
+    from hydra_suite.core.inference.autotune.integration import (
+        build_tracking_autotune_request,
+    )
+
+    preflight = build_tracking_autotune_request(
+        config,
+        run_context,
+        observation=probe.observation,
+        backend=backend,
+        device_identity=device_identity,
+    )
+    sizes = [
+        value
+        for value in (
+            preflight.planner.static_max_for(field, preflight.baseline)
+            for field in ("detection_batch_size", "slice_tile_batch_size")
+        )
+        if value is not None
+    ]
+    return max(sizes, default=preflight.baseline.detection_batch_size)
 
 
 def build_autotune_context(
@@ -101,53 +151,52 @@ def build_autotune_context(
         should_cancel=should_cancel,
         status_callback=status_callback,
     )
+    device_identity = (
+        probe.device_uuid,
+        probe.device_model,
+        probe.compute_capability,
+        int(probe.observation.total_accelerator_bytes or 0),
+    )
+    # Derived HERE, once, and the TensorRT param injected HERE, once -- before
+    # anybody builds the real request. When ``calibrate`` derived it privately
+    # and ``lookup`` did not, the two keyed every TensorRT profile differently
+    # (calibrate on the candidate maximum, lookup on the configured batch) and
+    # no profile was ever findable on gpu_fast/CUDA. ``ephemeral_params`` is
+    # the same dict object ``run_context`` holds, so this mutation is visible
+    # through both.
+    artifact_batch_size = derive_artifact_batch_size(
+        config,
+        run_context,
+        probe=probe,
+        backend=resolved.backend,
+        device_identity=device_identity,
+    )
+    if resolved.backend == "tensorrt":
+        ephemeral_params[TENSORRT_PROFILE_BATCH_PARAM] = artifact_batch_size
     return AutotuneContext(
         config=config,
         run_context=run_context,
         params=ephemeral_params,
         backend=resolved.backend,
         probe=probe,
-        device_identity=(
-            probe.device_uuid,
-            probe.device_model,
-            probe.compute_capability,
-            int(probe.observation.total_accelerator_bytes or 0),
-        ),
+        device_identity=device_identity,
+        artifact_batch_size=artifact_batch_size,
     )
 
 
 def calibration_key_digest(ctx: AutotuneContext) -> str:
-    """The profile-key digest this context will calibrate and look up under.
+    """The ONE profile-key digest this context calibrates and looks up under.
 
-    Mirrors ``calibrate``'s ``artifact_batch_size`` derivation (via
-    ``static_max_for``, not live-memory-filtered ``values_for``) so this
-    exercises the exact same ``tensorrt_profile_id`` path a real calibration
-    run would produce -- including on the TensorRT backend, where that value
-    feeds ``_model_fingerprints`` (see ``integration.py``).
+    Derives nothing of its own: ``build_autotune_context`` already folded
+    ``artifact_batch_size`` into ``ctx.params`` (on TensorRT), so this is
+    simply the key ``lookup`` and ``calibrate`` both build from. Any
+    derivation repeated here could drift from theirs -- and did.
     """
 
     from hydra_suite.core.inference.autotune.integration import (
         build_tracking_autotune_request,
     )
 
-    preflight = build_tracking_autotune_request(
-        ctx.config,
-        ctx.run_context,
-        observation=ctx.probe.observation,
-        backend=ctx.backend,
-        device_identity=ctx.device_identity,
-    )
-    artifact_batch_size = max(
-        (
-            preflight.planner.static_max_for(field, preflight.baseline)
-            for field in ("detection_batch_size", "slice_tile_batch_size")
-        ),
-        default=preflight.baseline.detection_batch_size,
-    )
-    if ctx.backend == "tensorrt":
-        ctx.params["INFERENCE_AUTOTUNE_TENSORRT_PROFILE_BATCH_SIZE"] = (
-            artifact_batch_size
-        )
     request = build_tracking_autotune_request(
         ctx.config,
         ctx.run_context,
@@ -179,7 +228,6 @@ def calibrate(ctx: AutotuneContext, *, budget_seconds: float):
     """Measure and persist a profile for this exact context."""
 
     from hydra_suite.core.inference.autotune.integration import (
-        build_tracking_autotune_request,
         resolve_tracking_inference_config,
     )
     from hydra_suite.core.inference.autotune.sidecar import (
@@ -188,24 +236,10 @@ def calibrate(ctx: AutotuneContext, *, budget_seconds: float):
         SidecarTrialSpec,
     )
 
-    preflight = build_tracking_autotune_request(
-        ctx.config,
-        ctx.run_context,
-        observation=ctx.probe.observation,
-        backend=ctx.backend,
-        device_identity=ctx.device_identity,
-    )
-    artifact_batch_size = max(
-        (
-            preflight.planner.static_max_for(field, preflight.baseline)
-            for field in ("detection_batch_size", "slice_tile_batch_size")
-        ),
-        default=preflight.baseline.detection_batch_size,
-    )
-    if ctx.backend == "tensorrt":
-        ctx.params["INFERENCE_AUTOTUNE_TENSORRT_PROFILE_BATCH_SIZE"] = (
-            artifact_batch_size
-        )
+    # Derived and injected by ``build_autotune_context``, never re-derived
+    # here: that duplication is what let calibrate and lookup key TensorRT
+    # profiles differently.
+    artifact_batch_size = ctx.artifact_batch_size
     executor = ContainedTrialExecutor(
         SidecarTrialSpec(
             video_path=ctx.run_context.video_path,

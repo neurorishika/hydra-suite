@@ -85,5 +85,9 @@ class CalibrationWorker(BaseWorker):
                 "reason": overlay.reason,
                 "profile_id": overlay.profile_id,
                 "effective": overlay.effective.to_dict(),
+                # I5: the cache mask is part of the pipeline fingerprint, so
+                # this profile only covers runs in the SAME cache mode. Report
+                # which one, so a later miss is explicable.
+                "cached_detections": bool(ctx.run_context.cached_fields),
             }
         )

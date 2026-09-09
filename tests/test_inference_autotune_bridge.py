@@ -94,3 +94,88 @@ def test_zero_detection_frames_are_not_dropped_from_measured_density(
     # runs several blocks, so the count is a multiple of 3, not literally 3.
     assert len(candidate.detection_counts) % 3 == 0
     assert len(candidate.detection_counts) >= 3
+
+
+def test_calibration_works_on_a_project_with_no_slicing(monkeypatch, tmp_path):
+    """Every fixture above is SLICED, which is exactly why the whole suite
+    stayed green while ``session.calibrate`` raised ``TypeError`` on every
+    non-SAHI project (``fly_obb``, ``worm_bgsub``, any bgsub or plain
+    direct-OBB project with slicing off).
+
+    ``InferenceTuningSettings.from_config`` leaves ``slice_tile_batch_size``
+    at ``None`` there, ``candidate_space`` returns ``()`` for a ``None``
+    current value, and ``static_max_for`` therefore falls back to ``None`` --
+    which ``max()`` cannot compare to the ``detection_batch_size`` int.
+    """
+
+    from hydra_suite.core.inference.autotune.models import InferenceTuningSettings
+
+    store = fake_store(monkeypatch, tmp_path / "store")
+    ctx = make_calibration_context(monkeypatch, tmp_path, cache_dir=None, sliced=False)
+
+    # The fixture really is the shape that broke: no tile batch size at all.
+    baseline = InferenceTuningSettings.from_config(ctx.config)
+    assert baseline.slice_tile_batch_size is None
+    # ... and the derivation still produced a usable int rather than raising.
+    assert isinstance(ctx.artifact_batch_size, int)
+    assert ctx.artifact_batch_size >= ctx.config.detection_batch_size
+
+    _effective, overlay, _result = session.calibrate(ctx, budget_seconds=60.0)
+
+    assert overlay is not None
+    assert overlay.status == "calibrated"
+    assert store.saved, "a non-sliced project must still persist a profile"
+    # And the digest helper -- the other copy of the same derivation -- works.
+    assert session.calibration_key_digest(ctx)
+
+
+def test_lookup_and_calibrate_agree_on_a_tensorrt_context(tmp_path):
+    """The profile key ``calibrate`` writes under must be the key ``lookup``
+    reads under, on the ONE backend where they used to diverge.
+
+    ``_model_fingerprints`` folds ``tensorrt_profile_fingerprint(...)`` --
+    derived from ``INFERENCE_AUTOTUNE_TENSORRT_PROFILE_BATCH_SIZE``, falling
+    back to ``config.detection_batch_size`` -- into EVERY model fingerprint.
+    While only ``calibrate`` injected that param, it keyed on the static
+    candidate maximum and ``lookup`` keyed on the configured batch size, so
+    no profile was ever findable on gpu_fast/CUDA.
+    """
+
+    from dataclasses import replace
+
+    from hydra_suite.core.inference.autotune.integration import (
+        build_tracking_autotune_request,
+    )
+    from tests.autotune_helpers import make_tensorrt_context
+
+    ctx = make_tensorrt_context(tmp_path)
+
+    def digest_of(context) -> str:
+        return build_tracking_autotune_request(
+            context.config,
+            context.run_context,
+            observation=context.probe.observation,
+            backend=context.backend,
+            device_identity=context.device_identity,
+        ).key.digest
+
+    # ``lookup`` builds exactly this request and injects nothing of its own.
+    assert digest_of(ctx) == session.calibration_key_digest(ctx)
+
+    # The param is genuinely load-bearing and genuinely the candidate
+    # maximum -- not merely equal because both sides fell back to the
+    # configured batch size.
+    assert ctx.params[session.TENSORRT_PROFILE_BATCH_PARAM] == ctx.artifact_batch_size
+    assert ctx.artifact_batch_size > ctx.config.detection_batch_size
+
+    unkeyed_params = dict(ctx.params)
+    unkeyed_params.pop(session.TENSORRT_PROFILE_BATCH_PARAM)
+    unkeyed = replace(
+        ctx,
+        params=unkeyed_params,
+        run_context=replace(ctx.run_context, params=unkeyed_params),
+    )
+    assert digest_of(unkeyed) != digest_of(ctx), (
+        "the TensorRT profile batch size must change the key, else this "
+        "test would pass even if the fix were reverted"
+    )

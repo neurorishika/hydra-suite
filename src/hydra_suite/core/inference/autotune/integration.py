@@ -618,6 +618,12 @@ def build_tracking_autotune_request(
     # baseline does not. Refusing to apply here would discard that rescue
     # and force the very baseline that just failed to fit.
     eligible = True
+    # Retained as coordinator API surface, NOT a live knob: no branch below
+    # ever clears it, and deliberately so -- nothing here may block applying
+    # an already-validated profile. It stays an explicit field (rather than a
+    # hardcoded True at the AutotuneRequest construction site) because
+    # ``coordinator.py`` reads ``request.allow_cached_reuse`` in two places
+    # and a future caller may legitimately want to refuse reuse.
     allow_cached_reuse = True
     eligibility_reason = None
     if context.execution_mode == "realtime":

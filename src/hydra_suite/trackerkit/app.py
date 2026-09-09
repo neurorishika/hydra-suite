@@ -231,6 +231,22 @@ Examples:
             f"(default: {DEFAULT_CALIBRATION_BUDGET_SECONDS:g})."
         ),
     )
+    # Manual fields feed ``compute_baseline_digest`` -> ``key.baseline_digest``
+    # (integration.py), so a project that pins a coordinate keys its profile
+    # differently from one that leaves it free. Without this flag here,
+    # ``calibrate`` could not produce the key a
+    # ``track --inference-autotune-manual ...`` run looks up.
+    calibrate_parser.add_argument(
+        "--inference-autotune-manual",
+        action="append",
+        default=[],
+        metavar="FIELD",
+        help=(
+            "Keep one tuning coordinate at its configured value. May be "
+            "repeated. MUST match the `track` run that will use the "
+            "resulting profile -- it is part of the profile key."
+        ),
+    )
     # Deliberately NO --gpus / --jobs: concurrent calibration on one box
     # measures contention, not throughput, and would silently produce a
     # confidently wrong profile. Neither flag is registered on this
@@ -435,6 +451,9 @@ def main(argv: list[str] | None = None) -> object:
                 args.video,
                 config_path=getattr(args, "config", None),
                 budget_seconds=float(args.budget_seconds),
+                inference_autotune_manual=getattr(
+                    args, "inference_autotune_manual", []
+                ),
             )
         except Exception as e:
             logger.error("Tracker calibration failed: %s", e, exc_info=True)

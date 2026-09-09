@@ -42,6 +42,9 @@ def describe_calibration_outcome(payload: dict) -> str:
     profile = str(payload.get("profile_id") or "").strip()
     profile_text = f" Profile {profile}." if profile else ""
 
+    values = _format_effective_vector(payload.get("effective"))
+    cache_mode = _format_cache_mode(payload)
+
     if status == "cancelled":
         return "Calibration cancelled. Your configured settings are unchanged."
     if status in _SUCCESS_STATUSES and reason == "kept_current_settings":
@@ -49,11 +52,12 @@ def describe_calibration_outcome(payload: dict) -> str:
             "Calibration complete: no configuration beat your current "
             "settings, so they were kept. That is a correct outcome on some "
             "systems (on MPS, cross-frame batching has measured up to 1.58x "
-            "slower)." + profile_text
+            "slower)." + profile_text + cache_mode
         )
-    values = _format_effective_vector(payload.get("effective"))
     if status in _SUCCESS_STATUSES:
-        return (f"Validated profile in use ({reason}).{profile_text}{values}").strip()
+        return (
+            f"Validated profile in use ({reason}).{profile_text}{values}{cache_mode}"
+        ).strip()
     # "unavailable" is the status coordinator.resolve emits when no profile
     # can be used for this key (coordinator.py:135, :152). Verified against
     # the coordinator's status vocabulary -- not guessed.
@@ -61,11 +65,42 @@ def describe_calibration_outcome(payload: dict) -> str:
         return (
             "No validated profile matches this video, model, and settings. "
             f"Your configured inference values are used unchanged ({reason})."
-            f"{values}"
+            f"{values}{cache_mode}"
         )
     return (
-        f"{status.replace('_', ' ').capitalize()} — {reason}.{profile_text}{values}"
+        f"{status.replace('_', ' ').capitalize()} — {reason}."
+        f"{profile_text}{values}{cache_mode}"
     ).strip()
+
+
+def _format_cache_mode(payload: dict) -> str:
+    """Name the detection-cache mode this profile is keyed for.
+
+    ``RESULT_CACHE_STAGE_MASK`` and ``cached_fields`` are both part of the
+    pipeline fingerprint / search space, so a profile measured WITHOUT a
+    detection cache is not the profile a cache-reusing run looks up. The
+    density bridge (``store.py``) re-keys only ``workload``, not the cache
+    mask, so it cannot close that gap -- and synthesising a masked twin
+    record would be dishonest, since the winning vector was never validated
+    under the masked (smaller) search space.
+
+    So the label SAYS which mode it covers. A user who then gets a miss on
+    run 2 has an explicable result and a clear action (calibrate again),
+    rather than a mysterious one.
+    """
+    cached = payload.get("cached_detections")
+    if cached is None:
+        return ""
+    if cached:
+        return (
+            " This profile covers runs that REUSE the detection cache "
+            "(cached detections on)."
+        )
+    return (
+        " This profile covers runs with NO detection cache. With "
+        "'Use cached detections' enabled, calibrate again after this "
+        "video's first tracking run."
+    )
 
 
 def _format_effective_vector(effective: object) -> str:

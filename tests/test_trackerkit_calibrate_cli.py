@@ -151,3 +151,70 @@ def test_calibrate_and_track_derive_identical_context_inputs(tmp_path):
     assert calibrate_realtime == worker_realtime
     assert calibrate_use_cache == worker_use_cache is True
     assert calibrate_cache_dir == worker_cache_dir
+
+
+def test_calibrate_accepts_the_manual_field_flag():
+    """I4: manual fields feed ``compute_baseline_digest`` -> the profile KEY.
+    Without this flag, ``calibrate`` could not produce the key a
+    ``track --inference-autotune-manual ...`` run looks up.
+    """
+    parser = build_parser()
+    args = parser.parse_args(
+        [
+            "calibrate",
+            "--video",
+            "v.mp4",
+            "--inference-autotune-manual",
+            "pose_batch_size",
+            "--inference-autotune-manual",
+            "pipeline_depth",
+        ]
+    )
+    assert args.inference_autotune_manual == ["pose_batch_size", "pipeline_depth"]
+
+
+def test_calibrate_threads_manual_fields_through_the_same_override_as_track(
+    monkeypatch, tmp_path
+):
+    """Parser existence is not enough: the flag must reach the config the
+    session is built from, through the SAME ``apply_inference_autotune_override``
+    helper ``track`` uses (batch_plan.py), or the two key differently.
+    """
+    from hydra_suite.trackerkit import calibrate_cli, cli_config
+
+    video = tmp_path / "v.mp4"
+    _write_tiny_video(video)
+
+    captured = {}
+
+    class _Stop(Exception):
+        pass
+
+    def fake_session(video_path, *, config_path=None, config_data=None, **_kwargs):
+        captured["config_data"] = config_data
+        raise _Stop()
+
+    monkeypatch.setattr(cli_config, "load_tracker_cli_session", fake_session)
+
+    with pytest.raises(_Stop):
+        calibrate_cli.run_calibrate_cli(
+            str(video),
+            budget_seconds=60.0,
+            inference_autotune_manual=["pose_batch_size"],
+        )
+
+    assert (
+        captured["config_data"] is not None
+    ), "manual fields must be merged into a config_data override, not dropped"
+    assert captured["config_data"]["inference_autotune_manual_fields"] == [
+        "pose_batch_size"
+    ]
+    # And it is the SAME merge `track` performs.
+    expected = cli_config.apply_inference_autotune_override(
+        cli_config.load_tracker_cli_config(None),
+        manual_fields=("pose_batch_size",),
+    )
+    assert (
+        captured["config_data"]["inference_autotune_manual_fields"]
+        == expected["inference_autotune_manual_fields"]
+    )

@@ -113,6 +113,13 @@ def test_gui_worker_and_cli_build_the_same_context_kwargs():
     The GUI worker and ``run_calibrate_cli`` must hand
     ``build_autotune_context`` the same set of keywords, or the profile the
     GUI persists lands under a key the production run never looks up.
+
+    Scope, stated honestly: this compares keyword NAMES only. It catches an
+    argument DROPPED on one path, and nothing else. It would NOT have caught
+    the realtime bug (both paths passed a ``realtime=`` keyword; one passed a
+    hardcoded ``False``), and it cannot catch two paths passing different
+    VALUES under the same name. The value-level guards are the separate
+    behavioural tests below.
     """
     from hydra_suite.trackerkit import calibrate_cli
     from hydra_suite.trackerkit.gui.workers import calibration_worker
@@ -129,9 +136,15 @@ def test_worker_forwards_realtime_rather_than_hardcoding_false(monkeypatch):
 
     captured = {}
 
+    class _Ctx:
+        # The worker reports the cache mode it calibrated in (I5), so the
+        # stub context needs the field that carries it.
+        class run_context:  # noqa: N801 - stand-in namespace
+            cached_fields = frozenset()
+
     def fake_build(config, params, **kwargs):
         captured.update(kwargs)
-        return object()
+        return _Ctx()
 
     class _Overlay:
         status = "calibrated"
@@ -246,3 +259,90 @@ def test_effective_vector_is_shown_for_unavailable_and_deferred_statuses():
     )
     assert "detection_batch_size=4" in deferred_text
     assert "pipeline_depth=2" in deferred_text
+
+
+def test_status_label_names_the_detection_cache_mode():
+    """I5: ``RESULT_CACHE_STAGE_MASK`` is part of ``PipelineFingerprint`` and
+    ``use_cached_detections`` also decides ``cached_fields``, so a profile
+    covers exactly ONE cache mode. The density bridge re-keys only
+    ``workload``, so it cannot close that gap -- and synthesising a masked
+    twin record would be dishonest (the masked key implies a different,
+    smaller search space the winning vector was never validated under).
+
+    So the label must SAY which mode it covers, making a run-2 miss
+    explicable rather than mysterious.
+    """
+    from hydra_suite.trackerkit.gui.dialogs.calibration import (
+        describe_calibration_outcome,
+    )
+
+    fresh = describe_calibration_outcome(
+        {
+            "status": "calibrated",
+            "reason": "measured",
+            "profile_id": "abc",
+            "effective": {"detection_batch_size": 4},
+            "cached_detections": False,
+        }
+    )
+    assert "NO detection cache" in fresh
+    assert "calibrate again" in fresh
+
+    cached = describe_calibration_outcome(
+        {
+            "status": "calibrated",
+            "reason": "measured",
+            "profile_id": "abc",
+            "effective": {"detection_batch_size": 4},
+            "cached_detections": True,
+        }
+    )
+    assert "REUSE the detection cache" in cached
+
+    # A payload with no cache-mode information must not invent one.
+    silent = describe_calibration_outcome(
+        {"status": "calibrated", "reason": "measured", "profile_id": "abc"}
+    )
+    assert "detection cache" not in silent
+
+
+def test_gui_worker_reports_the_cache_mode_it_calibrated_in(monkeypatch, tmp_path):
+    """The label can only be honest if the worker actually reports the mode
+    from the context it calibrated with -- not a hardcoded guess."""
+    from hydra_suite.core.inference.autotune import session
+    from hydra_suite.trackerkit.gui.workers.calibration_worker import CalibrationWorker
+
+    class _Ctx:
+        class run_context:  # noqa: N801 - stand-in namespace
+            cached_fields = frozenset({"detection_batch_size"})
+
+    class _Overlay:
+        status = "calibrated"
+        reason = "measured"
+        profile_id = "abc"
+
+        class effective:
+            @staticmethod
+            def to_dict():
+                return {"detection_batch_size": 4}
+
+    monkeypatch.setattr(session, "build_autotune_context", lambda *a, **k: _Ctx())
+    monkeypatch.setattr(session, "calibrate", lambda *a, **k: (None, _Overlay(), None))
+
+    worker = CalibrationWorker(
+        {},
+        object(),
+        video_path=str(tmp_path / "v.mp4"),
+        budget_seconds=60.0,
+        frame_width=16,
+        frame_height=12,
+        start_frame=0,
+        end_frame=1,
+        realtime=False,
+        use_cached_detections=True,
+    )
+    payloads = []
+    worker.completed.connect(payloads.append)
+    worker.execute()
+
+    assert payloads and payloads[0]["cached_detections"] is True
