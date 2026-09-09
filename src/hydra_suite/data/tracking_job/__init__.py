@@ -9,6 +9,12 @@ from .manifest import (
     TrackingJobError,
     validate_job_relpath,
 )
+from .references import (
+    PlannedModel,
+    copy_model_reference,
+    external_key_for,
+    write_registry_subset,
+)
 
 __all__ = [
     "JOB_MANIFEST_FILENAME",
@@ -18,4 +24,8 @@ __all__ = [
     "JobVideo",
     "TrackingJobError",
     "validate_job_relpath",
+    "PlannedModel",
+    "copy_model_reference",
+    "external_key_for",
+    "write_registry_subset",
 ]
