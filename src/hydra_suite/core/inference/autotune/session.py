@@ -10,7 +10,7 @@ two is the whole correctness argument for this feature.
 from __future__ import annotations
 
 import logging
-from dataclasses import dataclass
+from dataclasses import dataclass, replace
 from typing import Any, Callable
 
 from hydra_suite.core.inference.config import InferenceConfig
@@ -282,8 +282,27 @@ def calibrate(ctx: AutotuneContext, *, budget_seconds: float):
             ),
         )
     )
-    effective, overlay, result = resolve_tracking_inference_config(
+    # The ONE place the calibrate mode is set. ``build_inference_config_from_params``
+    # always builds the policy as ``lookup`` (a config file never asks to
+    # measure), and ``coordinator.resolve`` returns "unavailable / no validated
+    # profile" immediately for a lookup request -- so without this replace
+    # BOTH the GUI Calibrate button and ``trackerkit calibrate`` were inert:
+    # they never built a search, never measured, never persisted. The budget
+    # is threaded here too: the coordinator's MeasurementProtocol deadline
+    # reads ``policy.budget_seconds``, so passing it only to the sidecar spec
+    # left the caller's budget half-applied. Neither field enters the profile
+    # key (the key folds ``manual_fields`` only), so a profile calibrated
+    # through this config is still found by a plain lookup run.
+    calibrate_config = replace(
         ctx.config,
+        inference_autotune=replace(
+            ctx.config.inference_autotune,
+            mode="calibrate",
+            budget_seconds=float(budget_seconds),
+        ),
+    )
+    effective, overlay, result = resolve_tracking_inference_config(
+        calibrate_config,
         ctx.run_context,
         observation=ctx.probe.observation,
         backend=ctx.backend,
