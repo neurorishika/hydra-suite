@@ -1020,7 +1020,14 @@ def build_engine_params(
     # confidence, then back-fills CNN_CLASSIFIER_MODEL_PATH from
     # COLOR_TAG_MODEL_PATH when empty, and reads the batch size off the first
     # configured CNN classifier (falling back to 64). Reproduce verbatim.
-    color_tag_model_path = str(_cfg_get(cfg, "color_tag_model_path", default=""))
+    # COLOR_TAG_MODEL_PATH is persisted models-root-relative (see
+    # gui/orchestrators/config.py). Resolve it here like every other model key:
+    # a relative value otherwise reaches the engine verbatim. resolve_model_path
+    # returns "" for "" and leaves an already-absolute path untouched, so both
+    # the disabled case and existing absolute configs are unaffected.
+    color_tag_model_path = str(
+        resolve_model_path(_cfg_get(cfg, "color_tag_model_path", default=""))
+    )
     cnn_classifier_model_path = color_tag_model_path
     cnn_classifier_batch_size = int(
         cnn_classifiers[0].get("batch_size", 64) if cnn_classifiers else 64
@@ -1588,7 +1595,7 @@ def build_engine_params(
         "APRILTAG_CROP_PADDING": float(
             _cfg_get(cfg, "apriltag_crop_padding", default=0.0)
         ),
-        "COLOR_TAG_MODEL_PATH": str(_cfg_get(cfg, "color_tag_model_path", default="")),
+        "COLOR_TAG_MODEL_PATH": color_tag_model_path,
         "COLOR_TAG_CONFIDENCE": float(
             _cfg_get(cfg, "color_tag_confidence", default=0.5)
         ),
