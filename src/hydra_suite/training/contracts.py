@@ -314,12 +314,28 @@ class Sam3LoraParams:
     # These are per-run PARAMETERS, never module constants (D18's lesson: a
     # baked threshold becomes dataset-specific and then needs a code edit).
     patience: int = 0
-    # An epoch improves only if it beats the best so far by MORE than this.
-    # 0.005 is well inside noise: the between-seed sd of `val_loss_mean`
-    # measured 0.0224 across three seeds on the 2026-09 corpus, so this cannot
-    # fire on seed noise alone. One corpus, three seeds -- which is exactly
-    # why it stays tunable rather than becoming a constant.
-    min_delta: float = 0.005
+    # An epoch improves only if it beats the best so far by MORE than this,
+    # so `min_delta` must sit ABOVE the run-to-run noise, not inside it. An
+    # earlier version of this comment had that backwards and justified 0.005
+    # as "well inside noise": a threshold below the noise is CLEARED BY the
+    # noise, which resets patience on a fluctuation and stops the run too
+    # LATE. The failure is wasted epochs, not a truncated run.
+    #
+    # The right yardstick is also not the between-seed sd. That number
+    # (0.0259 over six seeds) carries each seed's baseline offset, which
+    # cancels in the epoch-to-epoch comparison the rule actually makes.
+    # Measured PAIRED epoch-to-epoch sd on the 2026-09 corpus is ~0.008:
+    #
+    #     ep1->2  +0.0408 (paired sd 0.0075)   real
+    #     ep2->3  +0.0217 (paired sd 0.0077)   real
+    #     ep3->4  -0.0006 (paired sd 0.0092)   noise
+    #     ep4->5  +0.0021 (paired sd 0.0031)   noise
+    #     ep5->6  -0.0007 (paired sd 0.0076)   noise
+    #
+    # 0.010 is ~1.25x that paired sd: it admits both real improvements and
+    # rejects every plateau step. Six seeds, ONE 78-image corpus -- which is
+    # exactly why this stays a per-run parameter and not a constant.
+    min_delta: float = 0.010
 
 
 @dataclass(slots=True)
