@@ -21,6 +21,7 @@ from hydra_suite.data.al.escalation import (
     records_from_obb_result,
 )
 from hydra_suite.data.al.export import ExportedFrame, export_al_dataset
+from hydra_suite.data.al.inference_adapter import AL_DEFAULT_MAX_TARGETS
 from hydra_suite.utils.geometry_levels import GeometryLevel
 
 logger = logging.getLogger(__name__)
@@ -419,7 +420,24 @@ def _init_detection_runner(params, video_path):
                     params.get("DATASET_YOLO_CONFIDENCE_THRESHOLD", 0.05)
                 ),
                 iou_threshold=float(params.get("DATASET_YOLO_IOU_THRESHOLD", 0.5)),
-                max_targets=max(1, int(params.get("MAX_TARGETS", 8))),
+                # NOT `MAX_TARGETS`. That is the user's declared animal count,
+                # a tracking knob, and this pass writes exported labels
+                # directly from the detections it returns -- so capping here
+                # bakes a fabricated "only N animals in this frame" ground
+                # truth into the training set for exactly the crowded frames
+                # active learning exists to find. The post-filter cap keeps
+                # the LARGEST detections rather than the most confident, so
+                # the truncation is biased as well as lossy.
+                #
+                # This is the same defect `64b8c7cd` fixed on DetectKit's AL
+                # path; `AL_DEFAULT_MAX_TARGETS` (= ultralytics' own max_det)
+                # is the shared ceiling, with headroom above a declared count
+                # larger than it so the cap can never bite before the count
+                # signals can measure.
+                max_targets=max(
+                    AL_DEFAULT_MAX_TARGETS,
+                    2 * max(1, int(params.get("MAX_TARGETS", 8))),
+                ),
                 mode=mode,
                 model_task=task,
                 emit_native_geometry=(native_level is GeometryLevel.POLYGON),

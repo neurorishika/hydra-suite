@@ -119,3 +119,74 @@ def test_export_detector_still_requests_native_polygons(monkeypatch):
     """The polygon opt-in must survive the added param passthrough."""
     export = _export_cfg(monkeypatch, _sliced_segment_params())
     assert export.obb.emit_native_geometry is True
+
+
+# ── the export detection cap must not be the tracking animal count ─────────
+
+
+def test_export_detector_does_not_cap_at_tracking_max_targets(monkeypatch):
+    """MAX_TARGETS is the user's declared animal count, a tracking knob.
+
+    Applying it to the export pass bakes a fabricated "only N animals here"
+    ground truth into the labels for exactly the crowded frames active
+    learning exists to find. The post-filter cap keeps the LARGEST detections
+    rather than the most confident, so the truncation is biased as well as
+    lossy. `AL_DEFAULT_MAX_TARGETS` exists for this; DetectKit's AL worker
+    already uses it (see `64b8c7cd`), and this path must too.
+    """
+    from hydra_suite.data.al.inference_adapter import AL_DEFAULT_MAX_TARGETS
+
+    params = _sliced_segment_params()
+    params["MAX_TARGETS"] = 25
+    export = _export_cfg(monkeypatch, params).obb
+
+    assert export.max_detections >= AL_DEFAULT_MAX_TARGETS, (
+        f"export truncates to {export.max_detections} detections/frame; "
+        "crowded frames would be exported with invented ground truth"
+    )
+
+
+def test_export_detector_cap_has_headroom_over_declared_count(monkeypatch):
+    """A colony larger than the default ceiling still gets headroom.
+
+    Mirrors DetectKit's `max(AL_DEFAULT_MAX_TARGETS, 2 * expected_count)` so
+    the ceiling can never bite before the count signals can measure.
+    """
+    from hydra_suite.data.al.inference_adapter import AL_DEFAULT_MAX_TARGETS
+
+    params = _sliced_segment_params()
+    params["MAX_TARGETS"] = 400
+    export = _export_cfg(monkeypatch, params).obb
+
+    assert export.max_detections >= 2 * 400
+    assert export.max_detections > AL_DEFAULT_MAX_TARGETS
+
+
+def test_export_does_not_reuse_a_cache_capped_below_its_own_ceiling(monkeypatch):
+    """A cache written under the tracking cap must not satisfy the export pass.
+
+    Tracking's raw detection cache holds at most `2 * MAX_TARGETS` rows. Export
+    deliberately runs a much higher ceiling so crowded frames are not exported
+    with invented ground truth. Serving export from tracking's cache would hand
+    it exactly the truncated set the higher ceiling exists to avoid, so the two
+    must land on DIFFERENT cache keys -- `max_detections` and
+    `raw_detection_cap` are in the key for precisely this reason.
+    """
+    from hydra_suite.core.inference.cache.keys import detection_cache_key
+    from hydra_suite.core.inference.config import build_obb_only_config
+
+    params = _sliced_segment_params()
+    params["MAX_TARGETS"] = 25
+    export = _export_cfg(monkeypatch, params).obb
+
+    tracking = build_obb_only_config(
+        params["YOLO_OBB_DIRECT_MODEL_PATH"],
+        confidence_threshold=0.05,
+        iou_threshold=0.5,
+        max_targets=25,
+        mode="direct",
+        model_task="segment",
+    ).obb
+
+    assert export.max_detections > tracking.max_detections
+    assert detection_cache_key(export, None) != detection_cache_key(tracking, None)
