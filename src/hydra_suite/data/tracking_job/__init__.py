@@ -9,6 +9,12 @@ from .manifest import (
     TrackingJobError,
     validate_job_relpath,
 )
+from .outputs import (
+    PullDestination,
+    discover_outputs,
+    map_outputs_to_origins,
+    plan_pull,
+)
 from .references import (
     PlannedModel,
     copy_model_reference,
@@ -38,4 +44,8 @@ __all__ = [
     "copy_model_reference",
     "external_key_for",
     "write_registry_subset",
+    "PullDestination",
+    "discover_outputs",
+    "map_outputs_to_origins",
+    "plan_pull",
 ]
