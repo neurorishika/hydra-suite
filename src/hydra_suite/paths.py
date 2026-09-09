@@ -190,6 +190,11 @@ def get_advanced_config_path() -> Path:
     return _user_config_dir() / "advanced_config.json"
 
 
+def get_shared_roots_path() -> Path:
+    """Host mount table mapping a shared-root alias to this host's mount point."""
+    return _user_config_dir() / "shared_roots.json"
+
+
 def get_presets_dir() -> Path:
     """Return (and create) the presets directory, seeding bundled defaults on first use."""
     p = _user_config_dir() / "presets"
