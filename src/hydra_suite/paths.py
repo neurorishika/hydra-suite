@@ -169,6 +169,22 @@ def get_training_workspace_dir(subdir: str = "YOLO") -> Path:
     return p
 
 
+def get_platform_config_dir() -> Path:
+    """The platformdirs config directory, IGNORING ``HYDRA_CONFIG_DIR``.
+
+    A packed job's ``run.sh`` redirects ``HYDRA_CONFIG_DIR`` at the job's own
+    ``config/`` snapshot before invoking preflight. The shared-root mount table
+    is HOST identity, not job content, and is deliberately never snapshotted --
+    so preflight cannot reach it through ``get_config_dir()``, which honours
+    that redirection. This helper resolves the real per-user location instead.
+
+    Note this does NOT create the directory: callers only ever probe for a file
+    inside it, and a preflight check must not have the side effect of creating
+    config directories on a compute box.
+    """
+    return Path(user_config_dir(APP_NAME, APP_AUTHOR))
+
+
 def get_advanced_config_path() -> Path:
     """Return the path to the advanced configuration file."""
     return _user_config_dir() / "advanced_config.json"
