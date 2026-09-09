@@ -374,5 +374,7 @@ def test_worker_resolves_cache_replay_instead_of_skipping_the_preflight(
     _effective, overlay, _result = autotune_session.lookup(ctx)
 
     assert overlay is not None
-    assert overlay.status == "deferred_due_to_contention"
+    # Not "deferred_due_to_contention": a full cache replay is not a
+    # temporary resource condition that a later retry resolves.
+    assert overlay.status == "not_tunable"
     assert overlay.reason == "all inference stages are satisfied by reusable caches"

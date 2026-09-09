@@ -189,6 +189,13 @@ def test_detection_cache_reuse_is_modelled_as_nothing_to_tune(monkeypatch, tmp_p
     headtail.npz, cnn_<label>.npz, pose.npz, apriltag.npz). Every stage is then
     served from disk and essentially no inference runs.
 
+    The reuse REQUEST alone does not establish that, though: the GUI dialog
+    and ``calibrate`` CLI pass the raw checkbox/config flag, and the run's own
+    lookup (worker.py:1234) passes ``self.use_cached_detections`` before any
+    runner exists. So this classification is made only when
+    ``cache_set_is_fully_reusable`` agrees -- faked here, since the helper
+    fabricates density without writing real cache files.
+
     This used to be modelled as ``RESULT_CACHE_STAGE_MASK=("detector",)`` with
     only the two detector fields frozen, i.e. it asserted pose/head-tail/identity
     still ran. They do not. That invented a middle state the pipeline never
@@ -199,6 +206,10 @@ def test_detection_cache_reuse_is_modelled_as_nothing_to_tune(monkeypatch, tmp_p
     """
 
     fake_store(monkeypatch, tmp_path / "store")
+    monkeypatch.setattr(
+        "hydra_suite.core.inference.autotune.session._cache_set_fully_reusable",
+        lambda *args, **kwargs: True,
+    )
     ctx = make_calibration_context(
         monkeypatch,
         tmp_path,

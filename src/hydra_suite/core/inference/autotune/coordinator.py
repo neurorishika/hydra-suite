@@ -44,6 +44,13 @@ class AutotuneRequest:
     eligible: bool = True
     allow_cached_reuse: bool = True
     eligibility_reason: str | None = None
+    # Which status an ineligible request reports. "deferred_due_to_contention"
+    # is a TEMPORARY condition (a busy or throttled accelerator) and its
+    # wording promises a later retry will work; realtime mode, full cache
+    # replay and a failed baseline admission are none of those, and reporting
+    # them as contention produced self-contradicting text ("Deferred due to
+    # contention -- all inference stages are satisfied by reusable caches").
+    ineligible_status: str = "deferred_due_to_contention"
     stage_shares: tuple[tuple[str, float], ...] = ()
     should_cancel: Callable[[], bool] = lambda: False
     status_callback: Callable[[str], None] = lambda _message: None
@@ -140,7 +147,7 @@ class AutotuneCoordinator:
             return ResolveResult(
                 InferenceRuntimeOverlay.baseline(
                     request.baseline,
-                    status="deferred_due_to_contention",
+                    status=request.ineligible_status,
                     reason=request.eligibility_reason
                     or "live resource eligibility failed",
                 )
