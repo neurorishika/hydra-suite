@@ -30,8 +30,7 @@ from hydra_suite.core.inference.cache.store import DetectionCacheHandle, _npz_sa
 def _real_key():
     return CacheKey(
         schema_version=CACHE_SCHEMA_VERSION,
-        model_path="/models/obb.pt",
-        model_mtime=1234.5,
+        model_id="/models/obb.pt",
         config_hash="abc123",
     )
 

@@ -126,95 +126,97 @@ def test_cache_key_carries_schema_version():
     assert k.schema_version == CACHE_SCHEMA_VERSION
 
 
-def test_cache_schema_version_is_v4_identity_repair_bump():
-    """Finding C1: the identity-subsystem-repair branch changed what
-    cnn/headtail caches produce from unchanged model_path/mtime/geometry
-    inputs (fit-policy-aware Layer-2 dispatch + head-first crop orientation),
-    so CACHE_SCHEMA_VERSION must have been bumped to invalidate old caches.
+def test_cache_schema_version_is_v5_content_identity_bump():
+    """Task 4 (portable-jobs): model and video identity became CONTENT-based
+    (sha256 of bytes) rather than (absolute path, mtime)-based, so old
+    caches keyed on the removed model_path/model_mtime fields are no longer
+    even constructible -- CACHE_SCHEMA_VERSION must be bumped to invalidate
+    them. See ``cache/base.py``'s v5 changelog entry.
     """
-    assert CACHE_SCHEMA_VERSION == 4
+    assert CACHE_SCHEMA_VERSION == 5
 
 
-def test_cnn_and_headtail_keys_differ_across_schema_v3_v4():
-    """A cache written under schema v3 (pre-repair) must not match one
-    written under v4 (post-repair) even with identical model/geometry --
+def test_cnn_and_headtail_keys_differ_across_schema_v4_v5():
+    """A cache written under the previous schema version must not match one
+    written under the current version even with identical model/geometry --
     the schema_version field alone must invalidate it.
     """
-    ht_v4 = headtail_cache_key(_ht_config(), _GEOM_A)
-    ht_v3 = CacheKey(
-        schema_version=3,
-        model_path=ht_v4.model_path,
-        model_mtime=ht_v4.model_mtime,
-        config_hash=ht_v4.config_hash,
+    ht_new = headtail_cache_key(_ht_config(), _GEOM_A)
+    ht_old = CacheKey(
+        schema_version=CACHE_SCHEMA_VERSION - 1,
+        model_id=ht_new.model_id,
+        config_hash=ht_new.config_hash,
     )
-    assert ht_v4.schema_version == 4
-    assert not ht_v4.matches(ht_v3)
+    assert ht_new.schema_version == CACHE_SCHEMA_VERSION
+    assert not ht_new.matches(ht_old)
 
-    cnn_v4 = cnn_cache_key(_cnn_config(), _GEOM_A)
-    cnn_v3 = CacheKey(
-        schema_version=3,
-        model_path=cnn_v4.model_path,
-        model_mtime=cnn_v4.model_mtime,
-        config_hash=cnn_v4.config_hash,
+    cnn_new = cnn_cache_key(_cnn_config(), _GEOM_A)
+    cnn_old = CacheKey(
+        schema_version=CACHE_SCHEMA_VERSION - 1,
+        model_id=cnn_new.model_id,
+        config_hash=cnn_new.config_hash,
     )
-    assert cnn_v4.schema_version == 4
-    assert not cnn_v4.matches(cnn_v3)
+    assert cnn_new.schema_version == CACHE_SCHEMA_VERSION
+    assert not cnn_new.matches(cnn_old)
 
 
 def test_cache_key_matches_only_when_schema_version_matches():
-    a = CacheKey(
-        schema_version=2, model_path="/m.pt", model_mtime=12345.0, config_hash="x"
-    )
-    b = CacheKey(
-        schema_version=2, model_path="/m.pt", model_mtime=12345.0, config_hash="x"
-    )
-    c = CacheKey(
-        schema_version=1, model_path="/m.pt", model_mtime=12345.0, config_hash="x"
-    )
+    a = CacheKey(schema_version=2, model_id="/m.pt", config_hash="x")
+    b = CacheKey(schema_version=2, model_id="/m.pt", config_hash="x")
+    c = CacheKey(schema_version=1, model_id="/m.pt", config_hash="x")
     assert a.matches(b) is True
     assert a.matches(c) is False
-
-
-def test_cache_key_matches_tolerates_small_mtime_diff():
-    """Floating-point mtime can vary at the microsecond level — within 1ms is the same."""
-    a = CacheKey(
-        schema_version=2, model_path="/m.pt", model_mtime=12345.0, config_hash="x"
-    )
-    b = CacheKey(
-        schema_version=2,
-        model_path="/m.pt",
-        model_mtime=12345.0001,
-        config_hash="x",
-    )
-    assert a.matches(b) is True
 
 
 # ---- detection_cache_key ----
 
 
-def test_detection_key_changes_with_model_path():
-    k1 = detection_cache_key(_obb_direct(path="/a.pt"))
-    k2 = detection_cache_key(_obb_direct(path="/b.pt"))
+def test_detection_key_changes_with_model_path(tmp_path):
+    """Rewritten (round-7 corrected rationale): two nonexistent paths already
+    diverge via the missing-model sentinel, which never exercises real
+    content hashing. Use two real files with DIFFERENT bytes so this test
+    actually exercises the content-hashing code path."""
+    a = tmp_path / "a.pt"
+    b = tmp_path / "b.pt"
+    a.write_bytes(b"model-a-bytes")
+    b.write_bytes(b"model-b-bytes")
+    k1 = detection_cache_key(_obb_direct(path=str(a)))
+    k2 = detection_cache_key(_obb_direct(path=str(b)))
     assert k1 != k2
 
 
 def test_detection_key_stable_with_threshold():
     k1 = detection_cache_key(_obb_direct(threshold=0.3))
     k2 = detection_cache_key(_obb_direct(threshold=0.8))
-    assert k1.model_path == k2.model_path
+    assert k1.model_id == k2.model_id
     assert k1.config_hash == k2.config_hash
 
 
-def test_detection_key_sequential_encodes_both_models():
+def test_detection_key_sequential_encodes_both_models(tmp_path):
+    """Rewritten: under content identity the key contains sha256 hex, not
+    paths, so assert the key changes when EITHER model's bytes change --
+    rewriting each file in place (same path, new content) isolates content
+    identity from path identity for both halves of the pair."""
+    det = tmp_path / "det.pt"
+    obb = tmp_path / "obb.pt"
+    det.write_bytes(b"det-bytes")
+    obb.write_bytes(b"obb-bytes")
     cfg = OBBConfig(
         mode="sequential",
         sequential=OBBSequentialConfig(
-            detect_model_path="/det.pt",
-            obb_model_path="/obb.pt",
+            detect_model_path=str(det),
+            obb_model_path=str(obb),
         ),
     )
     k = detection_cache_key(cfg)
-    assert "/det.pt" in k.model_path and "/obb.pt" in k.model_path
+
+    det.write_bytes(b"det-bytes-changed")
+    assert detection_cache_key(cfg) != k
+
+    det.write_bytes(b"det-bytes")  # restore, isolate the obb-side change
+    assert detection_cache_key(cfg) == k
+    obb.write_bytes(b"obb-bytes-changed")
+    assert detection_cache_key(cfg) != k
 
 
 def test_direct_raw_output_contract_changes_detection_cache_key():
@@ -280,25 +282,25 @@ def test_native_geometry_export_changes_obb_detection_cache_key(mode: str) -> No
     assert detection_cache_key(base) != detection_cache_key(export)
 
 
-def test_sequential_second_model_signature_invalidates_detection_key(monkeypatch):
+def test_sequential_second_model_signature_invalidates_detection_key(tmp_path):
+    """Rewritten: Step 5 deletes ``keys._mtime`` entirely, so there is no
+    mtime hook left to monkeypatch. Rewrite the second model file's bytes on
+    disk instead and assert the key changes via the real content-based
+    path."""
+    det = tmp_path / "det.pt"
+    obb = tmp_path / "obb.pt"
+    det.write_bytes(b"det-bytes")
+    obb.write_bytes(b"obb-bytes-v1")
     cfg = OBBConfig(
         mode="sequential",
         sequential=OBBSequentialConfig(
-            detect_model_path="/det.pt",
-            obb_model_path="/obb.pt",
+            detect_model_path=str(det),
+            obb_model_path=str(obb),
         ),
     )
-
-    def _mtime(path):
-        return 10.0 if path == "/det.pt" else 20.0
-
-    monkeypatch.setattr("hydra_suite.core.inference.cache.keys._mtime", _mtime)
     first = detection_cache_key(cfg)
 
-    def _changed_mtime(path):
-        return 10.0 if path == "/det.pt" else 21.0
-
-    monkeypatch.setattr("hydra_suite.core.inference.cache.keys._mtime", _changed_mtime)
+    obb.write_bytes(b"obb-bytes-v2")
     second = detection_cache_key(cfg)
 
     assert first != second
@@ -536,7 +538,7 @@ def test_bgsub_key_changes_with_detection_params():
     k1 = bgsub_detection_cache_key(BgSubConfig.from_params({"THRESHOLD_VALUE": 25}))
     k2 = bgsub_detection_cache_key(BgSubConfig.from_params({"THRESHOLD_VALUE": 100}))
     assert k1 != k2
-    assert k1.model_path == "background_subtraction"
+    assert k1.model_id == "background_subtraction"
 
 
 def test_bgsub_key_stable_for_same_params():
@@ -576,8 +578,7 @@ def test_with_video_signature_changes_key_and_differs_per_video():
     assert k_a != k
     assert k_a != k_b
     # Only config_hash is mixed; model identity fields are untouched.
-    assert k_a.model_path == k.model_path
-    assert k_a.model_mtime == k.model_mtime
+    assert k_a.model_id == k.model_id
 
 
 def test_video_signature_changes_with_file_size(tmp_path):
@@ -609,7 +610,7 @@ def test_headtail_key_changes_with_model_path():
 def test_headtail_key_stable_with_threshold():
     k1 = headtail_cache_key(_ht_config(threshold=0.3), _GEOM_A)
     k2 = headtail_cache_key(_ht_config(threshold=0.9), _GEOM_A)
-    assert k1.model_path == k2.model_path
+    assert k1.model_id == k2.model_id
     assert k1.config_hash == k2.config_hash
 
 
@@ -625,7 +626,7 @@ def test_headtail_key_changes_with_canonical_params():
 def test_cnn_key_stable_with_calibration_temperature():
     k1 = cnn_cache_key(_cnn_config(temperature=1.0), _GEOM_A)
     k2 = cnn_cache_key(_cnn_config(temperature=2.5), _GEOM_A)
-    assert k1.model_path == k2.model_path
+    assert k1.model_id == k2.model_id
     assert k1.config_hash == k2.config_hash
 
 
@@ -682,7 +683,7 @@ def test_apriltag_key_changes_with_family():
 
 def test_apriltag_key_has_empty_model_path():
     k = apriltag_cache_key(_at_config())
-    assert k.model_path == ""
+    assert k.model_id == ""
 
 
 # ---- _open_caches: consumer/write-path ROI-mask coordination ----

@@ -29,7 +29,7 @@ def _square(cx: float, cy: float, half: float) -> np.ndarray:
 
 
 def _write_one_frame(path: Path) -> None:
-    key = CacheKey(schema_version=3, model_path="m", model_mtime=1.0, config_hash="h")
+    key = CacheKey(schema_version=3, model_id="m", config_hash="h")
     handle = DetectionCacheHandle(path=path, key=key)
     handle.write_frame(
         0,

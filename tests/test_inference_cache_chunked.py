@@ -27,7 +27,7 @@ from hydra_suite.core.inference.result import (
 
 
 def _key() -> CacheKey:
-    return CacheKey(CACHE_SCHEMA_VERSION, "/model.pt", 1.25, "config")
+    return CacheKey(CACHE_SCHEMA_VERSION, "/model.pt", "config")
 
 
 def _obb(frame: int, count: int = 2) -> OBBResult:
@@ -429,7 +429,7 @@ def test_cache_key_mismatch_does_not_return_empty_result(tmp_path):
     writer = DetectionCacheHandle(path, _key(), chunk_size=1)
     writer.write_frame(0, result=_obb(0, 0))
     writer.close()
-    wrong = CacheKey(CACHE_SCHEMA_VERSION, "/other.pt", 1.25, "config")
+    wrong = CacheKey(CACHE_SCHEMA_VERSION, "/other.pt", "config")
     reader = DetectionCacheHandle(path, wrong)
     assert not reader.is_valid()
     assert reader.read_frame(0) is None

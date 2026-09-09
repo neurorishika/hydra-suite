@@ -10,7 +10,7 @@ from hydra_suite.refinekit.gui.overlay_utils import (
 
 
 def _write_one_frame(path):
-    key = CacheKey(schema_version=3, model_path="m", model_mtime=1.0, config_hash="h")
+    key = CacheKey(schema_version=3, model_id="m", config_hash="h")
     h = DetectionCacheHandle(path=path, key=key)
     h.write_frame(
         0,

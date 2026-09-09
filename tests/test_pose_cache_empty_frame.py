@@ -23,7 +23,7 @@ KPTS = 13
 
 @pytest.fixture
 def key():
-    return CacheKey(CACHE_SCHEMA_VERSION, "/model.pt", 1.0, "config")
+    return CacheKey(CACHE_SCHEMA_VERSION, "/model.pt", "config")
 
 
 def _write(handle, frame_idx, n_det, n_kpt):
