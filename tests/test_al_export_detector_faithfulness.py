@@ -190,3 +190,36 @@ def test_export_does_not_reuse_a_cache_capped_below_its_own_ceiling(monkeypatch)
 
     assert export.max_detections > tracking.max_detections
     assert detection_cache_key(export, None) != detection_cache_key(tracking, None)
+
+
+def test_export_does_not_inherit_tracking_tile_memory_budget(monkeypatch):
+    """Tile memory budget is an EXECUTION control, not detection geometry.
+
+    Slice geometry must match tracking (what gets detected); the tile memory
+    budget must not, because it only decides how many tiles ride in one model
+    call. Export runs a much higher detection ceiling than tracking, and the
+    dense segment-mask term scales with that ceiling, so inheriting tracking's
+    budget made a sliced segment export inadmissible -- refused outright, with
+    zero labels, rather than throttled to smaller chunks.
+    """
+    from hydra_suite.core.inference.stages.slicing import (
+        MAX_TILE_BATCH_BYTES,
+        estimated_prediction_job_bytes,
+    )
+
+    params = _sliced_segment_params()
+    params["SLICE_MEMORY_BUDGET_MIB"] = 256
+    export = _export_cfg(monkeypatch, params).obb
+
+    budget = min(MAX_TILE_BATCH_BYTES, export.direct.slice.tile_memory_budget_bytes)
+    # A single 1024px segment tile at export's own ceiling must be admissible.
+    per_tile = estimated_prediction_job_bytes(
+        imgsz=1024,
+        task="segment",
+        max_detections=export.raw_detection_cap,
+        source_bytes=1931 * 1931 * 3,
+    )
+    assert per_tile <= budget, (
+        f"one tile needs {per_tile} bytes but only {budget} are admitted; "
+        "sliced segment export would be refused outright"
+    )

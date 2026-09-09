@@ -820,6 +820,26 @@ def _clamped_float(
     return default
 
 
+def _max_tile_budget_mib() -> int:
+    """The tile-admission ceiling, in MiB, as the upper clamp for a config.
+
+    Imported lazily: stages/slicing imports this module, so a module-level
+    import here would be a cycle.
+
+    This clamp used to be a hardcoded 256, which mirrored
+    MAX_TILE_BATCH_BYTES by coincidence rather than by construction. When
+    that ceiling was raised, the coincidence broke silently and the extra
+    headroom became unreachable: admitted_tile_chunk_size takes
+    min(MAX_TILE_BATCH_BYTES, byte_budget), and this clamp kept
+    byte_budget pinned below it. Deriving it keeps the two in step. The
+    default is unchanged at 256 MiB -- only a caller that explicitly asks for
+    more can reach the ceiling.
+    """
+    from .stages.slicing import MAX_TILE_BATCH_BYTES
+
+    return MAX_TILE_BATCH_BYTES // (1024 * 1024)
+
+
 def _slice_config_from_params(
     params: dict, prefix: str, *, reference_body_px: float
 ) -> SliceConfig:
@@ -868,7 +888,12 @@ def _slice_config_from_params(
             params.get(f"{prefix}TILE_BATCH_SIZE", 16), 16, 1, 128
         ),
         tile_memory_budget_bytes=(
-            _clamped_int(params.get(f"{prefix}MEMORY_BUDGET_MIB", 256), 256, 1, 256)
+            _clamped_int(
+                params.get(f"{prefix}MEMORY_BUDGET_MIB", 256),
+                256,
+                1,
+                _max_tile_budget_mib(),
+            )
             * 1024
             * 1024
         ),

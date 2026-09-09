@@ -15,6 +15,7 @@ from hydra_suite.core.inference.cache.reuse import (
     open_raw_detection_cache_reader,
 )
 from hydra_suite.core.inference.stages.filtering import filter_for_source
+from hydra_suite.core.inference.stages.slicing import MAX_TILE_BATCH_BYTES
 from hydra_suite.data.al.escalation import (
     LabelRecord,
     achievable_levels,
@@ -404,6 +405,18 @@ def _init_detection_runner(params, video_path):
                 for k, v in params.items()
                 if str(k).startswith(_FORWARDED_PREFIXES) or str(k) in _FORWARDED_KEYS
             }
+            # ...but NOT the tile memory budget. That is an execution control,
+            # not detection geometry: it decides only how many tiles ride in
+            # one model call, never what gets detected. The dense segment-mask
+            # term scales with the detection ceiling, and export deliberately
+            # runs a much higher one than tracking, so inheriting tracking's
+            # budget made a sliced segment export *inadmissible* -- refused
+            # outright with zero labels rather than throttled to smaller
+            # chunks. Export runs offline, one frame at a time, so it takes the
+            # full ceiling; `admitted_tile_chunk_size` still clamps to it.
+            extra_params["SLICE_MEMORY_BUDGET_MIB"] = MAX_TILE_BATCH_BYTES // (
+                1024 * 1024
+            )
             if mode == "sequential":
                 extra_params.update(
                     {k: v for k, v in params.items() if str(k).startswith("YOLO_SEQ_")}
