@@ -1,6 +1,6 @@
 # One-Click Inference Calibration, Decoupled from the Tracking Run
 
-**Status:** pending implementation plan
+**Status:** Shipped — merged to main (see the merge of `feat/oneclick-inference-calibration`)
 **Date:** 2026-09-08
 **Revised:** 2026-09-08 after adversarial review (14 findings, 2 critical) and a widened goal
 **Supersedes the UX of:** `docs/developer-guide/inference-autotuner.md` (modes + CUDA-only sections)
