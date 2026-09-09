@@ -51,4 +51,14 @@ def _concat_raw(parts, frame_idx: int):
             ],
             dim=0,
         ),
+        # Native contours are a ragged host list, so they concatenate as a
+        # plain list rather than a tensor. `None` only when NO tile carried
+        # them (the normal tracking case); a tile that legitimately produced
+        # no polygons for its own rows contributes nothing, which keeps the
+        # list aligned with the concatenated tensor rows above.
+        polygons=(
+            [poly for p in non_empty for poly in (p.polygons or [])]
+            if any(p.polygons is not None for p in non_empty)
+            else None
+        ),
     )

@@ -180,6 +180,16 @@ def filter_from_tensors(
         corners=corners_np.astype(np.float32),
         detection_ids=OBBResult.make_detection_ids(raw.frame_idx, m),
         class_ids=cls_np,
+        # Export-only native contours ride the same row subset as the tensors
+        # above; `_select` below reorders them with the NMS/cap survivors.
+        polygons=(
+            None
+            if raw.polygons is None
+            else [
+                raw.polygons[int(i)]
+                for i in indices_t.detach().cpu().numpy().astype(np.int64, copy=False)
+            ]
+        ),
     )
 
     local_idx = np.arange(m)

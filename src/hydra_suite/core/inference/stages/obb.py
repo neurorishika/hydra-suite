@@ -263,6 +263,17 @@ class _RawOBBTensors(NamedTuple):
     # this NamedTuple without a `cls=` kwarg; treated as "all class 0"
     # everywhere it is consumed (materialize_tensors, filter_from_tensors).
     cls: torch.Tensor | None = None
+    # Export-only native contours, one (P, 2) float32 array per row, in the
+    # SAME row order as `xywhr`. Deliberately host-side and ragged: polygons
+    # come from ``Masks.xy``, which is neither fixed-shape nor device-resident,
+    # so they cannot ride along as a tensor. This is the one field in this
+    # NamedTuple that is not on the accelerator.
+    #
+    # `None` (the default) means "not requested", which is the case for every
+    # tracking frame -- `emit_native_geometry` is set only by polygon-level
+    # active-learning export. The tracking hot path therefore never populates
+    # this and never pays the ``Masks.xy`` host expansion.
+    polygons: list[np.ndarray] | None = None
 
 
 @dataclass
@@ -801,12 +812,25 @@ def _translate_raw(raw: _RawOBBTensors, offset: tuple[float, float]) -> _RawOBBT
     corners = raw.corners.clone()
     corners[..., 0] += ox
     corners[..., 1] += oy
+    # Native contours are in the same coordinate space as the geometry they
+    # describe, so a tile-to-frame translation MUST move them too -- otherwise
+    # every sliced tile's polygons would be reported in tile-local pixels while
+    # its boxes are in frame pixels.
+    polygons = (
+        None
+        if raw.polygons is None
+        else [
+            np.asarray(p, dtype=np.float32) + np.array([ox, oy], dtype=np.float32)
+            for p in raw.polygons
+        ]
+    )
     return _RawOBBTensors(
         frame_idx=raw.frame_idx,
         xywhr=xywhr,
         corners=corners,
         conf=raw.conf,
         cls=raw.cls,
+        polygons=polygons,
     )
 
 
@@ -876,6 +900,7 @@ def extract_with_transform(
                 crop_size=seg.seg_crop_size,
                 pad_ratio=seg.seg_pad_ratio,
                 mask_threshold=seg.seg_mask_threshold,
+                emit_native_geometry=config.emit_native_geometry,
             )
         else:
             raw = _extract_raw_tensors(result, frame_idx, runtime.device)
@@ -1130,7 +1155,6 @@ def _extract_obb_from_masks(
     # candidate cap below. ``Masks.xy`` expands every retained dense mask into
     # host polygons, so reading it here would bypass the same memory boundary
     # that protects the rotated-rectangle kernel.
-    native_masks = masks
     polygons_native: list[np.ndarray] | None = None
 
     # Optimization: the downstream cap keeps only the top-`raw_detection_cap`
@@ -1155,24 +1179,9 @@ def _extract_obb_from_masks(
         source_order = source_order[order]
 
     if emit_native_geometry:
-        identity_order = np.array_equal(
-            source_order, np.arange(original_mask_count, dtype=np.int64)
+        polygons_native = _native_polygons_from_masks(
+            masks, source_order, original_mask_count
         )
-        if identity_order:
-            # Preserve compatibility with light-weight Masks-like adapters
-            # that expose ``data``/``xy`` but are not subscriptable. No rows
-            # were removed, so using the original object is still bounded by
-            # the already admitted model-boundary candidate cap.
-            native_masks = masks
-        else:
-            try:
-                native_masks = masks[source_order.copy()]
-            except (AttributeError, IndexError, TypeError) as exc:
-                raise ValueError(
-                    "Segment masks cannot be safely subset before native polygon expansion"
-                ) from exc
-
-        polygons_native = list(native_masks.xy)
 
     gain, pad_x, pad_y = letterbox_gain_pad(
         tuple(mask_tensor.shape[-2:]), tuple(result.orig_shape)
@@ -1269,6 +1278,45 @@ def _extract_obb_from_masks(
     return out
 
 
+def _native_polygons_from_masks(
+    masks: Any,
+    source_order: np.ndarray,
+    original_mask_count: int,
+) -> list[np.ndarray]:
+    """Expand `masks` to native contours, reordered to `source_order`.
+
+    The single authority for native-polygon expansion, shared by BOTH
+    extraction universes (``_extract_obb_from_masks`` on the numpy side,
+    ``_extract_raw_tensors_from_masks`` on the device-resident side) so the two
+    can never disagree about which contour belongs to which detection.
+
+    ``source_order`` holds each surviving row's index into the model's original
+    mask ordering; the returned list is in surviving-row order.
+
+    Subsetting the ``Masks`` object rather than expanding all of ``.xy`` and
+    slicing the list is deliberate: ``Masks.xy`` expands every dense mask into
+    host polygons, so expanding first would bypass the same memory boundary
+    that protects the rotated-rectangle kernel.
+    """
+    identity_order = np.array_equal(
+        source_order, np.arange(original_mask_count, dtype=np.int64)
+    )
+    if identity_order:
+        # Preserve compatibility with light-weight Masks-like adapters
+        # that expose ``data``/``xy`` but are not subscriptable. No rows
+        # were removed, so using the original object is still bounded by
+        # the already admitted model-boundary candidate cap.
+        native_masks = masks
+    else:
+        try:
+            native_masks = masks[source_order.copy()]
+        except (AttributeError, IndexError, TypeError) as exc:
+            raise ValueError(
+                "Segment masks cannot be safely subset before native polygon expansion"
+            ) from exc
+    return list(native_masks.xy)
+
+
 def _extract_raw_tensors_from_masks(
     result: Any,
     frame_idx: int,
@@ -1279,6 +1327,7 @@ def _extract_raw_tensors_from_masks(
     crop_size: int = 64,
     pad_ratio: float = 0.15,
     mask_threshold: float = 0.5,
+    emit_native_geometry: bool = False,
 ) -> _RawOBBTensors:
     """Keep segment-as-OBB tensors on the compute device -- no .cpu() call.
 
@@ -1308,12 +1357,27 @@ def _extract_raw_tensors_from_masks(
         )
     mask_tensor = masks.data
     boxes_orig = boxes.xyxy
+    original_mask_count = int(mask_tensor.shape[0])
     valid_keep = _valid_segment_source_indices(
         mask_tensor, boxes_orig, conf_all, mask_threshold
     )
     mask_tensor = mask_tensor[valid_keep]
     boxes_orig = boxes_orig[valid_keep]
     conf_all = conf_all[valid_keep]
+    # Track each surviving row's index into the model's original mask ordering,
+    # mirroring the numpy universe's `source_order`. Native polygons come from
+    # the Masks object, which is NOT subset by the tensor indexing above, so
+    # they can only be matched to their rows through this trail.
+    #
+    # Guarded on `emit_native_geometry`: this `.cpu()` is a host sync, and the
+    # whole point of this extractor is never to leave the accelerator. Only
+    # export asks for polygons, and export is not the hot path, so tracking
+    # keeps its no-sync guarantee untouched.
+    source_order = (
+        valid_keep.detach().cpu().numpy().astype(np.int64, copy=False)
+        if emit_native_geometry
+        else None
+    )
     if int(conf_all.shape[0]) == 0:
         dev = mask_tensor.device
         return _RawOBBTensors(
@@ -1332,6 +1396,10 @@ def _extract_raw_tensors_from_masks(
         mask_tensor = mask_tensor[keep]
         boxes_orig = boxes_orig[keep]
         conf_all = conf_all[keep]
+        if source_order is not None:
+            source_order = source_order[
+                keep.detach().cpu().numpy().astype(np.int64, copy=False)
+            ]
     gain, pad_x, pad_y = letterbox_gain_pad(
         tuple(mask_tensor.shape[-2:]), tuple(result.orig_shape)
     )
@@ -1357,8 +1425,17 @@ def _extract_raw_tensors_from_masks(
     corners = torch.zeros(
         (xywhr.shape[0], 4, 2), dtype=torch.float32, device=xywhr.device
     )
+    polygons = (
+        _native_polygons_from_masks(masks, source_order, original_mask_count)
+        if source_order is not None
+        else None
+    )
     return _RawOBBTensors(
-        frame_idx=frame_idx, xywhr=xywhr, corners=corners, conf=conf_all
+        frame_idx=frame_idx,
+        xywhr=xywhr,
+        corners=corners,
+        conf=conf_all,
+        polygons=polygons,
     )
 
 
@@ -1444,12 +1521,17 @@ def _filter_valid_raw_rows(raw: _RawOBBTensors) -> _RawOBBTensors:
         & (raw.xywhr[:, 3] > 0)
     )
     keep = torch.nonzero(valid, as_tuple=False).flatten()
+    polygons = raw.polygons
+    if polygons is not None:
+        keep_np = keep.detach().cpu().numpy().astype(np.int64, copy=False)
+        polygons = [polygons[int(i)] for i in keep_np]
     return _RawOBBTensors(
         frame_idx=raw.frame_idx,
         xywhr=raw.xywhr[keep],
         corners=raw.corners[keep],
         conf=raw.conf[keep],
         cls=raw.cls[keep] if raw.cls is not None else None,
+        polygons=polygons,
     )
 
 
@@ -1790,6 +1872,7 @@ def materialize_tensors(raw: _RawOBBTensors, raw_detection_cap: int = 0) -> OBBR
         if raw.cls is not None
         else np.zeros(xywhr_np.shape[0], dtype=np.int64)
     )
+    polygons = raw.polygons
     angles_fixed, sizes, aspect = _normalize_obb_geometry(
         xywhr_np[:, 2], xywhr_np[:, 3], xywhr_np[:, 4]
     )
@@ -1817,6 +1900,8 @@ def materialize_tensors(raw: _RawOBBTensors, raw_detection_cap: int = 0) -> OBBR
         angles_fixed = angles_fixed[mask]
         sizes = sizes[mask]
         aspect = aspect[mask]
+        if polygons is not None:
+            polygons = [p for p, keep_row in zip(polygons, mask) if keep_row]
     n = int(len(conf_np))
     # Rebuild corners in legacy ordering from xywhr (see _corners_from_xywhr).
     corners_np = _corners_from_xywhr(
@@ -1832,5 +1917,6 @@ def materialize_tensors(raw: _RawOBBTensors, raw_detection_cap: int = 0) -> OBBR
         corners=corners_np.astype(np.float32),
         detection_ids=OBBResult.make_detection_ids(raw.frame_idx, n),
         class_ids=cls_np,
+        polygons=polygons,
     )
     return _apply_raw_detection_cap(result, raw_detection_cap)
