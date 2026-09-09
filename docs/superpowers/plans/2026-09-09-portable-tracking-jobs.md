@@ -7040,7 +7040,7 @@ Fill in as gates are run. A gate with no pasted output is not a passed gate.
 
 | Gate | Platform | Commit | Result | Evidence |
 |---|---|---|---|---|
-| Cache-key before/after matrix | MPS | | | |
+| Cache-key before/after matrix (smoke: fly_obb, worm_bgsub) | MPS | `6959c8ce` vs base `8ec4730d` | **PASS** | All DETERMINISM + EQUIVALENCE verdicts EQUIVALENT ✅ (pos_p99<=0.5px, theta_mean<=0.05rad, unmatched==0, every keyed column identical). PERF 1.02x / 0.70x (tol 1.25). Row counts non-empty AND identical: fly_obb 1501, worm_bgsub 2707. **Proof the changed path executed:** legacy `detection.npz` holds `v4\|/Users/neurorishika/Library/App…` (path-based); new holds `v5\|sha256:b5047e47…` (content-based). Ran under contention (a live user `detectkit` session, PID 30883) — PERF is therefore indicative only; byte-identity is unaffected. |
 | Cache-key before/after matrix | CUDA (firebrat) | | | |
 | Final matrix | MPS | | | |
 | Final matrix | CUDA (firebrat) | | | |
