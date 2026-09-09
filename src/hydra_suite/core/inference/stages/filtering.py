@@ -9,7 +9,7 @@ import torch
 from ..config import OBBConfig
 from ..result import OBBResult
 from ..runtime import RuntimeContext
-from .obb import _RawOBBTensors
+from .obb import _numpy_descending_indices, _RawOBBTensors
 
 # Size gates compare against ELLIPSE area, not the OBB rectangle area. The
 # MIN/MAX_OBJECT_SIZE thresholds are derived from a circular body area
@@ -96,9 +96,13 @@ def filter_detections(
 
     max_detections = _effective_max_detections(config)
     if len(indices) > max_detections:
-        # H5 parity: legacy keeps the LARGEST detections (sort by size), not the
-        # most confident — _obb_geometry:587-588.
-        order = np.argsort(raw.sizes[indices])[::-1][:max_detections]
+        # Keep the most CONFIDENT detections. This was "H5 parity: keep the
+        # LARGEST (sort by size)", inherited from the legacy detector, which
+        # let a large low-confidence blob displace a small high-confidence
+        # animal on any frame with more detections than targets. Shares
+        # `_numpy_descending_indices` with the raw cap so both cuts rank and
+        # break ties identically.
+        order = _numpy_descending_indices(raw.confidences[indices])[:max_detections]
         indices = indices[order]
 
     return _select(raw, indices)
@@ -199,8 +203,15 @@ def filter_from_tensors(
 
     max_detections = _effective_max_detections(config)
     if len(local_idx) > max_detections:
-        # H5 parity: keep the LARGEST detections (sort by size) — _obb_geometry:587-588.
-        order = np.argsort(subset.sizes[local_idx])[::-1][:max_detections]
+        # Keep the most CONFIDENT detections. This was "H5 parity: keep the
+        # LARGEST (sort by size)", inherited from the legacy detector, which
+        # let a large low-confidence blob displace a small high-confidence
+        # animal on any frame with more detections than targets. Shares
+        # `_numpy_descending_indices` with the raw cap so both cuts rank and
+        # break ties identically.
+        order = _numpy_descending_indices(subset.confidences[local_idx])[
+            :max_detections
+        ]
         local_idx = local_idx[order]
 
     return _select(subset, local_idx)
@@ -349,8 +360,13 @@ def filter_with_indices(
         else MAX_DOWNSTREAM_CROPS_PER_FRAME
     )
     if len(indices) > max_detections:
-        # H5 parity: keep the LARGEST detections (sort by size) — _obb_geometry:587-588.
-        order = np.argsort(raw.sizes[indices])[::-1][:max_detections]
+        # Keep the most CONFIDENT detections. This was "H5 parity: keep the
+        # LARGEST (sort by size)", inherited from the legacy detector, which
+        # let a large low-confidence blob displace a small high-confidence
+        # animal on any frame with more detections than targets. Shares
+        # `_numpy_descending_indices` with the raw cap so both cuts rank and
+        # break ties identically.
+        order = _numpy_descending_indices(raw.confidences[indices])[:max_detections]
         indices = indices[order]
         subset = _select(raw, indices)
     return subset, indices.astype(np.int32)

@@ -331,31 +331,41 @@ def test_filter_raw_dispatches_to_gpu_path():
     assert result.num_detections == 1
 
 
-def test_final_cap_keeps_largest_by_size_not_confidence():
-    """H5 parity: when detections exceed max_detections, legacy keeps the
-    LARGEST (sort by size), not the most confident (_obb_geometry:587-588)."""
-    # 3 well-separated detections; cap to 2. The most confident is the SMALLEST,
-    # so a confidence-based cap would keep it while a size-based cap drops it.
+def test_final_cap_keeps_most_confident_not_largest():
+    """When detections exceed max_detections, keep the most CONFIDENT.
+
+    This test previously asserted the opposite ("H5 parity: legacy keeps the
+    LARGEST, sort by size", `_obb_geometry:587-588`). That ordering let a large
+    low-confidence blob displace a small high-confidence animal on any frame
+    with more detections than targets, which is the opposite of what the cap is
+    for. The change is deliberate and breaks byte-identity with the legacy
+    detector; goldens recorded under the size ordering were regenerated with it.
+
+    The fixture is unchanged from the size-ordered version so the inversion is
+    explicit: the most confident detection is the SMALLEST, so the two orderings
+    cannot agree by accident.
+    """
     centroids = [(50.0, 50.0), (200.0, 200.0), (350.0, 350.0)]
     confidences = [0.99, 0.80, 0.70]  # smallest box is most confident
     sizes = [100.0, 900.0, 1600.0]
     raw = _make_obb(centroids, confidences, sizes=sizes)
-    # iou=1.0 disables NMS so only the size cap decides survivors.
+    # iou=1.0 disables NMS so only the cap decides survivors.
     cfg = _cpu_config(confidence_threshold=0.0, iou_threshold=1.0, max_detections=2)
 
     out = filter_detections(raw, cfg)
     assert out.num_detections == 2
-    kept = sorted(out.sizes.tolist())
-    assert kept == [900.0, 1600.0]  # the two LARGEST, not the most confident
+    assert sorted(out.confidences.tolist()) == pytest.approx([0.80, 0.99])
+    # The 1600-area box is the LARGEST but the LEAST confident -- it must go.
+    assert sorted(out.sizes.tolist()) == [100.0, 900.0]
 
     # filter_with_indices must agree (used for cache keying).
     out2, idx = filter_with_indices(raw, cfg)
-    assert sorted(out2.sizes.tolist()) == [900.0, 1600.0]
+    assert sorted(out2.confidences.tolist()) == pytest.approx([0.80, 0.99])
     assert len(idx) == 2
 
 
-def test_final_cap_size_based_on_cuda_tensor_path():
-    """H5 parity on the CUDA tensor path: cap keeps the largest by size."""
+def test_final_cap_confidence_based_on_cuda_tensor_path():
+    """The tensor path applies the same confidence-ordered cap."""
     centroids = [(50.0, 50.0), (200.0, 200.0), (350.0, 350.0)]
     confidences = [0.99, 0.80, 0.70]
     sizes = [100.0, 900.0, 1600.0]
@@ -364,6 +374,6 @@ def test_final_cap_size_based_on_cuda_tensor_path():
 
     out = filter_from_tensors(raw, cfg, None, _cuda_rt())
     assert out.num_detections == 2
+    assert sorted(out.confidences.tolist()) == pytest.approx([0.80, 0.99])
     # sizes on the tensor path are w*h = (sqrt(size))^2 ≈ size.
-    kept = sorted(round(s) for s in out.sizes.tolist())
-    assert kept == [900, 1600]
+    assert sorted(round(s) for s in out.sizes.tolist()) == [100, 900]
