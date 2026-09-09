@@ -18,7 +18,7 @@ Machines share nothing except `ssh`/`rsync`.
 1. `trackerkit job pack` turns a tracking config (single video or `--video-list` batch) into a self-contained job directory: manifest, referenced models with sidecars and registry entries, config snapshot, videos, and a generated runner.
 2. `trackerkit job push` / `pull` move the job to and from a remote over `rsync` over `ssh`, incrementally.
 3. `trackerkit job run` executes the job on the compute box with **zero registration**: the job directory supplies the models root and the config root; the host keeps its own data dir.
-4. `pull` places every artifact the run produced back beside the original video, including `.inference_cache_<stem>/`, so backward passes and reruns work locally.
+4. `pull` places every artifact the run produced back beside the original video, including `.inference_cache_<stem>/`. **Caveat, verified:** the detection cache key embeds the absolute resolved model path and compares it exactly (`core/inference/cache/base.py:36-48`, `cache/keys.py:93-140`), so a cache written under `<job>/models/...` is a **record only** on the staging machine; it will not be reused by a local backward pass or rerun until the cache key is made path-independent (§17 item 1). The spec does not change the cache key.
 5. The set of files a job needs is **derived from the engine parameter builder**, so new model roles cannot be forgotten silently.
 6. Configs become portable by construction: the two save-side leaks (`color_tag_model_path`, `cnn_classifiers[].model_path`) are fixed at the source.
 
@@ -26,7 +26,7 @@ Machines share nothing except `ssh`/`rsync`.
 
 - Byte-identical results across CUDA and MPS. The guarantee is "same models, same config, runs to completion". Cross-device equivalence remains the job of `tools/equivalence/`.
 - Shipping TensorRT/ONNX/CoreML engines. These are host-specific, content-addressed under `<data>/runtime-artifacts`, and are rebuilt on the compute box.
-- Shipping calibration profiles (`<data>/inference_tuning_profiles`). They are host-fingerprinted and would never match.
+- Shipping calibration profiles (`<data>/inference_tuning_profiles`). They are host-fingerprinted and would never match; they are re-derived per compute box with `job calibrate` (§9.3).
 - Installing conda environments (e.g. the `sleap` env). The job records what it needs and preflight fails loudly.
 - A GUI for the job lifecycle. The Data-layer core is Qt-free so a GUI button can be added later; this spec ships the CLI only.
 - Job scheduling, queues, or multi-remote fan-out beyond what `trackerkit track --gpus` already does on one host.
@@ -89,7 +89,8 @@ Follows the `project_bundle.py` conventions (`bundle_version` integer, `to_dict`
       "size_bytes": 8123456789,
       "config_job_path": "videos/colony_A_cam1_config.json",
       "config_provenance": "own-sidecar",
-      "pushed_siblings": ["videos/colony_A_cam1_config.json"]
+      "pushed_siblings": ["videos/colony_A_cam1_config.json"],
+      "redirected_outputs": {"videos/colony_A_cam1_tracking.mp4": "/Volumes/renders/colony_A_cam1.mp4"}
     }
   ],
   "models": [
@@ -105,6 +106,7 @@ Follows the `project_bundle.py` conventions (`bundle_version` integer, `to_dict`
     },
     {
       "key": "pose/SLEAP/ant_pose_v3",
+      "_note": "key is whatever make_pose_model_path_relative returns; copy target is the directory resolve_pose_model_path(key, backend) yields under the job models root",
       "roles": ["POSE_MODEL_DIR"],
       "kind": "directory",
       "files": ["pose/SLEAP/ant_pose_v3/best.ckpt", "pose/SLEAP/ant_pose_v3/training_config.json"],
@@ -127,9 +129,6 @@ Follows the `project_bundle.py` conventions (`bundle_version` integer, `to_dict`
     "apply_tuned_inference": null,
     "inference_autotune_manual": []
   },
-  "runs": [
-    {"started_at": "…", "finished_at": "…", "hostname": "mehek", "exit_code": 0, "hydra_suite_version": "…", "git_sha": "…"}
-  ],
   "pull_history": [
     {"pulled_at": "…", "files": 14, "bytes": 123456789}
   ]
@@ -141,7 +140,8 @@ Field rules:
 - `videos[].origin_path` is the **only** place absolute staging-machine paths live. It exists purely so `pull` can put outputs back. It is never read by `run`.
 - `videos[].pushed_siblings` is the list of files that existed beside the video inside the job **before** the run. `pull` defines "output" as anything under `videos/` that is not the video itself and not in `pushed_siblings` (§10).
 - `models[].roles` lists the engine-parameter keys that resolved to this model, for diagnostics only.
-- `runs` and `pull_history` are appended, never rewritten; `run` appends on the remote, `pull` appends locally after merging the remote manifest's `runs`.
+- `videos[].redirected_outputs` maps a job-relative output path to the absolute path the user originally chose (§6.4), so `pull` can restore it.
+- **The remote never mutates `hydra_job.json`.** `run` appends one JSON line per run to `logs/runs.jsonl` (`started_at, finished_at, hostname, exit_code, hydra_suite_version, git_sha, argv`); `pull` fetches that file and merges it into the local manifest's `pull_history` entry. This is what lets `push` be a pure input sync (§8.1).
 - Manifest writes use `write_json_atomic` from `project_bundle.py`.
 
 ## 6. Pack: building the job
@@ -200,7 +200,7 @@ NON_MODEL_PATH_PARAM_KEYS = (
 
 The generator yields every non-empty value under those keys. Empty strings are skipped: `build_engine_params` already emits `""` for disabled roles (e.g. head-tail with the group off, `engine_params.py:826-843`), so pack ships exactly what the run will load.
 
-**Contract guard test** (`tests/test_engine_params_model_reference_contract.py`): build params from a config that enables every role, then assert that every key in the params dict whose name ends in `_MODEL_PATH`, `_MODEL_DIR`, `_PATH`, `_DIR` or whose value is a list of dicts containing `model_path` is in exactly one of the four tuples above. A new role added to `build_engine_params` without being classified fails this test. This is the mechanism that makes the feature long-term rather than a patch, and it is the kind of reflective guard that memory `feedback_run_contract_guards_after_field_additions` says must run on every field addition.
+**Contract guard test** (`tests/test_engine_params_model_reference_contract.py`): build params from a config that enables every role, then assert that every key whose name ends in `_MODEL_PATH` or `_MODEL_DIR`, or whose value is a list of dicts containing `model_path`, is in exactly one of the tuples above, **and** that every key ending in `_PATH` or `_DIR` is in the union of the four tuples plus an explicit `NON_MODEL_PATH_PARAM_KEYS` list (CSV/video/cache/output paths). The plan enumerates that list from real params once; afterwards any new path-ish key must be classified. A new role added to `build_engine_params` without being classified fails this test. This is the mechanism that makes the feature long-term rather than a patch, and it is the kind of reflective guard that memory `feedback_run_contract_guards_after_field_additions` says must run on every field addition.
 
 ### 6.4 Config rewrites performed by pack
 
@@ -250,22 +250,24 @@ Both are thin wrappers over `rsync` over `ssh`; the tool never implements file t
 
 ### 8.1 `trackerkit job push <job_dir> <remote>`
 
+Push is a **pure input sync**. The file list is built from the manifest, never from an exclude list:
+
 ```
-rsync -a --copy-links --partial --info=progress2 \
-      --exclude='videos/.inference_cache_*' --exclude='logs/' \
-      --exclude='*_logs/' \
-      <job_dir>/ <remote>/
+rsync -a --copy-links --partial --info=progress2 --files-from=<inputs.txt> <job_dir>/ <remote>/
 ```
 
-- `--copy-links` (`-L`) dereferences the video symlinks so real files land on the remote.
-- The exclusions are exactly the paths the remote produces; on a re-push after tweaking a config, nothing the remote made is clobbered.
-- Never `--delete`.
-- After transfer, run `job verify` remotely over `ssh` (§11) and report.
-- Records nothing in the manifest; push is idempotent and stateless.
+where `inputs.txt` = `hydra_job.json`, `run.sh`, `videos.txt`, `config/**`, every `models[]` file, sidecar and directory, every `videos[].job_path` and `pushed_siblings`. Nothing else travels, so:
+
+- a re-push after a local `pull` cannot overwrite remote outputs with the stale copies now sitting in the local job tree;
+- `logs/runs.jsonl` and every output the remote produced are untouched;
+- `--copy-links` (`-L`) dereferences the video symlinks so real files land on the remote;
+- never `--delete`.
+
+After transfer, run `job verify` remotely over `ssh` (§11) and report. Push writes nothing to the manifest; it is idempotent and stateless.
 
 ### 8.2 `trackerkit job pull <remote> <job_dir> [--dry-run] [--no-caches]`
 
-1. `rsync` the remote `hydra_job.json` and `logs/` first. Merge remote `runs` into the local manifest.
+1. `rsync` the remote `logs/` first (including `logs/runs.jsonl`); the remote manifest is never fetched because it is never modified there.
 2. Compute the output set on the remote: everything under `videos/` minus the video files minus each video's `pushed_siblings`. Done with one `ssh find` rather than enumerating names, so new artifact types (a future `<stem>_something/`) are pulled without a code change.
 3. `rsync -a --partial --info=progress2 --files-from=<list> <remote>/ <job_dir>/` for that set, minus `.inference_cache_*` when `--no-caches`.
 4. **Place back beside the originals.** For each video, for each pulled output relative to `videos/`, compute the destination by replacing the `videos/` prefix with `dirname(origin_path)`. Outputs that were redirected at pack time (`redirected_outputs`) go back to the recorded absolute path. Copy (hardlink when same filesystem) from the job tree to the destination; the job tree keeps its copy so the job remains a complete record.
@@ -291,8 +293,16 @@ export HYDRA_CONFIG_DIR="$JOB/config"
 # HYDRA_DATA_DIR intentionally NOT set: engines + calibration stay host-scoped.
 export KMP_DUPLICATE_LIB_OK=TRUE
 cd "$JOB"
-exec trackerkit track --video-list videos.txt "$@" 2>&1 | tee -a logs/run.log
+START="$(date -u +%FT%TZ)"
+set +e
+trackerkit track --video-list videos.txt "$@" 2>&1 | tee -a logs/run.log
+CODE=${PIPESTATUS[0]}
+set -e
+trackerkit job _record-run --started "$START" --exit-code "$CODE" -- "$@"   # appends to logs/runs.jsonl
+exit "$CODE"
 ```
+
+`HYDRA_CONFIG_DIR=<job>/config` **shadows the compute box's own `advanced_config.json`**; the run uses the staging machine's snapshot. That is the intent (the experiment travels whole). `run.sh` honours `HYDRA_JOB_HOST_ADVANCED_CONFIG=1` as the escape hatch: it copies the host's `advanced_config.json` over the snapshot before launching and logs that it did.
 
 `cd "$JOB"` is what makes the job-relative `videos.txt` and sidecar `file_path` values work with `load_video_list()`'s CWD-relative semantics (`app.py:314-349`) without changing that function. Extra arguments (`--gpus auto`, `--jobs 2`) pass straight through to `track`.
 
@@ -300,11 +310,15 @@ exec trackerkit track --video-list videos.txt "$@" 2>&1 | tee -a logs/run.log
 
 ### 9.2 `trackerkit job run <job_dir_or_remote> [--gpus …] [--jobs …] [--threads-per-job …] [--detach]`
 
-- Local job dir: runs `preflight` (§9.3), then `run.sh` in the foreground, appending a `runs` entry on exit.
+- Local job dir: runs `preflight` (§9.4), then `run.sh` in the foreground; `run.sh` appends the run record to `logs/runs.jsonl`.
 - Remote target: `ssh <host> 'cd <job> && ./run.sh …'`; with `--detach`, wraps in `nohup … &` and prints the log path. `job status <remote>` tails `logs/run.log` and reports the last `runs` entry.
 - `track_args` recorded at pack time (`--sahi-profile`, `--apply-tuned-inference`, `--inference-autotune-manual`) are **always** forwarded by `run`, because the calibration lookup key includes the manual-field baseline digest (`calibrate_cli.py:112-118`); dropping them makes the profile lookup silently miss. `run` refuses `--sahi-profile` etc. on its own command line: those belong to the experiment and are fixed at pack time.
 
-### 9.3 Preflight (`job preflight <job_dir>`, also run automatically by `run`)
+### 9.3 `trackerkit job calibrate <job_dir|remote> [--budget-seconds N]`
+
+One-click calibration is lookup-only at track time (`trackerkit calibrate` writes the profile, `track` only reads it), and the profile key is host-fingerprinted. So on a fresh compute box `--apply-tuned-inference` always misses unless calibration runs there first. `job calibrate` runs `trackerkit calibrate` inside the job environment (same `HYDRA_MODELS_DIR`/`HYDRA_CONFIG_DIR`, same `cd`), against the keystone video, forwarding `track_args.inference_autotune_manual` and `sahi_profile` verbatim so the baseline digest matches what `run` will look up (`calibrate_cli.py:112-118`). `run --calibrate` chains the two. The profile stays on the host under `<data>/inference_tuning_profiles`; it is never pulled.
+
+### 9.4 Preflight (`job preflight <job_dir>`, also run automatically by `run`)
 
 Fails loudly, all checks reported before exit:
 
@@ -365,7 +379,7 @@ src/hydra_suite/trackerkit/gui/orchestrators/config.py  # leak fixes (§6.5)
 
 Dependency direction (Core/Data must never import an app layer):
 
-- `discover_multihead_model_bundle` lives in `classkit/model_bundle.py` (app layer). It moves to `core/individual/classification/model_bundle.py`, with a re-export shim left in `classkit/model_bundle.py` for one release cycle per the `legacy/` policy.
+- `discover_multihead_model_bundle` lives in `classkit/model_bundle.py` (app layer). It is **not** moved: `trackerkit/job_cli.py` performs bundle discovery and passes the expanded file list down to `pack.py` as part of each model reference, the same pattern used for engine params below.
 - `build_engine_params` and the batch planner live in `trackerkit/` (app layer). `pack.py` therefore takes the planned per-video `(cfg, params)` pairs as **input**; `trackerkit/job_cli.py` does the planning and parameter building and hands the results down. `data/tracking_job` imports only from `data`, `core`, `training.model_publish`, `paths`, and the standard library.
 
 ## 13. CLI surface (final)
@@ -375,7 +389,8 @@ trackerkit job pack     <job_dir> (VIDEO... | --video-list FILE) [--config] [--k
 trackerkit job verify   <job_dir>
 trackerkit job push     <job_dir> <remote>
 trackerkit job preflight <job_dir> [--fast] [--allow-tier-fallback]
-trackerkit job run      <job_dir|remote> [--gpus] [--jobs] [--threads-per-job] [--detach] [--allow-tier-fallback]
+trackerkit job run      <job_dir|remote> [--gpus] [--jobs] [--threads-per-job] [--detach] [--calibrate] [--allow-tier-fallback]
+trackerkit job calibrate <job_dir|remote> [--budget-seconds]
 trackerkit job status   <remote>
 trackerkit job pull     <remote> <job_dir> [--dry-run] [--no-caches] [--overwrite]
 ```
@@ -398,7 +413,7 @@ Unit (no network, tmp dirs, `HYDRA_*` monkeypatched):
 3. `HYDRA_MODELS_DIR` override: `get_models_dir()`, registry path, `get_models_root_directory()`, SAM3 checkpoint root all follow it while `get_data_dir()` does not.
 4. `run.sh` + sidecars resolve: with `HYDRA_MODELS_DIR`/`HYDRA_CONFIG_DIR` pointed at a packed job and CWD at the job root, `load_tracker_cli_session` on each sidecar builds engine params whose model paths all lie inside `<job>/models` and equal, key for key, the params built on the staging side (the byte-identity of **params**, which is what the GUI/CLI parity tests already check).
 5. Output discovery and origin mapping (§10), including redirected outputs and the collision policy.
-6. Transport: `transport.py` builds the exact `rsync` argv (asserted as a list) and is exercised end-to-end against `localhost` only when `HYDRA_TEST_SSH_LOCALHOST=1`.
+6. Transport: `transport.py` builds the exact `rsync` argv (asserted as a list); the push `--files-from` list equals the manifest input set and contains no output path even when the local job tree holds pulled outputs and is exercised end-to-end against `localhost` only when `HYDRA_TEST_SSH_LOCALHOST=1`.
 7. Leak fixes: GUI save of a config with identity classifiers under the models root has no absolute paths in `color_tag_model_path` / `cnn_classifiers[].model_path`; `test_gui_cli_param_equivalence.py` unchanged and green.
 8. Preflight: missing conda env, unavailable tier, sha mismatch each fail with the expected code.
 
@@ -415,8 +430,9 @@ Equivalence gate: the only change touching the tracking path is the save-side re
 
 ## 17. Follow-ups (explicitly out of scope)
 
-1. Close the headless export-dir gap (§6.6) under the byte-identity harness.
-2. GUI "Package job…" action in TrackerKit calling `pack_job` through a `BaseWorker`.
-3. `job clean` and retention policy.
-4. Unify the duplicated sidecar-path formula (`session_plan.py:20-26` vs `orchestrators/config.py:97-103`) into `session_plan.get_video_config_path`.
-5. Registry-name references in configs (instead of relative paths) belong to the deferred model-registry unification spec and are not needed for portability.
+1. **Path-independent detection cache key.** Replace `model_path` in `CacheKey` with the models-root-relative key plus the model file sha256 (and drop `model_mtime`), so a cache pulled from a job is reusable by local backward passes and reruns. Changes every cache key on disk once and needs the equivalence gate on both platforms; until it lands, Goal 4's caches are a record only.
+2. Close the headless export-dir gap (§6.6) under the byte-identity harness.
+3. GUI "Package job…" action in TrackerKit calling `pack_job` through a `BaseWorker`.
+4. `job clean` and retention policy.
+5. Unify the duplicated sidecar-path formula (`session_plan.py:20-26` vs `orchestrators/config.py:97-103`) into `session_plan.get_video_config_path`.
+6. Registry-name references in configs (instead of relative paths) belong to the deferred model-registry unification spec and are not needed for portability.
