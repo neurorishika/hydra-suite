@@ -383,11 +383,30 @@ def _init_detection_runner(params, video_path):
             # pass silently built a sequential config with an empty stage-1
             # model path and dataclass-default stage-2 knobs -- a different
             # detector from the one that produced the tracking being reviewed.
-            extra_params = None
+            # `build_obb_only_config` builds its params dict from scratch with
+            # a small fixed set of keys, so every family it does not name is
+            # dropped on the way to the export config. Anything that decides
+            # WHAT gets detected has to be forwarded, or the export pass runs a
+            # different detector than the tracking it is supposed to be
+            # reviewing -- silently, and with no output to say so.
+            #
+            # The SAHI family is the one that bit: a sliced tracking run was
+            # reviewed by an unsliced export pass, which on a large frame with
+            # small objects finds almost nothing, and the round then aborts on
+            # "zero surviving detections". `REFERENCE_BODY_SIZE`/`RESIZE_FACTOR`
+            # come along because `auto_object` tile geometry is derived from
+            # them whenever `SLICE_TRAINED_BODY_PX` is absent (config.py:1126).
+            _FORWARDED_PREFIXES = ("SLICE_", "YOLO_OBB_SEG_")
+            _FORWARDED_KEYS = ("REFERENCE_BODY_SIZE", "RESIZE_FACTOR")
+            extra_params = {
+                k: v
+                for k, v in params.items()
+                if str(k).startswith(_FORWARDED_PREFIXES) or str(k) in _FORWARDED_KEYS
+            }
             if mode == "sequential":
-                extra_params = {
-                    k: v for k, v in params.items() if str(k).startswith("YOLO_SEQ_")
-                }
+                extra_params.update(
+                    {k: v for k, v in params.items() if str(k).startswith("YOLO_SEQ_")}
+                )
                 extra_params["YOLO_DETECT_MODEL_PATH"] = params.get(
                     "YOLO_DETECT_MODEL_PATH", ""
                 )

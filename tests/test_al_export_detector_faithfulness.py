@@ -1,0 +1,121 @@
+"""The export detector must match the detector that produced the tracking.
+
+`_init_detection_runner` builds the detection pass that active-learning export
+uses to recover label geometry for the frames the selector picked. That pass is
+only meaningful if it runs the SAME detector the tracking run did.
+
+`build_obb_only_config` builds its params dict from scratch with a small fixed
+set of keys, so whole families of geometry-determining params were dropped on
+the way to the export config -- notably the `SLICE_*` (SAHI) family, which made
+export run unsliced against a tracking run that was sliced.
+
+The oracle here is agreement: for the same params, the export config and the
+tracking config must not disagree about the geometry that decides what gets
+detected.
+"""
+
+from hydra_suite.core.inference.config import build_inference_config_from_params
+from hydra_suite.data import dataset_generation
+
+
+def _sliced_segment_params():
+    """Params shaped like a sliced direct-segment tracking run."""
+    return {
+        "DETECTION_METHOD": "yolo_obb",
+        "YOLO_OBB_MODE": "direct",
+        "YOLO_OBB_DIRECT_TASK": "segment",
+        "YOLO_OBB_DIRECT_MODEL_PATH": "seg.pt",
+        "RUNTIME_TIER": "gpu",
+        "MAX_TARGETS": 25,
+        "REFERENCE_BODY_SIZE": 49.83,
+        "RESIZE_FACTOR": 1.0,
+        "DATASET_EXPORT_LEVELS": ["polygon", "obb", "aabb"],
+        # SAHI geometry, exactly the flat keys build_engine_params emits.
+        "SLICE_ENABLED": True,
+        "SLICE_GEOMETRY_MODE": "auto_object",
+        "SLICE_OVERLAP": 0.2,
+        "SLICE_HEIGHT": 0,
+        "SLICE_WIDTH": 0,
+        "SLICE_OBJECT_TILE_FRACTION": 0.05,
+        "SLICE_TRAINED_BODY_PX": 96.5,
+        # Segment-extraction geometry.
+        "YOLO_OBB_SEG_NUM_ANGLES": 36,
+        "YOLO_OBB_SEG_CROP_SIZE": 128,
+        "YOLO_OBB_SEG_PAD_RATIO": 0.25,
+        "YOLO_OBB_SEG_MASK_THRESHOLD": 0.4,
+    }
+
+
+def _export_cfg(monkeypatch, params):
+    captured = {}
+
+    class _FakeRunner:
+        def __init__(self, cfg, cache_dir=None, video_path=None):
+            captured["cfg"] = cfg
+
+    monkeypatch.setattr(
+        "hydra_suite.core.inference.runner.InferenceRunner", _FakeRunner
+    )
+    assert dataset_generation._init_detection_runner(params, "/tmp/x.mp4") is not None
+    return captured["cfg"]
+
+
+def test_export_detector_preserves_sahi_slicing(monkeypatch):
+    """The bug: export ran unsliced against a sliced tracking run."""
+    params = _sliced_segment_params()
+    export = _export_cfg(monkeypatch, params)
+    tracking = build_inference_config_from_params(params)
+
+    assert tracking.obb.direct.slice.enabled is True, "fixture must be sliced"
+    assert export.obb.direct.slice.enabled is True, "export dropped SAHI slicing"
+
+
+def test_export_detector_slice_geometry_matches_tracking(monkeypatch):
+    """Not just enabled -- the same tile grid, or export sees different objects."""
+    params = _sliced_segment_params()
+    export = _export_cfg(monkeypatch, params).obb.direct.slice
+    tracking = build_inference_config_from_params(params).obb.direct.slice
+
+    for field in (
+        "enabled",
+        "geometry_mode",
+        "overlap_height_ratio",
+        "overlap_width_ratio",
+        "object_tile_fraction",
+        "reference_body_px",
+        "slice_width",
+        "slice_height",
+        "merge_policy",
+        "merge_metric",
+        "merge_threshold",
+    ):
+        assert getattr(export, field) == getattr(tracking, field), field
+
+
+def test_export_detector_segment_geometry_matches_tracking(monkeypatch):
+    """The segment-to-OBB kernel knobs must match too."""
+    params = _sliced_segment_params()
+    export = _export_cfg(monkeypatch, params).obb.direct
+    tracking = build_inference_config_from_params(params).obb.direct
+
+    for field in (
+        "seg_num_angles",
+        "seg_crop_size",
+        "seg_pad_ratio",
+        "seg_mask_threshold",
+    ):
+        assert getattr(export, field) == getattr(tracking, field), field
+
+
+def test_export_detector_unsliced_when_tracking_unsliced(monkeypatch):
+    """Faithfulness cuts both ways: don't invent slicing that tracking lacked."""
+    params = _sliced_segment_params()
+    params["SLICE_ENABLED"] = False
+    export = _export_cfg(monkeypatch, params)
+    assert export.obb.direct.slice.enabled is False
+
+
+def test_export_detector_still_requests_native_polygons(monkeypatch):
+    """The polygon opt-in must survive the added param passthrough."""
+    export = _export_cfg(monkeypatch, _sliced_segment_params())
+    assert export.obb.emit_native_geometry is True
