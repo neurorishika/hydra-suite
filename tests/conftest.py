@@ -11,6 +11,8 @@ if str(SRC_DIR) not in sys.path:
 if str(REPO_ROOT) not in sys.path:
     sys.path.insert(0, str(REPO_ROOT))
 
+from tests.helpers.tracking_job import _planned  # noqa: E402
+
 # Fixture helpers for classifier backend tests
 pytest_plugins = ["tests.test_classifier_fixtures"]
 
@@ -117,3 +119,47 @@ def _neutralize_leaked_training_flags():
     for widget in app.topLevelWidgets():
         if getattr(widget, "_training_running", False):
             widget._training_running = False
+
+
+# --- Portable tracking-job fixtures (shared by pack/verify/preflight tests) ---
+
+
+@pytest.fixture()
+def staging(tmp_path):
+    """A models root, a video, a skeleton and an advanced config."""
+    models = tmp_path / "models"
+    (models / "obb").mkdir(parents=True)
+    (models / "obb" / "x.pt").write_bytes(b"w")
+    videos = tmp_path / "data"
+    videos.mkdir()
+    video = videos / "colony.mp4"
+    video.write_bytes(b"\x00" * 2048)
+    skeleton = tmp_path / "skel" / "ant.json"
+    skeleton.parent.mkdir()
+    skeleton.write_text('{"nodes": []}')
+    advanced = tmp_path / "advanced_config.json"
+    advanced.write_text('{"adv": true}')
+    return {
+        "models": models,
+        "video": video,
+        "skeleton": skeleton,
+        "advanced": advanced,
+    }
+
+
+@pytest.fixture()
+def packed_job(tmp_path, staging):
+    """A freshly packed, self-verified job directory."""
+    from hydra_suite.data.tracking_job.pack import pack_job
+
+    pack_job(
+        tmp_path / "job",
+        [_planned(staging)],
+        registry_entries=[
+            ("obb/x.pt", {"species": "ant", "source_path": "/host/a.pt"})
+        ],
+        advanced_config_path=str(staging["advanced"]),
+        track_args={"video_list": "videos.txt"},
+        shared_table={},
+    )
+    return tmp_path / "job"
