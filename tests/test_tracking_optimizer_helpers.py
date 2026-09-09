@@ -759,8 +759,13 @@ def test_cached_filters_match_production_confidence_and_iou_gates() -> None:
 def test_cached_filters_match_production_roi_and_max_count_gates() -> None:
     raw = _make_filtering_obb(
         [[10, 10], [30, 30], [50, 50], [90, 90]],
-        [0.9, 0.9, 0.9, 0.9],
-        [10, 30, 20, 100],
+        # Distinct confidences: the final MAX_TARGETS cut is confidence-ordered,
+        # so tied confidences would make the survivor set a tie-break artifact
+        # rather than a property worth asserting. Sizes are deliberately
+        # ANTI-correlated with confidence so a size-ordered cap and a
+        # confidence-ordered cap cannot agree by accident.
+        [0.50, 0.90, 0.80, 0.99],
+        [100, 30, 20, 10],
         [
             [[5, 5], [15, 5], [15, 15], [5, 15]],
             [[25, 25], [35, 25], [35, 35], [25, 35]],
@@ -778,7 +783,10 @@ def test_cached_filters_match_production_roi_and_max_count_gates() -> None:
     }
 
     expected = _assert_cached_filters_match_production(params, raw, roi_mask)
-    assert expected.detection_ids.tolist() == [701, 702]
+    # id 703 is the most confident (0.99) but sits outside the ROI, so the ROI
+    # gate drops it before the cap. Of the survivors (700=0.50, 701=0.90,
+    # 702=0.80) the cap keeps the two most confident: 701 and 702.
+    assert sorted(expected.detection_ids.tolist()) == [701, 702]
 
 
 def test_cached_filters_preserve_bgsub_nan_confidence_detections() -> None:

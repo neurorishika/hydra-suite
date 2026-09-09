@@ -15,12 +15,14 @@ from hydra_suite.core.inference.cache.reuse import (
     open_raw_detection_cache_reader,
 )
 from hydra_suite.core.inference.stages.filtering import filter_for_source
+from hydra_suite.core.inference.stages.slicing import MAX_TILE_BATCH_BYTES
 from hydra_suite.data.al.escalation import (
     LabelRecord,
     achievable_levels,
     records_from_obb_result,
 )
 from hydra_suite.data.al.export import ExportedFrame, export_al_dataset
+from hydra_suite.data.al.inference_adapter import AL_DEFAULT_MAX_TARGETS
 from hydra_suite.utils.geometry_levels import GeometryLevel
 
 logger = logging.getLogger(__name__)
@@ -383,11 +385,42 @@ def _init_detection_runner(params, video_path):
             # pass silently built a sequential config with an empty stage-1
             # model path and dataclass-default stage-2 knobs -- a different
             # detector from the one that produced the tracking being reviewed.
-            extra_params = None
+            # `build_obb_only_config` builds its params dict from scratch with
+            # a small fixed set of keys, so every family it does not name is
+            # dropped on the way to the export config. Anything that decides
+            # WHAT gets detected has to be forwarded, or the export pass runs a
+            # different detector than the tracking it is supposed to be
+            # reviewing -- silently, and with no output to say so.
+            #
+            # The SAHI family is the one that bit: a sliced tracking run was
+            # reviewed by an unsliced export pass, which on a large frame with
+            # small objects finds almost nothing, and the round then aborts on
+            # "zero surviving detections". `REFERENCE_BODY_SIZE`/`RESIZE_FACTOR`
+            # come along because `auto_object` tile geometry is derived from
+            # them whenever `SLICE_TRAINED_BODY_PX` is absent (config.py:1126).
+            _FORWARDED_PREFIXES = ("SLICE_", "YOLO_OBB_SEG_")
+            _FORWARDED_KEYS = ("REFERENCE_BODY_SIZE", "RESIZE_FACTOR")
+            extra_params = {
+                k: v
+                for k, v in params.items()
+                if str(k).startswith(_FORWARDED_PREFIXES) or str(k) in _FORWARDED_KEYS
+            }
+            # ...but NOT the tile memory budget. That is an execution control,
+            # not detection geometry: it decides only how many tiles ride in
+            # one model call, never what gets detected. The dense segment-mask
+            # term scales with the detection ceiling, and export deliberately
+            # runs a much higher one than tracking, so inheriting tracking's
+            # budget made a sliced segment export *inadmissible* -- refused
+            # outright with zero labels rather than throttled to smaller
+            # chunks. Export runs offline, one frame at a time, so it takes the
+            # full ceiling; `admitted_tile_chunk_size` still clamps to it.
+            extra_params["SLICE_MEMORY_BUDGET_MIB"] = MAX_TILE_BATCH_BYTES // (
+                1024 * 1024
+            )
             if mode == "sequential":
-                extra_params = {
-                    k: v for k, v in params.items() if str(k).startswith("YOLO_SEQ_")
-                }
+                extra_params.update(
+                    {k: v for k, v in params.items() if str(k).startswith("YOLO_SEQ_")}
+                )
                 extra_params["YOLO_DETECT_MODEL_PATH"] = params.get(
                     "YOLO_DETECT_MODEL_PATH", ""
                 )
@@ -400,7 +433,24 @@ def _init_detection_runner(params, video_path):
                     params.get("DATASET_YOLO_CONFIDENCE_THRESHOLD", 0.05)
                 ),
                 iou_threshold=float(params.get("DATASET_YOLO_IOU_THRESHOLD", 0.5)),
-                max_targets=max(1, int(params.get("MAX_TARGETS", 8))),
+                # NOT `MAX_TARGETS`. That is the user's declared animal count,
+                # a tracking knob, and this pass writes exported labels
+                # directly from the detections it returns -- so capping here
+                # bakes a fabricated "only N animals in this frame" ground
+                # truth into the training set for exactly the crowded frames
+                # active learning exists to find. The post-filter cap keeps
+                # the LARGEST detections rather than the most confident, so
+                # the truncation is biased as well as lossy.
+                #
+                # This is the same defect `64b8c7cd` fixed on DetectKit's AL
+                # path; `AL_DEFAULT_MAX_TARGETS` (= ultralytics' own max_det)
+                # is the shared ceiling, with headroom above a declared count
+                # larger than it so the cap can never bite before the count
+                # signals can measure.
+                max_targets=max(
+                    AL_DEFAULT_MAX_TARGETS,
+                    2 * max(1, int(params.get("MAX_TARGETS", 8))),
+                ),
                 mode=mode,
                 model_task=task,
                 emit_native_geometry=(native_level is GeometryLevel.POLYGON),

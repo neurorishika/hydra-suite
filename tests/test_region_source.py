@@ -459,8 +459,18 @@ def test_segment_tile_admission_accounts_for_dense_model_outputs():
         source_bytes=64 * 64 * 3,
     )
     assert chunks
+    # The invariant: no model call may exceed the byte ceiling once the dense
+    # segment-mask term is accounted for.
     assert max(call_sizes) * per_job <= MAX_TILE_BATCH_BYTES
-    assert call_sizes == [1, 1, 1]
+    # Every tile is presented exactly once, in admitted chunks.
+    assert sum(call_sizes) == 3
+    assert max(call_sizes) <= slice_cfg.tile_batch_size
+    # This used to assert `call_sizes == [1, 1, 1]`. That one-tile-per-call
+    # chunking was not the admission policy working -- it was the dense-mask
+    # term being modelled at float32 when ultralytics returns uint8 masks, so
+    # every segment tile looked 4x its real cost. Pinning the arithmetic
+    # artifact would re-break the moment the estimate was corrected; the
+    # byte ceiling above is the property this test exists to protect.
 
 
 class _FakeBoxesXY:
