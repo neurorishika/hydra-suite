@@ -386,11 +386,28 @@ def _cmd_status(args) -> int:
     return 0
 
 
-def _remote_trackerkit_invocation() -> str:
-    """The Python-equivalent of ``HYDRA_JOB_TRACKERKIT``'s default: the
+def _local_trackerkit_invocation() -> str:
+    """``HYDRA_JOB_TRACKERKIT``'s default for a LOCAL ``job run``: the
     interpreter running THIS process, invoking the module entry point --
-    never a bare ``trackerkit`` resolved fresh from PATH (fix V3)."""
+    never a bare ``trackerkit`` resolved fresh from PATH, which in a dev
+    worktree resolves the MAIN editable install instead of this checkout
+    (fix V3)."""
     return f"{shlex.quote(sys.executable)} -m hydra_suite.trackerkit.app"
+
+
+def _remote_trackerkit_invocation() -> str:
+    """The invocation to use INSIDE an ssh command on the compute box.
+
+    This must NOT be the local ``sys.executable``: that is an absolute path on
+    THIS machine (e.g. a macOS conda prefix) which does not exist on the
+    remote, so ssh fails with ``No such file or directory`` -- caught in
+    practice when the post-push remote ``job verify`` tried to run the Mac's
+    interpreter on firebrat. ``--remote-bootstrap`` is what puts the right
+    environment on PATH remotely (verified: a bare ssh, and even ``bash -lc``,
+    cannot find ``trackerkit`` without it), so a plain name is correct here and
+    ``HYDRA_JOB_TRACKERKIT`` remains available as the per-host override.
+    """
+    return "trackerkit"
 
 
 def _bootstrap_prefix(remote_bootstrap: str) -> str:
@@ -406,7 +423,7 @@ def _job_env_with_trackerkit() -> dict[str, str]:
     on every dev machine (a bare ``trackerkit`` resolves MAIN's editable
     install, not this worktree)."""
     env = dict(os.environ)
-    env.setdefault("HYDRA_JOB_TRACKERKIT", _remote_trackerkit_invocation())
+    env.setdefault("HYDRA_JOB_TRACKERKIT", _local_trackerkit_invocation())
     return env
 
 
