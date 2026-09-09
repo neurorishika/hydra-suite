@@ -1368,7 +1368,8 @@ def build_inference_config_from_params(params: dict) -> InferenceConfig:
     # A policy built from params never measures on its own -- whether a run
     # applies a tuned profile is APPLY_TUNED_INFERENCE (the caller's own
     # decision), not something derived from a config file. "calibrate" is
-    # only ever set explicitly by session.calibrate's caller.
+    # only ever set by autotune.session.calibrate, which replaces
+    # this policy on the config it resolves.
     autotune_mode = "lookup"
     raw_manual_fields = params.get("INFERENCE_AUTOTUNE_MANUAL_FIELDS", ())
     if not isinstance(raw_manual_fields, (list, tuple, set, frozenset)):
