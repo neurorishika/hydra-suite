@@ -30,9 +30,21 @@ MAX_TILE_CHUNK = 128
 # largest normal inference representation.  Callers may request a smaller
 # limit, but not a larger one, until the sidecar-level resource policy can
 # supply a stricter live budget.
-MAX_TILE_BATCH_BYTES = 256 * 1024 * 1024
+#
+# Raised from 256 MiB so a sliced SEGMENT pass at an active-learning detection
+# ceiling stays admissible: the dense-mask term scales with `max_detections`,
+# and AL deliberately runs a much higher ceiling than tracking's animal count
+# (see `AL_DEFAULT_MAX_TARGETS`). At 256 MiB such a pass was refused outright
+# rather than throttled. This remains a real bound -- geometry that genuinely
+# cannot fit is still rejected before any pixels are copied.
+MAX_TILE_BATCH_BYTES = 1024 * 1024 * 1024
 COMPACT_OUTPUT_BYTES_PER_DETECTION = 128
-DENSE_MASK_BYTES_PER_PIXEL = 4
+# Ultralytics returns `Results.masks.data` as **uint8**, one byte per mask
+# pixel. This was 4 (float32), which overstated the dense-mask term by 4x on
+# every segment admission decision. Measured against a real checkpoint:
+# `imgsz=1024, max_det=600` returns `masks.data.shape=(24, 1024, 1024)`,
+# `dtype=torch.uint8` -- 25.2 MB actual against a 2516.6 MB estimate.
+DENSE_MASK_BYTES_PER_PIXEL = 1
 
 
 @dataclass(frozen=True)
