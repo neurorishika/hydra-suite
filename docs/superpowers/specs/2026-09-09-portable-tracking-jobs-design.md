@@ -3,7 +3,7 @@
 **Status:** design proposal, approved in brainstorming (approach A), pending implementation plan.
 
 > ## AMENDED 2026-09-09 — path-independent cache keys scoped IN (user decision)
-> The first draft left pulled `.inference_cache_<stem>/` as a record only because the cache key embeds the absolute model path. The user wants remote caches to be usable locally without regeneration, so §7b makes model identity and video identity content-based and bumps the cache schema. Goal 4 and §17 updated accordingly. Headless dataset/media export stays a follow-up (§17 item 1).
+> The first draft left pulled `.inference_cache_<stem>/` as a record only because the cache key embeds the absolute model path. The user wants remote caches to be usable locally without regeneration, so §7b makes model identity and video identity content-based and bumps the cache schema. Goal 4 and §17 updated accordingly. Headless dataset/media export stays a follow-up (§17 item 1). Same day: §6.7 adds shared-root video references so videos on a lab share are never copied (user request).
 **Repo:** `/Users/neurorishika/Projects/Rockefeller/Kronauer/multi-animal-tracker` @ `main` (`8678c5b6`).
 
 ## 1. Problem
@@ -12,7 +12,7 @@ A tracking experiment is staged on one machine (usually a laptop, in the Tracker
 
 The lab wants a durable mechanism, not a one-off script: a **job** is packaged once on the staging machine with everything needed to run it, pushed to a compute box that has never seen those models, run there without any registration step, and its outputs (including caches) pulled back beside the original videos.
 
-Machines share nothing except `ssh`/`rsync`.
+Machines share nothing except `ssh`/`rsync` in the general case. When a lab share is mounted on both sides, videos must not be copied (§6.7).
 
 ## 2. Goals and non-goals
 
@@ -24,6 +24,7 @@ Machines share nothing except `ssh`/`rsync`.
 4. `pull` places every artifact the run produced back beside the original video, including `.inference_cache_<stem>/`, **and those caches are reusable locally**: a backward pass, a rerun, a parameter-optimizer session or a replay session on the staging machine hits the cache produced on the compute box. This requires the cache key to identify models and videos by content rather than by absolute path and mtime (§7b).
 5. The set of files a job needs is **derived from the engine parameter builder**, so new model roles cannot be forgotten silently.
 6. Configs become portable by construction: the two save-side leaks (`color_tag_model_path`, `cnn_classifiers[].model_path`) are fixed at the source.
+7. Videos that live on a share mounted on both machines are referenced, not copied (§6.7).
 
 **Non-goals**
 
@@ -94,6 +95,16 @@ Follows the `project_bundle.py` conventions (`bundle_version` integer, `to_dict`
       "config_provenance": "own-sidecar",
       "pushed_siblings": ["videos/colony_A_cam1_config.json"],
       "redirected_outputs": {"videos/colony_A_cam1_tracking.mp4": "/Volumes/renders/colony_A_cam1.mp4"}
+    },
+    {
+      "job_path": "videos/colony_A_cam2.mp4",
+      "origin_path": "/Volumes/lab/2026-09/colony_A_cam2.mp4",
+      "size_bytes": 8123456789,
+      "signature": "8123456789:3f9a…",
+      "shared": {"alias": "labnas", "relpath": "2026-09/colony_A_cam2.mp4"},
+      "config_job_path": "videos/colony_A_cam2_config.json",
+      "config_provenance": "keystone-baseline",
+      "pushed_siblings": ["videos/colony_A_cam2_config.json"]
     }
   ],
   "models": [
@@ -143,6 +154,7 @@ Field rules:
 - `videos[].origin_path` is the **only** place absolute staging-machine paths live. It exists purely so `pull` can put outputs back. It is never read by `run`.
 - `videos[].pushed_siblings` is the list of files that existed beside the video inside the job **before** the run. `pull` defines "output" as anything under `videos/` that is not the video itself and not in `pushed_siblings` (§10).
 - `models[].roles` lists the engine-parameter keys that resolved to this model, for diagnostics only.
+- `videos[].shared`, when present, means the video is **not** in the job tree and not pushed: each host resolves `alias` through its own mount table (§6.7). `videos[].signature` is the content signature of §7b.2 and is what proves the remote resolved the same file.
 - `videos[].redirected_outputs` maps a job-relative output path to the absolute path the user originally chose (§6.4), so `pull` can restore it.
 - **The remote never mutates `hydra_job.json`.** `run` appends one JSON line per run to `logs/runs.jsonl` (`started_at, finished_at, hostname, exit_code, hydra_suite_version, git_sha, argv`); `pull` fetches that file and merges it into the local manifest's `pull_history` entry. This is what lets `push` be a pure input sync (§8.1).
 - Manifest writes use `write_json_atomic` from `project_bundle.py`.
@@ -156,7 +168,7 @@ Entry point: `hydra_suite.data.tracking_job.pack_job(...)` (Qt-free), wrapped by
 ```
 trackerkit job pack <job_dir> (VIDEO... | --video-list FILE) [--config FILE] [--keystone-override]
                     [--sahi-profile NAME] [--apply-tuned-inference | --no-apply-tuned-inference]
-                    [--inference-autotune-manual FIELD]... [--name NAME] [--copy-videos]
+                    [--inference-autotune-manual FIELD]... [--name NAME] [--copy-videos] [--no-shared | --shared-only]
 ```
 
 The video/config arguments are **exactly** those of `trackerkit track`, resolved through the same functions: `resolve_track_video_inputs()` (`app.py:352`) for the video list and `plan_batch_jobs()` → `build_batch_video_plan()` for per-video config resolution with the existing `own-sidecar | explicit | keystone-baseline` provenance. Pack does not reimplement config precedence; it consumes the plan.
@@ -230,6 +242,34 @@ Load side is already symmetric (`resolve_model_path`). A characterization test a
 ### 6.6 Headless output-dir gap
 
 The CLI leaves `DATASET_OUTPUT_DIR`, `FINAL_MEDIA_EXPORT_VIDEO_OUTPUT_DIR`, `INDIVIDUAL_DATASET_OUTPUT_DIR` at `None` (`cli_config.py:279-301`), so a job that enables dataset or media export produces nothing on the remote. This is an existing CLI gap, not a job-specific one. Pack **warns** when any export stage is enabled in a config and points at this limitation. Closing the gap (deriving `<stem>_datasets/<subfolder>` in `cli_config.py` exactly as the GUI does at `orchestrators/config.py:2241-2252`) is listed as a follow-up, gated by the byte-identity harness because it changes CLI engine params.
+
+### 6.7 Shared-root video references (no copy when a share is mounted on both sides)
+
+**Mount table.** Each host keeps `<config>/shared_roots.json`, a flat `{alias: absolute_mount_path}` map:
+
+```json
+{"labnas": "/Volumes/lab"}     // laptop
+{"labnas": "/mnt/lab"}         // mehek
+```
+
+Only the alias name has to agree across machines. Managed by `trackerkit job shared-root add|remove|list` or by hand; read through a new `paths.get_shared_roots_path()` so `HYDRA_CONFIG_DIR` relocation applies. Note that on the remote `HYDRA_CONFIG_DIR` points at `<job>/config` during `run` (§9.1), so the mount table is read from the **host's** config dir explicitly, never from the job snapshot: `run.sh` captures `HYDRA_HOST_CONFIG_DIR` before overriding.
+
+**Pack.** For each planned video, `pack` resolves the origin with `os.path.realpath` and tests it against every local alias root (longest match wins). If it matches, the manifest entry gets `shared: {alias, relpath}` and `signature`; no symlink is created under `videos/`, and the video is excluded from the push input set. Otherwise the video is handled as in §6.2 step 8. `--no-shared` disables matching for one pack; `--shared-only` fails pack if any video is not under an alias (for labs that never want copies).
+
+**Preflight / materialize on the remote.** For each `shared` entry, in order:
+
+1. Resolve `alias` through the host mount table, or through a one-off `--shared-root ALIAS=PATH` given to `run`/`preflight` (which also offers to persist it). Unknown alias fails with the alias name and the list of known aliases.
+2. Check `<root>/<relpath>` exists and is readable.
+3. Compare `size_bytes` and the content `signature` (§7b.2) with the manifest. Mismatch fails with both paths and both signatures; this catches a stale mirror or a re-encoded file.
+4. Create `videos/<basename>` as a symlink to the resolved path (replace an existing symlink, never a regular file).
+
+Because the sidecar `file_path` is still `videos/<basename>`, every output is written into the job tree beside the symlink, exactly as for a copied video. `pull` and the origin mapping of §8.2 are unchanged: the local `origin_path` is the laptop's mount of the same file, so outputs land beside the original on the share.
+
+**What is deliberately not done.**
+
+- Outputs are never written to the share directly by the remote; the job tree remains the single record and `pull` the single return path. Writing to the share from two hosts would also reintroduce the collision cases `_reject_collisions` guards against.
+- Models are always copied. They are small next to videos, and copying is what makes the job self-contained. The alias mechanism is reusable for a shared models root later without changing the manifest format.
+- No attempt is made to detect a share without the mount table (e.g. by comparing inodes or file signatures across hosts). An explicit alias is one line of config and fails in one obvious way.
 
 ## 7. `paths.py` change: `HYDRA_MODELS_DIR`
 
@@ -317,7 +357,7 @@ Push is a **pure input sync**. The file list is built from the manifest, never f
 rsync -a --copy-links --partial --info=progress2 --files-from=<inputs.txt> <job_dir>/ <remote>/
 ```
 
-where `inputs.txt` = `hydra_job.json`, `run.sh`, `videos.txt`, `config/**`, every `models[]` file, sidecar and directory, every `videos[].job_path` and `pushed_siblings`. Nothing else travels, so:
+where `inputs.txt` = `hydra_job.json`, `run.sh`, `videos.txt`, `config/**`, every `models[]` file, sidecar and directory, every `videos[].job_path` **without** a `shared` entry, and every `pushed_siblings`. Nothing else travels, so:
 
 - a re-push after a local `pull` cannot overwrite remote outputs with the stale copies now sitting in the local job tree;
 - `logs/runs.jsonl` and every output the remote produced are untouched;
@@ -349,6 +389,7 @@ The job directory is the unit of reproducibility: after `pull` it contains the i
 #!/usr/bin/env bash
 set -euo pipefail
 JOB="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"
+export HYDRA_HOST_CONFIG_DIR="${HYDRA_CONFIG_DIR:-}"   # host mount table lives here (§6.7)
 export HYDRA_MODELS_DIR="$JOB/models"
 export HYDRA_CONFIG_DIR="$JOB/config"
 # HYDRA_DATA_DIR intentionally NOT set: engines + calibration stay host-scoped.
@@ -388,7 +429,8 @@ Fails loudly, all checks reported before exit:
 3. Every `requirements.conda_envs` entry exists (`conda env list`), and `conda` is on PATH. This is the `pose_sleap_env` problem: not fixable by packing, so it fails here with the exact env name and a pointer to the SLEAP setup docs.
 4. Requested `runtime_tier` is in `available_tiers()` for this host; if not, print the fallback the resolver would take and require `--allow-tier-fallback`.
 5. Every `models/` entry hashes to the manifest sha256 (skippable with `--fast` after a verified push).
-6. Free disk under `videos/` ≥ 1.5× total video bytes (caches and outputs).
+6. Shared-root references resolved, verified and materialized as symlinks (§6.7).
+7. Free disk under `videos/` ≥ 1.5× total video bytes (caches and outputs), counting shared videos' sizes for caches but not for the videos themselves.
 
 Result is written to `logs/preflight.json`.
 
@@ -413,7 +455,7 @@ Pure local check, no network:
 
 - manifest parses, `job_version == 1`;
 - every `models[]` file exists with matching sha256 and size; every `sidecars[]` exists;
-- every `videos[].job_path` exists (symlink target exists on the staging machine; regular file on the remote) and `videos[].config_job_path` exists;
+- every `videos[].job_path` without `shared` exists (symlink target exists on the staging machine; regular file on the remote); `shared` entries are checked by preflight, not verify, because verify is offline and mount-agnostic; `videos[].config_job_path` exists;
 - no sidecar config contains an absolute path in any key listed in §6.4 (this is the "portable by construction" assertion, run against real configs);
 - `videos.txt` lines all exist and the first equals the keystone;
 - every relative path in the manifest passes the traversal check (`_validated_archive_relpath` pattern from `project_bundle.py:264-274`, generalized to a `validate_job_relpath`).
@@ -430,7 +472,8 @@ src/hydra_suite/data/tracking_job/
     references.py        # copy_model_reference (file/dir/bundle/sidecars), registry subset
     outputs.py           # output-set discovery + origin mapping (used by pull)
     runner.py            # run.sh template
-    preflight.py         # host checks
+    preflight.py         # host checks, shared-root resolution + materialization
+    shared_roots.py      # mount table read/write, alias matching (longest root wins)
     transport.py         # rsync/ssh command construction + execution (subprocess), no policy
 src/hydra_suite/trackerkit/job_cli.py   # argparse wiring for `trackerkit job …`, thin
 src/hydra_suite/trackerkit/engine_params.py  # + iter_model_references + the four key tuples
@@ -446,11 +489,12 @@ Dependency direction (Core/Data must never import an app layer):
 ## 13. CLI surface (final)
 
 ```
-trackerkit job pack     <job_dir> (VIDEO... | --video-list FILE) [--config] [--keystone-override] [--sahi-profile] [--apply-tuned-inference|--no-apply-tuned-inference] [--inference-autotune-manual]... [--name] [--copy-videos]
+trackerkit job pack     <job_dir> (VIDEO... | --video-list FILE) [--config] [--keystone-override] [--sahi-profile] [--apply-tuned-inference|--no-apply-tuned-inference] [--inference-autotune-manual]... [--name] [--copy-videos] [--no-shared | --shared-only]
 trackerkit job verify   <job_dir>
+trackerkit job shared-root add <alias> <path> | remove <alias> | list
 trackerkit job push     <job_dir> <remote>
-trackerkit job preflight <job_dir> [--fast] [--allow-tier-fallback]
-trackerkit job run      <job_dir|remote> [--gpus] [--jobs] [--threads-per-job] [--detach] [--calibrate] [--allow-tier-fallback]
+trackerkit job preflight <job_dir> [--fast] [--allow-tier-fallback] [--shared-root ALIAS=PATH]...
+trackerkit job run      <job_dir|remote> [--gpus] [--jobs] [--threads-per-job] [--detach] [--calibrate] [--allow-tier-fallback] [--shared-root ALIAS=PATH]...
 trackerkit job calibrate <job_dir|remote> [--budget-seconds]
 trackerkit job status   <remote>
 trackerkit job pull     <remote> <job_dir> [--dry-run] [--no-caches] [--overwrite]
@@ -477,6 +521,7 @@ Unit (no network, tmp dirs, `HYDRA_*` monkeypatched):
 6. Transport: `transport.py` builds the exact `rsync` argv (asserted as a list); the push `--files-from` list equals the manifest input set and contains no output path even when the local job tree holds pulled outputs and is exercised end-to-end against `localhost` only when `HYDRA_TEST_SSH_LOCALHOST=1`.
 7. Leak fixes: GUI save of a config with identity classifiers under the models root has no absolute paths in `color_tag_model_path` / `cnn_classifiers[].model_path`; `test_gui_cli_param_equivalence.py` unchanged and green.
 8. Preflight: missing conda env, unavailable tier, sha mismatch each fail with the expected code.
+9. Shared roots: a video under a local alias is packed as a reference, absent from the push list and from `videos/`; on a fake remote with a different mount path the same alias resolves, the signature check passes, a symlink is materialized, and outputs written beside it are mapped back to the origin; a wrong alias, a missing file and a re-encoded file each fail preflight with the expected message; `--shared-only` fails pack for an off-share video.
 
 Integration (manual, in the plan's acceptance section): pack `fly_obb` and `ant_pose_headtail` fixtures on this Mac, push to mehek, run, pull, and diff the pulled `_tracking.csv` against a native run on mehek with the same config: identical rows (same host, same models, same config).
 
@@ -484,7 +529,7 @@ Equivalence gate: two changes touch the tracking path, the save-side relativizat
 
 ## 16. Documentation
 
-- New `docs/user-guide/trackerkit-jobs.md`: lifecycle walkthrough (pack → push → run → pull), the "what travels, what doesn't" table, the conda-env requirement, and the nine-GPU example adapted to `job run --gpus auto`.
+- New `docs/user-guide/trackerkit-jobs.md`: lifecycle walkthrough (pack → push → run → pull), the "what travels, what doesn't" table, the shared-root mount table with a two-host example, the conda-env requirement, and the nine-GPU example adapted to `job run --gpus auto`.
 - `docs/user-guide/trackerkit-cli.md`: cross-link from `## A batch`.
 - `docs/getting-started/installation.md:242-258`: add `HYDRA_MODELS_DIR`.
 - `docs/developer-guide/`: a short note on `iter_model_references` as the contract every new model role must join.
