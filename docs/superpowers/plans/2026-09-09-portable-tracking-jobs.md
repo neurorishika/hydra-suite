@@ -1873,27 +1873,32 @@ def test_no_app_layer_or_qt_imports(path):
             assert layer not in FORBIDDEN_ROOTS, f"{path.name} imports app layer: {name}"
 
 
-def test_package_imports_without_qt_installed(monkeypatch):
-    """Importing the package must not pull PySide6 in transitively."""
+def test_package_imports_without_qt_installed():
+    """Importing the package must not pull PySide6 in transitively.
+
+    Run in a SUBPROCESS. Purging ``hydra_suite.*`` from ``sys.modules`` in-process
+    (an earlier draft's approach) is not order-robust and actively harms the rest
+    of the run: nothing restores the purged modules, so every later test that
+    re-imports gets FRESH class objects -- ``isinstance`` checks against
+    pre-purge classes start failing, ``lru_cache``es and registries reset, and
+    numba re-JITs. A subprocess has a clean interpreter by construction and
+    leaves this process untouched.
+    """
+    import os
+    import subprocess
     import sys
 
-    # Minor fix: purging only ``hydra_suite.data.tracking_job*`` leaves the
-    # PARENT ``hydra_suite.data`` (and ``hydra_suite``) cached, so whether this
-    # test re-executes any import at all depends on which tests ran before it.
-    # Purge the whole ``hydra_suite`` subtree instead: order-robust, and the
-    # re-import is cheap because the package is Qt-free by construction.
-    for module in [
-        m
-        for m in list(sys.modules)
-        if m == "hydra_suite" or m.startswith("hydra_suite.")
-    ]:
-        del sys.modules[module]
-    monkeypatch.setitem(sys.modules, "PySide6", None)
-    import hydra_suite.data.tracking_job  # noqa: F401
-
-    assert not any(m.startswith("PySide6.") for m in sys.modules), (
-        "importing tracking_job pulled in a Qt submodule"
+    script = (
+        "import sys; sys.modules['PySide6'] = None; "
+        "import hydra_suite.data.tracking_job; "
+        "assert not any(m.startswith('PySide6.') for m in sys.modules), "
+        "'importing tracking_job pulled in a Qt submodule'"
     )
+    env = {**os.environ, "PYTHONPATH": str(PACKAGE.parents[3])}
+    result = subprocess.run(
+        [sys.executable, "-c", script], capture_output=True, text=True, env=env
+    )
+    assert result.returncode == 0, result.stderr
 ```
 
 - [ ] **Step 2: Run tests to verify they fail**
@@ -2653,7 +2658,7 @@ from hydra_suite.data.tracking_job.references import PlannedModel
 # `tests/conftest.py` -- `test_tracking_job_verify.py` and (Task 10)
 # `test_tracking_job_preflight.py` cannot see a module-local fixture and would
 # fail at COLLECTION. This module keeps `_pack` and the tests, and imports the
-# helper back with `from tests.conftest import _planned`.
+# helper back with `from tests.helpers.tracking_job import _planned`.
 @pytest.fixture()
 def staging(tmp_path):
     """A models root, a video, a skeleton and an advanced config."""
@@ -2907,7 +2912,44 @@ def test_all_problems_are_reported_not_just_the_first(packed_job):
 
 `tests/test_tracking_job_verify.py` (this task) and `tests/test_tracking_job_preflight.py` (Task 10) both consume `packed_job`, which consumes `staging`/`_planned`. A pytest fixture defined in one test MODULE is not visible from another, so leaving them in `test_tracking_job_pack.py` makes both of those files fail at COLLECTION with `fixture 'staging' not found` — not at assertion time, so the failure looks unrelated to this task. `tests/conftest.py` today defines only `direct_obb_fixture` and the autouse `_neutralize_leaked_training_flags`; there is no `tests/tracking_job_conftest.py` and none is created.
 
-Cut the `staging` fixture and the `_planned` helper verbatim out of `tests/test_tracking_job_pack.py` (they keep working there via conftest injection — `_planned` is a plain function, so import it back: `from tests.conftest import _planned`, which resolves because `tests/conftest.py:1-12` already puts `REPO_ROOT` on `sys.path`), and APPEND this to `tests/conftest.py`:
+Cut the `staging` fixture out of `tests/test_tracking_job_pack.py` and APPEND it (plus `packed_job`) to `tests/conftest.py`. **`_planned` goes to `tests/helpers/tracking_job.py`, NOT into conftest** — importing a name out of a conftest (`from tests.conftest import _planned`) makes pytest load `conftest.py` twice under two different module names when `tests/` has no `__init__.py`, which duplicates every fixture definition in it. `tests/helpers/` is already a real package (`tests/helpers/__init__.py` exists), so both `tests/conftest.py` and `tests/test_tracking_job_pack.py` do `from tests.helpers.tracking_job import _planned`.
+
+Create `tests/helpers/tracking_job.py`:
+
+```python
+"""Shared builders for the portable-job tests."""
+
+from hydra_suite.data.tracking_job.pack import PlannedVideo
+from hydra_suite.data.tracking_job.references import PlannedModel
+
+
+def _planned(staging, **overrides):
+    config = {
+        "file_path": str(staging["video"]),
+        "csv_path": str(staging["video"].with_name("colony_tracking.csv")),
+        "video_output_path": str(staging["video"].with_name("colony_tracking.mp4")),
+        "yolo_obb_direct_model_path": "obb/x.pt",
+        "pose_skeleton_file": str(staging["skeleton"]),
+    }
+    config.update(overrides.pop("config", {}))
+    return PlannedVideo(
+        video_path=str(staging["video"]),
+        config=config,
+        config_provenance="own-sidecar",
+        planned_models=[
+            PlannedModel(
+                role="YOLO_OBB_DIRECT_MODEL_PATH",
+                source_path=str(staging["models"] / "obb" / "x.pt"),
+                kind="file",
+                key="obb/x.pt",
+            )
+        ],
+        skeleton_path=str(staging["skeleton"]),
+        **overrides,
+    )
+```
+
+and APPEND this to `tests/conftest.py` (which does `from tests.helpers.tracking_job import _planned` at its top):
 
 ```python
 # --- Portable tracking-job fixtures (shared by pack/verify/preflight tests) ---
@@ -2936,35 +2978,6 @@ def staging(tmp_path):
     }
 
 
-def _planned(staging, **overrides):
-    from hydra_suite.data.tracking_job.pack import PlannedVideo
-    from hydra_suite.data.tracking_job.references import PlannedModel
-
-    config = {
-        "file_path": str(staging["video"]),
-        "csv_path": str(staging["video"].with_name("colony_tracking.csv")),
-        "video_output_path": str(staging["video"].with_name("colony_tracking.mp4")),
-        "yolo_obb_direct_model_path": "obb/x.pt",
-        "pose_skeleton_file": str(staging["skeleton"]),
-    }
-    config.update(overrides.pop("config", {}))
-    return PlannedVideo(
-        video_path=str(staging["video"]),
-        config=config,
-        config_provenance="own-sidecar",
-        planned_models=[
-            PlannedModel(
-                role="YOLO_OBB_DIRECT_MODEL_PATH",
-                source_path=str(staging["models"] / "obb" / "x.pt"),
-                kind="file",
-                key="obb/x.pt",
-            )
-        ],
-        skeleton_path=str(staging["skeleton"]),
-        **overrides,
-    )
-
-
 @pytest.fixture()
 def packed_job(tmp_path, staging):
     """A freshly packed, self-verified job directory."""
@@ -2983,7 +2996,7 @@ def packed_job(tmp_path, staging):
     return tmp_path / "job"
 ```
 
-`pytest` is already imported at the top of `tests/conftest.py`. **Task 10 must EXTEND this `packed_job` (or add a distinctly-named sibling), never redefine a second `packed_job` — see Task 10 Step 1.**
+`pytest` is already imported at the top of `tests/conftest.py`; add `tests/helpers/tracking_job.py` to this task's `git add`. **Task 10 must EXTEND this `packed_job` (or add a distinctly-named sibling), never redefine a second `packed_job` — see Task 10 Step 1.**
 
 - [ ] **Step 2: Run tests to verify they fail**
 
@@ -3285,6 +3298,7 @@ git add src/hydra_suite/data/tracking_job/pack.py \
         src/hydra_suite/data/tracking_job/__init__.py \
         tests/test_tracking_job_pack.py \
         tests/test_tracking_job_verify.py \
+        tests/helpers/tracking_job.py \
         tests/conftest.py
 git commit -m "feat(tracking-job): pack a job directory, generate run.sh, and verify it offline"
 ```
@@ -3923,7 +3937,7 @@ def test_insufficient_disk_fails(packed_job, monkeypatch):
 **Fix M11 — the four `packed_job*` fixtures, fully specified.** The tests above were host-dependent (nothing pinned `runtime_tier`, and nothing isolated the shared-root/host-config lookups from this machine's REAL `HYDRA_CONFIG_DIR`/`HYDRA_HOST_CONFIG_DIR`), so a real `labnas` alias configured on this Mac (see Task 13 Step 5, which does exactly that) could flip these tests. `build_engine_params` also defaults an absent `runtime_tier` to `"gpu"` (`engine_params.py:805`), so any fixture that doesn't pin one explicitly is silently GPU-tier and `test_a_good_job_passes`'s `available_tiers=("cpu", "gpu")` would mask that. Add these to `tests/conftest.py` — the same file Task 7 Step 1b already put `staging`, `_planned` and `packed_job` in. **Fix B8: this task must EXTEND the existing `packed_job`, never define a second one.** Two `@pytest.fixture()`-decorated `packed_job` functions in one module means the later definition silently shadows the earlier one, and which behaviour any given test gets depends on textual order — exactly the kind of invisible coupling that makes a preflight failure unreproducible. Concretely:
 
 1. Add `_isolated_host_config`, `packed_job_needing_sleap`, `packed_job_gpu_tier` and `packed_job_shared` as NEW fixtures.
-2. **Edit the existing `packed_job` in place** to (a) take `_isolated_host_config`, and (b) pin `runtime_tier` to `"cpu"` — its body becomes the `packed_job` shown below. Do not paste a duplicate.
+2. **Edit the existing `packed_job` in place** to (a) take `_isolated_host_config`, and (b) pin `runtime_tier` to `"cpu"` — its body becomes the `packed_job` shown below. Do not paste a duplicate. **The four fixture bodies below call `pack_job` bare**; Task 7's version imported it lazily inside the fixture, so add `from hydra_suite.data.tracking_job.pack import pack_job` at the TOP of `tests/conftest.py` when making this edit (the package exists by Task 10, so a module-level import is safe and removes four duplicated lazy imports). Without it every preflight test raises `NameError: name 'pack_job' is not defined`.
 3. Re-run `python -m pytest tests/test_tracking_job_pack.py tests/test_tracking_job_verify.py -v` after the edit: those files consume `packed_job` too, and pinning the tier must not change their outcomes.
 
 Every fixture monkeypatches `HYDRA_CONFIG_DIR` and `HYDRA_HOST_CONFIG_DIR` to `tmp_path` so a real machine-local alias can never leak in:
@@ -4634,17 +4648,24 @@ The equivalence harness forces `use_cached_detections: False` (`tools/equivalenc
 cd /Users/neurorishika/Projects/Rockefeller/Kronauer/multi-animal-tracker/.worktrees/portable-jobs && \
   conda run --no-capture-output -n hydra-mps bash tools/equivalence/fixtures/fetch_fixtures.sh
 
-# 1. Pack two fixture jobs (one pose/SLEAP, one pure OBB).
+# 1. Pack two fixture jobs from a COPY of the clips, never from
+#    tools/equivalence/fixtures/clips/ itself: `pull` lands outputs BESIDE THE
+#    ORIGIN, so packing in place would write CSVs, logs and a
+#    .inference_cache_<stem>/ into the tracked fixture directory.
+mkdir -p /tmp/jobs/src && cp \
+  /Users/neurorishika/Projects/Rockefeller/Kronauer/multi-animal-tracker/.worktrees/portable-jobs/tools/equivalence/fixtures/clips/fly_obb.mp4 \
+  /Users/neurorishika/Projects/Rockefeller/Kronauer/multi-animal-tracker/.worktrees/portable-jobs/tools/equivalence/fixtures/clips/ant_pose_headtail.mp4 \
+  /tmp/jobs/src/
 cd /Users/neurorishika/Projects/Rockefeller/Kronauer/multi-animal-tracker/.worktrees/portable-jobs && \
   PYTHONPATH=$PWD/src conda run --no-capture-output -n hydra-mps \
     python -m hydra_suite.trackerkit.app job pack /tmp/jobs/fly \
-      tools/equivalence/fixtures/clips/fly_obb.mp4 \
+      /tmp/jobs/src/fly_obb.mp4 \
       --config tools/equivalence/fixtures/configs/fly_obb.json
 
 cd /Users/neurorishika/Projects/Rockefeller/Kronauer/multi-animal-tracker/.worktrees/portable-jobs && \
   PYTHONPATH=$PWD/src conda run --no-capture-output -n hydra-mps \
     python -m hydra_suite.trackerkit.app job pack /tmp/jobs/pose \
-      tools/equivalence/fixtures/clips/ant_pose_headtail.mp4 \
+      /tmp/jobs/src/ant_pose_headtail.mp4 \
       --config tools/equivalence/fixtures/configs/ant_pose_headtail.json
 
 # 2. Push.
@@ -4703,10 +4724,15 @@ Assert, and paste the evidence:
    ssh rutalab@firebrat 'sha256sum ~/.local/share/hydra-suite/models/model_registry.json 2>/dev/null || echo "ABSENT"'
    ```
    Run it before step 2 (push) and again after step 4 (run); the two lines must match exactly.
-2. Every artifact from the §10 table landed beside the original clip on the Mac, including `.inference_cache_<stem>/`:
+2. Every artifact from the §10 table landed **beside the ORIGIN clip** (`/tmp/jobs/src/`, per command 1) on the Mac, including `.inference_cache_<stem>/`:
    ```bash
-   ls -la tools/equivalence/fixtures/clips/ && ls -la tools/equivalence/fixtures/clips/.inference_cache_fly_obb/
+   ls -la /tmp/jobs/src/ && ls -la /tmp/jobs/src/.inference_cache_fly_obb/
    ```
+   Note the two locations are deliberately different and both matter: `pull`
+   maps outputs to the ORIGIN (`/tmp/jobs/src/`), while the probe in command 6
+   reads `build_inference_cache_dir(<job>/videos/fly_obb.mp4)` — i.e.
+   `/tmp/jobs/fly/videos/.inference_cache_fly_obb/`, the copy inside the job
+   that `pull` also refreshes. Check both exist.
 3. **The cache hits — executable probe, not a log-scrape** (command 6 above; the script is specified below).
 4. The pulled `_tracking.csv` from firebrat is row-identical to a native firebrat run of the same config — see Step 4c for the exact commands.
 
@@ -4726,7 +4752,28 @@ Constructing a runner loads the OBB backend — slow, device-dependent, and able
 | `_open_caches` | `core/inference/runner.py:530-538` | `(config, cache_dir, video_sig="", roi_mask=None, *, read_only=False, write_mode="auto") -> _CacheSet` — `video_sig` and `roi_mask` are POSITIONAL-OR-KEYWORD in that order; `read_only` is genuinely keyword-only and genuinely named `read_only` |
 | `cache_set_is_fully_reusable` | `core/inference/runner.py:430` | `(caches: _CacheSet) -> bool` — MODULE-LEVEL function, not a method |
 | `DetectionCacheHandle.get_missing_frames` | `core/inference/cache/store.py:333-343` | `(start_frame: int, end_frame: int, max_report: int = 10) -> list[int]` — reached as `caches.detection.get_missing_frames(...)`; `caches.detection` is `DetectionCacheHandle \| None` (`runner.py:107`) |
-| read-only `close()` | `core/inference/cache/store.py:223-225` | `_finish_close` returns immediately when `read_only` — closing the probe's handles writes nothing, so probing cannot invalidate the very cache it is measuring |
+| read-only `close()` | `core/inference/cache/store.py:223-225` | `_finish_close` returns immediately when `read_only` — closing the probe's handles writes nothing |
+
+**The probe is provably non-mutating — verified on the OPEN side too, not just `close()`.** `_open_caches`'s `read_only` branch (`runner.py:569-582`) only *reads*: it calls `load_cache_set(cache_dir)`, then sets `root` to the existing generation directory when the member set matches and to `cache_dir` itself otherwise. It never calls `mkdir`, never clones a revision (that is the `write_mode == "resume"` branch at `:583-596`), and never publishes a set manifest — `set_manifest_valid` is a computed boolean, not a write. Combined with the read-only `close()` no-op, **nothing under `cache_dir` is created, modified or removed by this probe.** The probe still asserts this, because the whole acceptance rests on it:
+
+```python
+before = {
+    str(q.relative_to(cache_dir)): (q.stat().st_size, q.stat().st_mtime_ns)
+    for q in sorted(cache_dir.rglob("*"))
+    if q.is_file()
+}
+# ... open, probe, close ...
+after = {
+    str(q.relative_to(cache_dir)): (q.stat().st_size, q.stat().st_mtime_ns)
+    for q in sorted(cache_dir.rglob("*"))
+    if q.is_file()
+}
+if before != after:
+    print("FAIL: the probe MUTATED the cache it was measuring")
+    sys.exit(1)
+```
+
+Place the `before` snapshot immediately after the `cache_dir.is_dir()` check and the `after` comparison in the `finally` block's tail, after every handle is closed.
 
 **`roi_mask` must match the run's.** `_open_caches` folds `roi_mask` into the detection key via `detection_cache_key(config.obb, roi_mask, ...)` (`runner.py:553`), and `detection_cache_key` folds it in **only when sliced inference is enabled** (`cache/keys.py:100-101`). So passing the wrong mask is a silent no-op on a non-sliced config and a silent key change on a sliced one — a false FAIL that looks like a portability bug. The probe therefore reads `params["ROI_MASK"]` from the same session the run used, exactly as `worker.py` does, and never substitutes `None`.
 
@@ -4939,3 +4986,4 @@ Fill in as gates are run. A gate with no pasted output is not a passed gate.
 11. **`CLAUDE.md`'s pre-PR checklist references a nonexistent `make lint-moderate`.** Discovered while applying fix B7: `Makefile:421,427,440,446` define only `lint`, `lint-fix`, `lint-strict`, `lint-report`, yet `CLAUDE.md`'s "Pre-PR checklist" tells contributors to run `make lint-moderate`. Anyone chaining it with `&&` (as this plan used to) silently never reaches the next command. **Do not fix `CLAUDE.md` in this branch** — it is unrelated to portable jobs and touching agent configuration from inside a feature branch is out of scope. File it as a standalone one-line correction.
 12. **`ant_cnn_identity`'s characterization golden pins this machine's absolute classifier path.** `tests/data/get_parameters_dict_golden/ant_cnn_identity.json` carries `/Users/neurorishika/Library/Application Support/hydra-suite/models/classification/identity/20260429-105036_classifier_multihead_obiroi_colortag.multihead.json`, and `CNN_CLASSIFIERS` is absent from `HOST_DEPENDENT_DROPPED_KEYS` (`tests/test_get_parameters_dict_characterization.py:269-274`). That test therefore cannot pass on any other host. Either add `CNN_CLASSIFIERS` to the dropped set with the same ndarray-style normalization the model-path keys get, or regenerate the golden with a relativized path. Noted in Task 2 Step 6 so an agent does not misdiagnose it as a Task 2 regression; out of scope to fix here because it changes a committed characterization golden.
 13. **`verify_job`'s directory-model branch trusts `file_digests` alone.** After fix B4 a directory model's integrity rests entirely on its per-member digests; there is no top-level roll-up, so a member ADDED to the job after packing (not present in `file_digests`) is not detected. Adding a "no unexpected files under `models/<key>/`" check would close it. Not done here because it needs a decision about whether host-written scratch files inside a pose-run directory are legitimate.
+14. **The layering gate does not see relative imports.** `test_no_app_layer_or_qt_imports` (Task 5) filters `ast.ImportFrom` on `node.level == 0`, so every `from ...core.x import y` inside `data/tracking_job/` is invisible to it — and so would `from ...trackerkit import z` be. Pre-existing hole in the gate as designed, surfaced while templating `_normalize_model_path`'s relative import in Task 7. Closing it means resolving `node.level` against the module's own package path before applying `FORBIDDEN_ROOTS`; left out of this branch because it would need its own before/after check against the whole package.
