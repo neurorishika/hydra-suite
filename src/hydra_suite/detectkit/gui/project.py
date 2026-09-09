@@ -11,7 +11,9 @@ from datetime import datetime
 from pathlib import Path
 from typing import Any, Optional
 
-from hydra_suite.core.inference.model_paths import MODEL_METADATA_SIDECAR_SUFFIXES
+from hydra_suite.core.inference.model_paths import (
+    MODEL_METADATA_SIDECAR_SUFFIXES,
+)
 from hydra_suite.core.inference.model_paths import (
     copy_model_metadata_sidecars as _copy_model_metadata_sidecars_shared,
 )

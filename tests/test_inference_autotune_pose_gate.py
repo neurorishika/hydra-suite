@@ -151,7 +151,9 @@ def test_heading_resolved_shift_is_rejected():
 def test_reported_only_columns_do_not_by_themselves_fail_the_gate(column, delta):
     """Enumerated in _REPORTED_ONLY_COLUMNS: no decision consumer, shadow-gated."""
 
-    assert _verdict(lambda frame: frame.__setitem__(column, frame[column] + delta)).passed
+    assert _verdict(
+        lambda frame: frame.__setitem__(column, frame[column] + delta)
+    ).passed
 
 
 @pytest.mark.parametrize(

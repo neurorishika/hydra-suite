@@ -51,7 +51,9 @@ from hydra_suite.refinekit.gui.overlay_utils import (
 from hydra_suite.refinekit.gui.overlay_utils import (
     draw_detections as draw_colored_detections,
 )
-from hydra_suite.refinekit.gui.overlay_utils import review_overlay_style_from_shape
+from hydra_suite.refinekit.gui.overlay_utils import (
+    review_overlay_style_from_shape,
+)
 from hydra_suite.refinekit.gui.widgets.synced_video_grid import SyncedVideoGrid
 from hydra_suite.utils.video_artifacts import build_inference_cache_dir
 

@@ -4,8 +4,10 @@ The inference autotuner measures a project's own inference pipeline on the
 project's own video and, when it can prove the result is output-equivalent,
 selects faster batch sizes and pipeline depth than the configured defaults.
 
-It is implemented in `src/hydra_suite/core/inference/autotune/` and is driven
-from `core/tracking/worker.py` on every offline tracking run.
+It is implemented in `src/hydra_suite/core/inference/autotune/`. Calibration
+(measuring) and tracking (running) are separate actions: a tracking run only
+ever performs a lookup against a stored profile — it never measures — via
+`core/inference/autotune/session.py`, driven from `core/tracking/worker.py`.
 
 ## What it tunes
 
@@ -24,44 +26,148 @@ Fields whose configured value is `None` (stage not in this project's pipeline)
 are not tuned. Fields the user pinned in the GUI are passed as `manual_fields`
 and are excluded from the search.
 
-## The three modes
+## Calibrate once, apply everywhere
 
-`InferenceAutotunePolicy.mode` (`core/inference/config.py`) accepts exactly
-`off`, `record`, or `automatic`. Anything else is rejected at construction; an
-unrecognised value arriving through `engine_params` falls back to `off`.
+Calibration is an explicit user action, not something a tracking run does to
+itself. There is a "Calibrate…" button in TrackerKit's Setup panel (Performance
+section), which opens `CalibrationDialog` and runs `CalibrationWorker` in the
+background, and a headless `trackerkit calibrate` subcommand (see
+`docs/user-guide/trackerkit-cli.md`) for boxes without a GUI. Both build engine
+params through the same `build_engine_params` call `track` uses, then call
+`core/inference/autotune/session.py`'s `calibrate(context, budget_seconds=...)`.
+That is the correctness argument for cross-entry-point agreement: calibrate and
+lookup fingerprint the same params dict through the same
+`build_autotune_context(...)`, so a profile written by one entry point is found
+by the other.
 
-- **`off`** (default) — no autotune code runs. The configured settings are used.
-- **`record`** — calibration runs and a profile is persisted, but the tuned
-  vector is **never applied**. `effective == baseline` on every run, including a
-  run that hits an already-validated cached profile: `integration.py` forces
-  `allow_cached_reuse = False` for record mode, and the coordinator
-  short-circuits a validated cache hit to a baseline overlay with
-  `status="recorded"`. This is rollout stage 1 — it lets you see what the tuner
-  *would* choose without changing any output.
-- **`automatic`** — calibration runs, the profile is persisted, and a
-  **validated** profile is applied to the production run.
+A tracking run never calibrates. It performs a **lookup only**
+(`session.lookup(context)`, `trial_executor=None`) — no lock is claimed, no
+measurement runs, and lookup terminates in `unavailable` on a genuine miss
+rather than blocking. Whether a run applies a profile it finds is a single
+boolean: `config.apply_tuned_inference`, emitted as the engine param
+`APPLY_TUNED_INFERENCE`. The mode vocabulary `{off, record, automatic}` is
+gone; `record` is expressed by calibrating with the GUI's apply checkbox
+(or `--apply-tuned-inference`) off — a validated profile is written, but this
+run does not apply it.
 
-## The CUDA-only policy for `automatic`
+Because a run only ever looks up, it does not have the old modes' cost: a
+run's duration no longer depends on whether a profile exists. It does still
+call `store.observe_production_throughput(...)` at the end (gated on
+`APPLY_TUNED_INFERENCE or ENABLE_PROFILING`), which can demote a profile
+found to have regressed and is also half of the density bridge — see below.
 
-`automatic` is refused on any non-CUDA accelerator
-(`integration.py`, `AcceleratorKind.CUDA` check): the request comes back with
-`eligible=False`, `allow_cached_reuse=False`, and
+### `eligible` vs `allow_cached_reuse`
 
-```
-eligibility_reason = "automatic inference tuning is validated only for CUDA"
-```
+The old CUDA-only restriction on *applying* a profile is gone. "May this
+context calibrate" (measure) and "may this context apply" (use a stored
+profile) are now independent:
 
-On Apple Silicon (MPS) and CPU, `automatic` therefore behaves as a no-op —
-the overlay reports the baseline. `record` mode is **not** subject to this gate
-and does calibrate on MPS.
+| Condition | May calibrate (`eligible`) | May apply (`allow_cached_reuse`) |
+| --- | --- | --- |
+| non-CUDA (`mps`, `cpu`) | yes | yes |
+| backward pass (`cache_replay`) | no | yes, from the forward pass's persisted vector (see below) |
+| realtime | no | yes |
+| contention / thermal throttle | no | yes |
+| preview | no | yes |
+| baseline admission failed (vector doesn't fit in memory) | no | no |
 
-Calibration is also declined, in any mode, when:
+Applying a stored, validated profile is cheap and device-neutral — the same
+correctness gate (CSV equivalence + determinism floor + the ≥2% gain gate, all
+below) already proved the vector is safe before it was ever saved. Only
+*measuring* is environment-sensitive, so only measuring is guarded by
+realtime/contention/throttle/cache-replay.
+
+On MPS and CPU, calibration now actually runs the full search (previously
+only `record` mode did this) and can validate and apply a profile, exactly
+like CUDA. Do not read a calibration that ends in "no improvement available"
+as a bug: on MPS, cross-frame batching has been measured up to 1.58× *slower*
+than the per-frame baseline (`docs/developer-guide/performance-tuning.md:49`),
+so a candidate that loses on this device is expected, and the acceptance gate
+(below) correctly rejects it and stores a no-op profile. The GUI status label
+reports this case as "No improvement available on this device", distinct from
+"No profile for this configuration" (never calibrated) and "Tuned profile
+found — N.NNx measured" (a real win).
+
+Calibration is declined, in any case, when:
 
 - the run is realtime (`"realtime inference is not tunable"`);
 - every stage is served from cache (`cache_replay`);
 - another accelerator job is active (`contention_detected`);
 - the accelerator is thermally throttled;
-- the baseline vector itself fails the planner's memory admission.
+- the baseline vector itself fails the planner's memory admission (this also
+  blocks applying — the vector doesn't fit regardless of who chose it).
+
+### Backward-pass propagation
+
+Backward-enabled projects (i.e. `resources/configs/default.json`, which
+enables backward tracking by default) are fully supported. Previously a tuned
+forward pass wrote its detection cache under a key that includes the tuned
+batch size, then the backward pass re-resolved at the project's *untuned*
+batch size, missed that key, and aborted — measured on a real courtship
+project. A second independent lookup on the backward pass would not fix this:
+re-deriving a key from a `cache_replay` context could legitimately differ from
+the forward pass's key and silently reintroduce the abort.
+
+Instead, the forward pass persists its **effective** `InferenceTuningSettings`
+to `applied_inference_vector.json` in the run's inference-cache directory
+(`.inference_cache_<stem>/`), alongside the detection cache it wrote. The
+backward pass reads that file and applies the vector **verbatim, with no
+fingerprint lookup involved** — the cache key matches because it is
+byte-for-byte the same vector that wrote the cache. If the sidecar file is
+absent (e.g. a cache written before this feature existed), the backward pass
+falls back to the project's configured values, which is exactly the
+pre-existing behaviour for an untuned forward pass.
+
+Every non-preview **forward** pass writes this sidecar, including one that ran
+with "Apply tuned inference profile" **off** — in which case the recorded
+vector is simply the project's own baseline. `APPLY_TUNED_INFERENCE` gates
+*lookup* (whether a stored profile is consulted), not the propagation. If the
+write were skipped when apply was off, a stale sidecar from an earlier tuned
+run would survive and the backward pass would apply a vector that this
+forward pass never ran at. Cache-read-only replay passes do not write it:
+they produced no cache, so whatever run did still owns the sidecar.
+
+### A profile covers ONE detection-cache mode
+
+`RESULT_CACHE_STAGE_MASK` is part of `PipelineFingerprint`, and
+`use_cached_detections` also decides `cached_fields` — i.e. which coordinates
+are searched at all. A profile calibrated on a fresh video (no detection
+cache) is therefore **not** the profile a cache-reusing run looks up.
+
+With detection-cache reuse enabled (the GUI default), a project needs a
+**second Calibrate after its first tracking run**: run 1 hits the profile you
+just measured, and every run from 2 onward — once a detection cache exists —
+keys differently and misses until you calibrate again in that mode.
+
+The two-record density bridge below does not close this gap: it re-keys only
+`workload`, not the cache mask. Synthesising a masked twin record would be
+dishonest — the masked key implies a different (smaller) search space, and the
+unmasked winning vector was never validated under it. Instead, the GUI's
+calibration status label and the CLI's printed summary both **name the cache
+mode the profile covers**, so a miss is explicable rather than mysterious.
+
+### The two-record density bridge
+
+One calibration writes **two** profile records, so both a cache-less first run
+and later cached runs hit a profile without a second tracking run:
+
+1. With no detection cache yet, the search has no real per-frame object
+   counts to key on, so it falls back to `bucket(MAX_TARGETS)` for all
+   density buckets and marks the key `density_is_estimated=True`.
+2. After a successful calibration, the search's own trials measured real
+   detection counts. The calibrate path calls
+   `store.observe_production_throughput(...)` immediately with that measured
+   density, which — because the first record's key says it was an estimate —
+   writes a **second** record under the measured key, while deliberately
+   leaving the estimated-key record in place so the next brand-new video
+   (which also starts with no cache) still gets a warm start from it.
+3. A later run that does have a detection cache computes the measured key and
+   hits record 2; a cache-less run hits record 1.
+
+`density_is_estimated` therefore stays a load-bearing key component — it
+distinguishes "re-key this, it was never measured" from "demote this, reality
+changed" — and is not something a future change should drop from the
+fingerprint.
 
 ## The calibration budget
 
@@ -180,4 +286,4 @@ model set, video geometry, device identity, and package source digest — so a
 code edit or a hardware change invalidates the profile rather than reusing a
 stale one. States are `PROVISIONAL`, `VALIDATED`, and `INCOMPLETE` (the negative
 cache described above). Only a `VALIDATED` profile can affect a production run,
-and only in `automatic` mode.
+and only when the run has `apply_tuned_inference` (`APPLY_TUNED_INFERENCE`) on.

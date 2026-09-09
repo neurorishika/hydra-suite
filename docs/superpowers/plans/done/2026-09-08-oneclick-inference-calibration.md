@@ -783,7 +783,7 @@ space instead."
 
 **Files:**
 - Modify: `src/hydra_suite/trackerkit/config/schemas.py:51-53, 89-94, 117-143`
-- Modify: `src/hydra_suite/trackerkit/engine_params.py:541-575, 1240-1242`
+- Modify: `src/hydra_suite/trackerkit/engine_params.py:541-575, 1160-1164, 1240-1242`
 - Modify: `src/hydra_suite/core/inference/config.py:1313-1315`
 - Modify: `src/hydra_suite/trackerkit/cli_config.py:216-247`
 - Modify: `src/hydra_suite/trackerkit/gui/orchestrators/config.py:311-325, 1720`
@@ -862,6 +862,53 @@ In `engine_params.py`, delete the `autotune_mode` derivation and its three-value
 ```
 
 Keep the manual-field normalization (`:550-559`), the budget clamp (`:560-576`), and the `INFERENCE_AUTOTUNE_MANUAL_FIELDS` / `_BUDGET_SECONDS` / `_SINGLEFLIGHT_WAIT_SECONDS` / `_STAGE_SHARES` emissions at `:1241-1256` exactly as they are — the budget now funds calibration instead of an in-run search, but nothing about its plumbing changes.
+
+**Second consumer at `:1160-1164` — do not miss this one.** It currently reads:
+
+```python
+        "SLICE_TILE_BATCH_AUTOTUNE": (
+            False
+            if autotune_mode == "automatic" and detect_platform().has_cuda
+            else advanced.get("slice_tile_batch_autotune", False)
+        ),
+```
+
+It has two defects. It reads `autotune_mode`, which this task deletes. And its `has_cuda`
+test encodes the CUDA-only apply policy that **Task 2 already removed** — so after Task 2
+an MPS run holding a validated profile would have both the coordinated tile value and the
+process-local SAHI ramp driving `tile_batch_size`.
+
+Replace it with the unconditional form:
+
+```python
+        "SLICE_TILE_BATCH_AUTOTUNE": advanced.get("slice_tile_batch_autotune", False),
+```
+
+This is safe because the decision already lives in the right place:
+`InferenceTuningSettings.apply` disables the process-local tuner itself
+(`models.py:186-198`), and only when the overlay status shows a coordinated tile value was
+actually supplied (`models.py:399`). The `engine_params` guess was a redundant pre-emption
+of that logic. Removing it also preserves the process-local tuner for runs with **no
+profile yet** — the normal state before a user clicks Calibrate — which is the only tile
+adaptation those runs have.
+
+Do **not** delete `core/inference/stages/tile_batch_autotune.py` in this task or this
+branch. It defaults to `False` (`config.py:197`), is advanced-config only, and removing it
+is a separate behavioural change needing its own equivalence evidence.
+
+Add to the migration test file:
+
+```python
+@pytest.mark.parametrize("apply_tuned", [True, False])
+def test_tile_batch_autotune_is_independent_of_the_apply_flag(apply_tuned):
+    """The process-local SAHI tuner is disabled by the overlay when a coordinated
+    tile value is actually applied -- never pre-emptively by platform or policy."""
+    params = build_engine_params_for_test(apply_tuned_inference=apply_tuned)
+    assert params["SLICE_TILE_BATCH_AUTOTUNE"] is False  # advanced default
+```
+
+Use whatever `build_engine_params` entry point the surrounding tests already use to build
+a params dict; do not invent a new harness.
 
 In `core/inference/config.py:1313`, replace the mode-string read. The policy mode is now **always** `"lookup"` when built from params — `calibrate` is set only by `session.calibrate`, never derived from a config file. Whether a run consults the store at all is the caller's decision from `APPLY_TUNED_INFERENCE`, not a policy value:
 

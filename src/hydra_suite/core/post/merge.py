@@ -50,7 +50,9 @@ def resolve_tag_identities(
     if not isinstance(resolved_trajectories, pd.DataFrame) or not tag_cache_path:
         return resolved_trajectories
     try:
-        from hydra_suite.core.post.tag_identity import detect_tag_swaps
+        from hydra_suite.core.post.tag_identity import (
+            detect_tag_swaps,
+        )
         from hydra_suite.core.post.tag_identity import (
             resolve_tag_identities as _resolve_tag_identities,
         )

@@ -196,7 +196,9 @@ def test_a_trial_leaves_the_shared_video_directory_byte_unchanged(tmp_path):
     after = _tree_digest(video_dir)
     added = sorted(set(after) - set(before))
     removed = sorted(set(before) - set(after))
-    changed = sorted(name for name in set(before) & set(after) if before[name] != after[name])
+    changed = sorted(
+        name for name in set(before) & set(after) if before[name] != after[name]
+    )
     assert not added, f"trial created shared files: {added}"
     assert not removed, f"trial deleted shared files: {removed}"
     assert not changed, f"trial rewrote shared files: {changed}"

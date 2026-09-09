@@ -13,11 +13,17 @@ from typing import Mapping, Optional, Sequence
 
 import psutil
 
-from .resource_limits import cgroup_path_contains_unit, signal_systemd_scope
+from .resource_limits import (
+    cgroup_path_contains_unit,
+    signal_systemd_scope,
+)
 from .resource_limits import (
     systemd_scope_invocation_id as probe_systemd_scope_invocation_id,
 )
-from .resource_limits import systemd_scope_is_quiescent, systemd_scope_member_pids
+from .resource_limits import (
+    systemd_scope_is_quiescent,
+    systemd_scope_member_pids,
+)
 
 _TOKEN_ENV = "HYDRA_CONTAINMENT_TOKEN"
 _MAX_EXTERNAL_IDENTITIES = 4096

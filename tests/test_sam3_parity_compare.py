@@ -14,22 +14,22 @@ import pytest
 
 sys.path.insert(0, str(Path(__file__).resolve().parents[1] / "tools" / "sam3_parity"))
 
+from compare_models import _trapezoid  # noqa: E402
 from compare_models import (  # noqa: E402
     OperatingPoint,
     PairedComparison,
     average_precision,
     bootstrap_ci,
     extras_unique_to_a,
+    group_extras_by_frame,
     interpolate_extras_at_recall,
     paired_comparison,
     paired_frame_diffs,
     precision_recall_curve,
     sign_test,
-    group_extras_by_frame,
     source_frame_of,
     unmatched_predictions,
 )
-from compare_models import _trapezoid  # noqa: E402
 
 # ---------------------------------------------------------------------------
 # Step 1: paired per-frame diffs

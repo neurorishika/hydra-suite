@@ -20,13 +20,13 @@ from hydra_suite.trackerkit.gui.orchestrators.tracking import TrackingOrchestrat
 
 def test_tracker_config_round_trips_inference_autotune_policy() -> None:
     config = TrackerConfig(
-        inference_autotune_mode="automatic",
+        apply_tuned_inference=True,
         inference_autotune_manual_fields=["pose_batch_size", "pipeline_depth"],
     )
 
     restored = TrackerConfig.from_dict(config.to_dict())
 
-    assert restored.inference_autotune_mode == "automatic"
+    assert restored.apply_tuned_inference is True
     assert restored.inference_autotune_manual_fields == [
         "pose_batch_size",
         "pipeline_depth",
@@ -34,7 +34,7 @@ def test_tracker_config_round_trips_inference_autotune_policy() -> None:
 
 
 def test_legacy_tracker_config_keeps_throughput_tuner_disabled() -> None:
-    assert TrackerConfig.from_dict({}).inference_autotune_mode == "off"
+    assert TrackerConfig.from_dict({}).apply_tuned_inference is False
     assert TrackerConfig.from_dict({}).inference_autotune_manual_fields == []
 
 
@@ -46,7 +46,7 @@ def test_engine_params_carry_inference_autotune_policy_without_mutating_batches(
         config_data={
             "detection_batch_size": 8,
             "pipeline_depth": 3,
-            "inference_autotune_mode": "automatic",
+            "apply_tuned_inference": True,
             "inference_autotune_manual_fields": ["pose_batch_size"],
         },
         video_probe=TrackerCliVideoProbe(fps=20.0, total_frames=50, width=5, height=5),
@@ -54,46 +54,49 @@ def test_engine_params_carry_inference_autotune_policy_without_mutating_batches(
 
     assert session.params["YOLO_BATCH_SIZE"] == 8
     assert session.params["PIPELINE_DEPTH"] == 3
-    assert session.params["INFERENCE_AUTOTUNE_MODE"] == "automatic"
+    assert session.params["APPLY_TUNED_INFERENCE"] is True
     assert session.params["INFERENCE_AUTOTUNE_MANUAL_FIELDS"] == ["pose_batch_size"]
     assert session.params["INFERENCE_AUTOTUNE_BUDGET_SECONDS"] == 4500.0
     assert session.params["INFERENCE_AUTOTUNE_PROJECT_CONFIG"] == {
         "detection_batch_size": 8,
         "pipeline_depth": 3,
-        "inference_autotune_mode": "automatic",
+        "apply_tuned_inference": True,
         "inference_autotune_manual_fields": ["pose_batch_size"],
     }
     assert session.params["INFERENCE_AUTOTUNE_PROJECT_CONFIG"] is not session.config
 
 
 def test_cli_autotune_override_has_explicit_precedence_and_preserves_manuals() -> None:
+    """``apply`` speaks the same boolean vocabulary as the config field it
+    sets (``TrackerConfig.apply_tuned_inference`` / ``--apply-tuned-inference``
+    -- the old off/record/automatic mode vocabulary is retired)."""
     original = {
-        "inference_autotune_mode": "record",
+        "apply_tuned_inference": False,
         "inference_autotune_manual_fields": ["pose_batch_size"],
     }
 
     overridden = apply_inference_autotune_override(
         original,
-        mode="automatic",
+        apply=True,
         manual_fields=["pipeline_depth", "pose_batch_size"],
     )
 
-    assert original["inference_autotune_mode"] == "record"
-    assert overridden["inference_autotune_mode"] == "automatic"
+    assert original["apply_tuned_inference"] is False
+    assert overridden["apply_tuned_inference"] is True
     assert overridden["inference_autotune_manual_fields"] == [
         "pipeline_depth",
         "pose_batch_size",
     ]
 
 
-def test_cli_autotune_flags_support_record_and_per_run_bypass() -> None:
-    record = parse_arguments(["track", "video.mp4", "--inference-autotune", "record"])
-    bypass = parse_arguments(["track", "video.mp4", "--no-inference-autotune"])
+def test_cli_autotune_flags_support_apply_and_per_run_bypass() -> None:
+    applied = parse_arguments(["track", "video.mp4", "--apply-tuned-inference"])
+    bypass = parse_arguments(["track", "video.mp4", "--no-apply-tuned-inference"])
+    unset = parse_arguments(["track", "video.mp4"])
 
-    assert record.inference_autotune == "record"
-    assert record.no_inference_autotune is False
-    assert bypass.inference_autotune is None
-    assert bypass.no_inference_autotune is True
+    assert applied.apply_tuned_inference is True
+    assert bypass.apply_tuned_inference is False
+    assert unset.apply_tuned_inference is None
 
 
 def test_cli_autotune_manual_field_can_be_repeated() -> None:
@@ -101,8 +104,7 @@ def test_cli_autotune_manual_field_can_be_repeated() -> None:
         [
             "track",
             "video.mp4",
-            "--inference-autotune",
-            "automatic",
+            "--apply-tuned-inference",
             "--inference-autotune-manual",
             "pose_batch_size",
             "--inference-autotune-manual",
@@ -117,9 +119,6 @@ def test_gui_status_displays_effective_runtime_overlay() -> None:
     captured = []
 
     class Setup:
-        def set_inference_autotune_calibration_active(self, _active):
-            pass
-
         def set_inference_autotune_status(self, text):
             captured.append(text)
 
@@ -141,39 +140,20 @@ def test_gui_status_displays_effective_runtime_overlay() -> None:
         }
     )
 
-    assert "Cache hit" in captured[0]
+    # The label now states the user-meaningful outcome rather than echoing
+    # the raw coordinator status; it shares describe_calibration_outcome with
+    # the Calibrate dialog so the two can never disagree.
+    assert "Validated profile in use" in captured[0]
     assert "abc123" in captured[0]
     assert "detection_batch_size=4" in captured[0]
 
 
-def test_gui_continue_action_cancels_only_calibration() -> None:
-    calls = []
-
-    class Worker:
-        def cancel_inference_autotune(self):
-            calls.append("cancel")
-
-    class Setup:
-        def set_inference_autotune_calibration_active(self, active):
-            calls.append(("active", active))
-
-        def set_inference_autotune_status(self, text):
-            calls.append(("status", text))
-
-    class MainWindow:
-        tracking_worker = Worker()
-
-    orchestrator = object.__new__(TrackingOrchestrator)
-    orchestrator._mw = MainWindow()
-    orchestrator._panels = type("Panels", (), {"setup": Setup()})()
-
-    orchestrator.continue_with_current_inference_settings()
-
-    assert calls == [
-        "cancel",
-        ("active", False),
-        ("status", "Continuing with configured inference settings…"),
-    ]
+def test_gui_no_continue_escape_hatch_remains() -> None:
+    """The interim "Continue with current settings" escape hatch existed
+    only to interrupt calibration a tracking run should never have been
+    doing. A run never calibrates now (only the explicit Calibrate…
+    dialog does), so the method is gone."""
+    assert not hasattr(TrackingOrchestrator, "continue_with_current_inference_settings")
 
 
 def test_run_summary_includes_fingerprint_even_without_promoted_profile() -> None:
@@ -207,7 +187,7 @@ def test_calibration_budget_above_600s_survives_the_live_params_path(tmp_path) -
     session = load_tracker_cli_session(
         str(tmp_path / "subject.mp4"),
         config_data={
-            "inference_autotune_mode": "record",
+            "apply_tuned_inference": True,
             "inference_autotune_budget_seconds": 3000.0,
         },
         video_probe=TrackerCliVideoProbe(fps=20.0, total_frames=50, width=5, height=5),

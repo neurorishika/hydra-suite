@@ -177,6 +177,7 @@ def _is_reported_only(column: str) -> bool:
         return True
     return column.startswith(_KEYPOINT_PREFIX) and column.endswith("_Conf")
 
+
 _KEYPOINT_PREFIX = "PoseKpt_"
 
 
@@ -235,9 +236,7 @@ def _numeric_families(
     ]
     owned = set(_POSITIONAL_COLUMNS) | set(_MANDATORY_EXACT_COLUMNS)
     owned |= set(_categorical_columns(shared))
-    keypoints = tuple(
-        item for item in _keypoint_pairs(numeric) if item[1] not in owned
-    )
+    keypoints = tuple(item for item in _keypoint_pairs(numeric) if item[1] not in owned)
     keypoint_columns = {column for _name, x, y in keypoints for column in (x, y)}
     angular = tuple(
         column
@@ -603,7 +602,9 @@ def _numeric_mismatches(
         )
         if not usable.any():
             continue
-        distance = np.hypot(old_x[usable] - new_x[usable], old_y[usable] - new_y[usable])
+        distance = np.hypot(
+            old_x[usable] - new_x[usable], old_y[usable] - new_y[usable]
+        )
         keypoint_samples.extend(distance.tolist())
         beyond = int(np.count_nonzero(distance > policy.match_gate))
         if beyond:

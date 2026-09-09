@@ -12,9 +12,15 @@ import os
 import sys
 from typing import Sequence
 
+from hydra_suite.core.inference.config import (
+    DEFAULT_CALIBRATION_BUDGET_SECONDS,
+    MAXIMUM_CALIBRATION_BUDGET_SECONDS,
+    MINIMUM_CALIBRATION_BUDGET_SECONDS,
+)
 from hydra_suite.trackerkit.cli import run_tracking_cli
 
-# Fix OpenMP conflict on macOS (PyTorch + OpenCV + NumPy can load multiple OpenMP libraries)
+# Fix OpenMP conflict on macOS (PyTorch + OpenCV + NumPy can load multiple
+# OpenMP libraries)
 os.environ.setdefault("KMP_DUPLICATE_LIB_OK", "TRUE")
 
 
@@ -48,8 +54,13 @@ def setup_logging(
     logger.info(f"Working directory: {os.getcwd()}")
 
 
-def parse_arguments(argv: list[str] | None = None) -> object:
-    """Parse command line arguments."""
+def build_parser() -> argparse.ArgumentParser:
+    """Build the TrackerKit argument parser (no parsing side effects).
+
+    Extracted so tests can exercise argument parsing (choices, mutually
+    exclusive groups, subcommands) without invoking ``main`` or
+    ``parse_arguments``'s post-parse validation.
+    """
     parser = argparse.ArgumentParser(
         description="TrackerKit - GUI and basic config-driven tracking CLI",
         formatter_class=argparse.RawDescriptionHelpFormatter,
@@ -87,11 +98,23 @@ Examples:
     track_parser = subparsers.add_parser(
         "track",
         help="Run config-driven tracking on one or more videos",
+        allow_abbrev=False,
     )
     track_parser.add_argument(
         "videos",
         nargs="*",
+        default=[],
         help="One or more video paths. The first video is the keystone for batch fallback.",
+    )
+    track_parser.add_argument(
+        "--video",
+        dest="video_flag",
+        type=str,
+        default=None,
+        help=(
+            "Single video path, as an alternative to the positional videos "
+            "argument (matches `trackerkit calibrate --video`)."
+        ),
     )
     track_parser.add_argument(
         "--video-list",
@@ -118,20 +141,20 @@ Examples:
             "Applies to every video in the batch."
         ),
     )
-    inference_autotune_group = track_parser.add_mutually_exclusive_group()
-    inference_autotune_group.add_argument(
-        "--inference-autotune",
-        choices=["off", "record", "automatic"],
-        help=(
-            "Override this run's full-inference throughput tuning policy. "
-            "automatic applies only a fully validated profile; record measures "
-            "without changing configured execution settings."
-        ),
-    )
-    inference_autotune_group.add_argument(
-        "--no-inference-autotune",
+    autotune_group = track_parser.add_mutually_exclusive_group()
+    autotune_group.add_argument(
+        "--apply-tuned-inference",
+        dest="apply_tuned_inference",
         action="store_true",
-        help="Per-run bypass: keep configured inference execution settings.",
+        default=None,
+        help="Apply a validated inference profile if one exists for this "
+        "configuration. Produce one with `trackerkit calibrate`.",
+    )
+    autotune_group.add_argument(
+        "--no-apply-tuned-inference",
+        dest="apply_tuned_inference",
+        action="store_false",
+        help="Ignore any stored inference profile and use configured values.",
     )
     track_parser.add_argument(
         "--inference-autotune-manual",
@@ -176,10 +199,88 @@ Examples:
         ),
     )
 
+    calibrate_parser = subparsers.add_parser(
+        "calibrate",
+        help=(
+            "Measure and persist a validated inference-throughput profile "
+            "for one video/config, on THIS box. The headless equivalent of "
+            "the GUI's Calibrate button."
+        ),
+        allow_abbrev=False,
+    )
+    calibrate_parser.add_argument(
+        "--video",
+        dest="video",
+        type=str,
+        required=True,
+        help="Video path to calibrate against.",
+    )
+    calibrate_parser.add_argument(
+        "--config",
+        type=str,
+        help="Optional config file. Uses the same defaults as `track` when omitted.",
+    )
+    calibrate_parser.add_argument(
+        "--budget-seconds",
+        type=float,
+        default=DEFAULT_CALIBRATION_BUDGET_SECONDS,
+        help=(
+            "Wall-clock budget for the calibration search, between "
+            f"{MINIMUM_CALIBRATION_BUDGET_SECONDS:g} and "
+            f"{MAXIMUM_CALIBRATION_BUDGET_SECONDS:g} seconds "
+            f"(default: {DEFAULT_CALIBRATION_BUDGET_SECONDS:g})."
+        ),
+    )
+    # Manual fields feed ``compute_baseline_digest`` -> ``key.baseline_digest``
+    # (integration.py), so a project that pins a coordinate keys its profile
+    # differently from one that leaves it free. Without this flag here,
+    # ``calibrate`` could not produce the key a
+    # ``track --inference-autotune-manual ...`` run looks up.
+    calibrate_parser.add_argument(
+        "--inference-autotune-manual",
+        action="append",
+        default=[],
+        metavar="FIELD",
+        help=(
+            "Keep one tuning coordinate at its configured value. May be "
+            "repeated. MUST match the `track` run that will use the "
+            "resulting profile -- it is part of the profile key."
+        ),
+    )
+    # Deliberately NO --gpus / --jobs: concurrent calibration on one box
+    # measures contention, not throughput, and would silently produce a
+    # confidently wrong profile. Neither flag is registered on this
+    # subparser, so passing either is an "unrecognized arguments" SystemExit
+    # from argparse itself -- a loud rejection, not a silent ignore.
+
+    return parser
+
+
+def _subparser_choices(
+    parser: argparse.ArgumentParser,
+) -> dict[str, argparse.ArgumentParser]:
+    """The ``{name: subparser}`` map, without reaching into private attrs."""
+    for action in parser._actions:  # noqa: SLF001 - argparse has no public accessor
+        if isinstance(action, argparse._SubParsersAction):
+            return action.choices
+    return {}
+
+
+def parse_arguments(argv: list[str] | None = None) -> object:
+    """Parse command line arguments."""
+    parser = build_parser()
+    subcommands = _subparser_choices(parser)
+    track_parser = subcommands["track"]
+    calibrate_parser = subcommands["calibrate"]
+
     args = parser.parse_args(argv)
 
     if args.command == "track":
-        videos = getattr(args, "videos", []) or []
+        videos = list(getattr(args, "videos", []) or [])
+        video_flag = getattr(args, "video_flag", None)
+        if video_flag:
+            videos.append(str(video_flag))
+        args.videos = videos
         video_list = getattr(args, "video_list", None)
         if videos and video_list:
             track_parser.error(
@@ -193,6 +294,19 @@ Examples:
         tpj = getattr(args, "threads_per_job", None)
         if tpj is not None and int(tpj) < 1:
             track_parser.error("--threads-per-job must be >= 1")
+
+    if args.command == "calibrate":
+        budget = getattr(args, "budget_seconds", None)
+        if budget is not None and not (
+            MINIMUM_CALIBRATION_BUDGET_SECONDS
+            <= float(budget)
+            <= MAXIMUM_CALIBRATION_BUDGET_SECONDS
+        ):
+            calibrate_parser.error(
+                "--budget-seconds must be between "
+                f"{MINIMUM_CALIBRATION_BUDGET_SECONDS:g} and "
+                f"{MAXIMUM_CALIBRATION_BUDGET_SECONDS:g}"
+            )
 
     return args
 
@@ -318,17 +432,31 @@ def main(argv: list[str] | None = None) -> object:
                 jobs=getattr(args, "jobs", None),
                 threads_per_job=getattr(args, "threads_per_job", None),
                 log_level=str(args.log_level),
-                inference_autotune=(
-                    "off"
-                    if bool(getattr(args, "no_inference_autotune", False))
-                    else getattr(args, "inference_autotune", None)
-                ),
+                apply_tuned_inference=getattr(args, "apply_tuned_inference", None),
                 inference_autotune_manual=getattr(
                     args, "inference_autotune_manual", []
                 ),
             )
         except Exception as e:
             logger.error("Tracker CLI failed: %s", e, exc_info=True)
+            print(f"Error: {e}")
+            sys.exit(1)
+        sys.exit(exit_code)
+
+    if args.command == "calibrate":
+        from hydra_suite.trackerkit.calibrate_cli import run_calibrate_cli
+
+        try:
+            exit_code = run_calibrate_cli(
+                args.video,
+                config_path=getattr(args, "config", None),
+                budget_seconds=float(args.budget_seconds),
+                inference_autotune_manual=getattr(
+                    args, "inference_autotune_manual", []
+                ),
+            )
+        except Exception as e:
+            logger.error("Tracker calibration failed: %s", e, exc_info=True)
             print(f"Error: {e}")
             sys.exit(1)
         sys.exit(exit_code)
@@ -378,7 +506,8 @@ def main(argv: list[str] | None = None) -> object:
         logger.info("Initializing main window...")
         main_window = MainWindow()
         try:
-            # Ensure taskbar/dock uses TrackerKit icon on platforms honoring window icon.
+            # Ensure taskbar/dock uses TrackerKit icon on platforms honoring window
+            # icon.
             main_window.setWindowIcon(app.windowIcon())
         except Exception:
             pass

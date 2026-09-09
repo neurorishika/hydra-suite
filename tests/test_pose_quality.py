@@ -6,7 +6,10 @@ import numpy as np
 import pandas as pd
 import pytest
 
-from hydra_suite.core.individual.pose.quality import BodyLengthPrior, EdgeLengthPriors
+from hydra_suite.core.individual.pose.quality import (
+    BodyLengthPrior,
+    EdgeLengthPriors,
+)
 from hydra_suite.core.individual.pose.quality import (
     _extract_keypoints_from_row as _ref_extract_keypoints_from_row,
 )

@@ -81,7 +81,6 @@ def test_tracking_request_fingerprints_every_model_and_path_free_geometry(tmp_pa
     context = TrackingRunContext(
         video_path=tmp_path / "private-name.mp4",
         params={
-            "INFERENCE_AUTOTUNE_MODE": "record",
             "MAX_TARGETS": 25,
             "RESIZE_FACTOR": 0.5,
             "INFERENCE_AUTOTUNE_DETECTION_COUNTS": [12, 25, 17],
@@ -149,7 +148,7 @@ def test_realtime_drops_inert_detector_batch_and_depth_coordinates(tmp_path):
     config = _config(tmp_path)
     context = TrackingRunContext(
         video_path=tmp_path / "video.mp4",
-        params={"INFERENCE_AUTOTUNE_MODE": "record", "MAX_TARGETS": 25},
+        params={"MAX_TARGETS": 25},
         frame_width=1200,
         frame_height=900,
         execution_mode="realtime",
@@ -174,7 +173,7 @@ def test_cache_replay_is_ineligible_and_never_searches(tmp_path):
     config = _config(tmp_path)
     context = TrackingRunContext(
         video_path=tmp_path / "video.mp4",
-        params={"INFERENCE_AUTOTUNE_MODE": "automatic", "MAX_TARGETS": 25},
+        params={"MAX_TARGETS": 25},
         frame_width=1200,
         frame_height=900,
         execution_mode="cache_replay",
@@ -188,7 +187,10 @@ def test_cache_replay_is_ineligible_and_never_searches(tmp_path):
     )
 
     assert not request.eligible
-    assert not request.allow_cached_reuse
+    # A cache_replay (backward) pass MUST apply the forward pass's vector --
+    # the detection cache was written at that batch size, so refusing to
+    # apply it is what made backward runs abort. See eligibility-split tests.
+    assert request.allow_cached_reuse
     assert (
         request.eligibility_reason
         == "all inference stages are satisfied by reusable caches"
@@ -199,7 +201,7 @@ def test_realtime_is_ineligible_and_never_searches(tmp_path):
     config = _config(tmp_path)
     context = TrackingRunContext(
         video_path=tmp_path / "video.mp4",
-        params={"INFERENCE_AUTOTUNE_MODE": "automatic", "MAX_TARGETS": 25},
+        params={"MAX_TARGETS": 25},
         frame_width=1200,
         frame_height=900,
         execution_mode="realtime",
@@ -217,52 +219,10 @@ def test_realtime_is_ineligible_and_never_searches(tmp_path):
     assert request.planner.admit(request.baseline).settings.detection_batch_size == 1
 
 
-def test_automatic_backend_without_evidence_falls_back_but_record_mode_can_measure(
-    tmp_path,
-):
-    config = _config(tmp_path)
-    automatic = TrackingRunContext(
-        video_path=tmp_path / "video.mp4",
-        params={"INFERENCE_AUTOTUNE_MODE": "automatic", "MAX_TARGETS": 25},
-        frame_width=100,
-        frame_height=100,
-        execution_mode="batch",
-    )
-    record = TrackingRunContext(
-        video_path=automatic.video_path,
-        params={**automatic.params, "INFERENCE_AUTOTUNE_MODE": "record"},
-        frame_width=100,
-        frame_height=100,
-        execution_mode="batch",
-    )
-
-    config.inference_autotune = InferenceAutotunePolicy(mode="automatic")
-
-    auto_request = build_tracking_autotune_request(
-        config,
-        automatic,
-        observation=_observation(),
-        backend="torch",
-        device_identity=("cpu", "CPU", "none", 0),
-    )
-    config.inference_autotune = InferenceAutotunePolicy(mode="record")
-    record_request = build_tracking_autotune_request(
-        config,
-        record,
-        observation=_observation(),
-        backend="torch",
-        device_identity=("cpu", "CPU", "none", 0),
-    )
-
-    assert not auto_request.eligible
-    assert "validated only for CUDA" in (auto_request.eligibility_reason or "")
-    assert record_request.eligible
-
-
 def test_core_inference_policy_roundtrip_and_legacy_default(tmp_path):
     config = _config(tmp_path)
     config.inference_autotune = InferenceAutotunePolicy(
-        mode="automatic",
+        mode="calibrate",
         manual_fields=("pipeline_depth", "pose_batch_size"),
         budget_seconds=90,
     )
@@ -276,7 +236,7 @@ def test_core_inference_policy_roundtrip_and_legacy_default(tmp_path):
     raw.pop("inference_autotune")
     path.write_text(json.dumps(raw), encoding="utf-8")
     legacy = InferenceConfig.from_json(str(path))
-    assert legacy.inference_autotune.mode == "off"
+    assert legacy.inference_autotune.mode == "lookup"
 
 
 def test_existing_detection_cache_supplies_zero_inclusive_density(
@@ -391,17 +351,17 @@ def test_worker_resolves_cache_replay_instead_of_skipping_the_preflight(
     run was silently invisible to autotune observability. It must now
     resolve to an honest, ineligible "cache_replay" overlay instead."""
     monkeypatch.setenv("HYDRA_DATA_DIR", str(tmp_path / "hydra_data"))
+    from hydra_suite.core.inference.autotune import session as autotune_session
     from hydra_suite.core.inference.config import InferenceAutotunePolicy
-    from hydra_suite.core.tracking import worker as worker_mod
 
     config = _config(tmp_path)
-    config.inference_autotune = InferenceAutotunePolicy(mode="automatic")
+    config.inference_autotune = InferenceAutotunePolicy(mode="calibrate")
     video_path = tmp_path / "video.mp4"
     video_path.write_bytes(b"not a real video")
 
-    _effective, overlay, _result = worker_mod._resolve_inference_autotune_before_load(
+    ctx = autotune_session.build_autotune_context(
         config,
-        {"MAX_TARGETS": 25},
+        {"MAX_TARGETS": 25, "APPLY_TUNED_INFERENCE": True},
         video_path=str(video_path),
         frame_width=100,
         frame_height=100,
@@ -411,6 +371,7 @@ def test_worker_resolves_cache_replay_instead_of_skipping_the_preflight(
         should_cancel=lambda: False,
         cache_read_only_replay=True,
     )
+    _effective, overlay, _result = autotune_session.lookup(ctx)
 
     assert overlay is not None
     assert overlay.status == "deferred_due_to_contention"

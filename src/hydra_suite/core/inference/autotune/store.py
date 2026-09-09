@@ -408,6 +408,7 @@ def _candidate_from_dict(value: Mapping[str, Any]) -> CandidateEvidence:
         "thermal_c_range",
         "throughput_confidence_95",
         "stage_shares",
+        "detection_counts",
     ):
         if raw.get(name) is not None:
             raw[name] = tuple(raw[name])

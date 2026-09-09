@@ -274,6 +274,12 @@ class CandidateEvidence:
     phase: str = "unknown"
     throughput_confidence_95: tuple[float, float] | None = None
     stage_shares: tuple[tuple[str, float], ...] = ()
+    # Per-frame observed detection counts from THIS candidate's own measured
+    # window(s). Calibration already ran real frames through the pipeline, so
+    # this is real density -- not the MAX_TARGETS fallback a cache-less run
+    # otherwise keys on. Closing the store's estimated/measured two-record
+    # bridge (S2) reads this instead of paying a whole extra tracking run.
+    detection_counts: tuple[int, ...] = ()
 
     def __post_init__(self) -> None:
         if any(not math.isfinite(v) or v <= 0 for v in self.throughput_samples):
@@ -295,6 +301,8 @@ class CandidateEvidence:
             raise ValueError(
                 "candidate counters and memory observations must be non-negative"
             )
+        if any(count < 0 for count in self.detection_counts):
+            raise ValueError("detection_counts entries must be non-negative")
         if self.phase not in {
             "unknown",
             "baseline",

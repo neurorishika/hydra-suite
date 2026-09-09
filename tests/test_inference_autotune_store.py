@@ -59,7 +59,7 @@ def test_budget_expiry_is_cached_so_the_next_run_does_not_retune(tmp_path):
         key,
         baseline,
         _planner(),
-        mode="automatic",
+        mode="calibrate",
         budget_seconds=1.0,
     )
 
@@ -73,36 +73,15 @@ def test_budget_expiry_is_cached_so_the_next_run_does_not_retune(tmp_path):
     assert record.state is ProfileState.INCOMPLETE
     assert record.invalidation_reason
 
+    # The "next run" that must not re-pay the failed budget is a lookup, not
+    # another explicit calibrate -- an explicit calibrate bypasses the
+    # negative cache by design (see test_inference_autotune_intent.py).
+    lookup_request = replace(request, mode="lookup")
     second = AutotuneCoordinator(store, trial_executor=_NeverCalledExecutor()).resolve(
-        request
+        lookup_request
     )
     assert second.overlay.status == "deferred_due_to_prior_failure"
     assert second.overlay.reason == record.invalidation_reason
-
-
-def test_record_mode_also_gets_the_negative_cache(tmp_path):
-    """S5: negative caching applies to every mode, including record -- a
-    record-only run must not re-burn the full budget on a project that
-    cannot calibrate either.
-    """
-    store = InferenceTuningProfileStore(tmp_path)
-    key = _key()
-    baseline = _settings()
-    request = AutotuneRequest(
-        key,
-        baseline,
-        _planner(),
-        mode="record",
-        budget_seconds=1.0,
-    )
-
-    AutotuneCoordinator(store, trial_executor=_NeverCompletesExecutor()).resolve(
-        request
-    )
-    second = AutotuneCoordinator(store, trial_executor=_NeverCalledExecutor()).resolve(
-        request
-    )
-    assert second.overlay.status == "deferred_due_to_prior_failure"
 
 
 def test_contention_detected_flag_is_defense_in_depth_not_a_live_path(tmp_path):
@@ -124,7 +103,7 @@ def test_contention_detected_flag_is_defense_in_depth_not_a_live_path(tmp_path):
         key,
         baseline,
         _planner(),
-        mode="automatic",
+        mode="calibrate",
         budget_seconds=1.0,
         contention_detected=True,
     )
@@ -170,7 +149,7 @@ def test_save_incomplete_writes_when_no_record_exists(tmp_path):
     key = _key()
     baseline = _settings()
     request = AutotuneRequest(
-        key, baseline, _planner(), mode="automatic", budget_seconds=1.0
+        key, baseline, _planner(), mode="calibrate", budget_seconds=1.0
     )
 
     AutotuneCoordinator(store, trial_executor=_NeverCompletesExecutor()).resolve(
@@ -189,7 +168,7 @@ def test_save_incomplete_refreshes_an_existing_incomplete_record(tmp_path):
     store.save(_profile(key, baseline, state=ProfileState.INCOMPLETE))
     first_timestamp = store.load(key).last_validation_unix_ns
     request = AutotuneRequest(
-        key, baseline, _planner(), mode="automatic", budget_seconds=1.0
+        key, baseline, _planner(), mode="calibrate", budget_seconds=1.0
     )
 
     AutotuneCoordinator(store, trial_executor=_NeverCompletesExecutor()).resolve(
@@ -212,7 +191,7 @@ def test_save_incomplete_never_overwrites_a_provisional_record(tmp_path):
     provisional = _profile(key, baseline, state=ProfileState.PROVISIONAL)
     store.save(provisional)
     request = AutotuneRequest(
-        key, baseline, _planner(), mode="automatic", budget_seconds=1.0
+        key, baseline, _planner(), mode="calibrate", budget_seconds=1.0
     )
 
     result = AutotuneCoordinator(
@@ -245,7 +224,7 @@ def test_save_incomplete_never_overwrites_a_validated_record(tmp_path):
         key,
         baseline,
         _planner(),
-        mode="automatic",
+        mode="calibrate",
         budget_seconds=1.0,
         allow_cached_reuse=False,
     )
@@ -432,7 +411,7 @@ def test_nondeterministic_baseline_is_negative_cached(tmp_path):
     key = _key()
     baseline = _settings()
     request = AutotuneRequest(
-        key, baseline, _planner(), mode="record", budget_seconds=30.0
+        key, baseline, _planner(), mode="calibrate", budget_seconds=30.0
     )
 
     first = AutotuneCoordinator(
@@ -446,7 +425,7 @@ def test_nondeterministic_baseline_is_negative_cached(tmp_path):
     assert record.invalidation_reason == "baseline_nondeterministic_beyond_contract"
 
     second = AutotuneCoordinator(store, trial_executor=_NeverCalledExecutor()).resolve(
-        request
+        replace(request, mode="lookup")
     )
     assert second.overlay.status == "deferred_due_to_prior_failure"
 
@@ -458,7 +437,7 @@ def test_nondeterministic_baseline_is_not_cached_under_contention(tmp_path):
         key,
         _settings(),
         _planner(),
-        mode="automatic",
+        mode="calibrate",
         budget_seconds=30.0,
         contention_detected=True,
     )
@@ -476,7 +455,7 @@ def test_nondeterministic_baseline_never_overwrites_a_provisional_record(tmp_pat
     baseline = _settings()
     store.save(_profile(key, baseline, state=ProfileState.PROVISIONAL))
     request = AutotuneRequest(
-        key, baseline, _planner(), mode="automatic", budget_seconds=30.0
+        key, baseline, _planner(), mode="calibrate", budget_seconds=30.0
     )
 
     AutotuneCoordinator(

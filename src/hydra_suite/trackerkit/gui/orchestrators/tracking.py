@@ -18,6 +18,7 @@ from PySide6.QtGui import QImage, QPixmap
 from PySide6.QtWidgets import QApplication, QMessageBox
 
 from hydra_suite.trackerkit.cli_config import legacy_detection_runtime_fields
+from hydra_suite.trackerkit.gui.dialogs.calibration import describe_calibration_outcome
 from hydra_suite.trackerkit.gui.orchestrators.config import _get_video_config_path
 from hydra_suite.trackerkit.gui.workers.session_worker import SessionWorker
 from hydra_suite.trackerkit.headless_tracking import build_tracking_csv_header
@@ -90,9 +91,135 @@ class TrackingOrchestrator:
         self._mw = main_window
         self._config = config
         self._panels = panels
+        self._calibration_dialog = None
+
+    def _tracking_is_active(self) -> bool:
+        """True while a track (single or fanned-out batch) is running."""
+        worker = getattr(self._mw, "tracking_worker", None)
+        fanout_worker = getattr(self._mw, "batch_fanout_worker", None)
+        return bool(worker and worker.isRunning()) or bool(
+            fanout_worker is not None and fanout_worker.isRunning()
+        )
+
+    def _calibration_is_active(self) -> bool:
+        """True while a calibration search thread is still executing."""
+        dialog = self._calibration_dialog
+        if dialog is None:
+            return False
+        try:
+            return bool(dialog.is_calibration_running())
+        except RuntimeError:
+            # Underlying C++ dialog already deleted -> nothing is running.
+            self._calibration_dialog = None
+            return False
+
+    def open_calibration_dialog(self) -> None:
+        """Open the one-click Calibrate dialog.
+
+        Calibration and tracking are mutually exclusive: on MPS/CPU the
+        autotune contention probe hardcodes ``contention_detected=False``
+        (``core/inference/autotune/device.py``), so nothing below the GUI
+        can detect an overlapping tracking run, and a calibration measured
+        against one would silently produce a confidently wrong profile.
+        Refuse to open while a track is running; the dialog itself is
+        application-modal, so it symmetrically blocks starting a track
+        while calibration is in progress.
+        """
+        if self._tracking_is_active():
+            QMessageBox.warning(
+                self._mw,
+                "Tracking in progress",
+                "Calibration cannot run while a tracking run is active. "
+                "Stop tracking first, then calibrate.",
+            )
+            return
+
+        # A cancelled worker can outlive its dialog (reject() waits only 5s).
+        # Without this, reopening would start a second concurrent measurement
+        # AND overwrite _calibration_dialog, losing the only handle to the
+        # first one -- so nothing would block tracking any more either.
+        if self._calibration_is_active():
+            QMessageBox.warning(
+                self._mw,
+                "Calibration in progress",
+                "A calibration is still running. Wait for it to finish "
+                "before starting another one.",
+            )
+            return
+
+        video_path = str(self._mw.current_video_path or "").strip()
+        if not video_path:
+            QMessageBox.warning(
+                self._mw, "No video loaded", "Load a video before calibrating."
+            )
+            return
+
+        from hydra_suite.core.inference.config import build_inference_config_from_params
+        from hydra_suite.trackerkit.calibrate_cli import derive_context_inputs
+        from hydra_suite.trackerkit.gui.dialogs.calibration import CalibrationDialog
+
+        params = self._mw.get_parameters_dict()
+        inference_config = build_inference_config_from_params(params)
+
+        class _FrameCountProbe:
+            total_frames = int(getattr(self._mw, "video_total_frames", 0) or 0)
+
+        inputs = derive_context_inputs(
+            video_path,
+            params,
+            _FrameCountProbe(),
+            use_cached_detections=bool(
+                self._panels.setup.chk_use_cached_detections.isChecked()
+            ),
+        )
+
+        dialog = CalibrationDialog(
+            params=params,
+            config=inference_config,
+            video_path=video_path,
+            frame_width=int(getattr(self._mw, "video_width", None) or 1),
+            frame_height=int(getattr(self._mw, "video_height", None) or 1),
+            start_frame=inputs.start_frame,
+            end_frame=inputs.end_frame,
+            realtime=inputs.realtime,
+            cache_dir=inputs.cache_dir,
+            use_cached_detections=inputs.use_cached_detections,
+            default_budget_seconds=float(
+                self._config.inference_autotune_budget_seconds
+            ),
+            parent=self._mw,
+        )
+        # Kept past exec() on purpose: a cancelled worker may outlive the
+        # dialog (reject() waits only 5s), and _calibration_is_active must
+        # still see it so start_full keeps refusing.
+        self._calibration_dialog = dialog
+        self._mw.btn_start.setEnabled(False)
+        try:
+            dialog.exec()
+        finally:
+            self._mw.btn_start.setEnabled(True)
+
+        result = dialog.result_payload
+        if result is not None:
+            self._panels.setup.set_inference_autotune_status(
+                describe_calibration_outcome(result)
+            )
 
     def start_full(self):
         """start_full method documentation."""
+        # Calibration and tracking are mutually exclusive. The MPS/CPU
+        # contention probe hardcodes contention_detected=False, so an
+        # overlapping track would silently corrupt the measurement.
+        if self._calibration_is_active():
+            QMessageBox.warning(
+                self._mw,
+                "Calibration in progress",
+                "Tracking cannot start while an inference calibration is "
+                "running. Wait for it to finish, then start tracking.",
+            )
+            self._mw.btn_start.setChecked(False)
+            return
+
         if self._mw.btn_preview.isChecked():
             self._mw.btn_preview.setChecked(False)
             self._mw.btn_preview.setText("Preview Mode")
@@ -359,18 +486,6 @@ class TrackingOrchestrator:
             return
         self._mw.progress_bar.setValue(percentage)
         self._mw.progress_label.setText(status_text)
-        if str(status_text).startswith("Optimizing inference"):
-            self._panels.setup.set_inference_autotune_calibration_active(True)
-
-    def continue_with_current_inference_settings(self) -> None:
-        """Cancel calibration while allowing the configured production run."""
-        worker = getattr(self._mw, "tracking_worker", None)
-        if worker is not None and hasattr(worker, "cancel_inference_autotune"):
-            worker.cancel_inference_autotune()
-        self._panels.setup.set_inference_autotune_calibration_active(False)
-        self._panels.setup.set_inference_autotune_status(
-            "Continuing with configured inference settings…"
-        )
 
     def on_pose_exported_model_resolved(self, artifact_path: str) -> None:
         """Update pose exported-model UI/config when runtime resolves an artifact path."""
@@ -673,22 +788,10 @@ class TrackingOrchestrator:
             return
         tuning = stats.get("inference_autotune")
         if isinstance(tuning, dict):
-            self._panels.setup.set_inference_autotune_calibration_active(False)
-            status = str(tuning.get("status", "unknown")).replace("_", " ")
-            reason = str(tuning.get("reason", "")).strip()
-            effective = tuning.get("effective", {})
-            values = ""
-            if isinstance(effective, dict):
-                compact = ", ".join(
-                    f"{name}={value}"
-                    for name, value in effective.items()
-                    if value not in (None, {}, [], ())
-                )
-                values = f" Effective: {compact}." if compact else ""
-            profile = str(tuning.get("profile_id") or "").strip()
-            profile_text = f" Profile {profile}." if profile else ""
+            # Same mapping the Calibrate dialog uses, so the label never says
+            # one thing after calibrating and another during a real run.
             self._panels.setup.set_inference_autotune_status(
-                f"{status.capitalize()} — {reason}.{profile_text}{values}"
+                describe_calibration_outcome(tuning)
             )
         phase = str(stats.get("phase", "tracking"))
         is_precompute = phase == "individual_precompute"

@@ -13,6 +13,8 @@ child e2e anchor) needs. Later tasks add more helpers here as they need them
 
 from __future__ import annotations
 
+import time
+from contextlib import contextmanager
 from dataclasses import replace
 from pathlib import Path
 from typing import Any
@@ -22,7 +24,10 @@ from hydra_suite.core.inference.autotune.candidates import (
     CandidatePlanner,
     MemoryCostModel,
 )
-from hydra_suite.core.inference.autotune.coordinator import AutotuneRequest
+from hydra_suite.core.inference.autotune.coordinator import (
+    AutotuneCoordinator,
+    AutotuneRequest,
+)
 from hydra_suite.core.inference.autotune.device import RuntimeResourceProbe
 from hydra_suite.core.inference.autotune.fingerprint import (
     AcceleratorFingerprint,
@@ -258,18 +263,17 @@ def make_roi_params(video_path: Path) -> dict[str, Any]:
     return build_tracking_parameters(config, video_probe=probe)
 
 
-def record_mode_request_with_validated_cache(
+def calibrate_request_with_validated_cache(
     tmp_path: Path,
 ) -> tuple[InferenceTuningProfileStore, AutotuneRequest]:
-    """A record-mode request whose store already holds a VALIDATED profile.
+    """A calibrate-mode request whose store already holds a VALIDATED profile.
 
     ``selected`` differs from ``baseline`` in ``detection_batch_size`` so a
-    test can prove a record-mode cache hit keeps the *baseline* effective
-    settings rather than silently applying the tuned vector (finding B2:
-    record mode must never apply, on any run).
+    test can prove a calibrate-mode cache hit is served from the store
+    (``cache_hit``) rather than re-measuring.
 
     Modeled on the construction in
-    ``tests/test_inference_autotune_search.py::test_record_only_persists_but_does_not_apply``
+    ``tests/test_inference_autotune_search.py::test_calibrate_persists_a_validated_profile``
     (run-1 coverage); this helper covers run 2 -- a cache hit.
     """
 
@@ -302,7 +306,7 @@ def record_mode_request_with_validated_cache(
         key,
         baseline,
         _planner(),
-        mode="record",
+        mode="calibrate",
     )
     return store, request
 
@@ -359,3 +363,491 @@ def equivalence_outputs(frame):
     from hydra_suite.core.inference.autotune.equivalence import CalibrationOutputs
 
     return CalibrationOutputs(frame.copy(), frame.copy())
+
+
+def make_request_inputs(
+    tmp_path: Path | None = None,
+    *,
+    kind: AcceleratorKind = AcceleratorKind.CUDA,
+    execution_mode: str = "batch",
+    available_accelerator_bytes: int = 48 * 1024**3,
+    sliced: bool = True,
+) -> dict[str, Any]:
+    """Keyword arguments for ``build_tracking_autotune_request``.
+
+    Defaults to a CUDA batch context with an admissible baseline; override
+    ``kind``/``execution_mode``/``available_accelerator_bytes`` to exercise
+    the eligibility-split cases.
+
+    ``sliced=False`` drops the ``SliceConfig`` entirely, modelling every
+    NON-SAHI project (``fly_obb``, ``worm_bgsub``, any bgsub or plain
+    direct-OBB project). That leaves ``slice_tile_batch_size=None`` on the
+    baseline settings -- the shape that made ``session.calibrate`` raise
+    ``TypeError`` on every such project while the whole suite stayed green,
+    because every fixture here was sliced. Follows the construction pattern in
+    ``tests/test_inference_autotune_integration.py`` (``_config``/
+    ``TrackingRunContext``/``build_tracking_autotune_request``) rather than
+    inventing a new one.
+    """
+
+    import tempfile
+
+    from hydra_suite.core.inference.autotune.integration import TrackingRunContext
+    from hydra_suite.core.inference.config import (
+        CNNConfig,
+        HeadTailConfig,
+        InferenceConfig,
+        OBBConfig,
+        OBBDirectConfig,
+        PoseConfig,
+        PoseYOLOConfig,
+        SliceConfig,
+    )
+
+    tmp_path = tmp_path or Path(tempfile.mkdtemp())
+
+    def _model(name: str, payload: bytes) -> str:
+        path = tmp_path / name
+        path.write_bytes(payload)
+        return str(path)
+
+    detector = _model("detector.pt", b"detector")
+    headtail = _model("headtail.pt", b"headtail")
+    pose = _model("pose.pt", b"pose")
+    identity = _model("identity.pt", b"identity")
+    config = InferenceConfig(
+        obb=OBBConfig(
+            mode="direct",
+            direct=OBBDirectConfig(
+                detector,
+                slice=(
+                    SliceConfig(
+                        enabled=True,
+                        geometry_mode="custom",
+                        slice_width=512,
+                        slice_height=384,
+                        tile_batch_size=2,
+                    )
+                    if sliced
+                    else None
+                ),
+            ),
+            target_classes=[0],
+            max_detections=25,
+        ),
+        headtail=HeadTailConfig(headtail, batch_size=8),
+        cnn_phases=[CNNConfig("color", identity, batch_size=8)],
+        pose=PoseConfig(backend="yolo", yolo=PoseYOLOConfig(pose, batch_size=8)),
+        detection_batch_size=2,
+        pipeline_depth=2,
+        runtime_tier="cpu",
+    )
+    context = TrackingRunContext(
+        video_path=tmp_path / "video.mp4",
+        params={"APPLY_TUNED_INFERENCE": True, "MAX_TARGETS": 25},
+        frame_width=1200,
+        frame_height=900,
+        execution_mode=execution_mode,
+    )
+    if kind is AcceleratorKind.CUDA:
+        observation = ResourceObservation(
+            total_host_bytes=64 * 1024**3,
+            available_host_bytes=48 * 1024**3,
+            accelerator_kind=kind,
+            accelerator_name="accelerator",
+            total_accelerator_bytes=48 * 1024**3,
+            available_accelerator_bytes=available_accelerator_bytes,
+        )
+    else:
+        # MPS uses unified host memory and CPU has no separate accelerator
+        # pool -- neither may carry total/available_accelerator_bytes.
+        observation = ResourceObservation(
+            total_host_bytes=64 * 1024**3,
+            available_host_bytes=48 * 1024**3,
+            accelerator_kind=kind,
+        )
+    return {
+        "config": config,
+        "context": context,
+        "observation": observation,
+        "backend": "torch",
+        "device_identity": ("cpu", "CPU", "none", 0),
+    }
+
+
+def make_tensorrt_context(
+    tmp_path: Path | None = None,
+    *,
+    backend: str = "tensorrt",
+    available_accelerator_bytes: int = 48 * 1024**3,
+):
+    """An ``AutotuneContext`` for exercising ``session.calibration_key_digest``.
+
+    Built on ``make_request_inputs`` (CUDA, direct-OBB-with-slice config) so
+    the resulting context has a real ``detection_batch_size``/
+    ``slice_tile_batch_size`` candidate space to derive ``artifact_batch_size``
+    from. ``backend="tensorrt"`` (the default) makes
+    ``session.calibration_key_digest`` reach ``_model_fingerprints``'s
+    ``tensorrt_profile_fingerprint`` call; pass ``backend="torch"`` for the
+    non-TensorRT comparison.
+    """
+
+    import tempfile
+
+    from hydra_suite.core.inference.autotune.device import RuntimeResourceProbe
+    from hydra_suite.core.inference.autotune.session import (
+        TENSORRT_PROFILE_BATCH_PARAM,
+        AutotuneContext,
+        derive_artifact_batch_size,
+    )
+
+    tmp_path = tmp_path or Path(tempfile.mkdtemp())
+    inputs = make_request_inputs(
+        tmp_path,
+        available_accelerator_bytes=available_accelerator_bytes,
+    )
+    probe = RuntimeResourceProbe(
+        inputs["observation"],
+        "gpu-uuid",
+        "GPU",
+        "8.9",
+        None,
+        "driver",
+        False,
+        False,
+    )
+    # ``ctx.params`` must be the SAME dict object as ``run_context.params``
+    # (as ``build_autotune_context`` constructs it) so mutating one is
+    # visible through the other -- the artifact batch size is folded into
+    # the fingerprint through exactly that aliasing.
+    #
+    # The batch size comes from the REAL production helper, and the TensorRT
+    # param is injected here the same way ``build_autotune_context`` injects
+    # it, so this fixture cannot drift from production by hand-copying a
+    # value.
+    artifact_batch_size = derive_artifact_batch_size(
+        inputs["config"],
+        inputs["context"],
+        probe=probe,
+        backend=backend,
+        device_identity=inputs["device_identity"],
+    )
+    if backend == "tensorrt":
+        inputs["context"].params[TENSORRT_PROFILE_BATCH_PARAM] = artifact_batch_size
+    return AutotuneContext(
+        config=inputs["config"],
+        run_context=inputs["context"],
+        params=inputs["context"].params,
+        backend=backend,
+        probe=probe,
+        device_identity=inputs["device_identity"],
+        artifact_batch_size=artifact_batch_size,
+    )
+
+
+class _FakeProfileStore:
+    """In-memory ``InferenceTuningProfileStore`` stand-in for intent tests.
+
+    Records every ``save``/``claim`` call so a test can assert a ``lookup``
+    request never writes to, or single-flight-claims, the store -- a lookup
+    is read-only by construction, and this is how that gets proven rather
+    than assumed.
+    """
+
+    def __init__(self, profile: InferenceTuningProfile | None = None) -> None:
+        self._profile = profile
+        self.saves: list[InferenceTuningProfile] = []
+        self.claims: list[TuningProfileKey] = []
+
+    def load(self, key: TuningProfileKey) -> InferenceTuningProfile | None:
+        return self._profile
+
+    def save(self, profile: InferenceTuningProfile) -> None:
+        self.saves.append(profile)
+        self._profile = profile
+
+    @contextmanager
+    def claim(self, key: TuningProfileKey, *, timeout_seconds: float = 2.0):
+        self.claims.append(key)
+
+        class _Claim:
+            acquired = True
+
+        yield _Claim()
+
+
+class _StubExecutor:
+    """A trivial always-succeeds trial executor for intent tests that only
+    care about which branch ``resolve`` took, not about search dynamics."""
+
+    def run(self, settings, *, phase, field_name, block_index, should_cancel):
+        from hydra_suite.core.inference.autotune.search import TrialObservation
+
+        return TrialObservation(
+            settings,
+            100.0,
+            0.5,
+            equivalence_outputs(equivalence_frame()),
+            warmup_calls=3,
+            warmup_frames=8,
+            measured_frames=10,
+        )
+
+
+_UNSET = object()
+
+
+def make_incomplete_profile(
+    key: TuningProfileKey | None = None,
+) -> InferenceTuningProfile:
+    """An INCOMPLETE (negative-cache) profile, freshly timestamped so it
+    still falls inside the 24h retry window."""
+
+    key = key or _key()
+    baseline = _settings()
+    now = time.time_ns()
+    return InferenceTuningProfile(
+        profile_id=key.digest[:24],
+        key=key,
+        baseline=baseline,
+        requested=baseline,
+        admitted=baseline,
+        selected=baseline,
+        candidates=(),
+        state=ProfileState.INCOMPLETE,
+        selection_reason="budget_expired",
+        created_at_unix_ns=now,
+        last_validation_unix_ns=now,
+        invalidation_reason="a prior calibration attempt did not complete",
+    )
+
+
+def make_request(
+    *, mode: str = "lookup", eligible: bool = True, **overrides: Any
+) -> AutotuneRequest:
+    """A representative ``AutotuneRequest`` for the given ``mode``."""
+
+    fields = {
+        "key": _key(),
+        "baseline": _settings(),
+        "planner": _planner(),
+        "mode": mode,
+        "eligible": eligible,
+    }
+    fields.update(overrides)
+    return AutotuneRequest(**fields)
+
+
+def make_coordinator(
+    *,
+    trial_executor: Any = _UNSET,
+    cached_state: ProfileState | None = None,
+    cached_profile: InferenceTuningProfile | None = None,
+) -> tuple[AutotuneCoordinator, _FakeProfileStore]:
+    """An ``AutotuneCoordinator`` wired to a ``_FakeProfileStore``.
+
+    ``cached_profile`` wins if given; otherwise ``cached_state`` builds a
+    representative VALIDATED or INCOMPLETE profile. ``trial_executor``
+    defaults to a working stub -- pass ``None`` explicitly to exercise the
+    "no executor configured" path.
+    """
+
+    profile = cached_profile
+    if profile is None and cached_state is not None:
+        if cached_state is ProfileState.VALIDATED:
+            profile = _profile()
+        elif cached_state is ProfileState.INCOMPLETE:
+            profile = make_incomplete_profile()
+        else:
+            raise ValueError(f"unsupported cached_state: {cached_state!r}")
+    store = _FakeProfileStore(profile)
+    executor = _StubExecutor() if trial_executor is _UNSET else trial_executor
+    coordinator = AutotuneCoordinator(store, trial_executor=executor)
+    return coordinator, store
+
+
+class _SpyProfileStore(InferenceTuningProfileStore):
+    """A throwaway, on-disk ``InferenceTuningProfileStore`` that records saves.
+
+    Task 9 (S2 bridge closure): wraps the REAL store rather than duck-typing
+    a fake, because ``session._close_density_bridge`` exercises
+    ``store.observe_production_throughput`` end to end -- that is the exact
+    logic under test. A fake would either have to reimplement it (risking
+    drift from the real bridging rules in ``store.py``) or would silently
+    swallow the call via ``_close_density_bridge``'s broad ``except
+    Exception``, hiding a real failure as a false pass. Subclassing keeps
+    that logic real while still letting a test see every persisted record.
+    """
+
+    def __init__(self, root: Path) -> None:
+        super().__init__(root)
+        self.saved: list[InferenceTuningProfile] = []
+
+    def save(self, profile: InferenceTuningProfile) -> None:
+        self.saved.append(profile)
+        super().save(profile)
+
+
+def fake_store(monkeypatch: Any, tmp_path: Path | None = None) -> _SpyProfileStore:
+    """Wire every default-constructed store in ``session``/``integration`` to
+    ONE throwaway, spy-wrapped ``InferenceTuningProfileStore``.
+
+    ``session.calibrate`` (via ``integration.resolve_tracking_inference_config``)
+    and ``session._close_density_bridge`` each construct a bare
+    ``InferenceTuningProfileStore()`` when no store is injected -- there is no
+    store-injection seam on the session entry points, by design (worker.py
+    never has one to give them). Rather than adding one for a test-only need,
+    monkeypatch the class both modules resolve at call time so every fresh
+    construction lands on the same instance: the two-record bridge this
+    exercises only makes sense if both the ``calibrated`` write and the
+    ``observe_production_throughput`` write land in the same place.
+    """
+
+    import tempfile
+
+    from hydra_suite.core.inference.autotune import integration
+    from hydra_suite.core.inference.autotune import store as store_module
+
+    root = (
+        Path(tempfile.mkdtemp(prefix="autotune-fake-store-"))
+        if tmp_path is None
+        else tmp_path
+    )
+    spy = _SpyProfileStore(root)
+    monkeypatch.setattr(
+        store_module, "InferenceTuningProfileStore", lambda *_a, **_k: spy
+    )
+    monkeypatch.setattr(
+        integration, "InferenceTuningProfileStore", lambda *_a, **_k: spy
+    )
+    return spy
+
+
+class FakeCalibrationExecutor:
+    """Deterministic, sidecar-free trial executor for ``session.calibrate``.
+
+    Every trial returns the same fixed throughput and forward-CSV outputs
+    regardless of settings/phase/block, shaped like ``frame_counts`` real
+    per-frame detections -- following the ``FixedExecutor``/
+    ``ConflictingExecutor`` pattern in ``test_inference_autotune_search.py``.
+    Identical outputs across every call keep the correctness gate trivially
+    satisfied, and the fixed density is what lets a test prove
+    ``CandidateEvidence.detection_counts`` (and the S2 bridge it feeds) carry
+    real measured density rather than the ``MAX_TARGETS`` fallback.
+
+    ``frame_counts`` is the true per-frame density for the whole measured
+    window, INCLUDING zero-detection frames (e.g. ``(2, 0, 3)`` is a
+    3-frame window where the middle frame produced nothing) -- so
+    ``measured_frames`` (``len(frame_counts)``, the window length) and the
+    forward CSV (only rows for frames with ``count > 0``, matching how a
+    real tracking pass writes no row for an empty frame) stay consistent
+    with each other, exactly like a real sidecar trial.
+    """
+
+    def __init__(self, frame_counts: tuple[int, ...] = (2, 3, 2)) -> None:
+        self.frame_counts = frame_counts
+        self.calls: list[tuple[str, str | None, int]] = []
+
+    def run(self, settings, *, phase, field_name, block_index, should_cancel):
+        from hydra_suite.core.inference.autotune.search import TrialObservation
+
+        self.calls.append((phase, field_name, block_index))
+        frame_ids = [
+            frame for frame, count in enumerate(self.frame_counts) for _ in range(count)
+        ]
+        outputs = equivalence_outputs(
+            equivalence_frame(rows=len(frame_ids), frame_ids=frame_ids)
+        )
+        return TrialObservation(
+            settings,
+            100.0,
+            0.5,
+            outputs,
+            warmup_calls=3,
+            warmup_frames=8,
+            measured_frames=len(self.frame_counts),
+        )
+
+
+def make_calibration_context(
+    monkeypatch: Any,
+    tmp_path: Path | None = None,
+    *,
+    cache_dir: Path | None = None,
+    measured_counts: tuple[int, ...] = (),
+    frame_counts: tuple[int, ...] = (2, 3, 2),
+    mode: str = "calibrate",
+    sliced: bool = True,
+    use_cached_detections: bool = False,
+):
+    """A CPU-tier ``AutotuneContext`` wired for ``session.calibrate``/``lookup``.
+
+    ``cache_dir=None`` reproduces run 1 of a brand-new video (S2): no
+    detection cache exists yet, so ``build_autotune_context`` keys the
+    request on the ``MAX_TARGETS`` fallback (``density_is_estimated=True``).
+    ``cache_dir=<path>`` with ``measured_counts`` reproduces a later run WITH
+    a cache: ``open_detection_cache_reader`` is faked to yield exactly
+    ``measured_counts`` (one entry per frame) -- the same technique
+    ``test_existing_detection_cache_supplies_zero_inclusive_density`` uses in
+    ``test_inference_autotune_integration.py`` -- so no real ``.npz`` cache
+    file is written.
+
+    Also monkeypatches ``session.calibrate``'s sidecar-spawning
+    ``ContainedTrialExecutor`` with :class:`FakeCalibrationExecutor` (density
+    ``frame_counts``), so ``session.calibrate`` can run end to end against
+    this context without a real video or a real sidecar child process.
+    """
+
+    import tempfile
+    from dataclasses import replace as _replace
+
+    from hydra_suite.core.inference.autotune import sidecar as sidecar_module
+    from hydra_suite.core.inference.autotune.session import build_autotune_context
+    from hydra_suite.core.inference.config import InferenceAutotunePolicy
+
+    tmp_path = tmp_path or Path(tempfile.mkdtemp(prefix="autotune-calib-ctx-"))
+    inputs = make_request_inputs(tmp_path, kind=AcceleratorKind.CPU, sliced=sliced)
+    context = inputs["context"]
+    inputs["config"] = _replace(
+        inputs["config"],
+        inference_autotune=InferenceAutotunePolicy(mode=mode, budget_seconds=60.0),
+    )
+
+    if cache_dir is not None and measured_counts:
+
+        class _Reader:
+            def is_valid(self) -> bool:
+                return True
+
+            def iter_arrays(self):
+                written = list(range(len(measured_counts)))
+                frame_indices = [
+                    frame
+                    for frame, count in enumerate(measured_counts)
+                    for _ in range(count)
+                ]
+                yield {"written_frames": written, "frame_indices": frame_indices}
+
+        monkeypatch.setattr(
+            "hydra_suite.core.inference.cache.open_detection_cache_reader",
+            lambda _path: _Reader(),
+        )
+
+    executor = FakeCalibrationExecutor(frame_counts)
+    monkeypatch.setattr(
+        sidecar_module, "ContainedTrialExecutor", lambda *_a, **_k: executor
+    )
+
+    end_frame = max(len(measured_counts) - 1, 0) if measured_counts else 9
+    return build_autotune_context(
+        inputs["config"],
+        dict(context.params),
+        video_path=str(context.video_path),
+        frame_width=context.frame_width,
+        frame_height=context.frame_height,
+        start_frame=0,
+        end_frame=end_frame,
+        realtime=False,
+        cache_dir=cache_dir,
+        use_cached_detections=use_cached_detections,
+    )

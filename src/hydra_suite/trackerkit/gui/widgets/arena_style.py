@@ -9,7 +9,9 @@ from __future__ import annotations
 
 from dataclasses import dataclass
 
-from hydra_suite.utils.arena_overlay_style import BOUNDARY_COLOR_RGB
+from hydra_suite.utils.arena_overlay_style import (
+    BOUNDARY_COLOR_RGB,
+)
 from hydra_suite.utils.arena_overlay_style import (
     LINE_WIDTH_DIVISOR as _LINE_WIDTH_DIVISOR,
 )

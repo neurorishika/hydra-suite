@@ -73,7 +73,7 @@ def main() -> int:
     cfg["csv_path"] = str(outdir / f"{video_link.stem}_tracking.csv")
     cfg["use_cached_detections"] = False
     cfg["end_frame"] = int(args.end_frame)
-    cfg["inference_autotune_mode"] = "automatic"
+    cfg["apply_tuned_inference"] = True
     # A tuner cannot run on a realtime pass (it is declared non-tunable), and
     # this probe is about the apply path, not the calibration path.
     cfg["tracking_workflow_mode"] = "offline"

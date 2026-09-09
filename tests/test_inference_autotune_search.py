@@ -48,7 +48,7 @@ from hydra_suite.runtime.resource_budget import (
     ResourcePolicy,
 )
 
-from .autotune_helpers import record_mode_request_with_validated_cache
+from .autotune_helpers import calibrate_request_with_validated_cache
 
 
 def _key():
@@ -260,7 +260,7 @@ def _resolve_in_fresh_process(root: str, counter: str, barrier, queue) -> None:
             _key(),
             _settings(),
             _planner(cached_fields=frozenset(_settings().field_names())),
-            mode="automatic",
+            mode="calibrate",
             singleflight_wait_seconds=10.0,
         )
     )
@@ -305,7 +305,7 @@ def test_cache_hit_down_admits_only_validated_settings_and_does_not_mutate_store
         cost=MemoryCostModel(detector_frame_accelerator_bytes=100),
     )
     result = AutotuneCoordinator(store, trial_executor=ExplodingExecutor()).resolve(
-        AutotuneRequest(key, baseline, planner, mode="automatic")
+        AutotuneRequest(key, baseline, planner, mode="lookup")
     )
     assert result.overlay.status == "cache_hit"
     assert result.overlay.effective.detection_batch_size == 2
@@ -375,7 +375,7 @@ def test_down_admission_excludes_stage_only_evidence_but_admits_full_evidence(
         cost=MemoryCostModel(detector_frame_accelerator_bytes=100),
     )
     result = AutotuneCoordinator(store, trial_executor=ExplodingExecutor()).resolve(
-        AutotuneRequest(key, baseline, planner, mode="automatic")
+        AutotuneRequest(key, baseline, planner, mode="lookup")
     )
     # A bug that includes stage-only evidence would admit det=3 here (300 <=
     # 350, the largest of ALL successful evidence). The fix must skip it and
@@ -419,7 +419,7 @@ def test_manual_field_precedence_over_cached_profile(tmp_path):
             key,
             baseline,
             _planner(),
-            mode="automatic",
+            mode="lookup",
             manual_fields=frozenset({"pose_batch_size"}),
         )
     )
@@ -460,7 +460,7 @@ def test_permanently_ineligible_runtime_never_reuses_validated_cache(tmp_path):
             key,
             baseline,
             _planner(),
-            mode="automatic",
+            mode="calibrate",
             eligible=False,
             allow_cached_reuse=False,
             eligibility_reason="automatic tuning is CUDA-only",
@@ -473,7 +473,7 @@ def test_permanently_ineligible_runtime_never_reuses_validated_cache(tmp_path):
     assert result.overlay.profile_id is None
 
 
-def test_record_only_persists_but_does_not_apply(tmp_path):
+def test_calibrate_persists_a_validated_profile(tmp_path):
     executor = ConflictingExecutor()
     store = InferenceTuningProfileStore(tmp_path)
     key = _key()
@@ -483,26 +483,26 @@ def test_record_only_persists_but_does_not_apply(tmp_path):
             key,
             baseline,
             _planner(),
-            mode="record",
+            mode="calibrate",
             stage_shares=(("pose_batch_size", 1.0),),
         )
     )
-    assert result.overlay.status == "recorded"
-    assert result.overlay.effective == baseline
+    assert result.overlay.status == "calibrated"
     stored = store.load(key)
     assert stored.state is ProfileState.VALIDATED
     assert dict(stored.calibration_summary)["candidate_count"] == len(stored.candidates)
     assert dict(stored.calibration_summary)["detections_p95_bucket"] == 8
 
 
-def test_record_mode_never_applies_even_on_a_cache_hit(tmp_path):
-    """Run 2 with a VALIDATED profile in the cache must still keep baseline."""
-    store, request = record_mode_request_with_validated_cache(tmp_path)
+def test_calibrate_reuses_a_cache_hit_without_measuring(tmp_path):
+    """A calibrate request that already has a VALIDATED cache entry must not
+    re-run the (exploding) trial executor -- the existing profile serves the
+    request as a cache hit."""
+    store, request = calibrate_request_with_validated_cache(tmp_path)
     result = AutotuneCoordinator(store, trial_executor=ExplodingExecutor()).resolve(
         request
     )
-    assert result.overlay.status == "recorded"
-    assert result.overlay.effective == request.baseline
+    assert result.overlay.status == "cache_hit"
 
 
 def test_search_status_reports_incumbent_field_and_budget() -> None:

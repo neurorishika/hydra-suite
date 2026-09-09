@@ -307,13 +307,14 @@ class ConfigOrchestrator:
         self._panels.setup.set_visualization_free(
             get_cfg("visualization_free_mode", default=False)
         )
-        raw_autotune_mode = (
+        legacy_autotune_mode = (
             str(get_cfg("inference_autotune_mode", default="off")).strip().lower()
         )
-        autotune_mode = (
-            raw_autotune_mode
-            if raw_autotune_mode in {"off", "record", "automatic"}
-            else "off"
+        apply_tuned_inference = bool(
+            get_cfg(
+                "apply_tuned_inference",
+                default=legacy_autotune_mode in {"automatic", "record"},
+            )
         )
         raw_manual_fields = get_cfg("inference_autotune_manual_fields", default=[])
         if isinstance(raw_manual_fields, str):
@@ -322,7 +323,7 @@ class ConfigOrchestrator:
             ]
         if not isinstance(raw_manual_fields, (list, tuple, set)):
             raw_manual_fields = []
-        self._mw.config.inference_autotune_mode = autotune_mode
+        self._mw.config.apply_tuned_inference = apply_tuned_inference
         self._mw.config.inference_autotune_manual_fields = sorted(
             {str(value).strip() for value in raw_manual_fields if str(value).strip()}
         )
@@ -340,13 +341,10 @@ class ConfigOrchestrator:
             min(MAXIMUM_CALIBRATION_BUDGET_SECONDS, budget_seconds),
         )
         panel = self._panels.setup
-        panel._set_inference_autotune_combo_mode(autotune_mode)
-        panel.spin_inference_autotune_budget.blockSignals(True)
-        panel.spin_inference_autotune_budget.setValue(
-            self._mw.config.inference_autotune_budget_seconds
-        )
-        panel.spin_inference_autotune_budget.blockSignals(False)
-        panel.set_inference_autotune_status_for_mode(autotune_mode)
+        panel.chk_apply_tuned_inference.blockSignals(True)
+        panel.chk_apply_tuned_inference.setChecked(apply_tuned_inference)
+        panel.chk_apply_tuned_inference.blockSignals(False)
+        panel.set_inference_autotune_status_for_checkbox(apply_tuned_inference)
 
     def _load_config_detection(self, get_cfg, get_cfg_time):
         det_method = get_cfg("detection_method", default="background_subtraction")
@@ -1717,7 +1715,7 @@ class ConfigOrchestrator:
                 # === SYSTEM PERFORMANCE ===
                 "resize_factor": self._panels.setup.spin_resize.value(),
                 "use_cached_detections": self._panels.setup.chk_use_cached_detections.isChecked(),
-                "inference_autotune_mode": self._mw.config.inference_autotune_mode,
+                "apply_tuned_inference": self._mw.config.apply_tuned_inference,
                 "inference_autotune_manual_fields": list(
                     self._mw.config.inference_autotune_manual_fields
                 ),
@@ -2045,7 +2043,8 @@ class ConfigOrchestrator:
             {
                 "dataset_min_selection_score": self._panels.dataset.spin_dataset_min_selection_score.value(),
                 "dataset_al_preset": self._panels.dataset.combo_dataset_preset.currentText(),
-                # Note: dataset YOLO conf/IOU now in advanced_config.json, not per-video config
+                # Note: dataset YOLO conf/IOU now in advanced_config.json, not per-video
+                # config
                 "dataset_diversity_window": self._panels.dataset.spin_dataset_diversity_window.value(),
                 "dataset_export_levels": _export_levels,
                 "dataset_dedup_method": self._panels.dataset.combo_dataset_dedup.currentText(),
@@ -2581,33 +2580,50 @@ class ConfigOrchestrator:
             "roi_crop_warning_threshold": 0.6,  # Warn if ROI is <60% of frame
             "roi_crop_auto_suggest": True,  # Auto-suggest cropping
             "roi_crop_remind_every_session": False,  # Remind every time or once
-            "roi_crop_padding_fraction": 0.05,  # Padding as fraction of min(width, height) - typically 5%
-            "video_crop_codec": "libx264",  # Codec for cropped videos (libx264 for quality)
-            "video_crop_crf": 18,  # CRF quality (lower = better, 18 = visually lossless)
-            "video_crop_preset": "medium",  # ffmpeg preset (ultrafast, fast, medium, slow, veryslow)
+            # Padding as fraction of min(width, height) - typically 5%
+            "roi_crop_padding_fraction": 0.05,
+            # Codec for cropped videos (libx264 for quality)
+            "video_crop_codec": "libx264",
+            # CRF quality (lower = better, 18 = visually lossless)
+            "video_crop_crf": 18,
+            # ffmpeg preset (ultrafast, fast, medium, slow, veryslow)
+            "video_crop_preset": "medium",
             # YOLO Batching - Memory Fractions (device-specific optimization)
-            "mps_memory_fraction": 0.3,  # Conservative 30% of unified memory for MPS (Apple Silicon)
+            # Conservative 30% of unified memory for MPS (Apple Silicon)
+            "mps_memory_fraction": 0.3,
             "cuda_memory_fraction": 0.7,  # 70% of VRAM for CUDA (NVIDIA GPUs)
             "tensorrt_build_workspace_gb": 4.0,  # TensorRT builder workspace limit in GB
             "tensorrt_build_batch_size": None,  # Optional fixed TensorRT build batch override
-            "yolo_headtail_detect_conf_threshold": 0.25,  # Minimum detection confidence before head-tail inference runs; lower-confidence detections remain unknown
+            # Minimum detection confidence before head-tail inference runs;
+            # lower-confidence detections remain unknown
+            "yolo_headtail_detect_conf_threshold": 0.25,
             "headtail_batch_size": 64,  # Canonical crop batch size for head-tail classifier inference
-            "realtime_visualization_emit_stride": 1,  # Emit GUI overlays every Nth frame during realtime tracking while preserving full-speed tracking/video output
+            # Emit GUI overlays every Nth frame during realtime tracking while
+            # preserving full-speed tracking/video output
+            "realtime_visualization_emit_stride": 1,
             "visualization_emit_stride": 1,  # Optional GUI overlay decimation for non-realtime runs
             # Dataset Generation - YOLO Detection Parameters (separate from tracking)
-            "dataset_yolo_confidence_threshold": 0.05,  # Very low - detect all animals including uncertain ones for annotation
-            "dataset_yolo_iou_threshold": 0.5,  # Moderate - remove obvious duplicates but keep borderline cases for manual review
+            # Very low - detect all animals including uncertain ones for annotation
+            "dataset_yolo_confidence_threshold": 0.05,
+            # Moderate - remove obvious duplicates but keep borderline cases for
+            # manual review
+            "dataset_yolo_iou_threshold": 0.5,
             # Identity swap-correction & rejoin gate (advanced; UI-exposed defaults
             # cover most cases — tune here only if defaults are inappropriate).
             "identity_swap_conf_margin": 0.2,  # prob margin to count a frame as mutual mismatch
-            "identity_rejoin_velocity_budget": 1.5,  # safety factor on (frames_lost * v_max) for identity rejoin distance
-            "identity_rejoin_dist_floor": None,  # absolute min rejoin distance (None = 2 * body_size)
+            # safety factor on (frames_lost * v_max) for identity rejoin distance
+            "identity_rejoin_velocity_budget": 1.5,
+            # absolute min rejoin distance (None = 2 * body_size)
+            "identity_rejoin_dist_floor": None,
             # Segment-as-OBB rotated-rect kernel (advanced; only read when
             # YOLO_OBB_DIRECT_TASK == "segment" -- tune here only if the
             # defaults are too slow/inaccurate for your footage).
-            "obb_seg_num_angles": 24,  # coarse angle-search steps over [0, pi); linear cost
-            "obb_seg_crop_size": 64,  # mask resample resolution (crop_size^2 pixels); quadratic cost
-            "obb_seg_pad_ratio": 0.15,  # fractional padding around the box before cropping (clip safety)
+            # coarse angle-search steps over [0, pi); linear cost
+            "obb_seg_num_angles": 24,
+            # mask resample resolution (crop_size^2 pixels); quadratic cost
+            "obb_seg_crop_size": 64,
+            # fractional padding around the box before cropping (clip safety)
+            "obb_seg_pad_ratio": 0.15,
             "obb_seg_mask_threshold": 0.5,  # foreground cutoff on the resampled soft mask
         }
 
@@ -2876,7 +2892,8 @@ class ConfigOrchestrator:
 
         try:
             # Use ffmpeg for high-quality cropping that preserves video properties
-            # This is much faster and maintains quality better than re-encoding with OpenCV
+            # This is much faster and maintains quality better than re-encoding with
+            # OpenCV
             import subprocess
 
             # Get video properties for the success message
@@ -2916,7 +2933,8 @@ class ConfigOrchestrator:
 
             # Log the ffmpeg command for debugging
             logger.info(
-                f"Starting video crop: {frame_w}x{frame_h} -> {w}x{h} (padding: {padding_percent:.1f}%)"
+                f"Starting video crop: {frame_w}x{frame_h} -> {w}x{h} (padding: {
+                    padding_percent: .1f}%)"
             )
             logger.info(f"ffmpeg command: {' '.join(ffmpeg_cmd)}")
 

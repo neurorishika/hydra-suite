@@ -363,7 +363,7 @@ def test_admission_failure_on_a_cache_hit_does_not_disable_the_tile_batch_autotu
         key,
         baseline,
         _always_failing_planner(),
-        mode="automatic",
+        mode="lookup",
     )
 
     result = AutotuneCoordinator(store).resolve(request)

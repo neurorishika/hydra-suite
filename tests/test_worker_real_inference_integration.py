@@ -315,6 +315,21 @@ class _FakeVideoCapture:
         self._opened = False
 
 
+def _a_real_model_file(tmp_path) -> str:
+    """A detector path that actually EXISTS on disk.
+
+    ``build_autotune_context`` now derives the artifact batch size itself,
+    which reaches ``_model_fingerprints`` -> ``model_content_digest`` and so
+    stats/hashes the detector. The default param leaves the detector at a
+    bare repo-relative filename that is not present in a checkout, which
+    previously went unnoticed only because these tests monkeypatch
+    ``session.lookup`` and nothing else touched the model.
+    """
+    path = tmp_path / "detector.pt"
+    path.write_bytes(b"detector")
+    return str(path)
+
+
 def _dispatch_params(**overrides):
     p = {
         "MAX_TARGETS": 1,
@@ -447,11 +462,12 @@ def test_autotune_overlay_resolves_before_runner_loads_models(monkeypatch, tmp_p
     """The production runner must see only the detached effective config."""
     import copy
 
+    import hydra_suite.core.inference.autotune.session as autotune_session
     import hydra_suite.core.tracking.worker as worker_mod
 
     calls = []
 
-    def resolve(config, _params, **_kwargs):
+    def resolve(ctx, **_kwargs):
         from hydra_suite.core.inference.autotune.coordinator import ResolveResult
         from hydra_suite.core.inference.autotune.models import (
             InferenceRuntimeOverlay,
@@ -459,9 +475,9 @@ def test_autotune_overlay_resolves_before_runner_loads_models(monkeypatch, tmp_p
         )
 
         calls.append("resolve")
-        effective = copy.deepcopy(config)
+        effective = copy.deepcopy(ctx.config)
         effective.detection_batch_size = 4
-        baseline = InferenceTuningSettings.from_config(config)
+        baseline = InferenceTuningSettings.from_config(ctx.config)
         overlay = InferenceRuntimeOverlay.baseline(
             baseline, status="fallback", reason="test"
         )
@@ -486,14 +502,18 @@ def test_autotune_overlay_resolves_before_runner_loads_models(monkeypatch, tmp_p
     monkeypatch.setattr(worker_mod, "TrackingProfiler", _FakeProfiler)
     monkeypatch.setattr(worker_mod.cv2, "VideoCapture", _FakeVideoCapture)
     monkeypatch.setattr(worker_mod, "InferenceRunner", _ProbeRunner)
-    monkeypatch.setattr(worker_mod, "_resolve_inference_autotune_before_load", resolve)
+    monkeypatch.setattr(autotune_session, "lookup", resolve)
     worker = worker_mod.TrackingEngineCore(
         str(tmp_path / "video.mp4"),
         on_finished=lambda *_args: None,
         use_cached_detections=False,
     )
     worker.set_parameters(
-        _dispatch_params(INFERENCE_AUTOTUNE_MODE="automatic", YOLO_BATCH_SIZE=1)
+        _dispatch_params(
+            APPLY_TUNED_INFERENCE=True,
+            YOLO_BATCH_SIZE=1,
+            YOLO_OBB_DIRECT_MODEL_PATH=_a_real_model_file(tmp_path),
+        )
     )
 
     try:
@@ -511,11 +531,12 @@ def test_preflight_probe_failure_does_not_kill_the_run(monkeypatch, tmp_path):
     same envelope ``resolve_tracking_inference_config`` already has inside
     ``integration.py``.
     """
+    import hydra_suite.core.inference.autotune.session as autotune_session
     import hydra_suite.core.tracking.worker as worker_mod
 
     calls = []
 
-    def resolve(_config, _params, **_kwargs):
+    def build_context(*_args, **_kwargs):
         calls.append("resolve")
         # Mirrors a missing nvidia-smi (device.py FileNotFoundError) or an
         # AutotuneRequest.__post_init__ ValueError for a manual field the
@@ -541,14 +562,18 @@ def test_preflight_probe_failure_does_not_kill_the_run(monkeypatch, tmp_path):
     monkeypatch.setattr(worker_mod, "TrackingProfiler", _FakeProfiler)
     monkeypatch.setattr(worker_mod.cv2, "VideoCapture", _FakeVideoCapture)
     monkeypatch.setattr(worker_mod, "InferenceRunner", _ProbeRunner)
-    monkeypatch.setattr(worker_mod, "_resolve_inference_autotune_before_load", resolve)
+    monkeypatch.setattr(autotune_session, "build_autotune_context", build_context)
     worker = worker_mod.TrackingEngineCore(
         str(tmp_path / "video.mp4"),
         on_finished=lambda *_args: None,
         use_cached_detections=False,
     )
     worker.set_parameters(
-        _dispatch_params(INFERENCE_AUTOTUNE_MODE="automatic", YOLO_BATCH_SIZE=1)
+        _dispatch_params(
+            APPLY_TUNED_INFERENCE=True,
+            YOLO_BATCH_SIZE=1,
+            YOLO_OBB_DIRECT_MODEL_PATH=_a_real_model_file(tmp_path),
+        )
     )
 
     try:
@@ -564,20 +589,6 @@ def test_preflight_probe_failure_does_not_kill_the_run(monkeypatch, tmp_path):
     assert calls == ["resolve", ("runner", 1)]
     assert worker.inference_autotune_overlay is not None
     assert worker.inference_autotune_overlay.status == "fallback"
-
-
-def test_autotune_cancel_request_keeps_tracking_stop_flag_clear(tmp_path):
-    import hydra_suite.core.tracking.worker as worker_mod
-
-    worker = worker_mod.TrackingEngineCore(
-        str(tmp_path / "video.mp4"),
-        on_finished=lambda *_args: None,
-    )
-
-    worker.cancel_inference_autotune()
-
-    assert worker._inference_autotune_cancel_requested is True
-    assert worker._stop_requested is False
 
 
 def test_forward_valid_caches_skips_batch_pass(monkeypatch, tmp_path):
@@ -704,11 +715,12 @@ def test_preview_never_launches_a_calibration(monkeypatch, tmp_path):
     became the calibration range for a profile whose key carries no frame
     range -- which was then applied to the full run.
     """
+    import hydra_suite.core.inference.autotune.session as autotune_session
     import hydra_suite.core.tracking.worker as worker_mod
 
     calls = []
 
-    def resolve(_config, _params, **_kwargs):
+    def resolve(*_args, **_kwargs):
         calls.append("resolve")
         raise AssertionError("preview must not reach the autotune preflight")
 
@@ -731,7 +743,8 @@ def test_preview_never_launches_a_calibration(monkeypatch, tmp_path):
     monkeypatch.setattr(worker_mod, "TrackingProfiler", _FakeProfiler)
     monkeypatch.setattr(worker_mod.cv2, "VideoCapture", _FakeVideoCapture)
     monkeypatch.setattr(worker_mod, "InferenceRunner", _ProbeRunner)
-    monkeypatch.setattr(worker_mod, "_resolve_inference_autotune_before_load", resolve)
+    monkeypatch.setattr(autotune_session, "build_autotune_context", resolve)
+    monkeypatch.setattr(autotune_session, "lookup", resolve)
     worker = worker_mod.TrackingEngineCore(
         str(tmp_path / "video.mp4"),
         on_finished=lambda *_args: None,
@@ -739,7 +752,11 @@ def test_preview_never_launches_a_calibration(monkeypatch, tmp_path):
         preview_mode=True,
     )
     worker.set_parameters(
-        _dispatch_params(INFERENCE_AUTOTUNE_MODE="automatic", YOLO_BATCH_SIZE=1)
+        _dispatch_params(
+            APPLY_TUNED_INFERENCE=True,
+            YOLO_BATCH_SIZE=1,
+            YOLO_OBB_DIRECT_MODEL_PATH=_a_real_model_file(tmp_path),
+        )
     )
 
     try:
@@ -813,23 +830,27 @@ def test_backward_enabled_project_is_calibrated_and_records_its_vector(
     calls = []
     overlay = _tuned_overlay(4)
 
-    def resolve(config, _params, **_kwargs):
+    def resolve(_ctx):
         calls.append("resolve")
-        return overlay.apply(config), overlay, None
+        return overlay.apply(_ctx.config), overlay, None
 
     _BatchProbeRunner.seen = []
     cache_dir = tmp_path / "cache"
     monkeypatch.setattr(worker_mod, "TrackingProfiler", _FakeProfiler)
     monkeypatch.setattr(worker_mod.cv2, "VideoCapture", _FakeVideoCapture)
     monkeypatch.setattr(worker_mod, "InferenceRunner", _BatchProbeRunner)
-    monkeypatch.setattr(worker_mod, "_resolve_inference_autotune_before_load", resolve)
+    # The worker now looks a profile up through session.lookup rather than
+    # the retired local resolver; patch the seam it actually calls.
+    from hydra_suite.core.inference.autotune import session as _session_mod
+
+    monkeypatch.setattr(_session_mod, "lookup", resolve)
     worker = worker_mod.TrackingEngineCore(
         str(tmp_path / "video.mp4"),
         on_finished=lambda *_args: None,
         use_cached_detections=False,
         inference_cache_dir=str(cache_dir),
     )
-    params = _dispatch_params(INFERENCE_AUTOTUNE_MODE="automatic", YOLO_BATCH_SIZE=1)
+    params = _dispatch_params(APPLY_TUNED_INFERENCE=True, YOLO_BATCH_SIZE=1)
     params["INFERENCE_AUTOTUNE_PROJECT_CONFIG"] = {"enable_backward_tracking": True}
     worker.set_parameters(params)
 
@@ -913,3 +934,28 @@ def test_backward_pass_without_a_record_is_unchanged(monkeypatch, tmp_path):
         pass
 
     assert _BatchProbeRunner.seen == [1]
+
+
+def test_a_baseline_vector_applies_as_a_no_op(tmp_path):
+    """The byte-identity argument for writing the sidecar with apply OFF.
+
+    With apply off the recorded vector IS the project's baseline, so a
+    backward pass that reads and applies it must reach a config equal to the
+    one it would have used had no sidecar existed.
+    """
+    from hydra_suite.core.inference.autotune.models import InferenceTuningSettings
+    from hydra_suite.core.inference.config import build_inference_config_from_params
+
+    params = _dispatch_params(APPLY_TUNED_INFERENCE=False, YOLO_BATCH_SIZE=1)
+    params["YOLO_OBB_DIRECT_MODEL_PATH"] = str(tmp_path / "model.pt")
+    params["YOLO_OBB_MODE"] = "direct"
+    config = build_inference_config_from_params(params)
+    baseline = InferenceTuningSettings.from_config(config)
+
+    applied = baseline.apply(config, disable_tile_autotune=False)
+
+    # Full dataclass equality, not just a round-trip of the tuning fields:
+    # the claim is that the config the backward pass reaches is the one it
+    # would have used had no sidecar existed at all.
+    assert applied == config
+    assert InferenceTuningSettings.from_config(applied) == baseline

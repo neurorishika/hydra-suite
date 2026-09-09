@@ -91,15 +91,15 @@ class InferenceAutotunePolicy:
     by an immutable runtime overlay and are never written back into a project.
     """
 
-    mode: Literal["off", "record", "automatic"] = "off"
+    mode: Literal["lookup", "calibrate"] = "lookup"
     manual_fields: tuple[str, ...] = ()
     budget_seconds: float = DEFAULT_CALIBRATION_BUDGET_SECONDS
     singleflight_wait_seconds: float = 2.0
 
     def __post_init__(self) -> None:
-        if self.mode not in {"off", "record", "automatic"}:
+        if self.mode not in {"lookup", "calibrate"}:
             raise InferenceConfigError(
-                "InferenceAutotunePolicy.mode must be off, record, or automatic"
+                "InferenceAutotunePolicy.mode must be lookup or calibrate"
             )
         normalized = tuple(sorted({str(item) for item in self.manual_fields}))
         if any(not item or len(item) > 256 for item in normalized):
@@ -542,6 +542,39 @@ def _default_canonical_geometry() -> CanonicalGeometry:
     return canonical_geometry_from_params({})
 
 
+def clamp_frame_range(
+    start_frame: int,
+    end_frame: int | None,
+    total_video_frames: int | None,
+) -> tuple[int, int]:
+    """Resolve and clamp a requested ``(start_frame, end_frame)`` pair.
+
+    The one place both ``TrackingWorker.run_tracking`` (the ``track`` CLI/GUI
+    path) and ``calibrate_cli.run_calibrate_cli`` (the ``calibrate`` CLI
+    path) must derive frame bounds identically: an unclamped
+    ``start_frame``/``end_frame`` carried by a stale or hand-edited config
+    (out of range for the video actually being processed) would otherwise
+    make the two paths fingerprint different ``(start_frame, end_frame)``
+    pairs -- and therefore different ``calibration_key_digest`` values -- so
+    a calibration writes a profile under a key ``track`` never looks up.
+
+    ``end_frame=None`` means "to the end of the video". ``total_video_frames``
+    falsy (0/None, e.g. an unseekable stream) disables clamping entirely,
+    matching the pre-existing ``TrackingWorker`` behaviour.
+    """
+    resolved_end = (
+        end_frame
+        if end_frame is not None
+        else ((total_video_frames - 1) if total_video_frames else 0)
+    )
+    resolved_start = int(start_frame)
+    resolved_end = int(resolved_end)
+    if total_video_frames:
+        resolved_start = max(0, min(resolved_start, total_video_frames - 1))
+        resolved_end = max(resolved_start, min(resolved_end, total_video_frames - 1))
+    return resolved_start, resolved_end
+
+
 @dataclass
 class InferenceConfig:
     # Exactly one detection source must be set. OBB is the YOLO path; bgsub is
@@ -713,7 +746,7 @@ def _dict_to_config(d: dict[str, Any]) -> InferenceConfig:
     autotune_d = d.get("inference_autotune", {})
     inference_autotune = (
         InferenceAutotunePolicy(
-            mode=str(autotune_d.get("mode", "off")),
+            mode=str(autotune_d.get("mode", "lookup")),
             manual_fields=tuple(autotune_d.get("manual_fields", ())),
             budget_seconds=float(
                 autotune_d.get("budget_seconds", DEFAULT_CALIBRATION_BUDGET_SECONDS)
@@ -1310,14 +1343,16 @@ def build_inference_config_from_params(params: dict) -> InferenceConfig:
 
     batch_size = int(params.get("YOLO_BATCH_SIZE", params.get("BATCH_SIZE", 1)))
 
-    raw_autotune_mode = str(params.get("INFERENCE_AUTOTUNE_MODE", "off")).lower()
-    if raw_autotune_mode not in {"off", "record", "automatic"}:
-        raw_autotune_mode = "off"
+    # A policy built from params never measures on its own -- whether a run
+    # applies a tuned profile is APPLY_TUNED_INFERENCE (the caller's own
+    # decision), not something derived from a config file. "calibrate" is
+    # only ever set explicitly by session.calibrate's caller.
+    autotune_mode = "lookup"
     raw_manual_fields = params.get("INFERENCE_AUTOTUNE_MANUAL_FIELDS", ())
     if not isinstance(raw_manual_fields, (list, tuple, set, frozenset)):
         raw_manual_fields = ()
     inference_autotune = InferenceAutotunePolicy(
-        mode=raw_autotune_mode,
+        mode=autotune_mode,
         manual_fields=tuple(str(item) for item in raw_manual_fields),
         budget_seconds=_clamped_float(
             params.get(

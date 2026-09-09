@@ -383,7 +383,8 @@ def _cost_model(
             if role == "detector.direct":
                 path = config.obb.direct.model_path  # type: ignore[union-attr]
             elif role == "detector.stage1":
-                path = config.obb.sequential.detect_model_path  # type: ignore[union-attr]
+                # type: ignore[union-attr]
+                path = config.obb.sequential.detect_model_path
             elif role == "detector.stage2":
                 path = config.obb.sequential.obb_model_path  # type: ignore[union-attr]
             elif role == "headtail":
@@ -394,7 +395,8 @@ def _cost_model(
                     item.model_path for item in config.cnn_phases if item.label == label
                 )
             else:
-                backend = getattr(config.pose, config.pose.backend)  # type: ignore[union-attr]
+                # type: ignore[union-attr]
+                backend = getattr(config.pose, config.pose.backend)
                 path = backend.model_path
             artifact = Path(path)
             if artifact.is_file():
@@ -598,16 +600,37 @@ def build_tracking_autotune_request(
             measured_records=measured_records,
         )
     )
+    # Two DIFFERENT permissions, deliberately no longer computed together.
+    #
+    #   eligible            -- may we MEASURE? Expensive, environment-sensitive,
+    #                          and meaningless under contention or replay.
+    #   allow_cached_reuse  -- may we APPLY an already-validated profile? Nearly
+    #                          free, and for a cache_replay (backward) pass it is
+    #                          REQUIRED: the detection cache was written at the
+    #                          forward pass's batch size, so refusing to apply
+    #                          that same vector is what made backward runs abort.
+    #
+    # Nothing here blocks applying. Baseline admission failure blocks only
+    # measuring: at apply time, `_reuse` re-admits independently via
+    # `planner.down_admit(selected, successful, baseline)`, which considers
+    # {selected, baseline, *successful_equivalent} and can select a smaller,
+    # already equivalence-proven vector that fits when the configured
+    # baseline does not. Refusing to apply here would discard that rescue
+    # and force the very baseline that just failed to fit.
     eligible = True
+    # Retained as coordinator API surface, NOT a live knob: no branch below
+    # ever clears it, and deliberately so -- nothing here may block applying
+    # an already-validated profile. It stays an explicit field (rather than a
+    # hardcoded True at the AutotuneRequest construction site) because
+    # ``coordinator.py`` reads ``request.allow_cached_reuse`` in two places
+    # and a future caller may legitimately want to refuse reuse.
     allow_cached_reuse = True
     eligibility_reason = None
     if context.execution_mode == "realtime":
         eligible = False
-        allow_cached_reuse = False
         eligibility_reason = "realtime inference is not tunable"
     elif context.execution_mode == "cache_replay":
         eligible = False
-        allow_cached_reuse = False
         eligibility_reason = "all inference stages are satisfied by reusable caches"
     elif context.contention_detected:
         eligible = False
@@ -615,24 +638,11 @@ def build_tracking_autotune_request(
     elif context.thermal_throttled:
         eligible = False
         eligibility_reason = "accelerator is thermally throttled"
-    elif (
-        policy.mode == "automatic"
-        and observation.accelerator_kind is not AcceleratorKind.CUDA
-    ):
-        eligible = False
-        allow_cached_reuse = False
-        eligibility_reason = "automatic inference tuning is validated only for CUDA"
     else:
         admission = planner.admit(baseline)
         if not admission.admitted:
             eligible = False
             eligibility_reason = f"baseline admission failed: {admission.reason}"
-
-    if policy.mode == "record":
-        # Record mode must persist a validated profile but never apply it,
-        # on any run -- including a run that hits an already-validated cache
-        # entry. Leave `eligible` alone: record mode must still calibrate.
-        allow_cached_reuse = False
 
     shares = params.get("INFERENCE_AUTOTUNE_STAGE_SHARES", {})
     stage_shares = (
@@ -677,14 +687,10 @@ def resolve_tracking_inference_config(
     """Resolve and apply a detached overlay before production model loading."""
 
     baseline = InferenceTuningSettings.from_config(config)
-    if config.inference_autotune.mode == "off":
-        overlay = InferenceRuntimeOverlay.baseline(
-            baseline,
-            status="disabled",
-            reason="automatic inference tuning is disabled",
-        )
-        result = ResolveResult(overlay)
-        return config, overlay, result
+    # "off" is no longer a policy value ``mode`` can hold -- whether to
+    # consult the store at all is the caller's decision (APPLY_TUNED_INFERENCE
+    # for a run; see worker.py's guard immediately before this function is
+    # ever reached).
     try:
         request = build_tracking_autotune_request(
             config,
@@ -701,10 +707,7 @@ def resolve_tracking_inference_config(
             profile_store, trial_executor=trial_executor
         ).resolve(request)
         result = replace(result, key_digest=request.key.digest)
-        if result.profile is not None and result.overlay.status in {
-            "calibrated",
-            "recorded",
-        }:
+        if result.profile is not None and result.overlay.status == "calibrated":
             record_profile_memory_evidence(result.profile)
         return result.overlay.apply(config), result.overlay, result
     except Exception as exc:

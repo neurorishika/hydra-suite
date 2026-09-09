@@ -57,7 +57,7 @@ def test_candidate_param_overlay_is_detached_complete_and_disables_recursion():
             {"label": "color", "batch_size": 1},
             {"label": "behavior", "batch_size": 3},
         ],
-        "INFERENCE_AUTOTUNE_MODE": "automatic",
+        "APPLY_TUNED_INFERENCE": True,
         "SLICE_TILE_BATCH_AUTOTUNE": True,
     }
 
@@ -66,7 +66,7 @@ def test_candidate_param_overlay_is_detached_complete_and_disables_recursion():
     )
 
     assert source["CNN_CLASSIFIERS"][0]["batch_size"] == 1
-    assert output["INFERENCE_AUTOTUNE_MODE"] == "off"
+    assert output["APPLY_TUNED_INFERENCE"] is False
     assert output["YOLO_BATCH_SIZE"] == 4
     assert output["PIPELINE_DEPTH"] == 3
     assert output["SLICE_TILE_BATCH_SIZE"] == 2
@@ -505,6 +505,28 @@ def test_min_trajectory_length_is_clamped_to_the_window_not_to_one():
         ]
         == 16
     )
+
+
+def test_trial_child_never_applies_a_tuned_profile():
+    """A trial child must force APPLY_TUNED_INFERENCE to False.
+
+    If a trial child applied a stored tuning profile, it would measure the
+    profile's effect rather than measuring the candidate under test. This
+    silently corrupts the baseline block (wrong baseline) and therefore every
+    throughput comparison and gain calculation derived from it. The guard
+    ensures trial measurements are pure: they measure only the candidate
+    settings, not the candidate-plus-profile stack.
+    """
+
+    from hydra_suite.core.inference.autotune.sidecar_child import calibration_run_params
+
+    params = {
+        "APPLY_TUNED_INFERENCE": True,
+        "MIN_TRAJECTORY_LENGTH": 10,
+    }
+    run_params = calibration_run_params(params, start=0, end=127)
+
+    assert run_params["APPLY_TUNED_INFERENCE"] is False
 
 
 # ---- B3: a cold artifact build must not guarantee a trial timeout ----------

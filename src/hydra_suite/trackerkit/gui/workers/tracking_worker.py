@@ -68,16 +68,13 @@ class TrackingWorker(QThread):
     def stop(self) -> None:
         self._core.stop()
 
-    def cancel_inference_autotune(self) -> None:
-        """Continue the run with configured settings after cancelling calibration."""
-        self._core.cancel_inference_autotune()
-
     @property
     def _stop_requested(self) -> bool:  # some call sites / tests read this
         return self._core._stop_requested
 
     # --- straggler proxies: fields the tracking orchestrator reads directly
-    # off the worker instance via getattr/hasattr (see gui/orchestrators/tracking.py) ---
+    # off the worker instance via getattr/hasattr (see
+    # gui/orchestrators/tracking.py) ---
     @property
     def backward_mode(self) -> bool:
         return self._core.backward_mode

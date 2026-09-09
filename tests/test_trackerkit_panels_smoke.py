@@ -86,84 +86,73 @@ def test_setup_panel_wired_in_main_window(main_window):
         not sys.platform.startswith("linux")
     )
     assert main_window._setup_panel.spin_traj_hist.minimum() == -1
-    assert hasattr(main_window._setup_panel, "combo_inference_autotune")
-    assert hasattr(main_window._setup_panel, "spin_inference_autotune_budget")
+    assert hasattr(main_window._setup_panel, "chk_apply_tuned_inference")
+    assert hasattr(main_window._setup_panel, "btn_calibrate_inference")
     assert hasattr(main_window._setup_panel, "lbl_inference_autotune_status")
-    assert hasattr(main_window._setup_panel, "btn_continue_inference_settings")
-    assert not main_window._setup_panel.btn_continue_inference_settings.isVisible()
 
 
-def test_setup_inference_autotune_policy_persists_and_status_is_read_only(main_window):
-    """The one UI control owns policy; runtime outcomes only update its label.
-
-    All three modes -- including "record", previously unreachable from a
-    boolean checkbox -- must round-trip losslessly through the combo box.
-    """
+def test_setup_apply_tuned_inference_checkbox_persists(main_window):
+    """The one UI control (apply checkbox) owns the boolean policy; runtime
+    outcomes only ever update the read-only status label."""
     panel = main_window._setup_panel
-    original_index = panel.combo_inference_autotune.currentIndex()
+    original = panel.chk_apply_tuned_inference.isChecked()
     try:
-        panel._set_inference_autotune_combo_mode("record")
-        panel._on_inference_autotune_mode_changed(
-            panel.combo_inference_autotune.currentIndex()
-        )
+        panel.chk_apply_tuned_inference.setChecked(True)
         config = main_window._config_orch.build_config_dict()
-        assert config["inference_autotune_mode"] == "record"
-        assert "Record-only" in panel.lbl_inference_autotune_status.text()
+        assert config["apply_tuned_inference"] is True
+        assert "enabled" in panel.lbl_inference_autotune_status.text().lower()
 
-        panel._set_inference_autotune_combo_mode("automatic")
-        panel._on_inference_autotune_mode_changed(
-            panel.combo_inference_autotune.currentIndex()
-        )
+        panel.chk_apply_tuned_inference.setChecked(False)
         config = main_window._config_orch.build_config_dict()
-        assert config["inference_autotune_mode"] == "automatic"
-        assert "validated profile" in panel.lbl_inference_autotune_status.text()
+        assert config["apply_tuned_inference"] is False
+        assert "disabled" in panel.lbl_inference_autotune_status.text().lower()
 
         panel.set_inference_autotune_status("Cache hit — profile abc123")
-        assert panel.combo_inference_autotune.currentData() == "automatic"
         assert (
             panel.lbl_inference_autotune_status.text() == "Cache hit — profile abc123"
         )
     finally:
-        panel.combo_inference_autotune.setCurrentIndex(original_index)
+        panel.chk_apply_tuned_inference.setChecked(original)
 
 
-def test_setup_inference_autotune_combo_signal_is_actually_connected(main_window):
-    """IMPORTANT 2 (round 1 review): the previous test only ever called
-    ``_on_inference_autotune_mode_changed`` by hand, so a severed
-    ``currentIndexChanged.connect(...)`` in ``setup_panel.py`` would still
-    pass it. Drive the combo box the way a real user does -- an unblocked
-    ``setCurrentIndex`` -- and observe the persisted config change through
-    that signal alone, so a disconnected wire fails this test.
+def test_setup_apply_tuned_inference_checkbox_signal_is_actually_connected(
+    main_window,
+):
+    """Drive the checkbox the way a real user does -- ``setChecked`` -- and
+    observe the persisted config change through the signal alone, so a
+    severed ``toggled.connect(...)`` wire fails this test."""
+    panel = main_window._setup_panel
+    original = panel.chk_apply_tuned_inference.isChecked()
+    try:
+        panel.chk_apply_tuned_inference.setChecked(not original)
+        config = main_window._config_orch.build_config_dict()
+        assert config["apply_tuned_inference"] is (not original)
+    finally:
+        panel.chk_apply_tuned_inference.setChecked(original)
+
+
+def test_setup_calibrate_button_emits_calibrate_inference_requested(main_window):
+    """Clicking Calibrate… emits the request signal the orchestrator wires
+    to ``TrackingOrchestrator.open_calibration_dialog``.
+
+    The real ``main_window`` wiring is disconnected for the click so this
+    test doesn't also invoke the live orchestrator handler, which would pop
+    a real (blocking, modal) ``QMessageBox`` in this no-video-loaded state
+    and hang the test process.
     """
     panel = main_window._setup_panel
-    original_index = panel.combo_inference_autotune.currentIndex()
+    panel.calibrate_inference_requested.disconnect(
+        main_window._tracking_orch.open_calibration_dialog
+    )
     try:
-        record_index = panel.combo_inference_autotune.findData("record")
-        assert record_index >= 0
-        panel.combo_inference_autotune.setCurrentIndex(record_index)
-        config = main_window._config_orch.build_config_dict()
-        assert config["inference_autotune_mode"] == "record"
-
-        automatic_index = panel.combo_inference_autotune.findData("automatic")
-        panel.combo_inference_autotune.setCurrentIndex(automatic_index)
-        config = main_window._config_orch.build_config_dict()
-        assert config["inference_autotune_mode"] == "automatic"
+        received = []
+        panel.calibrate_inference_requested.connect(lambda: received.append(True))
+        panel.btn_calibrate_inference.click()
+        assert received == [True]
     finally:
-        panel.combo_inference_autotune.setCurrentIndex(original_index)
-
-
-def test_setup_inference_autotune_budget_spinbox_persists(main_window):
-    """The bounded calibration-time budget (previously widget-less) must be
-    both visible and persisted through the config dict."""
-    panel = main_window._setup_panel
-    original = panel.spin_inference_autotune_budget.value()
-    try:
-        panel.spin_inference_autotune_budget.setValue(45.0)
-        panel._on_inference_autotune_budget_changed(45.0)
-        config = main_window._config_orch.build_config_dict()
-        assert config["inference_autotune_budget_seconds"] == 45.0
-    finally:
-        panel.spin_inference_autotune_budget.setValue(original)
+        panel.calibrate_inference_requested.connect(
+            main_window._tracking_orch.open_calibration_dialog
+        )
 
 
 def test_controls_panel_has_wider_minimum_width(main_window):

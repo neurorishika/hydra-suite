@@ -87,9 +87,17 @@ class CandidatePlanner:
             value *= 2
         return tuple(sorted(values))
 
-    def values_for(
+    def candidate_space(
         self, field_name: str, incumbent: InferenceTuningSettings
     ) -> tuple[int, ...]:
+        """Unfiltered candidate values for *field_name*, before admission.
+
+        This enumerates the same values ``values_for`` considers, but does
+        not filter them through ``admit()`` (which reads live resource
+        observation). Returns ``()`` under the same early-exit conditions as
+        ``values_for`` (no current value, or a cached field) so the two stay
+        in lockstep.
+        """
         current = incumbent.value_for(field_name)
         if current is None or field_name in self.context.cached_fields:
             return ()
@@ -111,12 +119,40 @@ class CandidatePlanner:
                 values = tuple(
                     sorted({*values, min(maximum, self.context.crop_count_p95)})
                 )
+        return values
+
+    def values_for(
+        self, field_name: str, incumbent: InferenceTuningSettings
+    ) -> tuple[int, ...]:
         output = []
-        for value in values:
+        for value in self.candidate_space(field_name, incumbent):
             candidate = incumbent.with_value(field_name, value)
             if self.admit(candidate).admitted:
                 output.append(value)
         return tuple(output)
+
+    def static_max_for(
+        self, field: str, baseline: InferenceTuningSettings
+    ) -> int | None:
+        """Largest candidate value for *field*, ignoring live memory admission.
+
+        ``values_for`` filters through ``admit()``, which reads the live
+        resource observation. Anything that feeds the PROFILE KEY must not,
+        or the key drifts with free memory and a stored profile becomes
+        unfindable on a busier machine.
+
+        When ``candidate_space`` returns empty (no current value, or a
+        cached field), falls back to the baseline's current value for
+        *field* so a cached field cannot contribute a bogus artifact batch
+        size to the key. That fallback is ``None`` for a field the project
+        does not have at all (e.g. ``slice_tile_batch_size`` on any
+        non-SAHI project), hence the ``int | None`` return -- callers that
+        aggregate several fields MUST drop ``None`` before comparing.
+        """
+        return max(
+            self.candidate_space(field, baseline),
+            default=baseline.value_for(field),
+        )
 
     def canonicalize(
         self, settings: InferenceTuningSettings
