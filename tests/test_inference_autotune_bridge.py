@@ -179,3 +179,54 @@ def test_lookup_and_calibrate_agree_on_a_tensorrt_context(tmp_path):
         "the TensorRT profile batch size must change the key, else this "
         "test would pass even if the fix were reverted"
     )
+
+
+def test_detection_cache_reuse_is_modelled_as_nothing_to_tune(monkeypatch, tmp_path):
+    """Cache reuse is ALL-OR-NOTHING, so a reuse run has nothing to calibrate.
+
+    ``worker.py`` only sets ``use_cached_detections`` after ``caches_all_valid()``
+    -- ``cache_set_is_fully_reusable`` over the WHOLE set (detection.npz,
+    headtail.npz, cnn_<label>.npz, pose.npz, apriltag.npz). Every stage is then
+    served from disk and essentially no inference runs.
+
+    This used to be modelled as ``RESULT_CACHE_STAGE_MASK=("detector",)`` with
+    only the two detector fields frozen, i.e. it asserted pose/head-tail/identity
+    still ran. They do not. That invented a middle state the pipeline never
+    enters, and it cost twice: a calibration started with reuse active would
+    "measure" stages that never execute, promoting a vector picked from
+    cache-read noise; and the invented mask entered the profile key, so a reuse
+    run could never match a profile calibrated without a cache.
+    """
+
+    fake_store(monkeypatch, tmp_path / "store")
+    ctx = make_calibration_context(
+        monkeypatch,
+        tmp_path,
+        cache_dir=tmp_path / "cache",
+        measured_counts=(2, 3, 2),
+        use_cached_detections=True,
+    )
+
+    assert ctx.run_context.execution_mode == "cache_replay"
+    assert "RESULT_CACHE_STAGE_MASK" not in ctx.params
+
+    from hydra_suite.core.inference.autotune.integration import (
+        build_tracking_autotune_request,
+    )
+
+    request = build_tracking_autotune_request(
+        ctx.config,
+        ctx.run_context,
+        observation=ctx.probe.observation,
+        backend=ctx.backend,
+        device_identity=ctx.device_identity,
+    )
+
+    # Nothing left to search, and measuring is declined outright -- exactly the
+    # treatment cache_replay already received.
+    assert request.eligible is False
+    assert set(request.baseline.field_names()) <= set(
+        request.planner.context.cached_fields
+    )
+    for field in request.baseline.field_names():
+        assert request.planner.values_for(field, request.baseline) == ()

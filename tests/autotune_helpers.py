@@ -778,6 +778,7 @@ def make_calibration_context(
     frame_counts: tuple[int, ...] = (2, 3, 2),
     mode: str = "calibrate",
     sliced: bool = True,
+    use_cached_detections: bool = False,
 ):
     """A CPU-tier ``AutotuneContext`` wired for ``session.calibrate``/``lookup``.
 
@@ -848,4 +849,5 @@ def make_calibration_context(
         end_frame=end_frame,
         realtime=False,
         cache_dir=cache_dir,
+        use_cached_detections=use_cached_detections,
     )

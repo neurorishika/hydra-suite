@@ -2934,7 +2934,7 @@ class ConfigOrchestrator:
             # Log the ffmpeg command for debugging
             logger.info(
                 f"Starting video crop: {frame_w}x{frame_h} -> {w}x{h} (padding: {
-                    padding_percent:.1f}%)"
+                    padding_percent: .1f}%)"
             )
             logger.info(f"ffmpeg command: {' '.join(ffmpeg_cmd)}")
 

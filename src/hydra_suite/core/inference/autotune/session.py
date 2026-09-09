@@ -127,10 +127,31 @@ def build_autotune_context(
         ):
             ephemeral_params["INFERENCE_AUTOTUNE_DETECTION_COUNTS"] = prior_counts
             ephemeral_params["INFERENCE_AUTOTUNE_CROP_COUNTS"] = prior_counts
+    # Detection-cache reuse is ALL-OR-NOTHING, not detector-only. worker.py
+    # only sets ``use_cached_detections`` after ``caches_all_valid()``, which
+    # is ``cache_set_is_fully_reusable`` over the WHOLE set -- detection.npz,
+    # headtail.npz, cnn_<label>.npz, pose.npz, apriltag.npz (runner.py:564-571).
+    # So when reuse engages, every stage is served from disk and essentially no
+    # inference runs.
+    #
+    # This previously claimed ``RESULT_CACHE_STAGE_MASK = ("detector",)`` and
+    # froze only the two detector fields, i.e. it asserted that pose, head/tail
+    # and identity still ran. They do not. That invented a middle state the
+    # pipeline never enters, and it had two costs: a calibration launched with
+    # reuse active would "measure" batch sizes for stages that never execute --
+    # promoting a vector chosen from cache-read noise -- and the bogus mask
+    # entered the profile key, so a reuse run could never match the profile
+    # calibrated without a cache.
+    #
+    # Model it as what it is: the same as ``cache_replay``. Nothing to tune.
     cached_fields = frozenset()
+    execution_mode = (
+        "cache_replay"
+        if cache_read_only_replay
+        else ("realtime" if realtime else "batch")
+    )
     if use_cached_detections and prior_counts:
-        cached_fields = frozenset(("detection_batch_size", "slice_tile_batch_size"))
-        ephemeral_params["RESULT_CACHE_STAGE_MASK"] = ("detector",)
+        execution_mode = "cache_replay"
     run_context = TrackingRunContext(
         video_path=video_path,
         params=ephemeral_params,
@@ -138,11 +159,7 @@ def build_autotune_context(
         frame_height=max(1, int(frame_height)),
         channels=3,
         decoder_mode="nvdec" if config.runtime_tier == "gpu_fast" else "opencv",
-        execution_mode=(
-            "cache_replay"
-            if cache_read_only_replay
-            else ("realtime" if realtime else "batch")
-        ),
+        execution_mode=execution_mode,
         start_frame=start_frame,
         end_frame=end_frame,
         cached_fields=cached_fields,

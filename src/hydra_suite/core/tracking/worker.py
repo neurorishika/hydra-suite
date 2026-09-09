@@ -4590,13 +4590,13 @@ class TrackingEngineCore:
                             if use_batched_detection:
                                 status_text = (
                                     f"Tracking (batched): Frame {
-                                        self.frame_count}/{total_frames} "
+                                        self.frame_count} / {total_frames} "
                                     f"(abs {actual_frame_index})"
                                 )
                             else:
                                 status_text = (
                                     f"Tracking (cached): Frame {
-                                        self.frame_count}/{total_frames} "
+                                        self.frame_count} / {total_frames} "
                                     f"(abs {actual_frame_index})"
                                 )
                         else:
