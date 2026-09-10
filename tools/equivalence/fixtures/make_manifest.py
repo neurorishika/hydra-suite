@@ -98,6 +98,32 @@ def collect_models(models_dir: Path) -> list[str]:
     return sorted(rels)
 
 
+def expand_model_files(models_dir: Path, models: list[str]) -> list[dict]:
+    """Per-file sha256 for every model asset, recursing into directory entries.
+
+    `models_contained` lists what a config references, and a SLEAP model is a
+    directory. fetch_fixtures.sh verifies an already-populated models dir
+    against THIS list, which is what makes the machine-to-machine transfer path
+    checkable without the release archive.
+    """
+    entries: list[dict] = []
+    for rel in models:
+        target = models_dir / rel
+        if target.is_dir():
+            paths = sorted(p for p in target.rglob("*") if p.is_file())
+        else:
+            paths = [target]
+        for path in paths:
+            entries.append(
+                {
+                    "path": str(path.relative_to(models_dir)),
+                    "sha256": sha256(path),
+                    "bytes": path.stat().st_size,
+                }
+            )
+    return sorted(entries, key=lambda e: e["path"])
+
+
 def build_models_tar(models_dir: Path, models: list[str], out: Path) -> None:
     out.parent.mkdir(parents=True, exist_ok=True)
     with tarfile.open(out, "w:gz") as tar:
@@ -128,6 +154,7 @@ def main() -> None:
             "extract_to": "models_dir",
         },
         "models_contained": models,
+        "model_files": expand_model_files(models_dir, models),
     }
     for c in CLIPS:
         clip = CLIPS_DIR / c["name"]
