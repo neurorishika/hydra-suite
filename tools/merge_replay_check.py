@@ -130,6 +130,11 @@ def main() -> int:
     ap.add_argument("--window", nargs=2, type=int, metavar=("START", "END"))
     ap.add_argument("--full", action="store_true")
     ap.add_argument(
+        "--profile",
+        metavar="OUT",
+        help="cProfile the resolve stage and write pstats to OUT.",
+    )
+    ap.add_argument(
         "--compare-final",
         metavar="CSV",
         help="Run the complete merge (resolve + interpolate + rescale), write it "
@@ -206,7 +211,16 @@ def main() -> int:
         return 0 if a == b else 1
 
     t0 = time.perf_counter()
-    resolved = P.resolve_trajectories(fwd, bwd, params)
+    if args.profile:
+        import cProfile
+
+        pr = cProfile.Profile()
+        pr.enable()
+        resolved = P.resolve_trajectories(fwd, bwd, params)
+        pr.disable()
+        pr.dump_stats(args.profile)
+    else:
+        resolved = P.resolve_trajectories(fwd, bwd, params)
     print(
         f"resolve_trajectories (current code): {time.perf_counter() - t0:.1f}s "
         f"-> {len(resolved)} trajectories"

@@ -2468,6 +2468,30 @@ def _is_spatially_continuous(
     return dist <= threshold
 
 
+def _is_missing(value) -> bool:
+    """``pandas.isna`` for a single scalar, without the pandas dispatch cost.
+
+    ``_check_detection_id_match`` runs once per overlapping frame per candidate
+    pair -- 299 million times on a 41,450-frame dataset, which made `pd.isna`
+    the single most-called function in the profile (696M calls, ~208s). The
+    values here are numpy scalars pulled out of a column, so the float and
+    integer cases cover essentially all of them and anything else still falls
+    through to pandas rather than guessing.
+
+    NaN is the only missing value a float can hold, and ``value != value`` is
+    exactly the IEEE test for it; integers and booleans can never be missing.
+    ``np.float64`` subclasses ``float`` but ``np.float32`` does not, so both
+    numpy hierarchies are named explicitly.
+    """
+    if value is None:
+        return True
+    if isinstance(value, (float, np.floating)):
+        return value != value
+    if isinstance(value, (bool, int, np.integer, np.bool_)):
+        return False
+    return bool(pd.isna(value))
+
+
 def _check_detection_id_match(ra, rb, has_detection_id):
     """Check whether two row dicts share a valid DetectionID."""
     if not has_detection_id:
@@ -2476,9 +2500,9 @@ def _check_detection_id_match(ra, rb, has_detection_id):
     det_b = rb.get("DetectionID")
     return (
         det_a is not None
-        and not pd.isna(det_a)
+        and not _is_missing(det_a)
         and det_b is not None
-        and not pd.isna(det_b)
+        and not _is_missing(det_b)
         and det_a == det_b
     )
 
@@ -2964,6 +2988,24 @@ def _merge_overlapping_agreeing_trajectories(
     max_iterations = 50
     iteration = 0
 
+    # id(df) -> (df, lookup, frame_set, bounds), carried across passes. A pass
+    # replaces only the trajectories it actually merged; everything else is the
+    # *same object*, passed through untouched, so its lookup is still valid.
+    # Rebuilding all of them every pass was 56% of this stage (1,709,520 builds
+    # on a real 41,450-frame run, most of it pandas boxing one Series per
+    # column inside `_build_frame_lookup`).
+    #
+    # Keying on `id()` is only safe because the cache holds a strong reference
+    # to every DataFrame it keys: an id can be recycled once its object is
+    # freed, so the previous generation must stay alive until the next one has
+    # been built. The `entry[0] is traj` check makes that explicit rather than
+    # relying on the reference-holding argument alone.
+    #
+    # Soundness also depends on nothing in this loop mutating a passed-through
+    # trajectory or the row dicts in its lookup: `_average_trajectory_rows`
+    # copies before editing, and segment builders construct new DataFrames.
+    lookup_cache: dict = {}
+
     while iteration < max_iterations:
         if should_stop is not None and should_stop():
             break
@@ -2982,19 +3024,30 @@ def _merge_overlapping_agreeing_trajectories(
         used = set()
         new_trajectories = []
 
-        # Build lookups and frame bounds once per iteration for faster pair pruning.
+        # Lookups and frame bounds for pair pruning: reused from the previous
+        # pass for every trajectory that survived it unchanged.
         traj_lookups = []
         traj_frame_sets = []
         traj_bounds = []
+        next_cache: dict = {}
         for traj in trajectories:
-            lookup = _build_frame_lookup(traj, require_valid_x=True)
-            frame_set = set(lookup.keys())
-            traj_lookups.append(lookup)
-            traj_frame_sets.append(frame_set)
-            if frame_set:
-                traj_bounds.append((min(frame_set), max(frame_set)))
-            else:
-                traj_bounds.append((np.inf, -np.inf))
+            key = id(traj)
+            entry = lookup_cache.get(key)
+            if entry is None or entry[0] is not traj:
+                lookup = _build_frame_lookup(traj, require_valid_x=True)
+                frame_set = set(lookup.keys())
+                bounds = (
+                    (min(frame_set), max(frame_set)) if frame_set else (np.inf, -np.inf)
+                )
+                entry = (traj, lookup, frame_set, bounds)
+            next_cache[key] = entry
+            traj_lookups.append(entry[1])
+            traj_frame_sets.append(entry[2])
+            traj_bounds.append(entry[3])
+        # Only now release the previous generation: until `next_cache` is fully
+        # built, the old entries are what keep the reused ids from being
+        # recycled underneath us.
+        lookup_cache = next_cache
 
         # Frame -> {trajectory index} occupancy index, so each `i` enumerates
         # only the trajectories it actually shares a frame with instead of all
