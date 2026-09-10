@@ -2271,13 +2271,35 @@ def _remove_spatially_redundant_trajectories(
 
     trimmed_replacements = {}  # idx -> trimmed DataFrame (or None to remove)
 
+    # Frame -> {position in traj_arrays} occupancy index, so each A scores only
+    # the trajectories it shares a frame with. `_find_agreeing_frames` returns
+    # the empty set for a pair with no common frame, and an empty set always
+    # fails the `min(min_overlap, total_b_frames)` test below, so every pair
+    # skipped here is one that would have hit `continue` with no side effect.
+    # Positions are visited in ascending order, exactly as the slice did.
+    frame_occupants: dict = {}
+    for pos, (_idx, frame_to_pos, _n_valid) in enumerate(traj_arrays):
+        for frame in frame_to_pos:
+            occupants = frame_occupants.get(frame)
+            if occupants is None:
+                frame_occupants[frame] = {pos}
+            else:
+                occupants.add(pos)
+
     for i, (idx_a, a_by_frame, _) in enumerate(traj_arrays):
         if should_stop is not None and should_stop():
             break
         if idx_a in redundant_indices:
             continue
 
-        for idx_b, b_by_frame, total_b_frames in traj_arrays[i + 1 :]:
+        if not a_by_frame:
+            continue
+        co_occurring: set = set()
+        co_occurring.update(*(frame_occupants[f] for f in a_by_frame))
+        candidate_positions = sorted(p for p in co_occurring if p > i)
+
+        for pos_b in candidate_positions:
+            idx_b, b_by_frame, total_b_frames = traj_arrays[pos_b]
             if idx_b in redundant_indices or total_b_frames == 0:
                 continue
 
