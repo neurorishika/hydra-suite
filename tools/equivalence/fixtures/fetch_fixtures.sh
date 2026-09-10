@@ -106,15 +106,25 @@ missing_models() {
 if [ -n "$PEER" ]; then
   echo "### peer transfer from $PEER"
   if [ -z "$PEER_MODELS_DIR" ]; then
-    # The peer's models dir is platform-specific, so ask it. This needs a
-    # hydra env active in the peer's login shell; if it is not, the user can
-    # pass PEER_MODELS_DIR explicitly.
+    # The peer's models dir is platform-specific, so ask it. A login shell
+    # usually has no hydra env active, so fall back to probing the platformdirs
+    # defaults (and $HYDRA_DATA_DIR, which overrides them) for one that exists.
     PEER_MODELS_DIR=$(ssh "$PEER" 'python -c "from hydra_suite.paths import get_models_dir; print(get_models_dir())"' 2>/dev/null | tail -1)
+  fi
+  if [ -z "$PEER_MODELS_DIR" ]; then
+    PEER_MODELS_DIR=$(ssh "$PEER" '
+      for d in "${HYDRA_DATA_DIR:-}/models" \
+               "$HOME/.local/share/hydra-suite/models" \
+               "$HOME/Library/Application Support/hydra-suite/models"; do
+        [ -n "$d" ] && [ -d "$d" ] && { printf "%s\n" "$d"; break; }
+      done' 2>/dev/null | tail -1)
+    [ -n "$PEER_MODELS_DIR" ] && echo "  (resolved by probing the peer's default data dirs)"
   fi
   if [ -z "$PEER_MODELS_DIR" ]; then
     echo "!! could not resolve the peer's models dir over ssh." >&2
     echo "   Re-run with it named explicitly, e.g." >&2
-    echo "   PEER=$PEER PEER_MODELS_DIR='~/.local/share/hydra-suite/models' bash \$0" >&2
+    echo "   PEER=$PEER PEER_MODELS_DIR=\"\$HOME/.local/share/hydra-suite/models\" \\" >&2
+    echo "     bash tools/equivalence/fixtures/fetch_fixtures.sh" >&2
     exit 1
   fi
   echo "  peer models dir: $PEER_MODELS_DIR"
