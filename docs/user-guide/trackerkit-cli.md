@@ -9,6 +9,10 @@ trackerkit track video.mp4                     # uses video_config.json beside t
 trackerkit track video.mp4 --config my.json    # explicit config
 ```
 
+To package a batch, its models, and its config for a different compute box
+(zero model registration, outputs pulled back beside the originals), see
+[Portable tracking jobs](trackerkit-jobs.md) (`trackerkit job pack|push|preflight|run|pull`).
+
 ## A batch
 
 ```bash

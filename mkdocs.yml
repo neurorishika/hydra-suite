@@ -98,6 +98,7 @@ nav:
   - Overview: user-guide/overview.md
   - End-to-End Workflow: user-guide/workflow.md
   - TrackerKit Command Line: user-guide/trackerkit-cli.md
+  - Portable Tracking Jobs: user-guide/trackerkit-jobs.md
   - Detection Modes: user-guide/detection-modes.md
   - Tracking and Merging: user-guide/tracking-and-merging.md
   - Post-processing: user-guide/post-processing.md

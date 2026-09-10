@@ -374,3 +374,155 @@ def test_pull_logs_fetch_transfers_both_run_log_and_runs_jsonl(tmp_path):
     assert (dest / "logs" / "run.log").is_file()
     assert (dest / "logs" / "runs.jsonl").is_file()
     assert report.dry_run is True
+
+
+def _pull_collision_manifest(origin_dir):
+    """A one-video manifest whose "videos/a_tracks.csv" is a discoverable
+    output (not the video itself, not a pushed sidecar) mapped back to an
+    origin directory."""
+    from hydra_suite.data.tracking_job.manifest import JobManifest, JobVideo
+
+    return JobManifest(
+        job_id="j",
+        created_at="t",
+        created_on={},
+        keystone={"video": "videos/a.mp4", "config": "videos/a_config.json"},
+        videos=[
+            JobVideo(
+                job_path="videos/a.mp4",
+                origin_path=str(Path(origin_dir) / "a.mp4"),
+                size_bytes=1,
+                config_job_path="videos/a_config.json",
+                config_provenance="own-sidecar",
+                pushed_siblings=["videos/a_config.json"],
+            )
+        ],
+        models=[],
+    )
+
+
+def _collision_runner(remote_fixture_videos):
+    """A runner that answers the `find videos/` listing and the files-from
+    rsync fetch by copying from `remote_fixture_videos`, mirroring the
+    `copying_runner` pattern used for the logs fetch above."""
+
+    def runner(argv, **kwargs):
+        if argv[0] == "ssh" and "find videos" in argv[-1]:
+            names = [p.name for p in remote_fixture_videos.rglob("*") if p.is_file()]
+            listing = "\n".join(f"videos/{name}" for name in names)
+            return subprocess.CompletedProcess(argv, 0, stdout=listing, stderr="")
+        if argv[0] == "rsync" and any(str(a).startswith("--files-from=") for a in argv):
+            list_arg = next(a for a in argv if str(a).startswith("--files-from="))
+            list_path = Path(str(list_arg).split("=", 1)[1])
+            destination_root = Path(argv[-1])
+            for relpath in list_path.read_text().splitlines():
+                if not relpath:
+                    continue
+                src = remote_fixture_videos / Path(relpath).name
+                dst = destination_root / relpath
+                dst.parent.mkdir(parents=True, exist_ok=True)
+                shutil.copy2(src, dst)
+            return subprocess.CompletedProcess(argv, 0, stdout="", stderr="")
+        return subprocess.CompletedProcess(argv, 0, stdout="", stderr="")
+
+    return runner
+
+
+def test_pull_raises_on_sha256_mismatched_existing_destination(tmp_path):
+    """§8.2 step 5: a pull whose incoming file collides (different content)
+    with an existing destination must refuse, naming the colliding path,
+    unless --overwrite is given."""
+    from hydra_suite.data.tracking_job.manifest import TrackingJobError
+    from hydra_suite.data.tracking_job.transport import pull_job
+
+    origin_dir = tmp_path / "origin"
+    origin_dir.mkdir()
+    (origin_dir / "a_tracks.csv").write_text("existing,stale,data\n")
+
+    remote_fixture_videos = tmp_path / "remote_fixture" / "videos"
+    remote_fixture_videos.mkdir(parents=True)
+    (remote_fixture_videos / "a_tracks.csv").write_text("new,pulled,data\n")
+
+    dest = tmp_path / "dest"
+    dest.mkdir()
+    manifest = _pull_collision_manifest(origin_dir)
+    manifest.write(dest / "hydra_job.json")
+
+    with pytest.raises(TrackingJobError) as excinfo:
+        pull_job(
+            "host:/remote",
+            dest,
+            include_caches=True,
+            overwrite=False,
+            dry_run=False,
+            runner=_collision_runner(remote_fixture_videos),
+        )
+    assert excinfo.value.code == 5
+    assert "a_tracks.csv" in str(excinfo.value)
+
+
+def test_pull_overwrite_replaces_a_mismatched_destination(tmp_path):
+    """With --overwrite, a mismatched destination is replaced, not refused."""
+    from hydra_suite.data.tracking_job.transport import pull_job
+
+    origin_dir = tmp_path / "origin"
+    origin_dir.mkdir()
+    (origin_dir / "a_tracks.csv").write_text("existing,stale,data\n")
+
+    remote_fixture_videos = tmp_path / "remote_fixture" / "videos"
+    remote_fixture_videos.mkdir(parents=True)
+    (remote_fixture_videos / "a_tracks.csv").write_text("new,pulled,data\n")
+
+    dest = tmp_path / "dest"
+    dest.mkdir()
+    manifest = _pull_collision_manifest(origin_dir)
+    manifest.write(dest / "hydra_job.json")
+
+    report = pull_job(
+        "host:/remote",
+        dest,
+        include_caches=True,
+        overwrite=True,
+        dry_run=False,
+        runner=_collision_runner(remote_fixture_videos),
+    )
+    assert len(report.pulled) == 1
+    assert (origin_dir / "a_tracks.csv").read_text() == "new,pulled,data\n"
+
+
+def test_pull_identical_destination_is_not_a_collision(tmp_path):
+    """An existing destination whose sha256 already matches the incoming
+    file is treated as already-pulled: no error, no collision reported.
+
+    Note: the current `pull_job` implementation always re-links/copies
+    every planned entry after the collision check (it does not special-case
+    an identical-content destination into a true no-op) -- so this test
+    asserts the documented "no error" half of the requirement and that the
+    destination content is unchanged, rather than asserting no filesystem
+    write occurred at all.
+    """
+    from hydra_suite.data.tracking_job.transport import pull_job
+
+    origin_dir = tmp_path / "origin"
+    origin_dir.mkdir()
+    (origin_dir / "a_tracks.csv").write_text("same,content\n")
+
+    remote_fixture_videos = tmp_path / "remote_fixture" / "videos"
+    remote_fixture_videos.mkdir(parents=True)
+    (remote_fixture_videos / "a_tracks.csv").write_text("same,content\n")
+
+    dest = tmp_path / "dest"
+    dest.mkdir()
+    manifest = _pull_collision_manifest(origin_dir)
+    manifest.write(dest / "hydra_job.json")
+
+    report = pull_job(
+        "host:/remote",
+        dest,
+        include_caches=True,
+        overwrite=False,
+        dry_run=False,
+        runner=_collision_runner(remote_fixture_videos),
+    )
+    assert len(report.pulled) == 1
+    assert (origin_dir / "a_tracks.csv").read_text() == "same,content\n"
