@@ -50,9 +50,7 @@ def resolve_tag_identities(
     if not isinstance(resolved_trajectories, pd.DataFrame) or not tag_cache_path:
         return resolved_trajectories
     try:
-        from hydra_suite.core.post.tag_identity import (
-            detect_tag_swaps,
-        )
+        from hydra_suite.core.post.tag_identity import detect_tag_swaps
         from hydra_suite.core.post.tag_identity import (
             resolve_tag_identities as _resolve_tag_identities,
         )
@@ -154,11 +152,21 @@ def merge_trajectories(
         profiler.phase_start("post_resolve")
         _emit(30, "Resolving trajectory conflicts...")
         with span(N.RESOLVE):
+            # Resolution is by far the longest stage of post-processing (~3/4
+            # of it on a full-length video) and used to report nothing at all
+            # between 30% and 60%, so a run that was working normally was
+            # indistinguishable from a hang. The resolver reports a 0..1
+            # fraction of its own work; the 30..60 band belongs to this caller.
             resolved = resolve_trajectories(
                 forward_prepared,
                 backward_prepared,
                 params=params,
                 should_stop=should_stop,
+                progress=(
+                    (lambda frac, message: _emit(30 + int(30 * frac), message))
+                    if progress is not None
+                    else None
+                ),
             )
         profiler.phase_end("post_resolve")
 
