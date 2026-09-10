@@ -164,8 +164,29 @@ make install-mps
 # NVIDIA GPU (CUDA)
 make setup-cuda
 conda activate hydra-cuda
-make install-cuda CUDA_MAJOR=13     # or CUDA_MAJOR=12
+make install-cuda CUDA_MAJOR=13     # or CUDA_MAJOR=12 — see below
 ```
+
+#### Choosing `CUDA_MAJOR`
+
+`CUDA_MAJOR` must match what the installed **driver** supports, not the newest
+CUDA that exists. Check first:
+
+```bash
+nvidia-smi --query-gpu=driver_version --format=csv,noheader
+```
+
+| Driver version | Max CUDA | Use |
+|---|---|---|
+| 580 or newer | 13.x | `CUDA_MAJOR=13` |
+| 525–579 | 12.x | `CUDA_MAJOR=12` |
+
+Pick the wrong one and torch imports fine while `torch.cuda.is_available()` is
+`False` — note that `torch.cuda.device_count()` still reports your GPUs in that
+state, because it counts what the driver enumerates rather than what the torch
+build can drive. The install's CUDA self-check tests `is_available()` and runs a
+real convolution, so it fails fast on a mismatch and tells you which
+`CUDA_MAJOR` to use.
 
 ### Step 3: Install dev tools (optional)
 
@@ -320,6 +341,39 @@ make install-mps                                  # reinstall pip packages
 - For a direct ONNX Runtime session check, use: `python -c "import onnxruntime as ort; s=ort.InferenceSession('model.onnx', providers=['CUDAExecutionProvider']); print(s.get_providers())"`
 - If you see `libcurand.so.10: cannot open shared object file`, update the conda env: `conda install -n hydra-cuda -c nvidia -c conda-forge libcurand=10.*`
 - **conda path:** re-run `make install-cuda CUDA_MAJOR=13` (or `CUDA_MAJOR=12`) and reactivate the environment to refresh hooks; the Makefile now runs a CUDA runtime self-check and fails fast if ONNX Runtime libraries are still missing
+
+### `torch.cuda.is_available()` is `False` on a machine with GPUs
+
+Almost always a CUDA-major mismatch: a CUDA 13 torch build on a pre-580 driver.
+Confirm with `python -c "import torch; print(torch.version.cuda)"` and compare
+against the driver table above, then reinstall with the right `CUDA_MAJOR`.
+Do not be reassured by `torch.cuda.device_count()` — it reports GPUs even when
+none of them are usable by this build.
+
+### Mixed CUDA 12 / CUDA 13 wheels (`CUDNN_STATUS_SUBLIBRARY_LOADING_FAILED`, CuPy build errors)
+
+The CUDA component wheels ship under two naming schemes — `nvidia-cublas-cu12`
+(CUDA 12) and plain `nvidia-cublas` (CUDA 13) — and both unpack into the same
+`site-packages/nvidia/` tree. Switching a CUDA major in place leaves the old
+family behind, and the leftovers cause failures far from their cause:
+
+- CuPy compiles its kernels against whatever headers it finds there, so a stale
+  `nvidia/cu13/include` makes GPU background subtraction fall back to CPU with
+  only an `INFO` log line
+- convolutions fail with `CUDNN_STATUS_SUBLIBRARY_LOADING_FAILED`
+
+**Do not uninstall individual `nvidia-*` packages to clean this up.** They share
+files, so a partial uninstall removes cuDNN sublibraries that the surviving
+packages still need — turning a degraded environment into a broken one.
+Reinstall the whole stack:
+
+```bash
+pip list | awk '/^nvidia-/{print $1}' | xargs -r pip uninstall -y
+rm -rf "$CONDA_PREFIX"/lib/python*/site-packages/nvidia
+make install-cuda CUDA_MAJOR=12   # or 13
+```
+
+The CUDA self-check detects a mixed environment and prints these steps.
 
 ### PySide6 / Qt errors on Linux (pip only)
 
