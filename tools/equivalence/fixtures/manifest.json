@@ -103,11 +103,6 @@
       "bytes": 6568604
     },
     {
-      "path": "pose/SLEAP/20260214-224154_unet_ant_single_instance/.DS_Store",
-      "sha256": "ad6a34578e89e1402bfcfbf5d3ad5b06462f515edfb1513d6a36602c2a06c314",
-      "bytes": 6148
-    },
-    {
       "path": "pose/SLEAP/20260214-224154_unet_ant_single_instance/best.ckpt",
       "sha256": "36331d10c0b9de9006b2da4892b203f4838185dd4ee6541573a404c688a2c917",
       "bytes": 94301483
