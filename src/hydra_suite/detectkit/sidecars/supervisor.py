@@ -54,6 +54,10 @@ OUTPUT_MAX_LINES = 256
 OUTPUT_MAX_CHARS = 128 * 1024
 POLL_SECONDS = 0.1
 MAX_PROCESSES = 256
+# Fraction of the admitted host capacity the containment cap deliberately
+# leaves unclaimed, so the pre-launch re-check tolerates ordinary drift in
+# available memory. See `_containment_limits`.
+HOST_CAP_HEADROOM_FRACTION = 0.10
 
 
 @dataclass(frozen=True, slots=True)
@@ -95,8 +99,18 @@ def _containment_limits(budget, observation, accelerator: AcceleratorKind):
     refuse workloads that would consume the protected system reserve.  It is
     not a safe containment boundary: using it as one turns a small model's
     estimate into an arbitrary cap even on a machine with abundant memory.
+
+    The cap keeps ``HOST_CAP_HEADROOM_FRACTION`` of the admitted capacity in
+    hand.  Taking ALL of it made the cap exactly ``available - reserve`` as
+    observed during admission, and ``prelaunch_check`` then re-tests that same
+    cap against a FRESH reading of available memory.  Host availability drifts
+    by hundreds of MiB second to second on an idle machine, so an equality-tight
+    cap failed that check -- "available host memory fell before launch" -- on
+    any downward jitter at all, turning ordinary runs into a coin flip.  The
+    headroom is what the re-check is allowed to consume before a genuine
+    collapse in free memory is declared.
     """
-    hard = int(budget.usable_host_bytes)
+    hard = int(budget.usable_host_bytes * (1.0 - HOST_CAP_HEADROOM_FRACTION))
     soft = max(1, int(hard * 0.9))
     mps_ratio = (
         min(0.9, hard / max(1, observation.total_host_bytes))
@@ -481,9 +495,14 @@ class ProtectedOperation:
                     policy.reserve_host_bytes,
                     int(live.total_host_bytes * policy.reserve_host_fraction),
                 )
-                if hard > max(0, live.available_host_bytes - reserve):
+                headroom = max(0, live.available_host_bytes - reserve)
+                if hard > headroom:
                     raise RuntimeError(
-                        "available host memory fell before launch; the immutable cap would expose the reserve"
+                        "available host memory fell before launch; the immutable "
+                        f"cap of {_gib(hard)} would expose the protected reserve "
+                        f"({_gib(headroom)} is usable now, against "
+                        f"{_gib(budget.usable_host_bytes)} at admission). Close "
+                        "other memory-heavy applications and try again."
                     )
                 if cuda_uuid is not None:
                     from hydra_suite.training.sam3_lora.preflight import (

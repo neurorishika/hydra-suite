@@ -13,6 +13,7 @@ from hydra_suite.widgets.workers import BaseWorker
 
 from ..sidecars.protocol import Operation, SidecarRequest
 from ..sidecars.supervisor import ProtectedOperation
+from .containment_recovery import ContainmentRecoveryMixin
 from .semantic_artifacts import read_frame_preview
 
 
@@ -20,7 +21,7 @@ def _device(params: dict) -> str:
     return str(params.get("device", "auto") or "auto")
 
 
-class FramePreviewWorker(BaseWorker):
+class FramePreviewWorker(ContainmentRecoveryMixin, BaseWorker):
     result_ready = Signal(object)
 
     def __init__(self, sources, prompt, variant, params, labeler=None, parent=None):
@@ -28,6 +29,7 @@ class FramePreviewWorker(BaseWorker):
         if labeler is not None:
             raise ValueError("in-process semantic labelers are not accepted")
         self._cancel = False
+        self.recovery_cleanup_error = ""
         self._output_path = Path(tempfile.gettempdir()) / (
             f"hydra-semantic-preview-{uuid.uuid4().hex}.json"
         )
@@ -46,6 +48,12 @@ class FramePreviewWorker(BaseWorker):
         )
 
     def cancel(self) -> None:
+        # A retained-ownership failure turns Cancel into "retry cleanup": the
+        # leases this process still holds must be released or every later
+        # protected job collides with it.
+        if self.containment_recovery_required:
+            self.retry_containment_cleanup()
+            return
         self._cancel = True
         self._operation.cancel()
 
@@ -54,11 +62,12 @@ class FramePreviewWorker(BaseWorker):
         return self._cancel or self._operation.cancelled
 
     def execute(self) -> None:
-        outcome = self._operation.run(
+        outcome = self.run_protected(
+            self._operation,
             progress=lambda pct, msg: (
                 self.progress.emit(pct),
                 self.status.emit(msg),
-            )
+            ),
         )
         if outcome.canceled:
             self._cancel = True
@@ -75,7 +84,7 @@ class FramePreviewWorker(BaseWorker):
 TilePreviewWorker = FramePreviewWorker
 
 
-class CalibrationWorker(BaseWorker):
+class CalibrationWorker(ContainmentRecoveryMixin, BaseWorker):
     result_ready = Signal(object)
 
     def __init__(
@@ -93,6 +102,7 @@ class CalibrationWorker(BaseWorker):
         if labeler is not None:
             raise ValueError("in-process semantic labelers are not accepted")
         self._cancel = False
+        self.recovery_cleanup_error = ""
         self.preview_frames = []
         self.sampled_frames: list[str] = []
         project_root = (
@@ -120,6 +130,12 @@ class CalibrationWorker(BaseWorker):
         )
 
     def cancel(self) -> None:
+        # A retained-ownership failure turns Cancel into "retry cleanup": the
+        # leases this process still holds must be released or every later
+        # protected job collides with it.
+        if self.containment_recovery_required:
+            self.retry_containment_cleanup()
+            return
         self._cancel = True
         self._operation.cancel()
 
@@ -133,11 +149,12 @@ class CalibrationWorker(BaseWorker):
             load_calibration_previews,
         )
 
-        outcome = self._operation.run(
+        outcome = self.run_protected(
+            self._operation,
             progress=lambda pct, msg: (
                 self.progress.emit(pct),
                 self.status.emit(msg),
-            )
+            ),
         )
         if outcome.canceled:
             self._cancel = True
@@ -157,7 +174,7 @@ class CalibrationWorker(BaseWorker):
         )
 
 
-class SemanticEscalationWorker(BaseWorker):
+class SemanticEscalationWorker(ContainmentRecoveryMixin, BaseWorker):
     result_ready = Signal(object)
     project_mutated = Signal()
 
@@ -167,6 +184,7 @@ class SemanticEscalationWorker(BaseWorker):
             raise ValueError("in-process semantic labelers are not accepted")
         self._request = request
         self._cancel = False
+        self.recovery_cleanup_error = ""
         excluded = {
             "project",
             "source_names",
@@ -198,6 +216,12 @@ class SemanticEscalationWorker(BaseWorker):
         )
 
     def cancel(self) -> None:
+        # A retained-ownership failure turns Cancel into "retry cleanup": the
+        # leases this process still holds must be released or every later
+        # protected job collides with it.
+        if self.containment_recovery_required:
+            self.retry_containment_cleanup()
+            return
         self._cancel = True
         self._operation.cancel()
 
@@ -210,11 +234,12 @@ class SemanticEscalationWorker(BaseWorker):
 
         from .semantic_escalation import SemanticEscalationResult
 
-        outcome = self._operation.run(
+        outcome = self.run_protected(
+            self._operation,
             progress=lambda pct, msg: (
                 self.progress.emit(pct),
                 self.status.emit(msg),
-            )
+            ),
         )
         if outcome.canceled:
             self._cancel = True

@@ -317,6 +317,8 @@ Examples:
     shared_root_add = shared_root_subparsers.add_parser("add", allow_abbrev=False)
     shared_root_add.add_argument("alias", type=str)
     shared_root_add.add_argument("path", type=str)
+    shared_root_remove = shared_root_subparsers.add_parser("remove", allow_abbrev=False)
+    shared_root_remove.add_argument("alias", type=str)
     shared_root_subparsers.add_parser("list", allow_abbrev=False)
 
     job_push = job_subparsers.add_parser(

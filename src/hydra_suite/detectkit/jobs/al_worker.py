@@ -46,6 +46,7 @@ from hydra_suite.data.al.signals import (
     score_uncertainty,
 )
 from hydra_suite.detectkit.gui.models import DetectKitProject, OBBSource
+from hydra_suite.detectkit.jobs.containment_recovery import ContainmentRecoveryMixin
 from hydra_suite.utils.geometry import obb_corners_from_dims as _detection_corners
 from hydra_suite.utils.geometry_levels import GeometryLevel
 from hydra_suite.utils.video_artifacts import build_inference_cache_dir
@@ -678,7 +679,7 @@ def _run_active_learning_with_source(
     )
 
 
-class ALWorker(BaseWorker):
+class ALWorker(ContainmentRecoveryMixin, BaseWorker):
     """Thin GUI coordinator for a protected active-learning sidecar.
 
     Uses the inherited BaseWorker signals (`progress`, `status`, `error`)
@@ -692,6 +693,7 @@ class ALWorker(BaseWorker):
     def __init__(self, request: ALRequest):
         super().__init__()
         self._request = request
+        self.recovery_cleanup_error = ""
         if request.detector is None:
             raise ValueError("active learning requires a detector specification")
         payload = {
@@ -729,6 +731,9 @@ class ALWorker(BaseWorker):
         )
 
     def cancel(self) -> None:
+        if self.containment_recovery_required:
+            self.retry_containment_cleanup()
+            return
         self._operation.cancel()
 
     def execute(self):
@@ -738,7 +743,7 @@ class ALWorker(BaseWorker):
             self.progress.emit(int(pct))
             self.status.emit(str(msg))
 
-        outcome = self._operation.run(progress=cb)
+        outcome = self.run_protected(self._operation, progress=cb)
         if outcome.canceled:
             self.status.emit("Active learning cancelled.")
             return
