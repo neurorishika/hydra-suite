@@ -58,6 +58,17 @@ make install-cuda CUDA_MAJOR=12  # NVIDIA CUDA 12
 make install-dev                  # Dev tools (formatting, linting, testing, publishing)
 ```
 
+`CUDA_MAJOR` must match the driver: 13 needs driver 580+, otherwise use 12.
+Check with `nvidia-smi --query-gpu=driver_version --format=csv,noheader`. See
+[Choosing `CUDA_MAJOR`](installation.md#choosing-cuda_major) — a mismatch leaves
+`torch.cuda.is_available()` `False` while GPUs still appear in
+`device_count()`.
+
+Each profile pins torch/torchvision/torchaudio to explicit `+cu128` / `+cu130`
+builds in `requirements-cuda12.txt` / `requirements-cuda13.txt`. Those local
+version tags are what force the wheels to come from the PyTorch index rather
+than PyPI; do not relax them to bare version pins.
+
 ### Update (refresh both conda and pip)
 
 ```bash

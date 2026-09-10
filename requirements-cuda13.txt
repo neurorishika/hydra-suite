@@ -1,8 +1,21 @@
 # CUDA 13.x install profile for hydra-suite
 # Install with: uv pip install -v -r requirements-cuda13.txt
+#
+# Pick this profile only when the NVIDIA driver is 580 or newer (`nvidia-smi`
+# reports "CUDA Version: 13.x"). On an older driver use requirements-cuda12.txt.
 
 --extra-index-url https://download.pytorch.org/whl/cu130
 -r requirements-cuda.txt
+
+# Pinned to `+cu130` local versions for the same reason the CUDA 12 profile
+# pins `+cu128` -- see the full explanation in requirements-cuda12.txt. The
+# accident that PyPI's current default linux torch happens to be a CUDA 13
+# build is not something to rely on: it makes the CUDA 13 profile appear to
+# work while leaving the actual wheel family up to whatever PyPI ships next.
+# Bump all three together and re-verify on a CUDA 13 box.
+torch==2.11.0+cu130
+torchvision==0.26.0+cu130
+torchaudio==2.11.0+cu130
 
 tensorrt-cu13
 tensorrt-cu13-bindings

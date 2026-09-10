@@ -4,10 +4,13 @@
 # Base dependencies are in pyproject.toml (installed via -e . below).
 # This file adds torch and CUDA-specific packages only.
 
-# PyTorch with CUDA support (index URL set in requirements-cuda12/13.txt)
-torch
-torchvision
-torchaudio
+# PyTorch with CUDA support.
+#
+# The torch/torchvision/torchaudio PINS LIVE IN requirements-cuda12.txt and
+# requirements-cuda13.txt, not here, and they are deliberately pinned to
+# `+cuXXX` local versions. Leaving them unpinned here is what caused the
+# CUDA 12 profile to silently install a CUDA 13 build -- see the long comment
+# in requirements-cuda12.txt before changing this.
 
 # TensorRT runtime wheels are selected by requirements-cuda12/13.txt.
 # Do not install the generic `tensorrt` metapackage here because it currently

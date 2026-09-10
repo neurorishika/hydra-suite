@@ -44,6 +44,22 @@ pip install "sleap[nn,nn-export-gpu]==1.6.2"
 pip install "sleap[nn,nn-export-gpu,nn-tensorrt]==1.6.2"
 ```
 
+!!! warning "The `sleap` env brings its own torch"
+
+    This is a separate environment, so it resolves torch independently of
+    `hydra-cuda` and lands on whatever PyPI currently serves — which on a
+    pre-580 driver is a CUDA 13 build that cannot see the GPU. On CUDA 12
+    hosts, pin it to match the driver right after installing SLEAP:
+
+    ```bash
+    pip install --index-url https://download.pytorch.org/whl/cu128 \
+        --force-reinstall torch torchvision
+    ```
+
+    Use the `cu130` index instead on driver 580+. A `torch-tensorrt` version
+    warning after this is expected and harmless for the SLEAP *service*
+    backend; it only affects TensorRT export.
+
 ### Compatibility Matrix
 
 - **macOS (Apple Silicon)**:
