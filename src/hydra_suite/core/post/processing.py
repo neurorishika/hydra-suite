@@ -2898,16 +2898,53 @@ def _merge_overlapping_agreeing_trajectories(
             else:
                 traj_bounds.append((np.inf, -np.inf))
 
+        # Frame -> {trajectory index} occupancy index, so each `i` enumerates
+        # only the trajectories it actually shares a frame with instead of all
+        # n - i - 1 successors.  This is a pure enumeration narrowing, not a
+        # behavior change: `_try_merge_trajectory_pair` rejects a pair with no
+        # common frames outright (empty intersection fails the `min_overlap`
+        # test) and has no side effects on that path, so every pair skipped
+        # here is one that would have returned None.  Candidates are still
+        # visited in ascending `j`, which preserves the "first mergeable
+        # partner wins" semantics of the `break` below.
+        #
+        # This is the difference between hours and seconds on real runs: with
+        # ~60k short trajectories spread over 41k frames the all-pairs form ran
+        # ~1e10 calls per pass (2h45m across 33 passes, 91% of the whole
+        # post-processing resolve stage, with the GUI frozen throughout).
+        frame_occupants: dict = {}
+        for idx, frame_set in enumerate(traj_frame_sets):
+            for frame in frame_set:
+                occupants = frame_occupants.get(frame)
+                if occupants is None:
+                    frame_occupants[frame] = {idx}
+                else:
+                    occupants.add(idx)
+
+        stopped = False
         for i in range(len(trajectories)):
+            # Cancellation was previously only observed between outer
+            # iterations; a single pass over a large population can run for
+            # minutes, so Stop went unheard for that whole time.
+            if should_stop is not None and should_stop():
+                stopped = True
+                break
             if i in used:
                 continue
 
             traj_a = trajectories[i]
 
-            for j in range(i + 1, len(trajectories)):
-                if j in used:
-                    continue
+            frames_a = traj_frame_sets[i]
+            if frames_a:
+                co_occurring: set = set()
+                co_occurring.update(*(frame_occupants[f] for f in frames_a))
+                candidates = sorted(j for j in co_occurring if j > i and j not in used)
+            else:
+                # No valid-X rows at all: bounds are (inf, -inf), so this
+                # trajectory can never overlap anything.
+                candidates = []
 
+            for j in candidates:
                 result_segments = _try_merge_trajectory_pair(
                     i,
                     j,
@@ -2938,6 +2975,14 @@ def _merge_overlapping_agreeing_trajectories(
             if i not in used:
                 new_trajectories.append(traj_a)
                 used.add(i)
+
+        if stopped:
+            # Do not adopt a half-built pass: `new_trajectories` covers only
+            # the prefix of `i` reached before the stop, so committing it would
+            # silently drop every trajectory after that point. The caller
+            # discards the result on stop anyway; return the last complete
+            # generation.
+            break
 
         trajectories = new_trajectories
 
