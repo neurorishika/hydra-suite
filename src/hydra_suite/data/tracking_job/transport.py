@@ -399,6 +399,14 @@ def pull_job(
             continue
         destination.parent.mkdir(parents=True, exist_ok=True)
         if destination.exists():
+            # Spec section 8.2 step 5: a destination that is already
+            # byte-identical is ALREADY PULLED, not a collision and not work to
+            # redo. Skipping it keeps a re-pull idempotent and, more usefully,
+            # keeps a hardlinked job-tree copy intact instead of unlinking and
+            # recreating it on every pull.
+            if _sha256(source) == _sha256(destination):
+                pulled.append(entry)
+                continue
             destination.unlink()
         try:
             import os
