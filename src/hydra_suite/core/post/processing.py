@@ -1197,12 +1197,33 @@ def _reassign_trajectory_ids(result_trajectories):
             traj.drop(columns=["_source"], inplace=True)
 
 
+def _sub_progress(progress, lo: float, hi: float):
+    """Scale a 0..1 progress callback into the sub-range ``[lo, hi]``.
+
+    Every stage below reports progress as a fraction of *its own* work and
+    knows nothing about where it sits in the caller's bar; the caller owns the
+    band. Returns ``None`` when there is nothing to report to, so callees can
+    skip the bookkeeping entirely.
+    """
+    if progress is None:
+        return None
+
+    span_width = hi - lo
+
+    def _scaled(fraction: float, message: str) -> None:
+        clamped = 0.0 if fraction < 0.0 else (1.0 if fraction > 1.0 else fraction)
+        progress(lo + span_width * clamped, message)
+
+    return _scaled
+
+
 def _resolve_trajectories_single_arena(
     forward_trajs: object,
     backward_trajs: object,
     params: object = None,
     *,
     should_stop=None,
+    progress=None,
 ) -> object:
     """
     Merges forward and backward trajectories using conservative consensus-based merging.
@@ -1298,12 +1319,22 @@ def _resolve_trajectories_single_arena(
         _drop_source_column(forward_dfs)
         return forward_dfs
 
+    # Sub-stage weights within this resolver, from a measured 25-minute run on
+    # a 41,450-frame dataset (see docs/developer-guide/performance-tuning.md).
+    # They only shape the bar; getting them wrong costs smoothness, not
+    # correctness.
+    if progress is not None:
+        progress(0.02, "Finding merge candidates...")
+
     # Find merge candidates based on overlap counting
     merge_candidates = _find_merge_candidates(
         forward_dfs, backward_dfs, AGREEMENT_DISTANCE, MIN_OVERLAP_FRAMES
     )
 
     logger.info(f"Found {len(merge_candidates)} merge candidates")
+
+    if progress is not None:
+        progress(0.18, f"Applying {len(merge_candidates)} merge candidates...")
 
     # Now merge candidates using conservative strategy
     result_trajectories = _apply_merge_candidates(
@@ -1334,6 +1365,7 @@ def _resolve_trajectories_single_arena(
         AGREEMENT_DISTANCE,
         MIN_OVERLAP_FRAMES,
         should_stop=should_stop,
+        progress=_sub_progress(progress, 0.24, 0.36),
     )
 
     # CRITICAL: Merge overlapping trajectories that agree spatially
@@ -1346,6 +1378,7 @@ def _resolve_trajectories_single_arena(
         identity_disagree_min_run=IDENTITY_DISAGREE_MIN_RUN,
         identity_drives_splits=IDENTITY_GATES_TRAJECTORY_STRUCTURE,
         should_stop=should_stop,
+        progress=_sub_progress(progress, 0.36, 0.75),
     )
 
     # NEW: Stitch consecutive fragments that are spatially close
@@ -1357,6 +1390,8 @@ def _resolve_trajectories_single_arena(
     #   • density tightening when ≥2 other fragments are near the gap midpoint,
     #   • margin test (reject when runner-up is comparable),
     #   • symmetric NN test (A→B accepted only if B also prefers A).
+    if progress is not None:
+        progress(0.75, "Stitching broken fragments...")
     _stitch_gap = int(params.get("STITCH_MAX_GAP_FRAMES", 3))
     _max_vel_break = float(params.get("MAX_VELOCITY_BREAK", 100.0))
     _single_option_margin = float(params.get("STITCH_SINGLE_OPTION_MARGIN", 0.5))
@@ -1374,6 +1409,8 @@ def _resolve_trajectories_single_arena(
         identity_gates_stitching=IDENTITY_GATES_TRAJECTORY_STRUCTURE,
         should_stop=should_stop,
     )
+    if progress is not None:
+        progress(0.85, "Removing redundant trajectories (final pass)...")
 
     # FINAL DEDUPLICATION: Run a second redundancy pass after all merging and stitching.
     # _merge_overlapping_agreeing_trajectories can produce new disagree-source fragments
@@ -1385,6 +1422,7 @@ def _resolve_trajectories_single_arena(
         AGREEMENT_DISTANCE,
         MIN_OVERLAP_FRAMES,
         should_stop=should_stop,
+        progress=_sub_progress(progress, 0.85, 0.98),
     )
 
     # FINAL CLEANING: Now that stitching is done, remove trajectories that are still too short
@@ -1393,6 +1431,8 @@ def _resolve_trajectories_single_arena(
 
     # Reassign trajectory IDs and remove internal columns
     # Enforce: only one trajectory may claim a given identity at any frame.
+    if progress is not None:
+        progress(0.98, "Resolving simultaneous identity conflicts...")
     result_trajectories = resolve_simultaneous_identity_conflicts(
         result_trajectories, params
     )
@@ -1443,6 +1483,7 @@ def resolve_trajectories(
     params: object = None,
     *,
     should_stop=None,
+    progress=None,
 ) -> object:
     """Resolve forward/backward trajectories, independently per arena.
 
@@ -1465,7 +1506,11 @@ def resolve_trajectories(
 
     if len(distinct_arenas) <= 1:
         return _resolve_trajectories_single_arena(
-            forward_trajs, backward_trajs, params, should_stop=should_stop
+            forward_trajs,
+            backward_trajs,
+            params,
+            should_stop=should_stop,
+            progress=progress,
         )
 
     # Group by arena; trajectories with no arena info (arena is None) sit in
@@ -1476,16 +1521,29 @@ def resolve_trajectories(
     )
 
     resolved: list = []
-    for arena in all_arenas:
+    n_arenas = len(all_arenas)
+    for position, arena in enumerate(all_arenas):
         if should_stop is not None and should_stop():
             return []
         fwd = [t for t, a in zip(forward_trajs, fwd_arenas) if a == arena]
         bwd = [t for t, a in zip(backward_trajs, bwd_arenas) if a == arena]
         if not fwd and not bwd:
             continue
+        # Each arena gets an equal slice of the bar. Arenas are resolved
+        # independently and typically hold comparable populations, so equal
+        # slices are a fair estimate without pre-counting work.
+        arena_progress = _sub_progress(
+            progress, position / n_arenas, (position + 1) / n_arenas
+        )
+        if arena_progress is not None:
+            arena_progress(0.0, f"Resolving arena {position + 1} of {n_arenas}...")
         resolved.extend(
             _resolve_trajectories_single_arena(
-                fwd, bwd, params, should_stop=should_stop
+                fwd,
+                bwd,
+                params,
+                should_stop=should_stop,
+                progress=arena_progress,
             )
         )
     for new_id, df in enumerate(resolved):
@@ -2233,7 +2291,7 @@ def _trim_or_remove_trajectory(
 
 
 def _remove_spatially_redundant_trajectories(
-    trajectories, agreement_distance, min_overlap, *, should_stop=None
+    trajectories, agreement_distance, min_overlap, *, should_stop=None, progress=None
 ):
     """
     Remove trajectories that are spatially redundant (covered by another trajectory).
@@ -2286,9 +2344,16 @@ def _remove_spatially_redundant_trajectories(
             else:
                 occupants.add(pos)
 
+    total_a = len(traj_arrays)
+    report_every = max(1, total_a // 50)
     for i, (idx_a, a_by_frame, _) in enumerate(traj_arrays):
         if should_stop is not None and should_stop():
             break
+        if progress is not None and i % report_every == 0:
+            progress(
+                i / total_a,
+                f"Removing redundant trajectories ({i}/{total_a})...",
+            )
         if idx_a in redundant_indices:
             continue
 
@@ -2873,6 +2938,7 @@ def _merge_overlapping_agreeing_trajectories(
     identity_drives_splits: bool = True,
     *,
     should_stop=None,
+    progress=None,
 ):
     """
     Merge trajectories that overlap in time and agree spatially or share DetectionIDs.
@@ -2902,6 +2968,16 @@ def _merge_overlapping_agreeing_trajectories(
         if should_stop is not None and should_stop():
             break
         iteration += 1
+        if progress is not None:
+            # The loop runs until it converges, so the remaining pass count is
+            # genuinely unknown. Report a damped fraction that rises fast and
+            # approaches (never reaches) 1, rather than inventing a denominator
+            # from `max_iterations` that the loop almost never reaches.
+            progress(
+                1.0 - 0.5**iteration,
+                f"Merging overlapping trajectories (pass {iteration}, "
+                f"{len(trajectories)} fragments)...",
+            )
         merged_any = False
         used = set()
         new_trajectories = []
