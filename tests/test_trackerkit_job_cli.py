@@ -1,5 +1,7 @@
 """The job subcommand group: parsing, rejection, dispatch."""
 
+import argparse
+
 import pytest
 
 from hydra_suite.core.inference.config import DEFAULT_CALIBRATION_BUDGET_SECONDS
@@ -325,3 +327,50 @@ def test_job_run_remote_command_includes_shared_root_flag_and_skip_preflight(
     assert remote_cmd.index("--shared-root labnas=/mnt/lab") < remote_cmd.index(
         "HYDRA_JOB_SKIP_PREFLIGHT=1"
     )
+
+
+def test_shared_root_remove_is_registered():
+    """Spec section 13 lists `shared-root add | remove | list`; remove was missing.
+
+    Found in practice trying to undo a test alias: `job shared-root remove` did
+    not exist, so an alias could be created but never deleted through the CLI.
+    """
+    args = parse_arguments(["job", "shared-root", "remove", "labnas"])
+    assert args.job_command == "shared-root"
+    assert args.shared_root_command == "remove"
+    assert args.alias == "labnas"
+
+
+def test_shared_root_remove_preserves_other_aliases(tmp_path, monkeypatch):
+    from hydra_suite.data.tracking_job.shared_roots import (
+        load_shared_roots,
+        save_shared_roots,
+    )
+
+    monkeypatch.setenv("HYDRA_CONFIG_DIR", str(tmp_path))
+    save_shared_roots({"keep": "/mnt/keep", "drop": "/mnt/drop"})
+
+    from hydra_suite.trackerkit import job_cli
+
+    ns = argparse.Namespace(
+        job_command="shared-root", shared_root_command="remove", alias="drop"
+    )
+    assert job_cli._cmd_shared_root(ns) == 0
+    assert load_shared_roots() == {"keep": "/mnt/keep"}
+
+
+def test_shared_root_remove_unknown_alias_names_the_known_ones(tmp_path, monkeypatch):
+    from hydra_suite.data.tracking_job.manifest import TrackingJobError
+    from hydra_suite.data.tracking_job.shared_roots import save_shared_roots
+
+    monkeypatch.setenv("HYDRA_CONFIG_DIR", str(tmp_path))
+    save_shared_roots({"keep": "/mnt/keep"})
+
+    from hydra_suite.trackerkit import job_cli
+
+    ns = argparse.Namespace(
+        job_command="shared-root", shared_root_command="remove", alias="ghost"
+    )
+    with pytest.raises(TrackingJobError) as excinfo:
+        job_cli._cmd_shared_root(ns)
+    assert "ghost" in str(excinfo.value) and "keep" in str(excinfo.value)

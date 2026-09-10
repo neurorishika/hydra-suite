@@ -91,6 +91,10 @@ trackerkit job shared-root add labnas /Volumes/lab
 
 # On firebrat (same alias name, different local mount path)
 ssh rutalab@firebrat trackerkit job shared-root add labnas /mnt/lab
+
+# Inspect or undo
+trackerkit job shared-root list
+trackerkit job shared-root remove labnas
 ```
 
 which persists to `<config>/shared_roots.json`:

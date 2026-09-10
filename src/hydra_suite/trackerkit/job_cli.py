@@ -30,7 +30,11 @@ from hydra_suite.data.tracking_job.pack import (
 )
 from hydra_suite.data.tracking_job.preflight import preflight_job
 from hydra_suite.data.tracking_job.references import PlannedModel, external_key_for
-from hydra_suite.data.tracking_job.shared_roots import load_shared_roots, save_alias
+from hydra_suite.data.tracking_job.shared_roots import (
+    load_shared_roots,
+    save_alias,
+    save_shared_roots,
+)
 from hydra_suite.data.tracking_job.transport import parse_remote, pull_job, push_job
 from hydra_suite.data.tracking_job.verify import verify_job
 
@@ -272,6 +276,18 @@ def _cmd_shared_root(args) -> int:
     if sub == "add":
         save_alias(args.alias, args.path)
         print(f"added shared-root alias {args.alias!r} -> {args.path}")
+        return 0
+    if sub == "remove":
+        table = load_shared_roots()
+        if args.alias not in table:
+            known = ", ".join(sorted(table)) or "(none configured)"
+            raise TrackingJobError(
+                f"no shared-root alias {args.alias!r} to remove; known: {known}",
+                code=2,
+            )
+        removed = table.pop(args.alias)
+        save_shared_roots(table)
+        print(f"removed shared-root alias {args.alias!r} -> {removed}")
         return 0
     if sub == "list":
         table = load_shared_roots()
