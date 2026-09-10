@@ -110,6 +110,61 @@ known alias, for labs that never want a silent fallback to a copy.
 A one-off alias can also be supplied directly to `preflight`/`run` without
 persisting it: `--shared-root labnas=/mnt/lab`.
 
+### The compute box already has its own copy of the videos
+
+The same mechanism covers this, and it does **not** require a network share.
+The alias table is just a name → local-directory map, so "both machines mount
+the same NAS" and "the box happens to hold its own copy of the same files"
+are the same case as far as a job is concerned. Only the alias *name* has to
+match; the directories are unrelated paths on unrelated filesystems.
+
+```bash
+# Laptop: the videos live beside the project
+trackerkit job shared-root add labclips ~/experiments/2026-09/clips
+
+# Pack picks the alias up automatically -- the video is recorded as a
+# reference and is NOT written into the job tree
+trackerkit job pack /tmp/jobs/colony_A ~/experiments/2026-09/clips/fly_obb.mp4
+
+# Push transfers models + config + sidecars only; the video does not move
+trackerkit job push /tmp/jobs/colony_A rutalab@firebrat:/home/rutalab/jobs/colony_A \
+  --remote-bootstrap 'source ~/miniforge3/etc/profile.d/conda.sh && conda activate hydra-cuda'
+
+# Point the SAME alias at wherever the box keeps its copy
+trackerkit job run rutalab@firebrat:/home/rutalab/jobs/colony_A \
+  --shared-root labclips=/home/rutalab/videos \
+  --remote-bootstrap 'source ~/miniforge3/etc/profile.d/conda.sh && conda activate hydra-cuda'
+```
+
+This is worth doing whenever the box already has the footage: video bytes
+dominate a job, so skipping them turns a multi-hour push into seconds.
+
+What makes it safe is the content signature. `pack` records
+`size:sha256(first 8 MiB ‖ last 8 MiB)` for every video, and `preflight`
+checks it against whatever the alias resolves to on the box. A copy that is
+stale, truncated, or re-encoded fails loudly:
+
+```
+[FAIL] video_signature -- video videos/fly_obb.mp4: content signature mismatch
+       (expected '3109115:cd1668ec1de8c5893e0a3ffd8ea74b14', got '…')
+```
+
+rather than silently tracking the wrong footage. A missing or unknown alias
+fails the same way, naming the alias and listing the ones the box does know.
+
+If you use a one-off `--shared-root` (rather than persisting the alias on the
+box) and then want to re-run `./run.sh` **by hand** over ssh, pass the same
+override through the environment — `run.sh`'s own preflight reads it:
+
+```bash
+HYDRA_JOB_PREFLIGHT_ARGS='--shared-root labclips=/home/rutalab/videos' ./run.sh
+```
+
+`trackerkit job run` sets that variable for you, so a job launched through it
+leaves behind a `run.sh` that re-runs by hand with the same result. For a box
+that will process many jobs off the same directory, persisting the alias with
+`job shared-root add` is simpler than repeating the override.
+
 `preflight` resolves the alias, checks the target exists and its size/content
 signature match what `pack` recorded (catches a stale mirror or a
 re-encoded file), then replaces (never overwrites a regular file) the

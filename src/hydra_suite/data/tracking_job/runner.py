@@ -121,9 +121,8 @@ eval "TK=($TRACKERKIT_STR)"
 #
 # Fix X2: this self-preflight is deliberately FLAG-LESS -- it never sees a
 # one-off `--shared-root ALIAS=PATH` or `--allow-tier-fallback` the caller may
-# have passed to `trackerkit job run`. A non-persisted alias override cannot
-# be threaded through an `ssh ... && ./run.sh` chain as a CLI flag without
-# re-parsing job_cli's own argv inside bash, and `job run` (both the local and
+# have passed to `trackerkit job run` AS CLI FLAGS -- they arrive instead via
+# HYDRA_JOB_PREFLIGHT_ARGS (see the else-branch below). `job run` (both the local and
 # the ssh-chained remote branch, fix M7) already runs `preflight_job` itself,
 # WITH those flags, immediately before invoking run.sh. Re-running a
 # flag-less preflight here would then fail on the exact alias/tier state the
@@ -137,13 +136,29 @@ eval "TK=($TRACKERKIT_STR)"
 if [ "${HYDRA_JOB_SKIP_PREFLIGHT:-0}" = "1" ]; then
   echo "run.sh: skipping self-preflight (already run by 'trackerkit job run' with its flags)"
 else
-  # NOTE: this is the ONLY preflight for a hand-run ./run.sh, so it carries no
-  # --shared-root/--allow-tier-fallback overrides; those flags only exist on
-  # `trackerkit job run`/`trackerkit job preflight`, never on run.sh itself.
-  # Fix Y1: array expansion, NOT eval -- "${TK[@]}" is already the correctly
-  # word-split interpreter invocation; `job preflight .` has no arguments
-  # that could themselves contain spaces, so this is a plain literal tail.
-  "${TK[@]}" job preflight .
+  # This is the ONLY preflight for a hand-run ./run.sh. It picks up overrides
+  # from HYDRA_JOB_PREFLIGHT_ARGS so the hand-run path is self-sufficient for a
+  # job whose videos are `shared` (spec 6.7) against an alias the box does not
+  # have persisted:
+  #
+  #   HYDRA_JOB_PREFLIGHT_ARGS='--shared-root labnas=/mnt/lab' ./run.sh
+  #
+  # `trackerkit job run` sets this from its own --shared-root /
+  # --allow-tier-fallback flags, so a job launched once through `job run`
+  # leaves behind a run.sh a human can re-run by hand with the same result.
+  # Without it a hand-run aborts with "unknown shared-root alias ...; known
+  # aliases: (none configured)" even though `job run` had just succeeded --
+  # and the spec calls run.sh "the executable contract", so the two paths must
+  # agree. Persisting the alias with `trackerkit job shared-root add` on the
+  # box is the other valid answer, and the better one for a machine that will
+  # run many jobs off the same share.
+  #
+  # eval touches ONLY the trusted operator-supplied string (exactly as
+  # TRACKERKIT_STR above), never argv, so a quoted path containing spaces
+  # survives. The ${PF_ARGS[@]+...} guard keeps this correct under `set -u`
+  # when the array is empty.
+  eval "PF_ARGS=(${HYDRA_JOB_PREFLIGHT_ARGS:-})"
+  "${TK[@]}" job preflight . ${PF_ARGS[@]+"${PF_ARGS[@]}"}
 fi
 
 set +e

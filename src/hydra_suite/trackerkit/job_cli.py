@@ -410,6 +410,24 @@ def _remote_trackerkit_invocation() -> str:
     return "trackerkit"
 
 
+def _preflight_flag_string(
+    shared_overrides: dict[str, str], allow_tier_fallback: bool
+) -> str:
+    """The `job preflight` flags implied by this invocation, as one string.
+
+    Used two ways: appended to the ssh-chained remote `job preflight` call, and
+    exported as ``HYDRA_JOB_PREFLIGHT_ARGS`` so ``run.sh``'s own self-preflight
+    sees the same overrides on a later hand-run.
+    """
+    flags = "".join(
+        f" --shared-root {shlex.quote(alias)}={shlex.quote(root)}"
+        for alias, root in shared_overrides.items()
+    )
+    if allow_tier_fallback:
+        flags += " --allow-tier-fallback"
+    return flags
+
+
 def _bootstrap_prefix(remote_bootstrap: str) -> str:
     """Fix A2b: a non-empty bootstrap gets a trailing ``; `` so it cannot
     short-circuit the following ``&&`` chain by being read as its LHS."""
@@ -471,6 +489,14 @@ def _cmd_run(args) -> int:
             )
         env = _job_env_with_trackerkit()
         env["HYDRA_JOB_SKIP_PREFLIGHT"] = "1"
+        # Also record the overrides so the run.sh left behind is re-runnable BY
+        # HAND with the same result. Without this a later `./run.sh` aborts on
+        # "unknown shared-root alias" for a non-persisted alias, even though
+        # `job run` had just succeeded -- and the spec calls run.sh "the
+        # executable contract".
+        preflight_args = _preflight_flag_string(shared_overrides, allow_tier_fallback)
+        if preflight_args:
+            env["HYDRA_JOB_PREFLIGHT_ARGS"] = preflight_args.strip()
         run_argv = ["./run.sh", *passthrough]
         if getattr(args, "detach", False):
             with open(os.devnull, "wb") as devnull:
@@ -490,12 +516,7 @@ def _cmd_run(args) -> int:
 
     remote = parse_remote(target)
     bootstrap = _bootstrap_prefix(getattr(args, "remote_bootstrap", "") or "")
-    preflight_flags = "".join(
-        f" --shared-root {shlex.quote(a)}={shlex.quote(p)}"
-        for a, p in shared_overrides.items()
-    )
-    if allow_tier_fallback:
-        preflight_flags += " --allow-tier-fallback"
+    preflight_flags = _preflight_flag_string(shared_overrides, allow_tier_fallback)
     passthrough = list(passthrough or [])
     tk = _remote_trackerkit_invocation()
     run_tail = f"./run.sh {shlex.join(passthrough)}".rstrip()
@@ -504,7 +525,9 @@ def _cmd_run(args) -> int:
     remote_cmd = (
         f"{bootstrap}cd {shlex.quote(remote.path)} && "
         f"{tk} job preflight .{preflight_flags} && "
-        f"HYDRA_JOB_SKIP_PREFLIGHT=1 {run_tail}"
+        f"HYDRA_JOB_SKIP_PREFLIGHT=1 "
+        f"HYDRA_JOB_PREFLIGHT_ARGS={shlex.quote(preflight_flags.strip())} "
+        f"{run_tail}"
     )
     result = subprocess.run(
         ["ssh", remote.host, remote_cmd], check=False, stdin=subprocess.DEVNULL

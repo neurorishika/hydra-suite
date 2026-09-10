@@ -693,3 +693,40 @@ def test_pack_job_accepts_a_registry_entries_generator(tmp_path, staging):
     assert "obb/x.pt" in payload["entries"]
     matching = [m for m in manifest.models if m.key == "obb/x.pt"]
     assert matching and matching[0].registry_entry_present is True
+
+
+def test_run_sh_self_preflight_forwards_shared_root_overrides():
+    """A hand-run ./run.sh must be able to resolve a NON-persisted alias.
+
+    Regression: the self-preflight was flag-less, so `./run.sh` on a box whose
+    shared-root table lacks the alias aborted with "unknown shared-root alias
+    ...; known aliases: (none configured)" even when `trackerkit job run
+    --shared-root ...` had just succeeded against the same box. The spec calls
+    run.sh "the executable contract" that anyone can ssh in and run by hand, so
+    the two paths must agree. Verified end to end on firebrat.
+    """
+    from hydra_suite.data.tracking_job.runner import render_run_sh
+
+    script = render_run_sh()
+    assert "HYDRA_JOB_PREFLIGHT_ARGS" in script
+    # The overrides must reach the self-preflight, not just be read into a var.
+    assert 'eval "PF_ARGS=(${HYDRA_JOB_PREFLIGHT_ARGS:-})"' in script
+    assert 'job preflight . ${PF_ARGS[@]+"${PF_ARGS[@]}"}' in script
+    # ...and it must stay safe under `set -u` when unset (the ${x[@]+...} guard).
+    assert "${PF_ARGS[@]+" in script
+
+
+def test_job_run_exports_the_overrides_for_a_later_hand_run():
+    """`job run --shared-root ...` leaves a run.sh a human can re-run."""
+    from hydra_suite.trackerkit.job_cli import _preflight_flag_string
+
+    flags = _preflight_flag_string({"labnas": "/mnt/lab"}, False)
+    assert "--shared-root labnas=/mnt/lab" in flags
+    assert "--allow-tier-fallback" not in flags
+
+    flags = _preflight_flag_string({}, True)
+    assert flags.strip() == "--allow-tier-fallback"
+
+    # A path with spaces must survive shell word-splitting on the far side.
+    flags = _preflight_flag_string({"lab": "/mnt/my lab"}, False)
+    assert "'/mnt/my lab'" in flags or '"/mnt/my lab"' in flags
