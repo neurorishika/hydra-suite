@@ -63,7 +63,10 @@ def test_progress_protocol_is_typed_and_bounded():
 
 
 def test_model_operation_containment_uses_admitted_capacity_not_estimate():
-    from hydra_suite.detectkit.sidecars.supervisor import _containment_limits
+    from hydra_suite.detectkit.sidecars.supervisor import (
+        HOST_CAP_HEADROOM_FRACTION,
+        _containment_limits,
+    )
     from hydra_suite.runtime.resource_budget import AcceleratorKind
 
     budget = SimpleNamespace(usable_host_bytes=32 * 1024**3)
@@ -73,9 +76,11 @@ def test_model_operation_containment_uses_admitted_capacity_not_estimate():
         budget, observation, AcceleratorKind.MPS
     )
 
-    assert hard == 32 * 1024**3
-    assert soft == int(32 * 1024**3 * 0.9)
-    assert mps_ratio == 0.5
+    # Admitted capacity, less the headroom the pre-launch re-check needs.
+    expected_hard = int(32 * 1024**3 * (1.0 - HOST_CAP_HEADROOM_FRACTION))
+    assert hard == expected_hard
+    assert soft == int(expected_hard * 0.9)
+    assert mps_ratio == expected_hard / (64 * 1024**3)
 
 
 def test_protected_operation_surfaces_a_valid_child_failure_report(
