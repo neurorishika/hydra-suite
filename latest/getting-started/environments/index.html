@@ -567,6 +567,39 @@
   
 </li>
         
+      </ul>
+    </nav>
+  
+</li>
+      
+        <li class="md-nav__item">
+  <a href="#fresh-box-condamamba-initialisation-non-interactive-shells" class="md-nav__link">
+    <span class="md-ellipsis">
+      Fresh-box conda/mamba initialisation (non-interactive shells)
+    </span>
+  </a>
+  
+</li>
+      
+        <li class="md-nav__item">
+  <a href="#sam3-training-prerequisite-hugging-face-authentication" class="md-nav__link">
+    <span class="md-ellipsis">
+      SAM3 training prerequisite: Hugging Face authentication
+    </span>
+  </a>
+  
+</li>
+      
+        <li class="md-nav__item">
+  <a href="#sam3-environment-recipe-use-the-script-not-prose" class="md-nav__link">
+    <span class="md-ellipsis">
+      SAM3 environment recipe — use the script, not prose
+    </span>
+  </a>
+  
+    <nav class="md-nav" aria-label="SAM3 environment recipe — use the script, not prose">
+      <ul class="md-nav__list">
+        
           <li class="md-nav__item">
   <a href="#other-useful-targets" class="md-nav__link">
     <span class="md-ellipsis">
@@ -756,6 +789,48 @@
   
   <span class="md-ellipsis">
     End-to-End Workflow
+  </span>
+  
+
+      </a>
+    </li>
+  
+
+              
+            
+              
+                
+  
+  
+  
+  
+    <li class="md-nav__item">
+      <a href="../../user-guide/trackerkit-cli/" class="md-nav__link">
+        
+  
+  <span class="md-ellipsis">
+    TrackerKit Command Line
+  </span>
+  
+
+      </a>
+    </li>
+  
+
+              
+            
+              
+                
+  
+  
+  
+  
+    <li class="md-nav__item">
+      <a href="../../user-guide/trackerkit-jobs/" class="md-nav__link">
+        
+  
+  <span class="md-ellipsis">
+    Portable Tracking Jobs
   </span>
   
 
@@ -1430,6 +1505,27 @@
   
   
     <li class="md-nav__item">
+      <a href="../../developer-guide/inference-autotuner/" class="md-nav__link">
+        
+  
+  <span class="md-ellipsis">
+    Inference Autotuner
+  </span>
+  
+
+      </a>
+    </li>
+  
+
+              
+            
+              
+                
+  
+  
+  
+  
+    <li class="md-nav__item">
       <a href="../../developer-guide/confidence-metrics/" class="md-nav__link">
         
   
@@ -1998,6 +2094,39 @@
   
 </li>
         
+      </ul>
+    </nav>
+  
+</li>
+      
+        <li class="md-nav__item">
+  <a href="#fresh-box-condamamba-initialisation-non-interactive-shells" class="md-nav__link">
+    <span class="md-ellipsis">
+      Fresh-box conda/mamba initialisation (non-interactive shells)
+    </span>
+  </a>
+  
+</li>
+      
+        <li class="md-nav__item">
+  <a href="#sam3-training-prerequisite-hugging-face-authentication" class="md-nav__link">
+    <span class="md-ellipsis">
+      SAM3 training prerequisite: Hugging Face authentication
+    </span>
+  </a>
+  
+</li>
+      
+        <li class="md-nav__item">
+  <a href="#sam3-environment-recipe-use-the-script-not-prose" class="md-nav__link">
+    <span class="md-ellipsis">
+      SAM3 environment recipe — use the script, not prose
+    </span>
+  </a>
+  
+    <nav class="md-nav" aria-label="SAM3 environment recipe — use the script, not prose">
+      <ul class="md-nav__list">
+        
           <li class="md-nav__item">
   <a href="#other-useful-targets" class="md-nav__link">
     <span class="md-ellipsis">
@@ -2134,6 +2263,15 @@
 </span><span id="__span-1-4"><a id="__codelineno-1-4" name="__codelineno-1-4" href="#__codelineno-1-4"></a>make<span class="w"> </span>install-cuda<span class="w"> </span><span class="nv">CUDA_MAJOR</span><span class="o">=</span><span class="m">12</span><span class="w">  </span><span class="c1"># NVIDIA CUDA 12</span>
 </span><span id="__span-1-5"><a id="__codelineno-1-5" name="__codelineno-1-5" href="#__codelineno-1-5"></a>make<span class="w"> </span>install-dev<span class="w">                  </span><span class="c1"># Dev tools (formatting, linting, testing, publishing)</span>
 </span></code></pre></div>
+<p><code>CUDA_MAJOR</code> must match the driver: 13 needs driver 580+, otherwise use 12.
+Check with <code>nvidia-smi --query-gpu=driver_version --format=csv,noheader</code>. See
+<a href="../installation/#choosing-cuda_major">Choosing <code>CUDA_MAJOR</code></a> — a mismatch leaves
+<code>torch.cuda.is_available()</code> <code>False</code> while GPUs still appear in
+<code>device_count()</code>.</p>
+<p>Each profile pins torch/torchvision/torchaudio to explicit <code>+cu128</code> / <code>+cu130</code>
+builds in <code>requirements-cuda12.txt</code> / <code>requirements-cuda13.txt</code>. Those local
+version tags are what force the wheels to come from the PyTorch index rather
+than PyPI; do not relax them to bare version pins.</p>
 <h3 id="update-refresh-both-conda-and-pip">Update (refresh both conda and pip)<a class="headerlink" href="#update-refresh-both-conda-and-pip" title="Permanent link">&para;</a></h3>
 <div class="language-bash highlight"><pre><span></span><code><span id="__span-2-1"><a id="__codelineno-2-1" name="__codelineno-2-1" href="#__codelineno-2-1"></a>make<span class="w"> </span>env-update<span class="w">                      </span><span class="c1"># CPU</span>
 </span><span id="__span-2-2"><a id="__codelineno-2-2" name="__codelineno-2-2" href="#__codelineno-2-2"></a>make<span class="w"> </span>env-update-mps<span class="w">                  </span><span class="c1"># Apple Silicon</span>
@@ -2144,14 +2282,65 @@
 </span><span id="__span-3-2"><a id="__codelineno-3-2" name="__codelineno-3-2" href="#__codelineno-3-2"></a>make<span class="w"> </span>env-remove-mps<span class="w">     </span><span class="c1"># Apple Silicon</span>
 </span><span id="__span-3-3"><a id="__codelineno-3-3" name="__codelineno-3-3" href="#__codelineno-3-3"></a>make<span class="w"> </span>env-remove-cuda<span class="w">    </span><span class="c1"># NVIDIA CUDA</span>
 </span></code></pre></div>
+<h2 id="fresh-box-condamamba-initialisation-non-interactive-shells">Fresh-box conda/mamba initialisation (non-interactive shells)<a class="headerlink" href="#fresh-box-condamamba-initialisation-non-interactive-shells" title="Permanent link">&para;</a></h2>
+<p>Two things a first-time provisioning session must get right that are easy to
+miss because they only bite in a <strong>non-interactive</strong> shell (e.g. a spawned
+subprocess, <code>ssh host 'cmd'</code>, or a service worker) rather than an interactive
+login shell:</p>
+<ol>
+<li><strong>conda's init block must sit above Ubuntu's interactivity guard</strong> in
+   <code>~/.bashrc</code> — the guard is the line that looks like
+   <code>case $- in *i*) ;; *) return;; esac</code>. If conda's <code>&gt;&gt;&gt; conda initialize &gt;&gt;&gt;</code>
+   block is <em>below</em> that guard, a non-interactive shell returns before conda
+   ever gets onto <code>PATH</code>. The SLEAP service launches <code>conda run -n sleap</code>
+   from exactly such a shell; if <code>conda</code> is unreachable there, the run does
+   not error loudly — it produces <strong>empty CSVs</strong>, which then falsely compare
+   as <code>EQUIVALENT</code> against a baseline in <code>tools/equivalence/</code>. Verify with
+   <code>ssh &lt;host&gt; 'conda run -n sleap python -c "import sleap"'</code> — no
+   <code>source ~/.bashrc</code> first — to prove the non-interactive path actually
+   works.</li>
+<li><strong><code>MAMBA_ROOT_PREFIX</code> must be set before <code>mamba.sh</code> is sourced.</strong> Without
+   it, mamba prints an 11-line <code>WARNING</code> block to <strong>stdout</strong> on every
+   non-interactive shell invocation. This is invisible in an interactive
+   terminal but corrupts the SAM3 sidecar's stdout protocol, which parses the
+   child process's stdout line-by-line for <code>@@HYDRA_SAM3_PROGRESS@@</code> records.</li>
+</ol>
+<p>Both were found missing on a from-scratch Ubuntu box during provisioning
+(2026-09-07); the fix is in <code>~/.bashrc</code>, not in this repo, since it's a
+per-machine shell-init concern.</p>
+<h2 id="sam3-training-prerequisite-hugging-face-authentication">SAM3 training prerequisite: Hugging Face authentication<a class="headerlink" href="#sam3-training-prerequisite-hugging-face-authentication" title="Permanent link">&para;</a></h2>
+<p><code>make setup-sam3-train</code> / <code>tools/setup_sam3_train_env.sh</code> build the <code>sam3</code>
+package and its dependencies, but SAM3 LoRA training itself additionally
+needs a Hugging Face credential on the machine that runs it — this is
+<strong>separate from and not satisfied by</strong> copying a local <code>sam3.pt</code> checkpoint.
+<code>build_sam3_image_model</code> fetches the model config from the <strong>gated</strong>
+<code>facebook/sam3</code> Hugging Face repo at build time, so on a fresh box with no
+credential, training (and even the auto-batch probe) refuses to start:</p>
+<div class="language-bash highlight"><pre><span></span><code><span id="__span-4-1"><a id="__codelineno-4-1" name="__codelineno-4-1" href="#__codelineno-4-1"></a>hf<span class="w"> </span>auth<span class="w"> </span>login<span class="w">      </span><span class="c1"># paste a token from a HF account that has accepted the</span>
+</span><span id="__span-4-2"><a id="__codelineno-4-2" name="__codelineno-4-2" href="#__codelineno-4-2"></a><span class="w">                    </span><span class="c1"># licence at https://huggingface.co/facebook/sam3</span>
+</span><span id="__span-4-3"><a id="__codelineno-4-3" name="__codelineno-4-3" href="#__codelineno-4-3"></a><span class="c1"># or: export HF_TOKEN=... / HUGGING_FACE_HUB_TOKEN=...</span>
+</span></code></pre></div>
+<p><code>src/hydra_suite/training/sam3_lora/preflight.py</code> checks for this up front
+and refuses with a message that already names the fix (<code>hf auth login</code>) —
+if you see a bare <code>GatedRepoError: 401</code> instead, you are hitting the
+credential check too late in the pipeline; file that as a regression.</p>
+<h2 id="sam3-environment-recipe-use-the-script-not-prose">SAM3 environment recipe — use the script, not prose<a class="headerlink" href="#sam3-environment-recipe-use-the-script-not-prose" title="Permanent link">&para;</a></h2>
+<p>The canonical, tested recipe for the <code>sam3</code> training sidecar env is
+<code>tools/setup_sam3_train_env.sh</code> (invoked by <code>make setup-sam3-train</code>). Do not
+re-derive or re-copy the pip install list into other docs — it drifts. Two
+of its pins are load-bearing and easy to accidentally drop if hand-rolling
+the env instead of running the script: <code>scipy&lt;1.14</code> and
+<code>opencv-python-headless&lt;4.12</code> — both would otherwise pull in <code>numpy&gt;=2</code>,
+silently breaking the <code>numpy&lt;2</code> pin the whole env exists to hold. See the
+comments in that script for the full rationale per pin.</p>
 <h3 id="other-useful-targets">Other useful targets<a class="headerlink" href="#other-useful-targets" title="Permanent link">&para;</a></h3>
-<div class="language-bash highlight"><pre><span></span><code><span id="__span-4-1"><a id="__codelineno-4-1" name="__codelineno-4-1" href="#__codelineno-4-1"></a>make<span class="w"> </span><span class="nb">help</span><span class="w">              </span><span class="c1"># Full command catalog</span>
-</span><span id="__span-4-2"><a id="__codelineno-4-2" name="__codelineno-4-2" href="#__codelineno-4-2"></a>make<span class="w"> </span>pytest<span class="w">            </span><span class="c1"># Run tests</span>
-</span><span id="__span-4-3"><a id="__codelineno-4-3" name="__codelineno-4-3" href="#__codelineno-4-3"></a>make<span class="w"> </span>format<span class="w">            </span><span class="c1"># Format code (autopep8 → black → isort)</span>
-</span><span id="__span-4-4"><a id="__codelineno-4-4" name="__codelineno-4-4" href="#__codelineno-4-4"></a>make<span class="w"> </span>lint<span class="w">              </span><span class="c1"># Lint at moderate severity</span>
-</span><span id="__span-4-5"><a id="__codelineno-4-5" name="__codelineno-4-5" href="#__codelineno-4-5"></a>make<span class="w"> </span>build<span class="w">             </span><span class="c1"># Build wheel and sdist for PyPI</span>
-</span><span id="__span-4-6"><a id="__codelineno-4-6" name="__codelineno-4-6" href="#__codelineno-4-6"></a>make<span class="w"> </span>publish-test<span class="w">      </span><span class="c1"># Upload to Test PyPI</span>
-</span><span id="__span-4-7"><a id="__codelineno-4-7" name="__codelineno-4-7" href="#__codelineno-4-7"></a>make<span class="w"> </span>publish<span class="w">           </span><span class="c1"># Upload to real PyPI</span>
+<div class="language-bash highlight"><pre><span></span><code><span id="__span-5-1"><a id="__codelineno-5-1" name="__codelineno-5-1" href="#__codelineno-5-1"></a>make<span class="w"> </span><span class="nb">help</span><span class="w">              </span><span class="c1"># Full command catalog</span>
+</span><span id="__span-5-2"><a id="__codelineno-5-2" name="__codelineno-5-2" href="#__codelineno-5-2"></a>make<span class="w"> </span>pytest<span class="w">            </span><span class="c1"># Run tests</span>
+</span><span id="__span-5-3"><a id="__codelineno-5-3" name="__codelineno-5-3" href="#__codelineno-5-3"></a>make<span class="w"> </span>format<span class="w">            </span><span class="c1"># Format code (autopep8 → black → isort)</span>
+</span><span id="__span-5-4"><a id="__codelineno-5-4" name="__codelineno-5-4" href="#__codelineno-5-4"></a>make<span class="w"> </span>lint<span class="w">              </span><span class="c1"># Lint at moderate severity</span>
+</span><span id="__span-5-5"><a id="__codelineno-5-5" name="__codelineno-5-5" href="#__codelineno-5-5"></a>make<span class="w"> </span>build<span class="w">             </span><span class="c1"># Build wheel and sdist for PyPI</span>
+</span><span id="__span-5-6"><a id="__codelineno-5-6" name="__codelineno-5-6" href="#__codelineno-5-6"></a>make<span class="w"> </span>publish-test<span class="w">      </span><span class="c1"># Upload to Test PyPI</span>
+</span><span id="__span-5-7"><a id="__codelineno-5-7" name="__codelineno-5-7" href="#__codelineno-5-7"></a>make<span class="w"> </span>publish<span class="w">           </span><span class="c1"># Upload to real PyPI</span>
 </span></code></pre></div>
 
 

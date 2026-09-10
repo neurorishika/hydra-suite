@@ -645,6 +645,48 @@
   
   
     <li class="md-nav__item">
+      <a href="../trackerkit-cli/" class="md-nav__link">
+        
+  
+  <span class="md-ellipsis">
+    TrackerKit Command Line
+  </span>
+  
+
+      </a>
+    </li>
+  
+
+              
+            
+              
+                
+  
+  
+  
+  
+    <li class="md-nav__item">
+      <a href="../trackerkit-jobs/" class="md-nav__link">
+        
+  
+  <span class="md-ellipsis">
+    Portable Tracking Jobs
+  </span>
+  
+
+      </a>
+    </li>
+  
+
+              
+            
+              
+                
+  
+  
+  
+  
+    <li class="md-nav__item">
       <a href="../detection-modes/" class="md-nav__link">
         
   
@@ -817,6 +859,15 @@
   <a href="#dataset-generation-and-identity" class="md-nav__link">
     <span class="md-ellipsis">
       Dataset Generation and Identity
+    </span>
+  </a>
+  
+</li>
+      
+        <li class="md-nav__item">
+  <a href="#batch-session-state" class="md-nav__link">
+    <span class="md-ellipsis">
+      Batch Session State
     </span>
   </a>
   
@@ -1421,6 +1472,27 @@
   
   
     <li class="md-nav__item">
+      <a href="../../developer-guide/inference-autotuner/" class="md-nav__link">
+        
+  
+  <span class="md-ellipsis">
+    Inference Autotuner
+  </span>
+  
+
+      </a>
+    </li>
+  
+
+              
+            
+              
+                
+  
+  
+  
+  
+    <li class="md-nav__item">
       <a href="../../developer-guide/confidence-metrics/" class="md-nav__link">
         
   
@@ -1986,6 +2058,15 @@
 </li>
       
         <li class="md-nav__item">
+  <a href="#batch-session-state" class="md-nav__link">
+    <span class="md-ellipsis">
+      Batch Session State
+    </span>
+  </a>
+  
+</li>
+      
+        <li class="md-nav__item">
   <a href="#configuration-behavior-notes" class="md-nav__link">
     <span class="md-ellipsis">
       Configuration Behavior Notes
@@ -2310,6 +2391,38 @@ the body-scaled parameters.</p>
 <td><code>individual_output_format</code></td>
 <td>crop export image format</td>
 <td><code>png/jpeg</code></td>
+</tr>
+</tbody>
+</table>
+<h2 id="batch-session-state">Batch Session State<a class="headerlink" href="#batch-session-state" title="Permanent link">&para;</a></h2>
+<p>These fields live on the TrackerKit GUI session (<code>TrackerConfig</code>), not the
+per-video engine config — they never get written into <code>&lt;stem&gt;_config.json</code>
+and have no effect on tracking output, only on how a batch is launched. See
+<a href="../trackerkit-cli/">TrackerKit command line</a> for the equivalent <code>--gpus</code>
+/ <code>--jobs</code> / <code>--threads-per-job</code> CLI flags.</p>
+<table>
+<thead>
+<tr>
+<th>Key</th>
+<th>Meaning</th>
+<th>Typical Range</th>
+</tr>
+</thead>
+<tbody>
+<tr>
+<td><code>batch_parallel</code></td>
+<td>Fan a batch out one child process per GPU instead of running sequentially in-process</td>
+<td><code>true</code> / <code>false</code> (default <code>false</code>)</td>
+</tr>
+<tr>
+<td><code>batch_parallel_jobs</code></td>
+<td>Max concurrent videos; <code>0</code> = one per selected GPU (or 1 without GPUs)</td>
+<td><code>0 - 64</code> (default <code>0</code>, auto)</td>
+</tr>
+<tr>
+<td><code>batch_parallel_gpus</code></td>
+<td>GPU selector: ordinals, ranges, UUID prefixes, or <code>auto</code> for every GPU <code>nvidia-smi</code> reports</td>
+<td>string (default <code>"auto"</code>)</td>
 </tr>
 </tbody>
 </table>

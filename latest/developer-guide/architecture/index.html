@@ -642,6 +642,48 @@
   
   
     <li class="md-nav__item">
+      <a href="../../user-guide/trackerkit-cli/" class="md-nav__link">
+        
+  
+  <span class="md-ellipsis">
+    TrackerKit Command Line
+  </span>
+  
+
+      </a>
+    </li>
+  
+
+              
+            
+              
+                
+  
+  
+  
+  
+    <li class="md-nav__item">
+      <a href="../../user-guide/trackerkit-jobs/" class="md-nav__link">
+        
+  
+  <span class="md-ellipsis">
+    Portable Tracking Jobs
+  </span>
+  
+
+      </a>
+    </li>
+  
+
+              
+            
+              
+                
+  
+  
+  
+  
+    <li class="md-nav__item">
       <a href="../../user-guide/detection-modes/" class="md-nav__link">
         
   
@@ -1192,6 +1234,15 @@
   
 </li>
       
+        <li class="md-nav__item">
+  <a href="#portable-job-model-reference-contract" class="md-nav__link">
+    <span class="md-ellipsis">
+      Portable job model-reference contract
+    </span>
+  </a>
+  
+</li>
+      
     </ul>
   
 </nav>
@@ -1423,6 +1474,27 @@
   
   <span class="md-ellipsis">
     Inference Fast Mode
+  </span>
+  
+
+      </a>
+    </li>
+  
+
+              
+            
+              
+                
+  
+  
+  
+  
+    <li class="md-nav__item">
+      <a href="../inference-autotuner/" class="md-nav__link">
+        
+  
+  <span class="md-ellipsis">
+    Inference Autotuner
   </span>
   
 
@@ -2030,6 +2102,15 @@
   
 </li>
       
+        <li class="md-nav__item">
+  <a href="#portable-job-model-reference-contract" class="md-nav__link">
+    <span class="md-ellipsis">
+      Portable job model-reference contract
+    </span>
+  </a>
+  
+</li>
+      
     </ul>
   
 </nav>
@@ -2208,6 +2289,27 @@
 <li><code>stacked_page.py</code> — stacked page navigation</li>
 <li><code>tooltip_button.py</code> — button with rich tooltip</li>
 </ul>
+<h2 id="portable-job-model-reference-contract">Portable job model-reference contract<a class="headerlink" href="#portable-job-model-reference-contract" title="Permanent link">&para;</a></h2>
+<p>Portable tracking jobs (<code>trackerkit job pack</code>, see
+<code>docs/user-guide/trackerkit-jobs.md</code>) derive the set of files a job needs
+from the engine parameter builder rather than a hand-maintained list.
+<code>iter_model_references(params)</code> (<code>trackerkit/engine_params.py</code>) walks every
+key in the four classification tuples in that same module —
+<code>MODEL_DIR_PARAM_KEYS</code>, <code>MODEL_FILE_PARAM_KEYS</code>, <code>MODEL_LIST_PARAM_KEYS</code>,
+<code>NON_MODEL_PATH_PARAM_KEYS</code> — to decide which resolved paths are model
+references pack must ship, and which path-shaped keys are not models at all.</p>
+<p><strong>Any new model-consuming role must join this contract in two places:</strong></p>
+<ol>
+<li>Its engine-param key must be added to the correct tuple in
+   <code>engine_params.py</code>, so <code>iter_model_references</code> classifies it.</li>
+<li><code>pack.ROLE_TO_CONFIG_KEY</code> (<code>data/tracking_job/pack.py</code>) must gain the
+   matching lowercase config key(s) for that role, so the packer can
+   rewrite the config-side reference to the job-relative path.</li>
+</ol>
+<p><code>tests/test_engine_params_model_reference_contract.py</code> fails loudly if a
+role is missing from either side — it turns on every model-consuming role
+at once and asserts every live model path is classified and every role that
+should produce a reference does.</p>
 
 
 

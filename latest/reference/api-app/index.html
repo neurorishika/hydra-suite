@@ -642,6 +642,48 @@
   
   
     <li class="md-nav__item">
+      <a href="../../user-guide/trackerkit-cli/" class="md-nav__link">
+        
+  
+  <span class="md-ellipsis">
+    TrackerKit Command Line
+  </span>
+  
+
+      </a>
+    </li>
+  
+
+              
+            
+              
+                
+  
+  
+  
+  
+    <li class="md-nav__item">
+      <a href="../../user-guide/trackerkit-jobs/" class="md-nav__link">
+        
+  
+  <span class="md-ellipsis">
+    Portable Tracking Jobs
+  </span>
+  
+
+      </a>
+    </li>
+  
+
+              
+            
+              
+                
+  
+  
+  
+  
+    <li class="md-nav__item">
       <a href="../../user-guide/detection-modes/" class="md-nav__link">
         
   
@@ -1300,6 +1342,27 @@
   
   
     <li class="md-nav__item">
+      <a href="../../developer-guide/inference-autotuner/" class="md-nav__link">
+        
+  
+  <span class="md-ellipsis">
+    Inference Autotuner
+  </span>
+  
+
+      </a>
+    </li>
+  
+
+              
+            
+              
+                
+  
+  
+  
+  
+    <li class="md-nav__item">
       <a href="../../developer-guide/confidence-metrics/" class="md-nav__link">
         
   
@@ -1666,6 +1729,15 @@
   <a href="#hydra_suite.trackerkit.app.setup_logging" class="md-nav__link">
     <span class="md-ellipsis">
       <code class="doc-symbol doc-symbol-toc doc-symbol-function"></code>&nbsp;setup_logging
+    </span>
+  </a>
+  
+</li>
+        
+          <li class="md-nav__item">
+  <a href="#hydra_suite.trackerkit.app.build_parser" class="md-nav__link">
+    <span class="md-ellipsis">
+      <code class="doc-symbol doc-symbol-toc doc-symbol-function"></code>&nbsp;build_parser
     </span>
   </a>
   
@@ -2059,6 +2131,15 @@
 </li>
         
           <li class="md-nav__item">
+  <a href="#hydra_suite.trackerkit.app.build_parser" class="md-nav__link">
+    <span class="md-ellipsis">
+      <code class="doc-symbol doc-symbol-toc doc-symbol-function"></code>&nbsp;build_parser
+    </span>
+  </a>
+  
+</li>
+        
+          <li class="md-nav__item">
   <a href="#hydra_suite.trackerkit.app.parse_arguments" class="md-nav__link">
     <span class="md-ellipsis">
       <code class="doc-symbol doc-symbol-toc doc-symbol-function"></code>&nbsp;parse_arguments
@@ -2389,6 +2470,26 @@ TrackerKit tracking system (part of HYDRA Suite).</p>
         <p>Set up logging configuration for the multi-tracker application.</p>
 <p>Note: File logging is now handled per-session in main_window.py.
 This only sets up console logging.</p>
+
+    </div>
+
+</div>
+
+<div class="doc doc-object doc-function">
+
+
+<h3 id="hydra_suite.trackerkit.app.build_parser" class="doc doc-heading">
+<code class="doc-symbol doc-symbol-heading doc-symbol-function"></code>            <code class="highlight language-python"><span class="n">build_parser</span><span class="p">()</span></code>
+
+<a href="#hydra_suite.trackerkit.app.build_parser" class="headerlink" title="Permanent link">&para;</a></h3>
+
+
+    <div class="doc doc-contents ">
+
+        <p>Build the TrackerKit argument parser (no parsing side effects).</p>
+<p>Extracted so tests can exercise argument parsing (choices, mutually
+exclusive groups, subcommands) without invoking <code>main</code> or
+<code>parse_arguments</code>'s post-parse validation.</p>
 
     </div>
 

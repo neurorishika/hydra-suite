@@ -1,0 +1,2859 @@
+
+<!doctype html>
+<html lang="en" class="no-js">
+  <head>
+    
+      <meta charset="utf-8">
+      <meta name="viewport" content="width=device-width,initial-scale=1">
+      
+        <meta name="description" content="User and developer documentation for HYDRA Suite">
+      
+      
+      
+        <link rel="canonical" href="https://neurorishika.github.io/hydra-suite/latest/superpowers/specs/done/2026-09-09-portable-tracking-jobs-design/">
+      
+      
+      
+      
+      <link rel="icon" href="../../../../assets/images/favicon.png">
+      <meta name="generator" content="mkdocs-1.6.1, mkdocs-material-9.5.43">
+    
+    
+      
+        <title>Portable tracking jobs: stage anywhere, run anywhere, sync back - HYDRA Suite Docs</title>
+      
+    
+    
+      <link rel="stylesheet" href="../../../../assets/stylesheets/main.0253249f.min.css">
+      
+        
+        <link rel="stylesheet" href="../../../../assets/stylesheets/palette.06af60db.min.css">
+      
+      
+
+
+    
+    
+      
+    
+    
+      
+        
+        
+        <link rel="preconnect" href="https://fonts.gstatic.com" crossorigin>
+        <link rel="stylesheet" href="https://fonts.googleapis.com/css?family=Roboto:300,300i,400,400i,700,700i%7CRoboto+Mono:400,400i,700,700i&display=fallback">
+        <style>:root{--md-text-font:"Roboto";--md-code-font:"Roboto Mono"}</style>
+      
+    
+    
+      <link rel="stylesheet" href="../../../../assets/_mkdocstrings.css">
+    
+    <script>__md_scope=new URL("../../../..",location),__md_hash=e=>[...e].reduce(((e,_)=>(e<<5)-e+_.charCodeAt(0)),0),__md_get=(e,_=localStorage,t=__md_scope)=>JSON.parse(_.getItem(t.pathname+"."+e)),__md_set=(e,_,t=localStorage,a=__md_scope)=>{try{t.setItem(a.pathname+"."+e,JSON.stringify(_))}catch(e){}}</script>
+    
+      
+
+    
+    
+    
+  </head>
+  
+  
+    
+    
+      
+    
+    
+    
+    
+    <body dir="ltr" data-md-color-scheme="default" data-md-color-primary="blue" data-md-color-accent="light-blue">
+  
+    
+    <input class="md-toggle" data-md-toggle="drawer" type="checkbox" id="__drawer" autocomplete="off">
+    <input class="md-toggle" data-md-toggle="search" type="checkbox" id="__search" autocomplete="off">
+    <label class="md-overlay" for="__drawer"></label>
+    <div data-md-component="skip">
+      
+        
+        <a href="#portable-tracking-jobs-stage-anywhere-run-anywhere-sync-back" class="md-skip">
+          Skip to content
+        </a>
+      
+    </div>
+    <div data-md-component="announce">
+      
+    </div>
+    
+      <div data-md-color-scheme="default" data-md-component="outdated" hidden>
+        
+      </div>
+    
+    
+      
+
+<header class="md-header" data-md-component="header">
+  <nav class="md-header__inner md-grid" aria-label="Header">
+    <a href="../../../.." title="HYDRA Suite Docs" class="md-header__button md-logo" aria-label="HYDRA Suite Docs" data-md-component="logo">
+      
+  
+  <svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 24 24"><path d="M12 8a3 3 0 0 0 3-3 3 3 0 0 0-3-3 3 3 0 0 0-3 3 3 3 0 0 0 3 3m0 3.54C9.64 9.35 6.5 8 3 8v11c3.5 0 6.64 1.35 9 3.54 2.36-2.19 5.5-3.54 9-3.54V8c-3.5 0-6.64 1.35-9 3.54"/></svg>
+
+    </a>
+    <label class="md-header__button md-icon" for="__drawer">
+      
+      <svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 24 24"><path d="M3 6h18v2H3zm0 5h18v2H3zm0 5h18v2H3z"/></svg>
+    </label>
+    <div class="md-header__title" data-md-component="header-title">
+      <div class="md-header__ellipsis">
+        <div class="md-header__topic">
+          <span class="md-ellipsis">
+            HYDRA Suite Docs
+          </span>
+        </div>
+        <div class="md-header__topic" data-md-component="header-topic">
+          <span class="md-ellipsis">
+            
+              Portable tracking jobs: stage anywhere, run anywhere, sync back
+            
+          </span>
+        </div>
+      </div>
+    </div>
+    
+      
+        <form class="md-header__option" data-md-component="palette">
+  
+    
+    
+    
+    <input class="md-option" data-md-color-media="(prefers-color-scheme: light)" data-md-color-scheme="default" data-md-color-primary="blue" data-md-color-accent="light-blue"  aria-label="Switch to dark mode"  type="radio" name="__palette" id="__palette_0">
+    
+      <label class="md-header__button md-icon" title="Switch to dark mode" for="__palette_1" hidden>
+        <svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 24 24"><path d="m17.75 4.09-2.53 1.94.91 3.06-2.63-1.81-2.63 1.81.91-3.06-2.53-1.94L12.44 4l1.06-3 1.06 3zm3.5 6.91-1.64 1.25.59 1.98-1.7-1.17-1.7 1.17.59-1.98L15.75 11l2.06-.05L18.5 9l.69 1.95zm-2.28 4.95c.83-.08 1.72 1.1 1.19 1.85-.32.45-.66.87-1.08 1.27C15.17 23 8.84 23 4.94 19.07c-3.91-3.9-3.91-10.24 0-14.14.4-.4.82-.76 1.27-1.08.75-.53 1.93.36 1.85 1.19-.27 2.86.69 5.83 2.89 8.02a9.96 9.96 0 0 0 8.02 2.89m-1.64 2.02a12.08 12.08 0 0 1-7.8-3.47c-2.17-2.19-3.33-5-3.49-7.82-2.81 3.14-2.7 7.96.31 10.98 3.02 3.01 7.84 3.12 10.98.31"/></svg>
+      </label>
+    
+  
+    
+    
+    
+    <input class="md-option" data-md-color-media="(prefers-color-scheme: dark)" data-md-color-scheme="slate" data-md-color-primary="blue" data-md-color-accent="light-blue"  aria-label="Switch to light mode"  type="radio" name="__palette" id="__palette_1">
+    
+      <label class="md-header__button md-icon" title="Switch to light mode" for="__palette_0" hidden>
+        <svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 24 24"><path d="M12 7a5 5 0 0 1 5 5 5 5 0 0 1-5 5 5 5 0 0 1-5-5 5 5 0 0 1 5-5m0 2a3 3 0 0 0-3 3 3 3 0 0 0 3 3 3 3 0 0 0 3-3 3 3 0 0 0-3-3m0-7 2.39 3.42C13.65 5.15 12.84 5 12 5s-1.65.15-2.39.42zM3.34 7l4.16-.35A7.2 7.2 0 0 0 5.94 8.5c-.44.74-.69 1.5-.83 2.29zm.02 10 1.76-3.77a7.131 7.131 0 0 0 2.38 4.14zM20.65 7l-1.77 3.79a7.02 7.02 0 0 0-2.38-4.15zm-.01 10-4.14.36c.59-.51 1.12-1.14 1.54-1.86.42-.73.69-1.5.83-2.29zM12 22l-2.41-3.44c.74.27 1.55.44 2.41.44.82 0 1.63-.17 2.37-.44z"/></svg>
+      </label>
+    
+  
+</form>
+      
+    
+    
+      <script>var palette=__md_get("__palette");if(palette&&palette.color){if("(prefers-color-scheme)"===palette.color.media){var media=matchMedia("(prefers-color-scheme: light)"),input=document.querySelector(media.matches?"[data-md-color-media='(prefers-color-scheme: light)']":"[data-md-color-media='(prefers-color-scheme: dark)']");palette.color.media=input.getAttribute("data-md-color-media"),palette.color.scheme=input.getAttribute("data-md-color-scheme"),palette.color.primary=input.getAttribute("data-md-color-primary"),palette.color.accent=input.getAttribute("data-md-color-accent")}for(var[key,value]of Object.entries(palette.color))document.body.setAttribute("data-md-color-"+key,value)}</script>
+    
+    
+    
+      <label class="md-header__button md-icon" for="__search">
+        
+        <svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 24 24"><path d="M9.5 3A6.5 6.5 0 0 1 16 9.5c0 1.61-.59 3.09-1.56 4.23l.27.27h.79l5 5-1.5 1.5-5-5v-.79l-.27-.27A6.52 6.52 0 0 1 9.5 16 6.5 6.5 0 0 1 3 9.5 6.5 6.5 0 0 1 9.5 3m0 2C7 5 5 7 5 9.5S7 14 9.5 14 14 12 14 9.5 12 5 9.5 5"/></svg>
+      </label>
+      <div class="md-search" data-md-component="search" role="dialog">
+  <label class="md-search__overlay" for="__search"></label>
+  <div class="md-search__inner" role="search">
+    <form class="md-search__form" name="search">
+      <input type="text" class="md-search__input" name="query" aria-label="Search" placeholder="Search" autocapitalize="off" autocorrect="off" autocomplete="off" spellcheck="false" data-md-component="search-query" required>
+      <label class="md-search__icon md-icon" for="__search">
+        
+        <svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 24 24"><path d="M9.5 3A6.5 6.5 0 0 1 16 9.5c0 1.61-.59 3.09-1.56 4.23l.27.27h.79l5 5-1.5 1.5-5-5v-.79l-.27-.27A6.52 6.52 0 0 1 9.5 16 6.5 6.5 0 0 1 3 9.5 6.5 6.5 0 0 1 9.5 3m0 2C7 5 5 7 5 9.5S7 14 9.5 14 14 12 14 9.5 12 5 9.5 5"/></svg>
+        
+        <svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 24 24"><path d="M20 11v2H8l5.5 5.5-1.42 1.42L4.16 12l7.92-7.92L13.5 5.5 8 11z"/></svg>
+      </label>
+      <nav class="md-search__options" aria-label="Search">
+        
+        <button type="reset" class="md-search__icon md-icon" title="Clear" aria-label="Clear" tabindex="-1">
+          
+          <svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 24 24"><path d="M19 6.41 17.59 5 12 10.59 6.41 5 5 6.41 10.59 12 5 17.59 6.41 19 12 13.41 17.59 19 19 17.59 13.41 12z"/></svg>
+        </button>
+      </nav>
+      
+        <div class="md-search__suggest" data-md-component="search-suggest"></div>
+      
+    </form>
+    <div class="md-search__output">
+      <div class="md-search__scrollwrap" tabindex="0" data-md-scrollfix>
+        <div class="md-search-result" data-md-component="search-result">
+          <div class="md-search-result__meta">
+            Initializing search
+          </div>
+          <ol class="md-search-result__list" role="presentation"></ol>
+        </div>
+      </div>
+    </div>
+  </div>
+</div>
+    
+    
+      <div class="md-header__source">
+        <a href="https://github.com/neurorishika/hydra-suite" title="Go to repository" class="md-source" data-md-component="source">
+  <div class="md-source__icon md-icon">
+    
+    <svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 448 512"><!--! Font Awesome Free 6.6.0 by @fontawesome - https://fontawesome.com License - https://fontawesome.com/license/free (Icons: CC BY 4.0, Fonts: SIL OFL 1.1, Code: MIT License) Copyright 2024 Fonticons, Inc.--><path d="M439.55 236.05 244 40.45a28.87 28.87 0 0 0-40.81 0l-40.66 40.63 51.52 51.52c27.06-9.14 52.68 16.77 43.39 43.68l49.66 49.66c34.23-11.8 61.18 31 35.47 56.69-26.49 26.49-70.21-2.87-56-37.34L240.22 199v121.85c25.3 12.54 22.26 41.85 9.08 55a34.34 34.34 0 0 1-48.55 0c-17.57-17.6-11.07-46.91 11.25-56v-123c-20.8-8.51-24.6-30.74-18.64-45L142.57 101 8.45 235.14a28.86 28.86 0 0 0 0 40.81l195.61 195.6a28.86 28.86 0 0 0 40.8 0l194.69-194.69a28.86 28.86 0 0 0 0-40.81"/></svg>
+  </div>
+  <div class="md-source__repository">
+    neurorishika/hydra-suite
+  </div>
+</a>
+      </div>
+    
+  </nav>
+  
+</header>
+    
+    <div class="md-container" data-md-component="container">
+      
+      
+        
+          
+            
+<nav class="md-tabs" aria-label="Tabs" data-md-component="tabs">
+  <div class="md-grid">
+    <ul class="md-tabs__list">
+      
+        
+  
+  
+  
+    <li class="md-tabs__item">
+      <a href="../../../.." class="md-tabs__link">
+        
+  
+    
+  
+  Home
+
+      </a>
+    </li>
+  
+
+      
+        
+  
+  
+  
+    
+    
+      <li class="md-tabs__item">
+        <a href="../../../../getting-started/installation/" class="md-tabs__link">
+          
+  
+  Getting Started
+
+        </a>
+      </li>
+    
+  
+
+      
+        
+  
+  
+  
+    
+    
+      <li class="md-tabs__item">
+        <a href="../../../../user-guide/overview/" class="md-tabs__link">
+          
+  
+  User Guide
+
+        </a>
+      </li>
+    
+  
+
+      
+        
+  
+  
+  
+    
+    
+      <li class="md-tabs__item">
+        <a href="../../../../developer-guide/architecture/" class="md-tabs__link">
+          
+  
+  Developer Guide
+
+        </a>
+      </li>
+    
+  
+
+      
+        
+  
+  
+  
+    
+    
+      <li class="md-tabs__item">
+        <a href="../../../../reference/api-index/" class="md-tabs__link">
+          
+  
+  Reference
+
+        </a>
+      </li>
+    
+  
+
+      
+    </ul>
+  </div>
+</nav>
+          
+        
+      
+      <main class="md-main" data-md-component="main">
+        <div class="md-main__inner md-grid">
+          
+            
+              
+              <div class="md-sidebar md-sidebar--primary" data-md-component="sidebar" data-md-type="navigation" >
+                <div class="md-sidebar__scrollwrap">
+                  <div class="md-sidebar__inner">
+                    
+
+
+  
+
+
+<nav class="md-nav md-nav--primary md-nav--lifted" aria-label="Navigation" data-md-level="0">
+  <label class="md-nav__title" for="__drawer">
+    <a href="../../../.." title="HYDRA Suite Docs" class="md-nav__button md-logo" aria-label="HYDRA Suite Docs" data-md-component="logo">
+      
+  
+  <svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 24 24"><path d="M12 8a3 3 0 0 0 3-3 3 3 0 0 0-3-3 3 3 0 0 0-3 3 3 3 0 0 0 3 3m0 3.54C9.64 9.35 6.5 8 3 8v11c3.5 0 6.64 1.35 9 3.54 2.36-2.19 5.5-3.54 9-3.54V8c-3.5 0-6.64 1.35-9 3.54"/></svg>
+
+    </a>
+    HYDRA Suite Docs
+  </label>
+  
+    <div class="md-nav__source">
+      <a href="https://github.com/neurorishika/hydra-suite" title="Go to repository" class="md-source" data-md-component="source">
+  <div class="md-source__icon md-icon">
+    
+    <svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 448 512"><!--! Font Awesome Free 6.6.0 by @fontawesome - https://fontawesome.com License - https://fontawesome.com/license/free (Icons: CC BY 4.0, Fonts: SIL OFL 1.1, Code: MIT License) Copyright 2024 Fonticons, Inc.--><path d="M439.55 236.05 244 40.45a28.87 28.87 0 0 0-40.81 0l-40.66 40.63 51.52 51.52c27.06-9.14 52.68 16.77 43.39 43.68l49.66 49.66c34.23-11.8 61.18 31 35.47 56.69-26.49 26.49-70.21-2.87-56-37.34L240.22 199v121.85c25.3 12.54 22.26 41.85 9.08 55a34.34 34.34 0 0 1-48.55 0c-17.57-17.6-11.07-46.91 11.25-56v-123c-20.8-8.51-24.6-30.74-18.64-45L142.57 101 8.45 235.14a28.86 28.86 0 0 0 0 40.81l195.61 195.6a28.86 28.86 0 0 0 40.8 0l194.69-194.69a28.86 28.86 0 0 0 0-40.81"/></svg>
+  </div>
+  <div class="md-source__repository">
+    neurorishika/hydra-suite
+  </div>
+</a>
+    </div>
+  
+  <ul class="md-nav__list" data-md-scrollfix>
+    
+      
+      
+  
+  
+  
+  
+    <li class="md-nav__item">
+      <a href="../../../.." class="md-nav__link">
+        
+  
+  <span class="md-ellipsis">
+    Home
+  </span>
+  
+
+      </a>
+    </li>
+  
+
+    
+      
+      
+  
+  
+  
+  
+    
+    
+    
+      
+      
+        
+      
+    
+    
+    <li class="md-nav__item md-nav__item--nested">
+      
+        
+        
+          
+        
+        <input class="md-nav__toggle md-toggle md-toggle--indeterminate" type="checkbox" id="__nav_2" >
+        
+          
+          <label class="md-nav__link" for="__nav_2" id="__nav_2_label" tabindex="0">
+            
+  
+  <span class="md-ellipsis">
+    Getting Started
+  </span>
+  
+
+            <span class="md-nav__icon md-icon"></span>
+          </label>
+        
+        <nav class="md-nav" data-md-level="1" aria-labelledby="__nav_2_label" aria-expanded="false">
+          <label class="md-nav__title" for="__nav_2">
+            <span class="md-nav__icon md-icon"></span>
+            Getting Started
+          </label>
+          <ul class="md-nav__list" data-md-scrollfix>
+            
+              
+                
+  
+  
+  
+  
+    <li class="md-nav__item">
+      <a href="../../../../getting-started/installation/" class="md-nav__link">
+        
+  
+  <span class="md-ellipsis">
+    Installation
+  </span>
+  
+
+      </a>
+    </li>
+  
+
+              
+            
+              
+                
+  
+  
+  
+  
+    <li class="md-nav__item">
+      <a href="../../../../getting-started/environments/" class="md-nav__link">
+        
+  
+  <span class="md-ellipsis">
+    Environments and Makefile
+  </span>
+  
+
+      </a>
+    </li>
+  
+
+              
+            
+              
+                
+  
+  
+  
+  
+    <li class="md-nav__item">
+      <a href="../../../../getting-started/integrations/" class="md-nav__link">
+        
+  
+  <span class="md-ellipsis">
+    Integrations
+  </span>
+  
+
+      </a>
+    </li>
+  
+
+              
+            
+              
+                
+  
+  
+  
+  
+    <li class="md-nav__item">
+      <a href="../../../../getting-started/quickstart-hydra/" class="md-nav__link">
+        
+  
+  <span class="md-ellipsis">
+    Quickstart (TrackerKit)
+  </span>
+  
+
+      </a>
+    </li>
+  
+
+              
+            
+              
+                
+  
+  
+  
+  
+    <li class="md-nav__item">
+      <a href="../../../../getting-started/quickstart-posekit/" class="md-nav__link">
+        
+  
+  <span class="md-ellipsis">
+    Quickstart (PoseKit)
+  </span>
+  
+
+      </a>
+    </li>
+  
+
+              
+            
+              
+                
+  
+  
+  
+  
+    <li class="md-nav__item">
+      <a href="../../../../getting-started/platforms/" class="md-nav__link">
+        
+  
+  <span class="md-ellipsis">
+    Platform Notes
+  </span>
+  
+
+      </a>
+    </li>
+  
+
+              
+            
+          </ul>
+        </nav>
+      
+    </li>
+  
+
+    
+      
+      
+  
+  
+  
+  
+    
+    
+    
+      
+      
+        
+      
+    
+    
+    <li class="md-nav__item md-nav__item--nested">
+      
+        
+        
+          
+        
+        <input class="md-nav__toggle md-toggle md-toggle--indeterminate" type="checkbox" id="__nav_3" >
+        
+          
+          <label class="md-nav__link" for="__nav_3" id="__nav_3_label" tabindex="0">
+            
+  
+  <span class="md-ellipsis">
+    User Guide
+  </span>
+  
+
+            <span class="md-nav__icon md-icon"></span>
+          </label>
+        
+        <nav class="md-nav" data-md-level="1" aria-labelledby="__nav_3_label" aria-expanded="false">
+          <label class="md-nav__title" for="__nav_3">
+            <span class="md-nav__icon md-icon"></span>
+            User Guide
+          </label>
+          <ul class="md-nav__list" data-md-scrollfix>
+            
+              
+                
+  
+  
+  
+  
+    <li class="md-nav__item">
+      <a href="../../../../user-guide/overview/" class="md-nav__link">
+        
+  
+  <span class="md-ellipsis">
+    Overview
+  </span>
+  
+
+      </a>
+    </li>
+  
+
+              
+            
+              
+                
+  
+  
+  
+  
+    <li class="md-nav__item">
+      <a href="../../../../user-guide/workflow/" class="md-nav__link">
+        
+  
+  <span class="md-ellipsis">
+    End-to-End Workflow
+  </span>
+  
+
+      </a>
+    </li>
+  
+
+              
+            
+              
+                
+  
+  
+  
+  
+    <li class="md-nav__item">
+      <a href="../../../../user-guide/trackerkit-cli/" class="md-nav__link">
+        
+  
+  <span class="md-ellipsis">
+    TrackerKit Command Line
+  </span>
+  
+
+      </a>
+    </li>
+  
+
+              
+            
+              
+                
+  
+  
+  
+  
+    <li class="md-nav__item">
+      <a href="../../../../user-guide/trackerkit-jobs/" class="md-nav__link">
+        
+  
+  <span class="md-ellipsis">
+    Portable Tracking Jobs
+  </span>
+  
+
+      </a>
+    </li>
+  
+
+              
+            
+              
+                
+  
+  
+  
+  
+    <li class="md-nav__item">
+      <a href="../../../../user-guide/detection-modes/" class="md-nav__link">
+        
+  
+  <span class="md-ellipsis">
+    Detection Modes
+  </span>
+  
+
+      </a>
+    </li>
+  
+
+              
+            
+              
+                
+  
+  
+  
+  
+    <li class="md-nav__item">
+      <a href="../../../../user-guide/tracking-and-merging/" class="md-nav__link">
+        
+  
+  <span class="md-ellipsis">
+    Tracking and Merging
+  </span>
+  
+
+      </a>
+    </li>
+  
+
+              
+            
+              
+                
+  
+  
+  
+  
+    <li class="md-nav__item">
+      <a href="../../../../user-guide/post-processing/" class="md-nav__link">
+        
+  
+  <span class="md-ellipsis">
+    Post-processing
+  </span>
+  
+
+      </a>
+    </li>
+  
+
+              
+            
+              
+                
+  
+  
+  
+  
+    <li class="md-nav__item">
+      <a href="../../../../user-guide/configuration-reference/" class="md-nav__link">
+        
+  
+  <span class="md-ellipsis">
+    Configuration Reference
+  </span>
+  
+
+      </a>
+    </li>
+  
+
+              
+            
+              
+                
+  
+  
+  
+  
+    <li class="md-nav__item">
+      <a href="../../../../user-guide/compute-runtimes/" class="md-nav__link">
+        
+  
+  <span class="md-ellipsis">
+    Compute Runtimes
+  </span>
+  
+
+      </a>
+    </li>
+  
+
+              
+            
+              
+                
+  
+  
+  
+  
+    <li class="md-nav__item">
+      <a href="../../../../user-guide/outputs-and-csv-schema/" class="md-nav__link">
+        
+  
+  <span class="md-ellipsis">
+    Outputs and CSV Schema
+  </span>
+  
+
+      </a>
+    </li>
+  
+
+              
+            
+              
+                
+  
+  
+  
+  
+    <li class="md-nav__item">
+      <a href="../../../../user-guide/dataset-generation/" class="md-nav__link">
+        
+  
+  <span class="md-ellipsis">
+    Dataset Generation
+  </span>
+  
+
+      </a>
+    </li>
+  
+
+              
+            
+              
+                
+  
+  
+  
+  
+    <li class="md-nav__item">
+      <a href="../../../../user-guide/individual-analysis/" class="md-nav__link">
+        
+  
+  <span class="md-ellipsis">
+    Individual Analysis
+  </span>
+  
+
+      </a>
+    </li>
+  
+
+              
+            
+              
+                
+  
+  
+  
+  
+    <li class="md-nav__item">
+      <a href="../../../../user-guide/posekit/" class="md-nav__link">
+        
+  
+  <span class="md-ellipsis">
+    PoseKit
+  </span>
+  
+
+      </a>
+    </li>
+  
+
+              
+            
+              
+                
+  
+  
+  
+  
+    <li class="md-nav__item">
+      <a href="../../../../user-guide/classkit/" class="md-nav__link">
+        
+  
+  <span class="md-ellipsis">
+    ClassKit
+  </span>
+  
+
+      </a>
+    </li>
+  
+
+              
+            
+              
+                
+  
+  
+  
+  
+    <li class="md-nav__item">
+      <a href="../../../../user-guide/detectkit/" class="md-nav__link">
+        
+  
+  <span class="md-ellipsis">
+    DetectKit
+  </span>
+  
+
+      </a>
+    </li>
+  
+
+              
+            
+              
+                
+  
+  
+  
+  
+    <li class="md-nav__item">
+      <a href="../../../../runbooks/detectkit-headless-training/" class="md-nav__link">
+        
+  
+  <span class="md-ellipsis">
+    DetectKit Headless Training
+  </span>
+  
+
+      </a>
+    </li>
+  
+
+              
+            
+              
+                
+  
+  
+  
+  
+    <li class="md-nav__item">
+      <a href="../../../../user-guide/detectkit-semantic-escalation/" class="md-nav__link">
+        
+  
+  <span class="md-ellipsis">
+    DetectKit: Semantic Escalation (SAM3)
+  </span>
+  
+
+      </a>
+    </li>
+  
+
+              
+            
+              
+                
+  
+  
+  
+  
+    <li class="md-nav__item">
+      <a href="../../../../user-guide/detectkit-sahi-calibration/" class="md-nav__link">
+        
+  
+  <span class="md-ellipsis">
+    DetectKit: SAHI Calibration Profiles
+  </span>
+  
+
+      </a>
+    </li>
+  
+
+              
+            
+              
+                
+  
+  
+  
+  
+    <li class="md-nav__item">
+      <a href="../../../../user-guide/filterkit/" class="md-nav__link">
+        
+  
+  <span class="md-ellipsis">
+    FilterKit
+  </span>
+  
+
+      </a>
+    </li>
+  
+
+              
+            
+              
+                
+  
+  
+  
+  
+    <li class="md-nav__item">
+      <a href="../../../../user-guide/refinekit/" class="md-nav__link">
+        
+  
+  <span class="md-ellipsis">
+    RefineKit
+  </span>
+  
+
+      </a>
+    </li>
+  
+
+              
+            
+              
+                
+  
+  
+  
+  
+    <li class="md-nav__item">
+      <a href="../../../../user-guide/troubleshooting/" class="md-nav__link">
+        
+  
+  <span class="md-ellipsis">
+    Troubleshooting
+  </span>
+  
+
+      </a>
+    </li>
+  
+
+              
+            
+          </ul>
+        </nav>
+      
+    </li>
+  
+
+    
+      
+      
+  
+  
+  
+  
+    
+    
+    
+      
+      
+        
+      
+    
+    
+    <li class="md-nav__item md-nav__item--nested">
+      
+        
+        
+          
+        
+        <input class="md-nav__toggle md-toggle md-toggle--indeterminate" type="checkbox" id="__nav_4" >
+        
+          
+          <label class="md-nav__link" for="__nav_4" id="__nav_4_label" tabindex="0">
+            
+  
+  <span class="md-ellipsis">
+    Developer Guide
+  </span>
+  
+
+            <span class="md-nav__icon md-icon"></span>
+          </label>
+        
+        <nav class="md-nav" data-md-level="1" aria-labelledby="__nav_4_label" aria-expanded="false">
+          <label class="md-nav__title" for="__nav_4">
+            <span class="md-nav__icon md-icon"></span>
+            Developer Guide
+          </label>
+          <ul class="md-nav__list" data-md-scrollfix>
+            
+              
+                
+  
+  
+  
+  
+    <li class="md-nav__item">
+      <a href="../../../../developer-guide/architecture/" class="md-nav__link">
+        
+  
+  <span class="md-ellipsis">
+    Architecture
+  </span>
+  
+
+      </a>
+    </li>
+  
+
+              
+            
+              
+                
+  
+  
+  
+  
+    <li class="md-nav__item">
+      <a href="../../../../developer-guide/module-map/" class="md-nav__link">
+        
+  
+  <span class="md-ellipsis">
+    Module Map
+  </span>
+  
+
+      </a>
+    </li>
+  
+
+              
+            
+              
+                
+  
+  
+  
+  
+    <li class="md-nav__item">
+      <a href="../../../../developer-guide/data-flow/" class="md-nav__link">
+        
+  
+  <span class="md-ellipsis">
+    Data Flow
+  </span>
+  
+
+      </a>
+    </li>
+  
+
+              
+            
+              
+                
+  
+  
+  
+  
+    <li class="md-nav__item">
+      <a href="../../../../developer-guide/tracking-algorithm-deep-dive/" class="md-nav__link">
+        
+  
+  <span class="md-ellipsis">
+    Tracking Algorithm Deep Dive
+  </span>
+  
+
+      </a>
+    </li>
+  
+
+              
+            
+              
+                
+  
+  
+  
+  
+    <li class="md-nav__item">
+      <a href="../../../../developer-guide/tracking-optimization/" class="md-nav__link">
+        
+  
+  <span class="md-ellipsis">
+    Tracking Optimization
+  </span>
+  
+
+      </a>
+    </li>
+  
+
+              
+            
+              
+                
+  
+  
+  
+  
+    <li class="md-nav__item">
+      <a href="../../../../developer-guide/gpu-backends/" class="md-nav__link">
+        
+  
+  <span class="md-ellipsis">
+    GPU Backends
+  </span>
+  
+
+      </a>
+    </li>
+  
+
+              
+            
+              
+                
+  
+  
+  
+  
+    <li class="md-nav__item">
+      <a href="../../../../developer-guide/runtime-integration/" class="md-nav__link">
+        
+  
+  <span class="md-ellipsis">
+    Runtime Integration
+  </span>
+  
+
+      </a>
+    </li>
+  
+
+              
+            
+              
+                
+  
+  
+  
+  
+    <li class="md-nav__item">
+      <a href="../../../../developer-guide/resource-containment/" class="md-nav__link">
+        
+  
+  <span class="md-ellipsis">
+    Resource Containment
+  </span>
+  
+
+      </a>
+    </li>
+  
+
+              
+            
+              
+                
+  
+  
+  
+  
+    <li class="md-nav__item">
+      <a href="../../../../developer-guide/profiling/" class="md-nav__link">
+        
+  
+  <span class="md-ellipsis">
+    Profiling
+  </span>
+  
+
+      </a>
+    </li>
+  
+
+              
+            
+              
+                
+  
+  
+  
+  
+    <li class="md-nav__item">
+      <a href="../../../../developer-guide/dependency-cuda-updates/" class="md-nav__link">
+        
+  
+  <span class="md-ellipsis">
+    CUDA Dependency Updates
+  </span>
+  
+
+      </a>
+    </li>
+  
+
+              
+            
+              
+                
+  
+  
+  
+  
+    <li class="md-nav__item">
+      <a href="../../../../developer-guide/performance-tuning/" class="md-nav__link">
+        
+  
+  <span class="md-ellipsis">
+    Performance Tuning
+  </span>
+  
+
+      </a>
+    </li>
+  
+
+              
+            
+              
+                
+  
+  
+  
+  
+    <li class="md-nav__item">
+      <a href="../../../../developer-guide/inference-fast-mode/" class="md-nav__link">
+        
+  
+  <span class="md-ellipsis">
+    Inference Fast Mode
+  </span>
+  
+
+      </a>
+    </li>
+  
+
+              
+            
+              
+                
+  
+  
+  
+  
+    <li class="md-nav__item">
+      <a href="../../../../developer-guide/inference-autotuner/" class="md-nav__link">
+        
+  
+  <span class="md-ellipsis">
+    Inference Autotuner
+  </span>
+  
+
+      </a>
+    </li>
+  
+
+              
+            
+              
+                
+  
+  
+  
+  
+    <li class="md-nav__item">
+      <a href="../../../../developer-guide/confidence-metrics/" class="md-nav__link">
+        
+  
+  <span class="md-ellipsis">
+    Confidence Metrics
+  </span>
+  
+
+      </a>
+    </li>
+  
+
+              
+            
+              
+                
+  
+  
+  
+  
+    <li class="md-nav__item">
+      <a href="../../../../developer-guide/extending-detection/" class="md-nav__link">
+        
+  
+  <span class="md-ellipsis">
+    Extending Detection
+  </span>
+  
+
+      </a>
+    </li>
+  
+
+              
+            
+              
+                
+  
+  
+  
+  
+    <li class="md-nav__item">
+      <a href="../../../../developer-guide/extending-identity/" class="md-nav__link">
+        
+  
+  <span class="md-ellipsis">
+    Extending Identity
+  </span>
+  
+
+      </a>
+    </li>
+  
+
+              
+            
+              
+                
+  
+  
+  
+  
+    <li class="md-nav__item">
+      <a href="../../../../developer-guide/code-health/" class="md-nav__link">
+        
+  
+  <span class="md-ellipsis">
+    Code Health & Auditing
+  </span>
+  
+
+      </a>
+    </li>
+  
+
+              
+            
+              
+                
+  
+  
+  
+  
+    <li class="md-nav__item">
+      <a href="../../../../developer-guide/publishing/" class="md-nav__link">
+        
+  
+  <span class="md-ellipsis">
+    Publishing
+  </span>
+  
+
+      </a>
+    </li>
+  
+
+              
+            
+              
+                
+  
+  
+  
+  
+    <li class="md-nav__item">
+      <a href="../../../../developer-guide/contributing/" class="md-nav__link">
+        
+  
+  <span class="md-ellipsis">
+    Contributing
+  </span>
+  
+
+      </a>
+    </li>
+  
+
+              
+            
+          </ul>
+        </nav>
+      
+    </li>
+  
+
+    
+      
+      
+  
+  
+  
+  
+    
+    
+    
+      
+      
+        
+      
+    
+    
+    <li class="md-nav__item md-nav__item--nested">
+      
+        
+        
+          
+        
+        <input class="md-nav__toggle md-toggle md-toggle--indeterminate" type="checkbox" id="__nav_5" >
+        
+          
+          <label class="md-nav__link" for="__nav_5" id="__nav_5_label" tabindex="0">
+            
+  
+  <span class="md-ellipsis">
+    Reference
+  </span>
+  
+
+            <span class="md-nav__icon md-icon"></span>
+          </label>
+        
+        <nav class="md-nav" data-md-level="1" aria-labelledby="__nav_5_label" aria-expanded="false">
+          <label class="md-nav__title" for="__nav_5">
+            <span class="md-nav__icon md-icon"></span>
+            Reference
+          </label>
+          <ul class="md-nav__list" data-md-scrollfix>
+            
+              
+                
+  
+  
+  
+  
+    <li class="md-nav__item">
+      <a href="../../../../reference/api-index/" class="md-nav__link">
+        
+  
+  <span class="md-ellipsis">
+    API Index
+  </span>
+  
+
+      </a>
+    </li>
+  
+
+              
+            
+              
+                
+  
+  
+  
+  
+    <li class="md-nav__item">
+      <a href="../../../../reference/ui-components-hydra/" class="md-nav__link">
+        
+  
+  <span class="md-ellipsis">
+    UI Components (TrackerKit)
+  </span>
+  
+
+      </a>
+    </li>
+  
+
+              
+            
+              
+                
+  
+  
+  
+  
+    <li class="md-nav__item">
+      <a href="../../../../reference/ui-components-posekit/" class="md-nav__link">
+        
+  
+  <span class="md-ellipsis">
+    UI Components (PoseKit)
+  </span>
+  
+
+      </a>
+    </li>
+  
+
+              
+            
+              
+                
+  
+  
+  
+  
+    <li class="md-nav__item">
+      <a href="../../../../reference/api-app/" class="md-nav__link">
+        
+  
+  <span class="md-ellipsis">
+    API (Launcher)
+  </span>
+  
+
+      </a>
+    </li>
+  
+
+              
+            
+              
+                
+  
+  
+  
+  
+    <li class="md-nav__item">
+      <a href="../../../../reference/api-core/" class="md-nav__link">
+        
+  
+  <span class="md-ellipsis">
+    API (Core)
+  </span>
+  
+
+      </a>
+    </li>
+  
+
+              
+            
+              
+                
+  
+  
+  
+  
+    <li class="md-nav__item">
+      <a href="../../../../reference/api-data/" class="md-nav__link">
+        
+  
+  <span class="md-ellipsis">
+    API (Data)
+  </span>
+  
+
+      </a>
+    </li>
+  
+
+              
+            
+              
+                
+  
+  
+  
+  
+    <li class="md-nav__item">
+      <a href="../../../../reference/api-gui/" class="md-nav__link">
+        
+  
+  <span class="md-ellipsis">
+    API (TrackerKit GUI)
+  </span>
+  
+
+      </a>
+    </li>
+  
+
+              
+            
+              
+                
+  
+  
+  
+  
+    <li class="md-nav__item">
+      <a href="../../../../reference/api-widgets/" class="md-nav__link">
+        
+  
+  <span class="md-ellipsis">
+    API (Widgets)
+  </span>
+  
+
+      </a>
+    </li>
+  
+
+              
+            
+              
+                
+  
+  
+  
+  
+    <li class="md-nav__item">
+      <a href="../../../../reference/api-posekit/" class="md-nav__link">
+        
+  
+  <span class="md-ellipsis">
+    API (PoseKit)
+  </span>
+  
+
+      </a>
+    </li>
+  
+
+              
+            
+              
+                
+  
+  
+  
+  
+    <li class="md-nav__item">
+      <a href="../../../../reference/api-utils/" class="md-nav__link">
+        
+  
+  <span class="md-ellipsis">
+    API (Utils)
+  </span>
+  
+
+      </a>
+    </li>
+  
+
+              
+            
+              
+                
+  
+  
+  
+  
+    <li class="md-nav__item">
+      <a href="../../../../reference/cli-reference/" class="md-nav__link">
+        
+  
+  <span class="md-ellipsis">
+    CLI Reference
+  </span>
+  
+
+      </a>
+    </li>
+  
+
+              
+            
+              
+                
+  
+  
+  
+  
+    <li class="md-nav__item">
+      <a href="../../../../reference/technical-reference/" class="md-nav__link">
+        
+  
+  <span class="md-ellipsis">
+    Technical Reference (LaTeX)
+  </span>
+  
+
+      </a>
+    </li>
+  
+
+              
+            
+              
+                
+  
+  
+  
+  
+    <li class="md-nav__item">
+      <a href="../../../../reference/changelog/" class="md-nav__link">
+        
+  
+  <span class="md-ellipsis">
+    Changelog
+  </span>
+  
+
+      </a>
+    </li>
+  
+
+              
+            
+              
+                
+  
+  
+  
+  
+    <li class="md-nav__item">
+      <a href="../../../../reference/faq/" class="md-nav__link">
+        
+  
+  <span class="md-ellipsis">
+    FAQ
+  </span>
+  
+
+      </a>
+    </li>
+  
+
+              
+            
+          </ul>
+        </nav>
+      
+    </li>
+  
+
+    
+  </ul>
+</nav>
+                  </div>
+                </div>
+              </div>
+            
+            
+              
+              <div class="md-sidebar md-sidebar--secondary" data-md-component="sidebar" data-md-type="toc" >
+                <div class="md-sidebar__scrollwrap">
+                  <div class="md-sidebar__inner">
+                    
+
+<nav class="md-nav md-nav--secondary" aria-label="Table of contents">
+  
+  
+  
+    
+  
+  
+    <label class="md-nav__title" for="__toc">
+      <span class="md-nav__icon md-icon"></span>
+      Table of contents
+    </label>
+    <ul class="md-nav__list" data-md-component="toc" data-md-scrollfix>
+      
+        <li class="md-nav__item">
+  <a href="#amended-2026-09-09-path-independent-cache-keys-scoped-in-user-decision" class="md-nav__link">
+    <span class="md-ellipsis">
+      AMENDED 2026-09-09 — path-independent cache keys scoped IN (user decision)
+    </span>
+  </a>
+  
+</li>
+      
+        <li class="md-nav__item">
+  <a href="#1-problem" class="md-nav__link">
+    <span class="md-ellipsis">
+      1. Problem
+    </span>
+  </a>
+  
+</li>
+      
+        <li class="md-nav__item">
+  <a href="#2-goals-and-non-goals" class="md-nav__link">
+    <span class="md-ellipsis">
+      2. Goals and non-goals
+    </span>
+  </a>
+  
+</li>
+      
+        <li class="md-nav__item">
+  <a href="#3-why-approach-a-job-supplies-models-config-host-keeps-data-dir" class="md-nav__link">
+    <span class="md-ellipsis">
+      3. Why approach A (job supplies models + config, host keeps data dir)
+    </span>
+  </a>
+  
+</li>
+      
+        <li class="md-nav__item">
+  <a href="#4-job-directory-layout" class="md-nav__link">
+    <span class="md-ellipsis">
+      4. Job directory layout
+    </span>
+  </a>
+  
+</li>
+      
+        <li class="md-nav__item">
+  <a href="#5-manifest-hydra_jobjson" class="md-nav__link">
+    <span class="md-ellipsis">
+      5. Manifest: hydra_job.json
+    </span>
+  </a>
+  
+</li>
+      
+        <li class="md-nav__item">
+  <a href="#6-pack-building-the-job" class="md-nav__link">
+    <span class="md-ellipsis">
+      6. Pack: building the job
+    </span>
+  </a>
+  
+    <nav class="md-nav" aria-label="6. Pack: building the job">
+      <ul class="md-nav__list">
+        
+          <li class="md-nav__item">
+  <a href="#61-inputs" class="md-nav__link">
+    <span class="md-ellipsis">
+      6.1 Inputs
+    </span>
+  </a>
+  
+</li>
+        
+          <li class="md-nav__item">
+  <a href="#62-steps" class="md-nav__link">
+    <span class="md-ellipsis">
+      6.2 Steps
+    </span>
+  </a>
+  
+</li>
+        
+          <li class="md-nav__item">
+  <a href="#63-iter_model_referencesparams-the-derivation-rule" class="md-nav__link">
+    <span class="md-ellipsis">
+      6.3 iter_model_references(params): the derivation rule
+    </span>
+  </a>
+  
+</li>
+        
+          <li class="md-nav__item">
+  <a href="#64-config-rewrites-performed-by-pack" class="md-nav__link">
+    <span class="md-ellipsis">
+      6.4 Config rewrites performed by pack
+    </span>
+  </a>
+  
+</li>
+        
+          <li class="md-nav__item">
+  <a href="#65-save-side-leak-fixes-source-fixes-not-packer-workarounds" class="md-nav__link">
+    <span class="md-ellipsis">
+      6.5 Save-side leak fixes (source fixes, not packer workarounds)
+    </span>
+  </a>
+  
+</li>
+        
+          <li class="md-nav__item">
+  <a href="#66-headless-output-dir-gap" class="md-nav__link">
+    <span class="md-ellipsis">
+      6.6 Headless output-dir gap
+    </span>
+  </a>
+  
+</li>
+        
+          <li class="md-nav__item">
+  <a href="#67-shared-root-video-references-no-copy-when-a-share-is-mounted-on-both-sides" class="md-nav__link">
+    <span class="md-ellipsis">
+      6.7 Shared-root video references (no copy when a share is mounted on both sides)
+    </span>
+  </a>
+  
+</li>
+        
+      </ul>
+    </nav>
+  
+</li>
+      
+        <li class="md-nav__item">
+  <a href="#7-pathspy-change-hydra_models_dir" class="md-nav__link">
+    <span class="md-ellipsis">
+      7. paths.py change: HYDRA_MODELS_DIR
+    </span>
+  </a>
+  
+</li>
+      
+        <li class="md-nav__item">
+  <a href="#7b-path-independent-cache-keys" class="md-nav__link">
+    <span class="md-ellipsis">
+      7b. Path-independent cache keys
+    </span>
+  </a>
+  
+    <nav class="md-nav" aria-label="7b. Path-independent cache keys">
+      <ul class="md-nav__list">
+        
+          <li class="md-nav__item">
+  <a href="#7b1-what-is-wrong-today-verified" class="md-nav__link">
+    <span class="md-ellipsis">
+      7b.1 What is wrong today (verified)
+    </span>
+  </a>
+  
+</li>
+        
+          <li class="md-nav__item">
+  <a href="#7b2-new-definition" class="md-nav__link">
+    <span class="md-ellipsis">
+      7b.2 New definition
+    </span>
+  </a>
+  
+</li>
+        
+          <li class="md-nav__item">
+  <a href="#7b3-cost-control" class="md-nav__link">
+    <span class="md-ellipsis">
+      7b.3 Cost control
+    </span>
+  </a>
+  
+</li>
+        
+          <li class="md-nav__item">
+  <a href="#7b4-schema-bump-and-migration" class="md-nav__link">
+    <span class="md-ellipsis">
+      7b.4 Schema bump and migration
+    </span>
+  </a>
+  
+</li>
+        
+          <li class="md-nav__item">
+  <a href="#7b5-what-does-not-change" class="md-nav__link">
+    <span class="md-ellipsis">
+      7b.5 What does not change
+    </span>
+  </a>
+  
+</li>
+        
+          <li class="md-nav__item">
+  <a href="#7b6-tests-specific-to-this-change" class="md-nav__link">
+    <span class="md-ellipsis">
+      7b.6 Tests specific to this change
+    </span>
+  </a>
+  
+</li>
+        
+      </ul>
+    </nav>
+  
+</li>
+      
+        <li class="md-nav__item">
+  <a href="#8-push-and-pull-transport" class="md-nav__link">
+    <span class="md-ellipsis">
+      8. Push and pull: transport
+    </span>
+  </a>
+  
+    <nav class="md-nav" aria-label="8. Push and pull: transport">
+      <ul class="md-nav__list">
+        
+          <li class="md-nav__item">
+  <a href="#81-trackerkit-job-push-job_dir-remote" class="md-nav__link">
+    <span class="md-ellipsis">
+      8.1 trackerkit job push &lt;job_dir&gt; &lt;remote&gt;
+    </span>
+  </a>
+  
+</li>
+        
+          <li class="md-nav__item">
+  <a href="#82-trackerkit-job-pull-remote-job_dir-dry-run-no-caches" class="md-nav__link">
+    <span class="md-ellipsis">
+      8.2 trackerkit job pull &lt;remote&gt; &lt;job_dir&gt; [--dry-run] [--no-caches]
+    </span>
+  </a>
+  
+</li>
+        
+          <li class="md-nav__item">
+  <a href="#83-why-both-directions-keep-a-job-tree-copy" class="md-nav__link">
+    <span class="md-ellipsis">
+      8.3 Why both directions keep a job-tree copy
+    </span>
+  </a>
+  
+</li>
+        
+      </ul>
+    </nav>
+  
+</li>
+      
+        <li class="md-nav__item">
+  <a href="#9-run-executing-on-the-compute-box" class="md-nav__link">
+    <span class="md-ellipsis">
+      9. Run: executing on the compute box
+    </span>
+  </a>
+  
+    <nav class="md-nav" aria-label="9. Run: executing on the compute box">
+      <ul class="md-nav__list">
+        
+          <li class="md-nav__item">
+  <a href="#91-runsh-generated-by-pack-executable" class="md-nav__link">
+    <span class="md-ellipsis">
+      9.1 run.sh (generated by pack, executable)
+    </span>
+  </a>
+  
+</li>
+        
+          <li class="md-nav__item">
+  <a href="#92-trackerkit-job-run-job_dir_or_remote-gpus-jobs-threads-per-job-detach" class="md-nav__link">
+    <span class="md-ellipsis">
+      9.2 trackerkit job run &lt;job_dir_or_remote&gt; [--gpus …] [--jobs …] [--threads-per-job …] [--detach]
+    </span>
+  </a>
+  
+</li>
+        
+          <li class="md-nav__item">
+  <a href="#93-trackerkit-job-calibrate-job_dirremote-budget-seconds-n" class="md-nav__link">
+    <span class="md-ellipsis">
+      9.3 trackerkit job calibrate &lt;job_dir|remote&gt; [--budget-seconds N]
+    </span>
+  </a>
+  
+</li>
+        
+          <li class="md-nav__item">
+  <a href="#94-preflight-job-preflight-job_dir-also-run-automatically-by-run" class="md-nav__link">
+    <span class="md-ellipsis">
+      9.4 Preflight (job preflight &lt;job_dir&gt;, also run automatically by run)
+    </span>
+  </a>
+  
+</li>
+        
+      </ul>
+    </nav>
+  
+</li>
+      
+        <li class="md-nav__item">
+  <a href="#10-output-discovery-contract" class="md-nav__link">
+    <span class="md-ellipsis">
+      10. Output discovery contract
+    </span>
+  </a>
+  
+</li>
+      
+        <li class="md-nav__item">
+  <a href="#11-verify-job-verify-job_dir" class="md-nav__link">
+    <span class="md-ellipsis">
+      11. Verify: job verify &lt;job_dir&gt;
+    </span>
+  </a>
+  
+</li>
+      
+        <li class="md-nav__item">
+  <a href="#12-module-layout-and-dependency-direction" class="md-nav__link">
+    <span class="md-ellipsis">
+      12. Module layout and dependency direction
+    </span>
+  </a>
+  
+</li>
+      
+        <li class="md-nav__item">
+  <a href="#13-cli-surface-final" class="md-nav__link">
+    <span class="md-ellipsis">
+      13. CLI surface (final)
+    </span>
+  </a>
+  
+</li>
+      
+        <li class="md-nav__item">
+  <a href="#14-error-handling" class="md-nav__link">
+    <span class="md-ellipsis">
+      14. Error handling
+    </span>
+  </a>
+  
+</li>
+      
+        <li class="md-nav__item">
+  <a href="#15-testing" class="md-nav__link">
+    <span class="md-ellipsis">
+      15. Testing
+    </span>
+  </a>
+  
+</li>
+      
+        <li class="md-nav__item">
+  <a href="#16-documentation" class="md-nav__link">
+    <span class="md-ellipsis">
+      16. Documentation
+    </span>
+  </a>
+  
+</li>
+      
+        <li class="md-nav__item">
+  <a href="#17-follow-ups-explicitly-out-of-scope" class="md-nav__link">
+    <span class="md-ellipsis">
+      17. Follow-ups (explicitly out of scope)
+    </span>
+  </a>
+  
+</li>
+      
+    </ul>
+  
+</nav>
+                  </div>
+                </div>
+              </div>
+            
+          
+          
+            <div class="md-content" data-md-component="content">
+              <article class="md-content__inner md-typeset">
+                
+                  
+
+  
+    <a href="https://github.com/neurorishika/hydra-suite/edit/main/docs/superpowers/specs/done/2026-09-09-portable-tracking-jobs-design.md" title="Edit this page" class="md-content__button md-icon">
+      
+      <svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 24 24"><path d="M10 20H6V4h7v5h5v3.1l2-2V8l-6-6H6c-1.1 0-2 .9-2 2v16c0 1.1.9 2 2 2h4zm10.2-7c.1 0 .3.1.4.2l1.3 1.3c.2.2.2.6 0 .8l-1 1-2.1-2.1 1-1c.1-.1.2-.2.4-.2m0 3.9L14.1 23H12v-2.1l6.1-6.1z"/></svg>
+    </a>
+  
+  
+
+
+<h1 id="portable-tracking-jobs-stage-anywhere-run-anywhere-sync-back">Portable tracking jobs: stage anywhere, run anywhere, sync back<a class="headerlink" href="#portable-tracking-jobs-stage-anywhere-run-anywhere-sync-back" title="Permanent link">&para;</a></h1>
+<p><strong>Status:</strong> Shipped — merged to <code>main</code>. Implemented via <code>docs/superpowers/plans/done/2026-09-09-portable-tracking-jobs.md</code>. Verified: MPS equivalence 42 EQUIVALENT/0 divergent, CUDA (firebrat) 54/0, full Mac→firebrat→Mac round trip with zero registration, and Goal 4 proven (a cache computed on firebrat stores byte-identically the key a local Mac run computes). Seven spec defects were found during planning and corrected in the plan — see its "Spec corrections established before planning" section; most consequentially §7b was under-scoped (<code>_model_signature</code> folded a raw path+mtime into <code>config_hash</code>, so OBB caches would have stayed machine-local even after the documented fix).</p>
+<blockquote>
+<h2 id="amended-2026-09-09-path-independent-cache-keys-scoped-in-user-decision">AMENDED 2026-09-09 — path-independent cache keys scoped IN (user decision)<a class="headerlink" href="#amended-2026-09-09-path-independent-cache-keys-scoped-in-user-decision" title="Permanent link">&para;</a></h2>
+<p>The first draft left pulled <code>.inference_cache_&lt;stem&gt;/</code> as a record only because the cache key embeds the absolute model path. The user wants remote caches to be usable locally without regeneration, so §7b makes model identity and video identity content-based and bumps the cache schema. Goal 4 and §17 updated accordingly. Headless dataset/media export stays a follow-up (§17 item 1). Same day: §6.7 adds shared-root video references so videos on a lab share are never copied (user request).
+<strong>Repo:</strong> <code>/Users/neurorishika/Projects/Rockefeller/Kronauer/multi-animal-tracker</code> @ <code>main</code> (<code>8678c5b6</code>).</p>
+</blockquote>
+<h2 id="1-problem">1. Problem<a class="headerlink" href="#1-problem" title="Permanent link">&para;</a></h2>
+<p>A tracking experiment is staged on one machine (usually a laptop, in the TrackerKit GUI) and run on another (a CUDA box). Today that requires re-registering every referenced model on the compute box by hand, copying videos and configs by hand, and copying outputs back by hand. Each step is a place where the run silently diverges from what was staged (wrong model, missing SAHI sidecar, stale config).</p>
+<p>The lab wants a durable mechanism, not a one-off script: a <strong>job</strong> is packaged once on the staging machine with everything needed to run it, pushed to a compute box that has never seen those models, run there without any registration step, and its outputs (including caches) pulled back beside the original videos.</p>
+<p>Machines share nothing except <code>ssh</code>/<code>rsync</code> in the general case. When a lab share is mounted on both sides, videos must not be copied (§6.7).</p>
+<h2 id="2-goals-and-non-goals">2. Goals and non-goals<a class="headerlink" href="#2-goals-and-non-goals" title="Permanent link">&para;</a></h2>
+<p><strong>Goals</strong></p>
+<ol>
+<li><code>trackerkit job pack</code> turns a tracking config (single video or <code>--video-list</code> batch) into a self-contained job directory: manifest, referenced models with sidecars and registry entries, config snapshot, videos, and a generated runner.</li>
+<li><code>trackerkit job push</code> / <code>pull</code> move the job to and from a remote over <code>rsync</code> over <code>ssh</code>, incrementally.</li>
+<li><code>trackerkit job run</code> executes the job on the compute box with <strong>zero registration</strong>: the job directory supplies the models root and the config root; the host keeps its own data dir.</li>
+<li><code>pull</code> places every artifact the run produced back beside the original video, including <code>.inference_cache_&lt;stem&gt;/</code>, <strong>and those caches are reusable locally</strong>: a backward pass, a rerun, a parameter-optimizer session or a replay session on the staging machine hits the cache produced on the compute box. This requires the cache key to identify models and videos by content rather than by absolute path and mtime (§7b).</li>
+<li>The set of files a job needs is <strong>derived from the engine parameter builder</strong>, so new model roles cannot be forgotten silently.</li>
+<li>Configs become portable by construction: the two save-side leaks (<code>color_tag_model_path</code>, <code>cnn_classifiers[].model_path</code>) are fixed at the source.</li>
+<li>Videos that live on a share mounted on both machines are referenced, not copied (§6.7).</li>
+</ol>
+<p><strong>Non-goals</strong></p>
+<ul>
+<li>Byte-identical results across CUDA and MPS. The guarantee is "same models, same config, runs to completion". Cross-device equivalence remains the job of <code>tools/equivalence/</code>.</li>
+<li>Shipping TensorRT/ONNX/CoreML engines. These are host-specific, content-addressed under <code>&lt;data&gt;/runtime-artifacts</code>, and are rebuilt on the compute box.</li>
+<li>Shipping calibration profiles (<code>&lt;data&gt;/inference_tuning_profiles</code>). They are host-fingerprinted and would never match; they are re-derived per compute box with <code>job calibrate</code> (§9.3).</li>
+<li>Installing conda environments (e.g. the <code>sleap</code> env). The job records what it needs and preflight fails loudly.</li>
+<li>A GUI for the job lifecycle. The Data-layer core is Qt-free so a GUI button can be added later; this spec ships the CLI only.</li>
+<li>Job scheduling, queues, or multi-remote fan-out beyond what <code>trackerkit track --gpus</code> already does on one host.</li>
+</ul>
+<h2 id="3-why-approach-a-job-supplies-models-config-host-keeps-data-dir">3. Why approach A (job supplies models + config, host keeps data dir)<a class="headerlink" href="#3-why-approach-a-job-supplies-models-config-host-keeps-data-dir" title="Permanent link">&para;</a></h2>
+<table>
+<thead>
+<tr>
+<th>Approach</th>
+<th>Registration step?</th>
+<th>Engines rebuilt per job?</th>
+<th>Pull drags host state home?</th>
+<th><code>paths.py</code> change</th>
+</tr>
+</thead>
+<tbody>
+<tr>
+<td><strong>A. <code>HYDRA_MODELS_DIR=&lt;job&gt;/models</code>, <code>HYDRA_CONFIG_DIR=&lt;job&gt;/config</code>, <code>HYDRA_DATA_DIR</code> untouched</strong></td>
+<td>No</td>
+<td>No (cache keyed by model sha256 + toolchain, host-wide)</td>
+<td>No</td>
+<td>one new env var</td>
+</tr>
+<tr>
+<td>B. <code>HYDRA_DATA_DIR=&lt;job&gt;</code></td>
+<td>No</td>
+<td>Yes, every job</td>
+<td>Yes unless excluded</td>
+<td>none</td>
+</tr>
+<tr>
+<td>C. Import into remote registry</td>
+<td>Yes (the thing being removed)</td>
+<td>No</td>
+<td>No</td>
+<td>none</td>
+</tr>
+</tbody>
+</table>
+<p>A is chosen. The one required change is that <code>get_models_dir()</code> gains an independent override so the models root can be relocated without relocating the whole data dir.</p>
+<h2 id="4-job-directory-layout">4. Job directory layout<a class="headerlink" href="#4-job-directory-layout" title="Permanent link">&para;</a></h2>
+<div class="language-text highlight"><pre><span></span><code><span id="__span-0-1"><a id="__codelineno-0-1" name="__codelineno-0-1" href="#__codelineno-0-1"></a>&lt;job&gt;/
+</span><span id="__span-0-2"><a id="__codelineno-0-2" name="__codelineno-0-2" href="#__codelineno-0-2"></a>  hydra_job.json                 # manifest (§5)
+</span><span id="__span-0-3"><a id="__codelineno-0-3" name="__codelineno-0-3" href="#__codelineno-0-3"></a>  run.sh                         # generated runner (§9), executable
+</span><span id="__span-0-4"><a id="__codelineno-0-4" name="__codelineno-0-4" href="#__codelineno-0-4"></a>  config/                        # becomes HYDRA_CONFIG_DIR on the remote
+</span><span id="__span-0-5"><a id="__codelineno-0-5" name="__codelineno-0-5" href="#__codelineno-0-5"></a>    advanced_config.json         # snapshot of the staging machine's advanced config
+</span><span id="__span-0-6"><a id="__codelineno-0-6" name="__codelineno-0-6" href="#__codelineno-0-6"></a>    skeletons/                   # only the skeleton file(s) the job references
+</span><span id="__span-0-7"><a id="__codelineno-0-7" name="__codelineno-0-7" href="#__codelineno-0-7"></a>    presets/.seeded              # marker so get_presets_dir() does not reseed bundled presets
+</span><span id="__span-0-8"><a id="__codelineno-0-8" name="__codelineno-0-8" href="#__codelineno-0-8"></a>    skeletons/.seeded
+</span><span id="__span-0-9"><a id="__codelineno-0-9" name="__codelineno-0-9" href="#__codelineno-0-9"></a>  models/                        # becomes HYDRA_MODELS_DIR on the remote
+</span><span id="__span-0-10"><a id="__codelineno-0-10" name="__codelineno-0-10" href="#__codelineno-0-10"></a>    model_registry.json          # v2 registry containing ONLY the shipped entries
+</span><span id="__span-0-11"><a id="__codelineno-0-11" name="__codelineno-0-11" href="#__codelineno-0-11"></a>    obb/&lt;file&gt;.pt                # each referenced model at its models-root-relative key
+</span><span id="__span-0-12"><a id="__codelineno-0-12" name="__codelineno-0-12" href="#__codelineno-0-12"></a>    obb/&lt;file&gt;.pt.slice_meta.json
+</span><span id="__span-0-13"><a id="__codelineno-0-13" name="__codelineno-0-13" href="#__codelineno-0-13"></a>    obb/&lt;file&gt;.pt.canonical_meta.json
+</span><span id="__span-0-14"><a id="__codelineno-0-14" name="__codelineno-0-14" href="#__codelineno-0-14"></a>    pose/SLEAP/&lt;dir&gt;/...         # pose models are directories, copied whole
+</span><span id="__span-0-15"><a id="__codelineno-0-15" name="__codelineno-0-15" href="#__codelineno-0-15"></a>    classification/identity/...  # ClassKit bundles: manifest + every listed artifact
+</span><span id="__span-0-16"><a id="__codelineno-0-16" name="__codelineno-0-16" href="#__codelineno-0-16"></a>  videos/
+</span><span id="__span-0-17"><a id="__codelineno-0-17" name="__codelineno-0-17" href="#__codelineno-0-17"></a>    &lt;stem&gt;.mp4                   # symlink on the staging machine, real file after push
+</span><span id="__span-0-18"><a id="__codelineno-0-18" name="__codelineno-0-18" href="#__codelineno-0-18"></a>    &lt;stem&gt;_config.json           # per-video sidecar, job-relative (§6)
+</span><span id="__span-0-19"><a id="__codelineno-0-19" name="__codelineno-0-19" href="#__codelineno-0-19"></a>    ... run outputs land here on the remote ...
+</span><span id="__span-0-20"><a id="__codelineno-0-20" name="__codelineno-0-20" href="#__codelineno-0-20"></a>  videos.txt                     # --video-list input, one job-relative path per line
+</span><span id="__span-0-21"><a id="__codelineno-0-21" name="__codelineno-0-21" href="#__codelineno-0-21"></a>  logs/
+</span><span id="__span-0-22"><a id="__codelineno-0-22" name="__codelineno-0-22" href="#__codelineno-0-22"></a>    run.log                      # stdout+stderr of `job run`
+</span><span id="__span-0-23"><a id="__codelineno-0-23" name="__codelineno-0-23" href="#__codelineno-0-23"></a>    preflight.json               # result of the last preflight
+</span></code></pre></div>
+<p>Every path inside the job is relative to the job root. The job is valid at any absolute location on any machine.</p>
+<h2 id="5-manifest-hydra_jobjson">5. Manifest: <code>hydra_job.json</code><a class="headerlink" href="#5-manifest-hydra_jobjson" title="Permanent link">&para;</a></h2>
+<p>Follows the <code>project_bundle.py</code> conventions (<code>bundle_version</code> integer, <code>to_dict</code>/<code>from_dict</code> dataclass, <code>ValueError</code> on version mismatch, path-traversal validation).</p>
+<div class="language-json highlight"><pre><span></span><code><span id="__span-1-1"><a id="__codelineno-1-1" name="__codelineno-1-1" href="#__codelineno-1-1"></a><span class="p">{</span>
+</span><span id="__span-1-2"><a id="__codelineno-1-2" name="__codelineno-1-2" href="#__codelineno-1-2"></a><span class="w">  </span><span class="nt">"job_version"</span><span class="p">:</span><span class="w"> </span><span class="mi">1</span><span class="p">,</span>
+</span><span id="__span-1-3"><a id="__codelineno-1-3" name="__codelineno-1-3" href="#__codelineno-1-3"></a><span class="w">  </span><span class="nt">"job_id"</span><span class="p">:</span><span class="w"> </span><span class="s2">"2026-09-09T14-03-12_ant_colony_A"</span><span class="p">,</span>
+</span><span id="__span-1-4"><a id="__codelineno-1-4" name="__codelineno-1-4" href="#__codelineno-1-4"></a><span class="w">  </span><span class="nt">"created_at"</span><span class="p">:</span><span class="w"> </span><span class="s2">"2026-09-09T14:03:12Z"</span><span class="p">,</span>
+</span><span id="__span-1-5"><a id="__codelineno-1-5" name="__codelineno-1-5" href="#__codelineno-1-5"></a><span class="w">  </span><span class="nt">"created_on"</span><span class="p">:</span><span class="w"> </span><span class="p">{</span><span class="nt">"hostname"</span><span class="p">:</span><span class="w"> </span><span class="s2">"rishika-mbp"</span><span class="p">,</span><span class="w"> </span><span class="nt">"platform"</span><span class="p">:</span><span class="w"> </span><span class="s2">"darwin"</span><span class="p">,</span><span class="w"> </span><span class="nt">"hydra_suite_version"</span><span class="p">:</span><span class="w"> </span><span class="s2">"x.y.z"</span><span class="p">,</span><span class="w"> </span><span class="nt">"git_sha"</span><span class="p">:</span><span class="w"> </span><span class="s2">"8678c5b6"</span><span class="p">},</span>
+</span><span id="__span-1-6"><a id="__codelineno-1-6" name="__codelineno-1-6" href="#__codelineno-1-6"></a><span class="w">  </span><span class="nt">"keystone"</span><span class="p">:</span><span class="w"> </span><span class="p">{</span><span class="nt">"video"</span><span class="p">:</span><span class="w"> </span><span class="s2">"videos/colony_A_cam1.mp4"</span><span class="p">,</span><span class="w"> </span><span class="nt">"config"</span><span class="p">:</span><span class="w"> </span><span class="s2">"videos/colony_A_cam1_config.json"</span><span class="p">},</span>
+</span><span id="__span-1-7"><a id="__codelineno-1-7" name="__codelineno-1-7" href="#__codelineno-1-7"></a><span class="w">  </span><span class="nt">"videos"</span><span class="p">:</span><span class="w"> </span><span class="p">[</span>
+</span><span id="__span-1-8"><a id="__codelineno-1-8" name="__codelineno-1-8" href="#__codelineno-1-8"></a><span class="w">    </span><span class="p">{</span>
+</span><span id="__span-1-9"><a id="__codelineno-1-9" name="__codelineno-1-9" href="#__codelineno-1-9"></a><span class="w">      </span><span class="nt">"job_path"</span><span class="p">:</span><span class="w"> </span><span class="s2">"videos/colony_A_cam1.mp4"</span><span class="p">,</span>
+</span><span id="__span-1-10"><a id="__codelineno-1-10" name="__codelineno-1-10" href="#__codelineno-1-10"></a><span class="w">      </span><span class="nt">"origin_path"</span><span class="p">:</span><span class="w"> </span><span class="s2">"/Volumes/lab/2026-09/colony_A_cam1.mp4"</span><span class="p">,</span>
+</span><span id="__span-1-11"><a id="__codelineno-1-11" name="__codelineno-1-11" href="#__codelineno-1-11"></a><span class="w">      </span><span class="nt">"size_bytes"</span><span class="p">:</span><span class="w"> </span><span class="mi">8123456789</span><span class="p">,</span>
+</span><span id="__span-1-12"><a id="__codelineno-1-12" name="__codelineno-1-12" href="#__codelineno-1-12"></a><span class="w">      </span><span class="nt">"config_job_path"</span><span class="p">:</span><span class="w"> </span><span class="s2">"videos/colony_A_cam1_config.json"</span><span class="p">,</span>
+</span><span id="__span-1-13"><a id="__codelineno-1-13" name="__codelineno-1-13" href="#__codelineno-1-13"></a><span class="w">      </span><span class="nt">"config_provenance"</span><span class="p">:</span><span class="w"> </span><span class="s2">"own-sidecar"</span><span class="p">,</span>
+</span><span id="__span-1-14"><a id="__codelineno-1-14" name="__codelineno-1-14" href="#__codelineno-1-14"></a><span class="w">      </span><span class="nt">"pushed_siblings"</span><span class="p">:</span><span class="w"> </span><span class="p">[</span><span class="s2">"videos/colony_A_cam1_config.json"</span><span class="p">],</span>
+</span><span id="__span-1-15"><a id="__codelineno-1-15" name="__codelineno-1-15" href="#__codelineno-1-15"></a><span class="w">      </span><span class="nt">"redirected_outputs"</span><span class="p">:</span><span class="w"> </span><span class="p">{</span><span class="nt">"videos/colony_A_cam1_tracking.mp4"</span><span class="p">:</span><span class="w"> </span><span class="s2">"/Volumes/renders/colony_A_cam1.mp4"</span><span class="p">}</span>
+</span><span id="__span-1-16"><a id="__codelineno-1-16" name="__codelineno-1-16" href="#__codelineno-1-16"></a><span class="w">    </span><span class="p">},</span>
+</span><span id="__span-1-17"><a id="__codelineno-1-17" name="__codelineno-1-17" href="#__codelineno-1-17"></a><span class="w">    </span><span class="p">{</span>
+</span><span id="__span-1-18"><a id="__codelineno-1-18" name="__codelineno-1-18" href="#__codelineno-1-18"></a><span class="w">      </span><span class="nt">"job_path"</span><span class="p">:</span><span class="w"> </span><span class="s2">"videos/colony_A_cam2.mp4"</span><span class="p">,</span>
+</span><span id="__span-1-19"><a id="__codelineno-1-19" name="__codelineno-1-19" href="#__codelineno-1-19"></a><span class="w">      </span><span class="nt">"origin_path"</span><span class="p">:</span><span class="w"> </span><span class="s2">"/Volumes/lab/2026-09/colony_A_cam2.mp4"</span><span class="p">,</span>
+</span><span id="__span-1-20"><a id="__codelineno-1-20" name="__codelineno-1-20" href="#__codelineno-1-20"></a><span class="w">      </span><span class="nt">"size_bytes"</span><span class="p">:</span><span class="w"> </span><span class="mi">8123456789</span><span class="p">,</span>
+</span><span id="__span-1-21"><a id="__codelineno-1-21" name="__codelineno-1-21" href="#__codelineno-1-21"></a><span class="w">      </span><span class="nt">"signature"</span><span class="p">:</span><span class="w"> </span><span class="s2">"8123456789:3f9a…"</span><span class="p">,</span>
+</span><span id="__span-1-22"><a id="__codelineno-1-22" name="__codelineno-1-22" href="#__codelineno-1-22"></a><span class="w">      </span><span class="nt">"shared"</span><span class="p">:</span><span class="w"> </span><span class="p">{</span><span class="nt">"alias"</span><span class="p">:</span><span class="w"> </span><span class="s2">"labnas"</span><span class="p">,</span><span class="w"> </span><span class="nt">"relpath"</span><span class="p">:</span><span class="w"> </span><span class="s2">"2026-09/colony_A_cam2.mp4"</span><span class="p">},</span>
+</span><span id="__span-1-23"><a id="__codelineno-1-23" name="__codelineno-1-23" href="#__codelineno-1-23"></a><span class="w">      </span><span class="nt">"config_job_path"</span><span class="p">:</span><span class="w"> </span><span class="s2">"videos/colony_A_cam2_config.json"</span><span class="p">,</span>
+</span><span id="__span-1-24"><a id="__codelineno-1-24" name="__codelineno-1-24" href="#__codelineno-1-24"></a><span class="w">      </span><span class="nt">"config_provenance"</span><span class="p">:</span><span class="w"> </span><span class="s2">"keystone-baseline"</span><span class="p">,</span>
+</span><span id="__span-1-25"><a id="__codelineno-1-25" name="__codelineno-1-25" href="#__codelineno-1-25"></a><span class="w">      </span><span class="nt">"pushed_siblings"</span><span class="p">:</span><span class="w"> </span><span class="p">[</span><span class="s2">"videos/colony_A_cam2_config.json"</span><span class="p">]</span>
+</span><span id="__span-1-26"><a id="__codelineno-1-26" name="__codelineno-1-26" href="#__codelineno-1-26"></a><span class="w">    </span><span class="p">}</span>
+</span><span id="__span-1-27"><a id="__codelineno-1-27" name="__codelineno-1-27" href="#__codelineno-1-27"></a><span class="w">  </span><span class="p">],</span>
+</span><span id="__span-1-28"><a id="__codelineno-1-28" name="__codelineno-1-28" href="#__codelineno-1-28"></a><span class="w">  </span><span class="nt">"models"</span><span class="p">:</span><span class="w"> </span><span class="p">[</span>
+</span><span id="__span-1-29"><a id="__codelineno-1-29" name="__codelineno-1-29" href="#__codelineno-1-29"></a><span class="w">    </span><span class="p">{</span>
+</span><span id="__span-1-30"><a id="__codelineno-1-30" name="__codelineno-1-30" href="#__codelineno-1-30"></a><span class="w">      </span><span class="nt">"key"</span><span class="p">:</span><span class="w"> </span><span class="s2">"obb/2026-08-01_ant_obb.pt"</span><span class="p">,</span>
+</span><span id="__span-1-31"><a id="__codelineno-1-31" name="__codelineno-1-31" href="#__codelineno-1-31"></a><span class="w">      </span><span class="nt">"roles"</span><span class="p">:</span><span class="w"> </span><span class="p">[</span><span class="s2">"YOLO_OBB_DIRECT_MODEL_PATH"</span><span class="p">],</span>
+</span><span id="__span-1-32"><a id="__codelineno-1-32" name="__codelineno-1-32" href="#__codelineno-1-32"></a><span class="w">      </span><span class="nt">"origin_path"</span><span class="p">:</span><span class="w"> </span><span class="s2">"/Users/rishika/Library/Application Support/hydra-suite/models/obb/2026-08-01_ant_obb.pt"</span><span class="p">,</span>
+</span><span id="__span-1-33"><a id="__codelineno-1-33" name="__codelineno-1-33" href="#__codelineno-1-33"></a><span class="w">      </span><span class="nt">"kind"</span><span class="p">:</span><span class="w"> </span><span class="s2">"file"</span><span class="p">,</span>
+</span><span id="__span-1-34"><a id="__codelineno-1-34" name="__codelineno-1-34" href="#__codelineno-1-34"></a><span class="w">      </span><span class="nt">"sha256"</span><span class="p">:</span><span class="w"> </span><span class="s2">"…"</span><span class="p">,</span>
+</span><span id="__span-1-35"><a id="__codelineno-1-35" name="__codelineno-1-35" href="#__codelineno-1-35"></a><span class="w">      </span><span class="nt">"size_bytes"</span><span class="p">:</span><span class="w"> </span><span class="mi">123456</span><span class="p">,</span>
+</span><span id="__span-1-36"><a id="__codelineno-1-36" name="__codelineno-1-36" href="#__codelineno-1-36"></a><span class="w">      </span><span class="nt">"sidecars"</span><span class="p">:</span><span class="w"> </span><span class="p">[</span><span class="s2">"obb/2026-08-01_ant_obb.pt.slice_meta.json"</span><span class="p">],</span>
+</span><span id="__span-1-37"><a id="__codelineno-1-37" name="__codelineno-1-37" href="#__codelineno-1-37"></a><span class="w">      </span><span class="nt">"registry_entry_present"</span><span class="p">:</span><span class="w"> </span><span class="kc">true</span>
+</span><span id="__span-1-38"><a id="__codelineno-1-38" name="__codelineno-1-38" href="#__codelineno-1-38"></a><span class="w">    </span><span class="p">},</span>
+</span><span id="__span-1-39"><a id="__codelineno-1-39" name="__codelineno-1-39" href="#__codelineno-1-39"></a><span class="w">    </span><span class="p">{</span>
+</span><span id="__span-1-40"><a id="__codelineno-1-40" name="__codelineno-1-40" href="#__codelineno-1-40"></a><span class="w">      </span><span class="nt">"key"</span><span class="p">:</span><span class="w"> </span><span class="s2">"pose/SLEAP/ant_pose_v3"</span><span class="p">,</span>
+</span><span id="__span-1-41"><a id="__codelineno-1-41" name="__codelineno-1-41" href="#__codelineno-1-41"></a><span class="w">      </span><span class="nt">"_note"</span><span class="p">:</span><span class="w"> </span><span class="s2">"key is whatever make_pose_model_path_relative returns; copy target is the directory resolve_pose_model_path(key, backend) yields under the job models root"</span><span class="p">,</span>
+</span><span id="__span-1-42"><a id="__codelineno-1-42" name="__codelineno-1-42" href="#__codelineno-1-42"></a><span class="w">      </span><span class="nt">"roles"</span><span class="p">:</span><span class="w"> </span><span class="p">[</span><span class="s2">"POSE_MODEL_DIR"</span><span class="p">],</span>
+</span><span id="__span-1-43"><a id="__codelineno-1-43" name="__codelineno-1-43" href="#__codelineno-1-43"></a><span class="w">      </span><span class="nt">"kind"</span><span class="p">:</span><span class="w"> </span><span class="s2">"directory"</span><span class="p">,</span>
+</span><span id="__span-1-44"><a id="__codelineno-1-44" name="__codelineno-1-44" href="#__codelineno-1-44"></a><span class="w">      </span><span class="nt">"files"</span><span class="p">:</span><span class="w"> </span><span class="p">[</span><span class="s2">"pose/SLEAP/ant_pose_v3/best.ckpt"</span><span class="p">,</span><span class="w"> </span><span class="s2">"pose/SLEAP/ant_pose_v3/training_config.json"</span><span class="p">],</span>
+</span><span id="__span-1-45"><a id="__codelineno-1-45" name="__codelineno-1-45" href="#__codelineno-1-45"></a><span class="w">      </span><span class="nt">"registry_entry_present"</span><span class="p">:</span><span class="w"> </span><span class="kc">false</span>
+</span><span id="__span-1-46"><a id="__codelineno-1-46" name="__codelineno-1-46" href="#__codelineno-1-46"></a><span class="w">    </span><span class="p">}</span>
+</span><span id="__span-1-47"><a id="__codelineno-1-47" name="__codelineno-1-47" href="#__codelineno-1-47"></a><span class="w">  </span><span class="p">],</span>
+</span><span id="__span-1-48"><a id="__codelineno-1-48" name="__codelineno-1-48" href="#__codelineno-1-48"></a><span class="w">  </span><span class="nt">"config_snapshot"</span><span class="p">:</span><span class="w"> </span><span class="p">{</span>
+</span><span id="__span-1-49"><a id="__codelineno-1-49" name="__codelineno-1-49" href="#__codelineno-1-49"></a><span class="w">    </span><span class="nt">"advanced_config"</span><span class="p">:</span><span class="w"> </span><span class="s2">"config/advanced_config.json"</span><span class="p">,</span>
+</span><span id="__span-1-50"><a id="__codelineno-1-50" name="__codelineno-1-50" href="#__codelineno-1-50"></a><span class="w">    </span><span class="nt">"skeletons"</span><span class="p">:</span><span class="w"> </span><span class="p">[</span><span class="s2">"config/skeletons/ant_10kp.json"</span><span class="p">]</span>
+</span><span id="__span-1-51"><a id="__codelineno-1-51" name="__codelineno-1-51" href="#__codelineno-1-51"></a><span class="w">  </span><span class="p">},</span>
+</span><span id="__span-1-52"><a id="__codelineno-1-52" name="__codelineno-1-52" href="#__codelineno-1-52"></a><span class="w">  </span><span class="nt">"requirements"</span><span class="p">:</span><span class="w"> </span><span class="p">{</span>
+</span><span id="__span-1-53"><a id="__codelineno-1-53" name="__codelineno-1-53" href="#__codelineno-1-53"></a><span class="w">    </span><span class="nt">"conda_envs"</span><span class="p">:</span><span class="w"> </span><span class="p">[</span><span class="s2">"sleap"</span><span class="p">],</span>
+</span><span id="__span-1-54"><a id="__codelineno-1-54" name="__codelineno-1-54" href="#__codelineno-1-54"></a><span class="w">    </span><span class="nt">"runtime_tier"</span><span class="p">:</span><span class="w"> </span><span class="s2">"gpu"</span><span class="p">,</span>
+</span><span id="__span-1-55"><a id="__codelineno-1-55" name="__codelineno-1-55" href="#__codelineno-1-55"></a><span class="w">    </span><span class="nt">"min_hydra_suite_version"</span><span class="p">:</span><span class="w"> </span><span class="s2">"x.y.z"</span>
+</span><span id="__span-1-56"><a id="__codelineno-1-56" name="__codelineno-1-56" href="#__codelineno-1-56"></a><span class="w">  </span><span class="p">},</span>
+</span><span id="__span-1-57"><a id="__codelineno-1-57" name="__codelineno-1-57" href="#__codelineno-1-57"></a><span class="w">  </span><span class="nt">"track_args"</span><span class="p">:</span><span class="w"> </span><span class="p">{</span>
+</span><span id="__span-1-58"><a id="__codelineno-1-58" name="__codelineno-1-58" href="#__codelineno-1-58"></a><span class="w">    </span><span class="nt">"video_list"</span><span class="p">:</span><span class="w"> </span><span class="s2">"videos.txt"</span><span class="p">,</span>
+</span><span id="__span-1-59"><a id="__codelineno-1-59" name="__codelineno-1-59" href="#__codelineno-1-59"></a><span class="w">    </span><span class="nt">"keystone_override"</span><span class="p">:</span><span class="w"> </span><span class="kc">false</span><span class="p">,</span>
+</span><span id="__span-1-60"><a id="__codelineno-1-60" name="__codelineno-1-60" href="#__codelineno-1-60"></a><span class="w">    </span><span class="nt">"sahi_profile"</span><span class="p">:</span><span class="w"> </span><span class="kc">null</span><span class="p">,</span>
+</span><span id="__span-1-61"><a id="__codelineno-1-61" name="__codelineno-1-61" href="#__codelineno-1-61"></a><span class="w">    </span><span class="nt">"apply_tuned_inference"</span><span class="p">:</span><span class="w"> </span><span class="kc">null</span><span class="p">,</span>
+</span><span id="__span-1-62"><a id="__codelineno-1-62" name="__codelineno-1-62" href="#__codelineno-1-62"></a><span class="w">    </span><span class="nt">"inference_autotune_manual"</span><span class="p">:</span><span class="w"> </span><span class="p">[]</span>
+</span><span id="__span-1-63"><a id="__codelineno-1-63" name="__codelineno-1-63" href="#__codelineno-1-63"></a><span class="w">  </span><span class="p">},</span>
+</span><span id="__span-1-64"><a id="__codelineno-1-64" name="__codelineno-1-64" href="#__codelineno-1-64"></a><span class="w">  </span><span class="nt">"pull_history"</span><span class="p">:</span><span class="w"> </span><span class="p">[</span>
+</span><span id="__span-1-65"><a id="__codelineno-1-65" name="__codelineno-1-65" href="#__codelineno-1-65"></a><span class="w">    </span><span class="p">{</span><span class="nt">"pulled_at"</span><span class="p">:</span><span class="w"> </span><span class="s2">"…"</span><span class="p">,</span><span class="w"> </span><span class="nt">"files"</span><span class="p">:</span><span class="w"> </span><span class="mi">14</span><span class="p">,</span><span class="w"> </span><span class="nt">"bytes"</span><span class="p">:</span><span class="w"> </span><span class="mi">123456789</span><span class="p">}</span>
+</span><span id="__span-1-66"><a id="__codelineno-1-66" name="__codelineno-1-66" href="#__codelineno-1-66"></a><span class="w">  </span><span class="p">]</span>
+</span><span id="__span-1-67"><a id="__codelineno-1-67" name="__codelineno-1-67" href="#__codelineno-1-67"></a><span class="p">}</span>
+</span></code></pre></div>
+<p>Field rules:</p>
+<ul>
+<li><code>videos[].origin_path</code> is the <strong>only</strong> place absolute staging-machine paths live. It exists purely so <code>pull</code> can put outputs back. It is never read by <code>run</code>.</li>
+<li><code>videos[].pushed_siblings</code> is the list of files that existed beside the video inside the job <strong>before</strong> the run. <code>pull</code> defines "output" as anything under <code>videos/</code> that is not the video itself and not in <code>pushed_siblings</code> (§10).</li>
+<li><code>models[].roles</code> lists the engine-parameter keys that resolved to this model, for diagnostics only.</li>
+<li><code>videos[].shared</code>, when present, means the video is <strong>not</strong> in the job tree and not pushed: each host resolves <code>alias</code> through its own mount table (§6.7). <code>videos[].signature</code> is the content signature of §7b.2 and is what proves the remote resolved the same file.</li>
+<li><code>videos[].redirected_outputs</code> maps a job-relative output path to the absolute path the user originally chose (§6.4), so <code>pull</code> can restore it.</li>
+<li><strong>The remote never mutates <code>hydra_job.json</code>.</strong> <code>run</code> appends one JSON line per run to <code>logs/runs.jsonl</code> (<code>started_at, finished_at, hostname, exit_code, hydra_suite_version, git_sha, argv</code>); <code>pull</code> fetches that file and merges it into the local manifest's <code>pull_history</code> entry. This is what lets <code>push</code> be a pure input sync (§8.1).</li>
+<li>Manifest writes use <code>write_json_atomic</code> from <code>project_bundle.py</code>.</li>
+</ul>
+<h2 id="6-pack-building-the-job">6. Pack: building the job<a class="headerlink" href="#6-pack-building-the-job" title="Permanent link">&para;</a></h2>
+<p>Entry point: <code>hydra_suite.data.tracking_job.pack_job(...)</code> (Qt-free), wrapped by <code>trackerkit job pack</code>.</p>
+<h3 id="61-inputs">6.1 Inputs<a class="headerlink" href="#61-inputs" title="Permanent link">&para;</a></h3>
+<div class="language-text highlight"><pre><span></span><code><span id="__span-2-1"><a id="__codelineno-2-1" name="__codelineno-2-1" href="#__codelineno-2-1"></a>trackerkit job pack &lt;job_dir&gt; (VIDEO... | --video-list FILE) [--config FILE] [--keystone-override]
+</span><span id="__span-2-2"><a id="__codelineno-2-2" name="__codelineno-2-2" href="#__codelineno-2-2"></a>                    [--sahi-profile NAME] [--apply-tuned-inference | --no-apply-tuned-inference]
+</span><span id="__span-2-3"><a id="__codelineno-2-3" name="__codelineno-2-3" href="#__codelineno-2-3"></a>                    [--inference-autotune-manual FIELD]... [--name NAME] [--copy-videos] [--no-shared | --shared-only]
+</span></code></pre></div>
+<p>The video/config arguments are <strong>exactly</strong> those of <code>trackerkit track</code>, resolved through the same functions: <code>resolve_track_video_inputs()</code> (<code>app.py:352</code>) for the video list and <code>plan_batch_jobs()</code> → <code>build_batch_video_plan()</code> for per-video config resolution with the existing <code>own-sidecar | explicit | keystone-baseline</code> provenance. Pack does not reimplement config precedence; it consumes the plan.</p>
+<p><code>--gpus/--jobs/--threads-per-job</code> are <strong>not</strong> accepted by <code>pack</code>. They describe the compute box, not the experiment, and are given to <code>job run</code> (§9). Mirrors the <code>calibrate</code> precedent (<code>app.py:196-200</code>): argparse rejects them loudly.</p>
+<h3 id="62-steps">6.2 Steps<a class="headerlink" href="#62-steps" title="Permanent link">&para;</a></h3>
+<ol>
+<li><strong>Plan.</strong> Build the batch plan as <code>track</code> would. Abort on the same errors <code>track</code> would raise (missing keystone, collisions).</li>
+<li><strong>Resolve engine params per video.</strong> For each planned video call <code>build_engine_params(cfg, ctx)</code> with a <code>RuntimeContext</code> identical to the CLI's (<code>cli_config.py</code>). This is the authoritative resolution of every model path.</li>
+<li><strong>Collect model references.</strong> Walk the returned params dict with <code>iter_model_references(params)</code> (§6.3). Each reference is <code>(role_key, resolved_path, kind)</code> where <code>kind ∈ {file, directory}</code>.</li>
+<li><strong>Compute the job key</strong> for each reference: <code>make_model_path_relative(path)</code> (or the pose variant). If the result is still absolute (the model lives outside the models root), the key becomes <code>external/&lt;sha256[:12]&gt;/&lt;basename&gt;</code> and the config is rewritten to that key (§6.4).</li>
+<li><strong>Copy models</strong> into <code>&lt;job&gt;/models/&lt;key&gt;</code>:</li>
+<li>files: <code>shutil.copy2</code>, then <code>copy_model_metadata_sidecars(src, dst)</code> (<code>model_paths.py:25</code>), then ClassKit bundle expansion: <code>discover_multihead_model_bundle(src)</code>; if a manifest is found, copy the manifest and every listed artifact with their own sidecars.</li>
+<li>directories (pose): copy the whole directory tree. Pose backends read <code>best.ckpt</code>, <code>training_config.{json,yaml}</code>, <code>export_metadata.json</code>, <code>metadata.json</code> and any <code>.pt/.ckpt/.onnx/.engine/.trt</code> sibling (<code>core/individual/pose/artifacts.py:14-31</code>); shipping the whole directory is the only future-proof choice. <code>.hydra-runtime-artifacts/</code> subtrees are excluded (they are the local-fallback engine cache).</li>
+<li>Record <code>sha256</code> of every file for <code>verify</code>.</li>
+<li><strong>Registry subset.</strong> Load the staging machine's <code>model_registry.json</code> via <code>model_publish.iter_registry_entries</code>; write a new v2 registry into <code>&lt;job&gt;/models/model_registry.json</code> containing only entries whose key is in the shipped set. Entries' <code>source_path</code> is rewritten to <code>null</code> (it is a staging-machine absolute path and meaningless elsewhere). Models with no registry entry are shipped anyway and flagged <code>registry_entry_present: false</code>; the run does not need registry entries, the GUI on the remote does.</li>
+<li><strong>Config snapshot.</strong> Copy <code>get_advanced_config_path()</code> if it exists. Copy every <code>pose_skeleton_file</code> referenced (resolved via the same fallback as the engine) into <code>config/skeletons/</code> and rewrite the config key to the job-relative path. Write <code>.seeded</code> markers into <code>config/presets/</code> and <code>config/skeletons/</code> so <code>get_presets_dir()</code>/<code>get_skeleton_dir()</code> do not seed bundled defaults on top of the snapshot.</li>
+<li><strong>Videos.</strong> For each planned video, create <code>&lt;job&gt;/videos/&lt;basename&gt;</code> as a <strong>symlink</strong> to the origin (default) or a copy (<code>--copy-videos</code>). Basename collisions across different directories are rejected (the batch planner already rejects duplicate videos; this adds the basename check with a clear message listing both origins).</li>
+<li><strong>Per-video config sidecar.</strong> Write <code>&lt;job&gt;/videos/&lt;stem&gt;_config.json</code> for <strong>every</strong> video regardless of provenance, containing the fully resolved config dict for that video after the rewrites of §6.4. Because every video now has its own sidecar, the remote run needs no keystone logic at all; <code>track_args.keystone_override</code> is recorded for provenance only.</li>
+<li><strong><code>videos.txt</code>.</strong> One job-relative path per line, keystone first.</li>
+<li><strong>Requirements.</strong> <code>conda_envs</code>: <code>[cfg["pose_sleap_env"]]</code> if any video uses the SLEAP backend with the service path; <code>runtime_tier</code> from the keystone config.</li>
+<li><strong><code>run.sh</code></strong> (§9) and manifest.</li>
+<li><strong>Self-verify.</strong> Run <code>verify_job()</code> (§11) on the freshly packed directory and fail pack if it fails.</li>
+</ol>
+<h3 id="63-iter_model_referencesparams-the-derivation-rule">6.3 <code>iter_model_references(params)</code>: the derivation rule<a class="headerlink" href="#63-iter_model_referencesparams-the-derivation-rule" title="Permanent link">&para;</a></h3>
+<p>Lives in <code>hydra_suite/trackerkit/engine_params.py</code> next to <code>build_engine_params</code>, because that file owns the key vocabulary.</p>
+<div class="language-python highlight"><pre><span></span><code><span id="__span-3-1"><a id="__codelineno-3-1" name="__codelineno-3-1" href="#__codelineno-3-1"></a><span class="n">MODEL_FILE_PARAM_KEYS</span> <span class="o">=</span> <span class="p">(</span>
+</span><span id="__span-3-2"><a id="__codelineno-3-2" name="__codelineno-3-2" href="#__codelineno-3-2"></a>    <span class="s2">"YOLO_OBB_DIRECT_MODEL_PATH"</span><span class="p">,</span> <span class="s2">"YOLO_DETECT_MODEL_PATH"</span><span class="p">,</span> <span class="s2">"YOLO_CROP_OBB_MODEL_PATH"</span><span class="p">,</span>
+</span><span id="__span-3-3"><a id="__codelineno-3-3" name="__codelineno-3-3" href="#__codelineno-3-3"></a>    <span class="s2">"YOLO_HEADTAIL_MODEL_PATH"</span><span class="p">,</span> <span class="s2">"COLOR_TAG_MODEL_PATH"</span><span class="p">,</span> <span class="s2">"CNN_CLASSIFIER_MODEL_PATH"</span><span class="p">,</span>
+</span><span id="__span-3-4"><a id="__codelineno-3-4" name="__codelineno-3-4" href="#__codelineno-3-4"></a><span class="p">)</span>
+</span><span id="__span-3-5"><a id="__codelineno-3-5" name="__codelineno-3-5" href="#__codelineno-3-5"></a><span class="n">MODEL_DIR_PARAM_KEYS</span> <span class="o">=</span> <span class="p">(</span><span class="s2">"POSE_MODEL_DIR"</span><span class="p">,)</span>
+</span><span id="__span-3-6"><a id="__codelineno-3-6" name="__codelineno-3-6" href="#__codelineno-3-6"></a><span class="n">MODEL_LIST_PARAM_KEYS</span> <span class="o">=</span> <span class="p">{</span><span class="s2">"CNN_CLASSIFIERS"</span><span class="p">:</span> <span class="s2">"model_path"</span><span class="p">}</span>
+</span><span id="__span-3-7"><a id="__codelineno-3-7" name="__codelineno-3-7" href="#__codelineno-3-7"></a><span class="n">NON_MODEL_PATH_PARAM_KEYS</span> <span class="o">=</span> <span class="p">(</span>
+</span><span id="__span-3-8"><a id="__codelineno-3-8" name="__codelineno-3-8" href="#__codelineno-3-8"></a>    <span class="s2">"YOLO_MODEL_PATH"</span><span class="p">,</span>             <span class="c1"># alias of one of the two OBB keys, never distinct</span>
+</span><span id="__span-3-9"><a id="__codelineno-3-9" name="__codelineno-3-9" href="#__codelineno-3-9"></a>    <span class="s2">"POSE_EXPORTED_MODEL_PATH"</span><span class="p">,</span>    <span class="c1"># always "" today</span>
+</span><span id="__span-3-10"><a id="__codelineno-3-10" name="__codelineno-3-10" href="#__codelineno-3-10"></a>    <span class="s2">"POSE_SKELETON_FILE"</span><span class="p">,</span>          <span class="c1"># config asset, handled by the config snapshot</span>
+</span><span id="__span-3-11"><a id="__codelineno-3-11" name="__codelineno-3-11" href="#__codelineno-3-11"></a>    <span class="s2">"DATASET_OUTPUT_DIR"</span><span class="p">,</span> <span class="s2">"FINAL_MEDIA_EXPORT_VIDEO_OUTPUT_DIR"</span><span class="p">,</span> <span class="s2">"INDIVIDUAL_DATASET_OUTPUT_DIR"</span><span class="p">,</span>
+</span><span id="__span-3-12"><a id="__codelineno-3-12" name="__codelineno-3-12" href="#__codelineno-3-12"></a><span class="p">)</span>
+</span></code></pre></div>
+<p>The generator yields every non-empty value under those keys. Empty strings are skipped: <code>build_engine_params</code> already emits <code>""</code> for disabled roles (e.g. head-tail with the group off, <code>engine_params.py:826-843</code>), so pack ships exactly what the run will load.</p>
+<p><strong>Contract guard test</strong> (<code>tests/test_engine_params_model_reference_contract.py</code>): build params from a config that enables every role, then assert that every key whose name ends in <code>_MODEL_PATH</code> or <code>_MODEL_DIR</code>, or whose value is a list of dicts containing <code>model_path</code>, is in exactly one of the tuples above, <strong>and</strong> that every key ending in <code>_PATH</code> or <code>_DIR</code> is in the union of the four tuples plus an explicit <code>NON_MODEL_PATH_PARAM_KEYS</code> list (CSV/video/cache/output paths). The plan enumerates that list from real params once; afterwards any new path-ish key must be classified. A new role added to <code>build_engine_params</code> without being classified fails this test. This is the mechanism that makes the feature long-term rather than a patch, and it is the kind of reflective guard that memory <code>feedback_run_contract_guards_after_field_additions</code> says must run on every field addition.</p>
+<h3 id="64-config-rewrites-performed-by-pack">6.4 Config rewrites performed by pack<a class="headerlink" href="#64-config-rewrites-performed-by-pack" title="Permanent link">&para;</a></h3>
+<p>Per-video config dicts are rewritten before being written as sidecars:</p>
+<table>
+<thead>
+<tr>
+<th>Key</th>
+<th>Rewrite</th>
+</tr>
+</thead>
+<tbody>
+<tr>
+<td><code>file_path</code></td>
+<td><code>videos/&lt;basename&gt;</code> (job-relative)</td>
+</tr>
+<tr>
+<td><code>csv_path</code>, <code>video_output_path</code></td>
+<td>If they were the defaults derived from the video (<code>&lt;stem&gt;_tracking.csv/.mp4</code> in the video's directory), rewrite to the job-relative equivalent. If the user pointed them elsewhere, rewrite to <code>videos/&lt;stem&gt;_&lt;original basename&gt;</code> and record the original absolute path in <code>videos[].redirected_outputs</code> so <code>pull</code> can restore it. Never leave a staging-machine absolute path in a sidecar.</td>
+</tr>
+<tr>
+<td><code>yolo_*_model_path</code>, <code>pose_*_model_dir</code>, <code>pose_model_dir</code>, <code>color_tag_model_path</code>, <code>cnn_classifiers[].model_path</code></td>
+<td>The job key from §6.2 step 4 (models-root-relative, or <code>external/...</code>).</td>
+</tr>
+<tr>
+<td><code>pose_skeleton_file</code></td>
+<td><code>config/skeletons/&lt;basename&gt;</code> (job-relative). Consumers read <code>POSE_SKELETON_FILE</code> verbatim with no models-root resolution (<code>core/inference/config.py:1233</code>, <code>core/post/pose_merge.py:292</code>, <code>core/post/media_export.py:401</code>, <code>core/individual/properties/cache.py:221</code>), so a job-relative path works only because <code>run.sh</code> does <code>cd "$JOB"</code> first. <code>verify</code> asserts the file exists at that relative path.</td>
+</tr>
+<tr>
+<td><code>pose_sleap_env</code></td>
+<td>Unchanged; recorded in <code>requirements.conda_envs</code>.</td>
+</tr>
+<tr>
+<td>Provenance copies (<code>yolo_model_size</code>, <code>*_model_info</code>, …)</td>
+<td>Unchanged.</td>
+</tr>
+</tbody>
+</table>
+<h3 id="65-save-side-leak-fixes-source-fixes-not-packer-workarounds">6.5 Save-side leak fixes (source fixes, not packer workarounds)<a class="headerlink" href="#65-save-side-leak-fixes-source-fixes-not-packer-workarounds" title="Permanent link">&para;</a></h3>
+<p>In <code>trackerkit/gui/orchestrators/config.py</code>:</p>
+<ul>
+<li><code>color_tag_model_path</code> (<code>:2096</code>) goes through <code>make_model_path_relative</code> like the other model keys at <code>:1763-1783</code>.</li>
+<li><code>cnn_classifiers[].model_path</code> entries are relativized on save at the point the identity config is serialized.</li>
+</ul>
+<p>Load side is already symmetric (<code>resolve_model_path</code>). A characterization test asserts that a config saved from a GUI state whose classifiers live under the models root contains no absolute paths in those two keys. The GUI-vs-CLI parity tests (<code>test_gui_cli_param_equivalence.py</code>) must stay green: relativizing on save and resolving on load is a round trip that leaves <code>build_engine_params</code> output unchanged.</p>
+<h3 id="66-headless-output-dir-gap">6.6 Headless output-dir gap<a class="headerlink" href="#66-headless-output-dir-gap" title="Permanent link">&para;</a></h3>
+<p>The CLI leaves <code>DATASET_OUTPUT_DIR</code>, <code>FINAL_MEDIA_EXPORT_VIDEO_OUTPUT_DIR</code>, <code>INDIVIDUAL_DATASET_OUTPUT_DIR</code> at <code>None</code> (<code>cli_config.py:279-301</code>), so a job that enables dataset or media export produces nothing on the remote. This is an existing CLI gap, not a job-specific one. Pack <strong>warns</strong> when any export stage is enabled in a config and points at this limitation. Closing the gap (deriving <code>&lt;stem&gt;_datasets/&lt;subfolder&gt;</code> in <code>cli_config.py</code> exactly as the GUI does at <code>orchestrators/config.py:2241-2252</code>) is listed as a follow-up, gated by the byte-identity harness because it changes CLI engine params.</p>
+<h3 id="67-shared-root-video-references-no-copy-when-a-share-is-mounted-on-both-sides">6.7 Shared-root video references (no copy when a share is mounted on both sides)<a class="headerlink" href="#67-shared-root-video-references-no-copy-when-a-share-is-mounted-on-both-sides" title="Permanent link">&para;</a></h3>
+<p><strong>Mount table.</strong> Each host keeps <code>&lt;config&gt;/shared_roots.json</code>, a flat <code>{alias: absolute_mount_path}</code> map:</p>
+<div class="language-json highlight"><pre><span></span><code><span id="__span-4-1"><a id="__codelineno-4-1" name="__codelineno-4-1" href="#__codelineno-4-1"></a><span class="p">{</span><span class="nt">"labnas"</span><span class="p">:</span><span class="w"> </span><span class="s2">"/Volumes/lab"</span><span class="p">}</span><span class="w">     </span><span class="c1">// laptop</span>
+</span><span id="__span-4-2"><a id="__codelineno-4-2" name="__codelineno-4-2" href="#__codelineno-4-2"></a><span class="p">{</span><span class="nt">"labnas"</span><span class="p">:</span><span class="w"> </span><span class="s2">"/mnt/lab"</span><span class="p">}</span><span class="w">         </span><span class="c1">// mehek</span>
+</span></code></pre></div>
+<p>Only the alias name has to agree across machines. Managed by <code>trackerkit job shared-root add|remove|list</code> or by hand; read through a new <code>paths.get_shared_roots_path()</code> so <code>HYDRA_CONFIG_DIR</code> relocation applies. Note that on the remote <code>HYDRA_CONFIG_DIR</code> points at <code>&lt;job&gt;/config</code> during <code>run</code> (§9.1), so the mount table is read from the <strong>host's</strong> config dir explicitly, never from the job snapshot: <code>run.sh</code> captures <code>HYDRA_HOST_CONFIG_DIR</code> before overriding.</p>
+<p><strong>Pack.</strong> For each planned video, <code>pack</code> resolves the origin with <code>os.path.realpath</code> and tests it against every local alias root (longest match wins). If it matches, the manifest entry gets <code>shared: {alias, relpath}</code> and <code>signature</code>; no symlink is created under <code>videos/</code>, and the video is excluded from the push input set. Otherwise the video is handled as in §6.2 step 8. <code>--no-shared</code> disables matching for one pack; <code>--shared-only</code> fails pack if any video is not under an alias (for labs that never want copies).</p>
+<p><strong>Preflight / materialize on the remote.</strong> For each <code>shared</code> entry, in order:</p>
+<ol>
+<li>Resolve <code>alias</code> through the host mount table, or through a one-off <code>--shared-root ALIAS=PATH</code> given to <code>run</code>/<code>preflight</code> (which also offers to persist it). Unknown alias fails with the alias name and the list of known aliases.</li>
+<li>Check <code>&lt;root&gt;/&lt;relpath&gt;</code> exists and is readable.</li>
+<li>Compare <code>size_bytes</code> and the content <code>signature</code> (§7b.2) with the manifest. Mismatch fails with both paths and both signatures; this catches a stale mirror or a re-encoded file.</li>
+<li>Create <code>videos/&lt;basename&gt;</code> as a symlink to the resolved path (replace an existing symlink, never a regular file).</li>
+</ol>
+<p>Because the sidecar <code>file_path</code> is still <code>videos/&lt;basename&gt;</code>, every output is written into the job tree beside the symlink, exactly as for a copied video. <code>pull</code> and the origin mapping of §8.2 are unchanged: the local <code>origin_path</code> is the laptop's mount of the same file, so outputs land beside the original on the share.</p>
+<p><strong>What is deliberately not done.</strong></p>
+<ul>
+<li>Outputs are never written to the share directly by the remote; the job tree remains the single record and <code>pull</code> the single return path. Writing to the share from two hosts would also reintroduce the collision cases <code>_reject_collisions</code> guards against.</li>
+<li>Models are always copied. They are small next to videos, and copying is what makes the job self-contained. The alias mechanism is reusable for a shared models root later without changing the manifest format.</li>
+<li>No attempt is made to detect a share without the mount table (e.g. by comparing inodes or file signatures across hosts). An explicit alias is one line of config and fails in one obvious way.</li>
+</ul>
+<h2 id="7-pathspy-change-hydra_models_dir">7. <code>paths.py</code> change: <code>HYDRA_MODELS_DIR</code><a class="headerlink" href="#7-pathspy-change-hydra_models_dir" title="Permanent link">&para;</a></h2>
+<div class="language-python highlight"><pre><span></span><code><span id="__span-5-1"><a id="__codelineno-5-1" name="__codelineno-5-1" href="#__codelineno-5-1"></a><span class="k">def</span><span class="w"> </span><span class="nf">get_models_dir</span><span class="p">()</span> <span class="o">-&gt;</span> <span class="n">Path</span><span class="p">:</span>
+</span><span id="__span-5-2"><a id="__codelineno-5-2" name="__codelineno-5-2" href="#__codelineno-5-2"></a>    <span class="n">override</span> <span class="o">=</span> <span class="n">os</span><span class="o">.</span><span class="n">environ</span><span class="o">.</span><span class="n">get</span><span class="p">(</span><span class="s2">"HYDRA_MODELS_DIR"</span><span class="p">)</span>
+</span><span id="__span-5-3"><a id="__codelineno-5-3" name="__codelineno-5-3" href="#__codelineno-5-3"></a>    <span class="k">if</span> <span class="n">override</span><span class="p">:</span>
+</span><span id="__span-5-4"><a id="__codelineno-5-4" name="__codelineno-5-4" href="#__codelineno-5-4"></a>        <span class="n">path</span> <span class="o">=</span> <span class="n">Path</span><span class="p">(</span><span class="n">override</span><span class="p">)</span><span class="o">.</span><span class="n">expanduser</span><span class="p">()</span>
+</span><span id="__span-5-5"><a id="__codelineno-5-5" name="__codelineno-5-5" href="#__codelineno-5-5"></a>        <span class="n">path</span><span class="o">.</span><span class="n">mkdir</span><span class="p">(</span><span class="n">parents</span><span class="o">=</span><span class="kc">True</span><span class="p">,</span> <span class="n">exist_ok</span><span class="o">=</span><span class="kc">True</span><span class="p">)</span>
+</span><span id="__span-5-6"><a id="__codelineno-5-6" name="__codelineno-5-6" href="#__codelineno-5-6"></a>        <span class="k">return</span> <span class="n">path</span>
+</span><span id="__span-5-7"><a id="__codelineno-5-7" name="__codelineno-5-7" href="#__codelineno-5-7"></a>    <span class="k">return</span> <span class="n">_user_data_dir</span><span class="p">()</span> <span class="o">/</span> <span class="s2">"models"</span>
+</span></code></pre></div>
+<p>Read per call like the other overrides (no caching), so tests monkeypatch <code>os.environ</code>. Documented in <code>paths.py:1-16</code>, <code>installation.md:242-258</code>, and <code>print_paths()</code>.</p>
+<p>Everything that already routes through <code>get_models_dir()</code> (registry path, <code>get_models_root_directory()</code>, SAM3 checkpoints) follows automatically. <code>get_data_dir()</code>-rooted stores (<code>runtime-artifacts</code>, <code>inference_tuning_profiles</code>, <code>training/runs</code>, <code>vitpose-assets</code>) stay on the host. The plan includes a grep gate: no module may compute <code>get_data_dir() / "models"</code> directly.</p>
+<h2 id="7b-path-independent-cache-keys">7b. Path-independent cache keys<a class="headerlink" href="#7b-path-independent-cache-keys" title="Permanent link">&para;</a></h2>
+<h3 id="7b1-what-is-wrong-today-verified">7b.1 What is wrong today (verified)<a class="headerlink" href="#7b1-what-is-wrong-today-verified" title="Permanent link">&para;</a></h3>
+<p><code>CacheKey</code> (<code>core/inference/cache/base.py:22-48</code>) is <code>(schema_version, model_path, model_mtime, config_hash)</code>. Every cache on disk stores <code>key.as_string()</code> and is accepted only on exact string equality (<code>cache/store.py:67</code>, <code>cache/chunked.py:540,580,1124</code>). The ingredients that break across machines:</p>
+<table>
+<thead>
+<tr>
+<th>Ingredient</th>
+<th>Where</th>
+<th>Why it breaks</th>
+</tr>
+</thead>
+<tbody>
+<tr>
+<td><code>model_path</code> = absolute resolved path (<code>"detect|obb"</code> joined for sequential)</td>
+<td><code>keys.py:110-131,355,364,394</code></td>
+<td><code>&lt;job&gt;/models/obb/x.pt</code> on the remote vs <code>~/Library/.../models/obb/x.pt</code> locally</td>
+</tr>
+<tr>
+<td><code>model_mtime</code> = <code>os.path.getmtime</code></td>
+<td><code>keys.py:419-423</code></td>
+<td>survives <code>copy2</code>/<code>rsync -a</code> by accident, not by contract</td>
+</tr>
+<tr>
+<td><code>video_signature</code> = <code>f"{size}:{st_mtime_ns}"</code></td>
+<td><code>keys.py:36-49</code>, folded via <code>with_video_signature</code></td>
+<td>nanosecond mtime survives only with rsync protocol ≥31 on both ends (this Mac 3.4.3, mehek 3.2.7: OK today; USB, <code>cp</code>, SMB, older rsync: broken)</td>
+</tr>
+</tbody>
+</table>
+<p>Everything else in the keys (canonical geometry, ROI mask sha, batch terms, stage params) is already content-based. Consumers that fold the video signature (<code>runner.py:543,975</code>, <code>cache/reuse.py:63-67</code>, density regions <code>worker.py:1434</code>, optimizer <code>optimizer.py:826</code>/<code>optimizer_workers.py:343</code>, <code>production_replay.py:185</code>, identity evidence <code>base_signature</code>, <code>parameter_helper.py:1818</code>) all call the one <code>video_signature()</code> function, so fixing it there fixes them uniformly.</p>
+<h3 id="7b2-new-definition">7b.2 New definition<a class="headerlink" href="#7b2-new-definition" title="Permanent link">&para;</a></h3>
+<div class="language-python highlight"><pre><span></span><code><span id="__span-6-1"><a id="__codelineno-6-1" name="__codelineno-6-1" href="#__codelineno-6-1"></a><span class="nd">@dataclass</span><span class="p">(</span><span class="n">frozen</span><span class="o">=</span><span class="kc">True</span><span class="p">)</span>
+</span><span id="__span-6-2"><a id="__codelineno-6-2" name="__codelineno-6-2" href="#__codelineno-6-2"></a><span class="k">class</span><span class="w"> </span><span class="nc">CacheKey</span><span class="p">:</span>
+</span><span id="__span-6-3"><a id="__codelineno-6-3" name="__codelineno-6-3" href="#__codelineno-6-3"></a>    <span class="n">schema_version</span><span class="p">:</span> <span class="nb">int</span>
+</span><span id="__span-6-4"><a id="__codelineno-6-4" name="__codelineno-6-4" href="#__codelineno-6-4"></a>    <span class="n">model_id</span><span class="p">:</span> <span class="nb">str</span>      <span class="c1"># content identity, see below; sentinel strings unchanged</span>
+</span><span id="__span-6-5"><a id="__codelineno-6-5" name="__codelineno-6-5" href="#__codelineno-6-5"></a>    <span class="n">config_hash</span><span class="p">:</span> <span class="nb">str</span>
+</span><span id="__span-6-6"><a id="__codelineno-6-6" name="__codelineno-6-6" href="#__codelineno-6-6"></a>    <span class="k">def</span><span class="w"> </span><span class="nf">as_string</span><span class="p">(</span><span class="bp">self</span><span class="p">):</span> <span class="k">return</span> <span class="sa">f</span><span class="s2">"v</span><span class="si">{</span><span class="bp">self</span><span class="o">.</span><span class="n">schema_version</span><span class="si">}</span><span class="s2">|</span><span class="si">{</span><span class="bp">self</span><span class="o">.</span><span class="n">model_id</span><span class="si">}</span><span class="s2">|</span><span class="si">{</span><span class="bp">self</span><span class="o">.</span><span class="n">config_hash</span><span class="si">}</span><span class="s2">"</span>
+</span><span id="__span-6-7"><a id="__codelineno-6-7" name="__codelineno-6-7" href="#__codelineno-6-7"></a>    <span class="k">def</span><span class="w"> </span><span class="nf">matches</span><span class="p">(</span><span class="bp">self</span><span class="p">,</span> <span class="n">other</span><span class="p">):</span> <span class="k">return</span> <span class="bp">self</span><span class="o">.</span><span class="n">as_string</span><span class="p">()</span> <span class="o">==</span> <span class="n">other</span><span class="o">.</span><span class="n">as_string</span><span class="p">()</span>
+</span></code></pre></div>
+<p><code>model_mtime</code> is removed. <code>model_path</code> becomes <code>model_id</code>:</p>
+<ul>
+<li><strong>File model</strong> (<code>.pt</code>, <code>.pth</code>, <code>.onnx</code>, ClassKit checkpoint): <code>sha256:&lt;hex&gt;</code> of the file bytes. Sidecars are <strong>not</strong> hashed: the SAHI/canonical sidecars' content already flows into <code>config_hash</code> through the stage config (slice profile, geometry), so hashing them again would only add spurious misses when a sidecar is re-stamped.</li>
+<li><strong>Directory model</strong> (pose SLEAP/ViTPose/YOLO dirs): <code>dirsha256:&lt;hex&gt;</code> over the sorted list of <code>(relative_path, sha256(file))</code> for every file the artifact fingerprint already considers (<code>core/individual/pose/artifacts.py:14-31</code>), excluding <code>.hydra-runtime-artifacts/</code>.</li>
+<li><strong>Sequential OBB</strong>: <code>sha256:&lt;detect&gt;|sha256:&lt;obb&gt;</code> (same join as today).</li>
+<li><strong>Sentinels</strong> <code>"background_subtraction"</code> and <code>""</code> (AprilTag) unchanged.</li>
+<li>ClassKit multi-head bundles: <code>model_id</code> of the selected checkpoint only, as today; sibling heads travel with it and are covered by <code>discover_multihead_model_bundle</code> at pack time.</li>
+</ul>
+<p><code>video_signature(path)</code> becomes <code>f"{size}:{sha256(head 8 MiB ‖ tail 8 MiB)[:32]}"</code>. Size plus the first and last 8 MiB catches every realistic replacement (re-encode, trim, different clip with the same name) without reading a 50 GB file; hashing 16 MiB costs ~30 ms. Symlinks are followed as today.</p>
+<h3 id="7b3-cost-control">7b.3 Cost control<a class="headerlink" href="#7b3-cost-control" title="Permanent link">&para;</a></h3>
+<p>Hashing a 100 MB <code>.pt</code> costs ~0.3 s. <code>model_id</code> is computed once per process per <code>(realpath, size, mtime_ns)</code> through an in-process LRU (<code>functools.lru_cache</code> keyed on that triple), so mtime still serves as a <strong>local</strong> fast-path hint but never reaches the key. The optimizer and preview paths that rebuild keys many times per session therefore pay once.</p>
+<h3 id="7b4-schema-bump-and-migration">7b.4 Schema bump and migration<a class="headerlink" href="#7b4-schema-bump-and-migration" title="Permanent link">&para;</a></h3>
+<p><code>CACHE_SCHEMA_VERSION</code> 4 → 5. Every existing cache is invalidated once. No converter: caches are derived data and regenerate. The <code>v5</code> comment in <code>base.py</code> records the reason (path-independent identity for portable jobs).</p>
+<h3 id="7b5-what-does-not-change">7b.5 What does not change<a class="headerlink" href="#7b5-what-does-not-change" title="Permanent link">&para;</a></h3>
+<ul>
+<li>Which frames, arrays and dtypes are cached. This is a key change only.</li>
+<li><code>config_hash</code> composition. ROI, geometry, batch terms, stage params are untouched.</li>
+<li>The read-only-handle rule from the detection-cache-wipe fix (read the stored key first when a cache is "ignored") still applies; the stored key is just a different string.</li>
+<li>Tracking output. The equivalence gate must show byte-identical CSVs before and after, on MPS and CUDA, with caches cleared on both sides (a stale <code>__pycache__</code> or an old <code>v4</code> cache is the known trap; see memory on poisoned numba caches).</li>
+</ul>
+<h3 id="7b6-tests-specific-to-this-change">7b.6 Tests specific to this change<a class="headerlink" href="#7b6-tests-specific-to-this-change" title="Permanent link">&para;</a></h3>
+<ol>
+<li>Key invariance: the same model copied to a different absolute path with a different mtime yields an identical <code>as_string()</code>; a one-byte change yields a different one. Same for pose directories and for a video with touched mtime vs re-encoded content.</li>
+<li>Round trip: pack a fixture job, run it into the job tree, <code>pull</code>, then run the same config locally in resume mode and assert the runner reports a cache hit for every stage (detection, head/tail, pose, CNN) with zero recomputed frames.</li>
+<li>Schema bump: a <code>v4</code> cache is rejected and rebuilt, and the rebuilt key starts with <code>v5|sha256:</code>.</li>
+<li>Memoization: hashing a model twice in one process reads the file once (count <code>open</code> calls via a fake).</li>
+</ol>
+<h2 id="8-push-and-pull-transport">8. Push and pull: transport<a class="headerlink" href="#8-push-and-pull-transport" title="Permanent link">&para;</a></h2>
+<p>Both are thin wrappers over <code>rsync</code> over <code>ssh</code>; the tool never implements file transfer itself. Remote target syntax is <code>[user@]host:/abs/path/to/jobs/&lt;job_id&gt;</code>. The tool checks <code>rsync</code> is on PATH locally and remotely, and fails with the install hint otherwise.</p>
+<h3 id="81-trackerkit-job-push-job_dir-remote">8.1 <code>trackerkit job push &lt;job_dir&gt; &lt;remote&gt;</code><a class="headerlink" href="#81-trackerkit-job-push-job_dir-remote" title="Permanent link">&para;</a></h3>
+<p>Push is a <strong>pure input sync</strong>. The file list is built from the manifest, never from an exclude list:</p>
+<div class="language-text highlight"><pre><span></span><code><span id="__span-7-1"><a id="__codelineno-7-1" name="__codelineno-7-1" href="#__codelineno-7-1"></a>rsync -a --copy-links --partial --info=progress2 --files-from=&lt;inputs.txt&gt; &lt;job_dir&gt;/ &lt;remote&gt;/
+</span></code></pre></div>
+<p>where <code>inputs.txt</code> = <code>hydra_job.json</code>, <code>run.sh</code>, <code>videos.txt</code>, <code>config/**</code>, every <code>models[]</code> file, sidecar and directory, every <code>videos[].job_path</code> <strong>without</strong> a <code>shared</code> entry, and every <code>pushed_siblings</code>. Nothing else travels, so:</p>
+<ul>
+<li>a re-push after a local <code>pull</code> cannot overwrite remote outputs with the stale copies now sitting in the local job tree;</li>
+<li><code>logs/runs.jsonl</code> and every output the remote produced are untouched;</li>
+<li><code>--copy-links</code> (<code>-L</code>) dereferences the video symlinks so real files land on the remote;</li>
+<li>never <code>--delete</code>.</li>
+</ul>
+<p>After transfer, run <code>job verify</code> remotely over <code>ssh</code> (§11) and report. Push writes nothing to the manifest; it is idempotent and stateless.</p>
+<h3 id="82-trackerkit-job-pull-remote-job_dir-dry-run-no-caches">8.2 <code>trackerkit job pull &lt;remote&gt; &lt;job_dir&gt; [--dry-run] [--no-caches]</code><a class="headerlink" href="#82-trackerkit-job-pull-remote-job_dir-dry-run-no-caches" title="Permanent link">&para;</a></h3>
+<ol>
+<li><code>rsync</code> the remote <code>logs/</code> first (including <code>logs/runs.jsonl</code>); the remote manifest is never fetched because it is never modified there.</li>
+<li>Compute the output set on the remote: everything under <code>videos/</code> minus the video files minus each video's <code>pushed_siblings</code>. Done with one <code>ssh find</code> rather than enumerating names, so new artifact types (a future <code>&lt;stem&gt;_something/</code>) are pulled without a code change.</li>
+<li><code>rsync -a --partial --info=progress2 --files-from=&lt;list&gt; &lt;remote&gt;/ &lt;job_dir&gt;/</code> for that set, minus <code>.inference_cache_*</code> when <code>--no-caches</code>.</li>
+<li><strong>Place back beside the originals.</strong> For each video, for each pulled output relative to <code>videos/</code>, compute the destination by replacing the <code>videos/</code> prefix with <code>dirname(origin_path)</code>. Outputs that were redirected at pack time (<code>redirected_outputs</code>) go back to the recorded absolute path. Copy (hardlink when same filesystem) from the job tree to the destination; the job tree keeps its copy so the job remains a complete record.</li>
+<li>Collision policy: if a destination exists and differs (sha256), refuse unless <code>--overwrite</code>; list every collision before touching anything.</li>
+<li>Append a <code>pull_history</code> entry.</li>
+</ol>
+<p><code>--dry-run</code> prints the full destination map and stops.</p>
+<h3 id="83-why-both-directions-keep-a-job-tree-copy">8.3 Why both directions keep a job-tree copy<a class="headerlink" href="#83-why-both-directions-keep-a-job-tree-copy" title="Permanent link">&para;</a></h3>
+<p>The job directory is the unit of reproducibility: after <code>pull</code> it contains the inputs, the exact config that ran, the models, the run log, and the outputs. Deleting it is the user's decision (<code>job clean</code> is deliberately not in scope).</p>
+<h2 id="9-run-executing-on-the-compute-box">9. Run: executing on the compute box<a class="headerlink" href="#9-run-executing-on-the-compute-box" title="Permanent link">&para;</a></h2>
+<h3 id="91-runsh-generated-by-pack-executable">9.1 <code>run.sh</code> (generated by pack, executable)<a class="headerlink" href="#91-runsh-generated-by-pack-executable" title="Permanent link">&para;</a></h3>
+<div class="language-bash highlight"><pre><span></span><code><span id="__span-8-1"><a id="__codelineno-8-1" name="__codelineno-8-1" href="#__codelineno-8-1"></a><span class="ch">#!/usr/bin/env bash</span>
+</span><span id="__span-8-2"><a id="__codelineno-8-2" name="__codelineno-8-2" href="#__codelineno-8-2"></a><span class="nb">set</span><span class="w"> </span>-euo<span class="w"> </span>pipefail
+</span><span id="__span-8-3"><a id="__codelineno-8-3" name="__codelineno-8-3" href="#__codelineno-8-3"></a><span class="nv">JOB</span><span class="o">=</span><span class="s2">"</span><span class="k">$(</span><span class="nb">cd</span><span class="w"> </span><span class="s2">"</span><span class="k">$(</span>dirname<span class="w"> </span><span class="s2">"</span><span class="si">${</span><span class="nv">BASH_SOURCE</span><span class="p">[0]</span><span class="si">}</span><span class="s2">"</span><span class="k">)</span><span class="s2">"</span><span class="w"> </span><span class="o">&amp;&amp;</span><span class="w"> </span><span class="nb">pwd</span><span class="k">)</span><span class="s2">"</span>
+</span><span id="__span-8-4"><a id="__codelineno-8-4" name="__codelineno-8-4" href="#__codelineno-8-4"></a><span class="nb">export</span><span class="w"> </span><span class="nv">HYDRA_HOST_CONFIG_DIR</span><span class="o">=</span><span class="s2">"</span><span class="si">${</span><span class="nv">HYDRA_CONFIG_DIR</span><span class="k">:-</span><span class="si">}</span><span class="s2">"</span><span class="w">   </span><span class="c1"># host mount table lives here (§6.7)</span>
+</span><span id="__span-8-5"><a id="__codelineno-8-5" name="__codelineno-8-5" href="#__codelineno-8-5"></a><span class="nb">export</span><span class="w"> </span><span class="nv">HYDRA_MODELS_DIR</span><span class="o">=</span><span class="s2">"</span><span class="nv">$JOB</span><span class="s2">/models"</span>
+</span><span id="__span-8-6"><a id="__codelineno-8-6" name="__codelineno-8-6" href="#__codelineno-8-6"></a><span class="nb">export</span><span class="w"> </span><span class="nv">HYDRA_CONFIG_DIR</span><span class="o">=</span><span class="s2">"</span><span class="nv">$JOB</span><span class="s2">/config"</span>
+</span><span id="__span-8-7"><a id="__codelineno-8-7" name="__codelineno-8-7" href="#__codelineno-8-7"></a><span class="c1"># HYDRA_DATA_DIR intentionally NOT set: engines + calibration stay host-scoped.</span>
+</span><span id="__span-8-8"><a id="__codelineno-8-8" name="__codelineno-8-8" href="#__codelineno-8-8"></a><span class="nb">export</span><span class="w"> </span><span class="nv">KMP_DUPLICATE_LIB_OK</span><span class="o">=</span>TRUE
+</span><span id="__span-8-9"><a id="__codelineno-8-9" name="__codelineno-8-9" href="#__codelineno-8-9"></a><span class="nb">cd</span><span class="w"> </span><span class="s2">"</span><span class="nv">$JOB</span><span class="s2">"</span>
+</span><span id="__span-8-10"><a id="__codelineno-8-10" name="__codelineno-8-10" href="#__codelineno-8-10"></a><span class="nv">START</span><span class="o">=</span><span class="s2">"</span><span class="k">$(</span>date<span class="w"> </span>-u<span class="w"> </span>+%FT%TZ<span class="k">)</span><span class="s2">"</span>
+</span><span id="__span-8-11"><a id="__codelineno-8-11" name="__codelineno-8-11" href="#__codelineno-8-11"></a><span class="nb">set</span><span class="w"> </span>+e
+</span><span id="__span-8-12"><a id="__codelineno-8-12" name="__codelineno-8-12" href="#__codelineno-8-12"></a>trackerkit<span class="w"> </span>track<span class="w"> </span>--video-list<span class="w"> </span>videos.txt<span class="w"> </span><span class="s2">"</span><span class="nv">$@</span><span class="s2">"</span><span class="w"> </span><span class="m">2</span>&gt;<span class="p">&amp;</span><span class="m">1</span><span class="w"> </span><span class="p">|</span><span class="w"> </span>tee<span class="w"> </span>-a<span class="w"> </span>logs/run.log
+</span><span id="__span-8-13"><a id="__codelineno-8-13" name="__codelineno-8-13" href="#__codelineno-8-13"></a><span class="nv">CODE</span><span class="o">=</span><span class="si">${</span><span class="nv">PIPESTATUS</span><span class="p">[0]</span><span class="si">}</span>
+</span><span id="__span-8-14"><a id="__codelineno-8-14" name="__codelineno-8-14" href="#__codelineno-8-14"></a><span class="nb">set</span><span class="w"> </span>-e
+</span><span id="__span-8-15"><a id="__codelineno-8-15" name="__codelineno-8-15" href="#__codelineno-8-15"></a>trackerkit<span class="w"> </span>job<span class="w"> </span>_record-run<span class="w"> </span>--started<span class="w"> </span><span class="s2">"</span><span class="nv">$START</span><span class="s2">"</span><span class="w"> </span>--exit-code<span class="w"> </span><span class="s2">"</span><span class="nv">$CODE</span><span class="s2">"</span><span class="w"> </span>--<span class="w"> </span><span class="s2">"</span><span class="nv">$@</span><span class="s2">"</span><span class="w">   </span><span class="c1"># appends to logs/runs.jsonl</span>
+</span><span id="__span-8-16"><a id="__codelineno-8-16" name="__codelineno-8-16" href="#__codelineno-8-16"></a><span class="nb">exit</span><span class="w"> </span><span class="s2">"</span><span class="nv">$CODE</span><span class="s2">"</span>
+</span></code></pre></div>
+<p><code>HYDRA_CONFIG_DIR=&lt;job&gt;/config</code> <strong>shadows the compute box's own <code>advanced_config.json</code></strong>; the run uses the staging machine's snapshot. That is the intent (the experiment travels whole). <code>run.sh</code> honours <code>HYDRA_JOB_HOST_ADVANCED_CONFIG=1</code> as the escape hatch: it copies the host's <code>advanced_config.json</code> over the snapshot before launching and logs that it did.</p>
+<p><code>cd "$JOB"</code> is what makes the job-relative <code>videos.txt</code> and sidecar <code>file_path</code> values work with <code>load_video_list()</code>'s CWD-relative semantics (<code>app.py:314-349</code>) without changing that function. Extra arguments (<code>--gpus auto</code>, <code>--jobs 2</code>) pass straight through to <code>track</code>.</p>
+<p><code>run.sh</code> is the executable contract. Anyone can <code>ssh</code> in and run it by hand with <code>nohup</code>; <code>job run</code> is sugar.</p>
+<h3 id="92-trackerkit-job-run-job_dir_or_remote-gpus-jobs-threads-per-job-detach">9.2 <code>trackerkit job run &lt;job_dir_or_remote&gt; [--gpus …] [--jobs …] [--threads-per-job …] [--detach]</code><a class="headerlink" href="#92-trackerkit-job-run-job_dir_or_remote-gpus-jobs-threads-per-job-detach" title="Permanent link">&para;</a></h3>
+<ul>
+<li>Local job dir: runs <code>preflight</code> (§9.4), then <code>run.sh</code> in the foreground; <code>run.sh</code> appends the run record to <code>logs/runs.jsonl</code>.</li>
+<li>Remote target: <code>ssh &lt;host&gt; 'cd &lt;job&gt; &amp;&amp; ./run.sh …'</code>; with <code>--detach</code>, wraps in <code>nohup … &amp;</code> and prints the log path. <code>job status &lt;remote&gt;</code> tails <code>logs/run.log</code> and reports the last <code>runs</code> entry.</li>
+<li><code>track_args</code> recorded at pack time (<code>--sahi-profile</code>, <code>--apply-tuned-inference</code>, <code>--inference-autotune-manual</code>) are <strong>always</strong> forwarded by <code>run</code>, because the calibration lookup key includes the manual-field baseline digest (<code>calibrate_cli.py:112-118</code>); dropping them makes the profile lookup silently miss. <code>run</code> refuses <code>--sahi-profile</code> etc. on its own command line: those belong to the experiment and are fixed at pack time.</li>
+</ul>
+<h3 id="93-trackerkit-job-calibrate-job_dirremote-budget-seconds-n">9.3 <code>trackerkit job calibrate &lt;job_dir|remote&gt; [--budget-seconds N]</code><a class="headerlink" href="#93-trackerkit-job-calibrate-job_dirremote-budget-seconds-n" title="Permanent link">&para;</a></h3>
+<p>One-click calibration is lookup-only at track time (<code>trackerkit calibrate</code> writes the profile, <code>track</code> only reads it), and the profile key is host-fingerprinted. So on a fresh compute box <code>--apply-tuned-inference</code> always misses unless calibration runs there first. <code>job calibrate</code> runs <code>trackerkit calibrate</code> inside the job environment (same <code>HYDRA_MODELS_DIR</code>/<code>HYDRA_CONFIG_DIR</code>, same <code>cd</code>), against the keystone video, forwarding <code>track_args.inference_autotune_manual</code> and <code>sahi_profile</code> verbatim so the baseline digest matches what <code>run</code> will look up (<code>calibrate_cli.py:112-118</code>). <code>run --calibrate</code> chains the two. The profile stays on the host under <code>&lt;data&gt;/inference_tuning_profiles</code>; it is never pulled.</p>
+<h3 id="94-preflight-job-preflight-job_dir-also-run-automatically-by-run">9.4 Preflight (<code>job preflight &lt;job_dir&gt;</code>, also run automatically by <code>run</code>)<a class="headerlink" href="#94-preflight-job-preflight-job_dir-also-run-automatically-by-run" title="Permanent link">&para;</a></h3>
+<p>Fails loudly, all checks reported before exit:</p>
+<ol>
+<li>Manifest version supported; <code>verify</code> (§11) passes.</li>
+<li><code>hydra_suite</code> importable and <code>&gt;= requirements.min_hydra_suite_version</code>.</li>
+<li>Every <code>requirements.conda_envs</code> entry exists (<code>conda env list</code>), and <code>conda</code> is on PATH. This is the <code>pose_sleap_env</code> problem: not fixable by packing, so it fails here with the exact env name and a pointer to the SLEAP setup docs.</li>
+<li>Requested <code>runtime_tier</code> is in <code>available_tiers()</code> for this host; if not, print the fallback the resolver would take and require <code>--allow-tier-fallback</code>.</li>
+<li>Every <code>models/</code> entry hashes to the manifest sha256 (skippable with <code>--fast</code> after a verified push).</li>
+<li>Shared-root references resolved, verified and materialized as symlinks (§6.7).</li>
+<li>Free disk under <code>videos/</code> ≥ 1.5× total video bytes (caches and outputs), counting shared videos' sizes for caches but not for the videos themselves.</li>
+</ol>
+<p>Result is written to <code>logs/preflight.json</code>.</p>
+<h2 id="10-output-discovery-contract">10. Output discovery contract<a class="headerlink" href="#10-output-discovery-contract" title="Permanent link">&para;</a></h2>
+<p>"Output" is defined structurally, not by name: any path under <code>&lt;job&gt;/videos/</code> after the run that is not a video listed in the manifest and not in that video's <code>pushed_siblings</code>. For documentation and tests, the artifacts known today are:</p>
+<table>
+<thead>
+<tr>
+<th>Artifact</th>
+<th>Source</th>
+</tr>
+</thead>
+<tbody>
+<tr>
+<td><code>&lt;stem&gt;_tracking.csv</code>, <code>&lt;stem&gt;_tracking.mp4</code></td>
+<td><code>cli_config.py:270-276</code></td>
+</tr>
+<tr>
+<td><code>&lt;stem&gt;_tracking_forward_processed.csv</code>, <code>&lt;stem&gt;_tracks.csv</code>, <code>*_with_individual.csv</code> (Debug)</td>
+<td><code>trajectory_writer.py</code></td>
+</tr>
+<tr>
+<td><code>&lt;stem&gt;_logs/</code></td>
+<td><code>video_artifacts.py:112-128</code></td>
+</tr>
+<tr>
+<td><code>.inference_cache_&lt;stem&gt;/</code> (<code>detection.npz</code>, <code>opt/</code>)</td>
+<td><code>video_artifacts.py:95-109</code></td>
+</tr>
+<tr>
+<td><code>&lt;stem&gt;_datasets/{active_learning,oriented_videos,individual_crops}/</code></td>
+<td>GUI-only today (§6.6)</td>
+</tr>
+<tr>
+<td><code>&lt;stem&gt;_config.json</code></td>
+<td>in <code>pushed_siblings</code>, <strong>not</strong> pulled back (the local original is authoritative)</td>
+</tr>
+</tbody>
+</table>
+<p>A test packs a fixture job, fabricates each of these on the "remote" side, and asserts <code>pull --dry-run</code> maps every one of them beside the origin video and nothing else.</p>
+<h2 id="11-verify-job-verify-job_dir">11. Verify: <code>job verify &lt;job_dir&gt;</code><a class="headerlink" href="#11-verify-job-verify-job_dir" title="Permanent link">&para;</a></h2>
+<p>Pure local check, no network:</p>
+<ul>
+<li>manifest parses, <code>job_version == 1</code>;</li>
+<li>every <code>models[]</code> file exists with matching sha256 and size; every <code>sidecars[]</code> exists;</li>
+<li>every <code>videos[].job_path</code> without <code>shared</code> exists (symlink target exists on the staging machine; regular file on the remote); <code>shared</code> entries are checked by preflight, not verify, because verify is offline and mount-agnostic; <code>videos[].config_job_path</code> exists;</li>
+<li>no sidecar config contains an absolute path in any key listed in §6.4 (this is the "portable by construction" assertion, run against real configs);</li>
+<li><code>videos.txt</code> lines all exist and the first equals the keystone;</li>
+<li>every relative path in the manifest passes the traversal check (<code>_validated_archive_relpath</code> pattern from <code>project_bundle.py:264-274</code>, generalized to a <code>validate_job_relpath</code>).</li>
+</ul>
+<p><code>verify</code> runs at the end of <code>pack</code>, at the end of <code>push</code> (remotely), and at the start of <code>run</code>.</p>
+<h2 id="12-module-layout-and-dependency-direction">12. Module layout and dependency direction<a class="headerlink" href="#12-module-layout-and-dependency-direction" title="Permanent link">&para;</a></h2>
+<div class="language-text highlight"><pre><span></span><code><span id="__span-9-1"><a id="__codelineno-9-1" name="__codelineno-9-1" href="#__codelineno-9-1"></a>src/hydra_suite/data/tracking_job/
+</span><span id="__span-9-2"><a id="__codelineno-9-2" name="__codelineno-9-2" href="#__codelineno-9-2"></a>    __init__.py          # public API: pack_job, verify_job, plan_pull, preflight_job, JobManifest
+</span><span id="__span-9-3"><a id="__codelineno-9-3" name="__codelineno-9-3" href="#__codelineno-9-3"></a>    manifest.py          # JobManifest dataclass, to_dict/from_dict, atomic write, validate_job_relpath
+</span><span id="__span-9-4"><a id="__codelineno-9-4" name="__codelineno-9-4" href="#__codelineno-9-4"></a>    pack.py              # pack_job: plan → resolve → collect → copy → rewrite → runner → verify
+</span><span id="__span-9-5"><a id="__codelineno-9-5" name="__codelineno-9-5" href="#__codelineno-9-5"></a>    references.py        # copy_model_reference (file/dir/bundle/sidecars), registry subset
+</span><span id="__span-9-6"><a id="__codelineno-9-6" name="__codelineno-9-6" href="#__codelineno-9-6"></a>    outputs.py           # output-set discovery + origin mapping (used by pull)
+</span><span id="__span-9-7"><a id="__codelineno-9-7" name="__codelineno-9-7" href="#__codelineno-9-7"></a>    runner.py            # run.sh template
+</span><span id="__span-9-8"><a id="__codelineno-9-8" name="__codelineno-9-8" href="#__codelineno-9-8"></a>    preflight.py         # host checks, shared-root resolution + materialization
+</span><span id="__span-9-9"><a id="__codelineno-9-9" name="__codelineno-9-9" href="#__codelineno-9-9"></a>    shared_roots.py      # mount table read/write, alias matching (longest root wins)
+</span><span id="__span-9-10"><a id="__codelineno-9-10" name="__codelineno-9-10" href="#__codelineno-9-10"></a>    transport.py         # rsync/ssh command construction + execution (subprocess), no policy
+</span><span id="__span-9-11"><a id="__codelineno-9-11" name="__codelineno-9-11" href="#__codelineno-9-11"></a>src/hydra_suite/trackerkit/job_cli.py   # argparse wiring for `trackerkit job …`, thin
+</span><span id="__span-9-12"><a id="__codelineno-9-12" name="__codelineno-9-12" href="#__codelineno-9-12"></a>src/hydra_suite/trackerkit/engine_params.py  # + iter_model_references + the four key tuples
+</span><span id="__span-9-13"><a id="__codelineno-9-13" name="__codelineno-9-13" href="#__codelineno-9-13"></a>src/hydra_suite/paths.py                     # + HYDRA_MODELS_DIR
+</span><span id="__span-9-14"><a id="__codelineno-9-14" name="__codelineno-9-14" href="#__codelineno-9-14"></a>src/hydra_suite/trackerkit/gui/orchestrators/config.py  # leak fixes (§6.5)
+</span></code></pre></div>
+<p>Dependency direction (Core/Data must never import an app layer):</p>
+<ul>
+<li><code>discover_multihead_model_bundle</code> lives in <code>classkit/model_bundle.py</code> (app layer). It is <strong>not</strong> moved: <code>trackerkit/job_cli.py</code> performs bundle discovery and passes the expanded file list down to <code>pack.py</code> as part of each model reference, the same pattern used for engine params below.</li>
+<li><code>build_engine_params</code> and the batch planner live in <code>trackerkit/</code> (app layer). <code>pack.py</code> therefore takes the planned per-video <code>(cfg, params)</code> pairs as <strong>input</strong>; <code>trackerkit/job_cli.py</code> does the planning and parameter building and hands the results down. <code>data/tracking_job</code> imports only from <code>data</code>, <code>core</code>, <code>training.model_publish</code>, <code>paths</code>, and the standard library.</li>
+</ul>
+<h2 id="13-cli-surface-final">13. CLI surface (final)<a class="headerlink" href="#13-cli-surface-final" title="Permanent link">&para;</a></h2>
+<div class="language-text highlight"><pre><span></span><code><span id="__span-10-1"><a id="__codelineno-10-1" name="__codelineno-10-1" href="#__codelineno-10-1"></a>trackerkit job pack     &lt;job_dir&gt; (VIDEO... | --video-list FILE) [--config] [--keystone-override] [--sahi-profile] [--apply-tuned-inference|--no-apply-tuned-inference] [--inference-autotune-manual]... [--name] [--copy-videos] [--no-shared | --shared-only]
+</span><span id="__span-10-2"><a id="__codelineno-10-2" name="__codelineno-10-2" href="#__codelineno-10-2"></a>trackerkit job verify   &lt;job_dir&gt;
+</span><span id="__span-10-3"><a id="__codelineno-10-3" name="__codelineno-10-3" href="#__codelineno-10-3"></a>trackerkit job shared-root add &lt;alias&gt; &lt;path&gt; | remove &lt;alias&gt; | list
+</span><span id="__span-10-4"><a id="__codelineno-10-4" name="__codelineno-10-4" href="#__codelineno-10-4"></a>trackerkit job push     &lt;job_dir&gt; &lt;remote&gt;
+</span><span id="__span-10-5"><a id="__codelineno-10-5" name="__codelineno-10-5" href="#__codelineno-10-5"></a>trackerkit job preflight &lt;job_dir&gt; [--fast] [--allow-tier-fallback] [--shared-root ALIAS=PATH]...
+</span><span id="__span-10-6"><a id="__codelineno-10-6" name="__codelineno-10-6" href="#__codelineno-10-6"></a>trackerkit job run      &lt;job_dir|remote&gt; [--gpus] [--jobs] [--threads-per-job] [--detach] [--calibrate] [--allow-tier-fallback] [--shared-root ALIAS=PATH]...
+</span><span id="__span-10-7"><a id="__codelineno-10-7" name="__codelineno-10-7" href="#__codelineno-10-7"></a>trackerkit job calibrate &lt;job_dir|remote&gt; [--budget-seconds]
+</span><span id="__span-10-8"><a id="__codelineno-10-8" name="__codelineno-10-8" href="#__codelineno-10-8"></a>trackerkit job status   &lt;remote&gt;
+</span><span id="__span-10-9"><a id="__codelineno-10-9" name="__codelineno-10-9" href="#__codelineno-10-9"></a>trackerkit job pull     &lt;remote&gt; &lt;job_dir&gt; [--dry-run] [--no-caches] [--overwrite]
+</span></code></pre></div>
+<p>Registered in <code>build_parser()</code> (<code>app.py:57</code>) as <code>job</code> with nested subparsers, <code>allow_abbrev=False</code>; validated in <code>parse_arguments</code>; dispatched in <code>main</code> by string comparison like <code>track</code> and <code>calibrate</code>. Exit codes: 0 success, 2 argument/validation error, 3 preflight failure, 4 transport failure, 5 pull collision.</p>
+<h2 id="14-error-handling">14. Error handling<a class="headerlink" href="#14-error-handling" title="Permanent link">&para;</a></h2>
+<ul>
+<li>All job errors are <code>TrackingJobError(ValueError)</code> with a <code>code</code> attribute matching the exit codes; the CLI prints <code>error: &lt;message&gt;</code> and exits with the code. Follows <code>project_bundle.py</code>'s plain-<code>ValueError</code> style but adds the code for scripting.</li>
+<li><code>rsync</code>/<code>ssh</code> failures surface the subprocess's stderr verbatim and the exact command line, so the user can rerun by hand.</li>
+<li><code>pull</code> is all-or-nothing at the planning stage (collisions listed before any copy) but resumable at the transfer stage (<code>rsync --partial</code>).</li>
+<li><code>pack</code> on a config that references a model that does not resolve on the staging machine fails immediately with the role key and the raw config value; it does not ship a broken job.</li>
+</ul>
+<h2 id="15-testing">15. Testing<a class="headerlink" href="#15-testing" title="Permanent link">&para;</a></h2>
+<p>Unit (no network, tmp dirs, <code>HYDRA_*</code> monkeypatched):</p>
+<ol>
+<li><code>iter_model_references</code> contract guard (§6.3).</li>
+<li>Pack rewrites: every §6.4 key ends job-relative; out-of-root model gets an <code>external/</code> key; ClassKit bundle siblings and pose directories copied whole; <code>.hydra-runtime-artifacts</code> excluded; registry subset contains exactly the shipped keys with <code>source_path=null</code>.</li>
+<li><code>HYDRA_MODELS_DIR</code> override: <code>get_models_dir()</code>, registry path, <code>get_models_root_directory()</code>, SAM3 checkpoint root all follow it while <code>get_data_dir()</code> does not.</li>
+<li><code>run.sh</code> + sidecars resolve: with <code>HYDRA_MODELS_DIR</code>/<code>HYDRA_CONFIG_DIR</code> pointed at a packed job and CWD at the job root, <code>load_tracker_cli_session</code> on each sidecar builds engine params whose model paths all lie inside <code>&lt;job&gt;/models</code> and equal, key for key, the params built on the staging side (the byte-identity of <strong>params</strong>, which is what the GUI/CLI parity tests already check).</li>
+<li>Output discovery and origin mapping (§10), including redirected outputs and the collision policy.</li>
+<li>Transport: <code>transport.py</code> builds the exact <code>rsync</code> argv (asserted as a list); the push <code>--files-from</code> list equals the manifest input set and contains no output path even when the local job tree holds pulled outputs and is exercised end-to-end against <code>localhost</code> only when <code>HYDRA_TEST_SSH_LOCALHOST=1</code>.</li>
+<li>Leak fixes: GUI save of a config with identity classifiers under the models root has no absolute paths in <code>color_tag_model_path</code> / <code>cnn_classifiers[].model_path</code>; <code>test_gui_cli_param_equivalence.py</code> unchanged and green.</li>
+<li>Preflight: missing conda env, unavailable tier, sha mismatch each fail with the expected code.</li>
+<li>Shared roots: a video under a local alias is packed as a reference, absent from the push list and from <code>videos/</code>; on a fake remote with a different mount path the same alias resolves, the signature check passes, a symlink is materialized, and outputs written beside it are mapped back to the origin; a wrong alias, a missing file and a re-encoded file each fail preflight with the expected message; <code>--shared-only</code> fails pack for an off-share video.</li>
+</ol>
+<p>Integration (manual, in the plan's acceptance section): pack <code>fly_obb</code> and <code>ant_pose_headtail</code> fixtures on this Mac, push to mehek, run, pull, and diff the pulled <code>_tracking.csv</code> against a native run on mehek with the same config: identical rows (same host, same models, same config).</p>
+<p>Equivalence gate: two changes touch the tracking path, the save-side relativization (a load-side no-op) and the cache-key redefinition (§7b, key-only). Run the <strong>full</strong> matrix on MPS and CUDA with <code>.inference_cache_*</code> and <code>__pycache__</code> cleared on both sides; acceptance is byte-identical CSVs at the determinism floor. Then run the §7b.6 round-trip test against mehek as the acceptance proof for Goal 4.</p>
+<h2 id="16-documentation">16. Documentation<a class="headerlink" href="#16-documentation" title="Permanent link">&para;</a></h2>
+<ul>
+<li>New <code>docs/user-guide/trackerkit-jobs.md</code>: lifecycle walkthrough (pack → push → run → pull), the "what travels, what doesn't" table, the shared-root mount table with a two-host example, the conda-env requirement, and the nine-GPU example adapted to <code>job run --gpus auto</code>.</li>
+<li><code>docs/user-guide/trackerkit-cli.md</code>: cross-link from <code>## A batch</code>.</li>
+<li><code>docs/getting-started/installation.md:242-258</code>: add <code>HYDRA_MODELS_DIR</code>.</li>
+<li><code>docs/developer-guide/</code>: a short note on <code>iter_model_references</code> as the contract every new model role must join.</li>
+</ul>
+<h2 id="17-follow-ups-explicitly-out-of-scope">17. Follow-ups (explicitly out of scope)<a class="headerlink" href="#17-follow-ups-explicitly-out-of-scope" title="Permanent link">&para;</a></h2>
+<ol>
+<li><strong>Headless CLI dataset/media export</strong> (user-requested follow-up). Close the gap in §6.6: derive <code>DATASET_OUTPUT_DIR</code>, <code>FINAL_MEDIA_EXPORT_VIDEO_OUTPUT_DIR</code>, <code>INDIVIDUAL_DATASET_OUTPUT_DIR</code> in <code>cli_config.py</code> exactly as the GUI does (<code>orchestrators/config.py:2241-2252</code>, <code>&lt;video_dir&gt;/&lt;stem&gt;_datasets/&lt;subfolder&gt;</code>), so a job run on a compute box emits active-learning, oriented-video and individual-crop exports beside the video and <code>pull</code> brings them home through the structural output discovery of §10 without further change. Gated by the byte-identity harness because it changes CLI engine params; until then <code>pack</code> keeps warning when an export stage is enabled.</li>
+<li>GUI "Package job…" action in TrackerKit calling <code>pack_job</code> through a <code>BaseWorker</code>.</li>
+<li><code>job clean</code> and retention policy.</li>
+<li>Unify the duplicated sidecar-path formula (<code>session_plan.py:20-26</code> vs <code>orchestrators/config.py:97-103</code>) into <code>session_plan.get_video_config_path</code>.</li>
+<li>Registry-name references in configs (instead of relative paths) belong to the deferred model-registry unification spec and are not needed for portability.</li>
+</ol>
+
+
+
+
+
+
+
+
+
+
+
+
+                
+              </article>
+            </div>
+          
+          
+<script>var target=document.getElementById(location.hash.slice(1));target&&target.name&&(target.checked=target.name.startsWith("__tabbed_"))</script>
+        </div>
+        
+          <button type="button" class="md-top md-icon" data-md-component="top" hidden>
+  
+  <svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 24 24"><path d="M13 20h-2V8l-5.5 5.5-1.42-1.42L12 4.16l7.92 7.92-1.42 1.42L13 8z"/></svg>
+  Back to top
+</button>
+        
+      </main>
+      
+        <footer class="md-footer">
+  
+  <div class="md-footer-meta md-typeset">
+    <div class="md-footer-meta__inner md-grid">
+      <div class="md-copyright">
+  
+  
+    Made with
+    <a href="https://squidfunk.github.io/mkdocs-material/" target="_blank" rel="noopener">
+      Material for MkDocs
+    </a>
+  
+</div>
+      
+    </div>
+  </div>
+</footer>
+      
+    </div>
+    <div class="md-dialog" data-md-component="dialog">
+      <div class="md-dialog__inner md-typeset"></div>
+    </div>
+    
+    
+    <script id="__config" type="application/json">{"base": "../../../..", "features": ["navigation.tabs", "navigation.sections", "navigation.expand", "navigation.top", "content.code.copy", "content.action.edit", "search.suggest", "search.highlight"], "search": "../../../../assets/javascripts/workers/search.6ce7567c.min.js", "translations": {"clipboard.copied": "Copied to clipboard", "clipboard.copy": "Copy to clipboard", "search.result.more.one": "1 more on this page", "search.result.more.other": "# more on this page", "search.result.none": "No matching documents", "search.result.one": "1 matching document", "search.result.other": "# matching documents", "search.result.placeholder": "Type to start searching", "search.result.term.missing": "Missing", "select.version": "Select version"}, "version": {"default": "latest", "provider": "mike"}}</script>
+    
+    
+      <script src="../../../../assets/javascripts/bundle.83f73b43.min.js"></script>
+      
+    
+  </body>
+</html>
