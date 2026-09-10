@@ -16,7 +16,7 @@ from hydra_suite.core.post.interpolated_crops import _get_detection_size
 
 
 def _write_single_frame_cache(path, detection_id=100000):
-    key = CacheKey(schema_version=0, model_path="m", model_mtime=1.0, config_hash="h")
+    key = CacheKey(schema_version=0, model_id="m", config_hash="h")
     writer = DetectionCacheHandle(path=path, key=key)
     # A 10x4 axis-aligned OBB: corners[1]-corners[0] has length 10 (width),
     # corners[2]-corners[1] has length 4 (height) -- matches

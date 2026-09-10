@@ -1768,6 +1768,15 @@ class ParameterHelperDialog(BaseDialog):
         def _source_signature(
             path: str | Path, *, cache_contents_only: bool = False
         ) -> object:
+            # KNOWN DIVERGENCE (Task 4, portable-jobs plan): this closure is a
+            # private (path, mtime)-based fingerprint, not
+            # ``cache/keys.py``'s ``video_signature`` (itself now a re-export
+            # of ``content_id.video_signature``). It does NOT follow the
+            # content-based redefinition — the optimizer state key computed
+            # here therefore stays machine-local even after Task 4 landed.
+            # Documented deliberately, not fixed here (spec §302 overstates
+            # "all call the one function"; see the plan's spec-corrections
+            # preamble).
             source = Path(path)
             try:
                 stat = source.stat()

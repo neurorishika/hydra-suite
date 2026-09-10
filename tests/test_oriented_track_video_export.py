@@ -55,9 +55,7 @@ def _write_detection_cache(path: Path, frames: list[dict]) -> None:
     ``detection_ids``. Missing keys default to zero detections for that
     frame (still recorded as a written frame).
     """
-    key = CacheKey(
-        schema_version=0, model_path="test", model_mtime=0.0, config_hash="h"
-    )
+    key = CacheKey(schema_version=0, model_id="test", config_hash="h")
     handle = DetectionCacheHandle(path=path, key=key)
     for frame in frames:
         frame_idx = int(frame["frame_idx"])

@@ -265,6 +265,7 @@ Override the default locations with environment variables:
 |----------|------------------|---------|
 | `HYDRA_DATA_DIR` | Models, training runs | `platformdirs` user data dir |
 | `HYDRA_CONFIG_DIR` | Presets, skeletons, advanced config | `platformdirs` user config dir |
+| `HYDRA_MODELS_DIR` | **Only** the models root (`model_registry.json` + published models), leaving engine artifacts and calibration profiles on the host data dir | `<HYDRA_DATA_DIR>/models` |
 
 Examples:
 
@@ -275,6 +276,10 @@ hydra
 
 # Use a project-specific config
 HYDRA_CONFIG_DIR=./my-project-config mat
+
+# Run a packaged job's models without relocating engine caches or
+# calibration profiles (set automatically by a packed job's run.sh)
+export HYDRA_MODELS_DIR=/home/rutalab/jobs/colony_A/models
 
 # Check where everything currently points
 python -c "from hydra_suite.paths import print_paths; print_paths()"

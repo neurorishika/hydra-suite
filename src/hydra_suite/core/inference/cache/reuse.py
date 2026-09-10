@@ -17,9 +17,7 @@ from .store import DetectionCacheHandle
 # `open_detection_cache_reader`'s convention: validity then gates on the
 # cache file's existence and its written-frame bookkeeping alone, not on a
 # run-config match.
-_FALLBACK_KEY = CacheKey(
-    schema_version=0, model_path="", model_mtime=0.0, config_hash=""
-)
+_FALLBACK_KEY = CacheKey(schema_version=0, model_id="", config_hash="")
 
 
 def _requires_live_native_geometry(runner: object) -> bool:
