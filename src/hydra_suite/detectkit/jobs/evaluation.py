@@ -13,9 +13,10 @@ from hydra_suite.widgets.workers import BaseWorker
 from ..evaluation import EvaluationCandidate, EvaluationResult, new_evaluation_id
 from ..sidecars.protocol import Operation, SidecarRequest
 from ..sidecars.supervisor import ProtectedOperation
+from .containment_recovery import ContainmentRecoveryMixin
 
 
-class EvaluationWorker(BaseWorker):
+class EvaluationWorker(ContainmentRecoveryMixin, BaseWorker):
     """Evaluate selected training runs sequentially outside the GUI thread."""
 
     result_ready = Signal(object)
@@ -35,9 +36,13 @@ class EvaluationWorker(BaseWorker):
         self._device = str(device)
         self._batch = max(1, int(batch))
         self._cancel_requested = False
+        self.recovery_cleanup_error = ""
         self._operation: ProtectedOperation | None = None
 
     def cancel(self) -> None:
+        if self.containment_recovery_required:
+            self.retry_containment_cleanup()
+            return
         self._cancel_requested = True
         if self._operation is not None:
             self._operation.cancel()
@@ -74,7 +79,8 @@ class EvaluationWorker(BaseWorker):
                 cleanup_paths=(self._output_root / evaluation_id,),
             )
             self._operation = operation
-            outcome = operation.run(
+            outcome = self.run_protected(
+                operation,
                 progress=lambda pct, message, index=index: (
                     self.progress.emit(
                         int(((index - 1) + pct / 100) * 100 / max(1, total))
