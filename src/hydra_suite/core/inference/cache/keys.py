@@ -1,7 +1,6 @@
 from __future__ import annotations
 
 import hashlib
-import os
 from dataclasses import replace
 
 import numpy as np
@@ -18,6 +17,16 @@ from ..config import (
     PoseConfig,
     SliceConfig,
 )
+
+# Fix Z1: re-export (not redefine) content_id.video_signature. keys.py used to
+# define its own (size, mtime_ns)-based `video_signature`; a same-named local
+# `def` here would silently SHADOW this import rather than error, because
+# F811 (redefinition) is disabled in .flake8's extend-ignore. Every caller
+# that imports `video_signature` from `keys`/`runner` (runner.py, worker.py,
+# optimizer.py, optimizer_workers.py, production_replay.py,
+# autotune/session.py) depends on this being the content-based one.
+from ..content_id import model_content_id
+from ..content_id import video_signature as video_signature  # noqa: F401
 from .base import CACHE_SCHEMA_VERSION, CacheKey
 
 
@@ -31,24 +40,6 @@ def canonical_geometry_key(geometry: CanonicalGeometry) -> str:
     return _sha(
         f"{geometry.canvas_w}x{geometry.canvas_h}|{geometry.margin}|{geometry.aspect_ratio}"
     )
-
-
-def video_signature(path: str | None) -> str:
-    """Cheap content fingerprint of a video file (size + mtime).
-
-    Folding this into the cache keys makes a cache reusable only for the exact
-    video file it was computed from. Without it, a video replaced under the same
-    name (e.g. a clip regenerated with a different frame count) would pass the
-    config-only key check and serve stale, truncated detections. Returns "" when
-    no path is given so non-video contexts and tests keep the old behavior.
-    """
-    if not path:
-        return ""
-    try:
-        st = os.stat(path)  # follows symlinks → fingerprints the real file
-        return f"{st.st_size}:{st.st_mtime_ns}"
-    except OSError:
-        return ""
 
 
 def with_video_signature(key: CacheKey, sig: str) -> CacheKey:
@@ -116,20 +107,20 @@ def detection_cache_key(
             # dtype). Two different masks => different keys; identical masks =>
             # identical keys.
             slice_hash = _sha(f"{slice_hash}|roi={_param_repr(roi_mask)}")
+        model_id = model_content_id(path)
     else:
         assert config.sequential is not None
-        path = (
-            f"{config.sequential.detect_model_path}|"
-            f"{config.sequential.obb_model_path}"
-        )
         slice_hash = _sequential_config_hash(config)
         stage1_slice = config.sequential.stage1_slice
         if stage1_slice.enabled and roi_mask is not None:
             slice_hash = _sha(f"{slice_hash}|roi={_param_repr(roi_mask)}")
+        model_id = (
+            f"{model_content_id(config.sequential.detect_model_path)}"
+            f"|{model_content_id(config.sequential.obb_model_path)}"
+        )
     return CacheKey(
         schema_version=CACHE_SCHEMA_VERSION,
-        model_path=path,
-        model_mtime=_mtime(path.split("|")[0]),
+        model_id=model_id,
         # User-facing confidence_threshold/iou stay excluded: replay reapplies
         # those filters. Every setting that changes raw extraction is folded in
         # below, including sequential's *second* model signature.
@@ -340,8 +331,7 @@ def bgsub_detection_cache_key(config: BgSubConfig) -> CacheKey:
     )
     return CacheKey(
         schema_version=CACHE_SCHEMA_VERSION,
-        model_path="background_subtraction",
-        model_mtime=0.0,
+        model_id="background_subtraction",
         config_hash=_sha(payload),
     )
 
@@ -352,8 +342,7 @@ def headtail_cache_key(config: HeadTailConfig, geometry: CanonicalGeometry) -> C
     )
     return CacheKey(
         schema_version=CACHE_SCHEMA_VERSION,
-        model_path=config.model_path,
-        model_mtime=_mtime(config.model_path),
+        model_id=model_content_id(config.model_path),
         config_hash=config_hash,
     )
 
@@ -361,8 +350,7 @@ def headtail_cache_key(config: HeadTailConfig, geometry: CanonicalGeometry) -> C
 def cnn_cache_key(config: CNNConfig, geometry: CanonicalGeometry) -> CacheKey:
     return CacheKey(
         schema_version=CACHE_SCHEMA_VERSION,
-        model_path=config.model_path,
-        model_mtime=_mtime(config.model_path),
+        model_id=model_content_id(config.model_path),
         # calibration_temperature, scoring_mode excluded; canonical geometry
         # IS included -- it changes what pixels the classifier actually sees.
         config_hash=canonical_geometry_key(geometry)
@@ -391,8 +379,7 @@ def pose_cache_key(config: PoseConfig, geometry: CanonicalGeometry) -> CacheKey:
     ) + _batch_term(backend_config.batch_size, _default_batch_size(backend_config))
     return CacheKey(
         schema_version=CACHE_SCHEMA_VERSION,
-        model_path=path,
-        model_mtime=_mtime(path),
+        model_id=model_content_id(path),
         config_hash=config_hash,
     )
 
@@ -406,8 +393,7 @@ def apriltag_cache_key(config: AprilTagConfig) -> CacheKey:
     )
     return CacheKey(
         schema_version=CACHE_SCHEMA_VERSION,
-        model_path="",
-        model_mtime=0.0,
+        model_id="",
         config_hash=config_hash,
     )
 
@@ -416,19 +402,13 @@ def _sha(text: str) -> str:
     return hashlib.sha256(text.encode()).hexdigest()
 
 
-def _mtime(path: str) -> float:
-    try:
-        return os.path.getmtime(path)
-    except OSError:
-        return 0.0
-
-
 def _model_signature(path: str) -> str:
-    """Stable model signature used when a cache consumes multiple models.
+    """Content signature of one model, for folding into a raw config hash.
 
-    ``CacheKey.model_mtime`` has one numeric slot for historical reasons. A
-    sequential detector has two independently changing model artifacts, so put
-    both path/mtime signatures into the raw config hash as well.
+    A sequential detector consumes two independently changing artifacts, so
+    both are folded here as well as into ``model_id``. This MUST be
+    content-based: it used to be f"{path}|mtime=…", which put an absolute
+    path inside ``config_hash`` and made every OBB cache machine-local even
+    after ``model_id`` itself became content-based.
     """
-
-    return f"{path}|mtime={_mtime(path):.9f}"
+    return model_content_id(path)

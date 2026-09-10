@@ -66,9 +66,34 @@ the clip is reused rather than a separate asset), and the regenerated
 
 On a fresh machine:
 ```bash
-conda activate hydra-mps                        # or hydra-suite-cuda
-bash tools/equivalence/fixtures/fetch_fixtures.sh   # downloads clips + models
+conda activate hydra-mps                        # or hydra-cuda
+bash tools/equivalence/fixtures/fetch_fixtures.sh   # clips + models
 bash tools/equivalence/run_matrix.sh                # FIXTURES=1 is the default
+```
+
+**The release is currently unpublished, so use the peer-transfer path.**
+`fetch_fixtures.sh` copies clips and models from a machine that already has
+them, then verifies everything against `manifest.json`:
+
+```bash
+PEER=rutalab@mehek.taild08eb9.ts.net bash tools/equivalence/fixtures/fetch_fixtures.sh
+# PEER_REPO=... if the peer's checkout is not ~/hydra-suite
+# PEER_MODELS_DIR=... if the peer's models dir cannot be resolved over ssh
+```
+
+Models are verified per file against the manifest's `model_files` checksums,
+not via the archive, so an already-populated models dir needs no download at
+all — and a stale or unreachable `models.tar.gz` cannot block a machine whose
+models are already correct. A missing model aborts the script by name: missing
+models do not fail loudly at runtime, they produce empty CSVs that then compare
+`EQUIVALENT` against each other.
+
+On a **shared** GPU box, pin the harness to an idle device before running it —
+`run_matrix.sh` is single-process and always lands on `cuda:0`:
+
+```bash
+nvidia-smi --query-gpu=index,memory.used,utilization.gpu --format=csv,noheader
+export CUDA_VISIBLE_DEVICES=$(nvidia-smi --query-gpu=uuid --format=csv,noheader -i 4)
 ```
 
 Run only specific clips (so you don't rerun the whole matrix) — pass names as

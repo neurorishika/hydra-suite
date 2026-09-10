@@ -9,6 +9,10 @@ trackerkit track video.mp4                     # uses video_config.json beside t
 trackerkit track video.mp4 --config my.json    # explicit config
 ```
 
+To package a batch, its models, and its config for a different compute box
+(zero model registration, outputs pulled back beside the originals), see
+[Portable tracking jobs](trackerkit-jobs.md) (`trackerkit job pack|push|preflight|run|pull`).
+
 ## A batch
 
 ```bash
@@ -75,6 +79,27 @@ run. Rules:
 - `--threads-per-job N` (opt-in) caps OMP/MKL/OpenBLAS/Numba threads per child.
   Leave it off unless the host is oversubscribed; it can change floating-point
   reduction order in threaded kernels.
+
+### On a shared machine
+
+`--gpus auto` means *every GPU `nvidia-smi` reports* — it does **not** skip GPUs
+that are busy. On a multi-user box it will happily start children on top of
+someone else's job. Check first and name the free GPUs explicitly:
+
+```bash
+nvidia-smi --query-gpu=index,memory.used,utilization.gpu --format=csv,noheader
+trackerkit track --video-list batch.txt --gpus 1,2,4,6      # the idle ones
+```
+
+Two related habits on a shared box:
+
+- Single-process runs (no fan-out) always use `cuda:0`, which may be the busiest
+  GPU. Pick a device with
+  `export CUDA_VISIBLE_DEVICES=$(nvidia-smi --query-gpu=uuid --format=csv,noheader -i 4)`.
+- Consider `--threads-per-job` when the machine has many cores: without it each
+  child sizes its thread pools from the *total* core count, so N children
+  oversubscribe the CPU and starve other users. It is opt-in because it can
+  change floating-point reduction order.
 - Requirements in each child: `conda` on `PATH` for SLEAP pose, and the same
   `HYDRA_DATA_DIR`/`HYDRA_CONFIG_DIR` as the parent (inherited automatically).
 

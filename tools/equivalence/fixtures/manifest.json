@@ -55,5 +55,117 @@
     "obb/20260503-171130_26x_fly_train7.pt",
     "obb/cropped/20260305-175049_26s_obiroi_obbcrop.pt",
     "pose/SLEAP/20260214-224154_unet_ant_single_instance"
+  ],
+  "model_files": [
+    {
+      "path": "classification/identity/20260429-105036_classifier_multihead_obiroi_colortag.multihead.json",
+      "sha256": "745fbd542241dab24ac86754bc88499869bd046e290d68524ab6f7351415f473",
+      "bytes": 670
+    },
+    {
+      "path": "classification/identity/20260429-105036_classifier_multihead_obiroi_colortag_flat.pth",
+      "sha256": "a10a7109ec667fbe6b4ee5d15be2a2350749e1fa1f0a696df2e2eb6a8f229b23",
+      "bytes": 16367653
+    },
+    {
+      "path": "classification/identity/20260429-105036_classifier_multihead_obiroi_colortag_flat_1.pth",
+      "sha256": "4022982d7110bd4bb8e54f0bfc8a180c344c46c90e1ba2fc6510b9cd5c4f32ad",
+      "bytes": 16366309
+    },
+    {
+      "path": "classification/orientation/20260429-104937_efficientnet_b0_obiroi_train1.pth",
+      "sha256": "cb65ad51dc5ee8ba19e07558e355a84095e44e62e823fc16a000a8449d4779b6",
+      "bytes": 16350821
+    },
+    {
+      "path": "detection/20260305-175022_26x_obiroi_v1.pt",
+      "sha256": "c6c62b6d8d7358817162c0a6704cd53bfea6939412dfe44cbf2c56018368aa79",
+      "bytes": 5496581
+    },
+    {
+      "path": "obb/20260214-210051_26x_ant_train22.pt",
+      "sha256": "012f9255c285c0bfef5ff135002b86dde559603e6d9f30e2ea5ffc31e81b9909",
+      "bytes": 7587804
+    },
+    {
+      "path": "obb/20260416-165920_26s_obiroi_train36.pt",
+      "sha256": "8fcd22a411361471b1654f3091e0db4ddd611f7dd7cb932e19a40b2ac167bf83",
+      "bytes": 126662481
+    },
+    {
+      "path": "obb/20260503-171130_26x_fly_train7.pt",
+      "sha256": "b5047e47474f75b7077946ff9ce1f544fc83fd00fea921bdd5ac23e68e4530cc",
+      "bytes": 126066705
+    },
+    {
+      "path": "obb/cropped/20260305-175049_26s_obiroi_obbcrop.pt",
+      "sha256": "4308a595a0f0a3cfe9b3b58ee00135fb54629bf1436b8ec76c849286a31d7635",
+      "bytes": 6568604
+    },
+    {
+      "path": "pose/SLEAP/20260214-224154_unet_ant_single_instance/best.ckpt",
+      "sha256": "36331d10c0b9de9006b2da4892b203f4838185dd4ee6541573a404c688a2c917",
+      "bytes": 94301483
+    },
+    {
+      "path": "pose/SLEAP/20260214-224154_unet_ant_single_instance/eval_metrics.json",
+      "sha256": "7e4feec3b71c6f5a2d5809252a7be77cad4124d7c75fb3070ea3a499d7d2d823",
+      "bytes": 1917
+    },
+    {
+      "path": "pose/SLEAP/20260214-224154_unet_ant_single_instance/eval_per_frame.csv",
+      "sha256": "08e4883f2f4d3795342ce95acd7afb6f2c3df821b3247bbc46f0658f070985eb",
+      "bytes": 51694
+    },
+    {
+      "path": "pose/SLEAP/20260214-224154_unet_ant_single_instance/eval_worst_frames.csv",
+      "sha256": "de9478e406a83484c75697aca24c346ff4b044ceedcf7aa40bd4b40d0241c18d",
+      "bytes": 9365
+    },
+    {
+      "path": "pose/SLEAP/20260214-224154_unet_ant_single_instance/initial_config.yaml",
+      "sha256": "813bb48b7255b3b47434d26e15c3917bb46facfe2e0728291a797f486583b7cc",
+      "bytes": 4316
+    },
+    {
+      "path": "pose/SLEAP/20260214-224154_unet_ant_single_instance/labels_gt.train.0.slp",
+      "sha256": "a355ab9f2144c987cf8a8210f6406f2dc7392055dcd27154255c39d6d73f9268",
+      "bytes": 141316
+    },
+    {
+      "path": "pose/SLEAP/20260214-224154_unet_ant_single_instance/labels_gt.val.0.slp",
+      "sha256": "0735160317f2ca238a035f696dd21c122449ce8fd8fcbbe9819b4de908523724",
+      "bytes": 22300
+    },
+    {
+      "path": "pose/SLEAP/20260214-224154_unet_ant_single_instance/labels_pr.train.0.slp",
+      "sha256": "8fdec1734e54cc24fc41bc8b16f0d99e7a7b46ad9d4e0779dacc50893aa9bf05",
+      "bytes": 148828
+    },
+    {
+      "path": "pose/SLEAP/20260214-224154_unet_ant_single_instance/labels_pr.val.0.slp",
+      "sha256": "1f9c1fa594cd3f6fb26612057ea7ee34c1efdac5d5abf55d9b250f0e98587ec7",
+      "bytes": 23916
+    },
+    {
+      "path": "pose/SLEAP/20260214-224154_unet_ant_single_instance/metrics.train.0.npz",
+      "sha256": "31d35d95179f9dcb4b36963bf64f0f537fb6a1260fafbac5e3b90f0ab9d0222e",
+      "bytes": 10483
+    },
+    {
+      "path": "pose/SLEAP/20260214-224154_unet_ant_single_instance/metrics.val.0.npz",
+      "sha256": "79cb6a6a48ed6749aa9bdc46bd0edb2ecac46ea4fb818e39110d81e993ae17c9",
+      "bytes": 2845
+    },
+    {
+      "path": "pose/SLEAP/20260214-224154_unet_ant_single_instance/training_config.yaml",
+      "sha256": "25fd22d9e43e8ac757f3fdfe17c9ca6dd6451c0144b0006a9d5c54f6d5a0485d",
+      "bytes": 5442
+    },
+    {
+      "path": "pose/SLEAP/20260214-224154_unet_ant_single_instance/training_log.csv",
+      "sha256": "3eecde06f2192e4366cdbc08c6c3135246d538438ac29e71ee5be731601a443b",
+      "bytes": 12063
+    }
   ]
 }

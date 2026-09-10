@@ -20,8 +20,7 @@ from hydra_suite.core.inference.result import (
 def _key(path="/m.pt") -> CacheKey:
     return CacheKey(
         schema_version=CACHE_SCHEMA_VERSION,
-        model_path=path,
-        model_mtime=0.0,
+        model_id=path,
         config_hash="abc",
     )
 
@@ -108,8 +107,7 @@ def test_detection_schema_version_mismatch_is_invalid(tmp_path):
     path = tmp_path / "test.obb.npz"
     legacy_key = CacheKey(
         schema_version=CACHE_SCHEMA_VERSION - 1,
-        model_path="/m.pt",
-        model_mtime=0.0,
+        model_id="/m.pt",
         config_hash="abc",
     )
     handle = DetectionCacheHandle(path=path, key=legacy_key)

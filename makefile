@@ -408,19 +408,24 @@ pre-commit-update:
 format:
 	@echo "✨ Formatting code (autopep8 → black → isort)..."
 	uvx autopep8 --in-place --recursive --select=E226,E225,E231 src/ tests/ tools/
-	black src/ tests/ tools/
-	isort src/ tests/ tools/
+	"$(PYTHON_BIN)" -m black src/ tests/ tools/
+	"$(PYTHON_BIN)" -m isort src/ tests/ tools/
 	@echo "✅ Format complete."
 
 format-check:
-	black --check src/ tests/ tools/
-	isort --check-only src/ tests/ tools/
+	"$(PYTHON_BIN)" -m black --check src/ tests/ tools/
+	"$(PYTHON_BIN)" -m isort --check-only src/ tests/ tools/
 	@echo "Format check complete."
 
 # Lint at moderate severity (default gate — catches real issues without noise)
+# `lint-moderate` is an alias: CLAUDE.md's pre-PR checklist names it, and a
+# missing target chained as `make lint-moderate && git commit` silently never
+# reaches the commit.
+lint-moderate: lint
+
 lint:
 	@echo "🔍 Linting (flake8 moderate)..."
-	flake8 --config=.flake8.moderate src/ tests/ tools/
+	"$(PYTHON_BIN)" -m flake8 --config=.flake8.moderate src/ tests/ tools/
 	@echo "✅ Lint complete."
 
 # Auto-fix safe issues with ruff, then reformat
@@ -439,7 +444,7 @@ lint-fix:
 # Strict lint: all best-practice issues
 lint-strict:
 	@echo "🔍 Running strict linting (all issues)..."
-	flake8 --config=.flake8.strict src/ tests/ tools/
+	"$(PYTHON_BIN)" -m flake8 --config=.flake8.strict src/ tests/ tools/
 	@echo "✅ Strict linting complete."
 
 # Side-by-side comparison of all three strictness levels
@@ -470,7 +475,7 @@ lint-report:
 dead-code:
 	@echo "🔍 Scanning for dead / orphaned code (vulture, ≥80% confidence)..."
 	@echo ""
-	vulture src/hydra_suite --min-confidence 80
+	"$(PYTHON_BIN)" -m vulture src/hydra_suite --min-confidence 80
 	@echo ""
 	@echo "� Cross-checking with deadcode..."
 	@echo ""
@@ -528,7 +533,7 @@ dep-graph-text:
 # Static type checking with mypy
 type-check:
 	@echo "🔎 Running mypy static type check..."
-	mypy src/hydra_suite --ignore-missing-imports --no-error-summary
+	"$(PYTHON_BIN)" -m mypy src/hydra_suite --ignore-missing-imports --no-error-summary
 	@echo "✅ mypy check complete."
 
 # Full code-health audit: dead code + dep graph + type check + coverage

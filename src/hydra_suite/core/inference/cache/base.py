@@ -17,32 +17,27 @@ from dataclasses import dataclass
 #      orientation fix (Task 4) change what the CNN and head/tail stages
 #      produce from the SAME model_path/mtime/geometry inputs, so old caches
 #      must be invalidated even though none of those fields changed.
-CACHE_SCHEMA_VERSION = 4
+# v5 = model and video identity became CONTENT-based rather than
+#      (absolute path, mtime)-based, so a cache produced on a compute box is
+#      reusable on the staging machine. ``model_path``+``model_mtime`` collapse
+#      into a single ``model_id``. See the portable-jobs design, section 7b.
+CACHE_SCHEMA_VERSION = 5
 
 
 @dataclass(frozen=True)
 class CacheKey:
     """Identifies a cache file's compatibility with a current configuration.
 
-    A cache is reusable iff: schema_version matches AND model_path matches AND
-    model_mtime matches (within 1ms) AND config_hash matches.
+    A cache is reusable iff: schema_version matches AND model_id matches AND
+    config_hash matches.
     """
 
     schema_version: int  # CACHE_SCHEMA_VERSION at write time
-    model_path: str  # primary model path (or "|"-joined for sequential)
-    model_mtime: float  # os.path.getmtime of primary model; 0.0 if no model file
+    model_id: str  # content identity: "sha256:…", "dirsha256:…", "a|b", or a sentinel
     config_hash: str  # sha256 hex of model-affecting config fields; "" when none apply
 
     def as_string(self) -> str:
-        return (
-            f"v{self.schema_version}|{self.model_path}"
-            f"|{self.model_mtime:.6f}|{self.config_hash}"
-        )
+        return f"v{self.schema_version}|{self.model_id}|{self.config_hash}"
 
     def matches(self, other: "CacheKey") -> bool:
-        return (
-            self.schema_version == other.schema_version
-            and self.model_path == other.model_path
-            and abs(self.model_mtime - other.model_mtime) < 1e-3
-            and self.config_hash == other.config_hash
-        )
+        return self.as_string() == other.as_string()

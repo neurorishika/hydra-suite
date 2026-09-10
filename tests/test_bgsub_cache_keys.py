@@ -99,7 +99,7 @@ def test_key_params_all_exist_in_codebase_naming():
 def test_cache_key_accepts_bgsub_config():
     cfg = BgSubConfig.from_params(_base_params())
     key = bgsub_detection_cache_key(cfg)
-    assert key.model_path == "background_subtraction"
+    assert key.model_id == "background_subtraction"
 
 
 def test_convergence_epsilon_is_keyed():

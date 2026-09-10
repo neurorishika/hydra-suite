@@ -1,6 +1,6 @@
 # Portable tracking jobs: stage anywhere, run anywhere, sync back
 
-**Status:** design proposal, approved in brainstorming (approach A), pending implementation plan.
+**Status:** Shipped — merged to `main`. Implemented via `docs/superpowers/plans/done/2026-09-09-portable-tracking-jobs.md`. Verified: MPS equivalence 42 EQUIVALENT/0 divergent, CUDA (firebrat) 54/0, full Mac→firebrat→Mac round trip with zero registration, and Goal 4 proven (a cache computed on firebrat stores byte-identically the key a local Mac run computes). Seven spec defects were found during planning and corrected in the plan — see its "Spec corrections established before planning" section; most consequentially §7b was under-scoped (`_model_signature` folded a raw path+mtime into `config_hash`, so OBB caches would have stayed machine-local even after the documented fix).
 
 > ## AMENDED 2026-09-09 — path-independent cache keys scoped IN (user decision)
 > The first draft left pulled `.inference_cache_<stem>/` as a record only because the cache key embeds the absolute model path. The user wants remote caches to be usable locally without regeneration, so §7b makes model identity and video identity content-based and bumps the cache schema. Goal 4 and §17 updated accordingly. Headless dataset/media export stays a follow-up (§17 item 1). Same day: §6.7 adds shared-root video references so videos on a lab share are never copied (user request).

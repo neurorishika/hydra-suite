@@ -3095,8 +3095,8 @@ class TrackingEngineCore:
                     # No frame and no cached detections - skip this iteration
                     if not use_cached_detections:
                         logger.warning(
-                            f"Frame {
-                                self.frame_count}: No frame available and no cached detections"
+                            "Frame %s: No frame available and no cached detections",
+                            self.frame_count,
                         )
                         continue
 
@@ -4567,14 +4567,14 @@ class TrackingEngineCore:
                         if use_cached_detections:
                             if use_batched_detection:
                                 status_text = (
-                                    f"Tracking (batched): Frame {
-                                        self.frame_count} / {total_frames} "
+                                    f"Tracking (batched): Frame "
+                                    f"{self.frame_count} / {total_frames} "
                                     f"(abs {actual_frame_index})"
                                 )
                             else:
                                 status_text = (
-                                    f"Tracking (cached): Frame {
-                                        self.frame_count} / {total_frames} "
+                                    f"Tracking (cached): Frame "
+                                    f"{self.frame_count} / {total_frames} "
                                     f"(abs {actual_frame_index})"
                                 )
                         else:

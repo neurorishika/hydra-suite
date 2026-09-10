@@ -114,3 +114,27 @@ TrackerKit-specific reusable UI primitives:
 - `loss_plot_widget.py` — training loss visualization
 - `stacked_page.py` — stacked page navigation
 - `tooltip_button.py` — button with rich tooltip
+
+## Portable job model-reference contract
+
+Portable tracking jobs (`trackerkit job pack`, see
+`docs/user-guide/trackerkit-jobs.md`) derive the set of files a job needs
+from the engine parameter builder rather than a hand-maintained list.
+`iter_model_references(params)` (`trackerkit/engine_params.py`) walks every
+key in the four classification tuples in that same module —
+`MODEL_DIR_PARAM_KEYS`, `MODEL_FILE_PARAM_KEYS`, `MODEL_LIST_PARAM_KEYS`,
+`NON_MODEL_PATH_PARAM_KEYS` — to decide which resolved paths are model
+references pack must ship, and which path-shaped keys are not models at all.
+
+**Any new model-consuming role must join this contract in two places:**
+
+1. Its engine-param key must be added to the correct tuple in
+   `engine_params.py`, so `iter_model_references` classifies it.
+2. `pack.ROLE_TO_CONFIG_KEY` (`data/tracking_job/pack.py`) must gain the
+   matching lowercase config key(s) for that role, so the packer can
+   rewrite the config-side reference to the job-relative path.
+
+`tests/test_engine_params_model_reference_contract.py` fails loudly if a
+role is missing from either side — it turns on every model-consuming role
+at once and asserts every live model path is classified and every role that
+should produce a reference does.

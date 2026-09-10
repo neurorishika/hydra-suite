@@ -19,6 +19,11 @@ from hydra_suite.core.inference.cache.chunked import (
     DEFAULT_CHUNK_FRAMES,
     ChunkedArrayStore,
 )
+from hydra_suite.core.inference.content_id import (
+    directory_content_id,
+    model_content_id,
+    video_signature,
+)
 
 MAX_FRAME_PAYLOAD_BYTES = 16 * 1024 * 1024
 MAX_DETECTIONS_PER_FRAME = 1_000
@@ -28,34 +33,85 @@ MAX_PATH_INDEX_BYTES = 16 * 1024 * 1024
 DEFAULT_LRU_FRAMES = 8
 
 
+def _source_content_id(source_path: str) -> str:
+    """DetectKit prediction-cache sources are DATASET DIRECTORIES
+    (dataset_panel.py:394 does Path(source_path)/"images"), not bare video
+    files. video_signature() on a directory silently degrades to "" via
+    its except OSError, collapsing every source onto one identity. Dispatch
+    explicitly instead of guessing from the exception.
+
+    Fix A4 -- hash ONLY the images/ subtree LISTING, not directory_content_id
+    of the dataset root. `directory_content_id(source_path)` would hash
+    every byte under source_path, including `labels/`
+    (operations.py:87 does `images_dir = source_path / "images"`, and
+    `labels/` sits as its sibling under the same root, edited by the
+    reviewer on every save via dataset_panel.py:394). Two things follow
+    from hashing the root wholesale, both real regressions, neither
+    exercised by any test in this plan:
+      1. `cache_path_for` derives the on-disk cache filename from
+         `key.as_string()` (`prediction_cache.py:63-66`), so EVERY label
+         save changes the key and orphans the previous prediction cache
+         file -- `artifacts/inference_cache/` grows without bound as the
+         reviewer works, one dead file per save.
+      2. `directory_content_id` reads and sha256's every byte under the
+         tree on every request (`dataset_inference.py:64`), which is
+         O(dataset bytes) -- and DetectKit datasets are image sets, often
+         far larger than a model checkpoint.
+    This cache is project-local (it lives beside the dataset, keyed by an
+    absolute-ish path already, never shipped by a portable job -- Task 6's
+    model-reference machinery does not touch DetectKit at all) and was
+    never claimed to be portable, so there is no reason to pay content
+    hashing here: identify the SOURCE by what actually invalidates
+    predictions -- the image SET, not every byte of every image and
+    certainly not the label annotations the reviewer is actively editing.
+    List (name, size, mtime_ns) for every file directly under
+    `images/` (non-recursive: dataset_panel.py:394 treats images/ as a
+    flat pool) and hash that listing; do not recurse into labels/ at all.
+    """
+    p = Path(source_path)
+    if p.is_dir():
+        images_dir = p / "images"
+        if not images_dir.is_dir():
+            return directory_content_id(str(p))
+        entries = sorted(
+            (child.name, child.stat().st_size, child.stat().st_mtime_ns)
+            for child in images_dir.iterdir()
+            if child.is_file()
+        )
+        blob = "\n".join(f"{n}={s}:{m}" for n, s, m in entries).encode("utf-8")
+        return f"imgset:{hashlib.sha256(blob).hexdigest()}"
+    return video_signature(source_path)
+
+
 def prediction_cache_key(
     source_path: str | Path,
     model_paths: Sequence[str | Path],
     settings: object,
 ) -> CacheKey:
-    """Build a metadata-only source/model/settings cache identity."""
-    models = [str(Path(path).expanduser().resolve()) for path in model_paths if path]
-    identities = []
-    for path in models:
-        try:
-            stat = Path(path).stat()
-            identities.append((path, stat.st_mtime_ns, stat.st_size))
-        except OSError:
-            identities.append((path, 0, 0))
+    """Build a content-based source/model/settings cache identity."""
+    # Fix Z5: expanduser() BEFORE hashing, same as the old implementation did
+    # for both model_paths and source_path (prediction_cache.py:37,47) — a
+    # raw "~/models/x.pt" path fails Path.is_file()/is_dir() and would
+    # otherwise fall through to the missing-model sentinel.
+    identities = [
+        (model_content_id(str(Path(path).expanduser())), path)
+        for path in model_paths
+        if path
+    ]
+    model_id = "|".join(identity for identity, _ in identities)
     encoded = json.dumps(
         {
-            "source": str(Path(source_path).expanduser().resolve()),
-            "models": identities,
+            # The SOURCE (image/video file OR dataset directory) is identified
+            # by content too, so a prediction cache survives the project
+            # moving on disk. See _source_content_id above for the dispatch.
+            "source": _source_content_id(str(Path(source_path).expanduser())),
             "settings": settings,
         },
         sort_keys=True,
-        separators=(",", ":"),
-        default=str,
     ).encode("utf-8")
     return CacheKey(
         schema_version=CACHE_SCHEMA_VERSION,
-        model_path="|".join(models),
-        model_mtime=max((value[1] for value in identities), default=0) / 1_000_000_000,
+        model_id=model_id,
         config_hash=hashlib.sha256(encoded).hexdigest(),
     )
 

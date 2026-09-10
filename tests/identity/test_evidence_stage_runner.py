@@ -37,8 +37,7 @@ from hydra_suite.core.inference.stages.identity_evidence import IdentityEvidence
 def _key(path: str) -> CacheKey:
     return CacheKey(
         schema_version=CACHE_SCHEMA_VERSION,
-        model_path=path,
-        model_mtime=0.0,
+        model_id=path,
         config_hash="cfg",
     )
 

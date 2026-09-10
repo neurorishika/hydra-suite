@@ -2069,9 +2069,17 @@ class ConfigOrchestrator:
                 "use_apriltags": self._mw._identity_config().get(
                     "use_apriltags", False
                 ),
-                "cnn_classifiers": self._mw._identity_config().get(
-                    "cnn_classifiers", []
-                ),
+                # Each entry's model_path is relativized on save; the load
+                # side already resolves it (engine_params.py:927-932).
+                "cnn_classifiers": [
+                    {
+                        **entry,
+                        "model_path": make_model_path_relative(
+                            entry.get("model_path", "")
+                        ),
+                    }
+                    for entry in self._mw._identity_config().get("cnn_classifiers", [])
+                ],
                 # Legacy CNN Classifier settings (for backward compat on load)
                 "cnn_classifier_confidence": self._panels.identity.spin_cnn_confidence.value(),
                 "enable_identity_in_tracking": self._panels.tracking.chk_enable_identity_in_tracking.isChecked(),
@@ -2093,7 +2101,11 @@ class ConfigOrchestrator:
                 "apriltag_family": self._panels.identity.combo_apriltag_family.currentText(),
                 "apriltag_decimate": self._panels.identity.spin_apriltag_decimate.value(),
                 "apriltag_crop_padding": self._panels.identity.spin_apriltag_crop_padding.value(),
-                "color_tag_model_path": self._panels.identity.line_color_tag_model.text(),
+                # Relativized like every other model key so a saved config is
+                # portable by construction; engine_params resolves it back.
+                "color_tag_model_path": make_model_path_relative(
+                    self._panels.identity.line_color_tag_model.text()
+                ),
                 "color_tag_confidence": self._panels.identity.spin_color_tag_conf.value(),
                 "enable_pose_extractor": self._panels.identity.chk_enable_pose_extractor.isChecked(),
                 "pose_model_type": self._panels.identity.combo_pose_model_type.currentText()
@@ -2936,8 +2948,12 @@ class ConfigOrchestrator:
 
             # Log the ffmpeg command for debugging
             logger.info(
-                f"Starting video crop: {frame_w}x{frame_h} -> {w}x{h} (padding: {
-                    padding_percent: .1f}%)"
+                "Starting video crop: %sx%s -> %sx%s (padding: %.1f%%)",
+                frame_w,
+                frame_h,
+                w,
+                h,
+                padding_percent,
             )
             logger.info(f"ffmpeg command: {' '.join(ffmpeg_cmd)}")
 

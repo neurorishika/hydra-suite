@@ -1300,7 +1300,7 @@ def test_export_cache_miss_recomputes_without_touching_trackings_cache(tmp_path)
     cache_path = cache_dir / "detection.npz"
 
     # A "tracking" cache that covers only frames 0-2 -- the subrange case.
-    key = CacheKey(schema_version=0, model_path="", model_mtime=0.0, config_hash="")
+    key = CacheKey(schema_version=0, model_id="", config_hash="")
     handle = DetectionCacheHandle(
         path=cache_path, key=key, require_key=False, read_only=False
     )

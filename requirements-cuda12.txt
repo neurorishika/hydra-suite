@@ -1,8 +1,37 @@
 # CUDA 12.x install profile for hydra-suite
 # Install with: uv pip install -v -r requirements-cuda12.txt
+#
+# Pick this profile when the NVIDIA driver is older than 580 (`nvidia-smi`
+# reports "CUDA Version: 12.x"). A CUDA 13 build on such a driver imports fine
+# but `torch.cuda.is_available()` is False.
 
 --extra-index-url https://download.pytorch.org/whl/cu128
 -r requirements-cuda.txt
+
+# WHY THESE ARE PINNED TO `+cu128`, AND WHY THE PIN MUST CARRY THE LOCAL TAG
+#
+# `--extra-index-url` above only ADDS the PyTorch index; combined with
+# `--index-strategy unsafe-best-match` (which install-cuda must pass -- see the
+# iopath/sam2 comment in the makefile) uv considers PyPI too and picks the
+# highest version it finds anywhere. PyPI's default linux torch is a CUDA 13
+# build and outranks the cu128 wheel, so an UNPINNED `torch` here resolves to
+# e.g. 2.14.0+cu130 -- on a CUDA 12 box that yields the silent failure this
+# profile exists to prevent: `torch.cuda.device_count()` still reports the
+# GPUs while `torch.cuda.is_available()` is False, so every stage falls back
+# to CPU without an error.
+#
+# `+cu128` local versions are published ONLY on the PyTorch index, so pinning
+# them forces uv to source these three from there regardless of index strategy.
+# That is the mechanism -- do not drop the `+cu128` suffix and do not relax
+# these to bare `>=` pins.
+#
+# To bump: pick a version present on https://download.pytorch.org/whl/cu128,
+# update all three together (they are released as a matched set), and re-run
+# `make install-cuda CUDA_MAJOR=12` on a CUDA 12 box -- the self-check in
+# verify_cuda_runtime.py will reject a mismatched or driver-incompatible build.
+torch==2.11.0+cu128
+torchvision==0.26.0+cu128
+torchaudio==2.11.0+cu128
 
 tensorrt-cu12
 tensorrt-cu12-bindings

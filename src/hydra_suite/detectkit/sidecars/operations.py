@@ -22,15 +22,19 @@ def _cache_key(payload: dict[str, Any]) -> CacheKey:
     raw = payload.get("cache_key")
     if not isinstance(raw, dict) or set(raw) != {
         "schema_version",
-        "model_path",
-        "model_mtime",
+        "model_id",
         "config_hash",
     }:
-        raise ValueError("cache_key has invalid fields")
+        raise ValueError(
+            "cache_key has invalid fields; this is the in-process sidecar IPC "
+            "payload shape, not an on-disk format — a pre-v5 shaped payload "
+            "means the parent and sidecar interpreters are running mismatched "
+            "hydra_suite code versions, not a stale unrestarted process (the "
+            "sidecar is spawned fresh per request, never long-lived)"
+        )
     return CacheKey(
         schema_version=int(raw["schema_version"]),
-        model_path=str(raw["model_path"]),
-        model_mtime=float(raw["model_mtime"]),
+        model_id=str(raw["model_id"]),
         config_hash=str(raw["config_hash"]),
     )
 

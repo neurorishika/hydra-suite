@@ -171,7 +171,7 @@ def test_bgsub_runner_uses_its_configured_cache_key():
     key, require_key = _cache_key_for(runner)
 
     assert require_key is True
-    assert key.model_path == "background_subtraction"
+    assert key.model_id == "background_subtraction"
     assert key.config_hash
 
 

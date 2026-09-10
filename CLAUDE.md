@@ -6,7 +6,7 @@ This file provides guidance to Claude Code (claude.ai/code) when working with co
 
 - **Never use the `artifact-design` skill and never create Artifacts.** Present visual results as files in the repo/scratchpad (e.g. saved PNGs) or inline, not as hosted Artifact pages.
 - **Isolation:** always do implementation/execution work in a **git worktree branched from local HEAD** (`git worktree add .worktrees/<name> -b <branch> HEAD`), never a fresh-from-origin worktree — local `main` is usually ahead of `origin/main`. Prefer worktrees over in-place feature branches.
-- **Verification:** run tests/equivalence on `hydra-mps` on this box; run CUDA checks on `hydra-cuda` at `rutalab@mehek.taild08eb9.ts.net`.
+- **Verification:** run tests/equivalence on `hydra-mps` on this box; run CUDA checks on `hydra-cuda` at `rutalab@mehek.taild08eb9.ts.net` (single GPU), or at `rishika@diptera.rockefeller.edu` (10× RTX 6000 Ada) when the work needs **multiple** GPUs. **diptera is shared with other users' jobs**: never `--gpus auto` there, check `nvidia-smi` and name idle GPUs explicitly, `export CUDA_VISIBLE_DEVICES=<uuid>` for single-process runs, and scope any process cleanup to `pgrep -u rishika`. It runs driver 570 so it needs `CUDA_MAJOR=12`; mehek's 595 takes `CUDA_MAJOR=13`.
 - **Before any heavy run** (equivalence harness, training, inference): kill dead/stale **sleap/hydra** processes first. **Never** interfere with a running process that is not sleap/hydra.
 - **Docs lifecycle:** when a branch's work is finally merged to `main`, `git mv` its plan (`docs/superpowers/plans/`) and design spec (`docs/superpowers/specs/`) into the matching `done/` subfolder in the same commit/PR. Only file-move — don't rewrite content — except to fix a stale `**Status:**` header (e.g. "pending implementation plan") into a `Shipped — merged to main (<sha>)` note, as done in `de7ed06e`. Leave a doc active (not `done/`) if the plan's checklist isn't fully checked off, the design is explicitly deferred/superseded, or no corresponding branch has merged yet.
 
@@ -80,10 +80,13 @@ git worktrees provide the two `src/` trees; the CURRENT tree provides the harnes
 + fixtures.
 
 ```bash
-# 0. Fixtures (once per machine): short clips + models from the GitHub Release.
+# 0. Fixtures (once per machine): short clips + models.
 #    (already present if tools/equivalence/fixtures/clips/*.mp4 exist)
-conda activate hydra-mps       # or hydra-cuda on the NVIDIA box (mehek)
+conda activate hydra-mps       # or hydra-cuda on an NVIDIA box (mehek/diptera)
 bash tools/equivalence/fixtures/fetch_fixtures.sh
+#    The GitHub Release is UNPUBLISHED (404), so on a fresh machine copy from a
+#    peer that already has them; models are then verified per file:
+#    PEER=rutalab@mehek.taild08eb9.ts.net bash tools/equivalence/fixtures/fetch_fixtures.sh
 
 # 1. Baseline worktree from the legacy tag (detached).
 git fetch origin --tags
