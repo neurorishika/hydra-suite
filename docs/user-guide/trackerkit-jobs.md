@@ -7,7 +7,7 @@ self-contained **job directory** that runs on any compute box with **zero
 model registration**, and whose outputs (including reusable detection
 caches) come home beside the original videos.
 
-See `docs/superpowers/specs/2026-09-09-portable-tracking-jobs-design.md` for
+See `docs/superpowers/specs/done/2026-09-09-portable-tracking-jobs-design.md` for
 the full design; this page is the day-to-day walkthrough.
 
 ## Lifecycle walkthrough
@@ -43,8 +43,10 @@ trackerkit job status rutalab@firebrat:/home/rutalab/jobs/colony_A
 trackerkit job pull rutalab@firebrat:/home/rutalab/jobs/colony_A /tmp/jobs/colony_A
 ```
 
-Every subcommand that names a remote target accepts `--remote-bootstrap`
-(see below); `pack`, `verify` and `shared-root` are always local.
+`push`, `run`, `calibrate` and `status` accept `--remote-bootstrap` (see
+below) because they invoke `trackerkit` on the far side. `pull` does **not**:
+it only runs `rsync` and `find` remotely, never `trackerkit`, so it needs no
+environment activation. `pack`, `verify` and `shared-root` are always local.
 
 The full subcommand list: `pack`, `verify`, `shared-root`, `push`,
 `preflight`, `run`, `calibrate`, `status`, `pull`. Run `trackerkit job
@@ -158,3 +160,56 @@ at this limitation. Closing this gap (deriving the same `<stem>_datasets/`
 paths headlessly that the GUI already derives) is tracked as a follow-up
 and is gated by the byte-identity harness, since it changes CLI engine
 parameters.
+
+## Troubleshooting
+
+**`trackerkit: command not found` over ssh, or `invalid choice: 'job'`.**
+A non-interactive `ssh host 'cmd'` does not source the profile that puts a
+conda environment's entry points on `PATH` — and neither does `ssh host 'bash
+-lc "…"'` (both verified failing on firebrat). Only an explicit
+`source <conda>/etc/profile.d/conda.sh && conda activate <env>` works, which
+is exactly what `--remote-bootstrap` is for. `invalid choice: 'job'`
+additionally means the remote checkout predates this feature — update it.
+
+**`No such file or directory` naming a path from your laptop.** An ssh
+command is being built with the *local* interpreter path, which does not
+exist on the compute box. Remote invocations must rely on
+`--remote-bootstrap` putting `trackerkit` on the remote `PATH`; only a
+*local* `job run` injects `HYDRA_JOB_TRACKERKIT=<local python> -m
+hydra_suite.trackerkit.app`.
+
+**Working in a git worktree: a bare `trackerkit` runs the wrong code.**
+`pip install -e` registers one console script per environment, so a bare
+`trackerkit` resolves whichever checkout was installed — typically `main`,
+not your worktree. Use `PYTHONPATH=<worktree>/src python -m
+hydra_suite.trackerkit.app job …` when testing a branch. A local `job run`
+handles this for you.
+
+**Pose runs produce empty CSVs that still compare "equivalent".** The SLEAP
+service needs `conda` on `PATH`; without it, it fails soft and every pose
+column comes back empty. Always check row counts and that `PoseKpt_*`
+columns are populated before trusting a pose result.
+
+**A job packed on a machine with no `advanced_config.json`.** `pack`
+synthesizes the defaults into the snapshot, so the job is still complete and
+`push` will not fail on a missing file.
+
+## Why the detection cache comes home reusable
+
+Cache identity is **content-based**: a model is identified by the sha256 of
+its bytes (a content digest over the member files for a pose directory, or
+over the manifest plus every referenced head for a `.multihead.json`
+bundle), and a video by its size plus a hash of its first and last 8 MiB.
+Nothing in the key depends on where a file happens to live.
+
+That is what makes a pulled cache usable. Verified end to end: a detection
+cache computed on firebrat, with the model at
+`/home/rutalab/jobs/fly/models/obb/…`, stores exactly the key a local macOS
+run computes with the same model at
+`~/Library/Application Support/hydra-suite/models/obb/…`. Under the previous
+`(absolute path, mtime)` key that was impossible by construction — the same
+model in two places was two different models.
+
+One consequence worth knowing: this invalidated every pre-existing cache
+once, when the schema went to v5. That is a one-time regeneration, not a
+recurring cost.

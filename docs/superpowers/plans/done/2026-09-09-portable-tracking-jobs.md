@@ -1,6 +1,6 @@
 # Portable Tracking Jobs Implementation Plan
 
-> **For agentic workers:** REQUIRED SUB-SKILL: Use superpowers:subagent-driven-development (recommended) or superpowers:executing-plans to implement this plan task-by-task. Steps use checkbox (`- [ ]`) syntax for tracking.
+> **For agentic workers:** REQUIRED SUB-SKILL: Use superpowers:subagent-driven-development (recommended) or superpowers:executing-plans to implement this plan task-by-task. Steps use checkbox (`- [x]`) syntax for tracking.
 
 **Goal:** Package a tracking experiment on one machine into a self-contained job directory that runs on any compute box with zero model registration, and whose outputs — including reusable detection caches — come home beside the original videos.
 
@@ -28,6 +28,19 @@ Plus two pre-existing bugs found while anchoring. **Do not fix them in this bran
 
 - `cache/reuse.py:62` and `core/tracking/worker.py:1435` call `detection_cache_key(...)` **without** `detection_batch_size`, while `runner.py:553` passes it. With a non-default batch these compute a different key than the runner's own cache.
 - `trackerkit/gui/dialogs/parameter_helper.py:1768-1780` uses a private `_source_signature` closure instead of `keys.video_signature()`, so it will *not* follow the Task 4 redefinition. Spec §302's "all call the one function" is wrong. Task 4 adds a comment there naming the divergence.
+
+## Completion status
+
+**All 13 tasks shipped and merged.** Checkboxes below are ticked to reflect executed work; the durable evidence is the source artifacts and the Acceptance Log at the bottom, not the boxes (a previous project in this repo was misread as open because its boxes were never ticked).
+
+| Verification | Result |
+|---|---|
+| MPS equivalence matrix | 8 clips, 42 EQUIVALENT / 0 divergent, perf 0.96–1.13x |
+| CUDA equivalence (firebrat) | 9 clips, 54 EQUIVALENT / 0 divergent, perf 0.99–1.01x |
+| Mac→firebrat→Mac round trip | zero registration; Goal 4 proven by identical cache keys |
+| Full pytest delta | 9464 passed, zero regressions (17 failures all reproduced on baseline or known flakes) |
+| Portable-jobs tests | 172 passing |
+| Docs | `mkdocs build --strict` clean |
 
 ## Global Constraints
 
@@ -229,7 +242,7 @@ Committed at `3d4e2625`. End of the already-done historical record.
 - Modify: `src/hydra_suite/paths.py` (add `get_platform_config_dir()` beside `_user_config_dir()`, verified at `:38-49`)
 - Test: `tests/test_paths.py` (add cases; do not create a new file — this is a one-function addition to an already-tested module)
 
-- [ ] **Step 8: Write the failing test**
+- [x] **Step 8: Write the failing test**
 
 Add to `tests/test_paths.py`:
 
@@ -253,12 +266,12 @@ def test_get_platform_config_dir_matches_platformdirs_default(tmp_path, monkeypa
     assert paths.get_platform_config_dir() == expected
 ```
 
-- [ ] **Step 9: Run test to verify it fails**
+- [x] **Step 9: Run test to verify it fails**
 
 Run: `conda activate hydra-mps && python -m pytest tests/test_paths.py -k platform_config_dir -v`
 Expected: FAIL — `AttributeError: module 'hydra_suite.paths' has no attribute 'get_platform_config_dir'`.
 
-- [ ] **Step 10: Implement**
+- [x] **Step 10: Implement**
 
 In `src/hydra_suite/paths.py`, add beside `_user_config_dir()` (`:38-49`):
 
@@ -279,12 +292,12 @@ def get_platform_config_dir() -> Path:
 
 This is a thin, deliberate duplication of `_user_config_dir()`'s else-branch — not a refactor of `_user_config_dir()` itself, since every other caller of `_user_config_dir()` legitimately wants the override-aware behaviour.
 
-- [ ] **Step 11: Run tests to verify they pass**
+- [x] **Step 11: Run tests to verify they pass**
 
 Run: `python -m pytest tests/test_paths.py tests/test_paths_models_dir_override.py -v`
 Expected: all PASS — **21 tests in `test_paths.py`** (19 existing + 2 new), 8 in the override file, 35 total across the four-file baseline group in Global Constraints.
 
-- [ ] **Step 12: Commit**
+- [x] **Step 12: Commit**
 
 ```bash
 make format
@@ -307,7 +320,7 @@ git commit -m "feat(paths): add get_platform_config_dir(), an override-blind pla
 
 **Why the load side is in this task, honestly stated.** `engine_params.py:1591` emits `COLOR_TAG_MODEL_PATH` as `str(_cfg_get(cfg, "color_tag_model_path", default=""))` with **no** `resolve_model_path`, and `:1024` copies that unresolved value into `CNN_CLASSIFIER_MODEL_PATH`. `cnn_classifiers[].model_path` *is* already resolved (`:927-932`). Spec §240 asserts the load side is already symmetric; it is not — but that asymmetry does **not** currently break anything, because `COLOR_TAG_MODEL_PATH`/`CNN_CLASSIFIER_MODEL_PATH` are dead: nothing in `src/hydra_suite/core/` reads `color_tag`, and the GUI's colour-tag input is `setVisible(False)` (`trackerkit/gui/panels/identity_panel.py:143`). Real colour-tag identity runs through ClassKit multi-head classifiers via `cnn_classifiers`, which is already resolved on load. We still add the load-side resolve here — it costs nothing, keeps the (currently inert) key internally consistent with every other model key, and the lowercase `color_tag_model_path` key lands verbatim in the job sidecar where `verify_job` (Task 7) rejects absolute paths — but the correct framing is **defensive symmetry + portability-by-construction**, not "or colour-tag identity breaks". Task 3 additionally moves `COLOR_TAG_MODEL_PATH` into the never-yielded key set, so pack never ships it as a model reference regardless.
 
-- [ ] **Step 1: Write the failing test**
+- [x] **Step 1: Write the failing test**
 
 Create `tests/test_config_model_path_portability.py`:
 
@@ -391,12 +404,12 @@ def test_save_load_round_trip_is_identity_for_engine_params(models_root):
     assert a["CNN_CLASSIFIERS"][0]["model_path"] == absolute
 ```
 
-- [ ] **Step 2: Run test to verify it fails**
+- [x] **Step 2: Run test to verify it fails**
 
 Run: `python -m pytest tests/test_config_model_path_portability.py -v`
 Expected: `test_color_tag_relative_path_resolves_in_engine_params` FAILS — `COLOR_TAG_MODEL_PATH` comes back as the bare relative string.
 
-- [ ] **Step 3: Fix the load side in `engine_params.py`**
+- [x] **Step 3: Fix the load side in `engine_params.py`**
 
 At `:1023` replace the derivation:
 
@@ -419,12 +432,12 @@ At `:1591` emit the already-resolved local instead of re-reading the config:
 
 (`resolve_model_path("")` returns `""`, so disabled colour tag is unaffected; `resolve_model_path` returns absolute paths unchanged, so existing absolute configs keep working.)
 
-- [ ] **Step 4: Run tests to verify they pass**
+- [x] **Step 4: Run tests to verify they pass**
 
 Run: `python -m pytest tests/test_config_model_path_portability.py -v`
 Expected: all PASS.
 
-- [ ] **Step 5: Fix the save side in `gui/orchestrators/config.py`**
+- [x] **Step 5: Fix the save side in `gui/orchestrators/config.py`**
 
 At `:2096`:
 
@@ -447,7 +460,7 @@ At `:2072-2074`, relativize each classifier entry as it is serialized:
 
 `make_model_path_relative` is already imported at `:41-42`.
 
-- [ ] **Step 6: Run the parity gate — this is the load-bearing check**
+- [x] **Step 6: Run the parity gate — this is the load-bearing check**
 
 Run:
 ```bash
@@ -474,7 +487,7 @@ the same command on the branch base **before** treating a STOP as real
 
 **Fix A7 (minor) — this particular STOP cannot fire from `color_tag_model_path` at all, on any host.** None of the equivalence fixtures (`tools/equivalence/fixtures/configs/*.json`) set `color_tag_model_path` — grepped, zero hits, including in `ant_cnn_identity.json`, which uses `cnn_classifiers` exclusively for its real classifier. So a golden divergence traceable to THIS task's `color_tag_model_path` change specifically cannot come from the committed fixtures/goldens; the only source that could ever trip this STOP is a config an agent constructs by hand while testing (e.g. `_everything_on` in Task 3's own test fixtures, which DOES set `color_tag_model_path`). The `ant_cnn_identity` host-path caveat above is a real, independent, pre-existing gap (fix in `CNN_CLASSIFIERS` handling, not `color_tag_model_path`) — don't conflate the two when triaging a STOP.
 
-- [ ] **Step 7: Commit**
+- [x] **Step 7: Commit**
 
 ```bash
 make format
@@ -509,7 +522,7 @@ git commit -m "fix(config): relativize color-tag and CNN classifier model paths 
 
 So gating `CNN_CLASSIFIERS` on `ENABLE_IDENTITY_ANALYSIS` **under-ships**: a config with the flag off but a populated `cnn_classifiers` list still runs the classifier in core, and a job packed with the flag-gated rule would silently diverge on the remote box (core loads models pack never shipped). `iter_model_references` must instead ship `CNN_CLASSIFIERS` whenever the list is non-empty, full stop — no identity-flag gate anywhere near it. Pose and head-tail remain gated (their flags genuinely control whether core builds the stage: `config.py:1255` for pose, the head-tail gate already in `build_engine_params` for head-tail); AprilTag needs no model file and is gated on `USE_APRILTAGS` (`config.py:1357`) purely for completeness of the reference set, not because it ships anything. The two non-selected YOLO mode keys are gated on `YOLO_OBB_MODE` since core genuinely never loads the unselected pair. `COLOR_TAG_MODEL_PATH` is never yielded at all — see below.
 
-- [ ] **Step 1: Write the failing test**
+- [x] **Step 1: Write the failing test**
 
 Create `tests/test_engine_params_model_reference_contract.py`:
 
@@ -798,12 +811,12 @@ def test_bgsub_config_yields_no_model_references(models_root):
     assert list(iter_model_references(params)) == []
 ```
 
-- [ ] **Step 2: Run test to verify it fails**
+- [x] **Step 2: Run test to verify it fails**
 
 Run: `python -m pytest tests/test_engine_params_model_reference_contract.py -v`
 Expected: FAIL with `ImportError: cannot import name 'iter_model_references'`.
 
-- [ ] **Step 3: Implement in `engine_params.py`**
+- [x] **Step 3: Implement in `engine_params.py`**
 
 Append after `build_engine_params`:
 
@@ -926,12 +939,12 @@ def iter_model_references(params: Mapping[str, Any]) -> Iterator[ModelReference]
 
 Add `Iterator` to the `typing` imports, `dataclass` to the `dataclasses` import, and `import os` (for the `os.path.isdir` kind check above — fix A3) at the top of the file if not already present.
 
-- [ ] **Step 4: Run tests to verify they pass**
+- [x] **Step 4: Run tests to verify they pass**
 
 Run: `python -m pytest tests/test_engine_params_model_reference_contract.py -v`
 Expected: all PASS. If `test_every_path_ish_key_is_classified` fails listing a key this plan did not anticipate, add it to `NON_MODEL_PATH_PARAM_KEYS` (if it is an output/config path) or to the appropriate model tuple — do **not** loosen the assertion.
 
-- [ ] **Step 5: Run the full contract-guard suite**
+- [x] **Step 5: Run the full contract-guard suite**
 
 Run:
 ```bash
@@ -941,7 +954,7 @@ python -m pytest tests/test_engine_params_model_reference_contract.py \
 ```
 Expected: PASS; `build_engine_params` output unchanged (this task only *adds* a reader).
 
-- [ ] **Step 6: Commit**
+- [x] **Step 6: Commit**
 
 ```bash
 make format
@@ -984,7 +997,7 @@ An agent picking up 4b or 4c should read the prior sub-task's commit(s) rather t
 
 **Deliberately unchanged:** `core/individual/pose/artifacts.py:71` `path_fingerprint_token` embeds the resolved absolute path, but it guards *export-artifact validity* (ONNX/TensorRT/CoreML reuse) which is host-local by design (spec §2 non-goal) and feeds **no** `CacheKey`. Leave it. Verified: its only consumers are `pose/backends/{sleap,vitpose,yolo}.py` artifact signatures.
 
-- [ ] **Step 1: Write the failing test**
+- [x] **Step 1: Write the failing test**
 
 Create `tests/test_cache_content_identity.py`:
 
@@ -1432,12 +1445,12 @@ def test_cache_written_at_one_path_is_not_reusable_after_one_byte_changes(tmp_pa
 
 `CacheKey` and `CACHE_SCHEMA_VERSION` are already imported at the top of that file (`:26`), as are `OBBConfig`/`OBBSequentialConfig` (`:24-25`) and `materialize_tensors`/`_raw` (`:31-41`); only `os` and `shutil` are new.
 
-- [ ] **Step 2: Run tests to verify they fail**
+- [x] **Step 2: Run tests to verify they fail**
 
 Run: `python -m pytest tests/test_cache_content_identity.py tests/test_inference_cache_keys.py -v`
 Expected: FAIL — `content_id` module missing; `CACHE_SCHEMA_VERSION == 4`; the two-path OBB tests fail because `_model_signature` puts the path in `config_hash`.
 
-- [ ] **Step 3: Create `src/hydra_suite/core/inference/content_id.py`**
+- [x] **Step 3: Create `src/hydra_suite/core/inference/content_id.py`**
 
 ```python
 """Content-based identity for models and videos.
@@ -1798,7 +1811,7 @@ def video_signature(path: str | os.PathLike[str] | None) -> str:
         return ""
 ```
 
-- [ ] **Step 4: Rewrite `CacheKey` in `cache/base.py`**
+- [x] **Step 4: Rewrite `CacheKey` in `cache/base.py`**
 
 ```python
 # v5 = model and video identity became CONTENT-based rather than
@@ -1823,7 +1836,7 @@ class CacheKey:
 
 (The old `matches()` carried a dead 1e-3 mtime tolerance while `as_string()` formatted `:.6f`; on-disk validation was always exact-string. Collapsing to string equality removes the inconsistency.)
 
-- [ ] **Step 5: Rewrite the key builders in `cache/keys.py`**
+- [x] **Step 5: Rewrite the key builders in `cache/keys.py`**
 
 Delete `_mtime`. Replace `_model_signature` — **this is spec correction #1**:
 
@@ -1894,7 +1907,7 @@ For `pose_cache_key`, the artifact is a directory, so `model_content_id` dispatc
 Update the placeholder keys: `cache/reuse.py:21` and `cache/reader.py:20,33` become
 `CacheKey(schema_version=0, model_id="", config_hash="")`.
 
-- [ ] **Sub-task 4a checkpoint: commit `content_id.py` + `CacheKey`/`keys.py` alone (fix A8)**
+- [x] **Sub-task 4a checkpoint: commit `content_id.py` + `CacheKey`/`keys.py` alone (fix A8)**
 
 ```bash
 make format
@@ -1909,7 +1922,7 @@ git commit -m "feat(cache): content-based model/video identity primitives, Cache
 ```
 **Fix Z4 — `tests/test_inference_cache_keys.py` is staged and committed HERE, not deferred to 4c.** Step 1 adds five new tests to that file (the OBB two-path tests plus, per fix Z1 above, the `keys_mod.video_signature` re-export guard), so it is a file Step 1 edited within 4a's own scope — leaving it unstaged would mean `make format` at this checkpoint silently reformats an uncommitted file, and a fresh agent picking up 4b or 4c and reading "the prior sub-task's commit(s)" would not see Step 1's tests at all. Note this file will receive FURTHER edits in 4c (Step 8's itemized rewrites of its pre-existing tests) — that is expected; 4a commits only the additions Step 1 made, 4c commits the rest of that same file's changes on top. This is a real, separately-reviewable checkpoint: the primitives exist and are tested (Step 1's five new tests plus the OBB regressions pass at this point; the file's OTHER, pre-existing tests — the ones Step 8 rewrites — still fail until 4c, which is expected and not a regression to "fix" here).
 
-- [ ] **Step 6: Migrate DetectKit**
+- [x] **Step 6: Migrate DetectKit**
 
 `detectkit/jobs/prediction_cache.py:31-61` (function range corrected — it is `:31-61`, not `:31-66`) — replace the absolute-path identity. **Add the import** (the current file imports nothing from `content_id`): `from hydra_suite.core.inference.content_id import directory_content_id, model_content_id, video_signature`.
 
@@ -2095,7 +2108,7 @@ def test_adding_an_image_does_change_the_prediction_cache_key(tmp_path):
     assert before.as_string() != after.as_string()
 ```
 
-- [ ] **Sub-task 4b checkpoint: commit the DetectKit migration alone (fix A8)**
+- [x] **Sub-task 4b checkpoint: commit the DetectKit migration alone (fix A8)**
 
 ```bash
 make format
@@ -2105,7 +2118,7 @@ git add src/hydra_suite/detectkit/jobs/prediction_cache.py \
 git commit -m "feat(detectkit): migrate prediction-cache identity onto content_id, scoped to images/ (fix A4) (4b)"
 ```
 
-- [ ] **Step 7: Comment the known divergence in `parameter_helper.py`**
+- [x] **Step 7: Comment the known divergence in `parameter_helper.py`**
 
 At `:1768`, above the `_source_signature` closure:
 
@@ -2117,7 +2130,7 @@ At `:1768`, above the `_source_signature` closure:
         # content-based function or it will reintroduce machine-local caches.
 ```
 
-- [ ] **Step 8: Update every test file that constructs `CacheKey` / uses `model_mtime` — full enumeration**
+- [x] **Step 8: Update every test file that constructs `CacheKey` / uses `model_mtime` — full enumeration**
 
 This is a breaking dataclass-shape change (`model_path`+`model_mtime` → `model_id`). **Fix Z2 — the enumeration below is 17 files, not 14: the original 14-file list plus 3 files it missed because Step 8's own grep instruction never checked `.model_path` (only `.model_mtime`).** Verified survivors NOT in the original 14 and NOT in Step 11's run list: `tests/test_vitpose_pose_config.py:25` (`assert key.model_path == str(p)`), `tests/test_bgsub_cache_keys.py:102` (`assert key.model_path == "background_subtraction"`), `tests/test_inference_cache_reuse.py:174` (`assert key.model_path == "background_subtraction"`). Fix ALL 17 in this step, not a representative subset:
 
@@ -2153,7 +2166,7 @@ For every file above: grep it for `CacheKey(`, `model_path=`, `model_mtime=`, `.
 - `tests/test_inference_cache_keys.py:132`'s `CACHE_SCHEMA_VERSION == 4` assertion — change to `5`.
 - **Fix Z2 — five more anchors in this same file the original itemization missed** (found via the corrected `.model_path` grep above): `:536` (`test_bgsub_key_changes_with_detection_params` — `k1.model_path == "background_subtraction"` → `.model_id`), `:576-577` (`test_bgsub_key_stable_for_same_params` region — `k_a.model_path == k.model_path` and `k_a.model_mtime == k.model_mtime`; the second assertion has no `model_id` equivalent and must simply be deleted, not renamed — `model_mtime` no longer exists on `CacheKey` at all), `:609` (`test_headtail_key_stable_with_threshold` — `k1.model_path == k2.model_path` → `.model_id`), `:625` (`test_cnn_key_stable_with_calibration_temperature` — same rename), `:682` (`test_apriltag_key_has_empty_model_path` — `k.model_path == ""` → `k.model_id == ""`; the apriltag sentinel itself, per Step 5, is unchanged as `model_id=""`).
 
-- [ ] **Step 9: Run the cache suites**
+- [x] **Step 9: Run the cache suites**
 
 Run:
 ```bash
@@ -2164,7 +2177,7 @@ python -m pytest tests/test_cache_content_identity.py tests/test_inference_cache
 ```
 Expected: PASS, and the `test_inference_cache_keys.py` + `test_inference_cache_chunked.py` pair is **>= 111** (the baseline) plus the new tests.
 
-- [ ] **Step 10: Grep gate — no `model_path`/`model_mtime` survivors on CacheKey**
+- [x] **Step 10: Grep gate — no `model_path`/`model_mtime` survivors on CacheKey**
 
 Run:
 ```bash
@@ -2174,7 +2187,7 @@ grep -rnA3 'CacheKey(' src/ | grep -B3 -v 'model_id' | grep 'CacheKey(' && echo 
 ```
 **Fix Z2 — the original single-line `grep -v 'model_id'` gate can NEVER print clean and is not a usable gate as written.** Every multi-line `CacheKey(` constructor in `keys.py` (verified: `:129,341,353,362,392,407`) has `model_id=` on the FOLLOWING line, not the same line as `CacheKey(` — `grep -v 'model_id'` matches per-LINE, so it always flags these real, correct constructions as "CHECK THESE", making the gate noisy on every run regardless of correctness (a false-positive gate that always fires is worse than no gate: nobody re-reads the same six false positives every time). Use `grep -A3` to pull the next 3 lines and only flag a `CacheKey(` block where none of those lines contain `model_id`, as above. Also add `.model_path` as its own gate (fix Z2) since the attribute no longer exists on `CacheKey` at all after Step 4 — any survivor is a bug, not a matter of naming style.
 
-- [ ] **Step 11: Run every file enumerated in Step 8 explicitly — not a `-k` filter**
+- [x] **Step 11: Run every file enumerated in Step 8 explicitly — not a `-k` filter**
 
 A `-k "cache or detectkit or sidecar"` substring filter is exactly the kind of "subset chosen by apparent relevance" the Global Constraints forbid, and several of the 14 files in Step 8 (e.g. `tests/test_obbresult_class_ids.py`, `tests/test_oriented_track_video_export.py`, `tests/test_dataset_generation.py`, `tests/core/individual/dataset/test_oriented_video_actual_rows.py`, `tests/core/post/test_interpolated_crops_size_lookup.py`) do not match that pattern and would silently be skipped. Run the explicit file list instead:
 
@@ -2203,7 +2216,7 @@ python -m pytest \
 (Fix Z2: the last three files above are the `.model_path` survivors Step 8's items #15-17 add; they were missing from this run list in the same way they were missing from the original 14-file enumeration.)
 Expected: no `TypeError: __init__() got an unexpected keyword argument`, no `AttributeError` on `.model_path`/`.model_mtime`, all PASS. THEN also run the full suite as a final catch-all for any construction site this enumeration missed: `python -m pytest tests/ -q 2>&1 | tail -30` and diff the failure set against the pre-task baseline (memory `project_test_suite_batching_chunk_boundary_trap`: compare failure SETS, not raw counts).
 
-- [ ] **Step 12: Commit (sub-task 4c — everything else: the 14-file test migration + the `parameter_helper.py` comment)**
+- [x] **Step 12: Commit (sub-task 4c — everything else: the 14-file test migration + the `parameter_helper.py` comment)**
 
 `content_id.py`, `cache/base.py`, `cache/keys.py`, and the DetectKit files were already committed at the 4a/4b checkpoints above (fix A8) — this commit is only the remaining call-site/test migration.
 
@@ -2225,7 +2238,7 @@ migration and the equivalence gate below."
 
 **Fix A7 — the baseline commit for this gate, and why it must NOT be `8f9688e0`.** This task declares "Consumes: nothing from earlier tasks", but it runs FOURTH in execution order, after Tasks 1-3 have already landed real behavior changes (Task 2's save/load path relativization, Task 3's `iter_model_references`). Baselining Step 13/14 against `8f9688e0` (the branch root, before ANY task) compares "everything through Task 4" against "nothing" in one shot — if a divergence appears, there is no way to tell whether Task 1, 2, 3, or 4 caused it, which defeats the entire point of running each task's own equivalence gate separately (this is exactly the attribution principle CLAUDE.md's equivalence section states: "so each slice's effect is isolated, not conflated"). Since this task is NOT reordered to run first (the task order above is unchanged), the correct baseline is **the commit at the tip of Task 3** (i.e., `HEAD` immediately before Task 4's own commits begin) — not `8f9688e0`. Record that commit SHA in the Acceptance Log entry for this step (e.g. `git rev-parse HEAD` run right before Task 4 Step 1). Tasks 1-3's own gates (already run at the end of each of those tasks) are what isolates their individual effects; this step isolates Task 4's.
 
-- [ ] **Step 13: BEFORE/AFTER equivalence gate on MPS (blocking)**
+- [x] **Step 13: BEFORE/AFTER equivalence gate on MPS (blocking)**
 
 **What this gate proves, precisely (and what it doesn't).** Every fixture config in `tools/equivalence/fixtures/configs/` sets `enable_backward_tracking: true`, and `trackerkit/headless_tracking.py:248` runs the backward pass against the SAME `detection_cache_path` the forward pass just wrote — so this matrix DOES exercise a same-process, same-path write-then-read cache-key round trip (forward writes the v5 cache, backward reads it back and must find it reusable), on real configs including `.multihead.json`-based CNN keys and `dirsha256`-based pose-directory keys. Concretely this proves: (a) key computation doesn't crash or diverge on any real fixture config, (b) same-path write→read reuse via the forward→backward handoff, and (c) no perf regression (`PERF_TOLERANCE`). It does **not** prove cross-path/cross-machine portability — no fixture here ever copies a model to a second path and rebuilds the key against it. That property is covered separately: the handle-level unit tests added at fix Z7 (`test_cache_written_at_one_path_is_reusable_from_a_copy_at_another_path` and its negative counterpart, in Step 1), and the end-to-end round trip in Task 13. Do not read a green result here as proof of portability by itself.
 
@@ -2274,7 +2287,7 @@ Expected: every clip EQUIVALENT at its DETERMINISM floor; identical row counts; 
 
 Record the result in the plan's Acceptance Log below. If any clip diverges, STOP and debug; do not proceed to Task 5.
 
-- [ ] **Step 14: Same gate on firebrat (CUDA)**
+- [x] **Step 14: Same gate on firebrat (CUDA)**
 
 **Fix Y7 (round-7) — `git fetch && git checkout <this-branch-sha>` cannot work as written: `feat/portable-tracking-jobs` (and the `TASK3_TIP` sha it names) exist ONLY in this local worktree/clone, never pushed anywhere firebrat's `git fetch` can reach — and even local `main` is ahead of `origin/main`, so "just fetch" is never sufficient for a branch built on top of it. Verified: `git branch -r --contains feat/portable-tracking-jobs` and `git ls-remote origin feat/portable-tracking-jobs` both come back empty from this worktree. The transport step below MUST run before `git fetch` on firebrat, every time this branch's tip changes (i.e. before Step 14 here, and again before Task 13 Step 3, which reuses this recipe verbatim).** Chosen mechanism: a **git bundle**, not `git push origin`, per this plan's own "do not push" instruction (this plan/branch is worked in an isolated local worktree and is not to touch `origin` autonomously) and per the existing precedent for this exact box class (memory `project_pose_cnn_batched_detection_slowdown`'s "mehek git-bundle transport recipe"). Run from THIS worktree (`.worktrees/portable-jobs`), local machine, before ssh'ing in:
 
@@ -2331,7 +2344,7 @@ Expected: same acceptance. Record in the Acceptance Log.
   - `SUPPORTED_JOB_VERSION = 1`.
   - `shared_roots.load_shared_roots(path: Path | None = None) -> dict[str, str]`, `save_shared_roots(table: dict[str, str], path: Path | None = None) -> None`, `save_alias(alias: str, root: str, path: Path | None = None) -> dict[str, str]` (fix B12a: read-modify-write one alias into the persisted table and return the new table — Tasks 10/11 call **this**, never `save_shared_roots` directly, so a one-off `--shared-root` promotion cannot clobber the host's other aliases), `match_shared_root(abs_path, table) -> tuple[str, str] | None` (longest root wins), `resolve_shared(alias, relpath, table) -> Path`.
 
-- [ ] **Step 1: Write the failing tests**
+- [x] **Step 1: Write the failing tests**
 
 Create `tests/test_tracking_job_manifest.py`:
 
@@ -2706,12 +2719,12 @@ def test_package_imports_without_qt_installed():
     assert result.returncode == 0, result.stderr
 ```
 
-- [ ] **Step 2: Run tests to verify they fail**
+- [x] **Step 2: Run tests to verify they fail**
 
 Run: `python -m pytest tests/test_tracking_job_manifest.py tests/test_tracking_job_shared_roots.py tests/test_tracking_job_layering.py -v`
 Expected: FAIL. **Minor fix (adversarial review) — the real expected failure shape, stated precisely.** `test_tracking_job_manifest.py`/`test_tracking_job_shared_roots.py` fail at collection (`ModuleNotFoundError: hydra_suite.data.tracking_job`), as expected. `test_tracking_job_layering.py` is different: `test_no_app_layer_or_qt_imports` is PARAMETRIZED over `sorted(PACKAGE.glob("*.py"))`, and with no package on disk yet that glob is empty — pytest collects it as a test with an EMPTY parameter set, which SKIPS (reports "no tests ran" for that parametrization) rather than failing. Only `test_the_gate_itself_catches_a_relative_app_layer_import` (it constructs its own synthetic file, independent of `PACKAGE`), the new `test_the_gate_catches_a_relative_app_layer_import_inside_a_real_init_file` (same — builds its own `tmp_path` tree), and `test_package_imports_without_qt_installed` (its subprocess `import hydra_suite.data.tracking_job` genuinely fails) produce real FAILs from this file at this step. State this as the actual expectation rather than a blanket "FAIL", so a literal implementer doesn't mistake the parametrized test's skip for an unexpected result.
 
-- [ ] **Step 3: Implement `manifest.py`**
+- [x] **Step 3: Implement `manifest.py`**
 
 Follow `data/project_bundle.py` conventions: `bundle_version`-style integer first, `to_dict`/`from_dict` dataclasses, `ValueError` subclass on version mismatch, `write_json_atomic` reused from `project_bundle` (`:167-186`).
 
@@ -2913,7 +2926,7 @@ class JobManifest:
 
 Note: a `shared` video has no file under `videos/` but keeps a `job_path` (the symlink the remote materializes), so `validate_job_relpath` still applies.
 
-- [ ] **Step 4: Implement `shared_roots.py` and `paths.get_shared_roots_path`**
+- [x] **Step 4: Implement `shared_roots.py` and `paths.get_shared_roots_path`**
 
 In `paths.py`, beside `get_advanced_config_path` (fix Q5, adversarial review: verified now at `:188`, not `:156-158` — Task 1 inserted `get_platform_config_dir` above it, shifting every later line number; re-check every `paths.py` line citation in this plan against current source before implementing):
 
@@ -3005,7 +3018,7 @@ def resolve_shared(alias: str, relpath: str, table: dict[str, str]) -> Path:
 
 `Path.relative_to` is component-wise, so the `/Volumes/labour` case is handled without string prefix checks.
 
-- [ ] **Step 5: `__init__.py` re-exports**
+- [x] **Step 5: `__init__.py` re-exports**
 
 ```python
 """Portable tracking jobs: pack anywhere, run anywhere, sync back."""
@@ -3033,12 +3046,12 @@ __all__ = [
 
 (Later tasks append `pack_job`, `verify_job`, `plan_pull`, `preflight_job` here.)
 
-- [ ] **Step 6: Run tests to verify they pass**
+- [x] **Step 6: Run tests to verify they pass**
 
 Run: `python -m pytest tests/test_tracking_job_manifest.py tests/test_tracking_job_shared_roots.py tests/test_tracking_job_layering.py -v`
 Expected: all PASS.
 
-- [ ] **Step 7: Commit**
+- [x] **Step 7: Commit**
 
 ```bash
 make format
@@ -3064,7 +3077,7 @@ git commit -m "feat(tracking-job): manifest, shared-root mount table, and the la
 
 **Layout rule (spec correction #6).** Two incompatible repo layouts share one registry (`model_publish._repo_dir_for_role` writes `YOLO-obb/`; `model_paths.get_yolo_model_repository_directory` reads `obb/`). `copy_model_reference` never re-derives a layout from a role — it copies to **the key the config already resolved through**, i.e. `make_model_path_relative(source)`, computed by the caller. Whatever layout the staging machine used is preserved verbatim, so the same relative string in the sidecar resolves on the remote.
 
-- [ ] **Step 1: Write the failing test**
+- [x] **Step 1: Write the failing test**
 
 Create `tests/test_tracking_job_references.py`:
 
@@ -3289,12 +3302,12 @@ def test_registry_subset_writes_an_empty_v2_registry_when_nothing_matches(tmp_pa
     assert payload == {"schema_version": 2, "entries": {}}
 ```
 
-- [ ] **Step 2: Run tests to verify they fail**
+- [x] **Step 2: Run tests to verify they fail**
 
 Run: `python -m pytest tests/test_tracking_job_references.py -v`
 Expected: FAIL — module missing.
 
-- [ ] **Step 3: Implement `references.py`**
+- [x] **Step 3: Implement `references.py`**
 
 ```python
 """Copying model artifacts into a job's models root."""
@@ -3483,12 +3496,12 @@ def write_registry_subset(
 
 Note `copy_model_metadata_sidecars` has two conventions (three suffixes appended to the full name, `.v2meta.json` replacing the suffix), which is why both are collected. **Minor note:** this also ships `x.pt.runtime_meta.json`, a host-specific export stamp (TensorRT/CoreML engine build provenance), which nominally contradicts "engines never travel" (spec §2 non-goal). Harmless in practice — it's signature-gated metadata, not the engine binary itself, and a stale stamp on the remote just causes a rebuild rather than a silent wrong-engine reuse — but worth knowing it rides along rather than being filtered out.
 
-- [ ] **Step 4: Run tests to verify they pass**
+- [x] **Step 4: Run tests to verify they pass**
 
 Run: `python -m pytest tests/test_tracking_job_references.py tests/test_tracking_job_layering.py -v`
 Expected: all PASS, including the layering gate (this module imports `core.inference.model_paths`, which is allowed).
 
-- [ ] **Step 5: Commit**
+- [x] **Step 5: Commit**
 
 ```bash
 make format
@@ -3561,7 +3574,7 @@ git commit -m "feat(tracking-job): copy model references with sidecars, bundles 
 
     **Minor fix — basename collisions under `config/skeletons/`.** Skeletons are copied by BASENAME (`config/skeletons/<name>.json`), and two different videos in the same job can point at two DIFFERENT skeleton files that happen to share a filename (e.g. two labs both naming their skeleton `skeleton.json`). Copying the second over the first would silently make one video's skeleton wrong on the remote, with `verify_job` unable to catch it (the file exists; it's just the wrong bytes). Detect this at pack time: if two distinct source `pose_skeleton_file` paths resolve to the same `config/skeletons/<name>.json` target AND their content differs (compare via `content_id.file_content_id`, not just presence), raise `TrackingJobError(code=2)` naming both source paths — fail loudly at pack, not silently on the remote.
 
-- [ ] **Step 1: Write the failing tests**
+- [x] **Step 1: Write the failing tests**
 
 Create `tests/test_tracking_job_pack.py`:
 
@@ -3917,7 +3930,7 @@ def test_all_problems_are_reported_not_just_the_first(packed_job):
 
 **Fix V2 note — `test_a_packed_shared_job_verifies_clean` is deferred to Task 10, not added here.** `verify_job`'s shared-exemption is proven by a test that packs a job with a `shared_table`, but `tests/conftest.py` does not gain a `packed_job_shared` fixture until Task 10 (Fix M11, below) — this task's own `staging`/`_planned`/`packed_job` fixtures (Step 1b) carry no shared-root wiring. Adding a test here that depends on a not-yet-existing fixture would break Task 7's own "Step 6: Run tests to verify they pass" gate with a collection-time `fixture 'packed_job_shared' not found` error. The test is added in Task 10 instead (see `test_a_packed_shared_job_verifies_clean` alongside the other `packed_job_shared` tests below), once the fixture that exercises `shared_table` actually exists — but it still proves exactly this task's `verify_job` behaviour, since Task 10 adds no new verify-time exemption of its own.
 
-- [ ] **Step 1b (fix B8): MOVE `staging`, `_planned` and `packed_job` into `tests/conftest.py` — do not leave them in `test_tracking_job_pack.py`.**
+- [x] **Step 1b (fix B8): MOVE `staging`, `_planned` and `packed_job` into `tests/conftest.py` — do not leave them in `test_tracking_job_pack.py`.**
 
 `tests/test_tracking_job_verify.py` (this task) and `tests/test_tracking_job_preflight.py` (Task 10) both consume `packed_job`, which consumes `staging`/`_planned`. A pytest fixture defined in one test MODULE is not visible from another, so leaving them in `test_tracking_job_pack.py` makes both of those files fail at COLLECTION with `fixture 'staging' not found` — not at assertion time, so the failure looks unrelated to this task. `tests/conftest.py` today defines only `direct_obb_fixture` and the autouse `_neutralize_leaked_training_flags`; there is no `tests/tracking_job_conftest.py` and none is created.
 
@@ -4011,12 +4024,12 @@ def packed_job(tmp_path, staging):
 
 `pytest` is already imported at the top of `tests/conftest.py`; add `tests/helpers/tracking_job.py` to this task's `git add`. **Task 10 must EXTEND this `packed_job` (or add a distinctly-named sibling), never redefine a second `packed_job` — see Task 10 Step 1.**
 
-- [ ] **Step 2: Run tests to verify they fail**
+- [x] **Step 2: Run tests to verify they fail**
 
 Run: `python -m pytest tests/test_tracking_job_pack.py tests/test_tracking_job_verify.py -v`
 Expected: FAIL — modules missing.
 
-- [ ] **Step 3: Implement `runner.py`**
+- [x] **Step 3: Implement `runner.py`**
 
 ```python
 """The generated run.sh: the job's executable contract."""
@@ -4196,7 +4209,7 @@ def render_run_sh() -> str:
     return RUN_SH
 ```
 
-- [ ] **Step 4: Implement `pack.py`**
+- [x] **Step 4: Implement `pack.py`**
 
 Steps, in order (spec §6.2): resolve shared/symlink/copy per video → copy models → registry subset → config snapshot (advanced config, skeletons, `.seeded` markers) → rewrite each config → write sidecars → `videos.txt` → requirements → `run.sh` → manifest → `verify_job` self-check (raise `TrackingJobError` if it reports problems).
 
@@ -4656,7 +4669,7 @@ Add `test_conda_envs_defaults_to_sleap_for_the_placeholder_value`: identical set
 
 Basename collisions across different source directories raise `TrackingJobError` naming **both** origins.
 
-- [ ] **Step 5: Implement `verify.py`**
+- [x] **Step 5: Implement `verify.py`**
 
 ```python
 ABSOLUTE_PATH_FORBIDDEN_KEYS = (
@@ -4724,12 +4737,12 @@ This makes `pack_job` correct regardless of what kind of iterable a future calle
 
 `shared` entries are **not** checked here — verify is offline and mount-agnostic; preflight (Task 10) checks them.
 
-- [ ] **Step 6: Run tests to verify they pass**
+- [x] **Step 6: Run tests to verify they pass**
 
 Run: `python -m pytest tests/test_tracking_job_pack.py tests/test_tracking_job_verify.py tests/test_tracking_job_layering.py -v`
 Expected: all PASS.
 
-- [ ] **Step 7: Commit**
+- [x] **Step 7: Commit**
 
 ```bash
 make format
@@ -4762,7 +4775,7 @@ git commit -m "feat(tracking-job): pack a job directory, generate run.sh, and ve
 
 **The contract is structural, not name-based.** An output is anything under `videos/` that is not a manifest video and not in that video's `pushed_siblings`. A future artifact type is therefore pulled with no code change.
 
-- [ ] **Step 1: Write the failing test**
+- [x] **Step 1: Write the failing test**
 
 Create `tests/test_tracking_job_outputs.py`:
 
@@ -4924,12 +4937,12 @@ def test_an_unattributable_output_raises():
         map_outputs_to_origins(_manifest(), ["videos/unrelated_thing.csv"])
 ```
 
-- [ ] **Step 2: Run test to verify it fails**
+- [x] **Step 2: Run test to verify it fails**
 
 Run: `python -m pytest tests/test_tracking_job_outputs.py -v`
 Expected: FAIL — module missing.
 
-- [ ] **Step 3: Implement `outputs.py`**
+- [x] **Step 3: Implement `outputs.py`**
 
 Attribution rule: an output belongs to the video whose **stem** is the longest prefix match of the output's first path component under `videos/` (so `colony_tracking.csv`, `colony_logs/…`, `.inference_cache_colony/…` and `colony_datasets/…` all attribute to `colony.mp4`). The `.inference_cache_<stem>` form is a *suffix* match, so handle it explicitly. Raise `TrackingJobError` when an output attributes to no video — silently dropping an artifact is how results get lost.
 
@@ -4978,12 +4991,12 @@ def test_a_stray_ds_store_is_ignored_not_raised():
     assert discover_outputs(_manifest(), listing) == []
 ```
 
-- [ ] **Step 4: Run tests to verify they pass**
+- [x] **Step 4: Run tests to verify they pass**
 
 Run: `python -m pytest tests/test_tracking_job_outputs.py -v`
 Expected: all PASS.
 
-- [ ] **Step 5: Commit**
+- [x] **Step 5: Commit**
 
 ```bash
 make format
@@ -5030,7 +5043,7 @@ git commit -m "feat(tracking-job): structural output discovery and origin mappin
   - `_last_runs_jsonl_timestamp(path: Path) -> float | None` (fix W3b — was referenced by the fix A5 "still running" guard but never declared here) — parses the LAST line of `runs.jsonl` and returns its `finished_at` as a Unix timestamp via `datetime.fromisoformat(...).timestamp()`, or `None` if the file is missing, empty, or the last line is unparseable/missing `finished_at`. Never raises.
   - `_RUNNING_CHECK_SLACK_SECONDS = 1.0` (fix W3b) — module-level constant; the still-running guard compares `run_log.stat().st_mtime - _RUNNING_CHECK_SLACK_SECONDS` against `last_entry_ts`, absorbing the sub-second gap between `run.sh`'s `tee -a logs/run.log` closing and `_record-run` stamping `finished_at` in the same script.
 
-- [ ] **Step 1: Write the failing test**
+- [x] **Step 1: Write the failing test**
 
 Create `tests/test_tracking_job_transport.py`:
 
@@ -5183,12 +5196,12 @@ def test_push_reports_the_exact_command_on_failure(tmp_path):
     assert excinfo.value.code == 4
 ```
 
-- [ ] **Step 2: Run test to verify it fails**
+- [x] **Step 2: Run test to verify it fails**
 
 Run: `python -m pytest tests/test_tracking_job_transport.py -v`
 Expected: FAIL — module missing.
 
-- [ ] **Step 3: Implement `transport.py`**
+- [x] **Step 3: Implement `transport.py`**
 
 `build_push_input_list` is derived **from the manifest**, never from an exclude list: `hydra_job.json`, `run.sh`, `videos.txt`, the config snapshot files plus both `.seeded` markers, `models/model_registry.json`, every model key + its `sidecars` + its `files`, every non-`shared` `videos[].job_path`, and every `pushed_siblings` entry.
 
@@ -5391,17 +5404,17 @@ Called once at pack time (Task 7) to populate `created_on["git_sha"]`; never re-
 
 Check `rsync` is on PATH locally and remotely up front, failing with the install hint.
 
-- [ ] **Step 4: Run tests to verify they pass**
+- [x] **Step 4: Run tests to verify they pass**
 
 Run: `python -m pytest tests/test_tracking_job_transport.py -v`
 Expected: all PASS.
 
-- [ ] **Step 5: Optional live localhost exercise**
+- [x] **Step 5: Optional live localhost exercise**
 
 Run: `HYDRA_TEST_SSH_LOCALHOST=1 python -m pytest tests/test_tracking_job_transport.py -v -k localhost`
 Expected: skipped unless the env var is set (guard the live test with `pytest.mark.skipif`).
 
-- [ ] **Step 6: Commit**
+- [x] **Step 6: Commit**
 
 ```bash
 make format
@@ -5434,7 +5447,7 @@ git commit -m "feat(tracking-job): rsync/ssh transport with a manifest-derived p
 
 **Every check runs before exit** — a preflight that stops at the first failure makes the user iterate once per problem.
 
-- [ ] **Step 1: Write the failing test**
+- [x] **Step 1: Write the failing test**
 
 Create `tests/test_tracking_job_preflight.py`:
 
@@ -5748,12 +5761,12 @@ def packed_job_shared(tmp_path, staging, _isolated_host_config):
 
 **`available_tiers=None` semantics (undefined in the original draft):** `preflight_job(..., available_tiers=None)` means "do not run the `runtime_tier` check at all" (report it neither passing nor failing — omit it from `checks`), as distinct from `available_tiers=()` which means "the tier check runs and fails, because nothing is available." This lets a caller that hasn't yet determined the local tier set (e.g. a dry `verify`-only invocation) skip the check honestly rather than getting a spurious pass or fail. `job_cli.py` (this task) always passes a real, non-`None` `available_tiers` derived from `runtime.resolver.available_tiers(detect_platform())` for actual `preflight`/`run` invocations; only test code exercising the "not yet known" path uses `None`. **Fix W7 — `available_tiers` is NOT a bare, zero-argument call.** Its real signature (verified `runtime/resolver.py:77`) is `available_tiers(platform: PlatformInfo) -> list` — it needs a `PlatformInfo` describing the ACTUAL host, obtained via `detect_platform()` (`runtime/resolver.py:104`, which reads `hydra_suite.utils.gpu_utils.CUDA_AVAILABLE`/`MPS_AVAILABLE`). Every call site in this plan is `runtime.resolver.available_tiers(runtime.resolver.detect_platform())`, never `available_tiers()` alone.
 
-- [ ] **Step 2: Run test to verify it fails**
+- [x] **Step 2: Run test to verify it fails**
 
 Run: `python -m pytest tests/test_tracking_job_preflight.py -v`
 Expected: FAIL — module missing.
 
-- [ ] **Step 3: Implement `preflight.py`**
+- [x] **Step 3: Implement `preflight.py`**
 
 Checks, in order, all executed (spec §9.4):
 
@@ -5808,12 +5821,12 @@ else:
 
 **Minor fix — restore the "offer to persist" behaviour spec §6.7 step 1 describes and the original draft silently dropped.** A one-off `--shared-root ALIAS=PATH` given to `job run`/`job preflight` should, after a successful preflight run that used it, prompt (interactively, when stdout is a tty and `--yes`/`--no-input` wasn't passed) to save the alias into the host's persistent `shared_roots.json` table via `shared_roots.py` (Task 5), so the next invocation doesn't need to repeat the override. In `job_cli.py` (Task 11), after `preflight_job(..., shared_root_overrides=parsed_overrides)` returns `ok=True`, for each override alias not already present in the persisted table: prompt `Save shared-root alias 'labnas' -> '/mnt/lab' for future jobs? [y/N]` and call `shared_roots.save_alias(alias, path)` on yes. Non-interactive/CI invocations skip the prompt and leave the override one-off, as before.
 
-- [ ] **Step 4: Run tests to verify they pass**
+- [x] **Step 4: Run tests to verify they pass**
 
 Run: `python -m pytest tests/test_tracking_job_preflight.py tests/test_tracking_job_layering.py -v`
 Expected: all PASS.
 
-- [ ] **Step 5: Commit**
+- [x] **Step 5: Commit**
 
 ```bash
 make format
@@ -5852,7 +5865,7 @@ An agent picking up 11b or 11c should read the prior sub-task's commit(s) for th
 
 **Spec correction #4:** `job calibrate` forwards **only** `inference_autotune_manual`. `run_calibrate_cli()` (`calibrate_cli.py:80`) has no `sahi_profile` parameter, and it does not need one: `pack` bakes the resolved SAHI profile into every sidecar, so the config `calibrate` loads already carries it. Forwarding the manual fields is mandatory — they feed `compute_baseline_digest` → `key.baseline_digest` (`integration.py:440-446`), so dropping them makes `track`'s profile lookup silently miss.
 
-- [ ] **Step 1: Write the failing test**
+- [x] **Step 1: Write the failing test**
 
 Create `tests/test_trackerkit_job_cli.py`:
 
@@ -5960,12 +5973,12 @@ def test_exit_codes_are_mapped(monkeypatch):
     assert job_cli.run_job_cli(object()) == 3
 ```
 
-- [ ] **Step 2: Run test to verify it fails**
+- [x] **Step 2: Run test to verify it fails**
 
 Run: `python -m pytest tests/test_trackerkit_job_cli.py -v`
 Expected: FAIL — no `job` subcommand.
 
-- [ ] **Step 3: Register the `job` group in `app.py`**
+- [x] **Step 3: Register the `job` group in `app.py`**
 
 After the `calibrate` subparser block (ends `:254`), add nested subparsers mirroring the exact house style:
 
@@ -5999,7 +6012,7 @@ In `parse_arguments`, add a `job`/`pack` branch mirroring `:278-296` (both/neith
 
 In `main`, add `elif args.command == "job":` dispatching to `run_job_cli(args)` with the same lazy import + `try/except` shape as the `calibrate` branch (`:446-462`).
 
-- [ ] **Step 4: Implement `job_cli.py`**
+- [x] **Step 4: Implement `job_cli.py`**
 
 `pack` flow:
 
@@ -6104,7 +6117,7 @@ Without this step at all, a pose-enabled job silently ships with no skeleton and
 7. `pack_job(...)` with `registry_entries=list(iter_registry_entries())`, `advanced_config_path=str(get_advanced_config_path())`, `advanced_config_fallback=load_advanced_tracker_config()` (fix X5a — `job_cli.py` is the app-layer caller, so THIS is where `trackerkit.cli_config.load_advanced_tracker_config` is imported and called; `pack.py` never imports it), `shared_table=load_shared_roots()`, `force=args.force`, `force_discard_outputs=args.discard_outputs` (fix X8 — `--discard-outputs` alone, without `--force`, is meaningless since `pack_job` only even looks at `videos/`'s contents on the force path; `job pack` does not reject that combination, it is simply a no-op flag in that case).
 8. **Warn** (spec §6.6) when any export stage is enabled in a config: the CLI leaves `DATASET_OUTPUT_DIR`, `FINAL_MEDIA_EXPORT_VIDEO_OUTPUT_DIR` and `INDIVIDUAL_DATASET_OUTPUT_DIR` at `None` (`cli_config.py:293-295`), so those exports produce nothing on the remote. Point at follow-up §17.1.
 
-- [ ] **Sub-task 11a checkpoint: commit `pack` end to end (fix A8)**
+- [x] **Sub-task 11a checkpoint: commit `pack` end to end (fix A8)**
 
 At this point `job pack` (argparse wiring from Steps 1-3, plus the flow above) is a complete, independently testable slice — it does not need `push`/`pull`/`run` to exist to be exercised (Step 7's local pack+verify e2e and hostile-config e2e can both run against 11a alone).
 
@@ -6123,7 +6136,7 @@ skeleton snapshot."
 
 `push`/`pull`/`status` dispatch is thin glue over Task 9's `transport.py` and Task 5's manifest: `push` parses its target with `parse_remote`, calls `push_job(job_dir, target, runner=subprocess.run)`, then (fix A2b, fix (c) above) runs `ssh <host> '<bootstrap>; cd <path> && trackerkit job verify .'` through the same `--remote-bootstrap` and surfaces a non-zero verify as a push failure. `pull` parses its target and calls `pull_job(target, job_dir, include_caches=not args.no_caches, overwrite=args.overwrite, dry_run=args.dry_run, force=args.force)` (fix A5), printing `PullReport.skipped` and returning non-zero when non-empty. `status` reads the local manifest summary plus the tail of `logs/runs.jsonl`, or the same over ssh (with `--remote-bootstrap`) for a remote target.
 
-- [ ] **Sub-task 11b checkpoint: commit `push`/`pull`/`status` wiring (fix A8)**
+- [x] **Sub-task 11b checkpoint: commit `push`/`pull`/`status` wiring (fix A8)**
 
 ```bash
 make format
@@ -6214,7 +6227,7 @@ Task 13 Step 5 must name this actual command (`<bootstrap>; cd <path> && tracker
 
 All `TrackingJobError`s are caught in `run_job_cli`, printed as `error: <message>`, and returned as `err.code`.
 
-- [ ] **Step 5: Run tests to verify they pass**
+- [x] **Step 5: Run tests to verify they pass**
 
 Run:
 ```bash
@@ -6226,7 +6239,7 @@ python -m pytest tests/test_trackerkit_job_cli.py \
 (Fix M14: `tests/test_trackerkit_cli.py` does not exist — the real existing CLI test files are `tests/test_trackerkit_app.py`, `tests/test_trackerkit_cli_fanout.py` and `tests/test_trackerkit_calibrate_cli.py`; running a nonexistent path silently reports 0 tests collected from that arg rather than failing loudly, which would have hidden a real regression here.)
 Expected: PASS, with the existing CLI tests unchanged (a new subcommand must not perturb `track`/`calibrate` parsing).
 
-- [ ] **Step 6: Smoke the help output**
+- [x] **Step 6: Smoke the help output**
 
 Run (fix B15 — bare `trackerkit` here violated this plan's own PYTHONPATH constraint; on this Mac it resolves to MAIN's editable install, which has no `job` subcommand at all, so this step would "fail" for a reason unrelated to the branch):
 ```bash
@@ -6237,7 +6250,7 @@ PYTHONPATH=$WT/src python -m hydra_suite.trackerkit.app job run --help
 ```
 Expected: all nine subcommands listed; `pack --help` shows no `--gpus`; `run --help` shows no `--sahi-profile`.
 
-- [ ] **Step 7: End-to-end local pack + verify — realistic fixture AND a purpose-built hostile config**
+- [x] **Step 7: End-to-end local pack + verify — realistic fixture AND a purpose-built hostile config**
 
 **Fix M13 — `trackerkit` bare must never be invoked from this worktree.** `hydra_suite.__file__` resolves to MAIN's editable install here, not the worktree's `src/` (verified) — a bare `trackerkit` invocation would silently exercise unmodified `main` code and report false confidence. Every invocation in this step (and in Task 13) uses:
 ```bash
@@ -6314,7 +6327,7 @@ PY
 ```
 Expected: pack succeeds despite every deliberately-adversarial input; `verify` reports no problems (everything landed job-relative); the printed assertions confirm the absolute-path rewrite, the redirect recording, the `external/` key for the out-of-root classifier, and the skeleton snapshot all actually fired. If ANY assertion fails, the corresponding Task 2/6/7 code is broken regardless of what the realistic-fixture case in sub-step 1 reported.
 
-- [ ] **Step 8: Fill the M10 coverage gaps — spec requirements this plan otherwise leaves untested**
+- [x] **Step 8: Fill the M10 coverage gaps — spec requirements this plan otherwise leaves untested**
 
 Five spec requirements had no task or step anywhere in the original draft. Add all five here, as part of Task 11 since each depends on the CLI wiring just built:
 
@@ -6558,7 +6571,7 @@ def test_job_run_remote_bootstrap_parses():
 
 **Fix V-minor — `job calibrate [--budget-seconds]` must supply the SAME default `trackerkit calibrate` itself uses, or an omitted flag crashes at the `run_calibrate_cli` call.** Verified: `run_calibrate_cli(video_path, *, config_path=None, budget_seconds: float, inference_autotune_manual=None)` (`calibrate_cli.py:80-86`) declares `budget_seconds` as a REQUIRED keyword-only parameter with no default. `trackerkit calibrate`'s own argparse subparser never lets this bite because it sets `default=DEFAULT_CALIBRATION_BUDGET_SECONDS` on `--budget-seconds` (`app.py:224-231`, `DEFAULT_CALIBRATION_BUDGET_SECONDS` imported at `app.py:16`) — `args.budget_seconds` is therefore never `None` by the time it reaches `calibrate_cli.py:453`'s `budget_seconds=float(args.budget_seconds)`. `job_cli.py`'s `job calibrate`/`job run --calibrate` argparse definitions (Task 11) must do the same: `add_argument("--budget-seconds", type=float, default=DEFAULT_CALIBRATION_BUDGET_SECONDS, ...)` (import `DEFAULT_CALIBRATION_BUDGET_SECONDS` from the same module `app.py` does). Without an explicit default here, `job calibrate <job>` with no flag passes `args.budget_seconds = None` straight into `run_calibrate_cli(..., budget_seconds=None)`, which either raises inside the search-deadline arithmetic or (worse) silently produces a zero/negative budget depending on where `None` first gets compared — either way a bug this plan's own Task 11 CLI tests would need to catch. Add `test_job_calibrate_budget_seconds_defaults_when_omitted`: `parse_arguments(["job", "calibrate", "/tmp/j"])` and assert `args.budget_seconds == DEFAULT_CALIBRATION_BUDGET_SECONDS` (not `None`).
 
-- [ ] **Step 9: Commit (sub-task 11c — `run`/`calibrate`/`preflight` + the e2e/coverage-gap tests; fix A8)**
+- [x] **Step 9: Commit (sub-task 11c — `run`/`calibrate`/`preflight` + the e2e/coverage-gap tests; fix A8)**
 
 `job_cli.py`'s `pack` and `push`/`pull`/`status` pieces were already committed at the 11a/11b checkpoints above — this commit is the `run`/`calibrate` remote-bootstrap dispatch (fix M7 + fix A2b) plus everything Steps 5-8 added.
 
@@ -6590,20 +6603,20 @@ remote-target subcommand."
 - Create: `docs/user-guide/trackerkit-jobs.md`
 - Modify: `docs/user-guide/trackerkit-cli.md` (cross-link from `## A batch`), `mkdocs.yml` (nav), **`docs/developer-guide/architecture.md`** (fix B-minor: the file was previously unnamed — append a "Portable job model-reference contract" section there; it is the guide that already describes layer boundaries and extension points, and it is already in the mkdocs nav so no nav edit is needed for it)
 
-- [ ] **Step 1: Write `docs/user-guide/trackerkit-jobs.md`**
+- [x] **Step 1: Write `docs/user-guide/trackerkit-jobs.md`**
 
 Cover: the lifecycle walkthrough (pack → push → preflight → calibrate → run → pull); the "what travels, what doesn't" table (models/config/videos travel; TensorRT/ONNX/CoreML engines, calibration profiles and conda envs do not); the shared-root mount table with a two-host example (`{"labnas": "/Volumes/lab"}` on the laptop, `{"labnas": "/mnt/lab"}` on the box); the conda-env requirement and how preflight reports it; the nine-GPU example adapted to `job run --gpus auto`; and the §6.6 export limitation with a pointer to follow-up §17.1.
 
-- [ ] **Step 2: Add the developer-guide note**
+- [x] **Step 2: Add the developer-guide note**
 
 Append a "Portable job model-reference contract" section to `docs/developer-guide/architecture.md` stating that `iter_model_references` + the four key tuples in `engine_params.py` are the contract every new model role must join; that `pack.ROLE_TO_CONFIG_KEY` must gain the matching lowercase config key(s); and that `tests/test_engine_params_model_reference_contract.py` fails loudly otherwise.
 
-- [ ] **Step 3: Build the docs**
+- [x] **Step 3: Build the docs**
 
 Run: `make docs-check`
 Expected: strict build passes, terminology check clean.
 
-- [ ] **Step 4: Commit**
+- [x] **Step 4: Commit**
 
 ```bash
 git add docs/user-guide/trackerkit-jobs.md \
@@ -6619,7 +6632,7 @@ git commit -m "docs: portable tracking jobs user guide and the model-reference c
 
 This task produces evidence, not code. **Nothing merges until every box here is ticked with pasted output.**
 
-- [ ] **Step 1: Full local suite delta**
+- [x] **Step 1: Full local suite delta**
 
 ```bash
 # Fix B14: self-contained -- `conda activate` does not survive to the next
@@ -6634,15 +6647,15 @@ cd /Users/neurorishika/Projects/Rockefeller/Kronauer/multi-animal-tracker/.workt
 Run this in the FOREGROUND. A backgrounded run piped through `tail` shows partial output that reads like a hang (memory `feedback_partial_output_is_not_a_hang`).
 Expected: the failure SET is a subset of the known-failing set on `8f9688e0`. Compare **sets**, not counts — new test files shift pytest chunk boundaries and can fake collection errors (memory `project_test_suite_batching_chunk_boundary_trap`). Record both sets.
 
-- [ ] **Step 2: MPS equivalence matrix (final, post-everything)**
+- [x] **Step 2: MPS equivalence matrix (final, post-everything)**
 
 Run the Task 4 Step 13 recipe again at the branch tip. Expected: every clip EQUIVALENT at its determinism floor, row counts > 1 on every CSV, perf ratio <= 1.25.
 
-- [ ] **Step 3: CUDA equivalence matrix on firebrat**
+- [x] **Step 3: CUDA equivalence matrix on firebrat**
 
 Run the Task 4 Step 14 recipe at the branch tip on `firebrat`, **including its fix Y7 git-bundle transport step first** (the branch has moved since Step 14 was last run, so the bundle must be re-created and re-fetched, not assumed still current on firebrat). **Confirm `courtship` is still not to be touched.** Expected: same acceptance.
 
-- [ ] **Step 4: The Goal-4 round trip — the only proof that matters**
+- [x] **Step 4: The Goal-4 round trip — the only proof that matters**
 
 **Correction (fix to the plan's own gate claim, was overstated):** the equivalence harness does NOT exercise "zero cache reuse". `tools/equivalence/runner.py:154` forces `use_cached_detections: False` for the *forward* pass only, but every fixture config has `enable_backward_tracking: true` and the runner's DISABLE block never turns that off, so the backward pass reads the forward pass's own detection cache **in-process, at the same path, on the same machine**. The matrix therefore DOES exercise write-then-read key equality (the cache written at path P by the forward pass is read back at the same path P by the backward pass) — that is real coverage, and it is why a wrong `config_hash`/`model_id` computation would already have broken the existing gate before this branch ever touched portability. What the matrix does **not** exercise is **cross-machine, cross-path reuse**: a cache written on one host/path and read back on a different host at a different absolute path, with no re-detection. That is the one gap this step closes, and it is the only step in the whole plan that proves it. State this precisely — "the cache change is gated except for portability", not "the cache change is ungated" — anywhere else in this document that repeats the stronger, false claim.
 
@@ -7075,7 +7088,7 @@ sys.exit(0)
 
 Run it for both pulled jobs and paste the `CACHE FULLY REUSABLE` output (see the self-contained commands in the block above). If either fails, the key is still carrying something machine-local — debug before merging.
 
-- [ ] **Step 4b (fix B14): commit the probe**
+- [x] **Step 4b (fix B14): commit the probe**
 
 Task 13 writes a new tracked file but had no commit step at all.
 
@@ -7085,7 +7098,7 @@ cd /Users/neurorishika/Projects/Rockefeller/Kronauer/multi-animal-tracker/.workt
   git commit -m "test(equivalence): Goal-4 cache-reuse probe and the acceptance log"
 ```
 
-- [ ] **Step 4c: item 4 — the native-run row comparison, as an actual command, for BOTH `fly` (no pose) and `pose` (SLEAP)**
+- [x] **Step 4c: item 4 — the native-run row comparison, as an actual command, for BOTH `fly` (no pose) and `pose` (SLEAP)**
 
 "Row-identical to a native firebrat run" named no command (fix B14). Run the same config natively on firebrat, in the job's own environment, then diff. Run BOTH jobs — not just `fly` — because `fly_obb.json` has no pose stage at all, so it can never catch fix A2's documented trap (memory `CLAUDE.md`/equivalence README: "conda MUST be active for any pose/SLEAP clip, else empty CSVs falsely pass 'EQUIVALENT'"). Only the `pose` job's native run exercises the SLEAP service, and only an explicit non-empty/row-count assertion on ITS output (not just `assert_frame_equal`, which two empty, header-only DataFrames would also satisfy) proves the pose columns actually got populated.
 
@@ -7275,7 +7288,7 @@ diff /tmp/sleap_dir_before.txt /tmp/sleap_dir_after.txt && echo "SLEAP run dir U
 
 If the diff shows a change, the fallback is the narrower fingerprint `core/individual/pose/artifacts.py` already computes (deliberately host-local per spec §2, per Task 4's "Deliberately unchanged" note) rather than a naive whole-tree hash — not implemented here, but the diagnosis this check produces is what tells a future reader whether that fallback is actually needed, instead of leaving a pose-job probe FAIL to be misdiagnosed as a cache-key regression.
 
-- [ ] **Step 5: Shared-root live check**
+- [x] **Step 5: Shared-root live check**
 
 **Fix B14 — "configure the same alias on both hosts" named no command. Here they are.** Use a directory both hosts can genuinely see; if there is no real shared mount available, use an sshfs/NFS path or, at minimum, two directories holding byte-identical copies of the clip (the signature check compares content, so identical bytes at different mount points is exactly the case §6.7 targets).
 
@@ -7303,7 +7316,7 @@ Then: pack a video that lives under `/Volumes/lab`, confirm the manifest records
 
 **Name the actual command (fix M7/X2).** "The run completes" is not a command. `job run rutalab@firebrat:/home/rutalab/jobs/<name>` internally chains `ssh rutalab@firebrat 'cd /home/rutalab/jobs/<name> && trackerkit job preflight . [--shared-root ...] [--allow-tier-fallback] && HYDRA_JOB_SKIP_PREFLIGHT=1 ./run.sh …'` as ONE ssh invocation, so preflight's materialization of the shared symlink happens immediately before `run.sh` on the same connection, and `run.sh`'s own flag-less self-preflight is skipped rather than re-running the same checks a second time without the flags that just made them pass — this is the step that actually exercises §6.7 for the primary remote workflow (a bare `./run.sh` without a preceding preflight, which the plan used to describe, would leave the shared video unmaterialized and `trackerkit track` would fail on a missing file). Paste the ssh session's preflight output showing the `shared_roots` check passing and the symlink being created, immediately followed by the tracking run's own log output, both from the SAME `job run` invocation.
 
-- [ ] **Step 6: Record everything in the Acceptance Log**
+- [x] **Step 6: Record everything in the Acceptance Log**
 
 ---
 
