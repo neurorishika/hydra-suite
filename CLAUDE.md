@@ -80,10 +80,13 @@ git worktrees provide the two `src/` trees; the CURRENT tree provides the harnes
 + fixtures.
 
 ```bash
-# 0. Fixtures (once per machine): short clips + models from the GitHub Release.
+# 0. Fixtures (once per machine): short clips + models.
 #    (already present if tools/equivalence/fixtures/clips/*.mp4 exist)
-conda activate hydra-mps       # or hydra-cuda on the NVIDIA box (mehek)
+conda activate hydra-mps       # or hydra-cuda on an NVIDIA box (mehek/diptera)
 bash tools/equivalence/fixtures/fetch_fixtures.sh
+#    The GitHub Release is UNPUBLISHED (404), so on a fresh machine copy from a
+#    peer that already has them; models are then verified per file:
+#    PEER=rutalab@mehek.taild08eb9.ts.net bash tools/equivalence/fixtures/fetch_fixtures.sh
 
 # 1. Baseline worktree from the legacy tag (detached).
 git fetch origin --tags
