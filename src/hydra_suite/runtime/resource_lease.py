@@ -43,10 +43,23 @@ class ResourceBusyError(RuntimeError):
         self.resource_key = resource_key
         self.owner = owner
         detail = "owner metadata unavailable"
+        same_process = ""
         if owner is not None:
             state = "live" if owner_is_live(owner) else "unverified"
             detail = f"PID {owner.pid} ({state}), job {owner.job_name!r}"
-        super().__init__(f"Resource {resource_key!r} is already leased by {detail}")
+            if owner.pid == os.getpid() and owner.hostname == socket.gethostname():
+                # The lock lives on a descriptor THIS process still holds: an
+                # earlier job either is still running or retained ownership
+                # after a teardown it could not prove.  Naming that is the
+                # difference between an actionable message and a mystery.
+                same_process = (
+                    " -- this is the same application process, so an earlier job "
+                    "is either still running or retained ownership after an "
+                    "unproven teardown"
+                )
+        super().__init__(
+            f"Resource {resource_key!r} is already leased by {detail}{same_process}"
+        )
 
 
 @dataclass(frozen=True)
