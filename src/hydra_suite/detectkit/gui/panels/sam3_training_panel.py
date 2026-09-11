@@ -369,12 +369,45 @@ class Sam3TrainingPanel(QWidget):
         host_notice.setWordWrap(True)
         layout.addWidget(host_notice)
 
-        shared_settings_note = QLabel(
-            "Shared with Advanced: data split, random seed, and selected device. "
-            "SAM3 uses the controls below for its training, LoRA, and tiling settings."
+        self.run_settings_group = QGroupBox("Run settings")
+        run_settings = QGridLayout(self.run_settings_group)
+        run_settings.setHorizontalSpacing(12)
+        self.run_train_spin = QDoubleSpinBox()
+        self.run_train_spin.setRange(0.05, 0.95)
+        self.run_train_spin.setSingleStep(0.05)
+        self.run_train_spin.setValue(0.8)
+        self.run_val_spin = QDoubleSpinBox()
+        self.run_val_spin.setRange(0.05, 0.95)
+        self.run_val_spin.setSingleStep(0.05)
+        self.run_val_spin.setValue(0.2)
+        split_row = QHBoxLayout()
+        split_row.setContentsMargins(0, 0, 0, 0)
+        split_row.setSpacing(6)
+        split_row.addWidget(QLabel("train"))
+        split_row.addWidget(self.run_train_spin)
+        split_row.addWidget(QLabel("val"))
+        split_row.addWidget(self.run_val_spin)
+        split_widget = QWidget()
+        split_widget.setLayout(split_row)
+        run_settings.addWidget(QLabel("Dataset split"), 0, 0)
+        run_settings.addWidget(split_widget, 0, 1)
+
+        self.run_seed_spin = QSpinBox()
+        self.run_seed_spin.setRange(0, 999999)
+        self.run_seed_spin.setValue(42)
+        run_settings.addWidget(QLabel("Random seed"), 0, 2)
+        run_settings.addWidget(self.run_seed_spin, 0, 3)
+
+        self.run_device_combo = QComboBox()
+        self.run_device_combo.setEditable(False)
+        self.run_device_combo.setToolTip(
+            "CUDA device used for SAM3 dataset preparation and training."
         )
-        shared_settings_note.setWordWrap(True)
-        layout.addWidget(shared_settings_note)
+        run_settings.addWidget(QLabel("Compute device"), 1, 0)
+        run_settings.addWidget(self.run_device_combo, 1, 1)
+        run_settings.setColumnStretch(1, 2)
+        run_settings.setColumnStretch(3, 1)
+        layout.addWidget(self.run_settings_group)
 
         # The SAM3 controls are independent enough to use the dialog width
         # efficiently. Keep the explanatory and safety-critical sections
