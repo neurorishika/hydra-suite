@@ -1053,6 +1053,15 @@
   
 </li>
       
+        <li class="md-nav__item">
+  <a href="#video-sources" class="md-nav__link">
+    <span class="md-ellipsis">
+      Video sources
+    </span>
+  </a>
+  
+</li>
+      
     </ul>
   
 </nav>
@@ -1955,6 +1964,15 @@
   
 </li>
       
+        <li class="md-nav__item">
+  <a href="#video-sources" class="md-nav__link">
+    <span class="md-ellipsis">
+      Video sources
+    </span>
+  </a>
+  
+</li>
+      
     </ul>
   
 </nav>
@@ -1987,11 +2005,18 @@
 </span></code></pre></div>
 <h2 id="workflow">Workflow<a class="headerlink" href="#workflow" title="Permanent link">&para;</a></h2>
 <ol>
-<li>Load a dataset directory.</li>
+<li>Load a dataset directory, or load a video to curate whole frames.</li>
 <li>Apply filtering criteria (quality, diversity, metadata).</li>
 <li>Preview and validate the filtered subset.</li>
 <li>Export the filtered dataset for training or analysis.</li>
 </ol>
+<h2 id="video-sources">Video sources<a class="headerlink" href="#video-sources" title="Permanent link">&para;</a></h2>
+<p>Choose <strong>Load Video</strong> to select a supported video file (<code>.mp4</code>, <code>.mov</code>, <code>.avi</code>,
+<code>.mkv</code>, or <code>.m4v</code>). FilterKit applies the same temporal, quality, duplicate, and
+diversity filters to whole frames. Processing exports selected frames as PNG files
+in a sibling <code>&lt;video-name&gt;_filterkit_output/images/</code> folder. The original video is
+never modified; <code>filterkit_video_manifest.json</code> records the source video, selected
+frame indices, and settings used for the selection.</p>
 
 
 
