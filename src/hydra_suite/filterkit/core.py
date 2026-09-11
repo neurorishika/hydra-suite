@@ -12,8 +12,62 @@ import numpy as np
 from sklearn.cluster import MiniBatchKMeans
 
 from hydra_suite.core.individual.dataset.naming import parse_identity_image_filename
+from hydra_suite.data.al.frame_source import FrameRef, VideoFrameSource
 
 _IMAGE_EXTS = {".png", ".jpg", ".jpeg"}
+_VIDEO_EXTS = {".mp4", ".mov", ".avi", ".mkv", ".m4v"}
+
+
+class FilterKitMediaReader:
+    """Read FilterKit image items without exposing source-specific I/O to filters.
+
+    Image datasets retain their existing path-based representation. Video items carry
+    a virtual display path plus ``video_path`` and ``frame_idx``; their frames are
+    decoded through the shared sequential ``VideoFrameSource`` implementation.
+    """
+
+    def __init__(self) -> None:
+        self._video_sources: Dict[str, VideoFrameSource] = {}
+
+    def read(self, item: Dict[str, Any]) -> Optional[np.ndarray]:
+        video_path = item.get("video_path")
+        if not video_path:
+            return cv2.imread(str(item["path"]))
+
+        path = str(video_path)
+        source = self._video_sources.get(path)
+        if source is None:
+            source = VideoFrameSource(path)
+            self._video_sources[path] = source
+        return source.read(
+            FrameRef(
+                source_id=f"filterkit:{Path(path).name}",
+                frame_id=int(item["frame_idx"]),
+            )
+        )
+
+    def close(self) -> None:
+        for source in self._video_sources.values():
+            source.close()
+        self._video_sources.clear()
+
+    def __enter__(self) -> "FilterKitMediaReader":
+        return self
+
+    def __exit__(self, *_exc_info) -> None:
+        self.close()
+
+
+def _read_filter_item(
+    item: Dict[str, Any], media_reader: Optional[FilterKitMediaReader] = None
+) -> Optional[np.ndarray]:
+    """Read one item, including direct core callers that did not supply a reader."""
+    if media_reader is not None:
+        return media_reader.read(item)
+    if not item.get("video_path"):
+        return cv2.imread(str(item["path"]))
+    with FilterKitMediaReader() as temporary_reader:
+        return temporary_reader.read(item)
 
 
 def _iter_images_in_dir(directory: Path) -> List[Path]:
@@ -242,6 +296,51 @@ class _HistogramSignatureIndex:
 
 class FilterKitCore:
     @staticmethod
+    def is_supported_video(path: "str | Path") -> bool:
+        return Path(path).suffix.lower() in _VIDEO_EXTS
+
+    def load_video(self, video_path: "str | Path") -> Tuple[str, List[Dict[str, Any]]]:
+        """Represent each decodable-positioned video frame as a FilterKit item.
+
+        ``path`` deliberately remains a unique virtual value so existing selection
+        bookkeeping and duplicate reporting can distinguish frames from one video.
+        The actual source is retained separately in ``video_path`` for decoding and
+        export.
+        """
+        path = Path(video_path).expanduser().resolve()
+        if not path.is_file() or not self.is_supported_video(path):
+            return "video", []
+
+        cap = cv2.VideoCapture(str(path))
+        try:
+            if not cap.isOpened():
+                return "video", []
+            frame_count = int(cap.get(cv2.CAP_PROP_FRAME_COUNT))
+        finally:
+            cap.release()
+
+        if frame_count <= 0:
+            return "video", []
+
+        items: List[Dict[str, Any]] = []
+        for frame_idx in range(frame_count):
+            filename = f"{path.stem}_frame_{frame_idx:08d}.png"
+            items.append(
+                {
+                    "path": f"{path}#frame={frame_idx}",
+                    "filename": filename,
+                    "det_id": frame_idx,
+                    "frame_idx": frame_idx,
+                    "det_idx": 0,
+                    "annotations": [],
+                    "source_type": "video",
+                    "interpolated": False,
+                    "video_path": str(path),
+                }
+            )
+        return "video", items
+
+    @staticmethod
     def _should_report_progress(idx: int, total: int) -> bool:
         return idx == 1 or idx % 250 == 0 or idx == total
 
@@ -305,17 +404,18 @@ class FilterKitCore:
         item: Dict[str, Any],
         method: str,
         color_threshold: Optional[float],
+        media_reader: Optional[FilterKitMediaReader] = None,
     ) -> bool:
         try:
             if "dedup_signature" not in item:
-                img = cv2.imread(item["path"])
+                img = _read_filter_item(item, media_reader)
                 if img is None:
                     return False
                 item["dedup_signature"] = self.compute_signature(img, method)
                 if color_threshold is not None:
                     item["color_signature"] = self.compute_color_signature(img)
             elif color_threshold is not None and "color_signature" not in item:
-                img = cv2.imread(item["path"])
+                img = _read_filter_item(item, media_reader)
                 if img is not None:
                     item["color_signature"] = self.compute_color_signature(img)
         except Exception:
@@ -691,6 +791,32 @@ class FilterKitCore:
 
         return dataset
 
+    def export_video_frames(
+        self,
+        items: List[Dict[str, Any]],
+        output_images: "str | Path",
+    ) -> List[int]:
+        """Decode selected video items to PNG files and return their frame IDs."""
+        output_images = Path(output_images)
+        output_images.mkdir(parents=True, exist_ok=True)
+        frame_ids: List[int] = []
+        with FilterKitMediaReader() as media_reader:
+            for item in items:
+                video_path = item.get("video_path")
+                if not video_path:
+                    raise ValueError("video export received a non-video FilterKit item")
+                frame = media_reader.read(item)
+                frame_idx = int(item["frame_idx"])
+                if frame is None:
+                    raise RuntimeError(
+                        f"Could not decode frame {frame_idx} from {Path(video_path).name}."
+                    )
+                output_path = output_images / str(item["filename"])
+                if not cv2.imwrite(str(output_path), frame):
+                    raise RuntimeError(f"Could not write selected frame: {output_path}")
+                frame_ids.append(frame_idx)
+        return frame_ids
+
     def temporal_subsample(
         self, dataset: List[Dict[str, Any]], interval: int
     ) -> List[Dict[str, Any]]:
@@ -720,6 +846,7 @@ class FilterKitCore:
         progress_callback: Optional[Callable[[int, int], None]] = None,
         return_groups: bool = False,
         color_threshold: Optional[float] = None,
+        media_reader: Optional[FilterKitMediaReader] = None,
     ):
         """
         Remove duplicates based on selected perceptual method.
@@ -751,7 +878,9 @@ class FilterKitCore:
 
         total = len(dataset_sorted)
         for idx, item in enumerate(dataset_sorted, start=1):
-            if not self._prepare_dedup_item(item, method, color_threshold):
+            if not self._prepare_dedup_item(
+                item, method, color_threshold, media_reader
+            ):
                 self._maybe_report_progress(progress_callback, idx, total)
                 continue
 
@@ -841,15 +970,23 @@ class FilterKitCore:
             return 1.0
         return len(dataset) / len(unique_frames)
 
-    def _extract_gray_feature(self, path: str, feature_size=(32, 32)):
-        img = cv2.imread(path)
+    def _extract_gray_feature(
+        self,
+        item: Dict[str, Any],
+        feature_size=(32, 32),
+        media_reader: Optional[FilterKitMediaReader] = None,
+    ):
+        img = _read_filter_item(item, media_reader)
         if img is None:
             return None
         gray = cv2.cvtColor(img, cv2.COLOR_BGR2GRAY) if len(img.shape) == 3 else img
         return cv2.resize(gray, feature_size).flatten()
 
     def _diversity_sample_by_frame(
-        self, dataset: List[Dict[str, Any]], n_frames: int
+        self,
+        dataset: List[Dict[str, Any]],
+        n_frames: int,
+        media_reader: Optional[FilterKitMediaReader] = None,
     ) -> List[Dict[str, Any]]:
         groups = self._group_dataset_by_frame(dataset)
         frame_ids = sorted(groups)
@@ -861,7 +998,7 @@ class FilterKitCore:
         for frame_id in frame_ids:
             member_features = []
             for item in groups[frame_id]:
-                feature = self._extract_gray_feature(item["path"])
+                feature = self._extract_gray_feature(item, media_reader=media_reader)
                 if feature is not None:
                     member_features.append(feature.astype(np.float64))
             if not member_features:
@@ -896,6 +1033,7 @@ class FilterKitCore:
         dataset: List[Dict[str, Any]],
         n_samples: int,
         by_frame: bool = False,
+        media_reader: Optional[FilterKitMediaReader] = None,
     ) -> List[Dict[str, Any]]:
         """
         Select diverse samples using MiniBatchKMeans on resized images.
@@ -912,7 +1050,9 @@ class FilterKitCore:
             return dataset
 
         if by_frame:
-            return self._diversity_sample_by_frame(dataset, n_samples)
+            return self._diversity_sample_by_frame(
+                dataset, n_samples, media_reader=media_reader
+            )
 
         # Extract features (32x32 resized image)
         feature_size = (32, 32)
@@ -921,7 +1061,7 @@ class FilterKitCore:
 
         for item in dataset:
             try:
-                img = cv2.imread(item["path"])
+                img = _read_filter_item(item, media_reader)
                 if img is None:
                     continue
                 # Use grayscale for feature vector to save space/time

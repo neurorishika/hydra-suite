@@ -8,7 +8,7 @@ from typing import Dict
 
 import cv2
 from PySide6.QtCore import QRectF, QSize, Qt, QUrl, Signal
-from PySide6.QtGui import QColor, QDesktopServices, QPainter, QPixmap
+from PySide6.QtGui import QColor, QDesktopServices, QImage, QPainter, QPixmap
 from PySide6.QtSvg import QSvgRenderer
 from PySide6.QtWidgets import (
     QApplication,
@@ -34,7 +34,7 @@ from PySide6.QtWidgets import (
 )
 
 from hydra_suite.filterkit.config.schemas import FilterKitConfig
-from hydra_suite.filterkit.core import FilterKitCore
+from hydra_suite.filterkit.core import FilterKitCore, FilterKitMediaReader
 from hydra_suite.utils.file_dialogs import HydraFileDialog as QFileDialog  # noqa: F811
 from hydra_suite.widgets.workers import BaseWorker
 
@@ -63,6 +63,8 @@ class FilterWorker(BaseWorker):
                 "frame_idx": int(item.get("frame_idx", 0)),
                 "det_idx": int(item.get("det_idx", 0)),
             }
+            if item.get("video_path"):
+                clean["video_path"] = str(item["video_path"])
             sanitized.append(clean)
         return sanitized
 
@@ -74,7 +76,15 @@ class FilterWorker(BaseWorker):
         for item in before_items:
             path = item.get("path")
             if path not in after_paths:
-                removed.append({"path": path, "reason": reason})
+                removed.append(
+                    {
+                        "path": path,
+                        "filename": item.get("filename", ""),
+                        "video_path": item.get("video_path", ""),
+                        "frame_idx": int(item.get("frame_idx", 0)),
+                        "reason": reason,
+                    }
+                )
                 if max_keep is not None and len(removed) >= max_keep:
                     break
         return removed
@@ -100,18 +110,21 @@ class FilterWorker(BaseWorker):
 
         kept = []
         total = len(dataset)
-        for idx, item in enumerate(dataset, start=1):
-            img = cv2.imread(item["path"], cv2.IMREAD_GRAYSCALE)
-            if img is None:
+        with FilterKitMediaReader() as media_reader:
+            for idx, item in enumerate(dataset, start=1):
+                img = media_reader.read(item)
+                if img is not None and img.ndim == 3:
+                    img = cv2.cvtColor(img, cv2.COLOR_BGR2GRAY)
+                if img is None:
+                    if idx == 1 or idx % 250 == 0 or idx == total:
+                        self._emit_stage_progress(25, 40, idx, total, "Quality filter")
+                    continue
+                blur_score = float(cv2.Laplacian(img, cv2.CV_64F).var())
+                contrast_score = float(img.std())
+                if blur_score >= min_blur and contrast_score >= min_contrast:
+                    kept.append(item)
                 if idx == 1 or idx % 250 == 0 or idx == total:
                     self._emit_stage_progress(25, 40, idx, total, "Quality filter")
-                continue
-            blur_score = float(cv2.Laplacian(img, cv2.CV_64F).var())
-            contrast_score = float(img.std())
-            if blur_score >= min_blur and contrast_score >= min_contrast:
-                kept.append(item)
-            if idx == 1 or idx % 250 == 0 or idx == total:
-                self._emit_stage_progress(25, 40, idx, total, "Quality filter")
         return kept
 
     def _should_abort(self):
@@ -123,7 +136,10 @@ class FilterWorker(BaseWorker):
     def _initialize_run_state(self):
         self.progress.emit(0, "Step 1/7: Loading dataset metadata")
         self.status.emit("Loading dataset...")
-        _, dataset = self.core.load_images_from_root(self.dataset_path)
+        if self.core.is_supported_video(self.dataset_path):
+            _, dataset = self.core.load_video(self.dataset_path)
+        else:
+            _, dataset = self.core.load_images_from_root(self.dataset_path)
         loaded_count = len(dataset)
         self.progress.emit(10, f"Step 1/7 complete: loaded {loaded_count:,} images")
         stats = {
@@ -208,16 +224,18 @@ class FilterWorker(BaseWorker):
             )
         )
         before = list(dataset)
-        dataset, duplicate_clusters = self.core.deduplicate_by_hash(
-            dataset,
-            threshold=threshold,
-            method=method,
-            progress_callback=lambda cur, tot: self._emit_stage_progress(
-                55, 85, cur, tot, "Deduplication"
-            ),
-            return_groups=True,
-            color_threshold=color_threshold,
-        )
+        with FilterKitMediaReader() as media_reader:
+            dataset, duplicate_clusters = self.core.deduplicate_by_hash(
+                dataset,
+                threshold=threshold,
+                method=method,
+                progress_callback=lambda cur, tot: self._emit_stage_progress(
+                    55, 85, cur, tot, "Deduplication"
+                ),
+                return_groups=True,
+                color_threshold=color_threshold,
+                media_reader=media_reader,
+            )
         self._extend_removed_examples(before, dataset, "duplicate", removed_examples)
         self.status.emit(f"Remaining after deduplication: {len(dataset)}")
         self.progress.emit(
@@ -255,9 +273,13 @@ class FilterWorker(BaseWorker):
         self.progress.emit(85, "Step 6/7: Running diversity sampling")
         self.status.emit(f"Applying diversity sampling (target={target})...")
         before = list(dataset)
-        dataset = self.core.diversity_sample(
-            dataset, n_samples, by_frame=preserve_full_frames
-        )
+        with FilterKitMediaReader() as media_reader:
+            dataset = self.core.diversity_sample(
+                dataset,
+                n_samples,
+                by_frame=preserve_full_frames,
+                media_reader=media_reader,
+            )
         self._extend_removed_examples(before, dataset, "diversity", removed_examples)
         self.status.emit(f"Remaining after diversity: {len(dataset)}")
         self.progress.emit(
@@ -367,7 +389,12 @@ class PreviewListWidget(QListWidget):
         self.itemDoubleClicked.connect(self.open_image_externally)
 
     def open_image_externally(self, item):
-        path = item.data(Qt.UserRole)
+        payload = item.data(Qt.UserRole)
+        path = (
+            payload.get("video_path", payload.get("path"))
+            if isinstance(payload, dict)
+            else payload
+        )
         if path and Path(path).exists():
             QDesktopServices.openUrl(QUrl.fromLocalFile(str(path)))
 
@@ -472,11 +499,12 @@ class DuplicateClusterExplorer(QDialog):
 
         for path in paths[start:end]:
             pixmap = QPixmap(path)
-            if pixmap.isNull():
-                continue
-            icon = pixmap.scaled(72, 72, Qt.KeepAspectRatio, Qt.SmoothTransformation)
             item = QListWidgetItem(Path(path).name)
-            item.setIcon(icon)
+            if not pixmap.isNull():
+                icon = pixmap.scaled(
+                    72, 72, Qt.KeepAspectRatio, Qt.SmoothTransformation
+                )
+                item.setIcon(icon)
             item.setData(Qt.UserRole, path)
             self.list_images.addItem(item)
 
@@ -529,6 +557,8 @@ class FilterKitWindow(QMainWindow):
         self.removed_examples = []
         self.pipeline_stats = {}
         self.duplicate_clusters = []
+        self._last_config = {}
+        self._preview_reader = FilterKitMediaReader()
 
         self.current_page = 0
         self.images_per_page = 200
@@ -731,6 +761,7 @@ class FilterKitWindow(QMainWindow):
                 ButtonDef(
                     label="Load Dataset Folder\u2026", callback=self.load_dataset_dialog
                 ),
+                ButtonDef(label="Load Video\u2026", callback=self.load_video_dialog),
                 ButtonDef(label="Quit", callback=self.close),
             ],
             recents_label="Recent Datasets",
@@ -768,8 +799,12 @@ class FilterKitWindow(QMainWindow):
         btn_load.clicked.connect(self.load_dataset_dialog)
         layout.addWidget(btn_load)
 
+        btn_load_video = QPushButton("Load Video")
+        btn_load_video.clicked.connect(self.load_video_dialog)
+        layout.addWidget(btn_load_video)
+
         self.lbl_load_help = QLabel(
-            "Pick your dataset root folder. If it contains an images/ folder, FilterKit uses it automatically."
+            "Pick a dataset folder or a video. Videos are sampled into an image dataset without changing the source file."
         )
         self.lbl_load_help.setWordWrap(True)
         self.lbl_load_help.setStyleSheet("color: #6a6a6a;")
@@ -1185,6 +1220,10 @@ class FilterKitWindow(QMainWindow):
         if hasattr(self, "logo_label") and self.logo_label.isVisible():
             self._show_logo()
 
+    def closeEvent(self, event) -> None:
+        self._preview_reader.close()
+        super().closeEvent(event)
+
     def _update_rollback_availability(self):
         if not self.dataset_path:
             self.btn_rollback.setEnabled(False)
@@ -1222,12 +1261,26 @@ class FilterKitWindow(QMainWindow):
 
         self.load_dataset_root(Path(folder))
 
+    def load_video_dialog(self):
+        from hydra_suite.paths import get_projects_dir
+
+        path, _ = QFileDialog.getOpenFileName(
+            self,
+            "Select Video",
+            str(get_projects_dir()),
+            "Video files (*.mp4 *.mov *.avi *.mkv *.m4v)",
+        )
+        if path:
+            self.load_dataset_root(Path(path))
+
     def load_dataset_root(self, root: Path, show_errors: bool = True) -> bool:
         root = Path(root).resolve()
-        if root.name == "images" and root.is_dir():
-            root = root.parent
-
-        source_kind, items = FilterKitCore().load_images_from_root(root)
+        if root.is_file() and FilterKitCore.is_supported_video(root):
+            source_kind, items = FilterKitCore().load_video(root)
+        else:
+            if root.name == "images" and root.is_dir():
+                root = root.parent
+            source_kind, items = FilterKitCore().load_images_from_root(root)
         if not items:
             if show_errors:
                 QMessageBox.warning(
@@ -1238,7 +1291,8 @@ class FilterKitWindow(QMainWindow):
                     "  • Flat image folder or images/ subdirectory\n"
                     "  • COCO JSON dataset\n"
                     "  • YOLO OBB / detect dataset\n"
-                    "  • Train/val class-folder dataset",
+                    "  • Train/val class-folder dataset\n"
+                    "  • Video file (.mp4, .mov, .avi, .mkv, .m4v)",
                 )
             return False
 
@@ -1247,6 +1301,7 @@ class FilterKitWindow(QMainWindow):
             "coco": "COCO JSON",
             "yolo_obb": "YOLO OBB/detect",
             "class_folders": "class-folder",
+            "video": "video",
         }.get(source_kind, source_kind)
 
         self.dataset_path = str(root)
@@ -1255,10 +1310,19 @@ class FilterKitWindow(QMainWindow):
         self.lbl_path.setText(f"{root.name}  —  {kind_label}")
 
         self.loaded_count = len(items)
+        unit = "frames" if source_kind == "video" else "images"
         self.lbl_status.setText(
-            f"Dataset loaded. Found {self.loaded_count} image(s). Configure strategy and run sieve."
+            f"Source loaded. Found {self.loaded_count} {unit}. Configure strategy and run sieve."
         )
-        self.lbl_preview_info.setText(f"Loaded: {self.loaded_count} images")
+        self.lbl_preview_info.setText(f"Loaded: {self.loaded_count} {unit}")
+        self.chk_preserve_full_frames.setEnabled(source_kind != "video")
+        if source_kind == "video":
+            self.chk_preserve_full_frames.setChecked(False)
+            self.chk_preserve_full_frames.setToolTip(
+                "Raw video already contains one item per frame."
+            )
+        else:
+            self.chk_preserve_full_frames.setToolTip("")
         self.progress.setValue(0)
         self.progress.setFormat("%p%")
         self.lbl_progress_details.setText("Waiting to start...")
@@ -1394,7 +1458,7 @@ class FilterKitWindow(QMainWindow):
 
     def run_sieve(self):
         if not self.dataset_path:
-            QMessageBox.warning(self, "Error", "Please load a dataset folder first.")
+            QMessageBox.warning(self, "Error", "Please load a dataset or video first.")
             return
 
         config = {
@@ -1454,6 +1518,7 @@ class FilterKitWindow(QMainWindow):
         self.pipeline_stats = payload.get("stats", {})
         self.removed_examples = payload.get("removed_examples", [])
         self.duplicate_clusters = payload.get("duplicate_clusters", [])
+        self._last_config = payload.get("config_used", {})
 
         self.current_page = 0
         self.removed_page = 0
@@ -1462,12 +1527,13 @@ class FilterKitWindow(QMainWindow):
         self.btn_show_clusters.setEnabled(bool(self.duplicate_clusters))
 
         selected_count = len(self.filtered_dataset)
-        self.lbl_status.setText(f"Finished. Selected {selected_count} images.")
+        unit = "frames" if self._source_kind == "video" else "images"
+        self.lbl_status.setText(f"Finished. Selected {selected_count} {unit}.")
         self.lbl_progress_details.setText(
-            f"Completed: selected {selected_count:,} images. Explore results below."
+            f"Completed: selected {selected_count:,} {unit}. Explore results below."
         )
         self.lbl_preview_info.setText(
-            f"Selected: {selected_count} image(s). Double-click to open in native viewer."
+            f"Selected: {selected_count} {unit}. Double-click to open in native viewer."
         )
 
         self._update_summary_card()
@@ -1521,6 +1587,33 @@ class FilterKitWindow(QMainWindow):
 
         self.lbl_summary.setText("\n".join(lines))
 
+    def _preview_pixmap(self, item) -> QPixmap:
+        """Return an icon pixmap for either a persisted image or a video frame."""
+        if not item.get("video_path"):
+            return QPixmap(item.get("path", ""))
+
+        frame = self._preview_reader.read(item)
+        if frame is None:
+            return QPixmap()
+        if frame.ndim == 2:
+            image = QImage(
+                frame.data,
+                frame.shape[1],
+                frame.shape[0],
+                frame.strides[0],
+                QImage.Format_Grayscale8,
+            )
+        else:
+            rgb = cv2.cvtColor(frame, cv2.COLOR_BGR2RGB)
+            image = QImage(
+                rgb.data,
+                rgb.shape[1],
+                rgb.shape[0],
+                rgb.strides[0],
+                QImage.Format_RGB888,
+            )
+        return QPixmap.fromImage(image.copy())
+
     def load_previews(self):
         self.list_preview.clear()
         total_images = len(self.filtered_dataset)
@@ -1539,14 +1632,13 @@ class FilterKitWindow(QMainWindow):
         self.btn_next_page.setEnabled(self.current_page < total_pages - 1)
 
         for item in self.filtered_dataset[start_idx:end_idx]:
-            path = item["path"]
-            pixmap = QPixmap(path)
+            pixmap = self._preview_pixmap(item)
             if pixmap.isNull():
                 continue
             icon = pixmap.scaled(72, 72, Qt.KeepAspectRatio, Qt.SmoothTransformation)
-            list_item = QListWidgetItem(Path(path).name)
+            list_item = QListWidgetItem(item.get("filename", Path(item["path"]).name))
             list_item.setIcon(icon)
-            list_item.setData(Qt.UserRole, path)
+            list_item.setData(Qt.UserRole, item)
             self.list_preview.addItem(list_item)
 
     def load_removed_examples(self):
@@ -1577,14 +1669,14 @@ class FilterKitWindow(QMainWindow):
             reason = item.get("reason", "removed")
             if not path:
                 continue
-            pixmap = QPixmap(path)
+            pixmap = self._preview_pixmap(item)
             if pixmap.isNull():
                 continue
             icon = pixmap.scaled(72, 72, Qt.KeepAspectRatio, Qt.SmoothTransformation)
-            label = f"[{reason}] {Path(path).name}"
+            label = f"[{reason}] {item.get('filename', Path(path).name)}"
             list_item = QListWidgetItem(label)
             list_item.setIcon(icon)
-            list_item.setData(Qt.UserRole, path)
+            list_item.setData(Qt.UserRole, item)
             self.list_removed.addItem(list_item)
 
     def toggle_compare_mode(self):
@@ -1641,6 +1733,16 @@ class FilterKitWindow(QMainWindow):
         loaded = stats.get("loaded", self.loaded_count)
         source_kind = getattr(self, "_source_kind", "images")
 
+        if source_kind == "video":
+            return (
+                "This will export selected frames without modifying the video:\n\n"
+                "1) Create a sibling FilterKit output folder\n"
+                f"2) Decode selected frames ({selected:,}) as PNG images\n"
+                "3) Write a frame-provenance manifest and transaction log\n\n"
+                f"Loaded: {loaded:,}  |  Selected: {selected:,}\n"
+                "Continue?"
+            )
+
         if source_kind == "images":
             return (
                 "This will process your dataset with backup support:\n\n"
@@ -1662,7 +1764,14 @@ class FilterKitWindow(QMainWindow):
         )
 
     def _transaction_path(self, root_path):
-        return Path(root_path) / self.TRANSACTION_FILE
+        root_path = Path(root_path)
+        if getattr(self, "_source_kind", "images") == "video":
+            return root_path.parent / f".{root_path.stem}{self.TRANSACTION_FILE}"
+        return root_path / self.TRANSACTION_FILE
+
+    def _video_output_root(self) -> Path:
+        source = Path(self.dataset_path)
+        return source.parent / f"{source.stem}_filterkit_output"
 
     def process_dataset(self):
         if not self.filtered_dataset or not self.dataset_path:
@@ -1685,7 +1794,62 @@ class FilterKitWindow(QMainWindow):
             self.lbl_status.setText("Processing dataset...")
             QApplication.processEvents()
 
-            if source_kind == "images":
+            if source_kind == "video":
+                source_video = Path(self.dataset_path)
+                output_root = self._video_output_root()
+                output_images = output_root / "images"
+
+                if output_root.exists():
+                    QMessageBox.warning(
+                        self,
+                        "Cannot Process",
+                        f"{output_root.name}/ already exists. Rename or remove it before processing.",
+                    )
+                    self.lbl_status.setText("Processing cancelled.")
+                    return
+
+                output_images.mkdir(parents=True, exist_ok=True)
+                frame_ids = FilterKitCore().export_video_frames(
+                    self.filtered_dataset, output_images
+                )
+                manifest = {
+                    "schema_version": 1,
+                    "source_video": str(source_video.resolve()),
+                    "selected_frame_indices": frame_ids,
+                    "selected_count": len(frame_ids),
+                    "filterkit_config": self._last_config,
+                }
+                manifest_path = output_root / "filterkit_video_manifest.json"
+                manifest_path.write_text(
+                    json.dumps(manifest, indent=2), encoding="utf-8"
+                )
+                transaction = {
+                    "created_at": datetime.now().isoformat(timespec="seconds"),
+                    "dataset_root": str(source_video),
+                    "source_kind": "video",
+                    "output_path": str(output_root),
+                    "output_images_path": str(output_images),
+                    "manifest_path": str(manifest_path),
+                    "copied_count": len(frame_ids),
+                    "selected_count": len(frame_ids),
+                }
+                self._transaction_path(source_video).write_text(
+                    json.dumps(transaction, indent=2), encoding="utf-8"
+                )
+                QMessageBox.information(
+                    self,
+                    "Success",
+                    (
+                        "Video frames exported successfully.\n\n"
+                        f"Output: {output_root.name}/images/ ({len(frame_ids):,} frame(s))\n"
+                        "The source video is unchanged.\n"
+                        "Rollback is available via 'Rollback Last Process'."
+                    ),
+                )
+                self.lbl_status.setText(
+                    f"Exported {len(frame_ids):,} frame(s) to {output_root.name}/images/."
+                )
+            elif source_kind == "images":
                 images_path = dataset_root / "images"
                 all_images_path = dataset_root / "all_images"
 

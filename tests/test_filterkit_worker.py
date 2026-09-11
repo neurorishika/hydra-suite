@@ -16,6 +16,16 @@ def _write_gray_image(path, value: int) -> None:
     cv2.imwrite(str(path), img)
 
 
+def _write_video(path, values: list[int]) -> None:
+    writer = cv2.VideoWriter(str(path), cv2.VideoWriter_fourcc(*"MJPG"), 10.0, (16, 16))
+    assert writer.isOpened()
+    try:
+        for value in values:
+            writer.write(np.full((16, 16, 3), value, dtype=np.uint8))
+    finally:
+        writer.release()
+
+
 def _build_identity_dataset(tmp_path, frame_values: dict[int, int], individuals: int):
     images_dir = tmp_path / "dataset" / "images"
     images_dir.mkdir(parents=True)
@@ -113,3 +123,29 @@ def test_filterworker_preserve_full_frames_off_matches_baseline(tmp_path) -> Non
     result = results[0]
     assert result["stats"]["after_expansion"] == result["stats"]["after_diversity"]
     assert len(result["selected_dataset"]) == 4
+
+
+def test_filterworker_video_temporal_selection_retains_frame_provenance(
+    tmp_path,
+) -> None:
+    video_path = tmp_path / "recording.avi"
+    _write_video(video_path, [20, 60, 120, 200])
+    worker = FilterWorker(
+        str(video_path),
+        {
+            "temporal_enabled": True,
+            "temporal_interval": 2,
+            "dedup_enabled": False,
+            "diversity_enabled": False,
+            "quality_enabled": False,
+            "preserve_full_frames": False,
+        },
+    )
+
+    results = []
+    worker.finished.connect(results.append)
+    worker.execute()
+
+    selected = results[0]["selected_dataset"]
+    assert [item["frame_idx"] for item in selected] == [0, 2]
+    assert all(item["video_path"] == str(video_path.resolve()) for item in selected)
