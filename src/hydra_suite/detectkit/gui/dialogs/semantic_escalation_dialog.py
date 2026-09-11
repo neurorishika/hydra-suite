@@ -172,7 +172,7 @@ class SemanticEscalationDialog(BaseDialog):
         self._no_finetuned_hint.setWordWrap(True)
         finetuned_present = len(available_models()) > len(available_variants())
         self._no_finetuned_hint.setVisible(not finetuned_present)
-        form.addWidget(self._no_finetuned_hint, 6, 0, 1, 4)
+        form.addWidget(self._no_finetuned_hint, 7, 0, 1, 4)
 
         self._prompt = QLineEdit(str(saved.get("prompt", "ant") or "ant"))
         self._prompt.setToolTip(
@@ -308,7 +308,9 @@ class SemanticEscalationDialog(BaseDialog):
         origin = QLabel(f"Body-size source: {self._body_origin_label.text()}")
         origin.setWordWrap(True)
         origin.setToolTip(self._body_origin_label.toolTip())
-        form.addWidget(origin, 5, 0, 1, 4)
+        # Keep this full-width provenance message below the class selector.
+        # Sharing row 5 made the two widgets paint on top of one another.
+        form.addWidget(origin, 6, 0, 1, 4)
         self._body_origin_display = origin
         top.addWidget(settings_group, 5)
         outer.addLayout(top, 1)
