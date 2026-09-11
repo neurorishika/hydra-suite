@@ -19,6 +19,7 @@ from PySide6.QtWidgets import (
     QComboBox,
     QDoubleSpinBox,
     QFormLayout,
+    QGridLayout,
     QGroupBox,
     QHBoxLayout,
     QLabel,
@@ -368,6 +369,22 @@ class Sam3TrainingPanel(QWidget):
         host_notice.setWordWrap(True)
         layout.addWidget(host_notice)
 
+        shared_settings_note = QLabel(
+            "Shared with Advanced: data split, random seed, and selected device. "
+            "SAM3 uses the controls below for its training, LoRA, and tiling settings."
+        )
+        shared_settings_note.setWordWrap(True)
+        layout.addWidget(shared_settings_note)
+
+        # The SAM3 controls are independent enough to use the dialog width
+        # efficiently. Keep the explanatory and safety-critical sections
+        # full-width, while pairing related, compact forms below.
+        self._settings_grid = QGridLayout()
+        self._settings_grid.setHorizontalSpacing(12)
+        self._settings_grid.setVerticalSpacing(12)
+        self._settings_grid.setColumnStretch(0, 1)
+        self._settings_grid.setColumnStretch(1, 1)
+
         prompt_group = QGroupBox("Concept")
         prompt_form = QFormLayout(prompt_group)
         self.prompt_edit = QLineEdit()
@@ -380,7 +397,7 @@ class Sam3TrainingPanel(QWidget):
         self.num_negatives_spin = QSpinBox()
         self.num_negatives_spin.setRange(0, SAM3_MAX_NEGATIVE_QUERIES_PER_TILE)
         prompt_form.addRow("Num negatives", self.num_negatives_spin)
-        layout.addWidget(prompt_group)
+        self._settings_grid.addWidget(prompt_group, 0, 0, 1, 2)
 
         lora_group = QGroupBox("LoRA")
         lora_form = QFormLayout(lora_group)
@@ -394,7 +411,7 @@ class Sam3TrainingPanel(QWidget):
         self.dropout_spin.setRange(0.0, 1.0)
         self.dropout_spin.setSingleStep(0.01)
         lora_form.addRow("Dropout", self.dropout_spin)
-        layout.addWidget(lora_group)
+        self._settings_grid.addWidget(lora_group, 1, 0)
 
         opt_group = QGroupBox("Optimisation")
         opt_form = QFormLayout(opt_group)
@@ -461,7 +478,7 @@ class Sam3TrainingPanel(QWidget):
             "Ignored when patience is 0."
         )
         opt_form.addRow("Early stop min delta", self.min_delta_spin)
-        layout.addWidget(opt_group)
+        self._settings_grid.addWidget(opt_group, 1, 1)
 
         safety_group = QGroupBox("Resource safety")
         safety_form = QFormLayout(safety_group)
@@ -488,10 +505,11 @@ class Sam3TrainingPanel(QWidget):
         self.watchdog_poll_spin.setRange(0.1, 60.0)
         self.watchdog_poll_spin.setDecimals(1)
         safety_form.addRow("Watchdog interval (s)", self.watchdog_poll_spin)
-        layout.addWidget(safety_group)
+        self._settings_grid.addWidget(safety_group, 2, 0)
 
         adapt_group = QGroupBox("Adapted submodules")
-        adapt_form = QFormLayout(adapt_group)
+        adapt_form = QGridLayout(adapt_group)
+        adapt_form.setHorizontalSpacing(12)
         self.chk_adapt_vision_encoder = QCheckBox("Vision encoder")
         self.chk_adapt_text_encoder = QCheckBox("Text encoder")
         self.chk_adapt_geometry_encoder = QCheckBox("Geometry encoder")
@@ -500,16 +518,20 @@ class Sam3TrainingPanel(QWidget):
         self.chk_adapt_mask_decoder = QCheckBox("Mask decoder")
         # Headless-only scope; see the params builder for why it has no widget.
         self._adapt_scoring_head = False
-        for chk in (
-            self.chk_adapt_vision_encoder,
-            self.chk_adapt_text_encoder,
-            self.chk_adapt_geometry_encoder,
-            self.chk_adapt_detr_encoder,
-            self.chk_adapt_detr_decoder,
-            self.chk_adapt_mask_decoder,
+        for index, chk in enumerate(
+            (
+                self.chk_adapt_vision_encoder,
+                self.chk_adapt_text_encoder,
+                self.chk_adapt_geometry_encoder,
+                self.chk_adapt_detr_encoder,
+                self.chk_adapt_detr_decoder,
+                self.chk_adapt_mask_decoder,
+            )
         ):
-            adapt_form.addRow(chk)
-        layout.addWidget(adapt_group)
+            adapt_form.addWidget(chk, index // 2, index % 2)
+        self._settings_grid.addWidget(adapt_group, 2, 1)
+
+        layout.addLayout(self._settings_grid)
 
         # The SAHI scale-set UI is SHARED with the YOLO training dialog rather
         # than duplicated: `target_size_fraction` and `object_tile_fraction`

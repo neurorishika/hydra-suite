@@ -12,7 +12,7 @@ import pytest
 pytest.importorskip("PySide6")
 
 from PySide6.QtCore import QCoreApplication, QEvent, QMimeData  # noqa: E402
-from PySide6.QtWidgets import QApplication  # noqa: E402
+from PySide6.QtWidgets import QApplication, QGridLayout, QGroupBox  # noqa: E402
 
 
 @pytest.fixture(scope="module")
@@ -44,6 +44,42 @@ def test_params_round_trip(qapp):
     assert back.host_reserve_gb == 12.0
     assert back.host_reserve_fraction == pytest.approx(0.2)
     assert back.cuda_safety_fraction == pytest.approx(0.8)
+
+
+def test_settings_groups_use_a_compact_two_column_layout(qapp):
+    """Independent SAM3 controls share rows instead of a long vertical stack."""
+    from hydra_suite.detectkit.gui.panels.sam3_training_panel import Sam3TrainingPanel
+
+    panel = Sam3TrainingPanel()
+
+    assert isinstance(panel._settings_grid, QGridLayout)
+    groups = {group.title(): group for group in panel.findChildren(QGroupBox)}
+
+    def position(title: str) -> tuple[int, int, int, int]:
+        return panel._settings_grid.getItemPosition(
+            panel._settings_grid.indexOf(groups[title])
+        )
+
+    concept_row, concept_column, concept_rows, concept_columns = position("Concept")
+    lora_row, lora_column, _, _ = position("LoRA")
+    opt_row, opt_column, _, _ = position("Optimisation")
+    safety_row, safety_column, _, _ = position("Resource safety")
+    adapt_row, adapt_column, _, _ = position("Adapted submodules")
+
+    assert (concept_column, concept_rows, concept_columns) == (0, 1, 2)
+    assert lora_row == opt_row and lora_column != opt_column
+    assert safety_row == adapt_row and safety_column != adapt_column
+    assert concept_row < lora_row < safety_row
+
+    adapt_layout = groups["Adapted submodules"].layout()
+    assert isinstance(adapt_layout, QGridLayout)
+    vision_row, vision_column, _, _ = adapt_layout.getItemPosition(
+        adapt_layout.indexOf(panel.chk_adapt_vision_encoder)
+    )
+    text_row, text_column, _, _ = adapt_layout.getItemPosition(
+        adapt_layout.indexOf(panel.chk_adapt_text_encoder)
+    )
+    assert vision_row == text_row and vision_column != text_column
 
 
 def test_auto_batch_checkbox_round_trip(qapp):
