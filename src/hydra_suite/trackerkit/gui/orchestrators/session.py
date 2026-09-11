@@ -1438,6 +1438,7 @@ class SessionOrchestrator:
         self._mw.video_total_frames = total_frames
         self._mw.video_width = width
         self._mw.video_height = height
+        self._panels.dataset.sync_diversity_window_bounds(total_frames)
 
         self._panels.setup.lbl_video_info.setText(
             f"Video: {total_frames} frames, {width}x{height}, {fps:.2f} FPS"

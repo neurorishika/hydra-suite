@@ -143,10 +143,33 @@ def test_dataset_class_names_falls_back_to_object_when_nothing_set():
 def test_dataset_export_knob_defaults():
     rt = RuntimeContext(fps=30.0, total_frames=100, frame_width=640, frame_height=480)
     params = build_engine_params({}, runtime=rt)
-    assert params["DATASET_EXPORT_LEVELS"] == ["polygon", "obb", "aabb"]
-    assert params["DATASET_DEDUP_METHOD"] == "phash"
-    assert params["DATASET_DEDUP_THRESHOLD"] == 8
+    assert params["DATASET_EXPORT_LEVELS"] == ["polygon"]
+    assert params["DATASET_MAX_FRAMES"] == 100
+    assert params["DATASET_DIVERSITY_WINDOW"] == -1
+    assert params["DATASET_DEDUP_METHOD"] == "none"
+    assert params["DATASET_DEDUP_THRESHOLD"] == 0
+    assert params["DATASET_INCLUDE_CONTEXT"] is False
+    assert params["DATASET_PROBABILISTIC_SAMPLING"] is True
     assert params["METRIC_CROWDING"] is True
+
+
+@pytest.mark.parametrize(
+    "cfg, expected_levels",
+    [
+        ({"detection_method": "yolo_obb", "yolo_obb_direct_task": "obb"}, ["obb"]),
+        (
+            {"detection_method": "yolo_obb", "yolo_obb_direct_task": "detect"},
+            ["aabb"],
+        ),
+    ],
+)
+def test_dataset_export_default_uses_only_the_highest_available_level(
+    cfg, expected_levels
+):
+    rt = RuntimeContext(fps=30.0, total_frames=100, frame_width=640, frame_height=480)
+    assert (
+        build_engine_params(cfg, runtime=rt)["DATASET_EXPORT_LEVELS"] == expected_levels
+    )
 
 
 def test_tracker_config_dataset_fields_round_trip():
@@ -166,9 +189,9 @@ def test_tracker_config_dataset_fields_round_trip():
 
     # And a fresh default TrackerConfig round-trips the documented defaults.
     default_restored = TrackerConfig.from_dict(TrackerConfig().to_dict())
-    assert default_restored.dataset_export_levels == ["polygon", "obb", "aabb"]
-    assert default_restored.dataset_dedup_method == "phash"
-    assert default_restored.dataset_dedup_threshold == 8
+    assert default_restored.dataset_export_levels is None
+    assert default_restored.dataset_dedup_method == "none"
+    assert default_restored.dataset_dedup_threshold == 0
     assert default_restored.dataset_class_names == ""
 
 

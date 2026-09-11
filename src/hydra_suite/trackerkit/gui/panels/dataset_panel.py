@@ -88,6 +88,10 @@ class DatasetPanel(QWidget):
         super().__init__(parent)
         self._main_window = main_window
         self._config = config
+        # Until a saved config or a user checkbox interaction supplies an
+        # explicit selection, follow detector capability and choose only its
+        # highest available geometry level.
+        self._export_levels_follow_capability = True
         self._layout = QVBoxLayout(self)
         self._build_ui()
 
@@ -151,10 +155,12 @@ class DatasetPanel(QWidget):
         )
         f_config.addRow("Class label", self.line_dataset_class_name)
 
-        # Export levels -- what the detector can actually produce. Every level
-        # the model supports is exported by default; the per-level overrides
-        # live in Advanced options, so the typical user only reads this line.
-        self.lbl_export_level_status = QLabel(format_level_status(GeometryLevel.OBB))
+        # Export levels -- what the detector can actually produce. By default
+        # only the highest level the model supports is exported; the per-level
+        # overrides live in Advanced options.
+        self.lbl_export_level_status = QLabel(
+            level_status_text(GeometryLevel.OBB, {GeometryLevel.OBB})
+        )
         self.lbl_export_level_status.setWordWrap(True)
         self.lbl_export_level_status.setStyleSheet("color: #9cdcfe;")
         self.lbl_export_level_status.setToolTip(
@@ -185,9 +191,9 @@ class DatasetPanel(QWidget):
         # a section title reliably at the top level, so a per-group help label
         # renders as a bare "?" floating in the body with nothing beside it.
         self.al_advanced.setHelpToolTip(
-            "The defaults suit most users: every label level the detector "
-            "supports is exported, and frames are ranked by how much trouble "
-            "the tracker had with them. Open this only to override that.\n\n"
+            "The defaults export only the highest label level the detector "
+            "supports, and frames are ranked by how much trouble the tracker "
+            "had with them. Open this only to override that.\n\n"
             "LABEL LEVELS\n"
             "Levels the detector cannot produce are greyed out. Each enabled "
             "level becomes its own DetectKit source; images are hardlinked, so "
@@ -207,7 +213,10 @@ class DatasetPanel(QWidget):
         self.chk_level_obb = QCheckBox("obb (oriented boxes)")
         self.chk_level_aabb = QCheckBox("aabb (axis-aligned boxes)")
         for chk in (self.chk_level_polygon, self.chk_level_obb, self.chk_level_aabb):
-            chk.setChecked(True)
+            # OBB is the initial detector capability. ``refresh_export_levels``
+            # replaces this with the live detector's highest level once all
+            # panels are ready.
+            chk.setChecked(chk is self.chk_level_obb)
             chk.setToolTip(
                 "Each enabled level is written as its own DetectKit source. "
                 "Images are hardlinked, so extra levels cost almost no disk."
@@ -262,7 +271,7 @@ class DatasetPanel(QWidget):
         f_selection.addRow("Acquisition preset", self.combo_dataset_preset)
 
         self.combo_dataset_dedup = QComboBox()
-        for method in ("phash", "ahash", "dhash", "histogram", "none"):
+        for method in ("none", "phash", "ahash", "dhash", "histogram"):
             self.combo_dataset_dedup.addItem(method)
         self.combo_dataset_dedup.setToolTip(
             "Perceptual dedup applied to the SELECTED frames (and their context "
@@ -273,7 +282,7 @@ class DatasetPanel(QWidget):
 
         self.spin_dataset_dedup_threshold = QSpinBox()
         self.spin_dataset_dedup_threshold.setRange(0, 64)
-        self.spin_dataset_dedup_threshold.setValue(8)
+        self.spin_dataset_dedup_threshold.setValue(0)
         self.spin_dataset_dedup_threshold.setToolTip(
             "Hamming distance (hash methods) or bin distance (histogram) below "
             "which two frames count as duplicates. Higher = more aggressive."
@@ -284,13 +293,16 @@ class DatasetPanel(QWidget):
 
         # Visual diversity window
         self.spin_dataset_diversity_window = QSpinBox()
-        self.spin_dataset_diversity_window.setRange(10, 500)
-        self.spin_dataset_diversity_window.setValue(30)
+        # The upper bound is tightened to half the loaded video length by
+        # ``sync_diversity_window_bounds``. Keep a useful provisional range
+        # until a video has been selected.
+        self.spin_dataset_diversity_window.setRange(-1, 500)
+        self.spin_dataset_diversity_window.setValue(-1)
         self.spin_dataset_diversity_window.setToolTip(
-            "Minimum frame separation for visual diversity (10-500 frames).\n"
-            "Prevents selecting too many consecutive similar frames.\n"
-            "Higher = more spread out frames, more visual variety.\n"
-            "Recommended: 20-50 frames (depends on video frame rate)."
+            "Minimum frame separation for visual diversity.\n\n"
+            "-1 disables diversity sampling. For a loaded video, the maximum "
+            "is half its frame count. Higher values spread selected frames "
+            "farther apart."
         )
         f_selection_right.addRow(
             "Diversity window (frames)",
@@ -301,7 +313,7 @@ class DatasetPanel(QWidget):
         self.chk_dataset_include_context = QCheckBox(
             "Include neighboring frames (+/-1)"
         )
-        self.chk_dataset_include_context.setChecked(True)
+        self.chk_dataset_include_context.setChecked(False)
         self.chk_dataset_include_context.setToolTip(
             "Export the frame before and after each selected frame.\n"
             "Provides temporal context which can improve annotation quality.\n"
@@ -627,7 +639,37 @@ class DatasetPanel(QWidget):
     def apply_config(self, config: TrackerConfig) -> None:
         """Update panel widgets to reflect a new config object."""
         self._config = config
+        self.restore_export_levels(config.dataset_export_levels)
         self.refresh_export_levels()
+
+    def restore_export_levels(self, levels: list[str] | None) -> None:
+        """Restore an explicit level choice or the capability-aware default."""
+        self._export_levels_follow_capability = levels is None
+        if levels is None:
+            self.refresh_export_levels()
+            return
+
+        selected = set(levels)
+        for level, chk in (
+            (GeometryLevel.POLYGON, self.chk_level_polygon),
+            (GeometryLevel.OBB, self.chk_level_obb),
+            (GeometryLevel.AABB, self.chk_level_aabb),
+        ):
+            was_blocked = chk.blockSignals(True)
+            try:
+                chk.setChecked(level.label in selected)
+            finally:
+                chk.blockSignals(was_blocked)
+
+    def sync_diversity_window_bounds(self, total_frames: int) -> None:
+        """Limit diversity spacing to half the currently loaded video."""
+        if total_frames <= 0:
+            return
+        spinbox = self.spin_dataset_diversity_window
+        previous_value = spinbox.value()
+        spinbox.setRange(-1, total_frames // 2)
+        if previous_value > spinbox.maximum():
+            spinbox.setValue(spinbox.maximum())
 
     def _detection_level_params(self) -> dict:
         """The three keys `resolve_native_level` needs, read straight off the
@@ -669,15 +711,29 @@ class DatasetPanel(QWidget):
         params = self._detection_level_params()
         native = resolve_native_level(params)
         allowed = set(achievable_levels(native))
-        for level, chk in (
+        level_checkboxes = (
             (GeometryLevel.POLYGON, self.chk_level_polygon),
             (GeometryLevel.OBB, self.chk_level_obb),
             (GeometryLevel.AABB, self.chk_level_aabb),
-        ):
+        )
+        if getattr(self, "_export_levels_follow_capability", False):
+            highest = next(iter(achievable_levels(native)), None)
+            for level, chk in level_checkboxes:
+                was_blocked = chk.blockSignals(True)
+                try:
+                    chk.setChecked(level is highest)
+                finally:
+                    chk.blockSignals(was_blocked)
+
+        for level, chk in level_checkboxes:
             available = level in allowed
             chk.setEnabled(available)
             if not available:
-                chk.setChecked(False)
+                was_blocked = chk.blockSignals(True)
+                try:
+                    chk.setChecked(False)
+                finally:
+                    chk.blockSignals(was_blocked)
 
         # A deliberate all-unchecked panel means "export nothing" -- say so
         # plainly rather than silently re-checking a box for the user (which
@@ -728,6 +784,7 @@ class DatasetPanel(QWidget):
         Only the status text is recomputed: a full ``refresh_export_levels``
         would write back to the very checkboxes that emitted this signal.
         """
+        self._export_levels_follow_capability = False
         self._refresh_level_status_text(
             resolve_native_level(self._detection_level_params())
         )

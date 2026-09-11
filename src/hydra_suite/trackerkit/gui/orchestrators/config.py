@@ -1200,26 +1200,26 @@ class ConfigOrchestrator:
             preset_idx if preset_idx >= 0 else 0
         )
         # Note: dataset YOLO conf/IOU now in advanced_config.json, not per-video config
+        self._panels.dataset.sync_diversity_window_bounds(
+            int(getattr(self._mw, "video_total_frames", 0) or 0)
+        )
         self._panels.dataset.spin_dataset_diversity_window.setValue(
-            get_cfg("dataset_diversity_window", default=30)
+            get_cfg("dataset_diversity_window", default=-1)
         )
-        export_levels = get_cfg(
-            "dataset_export_levels", default=["polygon", "obb", "aabb"]
+        self._panels.dataset.restore_export_levels(
+            get_cfg("dataset_export_levels", default=None)
         )
-        self._panels.dataset.chk_level_polygon.setChecked("polygon" in export_levels)
-        self._panels.dataset.chk_level_obb.setChecked("obb" in export_levels)
-        self._panels.dataset.chk_level_aabb.setChecked("aabb" in export_levels)
         dedup_idx = self._panels.dataset.combo_dataset_dedup.findText(
-            get_cfg("dataset_dedup_method", default="phash")
+            get_cfg("dataset_dedup_method", default="none")
         )
         self._panels.dataset.combo_dataset_dedup.setCurrentIndex(
             dedup_idx if dedup_idx >= 0 else 0
         )
         self._panels.dataset.spin_dataset_dedup_threshold.setValue(
-            get_cfg("dataset_dedup_threshold", default=8)
+            get_cfg("dataset_dedup_threshold", default=0)
         )
         self._panels.dataset.chk_dataset_include_context.setChecked(
-            get_cfg("dataset_include_context", default=True)
+            get_cfg("dataset_include_context", default=False)
         )
         self._panels.dataset.chk_dataset_probabilistic.setChecked(
             get_cfg("dataset_probabilistic_sampling", default=True)

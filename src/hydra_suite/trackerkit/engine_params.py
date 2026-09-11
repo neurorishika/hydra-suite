@@ -177,6 +177,14 @@ def _dataset_class_names(cfg) -> list[str]:
     return [single or "object"]
 
 
+def _default_dataset_export_levels(params: Mapping[str, Any]) -> list[str]:
+    """Return the single richest geometry level available to this detector."""
+    from hydra_suite.data.al.escalation import achievable_levels
+    from hydra_suite.data.dataset_generation import resolve_native_level
+
+    return [achievable_levels(resolve_native_level(params))[0].label]
+
+
 def _autopick_greedy(n_targets: int) -> bool:
     return int(n_targets) >= SOLVER_AUTOPICK_GREEDY_THRESHOLD
 
@@ -1113,6 +1121,19 @@ def build_engine_params(
                 SLICE_MERGE_DEFAULTS[_key] if _value is None else _value
             )
 
+    _default_export_levels = _default_dataset_export_levels(
+        {
+            "DETECTION_METHOD": _detection_method,
+            "YOLO_OBB_MODE": yolo_mode,
+            "YOLO_OBB_DIRECT_TASK": _cfg_get(
+                cfg, "yolo_obb_direct_task", default="obb"
+            ),
+            "YOLO_SEQ_STAGE2_TASK": _cfg_get(
+                cfg, "yolo_seq_stage2_task", "yolo_obb_stage2_task", default="obb"
+            ),
+        }
+    )
+
     params: dict[str, Any] = {
         "ADVANCED_CONFIG": advanced,
         "DEBUG_MODE": _debug_mode,
@@ -1650,7 +1671,7 @@ def build_engine_params(
         ),
         "DATASET_NAME": "",
         "DATASET_CLASS_NAME": str(_cfg_get(cfg, "dataset_class_name", default="")),
-        "DATASET_MAX_FRAMES": int(_cfg_get(cfg, "dataset_max_frames", default=50)),
+        "DATASET_MAX_FRAMES": int(_cfg_get(cfg, "dataset_max_frames", default=100)),
         "DATASET_CONF_THRESHOLD": 0.5,
         "DATASET_MIN_SELECTION_SCORE": float(
             _cfg_get(cfg, "dataset_min_selection_score", default=0.0)
@@ -1663,7 +1684,7 @@ def build_engine_params(
         ),
         "DATASET_YOLO_IOU_THRESHOLD": advanced.get("dataset_yolo_iou_threshold", 0.5),
         "DATASET_DIVERSITY_WINDOW": int(
-            _cfg_get(cfg, "dataset_diversity_window", default=10)
+            _cfg_get(cfg, "dataset_diversity_window", default=-1)
         ),
         "DATASET_INCLUDE_CONTEXT": bool(
             _cfg_get(cfg, "dataset_include_context", default=False)
@@ -1672,13 +1693,13 @@ def build_engine_params(
             _cfg_get(cfg, "dataset_probabilistic_sampling", default=True)
         ),
         "DATASET_EXPORT_LEVELS": list(
-            _cfg_get(cfg, "dataset_export_levels", default=["polygon", "obb", "aabb"])
+            _cfg_get(cfg, "dataset_export_levels", default=_default_export_levels)
         ),
         "DATASET_DEDUP_METHOD": str(
-            _cfg_get(cfg, "dataset_dedup_method", default="phash")
+            _cfg_get(cfg, "dataset_dedup_method", default="none")
         ),
         "DATASET_DEDUP_THRESHOLD": int(
-            _cfg_get(cfg, "dataset_dedup_threshold", default=8)
+            _cfg_get(cfg, "dataset_dedup_threshold", default=0)
         ),
         "DATASET_CLASS_NAMES": _dataset_class_names(cfg),
         # Active-learning metric selectors (bridge: config.py:2394-2399).

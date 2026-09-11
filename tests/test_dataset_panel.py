@@ -102,6 +102,9 @@ class _Check:
     def isChecked(self):
         return self.checked
 
+    def blockSignals(self, _blocked):
+        return False
+
 
 class _Label:
     def __init__(self):
@@ -113,6 +116,26 @@ class _Label:
 
     def setVisible(self, v):
         self.visible = bool(v)
+
+
+class _Spin:
+    def __init__(self, value=30):
+        self._value = value
+        self.minimum = 10
+        self._maximum = 500
+
+    def value(self):
+        return self._value
+
+    def maximum(self):
+        return self._maximum
+
+    def setRange(self, minimum, maximum):
+        self.minimum = minimum
+        self._maximum = maximum
+
+    def setValue(self, value):
+        self._value = value
 
 
 def _fake_panel_self(method_index=1, mode_index=0, task_index=2):
@@ -171,6 +194,45 @@ def test_refresh_export_levels_does_not_build_the_full_param_dict():
     DatasetPanel.refresh_export_levels(panel)
     assert panel.chk_level_polygon.enabled is False
     assert panel.chk_level_polygon.checked is False
+
+
+@pytest.mark.parametrize(
+    "task_index,expected_checked",
+    [
+        (2, {"polygon"}),
+        (0, {"obb"}),
+        (1, {"aabb"}),
+    ],
+)
+def test_default_export_level_tracks_the_highest_detector_capability(
+    task_index, expected_checked
+):
+    """New exports use only the richest label geometry the detector supplies."""
+    from hydra_suite.trackerkit.gui.panels.dataset_panel import DatasetPanel
+
+    panel = _fake_panel_self(method_index=1, mode_index=0, task_index=task_index)
+    panel._export_levels_follow_capability = True
+    DatasetPanel.refresh_export_levels(panel)
+
+    checks = {
+        "polygon": panel.chk_level_polygon.checked,
+        "obb": panel.chk_level_obb.checked,
+        "aabb": panel.chk_level_aabb.checked,
+    }
+    assert {name for name, checked in checks.items() if checked} == expected_checked
+
+
+def test_diversity_window_allows_disabled_and_caps_at_half_video_length():
+    from types import SimpleNamespace
+
+    from hydra_suite.trackerkit.gui.panels.dataset_panel import DatasetPanel
+
+    panel = SimpleNamespace(spin_dataset_diversity_window=_Spin(value=80))
+    DatasetPanel.sync_diversity_window_bounds(panel, total_frames=101)
+
+    assert panel.spin_dataset_diversity_window.minimum == -1
+    assert panel.spin_dataset_diversity_window.maximum() == 50
+    assert panel.spin_dataset_diversity_window.value() == 50
 
 
 def test_export_level_refresh_cannot_skip_identity_config_loading(tmp_path):

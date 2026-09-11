@@ -497,16 +497,16 @@ class TrackingSessionCore:
         from hydra_suite.data.dataset_generation import resolve_native_level
         from hydra_suite.utils.geometry_levels import GeometryLevel
 
-        stored_levels = [
-            GeometryLevel.from_str(name)
-            for name in self.params.get(
-                "DATASET_EXPORT_LEVELS", ["polygon", "obb", "aabb"]
-            )
-        ]
+        raw_stored_levels = self.params.get("DATASET_EXPORT_LEVELS")
+        stored_levels = (
+            [GeometryLevel.from_str(name) for name in raw_stored_levels]
+            if raw_stored_levels is not None
+            else []
+        )
         # An empty stored list is a deliberate "export nothing" choice (every
         # level checkbox unchecked in the GUI) -- honor it rather than
         # silently exporting everything.
-        if not stored_levels:
+        if raw_stored_levels == []:
             return {
                 "success": False,
                 "error": (
@@ -522,9 +522,16 @@ class TrackingSessionCore:
         # achievable levels (the stored preference is stale, not a
         # deliberate "export nothing").
         allowed = set(achievable_levels(resolve_native_level(self.params)))
-        levels = [lvl for lvl in stored_levels if lvl in allowed] or sorted(
-            allowed, reverse=True
-        )
+        levels = [lvl for lvl in stored_levels if lvl in allowed]
+        if not levels:
+            # No engine-level preference means use the new default: only the
+            # richest available geometry. A stale *explicit* preference keeps
+            # the historic compatibility fallback to every achievable level.
+            levels = (
+                [next(iter(achievable_levels(resolve_native_level(self.params))))]
+                if raw_stored_levels is None
+                else sorted(allowed, reverse=True)
+            )
 
         self.callbacks.stage_changed("dataset_generation")
         return dataset_export.generate_active_learning_dataset(
@@ -536,15 +543,15 @@ class TrackingSessionCore:
             class_name=class_name,
             params=self.params,
             max_frames=int(self.config.get("dataset_max_frames", 100)),
-            diversity_window=int(self.config.get("dataset_diversity_window", 30)),
-            include_context=bool(self.config.get("dataset_include_context", True)),
+            diversity_window=int(self.config.get("dataset_diversity_window", -1)),
+            include_context=bool(self.config.get("dataset_include_context", False)),
             probabilistic=bool(self.config.get("dataset_probabilistic_sampling", True)),
             progress=self.callbacks.progress,
             should_stop=self.callbacks.should_stop,
             export_levels=levels,
             class_names=self.params.get("DATASET_CLASS_NAMES", [class_name]),
-            dedup_method=self.params.get("DATASET_DEDUP_METHOD", "phash"),
-            dedup_threshold=int(self.params.get("DATASET_DEDUP_THRESHOLD", 8)),
+            dedup_method=self.params.get("DATASET_DEDUP_METHOD", "none"),
+            dedup_threshold=int(self.params.get("DATASET_DEDUP_THRESHOLD", 0)),
         )
 
     def _resolve_image_root(self):

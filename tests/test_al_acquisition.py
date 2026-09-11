@@ -92,6 +92,20 @@ def test_select_probabilistic_deterministic_with_seed():
     assert a == b
 
 
+def test_select_negative_diversity_window_disables_spacing_without_repeats():
+    """The TrackerKit ``-1`` UI value must sample without spacing or repeats."""
+    signals = [_signal(i, mean_confidence=0.5 + 0.01 * i) for i in range(10)]
+    picks = select(
+        signals,
+        weights=PRESETS["balanced"],
+        k=10,
+        diversity_window=-1,
+        probabilistic=True,
+        rng=np.random.default_rng(42),
+    )
+    assert len(picks) == len(set(picks)) == 10
+
+
 def test_select_min_score_filters_out_low_scoring_frames():
     signals = [_signal(i, mean_confidence=0.99 - 0.001 * i) for i in range(10)]
     picks = select(

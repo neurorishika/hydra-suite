@@ -56,11 +56,12 @@ class TrackerConfig:
     debug_mode: bool = False
 
     # --- Active-learning dataset export ---
-    dataset_export_levels: list = field(
-        default_factory=lambda: ["polygon", "obb", "aabb"]
-    )
-    dataset_dedup_method: str = "phash"
-    dataset_dedup_threshold: int = 8
+    # ``None`` means select the highest geometry level supported by the
+    # configured detector. An empty list remains the deliberate "export
+    # nothing" choice from the advanced panel.
+    dataset_export_levels: list | None = None
+    dataset_dedup_method: str = "none"
+    dataset_dedup_threshold: int = 0
     dataset_class_names: str = ""
 
     def to_dict(self) -> dict[str, Any]:
@@ -94,11 +95,12 @@ class TrackerConfig:
                 self.inference_autotune_budget_seconds
             ),
             "debug_mode": self.debug_mode,
-            "dataset_export_levels": list(self.dataset_export_levels),
             "dataset_dedup_method": self.dataset_dedup_method,
             "dataset_dedup_threshold": self.dataset_dedup_threshold,
             "dataset_class_names": self.dataset_class_names,
         }
+        if self.dataset_export_levels is not None:
+            d["dataset_export_levels"] = list(self.dataset_export_levels)
         if n_arenas_from_shapes(self.roi_shapes) > 1:
             d["animals_per_arena"] = int(self.animals_per_arena)
         return d
@@ -149,10 +151,12 @@ class TrackerConfig:
                 )
             ),
             debug_mode=bool(data.get("debug_mode", False)),
-            dataset_export_levels=list(
-                data.get("dataset_export_levels", ["polygon", "obb", "aabb"])
+            dataset_export_levels=(
+                list(data["dataset_export_levels"])
+                if data.get("dataset_export_levels") is not None
+                else None
             ),
-            dataset_dedup_method=str(data.get("dataset_dedup_method", "phash")),
-            dataset_dedup_threshold=int(data.get("dataset_dedup_threshold", 8)),
+            dataset_dedup_method=str(data.get("dataset_dedup_method", "none")),
+            dataset_dedup_threshold=int(data.get("dataset_dedup_threshold", 0)),
             dataset_class_names=str(data.get("dataset_class_names", "")),
         )
