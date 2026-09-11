@@ -211,7 +211,9 @@ class FilterWorker(BaseWorker):
         """Decode each video candidate once for quality, dedup, and diversity."""
         quality_enabled = bool(self.config.get("quality_enabled"))
         dedup_enabled = bool(self.config.get("dedup_enabled"))
-        diversity_enabled = bool(self.config.get("diversity_enabled"))
+        diversity_enabled = bool(self.config.get("diversity_enabled")) and int(
+            self.config.get("diversity_target", 1000)
+        ) < len(dataset)
         method = self.config.get("dedup_method", "phash")
         preserve_color = bool(self.config.get("preserve_color_diversity", False))
         min_blur = self.config.get("quality_min_blur", 30)
@@ -420,14 +422,16 @@ class FilterWorker(BaseWorker):
                 )
                 if self._should_abort():
                     return
-                if any(
-                    self.config.get(key)
-                    for key in (
-                        "quality_enabled",
-                        "dedup_enabled",
-                        "diversity_enabled",
+                visual_filter_needed = bool(
+                    self.config.get("quality_enabled")
+                    or self.config.get("dedup_enabled")
+                    or (
+                        self.config.get("diversity_enabled")
+                        and int(self.config.get("diversity_target", 1000))
+                        < len(dataset)
                     )
-                ):
+                )
+                if visual_filter_needed:
                     dataset = self._prepare_video_visual_data(
                         dataset, stats, removed_examples
                     )
@@ -1414,6 +1418,7 @@ class FilterKitWindow(QMainWindow):
         self.dataset_path = str(root)
         self.dataset_root = root
         self._source_kind = source_kind
+        self._preview_reader.close()
         self._preview_cache.clear()
         self.lbl_path.setText(f"{root.name}  —  {kind_label}")
 

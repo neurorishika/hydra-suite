@@ -118,6 +118,80 @@ def test_video_frame_source_uses_grab_for_forward_strided_reads(monkeypatch, tmp
     assert calls["set"] == 1
 
 
+def test_video_frame_source_recovers_from_failed_forward_grab(monkeypatch, tmp_path):
+    """A failed grab must not leave a stale decoder position for the next read."""
+    video = tmp_path / "synth.mp4"
+    _write_synthetic_video(video, n_frames=10)
+    real_capture = cv2.VideoCapture
+    calls = {"set": 0}
+
+    class FailingOnceCapture:
+        def __init__(self, *args, **kwargs):
+            self._inner = real_capture(*args, **kwargs)
+            self._failed = False
+
+        def set(self, *args, **kwargs):
+            calls["set"] += 1
+            return self._inner.set(*args, **kwargs)
+
+        def grab(self):
+            if not self._failed:
+                self._failed = True
+                return False
+            return self._inner.grab()
+
+        def __getattr__(self, name):
+            return getattr(self._inner, name)
+
+    monkeypatch.setattr(cv2, "VideoCapture", FailingOnceCapture)
+    source = VideoFrameSource(str(video))
+    refs = list(source)
+    assert source.read(refs[0]) is not None
+    assert source.read(refs[3]) is None
+    frame = source.read(refs[2])
+    source.close()
+
+    assert frame is not None
+    assert calls["set"] == 2  # initial seek plus recovery from the failed grab
+
+
+def test_video_frame_source_recovers_from_failed_read(monkeypatch, tmp_path):
+    """A failed read must not leave a stale decoder position for the next read."""
+    video = tmp_path / "synth.mp4"
+    _write_synthetic_video(video, n_frames=10)
+    real_capture = cv2.VideoCapture
+    calls = {"set": 0}
+
+    class FailingSecondReadCapture:
+        def __init__(self, *args, **kwargs):
+            self._inner = real_capture(*args, **kwargs)
+            self._reads = 0
+
+        def set(self, *args, **kwargs):
+            calls["set"] += 1
+            return self._inner.set(*args, **kwargs)
+
+        def read(self):
+            self._reads += 1
+            if self._reads == 2:
+                return False, None
+            return self._inner.read()
+
+        def __getattr__(self, name):
+            return getattr(self._inner, name)
+
+    monkeypatch.setattr(cv2, "VideoCapture", FailingSecondReadCapture)
+    source = VideoFrameSource(str(video))
+    refs = list(source)
+    assert source.read(refs[0]) is not None
+    assert source.read(refs[1]) is None
+    frame = source.read(refs[2])
+    source.close()
+
+    assert frame is not None
+    assert calls["set"] == 2  # initial seek plus recovery from the failed read
+
+
 def test_video_frame_source_out_of_order_read_still_correct(tmp_path):
     """Non-sequential reads (e.g. stride skips, random access) must still seek."""
     video = tmp_path / "synth.mp4"

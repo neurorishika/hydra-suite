@@ -111,3 +111,25 @@ def test_filterkit_window_removes_export_if_transaction_cannot_be_written(
         assert not (tmp_path / "recording_filterkit_output").exists()
     finally:
         window.close()
+
+
+def test_filterkit_window_releases_preview_video_on_source_change(tmp_path) -> None:
+    QApplication.instance() or QApplication([])
+    first_video = tmp_path / "first.avi"
+    second_video = tmp_path / "second.avi"
+    _write_video(first_video)
+    _write_video(second_video)
+    _, first_items = FilterKitCore().load_video(first_video)
+
+    window = FilterKitWindow()
+    try:
+        assert window.load_dataset_root(first_video)
+        assert not window._preview_pixmap(first_items[0]).isNull()
+        first_source = next(iter(window._preview_reader._video_sources.values()))
+        assert first_source._cap is not None
+
+        assert window.load_dataset_root(second_video)
+        assert first_source._cap is None
+        assert window._preview_reader._video_sources == {}
+    finally:
+        window.close()

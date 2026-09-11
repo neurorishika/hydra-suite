@@ -79,12 +79,19 @@ class VideoFrameSource:
             # retaining the exact requested frame for the following ``read``.
             for _ in range(ref.frame_id - self._last_read_index - 1):
                 if not self._cap.grab():
+                    # ``grab`` may have advanced the decoder before reporting
+                    # failure. Forget its position so the next request seeks
+                    # explicitly instead of calculating from stale state.
+                    self._last_read_index = None
                     return None
         else:
             self._cap.set(cv2.CAP_PROP_POS_FRAMES, ref.frame_id)
         ok, frame = self._cap.read()
         if ok:
             self._last_read_index = ref.frame_id
+        else:
+            # A failed read has the same position ambiguity as a failed grab.
+            self._last_read_index = None
         return frame if ok else None
 
     def length(self) -> int:

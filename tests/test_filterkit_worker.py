@@ -187,3 +187,37 @@ def test_filterworker_video_decodes_temporal_candidates_once(
     assert len(results) == 1
     assert results[0]["stats"]["after_temporal"] == 3
     assert reads == 3
+
+
+def test_filterworker_video_skips_decode_when_diversity_is_a_noop(
+    tmp_path, monkeypatch
+) -> None:
+    video_path = tmp_path / "recording.avi"
+    _write_video(video_path, [20, 60, 120, 200])
+    reads = 0
+    original_read = FilterKitMediaReader.read
+
+    def count_reads(self, item):
+        nonlocal reads
+        reads += 1
+        return original_read(self, item)
+
+    monkeypatch.setattr(FilterKitMediaReader, "read", count_reads)
+    worker = FilterWorker(
+        str(video_path),
+        {
+            "temporal_enabled": False,
+            "dedup_enabled": False,
+            "diversity_enabled": True,
+            "diversity_target": 10,
+            "quality_enabled": False,
+            "preserve_full_frames": False,
+        },
+    )
+    results = []
+    worker.finished.connect(results.append)
+    worker.execute()
+
+    assert len(results) == 1
+    assert len(results[0]["selected_dataset"]) == 4
+    assert reads == 0
