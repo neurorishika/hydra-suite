@@ -191,6 +191,31 @@ def test_semantic_dialog_uses_compact_multicolumn_settings(qapp, available_check
     assert dialog._tile_label.text().splitlines() == ["1644 px", "82 px / 0.05"]
 
 
+def test_semantic_dialog_gives_body_size_source_its_own_grid_row(
+    qapp, available_checkpoint
+):
+    """The body-size provenance must not overlap the class selector."""
+    from hydra_suite.detectkit.gui.dialogs.semantic_escalation_dialog import (
+        SemanticEscalationDialog,
+    )
+
+    dialog = SemanticEscalationDialog([_source()], 50.0)
+    grid = dialog._settings_grid
+    class_row, _class_column, _class_rows, _class_columns = grid.getItemPosition(
+        grid.indexOf(dialog._class_name)
+    )
+    origin_row, origin_column, origin_rows, origin_columns = grid.getItemPosition(
+        grid.indexOf(dialog._body_origin_display)
+    )
+    hint_row, _hint_column, _hint_rows, _hint_columns = grid.getItemPosition(
+        grid.indexOf(dialog._no_finetuned_hint)
+    )
+
+    assert origin_row != class_row
+    assert origin_row < hint_row
+    assert (origin_column, origin_rows, origin_columns) == (0, 1, 4)
+
+
 def test_recalibration_warns_before_replacing_saved_frontier(
     qapp, available_checkpoint, monkeypatch
 ):
