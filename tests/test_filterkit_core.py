@@ -6,6 +6,7 @@ import json
 
 import cv2
 import numpy as np
+import pytest
 
 from hydra_suite.filterkit.core import FilterKitCore
 
@@ -196,14 +197,39 @@ def test_filterkit_loads_and_exports_selected_video_frames(tmp_path) -> None:
     assert all(item["video_path"] == str(video_path.resolve()) for item in items)
     assert all("#frame=" in item["path"] for item in items)
 
-    output_images = tmp_path / "export" / "images"
-    exported = core.export_video_frames([items[0], items[2]], output_images)
+    output_root = tmp_path / "export"
+    export = core.export_video_dataset(
+        [items[0], items[2]], output_root, {"temporal_interval": 2}
+    )
 
-    assert exported == [0, 2]
-    first = cv2.imread(str(output_images / items[0]["filename"]))
-    last = cv2.imread(str(output_images / items[2]["filename"]))
+    assert export["frame_ids"] == [0, 2]
+    manifest = json.loads(export["manifest_path"].read_text(encoding="utf-8"))
+    assert manifest["selected_frame_indices"] == [0, 2]
+    assert manifest["filterkit_config"] == {"temporal_interval": 2}
+    first = cv2.imread(str(export["output_images"] / items[0]["filename"]))
+    last = cv2.imread(str(export["output_images"] / items[2]["filename"]))
     assert first is not None and last is not None
     assert int(first.mean()) < int(last.mean())
+
+
+def test_filterkit_video_export_cleans_up_staging_directory_on_failure(
+    tmp_path, monkeypatch
+) -> None:
+    video_path = tmp_path / "recording.avi"
+    _write_video(video_path, [20])
+    core = FilterKitCore()
+    _, items = core.load_video(video_path)
+    output_root = tmp_path / "export"
+
+    def fail_export(*_args, **_kwargs):
+        raise RuntimeError("simulated write failure")
+
+    monkeypatch.setattr(core, "export_video_frames", fail_export)
+    with pytest.raises(RuntimeError, match="simulated write failure"):
+        core.export_video_dataset(items, output_root, {})
+
+    assert not output_root.exists()
+    assert not list(tmp_path.glob(".export.tmp-*"))
 
 
 def test_filterkit_compute_avg_individuals_per_frame() -> None:

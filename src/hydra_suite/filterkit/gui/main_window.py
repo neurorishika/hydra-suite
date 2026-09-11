@@ -1808,21 +1808,14 @@ class FilterKitWindow(QMainWindow):
                     self.lbl_status.setText("Processing cancelled.")
                     return
 
-                output_images.mkdir(parents=True, exist_ok=True)
-                frame_ids = FilterKitCore().export_video_frames(
-                    self.filtered_dataset, output_images
+                export = FilterKitCore().export_video_dataset(
+                    self.filtered_dataset,
+                    output_root,
+                    self._last_config,
                 )
-                manifest = {
-                    "schema_version": 1,
-                    "source_video": str(source_video.resolve()),
-                    "selected_frame_indices": frame_ids,
-                    "selected_count": len(frame_ids),
-                    "filterkit_config": self._last_config,
-                }
-                manifest_path = output_root / "filterkit_video_manifest.json"
-                manifest_path.write_text(
-                    json.dumps(manifest, indent=2), encoding="utf-8"
-                )
+                frame_ids = export["frame_ids"]
+                output_images = export["output_images"]
+                manifest_path = export["manifest_path"]
                 transaction = {
                     "created_at": datetime.now().isoformat(timespec="seconds"),
                     "dataset_root": str(source_video),
@@ -1833,9 +1826,13 @@ class FilterKitWindow(QMainWindow):
                     "copied_count": len(frame_ids),
                     "selected_count": len(frame_ids),
                 }
-                self._transaction_path(source_video).write_text(
-                    json.dumps(transaction, indent=2), encoding="utf-8"
-                )
+                try:
+                    self._transaction_path(source_video).write_text(
+                        json.dumps(transaction, indent=2), encoding="utf-8"
+                    )
+                except Exception:
+                    shutil.rmtree(output_root, ignore_errors=True)
+                    raise
                 QMessageBox.information(
                     self,
                     "Success",

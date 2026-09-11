@@ -4,6 +4,8 @@ Includes perceptual hashing, duplicate removal, and diversity sampling.
 """
 
 import json
+import shutil
+import tempfile
 from pathlib import Path
 from typing import Any, Callable, Dict, List, Optional, Tuple
 
@@ -816,6 +818,56 @@ class FilterKitCore:
                     raise RuntimeError(f"Could not write selected frame: {output_path}")
                 frame_ids.append(frame_idx)
         return frame_ids
+
+    def export_video_dataset(
+        self,
+        items: List[Dict[str, Any]],
+        output_root: "str | Path",
+        filterkit_config: Dict[str, Any],
+    ) -> Dict[str, Any]:
+        """Atomically export selected video frames and their provenance manifest.
+
+        The complete dataset is staged alongside its destination and renamed only
+        after every frame and the manifest have been written. A decoder or disk
+        error therefore cannot leave a partial directory that prevents a retry.
+        """
+        if not items:
+            raise ValueError("video export requires at least one selected frame")
+
+        source_videos = {str(item.get("video_path", "")) for item in items}
+        if "" in source_videos or len(source_videos) != 1:
+            raise ValueError("video export items must come from one source video")
+
+        output_root = Path(output_root)
+        if output_root.exists():
+            raise FileExistsError(f"video output already exists: {output_root}")
+        output_root.parent.mkdir(parents=True, exist_ok=True)
+
+        staging_root = Path(
+            tempfile.mkdtemp(prefix=f".{output_root.name}.tmp-", dir=output_root.parent)
+        )
+        try:
+            output_images = staging_root / "images"
+            frame_ids = self.export_video_frames(items, output_images)
+            manifest = {
+                "schema_version": 1,
+                "source_video": str(Path(next(iter(source_videos))).resolve()),
+                "selected_frame_indices": frame_ids,
+                "selected_count": len(frame_ids),
+                "filterkit_config": dict(filterkit_config),
+            }
+            manifest_path = staging_root / "filterkit_video_manifest.json"
+            manifest_path.write_text(json.dumps(manifest, indent=2), encoding="utf-8")
+            staging_root.rename(output_root)
+        except Exception:
+            shutil.rmtree(staging_root, ignore_errors=True)
+            raise
+
+        return {
+            "frame_ids": frame_ids,
+            "output_images": output_root / "images",
+            "manifest_path": output_root / "filterkit_video_manifest.json",
+        }
 
     def temporal_subsample(
         self, dataset: List[Dict[str, Any]], interval: int
