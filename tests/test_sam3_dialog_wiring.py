@@ -12,6 +12,34 @@ import pytest
 pytest.importorskip("PySide6")
 
 
+def test_sam3_tab_scrolls_instead_of_compressing_its_settings(tmp_path):
+    """SAM3's many groups must retain their usable layout at dialog height."""
+    from PySide6.QtWidgets import QApplication, QScrollArea
+
+    QApplication.instance() or QApplication([])
+
+    from hydra_suite.detectkit.gui.dialogs import training_dialog as td
+    from hydra_suite.detectkit.gui.models import DetectKitProject
+
+    dialog = td.TrainingDialog(DetectKitProject(project_dir=tmp_path))
+    sam3_page = dialog.training_tabs.widget(dialog._sam3_tab_index)
+
+    assert isinstance(sam3_page, QScrollArea)
+    assert sam3_page.widget() is dialog.sam3_panel
+    assert sam3_page.widgetResizable()
+
+    dialog._set_combo_data(dialog.mode_combo, "semantic")
+    dialog._set_combo_data(dialog.task_combo, "segment")
+    dialog._on_training_selection_changed()
+    dialog.training_tabs.setCurrentIndex(dialog._sam3_tab_index)
+    dialog.resize(1080, 960)
+    dialog.show()
+    QApplication.processEvents()
+    assert dialog.sam3_panel.height() > sam3_page.viewport().height()
+    assert sam3_page.verticalScrollBar().maximum() > 0
+    dialog.close()
+
+
 def test_training_preset_round_trips_sam3_selection_and_safety_without_ack(
     tmp_path,
 ):
