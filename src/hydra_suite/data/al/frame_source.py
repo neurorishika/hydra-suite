@@ -35,12 +35,12 @@ class VideoFrameSource:
     `read()` reuses a single lazily-opened `cv2.VideoCapture` across calls
     instead of reopening the container per frame. When the requested frame is
     exactly the next one after the last frame actually read, it calls
-    `cap.read()` directly (no seek) -- the common case for a caller scanning
-    frames in ascending order. Any other request (out-of-order, skipped, or
-    the very first read of a non-zero frame) falls back to
-    `cap.set(CAP_PROP_POS_FRAMES, ...)` first, so random access remains
-    correct. Call `close()` (or use as a context manager) to release the
-    capture once done.
+    `cap.read()` directly (no seek). A forward strided request advances with
+    `cap.grab()` before reading its requested frame, avoiding repeated seeks
+    while scanning in ascending order. Out-of-order requests (and a first
+    non-zero request) use `cap.set(CAP_PROP_POS_FRAMES, ...)`, so random
+    access remains correct. Call `close()` (or use as a context manager) to
+    release the capture once done.
     """
 
     def __init__(self, video_path: str, stride: int = 1) -> None:
@@ -70,12 +70,17 @@ class VideoFrameSource:
             self._cap = cv2.VideoCapture(self._video_path)
             self._last_read_index = None
 
-        is_next_sequential = (
-            ref.frame_id == 0
-            if self._last_read_index is None
-            else ref.frame_id == self._last_read_index + 1
+        is_forward = (
+            self._last_read_index is not None and ref.frame_id > self._last_read_index
         )
-        if not is_next_sequential:
+        if is_forward:
+            # Strided scans are still sequential decoding work. Advancing with
+            # ``grab`` avoids a costly random seek for every candidate while
+            # retaining the exact requested frame for the following ``read``.
+            for _ in range(ref.frame_id - self._last_read_index - 1):
+                if not self._cap.grab():
+                    return None
+        else:
             self._cap.set(cv2.CAP_PROP_POS_FRAMES, ref.frame_id)
         ok, frame = self._cap.read()
         if ok:

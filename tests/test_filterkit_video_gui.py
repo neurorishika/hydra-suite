@@ -44,7 +44,18 @@ def test_filterkit_window_exports_video_selection_with_provenance(
         assert not window.chk_preserve_full_frames.isEnabled()
 
         window.filtered_dataset = [items[1]]
+        reads = 0
+        original_read = window._preview_reader.read
+
+        def count_reads(item):
+            nonlocal reads
+            reads += 1
+            return original_read(item)
+
+        monkeypatch.setattr(window._preview_reader, "read", count_reads)
         assert not window._preview_pixmap(items[1]).isNull()
+        assert not window._preview_pixmap(items[1]).isNull()
+        assert reads == 1
         window.pipeline_stats = {"loaded": len(items)}
         window._last_config = {"temporal_enabled": True, "temporal_interval": 2}
         monkeypatch.setattr(

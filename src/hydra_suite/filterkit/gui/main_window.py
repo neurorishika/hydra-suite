@@ -2,6 +2,7 @@
 
 import json
 import shutil
+from collections import OrderedDict
 from datetime import datetime
 from pathlib import Path
 from typing import Dict
@@ -174,30 +175,105 @@ class FilterWorker(BaseWorker):
         )
         return dataset
 
-    def _run_temporal_stage(self, dataset, stats, removed_examples):
+    def _run_temporal_stage(
+        self,
+        dataset,
+        stats,
+        removed_examples,
+        stage_start=40,
+        stage_end=55,
+    ):
         if not self.config.get("temporal_enabled"):
-            self.progress.emit(55, "Step 4/7 skipped: temporal filter disabled")
+            self.progress.emit(stage_end, "Step 4/7 skipped: temporal filter disabled")
             stats["after_temporal"] = len(dataset)
             return dataset
 
         interval = self.config.get("temporal_interval", 1)
         if interval <= 1:
-            self.progress.emit(55, "Step 4/7 skipped: interval is 1")
+            self.progress.emit(stage_end, "Step 4/7 skipped: interval is 1")
             stats["after_temporal"] = len(dataset)
             return dataset
 
-        self.progress.emit(40, "Step 4/7: Applying temporal subsampling")
+        self.progress.emit(stage_start, "Step 4/7: Applying temporal subsampling")
         self.status.emit(f"Applying temporal subsampling (1/{interval})...")
         before = list(dataset)
         dataset = self.core.temporal_subsample(dataset, interval)
         self._extend_removed_examples(before, dataset, "temporal", removed_examples)
         self.status.emit(f"Remaining after temporal: {len(dataset)}")
         self.progress.emit(
-            55,
+            stage_end,
             f"Step 4/7 complete: temporal {len(before):,} → {len(dataset):,}",
         )
         stats["after_temporal"] = len(dataset)
         return dataset
+
+    def _prepare_video_visual_data(self, dataset, stats, removed_examples):
+        """Decode each video candidate once for quality, dedup, and diversity."""
+        quality_enabled = bool(self.config.get("quality_enabled"))
+        dedup_enabled = bool(self.config.get("dedup_enabled"))
+        diversity_enabled = bool(self.config.get("diversity_enabled"))
+        method = self.config.get("dedup_method", "phash")
+        preserve_color = bool(self.config.get("preserve_color_diversity", False))
+        min_blur = self.config.get("quality_min_blur", 30)
+        min_contrast = self.config.get("quality_min_contrast", 20)
+        kept = []
+        total = len(dataset)
+
+        self.progress.emit(25, "Step 3/7: Decoding video candidates once")
+        self.status.emit("Preparing video frames for quality and visual filtering...")
+        with FilterKitMediaReader() as media_reader:
+            for idx, item in enumerate(dataset, start=1):
+                image = media_reader.read(item)
+                if image is None:
+                    removed_examples.append(
+                        {
+                            "path": item.get("path"),
+                            "filename": item.get("filename", ""),
+                            "video_path": item.get("video_path", ""),
+                            "frame_idx": int(item.get("frame_idx", 0)),
+                            "reason": "unreadable",
+                        }
+                    )
+                    continue
+
+                gray = (
+                    cv2.cvtColor(image, cv2.COLOR_BGR2GRAY)
+                    if image.ndim == 3
+                    else image
+                )
+                if quality_enabled:
+                    blur_score = float(cv2.Laplacian(gray, cv2.CV_64F).var())
+                    contrast_score = float(gray.std())
+                    if blur_score < min_blur or contrast_score < min_contrast:
+                        removed_examples.append(
+                            {
+                                "path": item.get("path"),
+                                "filename": item.get("filename", ""),
+                                "video_path": item.get("video_path", ""),
+                                "frame_idx": int(item.get("frame_idx", 0)),
+                                "reason": "quality",
+                            }
+                        )
+                        continue
+
+                if dedup_enabled:
+                    item["dedup_signature"] = self.core.compute_signature(image, method)
+                    if preserve_color:
+                        item["color_signature"] = self.core.compute_color_signature(
+                            image
+                        )
+                if diversity_enabled:
+                    item["features"] = self.core.compute_gray_feature(gray)
+                kept.append(item)
+                if idx == 1 or idx % 250 == 0 or idx == total:
+                    self._emit_stage_progress(25, 55, idx, total, "Video preparation")
+
+        stats["after_quality"] = len(kept)
+        self.progress.emit(
+            55,
+            f"Step 3/7 complete: prepared {len(kept):,}/{total:,} video frames",
+        )
+        return kept
 
     def _run_dedup_stage(self, dataset, stats, removed_examples):
         if not self.config.get("dedup_enabled"):
@@ -330,11 +406,40 @@ class FilterWorker(BaseWorker):
             if self._should_abort():
                 return
 
-            dataset = self._run_quality_stage(dataset, stats, removed_examples)
-            if self._should_abort():
-                return
+            is_video_source = bool(dataset and dataset[0].get("video_path"))
+            if is_video_source:
+                # Frame IDs are available without decoding, so reduce the video
+                # candidate set before any visual work. The following preparation
+                # pass caches every enabled visual artifact for later stages.
+                dataset = self._run_temporal_stage(
+                    dataset,
+                    stats,
+                    removed_examples,
+                    stage_start=10,
+                    stage_end=25,
+                )
+                if self._should_abort():
+                    return
+                if any(
+                    self.config.get(key)
+                    for key in (
+                        "quality_enabled",
+                        "dedup_enabled",
+                        "diversity_enabled",
+                    )
+                ):
+                    dataset = self._prepare_video_visual_data(
+                        dataset, stats, removed_examples
+                    )
+                else:
+                    stats["after_quality"] = len(dataset)
+                    self.progress.emit(55, "Step 3/7 skipped: visual filters disabled")
+            else:
+                dataset = self._run_quality_stage(dataset, stats, removed_examples)
+                if self._should_abort():
+                    return
 
-            dataset = self._run_temporal_stage(dataset, stats, removed_examples)
+                dataset = self._run_temporal_stage(dataset, stats, removed_examples)
             if self._should_abort():
                 return
 
@@ -559,6 +664,8 @@ class FilterKitWindow(QMainWindow):
         self.duplicate_clusters = []
         self._last_config = {}
         self._preview_reader = FilterKitMediaReader()
+        self._preview_cache = OrderedDict()
+        self._preview_cache_limit = 400
 
         self.current_page = 0
         self.images_per_page = 200
@@ -1307,6 +1414,7 @@ class FilterKitWindow(QMainWindow):
         self.dataset_path = str(root)
         self.dataset_root = root
         self._source_kind = source_kind
+        self._preview_cache.clear()
         self.lbl_path.setText(f"{root.name}  —  {kind_label}")
 
         self.loaded_count = len(items)
@@ -1482,6 +1590,7 @@ class FilterKitWindow(QMainWindow):
         self.filtered_dataset = []
         self.removed_examples = []
         self.duplicate_clusters = []
+        self._preview_cache.clear()
         self.list_preview.clear()
         self.list_removed.clear()
         self.logo_label.hide()
@@ -1519,6 +1628,7 @@ class FilterKitWindow(QMainWindow):
         self.removed_examples = payload.get("removed_examples", [])
         self.duplicate_clusters = payload.get("duplicate_clusters", [])
         self._last_config = payload.get("config_used", {})
+        self._preview_cache.clear()
 
         self.current_page = 0
         self.removed_page = 0
@@ -1589,30 +1699,42 @@ class FilterKitWindow(QMainWindow):
 
     def _preview_pixmap(self, item) -> QPixmap:
         """Return an icon pixmap for either a persisted image or a video frame."""
-        if not item.get("video_path"):
-            return QPixmap(item.get("path", ""))
+        cache_key = item.get("path", "")
+        cached = self._preview_cache.pop(cache_key, None)
+        if cached is not None:
+            self._preview_cache[cache_key] = cached
+            return cached
 
-        frame = self._preview_reader.read(item)
-        if frame is None:
-            return QPixmap()
-        if frame.ndim == 2:
-            image = QImage(
-                frame.data,
-                frame.shape[1],
-                frame.shape[0],
-                frame.strides[0],
-                QImage.Format_Grayscale8,
-            )
+        if not item.get("video_path"):
+            pixmap = QPixmap(item.get("path", ""))
         else:
-            rgb = cv2.cvtColor(frame, cv2.COLOR_BGR2RGB)
-            image = QImage(
-                rgb.data,
-                rgb.shape[1],
-                rgb.shape[0],
-                rgb.strides[0],
-                QImage.Format_RGB888,
-            )
-        return QPixmap.fromImage(image.copy())
+            frame = self._preview_reader.read(item)
+            if frame is None:
+                return QPixmap()
+            if frame.ndim == 2:
+                image = QImage(
+                    frame.data,
+                    frame.shape[1],
+                    frame.shape[0],
+                    frame.strides[0],
+                    QImage.Format_Grayscale8,
+                )
+            else:
+                rgb = cv2.cvtColor(frame, cv2.COLOR_BGR2RGB)
+                image = QImage(
+                    rgb.data,
+                    rgb.shape[1],
+                    rgb.shape[0],
+                    rgb.strides[0],
+                    QImage.Format_RGB888,
+                )
+            pixmap = QPixmap.fromImage(image.copy())
+
+        if not pixmap.isNull():
+            self._preview_cache[cache_key] = pixmap
+            if len(self._preview_cache) > self._preview_cache_limit:
+                self._preview_cache.popitem(last=False)
+        return pixmap
 
     def load_previews(self):
         self.list_preview.clear()

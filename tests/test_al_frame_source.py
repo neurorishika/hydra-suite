@@ -86,6 +86,38 @@ def test_video_frame_source_sequential_reads_match_baseline(tmp_path):
     cap.release()
 
 
+def test_video_frame_source_uses_grab_for_forward_strided_reads(monkeypatch, tmp_path):
+    video = tmp_path / "synth.mp4"
+    _write_synthetic_video(video, n_frames=10)
+    real_capture = cv2.VideoCapture
+    calls = {"set": 0, "grab": 0}
+
+    class TrackingCapture:
+        def __init__(self, *args, **kwargs):
+            self._inner = real_capture(*args, **kwargs)
+
+        def set(self, *args, **kwargs):
+            calls["set"] += 1
+            return self._inner.set(*args, **kwargs)
+
+        def grab(self):
+            calls["grab"] += 1
+            return self._inner.grab()
+
+        def __getattr__(self, name):
+            return getattr(self._inner, name)
+
+    monkeypatch.setattr(cv2, "VideoCapture", TrackingCapture)
+    source = VideoFrameSource(str(video), stride=2)
+    refs = list(source)
+    frames = [source.read(ref) for ref in refs]
+    source.close()
+
+    assert all(frame is not None for frame in frames)
+    assert calls["grab"] == len(refs) - 1
+    assert calls["set"] == 1
+
+
 def test_video_frame_source_out_of_order_read_still_correct(tmp_path):
     """Non-sequential reads (e.g. stride skips, random access) must still seek."""
     video = tmp_path / "synth.mp4"

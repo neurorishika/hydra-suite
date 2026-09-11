@@ -1028,10 +1028,20 @@ class FilterKitCore:
         feature_size=(32, 32),
         media_reader: Optional[FilterKitMediaReader] = None,
     ):
+        cached = item.get("features")
+        if cached is not None:
+            return np.asarray(cached)
         img = _read_filter_item(item, media_reader)
         if img is None:
             return None
-        gray = cv2.cvtColor(img, cv2.COLOR_BGR2GRAY) if len(img.shape) == 3 else img
+        return self.compute_gray_feature(img, feature_size)
+
+    @staticmethod
+    def compute_gray_feature(image: np.ndarray, feature_size=(32, 32)) -> np.ndarray:
+        """Return the compact grayscale feature used for diversity sampling."""
+        gray = (
+            cv2.cvtColor(image, cv2.COLOR_BGR2GRAY) if len(image.shape) == 3 else image
+        )
         return cv2.resize(gray, feature_size).flatten()
 
     def _diversity_sample_by_frame(
@@ -1107,23 +1117,15 @@ class FilterKitCore:
             )
 
         # Extract features (32x32 resized image)
-        feature_size = (32, 32)
         features = []
         valid_items = []
 
         for item in dataset:
             try:
-                img = _read_filter_item(item, media_reader)
-                if img is None:
+                feature = self._extract_gray_feature(item, media_reader=media_reader)
+                if feature is None:
                     continue
-                # Use grayscale for feature vector to save space/time
-                if len(img.shape) == 3:
-                    gray = cv2.cvtColor(img, cv2.COLOR_BGR2GRAY)
-                else:
-                    gray = img
-
-                resized = cv2.resize(gray, feature_size)
-                features.append(resized.flatten())
+                features.append(feature)
                 valid_items.append(item)
             except Exception:
                 continue

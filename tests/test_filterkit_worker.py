@@ -8,7 +8,7 @@ import pytest
 
 pytest.importorskip("PySide6")
 
-from hydra_suite.filterkit.gui.main_window import FilterWorker
+from hydra_suite.filterkit.gui.main_window import FilterKitMediaReader, FilterWorker
 
 
 def _write_gray_image(path, value: int) -> None:
@@ -149,3 +149,41 @@ def test_filterworker_video_temporal_selection_retains_frame_provenance(
     selected = results[0]["selected_dataset"]
     assert [item["frame_idx"] for item in selected] == [0, 2]
     assert all(item["video_path"] == str(video_path.resolve()) for item in selected)
+
+
+def test_filterworker_video_decodes_temporal_candidates_once(
+    tmp_path, monkeypatch
+) -> None:
+    video_path = tmp_path / "recording.avi"
+    _write_video(video_path, [20, 60, 120, 200, 80, 160])
+    reads = 0
+    original_read = FilterKitMediaReader.read
+
+    def count_reads(self, item):
+        nonlocal reads
+        reads += 1
+        return original_read(self, item)
+
+    monkeypatch.setattr(FilterKitMediaReader, "read", count_reads)
+    worker = FilterWorker(
+        str(video_path),
+        {
+            "temporal_enabled": True,
+            "temporal_interval": 2,
+            "dedup_enabled": True,
+            "dedup_method": "phash",
+            "dedup_threshold": 0,
+            "diversity_enabled": True,
+            "diversity_target": 2,
+            "quality_enabled": False,
+            "preserve_full_frames": False,
+        },
+    )
+
+    results = []
+    worker.finished.connect(results.append)
+    worker.execute()
+
+    assert len(results) == 1
+    assert results[0]["stats"]["after_temporal"] == 3
+    assert reads == 3
