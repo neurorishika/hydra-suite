@@ -245,6 +245,19 @@ class Sam3TrainingPanel(QWidget):
             worker.quit()
             worker.wait(self._CLOSE_WAIT_MS)
 
+    def _release_finished_probe_worker(self) -> None:
+        """Forget and delete a completed probe worker on the GUI thread.
+
+        A worker's ``deleteLater`` destroys its C++ object, but it does not
+        clear this Python reference.  Leaving that invalid wrapper in
+        ``_probe_worker`` makes a later hide/close event call ``isRunning``
+        on an already-deleted QThread.
+        """
+        worker = self._probe_worker
+        self._probe_worker = None
+        if worker is not None:
+            worker.deleteLater()
+
     def _mark_destroyed(self, *_args) -> None:
         self._is_destroyed = True
 
@@ -264,7 +277,7 @@ class Sam3TrainingPanel(QWidget):
         worker = _AvailabilityProbeWorker(env_name, _AUTO_PROBE_TIMEOUT_S, self)
         worker.result.connect(self._on_async_probe_result)
         worker.error.connect(self._on_async_probe_error)
-        worker.finished.connect(worker.deleteLater)
+        worker.finished.connect(self._release_finished_probe_worker)
         self._probe_worker = worker
         worker.start()
 

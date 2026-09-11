@@ -11,7 +11,7 @@ import pytest
 
 pytest.importorskip("PySide6")
 
-from PySide6.QtCore import QMimeData  # noqa: E402
+from PySide6.QtCore import QCoreApplication, QEvent, QMimeData  # noqa: E402
 from PySide6.QtWidgets import QApplication  # noqa: E402
 
 
@@ -233,6 +233,30 @@ def test_show_event_probes_asynchronously_without_blocking(qapp, monkeypatch):
     assert "sam3" in panel.unavailable_reason()
     assert not panel._body.isEnabled()
 
+    panel.close()
+
+
+def test_finished_probe_worker_is_released_before_later_hide(qapp, monkeypatch):
+    """A hidden panel must not inspect a wrapper deleted after probe completion."""
+    import hydra_suite.detectkit.gui.panels.sam3_training_panel as mod
+
+    monkeypatch.setattr(
+        mod,
+        "probe_sam3_training_availability",
+        lambda **kwargs: mod.Sam3TrainingAvailability(True),
+    )
+    panel = mod.Sam3TrainingPanel()
+    panel.show()
+    worker = panel._probe_worker
+    assert worker is not None
+    assert worker.wait(2000)
+
+    qapp.processEvents()
+    QCoreApplication.sendPostedEvents(None, QEvent.Type.DeferredDelete)
+    qapp.processEvents()
+
+    assert panel._probe_worker is None
+    panel.hide()
     panel.close()
 
 
