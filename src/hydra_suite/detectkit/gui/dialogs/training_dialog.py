@@ -515,8 +515,11 @@ class TrainingDialog(BaseDialog):
 
         self.training_tabs = QTabWidget()
         self.training_tabs.addTab(self._build_overview_tab(), "Overview")
-        self.training_tabs.addTab(self._build_training_tab(), "Advanced")
+        self._advanced_tab_index = self.training_tabs.addTab(
+            self._build_training_tab(), "Advanced"
+        )
         self.sam3_panel = Sam3TrainingPanel()
+        self._bind_sam3_run_settings()
         # SAM3 has substantially more vertical content than a normal dialog
         # viewport.  Without this wrapper, Qt resolves the shortfall by
         # shrinking every group box (and their controls) into thin strips.
@@ -534,6 +537,39 @@ class TrainingDialog(BaseDialog):
         self.add_content(container)
         self._connect_summary_signals()
         self._apply_training_tooltips()
+
+    def _bind_sam3_run_settings(self) -> None:
+        """Mirror the shared split, seed, and device controls onto SAM3.
+
+        Semantic mode hides the YOLO-only Advanced page.  Keeping distinct
+        widgets synchronized lets SAM3 retain these inputs without moving the
+        shared state out of the dialog's existing project persistence path.
+        """
+        panel = self.sam3_panel
+        panel.run_train_spin.setValue(self.spin_train.value())
+        panel.run_val_spin.setValue(self.spin_val.value())
+        panel.run_seed_spin.setValue(self.spin_seed.value())
+        panel.run_device_combo.addItems(
+            [
+                self.combo_device.itemText(index)
+                for index in range(self.combo_device.count())
+            ]
+        )
+        panel.run_device_combo.setCurrentIndex(self.combo_device.currentIndex())
+
+        for dialog_control, panel_control in (
+            (self.spin_train, panel.run_train_spin),
+            (self.spin_val, panel.run_val_spin),
+            (self.spin_seed, panel.run_seed_spin),
+        ):
+            dialog_control.valueChanged.connect(panel_control.setValue)
+            panel_control.valueChanged.connect(dialog_control.setValue)
+        self.combo_device.currentIndexChanged.connect(
+            panel.run_device_combo.setCurrentIndex
+        )
+        panel.run_device_combo.currentIndexChanged.connect(
+            self.combo_device.setCurrentIndex
+        )
 
     def _apply_training_tooltips(self) -> None:
         """Describe every interactive control in the training dialog.
@@ -1073,14 +1109,14 @@ QTabBar::tab:selected {
     # --- 2. Config ---
 
     def _build_config_group(self) -> QGroupBox:
-        gb = QGroupBox("Dataset And Runtime")
+        gb = QGroupBox("Run settings")
         grid = QGridLayout(gb)
         grid.setContentsMargins(16, 18, 16, 14)
         grid.setHorizontalSpacing(12)
         grid.setVerticalSpacing(8)
         grid.addWidget(
             self._build_section_note(
-                "Project classes are managed by DetectKit. Configure split, runtime, and sequential crop derivation here."
+                "Shared split, seed, and device settings. Other controls on this page apply only to YOLO training."
             ),
             0,
             0,
@@ -2040,9 +2076,16 @@ QTabBar::tab:selected {
         self._update_advanced_role_controls()
         self._sync_slice_model_input_size()
         if hasattr(self, "sam3_panel"):
+            semantic_mode = self._selected_mode() == "semantic"
+            self.training_tabs.setTabVisible(self._sam3_tab_index, semantic_mode)
             self.training_tabs.setTabVisible(
-                self._sam3_tab_index, self._selected_mode() == "semantic"
+                self._advanced_tab_index, not semantic_mode
             )
+            if (
+                semantic_mode
+                and self.training_tabs.currentIndex() == self._advanced_tab_index
+            ):
+                self.training_tabs.setCurrentIndex(self._sam3_tab_index)
         self._refresh_summary()
         self._mark_dataset_fit_dirty()
 

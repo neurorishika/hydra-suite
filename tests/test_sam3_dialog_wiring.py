@@ -40,6 +40,51 @@ def test_sam3_tab_scrolls_instead_of_compressing_its_settings(tmp_path):
     dialog.close()
 
 
+def test_semantic_mode_hides_advanced_and_mirrors_run_settings(tmp_path):
+    """SAM3 exposes its shared run inputs without showing YOLO-only controls."""
+    from PySide6.QtWidgets import QApplication
+
+    QApplication.instance() or QApplication([])
+
+    from hydra_suite.detectkit.gui.dialogs import training_dialog as td
+    from hydra_suite.detectkit.gui.models import DetectKitProject
+
+    dialog = td.TrainingDialog(DetectKitProject(project_dir=tmp_path))
+    dialog.training_tabs.setCurrentIndex(dialog._advanced_tab_index)
+    dialog._set_combo_data(dialog.mode_combo, "semantic")
+    dialog._set_combo_data(dialog.task_combo, "segment")
+    dialog._on_training_selection_changed()
+
+    assert not dialog.training_tabs.isTabVisible(dialog._advanced_tab_index)
+    assert dialog.training_tabs.isTabVisible(dialog._sam3_tab_index)
+    assert dialog.training_tabs.currentIndex() == dialog._sam3_tab_index
+    assert dialog.sam3_panel.run_settings_group.title() == "Run settings"
+
+    dialog.sam3_panel.run_train_spin.setValue(0.75)
+    dialog.sam3_panel.run_val_spin.setValue(0.25)
+    dialog.sam3_panel.run_seed_spin.setValue(123)
+    assert dialog.spin_train.value() == pytest.approx(0.75)
+    assert dialog.spin_val.value() == pytest.approx(0.25)
+    assert dialog.spin_seed.value() == 123
+
+    dialog.spin_seed.setValue(456)
+    assert dialog.sam3_panel.run_seed_spin.value() == 456
+    if dialog.combo_device.count() > 1:
+        dialog.combo_device.setCurrentIndex(1)
+        assert (
+            dialog.sam3_panel.run_device_combo.currentText()
+            == dialog.combo_device.currentText()
+        )
+        dialog.sam3_panel.run_device_combo.setCurrentIndex(0)
+        assert dialog.combo_device.currentIndex() == 0
+
+    dialog._set_combo_data(dialog.mode_combo, "direct")
+    dialog._set_combo_data(dialog.task_combo, "obb")
+    dialog._on_training_selection_changed()
+    assert dialog.training_tabs.isTabVisible(dialog._advanced_tab_index)
+    assert not dialog.training_tabs.isTabVisible(dialog._sam3_tab_index)
+
+
 def test_training_preset_round_trips_sam3_selection_and_safety_without_ack(
     tmp_path,
 ):
