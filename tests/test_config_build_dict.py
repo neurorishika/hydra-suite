@@ -66,6 +66,24 @@ def test_build_config_dict_is_pure(monkeypatch, qtbot_config_stub):
     assert called["resolve_path"] == 0
 
 
+def test_dataset_export_levels_stay_automatic_until_user_overrides_them(
+    qtbot_config_stub,
+):
+    """Saving defaults must not freeze them to the current detector level."""
+    orch = qtbot_config_stub
+    panel = orch._panels.dataset
+
+    panel.restore_export_levels(None)
+    assert "dataset_export_levels" not in orch.build_config_dict()
+
+    panel.chk_level_aabb.setChecked(True)
+    saved = orch.build_config_dict()
+    assert saved["dataset_export_levels"] == ["obb", "aabb"]
+
+    panel.restore_export_levels([])
+    assert orch.build_config_dict()["dataset_export_levels"] == []
+
+
 def test_max_bridge_gap_fragment_veto_color_tag_round_trip(qtbot_config_stub, tmp_path):
     """The 4 params-only leaks (Task 3) must persist into config and round-trip.
 

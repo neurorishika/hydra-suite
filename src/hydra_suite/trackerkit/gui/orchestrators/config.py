@@ -2095,6 +2095,11 @@ class ConfigOrchestrator:
                 "cnn_classifier_window": self._panels.identity.spin_cnn_window.value(),
             }
         )
+        # Keep capability-aware level selection as an automatic default after
+        # saving and reloading. Persist only a deliberate Advanced-options
+        # override, including an explicit empty list ("export nothing").
+        if self._panels.dataset._export_levels_follow_capability:
+            cfg.pop("dataset_export_levels", None)
 
         cfg.update(
             {
