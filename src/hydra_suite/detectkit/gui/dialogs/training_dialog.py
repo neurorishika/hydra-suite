@@ -517,7 +517,13 @@ class TrainingDialog(BaseDialog):
         self.training_tabs.addTab(self._build_overview_tab(), "Overview")
         self.training_tabs.addTab(self._build_training_tab(), "Advanced")
         self.sam3_panel = Sam3TrainingPanel()
-        self._sam3_tab_index = self.training_tabs.addTab(self.sam3_panel, "SAM3")
+        # SAM3 has substantially more vertical content than a normal dialog
+        # viewport.  Without this wrapper, Qt resolves the shortfall by
+        # shrinking every group box (and their controls) into thin strips.
+        # Keep it consistent with Overview and Advanced: preserve the panel's
+        # layout height and make the overflow accessible by scrolling.
+        self.sam3_scroll = self._wrap_scroll_page(self.sam3_panel)
+        self._sam3_tab_index = self.training_tabs.addTab(self.sam3_scroll, "SAM3")
         self.training_tabs.setTabVisible(
             self._sam3_tab_index, self._selected_mode() == "semantic"
         )
