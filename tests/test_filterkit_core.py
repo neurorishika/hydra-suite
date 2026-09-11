@@ -174,6 +174,38 @@ def _write_gray_image(path, value: int) -> None:
     cv2.imwrite(str(path), img)
 
 
+def _write_video(path, values: list[int]) -> None:
+    writer = cv2.VideoWriter(str(path), cv2.VideoWriter_fourcc(*"MJPG"), 10.0, (16, 16))
+    assert writer.isOpened()
+    try:
+        for value in values:
+            writer.write(np.full((16, 16, 3), value, dtype=np.uint8))
+    finally:
+        writer.release()
+
+
+def test_filterkit_loads_and_exports_selected_video_frames(tmp_path) -> None:
+    video_path = tmp_path / "recording.avi"
+    _write_video(video_path, [20, 80, 160])
+    core = FilterKitCore()
+
+    source_kind, items = core.load_video(video_path)
+
+    assert source_kind == "video"
+    assert [item["frame_idx"] for item in items] == [0, 1, 2]
+    assert all(item["video_path"] == str(video_path.resolve()) for item in items)
+    assert all("#frame=" in item["path"] for item in items)
+
+    output_images = tmp_path / "export" / "images"
+    exported = core.export_video_frames([items[0], items[2]], output_images)
+
+    assert exported == [0, 2]
+    first = cv2.imread(str(output_images / items[0]["filename"]))
+    last = cv2.imread(str(output_images / items[2]["filename"]))
+    assert first is not None and last is not None
+    assert int(first.mean()) < int(last.mean())
+
+
 def test_filterkit_compute_avg_individuals_per_frame() -> None:
     core = FilterKitCore()
     dataset = [
