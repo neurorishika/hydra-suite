@@ -21,11 +21,11 @@ from PySide6.QtWidgets import (
 )
 
 from hydra_suite.core.inference.slice_meta import read_slice_meta, training_geometry
+from hydra_suite.detectkit.gui.dialogs._base import DetectKitDialog
 from hydra_suite.detectkit.jobs.direct_calibration import (
     load_direct_calibration,
     resolve_calibration_dataset_yaml,
 )
-from hydra_suite.widgets.dialogs import BaseDialog
 
 from .direct_calibration_wizard import open_direct_calibration
 
@@ -111,7 +111,7 @@ def _entry_calibration_context(entry: dict) -> tuple[dict, Path | None]:
     return geometry, dataset_yaml
 
 
-class HistoryDialog(BaseDialog):
+class HistoryDialog(DetectKitDialog):
     """Browse training run history; optionally load a model for inference."""
 
     def __init__(self, project: "DetectKitProject", parent=None) -> None:

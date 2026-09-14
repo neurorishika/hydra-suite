@@ -24,7 +24,7 @@ from PySide6.QtWidgets import (
 
 from hydra_suite.core.inference.semantic.tiling import merge_candidates
 from hydra_suite.detectkit.gui.canvas import OBBCanvas
-from hydra_suite.widgets.dialogs import BaseDialog
+from hydra_suite.detectkit.gui.dialogs._base import DetectKitDialog
 
 from ._overlay_helpers import dialog_gt_layer, dialog_pred_layer
 
@@ -86,7 +86,7 @@ def frontier_rows(points, recommended, project_frames: int) -> list[dict]:
     return rows
 
 
-class CalibrationResultsDialog(BaseDialog):
+class CalibrationResultsDialog(DetectKitDialog):
     """Pick an operating point off the measured frontier."""
 
     def __init__(

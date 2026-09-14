@@ -28,8 +28,8 @@ from hydra_suite.detectkit.evaluation import (
     EvaluationResult,
     collect_evaluation_candidates,
 )
+from hydra_suite.detectkit.gui.dialogs._base import DetectKitDialog
 from hydra_suite.detectkit.jobs.evaluation import EvaluationWorker
-from hydra_suite.widgets.dialogs import BaseDialog
 
 from ..evaluation import build_dataset_analysis_report, open_quick_test_dialog
 
@@ -39,7 +39,7 @@ if TYPE_CHECKING:
 logger = logging.getLogger(__name__)
 
 
-class EvaluationDialog(BaseDialog):
+class EvaluationDialog(DetectKitDialog):
     """Compare trained models using their real held-out validation splits."""
 
     _RESULT_HEADERS = (

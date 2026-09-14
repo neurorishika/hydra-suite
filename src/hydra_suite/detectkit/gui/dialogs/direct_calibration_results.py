@@ -56,11 +56,11 @@ from hydra_suite.core.inference.slice_meta import (
     write_slice_meta,
 )
 from hydra_suite.detectkit.gui.canvas import OBBCanvas
+from hydra_suite.detectkit.gui.dialogs._base import DetectKitDialog
 from hydra_suite.detectkit.jobs.direct_calibration import (
     UNKNOWN_RECOMMENDATION_RULE_ID,
     UNKNOWN_RECOMMENDATION_RULE_LABEL,
 )
-from hydra_suite.widgets.dialogs import BaseDialog
 
 from ._overlay_helpers import dialog_gt_layer, dialog_pred_layer
 
@@ -139,7 +139,7 @@ def _humanise_duration(seconds: float, frames: int) -> str:
     return f"{secs} s"
 
 
-class DirectCalibrationResultsDialog(BaseDialog):
+class DirectCalibrationResultsDialog(DetectKitDialog):
     """Show the full measured frontier and stage named profiles for saving."""
 
     COL_LABEL = COL_LABEL

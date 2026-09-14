@@ -17,10 +17,10 @@ from PySide6.QtWidgets import (
     QWidget,
 )
 
+from hydra_suite.detectkit.gui.dialogs._base import DetectKitDialog
 from hydra_suite.detectkit.gui.models import DEFAULT_CLASS_NAME, normalize_class_names
 from hydra_suite.detectkit.gui.project import default_project_parent_dir
 from hydra_suite.utils.file_dialogs import HydraFileDialog as QFileDialog  # noqa: F811
-from hydra_suite.widgets.dialogs import BaseDialog
 
 _BTN_NEUTRAL = (
     "QPushButton { background-color:#3e3e42; color:#e0e0e0; padding:4px 12px; border-radius:4px; }"
@@ -28,7 +28,7 @@ _BTN_NEUTRAL = (
 )
 
 
-class NewProjectDialog(BaseDialog):
+class NewProjectDialog(DetectKitDialog):
     """Collect DetectKit project name, location, and initial class names."""
 
     def __init__(self, parent=None) -> None:

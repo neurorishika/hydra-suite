@@ -37,6 +37,7 @@ from PySide6.QtWidgets import (
     QWidget,
 )
 
+from hydra_suite.detectkit.gui.dialogs._base import DetectKitDialog
 from hydra_suite.runtime.process_supervisor import WorkloadStillOwnedError
 from hydra_suite.runtime.safe_text import (
     bounded_terminal_text,
@@ -50,7 +51,6 @@ from hydra_suite.training.contracts import (
 )
 from hydra_suite.training.geometry_levels import GeometryLevel
 from hydra_suite.training.registry import finalize_run_record
-from hydra_suite.widgets.dialogs import BaseDialog
 from hydra_suite.widgets.workers import BaseWorker, bounded_worker_message
 
 from ...jobs.dataset_preparation_sidecar import (
@@ -448,7 +448,7 @@ class _TrainingWorker(_BoundedLogWorker):
 # ---------------------------------------------------------------------------
 
 
-class TrainingDialog(BaseDialog):
+class TrainingDialog(DetectKitDialog):
     """Full training configuration and run control."""
 
     training_completed = Signal(list)

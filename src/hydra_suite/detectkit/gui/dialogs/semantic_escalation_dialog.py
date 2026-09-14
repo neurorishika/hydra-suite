@@ -49,7 +49,7 @@ from hydra_suite.core.inference.semantic.tiling import (
     SEMANTIC_TILE_FRACTION_SEED,
     resolve_tile_px,
 )
-from hydra_suite.widgets.dialogs import BaseDialog
+from hydra_suite.detectkit.gui.dialogs._base import DetectKitDialog
 
 
 def _saved_value(saved: dict, key: str, default, cast):
@@ -60,7 +60,7 @@ def _saved_value(saved: dict, key: str, default, cast):
         return default
 
 
-class SemanticEscalationDialog(BaseDialog):
+class SemanticEscalationDialog(DetectKitDialog):
     """Configure a SAM3 semantic escalation run.
 
     Calibration is offered whenever the selected sources hold a labelled

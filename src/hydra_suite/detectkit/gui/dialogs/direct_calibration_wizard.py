@@ -37,6 +37,7 @@ from hydra_suite.core.inference.direct_calibration_grid import (
     estimate_grid_work,
 )
 from hydra_suite.core.inference.direct_calibration_sweep import MergeSettings
+from hydra_suite.detectkit.gui.dialogs._base import DetectKitDialog
 from hydra_suite.detectkit.jobs.direct_calibration import (
     EXHAUSTIVE_LABEL_WARNING,
     DirectCalibrationRequest,
@@ -45,7 +46,6 @@ from hydra_suite.detectkit.jobs.direct_calibration import (
     collect_evidence,
     save_direct_calibration,
 )
-from hydra_suite.widgets.dialogs import BaseDialog
 
 _TABLE_COLUMNS = [
     ("label", "Candidate"),
@@ -79,7 +79,7 @@ def _humanise_tiles(total_tiles: int) -> str:
     return f"{total_tiles} tile-passes"
 
 
-class DirectCalibrationWizard(BaseDialog):
+class DirectCalibrationWizard(DetectKitDialog):
     """Gate dialog: evidence summary, candidate grid + cost, then affirm-and-run."""
 
     def __init__(

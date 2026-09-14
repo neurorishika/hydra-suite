@@ -21,7 +21,7 @@ from PySide6.QtWidgets import (
     QWidget,
 )
 
-from hydra_suite.widgets.dialogs import BaseDialog
+from hydra_suite.detectkit.gui.dialogs._base import DetectKitDialog
 
 from ..models import (
     INFERENCE_CONFIDENCE_FLOOR,
@@ -54,7 +54,7 @@ def _device_options(current: str) -> list[str]:
     return options
 
 
-class InferenceSettingsDialog(BaseDialog):
+class InferenceSettingsDialog(DetectKitDialog):
     """Edit settings applied only to subsequent dataset inference runs."""
 
     def __init__(

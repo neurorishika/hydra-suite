@@ -17,10 +17,10 @@ from hydra_suite.core.inference.sam2.checkpoints import (
     DEFAULT_VARIANT,
     available_variants,
 )
-from hydra_suite.widgets.dialogs import BaseDialog
+from hydra_suite.detectkit.gui.dialogs._base import DetectKitDialog
 
 
-class EscalateSam2Dialog(BaseDialog):
+class EscalateSam2Dialog(DetectKitDialog):
     """Pick which OBB/keypoint sources to escalate to SAM2 segmentation."""
 
     def __init__(self, sources, parent=None) -> None:

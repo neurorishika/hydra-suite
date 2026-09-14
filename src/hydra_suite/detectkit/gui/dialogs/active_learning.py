@@ -26,9 +26,9 @@ from PySide6.QtWidgets import (
 from hydra_suite.data.al.acquisition import PRESETS
 from hydra_suite.data.al.candidate_pool import CandidatePoolConfig
 from hydra_suite.data.al.escalation import achievable_levels
+from hydra_suite.detectkit.gui.dialogs._base import DetectKitDialog
 from hydra_suite.detectkit.gui.models import DetectKitProject
 from hydra_suite.utils.geometry_levels import GeometryLevel
-from hydra_suite.widgets.dialogs import BaseDialog
 
 # Ultralytics model task -> the geometry level that task natively produces.
 # segment -> polygon masks, obb -> oriented boxes, detect -> axis-aligned boxes
@@ -55,7 +55,7 @@ def _format_level_status(native_level: GeometryLevel) -> str:
     )
 
 
-class ActiveLearningDialog(BaseDialog):
+class ActiveLearningDialog(DetectKitDialog):
     """Active-learning frame-selection dialog (Input / Acquisition / Run)."""
 
     def __init__(

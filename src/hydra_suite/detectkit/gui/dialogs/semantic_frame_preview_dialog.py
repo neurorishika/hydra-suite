@@ -13,7 +13,7 @@ from PySide6.QtWidgets import (
 )
 
 from hydra_suite.detectkit.gui.canvas import OBBCanvas
-from hydra_suite.widgets.dialogs import BaseDialog
+from hydra_suite.detectkit.gui.dialogs._base import DetectKitDialog
 
 from ._overlay_helpers import dialog_gt_layer, dialog_pred_layer
 
@@ -28,7 +28,7 @@ def _duration(seconds: float) -> str:
     return f"{minutes / 60.0:.1f} h"
 
 
-class SemanticFramePreviewDialog(BaseDialog):
+class SemanticFramePreviewDialog(DetectKitDialog):
     """Zoomable predictions and optional ground truth for one test frame."""
 
     def __init__(

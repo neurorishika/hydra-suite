@@ -14,12 +14,13 @@ from PySide6.QtWidgets import (
     QWidget,
 )
 
+from hydra_suite.detectkit.gui.dialogs._base import DetectKitDialog
 from hydra_suite.training.geometry_levels import (
     GeometryLevel,
     SourceLevelScan,
     scan_source_levels,
 )
-from hydra_suite.widgets.dialogs import HYDRA_DIALOG_MUTED_TEXT_COLOR, BaseDialog
+from hydra_suite.widgets.dialogs import HYDRA_DIALOG_MUTED_TEXT_COLOR
 
 from ..source_import import DetectKitSourceInspection
 
@@ -91,7 +92,7 @@ def _describe_linked_action(inspection: DetectKitSourceInspection) -> str:
     )
 
 
-class DetectKitSourceValidationDialog(BaseDialog):
+class DetectKitSourceValidationDialog(DetectKitDialog):
     """Review a selected DetectKit source before adding it to the project."""
 
     def __init__(

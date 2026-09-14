@@ -18,7 +18,7 @@ from PySide6.QtWidgets import (
     QWidget,
 )
 
-from hydra_suite.widgets.dialogs import BaseDialog
+from hydra_suite.detectkit.gui.dialogs._base import DetectKitDialog
 
 from ...jobs.sam2_escalation import remove_staged_escalation_dir
 from ..source_import import (
@@ -42,7 +42,7 @@ if TYPE_CHECKING:
 logger = logging.getLogger(__name__)
 
 
-class SourceManagerDialog(BaseDialog):
+class SourceManagerDialog(DetectKitDialog):
     """Manage dataset source directories for a DetectKit project."""
 
     def __init__(self, project: "DetectKitProject", parent=None) -> None:
