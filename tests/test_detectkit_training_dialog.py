@@ -121,7 +121,7 @@ def test_training_dialog_uses_compact_grid_layouts(qapp, tmp_path):
     dlg = TrainingDialog(_make_proj(tmp_path))
     groups = {group.title(): group for group in dlg.findChildren(QGroupBox)}
     assert isinstance(groups["Training Selection"].layout(), QGridLayout)
-    assert isinstance(groups["Dataset And Runtime"].layout(), QGridLayout)
+    assert isinstance(groups["Run settings"].layout(), QGridLayout)
     assert isinstance(dlg.slice_group.layout(), QHBoxLayout)
 
 
@@ -984,6 +984,16 @@ def test_training_dialog_source_preview_loads_real_source_samples(qapp, tmp_path
     assert dlg.source_preview_status.text().startswith("Showing ")
     assert dlg.slice_group.preview.frame_size == (320, 240)
     assert dlg.slice_group.preview.frame_options == [(320, 240, 1), (640, 320, 1)]
+    assert dlg.sam3_panel.slice_group.preview.frame_size == (320, 240)
+    assert dlg.sam3_panel.slice_group.preview.frame_options == [
+        (320, 240, 1),
+        (640, 320, 1),
+    ]
+
+    proj.sources = []
+    dlg._refresh_source_preview()
+    assert dlg.slice_group.preview.frame_options == []
+    assert dlg.sam3_panel.slice_group.preview.frame_options == []
 
 
 # ---------------------------------------------------------------------------

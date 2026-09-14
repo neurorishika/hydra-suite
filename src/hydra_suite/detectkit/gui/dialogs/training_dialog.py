@@ -2502,6 +2502,14 @@ QTabBar::tab:selected {
         layout.addWidget(caption)
         return card
 
+    def _set_tiling_preview_frame_options(
+        self, options: list[tuple[int, int, int]]
+    ) -> None:
+        """Keep YOLO and SAM3 tiling previews on the same project frames."""
+        self.slice_group.set_preview_frame_options(options)
+        if hasattr(self, "sam3_panel"):
+            self.sam3_panel.slice_group.set_preview_frame_options(options)
+
     def _refresh_source_preview(self) -> None:
         if not hasattr(self, "source_preview_cards_layout"):
             return
@@ -2514,7 +2522,7 @@ QTabBar::tab:selected {
 
         records = self._source_preview_records()
         if not self._project.sources:
-            self.slice_group.set_preview_frame_options([])
+            self._set_tiling_preview_frame_options([])
             self.source_preview_status.setText(
                 "No sources configured yet. Add one or more DetectKit datasets to preview sample frames here."
             )
@@ -2527,7 +2535,7 @@ QTabBar::tab:selected {
             return
 
         if not records:
-            self.slice_group.set_preview_frame_options([])
+            self._set_tiling_preview_frame_options([])
             self.source_preview_status.setText(
                 "Source datasets are configured, but DetectKit could not discover previewable image-label pairs yet."
             )
@@ -2539,7 +2547,7 @@ QTabBar::tab:selected {
             self.source_preview_cards_layout.addWidget(empty_label)
             return
 
-        self.slice_group.set_preview_frame_options(
+        self._set_tiling_preview_frame_options(
             getattr(self, "_source_preview_frame_options", [])
         )
 
