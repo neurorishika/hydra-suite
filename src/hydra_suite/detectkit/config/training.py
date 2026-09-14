@@ -682,10 +682,6 @@ class DetectTrainingPlan:
         if len(set(role_names)) != len(role_names):
             raise TrainingPlanError("'roles' must not contain duplicates")
         if TrainingRole.SEMANTIC_SAM3 in role_names:
-            if len(self.sources) != 1:
-                raise TrainingPlanError(
-                    "SAM3 concept training supports exactly one source dataset"
-                )
             if self.sam3_params is None:
                 raise TrainingPlanError("SAM3 training requires a 'sam3' configuration")
             if not self.sam3_params.label_quality_acknowledged:

@@ -148,31 +148,6 @@ def prepare_role_datasets(
         check_cancelled()
         status(f"Preparing dataset {role_index}/{len(request.roles)}: {role.value}…")
 
-        if role is TrainingRole.SEMANTIC_SAM3:
-            if len(request.sources) != 1:
-                raise ValueError(
-                    "SAM3 concept training supports exactly one labeled source "
-                    "dataset at a time."
-                )
-            if request.sam3_params is None:
-                raise ValueError("SAM3 dataset preparation requires SAM3 parameters.")
-            source = request.sources[0]
-            build = orchestrator.build_role_dataset(
-                role,
-                source.path,
-                sam3_params=request.sam3_params,
-                seed=request.seed,
-                split=request.split,
-                comparison_baseline=request.comparison_baseline,
-            )
-            check_cancelled()
-            role_dataset_dirs[role.value] = build.dataset_dir
-            log(
-                f"Prepared [{role.value}] dataset from {source.path}: "
-                f"{build.dataset_dir}"
-            )
-            continue
-
         required_level = role_min_level(role)
         merged = merged_by_level.get(required_level)
         if merged is None:
@@ -247,6 +222,10 @@ def prepare_role_datasets(
             min_crop_size_px=request.min_crop_size_px,
             enforce_square=request.enforce_square,
             merged_level=required_level,
+            sam3_params=request.sam3_params,
+            seed=request.seed,
+            split=request.split,
+            comparison_baseline=request.comparison_baseline,
         )
         check_cancelled()
         role_dataset_dirs[role.value] = build.dataset_dir

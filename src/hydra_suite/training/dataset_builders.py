@@ -1133,9 +1133,8 @@ def prepare_role_dataset(
         )
 
     if role is TrainingRole.SEMANTIC_SAM3:
-        # Concept training is PER SOURCE. The caller passes a single raw source
-        # dir here, NOT a merged OBB dataset -- see the dialog task, which skips
-        # build_merged_obb_dataset for this role.
+        # SAM3 consumes the canonical merged polygon dataset, so all reviewed
+        # sources with compatible labels contribute to one training corpus.
         from .sam3_lora.dataset_build import build_sam3_coco_dataset
 
         if sam3_params is None:

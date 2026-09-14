@@ -364,6 +364,59 @@ def test_shared_workflow_prepares_and_runs_roles_with_parent_lineage(tmp_path):
     ]
 
 
+def test_sam3_plan_and_preparation_merge_all_polygon_sources(tmp_path):
+    """SAM3 must train from one canonical corpus containing every compatible
+    source, rather than accepting only the first source in a project."""
+
+    from hydra_suite.detectkit.config.training import DetectTrainingPlan
+    from hydra_suite.detectkit.jobs.training import prepare_role_datasets
+    from hydra_suite.training.contracts import TrainingRole
+    from hydra_suite.training.geometry_levels import GeometryLevel
+
+    payload = _plan_payload(tmp_path)
+    payload["sources"] = [
+        {"path": "./day-1", "name": "day-1", "level": "polygon"},
+        {"path": "./day-2", "name": "day-2", "level": "polygon"},
+    ]
+    payload["roles"] = [{"role": "semantic_sam3", "imgsz": 1008}]
+    payload["sam3"] = {"prompt": "ant", "label_quality_acknowledged": True}
+    plan = DetectTrainingPlan.from_dict(payload, base_dir=tmp_path)
+
+    calls: dict[str, object] = {}
+
+    class _Orchestrator:
+        def build_merged_obb_dataset(self, sources, **kwargs):
+            calls["sources"] = sources
+            calls["merge_kwargs"] = kwargs
+            return SimpleNamespace(
+                dataset_dir="/tmp/merged-polygon",
+                stats={"source_items": {"day-1": 2, "day-2": 3}},
+            )
+
+        def build_role_dataset(self, role, source_dir, **kwargs):
+            calls["role"] = role
+            calls["role_source_dir"] = source_dir
+            calls["role_kwargs"] = kwargs
+            return SimpleNamespace(dataset_dir="/tmp/sam3")
+
+    prepared = prepare_role_datasets(
+        _Orchestrator(),
+        plan.preparation_request(),
+        log=lambda _message: None,
+        status=lambda _message: None,
+        should_cancel=lambda: False,
+    )
+
+    assert [source.name for source in calls["sources"]] == ["day-1", "day-2"]
+    assert calls["merge_kwargs"]["target_level"] is GeometryLevel.POLYGON
+    assert calls["role"] is TrainingRole.SEMANTIC_SAM3
+    assert calls["role_source_dir"] == "/tmp/merged-polygon"
+    assert calls["role_kwargs"]["sam3_params"] is plan.sam3_params
+    assert prepared.role_dataset_dirs == {TrainingRole.SEMANTIC_SAM3.value: "/tmp/sam3"}
+    entry = plan.role_entries(prepared.role_dataset_dirs)[0]
+    assert [source.name for source in entry.spec.source_datasets] == ["day-1", "day-2"]
+
+
 def test_role_workflow_preserves_owned_workload_and_stops_later_roles(tmp_path):
     from hydra_suite.detectkit.config.training import DetectTrainingPlan
     from hydra_suite.detectkit.jobs.training import run_role_entries

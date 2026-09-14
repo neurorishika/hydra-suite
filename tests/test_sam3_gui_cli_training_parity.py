@@ -113,7 +113,14 @@ def _make_class_signals():
     return _Signal
 
 
-def _drive_gui_sam3_spec(tmp_path, monkeypatch, params: Sam3LoraParams):
+def _drive_gui_sam3_spec(
+    tmp_path,
+    monkeypatch,
+    params: Sam3LoraParams,
+    *,
+    source_count: int = 1,
+    preparation_requests: list | None = None,
+):
     """Build a TrainingRunSpec through the real `_start_training` GUI path."""
 
     _Signal = _make_class_signals()
@@ -126,9 +133,13 @@ def _drive_gui_sam3_spec(tmp_path, monkeypatch, params: Sam3LoraParams):
 
     tmp_path.mkdir(parents=True, exist_ok=True)
     proj = DetectKitProject(project_dir=tmp_path, class_names=["ant"])
-    src_dir = tmp_path / "ds1"
-    src_dir.mkdir(parents=True)
-    proj.sources = [OBBSource(path=str(src_dir), name="ds1")]
+    proj.sources = []
+    for index in range(source_count):
+        src_dir = tmp_path / f"ds{index + 1}"
+        src_dir.mkdir(parents=True)
+        proj.sources.append(
+            OBBSource(path=str(src_dir), name=src_dir.name, level="polygon")
+        )
 
     dlg = td.TrainingDialog(proj)
     dlg.chk_role_obb_direct.setChecked(False)
@@ -144,6 +155,8 @@ def _drive_gui_sam3_spec(tmp_path, monkeypatch, params: Sam3LoraParams):
     monkeypatch.setattr(dlg, "_write_to_project", lambda: None)
 
     def _finish_preparation(_orchestrator, request):
+        if preparation_requests is not None:
+            preparation_requests.append(request)
         dlg.role_dataset_dirs = {
             TrainingRole.SEMANTIC_SAM3.value: str(tmp_path / "derived")
         }
@@ -179,6 +192,21 @@ def _drive_gui_sam3_spec(tmp_path, monkeypatch, params: Sam3LoraParams):
     sam3_entries = [e for e in entries if e["role"] is TrainingRole.SEMANTIC_SAM3]
     assert len(sam3_entries) == 1
     return sam3_entries[0]["spec"], dlg
+
+
+def test_gui_sam3_start_forwards_all_sources_to_preparation(tmp_path, monkeypatch):
+    requests = []
+
+    _drive_gui_sam3_spec(
+        tmp_path,
+        monkeypatch,
+        Sam3LoraParams(prompt="ant", label_quality_acknowledged=True),
+        source_count=2,
+        preparation_requests=requests,
+    )
+
+    assert len(requests) == 1
+    assert [source.name for source in requests[0].sources] == ["ds1", "ds2"]
 
 
 def _cli_plan_payload(tmp_path, sam3_values: dict, publish_values: dict | None = None):

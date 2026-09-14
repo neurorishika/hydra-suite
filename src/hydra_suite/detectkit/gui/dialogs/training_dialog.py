@@ -2644,7 +2644,7 @@ QTabBar::tab:selected {
 
     @staticmethod
     def _sam3_spec_for(source_path, params, derived_dir, seed):
-        """One raw source, no merge. Concept training is per-source."""
+        """Construct a SAM3 spec for the legacy direct-builder test seam."""
         from hydra_suite.training import (
             SourceDataset,
             TrainingHyperParams,
@@ -2927,16 +2927,6 @@ QTabBar::tab:selected {
         orchestrator = self._get_orchestrator()
         if orchestrator is None:
             self._append_log("Training dependencies not available.")
-            return
-
-        if TrainingRole.SEMANTIC_SAM3 in roles and len(sources) != 1:
-            QMessageBox.warning(
-                self,
-                "Multiple Sources Not Supported",
-                "SAM3 concept training supports exactly one labeled source "
-                "dataset at a time. Remove the extra sources (or run this role "
-                "separately per source) before building/training this role.",
-            )
             return
 
         self._write_to_project()
