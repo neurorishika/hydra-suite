@@ -887,8 +887,9 @@ def test_val_record_carries_the_full_loss_decomposition_and_its_cost(tmp_path):
     assert "val_loss_mean" in source
     assert "elapsed_s" in source
     # The terminal artifact describes the selected export; history stays JSONL.
-    assert "selected_epoch" in inspect.getsource(cli._evaluate_and_write)
-    assert "append_series" in inspect.getsource(cli._evaluate_and_write)
+    terminal = inspect.getsource(cli._evaluate_and_write)
+    assert "selected_epoch" in terminal
+    assert "append_val_record(" not in terminal
 
 
 def test_recording_and_checkpoint_selection_stay_separate():
@@ -897,10 +898,14 @@ def test_recording_and_checkpoint_selection_stay_separate():
 
     from hydra_suite.training.sam3_lora import cli
 
-    source = inspect.getsource(cli._record_epoch_validation)
-    assert "anti-correlat" in source.lower()
-    assert "selection" in source.lower()
-    assert "CheckpointSelector" in inspect.getsource(cli.run_training)
+    recorder = inspect.getsource(cli._record_epoch_validation)
+    assert "CheckpointSelector" not in recorder.split('"""', 2)[2]
+    # The evidence against the default stays recorded next to the series.
+    assert "anti-correlat" in recorder.lower()
+    loop = inspect.getsource(cli.run_training)
+    assert "CheckpointSelector" in loop
+    assert "plan_terminal_export(" in loop
+    assert "_load_selected_adapters(" in loop
 
 
 def test_epoch_checkpoints_never_shadow_the_completion_signal():

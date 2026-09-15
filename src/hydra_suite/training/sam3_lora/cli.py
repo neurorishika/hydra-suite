@@ -17,17 +17,26 @@ Cancellation is NOT plumbed into this process: the launcher cancels a run by
 without having written `adapters.pt`, which the launcher already treats as
 a failed/canceled run -- see `train.py`'s artifact-existence check.
 
-Checkpoint selection is always the LAST epoch's weights, never the epoch
+CURRENT CHECKPOINT POLICY (2026-09-15, a user decision): which epoch becomes
+`adapters.pt` -- and is therefore registered and exported -- is the per-run
+``Sam3LoraParams.checkpoint_selection``. The default ``"best_val_loss"``
+exports the finite raw argmin of ``val_loss_mean`` over evaluated epochs
+(ties to the earlier epoch, no ``min_delta``; see `CheckpointSelector` and
+`plan_terminal_export`); ``"last"`` exports the final epoch as before. The
+choice is recorded in ``checkpoint_selection.json``. This decision was made
+KNOWING the evidence below points the other way; that evidence is kept, not
+reinterpreted as support. Everything below this paragraph is the history
+that led here, and its "selection is always last" statements describe the
+policy BEFORE 2026-09-15.
+
+(History.) Checkpoint selection was the LAST epoch's weights, never the epoch
 with the best validation loss. The spike's own val-loss-vs-AP comparison is
 not usable evidence either way: it came from a fold whose val split was
 byte-identical to its train split, so the reported anti-correlation reflects
 that overlap, not a real relationship between val loss and held-out AP.
 There was no evidence for best-checkpoint selection here -- last epoch was
 kept because it was simple and matched the spike's practice, not because of
-the anti-correlation claim. The 2026-09-15 user decision supersedes that
-conclusion: runs now default to exporting the finite raw argmin of
-``val_loss_mean``. The 2026-09-06 anti-correlation evidence remains recorded
-below; it is not erased or reinterpreted as support for this decision.
+the anti-correlation claim.
 
 That re-measurement HAS since been done (2026-09-06, a real held-out fold, a
 paired frame bootstrap over 16 frames), and it did not rescue val loss: every
@@ -44,14 +53,14 @@ early stopping on val loss" sentence above): a run MAY now stop early on
 `val_loss_mean` via `Sam3LoraParams.patience`/`min_delta`, defaulting to OFF
 (patience 0). Read the distinction carefully, because the anti-correlation
 result above still stands and is not contradicted: early stopping decides
-WHEN TO STOP SPENDING GPU TIME, it does not SELECT a checkpoint. Selection is
-still always the last epoch. Nothing restores the argmin of the loss curve --
-that is the thing the study says would be worse. The best epoch's checkpoint
-is merely retained (never pruned) so a future study could revisit it by hand.
+WHEN TO STOP SPENDING GPU TIME, it does not SELECT a checkpoint. (As of
+2026-09-08 selection was still always the last epoch; superseded 2026-09-15,
+see the current policy above. Early stopping still selects nothing -- the
+selector and the stopping rule are separate and can name different epochs.)
 See `EarlyStopTracker`.
 
 AP is therefore now ALSO recorded per epoch, in the same `val_series.jsonl`
-row (see `detection_quality` and `ap_cadence`). It still selects nothing.
+row (see `detection_quality` and `ap_cadence`). AP selects nothing.
 Read `detection_quality`'s module docstring before treating it as a rule: the
 evidence is one run, one seed, one corpus, seed variance is unmeasured, and
 the training-time number is tile-space and NMS-free, so it is not even on the
@@ -73,6 +82,7 @@ import os
 import random
 import sys
 import time
+from dataclasses import dataclass
 from pathlib import Path
 from typing import Any
 
@@ -698,6 +708,92 @@ def write_checkpoint_selection_record(
     path = run_dir_path / CHECKPOINT_SELECTION_FILENAME
     path.write_text(json.dumps(record, indent=2, sort_keys=True), encoding="utf-8")
     return path
+
+
+@dataclass(frozen=True)
+class TerminalExportPlan:
+    """What `run_training` exports and how it describes it, decided purely."""
+
+    selection: dict[str, Any]
+    fallback_reason: str | None
+    # A record already computed on the selected weights, carrying AP, that
+    # `val_stats.json` may reuse instead of a second forward pass.
+    reusable_record: dict[str, Any] | None
+    # Write `adapters.pt` from the CPU snapshot rather than the live model.
+    export_snapshot: bool
+    # Load the snapshot into the model before terminal evaluation.
+    load_snapshot: bool
+
+
+def plan_terminal_export(
+    selector: CheckpointSelector,
+    *,
+    final_epoch: int,
+    stopped_early: bool,
+    have_snapshot: bool,
+) -> TerminalExportPlan:
+    """Decide the terminal export from the selector's state.
+
+    Pure (no model, no disk) so every terminal path is testable without CUDA.
+    A fallback is only recorded when the selection rule actually fell back:
+    `"last"` never selects on the series, so it has nothing to fall back from.
+    """
+    best = selector.mode == "best_val_loss"
+    fallback_reason = None
+    if best and not selector.candidates:
+        fallback_reason = (
+            "no_validation_split"
+            if selector.evaluated_epochs == 0
+            else "no_finite_validation_loss"
+        )
+    if best and selector.candidates and not have_snapshot:
+        # Every argmin improvement snapshots the weights; a candidate without
+        # one would export the last epoch under a record naming another.
+        raise RuntimeError(
+            "checkpoint selection chose epoch "
+            f"{selector.selected_epoch} but no adapter snapshot was captured"
+        )
+    selection = selector.selection_record(
+        final_epoch=final_epoch,
+        stopped_early=stopped_early,
+        fallback_reason=fallback_reason,
+    )
+    selected_epoch = int(selection["selected_epoch"])
+    export_snapshot = best and have_snapshot and bool(selector.candidates)
+    record = selector.records.get(selected_epoch)
+    # Never add a duplicate row just because the chosen epoch was sampled
+    # without AP. The JSONL file is history; val_stats describes the export.
+    reusable = (
+        record
+        if record is not None and ("ap" in record or "ap_error" in record)
+        else None
+    )
+    return TerminalExportPlan(
+        selection=selection,
+        fallback_reason=fallback_reason,
+        reusable_record=reusable,
+        export_snapshot=export_snapshot,
+        load_snapshot=export_snapshot and selected_epoch != int(final_epoch),
+    )
+
+
+def _load_selected_adapters(model: Any, state: dict[str, Any]) -> None:
+    """Load a selected adapter snapshot, refusing a silent partial load.
+
+    `strict=False` is required because base weights are absent from the
+    snapshot, which also means a key rename would load NOTHING without
+    complaint -- and terminal evaluation would then score the final epoch's
+    weights while stamping them as the selected epoch.
+    """
+    result = model.load_state_dict(state, strict=False)
+    unexpected = list(getattr(result, "unexpected_keys", ()) or ())
+    missing = set(getattr(result, "missing_keys", ()) or ()) & set(state)
+    if unexpected or missing:
+        raise RuntimeError(
+            "selected adapter snapshot does not match the model: "
+            f"{len(unexpected)} unexpected key(s) (e.g. {unexpected[:3]}), "
+            f"{len(missing)} snapshot key(s) not loaded"
+        )
 
 
 class EarlyStopTracker:
@@ -1478,44 +1574,27 @@ def run_training(spec: Any, run_dir_path: Path) -> bool:
             if selection_improved and checkpoint_selector.mode == "best_val_loss":
                 selected_state = _cpu_adapter_clone(model)
 
-    fallback_reason = None
-    if not checkpoint_selector.candidates:
-        fallback_reason = (
-            "no_validation_split"
-            if checkpoint_selector.evaluated_epochs == 0
-            else "no_finite_validation_loss"
-        )
+    export_plan = plan_terminal_export(
+        checkpoint_selector,
+        final_epoch=final_epoch,
+        stopped_early=early_stop.stopped_at_epoch is not None,
+        have_snapshot=selected_state is not None,
+    )
+    if export_plan.fallback_reason is not None:
         emit_log(
             "CHECKPOINT SELECTION FALLBACK: "
             + (
                 "no validation split exists"
-                if fallback_reason == "no_validation_split"
+                if export_plan.fallback_reason == "no_validation_split"
                 else "no finite val_loss_mean was observed"
             )
             + f", so exporting last epoch {final_epoch}."
         )
-
-    selection = checkpoint_selector.selection_record(
-        final_epoch=final_epoch,
-        stopped_early=early_stop.stopped_at_epoch is not None,
-        fallback_reason=fallback_reason,
-    )
+    selection = export_plan.selection
     selected_epoch = int(selection["selected_epoch"])
-    selected_record = checkpoint_selector.records.get(selected_epoch)
-    if (
-        checkpoint_selector.mode == "best_val_loss"
-        and selected_state is not None
-        and selected_epoch != final_epoch
-    ):
-        model.load_state_dict(selected_state, strict=False)
-    # Never add a duplicate row just because the chosen epoch was sampled
-    # without AP. The JSONL file is history; val_stats describes export.
-    reusable = (
-        selected_record
-        if selected_record is not None
-        and ("ap" in selected_record or "ap_error" in selected_record)
-        else None
-    )
+    if export_plan.load_snapshot:
+        # Terminal evaluation must score the weights that are exported.
+        _load_selected_adapters(model, selected_state)
     _evaluate_and_write(
         model,
         spec,
@@ -1527,8 +1606,7 @@ def run_training(spec: Any, run_dir_path: Path) -> bool:
         True,
         run_dir_path,
         selected_epoch,
-        precomputed=reusable,
-        append_series=False,
+        precomputed=export_plan.reusable_record,
         checkpoint_selection=selection,
     )
     write_checkpoint_selection_record(run_dir_path, selection)
@@ -1542,9 +1620,7 @@ def run_training(spec: Any, run_dir_path: Path) -> bool:
         )
     artifact_path = run_dir_path / "adapters.pt"
     adapters = (
-        selected_state
-        if checkpoint_selector.mode == "best_val_loss" and selected_state is not None
-        else adapter_state_dict(model)
+        selected_state if export_plan.export_snapshot else adapter_state_dict(model)
     )
     _write_validated_adapter_artifact(adapters, artifact_path, torch)
     return True
@@ -1576,13 +1652,13 @@ def _evaluate_split(
     so the two costs stay attributable. See `detection_quality` for the four
     limitations that make AP a within-run trend and not a portable score.
 
-    Reporting only. Nothing here may select a checkpoint: a 2026-09-06 study
-    measured every per-query validation signal ANTI-correlating with held-out
-    AP, so selecting on it would be actively wrong. That study also found AP
-    the most stable signal it measured -- which makes AP a *candidate* for a
-    future selection rule on ONE run, ONE seed and ONE corpus, with seed
-    variance entirely unmeasured. It does not make it a rule, and this
-    function still selects nothing.
+    Measurement only: this function computes numbers and selects nothing.
+    The caller's `CheckpointSelector` may select on ``val_loss_mean`` (the
+    2026-09-15 default; see the module docstring), even though a 2026-09-06
+    study measured every per-query validation signal ANTI-correlating with
+    held-out AP. That study also found AP the most stable signal it measured
+    -- a *candidate* for a selection rule on ONE run, ONE seed and ONE corpus,
+    with seed variance unmeasured -- but AP selects nothing.
 
     Returns `None` when there is no validation split (small datasets skip it
     -- see `dataset_build.py`'s `validation: "none"` case) rather than
@@ -1675,18 +1751,17 @@ def _record_epoch_validation(
 ) -> dict[str, Any] | None:
     """Evaluate the validation split mid-run and append it to the series.
 
-    SELECTION IS STILL FORBIDDEN HERE. If you are here to wire
-    best-checkpoint selection onto this series, don't: a 2026-09-06 study on
-    a genuinely disjoint fold measured every per-query validation signal
-    ANTI-correlating with held-out AP, so choosing the minimum of this curve
-    would pick a worse detector.
-
-    What this series IS now allowed to drive, since 2026-09-08, is the
-    STOPPING decision -- `EarlyStopTracker` reads `val_loss_mean` from the
-    caller to decide whether more epochs are worth paying for. That is a
-    different question from which checkpoint to keep, and it is off by
-    default. The series also still does its original job: distinguishing
-    "converged" from "stalled at epoch 2".
+    This function only records; it decides nothing. The caller feeds the
+    returned ``val_loss_mean`` to two SEPARATE rules: `EarlyStopTracker`
+    (since 2026-09-08, whether more epochs are worth paying for; off by
+    default) and `CheckpointSelector` (since 2026-09-15, which epoch is
+    exported; raw argmin by default). Keep selection out of this function.
+    The selection default was a user decision taken against a 2026-09-06
+    study on a genuinely disjoint fold, which measured every per-query
+    validation signal ANTI-correlating with held-out AP -- i.e. evidence
+    that the minimum of this curve may pick a worse detector. The series also
+    still does its original job: distinguishing "converged" from "stalled at
+    epoch 2".
 
     Provably behaviour-preserving: the model is returned to `train()` and
     every RNG stream is restored, so the next epoch draws exactly the numbers
@@ -1776,34 +1851,29 @@ def _evaluate_and_write(
     epoch_number: int | None = None,
     *,
     precomputed: dict[str, Any] | None = None,
-    append_series: bool = True,
     checkpoint_selection: dict[str, Any] | None = None,
 ) -> Path | None:
-    """Compute validation loss for the exported adapters.
+    """Write `val_stats.json` for the EXPORTED adapters.
 
-    The selection decision is made before this call. If there is no validation
-    split (small datasets skip it -- see `dataset_build.py`'s `validation:
-    "none"` case), no file is written and `None` is returned rather than
-    fabricating a placeholder.
+    The selection decision is made before this call, and the caller has
+    already loaded the selected weights into *model*. If there is no
+    validation split (small datasets skip it -- see `dataset_build.py`'s
+    `validation: "none"` case), no file is written and `None` is returned
+    rather than fabricating a placeholder.
 
     Writes `val_stats.json` in its historical shape (`val_loss_mean`,
-    `val_batches`, `note`) plus the additive per-term breakdown, and appends
-    the SAME computation as the final entry of `val_series.jsonl`, so the
-    series' last row and the terminal artifact can never disagree. On a run
-    that reaches its last epoch, that epoch is never evaluated twice (the
-    mid-run recorder deliberately skips it). On an EARLY STOP the guarantee
-    is conditional -- see `precomputed` below.
+    `val_batches`, `note`) plus the additive per-term breakdown and the
+    `selected_epoch` it describes. It never touches `val_series.jsonl`: the
+    series is pure history, and every evaluated epoch -- the terminal one
+    included -- is appended once by `_record_epoch_validation`. The series'
+    last row is therefore the FINAL epoch, which need not be the exported
+    one, and may lack AP on an early stop whose stop epoch the AP cadence
+    skipped.
 
     `precomputed` passes in a record this run ALREADY produced for the chosen
-    epoch on the same weights. It is written to `val_stats.json` without a
-    second forward pass. ``append_series=False`` keeps a selected historical
-    epoch from producing a misleading duplicate JSONL row.
-
-    When the AP cadence (`HYDRA_SAM3_AP_EVERY`) skipped the stop epoch, the
-    mid-run record carries no detection-quality block, so it cannot be
-    reused: the selected adapters are evaluated once more for `val_stats.json`
-    without appending a second JSONL row. The series remains pure history;
-    the cost is one pass at stop time, never per-epoch.
+    epoch on the same weights, carrying AP; it is written without a second
+    forward pass. Otherwise the selected adapters are evaluated once more,
+    at stop time only, never per-epoch.
     """
     reused = precomputed is not None
     stats = (
@@ -1834,19 +1904,6 @@ def _evaluate_and_write(
     }
     metrics_path = run_dir_path / "val_stats.json"
     metrics_path.write_text(json.dumps(val_stats, indent=2), encoding="utf-8")
-    if epoch_number is not None and not reused and append_series:
-        # The FINAL row always carries AP, whatever the cadence: a series
-        # whose last epoch has no detection-quality number cannot be read
-        # against the always-last-epoch policy it exists to inform.
-        append_val_record(
-            run_dir_path,
-            {
-                "epoch": epoch_number,
-                "val_cadence": cadence,
-                "ap_cadence": ap_cadence(),
-                **stats,
-            },
-        )
     return metrics_path
 
 
