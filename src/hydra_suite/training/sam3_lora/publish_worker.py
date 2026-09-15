@@ -42,6 +42,24 @@ logger = logging.getLogger(__name__)
 
 _RUN_ID = re.compile(r"[A-Za-z0-9][A-Za-z0-9_.-]{0,127}\Z")
 _ATTEMPT_ID = re.compile(r"[0-9a-f]{32}\Z")
+_MAX_CHECKPOINT_SELECTION_BYTES = 64 * 1024
+
+
+def _checkpoint_selection_metadata(run_dir: Path | None) -> dict[str, Any]:
+    """Read the completed run's selected epoch without inventing provenance."""
+    if run_dir is None:
+        return {}
+    try:
+        encoded = (run_dir / "checkpoint_selection.json").read_bytes()
+        if len(encoded) > _MAX_CHECKPOINT_SELECTION_BYTES:
+            return {}
+        payload = json.loads(encoded)
+    except (OSError, json.JSONDecodeError):
+        return {}
+    selected_epoch = (
+        payload.get("selected_epoch") if isinstance(payload, dict) else None
+    )
+    return {"selected_epoch": selected_epoch} if isinstance(selected_epoch, int) else {}
 
 
 def _scale_grouping_metadata(run_dir: "Path | None") -> dict[str, Any]:
@@ -335,6 +353,7 @@ def publish_sam3_artifact(
             "label_quality_acknowledged": getattr(
                 params, "label_quality_acknowledged", False
             ),
+            **_checkpoint_selection_metadata(Path(adapters_path).parent),
             # Lets the parent clean up after a hard-killed child without ever
             # deleting an artifact that raced into the same final pathname.
             "publish_attempt_id": publish_attempt_id,

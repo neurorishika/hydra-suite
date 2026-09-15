@@ -17,6 +17,86 @@ import pytest
 from hydra_suite.training.contracts import Sam3LoraParams
 from hydra_suite.training.sam3_lora import cli
 
+
+def test_checkpoint_selector_uses_raw_argmin_not_early_stop_min_delta():
+    selector = cli.CheckpointSelector("best_val_loss")
+    tracker = cli.EarlyStopTracker(5, 0.01)
+    values = [1.53148, 1.40514, 1.40398, 1.42350, 1.41971, 1.45694, 1.43106]
+    stopped = False
+    for epoch, value in enumerate(values, start=1):
+        selector.observe(epoch, value)
+        stopped = tracker.observe(epoch, value)
+
+    assert stopped is True
+    assert tracker.best_epoch == 2
+    assert selector.selected_epoch == 3
+    assert selector.selected_value == pytest.approx(1.40398)
+
+
+def test_checkpoint_selector_uses_earlier_tie_and_skips_non_finite():
+    selector = cli.CheckpointSelector("best_val_loss")
+    for epoch, loss in enumerate((1.0, float("nan"), 0.8, 0.8, float("inf")), 1):
+        selector.observe(epoch, loss)
+
+    assert selector.selected_epoch == 3
+    assert selector.selected_value == pytest.approx(0.8)
+    assert selector.candidates == [
+        {"epoch": 1, "val_loss_mean": 1.0},
+        {"epoch": 3, "val_loss_mean": 0.8},
+        {"epoch": 4, "val_loss_mean": 0.8},
+    ]
+
+
+def test_checkpoint_selector_can_select_the_terminal_epoch():
+    selector = cli.CheckpointSelector("best_val_loss")
+    selector.observe(1, 1.2)
+    selector.observe(2, 1.1)
+    selector.observe(3, 1.0)  # terminal evaluation on a full-length run
+
+    record = selector.selection_record(
+        final_epoch=3, stopped_early=False, fallback_reason=None
+    )
+    assert record["selected_epoch"] == 3
+    assert record["selected_val_loss_mean"] == pytest.approx(1.0)
+
+
+def test_cpu_adapter_snapshot_is_isolated_from_later_model_updates(monkeypatch):
+    torch = pytest.importorskip("torch")
+    state = {"block.lora_A": torch.tensor([1.0])}
+    monkeypatch.setattr(cli, "adapter_state_dict", lambda _model: state)
+    snapshot = cli._cpu_adapter_clone(object())
+    state["block.lora_A"].fill_(9.0)
+
+    assert snapshot["block.lora_A"].device.type == "cpu"
+    assert snapshot["block.lora_A"].item() == 1.0
+
+
+def test_checkpoint_selector_record_falls_back_to_last_without_validation():
+    selector = cli.CheckpointSelector("best_val_loss")
+    record = selector.selection_record(
+        final_epoch=4, stopped_early=False, fallback_reason="no_validation_split"
+    )
+
+    assert record["selected_epoch"] == 4
+    assert record["selection_fallback_reason"] == "no_validation_split"
+    assert record["candidates"] == []
+
+
+def test_checkpoint_selector_distinguishes_nonfinite_validation_from_absence():
+    selector = cli.CheckpointSelector("best_val_loss")
+    selector.observe(1, float("nan"))
+    selector.observe(2, float("inf"))
+
+    assert selector.evaluated_epochs == 2
+    assert selector.candidates == []
+    record = selector.selection_record(
+        final_epoch=2,
+        stopped_early=False,
+        fallback_reason="no_finite_validation_loss",
+    )
+    assert record["selection_fallback_reason"] == "no_finite_validation_loss"
+
+
 # -- The stopping rule ------------------------------------------------------
 
 

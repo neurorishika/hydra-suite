@@ -128,6 +128,18 @@ def test_history_dialog_has_detail_label(qapp, tmp_path, monkeypatch):
     assert "run_001" in dlg.detail_label.text()
 
 
+def test_history_detail_surfaces_selected_epoch(qapp, tmp_path, monkeypatch):
+    import hydra_suite.detectkit.gui.dialogs.history_dialog as hd
+
+    run = {**_FAKE_RUNS[0], "selected_epoch": 3}
+    monkeypatch.setattr(hd, "_load_runs", lambda proj: [run])
+    from hydra_suite.detectkit.gui.dialogs.history_dialog import HistoryDialog
+
+    dlg = HistoryDialog(_make_proj(tmp_path))
+    assert "Exported epoch:" in dlg.detail_label.text()
+    assert "Epoch 3" in dlg.detail_label.text()
+
+
 def test_history_dialog_has_export_button(qapp, tmp_path, monkeypatch):
     import hydra_suite.detectkit.gui.dialogs.history_dialog as hd
 

@@ -411,6 +411,7 @@ def create_run_record(
         "artifact_paths": [],
         "published_model_path": "",
         "published_registry_entry": "",
+        "selected_epoch": None,
         "parent_run_id": parent_run_id,
         "run_dir": str(Path(run_dir).expanduser().resolve()),
         "spec": spec.to_dict(),
@@ -447,6 +448,7 @@ def finalize_run_record(
     artifact_paths: list[str] | None = None,
     published_model_path: str = "",
     published_registry_entry: str = "",
+    selected_epoch: int | None = None,
     error_message: str = "",
     failure_details: dict[str, Any] | None = None,
 ) -> dict[str, Any] | None:
@@ -460,6 +462,7 @@ def finalize_run_record(
         "artifact_paths": list(artifact_paths or []),
         "published_model_path": published_model_path,
         "published_registry_entry": published_registry_entry,
+        "selected_epoch": selected_epoch,
     }
     if error_message:
         patch["error_message"] = error_message

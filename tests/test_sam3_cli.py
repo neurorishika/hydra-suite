@@ -128,6 +128,15 @@ def test_runtime_precision_matrix_fails_closed():
     )
 
 
+def test_runtime_refuses_unknown_checkpoint_selection():
+    refusal = cli._runtime_admission_refusal(
+        SimpleNamespace(cuda=_FakeCuda()),
+        Sam3LoraParams(checkpoint_selection="lowest_ap"),
+    )
+    assert refusal is not None
+    assert "checkpoint_selection" in refusal
+
+
 def test_runtime_refuses_empty_adapter_scope():
     params = Sam3LoraParams(
         adapt_vision_encoder=False,
@@ -877,13 +886,13 @@ def test_val_record_carries_the_full_loss_decomposition_and_its_cost(tmp_path):
     source = inspect.getsource(cli._evaluate_split)
     assert "val_loss_mean" in source
     assert "elapsed_s" in source
-    # The terminal artifact keeps its existing shape; the series adds to it.
-    assert "informational only" in inspect.getsource(cli._evaluate_and_write)
+    # The terminal artifact describes the selected export; history stays JSONL.
+    assert "selected_epoch" in inspect.getsource(cli._evaluate_and_write)
+    assert "append_series" in inspect.getsource(cli._evaluate_and_write)
 
 
-def test_nothing_selects_a_checkpoint_on_the_recorded_series():
-    """Selection stays last-epoch; a study measured every per-query validation
-    signal ANTI-correlating with held-out AP."""
+def test_recording_and_checkpoint_selection_stay_separate():
+    """The loss recorder stays metric-only; the selector owns export policy."""
     import inspect
 
     from hydra_suite.training.sam3_lora import cli
@@ -891,6 +900,7 @@ def test_nothing_selects_a_checkpoint_on_the_recorded_series():
     source = inspect.getsource(cli._record_epoch_validation)
     assert "anti-correlat" in source.lower()
     assert "selection" in source.lower()
+    assert "CheckpointSelector" in inspect.getsource(cli.run_training)
 
 
 def test_epoch_checkpoints_never_shadow_the_completion_signal():

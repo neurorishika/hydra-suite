@@ -95,6 +95,29 @@ def test_sidecar_records_the_guard_fields(tmp_path):
     assert meta["reference_body_px"] == 55.4
 
 
+def test_sidecar_carries_selected_epoch_from_the_completed_run(tmp_path):
+    base = {"detector.qkv.weight": torch.randn(4, 4)}
+    torch.save(base, tmp_path / "base.pt")
+    torch.save(
+        {"qkv.lora_A": torch.randn(2, 4), "qkv.lora_B": torch.randn(4, 2)},
+        tmp_path / "adapters.pt",
+    )
+    (tmp_path / "checkpoint_selection.json").write_text(
+        json.dumps({"selected_epoch": 3}), encoding="utf-8"
+    )
+    _, artifact = publish_sam3_model(
+        run_id="r1",
+        adapters_path=tmp_path / "adapters.pt",
+        base_checkpoint=tmp_path / "base.pt",
+        build_manifest={"tile_px": 1007, "reference_body_px": 55.4},
+        params=Sam3LoraParams(prompt="ant", rank=2, alpha=4),
+        source_fingerprint="fp1",
+        models_root=tmp_path / "models",
+    )
+    meta = json.loads(Path(str(artifact) + ".sam3_meta.json").read_text())
+    assert meta["selected_epoch"] == 3
+
+
 def test_sidecar_records_the_realised_scale_grouping_not_just_the_request(tmp_path):
     """Finding 1: the grouping stamp `dataloader.write_sam3_scale_grouping_stamp`
     writes into the run directory must land on the published sidecar. Without

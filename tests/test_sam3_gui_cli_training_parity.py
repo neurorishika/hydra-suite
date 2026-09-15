@@ -37,7 +37,10 @@ from PySide6.QtWidgets import QApplication  # noqa: E402
 
 QApplication.instance() or QApplication([])
 
-from hydra_suite.detectkit.config.training import load_training_plan  # noqa: E402
+from hydra_suite.detectkit.config.training import (  # noqa: E402
+    TrainingPlanError,
+    load_training_plan,
+)
 from hydra_suite.detectkit.gui.dialogs import training_dialog as td  # noqa: E402
 from hydra_suite.detectkit.gui.models import DetectKitProject, OBBSource  # noqa: E402
 from hydra_suite.training.contracts import (  # noqa: E402
@@ -69,6 +72,7 @@ _REFERENCE_KWARGS = dict(
     # actually change what a run does.
     patience=4,
     min_delta=0.02,
+    checkpoint_selection="last",
     batch=2,
     grad_accum=4,
     mixed_precision="bf16",
@@ -278,6 +282,12 @@ def test_gui_and_cli_sam3lora_params_agree_field_by_field(tmp_path, monkeypatch)
 
     # Publish policy was given explicitly identically on both sides too.
     assert asdict(gui_spec.publish_policy) == asdict(cli_spec.publish_policy)
+
+
+def test_cli_rejects_unknown_checkpoint_selection(tmp_path):
+    values = dict(_REFERENCE_KWARGS, checkpoint_selection="lowest_ap")
+    with pytest.raises(TrainingPlanError, match="checkpoint_selection"):
+        _cli_sam3_spec(tmp_path, sam3_values=values)
 
 
 def test_env_name_default_resolution_matches_and_honors_override(tmp_path, monkeypatch):

@@ -676,6 +676,7 @@ class TrainingOrchestrator:
                     ),
                     artifact_paths=artifact_paths,
                     error_message=_failure_message(result),
+                    selected_epoch=result.get("selected_epoch"),
                     failure_details=_failure_details(result),
                 )
                 return result
@@ -690,6 +691,7 @@ class TrainingOrchestrator:
             artifact_paths=artifact_paths,
             published_model_path=published_path,
             published_registry_entry=published_key,
+            selected_epoch=result.get("selected_epoch"),
             failure_details=_failure_details(result),
         )
 
