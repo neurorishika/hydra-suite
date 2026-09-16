@@ -1,8 +1,9 @@
 """COCO instance-segmentation tile dataset builder for SAM3 LoRA finetuning.
 
-The source is a single raw DetectKit source (``images/`` + ``labels/`` +
-``classes.txt``), not the merged multi-source OBB dataset -- concept training
-is per source (see the design's breakage row 5). Tiling reuses
+The source is a DetectKit dataset directory (``images/`` + ``labels/`` +
+``classes.txt``): either a single raw source or, since 2026-09-14, the
+canonical merged polygon dataset, so every compatible reviewed source
+contributes to one training corpus. Tiling reuses
 ``hydra_suite.utils.slice_geometry`` so the trained tile grid matches the one
 inference plans at escalation time (Approach B). Qt-free; no ``sam3`` import
 at module scope -- that package is training-only and lazily imported by the
@@ -455,6 +456,7 @@ def build_sam3_coco_dataset(
     params: Sam3LoraParams,
     *,
     class_name: str | None = None,
+    class_names: list[str] | tuple[str, ...] | None = None,
     seed: int = 42,
     split: SplitConfig | None = None,
     io_limits: DatasetIOLimits = DEFAULT_DATASET_IO_LIMITS,
@@ -477,7 +479,13 @@ def build_sam3_coco_dataset(
     if prompt_error is not None:
         raise ValueError(f"Invalid SAM3 prompt configuration: {prompt_error}")
 
-    class_names = resolve_dataset_class_names(source)
+    # `class_names` is the plan's declaration, used only when the dataset
+    # itself carries no `classes.txt` -- e.g. a merged dataset built before
+    # that file was written. The dataset's own names still win.
+    resolved_names = resolve_dataset_class_names(
+        source, list(class_names) if class_names else None
+    )
+    class_names = resolved_names
     selected_class = class_name if class_name in class_names else class_names[0]
     selected_idx = class_names.index(selected_class)
 

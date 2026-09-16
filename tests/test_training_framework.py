@@ -10,6 +10,7 @@ import cv2
 import numpy as np
 import pytest
 
+from hydra_suite.training.class_mapping import resolve_dataset_class_names
 from hydra_suite.training.contracts import (
     SourceDataset,
     SplitConfig,
@@ -415,6 +416,11 @@ def test_orchestrator_preserves_multiclass_ids_and_names(tmp_path: Path):
     )
     assert "0: ant" in merged_yaml
     assert "1: bee" in merged_yaml
+    # Consumers that read `classes.txt` (SAM3 role preparation among them)
+    # must not refuse the merged dataset for lacking one.
+    classes_txt = (Path(merged.dataset_dir) / "classes.txt").read_text(encoding="utf-8")
+    assert classes_txt.split() == ["ant", "bee"]
+    assert resolve_dataset_class_names(merged.dataset_dir) == ["ant", "bee"]
 
     detect = orchestrator.build_role_dataset(
         TrainingRole.SEQ_DETECT,
