@@ -293,6 +293,10 @@ class HistoryDialog(DetectKitDialog):
         metrics_files = self._artifact_names(entry, "project_metrics_paths")
         source_files = self._artifact_names(entry, "artifact_paths")
         log_name = Path(str(entry.get("project_log_path", "") or "")).name or "-"
+        selected_epoch = entry.get("selected_epoch")
+        selection_text = (
+            f"Epoch {selected_epoch}" if isinstance(selected_epoch, int) else "-"
+        )
 
         self.detail_label.setText(
             f"<b>{entry.get('run_id', '?')}</b> &nbsp;&bull;&nbsp; Role: <b>{entry.get('role', '-')}</b>"
@@ -300,6 +304,7 @@ class HistoryDialog(DetectKitDialog):
             f"<span style='color:#ffffff'>Base model:</span> {self._base_model(entry)}"
             f" &nbsp;&bull;&nbsp; <span style='color:#ffffff'>Started:</span> {self._started_at(entry) or '-'}<br>"
             f"<span style='color:#ffffff'>Exported model:</span> <span style='color:#9cdcfe'>{export_name}</span>"
+            f" &nbsp;&bull;&nbsp; <span style='color:#ffffff'>Exported epoch:</span> {selection_text}"
             f" &nbsp;&bull;&nbsp; <span style='color:#ffffff'>Run folder:</span> {run_dir}<br>"
             f"<span style='color:#ffffff'>Source artifacts:</span> {source_files}<br>"
             f"<span style='color:#ffffff'>Project metrics:</span> {metrics_files}"

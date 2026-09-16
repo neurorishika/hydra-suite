@@ -10,6 +10,10 @@ loss series is the wrong signal to ever select on, while AP was the most
 stable signal measured (paired effect size 2.92). This module records AP so
 that a future selection decision has a signal worth considering.
 
+NOTE (2026-09-15): by user decision, runs now DEFAULT to exporting the raw
+``val_loss_mean`` argmin (``Sam3LoraParams.checkpoint_selection``), despite
+the study above; ``"last"`` remains available. See ``cli``'s module docstring.
+
 WHAT IT IS NOT. It selects nothing and stops nothing. If you are here to
 wire best-checkpoint selection or early stopping onto this number: the
 evidence for AP is ONE run, ONE seed, ONE corpus, and seed variance is

@@ -17,6 +17,201 @@ import pytest
 from hydra_suite.training.contracts import Sam3LoraParams
 from hydra_suite.training.sam3_lora import cli
 
+
+def test_checkpoint_selector_uses_raw_argmin_not_early_stop_min_delta():
+    selector = cli.CheckpointSelector("best_val_loss")
+    tracker = cli.EarlyStopTracker(5, 0.01)
+    values = [1.53148, 1.40514, 1.40398, 1.42350, 1.41971, 1.45694, 1.43106]
+    stopped = False
+    for epoch, value in enumerate(values, start=1):
+        selector.observe(epoch, value)
+        stopped = tracker.observe(epoch, value)
+
+    assert stopped is True
+    assert tracker.best_epoch == 2
+    assert selector.selected_epoch == 3
+    assert selector.selected_value == pytest.approx(1.40398)
+
+
+def test_checkpoint_selector_uses_earlier_tie_and_skips_non_finite():
+    selector = cli.CheckpointSelector("best_val_loss")
+    for epoch, loss in enumerate((1.0, float("nan"), 0.8, 0.8, float("inf")), 1):
+        selector.observe(epoch, loss)
+
+    assert selector.selected_epoch == 3
+    assert selector.selected_value == pytest.approx(0.8)
+    assert selector.candidates == [
+        {"epoch": 1, "val_loss_mean": 1.0},
+        {"epoch": 3, "val_loss_mean": 0.8},
+        {"epoch": 4, "val_loss_mean": 0.8},
+    ]
+
+
+def test_checkpoint_selector_can_select_the_terminal_epoch():
+    selector = cli.CheckpointSelector("best_val_loss")
+    selector.observe(1, 1.2)
+    selector.observe(2, 1.1)
+    selector.observe(3, 1.0)  # terminal evaluation on a full-length run
+
+    record = selector.selection_record(
+        final_epoch=3, stopped_early=False, fallback_reason=None
+    )
+    assert record["selected_epoch"] == 3
+    assert record["selected_val_loss_mean"] == pytest.approx(1.0)
+
+
+def test_cpu_adapter_snapshot_is_isolated_from_later_model_updates(monkeypatch):
+    torch = pytest.importorskip("torch")
+    state = {"block.lora_A": torch.tensor([1.0])}
+    monkeypatch.setattr(cli, "adapter_state_dict", lambda _model: state)
+    snapshot = cli._cpu_adapter_clone(object())
+    state["block.lora_A"].fill_(9.0)
+
+    assert snapshot["block.lora_A"].device.type == "cpu"
+    assert snapshot["block.lora_A"].item() == 1.0
+
+
+def test_checkpoint_selector_record_falls_back_to_last_without_validation():
+    selector = cli.CheckpointSelector("best_val_loss")
+    record = selector.selection_record(
+        final_epoch=4, stopped_early=False, fallback_reason="no_validation_split"
+    )
+
+    assert record["selected_epoch"] == 4
+    assert record["selection_fallback_reason"] == "no_validation_split"
+    assert record["candidates"] == []
+
+
+def test_checkpoint_selector_distinguishes_nonfinite_validation_from_absence():
+    selector = cli.CheckpointSelector("best_val_loss")
+    selector.observe(1, float("nan"))
+    selector.observe(2, float("inf"))
+
+    assert selector.evaluated_epochs == 2
+    assert selector.candidates == []
+    record = selector.selection_record(
+        final_epoch=2,
+        stopped_early=False,
+        fallback_reason="no_finite_validation_loss",
+    )
+    assert record["selection_fallback_reason"] == "no_finite_validation_loss"
+
+
+# -- Terminal export plan (the four run_training exit paths) -----------------
+
+_AP = {"ap": 0.5}
+
+
+def _observed(mode, series, *, ap_epochs=()):
+    selector = cli.CheckpointSelector(mode)
+    for epoch, loss in enumerate(series, start=1):
+        record = {"epoch": epoch, "val_loss_mean": loss}
+        if epoch in ap_epochs:
+            record.update(_AP)
+        selector.observe(epoch, loss, record=record)
+    return selector
+
+
+def test_export_plan_full_length_run_restores_an_earlier_best():
+    # Full-length run: the terminal epoch is recorded WITH AP; the best is not.
+    selector = _observed("best_val_loss", [1.2, 1.0, 1.1], ap_epochs={3})
+    plan = cli.plan_terminal_export(
+        selector, final_epoch=3, stopped_early=False, have_snapshot=True
+    )
+
+    assert plan.selection["selected_epoch"] == 2
+    assert plan.export_snapshot is True
+    assert plan.load_snapshot is True
+    # Epoch 2 carries no AP, so val_stats must re-evaluate the loaded weights
+    # rather than reuse epoch 3's record.
+    assert plan.reusable_record is None
+    assert plan.fallback_reason is None
+
+
+def test_export_plan_early_stop_reuses_the_selected_record_when_it_has_ap():
+    selector = _observed(
+        "best_val_loss",
+        [1.53148, 1.40514, 1.40398, 1.42350, 1.41971, 1.45694, 1.43106],
+        ap_epochs={1, 2, 3, 4, 5, 6, 7},
+    )
+    plan = cli.plan_terminal_export(
+        selector, final_epoch=7, stopped_early=True, have_snapshot=True
+    )
+
+    assert plan.selection["selected_epoch"] == 3
+    assert plan.selection["stopped_early"] is True
+    assert plan.load_snapshot is True
+    assert plan.reusable_record["epoch"] == 3
+
+
+def test_export_plan_terminal_best_needs_no_reload():
+    selector = _observed("best_val_loss", [1.2, 1.1, 1.0], ap_epochs={3})
+    plan = cli.plan_terminal_export(
+        selector, final_epoch=3, stopped_early=False, have_snapshot=True
+    )
+
+    assert plan.selection["selected_epoch"] == 3
+    assert plan.export_snapshot is True
+    assert plan.load_snapshot is False
+    assert plan.reusable_record["epoch"] == 3
+
+
+def test_export_plan_without_validation_falls_back_to_last():
+    selector = cli.CheckpointSelector("best_val_loss")
+    plan = cli.plan_terminal_export(
+        selector, final_epoch=4, stopped_early=False, have_snapshot=False
+    )
+
+    assert plan.selection["selected_epoch"] == 4
+    assert plan.fallback_reason == "no_validation_split"
+    assert plan.export_snapshot is False
+    assert plan.load_snapshot is False
+
+
+def test_export_plan_last_mode_exports_final_and_records_no_fallback():
+    # "last" never selects on the series, so an absent validation split is
+    # not a fallback -- the record must not claim one happened.
+    for series in ([], [1.0, 0.5, 0.9]):
+        selector = _observed("last", series)
+        final = max(len(series), 1)
+        plan = cli.plan_terminal_export(
+            selector, final_epoch=final, stopped_early=False, have_snapshot=False
+        )
+        assert plan.selection["rule"] == "last"
+        assert plan.selection["selected_epoch"] == final
+        assert plan.fallback_reason is None
+        assert plan.selection["selection_fallback_reason"] is None
+        assert plan.export_snapshot is False
+        assert plan.load_snapshot is False
+
+
+def test_export_plan_refuses_a_selection_without_a_snapshot():
+    selector = _observed("best_val_loss", [1.0, 0.9])
+    with pytest.raises(RuntimeError, match="no adapter snapshot"):
+        cli.plan_terminal_export(
+            selector, final_epoch=2, stopped_early=False, have_snapshot=False
+        )
+
+
+def test_selected_adapter_load_restores_exact_weights():
+    torch = pytest.importorskip("torch")
+    model = torch.nn.Sequential(torch.nn.Linear(2, 2))
+    snapshot = {"0.bias": torch.tensor([3.0, 4.0])}  # adapter-only subset
+    cli._load_selected_adapters(model, snapshot)
+
+    assert torch.equal(model[0].bias.detach(), snapshot["0.bias"])
+
+
+def test_selected_adapter_load_refuses_a_silent_no_op():
+    torch = pytest.importorskip("torch")
+    model = torch.nn.Sequential(torch.nn.Linear(2, 2))
+    before = model[0].bias.detach().clone()
+    # A renamed key: strict=False would load nothing without complaint.
+    with pytest.raises(RuntimeError, match="does not match the model"):
+        cli._load_selected_adapters(model, {"renamed.0.bias": torch.tensor([3.0, 4.0])})
+    assert torch.equal(model[0].bias.detach(), before)
+
+
 # -- The stopping rule ------------------------------------------------------
 
 

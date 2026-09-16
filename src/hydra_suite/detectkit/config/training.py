@@ -9,6 +9,7 @@ from pathlib import Path
 from typing import Any
 
 from hydra_suite.training.contracts import (
+    SAM3_CHECKPOINT_SELECTIONS,
     SAM3_MAX_CONFIGURED_PROMPT_BYTES,
     SAM3_MAX_NEGATIVE_PROMPT_COUNT,
     SAM3_MAX_NEGATIVE_QUERIES_PER_TILE,
@@ -568,7 +569,13 @@ class DetectTrainingPlan:
                     sam3_values[name] = _require_number(
                         sam3_values[name], f"sam3.{name}"
                     )
-            for name in ("prompt", "mixed_precision", "geometry_mode", "env_name"):
+            for name in (
+                "prompt",
+                "mixed_precision",
+                "geometry_mode",
+                "env_name",
+                "checkpoint_selection",
+            ):
                 if name in sam3_values:
                     sam3_values[name] = _require_string(
                         sam3_values[name], f"sam3.{name}"
@@ -759,6 +766,11 @@ class DetectTrainingPlan:
                 raise TrainingPlanError("sam3.patience must not be negative")
             if self.sam3_params.min_delta < 0.0:
                 raise TrainingPlanError("sam3.min_delta must not be negative")
+            if self.sam3_params.checkpoint_selection not in SAM3_CHECKPOINT_SELECTIONS:
+                raise TrainingPlanError(
+                    "sam3.checkpoint_selection must be one of "
+                    + ", ".join(repr(value) for value in SAM3_CHECKPOINT_SELECTIONS)
+                )
             if not 0.0 <= self.sam3_params.tile_overlap < 1.0:
                 raise TrainingPlanError("sam3.tile_overlap must be in [0, 1)")
             if self.sam3_params.object_tile_fraction <= 0.0:

@@ -109,6 +109,7 @@ def test_publish_sidecar_classification_reaches_result_and_registry(
         lambda *_args, **_kwargs: {
             "success": True,
             "artifact_path": str(tmp_path / "adapters.pt"),
+            "selected_epoch": 3,
         },
     )
     monkeypatch.setattr(
@@ -131,6 +132,7 @@ def test_publish_sidecar_classification_reaches_result_and_registry(
     record = load_registry()["runs"][0]
     assert record["status"] == "failed"
     assert record["failure_kind"] == "host-hard-limit"
+    assert record["selected_epoch"] == 3
 
 
 def test_publish_uncertain_ownership_is_not_collapsed_into_a_failed_result(
@@ -178,6 +180,28 @@ def _registered_spec(tmp_path, *, auto_import=False):
         publish_policy=PublishPolicy(auto_import=auto_import),
         sam3_params=Sam3LoraParams(prompt="ant"),
     )
+
+
+def test_completed_sam3_run_surfaces_selected_epoch_in_registry(monkeypatch, tmp_path):
+    import hydra_suite.training.registry as registry
+
+    monkeypatch.setattr(registry, "_project_root", lambda: tmp_path)
+    monkeypatch.setattr(
+        svc,
+        "run_training",
+        lambda *_args, **_kwargs: {
+            "success": True,
+            "artifact_path": str(tmp_path / "adapters.pt"),
+            "selected_epoch": 3,
+        },
+    )
+
+    result = svc.TrainingOrchestrator(tmp_path / "workspace").run_role_training(
+        _registered_spec(tmp_path)
+    )
+
+    assert result["success"] is True
+    assert load_registry()["runs"][0]["selected_epoch"] == 3
 
 
 def test_direct_orchestrator_rejects_oversized_prompt_pool_before_registry_work(

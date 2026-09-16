@@ -32,6 +32,7 @@ from PySide6.QtWidgets import (
 )
 
 from hydra_suite.training.contracts import (
+    SAM3_CHECKPOINT_SELECTIONS,
     SAM3_MAX_CONFIGURED_PROMPT_BYTES,
     SAM3_MAX_NEGATIVE_PROMPT_COUNT,
     SAM3_MAX_NEGATIVE_QUERIES_PER_TILE,
@@ -511,6 +512,15 @@ class Sam3TrainingPanel(QWidget):
             "Ignored when patience is 0."
         )
         opt_form.addRow("Early stop min delta", self.min_delta_spin)
+        self.checkpoint_selection_combo = QComboBox()
+        self.checkpoint_selection_combo.addItem("Best val loss", "best_val_loss")
+        self.checkpoint_selection_combo.addItem("Last epoch", "last")
+        self.checkpoint_selection_combo.setToolTip(
+            "Choose which epoch's adapters are exported. Best val loss uses the "
+            "raw minimum finite validated val_loss_mean; it is separate from "
+            "early stopping's min-delta rule."
+        )
+        opt_form.addRow("Checkpoint to export", self.checkpoint_selection_combo)
         self._settings_grid.addWidget(opt_group, 1, 1)
 
         safety_group = QGroupBox("Resource safety")
@@ -620,6 +630,7 @@ class Sam3TrainingPanel(QWidget):
             epochs=self.epochs_spin.value(),
             patience=self.patience_spin.value(),
             min_delta=self.min_delta_spin.value(),
+            checkpoint_selection=str(self.checkpoint_selection_combo.currentData()),
             batch=(
                 -1 if self.auto_batch_checkbox.isChecked() else self.batch_spin.value()
             ),
@@ -659,6 +670,11 @@ class Sam3TrainingPanel(QWidget):
         self.epochs_spin.setValue(p.epochs)
         self.patience_spin.setValue(p.patience)
         self.min_delta_spin.setValue(p.min_delta)
+        selection = p.checkpoint_selection
+        if selection not in SAM3_CHECKPOINT_SELECTIONS:
+            selection = Sam3LoraParams().checkpoint_selection
+        selection_index = self.checkpoint_selection_combo.findData(selection)
+        self.checkpoint_selection_combo.setCurrentIndex(max(0, selection_index))
         if p.batch == -1:
             self.auto_batch_checkbox.setChecked(True)
         else:

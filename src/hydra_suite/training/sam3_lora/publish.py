@@ -81,6 +81,7 @@ _PARAM_FIELDS = (
     "rank",
     "alpha",
     "dropout",
+    "checkpoint_selection",
     "label_quality_acknowledged",
     "adapt_vision_encoder",
     "adapt_text_encoder",

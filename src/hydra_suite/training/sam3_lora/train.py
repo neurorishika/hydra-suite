@@ -101,6 +101,7 @@ def _result(
     exit_code: Optional[int] = None,
     artifact_path: Optional[Path] = None,
     metrics_path: Optional[Path] = None,
+    selected_epoch: Optional[int] = None,
     command: tuple[str, ...] = (),
     resource_preflight: Optional[str] = None,
     containment: Optional[dict[str, Any]] = None,
@@ -110,6 +111,7 @@ def _result(
         "canceled": canceled,
         "artifact_path": str(artifact_path) if artifact_path else None,
         "metrics_path": str(metrics_path) if metrics_path else None,
+        "selected_epoch": selected_epoch,
         "command": list(command),
         "exit_code": exit_code,
         "failure_kind": failure_kind,
@@ -1068,10 +1070,20 @@ def train_sam3_lora(
 
     metrics_candidate = run_dir_path / "val_stats.json"
     metrics_path = metrics_candidate if metrics_candidate.exists() else None
+    selected_epoch = None
+    try:
+        selection = json.loads(
+            (run_dir_path / "checkpoint_selection.json").read_text(encoding="utf-8")
+        )
+        candidate = selection.get("selected_epoch")
+        selected_epoch = candidate if isinstance(candidate, int) else None
+    except (OSError, json.JSONDecodeError):
+        pass
     return _result(
         success=True,
         artifact_path=artifact_path,
         metrics_path=metrics_path,
+        selected_epoch=selected_epoch,
         exit_code=supervised.returncode,
         command=launch.command,
         resource_preflight=str(diagnostics_path),

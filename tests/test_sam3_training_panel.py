@@ -363,3 +363,14 @@ def test_early_stop_controls_live_in_the_optimisation_group(qapp):
     assert panel.patience_spin.value() == 4
     assert panel.params().patience == 4
     assert panel.params().min_delta == pytest.approx(0.02)
+
+
+def test_checkpoint_selection_control_round_trips_in_optimisation_group(qapp):
+    import hydra_suite.detectkit.gui.panels.sam3_training_panel as mod
+    from hydra_suite.training.contracts import Sam3LoraParams
+
+    panel = mod.Sam3TrainingPanel()
+    assert panel.checkpoint_selection_combo.parent() is panel.epochs_spin.parent()
+    assert panel.params().checkpoint_selection == "best_val_loss"
+    panel.set_params(Sam3LoraParams(prompt="ant", checkpoint_selection="last"))
+    assert panel.params().checkpoint_selection == "last"

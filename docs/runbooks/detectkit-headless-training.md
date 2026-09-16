@@ -247,6 +247,31 @@ path, including the ones shared with the YOLO block:
 Like YOLO's, SAM3 auto batch is not reproducible across machines. **Set a fixed
 positive `sam3.batch` for reproducible runs.**
 
+### SAM3 exported checkpoint
+
+`sam3.checkpoint_selection` decides which epoch becomes the run's
+`adapters.pt` — the file that is registered and published:
+
+| Value | Exports |
+| --- | --- |
+| `"best_val_loss"` (default) | The epoch with the lowest finite `val_loss_mean`. Ties go to the earlier epoch. `min_delta` does not apply. |
+| `"last"` | The final epoch's weights. |
+
+The epoch it exports can differ from the epoch early stopping calls best:
+early stopping only counts an improvement larger than `sam3.min_delta`, and
+selection counts any decrease. Only validated epochs are candidates, so with
+`HYDRA_SAM3_VAL_EVERY > 1` unvalidated epochs are never exported. A dataset
+with no validation split exports the last epoch and records why.
+
+The choice is recorded in `<run_dir>/checkpoint_selection.json` (rule,
+`selected_epoch`, final epoch, every candidate's loss, any fallback reason),
+`val_stats.json` describes the exported weights, and the published model's
+`.sam3_meta.json` carries `selected_epoch`.
+
+This default was chosen knowingly against a 2026-09-06 held-out study that
+found validation loss anti-correlated with held-out AP. Use `"last"` to get
+the earlier behaviour.
+
 ## Validate and prepare
 
 Validate the configuration and inspect all resolved paths without creating the

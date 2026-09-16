@@ -149,6 +149,9 @@ SAM3_MAX_PROMPT_CODEPOINTS = 256
 SAM3_MAX_PROMPT_UTF8_BYTES = 1024
 
 
+SAM3_CHECKPOINT_SELECTIONS = ("best_val_loss", "last")
+
+
 def sam3_prompt_text_error(value: object) -> str | None:
     """Return a stable admission error for one SAM3 prompt, if unsafe."""
 
@@ -314,6 +317,9 @@ class Sam3LoraParams:
     # These are per-run PARAMETERS, never module constants (D18's lesson: a
     # baked threshold becomes dataset-specific and then needs a code edit).
     patience: int = 0
+    # 2026-09-15 user decision: the default exported adapter is the raw
+    # finite argmin of val_loss_mean, independent of early-stop min_delta.
+    checkpoint_selection: str = "best_val_loss"
     # An epoch improves only if it beats the best so far by MORE than this,
     # so `min_delta` must sit ABOVE the run-to-run noise, not inside it. An
     # earlier version of this comment had that backwards and justified 0.005

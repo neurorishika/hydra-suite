@@ -447,6 +447,14 @@ def merge_obb_sources(
         class_names=resolved_class_names,
         include_test=include_test,
     )
+    # A merged dataset is a DetectKit dataset like any other, so it carries
+    # its class names the way every consumer reads them. Without this, any
+    # consumer that resolves names through `classes.txt` rather than
+    # `dataset.yaml` refuses the merged output outright -- which is exactly
+    # how SAM3 role preparation broke when it moved onto this dataset.
+    (out_dir / "classes.txt").write_text(
+        "\n".join(resolved_class_names) + "\n", encoding="utf-8"
+    )
     manifest = {
         "type": f"merged_{target_level.label}",
         "target_level": target_level.label,
@@ -1144,6 +1152,7 @@ def prepare_role_dataset(
             out_root,
             sam3_params,
             class_name=class_name,
+            class_names=class_names,
             seed=seed,
             split=split,
             baseline_model_key=comparison_baseline or None,
