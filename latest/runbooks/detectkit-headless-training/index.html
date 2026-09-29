@@ -991,6 +991,15 @@
   
 </li>
         
+          <li class="md-nav__item">
+  <a href="#sam3-exported-checkpoint" class="md-nav__link">
+    <span class="md-ellipsis">
+      SAM3 exported checkpoint
+    </span>
+  </a>
+  
+</li>
+        
       </ul>
     </nav>
   
@@ -1989,6 +1998,15 @@
   
 </li>
         
+          <li class="md-nav__item">
+  <a href="#sam3-exported-checkpoint" class="md-nav__link">
+    <span class="md-ellipsis">
+      SAM3 exported checkpoint
+    </span>
+  </a>
+  
+</li>
+        
       </ul>
     </nav>
   
@@ -2311,6 +2329,39 @@ path, including the ones shared with the YOLO block:</p>
 </table>
 <p>Like YOLO's, SAM3 auto batch is not reproducible across machines. <strong>Set a fixed
 positive <code>sam3.batch</code> for reproducible runs.</strong></p>
+<h3 id="sam3-exported-checkpoint">SAM3 exported checkpoint<a class="headerlink" href="#sam3-exported-checkpoint" title="Permanent link">&para;</a></h3>
+<p><code>sam3.checkpoint_selection</code> decides which epoch becomes the run's
+<code>adapters.pt</code> — the file that is registered and published:</p>
+<table>
+<thead>
+<tr>
+<th>Value</th>
+<th>Exports</th>
+</tr>
+</thead>
+<tbody>
+<tr>
+<td><code>"best_val_loss"</code> (default)</td>
+<td>The epoch with the lowest finite <code>val_loss_mean</code>. Ties go to the earlier epoch. <code>min_delta</code> does not apply.</td>
+</tr>
+<tr>
+<td><code>"last"</code></td>
+<td>The final epoch's weights.</td>
+</tr>
+</tbody>
+</table>
+<p>The epoch it exports can differ from the epoch early stopping calls best:
+early stopping only counts an improvement larger than <code>sam3.min_delta</code>, and
+selection counts any decrease. Only validated epochs are candidates, so with
+<code>HYDRA_SAM3_VAL_EVERY &gt; 1</code> unvalidated epochs are never exported. A dataset
+with no validation split exports the last epoch and records why.</p>
+<p>The choice is recorded in <code>&lt;run_dir&gt;/checkpoint_selection.json</code> (rule,
+<code>selected_epoch</code>, final epoch, every candidate's loss, any fallback reason),
+<code>val_stats.json</code> describes the exported weights, and the published model's
+<code>.sam3_meta.json</code> carries <code>selected_epoch</code>.</p>
+<p>This default was chosen knowingly against a 2026-09-06 held-out study that
+found validation loss anti-correlated with held-out AP. Use <code>"last"</code> to get
+the earlier behaviour.</p>
 <h2 id="validate-and-prepare">Validate and prepare<a class="headerlink" href="#validate-and-prepare" title="Permanent link">&para;</a></h2>
 <p>Validate the configuration and inspect all resolved paths without creating the
 workspace or reading the dataset:</p>
