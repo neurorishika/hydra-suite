@@ -13,8 +13,8 @@ pytest.importorskip("PySide6")
 
 from pathlib import Path  # noqa: E402
 
-from PySide6.QtCore import Qt  # noqa: E402
-from PySide6.QtWidgets import QApplication  # noqa: E402
+from PySide6.QtCore import QPoint, Qt  # noqa: E402
+from PySide6.QtWidgets import QApplication, QListWidgetItem, QScrollArea  # noqa: E402
 
 
 @pytest.fixture(scope="module")
@@ -28,6 +28,37 @@ def test_dataset_panel_has_source_combo(qapp):
 
     panel = DatasetPanel()
     assert hasattr(panel, "source_combo")
+
+
+def test_compact_panel_keeps_image_browser_usable(qapp):
+    from hydra_suite.detectkit.gui.panels.dataset_panel import DatasetPanel
+
+    panel = DatasetPanel()
+    for index in range(41):
+        panel.image_list.addItem(QListWidgetItem(f"frame_{index:03}.jpg"))
+    panel.resize(350, 600)
+    panel.show()
+    qapp.processEvents()
+
+    scroll = panel.findChild(QScrollArea)
+    assert scroll is not None
+    assert panel.image_list.viewport().height() >= 3 * panel.image_list.sizeHintForRow(
+        0
+    )
+    assert panel.image_list.verticalScrollBar().maximum() > 0
+    assert scroll.verticalScrollBar().maximum() > 0
+
+    panel.image_list.setCurrentRow(40)
+    qapp.processEvents()
+    assert panel.image_list.currentItem().text() == "frame_040.jpg"
+    assert panel.image_list.visualItemRect(panel.image_list.currentItem()).intersects(
+        panel.image_list.viewport().rect()
+    )
+    scroll.verticalScrollBar().setValue(scroll.verticalScrollBar().maximum())
+    qapp.processEvents()
+    train_pos = panel.btn_train.mapTo(scroll.viewport(), QPoint(0, 0))
+    assert scroll.viewport().rect().contains(train_pos)
+    panel.close()
 
 
 def test_dataset_panel_has_manage_btn(qapp):

@@ -21,12 +21,14 @@ from PySide6.QtWidgets import (
     QHBoxLayout,
     QInputDialog,
     QLabel,
+    QLayout,
     QListView,
     QListWidget,
     QListWidgetItem,
     QMenu,
     QMessageBox,
     QPushButton,
+    QScrollArea,
     QTreeView,
     QVBoxLayout,
     QWidget,
@@ -94,7 +96,18 @@ class DatasetPanel(QWidget):
         self._main_window = None
         self._project: DetectKitProject | None = None
 
-        layout = QVBoxLayout(self)
+        outer = QVBoxLayout(self)
+        outer.setContentsMargins(0, 0, 0, 0)
+        scroll = QScrollArea()
+        scroll.setWidgetResizable(True)
+        scroll.setHorizontalScrollBarPolicy(Qt.ScrollBarPolicy.ScrollBarAlwaysOff)
+        scroll.setFrameShape(QScrollArea.Shape.NoFrame)
+        outer.addWidget(scroll)
+
+        content = QWidget()
+        scroll.setWidget(content)
+        layout = QVBoxLayout(content)
+        layout.setSizeConstraint(QLayout.SizeConstraint.SetMinimumSize)
         layout.setContentsMargins(12, 12, 12, 12)
         layout.setSpacing(10)
 
@@ -155,6 +168,7 @@ class DatasetPanel(QWidget):
         self.image_list = QListWidget()
         self.image_list.setAlternatingRowColors(True)
         self.image_list.setUniformItemSizes(True)
+        self.image_list.setMinimumHeight(120)
         self.image_list.setSelectionMode(QAbstractItemView.ExtendedSelection)
         self.image_list.setContextMenuPolicy(Qt.CustomContextMenu)
         self.image_list.customContextMenuRequested.connect(
