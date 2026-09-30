@@ -1,10 +1,9 @@
 """A retained-ownership failure must not strand this process's heavy-job leases.
 
-The semantic workers have no interactive "retry cleanup" affordance, so a
-``WorkloadStillOwnedError`` that escapes them leaves the lease flock held on a
-descriptor owned by the GUI process for the rest of its life.  Every later
-protected job then refuses admission with ``ResourceBusyError ... leased by
-PID <self> (live)``.
+The semantic workers retry containment teardown once themselves. If that
+cannot prove quiescence, the GUI must retain the worker and offer another
+cleanup attempt. Dropping the owner would leave the lease flock held by the
+GUI process and block every later protected job.
 """
 
 from __future__ import annotations
@@ -106,3 +105,82 @@ def test_self_owned_lease_error_names_the_current_process(tmp_path):
     message = str(excinfo.value)
     assert f"PID {os.getpid()}" in message
     assert "same application process" in message
+
+
+def test_semantic_gui_keeps_recovery_owner_until_cleanup_is_proven(monkeypatch):
+    from hydra_suite.detectkit.gui.escalation_actions import (
+        retain_semantic_containment_recovery,
+        retry_semantic_containment_cleanup,
+    )
+
+    class FakeProgress:
+        def __init__(self):
+            self.visible = False
+            self.closed = False
+            self.label = ""
+            self.button = ""
+
+        def setLabelText(self, value):
+            self.label = value
+
+        def setCancelButtonText(self, value):
+            self.button = value
+
+        def show(self):
+            self.visible = True
+
+        def close(self):
+            self.closed = True
+            self.visible = False
+
+        def findChild(self, _cls):
+            return None
+
+    class FakeWorker:
+        recovery_cleanup_error = ""
+
+        def __init__(self):
+            self.can_cleanup = False
+
+        def retry_containment_cleanup(self):
+            return self.can_cleanup
+
+    class FakeStatusBar:
+        def showMessage(self, *_args):
+            pass
+
+    class FakeWindow:
+        def __init__(self, worker, progress):
+            self._escalation_worker = worker
+            self._escalation_progress_dialog = progress
+            self._last_escalation_error = "guardian could not prove quiescence"
+            self._last_escalation_result = None
+
+        def statusBar(self):
+            return FakeStatusBar()
+
+    messages = []
+    monkeypatch.setattr(
+        "hydra_suite.detectkit.gui.escalation_actions.QMessageBox.information",
+        lambda *args: messages.append(args[2]),
+    )
+    worker = FakeWorker()
+    progress = FakeProgress()
+    window = FakeWindow(worker, progress)
+
+    retain_semantic_containment_recovery(window, progress)
+    assert progress.visible
+    assert progress.button == "Retry cleanup"
+    assert window._escalation_worker is worker
+
+    assert not retry_semantic_containment_cleanup(window, worker, progress)
+    assert progress.visible
+    assert window._escalation_worker is worker
+
+    worker.can_cleanup = True
+    assert retry_semantic_containment_cleanup(window, worker, progress)
+    assert progress.closed
+    assert window._escalation_worker is None
+    assert window._escalation_progress_dialog is None
+    assert window._last_escalation_error is None
+    assert messages and "run it again" in messages[0].lower()

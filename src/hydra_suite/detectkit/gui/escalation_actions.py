@@ -9,7 +9,64 @@ flow to an already-oversized file.
 from __future__ import annotations
 
 from PySide6.QtCore import Qt
-from PySide6.QtWidgets import QMessageBox, QProgressDialog
+from PySide6.QtWidgets import QMessageBox, QProgressDialog, QPushButton
+
+
+def retain_semantic_containment_recovery(window, progress: QProgressDialog) -> None:
+    """Keep the SAM3 cleanup owner and retry control visible after failure."""
+    progress.setLabelText(
+        "Containment recovery required. Click Retry cleanup to confirm the "
+        "protected SAM3 process tree has stopped."
+    )
+    progress.setCancelButtonText("Retry cleanup")
+    progress.show()
+    window.statusBar().showMessage(
+        "SAM3 containment recovery required; resources remain reserved."
+    )
+
+
+def retry_semantic_containment_cleanup(
+    window, worker, progress: QProgressDialog
+) -> bool:
+    """Release the SAM3 worker only after its sidecar proves quiescence."""
+    progress.setLabelText("Retrying safe SAM3 containment cleanup…")
+    progress.setCancelButtonText("Retrying…")
+    button = progress.findChild(QPushButton)
+    if button is not None:
+        button.setEnabled(False)
+    if not worker.retry_containment_cleanup():
+        progress.setLabelText(
+            "Containment is still unproven. Retry cleanup again before "
+            "starting another SAM3 run."
+        )
+        progress.setCancelButtonText("Retry cleanup")
+        if button is not None:
+            button.setEnabled(True)
+        progress.show()
+        window.statusBar().showMessage(
+            "SAM3 containment recovery is still required; ownership is retained."
+        )
+        return False
+
+    progress.close()
+    if window._escalation_worker is worker:
+        window._escalation_worker = None
+        window._escalation_progress_dialog = None
+    window._last_escalation_error = None
+    window._last_escalation_result = None
+    cleanup_note = (
+        f" Temporary cleanup issue: {worker.recovery_cleanup_error}"
+        if worker.recovery_cleanup_error
+        else ""
+    )
+    QMessageBox.information(
+        window,
+        "SAM3 Containment Recovery Complete",
+        "The protected SAM3 process has stopped and its resources were released. "
+        "This escalation did not complete; run it again." + cleanup_note,
+    )
+    window.statusBar().showMessage("SAM3 containment recovery completed safely.", 5000)
+    return True
 
 
 def on_escalate_geometry(window, preselect: str | None = None) -> None:
@@ -298,10 +355,25 @@ def on_semantic_escalation(window) -> None:
     progress.setMinimumDuration(0)
     progress.setWindowModality(Qt.WindowModal)
     progress.setAttribute(Qt.WA_DeleteOnClose, True)
+    progress.setAutoClose(False)
+    progress.setAutoReset(False)
     progress.setValue(0)
 
     worker = SemanticEscalationWorker(request)
-    progress.canceled.connect(worker.cancel)
+
+    def _request_cancel() -> None:
+        if worker.containment_recovery_required:
+            retry_semantic_containment_cleanup(window, worker, progress)
+            return
+        worker.cancel()
+        progress.setLabelText("Cancelling SAM3 escalation…")
+        progress.setCancelButtonText("Cancelling…")
+        button = progress.findChild(QPushButton)
+        if button is not None:
+            button.setEnabled(False)
+        progress.show()
+
+    progress.canceled.connect(_request_cancel)
     worker.progress.connect(progress.setValue)
     worker.status.connect(progress.setLabelText)
 
@@ -334,6 +406,9 @@ def on_semantic_escalation(window) -> None:
         window._last_escalation_result = result
 
     def _finish() -> None:
+        if worker.containment_recovery_required:
+            retain_semantic_containment_recovery(window, progress)
+            return
         progress.close()
         window._escalation_worker = None
         window._escalation_progress_dialog = None
