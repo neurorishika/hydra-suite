@@ -550,10 +550,10 @@ def test_source_import_remaps_classes_before_registration(qapp, tmp_path, monkey
     source_root = tmp_path / "source"
     (source_root / "images").mkdir(parents=True)
     (source_root / "labels").mkdir()
-    (source_root / "classes.txt").write_text("bee\n", encoding="utf-8")
+    (source_root / "classes.txt").write_text("bee\nant\n", encoding="utf-8")
     (source_root / "images" / "frame.jpg").write_bytes(b"fake")
     (source_root / "labels" / "frame.txt").write_text(
-        "0 0.1 0.2 0.9 0.2 0.9 0.8 0.1 0.8\n", encoding="utf-8"
+        "1 0.1 0.2 0.9 0.2 0.9 0.8 0.1 0.8\n", encoding="utf-8"
     )
     monkeypatch.setattr(
         "hydra_suite.detectkit.gui.dialogs.source_manager.QFileDialog.getExistingDirectory",
