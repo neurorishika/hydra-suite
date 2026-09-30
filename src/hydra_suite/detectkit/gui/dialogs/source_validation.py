@@ -100,6 +100,7 @@ class DetectKitSourceValidationDialog(DetectKitDialog):
         source_root: str | Path,
         inspection: DetectKitSourceInspection,
         parent=None,
+        level_scan: SourceLevelScan | None = None,
     ) -> None:
         super().__init__(
             "Review Source Import",
@@ -163,9 +164,8 @@ class DetectKitSourceValidationDialog(DetectKitDialog):
         )
         form.addRow("Keep at source:", self._linked_action_value)
 
-        scan = resolve_source_level_or_block(
-            root / "labels",
-            _intended_level_for_kind(inspection.source_kind),
+        scan = level_scan or resolve_source_level_or_block(
+            root / "labels", _intended_level_for_kind(inspection.source_kind)
         )
         self._level_scan = scan
         self._level_value = QLabel(scan.resolved_level.label)
@@ -229,10 +229,10 @@ class DetectKitSourceValidationDialog(DetectKitDialog):
                 )
                 if answer != QMessageBox.StandardButton.Yes:
                     return
-                self._level_scan = resolve_source_level_or_block(
-                    Path(self._path_value.text()) / "labels",
-                    GeometryLevel.OBB,
-                    confirm=True,
+                self._level_scan = SourceLevelScan(
+                    resolved_level=GeometryLevel.POLYGON,
+                    is_homogeneous=True,
+                    reason="Quad files confirmed as genuine contours.",
                 )
             else:
                 from PySide6.QtWidgets import QMessageBox
@@ -257,9 +257,13 @@ def confirm_detectkit_source_addition(
     parent,
     source_root: str | Path,
     inspection: DetectKitSourceInspection,
+    *,
+    level_scan: SourceLevelScan | None = None,
 ) -> DetectKitSourceAdditionChoice | None:
     """Show the pre-import review dialog and return the selected add mode."""
-    dialog = DetectKitSourceValidationDialog(source_root, inspection, parent=parent)
+    dialog = DetectKitSourceValidationDialog(
+        source_root, inspection, parent=parent, level_scan=level_scan
+    )
     if dialog.exec() != dialog.DialogCode.Accepted:
         return None
     return dialog.selected_choice()

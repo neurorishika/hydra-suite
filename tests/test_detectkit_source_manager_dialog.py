@@ -5,6 +5,8 @@ from __future__ import annotations
 import os
 import sys
 from pathlib import Path
+from threading import Event
+from time import monotonic
 
 os.environ.setdefault("QT_QPA_PLATFORM", "offscreen")
 
@@ -12,7 +14,9 @@ import pytest
 
 pytest.importorskip("PySide6")
 
-from PySide6.QtWidgets import QApplication, QDialogButtonBox  # noqa: E402
+from PySide6.QtCore import QTimer  # noqa: E402
+from PySide6.QtTest import QTest  # noqa: E402
+from PySide6.QtWidgets import QApplication, QDialogButtonBox, QMessageBox  # noqa: E402
 
 
 @pytest.fixture(scope="module")
@@ -25,6 +29,15 @@ def _make_proj(tmp_path):
     from hydra_suite.detectkit.gui.models import DetectKitProject
 
     return DetectKitProject(project_dir=tmp_path, class_names=["ant"])
+
+
+def _add_source_and_wait(qapp, dlg):
+    dlg._add_source()
+    deadline = monotonic() + 10
+    while dlg._inspection_worker is not None or dlg._import_worker is not None:
+        assert monotonic() < deadline
+        QTest.qWait(10)
+    qapp.processEvents()
 
 
 def test_source_manager_is_base_dialog(qapp, tmp_path):
@@ -111,7 +124,7 @@ def test_source_manager_adds_imported_yolo_detect_source(qapp, tmp_path, monkeyp
 
     proj = _make_proj(tmp_path)
     dlg = SourceManagerDialog(proj)
-    dlg._add_source()
+    _add_source_and_wait(qapp, dlg)
 
     assert len(proj.sources) == 1
     added = proj.sources[0]
@@ -183,7 +196,7 @@ def test_source_manager_add_source_collapses_al_round_to_one_source(
 
     proj = _make_proj(tmp_path)
     dlg = SourceManagerDialog(proj)
-    dlg._add_source()
+    _add_source_and_wait(qapp, dlg)
 
     assert len(proj.sources) == 1
     added = proj.sources[0]
@@ -253,7 +266,7 @@ def test_source_manager_add_source_trusts_manifest_level_for_aabb_round(
 
     proj = _make_proj(tmp_path)
     dlg = SourceManagerDialog(proj)
-    dlg._add_source()
+    _add_source_and_wait(qapp, dlg)
 
     assert len(proj.sources) == 1
     assert proj.sources[0].level == "aabb"
@@ -306,8 +319,10 @@ def test_source_manager_does_not_add_source_when_validation_cancelled(
     from types import SimpleNamespace
 
     monkeypatch.setattr(
-        "hydra_suite.detectkit.gui.dialogs.source_manager.inspect_detectkit_source",
-        lambda *args, **kwargs: SimpleNamespace(dataset_root=source_root),
+        "hydra_suite.detectkit.gui.source_workers.inspect_detectkit_source",
+        lambda *args, **kwargs: SimpleNamespace(
+            dataset_root=source_root, source_kind="detectkit"
+        ),
     )
     monkeypatch.setattr(
         "hydra_suite.detectkit.gui.dialogs.source_manager.confirm_detectkit_source_addition",
@@ -318,13 +333,13 @@ def test_source_manager_does_not_add_source_when_validation_cancelled(
         raise AssertionError("materialize_detectkit_source should not be called")
 
     monkeypatch.setattr(
-        "hydra_suite.detectkit.gui.dialogs.source_manager.materialize_detectkit_source",
+        "hydra_suite.detectkit.gui.source_workers.materialize_detectkit_source",
         _should_not_materialize,
     )
 
     proj = _make_proj(tmp_path)
     dlg = SourceManagerDialog(proj)
-    dlg._add_source()
+    _add_source_and_wait(qapp, dlg)
 
     assert proj.sources == []
     assert dlg._source_list.count() == 0
@@ -363,7 +378,7 @@ def test_source_manager_adds_linked_source_in_place(qapp, tmp_path, monkeypatch)
 
     proj = _make_proj(tmp_path)
     dlg = SourceManagerDialog(proj)
-    dlg._add_source()
+    _add_source_and_wait(qapp, dlg)
 
     assert len(proj.sources) == 1
     added = proj.sources[0]
@@ -371,3 +386,198 @@ def test_source_manager_adds_linked_source_in_place(qapp, tmp_path, monkeypatch)
     assert added.original_path == str(source_root)
     assert added.imported is False
     assert (source_root / "classes.txt").exists()
+
+
+def test_source_import_keeps_event_loop_responsive_and_reports_progress(
+    qapp, tmp_path, monkeypatch
+):
+    from hydra_suite.detectkit.gui.dialogs.source_manager import SourceManagerDialog
+    from hydra_suite.detectkit.gui.dialogs.source_validation import (
+        DetectKitSourceAdditionChoice,
+    )
+    from hydra_suite.detectkit.gui.source_import import materialize_detectkit_source
+
+    source_root = tmp_path / "source"
+    (source_root / "images").mkdir(parents=True)
+    (source_root / "labels").mkdir()
+    (source_root / "classes.txt").write_text("ant\n", encoding="utf-8")
+    for index in range(3):
+        (source_root / "images" / f"frame{index}.jpg").write_bytes(b"fake")
+
+    monkeypatch.setattr(
+        "hydra_suite.detectkit.gui.dialogs.source_manager.QFileDialog.getExistingDirectory",
+        lambda *args, **kwargs: str(source_root),
+    )
+    monkeypatch.setattr(
+        "hydra_suite.detectkit.gui.dialogs.source_manager.confirm_detectkit_source_addition",
+        lambda *args, **kwargs: DetectKitSourceAdditionChoice(mode="portable"),
+    )
+    release = Event()
+
+    def slow_materialize(*args, **kwargs):
+        assert release.wait(5)
+        return materialize_detectkit_source(*args, **kwargs)
+
+    monkeypatch.setattr(
+        "hydra_suite.detectkit.gui.source_workers.materialize_detectkit_source",
+        slow_materialize,
+    )
+    proj = _make_proj(tmp_path)
+    dlg = SourceManagerDialog(proj)
+    values = []
+    dlg._import_progress.valueChanged.connect(values.append)
+    dlg.show()
+    dlg._add_source()
+    deadline = monotonic() + 5
+    while dlg._import_worker is None:
+        assert monotonic() < deadline
+        QTest.qWait(10)
+    assert dlg._import_worker is not None
+    assert not dlg.btn_add.isEnabled()
+    assert dlg._import_progress.isVisible()
+
+    timer_observed_running_worker = []
+
+    def on_timer():
+        timer_observed_running_worker.append(dlg._import_worker.isRunning())
+        release.set()
+
+    QTimer.singleShot(50, on_timer)
+    QTest.qWait(100)
+    assert timer_observed_running_worker == [True]
+    assert dlg._import_worker.wait(5000)
+    qapp.processEvents()
+    assert len(proj.sources) == 1
+    assert any(0 < value < 100 for value in values)
+    assert dlg.btn_add.isEnabled()
+    dlg.close()
+
+
+def test_source_inspection_keeps_event_loop_responsive(qapp, tmp_path, monkeypatch):
+    from hydra_suite.detectkit.gui.dialogs.source_manager import SourceManagerDialog
+    from hydra_suite.detectkit.gui.source_import import inspect_detectkit_source
+
+    source_root = tmp_path / "source"
+    (source_root / "images").mkdir(parents=True)
+    (source_root / "labels").mkdir()
+    (source_root / "classes.txt").write_text("ant\n", encoding="utf-8")
+    (source_root / "images" / "frame.jpg").write_bytes(b"fake")
+    monkeypatch.setattr(
+        "hydra_suite.detectkit.gui.dialogs.source_manager.QFileDialog.getExistingDirectory",
+        lambda *args, **kwargs: str(source_root),
+    )
+    monkeypatch.setattr(
+        "hydra_suite.detectkit.gui.dialogs.source_manager.confirm_detectkit_source_addition",
+        lambda *args, **kwargs: None,
+    )
+    release = Event()
+
+    def slow_inspect(*args, **kwargs):
+        assert release.wait(5)
+        return inspect_detectkit_source(*args, **kwargs)
+
+    monkeypatch.setattr(
+        "hydra_suite.detectkit.gui.source_workers.inspect_detectkit_source",
+        slow_inspect,
+    )
+    dlg = SourceManagerDialog(_make_proj(tmp_path))
+    dlg.show()
+    dlg._add_source()
+    assert dlg._inspection_worker is not None
+    assert dlg._import_progress.maximum() == 0
+    dlg.reject()
+    dlg.close()
+    assert dlg.isVisible()
+    observed_running = []
+
+    def on_timer():
+        observed_running.append(dlg._inspection_worker.isRunning())
+        release.set()
+
+    QTimer.singleShot(50, on_timer)
+    QTest.qWait(100)
+    assert observed_running == [True]
+    deadline = monotonic() + 5
+    while dlg._inspection_worker is not None:
+        assert monotonic() < deadline
+        QTest.qWait(10)
+    assert dlg._import_worker is None
+    assert dlg.btn_add.isEnabled()
+    dlg.close()
+
+
+def test_failed_source_import_restores_controls(qapp, tmp_path, monkeypatch):
+    from hydra_suite.detectkit.gui.dialogs.source_manager import SourceManagerDialog
+    from hydra_suite.detectkit.gui.dialogs.source_validation import (
+        DetectKitSourceAdditionChoice,
+    )
+
+    source_root = tmp_path / "source"
+    (source_root / "images").mkdir(parents=True)
+    (source_root / "labels").mkdir()
+    (source_root / "classes.txt").write_text("ant\n", encoding="utf-8")
+    (source_root / "images" / "frame.jpg").write_bytes(b"fake")
+    monkeypatch.setattr(
+        "hydra_suite.detectkit.gui.dialogs.source_manager.QFileDialog.getExistingDirectory",
+        lambda *args, **kwargs: str(source_root),
+    )
+    monkeypatch.setattr(
+        "hydra_suite.detectkit.gui.dialogs.source_manager.confirm_detectkit_source_addition",
+        lambda *args, **kwargs: DetectKitSourceAdditionChoice(mode="portable"),
+    )
+    monkeypatch.setattr(
+        "hydra_suite.detectkit.gui.source_workers.materialize_detectkit_source",
+        lambda *args, **kwargs: (_ for _ in ()).throw(RuntimeError("disk full")),
+    )
+    warnings = []
+    monkeypatch.setattr(QMessageBox, "warning", lambda *args: warnings.append(args[2]))
+
+    proj = _make_proj(tmp_path)
+    dlg = SourceManagerDialog(proj)
+    _add_source_and_wait(qapp, dlg)
+
+    assert proj.sources == []
+    assert dlg.btn_add.isEnabled()
+    assert warnings == ["disk full"]
+
+
+def test_source_import_remaps_classes_before_registration(qapp, tmp_path, monkeypatch):
+    from hydra_suite.detectkit.gui.dialogs.source_manager import SourceManagerDialog
+    from hydra_suite.detectkit.gui.dialogs.source_validation import (
+        DetectKitSourceAdditionChoice,
+    )
+
+    source_root = tmp_path / "source"
+    (source_root / "images").mkdir(parents=True)
+    (source_root / "labels").mkdir()
+    (source_root / "classes.txt").write_text("bee\n", encoding="utf-8")
+    (source_root / "images" / "frame.jpg").write_bytes(b"fake")
+    (source_root / "labels" / "frame.txt").write_text(
+        "0 0.1 0.2 0.9 0.2 0.9 0.8 0.1 0.8\n", encoding="utf-8"
+    )
+    monkeypatch.setattr(
+        "hydra_suite.detectkit.gui.dialogs.source_manager.QFileDialog.getExistingDirectory",
+        lambda *args, **kwargs: str(source_root),
+    )
+    monkeypatch.setattr(
+        "hydra_suite.detectkit.gui.dialogs.source_manager.confirm_detectkit_source_addition",
+        lambda *args, **kwargs: DetectKitSourceAdditionChoice(mode="portable"),
+    )
+    monkeypatch.setattr(
+        QMessageBox,
+        "question",
+        lambda *args, **kwargs: QMessageBox.StandardButton.Yes,
+    )
+
+    proj = _make_proj(tmp_path)
+    dlg = SourceManagerDialog(proj)
+    _add_source_and_wait(qapp, dlg)
+
+    assert len(proj.sources) == 1
+    dest_root = Path(proj.sources[0].path)
+    assert (dest_root / "classes.txt").read_text(encoding="utf-8") == "ant\n"
+    assert (
+        (dest_root / "labels" / "frame.txt")
+        .read_text(encoding="utf-8")
+        .startswith("0 ")
+    )

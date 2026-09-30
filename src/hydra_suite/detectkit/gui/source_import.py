@@ -9,7 +9,7 @@ import shutil
 from dataclasses import dataclass, replace
 from hashlib import sha1
 from pathlib import Path
-from typing import Any
+from typing import Any, Callable
 
 import numpy as np
 
@@ -430,12 +430,19 @@ def _write_classes_txt(dest_root: Path, class_names: list[str]) -> None:
     _write_text(dest_root / "classes.txt", "\n".join(class_names) + "\n")
 
 
-def _materialize_yolo_source(source_root: Path, dest_root: Path) -> list[str]:
+def _materialize_yolo_source(
+    source_root: Path,
+    dest_root: Path,
+    progress: Callable[[int, int], None] | None = None,
+) -> list[str]:
     inspection = inspect_obb_or_detect_dataset(source_root)
     class_names = resolve_dataset_class_names(source_root, inspection.class_names)
     _write_classes_txt(dest_root, class_names)
 
-    for item in _iter_inspection_items(inspection):
+    total = sum(len(items) for items in inspection.splits.values())
+    if progress is not None:
+        progress(0, total)
+    for index, item in enumerate(_iter_inspection_items(inspection), 1):
         image_path = Path(item.image_path).resolve()
         label_path = Path(item.label_path).resolve()
         relative_path = _relative_target_path(source_root, image_path)
@@ -444,6 +451,8 @@ def _materialize_yolo_source(source_root: Path, dest_root: Path) -> list[str]:
             dest_root / "labels" / relative_path.with_suffix(".txt"),
             _convert_yolo_label_text(label_path),
         )
+        if progress is not None:
+            progress(index, total)
 
     return class_names
 
@@ -635,7 +644,11 @@ def _coco_annotation_to_points(
     return None
 
 
-def _materialize_coco_source(source_root: Path, dest_root: Path) -> list[str]:
+def _materialize_coco_source(
+    source_root: Path,
+    dest_root: Path,
+    progress: Callable[[int, int], None] | None = None,
+) -> list[str]:
     loaded = _load_coco_dataset(source_root)
     if loaded is None:
         raise RuntimeError(f"No COCO annotations found in {source_root}")
@@ -666,10 +679,15 @@ def _materialize_coco_source(source_root: Path, dest_root: Path) -> list[str]:
             continue
         annotations_by_image.setdefault(int(image_id), []).append(annotation)
 
-    for image_entry in payload.get("images", []):
+    images = payload.get("images", [])
+    if progress is not None:
+        progress(0, len(images))
+    for index, image_entry in enumerate(images, 1):
         image_id = image_entry.get("id")
         file_name = image_entry.get("file_name")
         if image_id is None or not file_name:
+            if progress is not None:
+                progress(index, len(images))
             continue
         image_path = _resolve_coco_image_path(source_root, str(file_name))
         width, height = _coerce_coco_image_size(image_entry, image_path)
@@ -694,6 +712,8 @@ def _materialize_coco_source(source_root: Path, dest_root: Path) -> list[str]:
             dest_root / "labels" / relative_path.with_suffix(".txt"),
             "\n".join(lines) + ("\n" if lines else ""),
         )
+        if progress is not None:
+            progress(index, len(images))
 
     return class_names
 
@@ -725,6 +745,7 @@ def remap_materialized_source_classes(
     canonical_path: Path,
     project_classes: list[str],
     remap: dict[int, int],
+    progress: Callable[[int, int], None] | None = None,
 ) -> None:
     """Rewrite *canonical_path*/classes.txt and labels to use project class ids."""
     canonical_root = Path(canonical_path)
@@ -734,7 +755,11 @@ def remap_materialized_source_classes(
     if not labels_dir.is_dir():
         return
 
-    for label_file in labels_dir.rglob("*.txt"):
+    label_files = labels_dir.rglob("*.txt")
+    if progress is not None:
+        label_files = list(label_files)
+        progress(0, len(label_files))
+    for index, label_file in enumerate(label_files, 1):
         new_lines: list[str] = []
         for raw_line in label_file.read_text(encoding="utf-8").splitlines():
             line = raw_line.strip()
@@ -754,6 +779,8 @@ def remap_materialized_source_classes(
             "\n".join(new_lines) + ("\n" if new_lines else ""),
             encoding="utf-8",
         )
+        if progress is not None:
+            progress(index, len(label_files))
 
 
 def _coco_source_level(source_root: Path) -> str:
@@ -791,6 +818,7 @@ def materialize_detectkit_source(
     *,
     import_mode: str = IMPORT_MODE_PORTABLE,
     force_import: bool = False,
+    progress: Callable[[int, int], None] | None = None,
 ) -> MaterializedDetectKitSource:
     """Resolve *source_root* into a DetectKit-ready source for *project_dir*."""
     root = Path(source_root).expanduser().resolve()
@@ -806,9 +834,9 @@ def materialize_detectkit_source(
     if import_mode == IMPORT_MODE_LINKED:
         if inspection.requires_import:
             if inspection.source_kind == "coco":
-                _materialize_coco_source(root, root)
+                _materialize_coco_source(root, root, progress)
             else:
-                _materialize_yolo_source(root, root)
+                _materialize_yolo_source(root, root, progress)
         return MaterializedDetectKitSource(
             source_root=root,
             canonical_path=root,
@@ -827,9 +855,9 @@ def materialize_detectkit_source(
     dest_root.mkdir(parents=True, exist_ok=True)
 
     if inspection.source_kind == "coco":
-        _materialize_coco_source(root, dest_root)
+        _materialize_coco_source(root, dest_root, progress)
     else:
-        _materialize_yolo_source(root, dest_root)
+        _materialize_yolo_source(root, dest_root, progress)
 
     return MaterializedDetectKitSource(
         source_root=root,

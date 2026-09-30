@@ -56,6 +56,24 @@ def test_portable_mode_copies_an_existing_canonical_source(tmp_path: Path):
     assert (materialized.canonical_path / "images" / "frame001.jpg").exists()
 
 
+def test_materialization_reports_completed_images(tmp_path: Path):
+    source_root = tmp_path / "canonical"
+    (source_root / "images").mkdir(parents=True)
+    (source_root / "labels").mkdir()
+    (source_root / "classes.txt").write_text("ant\n", encoding="utf-8")
+    for index in range(3):
+        _write_fake_image(source_root / "images" / f"frame{index}.jpg")
+
+    updates: list[tuple[int, int]] = []
+    materialize_detectkit_source(
+        source_root,
+        tmp_path / "project",
+        progress=lambda done, total: updates.append((done, total)),
+    )
+
+    assert updates == [(0, 3), (1, 3), (2, 3), (3, 3)]
+
+
 def test_linked_mode_remains_linked_when_remapping_forced(tmp_path: Path):
     source_root = tmp_path / "canonical"
     (source_root / "images").mkdir(parents=True)

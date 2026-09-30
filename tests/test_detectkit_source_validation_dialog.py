@@ -95,3 +95,31 @@ def test_detectkit_source_validation_dialog_scrolls_overflow(qapp, tmp_path: Pat
     assert scroll_area is not None
     assert scroll_area.widgetResizable()
     assert scroll_area.verticalScrollBar().maximum() > 0
+
+
+def test_review_uses_background_geometry_scan(qapp, tmp_path: Path, monkeypatch):
+    from hydra_suite.detectkit.gui.dialogs.source_validation import (
+        DetectKitSourceValidationDialog,
+    )
+    from hydra_suite.detectkit.gui.source_import import DetectKitSourceInspection
+    from hydra_suite.training.geometry_levels import GeometryLevel, SourceLevelScan
+
+    inspection = DetectKitSourceInspection(
+        dataset_root=tmp_path,
+        source_kind="detectkit",
+        images_count=1,
+        annotation_count=0,
+        discovered_labels=["ant"],
+        requires_import=False,
+    )
+    monkeypatch.setattr(
+        "hydra_suite.detectkit.gui.dialogs.source_validation.resolve_source_level_or_block",
+        lambda *args, **kwargs: (_ for _ in ()).throw(
+            AssertionError("review must not rescan on the GUI thread")
+        ),
+    )
+
+    dialog = DetectKitSourceValidationDialog(
+        tmp_path, inspection, level_scan=SourceLevelScan(GeometryLevel.OBB, True)
+    )
+    assert dialog._level_value.text() == "obb"
