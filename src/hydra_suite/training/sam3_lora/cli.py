@@ -1922,7 +1922,13 @@ def _densest_first(descriptors: list) -> list:
 def _host_peak_bytes() -> int:
     """Peak RSS of this process, in bytes."""
 
-    import resource
+    try:
+        import resource
+    except ImportError:  # Windows: no getrusage; the peak working set is the analogue
+        import psutil
+
+        info = psutil.Process().memory_info()
+        return int(getattr(info, "peak_wset", info.rss))
 
     usage = resource.getrusage(resource.RUSAGE_SELF).ru_maxrss
     # Linux reports kilobytes; macOS reports bytes. The child always runs on

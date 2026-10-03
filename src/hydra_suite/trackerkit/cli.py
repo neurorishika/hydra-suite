@@ -188,6 +188,10 @@ def _fanout_stop_signals() -> list[int]:
     signals = [signal.SIGINT, signal.SIGTERM]
     if hasattr(signal, "SIGHUP"):
         signals.append(signal.SIGHUP)
+    # Windows: the batch fan-out stops a child with CTRL_BREAK_EVENT (its own
+    # process group), which arrives as SIGBREAK.
+    if hasattr(signal, "SIGBREAK"):
+        signals.append(signal.SIGBREAK)
     return signals
 
 
