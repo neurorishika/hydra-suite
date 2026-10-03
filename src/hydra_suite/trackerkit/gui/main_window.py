@@ -799,6 +799,7 @@ class MainWindow(QMainWindow):
             main_window=self, config=self.config, parent=self
         )
         self.tabs.addTab(self._tracking_panel, "Track Movement")
+        self._update_animals_per_arena_total_label()
 
         # Tab 5: Data (Post-proc)
         from hydra_suite.trackerkit.gui.panels.postprocess_panel import PostProcessPanel
@@ -2346,6 +2347,10 @@ class MainWindow(QMainWindow):
         per_arena = self._setup_panel.spin_max_targets.value()
         self.config.animals_per_arena = int(per_arena)
         n_arenas = n_arenas_from_shapes(self.roi_shapes)
+        if hasattr(self, "_tracking_panel"):
+            self._tracking_panel.lbl_large_group_warning.setVisible(
+                n_arenas * per_arena > 200
+            )
         if n_arenas > 1:
             total = n_arenas * per_arena
             self._setup_panel.lbl_animals_per_arena_total.setText(

@@ -27,6 +27,15 @@ detectkit
 - Side-by-side comparison of completed training runs
 - Integration with TrackerKit's dataset generation exports
 
+### Import sources from another project
+
+In the destination project, open **Manage Sources** and choose **Import Project
+Sources…**. Select the other DetectKit project folder. DetectKit checks every
+source, then copies its images and labels into the destination project. Sources
+already present are skipped. The two projects and their sources must use the
+same class names in the same order; missing datasets or unreviewed labels stop
+the import. Training history, models, and project settings are not copied.
+
 ### Evaluate trained models
 
 Open **Evaluate** from the main toolbar or **Evaluate…** in the Dataset panel.

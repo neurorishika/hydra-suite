@@ -29,7 +29,11 @@ from ..source_import import (
     compute_positional_class_remap,
     resolve_al_round_authoritative_level,
 )
-from ..source_workers import SourceImportWorker, SourceInspectionWorker
+from ..source_workers import (
+    ProjectSourcesImportWorker,
+    SourceImportWorker,
+    SourceInspectionWorker,
+)
 from .source_validation import (
     SOURCE_ADD_MODE_LINKED,
     SOURCE_ADD_MODE_PORTABLE,
@@ -54,6 +58,7 @@ class SourceManagerDialog(DetectKitDialog):
         self._project = project
         self._inspection_worker: SourceInspectionWorker | None = None
         self._import_worker: SourceImportWorker | None = None
+        self._project_import_worker: ProjectSourcesImportWorker | None = None
         self._pending_inspection: tuple[str, set[str]] | None = None
         self._pending_add: tuple[str, object, set[str]] | None = None
         self._build_content()
@@ -78,9 +83,12 @@ class SourceManagerDialog(DetectKitDialog):
         btn_row = QHBoxLayout()
         self.btn_add = QPushButton("Add Source…")
         self.btn_add.clicked.connect(self._add_source)
+        self.btn_add_project = QPushButton("Import Project Sources…")
+        self.btn_add_project.clicked.connect(self._add_project_sources)
         self.btn_remove = QPushButton("Remove Selected")
         self.btn_remove.clicked.connect(self._remove_selected)
         btn_row.addWidget(self.btn_add)
+        btn_row.addWidget(self.btn_add_project)
         btn_row.addWidget(self.btn_remove)
         v.addLayout(btn_row)
 
@@ -107,7 +115,11 @@ class SourceManagerDialog(DetectKitDialog):
             self._source_list.addItem(display)
 
     def _add_source(self) -> None:
-        if self._inspection_worker is not None or self._import_worker is not None:
+        if (
+            self._inspection_worker is not None
+            or self._import_worker is not None
+            or self._project_import_worker is not None
+        ):
             return
         directory = QFileDialog.getExistingDirectory(
             self, "Select Source Directory", ""
@@ -250,6 +262,7 @@ class SourceManagerDialog(DetectKitDialog):
 
     def _set_busy(self, status: str, *, indeterminate: bool = False) -> None:
         self.btn_add.setEnabled(False)
+        self.btn_add_project.setEnabled(False)
         self.btn_remove.setEnabled(False)
         self._buttons.button(QDialogButtonBox.StandardButton.Close).setEnabled(False)
         self._import_status.setText(status)
@@ -260,6 +273,7 @@ class SourceManagerDialog(DetectKitDialog):
 
     def _clear_busy(self) -> None:
         self.btn_add.setEnabled(True)
+        self.btn_add_project.setEnabled(True)
         self.btn_remove.setEnabled(True)
         self._buttons.button(QDialogButtonBox.StandardButton.Close).setEnabled(True)
         self._import_status.hide()
@@ -315,18 +329,80 @@ class SourceManagerDialog(DetectKitDialog):
         )
         self._refresh_list()
 
+    def _add_project_sources(self) -> None:
+        if (
+            self._inspection_worker is not None
+            or self._import_worker is not None
+            or self._project_import_worker is not None
+        ):
+            return
+        directory = QFileDialog.getExistingDirectory(
+            self, "Select DetectKit Project", ""
+        )
+        if not directory:
+            return
+        worker = ProjectSourcesImportWorker(self._project, Path(directory), parent=self)
+        self._project_import_worker = worker
+        self._set_busy("Checking project sources…", indeterminate=True)
+        worker.status.connect(self._import_status.setText)
+        worker.progress.connect(self._import_progress.setValue)
+        worker.finished.connect(self._finish_project_import)
+        worker.start()
+
+    def _finish_project_import(self) -> None:
+        worker = self._project_import_worker
+        self._project_import_worker = None
+        self._clear_busy()
+        if worker is None:
+            return
+        worker.deleteLater()
+        if worker.failure_exception is not None:
+            QMessageBox.warning(
+                self, "Import Project Sources", str(worker.failure_exception)
+            )
+            return
+        for materialized in worker.result:
+            self._project.sources.append(
+                OBBSource(
+                    path=str(materialized.canonical_path),
+                    name=materialized.display_name,
+                    original_path=str(materialized.source_root),
+                    source_kind=materialized.source_kind,
+                    imported=True,
+                    level=materialized.level,
+                )
+            )
+        self._refresh_list()
+        QMessageBox.information(
+            self,
+            "Import Project Sources",
+            f"Imported {len(worker.result)} source(s).",
+        )
+
     def reject(self) -> None:
-        if self._inspection_worker is None and self._import_worker is None:
+        if (
+            self._inspection_worker is None
+            and self._import_worker is None
+            and self._project_import_worker is None
+        ):
             super().reject()
 
     def closeEvent(self, event) -> None:  # noqa: N802
-        if self._inspection_worker is not None or self._import_worker is not None:
+        if (
+            self._inspection_worker is not None
+            or self._import_worker is not None
+            or self._project_import_worker is not None
+        ):
             event.ignore()
         else:
             super().closeEvent(event)
 
     def _remove_selected(self) -> None:
-        if self._inspection_worker is not None or self._import_worker is not None:
+        if (
+            self._inspection_worker is not None
+            or self._import_worker is not None
+            or self._project_import_worker is not None
+        ):
             return
         row = self._source_list.currentRow()
         if row < 0 or row >= len(self._project.sources):

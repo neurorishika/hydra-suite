@@ -89,6 +89,46 @@ def test_source_manager_has_add_remove_buttons(qapp, tmp_path):
     dlg = SourceManagerDialog(_make_proj(tmp_path))
     assert hasattr(dlg, "btn_add")
     assert hasattr(dlg, "btn_remove")
+    assert hasattr(dlg, "btn_add_project")
+
+
+def test_source_manager_imports_all_sources_from_project(qapp, tmp_path, monkeypatch):
+    from hydra_suite.detectkit.gui.dialogs.source_manager import SourceManagerDialog
+    from hydra_suite.detectkit.gui.models import OBBSource
+    from hydra_suite.detectkit.gui.project import create_project, save_project
+
+    monkeypatch.setenv("HYDRA_DATA_DIR", str(tmp_path / "user-data"))
+    origin = create_project(tmp_path / "origin", class_names=["ant"])
+    for index in range(2):
+        root = tmp_path / f"dataset-{index}"
+        (root / "images").mkdir(parents=True)
+        (root / "labels").mkdir()
+        (root / "images" / "frame.jpg").write_bytes(b"image")
+        (root / "labels" / "frame.txt").write_text("0 0.5 0.5 0.4 0.2\n")
+        (root / "classes.txt").write_text("ant\n")
+        origin.sources.append(OBBSource(path=str(root), name=root.name))
+    save_project(origin)
+    destination = create_project(tmp_path / "destination", class_names=["ant"])
+    monkeypatch.setattr(
+        "hydra_suite.detectkit.gui.dialogs.source_manager.QFileDialog.getExistingDirectory",
+        lambda *args, **kwargs: str(origin.project_dir),
+    )
+    monkeypatch.setattr(QMessageBox, "information", lambda *args, **kwargs: None)
+    monkeypatch.setattr(QMessageBox, "warning", lambda *args, **kwargs: None)
+    dialog = SourceManagerDialog(destination)
+    dialog._add_project_sources()
+    deadline = monotonic() + 30
+    while dialog._project_import_worker is not None:
+        assert monotonic() < deadline
+        QTest.qWait(10)
+    qapp.processEvents()
+
+    assert len(destination.sources) == 2
+    assert all(source.imported for source in destination.sources)
+    assert all(
+        Path(source.path, "classes.txt").read_text() == "ant\n"
+        for source in destination.sources
+    )
 
 
 def test_source_manager_adds_imported_yolo_detect_source(qapp, tmp_path, monkeypatch):
