@@ -645,6 +645,48 @@
   
   
     <li class="md-nav__item">
+      <a href="../trackerkit-cli/" class="md-nav__link">
+        
+  
+  <span class="md-ellipsis">
+    TrackerKit Command Line
+  </span>
+  
+
+      </a>
+    </li>
+  
+
+              
+            
+              
+                
+  
+  
+  
+  
+    <li class="md-nav__item">
+      <a href="../trackerkit-jobs/" class="md-nav__link">
+        
+  
+  <span class="md-ellipsis">
+    Portable Tracking Jobs
+  </span>
+  
+
+      </a>
+    </li>
+  
+
+              
+            
+              
+                
+  
+  
+  
+  
+    <li class="md-nav__item">
       <a href="../detection-modes/" class="md-nav__link">
         
   
@@ -1588,6 +1630,27 @@
   
   <span class="md-ellipsis">
     Inference Fast Mode
+  </span>
+  
+
+      </a>
+    </li>
+  
+
+              
+            
+              
+                
+  
+  
+  
+  
+    <li class="md-nav__item">
+      <a href="../../developer-guide/inference-autotuner/" class="md-nav__link">
+        
+  
+  <span class="md-ellipsis">
+    Inference Autotuner
   </span>
   
 
@@ -2626,16 +2689,12 @@ cpu/mps/cuda12; override with <code>make setup-sam3-train
 SAM3_TRAIN_PLATFORM=cuda13</code>, or run <code>tools/setup_sam3_train_env.sh
 [cpu|mps|cuda12|cuda13]</code> directly). It's idempotent — safe to re-run, and
 reuses the env if it already exists.</p>
-<p>The manual recipe it runs (verified on macOS; swap the <code>torch</code>/<code>torchvision</code>
-install line for a CUDA wheel on a GPU box):</p>
-<div class="language-bash highlight"><pre><span></span><code><span id="__span-1-1"><a id="__codelineno-1-1" name="__codelineno-1-1" href="#__codelineno-1-1"></a>conda<span class="w"> </span>create<span class="w"> </span>-n<span class="w"> </span>hydra-sam3<span class="w"> </span><span class="nv">python</span><span class="o">=</span><span class="m">3</span>.12<span class="w"> </span><span class="s1">'numpy&lt;2'</span>
-</span><span id="__span-1-2"><a id="__codelineno-1-2" name="__codelineno-1-2" href="#__codelineno-1-2"></a>conda<span class="w"> </span>run<span class="w"> </span>-n<span class="w"> </span>hydra-sam3<span class="w"> </span>pip<span class="w"> </span>install<span class="w"> </span>torch<span class="w"> </span>torchvision
-</span><span id="__span-1-3"><a id="__codelineno-1-3" name="__codelineno-1-3" href="#__codelineno-1-3"></a>conda<span class="w"> </span>run<span class="w"> </span>-n<span class="w"> </span>hydra-sam3<span class="w"> </span>pip<span class="w"> </span>install<span class="w"> </span><span class="s1">'setuptools&lt;81'</span>
-</span><span id="__span-1-4"><a id="__codelineno-1-4" name="__codelineno-1-4" href="#__codelineno-1-4"></a>conda<span class="w"> </span>run<span class="w"> </span>-n<span class="w"> </span>hydra-sam3<span class="w"> </span>pip<span class="w"> </span>install<span class="w"> </span>einops<span class="w"> </span>torchmetrics<span class="w"> </span><span class="s1">'scipy&lt;1.14'</span><span class="w"> </span>decord<span class="w"> </span>iopath<span class="w"> </span><span class="se">\</span>
-</span><span id="__span-1-5"><a id="__codelineno-1-5" name="__codelineno-1-5" href="#__codelineno-1-5"></a><span class="w">    </span>opencv-python-headless<span class="w"> </span>pillow<span class="w"> </span>platformdirs<span class="w"> </span>pandas<span class="w"> </span>numba<span class="w"> </span>pycocotools<span class="w"> </span>psutil
-</span><span id="__span-1-6"><a id="__codelineno-1-6" name="__codelineno-1-6" href="#__codelineno-1-6"></a>conda<span class="w"> </span>run<span class="w"> </span>-n<span class="w"> </span>hydra-sam3<span class="w"> </span>pip<span class="w"> </span>install<span class="w"> </span>git+https://github.com/facebookresearch/sam3.git
-</span><span id="__span-1-7"><a id="__codelineno-1-7" name="__codelineno-1-7" href="#__codelineno-1-7"></a>conda<span class="w"> </span>run<span class="w"> </span>-n<span class="w"> </span>hydra-sam3<span class="w"> </span>pip<span class="w"> </span>install<span class="w"> </span>--no-deps<span class="w"> </span>-e<span class="w"> </span>/path/to/hydra-suite
-</span></code></pre></div>
+<p><code>tools/setup_sam3_train_env.sh</code> is the authoritative recipe — read it rather
+than the copy that used to live here, which drifted out of sync (it was
+missing the <code>opencv-python-headless&lt;4.12</code> pin, found the hard way while
+provisioning a fresh CUDA box). The pin rationale is documented immediately
+below and in comments in the script itself; if you need to hand-run the
+steps for some reason, copy them from the script, not from this page.</p>
 <h4 id="hugging-face-access-is-required-on-every-training-machine">Hugging Face access is required on every training machine<a class="headerlink" href="#hugging-face-access-is-required-on-every-training-machine" title="Permanent link">&para;</a></h4>
 <p>Building the model calls <code>build_sam3_image_model</code>, which fetches the SAM3
 config from the <strong>gated</strong> <code>facebook/sam3</code> repo on Hugging Face. Having the
@@ -2648,7 +2707,7 @@ this):</p>
    account you will authenticate as.</li>
 <li>Authenticate on that machine:</li>
 </ol>
-<div class="language-bash highlight"><pre><span></span><code><span id="__span-2-1"><a id="__codelineno-2-1" name="__codelineno-2-1" href="#__codelineno-2-1"></a>conda<span class="w"> </span>run<span class="w"> </span>-n<span class="w"> </span>hydra-sam3<span class="w"> </span>hf<span class="w"> </span>auth<span class="w"> </span>login<span class="w">       </span><span class="c1"># or: export HF_TOKEN=hf_...</span>
+<div class="language-bash highlight"><pre><span></span><code><span id="__span-1-1"><a id="__codelineno-1-1" name="__codelineno-1-1" href="#__codelineno-1-1"></a>conda<span class="w"> </span>run<span class="w"> </span>-n<span class="w"> </span>hydra-sam3<span class="w"> </span>hf<span class="w"> </span>auth<span class="w"> </span>login<span class="w">       </span><span class="c1"># or: export HF_TOKEN=hf_...</span>
 </span></code></pre></div>
 <p>Without it, model construction fails with
 <code>huggingface_hub.errors.GatedRepoError: 401</code>. Preflight checks for a
@@ -2716,6 +2775,9 @@ these figures can be re-derived on your hardware rather than trusted.</p>
   <code>pip install scipy</code> (pulled in by <code>torchmetrics</code>) silently drags numpy back
   above the <code>numpy&lt;2</code> pin <code>sam3</code> needs. Pin it explicitly in the same
   <code>pip install</code> as <code>torchmetrics</code> so they resolve together.</li>
+<li><strong><code>opencv-python-headless&lt;4.12</code></strong> — same failure class as scipy above:
+  opencv 4.12+ requires <code>numpy&gt;=2</code>, so an unpinned <code>pip install
+  opencv-python-headless</code> silently breaks the <code>numpy&lt;2</code> pin too.</li>
 <li><strong><code>pandas</code>/<code>numba</code></strong> — training's in-env CLI runs as
   <code>python -m hydra_suite.training.sam3_lora.cli</code>, and importing
   <code>hydra_suite</code> this way eagerly imports <code>hydra_suite.training.service</code>,

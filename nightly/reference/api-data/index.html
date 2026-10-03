@@ -642,6 +642,48 @@
   
   
     <li class="md-nav__item">
+      <a href="../../user-guide/trackerkit-cli/" class="md-nav__link">
+        
+  
+  <span class="md-ellipsis">
+    TrackerKit Command Line
+  </span>
+  
+
+      </a>
+    </li>
+  
+
+              
+            
+              
+                
+  
+  
+  
+  
+    <li class="md-nav__item">
+      <a href="../../user-guide/trackerkit-jobs/" class="md-nav__link">
+        
+  
+  <span class="md-ellipsis">
+    Portable Tracking Jobs
+  </span>
+  
+
+      </a>
+    </li>
+  
+
+              
+            
+              
+                
+  
+  
+  
+  
+    <li class="md-nav__item">
       <a href="../../user-guide/detection-modes/" class="md-nav__link">
         
   
@@ -1300,6 +1342,27 @@
   
   
     <li class="md-nav__item">
+      <a href="../../developer-guide/inference-autotuner/" class="md-nav__link">
+        
+  
+  <span class="md-ellipsis">
+    Inference Autotuner
+  </span>
+  
+
+      </a>
+    </li>
+  
+
+              
+            
+              
+                
+  
+  
+  
+  
+    <li class="md-nav__item">
       <a href="../../developer-guide/confidence-metrics/" class="md-nav__link">
         
   
@@ -1839,6 +1902,15 @@
         
       </ul>
     </nav>
+  
+</li>
+        
+          <li class="md-nav__item">
+  <a href="#hydra_suite.data.csv_writer.build_tracking_csv_header" class="md-nav__link">
+    <span class="md-ellipsis">
+      <code class="doc-symbol doc-symbol-toc doc-symbol-function"></code>&nbsp;build_tracking_csv_header
+    </span>
+  </a>
   
 </li>
         
@@ -2724,6 +2796,15 @@
         
       </ul>
     </nav>
+  
+</li>
+        
+          <li class="md-nav__item">
+  <a href="#hydra_suite.data.csv_writer.build_tracking_csv_header" class="md-nav__link">
+    <span class="md-ellipsis">
+      <code class="doc-symbol doc-symbol-toc doc-symbol-function"></code>&nbsp;build_tracking_csv_header
+    </span>
+  </a>
   
 </li>
         
@@ -3759,6 +3840,30 @@ and all remaining data is flushed.</p>
 
 </div>
 
+
+<div class="doc doc-object doc-function">
+
+
+<h3 id="hydra_suite.data.csv_writer.build_tracking_csv_header" class="doc doc-heading">
+<code class="doc-symbol doc-symbol-heading doc-symbol-function"></code>            <code class="highlight language-python"><span class="n">build_tracking_csv_header</span><span class="p">(</span><span class="n">identity_method</span><span class="o">=</span><span class="s1">'none_disabled'</span><span class="p">,</span> <span class="n">n_arenas</span><span class="o">=</span><span class="mi">1</span><span class="p">)</span></code>
+
+<a href="#hydra_suite.data.csv_writer.build_tracking_csv_header" class="headerlink" title="Permanent link">&para;</a></h3>
+
+
+    <div class="doc doc-contents ">
+
+        <p>Build the raw tracking CSV header. Confidence columns are always emitted.</p>
+<p><code>arena_id</code> is appended ONLY when <code>n_arenas &gt; 1</code> -- an unconditional
+column would change the CSV contract (and column-count) for every existing
+single-arena user, and <code>tools/equivalence/compare.py</code> bails out entirely
+when the column lists differ, which would fail the byte-identity gate on
+schema grounds alone for single-arena runs.</p>
+<p>Shared by both the TrackerKit CLI (<code>trackerkit.headless_tracking</code>) and
+the inference-autotune sidecar child process, so the two never drift.</p>
+
+    </div>
+
+</div>
 
 
 
