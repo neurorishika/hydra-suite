@@ -2,8 +2,9 @@
 
 > This page also documents SAM3 LoRA **finetuning** (below), which produces
 > the checkpoints this page's escalation dialog can select from. Escalation
-> itself needs none of the packages the finetuning section names — only the
-> `sam3` extra.
+> runs on every device and needs none of the finetuning packages. Training
+> is CUDA-only and lives in an optional sidecar env. See
+> [SAM2 and SAM3: install and run](sam-install-and-run.md).
 
 DetectKit's **Escalation** group in the Tools panel offers two distinct
 operations. Both live under `detectkit`, in the same "Escalation" section.
@@ -23,29 +24,26 @@ to find what you don't.
 
 ## Installing SAM3
 
-Semantic escalation is an optional extra. Two steps, because one of SAM3's
-dependencies is not on PyPI:
+Nothing extra to install: `python install.py` installs SAM3 inference on
+every tier (CPU, Apple MPS, CUDA). That includes the `sam` extra and the
+pinned ultralytics CLIP fork, which is git-only and so cannot be a package
+dependency. If either is missing, DetectKit disables the semantic escalation
+button and the tooltip names the missing piece. See
+[SAM2 and SAM3: install and run](sam-install-and-run.md) for the device
+matrix, the `detectkit escalate sam3` command line, and troubleshooting.
 
-```bash
-pip install 'hydra-suite[sam3]'
-pip install git+https://github.com/ultralytics/CLIP.git
-```
+### The model checkpoint (3.45 GB, licence-gated, downloaded once)
 
-The second line installs OpenAI's `clip` package. It cannot be listed as a
-dependency of the `sam3` extra — PyPI rejects direct URL references in
-uploaded package metadata — so it has to be installed by hand. Without it,
-DetectKit disables the semantic escalation button and the tooltip names the
-missing package.
-
-### The model checkpoint (3.45 GB, downloaded once)
-
-The `sam3` checkpoint is about **3.45 GB** and is fetched from the public
-`facebook/sam3` Hugging Face repository the first time you run. DetectKit
-never downloads it behind your back: if it is not already on the machine,
-the escalation dialog shows a warning up front and asks for confirmation
-before the run (or a random-image check, or calibration) starts. The button
-stays enabled in that state — the download offer is inside the dialog, so
-disabling the button would put it out of reach.
+The stock `sam3` checkpoint is about **3.45 GB** and is fetched from the
+**licence-gated** `facebook/sam3` Hugging Face repository the first time you
+run. Before that first run, accept the licence at
+<https://huggingface.co/facebook/sam3> and run `hf auth login` (or set
+`HF_TOKEN`) once on the machine. DetectKit never downloads it behind your
+back: if it is not already on the machine, the escalation dialog shows a
+warning up front and asks for confirmation before the run (or a random-image
+check, or calibration) starts. The button stays enabled in that state,
+because the download offer is inside the dialog and disabling the button
+would put it out of reach.
 
 ## The prompt
 
@@ -280,134 +278,111 @@ when the tab is first shown and whenever you click "Check".
 
 #### Building the `hydra-sam3` env
 
-`make setup-sam3-train` automates the recipe below (auto-detects
-cpu/mps/cuda12; override with `make setup-sam3-train
-SAM3_TRAIN_PLATFORM=cuda13`, or run `tools/setup_sam3_train_env.sh
-[cpu|mps|cuda12|cuda13]` directly). It's idempotent — safe to re-run, and
-reuses the env if it already exists.
+On a CUDA machine:
 
-`tools/setup_sam3_train_env.sh` is the authoritative recipe — read it rather
-than the copy that used to live here, which drifted out of sync (it was
-missing the `opencv-python-headless<4.12` pin, found the hard way while
-provisioning a fresh CUDA box). The pin rationale is documented immediately
-below and in comments in the script itself; if you need to hand-run the
-steps for some reason, copy them from the script, not from this page.
+```bash
+python install.py --with-sam3-train      # or: make setup-sam3-train
+```
+
+This is the only supported recipe. It builds `hydra-sam3` with the matching
+CUDA torch, `sam3` pinned to a tested commit, and the **same hydra-suite
+source** as the main env. It never installs from PyPI. The env is reused if
+it already exists. See
+[SAM2 and SAM3: install and run](sam-install-and-run.md#sam3-training-optional-cuda-only)
+for details and troubleshooting.
 
 #### Hugging Face access is required on every training machine
 
 Building the model calls `build_sam3_image_model`, which fetches the SAM3
 config from the **gated** `facebook/sam3` repo on Hugging Face. Having the
-3.45 GB checkpoint already on disk does **not** remove this requirement --
+3.45 GB checkpoint already on disk does **not** remove this requirement:
 the local file supplies weights, not the architecture config.
 
-So on each machine that will *train* (escalation-only machines need none of
-this):
+Escalation with the **stock** `sam3` checkpoint needs the same licence and
+login to download the weights. Escalation with a published finetuned
+checkpoint needs neither. So on each machine that will train, or download
+the stock weights:
 
 1. Accept the licence at <https://huggingface.co/facebook/sam3> with the
    account you will authenticate as.
 2. Authenticate on that machine:
 
 ```bash
-conda run -n hydra-sam3 hf auth login       # or: export HF_TOKEN=hf_...
+hf auth login       # or: export HF_TOKEN=hf_...
 ```
 
 Without it, model construction fails with
 `huggingface_hub.errors.GatedRepoError: 401`. Preflight checks for a
-credential up front and refuses in milliseconds with this instruction, rather
-than letting the run die minutes later inside the sidecar subprocess -- but
-preflight can only see whether a token EXISTS. If the token's account has not
-accepted the licence, the 401 still arrives at build time.
+credential up front and refuses in milliseconds, rather than letting the run
+die minutes later inside the sidecar subprocess. However, preflight can only
+see whether a token EXISTS. If the token's account has not accepted the
+licence, the 401 still arrives at build time.
 
 #### Hardware requirements
 
-Measured on this pipeline's own configuration (batch 1, rank 16, 1008 px
-tiles, 206 adapters), via `torch.cuda.max_memory_reserved`:
+| Resource | Requirement |
+|---|---|
+| GPU | NVIDIA, compute capability ≥ 8.0 with bf16 |
+| VRAM | **12 GiB** free (the measured bf16 device peak preflight admits against, batch 1, rank 16, 1008 px tiles) |
+| Host RAM | ~16 GB |
+| Free disk | 8 GB (3.45 GB base checkpoint + ~3.2 GB merged artifact) |
 
-| Resource | Minimum | Measured |
-|---|---|---|
-| GPU | CUDA, **12 GiB VRAM**, compute capability >= 8.0 | 7.8 GiB peak, identical on an RTX 6000 Ada and an RTX 4090 |
-| Host RAM | ~16 GB | ~7 GB peak |
-| Free disk | 8 GB | 3.45 GB base checkpoint + ~3.2 GB merged artifact |
+A 24 GB RTX 4090 (capability 8.9) trains this role comfortably. Short probes
+have under-reported the full-run peak, so use the 12 GiB figure rather than
+any shorter measurement. Every run logs its own `vram_peak` on each progress
+line, so you can re-derive the figure on your own hardware.
 
-Compute capability 8.0 is required for bf16 autocast; a 24 GB RTX 4090
-(capability 8.9) trains this role comfortably. `batch > 1` has never been
-measured, and preflight's per-extra-batch allowance is deliberately
-conservative -- raising the batch size may be refused on a card that handles
-batch 1 easily. Every run logs its own `vram_peak` on each progress line, so
-these figures can be re-derived on your hardware rather than trusted.
+#### Why the sidecar pins what it pins
 
-Four of these pins are not obvious, and were found the hard way:
+The pins live in `install.py` (`sam3_train_steps`). Several are not obvious,
+and each was found the hard way:
 
-- **`--no-deps` on the editable install** — `pyproject.toml`'s core
-  dependency is an unpinned `numpy>=1.24`, which pip resolves to the latest
-  numpy 2.x. Installing `hydra-suite` without `--no-deps` silently upgrades
-  the env's numpy past 2, breaking `sam3`'s `numpy<2` pin that this whole
-  sidecar env exists to satisfy. Every runtime dependency the training CLI
-  actually imports (torch, sam3, pandas, numba, opencv, ...) is already
-  installed explicitly by the steps above, so `--no-deps` costs nothing.
-- **`setuptools<81`** — setuptools 81 removed `pkg_resources`, which
-  `sam3/model_builder.py:8` imports at module scope. Without this pin,
-  `import sam3` fails immediately with `ModuleNotFoundError:
-  No module named 'pkg_resources'`, regardless of what else is installed.
-- **`einops`** — imported by `sam3/sam/rope.py` at module scope but absent
-  from sam3's declared dependencies, so a bare `pip install sam3` leaves it
-  missing until the first LoRA-adapted forward pass fails.
-- **`pycocotools`** and **`psutil`** — imported by
-  `sam3/train/data/coco_json_loaders.py` and
-  `sam3/model/sam3_video_predictor.py` respectively, both at module scope
-  (reached via `sam3/model_builder.py`) and both absent from sam3's declared
-  dependencies. Without either, `import sam3` fails.
-- **`scipy<1.14`** — scipy 1.14+ requires `numpy>=2.0`, so a bare
-  `pip install scipy` (pulled in by `torchmetrics`) silently drags numpy back
-  above the `numpy<2` pin `sam3` needs. Pin it explicitly in the same
-  `pip install` as `torchmetrics` so they resolve together.
-- **`opencv-python-headless<4.12`** — same failure class as scipy above:
-  opencv 4.12+ requires `numpy>=2`, so an unpinned `pip install
-  opencv-python-headless` silently breaks the `numpy<2` pin too.
-- **`pandas`/`numba`** — training's in-env CLI runs as
+- **`--no-deps` on the hydra-suite install.** `pyproject.toml`'s core
+  dependency is `numpy>=1.24`, which pip would resolve to numpy 2.x and so
+  break `sam3`'s `numpy<2` pin. Every runtime dependency the training CLI
+  imports is installed explicitly, so `--no-deps` costs nothing.
+- **`setuptools<81`.** setuptools 81 removed `pkg_resources`, which
+  `sam3/model_builder.py` imports at module scope.
+- **`einops`, `pycocotools`, `psutil`.** `sam3` imports these at module
+  scope but does not declare them.
+- **`scipy<1.14` and `opencv-python-headless<4.12`.** Newer releases
+  require `numpy>=2`. They are installed in the same resolver call as
+  `numpy<2` so nothing drags numpy 2 back in.
+- **`pandas`/`numba`.** The in-env CLI runs as
   `python -m hydra_suite.training.sam3_lora.cli`, and importing
-  `hydra_suite` this way eagerly imports `hydra_suite.training.service`,
-  which pulls in numba, pandas, and cv2 even though the CLI itself needs
-  none of them for the training loop. The sidecar env just needs to
-  actually have them installed.
+  `hydra_suite` that way pulls them in.
 
-If you run any of the `conda run` commands above by hand (rather than
-through the DetectKit GUI, which sets this itself), also set
-**`KMP_DUPLICATE_LIB_OK=TRUE`** in the shell first — without it, a bare
-`import torch` aborts with `OMP Error #15` (double-linked libomp), which
-looks like a torch install problem but isn't one.
+If you run `conda run -n hydra-sam3 ...` commands by hand (the GUI sets this
+for you), set **`KMP_DUPLICATE_LIB_OK=TRUE`** first. Without it, a bare
+`import torch` aborts with `OMP Error #15` (double-linked libomp).
 
-### Platform: a runtime probe, not a hardcoded gate
+### Platform: CUDA only
 
-Training is gated on whether the `hydra-sam3` env can actually import
-`sam3` — checked live by the probe above, never hardcoded to a platform.
+SAM3 training requires an **NVIDIA GPU with compute capability ≥ 8.0 and
+bf16**. This is a hard gate, not a best-effort probe:
 
-- **CUDA works today.** A `hydra-sam3`-style env on a CUDA box (e.g. an
-  RTX 6000 Ada, 48 GB) imports `sam3` cleanly and trains end to end.
-- **macOS (MPS) is currently blocked, but by packaging, not memory.**
-  `sam3/__init__.py` reaches `import triton` at module scope, via the
-  video-tracker import path (`model_builder.py` →
-  `sam1_task_predictor.py` → `sam3_tracker_base.py` →
-  `sam3_tracker_utils.py` → `edt.py`). `triton` ships no macOS wheel, so
-  `import sam3` fails on any Mac today, even though the kernel it guards
-  belongs to SAM3's video tracker and the image-training path never calls
-  it. This is **not** a memory problem — Apple unified memory (up to
-  512 GB, 128 GB on a typical workstation) comfortably exceeds the ~29 GB
-  the training spike measured at peak. If that `triton` import becomes
-  optional upstream, MPS training works with no change to anything in
-  DetectKit; the probe would simply start reporting the env usable.
+- `python install.py --with-sam3-train` refuses to build the sidecar on a
+  non-CUDA host.
+- On a machine without CUDA, the SAM3 training tab says that training needs
+  an NVIDIA GPU and that SAM3 *inference* and SAM2 escalation still work.
+- Preflight refuses a run with no CUDA device, a GPU below compute
+  capability 8.0, or any precision other than bf16. There is no fp32 fallback.
 
-Preflight also checks free VRAM before touching a weight and refuses the
-run below **32 GB free**, with a further warning below 40 GB -- but only
-when the check can see a GPU at all. Preflight runs in the **launching**
-process (the GUI's conda env, e.g. `hydra-mps`/`hydra-cuda`), not in the
-`hydra-sam3` sidecar where training actually executes; on a Mac launcher
-there is no CUDA device to query, so this check silently reports "no CUDA
-device" and does not apply. The sidecar child does not re-check VRAM either.
-Where it does apply (a CUDA launcher, e.g. mehek), that floor sits above the
-~29 GB the training spike actually measured at batch size 1: the margin
-exists so the same GPU load that OOMs a real run also fails preflight, in
-milliseconds, rather than after an hour of compute time.
+**macOS (MPS)** has a second blocker as well. `sam3/__init__.py` reaches
+`import triton` at module scope through the video-tracker import path
+(`model_builder.py` → `sam1_task_predictor.py` → `sam3_tracker_base.py` →
+`sam3_tracker_utils.py` → `edt.py`), and `triton` ships no macOS wheel. So
+`import sam3` fails on a Mac today. This is a packaging problem, not a memory
+problem. Even if that import became optional upstream, MPS training would
+still need the CUDA/bf16 gates above lifted and the path verified. It would
+not "just work".
+
+**VRAM admission.** Preflight admits a run against the measured bf16 device
+peak, 12 GiB at batch 1, before any weight is loaded. The check runs in the
+launching process and **again inside the sidecar**: the launcher re-observes
+the selected GPU while it holds the GPU lease, and the training child repeats
+the CUDA/bf16/compute-capability gate before importing `sam3`. A busy GPU
+therefore fails in seconds, not after an hour of compute.
 
 ### The label-quality acknowledgement
 
@@ -449,15 +424,20 @@ roughly 0.624 (finetuned). That is a small-sample result on a single
 dataset, not a general performance claim; treat it as evidence the
 approach works at all, not as a number to expect on your own data.
 
-### Checkpoint selection is always "last", never "best"
+### Checkpoint selection
 
-On that same spike, validation loss was **anti-correlated** with held-out
-AP: the fold with the worst validation loss had the best held-out AP75.
-Training therefore always keeps the **last** epoch's checkpoint. It still
-computes and reports validation-loss statistics during the run, because
-they are informative to watch, but nothing in the pipeline uses them to
-pick which weights to keep. Do not "fix" this by wiring in best-checkpoint
-selection later without re-running the measurement that ruled it out.
+Which epoch's weights become the run's adapter is a per-run setting,
+`checkpoint_selection`. The default, `best_val_loss`, keeps the epoch with the
+lowest validation loss (ties go to the earlier epoch). `last` keeps the final
+epoch. The choice is recorded in the run's `checkpoint_selection.json`.
+
+This default was a deliberate user decision (2026-09-15), made knowing the
+earlier spike evidence pointed the other way. On that spike, validation loss
+was **anti-correlated** with held-out AP: the fold with the worst validation
+loss had the best held-out AP75. That spike's validation split later turned
+out to be byte-identical to its training split, so the comparison is not
+usable evidence either way. See the module docstring of
+`hydra_suite.training.sam3_lora.cli` for the full history.
 
 ### Publishing
 

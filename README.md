@@ -35,51 +35,41 @@ The codebase shares one runtime model across apps, with support for CPU, Apple S
 
 ## Quick Install
 
-### pip (CPU)
+One command on Linux, macOS and Windows. It detects CPU, Apple Silicon (MPS)
+or NVIDIA CUDA, and picks CUDA 12 or 13 from your driver:
 
 ```bash
-pip install hydra-suite
+git clone https://github.com/neurorishika/hydra-suite.git
+cd hydra-suite
+python install.py            # Windows: py -3 install.py
 ```
 
-### pip (GPU)
+The installer builds a conda env (or a venv if conda is not available),
+installs the matching PyTorch build plus everything declared in
+`pyproject.toml` at tested versions, adds SAM2/SAM3 inference, builds the
+Kronauer lab AprilTag fork, and finishes by running `hydra doctor` to verify
+the install.
 
 ```bash
-# Apple Silicon / MPS
-pip install torch torchvision
-pip install "hydra-suite[mps]"
-
-# NVIDIA CUDA
-pip install torch torchvision --index-url https://download.pytorch.org/whl/cu128
-pip install "hydra-suite[cuda]"
+python install.py --dry-run           # show the plan, change nothing
+python install.py --cuda 12           # override driver-based CUDA detection
+python install.py --with-sleap        # + SLEAP pose sidecar env
+python install.py --with-sam3-train   # + SAM3 LoRA training sidecar (CUDA only)
+python install.py --dev --docs        # + dev and docs tools
+hydra doctor                          # re-verify any time
 ```
 
-### Developer Install
+The `make` targets wrap the same installer
+(`make setup-cuda && conda activate hydra-cuda && make install-cuda`, and
+likewise `setup-mps`/`install-mps` and `setup`/`install`).
 
-```bash
-# CPU
-make setup
-conda activate hydra
-make install
+> HYDRA Suite is **not** published on PyPI, so `pip install hydra-suite` does
+> not work. To install without cloning, download `install.py` and run
+> `python install.py --source git+https://github.com/neurorishika/hydra-suite@main`.
 
-# Apple Silicon
-make setup-mps
-conda activate hydra-mps
-make install-mps
+Platform matrix, Windows prerequisites, updating, and troubleshooting:
 
-# NVIDIA CUDA
-make setup-cuda
-conda activate hydra-cuda
-make install-cuda CUDA_MAJOR=13
-```
-
-The `make install*` targets also build and install the pinned Kronauer lab
-AprilTag fork (`Social-Evolution-and-Behavior/apriltag` at
-`c43a9b6e6b7dcfe0e7647a78eff6655a1d743c2c`) so AprilTag workflows use the lab
-wrapper instead of the stock `apriltag` module.
-
-The full installation matrix, platform notes, and troubleshooting live in the docs site:
-
-- Getting Started: <https://neurorishika.github.io/hydra-suite/getting-started/installation/>
+- Installation: <https://neurorishika.github.io/hydra-suite/getting-started/installation/>
 - Environments and Makefile: <https://neurorishika.github.io/hydra-suite/getting-started/environments/>
 
 ## Launch

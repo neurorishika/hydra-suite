@@ -56,3 +56,22 @@ overwrite an image recreated at the same path or labels edited after they were
 cleared; resolve that conflict manually and try again. Nested images are shown
 by their paths relative to the source's `images/` directory, with the absolute
 path available in the row tooltip.
+
+## SAM2 and SAM3 escalation
+
+The **Escalation** group in the Tools panel upgrades and extends labels with
+Segment Anything models. Both run on every device (CUDA, Apple MPS, CPU) and
+are installed by default:
+
+- **Escalate to segment (SAM2)** turns existing box labels into polygon masks.
+- **Semantic escalation (SAM3)** finds every instance of a text prompt (e.g.
+  `ant`), including animals missing from your labels.
+
+Results are staged for frame-by-frame review; nothing changes until you
+accept. Both are also available headless as `detectkit escalate sam2` /
+`detectkit escalate sam3`. Stock SAM3 weights are licence-gated and need a
+one-time Hugging Face login, and SAM3 *training* is an optional CUDA-only
+add-on. See [SAM2 and SAM3: install and run](sam-install-and-run.md) for
+devices, weights, the CLI and training setup, and
+[Semantic Escalation (SAM3)](detectkit-semantic-escalation.md) for the SAM3
+workflow.

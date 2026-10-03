@@ -29,7 +29,10 @@
 
 ## Runtime
 
-- `hydra_suite.runtime.compute_runtime`
+- `hydra_suite.runtime.resolver` — runtime tier + platform + stage → `ResolvedBackend`
+- `hydra_suite.runtime.onnx_providers` — ONNX Runtime execution providers for a `ResolvedBackend`
+- `hydra_suite.runtime.doctor` — `hydra doctor` install verification
+- `hydra_suite.runtime.cuda_checks` — CUDA/ONNX Runtime/TensorRT/CuPy self-checks used by the doctor
 
 ## TrackerKit GUI
 

@@ -53,6 +53,13 @@ fixes and may be made in the primary checkout when explicitly requested.
 
 ## Environments and verification
 
+- Install or rebuild environments with `python install.py` (the one
+  cross-platform installer; `make setup*`/`install*` wrap it) and verify with
+  `hydra doctor`. CUDA 12 vs 13 is detected from the NVIDIA driver
+  (`--cuda 12|13` overrides). `pyproject.toml` is the only place Python
+  dependencies are declared; tested pins live in `constraints/` (regenerate
+  with `tools/lock_constraints.py`, then run
+  `tools/equivalence/env_swap_gate.sh`). hydra-suite is not published on PyPI.
 - Use the `hydra-mps` conda environment for local tests and equivalence checks
   on this Apple Silicon machine. Environment names are `hydra`, `hydra-mps`,
   and `hydra-cuda`.
