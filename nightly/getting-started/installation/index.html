@@ -603,6 +603,15 @@
   
 </li>
         
+          <li class="md-nav__item">
+  <a href="#verification-status-2026-10-03" class="md-nav__link">
+    <span class="md-ellipsis">
+      Verification status (2026-10-03)
+    </span>
+  </a>
+  
+</li>
+        
       </ul>
     </nav>
   
@@ -2316,6 +2325,15 @@
   
 </li>
         
+          <li class="md-nav__item">
+  <a href="#verification-status-2026-10-03" class="md-nav__link">
+    <span class="md-ellipsis">
+      Verification status (2026-10-03)
+    </span>
+  </a>
+  
+</li>
+        
       </ul>
     </nav>
   
@@ -2859,6 +2877,91 @@ non-zero only when a check <strong>fails</strong>.</p>
 </span><span id="__span-12-7"><a id="__codelineno-12-7" name="__codelineno-12-7" href="#__codelineno-12-7"></a>refinekit<span class="w">          </span><span class="c1"># RefineKit proofreading</span>
 </span></code></pre></div>
 <hr />
+<div class="admonition note">
+<p class="admonition-title">Linux needs glibc 2.34 or newer</p>
+<p>The tested pins include PySide6 6.11, whose Linux wheels are
+<code>manylinux_2_34</code> (RHEL/Rocky 9, Ubuntu 22.04 and newer). Older
+distributions (RHEL 8, Ubuntu 20.04) have no compatible wheel.</p>
+</div>
+<h3 id="verification-status-2026-10-03">Verification status (2026-10-03)<a class="headerlink" href="#verification-status-2026-10-03" title="Permanent link">&para;</a></h3>
+<p>What has actually been run, not just documented. "CI" is the
+<code>Install smoke</code> workflow (<code>install.py --target current --cuda none</code>, then
+<code>hydra doctor</code> and a test subset) on every push.</p>
+<table>
+<thead>
+<tr>
+<th>Install path</th>
+<th>Linux CPU</th>
+<th>macOS (Apple Silicon)</th>
+<th>Windows CPU</th>
+<th>Linux CUDA 12</th>
+<th>Linux CUDA 13</th>
+<th>Windows CUDA</th>
+</tr>
+</thead>
+<tbody>
+<tr>
+<td><code>python install.py</code> (pip, current env)</td>
+<td>CI, py3.11–3.13</td>
+<td>CI, py3.11–3.13 (mps packages)</td>
+<td>CI, py3.11–3.13</td>
+<td>—</td>
+<td>—</td>
+<td>not yet verified (no box)</td>
+</tr>
+<tr>
+<td><code>python install.py</code> (conda env)</td>
+<td>—</td>
+<td>fresh env, doctor all OK (MPS)</td>
+<td>—</td>
+<td>fresh env on diptera (driver 570, auto-detected cu128), doctor 0 failures</td>
+<td>fresh env on mehek (driver 595, auto-detected cu130), doctor all OK</td>
+<td>not yet verified</td>
+</tr>
+<tr>
+<td><code>make setup</code> + <code>make install</code></td>
+<td>CI (conda + make)</td>
+<td>CI (conda + make)</td>
+<td>n/a (use <code>install.py</code>)</td>
+<td>—</td>
+<td>—</td>
+<td>n/a</td>
+</tr>
+<tr>
+<td>SAM2 escalation (real frames)</td>
+<td>—</td>
+<td>MPS + CPU</td>
+<td>—</td>
+<td>—</td>
+<td>CUDA</td>
+<td>—</td>
+</tr>
+<tr>
+<td>SAM3 escalation (real frames)</td>
+<td>—</td>
+<td>MPS + CPU</td>
+<td>—</td>
+<td>—</td>
+<td>CUDA</td>
+<td>—</td>
+</tr>
+<tr>
+<td>SAM3 training sidecar + 1-epoch run</td>
+<td>n/a</td>
+<td>n/a (refused by design)</td>
+<td>n/a</td>
+<td>—</td>
+<td><code>--with-sam3-train</code>, trained + exported</td>
+<td>not yet verified</td>
+</tr>
+</tbody>
+</table>
+<p>Tracking output: an environment built by <code>install.py</code> with the tested pins
+produces the same trajectories as the previous conda envs — byte-identical on
+CUDA (mehek, <code>fly_obb</code> + <code>worm_bgsub</code>) and identical positions/headings/IDs on
+MPS, where only float32 rounding in <code>PositionUncertainty</code> and
+<code>AssignmentConfidence</code> differs (pip scipy links Apple Accelerate, conda scipy
+OpenBLAS; relative difference ≤ 5e-6).</p>
 <h2 id="updating-and-recreating">Updating and recreating<a class="headerlink" href="#updating-and-recreating" title="Permanent link">&para;</a></h2>
 <div class="language-bash highlight"><pre><span></span><code><span id="__span-13-1"><a id="__codelineno-13-1" name="__codelineno-13-1" href="#__codelineno-13-1"></a>git<span class="w"> </span>pull
 </span><span id="__span-13-2"><a id="__codelineno-13-2" name="__codelineno-13-2" href="#__codelineno-13-2"></a>python<span class="w"> </span>install.py<span class="w"> </span>--update<span class="w">       </span><span class="c1"># upgrade packages in the existing env</span>
