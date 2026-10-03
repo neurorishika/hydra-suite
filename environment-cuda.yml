@@ -1,73 +1,19 @@
+# Conda supplies ONLY what pip cannot: the interpreter, the ffmpeg binary and
+# the toolchain for the AprilTag C-extension build. Every Python package is
+# declared in pyproject.toml and installed by install.py.
+#
+# Preferred:   python install.py            (creates this env for you)
+# Manual:      mamba env create -f environment-cuda.yml && conda activate hydra-cuda && make install...
+#
+# Keep in sync with CONDA_PACKAGES in install.py (tests/test_installer.py).
 name: hydra-cuda
 channels:
 - conda-forge
-- nvidia
-- defaults
 dependencies:
-  # Core Python
 - python=3.13
-
-  # Scientific computing stack
-- numpy
-- scipy
-- pandas
-- jupyter
-- ipykernel
-- ipywidgets
-- einops
-- umap-learn
-- scikit-learn
-- pyyaml
-- ruptures
-
-  # Visualization
-- matplotlib
-- seaborn
-- bokeh
-
-  # Computer vision
-- opencv
-- scikit-image
-- pillow
-
- # Hyperparameter optimization
-- optuna
-- optunahub
-- cmaes
-
-  # Efficiency - CPU and GPU
-- numba
-
-  # ONNX Runtime GPU compatibility on CUDA 13 systems
-  # ORT GPU wheels currently require CUDA 12 user-space libs at runtime
-  # (e.g., libcublasLt.so.12, libcudart.so.12, libcufft.so.11, libcudnn.so.9).
-  # These can coexist with system-level CUDA 13 and driver installs.
-- cuda-version=12.*
-- cuda-cudart=12.*
-- cuda-nvrtc=12.*
-- libcublas=12.*
-- libcurand=10.*
-- libcufft=11.*
-- libcudnn=9.*
-
-  # Efficiency - CPU and GPU
-- numba
-
-  # GUI framework (Qt6 - modern, better HiDPI support)
-- pyside6>=6.6
-- qt6-main
-- pyqtwebengine
-
-  # Development tools
 - pip
-- setuptools
-- wheel
+- ffmpeg
+- git
 - cmake
-
-  # Dev tools are managed separately; after activating this env run:
-  #   make install-dev
-  # Install GPU-accelerated packages via pip
-  # Step 1: mamba/conda installs core packages + uv
-  # Step 2: uv installs GPU packages from requirements-cuda12/13.txt (much faster)
-- pip:
-  - uv    # Fast package installer for step 2
+- c-compiler
+- cxx-compiler

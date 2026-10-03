@@ -1,58 +1,19 @@
+# Conda supplies ONLY what pip cannot: the interpreter, the ffmpeg binary and
+# the toolchain for the AprilTag C-extension build. Every Python package is
+# declared in pyproject.toml and installed by install.py.
+#
+# Preferred:   python install.py            (creates this env for you)
+# Manual:      mamba env create -f environment-mps.yml && conda activate hydra-mps && make install...
+#
+# Keep in sync with CONDA_PACKAGES in install.py (tests/test_installer.py).
 name: hydra-mps
 channels:
 - conda-forge
-- defaults
 dependencies:
-  # Core Python
 - python=3.13
-
-  # Scientific computing stack
-- numpy
-- scipy
-- pandas
-- jupyter
-- ipykernel
-- ipywidgets
-- einops
-- umap-learn
-- scikit-learn
-- pyyaml
-- ruptures
-
-  # Visualization
-- matplotlib
-- seaborn
-- bokeh
-
-  # Computer vision
-- opencv
-- scikit-image
-- pillow
-
- # Hyperparameter optimization
-- optuna
-- optunahub
-- cmaes
-
-
-  # Efficiency - CPU acceleration (Metal Performance Shaders via PyTorch)
-- numba
-
-  # GUI framework (Qt6 - excellent Apple Silicon support)
-- pyside6>=6.6
-- qt6-main
-- pyqtwebengine
-
-  # Development tools
 - pip
-- setuptools
-- wheel
+- ffmpeg
+- git
 - cmake
-
-  # Dev tools are managed separately; after activating this env run:
-  #   make install-dev
-  # Install Apple Silicon optimized packages via pip
-  # Step 1: mamba/conda installs core packages + uv
-  # Step 2: uv installs MPS-optimized packages from requirements-mps.txt
-- pip:
-  - uv    # Fast package installer for step 2
+- c-compiler
+- cxx-compiler

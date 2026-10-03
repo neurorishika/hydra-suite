@@ -1,29 +1,24 @@
-#!/usr/bin/env python3
-"""Verify CUDA runtime libraries and accelerated runtime packages in CUDA envs."""
+"""CUDA-tier self-checks used by ``hydra doctor``.
+
+Each ``_verify_*`` prints a human-readable result and returns 0 (ok) or 1
+(failure). ``hydra_suite.runtime.doctor`` wraps them into structured checks.
+No conda assumptions: the CUDA user-space libraries come from the ``nvidia-*``
+pip wheels, on Linux and Windows alike.
+"""
 
 from __future__ import annotations
 
-import glob
 import importlib.metadata as importlib_metadata
-import os
 import sys
-
-
-def _prepend_cuda_library_dirs(prefix: str) -> None:
-    search_dirs = [
-        os.path.join(prefix, "targets", "x86_64-linux", "lib"),
-        os.path.join(prefix, "lib"),
-    ]
-    existing = os.environ.get("LD_LIBRARY_PATH", "")
-    merged = [directory for directory in search_dirs if os.path.isdir(directory)]
-    if existing:
-        merged.append(existing)
-    os.environ["LD_LIBRARY_PATH"] = ":".join(merged)
 
 
 def _verify_onnxruntime_import() -> int:
     try:
         import onnxruntime as ort
+
+        from hydra_suite.runtime.onnx_providers import preload_ort_cuda_libraries
+
+        preload_ort_cuda_libraries()
     except Exception as exc:
         print(
             f"ERROR: Failed to import onnxruntime after install: {exc}",
@@ -150,9 +145,7 @@ def _verify_nvidia_wheel_families() -> int:
         file=sys.stderr,
     )
     print(
-        "  pip list | awk '/^nvidia-/{print $1}' | xargs -r pip uninstall -y\n"
-        '  rm -rf "$CONDA_PREFIX"/lib/python*/site-packages/nvidia\n'
-        "  make install-cuda CUDA_MAJOR=<12|13>",
+        "  python install.py --recreate   (or --cuda 12|13 to override detection)",
         file=sys.stderr,
     )
     return 1
@@ -213,7 +206,7 @@ def _verify_torch_cuda() -> int:
         if driver_max is not None and driver_max != (0, 0):
             print(
                 f"The installed driver supports CUDA up to {driver_max[0]}.{driver_max[1]}. "
-                f"Reinstall with `make install-cuda CUDA_MAJOR={driver_max[0]}`.",
+                f"Reinstall with `python install.py --recreate --cuda {driver_max[0]}`.",
                 file=sys.stderr,
             )
         else:
@@ -312,8 +305,8 @@ def _verify_tensorrt_import() -> int:
             file=sys.stderr,
         )
         print(
-            "Uninstall all TensorRT wheels, then rerun `make install-cuda CUDA_MAJOR=<12|13>` \
-to reinstall a single matching family.",
+            "Re-run `python install.py` (it removes every TensorRT family but the "
+            "one matching the resolved CUDA major).",
             file=sys.stderr,
         )
         return 1
@@ -361,74 +354,21 @@ or stale TensorRT packages are still present in the environment.",
     return 0
 
 
+CHECKS = (
+    ("cuda wheel families", "_verify_nvidia_wheel_families"),
+    ("torch cuda", "_verify_torch_cuda"),
+    ("onnxruntime cuda", "_verify_onnxruntime_import"),
+    ("tensorrt", "_verify_tensorrt_import"),
+    ("cupy", "_verify_cupy"),
+)
+
+
 def main() -> int:
-    prefix = os.environ.get("CONDA_PREFIX")
-    if not prefix:
-        print("ERROR: CONDA_PREFIX is not set.", file=sys.stderr)
-        return 1
-
-    _prepend_cuda_library_dirs(prefix)
-
-    search_dirs = [
-        os.path.join(prefix, "lib"),
-        os.path.join(prefix, "targets", "x86_64-linux", "lib"),
-    ]
-    required_libs = [
-        "libcublasLt.so.12",
-        "libcudart.so.12",
-        "libcurand.so.10",
-        "libcufft.so.11",
-        "libcudnn.so.9",
-    ]
-
-    missing = []
-    for lib_name in required_libs:
-        found = False
-        for directory in search_dirs:
-            matches = glob.glob(os.path.join(directory, lib_name))
-            matches += glob.glob(os.path.join(directory, f"{lib_name}.*"))
-            if matches:
-                found = True
-                break
-        if not found:
-            missing.append(lib_name)
-
-    if missing:
-        print(
-            "ERROR: Missing CUDA runtime libraries required by ONNX Runtime:",
-            file=sys.stderr,
-        )
-        for lib_name in missing:
-            print(f"  - {lib_name}", file=sys.stderr)
-        print(
-            "Run `mamba env update -f environment-cuda.yml --prune` or install the "
-            "missing package(s), then reactivate the environment.",
-            file=sys.stderr,
-        )
-        return 1
-
-    # Order matters: the mixed-family check explains the root cause behind most
-    # torch/CuPy failures below, so report it first.
-    families_status = _verify_nvidia_wheel_families()
-    if families_status != 0:
-        return families_status
-
-    torch_status = _verify_torch_cuda()
-    if torch_status != 0:
-        return torch_status
-
-    import_status = _verify_onnxruntime_import()
-    if import_status != 0:
-        return import_status
-
-    tensorrt_status = _verify_tensorrt_import()
-    if tensorrt_status != 0:
-        return tensorrt_status
-
-    cupy_status = _verify_cupy()
-    if cupy_status != 0:
-        return cupy_status
-
+    """Run every CUDA check in order; first failure wins (it explains the rest)."""
+    for _name, fn in CHECKS:
+        status = globals()[fn]()
+        if status != 0:
+            return status
     print(
         "CUDA runtime self-check passed for torch, ONNX Runtime GPU, TensorRT and CuPy."
     )

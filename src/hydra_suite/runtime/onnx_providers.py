@@ -104,6 +104,39 @@ def _tensorrt_ep_cache_options() -> dict:
     }
 
 
+_ORT_CUDA_LIBS_PRELOADED = False
+
+
+def preload_ort_cuda_libraries() -> bool:
+    """Load the CUDA/cuDNN libraries ONNX Runtime's GPU providers link against.
+
+    The CUDA user-space libraries come from the ``nvidia-*`` pip wheels that
+    ``onnxruntime-gpu[cuda,cudnn]`` (and torch) install under
+    ``site-packages/nvidia``. ONNX Runtime does not search there on its own;
+    ``onnxruntime.preload_dlls()`` (ORT >= 1.21) loads them into the process so
+    the CUDA/TensorRT execution providers resolve them by soname -- on Linux and
+    Windows alike, with no ``LD_LIBRARY_PATH`` or conda activation hook.
+
+    Idempotent and never raises: a missing ``preload_dlls`` (CPU onnxruntime,
+    old ORT) or a failed load leaves session creation to report the real error.
+    Returns True when the preload ran successfully.
+    """
+    global _ORT_CUDA_LIBS_PRELOADED
+    if _ORT_CUDA_LIBS_PRELOADED:
+        return True
+    try:
+        import onnxruntime as ort
+
+        preload = getattr(ort, "preload_dlls", None)
+        if preload is None:
+            return False
+        preload()
+    except Exception:  # noqa: BLE001 - best effort, see docstring
+        return False
+    _ORT_CUDA_LIBS_PRELOADED = True
+    return True
+
+
 def execution_providers_for(
     resolved, include_cpu_fallback: bool = True
 ) -> List[object]:
@@ -116,6 +149,7 @@ def execution_providers_for(
     """
     providers: list[object] = []
     if resolved.backend == "tensorrt":
+        preload_ort_cuda_libraries()
         _append_provider(
             providers,
             ("TensorrtExecutionProvider", _tensorrt_ep_cache_options()),
