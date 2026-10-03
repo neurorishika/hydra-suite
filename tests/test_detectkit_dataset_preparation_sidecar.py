@@ -203,10 +203,13 @@ def test_parent_cancellation_terminates_sidecar_and_cleans_private_paths(
             self.output = Output()
             self.process = SimpleNamespace(poll=lambda: None)
             index_roots.append(Path(plan.launch.environment["HYDRA_DATASET_INDEX_DIR"]))
+            environments.append(dict(plan.launch.environment))
 
         def cancel(self, grace):
             canceled.append(grace)
 
+    environments = []
+    monkeypatch.delenv("OPENBLAS_NUM_THREADS", raising=False)
     monkeypatch.setattr(module, "SupervisedSidecar", Sidecar)
     with pytest.raises(DatasetPreparationCancelled):
         module.prepare_role_datasets_contained(
@@ -217,6 +220,8 @@ def test_parent_cancellation_terminates_sidecar_and_cleans_private_paths(
             should_cancel=lambda: True,
         )
     assert canceled
+    # TasksMax=64 counts threads: per-wheel OpenBLAS pools must be capped.
+    assert environments[0]["OPENBLAS_NUM_THREADS"] == "4"
     assert len(index_roots) == 1
     assert index_roots[0].parent == (tmp_path / "workspace").resolve()
     assert not list((tmp_path / "workspace").glob(".dataset-preparation-*.staging"))
