@@ -15,6 +15,8 @@ import numpy as np
 from PySide6.QtCore import Signal
 
 from hydra_suite.core.inference.masks import clip_mask_to_polygon, mask_to_contour
+from hydra_suite.core.inference.sam2.tiling import segment_boxes
+from hydra_suite.core.inference.semantic.tiling import DEFAULT_OVERLAP, TilingSettings
 from hydra_suite.data.al.escalation import LabelRecord
 from hydra_suite.data.al.labels import write_label_file
 from hydra_suite.data.project_bundle import ensure_bundle_subdirectory
@@ -23,6 +25,7 @@ from hydra_suite.detectkit.gui.models import OBBSource, StagedReview
 from hydra_suite.utils.geometry_levels import GeometryLevel
 from hydra_suite.widgets.workers import BaseWorker
 
+from .calibration_frames import CALIBRATION_SAMPLE_FRAMES, stratified_calibration_frames
 from .sam2_prompts import build_prompts, read_boxes_from_label
 
 logger = logging.getLogger(__name__)
@@ -103,6 +106,21 @@ class EscalationRequest:
     source_paths: list[str] = field(default_factory=list)
     # "auto" | "cuda" | "mps" | "cpu"; resolved against what this host has.
     device: str = "auto"
+    # SAHI for box-prompted SAM2. None = full frame, which is the
+    # pre-tiling behaviour exactly; SAM2 never borrows the SAM3 seed.
+    reference_body_px: float = 0.0
+    tile_fraction: float | None = None
+    tile_px: int | None = None
+    overlap: float = DEFAULT_OVERLAP
+
+    @property
+    def tiling(self) -> TilingSettings:
+        return TilingSettings(
+            reference_body_px=float(self.reference_body_px or 0.0),
+            tile_fraction=self.tile_fraction,
+            tile_px=self.tile_px,
+            overlap=float(self.overlap),
+        )
 
 
 @dataclass
@@ -114,6 +132,56 @@ class EscalationResult:
     # (source_name, reason) pairs for sources skipped because they already
     # have a pending escalation and overwrite was not requested.
     skipped: list[tuple[str, str]] = field(default_factory=list)
+    # Boxes no tile fully contained, segmented on the full frame instead.
+    seam_fallbacks: int = 0
+    # Frames segmented in tiles vs frames where the requested tile size could
+    # not apply (it covered the frame, or breached the tile ceiling) and the
+    # frame ran whole. Both stay 0 when tiling is off.
+    tiled_frames: int = 0
+    untiled_frames: int = 0
+    tile_px: int | None = None  # resolved tile size, None = full frame
+
+
+def chosen_calibration_point(record) -> dict | None:
+    """The chosen (else recommended) point of one variant's stored calibration."""
+    if not isinstance(record, dict):
+        return None
+    points = record.get("points") or []
+    try:
+        index = int(record.get("chosen_index", record.get("recommended_index", -1)))
+    except (TypeError, ValueError):
+        return None
+    if 0 <= index < len(points) and isinstance(points[index], dict):
+        return points[index]
+    return None
+
+
+def default_geometry_tiling(project, variant: str) -> dict:
+    """The tiling a SAM2 run of *variant* uses when nobody overrides it.
+
+    The ONE answer for both the dialog's opening state and the headless
+    ``detectkit escalate sam2`` command, so the two never stage different
+    results for the same project. Precedence: the settings the user last
+    accepted for this variant; then this variant's calibrated choice (with
+    the body size it was calibrated at); then full frame. A body size of 0
+    means tiling is off, exactly as ``resolve_tile_px`` treats it.
+    """
+    saved = dict(getattr(project, "geometry_escalation_settings", {}) or {})
+    fraction, body = 0.0, 0.0
+    if saved.get("variant") == variant and "tile_fraction" in saved:
+        fraction = float(saved.get("tile_fraction") or 0.0)
+        body = float(saved.get("reference_body_px") or 0.0)
+    else:
+        store = getattr(project, "geometry_calibration", {}) or {}
+        record = store.get(variant) if isinstance(store, dict) else None
+        point = chosen_calibration_point(record)
+        if point is not None:
+            fraction = float(point.get("tile_fraction") or 0.0)
+            body = float(record.get("reference_body_px") or 0.0)
+    return {
+        "reference_body_px": body,
+        "tile_fraction": fraction if fraction > 0 else None,
+    }
 
 
 class Sam2EscalationWorker(BaseWorker):
@@ -155,6 +223,78 @@ class Sam2EscalationWorker(BaseWorker):
             f"{result.fell_back} fell back (review these first)."
         )
         self.result_ready.emit(result)
+
+
+class Sam2CalibrationWorker(BaseWorker):
+    """Calibrate SAM2's tile fraction against polygon ground-truth frames.
+
+    Runs in-process like ``Sam2EscalationWorker`` (SAM2 has no sidecar).
+    Only frames whose labels are ALL polygons are sampled: calibration needs
+    real ground truth, and a box is not one for a mask.
+    """
+
+    result_ready = Signal(object)  # list[GeometryCalibrationPoint]
+
+    def __init__(
+        self,
+        sources,
+        variant: str,
+        *,
+        reference_body_px: float,
+        overlap: float = DEFAULT_OVERLAP,
+        executor=None,
+        budget: int = CALIBRATION_SAMPLE_FRAMES,
+        device: str = "auto",
+        parent=None,
+    ) -> None:
+        super().__init__(parent)
+        self._sources = list(sources)
+        self._variant = variant
+        self._reference_body_px = float(reference_body_px or 0.0)
+        self._overlap = float(overlap)
+        self._executor = executor
+        self._budget = int(budget)
+        self._device = str(device or "auto")
+        self._cancel = False
+        self.sampled_frames: list[str] = []
+
+    def cancel(self) -> None:
+        self._cancel = True
+
+    @property
+    def cancelled(self) -> bool:
+        return self._cancel
+
+    def execute(self) -> None:
+        from hydra_suite.core.inference.sam2.calibration import calibrate_geometry
+
+        frames = stratified_calibration_frames(
+            self._sources, budget=self._budget, polygon_only=True
+        )
+        if not frames:
+            raise RuntimeError(
+                "No polygon ground-truth frames in the calibration sources. "
+                "Label every animal in a few frames with polygons to calibrate."
+            )
+        self.sampled_frames = [str(path) for path, _records in frames]
+        executor = self._executor
+        if executor is None:
+            from hydra_suite.core.inference.sam2.executor import Sam2SegmentExecutor
+            from hydra_suite.core.inference.torch_device import resolve_torch_device
+
+            self.status.emit(f"Loading {self._variant}…")
+            executor = Sam2SegmentExecutor.from_variant(
+                self._variant, device=resolve_torch_device(self._device)
+            )
+        points = calibrate_geometry(
+            executor,
+            [(path, [rec.points for rec in records]) for path, records in frames],
+            reference_body_px=self._reference_body_px,
+            overlap=self._overlap,
+            progress=lambda pct, msg: (self.progress.emit(pct), self.status.emit(msg)),
+            should_stop=lambda: self._cancel,
+        )
+        self.result_ready.emit(points)
 
 
 def _sources_by_name(project) -> dict[str, OBBSource]:
@@ -212,6 +352,8 @@ def run_escalation(
             on_mutated()
 
     result = EscalationResult()
+    tiling = req.tiling
+    result.tile_px = tiling.resolved_tile_px()
     todo = [source for source in _requested_sources(req) if source.level != "polygon"]
     project_root = Path(req.project.project_dir)
     for si, src in enumerate(todo):
@@ -280,11 +422,19 @@ def run_escalation(
             records: list[LabelRecord] = []
             if boxes:
                 prompts = build_prompts(boxes)
-                executor.set_image(img)
-                for box, prompt in zip(boxes, prompts):
-                    mask, _iou = executor.segment(
-                        prompt.box_xyxy, prompt.positive_points, prompt.negative_points
-                    )
+                # Each box is segmented inside its owner tile (SAHI); a
+                # full-frame plan is the pre-tiling call sequence exactly.
+                plan = tiling.plan_for((h, w))
+                if result.tile_px is not None:
+                    if len(plan.tiles) > 1:
+                        result.tiled_frames += 1
+                    else:
+                        result.untiled_frames += 1
+                outcomes = segment_boxes(executor, img, prompts, plan.tiles)
+                for box, outcome in zip(boxes, outcomes):
+                    if outcome.owner_tile is None:
+                        result.seam_fallbacks += 1
+                    mask = outcome.mask
                     # SAM2's box prompt is soft guidance, not a hard crop -- the
                     # predicted mask can extend past the source OBB. Clip to the
                     # OBB's own polygon (not just its aabb) before contouring so

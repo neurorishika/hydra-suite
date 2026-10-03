@@ -720,6 +720,17 @@ def fake_store(monkeypatch: Any, tmp_path: Path | None = None) -> _SpyProfileSto
     monkeypatch.setattr(
         integration, "InferenceTuningProfileStore", lambda *_a, **_k: spy
     )
+    # The MEMORY-profile evidence written alongside a calibration must land in
+    # the same throwaway root. It used to go to the real user data dir, where
+    # every source change (the tuning key hashes the package source) added
+    # ~200 records until MAX_PROFILE_RECORDS was hit and calibration fell
+    # back -- failing these tests on any branch, on any machine whose store
+    # had filled up.
+    monkeypatch.setattr(
+        integration,
+        "profile_store_path",
+        lambda scope: root / "memory_profiles" / f"{scope}.json",
+    )
     return spy
 
 

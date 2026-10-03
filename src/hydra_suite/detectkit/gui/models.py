@@ -421,6 +421,11 @@ class DetectKitProject:
     # parameters while retaining old projects' empty defaults.
     semantic_escalation_settings: dict[str, Any] = field(default_factory=dict)
     semantic_calibration: dict[str, Any] = field(default_factory=dict)
+    # SAM2 geometry escalation: last-used dialog state, and measured tile
+    # calibrations keyed by SAM2 variant. Project-only by necessity: SAM2
+    # checkpoints are public weights with no sidecar to carry a calibration.
+    geometry_escalation_settings: dict[str, Any] = field(default_factory=dict)
+    geometry_calibration: dict[str, Any] = field(default_factory=dict)
 
     @property
     def class_name(self) -> str:
@@ -473,7 +478,12 @@ class DetectKitProject:
                 proj.sources = [OBBSource.from_dict(s) for s in val]
             elif name == "slice_settings":
                 proj.slice_settings = SliceTrainingSettings.from_dict(val)
-            elif name in {"semantic_escalation_settings", "semantic_calibration"}:
+            elif name in {
+                "semantic_escalation_settings",
+                "semantic_calibration",
+                "geometry_escalation_settings",
+                "geometry_calibration",
+            }:
                 setattr(proj, name, dict(val) if isinstance(val, dict) else {})
             else:
                 # Type-cast based on the default type.

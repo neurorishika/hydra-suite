@@ -585,16 +585,23 @@ def test_gui_handler_uses_frames_processed_as_the_denominator(tmp_path):
 
 
 def test_the_dialog_asks_for_labels_without_decoding_images():
-    """I8, other end: the has-labels check must not be labelled_frames_for."""
+    """I8, other end: the has-labels check must not be labelled_frames_for.
+
+    The check moved into the shared selector when calibration became
+    polygon-only; it must still be a label-FILE scan.
+    """
     import inspect
 
     from hydra_suite.detectkit.gui.dialogs import semantic_escalation_dialog as mod
+    from hydra_suite.detectkit.gui.widgets import calibration_source_selector as sel
 
-    source = inspect.getsource(
+    source = inspect.getsource(sel.CalibrationSourceSelector.__init__)
+    assert "has_polygon_frames" in source
+    assert "labelled_frames_for" not in source
+    refresh = inspect.getsource(
         mod.SemanticEscalationDialog._refresh_calibration_enabled
     )
-    assert "has_labelled_frames" in source
-    assert "labelled_frames_for" not in source
+    assert "labelled_frames_for" not in refresh
 
 
 def test_accepting_a_sam3_review_does_not_create_a_sibling_source(tmp_path):

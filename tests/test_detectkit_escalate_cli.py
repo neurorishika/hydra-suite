@@ -94,3 +94,41 @@ def test_sam3_class_must_be_a_project_class():
         escalate_cli._resolve_class_name(SimpleNamespace(class_names=["fly"]), "", "x")
         == "fly"
     )
+
+
+def _args(*extra):
+    return escalate_cli.build_parser().parse_args(["sam2", "--project", "/p", *extra])
+
+
+def test_sam2_tiling_defaults_to_full_frame():
+    project = SimpleNamespace(sources=[])
+    assert escalate_cli._sam2_tiling(project, _args())["tile_fraction"] is None
+
+
+def test_sam2_tiling_follows_the_dialogs_saved_choice_for_the_same_variant():
+    from hydra_suite.core.inference.sam2.checkpoints import DEFAULT_VARIANT
+
+    saved = {
+        "variant": DEFAULT_VARIANT,
+        "tile_fraction": 0.3,
+        "reference_body_px": 79.0,
+    }
+    project = SimpleNamespace(sources=[], geometry_escalation_settings=saved)
+    assert escalate_cli._sam2_tiling(project, _args()) == {
+        "reference_body_px": 79.0,
+        "tile_fraction": 0.3,
+    }
+    other = SimpleNamespace(
+        sources=[],
+        geometry_escalation_settings={**saved, "variant": "sam2.1-hiera-tiny"},
+    )
+    if DEFAULT_VARIANT != "sam2.1-hiera-tiny":
+        assert escalate_cli._sam2_tiling(other, _args())["tile_fraction"] is None
+
+
+def test_sam2_tiling_flags_win():
+    project = SimpleNamespace(sources=[])
+    out = escalate_cli._sam2_tiling(
+        project, _args("--tile-fraction", "0.2", "--reference-body-px", "50")
+    )
+    assert out == {"reference_body_px": 50.0, "tile_fraction": 0.2}

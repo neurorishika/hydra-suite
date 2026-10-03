@@ -69,6 +69,27 @@ def retry_semantic_containment_cleanup(
     return True
 
 
+def _tiling_note(tile_px, tiled_frames: int, untiled_frames: int, seams: int) -> str:
+    """What the run actually did with tiling, for the completion message."""
+    if not tile_px:
+        return ""
+    if not tiled_frames:
+        return (
+            f"\n\nTiling at {tile_px} px could not apply to any frame (the "
+            "tile covered the frame, or was too small for it), so every frame "
+            "was segmented whole."
+        )
+    note = f"\n\nSegmented in {tile_px} px tiles on {tiled_frames} frame(s)"
+    if untiled_frames:
+        note += f"; {untiled_frames} frame(s) could not be tiled and ran whole"
+    if seams:
+        note += (
+            f"; {seams} animal(s) crossed a tile seam and were segmented on "
+            "the full frame instead"
+        )
+    return note + "."
+
+
 def on_escalate_geometry(window, preselect: str | None = None) -> None:
     """Open the SAM2 escalate dialog and run a Sam2EscalationWorker."""
     if window._project is None:
@@ -101,7 +122,13 @@ def on_escalate_geometry(window, preselect: str | None = None) -> None:
         )
         return
 
-    dlg = EscalateSam2Dialog(window._project.sources, parent=window)
+    dlg = EscalateSam2Dialog(
+        window._project.sources,
+        parent=window,
+        project=window._project,
+        reference_body_px=resolve_reference_body_px(window._project)[0],
+        persist_callback=window._save_current_project,
+    )
     if preselect:
         dlg.preselect_source(preselect)
     if not dlg.exec():
@@ -159,6 +186,7 @@ def on_escalate_geometry(window, preselect: str | None = None) -> None:
         variant=dlg.selected_variant(),
         overwrite=overwrite,
         device=dlg.selected_device(),
+        **dlg.tiling_parameters(),
     )
 
     progress = QProgressDialog(
@@ -225,6 +253,14 @@ def on_escalate_geometry(window, preselect: str | None = None) -> None:
         staged = list(getattr(result, "staged", []) or [])
         primed = int(getattr(result, "primed", 0))
         fell_back = int(getattr(result, "fell_back", 0))
+        seam_fallbacks = int(getattr(result, "seam_fallbacks", 0))
+        tile_px = getattr(result, "tile_px", None)
+        tiling_note = _tiling_note(
+            tile_px,
+            int(getattr(result, "tiled_frames", 0)),
+            int(getattr(result, "untiled_frames", 0)),
+            seam_fallbacks,
+        )
         skipped = list(getattr(result, "skipped", []) or [])
         skipped_note = (
             (
@@ -244,7 +280,7 @@ def on_escalate_geometry(window, preselect: str | None = None) -> None:
                     f"Staged {len(staged)} source(s) for review: "
                     f"{', '.join(staged)}.\n\n"
                     f"{primed} instance(s) primed, {fell_back} fell back "
-                    f"to the original box.{skipped_note}\n\n"
+                    f"to the original box.{tiling_note}{skipped_note}\n\n"
                     "Use the review bar on the annotation preview to accept "
                     "or reject each frame."
                 ),
@@ -498,7 +534,10 @@ def resolve_reference_body_px(project) -> tuple[float, str]:
     so any project without a slice-training reference silently ran with
     tiling OFF -- the measured-worst configuration.
     """
-    from hydra_suite.detectkit.jobs.semantic_escalation import measure_median_body_px
+    from hydra_suite.detectkit.jobs.calibration_frames import (
+        has_polygon_frames,
+        measure_median_body_px,
+    )
 
     slice_settings = getattr(project, "slice_settings", None)
     from_project = float(getattr(slice_settings, "reference_body_px", 0.0) or 0.0)
@@ -509,8 +548,11 @@ def resolve_reference_body_px(project) -> tuple[float, str]:
         # the sample is capped project-wide. The cap is reported, not hidden:
         # the field is editable and the user must be able to see the median
         # rests on a sample rather than on every labelled frame.
+        # Polygon ground truth first: it is what calibration measures on, so
+        # the tile size it fits is relative to THESE animals' size.
+        sources = list(getattr(project, "sources", []) or [])
         measured, sampled, truncated = measure_median_body_px(
-            getattr(project, "sources", []) or []
+            [s for s in sources if has_polygon_frames(s)] or sources
         )
     except Exception:  # pragma: no cover - unreadable labels
         measured, sampled, truncated = 0.0, 0, False

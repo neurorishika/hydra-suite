@@ -17,7 +17,6 @@ from PySide6.QtWidgets import (
     QHBoxLayout,
     QLabel,
     QLineEdit,
-    QListWidget,
     QMessageBox,
     QPushButton,
     QSpinBox,
@@ -50,6 +49,11 @@ from hydra_suite.core.inference.semantic.tiling import (
     resolve_tile_px,
 )
 from hydra_suite.detectkit.gui.dialogs._base import DetectKitDialog
+from hydra_suite.detectkit.gui.widgets.calibration_source_selector import (
+    NO_POLYGON_SOURCES,
+    CalibrationSourceSelector,
+    scale_warning_text,
+)
 from hydra_suite.widgets.device_combo import DeviceCombo
 
 
@@ -64,10 +68,10 @@ def _saved_value(saved: dict, key: str, default, cast):
 class SemanticEscalationDialog(DetectKitDialog):
     """Configure a SAM3 semantic escalation run.
 
-    Calibration is offered whenever the selected sources hold a labelled
-    frame at ANY geometry level -- choosing an operating point needs
-    instance COUNTS, not masks, so OBB and AABB labels work as well as
-    polygons.
+    Calibration runs on the "Calibrate on" list: sources with frames
+    labelled entirely in polygons. It scores masks, so it needs real ground
+    truth -- a box is not one. Escalation runs on the separate "Escalate"
+    list, which is usually the sources WITHOUT that ground truth.
     """
 
     def __init__(
@@ -124,22 +128,15 @@ class SemanticEscalationDialog(DetectKitDialog):
         top = QHBoxLayout()
         top.setSpacing(12)
 
-        sources_group = QGroupBox("Sources to escalate")
-        sources_layout = QVBoxLayout(sources_group)
-
-        self._list = QListWidget()
-        self._list.setSelectionMode(QListWidget.SelectionMode.MultiSelection)
-        selected_names = set(saved.get("source_names") or [])
-        for row, src in enumerate(self._sources):
-            self._list.addItem(f"{src.name}  ({src.level})")
-            if src.name in selected_names:
-                self._list.item(row).setSelected(True)
-        self._list.setMinimumSize(240, 180)
-        sources_layout.addWidget(self._list)
-        source_hint = QLabel("Click entries to toggle one or more sources.")
-        source_hint.setWordWrap(True)
-        sources_layout.addWidget(source_hint)
-        top.addWidget(sources_group, 2)
+        self._selector = CalibrationSourceSelector(self._sources)
+        self._selector.restore(
+            saved.get("calibration_source_paths"),
+            saved.get("source_names"),
+            saved.get("escalation_source_paths"),
+        )
+        # The escalation list keeps its old name: handlers and tests drive it.
+        self._list = self._selector.escalation_list
+        top.addWidget(self._selector, 2)
 
         settings_group = QGroupBox("Run settings")
         form = QGridLayout(settings_group)
@@ -333,6 +330,7 @@ class SemanticEscalationDialog(DetectKitDialog):
         self._btn_calibrate.setEnabled(False)
         self._btn_calibrate.clicked.connect(self._run_calibration)
         self._refresh_calibration_enabled()
+        self._selector.calibration_changed.connect(self._refresh_calibration_enabled)
 
         self._btn_view_calibration = QPushButton("View saved calibration…")
         self._btn_view_calibration.clicked.connect(self._view_saved_calibration)
@@ -364,6 +362,14 @@ class SemanticEscalationDialog(DetectKitDialog):
         )
         self._variant.currentTextChanged.connect(self.prefill_from_sidecar)
 
+        self._scale_note = QLabel("")
+        self._scale_note.setWordWrap(True)
+        outer.addWidget(self._scale_note)
+        self._scale_cache: dict = {}
+        self._selector.calibration_changed.connect(self._refresh_scale_warning)
+        self._selector.escalation_changed.connect(self._refresh_scale_warning)
+        self._refresh_scale_warning()
+
         self._status = QLabel("")
         self._status.setWordWrap(True)
         outer.addWidget(self._status)
@@ -377,8 +383,21 @@ class SemanticEscalationDialog(DetectKitDialog):
     # -- accessors used by the handler -------------------------------------
 
     def selected_sources(self) -> list:
-        rows = [i.row() for i in self._list.selectedIndexes()]
-        return [self._sources[r] for r in sorted(rows)]
+        """The sources to ESCALATE."""
+        return self._selector.escalation_sources()
+
+    def calibration_sources(self) -> list:
+        """The polygon ground-truth sources to calibrate on."""
+        return self._selector.calibration_sources()
+
+    def _refresh_scale_warning(self) -> None:
+        self._scale_note.setText(
+            scale_warning_text(
+                self._scale_cache,
+                self.calibration_sources(),
+                self.selected_sources(),
+            )
+        )
 
     def selected_variant(self) -> str:
         return self._variant.currentText()
@@ -491,7 +510,10 @@ class SemanticEscalationDialog(DetectKitDialog):
         return {
             "variant": self.selected_variant(),
             "prompt": self.prompt(),
+            # Legacy key, still written so an older build reopens the dialog
+            # with the same escalation selection.
             "source_names": [src.name for src in self.selected_sources()],
+            **self._selector.state(),
             "exhaustive": self._exhaustive.isChecked(),
             # Persist 0.0 rather than None so QDoubleSpinBox can restore the
             # explicit full-frame choice without special-case coercion.
@@ -543,6 +565,9 @@ class SemanticEscalationDialog(DetectKitDialog):
             "variant": self.selected_variant(),
             "prompt": self.prompt(),
             "source_names": [src.name for src in self.selected_sources()],
+            "calibration_source_paths": self._selector.state()[
+                "calibration_source_paths"
+            ],
             "parameters": self.parameters(),
             "reason": str(reason or ""),
             "recommended_index": recommended_index,
@@ -735,18 +760,14 @@ class SemanticEscalationDialog(DetectKitDialog):
         self._status.setText(text)
 
     def _refresh_calibration_enabled(self) -> None:
-        from hydra_suite.detectkit.jobs.semantic_escalation import has_labelled_frames
-
-        # Calibration works at ANY geometry level -- it needs instance COUNTS,
-        # not masks -- so OBB and AABB sources qualify too. has_labelled_frames
-        # is a label-FILE scan: the old check decoded every labelled image
-        # on the GUI thread just to answer a yes/no.
-        has_labels = any(has_labelled_frames(s) for s in self._sources)
+        # The selector found the polygon sources with has_polygon_frames, a
+        # label-FILE scan: no image is decoded on the GUI thread to answer it.
+        if not self._selector.has_calibration_sources():
+            self.set_calibration_enabled(False, NO_POLYGON_SOURCES)
+            return
         self.set_calibration_enabled(
-            has_labels,
-            "No labelled frames in these sources. Label a few (any geometry "
-            "level) to calibrate the threshold to your data — or proceed and "
-            "tune it by eye.",
+            bool(self.calibration_sources()),
+            'Select at least one source under "Calibrate on".',
         )
 
     def _run_calibration(self) -> None:
@@ -764,9 +785,11 @@ class SemanticEscalationDialog(DetectKitDialog):
                 "the recommended threshold upward.",
             )
             return
-        sources = self.selected_sources() or self._sources
+        sources = self.calibration_sources()
         if not sources:
-            QMessageBox.information(self, "Calibrate", "No sources selected.")
+            QMessageBox.information(
+                self, "Calibrate", 'Select a source under "Calibrate on".'
+            )
             return
         if self.calibration_points:
             created = str(self._saved_calibration.get("created_at", ""))[:10]
@@ -812,18 +835,22 @@ class SemanticEscalationDialog(DetectKitDialog):
         worker.status.connect(progress.setLabelText)
 
         def _done(points) -> None:
+            # Read BEFORE close(): QProgressDialog.close() emits `canceled`,
+            # which is wired to worker.cancel, so every completed sweep used
+            # to look cancelled here and was never stored.
+            cancelled = worker.cancelled
             progress.close()
             if not points:
                 self.set_status(
-                    "Calibration produced nothing: no labelled frames were found "
-                    "in the selected source(s), or it was cancelled before the "
-                    "first frame finished."
+                    "Calibration produced nothing: no polygon ground-truth "
+                    "frames were found in the calibration source(s), or it was "
+                    "cancelled before the first frame finished."
                 )
                 return
             best, reason = recommend(points)
             # A cancelled/partial sweep is useful to inspect, but must not erase
             # the last complete calibration stored with the project.
-            if not worker.cancelled:
+            if not cancelled:
                 self._store_calibration(
                     points, best, reason, preview_frames=worker.preview_frames
                 )
@@ -831,7 +858,7 @@ class SemanticEscalationDialog(DetectKitDialog):
                 points,
                 best,
                 reason,
-                partial=worker.cancelled,
+                partial=cancelled,
                 preview_frames=worker.preview_frames,
             )
 
@@ -930,8 +957,9 @@ class SemanticEscalationDialog(DetectKitDialog):
             preview.exec()
 
         def _failed(msg: str) -> None:
+            cancelled = worker.cancelled  # before close(): it emits `canceled`
             progress.close()
-            if worker.cancelled:
+            if cancelled:
                 self.set_status("Random image check cancelled.")
                 return
             QMessageBox.warning(self, "Test random image", msg)
