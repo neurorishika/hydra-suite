@@ -78,7 +78,7 @@
     <div data-md-component="skip">
       
         
-        <a href="#conda-environments-and-makefile-reference" class="md-skip">
+        <a href="#environments-and-makefile-reference" class="md-skip">
           Skip to content
         </a>
       
@@ -495,29 +495,44 @@
     <ul class="md-nav__list" data-md-component="toc" data-md-scrollfix>
       
         <li class="md-nav__item">
-  <a href="#environment-files" class="md-nav__link">
+  <a href="#where-each-dependency-comes-from" class="md-nav__link">
     <span class="md-ellipsis">
-      Environment files
+      Where each dependency comes from
+    </span>
+  </a>
+  
+    <nav class="md-nav" aria-label="Where each dependency comes from">
+      <ul class="md-nav__list">
+        
+          <li class="md-nav__item">
+  <a href="#environments" class="md-nav__link">
+    <span class="md-ellipsis">
+      Environments
     </span>
   </a>
   
 </li>
-      
-        <li class="md-nav__item">
-  <a href="#requirements-files" class="md-nav__link">
+        
+          <li class="md-nav__item">
+  <a href="#sidecar-environments" class="md-nav__link">
     <span class="md-ellipsis">
-      Requirements files
+      Sidecar environments
     </span>
   </a>
   
 </li>
-      
-        <li class="md-nav__item">
-  <a href="#onnx-runtime-and-cuda-compatibility" class="md-nav__link">
+        
+          <li class="md-nav__item">
+  <a href="#gpu-library-loading-cuda" class="md-nav__link">
     <span class="md-ellipsis">
-      ONNX Runtime and CUDA compatibility
+      GPU library loading (CUDA)
     </span>
   </a>
+  
+</li>
+        
+      </ul>
+    </nav>
   
 </li>
       
@@ -532,36 +547,54 @@
       <ul class="md-nav__list">
         
           <li class="md-nav__item">
-  <a href="#setup-creates-conda-environment" class="md-nav__link">
+  <a href="#create-a-conda-env-step-1" class="md-nav__link">
     <span class="md-ellipsis">
-      Setup (creates conda environment)
+      Create a conda env (step 1)
     </span>
   </a>
   
 </li>
         
           <li class="md-nav__item">
-  <a href="#install-pip-packages-into-activated-environment" class="md-nav__link">
+  <a href="#install-into-the-activated-env-step-2" class="md-nav__link">
     <span class="md-ellipsis">
-      Install (pip packages into activated environment)
+      Install into the activated env (step 2)
     </span>
   </a>
   
 </li>
         
           <li class="md-nav__item">
-  <a href="#update-refresh-both-conda-and-pip" class="md-nav__link">
+  <a href="#update-or-remove" class="md-nav__link">
     <span class="md-ellipsis">
-      Update (refresh both conda and pip)
+      Update or remove
     </span>
   </a>
   
 </li>
         
           <li class="md-nav__item">
-  <a href="#remove" class="md-nav__link">
+  <a href="#individual-steps-and-checks" class="md-nav__link">
     <span class="md-ellipsis">
-      Remove
+      Individual steps and checks
+    </span>
+  </a>
+  
+</li>
+        
+          <li class="md-nav__item">
+  <a href="#optional-sidecars-and-tools" class="md-nav__link">
+    <span class="md-ellipsis">
+      Optional sidecars and tools
+    </span>
+  </a>
+  
+</li>
+        
+          <li class="md-nav__item">
+  <a href="#other-useful-targets" class="md-nav__link">
+    <span class="md-ellipsis">
+      Other useful targets
     </span>
   </a>
   
@@ -582,35 +615,11 @@
 </li>
       
         <li class="md-nav__item">
-  <a href="#sam3-training-prerequisite-hugging-face-authentication" class="md-nav__link">
+  <a href="#hugging-face-authentication-for-sam3" class="md-nav__link">
     <span class="md-ellipsis">
-      SAM3 training prerequisite: Hugging Face authentication
+      Hugging Face authentication for SAM3
     </span>
   </a>
-  
-</li>
-      
-        <li class="md-nav__item">
-  <a href="#sam3-environment-recipe-use-the-script-not-prose" class="md-nav__link">
-    <span class="md-ellipsis">
-      SAM3 environment recipe — use the script, not prose
-    </span>
-  </a>
-  
-    <nav class="md-nav" aria-label="SAM3 environment recipe — use the script, not prose">
-      <ul class="md-nav__list">
-        
-          <li class="md-nav__item">
-  <a href="#other-useful-targets" class="md-nav__link">
-    <span class="md-ellipsis">
-      Other useful targets
-    </span>
-  </a>
-  
-</li>
-        
-      </ul>
-    </nav>
   
 </li>
       
@@ -1083,6 +1092,27 @@
   
   <span class="md-ellipsis">
     DetectKit Headless Training
+  </span>
+  
+
+      </a>
+    </li>
+  
+
+              
+            
+              
+                
+  
+  
+  
+  
+    <li class="md-nav__item">
+      <a href="../../user-guide/sam-install-and-run/" class="md-nav__link">
+        
+  
+  <span class="md-ellipsis">
+    SAM2 and SAM3: Install and Run
   </span>
   
 
@@ -2022,29 +2052,44 @@
     <ul class="md-nav__list" data-md-component="toc" data-md-scrollfix>
       
         <li class="md-nav__item">
-  <a href="#environment-files" class="md-nav__link">
+  <a href="#where-each-dependency-comes-from" class="md-nav__link">
     <span class="md-ellipsis">
-      Environment files
+      Where each dependency comes from
+    </span>
+  </a>
+  
+    <nav class="md-nav" aria-label="Where each dependency comes from">
+      <ul class="md-nav__list">
+        
+          <li class="md-nav__item">
+  <a href="#environments" class="md-nav__link">
+    <span class="md-ellipsis">
+      Environments
     </span>
   </a>
   
 </li>
-      
-        <li class="md-nav__item">
-  <a href="#requirements-files" class="md-nav__link">
+        
+          <li class="md-nav__item">
+  <a href="#sidecar-environments" class="md-nav__link">
     <span class="md-ellipsis">
-      Requirements files
+      Sidecar environments
     </span>
   </a>
   
 </li>
-      
-        <li class="md-nav__item">
-  <a href="#onnx-runtime-and-cuda-compatibility" class="md-nav__link">
+        
+          <li class="md-nav__item">
+  <a href="#gpu-library-loading-cuda" class="md-nav__link">
     <span class="md-ellipsis">
-      ONNX Runtime and CUDA compatibility
+      GPU library loading (CUDA)
     </span>
   </a>
+  
+</li>
+        
+      </ul>
+    </nav>
   
 </li>
       
@@ -2059,36 +2104,54 @@
       <ul class="md-nav__list">
         
           <li class="md-nav__item">
-  <a href="#setup-creates-conda-environment" class="md-nav__link">
+  <a href="#create-a-conda-env-step-1" class="md-nav__link">
     <span class="md-ellipsis">
-      Setup (creates conda environment)
+      Create a conda env (step 1)
     </span>
   </a>
   
 </li>
         
           <li class="md-nav__item">
-  <a href="#install-pip-packages-into-activated-environment" class="md-nav__link">
+  <a href="#install-into-the-activated-env-step-2" class="md-nav__link">
     <span class="md-ellipsis">
-      Install (pip packages into activated environment)
+      Install into the activated env (step 2)
     </span>
   </a>
   
 </li>
         
           <li class="md-nav__item">
-  <a href="#update-refresh-both-conda-and-pip" class="md-nav__link">
+  <a href="#update-or-remove" class="md-nav__link">
     <span class="md-ellipsis">
-      Update (refresh both conda and pip)
+      Update or remove
     </span>
   </a>
   
 </li>
         
           <li class="md-nav__item">
-  <a href="#remove" class="md-nav__link">
+  <a href="#individual-steps-and-checks" class="md-nav__link">
     <span class="md-ellipsis">
-      Remove
+      Individual steps and checks
+    </span>
+  </a>
+  
+</li>
+        
+          <li class="md-nav__item">
+  <a href="#optional-sidecars-and-tools" class="md-nav__link">
+    <span class="md-ellipsis">
+      Optional sidecars and tools
+    </span>
+  </a>
+  
+</li>
+        
+          <li class="md-nav__item">
+  <a href="#other-useful-targets" class="md-nav__link">
+    <span class="md-ellipsis">
+      Other useful targets
     </span>
   </a>
   
@@ -2109,35 +2172,11 @@
 </li>
       
         <li class="md-nav__item">
-  <a href="#sam3-training-prerequisite-hugging-face-authentication" class="md-nav__link">
+  <a href="#hugging-face-authentication-for-sam3" class="md-nav__link">
     <span class="md-ellipsis">
-      SAM3 training prerequisite: Hugging Face authentication
+      Hugging Face authentication for SAM3
     </span>
   </a>
-  
-</li>
-      
-        <li class="md-nav__item">
-  <a href="#sam3-environment-recipe-use-the-script-not-prose" class="md-nav__link">
-    <span class="md-ellipsis">
-      SAM3 environment recipe — use the script, not prose
-    </span>
-  </a>
-  
-    <nav class="md-nav" aria-label="SAM3 environment recipe — use the script, not prose">
-      <ul class="md-nav__list">
-        
-          <li class="md-nav__item">
-  <a href="#other-useful-targets" class="md-nav__link">
-    <span class="md-ellipsis">
-      Other useful targets
-    </span>
-  </a>
-  
-</li>
-        
-      </ul>
-    </nav>
   
 </li>
       
@@ -2164,123 +2203,178 @@
   
 
 
-<h1 id="conda-environments-and-makefile-reference">Conda Environments and Makefile Reference<a class="headerlink" href="#conda-environments-and-makefile-reference" title="Permanent link">&para;</a></h1>
-<p>This page documents the conda environment files and Makefile targets used in the <a href="../installation/#conda-pip-developer-install">developer install path</a>.</p>
-<h2 id="environment-files">Environment files<a class="headerlink" href="#environment-files" title="Permanent link">&para;</a></h2>
+<h1 id="environments-and-makefile-reference">Environments and Makefile Reference<a class="headerlink" href="#environments-and-makefile-reference" title="Permanent link">&para;</a></h1>
+<p>This page explains how a HYDRA environment is put together and lists the
+Makefile targets. To <em>install</em>, follow <a href="../installation/">Installation</a>:
+<code>python install.py</code> does everything described here.</p>
+<h2 id="where-each-dependency-comes-from">Where each dependency comes from<a class="headerlink" href="#where-each-dependency-comes-from" title="Permanent link">&para;</a></h2>
 <table>
 <thead>
 <tr>
-<th>File</th>
-<th>Env name</th>
-<th>Platform</th>
-<th>What conda provides</th>
+<th>Layer</th>
+<th>Source of truth</th>
+<th>What it provides</th>
 </tr>
 </thead>
 <tbody>
 <tr>
-<td><code>environment.yml</code></td>
+<td>Conda env (optional)</td>
+<td><code>environment.yml</code>, <code>environment-mps.yml</code>, <code>environment-cuda.yml</code> (mirrored by <code>CONDA_PACKAGES</code> in <code>install.py</code>)</td>
+<td><strong>Only</strong> <code>python</code>, <code>pip</code>, <code>git</code>, <code>cmake</code>, <code>c-compiler</code>, <code>cxx-compiler</code> (Windows: <code>pip</code>, <code>git</code>, <code>cmake</code>). No Qt, no OpenCV, no ffmpeg, no CUDA libraries.</td>
+</tr>
+<tr>
+<td>Python dependencies</td>
+<td><code>pyproject.toml</code></td>
+<td><strong>The only place</strong> Python packages are declared: core dependencies plus the <code>cpu</code>, <code>mps</code>, <code>cuda12</code>, <code>cuda13</code> tier extras and the <code>sam</code>, <code>dev</code>, <code>docs</code> feature extras.</td>
+</tr>
+<tr>
+<td>Tested versions</td>
+<td><code>constraints/base.txt</code>, <code>constraints/cuda12.txt</code>, <code>constraints/cuda13.txt</code></td>
+<td>Exact versions applied by default, so results do not drift with upstream releases. Generated by <code>tools/lock_constraints.py</code>.</td>
+</tr>
+<tr>
+<td>torch / torchvision</td>
+<td><code>TORCH_VERSION</code> / <code>TORCHVISION_VERSION</code> in <code>install.py</code></td>
+<td>A pinned pair, installed from the PyTorch wheel index for the tier (<code>cpu</code>, <code>cu128</code>, <code>cu130</code>; PyPI on macOS).</td>
+</tr>
+<tr>
+<td>ffmpeg binary</td>
+<td><code>imageio-ffmpeg</code> wheel (core dependency)</td>
+<td>Bundled ffmpeg on every platform. A system <code>ffmpeg</code> on <code>PATH</code> takes precedence. Conda's ffmpeg is deliberately not used: its harfbuzz/freetype libraries broke Qt on Rocky Linux 9 (<code>undefined symbol: FT_Get_Colorline_Stops</code>).</td>
+</tr>
+<tr>
+<td>Git-only installs</td>
+<td><code>install.py</code></td>
+<td>The ultralytics CLIP fork (SAM3 text encoder) and the Kronauer lab AprilTag fork, each pinned to a commit.</td>
+</tr>
+</tbody>
+</table>
+<p>There are no <code>requirements*.txt</code> files any more. If a package is imported by
+<code>src/</code>, it must be declared in <code>pyproject.toml</code>
+(<code>tests/test_dependencies_declared.py</code> enforces this).</p>
+<h3 id="environments">Environments<a class="headerlink" href="#environments" title="Permanent link">&para;</a></h3>
+<table>
+<thead>
+<tr>
+<th>Env</th>
+<th>Tier</th>
+<th>Created by</th>
+</tr>
+</thead>
+<tbody>
+<tr>
 <td><code>hydra</code></td>
-<td>All</td>
-<td>Python, NumPy, SciPy, PySide6, Qt6, OpenCV, Numba</td>
+<td><code>cpu</code></td>
+<td><code>python install.py</code> on a CPU host, or <code>make setup</code></td>
 </tr>
 <tr>
-<td><code>environment-mps.yml</code></td>
 <td><code>hydra-mps</code></td>
-<td>macOS M1-M4</td>
-<td>Same as CPU</td>
+<td><code>mps</code></td>
+<td><code>python install.py</code> on Apple Silicon, or <code>make setup-mps</code></td>
 </tr>
 <tr>
-<td><code>environment-cuda.yml</code></td>
 <td><code>hydra-cuda</code></td>
-<td>Linux/Windows (NVIDIA)</td>
-<td>Same + CUDA 12 runtime libs (cublas, cudnn, curand, cufft)</td>
+<td><code>cuda</code> (12 or 13)</td>
+<td><code>python install.py</code> on an NVIDIA host, or <code>make setup-cuda</code></td>
+</tr>
+<tr>
+<td><code>hydra-sam3</code></td>
+<td>sidecar</td>
+<td><code>python install.py --with-sam3-train</code> (CUDA only)</td>
+</tr>
+<tr>
+<td><code>sleap</code></td>
+<td>sidecar</td>
+<td><code>python install.py --with-sleap</code></td>
 </tr>
 </tbody>
 </table>
-<p>The conda environments provide <strong>system libraries only</strong> (Qt, OpenGL, CUDA runtime). Python packages are installed separately via <code>make install-*</code>, which runs <code>uv pip install -r requirements-*.txt</code>.</p>
-<h2 id="requirements-files">Requirements files<a class="headerlink" href="#requirements-files" title="Permanent link">&para;</a></h2>
+<p>Without conda, <code>install.py</code> creates a venv at <code>&lt;checkout&gt;/.venv-&lt;name&gt;</code>
+instead (sidecars need conda).</p>
+<h3 id="sidecar-environments">Sidecar environments<a class="headerlink" href="#sidecar-environments" title="Permanent link">&para;</a></h3>
+<p>Two features need dependencies that cannot coexist with the main env, so they
+run in separate conda envs that HYDRA launches as subprocesses:</p>
+<ul>
+<li><strong><code>hydra-sam3</code></strong> holds Meta's <code>sam3</code> training code, which pins <code>numpy&lt;2</code>. It
+  gets the same hydra-suite source as the main env (editable checkout, git
+  commit or wheel). See
+  <a href="../../user-guide/sam-install-and-run/#sam3-training-optional-cuda-only">SAM3 training</a>.</li>
+<li><strong><code>sleap</code></strong> holds <code>sleap==1.6.2</code> (which brings <code>sleap-nn</code> 0.1.x) with the torch
+  build matching the host. See <a href="../integrations/">Integrations</a>.</li>
+</ul>
+<h3 id="gpu-library-loading-cuda">GPU library loading (CUDA)<a class="headerlink" href="#gpu-library-loading-cuda" title="Permanent link">&para;</a></h3>
+<p>ONNX Runtime GPU and TensorRT load the CUDA user-space libraries from the
+<code>nvidia-*</code> pip wheels, via <code>onnxruntime.preload_dlls()</code>. No conda CUDA
+packages are installed and no <code>LD_LIBRARY_PATH</code> activation hook is written.
+This works the same way on Linux and Windows. Each CUDA major gets exactly one
+wheel family:</p>
 <table>
 <thead>
 <tr>
-<th>File</th>
-<th>Inherits</th>
-<th>Adds (beyond pyproject.toml)</th>
+<th>CUDA</th>
+<th>torch wheels</th>
+<th>ONNX Runtime GPU</th>
+<th>TensorRT / CuPy</th>
 </tr>
 </thead>
 <tbody>
 <tr>
-<td><code>requirements.txt</code></td>
-<td><code>-e .</code></td>
-<td><code>torch</code>, <code>torchvision</code> (CPU)</td>
+<td>12</td>
+<td><code>+cu128</code></td>
+<td><code>onnxruntime-gpu[cuda,cudnn]</code> <code>&gt;=1.24,&lt;1.27</code> (<code>nvidia-*-cu12</code> wheels)</td>
+<td><code>tensorrt-cu12*</code>, <code>cupy-cuda12x</code></td>
 </tr>
 <tr>
-<td><code>requirements-mps.txt</code></td>
-<td><code>-e .</code></td>
-<td><code>torch</code>, <code>torchvision</code>, <code>torchaudio</code>, <code>onnxruntime</code></td>
-</tr>
-<tr>
-<td><code>requirements-cuda.txt</code></td>
-<td><code>-e .</code></td>
-<td><code>torch</code>, <code>torchvision</code>, <code>torchaudio</code>, <code>onnxruntime-gpu</code></td>
-</tr>
-<tr>
-<td><code>requirements-cuda12.txt</code></td>
-<td><code>-r requirements-cuda.txt</code></td>
-<td><code>--extra-index-url .../cu128</code>, <code>tensorrt-cu12-*</code>, <code>cupy-cuda12x</code></td>
-</tr>
-<tr>
-<td><code>requirements-cuda13.txt</code></td>
-<td><code>-r requirements-cuda.txt</code></td>
-<td><code>--extra-index-url .../cu130</code>, <code>tensorrt-cu13-*</code>, <code>cupy-cuda13x</code></td>
-</tr>
-<tr>
-<td><code>requirements-dev.txt</code></td>
-<td>(standalone)</td>
-<td>pytest, black, flake8, mypy, build, twine, etc.</td>
+<td>13</td>
+<td><code>+cu130</code></td>
+<td><code>onnxruntime-gpu[cuda,cudnn]</code> <code>&gt;=1.28</code> (unsuffixed <code>nvidia-*</code> wheels)</td>
+<td><code>tensorrt-cu13*</code>, <code>cupy-cuda13x</code></td>
 </tr>
 </tbody>
 </table>
-<p>All requirements files include <code>-e .</code> which installs the package in editable mode, pulling base dependencies from <code>pyproject.toml</code>. This means dependencies are declared once — in <code>pyproject.toml</code> — and requirements files only add what <code>pyproject.toml</code> cannot express (torch index URLs, GPU-specific wheels).</p>
-<p>For runtime-specific GPU installs, prefer the Makefile targets over direct <code>pip install -e .[extra]</code>. The CUDA install targets reset conflicting <code>onnxruntime</code> and TensorRT wheel families before reinstalling the correct variant for the selected platform, which avoids mixed-provider installs and broken CUDA backend selection.</p>
-<h2 id="onnx-runtime-and-cuda-compatibility">ONNX Runtime and CUDA compatibility<a class="headerlink" href="#onnx-runtime-and-cuda-compatibility" title="Permanent link">&para;</a></h2>
-<p><code>onnxruntime-gpu==1.24.1</code> links against CUDA 12 user-space libraries (<code>libcublasLt.so.12</code>, <code>libcudart.so.12</code>, <code>libcurand.so.10</code>). This is handled differently by each install path:</p>
-<ul>
-<li><strong>pip path:</strong> PyTorch's CUDA wheel installs <code>nvidia-cublas-cu12</code>, <code>nvidia-cudnn-cu12</code>, etc. as pip dependencies and preloads them via <code>ctypes</code> at import time. ONNX Runtime finds them in the same process.</li>
-<li><strong>conda path:</strong> <code>environment-cuda.yml</code> installs CUDA 12 runtime libs via conda packages, including <code>libcurand</code>. <code>make install-cuda</code> writes <code>LD_LIBRARY_PATH</code> activation hooks.</li>
-</ul>
-<p>Both approaches work on CUDA 13 systems — CUDA 12 user-space libs coexist with a CUDA 13 driver.</p>
-<p>TensorRT follows the same rule: install exactly one CUDA wheel family. <code>requirements-cuda12.txt</code> installs the CUDA 12 TensorRT wheels, and <code>requirements-cuda13.txt</code> installs the CUDA 13 family. Mixing both families in one env can leave <code>import tensorrt</code> working while builder initialization fails at runtime.</p>
+<p>The installer removes the other family's <code>onnxruntime</code>/TensorRT packages
+before installing. Mixing families in one env breaks cuDNN loading, and
+<code>hydra doctor</code> detects it.</p>
 <h2 id="makefile-targets">Makefile targets<a class="headerlink" href="#makefile-targets" title="Permanent link">&para;</a></h2>
-<h3 id="setup-creates-conda-environment">Setup (creates conda environment)<a class="headerlink" href="#setup-creates-conda-environment" title="Permanent link">&para;</a></h3>
-<div class="language-bash highlight"><pre><span></span><code><span id="__span-0-1"><a id="__codelineno-0-1" name="__codelineno-0-1" href="#__codelineno-0-1"></a>make<span class="w"> </span>setup<span class="w">            </span><span class="c1"># CPU</span>
-</span><span id="__span-0-2"><a id="__codelineno-0-2" name="__codelineno-0-2" href="#__codelineno-0-2"></a>make<span class="w"> </span>setup-mps<span class="w">        </span><span class="c1"># Apple Silicon</span>
-</span><span id="__span-0-3"><a id="__codelineno-0-3" name="__codelineno-0-3" href="#__codelineno-0-3"></a>make<span class="w"> </span>setup-cuda<span class="w">       </span><span class="c1"># NVIDIA CUDA</span>
+<p>Every install target is a thin wrapper around <code>install.py</code>. Windows users run
+<code>install.py</code> directly.</p>
+<h3 id="create-a-conda-env-step-1">Create a conda env (step 1)<a class="headerlink" href="#create-a-conda-env-step-1" title="Permanent link">&para;</a></h3>
+<div class="language-bash highlight"><pre><span></span><code><span id="__span-0-1"><a id="__codelineno-0-1" name="__codelineno-0-1" href="#__codelineno-0-1"></a>make<span class="w"> </span>setup<span class="w">            </span><span class="c1"># CPU          -&gt; hydra</span>
+</span><span id="__span-0-2"><a id="__codelineno-0-2" name="__codelineno-0-2" href="#__codelineno-0-2"></a>make<span class="w"> </span>setup-mps<span class="w">        </span><span class="c1"># Apple Silicon -&gt; hydra-mps</span>
+</span><span id="__span-0-3"><a id="__codelineno-0-3" name="__codelineno-0-3" href="#__codelineno-0-3"></a>make<span class="w"> </span>setup-cuda<span class="w">       </span><span class="c1"># NVIDIA       -&gt; hydra-cuda</span>
 </span></code></pre></div>
-<h3 id="install-pip-packages-into-activated-environment">Install (pip packages into activated environment)<a class="headerlink" href="#install-pip-packages-into-activated-environment" title="Permanent link">&para;</a></h3>
-<div class="language-bash highlight"><pre><span></span><code><span id="__span-1-1"><a id="__codelineno-1-1" name="__codelineno-1-1" href="#__codelineno-1-1"></a>make<span class="w"> </span>install<span class="w">                      </span><span class="c1"># CPU</span>
-</span><span id="__span-1-2"><a id="__codelineno-1-2" name="__codelineno-1-2" href="#__codelineno-1-2"></a>make<span class="w"> </span>install-mps<span class="w">                  </span><span class="c1"># Apple Silicon</span>
-</span><span id="__span-1-3"><a id="__codelineno-1-3" name="__codelineno-1-3" href="#__codelineno-1-3"></a>make<span class="w"> </span>install-cuda<span class="w"> </span><span class="nv">CUDA_MAJOR</span><span class="o">=</span><span class="m">13</span><span class="w">  </span><span class="c1"># NVIDIA CUDA 13</span>
-</span><span id="__span-1-4"><a id="__codelineno-1-4" name="__codelineno-1-4" href="#__codelineno-1-4"></a>make<span class="w"> </span>install-cuda<span class="w"> </span><span class="nv">CUDA_MAJOR</span><span class="o">=</span><span class="m">12</span><span class="w">  </span><span class="c1"># NVIDIA CUDA 12</span>
-</span><span id="__span-1-5"><a id="__codelineno-1-5" name="__codelineno-1-5" href="#__codelineno-1-5"></a>make<span class="w"> </span>install-dev<span class="w">                  </span><span class="c1"># Dev tools (formatting, linting, testing, publishing)</span>
+<p>These only create the env (<code>install.py --create-only</code>).</p>
+<h3 id="install-into-the-activated-env-step-2">Install into the activated env (step 2)<a class="headerlink" href="#install-into-the-activated-env-step-2" title="Permanent link">&para;</a></h3>
+<div class="language-bash highlight"><pre><span></span><code><span id="__span-1-1"><a id="__codelineno-1-1" name="__codelineno-1-1" href="#__codelineno-1-1"></a>make<span class="w"> </span>install<span class="w">          </span><span class="c1"># CPU</span>
+</span><span id="__span-1-2"><a id="__codelineno-1-2" name="__codelineno-1-2" href="#__codelineno-1-2"></a>make<span class="w"> </span>install-mps<span class="w">      </span><span class="c1"># Apple Silicon</span>
+</span><span id="__span-1-3"><a id="__codelineno-1-3" name="__codelineno-1-3" href="#__codelineno-1-3"></a>make<span class="w"> </span>install-cuda<span class="w">     </span><span class="c1"># NVIDIA; CUDA 12/13 auto-detected from the driver</span>
+</span><span id="__span-1-4"><a id="__codelineno-1-4" name="__codelineno-1-4" href="#__codelineno-1-4"></a>make<span class="w"> </span>install-cuda<span class="w"> </span><span class="nv">CUDA_MAJOR</span><span class="o">=</span><span class="m">12</span><span class="w">   </span><span class="c1"># optional override</span>
 </span></code></pre></div>
-<p><code>CUDA_MAJOR</code> must match the driver: 13 needs driver 580+, otherwise use 12.
-Check with <code>nvidia-smi --query-gpu=driver_version --format=csv,noheader</code>. See
-<a href="../installation/#choosing-cuda_major">Choosing <code>CUDA_MAJOR</code></a> — a mismatch leaves
-<code>torch.cuda.is_available()</code> <code>False</code> while GPUs still appear in
-<code>device_count()</code>.</p>
-<p>Each profile pins torch/torchvision/torchaudio to explicit <code>+cu128</code> / <code>+cu130</code>
-builds in <code>requirements-cuda12.txt</code> / <code>requirements-cuda13.txt</code>. Those local
-version tags are what force the wheels to come from the PyTorch index rather
-than PyPI; do not relax them to bare version pins.</p>
-<h3 id="update-refresh-both-conda-and-pip">Update (refresh both conda and pip)<a class="headerlink" href="#update-refresh-both-conda-and-pip" title="Permanent link">&para;</a></h3>
-<div class="language-bash highlight"><pre><span></span><code><span id="__span-2-1"><a id="__codelineno-2-1" name="__codelineno-2-1" href="#__codelineno-2-1"></a>make<span class="w"> </span>env-update<span class="w">                      </span><span class="c1"># CPU</span>
-</span><span id="__span-2-2"><a id="__codelineno-2-2" name="__codelineno-2-2" href="#__codelineno-2-2"></a>make<span class="w"> </span>env-update-mps<span class="w">                  </span><span class="c1"># Apple Silicon</span>
-</span><span id="__span-2-3"><a id="__codelineno-2-3" name="__codelineno-2-3" href="#__codelineno-2-3"></a>make<span class="w"> </span>env-update-cuda<span class="w"> </span><span class="nv">CUDA_MAJOR</span><span class="o">=</span><span class="m">13</span><span class="w">  </span><span class="c1"># NVIDIA CUDA</span>
+<p>These run <code>install.py --target current</code> with the activated env's Python.</p>
+<h3 id="update-or-remove">Update or remove<a class="headerlink" href="#update-or-remove" title="Permanent link">&para;</a></h3>
+<div class="language-bash highlight"><pre><span></span><code><span id="__span-2-1"><a id="__codelineno-2-1" name="__codelineno-2-1" href="#__codelineno-2-1"></a>make<span class="w"> </span>env-update<span class="w">       </span><span class="c1"># or env-update-mps / env-update-cuda  (install.py --update)</span>
+</span><span id="__span-2-2"><a id="__codelineno-2-2" name="__codelineno-2-2" href="#__codelineno-2-2"></a>make<span class="w"> </span>env-remove<span class="w">       </span><span class="c1"># or env-remove-mps / env-remove-cuda</span>
 </span></code></pre></div>
-<h3 id="remove">Remove<a class="headerlink" href="#remove" title="Permanent link">&para;</a></h3>
-<div class="language-bash highlight"><pre><span></span><code><span id="__span-3-1"><a id="__codelineno-3-1" name="__codelineno-3-1" href="#__codelineno-3-1"></a>make<span class="w"> </span>env-remove<span class="w">         </span><span class="c1"># CPU</span>
-</span><span id="__span-3-2"><a id="__codelineno-3-2" name="__codelineno-3-2" href="#__codelineno-3-2"></a>make<span class="w"> </span>env-remove-mps<span class="w">     </span><span class="c1"># Apple Silicon</span>
-</span><span id="__span-3-3"><a id="__codelineno-3-3" name="__codelineno-3-3" href="#__codelineno-3-3"></a>make<span class="w"> </span>env-remove-cuda<span class="w">    </span><span class="c1"># NVIDIA CUDA</span>
+<p>To rebuild an env from scratch, use <code>python install.py --recreate</code>.</p>
+<h3 id="individual-steps-and-checks">Individual steps and checks<a class="headerlink" href="#individual-steps-and-checks" title="Permanent link">&para;</a></h3>
+<div class="language-bash highlight"><pre><span></span><code><span id="__span-3-1"><a id="__codelineno-3-1" name="__codelineno-3-1" href="#__codelineno-3-1"></a>make<span class="w"> </span>doctor<span class="w">                  </span><span class="c1"># hydra doctor</span>
+</span><span id="__span-3-2"><a id="__codelineno-3-2" name="__codelineno-3-2" href="#__codelineno-3-2"></a>make<span class="w"> </span>install-apriltag-fork<span class="w">   </span><span class="c1"># install.py --only apriltag</span>
+</span><span id="__span-3-3"><a id="__codelineno-3-3" name="__codelineno-3-3" href="#__codelineno-3-3"></a>make<span class="w"> </span>install-sam3-clip<span class="w">       </span><span class="c1"># install.py --only clip</span>
+</span><span id="__span-3-4"><a id="__codelineno-3-4" name="__codelineno-3-4" href="#__codelineno-3-4"></a>make<span class="w"> </span>configure-mps-libs<span class="w">      </span><span class="c1"># python -m hydra_suite.runtime.macos_libomp</span>
+</span><span id="__span-3-5"><a id="__codelineno-3-5" name="__codelineno-3-5" href="#__codelineno-3-5"></a>make<span class="w"> </span>configure-cuda-ort<span class="w">      </span><span class="c1"># retired; now just runs hydra doctor --tier cuda</span>
+</span></code></pre></div>
+<h3 id="optional-sidecars-and-tools">Optional sidecars and tools<a class="headerlink" href="#optional-sidecars-and-tools" title="Permanent link">&para;</a></h3>
+<div class="language-bash highlight"><pre><span></span><code><span id="__span-4-1"><a id="__codelineno-4-1" name="__codelineno-4-1" href="#__codelineno-4-1"></a>make<span class="w"> </span>setup-sam3-train<span class="w">  </span><span class="c1"># install.py --with-sam3-train  (CUDA only)</span>
+</span><span id="__span-4-2"><a id="__codelineno-4-2" name="__codelineno-4-2" href="#__codelineno-4-2"></a>make<span class="w"> </span>setup-sleap<span class="w">       </span><span class="c1"># install.py --with-sleap</span>
+</span><span id="__span-4-3"><a id="__codelineno-4-3" name="__codelineno-4-3" href="#__codelineno-4-3"></a>make<span class="w"> </span>install-dev<span class="w">       </span><span class="c1"># [dev] extra, with the tested pins</span>
+</span><span id="__span-4-4"><a id="__codelineno-4-4" name="__codelineno-4-4" href="#__codelineno-4-4"></a>make<span class="w"> </span>docs-install<span class="w">      </span><span class="c1"># [docs] extra, with the tested pins</span>
+</span></code></pre></div>
+<h3 id="other-useful-targets">Other useful targets<a class="headerlink" href="#other-useful-targets" title="Permanent link">&para;</a></h3>
+<div class="language-bash highlight"><pre><span></span><code><span id="__span-5-1"><a id="__codelineno-5-1" name="__codelineno-5-1" href="#__codelineno-5-1"></a>make<span class="w"> </span><span class="nb">help</span><span class="w">              </span><span class="c1"># Full command catalog</span>
+</span><span id="__span-5-2"><a id="__codelineno-5-2" name="__codelineno-5-2" href="#__codelineno-5-2"></a>make<span class="w"> </span>pytest<span class="w">            </span><span class="c1"># Run tests</span>
+</span><span id="__span-5-3"><a id="__codelineno-5-3" name="__codelineno-5-3" href="#__codelineno-5-3"></a>make<span class="w"> </span>format<span class="w">            </span><span class="c1"># Format code (autopep8 → black → isort)</span>
+</span><span id="__span-5-4"><a id="__codelineno-5-4" name="__codelineno-5-4" href="#__codelineno-5-4"></a>make<span class="w"> </span>lint<span class="w">              </span><span class="c1"># Lint at moderate severity</span>
+</span><span id="__span-5-5"><a id="__codelineno-5-5" name="__codelineno-5-5" href="#__codelineno-5-5"></a>make<span class="w"> </span>build<span class="w">             </span><span class="c1"># Build wheel and sdist</span>
 </span></code></pre></div>
 <h2 id="fresh-box-condamamba-initialisation-non-interactive-shells">Fresh-box conda/mamba initialisation (non-interactive shells)<a class="headerlink" href="#fresh-box-condamamba-initialisation-non-interactive-shells" title="Permanent link">&para;</a></h2>
 <p>Two things a first-time provisioning session must get right that are easy to
@@ -2308,40 +2402,19 @@ login shell:</p>
 <p>Both were found missing on a from-scratch Ubuntu box during provisioning
 (2026-09-07); the fix is in <code>~/.bashrc</code>, not in this repo, since it's a
 per-machine shell-init concern.</p>
-<h2 id="sam3-training-prerequisite-hugging-face-authentication">SAM3 training prerequisite: Hugging Face authentication<a class="headerlink" href="#sam3-training-prerequisite-hugging-face-authentication" title="Permanent link">&para;</a></h2>
-<p><code>make setup-sam3-train</code> / <code>tools/setup_sam3_train_env.sh</code> build the <code>sam3</code>
-package and its dependencies, but SAM3 LoRA training itself additionally
-needs a Hugging Face credential on the machine that runs it — this is
-<strong>separate from and not satisfied by</strong> copying a local <code>sam3.pt</code> checkpoint.
-<code>build_sam3_image_model</code> fetches the model config from the <strong>gated</strong>
-<code>facebook/sam3</code> Hugging Face repo at build time, so on a fresh box with no
-credential, training (and even the auto-batch probe) refuses to start:</p>
-<div class="language-bash highlight"><pre><span></span><code><span id="__span-4-1"><a id="__codelineno-4-1" name="__codelineno-4-1" href="#__codelineno-4-1"></a>hf<span class="w"> </span>auth<span class="w"> </span>login<span class="w">      </span><span class="c1"># paste a token from a HF account that has accepted the</span>
-</span><span id="__span-4-2"><a id="__codelineno-4-2" name="__codelineno-4-2" href="#__codelineno-4-2"></a><span class="w">                    </span><span class="c1"># licence at https://huggingface.co/facebook/sam3</span>
-</span><span id="__span-4-3"><a id="__codelineno-4-3" name="__codelineno-4-3" href="#__codelineno-4-3"></a><span class="c1"># or: export HF_TOKEN=... / HUGGING_FACE_HUB_TOKEN=...</span>
+<h2 id="hugging-face-authentication-for-sam3">Hugging Face authentication for SAM3<a class="headerlink" href="#hugging-face-authentication-for-sam3" title="Permanent link">&para;</a></h2>
+<p>The stock SAM3 weights (<code>facebook/sam3</code>) are <strong>licence-gated</strong>. Any machine
+that downloads them (for escalation) or trains SAM3 needs a one-time login
+from an account that has accepted the licence at
+<a href="https://huggingface.co/facebook/sam3">https://huggingface.co/facebook/sam3</a>:</p>
+<div class="language-bash highlight"><pre><span></span><code><span id="__span-6-1"><a id="__codelineno-6-1" name="__codelineno-6-1" href="#__codelineno-6-1"></a>hf<span class="w"> </span>auth<span class="w"> </span>login<span class="w">      </span><span class="c1"># or: export HF_TOKEN=... / HUGGING_FACE_HUB_TOKEN=...</span>
 </span></code></pre></div>
-<p><code>src/hydra_suite/training/sam3_lora/preflight.py</code> checks for this up front
-and refuses with a message that already names the fix (<code>hf auth login</code>) —
-if you see a bare <code>GatedRepoError: 401</code> instead, you are hitting the
+<p>For training this is required even when a local <code>sam3.pt</code> is present:
+<code>build_sam3_image_model</code> fetches the model config from the gated repo at
+build time. <code>src/hydra_suite/training/sam3_lora/preflight.py</code> checks for a
+credential up front and refuses with a message that names the fix (<code>hf auth
+login</code>). If you see a bare <code>GatedRepoError: 401</code> instead, you are hitting the
 credential check too late in the pipeline; file that as a regression.</p>
-<h2 id="sam3-environment-recipe-use-the-script-not-prose">SAM3 environment recipe — use the script, not prose<a class="headerlink" href="#sam3-environment-recipe-use-the-script-not-prose" title="Permanent link">&para;</a></h2>
-<p>The canonical, tested recipe for the <code>sam3</code> training sidecar env is
-<code>tools/setup_sam3_train_env.sh</code> (invoked by <code>make setup-sam3-train</code>). Do not
-re-derive or re-copy the pip install list into other docs — it drifts. Two
-of its pins are load-bearing and easy to accidentally drop if hand-rolling
-the env instead of running the script: <code>scipy&lt;1.14</code> and
-<code>opencv-python-headless&lt;4.12</code> — both would otherwise pull in <code>numpy&gt;=2</code>,
-silently breaking the <code>numpy&lt;2</code> pin the whole env exists to hold. See the
-comments in that script for the full rationale per pin.</p>
-<h3 id="other-useful-targets">Other useful targets<a class="headerlink" href="#other-useful-targets" title="Permanent link">&para;</a></h3>
-<div class="language-bash highlight"><pre><span></span><code><span id="__span-5-1"><a id="__codelineno-5-1" name="__codelineno-5-1" href="#__codelineno-5-1"></a>make<span class="w"> </span><span class="nb">help</span><span class="w">              </span><span class="c1"># Full command catalog</span>
-</span><span id="__span-5-2"><a id="__codelineno-5-2" name="__codelineno-5-2" href="#__codelineno-5-2"></a>make<span class="w"> </span>pytest<span class="w">            </span><span class="c1"># Run tests</span>
-</span><span id="__span-5-3"><a id="__codelineno-5-3" name="__codelineno-5-3" href="#__codelineno-5-3"></a>make<span class="w"> </span>format<span class="w">            </span><span class="c1"># Format code (autopep8 → black → isort)</span>
-</span><span id="__span-5-4"><a id="__codelineno-5-4" name="__codelineno-5-4" href="#__codelineno-5-4"></a>make<span class="w"> </span>lint<span class="w">              </span><span class="c1"># Lint at moderate severity</span>
-</span><span id="__span-5-5"><a id="__codelineno-5-5" name="__codelineno-5-5" href="#__codelineno-5-5"></a>make<span class="w"> </span>build<span class="w">             </span><span class="c1"># Build wheel and sdist for PyPI</span>
-</span><span id="__span-5-6"><a id="__codelineno-5-6" name="__codelineno-5-6" href="#__codelineno-5-6"></a>make<span class="w"> </span>publish-test<span class="w">      </span><span class="c1"># Upload to Test PyPI</span>
-</span><span id="__span-5-7"><a id="__codelineno-5-7" name="__codelineno-5-7" href="#__codelineno-5-7"></a>make<span class="w"> </span>publish<span class="w">           </span><span class="c1"># Upload to real PyPI</span>
-</span></code></pre></div>
 
 
 

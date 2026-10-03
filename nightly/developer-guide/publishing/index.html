@@ -936,6 +936,27 @@
   
   
     <li class="md-nav__item">
+      <a href="../../user-guide/sam-install-and-run/" class="md-nav__link">
+        
+  
+  <span class="md-ellipsis">
+    SAM2 and SAM3: Install and Run
+  </span>
+  
+
+      </a>
+    </li>
+  
+
+              
+            
+              
+                
+  
+  
+  
+  
+    <li class="md-nav__item">
       <a href="../../user-guide/detectkit-semantic-escalation/" class="md-nav__link">
         
   
@@ -2202,11 +2223,21 @@
 
 <h1 id="publishing-to-pypi">Publishing to PyPI<a class="headerlink" href="#publishing-to-pypi" title="Permanent link">&para;</a></h1>
 <p>How to release new versions of hydra-suite to PyPI.</p>
+<div class="admonition warning">
+<p class="admonition-title">Not yet published</p>
+<p>hydra-suite has <strong>not</strong> been published to PyPI yet (<code>pip install
+hydra-suite</code> returns "not found"). Users install with <code>install.py</code> from a
+checkout or a git URL; see <a href="../../getting-started/installation/">Installation</a>.
+This page describes the release process for when it is published. Even
+then, a plain <code>pip install</code> will not give a complete install: it cannot
+choose the right torch build, and it cannot install the git-only CLIP
+fork or the AprilTag fork. Keep <code>install.py</code> as the documented path.</p>
+</div>
 <h2 id="prerequisites">Prerequisites<a class="headerlink" href="#prerequisites" title="Permanent link">&para;</a></h2>
 <p><code>build</code> and <code>twine</code> are included in dev dependencies. Install them with:</p>
-<div class="language-bash highlight"><pre><span></span><code><span id="__span-0-1"><a id="__codelineno-0-1" name="__codelineno-0-1" href="#__codelineno-0-1"></a>make<span class="w"> </span>install-dev<span class="w">     </span><span class="c1"># conda workflow</span>
+<div class="language-bash highlight"><pre><span></span><code><span id="__span-0-1"><a id="__codelineno-0-1" name="__codelineno-0-1" href="#__codelineno-0-1"></a>make<span class="w"> </span>install-dev<span class="w">            </span><span class="c1"># into the activated env, with the tested pins</span>
 </span><span id="__span-0-2"><a id="__codelineno-0-2" name="__codelineno-0-2" href="#__codelineno-0-2"></a><span class="c1"># or</span>
-</span><span id="__span-0-3"><a id="__codelineno-0-3" name="__codelineno-0-3" href="#__codelineno-0-3"></a>pip<span class="w"> </span>install<span class="w"> </span>-e<span class="w"> </span><span class="s2">".[dev]"</span><span class="w">  </span><span class="c1"># pip workflow</span>
+</span><span id="__span-0-3"><a id="__codelineno-0-3" name="__codelineno-0-3" href="#__codelineno-0-3"></a>python<span class="w"> </span>install.py<span class="w"> </span>--dev<span class="w">     </span><span class="c1"># full install including dev tools</span>
 </span></code></pre></div>
 <p>You also need a <a href="https://pypi.org/account/register/">PyPI account</a> and an <a href="https://pypi.org/manage/account/token/">API token</a> (unless using trusted publishing via GitHub Actions).</p>
 <h2 id="release-workflow">Release workflow<a class="headerlink" href="#release-workflow" title="Permanent link">&para;</a></h2>
@@ -2297,31 +2328,36 @@
 <li><code>tests/</code>, <code>docs/</code>, <code>legacy/</code>, <code>tools/</code></li>
 </ul>
 <h2 id="dependency-architecture">Dependency architecture<a class="headerlink" href="#dependency-architecture" title="Permanent link">&para;</a></h2>
-<div class="language-text highlight"><pre><span></span><code><span id="__span-8-1"><a id="__codelineno-8-1" name="__codelineno-8-1" href="#__codelineno-8-1"></a>pyproject.toml [project.dependencies]     ← single source of truth for base deps
-</span><span id="__span-8-2"><a id="__codelineno-8-2" name="__codelineno-8-2" href="#__codelineno-8-2"></a>    ├── numpy, scipy, pandas, PySide6, ultralytics, ...
-</span><span id="__span-8-3"><a id="__codelineno-8-3" name="__codelineno-8-3" href="#__codelineno-8-3"></a>    └── platformdirs (for user data dirs)
-</span><span id="__span-8-4"><a id="__codelineno-8-4" name="__codelineno-8-4" href="#__codelineno-8-4"></a>
-</span><span id="__span-8-5"><a id="__codelineno-8-5" name="__codelineno-8-5" href="#__codelineno-8-5"></a>pyproject.toml [project.optional-dependencies]
-</span><span id="__span-8-6"><a id="__codelineno-8-6" name="__codelineno-8-6" href="#__codelineno-8-6"></a>    ├── cuda: onnxruntime-gpu, cupy-cuda12x
-</span><span id="__span-8-7"><a id="__codelineno-8-7" name="__codelineno-8-7" href="#__codelineno-8-7"></a>    ├── mps: onnxruntime
-</span><span id="__span-8-8"><a id="__codelineno-8-8" name="__codelineno-8-8" href="#__codelineno-8-8"></a>    └── dev: pytest, black, flake8, mypy, ...
-</span><span id="__span-8-9"><a id="__codelineno-8-9" name="__codelineno-8-9" href="#__codelineno-8-9"></a>
-</span><span id="__span-8-10"><a id="__codelineno-8-10" name="__codelineno-8-10" href="#__codelineno-8-10"></a>requirements-*.txt (developer workflow only)
-</span><span id="__span-8-11"><a id="__codelineno-8-11" name="__codelineno-8-11" href="#__codelineno-8-11"></a>    ├── torch, torchvision (+ --extra-index-url for GPU)
-</span><span id="__span-8-12"><a id="__codelineno-8-12" name="__codelineno-8-12" href="#__codelineno-8-12"></a>    ├── GPU-specific: tensorrt, onnxruntime-gpu, cupy-*
-</span><span id="__span-8-13"><a id="__codelineno-8-13" name="__codelineno-8-13" href="#__codelineno-8-13"></a>    └── -e .  ← pulls pyproject.toml deps automatically
+<div class="language-text highlight"><pre><span></span><code><span id="__span-8-1"><a id="__codelineno-8-1" name="__codelineno-8-1" href="#__codelineno-8-1"></a>pyproject.toml [project.dependencies]          &lt;- the ONLY declaration of Python deps
+</span><span id="__span-8-2"><a id="__codelineno-8-2" name="__codelineno-8-2" href="#__codelineno-8-2"></a>    numpy, scipy, PySide6, ultralytics, sam2, torch&gt;=2.4, torchvision&gt;=0.16, ...
+</span><span id="__span-8-3"><a id="__codelineno-8-3" name="__codelineno-8-3" href="#__codelineno-8-3"></a>
+</span><span id="__span-8-4"><a id="__codelineno-8-4" name="__codelineno-8-4" href="#__codelineno-8-4"></a>pyproject.toml [project.optional-dependencies]
+</span><span id="__span-8-5"><a id="__codelineno-8-5" name="__codelineno-8-5" href="#__codelineno-8-5"></a>    cpu / mps / cuda12 / cuda13   tier extras (install.py selects exactly one)
+</span><span id="__span-8-6"><a id="__codelineno-8-6" name="__codelineno-8-6" href="#__codelineno-8-6"></a>    cuda                          alias for cuda12
+</span><span id="__span-8-7"><a id="__codelineno-8-7" name="__codelineno-8-7" href="#__codelineno-8-7"></a>    sam (sam3 alias)              SAM3 inference helpers, installed on every tier
+</span><span id="__span-8-8"><a id="__codelineno-8-8" name="__codelineno-8-8" href="#__codelineno-8-8"></a>    sam3-train                    SAM3 training sidecar only, never the main env
+</span><span id="__span-8-9"><a id="__codelineno-8-9" name="__codelineno-8-9" href="#__codelineno-8-9"></a>    dev / docs / onnx-tools
+</span><span id="__span-8-10"><a id="__codelineno-8-10" name="__codelineno-8-10" href="#__codelineno-8-10"></a>
+</span><span id="__span-8-11"><a id="__codelineno-8-11" name="__codelineno-8-11" href="#__codelineno-8-11"></a>constraints/*.txt                              &lt;- tested pins, generated by tools/lock_constraints.py
+</span><span id="__span-8-12"><a id="__codelineno-8-12" name="__codelineno-8-12" href="#__codelineno-8-12"></a>install.py                                     &lt;- torch build + index, CLIP and AprilTag git installs,
+</span><span id="__span-8-13"><a id="__codelineno-8-13" name="__codelineno-8-13" href="#__codelineno-8-13"></a>                                                  platform fixups, sidecar envs
 </span></code></pre></div>
-<p><strong>torch</strong> is deliberately excluded from <code>pyproject.toml</code> because:</p>
-<ul>
-<li>GPU variants require <code>--index-url</code> which PEP 621 cannot express</li>
-<li>Listing <code>torch</code> in deps would pull CPU torch from PyPI, potentially overwriting a user's GPU install</li>
-<li>This is standard practice (ultralytics, timm, transformers all do the same)</li>
-</ul>
+<p><strong>torch</strong> is declared in <code>pyproject.toml</code> with a loose floor (<code>torch&gt;=2.4</code>).
+<code>install.py</code> installs a pinned build (<code>TORCH_VERSION</code>) from the PyTorch wheel
+index for the tier <em>before</em> resolving hydra-suite, and constrains the
+resolver so it is never swapped. PEP 621 cannot express per-dependency index
+URLs, which is why this step lives in the installer.</p>
+<p><strong>CLIP</strong> (SAM3's text encoder) is not a dependency at all. It is a PEP 508
+direct reference (<code>clip @ git+https://...</code>), which PyPI rejects in uploaded
+metadata, so listing it would break <code>twine upload</code> for the whole package.
+<code>install.py</code> installs it from a pinned commit.</p>
 <p>When adding new dependencies:</p>
 <ul>
-<li><strong>Base deps</strong> (needed by all users) → add to <code>pyproject.toml</code> <code>[project.dependencies]</code></li>
-<li><strong>GPU-specific deps</strong> (CUDA only) → add to <code>pyproject.toml</code> <code>[project.optional-dependencies]</code> AND to <code>requirements-cuda.txt</code></li>
-<li><strong>torch-related</strong> → add to <code>requirements-*.txt</code> only (cannot go in pyproject.toml)</li>
+<li><strong>Needed by every install</strong> → <code>[project.dependencies]</code></li>
+<li><strong>Tier-specific</strong> (e.g. CUDA-only wheels) → the matching tier extra(s)</li>
+<li><strong>Git-only or index-specific</strong> → a step in <code>install.py</code>, not <code>pyproject.toml</code></li>
+<li>Then regenerate the pins: <code>python tools/lock_constraints.py</code>. See
+  <a href="../dependency-cuda-updates/">Dependency and CUDA Updates</a>.</li>
 </ul>
 <h2 id="version-checklist">Version checklist<a class="headerlink" href="#version-checklist" title="Permanent link">&para;</a></h2>
 <p>Before releasing:</p>

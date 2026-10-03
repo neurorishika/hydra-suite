@@ -10,13 +10,13 @@
       
       
       
-        <link rel="canonical" href="https://neurorishika.github.io/hydra-suite/nightly/developer-guide/extending-detection/">
+        <link rel="canonical" href="https://neurorishika.github.io/hydra-suite/nightly/user-guide/sam-install-and-run/">
       
       
-        <link rel="prev" href="../confidence-metrics/">
+        <link rel="prev" href="../../runbooks/detectkit-headless-training/">
       
       
-        <link rel="next" href="../extending-identity/">
+        <link rel="next" href="../detectkit-semantic-escalation/">
       
       
       <link rel="icon" href="../../assets/images/favicon.png">
@@ -24,7 +24,7 @@
     
     
       
-        <title>Extending Detection - HYDRA Suite Docs</title>
+        <title>SAM2 and SAM3: Install and Run - HYDRA Suite Docs</title>
       
     
     
@@ -78,7 +78,7 @@
     <div data-md-component="skip">
       
         
-        <a href="#extending-detection" class="md-skip">
+        <a href="#sam2-and-sam3-install-and-run" class="md-skip">
           Skip to content
         </a>
       
@@ -116,7 +116,7 @@
         <div class="md-header__topic" data-md-component="header-topic">
           <span class="md-ellipsis">
             
-              Extending Detection
+              SAM2 and SAM3: Install and Run
             
           </span>
         </div>
@@ -258,11 +258,13 @@
         
   
   
+    
+  
   
     
     
-      <li class="md-tabs__item">
-        <a href="../../user-guide/overview/" class="md-tabs__link">
+      <li class="md-tabs__item md-tabs__item--active">
+        <a href="../overview/" class="md-tabs__link">
           
   
   User Guide
@@ -276,13 +278,11 @@
         
   
   
-    
-  
   
     
     
-      <li class="md-tabs__item md-tabs__item--active">
-        <a href="../architecture/" class="md-tabs__link">
+      <li class="md-tabs__item">
+        <a href="../../developer-guide/architecture/" class="md-tabs__link">
           
   
   Developer Guide
@@ -555,27 +555,30 @@
       
   
   
+    
   
   
+  
     
     
     
+      
+        
+        
       
       
         
       
     
     
-    <li class="md-nav__item md-nav__item--nested">
+    <li class="md-nav__item md-nav__item--active md-nav__item--section md-nav__item--nested">
       
         
+        
+        <input class="md-nav__toggle md-toggle " type="checkbox" id="__nav_3" checked>
         
           
-        
-        <input class="md-nav__toggle md-toggle md-toggle--indeterminate" type="checkbox" id="__nav_3" >
-        
-          
-          <label class="md-nav__link" for="__nav_3" id="__nav_3_label" tabindex="0">
+          <label class="md-nav__link" for="__nav_3" id="__nav_3_label" tabindex="">
             
   
   <span class="md-ellipsis">
@@ -586,7 +589,7 @@
             <span class="md-nav__icon md-icon"></span>
           </label>
         
-        <nav class="md-nav" data-md-level="1" aria-labelledby="__nav_3_label" aria-expanded="false">
+        <nav class="md-nav" data-md-level="1" aria-labelledby="__nav_3_label" aria-expanded="true">
           <label class="md-nav__title" for="__nav_3">
             <span class="md-nav__icon md-icon"></span>
             User Guide
@@ -600,7 +603,7 @@
   
   
     <li class="md-nav__item">
-      <a href="../../user-guide/overview/" class="md-nav__link">
+      <a href="../overview/" class="md-nav__link">
         
   
   <span class="md-ellipsis">
@@ -621,7 +624,7 @@
   
   
     <li class="md-nav__item">
-      <a href="../../user-guide/workflow/" class="md-nav__link">
+      <a href="../workflow/" class="md-nav__link">
         
   
   <span class="md-ellipsis">
@@ -642,7 +645,7 @@
   
   
     <li class="md-nav__item">
-      <a href="../../user-guide/trackerkit-cli/" class="md-nav__link">
+      <a href="../trackerkit-cli/" class="md-nav__link">
         
   
   <span class="md-ellipsis">
@@ -663,7 +666,7 @@
   
   
     <li class="md-nav__item">
-      <a href="../../user-guide/trackerkit-jobs/" class="md-nav__link">
+      <a href="../trackerkit-jobs/" class="md-nav__link">
         
   
   <span class="md-ellipsis">
@@ -684,7 +687,7 @@
   
   
     <li class="md-nav__item">
-      <a href="../../user-guide/detection-modes/" class="md-nav__link">
+      <a href="../detection-modes/" class="md-nav__link">
         
   
   <span class="md-ellipsis">
@@ -705,7 +708,7 @@
   
   
     <li class="md-nav__item">
-      <a href="../../user-guide/tracking-and-merging/" class="md-nav__link">
+      <a href="../tracking-and-merging/" class="md-nav__link">
         
   
   <span class="md-ellipsis">
@@ -726,7 +729,7 @@
   
   
     <li class="md-nav__item">
-      <a href="../../user-guide/post-processing/" class="md-nav__link">
+      <a href="../post-processing/" class="md-nav__link">
         
   
   <span class="md-ellipsis">
@@ -747,7 +750,7 @@
   
   
     <li class="md-nav__item">
-      <a href="../../user-guide/configuration-reference/" class="md-nav__link">
+      <a href="../configuration-reference/" class="md-nav__link">
         
   
   <span class="md-ellipsis">
@@ -768,7 +771,7 @@
   
   
     <li class="md-nav__item">
-      <a href="../../user-guide/compute-runtimes/" class="md-nav__link">
+      <a href="../compute-runtimes/" class="md-nav__link">
         
   
   <span class="md-ellipsis">
@@ -789,7 +792,7 @@
   
   
     <li class="md-nav__item">
-      <a href="../../user-guide/outputs-and-csv-schema/" class="md-nav__link">
+      <a href="../outputs-and-csv-schema/" class="md-nav__link">
         
   
   <span class="md-ellipsis">
@@ -810,7 +813,7 @@
   
   
     <li class="md-nav__item">
-      <a href="../../user-guide/dataset-generation/" class="md-nav__link">
+      <a href="../dataset-generation/" class="md-nav__link">
         
   
   <span class="md-ellipsis">
@@ -831,7 +834,7 @@
   
   
     <li class="md-nav__item">
-      <a href="../../user-guide/individual-analysis/" class="md-nav__link">
+      <a href="../individual-analysis/" class="md-nav__link">
         
   
   <span class="md-ellipsis">
@@ -852,7 +855,7 @@
   
   
     <li class="md-nav__item">
-      <a href="../../user-guide/posekit/" class="md-nav__link">
+      <a href="../posekit/" class="md-nav__link">
         
   
   <span class="md-ellipsis">
@@ -873,7 +876,7 @@
   
   
     <li class="md-nav__item">
-      <a href="../../user-guide/classkit/" class="md-nav__link">
+      <a href="../classkit/" class="md-nav__link">
         
   
   <span class="md-ellipsis">
@@ -894,7 +897,7 @@
   
   
     <li class="md-nav__item">
-      <a href="../../user-guide/detectkit/" class="md-nav__link">
+      <a href="../detectkit/" class="md-nav__link">
         
   
   <span class="md-ellipsis">
@@ -933,10 +936,30 @@
                 
   
   
+    
   
   
-    <li class="md-nav__item">
-      <a href="../../user-guide/sam-install-and-run/" class="md-nav__link">
+  
+    <li class="md-nav__item md-nav__item--active">
+      
+      <input class="md-nav__toggle md-toggle" type="checkbox" id="__toc">
+      
+      
+        
+      
+      
+        <label class="md-nav__link md-nav__link--active" for="__toc">
+          
+  
+  <span class="md-ellipsis">
+    SAM2 and SAM3: Install and Run
+  </span>
+  
+
+          <span class="md-nav__icon md-icon"></span>
+        </label>
+      
+      <a href="./" class="md-nav__link md-nav__link--active">
         
   
   <span class="md-ellipsis">
@@ -945,6 +968,146 @@
   
 
       </a>
+      
+        
+
+<nav class="md-nav md-nav--secondary" aria-label="Table of contents">
+  
+  
+  
+    
+  
+  
+    <label class="md-nav__title" for="__toc">
+      <span class="md-nav__icon md-icon"></span>
+      Table of contents
+    </label>
+    <ul class="md-nav__list" data-md-component="toc" data-md-scrollfix>
+      
+        <li class="md-nav__item">
+  <a href="#what-is-installed-by-default" class="md-nav__link">
+    <span class="md-ellipsis">
+      What is installed by default
+    </span>
+  </a>
+  
+</li>
+      
+        <li class="md-nav__item">
+  <a href="#model-weights" class="md-nav__link">
+    <span class="md-ellipsis">
+      Model weights
+    </span>
+  </a>
+  
+    <nav class="md-nav" aria-label="Model weights">
+      <ul class="md-nav__list">
+        
+          <li class="md-nav__item">
+  <a href="#one-time-hugging-face-access-for-sam3" class="md-nav__link">
+    <span class="md-ellipsis">
+      One-time Hugging Face access for SAM3
+    </span>
+  </a>
+  
+</li>
+        
+      </ul>
+    </nav>
+  
+</li>
+      
+        <li class="md-nav__item">
+  <a href="#device-support" class="md-nav__link">
+    <span class="md-ellipsis">
+      Device support
+    </span>
+  </a>
+  
+</li>
+      
+        <li class="md-nav__item">
+  <a href="#running-from-the-gui" class="md-nav__link">
+    <span class="md-ellipsis">
+      Running from the GUI
+    </span>
+  </a>
+  
+</li>
+      
+        <li class="md-nav__item">
+  <a href="#running-from-the-command-line" class="md-nav__link">
+    <span class="md-ellipsis">
+      Running from the command line
+    </span>
+  </a>
+  
+</li>
+      
+        <li class="md-nav__item">
+  <a href="#sam3-training-optional-cuda-only" class="md-nav__link">
+    <span class="md-ellipsis">
+      SAM3 training (optional, CUDA only)
+    </span>
+  </a>
+  
+    <nav class="md-nav" aria-label="SAM3 training (optional, CUDA only)">
+      <ul class="md-nav__list">
+        
+          <li class="md-nav__item">
+  <a href="#install" class="md-nav__link">
+    <span class="md-ellipsis">
+      Install
+    </span>
+  </a>
+  
+</li>
+        
+          <li class="md-nav__item">
+  <a href="#hardware" class="md-nav__link">
+    <span class="md-ellipsis">
+      Hardware
+    </span>
+  </a>
+  
+</li>
+        
+          <li class="md-nav__item">
+  <a href="#headless-training" class="md-nav__link">
+    <span class="md-ellipsis">
+      Headless training
+    </span>
+  </a>
+  
+</li>
+        
+      </ul>
+    </nav>
+  
+</li>
+      
+        <li class="md-nav__item">
+  <a href="#smoke-testing-on-real-models" class="md-nav__link">
+    <span class="md-ellipsis">
+      Smoke-testing on real models
+    </span>
+  </a>
+  
+</li>
+      
+        <li class="md-nav__item">
+  <a href="#troubleshooting" class="md-nav__link">
+    <span class="md-ellipsis">
+      Troubleshooting
+    </span>
+  </a>
+  
+</li>
+      
+    </ul>
+  
+</nav>
+      
     </li>
   
 
@@ -957,7 +1120,7 @@
   
   
     <li class="md-nav__item">
-      <a href="../../user-guide/detectkit-semantic-escalation/" class="md-nav__link">
+      <a href="../detectkit-semantic-escalation/" class="md-nav__link">
         
   
   <span class="md-ellipsis">
@@ -978,7 +1141,7 @@
   
   
     <li class="md-nav__item">
-      <a href="../../user-guide/detectkit-sahi-calibration/" class="md-nav__link">
+      <a href="../detectkit-sahi-calibration/" class="md-nav__link">
         
   
   <span class="md-ellipsis">
@@ -999,7 +1162,7 @@
   
   
     <li class="md-nav__item">
-      <a href="../../user-guide/filterkit/" class="md-nav__link">
+      <a href="../filterkit/" class="md-nav__link">
         
   
   <span class="md-ellipsis">
@@ -1020,7 +1183,7 @@
   
   
     <li class="md-nav__item">
-      <a href="../../user-guide/refinekit/" class="md-nav__link">
+      <a href="../refinekit/" class="md-nav__link">
         
   
   <span class="md-ellipsis">
@@ -1041,7 +1204,7 @@
   
   
     <li class="md-nav__item">
-      <a href="../../user-guide/troubleshooting/" class="md-nav__link">
+      <a href="../troubleshooting/" class="md-nav__link">
         
   
   <span class="md-ellipsis">
@@ -1066,30 +1229,27 @@
       
   
   
-    
   
   
-  
     
     
     
-      
-        
-        
       
       
         
       
     
     
-    <li class="md-nav__item md-nav__item--active md-nav__item--section md-nav__item--nested">
+    <li class="md-nav__item md-nav__item--nested">
       
         
-        
-        <input class="md-nav__toggle md-toggle " type="checkbox" id="__nav_4" checked>
         
           
-          <label class="md-nav__link" for="__nav_4" id="__nav_4_label" tabindex="">
+        
+        <input class="md-nav__toggle md-toggle md-toggle--indeterminate" type="checkbox" id="__nav_4" >
+        
+          
+          <label class="md-nav__link" for="__nav_4" id="__nav_4_label" tabindex="0">
             
   
   <span class="md-ellipsis">
@@ -1100,7 +1260,7 @@
             <span class="md-nav__icon md-icon"></span>
           </label>
         
-        <nav class="md-nav" data-md-level="1" aria-labelledby="__nav_4_label" aria-expanded="true">
+        <nav class="md-nav" data-md-level="1" aria-labelledby="__nav_4_label" aria-expanded="false">
           <label class="md-nav__title" for="__nav_4">
             <span class="md-nav__icon md-icon"></span>
             Developer Guide
@@ -1114,7 +1274,7 @@
   
   
     <li class="md-nav__item">
-      <a href="../architecture/" class="md-nav__link">
+      <a href="../../developer-guide/architecture/" class="md-nav__link">
         
   
   <span class="md-ellipsis">
@@ -1135,7 +1295,7 @@
   
   
     <li class="md-nav__item">
-      <a href="../module-map/" class="md-nav__link">
+      <a href="../../developer-guide/module-map/" class="md-nav__link">
         
   
   <span class="md-ellipsis">
@@ -1156,7 +1316,7 @@
   
   
     <li class="md-nav__item">
-      <a href="../data-flow/" class="md-nav__link">
+      <a href="../../developer-guide/data-flow/" class="md-nav__link">
         
   
   <span class="md-ellipsis">
@@ -1177,7 +1337,7 @@
   
   
     <li class="md-nav__item">
-      <a href="../tracking-algorithm-deep-dive/" class="md-nav__link">
+      <a href="../../developer-guide/tracking-algorithm-deep-dive/" class="md-nav__link">
         
   
   <span class="md-ellipsis">
@@ -1198,7 +1358,7 @@
   
   
     <li class="md-nav__item">
-      <a href="../tracking-optimization/" class="md-nav__link">
+      <a href="../../developer-guide/tracking-optimization/" class="md-nav__link">
         
   
   <span class="md-ellipsis">
@@ -1219,7 +1379,7 @@
   
   
     <li class="md-nav__item">
-      <a href="../gpu-backends/" class="md-nav__link">
+      <a href="../../developer-guide/gpu-backends/" class="md-nav__link">
         
   
   <span class="md-ellipsis">
@@ -1240,7 +1400,7 @@
   
   
     <li class="md-nav__item">
-      <a href="../runtime-integration/" class="md-nav__link">
+      <a href="../../developer-guide/runtime-integration/" class="md-nav__link">
         
   
   <span class="md-ellipsis">
@@ -1261,7 +1421,7 @@
   
   
     <li class="md-nav__item">
-      <a href="../resource-containment/" class="md-nav__link">
+      <a href="../../developer-guide/resource-containment/" class="md-nav__link">
         
   
   <span class="md-ellipsis">
@@ -1282,7 +1442,7 @@
   
   
     <li class="md-nav__item">
-      <a href="../profiling/" class="md-nav__link">
+      <a href="../../developer-guide/profiling/" class="md-nav__link">
         
   
   <span class="md-ellipsis">
@@ -1303,7 +1463,7 @@
   
   
     <li class="md-nav__item">
-      <a href="../dependency-cuda-updates/" class="md-nav__link">
+      <a href="../../developer-guide/dependency-cuda-updates/" class="md-nav__link">
         
   
   <span class="md-ellipsis">
@@ -1324,7 +1484,7 @@
   
   
     <li class="md-nav__item">
-      <a href="../performance-tuning/" class="md-nav__link">
+      <a href="../../developer-guide/performance-tuning/" class="md-nav__link">
         
   
   <span class="md-ellipsis">
@@ -1345,7 +1505,7 @@
   
   
     <li class="md-nav__item">
-      <a href="../inference-fast-mode/" class="md-nav__link">
+      <a href="../../developer-guide/inference-fast-mode/" class="md-nav__link">
         
   
   <span class="md-ellipsis">
@@ -1366,7 +1526,7 @@
   
   
     <li class="md-nav__item">
-      <a href="../inference-autotuner/" class="md-nav__link">
+      <a href="../../developer-guide/inference-autotuner/" class="md-nav__link">
         
   
   <span class="md-ellipsis">
@@ -1387,7 +1547,7 @@
   
   
     <li class="md-nav__item">
-      <a href="../confidence-metrics/" class="md-nav__link">
+      <a href="../../developer-guide/confidence-metrics/" class="md-nav__link">
         
   
   <span class="md-ellipsis">
@@ -1405,30 +1565,10 @@
                 
   
   
-    
   
   
-  
-    <li class="md-nav__item md-nav__item--active">
-      
-      <input class="md-nav__toggle md-toggle" type="checkbox" id="__toc">
-      
-      
-        
-      
-      
-        <label class="md-nav__link md-nav__link--active" for="__toc">
-          
-  
-  <span class="md-ellipsis">
-    Extending Detection
-  </span>
-  
-
-          <span class="md-nav__icon md-icon"></span>
-        </label>
-      
-      <a href="./" class="md-nav__link md-nav__link--active">
+    <li class="md-nav__item">
+      <a href="../../developer-guide/extending-detection/" class="md-nav__link">
         
   
   <span class="md-ellipsis">
@@ -1437,53 +1577,6 @@
   
 
       </a>
-      
-        
-
-<nav class="md-nav md-nav--secondary" aria-label="Table of contents">
-  
-  
-  
-    
-  
-  
-    <label class="md-nav__title" for="__toc">
-      <span class="md-nav__icon md-icon"></span>
-      Table of contents
-    </label>
-    <ul class="md-nav__list" data-md-component="toc" data-md-scrollfix>
-      
-        <li class="md-nav__item">
-  <a href="#main-extension-surface" class="md-nav__link">
-    <span class="md-ellipsis">
-      Main Extension Surface
-    </span>
-  </a>
-  
-</li>
-      
-        <li class="md-nav__item">
-  <a href="#recommended-pattern" class="md-nav__link">
-    <span class="md-ellipsis">
-      Recommended Pattern
-    </span>
-  </a>
-  
-</li>
-      
-        <li class="md-nav__item">
-  <a href="#validation-checklist" class="md-nav__link">
-    <span class="md-ellipsis">
-      Validation Checklist
-    </span>
-  </a>
-  
-</li>
-      
-    </ul>
-  
-</nav>
-      
     </li>
   
 
@@ -1496,7 +1589,7 @@
   
   
     <li class="md-nav__item">
-      <a href="../extending-identity/" class="md-nav__link">
+      <a href="../../developer-guide/extending-identity/" class="md-nav__link">
         
   
   <span class="md-ellipsis">
@@ -1517,7 +1610,7 @@
   
   
     <li class="md-nav__item">
-      <a href="../code-health/" class="md-nav__link">
+      <a href="../../developer-guide/code-health/" class="md-nav__link">
         
   
   <span class="md-ellipsis">
@@ -1538,7 +1631,7 @@
   
   
     <li class="md-nav__item">
-      <a href="../publishing/" class="md-nav__link">
+      <a href="../../developer-guide/publishing/" class="md-nav__link">
         
   
   <span class="md-ellipsis">
@@ -1559,7 +1652,7 @@
   
   
     <li class="md-nav__item">
-      <a href="../contributing/" class="md-nav__link">
+      <a href="../../developer-guide/contributing/" class="md-nav__link">
         
   
   <span class="md-ellipsis">
@@ -1950,27 +2043,120 @@
     <ul class="md-nav__list" data-md-component="toc" data-md-scrollfix>
       
         <li class="md-nav__item">
-  <a href="#main-extension-surface" class="md-nav__link">
+  <a href="#what-is-installed-by-default" class="md-nav__link">
     <span class="md-ellipsis">
-      Main Extension Surface
+      What is installed by default
     </span>
   </a>
   
 </li>
       
         <li class="md-nav__item">
-  <a href="#recommended-pattern" class="md-nav__link">
+  <a href="#model-weights" class="md-nav__link">
     <span class="md-ellipsis">
-      Recommended Pattern
+      Model weights
+    </span>
+  </a>
+  
+    <nav class="md-nav" aria-label="Model weights">
+      <ul class="md-nav__list">
+        
+          <li class="md-nav__item">
+  <a href="#one-time-hugging-face-access-for-sam3" class="md-nav__link">
+    <span class="md-ellipsis">
+      One-time Hugging Face access for SAM3
+    </span>
+  </a>
+  
+</li>
+        
+      </ul>
+    </nav>
+  
+</li>
+      
+        <li class="md-nav__item">
+  <a href="#device-support" class="md-nav__link">
+    <span class="md-ellipsis">
+      Device support
     </span>
   </a>
   
 </li>
       
         <li class="md-nav__item">
-  <a href="#validation-checklist" class="md-nav__link">
+  <a href="#running-from-the-gui" class="md-nav__link">
     <span class="md-ellipsis">
-      Validation Checklist
+      Running from the GUI
+    </span>
+  </a>
+  
+</li>
+      
+        <li class="md-nav__item">
+  <a href="#running-from-the-command-line" class="md-nav__link">
+    <span class="md-ellipsis">
+      Running from the command line
+    </span>
+  </a>
+  
+</li>
+      
+        <li class="md-nav__item">
+  <a href="#sam3-training-optional-cuda-only" class="md-nav__link">
+    <span class="md-ellipsis">
+      SAM3 training (optional, CUDA only)
+    </span>
+  </a>
+  
+    <nav class="md-nav" aria-label="SAM3 training (optional, CUDA only)">
+      <ul class="md-nav__list">
+        
+          <li class="md-nav__item">
+  <a href="#install" class="md-nav__link">
+    <span class="md-ellipsis">
+      Install
+    </span>
+  </a>
+  
+</li>
+        
+          <li class="md-nav__item">
+  <a href="#hardware" class="md-nav__link">
+    <span class="md-ellipsis">
+      Hardware
+    </span>
+  </a>
+  
+</li>
+        
+          <li class="md-nav__item">
+  <a href="#headless-training" class="md-nav__link">
+    <span class="md-ellipsis">
+      Headless training
+    </span>
+  </a>
+  
+</li>
+        
+      </ul>
+    </nav>
+  
+</li>
+      
+        <li class="md-nav__item">
+  <a href="#smoke-testing-on-real-models" class="md-nav__link">
+    <span class="md-ellipsis">
+      Smoke-testing on real models
+    </span>
+  </a>
+  
+</li>
+      
+        <li class="md-nav__item">
+  <a href="#troubleshooting" class="md-nav__link">
+    <span class="md-ellipsis">
+      Troubleshooting
     </span>
   </a>
   
@@ -1991,7 +2177,7 @@
                   
 
   
-    <a href="https://github.com/neurorishika/hydra-suite/edit/main/docs/developer-guide/extending-detection.md" title="Edit this page" class="md-content__button md-icon">
+    <a href="https://github.com/neurorishika/hydra-suite/edit/main/docs/user-guide/sam-install-and-run.md" title="Edit this page" class="md-content__button md-icon">
       
       <svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 24 24"><path d="M10 20H6V4h7v5h5v3.1l2-2V8l-6-6H6c-1.1 0-2 .9-2 2v16c0 1.1.9 2 2 2h4zm10.2-7c.1 0 .3.1.4.2l1.3 1.3c.2.2.2.6 0 .8l-1 1-2.1-2.1 1-1c.1-.1.2-.2.4-.2m0 3.9L14.1 23H12v-2.1l6.1-6.1z"/></svg>
     </a>
@@ -1999,22 +2185,411 @@
   
 
 
-<h1 id="extending-detection">Extending Detection<a class="headerlink" href="#extending-detection" title="Permanent link">&para;</a></h1>
-<h2 id="main-extension-surface">Main Extension Surface<a class="headerlink" href="#main-extension-surface" title="Permanent link">&para;</a></h2>
-<p><code>hydra_suite.core.detectors.engine</code></p>
-<h2 id="recommended-pattern">Recommended Pattern<a class="headerlink" href="#recommended-pattern" title="Permanent link">&para;</a></h2>
-<ol>
-<li>Add detector class with <code>detect_objects</code>-compatible output shape.</li>
-<li>Register selection logic in factory/creation path.</li>
-<li>Keep measurement format consistent with assignment and Kalman expectations.</li>
-<li>Update user-facing options/documentation for new mode.</li>
-</ol>
-<h2 id="validation-checklist">Validation Checklist<a class="headerlink" href="#validation-checklist" title="Permanent link">&para;</a></h2>
+<h1 id="sam2-and-sam3-install-and-run">SAM2 and SAM3: install and run<a class="headerlink" href="#sam2-and-sam3-install-and-run" title="Permanent link">&para;</a></h1>
+<p>DetectKit uses two Segment Anything models to upgrade and extend your labels:</p>
 <ul>
-<li>Produces stable center/orientation estimates.</li>
-<li>Handles empty/noisy frames gracefully.</li>
-<li>Works with existing tracking/post-processing without schema changes.</li>
+<li><strong>SAM2 — geometry escalation</strong> ("Escalate to segment (SAM2)"): turns the
+  boxes (AABB/OBB) you already have into polygon masks. It cannot add an
+  animal that was never labelled.</li>
+<li><strong>SAM3 — semantic escalation</strong> ("Semantic escalation (SAM3)"): takes a text
+  prompt such as <code>ant</code> and finds instances of that concept across a source,
+  including animals missing from your labels.</li>
 </ul>
+<p>Both produce a <strong>staged review</strong>: nothing touches your labels until you
+accept frames in DetectKit's review bar. This page covers what gets
+installed, where the weights come from, which devices each model runs on, how
+to run them from the GUI or the command line, and the optional SAM3
+<strong>training</strong> sidecar. For SAM3 workflow details (prompting, tiling,
+calibration, review) see
+<a href="../detectkit-semantic-escalation/">DetectKit: Semantic Escalation (SAM3)</a>.</p>
+<h2 id="what-is-installed-by-default">What is installed by default<a class="headerlink" href="#what-is-installed-by-default" title="Permanent link">&para;</a></h2>
+<p><code>python install.py</code> installs SAM2 and SAM3 <strong>inference</strong> on every tier
+(CPU, Apple MPS, CUDA) — there is nothing extra to choose:</p>
+<table>
+<thead>
+<tr>
+<th>Component</th>
+<th>Comes from</th>
+<th>Notes</th>
+</tr>
+</thead>
+<tbody>
+<tr>
+<td><code>sam2</code></td>
+<td>core dependency in <code>pyproject.toml</code></td>
+<td>SAM2 inference</td>
+</tr>
+<tr>
+<td><code>ultralytics</code> (SAM3 predictor), <code>ftfy</code>, <code>regex</code></td>
+<td>core dependency + the <code>sam</code> extra</td>
+<td>SAM3 inference; the <code>sam</code> extra is installed on every tier (<code>sam3</code> is an alias for it)</td>
+</tr>
+<tr>
+<td>CLIP text encoder</td>
+<td>installer step <code>clip</code></td>
+<td>The <strong>ultralytics fork</strong> of CLIP, pinned to a commit. It is git-only, so it cannot be a pyproject dependency; <code>install.py</code> installs it.</td>
+</tr>
+</tbody>
+</table>
+<p>SAM3 <strong>training</strong> is not installed by default — see
+<a href="#sam3-training-optional-cuda-only">SAM3 training</a>.</p>
+<p>Check the inference install with <code>hydra doctor</code>: the <code>sam2</code> and
+<code>sam3 inference</code> lines should be <code>[ OK ]</code>.</p>
+<h2 id="model-weights">Model weights<a class="headerlink" href="#model-weights" title="Permanent link">&para;</a></h2>
+<table>
+<thead>
+<tr>
+<th>Model</th>
+<th>Source</th>
+<th>Size</th>
+<th>Login needed?</th>
+<th>Stored in</th>
+</tr>
+</thead>
+<tbody>
+<tr>
+<td>SAM2 (<code>sam2.1-hiera-tiny</code>, <code>-small</code>, <code>-base_plus</code> (default), <code>-large</code>)</td>
+<td><code>facebook/sam2.1-*</code> on Hugging Face</td>
+<td>varies by variant</td>
+<td>No — not gated</td>
+<td><code>&lt;models dir&gt;/sam2/</code></td>
+</tr>
+<tr>
+<td>SAM3 stock (<code>sam3</code>)</td>
+<td><code>facebook/sam3</code> on Hugging Face</td>
+<td>~3.45 GB</td>
+<td><strong>Yes — licence-gated</strong></td>
+<td><code>&lt;models dir&gt;/sam3/</code></td>
+</tr>
+<tr>
+<td>SAM3 finetuned (your published checkpoints)</td>
+<td>produced locally by SAM3 training</td>
+<td>~3.2 GB each</td>
+<td>No</td>
+<td><code>&lt;models dir&gt;/sam3_finetuned/</code></td>
+</tr>
+</tbody>
+</table>
+<p><code>&lt;models dir&gt;</code> is <code>hydra_suite.paths.get_models_dir()</code> (see
+<a href="../../getting-started/installation/#data-directories">data directories</a>).
+Weights download on first use. DetectKit never downloads the 3.45 GB SAM3
+checkpoint without telling you: the escalation dialog warns and asks first.</p>
+<h3 id="one-time-hugging-face-access-for-sam3">One-time Hugging Face access for SAM3<a class="headerlink" href="#one-time-hugging-face-access-for-sam3" title="Permanent link">&para;</a></h3>
+<p><code>facebook/sam3</code> is gated by Meta. Before the <strong>first</strong> SAM3 run on each
+machine:</p>
+<ol>
+<li>Open <a href="https://huggingface.co/facebook/sam3">https://huggingface.co/facebook/sam3</a> and accept the licence with
+   your Hugging Face account.</li>
+<li>
+<p>Authenticate on that machine:</p>
+<div class="language-bash highlight"><pre><span></span><code><span id="__span-0-1"><a id="__codelineno-0-1" name="__codelineno-0-1" href="#__codelineno-0-1"></a>hf<span class="w"> </span>auth<span class="w"> </span>login<span class="w">          </span><span class="c1"># or: export HF_TOKEN=hf_...</span>
+</span></code></pre></div>
+</li>
+</ol>
+<p>Without this, the download fails with a 401 and DetectKit (or
+<code>detectkit escalate sam3</code>) prints those two steps. Once the checkpoint is
+downloaded, inference with it needs no further network access. Published
+<strong>finetuned</strong> checkpoints are local files and never need a login. SAM2
+weights are not gated.</p>
+<h2 id="device-support">Device support<a class="headerlink" href="#device-support" title="Permanent link">&para;</a></h2>
+<table>
+<thead>
+<tr>
+<th></th>
+<th>CPU (Linux)</th>
+<th>CPU (Intel Mac)</th>
+<th>Apple MPS</th>
+<th>CUDA 12</th>
+<th>CUDA 13</th>
+<th>Windows CPU</th>
+<th>Windows CUDA</th>
+</tr>
+</thead>
+<tbody>
+<tr>
+<td>SAM2 inference</td>
+<td>Yes (slow)</td>
+<td>Yes (slow)</td>
+<td>Yes</td>
+<td>Yes</td>
+<td>Yes</td>
+<td>Yes (slow)</td>
+<td>Yes¹</td>
+</tr>
+<tr>
+<td>SAM3 inference</td>
+<td>Yes (very slow)</td>
+<td>Yes (very slow)</td>
+<td>Yes (slow)</td>
+<td>Yes</td>
+<td>Yes</td>
+<td>Yes (very slow)</td>
+<td>Yes¹</td>
+</tr>
+<tr>
+<td>SAM3 training</td>
+<td>No</td>
+<td>No</td>
+<td>No</td>
+<td>Yes²</td>
+<td>Yes²</td>
+<td>No</td>
+<td>Not yet verified³</td>
+</tr>
+</tbody>
+</table>
+<ol>
+<li>Supported; not yet verified on Windows + NVIDIA hardware.</li>
+<li>Needs compute capability ≥ 8.0 with bf16 and about 12 GiB of free VRAM.
+   See <a href="#hardware">Hardware</a>.</li>
+<li><code>install.py --with-sam3-train</code> builds the sidecar on Windows and adds
+   <code>triton-windows</code>, because Meta's <code>sam3</code> imports <code>triton</code> at module scope
+   and official <code>triton</code> wheels are Linux-only. This has not been run on real
+   hardware yet. Report results if you try it.</li>
+</ol>
+<div class="admonition note">
+<p class="admonition-title">Speed on CPU and Apple Silicon</p>
+<p>Both models run everywhere, but they are large. SAM2 on CPU and SAM3 on
+Apple MPS are <strong>slow</strong>. Expect SAM3 on MPS to take tens of seconds per
+frame, and SAM3 on CPU to be slower still. That is fine for
+a few frames or for checking a prompt. For a full project, run the
+escalation on a CUDA machine. The "Test random image" button in the SAM3
+dialog measures the per-image time <strong>on this machine</strong> and extrapolates it
+to the selected sources, so you can decide before starting a long run.</p>
+</div>
+<h2 id="running-from-the-gui">Running from the GUI<a class="headerlink" href="#running-from-the-gui" title="Permanent link">&para;</a></h2>
+<p>Open a project in <code>detectkit</code>. Both actions live in the <strong>Escalation</strong> group of
+the Tools panel:</p>
+<ul>
+<li><strong>Escalate to segment (SAM2)</strong> — pick one or more box-level sources (sources
+  already at polygon level are shown disabled) and a SAM2 variant.</li>
+<li><strong>Semantic escalation (SAM3)</strong> — pick sources, a prompt, and a model (the
+  stock <code>sam3</code> or one of your published finetuned checkpoints). Calibrate and
+  "Test random image" before a long run (see the
+  <a href="../detectkit-semantic-escalation/">SAM3 guide</a>).</li>
+</ul>
+<p>Both dialogs have a <strong>Run on</strong> device picker: <strong>Auto</strong> (CUDA if available,
+then Apple MPS, then CPU), plus only the accelerators this machine actually
+has. A device saved with a project that is not available on the current
+machine falls back to the best available device.</p>
+<p>When the run finishes, the result is staged and a <strong>review bar</strong> appears above
+the canvas. Accept, add or reject frame by frame. See
+<a href="../detectkit-semantic-escalation/#reviewing-results-frame-by-frame-into-the-source-you-ran-on">Reviewing results</a>.</p>
+<h2 id="running-from-the-command-line">Running from the command line<a class="headerlink" href="#running-from-the-command-line" title="Permanent link">&para;</a></h2>
+<p><code>detectkit escalate</code> runs the same jobs headless against a saved project and
+leaves the result <strong>staged for review</strong> exactly as the GUI does. Open the
+project in DetectKit afterwards to accept or reject the staged frames.</p>
+<div class="language-text highlight"><pre><span></span><code><span id="__span-1-1"><a id="__codelineno-1-1" name="__codelineno-1-1" href="#__codelineno-1-1"></a>detectkit escalate sam2 --project DIR [--source NAME]... [--variant VARIANT]
+</span><span id="__span-1-2"><a id="__codelineno-1-2" name="__codelineno-1-2" href="#__codelineno-1-2"></a>                        [--device auto|cuda|mps|cpu] [--overwrite]
+</span><span id="__span-1-3"><a id="__codelineno-1-3" name="__codelineno-1-3" href="#__codelineno-1-3"></a>
+</span><span id="__span-1-4"><a id="__codelineno-1-4" name="__codelineno-1-4" href="#__codelineno-1-4"></a>detectkit escalate sam3 --project DIR --prompt TEXT [--class-name CLASS]
+</span><span id="__span-1-5"><a id="__codelineno-1-5" name="__codelineno-1-5" href="#__codelineno-1-5"></a>                        [--source NAME]... [--variant sam3|&lt;finetuned key&gt;]
+</span><span id="__span-1-6"><a id="__codelineno-1-6" name="__codelineno-1-6" href="#__codelineno-1-6"></a>                        [--confidence 0.35] [--max-instances 0]
+</span><span id="__span-1-7"><a id="__codelineno-1-7" name="__codelineno-1-7" href="#__codelineno-1-7"></a>                        [--device auto|cuda|mps|cpu] [--overwrite]
+</span></code></pre></div>
+<table>
+<thead>
+<tr>
+<th>Option</th>
+<th>Meaning</th>
+</tr>
+</thead>
+<tbody>
+<tr>
+<td><code>--project</code></td>
+<td>DetectKit project directory (required).</td>
+</tr>
+<tr>
+<td><code>--source</code></td>
+<td>Source to escalate; <strong>repeat</strong> the flag for several (<code>--source a --source b</code>). Default: every eligible source. SAM2 skips sources already at polygon level.</td>
+</tr>
+<tr>
+<td><code>--device</code></td>
+<td><code>auto</code> (default) picks CUDA, then MPS, then CPU.</td>
+</tr>
+<tr>
+<td><code>--overwrite</code></td>
+<td>Replace an existing pending (unreviewed) escalation instead of skipping it.</td>
+</tr>
+<tr>
+<td><code>--variant</code></td>
+<td>SAM2: <code>sam2.1-hiera-tiny</code>, <code>sam2.1-hiera-small</code>, <code>sam2.1-hiera-base_plus</code> (default), <code>sam2.1-hiera-large</code>. SAM3: <code>sam3</code> (default) or a published finetuned model key.</td>
+</tr>
+<tr>
+<td><code>--prompt</code></td>
+<td>SAM3 only: the noun phrase to find, e.g. <code>"ant"</code> (required).</td>
+</tr>
+<tr>
+<td><code>--class-name</code></td>
+<td>SAM3 only: project class the staged instances are labelled as (default: the prompt).</td>
+</tr>
+<tr>
+<td><code>--confidence</code></td>
+<td>SAM3 only: score threshold (default <code>0.35</code>). It can be changed later in review without re-running.</td>
+</tr>
+<tr>
+<td><code>--max-instances</code></td>
+<td>SAM3 only: cap per image; <code>0</code> means unlimited.</td>
+</tr>
+</tbody>
+</table>
+<p>Examples:</p>
+<div class="language-bash highlight"><pre><span></span><code><span id="__span-2-1"><a id="__codelineno-2-1" name="__codelineno-2-1" href="#__codelineno-2-1"></a><span class="c1"># Turn every box source into polygon masks on the best available device</span>
+</span><span id="__span-2-2"><a id="__codelineno-2-2" name="__codelineno-2-2" href="#__codelineno-2-2"></a>detectkit<span class="w"> </span>escalate<span class="w"> </span>sam2<span class="w"> </span>--project<span class="w"> </span>~/projects/colony_A
+</span><span id="__span-2-3"><a id="__codelineno-2-3" name="__codelineno-2-3" href="#__codelineno-2-3"></a>
+</span><span id="__span-2-4"><a id="__codelineno-2-4" name="__codelineno-2-4" href="#__codelineno-2-4"></a><span class="c1"># Two specific sources, the large SAM2 model, on Apple Silicon</span>
+</span><span id="__span-2-5"><a id="__codelineno-2-5" name="__codelineno-2-5" href="#__codelineno-2-5"></a>detectkit<span class="w"> </span>escalate<span class="w"> </span>sam2<span class="w"> </span>--project<span class="w"> </span>~/projects/colony_A<span class="w"> </span><span class="se">\</span>
+</span><span id="__span-2-6"><a id="__codelineno-2-6" name="__codelineno-2-6" href="#__codelineno-2-6"></a><span class="w">    </span>--source<span class="w"> </span>cam1<span class="w"> </span>--source<span class="w"> </span>cam2<span class="w"> </span>--variant<span class="w"> </span>sam2.1-hiera-large<span class="w"> </span>--device<span class="w"> </span>mps
+</span><span id="__span-2-7"><a id="__codelineno-2-7" name="__codelineno-2-7" href="#__codelineno-2-7"></a>
+</span><span id="__span-2-8"><a id="__codelineno-2-8" name="__codelineno-2-8" href="#__codelineno-2-8"></a><span class="c1"># Find every ant in one source with SAM3 on a CUDA box</span>
+</span><span id="__span-2-9"><a id="__codelineno-2-9" name="__codelineno-2-9" href="#__codelineno-2-9"></a>detectkit<span class="w"> </span>escalate<span class="w"> </span>sam3<span class="w"> </span>--project<span class="w"> </span>~/projects/colony_A<span class="w"> </span><span class="se">\</span>
+</span><span id="__span-2-10"><a id="__codelineno-2-10" name="__codelineno-2-10" href="#__codelineno-2-10"></a><span class="w">    </span>--prompt<span class="w"> </span><span class="s2">"ant"</span><span class="w"> </span>--source<span class="w"> </span>cam1<span class="w"> </span>--device<span class="w"> </span>cuda
+</span></code></pre></div>
+<p>Exit status: <code>0</code> on success, <code>2</code> if SAM3 is not usable in this environment (the
+message names the missing piece), <code>3</code> if the gated SAM3 download is not
+authorised on this machine (follow the
+<a href="#one-time-hugging-face-access-for-sam3">Hugging Face steps</a>).</p>
+<h2 id="sam3-training-optional-cuda-only">SAM3 training (optional, CUDA only)<a class="headerlink" href="#sam3-training-optional-cuda-only" title="Permanent link">&para;</a></h2>
+<p>DetectKit can finetune a SAM3 LoRA adapter on your polygon labels and publish a
+merged checkpoint that then appears in the SAM3 escalation dialog's model list.
+Training details (dataset, defaults, publishing) are in the
+<a href="../detectkit-semantic-escalation/#finetuning-your-own-sam3-checkpoint">SAM3 guide</a>.</p>
+<p>Meta's <code>sam3</code> training code pins <code>numpy&lt;2</code>, while HYDRA needs numpy 2. The two
+cannot share an environment, so training runs in a separate <strong>sidecar conda
+env</strong>, <code>hydra-sam3</code>. DetectKit starts it as a subprocess and never imports
+<code>sam3</code> itself.</p>
+<h3 id="install">Install<a class="headerlink" href="#install" title="Permanent link">&para;</a></h3>
+<p>On a CUDA machine (conda required):</p>
+<div class="language-bash highlight"><pre><span></span><code><span id="__span-3-1"><a id="__codelineno-3-1" name="__codelineno-3-1" href="#__codelineno-3-1"></a>python<span class="w"> </span>install.py<span class="w"> </span>--with-sam3-train<span class="w">      </span><span class="c1"># or: make setup-sam3-train</span>
+</span></code></pre></div>
+<p>This builds <code>hydra-sam3</code> (Python 3.12, <code>numpy&lt;2</code>) with:</p>
+<ul>
+<li>the CUDA torch build matching the main env</li>
+<li><code>sam3</code> pinned to commit <code>660a5e9e</code></li>
+<li>its training dependencies, pinned so nothing pulls numpy 2 back in</li>
+<li>the <strong>same hydra-suite source as your main env</strong>: an editable checkout,
+  the same git commit, or the same wheel, read from the main install's
+  <code>direct_url.json</code>. The sidecar talks to DetectKit over a line protocol, so it
+  must never run a different version. It is never installed from PyPI.</li>
+</ul>
+<p>If <code>hydra-sam3</code> already exists it is reused, and its packages and
+hydra-suite source are refreshed. Remove it
+(<code>conda env remove -n hydra-sam3</code>) for a clean rebuild. On a machine without
+CUDA the installer refuses <code>--with-sam3-train</code> and explains that inference
+needs nothing extra. In the GUI, the SAM3 training tab says the same thing.</p>
+<p>Training also needs the <strong>Hugging Face login</strong> from
+<a href="#one-time-hugging-face-access-for-sam3">above</a> on the training machine. The
+model architecture config is fetched from the gated repo at build time, even
+when the checkpoint is already on disk. Preflight refuses to start when no
+credential is present.</p>
+<p>Verify:</p>
+<div class="language-bash highlight"><pre><span></span><code><span id="__span-4-1"><a id="__codelineno-4-1" name="__codelineno-4-1" href="#__codelineno-4-1"></a>hydra<span class="w"> </span>doctor<span class="w"> </span>--require-sam3-train
+</span></code></pre></div>
+<h3 id="hardware">Hardware<a class="headerlink" href="#hardware" title="Permanent link">&para;</a></h3>
+<table>
+<thead>
+<tr>
+<th>Requirement</th>
+<th>Value</th>
+</tr>
+</thead>
+<tbody>
+<tr>
+<td>GPU</td>
+<td>NVIDIA, compute capability ≥ 8.0 with bf16 support</td>
+</tr>
+<tr>
+<td>Precision</td>
+<td>bf16 only. fp32/fp16 are refused.</td>
+</tr>
+<tr>
+<td>VRAM</td>
+<td>Preflight admits a run against a 12 GiB measured bf16 device peak (batch 1). A 24 GB RTX 4090 trains comfortably.</td>
+</tr>
+<tr>
+<td>Free disk</td>
+<td>~8 GB (3.45 GB base checkpoint + ~3.2 GB merged artifact)</td>
+</tr>
+</tbody>
+</table>
+<p>These checks run twice: once in the launching process before the sidecar
+starts, and again inside the sidecar before <code>sam3</code> is imported.</p>
+<h3 id="headless-training">Headless training<a class="headerlink" href="#headless-training" title="Permanent link">&para;</a></h3>
+<p><code>detectkit train --config run.json</code> runs SAM3 (and YOLO) training without the
+GUI. See <a href="../../runbooks/detectkit-headless-training/">DetectKit Headless Training</a>.</p>
+<h2 id="smoke-testing-on-real-models">Smoke-testing on real models<a class="headerlink" href="#smoke-testing-on-real-models" title="Permanent link">&para;</a></h2>
+<p>The test suite includes a real-model smoke test. It runs SAM2 and SAM3 on
+every device available on the machine and skips when the weights are not
+present:</p>
+<div class="language-bash highlight"><pre><span></span><code><span id="__span-5-1"><a id="__codelineno-5-1" name="__codelineno-5-1" href="#__codelineno-5-1"></a>python<span class="w"> </span>-m<span class="w"> </span>pytest<span class="w"> </span>-m<span class="w"> </span>slow<span class="w"> </span>tests/test_sam_real_models.py
+</span></code></pre></div>
+<p>It reads <code>tools/equivalence/fixtures/clips/fly_obb.mp4</code>. From a worktree
+without the fixtures, set <code>HYDRA_EQUIV_FIXTURES</code> to a fixtures directory
+that contains <code>clips/fly_obb.mp4</code>.</p>
+<h2 id="troubleshooting">Troubleshooting<a class="headerlink" href="#troubleshooting" title="Permanent link">&para;</a></h2>
+<p><code>hydra doctor</code> reports the state of every piece on this page. The messages
+you are most likely to see:</p>
+<table>
+<thead>
+<tr>
+<th>Symptom</th>
+<th>Cause</th>
+<th>Fix</th>
+</tr>
+</thead>
+<tbody>
+<tr>
+<td>doctor: <code>sam3 checkpoint</code> <strong>WARN</strong> "not downloaded (~3.45 GB, licence-gated)"</td>
+<td>Normal before the first SAM3 run</td>
+<td>Accept the licence and <code>hf auth login</code>; DetectKit downloads it on first use.</td>
+</tr>
+<tr>
+<td><code>401</code> / "The SAM3 weights are gated by Meta"</td>
+<td>Licence not accepted, or no token on this machine</td>
+<td>Both <a href="#one-time-hugging-face-access-for-sam3">Hugging Face steps</a>. A token from an account that has <strong>not</strong> accepted the licence still gets a 401.</td>
+</tr>
+<tr>
+<td>"The installed 'clip' package is the wrong fork"</td>
+<td><code>openai/CLIP</code> is installed. SAM3 needs a tokenizer you can call, and only the ultralytics fork provides one.</td>
+<td><code>python install.py --only clip</code></td>
+</tr>
+<tr>
+<td>doctor: <code>sam3 inference</code> <strong>FAIL</strong> naming a missing package</td>
+<td><code>clip</code>, <code>ftfy</code> or <code>ultralytics</code> missing</td>
+<td><code>python install.py --only clip</code>, or re-run <code>python install.py</code></td>
+</tr>
+<tr>
+<td>doctor: <code>sam2</code> <strong>FAIL</strong></td>
+<td><code>sam2</code> not importable</td>
+<td><code>python install.py --recreate</code></td>
+</tr>
+<tr>
+<td>SAM2 weight download fails with <code>401</code> (SAM2 is not gated)</td>
+<td>A stale or invalid Hugging Face token is stored on this machine. Hugging Face rejects even public downloads that carry a bad token.</td>
+<td>Re-run <code>hf auth login</code> with a valid token, or <code>hf auth logout</code> to download anonymously</td>
+</tr>
+<tr>
+<td>SAM3 training unavailable: "requires an NVIDIA GPU"</td>
+<td>Non-CUDA host</td>
+<td>Expected. Train on a CUDA machine; inference works here.</td>
+</tr>
+<tr>
+<td>"The SAM3 sidecar runs a different hydra-suite than this app" (or "hydra-suite is not installed in the SAM3 sidecar env")</td>
+<td>The main env was reinstalled from a different source (another checkout, git commit or wheel) after <code>hydra-sam3</code> was built</td>
+<td><code>python install.py --with-sam3-train</code> — it reuses the env and reinstalls hydra-suite from the main env's source</td>
+</tr>
+<tr>
+<td>SAM3 training refused: compute capability &lt; 8.0 or no bf16</td>
+<td>GPU too old for bf16</td>
+<td>Use an Ampere-or-newer GPU. There is no fp32 fallback.</td>
+</tr>
+<tr>
+<td><code>OMP Error #15</code> when running sidecar commands by hand</td>
+<td>Duplicate libomp</td>
+<td><code>export KMP_DUPLICATE_LIB_OK=TRUE</code> first (the GUI sets it for you)</td>
+</tr>
+</tbody>
+</table>
 
 
 
