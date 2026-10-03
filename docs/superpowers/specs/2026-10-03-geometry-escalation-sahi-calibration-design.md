@@ -84,12 +84,16 @@ from `jobs/semantic_escalation.py` to `detectkit/jobs/calibration_frames.py`;
 re-export from the old module (existing importers keep working).
 
 Add the polygon criterion there:
+- A label line is a polygon when its coordinate count is even, >= 6 and
+  not 8 (AABB = 4, OBB = 8; the AL writer pads 4-point polygons so a
+  polygon line never has 8).
+- A frame is ground truth only if EVERY line in it is a polygon. Mixed
+  frames are excluded: their box-labelled animals could not be scored.
 - `has_polygon_frames(source) -> bool` — label-FILE scan (no image decode):
-  true if `source.level == "polygon"` or any label line carries > 8
-  coordinate values.
-- `labelled_frames_for(..., polygon_only=True)` — returns only polygon
-  records; frames with no polygon line are skipped. Used by both
-  calibrations.
+  true if the source has at least one such frame.
+- `labelled_frames_for(..., polygon_only=True)` /
+  `stratified_calibration_frames(..., polygon_only=True)` — only such
+  frames. Default `False`, so direct/YOLO calibration is unchanged.
 
 ### 4. Geometry calibration — `core/inference/sam2/calibration.py` (Qt-free)
 
