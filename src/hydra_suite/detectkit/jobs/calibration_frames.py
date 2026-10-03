@@ -88,7 +88,10 @@ def has_polygon_frames(source: OBBSource) -> bool:
     animals would go unmatched. A label-FILE scan, like
     ``has_labelled_frames``; no image is decoded.
     """
-    root = Path(source.path)
+    raw_path = getattr(source, "path", "")
+    if not raw_path:
+        return False
+    root = Path(raw_path)
     images_dir, labels_dir = root / "images", root / "labels"
     if not images_dir.is_dir() or not labels_dir.is_dir():
         return False

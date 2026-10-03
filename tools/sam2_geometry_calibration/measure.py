@@ -88,7 +88,12 @@ def main() -> None:
             f"{p.seconds_per_frame:8.3f} {p.median_iou:7.3f} {p.p10_iou:7.3f} "
             f"{p.fallback_rate:7.3f} {p.seam_fallback_rate:6.3f} {p.n_instances:5d}"
         )
-    print("recommended:", None if best is None else best.tile_fraction, reason)
+    if best is None:
+        print("recommended: REFUSED --", reason)
+    elif best.tile_fraction is None:
+        print("recommended: full frame")
+    else:
+        print(f"recommended: tile fraction {best.tile_fraction:g}")
 
     try:
         sha = subprocess.run(

@@ -101,7 +101,13 @@ def on_escalate_geometry(window, preselect: str | None = None) -> None:
         )
         return
 
-    dlg = EscalateSam2Dialog(window._project.sources, parent=window)
+    dlg = EscalateSam2Dialog(
+        window._project.sources,
+        parent=window,
+        project=window._project,
+        reference_body_px=resolve_reference_body_px(window._project)[0],
+        persist_callback=window._save_current_project,
+    )
     if preselect:
         dlg.preselect_source(preselect)
     if not dlg.exec():
@@ -158,6 +164,7 @@ def on_escalate_geometry(window, preselect: str | None = None) -> None:
         source_paths=source_paths,
         variant=dlg.selected_variant(),
         overwrite=overwrite,
+        **dlg.tiling_parameters(),
     )
 
     progress = QProgressDialog(
@@ -224,6 +231,19 @@ def on_escalate_geometry(window, preselect: str | None = None) -> None:
         staged = list(getattr(result, "staged", []) or [])
         primed = int(getattr(result, "primed", 0))
         fell_back = int(getattr(result, "fell_back", 0))
+        seam_fallbacks = int(getattr(result, "seam_fallbacks", 0))
+        tile_px = getattr(result, "tile_px", None)
+        tiling_note = (
+            f"\n\nSegmented in {tile_px} px tiles"
+            + (
+                f"; {seam_fallbacks} animal(s) crossed a tile seam and were "
+                "segmented on the full frame instead."
+                if seam_fallbacks
+                else "."
+            )
+            if tile_px
+            else ""
+        )
         skipped = list(getattr(result, "skipped", []) or [])
         skipped_note = (
             (
@@ -243,7 +263,7 @@ def on_escalate_geometry(window, preselect: str | None = None) -> None:
                     f"Staged {len(staged)} source(s) for review: "
                     f"{', '.join(staged)}.\n\n"
                     f"{primed} instance(s) primed, {fell_back} fell back "
-                    f"to the original box.{skipped_note}\n\n"
+                    f"to the original box.{tiling_note}{skipped_note}\n\n"
                     "Use the review bar on the annotation preview to accept "
                     "or reject each frame."
                 ),

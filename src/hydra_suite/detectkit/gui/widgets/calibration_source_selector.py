@@ -44,7 +44,7 @@ def _median_body_px(cache: dict, sources) -> float:
     ``measure_median_body_px`` decodes a capped sample of images, so it is
     computed once per distinct selection rather than on every click.
     """
-    key = tuple(sorted(_key(s.path) for s in sources))
+    key = tuple(sorted(_source_key(s) for s in sources))
     if not key:
         return 0.0
     if key not in cache:
@@ -80,6 +80,25 @@ def _key(path) -> str:
         return str(path)
 
 
+def _keys(saved) -> set[str]:
+    """Saved identities, matching both resolved paths and bare names."""
+    return {_key(p) for p in saved} | {str(p) for p in saved}
+
+
+def _source_key(source) -> str:
+    """Stable identity: the resolved path, or the name for path-less sources."""
+    path = getattr(source, "path", "")
+    return _key(path) if path else str(source.name)
+
+
+def _row(source, index: int) -> QListWidgetItem:
+    """A click-to-toggle row: selection, never a checkbox."""
+    item = QListWidgetItem(f"{source.name}  ({source.level})")
+    item.setData(_INDEX_ROLE, index)
+    item.setFlags(item.flags() & ~Qt.ItemFlag.ItemIsUserCheckable)
+    return item
+
+
 class CalibrationSourceSelector(QWidget):
     """Top: "Calibrate on" (polygon sources). Bottom: "Escalate" (all sources)."""
 
@@ -109,8 +128,7 @@ class CalibrationSourceSelector(QWidget):
         self.calibration_list = self._make_list()
         for i in self._calibration_rows:
             src = self._sources[i]
-            item = QListWidgetItem(f"{src.name}  ({src.level})")
-            item.setData(_INDEX_ROLE, i)
+            item = _row(src, i)
             item.setToolTip(str(getattr(src, "path", "") or src.name))
             self.calibration_list.addItem(item)
         cal_layout.addWidget(self.calibration_list)
@@ -125,8 +143,7 @@ class CalibrationSourceSelector(QWidget):
         esc_layout = QVBoxLayout(esc_group)
         self.escalation_list = self._make_list()
         for i, src in enumerate(self._sources):
-            item = QListWidgetItem(f"{src.name}  ({src.level})")
-            item.setData(_INDEX_ROLE, i)
+            item = _row(src, i)
             if not self._eligible(src):
                 item.setFlags(item.flags() & ~Qt.ItemFlag.ItemIsEnabled)
                 item.setToolTip(ineligible_reason)
@@ -179,9 +196,9 @@ class CalibrationSourceSelector(QWidget):
         esc = self.escalation_sources()
         return {
             "calibration_source_paths": [
-                _key(s.path) for s in self.calibration_sources()
+                _source_key(s) for s in self.calibration_sources()
             ],
-            "escalation_source_paths": [_key(s.path) for s in esc],
+            "escalation_source_paths": [_source_key(s) for s in esc],
             "escalation_source_names": [s.name for s in esc],
         }
 
@@ -200,17 +217,15 @@ class CalibrationSourceSelector(QWidget):
         legacy ``source_names`` key older projects saved. Ineligible rows are
         never selected.
         """
-        cal_keys = (
-            None if calibration_paths is None else {_key(p) for p in calibration_paths}
-        )
+        cal_keys = None if calibration_paths is None else _keys(calibration_paths)
         for r in range(self.calibration_list.count()):
             item = self.calibration_list.item(r)
             src = self.source_for(item)
-            item.setSelected(cal_keys is None or _key(src.path) in cal_keys)
+            item.setSelected(cal_keys is None or _source_key(src) in cal_keys)
 
         if escalation_paths:
-            wanted = {_key(p) for p in escalation_paths}
-            match = lambda s: _key(s.path) in wanted  # noqa: E731
+            wanted = _keys(escalation_paths)
+            match = lambda s: _source_key(s) in wanted  # noqa: E731
         else:
             names = set(escalation_names or [])
             match = lambda s: s.name in names  # noqa: E731
