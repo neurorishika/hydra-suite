@@ -1185,7 +1185,12 @@ class SupervisedSidecar:
             self._reader.join(timeout=2.0)
         self._release_leases()
 
-    def _complete_guardian_teardown(self, timeout: float = 5.0) -> bool:
+    def _complete_guardian_teardown(self, timeout: float = 30.0) -> bool:
+        # A guardian may need several process-table scans after the model exits,
+        # especially when a detached descendant is still winding down. The
+        # old five-second window converted this ordinary delay into a retained
+        # ownership error and discarded an otherwise completed sidecar result.
+        # Keep the wait bounded and require the guardian's explicit Q proof.
         if not self._guardian_started:
             return False
         descriptor = self._parent_liveness_write_fd

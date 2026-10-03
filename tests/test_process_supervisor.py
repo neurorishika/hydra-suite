@@ -1183,6 +1183,47 @@ def test_guardian_acknowledgement_survives_a_reap_timeout_for_retry():
     os.close(liveness_read)
 
 
+def test_guardian_teardown_waits_for_delayed_quiescence_proof(monkeypatch):
+    """A slow guardian must not turn a completed run into a failed rerun."""
+
+    liveness_read, liveness_write = os.pipe()
+    acknowledgement_read, acknowledgement_write = os.pipe()
+    os.write(acknowledgement_write, b"Q")
+    os.close(acknowledgement_write)
+
+    class CompletedGuardian:
+        returncode = 0
+
+        def wait(self, timeout):
+            return 0
+
+    sidecar = object.__new__(SupervisedSidecar)
+    sidecar._guardian_started = True
+    sidecar._guardian_teardown_requested = False
+    sidecar._guardian_ack_received = False
+    sidecar._parent_liveness_write_fd = liveness_write
+    sidecar._guardian_ack_read_fd = acknowledgement_read
+    sidecar._guardian_process = CompletedGuardian()
+
+    real_select = supervisor_module.select.select
+
+    def delayed_ack(readers, writers, errors, timeout):
+        # The guardian is still proving descendants gone at the old 5 s
+        # deadline, but acknowledges before the extended bounded deadline.
+        if timeout < 10.0:
+            return [], [], []
+        return real_select(readers, writers, errors, 0)
+
+    monkeypatch.setattr(supervisor_module.select, "select", delayed_ack)
+    try:
+        assert sidecar._complete_guardian_teardown()
+        assert os.read(liveness_read, 1) == b"T"
+    finally:
+        os.close(liveness_read)
+        if sidecar._guardian_ack_read_fd is not None:
+            os.close(sidecar._guardian_ack_read_fd)
+
+
 def test_noisy_output_retains_only_a_fixed_tail():
     output = BoundedLineBuffer(max_lines=10, max_chars=100)
     for index in range(10_000):
