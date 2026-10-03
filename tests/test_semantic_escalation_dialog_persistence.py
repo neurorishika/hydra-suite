@@ -3,6 +3,7 @@
 from __future__ import annotations
 
 import os
+import tempfile
 from pathlib import Path
 
 import pytest
@@ -34,8 +35,17 @@ def available_checkpoint(monkeypatch):
     monkeypatch.setattr(mod, "probe_checkpoint", lambda *_a, **_k: _Available())
 
 
+_SOURCE_ROOT = Path(tempfile.mkdtemp(prefix="sam3_dialog_sources_"))
+
+
 def _source(name: str = "source") -> OBBSource:
-    return OBBSource(name=name, level="polygon", path="/tmp/nonexistent")
+    """A polygon source ON DISK: calibration lists only real ground truth."""
+    from tests.test_calibration_frames import POLY, make_source
+
+    root = _SOURCE_ROOT / name
+    if root.exists():
+        return OBBSource(name=name, level="polygon", path=str(root))
+    return make_source(_SOURCE_ROOT, name, {"a": POLY})
 
 
 def _point_dict() -> dict:
@@ -459,3 +469,42 @@ def test_a_project_with_no_classes_disables_the_selector(qapp, available_checkpo
 
     assert not dialog._class_name.isEnabled()
     assert dialog.class_name() == ""
+
+
+def test_semantic_dialog_calibrates_on_polygon_sources_and_escalates_selection(
+    qapp, available_checkpoint, tmp_path
+):
+    from hydra_suite.detectkit.gui.dialogs.semantic_escalation_dialog import (
+        SemanticEscalationDialog,
+    )
+    from tests.test_calibration_frames import OBB, POLY, make_source
+
+    poly = make_source(tmp_path, "poly", {"a": POLY})
+    box = make_source(tmp_path, "box", {"a": OBB}, level="obb")
+    project = DetectKitProject(project_dir=tmp_path)
+    project.semantic_escalation_settings = {"source_names": ["box"]}
+    dlg = SemanticEscalationDialog([poly, box], 20.0, project=project)
+    assert dlg.calibration_sources() == [poly]
+    assert dlg.selected_sources() == [box]
+    assert dlg._btn_calibrate.isEnabled()
+    dlg._prompt.setText("ant")
+    dlg._persist_settings()
+    saved = project.semantic_escalation_settings
+    assert saved["source_names"] == ["box"]
+    assert saved["calibration_source_paths"] == [str(Path(poly.path).resolve())]
+
+
+def test_semantic_dialog_box_only_project_cannot_calibrate(
+    qapp, available_checkpoint, tmp_path
+):
+    from hydra_suite.detectkit.gui.dialogs.semantic_escalation_dialog import (
+        SemanticEscalationDialog,
+    )
+    from tests.test_calibration_frames import OBB, make_source
+
+    box = make_source(tmp_path, "box", {"a": OBB}, level="obb")
+    dlg = SemanticEscalationDialog(
+        [box], 20.0, project=DetectKitProject(project_dir=tmp_path)
+    )
+    assert not dlg._btn_calibrate.isEnabled()
+    assert "polygon" in dlg._btn_calibrate.toolTip()

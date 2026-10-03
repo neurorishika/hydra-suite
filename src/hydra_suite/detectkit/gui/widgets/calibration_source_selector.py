@@ -23,7 +23,12 @@ from PySide6.QtWidgets import (
     QWidget,
 )
 
-from hydra_suite.detectkit.jobs.calibration_frames import has_polygon_frames
+from hydra_suite.detectkit.jobs.calibration_frames import (
+    SCALE_MISMATCH_RATIO,
+    has_polygon_frames,
+    measure_median_body_px,
+    scale_mismatch,
+)
 
 _INDEX_ROLE = Qt.ItemDataRole.UserRole
 
@@ -31,6 +36,41 @@ NO_POLYGON_SOURCES = (
     "No polygon ground truth in this project. Label polygons on a few frames "
     "(every animal in the frame) to calibrate."
 )
+
+
+def _median_body_px(cache: dict, sources) -> float:
+    """Median body size of *sources*, cached by their paths.
+
+    ``measure_median_body_px`` decodes a capped sample of images, so it is
+    computed once per distinct selection rather than on every click.
+    """
+    key = tuple(sorted(_key(s.path) for s in sources))
+    if not key:
+        return 0.0
+    if key not in cache:
+        try:
+            cache[key] = measure_median_body_px(sources)[0]
+        except Exception:  # pragma: no cover - unreadable labels
+            cache[key] = 0.0
+    return cache[key]
+
+
+def scale_warning_text(cache: dict, calibration_sources, escalation_sources) -> str:
+    """A warning when calibration and escalation animals differ in size.
+
+    A tile fraction is relative to the animal, so a calibration only
+    transfers to targets of a similar size. Targets without labels have no
+    measurable size and never warn.
+    """
+    cal = _median_body_px(cache, calibration_sources)
+    esc = _median_body_px(cache, escalation_sources)
+    if not scale_mismatch(cal, esc):
+        return ""
+    return (
+        f"⚠ The calibration frames' animals (~{cal:.0f} px) differ in size from "
+        f"the escalation targets' (~{esc:.0f} px) by more than "
+        f"{SCALE_MISMATCH_RATIO:g}×; a calibrated tile fraction may not transfer."
+    )
 
 
 def _key(path) -> str:

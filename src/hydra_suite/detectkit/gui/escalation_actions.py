@@ -497,7 +497,10 @@ def resolve_reference_body_px(project) -> tuple[float, str]:
     so any project without a slice-training reference silently ran with
     tiling OFF -- the measured-worst configuration.
     """
-    from hydra_suite.detectkit.jobs.semantic_escalation import measure_median_body_px
+    from hydra_suite.detectkit.jobs.calibration_frames import (
+        has_polygon_frames,
+        measure_median_body_px,
+    )
 
     slice_settings = getattr(project, "slice_settings", None)
     from_project = float(getattr(slice_settings, "reference_body_px", 0.0) or 0.0)
@@ -508,8 +511,11 @@ def resolve_reference_body_px(project) -> tuple[float, str]:
         # the sample is capped project-wide. The cap is reported, not hidden:
         # the field is editable and the user must be able to see the median
         # rests on a sample rather than on every labelled frame.
+        # Polygon ground truth first: it is what calibration measures on, so
+        # the tile size it fits is relative to THESE animals' size.
+        sources = list(getattr(project, "sources", []) or [])
         measured, sampled, truncated = measure_median_body_px(
-            getattr(project, "sources", []) or []
+            [s for s in sources if has_polygon_frames(s)] or sources
         )
     except Exception:  # pragma: no cover - unreadable labels
         measured, sampled, truncated = 0.0, 0, False

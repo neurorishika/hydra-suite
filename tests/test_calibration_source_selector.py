@@ -79,3 +79,18 @@ def test_selection_changes_emit_signals(tmp_path):
     sel.escalation_list.item(1).setSelected(True)
     sel.calibration_list.item(0).setSelected(False)
     assert "e" in seen and "c" in seen
+
+
+def test_scale_warning_only_when_sizes_differ(tmp_path):
+    from hydra_suite.detectkit.gui.widgets.calibration_source_selector import (
+        scale_warning_text,
+    )
+
+    small = make_source(tmp_path, "small", {"a": POLY})  # ~25 px across
+    big_obb = "0 0.1 0.1 0.9 0.1 0.9 0.9 0.1 0.9\n"  # ~80 px across
+    big = make_source(tmp_path, "big", {"a": big_obb}, level="obb")
+    same = make_source(tmp_path, "same", {"a": POLY}, level="obb")
+    cache: dict = {}
+    assert "differ in size" in scale_warning_text(cache, [small], [big])
+    assert scale_warning_text(cache, [small], [same]) == ""
+    assert scale_warning_text(cache, [small], []) == ""
