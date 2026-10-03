@@ -18,11 +18,7 @@ from typing import Callable, Sequence
 import numpy as np
 
 from hydra_suite.core.inference.masks import polygon_iou
-from hydra_suite.utils.slice_geometry import (
-    SlicePlan,
-    plan_tiles,
-    tile_size_for_mode,
-)
+from hydra_suite.utils.slice_geometry import SlicePlan, plan_tiles, tile_size_for_mode
 
 from .base import SemanticInstance, SemanticLabeler
 from .shape_prior import AreaBand, in_band, polygon_area
@@ -231,6 +227,35 @@ def full_frame_plan(frame_hw) -> SlicePlan:
     """
     frame_h, frame_w = int(frame_hw[0]), int(frame_hw[1])
     return plan_tiles((frame_h, frame_w), frame_w, frame_h, 0.0, 0.0)
+
+
+@dataclass(frozen=True)
+class TilingSettings:
+    """Tile sizing shared by SAM3 (semantic) and SAM2 (geometry) escalation.
+
+    Only the PLAN is shared: what runs per tile differs. SAM3 detects and
+    merges across seams; SAM2 segments boxes it already has, each inside
+    one owner tile (``core/inference/sam2/tiling.py``).
+    ``tile_fraction=None`` means full frame.
+    """
+
+    reference_body_px: float = 0.0
+    tile_fraction: float | None = None
+    tile_px: int | None = None  # explicit override; wins over tile_fraction
+    overlap: float = DEFAULT_OVERLAP
+
+    def resolved_tile_px(self) -> int | None:
+        return self.tile_px or resolve_tile_px(
+            self.reference_body_px, self.tile_fraction
+        )
+
+    def plan_for(self, frame_hw) -> SlicePlan:
+        """The tile plan for one frame; full frame when a tile would cover it."""
+        frame_h, frame_w = int(frame_hw[0]), int(frame_hw[1])
+        tile_px = self.resolved_tile_px()
+        if tile_px is None or tile_px >= min(frame_h, frame_w):
+            return full_frame_plan((frame_h, frame_w))
+        return plan_for_frame((frame_h, frame_w), tile_px, self.overlap)
 
 
 def _touches_interior_seam(

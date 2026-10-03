@@ -41,6 +41,7 @@ from hydra_suite.core.inference.semantic.tiling import (
     TileCandidate,
     TileCollectionCancelled,
     TileProgressReporter,
+    TilingSettings,
     collect_candidates,
     full_frame_plan,
     merge_candidates,
@@ -130,6 +131,16 @@ class SemanticEscalationRequest:
     # Stable source identities for GUI requests. Kept after the pre-existing
     # fields so positional construction remains backward compatible.
     source_paths: list[str] = field(default_factory=list)
+
+    @property
+    def tiling(self) -> TilingSettings:
+        """The tile sizing this run uses, in the form SAM2 escalation shares."""
+        return TilingSettings(
+            reference_body_px=float(self.reference_body_px or 0.0),
+            tile_fraction=self.tile_fraction,
+            tile_px=self.tile_px,
+            overlap=float(self.overlap),
+        )
 
 
 @dataclass

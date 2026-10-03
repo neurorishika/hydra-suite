@@ -15,6 +15,7 @@ import numpy as np
 from PySide6.QtCore import Signal
 
 from hydra_suite.core.inference.masks import clip_mask_to_polygon, mask_to_contour
+from hydra_suite.core.inference.semantic.tiling import DEFAULT_OVERLAP, TilingSettings
 from hydra_suite.data.al.escalation import LabelRecord
 from hydra_suite.data.al.labels import write_label_file
 from hydra_suite.data.project_bundle import ensure_bundle_subdirectory
@@ -101,6 +102,21 @@ class EscalationRequest:
     variant: str
     overwrite: bool = False
     source_paths: list[str] = field(default_factory=list)
+    # SAHI for box-prompted SAM2. None = full frame, which is the
+    # pre-tiling behaviour exactly; SAM2 never borrows the SAM3 seed.
+    reference_body_px: float = 0.0
+    tile_fraction: float | None = None
+    tile_px: int | None = None
+    overlap: float = DEFAULT_OVERLAP
+
+    @property
+    def tiling(self) -> TilingSettings:
+        return TilingSettings(
+            reference_body_px=float(self.reference_body_px or 0.0),
+            tile_fraction=self.tile_fraction,
+            tile_px=self.tile_px,
+            overlap=float(self.overlap),
+        )
 
 
 @dataclass
@@ -112,6 +128,9 @@ class EscalationResult:
     # (source_name, reason) pairs for sources skipped because they already
     # have a pending escalation and overwrite was not requested.
     skipped: list[tuple[str, str]] = field(default_factory=list)
+    # Boxes no tile fully contained, segmented on the full frame instead.
+    seam_fallbacks: int = 0
+    tile_px: int | None = None  # resolved tile size, None = full frame
 
 
 class Sam2EscalationWorker(BaseWorker):
