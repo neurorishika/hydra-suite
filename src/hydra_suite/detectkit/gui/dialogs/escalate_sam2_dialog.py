@@ -75,7 +75,10 @@ class EscalateSam2Dialog(DetectKitDialog):
         self._calibration_worker = None
         self._scale_cache: dict = {}
         saved = dict(getattr(project, "geometry_escalation_settings", {}) or {})
-        self._saved_settings = saved
+        # Per-variant (fraction, body) the user left in THIS dialog session,
+        # so switching SAM2 version and back never loses a fresh calibration
+        # or a row the user picked.
+        self._session_tiling: dict[str, tuple[float, float]] = {}
 
         container = QWidget()
         outer = QVBoxLayout(container)
@@ -156,7 +159,7 @@ class EscalateSam2Dialog(DetectKitDialog):
 
         self._results = GeometryCalibrationResults()
         self._results.setMinimumHeight(140)
-        self._results.point_chosen.connect(self.apply_calibration_choice)
+        self._results.point_chosen.connect(self._on_point_chosen)
         form.addWidget(self._results, 6, 0, 1, 2)
         top.addWidget(settings, 3)
         outer.addLayout(top, 1)
@@ -170,7 +173,8 @@ class EscalateSam2Dialog(DetectKitDialog):
 
         self._tile_fraction.valueChanged.connect(self._refresh_tile_label)
         self._reference_body.valueChanged.connect(self._refresh_tile_label)
-        self._variant.currentTextChanged.connect(self._load_saved_calibration)
+        self._current_variant = self.selected_variant()
+        self._variant.currentTextChanged.connect(self._on_variant_changed)
         self._selector.calibration_changed.connect(self._refresh_calibration_enabled)
         self._selector.calibration_changed.connect(self._refresh_scale_warning)
         self._selector.escalation_changed.connect(self._refresh_scale_warning)
@@ -201,9 +205,6 @@ class EscalateSam2Dialog(DetectKitDialog):
 
     def selected_variant(self) -> str:
         return self._variant.currentText()
-
-    def selected_device(self) -> str:
-        return self._device.device()
 
     def selected_device(self) -> str:
         return self._device.device()
@@ -271,32 +272,43 @@ class EscalateSam2Dialog(DetectKitDialog):
         store = getattr(self._project, "geometry_calibration", None) or {}
         return dict(store.get(self.selected_variant(), {}) or {})
 
-    def _load_saved_calibration(self) -> None:
-        """Show THIS variant's calibration and set the tile fraction for it.
+    def _on_variant_changed(self, variant: str) -> None:
+        self._session_tiling[self._current_variant] = (
+            float(self._tile_fraction.value()),
+            float(self._reference_body.value()),
+        )
+        self._current_variant = variant
+        self._load_saved_calibration()
 
-        A calibration belongs to one SAM2 variant, so switching variant must
-        never carry another variant's fraction over. Precedence: the
-        fraction the user last accepted for this variant, then this
-        variant's calibrated choice, then full frame (the uncalibrated
-        default).
+    def _load_saved_calibration(self) -> None:
+        """Show THIS variant's calibration and set the tiling for it.
+
+        A calibration belongs to one SAM2 variant, so switching variant never
+        carries another variant's fraction over. Precedence: what the user
+        left for this variant earlier in this dialog session, then
+        ``default_geometry_tiling`` -- the same answer the headless command
+        uses (accepted settings, then the calibrated choice, then full frame).
         """
         from hydra_suite.core.inference.sam2.calibration import recommend_geometry
+        from hydra_suite.detectkit.jobs.sam2_escalation import default_geometry_tiling
 
         record = self._saved_record()
         points = _restore_points(record)
-        index = int(record.get("chosen_index", record.get("recommended_index", -1)))
-        chosen = points[index] if 0 <= index < len(points) else None
         recommended, _reason = recommend_geometry(points) if points else (None, "")
         self._results.set_points(points, recommended)
-        saved = self._saved_settings
-        if saved.get("variant") == self.selected_variant() and "tile_fraction" in saved:
-            self._tile_fraction.setValue(float(saved.get("tile_fraction") or 0.0))
-            self._status.setText("")
-        elif chosen is not None:
-            self.apply_calibration_choice(chosen)
+        self._status.setText("")
+        variant = self.selected_variant()
+        if variant in self._session_tiling:
+            fraction, body = self._session_tiling[variant]
         else:
-            self._tile_fraction.setValue(0.0)
-            self._status.setText("")
+            default = default_geometry_tiling(self._project, variant)
+            fraction = float(default["tile_fraction"] or 0.0)
+            body = float(default["reference_body_px"])
+            if fraction <= 0:
+                body = 0.0  # keep the prefilled body size; tiling is off anyway
+        if fraction > 0:
+            self._reference_body.setValue(body)
+        self._tile_fraction.setValue(fraction)
         if points:
             created = str(record.get("created_at", ""))[:10]
             self._status.setText(
@@ -304,6 +316,23 @@ class EscalateSam2Dialog(DetectKitDialog):
                 f"{len(points)} measured tile size(s)."
             )
         self._refresh_tile_label()
+
+    def _on_point_chosen(self, point) -> None:
+        """A row click: adopt it and remember it as this variant's choice."""
+        self.apply_calibration_choice(point)
+        if self._project is None:
+            return
+        store = dict(getattr(self._project, "geometry_calibration", {}) or {})
+        record = dict(store.get(self.selected_variant(), {}) or {})
+        points = self._results.points()
+        index = next((i for i, p in enumerate(points) if p is point), -1)
+        if not record or index < 0 or record.get("chosen_index") == index:
+            return
+        record["chosen_index"] = index
+        store[self.selected_variant()] = record
+        self._project.geometry_calibration = store
+        if self._persist_callback is not None:
+            self._persist_callback()
 
     def apply_calibration_choice(self, point) -> None:
         self._tile_fraction.setValue(

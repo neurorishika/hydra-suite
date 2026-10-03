@@ -123,37 +123,39 @@ def _selected(project, names: List[str]):
 
 
 def _sam2_tiling(project, args: argparse.Namespace) -> dict:
-    """The SAM2 tiling the GUI would use, so headless and GUI runs agree.
+    """The SAM2 tiling for this run: explicit flags, else the dialog's default.
 
-    Explicit flags win; otherwise the dialog's last accepted settings for
-    THIS variant (calibrations are per variant); otherwise full frame, the
-    uncalibrated default.
+    The default comes from ``default_geometry_tiling``, the same function the
+    dialog opens with, so a headless run stages what the GUI would.
     """
     from hydra_suite.detectkit.jobs.calibration_frames import (
         has_polygon_frames,
         quick_median_body_px,
     )
+    from hydra_suite.detectkit.jobs.sam2_escalation import default_geometry_tiling
 
-    saved = dict(getattr(project, "geometry_escalation_settings", {}) or {})
-    same_variant = saved.get("variant") == args.variant
-    fraction = args.tile_fraction
-    if fraction is None:
-        fraction = float(saved.get("tile_fraction") or 0.0) if same_variant else 0.0
-    body = args.reference_body_px
-    if body is None and same_variant:
-        body = float(saved.get("reference_body_px") or 0.0) or None
-    if body is None:
+    # No flags: exactly what the dialog would open with for this variant.
+    base = default_geometry_tiling(project, args.variant)
+    fraction = (
+        base["tile_fraction"] if args.tile_fraction is None else args.tile_fraction
+    )
+    fraction = fraction if fraction and fraction > 0 else None
+    body = (
+        base["reference_body_px"]
+        if args.reference_body_px is None
+        else float(args.reference_body_px)
+    )
+    if body <= 0 and args.tile_fraction is not None and fraction is not None:
+        # An explicit --tile-fraction with no known body size: resolve one
+        # the way the dialog prefills it, rather than silently not tiling.
         slice_settings = getattr(project, "slice_settings", None)
-        body = float(getattr(slice_settings, "reference_body_px", 0.0) or 0.0) or None
-    if body is None and fraction > 0:
-        sources = list(project.sources)
-        body = quick_median_body_px(
-            [s for s in sources if has_polygon_frames(s)] or sources
-        )
-    return {
-        "reference_body_px": float(body or 0.0),
-        "tile_fraction": fraction if fraction > 0 else None,
-    }
+        body = float(getattr(slice_settings, "reference_body_px", 0.0) or 0.0)
+        if body <= 0:
+            sources = list(project.sources)
+            body = quick_median_body_px(
+                [s for s in sources if has_polygon_frames(s)] or sources
+            )
+    return {"reference_body_px": float(body or 0.0), "tile_fraction": fraction}
 
 
 def run_sam2(args: argparse.Namespace) -> int:
@@ -173,7 +175,9 @@ def run_sam2(args: argparse.Namespace) -> int:
     device = resolve_torch_device(args.device)
     tiling = _sam2_tiling(project, args)
     print(f"SAM2 {args.variant} on {device}: {', '.join(s.name for s in sources)}")
-    if tiling["tile_fraction"] is not None:
+    from hydra_suite.core.inference.semantic.tiling import resolve_tile_px
+
+    if resolve_tile_px(tiling["reference_body_px"], tiling["tile_fraction"]):
         print(
             f"Tiling: fraction {tiling['tile_fraction']:g} of a "
             f"{tiling['reference_body_px']:.0f} px body"

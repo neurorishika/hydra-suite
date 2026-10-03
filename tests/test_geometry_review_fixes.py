@@ -218,3 +218,129 @@ def test_quick_median_reads_no_pixels_and_matches_the_decoding_one(
 
     monkeypatch.setattr(cf.cv2, "imread", _boom)
     assert cf.quick_median_body_px([src]) == pytest.approx(decoded)
+
+
+# -- second review: GUI/CLI parity and variant round trips -------------------
+
+
+def _points_record(fraction=0.3, body=79.0, chosen=0):
+    from dataclasses import asdict
+
+    return {
+        "chosen_index": chosen,
+        "reference_body_px": body,
+        "points": [asdict(_point(fraction)), asdict(_point(None))],
+    }
+
+
+def _parity_states(tmp_path):
+    other = next(v for v in available_variants() if v != DEFAULT_VARIANT)
+    return {
+        "nothing": ({}, {}),
+        "accepted, body unknown": (
+            {
+                "variant": DEFAULT_VARIANT,
+                "tile_fraction": 0.3,
+                "reference_body_px": 0.0,
+            },
+            {},
+        ),
+        "accepted full frame over a calibration": (
+            {
+                "variant": DEFAULT_VARIANT,
+                "tile_fraction": 0.0,
+                "reference_body_px": 79.0,
+            },
+            {DEFAULT_VARIANT: _points_record()},
+        ),
+        "calibration only": ({}, {DEFAULT_VARIANT: _points_record()}),
+        "other variant accepted, this one calibrated": (
+            {"variant": other, "tile_fraction": 0.1, "reference_body_px": 50.0},
+            {DEFAULT_VARIANT: _points_record()},
+        ),
+    }
+
+
+@pytest.mark.parametrize(
+    "state",
+    [
+        "nothing",
+        "accepted, body unknown",
+        "accepted full frame over a calibration",
+        "calibration only",
+        "other variant accepted, this one calibrated",
+    ],
+)
+def test_headless_sam2_tiles_exactly_like_the_dialog_opens(tmp_path, state):
+    from hydra_suite.core.inference.semantic.tiling import resolve_tile_px
+    from hydra_suite.detectkit import escalate_cli
+    from hydra_suite.detectkit.gui.dialogs.escalate_sam2_dialog import (
+        EscalateSam2Dialog,
+    )
+
+    settings, calibration = _parity_states(tmp_path)[state]
+    box = make_source(tmp_path, "box", {"a": OBB}, level="obb")
+    project = types.SimpleNamespace(
+        project_dir=str(tmp_path),
+        sources=[box],
+        geometry_calibration=calibration,
+        geometry_escalation_settings=settings,
+        slice_settings=types.SimpleNamespace(reference_body_px=79.0),
+    )
+    gui = EscalateSam2Dialog([box], project=project, reference_body_px=79.0)
+    gui._variant.setCurrentText(DEFAULT_VARIANT)
+    gui_tiling = gui.tiling_parameters()
+    cli_tiling = escalate_cli._sam2_tiling(
+        project,
+        escalate_cli.build_parser().parse_args(
+            ["sam2", "--project", "/p", "--variant", DEFAULT_VARIANT]
+        ),
+    )
+    assert resolve_tile_px(
+        gui_tiling["reference_body_px"], gui_tiling["tile_fraction"]
+    ) == resolve_tile_px(cli_tiling["reference_body_px"], cli_tiling["tile_fraction"])
+
+
+def test_fresh_calibration_survives_a_variant_round_trip(tmp_path, monkeypatch):
+    from hydra_suite.detectkit.gui.dialogs.escalate_sam2_dialog import (
+        EscalateSam2Dialog,
+    )
+    from hydra_suite.detectkit.jobs import sam2_escalation
+
+    monkeypatch.setattr(sam2_escalation, "Sam2CalibrationWorker", _FakeWorker)
+    other = next(v for v in available_variants() if v != DEFAULT_VARIANT)
+    poly = make_source(tmp_path, "poly", {"a": POLY})
+    project = _project(tmp_path)
+    project.geometry_escalation_settings = {
+        "variant": DEFAULT_VARIANT,
+        "tile_fraction": 0.0,
+    }
+    dlg = EscalateSam2Dialog([poly], project=project, reference_body_px=79.0)
+    assert dlg.tile_fraction() is None
+    dlg._run_calibration()
+    fresh = dlg.tile_fraction()
+    assert fresh is not None
+    dlg._variant.setCurrentText(other)
+    dlg._variant.setCurrentText(DEFAULT_VARIANT)
+    assert dlg.tile_fraction() == pytest.approx(fresh)
+    dlg.accept()
+    assert project.geometry_escalation_settings["tile_fraction"] == pytest.approx(fresh)
+
+
+def test_a_row_click_is_remembered_as_the_variants_choice(tmp_path):
+    from hydra_suite.detectkit.gui.dialogs.escalate_sam2_dialog import (
+        EscalateSam2Dialog,
+    )
+
+    other = next(v for v in available_variants() if v != DEFAULT_VARIANT)
+    box = make_source(tmp_path, "box", {"a": OBB}, level="obb")
+    project = _project(tmp_path)
+    project.geometry_calibration = {DEFAULT_VARIANT: _points_record(chosen=0)}
+    dlg = EscalateSam2Dialog([box], project=project, reference_body_px=79.0)
+    assert dlg.tile_fraction() == pytest.approx(0.3)
+    dlg._results.selectRow(1)  # the full-frame row
+    assert dlg.tile_fraction() is None
+    assert project.geometry_calibration[DEFAULT_VARIANT]["chosen_index"] == 1
+    dlg._variant.setCurrentText(other)
+    dlg._variant.setCurrentText(DEFAULT_VARIANT)
+    assert dlg.tile_fraction() is None

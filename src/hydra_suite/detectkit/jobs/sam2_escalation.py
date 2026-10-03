@@ -142,6 +142,48 @@ class EscalationResult:
     tile_px: int | None = None  # resolved tile size, None = full frame
 
 
+def chosen_calibration_point(record) -> dict | None:
+    """The chosen (else recommended) point of one variant's stored calibration."""
+    if not isinstance(record, dict):
+        return None
+    points = record.get("points") or []
+    try:
+        index = int(record.get("chosen_index", record.get("recommended_index", -1)))
+    except (TypeError, ValueError):
+        return None
+    if 0 <= index < len(points) and isinstance(points[index], dict):
+        return points[index]
+    return None
+
+
+def default_geometry_tiling(project, variant: str) -> dict:
+    """The tiling a SAM2 run of *variant* uses when nobody overrides it.
+
+    The ONE answer for both the dialog's opening state and the headless
+    ``detectkit escalate sam2`` command, so the two never stage different
+    results for the same project. Precedence: the settings the user last
+    accepted for this variant; then this variant's calibrated choice (with
+    the body size it was calibrated at); then full frame. A body size of 0
+    means tiling is off, exactly as ``resolve_tile_px`` treats it.
+    """
+    saved = dict(getattr(project, "geometry_escalation_settings", {}) or {})
+    fraction, body = 0.0, 0.0
+    if saved.get("variant") == variant and "tile_fraction" in saved:
+        fraction = float(saved.get("tile_fraction") or 0.0)
+        body = float(saved.get("reference_body_px") or 0.0)
+    else:
+        store = getattr(project, "geometry_calibration", {}) or {}
+        record = store.get(variant) if isinstance(store, dict) else None
+        point = chosen_calibration_point(record)
+        if point is not None:
+            fraction = float(point.get("tile_fraction") or 0.0)
+            body = float(record.get("reference_body_px") or 0.0)
+    return {
+        "reference_body_px": body,
+        "tile_fraction": fraction if fraction > 0 else None,
+    }
+
+
 class Sam2EscalationWorker(BaseWorker):
     """QThread wrapper around run_escalation (BaseWorker signals + result_ready)."""
 
