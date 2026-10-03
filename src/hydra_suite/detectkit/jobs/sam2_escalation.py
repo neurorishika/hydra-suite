@@ -25,6 +25,7 @@ from hydra_suite.detectkit.gui.models import OBBSource, StagedReview
 from hydra_suite.utils.geometry_levels import GeometryLevel
 from hydra_suite.widgets.workers import BaseWorker
 
+from .calibration_frames import CALIBRATION_SAMPLE_FRAMES, stratified_calibration_frames
 from .sam2_prompts import build_prompts, read_boxes_from_label
 
 logger = logging.getLogger(__name__)
@@ -171,6 +172,73 @@ class Sam2EscalationWorker(BaseWorker):
             f"{result.fell_back} fell back (review these first)."
         )
         self.result_ready.emit(result)
+
+
+class Sam2CalibrationWorker(BaseWorker):
+    """Calibrate SAM2's tile fraction against polygon ground-truth frames.
+
+    Runs in-process like ``Sam2EscalationWorker`` (SAM2 has no sidecar).
+    Only frames whose labels are ALL polygons are sampled: calibration needs
+    real ground truth, and a box is not one for a mask.
+    """
+
+    result_ready = Signal(object)  # list[GeometryCalibrationPoint]
+
+    def __init__(
+        self,
+        sources,
+        variant: str,
+        *,
+        reference_body_px: float,
+        overlap: float = DEFAULT_OVERLAP,
+        executor=None,
+        budget: int = CALIBRATION_SAMPLE_FRAMES,
+        parent=None,
+    ) -> None:
+        super().__init__(parent)
+        self._sources = list(sources)
+        self._variant = variant
+        self._reference_body_px = float(reference_body_px or 0.0)
+        self._overlap = float(overlap)
+        self._executor = executor
+        self._budget = int(budget)
+        self._cancel = False
+        self.sampled_frames: list[str] = []
+
+    def cancel(self) -> None:
+        self._cancel = True
+
+    @property
+    def cancelled(self) -> bool:
+        return self._cancel
+
+    def execute(self) -> None:
+        from hydra_suite.core.inference.sam2.calibration import calibrate_geometry
+
+        frames = stratified_calibration_frames(
+            self._sources, budget=self._budget, polygon_only=True
+        )
+        if not frames:
+            raise RuntimeError(
+                "No polygon ground-truth frames in the calibration sources. "
+                "Label every animal in a few frames with polygons to calibrate."
+            )
+        self.sampled_frames = [str(path) for path, _records in frames]
+        executor = self._executor
+        if executor is None:
+            from hydra_suite.core.inference.sam2.executor import Sam2SegmentExecutor
+
+            self.status.emit(f"Loading {self._variant}…")
+            executor = Sam2SegmentExecutor.from_variant(self._variant)
+        points = calibrate_geometry(
+            executor,
+            [(path, [rec.points for rec in records]) for path, records in frames],
+            reference_body_px=self._reference_body_px,
+            overlap=self._overlap,
+            progress=lambda pct, msg: (self.progress.emit(pct), self.status.emit(msg)),
+            should_stop=lambda: self._cancel,
+        )
+        self.result_ready.emit(points)
 
 
 def _sources_by_name(project) -> dict[str, OBBSource]:

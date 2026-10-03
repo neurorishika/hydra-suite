@@ -131,3 +131,49 @@ def test_core_module_is_qt_free():
     )
     out = subprocess.run([sys.executable, "-c", code], capture_output=True, text=True)
     assert out.stdout.strip().endswith("False"), out.stderr
+
+
+def test_worker_samples_polygon_frames_and_emits_points(tmp_path):
+    from hydra_suite.detectkit.gui.models import OBBSource
+    from hydra_suite.detectkit.jobs.sam2_escalation import Sam2CalibrationWorker
+
+    root = tmp_path / "s"
+    (root / "images").mkdir(parents=True)
+    (root / "labels").mkdir(parents=True)
+    cv2.imwrite(str(root / "images" / "a.png"), np.zeros((200, 200, 3), np.uint8))
+    ang = np.linspace(0, 2 * np.pi, 12, endpoint=False)
+    pts = np.stack([0.25 + 0.05 * np.cos(ang), 0.25 + 0.05 * np.sin(ang)], 1).ravel()
+    (root / "labels" / "a.txt").write_text(
+        "0 " + " ".join(f"{v:.5f}" for v in pts) + "\n"
+    )
+    src = OBBSource(path=str(root), name="s", level="polygon")
+    out = []
+    w = Sam2CalibrationWorker(
+        [src], "v", reference_body_px=20.0, overlap=0.5, executor=PerfectExec()
+    )
+    w.result_ready.connect(out.append)
+    w.execute()
+    assert out and out[0] and all(p.n_instances == 1 for p in out[0])
+    assert w.sampled_frames == [str(root / "images" / "a.png")]
+
+
+def test_worker_refuses_sources_without_polygon_frames(tmp_path):
+    import pytest
+
+    from hydra_suite.detectkit.gui.models import OBBSource
+    from hydra_suite.detectkit.jobs.sam2_escalation import Sam2CalibrationWorker
+
+    root = tmp_path / "b"
+    (root / "images").mkdir(parents=True)
+    (root / "labels").mkdir(parents=True)
+    cv2.imwrite(str(root / "images" / "a.png"), np.zeros((50, 50, 3), np.uint8))
+    (root / "labels" / "a.txt").write_text("0 0.5 0.5 0.7 0.5 0.7 0.7 0.5 0.7\n")
+    w = Sam2CalibrationWorker(
+        [OBBSource(path=str(root), name="b", level="obb")],
+        "v",
+        reference_body_px=20.0,
+        overlap=0.5,
+        executor=PerfectExec(),
+    )
+    with pytest.raises(RuntimeError, match="polygon"):
+        w.execute()

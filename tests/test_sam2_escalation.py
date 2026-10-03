@@ -635,3 +635,15 @@ def test_tiled_escalation_encodes_owner_tiles_and_counts_seam_fallbacks(tmp_path
     xs, ys = first[0::2], first[1::2]
     # the tiled box's polygon lands back in FRAME coordinates (20..60 px)
     assert min(xs) >= 0.049 and max(xs) <= 0.151 and min(ys) >= 0.049
+
+
+def test_project_round_trips_geometry_calibration(tmp_path):
+    from hydra_suite.detectkit.gui.models import DetectKitProject
+
+    p = DetectKitProject(project_dir=tmp_path)
+    p.geometry_calibration = {"sam2.1-hiera-tiny": {"recommended_index": 0}}
+    p.geometry_escalation_settings = {"tile_fraction": 0.1}
+    p.save(tmp_path / "p.json")
+    q = DetectKitProject.load(tmp_path / "p.json")
+    assert q.geometry_calibration == p.geometry_calibration
+    assert q.geometry_escalation_settings == p.geometry_escalation_settings
