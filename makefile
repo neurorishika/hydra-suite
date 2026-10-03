@@ -19,7 +19,7 @@ BOOT_PY ?= python3
 INSTALL = $(BOOT_PY) install.py
 CUDA_FLAG = $(if $(CUDA_MAJOR),--cuda $(CUDA_MAJOR),)
 # Inside an activated env, install into it; otherwise install.py manages the env.
-CURRENT = --target current
+CURRENT = $(if $(CONDA_PREFIX)$(VIRTUAL_ENV),--target current,)
 
 # =============================================================================
 # ENVIRONMENT SETUP
@@ -65,11 +65,13 @@ doctor:
 	"$(PYTHON_BIN)" -m hydra_suite.runtime.doctor
 
 # Optional sidecar envs
+# The sidecar copies hydra-suite's source from the env it is run against, so
+# run these from the ACTIVATED main env.
 setup-sam3-train:
-	$(INSTALL) --tier cuda $(CUDA_FLAG) --with-sam3-train --only sam3-train
+	"$(PYTHON_BIN)" install.py $(CURRENT) --tier cuda $(CUDA_FLAG) --with-sam3-train --only sam3-train
 
 setup-sleap:
-	$(INSTALL) $(CUDA_FLAG) --with-sleap --only sleap
+	"$(PYTHON_BIN)" install.py $(CURRENT) $(CUDA_FLAG) --with-sleap --only sleap
 
 # =============================================================================
 # ENVIRONMENT MAINTENANCE

@@ -70,11 +70,17 @@ def detect_tier() -> str:
 def _subprocess_python(
     code: str, timeout: float = 300.0
 ) -> subprocess.CompletedProcess:
+    import os
+
+    # KMP_DUPLICATE_LIB_OK masks a duplicate-libomp env (and can give silently
+    # wrong results); never let it turn a broken env into an OK check.
+    env = {k: v for k, v in os.environ.items() if k != "KMP_DUPLICATE_LIB_OK"}
     return subprocess.run(
         [sys.executable, "-c", code],
         capture_output=True,
         text=True,
         timeout=timeout,
+        env=env,
     )
 
 
@@ -392,10 +398,45 @@ def _conda_env_names() -> List[str]:
         return []
 
 
+REINSTALL_SLEAP = (
+    "conda env remove -n sleap && python install.py --with-sleap --only sleap"
+)
+
+
 def check_sleap() -> Check:
-    exists = "sleap" in _conda_env_names()
-    if exists:
-        return Check("sleap", OK, "sleap sidecar env present")
+    if "sleap" not in _conda_env_names():
+        return _sleap_missing()
+    from hydra_suite.runtime.sidecar_versions import SUPPORTED_SLEAP_NN_PREFIX
+    from hydra_suite.utils.conda_utils import run_conda
+
+    code = "import importlib.metadata as m; print(m.version('sleap-nn'))"
+    try:
+        r = run_conda(
+            ["conda", "run", "-n", "sleap", "python", "-c", code],
+            capture_output=True,
+            text=True,
+            timeout=120,
+        )
+    except Exception as exc:  # noqa: BLE001
+        return Check("sleap", WARN, f"sleap env not runnable: {exc}", REINSTALL_SLEAP)
+    lines = (r.stdout or "").strip().splitlines()
+    version = lines[-1].strip() if lines else ""
+    if r.returncode != 0 or not version:
+        return Check(
+            "sleap", WARN, "sleap env present but sleap-nn is missing", REINSTALL_SLEAP
+        )
+    if not version.startswith(SUPPORTED_SLEAP_NN_PREFIX):
+        return Check(
+            "sleap",
+            WARN,
+            f"sleap-nn {version} is unsupported (need {SUPPORTED_SLEAP_NN_PREFIX}x); "
+            "pose inference will refuse to start",
+            REINSTALL_SLEAP,
+        )
+    return Check("sleap", OK, f"sleap sidecar env present (sleap-nn {version})")
+
+
+def _sleap_missing() -> Check:
     return Check(
         "sleap",
         SKIP,

@@ -83,10 +83,24 @@ def _host_origin() -> Optional[dict]:  # seam for tests
     return {"version": dist.version, "direct_url": json.loads(raw) if raw else None}
 
 
+def _normalise_url(url: Optional[str]) -> Optional[str]:
+    """file:// URLs compared as real paths: pip and uv spell them differently
+    (symlinks such as /tmp -> /private/tmp, percent-encoding)."""
+    if not url or not url.startswith("file:"):
+        return url
+    import os
+    from urllib.parse import unquote, urlparse
+
+    path = unquote(urlparse(url).path)
+    if len(path) > 2 and path[0] == "/" and path[2] == ":":  # /C:/... on Windows
+        path = path[1:]
+    return os.path.normcase(os.path.realpath(path))
+
+
 def _origin_key(origin: dict) -> tuple:
     url = origin.get("direct_url") or {}
     return (
-        url.get("url"),
+        _normalise_url(url.get("url")),
         bool((url.get("dir_info") or {}).get("editable")),
         (url.get("vcs_info") or {}).get("commit_id"),
         None if url else origin.get("version"),

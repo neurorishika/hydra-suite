@@ -108,7 +108,27 @@ def _canonical(copies: list[Path], prefix: Path) -> Path:
     return copies[0]
 
 
+def repair_dangling_links(prefix: Path) -> None:
+    """A previous run replaced wheel copies with symlinks. A later reinstall
+    (torch bump) or a removed conda libomp can leave those links dangling, and
+    a dangling libomp makes every import fail. Restore the backup or drop it."""
+    candidates = [prefix / "lib" / "libomp.dylib"]
+    for site in _site_packages(prefix):
+        candidates += list(site.glob("**/libomp.dylib"))
+    for path in candidates:
+        if not (path.is_symlink() and not path.exists()):
+            continue
+        backup = path.with_name(path.name + BACKUP_SUFFIX)
+        path.unlink()
+        if backup.exists():
+            shutil.copy2(backup, path)
+            print(f"  restored dangling {path} from its backup")
+        else:
+            print(f"  removed dangling {path}")
+
+
 def configure(prefix: Path) -> int:
+    repair_dangling_links(prefix)
     copies = find_libomp_copies(prefix)
     if len(copies) <= 1:
         print(f"  {len(copies)} libomp copy in the env -- nothing to do")

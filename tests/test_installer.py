@@ -468,3 +468,86 @@ def test_sam3_training_on_windows_adds_triton_windows():
         _ctx(linux_gpu("595"), "cuda", 13), inst.Options(with_sam3_train=True)
     )
     assert "triton-windows" not in _argv_text(linux)
+
+
+# ---------------------------------------------------------------------------
+# Adversarial-review regressions
+# ---------------------------------------------------------------------------
+
+
+def test_only_with_unknown_step_is_an_error():
+    with pytest.raises(inst.InstallError, match="aprilag"):
+        inst.build_plan(_ctx(LINUX, "cpu"), inst.Options(only="aprilag"))
+
+
+def test_sleap_sidecar_pins_sleap_nn_too():
+    steps = inst.build_plan(_ctx(LINUX, "cpu"), inst.Options(with_sleap=True))
+    assert f"sleap-nn=={inst.SLEAP_NN_PIN}" in _argv_text(
+        [s for s in steps if s.name == "sleap"]
+    )
+
+
+def test_existing_conda_env_keeps_its_python_unless_asked():
+    ctx = _ctx(LINUX, "cpu", target="conda")
+    ctx.env_exists = True
+    env = next(s for s in inst.build_plan(ctx, inst.Options()) if s.name == "env")
+    assert not any(a.startswith("python=") for a in env.argv)
+    env = next(
+        s for s in inst.build_plan(ctx, inst.Options(python="3.12")) if s.name == "env"
+    )
+    assert "python=3.12" in env.argv
+
+
+def test_new_conda_env_gets_the_default_python():
+    env = next(
+        s
+        for s in inst.build_plan(_ctx(LINUX, "cpu", target="conda"), inst.Options())
+        if s.name == "env"
+    )
+    assert f"python={inst.DEFAULT_PYTHON}" in env.argv
+
+
+@pytest.mark.parametrize(
+    "version, ok",
+    [((3, 10), False), ((3, 11), True), ((3, 13), True), ((3, 14), False)],
+)
+def test_target_python_window(version, ok):
+    if ok:
+        inst._check_target_python("x", version)
+    else:
+        with pytest.raises(inst.InstallError, match="3.11-3.13"):
+            inst._check_target_python("x", version)
+
+
+def test_conda_preferred_over_mamba(monkeypatch):
+    found = {"mamba": "/opt/bin/mamba", "conda": "/opt/bin/conda"}
+    monkeypatch.setattr(inst.shutil, "which", found.get)
+    assert inst.find_conda({}) == "/opt/bin/conda"
+
+
+def test_windows_conda_bat_is_swapped_for_conda_exe(monkeypatch, tmp_path):
+    bat = tmp_path / "condabin" / "conda.bat"
+    exe = tmp_path / "Scripts" / "conda.exe"
+    bat.parent.mkdir()
+    exe.parent.mkdir()
+    bat.write_text("")
+    exe.write_text("")
+    monkeypatch.setattr(
+        inst.shutil, "which", lambda name: str(bat) if name == "conda" else None
+    )
+    assert inst.find_conda({}) == str(exe)
+
+
+def test_mamba2_run_drops_no_capture_output(monkeypatch):
+    class R:
+        stdout = "2.8.0\n"
+
+    monkeypatch.setattr(inst.subprocess, "run", lambda *a, **k: R())
+    assert inst.conda_run_flags("/opt/bin/mamba") == []
+    assert inst.conda_run_flags("/opt/bin/conda") == ["--no-capture-output"]
+
+
+def test_env_bin_dirs_cover_windows_conda_layout():
+    dirs = inst.env_bin_dirs(Path("C:/e"), WINDOWS, "conda")
+    assert Path("C:/e/Library/bin") in dirs and Path("C:/e/Scripts") in dirs
+    assert inst.env_bin_dirs(Path("/e"), LINUX, "conda") == [Path("/e/bin")]

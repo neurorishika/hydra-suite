@@ -64,12 +64,16 @@ SAM3_PYTHON = "3.12"
 
 SLEAP_ENV = "sleap"
 SLEAP_PYTHON = "3.13"
-#: sleap 1.6.2 pulls sleap-nn 0.1.3; newer sleap-nn breaks the shared-memory
+#: sleap 1.6.2 + sleap-nn 0.1.3 (pinned explicitly: sleap declares no upper
+#: bound on sleap-nn); newer sleap-nn breaks the shared-memory
 #: transport to the SLEAP service (AttributeError in sleap_nn.data.utils).
 SLEAP_PIN = "1.6.2"
+SLEAP_NN_PIN = "0.1.3"
 
 DEFAULT_PYTHON = "3.13"
 MIN_TARGET_PYTHON = (3, 11)
+#: Highest Python the tested pins have wheels for (coremltools, PySide6, ...).
+MAX_TARGET_PYTHON = (3, 13)
 
 DEFAULT_ENV_NAMES = {"cpu": "hydra", "mps": "hydra-mps", "cuda": "hydra-cuda"}
 
@@ -342,11 +346,49 @@ def find_conda(env_var: Dict[str, str] = os.environ) -> Optional[str]:
     exe = env_var.get("CONDA_EXE")
     if exe and Path(exe).exists():
         return exe
-    for name in ("mamba", "conda"):
+    # conda before mamba: mamba 2.x `run` rejects --no-capture-output, which
+    # the sidecar steps rely on for live output.
+    for name in ("conda", "mamba"):
         found = shutil.which(name)
-        if found:
-            return found
+        if not found:
+            continue
+        if found.lower().endswith(".bat"):
+            # condabin\conda.bat runs through cmd.exe, which treats '<'/'>' in
+            # specs like numpy<2 as redirections. Use the real executable.
+            real = Path(found).parent.parent / "Scripts" / "conda.exe"
+            if real.exists():
+                return str(real)
+        return found
     return None
+
+
+def conda_run_flags(conda: str) -> List[str]:
+    """``--no-capture-output`` for conda; omitted for mamba 2.x, which rejects it."""
+    if "mamba" not in Path(conda).name.lower():
+        return ["--no-capture-output"]
+    try:
+        out = subprocess.run(
+            [conda, "--version"], capture_output=True, text=True, timeout=30
+        ).stdout
+        major = int(re.findall(r"(\d+)\.", out)[0])
+    except Exception:  # noqa: BLE001
+        return []
+    return [] if major >= 2 else ["--no-capture-output"]
+
+
+def env_bin_dirs(prefix: Path, host: "Host", kind: str) -> List[Path]:
+    """Directories holding the env's own executables (git, cmake, compilers)."""
+    if host.is_windows:
+        if kind == "venv":
+            return [prefix / "Scripts"]
+        return [
+            prefix,
+            prefix / "Library" / "mingw-w64" / "bin",
+            prefix / "Library" / "usr" / "bin",
+            prefix / "Library" / "bin",
+            prefix / "Scripts",
+        ]
+    return [prefix / "bin"]
 
 
 def conda_env_prefix(conda: str, name: str) -> Tuple[Path, bool]:
@@ -399,7 +441,7 @@ class Options:
     cuda: str = "auto"
     target: str = "auto"  # auto | conda | venv | current
     env: Optional[str] = None
-    python: str = DEFAULT_PYTHON
+    python: Optional[str] = None  # None = keep an existing env's interpreter
     source: Optional[str] = None
     update: bool = False
     recreate: bool = False
@@ -480,7 +522,7 @@ def build_plan(ctx: Context, opts: Options) -> List[Step]:
                         str(ctx.prefix),
                         "-c",
                         "conda-forge",
-                        f"python={opts.python}",
+                        *([f"python={opts.python}"] if opts.python else []),
                         *pkgs,
                     ],
                 )
@@ -498,7 +540,7 @@ def build_plan(ctx: Context, opts: Options) -> List[Step]:
                         str(ctx.prefix),
                         "-c",
                         "conda-forge",
-                        f"python={opts.python}",
+                        f"python={opts.python or DEFAULT_PYTHON}",
                         *pkgs,
                     ],
                 )
@@ -599,6 +641,7 @@ def build_plan(ctx: Context, opts: Options) -> List[Step]:
                     "--force-reinstall",
                     "--no-deps",
                     "opencv-python-headless",
+                    *[a for f in pin_files(ctx, opts) for a in ("-c", str(f))],
                 ],
             )
         )
@@ -673,13 +716,28 @@ def pin_files(ctx: Context, opts: Options) -> List[Path]:
 def _filter_only(steps: List[Step], opts: Options) -> List[Step]:
     if not opts.only:
         return steps
-    wanted = {s.strip() for s in opts.only.split(",")}
+    wanted = {s.strip() for s in opts.only.split(",") if s.strip()}
+    unknown = sorted(wanted - {s.name for s in steps})
+    if unknown:
+        raise InstallError(
+            f"--only names step(s) not in this plan: {', '.join(unknown)}. "
+            f"Available: {', '.join(dict.fromkeys(s.name for s in steps))} "
+            "(sam3-train/sleap also need --with-sam3-train/--with-sleap)."
+        )
     return [s for s in steps if s.name in wanted]
+
+
+_TEMP_FILES: List[Path] = []
 
 
 def _write_temp(name: str, lines: Sequence[str]) -> str:
     path = Path(tempfile.gettempdir()) / f"hydra-install-{os.getpid()}-{name}"
     path.write_text("\n".join(lines) + "\n", encoding="utf-8")
+    if not _TEMP_FILES:
+        import atexit
+
+        atexit.register(lambda: [p.unlink() for p in _TEMP_FILES if p.exists()])
+    _TEMP_FILES.append(path)
     return str(path)
 
 
@@ -713,6 +771,7 @@ def build_apriltag(ctx: Context) -> None:
             + " Or re-run with --skip-apriltag (AprilTag identity will be unavailable)."
         )
     prefix = _python_prefix(ctx.python)
+    _export_conda_compilers(Path(prefix), ctx.host)
     with tempfile.TemporaryDirectory(prefix="hydra-apriltag-") as tmp:
         src = Path(tmp) / "apriltag"
         _run(
@@ -764,6 +823,28 @@ def build_apriltag(ctx: Context) -> None:
     _run([str(ctx.python), "-c", "import apriltag"])
 
 
+def _export_conda_compilers(prefix: Path, host: Host) -> None:
+    """Point CC/CXX at conda-forge's compilers when the env has them.
+
+    ``conda activate`` would export these; the installer never activates the
+    env, so without this cmake silently uses (or fails to find) a system one.
+    """
+    if host.is_windows:
+        return
+    bindir = prefix / "bin"
+    for var, patterns in (
+        ("CC", ("*-conda-linux-gnu-cc", "*-apple-darwin*-clang")),
+        ("CXX", ("*-conda-linux-gnu-c++", "*-apple-darwin*-clang++")),
+    ):
+        if os.environ.get(var):
+            continue
+        for pattern in patterns:
+            hits = sorted(bindir.glob(pattern))
+            if hits:
+                os.environ[var] = str(hits[0])
+                break
+
+
 def _compiler_hint(host: Host) -> str:
     if host.is_windows:
         return (
@@ -802,7 +883,16 @@ def sam3_train_steps(ctx: Context, opts: Options) -> List[Step]:
             "SAM3 training runs in a conda sidecar env; conda/mamba was not found on PATH."
         )
     conda = ctx.conda
-    side = [conda, "run", "-n", SAM3_ENV, "--no-capture-output", "python", "-m", "pip"]
+    side = [
+        conda,
+        "run",
+        "-n",
+        SAM3_ENV,
+        *conda_run_flags(conda),
+        "python",
+        "-m",
+        "pip",
+    ]
     reqs, index = torch_requirements("cuda", ctx.cuda_major, ctx.host)
     return [
         Step(
@@ -919,7 +1009,16 @@ def sleap_steps(ctx: Context, opts: Options) -> List[Step]:
             "The SLEAP sidecar is a conda env; conda/mamba was not found on PATH."
         )
     conda = ctx.conda
-    side = [conda, "run", "-n", SLEAP_ENV, "--no-capture-output", "python", "-m", "pip"]
+    side = [
+        conda,
+        "run",
+        "-n",
+        SLEAP_ENV,
+        *conda_run_flags(conda),
+        "python",
+        "-m",
+        "pip",
+    ]
     extra = "nn,nn-export-gpu" if ctx.tier == "cuda" else "nn,nn-export"
     steps = [
         Step(
@@ -941,7 +1040,14 @@ def sleap_steps(ctx: Context, opts: Options) -> List[Step]:
         Step(
             "sleap",
             f"install sleap[{extra}]=={SLEAP_PIN}",
-            [*side, "install", f"sleap[{extra}]=={SLEAP_PIN}"],
+            # sleap 1.6.2 declares sleap-nn>=0.1.2 with NO upper bound, so a fresh
+            # resolve takes 0.3.x -- which the service preflight refuses. Pin it.
+            [
+                *side,
+                "install",
+                f"sleap[{extra}]=={SLEAP_PIN}",
+                f"sleap-nn=={SLEAP_NN_PIN}",
+            ],
         ),
     ]
     reqs, index = torch_requirements(ctx.tier, ctx.cuda_major, ctx.host)
@@ -981,6 +1087,18 @@ def execute(steps: Sequence[Step]) -> None:
             raise InstallError(f"step '{step.name}' failed: {exc}") from exc
 
 
+def _check_target_python(what: str, version: Tuple[int, ...] = None) -> None:
+    v = tuple((version or sys.version_info)[:2])
+    lo, hi = MIN_TARGET_PYTHON, MAX_TARGET_PYTHON
+    if not lo <= v <= hi:
+        fmt = lambda t: ".".join(map(str, t))  # noqa: E731
+        raise InstallError(
+            f"{what} needs Python {fmt(lo)}-{fmt(hi)}; this is {fmt(v)}. "
+            "Use --target conda (it installs a supported Python), or run with a "
+            "supported interpreter."
+        )
+
+
 def resolve_context(opts: Options, host: Optional[Host] = None) -> Context:
     host = host or detect_host()
     tier = resolve_tier(opts.tier, opts.cuda, host)
@@ -997,11 +1115,7 @@ def resolve_context(opts: Options, host: Optional[Host] = None) -> Context:
 
     if target == "current":
         python = Path(sys.executable)
-        if sys.version_info < MIN_TARGET_PYTHON:
-            raise InstallError(
-                f"--target current needs Python >= {'.'.join(map(str, MIN_TARGET_PYTHON))}; "
-                f"this is {platform.python_version()}. Use --target conda or venv."
-            )
+        _check_target_python("--target current")
         return Context(
             host, tier, cuda_major, target, None, python, True, conda, source, warnings
         )
@@ -1020,11 +1134,9 @@ def resolve_context(opts: Options, host: Optional[Host] = None) -> Context:
             else REPO_ROOT / f".venv-{name}"
         )
         exists = env_python(prefix, host, "venv").exists()
-        if sys.version_info < MIN_TARGET_PYTHON:
-            raise InstallError(
-                f"--target venv needs this script to run on Python >= "
-                f"{'.'.join(map(str, MIN_TARGET_PYTHON))} (it becomes the venv's Python)."
-            )
+        _check_target_python(
+            "--target venv (this interpreter becomes the venv's Python)"
+        )
     python = env_python(prefix, host, target)
     return Context(
         host, tier, cuda_major, target, prefix, python, exists, conda, source, warnings
@@ -1047,7 +1159,10 @@ def parse_args(argv: Optional[Sequence[str]] = None) -> Options:
     )
     p.add_argument("--env", help="conda env name (or venv path)")
     p.add_argument(
-        "--python", default=DEFAULT_PYTHON, help="Python version for a new conda env"
+        "--python",
+        default=None,
+        help=f"Python version for the conda env (default {DEFAULT_PYTHON} for a new "
+        "env; an existing env keeps its interpreter unless this is given)",
     )
     p.add_argument(
         "--source",
@@ -1102,6 +1217,12 @@ def main(argv: Optional[Sequence[str]] = None) -> int:
     except InstallError as exc:
         print(f"ERROR: {exc}", file=sys.stderr)
         return 2
+    if ctx.prefix is not None:
+        # The env's own git/cmake/compilers (conda installs them) must be what
+        # every step -- and uv, which shells out to git -- finds first.
+        kind = "venv" if ctx.target == "venv" else "conda"
+        dirs = [str(d) for d in env_bin_dirs(ctx.prefix, ctx.host, kind)]
+        os.environ["PATH"] = os.pathsep.join(dirs + [os.environ.get("PATH", "")])
     print(
         f"HYDRA install: tier={tier_key(ctx.tier, ctx.cuda_major)} target={ctx.target} "
         f"python={ctx.python} source={ctx.source}"

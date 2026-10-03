@@ -25,6 +25,7 @@ from typing import Dict, List, Optional, Tuple
 import numpy as np
 
 from hydra_suite.core.inference.api import load_pose_backend
+from hydra_suite.runtime.sidecar_versions import SUPPORTED_SLEAP_NN_PREFIX
 from hydra_suite.utils.conda_utils import popen_conda, run_conda
 
 
@@ -2555,12 +2556,6 @@ def _format_sleap_env_preflight_error(raw_error: str, env_name: str) -> str:
             f"Original error: {msg}"
         )
     return f"{base} Original error: {msg}"
-
-
-#: sleap 1.6.2 pulls sleap-nn 0.1.x. Newer sleap-nn (0.3.x) changed the data
-#: utilities the shared-memory transport relies on and fails with an opaque
-#: AttributeError in sleap_nn.data.utils mid-run; refuse it at preflight.
-SUPPORTED_SLEAP_NN_PREFIX = "0.1."
 
 
 def _sleap_env_preflight(env_name: str) -> Tuple[bool, str]:

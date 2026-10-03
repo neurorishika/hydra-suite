@@ -308,3 +308,25 @@ def test_origin_skew_flags_missing_hydra_in_sidecar(monkeypatch):
 
 def test_origin_skew_tolerates_old_probe_payloads():
     assert av._origin_skew("absent") == ""
+
+
+def test_origin_skew_treats_symlinked_spellings_of_one_path_as_equal(
+    monkeypatch, tmp_path
+):
+    real = tmp_path / "real"
+    real.mkdir()
+    link = tmp_path / "link"
+    link.symlink_to(real)
+    host = {
+        "version": "1.0.0",
+        "direct_url": {"url": real.as_uri(), "dir_info": {"editable": True}},
+    }
+    side = {
+        "version": "1.0.0",
+        "direct_url": {
+            "url": link.as_uri().replace("/link", "/%6Cink"),
+            "dir_info": {"editable": True},
+        },
+    }
+    monkeypatch.setattr(av, "_host_origin", lambda: host)
+    assert av._origin_skew(side) == ""

@@ -78,3 +78,19 @@ def test_sam3_reports_missing_dependencies(monkeypatch, capsys):
     )
     assert escalate_cli.run_sam3(args) == 2
     assert "clip missing" in capsys.readouterr().err
+
+
+def test_sam3_class_must_be_a_project_class():
+    project = SimpleNamespace(class_names=["ant", "queen"])
+    assert (
+        escalate_cli._resolve_class_name(project, "queen", "ant with paint") == "queen"
+    )
+    assert escalate_cli._resolve_class_name(project, "", "ant") == "ant"
+    with pytest.raises(SystemExit, match="not a class"):
+        escalate_cli._resolve_class_name(project, "", "ant with paint")
+    with pytest.raises(SystemExit, match="must be one of"):
+        escalate_cli._resolve_class_name(project, "worker", "ant")
+    assert (
+        escalate_cli._resolve_class_name(SimpleNamespace(class_names=["fly"]), "", "x")
+        == "fly"
+    )

@@ -8,6 +8,9 @@ DetectKit to accept or reject the staged frames.
     detectkit escalate sam2 --project DIR [--source NAME ...] [--device mps]
     detectkit escalate sam3 --project DIR --prompt "ant" [--class-name ant]
 
+Runs in this process: unlike the GUI it does not use the DetectKit sidecar's
+memory containment, so size --device and --max-instances for the host.
+
 Works on every device (Auto picks CUDA, then Apple MPS, then CPU). SAM3's
 stock weights are licence-gated: accept the licence at
 https://huggingface.co/facebook/sam3 and run ``hf auth login`` once per
@@ -64,7 +67,8 @@ def build_parser() -> argparse.ArgumentParser:
     s3.add_argument(
         "--class-name",
         default="",
-        help="project class the staged instances are labelled as (default: the prompt)",
+        help="project class the staged instances are labelled as (must be one of the "
+        "project's classes; default: the only class, or the prompt if it is one)",
     )
     s3.add_argument(
         "--variant",
@@ -145,6 +149,27 @@ def run_sam2(args: argparse.Namespace) -> int:
     return 0
 
 
+def _resolve_class_name(project, requested: str, prompt: str) -> str:
+    """The project class staged instances are written as -- never free text.
+
+    The prompt is not the class: an instance labelled with a name outside
+    ``project.class_names`` is silently dropped by the overlay and the training
+    dataset builder. Mirror the GUI, which only offers the project's classes.
+    """
+    classes = [str(c) for c in (getattr(project, "class_names", None) or []) if str(c)]
+    if not classes:
+        return requested  # no class scheme: the job falls back to the prompt
+    chosen = requested or (prompt if prompt in classes else "")
+    if not chosen and len(classes) == 1:
+        chosen = classes[0]
+    if chosen not in classes:
+        raise SystemExit(
+            f"error: --class-name must be one of the project's classes {classes} "
+            f"(got {chosen or 'nothing'!r}; the prompt {prompt!r} is not a class)."
+        )
+    return chosen
+
+
 def run_sam3(args: argparse.Namespace) -> int:
     from hydra_suite.core.inference.semantic.checkpoints import (
         Sam3DownloadNotAuthorized,
@@ -160,13 +185,14 @@ def run_sam3(args: argparse.Namespace) -> int:
         return 2
     project = _open(args.project)
     sources = _selected(project, args.source)
+    class_name = _resolve_class_name(project, args.class_name, args.prompt)
     payload = {
         "project_dir": str(Path(project.project_dir).expanduser().resolve()),
         "source_names": [s.name for s in sources],
         "source_paths": [s.path for s in sources],
         "variant": args.variant,
         "prompt": args.prompt,
-        "class_name": args.class_name,
+        "class_name": class_name,
         "device": args.device,
         "params": {
             "device": args.device,

@@ -107,9 +107,10 @@ cuda12 = [
 ]
 cuda13 = [
     "hydra-suite[onnx-tools]",
-    # onnxruntime-gpu >=1.28 is built for CUDA 13 and depends on the
-    # UNSUFFIXED nvidia-* wheels -- the family torch+cu130 uses. (1.27 used
-    # -cu13-suffixed names; skip it so the two never mix in site-packages/nvidia.)
+    # onnxruntime-gpu >=1.28 is built for CUDA 13 and depends on the same
+    # nvidia-* wheel names torch+cu130 uses (unsuffixed cuda-runtime/cufft/...,
+    # plus nvidia-cudnn-cu13). 1.27 used -cu13-suffixed CUDA wheels; skip it so
+    # two spellings of one library never mix in site-packages/nvidia.
     "onnxruntime-gpu[cuda,cudnn]>=1.28",
     "cupy-cuda13x",
     "tensorrt-cu13",

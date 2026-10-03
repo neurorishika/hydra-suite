@@ -55,7 +55,7 @@ wheel family:
 | CUDA | torch wheels | ONNX Runtime GPU | TensorRT / CuPy |
 |---|---|---|---|
 | 12 | `+cu128` | `onnxruntime-gpu[cuda,cudnn]` `>=1.24,<1.27` (`nvidia-*-cu12` wheels) | `tensorrt-cu12*`, `cupy-cuda12x` |
-| 13 | `+cu130` | `onnxruntime-gpu[cuda,cudnn]` `>=1.28` (unsuffixed `nvidia-*` wheels) | `tensorrt-cu13*`, `cupy-cuda13x` |
+| 13 | `+cu130` | `onnxruntime-gpu[cuda,cudnn]` `>=1.28` (the same `nvidia-*` wheels torch `+cu130` uses) | `tensorrt-cu13*`, `cupy-cuda13x` |
 
 The installer removes the other family's `onnxruntime`/TensorRT packages
 before installing. Mixing families in one env breaks cuDNN loading, and

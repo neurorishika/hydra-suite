@@ -260,8 +260,14 @@ def _verify_cupy() -> int:
     try:
         import cupy as cp
     except ModuleNotFoundError:
-        print("CuPy is not installed; skipping GPU background-subtraction check.")
-        return 0
+        # The cuda12/cuda13 extras install CuPy; without it background
+        # subtraction silently runs on the CPU.
+        print(
+            "ERROR: CuPy is not installed (GPU background subtraction would fall "
+            "back to CPU). Re-run `python install.py`.",
+            file=sys.stderr,
+        )
+        return 1
     except Exception as exc:
         print(f"ERROR: Failed to import cupy after install: {exc}", file=sys.stderr)
         return 1

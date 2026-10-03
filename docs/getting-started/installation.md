@@ -299,6 +299,11 @@ refinekit          # RefineKit proofreading
 
 ---
 
+!!! note "Linux needs glibc 2.34 or newer"
+    The tested pins include PySide6 6.11, whose Linux wheels are
+    `manylinux_2_34` (RHEL/Rocky 9, Ubuntu 22.04 and newer). Older
+    distributions (RHEL 8, Ubuntu 20.04) have no compatible wheel.
+
 ### Verification status (2026-10-03)
 
 What has actually been run, not just documented. "CI" is the
