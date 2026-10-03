@@ -551,3 +551,32 @@ def test_env_bin_dirs_cover_windows_conda_layout():
     dirs = inst.env_bin_dirs(Path("C:/e"), WINDOWS, "conda")
     assert Path("C:/e/Library/bin") in dirs and Path("C:/e/Scripts") in dirs
     assert inst.env_bin_dirs(Path("/e"), LINUX, "conda") == [Path("/e/bin")]
+
+
+def test_sidecar_and_doctor_steps_run_with_the_callers_path():
+    """`conda run -n <sidecar> python` must not resolve the main env's python."""
+    steps = inst.build_plan(
+        _ctx(linux_gpu("570"), "cuda", 12),
+        inst.Options(with_sam3_train=True, with_sleap=True),
+    )
+    for step in steps:
+        expect = step.name in ("sam3-train", "sleap", "doctor")
+        assert step.original_path is expect, step.name
+
+
+def test_execute_restores_original_path_for_flagged_steps(monkeypatch):
+    seen = []
+    monkeypatch.setattr(inst, "_ORIGINAL_PATH", "/orig")
+    monkeypatch.setenv("PATH", "/env/bin:/orig")
+    steps = [
+        inst.Step("a", "a", func=lambda: seen.append(inst.os.environ["PATH"])),
+        inst.Step(
+            "b",
+            "b",
+            func=lambda: seen.append(inst.os.environ["PATH"]),
+            original_path=True,
+        ),
+    ]
+    inst.execute(steps)
+    assert seen == ["/env/bin:/orig", "/orig"]
+    assert inst.os.environ["PATH"] == "/env/bin:/orig"

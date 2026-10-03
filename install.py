@@ -420,6 +420,10 @@ class Step:
     env: Optional[Dict[str, str]] = None
     #: Failing steps abort the install unless this is set.
     optional: bool = False
+    #: Run with the caller's ORIGINAL PATH. Steps that go through `conda run -n
+    #: <other env>` must not see this env's bin first, or a bare `python`
+    #: resolves to the main env and pip installs into the wrong one.
+    original_path: bool = False
 
     def render(self) -> str:
         if self.argv is not None:
@@ -677,17 +681,29 @@ def build_plan(ctx: Context, opts: Options) -> List[Step]:
         )
 
     # 9. Optional sidecars
+    sidecars: List[Step] = []
     if opts.with_sam3_train:
-        steps.extend(sam3_train_steps(ctx, opts))
+        sidecars.extend(sam3_train_steps(ctx, opts))
     if opts.with_sleap:
-        steps.extend(sleap_steps(ctx, opts))
+        sidecars.extend(sleap_steps(ctx, opts))
+    for step in sidecars:
+        step.original_path = True
+    steps.extend(sidecars)
 
     # 10. Verify
     if not opts.skip_doctor:
         doctor = [py, "-m", "hydra_suite.runtime.doctor", "--tier", ctx.tier]
         if opts.with_sam3_train:
             doctor.append("--require-sam3-train")
-        steps.append(Step("doctor", "verify the install (hydra doctor)", doctor))
+        # doctor probes the sidecars through `conda run -n <env> python`.
+        steps.append(
+            Step(
+                "doctor",
+                "verify the install (hydra doctor)",
+                doctor,
+                original_path=True,
+            )
+        )
     return _filter_only(steps, opts)
 
 
@@ -1070,9 +1086,15 @@ def _run(argv: Sequence[str], env: Optional[Dict[str, str]] = None) -> None:
     subprocess.run(list(argv), check=True, env=env)
 
 
+_ORIGINAL_PATH: Optional[str] = None
+
+
 def execute(steps: Sequence[Step]) -> None:
     for i, step in enumerate(steps, 1):
         print(f"\n==> [{i}/{len(steps)}] {step.describe}", flush=True)
+        saved_path = os.environ.get("PATH", "")
+        if step.original_path and _ORIGINAL_PATH is not None:
+            os.environ["PATH"] = _ORIGINAL_PATH
         try:
             if step.func is not None:
                 step.func()
@@ -1085,6 +1107,8 @@ def execute(steps: Sequence[Step]) -> None:
                 print(f"    (optional step failed: {exc}; continuing)")
                 continue
             raise InstallError(f"step '{step.name}' failed: {exc}") from exc
+        finally:
+            os.environ["PATH"] = saved_path
 
 
 def _check_target_python(what: str, version: Tuple[int, ...] = None) -> None:
@@ -1222,6 +1246,8 @@ def main(argv: Optional[Sequence[str]] = None) -> int:
         # every step -- and uv, which shells out to git -- finds first.
         kind = "venv" if ctx.target == "venv" else "conda"
         dirs = [str(d) for d in env_bin_dirs(ctx.prefix, ctx.host, kind)]
+        global _ORIGINAL_PATH
+        _ORIGINAL_PATH = os.environ.get("PATH", "")
         os.environ["PATH"] = os.pathsep.join(dirs + [os.environ.get("PATH", "")])
     print(
         f"HYDRA install: tier={tier_key(ctx.tier, ctx.cuda_major)} target={ctx.target} "
