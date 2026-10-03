@@ -277,3 +277,10 @@ it is handed, not with the number of passes.
   bound.
 - `IOU_TOLERANCE = 0.02` — separates 0.729 (0.2) from the 0.756/0.761
   plateau (0.3/0.4).
+
+**End-to-end check (same box, commit 5af2dc8c):** 8 held-out polygon frames
+(indices 40-47) reduced to OBB labels and escalated through
+`run_escalation` with the real `sam2.1-hiera-base_plus` executor; staged
+polygons scored against the original polygons. Full frame: median IoU
+0.597, 195/195 primed, 14.7 s. Fraction 0.3 (263 px tiles): median IoU
+0.756, 195/195 primed, 0 seam fallbacks, 9.7 s.
