@@ -202,7 +202,7 @@ def calibrate_geometry(
                 progress(
                     int(100 * done / total_passes),
                     f"Calibrating frame {fi + 1}/{len(plans)} "
-                    f"({opt.tile_px or 'full frame'} px tiles)",
+                    f"({f'{opt.tile_px} px tiles' if opt.tile_px else 'full frame'})",
                 )
         del image
 
