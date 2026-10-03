@@ -222,3 +222,58 @@ collect/merge.
 - One real measurement (GPU) on polygon sources to set `IOU_FLOOR` /
   `FALLBACK_CEIL` and confirm owner-tile SAM2 beats full frame on small
   animals.
+
+## Measurement (2026-10-03, mehek, RTX 6000 Ada, `hydra-cuda`)
+
+**Data:** the user-reviewed polygon source `merged_source_20260914`
+(improved_ant_detection; 117 frames, all frames fully polygon-labelled,
+4512×4512). 30 frames sampled with `stratified_calibration_frames(polygon_only=True)`,
+697 instances. Median body 79.0 px. Overlap 0.5. Tool:
+`tools/sam2_geometry_calibration/measure.py`; raw JSON in
+`tools/sam2_geometry_calibration/results/` (commit 14bb02ea).
+
+`sam2.1-hiera-base_plus` (dialog default):
+
+| fraction | tile px | encodes/frame | s/frame | median IoU | p10 IoU | fallback | seam |
+|---|---|---|---|---|---|---|---|
+| full | — | 1.00 | 1.65 | 0.598 | 0.519 | 0 | 0 |
+| 0.02 | 3950 | 1.73 | 1.34 | 0.601 | 0.524 | 0 | 0 |
+| 0.03 | 2633 | 2.50 | 0.46 | 0.609 | 0.534 | 0 | 0 |
+| 0.05 | 1580 | 5.17 | 0.37 | 0.635 | 0.559 | 0 | 0 |
+| 0.10 | 790 | 6.67 | 0.38–0.41 | 0.683 | 0.599 | 0 | 0 |
+| 0.20 | 395 | 10.30 | 0.51–0.55 | 0.729 | 0.633 | 0 | 0 |
+| 0.30 | 263 | 14.67 | 0.74 | 0.756 | 0.636 | 0 | 0 |
+| 0.40 | 197 | 17.70 | 0.90 | 0.761 | 0.623 | 0 | 0.009 |
+| 0.50 | 158 | 18.13 | 1.18 | 0.753 | 0.561 | 0 | 0.145 |
+
+(0.70 → 113 px tiles exceeds `MAX_TILES_PER_FRAME` on 4512 px frames and is
+dropped.) `sam2.1-hiera-tiny` shows the same shape: full 0.598 → 0.752 at 0.20.
+
+**Answer: owner-tile SAHI beats full frame on small animals.** Median IoU
+0.598 → 0.756 (+0.16), p10 0.519 → 0.636, and it is also FASTER
+(1.65 → 0.74 s/frame), because SAM2's per-pass cost scales with the pixels
+it is handed, not with the number of passes.
+
+**Deviations from the design, forced by the data:**
+
+1. *Cost axis.* The design ranked by owned tiles per frame. Encode count
+   anti-correlates with time here (full frame = 1 pass, slowest), so ranking
+   by it recommended full frame — the worst and slowest configuration.
+   `recommend_geometry` now ranks by quality first, then MEASURED
+   `seconds_per_frame`: among eligible points within `IOU_TOLERANCE = 0.02`
+   of the best median IoU, the fastest wins. On this sweep that is 0.30.
+2. *Grid.* SAM3's `TILE_FRACTION_GRID` (0.03/0.05/0.10/full) never reaches
+   the region where SAM2 wins. SAM2 gets `SAM2_TILE_FRACTION_GRID =
+   (0.05, 0.1, 0.2, 0.3, 0.4, full)`; it stops at 0.4 because at 0.5
+   (tile = 2× body) 14.5% of animals cross every seam and p10 IoU drops.
+
+**Constants:**
+
+- `IOU_FLOOR = 0.45` — a "SAM2 is broken here" gate, set below the worst
+  working configuration measured (full frame, 0.598) with margin. Ranking,
+  not the floor, picks the operating point.
+- `FALLBACK_CEIL = 0.10` — **not measurable from this data**: no
+  configuration fell back on a single animal. Kept as a generous sanity
+  bound.
+- `IOU_TOLERANCE = 0.02` — separates 0.729 (0.2) from the 0.756/0.761
+  plateau (0.3/0.4).

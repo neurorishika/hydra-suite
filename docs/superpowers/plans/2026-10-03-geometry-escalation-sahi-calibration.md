@@ -18,7 +18,7 @@
 - Direct/YOLO calibration (`jobs/direct_calibration.py`) behaviour is unchanged: `polygon_only` defaults to `False`.
 - Core/Runtime/Data/Utils must not import from app layers; new `core/inference/sam2/*` modules are Qt-free and import nothing from `detectkit`.
 - Existing importers of moved helpers keep working via re-exports from `jobs/semantic_escalation.py`.
-- `IOU_FLOOR` / `FALLBACK_CEIL` start as provisional constants marked `PROVISIONAL`; Task 11 replaces them with measured values. Do not merge while they are provisional.
+- `IOU_FLOOR` / `FALLBACK_CEIL` started as provisional constants; Task 11 replaced them from the mehek measurement (see the spec's "Measurement" section, which also records two data-forced deviations: rank by measured seconds not tile count, and a SAM2-specific tile-fraction grid).
 - Run tests with `conda activate hydra-mps` and `PYTHONPATH=$PWD/src` from the worktree.
 - Commits as the configured git user, no Claude co-author trailer.
 

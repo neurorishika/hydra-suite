@@ -34,7 +34,7 @@ def main() -> None:
     ap.add_argument("--source", required=True)
     ap.add_argument("--variant", default="sam2.1-hiera-base_plus")
     ap.add_argument("--budget", type=int, default=30)
-    ap.add_argument("--fractions", default="0.02,0.03,0.05,0.1,0.2,full")
+    ap.add_argument("--fractions", default="0.05,0.1,0.2,0.3,0.4,full")
     ap.add_argument("--overlap", type=float, default=0.5)
     ap.add_argument("--device", default=None)
     ap.add_argument("--reference-body-px", type=float, default=0.0)

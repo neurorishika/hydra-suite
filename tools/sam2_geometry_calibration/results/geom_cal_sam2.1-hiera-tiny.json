@@ -1,0 +1,81 @@
+{
+  "source": "/home/rutalab/geom_sahi_data/merged_source_20260914",
+  "variant": "sam2.1-hiera-tiny",
+  "frames": 30,
+  "median_body_px": 78.99609375,
+  "overlap": 0.5,
+  "model_load_seconds": 0.4413477030029753,
+  "git_sha": "14bb02ea92069262b0d0c8a0dc8bf5a8cc9cdc1c",
+  "host": "mehek",
+  "gpu": "NVIDIA RTX 6000 Ada Generation",
+  "points": [
+    {
+      "tile_fraction": 0.02,
+      "tile_px": 3950,
+      "owned_tiles_per_frame": 1.7333333333333334,
+      "seconds_per_frame": 1.35930937469966,
+      "median_iou": 0.6046798553499255,
+      "p10_iou": 0.5284017938177825,
+      "fallback_rate": 0.0,
+      "seam_fallback_rate": 0.0,
+      "n_instances": 697
+    },
+    {
+      "tile_fraction": 0.03,
+      "tile_px": 2633,
+      "owned_tiles_per_frame": 2.5,
+      "seconds_per_frame": 0.5399387303657325,
+      "median_iou": 0.6173708920187794,
+      "p10_iou": 0.5445647238677152,
+      "fallback_rate": 0.0,
+      "seam_fallback_rate": 0.0,
+      "n_instances": 697
+    },
+    {
+      "tile_fraction": 0.05,
+      "tile_px": 1580,
+      "owned_tiles_per_frame": 5.166666666666667,
+      "seconds_per_frame": 0.2701651684663375,
+      "median_iou": 0.647406282998944,
+      "p10_iou": 0.5688368843570992,
+      "fallback_rate": 0.0,
+      "seam_fallback_rate": 0.0,
+      "n_instances": 697
+    },
+    {
+      "tile_fraction": 0.1,
+      "tile_px": 790,
+      "owned_tiles_per_frame": 6.666666666666667,
+      "seconds_per_frame": 0.2327659047320291,
+      "median_iou": 0.7023218574859887,
+      "p10_iou": 0.6010921476286882,
+      "fallback_rate": 0.0,
+      "seam_fallback_rate": 0.0,
+      "n_instances": 697
+    },
+    {
+      "tile_fraction": 0.2,
+      "tile_px": 395,
+      "owned_tiles_per_frame": 10.3,
+      "seconds_per_frame": 0.29144439159863395,
+      "median_iou": 0.7518592910265458,
+      "p10_iou": 0.6099030107765454,
+      "fallback_rate": 0.0,
+      "seam_fallback_rate": 0.0,
+      "n_instances": 697
+    },
+    {
+      "tile_fraction": null,
+      "tile_px": null,
+      "owned_tiles_per_frame": 1.0,
+      "seconds_per_frame": 1.6932606640014758,
+      "median_iou": 0.5982198370365522,
+      "p10_iou": 0.520712515158512,
+      "fallback_rate": 0.0,
+      "seam_fallback_rate": 0.0,
+      "n_instances": 697
+    }
+  ],
+  "recommended_fraction": null,
+  "reason": ""
+}

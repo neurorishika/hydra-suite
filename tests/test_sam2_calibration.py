@@ -71,16 +71,29 @@ def test_fraction_unresolvable_on_some_frames_is_dropped(tmp_path):
     assert [p.tile_fraction for p in pts] == [None]
 
 
-def test_recommend_prefers_fewest_tiles_clearing_floor():
-    def mk(frac, tiles, iou, fb=0.0, n=50):
-        return gc.GeometryCalibrationPoint(frac, None, tiles, 1.0, iou, iou, fb, 0.0, n)
+def _pt(frac, iou, seconds, fb=0.0, n=697, tiles=1.0):
+    return gc.GeometryCalibrationPoint(frac, None, tiles, seconds, iou, iou, fb, 0.0, n)
 
-    best, why = gc.recommend_geometry(
-        [mk(None, 1, 0.3), mk(0.1, 4, 0.8), mk(0.05, 9, 0.85)],
-        iou_floor=0.5,
-        fallback_ceil=0.1,
-    )
-    assert best.tile_fraction == 0.1 and why == ""
+
+# The 2026-10-03 mehek base_plus sweep (median IoU, s/frame, tiles/frame).
+MEASURED = [
+    _pt(0.1, 0.683, 0.407, tiles=6.67),
+    _pt(0.2, 0.729, 0.548, tiles=10.30),
+    _pt(0.3, 0.756, 0.741, tiles=14.67),
+    _pt(0.4, 0.761, 0.904, tiles=17.70),
+    _pt(None, 0.598, 1.652, tiles=1.0),
+]
+
+
+def test_recommend_on_the_measured_sweep_picks_the_fast_end_of_the_plateau():
+    best, why = gc.recommend_geometry(MEASURED)
+    assert best.tile_fraction == 0.3 and why == ""
+
+
+def test_recommend_never_ranks_by_tile_count():
+    # full frame is one encode but the slowest and worst: must not win
+    best, _ = gc.recommend_geometry(MEASURED, iou_tolerance=1.0)
+    assert best.tile_fraction == 0.1  # fastest once everything ties
 
 
 def test_recommend_refuses_with_reason():
