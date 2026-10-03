@@ -259,7 +259,6 @@ class TrackAssigner:
     def __init__(self, params, worker=None):
         self.params = params
         self.worker = worker
-        self._large_n_warning_shown = False  # Track if we've shown the warning
         self.track_arena = None  # set by the worker via set_track_arena()
 
     def set_track_arena(self, track_arena) -> None:
@@ -616,26 +615,6 @@ class TrackAssigner:
         M = len(measurements)
         if M == 0:
             return np.zeros((N, 0), np.float32), {}
-
-        # Warn about spatial indexing for large N
-        if (
-            N > 25
-            and not self._spatial_optimization_enabled()
-            and not self._large_n_warning_shown
-        ):
-            warning_msg = (
-                f"Tracking {N} objects without spatial indexing may be slow.\n\n"
-                f"Consider enabling these optimizations in tracking_config.json:\n"
-                f"  • ENABLE_SPATIAL_OPTIMIZATION: true\n"
-                f"  • ENABLE_GREEDY_ASSIGNMENT: true\n\n"
-                f"Expected performance improvement: 10-30% for {N}+ objects."
-            )
-            logger.warning(warning_msg.replace("\n", " "))
-            if self.worker is not None:
-                self.worker._emit_warning(
-                    "Performance Optimization Available", warning_msg
-                )
-            self._large_n_warning_shown = True
 
         # Get pre-calculated Inverse Innovation Covariances from Manager
         S_inv_batch = kf_manager.get_mahalanobis_matrices()

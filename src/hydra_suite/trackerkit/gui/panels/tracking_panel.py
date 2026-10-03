@@ -117,6 +117,18 @@ class TrackingPanel(QWidget):
         self._main_window._set_compact_scroll_layout(vbox)
         vbox.setAlignment(Qt.AlignTop)
 
+        self.lbl_large_group_warning = QLabel(
+            "Large group: tracking more than 200 animals may use more memory "
+            "and take longer."
+        )
+        self.lbl_large_group_warning.setWordWrap(True)
+        self.lbl_large_group_warning.setStyleSheet(
+            "color: #e8b75d; padding: 6px; border: 1px solid #9b7435; "
+            "border-radius: 4px;"
+        )
+        self.lbl_large_group_warning.hide()
+        vbox.addWidget(self.lbl_large_group_warning)
+
         # ── Basic settings ────────────────────────────────────────────────
         # Always visible at the top: the few knobs most users actually touch.
         # Everything else lives in the collapsed Advanced accordion below.
