@@ -106,6 +106,7 @@ CONFLICT_FAMILIES = {
 UV_OVERRIDES = ["opencv-python; sys_platform == 'never'"]
 
 REPO_ROOT = Path(__file__).resolve().parent
+PINS_DIR = REPO_ROOT / "constraints"
 
 
 class InstallError(RuntimeError):
@@ -407,6 +408,7 @@ class Options:
     skip_doctor: bool = False
     only: Optional[str] = None
     constraints: Optional[str] = None
+    latest: bool = False
     dry_run: bool = False
     use_uv: bool = True
 
@@ -561,13 +563,8 @@ def build_plan(ctx: Context, opts: Options) -> List[Step]:
         main_args += ["-c", _torch_constraints_file(reqs)]
         if index:
             main_args += ["--extra-index-url", index]
-    if opts.constraints:
-        # A lock/constraints file (e.g. `pip freeze` of a known-good env) makes a
-        # fresh install reproduce exact versions.
-        main_args += [
-            "--constraints" if opts.use_uv else "-c",
-            str(Path(opts.constraints).resolve()),
-        ]
+    for pin_file in pin_files(ctx, opts):
+        main_args += ["--constraints" if opts.use_uv else "-c", str(pin_file)]
     if opts.update:
         main_args.append("--upgrade")
     steps.append(
@@ -645,6 +642,28 @@ def build_plan(ctx: Context, opts: Options) -> List[Step]:
             doctor.append("--require-sam3-train")
         steps.append(Step("doctor", "verify the install (hydra doctor)", doctor))
     return _filter_only(steps, opts)
+
+
+def pin_files(ctx: Context, opts: Options) -> List[Path]:
+    """Constraint files applied to the hydra-suite install.
+
+    By default a fresh install gets the TESTED versions in ``constraints/``
+    (regenerated deliberately with tools/lock_constraints.py), so tracking
+    output does not drift whenever an upstream package releases. ``--latest``
+    drops them; ``--constraints FILE`` adds a user lock on top.
+    """
+    files: List[Path] = []
+    if not opts.latest:
+        pins = (
+            Path(ctx.source) / "constraints" if Path(ctx.source).is_dir() else PINS_DIR
+        )
+        if (pins / "base.txt").exists():
+            files.append(pins / "base.txt")
+            if ctx.tier == "cuda":
+                files.append(pins / f"cuda{ctx.cuda_major}.txt")
+    if opts.constraints:
+        files.append(Path(opts.constraints).resolve())
+    return files
 
 
 def _filter_only(steps: List[Step], opts: Options) -> List[Step]:
@@ -1043,7 +1062,12 @@ def parse_args(argv: Optional[Sequence[str]] = None) -> Options:
     )
     p.add_argument(
         "--constraints",
-        help="pip constraints file pinning exact versions (reproducible installs)",
+        help="extra pip constraints file pinning exact versions (applied on top of the tested pins)",
+    )
+    p.add_argument(
+        "--latest",
+        action="store_true",
+        help="ignore the tested pins in constraints/ and take the newest compatible releases",
     )
     p.add_argument(
         "--no-uv", dest="use_uv", action="store_false", help="use pip instead of uv"

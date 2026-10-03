@@ -2524,12 +2524,24 @@ def _format_sleap_env_preflight_error(raw_error: str, env_name: str) -> str:
             "  A) Use CPU-only torch in this env:\n"
             f"     conda run -n {env_name} python -m pip uninstall -y torch torchvision torchaudio nvidia-nccl-cu12 nvidia-nccl-cu13\n"
             f"     conda run -n {env_name} python -m pip install --index-url https://download.pytorch.org/whl/cpu torch torchvision\n"
-            "  B) Reinstall GPU torch/torchvision + NCCL from one matching CUDA stack (same channel/index):\n"
+            "  B) Reinstall GPU torch/torchvision + NCCL from one matching CUDA stack.\n"
+            "     Easiest: python install.py --with-sleap  (detects the driver's CUDA). Manually:\n"
             f"     conda run -n {env_name} python -m pip uninstall -y torch torchvision torchaudio nvidia-nccl-cu12 nvidia-nccl-cu13\n"
+            "     driver >= 580 (CUDA 13):\n"
             f"     conda run -n {env_name} python -m pip install --index-url https://download.pytorch.org/whl/cu130 torch torchvision\n"
-            f"     conda run -n {env_name} python -m pip install --upgrade nvidia-nccl-cu13\n"
+            "     driver < 580 (CUDA 12):\n"
+            f"     conda run -n {env_name} python -m pip install --index-url https://download.pytorch.org/whl/cu128 torch torchvision\n"
             f'  Verify: conda run -n {env_name} python -c "import torch, torchvision; print(torch.__version__, torchvision.__version__, torch.cuda.is_available())"\n'
             f"Original error: {msg}"
+        )
+    if "unsupported sleap-nn" in msg:
+        found = msg.rsplit(" ", 1)[-1]
+        return (
+            f"SLEAP env '{env_name}' has sleap-nn {found}; HYDRA supports "
+            f"sleap-nn {SUPPORTED_SLEAP_NN_PREFIX}x (from sleap==1.6.2). Newer "
+            "sleap-nn breaks the pose service's shared-memory transport.\n"
+            "Fix: python install.py --with-sleap   (rebuilds the env with the pin), or\n"
+            f'  conda run -n {env_name} python -m pip install "sleap[nn,nn-export]==1.6.2"'
         )
     if "torchvision::nms does not exist" in msg:
         return (
@@ -2543,6 +2555,12 @@ def _format_sleap_env_preflight_error(raw_error: str, env_name: str) -> str:
             f"Original error: {msg}"
         )
     return f"{base} Original error: {msg}"
+
+
+#: sleap 1.6.2 pulls sleap-nn 0.1.x. Newer sleap-nn (0.3.x) changed the data
+#: utilities the shared-memory transport relies on and fails with an opaque
+#: AttributeError in sleap_nn.data.utils mid-run; refuse it at preflight.
+SUPPORTED_SLEAP_NN_PREFIX = "0.1."
 
 
 def _sleap_env_preflight(env_name: str) -> Tuple[bool, str]:
@@ -2570,6 +2588,11 @@ def _sleap_env_preflight(env_name: str) -> Tuple[bool, str]:
         "except Exception as e:\n"
         "    print(f'ERROR: sleap_nn predictors import failed: {e}')\n"
         "    sys.exit(4)\n"
+        "import importlib.metadata as _md\n"
+        "out['sleap_nn']=_md.version('sleap-nn')\n"
+        f"if not out['sleap_nn'].startswith({SUPPORTED_SLEAP_NN_PREFIX!r}):\n"
+        "    print('ERROR: unsupported sleap-nn ' + out['sleap_nn'])\n"
+        "    sys.exit(5)\n"
         "print(json.dumps(out))\n"
     )
     script_path = (

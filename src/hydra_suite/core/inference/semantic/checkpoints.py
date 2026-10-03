@@ -43,7 +43,9 @@ CHECKPOINT_SIZE_GB = 3.45
 # Imports ultralytics AutoUpdate would otherwise install behind our back.
 REQUIRED_PACKAGES = ("ultralytics", "clip", "ftfy")
 
-DEFAULT_INSTALL_HINT = "pip install 'hydra-suite[sam3]'"
+# install.py installs SAM inference on every tier by default; the pip form is
+# for installs made without it.
+DEFAULT_INSTALL_HINT = "re-run `python install.py` (or: pip install 'hydra-suite[sam]')"
 # `clip` is NOT in the sam3 extra and cannot be: it is a PEP 508 direct
 # reference, which PyPI rejects in uploaded metadata. Pointing at the extra
 # for it named an install that could never satisfy the check. Same command
@@ -53,7 +55,12 @@ DEFAULT_INSTALL_HINT = "pip install 'hydra-suite[sam3]'"
 # SimpleTokenizer has no __call__, so pointing users there yields a probe
 # that says "ready" and a run that dies with an opaque TypeError deep in the
 # text encoder. ultralytics' own fork adds the __call__. Verified on CUDA.
-INSTALL_HINTS = {"clip": "pip install git+https://github.com/ultralytics/CLIP.git"}
+INSTALL_HINTS = {
+    "clip": (
+        "python install.py --only clip  "
+        "(or: pip install --no-deps git+https://github.com/ultralytics/CLIP.git)"
+    )
+}
 
 # The weights live behind a licence gate, so "download it for you" is only
 # true once the user has accepted it and logged in on THIS machine.

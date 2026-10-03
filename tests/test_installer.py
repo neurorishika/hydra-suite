@@ -388,3 +388,71 @@ def test_conda_files_hold_only_non_pip_packages(name):
 def test_requirements_files_are_gone():
     """pyproject.toml is the single source of truth; do not reintroduce these."""
     assert sorted(p.name for p in REPO.glob("requirements*.txt")) == []
+
+
+# ---------------------------------------------------------------------------
+# Tested-version pins (constraints/)
+# ---------------------------------------------------------------------------
+
+
+def test_default_install_uses_tested_pins():
+    files = inst.pin_files(_ctx(linux_gpu("570"), "cuda", 12), inst.Options())
+    assert [f.name for f in files] == ["base.txt", "cuda12.txt"]
+    files = inst.pin_files(_ctx(MAC_ARM, "mps"), inst.Options())
+    assert [f.name for f in files] == ["base.txt"]
+
+
+def test_latest_drops_tested_pins_but_keeps_user_constraints(tmp_path):
+    user = tmp_path / "lock.txt"
+    user.write_text("numpy==2.3.5\n")
+    files = inst.pin_files(
+        _ctx(LINUX, "cpu"), inst.Options(latest=True, constraints=str(user))
+    )
+    assert files == [user.resolve()]
+
+
+def _pin_names(path):
+    names = set()
+    for line in path.read_text().splitlines():
+        line = line.strip()
+        if line and not line.startswith("#"):
+            names.add(
+                re.split(r"[=<>;\[ ]", line, maxsplit=1)[0].lower().replace("_", "-")
+            )
+    return names
+
+
+def test_pins_cover_every_declared_dependency():
+    """A dependency added to pyproject must be re-locked (tools/lock_constraints.py)."""
+    import tomllib
+
+    project = tomllib.loads((REPO / "pyproject.toml").read_text())["project"]
+    base = _pin_names(REPO / "constraints" / "base.txt")
+    unpinned_by_design = {"torch", "torchvision", "hydra-suite"}
+
+    def names(reqs):
+        for req in reqs:
+            name = re.match(r"\s*([A-Za-z0-9][A-Za-z0-9._-]*)", req).group(1)
+            name = name.lower().replace("_", "-")
+            if name not in unpinned_by_design:
+                yield name
+
+    extras = project["optional-dependencies"]
+    for name in names(project["dependencies"]):
+        assert name in base, f"{name} declared but not pinned in constraints/base.txt"
+    for extra in ("cpu", "mps", "onnx-tools", "sam", "dev", "docs"):
+        for name in names(extras[extra]):
+            assert name in base, f"[{extra}] {name} not pinned in constraints/base.txt"
+    for major in (12, 13):
+        pinned = base | _pin_names(REPO / "constraints" / f"cuda{major}.txt")
+        for name in names(extras[f"cuda{major}"]):
+            assert name in pinned, f"[cuda{major}] {name} not pinned"
+
+
+def test_pins_never_fix_torch_or_its_cuda_wheels():
+    for path in (REPO / "constraints").glob("*.txt"):
+        for name in _pin_names(path):
+            assert not name.startswith(("torch", "nvidia-", "triton")), (
+                path.name,
+                name,
+            )

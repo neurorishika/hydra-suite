@@ -9,8 +9,17 @@ import json
 import subprocess
 import sys
 
+import pytest
+
 from hydra_suite.training.sam3_lora import availability as av
 from hydra_suite.training.sam3_lora import env as sam3_env
+
+
+@pytest.fixture(autouse=True)
+def _cuda_host(monkeypatch):
+    """The probe tests below model a CUDA host; the non-CUDA gate has its own."""
+    monkeypatch.setattr(av, "_host_has_cuda", lambda: True)
+
 
 # --------------------------------------------------------------------------
 # env.py
@@ -254,3 +263,48 @@ def test_sam3_env_command_disables_conda_output_capture():
         "python"
     ), "the flag is a conda run option and must precede the child command"
     assert "-u" in got
+
+
+def test_non_cuda_host_is_refused_without_probing_the_sidecar(monkeypatch):
+    monkeypatch.setattr(av, "_host_has_cuda", lambda: False)
+    monkeypatch.setattr(
+        av, "_run_probe", lambda *a, **k: pytest.fail("must not probe the sidecar")
+    )
+    result = av.probe_sam3_training_availability()
+    assert not result.usable
+    assert "requires an NVIDIA GPU" in result.reason
+    assert "inference" in result.reason  # tells the user what still works
+
+
+def test_install_hint_points_at_the_installer_not_an_internal_spec():
+    assert "install.py --with-sam3-train" in av.DEFAULT_INSTALL_HINT
+    assert "superpowers" not in av.DEFAULT_INSTALL_HINT
+
+
+_EDITABLE = {
+    "version": "1.0.0",
+    "direct_url": {"url": "file:///src/hydra", "dir_info": {"editable": True}},
+}
+
+
+def test_origin_skew_accepts_the_same_source(monkeypatch):
+    monkeypatch.setattr(av, "_host_origin", lambda: dict(_EDITABLE))
+    assert av._origin_skew(dict(_EDITABLE)) == ""
+
+
+def test_origin_skew_flags_a_different_checkout(monkeypatch):
+    monkeypatch.setattr(av, "_host_origin", lambda: dict(_EDITABLE))
+    other = {
+        "version": "1.0.0",
+        "direct_url": {"url": "file:///old/hydra", "dir_info": {"editable": True}},
+    }
+    assert "different hydra-suite" in av._origin_skew(other)
+
+
+def test_origin_skew_flags_missing_hydra_in_sidecar(monkeypatch):
+    monkeypatch.setattr(av, "_host_origin", lambda: dict(_EDITABLE))
+    assert "not installed in the SAM3 sidecar" in av._origin_skew(None)
+
+
+def test_origin_skew_tolerates_old_probe_payloads():
+    assert av._origin_skew("absent") == ""

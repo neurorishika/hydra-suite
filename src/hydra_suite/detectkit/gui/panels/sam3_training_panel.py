@@ -362,10 +362,18 @@ class Sam3TrainingPanel(QWidget):
         body_layout.setContentsMargins(0, 0, 0, 0)
         layout = body_layout
 
+        from hydra_suite.training.sam3_lora.preflight import (
+            _MEASURED_BF16_DEVICE_PEAK_BYTES,
+            GiB,
+        )
+
         host_notice = QLabel(
-            "SAM3 LoRA finetuning requires a CUDA host with a large GPU "
-            "(~32 GB). This role cannot run on this machine if 'sam3' or "
-            "its checkpoint is unavailable; the reason is shown when disabled."
+            "SAM3 LoRA finetuning is optional and CUDA-only: it needs an NVIDIA "
+            "GPU (compute capability >= 8.0, bf16) with about "
+            f"{_MEASURED_BF16_DEVICE_PEAK_BYTES / GiB:.0f} GiB free, plus the "
+            "hydra-sam3 sidecar env (python install.py --with-sam3-train). "
+            "SAM3 and SAM2 escalation (inference) work on every device without "
+            "it. When this role is unavailable the reason is shown below."
         )
         host_notice.setWordWrap(True)
         layout.addWidget(host_notice)

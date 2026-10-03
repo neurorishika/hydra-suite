@@ -11,7 +11,9 @@
 #   bash tools/equivalence/env_swap_gate.sh fly_obb worm_bgsub
 #
 # Either side may be skipped with SKIP_OLD=1 / SKIP_NEW=1 to reuse a previous run.
-# Exits non-zero if any clip is missing, empty, or not equivalent.
+# Exits non-zero if any clip is missing, empty, or not equivalent. "Equivalent"
+# = byte-identical, or differing only by BLAS float rounding in the Kalman
+# diagnostic columns (see env_swap_compare.py).
 set -euo pipefail
 
 : "${OLD_PY:?set OLD_PY}" "${NEW_PY:?set NEW_PY}" "${SRC:?set SRC}" "${OUT:?set OUT}"
@@ -56,12 +58,11 @@ for clip in "${CLIPS[@]}"; do
     if [ -z "$a" ] || [ -z "$b" ] || [ "$(wc -l <"$a")" -le 1 ] || [ "$(wc -l <"$b")" -le 1 ]; then
       FAILED+=("$clip/$kind: missing or empty CSV"); continue
     fi
-    if cmp -s "$a" "$b"; then
-      echo "[$clip/$kind] BYTE-IDENTICAL ($(($(wc -l <"$a") - 1)) rows)"
+    if verdict=$(python3 "$WT/tools/equivalence/env_swap_compare.py" "$a" "$b"); then
+      echo "[$clip/$kind] $verdict"
     else
-      echo "[$clip/$kind] DIFFERS -- detail:"
-      "$OLD_PY" "$WT/tools/equivalence/compare.py" "$a" "$b" || true
-      FAILED+=("$clip/$kind: not byte-identical")
+      echo "[$clip/$kind] $verdict"
+      FAILED+=("$clip/$kind: $verdict")
     fi
   done
 done
@@ -69,4 +70,4 @@ done
 if [ ${#FAILED[@]} -gt 0 ]; then
   printf 'FAIL: %s\n' "${FAILED[@]}"; exit 1
 fi
-echo "ALL BYTE-IDENTICAL"
+echo "ALL EQUIVALENT (byte-identical or BLAS floor only)"
