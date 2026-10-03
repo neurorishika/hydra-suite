@@ -299,6 +299,28 @@ refinekit          # RefineKit proofreading
 
 ---
 
+### Verification status (2026-10-03)
+
+What has actually been run, not just documented. "CI" is the
+`Install smoke` workflow (`install.py --target current --cuda none`, then
+`hydra doctor` and a test subset) on every push.
+
+| Install path | Linux CPU | macOS (Apple Silicon) | Windows CPU | Linux CUDA 12 | Linux CUDA 13 | Windows CUDA |
+| --- | --- | --- | --- | --- | --- | --- |
+| `python install.py` (pip, current env) | CI, py3.11–3.13 | CI, py3.11–3.13 (mps packages) | CI, py3.11–3.13 | — | — | not yet verified (no box) |
+| `python install.py` (conda env) | — | fresh env, doctor all OK (MPS) | — | fresh env on diptera (driver 570, auto-detected cu128), doctor 0 failures | fresh env on mehek (driver 595, auto-detected cu130), doctor all OK | not yet verified |
+| `make setup` + `make install` | CI (conda + make) | CI (conda + make) | n/a (use `install.py`) | — | — | n/a |
+| SAM2 escalation (real frames) | — | MPS + CPU | — | — | CUDA | — |
+| SAM3 escalation (real frames) | — | MPS + CPU | — | — | CUDA | — |
+| SAM3 training sidecar + 1-epoch run | n/a | n/a (refused by design) | n/a | — | `--with-sam3-train`, trained + exported | not yet verified |
+
+Tracking output: an environment built by `install.py` with the tested pins
+produces the same trajectories as the previous conda envs — byte-identical on
+CUDA (mehek, `fly_obb` + `worm_bgsub`) and identical positions/headings/IDs on
+MPS, where only float32 rounding in `PositionUncertainty` and
+`AssignmentConfidence` differs (pip scipy links Apple Accelerate, conda scipy
+OpenBLAS; relative difference ≤ 5e-6).
+
 ## Updating and recreating
 
 ```bash
