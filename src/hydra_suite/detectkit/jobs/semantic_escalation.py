@@ -98,6 +98,9 @@ class SemanticEscalationRequest:
     # on nothing. Empty falls back to the prompt, which is what pre-fix
     # staging directories on disk contain.
     class_name: str = ""
+    # "auto" | "cuda" | "mps" | "cpu". Where the model runs, never part of the
+    # cache fingerprint: the same frames give the same candidates anywhere.
+    device: str = "auto"
     confidence: float = 0.35
     max_instances: int = 0
     reference_body_px: float = 0.0

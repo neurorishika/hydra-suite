@@ -67,3 +67,8 @@ def test_dialog_keeps_duplicate_display_names_distinct_by_path():
 
     assert dlg.selected_sources() == ["duplicate"]
     assert dlg.selected_source_paths() == ["/one/duplicate"]
+
+
+def test_dialog_offers_device_choice_defaulting_to_auto():
+    dlg = EscalateSam2Dialog([OBBSource(name="a", level="obb")])
+    assert dlg.selected_device() == "auto"

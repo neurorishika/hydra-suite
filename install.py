@@ -711,10 +711,15 @@ def build_apriltag(ctx: Context) -> None:
             "-DPython3_FIND_STRATEGY=LOCATION",
             "-DBUILD_EXAMPLES=OFF",
         ]
-        if ctx.host.is_windows:
-            # Extension modules do not search PATH for DLLs (Python >= 3.8), so a
-            # shared apriltag.dll in <prefix>/bin would never load. Link statically.
-            configure.append("-DBUILD_SHARED_LIBS=OFF")
+        # Link libapriltag STATICALLY into the Python module on every OS. A
+        # shared lib lands in <prefix>/lib (or <prefix>/bin on Windows), which
+        # only conda's interpreter happens to search: a framework/venv Python
+        # on macOS fails with "no LC_RPATH's found", and on Windows extension
+        # modules never search PATH for DLLs (Python >= 3.8).
+        configure += [
+            "-DBUILD_SHARED_LIBS=OFF",
+            "-DCMAKE_POSITION_INDEPENDENT_CODE=ON",
+        ]
         try:
             _run(configure)
             _run(
@@ -1035,6 +1040,10 @@ def parse_args(argv: Optional[Sequence[str]] = None) -> Options:
     p.add_argument("--skip-doctor", action="store_true")
     p.add_argument(
         "--only", help="run only these comma-separated steps (e.g. clip,apriltag)"
+    )
+    p.add_argument(
+        "--constraints",
+        help="pip constraints file pinning exact versions (reproducible installs)",
     )
     p.add_argument(
         "--no-uv", dest="use_uv", action="store_false", help="use pip instead of uv"

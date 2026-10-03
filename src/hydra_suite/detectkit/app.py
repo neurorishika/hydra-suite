@@ -40,13 +40,17 @@ def _launch_gui(argv: list[str] | None = None) -> int:
 
 
 def main(argv: list[str] | None = None) -> int:
-    """Launch the GUI or dispatch ``detectkit train`` to the headless CLI."""
+    """Launch the GUI, or dispatch ``detectkit train`` / ``detectkit escalate``."""
 
     args = list(sys.argv[1:] if argv is None else argv)
     if args and args[0] == "train":
         from hydra_suite.detectkit.cli import main as training_main
 
         return training_main(args[1:])
+    if args and args[0] == "escalate":
+        from hydra_suite.detectkit.escalate_cli import main as escalate_main
+
+        return escalate_main(args[1:])
     return _launch_gui(args)
 
 
