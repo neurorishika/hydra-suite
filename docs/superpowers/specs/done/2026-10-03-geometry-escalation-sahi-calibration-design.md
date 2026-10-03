@@ -1,6 +1,6 @@
 # Geometry-escalation SAHI + split calibration/escalation source selection
 
-**Status:** Design — pending implementation plan
+**Status:** Shipped — merged to main via feat/geometry-escalation-sahi (branch tip f34b8ed9)
 **Date:** 2026-10-03
 
 ## Problem

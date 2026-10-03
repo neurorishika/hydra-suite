@@ -19,7 +19,7 @@ Three things differ from SAM3 calibration (``semantic/calibration.py``):
 
 The grid and every constant below come from the 2026-10-03 mehek
 measurement recorded in
-``docs/superpowers/specs/2026-10-03-geometry-escalation-sahi-calibration-design.md``
+``docs/superpowers/specs/done/2026-10-03-geometry-escalation-sahi-calibration-design.md``
 ("Measurement").
 """
 

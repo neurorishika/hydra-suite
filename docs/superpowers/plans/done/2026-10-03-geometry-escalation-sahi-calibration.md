@@ -1,6 +1,6 @@
 # Geometry-Escalation SAHI + Split Calibration Sources — Implementation Plan
 
-> **For agentic workers:** REQUIRED SUB-SKILL: Use superpowers:subagent-driven-development (recommended) or superpowers:executing-plans to implement this plan task-by-task. Steps use checkbox (`- [ ]`) syntax for tracking.
+> **For agentic workers:** REQUIRED SUB-SKILL: Use superpowers:subagent-driven-development (recommended) or superpowers:executing-plans to implement this plan task-by-task. Steps use checkbox (`- [x]`) syntax for tracking.
 
 **Goal:** SAM2 geometry escalation gains SAHI-style per-box (owner-tile) execution with a tile fraction calibrated against polygon ground truth, and both escalation dialogs split "Calibrate on" (polygon sources) from "Escalate" (all sources).
 
@@ -49,7 +49,7 @@
   - `median_body_px_for`, `has_labelled_frames`, `_label_path_for`, constants `MEDIAN_BODY_SAMPLE_FRAMES`, `MEDIAN_BODY_TOTAL_FRAMES`, `CALIBRATION_SAMPLE_FRAMES`
   - `SCALE_MISMATCH_RATIO = 1.5`; `scale_mismatch(a_px: float, b_px: float, ratio: float = SCALE_MISMATCH_RATIO) -> bool` (False if either ≤ 0)
 
-- [ ] **Step 1: Write failing tests** (`tests/test_calibration_frames.py`)
+- [x] **Step 1: Write failing tests** (`tests/test_calibration_frames.py`)
 
 ```python
 from pathlib import Path
@@ -129,9 +129,9 @@ def test_semantic_module_reexports_same_objects():
         assert getattr(se, name) is getattr(cf, name)
 ```
 
-- [ ] **Step 2: Run, verify FAIL** — `python -m pytest tests/test_calibration_frames.py -q` → ImportError (module missing).
+- [x] **Step 2: Run, verify FAIL** — `python -m pytest tests/test_calibration_frames.py -q` → ImportError (module missing).
 
-- [ ] **Step 3: Implement.** Create `calibration_frames.py` by MOVING (cut, not copy) `_label_path_for`, `has_labelled_frames`, `MEDIAN_BODY_SAMPLE_FRAMES`, `MEDIAN_BODY_TOTAL_FRAMES`, `CALIBRATION_SAMPLE_FRAMES`, `measure_median_body_px`, `median_body_px_for`, `labelled_frames_for`, `stratified_calibration_frames` verbatim (keep their docstrings/comments) from `semantic_escalation.py`. Module imports: `cv2`, `numpy as np`, `Path`, `LabelRecord` from `hydra_suite.data.al.escalation`, `IMG_EXTS`, `OBBSource`, `GeometryLevel`. Then add:
+- [x] **Step 3: Implement.** Create `calibration_frames.py` by MOVING (cut, not copy) `_label_path_for`, `has_labelled_frames`, `MEDIAN_BODY_SAMPLE_FRAMES`, `MEDIAN_BODY_TOTAL_FRAMES`, `CALIBRATION_SAMPLE_FRAMES`, `measure_median_body_px`, `median_body_px_for`, `labelled_frames_for`, `stratified_calibration_frames` verbatim (keep their docstrings/comments) from `semantic_escalation.py`. Module imports: `cv2`, `numpy as np`, `Path`, `LabelRecord` from `hydra_suite.data.al.escalation`, `IMG_EXTS`, `OBBSource`, `GeometryLevel`. Then add:
 
 ```python
 SCALE_MISMATCH_RATIO = 1.5
@@ -210,9 +210,9 @@ from .calibration_frames import (  # noqa: F401  (re-exported for importers)
 
 Keep any other in-module use of `_label_path_for` working (it is used by `preview_random_frame` and others).
 
-- [ ] **Step 4: Run** `python -m pytest tests/test_calibration_frames.py tests/test_semantic_escalation_job.py tests/test_detectkit_direct_calibration_job.py tests/test_detectkit_sam2_escalation_wiring.py -q` → all pass. If a source-text test (e.g. one asserting `"labelled_frames_for" not in source`) inspects a file you changed, read the test and keep its intent.
+- [x] **Step 4: Run** `python -m pytest tests/test_calibration_frames.py tests/test_semantic_escalation_job.py tests/test_detectkit_direct_calibration_job.py tests/test_detectkit_sam2_escalation_wiring.py -q` → all pass. If a source-text test (e.g. one asserting `"labelled_frames_for" not in source`) inspects a file you changed, read the test and keep its intent.
 
-- [ ] **Step 5: Commit** `git commit -m "Move calibration-frame helpers to calibration_frames and add polygon-only criterion"`
+- [x] **Step 5: Commit** `git commit -m "Move calibration-frame helpers to calibration_frames and add polygon-only criterion"`
 
 ---
 
@@ -224,7 +224,7 @@ Keep any other in-module use of `_label_path_for` working (it is used by `previe
 
 **Interfaces:** Consumes `stratified_calibration_frames(..., polygon_only=True)`.
 
-- [ ] **Step 1: Failing test** (append)
+- [x] **Step 1: Failing test** (append)
 
 ```python
 def test_semantic_calibration_sidecar_samples_polygon_frames_only(tmp_path, monkeypatch):
@@ -247,10 +247,10 @@ def test_semantic_calibration_sidecar_samples_polygon_frames_only(tmp_path, monk
 
 (Check the real function name around operations.py:324 — it is the `def` immediately above line 325; use that name.)
 
-- [ ] **Step 2: Run, verify FAIL** (`polygon_only` False).
-- [ ] **Step 3: Implement** — change the call to `stratified_calibration_frames(sources, budget=budget, polygon_only=True)` with a one-line comment: `# Calibration needs real ground truth: polygon frames only (spec 2026-10-03).`
-- [ ] **Step 4: Run** the test + `tests/test_semantic_calibration*.py` → pass.
-- [ ] **Step 5: Commit** `"Restrict SAM3 calibration to polygon ground-truth frames"`
+- [x] **Step 2: Run, verify FAIL** (`polygon_only` False).
+- [x] **Step 3: Implement** — change the call to `stratified_calibration_frames(sources, budget=budget, polygon_only=True)` with a one-line comment: `# Calibration needs real ground truth: polygon frames only (spec 2026-10-03).`
+- [x] **Step 4: Run** the test + `tests/test_semantic_calibration*.py` → pass.
+- [x] **Step 5: Commit** `"Restrict SAM3 calibration to polygon ground-truth frames"`
 
 ---
 
@@ -269,7 +269,7 @@ def test_semantic_calibration_sidecar_samples_polygon_frames_only(tmp_path, monk
   - `EscalationResult.seam_fallbacks: int = 0`, `EscalationResult.tile_px: int | None = None`.
   - `SemanticEscalationRequest.tiling` property (no field changes).
 
-- [ ] **Step 1: Failing test** (`tests/test_sam2_tiling.py`)
+- [x] **Step 1: Failing test** (`tests/test_sam2_tiling.py`)
 
 ```python
 from hydra_suite.core.inference.semantic.tiling import TilingSettings
@@ -304,8 +304,8 @@ def test_escalation_request_tiling_defaults_preserve_positional_args():
 
 Verify the expected `resolved_tile_px()` value by calling `resolve_tile_px(50.0, 0.25)` once in a REPL first and use what it returns (it rounds via `tile_size_for_mode`).
 
-- [ ] **Step 2: Run, verify FAIL.**
-- [ ] **Step 3: Implement** in `tiling.py` (after `full_frame_plan`):
+- [x] **Step 2: Run, verify FAIL.**
+- [x] **Step 3: Implement** in `tiling.py` (after `full_frame_plan`):
 
 ```python
 @dataclass(frozen=True)
@@ -347,8 +347,8 @@ class TilingSettings:
 
 Add `seam_fallbacks: int = 0` and `tile_px: int | None = None` to `EscalationResult`. Add the same `tiling` property to `SemanticEscalationRequest` (built from its existing fields).
 
-- [ ] **Step 4: Run** `tests/test_sam2_tiling.py tests/test_sam2_escalation.py tests/test_semantic_tiling.py` → pass.
-- [ ] **Step 5: Commit** `"Add shared TilingSettings and SAM2 escalation tiling fields"`
+- [x] **Step 4: Run** `tests/test_sam2_tiling.py tests/test_sam2_escalation.py tests/test_semantic_tiling.py` → pass.
+- [x] **Step 5: Commit** `"Add shared TilingSettings and SAM2 escalation tiling fields"`
 
 ---
 
@@ -359,7 +359,7 @@ Add `seam_fallbacks: int = 0` and `tile_px: int | None = None` to `EscalationRes
 
 This task runs against the UNMODIFIED `run_escalation` and records its behaviour; Task 6 must keep it green.
 
-- [ ] **Step 1: Write the characterization test**
+- [x] **Step 1: Write the characterization test**
 
 ```python
 """run_escalation with tiling off is byte-identical to pre-SAHI main.
@@ -428,9 +428,9 @@ EXPECTED_LOG = None  # filled in Step 2
 EXPECTED_LABEL = None  # filled in Step 2
 ```
 
-- [ ] **Step 2: Record the golden.** Run once with a temporary `print(repr(ex.log)); print(repr(staged))`, paste the printed values as literals into `EXPECTED_LOG`/`EXPECTED_LABEL`, remove the prints.
-- [ ] **Step 3: Run** → PASS against unmodified code.
-- [ ] **Step 4: Commit** `"Characterize untiled SAM2 escalation call sequence and staged bytes"`
+- [x] **Step 2: Record the golden.** Run once with a temporary `print(repr(ex.log)); print(repr(staged))`, paste the printed values as literals into `EXPECTED_LOG`/`EXPECTED_LABEL`, remove the prints.
+- [x] **Step 3: Run** → PASS against unmodified code.
+- [x] **Step 4: Commit** `"Characterize untiled SAM2 escalation call sequence and staged bytes"`
 
 ---
 
@@ -449,7 +449,7 @@ EXPECTED_LABEL = None  # filled in Step 2
 
 Semantics: if `tiles` has exactly one tile covering the whole frame, behave exactly as the legacy loop: one `set_image(image)` then `segment(...)` per prompt in order with UNMODIFIED coordinates, returning the executor's mask as-is (no copy into a new array). Otherwise: owned tiles processed in ascending tile index; for each, `set_image(image[y0:y1, x0:x1])`, then for each owned box in ascending box index call `segment` with box/points shifted by `(-x0, -y0)` and negative points outside the tile dropped; paste mask into `np.zeros((H, W), bool)` at `[y0:y1, x0:x1]`. Then, if any unowned boxes, ONE `set_image(image)` and segment them in ascending index with frame coords.
 
-- [ ] **Step 1: Failing tests** (append to `tests/test_sam2_tiling.py`)
+- [x] **Step 1: Failing tests** (append to `tests/test_sam2_tiling.py`)
 
 ```python
 import numpy as np
@@ -544,8 +544,8 @@ def test_single_full_frame_tile_is_the_legacy_call_sequence():
     ]
 ```
 
-- [ ] **Step 2: Run, verify FAIL** (module missing).
-- [ ] **Step 3: Implement** `core/inference/sam2/tiling.py`:
+- [x] **Step 2: Run, verify FAIL** (module missing).
+- [x] **Step 3: Implement** `core/inference/sam2/tiling.py`:
 
 ```python
 """Owner-tile SAHI for SAM2 box-prompted segmentation (Qt-free, torch-free).
@@ -646,8 +646,8 @@ def segment_boxes(executor, image, prompts, tiles) -> list[SegmentOutcome]:
 
 Note the legacy test expects positive points as given (floats from `_p`) — the full-frame branch passes them through untouched.
 
-- [ ] **Step 4: Run** `python -m pytest tests/test_sam2_tiling.py -q` → pass.
-- [ ] **Step 5: Commit** `"Add SAM2 owner-tile segmentation"`
+- [x] **Step 4: Run** `python -m pytest tests/test_sam2_tiling.py -q` → pass.
+- [x] **Step 5: Commit** `"Add SAM2 owner-tile segmentation"`
 
 ---
 
@@ -659,7 +659,7 @@ Note the legacy test expects positive points as given (floats from `_p`) — the
 
 **Interfaces:** Consumes `segment_boxes`, `TilingSettings.plan_for`, `EscalationRequest.tiling`.
 
-- [ ] **Step 1: Failing test** (append)
+- [x] **Step 1: Failing test** (append)
 
 ```python
 def test_tiled_escalation_encodes_owner_tiles_and_counts_seam_fallbacks(tmp_path):
@@ -696,8 +696,8 @@ def test_tiled_escalation_encodes_owner_tiles_and_counts_seam_fallbacks(tmp_path
     assert result.seam_fallbacks == 1 and result.primed == 2 and result.tile_px == 200
 ```
 
-- [ ] **Step 2: Run, verify FAIL.**
-- [ ] **Step 3: Implement.** In `run_escalation`, before the source loop: `tiling = req.tiling; result.tile_px = tiling.resolved_tile_px()`. Replace the `executor.set_image(img)` + per-box `segment` loop with:
+- [x] **Step 2: Run, verify FAIL.**
+- [x] **Step 3: Implement.** In `run_escalation`, before the source loop: `tiling = req.tiling; result.tile_px = tiling.resolved_tile_px()`. Replace the `executor.set_image(img)` + per-box `segment` loop with:
 
 ```python
             if boxes:
@@ -714,8 +714,8 @@ def test_tiled_escalation_encodes_owner_tiles_and_counts_seam_fallbacks(tmp_path
 
 Keep every existing comment that still applies (SAM2 box is soft guidance; class-id preservation). Import `segment_boxes` from `hydra_suite.core.inference.sam2.tiling`.
 
-- [ ] **Step 4: Run** `tests/test_sam2_escalation.py tests/test_sam2_escalation_byte_identity.py tests/test_sam2_tiling.py` → all pass (byte-identity unchanged).
-- [ ] **Step 5: Commit** `"Run SAM2 escalation through owner-tile segmentation"`
+- [x] **Step 4: Run** `tests/test_sam2_escalation.py tests/test_sam2_escalation_byte_identity.py tests/test_sam2_tiling.py` → all pass (byte-identity unchanged).
+- [x] **Step 5: Commit** `"Run SAM2 escalation through owner-tile segmentation"`
 
 ---
 
@@ -735,7 +735,7 @@ Keep every existing comment that still applies (SAM2 box is soft guidance; class
 
 Per frame and fraction: prompt per GT polygon = AABB of its OBB as `box_xyxy`, positive = polygon vertex mean, negatives = centres of other prompts whose AABBs overlap (same rule as `sam2_prompts.build_prompts`, reimplemented locally since core cannot import detectkit). Run `segment_boxes`; for each outcome: `contour = mask_to_contour(clip_mask_to_polygon(mask, obb))`; contour None → fallback (IoU 0 counted in the IoU distribution); else IoU = `polygon_iou(contour, gt)`. `owned_tiles_per_frame` = number of distinct owner tiles + (1 if any unowned and tiled). `seconds_per_frame` measured with `time.perf_counter` around `segment_boxes`. Cancellation: `should_stop()` checked between (frame, fraction) passes; a cancelled pass is not counted.
 
-- [ ] **Step 1: Failing tests** (`tests/test_sam2_calibration.py`)
+- [x] **Step 1: Failing tests** (`tests/test_sam2_calibration.py`)
 
 ```python
 from pathlib import Path
@@ -805,10 +805,10 @@ def test_cancel_returns_no_partial_points(tmp_path):
     ) == []
 ```
 
-- [ ] **Step 2: Run, verify FAIL.**
-- [ ] **Step 3: Implement** `calibration.py` following the Interfaces block. Module docstring: state that it scores SAM2 masks against user-reviewed polygon labels, that pairing is one-to-one by construction, that the sweep is one-dimensional (tile fraction), and that `IOU_FLOOR`/`FALLBACK_CEIL` are PROVISIONAL until Task 11. `recommend_geometry` order: empty → "No calibration points"; filter `median_iou >= iou_floor` else reason containing "IoU"; filter `fallback_rate <= fallback_ceil` else reason containing "fell back"; filter `n_instances >= min_instances` else reason containing "instances"; winner `min(key=(owned_tiles_per_frame, -median_iou))`.
-- [ ] **Step 4: Run** → pass. Also `python -c "import hydra_suite.core.inference.sam2.calibration"` must not import PySide6 (`python -X importtime ... 2>&1 | grep -c PySide6` → 0).
-- [ ] **Step 5: Commit** `"Add SAM2 geometry calibration against polygon ground truth"`
+- [x] **Step 2: Run, verify FAIL.**
+- [x] **Step 3: Implement** `calibration.py` following the Interfaces block. Module docstring: state that it scores SAM2 masks against user-reviewed polygon labels, that pairing is one-to-one by construction, that the sweep is one-dimensional (tile fraction), and that `IOU_FLOOR`/`FALLBACK_CEIL` are PROVISIONAL until Task 11. `recommend_geometry` order: empty → "No calibration points"; filter `median_iou >= iou_floor` else reason containing "IoU"; filter `fallback_rate <= fallback_ceil` else reason containing "fell back"; filter `n_instances >= min_instances` else reason containing "instances"; winner `min(key=(owned_tiles_per_frame, -median_iou))`.
+- [x] **Step 4: Run** → pass. Also `python -c "import hydra_suite.core.inference.sam2.calibration"` must not import PySide6 (`python -X importtime ... 2>&1 | grep -c PySide6` → 0).
+- [x] **Step 5: Commit** `"Add SAM2 geometry calibration against polygon ground truth"`
 
 ---
 
@@ -824,7 +824,7 @@ def test_cancel_returns_no_partial_points(tmp_path):
   - `Sam2CalibrationWorker(BaseWorker)(sources, variant: str, reference_body_px: float, overlap: float, executor=None, budget: int = CALIBRATION_SAMPLE_FRAMES)`; signal `result_ready(object)` emitting `list[GeometryCalibrationPoint]`; `cancel()`; `cancelled` property; attribute `sampled_frames: list[str]`.
   - `DetectKitProject.geometry_calibration: dict[str, Any]` (keyed by SAM2 variant) and `geometry_escalation_settings: dict[str, Any]`, both default `{}` and round-tripped like `semantic_calibration`.
 
-- [ ] **Step 1: Failing tests**
+- [x] **Step 1: Failing tests**
 
 ```python
 # tests/test_sam2_escalation.py
@@ -863,10 +863,10 @@ def test_worker_samples_polygon_frames_and_emits_points(tmp_path, qtbot=None):
     assert w.sampled_frames == [str(root / "images" / "a.png")]
 ```
 
-- [ ] **Step 2: Run, verify FAIL.**
-- [ ] **Step 3: Implement.** Worker `execute()`: `frames = stratified_calibration_frames(sources, budget=budget, polygon_only=True)`; if empty raise `RuntimeError("No polygon ground-truth frames in the calibration sources.")`; `self.sampled_frames = [str(p) for p, _ in frames]`; executor = injected or `Sam2SegmentExecutor.from_variant(variant)`; call `calibrate_geometry(executor, [(p, [r.points for r in recs]) for p, recs in frames], reference_body_px=..., overlap=..., progress=lambda pct, msg: (self.progress.emit(pct), self.status.emit(msg)), should_stop=lambda: self._cancel)`; emit `result_ready`. `calibrate_geometry`'s `progress` signature is `(pct: int, message: str)`. Add the two project fields next to `semantic_calibration` and to the dict-field name set at ~476.
-- [ ] **Step 4: Run** both test files → pass.
-- [ ] **Step 5: Commit** `"Add SAM2 calibration worker and project persistence"`
+- [x] **Step 2: Run, verify FAIL.**
+- [x] **Step 3: Implement.** Worker `execute()`: `frames = stratified_calibration_frames(sources, budget=budget, polygon_only=True)`; if empty raise `RuntimeError("No polygon ground-truth frames in the calibration sources.")`; `self.sampled_frames = [str(p) for p, _ in frames]`; executor = injected or `Sam2SegmentExecutor.from_variant(variant)`; call `calibrate_geometry(executor, [(p, [r.points for r in recs]) for p, recs in frames], reference_body_px=..., overlap=..., progress=lambda pct, msg: (self.progress.emit(pct), self.status.emit(msg)), should_stop=lambda: self._cancel)`; emit `result_ready`. `calibrate_geometry`'s `progress` signature is `(pct: int, message: str)`. Add the two project fields next to `semantic_calibration` and to the dict-field name set at ~476.
+- [x] **Step 4: Run** both test files → pass.
+- [x] **Step 5: Commit** `"Add SAM2 calibration worker and project persistence"`
 
 ---
 
@@ -888,7 +888,7 @@ def test_worker_samples_polygon_frames_and_emits_points(tmp_path, qtbot=None):
   - an empty-state `QLabel` (`self.calibration_empty_label`) visible iff no polygon sources: "No polygon ground truth in this project. Label polygons on a few frames to calibrate."
   - Calibrate list is populated with sources where `has_polygon_frames(s)`; group titles "Calibrate on (polygon ground truth)" and "Escalate".
 
-- [ ] **Step 1: Failing tests**
+- [x] **Step 1: Failing tests**
 
 ```python
 import os
@@ -949,10 +949,10 @@ def test_empty_state_when_no_polygon_sources(tmp_path):
 
 (If `tests` is not importable as a package, copy the `_src` helper and constants into this file instead.)
 
-- [ ] **Step 2: Run, verify FAIL.**
-- [ ] **Step 3: Implement** with `QVBoxLayout` holding two `QGroupBox`es. Store source objects with `item.setData(Qt.ItemDataRole.UserRole, index)`; disabled rows via clearing `ItemIsEnabled` and setting the tooltip; connect each list's `itemSelectionChanged` to its signal. Read `escalate_sam2_dialog.py` for the exact flag/role idiom to copy.
-- [ ] **Step 4: Run** → pass.
-- [ ] **Step 5: Commit** `"Add CalibrationSourceSelector for split calibrate/escalate source lists"`
+- [x] **Step 2: Run, verify FAIL.**
+- [x] **Step 3: Implement** with `QVBoxLayout` holding two `QGroupBox`es. Store source objects with `item.setData(Qt.ItemDataRole.UserRole, index)`; disabled rows via clearing `ItemIsEnabled` and setting the tooltip; connect each list's `itemSelectionChanged` to its signal. Read `escalate_sam2_dialog.py` for the exact flag/role idiom to copy.
+- [x] **Step 4: Run** → pass.
+- [x] **Step 5: Commit** `"Add CalibrationSourceSelector for split calibrate/escalate source lists"`
 
 ---
 
@@ -1075,11 +1075,11 @@ Data: courtship `~/detectkit-training/improved_ant_detection/merged_source_20260
 `measure.py` (headless, Qt-free): args `--source DIR --variant V --budget N --fractions 0.05,0.1,0.2,0.3,full --device cuda`; builds an `OBBSource`, `stratified_calibration_frames(polygon_only=True, budget=N)`, `measure_median_body_px`, runs `calibrate_geometry` with `Sam2SegmentExecutor.from_variant(V, device)`; prints a table and writes JSON with every `GeometryCalibrationPoint` plus `median_body_px`, frame count, git sha, variant, GPU name.
 
 Steps:
-- [ ] Bundle the branch to mehek (`git bundle create /tmp/geom.bundle main..feat/geometry-escalation-sahi`, scp, `git fetch /tmp/geom.bundle feat/geometry-escalation-sahi:feat/geometry-escalation-sahi`, worktree `~/hydra-suite/.worktrees/geom-sahi`); kill stale sleap/hydra procs first (`pgrep -u rutalab -f "sleap|hydra"`).
-- [ ] Run with `conda activate hydra-cuda`, `PYTHONPATH=<wt>/src`, variants `sam2.1-hiera-tiny` and `sam2.1-hiera-base_plus` (the dialog default), budget 30 frames.
-- [ ] Decide constants from the data: `IOU_FLOOR` = the full-frame-vs-best gap informed floor — set it so the best measured configuration clears it with margin and the clearly-bad ones fail; `FALLBACK_CEIL` likewise. Record the rationale and the full table in the spec under a new "Measurement (2026-10-03)" section and here.
-- [ ] Answer explicitly: does per-box tiling beat full frame on these small animals (median IoU / fallback, and at what s/frame cost)?
-- [ ] Commit `"Set SAM2 calibration floors from mehek measurement"`.
+- [x] Bundle the branch to mehek (`git bundle create /tmp/geom.bundle main..feat/geometry-escalation-sahi`, scp, `git fetch /tmp/geom.bundle feat/geometry-escalation-sahi:feat/geometry-escalation-sahi`, worktree `~/hydra-suite/.worktrees/geom-sahi`); kill stale sleap/hydra procs first (`pgrep -u rutalab -f "sleap|hydra"`).
+- [x] Run with `conda activate hydra-cuda`, `PYTHONPATH=<wt>/src`, variants `sam2.1-hiera-tiny` and `sam2.1-hiera-base_plus` (the dialog default), budget 30 frames.
+- [x] Decide constants from the data: `IOU_FLOOR` = the full-frame-vs-best gap informed floor — set it so the best measured configuration clears it with margin and the clearly-bad ones fail; `FALLBACK_CEIL` likewise. Record the rationale and the full table in the spec under a new "Measurement (2026-10-03)" section and here.
+- [x] Answer explicitly: does per-box tiling beat full frame on these small animals (median IoU / fallback, and at what s/frame cost)?
+- [x] Commit `"Set SAM2 calibration floors from mehek measurement"`.
 
 If mehek or the data is unavailable: STOP before Task 12; report thresholds still PROVISIONAL.
 
@@ -1087,8 +1087,35 @@ If mehek or the data is unavailable: STOP before Task 12; report thresholds stil
 
 ### Task 12: Gate, adversarial review, merge
 
-- [ ] `make format` (or black+isort on touched files); `make lint` clean for touched files.
-- [ ] Full suite delta on `hydra-mps`: run the suite on the branch base (`main` @ the worktree's base commit, in a separate detached worktree) and on the branch; compare the SETS of failing test ids (not counts). Any new failure → fix.
-- [ ] Adversarial review by a different model (dispatch a review agent with `model: "fable"` or `"sonnet"`) over `git diff main...HEAD` with the spec; fix confirmed findings, re-run affected tests.
-- [ ] Docs lifecycle: `git mv` the spec into `docs/superpowers/specs/done/` and this plan into `docs/superpowers/plans/done/`, fixing the spec's `**Status:**` to `Shipped — merged to main (<sha>)`.
-- [ ] Merge `--no-ff` into local `main` (not pushed); remove worktree + branch.
+- [x] `make format` (or black+isort on touched files); `make lint` clean for touched files.
+- [x] Full suite delta on `hydra-mps`: run the suite on the branch base (`main` @ the worktree's base commit, in a separate detached worktree) and on the branch; compare the SETS of failing test ids (not counts). Any new failure → fix.
+- [x] Adversarial review by a different model (dispatch a review agent with `model: "fable"` or `"sonnet"`) over `git diff main...HEAD` with the spec; fix confirmed findings, re-run affected tests.
+- [x] Docs lifecycle: `git mv` the spec into `docs/superpowers/specs/done/` and this plan into `docs/superpowers/plans/done/`, fixing the spec's `**Status:**` to `Shipped — merged to main (<sha>)`.
+- [x] Merge `--no-ff` into local `main` (not pushed); remove worktree + branch.
+
+
+---
+
+## Completion note (2026-10-03)
+
+All tasks done (55 steps). Executed inline in `.worktrees/geom-sahi`; branch tip f34b8ed9.
+Beyond the plan, driven by evidence:
+
+- **Task 11** changed the design (recorded in the spec's "Measurement"): rank by
+  measured seconds within `IOU_TOLERANCE` of the best IoU (tile count picked the
+  slowest, worst config), and a SAM2-specific grid `SAM2_TILE_FRACTION_GRID`.
+- **Adversarial review #1** (Fable): calibrations never persisted (`QProgressDialog.close()`
+  emits `canceled`; same pre-existing bug fixed in the SAM3 dialog), calibration leaking
+  across variants, `plan_for` raising after staged state was cleared, GUI-thread decode
+  in the scale warning, misleading completion note. Fixed in da443bc4.
+- **Merged `main`** (device picker + headless `detectkit escalate`); the CLI now tiles too.
+- **Adversarial review #2** (Fable): GUI/CLI tiling disagreement, a fresh calibration lost
+  on a variant round trip, row clicks forgotten. One shared `default_geometry_tiling`
+  now drives both (8025e197).
+- **Test gate:** full suite vs `main` 70beecc0 — no new failures except
+  `test_widgets_busy::test_runs_callable_in_thread_and_emits_success`, a pre-existing
+  load flake (also failed in the e1b02a89 baseline; 5/5 in isolation). Found and fixed a
+  test that wrote to the real user memory-profile store (f34b8ed9).
+- **GPU:** end-to-end tiled escalation on mehek reproduced on the final code
+  (0.597 → 0.756 median IoU, 195/195 primed), and the real `Sam2CalibrationWorker`
+  recommends fraction 0.3.
