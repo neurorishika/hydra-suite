@@ -349,7 +349,9 @@ def run_semantic_calibration(
             CALIBRATION_SAMPLE_FRAMES,
         ),
     )
-    frames = stratified_calibration_frames(sources, budget=budget)
+    # Calibration needs real ground truth: a box is not one for a mask, and
+    # a frame mixing boxes and polygons cannot be scored. Polygon frames only.
+    frames = stratified_calibration_frames(sources, budget=budget, polygon_only=True)
     if not frames:
         return {"points": [], "sampled_frames": [], "preview_artifact": ""}
     params = dict(payload.get("params") or {})

@@ -79,3 +79,21 @@ def test_semantic_module_reexports_same_objects():
         "CALIBRATION_SAMPLE_FRAMES",
     ):
         assert getattr(se, name) is getattr(cf, name)
+
+
+def test_semantic_calibration_sidecar_samples_polygon_frames_only(monkeypatch):
+    from hydra_suite.detectkit.sidecars import operations as ops
+
+    seen = {}
+
+    def fake_stratified(sources, *, budget, polygon_only=False):
+        seen["polygon_only"] = polygon_only
+        return []
+
+    monkeypatch.setattr(
+        "hydra_suite.detectkit.jobs.semantic_escalation.stratified_calibration_frames",
+        fake_stratified,
+    )
+    monkeypatch.setattr(ops, "_semantic_sources", lambda payload: [])
+    out = ops.run_semantic_calibration({"sample_budget": 4}, lambda *_: None)
+    assert seen["polygon_only"] is True and out["points"] == []
