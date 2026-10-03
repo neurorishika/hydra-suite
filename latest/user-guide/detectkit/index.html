@@ -1011,6 +1011,15 @@
   
 </li>
       
+        <li class="md-nav__item">
+  <a href="#sam2-and-sam3-escalation" class="md-nav__link">
+    <span class="md-ellipsis">
+      SAM2 and SAM3 escalation
+    </span>
+  </a>
+  
+</li>
+      
     </ul>
   
 </nav>
@@ -1032,6 +1041,27 @@
   
   <span class="md-ellipsis">
     DetectKit Headless Training
+  </span>
+  
+
+      </a>
+    </li>
+  
+
+              
+            
+              
+                
+  
+  
+  
+  
+    <li class="md-nav__item">
+      <a href="../sam-install-and-run/" class="md-nav__link">
+        
+  
+  <span class="md-ellipsis">
+    SAM2 and SAM3: Install and Run
   </span>
   
 
@@ -2039,6 +2069,15 @@
   
 </li>
       
+        <li class="md-nav__item">
+  <a href="#sam2-and-sam3-escalation" class="md-nav__link">
+    <span class="md-ellipsis">
+      SAM2 and SAM3 escalation
+    </span>
+  </a>
+  
+</li>
+      
     </ul>
   
 </nav>
@@ -2115,6 +2154,23 @@ overwrite an image recreated at the same path or labels edited after they were
 cleared; resolve that conflict manually and try again. Nested images are shown
 by their paths relative to the source's <code>images/</code> directory, with the absolute
 path available in the row tooltip.</p>
+<h2 id="sam2-and-sam3-escalation">SAM2 and SAM3 escalation<a class="headerlink" href="#sam2-and-sam3-escalation" title="Permanent link">&para;</a></h2>
+<p>The <strong>Escalation</strong> group in the Tools panel upgrades and extends labels with
+Segment Anything models. Both run on every device (CUDA, Apple MPS, CPU) and
+are installed by default:</p>
+<ul>
+<li><strong>Escalate to segment (SAM2)</strong> turns existing box labels into polygon masks.</li>
+<li><strong>Semantic escalation (SAM3)</strong> finds every instance of a text prompt (e.g.
+  <code>ant</code>), including animals missing from your labels.</li>
+</ul>
+<p>Results are staged for frame-by-frame review; nothing changes until you
+accept. Both are also available headless as <code>detectkit escalate sam2</code> /
+<code>detectkit escalate sam3</code>. Stock SAM3 weights are licence-gated and need a
+one-time Hugging Face login, and SAM3 <em>training</em> is an optional CUDA-only
+add-on. See <a href="../sam-install-and-run/">SAM2 and SAM3: install and run</a> for
+devices, weights, the CLI and training setup, and
+<a href="../detectkit-semantic-escalation/">Semantic Escalation (SAM3)</a> for the SAM3
+workflow.</p>
 
 
 

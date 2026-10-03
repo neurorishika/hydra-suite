@@ -936,6 +936,27 @@
   
   
     <li class="md-nav__item">
+      <a href="../../user-guide/sam-install-and-run/" class="md-nav__link">
+        
+  
+  <span class="md-ellipsis">
+    SAM2 and SAM3: Install and Run
+  </span>
+  
+
+      </a>
+    </li>
+  
+
+              
+            
+              
+                
+  
+  
+  
+  
+    <li class="md-nav__item">
       <a href="../../user-guide/detectkit-semantic-escalation/" class="md-nav__link">
         
   
@@ -2134,7 +2155,10 @@
 </ul>
 <h2 id="runtime">Runtime<a class="headerlink" href="#runtime" title="Permanent link">&para;</a></h2>
 <ul>
-<li><code>hydra_suite.runtime.compute_runtime</code></li>
+<li><code>hydra_suite.runtime.resolver</code> — runtime tier + platform + stage → <code>ResolvedBackend</code></li>
+<li><code>hydra_suite.runtime.onnx_providers</code> — ONNX Runtime execution providers for a <code>ResolvedBackend</code></li>
+<li><code>hydra_suite.runtime.doctor</code> — <code>hydra doctor</code> install verification</li>
+<li><code>hydra_suite.runtime.cuda_checks</code> — CUDA/ONNX Runtime/TensorRT/CuPy self-checks used by the doctor</li>
 </ul>
 <h2 id="trackerkit-gui">TrackerKit GUI<a class="headerlink" href="#trackerkit-gui" title="Permanent link">&para;</a></h2>
 <ul>

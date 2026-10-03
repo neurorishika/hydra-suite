@@ -817,36 +817,27 @@
     <ul class="md-nav__list" data-md-component="toc" data-md-scrollfix>
       
         <li class="md-nav__item">
-  <a href="#one-global-runtime" class="md-nav__link">
+  <a href="#the-three-tiers" class="md-nav__link">
     <span class="md-ellipsis">
-      One Global Runtime
+      The three tiers
     </span>
   </a>
   
 </li>
       
         <li class="md-nav__item">
-  <a href="#runtime-options" class="md-nav__link">
+  <a href="#how-a-tier-resolves-per-stage" class="md-nav__link">
     <span class="md-ellipsis">
-      Runtime Options
+      How a tier resolves per stage
     </span>
   </a>
   
 </li>
       
         <li class="md-nav__item">
-  <a href="#intersection-gating-important" class="md-nav__link">
+  <a href="#onnx-runtime" class="md-nav__link">
     <span class="md-ellipsis">
-      Intersection Gating (Important)
-    </span>
-  </a>
-  
-</li>
-      
-        <li class="md-nav__item">
-  <a href="#what-each-runtime-means" class="md-nav__link">
-    <span class="md-ellipsis">
-      What Each Runtime Means
+      ONNX Runtime
     </span>
   </a>
   
@@ -855,16 +846,7 @@
         <li class="md-nav__item">
   <a href="#auto-export-and-artifact-location" class="md-nav__link">
     <span class="md-ellipsis">
-      Auto Export and Artifact Location
-    </span>
-  </a>
-  
-</li>
-      
-        <li class="md-nav__item">
-  <a href="#platform-expectations" class="md-nav__link">
-    <span class="md-ellipsis">
-      Platform Expectations
+      Auto export and artifact location
     </span>
   </a>
   
@@ -873,7 +855,16 @@
         <li class="md-nav__item">
   <a href="#behavior-during-runs" class="md-nav__link">
     <span class="md-ellipsis">
-      Behavior During Runs
+      Behavior during runs
+    </span>
+  </a>
+  
+</li>
+      
+        <li class="md-nav__item">
+  <a href="#older-configs" class="md-nav__link">
+    <span class="md-ellipsis">
+      Older configs
     </span>
   </a>
   
@@ -1035,6 +1026,27 @@
   
   <span class="md-ellipsis">
     DetectKit Headless Training
+  </span>
+  
+
+      </a>
+    </li>
+  
+
+              
+            
+              
+                
+  
+  
+  
+  
+    <li class="md-nav__item">
+      <a href="../sam-install-and-run/" class="md-nav__link">
+        
+  
+  <span class="md-ellipsis">
+    SAM2 and SAM3: Install and Run
   </span>
   
 
@@ -1974,36 +1986,27 @@
     <ul class="md-nav__list" data-md-component="toc" data-md-scrollfix>
       
         <li class="md-nav__item">
-  <a href="#one-global-runtime" class="md-nav__link">
+  <a href="#the-three-tiers" class="md-nav__link">
     <span class="md-ellipsis">
-      One Global Runtime
+      The three tiers
     </span>
   </a>
   
 </li>
       
         <li class="md-nav__item">
-  <a href="#runtime-options" class="md-nav__link">
+  <a href="#how-a-tier-resolves-per-stage" class="md-nav__link">
     <span class="md-ellipsis">
-      Runtime Options
+      How a tier resolves per stage
     </span>
   </a>
   
 </li>
       
         <li class="md-nav__item">
-  <a href="#intersection-gating-important" class="md-nav__link">
+  <a href="#onnx-runtime" class="md-nav__link">
     <span class="md-ellipsis">
-      Intersection Gating (Important)
-    </span>
-  </a>
-  
-</li>
-      
-        <li class="md-nav__item">
-  <a href="#what-each-runtime-means" class="md-nav__link">
-    <span class="md-ellipsis">
-      What Each Runtime Means
+      ONNX Runtime
     </span>
   </a>
   
@@ -2012,16 +2015,7 @@
         <li class="md-nav__item">
   <a href="#auto-export-and-artifact-location" class="md-nav__link">
     <span class="md-ellipsis">
-      Auto Export and Artifact Location
-    </span>
-  </a>
-  
-</li>
-      
-        <li class="md-nav__item">
-  <a href="#platform-expectations" class="md-nav__link">
-    <span class="md-ellipsis">
-      Platform Expectations
+      Auto export and artifact location
     </span>
   </a>
   
@@ -2030,7 +2024,16 @@
         <li class="md-nav__item">
   <a href="#behavior-during-runs" class="md-nav__link">
     <span class="md-ellipsis">
-      Behavior During Runs
+      Behavior during runs
+    </span>
+  </a>
+  
+</li>
+      
+        <li class="md-nav__item">
+  <a href="#older-configs" class="md-nav__link">
+    <span class="md-ellipsis">
+      Older configs
     </span>
   </a>
   
@@ -2069,79 +2072,151 @@
 
 
 <h1 id="compute-runtimes">Compute Runtimes<a class="headerlink" href="#compute-runtimes" title="Permanent link">&para;</a></h1>
-<p>This page explains how global runtime selection works in TrackerKit and PoseKit.</p>
-<h2 id="one-global-runtime">One Global Runtime<a class="headerlink" href="#one-global-runtime" title="Permanent link">&para;</a></h2>
-<p>Runtime is selected once via <code>compute_runtime</code>.</p>
+<p>HYDRA selects how every compute-heavy stage runs from <strong>one setting: the
+runtime tier</strong>. There are no per-stage or per-backend runtime selectors.</p>
+<h2 id="the-three-tiers">The three tiers<a class="headerlink" href="#the-three-tiers" title="Permanent link">&para;</a></h2>
+<table>
+<thead>
+<tr>
+<th>Tier</th>
+<th>UI label</th>
+<th>What it means</th>
+</tr>
+</thead>
+<tbody>
+<tr>
+<td><code>cpu</code></td>
+<td><strong>CPU</strong></td>
+<td>Everything on the CPU with native PyTorch.</td>
+</tr>
+<tr>
+<td><code>gpu</code></td>
+<td><strong>GPU (CUDA)</strong> / <strong>GPU (Metal)</strong></td>
+<td>Native PyTorch on the GPU. Results match the CPU path as closely as the hardware allows.</td>
+</tr>
+<tr>
+<td><code>gpu_fast</code></td>
+<td><strong>GPU-Fast (TensorRT)</strong> / <strong>GPU-Fast (CoreML)</strong></td>
+<td>Exported, optimised artifacts: TensorRT engines on NVIDIA, CoreML packages on Apple Silicon. Fastest, at the cost of some accuracy.</td>
+</tr>
+</tbody>
+</table>
+<p>Only tiers this machine can run are offered. On a machine with neither CUDA
+nor Apple MPS, only <strong>CPU</strong> appears.</p>
+<p>Where to set it:</p>
 <ul>
-<li>TrackerKit: <code>Get Started -&gt; Performance -&gt; Compute runtime</code></li>
-<li>PoseKit: <code>Inference -&gt; Runtime</code></li>
+<li><strong>TrackerKit:</strong> the <strong>Compute tier</strong> card in the Performance group. The
+  same tier drives detection, head–tail, CNN identity, YOLO-pose, SLEAP and
+  ViTPose pose, and background subtraction. Pose has no separate runtime
+  control.</li>
+<li><strong>PoseKit:</strong> <code>Inference → Runtime</code>.</li>
+<li><strong>Config files / CLI:</strong> the <code>runtime_tier</code> key (<code>"cpu"</code>, <code>"gpu"</code>, <code>"gpu_fast"</code>).</li>
 </ul>
-<p>The same runtime drives:</p>
+<h2 id="how-a-tier-resolves-per-stage">How a tier resolves per stage<a class="headerlink" href="#how-a-tier-resolves-per-stage" title="Permanent link">&para;</a></h2>
+<p>The tier is resolved for each stage (OBB detection, head–tail, CNN identity,
+YOLO-pose, SLEAP pose, ViTPose pose, background subtraction) into a concrete
+backend and device:</p>
+<table>
+<thead>
+<tr>
+<th>Tier</th>
+<th>NVIDIA host</th>
+<th>Apple Silicon host</th>
+<th>CPU-only host</th>
+</tr>
+</thead>
+<tbody>
+<tr>
+<td><code>cpu</code></td>
+<td>torch on CPU</td>
+<td>torch on CPU</td>
+<td>torch on CPU</td>
+</tr>
+<tr>
+<td><code>gpu</code></td>
+<td>torch on CUDA</td>
+<td>torch on MPS</td>
+<td>torch on CPU (fallback)</td>
+</tr>
+<tr>
+<td><code>gpu_fast</code></td>
+<td>TensorRT on CUDA</td>
+<td>CoreML on MPS</td>
+<td>torch on CPU (fallback)</td>
+</tr>
+</tbody>
+</table>
+<p>Fallbacks are explicit, never silent:</p>
 <ul>
-<li>YOLO-OBB detection</li>
-<li>YOLO-pose inference</li>
-<li>SLEAP inference</li>
-<li>ViTPose inference</li>
+<li>On <code>gpu_fast</code>, a stage whose fast artifact is not available runs on the
+  native GPU instead (torch on CUDA/MPS). TrackerKit shows a note under the
+  tier selector when this happens.</li>
+<li><strong>Background subtraction</strong> has no TensorRT/CoreML implementation. On
+  <code>gpu_fast</code> it runs exactly as on <code>gpu</code>: CuPy on CUDA, PyTorch on MPS, Numba
+  on CPU.</li>
 </ul>
-<h2 id="runtime-options">Runtime Options<a class="headerlink" href="#runtime-options" title="Permanent link">&para;</a></h2>
+<h2 id="onnx-runtime">ONNX Runtime<a class="headerlink" href="#onnx-runtime" title="Permanent link">&para;</a></h2>
+<p>Stages that run on torch never use ONNX Runtime. Where an ONNX model is used,
+the execution providers follow the resolved backend:</p>
+<table>
+<thead>
+<tr>
+<th>Resolved backend</th>
+<th>ONNX Runtime execution providers</th>
+</tr>
+</thead>
+<tbody>
+<tr>
+<td><code>tensorrt</code> (NVIDIA <code>gpu_fast</code>)</td>
+<td>TensorRT EP (with a persistent per-machine engine cache), then CUDA EP, then CPU</td>
+</tr>
+<tr>
+<td><code>coreml</code> (Apple <code>gpu_fast</code>)</td>
+<td>CoreML EP, when ONNX Runtime's CoreML provider is available on an MPS host, then CPU</td>
+</tr>
+<tr>
+<td><code>torch</code></td>
+<td>CPU</td>
+</tr>
+</tbody>
+</table>
+<p>The Apple install includes an <code>onnxruntime</code> build with the CoreML provider.
+<code>hydra doctor</code> warns if it is missing.</p>
+<h2 id="auto-export-and-artifact-location">Auto export and artifact location<a class="headerlink" href="#auto-export-and-artifact-location" title="Permanent link">&para;</a></h2>
+<p>Fast-tier artifacts are generated automatically the first time they are
+needed, next to the source model:</p>
 <ul>
-<li><code>cpu</code></li>
-<li><code>mps</code></li>
-<li><code>cuda</code></li>
-<li><code>onnx_coreml</code></li>
-<li><code>onnx_cpu</code></li>
-<li><code>onnx_cuda</code></li>
-<li><code>tensorrt</code></li>
+<li>YOLO model <code>/path/model.pt</code> → TensorRT <code>/path/model.engine</code> (NVIDIA) or
+  CoreML <code>/path/model.mlpackage</code> (Apple Silicon)</li>
+<li>SLEAP model directory <code>/path/sleap_model_dir</code> → <code>/path/sleap_model_dir.onnx</code>
+  / <code>/path/sleap_model_dir.tensorrt</code></li>
 </ul>
-<p>The UI only shows options valid for the currently enabled pipelines.</p>
-<h2 id="intersection-gating-important">Intersection Gating (Important)<a class="headerlink" href="#intersection-gating-important" title="Permanent link">&para;</a></h2>
-<p>Available runtimes are the <strong>intersection</strong> of support across enabled pipelines.</p>
-<p>Examples:</p>
-<ul>
-<li>If tracking uses YOLO-OBB + YOLO-pose, runtime must be valid for both.</li>
-<li>If pose backend is switched to SLEAP, runtime options are recomputed immediately.</li>
-<li>Invalid saved runtime is automatically reset to a valid one.</li>
-</ul>
-<h2 id="what-each-runtime-means">What Each Runtime Means<a class="headerlink" href="#what-each-runtime-means" title="Permanent link">&para;</a></h2>
-<ul>
-<li><code>cpu</code>: CPU inference paths.</li>
-<li><code>mps</code>: Apple Metal (PyTorch-native paths).</li>
-<li><code>onnx_coreml</code>: ONNX Runtime with CoreMLExecutionProvider on Apple Silicon.</li>
-<li><code>cuda</code>: PyTorch CUDA native paths.</li>
-<li><code>onnx_cpu</code>: ONNX Runtime with CPU provider.</li>
-<li><code>onnx_cuda</code>: ONNX Runtime with CUDA provider.</li>
-<li><code>tensorrt</code>: TensorRT engine/runtime on NVIDIA CUDA.</li>
-</ul>
-<h2 id="auto-export-and-artifact-location">Auto Export and Artifact Location<a class="headerlink" href="#auto-export-and-artifact-location" title="Permanent link">&para;</a></h2>
-<p>Export artifacts are generated automatically when needed.</p>
-<ul>
-<li>YOLO model <code>/path/model.pt</code>:</li>
-<li>ONNX: <code>/path/model.onnx</code></li>
-<li>TensorRT: <code>/path/model.engine</code></li>
-<li>SLEAP model directory <code>/path/sleap_model_dir</code>:</li>
-<li>ONNX export directory: <code>/path/sleap_model_dir.onnx</code></li>
-<li>TensorRT export directory: <code>/path/sleap_model_dir.tensorrt</code></li>
-</ul>
-<p>No manual exported-model-path entry is required.</p>
-<h2 id="platform-expectations">Platform Expectations<a class="headerlink" href="#platform-expectations" title="Permanent link">&para;</a></h2>
-<ul>
-<li>Apple Silicon:</li>
-<li>Typically <code>mps</code>, <code>onnx_coreml</code>, and <code>onnx_cpu</code> (no TensorRT).</li>
-<li>NVIDIA CUDA:</li>
-<li><code>cuda</code>, <code>onnx_cuda</code>, and <code>tensorrt</code> when installed correctly.</li>
-</ul>
-<h2 id="behavior-during-runs">Behavior During Runs<a class="headerlink" href="#behavior-during-runs" title="Permanent link">&para;</a></h2>
-<p>Runtime controls are locked during long-running prediction/tracking tasks to prevent backend switching crashes.</p>
+<p>No manual exported-model path is required. See
+<a href="../../developer-guide/inference-fast-mode/">Inference Fast Mode</a> for the
+export details and determinism caveats.</p>
+<h2 id="behavior-during-runs">Behavior during runs<a class="headerlink" href="#behavior-during-runs" title="Permanent link">&para;</a></h2>
+<p>Runtime controls are locked during long-running prediction/tracking tasks to
+prevent backend switching crashes.</p>
+<h2 id="older-configs">Older configs<a class="headerlink" href="#older-configs" title="Permanent link">&para;</a></h2>
+<p>Configs saved before runtime tiers existed used per-stage strings such as
+<code>compute_runtime: "onnx_coreml"</code>. Loading a config without <code>runtime_tier</code> fails
+with an error that points to the one-time migration:</p>
+<div class="language-bash highlight"><pre><span></span><code><span id="__span-0-1"><a id="__codelineno-0-1" name="__codelineno-0-1" href="#__codelineno-0-1"></a>python<span class="w"> </span>scripts/migrate_runtime_config.py<span class="w"> </span>&lt;config.json&gt;
+</span></code></pre></div>
 <h2 id="troubleshooting">Troubleshooting<a class="headerlink" href="#troubleshooting" title="Permanent link">&para;</a></h2>
 <ul>
-<li>Runtime disappeared from dropdown:</li>
-<li>A selected backend/pipeline no longer supports it.</li>
-<li>ONNX shown but fails at runtime:</li>
-<li>Check provider availability and model export compatibility.</li>
-<li>SLEAP ONNX/TensorRT unavailable:</li>
-<li>Verify selected SLEAP environment and export dependencies.</li>
+<li><strong>Only "CPU" is offered:</strong> torch cannot see a GPU. Run <code>hydra doctor</code>. On
+  NVIDIA this is usually a CUDA 13 build on a pre-580 driver; see
+  <a href="../../getting-started/installation/#troubleshooting">Installation</a>.</li>
+<li><strong><code>gpu_fast</code> is not faster, or a note says a stage fell back:</strong> that stage
+  has no fast artifact (for example, background subtraction) or its export
+  failed. Check the log for the export error.</li>
+<li><strong>SLEAP fast export unavailable:</strong> the SLEAP sidecar env needs its export
+  extras. Rebuild it with <code>python install.py --with-sleap</code>.</li>
 </ul>
-<p>See also: <a href="../../getting-started/integrations/">Integrations</a>, <a href="../troubleshooting/">Troubleshooting</a></p>
+<p>See also: <a href="../../getting-started/integrations/">Integrations</a>,
+<a href="../../getting-started/platforms/">Platform Notes</a>,
+<a href="../troubleshooting/">Troubleshooting</a></p>
 
 
 

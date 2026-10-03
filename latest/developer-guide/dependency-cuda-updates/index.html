@@ -78,7 +78,7 @@
     <div data-md-component="skip">
       
         
-        <a href="#cuda-dependency-updates-tracker" class="md-skip">
+        <a href="#dependency-and-cuda-updates" class="md-skip">
           Skip to content
         </a>
       
@@ -936,6 +936,27 @@
   
   
     <li class="md-nav__item">
+      <a href="../../user-guide/sam-install-and-run/" class="md-nav__link">
+        
+  
+  <span class="md-ellipsis">
+    SAM2 and SAM3: Install and Run
+  </span>
+  
+
+      </a>
+    </li>
+  
+
+              
+            
+              
+                
+  
+  
+  
+  
+    <li class="md-nav__item">
       <a href="../../user-guide/detectkit-semantic-escalation/" class="md-nav__link">
         
   
@@ -1328,55 +1349,82 @@
     <ul class="md-nav__list" data-md-component="toc" data-md-scrollfix>
       
         <li class="md-nav__item">
-  <a href="#current-workarounds" class="md-nav__link">
+  <a href="#where-versions-live" class="md-nav__link">
     <span class="md-ellipsis">
-      Current Workarounds
+      Where versions live
     </span>
   </a>
   
-    <nav class="md-nav" aria-label="Current Workarounds">
+</li>
+      
+        <li class="md-nav__item">
+  <a href="#bumping-the-tested-pins" class="md-nav__link">
+    <span class="md-ellipsis">
+      Bumping the tested pins
+    </span>
+  </a>
+  
+</li>
+      
+        <li class="md-nav__item">
+  <a href="#bumping-torch" class="md-nav__link">
+    <span class="md-ellipsis">
+      Bumping torch
+    </span>
+  </a>
+  
+</li>
+      
+        <li class="md-nav__item">
+  <a href="#cuda-specific-constraints-to-re-check" class="md-nav__link">
+    <span class="md-ellipsis">
+      CUDA-specific constraints to re-check
+    </span>
+  </a>
+  
+    <nav class="md-nav" aria-label="CUDA-specific constraints to re-check">
       <ul class="md-nav__list">
         
           <li class="md-nav__item">
-  <a href="#faiss-gpu-wheel-for-cuda-13" class="md-nav__link">
+  <a href="#onnx-runtime-gpu-one-wheel-family-per-cuda-major" class="md-nav__link">
     <span class="md-ellipsis">
-      FAISS GPU Wheel for CUDA 13
+      ONNX Runtime GPU: one wheel family per CUDA major
     </span>
   </a>
   
 </li>
         
           <li class="md-nav__item">
-  <a href="#onnx-runtime-gpu-version-pinning" class="md-nav__link">
+  <a href="#tensorrt-and-cupy" class="md-nav__link">
     <span class="md-ellipsis">
-      ONNX Runtime GPU Version Pinning
+      TensorRT and CuPy
     </span>
   </a>
   
 </li>
         
           <li class="md-nav__item">
-  <a href="#cupy-prerelease-on-cuda-13" class="md-nav__link">
+  <a href="#mixed-wheel-families" class="md-nav__link">
     <span class="md-ellipsis">
-      CuPy Prerelease on CUDA 13
+      Mixed wheel families
     </span>
   </a>
   
 </li>
         
           <li class="md-nav__item">
-  <a href="#tensorrt-version-specific-pins" class="md-nav__link">
+  <a href="#sleap-sidecar" class="md-nav__link">
     <span class="md-ellipsis">
-      TensorRT Version-Specific Pins
+      SLEAP sidecar
     </span>
   </a>
   
 </li>
         
           <li class="md-nav__item">
-  <a href="#pytorch-index-urls" class="md-nav__link">
+  <a href="#sam3-training-sidecar" class="md-nav__link">
     <span class="md-ellipsis">
-      PyTorch Index URLs
+      SAM3 training sidecar
     </span>
   </a>
   
@@ -1388,27 +1436,9 @@
 </li>
       
         <li class="md-nav__item">
-  <a href="#monitoring-checklist" class="md-nav__link">
+  <a href="#checklist" class="md-nav__link">
     <span class="md-ellipsis">
-      Monitoring Checklist
-    </span>
-  </a>
-  
-</li>
-      
-        <li class="md-nav__item">
-  <a href="#summary-table" class="md-nav__link">
-    <span class="md-ellipsis">
-      Summary Table
-    </span>
-  </a>
-  
-</li>
-      
-        <li class="md-nav__item">
-  <a href="#how-to-report-resolved-items" class="md-nav__link">
-    <span class="md-ellipsis">
-      How to Report Resolved Items
+      Checklist
     </span>
   </a>
   
@@ -1989,55 +2019,82 @@
     <ul class="md-nav__list" data-md-component="toc" data-md-scrollfix>
       
         <li class="md-nav__item">
-  <a href="#current-workarounds" class="md-nav__link">
+  <a href="#where-versions-live" class="md-nav__link">
     <span class="md-ellipsis">
-      Current Workarounds
+      Where versions live
     </span>
   </a>
   
-    <nav class="md-nav" aria-label="Current Workarounds">
+</li>
+      
+        <li class="md-nav__item">
+  <a href="#bumping-the-tested-pins" class="md-nav__link">
+    <span class="md-ellipsis">
+      Bumping the tested pins
+    </span>
+  </a>
+  
+</li>
+      
+        <li class="md-nav__item">
+  <a href="#bumping-torch" class="md-nav__link">
+    <span class="md-ellipsis">
+      Bumping torch
+    </span>
+  </a>
+  
+</li>
+      
+        <li class="md-nav__item">
+  <a href="#cuda-specific-constraints-to-re-check" class="md-nav__link">
+    <span class="md-ellipsis">
+      CUDA-specific constraints to re-check
+    </span>
+  </a>
+  
+    <nav class="md-nav" aria-label="CUDA-specific constraints to re-check">
       <ul class="md-nav__list">
         
           <li class="md-nav__item">
-  <a href="#faiss-gpu-wheel-for-cuda-13" class="md-nav__link">
+  <a href="#onnx-runtime-gpu-one-wheel-family-per-cuda-major" class="md-nav__link">
     <span class="md-ellipsis">
-      FAISS GPU Wheel for CUDA 13
+      ONNX Runtime GPU: one wheel family per CUDA major
     </span>
   </a>
   
 </li>
         
           <li class="md-nav__item">
-  <a href="#onnx-runtime-gpu-version-pinning" class="md-nav__link">
+  <a href="#tensorrt-and-cupy" class="md-nav__link">
     <span class="md-ellipsis">
-      ONNX Runtime GPU Version Pinning
+      TensorRT and CuPy
     </span>
   </a>
   
 </li>
         
           <li class="md-nav__item">
-  <a href="#cupy-prerelease-on-cuda-13" class="md-nav__link">
+  <a href="#mixed-wheel-families" class="md-nav__link">
     <span class="md-ellipsis">
-      CuPy Prerelease on CUDA 13
+      Mixed wheel families
     </span>
   </a>
   
 </li>
         
           <li class="md-nav__item">
-  <a href="#tensorrt-version-specific-pins" class="md-nav__link">
+  <a href="#sleap-sidecar" class="md-nav__link">
     <span class="md-ellipsis">
-      TensorRT Version-Specific Pins
+      SLEAP sidecar
     </span>
   </a>
   
 </li>
         
           <li class="md-nav__item">
-  <a href="#pytorch-index-urls" class="md-nav__link">
+  <a href="#sam3-training-sidecar" class="md-nav__link">
     <span class="md-ellipsis">
-      PyTorch Index URLs
+      SAM3 training sidecar
     </span>
   </a>
   
@@ -2049,27 +2106,9 @@
 </li>
       
         <li class="md-nav__item">
-  <a href="#monitoring-checklist" class="md-nav__link">
+  <a href="#checklist" class="md-nav__link">
     <span class="md-ellipsis">
-      Monitoring Checklist
-    </span>
-  </a>
-  
-</li>
-      
-        <li class="md-nav__item">
-  <a href="#summary-table" class="md-nav__link">
-    <span class="md-ellipsis">
-      Summary Table
-    </span>
-  </a>
-  
-</li>
-      
-        <li class="md-nav__item">
-  <a href="#how-to-report-resolved-items" class="md-nav__link">
-    <span class="md-ellipsis">
-      How to Report Resolved Items
+      Checklist
     </span>
   </a>
   
@@ -2098,181 +2137,154 @@
   
 
 
-<h1 id="cuda-dependency-updates-tracker">CUDA Dependency Updates Tracker<a class="headerlink" href="#cuda-dependency-updates-tracker" title="Permanent link">&para;</a></h1>
-<p>This page tracks workarounds and pinned dependencies that depend on external packages improving their CUDA 13 support. As package maintainers release updated versions with better CUDA compatibility, the items below should be revisited and updated.</p>
-<h2 id="current-workarounds">Current Workarounds<a class="headerlink" href="#current-workarounds" title="Permanent link">&para;</a></h2>
-<h3 id="faiss-gpu-wheel-for-cuda-13">FAISS GPU Wheel for CUDA 13<a class="headerlink" href="#faiss-gpu-wheel-for-cuda-13" title="Permanent link">&para;</a></h3>
-<p><strong>Status</strong>: ⚠️ Requires Action</p>
-<p><strong>Current Workaround</strong>: Use <code>faiss-cpu</code> in <code>requirements-cuda13.txt</code></p>
-<p><strong>File</strong>: <code>requirements-cuda13.txt</code></p>
-<p><strong>Issue</strong>:</p>
-<ul>
-<li>FAISS GPU wheels are unavailable for CUDA 13 + Python 3.13 due to limited build coverage from Meta</li>
-<li>CPU variant is a functional fallback but lacks GPU acceleration for vector similarity search</li>
-</ul>
-<p><strong>Action Required When Fixed</strong>:</p>
-<ol>
-<li>Monitor <a href="https://github.com/facebookresearch/faiss/releases">FAISS releases</a> for CUDA 13 + Python 3.13 wheel availability</li>
-<li>Test <code>faiss-gpu</code> with CUDA 13.x in CI environment</li>
-<li>Replace <code>faiss-cpu</code> with <code>faiss-gpu</code> in <code>requirements-cuda13.txt</code></li>
-<li>Update documentation in <code>docs/getting-started/installation.md</code> and <code>docs/getting-started/environments.md</code> to remove the fallback note</li>
-</ol>
-<p><strong>Related Issue</strong>: Meta/FAISS issue tracker for CUDA 13 wheel builds</p>
-<hr />
-<h3 id="onnx-runtime-gpu-version-pinning">ONNX Runtime GPU Version Pinning<a class="headerlink" href="#onnx-runtime-gpu-version-pinning" title="Permanent link">&para;</a></h3>
-<p><strong>Status</strong>: 📌 Version Pinned</p>
-<p><strong>Current Pin</strong>: <code>onnxruntime-gpu==1.24.1</code> in <code>requirements-cuda.txt</code></p>
-<p><strong>File</strong>: <code>requirements-cuda.txt</code></p>
-<p><strong>Reason for Pinning</strong>:</p>
-<ul>
-<li>Version 1.24.1 is known to work with CUDA 12 user-space library linkage (libcublasLt.so.12, etc.) across both CUDA 12.x and 13.x environments</li>
-<li>Later versions may have changed their CUDA 12 binary compatibility or introduced stricter version requirements</li>
-</ul>
-<p><strong>Action Required When Fixed</strong>:</p>
-<ol>
-<li>Monitor <a href="https://github.com/onnx/onnx-runtime/releases">ONNX Runtime releases</a> for CUDA 12–13 compatibility improvements</li>
-<li>Test newer versions (1.25.x, 1.26.x+) with:</li>
-<li>CUDA 12.x environments</li>
-<li>CUDA 13.x environments (with conda CUDA 12 runtime libs for linkage)</li>
-<li>CPU provider fallback behavior</li>
-<li>If newer versions offer better compatibility or performance, update to <code>onnxruntime-gpu&gt;=1.24.1,&lt;2.0</code> (or specific newer pin)</li>
-<li>Update CI/CD testing to verify linkage across versions</li>
-<li>Document the upgrade path in the changelog</li>
-</ol>
-<p><strong>Related Issue</strong>: Check ONNX Runtime issues for "CUDA 13" and "CUDA compatibility"</p>
-<hr />
-<h3 id="cupy-prerelease-on-cuda-13">CuPy Prerelease on CUDA 13<a class="headerlink" href="#cupy-prerelease-on-cuda-13" title="Permanent link">&para;</a></h3>
-<p><strong>Status</strong>: 🔧 Prerelease Required</p>
-<p><strong>Current Configuration</strong>: Uses <code>--pre</code> flag and <code>https://pip.cupy.dev/pre</code> in <code>requirements-cuda13.txt</code></p>
-<p><strong>File</strong>: <code>requirements-cuda13.txt</code></p>
-<p><strong>Reason for Prerelease</strong>:</p>
-<ul>
-<li>CUDA 13 stable <code>cupy-cuda13x</code> wheels may not be available from the main PyPI index</li>
-<li>Prerelease wheels from CuPy's development server ensure CUDA 13 support</li>
-</ul>
-<p><strong>Action Required When Fixed</strong>:</p>
-<ol>
-<li>Monitor <a href="https://pypi.org/project/cupy-cuda13x/">CuPy releases</a> for CUDA 13 stable wheel availability</li>
-<li>When stable wheels are published:</li>
-<li>Remove <code>--pre</code> flag from <code>requirements-cuda13.txt</code></li>
-<li>Remove custom index URL <code>https://pip.cupy.dev/pre</code></li>
-<li>Update to pinned stable version (e.g., <code>cupy-cuda13x==X.Y.Z</code>)</li>
-<li>Test in CI with stable index to confirm compatibility</li>
-<li>Update <code>docs/getting-started/installation.md</code> to note that CUDA 13 installation is now fully stable</li>
-</ol>
-<p><strong>Related Issue</strong>: Monitor <a href="https://github.com/cupy/cupy/releases">CuPy GitHub Releases</a> for CUDA 13 stable tag</p>
-<hr />
-<h3 id="tensorrt-version-specific-pins">TensorRT Version-Specific Pins<a class="headerlink" href="#tensorrt-version-specific-pins" title="Permanent link">&para;</a></h3>
-<p><strong>Status</strong>: ✅ Versioned, May Improve</p>
-<p><strong>Current Configuration</strong>: Separate <code>tensorrt-cu12</code>, <code>tensorrt-cu13</code> (unversioned) in version-specific files</p>
-<p><strong>Files</strong>: <code>requirements-cuda12.txt</code>, <code>requirements-cuda13.txt</code></p>
-<p><strong>Considerations</strong>:</p>
-<ul>
-<li>If NVIDIA publishes unified TensorRT CPU wheels with better version compatibility, we may simplify to a single tensorrt package</li>
-<li>CUDA 13 support may improve with new releases; consider stricter pinning if compatibility issues emerge</li>
-</ul>
-<p><strong>Action Required When Fixed</strong>:</p>
-<ol>
-<li>Monitor <a href="https://github.com/NVIDIA/TensorRT/releases">NVIDIA TensorRT releases</a> for unified CUDA version support</li>
-<li>If NVIDIA publishes CPU/GPU-agnostic wheels:</li>
-<li>Move TensorRT to <code>requirements-cuda.txt</code> (shared base)</li>
-<li>Remove version-specific TensorRT packages</li>
-<li>Simplify requirements structure</li>
-<li>If CUDA 13 TensorRT stability improves, consider pinning to a specific version range</li>
-</ol>
-<p><strong>Related Issue</strong>: NVIDIA TensorRT issue tracker</p>
-<hr />
-<h3 id="pytorch-index-urls">PyTorch Index URLs<a class="headerlink" href="#pytorch-index-urls" title="Permanent link">&para;</a></h3>
-<p><strong>Status</strong>: 📦 Version-Specific, Monitor</p>
-<p><strong>Current Configuration</strong>:</p>
-<ul>
-<li>CUDA 12: <code>--extra-index-url https://download.pytorch.org/whl/cu128</code></li>
-<li>CUDA 13: <code>--extra-index-url https://download.pytorch.org/whl/cu130</code></li>
-</ul>
-<p><strong>Files</strong>: <code>requirements-cuda12.txt</code>, <code>requirements-cuda13.txt</code></p>
-<p><strong>Considerations</strong>:</p>
-<ul>
-<li>PyTorch uses a custom index URL distribution strategy; check for future changes to their build/distribution infrastructure</li>
-<li>CUDA 13 might be integrated into the main PyPI wheels in future major versions, eliminating the need for custom indexes</li>
-</ul>
-<p><strong>Action Required When Fixed</strong>:</p>
-<ol>
-<li>Monitor <a href="https://pytorch.org/get-started/locally/">PyTorch installation docs</a> for index URL changes</li>
-<li>If PyTorch integrates CUDA variants into standard PyPI:</li>
-<li>Remove custom index URLs from both CUDA requirement files</li>
-<li>Simplify to pinned PyTorch versions (e.g., <code>torch&gt;=2.1.0</code>)</li>
-<li>Update CI to verify installation without custom indexes</li>
-</ol>
-<hr />
-<h2 id="monitoring-checklist">Monitoring Checklist<a class="headerlink" href="#monitoring-checklist" title="Permanent link">&para;</a></h2>
-<p>When updating dependencies:</p>
-<ul class="task-list">
-<li class="task-list-item"><label class="task-list-control"><input type="checkbox" disabled/><span class="task-list-indicator"></span></label> Check FAISS releases for CUDA 13 wheel availability</li>
-<li class="task-list-item"><label class="task-list-control"><input type="checkbox" disabled/><span class="task-list-indicator"></span></label> Review ONNX Runtime release notes and test compatibility</li>
-<li class="task-list-item"><label class="task-list-control"><input type="checkbox" disabled/><span class="task-list-indicator"></span></label> Monitor CuPy stable CUDA 13 wheel status</li>
-<li class="task-list-item"><label class="task-list-control"><input type="checkbox" disabled/><span class="task-list-indicator"></span></label> Evaluate TensorRT unified wheel roadmap</li>
-<li class="task-list-item"><label class="task-list-control"><input type="checkbox" disabled/><span class="task-list-indicator"></span></label> Check PyTorch for index URL or distribution strategy changes</li>
-<li class="task-list-item"><label class="task-list-control"><input type="checkbox" disabled/><span class="task-list-indicator"></span></label> Run full CI/CD suite with new dependencies</li>
-<li class="task-list-item"><label class="task-list-control"><input type="checkbox" disabled/><span class="task-list-indicator"></span></label> Update this document with resolved items</li>
-</ul>
-<h2 id="summary-table">Summary Table<a class="headerlink" href="#summary-table" title="Permanent link">&para;</a></h2>
+<h1 id="dependency-and-cuda-updates">Dependency and CUDA Updates<a class="headerlink" href="#dependency-and-cuda-updates" title="Permanent link">&para;</a></h1>
+<p>How dependency versions are declared, pinned and bumped, and the CUDA-specific
+constraints to re-check when you do.</p>
+<h2 id="where-versions-live">Where versions live<a class="headerlink" href="#where-versions-live" title="Permanent link">&para;</a></h2>
 <table>
 <thead>
 <tr>
-<th>Package</th>
-<th>Current Fix</th>
+<th>What</th>
 <th>File</th>
-<th>Priority</th>
-<th>Check Frequency</th>
+<th>Role</th>
 </tr>
 </thead>
 <tbody>
 <tr>
-<td>FAISS</td>
-<td><code>faiss-cpu</code> fallback</td>
-<td>requirements-cuda13.txt</td>
-<td>High</td>
-<td>Monthly</td>
+<td>Allowed ranges</td>
+<td><code>pyproject.toml</code></td>
+<td>The <strong>only</strong> declaration of Python dependencies: core deps plus extras <code>cpu</code>, <code>mps</code>, <code>cuda12</code>, <code>cuda13</code> (<code>cuda</code> = alias for <code>cuda12</code>), <code>sam</code> (<code>sam3</code> alias), <code>sam3-train</code> (sidecar only), <code>dev</code>, <code>docs</code>, <code>onnx-tools</code>.</td>
 </tr>
 <tr>
-<td>ONNX Runtime</td>
-<td>Version pin 1.24.1</td>
-<td>requirements-cuda.txt</td>
-<td>High</td>
-<td>Quarterly</td>
+<td>Tested pins</td>
+<td><code>constraints/base.txt</code>, <code>constraints/cuda12.txt</code>, <code>constraints/cuda13.txt</code></td>
+<td>Exact versions <code>install.py</code> applies by default. <strong>Generated</strong> — never edit by hand.</td>
 </tr>
 <tr>
-<td>CuPy</td>
-<td>Prerelease CUDA 13</td>
-<td>requirements-cuda13.txt</td>
-<td>Medium</td>
-<td>Monthly</td>
+<td>torch / torchvision</td>
+<td><code>TORCH_VERSION</code>, <code>TORCHVISION_VERSION</code> in <code>install.py</code></td>
+<td>A matched release pair, installed from the PyTorch index for the tier.</td>
 </tr>
 <tr>
-<td>TensorRT</td>
-<td>Version-specific import</td>
-<td>requirements-cudaX.txt</td>
-<td>Medium</td>
-<td>Quarterly</td>
+<td>Driver → CUDA mapping</td>
+<td><code>CUDA13_MIN_DRIVER</code> in <code>install.py</code> (580)</td>
+<td>Driver ≥ 580 gets CUDA 13 (<code>cu130</code>); older drivers get CUDA 12 (<code>cu128</code>).</td>
 </tr>
 <tr>
-<td>PyTorch</td>
-<td>Custom index URLs</td>
-<td>requirements-cudaX.txt</td>
-<td>Low</td>
-<td>Quarterly</td>
+<td>Git-only pins</td>
+<td><code>CLIP_REF</code>, <code>APRILTAG_COMMIT</code>, <code>SAM3_REF</code> in <code>install.py</code></td>
+<td>ultralytics CLIP fork, Kronauer lab AprilTag fork, Meta <code>sam3</code> (training sidecar).</td>
+</tr>
+<tr>
+<td>Sidecar pins</td>
+<td><code>SLEAP_PIN</code> (<code>1.6.2</code>) and the <code>sam3_train_steps</code> pin list in <code>install.py</code></td>
+<td>SLEAP and SAM3-training sidecar envs.</td>
 </tr>
 </tbody>
 </table>
-<h2 id="how-to-report-resolved-items">How to Report Resolved Items<a class="headerlink" href="#how-to-report-resolved-items" title="Permanent link">&para;</a></h2>
-<p>When any of these items is resolved:</p>
+<p><code>tools/lock_constraints.py</code> deliberately does <strong>not</strong> pin <code>torch</code>,
+<code>torchvision</code>, <code>triton</code>, <code>nvidia-*</code>, <code>cuda-*</code> or <code>hydra-suite</code> itself. Torch
+comes from the PyTorch wheel index, and the <code>nvidia-*</code> wheels must follow
+whichever torch build is installed.</p>
+<h2 id="bumping-the-tested-pins">Bumping the tested pins<a class="headerlink" href="#bumping-the-tested-pins" title="Permanent link">&para;</a></h2>
+<div class="language-bash highlight"><pre><span></span><code><span id="__span-0-1"><a id="__codelineno-0-1" name="__codelineno-0-1" href="#__codelineno-0-1"></a>python<span class="w"> </span>tools/lock_constraints.py<span class="w">                          </span><span class="c1"># re-resolve, keep existing pins</span>
+</span><span id="__span-0-2"><a id="__codelineno-0-2" name="__codelineno-0-2" href="#__codelineno-0-2"></a>python<span class="w"> </span>tools/lock_constraints.py<span class="w"> </span>--upgrade-package<span class="w"> </span>numpy<span class="w">  </span><span class="c1"># bump one package</span>
+</span><span id="__span-0-3"><a id="__codelineno-0-3" name="__codelineno-0-3" href="#__codelineno-0-3"></a>python<span class="w"> </span>tools/lock_constraints.py<span class="w"> </span>--upgrade<span class="w">                </span><span class="c1"># bump everything</span>
+</span></code></pre></div>
+<p>The tool resolves universally (one file covers Linux, macOS and Windows,
+Python 3.11+). Then, <strong>before committing new pins</strong>:</p>
 <ol>
-<li>Update the relevant requirement file</li>
-<li>Update this document, marking the item as ✅ <strong>Resolved</strong></li>
-<li>Update related documentation (installation.md, environments.md)</li>
-<li>Add a note to <code>CHANGELOG.md</code> under the new release</li>
-<li>Remove the resolved item from the monitoring checklist</li>
+<li>Build a fresh env from the new pins (<code>python install.py --recreate</code>, or a
+   throwaway <code>--env</code>).</li>
+<li>
+<p>Prove tracking output did not move with the env-swap gate. It keeps the
+   <code>src/</code> tree fixed and swaps the interpreter (old env vs new env):</p>
+<div class="language-bash highlight"><pre><span></span><code><span id="__span-1-1"><a id="__codelineno-1-1" name="__codelineno-1-1" href="#__codelineno-1-1"></a><span class="nv">OLD_PY</span><span class="o">=</span>/path/to/old/env/bin/python<span class="w"> </span><span class="nv">NEW_PY</span><span class="o">=</span>/path/to/new/env/bin/python<span class="w"> </span><span class="se">\</span>
+</span><span id="__span-1-2"><a id="__codelineno-1-2" name="__codelineno-1-2" href="#__codelineno-1-2"></a><span class="nv">SRC</span><span class="o">=</span><span class="nv">$PWD</span>/src<span class="w"> </span><span class="nv">OUT</span><span class="o">=</span>/tmp/envswap<span class="w"> </span><span class="nv">RUNTIME</span><span class="o">=</span>mps<span class="w"> </span><span class="se">\</span>
+</span><span id="__span-1-3"><a id="__codelineno-1-3" name="__codelineno-1-3" href="#__codelineno-1-3"></a><span class="w">  </span>bash<span class="w"> </span>tools/equivalence/env_swap_gate.sh<span class="w"> </span>fly_obb<span class="w"> </span>worm_bgsub
+</span></code></pre></div>
+<p>A clip passes as <strong>BYTE-IDENTICAL</strong>, or as <strong>BLAS-FLOOR</strong> when the only
+differences are BLAS float rounding in the Kalman diagnostic columns
+(<code>PositionUncertainty</code>, <code>AssignmentConfidence</code>). Anything else is a real
+change.
+3. Run it on <strong>MPS and CUDA</strong> (CUDA 12 and CUDA 13 if <code>cuda12.txt</code> /
+   <code>cuda13.txt</code> changed).</p>
+</li>
 </ol>
+<p>Users who want the newest releases regardless can install with
+<code>python install.py --latest</code>.</p>
+<h2 id="bumping-torch">Bumping torch<a class="headerlink" href="#bumping-torch" title="Permanent link">&para;</a></h2>
+<ol>
+<li>Change <code>TORCH_VERSION</code> <strong>and</strong> <code>TORCHVISION_VERSION</code> in <code>install.py</code>
+   together. They are a matched pair. Check the PyTorch release notes for
+   the torchvision that goes with the new torch.</li>
+<li>Confirm the <code>+cu128</code> and <code>+cu130</code> builds of that version exist on
+   <code>https://download.pytorch.org/whl/cu128</code> and <code>.../cu130</code>. The local tag is
+   what stops PyPI's default (CUDA 13) Linux wheel from being chosen on a
+   CUDA 12 host.</li>
+<li>If PyTorch drops or adds a CUDA line, update the tag map in
+   <code>torch_requirements()</code> and <code>CUDA13_MIN_DRIVER</code>.</li>
+<li>Rebuild and run <code>hydra doctor</code> on every tier, then the env-swap gate as
+   above.</li>
+</ol>
+<h2 id="cuda-specific-constraints-to-re-check">CUDA-specific constraints to re-check<a class="headerlink" href="#cuda-specific-constraints-to-re-check" title="Permanent link">&para;</a></h2>
+<h3 id="onnx-runtime-gpu-one-wheel-family-per-cuda-major">ONNX Runtime GPU: one wheel family per CUDA major<a class="headerlink" href="#onnx-runtime-gpu-one-wheel-family-per-cuda-major" title="Permanent link">&para;</a></h3>
+<table>
+<thead>
+<tr>
+<th>Extra</th>
+<th>Range</th>
+<th>Why</th>
+</tr>
+</thead>
+<tbody>
+<tr>
+<td><code>cuda12</code></td>
+<td><code>onnxruntime-gpu[cuda,cudnn]&gt;=1.24,&lt;1.27</code></td>
+<td>1.26 is the last CUDA 12 build; its <code>[cuda,cudnn]</code> extra pulls the <code>nvidia-*-cu12</code> wheels that torch <code>+cu128</code> also uses.</td>
+</tr>
+<tr>
+<td><code>cuda13</code></td>
+<td><code>onnxruntime-gpu[cuda,cudnn]&gt;=1.28</code></td>
+<td>Built for CUDA 13; depends on the <strong>unsuffixed</strong> <code>nvidia-*</code> wheels, the same family as torch <code>+cu130</code>. 1.27 is skipped because it used <code>-cu13</code>-suffixed names.</td>
+</tr>
+</tbody>
+</table>
+<p>ONNX Runtime loads these libraries through <code>onnxruntime.preload_dlls()</code>
+(<code>hydra_suite.runtime.onnx_providers.preload_ort_cuda_libraries</code>). No conda
+CUDA packages or <code>LD_LIBRARY_PATH</code> hooks are involved. When bumping the
+range, check that the new release's <code>nvidia-*</code> dependency family still matches
+torch's.</p>
+<h3 id="tensorrt-and-cupy">TensorRT and CuPy<a class="headerlink" href="#tensorrt-and-cupy" title="Permanent link">&para;</a></h3>
+<p><code>tensorrt-cu12*</code> / <code>cupy-cuda12x</code> go in <code>cuda12</code>, and <code>tensorrt-cu13*</code> /
+<code>cupy-cuda13x</code> go in <code>cuda13</code>. The installer uninstalls the other family
+before installing, because two TensorRT families in one env can leave
+<code>import tensorrt</code> working while builder initialisation fails. CuPy CUDA 13
+now has stable wheels, so it is pinned normally in <code>constraints/cuda13.txt</code>.</p>
+<h3 id="mixed-wheel-families">Mixed wheel families<a class="headerlink" href="#mixed-wheel-families" title="Permanent link">&para;</a></h3>
+<p>Both <code>nvidia-*-cu12</code> and unsuffixed <code>nvidia-*</code> wheels unpack into
+<code>site-packages/nvidia/</code>. The CUDA checks in <code>hydra_suite.runtime.cuda_checks</code>
+(run by <code>hydra doctor --tier cuda</code>) detect a mixed env and tell the user to
+run <code>python install.py --recreate</code>.</p>
+<h3 id="sleap-sidecar">SLEAP sidecar<a class="headerlink" href="#sleap-sidecar" title="Permanent link">&para;</a></h3>
+<p><code>sleap==1.6.2</code> pins <code>sleap-nn</code> 0.1.x. Newer <code>sleap-nn</code> breaks the
+shared-memory transport, and the runtime preflight refuses anything but 0.1.x.
+Re-verify on a fresh env before relaxing <code>SLEAP_PIN</code>.</p>
+<h3 id="sam3-training-sidecar">SAM3 training sidecar<a class="headerlink" href="#sam3-training-sidecar" title="Permanent link">&para;</a></h3>
+<p>Meta's <code>sam3</code> pins <code>numpy&lt;2</code>, and the sidecar pin list (<code>setuptools&lt;81</code>,
+<code>scipy&lt;1.14</code>, <code>opencv-python-headless&lt;4.12</code>, …) exists to hold that pin. Keep
+<code>pyproject.toml</code>'s <code>sam3-train</code> extra in sync with <code>TRAINING_PACKAGES</code> in
+<code>hydra_suite/training/sam3_lora/availability.py</code>. When bumping <code>SAM3_REF</code>,
+re-run a training smoke test on a CUDA box.</p>
+<h2 id="checklist">Checklist<a class="headerlink" href="#checklist" title="Permanent link">&para;</a></h2>
+<ul class="task-list">
+<li class="task-list-item"><label class="task-list-control"><input type="checkbox" disabled/><span class="task-list-indicator"></span></label> Pins regenerated with <code>tools/lock_constraints.py</code> (no hand edits)</li>
+<li class="task-list-item"><label class="task-list-control"><input type="checkbox" disabled/><span class="task-list-indicator"></span></label> <code>TORCH_VERSION</code>/<code>TORCHVISION_VERSION</code> bumped together, wheels exist for <code>cpu</code>/<code>cu128</code>/<code>cu130</code></li>
+<li class="task-list-item"><label class="task-list-control"><input type="checkbox" disabled/><span class="task-list-indicator"></span></label> Fresh env builds on MPS and CUDA; <code>hydra doctor</code> passes</li>
+<li class="task-list-item"><label class="task-list-control"><input type="checkbox" disabled/><span class="task-list-indicator"></span></label> <code>tools/equivalence/env_swap_gate.sh</code> is BYTE-IDENTICAL or BLAS-FLOOR on MPS and CUDA</li>
+<li class="task-list-item"><label class="task-list-control"><input type="checkbox" disabled/><span class="task-list-indicator"></span></label> <code>install-smoke</code> CI is green on Linux, macOS and Windows</li>
+<li class="task-list-item"><label class="task-list-control"><input type="checkbox" disabled/><span class="task-list-indicator"></span></label> Installation docs updated if user-facing behaviour changed</li>
+</ul>
 
 
 

@@ -936,6 +936,27 @@
   
   
     <li class="md-nav__item">
+      <a href="../../user-guide/sam-install-and-run/" class="md-nav__link">
+        
+  
+  <span class="md-ellipsis">
+    SAM2 and SAM3: Install and Run
+  </span>
+  
+
+      </a>
+    </li>
+  
+
+              
+            
+              
+                
+  
+  
+  
+  
+    <li class="md-nav__item">
       <a href="../../user-guide/detectkit-semantic-escalation/" class="md-nav__link">
         
   
@@ -2106,7 +2127,7 @@ and reused on subsequent runs.</p>
 <li>Format: TensorRT FP32 engine</li>
 <li>Precision: fp32 (numerically close to the PyTorch baseline but NOT bit-identical
   — kernel fusion reorders ops; see the Determinism note below)</li>
-<li>Trigger: <code>compute_runtime = "tensorrt"</code> in TrackerKit / ClassKit config</li>
+<li>Trigger: <code>runtime_tier = "gpu_fast"</code> on an NVIDIA (CUDA) host (resolves to the <code>tensorrt</code> backend)</li>
 <li>Artifact path: <code>&lt;model&gt;.engine</code> adjacent to the source <code>.pt</code></li>
 </ul>
 <h3 id="apple-silicon-coreml">Apple Silicon → CoreML<a class="headerlink" href="#apple-silicon-coreml" title="Permanent link">&para;</a></h3>
@@ -2116,7 +2137,7 @@ classifier families to CoreML <code>.mlpackage</code> bundles on first run.</p>
 <li>Format: CoreML <code>.mlpackage</code> (directory bundle)</li>
 <li>Compute units: <code>ALL</code> (Neural Engine + CPU + GPU)</li>
 <li>Minimum deployment target: macOS 13</li>
-<li>Trigger: <code>compute_runtime = "coreml"</code> in TrackerKit / ClassKit config</li>
+<li>Trigger: <code>runtime_tier = "gpu_fast"</code> on an Apple Silicon (MPS) host (resolves to the <code>coreml</code> backend)</li>
 <li>Artifact path: <code>&lt;model&gt;.mlpackage</code> adjacent to the source <code>.pt</code> / <code>.pth</code></li>
 </ul>
 <hr />
