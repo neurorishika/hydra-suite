@@ -765,6 +765,16 @@ class MainWindow(QMainWindow):
             main_window=self, config=self.config, parent=self
         )
         self.tabs.addTab(self._setup_panel, "Get Started")
+        # Keep the player beside the image it controls, independent of the
+        # selected configuration tab. Reparent the existing wired controls.
+        self._setup_panel.g_video_player.parentWidget().layout().removeWidget(
+            self._setup_panel.g_video_player
+        )
+        self._setup_panel.g_video_player.setParent(left_panel)
+        left_layout.insertWidget(
+            left_layout.indexOf(self.interaction_help) + 1,
+            self._setup_panel.g_video_player,
+        )
 
         # Tab 2: Detection (Image, Method, Params)
         from hydra_suite.trackerkit.gui.panels.detection_panel import DetectionPanel

@@ -4,7 +4,6 @@ from __future__ import annotations
 
 import json
 import os
-import sys
 from typing import TYPE_CHECKING
 
 from PySide6.QtCore import Qt, Signal
@@ -409,34 +408,36 @@ class SetupPanel(QWidget):
         # ============================================================
         # Video Player & Frame Range
         # ============================================================
-        self.g_video_player = QGroupBox("Preview")
+        self.g_video_player = QWidget()
         self._main_window._set_compact_section_widget(self.g_video_player)
         vl_player = QVBoxLayout(self.g_video_player)
-        vl_player.setSpacing(6)
-        vl_player.addWidget(
-            self._main_window._create_help_label(
-                "Preview video and select frame range for tracking. Use the slider to seek through the video."
-            )
+        vl_player.setContentsMargins(4, 0, 4, 2)
+        vl_player.setSpacing(2)
+        self.g_video_player.setToolTip(
+            "Seek, play, and choose the frame range for tracking."
         )
 
         # Video info label
         self.lbl_video_info = QLabel("No video loaded")
-        self.lbl_video_info.setStyleSheet(
-            "color: #6a6a6a; font-size: 10px; font-style: italic; padding: 5px;"
-        )
-        vl_player.addWidget(self.lbl_video_info)
+        self.lbl_video_info.setStyleSheet("color: #9a9a9a; font-size: 10px;")
 
         # Timeline slider
-        timeline_layout = QVBoxLayout()
+        status_row = QHBoxLayout()
+        status_row.setSpacing(8)
+        status_row.addWidget(self.lbl_video_info)
         self.lbl_current_frame = QLabel("Frame: -")
         self.lbl_current_frame.setStyleSheet("font-size: 10px; color: #9a9a9a;")
-        timeline_layout.addWidget(self.lbl_current_frame)
+        status_row.addStretch(1)
+        status_row.addWidget(self.lbl_current_frame)
+        vl_player.addLayout(status_row)
 
         self.slider_timeline = QSlider(Qt.Horizontal)
         self.slider_timeline.setMinimum(0)
         self.slider_timeline.setMaximum(0)
         self.slider_timeline.setValue(0)
-        self.slider_timeline.setTracking(not sys.platform.startswith("linux"))
+        # Decoding every intermediate frame blocks the GUI on compressed video.
+        # Show the target frame number while dragging, then decode on release.
+        self.slider_timeline.setTracking(False)
         self.slider_timeline.setEnabled(False)
         self.slider_timeline.setToolTip("Seek through video frames")
         self.slider_timeline.valueChanged.connect(
@@ -446,19 +447,18 @@ class SetupPanel(QWidget):
             self._main_window._on_timeline_pressed
         )
         self.slider_timeline.sliderMoved.connect(self._main_window._on_timeline_moved)
-        timeline_layout.addWidget(self.slider_timeline)
-        vl_player.addLayout(timeline_layout)
+        vl_player.addWidget(self.slider_timeline)
 
         # Playback controls
         controls_layout = QHBoxLayout()
-        controls_layout.setSpacing(6)
+        controls_layout.setSpacing(4)
 
         self.btn_first_frame = QPushButton("⏮")
         self.btn_first_frame.setEnabled(False)
         self.btn_first_frame.clicked.connect(self._main_window._goto_first_frame)
         self.btn_first_frame.setToolTip("Go to first frame")
         self.btn_first_frame.setObjectName("SecondaryBtn")
-        self.btn_first_frame.setFixedWidth(44)
+        self.btn_first_frame.setFixedWidth(32)
         controls_layout.addWidget(self.btn_first_frame)
 
         self.btn_prev_frame = QPushButton("◀")
@@ -466,7 +466,7 @@ class SetupPanel(QWidget):
         self.btn_prev_frame.clicked.connect(self._main_window._goto_prev_frame)
         self.btn_prev_frame.setToolTip("Previous frame")
         self.btn_prev_frame.setObjectName("SecondaryBtn")
-        self.btn_prev_frame.setFixedWidth(44)
+        self.btn_prev_frame.setFixedWidth(32)
         controls_layout.addWidget(self.btn_prev_frame)
 
         self.btn_play_pause = QPushButton("▶ Play")
@@ -480,7 +480,7 @@ class SetupPanel(QWidget):
         self.btn_next_frame.clicked.connect(self._main_window._goto_next_frame)
         self.btn_next_frame.setToolTip("Next frame")
         self.btn_next_frame.setObjectName("SecondaryBtn")
-        self.btn_next_frame.setFixedWidth(44)
+        self.btn_next_frame.setFixedWidth(32)
         controls_layout.addWidget(self.btn_next_frame)
 
         self.btn_last_frame = QPushButton("⏭")
@@ -488,10 +488,8 @@ class SetupPanel(QWidget):
         self.btn_last_frame.clicked.connect(self._main_window._goto_last_frame)
         self.btn_last_frame.setToolTip("Go to last frame")
         self.btn_last_frame.setObjectName("SecondaryBtn")
-        self.btn_last_frame.setFixedWidth(44)
+        self.btn_last_frame.setFixedWidth(32)
         controls_layout.addWidget(self.btn_last_frame)
-
-        controls_layout.addSpacing(4)
 
         self.btn_random_seek = QPushButton("🎲 Random")
         self.btn_random_seek.setEnabled(False)
@@ -500,33 +498,19 @@ class SetupPanel(QWidget):
         self.btn_random_seek.setObjectName("SecondaryBtn")
         controls_layout.addWidget(self.btn_random_seek)
 
-        controls_layout.addSpacing(8)
-
         # Playback speed control
-        speed_label = QLabel("Speed")
-        speed_label.setStyleSheet("color: #8a8a8a;")
-        controls_layout.addWidget(speed_label)
         self.combo_playback_speed = QComboBox()
         self.combo_playback_speed.addItems(["0.25x", "0.5x", "1x", "2x", "4x"])
         self.combo_playback_speed.setCurrentText("1x")
         self.combo_playback_speed.setEnabled(False)
         self.combo_playback_speed.setToolTip("Playback speed")
-        self.combo_playback_speed.setMaximumWidth(84)
+        self.combo_playback_speed.setFixedWidth(65)
         controls_layout.addWidget(self.combo_playback_speed)
         controls_layout.addStretch(1)
 
-        vl_player.addLayout(controls_layout)
-
-        vl_player.addWidget(self._main_window._make_setup_divider())
-
-        # Frame range selection
-        range_label = QLabel("Frame range")
-        range_label.setStyleSheet("font-weight: 600; color: #d0d0d0;")
-        vl_player.addWidget(range_label)
-
-        # Compact single row: Start [spinbox] [↕] · End [spinbox] [↕] [Reset]
+        # Keep the tracking range beside playback, where it stays visible.
         _range_row = QHBoxLayout()
-        _range_row.setSpacing(6)
+        _range_row.setSpacing(4)
         _range_row.addWidget(QLabel("Start:"))
         self.spin_start_frame = QSpinBox()
         self.spin_start_frame.setMinimum(0)
@@ -538,16 +522,16 @@ class SetupPanel(QWidget):
         self.spin_start_frame.valueChanged.connect(
             self._main_window._on_frame_range_changed
         )
-        _range_row.addWidget(self.spin_start_frame, 1)
+        self.spin_start_frame.setFixedWidth(82)
+        _range_row.addWidget(self.spin_start_frame)
         self.btn_set_start_current = QPushButton("↕")
         self.btn_set_start_current.setEnabled(False)
-        self.btn_set_start_current.setMaximumWidth(30)
+        self.btn_set_start_current.setFixedWidth(26)
         self.btn_set_start_current.clicked.connect(
             self._main_window._set_start_to_current
         )
         self.btn_set_start_current.setToolTip("Set start frame to current frame")
         _range_row.addWidget(self.btn_set_start_current)
-        _range_row.addSpacing(10)
         _range_row.addWidget(QLabel("End:"))
         self.spin_end_frame = QSpinBox()
         self.spin_end_frame.setMinimum(0)
@@ -559,28 +543,27 @@ class SetupPanel(QWidget):
         self.spin_end_frame.valueChanged.connect(
             self._main_window._on_frame_range_changed
         )
-        _range_row.addWidget(self.spin_end_frame, 1)
+        self.spin_end_frame.setFixedWidth(82)
+        _range_row.addWidget(self.spin_end_frame)
         self.btn_set_end_current = QPushButton("↕")
         self.btn_set_end_current.setEnabled(False)
-        self.btn_set_end_current.setMaximumWidth(30)
+        self.btn_set_end_current.setFixedWidth(26)
         self.btn_set_end_current.clicked.connect(self._main_window._set_end_to_current)
         self.btn_set_end_current.setToolTip("Set end frame to current frame")
         _range_row.addWidget(self.btn_set_end_current)
-        _range_row.addSpacing(10)
         self.btn_reset_range = QPushButton("Reset")
         self.btn_reset_range.setEnabled(False)
         self.btn_reset_range.clicked.connect(self._main_window._reset_frame_range)
         self.btn_reset_range.setToolTip("Reset to track entire video")
         self.btn_reset_range.setObjectName("SecondaryBtn")
         _range_row.addWidget(self.btn_reset_range)
-        vl_player.addLayout(_range_row)
+        controls_layout.addLayout(_range_row)
+        vl_player.addLayout(controls_layout)
 
         # Range info
         self.lbl_range_info = QLabel()
-        self.lbl_range_info.setStyleSheet(
-            "color: #6a6a6a; font-size: 10px; font-style: italic; padding: 5px;"
-        )
-        vl_player.addWidget(self.lbl_range_info)
+        self.lbl_range_info.setStyleSheet("color: #9a9a9a; font-size: 10px;")
+        status_row.insertWidget(1, self.lbl_range_info)
         form.addWidget(self.g_video_player)
 
         # Initially hide video player (shown when video is loaded)

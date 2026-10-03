@@ -1,7 +1,6 @@
 """Smoke tests: each panel instantiates and exposes expected key widgets."""
 
 import os
-import sys
 
 import pytest
 
@@ -82,9 +81,7 @@ def test_setup_panel_wired_in_main_window(main_window):
     assert hasattr(main_window._setup_panel, "btn_file")
     assert not main_window._setup_panel.spin_start_frame.keyboardTracking()
     assert not main_window._setup_panel.spin_end_frame.keyboardTracking()
-    assert main_window._setup_panel.slider_timeline.hasTracking() is (
-        not sys.platform.startswith("linux")
-    )
+    assert not main_window._setup_panel.slider_timeline.hasTracking()
     assert main_window._setup_panel.spin_traj_hist.minimum() == -1
     assert hasattr(main_window._setup_panel, "chk_apply_tuned_inference")
     assert hasattr(main_window._setup_panel, "btn_calibrate_inference")
