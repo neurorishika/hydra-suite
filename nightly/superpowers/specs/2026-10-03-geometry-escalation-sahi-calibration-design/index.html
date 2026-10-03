@@ -10,28 +10,24 @@
       
       
       
-        <link rel="canonical" href="https://neurorishika.github.io/hydra-suite/nightly/user-guide/detectkit/">
+        <link rel="canonical" href="https://neurorishika.github.io/hydra-suite/nightly/superpowers/specs/2026-10-03-geometry-escalation-sahi-calibration-design/">
       
       
-        <link rel="prev" href="../classkit/">
       
       
-        <link rel="next" href="../../runbooks/detectkit-headless-training/">
-      
-      
-      <link rel="icon" href="../../assets/images/favicon.png">
+      <link rel="icon" href="../../../assets/images/favicon.png">
       <meta name="generator" content="mkdocs-1.6.1, mkdocs-material-9.5.43">
     
     
       
-        <title>DetectKit - HYDRA Suite Docs</title>
+        <title>Geometry-escalation SAHI + split calibration/escalation source selection - HYDRA Suite Docs</title>
       
     
     
-      <link rel="stylesheet" href="../../assets/stylesheets/main.0253249f.min.css">
+      <link rel="stylesheet" href="../../../assets/stylesheets/main.0253249f.min.css">
       
         
-        <link rel="stylesheet" href="../../assets/stylesheets/palette.06af60db.min.css">
+        <link rel="stylesheet" href="../../../assets/stylesheets/palette.06af60db.min.css">
       
       
 
@@ -50,9 +46,9 @@
       
     
     
-      <link rel="stylesheet" href="../../assets/_mkdocstrings.css">
+      <link rel="stylesheet" href="../../../assets/_mkdocstrings.css">
     
-    <script>__md_scope=new URL("../..",location),__md_hash=e=>[...e].reduce(((e,_)=>(e<<5)-e+_.charCodeAt(0)),0),__md_get=(e,_=localStorage,t=__md_scope)=>JSON.parse(_.getItem(t.pathname+"."+e)),__md_set=(e,_,t=localStorage,a=__md_scope)=>{try{t.setItem(a.pathname+"."+e,JSON.stringify(_))}catch(e){}}</script>
+    <script>__md_scope=new URL("../../..",location),__md_hash=e=>[...e].reduce(((e,_)=>(e<<5)-e+_.charCodeAt(0)),0),__md_get=(e,_=localStorage,t=__md_scope)=>JSON.parse(_.getItem(t.pathname+"."+e)),__md_set=(e,_,t=localStorage,a=__md_scope)=>{try{t.setItem(a.pathname+"."+e,JSON.stringify(_))}catch(e){}}</script>
     
       
 
@@ -78,7 +74,7 @@
     <div data-md-component="skip">
       
         
-        <a href="#detectkit" class="md-skip">
+        <a href="#geometry-escalation-sahi-split-calibrationescalation-source-selection" class="md-skip">
           Skip to content
         </a>
       
@@ -96,7 +92,7 @@
 
 <header class="md-header" data-md-component="header">
   <nav class="md-header__inner md-grid" aria-label="Header">
-    <a href="../.." title="HYDRA Suite Docs" class="md-header__button md-logo" aria-label="HYDRA Suite Docs" data-md-component="logo">
+    <a href="../../.." title="HYDRA Suite Docs" class="md-header__button md-logo" aria-label="HYDRA Suite Docs" data-md-component="logo">
       
   
   <svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 24 24"><path d="M12 8a3 3 0 0 0 3-3 3 3 0 0 0-3-3 3 3 0 0 0-3 3 3 3 0 0 0 3 3m0 3.54C9.64 9.35 6.5 8 3 8v11c3.5 0 6.64 1.35 9 3.54 2.36-2.19 5.5-3.54 9-3.54V8c-3.5 0-6.64 1.35-9 3.54"/></svg>
@@ -116,7 +112,7 @@
         <div class="md-header__topic" data-md-component="header-topic">
           <span class="md-ellipsis">
             
-              DetectKit
+              Geometry-escalation SAHI + split calibration/escalation source selection
             
           </span>
         </div>
@@ -225,7 +221,7 @@
   
   
     <li class="md-tabs__item">
-      <a href="../.." class="md-tabs__link">
+      <a href="../../.." class="md-tabs__link">
         
   
     
@@ -244,7 +240,7 @@
     
     
       <li class="md-tabs__item">
-        <a href="../../getting-started/installation/" class="md-tabs__link">
+        <a href="../../../getting-started/installation/" class="md-tabs__link">
           
   
   Getting Started
@@ -258,13 +254,11 @@
         
   
   
-    
-  
   
     
     
-      <li class="md-tabs__item md-tabs__item--active">
-        <a href="../overview/" class="md-tabs__link">
+      <li class="md-tabs__item">
+        <a href="../../../user-guide/overview/" class="md-tabs__link">
           
   
   User Guide
@@ -282,7 +276,7 @@
     
     
       <li class="md-tabs__item">
-        <a href="../../developer-guide/architecture/" class="md-tabs__link">
+        <a href="../../../developer-guide/architecture/" class="md-tabs__link">
           
   
   Developer Guide
@@ -300,7 +294,7 @@
     
     
       <li class="md-tabs__item">
-        <a href="../../reference/api-index/" class="md-tabs__link">
+        <a href="../../../reference/api-index/" class="md-tabs__link">
           
   
   Reference
@@ -333,7 +327,7 @@
 
 <nav class="md-nav md-nav--primary md-nav--lifted" aria-label="Navigation" data-md-level="0">
   <label class="md-nav__title" for="__drawer">
-    <a href="../.." title="HYDRA Suite Docs" class="md-nav__button md-logo" aria-label="HYDRA Suite Docs" data-md-component="logo">
+    <a href="../../.." title="HYDRA Suite Docs" class="md-nav__button md-logo" aria-label="HYDRA Suite Docs" data-md-component="logo">
       
   
   <svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 24 24"><path d="M12 8a3 3 0 0 0 3-3 3 3 0 0 0-3-3 3 3 0 0 0-3 3 3 3 0 0 0 3 3m0 3.54C9.64 9.35 6.5 8 3 8v11c3.5 0 6.64 1.35 9 3.54 2.36-2.19 5.5-3.54 9-3.54V8c-3.5 0-6.64 1.35-9 3.54"/></svg>
@@ -363,7 +357,7 @@
   
   
     <li class="md-nav__item">
-      <a href="../.." class="md-nav__link">
+      <a href="../../.." class="md-nav__link">
         
   
   <span class="md-ellipsis">
@@ -425,7 +419,7 @@
   
   
     <li class="md-nav__item">
-      <a href="../../getting-started/installation/" class="md-nav__link">
+      <a href="../../../getting-started/installation/" class="md-nav__link">
         
   
   <span class="md-ellipsis">
@@ -446,7 +440,7 @@
   
   
     <li class="md-nav__item">
-      <a href="../../getting-started/environments/" class="md-nav__link">
+      <a href="../../../getting-started/environments/" class="md-nav__link">
         
   
   <span class="md-ellipsis">
@@ -467,7 +461,7 @@
   
   
     <li class="md-nav__item">
-      <a href="../../getting-started/integrations/" class="md-nav__link">
+      <a href="../../../getting-started/integrations/" class="md-nav__link">
         
   
   <span class="md-ellipsis">
@@ -488,7 +482,7 @@
   
   
     <li class="md-nav__item">
-      <a href="../../getting-started/quickstart-hydra/" class="md-nav__link">
+      <a href="../../../getting-started/quickstart-hydra/" class="md-nav__link">
         
   
   <span class="md-ellipsis">
@@ -509,7 +503,7 @@
   
   
     <li class="md-nav__item">
-      <a href="../../getting-started/quickstart-posekit/" class="md-nav__link">
+      <a href="../../../getting-started/quickstart-posekit/" class="md-nav__link">
         
   
   <span class="md-ellipsis">
@@ -530,7 +524,7 @@
   
   
     <li class="md-nav__item">
-      <a href="../../getting-started/platforms/" class="md-nav__link">
+      <a href="../../../getting-started/platforms/" class="md-nav__link">
         
   
   <span class="md-ellipsis">
@@ -555,30 +549,27 @@
       
   
   
-    
   
   
-  
     
     
     
-      
-        
-        
       
       
         
       
     
     
-    <li class="md-nav__item md-nav__item--active md-nav__item--section md-nav__item--nested">
+    <li class="md-nav__item md-nav__item--nested">
       
         
-        
-        <input class="md-nav__toggle md-toggle " type="checkbox" id="__nav_3" checked>
         
           
-          <label class="md-nav__link" for="__nav_3" id="__nav_3_label" tabindex="">
+        
+        <input class="md-nav__toggle md-toggle md-toggle--indeterminate" type="checkbox" id="__nav_3" >
+        
+          
+          <label class="md-nav__link" for="__nav_3" id="__nav_3_label" tabindex="0">
             
   
   <span class="md-ellipsis">
@@ -589,7 +580,7 @@
             <span class="md-nav__icon md-icon"></span>
           </label>
         
-        <nav class="md-nav" data-md-level="1" aria-labelledby="__nav_3_label" aria-expanded="true">
+        <nav class="md-nav" data-md-level="1" aria-labelledby="__nav_3_label" aria-expanded="false">
           <label class="md-nav__title" for="__nav_3">
             <span class="md-nav__icon md-icon"></span>
             User Guide
@@ -603,7 +594,7 @@
   
   
     <li class="md-nav__item">
-      <a href="../overview/" class="md-nav__link">
+      <a href="../../../user-guide/overview/" class="md-nav__link">
         
   
   <span class="md-ellipsis">
@@ -624,7 +615,7 @@
   
   
     <li class="md-nav__item">
-      <a href="../workflow/" class="md-nav__link">
+      <a href="../../../user-guide/workflow/" class="md-nav__link">
         
   
   <span class="md-ellipsis">
@@ -645,7 +636,7 @@
   
   
     <li class="md-nav__item">
-      <a href="../trackerkit-cli/" class="md-nav__link">
+      <a href="../../../user-guide/trackerkit-cli/" class="md-nav__link">
         
   
   <span class="md-ellipsis">
@@ -666,7 +657,7 @@
   
   
     <li class="md-nav__item">
-      <a href="../trackerkit-jobs/" class="md-nav__link">
+      <a href="../../../user-guide/trackerkit-jobs/" class="md-nav__link">
         
   
   <span class="md-ellipsis">
@@ -687,7 +678,7 @@
   
   
     <li class="md-nav__item">
-      <a href="../detection-modes/" class="md-nav__link">
+      <a href="../../../user-guide/detection-modes/" class="md-nav__link">
         
   
   <span class="md-ellipsis">
@@ -708,7 +699,7 @@
   
   
     <li class="md-nav__item">
-      <a href="../tracking-and-merging/" class="md-nav__link">
+      <a href="../../../user-guide/tracking-and-merging/" class="md-nav__link">
         
   
   <span class="md-ellipsis">
@@ -729,7 +720,7 @@
   
   
     <li class="md-nav__item">
-      <a href="../post-processing/" class="md-nav__link">
+      <a href="../../../user-guide/post-processing/" class="md-nav__link">
         
   
   <span class="md-ellipsis">
@@ -750,7 +741,7 @@
   
   
     <li class="md-nav__item">
-      <a href="../configuration-reference/" class="md-nav__link">
+      <a href="../../../user-guide/configuration-reference/" class="md-nav__link">
         
   
   <span class="md-ellipsis">
@@ -771,7 +762,7 @@
   
   
     <li class="md-nav__item">
-      <a href="../compute-runtimes/" class="md-nav__link">
+      <a href="../../../user-guide/compute-runtimes/" class="md-nav__link">
         
   
   <span class="md-ellipsis">
@@ -792,7 +783,7 @@
   
   
     <li class="md-nav__item">
-      <a href="../outputs-and-csv-schema/" class="md-nav__link">
+      <a href="../../../user-guide/outputs-and-csv-schema/" class="md-nav__link">
         
   
   <span class="md-ellipsis">
@@ -813,7 +804,7 @@
   
   
     <li class="md-nav__item">
-      <a href="../dataset-generation/" class="md-nav__link">
+      <a href="../../../user-guide/dataset-generation/" class="md-nav__link">
         
   
   <span class="md-ellipsis">
@@ -834,7 +825,7 @@
   
   
     <li class="md-nav__item">
-      <a href="../individual-analysis/" class="md-nav__link">
+      <a href="../../../user-guide/individual-analysis/" class="md-nav__link">
         
   
   <span class="md-ellipsis">
@@ -855,7 +846,7 @@
   
   
     <li class="md-nav__item">
-      <a href="../posekit/" class="md-nav__link">
+      <a href="../../../user-guide/posekit/" class="md-nav__link">
         
   
   <span class="md-ellipsis">
@@ -876,7 +867,7 @@
   
   
     <li class="md-nav__item">
-      <a href="../classkit/" class="md-nav__link">
+      <a href="../../../user-guide/classkit/" class="md-nav__link">
         
   
   <span class="md-ellipsis">
@@ -894,30 +885,10 @@
                 
   
   
-    
   
   
-  
-    <li class="md-nav__item md-nav__item--active">
-      
-      <input class="md-nav__toggle md-toggle" type="checkbox" id="__toc">
-      
-      
-        
-      
-      
-        <label class="md-nav__link md-nav__link--active" for="__toc">
-          
-  
-  <span class="md-ellipsis">
-    DetectKit
-  </span>
-  
-
-          <span class="md-nav__icon md-icon"></span>
-        </label>
-      
-      <a href="./" class="md-nav__link md-nav__link--active">
+    <li class="md-nav__item">
+      <a href="../../../user-guide/detectkit/" class="md-nav__link">
         
   
   <span class="md-ellipsis">
@@ -926,104 +897,6 @@
   
 
       </a>
-      
-        
-
-<nav class="md-nav md-nav--secondary" aria-label="Table of contents">
-  
-  
-  
-    
-  
-  
-    <label class="md-nav__title" for="__toc">
-      <span class="md-nav__icon md-icon"></span>
-      Table of contents
-    </label>
-    <ul class="md-nav__list" data-md-component="toc" data-md-scrollfix>
-      
-        <li class="md-nav__item">
-  <a href="#purpose" class="md-nav__link">
-    <span class="md-ellipsis">
-      Purpose
-    </span>
-  </a>
-  
-</li>
-      
-        <li class="md-nav__item">
-  <a href="#launch" class="md-nav__link">
-    <span class="md-ellipsis">
-      Launch
-    </span>
-  </a>
-  
-</li>
-      
-        <li class="md-nav__item">
-  <a href="#workflow" class="md-nav__link">
-    <span class="md-ellipsis">
-      Workflow
-    </span>
-  </a>
-  
-</li>
-      
-        <li class="md-nav__item">
-  <a href="#key-features" class="md-nav__link">
-    <span class="md-ellipsis">
-      Key Features
-    </span>
-  </a>
-  
-    <nav class="md-nav" aria-label="Key Features">
-      <ul class="md-nav__list">
-        
-          <li class="md-nav__item">
-  <a href="#import-sources-from-another-project" class="md-nav__link">
-    <span class="md-ellipsis">
-      Import sources from another project
-    </span>
-  </a>
-  
-</li>
-        
-          <li class="md-nav__item">
-  <a href="#evaluate-trained-models" class="md-nav__link">
-    <span class="md-ellipsis">
-      Evaluate trained models
-    </span>
-  </a>
-  
-</li>
-        
-          <li class="md-nav__item">
-  <a href="#dataset-panel" class="md-nav__link">
-    <span class="md-ellipsis">
-      Dataset panel
-    </span>
-  </a>
-  
-</li>
-        
-      </ul>
-    </nav>
-  
-</li>
-      
-        <li class="md-nav__item">
-  <a href="#sam2-and-sam3-escalation" class="md-nav__link">
-    <span class="md-ellipsis">
-      SAM2 and SAM3 escalation
-    </span>
-  </a>
-  
-</li>
-      
-    </ul>
-  
-</nav>
-      
     </li>
   
 
@@ -1036,7 +909,7 @@
   
   
     <li class="md-nav__item">
-      <a href="../../runbooks/detectkit-headless-training/" class="md-nav__link">
+      <a href="../../../runbooks/detectkit-headless-training/" class="md-nav__link">
         
   
   <span class="md-ellipsis">
@@ -1057,7 +930,7 @@
   
   
     <li class="md-nav__item">
-      <a href="../sam-install-and-run/" class="md-nav__link">
+      <a href="../../../user-guide/sam-install-and-run/" class="md-nav__link">
         
   
   <span class="md-ellipsis">
@@ -1078,7 +951,7 @@
   
   
     <li class="md-nav__item">
-      <a href="../detectkit-semantic-escalation/" class="md-nav__link">
+      <a href="../../../user-guide/detectkit-semantic-escalation/" class="md-nav__link">
         
   
   <span class="md-ellipsis">
@@ -1099,7 +972,7 @@
   
   
     <li class="md-nav__item">
-      <a href="../detectkit-sahi-calibration/" class="md-nav__link">
+      <a href="../../../user-guide/detectkit-sahi-calibration/" class="md-nav__link">
         
   
   <span class="md-ellipsis">
@@ -1120,7 +993,7 @@
   
   
     <li class="md-nav__item">
-      <a href="../filterkit/" class="md-nav__link">
+      <a href="../../../user-guide/filterkit/" class="md-nav__link">
         
   
   <span class="md-ellipsis">
@@ -1141,7 +1014,7 @@
   
   
     <li class="md-nav__item">
-      <a href="../refinekit/" class="md-nav__link">
+      <a href="../../../user-guide/refinekit/" class="md-nav__link">
         
   
   <span class="md-ellipsis">
@@ -1162,7 +1035,7 @@
   
   
     <li class="md-nav__item">
-      <a href="../troubleshooting/" class="md-nav__link">
+      <a href="../../../user-guide/troubleshooting/" class="md-nav__link">
         
   
   <span class="md-ellipsis">
@@ -1232,7 +1105,7 @@
   
   
     <li class="md-nav__item">
-      <a href="../../developer-guide/architecture/" class="md-nav__link">
+      <a href="../../../developer-guide/architecture/" class="md-nav__link">
         
   
   <span class="md-ellipsis">
@@ -1253,7 +1126,7 @@
   
   
     <li class="md-nav__item">
-      <a href="../../developer-guide/module-map/" class="md-nav__link">
+      <a href="../../../developer-guide/module-map/" class="md-nav__link">
         
   
   <span class="md-ellipsis">
@@ -1274,7 +1147,7 @@
   
   
     <li class="md-nav__item">
-      <a href="../../developer-guide/data-flow/" class="md-nav__link">
+      <a href="../../../developer-guide/data-flow/" class="md-nav__link">
         
   
   <span class="md-ellipsis">
@@ -1295,7 +1168,7 @@
   
   
     <li class="md-nav__item">
-      <a href="../../developer-guide/tracking-algorithm-deep-dive/" class="md-nav__link">
+      <a href="../../../developer-guide/tracking-algorithm-deep-dive/" class="md-nav__link">
         
   
   <span class="md-ellipsis">
@@ -1316,7 +1189,7 @@
   
   
     <li class="md-nav__item">
-      <a href="../../developer-guide/tracking-optimization/" class="md-nav__link">
+      <a href="../../../developer-guide/tracking-optimization/" class="md-nav__link">
         
   
   <span class="md-ellipsis">
@@ -1337,7 +1210,7 @@
   
   
     <li class="md-nav__item">
-      <a href="../../developer-guide/gpu-backends/" class="md-nav__link">
+      <a href="../../../developer-guide/gpu-backends/" class="md-nav__link">
         
   
   <span class="md-ellipsis">
@@ -1358,7 +1231,7 @@
   
   
     <li class="md-nav__item">
-      <a href="../../developer-guide/runtime-integration/" class="md-nav__link">
+      <a href="../../../developer-guide/runtime-integration/" class="md-nav__link">
         
   
   <span class="md-ellipsis">
@@ -1379,7 +1252,7 @@
   
   
     <li class="md-nav__item">
-      <a href="../../developer-guide/resource-containment/" class="md-nav__link">
+      <a href="../../../developer-guide/resource-containment/" class="md-nav__link">
         
   
   <span class="md-ellipsis">
@@ -1400,7 +1273,7 @@
   
   
     <li class="md-nav__item">
-      <a href="../../developer-guide/profiling/" class="md-nav__link">
+      <a href="../../../developer-guide/profiling/" class="md-nav__link">
         
   
   <span class="md-ellipsis">
@@ -1421,7 +1294,7 @@
   
   
     <li class="md-nav__item">
-      <a href="../../developer-guide/dependency-cuda-updates/" class="md-nav__link">
+      <a href="../../../developer-guide/dependency-cuda-updates/" class="md-nav__link">
         
   
   <span class="md-ellipsis">
@@ -1442,7 +1315,7 @@
   
   
     <li class="md-nav__item">
-      <a href="../../developer-guide/performance-tuning/" class="md-nav__link">
+      <a href="../../../developer-guide/performance-tuning/" class="md-nav__link">
         
   
   <span class="md-ellipsis">
@@ -1463,7 +1336,7 @@
   
   
     <li class="md-nav__item">
-      <a href="../../developer-guide/inference-fast-mode/" class="md-nav__link">
+      <a href="../../../developer-guide/inference-fast-mode/" class="md-nav__link">
         
   
   <span class="md-ellipsis">
@@ -1484,7 +1357,7 @@
   
   
     <li class="md-nav__item">
-      <a href="../../developer-guide/inference-autotuner/" class="md-nav__link">
+      <a href="../../../developer-guide/inference-autotuner/" class="md-nav__link">
         
   
   <span class="md-ellipsis">
@@ -1505,7 +1378,7 @@
   
   
     <li class="md-nav__item">
-      <a href="../../developer-guide/confidence-metrics/" class="md-nav__link">
+      <a href="../../../developer-guide/confidence-metrics/" class="md-nav__link">
         
   
   <span class="md-ellipsis">
@@ -1526,7 +1399,7 @@
   
   
     <li class="md-nav__item">
-      <a href="../../developer-guide/extending-detection/" class="md-nav__link">
+      <a href="../../../developer-guide/extending-detection/" class="md-nav__link">
         
   
   <span class="md-ellipsis">
@@ -1547,7 +1420,7 @@
   
   
     <li class="md-nav__item">
-      <a href="../../developer-guide/extending-identity/" class="md-nav__link">
+      <a href="../../../developer-guide/extending-identity/" class="md-nav__link">
         
   
   <span class="md-ellipsis">
@@ -1568,7 +1441,7 @@
   
   
     <li class="md-nav__item">
-      <a href="../../developer-guide/code-health/" class="md-nav__link">
+      <a href="../../../developer-guide/code-health/" class="md-nav__link">
         
   
   <span class="md-ellipsis">
@@ -1589,7 +1462,7 @@
   
   
     <li class="md-nav__item">
-      <a href="../../developer-guide/publishing/" class="md-nav__link">
+      <a href="../../../developer-guide/publishing/" class="md-nav__link">
         
   
   <span class="md-ellipsis">
@@ -1610,7 +1483,7 @@
   
   
     <li class="md-nav__item">
-      <a href="../../developer-guide/contributing/" class="md-nav__link">
+      <a href="../../../developer-guide/contributing/" class="md-nav__link">
         
   
   <span class="md-ellipsis">
@@ -1680,7 +1553,7 @@
   
   
     <li class="md-nav__item">
-      <a href="../../reference/api-index/" class="md-nav__link">
+      <a href="../../../reference/api-index/" class="md-nav__link">
         
   
   <span class="md-ellipsis">
@@ -1701,7 +1574,7 @@
   
   
     <li class="md-nav__item">
-      <a href="../../reference/ui-components-hydra/" class="md-nav__link">
+      <a href="../../../reference/ui-components-hydra/" class="md-nav__link">
         
   
   <span class="md-ellipsis">
@@ -1722,7 +1595,7 @@
   
   
     <li class="md-nav__item">
-      <a href="../../reference/ui-components-posekit/" class="md-nav__link">
+      <a href="../../../reference/ui-components-posekit/" class="md-nav__link">
         
   
   <span class="md-ellipsis">
@@ -1743,7 +1616,7 @@
   
   
     <li class="md-nav__item">
-      <a href="../../reference/api-app/" class="md-nav__link">
+      <a href="../../../reference/api-app/" class="md-nav__link">
         
   
   <span class="md-ellipsis">
@@ -1764,7 +1637,7 @@
   
   
     <li class="md-nav__item">
-      <a href="../../reference/api-core/" class="md-nav__link">
+      <a href="../../../reference/api-core/" class="md-nav__link">
         
   
   <span class="md-ellipsis">
@@ -1785,7 +1658,7 @@
   
   
     <li class="md-nav__item">
-      <a href="../../reference/api-data/" class="md-nav__link">
+      <a href="../../../reference/api-data/" class="md-nav__link">
         
   
   <span class="md-ellipsis">
@@ -1806,7 +1679,7 @@
   
   
     <li class="md-nav__item">
-      <a href="../../reference/api-gui/" class="md-nav__link">
+      <a href="../../../reference/api-gui/" class="md-nav__link">
         
   
   <span class="md-ellipsis">
@@ -1827,7 +1700,7 @@
   
   
     <li class="md-nav__item">
-      <a href="../../reference/api-widgets/" class="md-nav__link">
+      <a href="../../../reference/api-widgets/" class="md-nav__link">
         
   
   <span class="md-ellipsis">
@@ -1848,7 +1721,7 @@
   
   
     <li class="md-nav__item">
-      <a href="../../reference/api-posekit/" class="md-nav__link">
+      <a href="../../../reference/api-posekit/" class="md-nav__link">
         
   
   <span class="md-ellipsis">
@@ -1869,7 +1742,7 @@
   
   
     <li class="md-nav__item">
-      <a href="../../reference/api-utils/" class="md-nav__link">
+      <a href="../../../reference/api-utils/" class="md-nav__link">
         
   
   <span class="md-ellipsis">
@@ -1890,7 +1763,7 @@
   
   
     <li class="md-nav__item">
-      <a href="../../reference/cli-reference/" class="md-nav__link">
+      <a href="../../../reference/cli-reference/" class="md-nav__link">
         
   
   <span class="md-ellipsis">
@@ -1911,7 +1784,7 @@
   
   
     <li class="md-nav__item">
-      <a href="../../reference/technical-reference/" class="md-nav__link">
+      <a href="../../../reference/technical-reference/" class="md-nav__link">
         
   
   <span class="md-ellipsis">
@@ -1932,7 +1805,7 @@
   
   
     <li class="md-nav__item">
-      <a href="../../reference/changelog/" class="md-nav__link">
+      <a href="../../../reference/changelog/" class="md-nav__link">
         
   
   <span class="md-ellipsis">
@@ -1953,7 +1826,7 @@
   
   
     <li class="md-nav__item">
-      <a href="../../reference/faq/" class="md-nav__link">
+      <a href="../../../reference/faq/" class="md-nav__link">
         
   
   <span class="md-ellipsis">
@@ -2001,64 +1874,91 @@
     <ul class="md-nav__list" data-md-component="toc" data-md-scrollfix>
       
         <li class="md-nav__item">
-  <a href="#purpose" class="md-nav__link">
+  <a href="#problem" class="md-nav__link">
     <span class="md-ellipsis">
-      Purpose
+      Problem
     </span>
   </a>
   
 </li>
       
         <li class="md-nav__item">
-  <a href="#launch" class="md-nav__link">
+  <a href="#decisions-agreed-with-the-user" class="md-nav__link">
     <span class="md-ellipsis">
-      Launch
+      Decisions (agreed with the user)
     </span>
   </a>
   
 </li>
       
         <li class="md-nav__item">
-  <a href="#workflow" class="md-nav__link">
+  <a href="#design" class="md-nav__link">
     <span class="md-ellipsis">
-      Workflow
+      Design
     </span>
   </a>
   
-</li>
-      
-        <li class="md-nav__item">
-  <a href="#key-features" class="md-nav__link">
-    <span class="md-ellipsis">
-      Key Features
-    </span>
-  </a>
-  
-    <nav class="md-nav" aria-label="Key Features">
+    <nav class="md-nav" aria-label="Design">
       <ul class="md-nav__list">
         
           <li class="md-nav__item">
-  <a href="#import-sources-from-another-project" class="md-nav__link">
+  <a href="#1-shared-tiling-settings" class="md-nav__link">
     <span class="md-ellipsis">
-      Import sources from another project
+      1. Shared tiling settings
     </span>
   </a>
   
 </li>
         
           <li class="md-nav__item">
-  <a href="#evaluate-trained-models" class="md-nav__link">
+  <a href="#2-sam2-owner-tile-execution-coreinferencesam2tilingpy-qt-free" class="md-nav__link">
     <span class="md-ellipsis">
-      Evaluate trained models
+      2. SAM2 owner-tile execution — core/inference/sam2/tiling.py (Qt-free)
     </span>
   </a>
   
 </li>
         
           <li class="md-nav__item">
-  <a href="#dataset-panel" class="md-nav__link">
+  <a href="#3-neutral-home-for-shared-calibration-helpers" class="md-nav__link">
     <span class="md-ellipsis">
-      Dataset panel
+      3. Neutral home for shared calibration helpers
+    </span>
+  </a>
+  
+</li>
+        
+          <li class="md-nav__item">
+  <a href="#4-geometry-calibration-coreinferencesam2calibrationpy-qt-free" class="md-nav__link">
+    <span class="md-ellipsis">
+      4. Geometry calibration — core/inference/sam2/calibration.py (Qt-free)
+    </span>
+  </a>
+  
+</li>
+        
+          <li class="md-nav__item">
+  <a href="#5-persistence" class="md-nav__link">
+    <span class="md-ellipsis">
+      5. Persistence
+    </span>
+  </a>
+  
+</li>
+        
+          <li class="md-nav__item">
+  <a href="#6-shared-dialog-layout-calibrationsourceselector" class="md-nav__link">
+    <span class="md-ellipsis">
+      6. Shared dialog layout — CalibrationSourceSelector
+    </span>
+  </a>
+  
+</li>
+        
+          <li class="md-nav__item">
+  <a href="#7-out-of-scope" class="md-nav__link">
+    <span class="md-ellipsis">
+      7. Out of scope
     </span>
   </a>
   
@@ -2070,9 +1970,18 @@
 </li>
       
         <li class="md-nav__item">
-  <a href="#sam2-and-sam3-escalation" class="md-nav__link">
+  <a href="#error-handling" class="md-nav__link">
     <span class="md-ellipsis">
-      SAM2 and SAM3 escalation
+      Error handling
+    </span>
+  </a>
+  
+</li>
+      
+        <li class="md-nav__item">
+  <a href="#testing" class="md-nav__link">
+    <span class="md-ellipsis">
+      Testing
     </span>
   </a>
   
@@ -2093,7 +2002,7 @@
                   
 
   
-    <a href="https://github.com/neurorishika/hydra-suite/edit/main/docs/user-guide/detectkit.md" title="Edit this page" class="md-content__button md-icon">
+    <a href="https://github.com/neurorishika/hydra-suite/edit/main/docs/superpowers/specs/2026-10-03-geometry-escalation-sahi-calibration-design.md" title="Edit this page" class="md-content__button md-icon">
       
       <svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 24 24"><path d="M10 20H6V4h7v5h5v3.1l2-2V8l-6-6H6c-1.1 0-2 .9-2 2v16c0 1.1.9 2 2 2h4zm10.2-7c.1 0 .3.1.4.2l1.3 1.3c.2.2.2.6 0 .8l-1 1-2.1-2.1 1-1c.1-.1.2-.2.4-.2m0 3.9L14.1 23H12v-2.1l6.1-6.1z"/></svg>
     </a>
@@ -2101,76 +2010,199 @@
   
 
 
-<h1 id="detectkit">DetectKit<a class="headerlink" href="#detectkit" title="Permanent link">&para;</a></h1>
-<p>DetectKit is the detection model training tool, launched via <code>detectkit</code>.</p>
-<h2 id="purpose">Purpose<a class="headerlink" href="#purpose" title="Permanent link">&para;</a></h2>
-<p>Train, evaluate, and manage YOLO detection models for use in TrackerKit.</p>
-<h2 id="launch">Launch<a class="headerlink" href="#launch" title="Permanent link">&para;</a></h2>
-<div class="language-bash highlight"><pre><span></span><code><span id="__span-0-1"><a id="__codelineno-0-1" name="__codelineno-0-1" href="#__codelineno-0-1"></a>detectkit
-</span></code></pre></div>
-<h2 id="workflow">Workflow<a class="headerlink" href="#workflow" title="Permanent link">&para;</a></h2>
+<h1 id="geometry-escalation-sahi-split-calibrationescalation-source-selection">Geometry-escalation SAHI + split calibration/escalation source selection<a class="headerlink" href="#geometry-escalation-sahi-split-calibrationescalation-source-selection" title="Permanent link">&para;</a></h1>
+<p><strong>Status:</strong> Design — pending implementation plan
+<strong>Date:</strong> 2026-10-03</p>
+<h2 id="problem">Problem<a class="headerlink" href="#problem" title="Permanent link">&para;</a></h2>
+<p>DetectKit's semantic escalation (SAM3) tiles frames (SAHI) and calibrates the
+tile fraction against the user's labelled frames. Geometry escalation (SAM2,
+<code>detectkit/jobs/sam2_escalation.py</code>) does neither: it calls <code>set_image</code> on the
+whole frame, and <code>SAM2ImagePredictor</code> resizes that frame to 1024 px. On a
+4512² frame a ~50 px animal becomes a ~11 px box prompt, which is the main
+reason primed masks are poor or fall back to the OBB.</p>
+<p>Separately, the semantic dialog uses ONE source list for both calibration and
+escalation, and calibrates against labels at any geometry level. A box is not
+ground truth for a mask: calibration is only meaningful against polygons.</p>
+<h2 id="decisions-agreed-with-the-user">Decisions (agreed with the user)<a class="headerlink" href="#decisions-agreed-with-the-user" title="Permanent link">&para;</a></h2>
 <ol>
-<li>Curate detection training datasets from TrackerKit exports or external sources.</li>
-<li>Configure YOLO training parameters (epochs, batch size, image size).</li>
-<li>Launch training and monitor loss curves.</li>
-<li>Evaluate model performance on validation sets.</li>
+<li><strong>Unify at the tile-plan layer, not the collect/merge layer.</strong> SAM3 is
+   detect-then-merge (every tile runs, cross-seam duplicates merged,
+   confidence is an axis). SAM2 is prompt-per-known-box (nothing to find,
+   nothing to merge). Both share tile sizing/planning; SAM2 gets its own
+   owner-tile execution. Routing SAM2 through <code>collect_candidates</code> /
+   <code>merge_candidates</code> is rejected. Per-instance crop windows are rejected
+   (encoder cost scales with instance count; shares nothing).</li>
+<li><strong>Calibration needs real ground truth: polygon frames only — for BOTH
+   semantic and geometry.</strong> Box-only projects lose SAM3 calibration; that is
+   accepted (scoring a mask against a box was never ground truth).
+   Polygon sources are assumed user-reviewed; no provenance filtering.</li>
+<li><strong>Both dialogs get two source selectors on the left side:</strong> top =
+   "Calibrate on" (only sources with polygon frames), bottom = "Escalate"
+   (all sources). Each action reads its own list.</li>
+<li><strong>Uncalibrated geometry default = full frame</strong> (<code>tile_fraction=None</code>),
+   byte-identical to today. SAM2 must NOT borrow
+   <code>SEMANTIC_TILE_FRACTION_SEED</code> (<code>resolve_tile_px</code> documents that fractions
+   do not transfer between models).</li>
 </ol>
-<h2 id="key-features">Key Features<a class="headerlink" href="#key-features" title="Permanent link">&para;</a></h2>
+<h2 id="design">Design<a class="headerlink" href="#design" title="Permanent link">&para;</a></h2>
+<h3 id="1-shared-tiling-settings">1. Shared tiling settings<a class="headerlink" href="#1-shared-tiling-settings" title="Permanent link">&para;</a></h3>
+<p>New frozen dataclass <code>TilingSettings(reference_body_px, tile_fraction,
+tile_px, overlap)</code> in <code>core/inference/semantic/tiling.py</code> (re-homing to a
+neutral <code>core/inference/tiling.py</code> is a later, optional move). Embedded by
+<code>EscalationRequest</code> (default <code>tile_fraction=None</code>) and
+<code>SemanticEscalationRequest</code> (existing fields kept as properties/aliases so
+positional construction and the request/params/JSON round trip keep working).
+SAM3-only settings stay on the semantic request: <code>seam_margin_px</code>,
+<code>merge_iou</code>, <code>confidence</code>, <code>max_instances</code>, <code>area_*</code>.</p>
+<h3 id="2-sam2-owner-tile-execution-coreinferencesam2tilingpy-qt-free">2. SAM2 owner-tile execution — <code>core/inference/sam2/tiling.py</code> (Qt-free)<a class="headerlink" href="#2-sam2-owner-tile-execution-coreinferencesam2tilingpy-qt-free" title="Permanent link">&para;</a></h3>
+<div class="language-text highlight"><pre><span></span><code><span id="__span-0-1"><a id="__codelineno-0-1" name="__codelineno-0-1" href="#__codelineno-0-1"></a>assign_owner_tiles(boxes, plan) -&gt; (dict[tile_index, list[box_index]], unowned: list[box_index])
+</span><span id="__span-0-2"><a id="__codelineno-0-2" name="__codelineno-0-2" href="#__codelineno-0-2"></a>segment_frame(executor, image, boxes, plan) -&gt; list[(mask_frame_bool | None, iou)]
+</span></code></pre></div>
 <ul>
-<li>Dataset panel for assembling and inspecting training data</li>
-<li>Training panel with configurable hyperparameters</li>
-<li>Validation-set evaluation with precision, recall, mAP50, and mAP50-95</li>
-<li>Side-by-side comparison of completed training runs</li>
-<li>Integration with TrackerKit's dataset generation exports</li>
+<li>A box is owned by the tile that fully contains its AABB with the largest
+  minimum margin; ties → lowest tile index (deterministic).</li>
+<li><code>set_image</code> runs once per tile that owns ≥1 box; empty tiles are skipped.</li>
+<li>Prompts (box, positive centre, negative neighbour centres from
+  <code>build_prompts</code>) are offset into tile coordinates. Negative points that
+  fall outside the owner tile are dropped (SAM2 cannot use them).</li>
+<li>The returned tile mask is pasted into a frame-sized mask before the
+  existing <code>clip_mask_to_polygon</code> → <code>mask_to_contour</code> path, so staging,
+  fallback and class-id handling in <code>run_escalation</code> are unchanged.</li>
+<li><strong>Seam fallback:</strong> boxes no tile fully contains are segmented with ONE
+  lazy full-frame <code>set_image</code> for that frame (today's behaviour), counted in
+  a new <code>EscalationResult.seam_fallbacks</code>.</li>
+<li><code>full_frame_plan</code> (no tiling) yields one tile owning every box → identical
+  call sequence to today. This is the byte-identity guard.</li>
 </ul>
-<h3 id="import-sources-from-another-project">Import sources from another project<a class="headerlink" href="#import-sources-from-another-project" title="Permanent link">&para;</a></h3>
-<p>In the destination project, open <strong>Manage Sources</strong> and choose <strong>Import Project
-Sources…</strong>. Select the other DetectKit project folder. DetectKit checks every
-source, then copies its images and labels into the destination project. Sources
-already present are skipped. The two projects and their sources must use the
-same class names in the same order; missing datasets or unreviewed labels stop
-the import. Training history, models, and project settings are not copied.</p>
-<h3 id="evaluate-trained-models">Evaluate trained models<a class="headerlink" href="#evaluate-trained-models" title="Permanent link">&para;</a></h3>
-<p>Open <strong>Evaluate</strong> from the main toolbar or <strong>Evaluate…</strong> in the Dataset panel.
-DetectKit lists completed YOLO training runs that still have both their model
-artifact and derived dataset. Select one or more runs, then choose <strong>Evaluate
-Selected</strong> or <strong>Evaluate All Available</strong>.</p>
-<p>Each model is evaluated on the held-out <code>val</code> split recorded for that training
-run. Detection and OBB runs report box metrics; segmentation runs report mask
-metrics. Results include precision, recall, mAP50, mAP50-95, and measured
-inference time. Evaluation history is saved with the project so runs can be
-compared again after reopening it. SAM3 concept runs use a different evaluation
-stack and are shown as unavailable in this YOLO evaluator.</p>
-<h3 id="dataset-panel">Dataset panel<a class="headerlink" href="#dataset-panel" title="Permanent link">&para;</a></h3>
-<p>Dataset curation changes are recoverable. Removing selected images with
-<strong>Delete</strong> or <strong>Backspace</strong> moves the images and matching labels into the
-project's <code>artifacts/recovery/</code> folder. The frame-, source-, and whole-project
-<strong>Clear labels</strong> actions save exact copies there before truncating the working
-label files. This also protects linked sources that live outside the project:
-their recovery payload is owned by the project that initiated the change.</p>
-<p>Use <strong>Undo last dataset change</strong> or the platform Undo shortcut (Command-Z on
-macOS, Ctrl-Z elsewhere) to restore the newest operation. Undo will not
-overwrite an image recreated at the same path or labels edited after they were
-cleared; resolve that conflict manually and try again. Nested images are shown
-by their paths relative to the source's <code>images/</code> directory, with the absolute
-path available in the row tooltip.</p>
-<h2 id="sam2-and-sam3-escalation">SAM2 and SAM3 escalation<a class="headerlink" href="#sam2-and-sam3-escalation" title="Permanent link">&para;</a></h2>
-<p>The <strong>Escalation</strong> group in the Tools panel upgrades and extends labels with
-Segment Anything models. Both run on every device (CUDA, Apple MPS, CPU) and
-are installed by default:</p>
+<p><code>run_escalation</code> replaces its inline <code>set_image</code>/<code>segment</code> loop with
+<code>segment_frame</code>; tile plan resolved per frame via <code>resolve_tile_px</code> +
+<code>plan_for_frame</code>/<code>full_frame_plan</code>, exactly as the semantic job does.</p>
+<h3 id="3-neutral-home-for-shared-calibration-helpers">3. Neutral home for shared calibration helpers<a class="headerlink" href="#3-neutral-home-for-shared-calibration-helpers" title="Permanent link">&para;</a></h3>
+<p>Move <code>measure_median_body_px</code>, <code>labelled_frames_for</code>,
+<code>stratified_calibration_frames</code>, <code>has_labelled_frames</code>, <code>_label_path_for</code>
+from <code>jobs/semantic_escalation.py</code> to <code>detectkit/jobs/calibration_frames.py</code>;
+re-export from the old module (existing importers keep working).</p>
+<p>Add the polygon criterion there:
+- <code>has_polygon_frames(source) -&gt; bool</code> — label-FILE scan (no image decode):
+  true if <code>source.level == "polygon"</code> or any label line carries &gt; 8
+  coordinate values.
+- <code>labelled_frames_for(..., polygon_only=True)</code> — returns only polygon
+  records; frames with no polygon line are skipped. Used by both
+  calibrations.</p>
+<h3 id="4-geometry-calibration-coreinferencesam2calibrationpy-qt-free">4. Geometry calibration — <code>core/inference/sam2/calibration.py</code> (Qt-free)<a class="headerlink" href="#4-geometry-calibration-coreinferencesam2calibrationpy-qt-free" title="Permanent link">&para;</a></h3>
+<p>Per sampled polygon frame (from the "Calibrate on" list, via
+<code>stratified_calibration_frames(polygon_only=True)</code>):</p>
+<ol>
+<li>Derive the prompt from ground truth with <code>data/al/escalation.derive_down</code>
+   (polygon → OBB), i.e. exactly what a box source would supply.</li>
+<li>For each fraction in <code>candidate_tile_plans(frame_hw, reference_body_px)</code>
+   (full frame always included) run <code>segment_frame</code>, then the same
+   clip/contour step as escalation.</li>
+<li>Score: pairing is 1:1 by construction (one box in, one mask out), no
+   matcher. Per instance: <code>polygon_iou(contour, gt_polygon)</code>; contour <code>None</code>
+   counts as fallback.</li>
+</ol>
+<div class="language-text highlight"><pre><span></span><code><span id="__span-1-1"><a id="__codelineno-1-1" name="__codelineno-1-1" href="#__codelineno-1-1"></a>@dataclass(frozen=True)
+</span><span id="__span-1-2"><a id="__codelineno-1-2" name="__codelineno-1-2" href="#__codelineno-1-2"></a>class GeometryCalibrationPoint:
+</span><span id="__span-1-3"><a id="__codelineno-1-3" name="__codelineno-1-3" href="#__codelineno-1-3"></a>    tile_fraction: float | None
+</span><span id="__span-1-4"><a id="__codelineno-1-4" name="__codelineno-1-4" href="#__codelineno-1-4"></a>    tile_px: int | None
+</span><span id="__span-1-5"><a id="__codelineno-1-5" name="__codelineno-1-5" href="#__codelineno-1-5"></a>    owned_tiles_per_frame: float   # the real cost axis (empty tiles skipped)
+</span><span id="__span-1-6"><a id="__codelineno-1-6" name="__codelineno-1-6" href="#__codelineno-1-6"></a>    seconds_per_frame: float       # measured
+</span><span id="__span-1-7"><a id="__codelineno-1-7" name="__codelineno-1-7" href="#__codelineno-1-7"></a>    median_iou: float
+</span><span id="__span-1-8"><a id="__codelineno-1-8" name="__codelineno-1-8" href="#__codelineno-1-8"></a>    p10_iou: float
+</span><span id="__span-1-9"><a id="__codelineno-1-9" name="__codelineno-1-9" href="#__codelineno-1-9"></a>    fallback_rate: float
+</span><span id="__span-1-10"><a id="__codelineno-1-10" name="__codelineno-1-10" href="#__codelineno-1-10"></a>    seam_fallback_rate: float
+</span><span id="__span-1-11"><a id="__codelineno-1-11" name="__codelineno-1-11" href="#__codelineno-1-11"></a>    n_instances: int
+</span></code></pre></div>
+<p><code>recommend_geometry(points)</code>: eligibility filters <code>n_instances ≥ MIN</code>,
+<code>median_iou ≥ IOU_FLOOR</code>, <code>fallback_rate ≤ FALLBACK_CEIL</code>; among eligible,
+fewest <code>owned_tiles_per_frame</code>, ties → higher <code>median_iou</code>. Refusal returns a
+reason string, same contract as semantic <code>recommend</code>. <strong><code>IOU_FLOOR</code> and
+<code>FALLBACK_CEIL</code> are set from one measurement on real polygon sources during
+implementation</strong>, not invented here; the measurement is recorded alongside.</p>
+<p>Worker: <code>Sam2CalibrationWorker(BaseWorker)</code> in <code>detectkit/jobs/</code>, honours
+cancellation between frames/fractions.</p>
+<h3 id="5-persistence">5. Persistence<a class="headerlink" href="#5-persistence" title="Permanent link">&para;</a></h3>
+<p>SAM2 checkpoints are public HF weights with no sidecar, so the result is
+PROJECT-only: <code>DetectKitProject.geometry_calibration: dict[variant, record]</code>
+(new field, round-tripped like <code>semantic_calibration</code>). Record: <code>created_at</code>,
+points, chosen point, <code>calibration_source_paths</code>, calibration
+<code>median_body_px</code>, frames sampled/truncated. Semantic persistence (project +
+SAM3 sidecar) is unchanged in shape.</p>
+<p>Persisted dialog settings split <code>source_names</code> into
+<code>calibration_source_names</code> + <code>escalation_source_names</code>; a legacy
+<code>source_names</code> is read as <code>escalation_source_names</code>.</p>
+<h3 id="6-shared-dialog-layout-calibrationsourceselector">6. Shared dialog layout — <code>CalibrationSourceSelector</code><a class="headerlink" href="#6-shared-dialog-layout-calibrationsourceselector" title="Permanent link">&para;</a></h3>
+<p>New widget <code>detectkit/gui/widgets/calibration_source_selector.py</code> (first file
+in a new <code>detectkit/gui/widgets/</code>), used by <code>SemanticEscalationDialog</code> and
+<code>EscalateSam2Dialog</code>. Left column, two stacked groups:</p>
 <ul>
-<li><strong>Escalate to segment (SAM2)</strong> turns existing box labels into polygon masks.</li>
-<li><strong>Semantic escalation (SAM3)</strong> finds every instance of a text prompt (e.g.
-  <code>ant</code>), including animals missing from your labels.</li>
+<li><strong>Calibrate on</strong> — only sources where <code>has_polygon_frames</code> is true; all
+  checked by default. Empty → message "No polygon ground truth in this
+  project. Label polygons on a few frames to calibrate." and the dialog's
+  Calibrate button disabled.</li>
+<li><strong>Escalate</strong> — every source. In the SAM2 dialog, polygon-level sources are
+  shown disabled with tooltip "Already polygon" (run_escalation skips them).</li>
 </ul>
-<p>Results are staged for frame-by-frame review; nothing changes until you
-accept. Both are also available headless as <code>detectkit escalate sam2</code> /
-<code>detectkit escalate sam3</code>. Stock SAM3 weights are licence-gated and need a
-one-time Hugging Face login, and SAM3 <em>training</em> is an optional CUDA-only
-add-on. See <a href="../sam-install-and-run/">SAM2 and SAM3: install and run</a> for
-devices, weights, the CLI and training setup, and
-<a href="../detectkit-semantic-escalation/">Semantic Escalation (SAM3)</a> for the SAM3
-workflow.</p>
+<p>API: <code>calibration_sources()</code>, <code>escalation_sources()</code>, signals
+<code>calibration_changed</code> / <code>escalation_changed</code>, <code>restore(saved)</code>, <code>state()</code>.</p>
+<p>Wiring per dialog:
+- Semantic: <code>_run_calibration</code> reads <code>calibration_sources()</code> (replaces
+  <code>selected_sources() or self._sources</code>); escalation run, frame count and
+  ETA read <code>escalation_sources()</code>; the complete-frame preview samples
+  escalation sources (it estimates run time on the targets) and shows GT
+  overlays when the frame has polygons. <code>reference_body_px</code> prefill
+  (project setting → median) measures the calibration sources.
+- SAM2: right side gains a tile-fraction control (Full frame + grid
+  values, prefilled from <code>geometry_calibration[variant]</code> if present), a
+  "Calibrate against polygon frames…" button, and a compact results table
+  (one row per fraction: tiles/frame, s/frame, median IoU, p10 IoU,
+  fallback %). It reuses the calibration preview-frame rendering, not
+  <code>CalibrationResultsDialog</code> (whose rows are confidence-sweep shaped).</p>
+<p><strong>Scale-transfer warning (both dialogs):</strong> tile fraction is relative to body
+size, so when median body px of calibration vs escalation sources differs by
+more than 1.5× (constant, tunable), show a non-blocking warning ("calibrated
+on frames at a different scale"). Escalation sources without labels skip the
+check.</p>
+<h3 id="7-out-of-scope">7. Out of scope<a class="headerlink" href="#7-out-of-scope" title="Permanent link">&para;</a></h3>
+<p>Direct/YOLO calibration (<code>direct_calibration*</code>); moving semantic tiling
+helpers to a neutral package; multi-scale SAM2; any change to SAM3
+collect/merge.</p>
+<h2 id="error-handling">Error handling<a class="headerlink" href="#error-handling" title="Permanent link">&para;</a></h2>
+<ul>
+<li>No polygon frames among calibration sources → Calibrate disabled (GUI);
+  worker raises a clear error if invoked headless.</li>
+<li><code>plan_for_frame</code> ValueError (tile ceiling) → that fraction is skipped in
+  calibration (as <code>candidate_tile_plans</code> already does); at escalation time it
+  falls back to full frame for that frame and is reported, never silent.</li>
+<li>Cancelled calibration → no record written; cancelled escalation keeps
+  existing staging semantics.</li>
+</ul>
+<h2 id="testing">Testing<a class="headerlink" href="#testing" title="Permanent link">&para;</a></h2>
+<ul>
+<li><code>assign_owner_tiles</code>: interior box, seam box (unowned), margin tie-break,
+  empty tiles skipped.</li>
+<li><code>segment_frame</code> with a fake executor: coordinate round trip (tile mask
+  pasted to correct frame location), negative points outside tile dropped,
+  one <code>set_image</code> per owned tile, seam fallback issues exactly one
+  full-frame <code>set_image</code>.</li>
+<li><strong>Byte-identity:</strong> <code>run_escalation</code> with <code>tile_fraction=None</code> produces
+  staged label files identical to current main and an identical executor
+  call sequence.</li>
+<li>Geometry calibration on a synthetic polygon source with a fake executor
+  returning the GT mask (IoU 1) vs a shrunken mask; <code>recommend_geometry</code>
+  refusal paths.</li>
+<li><code>has_polygon_frames</code> / <code>polygon_only</code> parsing: AABB, OBB, polygon, mixed
+  files.</li>
+<li>Semantic calibration now refuses box-only sources (behaviour change test).</li>
+<li>Dialog: selector population/filtering, legacy <code>source_names</code> restore,
+  each action reads its own list, scale warning threshold.</li>
+<li>Equivalence harness: unaffected (TrackerKit pipeline untouched); not
+  required.</li>
+<li>One real measurement (GPU) on polygon sources to set <code>IOU_FLOOR</code> /
+  <code>FALLBACK_CEIL</code> and confirm owner-tile SAM2 beats full frame on small
+  animals.</li>
+</ul>
 
 
 
@@ -2223,10 +2255,10 @@ workflow.</p>
     </div>
     
     
-    <script id="__config" type="application/json">{"base": "../..", "features": ["navigation.tabs", "navigation.sections", "navigation.expand", "navigation.top", "content.code.copy", "content.action.edit", "search.suggest", "search.highlight"], "search": "../../assets/javascripts/workers/search.6ce7567c.min.js", "translations": {"clipboard.copied": "Copied to clipboard", "clipboard.copy": "Copy to clipboard", "search.result.more.one": "1 more on this page", "search.result.more.other": "# more on this page", "search.result.none": "No matching documents", "search.result.one": "1 matching document", "search.result.other": "# matching documents", "search.result.placeholder": "Type to start searching", "search.result.term.missing": "Missing", "select.version": "Select version"}, "version": {"default": "latest", "provider": "mike"}}</script>
+    <script id="__config" type="application/json">{"base": "../../..", "features": ["navigation.tabs", "navigation.sections", "navigation.expand", "navigation.top", "content.code.copy", "content.action.edit", "search.suggest", "search.highlight"], "search": "../../../assets/javascripts/workers/search.6ce7567c.min.js", "translations": {"clipboard.copied": "Copied to clipboard", "clipboard.copy": "Copy to clipboard", "search.result.more.one": "1 more on this page", "search.result.more.other": "# more on this page", "search.result.none": "No matching documents", "search.result.one": "1 matching document", "search.result.other": "# matching documents", "search.result.placeholder": "Type to start searching", "search.result.term.missing": "Missing", "select.version": "Select version"}, "version": {"default": "latest", "provider": "mike"}}</script>
     
     
-      <script src="../../assets/javascripts/bundle.83f73b43.min.js"></script>
+      <script src="../../../assets/javascripts/bundle.83f73b43.min.js"></script>
       
     
   </body>
