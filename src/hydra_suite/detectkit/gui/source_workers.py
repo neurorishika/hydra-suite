@@ -7,7 +7,9 @@ from pathlib import Path
 from hydra_suite.training.geometry_levels import GeometryLevel, scan_source_levels
 from hydra_suite.widgets.workers import BaseWorker
 
+from .project_source_import import project_sources_to_import
 from .source_import import (
+    IMPORT_MODE_PORTABLE,
     compute_positional_class_remap,
     inspect_detectkit_source,
     materialize_detectkit_source,
@@ -101,3 +103,27 @@ class SourceImportWorker(BaseWorker):
             )
         self.result = materialized
         self.progress.emit(100)
+
+
+class ProjectSourcesImportWorker(BaseWorker):
+    """Validate and copy every compatible source from another project."""
+
+    def __init__(self, destination, source_project_dir: Path, parent=None) -> None:
+        super().__init__(parent)
+        self.destination = destination
+        self.source_project_dir = source_project_dir
+        self.result = None
+
+    def execute(self) -> None:
+        self.status.emit("Checking project sources…")
+        roots = project_sources_to_import(self.destination, self.source_project_dir)
+        results = []
+        for index, root in enumerate(roots, start=1):
+            self.status.emit(f"Importing source {index} of {len(roots)}: {root.name}")
+            results.append(
+                materialize_detectkit_source(
+                    root, self.destination.project_dir, import_mode=IMPORT_MODE_PORTABLE
+                )
+            )
+            self.progress.emit(round(100 * index / len(roots)))
+        self.result = results
