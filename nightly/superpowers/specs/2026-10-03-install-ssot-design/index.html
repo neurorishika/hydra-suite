@@ -2076,7 +2076,7 @@
 </tr>
 <tr>
 <td><code>imageio-ffmpeg</code></td>
-<td><code>ffmpeg</code> binary fallback on venv/Windows</td>
+<td>the <code>ffmpeg</code> binary on every platform (conda ffmpeg dropped, see below)</td>
 </tr>
 </tbody>
 </table>
@@ -2134,7 +2134,8 @@
 </tbody>
 </table>
 <p><strong>Deleted files:</strong> <code>requirements.txt</code>, <code>requirements-mps.txt</code>, <code>requirements-cuda.txt</code>, <code>requirements-cuda12.txt</code>, <code>requirements-cuda13.txt</code>, <code>requirements-dev.txt</code>, <code>requirements-docs.txt</code>. A test asserts that none come back. The docs workflow installs the <code>docs</code> extra's requirement list (read via <code>tomllib</code>) without the heavy core deps.</p>
-<p><strong>Conda ymls</strong> (<code>environment.yml</code>, <code>-mps</code>, <code>-cuda</code>) shrink to <code>python=3.13</code>, <code>pip</code>, <code>ffmpeg</code>, <code>git</code>, <code>cmake</code>, <code>c-compiler</code>, <code>cxx-compiler</code>.
+<p><strong>Conda ymls</strong> (<code>environment.yml</code>, <code>-mps</code>, <code>-cuda</code>) shrink to <code>python=3.13</code>, <code>pip</code>, <code>git</code>, <code>cmake</code>, <code>c-compiler</code>, <code>cxx-compiler</code>.
+- <em>Amended during implementation:</em> conda <code>ffmpeg</code> was dropped. It pulls <code>harfbuzz</code>/<code>freetype</code> into <code>&lt;env&gt;/lib</code>; Qt then loaded that harfbuzz against Rocky Linux 9's older system freetype (<code>undefined symbol: FT_Get_Colorline_Stops</code>, diptera). <code>imageio-ffmpeg</code> supplies the binary everywhere.
 - No numpy/opencv/PySide6/qt6-main/pyqtwebengine/optuna/numba.
 - The CUDA-12 user-space libraries leave the CUDA yml, replaced by ORT's pip <code>[cuda,cudnn]</code> extra plus <code>preload_dlls()</code>.
 - <strong>Fallback, if that fails verification on mehek or diptera:</strong> keep only those libraries in <code>environment-cuda.yml</code> as a documented exception.</p>
