@@ -53,6 +53,25 @@ def _cache_dir(cache_dir: Path | None) -> Path:
     return Path(cache_dir) if cache_dir is not None else Path(get_models_dir()) / "sam2"
 
 
+def _download(repo_id: str, filename: str) -> str:
+    """Download a PUBLIC SAM2 file, surviving a stale stored HF token.
+
+    The facebook/sam2.1-* repos are public, but huggingface_hub sends any
+    stored token, and an expired/revoked one turns the request into a 401 --
+    so a machine with an old `hf auth login` could never fetch SAM2. Retry
+    anonymously before giving up.
+    """
+    from huggingface_hub.errors import HfHubHTTPError
+
+    try:
+        return hf_hub_download(repo_id=repo_id, filename=filename)
+    except HfHubHTTPError as exc:
+        status = getattr(getattr(exc, "response", None), "status_code", None)
+        if status != 401:
+            raise
+        return hf_hub_download(repo_id=repo_id, filename=filename, token=False)
+
+
 def ensure_checkpoint(
     variant: str, *, allow_download: bool = True, cache_dir: Path | None = None
 ) -> Path:
@@ -74,7 +93,7 @@ def ensure_checkpoint(
         )
     from hydra_suite.core.inference.hf_staging import stage_hf_file
 
-    src = Path(hf_hub_download(repo_id=entry.repo_id, filename=entry.filename))
+    src = Path(_download(entry.repo_id, entry.filename))
     # Streams or hardlinks: never `dest.write_bytes(src.read_bytes())`, which
     # holds the whole checkpoint (up to ~900 MB for hiera-large) in RAM.
     return stage_hf_file(src, dest)

@@ -456,3 +456,15 @@ def test_pins_never_fix_torch_or_its_cuda_wheels():
                 path.name,
                 name,
             )
+
+
+def test_sam3_training_on_windows_adds_triton_windows():
+    steps = inst.build_plan(
+        _ctx(windows_gpu("595"), "cuda", 13), inst.Options(with_sam3_train=True)
+    )
+    text = _argv_text([s for s in steps if s.name == "sam3-train"])
+    assert "triton-windows" in text
+    linux = inst.build_plan(
+        _ctx(linux_gpu("595"), "cuda", 13), inst.Options(with_sam3_train=True)
+    )
+    assert "triton-windows" not in _argv_text(linux)

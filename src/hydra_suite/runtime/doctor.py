@@ -297,6 +297,38 @@ def check_sam3_inference() -> List[Check]:
     return out
 
 
+def check_hf_token() -> Check:
+    """A stored-but-invalid HF token 401s even PUBLIC downloads (SAM2)."""
+    try:
+        from huggingface_hub import get_token, whoami
+        from huggingface_hub.errors import HfHubHTTPError
+    except Exception:  # noqa: BLE001
+        return Check("hf token", SKIP, "huggingface_hub not importable")
+    token = get_token()
+    if not token:
+        return Check(
+            "hf token",
+            SKIP,
+            "not logged in (needed only for the gated SAM3 weights)",
+            "hf auth login",
+        )
+    try:
+        whoami(token=token)
+    except HfHubHTTPError as exc:
+        status = getattr(getattr(exc, "response", None), "status_code", None)
+        if status == 401:
+            return Check(
+                "hf token",
+                WARN,
+                "the stored Hugging Face token is invalid or expired",
+                "hf auth login  (or: hf auth logout)",
+            )
+        return Check("hf token", SKIP, f"could not verify: {exc}")
+    except Exception as exc:  # noqa: BLE001 - offline etc.
+        return Check("hf token", SKIP, f"could not verify (offline?): {exc}")
+    return Check("hf token", OK, "valid")
+
+
 def check_apriltag() -> Check:
     r = _subprocess_python("import apriltag")
     if r.returncode != 0:
@@ -388,6 +420,7 @@ def run_checks(
     checks += check_torch(tier)
     checks += [check_onnxruntime(tier), check_coreml(tier), check_sam2()]
     checks += check_sam3_inference()
+    checks.append(check_hf_token())
     checks += [
         check_apriltag(),
         check_ffmpeg(),

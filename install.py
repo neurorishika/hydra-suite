@@ -852,10 +852,23 @@ def sam3_train_steps(ctx: Context, opts: Options) -> List[Step]:
                 "psutil",
             ],
         ),
+        *(
+            [
+                Step(
+                    "sam3-train",
+                    "install triton-windows (sam3 imports triton at module scope)",
+                    [*side, "install", "triton-windows"],
+                )
+            ]
+            if ctx.host.is_windows
+            else []
+        ),
         Step(
             "sam3-train",
             f"install sam3 @ {SAM3_REF[:7]}",
-            [*side, "install", "--no-deps", f"{SAM3_URL}@{SAM3_REF}"],
+            # WITH its dependencies (huggingface_hub, timm, ftfy, ...): sam3 pins
+            # numpy<2 itself, so resolving them cannot pull numpy 2 back in.
+            [*side, "install", f"{SAM3_URL}@{SAM3_REF}", "numpy<2"],
         ),
         Step(
             "sam3-train",
