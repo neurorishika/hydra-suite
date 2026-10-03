@@ -1,6 +1,6 @@
 # Install paths + SAM2/SAM3 availability — to-do checklist
 
-**Status:** Implemented on `feat/install-ssot` (design: `docs/superpowers/specs/2026-10-03-install-ssot-design.md`). Remaining deferrals are marked inline.
+**Status:** Shipped — merged to local main (feat/install-ssot) (design: `docs/superpowers/specs/2026-10-03-install-ssot-design.md`). Remaining deferrals are marked inline.
 It comes from two read-only audits. Items marked (verified) were confirmed locally; the rest came from reading code and need a run to confirm.
 
 ## Decisions (agreed)

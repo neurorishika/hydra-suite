@@ -1,6 +1,6 @@
 # Install single-source-of-truth + cross-platform installer — design
 
-**Status:** Approved direction (user, 2026-10-03); implementation on `feat/install-ssot`.
+**Status:** Shipped — merged to local main (feat/install-ssot). Windows+CUDA hardware gate deferred until a box is available.
 **Checklist:** `docs/superpowers/plans/2026-10-03-install-paths-and-sam-todo.md`.
 
 ## Goals
