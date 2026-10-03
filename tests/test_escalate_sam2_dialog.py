@@ -141,3 +141,16 @@ def test_sam2_dialog_without_polygon_sources_cannot_calibrate():
     dlg = EscalateSam2Dialog([OBBSource(name="a", level="obb", path="/nope")])
     assert not dlg._btn_calibrate.isEnabled()
     assert "polygon" in dlg._btn_calibrate.toolTip()
+
+
+def test_dialog_tiling_parameters_feed_the_escalation_request():
+    from types import SimpleNamespace
+
+    from hydra_suite.detectkit.jobs.sam2_escalation import EscalationRequest
+
+    dlg = EscalateSam2Dialog([OBBSource(name="a", level="obb")], reference_body_px=79.0)
+    dlg._tile_fraction.setValue(0.2)
+    req = EscalationRequest(
+        SimpleNamespace(), ["a"], DEFAULT_VARIANT, **dlg.tiling_parameters()
+    )
+    assert req.tiling.resolved_tile_px() == 395
