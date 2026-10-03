@@ -129,6 +129,8 @@ cuda = [
 # and would break `twine upload` for the WHOLE package. install.py installs it
 # from git at a pinned commit.
 sam = [
+    # SAM3SemanticPredictor + the MPS target-assigner fix.
+    "ultralytics>=8.4.138",
     "ftfy",
     "regex",
 ]
