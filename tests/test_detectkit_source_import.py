@@ -56,6 +56,29 @@ def test_portable_mode_copies_an_existing_canonical_source(tmp_path: Path):
     assert (materialized.canonical_path / "images" / "frame001.jpg").exists()
 
 
+def test_portable_import_flattens_splits_without_overwriting_labels(tmp_path: Path):
+    source = tmp_path / "split_source"
+    for split, label in (
+        ("train", "0 0.1 0.1 0.2 0.1 0.2 0.2 0.1 0.2"),
+        ("val", "0 0.3 0.3 0.4 0.3 0.4 0.4 0.3 0.4"),
+    ):
+        _write_fake_image(source / "images" / split / "same.jpg")
+        (source / "labels" / split).mkdir(parents=True)
+        (source / "labels" / split / "same.txt").write_text(label + "\n")
+    (source / "classes.txt").write_text("ant\n")
+
+    result = materialize_detectkit_source(source, tmp_path / "project")
+    images = sorted((result.canonical_path / "images").glob("*.jpg"))
+    labels = sorted((result.canonical_path / "labels").glob("*.txt"))
+    assert len(images) == len(labels) == 2
+    assert {path.stem for path in images} == {path.stem for path in labels}
+    assert {path.read_text().strip() for path in labels} == {
+        "0 0.100000 0.100000 0.200000 0.100000 0.200000 0.200000 0.100000 0.200000",
+        "0 0.300000 0.300000 0.400000 0.300000 0.400000 0.400000 0.300000 0.400000",
+    }
+    assert not (result.canonical_path / "images" / "train").exists()
+
+
 def test_materialization_reports_completed_images(tmp_path: Path):
     source_root = tmp_path / "canonical"
     (source_root / "images").mkdir(parents=True)
@@ -175,6 +198,37 @@ def test_materialize_detectkit_source_converts_coco_bbox_annotations(tmp_path: P
     )
     assert len(fields) == 9
     assert fields[0] == "0"
+
+
+def test_coco_import_flattens_nested_images_with_same_stem(tmp_path: Path):
+    source = tmp_path / "coco_split"
+    for split in ("train", "val"):
+        _write_fake_image(source / "images" / split / "same.jpg")
+    (source / "annotations.json").write_text(
+        json.dumps(
+            {
+                "images": [
+                    {"id": 1, "file_name": "train/same.jpg", "width": 10, "height": 10},
+                    {"id": 2, "file_name": "val/same.jpg", "width": 10, "height": 10},
+                ],
+                "annotations": [
+                    {"id": 1, "image_id": 1, "category_id": 1, "bbox": [1, 1, 2, 2]},
+                    {"id": 2, "image_id": 2, "category_id": 1, "bbox": [2, 2, 3, 3]},
+                ],
+                "categories": [{"id": 1, "name": "ant"}],
+            }
+        )
+    )
+
+    result = materialize_detectkit_source(source, tmp_path / "project")
+    assert {path.name for path in (result.canonical_path / "images").iterdir()} == {
+        "train_same.jpg",
+        "val_same.jpg",
+    }
+    assert {path.name for path in (result.canonical_path / "labels").iterdir()} == {
+        "train_same.txt",
+        "val_same.txt",
+    }
 
 
 def test_coco_multipolygon_uses_one_valid_component_instead_of_bridging(

@@ -167,6 +167,13 @@ See also:
 
 ## X-AnyLabeling Integration
 
+DetectKit portable imports place images directly in `images/` and matching
+YOLO labels directly in `labels/`, even when an input dataset uses `train/`
+and `val/` subfolders. If two splits contain the same image stem, the imported
+names include the split so both image and label pairs are preserved. Use the
+portable import option when preparing a split dataset for **Open in
+X-AnyLabeling**; linked sources retain their original layout.
+
 `X-AnyLabeling` is useful for adding labels to additional frames and correcting detection misses before rerunning TrackerKit pipelines.
 
 ### Install (git clone method)

@@ -363,6 +363,31 @@ def _relative_target_path(source_root: Path, image_path: Path) -> Path:
     return Path(f"{digest}_{image_path.name}")
 
 
+def _flat_image_names(source_root: Path, image_paths: list[Path]) -> dict[Path, str]:
+    """Give every image a unique flat name while keeping familiar names when safe."""
+    relative = {path: _relative_target_path(source_root, path) for path in image_paths}
+    stem_counts: dict[str, int] = {}
+    for path in relative.values():
+        stem_counts[path.stem.casefold()] = stem_counts.get(path.stem.casefold(), 0) + 1
+    names: dict[Path, str] = {}
+    used: set[str] = set()
+    for image_path, path in relative.items():
+        stem = path.stem
+        if stem_counts[stem.casefold()] > 1:
+            stem = "_".join((*path.parts[:-1], stem))
+        candidate = f"{stem}{path.suffix}"
+        if candidate.casefold() in used or f"{stem}.txt".casefold() in used:
+            digest = sha1(str(path).encode("utf-8")).hexdigest()[:12]
+            stem = f"{stem}-{digest}"
+            candidate = f"{stem}{path.suffix}"
+        if candidate.casefold() in used or f"{stem}.txt".casefold() in used:
+            raise RuntimeError(f"Could not assign a unique flat name for {image_path}")
+        used.add(candidate.casefold())
+        used.add(f"{stem}.txt".casefold())
+        names[image_path] = candidate
+    return names
+
+
 def _clamp_normalized(value: float) -> float:
     return max(0.0, min(1.0, float(value)))
 
@@ -442,13 +467,17 @@ def _materialize_yolo_source(
     total = sum(len(items) for items in inspection.splits.values())
     if progress is not None:
         progress(0, total)
-    for index, item in enumerate(_iter_inspection_items(inspection), 1):
+    items = list(_iter_inspection_items(inspection))
+    flat_names = _flat_image_names(
+        source_root, [Path(item.image_path).resolve() for item in items]
+    )
+    for index, item in enumerate(items, 1):
         image_path = Path(item.image_path).resolve()
         label_path = Path(item.label_path).resolve()
-        relative_path = _relative_target_path(source_root, image_path)
-        _copy_file(image_path, dest_root / "images" / relative_path)
+        flat_name = Path(flat_names[image_path])
+        _copy_file(image_path, dest_root / "images" / flat_name)
         _write_text(
-            dest_root / "labels" / relative_path.with_suffix(".txt"),
+            dest_root / "labels" / flat_name.with_suffix(".txt"),
             _convert_yolo_label_text(label_path),
         )
         if progress is not None:
@@ -680,6 +709,12 @@ def _materialize_coco_source(
         annotations_by_image.setdefault(int(image_id), []).append(annotation)
 
     images = payload.get("images", [])
+    image_paths = [
+        _resolve_coco_image_path(source_root, str(entry["file_name"]))
+        for entry in images
+        if entry.get("id") is not None and entry.get("file_name")
+    ]
+    flat_names = _flat_image_names(source_root, image_paths)
     if progress is not None:
         progress(0, len(images))
     for index, image_entry in enumerate(images, 1):
@@ -691,8 +726,8 @@ def _materialize_coco_source(
             continue
         image_path = _resolve_coco_image_path(source_root, str(file_name))
         width, height = _coerce_coco_image_size(image_entry, image_path)
-        relative_path = _relative_target_path(source_root, image_path)
-        _copy_file(image_path, dest_root / "images" / relative_path)
+        flat_name = Path(flat_names[image_path])
+        _copy_file(image_path, dest_root / "images" / flat_name)
 
         lines: list[str] = []
         for annotation in annotations_by_image.get(int(image_id), []):
@@ -709,7 +744,7 @@ def _materialize_coco_source(
             lines.append(_format_obb_line(dense_id, coords))
 
         _write_text(
-            dest_root / "labels" / relative_path.with_suffix(".txt"),
+            dest_root / "labels" / flat_name.with_suffix(".txt"),
             "\n".join(lines) + ("\n" if lines else ""),
         )
         if progress is not None:
