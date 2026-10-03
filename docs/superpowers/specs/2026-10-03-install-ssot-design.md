@@ -94,7 +94,7 @@ Default env names are unchanged (`hydra`, `hydra-mps`, `hydra-cuda`).
 |---|---|
 | `torch>=2.4`, `torchvision>=0.16` | Declared explicitly |
 | `optuna`, `optunahub`, `cmaes`, `umap-learn`, `pyyaml`, `scikit-image`, `pillow`, `einops` | Everything `src/` imports at top level that only the ymls provided — the authoritative list comes from the import-declared test (§7) |
-| `imageio-ffmpeg` | `ffmpeg` binary fallback on venv/Windows |
+| `imageio-ffmpeg` | the `ffmpeg` binary on every platform (conda ffmpeg dropped, see below) |
 
 `opencv-python-headless` stays.
 
@@ -117,7 +117,8 @@ Default env names are unchanged (`hydra`, `hydra-mps`, `hydra-cuda`).
 
 **Deleted files:** `requirements.txt`, `requirements-mps.txt`, `requirements-cuda.txt`, `requirements-cuda12.txt`, `requirements-cuda13.txt`, `requirements-dev.txt`, `requirements-docs.txt`. A test asserts that none come back. The docs workflow installs the `docs` extra's requirement list (read via `tomllib`) without the heavy core deps.
 
-**Conda ymls** (`environment.yml`, `-mps`, `-cuda`) shrink to `python=3.13`, `pip`, `ffmpeg`, `git`, `cmake`, `c-compiler`, `cxx-compiler`.
+**Conda ymls** (`environment.yml`, `-mps`, `-cuda`) shrink to `python=3.13`, `pip`, `git`, `cmake`, `c-compiler`, `cxx-compiler`.
+- *Amended during implementation:* conda `ffmpeg` was dropped. It pulls `harfbuzz`/`freetype` into `<env>/lib`; Qt then loaded that harfbuzz against Rocky Linux 9's older system freetype (`undefined symbol: FT_Get_Colorline_Stops`, diptera). `imageio-ffmpeg` supplies the binary everywhere.
 - No numpy/opencv/PySide6/qt6-main/pyqtwebengine/optuna/numba.
 - The CUDA-12 user-space libraries leave the CUDA yml, replaced by ORT's pip `[cuda,cudnn]` extra plus `preload_dlls()`.
 - **Fallback, if that fails verification on mehek or diptera:** keep only those libraries in `environment-cuda.yml` as a documented exception.

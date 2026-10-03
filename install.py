@@ -73,12 +73,16 @@ MIN_TARGET_PYTHON = (3, 11)
 
 DEFAULT_ENV_NAMES = {"cpu": "hydra", "mps": "hydra-mps", "cuda": "hydra-cuda"}
 
-#: Conda supplies only what pip cannot: the interpreter, the ffmpeg binary and
-#: the toolchain for the AprilTag build. Must match environment*.yml (tested).
-CONDA_PACKAGES = ["pip", "ffmpeg", "git", "cmake", "c-compiler", "cxx-compiler"]
+#: Conda supplies only what pip cannot: the interpreter and the toolchain for
+#: the AprilTag build. Must match environment*.yml (tested). NOT ffmpeg: conda's
+#: ffmpeg drags harfbuzz/freetype into <env>/lib, and Qt (PySide6 wheel) then
+#: loads that harfbuzz against the OS's older freetype -- "undefined symbol:
+#: FT_Get_Colorline_Stops" on Rocky Linux 9. The ffmpeg binary comes from the
+#: imageio-ffmpeg wheel on every platform instead (utils/ffmpeg.py).
+CONDA_PACKAGES = ["pip", "git", "cmake", "c-compiler", "cxx-compiler"]
 #: conda-forge's compiler metapackages on Windows only activate an existing
 #: MSVC install; MSVC itself comes from Visual Studio Build Tools.
-CONDA_PACKAGES_WINDOWS = ["pip", "ffmpeg", "git", "cmake"]
+CONDA_PACKAGES_WINDOWS = ["pip", "git", "cmake"]
 
 #: Package families that must never coexist in one env. Everything not in the
 #: wanted set for the tier is removed before installing.

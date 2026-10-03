@@ -1,5 +1,5 @@
-# Conda supplies ONLY what pip cannot: the interpreter, the ffmpeg binary and
-# the toolchain for the AprilTag C-extension build. Every Python package is
+# Conda supplies ONLY what pip cannot: the interpreter and the toolchain for
+# the AprilTag C-extension build (ffmpeg comes from the imageio-ffmpeg wheel). Every Python package is
 # declared in pyproject.toml and installed by install.py.
 #
 # Preferred:   python install.py            (creates this env for you)
@@ -12,7 +12,6 @@ channels:
 dependencies:
 - python=3.13
 - pip
-- ffmpeg
 - git
 - cmake
 - c-compiler

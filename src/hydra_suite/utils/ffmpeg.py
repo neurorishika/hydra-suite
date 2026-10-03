@@ -1,8 +1,9 @@
 """Locate an ``ffmpeg`` executable on every platform.
 
-conda environments ship ``ffmpeg`` on PATH; pip/venv installs (and most
-Windows machines) do not. ``imageio-ffmpeg`` -- a core dependency -- bundles a
-static binary for Linux, macOS and Windows, so it is the fallback.
+A system ``ffmpeg`` on PATH wins. Otherwise ``imageio-ffmpeg`` -- a core
+dependency -- supplies a static binary for Linux, macOS and Windows. install.py
+deliberately does NOT install conda's ffmpeg (its harfbuzz/freetype libraries
+break Qt on hosts with an older system freetype).
 """
 
 from __future__ import annotations
