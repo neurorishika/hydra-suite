@@ -15,6 +15,7 @@ import numpy as np
 from PySide6.QtCore import Signal
 
 from hydra_suite.core.inference.masks import clip_mask_to_polygon, mask_to_contour
+from hydra_suite.core.inference.sam2.tiling import segment_boxes
 from hydra_suite.core.inference.semantic.tiling import DEFAULT_OVERLAP, TilingSettings
 from hydra_suite.data.al.escalation import LabelRecord
 from hydra_suite.data.al.labels import write_label_file
@@ -227,6 +228,8 @@ def run_escalation(
             on_mutated()
 
     result = EscalationResult()
+    tiling = req.tiling
+    result.tile_px = tiling.resolved_tile_px()
     todo = [source for source in _requested_sources(req) if source.level != "polygon"]
     project_root = Path(req.project.project_dir)
     for si, src in enumerate(todo):
@@ -295,11 +298,14 @@ def run_escalation(
             records: list[LabelRecord] = []
             if boxes:
                 prompts = build_prompts(boxes)
-                executor.set_image(img)
-                for box, prompt in zip(boxes, prompts):
-                    mask, _iou = executor.segment(
-                        prompt.box_xyxy, prompt.positive_points, prompt.negative_points
-                    )
+                # Each box is segmented inside its owner tile (SAHI); a
+                # full-frame plan is the pre-tiling call sequence exactly.
+                plan = tiling.plan_for((h, w))
+                outcomes = segment_boxes(executor, img, prompts, plan.tiles)
+                for box, outcome in zip(boxes, outcomes):
+                    if outcome.owner_tile is None:
+                        result.seam_fallbacks += 1
+                    mask = outcome.mask
                     # SAM2's box prompt is soft guidance, not a hard crop -- the
                     # predicted mask can extend past the source OBB. Clip to the
                     # OBB's own polygon (not just its aabb) before contouring so

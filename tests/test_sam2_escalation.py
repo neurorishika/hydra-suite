@@ -596,3 +596,42 @@ def test_replacing_a_pointer_clears_it_before_the_new_one_is_written(tmp_path):
     assert seen[0] is None  # the clear, persisted on its own
     assert not stale.exists()
     assert seen[-1] is not None and seen[-1].staged_path != str(stale)
+
+
+def test_tiled_escalation_encodes_owner_tiles_and_counts_seam_fallbacks(tmp_path):
+    root = tmp_path / "sources" / "big"
+    (root / "images").mkdir(parents=True)
+    (root / "labels").mkdir(parents=True)
+    cv2.imwrite(str(root / "images" / "a.png"), np.zeros((400, 400, 3), np.uint8))
+    # one box well inside the top-left tile, one across the centre seam
+    (root / "labels" / "a.txt").write_text(
+        "0 0.05 0.05 0.15 0.05 0.15 0.15 0.05 0.15\n"
+        "0 0.45 0.45 0.55 0.45 0.55 0.55 0.45 0.55\n"
+    )
+    src = OBBSource(path=str(root), name="big", level="obb")
+    project = types.SimpleNamespace(project_dir=str(tmp_path), sources=[src])
+
+    class Ex:
+        def __init__(self):
+            self.shapes = []
+
+        def set_image(self, img):
+            self.shapes.append(img.shape[:2])
+            self.shape = img.shape[:2]
+
+        def segment(self, box, pos, neg):
+            m = np.zeros(self.shape, bool)
+            x1, y1, x2, y2 = (int(v) for v in box)
+            m[y1:y2, x1:x2] = True
+            return m, 0.9
+
+    ex = Ex()
+    req = EscalationRequest(project, ["big"], "v", tile_px=200, overlap=0.0)
+    result = run_escalation(req, ex)
+    assert ex.shapes == [(200, 200), (400, 400)]
+    assert result.seam_fallbacks == 1 and result.primed == 2 and result.tile_px == 200
+    staged = Path(src.staged_review.staged_path) / "labels" / "a.txt"
+    first = [float(v) for v in staged.read_text().splitlines()[0].split()[1:]]
+    xs, ys = first[0::2], first[1::2]
+    # the tiled box's polygon lands back in FRAME coordinates (20..60 px)
+    assert min(xs) >= 0.049 and max(xs) <= 0.151 and min(ys) >= 0.049
