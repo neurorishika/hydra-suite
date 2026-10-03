@@ -26,7 +26,7 @@ from PySide6.QtWidgets import (
 from hydra_suite.detectkit.jobs.calibration_frames import (
     SCALE_MISMATCH_RATIO,
     has_polygon_frames,
-    measure_median_body_px,
+    quick_median_body_px,
     scale_mismatch,
 )
 
@@ -41,15 +41,16 @@ NO_POLYGON_SOURCES = (
 def _median_body_px(cache: dict, sources) -> float:
     """Median body size of *sources*, cached by their paths.
 
-    ``measure_median_body_px`` decodes a capped sample of images, so it is
-    computed once per distinct selection rather than on every click.
+    Runs on every selection click, so it must not decode images: it reads
+    label files and image headers only (``quick_median_body_px``), and is
+    cached per distinct selection.
     """
     key = tuple(sorted(_source_key(s) for s in sources))
     if not key:
         return 0.0
     if key not in cache:
         try:
-            cache[key] = measure_median_body_px(sources)[0]
+            cache[key] = quick_median_body_px(sources)
         except Exception:  # pragma: no cover - unreadable labels
             cache[key] = 0.0
     return cache[key]

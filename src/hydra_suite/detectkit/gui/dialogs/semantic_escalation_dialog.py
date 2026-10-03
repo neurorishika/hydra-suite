@@ -830,6 +830,10 @@ class SemanticEscalationDialog(DetectKitDialog):
         worker.status.connect(progress.setLabelText)
 
         def _done(points) -> None:
+            # Read BEFORE close(): QProgressDialog.close() emits `canceled`,
+            # which is wired to worker.cancel, so every completed sweep used
+            # to look cancelled here and was never stored.
+            cancelled = worker.cancelled
             progress.close()
             if not points:
                 self.set_status(
@@ -841,7 +845,7 @@ class SemanticEscalationDialog(DetectKitDialog):
             best, reason = recommend(points)
             # A cancelled/partial sweep is useful to inspect, but must not erase
             # the last complete calibration stored with the project.
-            if not worker.cancelled:
+            if not cancelled:
                 self._store_calibration(
                     points, best, reason, preview_frames=worker.preview_frames
                 )
@@ -849,7 +853,7 @@ class SemanticEscalationDialog(DetectKitDialog):
                 points,
                 best,
                 reason,
-                partial=worker.cancelled,
+                partial=cancelled,
                 preview_frames=worker.preview_frames,
             )
 
@@ -948,8 +952,9 @@ class SemanticEscalationDialog(DetectKitDialog):
             preview.exec()
 
         def _failed(msg: str) -> None:
+            cancelled = worker.cancelled  # before close(): it emits `canceled`
             progress.close()
-            if worker.cancelled:
+            if cancelled:
                 self.set_status("Random image check cancelled.")
                 return
             QMessageBox.warning(self, "Test random image", msg)

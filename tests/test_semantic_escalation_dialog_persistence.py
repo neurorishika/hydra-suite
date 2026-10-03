@@ -2,7 +2,9 @@
 
 from __future__ import annotations
 
+import atexit
 import os
+import shutil
 import tempfile
 from pathlib import Path
 
@@ -36,6 +38,7 @@ def available_checkpoint(monkeypatch):
 
 
 _SOURCE_ROOT = Path(tempfile.mkdtemp(prefix="sam3_dialog_sources_"))
+atexit.register(shutil.rmtree, _SOURCE_ROOT, True)
 
 
 def _source(name: str = "source") -> OBBSource:

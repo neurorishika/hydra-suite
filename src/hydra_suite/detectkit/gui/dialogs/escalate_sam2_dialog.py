@@ -74,6 +74,7 @@ class EscalateSam2Dialog(DetectKitDialog):
         self._calibration_worker = None
         self._scale_cache: dict = {}
         saved = dict(getattr(project, "geometry_escalation_settings", {}) or {})
+        self._saved_settings = saved
 
         container = QWidget()
         outer = QVBoxLayout(container)
@@ -170,8 +171,6 @@ class EscalateSam2Dialog(DetectKitDialog):
         self._selector.escalation_changed.connect(self._refresh_scale_warning)
 
         self._load_saved_calibration()
-        if "tile_fraction" in saved:
-            self._tile_fraction.setValue(float(saved.get("tile_fraction") or 0.0))
         self._refresh_tile_label()
         self._refresh_calibration_enabled()
         self._refresh_scale_warning()
@@ -262,7 +261,14 @@ class EscalateSam2Dialog(DetectKitDialog):
         return dict(store.get(self.selected_variant(), {}) or {})
 
     def _load_saved_calibration(self) -> None:
-        """Show this variant's saved calibration and adopt its chosen point."""
+        """Show THIS variant's calibration and set the tile fraction for it.
+
+        A calibration belongs to one SAM2 variant, so switching variant must
+        never carry another variant's fraction over. Precedence: the
+        fraction the user last accepted for this variant, then this
+        variant's calibrated choice, then full frame (the uncalibrated
+        default).
+        """
         from hydra_suite.core.inference.sam2.calibration import recommend_geometry
 
         record = self._saved_record()
@@ -271,13 +277,22 @@ class EscalateSam2Dialog(DetectKitDialog):
         chosen = points[index] if 0 <= index < len(points) else None
         recommended, _reason = recommend_geometry(points) if points else (None, "")
         self._results.set_points(points, recommended)
-        if chosen is not None:
+        saved = self._saved_settings
+        if saved.get("variant") == self.selected_variant() and "tile_fraction" in saved:
+            self._tile_fraction.setValue(float(saved.get("tile_fraction") or 0.0))
+            self._status.setText("")
+        elif chosen is not None:
             self.apply_calibration_choice(chosen)
+        else:
+            self._tile_fraction.setValue(0.0)
+            self._status.setText("")
+        if points:
             created = str(record.get("created_at", ""))[:10]
             self._status.setText(
                 f"Saved calibration{f' from {created}' if created else ''}: "
                 f"{len(points)} measured tile size(s)."
             )
+        self._refresh_tile_label()
 
     def apply_calibration_choice(self, point) -> None:
         self._tile_fraction.setValue(
@@ -322,6 +337,9 @@ class EscalateSam2Dialog(DetectKitDialog):
         worker.status.connect(progress.setLabelText)
 
         def _done(points) -> None:
+            # Read BEFORE close(): QProgressDialog.close() emits `canceled`,
+            # wired to worker.cancel, which made every sweep look cancelled.
+            cancelled = worker.cancelled
             progress.close()
             if not points:
                 self._status.setText("Calibration cancelled; nothing was saved.")
@@ -332,7 +350,7 @@ class EscalateSam2Dialog(DetectKitDialog):
                 self.apply_calibration_choice(best)
             else:
                 self._status.setText(reason)
-            if not worker.cancelled:
+            if not cancelled:
                 self._store_calibration(points, best, reason, worker, sources)
 
         def _failed(message: str) -> None:

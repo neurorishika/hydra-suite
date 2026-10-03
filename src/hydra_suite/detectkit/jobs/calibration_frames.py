@@ -168,6 +168,66 @@ def measure_median_body_px(
     return float(np.median(np.asarray(sides, dtype=np.float64))), used, truncated
 
 
+def _image_size(img_path: Path) -> tuple[int, int] | None:
+    """(width, height) from the file HEADER; decodes only if Pillow is absent."""
+    try:
+        from PIL import Image
+
+        with Image.open(img_path) as im:
+            return int(im.width), int(im.height)
+    except ImportError:  # pragma: no cover - Pillow ships with torchvision
+        image = cv2.imread(str(img_path))
+        return None if image is None else (image.shape[1], image.shape[0])
+    except OSError:
+        return None
+
+
+def quick_median_body_px(
+    sources, *, max_frames: int = MEDIAN_BODY_TOTAL_FRAMES
+) -> float:
+    """Median longest label side across *sources*, WITHOUT decoding pixels.
+
+    For UI feedback that reruns on every selection change (the dialogs'
+    scale-mismatch warning). ``measure_median_body_px`` decodes each sampled
+    frame, which froze the GUI on large frames (F4); this reads only label
+    files and image headers. Returns 0.0 when nothing is measurable.
+    """
+    from hydra_suite.detectkit.gui.utils import parse_obb_label
+
+    sides: list[float] = []
+    used = 0
+    for source in sources:
+        raw_path = getattr(source, "path", "")
+        if not raw_path:
+            continue
+        root = Path(raw_path)
+        images_dir, labels_dir = root / "images", root / "labels"
+        if not images_dir.is_dir():
+            continue
+        for img_path in sorted(
+            p for p in images_dir.rglob("*") if p.suffix.lower() in IMG_EXTS
+        ):
+            if used >= max_frames:
+                break
+            label_path = _label_path_for(images_dir, labels_dir, img_path)
+            if not label_path.exists():
+                continue
+            size = _image_size(img_path)
+            if size is None:
+                continue
+            parsed = parse_obb_label(label_path, size[0], size[1])
+            if not parsed:
+                continue
+            used += 1
+            for item in parsed:
+                pts = np.asarray(item["polygon_px"], dtype=np.float32).reshape(-1, 2)
+                extent = pts.max(axis=0) - pts.min(axis=0)
+                longest = float(max(extent[0], extent[1]))
+                if longest > 0:
+                    sides.append(longest)
+    return float(np.median(sides)) if sides else 0.0
+
+
 def median_body_px_for(
     sources, *, sample_frames: int = MEDIAN_BODY_SAMPLE_FRAMES
 ) -> float:

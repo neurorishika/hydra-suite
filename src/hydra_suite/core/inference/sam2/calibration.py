@@ -166,6 +166,15 @@ def calibrate_geometry(
         plans.append((Path(img_path), list(polygons), options))
     total_passes = max(1, sum(len(opts) for _p, _g, opts in plans))
 
+    if plans:
+        # One untimed pass first: model/CUDA warm-up would otherwise be
+        # charged to the first measured (frame, fraction), and seconds per
+        # frame decides ties between near-equal fractions.
+        first = cv2.imread(str(plans[0][0]))
+        if first is not None:
+            executor.set_image(first[:256, :256])
+            del first
+
     acc: dict[float | None, dict] = {}
     completed: set[int] = set()
     done = 0

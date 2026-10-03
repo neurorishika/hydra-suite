@@ -250,12 +250,23 @@ class TilingSettings:
         )
 
     def plan_for(self, frame_hw) -> SlicePlan:
-        """The tile plan for one frame; full frame when a tile would cover it."""
+        """The tile plan for one frame; full frame when tiling cannot apply.
+
+        Never raises: a tile covering the frame, or one so small the grid
+        breaches ``MAX_TILES_PER_FRAME``, yields the full-frame plan. Callers
+        that must report it compare ``len(plan.tiles)``. Raising here used to
+        abort a SAM2 escalation on its first frame, after the run had already
+        cleared the source's previous staging directory.
+        """
         frame_h, frame_w = int(frame_hw[0]), int(frame_hw[1])
         tile_px = self.resolved_tile_px()
         if tile_px is None or tile_px >= min(frame_h, frame_w):
             return full_frame_plan((frame_h, frame_w))
-        return plan_for_frame((frame_h, frame_w), tile_px, self.overlap)
+        try:
+            return plan_for_frame((frame_h, frame_w), tile_px, self.overlap)
+        except ValueError as exc:
+            logger.warning("Tiling off for a %dx%d frame: %s", frame_w, frame_h, exc)
+            return full_frame_plan((frame_h, frame_w))
 
 
 def _touches_interior_seam(

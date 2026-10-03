@@ -132,6 +132,11 @@ class EscalationResult:
     skipped: list[tuple[str, str]] = field(default_factory=list)
     # Boxes no tile fully contained, segmented on the full frame instead.
     seam_fallbacks: int = 0
+    # Frames segmented in tiles vs frames where the requested tile size could
+    # not apply (it covered the frame, or breached the tile ceiling) and the
+    # frame ran whole. Both stay 0 when tiling is off.
+    tiled_frames: int = 0
+    untiled_frames: int = 0
     tile_px: int | None = None  # resolved tile size, None = full frame
 
 
@@ -369,6 +374,11 @@ def run_escalation(
                 # Each box is segmented inside its owner tile (SAHI); a
                 # full-frame plan is the pre-tiling call sequence exactly.
                 plan = tiling.plan_for((h, w))
+                if result.tile_px is not None:
+                    if len(plan.tiles) > 1:
+                        result.tiled_frames += 1
+                    else:
+                        result.untiled_frames += 1
                 outcomes = segment_boxes(executor, img, prompts, plan.tiles)
                 for box, outcome in zip(boxes, outcomes):
                     if outcome.owner_tile is None:
