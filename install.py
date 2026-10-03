@@ -406,6 +406,7 @@ class Options:
     skip_apriltag: bool = False
     skip_doctor: bool = False
     only: Optional[str] = None
+    constraints: Optional[str] = None
     dry_run: bool = False
     use_uv: bool = True
 
@@ -560,6 +561,13 @@ def build_plan(ctx: Context, opts: Options) -> List[Step]:
         main_args += ["-c", _torch_constraints_file(reqs)]
         if index:
             main_args += ["--extra-index-url", index]
+    if opts.constraints:
+        # A lock/constraints file (e.g. `pip freeze` of a known-good env) makes a
+        # fresh install reproduce exact versions.
+        main_args += [
+            "--constraints" if opts.use_uv else "-c",
+            str(Path(opts.constraints).resolve()),
+        ]
     if opts.update:
         main_args.append("--upgrade")
     steps.append(

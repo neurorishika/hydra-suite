@@ -72,7 +72,9 @@ def ensure_checkpoint(
             f"SAM2 variant {variant!r} is not downloaded and downloads are "
             f"disabled (offline). Download it once with network access."
         )
-    cdir.mkdir(parents=True, exist_ok=True)
+    from hydra_suite.core.inference.hf_staging import stage_hf_file
+
     src = Path(hf_hub_download(repo_id=entry.repo_id, filename=entry.filename))
-    dest.write_bytes(src.read_bytes())
-    return dest
+    # Streams or hardlinks: never `dest.write_bytes(src.read_bytes())`, which
+    # holds the whole checkpoint (up to ~900 MB for hiera-large) in RAM.
+    return stage_hf_file(src, dest)
