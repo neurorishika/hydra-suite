@@ -158,6 +158,7 @@ def on_escalate_geometry(window, preselect: str | None = None) -> None:
         source_paths=source_paths,
         variant=dlg.selected_variant(),
         overwrite=overwrite,
+        device=dlg.selected_device(),
     )
 
     progress = QProgressDialog(

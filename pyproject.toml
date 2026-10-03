@@ -27,99 +27,126 @@ classifiers = [
     "Topic :: Scientific/Engineering :: Visualization",
 ]
 dependencies = [
+    # pyproject.toml is the ONLY place Python dependencies are declared.
+    # install.py picks the torch build (wheel index) and the tier extra;
+    # tests/test_dependencies_declared.py fails if src/ imports anything
+    # not declared here.
     "numpy>=1.24",
     "scipy>=1.10",
     "pandas>=2.0",
     "numba>=0.58",
     "scikit-learn>=1.3",
     "matplotlib>=3.7",
+    "pillow>=10.0",
+    # The ONE opencv distribution. ultralytics asks for the GUI build
+    # (opencv-python); both write cv2/, so install.py overrides it away.
     "opencv-python-headless>=4.8",
     "PySide6>=6.5",
+    # torch/torchvision: install.py installs a pinned build from the wheel
+    # index matching the tier (cpu / cu128 / cu130) BEFORE this resolves.
+    "torch>=2.4",
+    # torchvision 0.16.0 (Oct 2023) added the native MPS kernel for roi_align
+    # (and roi_pool/ps_roi_align/ps_roi_pool); older installs raise
+    # NotImplementedError from rotated_rect_from_masks's roi_align call on the
+    # segment-as-OBB path. See torchvision v0.16.0 release notes.
+    "torchvision>=0.16.0",
     "timm",
+    "tqdm",
     "huggingface_hub",
     # DetectKit's training entrypoint adds an MPS TaskAlignedAssigner
     # compatibility fallback for this PyTorch indexing failure.
     "ultralytics>=8.4.138",
     "hnswlib",
     "usearch",
-    "annoy",
+    "umap-learn",
+    "pyyaml",
+    # Tracking parameter optimizer (optunahub's AutoSampler uses cmaes).
+    "optuna>=3.5",
+    "optunahub",
+    "cmaes",
     "platformdirs>=3.0",
     # Resource admission, cross-process lease validation, and process-tree
     # watchdogs require portable host/process memory observations.
     "psutil>=5.9",
     "ruptures>=1.1",
+    # ffmpeg binary fallback when none is on PATH (venv / Windows installs).
+    "imageio-ffmpeg>=0.4.9",
+    "av>=12.0",
+    # SAM2 geometry escalation (inference) on every tier.
     "sam2>=1.1",
 ]
 
 [project.optional-dependencies]
-cuda12 = [
-    "onnxruntime-gpu>=1.24",
-    "cupy-cuda12x",
-    "tensorrt-cu12",
-    "tensorrt-cu12-libs",
+# ---- Tier extras: install.py selects exactly one -------------------------
+onnx-tools = [
     "onnx",
     "onnxslim",
     "onnxscript",
-    "torchaudio",
-    "av>=12.0",
 ]
-cuda13 = [
-    "onnxruntime-gpu>=1.24",
-    "cupy-cuda13x",
-    "tensorrt-cu13",
-    "tensorrt-cu13-libs",
-    "onnx",
-    "onnxslim",
-    "onnxscript",
-    "torchaudio",
-    "av>=12.0",
-]
-cuda = [
-    # Alias for cuda12 (most common)
-    "hydra-suite[cuda12]",
+cpu = [
+    "hydra-suite[onnx-tools]",
+    "onnxruntime>=1.16",
 ]
 mps = [
+    "hydra-suite[onnx-tools]",
     "onnxruntime>=1.16",
-    "onnx",
-    "onnxslim",
-    "torchaudio",
-    "av>=12.0",
     "coremltools>=8.0",
-    # torchvision 0.16.0 (Oct 2023) added the native MPS kernel for roi_align
-    # (and roi_pool/ps_roi_align/ps_roi_pool); older installs raise
-    # NotImplementedError from rotated_rect_from_masks's roi_align call on the
-    # segment-as-OBB path. See torchvision v0.16.0 release notes.
-    "torchvision>=0.16.0",
 ]
-av = [
-    "av>=12.0",
+cuda12 = [
+    "hydra-suite[onnx-tools]",
+    # onnxruntime-gpu <=1.26 is the last CUDA 12 build. [cuda,cudnn] pulls the
+    # nvidia-*-cu12 wheels it links against -- the same family torch+cu128
+    # uses -- and runtime/onnx_providers.py calls onnxruntime.preload_dlls(),
+    # so no LD_LIBRARY_PATH / conda library hook is needed (Linux or Windows).
+    "onnxruntime-gpu[cuda,cudnn]>=1.24,<1.27",
+    "cupy-cuda12x",
+    "tensorrt-cu12",
+    "tensorrt-cu12-bindings",
+    "tensorrt-cu12-libs",
+    "PyNvVideoCodec",
 ]
-# NOTE: SAM3 also needs OpenAI's `clip`, which is NOT on PyPI. It is
-# deliberately absent from this extra: a PEP 508 direct reference
-# (`clip @ git+https://...`) is rejected in uploaded PyPI metadata and would
-# break `twine upload` for the WHOLE package, not just this extra. Install it
-# manually -- see docs/user-guide/detectkit-semantic-escalation.md.
-sam3 = [
+cuda13 = [
+    "hydra-suite[onnx-tools]",
+    # onnxruntime-gpu >=1.28 is built for CUDA 13 and depends on the same
+    # nvidia-* wheel names torch+cu130 uses (unsuffixed cuda-runtime/cufft/...,
+    # plus nvidia-cudnn-cu13). 1.27 used -cu13-suffixed CUDA wheels; skip it so
+    # two spellings of one library never mix in site-packages/nvidia.
+    "onnxruntime-gpu[cuda,cudnn]>=1.28",
+    "cupy-cuda13x",
+    "tensorrt-cu13",
+    "tensorrt-cu13-bindings",
+    "tensorrt-cu13-libs",
+    "PyNvVideoCodec",
+]
+cuda = [
+    # Alias for cuda12 (works on every driver >= 525).
+    "hydra-suite[cuda12]",
+]
+# ---- Feature extras ------------------------------------------------------
+# SAM3 semantic escalation (inference). Installed by default on every tier.
+# SAM3 also needs ultralytics' `clip`, which is NOT on PyPI: a PEP 508 direct
+# reference (`clip @ git+https://...`) is rejected in uploaded PyPI metadata
+# and would break `twine upload` for the WHOLE package. install.py installs it
+# from git at a pinned commit.
+sam = [
+    # SAM3SemanticPredictor + the MPS target-assigner fix.
     "ultralytics>=8.4.138",
     "ftfy",
+    "regex",
 ]
-# SAM3 LoRA finetuning (training, not inference -- see the sam3 extra above
-# for that). Also needs `torch` (already a core dependency), the `sam3`
-# package itself (a git dependency, so it cannot be listed here -- same PEP
-# 508 constraint the sam3 extra above documents for `clip`), and CUDA at
-# runtime; this extra provides no path around either requirement. Must stay
-# in sync with `TRAINING_PACKAGES` in
+sam3 = [
+    # Back-compat alias.
+    "hydra-suite[sam]",
+]
+# SAM3 LoRA finetuning (training, not inference). Lives in the separate
+# hydra-sam3 sidecar env -- build it with `python install.py --with-sam3-train`
+# (CUDA only). Never install this extra into the main env: sam3 pins numpy<2.
+# Must stay in sync with `TRAINING_PACKAGES` in
 # hydra_suite/training/sam3_lora/availability.py.
 sam3-train = [
-    # Meta's `sam3` itself is not on PyPI -- install it separately with
-    #   pip install git+https://github.com/facebookresearch/sam3.git
-    # A pip install of that repo resolves its own declared dependencies
-    # (timm, ftfy, regex, tqdm, typing_extensions, huggingface_hub and the
-    # numpy<2 pin). The packages below are the ones our trainer needs on top
-    # of those, plus `iopath`, which sam3 declares but which is missing when
-    # sam3 is used from a source checkout on PYTHONPATH rather than installed
-    # -- the configuration the spike ran, and the one that fails at import
-    # time inside sam3.train.loss with a bare ModuleNotFoundError.
+    # Meta's `sam3` itself is not on PyPI (install.py pins a git commit).
+    # `iopath` is declared by sam3 but missing when sam3 is used from a
+    # source checkout, and fails at import inside sam3.train.loss.
     "torchmetrics",
     "scipy",
     "einops",
@@ -130,16 +157,29 @@ sam3-train = [
     "numpy>=1.26,<2",
 ]
 dev = [
-    "pytest>=7.0",
-    "pytest-cov",
+    "pytest>=8.0",
+    "pytest-cov>=5.0",
     "pytest-timeout>=2.1",
-    "black>=23.0",
-    "isort>=5.12",
-    "flake8>=6.0",
-    "mypy>=1.5",
-    "vulture>=2.7",
+    "black>=24.0",
+    "isort>=5.13",
+    "flake8>=7.0",
+    "pre-commit>=3.7",
+    "mypy>=1.9",
+    "vulture>=2.11",
+    "deadcode>=2.4",
+    # dep-graph also needs the graphviz `dot` binary (not pip-installable).
+    "pydeps>=1.12",
+    "pylint>=3.0",
     "build>=1.0",
     "twine>=5.0",
+]
+docs = [
+    "mkdocs==1.6.1",
+    "mkdocs-material==9.5.43",
+    "mkdocstrings[python]==0.26.2",
+    "mkdocs-autorefs==1.2.0",
+    "mkdocs-include-markdown-plugin==7.1.4",
+    "mike>=2.1.3",
 ]
 
 [project.urls]
@@ -149,7 +189,7 @@ Repository = "https://github.com/neurorishika/hydra-suite"
 Issues = "https://github.com/neurorishika/hydra-suite/issues"
 
 [project.scripts]
-hydra = "hydra_suite.launcher.app:main"
+hydra = "hydra_suite.launcher.cli:main"
 trackerkit = "hydra_suite.trackerkit.app:main"
 posekit = "hydra_suite.posekit.gui.main:main"
 filterkit = "hydra_suite.filterkit.app:main"

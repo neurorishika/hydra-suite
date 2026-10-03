@@ -152,23 +152,27 @@ def test_unimplemented_precision_modes_fail_closed(tmp_path, precision):
     assert any(precision in reason for reason in decision.refusals)
 
 
-def test_fp32_is_admitted_with_a_doubled_device_estimate(tmp_path):
-    """FP32 was refused for depending on "SAM3's BF16 activation path" --
-    `perflib.fused.addmm_act`, which `perflib_compat` now replaces with a
-    dtype-neutral eager equivalent. Nothing in the training path needs bf16.
+def test_fp32_is_refused_up_front_like_the_runtime_gate(tmp_path):
+    """Preflight and cli.py's runtime admission must agree on precision.
 
-    The device estimate must scale, or the gate admits a run that OOMs the
-    card after minutes of setup.
+    Preflight used to admit fp32 while the runtime gate refused it, so the
+    refusal surfaced only minutes into a launched run.
     """
+    _write_coco(tmp_path)
+
+    fp32 = _decision(_spec(tmp_path, mixed_precision="fp32"))
+
+    assert not fp32.admitted
+    assert any("not available" in reason for reason in fp32.refusals)
+
+
+def test_fp32_device_estimate_still_scales(tmp_path):
+    """Kept for when fp32 is re-enabled: the estimate must not under-read."""
     _write_coco(tmp_path)
 
     bf16 = _decision(_spec(tmp_path, mixed_precision="bf16"))
     fp32 = _decision(_spec(tmp_path, mixed_precision="fp32"))
 
-    # No longer refused on PRECISION grounds...
-    assert not any("not available" in reason for reason in fp32.refusals)
-    # ...but the device estimate must scale, so a card that cannot hold the
-    # fp32 envelope is still refused -- on honest capacity grounds.
     assert fp32.budget.accelerator_peak_bytes > bf16.budget.accelerator_peak_bytes
 
 

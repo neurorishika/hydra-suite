@@ -111,6 +111,7 @@ nav:
   - ClassKit: user-guide/classkit.md
   - DetectKit: user-guide/detectkit.md
   - DetectKit Headless Training: runbooks/detectkit-headless-training.md
+  - "SAM2 and SAM3: Install and Run": user-guide/sam-install-and-run.md
   - "DetectKit: Semantic Escalation (SAM3)": user-guide/detectkit-semantic-escalation.md
   - "DetectKit: SAHI Calibration Profiles": user-guide/detectkit-sahi-calibration.md
   - FilterKit: user-guide/filterkit.md

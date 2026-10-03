@@ -65,38 +65,30 @@ Multi-animal tracking, pose labeling, classification, detection training, datase
 
 ## Quick Start
 
-=== "pip"
+=== "Install"
 
     ```bash
-    # CPU
-    pip install hydra-suite
-
-    # Apple Silicon / MPS
-    pip install torch torchvision
-    pip install "hydra-suite[mps]"
-
-    # NVIDIA CUDA
-    pip install torch torchvision --index-url https://download.pytorch.org/whl/cu128
-    pip install "hydra-suite[cuda]"
+    git clone https://github.com/neurorishika/hydra-suite.git
+    cd hydra-suite
+    python install.py        # detects CPU / Apple MPS / NVIDIA CUDA 12 or 13
+    hydra doctor             # verify (the installer also runs it)
     ```
 
-=== "Developer"
+    Works on Linux, macOS and Windows. HYDRA Suite is not on PyPI; see
+    [Installation](getting-started/installation.md) for options, add-ons
+    (SAM3 training, SLEAP) and installing without a checkout.
+
+=== "Make (conda)"
 
     ```bash
-    # CPU
-    make setup
-    conda activate hydra
-    make install
-
     # Apple Silicon
-    make setup-mps
-    conda activate hydra-mps
-    make install-mps
+    make setup-mps && conda activate hydra-mps && make install-mps
 
-    # NVIDIA CUDA
-    make setup-cuda
-    conda activate hydra-cuda
-    make install-cuda CUDA_MAJOR=13
+    # NVIDIA CUDA (CUDA 12/13 auto-detected; CUDA_MAJOR=12|13 overrides)
+    make setup-cuda && conda activate hydra-cuda && make install-cuda
+
+    # CPU
+    make setup && conda activate hydra && make install
     ```
 
 === "Launch"

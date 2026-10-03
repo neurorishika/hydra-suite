@@ -30,3 +30,25 @@ def test_cached_checkpoint_returned_without_download(tmp_path, monkeypatch):
 
     monkeypatch.setattr(ck, "hf_hub_download", _boom)
     assert ck.ensure_checkpoint(variant, cache_dir=tmp_path) == dest
+
+
+def test_public_download_retries_anonymously_on_stale_token(monkeypatch):
+    import httpx
+    from huggingface_hub.errors import HfHubHTTPError
+
+    import hydra_suite.core.inference.sam2.checkpoints as ck
+
+    calls = []
+
+    def fake(repo_id, filename, token=None):
+        calls.append(token)
+        if token is None:
+            response = httpx.Response(
+                401, request=httpx.Request("HEAD", "https://hf.co")
+            )
+            raise HfHubHTTPError("401 Unauthorized", response=response)
+        return "/tmp/ok.pt"
+
+    monkeypatch.setattr(ck, "hf_hub_download", fake)
+    assert ck._download("facebook/sam2.1-hiera-tiny", "x.pt") == "/tmp/ok.pt"
+    assert calls == [None, False]

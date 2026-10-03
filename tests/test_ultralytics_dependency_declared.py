@@ -14,7 +14,7 @@ def test_ultralytics_mps_target_assigner_fix_is_required() -> None:
     config = tomllib.loads((root / "pyproject.toml").read_text(encoding="utf-8"))
 
     assert _FIXED_ULTRALYTICS_REQUIREMENT in config["project"]["dependencies"]
-    assert (
-        _FIXED_ULTRALYTICS_REQUIREMENT
-        in config["project"]["optional-dependencies"]["sam3"]
-    )
+    extras = config["project"]["optional-dependencies"]
+    assert _FIXED_ULTRALYTICS_REQUIREMENT in extras["sam"]
+    # sam3 is a back-compat alias that must keep pulling the fixed build.
+    assert "hydra-suite[sam]" in extras["sam3"]

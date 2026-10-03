@@ -1,84 +1,103 @@
 # Compute Runtimes
 
-This page explains how global runtime selection works in TrackerKit and PoseKit.
+HYDRA selects how every compute-heavy stage runs from **one setting: the
+runtime tier**. There are no per-stage or per-backend runtime selectors.
 
-## One Global Runtime
+## The three tiers
 
-Runtime is selected once via `compute_runtime`.
+| Tier | UI label | What it means |
+|---|---|---|
+| `cpu` | **CPU** | Everything on the CPU with native PyTorch. |
+| `gpu` | **GPU (CUDA)** / **GPU (Metal)** | Native PyTorch on the GPU. Results match the CPU path as closely as the hardware allows. |
+| `gpu_fast` | **GPU-Fast (TensorRT)** / **GPU-Fast (CoreML)** | Exported, optimised artifacts: TensorRT engines on NVIDIA, CoreML packages on Apple Silicon. Fastest, at the cost of some accuracy. |
 
-- TrackerKit: `Get Started -> Performance -> Compute runtime`
-- PoseKit: `Inference -> Runtime`
+Only tiers this machine can run are offered. On a machine with neither CUDA
+nor Apple MPS, only **CPU** appears.
 
-The same runtime drives:
+Where to set it:
 
-- YOLO-OBB detection
-- YOLO-pose inference
-- SLEAP inference
-- ViTPose inference
+- **TrackerKit:** the **Compute tier** card in the Performance group. The
+  same tier drives detection, head–tail, CNN identity, YOLO-pose, SLEAP and
+  ViTPose pose, and background subtraction. Pose has no separate runtime
+  control.
+- **PoseKit:** `Inference → Runtime`.
+- **Config files / CLI:** the `runtime_tier` key (`"cpu"`, `"gpu"`, `"gpu_fast"`).
 
-## Runtime Options
+## How a tier resolves per stage
 
-- `cpu`
-- `mps`
-- `cuda`
-- `onnx_coreml`
-- `onnx_cpu`
-- `onnx_cuda`
-- `tensorrt`
+The tier is resolved for each stage (OBB detection, head–tail, CNN identity,
+YOLO-pose, SLEAP pose, ViTPose pose, background subtraction) into a concrete
+backend and device:
 
-The UI only shows options valid for the currently enabled pipelines.
+| Tier | NVIDIA host | Apple Silicon host | CPU-only host |
+|---|---|---|---|
+| `cpu` | torch on CPU | torch on CPU | torch on CPU |
+| `gpu` | torch on CUDA | torch on MPS | torch on CPU (fallback) |
+| `gpu_fast` | TensorRT on CUDA | CoreML on MPS | torch on CPU (fallback) |
 
-## Intersection Gating (Important)
+Fallbacks are explicit, never silent:
 
-Available runtimes are the **intersection** of support across enabled pipelines.
+- On `gpu_fast`, a stage whose fast artifact is not available runs on the
+  native GPU instead (torch on CUDA/MPS). TrackerKit shows a note under the
+  tier selector when this happens.
+- **Background subtraction** has no TensorRT/CoreML implementation. On
+  `gpu_fast` it runs exactly as on `gpu`: CuPy on CUDA, PyTorch on MPS, Numba
+  on CPU.
 
-Examples:
+## ONNX Runtime
 
-- If tracking uses YOLO-OBB + YOLO-pose, runtime must be valid for both.
-- If pose backend is switched to SLEAP, runtime options are recomputed immediately.
-- Invalid saved runtime is automatically reset to a valid one.
+Stages that run on torch never use ONNX Runtime. Where an ONNX model is used,
+the execution providers follow the resolved backend:
 
-## What Each Runtime Means
+| Resolved backend | ONNX Runtime execution providers |
+|---|---|
+| `tensorrt` (NVIDIA `gpu_fast`) | TensorRT EP (with a persistent per-machine engine cache), then CUDA EP, then CPU |
+| `coreml` (Apple `gpu_fast`) | CoreML EP, when ONNX Runtime's CoreML provider is available on an MPS host, then CPU |
+| `torch` | CPU |
 
-- `cpu`: CPU inference paths.
-- `mps`: Apple Metal (PyTorch-native paths).
-- `onnx_coreml`: ONNX Runtime with CoreMLExecutionProvider on Apple Silicon.
-- `cuda`: PyTorch CUDA native paths.
-- `onnx_cpu`: ONNX Runtime with CPU provider.
-- `onnx_cuda`: ONNX Runtime with CUDA provider.
-- `tensorrt`: TensorRT engine/runtime on NVIDIA CUDA.
+The Apple install includes an `onnxruntime` build with the CoreML provider.
+`hydra doctor` warns if it is missing.
 
-## Auto Export and Artifact Location
+## Auto export and artifact location
 
-Export artifacts are generated automatically when needed.
+Fast-tier artifacts are generated automatically the first time they are
+needed, next to the source model:
 
-- YOLO model `/path/model.pt`:
-  - ONNX: `/path/model.onnx`
-  - TensorRT: `/path/model.engine`
-- SLEAP model directory `/path/sleap_model_dir`:
-  - ONNX export directory: `/path/sleap_model_dir.onnx`
-  - TensorRT export directory: `/path/sleap_model_dir.tensorrt`
+- YOLO model `/path/model.pt` → TensorRT `/path/model.engine` (NVIDIA) or
+  CoreML `/path/model.mlpackage` (Apple Silicon)
+- SLEAP model directory `/path/sleap_model_dir` → `/path/sleap_model_dir.onnx`
+  / `/path/sleap_model_dir.tensorrt`
 
-No manual exported-model-path entry is required.
+No manual exported-model path is required. See
+[Inference Fast Mode](../developer-guide/inference-fast-mode.md) for the
+export details and determinism caveats.
 
-## Platform Expectations
+## Behavior during runs
 
-- Apple Silicon:
-  - Typically `mps`, `onnx_coreml`, and `onnx_cpu` (no TensorRT).
-- NVIDIA CUDA:
-  - `cuda`, `onnx_cuda`, and `tensorrt` when installed correctly.
+Runtime controls are locked during long-running prediction/tracking tasks to
+prevent backend switching crashes.
 
-## Behavior During Runs
+## Older configs
 
-Runtime controls are locked during long-running prediction/tracking tasks to prevent backend switching crashes.
+Configs saved before runtime tiers existed used per-stage strings such as
+`compute_runtime: "onnx_coreml"`. Loading a config without `runtime_tier` fails
+with an error that points to the one-time migration:
+
+```bash
+python scripts/migrate_runtime_config.py <config.json>
+```
 
 ## Troubleshooting
 
-- Runtime disappeared from dropdown:
-  - A selected backend/pipeline no longer supports it.
-- ONNX shown but fails at runtime:
-  - Check provider availability and model export compatibility.
-- SLEAP ONNX/TensorRT unavailable:
-  - Verify selected SLEAP environment and export dependencies.
+- **Only "CPU" is offered:** torch cannot see a GPU. Run `hydra doctor`. On
+  NVIDIA this is usually a CUDA 13 build on a pre-580 driver; see
+  [Installation](../getting-started/installation.md#troubleshooting).
+- **`gpu_fast` is not faster, or a note says a stage fell back:** that stage
+  has no fast artifact (for example, background subtraction) or its export
+  failed. Check the log for the export error.
+- **SLEAP fast export unavailable:** the SLEAP sidecar env needs its export
+  extras. Rebuild it with `python install.py --with-sleap`.
 
-See also: [Integrations](../getting-started/integrations.md), [Troubleshooting](troubleshooting.md)
+See also: [Integrations](../getting-started/integrations.md),
+[Platform Notes](../getting-started/platforms.md),
+[Troubleshooting](troubleshooting.md)

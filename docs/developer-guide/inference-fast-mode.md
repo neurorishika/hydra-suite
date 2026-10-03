@@ -23,7 +23,7 @@ and reused on subsequent runs.
 * Format: TensorRT FP32 engine
 * Precision: fp32 (numerically close to the PyTorch baseline but NOT bit-identical
   — kernel fusion reorders ops; see the Determinism note below)
-* Trigger: `compute_runtime = "tensorrt"` in TrackerKit / ClassKit config
+* Trigger: `runtime_tier = "gpu_fast"` on an NVIDIA (CUDA) host (resolves to the `tensorrt` backend)
 * Artifact path: `<model>.engine` adjacent to the source `.pt`
 
 ### Apple Silicon → CoreML
@@ -34,7 +34,7 @@ classifier families to CoreML `.mlpackage` bundles on first run.
 * Format: CoreML `.mlpackage` (directory bundle)
 * Compute units: `ALL` (Neural Engine + CPU + GPU)
 * Minimum deployment target: macOS 13
-* Trigger: `compute_runtime = "coreml"` in TrackerKit / ClassKit config
+* Trigger: `runtime_tier = "gpu_fast"` on an Apple Silicon (MPS) host (resolves to the `coreml` backend)
 * Artifact path: `<model>.mlpackage` adjacent to the source `.pt` / `.pth`
 
 ---

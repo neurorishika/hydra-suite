@@ -3,7 +3,7 @@ from __future__ import annotations
 import sys
 import types
 
-import verify_cuda_runtime as verify
+import hydra_suite.runtime.cuda_checks as verify
 
 
 class _FakeDist:

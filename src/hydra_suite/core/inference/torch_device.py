@@ -26,3 +26,18 @@ def resolve_torch_device(preference: str | None = None) -> str:
     if MPS_AVAILABLE:
         return "mps"
     return "cpu"
+
+
+def device_choices() -> list[tuple[str, str]]:
+    """(label, value) pairs for a device picker: Auto + what this host has.
+
+    Values feed :func:`resolve_torch_device`. CPU is always offered so a user
+    can keep a busy GPU free; unavailable accelerators are never listed.
+    """
+    choices = [("Auto (best available)", "auto")]
+    if TORCH_CUDA_AVAILABLE:
+        choices.append(("NVIDIA GPU (CUDA)", "cuda"))
+    if MPS_AVAILABLE:
+        choices.append(("Apple GPU (MPS)", "mps"))
+    choices.append(("CPU (slow)", "cpu"))
+    return choices

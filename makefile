@@ -1,191 +1,90 @@
-.PHONY: configure-mps-libs env-create env-create-cuda env-create-mps env-update env-update-cuda env-update-mps env-remove env-remove-cuda env-remove-mps install install-cuda install-mps install-apriltag-fork install-sam3-clip setup-sam3-train install-dev configure-cuda-ort setup setup-cuda setup-mps test pytest test-cov test-cov-html clean docs-install docs-serve docs-build docs-quality docs-check techref-build techref-clean pre-commit-install pre-commit-autopep8 pre-commit-run pre-commit-update format format-check lint lint-fix lint-strict lint-report dead-code dead-code-fix dep-graph dep-graph-text type-check audit benchmark build publish publish-test help
+.PHONY: configure-mps-libs env-create env-create-cuda env-create-mps env-update env-update-cuda env-update-mps env-remove env-remove-cuda env-remove-mps install install-cuda install-mps install-apriltag-fork install-sam3-clip setup-sam3-train setup-sleap doctor install-dev configure-cuda-ort setup setup-cuda setup-mps test pytest test-cov test-cov-html clean docs-install docs-serve docs-build docs-quality docs-check techref-build techref-clean pre-commit-install pre-commit-autopep8 pre-commit-run pre-commit-update format format-check lint lint-fix lint-strict lint-report dead-code dead-code-fix dep-graph dep-graph-text type-check audit benchmark build publish publish-test help
 
 # Environment names for different platforms
 ENV_NAME = hydra
 ENV_NAME_GPU = hydra-cuda
 ENV_NAME_MPS = hydra-mps
-CUDA_MAJOR ?= 13
+# CUDA major: empty = detect from the NVIDIA driver (>=580 -> 13, else 12).
+# Override with `make install-cuda CUDA_MAJOR=12`.
+CUDA_MAJOR ?=
 PYTEST ?= pytest
 PYTHON_BIN = $(if $(CONDA_PREFIX),$(CONDA_PREFIX)/bin/python,python)
-UV_PIP = uv pip
-UV_PIP_PYTHON = $(if $(CONDA_PREFIX),--python "$(CONDA_PREFIX)/bin/python",)
-PRE_COMMIT = $(if $(CONDA_PREFIX),env LD_LIBRARY_PATH="$(CONDA_PREFIX)/targets/x86_64-linux/lib:$(CONDA_PREFIX)/lib$${LD_LIBRARY_PATH:+:$$LD_LIBRARY_PATH}" "$(CONDA_PREFIX)/bin/pre-commit",pre-commit)
-APRILTAG_FORK_REPO = https://github.com/Social-Evolution-and-Behavior/apriltag.git
-APRILTAG_FORK_COMMIT = c43a9b6e6b7dcfe0e7647a78eff6655a1d743c2c
-APRILTAG_FORK_REF = c43a9b6
+PRE_COMMIT = $(if $(CONDA_PREFIX),"$(CONDA_PREFIX)/bin/pre-commit",pre-commit)
 
-define reset_onnxruntime_packages
-	@"$(PYTHON_BIN)" -m pip uninstall -y onnxruntime onnxruntime-gpu >/dev/null 2>&1 || true
-endef
-
-define reset_tensorrt_packages
-	@"$(PYTHON_BIN)" -m pip uninstall -y tensorrt tensorrt-cu12 tensorrt-cu12-bindings tensorrt-cu12-libs tensorrt-cu13 tensorrt-cu13-bindings tensorrt-cu13-libs >/dev/null 2>&1 || true
-endef
+# Every install target is a thin wrapper around install.py -- the one
+# cross-platform installer (Windows users run it directly). Python
+# dependencies live ONLY in pyproject.toml; tested versions in constraints/.
+# BOOT_PY runs the installer itself and may be any Python >= 3.9.
+BOOT_PY ?= python3
+INSTALL = $(BOOT_PY) install.py
+CUDA_FLAG = $(if $(CUDA_MAJOR),--cuda $(CUDA_MAJOR),)
+# Inside an activated env, install into it; otherwise install.py manages the env.
+CURRENT = $(if $(CONDA_PREFIX)$(VIRTUAL_ENV),--target current,)
 
 # =============================================================================
 # ENVIRONMENT SETUP
 # =============================================================================
 
-# Step 1: Create conda environment
+# Step 1: create the conda env (python + ffmpeg + build tools only)
 env-create:
-	@echo "Creating CPU-optimized environment..."
-	mamba env create -f environment.yml
+	$(INSTALL) --target conda --tier cpu --env $(ENV_NAME) --create-only
 
 env-create-cuda:
-	@echo "Creating NVIDIA GPU (CUDA) environment..."
-	mamba env create -f environment-cuda.yml
+	$(INSTALL) --target conda --tier cuda $(CUDA_FLAG) --env $(ENV_NAME_GPU) --create-only
 
 env-create-mps:
-	@echo "Creating Apple Silicon (MPS) environment..."
-	mamba env create -f environment-mps.yml
+	$(INSTALL) --target conda --tier mps --env $(ENV_NAME_MPS) --create-only
 
-
-# Step 2: Install pip packages (run after activating environment)
-configure-cuda-ort:
-	@if [ -z "$$CONDA_PREFIX" ]; then \
-		echo "ERROR: activate the CUDA conda env first (conda activate $(ENV_NAME_GPU))"; \
-		exit 1; \
-	fi
-	@mkdir -p "$$CONDA_PREFIX/etc/conda/activate.d" "$$CONDA_PREFIX/etc/conda/deactivate.d"
-	@printf '%s\n' \
-		'export _HYDRA_OLD_LD_LIBRARY_PATH="$${LD_LIBRARY_PATH:-}"' \
-		'export LD_LIBRARY_PATH="$$CONDA_PREFIX/targets/x86_64-linux/lib:$$CONDA_PREFIX/lib$${LD_LIBRARY_PATH:+:$$LD_LIBRARY_PATH}"' \
-		> "$$CONDA_PREFIX/etc/conda/activate.d/onnxruntime-cuda12-paths.sh"
-	@printf '%s\n' \
-		'if [ -n "$${_HYDRA_OLD_LD_LIBRARY_PATH+x}" ]; then' \
-		'  export LD_LIBRARY_PATH="$$_HYDRA_OLD_LD_LIBRARY_PATH"' \
-		'  unset _HYDRA_OLD_LD_LIBRARY_PATH' \
-		'else' \
-		'  unset LD_LIBRARY_PATH' \
-		'fi' \
-		> "$$CONDA_PREFIX/etc/conda/deactivate.d/onnxruntime-cuda12-paths.sh"
-	@echo "Configured CUDA 12 runtime library path hook for ONNX Runtime GPU."
-	@"$(PYTHON_BIN)" verify_cuda_runtime.py
-
-install-apriltag-fork:
-	@prefix="$${CONDA_PREFIX:-$${VIRTUAL_ENV:-}}"; \
-	if [ -z "$$prefix" ]; then \
-		echo "ERROR: activate a conda environment or virtualenv before installing the apriltag fork."; \
-		exit 1; \
-	fi; \
-	python_bin="$$prefix/bin/python"; \
-	if [ ! -x "$$python_bin" ]; then \
-		echo "ERROR: expected Python interpreter at $$python_bin"; \
-		exit 1; \
-	fi; \
-	tmpdir=$$(mktemp -d); \
-	trap 'rm -rf "$$tmpdir"' EXIT HUP INT TERM; \
-	echo "Installing apriltag fork $(APRILTAG_FORK_REF) into $$prefix..."; \
-	"$$python_bin" -m pip uninstall -y apriltag >/dev/null 2>&1 || true; \
-	git clone --quiet "$(APRILTAG_FORK_REPO)" "$$tmpdir/apriltag"; \
-	cd "$$tmpdir/apriltag"; \
-	git checkout --quiet --detach "$(APRILTAG_FORK_COMMIT)"; \
-	cmake -S . -B build \
-		-DCMAKE_BUILD_TYPE=Release \
-		-DCMAKE_INSTALL_PREFIX="$$prefix" \
-		-DPython3_EXECUTABLE="$$python_bin" \
-		-DPython3_ROOT_DIR="$$prefix" \
-		-DPython3_FIND_VIRTUALENV=ONLY \
-		-DBUILD_EXAMPLES=OFF; \
-	cmake --build build --parallel; \
-	cmake --install build; \
-	echo "Installed apriltag fork $(APRILTAG_FORK_REF)."
-
-install-sam3-clip:
-	@prefix="$${CONDA_PREFIX:-$${VIRTUAL_ENV:-}}"; \
-	if [ -z "$$prefix" ]; then \
-		echo "ERROR: activate a conda environment or virtualenv before installing the SAM3 CLIP dependency."; \
-		exit 1; \
-	fi; \
-	echo "Installing ultralytics/CLIP fork for SAM3 semantic escalation..."; \
-	"$$prefix/bin/python" -m pip install --quiet git+https://github.com/ultralytics/CLIP.git; \
-	echo "Installed CLIP for SAM3 semantic escalation."
-
-SAM3_TRAIN_PLATFORM ?=
-
-setup-sam3-train:
-	@bash tools/setup_sam3_train_env.sh $(SAM3_TRAIN_PLATFORM)
-
-configure-mps-libs:
-	@if [ -z "$$CONDA_PREFIX" ]; then \
-		echo "ERROR: activate the MPS conda env first (conda activate $(ENV_NAME_MPS))"; \
-		exit 1; \
-	fi
-	@$(PYTHON_BIN) tools/configure_mps_libs.py
-
+# Step 2: install packages into the ACTIVATED env
 install:
-	@echo "Installing CPU packages..."
-	$(UV_PIP) install $(UV_PIP_PYTHON) -v -r requirements.txt
-	@$(MAKE) install-apriltag-fork
-	@$(MAKE) install-sam3-clip
+	"$(PYTHON_BIN)" install.py $(CURRENT) --tier cpu
 
 install-cuda:
-	@echo "Installing NVIDIA GPU (CUDA) packages..."
-	@if [ "$(CUDA_MAJOR)" != "12" ] && [ "$(CUDA_MAJOR)" != "13" ]; then \
-		echo "ERROR: CUDA_MAJOR must be 12 or 13"; \
-		exit 1; \
-	fi
-	$(call reset_onnxruntime_packages)
-	$(call reset_tensorrt_packages)
-	@# requirements-cuda*.txt adds --extra-index-url .../whl/cuXXX. uv's default
-	@# --index-strategy first-index then resolves EVERY package (not just torch)
-	@# against that index first; the pytorch index only ships iopath==0.1.9, so
-	@# uv concludes sam2>=1.1.0 (needs iopath>=0.1.10) is unsatisfiable and the
-	@# whole install aborts. --index-strategy unsafe-best-match makes uv
-	@# consider all indexes for every package, which is what CPU/MPS installs
-	@# already get implicitly (they have no extra index). Do not remove this
-	@# thinking it's a no-op: without it, install-cuda fails on a clean box.
-	$(UV_PIP) install $(UV_PIP_PYTHON) --index-strategy unsafe-best-match -v -r requirements-cuda$(CUDA_MAJOR).txt
-	@$(MAKE) install-apriltag-fork
-	@$(MAKE) install-sam3-clip
-	@$(MAKE) configure-cuda-ort
+	"$(PYTHON_BIN)" install.py $(CURRENT) --tier cuda $(CUDA_FLAG)
 
 install-mps:
-	@echo "Installing Apple Silicon (MPS) packages..."
-	$(call reset_onnxruntime_packages)
-	$(UV_PIP) install $(UV_PIP_PYTHON) -v -r requirements-mps.txt
-	@$(MAKE) install-apriltag-fork
-	@$(MAKE) install-sam3-clip
-	@$(MAKE) configure-mps-libs
+	"$(PYTHON_BIN)" install.py $(CURRENT) --tier mps
+
+# Individual installer steps (kept for existing muscle memory)
+install-apriltag-fork:
+	"$(PYTHON_BIN)" install.py $(CURRENT) --only apriltag
+
+install-sam3-clip:
+	"$(PYTHON_BIN)" install.py $(CURRENT) --only clip
+
+configure-mps-libs:
+	"$(PYTHON_BIN)" -m hydra_suite.runtime.macos_libomp
+
+# Retired: ONNX Runtime now loads its CUDA libraries from the pip nvidia-*
+# wheels (onnxruntime.preload_dlls), so there is no LD_LIBRARY_PATH hook to
+# write. Kept as a name; runs the CUDA self-check instead.
+configure-cuda-ort:
+	"$(PYTHON_BIN)" -m hydra_suite.runtime.doctor --tier cuda
+
+doctor:
+	"$(PYTHON_BIN)" -m hydra_suite.runtime.doctor
+
+# Optional sidecar envs
+# The sidecar copies hydra-suite's source from the env it is run against, so
+# run these from the ACTIVATED main env.
+setup-sam3-train:
+	"$(PYTHON_BIN)" install.py $(CURRENT) --tier cuda $(CUDA_FLAG) --with-sam3-train --only sam3-train
+
+setup-sleap:
+	"$(PYTHON_BIN)" install.py $(CURRENT) $(CUDA_FLAG) --with-sleap --only sleap
 
 # =============================================================================
 # ENVIRONMENT MAINTENANCE
 # =============================================================================
 
-# Update environments
 env-update:
-	@echo "Updating CPU environment..."
-	mamba env update -f environment.yml --prune
-	$(UV_PIP) install $(UV_PIP_PYTHON) -v -r requirements.txt --upgrade
-	@$(MAKE) install-apriltag-fork
-	@$(MAKE) install-sam3-clip
+	$(INSTALL) --target conda --tier cpu --env $(ENV_NAME) --update
 
 env-update-cuda:
-	@echo "Updating NVIDIA GPU (CUDA) environment..."
-	mamba env update -f environment-cuda.yml --prune
-	@if [ "$(CUDA_MAJOR)" != "12" ] && [ "$(CUDA_MAJOR)" != "13" ]; then \
-		echo "ERROR: CUDA_MAJOR must be 12 or 13"; \
-		exit 1; \
-	fi
-	$(call reset_onnxruntime_packages)
-	$(call reset_tensorrt_packages)
-	@# Same --extra-index-url/iopath-vs-sam2 defect as install-cuda; see comment there.
-	$(UV_PIP) install $(UV_PIP_PYTHON) --index-strategy unsafe-best-match -v -r requirements-cuda$(CUDA_MAJOR).txt --upgrade
-	@$(MAKE) install-apriltag-fork
-	@$(MAKE) install-sam3-clip
-	@if [ -n "$$CONDA_PREFIX" ]; then \
-		$(MAKE) configure-cuda-ort; \
-	else \
-		echo "NOTE: activate the CUDA conda env and run 'make install-cuda CUDA_MAJOR=$(CUDA_MAJOR)' to refresh ONNX Runtime hooks and run the CUDA self-check."; \
-	fi
+	$(INSTALL) --target conda --tier cuda $(CUDA_FLAG) --env $(ENV_NAME_GPU) --update
 
 env-update-mps:
-	@echo "Updating Apple Silicon (MPS) environment..."
-	mamba env update -f environment-mps.yml --prune
-	$(call reset_onnxruntime_packages)
-	$(UV_PIP) install $(UV_PIP_PYTHON) -v -r requirements-mps.txt --upgrade
-	@$(MAKE) install-apriltag-fork
-	@$(MAKE) install-sam3-clip
+	$(INSTALL) --target conda --tier mps --env $(ENV_NAME_MPS) --update
 
 # Remove environments
 env-remove:
@@ -264,34 +163,16 @@ clean:
 # =============================================================================
 
 setup:
-	@echo "📦 Setting up CPU-optimized environment..."
-	@echo ""
-	mamba env create -f environment.yml
-	@echo ""
-	@echo "✅ Conda environment created!"
-	@echo "📝 Next steps:"
-	@echo "   1. conda activate $(ENV_NAME)"
-	@echo "   2. make install"
+	$(INSTALL) --target conda --tier cpu --env $(ENV_NAME) --create-only
+	@echo "Next: conda activate $(ENV_NAME) && make install   (or just: python install.py)"
 
 setup-cuda:
-	@echo "📦 Setting up NVIDIA GPU (CUDA) environment..."
-	@echo ""
-	mamba env create -f environment-cuda.yml
-	@echo ""
-	@echo "✅ Conda environment created!"
-	@echo "📝 Next steps:"
-	@echo "   1. conda activate $(ENV_NAME_GPU)"
-	@echo "   2. make install-cuda CUDA_MAJOR=13  # or CUDA_MAJOR=12"
+	$(INSTALL) --target conda --tier cuda $(CUDA_FLAG) --env $(ENV_NAME_GPU) --create-only
+	@echo "Next: conda activate $(ENV_NAME_GPU) && make install-cuda   (CUDA auto-detected; CUDA_MAJOR=12|13 overrides)"
 
 setup-mps:
-	@echo "📦 Setting up Apple Silicon (MPS) environment..."
-	@echo ""
-	mamba env create -f environment-mps.yml
-	@echo ""
-	@echo "✅ Conda environment created!"
-	@echo "📝 Next steps:"
-	@echo "   1. conda activate $(ENV_NAME_MPS)"
-	@echo "   2. make install-mps"
+	$(INSTALL) --target conda --tier mps --env $(ENV_NAME_MPS) --create-only
+	@echo "Next: conda activate $(ENV_NAME_MPS) && make install-mps"
 
 # =============================================================================
 # PACKAGING & PUBLISHING
@@ -329,17 +210,14 @@ publish: build
 # =============================================================================
 
 docs-install:
-	$(UV_PIP) install $(UV_PIP_PYTHON) -r requirements-docs.txt
+	"$(PYTHON_BIN)" -c "import tomllib; print('\n'.join(tomllib.load(open('pyproject.toml','rb'))['project']['optional-dependencies']['docs']))" > .docs-reqs.txt
+	"$(PYTHON_BIN)" -m pip install -r .docs-reqs.txt -c constraints/base.txt && rm -f .docs-reqs.txt
 
 install-dev:
-	@echo "🔧 Installing dev & code-quality tools..."
-	$(UV_PIP) install $(UV_PIP_PYTHON) -r requirements-dev.txt
-	@echo ""
-	@echo "⚠️  graphviz dot binary is not pip-installable."
-	@echo "   If you need dep-graph, run once in your active conda env:"
-	@echo "   conda install -c conda-forge graphviz"
-	@echo ""
-	@echo "✅ Dev tools installed. Run 'make help' to see available audit targets."
+	@echo "🔧 Installing dev & code-quality tools (pyproject [dev] extra, tested pins)..."
+	"$(PYTHON_BIN)" -c "import tomllib; print('\n'.join(tomllib.load(open('pyproject.toml','rb'))['project']['optional-dependencies']['dev']))" > .dev-reqs.txt
+	"$(PYTHON_BIN)" -m pip install -r .dev-reqs.txt -c constraints/base.txt && rm -f .dev-reqs.txt
+	@echo "⚠️  dep-graph also needs the graphviz dot binary: conda install -c conda-forge graphviz"
 
 docs-serve:
 	mkdocs serve

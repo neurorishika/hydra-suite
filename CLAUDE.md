@@ -12,44 +12,58 @@ This file provides guidance to Claude Code (claude.ai/code) when working with co
 
 ## Build & Environment Setup
 
-### Quick Install (pip, CPU only)
+### Install (one command, every platform)
+
+`install.py` (repo root, stdlib-only, runs on any Python >= 3.9) is the one
+cross-platform installer for Linux, macOS and Windows. It detects the tier
+(`cpu` / `mps` / `cuda`), picks CUDA 12 vs 13 from the NVIDIA driver
+(>= 580 -> CUDA 13 / `cu130`, else CUDA 12 / `cu128`), builds a conda env (or
+a venv without conda), installs pinned torch from the PyTorch index plus
+`"hydra-suite[<tier>,sam]"`, the CLIP fork and the AprilTag fork, and finishes
+with `hydra doctor`.
 
 ```bash
-pip install hydra-suite
+python install.py                    # detect platform, build/refresh env, run doctor
+python install.py --dry-run          # print the plan only
+python install.py --cuda 12          # override driver detection (or CUDA_MAJOR=12)
+python install.py --update           # upgrade an existing env
+python install.py --recreate         # rebuild the conda env (do this for pre-pyproject envs)
+python install.py --with-sam3-train  # + hydra-sam3 training sidecar (CUDA only)
+python install.py --with-sleap       # + sleap sidecar (sleap==1.6.2)
+python install.py --dev --docs       # + dev / docs extras
+python install.py --latest           # ignore the tested pins in constraints/
+hydra doctor                         # headless install verification (also: make doctor)
 ```
 
-For GPU variants:
+hydra-suite is **not on PyPI**; never document `pip install hydra-suite`.
+Without a checkout: `python install.py --source git+https://github.com/neurorishika/hydra-suite@main`
+(tested pins only apply from a checkout or via `--constraints FILE`).
+
+Dependencies: `pyproject.toml` is the ONLY place Python deps are declared
+(extras `cpu`, `mps`, `cuda12`, `cuda13`, `cuda`=`cuda12`, `sam`, `sam3-train`,
+`dev`, `docs`). Tested versions live in `constraints/{base,cuda12,cuda13}.txt`;
+regenerate with `python tools/lock_constraints.py [--upgrade-package X]`, then
+re-run the equivalence gates. Torch is pinned by `TORCH_VERSION`/`TORCHVISION_VERSION`
+in `install.py`. Conda envs (`environment*.yml`) hold only python, pip,
+git, cmake and compilers (ffmpeg comes from the `imageio-ffmpeg` wheel; conda's
+ffmpeg broke Qt on Rocky 9); there are no `requirements*.txt` files and no conda
+CUDA libraries (ONNX Runtime GPU loads the pip `nvidia-*` wheels via
+`onnxruntime.preload_dlls()`).
+
+### Make targets (wrap install.py)
 
 ```bash
-# NVIDIA GPU
-pip install torch torchvision --index-url https://download.pytorch.org/whl/cu128
-pip install hydra-suite[cuda]
-
-# Apple Silicon
-pip install hydra-suite[mps]   # requires torchvision>=0.16.0 for the native MPS roi_align kernel
+make setup            # create env only: hydra      (also setup-mps / setup-cuda)
+make install          # into the ACTIVATED env      (also install-mps / install-cuda [CUDA_MAJOR=12|13])
+make env-update       # install.py --update         (also env-update-mps / env-update-cuda)
+make doctor           # hydra doctor
+make setup-sam3-train # SAM3 training sidecar (CUDA only)
+make setup-sleap      # SLEAP sidecar
+make install-dev      # dev/audit tools
+make docs-install     # docs tools
 ```
 
-### Full Environment (conda)
-
-Platform-specific conda environments are used. Choose one:
-
-```bash
-# Create environment (pick your platform)
-make setup            # CPU / NumPy+Numba
-make setup-mps        # Apple Silicon (M1/M2/M3/M4)
-make setup-cuda       # NVIDIA GPU (CUDA 12 or 13)
-
-# After activating the environment, install runtime packages
-make install          # or install-mps / install-cuda
-
-# Install dev/audit tools
-make install-dev
-
-# Install docs tools
-make docs-install
-```
-
-Environment names: `hydra`, `hydra-mps`, `hydra-cuda`.
+Environment names: `hydra`, `hydra-mps`, `hydra-cuda` (sidecars: `hydra-sam3`, `sleap`).
 
 ## Running Tests
 
@@ -113,6 +127,20 @@ git worktree remove --force .worktrees/equiv-legacy && git worktree prune
   documented noise floor, not a regression (see memory `project-migration-verification`).
 - **Performance:** `new/legacy` wall-clock ratio ≤ `PERF_TOLERANCE` (default 1.25).
 - **Both platforms:** MPS (Apple, `hydra-mps`, this box) **and** CUDA (mehek, `hydra-cuda`).
+
+### Env-swap gate (install / dependency changes)
+
+`run_matrix.sh` holds the env fixed and swaps `src/`. For install or pin changes
+use `tools/equivalence/env_swap_gate.sh`: same `src/`, two environments
+(`OLD_PY` vs `NEW_PY`). Verdict per clip is **BYTE-IDENTICAL**, or
+**BLAS-FLOOR** when only BLAS float rounding in `PositionUncertainty`/`AssignmentConfidence`
+differs; anything else fails.
+
+```bash
+OLD_PY=/path/old/bin/python NEW_PY=/path/new/bin/python \
+  SRC=$PWD/src OUT=/tmp/envswap RUNTIME=mps \
+  bash tools/equivalence/env_swap_gate.sh fly_obb worm_bgsub
+```
 
 ### CUDA box (mehek)
 ```bash
@@ -388,7 +416,7 @@ Superseded code is moved to `legacy/` for one release cycle before deletion. `le
 3. Labels persisted to YOLO pose format
 4. Optional model-assisted inference (YOLO pose, SLEAP, or ViTPose) and split-generation steps
 
-PoseKit inference uses the same `compute_runtime` system and the same ONNX/TensorRT artifact auto-management pattern as MAT.
+PoseKit inference uses the same Runtime Gen-2 tier (`runtime_tier` → `ResolvedBackend`) and the same ONNX/TensorRT artifact auto-management pattern as MAT.
 
 ---
 

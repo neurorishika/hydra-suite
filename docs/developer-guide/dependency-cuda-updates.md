@@ -1,168 +1,119 @@
-# CUDA Dependency Updates Tracker
+# Dependency and CUDA Updates
 
-This page tracks workarounds and pinned dependencies that depend on external packages improving their CUDA 13 support. As package maintainers release updated versions with better CUDA compatibility, the items below should be revisited and updated.
+How dependency versions are declared, pinned and bumped, and the CUDA-specific
+constraints to re-check when you do.
 
-## Current Workarounds
+## Where versions live
 
-### FAISS GPU Wheel for CUDA 13
+| What | File | Role |
+|---|---|---|
+| Allowed ranges | `pyproject.toml` | The **only** declaration of Python dependencies: core deps plus extras `cpu`, `mps`, `cuda12`, `cuda13` (`cuda` = alias for `cuda12`), `sam` (`sam3` alias), `sam3-train` (sidecar only), `dev`, `docs`, `onnx-tools`. |
+| Tested pins | `constraints/base.txt`, `constraints/cuda12.txt`, `constraints/cuda13.txt` | Exact versions `install.py` applies by default. **Generated** — never edit by hand. |
+| torch / torchvision | `TORCH_VERSION`, `TORCHVISION_VERSION` in `install.py` | A matched release pair, installed from the PyTorch index for the tier. |
+| Driver → CUDA mapping | `CUDA13_MIN_DRIVER` in `install.py` (580) | Driver ≥ 580 gets CUDA 13 (`cu130`); older drivers get CUDA 12 (`cu128`). |
+| Git-only pins | `CLIP_REF`, `APRILTAG_COMMIT`, `SAM3_REF` in `install.py` | ultralytics CLIP fork, Kronauer lab AprilTag fork, Meta `sam3` (training sidecar). |
+| Sidecar pins | `SLEAP_PIN` (`1.6.2`) and the `sam3_train_steps` pin list in `install.py` | SLEAP and SAM3-training sidecar envs. |
 
-**Status**: ⚠️ Requires Action
+`tools/lock_constraints.py` deliberately does **not** pin `torch`,
+`torchvision`, `triton`, `nvidia-*`, `cuda-*` or `hydra-suite` itself. Torch
+comes from the PyTorch wheel index, and the `nvidia-*` wheels must follow
+whichever torch build is installed.
 
-**Current Workaround**: Use `faiss-cpu` in `requirements-cuda13.txt`
+## Bumping the tested pins
 
-**File**: `requirements-cuda13.txt`
+```bash
+python tools/lock_constraints.py                          # re-resolve, keep existing pins
+python tools/lock_constraints.py --upgrade-package numpy  # bump one package
+python tools/lock_constraints.py --upgrade                # bump everything
+```
 
-**Issue**:
+The tool resolves universally (one file covers Linux, macOS and Windows,
+Python 3.11+). Then, **before committing new pins**:
 
-- FAISS GPU wheels are unavailable for CUDA 13 + Python 3.13 due to limited build coverage from Meta
-- CPU variant is a functional fallback but lacks GPU acceleration for vector similarity search
+1. Build a fresh env from the new pins (`python install.py --recreate`, or a
+   throwaway `--env`).
+2. Prove tracking output did not move with the env-swap gate. It keeps the
+   `src/` tree fixed and swaps the interpreter (old env vs new env):
 
-**Action Required When Fixed**:
+    ```bash
+    OLD_PY=/path/to/old/env/bin/python NEW_PY=/path/to/new/env/bin/python \
+    SRC=$PWD/src OUT=/tmp/envswap RUNTIME=mps \
+      bash tools/equivalence/env_swap_gate.sh fly_obb worm_bgsub
+    ```
 
-1. Monitor [FAISS releases](https://github.com/facebookresearch/faiss/releases) for CUDA 13 + Python 3.13 wheel availability
-2. Test `faiss-gpu` with CUDA 13.x in CI environment
-3. Replace `faiss-cpu` with `faiss-gpu` in `requirements-cuda13.txt`
-4. Update documentation in `docs/getting-started/installation.md` and `docs/getting-started/environments.md` to remove the fallback note
+    A clip passes as **BYTE-IDENTICAL**, or as **BLAS-FLOOR** when the only
+    differences are BLAS float rounding in the Kalman diagnostic columns
+    (`PositionUncertainty`, `AssignmentConfidence`). Anything else is a real
+    change.
+3. Run it on **MPS and CUDA** (CUDA 12 and CUDA 13 if `cuda12.txt` /
+   `cuda13.txt` changed).
 
-**Related Issue**: Meta/FAISS issue tracker for CUDA 13 wheel builds
+Users who want the newest releases regardless can install with
+`python install.py --latest`.
 
----
+## Bumping torch
 
-### ONNX Runtime GPU Version Pinning
+1. Change `TORCH_VERSION` **and** `TORCHVISION_VERSION` in `install.py`
+   together. They are a matched pair. Check the PyTorch release notes for
+   the torchvision that goes with the new torch.
+2. Confirm the `+cu128` and `+cu130` builds of that version exist on
+   `https://download.pytorch.org/whl/cu128` and `.../cu130`. The local tag is
+   what stops PyPI's default (CUDA 13) Linux wheel from being chosen on a
+   CUDA 12 host.
+3. If PyTorch drops or adds a CUDA line, update the tag map in
+   `torch_requirements()` and `CUDA13_MIN_DRIVER`.
+4. Rebuild and run `hydra doctor` on every tier, then the env-swap gate as
+   above.
 
-**Status**: 📌 Version Pinned
+## CUDA-specific constraints to re-check
 
-**Current Pin**: `onnxruntime-gpu==1.24.1` in `requirements-cuda.txt`
+### ONNX Runtime GPU: one wheel family per CUDA major
 
-**File**: `requirements-cuda.txt`
+| Extra | Range | Why |
+|---|---|---|
+| `cuda12` | `onnxruntime-gpu[cuda,cudnn]>=1.24,<1.27` | 1.26 is the last CUDA 12 build; its `[cuda,cudnn]` extra pulls the `nvidia-*-cu12` wheels that torch `+cu128` also uses. |
+| `cuda13` | `onnxruntime-gpu[cuda,cudnn]>=1.28` | Built for CUDA 13; depends on the **unsuffixed** `nvidia-*` wheels, the same family as torch `+cu130`. 1.27 is skipped because it used `-cu13`-suffixed names. |
 
-**Reason for Pinning**:
+ONNX Runtime loads these libraries through `onnxruntime.preload_dlls()`
+(`hydra_suite.runtime.onnx_providers.preload_ort_cuda_libraries`). No conda
+CUDA packages or `LD_LIBRARY_PATH` hooks are involved. When bumping the
+range, check that the new release's `nvidia-*` dependency family still matches
+torch's.
 
-- Version 1.24.1 is known to work with CUDA 12 user-space library linkage (libcublasLt.so.12, etc.) across both CUDA 12.x and 13.x environments
-- Later versions may have changed their CUDA 12 binary compatibility or introduced stricter version requirements
+### TensorRT and CuPy
 
-**Action Required When Fixed**:
+`tensorrt-cu12*` / `cupy-cuda12x` go in `cuda12`, and `tensorrt-cu13*` /
+`cupy-cuda13x` go in `cuda13`. The installer uninstalls the other family
+before installing, because two TensorRT families in one env can leave
+`import tensorrt` working while builder initialisation fails. CuPy CUDA 13
+now has stable wheels, so it is pinned normally in `constraints/cuda13.txt`.
 
-1. Monitor [ONNX Runtime releases](https://github.com/onnx/onnx-runtime/releases) for CUDA 12–13 compatibility improvements
-2. Test newer versions (1.25.x, 1.26.x+) with:
-   - CUDA 12.x environments
-   - CUDA 13.x environments (with conda CUDA 12 runtime libs for linkage)
-   - CPU provider fallback behavior
-3. If newer versions offer better compatibility or performance, update to `onnxruntime-gpu>=1.24.1,<2.0` (or specific newer pin)
-4. Update CI/CD testing to verify linkage across versions
-5. Document the upgrade path in the changelog
+### Mixed wheel families
 
-**Related Issue**: Check ONNX Runtime issues for "CUDA 13" and "CUDA compatibility"
+Both `nvidia-*-cu12` and unsuffixed `nvidia-*` wheels unpack into
+`site-packages/nvidia/`. The CUDA checks in `hydra_suite.runtime.cuda_checks`
+(run by `hydra doctor --tier cuda`) detect a mixed env and tell the user to
+run `python install.py --recreate`.
 
----
+### SLEAP sidecar
 
-### CuPy Prerelease on CUDA 13
+`sleap==1.6.2` pins `sleap-nn` 0.1.x. Newer `sleap-nn` breaks the
+shared-memory transport, and the runtime preflight refuses anything but 0.1.x.
+Re-verify on a fresh env before relaxing `SLEAP_PIN`.
 
-**Status**: 🔧 Prerelease Required
+### SAM3 training sidecar
 
-**Current Configuration**: Uses `--pre` flag and `https://pip.cupy.dev/pre` in `requirements-cuda13.txt`
+Meta's `sam3` pins `numpy<2`, and the sidecar pin list (`setuptools<81`,
+`scipy<1.14`, `opencv-python-headless<4.12`, …) exists to hold that pin. Keep
+`pyproject.toml`'s `sam3-train` extra in sync with `TRAINING_PACKAGES` in
+`hydra_suite/training/sam3_lora/availability.py`. When bumping `SAM3_REF`,
+re-run a training smoke test on a CUDA box.
 
-**File**: `requirements-cuda13.txt`
+## Checklist
 
-**Reason for Prerelease**:
-
-- CUDA 13 stable `cupy-cuda13x` wheels may not be available from the main PyPI index
-- Prerelease wheels from CuPy's development server ensure CUDA 13 support
-
-**Action Required When Fixed**:
-
-1. Monitor [CuPy releases](https://pypi.org/project/cupy-cuda13x/) for CUDA 13 stable wheel availability
-2. When stable wheels are published:
-   - Remove `--pre` flag from `requirements-cuda13.txt`
-   - Remove custom index URL `https://pip.cupy.dev/pre`
-   - Update to pinned stable version (e.g., `cupy-cuda13x==X.Y.Z`)
-3. Test in CI with stable index to confirm compatibility
-4. Update `docs/getting-started/installation.md` to note that CUDA 13 installation is now fully stable
-
-**Related Issue**: Monitor [CuPy GitHub Releases](https://github.com/cupy/cupy/releases) for CUDA 13 stable tag
-
----
-
-### TensorRT Version-Specific Pins
-
-**Status**: ✅ Versioned, May Improve
-
-**Current Configuration**: Separate `tensorrt-cu12`, `tensorrt-cu13` (unversioned) in version-specific files
-
-**Files**: `requirements-cuda12.txt`, `requirements-cuda13.txt`
-
-**Considerations**:
-
-- If NVIDIA publishes unified TensorRT CPU wheels with better version compatibility, we may simplify to a single tensorrt package
-- CUDA 13 support may improve with new releases; consider stricter pinning if compatibility issues emerge
-
-**Action Required When Fixed**:
-
-1. Monitor [NVIDIA TensorRT releases](https://github.com/NVIDIA/TensorRT/releases) for unified CUDA version support
-2. If NVIDIA publishes CPU/GPU-agnostic wheels:
-   - Move TensorRT to `requirements-cuda.txt` (shared base)
-   - Remove version-specific TensorRT packages
-   - Simplify requirements structure
-3. If CUDA 13 TensorRT stability improves, consider pinning to a specific version range
-
-**Related Issue**: NVIDIA TensorRT issue tracker
-
----
-
-### PyTorch Index URLs
-
-**Status**: 📦 Version-Specific, Monitor
-
-**Current Configuration**:
-
-- CUDA 12: `--extra-index-url https://download.pytorch.org/whl/cu128`
-- CUDA 13: `--extra-index-url https://download.pytorch.org/whl/cu130`
-
-**Files**: `requirements-cuda12.txt`, `requirements-cuda13.txt`
-
-**Considerations**:
-
-- PyTorch uses a custom index URL distribution strategy; check for future changes to their build/distribution infrastructure
-- CUDA 13 might be integrated into the main PyPI wheels in future major versions, eliminating the need for custom indexes
-
-**Action Required When Fixed**:
-
-1. Monitor [PyTorch installation docs](https://pytorch.org/get-started/locally/) for index URL changes
-2. If PyTorch integrates CUDA variants into standard PyPI:
-   - Remove custom index URLs from both CUDA requirement files
-   - Simplify to pinned PyTorch versions (e.g., `torch>=2.1.0`)
-3. Update CI to verify installation without custom indexes
-
----
-
-## Monitoring Checklist
-
-When updating dependencies:
-
-- [ ] Check FAISS releases for CUDA 13 wheel availability
-- [ ] Review ONNX Runtime release notes and test compatibility
-- [ ] Monitor CuPy stable CUDA 13 wheel status
-- [ ] Evaluate TensorRT unified wheel roadmap
-- [ ] Check PyTorch for index URL or distribution strategy changes
-- [ ] Run full CI/CD suite with new dependencies
-- [ ] Update this document with resolved items
-
-## Summary Table
-
-| Package | Current Fix | File | Priority | Check Frequency |
-| --- | --- | --- | --- | --- |
-| FAISS | `faiss-cpu` fallback | requirements-cuda13.txt | High | Monthly |
-| ONNX Runtime | Version pin 1.24.1 | requirements-cuda.txt | High | Quarterly |
-| CuPy | Prerelease CUDA 13 | requirements-cuda13.txt | Medium | Monthly |
-| TensorRT | Version-specific import | requirements-cudaX.txt | Medium | Quarterly |
-| PyTorch | Custom index URLs | requirements-cudaX.txt | Low | Quarterly |
-
-## How to Report Resolved Items
-
-When any of these items is resolved:
-
-1. Update the relevant requirement file
-2. Update this document, marking the item as ✅ **Resolved**
-3. Update related documentation (installation.md, environments.md)
-4. Add a note to `CHANGELOG.md` under the new release
-5. Remove the resolved item from the monitoring checklist
+- [ ] Pins regenerated with `tools/lock_constraints.py` (no hand edits)
+- [ ] `TORCH_VERSION`/`TORCHVISION_VERSION` bumped together, wheels exist for `cpu`/`cu128`/`cu130`
+- [ ] Fresh env builds on MPS and CUDA; `hydra doctor` passes
+- [ ] `tools/equivalence/env_swap_gate.sh` is BYTE-IDENTICAL or BLAS-FLOOR on MPS and CUDA
+- [ ] `install-smoke` CI is green on Linux, macOS and Windows
+- [ ] Installation docs updated if user-facing behaviour changed

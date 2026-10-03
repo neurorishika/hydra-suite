@@ -18,6 +18,7 @@ from hydra_suite.core.inference.sam2.checkpoints import (
     available_variants,
 )
 from hydra_suite.detectkit.gui.dialogs._base import DetectKitDialog
+from hydra_suite.widgets.device_combo import DeviceCombo
 
 
 class EscalateSam2Dialog(DetectKitDialog):
@@ -33,6 +34,10 @@ class EscalateSam2Dialog(DetectKitDialog):
             self._variant.addItem(v)
         self._variant.setCurrentText(DEFAULT_VARIANT)
         layout.addWidget(self._variant)
+
+        layout.addWidget(QLabel("Run on:"))
+        self._device = DeviceCombo()
+        layout.addWidget(self._device)
 
         layout.addWidget(QLabel("Sources to escalate (click to toggle selection):"))
         self._list = QListWidget()
@@ -78,6 +83,9 @@ class EscalateSam2Dialog(DetectKitDialog):
 
     def selected_variant(self) -> str:
         return self._variant.currentText()
+
+    def selected_device(self) -> str:
+        return self._device.device()
 
     def selected_sources(self) -> list[str]:
         return [

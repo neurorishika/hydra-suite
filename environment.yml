@@ -1,56 +1,18 @@
+# Conda supplies ONLY what pip cannot: the interpreter and the toolchain for
+# the AprilTag C-extension build (ffmpeg comes from the imageio-ffmpeg wheel). Every Python package is
+# declared in pyproject.toml and installed by install.py.
+#
+# Preferred:   python install.py            (creates this env for you)
+# Manual:      mamba env create -f environment.yml && conda activate hydra && make install...
+#
+# Keep in sync with CONDA_PACKAGES in install.py (tests/test_installer.py).
 name: hydra
 channels:
 - conda-forge
-- defaults
 dependencies:
-  # Core Python
 - python=3.13
-
-  # Scientific computing stack
-- numpy
-- scipy
-- pandas
-- jupyter
-- ipykernel
-- ipywidgets
-- einops
-- umap-learn
-- scikit-learn
-- pyyaml
-- ruptures
-
-  # Visualization
-- matplotlib
-- seaborn
-- bokeh
-
-  # Computer vision
-- opencv
-- scikit-image
-- pillow
-
- # Hyperparameter optimization
-- optuna
-- optunahub
-- cmaes
-
-  # Efficiency - CPU acceleration
-- numba
-
-  # GUI framework (Qt6 - modern, better HiDPI and Apple Silicon support)
-- pyside6>=6.6
-- qt6-main
-- pyqtwebengine
-
-  # Development tools
 - pip
-- setuptools
-- wheel
+- git
 - cmake
-
-  # Dev tools are managed separately; after activating this env run:
-  #   make install-dev
-  # Install uv for fast pip package installation
-  # After creating environment, run: uv pip install -v -r requirements.txt
-- pip:
-  - uv
+- c-compiler
+- cxx-compiler

@@ -101,6 +101,8 @@ class EscalationRequest:
     variant: str
     overwrite: bool = False
     source_paths: list[str] = field(default_factory=list)
+    # "auto" | "cuda" | "mps" | "cpu"; resolved against what this host has.
+    device: str = "auto"
 
 
 @dataclass
@@ -131,9 +133,11 @@ class Sam2EscalationWorker(BaseWorker):
 
     def execute(self) -> None:
         from hydra_suite.core.inference.sam2.executor import Sam2SegmentExecutor
+        from hydra_suite.core.inference.torch_device import resolve_torch_device
 
         executor = self._executor or Sam2SegmentExecutor.from_variant(
-            self._request.variant
+            self._request.variant,
+            device=resolve_torch_device(self._request.device),
         )
         self.status.emit(f"Escalating {len(self._request.source_names)} source(s)...")
         result = run_escalation(

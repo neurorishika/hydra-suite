@@ -144,7 +144,9 @@ def install_stop_signal_handlers(
 ) -> tuple[threading.Event, dict[int, Any], bool]:
     """Install stop-flag handlers for *signals*. Returns (event, previous, installed).
 
-    ``signals`` defaults to ``[SIGINT]``. The fan-out CLI additionally traps
+    ``signals`` defaults to ``[SIGINT]`` (plus ``SIGBREAK`` on Windows, which is
+    how the batch fan-out asks a child in its own process group to stop
+    cleanly -- CTRL_BREAK_EVENT). The fan-out CLI additionally traps
     SIGTERM/SIGHUP so a scheduler kill or a closed terminal tears the GPU
     children down instead of stranding them.
 
@@ -156,7 +158,11 @@ def install_stop_signal_handlers(
     """
     stop_event = threading.Event()
     previous: dict[int, Any] = {}
-    for signum in list(signals) if signals is not None else [signal.SIGINT]:
+    if signals is None:
+        signals = [signal.SIGINT]
+        if hasattr(signal, "SIGBREAK"):
+            signals.append(signal.SIGBREAK)
+    for signum in list(signals):
 
         def _handler(signum_received, _frame):
             logger.warning(log_message, signal.Signals(signum_received).name)

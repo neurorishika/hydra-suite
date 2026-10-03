@@ -39,8 +39,16 @@ TRAINING_PACKAGES = (
 )
 
 _ENV_RECIPE_HINT = (
-    "See the hydra-sam3 env recipe in "
-    "docs/superpowers/specs/2026-09-01-sam3-training-sidecar-env-design.md"
+    "Build the optional training sidecar with `python install.py "
+    "--with-sam3-train` (CUDA hosts only). See the user guide: "
+    "docs/user-guide/sam-install-and-run.md#sam3-training-optional-cuda-only"
+)
+
+NO_CUDA_REASON = (
+    "SAM3 training requires an NVIDIA GPU (CUDA, compute capability >= 8.0 "
+    "with bf16). This machine has none, so the training role is unavailable "
+    "here. SAM3 *inference* (semantic escalation) and SAM2 escalation work "
+    "on every device and need nothing extra."
 )
 INSTALL_HINTS = {
     "sam3": _ENV_RECIPE_HINT,
@@ -56,6 +64,69 @@ _PROBE_SCRIPT_PATH = Path(__file__).with_name("_probe_script.py")
 class Sam3TrainingAvailability:
     usable: bool
     reason: str = ""
+
+
+def _host_has_cuda() -> bool:  # seam for tests
+    from hydra_suite.utils.gpu_utils import TORCH_CUDA_AVAILABLE
+
+    return bool(TORCH_CUDA_AVAILABLE)
+
+
+def _host_origin() -> Optional[dict]:  # seam for tests
+    import importlib.metadata as metadata
+
+    try:
+        dist = metadata.distribution("hydra-suite")
+    except metadata.PackageNotFoundError:
+        return None
+    raw = dist.read_text("direct_url.json")
+    return {"version": dist.version, "direct_url": json.loads(raw) if raw else None}
+
+
+def _normalise_url(url: Optional[str]) -> Optional[str]:
+    """file:// URLs compared as real paths: pip and uv spell them differently
+    (symlinks such as /tmp -> /private/tmp, percent-encoding)."""
+    if not url or not url.startswith("file:"):
+        return url
+    import os
+    from urllib.parse import unquote, urlparse
+
+    path = unquote(urlparse(url).path)
+    if len(path) > 2 and path[0] == "/" and path[2] == ":":  # /C:/... on Windows
+        path = path[1:]
+    return os.path.normcase(os.path.realpath(path))
+
+
+def _origin_key(origin: dict) -> tuple:
+    url = origin.get("direct_url") or {}
+    return (
+        _normalise_url(url.get("url")),
+        bool((url.get("dir_info") or {}).get("editable")),
+        (url.get("vcs_info") or {}).get("commit_id"),
+        None if url else origin.get("version"),
+    )
+
+
+def _origin_skew(sidecar: Any) -> str:
+    """Non-empty when the sidecar's hydra-suite is not the main env's code.
+
+    The training child speaks a line protocol with this process, so it must
+    run the same source. ``"absent"`` means an older probe that does not
+    report origin -- tolerated, there is nothing to compare.
+    """
+    if sidecar == "absent":
+        return ""
+    fix = "Re-run `python install.py --with-sam3-train` to reinstall it from this env's source."
+    if sidecar is None:
+        return f"hydra-suite is not installed in the SAM3 sidecar env. {fix}"
+    host = _host_origin()
+    if host is None or _origin_key(host) == _origin_key(sidecar):
+        return ""
+    return (
+        "The SAM3 sidecar runs a different hydra-suite than this app "
+        f"(sidecar: {sidecar.get('direct_url') or sidecar.get('version')}; "
+        f"app: {host.get('direct_url') or host.get('version')}). {fix}"
+    )
 
 
 def _checkpoint_present(cache_dir: Optional[Path] = None) -> bool:  # seam for tests
@@ -97,6 +168,11 @@ def probe_sam3_training_availability(
     unusable, so the user knows exactly what to fix.
     """
     target_env = env or DEFAULT_SAM3_ENV
+
+    # Training is CUDA-only by design; say so plainly instead of reporting
+    # whatever the sidecar env happens to lack on a host that can never train.
+    if not _host_has_cuda():
+        return Sam3TrainingAvailability(False, NO_CUDA_REASON)
 
     try:
         result = _run_probe(target_env, timeout)
@@ -157,6 +233,10 @@ def probe_sam3_training_availability(
             f"The {target_env!r} conda env reported it cannot run SAM3 "
             f"training: {error}",
         )
+
+    skew = _origin_skew(payload.get("hydra_origin", "absent"))
+    if skew:
+        return Sam3TrainingAvailability(False, skew)
 
     if not payload.get("cuda_available", False):
         return Sam3TrainingAvailability(
