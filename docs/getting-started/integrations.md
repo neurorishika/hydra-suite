@@ -6,10 +6,11 @@ SLEAP inference is executed from the **SLEAP conda/mamba environment selected in
 
 ### Why this env is separate
 
-Do not rely on the main TrackerKit environment for SLEAP export/runtime dependencies.
-In practice, the `uv`-based TrackerKit install path does not guarantee the SLEAP runtime/export modules needed for all SLEAP backends.
+SLEAP runs in its own conda env, `sleap`. Its dependencies (`sleap-nn`, its
+export extras, and its own torch) are not part of the main HYDRA env, and
+HYDRA talks to it through a service subprocess (`conda run -n sleap ...`).
 
-Create a dedicated SLEAP environment and select it from:
+Select the env from:
 
 - TrackerKit: `Analyze Individuals -> Pose Extraction -> SLEAP env`
 - PoseKit: `Inference -> SLEAP -> Conda environment`
@@ -18,47 +19,49 @@ To use ONNX/TensorRT SLEAP prediction inside PoseKit, also enable:
 
 - `Inference -> SLEAP -> Allow experimental SLEAP runtimes`
 
-### Environment Setup
+### Environment setup
+
+The installer builds the env (conda required):
 
 ```bash
-mamba create -n sleap python=3.13 -y
-conda activate sleap
+python install.py --with-sleap        # or: make setup-sleap
 ```
 
-Choose one install profile. **Pin `sleap==1.6.2`** — an unpinned
-`pip install "sleap[nn,...]"` currently resolves `sleap-nn` to 0.3.3, which
-breaks the pipeline's shared-memory transport to the SLEAP service (fails
-with `AttributeError` from `sleap_nn.data.utils.imread_`). `sleap==1.6.2`
-pulls in the working `sleap-nn 0.1.3`; verified on a fresh Ubuntu/RTX 4090
-box (python 3.11.16, numpy 2.4.6, torch 2.14.0+cu130) on 2026-09-07. Do not
-remove the pin without re-verifying against a fresh sleap-nn release.
+This creates `sleap` (Python 3.13) and installs:
+
+- `sleap[nn,nn-export-gpu]==1.6.2` on CUDA hosts, `sleap[nn,nn-export]==1.6.2`
+  elsewhere;
+- then **force-reinstalls the sidecar's torch/torchvision to the same build the
+  main env uses** (`cu128` on drivers older than 580, `cu130` on 580+, CPU or
+  macOS wheels otherwise). Left alone, the `sleap` env would pick up whatever
+  torch PyPI serves, which on a pre-580 driver is a CUDA 13 build that cannot
+  see the GPU.
+
+If the `sleap` env already exists it is reused and its packages are
+refreshed. For a clean rebuild, run `conda env remove -n sleap` first.
+
+**Why `sleap==1.6.2` is pinned.** An unpinned `pip install "sleap[nn,...]"`
+currently resolves `sleap-nn` to 0.3.x, which breaks the pipeline's
+shared-memory transport to the SLEAP service (it fails with an `AttributeError`
+from `sleap_nn.data.utils.imread_`). `sleap==1.6.2` pulls in the working
+`sleap-nn` 0.1.3. This was verified on a fresh Ubuntu/RTX 4090 box on
+2026-09-07. HYDRA's SLEAP preflight also checks the env and refuses any
+`sleap-nn` that is not 0.1.x with an "unsupported sleap-nn" error, instead of
+failing mid-run. Do not remove the pin without re-verifying against a fresh
+sleap-nn release.
+
+**TensorRT export (optional, manual).** The installer does not install
+SLEAP's `nn-tensorrt` extra. If you want SLEAP TensorRT export, add it to the
+env by hand, keeping the pin:
 
 ```bash
-# CPU + ONNX CPU export/runtime support
-pip install "sleap[nn,nn-export]==1.6.2"
-
-# GPU + ONNX GPU export/runtime support
-pip install "sleap[nn,nn-export-gpu]==1.6.2"
-
-# GPU + TensorRT export/runtime support
-pip install "sleap[nn,nn-export-gpu,nn-tensorrt]==1.6.2"
+conda run -n sleap python -m pip install "sleap[nn,nn-export-gpu,nn-tensorrt]==1.6.2"
 ```
 
-!!! warning "The `sleap` env brings its own torch"
+A `torch-tensorrt` version warning after the torch re-pin is expected. It
+does not affect the SLEAP *service* backend, only TensorRT export.
 
-    This is a separate environment, so it resolves torch independently of
-    `hydra-cuda` and lands on whatever PyPI currently serves — which on a
-    pre-580 driver is a CUDA 13 build that cannot see the GPU. On CUDA 12
-    hosts, pin it to match the driver right after installing SLEAP:
-
-    ```bash
-    pip install --index-url https://download.pytorch.org/whl/cu128 \
-        --force-reinstall torch torchvision
-    ```
-
-    Use the `cu130` index instead on driver 580+. A `torch-tensorrt` version
-    warning after this is expected and harmless for the SLEAP *service*
-    backend; it only affects TensorRT export.
+`hydra doctor` reports whether the `sleap` env exists.
 
 ### Compatibility Matrix
 
@@ -66,7 +69,7 @@ pip install "sleap[nn,nn-export-gpu,nn-tensorrt]==1.6.2"
   - Supported: SLEAP native (`mps`/`cpu`), ONNX CPU.
   - Not supported: TensorRT.
 - **NVIDIA CUDA systems**:
-  - Supported: SLEAP native CUDA, ONNX GPU, TensorRT (with `nn-tensorrt` extras and system CUDA/TensorRT compatibility).
+  - Supported: SLEAP native CUDA, ONNX GPU, TensorRT (with the `nn-tensorrt` extra added manually).
 - **CPU-only systems**:
   - Supported: SLEAP native CPU, ONNX CPU.
 
@@ -74,43 +77,61 @@ pip install "sleap[nn,nn-export-gpu,nn-tensorrt]==1.6.2"
 
 ```bash
 conda run -n sleap python -c "import importlib.util as u; print('sleap_nn', bool(u.find_spec('sleap_nn'))); print('onnx', bool(u.find_spec('onnx'))); print('onnxruntime', bool(u.find_spec('onnxruntime')))"
-conda run -n sleap python -c "import torch, torchvision; print('torch', torch.__version__); print('torchvision', torchvision.__version__)"
+conda run -n sleap python -c "import torch, torchvision; print('torch', torch.__version__, 'cuda', torch.cuda.is_available()); print('torchvision', torchvision.__version__)"
+conda run -n sleap python -c "import importlib.metadata as m; print('sleap-nn', m.version('sleap-nn'))"   # must be 0.1.x
 conda run -n sleap sleap-nn export --help
 ```
 
-If `torchvision` import fails with `operator torchvision::nms does not exist`, reinstall matching `torch` + `torchvision` builds from the same channel (CPU or CUDA-specific), then rerun the verification commands above.
-
 ### Troubleshooting Install/Runtime Issues
 
-If SLEAP preflight fails, use the commands below.
+The quickest fix for most sidecar problems is to rebuild it:
+
+```bash
+conda env remove -n sleap
+python install.py --with-sleap
+```
+
+If you need to repair it by hand, first check which CUDA build the driver
+supports: `nvidia-smi --query-gpu=driver_version --format=csv,noheader`.
+Driver **580 or newer** uses the `cu130` wheels. **Older** drivers use `cu128`.
 
 #### 1) `operator torchvision::nms does not exist`
 
-This usually means `torch` and `torchvision` are incompatible builds.
+`torch` and `torchvision` are incompatible builds. Reinstall one matching pair:
 
 ```bash
 conda run -n sleap python -m pip uninstall -y torch torchvision torchaudio
 
-# Reinstall one matching stack (pick one):
-# CPU-only
-conda run -n sleap python -m pip install --index-url https://download.pytorch.org/whl/cpu torch torchvision
-
-# CUDA 13.0
-conda run -n sleap python -m pip install --index-url https://download.pytorch.org/whl/cu130 torch torchvision
+# pick ONE:
+conda run -n sleap python -m pip install --index-url https://download.pytorch.org/whl/cpu   torch torchvision   # CPU-only Linux/Windows
+conda run -n sleap python -m pip install --index-url https://download.pytorch.org/whl/cu128 torch torchvision   # driver < 580 (CUDA 12)
+conda run -n sleap python -m pip install --index-url https://download.pytorch.org/whl/cu130 torch torchvision   # driver >= 580 (CUDA 13)
+conda run -n sleap python -m pip install torch torchvision                                                     # macOS
 
 conda run -n sleap python -c "import torch, torchvision; print(torch.__version__, torchvision.__version__)"
 ```
 
 #### 2) `libtorch_cuda.so: undefined symbol: ncclAlltoAll`
 
-This indicates a CUDA/NCCL binary mismatch.
+A CUDA/NCCL binary mismatch. The NCCL wheel must match the torch build:
 
-```bash
-conda run -n sleap python -m pip uninstall -y torch torchvision torchaudio nvidia-nccl-cu12 nvidia-nccl-cu13
-conda run -n sleap python -m pip install --index-url https://download.pytorch.org/whl/cu130 torch torchvision
-conda run -n sleap python -m pip install --upgrade nvidia-nccl-cu13
-conda run -n sleap python -c "import torch, torchvision; print(torch.__version__, torchvision.__version__, torch.cuda.is_available())"
-```
+=== "Driver < 580 (CUDA 12, cu128)"
+
+    ```bash
+    conda run -n sleap python -m pip uninstall -y torch torchvision torchaudio nvidia-nccl-cu12 nvidia-nccl-cu13
+    conda run -n sleap python -m pip install --index-url https://download.pytorch.org/whl/cu128 torch torchvision
+    conda run -n sleap python -m pip install --upgrade nvidia-nccl-cu12
+    conda run -n sleap python -c "import torch, torchvision; print(torch.__version__, torchvision.__version__, torch.cuda.is_available())"
+    ```
+
+=== "Driver >= 580 (CUDA 13, cu130)"
+
+    ```bash
+    conda run -n sleap python -m pip uninstall -y torch torchvision torchaudio nvidia-nccl-cu12 nvidia-nccl-cu13
+    conda run -n sleap python -m pip install --index-url https://download.pytorch.org/whl/cu130 torch torchvision
+    conda run -n sleap python -m pip install --upgrade nvidia-nccl-cu13
+    conda run -n sleap python -c "import torch, torchvision; print(torch.__version__, torchvision.__version__, torch.cuda.is_available())"
+    ```
 
 If this succeeds only when unsetting `LD_LIBRARY_PATH`, your shell is injecting incompatible CUDA/NCCL libraries:
 
@@ -119,6 +140,13 @@ env -u LD_LIBRARY_PATH conda run -n sleap python -c "import torch; print(torch.c
 ```
 
 In that case, remove conflicting CUDA/NCCL paths from `LD_LIBRARY_PATH` for SLEAP runs.
+
+#### 3) "unsupported sleap-nn"
+
+The env has a `sleap-nn` other than 0.1.x, usually from an unpinned
+`pip install sleap`. Reinstall with the pin
+(`python install.py --with-sleap` after removing the env, or
+`conda run -n sleap python -m pip install "sleap[nn,nn-export]==1.6.2"`).
 
 For ONNX export smoke test:
 

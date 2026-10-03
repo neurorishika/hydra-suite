@@ -13,8 +13,6 @@ from __future__ import annotations
 
 import importlib.util
 import json
-import os
-import shutil
 from dataclasses import dataclass
 from pathlib import Path
 from typing import NamedTuple
@@ -45,7 +43,9 @@ CHECKPOINT_SIZE_GB = 3.45
 # Imports ultralytics AutoUpdate would otherwise install behind our back.
 REQUIRED_PACKAGES = ("ultralytics", "clip", "ftfy")
 
-DEFAULT_INSTALL_HINT = "pip install 'hydra-suite[sam3]'"
+# install.py installs SAM inference on every tier by default; the pip form is
+# for installs made without it.
+DEFAULT_INSTALL_HINT = "re-run `python install.py` (or: pip install 'hydra-suite[sam]')"
 # `clip` is NOT in the sam3 extra and cannot be: it is a PEP 508 direct
 # reference, which PyPI rejects in uploaded metadata. Pointing at the extra
 # for it named an install that could never satisfy the check. Same command
@@ -55,7 +55,12 @@ DEFAULT_INSTALL_HINT = "pip install 'hydra-suite[sam3]'"
 # SimpleTokenizer has no __call__, so pointing users there yields a probe
 # that says "ready" and a run that dies with an opaque TypeError deep in the
 # text encoder. ultralytics' own fork adds the __call__. Verified on CUDA.
-INSTALL_HINTS = {"clip": "pip install git+https://github.com/ultralytics/CLIP.git"}
+INSTALL_HINTS = {
+    "clip": (
+        "python install.py --only clip  "
+        "(or: pip install --no-deps git+https://github.com/ultralytics/CLIP.git)"
+    )
+}
 
 # The weights live behind a licence gate, so "download it for you" is only
 # true once the user has accepted it and logged in on THIS machine.
@@ -374,23 +379,8 @@ def ensure_checkpoint(
         raise Sam3DownloadNotAuthorized(
             GATED_REPO_HINT.format(repo=entry.repo_id)
         ) from exc
-    # hf_hub_download returns a path inside the HF cache SNAPSHOT dir, which
-    # on Linux is a symlink into ../../blobs/<sha>. Hardlinking that entry
-    # copies the symlink itself, so `dest` inherits a relative target that
-    # means nothing where it now lives -- a dangling link whose .exists() is
-    # False, so the probe re-downloads 3.3 GB on every run, forever, and the
-    # feature can never start. Resolve to the real blob first. (Reproduced on
-    # the CUDA box; macOS never hit it because nothing had downloaded yet.)
-    src = src.resolve()
-    # NOT dest.write_bytes(src.read_bytes()): that holds all 3.45 GB in RAM at
-    # once and can OOM a 16 GB laptop. Hardlink when the HF cache is on the
-    # same volume (also avoids doubling disk usage), else stream a copy.
-    try:
-        os.link(src, dest)
-    except OSError:
-        shutil.copyfile(src, dest)
-    if not dest.exists():  # never hand back a path we cannot actually open
-        raise RuntimeError(
-            f"SAM3 checkpoint staging produced an unusable path at {dest}."
-        )
-    return dest
+    # Resolves the HF snapshot symlink, then hardlinks or streams -- never
+    # reads 3.45 GB into RAM, never leaves a half-copied file at `dest`.
+    from hydra_suite.core.inference.hf_staging import stage_hf_file
+
+    return stage_hf_file(src, dest)

@@ -37,6 +37,18 @@ TRAINING_PACKAGES = (
 )
 
 
+def _hydra_origin() -> dict | None:
+    """How hydra-suite is installed here, from metadata only (no import)."""
+    import importlib.metadata as metadata
+
+    try:
+        dist = metadata.distribution("hydra-suite")
+    except metadata.PackageNotFoundError:
+        return None
+    raw = dist.read_text("direct_url.json")
+    return {"version": dist.version, "direct_url": json.loads(raw) if raw else None}
+
+
 def _probe() -> dict:
     imported = {}
     for package in TRAINING_PACKAGES:
@@ -54,6 +66,7 @@ def _probe() -> dict:
     return {
         "ok": True,
         "missing": [],
+        "hydra_origin": _hydra_origin(),
         "cuda_available": cuda_available,
         "cuda_compute_capability": capability,
         "cuda_bf16_supported": bf16_supported,

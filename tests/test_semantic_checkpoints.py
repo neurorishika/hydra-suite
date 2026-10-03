@@ -213,12 +213,13 @@ def test_missing_clip_names_an_install_that_can_actually_fix_it(tmp_path, monkey
     assert avail.usable is False
     assert "clip" in avail.reason
     assert "github.com/ultralytics/CLIP.git" in avail.reason
-    assert "hydra-suite[sam3]" not in avail.reason
+    assert "hydra-suite[sam]" not in avail.reason
     # The other deps DO come from the extra.
     monkeypatch.setattr(
         ck, "_find_spec", lambda name: None if name == "ftfy" else object()
     )
-    assert "hydra-suite[sam3]" in ck.probe_availability(cache_dir=tmp_path).reason
+    reason = ck.probe_availability(cache_dir=tmp_path).reason
+    assert "install.py" in reason and "hydra-suite[sam]" in reason
 
 
 def test_predictor_overrides_pin_the_requested_confidence_floor():

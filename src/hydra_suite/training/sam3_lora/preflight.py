@@ -137,7 +137,13 @@ _MEASURED_BF16_DEVICE_PEAK_BYTES = 12 * GiB
 # direction for an admission gate: it refuses a marginal run rather than
 # admitting one that OOMs the device after minutes of setup.
 _FP32_DEVICE_PEAK_MULTIPLIER = 2.0
-SUPPORTED_PRECISIONS = ("bf16", "fp32")
+# bf16 only. ef3c16d9 re-enabled fp32 here (perflib_compat removed the kernel
+# that hard-cast to bf16), but the runtime admission in cli.py still refuses
+# anything but CUDA BF16, and an fp32 run (~58 GiB estimated) has never been
+# run end-to-end. Admitting it here only moved the refusal from the dialog to
+# minutes into a launched run. Re-add "fp32" together with the cli.py gate
+# once an fp32 run has been verified on hardware that fits it.
+SUPPORTED_PRECISIONS = ("bf16",)
 # MEASURED, from two independent probes on two different corpora and two
 # different GPU architectures, both under `expandable_segments:True`
 # (>=60 optimizer steps/point, 312 adapters, rank 16, bf16). This constant is
@@ -1534,13 +1540,10 @@ def assess_preflight(
         )
 
     if getattr(params, "mixed_precision", None) not in SUPPORTED_PRECISIONS:
-        # FP32 is supported again. The original refusal blamed "SAM3's BF16
-        # activation path", which was `perflib.fused.addmm_act` -- a kernel
-        # that hard-casts to bfloat16 AND refuses to run with grad enabled.
-        # `perflib_compat` now replaces it with an eager, dtype-neutral
-        # equivalent before the model is built, so nothing in the training
-        # path requires bf16. FP16 stays out: its narrow range genuinely does
-        # overflow SAM3's loss scales, and nothing here provides a GradScaler.
+        # See SUPPORTED_PRECISIONS: this gate and cli.py's runtime admission
+        # must agree, or a refused precision is only discovered after launch.
+        # FP16 stays out regardless: its narrow range overflows SAM3's loss
+        # scales, and nothing here provides a GradScaler.
         refusals.append(
             "SAM3 LoRA training supports "
             f"{' or '.join(SUPPORTED_PRECISIONS)}; "

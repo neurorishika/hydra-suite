@@ -1,236 +1,288 @@
 # Installation
 
-There are three ways to install HYDRA Suite, depending on your situation:
+HYDRA Suite installs with **one command on every platform**: `python install.py`
+from a checkout. The installer detects your platform (and, on NVIDIA machines,
+your driver's CUDA version), builds a conda env or venv, installs the matching
+PyTorch build plus everything in `pyproject.toml`, and finishes by running
+`hydra doctor` to prove the result works.
 
-| Method | When to use |
-|--------|-------------|
-| [**pip install**](#pip-install-from-pypi) | You want to use the software. One command, no git needed. |
-| [**pip install from GitHub**](#pip-install-from-github) | You want the latest unreleased version, or the package isn't on PyPI yet. |
-| [**conda + pip (developer)**](#conda-pip-developer-install) | You're developing the code. Editable install, Makefile workflows. |
+!!! warning "HYDRA Suite is not on PyPI"
 
-All three methods support full GPU acceleration. See the [platform matrix](#platform-matrix) for what's available on each platform.
+    `pip install hydra-suite` does **not** work — the package has not been
+    published to PyPI. Install from a checkout (below) or from the git URL
+    (see [Install without a checkout](#install-without-a-checkout)).
 
----
+The page is a decision tree:
 
-## Platform matrix
-
-| Feature | CPU | MPS (Apple Silicon) | CUDA (NVIDIA) |
-|---------|-----|---------------------|---------------|
-| YOLO detection / pose | CPU | GPU | GPU |
-| TensorRT acceleration | No | No | Yes (NVIDIA only) |
-| ONNX Runtime | CPU | CPU | GPU |
-| CuPy background subtraction | No | No (NVIDIA only) | GPU |
-| Platforms | All | macOS M1-M4 | Linux, Windows |
-| System requirements | Python 3.11+ | Python 3.11+ | Python 3.11+ |
+1. [Pick your platform](#1-pick-your-platform) and check its prerequisites.
+2. [Run the installer](#2-run-the-installer) — one command.
+3. [Add optional extras](#3-optional-add-ons) — SAM3 training, SLEAP, dev/docs tools.
+4. [Verify](#verify) with `hydra doctor`.
 
 ---
 
-## pip install from PyPI
+## 1. Pick your platform
 
-Requires only Python 3.11+. No conda, no git clone.
-
-AprilTag-backed workflows are the exception: HYDRA expects the Kronauer lab fork
-of `apriltag` (`Social-Evolution-and-Behavior/apriltag` at
-`c43a9b6e6b7dcfe0e7647a78eff6655a1d743c2c`). The developer `make install*`
-targets install that fork automatically. If you use a pure pip install and need
-AprilTag features, build that fork into the same environment following the fork
-README.
-
-### CPU (all platforms)
-
-```bash
-pip install hydra-suite
-```
-
-### Apple Silicon / MPS (macOS M1-M4)
-
-```bash
-pip install torch torchvision
-pip install "hydra-suite[mps]"
-```
-
-MPS is built into the standard PyTorch macOS wheel. GPU acceleration works for YOLO inference and neural network operations.
-
-### NVIDIA GPU / CUDA (Linux, Windows)
-
-```bash
-# Step 1: Install PyTorch from PyTorch's own index
-pip install torch torchvision --index-url https://download.pytorch.org/whl/cu128
-
-# Step 2: Install hydra-suite with CUDA extras
-pip install "hydra-suite[cuda]"
-```
-
-This installs everything: ONNX Runtime GPU, TensorRT, CuPy, ONNX export tools.
-
-**CUDA version selection:**
-
-| Your CUDA version | PyTorch `--index-url` | Package extra |
+| Your machine | Tier the installer picks | What you get |
 |---|---|---|
-| 12.6 | `.../cu126` | `[cuda]` or `[cuda12]` |
-| 12.8 | `.../cu128` | `[cuda]` or `[cuda12]` |
-| 13.0 | `.../cu130` | `[cuda13]` |
+| Apple Silicon Mac (M1–M4) | `mps` | PyTorch MPS, ONNX Runtime with CoreML provider, `coremltools` |
+| Linux or Windows with an NVIDIA GPU | `cuda` (CUDA 12 or 13, from the driver) | CUDA PyTorch, ONNX Runtime GPU, TensorRT, CuPy, PyNvVideoCodec |
+| Anything else (Intel Mac, Linux/Windows without NVIDIA) | `cpu` | CPU PyTorch, ONNX Runtime CPU |
 
-`[cuda]` is an alias for `[cuda12]`. For CUDA 13 systems:
+Every tier also gets SAM2 and SAM3 **inference** (DetectKit escalation) by
+default. See [Platform Notes](platforms.md) for which features run on which
+device.
 
-```bash
-pip install torch torchvision --index-url https://download.pytorch.org/whl/cu130
-pip install "hydra-suite[cuda13]"
-```
+### Prerequisites
 
-**You do not need the CUDA toolkit installed.** PyTorch's pip wheel bundles NVIDIA CUDA runtime libraries (`nvidia-cublas-cu12`, `nvidia-cudnn-cu12`, `nvidia-curand-cu12`, etc.) as pip dependencies and preloads them at import time, so ONNX Runtime and TensorRT find them automatically.
+All platforms need:
 
-### Why is GPU install two commands?
+- **Python ≥ 3.9** to *run* the installer (base conda, system `python3`, or
+  `py -3` on Windows). The installer only uses the standard library. The env it
+  builds gets Python 3.13 by default (`--python` to change it); HYDRA itself
+  needs Python 3.11–3.13.
+- **git** — CLIP (SAM3's text encoder) and the AprilTag fork install from git.
+- **conda/mamba (recommended, optional)** — if `conda` or `mamba` is on `PATH`
+  the installer builds a conda env that also supplies `git`, `cmake` and a C
+  toolchain. Without conda it builds a venv instead (see
+  [venv vs conda vs current](#venv-vs-conda-vs-current-env)).
+- **ffmpeg** — nothing to do. The `imageio-ffmpeg` wheel bundles a binary on
+  every platform, and a system `ffmpeg` on `PATH` takes precedence.
 
-PyTorch GPU builds are hosted on PyTorch's own server, not PyPI. Python packaging standards (PEP 621) have no way to specify per-dependency index URLs. This is how every ML project handles it: you install torch first, then the package. The second command will **not** overwrite your existing torch.
+Plus, per platform:
+
+=== "macOS"
+
+    - Xcode Command Line Tools, for the AprilTag C build:
+      `xcode-select --install` (accept the licence with
+      `sudo xcodebuild -license` if prompted).
+
+=== "Linux"
+
+    - With conda: nothing else — the env includes `c-compiler`/`cmake`.
+    - Without conda: a C compiler and `cmake` from your package manager.
+    - For the Qt GUIs on a minimal install you may need system libraries, e.g.
+      on Ubuntu/Debian:
+
+        ```bash
+        sudo apt-get install -y libegl1 libgl1 libxkbcommon0 libxkbcommon-x11-0 \
+            libdbus-1-3 libfontconfig1 libxcb-cursor0
+        ```
+
+    - NVIDIA: a working driver (`nvidia-smi` must run). You do **not** need
+      the CUDA toolkit — the CUDA user-space libraries come from pip wheels.
+
+=== "Windows"
+
+    - Python from python.org, the Microsoft Store, or Miniforge/Anaconda.
+    - git for Windows (<https://git-scm.com>), or `conda install git`.
+    - **Visual Studio Build Tools** with the *Desktop development with C++*
+      workload, for the AprilTag C build. If you do not need AprilTag identity,
+      skip it with `--skip-apriltag` and you need no compiler at all.
+    - `cmake` (installed into the conda env automatically; `pip install cmake`
+      or the VS Build Tools CMake component for a venv).
+    - NVIDIA: a working driver (`nvidia-smi` must run).
+    - Conda is optional.
+
+    !!! note "Windows status"
+
+        Windows is a supported target and CI builds and verifies a **CPU**
+        install with `install.py` on Windows for Python 3.11, 3.12 and 3.13.
+        A Windows **CUDA** install has not yet been verified on real hardware.
+        Please report problems.
 
 ---
 
-## pip install from GitHub
-
-Install the latest code directly from the repository without cloning. Useful when:
-
-- The package isn't on PyPI yet
-- You need a fix that hasn't been released
-- A collaborator wants to try the latest version
-
-### CPU
-
-```bash
-pip install "hydra-suite @ git+https://github.com/neurorishika/hydra-suite.git"
-```
-
-### With GPU extras
-
-```bash
-# MPS
-pip install torch torchvision
-pip install "hydra-suite[mps] @ git+https://github.com/neurorishika/hydra-suite.git"
-
-# CUDA
-pip install torch torchvision --index-url https://download.pytorch.org/whl/cu128
-pip install "hydra-suite[cuda] @ git+https://github.com/neurorishika/hydra-suite.git"
-
-# CUDA 13
-pip install torch torchvision --index-url https://download.pytorch.org/whl/cu130
-pip install "hydra-suite[cuda13] @ git+https://github.com/neurorishika/hydra-suite.git"
-```
-
-### Install a specific branch or tag
-
-```bash
-# Specific branch
-pip install "hydra-suite @ git+https://github.com/neurorishika/hydra-suite.git@main"
-
-# Specific tag
-pip install "hydra-suite @ git+https://github.com/neurorishika/hydra-suite.git@v1.0.0"
-```
-
-### Upgrading a GitHub install
-
-```bash
-pip install --upgrade --force-reinstall --no-deps \
-    "hydra-suite @ git+https://github.com/neurorishika/hydra-suite.git"
-```
-
----
-
-## conda + pip (developer install)
-
-For active development. Uses conda for system libraries (Qt, OpenGL) and pip for Python packages. Provides editable install so code changes are live immediately.
-
-### Step 1: Clone
+## 2. Run the installer
 
 ```bash
 git clone https://github.com/neurorishika/hydra-suite.git
 cd hydra-suite
+python install.py            # Windows: py -3 install.py
 ```
 
-### Step 2: Create environment and install
-
-Pick your platform:
+That is the whole install. When it finishes it prints how to activate the env:
 
 ```bash
-# CPU
-make setup
-conda activate hydra
-make install
-
-# Apple Silicon (MPS)
-make setup-mps
-conda activate hydra-mps
-make install-mps
-
-# NVIDIA GPU (CUDA)
-make setup-cuda
-conda activate hydra-cuda
-make install-cuda CUDA_MAJOR=13     # or CUDA_MAJOR=12 — see below
+conda activate hydra-mps     # or hydra / hydra-cuda; venv users get an activate path
 ```
 
-#### Choosing `CUDA_MAJOR`
-
-`CUDA_MAJOR` must match what the installed **driver** supports, not the newest
-CUDA that exists. Check first:
+Preview without changing anything:
 
 ```bash
-nvidia-smi --query-gpu=driver_version --format=csv,noheader
+python install.py --dry-run
 ```
 
-| Driver version | Max CUDA | Use |
+### What the installer does
+
+| Step | Name (for `--only`) | What happens |
 |---|---|---|
-| 580 or newer | 13.x | `CUDA_MAJOR=13` |
-| 525–579 | 12.x | `CUDA_MAJOR=12` |
+| 1 | `env` | Create (or update) the conda env / venv. Conda supplies only `python`, `pip`, `git`, `cmake`, and the C/C++ compilers (no compilers on Windows — MSVC comes from VS Build Tools). |
+| 2 | `uv` | Install `uv` into the env (`--no-uv` falls back to pip). |
+| 3 | `conflicts` | Remove package variants that must not coexist for this tier (the other `onnxruntime`/`onnxruntime-gpu`, GUI `opencv` builds, the other TensorRT family). |
+| 4 | `torch` | Install the pinned `torch`/`torchvision` pair from the PyTorch index for the tier (`cpu`, `cu128` or `cu130`; PyPI on macOS). |
+| 5 | `hydra` | Install `hydra-suite[<tier>,sam]` from the checkout (editable), with the [tested pins](#tested-pins) applied. |
+| 6 | `clip` | Install the pinned ultralytics CLIP fork (SAM3's text encoder; git-only, so it cannot be a pyproject dependency). |
+| 7 | `apriltag` | Build the Kronauer lab AprilTag fork (`Social-Evolution-and-Behavior/apriltag` @ `c43a9b6`) from source, statically linked. Skipped with `--skip-apriltag`. |
+| 8 | `libomp` | Apple Silicon only: de-duplicate the OpenMP runtime so torch and other OpenMP users load one copy. |
+| 9 | `sam3-train`, `sleap` | Optional sidecar envs — only with `--with-sam3-train` / `--with-sleap`. |
+| 10 | `doctor` | Run `hydra doctor` for the tier. Skipped with `--skip-doctor`. |
 
-Pick the wrong one and torch imports fine while `torch.cuda.is_available()` is
-`False` — note that `torch.cuda.device_count()` still reports your GPUs in that
-state, because it counts what the driver enumerates rather than what the torch
-build can drive. The install's CUDA self-check tests `is_available()` and runs a
-real convolution, so it fails fast on a mismatch and tells you which
-`CUDA_MAJOR` to use.
+`--only clip,apriltag` re-runs individual steps against an existing env.
 
-### Step 3: Install dev tools (optional)
+### CUDA: auto-detection and override
 
-```bash
-make install-dev
-```
+On a machine with an NVIDIA GPU the installer reads the driver version from
+`nvidia-smi` and picks the CUDA build the driver can actually run:
 
-This adds formatting, linting, testing, and publishing tools. Run `make help` for the full command catalog.
+| Driver version | CUDA build | PyTorch wheels | Extra |
+|---|---|---|---|
+| 580 or newer | CUDA 13 | `cu130` | `cuda13` |
+| older than 580 | CUDA 12 | `cu128` | `cuda12` |
 
-### How it works
-
-The conda environment provides system libraries and Python. The `make install-*` targets run `uv pip install -r requirements-*.txt`, which installs:
-
-1. **torch** with the correct GPU variant and index URL
-2. **`-e .`** — an editable install that pulls all `pyproject.toml` dependencies
-3. The pinned Kronauer lab `apriltag` fork via `make install-apriltag-fork`
-
-Base dependencies (numpy, scipy, PySide6, ultralytics, etc.) are declared once in `pyproject.toml`. The requirements files only add what `pyproject.toml` cannot express (torch GPU index URLs). This means there is **one source of truth** for dependencies.
-
-### Development workflow
+Override it when you need to:
 
 ```bash
-conda activate hydra-mps   # or your env
-# Edit code — changes are live immediately (editable install)
-make pytest                               # run tests
-make format && make lint                  # format and lint before committing
+python install.py --cuda 12        # or 13; CUDA_MAJOR=12 in the environment also works
+python install.py --cuda none      # ignore the GPU, install the CPU tier
 ```
+
+An explicit `--cuda 13` on a driver older than 580 is honoured but warns: that
+build imports fine, but `torch.cuda.is_available()` is `False`. (Note that
+`torch.cuda.device_count()` still reports the GPUs in that state — do not be
+reassured by it.) On a Linux/Windows machine with no working `nvidia-smi`,
+`python install.py` simply installs the CPU tier; forcing `--tier cuda` there
+without `--cuda 12|13` is refused.
+
+### The `make` equivalents
+
+The Makefile targets keep their old names but are thin wrappers around
+`install.py`. They split the install into two steps — create the env, then
+install into the **activated** env:
+
+```bash
+# Apple Silicon
+make setup-mps && conda activate hydra-mps && make install-mps
+
+# NVIDIA (CUDA major auto-detected; CUDA_MAJOR=12|13 overrides)
+make setup-cuda && conda activate hydra-cuda && make install-cuda
+
+# CPU
+make setup && conda activate hydra && make install
+```
+
+`make setup*` only creates the env (`--create-only`); `make install*` runs
+`install.py --target current` with the env's Python. See
+[Environments and Makefile](environments.md) for the full target list.
+
+### Choosing a tier explicitly
+
+```bash
+python install.py --tier cpu       # e.g. a CPU-only env on a GPU box
+python install.py --tier cuda --cuda 12
+python install.py --env my-hydra   # custom env name (default: hydra / hydra-mps / hydra-cuda)
+```
+
+### venv vs conda vs current env
+
+`--target` decides where packages go:
+
+| `--target` | When | Notes |
+|---|---|---|
+| `auto` (default) | — | `conda` if conda/mamba is on `PATH`, else `venv`. |
+| `conda` | Recommended | Named env (`hydra`, `hydra-mps`, `hydra-cuda`); conda supplies `git` and the build toolchain. Sidecar envs (SAM3 training, SLEAP) require conda. |
+| `venv` | No conda | Created at `<checkout>/.venv-<name>` (e.g. `.venv-hydra-cuda`), or at the path given by `--env some/path`. The installer itself must run on Python ≥ 3.11 because it becomes the venv's Python. |
+| `current` | You manage the env | Installs into the interpreter running `install.py` (Python ≥ 3.11). This is what `make install*` uses. |
+
+### Tested pins
+
+By default a fresh install gets the exact versions in `constraints/`
+(`base.txt` on every tier, plus `cuda12.txt` or `cuda13.txt` on CUDA), so
+tracking output does not drift every time an upstream package releases.
+`pyproject.toml` declares the allowed *ranges*; `constraints/` records the
+*tested* versions. Torch is pinned separately in `install.py`
+(`TORCH_VERSION`/`TORCHVISION_VERSION`).
+
+```bash
+python install.py --latest                 # ignore constraints/, take the newest compatible releases
+python install.py --constraints my.lock    # add your own lock on top of the tested pins
+```
+
+To bump the tested pins (maintainers):
+
+```bash
+python tools/lock_constraints.py                          # re-resolve, keep existing pins
+python tools/lock_constraints.py --upgrade-package numpy  # bump one package
+```
+
+then re-run the equivalence gates before committing — see
+[Dependency and CUDA Updates](../developer-guide/dependency-cuda-updates.md).
+
+### Install without a checkout
+
+You can install straight from GitHub without cloning:
+
+```bash
+curl -O https://raw.githubusercontent.com/neurorishika/hydra-suite/main/install.py
+python install.py --source git+https://github.com/neurorishika/hydra-suite@main
+```
+
+`--source` also accepts a checkout directory or a built wheel.
+
+!!! warning "No tested pins without a checkout"
+
+    The tested pins live in `constraints/` next to `install.py`. A lone
+    downloaded `install.py` has no `constraints/` beside it, so a no-checkout
+    install resolves the newest compatible releases. Pass a lock file with
+    `--constraints FILE` (e.g. a copy of `constraints/base.txt`) to pin.
 
 ---
 
-## After installation
+## 3. Optional add-ons
 
-### Verify
+| Add-on | Command | Make target | Notes |
+|---|---|---|---|
+| SAM3 LoRA training sidecar | `python install.py --with-sam3-train` | `make setup-sam3-train` | **CUDA only** (compute capability ≥ 8.0, bf16); refused on other tiers. Builds conda env `hydra-sam3`. See [SAM2 and SAM3](../user-guide/sam-install-and-run.md#sam3-training-optional-cuda-only). |
+| SLEAP pose sidecar | `python install.py --with-sleap` | `make setup-sleap` | Builds conda env `sleap` with `sleap==1.6.2` and the torch build matching this host. See [Integrations](integrations.md#sleap-integration-trackerkit-posekit). |
+| Dev tools | `python install.py --dev` | `make install-dev` | pytest, black, flake8, mypy, build, twine, … (`[dev]` extra). |
+| Docs tools | `python install.py --docs` | `make docs-install` | mkdocs and plugins (`[docs]` extra). |
+
+Flags combine, e.g. `python install.py --dev --with-sleap`. When the main env
+already exists, the installer updates it in place and then adds the sidecar.
+The `make setup-*` sidecar targets run only the sidecar steps.
+
+---
+
+## Verify
+
+The installer runs this for you; run it again any time:
 
 ```bash
-hydra --help
-python -c "import torch; print('CUDA:', torch.cuda.is_available(), '| MPS:', torch.backends.mps.is_available())"
+hydra doctor                 # or: python -m hydra_suite.runtime.doctor, or: make doctor
 ```
 
-For CUDA, also check ONNX Runtime:
+`hydra doctor` is headless (no Qt window, no downloads) and checks:
+
+- Python version, and that every kit's GUI module imports
+- that exactly **one** package owns OpenCV's `cv2/`
+- macOS: that only one OpenMP runtime loads in every import order
+- torch for the tier — MPS availability, or on CUDA a real convolution plus a
+  check that the CUDA 12/13 wheel families are not mixed
+- ONNX Runtime providers (CoreML on MPS); TensorRT and CuPy on CUDA;
+  `coremltools` on MPS
+- SAM2, SAM3 inference packages (including the correct CLIP fork), and whether
+  the gated SAM3 checkpoint is downloaded (a warning, not a failure)
+- AprilTag and `ffmpeg` (warnings)
+- the optional SAM3 training and SLEAP sidecars
+
+Each warning or failure prints the command that fixes it. The exit code is
+non-zero only when a check **fails**.
 
 ```bash
-python -c "import onnxruntime as ort; print(ort.get_available_providers())"
-# Should include 'CUDAExecutionProvider'
+hydra doctor --json                  # machine-readable
+hydra doctor --tier cuda             # check against an expected tier
+hydra doctor --quick                 # skip the slow GUI-import check
+hydra doctor --require-sam3-train    # fail if the training sidecar is unusable
 ```
 
 ### Launch
@@ -245,7 +297,60 @@ filterkit          # FilterKit tool
 refinekit          # RefineKit proofreading
 ```
 
-### Data directories
+---
+
+!!! note "Linux needs glibc 2.34 or newer"
+    The tested pins include PySide6 6.11, whose Linux wheels are
+    `manylinux_2_34` (RHEL/Rocky 9, Ubuntu 22.04 and newer). Older
+    distributions (RHEL 8, Ubuntu 20.04) have no compatible wheel.
+
+### Verification status (2026-10-03)
+
+What has actually been run, not just documented. "CI" is the
+`Install smoke` workflow (`install.py --target current --cuda none`, then
+`hydra doctor` and a test subset) on every push.
+
+| Install path | Linux CPU | macOS (Apple Silicon) | Windows CPU | Linux CUDA 12 | Linux CUDA 13 | Windows CUDA |
+| --- | --- | --- | --- | --- | --- | --- |
+| `python install.py` (pip, current env) | CI, py3.11–3.13 | CI, py3.11–3.13 (mps packages) | CI, py3.11–3.13 | — | — | not yet verified (no box) |
+| `python install.py` (conda env) | — | fresh env, doctor all OK (MPS) | — | fresh env on diptera (driver 570, auto-detected cu128), doctor 0 failures | fresh env on mehek (driver 595, auto-detected cu130), doctor all OK | not yet verified |
+| `make setup` + `make install` | CI (conda + make) | CI (conda + make) | n/a (use `install.py`) | — | — | n/a |
+| SAM2 escalation (real frames) | — | MPS + CPU | — | — | CUDA | — |
+| SAM3 escalation (real frames) | — | MPS + CPU | — | — | CUDA | — |
+| SAM3 training sidecar + 1-epoch run | n/a | n/a (refused by design) | n/a | — | `--with-sam3-train`, trained + exported | not yet verified |
+
+Tracking output: an environment built by `install.py` with the tested pins
+produces the same trajectories as the previous conda envs — byte-identical on
+CUDA (mehek, `fly_obb` + `worm_bgsub`) and identical positions/headings/IDs on
+MPS, where only float32 rounding in `PositionUncertainty` and
+`AssignmentConfidence` differs (pip scipy links Apple Accelerate, conda scipy
+OpenBLAS; relative difference ≤ 5e-6).
+
+## Updating and recreating
+
+```bash
+git pull
+python install.py --update       # upgrade packages in the existing env
+python install.py --recreate     # delete and rebuild the conda env from scratch
+```
+
+- **`--update`** refreshes the conda packages and re-installs `hydra-suite`
+  with `--upgrade` (still within the tested pins unless you pass `--latest`).
+- **`--recreate`** removes the conda env and builds it again. For a venv,
+  delete the `.venv-<name>` directory and re-run.
+
+!!! warning "Recreate environments built before the pyproject-only layout"
+
+    Older envs were built from `environment*.yml` files that installed Qt,
+    OpenCV and CUDA libraries from conda, plus `requirements*.txt` files that
+    no longer exist. Updating such an env in place leaves conda- and
+    pip-installed copies fighting over the same files. `hydra doctor` flags
+    the most common symptom — more than one package (or a conda package)
+    owning `cv2/` — and tells you to run `python install.py --recreate`.
+
+---
+
+## Data directories
 
 User data is stored in platform-appropriate locations (not inside the package):
 
@@ -275,7 +380,7 @@ export HYDRA_DATA_DIR=/mnt/lab-shared/hydra-data
 hydra
 
 # Use a project-specific config
-HYDRA_CONFIG_DIR=./my-project-config mat
+HYDRA_CONFIG_DIR=./my-project-config trackerkit
 
 # Run a packaged job's models without relocating engine caches or
 # calibration profiles (set automatically by a packed job's run.sh)
@@ -310,108 +415,75 @@ python -m hydra_suite.paths_migrate /path/to/repo            # copy files
 
 ---
 
-## Updating
-
-### pip (PyPI)
-
-```bash
-pip install --upgrade hydra-suite
-```
-
-### pip (GitHub)
-
-```bash
-pip install --upgrade --force-reinstall --no-deps \
-    "hydra-suite @ git+https://github.com/neurorishika/hydra-suite.git"
-```
-
-### conda + pip (developer)
-
-```bash
-conda activate hydra-mps  # or your env
-git pull
-mamba env update -f environment-mps.yml --prune   # if conda deps changed
-make install-mps                                  # reinstall pip packages
-```
-
----
-
 ## Troubleshooting
 
-### `CUDAExecutionProvider` missing from ONNX Runtime
-
-- Ensure you installed with `[cuda]` or `[cuda13]` extra
-- Ensure PyTorch is imported before ONNX Runtime (PyTorch preloads CUDA libs)
-- Verify: `python -c "import torch; import onnxruntime as ort; print(ort.get_available_providers())"`
-- For a direct ONNX Runtime session check, use: `python -c "import onnxruntime as ort; s=ort.InferenceSession('model.onnx', providers=['CUDAExecutionProvider']); print(s.get_providers())"`
-- If you see `libcurand.so.10: cannot open shared object file`, update the conda env: `conda install -n hydra-cuda -c nvidia -c conda-forge libcurand=10.*`
-- **conda path:** re-run `make install-cuda CUDA_MAJOR=13` (or `CUDA_MAJOR=12`) and reactivate the environment to refresh hooks; the Makefile now runs a CUDA runtime self-check and fails fast if ONNX Runtime libraries are still missing
+Start with `hydra doctor` — most failures name their own fix. Common cases:
 
 ### `torch.cuda.is_available()` is `False` on a machine with GPUs
 
-Almost always a CUDA-major mismatch: a CUDA 13 torch build on a pre-580 driver.
-Confirm with `python -c "import torch; print(torch.version.cuda)"` and compare
-against the driver table above, then reinstall with the right `CUDA_MAJOR`.
-Do not be reassured by `torch.cuda.device_count()` — it reports GPUs even when
-none of them are usable by this build.
+Almost always a CUDA-major mismatch: a CUDA 13 build on a driver older than
+580. Check `python -c "import torch; print(torch.version.cuda)"` against the
+[driver table](#cuda-auto-detection-and-override), then rebuild with the right
+build:
 
-### Mixed CUDA 12 / CUDA 13 wheels (`CUDNN_STATUS_SUBLIBRARY_LOADING_FAILED`, CuPy build errors)
+```bash
+python install.py --recreate --cuda 12     # or 13
+```
+
+### Mixed CUDA 12 / CUDA 13 wheels (`CUDNN_STATUS_SUBLIBRARY_LOADING_FAILED`, CuPy falls back to CPU)
 
 The CUDA component wheels ship under two naming schemes — `nvidia-cublas-cu12`
 (CUDA 12) and plain `nvidia-cublas` (CUDA 13) — and both unpack into the same
-`site-packages/nvidia/` tree. Switching a CUDA major in place leaves the old
-family behind, and the leftovers cause failures far from their cause:
+`site-packages/nvidia/` tree. Switching CUDA major in place can leave both
+families installed. Symptoms surface far from the cause: convolutions fail
+with `CUDNN_STATUS_SUBLIBRARY_LOADING_FAILED`, or CuPy compiles against stale
+headers and GPU background subtraction silently falls back to CPU.
 
-- CuPy compiles its kernels against whatever headers it finds there, so a stale
-  `nvidia/cu13/include` makes GPU background subtraction fall back to CPU with
-  only an `INFO` log line
-- convolutions fail with `CUDNN_STATUS_SUBLIBRARY_LOADING_FAILED`
-
-**Do not uninstall individual `nvidia-*` packages to clean this up.** They share
-files, so a partial uninstall removes cuDNN sublibraries that the surviving
-packages still need — turning a degraded environment into a broken one.
-Reinstall the whole stack:
+**Do not uninstall individual `nvidia-*` packages** — they share files, and a
+partial uninstall removes cuDNN sublibraries the survivors still need.
+`hydra doctor` detects the mixed state; rebuild the env:
 
 ```bash
-pip list | awk '/^nvidia-/{print $1}' | xargs -r pip uninstall -y
-rm -rf "$CONDA_PREFIX"/lib/python*/site-packages/nvidia
-make install-cuda CUDA_MAJOR=12   # or 13
+python install.py --recreate      # add --cuda 12|13 to override detection
 ```
 
-The CUDA self-check detects a mixed environment and prints these steps.
+### `CUDAExecutionProvider` missing from ONNX Runtime
 
-### PySide6 / Qt errors on Linux (pip only)
+ONNX Runtime GPU loads its CUDA libraries from the pip `nvidia-*` wheels via
+`onnxruntime.preload_dlls()` — there is no `LD_LIBRARY_PATH` hook and no CUDA
+library from conda any more. If the provider is missing, the env usually has
+the wrong `onnxruntime` variant or a mixed wheel family; `hydra doctor --tier
+cuda` reports which, and `python install.py --recreate` fixes both.
 
-pip-installed PySide6 may need system libraries:
+### AprilTag build fails
+
+The fork is a C extension. Install a compiler (Xcode CLT on macOS, VS Build
+Tools on Windows, `c-compiler`/`cmake` on Linux) and re-run just that step:
 
 ```bash
-sudo apt install libgl1-mesa-glx libegl1 libxcb-xinerama0  # Ubuntu/Debian
+python install.py --only apriltag
 ```
 
-The conda path handles this automatically.
+Or install without it: `python install.py --skip-apriltag` (AprilTag identity
+is then unavailable; `hydra doctor` reports it as a warning).
 
-### CuPy compilation fails
+### SAM3 says the `clip` package is the wrong fork
 
-CuPy builds from source on first install if no prebuilt wheel is found. Ensure CUDA dev packages are installed.
+SAM3 needs the ultralytics CLIP fork, not `openai/CLIP`. Re-run
+`python install.py --only clip`. See
+[SAM2 and SAM3](../user-guide/sam-install-and-run.md#troubleshooting).
 
-### Fresh reinstall
+### `OMP Error #15` on macOS
 
-```bash
-# pip
-pip uninstall hydra-suite
-pip install "hydra-suite[cuda]"
-
-# conda
-conda env remove -n hydra-cuda
-make setup-cuda
-conda activate hydra-cuda
-make install-cuda CUDA_MAJOR=13
-```
+Two OpenMP runtimes were loaded. Run `python -m hydra_suite.runtime.macos_libomp`
+(or `make configure-mps-libs`); `hydra doctor` checks for this.
 
 ---
 
 ## Related docs
 
-- [Environments](environments.md) — conda environment matrix and Makefile reference
+- [Environments and Makefile](environments.md) — how environments are composed, Makefile reference
+- [Platform Notes](platforms.md) — feature × device matrix
 - [Integrations](integrations.md) — SLEAP, X-AnyLabeling setup
-- [Publishing to PyPI](../developer-guide/publishing.md) — releasing new versions
+- [SAM2 and SAM3: install and run](../user-guide/sam-install-and-run.md)
+- [Dependency and CUDA Updates](../developer-guide/dependency-cuda-updates.md) — bumping pins

@@ -38,6 +38,7 @@ from hydra_suite.detectkit.gui.widgets.calibration_source_selector import (
     CalibrationSourceSelector,
     scale_warning_text,
 )
+from hydra_suite.widgets.device_combo import DeviceCombo
 
 TITLE = "Escalate to segment (SAM2)"
 ALREADY_POLYGON = "This source already contains segmentation polygons."
@@ -112,7 +113,11 @@ class EscalateSam2Dialog(DetectKitDialog):
         )
         form.addWidget(self._variant, 0, 1)
 
-        form.addWidget(QLabel("Body size (px)"), 1, 0)
+        form.addWidget(QLabel("Run on"), 1, 0)
+        self._device = DeviceCombo(str(saved.get("device", "auto") or "auto"))
+        form.addWidget(self._device, 1, 1)
+
+        form.addWidget(QLabel("Body size (px)"), 2, 0)
         self._reference_body = QDoubleSpinBox()
         self._reference_body.setRange(0.0, 4096.0)
         self._reference_body.setDecimals(1)
@@ -125,9 +130,9 @@ class EscalateSam2Dialog(DetectKitDialog):
             "The typical longest side of one animal, in pixels. Tile size = "
             "this / tile fraction."
         )
-        form.addWidget(self._reference_body, 1, 1)
+        form.addWidget(self._reference_body, 2, 1)
 
-        form.addWidget(QLabel("Tile fraction"), 2, 0)
+        form.addWidget(QLabel("Tile fraction"), 3, 0)
         self._tile_fraction = QDoubleSpinBox()
         self._tile_fraction.setRange(0.0, 0.9)
         self._tile_fraction.setSingleStep(0.05)
@@ -138,21 +143,21 @@ class EscalateSam2Dialog(DetectKitDialog):
             "fraction, so small animals are not shrunk to a few pixels. "
             "Full frame is the uncalibrated default; calibrate to fit it."
         )
-        form.addWidget(self._tile_fraction, 2, 1)
+        form.addWidget(self._tile_fraction, 3, 1)
 
-        form.addWidget(QLabel("Resolved tile"), 3, 0)
+        form.addWidget(QLabel("Resolved tile"), 4, 0)
         self._tile_label = QLabel("")
         self._tile_label.setWordWrap(True)
-        form.addWidget(self._tile_label, 3, 1)
+        form.addWidget(self._tile_label, 4, 1)
 
         self._btn_calibrate = QPushButton("Calibrate against polygon frames…")
         self._btn_calibrate.clicked.connect(self._run_calibration)
-        form.addWidget(self._btn_calibrate, 4, 0, 1, 2)
+        form.addWidget(self._btn_calibrate, 5, 0, 1, 2)
 
         self._results = GeometryCalibrationResults()
         self._results.setMinimumHeight(140)
         self._results.point_chosen.connect(self.apply_calibration_choice)
-        form.addWidget(self._results, 5, 0, 1, 2)
+        form.addWidget(self._results, 6, 0, 1, 2)
         top.addWidget(settings, 3)
         outer.addLayout(top, 1)
 
@@ -196,6 +201,12 @@ class EscalateSam2Dialog(DetectKitDialog):
 
     def selected_variant(self) -> str:
         return self._variant.currentText()
+
+    def selected_device(self) -> str:
+        return self._device.device()
+
+    def selected_device(self) -> str:
+        return self._device.device()
 
     def selected_sources(self) -> list[str]:
         return [s.name for s in self._selector.escalation_sources()]
@@ -331,6 +342,7 @@ class EscalateSam2Dialog(DetectKitDialog):
             self.selected_variant(),
             reference_body_px=params["reference_body_px"],
             overlap=params["overlap"],
+            device=self.selected_device(),
         )
         progress.canceled.connect(worker.cancel)
         worker.progress.connect(progress.setValue)
@@ -393,6 +405,7 @@ class EscalateSam2Dialog(DetectKitDialog):
         self._project.geometry_escalation_settings = {
             **self._selector.state(),
             "variant": self.selected_variant(),
+            "device": self.selected_device(),
             "reference_body_px": float(self._reference_body.value()),
             "tile_fraction": float(self._tile_fraction.value()),
         }

@@ -54,6 +54,7 @@ from hydra_suite.detectkit.gui.widgets.calibration_source_selector import (
     CalibrationSourceSelector,
     scale_warning_text,
 )
+from hydra_suite.widgets.device_combo import DeviceCombo
 
 
 def _saved_value(saved: dict, key: str, default, cast):
@@ -205,6 +206,9 @@ class SemanticEscalationDialog(DetectKitDialog):
             "This is what accept writes into the source -- not the prompt."
         )
         add_field(5, 0, "Assign to class", self._class_name)
+
+        self._device = DeviceCombo(str(saved.get("device", "auto") or "auto"))
+        add_field(5, 1, "Run on", self._device)
 
         self._confidence = QDoubleSpinBox()
         self._confidence.setRange(0.01, 0.99)
@@ -474,6 +478,7 @@ class SemanticEscalationDialog(DetectKitDialog):
     def parameters(self) -> dict:
         return {
             "class_name": self.class_name(),
+            "device": self._device.device(),
             "confidence": float(self._confidence.value()),
             "max_instances": int(self._max_instances.value()),
             "overlap": float(self._overlap.value()),

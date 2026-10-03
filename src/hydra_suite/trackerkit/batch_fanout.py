@@ -33,6 +33,40 @@ from hydra_suite.utils.video_artifacts import (
     choose_writable_artifact_base_dir,
 )
 
+#: Windows has no SIGKILL; TerminateProcess (what Popen.kill/terminate both use
+#: there) is already a hard kill, so SIGTERM is the faithful stand-in.
+_SIGKILL = getattr(signal, "SIGKILL", signal.SIGTERM)
+
+
+def _is_windows() -> bool:
+    return os.name == "nt"
+
+
+def _kill_tree_windows(pid: int) -> bool:
+    """Windows: hard-kill ``pid`` and every live descendant (no process groups).
+
+    POSIX reaches grandchildren (the SLEAP service under ``conda run``) through
+    the child's session group; Windows has no equivalent, so the tree is walked
+    while the leader is still alive. Returns False if ``pid`` is already gone --
+    its orphaned descendants are then unreachable by ancestry (a documented
+    Windows limitation of this best-effort cleanup).
+    """
+    import psutil
+
+    try:
+        leader = psutil.Process(pid)
+        victims = leader.children(recursive=True) + [leader]
+    except psutil.Error:
+        return False
+    for proc in victims:
+        try:
+            proc.kill()
+        except psutil.Error:
+            pass
+    psutil.wait_procs(victims, timeout=5)
+    return True
+
+
 logger = logging.getLogger(__name__)
 
 _PROGRESS_RE = re.compile(
@@ -150,8 +184,12 @@ class LiveChildRegistry:
         """
         killed: list[int] = []
         for pid in self.pids():
-            if os.name == "nt":  # pragma: no cover - POSIX-only process groups
-                break
+            if _is_windows():
+                if _kill_tree_windows(pid):
+                    killed.append(pid)
+                else:
+                    self.discard(pid)
+                continue
             try:
                 os.killpg(pid, signal.SIGKILL)
                 killed.append(pid)
@@ -366,7 +404,11 @@ def _launch(
         bufsize=1,
         env=env,
     )
-    if os.name != "nt":
+    if _is_windows():
+        # Its own console process group, so CTRL_BREAK_EVENT in _stop_children
+        # reaches this child alone -- not the scheduler and every sibling.
+        popen_kwargs["creationflags"] = subprocess.CREATE_NEW_PROCESS_GROUP
+    else:
         popen_kwargs["start_new_session"] = True
     # Popen is LAST: everything that can fail has already succeeded, so a raise
     # before this point cannot leak a process. Anything after it must tear the
@@ -400,7 +442,7 @@ def _launch(
         events.job_started(spec, gpu, log_path)
     except BaseException:
         # The process is already running; never abandon it.
-        _signal_group(proc, signal.SIGKILL)
+        _signal_group(proc, _SIGKILL)
         try:
             proc.wait(timeout=5)
         except Exception:
@@ -493,18 +535,27 @@ def _signal_group(proc: subprocess.Popen, sig: int) -> None:
     escalation path, so SIGTERM/SIGKILL go to the process group. This is safe
     because ``start_new_session=True`` in :func:`_launch` makes that group ours
     and ours alone; we can never signal the scheduler or an unrelated process.
+
+    Windows has no process groups to signal: the live tree is walked and
+    hard-killed instead (TerminateProcess is the only "signal" there anyway).
     """
-    if os.name != "nt":
-        try:
-            # ``proc.pid`` IS the pgid (start_new_session=True), and unlike
-            # ``os.getpgid(pid)`` it still works once poll() has reaped the
-            # leader -- so an already-exited child's group is still reachable.
-            os.killpg(proc.pid, sig)
-            return
-        except (ProcessLookupError, PermissionError, OSError):
-            pass  # group already gone or not ours: fall back to the child
+    if _is_windows():
+        if not _kill_tree_windows(proc.pid):
+            try:
+                proc.kill()
+            except Exception:
+                pass
+        return
     try:
-        if sig == signal.SIGKILL:
+        # ``proc.pid`` IS the pgid (start_new_session=True), and unlike
+        # ``os.getpgid(pid)`` it still works once poll() has reaped the
+        # leader -- so an already-exited child's group is still reachable.
+        os.killpg(proc.pid, sig)
+        return
+    except (ProcessLookupError, PermissionError, OSError):
+        pass  # group already gone or not ours: fall back to the child
+    try:
+        if sig == _SIGKILL:
             proc.kill()
         else:
             proc.terminate()
@@ -523,12 +574,11 @@ def _stop_children(running: list[_Live], options: FanoutOptions) -> None:
     # would race that orderly teardown.
     for live in _alive():
         try:
-            # NOTE (Windows): CTRL_BREAK_EVENT is only valid for a child started
-            # with creationflags=CREATE_NEW_PROCESS_GROUP, which _launch does not
-            # set. On nt this would hit the whole console group, scheduler
-            # included. Deployment is macOS/Linux; a Windows port must fix this.
+            # Windows: _launch starts each child in its own process group
+            # (CREATE_NEW_PROCESS_GROUP), so CTRL_BREAK_EVENT reaches that child
+            # only; trackerkit's CLI traps the resulting SIGBREAK as a stop.
             live.proc.send_signal(
-                signal.SIGINT if os.name != "nt" else signal.CTRL_BREAK_EVENT
+                signal.CTRL_BREAK_EVENT if _is_windows() else signal.SIGINT
             )
         except Exception:
             pass
@@ -543,7 +593,7 @@ def _stop_children(running: list[_Live], options: FanoutOptions) -> None:
     while _alive() and time.monotonic() < deadline:
         time.sleep(0.05)
     for live in _alive():
-        _signal_group(live.proc, signal.SIGKILL)
+        _signal_group(live.proc, _SIGKILL)
     for live in running:
         try:
             live.proc.wait(timeout=5)

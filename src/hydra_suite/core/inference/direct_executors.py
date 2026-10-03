@@ -487,6 +487,9 @@ class DirectONNXOBBExecutor(_BaseDirectOBBExecutor):
 
         import onnxruntime as ort
 
+        from hydra_suite.runtime.onnx_providers import preload_ort_cuda_libraries
+
+        preload_ort_cuda_libraries()
         providers = [
             ("CUDAExecutionProvider", {"device_id": 0}),
             "CPUExecutionProvider",

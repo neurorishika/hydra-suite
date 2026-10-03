@@ -533,10 +533,9 @@ def check_dependencies() -> object:
     """Check that all required dependencies are available."""
     required_modules = [
         ("numpy", "numpy"),
-        ("cv2", "opencv-python"),
+        ("cv2", "opencv-python-headless"),
         ("matplotlib", "matplotlib"),
         ("scipy", "scipy"),
-        ("skimage", "scikit-image"),
     ]
 
     missing_modules = []
@@ -550,10 +549,8 @@ def check_dependencies() -> object:
         print("Error: Missing required dependencies:")
         for package in missing_modules:
             print(f"  - {package}")
-        print("\nPlease install missing packages with:")
-        print(f"conda install -c conda-forge {' '.join(missing_modules)}")
-        print("or")
-        print(f"pip install {' '.join(missing_modules)}")
+        print("\nRepair the installation with:  python install.py")
+        print("(then check it with:  hydra doctor)")
         return False
 
     return True

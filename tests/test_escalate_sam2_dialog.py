@@ -154,3 +154,22 @@ def test_dialog_tiling_parameters_feed_the_escalation_request():
         SimpleNamespace(), ["a"], DEFAULT_VARIANT, **dlg.tiling_parameters()
     )
     assert req.tiling.resolved_tile_px() == 395
+
+
+def test_dialog_offers_device_choice_defaulting_to_auto():
+    dlg = EscalateSam2Dialog([OBBSource(name="a", level="obb")])
+    assert dlg.selected_device() == "auto"
+
+
+def test_sam2_dialog_persists_the_device_with_the_tiling(tmp_path):
+    from types import SimpleNamespace
+
+    project = SimpleNamespace(
+        project_dir=str(tmp_path),
+        geometry_calibration={},
+        geometry_escalation_settings={"variant": DEFAULT_VARIANT, "device": "cpu"},
+    )
+    dlg = EscalateSam2Dialog([OBBSource(name="a", level="obb")], project=project)
+    assert dlg.selected_device() == "cpu"
+    dlg.accept()
+    assert project.geometry_escalation_settings["device"] == "cpu"

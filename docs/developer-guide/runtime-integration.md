@@ -8,92 +8,84 @@ This guide defines the runtime contract for end-to-end integration of:
 
 ## Design Goal
 
-All compute-heavy methods must be controlled by one canonical runtime setting:
+All compute-heavy methods are controlled by **one stored setting**, the
+runtime tier:
 
-- `compute_runtime`
+```
+config.runtime_tier ∈ {cpu, gpu, gpu_fast}
+  → RuntimeResolver(tier, platform).resolve(stage)
+  → ResolvedBackend(backend ∈ {torch, tensorrt, coreml},
+                    device ∈ {cpu, cuda, mps}, used_fallback)
+```
 
-No feature should require users to configure a separate runtime selector.
+No feature may add its own runtime selector or runtime string vocabulary. The
+pre-Gen-2 per-stage `compute_runtime` strings (`onnx_cuda`, `onnx_coreml`, …)
+are gone. Old configs are migrated once with
+`scripts/migrate_runtime_config.py`, and loading a config without
+`runtime_tier` raises an error that points to that script.
 
 ## Source of Truth
 
-Runtime support and translation logic are centralized in:
+- `src/hydra_suite/runtime/resolver.py` is the single authority. It holds
+  `RuntimeResolver`, `ResolvedBackend`, `PlatformInfo`, `STAGES`,
+  `available_tiers(platform)` and `tier_label(tier, platform)` (UI labels
+  such as "GPU (Metal)" and "GPU-Fast (TensorRT)"), plus `detect_platform()`.
+  It is pure: no torch import and no I/O, and artifact availability is
+  injected as a callable.
+- `src/hydra_suite/runtime/onnx_providers.py` provides
+  `execution_providers_for(resolved)`, the ONNX Runtime provider list for a
+  `ResolvedBackend`, together with the TensorRT engine-cache options and
+  `preload_ort_cuda_libraries()`.
+- `src/hydra_suite/core/inference/runtime.py` provides
+  `RuntimeContext.from_config(config)`, which resolves the tier and carries
+  the result as `RuntimeContext.resolved`. `resolved_backend_for(ctx)`
+  derives a `ResolvedBackend` for hand-built contexts (tests, GUI workers).
+- `src/hydra_suite/utils/gpu_utils.py` provides the host accelerator
+  availability flags.
 
-- `src/hydra_suite/core/runtime/compute_runtime.py`
-- `src/hydra_suite/utils/gpu_utils.py`
+## Resolution Rules
 
-Core public helpers:
+| Tier | CUDA host | MPS host | CPU-only host |
+|---|---|---|---|
+| `cpu` | `torch`/`cpu` | `torch`/`cpu` | `torch`/`cpu` |
+| `gpu` | `torch`/`cuda` | `torch`/`mps` | `torch`/`cpu`, `used_fallback=True` |
+| `gpu_fast` | `tensorrt`/`cuda` if the artifact is available, else `torch`/`cuda` (fallback) | `coreml`/`mps` if available, else `torch`/`mps` (fallback) | `torch`/`cpu` (fallback) |
 
-- `CANONICAL_RUNTIMES`
-- `allowed_runtimes_for_pipelines(...)`
-- `infer_compute_runtime_from_legacy(...)`
-- `derive_detection_runtime_settings(...)`
-- `derive_pose_runtime_settings(...)`
-
-## Canonical Runtime Values
-
-- `cpu`
-- `mps`
-- `cuda`
-- `onnx_coreml`
-- `onnx_cpu`
-- `onnx_cuda`
-- `tensorrt`
+`bgsub` has no TensorRT/CoreML implementation, so on `gpu_fast` it resolves
+like `gpu` and is always flagged `used_fallback=True`.
 
 ## Integration Checklist (Required)
 
-### 1) Define a pipeline key
+### 1) Pick or add a stage key
 
-Add a stable pipeline name and use it in runtime gating.
+Current stages (`resolver.STAGES`): `obb`, `head_tail`, `cnn`, `yolo_pose`,
+`sleap_pose`, `vitpose_pose`, `bgsub`. A new kind of model gets a new stage
+key. Resolve it with `RuntimeResolver.resolve(stage, artifact_available=...)`,
+and pass an `artifact_available` callable that reports whether the stage's
+fast artifact (TensorRT engine / CoreML package) exists or can be built.
 
-Current examples:
+### 2) Consume `ResolvedBackend`, nothing else
 
-- `yolo_obb_detection`
-- `yolo_pose`
-- `sleap_pose`
-- `vitpose_pose`
-- `cnn_identity`
-- `head_tail`
+Branch on `resolved.backend` and `resolved.device` only. Do not re-derive
+backend choices from the tier, the platform, or legacy knobs. If the stage
+runs ONNX, take the providers from `execution_providers_for(resolved)`:
 
-For future additions, use names like:
+- `tensorrt` → TensorRT EP (persistent engine cache under the data dir) +
+  CUDA EP
+- `coreml` → CoreML EP, when ONNX Runtime's CoreML provider is present on an
+  MPS host
+- `torch` → CPU EP only (torch stages never run ONNX)
 
-- `appearance_embedding`
-- `contrastive_embedding`
-- `apriltag_classifier`
-- `colortag_classifier`
+### 3) Report fallbacks
 
-### 2) Add capability rules
+When a `gpu_fast` request cannot use the fast artifact, the resolver returns
+`used_fallback=True`. Surface it (TrackerKit shows a note under the tier
+selector) and log it. Never remap silently.
 
-Update `_pipeline_supports_runtime(...)` in `compute_runtime.py` so the new pipeline explicitly defines supported runtimes.
+### 4) Implement runtime lifecycle
 
-Rules must be strict:
-
-- If unsupported, return `False`.
-- Do not silently remap unsupported runtime to a different backend.
-
-### 3) Add runtime translation
-
-If the pipeline consumes legacy backend knobs, add mapping from `compute_runtime` to backend settings.
-
-Examples already used:
-
-- Detection: `yolo_device`, `enable_onnx_runtime`, `enable_tensorrt`
-- Pose: `pose_runtime_flavor`, `pose_sleap_device`
-
-### 4) Wire UI intersection gating
-
-Ensure the UI includes the new pipeline in the runtime context set.
-
-TrackerKit pattern:
-
-- Gather enabled pipeline set.
-- Call `allowed_runtimes_for_pipelines(...)`.
-- Populate runtime dropdown from the intersection.
-
-PoseKit uses the same pattern for active prediction backend scope.
-
-### 5) Implement runtime lifecycle
-
-If the integration has long-lived resources (service/subprocess/session), lifecycle must be run-scoped:
+If the integration has long-lived resources (service/subprocess/session),
+lifecycle must be run-scoped:
 
 - Initialize once per run.
 - Warmup once.
@@ -101,37 +93,36 @@ If the integration has long-lived resources (service/subprocess/session), lifecy
 
 Use existing runtime manager/service patterns where possible.
 
-### 6) Export artifacts automatically
+### 5) Export artifacts automatically
 
-If ONNX/TensorRT export is needed:
+If TensorRT/CoreML/ONNX export is needed:
 
 - Generate artifacts automatically.
 - Store artifacts adjacent to model paths.
 - Save runtime metadata signature for freshness checks.
 - Never require a manual export path for normal operation.
 
-### 7) Keep cache keys runtime-correct
+### 6) Keep cache keys runtime-correct
 
-Any cached output that depends on runtime/model/export shape must include those inputs in cache identity.
+Any cached output that depends on runtime/model/export shape must include
+those inputs in cache identity:
 
-For new features:
+- Include the model fingerprint and the resolved backend in cache signatures.
+- Include feature-specific shaping params (for example max instances,
+  embedding dimension, preprocessing mode).
 
-- Include model fingerprint and runtime flavor in cache signatures.
-- Include feature-specific shaping params (for example max instances, embedding dimension, preprocessing mode).
+### 7) Lock controls during compute
 
-### 8) Lock controls during compute
+UI controls that could invalidate active runtime sessions must be disabled
+while jobs are running.
 
-UI controls that could invalidate active runtime sessions must be disabled while jobs are running.
-
-This prevents mid-run backend switches and thread crashes.
-
-### 9) Add tests (minimum bar)
+### 8) Add tests (minimum bar)
 
 Add/extend tests for:
 
-- Capability matrix and intersection gating.
-- Runtime translation determinism from `compute_runtime`.
-- Migration from legacy config values.
+- Resolution for every tier × platform the stage supports, including
+  fallbacks.
+- Provider lists for each `ResolvedBackend` the stage can receive.
 - Lifecycle correctness (startup/teardown on success and failure).
 - Artifact auto-export + freshness behavior.
 - Failure fallback behavior with explicit logging.
@@ -140,18 +131,20 @@ Add/extend tests for:
 
 A new model/method integration is complete only when:
 
-1. It appears in runtime gating with explicit support rules.
-2. It runs from canonical `compute_runtime` without extra runtime selectors.
-3. Its ONNX/TensorRT artifacts are auto-managed (if applicable).
+1. It resolves through `RuntimeResolver` under a stage key, with no extra
+   runtime selector.
+2. It consumes `ResolvedBackend` (and `execution_providers_for` for ONNX).
+3. Its TensorRT/CoreML artifacts are auto-managed (if applicable).
 4. Caches remain valid and runtime/model-aware.
 5. TrackerKit and PoseKit behavior is consistent where the feature exists.
 
 ## Common Anti-Patterns (Do Not Add)
 
-- Hidden runtime remapping (`onnx_*` requested, CPU used without notice).
-- Feature-specific runtime dropdowns when global runtime is available.
+- Hidden runtime remapping (fast tier requested, a slower backend used
+  without `used_fallback`).
+- New runtime strings or feature-specific runtime dropdowns.
 - Manual exported-model-path requirements for standard workflows.
-- Runtime checks scattered across GUI/business logic without shared resolver usage.
+- Backend checks scattered across GUI/business logic instead of resolver usage.
 
 ## Sliced Inference (SAHI)
 
@@ -314,7 +307,7 @@ source (see Workflow below) — it does not create a new source.
   during a run; progress/status are reported via the standard `BaseWorker` signals.
 - Model weights are auto-managed (variant catalog via `checkpoints.py`); weights download on first use.
 - No caching, no ONNX/TensorRT export (SAM2 is torch-only).
-- No per-tier gating; runs on whatever torch device is available.
+- No per-tier gating. The device comes from the dialog's **Run on** picker (or `detectkit escalate sam2 --device`), resolved by `core.inference.torch_device.resolve_torch_device`: Auto picks CUDA, then MPS, then CPU, and an unavailable saved choice falls through to the best available device.
 - `sam2` is imported lazily, only inside `Sam2SegmentExecutor.from_variant` — importing the executor
   module (or `sam2_escalation.py`) does not require `sam2` to be installed.
 

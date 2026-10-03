@@ -96,6 +96,10 @@ class DatasetPreparationBudget:
             )
 
 
+_BLAS_THREAD_VARS = ("OPENBLAS_NUM_THREADS", "OMP_NUM_THREADS", "MKL_NUM_THREADS")
+_CHILD_BLAS_THREADS = "4"
+
+
 def _bounded_request_payload(request: DatasetPreparationRequest) -> dict[str, Any]:
     if len(request.sources) > MAX_SOURCES:
         raise DatasetLimitError(f"Preparation request exceeds {MAX_SOURCES} sources")
@@ -385,6 +389,14 @@ def prepare_role_datasets_contained(
     )
     child_environment = dict(os.environ)
     child_environment["HYDRA_DATASET_INDEX_DIR"] = str(index_root)
+    # TasksMax counts THREADS. pip's numpy and scipy wheels each bundle their
+    # own OpenBLAS, and each sizes its pool to the core count (32 on mehek), so
+    # the import chain alone exceeded 64 and died in blas_thread_init before
+    # any work ran (conda builds shared one pool, which hid this). Dataset
+    # preparation is I/O and image work, not BLAS: cap the pools instead of
+    # loosening the fork-bomb guard. A caller's explicit setting still wins.
+    for var in _BLAS_THREAD_VARS:
+        child_environment.setdefault(var, _CHILD_BLAS_THREADS)
     launch = build_limited_launch(
         command,
         limits,

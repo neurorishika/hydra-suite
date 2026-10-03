@@ -2931,8 +2931,16 @@ class ConfigOrchestrator:
             crf = str(self._mw.advanced_config.get("video_crop_crf", 18))
             preset = self._mw.advanced_config.get("video_crop_preset", "medium")
 
+            from hydra_suite.utils.ffmpeg import ffmpeg_exe
+
+            ffmpeg_bin = ffmpeg_exe()
+            if ffmpeg_bin is None:
+                raise Exception(
+                    "ffmpeg was not found on PATH and imageio-ffmpeg is unavailable; "
+                    "re-run install.py to install it"
+                )
             ffmpeg_cmd = [
-                "ffmpeg",
+                ffmpeg_bin,
                 "-i",
                 video_path,
                 "-filter:v",

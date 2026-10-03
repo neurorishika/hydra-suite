@@ -104,6 +104,8 @@ class EscalationRequest:
     variant: str
     overwrite: bool = False
     source_paths: list[str] = field(default_factory=list)
+    # "auto" | "cuda" | "mps" | "cpu"; resolved against what this host has.
+    device: str = "auto"
     # SAHI for box-prompted SAM2. None = full frame, which is the
     # pre-tiling behaviour exactly; SAM2 never borrows the SAM3 seed.
     reference_body_px: float = 0.0
@@ -157,9 +159,11 @@ class Sam2EscalationWorker(BaseWorker):
 
     def execute(self) -> None:
         from hydra_suite.core.inference.sam2.executor import Sam2SegmentExecutor
+        from hydra_suite.core.inference.torch_device import resolve_torch_device
 
         executor = self._executor or Sam2SegmentExecutor.from_variant(
-            self._request.variant
+            self._request.variant,
+            device=resolve_torch_device(self._request.device),
         )
         self.status.emit(f"Escalating {len(self._request.source_names)} source(s)...")
         result = run_escalation(
@@ -198,6 +202,7 @@ class Sam2CalibrationWorker(BaseWorker):
         overlap: float = DEFAULT_OVERLAP,
         executor=None,
         budget: int = CALIBRATION_SAMPLE_FRAMES,
+        device: str = "auto",
         parent=None,
     ) -> None:
         super().__init__(parent)
@@ -207,6 +212,7 @@ class Sam2CalibrationWorker(BaseWorker):
         self._overlap = float(overlap)
         self._executor = executor
         self._budget = int(budget)
+        self._device = str(device or "auto")
         self._cancel = False
         self.sampled_frames: list[str] = []
 
@@ -232,9 +238,12 @@ class Sam2CalibrationWorker(BaseWorker):
         executor = self._executor
         if executor is None:
             from hydra_suite.core.inference.sam2.executor import Sam2SegmentExecutor
+            from hydra_suite.core.inference.torch_device import resolve_torch_device
 
             self.status.emit(f"Loading {self._variant}…")
-            executor = Sam2SegmentExecutor.from_variant(self._variant)
+            executor = Sam2SegmentExecutor.from_variant(
+                self._variant, device=resolve_torch_device(self._device)
+            )
         points = calibrate_geometry(
             executor,
             [(path, [rec.points for rec in records]) for path, records in frames],
