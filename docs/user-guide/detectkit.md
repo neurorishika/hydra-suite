@@ -84,3 +84,28 @@ add-on. See [SAM2 and SAM3: install and run](sam-install-and-run.md) for
 devices, weights, the CLI and training setup, and
 [Semantic Escalation (SAM3)](detectkit-semantic-escalation.md) for the SAM3
 workflow.
+
+### SAM3 training augmentation
+
+The SAM3 training tab has an **Augmentation** group that augments tiles at
+train time. It applies to the **training split only**; validation is never
+augmented. Image and polygons are transformed together.
+
+| Control | Meaning | Fresh default |
+|---|---|---|
+| Flip left-right / up-down (p) | Probability of a flip | 0.5 / 0.5 |
+| Rotate 90 (p) | Probability of a random-direction 90 degree rotation | 0.5 |
+| Rotate +/- (deg) | Maximum small-angle rotation (gray border fill) | 0 |
+| Brightness / Contrast / Saturation +/- | Colour jitter | 0.2 each |
+| Hue +/- | HSV hue shift (fraction of the hue circle) | 0 |
+| Decode-colour sim (p) | Re-simulate video decode colour conversion | 0 |
+| Resample sim (p) | Alternate-resampler sub-pixel warp | 0 |
+| Monochrome | Convert tiles to grayscale | off |
+
+A fresh session starts with this recommended profile enabled. Set both flips
+to 0 for chiral concepts, and keep `hue` at 0 when colour is the concept. Saved
+presets from before augmentation existed keep the recommended profile.
+
+Headless, set the `sam3.augmentation` key in the training plan. When the key is
+omitted, augmentation is **disabled**, so existing plans train unchanged. Each
+run records the profile it used in `hydra_sam3_augmentation.json`.

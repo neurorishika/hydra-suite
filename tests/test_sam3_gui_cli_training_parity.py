@@ -106,9 +106,6 @@ _REFERENCE_KWARGS = dict(
     ),
 )
 
-# Fields the GUI panel cannot emit yet; compared by a strict-xfail test instead.
-_PANEL_PENDING_FIELDS = frozenset({"augmentation"})
-
 
 def test_reference_covers_every_sam3lora_field():
     """Fails loudly if a field is added to Sam3LoraParams and not covered here."""
@@ -283,8 +280,7 @@ def test_gui_and_cli_sam3lora_params_agree_field_by_field(tmp_path, monkeypatch)
     mismatches = {
         f.name: (getattr(gui_params, f.name), getattr(cli_params, f.name))
         for f in fields(Sam3LoraParams)
-        if f.name not in _PANEL_PENDING_FIELDS
-        and getattr(gui_params, f.name) != getattr(cli_params, f.name)
+        if getattr(gui_params, f.name) != getattr(cli_params, f.name)
     }
     assert not mismatches, f"Sam3LoraParams field(s) diverged: {mismatches}"
 
@@ -292,18 +288,31 @@ def test_gui_and_cli_sam3lora_params_agree_field_by_field(tmp_path, monkeypatch)
     assert asdict(gui_spec.publish_policy) == asdict(cli_spec.publish_policy)
 
 
-@pytest.mark.xfail(strict=True, reason="panel controls land in Task 6")
-def test_gui_and_cli_augmentation_agree(tmp_path, monkeypatch):
-    """Remove this xfail (and `_PANEL_PENDING_FIELDS`) in Task 6."""
+def test_augmentation_default_is_a_documented_intentional_divergence():
+    """A fresh GUI panel recommends augmentation; a CLI plan omitting it is OFF.
 
-    reference = Sam3LoraParams(**_REFERENCE_KWARGS)
-    gui_spec, _dlg = _drive_gui_sam3_spec(tmp_path / "gui", monkeypatch, reference)
-    cli_spec, _plan = _cli_sam3_spec(
-        tmp_path / "cli",
-        sam3_values=dict(_REFERENCE_KWARGS),
-        publish_values={"auto_import": True, "auto_select": False},
-    )
-    assert gui_spec.sam3_params.augmentation == cli_spec.sam3_params.augmentation
+    The GUI's fresh-session default is the recommended profile, so new
+    interactive runs get augmentation. The CLI/JSON contract default stays
+    `enabled=False` so every existing plan (which has no `sam3.augmentation`
+    key) trains exactly as it did before. Pinned explicitly, mirroring the
+    `auto_import` divergence, rather than excluded from the comparison.
+    """
+
+    from PySide6.QtWidgets import QApplication
+
+    QApplication.instance() or QApplication([])
+    from hydra_suite.detectkit.gui.panels.sam3_training_panel import Sam3TrainingPanel
+    from hydra_suite.training.sam3_lora.augment import recommended_sam3_augmentation
+
+    assert Sam3TrainingPanel().params().augmentation == recommended_sam3_augmentation()
+    assert recommended_sam3_augmentation().enabled is True
+    assert Sam3LoraParams().augmentation.enabled is False
+
+
+def test_cli_plan_without_augmentation_key_is_disabled(tmp_path):
+    values = {k: v for k, v in _REFERENCE_KWARGS.items() if k != "augmentation"}
+    cli_spec, _plan = _cli_sam3_spec(tmp_path, sam3_values=values)
+    assert cli_spec.sam3_params.augmentation.enabled is False
 
 
 def test_cli_rejects_unknown_checkpoint_selection(tmp_path):

@@ -38,8 +38,10 @@ from hydra_suite.training.contracts import (
     SAM3_MAX_NEGATIVE_QUERIES_PER_TILE,
     SAM3_MAX_PROMPT_CODEPOINTS,
     SAM3_MAX_PROMPT_UTF8_BYTES,
+    AugmentationProfile,
     Sam3LoraParams,
 )
+from hydra_suite.training.sam3_lora.augment import recommended_sam3_augmentation
 from hydra_suite.training.sam3_lora.availability import (
     Sam3TrainingAvailability,
     probe_sam3_training_availability,
@@ -531,6 +533,75 @@ class Sam3TrainingPanel(QWidget):
         opt_form.addRow("Checkpoint to export", self.checkpoint_selection_combo)
         self._settings_grid.addWidget(opt_group, 1, 1)
 
+        self.aug_group = QGroupBox("Augmentation")
+        self.aug_group.setCheckable(True)
+        self.aug_group.setToolTip(
+            "Train-time augmentation of SAM3 tiles (training split only; "
+            "validation is never augmented). Image and polygons are "
+            "transformed together. Set flips to 0 for chiral concepts."
+        )
+        aug_form = QFormLayout(self.aug_group)
+
+        def _aug_spin(maximum: float, step: float, decimals: int = 2) -> QDoubleSpinBox:
+            spin = QDoubleSpinBox()
+            spin.setRange(0.0, maximum)
+            spin.setSingleStep(step)
+            spin.setDecimals(decimals)
+            return spin
+
+        self.aug_fliplr = _aug_spin(1.0, 0.05)
+        self.aug_flipud = _aug_spin(1.0, 0.05)
+        self.aug_rot90 = _aug_spin(1.0, 0.05)
+        self.aug_rotate = _aug_spin(180.0, 1.0, 1)
+        self.aug_brightness = _aug_spin(1.0, 0.05)
+        self.aug_contrast = _aug_spin(1.0, 0.05)
+        self.aug_saturation = _aug_spin(1.0, 0.05)
+        self.aug_hue = _aug_spin(0.5, 0.005, 3)
+        self.aug_decode_color_sim = _aug_spin(1.0, 0.05)
+        self.aug_resample_sim = _aug_spin(1.0, 0.05)
+        self.aug_monochrome = QCheckBox("Monochrome")
+        for label, widget, tip in (
+            (
+                "Flip left-right (p)",
+                self.aug_fliplr,
+                "Probability of a horizontal flip.",
+            ),
+            ("Flip up-down (p)", self.aug_flipud, "Probability of a vertical flip."),
+            (
+                "Rotate 90° (p)",
+                self.aug_rot90,
+                "Probability of a 90° rotation (direction random). Label-exact for top-down views.",
+            ),
+            (
+                "Rotate ± (deg)",
+                self.aug_rotate,
+                "Maximum small-angle rotation. Borders are filled gray; instances clipped below the fragment floor become non-exhaustive.",
+            ),
+            ("Brightness ±", self.aug_brightness, "Multiplicative brightness jitter."),
+            ("Contrast ±", self.aug_contrast, "Contrast jitter about the image mean."),
+            ("Saturation ±", self.aug_saturation, "HSV saturation jitter."),
+            (
+                "Hue ±",
+                self.aug_hue,
+                "HSV hue shift (fraction of the hue circle). Keep 0 when colour is the concept.",
+            ),
+            (
+                "Decode-colour sim (p)",
+                self.aug_decode_color_sim,
+                "Probability of re-simulating video decode colour conversion.",
+            ),
+            (
+                "Resample sim (p)",
+                self.aug_resample_sim,
+                "Probability of an alternate-resampler sub-pixel warp.",
+            ),
+        ):
+            widget.setToolTip(tip)
+            aug_form.addRow(label, widget)
+        self.aug_monochrome.setToolTip("Convert tiles to grayscale.")
+        aug_form.addRow(self.aug_monochrome)
+        self._settings_grid.addWidget(self.aug_group, 3, 0, 1, 2)
+
         safety_group = QGroupBox("Resource safety")
         safety_form = QFormLayout(safety_group)
         self.host_reserve_gb_spin = QDoubleSpinBox()
@@ -609,7 +680,7 @@ class Sam3TrainingPanel(QWidget):
         ack_layout.addWidget(self.chk_ack)
         layout.addWidget(ack_group)
 
-        self.set_params(Sam3LoraParams())
+        self.set_params(Sam3LoraParams(augmentation=recommended_sam3_augmentation()))
 
     # -- Public interface --------------------------------------------------
 
@@ -665,6 +736,20 @@ class Sam3TrainingPanel(QWidget):
             **self.slice_group.to_sam3_tiling(),
             label_quality_acknowledged=self.chk_ack.isChecked(),
             env_name=self.env_edit.text().strip(),
+            augmentation=AugmentationProfile(
+                enabled=self.aug_group.isChecked(),
+                fliplr=self.aug_fliplr.value(),
+                flipud=self.aug_flipud.value(),
+                rot90=self.aug_rot90.value(),
+                rotate=self.aug_rotate.value(),
+                brightness=self.aug_brightness.value(),
+                contrast=self.aug_contrast.value(),
+                saturation=self.aug_saturation.value(),
+                hue=self.aug_hue.value(),
+                decode_color_sim=self.aug_decode_color_sim.value(),
+                resample_sim=self.aug_resample_sim.value(),
+                monochrome=self.aug_monochrome.isChecked(),
+            ),
         )
 
     def set_params(self, p: Sam3LoraParams) -> None:
@@ -719,6 +804,19 @@ class Sam3TrainingPanel(QWidget):
         )
         self.chk_ack.setChecked(p.label_quality_acknowledged)
         self.env_edit.setText(p.env_name or resolve_sam3_env())
+        a = p.augmentation
+        self.aug_group.setChecked(a.enabled)
+        self.aug_fliplr.setValue(a.fliplr)
+        self.aug_flipud.setValue(a.flipud)
+        self.aug_rot90.setValue(a.rot90)
+        self.aug_rotate.setValue(a.rotate)
+        self.aug_brightness.setValue(a.brightness)
+        self.aug_contrast.setValue(a.contrast)
+        self.aug_saturation.setValue(a.saturation)
+        self.aug_hue.setValue(a.hue)
+        self.aug_decode_color_sim.setValue(a.decode_color_sim)
+        self.aug_resample_sim.setValue(a.resample_sim)
+        self.aug_monochrome.setChecked(a.monochrome)
 
     def acknowledged(self) -> bool:
         return self.chk_ack.isChecked()

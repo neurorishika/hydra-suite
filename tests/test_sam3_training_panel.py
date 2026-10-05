@@ -374,3 +374,75 @@ def test_checkpoint_selection_control_round_trips_in_optimisation_group(qapp):
     assert panel.params().checkpoint_selection == "best_val_loss"
     panel.set_params(Sam3LoraParams(prompt="ant", checkpoint_selection="last"))
     assert panel.params().checkpoint_selection == "last"
+
+
+def _aug_profile():
+    from hydra_suite.training.contracts import AugmentationProfile
+
+    return AugmentationProfile(
+        enabled=True,
+        fliplr=0.1,
+        flipud=0.2,
+        rot90=0.3,
+        rotate=10.0,
+        brightness=0.4,
+        contrast=0.5,
+        saturation=0.6,
+        hue=0.05,
+        decode_color_sim=0.7,
+        resample_sim=0.8,
+        monochrome=True,
+    )
+
+
+def test_fresh_panel_defaults_to_recommended_augmentation(qapp):
+    from hydra_suite.detectkit.gui.panels.sam3_training_panel import Sam3TrainingPanel
+    from hydra_suite.training.sam3_lora.augment import recommended_sam3_augmentation
+
+    panel = Sam3TrainingPanel()
+    assert panel.params().augmentation == recommended_sam3_augmentation()
+
+
+def test_augmentation_round_trips_through_the_panel(qapp):
+    from hydra_suite.detectkit.gui.panels.sam3_training_panel import Sam3TrainingPanel
+    from hydra_suite.training.contracts import Sam3LoraParams
+
+    panel = Sam3TrainingPanel()
+    profile = _aug_profile()
+    panel.set_params(Sam3LoraParams(prompt="ant", augmentation=profile))
+    assert panel.params().augmentation == profile
+
+
+def test_disabled_augmentation_unchecks_the_group(qapp):
+    from dataclasses import replace
+
+    from hydra_suite.detectkit.gui.panels.sam3_training_panel import Sam3TrainingPanel
+    from hydra_suite.training.contracts import Sam3LoraParams
+
+    panel = Sam3TrainingPanel()
+    panel.set_params(
+        Sam3LoraParams(
+            prompt="ant", augmentation=replace(_aug_profile(), enabled=False)
+        )
+    )
+    assert panel.aug_group.isChecked() is False
+    assert panel.params().augmentation.enabled is False
+
+
+def test_augmentation_spin_ranges(qapp):
+    from hydra_suite.detectkit.gui.panels.sam3_training_panel import Sam3TrainingPanel
+
+    panel = Sam3TrainingPanel()
+    assert panel.aug_rotate.maximum() == 180
+    assert panel.aug_hue.maximum() == 0.5
+    for spin in (
+        panel.aug_fliplr,
+        panel.aug_flipud,
+        panel.aug_rot90,
+        panel.aug_brightness,
+        panel.aug_contrast,
+        panel.aug_saturation,
+        panel.aug_decode_color_sim,
+        panel.aug_resample_sim,
+    ):
+        assert spin.maximum() == 1
