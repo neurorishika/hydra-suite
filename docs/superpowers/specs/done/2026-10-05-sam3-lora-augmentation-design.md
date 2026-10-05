@@ -1,6 +1,6 @@
 # SAM3 LoRA training augmentation — design
 
-**Status:** Approved for implementation (goal-directed session, 2026-10-05).
+**Status:** Shipped — merged to main (feat/sam3-lora-augmentation @ 3662c7a2, 2026-10-05).
 **Branch:** `feat/sam3-lora-augmentation` (worktree `.worktrees/sam3-aug`).
 
 ## Why

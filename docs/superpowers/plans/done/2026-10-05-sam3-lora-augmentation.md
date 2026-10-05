@@ -43,7 +43,7 @@
 **Interfaces:**
 - Produces: `AugmentationProfile.rot90: float = 0.0`; `Sam3LoraParams.augmentation: AugmentationProfile` (default `AugmentationProfile(enabled=False)`); `Sam3LoraParams.__post_init__` coerces a `dict` to `AugmentationProfile`.
 
-- [ ] **Step 1: Write the failing test** `tests/test_sam3_augmentation_contract.py`:
+- [x] **Step 1: Write the failing test** `tests/test_sam3_augmentation_contract.py`:
 
 ```python
 from dataclasses import asdict
@@ -83,9 +83,9 @@ def test_dict_without_augmentation_key_gets_disabled_profile():
     assert Sam3LoraParams(**data).augmentation.enabled is False
 ```
 
-- [ ] **Step 2: Run it.** `python -m pytest tests/test_sam3_augmentation_contract.py -q`. Expected: FAIL (`rot90` / `augmentation` missing).
+- [x] **Step 2: Run it.** `python -m pytest tests/test_sam3_augmentation_contract.py -q`. Expected: FAIL (`rot90` / `augmentation` missing).
 
-- [ ] **Step 3: Implement.** In `AugmentationProfile`, after `contrast`:
+- [x] **Step 3: Implement.** In `AugmentationProfile`, after `contrast`:
 
 ```python
     # P(rotate 90 degrees, CW/CCW 50/50). Label-exact for top-down views;
@@ -115,9 +115,9 @@ In `Sam3LoraParams`, add the last field and a `__post_init__`:
 
 `AugmentationProfile` is defined later in the module. That is fine: the lambda and `__post_init__` resolve it at call time, and the annotation is a string under `from __future__ import annotations`.
 
-- [ ] **Step 4: Run** the new test, then the reflective guards: `python -m pytest tests/test_sam3_augmentation_contract.py tests/test_sam3_gui_cli_training_parity.py tests/test_sam3_train_probe_phase.py tests/test_sam3_slice_settings_shared.py tests/test_geometry_drift_guard.py tests/test_augmentation_profile_canonical_copies.py tests/test_training_augmentation.py tests/test_sam3_contracts.py -q`. Fix only the guards that fail, by adding `augmentation` to their reference sets. In `_REFERENCE_KWARGS`, use a non-default value: `AugmentationProfile(enabled=True, fliplr=0.3, flipud=0.4, rot90=0.6, brightness=0.1)`. If the parity GUI driver cannot yet emit it (the panel has no controls until Task 6), mark ONLY that field's comparison `xfail(strict=True, reason="panel controls land in Task 6")`, and remove the xfail in Task 6.
+- [x] **Step 4: Run** the new test, then the reflective guards: `python -m pytest tests/test_sam3_augmentation_contract.py tests/test_sam3_gui_cli_training_parity.py tests/test_sam3_train_probe_phase.py tests/test_sam3_slice_settings_shared.py tests/test_geometry_drift_guard.py tests/test_augmentation_profile_canonical_copies.py tests/test_training_augmentation.py tests/test_sam3_contracts.py -q`. Fix only the guards that fail, by adding `augmentation` to their reference sets. In `_REFERENCE_KWARGS`, use a non-default value: `AugmentationProfile(enabled=True, fliplr=0.3, flipud=0.4, rot90=0.6, brightness=0.1)`. If the parity GUI driver cannot yet emit it (the panel has no controls until Task 6), mark ONLY that field's comparison `xfail(strict=True, reason="panel controls land in Task 6")`, and remove the xfail in Task 6.
 
-- [ ] **Step 5: Commit** `feat(sam3): nested AugmentationProfile on Sam3LoraParams + rot90 field`.
+- [x] **Step 5: Commit** `feat(sam3): nested AugmentationProfile on Sam3LoraParams + rot90 field`.
 
 ---
 
@@ -139,7 +139,7 @@ In `Sam3LoraParams`, add the last field and a `__post_init__`:
   - `make_tile_augmenter(profile, *, epoch_seed: int, min_area_ratio: float) -> Callable[[np.ndarray, list[Instance], int], tuple[np.ndarray, list[Instance]]] | None`
   - `AUGMENTATION_STAMP_FILENAME = "hydra_sam3_augmentation.json"`; `write_sam3_augmentation_stamp(run_dir, profile) -> Path | None`; `read_sam3_augmentation_stamp(run_dir) -> dict | None`
 
-- [ ] **Step 1: Write failing tests** `tests/test_sam3_augment.py`:
+- [x] **Step 1: Write failing tests** `tests/test_sam3_augment.py`:
 
 ```python
 import json
@@ -328,9 +328,9 @@ def test_stamp_both_arms(tmp_path):
     assert aug.read_sam3_augmentation_stamp(tmp_path / "missing") is None
 ```
 
-- [ ] **Step 2: Run.** `python -m pytest tests/test_sam3_augment.py -q`. Expected: FAIL (module missing).
+- [x] **Step 2: Run.** `python -m pytest tests/test_sam3_augment.py -q`. Expected: FAIL (module missing).
 
-- [ ] **Step 3: Implement** `src/hydra_suite/training/sam3_lora/augment.py`:
+- [x] **Step 3: Implement** `src/hydra_suite/training/sam3_lora/augment.py`:
 
 ```python
 """Train-time tile augmentation for SAM3 LoRA finetuning.
@@ -636,9 +636,9 @@ def read_sam3_augmentation_stamp(run_dir: str | Path) -> dict[str, Any] | None:
         return None
 ```
 
-- [ ] **Step 4: Run** `python -m pytest tests/test_sam3_augment.py -q`. Expected: PASS. If a geometric alignment test fails, fix the transform, never the threshold. Also check the module imports with cv2 blocked: `python -c "import sys; sys.modules['cv2']=None; import hydra_suite.training.sam3_lora.augment"` must succeed.
+- [x] **Step 4: Run** `python -m pytest tests/test_sam3_augment.py -q`. Expected: PASS. If a geometric alignment test fails, fix the transform, never the threshold. Also check the module imports with cv2 blocked: `python -c "import sys; sys.modules['cv2']=None; import hydra_suite.training.sam3_lora.augment"` must succeed.
 
-- [ ] **Step 5: Commit** `feat(sam3): pure tile augmentation module`.
+- [x] **Step 5: Commit** `feat(sam3): pure tile augmentation module`.
 
 ---
 
@@ -652,7 +652,7 @@ def read_sam3_augmentation_stamp(run_dir: str | Path) -> dict[str, Any] | None:
 - Consumes: `TileAugmenter` (Task 2).
 - Produces: `load_datapoints(descriptor, transform, augmenter=None)`, `collate_batches(descriptors, batch_size, augmenter=None)`, `collate_epoch_batches(descriptors, batch_size, *, seed, group_by_scale=False, augmenter=None)`.
 
-- [ ] **Step 1: Append failing tests** to `tests/test_sam3_dataloader.py`:
+- [x] **Step 1: Append failing tests** to `tests/test_sam3_dataloader.py`:
 
 ```python
 def _descs(n=5, group=""):
@@ -732,9 +732,9 @@ def test_collate_batches_default_has_no_augmenter(monkeypatch):
     assert inspect.signature(dl.collate_batches).parameters["augmenter"].default is None
 ```
 
-- [ ] **Step 2: Run.** `python -m pytest tests/test_sam3_dataloader.py -q`. Expected: the new tests FAIL (`augmenter` kwarg unknown).
+- [x] **Step 2: Run.** `python -m pytest tests/test_sam3_dataloader.py -q`. Expected: the new tests FAIL (`augmenter` kwarg unknown).
 
-- [ ] **Step 3: Implement.** In `load_datapoints`, add `augmenter: Any = None`. After building `instances`, add:
+- [x] **Step 3: Implement.** In `load_datapoints`, add `augmenter: Any = None`. After building `instances`, add:
 
 ```python
     if augmenter is not None:
@@ -756,9 +756,9 @@ In `collate_batches(descriptors, batch_size, augmenter: Any = None)`, replace th
 
 The two-arity call keeps existing tests that monkeypatch `load_datapoints` with a two-argument lambda valid, and keeps the off arm literally unchanged. Add `augmenter: Any = None` to `collate_epoch_batches` and `_grouped_epoch_batches`, and forward it to every `collate_batches` call in both arms. Add one docstring sentence to `collate_epoch_batches`: "``augmenter`` is passed only by the training loop; validation, the autobatch probe and detection-quality call `collate_batches` without one."
 
-- [ ] **Step 4: Run** `python -m pytest tests/test_sam3_dataloader.py tests/test_sam3_detection_quality.py tests/test_sam3_streaming_memory.py -q`. Expected: PASS. Then `grep -n "collate_batches(\|collate_epoch_batches(" src/hydra_suite/training/sam3_lora/*.py` and confirm that only the training loop will pass `augmenter=` (wired in Task 4).
+- [x] **Step 4: Run** `python -m pytest tests/test_sam3_dataloader.py tests/test_sam3_detection_quality.py tests/test_sam3_streaming_memory.py -q`. Expected: PASS. Then `grep -n "collate_batches(\|collate_epoch_batches(" src/hydra_suite/training/sam3_lora/*.py` and confirm that only the training loop will pass `augmenter=` (wired in Task 4).
 
-- [ ] **Step 5: Commit** `feat(sam3): thread optional tile augmenter through train batching`.
+- [x] **Step 5: Commit** `feat(sam3): thread optional tile augmenter through train batching`.
 
 ---
 
@@ -773,7 +773,7 @@ The two-arity call keeps existing tests that monkeypatch `load_datapoints` with 
 - Consumes: `validate_sam3_augmentation`, `make_tile_augmenter`, `write_sam3_augmentation_stamp`, `read_sam3_augmentation_stamp`, `active_ops` (Task 2); `collate_epoch_batches(..., augmenter=)` (Task 3).
 - Produces: the sidecar metadata key `"augmentation": {"requested": {...}, "applied": {...}}`, present only when the stamp exists.
 
-- [ ] **Step 1: Write failing tests.** Find the harness in `tests/test_sam3_cli.py` that drives the training function with a fake model/loss (grep `collate_epoch_batches` / `monkeypatch.setattr(sam3_cli`). Add:
+- [x] **Step 1: Write failing tests.** Find the harness in `tests/test_sam3_cli.py` that drives the training function with a fake model/loss (grep `collate_epoch_batches` / `monkeypatch.setattr(sam3_cli`). Add:
   - `test_run_training_passes_augmenter_per_epoch`: monkeypatch `sam3_cli.collate_epoch_batches` with a recorder that returns `iter(())` (or the harness's fake batches). Run with `sam3_params.augmentation = recommended_sam3_augmentation()` and `epochs=2`. Assert that every call received a callable `augmenter`, and that the two epochs' augmenters are distinct objects. Assert that `hydra_sam3_augmentation.json` exists in the run dir with `applied.augmentation is True`.
   - `test_run_training_default_params_pass_no_augmenter`: same with the default params. Assert `augmenter is None` in every call and the stamp says `reason == "disabled"`.
   - `test_run_training_rejects_invalid_augmentation`: `augmentation=AugmentationProfile(enabled=True, fliplr=2.0)`. Assert `RuntimeError` matching `"augmentation.fliplr"` is raised before any `collate_epoch_batches` call.
@@ -781,9 +781,9 @@ The two-arity call keeps existing tests that monkeypatch `load_datapoints` with 
 
   In `tests/test_sam3_publish_sidecar.py` add `test_sidecar_carries_realised_augmentation_stamp`: write a stamp into the run dir with `write_sam3_augmentation_stamp(run_dir, recommended_sam3_augmentation())` and assert `_scale_metadata(manifest, run_dir)["augmentation"]["applied"]["augmentation"] is True`. Also assert that a run dir without the stamp has no `"augmentation"` key.
 
-- [ ] **Step 2: Run them.** Expected: FAIL.
+- [x] **Step 2: Run them.** Expected: FAIL.
 
-- [ ] **Step 3: Implement.** In `cli.py`, import from `.augment` (`active_ops`, `make_tile_augmenter`, `validate_sam3_augmentation`, `write_sam3_augmentation_stamp`). Immediately after `params = spec.sam3_params` in the training entry (~L1270), add:
+- [x] **Step 3: Implement.** In `cli.py`, import from `.augment` (`active_ops`, `make_tile_augmenter`, `validate_sam3_augmentation`, `write_sam3_augmentation_stamp`). Immediately after `params = spec.sam3_params` in the training entry (~L1270), add:
 
 ```python
     augmentation = params.augmentation
@@ -847,9 +847,9 @@ def _augmentation_metadata(run_dir: "Path | None") -> dict[str, Any]:
     }
 ```
 
-- [ ] **Step 4: Run** `python -m pytest tests/test_sam3_cli.py tests/test_sam3_publish_sidecar.py tests/test_sam3_publish.py tests/test_sam3_train.py tests/test_sam3_early_stopping.py tests/test_sam3_train_probe_phase.py -q`. Expected: PASS.
+- [x] **Step 4: Run** `python -m pytest tests/test_sam3_cli.py tests/test_sam3_publish_sidecar.py tests/test_sam3_publish.py tests/test_sam3_train.py tests/test_sam3_early_stopping.py tests/test_sam3_train_probe_phase.py -q`. Expected: PASS.
 
-- [ ] **Step 5: Commit** `feat(sam3): wire augmentation into the training loop + realised stamp`.
+- [x] **Step 5: Commit** `feat(sam3): wire augmentation into the training loop + realised stamp`.
 
 ---
 
@@ -863,16 +863,16 @@ def _augmentation_metadata(run_dir: "Path | None") -> dict[str, Any]:
 - Consumes: `validate_sam3_augmentation` (Task 2), `AugmentationProfile.rot90` (Task 1).
 - Produces: `_parse_augmentation_profile(values: dict, label: str) -> AugmentationProfile` (module-private), used for both `training.augmentation` and `sam3.augmentation`.
 
-- [ ] **Step 1: Write failing tests**:
+- [x] **Step 1: Write failing tests**:
   - A plan with `sam3.augmentation = {"enabled": true, "fliplr": 0.5, "rot90": 0.5, "brightness": 0.2}` loads (`load_training_plan`). `plan.sam3_params.augmentation` is an `AugmentationProfile` with those values, and `plan.to_dict()` → JSON → `from_dict` round-trips to an equal profile.
   - A plan with no `sam3.augmentation` loads with `augmentation.enabled is False`.
   - `sam3.augmentation.fliplr = 2` → `plan.validate()` raises `TrainingPlanError` mentioning `sam3.augmentation.fliplr`. The same for `args: {"mosaic": 1}` and `canonical_aug: true`.
   - `sam3.augmentation.fliplr = "yes"` → `TrainingPlanError` (type) at load. An unknown key `sam3.augmentation.mosaic` → `TrainingPlanError` at load.
   - `training.augmentation.rot90 = 0.5` loads into the plan-level profile.
 
-- [ ] **Step 2: Run.** Expected: FAIL.
+- [x] **Step 2: Run.** Expected: FAIL.
 
-- [ ] **Step 3: Implement.** Extract the existing `training.augmentation` typing block into:
+- [x] **Step 3: Implement.** Extract the existing `training.augmentation` typing block into:
 
 ```python
 def _parse_augmentation_profile(raw: object, label: str) -> AugmentationProfile:
@@ -914,9 +914,9 @@ Call it for `training.augmentation` (same behaviour as before, now with `rot90`)
 
 Confirm that `_sam3_to_json` emits `augmentation` as a dict (`asdict` recurses) and that `_validate_training_plan_json_shape` tolerates the nesting depth; adjust its depth limit only if a test proves it rejects the payload.
 
-- [ ] **Step 4: Run** the new file plus `python -m pytest tests/test_sam3_gui_cli_training_parity.py tests/test_sam3_params_threading.py tests/test_sam3_role_plumbing.py -q -k "not gui"` (or the full files if they don't need a display). Expected: PASS.
+- [x] **Step 4: Run** the new file plus `python -m pytest tests/test_sam3_gui_cli_training_parity.py tests/test_sam3_params_threading.py tests/test_sam3_role_plumbing.py -q -k "not gui"` (or the full files if they don't need a display). Expected: PASS.
 
-- [ ] **Step 5: Commit** `feat(detectkit): sam3.augmentation plan config + validation`.
+- [x] **Step 5: Commit** `feat(detectkit): sam3.augmentation plan config + validation`.
 
 ---
 
@@ -933,7 +933,7 @@ Confirm that `_sam3_to_json` emits `augmentation` as a dict (`asdict` recurses) 
 - Consumes: `recommended_sam3_augmentation()` (Task 2), `Sam3LoraParams.augmentation` (Task 1).
 - Produces: panel attributes `aug_group` (checkable `QGroupBox`), `aug_fliplr`, `aug_flipud`, `aug_rot90`, `aug_rotate`, `aug_brightness`, `aug_contrast`, `aug_saturation`, `aug_hue`, `aug_decode_color_sim`, `aug_resample_sim` (`QDoubleSpinBox`), `aug_monochrome` (`QCheckBox`).
 
-- [ ] **Step 1: Write failing tests** in `tests/test_sam3_training_panel.py`, following its existing panel fixture:
+- [x] **Step 1: Write failing tests** in `tests/test_sam3_training_panel.py`, following its existing panel fixture:
   - A fresh panel: `panel.params().augmentation == recommended_sam3_augmentation()`.
   - Round-trip: `panel.set_params(Sam3LoraParams(prompt="ant", augmentation=AugmentationProfile(enabled=True, fliplr=0.1, flipud=0.2, rot90=0.3, rotate=10.0, brightness=0.4, contrast=0.5, saturation=0.6, hue=0.05, decode_color_sim=0.7, resample_sim=0.8, monochrome=True)))`, then `panel.params().augmentation` equals that profile.
   - `set_params` with `enabled=False` unchecks the group, and `params().augmentation.enabled is False`.
@@ -941,9 +941,9 @@ Confirm that `_sam3_to_json` emits `augmentation` as a dict (`asdict` recurses) 
   - Dialog persisted-state load (use the harness in `tests/test_sam3_dialog_wiring.py`): a saved `sam3` dict WITHOUT `augmentation` leaves the panel at the recommended profile. A saved dict WITH an `augmentation` dict applies it.
   In the parity test: remove the xfail. Add `test_augmentation_default_is_a_documented_intentional_divergence`, asserting that a fresh GUI panel emits `recommended_sam3_augmentation()` while a CLI plan without `sam3.augmentation` yields `enabled=False`. Explain in its docstring why (old plans must train unchanged), mirroring the `auto_import` test.
 
-- [ ] **Step 2: Run.** Expected: FAIL.
+- [x] **Step 2: Run.** Expected: FAIL.
 
-- [ ] **Step 3: Implement.** In `_build_ui`, add after the "Optimisation" group (match the file's existing group/layout and tooltip idiom):
+- [x] **Step 3: Implement.** In `_build_ui`, add after the "Optimisation" group (match the file's existing group/layout and tooltip idiom):
 
 ```python
         self.aug_group = QGroupBox("Augmentation")
@@ -1023,9 +1023,9 @@ In `set_params()`, add the mirror (`a = p.augmentation`; `self.aug_group.setChec
 
 Check that the save path (~L3393, `asdict(self.sam3_panel.params())`) writes the nested dict to JSON (`asdict` recurses). In `docs/user-guide/detectkit.md`, SAM3 section, add a short "Augmentation" subsection: the table of controls, the fresh defaults, "training split only", the flip caveat for chiral concepts, `hue` kept 0 for colour concepts, the CLI key `sam3.augmentation` (default disabled when omitted), and the `hydra_sam3_augmentation.json` stamp.
 
-- [ ] **Step 4: Run** `QT_QPA_PLATFORM=offscreen python -m pytest tests/test_sam3_training_panel.py tests/test_sam3_dialog_wiring.py tests/test_sam3_gui_cli_training_parity.py tests/test_sam3_slice_settings_shared.py -q` and `make docs-build` (or `mkdocs build --strict`). Expected: PASS.
+- [x] **Step 4: Run** `QT_QPA_PLATFORM=offscreen python -m pytest tests/test_sam3_training_panel.py tests/test_sam3_dialog_wiring.py tests/test_sam3_gui_cli_training_parity.py tests/test_sam3_slice_settings_shared.py -q` and `make docs-build` (or `mkdocs build --strict`). Expected: PASS.
 
-- [ ] **Step 5: Commit** `feat(detectkit): SAM3 augmentation controls + parity + docs`.
+- [x] **Step 5: Commit** `feat(detectkit): SAM3 augmentation controls + parity + docs`.
 
 ---
 
@@ -1035,13 +1035,13 @@ Check that the save path (~L3393, `asdict(self.sam3_panel.params())`) writes the
 - Create: `tools/sam3_augmentation_preview.py` (dev tool: renders an augmented-tile grid)
 - Test: none new (verification task)
 
-- [ ] **Step 1: Write the preview tool.** CLI: `python tools/sam3_augmentation_preview.py --dataset <sam3 derived dataset dir> --out <png> [--n 6] [--epochs 3] [--seed 0]`. It calls `dataloader.build_descriptors(dataset, Sam3LoraParams(prompt="x", num_negatives=0), "train")`, takes the first `n` descriptors, decodes each with `cv2.imread`, and for each epoch `e` applies `make_tile_augmenter(recommended_sam3_augmentation() with rotate=15, epoch_seed=seed+e, min_area_ratio=0.1)`. It draws the polygons (green, crowd in red) with `cv2.polylines` on edge→index-shifted coords, and tiles an `n × (epochs+1)` grid (column 0 unaugmented) to `--out`.
+- [x] **Step 1: Write the preview tool.** CLI: `python tools/sam3_augmentation_preview.py --dataset <sam3 derived dataset dir> --out <png> [--n 6] [--epochs 3] [--seed 0]`. It calls `dataloader.build_descriptors(dataset, Sam3LoraParams(prompt="x", num_negatives=0), "train")`, takes the first `n` descriptors, decodes each with `cv2.imread`, and for each epoch `e` applies `make_tile_augmenter(recommended_sam3_augmentation() with rotate=15, epoch_seed=seed+e, min_area_ratio=0.1)`. It draws the polygons (green, crowd in red) with `cv2.polylines` on edge→index-shifted coords, and tiles an `n × (epochs+1)` grid (column 0 unaugmented) to `--out`.
 
-- [ ] **Step 2: Render on a local SAM3 dataset or fixture.** Find a built SAM3 dataset (`find ~ -name build_manifest.json -path '*sam3*' 2>/dev/null | head`). If none exists locally, build a tiny synthetic COCO split in `/tmp` (3 images with filled polygons). Read the PNG with the Read tool and confirm that the polygons sit exactly on the animals in every augmented cell and that the borders are gray. Save it to `/tmp/sam3_aug_preview.png`.
+- [x] **Step 2: Render on a local SAM3 dataset or fixture.** Find a built SAM3 dataset (`find ~ -name build_manifest.json -path '*sam3*' 2>/dev/null | head`). If none exists locally, build a tiny synthetic COCO split in `/tmp` (3 images with filled polygons). Read the PNG with the Read tool and confirm that the polygons sit exactly on the animals in every augmented cell and that the borders are gray. Save it to `/tmp/sam3_aug_preview.png`.
 
-- [ ] **Step 3: Full local suite.** Run every SAM3 + augmentation + guard file: `QT_QPA_PLATFORM=offscreen python -m pytest tests/test_sam3_*.py tests/test_augmentation_*.py tests/test_training_augmentation.py tests/test_geometry_drift_guard.py tests/test_gui_cli_profile_parity.py tests/test_semantic_sam3_overrides.py -q`, then `make pytest`. Compare any failures against the branch base `dba69a55` (run the same failing test there) before calling them pre-existing.
+- [x] **Step 3: Full local suite.** Run every SAM3 + augmentation + guard file: `QT_QPA_PLATFORM=offscreen python -m pytest tests/test_sam3_*.py tests/test_augmentation_*.py tests/test_training_augmentation.py tests/test_geometry_drift_guard.py tests/test_gui_cli_profile_parity.py tests/test_semantic_sam3_overrides.py -q`, then `make pytest`. Compare any failures against the branch base `dba69a55` (run the same failing test there) before calling them pre-existing.
 
-- [ ] **Step 4: CUDA smoke on courtship.** `ssh rutalab@courtship.taild08eb9.ts.net`. Steps:
+- [x] **Step 4: CUDA smoke on courtship.** `ssh rutalab@courtship.taild08eb9.ts.net`. Steps:
   1. `source ~/anaconda3/etc/profile.d/conda.sh`.
   2. Find how the `hydra-sam3` env imports `hydra_suite`: `conda run -n hydra-sam3 python -c "import hydra_suite;print(hydra_suite.__file__)"`. Sync the branch source to that location (rsync the worktree `src/`, or git fetch a pushed-to-courtship ref). Do NOT push to origin.
   3. Check `nvidia-smi`. Kill only stale sleap/hydra processes, by PID.
@@ -1050,13 +1050,21 @@ Check that the save path (~L3393, `asdict(self.sam3_panel.params())`) writes the
   6. Verify: the log shows `augmentation ON: ...` and a finite loss each step; there is no OOM; `hydra_sam3_augmentation.json` exists with `applied.augmentation=true`; `batch_resolution.json` shows the measured batch, and the peak reserved VRAM (from the log or `nvidia-smi` sampling) is within the admission budget.
   7. Record the numbers in the plan's completion notes.
 
-- [ ] **Step 5: Commit** the tool, `chore(sam3): augmentation preview tool`.
+- [x] **Step 5: Commit** the tool, `chore(sam3): augmentation preview tool`.
 
 ---
 
 ### Task 8: Adversarial review, merge, docs lifecycle
 
-- [ ] **Step 1:** Run an adversarial whole-branch review with a different model (e.g. `fable`) via the Agent tool: diff `dba69a55..HEAD`, spec and plan attached, asked to find real bugs (coordinate conventions, RNG determinism, probe/val leakage, config round-trip, GUI default drift). Fix the confirmed findings with tests.
-- [ ] **Step 2:** Run `make format` on the touched files, `make lint-moderate`, and re-run the Task 7 Step 3 suite.
-- [ ] **Step 3:** In the same commit as the merge (on the branch, before merging), `git mv` the spec into `docs/superpowers/specs/done/` and the plan into `docs/superpowers/plans/done/`, and stamp the spec's Status line as `Shipped — merged to main (<sha>)`.
-- [ ] **Step 4:** In the main checkout, run `git merge --no-ff feat/sam3-lora-augmentation`. Do not push. Remove the worktree after the merge.
+- [x] **Step 1:** Run an adversarial whole-branch review with a different model (e.g. `fable`) via the Agent tool: diff `dba69a55..HEAD`, spec and plan attached, asked to find real bugs (coordinate conventions, RNG determinism, probe/val leakage, config round-trip, GUI default drift). Fix the confirmed findings with tests.
+- [x] **Step 2:** Run `make format` on the touched files, `make lint-moderate`, and re-run the Task 7 Step 3 suite.
+- [x] **Step 3:** In the same commit as the merge (on the branch, before merging), `git mv` the spec into `docs/superpowers/specs/done/` and the plan into `docs/superpowers/plans/done/`, and stamp the spec's Status line as `Shipped — merged to main (<sha>)`.
+- [x] **Step 4:** In the main checkout, run `git merge --no-ff feat/sam3-lora-augmentation`. Do not push. Remove the worktree after the merge.
+
+## Completion notes (2026-10-05)
+
+- Local `hydra-mps`: SAM3 + augmentation + guard set — 861 passed, 5 skipped, 1 failed (`test_importing_parent_publish_module_does_not_import_torch`, pre-existing: fails identically at base `dba69a55`).
+- Visual: `tools/sam3_augmentation_preview.py` on 6 real courtship ant tiles (647/971/1941 px, recommended + rotate 15): outlines on the ants in every augmented cell, flat gray rotate borders, one plausible crowd fragment at a rotated border.
+- CUDA smoke (courtship, RTX 4090, `hydra-sam3` sidecar, branch src via `PYTHONPATH`): run `20261005-181106_semantic_sam3`, 1 epoch, 2651 micro-batches, augmentation ON (fliplr/flipud/rot90 0.5, rotate 15, brightness/contrast/saturation 0.2), stamp `applied.augmentation=true`; auto batch 4 (measured requirement 11.8 GiB), `nvidia-smi` steady 12.1 / 24.5 GiB, no OOM, 0 non-finite losses; `val_loss_mean=1.654`, `ap=0.790`; adapter exported.
+- Measured cost: `augment_tile` 113 ms / 28 ms / 15 ms per 1941 / 971 / 647 px tile, synchronous in the train loop (observed ~1.8 s/step at batch 4). Follow-up candidate: background prefetch of train batches.
+- Adversarial whole-branch review (different model): Ready-after-fixes; the one must-fix (SAM3 dialog tests wrote the developer's real `ui_settings.json`) fixed in `3662c7a2` with per-file hermetic fixtures.
