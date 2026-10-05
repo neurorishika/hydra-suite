@@ -83,3 +83,13 @@ def test_training_augmentation_rot90_loads(tmp_path):
     payload["training"]["augmentation"] = {"enabled": True, "rot90": 0.5}
     plan = _load(tmp_path, payload)
     assert plan.augmentation_profile.rot90 == 0.5
+
+
+def test_sam3_augmentation_null_is_disabled(tmp_path):
+    plan = _load(tmp_path, _payload({"augmentation": None}))
+    assert plan.sam3_params.augmentation.enabled is False
+
+
+def test_sam3_augmentation_empty_mapping_keeps_profile_defaults(tmp_path):
+    plan = _load(tmp_path, _payload({"augmentation": {}}))
+    assert plan.sam3_params.augmentation == AugmentationProfile()

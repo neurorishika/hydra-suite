@@ -1,7 +1,9 @@
 """Train-time tile augmentation for SAM3 LoRA finetuning.
 
-Pure and Qt-free; numpy only at module scope (cv2/torch lazily) because the
-`hydra-sam3` sidecar imports this. Uses the YOLO-side `AugmentationProfile`
+Pure and Qt-free. This module's own imports are numpy-only (cv2/torch are
+imported lazily), but it imports `hydra_suite.training.contracts`, which pulls
+cv2 transitively via `hydra_suite.utils`; the `hydra-sam3` sidecar env has
+cv2, so that is fine. Uses the YOLO-side `AugmentationProfile`
 vocabulary -- see docs/superpowers/specs/2026-10-05-sam3-lora-augmentation-design.md
 for the SAM3 semantics of each field.
 

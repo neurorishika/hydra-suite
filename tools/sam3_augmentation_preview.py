@@ -37,7 +37,7 @@ def _render(tile_bgr, instances, cell: int) -> np.ndarray:
     s = cell / max(h, w)
     out = cv2.resize(tile_bgr, (max(1, round(w * s)), max(1, round(h * s))))
     for poly, crowd in instances:
-        pts = (np.asarray(poly, dtype=np.float64) - 0.5) * s
+        pts = np.asarray(poly, dtype=np.float64) * s - 0.5
         cv2.polylines(
             out,
             [np.round(pts).astype(np.int32).reshape(-1, 1, 2)],

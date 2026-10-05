@@ -33,3 +33,9 @@ def test_dict_without_augmentation_key_gets_disabled_profile():
     data = asdict(Sam3LoraParams(prompt="ant"))
     data.pop("augmentation")
     assert Sam3LoraParams(**data).augmentation.enabled is False
+
+
+def test_none_augmentation_coerces_to_disabled_profile():
+    p = Sam3LoraParams(augmentation=None)
+    assert isinstance(p.augmentation, AugmentationProfile)
+    assert p.augmentation.enabled is False

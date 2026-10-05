@@ -994,6 +994,14 @@ def test_run_training_passes_augmenter_per_epoch(tmp_path, monkeypatch):
         recommended_sam3_augmentation,
     )
 
+    seeds = []
+    real_make = cli.make_tile_augmenter
+
+    def _recording_make(profile, *, epoch_seed, **kwargs):
+        seeds.append(epoch_seed)
+        return real_make(profile, epoch_seed=epoch_seed, **kwargs)
+
+    monkeypatch.setattr(cli, "make_tile_augmenter", _recording_make)
     spec, run_dir, calls = _augmentation_harness(
         tmp_path, monkeypatch, augmentation=recommended_sam3_augmentation()
     )
@@ -1001,6 +1009,7 @@ def test_run_training_passes_augmenter_per_epoch(tmp_path, monkeypatch):
         cli.run_training(spec, run_dir)
 
     assert len(calls) == 2
+    assert seeds == [spec.seed, spec.seed + 1]
     augmenters = [c["augmenter"] for c in calls]
     assert all(callable(a) for a in augmenters)
     assert augmenters[0] is not augmenters[1]

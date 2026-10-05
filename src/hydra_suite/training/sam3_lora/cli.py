@@ -1339,11 +1339,12 @@ def run_training(spec: Any, run_dir_path: Path) -> bool:
         group_counts=group_counts,
     )
     write_sam3_augmentation_stamp(run_dir_path, augmentation)
+    active_aug_ops = active_ops(augmentation)
     emit_log(
         "augmentation "
         + (
-            "ON: " + ", ".join(f"{k}={v}" for k, v in active_ops(augmentation).items())
-            if active_ops(augmentation)
+            "ON: " + ", ".join(f"{k}={v}" for k, v in active_aug_ops.items())
+            if active_aug_ops
             else "OFF"
         )
     )

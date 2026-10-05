@@ -354,7 +354,9 @@ class Sam3LoraParams:
         # Every `Sam3LoraParams(**json_dict)` site (sidecar child, publish
         # CLI, dialog load, dataset-prep sidecar) hands the nested profile
         # over as a plain dict.
-        if isinstance(self.augmentation, dict):
+        if self.augmentation is None:
+            self.augmentation = AugmentationProfile(enabled=False)
+        elif isinstance(self.augmentation, dict):
             self.augmentation = AugmentationProfile(**self.augmentation)
 
 

@@ -574,7 +574,11 @@ class DetectTrainingPlan:
                     sam3_values[name] = _require_string(
                         sam3_values[name], f"sam3.{name}"
                     )
-            if "augmentation" in sam3_values:
+            if sam3_values.get("augmentation", ...) is None:
+                # Explicit null means "no augmentation" (an empty mapping
+                # keeps AugmentationProfile() semantics).
+                sam3_values["augmentation"] = AugmentationProfile(enabled=False)
+            elif "augmentation" in sam3_values:
                 sam3_values["augmentation"] = _parse_augmentation_profile(
                     sam3_values["augmentation"], "sam3.augmentation"
                 )

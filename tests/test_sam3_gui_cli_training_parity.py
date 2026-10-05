@@ -107,6 +107,22 @@ _REFERENCE_KWARGS = dict(
 )
 
 
+@pytest.fixture(autouse=True)
+def _hermetic_ui_settings(tmp_path_factory, monkeypatch):
+    """Isolate DetectKit persistent UI settings to a clean temp dir.
+
+    TrainingDialog._apply_persistent_state() reads ui_settings.json (under the
+    data dir) and overrides per-project values. Point HYDRA_DATA_DIR/CONFIG_DIR
+    at a fresh temp dir so the developer's real ui_settings.json can't clobber
+    the project values these tests assert on (get_ui_settings_path() reads the
+    env var at call time).
+    """
+    home = tmp_path_factory.mktemp("hydra_home")
+    monkeypatch.setenv("HYDRA_DATA_DIR", str(home / "data"))
+    monkeypatch.setenv("HYDRA_CONFIG_DIR", str(home / "config"))
+    yield
+
+
 def test_reference_covers_every_sam3lora_field():
     """Fails loudly if a field is added to Sam3LoraParams and not covered here."""
 
