@@ -222,7 +222,7 @@ def test_rotate_keeps_alignment_for_interior_instance():
 
 def test_rotate_marks_sub_floor_fragment_crowd_and_keeps_existing_crowd():
     img = np.zeros((40, 40, 3), np.uint8)
-    corner = np.array([[0, 0], [6, 0], [6, 6], [0, 6]], np.float32)
+    corner = np.array([[0, 0], [10, 0], [10, 10], [0, 10]], np.float32)
     centre = np.array([[15, 15], [25, 15], [25, 25], [15, 25]], np.float32)
     out, inst = aug._rotate(img, [(corner, False), (centre, True)], 45.0, 0.9)
     assert len(inst) == 2
