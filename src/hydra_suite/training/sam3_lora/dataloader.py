@@ -224,7 +224,9 @@ def build_descriptors(
     return descriptors
 
 
-def load_datapoints(descriptor: TileDescriptor, transform: Any) -> list[Any]:
+def load_datapoints(
+    descriptor: TileDescriptor, transform: Any, augmenter: Any = None
+) -> list[Any]:
     """Decode one tile into query-level Datapoints sharing one image tensor."""
     tile_bgr = cv2.imread(descriptor.image_path)
     if tile_bgr is None:
@@ -235,6 +237,10 @@ def load_datapoints(descriptor: TileDescriptor, transform: Any) -> list[Any]:
         (np.asarray(instance.polygon, dtype=np.float32), instance.is_crowd)
         for instance in descriptor.instances
     ]
+    if augmenter is not None:
+        # Train arm only (see `collate_epoch_batches`); image and polygons
+        # move together, before the RES resize inside build_tile_datapoint.
+        tile_bgr, instances = augmenter(tile_bgr, instances, descriptor.image_id)
     return build_shared_query_datapoints(
         tile_bgr,
         descriptor.positive_prompt,
@@ -307,7 +313,7 @@ def query_count(descriptors: Sequence[TileDescriptor]) -> int:
 
 
 def collate_batches(
-    descriptors: Sequence[TileDescriptor], batch_size: int
+    descriptors: Sequence[TileDescriptor], batch_size: int, augmenter: Any = None
 ) -> Iterator[Any]:
     """Fixed dataset-order batching (no shuffle) -- used for validation,
     where reproducible order across runs is preferable to decorrelation."""
@@ -317,7 +323,12 @@ def collate_batches(
     for descriptor in descriptors:
         # The group remains adjacent so its query Datapoints can share one
         # transformed Image without a dataset-sized image cache.
-        for datapoint in load_datapoints(descriptor, transform):
+        loaded = (
+            load_datapoints(descriptor, transform)
+            if augmenter is None
+            else load_datapoints(descriptor, transform, augmenter)
+        )
+        for datapoint in loaded:
             pending.append(datapoint)
             if len(pending) == batch_size:
                 batch = collate_datapoints(pending)
@@ -390,6 +401,7 @@ def collate_epoch_batches(
     *,
     seed: int,
     group_by_scale: bool = False,
+    augmenter: Any = None,
 ) -> Iterator[Any]:
     """Shuffle lightweight descriptor indices and lazily yield each batch.
 
@@ -409,17 +421,20 @@ def collate_epoch_batches(
     batches are not interleaved across groups: doing that would mean
     materialising every batch, and the whole point of this generator is that it
     stays lazy over a dataset-sized tile list.
+
+    ``augmenter`` is passed only by the training loop; validation, the autobatch
+    probe and detection-quality call ``collate_batches`` without one.
     """
     if group_by_scale:
         grouped = _grouped_descriptors(descriptors)
         rng = random.Random(seed)
         keys = sorted(grouped)
         rng.shuffle(keys)
-        return _grouped_epoch_batches(grouped, keys, batch_size, rng)
+        return _grouped_epoch_batches(grouped, keys, batch_size, rng, augmenter)
     order = list(range(len(descriptors)))
     random.Random(seed).shuffle(order)
     shuffled = [descriptors[i] for i in order]
-    return collate_batches(shuffled, batch_size)
+    return collate_batches(shuffled, batch_size, augmenter)
 
 
 def _grouped_epoch_batches(
@@ -427,11 +442,12 @@ def _grouped_epoch_batches(
     keys: Sequence[str],
     batch_size: int,
     rng: random.Random,
+    augmenter: Any = None,
 ) -> Iterator[Any]:
     for key in keys:
         members = list(grouped[key])
         rng.shuffle(members)
-        yield from collate_batches(members, batch_size)
+        yield from collate_batches(members, batch_size, augmenter)
 
 
 def scale_grouping_decision(
