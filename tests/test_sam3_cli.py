@@ -925,3 +925,134 @@ def test_epoch_checkpoints_never_shadow_the_completion_signal():
     loop = inspect.getsource(cli.run_training)
     # Salvage is skipped on the final epoch; the real artifact follows.
     assert "epoch + 1 < params.epochs" in loop
+
+
+# --- train-time augmentation wiring (Task 4) ---------------------------------
+
+
+class _StopTraining(Exception):
+    """Raised by a recorder to end the loop once the calls were captured."""
+
+
+def _augmentation_harness(tmp_path, monkeypatch, *, augmentation=None, epochs=2):
+    """Drive `run_training` through the epoch loop with the model stubbed.
+
+    Returns (spec, run_dir, calls). The recorder replaces
+    `collate_epoch_batches`, returns no batches, and aborts on the final epoch's
+    collate call so the (CUDA-only) terminal export never runs.
+    """
+    torch = pytest.importorskip("torch")
+
+    spec = cli._load_spec(_write_spec(tmp_path))
+    params = spec.sam3_params
+    params.epochs = epochs
+    params.batch = 2
+    if augmentation is not None:
+        params.augmentation = augmentation
+
+    monkeypatch.setattr(
+        cli, "_build_dataloader", lambda spec, params, split: [object()]
+    )
+    monkeypatch.setattr(cli, "_runtime_admission_refusal", lambda *_a: None)
+    monkeypatch.setattr(cli, "_seed_everything", lambda *_a: None)
+    monkeypatch.setattr(cli, "scale_group_summary", lambda _d: {})
+    monkeypatch.setattr(cli, "query_count", lambda _d: 4)
+    weight = torch.nn.Parameter(torch.zeros(1))
+    monkeypatch.setattr(
+        cli,
+        "_build_model_and_loss",
+        lambda _p: (
+            "cpu",
+            SimpleNamespace(train=lambda: None),
+            None,
+            None,
+            [weight],
+        ),
+    )
+    monkeypatch.setattr(torch.cuda, "reset_peak_memory_stats", lambda *_a: None)
+    monkeypatch.setattr(cli, "_write_epoch_checkpoint", lambda *a, **k: "ckpt")
+    monkeypatch.setattr(cli, "_record_epoch_validation", lambda *a, **k: None)
+    monkeypatch.setattr(cli, "emit_log", lambda *_a, **_k: None)
+
+    calls = []
+
+    def _recorder(descriptors, batch_size, **kwargs):
+        calls.append(kwargs)
+        if len(calls) == epochs:
+            raise _StopTraining
+        return iter(())
+
+    monkeypatch.setattr(cli, "collate_epoch_batches", _recorder)
+    run_dir = tmp_path / "run"
+    run_dir.mkdir()
+    return spec, run_dir, calls
+
+
+def test_run_training_passes_augmenter_per_epoch(tmp_path, monkeypatch):
+    from hydra_suite.training.sam3_lora.augment import (
+        AUGMENTATION_STAMP_FILENAME,
+        recommended_sam3_augmentation,
+    )
+
+    spec, run_dir, calls = _augmentation_harness(
+        tmp_path, monkeypatch, augmentation=recommended_sam3_augmentation()
+    )
+    with pytest.raises(_StopTraining):
+        cli.run_training(spec, run_dir)
+
+    assert len(calls) == 2
+    augmenters = [c["augmenter"] for c in calls]
+    assert all(callable(a) for a in augmenters)
+    assert augmenters[0] is not augmenters[1]
+    stamp = json.loads((run_dir / AUGMENTATION_STAMP_FILENAME).read_text())
+    assert stamp["applied"]["augmentation"] is True
+
+
+def test_run_training_default_params_pass_no_augmenter(tmp_path, monkeypatch):
+    from hydra_suite.training.sam3_lora.augment import AUGMENTATION_STAMP_FILENAME
+
+    spec, run_dir, calls = _augmentation_harness(tmp_path, monkeypatch)
+    with pytest.raises(_StopTraining):
+        cli.run_training(spec, run_dir)
+
+    assert all(c["augmenter"] is None for c in calls)
+    stamp = json.loads((run_dir / AUGMENTATION_STAMP_FILENAME).read_text())
+    assert stamp["applied"]["reason"] == "disabled"
+
+
+def test_run_training_rejects_invalid_augmentation(tmp_path, monkeypatch):
+    from hydra_suite.training.contracts import AugmentationProfile
+
+    spec, run_dir, calls = _augmentation_harness(
+        tmp_path,
+        monkeypatch,
+        augmentation=AugmentationProfile(enabled=True, fliplr=2.0),
+    )
+    with pytest.raises(RuntimeError, match=r"augmentation\.fliplr"):
+        cli.run_training(spec, run_dir)
+
+    assert calls == []
+
+
+def test_validation_collate_never_receives_an_augmenter(tmp_path, monkeypatch):
+    pytest.importorskip("torch")
+    spec = cli._load_spec(_write_spec(tmp_path))
+    params = spec.sam3_params
+    monkeypatch.setattr(cli, "try_build_descriptors", lambda *_a, **_k: [object()])
+    monkeypatch.setattr(cli, "query_count", lambda _d: 4)
+    seen = []
+
+    def _recorder(*args, **kwargs):
+        seen.append((args, kwargs))
+        raise _StopTraining
+
+    monkeypatch.setattr(cli, "collate_batches", _recorder)
+    with pytest.raises(_StopTraining):
+        cli._evaluate_split(
+            SimpleNamespace(), spec, params, None, None, "cpu", None, True
+        )
+
+    assert len(seen) == 1
+    args, kwargs = seen[0]
+    assert "augmenter" not in kwargs
+    assert len(args) == 2

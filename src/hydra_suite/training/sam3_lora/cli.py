@@ -95,6 +95,12 @@ from hydra_suite.training.contracts import (
 )
 
 from .artifacts import write_completion_marker
+from .augment import (
+    active_ops,
+    make_tile_augmenter,
+    validate_sam3_augmentation,
+    write_sam3_augmentation_stamp,
+)
 from .dataloader import (
     batch_count,
     build_descriptors,
@@ -1268,6 +1274,14 @@ def run_training(spec: Any, run_dir_path: Path) -> bool:
     uncaught exception is `main()`'s cue to exit nonzero).
     """
     params = spec.sam3_params
+    augmentation = params.augmentation
+    augmentation_errors = validate_sam3_augmentation(augmentation)
+    if augmentation_errors:
+        # A hand-edited spec.json can bypass plan validation; refuse rather
+        # than train on a silently clamped or ignored setting.
+        raise RuntimeError(
+            "Invalid SAM3 augmentation settings: " + "; ".join(augmentation_errors)
+        )
 
     train_descriptors = _build_dataloader(spec, params, split="train")
     if not train_descriptors:
@@ -1323,6 +1337,15 @@ def run_training(spec: Any, run_dir_path: Path) -> bool:
         applied=group_by_scale,
         reason=grouping_reason,
         group_counts=group_counts,
+    )
+    write_sam3_augmentation_stamp(run_dir_path, augmentation)
+    emit_log(
+        "augmentation "
+        + (
+            "ON: " + ", ".join(f"{k}={v}" for k, v in active_ops(augmentation).items())
+            if active_ops(augmentation)
+            else "OFF"
+        )
     )
     if group_by_scale:
         n_batches = grouped_batch_count(train_descriptors, batch_size)
@@ -1401,6 +1424,14 @@ def run_training(spec: Any, run_dir_path: Path) -> bool:
             batch_size,
             seed=spec.seed + epoch,
             group_by_scale=group_by_scale,
+            # Fresh per epoch: draws are keyed on (epoch seed, image_id), so
+            # each epoch sees new augmentations, reproducibly. None when the
+            # profile is disabled/no-op -> literally the unaugmented path.
+            augmenter=make_tile_augmenter(
+                augmentation,
+                epoch_seed=spec.seed + epoch,
+                min_area_ratio=float(params.min_area_ratio),
+            ),
         )
         n_epoch_batches = n_batches
         for micro_idx, batch in enumerate(epoch_batches):
