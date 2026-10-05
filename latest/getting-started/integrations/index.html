@@ -2341,6 +2341,12 @@ Driver <strong>580 or newer</strong> uses the <code>cu130</code> wheels. <strong
 <li><a href="../../developer-guide/runtime-integration/">Runtime Integration (Developer Guide)</a></li>
 </ul>
 <h2 id="x-anylabeling-integration">X-AnyLabeling Integration<a class="headerlink" href="#x-anylabeling-integration" title="Permanent link">&para;</a></h2>
+<p>DetectKit portable imports place images directly in <code>images/</code> and matching
+YOLO labels directly in <code>labels/</code>, even when an input dataset uses <code>train/</code>
+and <code>val/</code> subfolders. If two splits contain the same image stem, the imported
+names include the split so both image and label pairs are preserved. Use the
+portable import option when preparing a split dataset for <strong>Open in
+X-AnyLabeling</strong>; linked sources retain their original layout.</p>
 <p><code>X-AnyLabeling</code> is useful for adding labels to additional frames and correcting detection misses before rerunning TrackerKit pipelines.</p>
 <h3 id="install-git-clone-method">Install (git clone method)<a class="headerlink" href="#install-git-clone-method" title="Permanent link">&para;</a></h3>
 <div class="language-bash highlight"><pre><span></span><code><span id="__span-10-1"><a id="__codelineno-10-1" name="__codelineno-10-1" href="#__codelineno-10-1"></a>git<span class="w"> </span>clone<span class="w"> </span>https://github.com/CVHub520/X-AnyLabeling.git
