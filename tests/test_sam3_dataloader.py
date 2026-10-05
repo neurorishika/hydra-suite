@@ -415,3 +415,98 @@ def test_every_positive_and_negative_query_appears_once_per_epoch(monkeypatch):
         "wall-1",
         "wall-2",
     ]
+
+
+def _descs(n=5, group=""):
+    return [
+        dl.TileDescriptor(
+            image_id=i,
+            image_path=f"t{i}.png",
+            positive_prompt="ant",
+            negative_prompts=(),
+            instances=(
+                dl.InstanceDescriptor(polygon=((1, 1), (5, 1), (5, 5)), is_crowd=False),
+            ),
+            width=16,
+            height=16,
+            scale_group=group,
+        )
+        for i in range(n)
+    ]
+
+
+def _capture(monkeypatch):
+    seen = []
+
+    def fake_imread(path):
+        img = np.zeros((16, 16, 3), np.uint8)
+        img[2:6, 2:6, 2] = 255
+        return img
+
+    def fake_build(tile_bgr, prompt, instances, negatives, transform):
+        seen.append((tile_bgr.copy(), [(p.copy(), c) for p, c in instances]))
+        return [len(seen)]
+
+    monkeypatch.setattr(dl.cv2, "imread", fake_imread)
+    monkeypatch.setattr(dl, "_default_transform", lambda: object())
+    monkeypatch.setattr(dl, "build_shared_query_datapoints", fake_build)
+    monkeypatch.setattr(dl, "collate_datapoints", lambda values: list(values))
+    return seen
+
+
+@pytest.mark.parametrize("group_by_scale", [False, True])
+def test_disabled_augmentation_is_byte_identical(monkeypatch, group_by_scale):
+    from hydra_suite.training.contracts import AugmentationProfile, Sam3LoraParams
+    from hydra_suite.training.sam3_lora.augment import make_tile_augmenter
+
+    for profile in (Sam3LoraParams().augmentation, AugmentationProfile(enabled=True)):
+        seen_none = _capture(monkeypatch)
+        list(
+            dl.collate_epoch_batches(
+                _descs(group="a"), 2, seed=3, group_by_scale=group_by_scale
+            )
+        )
+        seen_off = _capture(monkeypatch)
+        augmenter = make_tile_augmenter(profile, epoch_seed=3, min_area_ratio=0.1)
+        list(
+            dl.collate_epoch_batches(
+                _descs(group="a"),
+                2,
+                seed=3,
+                group_by_scale=group_by_scale,
+                augmenter=augmenter,
+            )
+        )
+        assert len(seen_none) == len(seen_off)
+        for (img_a, inst_a), (img_b, inst_b) in zip(seen_none, seen_off):
+            assert img_a.tobytes() == img_b.tobytes()
+            for (pa, ca), (pb, cb) in zip(inst_a, inst_b):
+                assert pa.tobytes() == pb.tobytes() and ca == cb
+
+
+@pytest.mark.parametrize("group_by_scale", [False, True])
+def test_epoch_batches_apply_augmenter_with_image_id(monkeypatch, group_by_scale):
+    seen = _capture(monkeypatch)
+    calls = []
+
+    def augmenter(tile, instances, image_id):
+        calls.append(image_id)
+        return tile[:, ::-1].copy(), instances
+
+    list(
+        dl.collate_epoch_batches(
+            _descs(group="g"),
+            2,
+            seed=0,
+            group_by_scale=group_by_scale,
+            augmenter=augmenter,
+        )
+    )
+    assert sorted(calls) == list(range(5))
+    assert all(img[2:6, 10:14, 2].all() for img, _ in seen)
+
+
+def test_collate_batches_default_has_no_augmenter(monkeypatch):
+    import inspect
+
+    assert inspect.signature(dl.collate_batches).parameters["augmenter"].default is None

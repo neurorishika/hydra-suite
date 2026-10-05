@@ -342,6 +342,22 @@ class Sam3LoraParams:
     # rejects every plateau step. Six seeds, ONE 78-image corpus -- which is
     # exactly why this stays a per-run parameter and not a constant.
     min_delta: float = 0.010
+    # Train-time tile augmentation (YOLO-parallel vocabulary; see
+    # sam3_lora/augment.py for SAM3 semantics). Disabled by default so a plan
+    # written before this field existed trains exactly as it did; the GUI's
+    # fresh-session default is `augment.recommended_sam3_augmentation()`.
+    augmentation: "AugmentationProfile" = field(
+        default_factory=lambda: AugmentationProfile(enabled=False)
+    )
+
+    def __post_init__(self) -> None:
+        # Every `Sam3LoraParams(**json_dict)` site (sidecar child, publish
+        # CLI, dialog load, dataset-prep sidecar) hands the nested profile
+        # over as a plain dict.
+        if self.augmentation is None:
+            self.augmentation = AugmentationProfile(enabled=False)
+        elif isinstance(self.augmentation, dict):
+            self.augmentation = AugmentationProfile(**self.augmentation)
 
 
 @dataclass(slots=True)
@@ -356,6 +372,10 @@ class AugmentationProfile:
     saturation: float = 0.0
     brightness: float = 0.0
     contrast: float = 0.0
+    # P(rotate 90 degrees, CW/CCW 50/50). Label-exact for top-down views;
+    # with fliplr/flipud covers all 8 dihedral symmetries. Consumed by SAM3
+    # LoRA training only today (YOLO/classify ignore it, as they do `rotate`).
+    rot90: float = 0.0
     decode_color_sim: float = (
         0.0  # 0=off; ~0.5 recommended. P(apply) decode-color re-sim.
     )

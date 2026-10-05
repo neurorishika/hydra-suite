@@ -11,6 +11,23 @@ from PySide6.QtWidgets import QApplication
 
 _app = QApplication.instance() or QApplication([])
 
+
+@pytest.fixture(autouse=True)
+def _hermetic_ui_settings(tmp_path_factory, monkeypatch):
+    """Isolate DetectKit persistent UI settings to a clean temp dir.
+
+    TrainingDialog._apply_persistent_state() reads ui_settings.json (under the
+    data dir) and overrides per-project values. Point HYDRA_DATA_DIR/CONFIG_DIR
+    at a fresh temp dir so the developer's real ui_settings.json can't clobber
+    the project values these tests assert on (get_ui_settings_path() reads the
+    env var at call time).
+    """
+    home = tmp_path_factory.mktemp("hydra_home")
+    monkeypatch.setenv("HYDRA_DATA_DIR", str(home / "data"))
+    monkeypatch.setenv("HYDRA_CONFIG_DIR", str(home / "config"))
+    yield
+
+
 LABEL_LINE = "0 0.1 0.1 0.2 0.1 0.2 0.2 0.1 0.2\n"
 
 

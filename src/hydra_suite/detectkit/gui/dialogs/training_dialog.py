@@ -3467,6 +3467,10 @@ QTabBar::tab:selected {
                 name: sam3_data[name] for name in persistent_names if name in sam3_data
             }
             values["label_quality_acknowledged"] = False
+            if "augmentation" not in values:
+                # State saved before SAM3 augmentation existed: keep the
+                # panel's (recommended) profile rather than the contract's OFF.
+                values["augmentation"] = self.sam3_panel.params().augmentation
             self.sam3_panel.set_params(Sam3LoraParams(**values))
         # This is an explicit per-run safety affirmation, not reusable config.
         # Reset it even for old presets that happened to persist the field.

@@ -102,6 +102,35 @@ def _construct_dataclass(cls, values: dict[str, Any], name: str):
         raise TrainingPlanError(f"Invalid {name}: {exc}") from exc
 
 
+def _parse_augmentation_profile(raw: object, label: str) -> AugmentationProfile:
+    values = _require_mapping(raw, label)
+    for name in ("enabled", "canonical_aug", "monochrome"):
+        if name in values:
+            values[name] = _require_bool(values[name], f"{label}.{name}")
+    if "canonical_aug_copies" in values:
+        values["canonical_aug_copies"] = _require_int(
+            values["canonical_aug_copies"], f"{label}.canonical_aug_copies"
+        )
+    for name in (
+        "flipud",
+        "fliplr",
+        "rot90",
+        "rotate",
+        "hue",
+        "saturation",
+        "brightness",
+        "contrast",
+        "decode_color_sim",
+        "resample_sim",
+    ):
+        if name in values:
+            values[name] = _require_number(values[name], f"{label}.{name}")
+    for name in ("args", "label_expansion"):
+        if name in values:
+            values[name] = _require_mapping(values[name], f"{label}.{name}")
+    return _construct_dataclass(AugmentationProfile, values, label)
+
+
 def _require_bool(value: object, name: str) -> bool:
     if not isinstance(value, bool):
         raise TrainingPlanError(f"'{name}' must be a boolean")
@@ -445,43 +474,8 @@ class DetectTrainingPlan:
         slicing = SliceTrainingConfig.from_dict(dataset.get("slicing"))
 
         training = _require_mapping(root.get("training"), "training")
-        augmentation_values = _require_mapping(
+        augmentation = _parse_augmentation_profile(
             training.get("augmentation"), "training.augmentation"
-        )
-        for name in ("enabled", "canonical_aug", "monochrome"):
-            if name in augmentation_values:
-                augmentation_values[name] = _require_bool(
-                    augmentation_values[name], f"training.augmentation.{name}"
-                )
-        if "canonical_aug_copies" in augmentation_values:
-            augmentation_values["canonical_aug_copies"] = _require_int(
-                augmentation_values["canonical_aug_copies"],
-                "training.augmentation.canonical_aug_copies",
-            )
-        for name in (
-            "flipud",
-            "fliplr",
-            "rotate",
-            "hue",
-            "saturation",
-            "brightness",
-            "contrast",
-            "decode_color_sim",
-            "resample_sim",
-        ):
-            if name in augmentation_values:
-                augmentation_values[name] = _require_number(
-                    augmentation_values[name], f"training.augmentation.{name}"
-                )
-        for name in ("args", "label_expansion"):
-            if name in augmentation_values:
-                augmentation_values[name] = _require_mapping(
-                    augmentation_values[name], f"training.augmentation.{name}"
-                )
-        augmentation = _construct_dataclass(
-            AugmentationProfile,
-            augmentation_values,
-            "training.augmentation",
         )
         hyperparam_names = {item.name for item in fields(TrainingHyperParams)}
         hyperparam_values = {
@@ -580,6 +574,14 @@ class DetectTrainingPlan:
                     sam3_values[name] = _require_string(
                         sam3_values[name], f"sam3.{name}"
                     )
+            if sam3_values.get("augmentation", ...) is None:
+                # Explicit null means "no augmentation" (an empty mapping
+                # keeps AugmentationProfile() semantics).
+                sam3_values["augmentation"] = AugmentationProfile(enabled=False)
+            elif "augmentation" in sam3_values:
+                sam3_values["augmentation"] = _parse_augmentation_profile(
+                    sam3_values["augmentation"], "sam3.augmentation"
+                )
             if "object_tile_fractions" in sam3_values:
                 # JSON has no tuple; keep the dataclass's declared shape so a
                 # round-tripped plan is not silently a different type.
@@ -787,6 +789,17 @@ class DetectTrainingPlan:
                     raise TrainingPlanError(
                         f"sam3.object_tile_fractions[{index}] must be in (0, 1]"
                     )
+            from hydra_suite.training.sam3_lora.augment import (
+                validate_sam3_augmentation,
+            )
+
+            augmentation_errors = validate_sam3_augmentation(
+                self.sam3_params.augmentation
+            )
+            if augmentation_errors:
+                raise TrainingPlanError(
+                    "; ".join(f"sam3.{error}" for error in augmentation_errors)
+                )
         if self.hyperparams.epochs <= 0:
             raise TrainingPlanError("training.epochs must be positive")
         if self.hyperparams.batch == 0 or self.hyperparams.batch < -1:

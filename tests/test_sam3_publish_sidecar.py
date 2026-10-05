@@ -425,3 +425,24 @@ def test_live_profile_growth_refuses_before_child_work(monkeypatch, tmp_path):
 
     assert raised.value.failure_kind == "host-admission-refusal"
     assert not (tmp_path / "models" / "model_registry.json").exists()
+
+
+def test_sidecar_carries_realised_augmentation_stamp(tmp_path):
+    from hydra_suite.training.sam3_lora.augment import (
+        recommended_sam3_augmentation,
+        write_sam3_augmentation_stamp,
+    )
+    from hydra_suite.training.sam3_lora.publish_worker import _scale_metadata
+
+    manifest = {"tile_px": 1008, "object_tile_fraction": 0.5}
+    run_dir = tmp_path / "run"
+    run_dir.mkdir()
+    assert "augmentation" not in _scale_metadata(manifest, run_dir)
+
+    write_sam3_augmentation_stamp(run_dir, recommended_sam3_augmentation())
+    meta = _scale_metadata(manifest, run_dir)
+    assert meta["augmentation"]["applied"]["augmentation"] is True
+    assert "requested" in meta["augmentation"]
+
+    multi = {"tile_px_set": [640, 1008]}
+    assert _scale_metadata(multi, run_dir)["augmentation"]["applied"]["augmentation"]

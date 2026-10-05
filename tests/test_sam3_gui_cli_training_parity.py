@@ -44,6 +44,7 @@ from hydra_suite.detectkit.config.training import (  # noqa: E402
 from hydra_suite.detectkit.gui.dialogs import training_dialog as td  # noqa: E402
 from hydra_suite.detectkit.gui.models import DetectKitProject, OBBSource  # noqa: E402
 from hydra_suite.training.contracts import (  # noqa: E402
+    AugmentationProfile,
     PublishPolicy,
     Sam3LoraParams,
     TrainingRole,
@@ -100,7 +101,26 @@ _REFERENCE_KWARGS = dict(
     min_area_ratio=0.4,
     label_quality_acknowledged=True,
     env_name="hydra-sam3-custom-env",
+    augmentation=AugmentationProfile(
+        enabled=True, fliplr=0.3, flipud=0.4, rot90=0.6, brightness=0.1
+    ),
 )
+
+
+@pytest.fixture(autouse=True)
+def _hermetic_ui_settings(tmp_path_factory, monkeypatch):
+    """Isolate DetectKit persistent UI settings to a clean temp dir.
+
+    TrainingDialog._apply_persistent_state() reads ui_settings.json (under the
+    data dir) and overrides per-project values. Point HYDRA_DATA_DIR/CONFIG_DIR
+    at a fresh temp dir so the developer's real ui_settings.json can't clobber
+    the project values these tests assert on (get_ui_settings_path() reads the
+    env var at call time).
+    """
+    home = tmp_path_factory.mktemp("hydra_home")
+    monkeypatch.setenv("HYDRA_DATA_DIR", str(home / "data"))
+    monkeypatch.setenv("HYDRA_CONFIG_DIR", str(home / "config"))
+    yield
 
 
 def test_reference_covers_every_sam3lora_field():
@@ -240,7 +260,7 @@ def _cli_sam3_spec(tmp_path, sam3_values: dict, publish_values: dict | None = No
     tmp_path.mkdir(parents=True, exist_ok=True)
     payload = _cli_plan_payload(tmp_path, sam3_values, publish_values)
     path = tmp_path / "plan.json"
-    path.write_text(json.dumps(payload), encoding="utf-8")
+    path.write_text(json.dumps(payload, default=asdict), encoding="utf-8")
     plan = load_training_plan(path)
     entries = plan.role_entries(
         {TrainingRole.SEMANTIC_SAM3.value: str(tmp_path / "derived")}
@@ -282,6 +302,33 @@ def test_gui_and_cli_sam3lora_params_agree_field_by_field(tmp_path, monkeypatch)
 
     # Publish policy was given explicitly identically on both sides too.
     assert asdict(gui_spec.publish_policy) == asdict(cli_spec.publish_policy)
+
+
+def test_augmentation_default_is_a_documented_intentional_divergence():
+    """A fresh GUI panel recommends augmentation; a CLI plan omitting it is OFF.
+
+    The GUI's fresh-session default is the recommended profile, so new
+    interactive runs get augmentation. The CLI/JSON contract default stays
+    `enabled=False` so every existing plan (which has no `sam3.augmentation`
+    key) trains exactly as it did before. Pinned explicitly, mirroring the
+    `auto_import` divergence, rather than excluded from the comparison.
+    """
+
+    from PySide6.QtWidgets import QApplication
+
+    QApplication.instance() or QApplication([])
+    from hydra_suite.detectkit.gui.panels.sam3_training_panel import Sam3TrainingPanel
+    from hydra_suite.training.sam3_lora.augment import recommended_sam3_augmentation
+
+    assert Sam3TrainingPanel().params().augmentation == recommended_sam3_augmentation()
+    assert recommended_sam3_augmentation().enabled is True
+    assert Sam3LoraParams().augmentation.enabled is False
+
+
+def test_cli_plan_without_augmentation_key_is_disabled(tmp_path):
+    values = {k: v for k, v in _REFERENCE_KWARGS.items() if k != "augmentation"}
+    cli_spec, _plan = _cli_sam3_spec(tmp_path, sam3_values=values)
+    assert cli_spec.sam3_params.augmentation.enabled is False
 
 
 def test_cli_rejects_unknown_checkpoint_selection(tmp_path):

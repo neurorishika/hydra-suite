@@ -12,6 +12,22 @@ import pytest
 pytest.importorskip("PySide6")
 
 
+@pytest.fixture(autouse=True)
+def _hermetic_ui_settings(tmp_path_factory, monkeypatch):
+    """Isolate DetectKit persistent UI settings to a clean temp dir.
+
+    TrainingDialog._apply_persistent_state() reads ui_settings.json (under the
+    data dir) and overrides per-project values. Point HYDRA_DATA_DIR/CONFIG_DIR
+    at a fresh temp dir so the developer's real ui_settings.json can't clobber
+    the project values these tests assert on (get_ui_settings_path() reads the
+    env var at call time).
+    """
+    home = tmp_path_factory.mktemp("hydra_home")
+    monkeypatch.setenv("HYDRA_DATA_DIR", str(home / "data"))
+    monkeypatch.setenv("HYDRA_CONFIG_DIR", str(home / "config"))
+    yield
+
+
 def test_sam3_tab_scrolls_instead_of_compressing_its_settings(tmp_path):
     """SAM3's many groups must retain their usable layout at dialog height."""
     from PySide6.QtWidgets import QApplication, QScrollArea
@@ -274,3 +290,45 @@ def test_run_path_carries_sam3_params_and_is_reachable(tmp_path, monkeypatch):
     assert spec.sam3_params is not None
     assert spec.sam3_params.prompt == "ant"
     assert spec.sam3_params.label_quality_acknowledged is True
+
+
+def _augmentation_dialog(tmp_path, monkeypatch):
+    # The dialog restores state from the per-machine UI settings file at
+    # construction; isolate it so a developer's saved state cannot leak in.
+    monkeypatch.setenv("HYDRA_DATA_DIR", str(tmp_path / "data"))
+    from PySide6.QtWidgets import QApplication
+
+    QApplication.instance() or QApplication([])
+
+    from hydra_suite.detectkit.gui.dialogs import training_dialog as td
+    from hydra_suite.detectkit.gui.models import DetectKitProject
+
+    return td.TrainingDialog(DetectKitProject(project_dir=tmp_path))
+
+
+def test_saved_state_without_augmentation_keeps_recommended_profile(
+    tmp_path, monkeypatch
+):
+    from hydra_suite.training.sam3_lora.augment import recommended_sam3_augmentation
+
+    dialog = _augmentation_dialog(tmp_path, monkeypatch)
+    dialog._apply_training_state({"sam3": {"prompt": "old preset", "epochs": 4}})
+
+    assert dialog.sam3_panel.params().prompt == "old preset"
+    assert dialog.sam3_panel.params().augmentation == recommended_sam3_augmentation()
+
+
+def test_saved_state_with_augmentation_is_applied_and_round_trips(
+    tmp_path, monkeypatch
+):
+    from hydra_suite.training.contracts import AugmentationProfile
+
+    dialog = _augmentation_dialog(tmp_path, monkeypatch)
+    saved = AugmentationProfile(enabled=True, fliplr=0.0, flipud=0.0, hue=0.1)
+    dialog._apply_training_state(
+        {"sam3": {"prompt": "p", "augmentation": asdict(saved)}}
+    )
+    assert dialog.sam3_panel.params().augmentation == saved
+
+    state = dialog._collect_training_state()
+    assert state["sam3"]["augmentation"] == asdict(saved)

@@ -30,6 +30,7 @@ from hydra_suite.runtime.sam3_checkpoint_guard import (
 )
 from hydra_suite.utils.sam3_constants import PREDICTOR_IMGSZ
 
+from .augment import read_sam3_augmentation_stamp
 from .dataloader import read_sam3_scale_grouping_stamp
 from .lora import (
     _validated_adapter_pairs,
@@ -92,15 +93,34 @@ def _scale_grouping_metadata(run_dir: "Path | None") -> dict[str, Any]:
     }
 
 
+def _augmentation_metadata(run_dir: "Path | None") -> dict[str, Any]:
+    """The REALISED augmentation block (from the run-dir stamp), or {}."""
+    if run_dir is None:
+        return {}
+    stamp = read_sam3_augmentation_stamp(run_dir)
+    if stamp is None:
+        return {}
+    return {
+        "augmentation": {
+            "requested": dict(stamp.get("requested") or {}),
+            "applied": dict(stamp.get("applied") or {}),
+        }
+    }
+
+
 def _scale_metadata(
     build_manifest: dict[str, Any], run_dir: "Path | None" = None
 ) -> dict[str, Any]:
     """The trained-geometry block for the sidecar, single- or multi-scale."""
     scale_set = build_manifest.get("tile_px_set")
+    # Augmentation is independent of the tile geometry, so it rides on both
+    # the single- and multi-scale blocks.
+    augmentation = _augmentation_metadata(run_dir)
     if not scale_set:
         return {
             "train_tile_px": build_manifest.get("tile_px"),
             "object_tile_fraction": build_manifest.get("object_tile_fraction"),
+            **augmentation,
         }
     return {
         "train_tile_px_set": scale_set,
@@ -112,6 +132,7 @@ def _scale_metadata(
             "prefill_object_tile_fraction"
         ),
         **_scale_grouping_metadata(run_dir),
+        **augmentation,
     }
 
 
