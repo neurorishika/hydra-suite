@@ -44,6 +44,7 @@ from hydra_suite.detectkit.config.training import (  # noqa: E402
 from hydra_suite.detectkit.gui.dialogs import training_dialog as td  # noqa: E402
 from hydra_suite.detectkit.gui.models import DetectKitProject, OBBSource  # noqa: E402
 from hydra_suite.training.contracts import (  # noqa: E402
+    AugmentationProfile,
     PublishPolicy,
     Sam3LoraParams,
     TrainingRole,
@@ -100,7 +101,13 @@ _REFERENCE_KWARGS = dict(
     min_area_ratio=0.4,
     label_quality_acknowledged=True,
     env_name="hydra-sam3-custom-env",
+    augmentation=AugmentationProfile(
+        enabled=True, fliplr=0.3, flipud=0.4, rot90=0.6, brightness=0.1
+    ),
 )
+
+# Fields the GUI panel cannot emit yet; compared by a strict-xfail test instead.
+_PANEL_PENDING_FIELDS = frozenset({"augmentation"})
 
 
 def test_reference_covers_every_sam3lora_field():
@@ -240,7 +247,7 @@ def _cli_sam3_spec(tmp_path, sam3_values: dict, publish_values: dict | None = No
     tmp_path.mkdir(parents=True, exist_ok=True)
     payload = _cli_plan_payload(tmp_path, sam3_values, publish_values)
     path = tmp_path / "plan.json"
-    path.write_text(json.dumps(payload), encoding="utf-8")
+    path.write_text(json.dumps(payload, default=asdict), encoding="utf-8")
     plan = load_training_plan(path)
     entries = plan.role_entries(
         {TrainingRole.SEMANTIC_SAM3.value: str(tmp_path / "derived")}
@@ -276,12 +283,27 @@ def test_gui_and_cli_sam3lora_params_agree_field_by_field(tmp_path, monkeypatch)
     mismatches = {
         f.name: (getattr(gui_params, f.name), getattr(cli_params, f.name))
         for f in fields(Sam3LoraParams)
-        if getattr(gui_params, f.name) != getattr(cli_params, f.name)
+        if f.name not in _PANEL_PENDING_FIELDS
+        and getattr(gui_params, f.name) != getattr(cli_params, f.name)
     }
     assert not mismatches, f"Sam3LoraParams field(s) diverged: {mismatches}"
 
     # Publish policy was given explicitly identically on both sides too.
     assert asdict(gui_spec.publish_policy) == asdict(cli_spec.publish_policy)
+
+
+@pytest.mark.xfail(strict=True, reason="panel controls land in Task 6")
+def test_gui_and_cli_augmentation_agree(tmp_path, monkeypatch):
+    """Remove this xfail (and `_PANEL_PENDING_FIELDS`) in Task 6."""
+
+    reference = Sam3LoraParams(**_REFERENCE_KWARGS)
+    gui_spec, _dlg = _drive_gui_sam3_spec(tmp_path / "gui", monkeypatch, reference)
+    cli_spec, _plan = _cli_sam3_spec(
+        tmp_path / "cli",
+        sam3_values=dict(_REFERENCE_KWARGS),
+        publish_values={"auto_import": True, "auto_select": False},
+    )
+    assert gui_spec.sam3_params.augmentation == cli_spec.sam3_params.augmentation
 
 
 def test_cli_rejects_unknown_checkpoint_selection(tmp_path):
