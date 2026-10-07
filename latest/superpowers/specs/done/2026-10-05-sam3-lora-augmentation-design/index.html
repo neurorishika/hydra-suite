@@ -10,28 +10,24 @@
       
       
       
-        <link rel="canonical" href="https://neurorishika.github.io/hydra-suite/latest/user-guide/detectkit/">
+        <link rel="canonical" href="https://neurorishika.github.io/hydra-suite/latest/superpowers/specs/done/2026-10-05-sam3-lora-augmentation-design/">
       
       
-        <link rel="prev" href="../classkit/">
       
       
-        <link rel="next" href="../../runbooks/detectkit-headless-training/">
-      
-      
-      <link rel="icon" href="../../assets/images/favicon.png">
+      <link rel="icon" href="../../../../assets/images/favicon.png">
       <meta name="generator" content="mkdocs-1.6.1, mkdocs-material-9.5.43">
     
     
       
-        <title>DetectKit - HYDRA Suite Docs</title>
+        <title>SAM3 LoRA training augmentation — design - HYDRA Suite Docs</title>
       
     
     
-      <link rel="stylesheet" href="../../assets/stylesheets/main.0253249f.min.css">
+      <link rel="stylesheet" href="../../../../assets/stylesheets/main.0253249f.min.css">
       
         
-        <link rel="stylesheet" href="../../assets/stylesheets/palette.06af60db.min.css">
+        <link rel="stylesheet" href="../../../../assets/stylesheets/palette.06af60db.min.css">
       
       
 
@@ -50,9 +46,9 @@
       
     
     
-      <link rel="stylesheet" href="../../assets/_mkdocstrings.css">
+      <link rel="stylesheet" href="../../../../assets/_mkdocstrings.css">
     
-    <script>__md_scope=new URL("../..",location),__md_hash=e=>[...e].reduce(((e,_)=>(e<<5)-e+_.charCodeAt(0)),0),__md_get=(e,_=localStorage,t=__md_scope)=>JSON.parse(_.getItem(t.pathname+"."+e)),__md_set=(e,_,t=localStorage,a=__md_scope)=>{try{t.setItem(a.pathname+"."+e,JSON.stringify(_))}catch(e){}}</script>
+    <script>__md_scope=new URL("../../../..",location),__md_hash=e=>[...e].reduce(((e,_)=>(e<<5)-e+_.charCodeAt(0)),0),__md_get=(e,_=localStorage,t=__md_scope)=>JSON.parse(_.getItem(t.pathname+"."+e)),__md_set=(e,_,t=localStorage,a=__md_scope)=>{try{t.setItem(a.pathname+"."+e,JSON.stringify(_))}catch(e){}}</script>
     
       
 
@@ -78,7 +74,7 @@
     <div data-md-component="skip">
       
         
-        <a href="#detectkit" class="md-skip">
+        <a href="#sam3-lora-training-augmentation-design" class="md-skip">
           Skip to content
         </a>
       
@@ -96,7 +92,7 @@
 
 <header class="md-header" data-md-component="header">
   <nav class="md-header__inner md-grid" aria-label="Header">
-    <a href="../.." title="HYDRA Suite Docs" class="md-header__button md-logo" aria-label="HYDRA Suite Docs" data-md-component="logo">
+    <a href="../../../.." title="HYDRA Suite Docs" class="md-header__button md-logo" aria-label="HYDRA Suite Docs" data-md-component="logo">
       
   
   <svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 24 24"><path d="M12 8a3 3 0 0 0 3-3 3 3 0 0 0-3-3 3 3 0 0 0-3 3 3 3 0 0 0 3 3m0 3.54C9.64 9.35 6.5 8 3 8v11c3.5 0 6.64 1.35 9 3.54 2.36-2.19 5.5-3.54 9-3.54V8c-3.5 0-6.64 1.35-9 3.54"/></svg>
@@ -116,7 +112,7 @@
         <div class="md-header__topic" data-md-component="header-topic">
           <span class="md-ellipsis">
             
-              DetectKit
+              SAM3 LoRA training augmentation — design
             
           </span>
         </div>
@@ -225,7 +221,7 @@
   
   
     <li class="md-tabs__item">
-      <a href="../.." class="md-tabs__link">
+      <a href="../../../.." class="md-tabs__link">
         
   
     
@@ -244,7 +240,7 @@
     
     
       <li class="md-tabs__item">
-        <a href="../../getting-started/installation/" class="md-tabs__link">
+        <a href="../../../../getting-started/installation/" class="md-tabs__link">
           
   
   Getting Started
@@ -258,13 +254,11 @@
         
   
   
-    
-  
   
     
     
-      <li class="md-tabs__item md-tabs__item--active">
-        <a href="../overview/" class="md-tabs__link">
+      <li class="md-tabs__item">
+        <a href="../../../../user-guide/overview/" class="md-tabs__link">
           
   
   User Guide
@@ -282,7 +276,7 @@
     
     
       <li class="md-tabs__item">
-        <a href="../../developer-guide/architecture/" class="md-tabs__link">
+        <a href="../../../../developer-guide/architecture/" class="md-tabs__link">
           
   
   Developer Guide
@@ -300,7 +294,7 @@
     
     
       <li class="md-tabs__item">
-        <a href="../../reference/api-index/" class="md-tabs__link">
+        <a href="../../../../reference/api-index/" class="md-tabs__link">
           
   
   Reference
@@ -333,7 +327,7 @@
 
 <nav class="md-nav md-nav--primary md-nav--lifted" aria-label="Navigation" data-md-level="0">
   <label class="md-nav__title" for="__drawer">
-    <a href="../.." title="HYDRA Suite Docs" class="md-nav__button md-logo" aria-label="HYDRA Suite Docs" data-md-component="logo">
+    <a href="../../../.." title="HYDRA Suite Docs" class="md-nav__button md-logo" aria-label="HYDRA Suite Docs" data-md-component="logo">
       
   
   <svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 24 24"><path d="M12 8a3 3 0 0 0 3-3 3 3 0 0 0-3-3 3 3 0 0 0-3 3 3 3 0 0 0 3 3m0 3.54C9.64 9.35 6.5 8 3 8v11c3.5 0 6.64 1.35 9 3.54 2.36-2.19 5.5-3.54 9-3.54V8c-3.5 0-6.64 1.35-9 3.54"/></svg>
@@ -363,7 +357,7 @@
   
   
     <li class="md-nav__item">
-      <a href="../.." class="md-nav__link">
+      <a href="../../../.." class="md-nav__link">
         
   
   <span class="md-ellipsis">
@@ -425,7 +419,7 @@
   
   
     <li class="md-nav__item">
-      <a href="../../getting-started/installation/" class="md-nav__link">
+      <a href="../../../../getting-started/installation/" class="md-nav__link">
         
   
   <span class="md-ellipsis">
@@ -446,7 +440,7 @@
   
   
     <li class="md-nav__item">
-      <a href="../../getting-started/environments/" class="md-nav__link">
+      <a href="../../../../getting-started/environments/" class="md-nav__link">
         
   
   <span class="md-ellipsis">
@@ -467,7 +461,7 @@
   
   
     <li class="md-nav__item">
-      <a href="../../getting-started/integrations/" class="md-nav__link">
+      <a href="../../../../getting-started/integrations/" class="md-nav__link">
         
   
   <span class="md-ellipsis">
@@ -488,7 +482,7 @@
   
   
     <li class="md-nav__item">
-      <a href="../../getting-started/quickstart-hydra/" class="md-nav__link">
+      <a href="../../../../getting-started/quickstart-hydra/" class="md-nav__link">
         
   
   <span class="md-ellipsis">
@@ -509,7 +503,7 @@
   
   
     <li class="md-nav__item">
-      <a href="../../getting-started/quickstart-posekit/" class="md-nav__link">
+      <a href="../../../../getting-started/quickstart-posekit/" class="md-nav__link">
         
   
   <span class="md-ellipsis">
@@ -530,7 +524,7 @@
   
   
     <li class="md-nav__item">
-      <a href="../../getting-started/platforms/" class="md-nav__link">
+      <a href="../../../../getting-started/platforms/" class="md-nav__link">
         
   
   <span class="md-ellipsis">
@@ -555,30 +549,27 @@
       
   
   
-    
   
   
-  
     
     
     
-      
-        
-        
       
       
         
       
     
     
-    <li class="md-nav__item md-nav__item--active md-nav__item--section md-nav__item--nested">
+    <li class="md-nav__item md-nav__item--nested">
       
         
-        
-        <input class="md-nav__toggle md-toggle " type="checkbox" id="__nav_3" checked>
         
           
-          <label class="md-nav__link" for="__nav_3" id="__nav_3_label" tabindex="">
+        
+        <input class="md-nav__toggle md-toggle md-toggle--indeterminate" type="checkbox" id="__nav_3" >
+        
+          
+          <label class="md-nav__link" for="__nav_3" id="__nav_3_label" tabindex="0">
             
   
   <span class="md-ellipsis">
@@ -589,7 +580,7 @@
             <span class="md-nav__icon md-icon"></span>
           </label>
         
-        <nav class="md-nav" data-md-level="1" aria-labelledby="__nav_3_label" aria-expanded="true">
+        <nav class="md-nav" data-md-level="1" aria-labelledby="__nav_3_label" aria-expanded="false">
           <label class="md-nav__title" for="__nav_3">
             <span class="md-nav__icon md-icon"></span>
             User Guide
@@ -603,7 +594,7 @@
   
   
     <li class="md-nav__item">
-      <a href="../overview/" class="md-nav__link">
+      <a href="../../../../user-guide/overview/" class="md-nav__link">
         
   
   <span class="md-ellipsis">
@@ -624,7 +615,7 @@
   
   
     <li class="md-nav__item">
-      <a href="../workflow/" class="md-nav__link">
+      <a href="../../../../user-guide/workflow/" class="md-nav__link">
         
   
   <span class="md-ellipsis">
@@ -645,7 +636,7 @@
   
   
     <li class="md-nav__item">
-      <a href="../trackerkit-cli/" class="md-nav__link">
+      <a href="../../../../user-guide/trackerkit-cli/" class="md-nav__link">
         
   
   <span class="md-ellipsis">
@@ -666,7 +657,7 @@
   
   
     <li class="md-nav__item">
-      <a href="../trackerkit-jobs/" class="md-nav__link">
+      <a href="../../../../user-guide/trackerkit-jobs/" class="md-nav__link">
         
   
   <span class="md-ellipsis">
@@ -687,7 +678,7 @@
   
   
     <li class="md-nav__item">
-      <a href="../detection-modes/" class="md-nav__link">
+      <a href="../../../../user-guide/detection-modes/" class="md-nav__link">
         
   
   <span class="md-ellipsis">
@@ -708,7 +699,7 @@
   
   
     <li class="md-nav__item">
-      <a href="../tracking-and-merging/" class="md-nav__link">
+      <a href="../../../../user-guide/tracking-and-merging/" class="md-nav__link">
         
   
   <span class="md-ellipsis">
@@ -729,7 +720,7 @@
   
   
     <li class="md-nav__item">
-      <a href="../post-processing/" class="md-nav__link">
+      <a href="../../../../user-guide/post-processing/" class="md-nav__link">
         
   
   <span class="md-ellipsis">
@@ -750,7 +741,7 @@
   
   
     <li class="md-nav__item">
-      <a href="../configuration-reference/" class="md-nav__link">
+      <a href="../../../../user-guide/configuration-reference/" class="md-nav__link">
         
   
   <span class="md-ellipsis">
@@ -771,7 +762,7 @@
   
   
     <li class="md-nav__item">
-      <a href="../compute-runtimes/" class="md-nav__link">
+      <a href="../../../../user-guide/compute-runtimes/" class="md-nav__link">
         
   
   <span class="md-ellipsis">
@@ -792,7 +783,7 @@
   
   
     <li class="md-nav__item">
-      <a href="../outputs-and-csv-schema/" class="md-nav__link">
+      <a href="../../../../user-guide/outputs-and-csv-schema/" class="md-nav__link">
         
   
   <span class="md-ellipsis">
@@ -813,7 +804,7 @@
   
   
     <li class="md-nav__item">
-      <a href="../dataset-generation/" class="md-nav__link">
+      <a href="../../../../user-guide/dataset-generation/" class="md-nav__link">
         
   
   <span class="md-ellipsis">
@@ -834,7 +825,7 @@
   
   
     <li class="md-nav__item">
-      <a href="../individual-analysis/" class="md-nav__link">
+      <a href="../../../../user-guide/individual-analysis/" class="md-nav__link">
         
   
   <span class="md-ellipsis">
@@ -855,7 +846,7 @@
   
   
     <li class="md-nav__item">
-      <a href="../posekit/" class="md-nav__link">
+      <a href="../../../../user-guide/posekit/" class="md-nav__link">
         
   
   <span class="md-ellipsis">
@@ -876,7 +867,7 @@
   
   
     <li class="md-nav__item">
-      <a href="../classkit/" class="md-nav__link">
+      <a href="../../../../user-guide/classkit/" class="md-nav__link">
         
   
   <span class="md-ellipsis">
@@ -894,30 +885,10 @@
                 
   
   
-    
   
   
-  
-    <li class="md-nav__item md-nav__item--active">
-      
-      <input class="md-nav__toggle md-toggle" type="checkbox" id="__toc">
-      
-      
-        
-      
-      
-        <label class="md-nav__link md-nav__link--active" for="__toc">
-          
-  
-  <span class="md-ellipsis">
-    DetectKit
-  </span>
-  
-
-          <span class="md-nav__icon md-icon"></span>
-        </label>
-      
-      <a href="./" class="md-nav__link md-nav__link--active">
+    <li class="md-nav__item">
+      <a href="../../../../user-guide/detectkit/" class="md-nav__link">
         
   
   <span class="md-ellipsis">
@@ -926,119 +897,6 @@
   
 
       </a>
-      
-        
-
-<nav class="md-nav md-nav--secondary" aria-label="Table of contents">
-  
-  
-  
-    
-  
-  
-    <label class="md-nav__title" for="__toc">
-      <span class="md-nav__icon md-icon"></span>
-      Table of contents
-    </label>
-    <ul class="md-nav__list" data-md-component="toc" data-md-scrollfix>
-      
-        <li class="md-nav__item">
-  <a href="#purpose" class="md-nav__link">
-    <span class="md-ellipsis">
-      Purpose
-    </span>
-  </a>
-  
-</li>
-      
-        <li class="md-nav__item">
-  <a href="#launch" class="md-nav__link">
-    <span class="md-ellipsis">
-      Launch
-    </span>
-  </a>
-  
-</li>
-      
-        <li class="md-nav__item">
-  <a href="#workflow" class="md-nav__link">
-    <span class="md-ellipsis">
-      Workflow
-    </span>
-  </a>
-  
-</li>
-      
-        <li class="md-nav__item">
-  <a href="#key-features" class="md-nav__link">
-    <span class="md-ellipsis">
-      Key Features
-    </span>
-  </a>
-  
-    <nav class="md-nav" aria-label="Key Features">
-      <ul class="md-nav__list">
-        
-          <li class="md-nav__item">
-  <a href="#import-sources-from-another-project" class="md-nav__link">
-    <span class="md-ellipsis">
-      Import sources from another project
-    </span>
-  </a>
-  
-</li>
-        
-          <li class="md-nav__item">
-  <a href="#evaluate-trained-models" class="md-nav__link">
-    <span class="md-ellipsis">
-      Evaluate trained models
-    </span>
-  </a>
-  
-</li>
-        
-          <li class="md-nav__item">
-  <a href="#dataset-panel" class="md-nav__link">
-    <span class="md-ellipsis">
-      Dataset panel
-    </span>
-  </a>
-  
-</li>
-        
-      </ul>
-    </nav>
-  
-</li>
-      
-        <li class="md-nav__item">
-  <a href="#sam2-and-sam3-escalation" class="md-nav__link">
-    <span class="md-ellipsis">
-      SAM2 and SAM3 escalation
-    </span>
-  </a>
-  
-    <nav class="md-nav" aria-label="SAM2 and SAM3 escalation">
-      <ul class="md-nav__list">
-        
-          <li class="md-nav__item">
-  <a href="#sam3-training-augmentation" class="md-nav__link">
-    <span class="md-ellipsis">
-      SAM3 training augmentation
-    </span>
-  </a>
-  
-</li>
-        
-      </ul>
-    </nav>
-  
-</li>
-      
-    </ul>
-  
-</nav>
-      
     </li>
   
 
@@ -1051,7 +909,7 @@
   
   
     <li class="md-nav__item">
-      <a href="../../runbooks/detectkit-headless-training/" class="md-nav__link">
+      <a href="../../../../runbooks/detectkit-headless-training/" class="md-nav__link">
         
   
   <span class="md-ellipsis">
@@ -1072,7 +930,7 @@
   
   
     <li class="md-nav__item">
-      <a href="../sam-install-and-run/" class="md-nav__link">
+      <a href="../../../../user-guide/sam-install-and-run/" class="md-nav__link">
         
   
   <span class="md-ellipsis">
@@ -1093,7 +951,7 @@
   
   
     <li class="md-nav__item">
-      <a href="../detectkit-semantic-escalation/" class="md-nav__link">
+      <a href="../../../../user-guide/detectkit-semantic-escalation/" class="md-nav__link">
         
   
   <span class="md-ellipsis">
@@ -1114,7 +972,7 @@
   
   
     <li class="md-nav__item">
-      <a href="../detectkit-sahi-calibration/" class="md-nav__link">
+      <a href="../../../../user-guide/detectkit-sahi-calibration/" class="md-nav__link">
         
   
   <span class="md-ellipsis">
@@ -1135,7 +993,7 @@
   
   
     <li class="md-nav__item">
-      <a href="../filterkit/" class="md-nav__link">
+      <a href="../../../../user-guide/filterkit/" class="md-nav__link">
         
   
   <span class="md-ellipsis">
@@ -1156,7 +1014,7 @@
   
   
     <li class="md-nav__item">
-      <a href="../refinekit/" class="md-nav__link">
+      <a href="../../../../user-guide/refinekit/" class="md-nav__link">
         
   
   <span class="md-ellipsis">
@@ -1177,7 +1035,7 @@
   
   
     <li class="md-nav__item">
-      <a href="../troubleshooting/" class="md-nav__link">
+      <a href="../../../../user-guide/troubleshooting/" class="md-nav__link">
         
   
   <span class="md-ellipsis">
@@ -1247,7 +1105,7 @@
   
   
     <li class="md-nav__item">
-      <a href="../../developer-guide/architecture/" class="md-nav__link">
+      <a href="../../../../developer-guide/architecture/" class="md-nav__link">
         
   
   <span class="md-ellipsis">
@@ -1268,7 +1126,7 @@
   
   
     <li class="md-nav__item">
-      <a href="../../developer-guide/module-map/" class="md-nav__link">
+      <a href="../../../../developer-guide/module-map/" class="md-nav__link">
         
   
   <span class="md-ellipsis">
@@ -1289,7 +1147,7 @@
   
   
     <li class="md-nav__item">
-      <a href="../../developer-guide/data-flow/" class="md-nav__link">
+      <a href="../../../../developer-guide/data-flow/" class="md-nav__link">
         
   
   <span class="md-ellipsis">
@@ -1310,7 +1168,7 @@
   
   
     <li class="md-nav__item">
-      <a href="../../developer-guide/tracking-algorithm-deep-dive/" class="md-nav__link">
+      <a href="../../../../developer-guide/tracking-algorithm-deep-dive/" class="md-nav__link">
         
   
   <span class="md-ellipsis">
@@ -1331,7 +1189,7 @@
   
   
     <li class="md-nav__item">
-      <a href="../../developer-guide/tracking-optimization/" class="md-nav__link">
+      <a href="../../../../developer-guide/tracking-optimization/" class="md-nav__link">
         
   
   <span class="md-ellipsis">
@@ -1352,7 +1210,7 @@
   
   
     <li class="md-nav__item">
-      <a href="../../developer-guide/gpu-backends/" class="md-nav__link">
+      <a href="../../../../developer-guide/gpu-backends/" class="md-nav__link">
         
   
   <span class="md-ellipsis">
@@ -1373,7 +1231,7 @@
   
   
     <li class="md-nav__item">
-      <a href="../../developer-guide/runtime-integration/" class="md-nav__link">
+      <a href="../../../../developer-guide/runtime-integration/" class="md-nav__link">
         
   
   <span class="md-ellipsis">
@@ -1394,7 +1252,7 @@
   
   
     <li class="md-nav__item">
-      <a href="../../developer-guide/resource-containment/" class="md-nav__link">
+      <a href="../../../../developer-guide/resource-containment/" class="md-nav__link">
         
   
   <span class="md-ellipsis">
@@ -1415,7 +1273,7 @@
   
   
     <li class="md-nav__item">
-      <a href="../../developer-guide/profiling/" class="md-nav__link">
+      <a href="../../../../developer-guide/profiling/" class="md-nav__link">
         
   
   <span class="md-ellipsis">
@@ -1436,7 +1294,7 @@
   
   
     <li class="md-nav__item">
-      <a href="../../developer-guide/dependency-cuda-updates/" class="md-nav__link">
+      <a href="../../../../developer-guide/dependency-cuda-updates/" class="md-nav__link">
         
   
   <span class="md-ellipsis">
@@ -1457,7 +1315,7 @@
   
   
     <li class="md-nav__item">
-      <a href="../../developer-guide/performance-tuning/" class="md-nav__link">
+      <a href="../../../../developer-guide/performance-tuning/" class="md-nav__link">
         
   
   <span class="md-ellipsis">
@@ -1478,7 +1336,7 @@
   
   
     <li class="md-nav__item">
-      <a href="../../developer-guide/inference-fast-mode/" class="md-nav__link">
+      <a href="../../../../developer-guide/inference-fast-mode/" class="md-nav__link">
         
   
   <span class="md-ellipsis">
@@ -1499,7 +1357,7 @@
   
   
     <li class="md-nav__item">
-      <a href="../../developer-guide/inference-autotuner/" class="md-nav__link">
+      <a href="../../../../developer-guide/inference-autotuner/" class="md-nav__link">
         
   
   <span class="md-ellipsis">
@@ -1520,7 +1378,7 @@
   
   
     <li class="md-nav__item">
-      <a href="../../developer-guide/confidence-metrics/" class="md-nav__link">
+      <a href="../../../../developer-guide/confidence-metrics/" class="md-nav__link">
         
   
   <span class="md-ellipsis">
@@ -1541,7 +1399,7 @@
   
   
     <li class="md-nav__item">
-      <a href="../../developer-guide/extending-detection/" class="md-nav__link">
+      <a href="../../../../developer-guide/extending-detection/" class="md-nav__link">
         
   
   <span class="md-ellipsis">
@@ -1562,7 +1420,7 @@
   
   
     <li class="md-nav__item">
-      <a href="../../developer-guide/extending-identity/" class="md-nav__link">
+      <a href="../../../../developer-guide/extending-identity/" class="md-nav__link">
         
   
   <span class="md-ellipsis">
@@ -1583,7 +1441,7 @@
   
   
     <li class="md-nav__item">
-      <a href="../../developer-guide/code-health/" class="md-nav__link">
+      <a href="../../../../developer-guide/code-health/" class="md-nav__link">
         
   
   <span class="md-ellipsis">
@@ -1604,7 +1462,7 @@
   
   
     <li class="md-nav__item">
-      <a href="../../developer-guide/publishing/" class="md-nav__link">
+      <a href="../../../../developer-guide/publishing/" class="md-nav__link">
         
   
   <span class="md-ellipsis">
@@ -1625,7 +1483,7 @@
   
   
     <li class="md-nav__item">
-      <a href="../../developer-guide/contributing/" class="md-nav__link">
+      <a href="../../../../developer-guide/contributing/" class="md-nav__link">
         
   
   <span class="md-ellipsis">
@@ -1695,7 +1553,7 @@
   
   
     <li class="md-nav__item">
-      <a href="../../reference/api-index/" class="md-nav__link">
+      <a href="../../../../reference/api-index/" class="md-nav__link">
         
   
   <span class="md-ellipsis">
@@ -1716,7 +1574,7 @@
   
   
     <li class="md-nav__item">
-      <a href="../../reference/ui-components-hydra/" class="md-nav__link">
+      <a href="../../../../reference/ui-components-hydra/" class="md-nav__link">
         
   
   <span class="md-ellipsis">
@@ -1737,7 +1595,7 @@
   
   
     <li class="md-nav__item">
-      <a href="../../reference/ui-components-posekit/" class="md-nav__link">
+      <a href="../../../../reference/ui-components-posekit/" class="md-nav__link">
         
   
   <span class="md-ellipsis">
@@ -1758,7 +1616,7 @@
   
   
     <li class="md-nav__item">
-      <a href="../../reference/api-app/" class="md-nav__link">
+      <a href="../../../../reference/api-app/" class="md-nav__link">
         
   
   <span class="md-ellipsis">
@@ -1779,7 +1637,7 @@
   
   
     <li class="md-nav__item">
-      <a href="../../reference/api-core/" class="md-nav__link">
+      <a href="../../../../reference/api-core/" class="md-nav__link">
         
   
   <span class="md-ellipsis">
@@ -1800,7 +1658,7 @@
   
   
     <li class="md-nav__item">
-      <a href="../../reference/api-data/" class="md-nav__link">
+      <a href="../../../../reference/api-data/" class="md-nav__link">
         
   
   <span class="md-ellipsis">
@@ -1821,7 +1679,7 @@
   
   
     <li class="md-nav__item">
-      <a href="../../reference/api-gui/" class="md-nav__link">
+      <a href="../../../../reference/api-gui/" class="md-nav__link">
         
   
   <span class="md-ellipsis">
@@ -1842,7 +1700,7 @@
   
   
     <li class="md-nav__item">
-      <a href="../../reference/api-widgets/" class="md-nav__link">
+      <a href="../../../../reference/api-widgets/" class="md-nav__link">
         
   
   <span class="md-ellipsis">
@@ -1863,7 +1721,7 @@
   
   
     <li class="md-nav__item">
-      <a href="../../reference/api-posekit/" class="md-nav__link">
+      <a href="../../../../reference/api-posekit/" class="md-nav__link">
         
   
   <span class="md-ellipsis">
@@ -1884,7 +1742,7 @@
   
   
     <li class="md-nav__item">
-      <a href="../../reference/api-utils/" class="md-nav__link">
+      <a href="../../../../reference/api-utils/" class="md-nav__link">
         
   
   <span class="md-ellipsis">
@@ -1905,7 +1763,7 @@
   
   
     <li class="md-nav__item">
-      <a href="../../reference/cli-reference/" class="md-nav__link">
+      <a href="../../../../reference/cli-reference/" class="md-nav__link">
         
   
   <span class="md-ellipsis">
@@ -1926,7 +1784,7 @@
   
   
     <li class="md-nav__item">
-      <a href="../../reference/technical-reference/" class="md-nav__link">
+      <a href="../../../../reference/technical-reference/" class="md-nav__link">
         
   
   <span class="md-ellipsis">
@@ -1947,7 +1805,7 @@
   
   
     <li class="md-nav__item">
-      <a href="../../reference/changelog/" class="md-nav__link">
+      <a href="../../../../reference/changelog/" class="md-nav__link">
         
   
   <span class="md-ellipsis">
@@ -1968,7 +1826,7 @@
   
   
     <li class="md-nav__item">
-      <a href="../../reference/faq/" class="md-nav__link">
+      <a href="../../../../reference/faq/" class="md-nav__link">
         
   
   <span class="md-ellipsis">
@@ -2016,64 +1874,91 @@
     <ul class="md-nav__list" data-md-component="toc" data-md-scrollfix>
       
         <li class="md-nav__item">
-  <a href="#purpose" class="md-nav__link">
+  <a href="#why" class="md-nav__link">
     <span class="md-ellipsis">
-      Purpose
+      Why
     </span>
   </a>
   
 </li>
       
         <li class="md-nav__item">
-  <a href="#launch" class="md-nav__link">
+  <a href="#decisions-made-without-interactive-review" class="md-nav__link">
     <span class="md-ellipsis">
-      Launch
+      Decisions made without interactive review
     </span>
   </a>
   
 </li>
       
         <li class="md-nav__item">
-  <a href="#workflow" class="md-nav__link">
+  <a href="#vocabulary-reuse-of-augmentationprofile" class="md-nav__link">
     <span class="md-ellipsis">
-      Workflow
+      Vocabulary (reuse of AugmentationProfile)
     </span>
   </a>
   
 </li>
       
         <li class="md-nav__item">
-  <a href="#key-features" class="md-nav__link">
+  <a href="#architecture" class="md-nav__link">
     <span class="md-ellipsis">
-      Key Features
+      Architecture
     </span>
   </a>
   
-    <nav class="md-nav" aria-label="Key Features">
+    <nav class="md-nav" aria-label="Architecture">
       <ul class="md-nav__list">
         
           <li class="md-nav__item">
-  <a href="#import-sources-from-another-project" class="md-nav__link">
+  <a href="#new-module-trainingsam3_loraaugmentpy-pure-qt-free-no-sam3-import" class="md-nav__link">
     <span class="md-ellipsis">
-      Import sources from another project
+      New module training/sam3_lora/augment.py (pure, Qt-free, no sam3 import)
     </span>
   </a>
   
 </li>
         
           <li class="md-nav__item">
-  <a href="#evaluate-trained-models" class="md-nav__link">
+  <a href="#dataloader-threading-dataloaderpy" class="md-nav__link">
     <span class="md-ellipsis">
-      Evaluate trained models
+      Dataloader threading (dataloader.py)
     </span>
   </a>
   
 </li>
         
           <li class="md-nav__item">
-  <a href="#dataset-panel" class="md-nav__link">
+  <a href="#training-loop-clipy" class="md-nav__link">
     <span class="md-ellipsis">
-      Dataset panel
+      Training loop (cli.py)
+    </span>
+  </a>
+  
+</li>
+        
+          <li class="md-nav__item">
+  <a href="#publish-publish_workerpy" class="md-nav__link">
+    <span class="md-ellipsis">
+      Publish (publish_worker.py)
+    </span>
+  </a>
+  
+</li>
+        
+          <li class="md-nav__item">
+  <a href="#config-cli-detectkitconfigtrainingpy" class="md-nav__link">
+    <span class="md-ellipsis">
+      Config / CLI (detectkit/config/training.py)
+    </span>
+  </a>
+  
+</li>
+        
+          <li class="md-nav__item">
+  <a href="#gui-detectkitguipanelssam3_training_panelpy" class="md-nav__link">
+    <span class="md-ellipsis">
+      GUI (detectkit/gui/panels/sam3_training_panel.py)
     </span>
   </a>
   
@@ -2085,26 +1970,20 @@
 </li>
       
         <li class="md-nav__item">
-  <a href="#sam2-and-sam3-escalation" class="md-nav__link">
+  <a href="#error-handling" class="md-nav__link">
     <span class="md-ellipsis">
-      SAM2 and SAM3 escalation
-    </span>
-  </a>
-  
-    <nav class="md-nav" aria-label="SAM2 and SAM3 escalation">
-      <ul class="md-nav__list">
-        
-          <li class="md-nav__item">
-  <a href="#sam3-training-augmentation" class="md-nav__link">
-    <span class="md-ellipsis">
-      SAM3 training augmentation
+      Error handling
     </span>
   </a>
   
 </li>
-        
-      </ul>
-    </nav>
+      
+        <li class="md-nav__item">
+  <a href="#testing" class="md-nav__link">
+    <span class="md-ellipsis">
+      Testing
+    </span>
+  </a>
   
 </li>
       
@@ -2123,7 +2002,7 @@
                   
 
   
-    <a href="https://github.com/neurorishika/hydra-suite/edit/main/docs/user-guide/detectkit.md" title="Edit this page" class="md-content__button md-icon">
+    <a href="https://github.com/neurorishika/hydra-suite/edit/main/docs/superpowers/specs/done/2026-10-05-sam3-lora-augmentation-design.md" title="Edit this page" class="md-content__button md-icon">
       
       <svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 24 24"><path d="M10 20H6V4h7v5h5v3.1l2-2V8l-6-6H6c-1.1 0-2 .9-2 2v16c0 1.1.9 2 2 2h4zm10.2-7c.1 0 .3.1.4.2l1.3 1.3c.2.2.2.6 0 .8l-1 1-2.1-2.1 1-1c.1-.1.2-.2.4-.2m0 3.9L14.1 23H12v-2.1l6.1-6.1z"/></svg>
     </a>
@@ -2131,137 +2010,256 @@
   
 
 
-<h1 id="detectkit">DetectKit<a class="headerlink" href="#detectkit" title="Permanent link">&para;</a></h1>
-<p>DetectKit is the detection model training tool, launched via <code>detectkit</code>.</p>
-<h2 id="purpose">Purpose<a class="headerlink" href="#purpose" title="Permanent link">&para;</a></h2>
-<p>Train, evaluate, and manage YOLO detection models for use in TrackerKit.</p>
-<h2 id="launch">Launch<a class="headerlink" href="#launch" title="Permanent link">&para;</a></h2>
-<div class="language-bash highlight"><pre><span></span><code><span id="__span-0-1"><a id="__codelineno-0-1" name="__codelineno-0-1" href="#__codelineno-0-1"></a>detectkit
-</span></code></pre></div>
-<h2 id="workflow">Workflow<a class="headerlink" href="#workflow" title="Permanent link">&para;</a></h2>
+<h1 id="sam3-lora-training-augmentation-design">SAM3 LoRA training augmentation — design<a class="headerlink" href="#sam3-lora-training-augmentation-design" title="Permanent link">&para;</a></h1>
+<p><strong>Status:</strong> Shipped — merged to main (feat/sam3-lora-augmentation @ 3662c7a2, 2026-10-05).
+<strong>Branch:</strong> <code>feat/sam3-lora-augmentation</code> (worktree <code>.worktrees/sam3-aug</code>).</p>
+<h2 id="why">Why<a class="headerlink" href="#why" title="Permanent link">&para;</a></h2>
+<p>SAM3 LoRA training (<code>src/hydra_suite/training/sam3_lora/</code>) applies <strong>no</strong>
+augmentation. <code>dataloader._default_transform</code> is <code>to_tensor</code>;
+<code>datapoints.build_tile_datapoint</code> only resizes to <code>RES</code> and applies Meta's
+<code>NormalizeAPI</code>; <code>dataset_build</code> writes fixed tiles. Every epoch replays the same
+pixels, which encourages overfitting on the small labeled sets SAM3 is meant
+for. YOLO roles get augmentation through <code>AugmentationProfile</code>
+(<code>training/contracts.py</code>) and Ultralytics. This design gives the SAM3 role a
+YOLO-parallel augmentation path with GUI controls, CLI/JSON parity, and a
+realised stamp.</p>
+<h2 id="decisions-made-without-interactive-review">Decisions made without interactive review<a class="headerlink" href="#decisions-made-without-interactive-review" title="Permanent link">&para;</a></h2>
+<p>The session ran under a "do not pause" goal, so these were decided by the
+implementer (with an advisor pass) rather than by the user. Each one can be
+reversed cheaply.</p>
 <ol>
-<li>Curate detection training datasets from TrackerKit exports or external sources.</li>
-<li>Configure YOLO training parameters (epochs, batch size, image size).</li>
-<li>Launch training and monitor loss curves.</li>
-<li>Evaluate model performance on validation sets.</li>
+<li><strong>Contract default OFF, GUI fresh-session default ON.</strong>
+   <code>Sam3LoraParams().augmentation</code> is a disabled profile, so every existing
+   plan JSON, published spec and probe resolves to exactly today's training
+   (the <code>patience</code> rule in <code>contracts.py</code>: "a plan written before this field
+   existed must train exactly as it did"). The SAM3 panel's fresh default is
+   the recommended profile below. This is a <strong>documented intentional GUI/CLI
+   default divergence</strong>, asserted next to the existing <code>auto_import</code> one in
+   <code>tests/test_sam3_gui_cli_training_parity.py</code>.</li>
+<li><strong>Schema: nest the existing <code>AugmentationProfile</code></strong> as
+   <code>Sam3LoraParams.augmentation</code>. No parallel <code>aug_*</code> fields. A
+   <code>__post_init__</code> coerces a <code>dict</code> into <code>AugmentationProfile</code>, so all four
+   <code>Sam3LoraParams(**dict)</code> reconstruction sites (sidecar child, publish CLI,
+   dialog project load, dataset-prep sidecar) keep working unchanged.</li>
+<li><strong>New typed field <code>AugmentationProfile.rot90: float = 0.0</code></strong>: the
+   probability of a 90° rotation. Transpose-type rotations cannot be expressed
+   with flips, and together with <code>fliplr</code>/<code>flipud</code> they cover all eight
+   label-exact dihedral symmetries of a top-down view. SAM3 is the only
+   consumer today. YOLO/classify ignore it, as they already ignore <code>rotate</code>.</li>
+<li><strong>Small-angle <code>rotate</code> defaults to 0</strong> (opt-in). It needs a border fill and
+   polygon clipping, so the label-exact geometric ops are the default.</li>
+<li><strong>BGR handling:</strong> the tile arrives from <code>cv2.imread</code> as BGR. The
+   photometric ops convert to RGB once, run in RGB (the convention of
+   <code>_apply_tiny_augmentation</code> and <code>simulate_decode_color</code>), and convert back.</li>
+<li><strong>Saved dialog state without an <code>augmentation</code> key</strong> keeps the panel's
+   current (fresh-default) augmentation rather than resetting it to the
+   contract's OFF. Older per-machine UI state therefore picks up the
+   recommended profile. Old <em>plan JSON</em> (CLI) does not.</li>
 </ol>
-<h2 id="key-features">Key Features<a class="headerlink" href="#key-features" title="Permanent link">&para;</a></h2>
-<ul>
-<li>Dataset panel for assembling and inspecting training data</li>
-<li>Training panel with configurable hyperparameters</li>
-<li>Validation-set evaluation with precision, recall, mAP50, and mAP50-95</li>
-<li>Side-by-side comparison of completed training runs</li>
-<li>Integration with TrackerKit's dataset generation exports</li>
-</ul>
-<h3 id="import-sources-from-another-project">Import sources from another project<a class="headerlink" href="#import-sources-from-another-project" title="Permanent link">&para;</a></h3>
-<p>In the destination project, open <strong>Manage Sources</strong> and choose <strong>Import Project
-Sources…</strong>. Select the other DetectKit project folder. DetectKit checks every
-source, then copies its images and labels into the destination project. Sources
-already present are skipped. The two projects and their sources must use the
-same class names in the same order; missing datasets or unreviewed labels stop
-the import. Training history, models, and project settings are not copied.</p>
-<h3 id="evaluate-trained-models">Evaluate trained models<a class="headerlink" href="#evaluate-trained-models" title="Permanent link">&para;</a></h3>
-<p>Open <strong>Evaluate</strong> from the main toolbar or <strong>Evaluate…</strong> in the Dataset panel.
-DetectKit lists completed YOLO training runs that still have both their model
-artifact and derived dataset. Select one or more runs, then choose <strong>Evaluate
-Selected</strong> or <strong>Evaluate All Available</strong>.</p>
-<p>Each model is evaluated on the held-out <code>val</code> split recorded for that training
-run. Detection and OBB runs report box metrics; segmentation runs report mask
-metrics. Results include precision, recall, mAP50, mAP50-95, and measured
-inference time. Evaluation history is saved with the project so runs can be
-compared again after reopening it. SAM3 concept runs use a different evaluation
-stack and are shown as unavailable in this YOLO evaluator.</p>
-<h3 id="dataset-panel">Dataset panel<a class="headerlink" href="#dataset-panel" title="Permanent link">&para;</a></h3>
-<p>Dataset curation changes are recoverable. Removing selected images with
-<strong>Delete</strong> or <strong>Backspace</strong> moves the images and matching labels into the
-project's <code>artifacts/recovery/</code> folder. The frame-, source-, and whole-project
-<strong>Clear labels</strong> actions save exact copies there before truncating the working
-label files. This also protects linked sources that live outside the project:
-their recovery payload is owned by the project that initiated the change.</p>
-<p>Use <strong>Undo last dataset change</strong> or the platform Undo shortcut (Command-Z on
-macOS, Ctrl-Z elsewhere) to restore the newest operation. Undo will not
-overwrite an image recreated at the same path or labels edited after they were
-cleared; resolve that conflict manually and try again. Nested images are shown
-by their paths relative to the source's <code>images/</code> directory, with the absolute
-path available in the row tooltip.</p>
-<h2 id="sam2-and-sam3-escalation">SAM2 and SAM3 escalation<a class="headerlink" href="#sam2-and-sam3-escalation" title="Permanent link">&para;</a></h2>
-<p>The <strong>Escalation</strong> group in the Tools panel upgrades and extends labels with
-Segment Anything models. Both run on every device (CUDA, Apple MPS, CPU) and
-are installed by default:</p>
-<ul>
-<li><strong>Escalate to segment (SAM2)</strong> turns existing box labels into polygon masks.</li>
-<li><strong>Semantic escalation (SAM3)</strong> finds every instance of a text prompt (e.g.
-  <code>ant</code>), including animals missing from your labels.</li>
-</ul>
-<p>Results are staged for frame-by-frame review; nothing changes until you
-accept. Both are also available headless as <code>detectkit escalate sam2</code> /
-<code>detectkit escalate sam3</code>. Stock SAM3 weights are licence-gated and need a
-one-time Hugging Face login, and SAM3 <em>training</em> is an optional CUDA-only
-add-on. See <a href="../sam-install-and-run/">SAM2 and SAM3: install and run</a> for
-devices, weights, the CLI and training setup, and
-<a href="../detectkit-semantic-escalation/">Semantic Escalation (SAM3)</a> for the SAM3
-workflow.</p>
-<h3 id="sam3-training-augmentation">SAM3 training augmentation<a class="headerlink" href="#sam3-training-augmentation" title="Permanent link">&para;</a></h3>
-<p>The SAM3 training tab has an <strong>Augmentation</strong> group that augments tiles at
-train time. It applies to the <strong>training split only</strong>; validation is never
-augmented. Image and polygons are transformed together.</p>
+<h2 id="vocabulary-reuse-of-augmentationprofile">Vocabulary (reuse of <code>AugmentationProfile</code>)<a class="headerlink" href="#vocabulary-reuse-of-augmentationprofile" title="Permanent link">&para;</a></h2>
 <table>
 <thead>
 <tr>
-<th>Control</th>
-<th>Meaning</th>
-<th>Fresh default</th>
+<th>Field</th>
+<th>SAM3 semantics</th>
+<th>Fresh GUI default</th>
 </tr>
 </thead>
 <tbody>
 <tr>
-<td>Flip left-right / up-down (p)</td>
-<td>Probability of a flip</td>
-<td>0.5 / 0.5</td>
+<td><code>enabled</code></td>
+<td>master switch</td>
+<td><code>True</code></td>
 </tr>
 <tr>
-<td>Rotate 90 (p)</td>
-<td>Probability of a random-direction 90 degree rotation</td>
+<td><code>fliplr</code></td>
+<td>P(horizontal flip)</td>
 <td>0.5</td>
 </tr>
 <tr>
-<td>Rotate +/- (deg)</td>
-<td>Maximum small-angle rotation (gray border fill)</td>
-<td>0</td>
+<td><code>flipud</code></td>
+<td>P(vertical flip)</td>
+<td>0.5</td>
 </tr>
 <tr>
-<td>Brightness / Contrast / Saturation +/-</td>
-<td>Colour jitter</td>
-<td>0.2 each</td>
+<td><code>rot90</code> (new)</td>
+<td>P(rotate 90°, direction 50/50 CW/CCW)</td>
+<td>0.5</td>
 </tr>
 <tr>
-<td>Hue +/-</td>
-<td>HSV hue shift (fraction of the hue circle)</td>
-<td>0</td>
+<td><code>rotate</code></td>
+<td>max |angle| in degrees, uniform; constant gray fill</td>
+<td>0.0</td>
 </tr>
 <tr>
-<td>Decode-colour sim (p)</td>
-<td>Re-simulate video decode colour conversion</td>
-<td>0</td>
+<td><code>brightness</code></td>
+<td>multiplicative factor ~ U(1−b, 1+b)</td>
+<td>0.2</td>
 </tr>
 <tr>
-<td>Resample sim (p)</td>
-<td>Alternate-resampler sub-pixel warp</td>
-<td>0</td>
+<td><code>contrast</code></td>
+<td>about the per-channel mean, ~ U(1−c, 1+c)</td>
+<td>0.2</td>
 </tr>
 <tr>
-<td>Monochrome</td>
-<td>Convert tiles to grayscale</td>
-<td>off</td>
+<td><code>saturation</code></td>
+<td>HSV S factor ~ U(1−s, 1+s)</td>
+<td>0.2</td>
+</tr>
+<tr>
+<td><code>hue</code></td>
+<td>HSV H shift ~ U(−h, h)·179 (Ultralytics <code>hsv_h</code> units)</td>
+<td>0.0</td>
+</tr>
+<tr>
+<td><code>monochrome</code></td>
+<td>gray → 3-channel</td>
+<td><code>False</code></td>
+</tr>
+<tr>
+<td><code>decode_color_sim</code></td>
+<td>P(apply), <code>training.augmentation.simulate_decode_color</code></td>
+<td>0.0</td>
+</tr>
+<tr>
+<td><code>resample_sim</code></td>
+<td>P(apply), <code>training.augmentation.simulate_resample</code></td>
+<td>0.0</td>
 </tr>
 </tbody>
 </table>
-<p>A fresh session starts with this recommended profile enabled. Set both flips
-to 0 for chiral concepts, and keep <code>hue</code> at 0 when colour is the concept. Saved
-presets from before augmentation existed keep the recommended profile.</p>
-<p>Headless, set the <code>sam3.augmentation</code> key in the training plan. When the key is
-omitted, augmentation is <strong>disabled</strong>, so existing plans train unchanged. Each
-run records the profile it used in <code>hydra_sam3_augmentation.json</code>.</p>
+<p>The photometric semantics match <code>runner._apply_tiny_augmentation</code> exactly,
+except that draws come from an explicit generator. <code>hue</code> defaults to 0
+because colour can be the concept's signal (painted tags), as with
+<code>fliplr=0</code> guidance for asymmetric animals on the YOLO side.</p>
+<p><strong>Unsupported for SAM3, rejected loudly</strong> by the shared validator:
+<code>canonical_aug=True</code>, non-empty <code>label_expansion</code>, non-empty <code>args</code>.
+<code>canonical_aug_copies</code> is inert unless <code>canonical_aug</code> is set, and is ignored.
+Ranges: probabilities in [0, 1]; <code>rotate</code> in [0, 180]; <code>hue</code> in [0, 0.5];
+<code>brightness</code>/<code>contrast</code>/<code>saturation</code> in [0, 1].</p>
+<p>Mosaic and mixup are deliberately not ported. Mosaic changes the tile scale
+that the scale-grouped multi-scale build controls, and mixup blends unlabeled
+pixels into exhaustive queries. Both would corrupt SAM3's exhaustive-query
+supervision.</p>
+<h2 id="architecture">Architecture<a class="headerlink" href="#architecture" title="Permanent link">&para;</a></h2>
+<h3 id="new-module-trainingsam3_loraaugmentpy-pure-qt-free-no-sam3-import">New module <code>training/sam3_lora/augment.py</code> (pure, Qt-free, no <code>sam3</code> import)<a class="headerlink" href="#new-module-trainingsam3_loraaugmentpy-pure-qt-free-no-sam3-import" title="Permanent link">&para;</a></h3>
+<ul>
+<li><code>is_active(profile) -&gt; bool</code>: true when <code>enabled</code> and at least one op is
+  non-zero (or <code>monochrome</code>).</li>
+<li><code>validate_sam3_augmentation(profile) -&gt; list[str]</code>: error strings for range
+  or unsupported-field violations. It is called by
+  <code>DetectTrainingPlan.validate()</code> (raising <code>TrainingPlanError</code>) and by the
+  sidecar child at startup (raising <code>RuntimeError</code>).</li>
+<li><code>active_ops(profile) -&gt; dict</code>: the ops actually in effect (for the stamp).</li>
+<li><code>augment_tile(tile_bgr, instances, profile, rng, *, min_area_ratio)
+  -&gt; (tile_bgr, instances)</code>. <code>instances</code> is <code>[(polygon Nx2 float32, is_crowd)]</code>
+  in tile-pixel, edge-convention coordinates (the convention
+  <code>_scale_polygons_to_res</code> assumes).</li>
+<li>Geometric ops in order flipud → fliplr → rot90 → rotate, each applied to
+    the image and every polygon together. Flip: <code>x' = w − x</code>. rot90 CW:
+    <code>(x, y) → (h − y, x)</code> with new shape (w, h). CCW is the inverse.</li>
+<li><code>rotate</code>: <code>cv2.getRotationMatrix2D</code> about the pixel-index centre
+    <code>((w−1)/2, (h−1)/2)</code>, polygons mapped as <code>index = edge − 0.5</code>, warp with
+    <code>BORDER_CONSTANT</code> value (114, 114, 114) — <strong>never reflect</strong>, which would
+    paste unlabeled mirrored animals into exhaustive queries. Polygons are
+    clipped to the tile with <code>utils.slice_geometry.clip_polygon_to_tile</code>.
+    Retained fraction = clipped area / pre-clip area (the tile polygon; the
+    full-frame area that <code>dataset_build</code> used is unavailable here).
+    0 → instance dropped (it is no longer in the image). Below
+    <code>params.min_area_ratio</code> → <code>is_crowd=True</code>, so
+    <code>select_output_objects</code> excludes it and marks the positive query
+    non-exhaustive. Already-crowd stays crowd.</li>
+<li>Photometric ops (BGR→RGB once): brightness → contrast → saturation/hue →
+    monochrome → decode_color_sim → resample_sim → RGB→BGR. <code>resample_sim</code>'s
+    ≤0.5 px sub-pixel shift is left unlabeled, as it is for classifiers.</li>
+<li><code>tile_rng(epoch_seed, image_id) -&gt; np.random.Generator</code>:
+  <code>np.random.default_rng([epoch_seed, image_id, _SALT])</code>. Draws are therefore
+  independent of shuffle and grouping order, and reproducible per epoch.</li>
+<li><code>make_tile_augmenter(profile, *, epoch_seed, min_area_ratio)
+  -&gt; Callable | None</code>: returns <code>None</code> when not <code>is_active</code>. A no-op profile
+  therefore takes literally the existing code path.</li>
+</ul>
+<h3 id="dataloader-threading-dataloaderpy">Dataloader threading (<code>dataloader.py</code>)<a class="headerlink" href="#dataloader-threading-dataloaderpy" title="Permanent link">&para;</a></h3>
+<p><code>load_datapoints(descriptor, transform, augmenter=None)</code> applies
+<code>augmenter(tile_bgr, instances, descriptor.image_id)</code> before
+<code>build_shared_query_datapoints</code>. <code>collate_batches(..., augmenter=None)</code> and
+<code>collate_epoch_batches(..., augmenter=None)</code> (both grouped and ungrouped arms)
+forward it. <strong>Only the training loop passes one.</strong> Validation (<code>cli.py</code>
+<code>collate_batches(val_descriptors, …)</code>), the autobatch probe
+(<code>collate_batches(densest, …)</code>) and <code>detection_quality</code> keep <code>None</code>.</p>
+<p><code>TileDescriptor.width/height</code> stay the stored tile shape. <code>rot90</code> swaps the
+array's shape, and <code>build_tile_datapoint</code> reads the shape from the array.
+Descriptor dims are only read by consumers that skip decoding, and none of
+those sit downstream of the augmenter (verified in the plan).</p>
+<p><strong>The probe stays an upper bound.</strong> Flips and rot90 preserve the instance
+count and the RES×RES tensor; rotate can only drop instances. The collator's
+max-instance padding (the superlinear VRAM driver) therefore never grows.</p>
+<h3 id="training-loop-clipy">Training loop (<code>cli.py</code>)<a class="headerlink" href="#training-loop-clipy" title="Permanent link">&para;</a></h3>
+<p>At startup: validate <code>params.augmentation</code> (fail loudly). Write
+<code>hydra_sam3_augmentation.json</code> to the run dir on <strong>both</strong> arms:
+<code>{"requested": asdict(profile), "applied": {"augmentation": bool, "ops": {...},
+"reason": str}}</code>, with reason <code>"disabled"</code> / <code>"no active ops"</code> when the arm is
+off. In each epoch, build <code>make_tile_augmenter(profile,
+epoch_seed=spec.seed + epoch, min_area_ratio=params.min_area_ratio)</code> and pass
+it to <code>collate_epoch_batches</code>. Log one line stating the arm and active ops.</p>
+<h3 id="publish-publish_workerpy">Publish (<code>publish_worker.py</code>)<a class="headerlink" href="#publish-publish_workerpy" title="Permanent link">&para;</a></h3>
+<p><code>_augmentation_metadata(run_dir)</code> reads the stamp (<code>read_sam3_augmentation_stamp</code>)
+and adds an <code>"augmentation"</code> block to the sidecar next to
+<code>scale_grouped_batching</code>. When the stamp is absent it adds <code>{}</code>, so old runs
+are unchanged.</p>
+<h3 id="config-cli-detectkitconfigtrainingpy">Config / CLI (<code>detectkit/config/training.py</code>)<a class="headerlink" href="#config-cli-detectkitconfigtrainingpy" title="Permanent link">&para;</a></h3>
+<p>A shared <code>_parse_augmentation_profile(values, label)</code> handles typing for both
+<code>training.augmentation</code> (now also accepting <code>rot90</code>) and <code>sam3.augmentation</code>.
+<code>_sam3_to_json</code> already recurses via <code>asdict</code>. <code>plan.validate()</code> calls
+<code>validate_sam3_augmentation</code> when SAM3 is a role.</p>
+<h3 id="gui-detectkitguipanelssam3_training_panelpy">GUI (<code>detectkit/gui/panels/sam3_training_panel.py</code>)<a class="headerlink" href="#gui-detectkitguipanelssam3_training_panelpy" title="Permanent link">&para;</a></h3>
+<p>A new checkable <code>QGroupBox("Augmentation")</code> on the SAM3 tab with spin boxes
+for every row of the vocabulary table and a monochrome checkbox, each with a
+tooltip. <code>params()</code> emits <code>augmentation=AugmentationProfile(...)</code>;
+<code>set_params()</code> round-trips it. Panel construction applies the fresh
+recommended profile (<code>RECOMMENDED_SAM3_AUGMENTATION</code> in <code>augment.py</code>, the one
+source for the defaults). The dialog's persisted-state loader keeps the
+panel's augmentation when the saved state has none (decision 6).</p>
+<h2 id="error-handling">Error handling<a class="headerlink" href="#error-handling" title="Permanent link">&para;</a></h2>
+<ul>
+<li>Invalid ranges or unsupported fields: <code>TrainingPlanError</code> at plan
+  validation (GUI shows its existing warning dialog), and <code>RuntimeError</code> in
+  the child if a hand-edited <code>spec.json</code> bypassed the plan.</li>
+<li>An augmenter exception inside a batch propagates (never swallowed). A silent
+  fallback to unaugmented training would make the stamp lie.</li>
+</ul>
+<h2 id="testing">Testing<a class="headerlink" href="#testing" title="Permanent link">&para;</a></h2>
+<ul>
+<li><code>augment_tile</code> unit tests (no <code>sam3</code> needed): for each geometric op, rasterise
+  the polygons to masks before and after, and check the mask transformed by
+  the same op as the image equals the mask of the transformed polygons (IoU ≈
+  1). Edge-clipped instances under <code>rotate</code>: drop at 0, crowd below
+  <code>min_area_ratio</code>, already-crowd stays crowd. Constant fill (no reflected
+  content). Photometric ops leave polygons bit-identical. BGR/RGB: a pure-red
+  BGR tile stays red after brightness-only.</li>
+<li>Determinism: same <code>(epoch_seed, image_id)</code> gives identical output; a
+  different epoch gives different output; the result is independent of
+  descriptor order.</li>
+<li>Disabled identity (goal item 5): <code>collate_epoch_batches(..., augmenter=
+  make_tile_augmenter(disabled))</code> yields batches equal to <code>augmenter=None</code>,
+  and <code>make_tile_augmenter</code> returns <code>None</code> for disabled and all-zero profiles.
+  Default <code>Sam3LoraParams()</code> is inactive.</li>
+<li>Config: <code>sam3.augmentation</code> round-trip through <code>to_dict</code>/<code>from_dict</code>;
+  rejection of out-of-range and unsupported fields; <code>training.augmentation.rot90</code>
+  accepted.</li>
+<li><code>Sam3LoraParams(**asdict(p))</code> round-trip, i.e. <code>__post_init__</code> coercion.</li>
+<li>GUI: panel <code>params()</code>/<code>set_params()</code> round-trip; fresh default equals
+  <code>RECOMMENDED_SAM3_AUGMENTATION</code>; parity test covers the nested field with a
+  non-default profile; intentional default divergence asserted.</li>
+<li>Stamp written on both arms; publish sidecar carries it.</li>
+<li>Reflective guards updated: <code>_REFERENCE_KWARGS</code>, <code>_SAM3_PARAM_FIELDS</code>,
+  slice-settings contract, geometry drift guard.</li>
+<li>Full SAM3 test files + contract guards on <code>hydra-mps</code>, with
+  <code>hydra_suite.__file__</code> verified to resolve into the worktree.</li>
+<li>Visual: PNG grid of augmented fixture tiles with overlaid polygons.</li>
+<li>CUDA smoke on <strong>courtship</strong> (RTX 4090): at least 1 epoch with augmentation
+  on, finite loss, no OOM, peak VRAM within the probe's admission.</li>
+</ul>
 
 
 
@@ -2314,10 +2312,10 @@ run records the profile it used in <code>hydra_sam3_augmentation.json</code>.</p
     </div>
     
     
-    <script id="__config" type="application/json">{"base": "../..", "features": ["navigation.tabs", "navigation.sections", "navigation.expand", "navigation.top", "content.code.copy", "content.action.edit", "search.suggest", "search.highlight"], "search": "../../assets/javascripts/workers/search.6ce7567c.min.js", "translations": {"clipboard.copied": "Copied to clipboard", "clipboard.copy": "Copy to clipboard", "search.result.more.one": "1 more on this page", "search.result.more.other": "# more on this page", "search.result.none": "No matching documents", "search.result.one": "1 matching document", "search.result.other": "# matching documents", "search.result.placeholder": "Type to start searching", "search.result.term.missing": "Missing", "select.version": "Select version"}, "version": {"default": "latest", "provider": "mike"}}</script>
+    <script id="__config" type="application/json">{"base": "../../../..", "features": ["navigation.tabs", "navigation.sections", "navigation.expand", "navigation.top", "content.code.copy", "content.action.edit", "search.suggest", "search.highlight"], "search": "../../../../assets/javascripts/workers/search.6ce7567c.min.js", "translations": {"clipboard.copied": "Copied to clipboard", "clipboard.copy": "Copy to clipboard", "search.result.more.one": "1 more on this page", "search.result.more.other": "# more on this page", "search.result.none": "No matching documents", "search.result.one": "1 matching document", "search.result.other": "# matching documents", "search.result.placeholder": "Type to start searching", "search.result.term.missing": "Missing", "select.version": "Select version"}, "version": {"default": "latest", "provider": "mike"}}</script>
     
     
-      <script src="../../assets/javascripts/bundle.83f73b43.min.js"></script>
+      <script src="../../../../assets/javascripts/bundle.83f73b43.min.js"></script>
       
     
   </body>
