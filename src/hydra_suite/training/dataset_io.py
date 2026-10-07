@@ -18,6 +18,8 @@ from dataclasses import dataclass
 from pathlib import Path
 from typing import Iterator
 
+from hydra_suite.utils.hidden_files import is_hidden_file
+
 
 @dataclass(frozen=True, slots=True)
 class DatasetIOLimits:
@@ -118,7 +120,7 @@ def sorted_file_index(
                         continue
                     if not entry.is_file(follow_symlinks=False):
                         continue
-                    if path.suffix.lower() not in suffixes:
+                    if path.suffix.lower() not in suffixes or is_hidden_file(path):
                         continue
                     path_index_bytes += relative_bytes
                     if path_index_bytes > limits.max_path_index_bytes:

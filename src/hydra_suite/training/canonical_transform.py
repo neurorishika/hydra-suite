@@ -12,6 +12,7 @@ from __future__ import annotations
 import numpy as np
 
 from hydra_suite.core.canonicalization.fit import apply_fit, fit_to_model_input
+from hydra_suite.utils.hidden_files import is_hidden_file
 
 # Layer-2 fit policy every artifact trained through ``CanonicalFitTransform``
 # is stamped with (see ``ClassifierMetadata.fit_policy`` in
@@ -42,6 +43,16 @@ class CanonicalFitTransform:
         h, w = arr.shape[:2]
         fit = fit_to_model_input((w, h), (self.model_hw[1], self.model_hw[0]))
         return apply_fit(arr, fit)
+
+
+def is_visible_image_file(path) -> bool:
+    """``ImageFolder(is_valid_file=...)``: torchvision's image suffixes minus
+    dot-files, so a macOS ``._frame.jpg`` sidecar is never a training sample."""
+    from torchvision.datasets.folder import IMG_EXTENSIONS, has_file_allowed_extension
+
+    return has_file_allowed_extension(str(path), IMG_EXTENSIONS) and not (
+        is_hidden_file(path)
+    )
 
 
 def cv2_bgr_loader(path) -> np.ndarray:

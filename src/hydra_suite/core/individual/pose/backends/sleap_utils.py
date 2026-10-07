@@ -14,6 +14,7 @@ from hydra_suite.core.individual.pose.utils import (
     safe_pos_int,
 )
 from hydra_suite.utils.conda_utils import conda_subprocess_kwargs
+from hydra_suite.utils.hidden_files import is_hidden_file
 
 logger = logging.getLogger(__name__)
 
@@ -118,14 +119,16 @@ def looks_like_sleap_export_path(path_str: str, runtime_flavor: str) -> bool:
         path / "export_metadata.json"
     ).exists()
     if runtime == "onnx":
-        has_artifact = any(path.rglob("*.onnx"))
+        has_artifact = any(q for q in path.rglob("*.onnx") if not is_hidden_file(q))
     elif runtime == "tensorrt":
-        has_artifact = any(path.rglob("*.engine")) or any(path.rglob("*.trt"))
+        has_artifact = any(
+            q for q in path.rglob("*.engine") if not is_hidden_file(q)
+        ) or any(q for q in path.rglob("*.trt") if not is_hidden_file(q))
     else:
         has_artifact = (
-            any(path.rglob("*.onnx"))
-            or any(path.rglob("*.engine"))
-            or any(path.rglob("*.trt"))
+            any(q for q in path.rglob("*.onnx") if not is_hidden_file(q))
+            or any(q for q in path.rglob("*.engine") if not is_hidden_file(q))
+            or any(q for q in path.rglob("*.trt") if not is_hidden_file(q))
         )
     return bool(has_meta or has_artifact)
 
@@ -150,7 +153,9 @@ def normalize_export_result_path(
         parent = p.expanduser().resolve().parent
         if not parent.exists():
             continue
-        matches = sorted(parent.glob(f"*{expected_suffix}"))
+        matches = sorted(
+            q for q in parent.glob(f"*{expected_suffix}") if not is_hidden_file(q)
+        )
         if matches:
             return matches[-1].resolve()
     return None

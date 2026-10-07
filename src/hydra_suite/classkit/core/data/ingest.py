@@ -4,6 +4,8 @@ import hashlib
 from pathlib import Path
 from typing import Any, Dict, Generator, List, Union
 
+from hydra_suite.utils.hidden_files import is_hidden_file
+
 
 def compute_image_hash(path: Path) -> str:
     """Compute MD5 hash of an image file."""
@@ -46,7 +48,7 @@ def scan_images(
         candidates = [
             p.resolve()
             for p in images_dir.iterdir()
-            if p.is_file() and p.suffix.lower() in valid_exts
+            if p.is_file() and p.suffix.lower() in valid_exts and not is_hidden_file(p)
         ]
         if candidates:
             yield from iter(candidates)
@@ -54,7 +56,11 @@ def scan_images(
 
     # Fall back to the root folder itself (non-recursive).
     for path in root.iterdir():
-        if path.is_file() and path.suffix.lower() in valid_exts:
+        if (
+            path.is_file()
+            and path.suffix.lower() in valid_exts
+            and not is_hidden_file(path)
+        ):
             yield path.resolve()
 
 

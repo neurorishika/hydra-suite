@@ -16,6 +16,7 @@ from hydra_suite.data.project_bundle import (
     ensure_bundle_subdirectory,
 )
 from hydra_suite.training.dataset_inspector import inspect_obb_or_detect_dataset
+from hydra_suite.utils.hidden_files import is_hidden_file
 
 from .ingest import scan_images
 
@@ -58,7 +59,9 @@ def _iter_supported_images(folder: Path) -> list[Path]:
     return [
         path.resolve()
         for path in sorted(folder.iterdir())
-        if path.is_file() and path.suffix.lower() in _SUPPORTED_IMAGE_EXTS
+        if path.is_file()
+        and path.suffix.lower() in _SUPPORTED_IMAGE_EXTS
+        and not is_hidden_file(path)
     ]
 
 
@@ -181,6 +184,7 @@ def _iter_coco_json_candidates(root: Path) -> list[Path]:
 
     candidates.extend(sorted(root.glob("*.coco.json")))
     candidates.extend(sorted(root.glob("*.json")))
+    candidates = [path for path in candidates if not is_hidden_file(path)]
 
     unique: list[Path] = []
     seen: set[Path] = set()
@@ -283,7 +287,7 @@ def _inspect_class_folder_source(root: Path) -> ExternalSourceInspection | None:
     discovered_labels: set[str] = set()
     for split_dir in split_dirs:
         for class_dir in sorted(split_dir.iterdir()):
-            if not class_dir.is_dir():
+            if not class_dir.is_dir() or is_hidden_file(class_dir):
                 continue
             images = _iter_supported_images(class_dir)
             if not images:
@@ -476,7 +480,7 @@ def _build_class_folder_plan(root: Path) -> SourceImportPlan:
         if not split_dir.is_dir():
             continue
         for class_dir in sorted(split_dir.iterdir()):
-            if not class_dir.is_dir():
+            if not class_dir.is_dir() or is_hidden_file(class_dir):
                 continue
             label = class_dir.name.strip()
             if not label:

@@ -11,6 +11,8 @@ import cv2
 import numpy as np
 from PySide6.QtGui import QColor
 
+from hydra_suite.utils.hidden_files import is_hidden_file
+
 from .constants import IMG_EXTS
 
 logger = logging.getLogger("pose_label")
@@ -35,7 +37,7 @@ def list_images(images_dir: Path) -> List[Path]:
     """Recursively list supported image files in sorted order."""
     paths: List[Path] = []
     for p in sorted(images_dir.rglob("*")):
-        if p.is_file() and p.suffix.lower() in IMG_EXTS:
+        if p.is_file() and p.suffix.lower() in IMG_EXTS and not is_hidden_file(p):
             paths.append(p)
     return paths
 

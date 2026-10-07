@@ -64,6 +64,7 @@ from hydra_suite.trackerkit.gui.panels.tracking_panel import (
     POSE_REJECTION_THRESHOLD_CONST,
     SOLVER_AUTOPICK_GREEDY_THRESHOLD,
 )
+from hydra_suite.utils.hidden_files import is_hidden_file
 
 if TYPE_CHECKING:
     pass
@@ -2385,7 +2386,7 @@ class ConfigOrchestrator:
 
         # Scan all JSON files in configs directory
         for filename in sorted(os.listdir(presets_dir)):
-            if not filename.endswith(".json"):
+            if not filename.endswith(".json") or is_hidden_file(filename):
                 continue
 
             filepath = os.path.join(presets_dir, filename)
@@ -3591,6 +3592,8 @@ class ConfigOrchestrator:
                 local_model_paths = []
                 for dirpath, _dirnames, filenames in os.walk(models_dir):
                     for fn in sorted(filenames):
+                        if is_hidden_file(fn):
+                            continue
                         if os.path.splitext(fn)[1].lower() in (".pt", ".pth"):
                             local_model_paths.append(os.path.join(dirpath, fn))
             else:
@@ -3598,6 +3601,7 @@ class ConfigOrchestrator:
                     os.path.join(models_dir, f)
                     for f in os.listdir(models_dir)
                     if os.path.splitext(f)[1].lower() in (".pt", ".pth")
+                    and not is_hidden_file(f)
                 )
         except Exception as e:
             logger.warning(f"Failed to list YOLO model directory '{models_dir}': {e}")
@@ -3845,12 +3849,15 @@ class ConfigOrchestrator:
             if backend_key == "sleap":
                 for name in sorted(os.listdir(repo_dir)):
                     full = os.path.join(repo_dir, name)
-                    if os.path.isdir(full):
+                    if os.path.isdir(full) and not is_hidden_file(name):
                         rel = make_pose_model_path_relative(full)
                         entries[rel] = name
             else:
                 for fn in sorted(os.listdir(repo_dir)):
-                    if os.path.splitext(fn)[1].lower() in (".pt", ".pth"):
+                    if os.path.splitext(fn)[1].lower() in (
+                        ".pt",
+                        ".pth",
+                    ) and not is_hidden_file(fn):
                         full = os.path.join(repo_dir, fn)
                         rel = make_pose_model_path_relative(full)
                         entries[rel] = self._format_yolo_model_label(rel)
@@ -4218,7 +4225,11 @@ class ConfigOrchestrator:
                 dest_path = _Path(dest_dir) / f"{target_name}_{counter}"
                 counter += 1
             try:
-                _shutil.copytree(src_path, dest_path)
+                _shutil.copytree(
+                    src_path,
+                    dest_path,
+                    ignore=lambda _d, names: [n for n in names if is_hidden_file(n)],
+                )
             except Exception as exc:
                 logger.error("Failed to copy SLEAP model directory: %s", exc)
                 QMessageBox.warning(

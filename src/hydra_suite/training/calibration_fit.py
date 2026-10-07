@@ -91,6 +91,7 @@ def _build_recalibration_val_loader(model_path: str, val_dir: str, raw_ckpt: dic
         CanonicalFitTransform,
         bgr_to_rgb_pil,
         cv2_bgr_loader,
+        is_visible_image_file,
     )
     from hydra_suite.training.torchvision_model import (
         get_classifier_normalization_stats,
@@ -143,7 +144,10 @@ def _build_recalibration_val_loader(model_path: str, val_dir: str, raw_ckpt: dic
 
     else:
         val_ds = datasets.ImageFolder(
-            str(val_dir), transform=val_tf, loader=cv2_bgr_loader
+            str(val_dir),
+            transform=val_tf,
+            loader=cv2_bgr_loader,
+            is_valid_file=is_visible_image_file,
         )
         # ImageFolder indexes classes by sorted folder name, independent of the
         # checkpoint's stored class order. If val_dir's class set/order doesn't

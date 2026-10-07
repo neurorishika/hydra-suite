@@ -13,6 +13,7 @@ import logging
 from pathlib import Path
 
 from hydra_suite.runtime.resolver import ResolvedBackend
+from hydra_suite.utils.hidden_files import is_hidden_file
 
 from .onnx_session import OnnxSessionRunner
 from .tensorrt_engine import TensorRTEngineRunner
@@ -23,7 +24,9 @@ logger = logging.getLogger(__name__)
 def _sibling_onnx(model_path: Path):
     if model_path.suffix.lower() == ".onnx":
         return model_path
-    siblings = sorted(model_path.parent.rglob("*.onnx"))
+    siblings = sorted(
+        q for q in model_path.parent.rglob("*.onnx") if not is_hidden_file(q)
+    )
     return siblings[0] if siblings else None
 
 

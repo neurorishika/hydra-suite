@@ -7,6 +7,7 @@ from dataclasses import dataclass
 from pathlib import Path
 
 from hydra_suite.classkit.core.data.source_import import inspect_external_source
+from hydra_suite.utils.hidden_files import is_hidden_file
 
 CLASSKIT_IMAGES_SUBDIR = "images"
 CLASSKIT_IMAGE_EXTS = {".jpg", ".jpeg", ".png"}
@@ -29,7 +30,9 @@ def list_classkit_images(folder: Path) -> list[Path]:
     return [
         path
         for path in sorted(folder.iterdir())
-        if path.is_file() and path.suffix.lower() in CLASSKIT_IMAGE_EXTS
+        if path.is_file()
+        and path.suffix.lower() in CLASSKIT_IMAGE_EXTS
+        and not is_hidden_file(path)
     ]
 
 

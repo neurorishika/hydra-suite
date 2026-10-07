@@ -38,6 +38,7 @@ from hydra_suite.paths import get_app_data_dir
 from hydra_suite.training.geometry_levels import GeometryLevel, scan_source_levels
 from hydra_suite.utils.conda_utils import run_conda
 from hydra_suite.utils.file_dialogs import HydraFileDialog as QFileDialog  # noqa: F811
+from hydra_suite.utils.hidden_files import is_hidden_file
 
 from ..dataset_recovery import (
     DatasetRecoveryError,
@@ -63,7 +64,13 @@ def _copy_tree_without_metadata(src: Path, dst: Path) -> None:
     """Copy a directory tree without preserving macOS metadata or xattrs."""
     if not src.exists():
         return
-    shutil.copytree(src, dst, dirs_exist_ok=True, copy_function=shutil.copyfile)
+    shutil.copytree(
+        src,
+        dst,
+        dirs_exist_ok=True,
+        copy_function=shutil.copyfile,
+        ignore=lambda _dir, names: [n for n in names if is_hidden_file(n)],
+    )
 
 
 def xal_mode_for_level(level: GeometryLevel) -> str:

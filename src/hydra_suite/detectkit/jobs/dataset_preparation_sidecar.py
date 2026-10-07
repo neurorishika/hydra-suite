@@ -41,6 +41,7 @@ from hydra_suite.training.contracts import (
     sam3_prompt_pool_error,
 )
 from hydra_suite.training.dataset_io import DatasetLimitError, read_bounded_text
+from hydra_suite.utils.hidden_files import is_hidden_file
 
 from .training import (
     DatasetPreparationCancelled,
@@ -227,6 +228,8 @@ def _scan_source_footprint(
             raise DatasetLimitError(f"Dataset directory depth exceeds 32: {directory}")
         with os.scandir(directory) as entries:
             for entry in entries:
+                if is_hidden_file(entry.name):
+                    continue
                 path = Path(entry.path)
                 if len(os.fsencode(path.relative_to(root).as_posix())) > 16 * 1024:
                     raise DatasetLimitError(f"Dataset path exceeds 16384 bytes: {path}")

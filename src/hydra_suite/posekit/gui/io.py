@@ -5,6 +5,7 @@ from pathlib import Path
 from typing import Dict, List, Optional, Tuple
 
 from hydra_suite.posekit.core.extensions import CrashSafeWriter, LabelVersioning
+from hydra_suite.utils.hidden_files import is_hidden_file
 
 from .models import Keypoint, compute_bbox_from_kpts
 from .utils import _clamp01, _xyxy_to_cxcywh
@@ -175,7 +176,7 @@ def migrate_labels_keypoints(
     mode="index": preserve positions by old index (truncate/extend)
     Returns: (files_modified, files_total)
     """
-    txts = sorted(labels_dir.glob("*.txt"))
+    txts = sorted(p for p in labels_dir.glob("*.txt") if not is_hidden_file(p))
     if not txts:
         return (0, 0)
 

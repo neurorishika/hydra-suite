@@ -1072,11 +1072,18 @@ def _resolve_export_model_path(exported_model_path, runtime_flavor):
     p = Path(str(exported_model_path or "")).expanduser().resolve()
     if p.is_dir():
         if runtime_flavor == "onnx":
-            files = sorted(p.rglob("*.onnx"))
+            # Skip dot-files (macOS ``._*`` AppleDouble sidecars on SMB).
+            files = sorted(
+                f for f in p.rglob("*.onnx") if not f.name.startswith(".")
+            )
             if not files:
                 raise RuntimeError(f"No ONNX artifact found in export directory: {p}")
             return files[0]
-        files = sorted(list(p.rglob("*.engine")) + list(p.rglob("*.trt")))
+        files = sorted(
+            f
+            for f in [*p.rglob("*.engine"), *p.rglob("*.trt")]
+            if not f.name.startswith(".")
+        )
         if not files:
             raise RuntimeError(f"No TensorRT artifact found in export directory: {p}")
         return files[0]

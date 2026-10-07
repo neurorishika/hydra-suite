@@ -8,6 +8,7 @@ from pathlib import Path
 from typing import Optional
 
 from hydra_suite.training.class_mapping import build_class_id_map, read_classes_txt
+from hydra_suite.utils.hidden_files import is_hidden_file
 
 from .constants import IMG_EXTS
 
@@ -110,7 +111,7 @@ def list_images_in_source(source_path: str) -> list[Path]:
 
     results: list[Path] = []
     for p in search_root.rglob("*"):
-        if p.suffix.lower() in IMG_EXTS:
+        if p.suffix.lower() in IMG_EXTS and not is_hidden_file(p):
             results.append(p)
     results.sort()
     return results
@@ -122,7 +123,10 @@ def source_has_images(source_path: str) -> bool:
     root = Path(source_path)
     images_dir = root / "images"
     search_root = images_dir if images_dir.is_dir() else root
-    return any(path.suffix.lower() in IMG_EXTS for path in search_root.rglob("*"))
+    return any(
+        path.suffix.lower() in IMG_EXTS and not is_hidden_file(path)
+        for path in search_root.rglob("*")
+    )
 
 
 def ensure_detectkit_source_structure(source_path: str | Path) -> Path:
@@ -274,7 +278,11 @@ def labels_to_clear(
         return []
 
     if image_paths is None:
-        return [p for p in labels_dir.rglob("*.txt") if p.name != "classes.txt"]
+        return [
+            p
+            for p in labels_dir.rglob("*.txt")
+            if p.name != "classes.txt" and not is_hidden_file(p)
+        ]
 
     images_dir = source_root / "images"
     seen: set[Path] = set()

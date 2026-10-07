@@ -27,6 +27,7 @@ from hydra_suite.data.al.merge import MergeMode, merge_records
 from hydra_suite.detectkit.gui.constants import IMG_EXTS
 from hydra_suite.detectkit.gui.models import OBBSource
 from hydra_suite.utils.geometry_levels import GeometryLevel
+from hydra_suite.utils.hidden_files import is_hidden_file
 
 logger = logging.getLogger(__name__)
 
@@ -81,7 +82,7 @@ def staged_frames(staged_root: str | Path) -> list[str]:
     return sorted(
         p.relative_to(labels).as_posix()
         for p in labels.rglob("*.txt")
-        if p.stat().st_size > 0
+        if not is_hidden_file(p) and p.stat().st_size > 0
     )
 
 
@@ -530,6 +531,8 @@ def _promote_source(
     """
     labels_dir = Path(source.path) / "labels"
     for path in sorted(labels_dir.rglob("*.txt")):
+        if is_hidden_file(path):
+            continue
         rel = path.relative_to(labels_dir).as_posix()
         if rel == skip:
             continue

@@ -14,6 +14,8 @@ import shutil
 from pathlib import Path
 from typing import Any
 
+from hydra_suite.utils.hidden_files import is_hidden_file
+
 logger = logging.getLogger(__name__)
 
 
@@ -159,7 +161,7 @@ def validate_labels(labels_dir: str | Path) -> tuple[set[int], int]:
     total = 0
     for root, _, files in os.walk(labels_dir):
         for fn in files:
-            if not fn.endswith(".txt"):
+            if not fn.endswith(".txt") or is_hidden_file(fn):
                 continue
             total += 1
             fp = os.path.join(root, fn)
@@ -183,7 +185,7 @@ def rewrite_labels_to_single_class(labels_dir: str | Path, class_id: int = 0) ->
     """Rewrite all label files so every object uses the same class ID."""
     for root, _, files in os.walk(labels_dir):
         for fn in files:
-            if not fn.endswith(".txt"):
+            if not fn.endswith(".txt") or is_hidden_file(fn):
                 continue
             fp = os.path.join(root, fn)
             lines = []
@@ -293,7 +295,7 @@ def _collect_images(img_dir: str | Path) -> list[str]:
     files = []
     for root, _, fnames in os.walk(img_dir):
         for fn in fnames:
-            if Path(fn).suffix.lower() in exts:
+            if Path(fn).suffix.lower() in exts and not is_hidden_file(fn):
                 files.append(os.path.join(root, fn))
     return files
 

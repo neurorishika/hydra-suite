@@ -8,6 +8,8 @@ from dataclasses import dataclass, field
 from pathlib import Path
 from typing import Any, Literal
 
+from hydra_suite.utils.hidden_files import is_hidden_file
+
 from .dataset_io import (
     DEFAULT_DATASET_IO_LIMITS,
     DatasetIOLimits,
@@ -246,7 +248,7 @@ def _collect_list_split(
         p = Path(ln)
         if not p.is_absolute():
             p = (root / p).resolve()
-        if p.suffix.lower() not in IMAGE_EXTS:
+        if p.suffix.lower() not in IMAGE_EXTS or is_hidden_file(p):
             continue
         lbl = _infer_label_path_from_image(root, p, labels_root=labels_root)
         if not lbl.is_absolute():

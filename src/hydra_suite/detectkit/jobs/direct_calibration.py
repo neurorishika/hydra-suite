@@ -45,6 +45,7 @@ from hydra_suite.core.inference.direct_calibration_sweep import (
 )
 from hydra_suite.core.inference.stages.obb import collect_obb_parts_by_frame
 from hydra_suite.detectkit.jobs.semantic_escalation import stratified_calibration_frames
+from hydra_suite.utils.hidden_files import is_hidden_file
 from hydra_suite.widgets.workers import BaseWorker
 
 PREVIEW_FRAMES = 8
@@ -121,7 +122,9 @@ def _split_frames(dataset_yaml: Path, split: str) -> list:
         return []
     out = []
     for image_path in sorted(
-        p for p in images_dir.rglob("*") if p.suffix.lower() in _IMG_EXTS
+        p
+        for p in images_dir.rglob("*")
+        if p.suffix.lower() in _IMG_EXTS and not is_hidden_file(p)
     ):
         label_path = labels_dir / (image_path.stem + ".txt")
         if not label_path.exists() or not label_path.read_text().strip():

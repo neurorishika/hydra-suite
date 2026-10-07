@@ -16,6 +16,8 @@ from typing import Callable
 import torch
 from torch.utils.data import Dataset
 
+from hydra_suite.utils.hidden_files import is_hidden_file
+
 from .canonical_transform import cv2_bgr_loader
 
 _IMG_EXTENSIONS = {".jpg", ".jpeg", ".png", ".bmp", ".tif", ".tiff", ".webp"}
@@ -51,7 +53,7 @@ class MultiFactorImageFolder(Dataset):
 
         self._samples: list[tuple[str, list[int]]] = []
         for entry in sorted(root_path.iterdir()):
-            if not entry.is_dir():
+            if not entry.is_dir() or is_hidden_file(entry):
                 continue
             parts = entry.name.split(delimiter)
             if len(parts) != n_factors:
@@ -68,7 +70,11 @@ class MultiFactorImageFolder(Dataset):
                     )
                 label_tuple.append(per_factor_index[k][part])
             for fp in sorted(entry.iterdir()):
-                if fp.is_file() and fp.suffix.lower() in _IMG_EXTENSIONS:
+                if (
+                    fp.is_file()
+                    and fp.suffix.lower() in _IMG_EXTENSIONS
+                    and not is_hidden_file(fp)
+                ):
                     self._samples.append((str(fp), label_tuple))
 
     def __len__(self) -> int:

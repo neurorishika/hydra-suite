@@ -26,6 +26,8 @@ import cv2
 import numpy as np
 from PySide6.QtCore import QObject, Signal, Slot
 
+from hydra_suite.utils.hidden_files import is_hidden_file
+
 logger = logging.getLogger("pose_label.extensions")
 
 
@@ -714,7 +716,7 @@ def migrate_labels_keypoints(
     mode="index": preserve positions by old index (truncate/extend)
     Returns: (files_modified, files_total)
     """
-    txts = sorted(labels_dir.glob("*.txt"))
+    txts = sorted(p for p in labels_dir.glob("*.txt") if not is_hidden_file(p))
     if not txts:
         return (0, 0)
 

@@ -54,6 +54,7 @@ from hydra_suite.data.project_bundle import ensure_bundle_subdirectory
 from hydra_suite.detectkit.gui.constants import IMG_EXTS
 from hydra_suite.detectkit.gui.models import OBBSource, StagedReview
 from hydra_suite.utils.geometry_levels import GeometryLevel
+from hydra_suite.utils.hidden_files import is_hidden_file
 from hydra_suite.utils.sam3_constants import PREDICTOR_IMGSZ
 
 from .calibration_frames import (  # noqa: F401  (re-exported for importers)
@@ -542,7 +543,7 @@ def _remaining_tile_count(
     images_dir = src_root / "images"
     total = 0
     for img_path in images_dir.rglob("*"):
-        if img_path.suffix.lower() not in IMG_EXTS:
+        if img_path.suffix.lower() not in IMG_EXTS or is_hidden_file(img_path):
             continue
         try:
             rel = str(img_path.relative_to(images_dir))
@@ -838,7 +839,9 @@ def run_semantic_escalation(
                 )
             legacy_cache = {"version": 1, "images": {}}
         images = sorted(
-            p for p in images_dir.rglob("*") if p.suffix.lower() in IMG_EXTS
+            p
+            for p in images_dir.rglob("*")
+            if p.suffix.lower() in IMG_EXTS and not is_hidden_file(p)
         )
         for ii, img_path in enumerate(images):
             # DEPARTURE 4: cancellation, honoured between images and (inside
@@ -1113,7 +1116,7 @@ def preview_random_frame(
         choices.extend(
             (source, path)
             for path in sorted(images_dir.rglob("*"))
-            if path.suffix.lower() in IMG_EXTS
+            if path.suffix.lower() in IMG_EXTS and not is_hidden_file(path)
         )
     if not choices:
         raise RuntimeError("The selected source(s) have no images to preview.")

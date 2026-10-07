@@ -15,6 +15,7 @@ from sklearn.cluster import MiniBatchKMeans
 
 from hydra_suite.core.individual.dataset.naming import parse_identity_image_filename
 from hydra_suite.data.al.frame_source import FrameRef, VideoFrameSource
+from hydra_suite.utils.hidden_files import is_hidden_file
 
 _IMAGE_EXTS = {".png", ".jpg", ".jpeg"}
 _VIDEO_EXTS = {".mp4", ".mov", ".avi", ".mkv", ".m4v"}
@@ -76,7 +77,7 @@ def _iter_images_in_dir(directory: Path) -> List[Path]:
     return sorted(
         p
         for p in directory.iterdir()
-        if p.is_file() and p.suffix.lower() in _IMAGE_EXTS
+        if p.is_file() and p.suffix.lower() in _IMAGE_EXTS and not is_hidden_file(p)
     )
 
 
@@ -98,6 +99,7 @@ def _collect_coco_images(root: Path) -> Optional[List[Path]]:
         candidates.extend(sorted(ann_dir.glob("*.json")))
     candidates.extend(sorted(root.glob("*.coco.json")))
     candidates.extend(sorted(root.glob("*.json")))
+    candidates = [p for p in candidates if not is_hidden_file(p)]
 
     for candidate in candidates:
         try:
@@ -162,7 +164,7 @@ def collect_images_for_root(root: Path) -> Tuple[str, List[Path]]:
         paths: List[Path] = []
         for split_dir in split_dirs:
             for class_dir in sorted(split_dir.iterdir()):
-                if class_dir.is_dir():
+                if class_dir.is_dir() and not is_hidden_file(class_dir):
                     paths.extend(_iter_images_in_dir(class_dir))
         if paths:
             return "class_folders", paths
@@ -299,7 +301,7 @@ class _HistogramSignatureIndex:
 class FilterKitCore:
     @staticmethod
     def is_supported_video(path: "str | Path") -> bool:
-        return Path(path).suffix.lower() in _VIDEO_EXTS
+        return Path(path).suffix.lower() in _VIDEO_EXTS and not is_hidden_file(path)
 
     def load_video(self, video_path: "str | Path") -> Tuple[str, List[Dict[str, Any]]]:
         """Represent each decodable-positioned video frame as a FilterKit item.
@@ -750,7 +752,9 @@ class FilterKitCore:
         files = sorted(
             path
             for path in folder.iterdir()
-            if path.is_file() and path.suffix.lower() in {".png", ".jpg", ".jpeg"}
+            if path.is_file()
+            and path.suffix.lower() in {".png", ".jpg", ".jpeg"}
+            and not is_hidden_file(path)
         )
 
         for file_path in files:

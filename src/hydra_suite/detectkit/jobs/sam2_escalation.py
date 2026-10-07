@@ -23,6 +23,7 @@ from hydra_suite.data.project_bundle import ensure_bundle_subdirectory
 from hydra_suite.detectkit.gui.constants import IMG_EXTS
 from hydra_suite.detectkit.gui.models import OBBSource, StagedReview
 from hydra_suite.utils.geometry_levels import GeometryLevel
+from hydra_suite.utils.hidden_files import is_hidden_file
 from hydra_suite.widgets.workers import BaseWorker
 
 from .calibration_frames import CALIBRATION_SAMPLE_FRAMES, stratified_calibration_frames
@@ -409,7 +410,9 @@ def run_escalation(
         # those staged no label for that image, and accept() then refused
         # forever on the missing-labels check.
         images = sorted(
-            p for p in images_dir.rglob("*") if p.suffix.lower() in IMG_EXTS
+            p
+            for p in images_dir.rglob("*")
+            if p.suffix.lower() in IMG_EXTS and not is_hidden_file(p)
         )
         for ii, img_path in enumerate(images):
             img = cv2.imread(str(img_path))

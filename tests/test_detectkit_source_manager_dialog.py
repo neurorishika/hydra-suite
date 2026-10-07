@@ -621,3 +621,50 @@ def test_source_import_remaps_classes_before_registration(qapp, tmp_path, monkey
         .read_text(encoding="utf-8")
         .startswith("0 ")
     )
+
+
+def _imported_source(tmp_path, name):
+    from hydra_suite.detectkit.gui.models import OBBSource
+
+    path = tmp_path / "artifacts" / "imported_sources" / name
+    (path / "images").mkdir(parents=True)
+    (path / "images" / "a.jpg").write_bytes(b"x")
+    return path, OBBSource(path=str(path), name=name)
+
+
+def test_remove_imported_source_deletes_copy_after_saving(qapp, tmp_path, monkeypatch):
+    from hydra_suite.detectkit.gui.dialogs.source_manager import SourceManagerDialog
+    from hydra_suite.detectkit.gui.project import open_project
+
+    copy, source = _imported_source(tmp_path, "ds-abc")
+    keep, other = _imported_source(tmp_path, "ds-keep")
+    proj = _make_proj(tmp_path)
+    proj.sources = [source, other]
+    monkeypatch.setattr(
+        QMessageBox, "question", lambda *a, **k: QMessageBox.StandardButton.Yes
+    )
+    dlg = SourceManagerDialog(proj)
+    dlg._source_list.setCurrentRow(0)
+    dlg._remove_selected()
+
+    assert [s.name for s in proj.sources] == ["ds-keep"]
+    assert not copy.exists()
+    assert keep.exists()
+    assert [s.name for s in open_project(tmp_path).sources] == ["ds-keep"]
+
+
+def test_remove_imported_source_cancel_keeps_everything(qapp, tmp_path, monkeypatch):
+    from hydra_suite.detectkit.gui.dialogs.source_manager import SourceManagerDialog
+
+    copy, source = _imported_source(tmp_path, "ds-abc")
+    proj = _make_proj(tmp_path)
+    proj.sources = [source]
+    monkeypatch.setattr(
+        QMessageBox, "question", lambda *a, **k: QMessageBox.StandardButton.Cancel
+    )
+    dlg = SourceManagerDialog(proj)
+    dlg._source_list.setCurrentRow(0)
+    dlg._remove_selected()
+
+    assert len(proj.sources) == 1
+    assert copy.exists()

@@ -40,6 +40,7 @@ from hydra_suite.training.device_ids import (  # noqa: F401  (re-exported)
     is_bare_ordinal_device,
     normalize_cuda_device,
 )
+from hydra_suite.utils.hidden_files import is_hidden_file
 
 #: The largest batch Ultralytics 8.4.x actually PROFILES rather than
 #: extrapolates to. Anything above it is a linear-fit extrapolation, so we
@@ -120,6 +121,8 @@ def _dataset_label_profile(dataset_dir: Path) -> tuple[int, int, list[str]]:
     most = 0
     count = 0
     for path in sorted(labels[0].rglob("*.txt")):
+        if is_hidden_file(path):
+            continue
         try:
             lines = [
                 line
