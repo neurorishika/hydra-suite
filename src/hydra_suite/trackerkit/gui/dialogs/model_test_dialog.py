@@ -19,6 +19,7 @@ from PySide6.QtWidgets import (
     QWidget,
 )
 
+from hydra_suite.utils.hidden_files import is_hidden_file
 from hydra_suite.widgets.dialogs import BaseDialog
 from hydra_suite.widgets.workers import BaseWorker
 
@@ -369,9 +370,11 @@ def _collect_sample_images(
     def _image_files(d: Path) -> list[str]:
         if not d.is_dir():
             return []
-        return sorted(str(p) for p in d.iterdir() if p.suffix.lower() in exts)[
-            :max_count
-        ]
+        return sorted(
+            str(p)
+            for p in d.iterdir()
+            if p.suffix.lower() in exts and not is_hidden_file(p)
+        )[:max_count]
 
     # Try val/images first, then train/images
     for split in ("val", "valid", "test", "train"):

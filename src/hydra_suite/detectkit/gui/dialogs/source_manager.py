@@ -23,12 +23,14 @@ from hydra_suite.detectkit.gui.dialogs._base import DetectKitDialog
 
 from ...jobs.sam2_escalation import remove_staged_escalation_dir
 from ..models import OBBSource
+from ..project import save_project
 from ..source_import import (
     IMPORT_MODE_LINKED,
     IMPORT_MODE_PORTABLE,
     compute_positional_class_remap,
     resolve_al_round_authoritative_level,
 )
+from ..source_removal import delete_imported_copy, owned_imported_copy
 from ..source_workers import (
     ProjectSourcesImportWorker,
     SourceImportWorker,
@@ -407,7 +409,52 @@ class SourceManagerDialog(DetectKitDialog):
         row = self._source_list.currentRow()
         if row < 0 or row >= len(self._project.sources):
             return
+        selected = self._project.sources[row]
+        remaining_paths = [
+            s.path for i, s in enumerate(self._project.sources) if i != row
+        ]
+        imported_copy = owned_imported_copy(
+            selected.path, self._project.project_dir, remaining_paths
+        )
+        if imported_copy is not None:
+            answer = QMessageBox.question(
+                self,
+                "Remove Source",
+                f"Remove source '{selected.name}' from the project?\n\n"
+                "Its imported copy (images and labels) will be permanently "
+                f"deleted:\n{imported_copy}",
+                QMessageBox.StandardButton.Yes | QMessageBox.StandardButton.Cancel,
+                QMessageBox.StandardButton.Cancel,
+            )
+            if answer != QMessageBox.StandardButton.Yes:
+                return
         removed = self._project.sources.pop(row)
+        if imported_copy is not None:
+            # Persist the removal BEFORE deleting, so the saved project can
+            # never reference a folder that no longer exists.
+            try:
+                save_project(self._project)
+            except Exception as exc:
+                self._project.sources.insert(row, removed)
+                logger.exception("Could not save project before source removal")
+                QMessageBox.warning(
+                    self,
+                    "Remove Source",
+                    f"The project could not be saved, so nothing was removed:\n\n{exc}",
+                )
+                return
+            try:
+                delete_imported_copy(
+                    removed.path, self._project.project_dir, remaining_paths
+                )
+            except OSError as exc:
+                logger.exception("Failed to delete imported copy %s", imported_copy)
+                QMessageBox.warning(
+                    self,
+                    "Remove Source",
+                    f"The source was removed, but its imported copy could not be "
+                    f"fully deleted:\n{imported_copy}\n\n{exc}",
+                )
         pending = removed.staged_review
         if pending is not None and pending.staged_path:
             # Bounded delete: staged_path round-trips through the saved

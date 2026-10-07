@@ -9,6 +9,8 @@ from typing import Iterator, Protocol
 import cv2
 import numpy as np
 
+from hydra_suite.utils.hidden_files import is_hidden_file
+
 
 @dataclass(frozen=True)
 class FrameRef:
@@ -122,7 +124,7 @@ class ImageFolderFrameSource:
         self._paths: list[Path] = sorted(
             p
             for p in self._folder.iterdir()
-            if p.is_file() and p.suffix.lower() in _IMAGE_EXTS
+            if p.is_file() and p.suffix.lower() in _IMAGE_EXTS and not is_hidden_file(p)
         )
         self._source_id = f"folder:{self._folder.name}"
 
@@ -158,7 +160,9 @@ class DetectKitProjectSource:
             if not images_dir.is_dir():
                 continue
             for img_path in sorted(images_dir.iterdir()):
-                if img_path.suffix.lower() not in _IMAGE_EXTS:
+                if img_path.suffix.lower() not in _IMAGE_EXTS or is_hidden_file(
+                    img_path
+                ):
                     continue
                 if only_unlabeled:
                     label_path = labels_dir / (img_path.stem + ".txt")

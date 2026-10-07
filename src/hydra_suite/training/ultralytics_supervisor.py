@@ -54,6 +54,7 @@ from hydra_suite.training.yolo_autobatch import (
     child_degraded_reasons,
     resolve_yolo_batch,
 )
+from hydra_suite.utils.hidden_files import is_hidden_file
 
 #: The warning period is a SHARED, one-line switch defined in
 #: :mod:`hydra_suite.training.device_ids` and imported above; the DetectKit
@@ -165,6 +166,7 @@ def _estimate_host_bytes(spec) -> int:
             1
             for path in dataset.rglob("*")
             if path.suffix.lower() in {".jpg", ".jpeg", ".png", ".bmp", ".tif", ".tiff"}
+            and not is_hidden_file(path)
         )
         estimate += count * imgsz * imgsz * 3
     return max(4 * GiB, estimate)

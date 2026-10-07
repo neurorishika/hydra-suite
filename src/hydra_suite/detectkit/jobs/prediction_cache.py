@@ -24,6 +24,7 @@ from hydra_suite.core.inference.content_id import (
     model_content_id,
     video_signature,
 )
+from hydra_suite.utils.hidden_files import is_hidden_file
 
 MAX_FRAME_PAYLOAD_BYTES = 16 * 1024 * 1024
 MAX_DETECTIONS_PER_FRAME = 1_000
@@ -76,7 +77,7 @@ def _source_content_id(source_path: str) -> str:
         entries = sorted(
             (child.name, child.stat().st_size, child.stat().st_mtime_ns)
             for child in images_dir.iterdir()
-            if child.is_file()
+            if child.is_file() and not is_hidden_file(child)
         )
         blob = "\n".join(f"{n}={s}:{m}" for n, s, m in entries).encode("utf-8")
         return f"imgset:{hashlib.sha256(blob).hexdigest()}"

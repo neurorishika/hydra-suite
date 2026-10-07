@@ -80,7 +80,8 @@ def copy_model_reference(planned: PlannedModel, models_root: Path) -> JobModel:
         shutil.copytree(
             source,
             destination,
-            ignore=shutil.ignore_patterns(*EXCLUDED_DIR_NAMES),
+            # "._*": AppleDouble sidecars macOS writes beside every file on SMB.
+            ignore=shutil.ignore_patterns(*EXCLUDED_DIR_NAMES, "._*"),
         )
         # Fix B4: file_digests was DECLARED on JobModel but never populated,
         # which made verify_job's "if model.file_digests: check every member"

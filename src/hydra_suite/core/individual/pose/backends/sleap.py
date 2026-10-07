@@ -46,6 +46,7 @@ from hydra_suite.core.individual.pose.utils import (
 )
 from hydra_suite.runtime.artifact_lock import artifact_build_lock
 from hydra_suite.runtime.resolver import ResolvedBackend
+from hydra_suite.utils.hidden_files import is_hidden_file
 
 logger = logging.getLogger(__name__)
 
@@ -60,15 +61,21 @@ def _resolve_export_model_path(
     runtime = str(runtime_flavor or "onnx").strip().lower()
     if path.is_dir():
         if runtime == "onnx":
-            matches = sorted(path.rglob("*.onnx"))
+            matches = sorted(q for q in path.rglob("*.onnx") if not is_hidden_file(q))
             if not matches:
                 raise RuntimeError(
                     f"No ONNX artifact found in export directory: {path}"
                 )
             return matches[0]
-        matches = sorted(list(path.rglob("*.engine")) + list(path.rglob("*.trt")))
+        matches = sorted(
+            q
+            for q in [*path.rglob("*.engine"), *path.rglob("*.trt")]
+            if not is_hidden_file(q)
+        )
         if not matches:
-            onnx_matches = sorted(path.rglob("*.onnx"))
+            onnx_matches = sorted(
+                q for q in path.rglob("*.onnx") if not is_hidden_file(q)
+            )
             if onnx_matches:
                 return onnx_matches[0]
             raise RuntimeError(
@@ -405,7 +412,11 @@ class SleapExportedBackend:
                     exc,
                 )
                 # Locate a sibling .onnx to rebuild from
-                onnx_siblings = sorted(model_path.parent.rglob("*.onnx"))
+                onnx_siblings = sorted(
+                    q
+                    for q in model_path.parent.rglob("*.onnx")
+                    if not is_hidden_file(q)
+                )
                 if not onnx_siblings:
                     logger.warning(
                         "No sibling ONNX file found in %s — cannot rebuild TRT "
@@ -482,7 +493,11 @@ class SleapExportedBackend:
         # from a stale .trt rebuild-fail, look for a sibling .onnx.
         onnx_path = self.model_path
         if onnx_path.suffix.lower() not in {".onnx"}:
-            siblings = sorted(self.model_path.parent.rglob("*.onnx"))
+            siblings = sorted(
+                q
+                for q in self.model_path.parent.rglob("*.onnx")
+                if not is_hidden_file(q)
+            )
             if siblings:
                 onnx_path = siblings[0]
         return _DirectOnnxSession(

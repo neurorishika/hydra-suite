@@ -21,6 +21,7 @@ from hydra_suite.data.al.escalation import LabelRecord
 from hydra_suite.detectkit.gui.constants import IMG_EXTS
 from hydra_suite.detectkit.gui.models import OBBSource
 from hydra_suite.utils.geometry_levels import GeometryLevel
+from hydra_suite.utils.hidden_files import is_hidden_file
 
 # A calibration fitted at one body size only transfers to targets of a
 # similar size: tile fraction is relative to the animal.
@@ -69,7 +70,7 @@ def has_labelled_frames(source: OBBSource) -> bool:
     if not images_dir.is_dir() or not labels_dir.is_dir():
         return False
     for img_path in images_dir.rglob("*"):
-        if img_path.suffix.lower() not in IMG_EXTS:
+        if img_path.suffix.lower() not in IMG_EXTS or is_hidden_file(img_path):
             continue
         label_path = _label_path_for(images_dir, labels_dir, img_path)
         try:
@@ -96,7 +97,7 @@ def has_polygon_frames(source: OBBSource) -> bool:
     if not images_dir.is_dir() or not labels_dir.is_dir():
         return False
     for img_path in images_dir.rglob("*"):
-        if img_path.suffix.lower() not in IMG_EXTS:
+        if img_path.suffix.lower() not in IMG_EXTS or is_hidden_file(img_path):
             continue
         label_path = _label_path_for(images_dir, labels_dir, img_path)
         try:
@@ -205,7 +206,9 @@ def quick_median_body_px(
         if not images_dir.is_dir():
             continue
         for img_path in sorted(
-            p for p in images_dir.rglob("*") if p.suffix.lower() in IMG_EXTS
+            p
+            for p in images_dir.rglob("*")
+            if p.suffix.lower() in IMG_EXTS and not is_hidden_file(p)
         ):
             if used >= max_frames:
                 break
@@ -253,7 +256,9 @@ def labelled_frames_for(
     images_dir, labels_dir = root / "images", root / "labels"
     out: list[tuple[Path, list[LabelRecord]]] = []
     for img_path in sorted(
-        p for p in images_dir.rglob("*") if p.suffix.lower() in IMG_EXTS
+        p
+        for p in images_dir.rglob("*")
+        if p.suffix.lower() in IMG_EXTS and not is_hidden_file(p)
     ):
         if limit and len(out) >= limit:
             break

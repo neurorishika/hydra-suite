@@ -21,6 +21,8 @@ except ImportError:  # pragma: no cover - Windows does not provide fcntl.
 
 import psutil
 
+from hydra_suite.utils.hidden_files import is_hidden_file
+
 from .contracts import TrainingRunSpec
 
 _PROCESS_REGISTRY_LOCK = threading.RLock()
@@ -233,6 +235,8 @@ def _iter_dataset_files(directory: Path, *, depth: int = 0):
         raise ValueError(f"Dataset directory nesting exceeds safe depth: {directory}")
     with os.scandir(directory) as entries:
         for entry in entries:
+            if is_hidden_file(entry.name):
+                continue
             try:
                 if entry.is_dir(follow_symlinks=False):
                     yield from _iter_dataset_files(Path(entry.path), depth=depth + 1)

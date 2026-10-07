@@ -54,6 +54,7 @@ from hydra_suite.detectkit.gui.widgets.calibration_source_selector import (
     CalibrationSourceSelector,
     scale_warning_text,
 )
+from hydra_suite.utils.hidden_files import is_hidden_file
 from hydra_suite.widgets.device_combo import DeviceCombo
 
 
@@ -731,7 +732,9 @@ class SemanticEscalationDialog(DetectKitDialog):
             images = Path(src.path) / "images"
             if images.is_dir():
                 total += sum(
-                    1 for p in images.rglob("*") if p.suffix.lower() in IMG_EXTS
+                    1
+                    for p in images.rglob("*")
+                    if p.suffix.lower() in IMG_EXTS and not is_hidden_file(p)
                 )
         return total
 

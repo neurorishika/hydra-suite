@@ -15,6 +15,8 @@ from typing import Any, Dict, List, Optional, Sequence, Tuple
 
 import numpy as np
 
+from hydra_suite.utils.hidden_files import is_hidden_file
+
 try:
     import cv2  # type: ignore
 except Exception:
@@ -516,7 +518,9 @@ def _load_predictor(
     model_candidate = Path(model_path).expanduser().resolve()
     if model_candidate.is_dir():
         if runtime_flavor == "onnx":
-            onnx_files = sorted(model_candidate.rglob("*.onnx"))
+            onnx_files = sorted(
+                p for p in model_candidate.rglob("*.onnx") if not is_hidden_file(p)
+            )
             if not onnx_files:
                 raise RuntimeError(
                     f"No ONNX artifact found in export directory: {model_candidate}"
@@ -524,8 +528,12 @@ def _load_predictor(
             model_candidate = onnx_files[0]
         elif runtime_flavor == "tensorrt":
             engine_files = sorted(
-                list(model_candidate.rglob("*.engine"))
-                + list(model_candidate.rglob("*.trt"))
+                p
+                for p in [
+                    *model_candidate.rglob("*.engine"),
+                    *model_candidate.rglob("*.trt"),
+                ]
+                if not is_hidden_file(p)
             )
             if not engine_files:
                 raise RuntimeError(

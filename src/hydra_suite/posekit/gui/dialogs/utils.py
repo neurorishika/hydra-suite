@@ -16,6 +16,7 @@ from PySide6.QtCore import Qt
 from PySide6.QtGui import QColor, QImage, QPainter, QPen
 
 from hydra_suite.utils.conda_utils import run_conda
+from hydra_suite.utils.hidden_files import is_hidden_file
 
 
 # Settings helpers
@@ -162,7 +163,7 @@ def list_images_in_dir(images_dir: Path) -> List[Path]:
     """List images in directory with known extensions."""
     paths: List[Path] = []
     for p in sorted(images_dir.rglob("*")):
-        if p.is_file() and p.suffix.lower() in IMG_EXTS:
+        if p.is_file() and p.suffix.lower() in IMG_EXTS and not is_hidden_file(p):
             paths.append(p)
     return paths
 

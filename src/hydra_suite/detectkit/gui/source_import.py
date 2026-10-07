@@ -25,6 +25,7 @@ from hydra_suite.training.geometry_levels import (
     classify_label_line,
     scan_source_levels,
 )
+from hydra_suite.utils.hidden_files import is_hidden_file
 
 logger = logging.getLogger(__name__)
 
@@ -152,6 +153,7 @@ def _iter_coco_json_candidates(root: Path) -> list[Path]:
 
     candidates.extend(sorted(root.glob("*.coco.json")))
     candidates.extend(sorted(root.glob("*.json")))
+    candidates = [path for path in candidates if not is_hidden_file(path)]
 
     unique: list[Path] = []
     seen: set[Path] = set()
@@ -790,7 +792,7 @@ def remap_materialized_source_classes(
     if not labels_dir.is_dir():
         return
 
-    label_files = labels_dir.rglob("*.txt")
+    label_files = (p for p in labels_dir.rglob("*.txt") if not is_hidden_file(p))
     if progress is not None:
         label_files = list(label_files)
         progress(0, len(label_files))

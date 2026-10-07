@@ -17,6 +17,8 @@ import time
 from pathlib import Path
 from typing import Any, Callable
 
+from hydra_suite.utils.hidden_files import is_hidden_file
+
 from .canonical_transform import FIT_POLICY_TRAINED
 from .contracts import (
     AugmentationProfile,
@@ -219,7 +221,7 @@ def _prefit_yolo_classify_dataset(
             out_cls_dir = dest_dir / split_dir.name / cls_dir.name
             out_cls_dir.mkdir(parents=True, exist_ok=True)
             for img_path in sorted(cls_dir.iterdir()):
-                if not img_path.is_file():
+                if not img_path.is_file() or is_hidden_file(img_path):
                     continue
                 try:
                     img = cv2_bgr_loader(img_path)
@@ -361,6 +363,8 @@ def _iter_classify_samples(
         if cls_idx is None:
             continue
         for img in sorted(cls_dir.rglob("*")):
+            if is_hidden_file(img):
+                continue
             if img.suffix.lower() in {".jpg", ".jpeg", ".png", ".bmp", ".tif", ".tiff"}:
                 yield img, cls_idx
 
@@ -1530,6 +1534,7 @@ def _train_custom_classify(
         CanonicalFitTransform,
         bgr_to_rgb_pil,
         cv2_bgr_loader,
+        is_visible_image_file,
     )
 
     profile = spec.augmentation_profile
@@ -1606,14 +1611,22 @@ def _train_custom_classify(
     class_names = sorted(shared_class_to_idx.keys())
 
     train_ds = datasets.ImageFolder(
-        str(dataset_dir / "train"), transform=train_tf, loader=cv2_bgr_loader
+        str(dataset_dir / "train"),
+        transform=train_tf,
+        loader=cv2_bgr_loader,
+        is_valid_file=is_visible_image_file,
     )
     val_dir = dataset_dir / "val"
     has_validation = val_dir.exists() and any(
-        path.is_file() for path in val_dir.rglob("*")
+        path.is_file() and not is_hidden_file(path) for path in val_dir.rglob("*")
     )
     val_ds = (
-        datasets.ImageFolder(str(val_dir), transform=val_tf, loader=cv2_bgr_loader)
+        datasets.ImageFolder(
+            str(val_dir),
+            transform=val_tf,
+            loader=cv2_bgr_loader,
+            is_valid_file=is_visible_image_file,
+        )
         if has_validation
         else None
     )

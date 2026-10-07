@@ -15,6 +15,8 @@ import os
 from functools import lru_cache
 from pathlib import Path
 
+from hydra_suite.utils.hidden_files import is_hidden_file
+
 _CHUNK = 1 << 20  # 1 MiB
 _VIDEO_PROBE = 8 << 20  # head and tail bytes hashed for a video signature
 
@@ -98,7 +100,8 @@ def directory_content_id(path: str | os.PathLike[str] | None) -> str:
             return ""
         parts: list[str] = []
         for child in sorted(root.rglob("*")):
-            if not child.is_file():
+            # AppleDouble ``._*`` sidecars (SMB copies) are OS noise too.
+            if not child.is_file() or is_hidden_file(child):
                 continue
             rel = child.relative_to(root)
             if any(part in _EXCLUDED_DIR_NAMES for part in rel.parts):

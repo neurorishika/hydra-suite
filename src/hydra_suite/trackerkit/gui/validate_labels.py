@@ -11,6 +11,8 @@ from typing import List, Tuple
 
 import numpy as np
 
+from hydra_suite.utils.hidden_files import is_hidden_file
+
 logging.basicConfig(level=logging.INFO, format="%(levelname)s: %(message)s")
 logger = logging.getLogger(__name__)
 
@@ -140,7 +142,9 @@ def validate_dataset(
     Returns:
         (valid_count, invalid_count, fixed_count)
     """
-    label_files = sorted(labels_dir.glob("**/*.txt"))
+    label_files = sorted(
+        p for p in labels_dir.glob("**/*.txt") if not is_hidden_file(p)
+    )
 
     if not label_files:
         logger.warning(f"No label files found in {labels_dir}")
