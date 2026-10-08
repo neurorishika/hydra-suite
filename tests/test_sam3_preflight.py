@@ -7,6 +7,7 @@ import json
 import os
 import subprocess
 import sys
+from types import SimpleNamespace
 
 import pytest
 
@@ -357,7 +358,7 @@ def test_compact_high_cardinality_metadata_is_rejected_before_json_load(
 ):
     path = tmp_path / "many-values.json"
     path.write_text('{"images":[0,1,2,3,4,5]}', encoding="utf-8")
-    monkeypatch.setattr(pf, "_MAX_JSON_VALUES", 6)
+    monkeypatch.setattr(pf, "_metadata_parse_budget_bytes", lambda: 6 * 64)
     monkeypatch.setattr(
         pf.json,
         "loads",
@@ -371,7 +372,7 @@ def test_compact_high_cardinality_metadata_is_rejected_before_json_load(
 def test_raw_metadata_read_is_hard_capped_with_compact_fixture(tmp_path, monkeypatch):
     path = tmp_path / "raw-cap.json"
     path.write_text('{"images":[]}', encoding="utf-8")
-    monkeypatch.setattr(pf, "_MAX_COCO_METADATA_BYTES", 8)
+    monkeypatch.setattr(pf, "_metadata_parse_budget_bytes", lambda: 16)
     monkeypatch.setattr(
         pf.json,
         "loads",
@@ -399,7 +400,7 @@ def test_compact_deep_metadata_is_rejected_before_json_load(tmp_path, monkeypatc
 def test_estimated_parsed_metadata_is_capped_before_json_load(tmp_path, monkeypatch):
     path = tmp_path / "expanded.json"
     path.write_text('{"images":[{"file_name":"abcdefghij"}]}', encoding="utf-8")
-    monkeypatch.setattr(pf, "_MAX_ESTIMATED_PARSED_BYTES", 64)
+    monkeypatch.setattr(pf, "_metadata_parse_budget_bytes", lambda: 640)
     monkeypatch.setattr(
         pf.json,
         "loads",
@@ -408,6 +409,48 @@ def test_estimated_parsed_metadata_is_capped_before_json_load(tmp_path, monkeypa
 
     with pytest.raises(ValueError, match="parsed-memory"):
         pf._load_coco(path)
+
+
+def test_metadata_parse_budget_scales_with_usable_host_memory(monkeypatch):
+    import psutil
+
+    gib = 1024**3
+    host = SimpleNamespace(total=64 * gib, available=40 * gib)
+    monkeypatch.setattr(psutil, "virtual_memory", lambda: host)
+    # reserve = max(8 GiB, 15% of 64 GiB = 9.6 GiB); a quarter of the rest.
+    usable = 40 * gib - int(64 * gib * 0.15)
+    assert pf._metadata_parse_budget_bytes() == int(usable * 0.25)
+
+    host = SimpleNamespace(total=2048 * gib, available=1900 * gib)
+    big = pf._metadata_parse_budget_bytes()
+    assert big > 350 * gib
+    # The 25.6 MB / ~1.5M-value COCO file that the old fixed 16 MiB / 2M /
+    # 96 MiB caps refused fits easily on such a host.
+    assert big // 2 > 25_607_715 and big // 64 > 1_536_730
+
+
+def test_metadata_parse_budget_never_drops_below_former_fixed_bound(monkeypatch):
+    import psutil
+
+    host = SimpleNamespace(total=16 * 1024**3, available=1024**3)
+    monkeypatch.setattr(psutil, "virtual_memory", lambda: host)
+
+    assert pf._metadata_parse_budget_bytes() == 96 * 1024**2
+
+
+def test_metadata_larger_than_a_small_budget_loads_under_a_larger_one(
+    tmp_path, monkeypatch
+):
+    path = tmp_path / "scales.json"
+    path.write_text('{"images":[{"file_name":"abcdefghij"}]}', encoding="utf-8")
+
+    with pytest.raises(ValueError, match="parsed-memory"):
+        pf._load_coco(path, budget_bytes=640)
+    monkeypatch.setattr(pf, "_metadata_parse_budget_bytes", lambda: 4096)
+    coco, size = pf._load_coco(path)
+
+    assert coco["images"][0]["file_name"] == "abcdefghij"
+    assert size == path.stat().st_size
 
 
 def test_invalid_or_crowd_polygons_do_not_satisfy_example_floor(tmp_path):
