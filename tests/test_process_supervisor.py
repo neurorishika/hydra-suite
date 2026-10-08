@@ -24,6 +24,7 @@ from hydra_suite.runtime.process_supervisor import (
     OwnedProcessTree,
     ProcessTreeWatchdog,
     SupervisedSidecar,
+    WatchdogOutcome,
     WatchdogPolicy,
     WatchdogTrigger,
     WorkloadStillOwnedError,
@@ -2133,4 +2134,60 @@ def test_accelerator_oom_and_ordinary_failure_remain_distinct():
     assert ordinary.kind is ExitKind.ORDINARY_FAILURE
     assert classify_exit(ExitEvidence(-signal.SIGTERM, requested_cancel=True)).kind is (
         ExitKind.CANCELED
+    )
+
+
+class _FakeMemoryProcess:
+    def __init__(self, rss, pss=None, full_error=None):
+        self._rss = rss
+        self._pss = pss
+        self._full_error = full_error
+
+    def memory_info(self):
+        return SimpleNamespace(rss=self._rss)
+
+    def memory_full_info(self):
+        if self._full_error is not None:
+            raise self._full_error
+        if self._pss is None:
+            return SimpleNamespace(rss=self._rss, uss=self._rss // 2)
+        return SimpleNamespace(rss=self._rss, pss=self._pss)
+
+
+def test_resident_bytes_prefers_pss_so_forked_workers_are_not_multicounted():
+    # Forked dataloader workers each report the parent's shared COW pages in
+    # RSS; summing RSS over the tree overcounted 7x on a real CUDA box.
+    resident = supervisor_module._resident_bytes
+    assert resident(_FakeMemoryProcess(rss=1600, pss=200)) == 200
+    # macOS exposes no PSS: fall back to RSS.
+    assert resident(_FakeMemoryProcess(rss=1600)) == 1600
+    # smaps unreadable: fall back to RSS rather than failing observation.
+    denied = _FakeMemoryProcess(rss=1600, full_error=psutil.AccessDenied(1))
+    assert resident(denied) == 1600
+
+
+def test_hard_rss_exit_names_the_tree_limit_not_the_system_reserve():
+    hard = WatchdogOutcome(
+        WatchdogTrigger.HARD_RSS,
+        observed_tree_rss_bytes=14 * 1024**3,
+        observed_system_available_bytes=120 * 1024**3,
+        hard_kill_sent=True,
+        graceful_exit=False,
+    )
+    reserve = WatchdogOutcome(
+        WatchdogTrigger.SYSTEM_RESERVE,
+        observed_tree_rss_bytes=1024**3,
+        observed_system_available_bytes=1024**3,
+        hard_kill_sent=True,
+        graceful_exit=False,
+    )
+    hard_exit = classify_exit(ExitEvidence(-signal.SIGKILL, watchdog=hard))
+    reserve_exit = classify_exit(ExitEvidence(-signal.SIGKILL, watchdog=reserve))
+
+    assert hard_exit.kind is ExitKind.HOST_HARD_LIMIT
+    assert "reserve" not in hard_exit.message
+    assert "hard host-memory limit" in hard_exit.message
+    assert "14.0 GiB" in hard_exit.message
+    assert reserve_exit.message.startswith(
+        "Worker was killed to preserve the host memory reserve"
     )

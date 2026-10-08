@@ -184,6 +184,27 @@ class _ProcessIdentity:
         return self.probe()[0]
 
 
+def _resident_bytes(process: psutil.Process) -> int:
+    """Return a process's proportional resident memory (PSS) when available.
+
+    Summing RSS over a process tree counts copy-on-write pages shared by
+    forked children once per child: 8 Ultralytics dataloader workers forked
+    from a torch+CUDA parent summed to ~7x their PSS on a real CUDA box and
+    tripped the hard tree limit while the cgroup itself never came close.
+    PSS splits each shared page across its sharers, so the tree sum matches
+    real consumption. Platforms without PSS (macOS) and unreadable smaps fall
+    back to RSS.
+    """
+
+    try:
+        pss = getattr(process.memory_full_info(), "pss", None)
+    except (psutil.AccessDenied, OSError):
+        pss = None
+    if pss is not None:
+        return int(pss)
+    return int(process.memory_info().rss)
+
+
 class OwnedProcessTree:
     """Signal only a captured process identity or its dedicated process group."""
 
@@ -328,7 +349,7 @@ class OwnedProcessTree:
                     self._permanent_ownership_uncertain = True
                     continue
                 try:
-                    total += process.memory_info().rss
+                    total += _resident_bytes(process)
                 except (psutil.NoSuchProcess, psutil.ZombieProcess):
                     continue
                 except (psutil.AccessDenied, OSError):
@@ -1406,9 +1427,17 @@ def classify_exit(evidence: ExitEvidence) -> ClassifiedExit:
                 ExitKind.HOST_HARD_LIMIT,
                 "Worker was killed because process-tree observation failed",
             )
+        if evidence.watchdog.trigger is WatchdogTrigger.HARD_RSS:
+            return ClassifiedExit(
+                ExitKind.HOST_HARD_LIMIT,
+                "Worker crossed its hard host-memory limit (process tree used "
+                f"{evidence.watchdog.observed_tree_rss_bytes / 1024**3:.1f} GiB) "
+                "and was killed",
+            )
         return ClassifiedExit(
             ExitKind.HOST_HARD_LIMIT,
-            "Worker was killed to preserve the host memory reserve",
+            "Worker was killed to preserve the host memory reserve (system "
+            f"available fell to {evidence.watchdog.observed_system_available_bytes / 1024**3:.1f} GiB)",
         )
     if evidence.requested_cancel:
         return ClassifiedExit(ExitKind.CANCELED, "Canceled by the user")
