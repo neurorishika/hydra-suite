@@ -69,6 +69,7 @@ OUTPUT_MAX_LINES = 512
 OUTPUT_MAX_CHARS = 256 * 1024
 POLL_SECONDS = 0.1
 MAX_PROCESSES = 512
+WORKER_HOST_BYTES = GiB // 2
 
 
 def _accelerator(device: str):
@@ -160,6 +161,14 @@ def _estimate_host_bytes(spec) -> int:
     model = Path(str(spec.base_model)).expanduser()
     if model.is_file():
         estimate += min(model.stat().st_size * 6, 8 * GiB)
+    # Dataloader workers: Ultralytics runs `workers` train processes and
+    # `2 * workers` val processes, each capped at the CPU count. Measured on
+    # courtship (yolo26x-seg, imgsz 1024): <= 0.25 GiB PSS per loader process
+    # after one epoch; the allowance doubles that for growth over epochs.
+    workers = max(0, int(params.workers))
+    cpus = os.cpu_count() or 1
+    loader_processes = min(cpus, workers) + min(cpus, 2 * workers)
+    estimate += loader_processes * WORKER_HOST_BYTES
     if bool(params.cache):
         dataset = Path(spec.derived_dataset_dir).expanduser()
         count = sum(
@@ -211,6 +220,11 @@ def _run_ultralytics_once(
             "alone rather than overstating the capacity of the set."
         )
     estimate = _estimate_host_bytes(spec)
+    # Dataloader workers hold host memory only; keep them out of the
+    # accelerator estimate so worker count never refuses a GPU admission.
+    accelerator_estimate = _estimate_host_bytes(
+        replace(spec, hyperparams=replace(spec.hyperparams, workers=0))
+    )
     policy = ResourcePolicy()
 
     def observe():
@@ -242,7 +256,7 @@ def _run_ultralytics_once(
 
     initial = observe()
     budget = evaluate_resource_request(
-        request(estimate if cuda is not None else 0), initial, policy
+        request(accelerator_estimate if cuda is not None else 0), initial, policy
     )
     admission_warnings: list[str] = []
     if (

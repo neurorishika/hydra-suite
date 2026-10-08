@@ -933,3 +933,61 @@ def test_missing_device_telemetry_before_launch_is_still_refused(monkeypatch, tm
     assert result["success"] is False
     assert "CUDA device" in result["error_message"]
     assert not any(str(item).startswith("GPU-") for item in _asked)
+
+
+def test_host_estimate_budgets_train_and_val_dataloader_workers(monkeypatch, tmp_path):
+    """yolo26x-seg, imgsz 1024, batch 1, workers 8 peaked at 7.15 GiB PSS on
+    courtship (parent 3.3 GiB + 24 loader processes up to 0.25 GiB each, the
+    val loader running 2x workers). The worker-blind 4 GiB estimate killed it."""
+    from dataclasses import replace
+
+    import hydra_suite.training.ultralytics_supervisor as mod
+
+    monkeypatch.setattr(mod.os, "cpu_count", lambda: 32)
+    spec = _auto_spec(tmp_path, 1, imgsz=1024)
+    eight = replace(spec, hyperparams=replace(spec.hyperparams, workers=8))
+    assert mod._estimate_host_bytes(eight) >= int(7.15 * mod.GiB * 1.5)
+    assert mod._estimate_host_bytes(eight) > mod._estimate_host_bytes(spec)
+    # Ultralytics caps loader workers at the CPU count.
+    monkeypatch.setattr(mod.os, "cpu_count", lambda: 2)
+    assert mod._estimate_host_bytes(eight) < int(7.15 * mod.GiB)
+
+
+def test_worker_allowance_stays_out_of_the_accelerator_estimate(monkeypatch, tmp_path):
+    from dataclasses import replace
+
+    import hydra_suite.training.ultralytics_supervisor as mod
+
+    seen = []
+    real = mod.evaluate_resource_request
+
+    def spy(request, observation, policy):
+        seen.append(request)
+        return real(request, observation, policy)
+
+    monkeypatch.setattr(mod.os, "cpu_count", lambda: 32)
+    monkeypatch.setattr(mod, "evaluate_resource_request", spy)
+    monkeypatch.setattr(
+        mod,
+        "_accelerator",
+        lambda device: (
+            mod.AcceleratorKind.CUDA,
+            SimpleNamespace(
+                name="fake", uuid="GPU-x", free_bytes=1 << 40, total_bytes=1 << 40
+            ),
+        ),
+    )
+    monkeypatch.setattr(mod, "SupervisedSidecar", _RaisingSidecar)
+    spec = _auto_spec(tmp_path, 1, imgsz=1024)
+    spec = replace(spec, hyperparams=replace(spec.hyperparams, workers=8))
+    mod._run_ultralytics_once(["true"], spec)
+    phase = seen[0].phases[0]
+    assert phase.host_peak_bytes == mod._estimate_host_bytes(spec)
+    no_workers = replace(spec, hyperparams=replace(spec.hyperparams, workers=0))
+    assert phase.accelerator_peak_bytes == mod._estimate_host_bytes(no_workers)
+    assert phase.accelerator_peak_bytes < phase.host_peak_bytes
+
+
+class _RaisingSidecar:
+    def __init__(self, *args, **kwargs):
+        raise RuntimeError("stop before launch")
