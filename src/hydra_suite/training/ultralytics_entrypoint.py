@@ -2,6 +2,7 @@
 
 from __future__ import annotations
 
+import os
 from typing import Any
 
 
@@ -33,8 +34,65 @@ def install_mps_task_aligned_assigner_fallback(assigner_cls: type) -> bool:
     return True
 
 
+def _uuid_tokens(mask: str) -> list[str]:
+    tokens = [token.strip() for token in mask.split(",") if token.strip()]
+    if not tokens or not all(token.upper().startswith("GPU-") for token in tokens):
+        return []
+    return [token[4:].lower() for token in tokens]
+
+
+def latch_cuda_visible_devices(torch_module: Any = None) -> bool:
+    """Make the supervisor's GPU pin survive Ultralytics' device selection.
+
+    Ultralytics 8.4.45 ``select_device`` overwrites ``CUDA_VISIBLE_DEVICES``
+    with the requested ordinal; if CUDA is not yet initialised, ``device=0``
+    then trains on PHYSICAL GPU 0 (reproduced on a 10-GPU box). Until now the
+    pin survived only because importing ``hydra_suite.utils.gpu_utils`` calls
+    ``torch.cuda.is_available()``, which happens to initialise the driver
+    first. CUDA reads the mask once, at first initialisation; initialising
+    here, while the pin is still in place, makes every later rewrite inert on
+    purpose. When the mask names UUIDs, each visible device is checked against
+    it so a regression fails loudly instead of training on someone else's GPU.
+    """
+
+    mask = os.environ.get("CUDA_VISIBLE_DEVICES")
+    if mask is None or not mask.strip():
+        return False
+    if torch_module is None:
+        import torch as torch_module
+    expected = _uuid_tokens(mask)
+    if not torch_module.cuda.is_available():
+        if expected:
+            # Ultralytics would rewrite the mask to an ordinal and reach a GPU
+            # the supervisor never admitted.
+            raise RuntimeError(
+                f"CUDA_VISIBLE_DEVICES={mask} pins a GPU but torch sees none"
+            )
+        return False
+    torch_module.cuda.init()
+    if not expected:
+        return True
+    count = torch_module.cuda.device_count()
+    observed = [
+        str(torch_module.cuda.get_device_properties(index).uuid).lower()
+        for index in range(count)
+    ]
+    matched = len(observed) == len(expected) and all(
+        uuid.startswith(token) or token.startswith(uuid)
+        for uuid, token in zip(observed, expected)
+    )
+    if not matched:
+        raise RuntimeError(
+            "CUDA device pin was not honoured: CUDA_VISIBLE_DEVICES="
+            f"{mask} but torch sees {observed or 'no devices'}"
+        )
+    return True
+
+
 def main() -> None:
     """Install the compatibility shim before dispatching the Ultralytics CLI."""
+    latch_cuda_visible_devices()
+
     from ultralytics.cfg import entrypoint
     from ultralytics.utils import LOGGER
     from ultralytics.utils.tal import TaskAlignedAssigner

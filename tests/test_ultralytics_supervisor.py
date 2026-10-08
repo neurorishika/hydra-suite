@@ -684,6 +684,50 @@ def test_a_bare_ordinal_is_classified_cuda_and_gets_a_uuid_pin(monkeypatch, tmp_
     assert launched[0].launch.environment["CUDA_VISIBLE_DEVICES"] == "GPU-1111"
 
 
+def test_a_pinned_run_passes_the_mask_relative_ordinal(monkeypatch, tmp_path):
+    """Under a one-UUID mask the pinned GPU is ordinal 0; device=1 would name a
+    GPU the child cannot see (8.4.45 used it to bypass the pin entirely)."""
+
+    import hydra_suite.training.ultralytics_supervisor as mod
+    from hydra_suite.training.sam3_lora import preflight
+
+    monkeypatch.setattr(
+        preflight, "_probe_cuda_device", lambda dev: _cuda_device(40 * 1024**3)
+    )
+    monkeypatch.setattr(
+        mod,
+        "probe_resources",
+        _fake_probe_resources((256 * 1024**3, 200 * 1024**3), gpu_free=40 * 1024**3),
+    )
+    launched = []
+    _launch_sidecar(monkeypatch, mod, launched)
+    spec = _spec(tmp_path)
+    spec.device = "cuda:1"
+    spec.hyperparams = TrainingHyperParams(batch=2, imgsz=64, workers=0)
+    result = mod.run_ultralytics_supervised(
+        ["trainer", "device=cuda:1", "epochs=1"], spec, run_dir=tmp_path
+    )
+    assert result["success"] is True
+    command = list(launched[0].launch.command)
+    assert launched[0].launch.environment["CUDA_VISIBLE_DEVICES"] == "GPU-1111"
+    assert [arg for arg in command if arg.startswith("device=")] == ["device=0"]
+    assert "epochs=1" in command
+
+
+def test_the_device_rewrite_never_adds_an_argument():
+    import hydra_suite.training.ultralytics_supervisor as mod
+
+    probe = (
+        "python",
+        "-m",
+        "hydra_suite.training.yolo_autobatch",
+        "--device",
+        "cuda:0",
+    )
+    assert mod._command_with_device(probe, "0") == probe
+    assert mod._command_with_device(("t", "device=2,3"), "0") == ("t", "device=0")
+
+
 def test_a_multi_gpu_ordinal_resolves_against_the_first_device(monkeypatch, tmp_path):
     import hydra_suite.training.ultralytics_supervisor as mod
     from hydra_suite.training.sam3_lora import preflight
