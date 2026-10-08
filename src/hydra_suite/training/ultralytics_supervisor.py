@@ -215,9 +215,9 @@ def _run_ultralytics_once(
         and log_cb is not None
     ):
         log_cb(
-            f"containment: {spec.device} names several devices; accounting and "
-            f"the device pin resolve against {normalize_cuda_device(spec.device)} "
-            "alone rather than overstating the capacity of the set."
+            f"WARNING: device={spec.device} names several devices; training is "
+            f"pinned to {normalize_cuda_device(spec.device)} alone (multi-GPU "
+            "training is not supported yet), and accounting covers that device."
         )
     estimate = _estimate_host_bytes(spec)
     # Dataloader workers hold host memory only; keep them out of the
@@ -322,6 +322,9 @@ def _run_ultralytics_once(
         cuda_probe_device = normalize_cuda_device(spec.device)
         cuda_uuid = cuda.uuid
         environment["CUDA_VISIBLE_DEVICES"] = cuda_uuid
+        # The child sees only the pinned GPU, so it is ordinal 0 there. The
+        # entrypoint latches the mask before Ultralytics can rewrite it.
+        command = _command_with_device(command, "0")
 
         def accelerator_probe() -> int:
             from hydra_suite.training.sam3_lora.preflight import _probe_cuda_device
@@ -467,6 +470,19 @@ def _write_batch_resolution(
     except OSError as exc:
         if log_cb is not None:
             log_cb(f"auto batch: could not persist the resolution: {exc}")
+
+
+def _command_with_device(command: Sequence[str], device: str) -> tuple[str, ...]:
+    """Replace an existing Ultralytics ``device=`` argument.
+
+    Never adds one: a command without it (``auto``, or the autobatch child,
+    which takes ``--device``) already selects ordinal 0 of the mask.
+    """
+
+    return tuple(
+        f"device={device}" if str(raw).startswith("device=") else str(raw)
+        for raw in command
+    )
 
 
 def _command_with_pressure(
