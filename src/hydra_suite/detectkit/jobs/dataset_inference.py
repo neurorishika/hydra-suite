@@ -36,20 +36,31 @@ def preview_settings_dict(
     Every resolved tiling value -- including the merge policy/metric and the
     tiling imgsz -- enters ``prediction_cache_key``, so recalibrating the
     model's sidecar invalidates cached predictions (Review Focus 4).
+
+    With slicing OFF none of the tiling reaches inference, so none of it is
+    keyed (m1): a recalibrated sidecar must not invalidate a non-sliced cache.
     """
-    return {
+    settings = {
         "inference_kind": str(inference_kind),
         "device": str(device or "auto"),
         "confidence_threshold": float(confidence_threshold),
         "crop_pad_ratio": float(crop_pad_ratio),
         "stage2_image_size": int(stage2_image_size),
-        "slice_settings": tiling.slice_settings.to_dict(),
+        "slice_settings": {"enabled": False},
         # Kept for back-compat; the sliced branch prefers ``slice_imgsz``.
         "imgsz_obb_direct": int(tiling.imgsz),
-        "slice_imgsz": int(tiling.imgsz),
-        "slice_merge_policy": str(tiling.merge_policy),
-        "slice_merge_metric": str(tiling.merge_metric),
     }
+    if not tiling.slice_settings.enabled:
+        return settings
+    settings.update(
+        {
+            "slice_settings": tiling.slice_settings.to_dict(),
+            "slice_imgsz": int(tiling.imgsz),
+            "slice_merge_policy": str(tiling.merge_policy),
+            "slice_merge_metric": str(tiling.merge_metric),
+        }
+    )
+    return settings
 
 
 class DatasetInferenceWorker(ContainmentRecoveryMixin, BaseWorker):

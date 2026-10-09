@@ -234,3 +234,41 @@ def test_preview_runs_at_the_profile_fraction_exactly(tmp_path):
     # A legacy pixel project keeps its median(px)/640 scale.
     legacy = SliceTrainingSettings.from_dict({"target_sizes": [64.0, 96.0, 128.0]})
     assert sliced_preview_fraction(legacy) == 0.15
+
+
+def test_disabled_preview_key_ignores_the_sidecar(tmp_path):
+    """m1: recalibrating must not invalidate a NON-sliced preview cache."""
+    from hydra_suite.detectkit.jobs.dataset_inference import preview_settings_dict
+
+    disabled = SliceTrainingSettings(enabled=False)
+    plain = tmp_path / "a"
+    plain.mkdir()
+    profiled = tmp_path / "b"
+    profiled.mkdir()
+    a = preview_settings_dict(
+        resolve_preview_tiling(
+            _model(plain, {"training_geometry": GEOM}),
+            disabled,
+            project_imgsz=640,
+            override=None,
+        )
+    )
+    b = preview_settings_dict(
+        resolve_preview_tiling(
+            _model(
+                profiled,
+                upsert_slice_profile(
+                    {"training_geometry": GEOM},
+                    name="P",
+                    settings={"overlap": 0.4, "merge_policy": "nms"},
+                    primary=True,
+                ),
+            ),
+            disabled,
+            project_imgsz=640,
+            override=None,
+        )
+    )
+    assert a == b
+    assert a["slice_settings"] == {"enabled": False}
+    assert not any(key.startswith("slice_") and key != "slice_settings" for key in a)
