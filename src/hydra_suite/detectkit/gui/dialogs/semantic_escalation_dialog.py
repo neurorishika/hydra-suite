@@ -82,12 +82,14 @@ def _format_tile_label(
         )
     if fraction is None:
         return "full frame — tiling off by choice.", ""
-    text = (
-        "full frame — no reference body size is known, so tiling is off. "
-        "Enter one above (or set one in project settings) for much "
-        "better small-object recall."
+    # Short visible line (no wrapping, so the row never squeezes its
+    # neighbours); the guidance lives in the tooltip.
+    return (
+        "Tiling off — enter a body size",
+        "Full frame: no reference body size is known, so tiling is off. Enter "
+        "one above (or set one in project settings) for much better "
+        "small-object recall.",
     )
-    return text, text
 
 
 class SemanticEscalationDialog(DetectKitDialog):

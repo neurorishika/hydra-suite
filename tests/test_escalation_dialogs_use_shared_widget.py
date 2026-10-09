@@ -183,3 +183,44 @@ def test_sam2_full_frame_round_trip_through_a_calibration_choice():
     point.tile_fraction, point.tile_px = 0.1, 400
     dialog.apply_calibration_choice(point)
     assert dialog._tile_label.text() == "400 px (40 px / 0.1)"
+
+
+def _rows_do_not_collide(dialog) -> None:
+    from PySide6.QtCore import QPoint, QRect
+
+    dialog.show()
+    for _ in range(4):
+        QApplication.processEvents()
+    label = dialog._tile_label
+    assert label.height() >= label.heightForWidth(label.width())
+    rows = {
+        "fraction": dialog._tile_fraction,
+        "body": dialog._reference_body,
+        "label": label,
+        "overlap": dialog._tiling.spin_slice_overlap,
+    }
+    rects = {
+        name: QRect(widget.mapTo(dialog, QPoint(0, 0)), widget.size())
+        for name, widget in rows.items()
+    }
+    names = list(rects)
+    for i, first in enumerate(names):
+        for second in names[i + 1 :]:
+            assert not rects[first].intersects(rects[second]), (first, second)
+    dialog.hide()
+
+
+@pytest.mark.parametrize("body", [0.0, 82.2])
+def test_sam3_tiling_rows_never_overlap(available_checkpoint, body):
+    dialog = _sam3(body, body_px_origin="")
+    if body == 0.0:
+        assert "enter a body size" in dialog._tile_label.text().lower()
+        assert "small-object recall" in dialog._tile_label.toolTip()
+    _rows_do_not_collide(dialog)
+
+
+@pytest.mark.parametrize("body", [0.0, 40.0])
+def test_sam2_tiling_rows_never_overlap(body):
+    dialog = _sam2(reference_body_px=body)
+    dialog._tile_fraction.setValue(0.1)
+    _rows_do_not_collide(dialog)

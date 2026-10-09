@@ -67,7 +67,10 @@ def _format_tile_label(
         return f"{tile_px} px ({body_px:.0f} px / {fraction:g})", ""
     if fraction is None:
         return "full frame — tiling off.", ""
-    return "full frame — no body size is known, so tiling is off.", ""
+    return (
+        "Tiling off — enter a body size",
+        "Full frame: no body size is known, so tiling is off.",
+    )
 
 
 class EscalateSam2Dialog(DetectKitDialog):

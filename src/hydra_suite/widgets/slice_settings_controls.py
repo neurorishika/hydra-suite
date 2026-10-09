@@ -182,7 +182,11 @@ def build_controls(w) -> None:
         0, SLICE_SIZE_MAX, tile_tip.format("height"), "model input"
     )
     w.lbl_slice_tile_size = QLabel()
-    w.lbl_slice_tile_size.setWordWrap(role in ESCALATE_ROLES)
+    # Never word-wrapped: a wrapped label's height-for-width is not part of
+    # the grid's minimum, so it would overlap its neighbours. Hosts keep the
+    # visible text short (explicit newlines are fine) and put prose in the
+    # tooltip.
+    w.lbl_slice_tile_size.setWordWrap(False)
     if role in ESCALATE_ROLES:
         w.lbl_slice_tile_size.setMinimumWidth(180)
     w.lbl_slice_tile_badge = badge_label()
