@@ -10,13 +10,26 @@ canonical-only. Builders stamp only what the input states -- never defaults.
 
 from __future__ import annotations
 
+import json
+import logging
 import math
+from dataclasses import dataclass, field, replace
+from pathlib import Path
 from typing import Any
 
 from hydra_suite.utils.slice_geometry import LEGACY_TARGET_SIZE_IMGSZ
-from hydra_suite.utils.tiling_spec import canonicalize, operating_fraction
+from hydra_suite.utils.tiling_spec import (
+    FRACTION_MAX,
+    FRACTION_MIN,
+    TilingSpec,
+    canonicalize,
+    operating_fraction,
+)
 
-from .geometry_drift import stamped_object_tile_fraction
+from .geometry_drift import stamped_object_tile_fraction, stamped_tile_px_set
+from .slice_meta import available_slice_profiles, read_slice_meta, training_geometry
+
+logger = logging.getLogger(__name__)
 
 MODEL_FAMILIES = ("yolo", "sam3")
 # SAM3 build manifests carry build bookkeeping; only these survive into the stamp.
@@ -28,6 +41,20 @@ _SAM3_PRESENT_ONLY = (
     "slice_height",
     "overlap",
     "min_area_ratio",
+)
+_FAMILY_FRAGMENT = {"yolo": "drop", "sam3": "crowd"}
+_SAM3_META_EXTRAS = (
+    "full_frame_mix",
+    "scale_range_px",
+    "scale_grouped_batching",
+    "augmentation",
+)
+_GEOMETRY_ONLY_KEYS = (
+    "imgsz",
+    "tile_px_set",
+    "train_tile_px",
+    "train_tile_px_set",
+    "prefill_train_tile_px",
 )
 
 
@@ -129,3 +156,117 @@ def training_geometry_from_sam3_manifest(
         geometry["tile_px_set"] = [[w, h] for w, h in tiles]
     geometry.update({k: extras[k] for k in _SAM3_EXTRAS if k in extras})
     return geometry
+
+
+def sam3_meta_path(model_path: str | Path) -> Path:
+    """``<artifact>.sam3_meta.json`` (append-style, as publish_worker writes it)."""
+    path = Path(model_path)
+    return path.with_name(path.name + ".sam3_meta.json")
+
+
+def _read_json(path: Path) -> dict[str, Any] | None:
+    try:
+        data = json.loads(path.read_text(encoding="utf-8"))
+    except Exception:
+        return None
+    return data if isinstance(data, dict) else None
+
+
+def _imgsz(raw: Any) -> int:
+    value = _real(raw)
+    return int(value) if value is not None and value >= 1 else 0
+
+
+@dataclass(frozen=True)
+class TilingMeta:
+    """A model's SAHI training geometry and calibration profiles, any family."""
+
+    model_family: str
+    source: str  # "slice_meta" | "sam3_meta"
+    training: TilingSpec | None
+    imgsz: int
+    tile_px_set: tuple[tuple[int, int], ...]
+    operating_fraction: float | None
+    extras: dict[str, Any] = field(default_factory=dict)
+    primary_profile_id: str = ""
+    profiles: tuple[dict[str, Any], ...] = ()
+
+
+def read_tiling_meta(model_path: str | Path) -> TilingMeta | None:
+    """The ONE reader for a model's SAHI geometry and calibration profiles. Never raises."""
+    try:
+        return _read_tiling_meta(model_path)
+    except Exception:
+        logger.warning("Unreadable SAHI metadata beside %s", model_path, exc_info=True)
+        return None
+
+
+def _stamped_tiles(geometry: dict[str, Any]) -> tuple[tuple[int, int], ...]:
+    if geometry.get("tile_px_set") is not None:
+        return tuple(_tile_pairs(geometry["tile_px_set"]))
+    try:
+        stamped = stamped_tile_px_set(geometry) or ()
+    except Exception:  # e.g. OverflowError on a huge int: no usable claim
+        stamped = ()
+    return tuple(_tile_pairs([list(pair) for pair in stamped]))
+
+
+def _read_tiling_meta(model_path: str | Path) -> TilingMeta | None:
+    slice_doc = read_slice_meta(model_path) or {}
+    geometry = training_geometry(slice_doc) if slice_doc else {}
+    family = slice_doc.get("model_family") or "yolo"
+    source = "slice_meta"
+    if not geometry:
+        sam3_doc = _read_json(sam3_meta_path(model_path))
+        if sam3_doc:
+            geometry, family, source = sam3_doc, "sam3", "sam3_meta"
+    if not geometry and not slice_doc:
+        return None
+    if not isinstance(family, str) or family not in MODEL_FAMILIES:
+        logger.warning(
+            "Unknown SAHI model_family %r beside %s; reading as yolo",
+            family,
+            model_path,
+        )
+        family = "yolo"
+
+    training: TilingSpec | None = None
+    operating: float | None = None
+    extras: dict[str, Any] = {}
+    tiles: tuple[tuple[int, int], ...] = ()
+    imgsz = 0
+    if geometry:
+        legacy = LEGACY_TARGET_SIZE_IMGSZ if family == "yolo" else None
+        canonical, extras = canonicalize(geometry, legacy_px_imgsz=legacy)
+        try:
+            training = TilingSpec.from_canonical(canonical)
+        except Exception:
+            logger.warning("Invalid SAHI geometry beside %s", model_path, exc_info=True)
+            training = None
+        if training is not None:
+            training = replace(training, enabled=True)
+            if "fragment_policy" not in canonical:
+                training = replace(training, fragment_policy=_FAMILY_FRAGMENT[family])
+            operating = canonical.get("operating_fraction")
+            if operating is None:
+                operating = training.operating_fraction()
+            else:
+                operating = max(FRACTION_MIN, min(FRACTION_MAX, float(operating)))
+        imgsz = _imgsz(geometry.get("imgsz"))
+        tiles = _stamped_tiles(geometry)
+        if source == "sam3_meta":
+            extras = {k: extras[k] for k in _SAM3_META_EXTRAS if k in extras}
+        for key in _GEOMETRY_ONLY_KEYS:
+            extras.pop(key, None)
+
+    return TilingMeta(
+        model_family=family,
+        source=source,
+        training=training,
+        imgsz=imgsz,
+        tile_px_set=tiles,
+        operating_fraction=operating,
+        extras=extras,
+        primary_profile_id=str(slice_doc.get("primary_profile_id", "") or ""),
+        profiles=tuple(available_slice_profiles(slice_doc)),
+    )
