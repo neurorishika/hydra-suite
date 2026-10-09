@@ -146,3 +146,68 @@ def test_detections_carry_frame_space_polygons_and_class_ids(direct_obb_fixture)
         assert detection.polygon_px.ndim == 2 and detection.polygon_px.shape[1] == 2
         assert detection.polygon_px.shape[0] >= 3
         assert isinstance(detection.class_id, int)
+
+
+@pytest.mark.parametrize(
+    ("task", "expected"), [("segment", True), ("obb", False), ("detect", False)]
+)
+def test_only_a_segment_model_asks_for_native_mask_polygons(tmp_path, task, expected):
+    model = tmp_path / "m.pt"
+    model.write_bytes(b"weights")
+    config = build_calibration_config(
+        str(model),
+        slice_params=SLICE_PARAMS,
+        max_targets=64,
+        confidence=0.35,
+        runtime_tier="cpu",
+        model_task=task,
+    )
+    assert config.obb.emit_native_geometry is expected
+
+
+def _raw_part(confs, polygon_tag):
+    import torch
+
+    from hydra_suite.core.inference.stages.obb import _RawOBBTensors
+
+    n = len(confs)
+    return _RawOBBTensors(
+        frame_idx=0,
+        xywhr=torch.ones((n, 5)),
+        corners=torch.zeros((n, 4, 2)),
+        conf=torch.tensor(confs, dtype=torch.float32),
+        polygons=[np.full((3, 2), polygon_tag + i, np.float32) for i in range(n)],
+    )
+
+
+def test_reservoir_trim_keeps_native_polygons_aligned_to_surviving_rows():
+    from hydra_suite.core.inference.stages.obb import _bound_compact_parts
+
+    parts = [
+        _raw_part([0.9, 0.1, 0.2], 0),
+        _raw_part([0.8, 0.3, 0.4], 10),
+        _raw_part([0.7, 0.5, 0.6], 20),
+    ]
+    (trimmed,) = _bound_compact_parts(parts, 0, 2)
+    assert trimmed.polygons is not None
+    assert len(trimmed.polygons) == int(trimmed.conf.shape[0]) == 2
+    # the two highest confidences are 0.9 (part 0, row 0) and 0.8 (part 1, row 0)
+    tags = sorted(float(p[0, 0]) for p in trimmed.polygons)
+    assert tags == [0.0, 10.0]
+
+
+def test_concat_raw_drops_polygons_rather_than_misalign_them():
+    import torch
+
+    from hydra_suite.core.inference.stages.obb import _RawOBBTensors
+    from hydra_suite.core.inference.stages.slicing_cuda import _concat_raw
+
+    bare = _RawOBBTensors(
+        frame_idx=0,
+        xywhr=torch.ones((2, 5)),
+        corners=torch.zeros((2, 4, 2)),
+        conf=torch.ones(2),
+    )
+    merged = _concat_raw([_raw_part([0.5, 0.4], 0), bare], 0)
+    assert merged.polygons is None
+    assert int(merged.conf.shape[0]) == 4

@@ -52,13 +52,17 @@ def _concat_raw(parts, frame_idx: int):
             dim=0,
         ),
         # Native contours are a ragged host list, so they concatenate as a
-        # plain list rather than a tensor. `None` only when NO tile carried
-        # them (the normal tracking case); a tile that legitimately produced
-        # no polygons for its own rows contributes nothing, which keeps the
-        # list aligned with the concatenated tensor rows above.
+        # plain list rather than a tensor. Kept only when EVERY non-empty tile
+        # carries one per row (`None` in the normal tracking case); a tile
+        # with rows but no contours would shift every later contour onto the
+        # wrong row, so the whole list is dropped instead -- matching
+        # `merge_obb_results`.
         polygons=(
-            [poly for p in non_empty for poly in (p.polygons or [])]
-            if any(p.polygons is not None for p in non_empty)
+            [poly for p in non_empty for poly in p.polygons]
+            if all(
+                p.polygons is not None and len(p.polygons) == p.xywhr.shape[0]
+                for p in non_empty
+            )
             else None
         ),
     )
