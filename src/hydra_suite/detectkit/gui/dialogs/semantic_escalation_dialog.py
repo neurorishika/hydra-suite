@@ -293,6 +293,37 @@ class SemanticEscalationDialog(DetectKitDialog):
         self._tile_fraction.setValue(
             _saved_value(saved, "tile_fraction", SEMANTIC_TILE_FRACTION_SEED, float)
         )
+        # F3: when nothing saved applies to the opening variant, open where a
+        # headless `detectkit escalate sam3` would run -- the SAME resolver.
+        # Rung 4 (seed + this body chain) is exactly the historical opening
+        # state, so only a calibration or a model stamp changes anything.
+        opening_variant = self._variant.currentText()
+        if not (
+            "tile_fraction" in saved
+            and str(saved.get("variant") or "") in ("", opening_variant)
+        ):
+            from hydra_suite.detectkit.jobs.semantic_escalation import (
+                default_semantic_tiling,
+            )
+
+            opening = default_semantic_tiling(
+                project,
+                opening_variant,
+                body_chain_px=float(reference_body_px or 0.0),
+            )
+            if opening["origin"] in ("calibration", "stamped"):
+                self._tile_fraction.setValue(float(opening["tile_fraction"]))
+                self._reference_body.setValue(float(opening["reference_body_px"]))
+                self._body_origin_label.setText(
+                    "the model's calibration"
+                    if opening["origin"] == "calibration"
+                    else (
+                        self._body_origin_label.text()
+                        if float(reference_body_px or 0.0) > 0
+                        else "stamped on the model"
+                    )
+                )
+                self._body_origin_label.setToolTip(self._body_origin_label.text())
         self._tile_fraction.setToolTip(
             "Tile size = reference body size / this fraction. The default is a "
             "starting guess from one dataset, not a tuned value — calibrate "

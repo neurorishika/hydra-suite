@@ -126,6 +126,7 @@ detectkit escalate sam2 --project DIR [--source NAME]... [--variant VARIANT]
 detectkit escalate sam3 --project DIR --prompt TEXT [--class-name CLASS]
                         [--source NAME]... [--variant sam3|<finetuned key>]
                         [--confidence 0.35] [--max-instances 0]
+                        [--tile-fraction F] [--reference-body-px PX]
                         [--device auto|cuda|mps|cpu] [--overwrite]
 ```
 
@@ -140,6 +141,8 @@ detectkit escalate sam3 --project DIR --prompt TEXT [--class-name CLASS]
 | `--class-name` | SAM3 only: project class the staged instances are labelled as (default: the prompt). |
 | `--confidence` | SAM3 only: score threshold (default `0.35`). It can be changed later in review without re-running. |
 | `--max-instances` | SAM3 only: cap per image; `0` means unlimited. |
+| `--tile-fraction` | Tile size = body size / this fraction; `0` means full frame. Default: what the DetectKit dialog would open with for this variant (saved settings, then the calibration, then the model's stamped scale, then the starting guess at the project's body size). |
+| `--reference-body-px` | Typical longest animal side in pixels. Default: the dialog's value, then the project's sliced-training reference, then the median of your labels. |
 
 Examples:
 

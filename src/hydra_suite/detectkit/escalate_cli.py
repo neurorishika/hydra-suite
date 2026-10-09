@@ -92,6 +92,21 @@ def build_parser() -> argparse.ArgumentParser:
     )
     s3.add_argument("--confidence", type=float, default=0.35)
     s3.add_argument("--max-instances", type=int, default=0, help="0 = unlimited")
+    s3.add_argument(
+        "--tile-fraction",
+        type=float,
+        default=None,
+        help="tile = body size / this fraction (0 = full frame). Default: what "
+        "the DetectKit dialog would open with (saved -> calibrated -> the "
+        "model's stamp -> the seed at the project's body size).",
+    )
+    s3.add_argument(
+        "--reference-body-px",
+        type=float,
+        default=None,
+        help="typical longest animal side in px (default: the dialog's value, then "
+        "the project's sliced-training reference, then the label median)",
+    )
     return p
 
 
@@ -156,6 +171,50 @@ def _sam2_tiling(project, args: argparse.Namespace) -> dict:
                 [s for s in sources if has_polygon_frames(s)] or sources
             )
     return {"reference_body_px": float(body or 0.0), "tile_fraction": fraction}
+
+
+def _sam3_tiling(project, args: argparse.Namespace) -> dict:
+    """The SAM3 tiling for this run: explicit flags, else the dialog's default.
+
+    The default comes from ``default_semantic_tiling``, the same function the
+    dialog opens with, so a headless run stages what the GUI would (F3).
+    """
+    from hydra_suite.detectkit.jobs.calibration_frames import (
+        has_polygon_frames,
+        quick_median_body_px,
+    )
+    from hydra_suite.detectkit.jobs.semantic_escalation import default_semantic_tiling
+
+    base = default_semantic_tiling(project, args.variant)
+    fraction = (
+        base["tile_fraction"] if args.tile_fraction is None else args.tile_fraction
+    )
+    fraction = fraction if fraction and fraction > 0 else None
+    body = (
+        float(base["reference_body_px"] or 0.0)
+        if args.reference_body_px is None
+        else float(args.reference_body_px)
+    )
+    if body <= 0 and args.tile_fraction is not None and fraction is not None:
+        # An explicit --tile-fraction with no known body size: resolve one the
+        # way the dialog prefills it (same chain as _sam2_tiling).
+        slice_settings = getattr(project, "slice_settings", None)
+        body = float(getattr(slice_settings, "reference_body_px", 0.0) or 0.0)
+        if body <= 0:
+            sources = list(project.sources)
+            body = quick_median_body_px(
+                [s for s in sources if has_polygon_frames(s)] or sources
+            )
+    origin = "flags" if args.tile_fraction is not None else base["origin"]
+    return {
+        "reference_body_px": float(body or 0.0),
+        "tile_fraction": fraction,
+        "overlap": float(base["overlap"]),
+        "merge_iou": float(base["merge_iou"]),
+        "area_min_px2": float(base["area_min_px2"]),
+        "area_max_px2": float(base["area_max_px2"]),
+        "origin": origin,
+    }
 
 
 def run_sam2(args: argparse.Namespace) -> int:
@@ -248,6 +307,8 @@ def run_sam3(args: argparse.Namespace) -> int:
     project = _open(args.project)
     sources = _selected(project, args.source)
     class_name = _resolve_class_name(project, args.class_name, args.prompt)
+    tiling = _sam3_tiling(project, args)
+    origin = tiling.pop("origin")
     payload = {
         "project_dir": str(Path(project.project_dir).expanduser().resolve()),
         "source_names": [s.name for s in sources],
@@ -261,9 +322,21 @@ def run_sam3(args: argparse.Namespace) -> int:
             "confidence": float(args.confidence),
             "max_instances": int(args.max_instances),
             "overwrite": bool(args.overwrite),
+            # SemanticEscalationRequest fields: without these the request's
+            # body default (0) silently ran every headless job full frame.
+            **tiling,
         },
     }
     print(f"SAM3 {args.variant!r} prompt={args.prompt!r} device={args.device}")
+    from hydra_suite.core.inference.semantic.tiling import resolve_tile_px
+
+    if resolve_tile_px(tiling["reference_body_px"], tiling["tile_fraction"]):
+        print(
+            f"Tiling: fraction {tiling['tile_fraction']:g} of a "
+            f"{tiling['reference_body_px']:.0f} px body ({origin})"
+        )
+    else:
+        print("Tiling: full frame")
     try:
         out = run_semantic_escalation_sidecar(payload, _progress)
     except Sam3DownloadNotAuthorized as exc:
