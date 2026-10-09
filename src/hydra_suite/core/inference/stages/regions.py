@@ -533,7 +533,8 @@ class Stage1Proposals(RegionSource):
     ) -> Iterator[list[tuple[int, Region, Any]]]:
         """Run stage 2 over crop chunks created just in time."""
 
-        from .obb import MAX_RAW_CANDIDATES_PER_FRAME, effective_raw_detection_cap
+        from ..limits import MAX_DETECTIONS_PER_FRAME
+        from .obb import effective_raw_detection_cap
         from .slicing import admitted_prediction_chunk_size
 
         seq = config.sequential
@@ -557,11 +558,14 @@ class Stage1Proposals(RegionSource):
             boxes = stage1_result.boxes
             if boxes is None or len(boxes) == 0:
                 continue
-            if len(boxes) > MAX_RAW_CANDIDATES_PER_FRAME:
+            # max_det is at most the limit plus one probe row, so this only
+            # fires if the model returned more than it was asked for -- never
+            # on a normal tracking run.
+            if len(boxes) > MAX_DETECTIONS_PER_FRAME + 1:
                 raise ValueError(
                     "Sequential stage-1 proposals are not resource-admissible: "
                     f"frame {frame_idx} produced {len(boxes)} candidates, above "
-                    f"the hard {MAX_RAW_CANDIDATES_PER_FRAME}-candidate ceiling; "
+                    f"the hard {MAX_DETECTIONS_PER_FRAME}-detection-per-frame limit; "
                     "increase the confidence threshold"
                 )
             stage2_side = int(seq.stage2_image_size or max(frame.shape[:2]))
@@ -919,8 +923,8 @@ class SlicedStage1Proposals(Stage1Proposals):
         if not frames:
             return
 
+        from ..limits import MAX_DETECTIONS_PER_FRAME
         from .obb import (
-            MAX_RAW_CANDIDATES_PER_FRAME,
             _frames_are_cuda_tensors,
             _resolve_imgsz,
             effective_raw_detection_cap,
@@ -988,12 +992,14 @@ class SlicedStage1Proposals(Stage1Proposals):
                 boxes = getattr(result, "boxes", None)
                 if boxes is None or len(boxes) == 0:
                     continue
-                if len(boxes) > MAX_RAW_CANDIDATES_PER_FRAME:
+                # max_det is at most the limit plus one probe row: fires only
+                # if the model returned more than it was asked for.
+                if len(boxes) > MAX_DETECTIONS_PER_FRAME + 1:
                     raise ValueError(
                         "Sliced sequential stage-1 proposals are not "
                         f"resource-admissible: one tile produced {len(boxes)} "
                         f"candidates, above the hard "
-                        f"{MAX_RAW_CANDIDATES_PER_FRAME}-candidate ceiling; "
+                        f"{MAX_DETECTIONS_PER_FRAME}-detection-per-frame limit; "
                         "increase the confidence threshold"
                     )
                 xyxy = np.asarray(

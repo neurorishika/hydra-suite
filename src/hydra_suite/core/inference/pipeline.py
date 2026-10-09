@@ -54,6 +54,7 @@ from hydra_suite.utils.profiling import bind_target, span
 
 from .cancellation import InferenceCancelled
 from .config import MAX_PIPELINE_DEPTH
+from .limits import MAX_DETECTIONS_PER_FRAME, DetectionLimitStats
 from .result import FrameResult, OBBResult
 from .stages.apriltag import run_apriltag
 from .stages.bgsub import run_bgsub_batch
@@ -69,6 +70,7 @@ from .stages.obb import (
     _RawOBBTensors,
     effective_raw_detection_cap,
     materialize_tensors,
+    rank_and_bound,
     run_obb,
 )
 from .stages.pose import run_pose_batch
@@ -178,6 +180,7 @@ class Pipeline:
         depth: int = 1,
         queue_bound: int | None = None,
         clipping_stats: "ClippingStats | None" = None,
+        detection_limit_stats: "DetectionLimitStats | None" = None,
         collect_results: bool = False,
     ) -> None:
         if depth < 1:
@@ -192,6 +195,13 @@ class Pipeline:
         # constructing a Pipeline directly (tests) never needs to supply one.
         self.clipping_stats = (
             clipping_stats if clipping_stats is not None else ClippingStats()
+        )
+        # Run-scoped record of frames that hit MAX_DETECTIONS_PER_FRAME; shared
+        # with the owning InferenceRunner exactly like ``clipping_stats``.
+        self.detection_limit_stats = (
+            detection_limit_stats
+            if detection_limit_stats is not None
+            else DetectionLimitStats()
         )
         # depth=1 -> synchronous (no threads). depth>=2 -> producer/consumer
         # with a single in-order consumer and a bounded prefetch queue. Increasing
@@ -355,6 +365,13 @@ class Pipeline:
                     if isinstance(raw, _RawOBBTensors)
                     else raw
                 )
+                if cfg.detection_source == "obb":
+                    # Every cached OBB frame is confidence-ranked and bounded
+                    # to the limit; a frame with more candidates (the probe
+                    # row survived) is a LOUD hit: WARNING + run summary.
+                    obb_result, candidate_count = rank_and_bound(obb_result)
+                    if candidate_count > MAX_DETECTIONS_PER_FRAME:
+                        self.detection_limit_stats.record(frame_idx, candidate_count)
                 obb_result = OBBResult(
                     frame_idx=frame_idx,
                     centroids=obb_result.centroids,

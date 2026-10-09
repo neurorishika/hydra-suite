@@ -50,6 +50,7 @@ from .cache.store import (
 from .cache.writer import CacheWriter
 from .cancellation import InferenceCancelled
 from .config import InferenceConfig
+from .limits import MAX_DETECTIONS_PER_FRAME, DetectionLimitStats
 from .pipeline import Pipeline, PipelineStages
 from .result import (
     AprilTagResult,
@@ -67,7 +68,14 @@ from .stages.cnn import CNNModel, run_cnn
 from .stages.crops import extract_aabb_crops, extract_canonical_crops
 from .stages.filtering import filter_for_source
 from .stages.headtail import HeadTailModel, run_headtail
-from .stages.obb import OBBModels, _RawOBBTensors, materialize_tensors, run_obb
+from .stages.obb import (
+    OBBModels,
+    _RawOBBTensors,
+    effective_raw_detection_cap,
+    materialize_tensors,
+    rank_and_bound,
+    run_obb,
+)
 from .stages.pose import PoseModel, run_pose
 
 logger = logging.getLogger(__name__)
@@ -1023,6 +1031,17 @@ class InferenceRunner:
         # TrackingWorker) in its end-of-run summary alongside the other
         # tracking-loop counters.
         self.clipping_stats = ClippingStats()
+        # Run-scoped: frames whose candidate count exceeded
+        # MAX_DETECTIONS_PER_FRAME (each logged as a WARNING when recorded);
+        # shared with the batch Pipeline like ``clipping_stats``.
+        self.detection_limit_stats = DetectionLimitStats()
+
+    def _rank_and_bound(self, raw_obb: OBBResult, frame_idx: int) -> OBBResult:
+        """Confidence-rank + bound one OBB frame; record a limit hit loudly."""
+        raw_obb, candidate_count = rank_and_bound(raw_obb)
+        if candidate_count > MAX_DETECTIONS_PER_FRAME:
+            self.detection_limit_stats.record(frame_idx, candidate_count)
+        return raw_obb
 
     @property
     def obb_class_names(self) -> "dict[int, str] | None":
@@ -1146,10 +1165,11 @@ class InferenceRunner:
                     raw = raw_list[0]
                     if isinstance(raw, _RawOBBTensors):
                         raw_obb = materialize_tensors(
-                            raw, self.config.obb.raw_detection_cap
+                            raw, effective_raw_detection_cap(self.config.obb)
                         )
                     else:
                         raw_obb = raw
+                    raw_obb = self._rank_and_bound(raw_obb, frame_idx)
                 # Re-stamp detection_ids with the real frame_idx (materialize_tensors / the
                 # CPU OBB path generate them at frame 0) so cached ids are unique per
                 # frame.
@@ -1552,9 +1572,12 @@ class InferenceRunner:
         raw_results: list[OBBResult] = []
         for raw, f_idx in zip(raw_list, frame_indices):
             if isinstance(raw, _RawOBBTensors):
-                raw_obb = materialize_tensors(raw, self.config.obb.raw_detection_cap)
+                raw_obb = materialize_tensors(
+                    raw, effective_raw_detection_cap(self.config.obb)
+                )
             else:
                 raw_obb = raw
+            raw_obb = self._rank_and_bound(raw_obb, f_idx)
             raw_obb = OBBResult(
                 frame_idx=f_idx,
                 centroids=raw_obb.centroids,
@@ -1666,6 +1689,7 @@ class InferenceRunner:
             writer,
             depth=self.config.pipeline_depth,
             clipping_stats=self.clipping_stats,
+            detection_limit_stats=self.detection_limit_stats,
         )
 
     def run_batch_pass(

@@ -266,5 +266,5 @@ def test_cache_key_has_no_mtime_field_and_new_string_form():
     assert key.as_string() == f"v{CACHE_SCHEMA_VERSION}|sha256:ab|cd"
 
 
-def test_schema_version_is_five():
-    assert CACHE_SCHEMA_VERSION == 5
+def test_schema_version_is_six():
+    assert CACHE_SCHEMA_VERSION == 6

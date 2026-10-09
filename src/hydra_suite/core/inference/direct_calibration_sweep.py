@@ -23,8 +23,10 @@ from hydra_suite.core.inference.stages.filtering import filter_for_source
 from hydra_suite.core.inference.stages.obb import (
     _empty_obb_result,
     _RawOBBTensors,
+    effective_raw_detection_cap,
     materialize_tensors,
     merge_per_frame,
+    rank_and_bound,
 )
 
 
@@ -113,7 +115,11 @@ def rescore_parts(
         runtime,
     )
     if isinstance(merged, _RawOBBTensors):
-        merged = materialize_tensors(merged, inference_config.obb.raw_detection_cap)
+        merged = materialize_tensors(
+            merged, effective_raw_detection_cap(inference_config.obb)
+        )
+    # Same confidence-ranked, limit-bounded frame the detection cache stores.
+    merged, _candidate_count = rank_and_bound(merged)
     filtered, _indices = filter_for_source(inference_config, merged, None)
     return filtered
 

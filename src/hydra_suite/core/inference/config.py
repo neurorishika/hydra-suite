@@ -18,6 +18,8 @@ from hydra_suite.core.individual.classification.errors import (
 from hydra_suite.runtime.resolver import RuntimeTier
 from hydra_suite.utils.tiling_spec import BACKEND_DEFAULTS, DEFAULT_OVERLAP
 
+from .limits import EXTRACTION_CONFIDENCE_FLOOR, require_target_count_within_limit
+
 logger = logging.getLogger(__name__)
 
 # SAHI inference defaults come from the one table in utils/tiling_spec (F4/F8).
@@ -42,7 +44,8 @@ MAX_PIPELINE_DEPTH = 4
 # Tracker detection caches store permissive raw OBB output and apply the
 # user-facing confidence threshold later in ``filter_for_source``. Keep this
 # value explicit because changing it must also invalidate sequential caches.
-TRACKER_RAW_OBB_CONFIDENCE_FLOOR = 1e-3
+# Kept as the name sequential configs and keys import; one value.
+TRACKER_RAW_OBB_CONFIDENCE_FLOOR = EXTRACTION_CONFIDENCE_FLOOR
 
 
 # Calibration budget bounds, set from measurement rather than taste.
@@ -235,7 +238,7 @@ class SliceConfig:
 @dataclass
 class OBBDirectConfig:
     model_path: str
-    confidence_floor: float = 1e-3
+    confidence_floor: float = EXTRACTION_CONFIDENCE_FLOOR
     confidence_threshold: float = 0.25
     # Auto-export the .engine (TensorRT) / .mlpackage (CoreML) artifact from a
     # .pt source on first load for the gpu_fast runtimes. When False and no
@@ -312,11 +315,9 @@ class OBBConfig:
     sequential: OBBSequentialConfig | None = None
     target_classes: list[int] = field(default_factory=list)
     max_detections: int = 20
-    # Cap on RAW detections per frame, applied at OBB extraction (sorted by
-    # confidence descending, top-k) BEFORE size/aspect/IoU filtering. Mirrors
-    # legacy ``_obb_geometry._raw_detection_cap`` (= 2 * MAX_TARGETS). Zero
-    # derives a finite 2 * max_detections cap; positive expert values are still
-    # bounded by the inference resource ceiling.
+    # Explicit per-frame extraction cap for non-tracking callers (DetectKit
+    # preview, AL). 0 = MAX_DETECTIONS_PER_FRAME. Tracking never sets it; N is
+    # applied at replay.
     raw_detection_cap: int = 0
     min_object_size: float = 0.0
     max_object_size: float = float("inf")
@@ -1023,16 +1024,12 @@ def build_inference_config_from_params(params: dict) -> InferenceConfig:
     yolo_iou = float(params.get("YOLO_IOU_THRESHOLD", 0.7))
     min_obj = float(params.get("MIN_OBJECT_SIZE", 0.0))
     max_obj = float(params.get("MAX_OBJECT_SIZE", float("inf")) or float("inf"))
-    # Detection caps mirror legacy core/detectors/_obb_geometry:
-    #   * RAW cap = 2 * MAX_TARGETS, applied at OBB extraction sorted by
-    #     confidence, BEFORE size/aspect/IoU filtering.
-    #   * FINAL cap = MAX_TARGETS, applied AFTER filtering, keeping the
-    #     LARGEST detections (filtering sorts the cap by size, not conf).
-    # Setting max_detections = MAX_TARGETS (not 2*MAX_TARGETS) restores the
-    # legacy post-filter count cap (`_obb_geometry:587`) the redesign dropped.
-    max_targets = max(1, int(params.get("MAX_TARGETS", 8)))
-    raw_cap = 2 * max_targets
-    max_dets = max_targets
+    # N is a replay-time knob: extraction keeps every candidate >= the
+    # extraction floor (bounded by MAX_DETECTIONS_PER_FRAME) and replay
+    # applies the 2N window and the final N cut (filtering.filter_with_indices).
+    max_dets = require_target_count_within_limit(
+        max(1, int(params.get("MAX_TARGETS", 8)))
+    )
 
     # Restrict detections to specific class IDs (legacy YOLO_TARGET_CLASSES;
     # None/empty == all classes). Threaded into OBBConfig.target_classes and
@@ -1144,7 +1141,6 @@ def build_inference_config_from_params(params: dict) -> InferenceConfig:
             min_aspect_ratio=min_ar,
             max_aspect_ratio=max_ar,
             max_detections=max_dets,
-            raw_detection_cap=raw_cap,
         )
     else:
         model_task = str(params.get("YOLO_OBB_DIRECT_TASK", "obb")).strip().lower()
@@ -1189,7 +1185,7 @@ def build_inference_config_from_params(params: dict) -> InferenceConfig:
             mode="direct",
             direct=OBBDirectConfig(
                 model_path=direct_model_path,
-                confidence_floor=1e-3,
+                confidence_floor=EXTRACTION_CONFIDENCE_FLOOR,
                 confidence_threshold=yolo_conf,
                 model_task=model_task,
                 fixed_angle_deg=fixed_angle_deg,
@@ -1207,7 +1203,6 @@ def build_inference_config_from_params(params: dict) -> InferenceConfig:
             min_aspect_ratio=min_ar,
             max_aspect_ratio=max_ar,
             max_detections=max_dets,
-            raw_detection_cap=raw_cap,
         )
 
     # HeadTail

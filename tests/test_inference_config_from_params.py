@@ -21,9 +21,8 @@ def test_direct_obb_minimal_params():
     assert cfg.headtail is None
     assert cfg.cnn_phases == []
     assert cfg.pose is None
-    # raw cap = 2*MAX_TARGETS, final cap = MAX_TARGETS (legacy parity).
     assert cfg.obb.max_detections == 8
-    assert cfg.obb.raw_detection_cap == 16
+    assert cfg.obb.raw_detection_cap == 0  # N is replay-only
     assert cfg.runtime_tier == "cpu"
 
 

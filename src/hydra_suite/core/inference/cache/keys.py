@@ -27,6 +27,7 @@ from ..config import (
 # autotune/session.py) depends on this being the content-based one.
 from ..content_id import model_content_id
 from ..content_id import video_signature as video_signature  # noqa: F401
+from ..limits import MAX_DETECTIONS_PER_FRAME
 from .base import CACHE_SCHEMA_VERSION, CacheKey
 
 
@@ -136,16 +137,18 @@ def _direct_raw_config_hash(config: OBBConfig) -> str:
     """Hash the complete direct-mode raw-extraction contract.
 
     The cache stores results before the replay-time confidence/IoU filters, but
-    it is *not* a model-agnostic bag of boxes. Classes, raw cap, direct-task
-    conversion, segment geometry, and sliced prediction settings all change
-    which raw OBBs are materialized and must invalidate it.
+    it is *not* a model-agnostic bag of boxes. Classes, the explicit raw cap,
+    the extraction limit, direct-task conversion, segment geometry, and sliced
+    prediction settings all change which raw OBBs are materialized and must
+    invalidate it; N (``max_detections``) is NOT part of the key -- it is
+    applied at replay.
     """
 
     assert config.direct is not None
     direct = config.direct
     task = str(direct.model_task)
     payload = (
-        "direct-raw-v4",
+        "direct-raw-v5",
         _model_signature(direct.model_path),
         direct.confidence_floor,
         direct.auto_export,
@@ -156,8 +159,8 @@ def _direct_raw_config_hash(config: OBBConfig) -> str:
         direct.seg_pad_ratio if task == "segment" else None,
         direct.seg_mask_threshold if task == "segment" else None,
         tuple(config.target_classes),
-        config.max_detections,
         config.raw_detection_cap,
+        MAX_DETECTIONS_PER_FRAME,
         # OBBResult cache serialization intentionally omits native polygons.
         # Export therefore needs a geometry-producing live extraction rather
         # than a false cache hit from an ordinary tracking replay.
@@ -179,7 +182,7 @@ def _sequential_config_hash(config: OBBConfig) -> str:
     assert config.sequential is not None
     seq = config.sequential
     payload = (
-        "sequential-raw-v4",
+        "sequential-raw-v5",
         _model_signature(seq.detect_model_path),
         _model_signature(seq.obb_model_path),
         seq.auto_export,
@@ -198,8 +201,8 @@ def _sequential_config_hash(config: OBBConfig) -> str:
         seq.seg_mask_threshold,
         _slice_config_hash(seq.stage1_slice),
         tuple(config.target_classes),
-        config.max_detections,
         config.raw_detection_cap,
+        MAX_DETECTIONS_PER_FRAME,
         # See the corresponding direct-mode raw contract above.
         config.emit_native_geometry,
     )
