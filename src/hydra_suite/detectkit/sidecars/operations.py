@@ -7,6 +7,7 @@ from pathlib import Path
 from typing import Any, Callable
 
 from hydra_suite.core.inference.cache.base import CacheKey
+from hydra_suite.utils.tiling_spec import DEFAULT_YOLO_IMGSZ
 
 Progress = Callable[[int, str], None]
 
@@ -187,7 +188,7 @@ def run_dataset_inference(
                     1,
                     int(
                         payload.get("slice_imgsz")
-                        or payload.get("imgsz_obb_direct", 640)
+                        or payload.get("imgsz_obb_direct", DEFAULT_YOLO_IMGSZ)
                     ),
                 )
                 task = {"detect_direct": "detect", "segment_direct": "segment"}.get(

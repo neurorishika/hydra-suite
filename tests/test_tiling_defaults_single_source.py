@@ -45,3 +45,20 @@ def test_legacy_project_without_fractions_keeps_its_scales():
     """Review Focus 2: an old project (pixel target_sizes, no fractions key)."""
     old = SliceTrainingSettings.from_dict({"target_sizes": [64.0, 128.0]})
     assert old.target_fractions() == [0.1, 0.2]
+
+
+def test_training_scalar_overlap_and_imgsz_defaults_are_named_constants():
+    """m5: the remaining literals resolve to named constants, same values."""
+    from hydra_suite.training.sliced_dataset import SliceBuildParams
+    from hydra_suite.utils.tiling_spec import (
+        DEFAULT_TRAIN_OBJECT_TILE_FRACTION,
+        DEFAULT_YOLO_IMGSZ,
+    )
+
+    assert DEFAULT_TRAIN_OBJECT_TILE_FRACTION == 0.10 and DEFAULT_YOLO_IMGSZ == 640
+    for cls in (SliceTrainingSettings, SliceTrainingConfig, SliceBuildParams):
+        assert cls().object_tile_fraction == DEFAULT_TRAIN_OBJECT_TILE_FRACTION
+        assert cls().overlap == DEFAULT_OVERLAP
+    params = SliceBuildParams()
+    assert params.imgsz == DEFAULT_YOLO_IMGSZ
+    assert list(params.target_sizes) == [32.0, 64.0, 96.0, 128.0]

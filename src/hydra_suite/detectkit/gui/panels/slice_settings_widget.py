@@ -20,6 +20,7 @@ from PySide6.QtWidgets import (
 )
 
 from hydra_suite.utils.slice_geometry import plan_tiles, tile_size_for_mode
+from hydra_suite.utils.tiling_spec import DEFAULT_YOLO_IMGSZ
 
 from ..models import SliceTrainingSettings
 
@@ -43,7 +44,7 @@ class _TileLayoutPreview(QWidget):
         self._target_fractions = [0.05, 0.10, 0.15, 0.20]
         self._slice_wh = (0, 0)
         self._overlap = 0.2
-        self._model_input_size = 640
+        self._model_input_size = DEFAULT_YOLO_IMGSZ
         self._reference_body_px = 0.0
         self._frame_wh = self._FALLBACK_FRAME_WH
         self._uses_fallback_frame = True
@@ -302,7 +303,7 @@ class SliceSettingsGroup(QGroupBox):
     ``full_frame_mix`` fields can never be cross-assigned.
     """
 
-    _DEFAULT_MODEL_INPUT_SIZE = 640
+    _DEFAULT_MODEL_INPUT_SIZE = DEFAULT_YOLO_IMGSZ
     _SAM3_MODEL_INPUT_SIZE = 1008
 
     def __init__(self, parent=None, *, backend: str = "yolo") -> None:

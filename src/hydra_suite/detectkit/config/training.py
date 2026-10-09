@@ -28,7 +28,11 @@ from hydra_suite.utils.slice_geometry import (
     LEGACY_TARGET_SIZE_IMGSZ,
     target_fractions_from,
 )
-from hydra_suite.utils.tiling_spec import BACKEND_DEFAULTS
+from hydra_suite.utils.tiling_spec import (
+    BACKEND_DEFAULTS,
+    DEFAULT_OVERLAP,
+    DEFAULT_TRAIN_OBJECT_TILE_FRACTION,
+)
 
 _MAX_TRAINING_PLAN_BYTES = 1024 * 1024
 _MAX_TRAINING_PLAN_DEPTH = 64
@@ -195,11 +199,11 @@ class SliceTrainingConfig:
 
     enabled: bool = False
     geometry_mode: str = "auto_object"
-    object_tile_fraction: float = 0.10
+    object_tile_fraction: float = DEFAULT_TRAIN_OBJECT_TILE_FRACTION
     reference_body_px: float = 0.0
     slice_width: int = 0
     slice_height: int = 0
-    overlap: float = 0.2
+    overlap: float = DEFAULT_OVERLAP
     min_area_ratio: float = DEFAULT_MIN_AREA_RATIO
     negative_tile_fraction: float = 0.15
     # The YOLO training scale set from the one defaults table (F4).

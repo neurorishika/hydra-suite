@@ -29,6 +29,7 @@ from hydra_suite.core.inference.slice_meta import (
     sidecar_path,
     slice_meta_to_panel_values,
 )
+from hydra_suite.utils.tiling_spec import DEFAULT_YOLO_IMGSZ
 
 from ..gui.models import InferenceRunSettings, SliceTrainingSettings
 
@@ -97,7 +98,7 @@ def resolve_preview_tiling(
     override: SliceTrainingSettings | None,
 ) -> PreviewTiling:
     """Return the preview tiling for ``model_path`` (see module docstring)."""
-    imgsz = max(1, int(project_imgsz or 640))
+    imgsz = max(1, int(project_imgsz or DEFAULT_YOLO_IMGSZ))
     if override is not None:
         return PreviewTiling(slice_settings=override, imgsz=imgsz, source="override")
     project_only = PreviewTiling(
