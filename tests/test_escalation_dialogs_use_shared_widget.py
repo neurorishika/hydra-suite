@@ -265,11 +265,11 @@ def test_sam3_dialog_shrinks_back_after_advanced_collapses(available_checkpoint)
     for _ in range(3):
         QApplication.processEvents()
     min_height, height = dialog.minimumHeight(), dialog.height()
-    dialog._tiling.set_advanced_expanded(True)
+    dialog._tiling.btn_slice_advanced.click()
     QApplication.processEvents()
     assert dialog.minimumHeight() >= min_height
     assert dialog.height() >= dialog.minimumHeight()
-    dialog._tiling.set_advanced_expanded(False)
+    dialog._tiling.btn_slice_advanced.click()
     QApplication.processEvents()
     assert dialog.minimumHeight() == min_height
     assert dialog.height() == height
@@ -282,8 +282,8 @@ def test_fit_keeps_a_user_resized_dialog_size(available_checkpoint):
     QApplication.processEvents()
     dialog.resize(dialog.width() + 120, dialog.height() + 80)
     user_size = dialog.size()
-    dialog._tiling.set_advanced_expanded(True)
-    dialog._tiling.set_advanced_expanded(False)
+    dialog._tiling.btn_slice_advanced.click()
+    dialog._tiling.btn_slice_advanced.click()
     QApplication.processEvents()
     assert dialog.size() == user_size
     dialog.hide()
@@ -325,4 +325,53 @@ def test_fit_to_content_reruns_on_show():
     dialog.show()
     QApplication.processEvents()
     assert dialog.minimumHeight() > 700
+    dialog.hide()
+
+
+def test_user_resize_survives_repeated_toggles_and_reshow(available_checkpoint):
+    dialog = _sam3()
+    dialog.show()
+    QApplication.processEvents()
+    dialog.resize(dialog.width() + 150, dialog.height() + 90)
+    QApplication.processEvents()
+    user_size = dialog.size()
+    for _ in range(3):
+        dialog._tiling.btn_slice_advanced.click()  # the user path: re-fits
+        dialog._tiling.btn_slice_advanced.click()
+        QApplication.processEvents()
+    assert dialog.size() == user_size
+    dialog.hide()
+    dialog.show()
+    for _ in range(3):
+        QApplication.processEvents()
+    assert dialog.size() == user_size
+    dialog.hide()
+
+
+def test_pre_expanded_dialog_fits_after_show():
+    dialog, content = _growing_dialog()
+    content.setMinimumHeight(700)  # grew before the first show
+    dialog.show()
+    for _ in range(3):
+        QApplication.processEvents()
+    assert dialog.height() >= dialog.minimumSizeHint().height()
+    dialog.hide()
+
+
+def test_sam3_dialog_grows_then_shrinks_on_single_event_pumps(available_checkpoint):
+    """Re-check MINOR: collapse must shrink back on the user's click path,
+    where only one event-loop iteration runs before the deferred fit."""
+    dialog = _sam3()
+    dialog.show()
+    for _ in range(3):
+        QApplication.processEvents()
+    height = dialog.height()
+    dialog._tiling.btn_slice_advanced.click()
+    for _ in range(3):
+        QApplication.processEvents()
+    expanded = dialog.height()
+    assert expanded > height
+    dialog._tiling.btn_slice_advanced.click()
+    QApplication.processEvents()
+    assert dialog.height() == height
     dialog.hide()

@@ -446,7 +446,7 @@ class SemanticEscalationDialog(DetectKitDialog):
         self.resize(820, 560)
         self.fit_to_content(QSize(720, 500))
         self._tiling.btn_slice_advanced.toggled.connect(
-            lambda _expanded: self.fit_to_content(QSize(720, 500))
+            lambda _expanded: self.schedule_fit()
         )
 
     # -- accessors used by the handler -------------------------------------
