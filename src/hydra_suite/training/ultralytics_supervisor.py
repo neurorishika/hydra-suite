@@ -178,6 +178,9 @@ def _estimate_host_bytes(spec) -> int:
             and not is_hidden_file(path)
         )
         estimate += count * imgsz * imgsz * 3
+    # Host use keeps creeping up after the first validation (measured about
+    # 0.14 GiB/min on yolo26n-seg), so leave headroom over the static sum.
+    estimate = int(estimate * 1.35)
     return max(4 * GiB, estimate)
 
 
