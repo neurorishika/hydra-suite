@@ -10,6 +10,8 @@ from __future__ import annotations
 
 import logging
 import math
+import numbers
+import operator
 from collections.abc import Mapping
 from dataclasses import asdict, dataclass, replace
 from typing import Any, Literal, NamedTuple
@@ -155,6 +157,40 @@ def _positive(value: Any) -> float | None:
     return parsed if parsed is not None and parsed > 0 else None
 
 
+def _strict_real(value: Any) -> float | None:
+    """A real number (int/float/numpy, never bool or str) as a finite float."""
+    if isinstance(value, (bool, np.bool_)) or not isinstance(value, numbers.Real):
+        return None
+    parsed = _finite(value)
+    return parsed
+
+
+def _strict_index(value: Any) -> int | None:
+    """An integral value (int or numpy integer; never bool, float or str)."""
+    if isinstance(value, (bool, np.bool_)):
+        return None
+    try:
+        return operator.index(value)
+    except TypeError:
+        return None
+
+
+def _strict_fractions(raw: Any) -> tuple[float, ...] | None:
+    """An iterable of real numbers as a float tuple; None when it is not one."""
+    if isinstance(raw, (str, bytes)):
+        return None
+    try:
+        items = list(raw)
+    except TypeError:
+        return None
+    out: list[float] = []
+    for item in items:
+        if isinstance(item, (bool, np.bool_)) or not isinstance(item, numbers.Real):
+            return None
+        out.append(float(item))
+    return tuple(out)
+
+
 @dataclass(frozen=True)
 class TilingSpec:
     """One SAHI tiling configuration in canonical (TrackerKit) vocabulary."""
@@ -173,41 +209,57 @@ class TilingSpec:
     merge_threshold: float = 0.5
 
     def __post_init__(self) -> None:
-        fractions = tuple(float(f) for f in self.object_tile_fractions)
-        object.__setattr__(self, "object_tile_fractions", fractions)
-        object.__setattr__(self, "enabled", bool(self.enabled))
+        # Write-strict: wrong TYPES are a ValueError (never a TypeError) and
+        # numpy scalars are coerced to Python so to_mapping() is JSON-safe.
         problems: list[str] = []
-        if self.geometry_mode not in GEOMETRY_MODES:
-            problems.append(f"geometry_mode {self.geometry_mode!r}")
+        enabled = self.enabled
+        if isinstance(enabled, (bool, np.bool_)):
+            object.__setattr__(self, "enabled", bool(enabled))
+        else:
+            problems.append(f"enabled {enabled!r} is not a bool")
+        fractions = _strict_fractions(self.object_tile_fractions)
+        if fractions is None:
+            problems.append(
+                f"object_tile_fractions {self.object_tile_fractions!r} is not "
+                "an iterable of numbers"
+            )
+            fractions = ()
+        object.__setattr__(self, "object_tile_fractions", fractions)
         if any(not (math.isfinite(f) and 0.0 < f <= 1.0) for f in fractions):
             problems.append(f"object_tile_fractions {fractions!r} outside (0, 1]")
-        body = _finite(self.reference_body_px)
-        if body is None or body < 0:
-            problems.append(f"reference_body_px {self.reference_body_px!r}")
+        if not isinstance(self.geometry_mode, str) or (
+            self.geometry_mode not in GEOMETRY_MODES
+        ):
+            problems.append(f"geometry_mode {self.geometry_mode!r}")
+        for name, lo, hi in (
+            ("reference_body_px", 0.0, math.inf),
+            ("overlap", 0.0, OVERLAP_MAX),
+            ("min_area_ratio", 0.0, 1.0),
+            ("merge_threshold", 0.0, 1.0),
+        ):
+            raw = getattr(self, name)
+            if name == "overlap" and raw is None:
+                continue  # unset -> resolve_overlap derives it
+            value = _strict_real(raw)
+            if value is None or not lo <= value <= hi:
+                problems.append(f"{name} {raw!r} outside [{lo}, {hi}]")
+            else:
+                object.__setattr__(self, name, value)
         for name in ("slice_width", "slice_height"):
-            value = getattr(self, name)
-            if (
-                not isinstance(value, int)
-                or isinstance(value, bool)
-                or not 0 <= value <= 8192
-            ):
-                problems.append(f"{name} {value!r} outside [0, 8192]")
-        if self.overlap is not None:
-            overlap = _finite(self.overlap)
-            if overlap is None or not 0.0 <= overlap <= OVERLAP_MAX:
-                problems.append(f"overlap {self.overlap!r} outside [0, {OVERLAP_MAX}]")
-        area = _finite(self.min_area_ratio)
-        if area is None or not 0.0 <= area <= 1.0:
-            problems.append(f"min_area_ratio {self.min_area_ratio!r}")
-        if self.fragment_policy not in FRAGMENT_POLICIES:
-            problems.append(f"fragment_policy {self.fragment_policy!r}")
-        if self.merge_policy not in MERGE_POLICIES:
-            problems.append(f"merge_policy {self.merge_policy!r}")
-        if self.merge_metric not in MERGE_METRICS:
-            problems.append(f"merge_metric {self.merge_metric!r}")
-        threshold = _finite(self.merge_threshold)
-        if threshold is None or not 0.0 <= threshold <= 1.0:
-            problems.append(f"merge_threshold {self.merge_threshold!r}")
+            raw = getattr(self, name)
+            value = _strict_index(raw)
+            if value is None or not 0 <= value <= 8192:
+                problems.append(f"{name} {raw!r} outside [0, 8192]")
+            else:
+                object.__setattr__(self, name, value)
+        for name, allowed in (
+            ("fragment_policy", FRAGMENT_POLICIES),
+            ("merge_policy", MERGE_POLICIES),
+            ("merge_metric", MERGE_METRICS),
+        ):
+            raw = getattr(self, name)
+            if not isinstance(raw, str) or raw not in allowed:
+                problems.append(f"{name} {raw!r}")
         if problems:
             raise ValueError("Invalid TilingSpec: " + "; ".join(problems))
 

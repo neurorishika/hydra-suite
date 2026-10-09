@@ -1,5 +1,7 @@
+import json
 import math
 
+import numpy as np
 import pytest
 
 from hydra_suite.utils.slice_geometry import resolve_scales
@@ -120,3 +122,83 @@ def test_to_mapping_is_canonical_and_json_safe():
         "merge_metric",
         "merge_threshold",
     }
+
+
+# --- S1 fix wave: strict typing (D5) and from_canonical -----------------------
+
+
+@pytest.mark.parametrize(
+    "kwargs",
+    [
+        {"reference_body_px": "50"},
+        {"reference_body_px": True},
+        {"overlap": "0.2"},
+        {"overlap": False},
+        {"min_area_ratio": "0.3"},
+        {"merge_threshold": True},
+        {"slice_width": 512.0},
+        {"slice_width": "512"},
+        {"slice_height": True},
+        {"enabled": "false"},
+        {"enabled": 1},
+        {"object_tile_fractions": 0.1},
+        {"object_tile_fractions": "0.1"},
+        {"object_tile_fractions": (0.1, "0.2")},
+        {"object_tile_fractions": (True,)},
+        {"object_tile_fractions": (None,)},
+        {"geometry_mode": ["auto_model"]},
+    ],
+)
+def test_strict_types_raise_value_error_not_type_error(kwargs):
+    with pytest.raises(ValueError):
+        TilingSpec(**kwargs)
+
+
+def test_numpy_inputs_coerced_to_python_and_json_safe():
+    spec = TilingSpec(
+        enabled=np.bool_(True),
+        object_tile_fractions=np.array([0.1, 0.2]),
+        reference_body_px=np.float32(50.0),
+        slice_width=np.int64(512),
+        slice_height=np.int32(384),
+        overlap=np.float64(0.25),
+        min_area_ratio=np.float64(0.3),
+        merge_threshold=np.float32(0.5),
+    )
+    assert spec.enabled is True
+    assert type(spec.reference_body_px) is float
+    assert type(spec.overlap) is float
+    assert type(spec.slice_width) is int and spec.slice_width == 512
+    assert all(type(f) is float for f in spec.object_tile_fractions)
+    json.dumps(spec.to_mapping())
+
+
+def test_int_floats_stored_as_float():
+    spec = TilingSpec(reference_body_px=50, overlap=0, merge_threshold=1)
+    assert type(spec.reference_body_px) is float
+    assert type(spec.overlap) is float
+    assert type(spec.merge_threshold) is float
+
+
+def test_from_canonical_ignores_operating_fraction():
+    spec = TilingSpec.from_canonical(
+        {"operating_fraction": 0.125, "object_tile_fractions": (0.1, 0.15)}
+    )
+    assert spec.object_tile_fractions == (0.1, 0.15)
+    assert "operating_fraction" not in spec.to_mapping()
+
+
+def test_from_canonical_backend_overlay():
+    spec = TilingSpec.from_canonical({"overlap": 0.3}, backend="sam3")
+    assert spec.overlap == 0.3
+    assert spec.object_tile_fractions == (0.055,)
+    assert spec.fragment_policy == "crowd"
+
+
+def test_from_canonical_full_frame_escalation_keeps_backend_fractions():
+    from hydra_suite.utils.tiling_spec import canonicalize
+
+    canonical, _ = canonicalize({"tile_fraction": 0})
+    spec = TilingSpec.from_canonical(canonical, backend="sam3")
+    assert spec.enabled is False
+    assert spec.object_tile_fractions == (0.055,)
