@@ -3,7 +3,7 @@
 from __future__ import annotations
 
 import sqlite3
-from collections.abc import Iterable, Iterator, Sequence
+from collections.abc import Callable, Iterable, Iterator, Sequence
 from dataclasses import dataclass, field
 from pathlib import Path
 from typing import Any, Literal
@@ -485,10 +485,13 @@ def analyze_obb_sizes(
     min_crop_size_px: int = 64,
     enforce_square: bool = True,
     max_images: int = 500,
+    should_cancel: Callable[[], bool] | None = None,
 ) -> OBBSizeStats:
     """Compute object and derived crop size statistics from an OBB dataset.
 
     Samples up to *max_images* items (deterministic) to keep the analysis fast.
+    *should_cancel* is polled before each image read; when it returns True the
+    partial statistics gathered so far are returned.
     """
     import random
 
@@ -510,6 +513,8 @@ def analyze_obb_sizes(
         return stats
 
     for item in reservoir:
+        if should_cancel is not None and should_cancel():
+            break
         _analyze_obb_item(
             item,
             stats,

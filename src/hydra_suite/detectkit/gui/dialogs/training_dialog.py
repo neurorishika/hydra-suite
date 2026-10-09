@@ -4,12 +4,12 @@ from __future__ import annotations
 
 import logging
 from collections import deque
-from dataclasses import asdict, fields
+from dataclasses import asdict, dataclass, fields
 from pathlib import Path
 from threading import Lock
 from typing import TYPE_CHECKING
 
-from PySide6.QtCore import Qt, Signal
+from PySide6.QtCore import QCoreApplication, Qt, Signal
 from PySide6.QtGui import QImageReader, QPixmap
 from PySide6.QtWidgets import (
     QAbstractButton,
@@ -272,6 +272,96 @@ class _BoundedLogWorker(BaseWorker):
             self._delivering_log_role = ""
 
 
+@dataclass(frozen=True)
+class _DatasetFitRequest:
+    cache_key: tuple
+    source_paths: tuple[str, ...]
+    pad_ratio: float
+    min_crop_size_px: int
+    enforce_square: bool
+
+
+@dataclass(frozen=True)
+class _DatasetFitResult:
+    request: _DatasetFitRequest
+    stats: object | None
+    valid_items: int
+
+
+class _DatasetFitWorker(BaseWorker):
+    """Inspect sources and sample object sizes for the Dataset Fit card.
+
+    Every sampled image is opened and decoded, so on cold or network storage
+    this takes minutes; it must never run on the GUI thread.
+    """
+
+    result_ready = Signal(object)
+
+    def __init__(self, request: _DatasetFitRequest) -> None:
+        # Parented to the application so the thread outlives a dialog that is
+        # closed (or garbage-collected) mid-analysis; deleteLater on finished
+        # reclaims it. A QThread destroyed while running aborts the process.
+        super().__init__(QCoreApplication.instance())
+        self._request = request
+        self._cancel = False
+        self.finished.connect(self.deleteLater)
+
+    def cancel(self) -> None:
+        self._cancel = True
+
+    def is_cancelled(self) -> bool:
+        return bool(self._cancel)
+
+    def execute(self) -> None:
+        from hydra_suite.training.dataset_inspector import (
+            DatasetInspection,
+            DatasetItemStore,
+            analyze_obb_sizes,
+            inspect_obb_or_detect_dataset,
+        )
+
+        request = self._request
+        merged = DatasetInspection(root_dir="overview")
+        valid_items = 0
+        for source_path in request.source_paths:
+            if self.is_cancelled():
+                return
+            if not Path(source_path).exists():
+                continue
+            try:
+                inspection = inspect_obb_or_detect_dataset(source_path)
+            except Exception as exc:
+                logger.warning(
+                    "Failed to inspect DetectKit source %s: %s", source_path, exc
+                )
+                continue
+            for split_name, items in inspection.splits.items():
+                merged_items = merged.splits.get(split_name)
+                if merged_items is None:
+                    merged_items = DatasetItemStore()
+                    merged.splits[split_name] = merged_items
+                assert isinstance(merged_items, DatasetItemStore)
+                merged_items.extend(items)
+                valid_items += len(items)
+            merged.class_names.update(inspection.class_names)
+
+        for items in merged.splits.values():
+            assert isinstance(items, DatasetItemStore)
+            items.commit()
+
+        stats = None
+        if valid_items > 0:
+            stats = analyze_obb_sizes(
+                merged,
+                pad_ratio=request.pad_ratio,
+                min_crop_size_px=request.min_crop_size_px,
+                enforce_square=request.enforce_square,
+                should_cancel=self.is_cancelled,
+            )
+        if not self.is_cancelled():
+            self.result_ready.emit(_DatasetFitResult(request, stats, valid_items))
+
+
 class _DatasetPreparationWorker(_BoundedLogWorker):
     """Supervise a memory-limited preparation process outside the GUI."""
 
@@ -472,6 +562,7 @@ class TrainingDialog(DetectKitDialog):
         self._dataset_fit_cache_key: tuple | None = None
         self._dataset_fit_cache_text = ""
         self._dataset_fit_dirty = True
+        self._dataset_fit_worker: _DatasetFitWorker | None = None
         self._training_running = False
         self.role_dataset_dirs: dict[str, str] = {}
         # Test/caller affordance only -- NOT a source of truth for what
@@ -2148,17 +2239,14 @@ QTabBar::tab:selected {
             self.dataset_fit_view.setPlainText(self._dataset_fit_cache_text)
             return
 
+        if self._dataset_fit_worker is not None:
+            return
+
         try:
+            from hydra_suite.training import dataset_inspector  # noqa: F401
             from hydra_suite.training.contracts import SourceDataset
             from hydra_suite.training.dataset_builders import (
                 resolve_source_path_for_target,
-            )
-            from hydra_suite.training.dataset_inspector import (
-                DatasetInspection,
-                DatasetItemStore,
-                analyze_obb_sizes,
-                format_size_analysis,
-                inspect_obb_or_detect_dataset,
             )
         except ImportError:
             self.dataset_fit_status.setText(
@@ -2193,33 +2281,62 @@ QTabBar::tab:selected {
             self._dataset_fit_dirty = False
             return
 
-        merged = DatasetInspection(root_dir="overview")
-        valid_items = 0
-        for source_path in source_paths:
-            if not Path(source_path).exists():
-                continue
+        request = _DatasetFitRequest(
+            cache_key=cache_key,
+            source_paths=tuple(source_paths),
+            pad_ratio=self.spin_crop_pad.value(),
+            min_crop_size_px=self.spin_crop_min_px.value(),
+            enforce_square=self.chk_crop_square.isChecked(),
+        )
+        worker = _DatasetFitWorker(request)
+        worker.result_ready.connect(self._on_dataset_fit_ready)
+        worker.error.connect(self._on_dataset_fit_error)
+        worker.finished.connect(self._on_dataset_fit_worker_finished)
+        self._dataset_fit_worker = worker
+        self.btn_refresh_dataset_fit.setEnabled(False)
+        self.dataset_fit_status.setText(
+            f"Analyzing {len(source_paths)} source(s) in the background…"
+        )
+        worker.start()
+
+    def _on_dataset_fit_error(self, message: str) -> None:
+        if self.sender() is not self._dataset_fit_worker:
+            return
+        self.dataset_fit_status.setText(f"Dataset analysis failed: {message}")
+        self.dataset_fit_view.setPlainText("")
+
+    def _on_dataset_fit_worker_finished(self) -> None:
+        if self.sender() is not self._dataset_fit_worker:
+            return
+        self._dataset_fit_worker = None
+        self.btn_refresh_dataset_fit.setEnabled(True)
+
+    def _stop_dataset_fit_worker(self) -> None:
+        """Detach and cancel a running analysis; the app owns its teardown."""
+        worker = self._dataset_fit_worker
+        if worker is None:
+            return
+        self._dataset_fit_worker = None
+        for signal, slot in (
+            (worker.result_ready, self._on_dataset_fit_ready),
+            (worker.error, self._on_dataset_fit_error),
+            (worker.finished, self._on_dataset_fit_worker_finished),
+        ):
             try:
-                inspection = inspect_obb_or_detect_dataset(source_path)
-            except Exception as exc:
-                logger.warning(
-                    "Failed to inspect DetectKit source %s: %s", source_path, exc
-                )
-                continue
-            for split_name, items in inspection.splits.items():
-                merged_items = merged.splits.get(split_name)
-                if merged_items is None:
-                    merged_items = DatasetItemStore()
-                    merged.splits[split_name] = merged_items
-                assert isinstance(merged_items, DatasetItemStore)
-                merged_items.extend(items)
-                valid_items += len(items)
-            merged.class_names.update(inspection.class_names)
+                signal.disconnect(slot)
+            except (RuntimeError, TypeError):
+                pass
+        worker.cancel()
 
-        for items in merged.splits.values():
-            assert isinstance(items, DatasetItemStore)
-            items.commit()
+    def _on_dataset_fit_ready(self, result: _DatasetFitResult) -> None:
+        if self.sender() is not self._dataset_fit_worker:
+            return
+        stats = result.stats
+        valid_items = result.valid_items
+        cache_key = result.request.cache_key
+        source_paths = result.request.source_paths
 
-        if valid_items <= 0:
+        if valid_items <= 0 or stats is None:
             self.dataset_fit_status.setText(
                 "No valid dataset items were found in the configured sources."
             )
@@ -2231,17 +2348,7 @@ QTabBar::tab:selected {
             self._dataset_fit_dirty = False
             return
 
-        try:
-            stats = analyze_obb_sizes(
-                merged,
-                pad_ratio=self.spin_crop_pad.value(),
-                min_crop_size_px=self.spin_crop_min_px.value(),
-                enforce_square=self.chk_crop_square.isChecked(),
-            )
-        except Exception as exc:
-            self.dataset_fit_status.setText(f"Dataset analysis failed: {exc}")
-            self.dataset_fit_view.setPlainText("")
-            return
+        from hydra_suite.training.dataset_inspector import format_size_analysis
 
         selected_roles = set(self._selected_role_keys())
         lines: list[str] = []
@@ -2361,6 +2468,9 @@ QTabBar::tab:selected {
         self._dataset_fit_cache_key = cache_key
         self._dataset_fit_cache_text = text
         self._dataset_fit_dirty = False
+        if cache_key != self._dataset_fit_key():
+            # Settings changed while the analysis ran.
+            self._mark_dataset_fit_dirty()
 
     def _source_preview_records(
         self, max_items: int = 6
@@ -3560,6 +3670,7 @@ QTabBar::tab:selected {
             )
             event.ignore()
             return
+        self._stop_dataset_fit_worker()
         try:
             self._save_persistent_state()
         except Exception:
@@ -3567,3 +3678,8 @@ QTabBar::tab:selected {
                 "Failed to persist training-dialog state on close", exc_info=True
             )
         super().closeEvent(event)
+
+    def done(self, result: int) -> None:  # noqa: D401
+        """Stop any background dataset analysis when the dialog finishes."""
+        self._stop_dataset_fit_worker()
+        super().done(result)
