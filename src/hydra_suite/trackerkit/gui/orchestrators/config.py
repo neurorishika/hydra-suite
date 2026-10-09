@@ -451,7 +451,7 @@ class ConfigOrchestrator:
         advanced = self._mw.advanced_config
         return {
             "enabled": bool(panel.chk_slice_enabled.isChecked()),
-            "geometry_mode": panel.combo_slice_geometry.currentText(),
+            "geometry_mode": panel.combo_slice_geometry.currentData(),
             "overlap": panel.spin_slice_overlap.value(),
             "object_tile_fraction": panel.spin_slice_object_fraction.value(),
             "trained_body_px": advanced.get("slice_trained_body_px", 0.0),
@@ -500,7 +500,8 @@ class ConfigOrchestrator:
         slice_geo = str(get_cfg("slice_geometry_mode", default="auto_model")).strip()
         if slice_geo not in {"auto_model", "auto_object", "custom"}:
             slice_geo = "auto_model"
-        self._panels.detection.combo_slice_geometry.setCurrentText(slice_geo)
+        geometry_combo = self._panels.detection.combo_slice_geometry
+        geometry_combo.setCurrentIndex(geometry_combo.findData(slice_geo))
         self._mw.advanced_config["slice_profile_id"] = str(
             get_cfg("slice_profile_id", default="") or ""
         )
@@ -1768,7 +1769,7 @@ class ConfigOrchestrator:
                 ],
                 "yolo_fixed_angle_deg": self._panels.detection.spin_yolo_fixed_angle.value(),
                 "slice_enabled": self._panels.detection.chk_slice_enabled.isChecked(),
-                "slice_geometry_mode": self._panels.detection.combo_slice_geometry.currentText(),
+                "slice_geometry_mode": self._panels.detection.combo_slice_geometry.currentData(),
                 "slice_profile_id": str(
                     self._mw.advanced_config.get("slice_profile_id", "") or ""
                 ),
