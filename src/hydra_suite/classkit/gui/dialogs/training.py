@@ -408,6 +408,8 @@ class ClassKitTrainingDialog(QDialog):
             (self.contrast_spin, "contrast"),
             (self.flip_ud_spin, "flipud"),
             (self.flip_lr_spin, "fliplr"),
+            (self.scale_jitter_spin, "scale_jitter"),
+            (self.aspect_jitter_spin, "aspect_jitter"),
             (self.decode_color_spin, "decode_color_sim"),
             (self.resample_spin, "resample_sim"),
         ):
@@ -1592,7 +1594,7 @@ class ClassKitTrainingDialog(QDialog):
         self.brightness_spin = QDoubleSpinBox()
         self.brightness_spin.setRange(0.0, 1.0)
         self.brightness_spin.setSingleStep(0.05)
-        self.brightness_spin.setValue(0.0)
+        self.brightness_spin.setValue(0.10)
         self.brightness_spin.setToolTip(
             "Photometric brightness jitter. Useful for lighting variation while preserving canonical pose."
         )
@@ -1601,7 +1603,7 @@ class ClassKitTrainingDialog(QDialog):
         self.contrast_spin = QDoubleSpinBox()
         self.contrast_spin.setRange(0.0, 1.0)
         self.contrast_spin.setSingleStep(0.05)
-        self.contrast_spin.setValue(0.0)
+        self.contrast_spin.setValue(0.10)
         self.contrast_spin.setToolTip(
             "Photometric contrast jitter. Preferred over rotation for canonicalized crops."
         )
@@ -1610,7 +1612,7 @@ class ClassKitTrainingDialog(QDialog):
         self.saturation_spin = QDoubleSpinBox()
         self.saturation_spin.setRange(0.0, 1.0)
         self.saturation_spin.setSingleStep(0.05)
-        self.saturation_spin.setValue(0.0)
+        self.saturation_spin.setValue(0.10)
         self.saturation_spin.setToolTip(
             "Photometric saturation jitter. Useful when color strength varies but hue identity remains informative."
         )
@@ -1620,11 +1622,39 @@ class ClassKitTrainingDialog(QDialog):
         self.hue_spin.setRange(0.0, 0.5)
         self.hue_spin.setSingleStep(0.01)
         self.hue_spin.setDecimals(2)
-        self.hue_spin.setValue(0.0)
+        self.hue_spin.setValue(0.01)
         self.hue_spin.setToolTip(
-            "Hue jitter fraction. Small values are recommended when color identity may shift across acquisitions."
+            "Hue jitter fraction. Keep this minimal (default 0.01): colour-tag identity "
+            "depends on hue, so large shifts turn one tag colour into another."
         )
         aug_form.addRow("<b>Hue Jitter:</b>", self.hue_spin)
+
+        self.scale_jitter_spin = QDoubleSpinBox()
+        self.scale_jitter_spin.setRange(0.0, 0.9)
+        self.scale_jitter_spin.setSingleStep(0.05)
+        self.scale_jitter_spin.setDecimals(2)
+        self.scale_jitter_spin.setValue(0.20)
+        self.scale_jitter_spin.setToolTip(
+            "Scale invariance: the crop window is resized about its centre by a factor "
+            "drawn from U(1 - j, 1 + j) (0.20 -> 0.8x to 1.2x), so the animal appears "
+            "larger or smaller after the model's fit-to-input step (detector box and "
+            "per-frame scale wobble). Train samples only. 0 = off."
+        )
+        aug_form.addRow("<b>Scale Jitter:</b>", self.scale_jitter_spin)
+
+        self.aspect_jitter_spin = QDoubleSpinBox()
+        self.aspect_jitter_spin.setRange(0.0, 1.0)
+        self.aspect_jitter_spin.setSingleStep(0.05)
+        self.aspect_jitter_spin.setDecimals(2)
+        self.aspect_jitter_spin.setValue(0.20)
+        self.aspect_jitter_spin.setToolTip(
+            "Crop aspect-ratio invariance: the crop window's width:height ratio is "
+            "drawn log-uniformly from [1/(1+a), 1+a] (0.20 -> 0.83x to 1.20x) at "
+            "constant area, then letterboxed to the model input. The crop centre "
+            "never moves and the animal is never stretched; the model just sees "
+            "more or less context on each axis. Train samples only. 0 = off."
+        )
+        aug_form.addRow("<b>Aspect Ratio Jitter:</b>", self.aspect_jitter_spin)
 
         self.decode_color_spin = QDoubleSpinBox()
         self.decode_color_spin.setRange(0.0, 1.0)
@@ -1764,6 +1794,12 @@ class ClassKitTrainingDialog(QDialog):
             lambda _value: self._refresh_data_summary()
         )
         self.hue_spin.valueChanged.connect(lambda _value: self._refresh_data_summary())
+        self.scale_jitter_spin.valueChanged.connect(
+            lambda _value: self._refresh_data_summary()
+        )
+        self.aspect_jitter_spin.valueChanged.connect(
+            lambda _value: self._refresh_data_summary()
+        )
         self.monochrome_check.toggled.connect(
             lambda _checked: self._refresh_data_summary()
         )
@@ -2080,6 +2116,12 @@ class ClassKitTrainingDialog(QDialog):
             enabled_augments.append(f"saturation {self.saturation_spin.value():.2f}")
         if self.hue_spin.value() > 0:
             enabled_augments.append(f"hue {self.hue_spin.value():.2f}")
+        if self.scale_jitter_spin.value() > 0:
+            enabled_augments.append(f"scale +/-{self.scale_jitter_spin.value():.2f}")
+        if self.aspect_jitter_spin.value() > 0:
+            enabled_augments.append(
+                f"aspect ratio {self.aspect_jitter_spin.value():.2f}"
+            )
         if self.decode_color_spin.value() > 0:
             enabled_augments.append(
                 f"decode-color {self.decode_color_spin.value():.2f}"
@@ -2413,6 +2455,8 @@ class ClassKitTrainingDialog(QDialog):
             "saturation": saturation_value,
             "brightness": brightness_value,
             "contrast": contrast_value,
+            "scale_jitter": self.scale_jitter_spin.value(),
+            "aspect_jitter": self.aspect_jitter_spin.value(),
             "decode_color_sim": self.decode_color_spin.value(),
             "resample_sim": self.resample_spin.value(),
             "monochrome": monochrome_value,

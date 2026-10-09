@@ -11,6 +11,7 @@ from torch.utils.data import Dataset
 from ..geometry import DEFAULT_GEOMETRY, PoseGeometry
 from ..transforms import affine_matrix, box2cs, normalize, top_down_affine
 from .targets import generate_udp_gaussian
+from .window_jitter import WindowJitter
 
 # Kept for backward compatibility: some callers/tests reach for the
 # process-wide default stride directly. Per-instance geometry now lives on
@@ -50,7 +51,20 @@ class CocoKeypointsDataset(Dataset):
         sigma: float,
         augment: bool,
         geom: PoseGeometry = DEFAULT_GEOMETRY,
+        scale_jitter: float | None = None,
+        aspect_jitter: float = 0.0,
+        seed: int = 0,
     ) -> None:
+        # ``scale_jitter=None`` keeps the legacy hard-coded random zoom. Any
+        # explicit value (including 0) switches to the centred window jitter:
+        # the crop window's size (``scale_jitter``) and width:height ratio
+        # (``aspect_jitter``) vary about the fixed crop centre.
+        self._window = (
+            WindowJitter(scale_jitter or 0.0, aspect_jitter, seed)
+            if augment and (scale_jitter is not None or aspect_jitter > 0.0)
+            else None
+        )
+        self._legacy_scale = scale_jitter is None
         self.dir = Path(dataset_dir)
         self.ids, self.index = load_coco_index(dataset_dir)
         self.ids = [i for i in ids if i in self.index]
@@ -80,17 +94,23 @@ class CocoKeypointsDataset(Dataset):
         # lands on an identical fraction-of-input at train and inference time.
         # ann["bbox"] is left untouched below for PCK normalization (validate.py),
         # which legitimately wants the tight animal extent, not the crop extent.
+        kp_warp = kp
+        if self._window is not None:
+            img, kp_warp = self._window.recrop(img, kp)
         img_h, img_w = img.shape[:2]
         full_box_xywh = np.array([0.0, 0.0, float(img_w), float(img_h)], np.float32)
         center, scale = box2cs(full_box_xywh, geom=self.geom)
 
         rot = 0.0
         if self.augment:
-            scale = scale * float(
-                np.clip(
-                    np.random.randn() * 0.25 + 1.0, 1 - _SCALE_JITTER, 1 + _SCALE_JITTER
+            if self._legacy_scale:
+                scale = scale * float(
+                    np.clip(
+                        np.random.randn() * 0.25 + 1.0,
+                        1 - _SCALE_JITTER,
+                        1 + _SCALE_JITTER,
+                    )
                 )
-            )
             if np.random.rand() < _ROT_PROB:
                 rot = float(
                     np.clip(
@@ -104,9 +124,9 @@ class CocoKeypointsDataset(Dataset):
         image = torch.from_numpy(normalize(warped))
 
         matrix = affine_matrix(center, scale, rot, geom=self.geom)
-        joints_in = _warp_joints(kp[:, :2], matrix)  # input-crop space
+        joints_in = _warp_joints(kp_warp[:, :2], matrix)  # input-crop space
         joints_hm = joints_in / self._feat_stride  # heatmap space
-        vis = kp[:, 2]
+        vis = kp_warp[:, 2]
         # Zero out visibility (for target/weight generation only) for joints
         # that warp outside the heatmap bounds under augmentation, so
         # JointsMSELoss does not train those channels toward "no keypoint

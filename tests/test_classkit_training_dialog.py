@@ -76,27 +76,41 @@ def test_training_dialog_auto_sizes_from_average_image_dimensions(qapp) -> None:
     assert dialog._custom_input_size_spin.value() == 96
 
 
-def test_training_dialog_augmentation_defaults_start_disabled(qapp) -> None:
+def test_training_dialog_augmentation_defaults_are_conservative(qapp) -> None:
     dialog = ClassKitTrainingDialog(n_labeled=8, class_choices=["a", "b"])
 
     settings = dialog.get_settings()
 
-    assert dialog.flip_ud_spin.value() == pytest.approx(0.0)
-    assert dialog.flip_lr_spin.value() == pytest.approx(0.0)
-    assert dialog.hue_spin.value() == pytest.approx(0.0)
-    assert dialog.saturation_spin.value() == pytest.approx(0.0)
-    assert dialog.brightness_spin.value() == pytest.approx(0.0)
-    assert dialog.contrast_spin.value() == pytest.approx(0.0)
-    assert dialog.monochrome_check.isChecked() is False
+    # Flips stay off by default: left/right are class labels for heading models.
     assert settings["flipud"] == pytest.approx(0.0)
     assert settings["fliplr"] == pytest.approx(0.0)
-    assert settings["hue"] == pytest.approx(0.0)
-    assert settings["saturation"] == pytest.approx(0.0)
-    assert settings["brightness"] == pytest.approx(0.0)
-    assert settings["contrast"] == pytest.approx(0.0)
+    # Hue is minimal because colour-tag identity depends on it.
+    assert settings["hue"] == pytest.approx(0.01)
+    assert settings["saturation"] == pytest.approx(0.10)
+    assert settings["brightness"] == pytest.approx(0.10)
+    assert settings["contrast"] == pytest.approx(0.10)
+    # Scale / aspect-ratio invariance is on by default.
+    assert settings["scale_jitter"] == pytest.approx(0.20)
+    assert settings["aspect_jitter"] == pytest.approx(0.20)
+    assert settings["decode_color_sim"] == pytest.approx(0.0)
+    assert settings["resample_sim"] == pytest.approx(0.0)
+    assert dialog.monochrome_check.isChecked() is False
     assert settings["monochrome"] is False
     assert settings["split_strategy"] == "stratified"
     assert settings["prediction_confidence_threshold"] == pytest.approx(0.5)
+
+
+def test_training_dialog_restores_scale_and_aspect_jitter(qapp) -> None:
+    dialog = ClassKitTrainingDialog(
+        n_labeled=8,
+        class_choices=["a", "b"],
+        initial_settings={"scale_jitter": 0.35, "aspect_jitter": 0.05},
+    )
+
+    settings = dialog.get_settings()
+
+    assert settings["scale_jitter"] == pytest.approx(0.35)
+    assert settings["aspect_jitter"] == pytest.approx(0.05)
 
 
 def test_training_dialog_restores_initial_settings(qapp) -> None:
