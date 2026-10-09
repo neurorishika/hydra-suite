@@ -485,9 +485,10 @@ def refresh_overlap_minimum(w) -> None:
         label.setText(f"Below whole-animal minimum ({shown})")
         label.setStyleSheet("color: #e0943a;")
         label.setToolTip(
-            "With less overlap than the largest object scale, an animal at a "
-            "tile seam can be cut in every tile. Your overlap is kept until "
-            "you raise it."
+            "With less overlap than an animal's share of a tile (the largest "
+            "object scale, or body size / tile size), an animal at a tile "
+            "seam can be cut in every tile. Your overlap is kept until you "
+            "raise it."
         )
         button.setText(f"Raise to {minimum:.{decimals}f}")
     else:

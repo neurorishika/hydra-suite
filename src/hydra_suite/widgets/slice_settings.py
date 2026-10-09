@@ -519,9 +519,33 @@ class SliceSettingsWidget(QGroupBox):
         if minimum is not None:
             self.spin_slice_overlap.setValue(minimum[0])  # the user path: emits
 
+    def _minimum_fractions(self) -> list[float]:
+        """The animal's share of a tile, per tile size the mode produces.
+
+        auto_object: the object scale(s) themselves (tile = body / scale).
+        custom: body / min(W, H) (a 0 side is the model input); auto_model:
+        body / model input. Outside auto_object the object scale is unused,
+        so without a known body there is no minimum to state.
+        """
+        mode = self._mode()
+        if mode == "auto_object":
+            return self._display_fractions()
+        body = self._body_value()
+        if body <= 0:
+            return []
+        imgsz = self._model_input_size
+        if mode == "custom":
+            side = min(
+                int(self.spin_slice_tile_w.value()) or imgsz,
+                int(self.spin_slice_tile_h.value()) or imgsz,
+            )
+        else:
+            side = imgsz
+        return [body / float(side)] if side > 0 else []
+
     def _whole_animal_minimum(self) -> tuple[float, bool] | None:
         return whole_animal_minimum(
-            self._display_fractions(),
+            self._minimum_fractions(),
             decimals=self.spin_slice_overlap.decimals(),
             ceiling=self.spin_slice_overlap.maximum(),
         )

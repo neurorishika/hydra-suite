@@ -518,3 +518,65 @@ def test_overlap_warning_hidden_while_tiling_is_off():
     w.chk_slice_enabled.setChecked(True)
     assert w.lbl_slice_overlap_minimum.text().startswith("Below")
     assert not w.btn_slice_overlap_raise.isHidden()
+
+
+# ---------------------------------------------- S4b follow-ups (coordinator)
+
+
+def _infer_widget(mode: str, *, body: float, tile=(0, 0), overlap=0.05):
+    w = SliceSettingsWidget(role="infer_yolo")
+    w.set_model_input_size(640)
+    w.set_spec(
+        TilingSpec(
+            enabled=True,
+            geometry_mode=mode,
+            object_tile_fractions=(0.4,),  # irrelevant outside auto_object
+            slice_width=tile[0],
+            slice_height=tile[1],
+            overlap=overlap,
+        )
+    )
+    w.set_reference_body(body, "stamped")
+    return w
+
+
+def test_custom_minimum_uses_body_over_the_smaller_custom_side():
+    """Custom tiles: the animal's share of a tile is body / min(W, H), not
+    the (disabled, unused) object scale."""
+    w = _infer_widget("custom", body=48.0, tile=(480, 400))
+    # 48 / 400 = 0.12 (+0.05 margin) = 0.17 -- not 0.4 + 0.05.
+    assert w.lbl_slice_overlap_minimum.text() == "Below whole-animal minimum (0.17)"
+    assert w.btn_slice_overlap_raise.text() == "Raise to 0.17"
+    w.spin_slice_tile_h.setValue(800)  # now min side 480: 0.1 + 0.05
+    assert "(0.15)" in w.lbl_slice_overlap_minimum.text()
+
+
+def test_custom_zero_side_means_model_input():
+    w = _infer_widget("custom", body=64.0, tile=(0, 0))
+    assert "(0.15)" in w.lbl_slice_overlap_minimum.text()  # 64/640 + 0.05
+
+
+def test_custom_without_a_body_shows_no_minimum():
+    w = _infer_widget("custom", body=0.0, tile=(480, 400))
+    assert w.lbl_slice_overlap_minimum.text() == ""
+    assert w.btn_slice_overlap_raise.isHidden()
+
+
+def test_auto_model_minimum_uses_body_over_the_model_input():
+    w = _infer_widget("auto_model", body=96.0)
+    assert w.lbl_slice_overlap_minimum.text() == "Below whole-animal minimum (0.20)"
+    w = _infer_widget("auto_model", body=0.0)
+    assert w.lbl_slice_overlap_minimum.text() == ""
+    assert w.btn_slice_overlap_raise.isHidden()
+
+
+def test_auto_object_minimum_still_uses_the_scale():
+    w = _infer_widget("auto_object", body=48.0)
+    assert "(0.45)" in w.lbl_slice_overlap_minimum.text()
+
+
+def test_custom_minimum_is_capped_for_a_tile_smaller_than_the_animal():
+    w = _infer_widget("custom", body=500.0, tile=(400, 400))
+    assert w.lbl_slice_overlap_minimum.text() == (
+        "Below whole-animal minimum (0.90, capped)"
+    )
