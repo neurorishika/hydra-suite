@@ -365,7 +365,9 @@ def test_extraction_cap_ignores_n():
     for n in (1, 10, 500):
         cfg = build_inference_config_from_params(_params(n))
         assert cfg.obb.raw_detection_cap == 0
-        assert effective_raw_detection_cap(cfg.obb) == MAX_DETECTIONS_PER_FRAME
+        # Extraction collects one past the limit so a real truncation is
+        # observable (rank_and_bound then cuts to the limit and records it).
+        assert effective_raw_detection_cap(cfg.obb) == MAX_DETECTIONS_PER_FRAME + 1
         assert cfg.obb.max_detections == n
 
 
@@ -425,10 +427,15 @@ def effective_raw_detection_cap(config: Any) -> int:
     is honoured up to the limit; 0 -- what tracking always uses -- means the
     limit itself. N (``max_detections``) is deliberately NOT consulted: it is
     applied at replay (``filtering.filter_with_indices``).
+
+    With no explicit cap, extraction collects ``MAX_DETECTIONS_PER_FRAME + 1``
+    candidates (model ``max_det`` included): the one extra row is a probe, so
+    ``rank_and_bound`` can tell a genuinely truncated frame (> limit) from one
+    with exactly the limit, and record it LOUDLY.
     """
     requested = int(getattr(config, "raw_detection_cap", 0) or 0)
     if requested <= 0:
-        return MAX_DETECTIONS_PER_FRAME
+        return MAX_DETECTIONS_PER_FRAME + 1
     return min(requested, MAX_DETECTIONS_PER_FRAME)
 ```
 
@@ -500,14 +507,7 @@ Import `require_target_count_within_limit` from `.limits`. Delete `raw_cap` and 
                         self.detection_limit_stats.record(frame_idx, candidate_count)
 ```
 
-Note: `materialize_tensors` already bounds tensor frames at the limit, so a tensor frame shows `count == limit` without a recorded hit. Make it visible: in `materialize_tensors`, compute `pre = int(raw.xywhr.shape[0])` before the cap. If `pre > cap`, set `result._pre_cap_count = pre` (a plain attribute on the dataclass instance). `rank_and_bound` returns `max(count, getattr(r, "_pre_cap_count", count))`. Ultralytics `max_det` truncation upstream stays invisible. That is acceptable because `max_det` equals the limit, so a frame showing exactly 1024 is reported by this check:
-
-```python
-                    elif candidate_count == MAX_DETECTIONS_PER_FRAME:
-                        self.detection_limit_stats.record(frame_idx, candidate_count)
-```
-
-(Record `==` too. At exactly the limit, truncation upstream cannot be ruled out, and the spec wants this loud.)
+Note: because `effective_raw_detection_cap` returns `MAX_DETECTIONS_PER_FRAME + 1` (the probe row), every upstream bound -- Ultralytics `max_det`, tile reservoirs, merge caps, `materialize_tensors` -- keeps at most limit+1 rows. `rank_and_bound` therefore sees `count == limit + 1` exactly when something was cut, and `count > MAX_DETECTIONS_PER_FRAME` is a precise hit test. Do NOT record frames with exactly 1024 detections. Add a test: a frame with exactly `MAX_DETECTIONS_PER_FRAME` candidates is stored whole and NOT recorded; one with `MAX_DETECTIONS_PER_FRAME + 1` is cut to the limit and recorded.
 
 `runner.py:1025`: `self.detection_limit_stats = DetectionLimitStats()`; pass `detection_limit_stats=self.detection_limit_stats` where `clipping_stats=self.clipping_stats` is passed (`:1668`). In `run_realtime` (`:1146-1151`) and `detect_batch_raw` (`:1555`), change `materialize_tensors(raw, self.config.obb.raw_detection_cap)` to `materialize_tensors(raw, effective_raw_detection_cap(self.config.obb))`, then apply `rank_and_bound` + record, exactly as in the pipeline, before the cache write.
 
