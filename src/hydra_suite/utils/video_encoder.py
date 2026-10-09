@@ -61,12 +61,19 @@ def _resolve_codec(backend: str, width: int, height: int) -> str:
     return codec
 
 
+# Probe-clip edge length: NVENC's minimum is ~145 px, VideoToolbox wants a
+# multiple of 16.
+_PROBE_SIZE = 256
+
+
 def _try_encode(codec_name: str) -> bool:
     """Return True if codec_name successfully encodes a test clip.
 
-    Uses 64x64 frames (multiple of 16) so hardware codecs exercise the same
+    Uses 256x256 frames (multiple of 16) so hardware codecs exercise the same
     avcodec_open2 path they would use for real frames.  2x2 frames are handled
-    differently by VideoToolbox and give false positives on some configurations.
+    differently by VideoToolbox and give false positives on some configurations,
+    and NVENC rejects anything below ~145 px (64x64 failed avcodec_open2 on every
+    NVIDIA box, silently dropping renders to libx264).
     """
     try:
         import av
@@ -77,10 +84,10 @@ def _try_encode(codec_name: str) -> bool:
         try:
             container = av.open(tmp, mode="w")
             stream = container.add_stream(codec_name, rate=1)
-            stream.width = 64
-            stream.height = 64
+            stream.width = _PROBE_SIZE
+            stream.height = _PROBE_SIZE
             stream.pix_fmt = "yuv420p"
-            frame = av.VideoFrame(64, 64, "yuv420p")
+            frame = av.VideoFrame(_PROBE_SIZE, _PROBE_SIZE, "yuv420p")
             for pkt in stream.encode(frame):
                 container.mux(pkt)
             for pkt in stream.encode():
@@ -132,6 +139,40 @@ def probe_video_backend() -> str:
     if _BACKEND_CACHE is None:
         _BACKEND_CACHE = _probe_backend()
     return _BACKEND_CACHE
+
+
+# ── Frame hand-off ────────────────────────────────────────────────────────────
+
+
+def _yuv420p_frame(av, frame_bgr: np.ndarray):
+    """Build a yuv420p ``av.VideoFrame`` from a C-contiguous BGR uint8 frame.
+
+    PyAV's ``from_ndarray(format="bgr24")`` copies row by row under the GIL and
+    then needs a swscale pass; on 4512x4512 frames that is ~67 ms and was the
+    whole render bottleneck once NVENC encoded in ~4 ms. cv2's I420 conversion
+    (same BT.601 limited-range matrix, rounding differs by <= 3 levels) plus a
+    straight memcpy into the planes is ~7 ms. Odd sizes (no exact 4:2:0 layout)
+    and padded planes keep the original path. A fresh frame per call: the
+    encoder may still hold a reference to the previous one.
+    """
+    height, width = frame_bgr.shape[:2]
+    if width % 2 or height % 2:
+        vf = av.VideoFrame.from_ndarray(frame_bgr, format="bgr24")
+        return vf.reformat(format="yuv420p")
+
+    import cv2
+
+    i420 = cv2.cvtColor(frame_bgr, cv2.COLOR_BGR2YUV_I420)
+    vf = av.VideoFrame(width, height, "yuv420p")
+    y_plane, u_plane, v_plane = vf.planes
+    if y_plane.line_size != width or u_plane.line_size != width // 2:
+        return av.VideoFrame.from_ndarray(i420, format="yuv420p")
+    chroma = i420[height:].reshape(-1)
+    quarter = (width // 2) * (height // 2)
+    y_plane.update(i420[:height])
+    u_plane.update(chroma[:quarter])
+    v_plane.update(chroma[quarter:])
+    return vf
 
 
 # ── VideoEncoder ──────────────────────────────────────────────────────────────
@@ -272,8 +313,7 @@ class VideoEncoder:
                     if frame_bgr.flags.c_contiguous
                     else np.ascontiguousarray(frame_bgr)
                 )
-                vf = av.VideoFrame.from_ndarray(frame_data, format="bgr24")
-                vf = vf.reformat(format="yuv420p")
+                vf = _yuv420p_frame(av, frame_data)
                 for pkt in self._stream.encode(vf):
                     self._container.mux(pkt)
             except Exception:

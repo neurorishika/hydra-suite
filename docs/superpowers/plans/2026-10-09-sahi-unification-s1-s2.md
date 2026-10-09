@@ -28,14 +28,28 @@
 
 1. `TilingSpec` lives in a new `utils/tiling_spec.py`, not `utils/slice_geometry.py` (385 lines; the ~500-line rule). `slice_geometry.py` remains the grid module and is not modified.
 2. SAM3 publish **dual-writes**: geometry stays in `.sam3_meta.json` (existing readers `sidecar_for` / `geometry_drift` keep working) and is also written to `.slice_meta.json` v3. Removing geometry from `.sam3_meta.json` is deferred to S3 once every reader goes through `read_tiling_meta`.
-3. v3 `training_geometry` keeps v2-reader mirrors: `reference_body_px` (= `trained_body_px`) and, for YOLO, a bare `object_tile_fraction`. SAM3 multi-scale omits the bare scalar (existing SAM3 convention: the median is stamped only as `prefill_object_tile_fraction`).
-4. The operating-scale rule differs per family because both are already shipped behavior: YOLO uses `np.median` of the fractions (what TrackerKit computes today from `target_sizes`); SAM3 uses an actual member of the set (`dataset_build._median_scale`). Both are written as `prefill_object_tile_fraction` at publish so readers never recompute.
+3. **YOLO v3 is strictly additive over v2** (adversarial review M3): every v2 key is kept verbatim — including `target_sizes` and the manifest's scalar `object_tile_fraction` — and canonical keys are added beside them. This keeps the v2 reader (`_training_values`), the baseline drift guard (`sliced_dataset.py:272`) and the DetectKit calibration grid byte-for-byte unchanged. Spec §4's "never writes `target_sizes`" is deferred to S3, when every reader goes through `read_tiling_meta`. SAM3 v3 (a new file, no legacy readers) is canonical-only and stamps only values present in the build (never defaults).
+4. **One operating-scale rule: `np.median`** of the fraction set (adversarial review M2). It is what TrackerKit computes from `target_sizes` and what SAM3's `dataset_build` stamps as `prefill_object_tile_fraction` (`_median`); `_median_scale` (a set member) is used only for `prefill_tile_px` and is not a fraction rule. Stamped `prefill_object_tile_fraction` is always preferred over recomputation.
 5. YOLO v3 does not stamp `tile_px_set`: the YOLO builder measures the reference body per frame, so no single set exists. SAM3 stamps its real set.
+6. `prefill_object_tile_fraction` maps to the canonical *operating* scale, not to `object_tile_fractions` (spec §3.5 listed it as a fraction alias; it is a median, not a member of the set).
+7. `TilingSpec.training_tile_sizes()` (fans out every scale) is named for training only; inference uses `operating_fraction` + `resolve_tile_size` — one scale, per the user's decision.
+8. `canonicalize`'s `operating_fraction` matches `_training_values` for every shape a writer in this repo produces; it knowingly differs on hand-made shapes TrackerKit mishandles (bools as numbers, `imgsz` strings like `"640.5"`, prefill-only docs which TrackerKit ignores). Documented, not mirrored.
+
+9. (S1 adversarial M1) `canonicalize` never raises on `target_sizes`: with no stated `imgsz` and no `legacy_px_imgsz`, it warns once and leaves `object_tile_fractions` absent (never rescales by an unstated size). Supersedes Review Focus 2's "raises".
+10. (S1 adversarial M3) Operating-scale ladder: `median(target_sizes)/imgsz` → stamped prefill → np.median of a fraction SET → bare scalar (0.15 if unparseable). Writer-produced sidecars carry no set key without `imgsz`, so `_training_values` parity holds for them.
+11. (S1 adversarial M4) `tile_px` (escalation explicit override) aliases to `slice_width = slice_height` with `geometry_mode="custom"` unless a mode is given.
+12. (S1 adversarial M6) A positive `tile_fraction` implies `enabled=True` (explicit `enabled` wins).
+13. `utils/tiling_spec.py` may exceed 500 lines (CLAUDE.md's guideline targets classes); resolvers split to `utils/tiling_resolve.py` only past ~650 lines.
+
+### S2 adversarial-review decisions (2026-10-09)
+
+- Fixed in the S2 fix wave: malformed profile `measurement` no longer raises (TrackerKit crashed on it too); SAM3 builder/reader never invent a fraction from the YOLO 0.15 fallback; `read_tiling_meta` uses family-correct defaults (YOLO `auto_object` like `_training_values`, SAM3 `nms`/`polygon_iou`/`crowd`) and never claims a default fraction; owned cleanup keeps a `.slice_meta.json` that carries user profiles; failed tiling writes leave no `.tmp`; `merge_training_geometry` requires `model_family`; publish → sidecar end-to-end tests.
+- Accepted, documented: a stale `.slice_meta.json` beside a fresh SAM3 publish target is read-merged (profiles kept, relabelled `sam3`); an OLD build's profile upsert on a v3 doc writes schema 2 without `model_family` (mixed-version only); the SAM3 publish child imports `core.inference` (+~220 MB RSS, measured on diptera; the training child already does); flat docs carrying envelope keys lose them from `training_geometry()` (no writer produces them).
 
 ## Review Focus
 
 1. An older TrackerKit (`slice_meta._training_values`) reading a v3 YOLO sidecar must return exactly (`==`, bit-exact floats) what it returns for the equivalent v2 sidecar — including multi-scale `target_sizes` medians. → Task 5.
-2. Legacy `target_sizes` with no `imgsz` are divided by 640 for YOLO only; anything else raises rather than silently rescaling by 1008. → Task 2, Task 6.
+2. Legacy `target_sizes` with no `imgsz` are divided by 640 for YOLO only; anything else is left unresolved with a warning (deviation 9) rather than silently rescaled by 1008. → Task 2, Task 6.
 3. Out-of-range or retired values in old files (overlap 0.95, fraction 0 or 1.5, `nmm`, unknown geometry mode, NaN) load with a warning and never raise; the same values passed straight to `TilingSpec(...)` raise. → Task 1, Task 2.
 4. A SAM3 publish whose `.slice_meta.json` write fails still succeeds; an orphaned-attempt cleanup also removes the attempt's `.slice_meta.json`. → Task 8.
 5. User calibration profiles in an existing sidecar survive a YOLO republish that upgrades v2 → v3, unchanged. → Task 7.
@@ -69,8 +83,8 @@ python -c "import hydra_suite, sys; print(hydra_suite.__file__)"   # must print 
   - `Backend = Literal["yolo_train", "yolo_infer", "sam3", "sam2"]`
   - `class Sourced(NamedTuple): value: Any; source: str`
   - `@dataclass(frozen=True) class BackendDefaults` and `BACKEND_DEFAULTS: dict[str, BackendDefaults]`
-  - `operating_fraction(fractions, rule: str) -> float | None`
-  - `@dataclass(frozen=True) class TilingSpec` with fields `enabled, geometry_mode, object_tile_fractions, reference_body_px, slice_width, slice_height, overlap, min_area_ratio, fragment_policy, merge_policy, merge_metric, merge_threshold`; methods `TilingSpec.defaults(backend)`, `.operating_fraction(backend=None)`, `.tile_sizes(imgsz, backend=None)`, `.to_mapping()`.
+  - `operating_fraction(fractions) -> float | None` (np.median, clamped to [0.01, 0.9])
+  - `@dataclass(frozen=True) class TilingSpec` with fields `enabled, geometry_mode, object_tile_fractions, reference_body_px, slice_width, slice_height, overlap, min_area_ratio, fragment_policy, merge_policy, merge_metric, merge_threshold`; methods `TilingSpec.defaults(backend)`, `.operating_fraction()`, `.training_tile_sizes(imgsz)`, `.to_mapping()`.
 
 - [ ] **Step 1: Write the failing tests**
 
@@ -142,26 +156,21 @@ def test_defaults_constructor_uses_table():
     assert spec.enabled is False
 
 
-def test_np_median_rule_matches_trackerkit_legacy():
-    # TrackerKit today: median(target_sizes)/imgsz -> 80/640 for [32,64,96,128].
-    assert operating_fraction((0.05, 0.10, 0.15, 0.20), "np_median") == pytest.approx(0.125)
-
-
-def test_member_median_rule_matches_sam3_median_scale():
-    # SAM3 _median_scale sorts TILES ascending and takes index (n-1)//2;
-    # tiles shrink as fractions grow, so that is the higher-middle fraction.
-    assert operating_fraction((0.05, 0.10, 0.15, 0.20), "member_median") == 0.15
-    assert operating_fraction((0.0275, 0.055), "member_median") == 0.055
-    assert operating_fraction((0.055,), "member_median") == 0.055
+def test_operating_fraction_is_np_median():
+    # TrackerKit today: median(target_sizes)/imgsz -> 80/640 for [32,64,96,128];
+    # SAM3 dataset_build stamps prefill_object_tile_fraction with the same rule.
+    assert operating_fraction((0.05, 0.10, 0.15, 0.20)) == pytest.approx(0.125)
+    assert operating_fraction((0.0275, 0.055)) == pytest.approx(0.04125)
+    assert operating_fraction((0.055,)) == 0.055
 
 
 def test_operating_fraction_clamps_and_handles_empty():
-    assert operating_fraction((), "np_median") is None
-    assert operating_fraction((0.005,), "np_median") == 0.01
-    assert operating_fraction((0.95,), "member_median") == 0.9
+    assert operating_fraction(()) is None
+    assert operating_fraction((0.005,)) == 0.01
+    assert operating_fraction((0.95,)) == 0.9
 
 
-def test_tile_sizes_delegates_to_resolve_scales():
+def test_training_tile_sizes_delegates_to_resolve_scales():
     spec = TilingSpec(
         enabled=True,
         geometry_mode="auto_object",
@@ -177,7 +186,7 @@ def test_tile_sizes_delegates_to_resolve_scales():
         slice_width=0,
         slice_height=0,
     )
-    assert spec.tile_sizes(640) == expected == [(500, 500), (250, 250)]
+    assert spec.training_tile_sizes(640) == expected == [(500, 500), (250, 250)]
 
 
 def test_to_mapping_is_canonical_and_json_safe():
@@ -270,34 +279,30 @@ class BackendDefaults:
     merge_metric: str
     merge_threshold: float
     min_area_ratio: float
-    # How one operating scale is chosen from a set (both are shipped behavior):
-    # "np_median" = TrackerKit's median(target_sizes)/imgsz;
-    # "member_median" = SAM3 dataset_build._median_scale (a real member).
-    operating_rule: str
 
 
 BACKEND_DEFAULTS: dict[str, BackendDefaults] = {
     # Multi-scale robustness set used by headless SliceTrainingConfig today.
     "yolo_train": BackendDefaults(
         (0.05, 0.10, 0.15, 0.20), "auto_object", "drop",
-        "greedy_nmm", "ios", 0.5, DEFAULT_MIN_AREA_RATIO, "np_median",
+        "greedy_nmm", "ios", 0.5, DEFAULT_MIN_AREA_RATIO,
     ),
     # SliceConfig defaults (TrackerKit is canonical; must not move).
     "yolo_infer": BackendDefaults(
         (0.15,), "auto_model", "drop",
-        "greedy_nmm", "ios", 0.5, DEFAULT_MIN_AREA_RATIO, "np_median",
+        "greedy_nmm", "ios", 0.5, DEFAULT_MIN_AREA_RATIO,
     ),
     # Sam3LoraParams.object_tile_fraction; SAM3 merge is polygon-IoU NMS after
     # a containment gate (semantic/tiling.py), fragments become is_crowd.
     "sam3": BackendDefaults(
         (0.055,), "auto_object", "crowd",
-        "nms", "polygon_iou", 0.5, DEFAULT_MIN_AREA_RATIO, "member_median",
+        "nms", "polygon_iou", 0.5, DEFAULT_MIN_AREA_RATIO,
     ),
     # Stock SAM2: full frame until calibrated (2026-10-03 spec: fractions do
     # not transfer between models). SAM2 owner tiles do not merge.
     "sam2": BackendDefaults(
         (), "auto_object", "drop",
-        "nms", "iou", 0.5, DEFAULT_MIN_AREA_RATIO, "member_median",
+        "nms", "iou", 0.5, DEFAULT_MIN_AREA_RATIO,
     ),
 }
 
@@ -306,19 +311,16 @@ def _clamp_fraction(value: float) -> float:
     return max(FRACTION_MIN, min(FRACTION_MAX, float(value)))
 
 
-def operating_fraction(fractions, rule: str) -> float | None:
-    """The single operating scale for a fraction set, clamped like the planner."""
+def operating_fraction(fractions) -> float | None:
+    """The ONE inference scale for a fraction set: np.median, clamped like the planner.
+
+    The same rule TrackerKit applies to median(target_sizes)/imgsz and SAM3's
+    dataset_build stamps as prefill_object_tile_fraction.
+    """
     values = [float(f) for f in fractions]
     if not values:
         return None
-    if rule == "np_median":
-        return _clamp_fraction(float(np.median(np.asarray(values))))
-    if rule == "member_median":
-        # Tiles shrink as fractions grow: _median_scale's ascending-tile index
-        # (n-1)//2 is the same element in a DESCENDING fraction ordering.
-        ordered = sorted(values, reverse=True)
-        return _clamp_fraction(ordered[(len(ordered) - 1) // 2])
-    raise ValueError(f"unknown operating rule {rule!r}")
+    return _clamp_fraction(float(np.median(np.asarray(values))))
 
 
 def _finite(value: Any) -> float | None:
@@ -396,12 +398,13 @@ class TilingSpec:
             merge_threshold=d.merge_threshold,
         )
 
-    def operating_fraction(self, backend: Backend | None = None) -> float | None:
-        rule = BACKEND_DEFAULTS[backend].operating_rule if backend else "np_median"
-        return operating_fraction(self.object_tile_fractions, rule)
+    def operating_fraction(self) -> float | None:
+        return operating_fraction(self.object_tile_fractions)
 
-    def tile_sizes(self, imgsz: int, backend: Backend | None = None) -> list[tuple[int, int]]:
-        scalar = self.operating_fraction(backend) or BACKEND_DEFAULTS["yolo_infer"].object_tile_fractions[0]
+    def training_tile_sizes(self, imgsz: int) -> list[tuple[int, int]]:
+        """TRAINING fan-out: one tile size per scale. Inference uses ONE scale
+        (operating_fraction + resolve_tile_size), never this."""
+        scalar = self.operating_fraction() or BACKEND_DEFAULTS["yolo_infer"].object_tile_fractions[0]
         return resolve_scales(
             geometry_mode=self.geometry_mode,
             imgsz=int(imgsz),
@@ -446,7 +449,8 @@ git commit -m "feat(tiling): canonical TilingSpec contract and per-backend defau
   - `canonicalize(mapping, *, legacy_px_imgsz: float | None = None) -> tuple[dict[str, Any], dict[str, Any]]` — returns `(canonical, extras)`. `canonical` holds only keys the input determined, using `_SPEC_FIELDS` names plus the extra key `"operating_fraction"` when the input stamped one (`prefill_object_tile_fraction`) or when it is derivable bit-exactly from `target_sizes` + `imgsz`. `extras` holds every unconsumed key unchanged (including `imgsz`).
   - `TilingSpec.from_mapping(mapping, *, backend=None, legacy_px_imgsz=None) -> TilingSpec` — dataclass defaults (or `defaults(backend)`) overlaid with `canonical`.
   - `TilingSpec.from_canonical(canonical, *, backend=None) -> TilingSpec` — same, from an existing `canonicalize` result.
-  - `operating_fraction` in `canonical` mirrors `slice_meta._training_values` bit-for-bit: `median(target_sizes)/imgsz` when both present, else stamped `prefill_object_tile_fraction`, else the bare `object_tile_fraction` (clamped; unparseable → 0.15) when that key or `target_sizes` is present.
+  - `operating_fraction` in `canonical`, in order: `median(target_sizes)/imgsz` when both present (imgsz must parse to an int ≥ 1); else stamped `prefill_object_tile_fraction`; else the bare `object_tile_fraction` (clamped; unparseable → 0.15) when that key or `target_sizes` is present. Equals `_training_values` for every writer-produced shape (deviation 8).
+  - Warnings for clamped/dropped legacy values are logged once per `(field, value)` per process (TrackerKit re-reads sidecars on every refresh).
 
 - [ ] **Step 1: Write the failing tests**
 
@@ -603,6 +607,25 @@ def test_from_mapping_without_backend_does_not_invent_fractions():
     assert spec.object_tile_fractions == ()
 
 
+@pytest.mark.parametrize("imgsz", [0.5, float("inf"), float("nan"), "x", -640, True])
+def test_unusable_imgsz_never_divides(imgsz):
+    """Adversarial M4: no ZeroDivision/Overflow on hostile imgsz."""
+    canonical, _ = canonicalize({"target_sizes": [64], "imgsz": imgsz}, legacy_px_imgsz=640.0)
+    assert canonical["object_tile_fractions"] == (0.1,)
+
+
+@pytest.mark.parametrize("raw,expected", [("false", False), ("0", False), ("true", True), (0, False), (1, True), (True, True)])
+def test_enabled_parses_strings(raw, expected):
+    assert canonicalize({"enabled": raw})[0]["enabled"] is expected
+
+
+def test_repeated_legacy_warning_logged_once(caplog):
+    caplog.set_level(logging.WARNING)
+    for _ in range(5):
+        canonicalize({"overlap": 0.97})
+    assert caplog.text.count("overlap=0.97") == 1
+
+
 def test_none_and_empty_mapping():
     assert canonicalize(None) == ({}, {})
     assert canonicalize({}) == ({}, {})
@@ -671,18 +694,44 @@ def _fraction_list(raw: Any) -> list[float]:
     return out
 
 
+_WARNED: set[tuple[str, str]] = set()
+
+
+def _warn_once(name: str, value: Any, message: str, *args: Any) -> None:
+    """Legacy-value warnings fire once per (field, value) per process."""
+    key = (name, repr(value))
+    if key in _WARNED:
+        return
+    _WARNED.add(key)
+    logger.warning(message, *args)
+
+
 def _clamped(name: str, value: float, lo: float, hi: float) -> float:
     if value < lo or value > hi:
         clamped = max(lo, min(hi, value))
-        logger.warning("SAHI %s=%r is outside [%s, %s]; using %s", name, value, lo, hi, clamped)
+        _warn_once(name, value, "SAHI %s=%r is outside [%s, %s]; using %s", name, value, lo, hi, clamped)
         return clamped
     return value
+
+
+def _parse_bool(raw: Any) -> bool:
+    if isinstance(raw, str):
+        return raw.strip().lower() not in ("", "0", "false", "no", "off")
+    return bool(raw)
+
+
+def _positive_int(raw: Any) -> int:
+    """An image size usable as a denominator, else 0."""
+    value = _finite(raw)
+    if value is None or value < 1:
+        return 0
+    return min(8192, int(value))
 
 
 def _normalize(name: str, raw: Any) -> Any:
     """Lenient per-field read. Returns _DROP when the value is unusable."""
     if name == "enabled":
-        return bool(raw)
+        return _parse_bool(raw)
     if name in ("geometry_mode", "fragment_policy", "merge_metric", "merge_policy"):
         value = str(raw)
         if name == "merge_policy" and value == "nmm":
@@ -694,18 +743,18 @@ def _normalize(name: str, raw: Any) -> Any:
             "merge_policy": MERGE_POLICIES,
         }[name]
         if value not in allowed:
-            logger.warning("SAHI %s=%r is not one of %s; ignoring it", name, value, allowed)
+            _warn_once(name, value, "SAHI %s=%r is not one of %s; ignoring it", name, value, allowed)
             return _DROP
         return value
     number = _finite(raw)
     if number is None:
-        logger.warning("SAHI %s=%r is not a finite number; ignoring it", name, raw)
+        _warn_once(name, raw, "SAHI %s=%r is not a finite number; ignoring it", name, raw)
         return _DROP
     if name in ("slice_width", "slice_height"):
         return int(_clamped(name, float(int(number)), 0, 8192))
     if name == "reference_body_px":
         if number < 0:
-            logger.warning("SAHI reference_body_px=%r is negative; ignoring it", number)
+            _warn_once(name, number, "SAHI reference_body_px=%r is negative; ignoring it", number)
             return _DROP
         return number
     if name == "overlap":
@@ -741,7 +790,9 @@ def canonicalize(
         canonical[name] = value
         if name == "overlap" and {"overlap_width_ratio", "overlap_height_ratio"} <= set(present):
             if src["overlap_width_ratio"] != src["overlap_height_ratio"]:
-                logger.warning(
+                _warn_once(
+                    "overlap_axes",
+                    (src["overlap_width_ratio"], src["overlap_height_ratio"]),
                     "SAHI overlap_width_ratio=%r and overlap_height_ratio=%r differ; "
                     "the canonical single overlap uses the width ratio",
                     src["overlap_width_ratio"],
@@ -762,9 +813,9 @@ def canonicalize(
     consumed.add(_LEGACY_PX_KEY)
     raw_targets = [_finite(t) for t in _as_list(src.get(_LEGACY_PX_KEY))]
     raw_targets = [t for t in raw_targets if t is not None]
-    stated_imgsz = _finite(src.get("imgsz"))
+    stated_imgsz = _positive_int(src.get("imgsz"))
     if not fractions and any(t > 0 for t in raw_targets):
-        denominator = stated_imgsz if stated_imgsz and stated_imgsz > 0 else legacy_px_imgsz
+        denominator = stated_imgsz or _finite(legacy_px_imgsz)
         if not denominator or denominator <= 0:
             raise ValueError(
                 "target_sizes are pixels at a model input size; the mapping has no "
@@ -773,9 +824,9 @@ def canonicalize(
         fractions = [t / denominator for t in raw_targets if 0.0 < t / denominator <= 1.0]
     # operating_fraction mirrors core/inference/slice_meta._training_values
     # bit-for-bit (what TrackerKit serves today), then a stamped prefill.
-    if raw_targets and stated_imgsz and stated_imgsz > 0:
+    if raw_targets and stated_imgsz:
         canonical["operating_fraction"] = _clamp_fraction(
-            float(np.median(np.asarray(raw_targets))) / min(8192, int(stated_imgsz))
+            float(np.median(np.asarray(raw_targets))) / stated_imgsz
         )
 
     for key in _FRACTION_SCALAR_KEYS:
@@ -794,7 +845,7 @@ def canonicalize(
                 fractions = got[:1]
                 break
             if src[key] is not None:
-                logger.warning("SAHI %s=%r is outside (0, 1]; ignoring it", key, src[key])
+                _warn_once(key, src[key], "SAHI %s=%r is outside (0, 1]; ignoring it", key, src[key])
     if fractions:
         canonical["object_tile_fractions"] = tuple(fractions)
 
@@ -863,6 +914,7 @@ git commit -m "feat(tiling): canonicalize legacy SAHI names in one alias map"
 - Produces:
   - `resolve_reference_body_px(*, override=None, dataset_median=None, stamped=None, tracker_reference=None) -> Sourced` (float px; sources `override` / `dataset` / `stamped` / `user`; `Sourced(0.0, "default")` when nothing positive)
   - `resolve_operating_fraction(*, backend, profile=None, stamped_operating=None, stamped_fractions=()) -> Sourced` (float | None; sources `profile` / `stamped` / `default`)
+  - `resolve_object_tile_fractions(*, backend, user=None, profile=None, stamped=()) -> Sourced` (tuple; sources `user` / `profile` / `stamped` / `default`) — the fraction SET for training (spec §3.3)
   - `resolve_overlap(*, override=None, saved=None, fractions=()) -> Sourced` (sources `override` / `user` / `derived` / `default`)
   - `resolve_tile_size(spec: TilingSpec, *, imgsz: int, fraction: float | None) -> Sourced` (`(w, h)`; source `user` in custom mode with an explicit size, else `derived`)
 
@@ -877,6 +929,7 @@ from hydra_suite.utils.tiling_spec import (
     DEFAULT_OVERLAP,
     Sourced,
     TilingSpec,
+    resolve_object_tile_fractions,
     resolve_operating_fraction,
     resolve_overlap,
     resolve_reference_body_px,
@@ -901,9 +954,18 @@ def test_operating_fraction_chain():
     assert resolve_operating_fraction(backend="yolo_infer", profile=0.12, stamped_operating=0.2) == Sourced(0.12, "profile")
     assert resolve_operating_fraction(backend="yolo_infer", stamped_operating=0.2) == Sourced(0.2, "stamped")
     assert resolve_operating_fraction(backend="yolo_infer", stamped_fractions=(0.05, 0.1, 0.15, 0.2)) == Sourced(pytest.approx(0.125), "stamped")
-    assert resolve_operating_fraction(backend="sam3", stamped_fractions=(0.05, 0.1, 0.15, 0.2)) == Sourced(0.15, "stamped")
+    assert resolve_operating_fraction(backend="sam3", stamped_fractions=(0.05, 0.1, 0.15, 0.2)) == Sourced(pytest.approx(0.125), "stamped")
     assert resolve_operating_fraction(backend="yolo_infer") == Sourced(0.15, "default")
     assert resolve_operating_fraction(backend="sam2") == Sourced(None, "default")
+
+
+def test_fraction_set_chain():
+    assert resolve_object_tile_fractions(backend="yolo_train", user=[0.1, 0.2], profile=(0.3,), stamped=(0.4,)) == Sourced((0.1, 0.2), "user")
+    assert resolve_object_tile_fractions(backend="yolo_train", profile=(0.3,), stamped=(0.4,)) == Sourced((0.3,), "profile")
+    assert resolve_object_tile_fractions(backend="yolo_train", stamped=(0.4,)) == Sourced((0.4,), "stamped")
+    assert resolve_object_tile_fractions(backend="yolo_train") == Sourced((0.05, 0.10, 0.15, 0.20), "default")
+    assert resolve_object_tile_fractions(backend="yolo_train", user=[], stamped=[0, 2.0]) == Sourced((0.05, 0.10, 0.15, 0.20), "default")
+    assert resolve_object_tile_fractions(backend="sam2") == Sourced((), "default")
 
 
 def test_overlap_chain():
@@ -985,20 +1047,29 @@ def resolve_operating_fraction(
     stamped_fractions=(),
 ) -> Sourced:
     """The ONE inference scale: profile -> stamped -> backend default."""
-    rule = BACKEND_DEFAULTS[backend].operating_rule
     parsed = _positive(profile)
     if parsed is not None:
         return Sourced(_clamp_fraction(parsed), "profile")
     parsed = _positive(stamped_operating)
     if parsed is not None:
         return Sourced(_clamp_fraction(parsed), "stamped")
-    stamped = operating_fraction(_fraction_list(stamped_fractions), rule)
+    stamped = operating_fraction(_fraction_list(stamped_fractions))
     if stamped is not None:
         return Sourced(stamped, "stamped")
     return Sourced(
-        operating_fraction(BACKEND_DEFAULTS[backend].object_tile_fractions, rule),
-        "default",
+        operating_fraction(BACKEND_DEFAULTS[backend].object_tile_fractions), "default"
     )
+
+
+def resolve_object_tile_fractions(
+    *, backend: Backend, user: Any = None, profile: Any = None, stamped: Any = ()
+) -> Sourced:
+    """The fraction SET (training): user -> profile -> stamped -> backend default."""
+    for value, source in ((user, "user"), (profile, "profile"), (stamped, "stamped")):
+        usable = _fraction_list(value)
+        if usable:
+            return Sourced(tuple(usable), source)
+    return Sourced(BACKEND_DEFAULTS[backend].object_tile_fractions, "default")
 
 
 def resolve_overlap(*, override: Any = None, saved: Any = None, fractions=()) -> Sourced:
@@ -1060,7 +1131,7 @@ Expected: all PASS; lint clean for the new module.
 
 Dispatch `Agent` with `model: "fable"`, `subagent_type: "general-purpose"`, prompt:
 
-> You are an adversarial reviewer. Find reasons NOT to merge branch `feat/sahi-unify-s1` (worktree `.worktrees/sahi-s1`, diff vs `main`). Spec: `docs/superpowers/specs/2026-10-09-sahi-unification-design.md`; plan: `docs/superpowers/plans/2026-10-09-sahi-unification-s1-s2.md`. EXECUTE code (`conda activate hydra-mps; export PYTHONPATH=$PWD/src`) to falsify claims; construct counterexamples. Targets: (1) `canonicalize` on every real legacy shape in the repo — grep writers of `.slice_meta.json`, `.sam3_meta.json`, `SliceTrainingSettings.to_dict`, `SliceTrainingConfig`, `Sam3LoraParams`, TrackerKit `slice_profile_settings` snapshot, `SemanticEscalationRequest`, SAM2 request — and report any key it drops, mis-maps, or raises on; (2) is `operating_fraction` in `canonicalize` bit-identical to `core/inference/slice_meta._training_values` for every input both accept (fuzz it); (3) does `member_median` equal `training/sam3_lora/dataset_build._median_scale` after mapping fractions → tiles for random sets incl. ties/duplicates; (4) do the backend defaults match the live dataclass defaults they claim to mirror; (5) read-lenient/write-strict holds (no raise on any legacy value; strict constructor). Do NOT stash, reset, or edit files in the worktree; write scratch scripts under /tmp. Report findings ranked by severity with a reproducer each.
+> You are an adversarial reviewer. Find reasons NOT to merge branch `feat/sahi-unify-s1` (worktree `.worktrees/sahi-s1`, diff vs `main`). Spec: `docs/superpowers/specs/2026-10-09-sahi-unification-design.md`; plan: `docs/superpowers/plans/2026-10-09-sahi-unification-s1-s2.md`. EXECUTE code (`conda activate hydra-mps; export PYTHONPATH=$PWD/src`) to falsify claims; construct counterexamples. Targets: (1) `canonicalize` on every real legacy shape in the repo — grep writers of `.slice_meta.json`, `.sam3_meta.json`, `SliceTrainingSettings.to_dict`, `SliceTrainingConfig`, `Sam3LoraParams`, TrackerKit `slice_profile_settings` snapshot, `SemanticEscalationRequest`, SAM2 request — and report any key it drops, mis-maps, or raises on; (2) is `operating_fraction` in `canonicalize` bit-identical to `core/inference/slice_meta._training_values` for every input both accept (fuzz it); (3) does `operating_fraction` equal what `training/sam3_lora/dataset_build` stamps as `prefill_object_tile_fraction` (its `_median`) for random sets incl. ties/duplicates; (4) do the backend defaults match the live dataclass defaults they claim to mirror; (5) read-lenient/write-strict holds (no raise on any legacy value; strict constructor). Do NOT stash, reset, or edit files in the worktree; write scratch scripts under /tmp. Report findings ranked by severity with a reproducer each.
 
 Run alongside it a normal whole-branch reviewer (`superpowers:requesting-code-review`).
 
@@ -1080,6 +1151,8 @@ git worktree remove .worktrees/sahi-s1 && git branch -d feat/sahi-unify-s1
 
 ## Slice S2 — v3 tiling sidecar
 
+> **Revised 2026-10-09 after the plan-stage adversarial review** (B1, M1–M5, m2–m4, m7 folded into Tasks 5–8 below). The S2 equivalence smoke only proves import-time inertness; writer behavior is covered by Task 7/8 tests.
+
 Setup (after S1 is merged):
 
 ```bash
@@ -1092,16 +1165,15 @@ cd .worktrees/sahi-s2 && conda activate hydra-mps && export PYTHONPATH=$PWD/src
 
 **Files:**
 - Create: `src/hydra_suite/core/inference/tiling_meta.py`
-- Modify: `src/hydra_suite/core/inference/slice_meta.py:19` (`SLICE_META_SCHEMA_VERSION = 3`), `:66-73` (`normalized_slice_meta` carries `model_family`), `:201-210` (`merge_training_geometry` gains `model_family`)
+- Modify: `src/hydra_suite/core/inference/slice_meta.py` — `SLICE_META_SCHEMA_VERSION = 3`; `training_geometry` strips envelope keys from flat docs; `normalized_slice_meta` carries `model_family`; `merge_training_geometry` gains `model_family`
 - Test: `tests/test_tiling_meta_build.py`
 
 **Interfaces:**
-- Consumes: `TilingSpec`, `canonicalize` (S1); `slice_meta.normalized_slice_meta`, `merge_training_geometry`.
+- Consumes (S1): `canonicalize`, `operating_fraction`; `utils.slice_geometry.LEGACY_TARGET_SIZE_IMGSZ`.
 - Produces:
   - `MODEL_FAMILIES = ("yolo", "sam3")`
-  - `build_training_geometry(spec: TilingSpec, *, model_family: str, imgsz: int, tile_px_set=(), operating: float | None = None, extras: dict | None = None) -> dict`
-  - `training_geometry_from_yolo_manifest(slice_geometry: dict) -> dict`
-  - `training_geometry_from_sam3_manifest(build_manifest: dict, *, imgsz: int) -> dict`
+  - `training_geometry_from_yolo_manifest(slice_geometry: dict) -> dict` — **additive**: every input key kept verbatim; adds `object_tile_fractions` (only if non-empty), `prefill_object_tile_fraction` (only if derivable), `trained_body_px` (only if a body size is present), `fragment_policy="drop"` (only if absent). Never raises.
+  - `training_geometry_from_sam3_manifest(build_manifest: dict, *, imgsz: int) -> dict` — canonical-only; stamps only values present in the input plus `fragment_policy="crowd"` and `imgsz`. Never invents `geometry_mode`/`overlap`/`min_area_ratio`. Bare `object_tile_fraction` only when single-scale. Never raises.
   - `slice_meta.merge_training_geometry(existing, training_geometry, *, model_family: str = "yolo") -> dict`
   - v3 document keys: `schema_version` (3), `model_family`, `training_geometry`, `primary_profile_id`, `profiles`.
 
@@ -1111,18 +1183,18 @@ cd .worktrees/sahi-s2 && conda activate hydra-mps && export PYTHONPATH=$PWD/src
 # tests/test_tiling_meta_build.py
 import pytest
 
+from hydra_suite.core.inference.geometry_drift import stamped_object_tile_fraction
 from hydra_suite.core.inference.slice_meta import (
     SLICE_META_SCHEMA_VERSION,
     _training_values,
     merge_training_geometry,
     normalized_slice_meta,
+    training_geometry,
 )
 from hydra_suite.core.inference.tiling_meta import (
-    build_training_geometry,
     training_geometry_from_sam3_manifest,
     training_geometry_from_yolo_manifest,
 )
-from hydra_suite.utils.tiling_spec import TilingSpec
 
 
 def _yolo_manifest(**over):
@@ -1137,94 +1209,110 @@ def _yolo_manifest(**over):
     return base
 
 
-@pytest.mark.parametrize(
-    "manifest",
-    [
-        _yolo_manifest(),
-        _yolo_manifest(target_sizes=[33, 70, 101]),
-        _yolo_manifest(target_sizes=[], object_tile_fraction=0.137),
-        _yolo_manifest(target_sizes=[96], imgsz=1024),
-        _yolo_manifest(geometry_mode="custom", slice_width=800, slice_height=600),
-        _yolo_manifest(target_sizes=[4, 8], imgsz=640),  # clamps to 0.01
-        {"geometry_mode": "auto_object", "target_sizes": [200.0, 300.0], "reference_body_px": 42.0},
-        {"object_tile_fraction": 0, "overlap": 0.95},
-    ],
-)
-def test_v2_reader_invariance_for_yolo(manifest):
-    """Review Focus 1: an older TrackerKit sees bit-identical values."""
+YOLO_MANIFESTS = [
+    _yolo_manifest(),
+    _yolo_manifest(target_sizes=[33, 70, 101]),
+    _yolo_manifest(target_sizes=[], object_tile_fraction=0.137),
+    _yolo_manifest(target_sizes=[96], imgsz=1024),
+    _yolo_manifest(geometry_mode="custom", slice_width=800, slice_height=600),
+    _yolo_manifest(target_sizes=[4, 8], imgsz=640),
+    {"geometry_mode": "auto_object", "target_sizes": [200.0, 300.0], "reference_body_px": 42.0},
+    {"object_tile_fraction": 0, "overlap": 0.95},
+    {},
+]
+
+
+@pytest.mark.parametrize("manifest", YOLO_MANIFESTS)
+def test_yolo_v3_is_additive(manifest):
+    """Review Focus 1 + adversarial M3: every v2 consumer sees identical input."""
     v3 = training_geometry_from_yolo_manifest(manifest)
+    assert {k: v3[k] for k in manifest} == manifest
     assert _training_values(v3) == _training_values(manifest)
+    assert stamped_object_tile_fraction(v3) == stamped_object_tile_fraction(manifest)
 
 
-def test_yolo_v3_shape():
+def test_yolo_v3_added_keys():
     v3 = training_geometry_from_yolo_manifest(_yolo_manifest())
     assert v3["object_tile_fractions"] == [0.05, 0.1, 0.15, 0.2]
-    assert v3["trained_body_px"] == v3["reference_body_px"] == 41.5
+    assert v3["prefill_object_tile_fraction"] == pytest.approx(0.125)
+    assert v3["trained_body_px"] == 41.5
     assert v3["fragment_policy"] == "drop"
-    assert v3["imgsz"] == 640
-    assert "target_sizes" not in v3
     assert "tile_px_set" not in v3  # YOLO measures body per frame: no single set
-    assert v3["negative_tile_fraction"] == 0.15
-    assert v3["multiscale_loss_balance"] == {"enabled": True, "power": 0.5}
+
+
+def test_yolo_v3_never_invents():
+    """Adversarial B1/m2: an empty manifest gains no geometry."""
+    v3 = training_geometry_from_yolo_manifest({})
+    assert v3 == {"fragment_policy": "drop"}
+
+
+def test_yolo_v3_does_not_mutate_input():
+    manifest = _yolo_manifest()
+    snapshot = dict(manifest)
+    training_geometry_from_yolo_manifest(manifest)
+    assert manifest == snapshot
+
+
+SAM3_MULTI = {
+    "geometry_mode": "auto_object", "tile_px_set": [[1940, 1940], [970, 970]],
+    "object_tile_fractions": [0.0275, 0.055], "prefill_object_tile_fraction": 0.04125,
+    "prefill_tile_px": [970, 970], "full_frame_mix": False, "scale_range_px": [970, 1940],
+    "reference_body_px": 53.4, "tile_overlap": 0.25, "min_retained_area_frac": 0.3,
+    "fragment_counts": {"x": 1}, "scale_counts": {"tile:970x970": 10},
+}
 
 
 def test_sam3_multiscale_shape():
-    manifest = {
-        "geometry_mode": "auto_object", "tile_px_set": [[1940, 1940], [970, 970]],
-        "object_tile_fractions": [0.0275, 0.055], "prefill_object_tile_fraction": 0.055,
-        "prefill_tile_px": [970, 970], "full_frame_mix": False, "scale_range_px": [970, 1940],
-        "reference_body_px": 53.4, "tile_overlap": 0.25, "min_retained_area_frac": 0.25,
-        "fragment_counts": {"x": 1}, "scale_counts": {"tile:970x970": 10},
-    }
-    v3 = training_geometry_from_sam3_manifest(manifest, imgsz=1008)
+    v3 = training_geometry_from_sam3_manifest(SAM3_MULTI, imgsz=1008)
     assert v3["object_tile_fractions"] == [0.0275, 0.055]
-    assert v3["prefill_object_tile_fraction"] == 0.055
+    assert v3["prefill_object_tile_fraction"] == 0.04125
     assert "object_tile_fraction" not in v3  # SAM3 multi-scale convention
     assert v3["tile_px_set"] == [[1940, 1940], [970, 970]]
     assert v3["overlap"] == 0.25
+    assert v3["min_area_ratio"] == 0.3
+    assert v3["geometry_mode"] == "auto_object"
+    assert v3["trained_body_px"] == v3["reference_body_px"] == 53.4
     assert v3["fragment_policy"] == "crowd"
     assert v3["imgsz"] == 1008
-    assert "fragment_counts" not in v3 and "scale_counts" not in v3  # build bookkeeping stays in the manifest
-    assert v3["scale_range_px"] == [970, 1940]
+    assert v3["full_frame_mix"] is False and v3["scale_range_px"] == [970, 1940]
+    for legacy in ("tile_overlap", "min_retained_area_frac", "prefill_tile_px", "fragment_counts", "scale_counts"):
+        assert legacy not in v3
 
 
 def test_sam3_single_scale_keeps_bare_scalar():
     v3 = training_geometry_from_sam3_manifest(
-        {"tile_px": [971, 971], "object_tile_fraction": 0.055, "reference_body_px": 53.4,
-         "tile_overlap": 0.25, "geometry_mode": "auto_object"},
+        {"tile_px": [971, 971], "object_tile_fraction": 0.055, "reference_body_px": 53.4},
         imgsz=1008,
     )
-    assert v3["object_tile_fraction"] == 0.055
+    assert v3["object_tile_fraction"] == v3["prefill_object_tile_fraction"] == 0.055
     assert v3["tile_px_set"] == [[971, 971]]
 
 
-def test_missing_overlap_or_imgsz_is_not_invented():
-    """Review Focus 6: partial manifests publish; nothing is fabricated."""
-    geometry = build_training_geometry(TilingSpec(), model_family="yolo", imgsz=0)
-    assert "overlap" not in geometry
-    assert "imgsz" not in geometry
+def test_sam3_never_invents():
+    """Adversarial B1: absent mode/overlap/min-area stay absent."""
+    v3 = training_geometry_from_sam3_manifest({"tile_px": 971}, imgsz=1008)
+    assert v3 == {"fragment_policy": "crowd", "imgsz": 1008, "tile_px_set": [[971, 971]]}
 
 
-def test_partial_legacy_manifest_from_existing_publish_tests():
-    # Shape used by tests/test_model_publish_slice_geometry.py: no imgsz, no overlap.
-    manifest = {"geometry_mode": "auto_object", "target_sizes": [200.0, 300.0], "reference_body_px": 42.0}
-    v3 = training_geometry_from_yolo_manifest(manifest)
-    assert v3["reference_body_px"] == 42.0
-    assert _training_values(v3) == _training_values(manifest)
+@pytest.mark.parametrize(
+    "hostile",
+    [{"tile_px_set": 971}, {"tile_px_set": [["a", "b"]]}, {"tile_px_set": [[float("nan"), 1]]},
+     {"tile_px_set": [[float("inf"), 1]]}, {"tile_px": True}, {"object_tile_fractions": "x"}],
+)
+def test_sam3_builder_never_raises(hostile):
+    training_geometry_from_sam3_manifest(hostile, imgsz=1008)
 
 
-def test_unknown_family_rejected():
-    with pytest.raises(ValueError):
-        build_training_geometry(TilingSpec(overlap=0.2), model_family="sam9", imgsz=640)
-
-
-def test_schema_v3_and_family_round_trip():
+def test_schema_v3_and_family():
     assert SLICE_META_SCHEMA_VERSION == 3
     doc = merge_training_geometry(None, {"overlap": 0.2}, model_family="sam3")
     assert doc["schema_version"] == 3 and doc["model_family"] == "sam3"
     assert normalized_slice_meta(doc)["model_family"] == "sam3"
-    # Legacy v1/v2 docs were YOLO-only.
-    assert normalized_slice_meta({"overlap": 0.2})["model_family"] == "yolo"
+    assert normalized_slice_meta({"overlap": 0.2})["model_family"] == "yolo"  # v1/v2 were YOLO-only
+
+
+def test_flat_doc_geometry_excludes_envelope():
+    assert training_geometry({"overlap": 0.2, "schema_version": 1, "model_family": "yolo"}) == {"overlap": 0.2}
 
 
 def test_merge_preserves_profiles():
@@ -1245,10 +1333,20 @@ Expected: FAIL — `ModuleNotFoundError: ...tiling_meta`
 
 - [ ] **Step 3: Implement**
 
-`core/inference/slice_meta.py` edits:
+`core/inference/slice_meta.py`:
 
 ```python
 SLICE_META_SCHEMA_VERSION = 3
+_ENVELOPE_KEYS = ("schema_version", "model_family", "primary_profile_id", "profiles")
+```
+
+```python
+def training_geometry(meta: dict[str, Any]) -> dict[str, Any]:
+    """Return nested training geometry or a legacy flat payload, without mutation."""
+    nested = meta.get("training_geometry")
+    if isinstance(nested, dict):
+        return dict(nested)
+    return {k: v for k, v in meta.items() if k not in _ENVELOPE_KEYS}
 ```
 
 ```python
@@ -1272,7 +1370,7 @@ def merge_training_geometry(
     existing: dict[str, Any] | None,
     training_geometry: dict[str, Any],
     *,
-    model_family: str = "yolo",
+    model_family: str,
 ) -> dict[str, Any]:
     """Replace training geometry while preserving user-approved profiles.
 
@@ -1284,170 +1382,139 @@ def merge_training_geometry(
     return result
 ```
 
-Caveat for the implementer: `training_geometry(meta)` returns the WHOLE dict for a flat legacy doc; with `model_family` now an envelope key, make `training_geometry` strip envelope keys when it falls back to the flat payload:
-
-```python
-_ENVELOPE_KEYS = ("schema_version", "model_family", "primary_profile_id", "profiles")
-
-
-def training_geometry(meta: dict[str, Any]) -> dict[str, Any]:
-    """Return nested training geometry or a legacy flat payload, without mutation."""
-    nested = meta.get("training_geometry")
-    if isinstance(nested, dict):
-        return dict(nested)
-    return {k: v for k, v in meta.items() if k not in _ENVELOPE_KEYS}
-```
-
 `core/inference/tiling_meta.py`:
 
 ```python
 """Unified v3 tiling sidecar: geometry builders and one reader for every family.
 
 Spec: docs/superpowers/specs/2026-10-09-sahi-unification-design.md (§4).
-The file is still ``<model>.<ext>.slice_meta.json`` (slice_meta.sidecar_path);
-v3 adds ``model_family`` and canonical geometry, and stays readable by the
-v2 reader (``slice_meta._training_values``) through explicit mirror keys.
+The file is still ``<model>.<ext>.slice_meta.json`` (slice_meta.sidecar_path).
+YOLO v3 geometry is ADDITIVE over v2 (every v2 key verbatim) so the v2
+reader, the baseline drift guard and the calibration grid are unchanged
+until S3 moves them onto ``read_tiling_meta``. SAM3 v3 is a new file and is
+canonical-only. Builders stamp only what the input states -- never defaults.
 """
 
 from __future__ import annotations
 
-from dataclasses import replace
+import math
 from typing import Any
 
 from hydra_suite.utils.slice_geometry import LEGACY_TARGET_SIZE_IMGSZ
-from hydra_suite.utils.tiling_spec import TilingSpec, canonicalize
+from hydra_suite.utils.tiling_spec import canonicalize, operating_fraction
 
 MODEL_FAMILIES = ("yolo", "sam3")
-_FAMILY_BACKEND = {"yolo": "yolo_train", "sam3": "sam3"}
-_FAMILY_FRAGMENT = {"yolo": "drop", "sam3": "crowd"}
 # SAM3 build manifests carry build bookkeeping; only these survive into the stamp.
 _SAM3_EXTRAS = ("full_frame_mix", "scale_range_px", "keep_empty_tiles")
-# Legacy spellings a writer must never emit (spec §3.5: writers are canonical).
-_NEVER_WRITE = (
-    "target_sizes",
-    "target_size_fractions",
-    "tile_fraction",
-    "tile_overlap",
-    "min_retained_area_frac",
-    "measured_reference_body_px",
-    "train_tile_px",
-    "train_tile_px_set",
-    "prefill_train_tile_px",
-    "prefill_tile_px",
-    "tile_px",
-    "imgsz",
+_SAM3_PRESENT_ONLY = (
+    "geometry_mode",
+    "reference_body_px",
+    "slice_width",
+    "slice_height",
+    "overlap",
+    "min_area_ratio",
 )
 
 
-def build_training_geometry(
-    spec: TilingSpec,
-    *,
-    model_family: str,
-    imgsz: int,
-    tile_px_set=(),
-    operating: float | None = None,
-    extras: dict[str, Any] | None = None,
-) -> dict[str, Any]:
-    """The v3 ``training_geometry`` block for what training actually did."""
-    if model_family not in MODEL_FAMILIES:
-        raise ValueError(f"model_family must be one of {MODEL_FAMILIES}, got {model_family!r}")
-    # Lenient on purpose: a publish must never fail on a partial (legacy or
-    # hand-built) manifest. Unknown values are omitted, never invented.
-    fractions = list(spec.object_tile_fractions)
-    if operating is None:
-        operating = spec.operating_fraction(_FAMILY_BACKEND[model_family])
-    geometry = {k: v for k, v in (extras or {}).items() if k not in _NEVER_WRITE}
-    geometry.update(
-        {
-            "geometry_mode": spec.geometry_mode,
-            "object_tile_fractions": fractions,
-            "min_area_ratio": float(spec.min_area_ratio),
-            "fragment_policy": spec.fragment_policy,
-            "slice_width": int(spec.slice_width),
-            "slice_height": int(spec.slice_height),
-            "trained_body_px": float(spec.reference_body_px),
-            # v2-reader mirror: slice_meta._training_values reads this name.
-            "reference_body_px": float(spec.reference_body_px),
-        }
-    )
-    if spec.overlap is not None:
-        geometry["overlap"] = float(spec.overlap)
-    if int(imgsz) > 0:
-        geometry["imgsz"] = int(imgsz)
-    if operating is not None:
-        geometry["prefill_object_tile_fraction"] = float(operating)
-        # YOLO: v2 readers need the bare scalar. SAM3 multi-scale omits it
-        # (a median under a measurement's name reads as "the" tile size).
-        if model_family == "yolo" or len(fractions) <= 1:
-            geometry["object_tile_fraction"] = float(operating)
-    if tile_px_set:
-        geometry["tile_px_set"] = [[int(w), int(h)] for w, h in tile_px_set]
-    return geometry
-
-
-def training_geometry_from_yolo_manifest(slice_geometry: dict[str, Any]) -> dict[str, Any]:
-    """v3 block from ``training/sliced_dataset._slice_geometry_manifest`` output."""
-    # Legacy YOLO pixel target_sizes without imgsz were expressed at 640.
-    canonical, extras = canonicalize(
-        slice_geometry, legacy_px_imgsz=LEGACY_TARGET_SIZE_IMGSZ
-    )
-    spec = replace(
-        TilingSpec.from_canonical(canonical), enabled=True, fragment_policy="drop"
-    )
-    raw_imgsz = slice_geometry.get("imgsz")
-    return build_training_geometry(
-        spec,
-        model_family="yolo",
-        imgsz=int(raw_imgsz) if isinstance(raw_imgsz, (int, float)) and not isinstance(raw_imgsz, bool) else 0,
-        operating=canonical.get("operating_fraction"),
-        extras=extras,
-    )
+def _safe_canonicalize(mapping: Any, **kwargs: Any) -> tuple[dict[str, Any], dict[str, Any]]:
+    """Publishing must never fail on a partial or odd manifest."""
+    try:
+        return canonicalize(mapping, **kwargs)
+    except Exception:
+        return {}, {}
 
 
 def _tile_pairs(raw: Any) -> list[tuple[int, int]]:
+    """Parse a tile size / tile-size set; skip anything not a positive finite size."""
+    items = raw if isinstance(raw, (list, tuple)) else [raw]
+    if len(items) == 2 and all(
+        isinstance(v, (int, float)) and not isinstance(v, bool) for v in items
+    ):
+        items = [items]  # a bare [w, h] pair
     pairs: list[tuple[int, int]] = []
-    for item in raw or []:
+    for item in items:
         if isinstance(item, (list, tuple)) and len(item) == 2:
-            pairs.append((int(item[0]), int(item[1])))
-        elif isinstance(item, (int, float)) and not isinstance(item, bool):
-            pairs.append((int(item), int(item)))
+            w, h = item
+        else:
+            w = h = item
+        if any(isinstance(v, bool) or not isinstance(v, (int, float)) for v in (w, h)):
+            continue
+        if not all(math.isfinite(float(v)) and float(v) >= 1 for v in (w, h)):
+            continue
+        pairs.append((int(w), int(h)))
     return pairs
+
+
+def training_geometry_from_yolo_manifest(slice_geometry: dict[str, Any]) -> dict[str, Any]:
+    """v3 block for a YOLO sliced build: the v2 manifest verbatim + canonical keys."""
+    geometry = dict(slice_geometry or {})
+    # Legacy YOLO pixel target_sizes without imgsz were expressed at 640.
+    canonical, _ = _safe_canonicalize(
+        geometry, legacy_px_imgsz=LEGACY_TARGET_SIZE_IMGSZ
+    )
+    fractions = list(canonical.get("object_tile_fractions") or ())
+    if fractions:
+        geometry.setdefault("object_tile_fractions", fractions)
+    operating = canonical.get("operating_fraction")
+    if operating is not None:
+        geometry.setdefault("prefill_object_tile_fraction", float(operating))
+    if "reference_body_px" in canonical:
+        geometry.setdefault("trained_body_px", float(canonical["reference_body_px"]))
+    geometry.setdefault("fragment_policy", "drop")
+    return geometry
 
 
 def training_geometry_from_sam3_manifest(
     build_manifest: dict[str, Any], *, imgsz: int
 ) -> dict[str, Any]:
-    """v3 block from a SAM3 ``build_manifest.json`` (``sam3_coco_tiles``)."""
-    canonical, extras = canonicalize(build_manifest)
-    spec = replace(
-        TilingSpec.from_canonical(canonical), enabled=True, fragment_policy="crowd"
+    """v3 block for a SAM3 tile build: canonical names, present values only."""
+    # A build manifest's tile_px is a realized MEASUREMENT, not the escalation
+    # override canonicalize aliases to custom slice_width/height (S1 NEW-3);
+    # it is mapped to tile_px_set below instead.
+    canonical, extras = _safe_canonicalize(
+        {k: v for k, v in (build_manifest or {}).items() if k != "tile_px"}
     )
-    raw_set = build_manifest.get("tile_px_set")
-    if not raw_set and build_manifest.get("tile_px") is not None:
-        raw_set = [build_manifest["tile_px"]]
-    return build_training_geometry(
-        spec,
-        model_family="sam3",
-        imgsz=imgsz,
-        tile_px_set=_tile_pairs(raw_set),
-        operating=canonical.get("operating_fraction"),
-        extras={k: extras[k] for k in _SAM3_EXTRAS if k in extras},
-    )
+    geometry: dict[str, Any] = {"fragment_policy": "crowd", "imgsz": int(imgsz)}
+    for key in _SAM3_PRESENT_ONLY:
+        if key in canonical:
+            geometry[key] = canonical[key]
+    if "reference_body_px" in canonical:
+        geometry["trained_body_px"] = float(canonical["reference_body_px"])
+    fractions = list(canonical.get("object_tile_fractions") or ())
+    if fractions:
+        geometry["object_tile_fractions"] = fractions
+    operating = canonical.get("operating_fraction")
+    if operating is None:
+        operating = operating_fraction(fractions)
+    if operating is not None:
+        geometry["prefill_object_tile_fraction"] = float(operating)
+        # A median under a measurement's name reads as "the" training tile
+        # size downstream; multi-scale stamps it only as the named prefill.
+        if len(fractions) <= 1:
+            geometry["object_tile_fraction"] = float(operating)
+    raw_set = (build_manifest or {}).get("tile_px_set")
+    if not raw_set and (build_manifest or {}).get("tile_px") is not None:
+        raw_set = build_manifest["tile_px"]
+    tiles = _tile_pairs(raw_set) if raw_set is not None else []
+    if tiles:
+        geometry["tile_px_set"] = [[w, h] for w, h in tiles]
+    geometry.update({k: extras[k] for k in _SAM3_EXTRAS if k in extras})
+    return geometry
 ```
 
-Note on `_tile_pairs` for a single-scale manifest: `tile_px` is a `[w, h]` pair, so `raw_set = [[971, 971]]`. A scalar `tile_px` (`971`) becomes `[971]` → `(971, 971)`.
+Note `_tile_pairs` input shapes: `[[1940, 1940], [970, 970]]` → two pairs; `[971, 971]` (a single-scale manifest's `tile_px`) → one pair; `971` → one pair; anything non-numeric/non-finite/<1 is skipped.
 
-- [ ] **Step 4: Run tests to verify they pass, then the existing slice_meta suites**
+- [ ] **Step 4: Run tests, then the existing slice_meta suites**
 
-Run: `python -m pytest tests/test_tiling_meta_build.py tests/test_slice_meta_read.py tests/test_slice_profile_resolution.py tests/test_slice_profile_mutations.py tests/test_engine_params_slice_profile.py tests/test_trackerkit_slice_meta_prefill.py -q`
-Expected: new tests PASS. If an existing test asserts `schema_version == 2` on a NORMALIZED/written document, update that literal to `SLICE_META_SCHEMA_VERSION`; if it asserts exact dict equality of a normalized document, add `"model_family": "yolo"` to the expected dict. Change nothing else; any other failure is a bug in this task.
+Run: `python -m pytest tests/test_tiling_meta_build.py tests/test_slice_meta_read.py tests/test_slice_profile_resolution.py tests/test_slice_profile_mutations.py tests/test_engine_params_slice_profile.py tests/test_trackerkit_slice_meta_prefill.py tests/test_detectkit_direct_calibration_ui.py -q`
+Expected: PASS. If an existing test asserts `schema_version == 2` on a normalized/written document, change that literal to `SLICE_META_SCHEMA_VERSION`; if it asserts exact equality of a normalized document, add `"model_family": "yolo"`. Nothing else may change.
 
 - [ ] **Step 5: Commit**
 
 ```bash
 make format
-git add src/hydra_suite/core/inference/tiling_meta.py src/hydra_suite/core/inference/slice_meta.py tests/test_tiling_meta_build.py tests/test_slice_meta_read.py tests/test_slice_profile_mutations.py
-git commit -m "feat(tiling): v3 slice_meta with model_family and canonical training geometry"
+git add src/hydra_suite/core/inference/tiling_meta.py src/hydra_suite/core/inference/slice_meta.py tests/
+git commit -m "feat(tiling): v3 slice_meta with model_family; additive YOLO and canonical SAM3 geometry"
 ```
 
 ### Task 6: `read_tiling_meta` — one reader for v1/v2/v3 and legacy `.sam3_meta.json`
@@ -1457,11 +1524,11 @@ git commit -m "feat(tiling): v3 slice_meta with model_family and canonical train
 - Test: `tests/test_tiling_meta_read.py`
 
 **Interfaces:**
-- Consumes: Task 5; `slice_meta.read_slice_meta`, `training_geometry`, `available_slice_profiles`; `geometry_drift.stamped_tile_px_set`; `utils.slice_geometry.LEGACY_TARGET_SIZE_IMGSZ`.
+- Consumes: Task 5; `slice_meta.read_slice_meta`, `training_geometry`, `available_slice_profiles`, `merge_training_geometry`; `geometry_drift.stamped_tile_px_set`; S1 `TilingSpec.from_canonical`.
 - Produces:
-  - `sam3_meta_path(model_path) -> Path` (`<artifact>.sam3_meta.json`, append-style)
+  - `sam3_meta_path(model_path) -> Path` (`<artifact>.sam3_meta.json`)
   - `@dataclass(frozen=True) class TilingMeta: model_family: str; source: str; training: TilingSpec | None; imgsz: int; tile_px_set: tuple[tuple[int, int], ...]; operating_fraction: float | None; extras: dict; primary_profile_id: str; profiles: tuple[dict, ...]`
-  - `read_tiling_meta(model_path) -> TilingMeta | None` — `source` is `"slice_meta"` or `"sam3_meta"`; never raises on malformed content (returns `None` or a best-effort `TilingMeta`).
+  - `read_tiling_meta(model_path) -> TilingMeta | None` — never raises. `source` ∈ {`"slice_meta"`, `"sam3_meta"`}. `training.fragment_policy` defaults to the family's (`drop`/`crowd`) when unstamped. `operating_fraction` = canonical operating value (stamped prefill or legacy target_sizes median), else np.median of the fractions; clamped [0.01, 0.9].
 
 - [ ] **Step 1: Write the failing tests**
 
@@ -1471,9 +1538,13 @@ import json
 
 import pytest
 
-from hydra_suite.core.inference.slice_meta import _training_values, sidecar_path, write_slice_meta
+from hydra_suite.core.inference.slice_meta import (
+    _training_values,
+    merge_training_geometry,
+    sidecar_path,
+    write_slice_meta,
+)
 from hydra_suite.core.inference.tiling_meta import (
-    merge_training_geometry,  # re-exported for convenience
     read_tiling_meta,
     sam3_meta_path,
     training_geometry_from_sam3_manifest,
@@ -1519,8 +1590,8 @@ def test_v1_flat_yolo(model):
     assert meta.imgsz == 640
 
 
-def test_v1_target_sizes_without_imgsz_uses_640_and_old_operating(model):
-    """Review Focus 2."""
+def test_v1_target_sizes_without_imgsz(model):
+    """Review Focus 2: 640 anchor for YOLO; operating matches TrackerKit."""
     doc = {k: v for k, v in V1_YOLO.items() if k != "imgsz"}
     _write(sidecar_path(model), doc)
     meta = read_tiling_meta(model)
@@ -1556,7 +1627,7 @@ def test_v3_yolo_round_trip(model):
 def test_v3_sam3_round_trip(model):
     geometry = training_geometry_from_sam3_manifest(
         {"tile_px_set": [[1940, 1940], [970, 970]], "object_tile_fractions": [0.0275, 0.055],
-         "prefill_object_tile_fraction": 0.055, "reference_body_px": 53.4,
+         "prefill_object_tile_fraction": 0.04125, "reference_body_px": 53.4,
          "tile_overlap": 0.25, "geometry_mode": "auto_object"},
         imgsz=1008,
     )
@@ -1564,8 +1635,9 @@ def test_v3_sam3_round_trip(model):
     meta = read_tiling_meta(model)
     assert meta.model_family == "sam3"
     assert meta.tile_px_set == ((1940, 1940), (970, 970))
-    assert meta.operating_fraction == 0.055
+    assert meta.operating_fraction == 0.04125
     assert meta.training.fragment_policy == "crowd"
+    assert meta.training.overlap == 0.25
 
 
 def test_legacy_sam3_meta_single_scale(model):
@@ -1583,18 +1655,17 @@ def test_legacy_sam3_meta_single_scale(model):
 def test_legacy_sam3_meta_multiscale(model):
     _write(sam3_meta_path(model), {"train_tile_px_set": [[1940, 1940], [970, 970]],
                                    "object_tile_fractions": [0.0275, 0.055],
-                                   "prefill_object_tile_fraction": 0.055,
+                                   "prefill_object_tile_fraction": 0.04125,
                                    "reference_body_px": 53.4, "imgsz": 1008})
     meta = read_tiling_meta(model)
     assert meta.tile_px_set == ((1940, 1940), (970, 970))
-    assert meta.operating_fraction == 0.055
+    assert meta.operating_fraction == 0.04125
 
 
 def test_slice_meta_geometry_wins_over_sam3_meta(model):
     _write(sam3_meta_path(model), {"train_tile_px": 500, "object_tile_fraction": 0.1, "imgsz": 1008})
     geometry = training_geometry_from_sam3_manifest(
-        {"tile_px": [971, 971], "object_tile_fraction": 0.055, "reference_body_px": 53.4,
-         "tile_overlap": 0.25, "geometry_mode": "auto_object"}, imgsz=1008)
+        {"tile_px": [971, 971], "object_tile_fraction": 0.055, "reference_body_px": 53.4}, imgsz=1008)
     write_slice_meta(model, merge_training_geometry(None, geometry, model_family="sam3"))
     meta = read_tiling_meta(model)
     assert meta.source == "slice_meta"
@@ -1606,6 +1677,22 @@ def test_lenient_on_bad_values(model):
     meta = read_tiling_meta(model)
     assert meta.training.overlap == 0.9
     assert meta.training.geometry_mode == "auto_model"
+
+
+@pytest.mark.parametrize(
+    "doc",
+    [
+        {"tile_px_set": 971}, {"tile_px_set": [["a", "b"]]}, {"tile_px_set": [[float("nan"), 1]]},
+        {"tile_px_set": [[float("inf"), 1]]}, {"imgsz": float("inf")}, {"imgsz": float("nan")},
+        {"imgsz": 0.5, "target_sizes": [64]}, {"train_tile_px": 971, "imgsz": float("nan")},
+        {"training_geometry": [1, 2]}, {"profiles": {"a": 1}}, {"model_family": 7, "overlap": 0.2},
+        {"object_tile_fractions": {"a": 1}}, {"reference_body_px": "1e999"},
+    ],
+)
+def test_hostile_documents_never_raise(model, doc):
+    """Adversarial M4."""
+    sidecar_path(model).write_text(json.dumps(doc, allow_nan=True), encoding="utf-8")
+    read_tiling_meta(model)
 ```
 
 - [ ] **Step 2: Run tests to verify they fail**
@@ -1615,26 +1702,23 @@ Expected: FAIL — `ImportError: cannot import name 'read_tiling_meta'`
 
 - [ ] **Step 3: Implement (append to `tiling_meta.py`; extend imports)**
 
-Add imports at the top of `tiling_meta.py`:
+Imports to add at the top of `tiling_meta.py`:
 
 ```python
 import json
 import logging
-from dataclasses import dataclass, field
+from dataclasses import dataclass, field, replace
 from pathlib import Path
 
-from hydra_suite.utils.tiling_spec import FRACTION_MAX, FRACTION_MIN
+from hydra_suite.utils.tiling_spec import FRACTION_MAX, FRACTION_MIN, TilingSpec
 
 from .geometry_drift import stamped_tile_px_set
-from .slice_meta import (
-    available_slice_profiles,
-    merge_training_geometry,
-    read_slice_meta,
-    training_geometry,
-)
+from .slice_meta import available_slice_profiles, read_slice_meta, training_geometry
 
 logger = logging.getLogger(__name__)
+_FAMILY_FRAGMENT = {"yolo": "drop", "sam3": "crowd"}
 _SAM3_META_EXTRAS = ("full_frame_mix", "scale_range_px", "scale_grouped_batching", "augmentation")
+_GEOMETRY_ONLY_KEYS = ("imgsz", "tile_px_set", "train_tile_px", "train_tile_px_set", "prefill_train_tile_px")
 ```
 
 Then:
@@ -1654,6 +1738,12 @@ def _read_json(path: Path) -> dict[str, Any] | None:
     return data if isinstance(data, dict) else None
 
 
+def _imgsz(raw: Any) -> int:
+    if isinstance(raw, bool) or not isinstance(raw, (int, float)):
+        return 0
+    return int(raw) if math.isfinite(float(raw)) and raw >= 1 else 0
+
+
 @dataclass(frozen=True)
 class TilingMeta:
     model_family: str
@@ -1668,10 +1758,18 @@ class TilingMeta:
 
 
 def read_tiling_meta(model_path: str | Path) -> TilingMeta | None:
-    """The ONE reader for a model's SAHI geometry and calibration profiles."""
+    """The ONE reader for a model's SAHI geometry and calibration profiles. Never raises."""
+    try:
+        return _read_tiling_meta(model_path)
+    except Exception:
+        logger.warning("Unreadable SAHI metadata beside %s", model_path, exc_info=True)
+        return None
+
+
+def _read_tiling_meta(model_path: str | Path) -> TilingMeta | None:
     slice_doc = read_slice_meta(model_path) or {}
     geometry = training_geometry(slice_doc) if slice_doc else {}
-    family = str(slice_doc.get("model_family") or "yolo")
+    family = slice_doc.get("model_family") or "yolo"
     source = "slice_meta"
     if not geometry:
         sam3_doc = _read_json(sam3_meta_path(model_path))
@@ -1680,7 +1778,7 @@ def read_tiling_meta(model_path: str | Path) -> TilingMeta | None:
     if not geometry and not slice_doc:
         return None
     if family not in MODEL_FAMILIES:
-        logger.warning("Unknown SAHI model_family %r in %s; reading as yolo", family, model_path)
+        logger.warning("Unknown SAHI model_family %r beside %s; reading as yolo", family, model_path)
         family = "yolo"
 
     training: TilingSpec | None = None
@@ -1690,31 +1788,33 @@ def read_tiling_meta(model_path: str | Path) -> TilingMeta | None:
     imgsz = 0
     if geometry:
         legacy = LEGACY_TARGET_SIZE_IMGSZ if family == "yolo" else None
+        canonical, extras = _safe_canonicalize(geometry, legacy_px_imgsz=legacy)
         try:
-            canonical, extras = canonicalize(geometry, legacy_px_imgsz=legacy)
             training = TilingSpec.from_canonical(canonical)
-        except ValueError as exc:
-            logger.warning("Unreadable SAHI geometry in %s: %s", model_path, exc)
-            canonical, training = {}, None
+        except Exception:
+            logger.warning("Invalid SAHI geometry beside %s", model_path, exc_info=True)
+            training = None
         if training is not None:
             training = replace(training, enabled=True)
             if "fragment_policy" not in canonical:
                 training = replace(training, fragment_policy=_FAMILY_FRAGMENT[family])
             operating = canonical.get("operating_fraction")
             if operating is None:
-                operating = training.operating_fraction(_FAMILY_BACKEND[family])
+                operating = training.operating_fraction()
             else:
                 operating = max(FRACTION_MIN, min(FRACTION_MAX, float(operating)))
-        raw_imgsz = geometry.get("imgsz")
-        imgsz = int(raw_imgsz) if isinstance(raw_imgsz, (int, float)) and not isinstance(raw_imgsz, bool) else 0
-        if geometry.get("tile_px_set"):
+        imgsz = _imgsz(geometry.get("imgsz"))
+        if geometry.get("tile_px_set") is not None:
             tiles = tuple(_tile_pairs(geometry["tile_px_set"]))
         else:
-            stamped = stamped_tile_px_set(geometry) or ()
-            tiles = tuple((int(round(w)), int(round(h))) for w, h in stamped)
+            try:
+                stamped = stamped_tile_px_set(geometry) or ()
+            except Exception:
+                stamped = ()
+            tiles = tuple(_tile_pairs([list(pair) for pair in stamped]))
         if source == "sam3_meta":
             extras = {k: extras[k] for k in _SAM3_META_EXTRAS if k in extras}
-        for key in ("imgsz", "tile_px_set", "train_tile_px", "train_tile_px_set", "prefill_train_tile_px"):
+        for key in _GEOMETRY_ONLY_KEYS:
             extras.pop(key, None)
 
     return TilingMeta(
@@ -1730,7 +1830,7 @@ def read_tiling_meta(model_path: str | Path) -> TilingMeta | None:
     )
 ```
 
-Note: `test_lenient_on_bad_values` expects `geometry_mode == "auto_model"` because `canonicalize` drops the invalid mode and `TilingSpec()`'s default applies — this is the read-side default, distinct from `_training_values`' `"auto_object"` fallback. That divergence is intentional for S2 (no caller uses `read_tiling_meta` yet); S3 decides the TrackerKit prefill default when it switches callers. Record it in the S2 commit message.
+Note: an invalid stamped `geometry_mode` reads as the `TilingSpec` default `auto_model`, unlike `_training_values` (`auto_object`). No caller uses `read_tiling_meta` in S2; S3 decides the TrackerKit prefill default. Say so in the commit message.
 
 - [ ] **Step 4: Run tests to verify they pass**
 
@@ -1742,32 +1842,29 @@ Expected: PASS
 ```bash
 make format
 git add src/hydra_suite/core/inference/tiling_meta.py tests/test_tiling_meta_read.py
-git commit -m "feat(tiling): read_tiling_meta, one reader for v1/v2/v3 and legacy sam3_meta
+git commit -m "feat(tiling): read_tiling_meta, one never-raising reader for v1/v2/v3 and legacy sam3_meta
 
-read_tiling_meta's fallback for an invalid stamped geometry_mode is the
-TilingSpec default (auto_model), unlike _training_values (auto_object);
-no caller uses it yet, S3 decides the prefill default."
+An invalid stamped geometry_mode reads as the TilingSpec default
+(auto_model), unlike _training_values (auto_object); no caller uses
+read_tiling_meta yet, S3 decides the prefill default."
 ```
 
 ### Task 7: YOLO publish writes v3
 
 **Files:**
-- Modify: `src/hydra_suite/training/model_publish.py:874-895` (the `slice_geometry` branch)
-- Modify (if they assert raw-manifest equality): `tests/test_model_publish_slice_geometry.py`, `tests/test_service_publish_slice_geometry.py`
+- Modify: `src/hydra_suite/training/model_publish.py` (the `slice_geometry` branch, ~874-895)
+- Modify: `tests/test_model_publish_slice_geometry.py` (the 3 `test_all_direct_detector_roles_publish_slice_geometry[*]` cases assert exact equality with the raw manifest)
 - Test: `tests/test_tiling_meta_publish_yolo.py`
 
 **Interfaces:**
 - Consumes: `training_geometry_from_yolo_manifest`, `merge_training_geometry(..., model_family="yolo")`, `read_tiling_meta`.
-- Produces: published `<dst>.pt.slice_meta.json` is schema 3, `model_family="yolo"`, canonical `training_geometry`. Registry `metadata["slice_geometry"]` stays the raw manifest (unchanged).
+- Produces: published `<dst>.pt.slice_meta.json` is schema 3, `model_family="yolo"`, additive v3 `training_geometry`. Registry `metadata["slice_geometry"]` stays the raw manifest.
 
 - [ ] **Step 1: Write the failing test**
-
-Uses the established pattern from `tests/test_model_publish_slice_geometry.py` (monkeypatch `mp.get_models_root`, call `mp.publish_trained_model`).
 
 ```python
 # tests/test_tiling_meta_publish_yolo.py
 import json
-
 from pathlib import Path
 
 import hydra_suite.training.model_publish as mp
@@ -1775,9 +1872,17 @@ from hydra_suite.core.inference.slice_meta import _training_values, sidecar_path
 from hydra_suite.core.inference.tiling_meta import read_tiling_meta
 from hydra_suite.training.contracts import TrainingRole
 
+MANIFEST = {
+    "geometry_mode": "auto_object", "imgsz": 640, "object_tile_fraction": 0.1,
+    "slice_width": 0, "slice_height": 0, "overlap": 0.2, "min_area_ratio": 0.25,
+    "negative_tile_fraction": 0.15, "target_sizes": [32, 64, 96, 128],
+    "full_frame_mix": True, "reference_body_px": 41.5,
+    "multiscale_loss_balance": {"enabled": True, "power": 0.5},
+}
+
 
 def _publish_direct_model(tmp_path, monkeypatch, *, slice_geometry, source_sidecar=None):
-    monkeypatch.setattr(mp, "get_models_root", lambda: tmp_path / "models")
+    monkeypatch.setattr(mp, "get_models_root", lambda: tmp_path)
     src = tmp_path / "weights.pt"
     src.write_bytes(b"fake-weights")
     if source_sidecar is not None:
@@ -1789,23 +1894,18 @@ def _publish_direct_model(tmp_path, monkeypatch, *, slice_geometry, source_sidec
     )
     return Path(stored)
 
-MANIFEST = {
-    "geometry_mode": "auto_object", "imgsz": 640, "object_tile_fraction": 0.1,
-    "slice_width": 0, "slice_height": 0, "overlap": 0.2, "min_area_ratio": 0.25,
-    "negative_tile_fraction": 0.15, "target_sizes": [32, 64, 96, 128],
-    "full_frame_mix": True, "reference_body_px": 41.5,
-    "multiscale_loss_balance": {"enabled": True, "power": 0.5},
-}
 
-
-def test_publish_writes_v3(tmp_path, monkeypatch):
+def test_publish_writes_additive_v3(tmp_path, monkeypatch):
     dst = _publish_direct_model(tmp_path, monkeypatch, slice_geometry=MANIFEST)
     doc = json.loads(sidecar_path(dst).read_text())
     assert doc["schema_version"] == 3 and doc["model_family"] == "yolo"
-    assert "target_sizes" not in doc["training_geometry"]
-    assert _training_values(doc["training_geometry"]) == _training_values(MANIFEST)
+    geometry = doc["training_geometry"]
+    assert {k: geometry[k] for k in MANIFEST} == MANIFEST
+    assert _training_values(geometry) == _training_values(MANIFEST)
     meta = read_tiling_meta(dst)
     assert meta.training.object_tile_fractions == (0.05, 0.1, 0.15, 0.2)
+    reg = mp.load_model_registry()
+    assert any(entry.get("slice_geometry") == MANIFEST for entry in reg["entries"].values())
 
 
 def test_republish_upgrades_v2_and_keeps_profiles(tmp_path, monkeypatch):
@@ -1824,14 +1924,14 @@ def test_republish_upgrades_v2_and_keeps_profiles(tmp_path, monkeypatch):
     assert doc["primary_profile_id"] == "bal-1"
 ```
 
-If `publish_trained_model` stores outside `get_models_root()` in the current code, mirror whatever `test_slice_geometry_written_as_sidecar_and_registry` does instead — that test is the reference.
+`test_slice_geometry_written_as_sidecar_and_registry` in `tests/test_model_publish_slice_geometry.py` is the reference for the monkeypatch/publish pattern; if the registry/models root plumbing differs from this helper, mirror that test.
 
 - [ ] **Step 2: Run to verify it fails**
 
 Run: `python -m pytest tests/test_tiling_meta_publish_yolo.py -q`
-Expected: FAIL — `"target_sizes" in training_geometry` (raw manifest still written).
+Expected: FAIL — `KeyError: 'fragment_policy'`-style or `model_family` mismatch until the writer switches (the publish path still writes the raw manifest under `model_family` default `"yolo"`; the test that must fail is the one asserting `object_tile_fractions` via `read_tiling_meta` only if Task 6's reader cannot derive them — if Step 2 unexpectedly passes, add `assert "object_tile_fractions" in geometry` to `test_publish_writes_additive_v3` and re-run: it must fail).
 
-- [ ] **Step 3: Implement** — in `model_publish.py`, import `training_geometry_from_yolo_manifest` from `hydra_suite.core.inference.tiling_meta` and change the merge line:
+- [ ] **Step 3: Implement** — in `model_publish.py`, import `training_geometry_from_yolo_manifest` from `hydra_suite.core.inference.tiling_meta` and change the merge:
 
 ```python
         source_meta = read_slice_meta(src)
@@ -1842,65 +1942,110 @@ Expected: FAIL — `"target_sizes" in training_geometry` (raw manifest still wri
         )
 ```
 
-Leave `metadata["slice_geometry"] = dict(slice_geometry)` (registry) unchanged.
+Leave `metadata["slice_geometry"] = dict(slice_geometry)` unchanged.
+
+Retarget the 3 exact-equality assertions in `test_all_direct_detector_roles_publish_slice_geometry` from `training_geometry == manifest` to `{k: training_geometry[k] for k in manifest} == manifest` (additive v3). Change nothing else in that file.
 
 - [ ] **Step 4: Run new + existing publish suites**
 
-Run: `python -m pytest tests/test_tiling_meta_publish_yolo.py tests/test_model_publish_slice_geometry.py tests/test_service_publish_slice_geometry.py tests/test_trackerkit_slice_meta_prefill.py tests/test_engine_params_slice_profile.py tests/test_gui_cli_profile_parity.py -q`
-Expected: PASS. If an existing test compares the written sidecar's `training_geometry` to the raw manifest, change the expected value to `training_geometry_from_yolo_manifest(manifest)`; if it checks a specific value TrackerKit reads, assert via `_training_values(...)` equality instead. Do not loosen anything else.
+Run: `python -m pytest tests/test_tiling_meta_publish_yolo.py tests/test_model_publish_slice_geometry.py tests/test_service_publish_slice_geometry.py tests/test_trackerkit_slice_meta_prefill.py tests/test_engine_params_slice_profile.py tests/test_gui_cli_profile_parity.py tests/test_trackerkit_cli_sahi_profile.py tests/test_sliced_dataset_reference.py tests/test_geometry_drift_guard.py -q`
+Expected: PASS.
 
 - [ ] **Step 5: Commit**
 
 ```bash
 make format
-git add src/hydra_suite/training/model_publish.py tests/test_tiling_meta_publish_yolo.py tests/test_model_publish_slice_geometry.py tests/test_service_publish_slice_geometry.py
-git commit -m "feat(tiling): YOLO publish stamps v3 canonical training geometry"
+git add src/hydra_suite/training/model_publish.py tests/test_tiling_meta_publish_yolo.py tests/test_model_publish_slice_geometry.py
+git commit -m "feat(tiling): YOLO publish stamps additive v3 training geometry"
 ```
 
-### Task 8: SAM3 publish dual-writes `.slice_meta.json` (+ orphan cleanup)
+### Task 8: SAM3 publish dual-writes `.slice_meta.json` (+ payload, cleanup)
 
 **Files:**
-- Modify: `src/hydra_suite/training/sam3_lora/publish_worker.py` (after `_promote_staged_pair(...)` in `publish_sam3_artifact`, ~line 401)
-- Modify: `src/hydra_suite/training/sam3_lora/publish.py:316-319` (`_cleanup_attempt`)
+- Modify: `src/hydra_suite/training/sam3_lora/publish.py` — `_request_payload` (~377-483) forwards `geometry_mode`, `tile_overlap`, `min_retained_area_frac`; `_cleanup_attempt` (~316-319) removes the attempt's tiling sidecar
+- Modify: `src/hydra_suite/training/sam3_lora/publish_worker.py` — `_write_tiling_sidecar`, called after `_promote_staged_pair(...)` in `publish_sam3_artifact`
 - Test: `tests/test_sam3_publish_tiling_sidecar.py`
 
 **Interfaces:**
-- Consumes: `training_geometry_from_sam3_manifest`, `merge_training_geometry(None, ..., model_family="sam3")`, `slice_meta.write_slice_meta`, `slice_meta.sidecar_path`, `PREDICTOR_IMGSZ` (already imported in `publish_worker`).
-- Produces: `publish_worker._write_tiling_sidecar(artifact_path: Path, build_manifest: dict) -> Path | None` (never raises); `_cleanup_attempt` also removes `<artifact>.slice_meta.json` and its `.tmp` when it removes an owned final pair.
+- Consumes: `training_geometry_from_sam3_manifest`, `slice_meta.merge_training_geometry`, `read_slice_meta`, `write_slice_meta`, `PREDICTOR_IMGSZ` (already in `publish_worker`).
+- Produces:
+  - `publish._request_payload(...)["build_manifest"]` additionally carries `geometry_mode` (str ∈ `auto_model|auto_object|custom`), `tile_overlap` (finite, [0, 1)), `min_retained_area_frac` (finite, [0, 1]) when the build manifest has them; invalid → `ValueError` like the other fields.
+  - `publish_worker._write_tiling_sidecar(artifact_path: Path, build_manifest: dict) -> Path | None` — read-merges any existing `.slice_meta.json` (profiles kept), never raises.
+  - `publish._cleanup_attempt` also deletes `<artifact>.slice_meta.json` and `<artifact>.slice_meta.json.tmp` when it deletes an owned final pair. The path is built locally (`artifact_path.with_name(artifact_path.name + ".slice_meta.json")`) — `publish.py` must not import `hydra_suite.core.inference` (its `__init__` loads torch).
 
-- [ ] **Step 1: Write the failing tests**
+- [ ] **Step 1: Read `_request_payload`'s signature and call site** (`publish.py:361` and `:585`) to build a valid call in the test. Then write the failing tests:
 
 ```python
 # tests/test_sam3_publish_tiling_sidecar.py
 import json
 import logging
 
-from hydra_suite.core.inference.slice_meta import sidecar_path
+import pytest
+
+from hydra_suite.core.inference.slice_meta import sidecar_path, write_slice_meta
 from hydra_suite.core.inference.tiling_meta import read_tiling_meta
 from hydra_suite.training.sam3_lora import publish, publish_worker
 
-MANIFEST = {
+FULL_MANIFEST = {
     "type": "sam3_coco_tiles", "geometry_mode": "auto_object",
     "tile_px_set": [[1940, 1940], [970, 970]], "object_tile_fractions": [0.0275, 0.055],
-    "prefill_object_tile_fraction": 0.055, "prefill_tile_px": [970, 970],
-    "reference_body_px": 53.4, "tile_overlap": 0.25, "min_retained_area_frac": 0.25,
+    "prefill_object_tile_fraction": 0.04125, "prefill_tile_px": [970, 970],
+    "reference_body_px": 53.4, "tile_overlap": 0.25, "min_retained_area_frac": 0.3,
     "full_frame_mix": False, "scale_range_px": [970, 1940],
 }
 
 
-def test_write_tiling_sidecar(tmp_path):
+def _child_manifest(full):
+    """What the publish child really receives (adversarial M1)."""
+    payload = publish._request_payload(**_request_kwargs(full))  # build kwargs per Step 1
+    return payload["build_manifest"]
+
+
+def test_child_manifest_carries_tiling_fields():
+    child = _child_manifest(FULL_MANIFEST)
+    assert child["geometry_mode"] == "auto_object"
+    assert child["tile_overlap"] == 0.25
+    assert child["min_retained_area_frac"] == 0.3
+
+
+@pytest.mark.parametrize(
+    "field,bad",
+    [("geometry_mode", "weird"), ("tile_overlap", 1.0), ("tile_overlap", float("nan")),
+     ("min_retained_area_frac", 1.5), ("tile_overlap", True)],
+)
+def test_child_manifest_rejects_invalid_tiling_fields(field, bad):
+    with pytest.raises(ValueError):
+        _child_manifest(dict(FULL_MANIFEST, **{field: bad}))
+
+
+def test_tiling_sidecar_from_child_manifest(tmp_path):
     artifact = tmp_path / "sam3-run.pt"
     artifact.write_bytes(b"x")
-    written = publish_worker._write_tiling_sidecar(artifact, MANIFEST)
+    written = publish_worker._write_tiling_sidecar(artifact, _child_manifest(FULL_MANIFEST))
     assert written == sidecar_path(artifact)
     meta = read_tiling_meta(artifact)
     assert meta.model_family == "sam3" and meta.source == "slice_meta"
+    assert meta.training.geometry_mode == "auto_object"
+    assert meta.training.overlap == 0.25
+    assert meta.training.min_area_ratio == 0.3
     assert meta.tile_px_set == ((1940, 1940), (970, 970))
     assert meta.imgsz == publish_worker.PREDICTOR_IMGSZ
 
 
+def test_tiling_sidecar_keeps_existing_profiles(tmp_path):
+    """Adversarial m3."""
+    artifact = tmp_path / "sam3-run.pt"
+    artifact.write_bytes(b"x")
+    profile = {"id": "p-1", "name": "Calibrated", "note": "", "settings": {"object_tile_fraction": 0.05}, "measurement": {}}
+    write_slice_meta(artifact, {"schema_version": 3, "model_family": "sam3", "training_geometry": {},
+                                "primary_profile_id": "p-1", "profiles": [profile]})
+    publish_worker._write_tiling_sidecar(artifact, _child_manifest(FULL_MANIFEST))
+    meta = read_tiling_meta(artifact)
+    assert meta.profiles == (profile,) and meta.primary_profile_id == "p-1"
+
+
 def test_write_failure_is_non_fatal(tmp_path, caplog, monkeypatch):
-    """Review Focus 4: a failed tiling sidecar never fails a publish."""
+    """Review Focus 4."""
     caplog.set_level(logging.WARNING)
     artifact = tmp_path / "sam3-run.pt"
     artifact.write_bytes(b"x")
@@ -1909,21 +2054,11 @@ def test_write_failure_is_non_fatal(tmp_path, caplog, monkeypatch):
         raise OSError("disk full")
 
     monkeypatch.setattr(publish_worker, "write_slice_meta", boom)
-    assert publish_worker._write_tiling_sidecar(artifact, MANIFEST) is None
+    assert publish_worker._write_tiling_sidecar(artifact, FULL_MANIFEST) is None
     assert "tiling sidecar" in caplog.text
 
 
-def test_manifest_without_overlap_writes_without_inventing_one(tmp_path):
-    artifact = tmp_path / "sam3-run.pt"
-    artifact.write_bytes(b"x")
-    partial = {k: v for k, v in MANIFEST.items() if k != "tile_overlap"}
-    assert publish_worker._write_tiling_sidecar(artifact, partial) == sidecar_path(artifact)
-    doc = json.loads(sidecar_path(artifact).read_text())
-    assert "overlap" not in doc["training_geometry"]
-
-
 def test_cleanup_removes_owned_tiling_sidecar(tmp_path):
-    """Review Focus 4: orphan cleanup."""
     artifact = tmp_path / "sam3-run.pt"
     sam3_sidecar = tmp_path / "sam3-run.pt.sam3_meta.json"
     artifact.write_bytes(b"x")
@@ -1934,8 +2069,7 @@ def test_cleanup_removes_owned_tiling_sidecar(tmp_path):
     publish._cleanup_attempt(artifact_path=artifact, sidecar_path=sam3_sidecar,
                              control_dir=None, attempt_id="a" * 32)
     assert not artifact.exists() and not sam3_sidecar.exists()
-    assert not tiling.exists()
-    assert not tiling.with_name(tiling.name + ".tmp").exists()
+    assert not tiling.exists() and not tiling.with_name(tiling.name + ".tmp").exists()
 
 
 def test_cleanup_keeps_unowned_tiling_sidecar(tmp_path):
@@ -1950,39 +2084,83 @@ def test_cleanup_keeps_unowned_tiling_sidecar(tmp_path):
     assert tiling.exists()
 ```
 
-Before running: open `publish._cleanup_attempt` and confirm the attempt-id format accepted (`_ATTEMPT_ID`); if `"a" * 32` is rejected anywhere on that path, use `uuid.uuid4().hex` values instead.
+Define `_request_kwargs(full)` in the test module from what Step 1 shows `_request_payload` needs (run id, params, paths, `build_manifest=full`, …), using the same minimal values the existing `tests/test_sam3_publish*.py` tests use for it (grep them for `_request_payload`).
 
 - [ ] **Step 2: Run to verify they fail**
 
 Run: `python -m pytest tests/test_sam3_publish_tiling_sidecar.py -q`
-Expected: FAIL — `AttributeError: module ... has no attribute '_write_tiling_sidecar'`
+Expected: FAIL — `KeyError: 'geometry_mode'` (payload) and `AttributeError: ... '_write_tiling_sidecar'`.
 
 - [ ] **Step 3: Implement**
 
-In `publish_worker.py` (imports at top):
+`publish.py`, in `_request_payload` just before `return {` (after the `geometry_fields` loop):
 
 ```python
-from hydra_suite.core.inference.slice_meta import merge_training_geometry, write_slice_meta
+    # Tiling settings the child stamps into the v3 .slice_meta.json. Without
+    # them the child would record a geometry the build never used.
+    mode = build_manifest.get("geometry_mode")
+    if mode is not None:
+        if mode not in ("auto_model", "auto_object", "custom"):
+            raise ValueError(f"SAM3 publish geometry 'geometry_mode' is invalid: {mode!r}")
+        geometry["geometry_mode"] = mode
+    for field, upper_inclusive in (("tile_overlap", False), ("min_retained_area_frac", True)):
+        if field not in build_manifest:
+            continue
+        value = build_manifest[field]
+        if (
+            isinstance(value, bool)
+            or not isinstance(value, (int, float))
+            or not math.isfinite(float(value))
+            or float(value) < 0.0
+            or (float(value) > 1.0 if upper_inclusive else float(value) >= 1.0)
+        ):
+            raise ValueError(f"SAM3 publish geometry {field!r} is out of range: {value!r}")
+        geometry[field] = float(value)
+```
+
+`publish.py` `_cleanup_attempt`, inside `if owned_final_pair:`:
+
+```python
+        # Built locally: importing core.inference here would load torch in the
+        # parent (core/inference/__init__ pulls the runner).
+        tiling_sidecar = artifact_path.with_name(artifact_path.name + ".slice_meta.json")
+        attempt(lambda: tiling_sidecar.unlink(missing_ok=True))
+        attempt(
+            lambda: tiling_sidecar.with_name(tiling_sidecar.name + ".tmp").unlink(
+                missing_ok=True
+            )
+        )
+```
+
+`publish_worker.py` imports:
+
+```python
+from hydra_suite.core.inference.slice_meta import (
+    merge_training_geometry,
+    read_slice_meta,
+    write_slice_meta,
+)
 from hydra_suite.core.inference.tiling_meta import training_geometry_from_sam3_manifest
 ```
 
-New function (near `_write_sidecar`):
+New function near `_write_sidecar`:
 
 ```python
 def _write_tiling_sidecar(artifact_path: Path, build_manifest: dict[str, Any]) -> Path | None:
     """Dual-write the canonical v3 ``.slice_meta.json`` beside a promoted artifact.
 
     Non-fatal by design: geometry is also in ``.sam3_meta.json`` and
-    ``read_tiling_meta`` falls back to it, so a failure here must never turn a
-    successful publish into a failed one.
+    ``read_tiling_meta`` falls back to it. Read-merges an existing document so
+    calibration profiles saved beside the artifact survive.
     """
     try:
         geometry = training_geometry_from_sam3_manifest(
             build_manifest, imgsz=PREDICTOR_IMGSZ
         )
-        return write_slice_meta(
-            artifact_path, merge_training_geometry(None, geometry, model_family="sam3")
+        merged = merge_training_geometry(
+            read_slice_meta(artifact_path), geometry, model_family="sam3"
         )
+        return write_slice_meta(artifact_path, merged)
     except Exception:
         logger.warning(
             "sam3 publish: could not write the tiling sidecar for %s; "
@@ -1999,34 +2177,17 @@ In `publish_sam3_artifact`, immediately after `_promote_staged_pair(...)` and be
         _write_tiling_sidecar(artifact_path, build_manifest)
 ```
 
-In `publish.py` `_cleanup_attempt` (import `sidecar_path as slice_sidecar_path` from `hydra_suite.core.inference.slice_meta`):
-
-```python
-    if owned_final_pair:
-        attempt(lambda: artifact_path.unlink(missing_ok=True))
-        attempt(lambda: sidecar_path.unlink(missing_ok=True))
-        tiling_sidecar = slice_sidecar_path(artifact_path)
-        attempt(lambda: tiling_sidecar.unlink(missing_ok=True))
-        attempt(
-            lambda: tiling_sidecar.with_name(tiling_sidecar.name + ".tmp").unlink(
-                missing_ok=True
-            )
-        )
-```
-
-Check `test_core_import_is_light.py` still passes: `publish.py` must not gain a heavy import (`slice_meta` imports numpy only).
-
 - [ ] **Step 4: Run new + existing SAM3 publish suites**
 
 Run: `python -m pytest tests/test_sam3_publish_tiling_sidecar.py tests/test_sam3_publish.py tests/test_sam3_publish_sidecar.py tests/test_sam3_publish_atomic.py tests/test_sam3_publish_lifecycle.py tests/test_sam3_service_publish.py tests/test_sam3_multiscale_stamp.py tests/test_core_import_is_light.py -q`
-Expected: PASS. If a lifecycle test asserts the exact set of files in the models dir after a publish, add the `.slice_meta.json` name to the expected set — nothing else.
+Expected: PASS, except `test_sam3_publish_sidecar.py::test_importing_parent_publish_module_does_not_import_torch`, which already fails on `main` (verify it fails identically on `main` before accepting; it must not change). If a lifecycle test asserts the exact file set in the models dir, add the `.slice_meta.json` name — nothing else.
 
 - [ ] **Step 5: Commit**
 
 ```bash
 make format
-git add src/hydra_suite/training/sam3_lora/publish_worker.py src/hydra_suite/training/sam3_lora/publish.py tests/test_sam3_publish_tiling_sidecar.py
-git commit -m "feat(tiling): SAM3 publish dual-writes the v3 tiling sidecar"
+git add src/hydra_suite/training/sam3_lora/publish.py src/hydra_suite/training/sam3_lora/publish_worker.py tests/test_sam3_publish_tiling_sidecar.py
+git commit -m "feat(tiling): SAM3 publish forwards tiling fields and dual-writes the v3 sidecar"
 ```
 
 ### Task 9: S2 gate — regression, adversarial review, merge
