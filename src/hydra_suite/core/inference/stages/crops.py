@@ -3,6 +3,7 @@ from __future__ import annotations
 import os
 import threading
 from concurrent.futures import ThreadPoolExecutor
+from dataclasses import dataclass
 
 import numpy as np
 import torch
@@ -500,11 +501,52 @@ def frames_on_cuda(runtime, frames) -> bool:
     return False
 
 
+@dataclass(frozen=True)
+class ForeignSet:
+    """The full foreign-candidate set of one frame, for masking a row subset.
+
+    Per-animal stages crop a frame's detections in bounded chunks, but a
+    detection's pose-crop mask must not depend on which chunk it landed in.
+    ``corners`` holds EVERY detection of the frame's set (in set order) and
+    ``self_rows[i]`` is the row in ``corners`` of the i-th cropped detection;
+    crop ``i`` is masked against all rows of ``corners`` except
+    ``self_rows[i]``. Without a ``ForeignSet`` the cropped OBB itself is the
+    foreign set (``corners = obb.corners``, ``self_rows = arange(n)``).
+    """
+
+    corners: np.ndarray  # (M, 4, 2)
+    self_rows: np.ndarray  # (n,) int
+
+    def __len__(self) -> int:
+        return int(len(self.corners))
+
+
+def _resolve_foreign(obb: OBBResult, foreign: ForeignSet | None) -> ForeignSet:
+    if foreign is None:
+        return ForeignSet(
+            corners=np.asarray(obb.corners), self_rows=np.arange(obb.num_detections)
+        )
+    rows = np.asarray(foreign.self_rows, dtype=np.int64)
+    if len(rows) != obb.num_detections or not np.array_equal(
+        np.asarray(foreign.corners)[rows], np.asarray(obb.corners)
+    ):
+        raise ValueError(
+            "ForeignSet.self_rows must locate every cropped detection in "
+            "ForeignSet.corners"
+        )
+    return ForeignSet(corners=np.asarray(foreign.corners), self_rows=rows)
+
+
+def _foreign_count(obb: OBBResult, foreign: ForeignSet | None) -> int:
+    return obb.num_detections if foreign is None else len(foreign)
+
+
 def _apply_foreign_mask_canonical_batch(
     crops: torch.Tensor,
     obb: OBBResult,
     geometry: CanonicalGeometry,
     background_color: tuple[int, int, int],
+    foreign_set: ForeignSet | None = None,
 ) -> torch.Tensor:
     """Black out foreign OBB polygons in each crop of one frame's crop tensor.
 
@@ -518,8 +560,14 @@ def _apply_foreign_mask_canonical_batch(
     The crop tensor may be CUDA-resident; masking uses a CPU round-trip
     (on-device polygon rasterisation is non-trivial) — same documented approach
     the old resize-based ``extract_crops`` used.
+
+    ``foreign_set`` (optional): mask against a frame-wide set that is larger
+    than the cropped ``obb`` (see :class:`ForeignSet`). Omitted, the foreign
+    set is ``obb`` itself -- byte-identical to before.
     """
     n = obb.num_detections
+    fs = _resolve_foreign(obb, foreign_set)
+    m_total = len(fs)
 
     m_aligns: list[np.ndarray] = []
     for i in range(n):
@@ -534,7 +582,8 @@ def _apply_foreign_mask_canonical_batch(
     # crops_np is (N, C, H, W); operate per crop as a HWC view for fillPoly.
     for i in range(n):
         crop_hwc = np.ascontiguousarray(crops_np[i].transpose(1, 2, 0))
-        foreign = [obb.corners[j] for j in range(n) if j != i]
+        own = int(fs.self_rows[i])
+        foreign = [fs.corners[j] for j in range(m_total) if j != own]
         _apply_foreign_mask_canonical(
             crop_hwc,
             m_aligns[i],
@@ -555,6 +604,7 @@ def extract_canonical_crops_batch(
     suppress_foreign: bool = False,
     background_color: tuple[int, int, int] = (0, 0, 0),
     headtail_by_frame: "dict[int, HeadTailResult] | None" = None,
+    foreign_by_frame: "dict[int, ForeignSet] | None" = None,
 ) -> CropBatch:
     """Window-level canonical pose crops, bit-identical to ``extract_canonical_crops``.
 
@@ -578,6 +628,11 @@ def extract_canonical_crops_batch(
     its crops are head-first (R8), matching the CPU path's
     ``extract_classifier_crops_batch_np``. Omitted (pose's call site) this is
     exactly byte-identical to before.
+
+    ``foreign_by_frame`` (optional, ``{frame_idx: ForeignSet}``): when a frame's
+    OBB is only a chunk of its detection set, mask each crop against the FULL
+    set so the result does not depend on the chunking. Omitted, the foreign
+    set is the cropped OBB itself (unchanged behaviour).
     """
     per_frame: list[torch.Tensor] = []
     det_ids: list[np.ndarray] = []
@@ -596,9 +651,10 @@ def extract_canonical_crops_batch(
             heading_hints=ht.heading_hints if ht is not None else None,
             directed_mask=ht.directed_mask if ht is not None else None,
         )
-        if suppress_foreign and obb.num_detections > 1:
+        fs = foreign_by_frame.get(obb.frame_idx) if foreign_by_frame else None
+        if suppress_foreign and _foreign_count(obb, fs) > 1:
             crops = _apply_foreign_mask_canonical_batch(
-                crops, obb, geometry, background_color
+                crops, obb, geometry, background_color, fs
             )
         per_frame.append(crops)
         det_ids.append(obb.detection_ids)
@@ -668,24 +724,27 @@ def apply_foreign_mask_to_crop_batch(
     batch: CropBatch,
     geometry: CanonicalGeometry,
     background_color: tuple[int, int, int] = (0, 0, 0),
+    foreign_by_frame: "dict[int, ForeignSet] | None" = None,
 ) -> CropBatch:
     """Return a pose-masked copy of an existing unmasked canonical batch.
 
     The shared input remains untouched for head-tail. Per-frame masking delegates
     to the same truncating uint8 helper used during normal pose extraction, so
     this is bit-identical to ``extract_canonical_crops_batch(...,
-    suppress_foreign=True)`` while avoiding a second Layer-1 warp.
+    suppress_foreign=True)`` (with the same ``foreign_by_frame``) while
+    avoiding a second Layer-1 warp.
     """
     masked = batch.crops.clone()
     for frame_idx in sorted(batch.obb_by_frame):
         obb = batch.obb_by_frame[frame_idx]
         rows = batch.select_frame(frame_idx)
-        if len(rows) == 0 or obb.num_detections <= 1:
+        fs = foreign_by_frame.get(frame_idx) if foreign_by_frame else None
+        if len(rows) == 0 or _foreign_count(obb, fs) <= 1:
             continue
         row_index = torch.as_tensor(rows, dtype=torch.long, device=masked.device)
         frame_crops = masked.index_select(0, row_index)
         frame_crops = _apply_foreign_mask_canonical_batch(
-            frame_crops, obb, geometry, background_color
+            frame_crops, obb, geometry, background_color, fs
         )
         masked.index_copy_(0, row_index, frame_crops)
 

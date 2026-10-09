@@ -171,3 +171,91 @@ def test_superset_is_chunked_and_cnn_is_raw_in_cache_positional_in_memory():
     assert [p.det_index for p in fr.cnn[0].predictions] == [0, 1, 2]
     assert [p.factors[0] for p in fr.cnn[0].predictions] == [0.0, 50.0, 100.0]
     assert fr.headtail.heading_hints.tolist() == [0.0, 50.0, 100.0]
+
+
+# --- R7: pose foreign-region masking uses the FULL superset, not the chunk ---
+
+
+def _crowded_obb(frame_idx, n):
+    # Overlapping 12x12 boxes 6 px apart: every crop sees several neighbours,
+    # including ones that land in a different chunk.
+    xs = 30.0 + np.arange(n, dtype=np.float32) * 6.0
+    c = np.stack([xs, np.full(n, 30.0, np.float32)], 1)
+    corners = np.stack([c + d for d in ([-6, -6], [6, -6], [6, 6], [-6, 6])], 1)
+    return OBBResult(
+        frame_idx,
+        c,
+        np.zeros(n, np.float32),
+        np.full(n, 144.0, np.float32),
+        np.ones((n, 2), np.float32),
+        np.linspace(0.9, 0.5, n).astype(np.float32),
+        corners.astype(np.float32),
+        OBBResult.make_detection_ids(frame_idx, n),
+    )
+
+
+def _pose_crops(chunk_size, with_headtail):
+    from hydra_suite.core.inference.config import PoseConfig
+    from hydra_suite.core.inference.pipeline import BatchWindow
+    from hydra_suite.core.inference.result import PoseResult
+    from hydra_suite.core.inference.runner import InferenceRunner, _CacheSet
+
+    cfg = _cfg(
+        3,
+        headtail=HeadTailConfig(model_path="/ht.pt") if with_headtail else None,
+        pose=PoseConfig(suppress_foreign_regions=True),
+    )
+    seen = []
+
+    def _fake_pose(crop_batch, model, pcfg, runtime, geometry):
+        seen.append(crop_batch.crops.detach().cpu().clone())
+        n = crop_batch.crops.shape[0]
+        fi = int(crop_batch.frame_index[0])
+        return {
+            fi: PoseResult(
+                keypoints=np.zeros((n, 1, 3), np.float32),
+                valid_mask=np.ones(n, bool),
+            )
+        }
+
+    rng = np.random.default_rng(7)
+    frame = rng.integers(1, 255, (64, 160, 3), dtype=np.uint8)
+    models = MagicMock(
+        obb=MagicMock(),
+        headtail=MagicMock() if with_headtail else None,
+        cnn=[],
+        pose=MagicMock(),
+        apriltag=None,
+    )
+    with (
+        patch("hydra_suite.core.inference.runner._load_all_models") as ml,
+        patch(
+            "hydra_suite.core.inference.pipeline.run_obb",
+            side_effect=lambda frames, *a, **k: [_crowded_obb(0, 7)],
+        ),
+        patch(
+            "hydra_suite.core.inference.pipeline.run_headtail_batch",
+            side_effect=_fake_ht,
+        ),
+        patch("hydra_suite.core.inference.pipeline.run_pose_batch", _fake_pose),
+        patch("hydra_suite.core.inference.limits.DOWNSTREAM_CHUNK_SIZE", chunk_size),
+    ):
+        ml.return_value = models
+        runner = InferenceRunner(cfg, cache_dir=None)
+        caches = _CacheSet(detection=MagicMock(), pose=MagicMock())
+        pipeline = runner._build_pipeline(caches)
+        pipeline._process_window(BatchWindow(frames=[frame], frame_indices=[0]))
+    return seen
+
+
+def test_pose_foreign_mask_is_independent_of_chunking():
+    import torch
+
+    for with_headtail in (False, True):
+        whole = _pose_crops(256, with_headtail)
+        chunked = _pose_crops(3, with_headtail)
+        assert [t.shape[0] for t in whole] == [7]
+        assert [t.shape[0] for t in chunked] == [3, 3, 1]
+        # Every detection's masked pose crop is identical whether or not its
+        # neighbours landed in the same chunk (foreign set = full superset).
+        assert torch.equal(torch.cat(chunked), whole[0]), with_headtail

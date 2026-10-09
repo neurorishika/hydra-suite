@@ -60,6 +60,7 @@ from .stages.apriltag import run_apriltag
 from .stages.bgsub import run_bgsub_batch
 from .stages.cnn import run_cnn_batch
 from .stages.crops import (
+    ForeignSet,
     apply_foreign_mask_to_crop_batch,
     extract_aabb_crops,
     extract_canonical_crops_batch,
@@ -512,7 +513,15 @@ class Pipeline:
         at_parts: list = []
         cnn_parts: list[list] = [[] for _ in self.stages.cnn_models]
         for offset, chunk in split_rows(superset_obb, limits.DOWNSTREAM_CHUNK_SIZE):
-            ht, cnns, pose_r, at = self._run_stages_on_chunk(frame, chunk, geometry)
+            # Pose masks each crop against the FULL superset, not the chunk,
+            # so a detection's pose never depends on N or its chunk.
+            foreign = ForeignSet(
+                corners=superset_obb.corners,
+                self_rows=np.arange(offset, offset + chunk.num_detections),
+            )
+            ht, cnns, pose_r, at = self._run_stages_on_chunk(
+                frame, chunk, geometry, foreign=foreign
+            )
             ht_parts.append(ht)
             pose_parts.append(pose_r)
             at_parts.append((offset, at))
@@ -576,18 +585,23 @@ class Pipeline:
         frame: Any,
         obb: OBBResult,
         geometry: Any,
+        *,
+        foreign: ForeignSet | None = None,
     ) -> tuple[Any, list, Any, Any]:
         """Run head-tail / CNN / pose / AprilTag on one chunk of one frame.
 
         Returns this frame's ``(headtail, [cnn per phase], pose, apriltag)``
         results, positionally aligned with ``obb`` (``None`` for a disabled
         stage, or a phase/stage with no result for the frame). No cache writes.
+        ``foreign`` is the frame-wide foreign set for pose masking (defaults to
+        ``obb`` itself).
         """
 
         cfg = self.stages.config
         frames = [frame]
         obbs = [obb]
         frame_idx = obb.frame_idx
+        foreign_by_frame = None if foreign is None else {frame_idx: foreign}
 
         # Head-tail and pose consume the same undirected Layer-1 canonical
         # geometry. When both are enabled, build that expensive warp once;
@@ -648,12 +662,14 @@ class Pipeline:
                             self.runtime,
                             suppress_foreign=suppress_foreign,
                             background_color=background_color,
+                            foreign_by_frame=foreign_by_frame,
                         )
                     elif suppress_foreign:
                         crop_batch = apply_foreign_mask_to_crop_batch(
                             shared_canonical_batch,
                             geometry,
                             background_color,
+                            foreign_by_frame=foreign_by_frame,
                         )
                     else:
                         crop_batch = shared_canonical_batch
