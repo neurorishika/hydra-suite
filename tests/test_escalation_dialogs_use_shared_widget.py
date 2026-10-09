@@ -257,3 +257,72 @@ def test_sam2_tiling_rows_never_overlap(body):
     dialog = _sam2(reference_body_px=body)
     dialog._tile_fraction.setValue(0.1)
     _rows_do_not_collide(dialog)
+
+
+def test_sam3_dialog_shrinks_back_after_advanced_collapses(available_checkpoint):
+    dialog = _sam3()
+    dialog.show()
+    for _ in range(3):
+        QApplication.processEvents()
+    min_height, height = dialog.minimumHeight(), dialog.height()
+    dialog._tiling.set_advanced_expanded(True)
+    QApplication.processEvents()
+    assert dialog.minimumHeight() >= min_height
+    assert dialog.height() >= dialog.minimumHeight()
+    dialog._tiling.set_advanced_expanded(False)
+    QApplication.processEvents()
+    assert dialog.minimumHeight() == min_height
+    assert dialog.height() == height
+    dialog.hide()
+
+
+def test_fit_keeps_a_user_resized_dialog_size(available_checkpoint):
+    dialog = _sam3()
+    dialog.show()
+    QApplication.processEvents()
+    dialog.resize(dialog.width() + 120, dialog.height() + 80)
+    user_size = dialog.size()
+    dialog._tiling.set_advanced_expanded(True)
+    dialog._tiling.set_advanced_expanded(False)
+    QApplication.processEvents()
+    assert dialog.size() == user_size
+    dialog.hide()
+
+
+def _growing_dialog():
+    from PySide6.QtCore import QSize
+    from PySide6.QtWidgets import QWidget
+
+    from hydra_suite.detectkit.gui.dialogs._base import DetectKitDialog
+
+    dialog = DetectKitDialog("fit")
+    content = QWidget()
+    content.setMinimumSize(300, 120)
+    dialog.add_content(content)
+    dialog.resize(420, 260)
+    dialog.fit_to_content(QSize(320, 200))
+    return dialog, content
+
+
+def test_fit_to_content_grows_then_shrinks_back():
+    dialog, content = _growing_dialog()
+    dialog.show()
+    QApplication.processEvents()
+    min_height, size = dialog.minimumHeight(), dialog.size()
+    content.setMinimumHeight(700)
+    dialog.fit_to_content()
+    assert dialog.minimumHeight() > 700 and dialog.height() >= dialog.minimumHeight()
+    content.setMinimumHeight(120)
+    dialog.fit_to_content()
+    assert dialog.minimumHeight() == min_height
+    assert dialog.size() == size
+    dialog.hide()
+
+
+def test_fit_to_content_reruns_on_show():
+    dialog, content = _growing_dialog()
+    content.setMinimumHeight(700)  # grew while hidden, nobody re-fitted
+    dialog.show()
+    QApplication.processEvents()
+    assert dialog.minimumHeight() > 700
+    dialog.hide()
