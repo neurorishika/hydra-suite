@@ -15,7 +15,7 @@ from typing import Any, Literal, NamedTuple
 
 import numpy as np
 
-from .slice_geometry import DEFAULT_MIN_AREA_RATIO, resolve_scales
+from .slice_geometry import DEFAULT_MIN_AREA_RATIO, resolve_scales, tile_size_for_mode
 
 logger = logging.getLogger(__name__)
 
@@ -514,3 +514,107 @@ def canonicalize(
 
     extras = {key: value for key, value in src.items() if key not in consumed}
     return canonical, extras
+
+
+def _positive(value: Any) -> float | None:
+    parsed = _finite(value)
+    return parsed if parsed is not None and parsed > 0 else None
+
+
+def resolve_reference_body_px(
+    *,
+    override: Any = None,
+    dataset_median: Any = None,
+    stamped: Any = None,
+    tracker_reference: Any = None,
+) -> Sourced:
+    """Body px that sizes tiles: override -> dataset -> stamped -> TrackerKit's own.
+
+    ``tracker_reference`` is REFERENCE_BODY_SIZE x RESIZE_FACTOR, read only;
+    this function never writes it.
+    """
+    for value, source in (
+        (override, "override"),
+        (dataset_median, "dataset"),
+        (stamped, "stamped"),
+        (tracker_reference, "user"),
+    ):
+        parsed = _positive(value)
+        if parsed is not None:
+            return Sourced(parsed, source)
+    return Sourced(0.0, "default")
+
+
+def resolve_operating_fraction(
+    *,
+    backend: Backend,
+    profile: Any = None,
+    stamped_operating: Any = None,
+    stamped_fractions=(),
+) -> Sourced:
+    """The ONE inference scale: profile -> stamped -> backend default."""
+    parsed = _positive(profile)
+    if parsed is not None:
+        return Sourced(_clamp_fraction(parsed), "profile")
+    parsed = _positive(stamped_operating)
+    if parsed is not None:
+        return Sourced(_clamp_fraction(parsed), "stamped")
+    stamped = operating_fraction(_fraction_list(stamped_fractions))
+    if stamped is not None:
+        return Sourced(stamped, "stamped")
+    return Sourced(
+        operating_fraction(BACKEND_DEFAULTS[backend].object_tile_fractions), "default"
+    )
+
+
+def resolve_object_tile_fractions(
+    *, backend: Backend, user: Any = None, profile: Any = None, stamped: Any = ()
+) -> Sourced:
+    """The fraction SET (training): user -> profile -> stamped -> backend default."""
+    for value, source in ((user, "user"), (profile, "profile"), (stamped, "stamped")):
+        usable = _fraction_list(value)
+        if usable:
+            return Sourced(tuple(usable), source)
+    return Sourced(BACKEND_DEFAULTS[backend].object_tile_fractions, "default")
+
+
+def resolve_overlap(
+    *, override: Any = None, saved: Any = None, fractions=()
+) -> Sourced:
+    """Overlap: override -> saved -> derived from the largest scale -> default.
+
+    A SAVED overlap is never re-derived, so existing configs (TrackerKit's
+    persisted 0.2) keep their exact value.
+    """
+    for value, source in ((override, "override"), (saved, "user")):
+        parsed = _finite(value)
+        if parsed is not None and 0.0 <= parsed <= OVERLAP_MAX:
+            return Sourced(parsed, source)
+    usable = _fraction_list(fractions)
+    if usable:
+        return Sourced(
+            min(OVERLAP_MAX, round(max(usable) + OVERLAP_MARGIN, 6)), "derived"
+        )
+    return Sourced(DEFAULT_OVERLAP, "default")
+
+
+def resolve_tile_size(
+    spec: TilingSpec, *, imgsz: int, fraction: float | None
+) -> Sourced:
+    """Tile (w, h) for one scale; editable only in custom mode with explicit sizes."""
+    size = tile_size_for_mode(
+        geometry_mode=spec.geometry_mode,
+        imgsz=int(imgsz),
+        reference_body_px=float(spec.reference_body_px),
+        object_tile_fraction=(
+            float(fraction)
+            if fraction is not None
+            else BACKEND_DEFAULTS["yolo_infer"].object_tile_fractions[0]
+        ),
+        slice_width=spec.slice_width,
+        slice_height=spec.slice_height,
+    )
+    explicit = spec.geometry_mode == "custom" and (
+        spec.slice_width > 0 or spec.slice_height > 0
+    )
+    return Sourced(size, "user" if explicit else "derived")
