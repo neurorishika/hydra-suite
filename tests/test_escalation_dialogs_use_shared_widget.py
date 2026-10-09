@@ -88,6 +88,15 @@ def test_sam3_fresh_dialog_overlap_is_the_semantic_default(available_checkpoint)
     assert _sam3().parameters()["overlap"] == pytest.approx(DEFAULT_OVERLAP)
 
 
+def test_sam3_fresh_dialog_overlap_meets_the_whole_animal_minimum(
+    available_checkpoint,
+):
+    """The saved/default 0.5 is above max(scale)+margin: no nudge, no button."""
+    widget = _sam3().findChildren(SliceSettingsWidget)[0]
+    assert widget.lbl_slice_overlap_minimum.text().startswith("≥")
+    assert widget.btn_slice_overlap_raise.isHidden()
+
+
 def test_sam3_body_badge_is_dataset_when_seeded_from_the_project(
     available_checkpoint,
 ):

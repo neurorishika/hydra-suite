@@ -4,7 +4,7 @@ The widget's state is the S1 contract (:class:`TilingSpec`) plus a
 role-specific ``extras`` dict. Ownership model (plan decision 23): the widget
 writes its own controls ONLY inside :meth:`SliceSettingsWidget.set_spec`
 (signals blocked, then derived labels refreshed). Derived values (tile size
-outside Custom, the suggested overlap, the resolved tile) are shown in
+outside Custom, the whole-animal overlap minimum, the resolved tile) are shown in
 LABELS, never written into a host-persisted spin. A user edit emits
 ``field_changed(field)``.
 
@@ -13,6 +13,7 @@ Shared layer: imports only Qt and ``utils`` (never an app layer).
 
 from __future__ import annotations
 
+import math
 from dataclasses import replace
 from typing import Any
 
@@ -217,7 +218,7 @@ class SliceSettingsWidget(QGroupBox):
         )
         for signal, field in edits:
             signal.connect(lambda *_a, field=field: self._on_user_edit(field))
-        self.btn_slice_overlap_use_suggested.clicked.connect(self._use_suggested)
+        self.btn_slice_overlap_raise.clicked.connect(self._raise_to_minimum)
         self.btn_slice_advanced.toggled.connect(self.set_advanced_expanded)
 
     def _apply_role_defaults(self) -> None:
@@ -230,10 +231,10 @@ class SliceSettingsWidget(QGroupBox):
         self.chk_slice_body_override.setVisible(
             caps.body_override and self._role not in TRAIN_ROLES
         )
-        self.btn_slice_overlap_use_suggested.setVisible(caps.fixed_overlap is None)
+        self.btn_slice_overlap_raise.setVisible(False)
         if caps.fixed_overlap is not None:
-            self.lbl_slice_overlap_suggested.setText("fixed")
-            self.lbl_slice_overlap_suggested.setToolTip(
+            self.lbl_slice_overlap_minimum.setText("fixed")
+            self.lbl_slice_overlap_minimum.setToolTip(
                 "This backend's tiles always overlap by this constant."
             )
         self._tile_spins.setVisible(self._role not in ESCALATE_ROLES)
@@ -410,7 +411,7 @@ class SliceSettingsWidget(QGroupBox):
         return [value] if value > 0.0 else []
 
     def _display_fractions(self) -> list[float]:
-        """Scales the preview/suggestion use (fallbacks a host would apply)."""
+        """Scales the preview and overlap minimum use (host fallbacks applied)."""
         fractions = self._fractions()
         if fractions:
             return fractions
@@ -513,13 +514,52 @@ class SliceSettingsWidget(QGroupBox):
         self._refresh()
         self.field_changed.emit(field)
 
-    def _use_suggested(self) -> None:
-        suggested = self._suggested_overlap()
-        self.spin_slice_overlap.setValue(suggested)  # the user path: emits
+    def _raise_to_minimum(self) -> None:
+        minimum = self._whole_animal_minimum()
+        if minimum is not None:
+            self.spin_slice_overlap.setValue(minimum)  # the user path: emits
 
-    def _suggested_overlap(self) -> float:
+    def _whole_animal_minimum(self) -> float | None:
+        """max(scale) + margin, rounded UP to the overlap spin's precision.
+
+        The smallest overlap that keeps every animal whole inside at least
+        one tile (F7). A minimum, never a recommendation: a larger overlap is
+        left alone. None when nothing is tiled by scale (full frame).
+        """
         fractions = self._display_fractions()
-        return float(resolve_overlap(fractions=fractions).value)
+        if not fractions:
+            return None
+        value = float(resolve_overlap(fractions=fractions).value)
+        scale = 10 ** self.spin_slice_overlap.decimals()
+        rounded = math.ceil(value * scale - 1e-9) / scale
+        return min(rounded, self.spin_slice_overlap.maximum())
+
+    def _refresh_overlap_minimum(self) -> None:
+        label, button = self.lbl_slice_overlap_minimum, self.btn_slice_overlap_raise
+        minimum = self._whole_animal_minimum()
+        if minimum is None:
+            label.setText("")
+            button.setVisible(False)
+            return
+        decimals = self.spin_slice_overlap.decimals()
+        shown = f"{minimum:.{decimals}f}"
+        below = self.spin_slice_overlap.value() < minimum - 0.5 * 10**-decimals
+        if below:
+            label.setText(f"Below whole-animal minimum ({shown})")
+            label.setStyleSheet("color: #e0943a;")
+            label.setToolTip(
+                "With less overlap than the largest object scale, an animal at a "
+                "tile seam can be cut in every tile. Your overlap is kept until "
+                "you raise it."
+            )
+            button.setText(f"Raise to {shown}")
+        else:
+            label.setText(f"≥ whole-animal minimum ({shown})")
+            label.setStyleSheet("color: #8f969e;")
+            label.setToolTip(
+                "Every animal fits whole inside at least one tile at this overlap."
+            )
+        button.setVisible(below)
 
     # ------------------------------------------------------------- refreshes
 
@@ -558,10 +598,7 @@ class SliceSettingsWidget(QGroupBox):
             self.spin_slice_tile_w: on and mode == "custom",
             self.spin_slice_tile_h: on and mode == "custom",
             self.spin_slice_overlap: on and not fixed,
-            self.btn_slice_overlap_use_suggested: on
-            and not fixed
-            and abs(self.spin_slice_overlap.value() - self._suggested_overlap())
-            > 10 ** -(self.spin_slice_overlap.decimals() + 1),
+            self.btn_slice_overlap_raise: on and not fixed,
             self.spin_slice_merge: on,
             self.spin_slice_seam_margin: on,
             self.spin_slice_min_area: on,
@@ -629,15 +666,7 @@ class SliceSettingsWidget(QGroupBox):
         if role in TRAIN_ROLES:
             self._refresh_reference_note(body)
         if self._caps.fixed_overlap is None:
-            suggested = self._suggested_overlap()
-            decimals = self.spin_slice_overlap.decimals()
-            self.lbl_slice_overlap_suggested.setText(
-                f"Suggested: {suggested:.{decimals}f}"
-            )
-            self.lbl_slice_overlap_suggested.setToolTip(
-                "Largest object scale + margin: every animal fits whole inside at "
-                "least one tile. A suggestion only — your overlap is kept."
-            )
+            self._refresh_overlap_minimum()
         if role not in ESCALATE_ROLES:
             self.preview.set_settings(
                 mode=mode,

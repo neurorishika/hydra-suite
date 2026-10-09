@@ -200,8 +200,8 @@ def test_body_display_only_without_override_capability():
     assert w.chk_slice_body_override.isHidden()
 
 
-def test_overlap_is_suggested_never_applied():
-    """F7 (decision 22): a suggestion with a button, never a silent write."""
+def test_overlap_at_or_above_the_whole_animal_minimum_is_left_alone():
+    """F7 (decision 22): max(scale) + margin is a MINIMUM, never a nudge down."""
     w = SliceSettingsWidget(role="train_yolo")
     w.set_spec(
         TilingSpec(
@@ -213,31 +213,75 @@ def test_overlap_is_suggested_never_applied():
     )
     assert w.spin_slice_overlap.value() == pytest.approx(0.25)
     assert w.spin_slice_overlap.isEnabled()
-    assert "0.20" in w.lbl_slice_overlap_suggested.text()
-    assert w.btn_slice_overlap_use_suggested.isEnabled()
+    assert w.lbl_slice_overlap_minimum.text() == "≥ whole-animal minimum (0.20)"
+    assert w.btn_slice_overlap_raise.isHidden()
+
+
+def test_overlap_below_the_minimum_warns_and_offers_a_raise():
+    w = SliceSettingsWidget(role="train_yolo")
+    w.set_spec(
+        TilingSpec(
+            enabled=True,
+            geometry_mode="auto_object",
+            object_tile_fractions=(0.05, 0.15),
+            overlap=0.1,
+        )
+    )
+    assert w.spin_slice_overlap.value() == pytest.approx(0.1)  # never applied
+    assert w.lbl_slice_overlap_minimum.text() == "Below whole-animal minimum (0.20)"
+    assert not w.btn_slice_overlap_raise.isHidden()
+    assert w.btn_slice_overlap_raise.isEnabled()
+    assert w.btn_slice_overlap_raise.text() == "Raise to 0.20"
     hits = []
     w.field_changed.connect(hits.append)
-    w.btn_slice_overlap_use_suggested.click()
+    w.btn_slice_overlap_raise.click()
     assert w.spin_slice_overlap.value() == pytest.approx(0.2)
     assert "overlap" in hits
-    assert not w.btn_slice_overlap_use_suggested.isEnabled()
+    assert w.btn_slice_overlap_raise.isHidden()
+    assert w.lbl_slice_overlap_minimum.text().startswith("≥")
 
 
-def test_overlap_suggestion_follows_the_scales():
+def test_overlap_minimum_follows_the_scales():
     w = SliceSettingsWidget(role="infer_yolo")
     w.set_spec(
         TilingSpec(enabled=True, geometry_mode="auto_object", overlap=0.2),
     )
     w.spin_slice_object_fraction.setValue(0.4)
-    assert "0.45" in w.lbl_slice_overlap_suggested.text()
+    assert "0.45" in w.lbl_slice_overlap_minimum.text()
+    assert w.lbl_slice_overlap_minimum.text().startswith("Below")
     assert w.spin_slice_overlap.value() == pytest.approx(0.2)  # untouched
+
+
+def test_overlap_raise_target_rounds_up_to_the_spin_precision():
+    """0.055 + 0.05 = 0.105 must not round DOWN below the minimum at 2 dp."""
+    w = SliceSettingsWidget(role="escalate_sam3")
+    w.set_spec(
+        TilingSpec(
+            enabled=True,
+            geometry_mode="auto_object",
+            object_tile_fractions=(0.055,),
+            overlap=0.1,
+        )
+    )
+    assert w.btn_slice_overlap_raise.text() == "Raise to 0.11"
+    w.btn_slice_overlap_raise.click()
+    assert w.spin_slice_overlap.value() == pytest.approx(0.11)
+    assert w.btn_slice_overlap_raise.isHidden()
+
+
+def test_full_frame_escalation_has_no_overlap_minimum():
+    w = SliceSettingsWidget(role="escalate_sam3")
+    w.set_spec(TilingSpec(enabled=False, overlap=0.1))
+    assert w.lbl_slice_overlap_minimum.text() == ""
+    assert w.btn_slice_overlap_raise.isHidden()
 
 
 def test_sam2_overlap_is_a_disabled_constant():
     w = SliceSettingsWidget(role="escalate_sam2")
     assert not w.spin_slice_overlap.isEnabled()
     assert w.spin_slice_overlap.value() == pytest.approx(0.5)
-    assert w.btn_slice_overlap_use_suggested.isHidden()
+    assert w.lbl_slice_overlap_minimum.text() == "fixed"
+    assert w.btn_slice_overlap_raise.isHidden()
 
 
 def test_field_changed_only_on_user_edits():

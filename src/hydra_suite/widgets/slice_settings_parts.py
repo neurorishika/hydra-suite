@@ -229,7 +229,7 @@ def widget_stylesheet(text_color: str | None, *, bare: bool) -> str:
     style += (
         "QAbstractSpinBox:disabled, QComboBox:disabled, QLineEdit:disabled,"
         " QCheckBox:disabled, QToolButton:disabled { color: #a0a5ab; }"
-        " QToolButton#sliceUseSuggested { border: 1px solid #8f969e;"
+        " QToolButton#sliceOverlapRaise { border: 1px solid #8f969e;"
         " border-radius: 3px; padding: 1px 8px; background: transparent; }"
     )
     if bare:

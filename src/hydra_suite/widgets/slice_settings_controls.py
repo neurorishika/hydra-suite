@@ -195,13 +195,13 @@ def build_controls(w) -> None:
         "Fraction shared by neighbouring tiles. More overlap protects objects "
         "at tile edges but creates more inference work.",
     )
-    w.lbl_slice_overlap_suggested = muted_label()
-    w.btn_slice_overlap_use_suggested = QToolButton()
-    w.btn_slice_overlap_use_suggested.setText("Use suggested")
-    w.btn_slice_overlap_use_suggested.setObjectName("sliceUseSuggested")
-    w.btn_slice_overlap_use_suggested.setToolTip(
-        "Set the overlap to the largest object scale + margin, which keeps "
-        "every animal whole inside at least one tile."
+    w.lbl_slice_overlap_minimum = muted_label()
+    w.btn_slice_overlap_raise = QToolButton()
+    w.btn_slice_overlap_raise.setText("Raise")
+    w.btn_slice_overlap_raise.setObjectName("sliceOverlapRaise")
+    w.btn_slice_overlap_raise.setToolTip(
+        "Raise the overlap to the whole-animal minimum (largest object scale + "
+        "margin), so every animal lies whole inside at least one tile."
     )
 
     w.btn_slice_advanced = QToolButton()
@@ -390,8 +390,8 @@ def row_specs(w) -> list[tuple[str, str | None, QWidget, QLabel | None]]:
             "Tile overlap",
             hbox(
                 w.spin_slice_overlap,
-                w.lbl_slice_overlap_suggested,
-                w.btn_slice_overlap_use_suggested,
+                w.lbl_slice_overlap_minimum,
+                w.btn_slice_overlap_raise,
             ),
             None,
         ),
