@@ -2,12 +2,14 @@ import json
 
 import pytest
 
+from hydra_suite.core.inference import tiling_meta
 from hydra_suite.core.inference.slice_meta import (
     _training_values,
     merge_training_geometry,
     resolve_slice_profile_values,
     sidecar_path,
     slice_meta_to_panel_values,
+    training_geometry,
     write_slice_meta,
 )
 from hydra_suite.core.inference.tiling_meta import (
@@ -235,9 +237,80 @@ def test_lenient_on_bad_values(model):
     ],
 )
 def test_hostile_documents_never_raise(model, doc):
-    """Adversarial M4."""
+    """Adversarial M4. Calls the INNER reader: the public one's catch-all
+    would turn any raise into None and make this test vacuous."""
     sidecar_path(model).write_text(json.dumps(doc, allow_nan=True), encoding="utf-8")
-    read_tiling_meta(model)
+    meta = tiling_meta._read_tiling_meta(model)
+    # Every doc here is a non-empty object, so the reader owes a TilingMeta.
+    assert meta is not None
+    if training_geometry(doc):
+        assert meta.training is not None
+
+
+_GOOD = {
+    "id": "p1",
+    "name": "P1",
+    "note": "",
+    "settings": {"object_tile_fraction": 0.1},
+    "measurement": {},
+}
+_BIG = 10**400
+
+
+@pytest.mark.parametrize(
+    "geometry",
+    [
+        "garbage",
+        [1, 2],
+        None,
+        {
+            "geometry_mode": 7,
+            "imgsz": "x",
+            "object_tile_fraction": "y",
+            "target_sizes": "z",
+            "overlap": [1],
+            "reference_body_px": -1,
+            "slice_width": "w",
+            "fragment_policy": 3,
+            "tile_px_set": "abc",
+        },
+        {
+            "imgsz": float("nan"),
+            "object_tile_fraction": float("inf"),
+            "target_sizes": [float("nan")],
+            "overlap": float("-inf"),
+            "reference_body_px": float("inf"),
+            "tile_px_set": [[float("inf"), 1]],
+        },
+        {
+            "imgsz": _BIG,
+            "object_tile_fraction": _BIG,
+            "target_sizes": [_BIG],
+            "overlap": _BIG,
+            "reference_body_px": _BIG,
+            "slice_width": _BIG,
+            "tile_px_set": [[_BIG, _BIG]],
+            "train_tile_px": _BIG,
+            "train_tile_px_set": [[_BIG, 1]],
+        },
+        {"tile_px_set": [[1e300, 1e300]]},
+        {"training_geometry": {"imgsz": 640}, "profiles": [_GOOD], "schema_version": 2},
+    ],
+)
+@pytest.mark.parametrize("family", ["yolo", "sam3", ["sam3"], {"a": 1}, 3, "SAM3"])
+def test_hostile_geometry_keeps_profiles(model, geometry, family):
+    """The reviewer's hostile shapes: never raise, never lose the good profile."""
+    doc = {
+        "schema_version": 3,
+        "model_family": family,
+        "training_geometry": geometry,
+        "primary_profile_id": "p1",
+        "profiles": ["x", 1, None, _GOOD],
+    }
+    sidecar_path(model).write_text(json.dumps(doc, allow_nan=True), encoding="utf-8")
+    meta = tiling_meta._read_tiling_meta(model)
+    assert meta is not None
+    assert meta.profiles == (_GOOD,) and meta.primary_profile_id == "p1"
 
 
 def test_profiles_survive_hostile_geometry(model):
