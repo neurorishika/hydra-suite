@@ -1155,6 +1155,7 @@ class InferenceRunner:
                         self.config.bgsub,
                         self.runtime,
                         roi_mask=roi_mask,
+                        limit_stats=self.detection_limit_stats,
                     )
                 else:
                     # roi_mask is frame-space (the caller passes the mask matching this

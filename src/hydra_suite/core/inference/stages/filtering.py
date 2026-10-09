@@ -376,8 +376,8 @@ def filter_for_source(
     """Detection-source-aware dispatch in front of ``filter_with_indices``.
 
     OBB emits raw, un-gated detections, so the gates live here. bg-sub does not:
-    ``BackgroundMeasurer.detect_objects`` already applies the contour-area, size,
-    and MAX_TARGETS gates, and ``run_bgsub`` already intersects the ROI with the
+    ``BackgroundMeasurer.detect_objects`` applies the contour-area and size
+    gates (the N-dependent MAX_TARGETS rules are applied here, at replay), and ``run_bgsub`` already intersects the ROI with the
     foreground mask — so by the time a bg-sub ``OBBResult`` reaches this layer
     there is nothing left to filter and the identity is correct. There is
     also no ``OBBConfig`` to gate with (``config.obb is None``), and bg-sub's
@@ -388,16 +388,24 @@ def filter_for_source(
     normal inference and replay use the default final target cap.
     """
     if config.detection_source == "bgsub":
-        indices = np.arange(raw.num_detections, dtype=np.int32)
-        if raw.num_detections > MAX_DETECTIONS_PER_FRAME:
-            # Background subtraction has no confidence gate (its confidences
-            # are NaN), but its legacy count gate keeps the largest objects.
-            # Apply the same ordering before any downstream crop consumer so
-            # loaded/multi-arena configs cannot bypass the hard crop bound.
-            order = np.argsort(raw.sizes)[::-1][:MAX_DETECTIONS_PER_FRAME]
-            indices = np.ascontiguousarray(order, dtype=np.int32)
-            raw = _select(raw, indices)
-        return raw, indices
+        bg = getattr(config, "bgsub", None)
+        order = np.argsort(-np.asarray(raw.sizes, np.float64), kind="stable")
+        cap = MAX_DETECTIONS_PER_FRAME
+        if apply_max_detections and bg is not None:
+            target = require_target_count_within_limit(max(1, int(bg.max_targets)))
+            budget = target * int(bg.max_contour_multiplier)
+            # Contour-budget noise guard. It now counts the STORED contours
+            # (after the N-free area/size filters), not the raw findContours
+            # count -- an accepted semantic change of the N-free cache.
+            if raw.num_detections > budget:
+                order = order[:0]
+            cap = target
+        # Top-`cap` by area; re-sorted ascending so raw-index keying stays
+        # monotone for downstream caches.
+        indices = np.ascontiguousarray(np.sort(order[:cap]), dtype=np.int32)
+        if len(indices) == raw.num_detections:
+            return raw, indices
+        return _select(raw, indices), indices
     return filter_with_indices(
         raw,
         config.obb,

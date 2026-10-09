@@ -292,6 +292,7 @@ class Pipeline:
                         self.stages.bgsub_model,
                         cfg.bgsub,
                         self.runtime,
+                        limit_stats=self.detection_limit_stats,
                     )
             with span(N.RUN_OBB, units=len(window.frames)):
                 # DECODE is spanned in `_stream_windows`, the producer-side
