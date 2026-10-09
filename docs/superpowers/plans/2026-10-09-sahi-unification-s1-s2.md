@@ -1463,7 +1463,12 @@ def training_geometry_from_sam3_manifest(
     build_manifest: dict[str, Any], *, imgsz: int
 ) -> dict[str, Any]:
     """v3 block for a SAM3 tile build: canonical names, present values only."""
-    canonical, extras = _safe_canonicalize(build_manifest)
+    # A build manifest's tile_px is a realized MEASUREMENT, not the escalation
+    # override canonicalize aliases to custom slice_width/height (S1 NEW-3);
+    # it is mapped to tile_px_set below instead.
+    canonical, extras = _safe_canonicalize(
+        {k: v for k, v in (build_manifest or {}).items() if k != "tile_px"}
+    )
     geometry: dict[str, Any] = {"fragment_policy": "crowd", "imgsz": int(imgsz)}
     for key in _SAM3_PRESENT_ONLY:
         if key in canonical:
