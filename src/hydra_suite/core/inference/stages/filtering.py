@@ -10,7 +10,7 @@ from ..config import OBBConfig
 from ..limits import MAX_DETECTIONS_PER_FRAME, require_target_count_within_limit
 from ..result import OBBResult
 from ..runtime import RuntimeContext
-from .obb import _numpy_descending_indices, _RawOBBTensors
+from .obb import _RawOBBTensors
 
 # Size gates compare against ELLIPSE area, not the OBB rectangle area. The
 # MIN/MAX_OBJECT_SIZE thresholds are derived from a circular body area
@@ -20,6 +20,17 @@ from .obb import _numpy_descending_indices, _RawOBBTensors
 # so comparing it directly would reject the largest detections the legacy pipeline
 # keeps. Multiply by pi/4 to convert rectangle area -> ellipse area for parity.
 _ELLIPSE_AREA_FRACTION = np.pi / 4.0
+
+
+def _rank(confidences: np.ndarray, positions: np.ndarray) -> np.ndarray:
+    """Order (into the given arrays) by confidence desc, then raw index asc.
+
+    The single replay ranking. Detection caches are stored in exactly this
+    order (``obb.rank_and_bound``), so a cache prefix IS a top-k under this
+    ranking -- which makes the 2N window, NMS and the final cut agree for
+    every N and keeps every replay set inside the per-animal superset.
+    """
+    return np.lexsort((np.asarray(positions), -np.asarray(confidences)))
 
 
 def _final_cap(config: OBBConfig) -> int:
@@ -96,9 +107,9 @@ def filter_detections(
         # LARGEST (sort by size)", inherited from the legacy detector, which
         # let a large low-confidence blob displace a small high-confidence
         # animal on any frame with more detections than targets. Shares
-        # `_numpy_descending_indices` with the raw cap so both cuts rank and
-        # break ties identically.
-        order = _numpy_descending_indices(raw.confidences[indices])[:max_detections]
+        # `_rank` (confidence desc, raw index asc) so every cut ranks
+        # and breaks ties identically.
+        order = _rank(raw.confidences[indices], indices)[:max_detections]
         indices = indices[order]
 
     return _select(raw, indices)
@@ -203,11 +214,9 @@ def filter_from_tensors(
         # LARGEST (sort by size)", inherited from the legacy detector, which
         # let a large low-confidence blob displace a small high-confidence
         # animal on any frame with more detections than targets. Shares
-        # `_numpy_descending_indices` with the raw cap so both cuts rank and
-        # break ties identically.
-        order = _numpy_descending_indices(subset.confidences[local_idx])[
-            :max_detections
-        ]
+        # `_rank` (confidence desc, raw index asc) so every cut ranks
+        # and breaks ties identically.
+        order = _rank(subset.confidences[local_idx], local_idx)[:max_detections]
         local_idx = local_idx[order]
 
     return _select(subset, local_idx)
@@ -221,7 +230,7 @@ def _obb_nms(raw: OBBResult, indices: np.ndarray, iou_threshold: float) -> np.nd
     ``cv2.intersectConvexConvex`` (NOT a reconstructed RotatedRect), so the
     suppression decisions near the IoU threshold match the legacy detector.
     """
-    order = indices[np.argsort(raw.confidences[indices])[::-1]]
+    order = indices[_rank(raw.confidences[indices], indices)]
     hulls: dict[int, tuple[np.ndarray, float]] = {}
     # Axis-aligned bbox per detection for the cheap overlap pre-check (matches
     # legacy: boxes whose AABBs don't overlap have zero polygon IoU, so the
@@ -325,7 +334,12 @@ def filter_with_indices(
     if n == 0:
         return raw, np.zeros(0, dtype=np.int32)
 
+    final_cap = _final_cap(config) if apply_max_detections else MAX_DETECTIONS_PER_FRAME
     keep = raw.confidences >= config.confidence_threshold
+    if apply_max_detections:
+        # 2N replay window: the cache is confidence-ranked, so the first
+        # min(2N, n) rows are exactly the legacy "raw cap" candidates.
+        keep[min(n, 2 * final_cap) :] = False
     ellipse_area = raw.sizes * _ELLIPSE_AREA_FRACTION
     if config.min_object_size > 0:
         keep = keep & (ellipse_area >= config.min_object_size)
@@ -350,18 +364,9 @@ def filter_with_indices(
         keep_nms = _obb_nms(subset, np.arange(len(indices)), config.iou_threshold)
         indices = indices[keep_nms]
         subset = _select(raw, indices)
-    max_detections = (
-        _final_cap(config) if apply_max_detections else MAX_DETECTIONS_PER_FRAME
-    )
-    if len(indices) > max_detections:
-        # Keep the most CONFIDENT detections. This was "H5 parity: keep the
-        # LARGEST (sort by size)", inherited from the legacy detector, which
-        # let a large low-confidence blob displace a small high-confidence
-        # animal on any frame with more detections than targets. Shares
-        # `_numpy_descending_indices` with the raw cap so both cuts rank and
-        # break ties identically.
-        order = _numpy_descending_indices(raw.confidences[indices])[:max_detections]
-        indices = indices[order]
+    if len(indices) > final_cap:
+        order = _rank(raw.confidences[indices], indices)[:final_cap]
+        indices = indices[np.sort(order)]
         subset = _select(raw, indices)
     return subset, indices.astype(np.int32)
 
