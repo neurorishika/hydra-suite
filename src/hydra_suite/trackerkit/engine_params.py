@@ -689,6 +689,9 @@ def build_engine_params(
     )
     animals_per_arena = int(_cfg_get(cfg, "animals_per_arena", default=max_targets))
     max_targets = n_arenas * animals_per_arena
+    from hydra_suite.core.inference.limits import require_target_count_within_limit
+
+    require_target_count_within_limit(max_targets)
     reference_body_size = float(_cfg_get(cfg, "reference_body_size", default=20.0))
     resize_factor = float(_cfg_get(cfg, "resize_factor", default=1.0))
     # RESIZE_FACTOR is a background-subtraction knob. The worker's frame

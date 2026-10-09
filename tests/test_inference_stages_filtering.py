@@ -3,10 +3,10 @@ import pytest
 import torch
 
 from hydra_suite.core.inference.config import OBBConfig, OBBDirectConfig
+from hydra_suite.core.inference.limits import MAX_DETECTIONS_PER_FRAME
 from hydra_suite.core.inference.result import OBBResult
 from hydra_suite.core.inference.runtime import RuntimeContext
 from hydra_suite.core.inference.stages.filtering import (
-    MAX_DOWNSTREAM_CROPS_PER_FRAME,
     filter_detections,
     filter_for_source,
     filter_from_tensors,
@@ -164,7 +164,7 @@ def test_filter_max_detections():
 
 
 def test_unlimited_config_still_has_finite_downstream_crop_cap():
-    n = MAX_DOWNSTREAM_CROPS_PER_FRAME + 7
+    n = MAX_DETECTIONS_PER_FRAME + 7
     raw = _make_obb(
         [[i * 100.0, 0.0] for i in range(n)],
         [0.9] * n,
@@ -176,12 +176,12 @@ def test_unlimited_config_still_has_finite_downstream_crop_cap():
         _cpu_config(max_detections=0, iou_threshold=1.0),
     )
 
-    assert result.num_detections == MAX_DOWNSTREAM_CROPS_PER_FRAME
-    assert len(indices) == MAX_DOWNSTREAM_CROPS_PER_FRAME
+    assert result.num_detections == MAX_DETECTIONS_PER_FRAME
+    assert len(indices) == MAX_DETECTIONS_PER_FRAME
 
 
 def test_bgsub_source_is_capped_before_downstream_crop_materialization():
-    n = MAX_DOWNSTREAM_CROPS_PER_FRAME + 9
+    n = MAX_DETECTIONS_PER_FRAME + 9
     raw = _make_obb(
         [[i * 100.0, 0.0] for i in range(n)],
         [float("nan")] * n,
@@ -191,9 +191,9 @@ def test_bgsub_source_is_capped_before_downstream_crop_materialization():
 
     result, indices = filter_for_source(config, raw)
 
-    assert result.num_detections == MAX_DOWNSTREAM_CROPS_PER_FRAME
-    assert len(indices) == MAX_DOWNSTREAM_CROPS_PER_FRAME
-    assert result.sizes.min() == n - MAX_DOWNSTREAM_CROPS_PER_FRAME + 1
+    assert result.num_detections == MAX_DETECTIONS_PER_FRAME
+    assert len(indices) == MAX_DETECTIONS_PER_FRAME
+    assert result.sizes.min() == n - MAX_DETECTIONS_PER_FRAME + 1
 
 
 def test_filter_empty_input():

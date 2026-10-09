@@ -218,7 +218,9 @@ class SetupPanel(QWidget):
         # never entered directly) -- lbl_animals_per_arena_total shows that
         # derived total live so it's never silently wrong.
         self.spin_max_targets = QSpinBox()
-        self.spin_max_targets.setRange(1, 200)
+        from hydra_suite.core.inference.limits import MAX_DETECTIONS_PER_FRAME
+
+        self.spin_max_targets.setRange(1, MAX_DETECTIONS_PER_FRAME)
         self.spin_max_targets.setValue(4)
         self.spin_max_targets.setFixedHeight(30)
         self.spin_max_targets.setMinimumWidth(84)

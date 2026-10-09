@@ -139,11 +139,9 @@ def test_equal_confidences_break_ties_deterministically():
 
 def test_bgsub_still_uses_size_because_confidences_are_nan():
     """bg-sub confidences are NaN; size is the only usable ordering there."""
-    from hydra_suite.core.inference.stages.filtering import (
-        MAX_DOWNSTREAM_CROPS_PER_FRAME,
-    )
+    from hydra_suite.core.inference.limits import MAX_DETECTIONS_PER_FRAME
 
-    n = MAX_DOWNSTREAM_CROPS_PER_FRAME + 3
+    n = MAX_DETECTIONS_PER_FRAME + 3
     sizes = np.arange(n, dtype=np.float32) + 1.0
     res = _result(sizes.tolist(), [float("nan")] * n)
 
@@ -151,8 +149,6 @@ def test_bgsub_still_uses_size_because_confidences_are_nan():
         detection_source = "bgsub"
 
     out, _ = filter_for_source(_BgCfg(), res, None)
-    assert out.num_detections == MAX_DOWNSTREAM_CROPS_PER_FRAME
+    assert out.num_detections == MAX_DETECTIONS_PER_FRAME
     # The largest survive.
-    assert out.sizes.min() == pytest.approx(
-        float(n - MAX_DOWNSTREAM_CROPS_PER_FRAME + 1)
-    )
+    assert out.sizes.min() == pytest.approx(float(n - MAX_DETECTIONS_PER_FRAME + 1))

@@ -209,3 +209,19 @@ def test_engine_params_module_is_qt_free(monkeypatch):
     assert hasattr(module, "build_engine_params")
     assert hasattr(module, "RuntimeContext")
     assert hasattr(module, "build_roi_mask")
+
+
+def test_engine_params_rejects_total_n_above_limit(fly_obb_cfg, fly_obb_probe):
+    from hydra_suite.core.inference.limits import DetectionLimitError
+
+    cfg = dict(fly_obb_cfg)
+    cfg["max_targets"] = 1025
+    cfg["animals_per_arena"] = 1025
+    rt = RuntimeContext(
+        fps=fly_obb_probe.fps,
+        total_frames=fly_obb_probe.total_frames,
+        frame_width=fly_obb_probe.width,
+        frame_height=fly_obb_probe.height,
+    )
+    with pytest.raises(DetectionLimitError, match="1024"):
+        build_engine_params(cfg, runtime=rt)

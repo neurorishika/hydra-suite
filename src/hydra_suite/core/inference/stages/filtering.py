@@ -7,6 +7,7 @@ import numpy as np
 import torch
 
 from ..config import OBBConfig
+from ..limits import MAX_DETECTIONS_PER_FRAME, require_target_count_within_limit
 from ..result import OBBResult
 from ..runtime import RuntimeContext
 from .obb import _numpy_descending_indices, _RawOBBTensors
@@ -20,18 +21,13 @@ from .obb import _numpy_descending_indices, _RawOBBTensors
 # keeps. Multiply by pi/4 to convert rectangle area -> ellipse area for parity.
 _ELLIPSE_AREA_FRACTION = np.pi / 4.0
 
-# Downstream crop consumers are intentionally frame-local. This finite cap is
-# independent of the detection frame batch and bounds canonical/AABB crop
-# materialization even for legacy configs where max_detections=0 meant
-# unlimited. Normal tracker configs use much smaller MAX_TARGETS values.
-MAX_DOWNSTREAM_CROPS_PER_FRAME = 128
 
-
-def _effective_max_detections(config: OBBConfig) -> int:
+def _final_cap(config: OBBConfig) -> int:
+    """The replay-time final cap N. 0/unset means 'no N cut' (the limit)."""
     requested = int(getattr(config, "max_detections", 0) or 0)
     if requested <= 0:
-        return MAX_DOWNSTREAM_CROPS_PER_FRAME
-    return min(requested, MAX_DOWNSTREAM_CROPS_PER_FRAME)
+        return MAX_DETECTIONS_PER_FRAME
+    return require_target_count_within_limit(requested)
 
 
 def filter_raw(
@@ -94,7 +90,7 @@ def filter_detections(
     if config.iou_threshold < 1.0 and len(indices) > 1:
         indices = _obb_nms(raw, indices, config.iou_threshold)
 
-    max_detections = _effective_max_detections(config)
+    max_detections = _final_cap(config)
     if len(indices) > max_detections:
         # Keep the most CONFIDENT detections. This was "H5 parity: keep the
         # LARGEST (sort by size)", inherited from the legacy detector, which
@@ -201,7 +197,7 @@ def filter_from_tensors(
     if config.iou_threshold < 1.0 and m > 1:
         local_idx = _obb_nms(subset, local_idx, config.iou_threshold)
 
-    max_detections = _effective_max_detections(config)
+    max_detections = _final_cap(config)
     if len(local_idx) > max_detections:
         # Keep the most CONFIDENT detections. This was "H5 parity: keep the
         # LARGEST (sort by size)", inherited from the legacy detector, which
@@ -355,9 +351,7 @@ def filter_with_indices(
         indices = indices[keep_nms]
         subset = _select(raw, indices)
     max_detections = (
-        _effective_max_detections(config)
-        if apply_max_detections
-        else MAX_DOWNSTREAM_CROPS_PER_FRAME
+        _final_cap(config) if apply_max_detections else MAX_DETECTIONS_PER_FRAME
     )
     if len(indices) > max_detections:
         # Keep the most CONFIDENT detections. This was "H5 parity: keep the
@@ -395,12 +389,12 @@ def filter_for_source(
     """
     if config.detection_source == "bgsub":
         indices = np.arange(raw.num_detections, dtype=np.int32)
-        if raw.num_detections > MAX_DOWNSTREAM_CROPS_PER_FRAME:
+        if raw.num_detections > MAX_DETECTIONS_PER_FRAME:
             # Background subtraction has no confidence gate (its confidences
             # are NaN), but its legacy count gate keeps the largest objects.
             # Apply the same ordering before any downstream crop consumer so
             # loaded/multi-arena configs cannot bypass the hard crop bound.
-            order = np.argsort(raw.sizes)[::-1][:MAX_DOWNSTREAM_CROPS_PER_FRAME]
+            order = np.argsort(raw.sizes)[::-1][:MAX_DETECTIONS_PER_FRAME]
             indices = np.ascontiguousarray(order, dtype=np.int32)
             raw = _select(raw, indices)
         return raw, indices
