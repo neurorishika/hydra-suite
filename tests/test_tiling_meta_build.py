@@ -234,3 +234,9 @@ def test_sam3_does_not_stamp_keep_empty_tiles():
     """Review m5: publish never forwards it, so it is not part of the stamp."""
     v3 = training_geometry_from_sam3_manifest({"keep_empty_tiles": True}, imgsz=1008)
     assert "keep_empty_tiles" not in v3
+
+
+def test_merge_requires_model_family():
+    """Review m7: a writer must say which family it stamps; no silent yolo."""
+    with pytest.raises(TypeError):
+        merge_training_geometry(None, {"overlap": 0.2})
