@@ -428,3 +428,21 @@ def test_yolo_family_defaults_claim_no_fraction(model):
     assert training.merge_policy == "greedy_nmm" and training.merge_metric == "ios"
     assert training.fragment_policy == "drop"
     assert training.object_tile_fractions == ()
+
+
+def test_trackerkit_reader_survives_huge_ints():
+    """S2 fix wave: _training_values overflowed on 10**400 (pre-existing)."""
+    from hydra_suite.core.inference.slice_meta import slice_meta_to_panel_values
+
+    values = slice_meta_to_panel_values(
+        {
+            "training_geometry": {
+                "overlap": 10**400,
+                "imgsz": 10**400,
+                "object_tile_fraction": 10**400,
+                "reference_body_px": 10**400,
+                "slice_width": 10**400,
+            }
+        }
+    )
+    assert values["overlap"] == 0.2 and values["object_tile_fraction"] == 0.15

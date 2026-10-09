@@ -296,7 +296,7 @@ def profile_by_id(
 def _clamped_float(value: object, default: float, lo: float, hi: float) -> float:
     try:
         parsed = float(value)
-    except (TypeError, ValueError):
+    except (TypeError, ValueError, OverflowError):
         return default
     return max(lo, min(hi, parsed)) if np.isfinite(parsed) else default
 
@@ -304,7 +304,7 @@ def _clamped_float(value: object, default: float, lo: float, hi: float) -> float
 def _clamped_int(value: object, default: int, lo: int, hi: int) -> int:
     try:
         parsed = int(value)
-    except (TypeError, ValueError):
+    except (TypeError, ValueError, OverflowError):
         return default
     return max(lo, min(hi, parsed))
 
@@ -317,7 +317,7 @@ def _training_values(geometry: dict[str, Any]) -> dict[str, Any]:
     for target in geometry.get("target_sizes") or []:
         try:
             targets.append(float(target))
-        except (TypeError, ValueError):
+        except (TypeError, ValueError, OverflowError):
             pass
     imgsz = _clamped_int(geometry.get("imgsz"), 0, 0, 8192)
     if targets and imgsz > 0:
