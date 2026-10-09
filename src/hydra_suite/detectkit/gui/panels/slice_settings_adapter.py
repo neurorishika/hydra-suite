@@ -13,6 +13,7 @@ raising inside a GUI load.
 
 from __future__ import annotations
 
+import logging
 from dataclasses import replace
 from statistics import median
 from typing import Any
@@ -21,6 +22,8 @@ from hydra_suite.utils.tiling_spec import GEOMETRY_MODES, OVERLAP_MAX, TilingSpe
 from hydra_suite.widgets.slice_settings_parts import SLICE_SIZE_MAX
 
 from ..models import SliceTrainingSettings
+
+logger = logging.getLogger(__name__)
 
 # The nine kwargs SliceSettingsGroup.to_sam3_tiling() has always returned.
 SAM3_TILING_KEYS = (
@@ -36,18 +39,30 @@ SAM3_TILING_KEYS = (
 )
 
 
-def _clamp(value: Any, lo: float, hi: float) -> float:
+def clamp_saved(field: str, value: Any, lo: float, hi: float) -> float:
+    """Clamp a saved value into the control's range, logging when it moves."""
     try:
         number = float(value)
     except (TypeError, ValueError):
+        number = float("nan")
+    if number != number:  # NaN or unparseable
+        logger.warning("SAHI %s=%r is not a number; using %r", field, value, lo)
         return lo
-    if number != number:  # NaN
-        return lo
-    return max(lo, min(hi, number))
+    clamped = max(lo, min(hi, number))
+    if clamped != number:
+        logger.warning(
+            "SAHI %s=%r is outside [%s, %s]; clamped to %r",
+            field,
+            value,
+            lo,
+            hi,
+            clamped,
+        )
+    return clamped
 
 
-def _size(value: Any) -> int:
-    return int(_clamp(value, 0, SLICE_SIZE_MAX))
+def _size(field: str, value: Any) -> int:
+    return int(clamp_saved(field, value, 0, SLICE_SIZE_MAX))
 
 
 def _mode(value: Any) -> str:
@@ -77,19 +92,23 @@ def settings_to_spec(s: SliceTrainingSettings) -> tuple[TilingSpec, dict]:
         enabled=bool(s.enabled),
         geometry_mode=_mode(s.geometry_mode),
         object_tile_fractions=_fractions(s.target_fractions()),
-        reference_body_px=_clamp(s.reference_body_px, 0.0, float("inf")),
-        slice_width=_size(s.slice_width),
-        slice_height=_size(s.slice_height),
-        overlap=_clamp(s.overlap, 0.0, OVERLAP_MAX),
-        min_area_ratio=_clamp(s.min_area_ratio, 0.0, 1.0),
-        merge_threshold=_clamp(s.merge_threshold, 0.0, 1.0),
+        reference_body_px=clamp_saved(
+            "reference_body_px", s.reference_body_px, 0.0, float("inf")
+        ),
+        slice_width=_size("slice_width", s.slice_width),
+        slice_height=_size("slice_height", s.slice_height),
+        overlap=clamp_saved("overlap", s.overlap, 0.0, OVERLAP_MAX),
+        min_area_ratio=clamp_saved("min_area_ratio", s.min_area_ratio, 0.0, 1.0),
+        merge_threshold=clamp_saved("merge_threshold", s.merge_threshold, 0.0, 1.0),
     )
     extras = {
-        "negative_tile_fraction": _clamp(s.negative_tile_fraction, 0.0, 1.0),
+        "negative_tile_fraction": clamp_saved(
+            "negative_tile_fraction", s.negative_tile_fraction, 0.0, 1.0
+        ),
         "full_frame_mix": bool(s.full_frame_mix),
         "balance_multiscale_loss": bool(s.balance_multiscale_loss),
-        "balance_multiscale_loss_power": _clamp(
-            s.balance_multiscale_loss_power, 0.0, 1.0
+        "balance_multiscale_loss_power": clamp_saved(
+            "balance_multiscale_loss_power", s.balance_multiscale_loss_power, 0.0, 1.0
         ),
         "min_area_ratio": spec.min_area_ratio,
     }
@@ -149,21 +168,23 @@ def sam3_tiling_to_spec(tiling: dict) -> tuple[TilingSpec, dict]:
     contract is [0, 1) while the shared spec stops at OVERLAP_MAX (decision
     27), so a saved 0.95 must not be clamped on its way through.
     """
-    overlap = _clamp(tiling.get("tile_overlap", 0.0), 0.0, 0.99)
-    min_area = _clamp(tiling.get("min_area_ratio", 0.0), 0.0, 1.0)
+    overlap = clamp_saved("tile_overlap", tiling.get("tile_overlap", 0.0), 0.0, 0.99)
+    min_area = clamp_saved(
+        "min_area_ratio", tiling.get("min_area_ratio", 0.0), 0.0, 1.0
+    )
     spec = replace(
         TilingSpec.defaults("sam3"),
         enabled=True,
         geometry_mode=_mode(tiling.get("geometry_mode")),
         object_tile_fractions=_fractions(tiling.get("object_tile_fractions")),
-        slice_width=_size(tiling.get("slice_width", 0)),
-        slice_height=_size(tiling.get("slice_height", 0)),
+        slice_width=_size("slice_width", tiling.get("slice_width", 0)),
+        slice_height=_size("slice_height", tiling.get("slice_height", 0)),
         overlap=min(overlap, OVERLAP_MAX),
         min_area_ratio=min_area,
     )
     extras = {
-        "object_tile_fraction": _clamp(
-            tiling.get("object_tile_fraction", 0.0), 0.0, 1.0
+        "object_tile_fraction": clamp_saved(
+            "object_tile_fraction", tiling.get("object_tile_fraction", 0.0), 0.0, 1.0
         ),
         "keep_empty_tiles": bool(tiling.get("keep_empty_tiles", False)),
         "full_frame_mix": bool(tiling.get("full_frame_mix", False)),

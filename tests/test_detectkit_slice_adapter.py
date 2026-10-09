@@ -231,3 +231,35 @@ def test_inference_dialog_hosts_the_shared_widget():
     assert out.overlap == pytest.approx(0.3)
     assert out.merge_threshold == pytest.approx(0.6)
     assert "500" in widgets[0].lbl_slice_tile_size.text()
+
+
+def test_clamping_a_saved_value_logs_one_warning(caplog):
+    import logging
+
+    caplog.set_level(logging.WARNING)
+    spec, _ = settings_to_spec(SliceTrainingSettings(overlap=0.95))
+    assert spec.overlap == pytest.approx(0.9)
+    warnings = [r for r in caplog.records if r.levelno == logging.WARNING]
+    assert len(warnings) == 1
+    message = warnings[0].getMessage()
+    assert "overlap" in message and "0.95" in message and "0.9" in message
+
+
+def test_in_range_values_log_nothing(caplog):
+    import logging
+
+    caplog.set_level(logging.WARNING)
+    settings_to_spec(SliceTrainingSettings(overlap=0.3))
+    sam3_tiling_to_spec(_sam3_kwargs(Sam3LoraParams()))
+    assert not [r for r in caplog.records if r.levelno == logging.WARNING]
+
+
+def test_sam3_oversized_tile_is_clamped_with_a_warning(caplog):
+    import logging
+
+    caplog.set_level(logging.WARNING)
+    spec, _ = sam3_tiling_to_spec(
+        {**_sam3_kwargs(Sam3LoraParams()), "slice_width": 100000}
+    )
+    assert spec.slice_width == 8192
+    assert any("slice_width" in r.getMessage() for r in caplog.records)

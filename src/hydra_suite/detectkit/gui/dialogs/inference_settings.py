@@ -35,15 +35,11 @@ from ..models import (
     InferenceRunSettings,
     SliceTrainingSettings,
 )
+from ..panels.slice_settings_adapter import clamp_saved
 
 # The runtime preview's single scale when nothing is configured: TrackerKit's
 # inference default from the one defaults table.
 _DEFAULT_INFERENCE_FRACTION = BACKEND_DEFAULTS["yolo_infer"].object_tile_fractions[0]
-
-
-def _clamp(value, lo: float, hi: float) -> float:
-    """Clamp a saved value into the control's range, as the spin boxes did."""
-    return max(lo, min(hi, float(value)))
 
 
 def _device_options(current: str) -> list[str]:
@@ -186,12 +182,22 @@ class InferenceSettingsDialog(DetectKitDialog):
                 if sliced.geometry_mode in GEOMETRY_MODES
                 else "auto_object"
             ),
-            object_tile_fractions=(_clamp(fraction, FRACTION_MIN, FRACTION_MAX),),
+            object_tile_fractions=(
+                clamp_saved(
+                    "object_tile_fraction", fraction, FRACTION_MIN, FRACTION_MAX
+                ),
+            ),
             reference_body_px=max(0.0, float(sliced.reference_body_px)),
-            slice_width=int(_clamp(sliced.slice_width, 0, SLICE_SIZE_MAX)),
-            slice_height=int(_clamp(sliced.slice_height, 0, SLICE_SIZE_MAX)),
-            overlap=_clamp(sliced.overlap, 0.0, OVERLAP_MAX),
-            merge_threshold=_clamp(sliced.merge_threshold, 0.0, 1.0),
+            slice_width=int(
+                clamp_saved("slice_width", sliced.slice_width, 0, SLICE_SIZE_MAX)
+            ),
+            slice_height=int(
+                clamp_saved("slice_height", sliced.slice_height, 0, SLICE_SIZE_MAX)
+            ),
+            overlap=clamp_saved("overlap", sliced.overlap, 0.0, OVERLAP_MAX),
+            merge_threshold=clamp_saved(
+                "merge_threshold", sliced.merge_threshold, 0.0, 1.0
+            ),
         )
         self.slice_widget.set_spec(
             spec, extras={"merge_threshold": spec.merge_threshold}
