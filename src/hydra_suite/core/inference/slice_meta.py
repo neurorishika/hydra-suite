@@ -16,7 +16,16 @@ from uuid import uuid4
 
 import numpy as np
 
-SLICE_META_SCHEMA_VERSION = 2
+SLICE_META_SCHEMA_VERSION = 3
+# Document envelope, never geometry. ``training_geometry`` is listed so a
+# malformed (non-dict) nested value is not read back as a geometry key.
+_ENVELOPE_KEYS = (
+    "schema_version",
+    "model_family",
+    "primary_profile_id",
+    "profiles",
+    "training_geometry",
+)
 _GEOMETRY_MODES = {"auto_model", "auto_object", "custom"}
 
 
@@ -48,9 +57,11 @@ def write_slice_meta(model_path: str | Path, meta: dict[str, Any]) -> Path:
 
 
 def training_geometry(meta: dict[str, Any]) -> dict[str, Any]:
-    """Return v2 training geometry or a legacy flat payload, without mutation."""
+    """Return nested training geometry or a legacy flat payload, without mutation."""
     nested = meta.get("training_geometry")
-    return dict(nested) if isinstance(nested, dict) else dict(meta)
+    if isinstance(nested, dict):
+        return dict(nested)
+    return {k: v for k, v in meta.items() if k not in _ENVELOPE_KEYS}
 
 
 def new_profile_id(name: str) -> str:
@@ -64,9 +75,14 @@ def new_profile_id(name: str) -> str:
 
 
 def normalized_slice_meta(meta: dict[str, Any]) -> dict[str, Any]:
-    """Promote legacy metadata to the v2 document shape without inventing profiles."""
+    """Promote legacy metadata to the current document shape without inventing profiles.
+
+    v1/v2 documents were written only for YOLO direct detectors, so an absent
+    ``model_family`` means ``"yolo"``.
+    """
     return {
         "schema_version": SLICE_META_SCHEMA_VERSION,
+        "model_family": str(meta.get("model_family") or "yolo"),
         "training_geometry": training_geometry(meta),
         "primary_profile_id": str(meta.get("primary_profile_id", "") or ""),
         "profiles": available_slice_profiles(meta),
@@ -199,7 +215,10 @@ def profile_summary(meta: dict[str, Any]) -> dict[str, Any]:
 
 
 def merge_training_geometry(
-    existing: dict[str, Any] | None, training_geometry: dict[str, Any]
+    existing: dict[str, Any] | None,
+    training_geometry: dict[str, Any],
+    *,
+    model_family: str = "yolo",
 ) -> dict[str, Any]:
     """Replace training geometry while preserving user-approved profiles.
 
@@ -207,6 +226,7 @@ def merge_training_geometry(
     """
     result = normalized_slice_meta(existing or {})
     result["training_geometry"] = dict(training_geometry)
+    result["model_family"] = str(model_family)
     return result
 
 
