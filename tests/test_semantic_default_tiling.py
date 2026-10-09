@@ -245,6 +245,7 @@ def _dialog_and_cli(monkeypatch, tmp_path, saved, body, models=("sam3",)):
         variant=dialog.selected_variant(), tile_fraction=None, reference_body_px=None
     )
     tiling = cli._sam3_tiling(project, ns)
+    _dialog_and_cli.last = (dialog, project, cli)
     return params, tiling
 
 
@@ -267,7 +268,30 @@ def test_stale_saved_variant_with_no_body_is_full_frame_in_both(monkeypatch, tmp
     saved = {"variant": "gone-model", "tile_fraction": 0.07, "reference_body_px": 40}
     params, tiling = _dialog_and_cli(monkeypatch, tmp_path, saved, 0.0)
     assert _effective(params["tile_fraction"], params["reference_body_px"]) is None
-    assert tiling["tile_fraction"] is None
+    assert _effective(params["tile_fraction"], params["reference_body_px"]) == (
+        _effective(tiling["tile_fraction"], tiling["reference_body_px"])
+    )
+
+
+def test_stale_saved_no_body_then_typing_a_body_tiles_like_the_cli_flag(
+    monkeypatch, tmp_path
+):
+    """r1: the dialog keeps the seed in its fraction field, as with no saved dict."""
+    import argparse
+
+    saved = {"variant": "gone-model", "tile_fraction": 0.07, "reference_body_px": 40}
+    _dialog_and_cli(monkeypatch, tmp_path, saved, 0.0)
+    dialog, project, cli = _dialog_and_cli.last
+    dialog._reference_body.setValue(70.0)
+    params = dialog.parameters()
+    ns = argparse.Namespace(
+        variant=dialog.selected_variant(), tile_fraction=None, reference_body_px=70.0
+    )
+    tiling = cli._sam3_tiling(project, ns)
+    assert _effective(params["tile_fraction"], params["reference_body_px"]) is not None
+    assert _effective(params["tile_fraction"], params["reference_body_px"]) == (
+        _effective(tiling["tile_fraction"], tiling["reference_body_px"])
+    )
 
 
 def test_saved_body_without_a_fraction_agrees_between_dialog_and_cli(

@@ -316,7 +316,14 @@ class SemanticEscalationDialog(DetectKitDialog):
             )
             stale_saved = bool(saved)
             if stale_saved or opening["origin"] in ("calibration", "stamped"):
-                self._tile_fraction.setValue(float(opening["tile_fraction"] or 0.0))
+                # r1: an unknown body (full_frame) zeroes only the body; the
+                # fraction field keeps the seed, as with no saved dict, so
+                # typing a body tiles exactly like `--reference-body-px N`.
+                self._tile_fraction.setValue(
+                    float(SEMANTIC_TILE_FRACTION_SEED)
+                    if opening["origin"] == "full_frame"
+                    else float(opening["tile_fraction"] or 0.0)
+                )
                 self._reference_body.setValue(float(opening["reference_body_px"]))
                 if opening["origin"] == "calibration":
                     origin_label = "the model's calibration"
