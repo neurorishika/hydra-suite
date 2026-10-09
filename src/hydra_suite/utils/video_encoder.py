@@ -61,12 +61,19 @@ def _resolve_codec(backend: str, width: int, height: int) -> str:
     return codec
 
 
+# Probe-clip edge length: NVENC's minimum is ~145 px, VideoToolbox wants a
+# multiple of 16.
+_PROBE_SIZE = 256
+
+
 def _try_encode(codec_name: str) -> bool:
     """Return True if codec_name successfully encodes a test clip.
 
-    Uses 64x64 frames (multiple of 16) so hardware codecs exercise the same
+    Uses 256x256 frames (multiple of 16) so hardware codecs exercise the same
     avcodec_open2 path they would use for real frames.  2x2 frames are handled
-    differently by VideoToolbox and give false positives on some configurations.
+    differently by VideoToolbox and give false positives on some configurations,
+    and NVENC rejects anything below ~145 px (64x64 failed avcodec_open2 on every
+    NVIDIA box, silently dropping renders to libx264).
     """
     try:
         import av
@@ -77,10 +84,10 @@ def _try_encode(codec_name: str) -> bool:
         try:
             container = av.open(tmp, mode="w")
             stream = container.add_stream(codec_name, rate=1)
-            stream.width = 64
-            stream.height = 64
+            stream.width = _PROBE_SIZE
+            stream.height = _PROBE_SIZE
             stream.pix_fmt = "yuv420p"
-            frame = av.VideoFrame(64, 64, "yuv420p")
+            frame = av.VideoFrame(_PROBE_SIZE, _PROBE_SIZE, "yuv420p")
             for pkt in stream.encode(frame):
                 container.mux(pkt)
             for pkt in stream.encode():

@@ -179,3 +179,43 @@ def test_nvenc_session_counter_decrements_on_release(tmp_path):
         ve._BACKEND_CACHE = saved_cache
         ve._NVENC_MAX = saved_max
         ve._NVENC_ACTIVE = saved_active
+
+
+def test_try_encode_probe_frame_meets_nvenc_minimum(monkeypatch: pytest.MonkeyPatch):
+    """The probe clip must be large enough for NVENC to open.
+
+    NVENC rejects tiny frames in avcodec_open2 (measured on an RTX 6000 Ada:
+    h264_nvenc needs > 144 px, hevc_nvenc > 128 px), so a too-small probe
+    reports NVENC unavailable on every NVIDIA box and silently drops the
+    whole render to libx264 (~10x slower on 4512x4512 frames).
+    """
+    import hydra_suite.utils.video_encoder as ve
+
+    seen = {}
+
+    class _Stream:
+        def encode(self, frame=None):
+            if frame is not None:
+                seen["frame"] = (frame.width, frame.height)
+            return []
+
+    class _Container:
+        def add_stream(self, codec_name, rate):
+            stream = _Stream()
+            seen["stream"] = stream
+            return stream
+
+        def mux(self, pkt):
+            pass
+
+        def close(self):
+            pass
+
+    import av
+
+    monkeypatch.setattr(av, "open", lambda *a, **k: _Container())
+    assert ve._try_encode("h264_nvenc") is True
+    width, height = seen["stream"].width, seen["stream"].height
+    assert (width, height) == seen["frame"]
+    assert min(width, height) >= 256
+    assert width % 16 == 0 and height % 16 == 0
