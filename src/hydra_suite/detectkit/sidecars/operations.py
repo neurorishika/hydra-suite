@@ -73,7 +73,7 @@ def run_dataset_inference(
         predict_obb_for_frame_sequential,
         predict_preview_detections_for_image,
         predict_sliced_obb_result,
-        preview_object_tile_fraction,
+        sliced_preview_fraction,
     )
     from hydra_suite.detectkit.jobs.prediction_cache import (
         MAX_PATH_BYTES,
@@ -199,11 +199,7 @@ def run_dataset_inference(
                     geometry_mode=slice_settings.geometry_mode,
                     imgsz=imgsz,
                     reference_body_px=slice_settings.reference_body_px,
-                    object_tile_fraction=preview_object_tile_fraction(
-                        slice_settings.target_sizes_for(imgsz),
-                        slice_settings.object_tile_fraction,
-                        imgsz,
-                    ),
+                    object_tile_fraction=sliced_preview_fraction(slice_settings),
                     slice_width=slice_settings.slice_width,
                     slice_height=slice_settings.slice_height,
                     overlap=slice_settings.overlap,

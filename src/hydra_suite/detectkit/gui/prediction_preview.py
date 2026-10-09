@@ -155,6 +155,19 @@ def preview_object_tile_fraction(target_sizes, object_tile_fraction, imgsz) -> f
     return max(0.01, min(0.9, frac))
 
 
+def sliced_preview_fraction(slice_settings) -> float:
+    """The auto_object fraction a sliced preview runs at.
+
+    The median of the settings' fraction set, taken directly -- no
+    ``fraction * imgsz / imgsz`` pixel round trip, which is 1 ulp off for
+    values such as 0.055 at 640 and would make the preview tile at a number
+    TrackerKit does not use for the same profile (F2).
+    """
+    return preview_object_tile_fraction(
+        slice_settings.target_fractions(), slice_settings.object_tile_fraction, 1
+    )
+
+
 def _resolve_torch_device(device_preference: str) -> str:
     """Map a high-level device preference to a torch-style device string."""
     from hydra_suite.core.inference.torch_device import resolve_torch_device

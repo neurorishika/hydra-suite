@@ -212,3 +212,25 @@ def test_gui_signature_changes_when_primary_profile_changes(tmp_path):
         ),
     )
     assert signature() != before
+
+
+def test_preview_runs_at_the_profile_fraction_exactly(tmp_path):
+    """Review Focus 1: no px round trip (0.055*640/640 is 1 ulp off 0.055)."""
+    from hydra_suite.detectkit.gui.prediction_preview import sliced_preview_fraction
+
+    meta = upsert_slice_profile(
+        {"training_geometry": GEOM},
+        name="Fine",
+        settings={"object_tile_fraction": 0.055},
+        primary=True,
+    )
+    got = resolve_preview_tiling(
+        _model(tmp_path, meta),
+        SliceTrainingSettings(enabled=True),
+        project_imgsz=640,
+        override=None,
+    )
+    assert sliced_preview_fraction(got.slice_settings) == 0.055
+    # A legacy pixel project keeps its median(px)/640 scale.
+    legacy = SliceTrainingSettings.from_dict({"target_sizes": [64.0, 96.0, 128.0]})
+    assert sliced_preview_fraction(legacy) == 0.15
