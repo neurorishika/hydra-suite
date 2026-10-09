@@ -35,10 +35,16 @@
 7. `TilingSpec.training_tile_sizes()` (fans out every scale) is named for training only; inference uses `operating_fraction` + `resolve_tile_size` — one scale, per the user's decision.
 8. `canonicalize`'s `operating_fraction` matches `_training_values` for every shape a writer in this repo produces; it knowingly differs on hand-made shapes TrackerKit mishandles (bools as numbers, `imgsz` strings like `"640.5"`, prefill-only docs which TrackerKit ignores). Documented, not mirrored.
 
+9. (S1 adversarial M1) `canonicalize` never raises on `target_sizes`: with no stated `imgsz` and no `legacy_px_imgsz`, it warns once and leaves `object_tile_fractions` absent (never rescales by an unstated size). Supersedes Review Focus 2's "raises".
+10. (S1 adversarial M3) Operating-scale ladder: `median(target_sizes)/imgsz` → stamped prefill → np.median of a fraction SET → bare scalar (0.15 if unparseable). Writer-produced sidecars carry no set key without `imgsz`, so `_training_values` parity holds for them.
+11. (S1 adversarial M4) `tile_px` (escalation explicit override) aliases to `slice_width = slice_height` with `geometry_mode="custom"` unless a mode is given.
+12. (S1 adversarial M6) A positive `tile_fraction` implies `enabled=True` (explicit `enabled` wins).
+13. `utils/tiling_spec.py` may exceed 500 lines (CLAUDE.md's guideline targets classes); resolvers split to `utils/tiling_resolve.py` only past ~650 lines.
+
 ## Review Focus
 
 1. An older TrackerKit (`slice_meta._training_values`) reading a v3 YOLO sidecar must return exactly (`==`, bit-exact floats) what it returns for the equivalent v2 sidecar — including multi-scale `target_sizes` medians. → Task 5.
-2. Legacy `target_sizes` with no `imgsz` are divided by 640 for YOLO only; anything else raises rather than silently rescaling by 1008. → Task 2, Task 6.
+2. Legacy `target_sizes` with no `imgsz` are divided by 640 for YOLO only; anything else is left unresolved with a warning (deviation 9) rather than silently rescaled by 1008. → Task 2, Task 6.
 3. Out-of-range or retired values in old files (overlap 0.95, fraction 0 or 1.5, `nmm`, unknown geometry mode, NaN) load with a warning and never raise; the same values passed straight to `TilingSpec(...)` raise. → Task 1, Task 2.
 4. A SAM3 publish whose `.slice_meta.json` write fails still succeeds; an orphaned-attempt cleanup also removes the attempt's `.slice_meta.json`. → Task 8.
 5. User calibration profiles in an existing sidecar survive a YOLO republish that upgrades v2 → v3, unchanged. → Task 7.
