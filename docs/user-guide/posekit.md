@@ -84,7 +84,7 @@ paths, device, epochs, batch size, and other hyperparameters).
 
 ## Training Augmentation
 
-The YOLO-pose training dialog keeps the crop centre fixed. Besides the
+The YOLO-pose and ViTPose training dialogs keep the crop centre fixed. Besides the
 Ultralytics controls (HSV, rotation) it has two window augmentations:
 
 | Setting | Default | Effect |
@@ -100,4 +100,14 @@ centre) and `scale` (isotropic zoom) now default to 0. Training launches through
 augmentation from the `HYDRA_WINDOW_SCALE_JITTER` / `HYDRA_WINDOW_ASPECT_JITTER`
 environment variables. Mosaic (an Ultralytics default) still tiles several crops
 and is independent of these settings.
+
+**ViTPose** (native trainer) has the same two controls in its *ViTPose Config*
+group, with the same defaults and meaning. They are written to `run.json` as
+`scale_jitter` / `aspect_jitter`; a `run.json` without `scale_jitter` keeps the
+legacy behaviour (random zoom of about +/-30%, no aspect jitter), while an
+explicit value, including 0, switches to the centred window jitter. The window
+is re-cropped before the usual full-extent box and fit to the model input, with
+black padding, and keypoints pushed outside it become not-visible. Rotation
+(+/-40 degrees, 60% of samples) and photometric jitter are unchanged. SLEAP
+training is external and does not get these controls.
 

@@ -300,6 +300,8 @@ class ViTPoseTrainingWorker(QObject):
         batch,
         device,
         input_size=None,
+        scale_jitter=None,
+        aspect_jitter=0.0,
     ):
         super().__init__()
         self.image_paths = list(image_paths)
@@ -316,6 +318,8 @@ class ViTPoseTrainingWorker(QObject):
         self.batch = int(batch)
         self.device = device
         self.input_size = list(input_size) if input_size else None
+        self.scale_jitter = None if scale_jitter is None else float(scale_jitter)
+        self.aspect_jitter = float(aspect_jitter)
         self._cancel = False
         self._proc = None
 
@@ -348,7 +352,10 @@ class ViTPoseTrainingWorker(QObject):
                 epochs=self.epochs,
                 batch_size=self.batch,
                 input_size=self.input_size,
+                aspect_jitter=self.aspect_jitter,
             )
+            if self.scale_jitter is not None:
+                params["scale_jitter"] = self.scale_jitter
             run_json = prepare_run(params, self.run_dir, self.cache_dir)
             cmd = build_training_command(run_json)
             self.log.emit(f"Launching: {' '.join(cmd)}")
@@ -713,6 +720,32 @@ class TrainingRunnerDialog(QDialog):
         self.vitpose_size_summary = QLabel("")
         self.vitpose_size_summary.setWordWrap(True)
         vitpose_layout.addRow("", self.vitpose_size_summary)
+
+        self.vitpose_scale_jitter_spin = QDoubleSpinBox()
+        self.vitpose_scale_jitter_spin.setRange(0.0, 0.9)
+        self.vitpose_scale_jitter_spin.setSingleStep(0.05)
+        self.vitpose_scale_jitter_spin.setDecimals(2)
+        self.vitpose_scale_jitter_spin.setValue(0.20)
+        self.vitpose_scale_jitter_spin.setToolTip(
+            "Scale invariance: the crop window is resized about its centre by a "
+            "factor drawn from U(1-j, 1+j) (0.20 -> 0.8x to 1.2x), then fitted to "
+            "the model input. The crop centre never moves. 0 = no scale "
+            "augmentation."
+        )
+        vitpose_layout.addRow("Scale jitter", self.vitpose_scale_jitter_spin)
+
+        self.vitpose_aspect_jitter_spin = QDoubleSpinBox()
+        self.vitpose_aspect_jitter_spin.setRange(0.0, 1.0)
+        self.vitpose_aspect_jitter_spin.setSingleStep(0.05)
+        self.vitpose_aspect_jitter_spin.setDecimals(2)
+        self.vitpose_aspect_jitter_spin.setValue(0.20)
+        self.vitpose_aspect_jitter_spin.setToolTip(
+            "The crop window's width:height ratio is drawn log-uniformly from "
+            "[1/(1+a), 1+a] (0.20 -> 0.83x to 1.2x) at constant area, then fitted "
+            "to the model input without stretching the animal. The crop centre "
+            "never moves. 0 = off."
+        )
+        vitpose_layout.addRow("Aspect jitter", self.vitpose_aspect_jitter_spin)
 
         content_layout.addWidget(self.vitpose_group)
 
@@ -1215,6 +1248,20 @@ class TrainingRunnerDialog(QDialog):
         self.vitpose_detail_spin.setValue(
             float(settings.get("vitpose_detail", self.vitpose_detail_spin.value()))
         )
+        self.vitpose_scale_jitter_spin.setValue(
+            float(
+                settings.get(
+                    "vitpose_scale_jitter", self.vitpose_scale_jitter_spin.value()
+                )
+            )
+        )
+        self.vitpose_aspect_jitter_spin.setValue(
+            float(
+                settings.get(
+                    "vitpose_aspect_jitter", self.vitpose_aspect_jitter_spin.value()
+                )
+            )
+        )
 
     def _apply_latest_weights_default(self):
         if (
@@ -1456,6 +1503,8 @@ class TrainingRunnerDialog(QDialog):
                 "vitpose_input_h": int(self.vitpose_h_spin.value()),
                 "vitpose_input_w": int(self.vitpose_w_spin.value()),
                 "vitpose_detail": float(self.vitpose_detail_spin.value()),
+                "vitpose_scale_jitter": float(self.vitpose_scale_jitter_spin.value()),
+                "vitpose_aspect_jitter": float(self.vitpose_aspect_jitter_spin.value()),
             },
         )
 
@@ -1757,6 +1806,8 @@ class TrainingRunnerDialog(QDialog):
                 int(self.vitpose_h_spin.value()),
                 int(self.vitpose_w_spin.value()),
             ],
+            scale_jitter=self.vitpose_scale_jitter_spin.value(),
+            aspect_jitter=self.vitpose_aspect_jitter_spin.value(),
         )
         self._worker.moveToThread(self._thread)
         self._thread.started.connect(self._worker.run)
