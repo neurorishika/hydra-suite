@@ -33,7 +33,7 @@ logger = logging.getLogger(__name__)
 
 MODEL_FAMILIES = ("yolo", "sam3")
 # SAM3 build manifests carry build bookkeeping; only these survive into the stamp.
-_SAM3_EXTRAS = ("full_frame_mix", "scale_range_px", "keep_empty_tiles")
+_SAM3_EXTRAS = ("full_frame_mix", "scale_range_px")
 _SAM3_PRESENT_ONLY = (
     "geometry_mode",
     "reference_body_px",
@@ -126,7 +126,8 @@ def training_geometry_from_yolo_manifest(
     # sees -- and would write the reader's 0.15 fallback to disk as if stated.
     if operating is not None and _v2_fraction_claim(slice_geometry or {}) is not None:
         geometry.setdefault("prefill_object_tile_fraction", float(operating))
-    if "reference_body_px" in canonical:
+    # 0 is "not measured" (the builder's default), not a trained body size.
+    if float(canonical.get("reference_body_px") or 0.0) > 0:
         geometry.setdefault("trained_body_px", float(canonical["reference_body_px"]))
     geometry.setdefault("fragment_policy", "drop")
     return geometry

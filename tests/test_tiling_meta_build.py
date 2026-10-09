@@ -221,3 +221,16 @@ def test_sam3_stated_prefill_alone_is_stamped():
         {"prefill_object_tile_fraction": 0.04}, imgsz=1008
     )
     assert v3["prefill_object_tile_fraction"] == 0.04
+
+
+@pytest.mark.parametrize("body", [0, 0.0, -1.0])
+def test_yolo_trained_body_px_only_when_positive(body):
+    """Review m4: a 0 body is 'not measured', not a trained body size."""
+    v3 = training_geometry_from_yolo_manifest(_yolo_manifest(reference_body_px=body))
+    assert "trained_body_px" not in v3
+
+
+def test_sam3_does_not_stamp_keep_empty_tiles():
+    """Review m5: publish never forwards it, so it is not part of the stamp."""
+    v3 = training_geometry_from_sam3_manifest({"keep_empty_tiles": True}, imgsz=1008)
+    assert "keep_empty_tiles" not in v3
