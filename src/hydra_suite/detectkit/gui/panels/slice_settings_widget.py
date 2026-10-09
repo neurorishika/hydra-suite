@@ -20,6 +20,7 @@ from PySide6.QtWidgets import (
 )
 
 from hydra_suite.utils.slice_geometry import plan_tiles, tile_size_for_mode
+from hydra_suite.utils.tiling_spec import DEFAULT_YOLO_IMGSZ
 
 from ..models import SliceTrainingSettings
 
@@ -43,7 +44,7 @@ class _TileLayoutPreview(QWidget):
         self._target_fractions = [0.05, 0.10, 0.15, 0.20]
         self._slice_wh = (0, 0)
         self._overlap = 0.2
-        self._model_input_size = 640
+        self._model_input_size = DEFAULT_YOLO_IMGSZ
         self._reference_body_px = 0.0
         self._frame_wh = self._FALLBACK_FRAME_WH
         self._uses_fallback_frame = True
@@ -302,7 +303,7 @@ class SliceSettingsGroup(QGroupBox):
     ``full_frame_mix`` fields can never be cross-assigned.
     """
 
-    _DEFAULT_MODEL_INPUT_SIZE = 640
+    _DEFAULT_MODEL_INPUT_SIZE = DEFAULT_YOLO_IMGSZ
     _SAM3_MODEL_INPUT_SIZE = 1008
 
     def __init__(self, parent=None, *, backend: str = "yolo") -> None:
@@ -348,10 +349,7 @@ class SliceSettingsGroup(QGroupBox):
         )
         self.txt_targets = QLineEdit()
         self.txt_targets.setPlaceholderText("e.g. 0.31, 0.47, 0.62")
-        self.txt_targets.setToolTip(
-            "Object size as a fraction of the model input. At a 640px input, "
-            "0.31 means about 200px. Larger fractions create smaller tiles."
-        )
+        self._refresh_targets_help()
         self.auto_reference_note = QLabel()
         self.auto_reference_note.setWordWrap(True)
         self.auto_reference_note.setStyleSheet("color: #b8d9e6;")
@@ -520,7 +518,20 @@ class SliceSettingsGroup(QGroupBox):
     def set_model_input_size(self, imgsz: int) -> None:
         """Set the active model input size used to resolve relative scales."""
         self._model_input_size = max(1, int(imgsz))
+        self._refresh_targets_help()
         self._refresh_preview()
+
+    def _refresh_targets_help(self) -> None:
+        # Worked example at the REAL model input, never a literal 640 (F1).
+        size = self._model_input_size
+        self.txt_targets.setToolTip(
+            f"Object size as a fraction of the model input. At a {size}px input, "
+            f"0.31 means about {0.31 * size:.0f}px. Larger fractions create "
+            "smaller tiles."
+        )
+        row = getattr(self, "_rows", {}).get("targets")
+        if row is not None:
+            row[0].setToolTip(self.txt_targets.toolTip())
 
     def set_preview_frame_size(self, frame_wh: tuple[int, int] | None) -> None:
         """Use a representative project frame for the tile-layout schematic."""
@@ -635,10 +646,9 @@ class SliceSettingsGroup(QGroupBox):
             overlap=self.spin_overlap.value(),
             min_area_ratio=self.spin_min_area.value(),
             negative_tile_fraction=self.spin_neg.value(),
+            # Fractions only (F1, deviation 21): ``target_sizes`` keeps its
+            # dataclass default and is ignored whenever fractions are present.
             target_size_fractions=fractions,
-            target_sizes=[
-                fraction * self._DEFAULT_MODEL_INPUT_SIZE for fraction in fractions
-            ],
             full_frame_mix=self.chk_full.isChecked(),
             merge_threshold=self.spin_merge.value(),
             balance_multiscale_loss=self.chk_balance_loss.isChecked(),

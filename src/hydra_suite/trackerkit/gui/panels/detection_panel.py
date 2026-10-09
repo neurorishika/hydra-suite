@@ -32,6 +32,10 @@ from PySide6.QtWidgets import (
     QWidget,
 )
 
+from hydra_suite.core.inference.config import (
+    DEFAULT_SLICE_OBJECT_TILE_FRACTION,
+    DEFAULT_SLICE_OVERLAP,
+)
 from hydra_suite.core.inference.model_paths import get_models_root_directory
 from hydra_suite.trackerkit.config.schemas import TrackerConfig
 from hydra_suite.trackerkit.engine_params import SLICE_MERGE_DEFAULTS
@@ -814,7 +818,9 @@ class DetectionPanel(QWidget):
         self.spin_slice_overlap = QDoubleSpinBox()
         self.spin_slice_overlap.setRange(0.0, 0.9)
         self.spin_slice_overlap.setSingleStep(0.05)
-        self.spin_slice_overlap.setValue(float(advanced.get("slice_overlap", 0.2)))
+        self.spin_slice_overlap.setValue(
+            float(advanced.get("slice_overlap", DEFAULT_SLICE_OVERLAP))
+        )
         self.spin_slice_overlap.setToolTip(
             "Fraction of each tile that overlaps its neighbours (0.0–0.9). "
             "Higher overlap reduces missed detections on tile seams but repeats "
@@ -836,7 +842,11 @@ class DetectionPanel(QWidget):
         self.spin_slice_object_fraction.setRange(0.01, 0.9)
         self.spin_slice_object_fraction.setSingleStep(0.01)
         self.spin_slice_object_fraction.setValue(
-            float(advanced.get("slice_object_tile_fraction", 0.15))
+            float(
+                advanced.get(
+                    "slice_object_tile_fraction", DEFAULT_SLICE_OBJECT_TILE_FRACTION
+                )
+            )
         )
         self.spin_slice_object_fraction.setToolTip(
             "Tile size for auto_object: the reference object spans this "

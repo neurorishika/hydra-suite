@@ -51,6 +51,12 @@ from ..jobs.prediction_cache import (
     PredictionPathIndex,
     remove_prediction_cache,
 )
+from ..jobs.preview_tiling import (
+    PreviewTiling,
+    dataset_signature,
+    preview_tiling_label,
+    resolve_preview_tiling,
+)
 from ..jobs.staged_review import (
     accept_all,
     accept_frame,
@@ -1623,7 +1629,12 @@ class DetectKitMainWindow(QMainWindow):
             self._project, overlay_settings.confidence_threshold
         )
         current = self._effective_inference_settings(overlay_settings)
-        dialog = InferenceSettingsDialog(current, defaults, parent=self)
+        dialog = InferenceSettingsDialog(
+            current,
+            defaults,
+            parent=self,
+            model_input_size=int(self._project.imgsz_obb_direct),
+        )
         if not dialog.exec():
             return
 
@@ -1637,16 +1648,39 @@ class DetectKitMainWindow(QMainWindow):
             5000,
         )
 
+    def _preview_tiling(self, model_path: str) -> PreviewTiling:
+        """The SAHI tiling the next preview run uses (F2, deviation 16).
+
+        The open inference-settings override wins; otherwise the model's
+        sidecar supplies geometry and merge (TrackerKit's fresh-load ladder)
+        while the project owns ``enabled``, body px and imgsz.
+        """
+        override = (
+            self._inference_settings_override.slice_settings
+            if self._inference_settings_override is not None
+            else None
+        )
+        return resolve_preview_tiling(
+            model_path,
+            self._project.slice_settings,
+            project_imgsz=int(self._project.imgsz_obb_direct),
+            override=override,
+        )
+
     def _dataset_signature(self, settings) -> tuple[object, ...] | None:
         if self._project is None or not self._current_source_path:
             return None
         model_path = str(settings.active_model_path or "").strip()
         if not model_path:
             return None
-        return (
+        # Built from the RESOLVED tiling so a recalibrated sidecar (new primary
+        # profile) is seen by the in-session reuse checks (plan review M3).
+        return dataset_signature(
             self._current_source_path,
             model_path,
-        ) + self._effective_inference_settings(settings).cache_key()
+            self._effective_inference_settings(settings).device,
+            self._preview_tiling(model_path),
+        )
 
     def _on_stage_predictions(self) -> None:
         """Turn the predictions currently on screen into a staged review.
@@ -1811,6 +1845,11 @@ class DetectKitMainWindow(QMainWindow):
         progress.setValue(0)
 
         inference_settings = self._effective_inference_settings(settings)
+        preview_tiling = self._preview_tiling(model_path)
+        if preview_tiling.slice_settings.enabled:
+            self.statusBar().showMessage(
+                f"SAHI preview: {preview_tiling_label(preview_tiling)}", 5000
+            )
 
         worker = _DetectKitDatasetInferenceWorker(
             project_dir=self._project.project_dir,
@@ -1828,8 +1867,9 @@ class DetectKitMainWindow(QMainWindow):
                 if kind == "sequential_segment"
                 else self._project.imgsz_seq_crop_obb
             ),
-            slice_settings=inference_settings.slice_settings,
+            slice_settings=preview_tiling.slice_settings,
             imgsz_obb_direct=self._project.imgsz_obb_direct,
+            preview_tiling=preview_tiling,
         )
         worker.progress.connect(progress.setValue)
         worker.status.connect(progress.setLabelText)

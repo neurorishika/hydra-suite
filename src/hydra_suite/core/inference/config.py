@@ -16,8 +16,18 @@ from hydra_suite.core.individual.classification.errors import (
     PoseModelUnresolvedError,
 )
 from hydra_suite.runtime.resolver import RuntimeTier
+from hydra_suite.utils.tiling_spec import BACKEND_DEFAULTS, DEFAULT_OVERLAP
 
 logger = logging.getLogger(__name__)
+
+# SAHI inference defaults come from the one table in utils/tiling_spec (F4/F8).
+# TrackerKit is canonical: these resolve to the same 0.15 / 0.2 literals that
+# were here before, so SliceConfig, its cache hash and tracking output are
+# unchanged.
+DEFAULT_SLICE_OBJECT_TILE_FRACTION = BACKEND_DEFAULTS[
+    "yolo_infer"
+].object_tile_fractions[0]
+DEFAULT_SLICE_OVERLAP = DEFAULT_OVERLAP
 
 
 class InferenceConfigError(ValueError):
@@ -168,11 +178,11 @@ class SliceConfig:
     # custom mode: explicit tile size in original-frame pixels.
     slice_height: int = 0
     slice_width: int = 0
-    overlap_height_ratio: float = 0.2
-    overlap_width_ratio: float = 0.2
+    overlap_height_ratio: float = DEFAULT_SLICE_OVERLAP
+    overlap_width_ratio: float = DEFAULT_SLICE_OVERLAP
     # auto_object mode: tile sized so a reference object spans this linear
     # fraction of the tile.
-    object_tile_fraction: float = 0.15
+    object_tile_fraction: float = DEFAULT_SLICE_OBJECT_TILE_FRACTION
     # Reference object size in ORIGINAL-FRAME pixels, sourced from
     # REFERENCE_BODY_SIZE * RESIZE_FACTOR. Only read in auto_object mode; 0
     # means "unknown", which falls back to auto_model sizing.
@@ -849,7 +859,12 @@ def _slice_config_from_params(
     stage-1 ``YOLO_SEQ_STAGE1_SLICE_*`` mapping (Task 11) -- same field
     semantics, different param-name prefix.
     """
-    overlap = _clamped_float(params.get(f"{prefix}OVERLAP", 0.2), 0.2, 0.0, 0.9)
+    overlap = _clamped_float(
+        params.get(f"{prefix}OVERLAP", DEFAULT_SLICE_OVERLAP),
+        DEFAULT_SLICE_OVERLAP,
+        0.0,
+        0.9,
+    )
     _geometry_mode = (
         str(params.get(f"{prefix}GEOMETRY_MODE", "auto_model")).strip().lower()
     )
@@ -870,7 +885,12 @@ def _slice_config_from_params(
         overlap_height_ratio=overlap,
         overlap_width_ratio=overlap,
         object_tile_fraction=_clamped_float(
-            params.get(f"{prefix}OBJECT_TILE_FRACTION", 0.15), 0.15, 0.01, 0.9
+            params.get(
+                f"{prefix}OBJECT_TILE_FRACTION", DEFAULT_SLICE_OBJECT_TILE_FRACTION
+            ),
+            DEFAULT_SLICE_OBJECT_TILE_FRACTION,
+            0.01,
+            0.9,
         ),
         reference_body_px=reference_body_px,
         merge_policy=(
