@@ -1,0 +1,2408 @@
+
+<!doctype html>
+<html lang="en" class="no-js">
+  <head>
+    
+      <meta charset="utf-8">
+      <meta name="viewport" content="width=device-width,initial-scale=1">
+      
+        <meta name="description" content="User and developer documentation for HYDRA Suite">
+      
+      
+      
+        <link rel="canonical" href="https://neurorishika.github.io/hydra-suite/latest/superpowers/plans/2026-10-09-sahi-unification-s4/">
+      
+      
+      
+      
+      <link rel="icon" href="../../../assets/images/favicon.png">
+      <meta name="generator" content="mkdocs-1.6.1, mkdocs-material-9.5.43">
+    
+    
+      
+        <title>SAHI Unification — Slice S4 (shared widget, five hosts, visual verification) Implementation Plan - HYDRA Suite Docs</title>
+      
+    
+    
+      <link rel="stylesheet" href="../../../assets/stylesheets/main.0253249f.min.css">
+      
+        
+        <link rel="stylesheet" href="../../../assets/stylesheets/palette.06af60db.min.css">
+      
+      
+
+
+    
+    
+      
+    
+    
+      
+        
+        
+        <link rel="preconnect" href="https://fonts.gstatic.com" crossorigin>
+        <link rel="stylesheet" href="https://fonts.googleapis.com/css?family=Roboto:300,300i,400,400i,700,700i%7CRoboto+Mono:400,400i,700,700i&display=fallback">
+        <style>:root{--md-text-font:"Roboto";--md-code-font:"Roboto Mono"}</style>
+      
+    
+    
+      <link rel="stylesheet" href="../../../assets/_mkdocstrings.css">
+    
+    <script>__md_scope=new URL("../../..",location),__md_hash=e=>[...e].reduce(((e,_)=>(e<<5)-e+_.charCodeAt(0)),0),__md_get=(e,_=localStorage,t=__md_scope)=>JSON.parse(_.getItem(t.pathname+"."+e)),__md_set=(e,_,t=localStorage,a=__md_scope)=>{try{t.setItem(a.pathname+"."+e,JSON.stringify(_))}catch(e){}}</script>
+    
+      
+
+    
+    
+    
+  </head>
+  
+  
+    
+    
+      
+    
+    
+    
+    
+    <body dir="ltr" data-md-color-scheme="default" data-md-color-primary="blue" data-md-color-accent="light-blue">
+  
+    
+    <input class="md-toggle" data-md-toggle="drawer" type="checkbox" id="__drawer" autocomplete="off">
+    <input class="md-toggle" data-md-toggle="search" type="checkbox" id="__search" autocomplete="off">
+    <label class="md-overlay" for="__drawer"></label>
+    <div data-md-component="skip">
+      
+        
+        <a href="#sahi-unification-slice-s4-shared-widget-five-hosts-visual-verification-implementation-plan" class="md-skip">
+          Skip to content
+        </a>
+      
+    </div>
+    <div data-md-component="announce">
+      
+    </div>
+    
+      <div data-md-color-scheme="default" data-md-component="outdated" hidden>
+        
+      </div>
+    
+    
+      
+
+<header class="md-header" data-md-component="header">
+  <nav class="md-header__inner md-grid" aria-label="Header">
+    <a href="../../.." title="HYDRA Suite Docs" class="md-header__button md-logo" aria-label="HYDRA Suite Docs" data-md-component="logo">
+      
+  
+  <svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 24 24"><path d="M12 8a3 3 0 0 0 3-3 3 3 0 0 0-3-3 3 3 0 0 0-3 3 3 3 0 0 0 3 3m0 3.54C9.64 9.35 6.5 8 3 8v11c3.5 0 6.64 1.35 9 3.54 2.36-2.19 5.5-3.54 9-3.54V8c-3.5 0-6.64 1.35-9 3.54"/></svg>
+
+    </a>
+    <label class="md-header__button md-icon" for="__drawer">
+      
+      <svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 24 24"><path d="M3 6h18v2H3zm0 5h18v2H3zm0 5h18v2H3z"/></svg>
+    </label>
+    <div class="md-header__title" data-md-component="header-title">
+      <div class="md-header__ellipsis">
+        <div class="md-header__topic">
+          <span class="md-ellipsis">
+            HYDRA Suite Docs
+          </span>
+        </div>
+        <div class="md-header__topic" data-md-component="header-topic">
+          <span class="md-ellipsis">
+            
+              SAHI Unification — Slice S4 (shared widget, five hosts, visual verification) Implementation Plan
+            
+          </span>
+        </div>
+      </div>
+    </div>
+    
+      
+        <form class="md-header__option" data-md-component="palette">
+  
+    
+    
+    
+    <input class="md-option" data-md-color-media="(prefers-color-scheme: light)" data-md-color-scheme="default" data-md-color-primary="blue" data-md-color-accent="light-blue"  aria-label="Switch to dark mode"  type="radio" name="__palette" id="__palette_0">
+    
+      <label class="md-header__button md-icon" title="Switch to dark mode" for="__palette_1" hidden>
+        <svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 24 24"><path d="m17.75 4.09-2.53 1.94.91 3.06-2.63-1.81-2.63 1.81.91-3.06-2.53-1.94L12.44 4l1.06-3 1.06 3zm3.5 6.91-1.64 1.25.59 1.98-1.7-1.17-1.7 1.17.59-1.98L15.75 11l2.06-.05L18.5 9l.69 1.95zm-2.28 4.95c.83-.08 1.72 1.1 1.19 1.85-.32.45-.66.87-1.08 1.27C15.17 23 8.84 23 4.94 19.07c-3.91-3.9-3.91-10.24 0-14.14.4-.4.82-.76 1.27-1.08.75-.53 1.93.36 1.85 1.19-.27 2.86.69 5.83 2.89 8.02a9.96 9.96 0 0 0 8.02 2.89m-1.64 2.02a12.08 12.08 0 0 1-7.8-3.47c-2.17-2.19-3.33-5-3.49-7.82-2.81 3.14-2.7 7.96.31 10.98 3.02 3.01 7.84 3.12 10.98.31"/></svg>
+      </label>
+    
+  
+    
+    
+    
+    <input class="md-option" data-md-color-media="(prefers-color-scheme: dark)" data-md-color-scheme="slate" data-md-color-primary="blue" data-md-color-accent="light-blue"  aria-label="Switch to light mode"  type="radio" name="__palette" id="__palette_1">
+    
+      <label class="md-header__button md-icon" title="Switch to light mode" for="__palette_0" hidden>
+        <svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 24 24"><path d="M12 7a5 5 0 0 1 5 5 5 5 0 0 1-5 5 5 5 0 0 1-5-5 5 5 0 0 1 5-5m0 2a3 3 0 0 0-3 3 3 3 0 0 0 3 3 3 3 0 0 0 3-3 3 3 0 0 0-3-3m0-7 2.39 3.42C13.65 5.15 12.84 5 12 5s-1.65.15-2.39.42zM3.34 7l4.16-.35A7.2 7.2 0 0 0 5.94 8.5c-.44.74-.69 1.5-.83 2.29zm.02 10 1.76-3.77a7.131 7.131 0 0 0 2.38 4.14zM20.65 7l-1.77 3.79a7.02 7.02 0 0 0-2.38-4.15zm-.01 10-4.14.36c.59-.51 1.12-1.14 1.54-1.86.42-.73.69-1.5.83-2.29zM12 22l-2.41-3.44c.74.27 1.55.44 2.41.44.82 0 1.63-.17 2.37-.44z"/></svg>
+      </label>
+    
+  
+</form>
+      
+    
+    
+      <script>var palette=__md_get("__palette");if(palette&&palette.color){if("(prefers-color-scheme)"===palette.color.media){var media=matchMedia("(prefers-color-scheme: light)"),input=document.querySelector(media.matches?"[data-md-color-media='(prefers-color-scheme: light)']":"[data-md-color-media='(prefers-color-scheme: dark)']");palette.color.media=input.getAttribute("data-md-color-media"),palette.color.scheme=input.getAttribute("data-md-color-scheme"),palette.color.primary=input.getAttribute("data-md-color-primary"),palette.color.accent=input.getAttribute("data-md-color-accent")}for(var[key,value]of Object.entries(palette.color))document.body.setAttribute("data-md-color-"+key,value)}</script>
+    
+    
+    
+      <label class="md-header__button md-icon" for="__search">
+        
+        <svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 24 24"><path d="M9.5 3A6.5 6.5 0 0 1 16 9.5c0 1.61-.59 3.09-1.56 4.23l.27.27h.79l5 5-1.5 1.5-5-5v-.79l-.27-.27A6.52 6.52 0 0 1 9.5 16 6.5 6.5 0 0 1 3 9.5 6.5 6.5 0 0 1 9.5 3m0 2C7 5 5 7 5 9.5S7 14 9.5 14 14 12 14 9.5 12 5 9.5 5"/></svg>
+      </label>
+      <div class="md-search" data-md-component="search" role="dialog">
+  <label class="md-search__overlay" for="__search"></label>
+  <div class="md-search__inner" role="search">
+    <form class="md-search__form" name="search">
+      <input type="text" class="md-search__input" name="query" aria-label="Search" placeholder="Search" autocapitalize="off" autocorrect="off" autocomplete="off" spellcheck="false" data-md-component="search-query" required>
+      <label class="md-search__icon md-icon" for="__search">
+        
+        <svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 24 24"><path d="M9.5 3A6.5 6.5 0 0 1 16 9.5c0 1.61-.59 3.09-1.56 4.23l.27.27h.79l5 5-1.5 1.5-5-5v-.79l-.27-.27A6.52 6.52 0 0 1 9.5 16 6.5 6.5 0 0 1 3 9.5 6.5 6.5 0 0 1 9.5 3m0 2C7 5 5 7 5 9.5S7 14 9.5 14 14 12 14 9.5 12 5 9.5 5"/></svg>
+        
+        <svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 24 24"><path d="M20 11v2H8l5.5 5.5-1.42 1.42L4.16 12l7.92-7.92L13.5 5.5 8 11z"/></svg>
+      </label>
+      <nav class="md-search__options" aria-label="Search">
+        
+        <button type="reset" class="md-search__icon md-icon" title="Clear" aria-label="Clear" tabindex="-1">
+          
+          <svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 24 24"><path d="M19 6.41 17.59 5 12 10.59 6.41 5 5 6.41 10.59 12 5 17.59 6.41 19 12 13.41 17.59 19 19 17.59 13.41 12z"/></svg>
+        </button>
+      </nav>
+      
+        <div class="md-search__suggest" data-md-component="search-suggest"></div>
+      
+    </form>
+    <div class="md-search__output">
+      <div class="md-search__scrollwrap" tabindex="0" data-md-scrollfix>
+        <div class="md-search-result" data-md-component="search-result">
+          <div class="md-search-result__meta">
+            Initializing search
+          </div>
+          <ol class="md-search-result__list" role="presentation"></ol>
+        </div>
+      </div>
+    </div>
+  </div>
+</div>
+    
+    
+      <div class="md-header__source">
+        <a href="https://github.com/neurorishika/hydra-suite" title="Go to repository" class="md-source" data-md-component="source">
+  <div class="md-source__icon md-icon">
+    
+    <svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 448 512"><!--! Font Awesome Free 6.6.0 by @fontawesome - https://fontawesome.com License - https://fontawesome.com/license/free (Icons: CC BY 4.0, Fonts: SIL OFL 1.1, Code: MIT License) Copyright 2024 Fonticons, Inc.--><path d="M439.55 236.05 244 40.45a28.87 28.87 0 0 0-40.81 0l-40.66 40.63 51.52 51.52c27.06-9.14 52.68 16.77 43.39 43.68l49.66 49.66c34.23-11.8 61.18 31 35.47 56.69-26.49 26.49-70.21-2.87-56-37.34L240.22 199v121.85c25.3 12.54 22.26 41.85 9.08 55a34.34 34.34 0 0 1-48.55 0c-17.57-17.6-11.07-46.91 11.25-56v-123c-20.8-8.51-24.6-30.74-18.64-45L142.57 101 8.45 235.14a28.86 28.86 0 0 0 0 40.81l195.61 195.6a28.86 28.86 0 0 0 40.8 0l194.69-194.69a28.86 28.86 0 0 0 0-40.81"/></svg>
+  </div>
+  <div class="md-source__repository">
+    neurorishika/hydra-suite
+  </div>
+</a>
+      </div>
+    
+  </nav>
+  
+</header>
+    
+    <div class="md-container" data-md-component="container">
+      
+      
+        
+          
+            
+<nav class="md-tabs" aria-label="Tabs" data-md-component="tabs">
+  <div class="md-grid">
+    <ul class="md-tabs__list">
+      
+        
+  
+  
+  
+    <li class="md-tabs__item">
+      <a href="../../.." class="md-tabs__link">
+        
+  
+    
+  
+  Home
+
+      </a>
+    </li>
+  
+
+      
+        
+  
+  
+  
+    
+    
+      <li class="md-tabs__item">
+        <a href="../../../getting-started/installation/" class="md-tabs__link">
+          
+  
+  Getting Started
+
+        </a>
+      </li>
+    
+  
+
+      
+        
+  
+  
+  
+    
+    
+      <li class="md-tabs__item">
+        <a href="../../../user-guide/overview/" class="md-tabs__link">
+          
+  
+  User Guide
+
+        </a>
+      </li>
+    
+  
+
+      
+        
+  
+  
+  
+    
+    
+      <li class="md-tabs__item">
+        <a href="../../../developer-guide/architecture/" class="md-tabs__link">
+          
+  
+  Developer Guide
+
+        </a>
+      </li>
+    
+  
+
+      
+        
+  
+  
+  
+    
+    
+      <li class="md-tabs__item">
+        <a href="../../../reference/api-index/" class="md-tabs__link">
+          
+  
+  Reference
+
+        </a>
+      </li>
+    
+  
+
+      
+    </ul>
+  </div>
+</nav>
+          
+        
+      
+      <main class="md-main" data-md-component="main">
+        <div class="md-main__inner md-grid">
+          
+            
+              
+              <div class="md-sidebar md-sidebar--primary" data-md-component="sidebar" data-md-type="navigation" >
+                <div class="md-sidebar__scrollwrap">
+                  <div class="md-sidebar__inner">
+                    
+
+
+  
+
+
+<nav class="md-nav md-nav--primary md-nav--lifted" aria-label="Navigation" data-md-level="0">
+  <label class="md-nav__title" for="__drawer">
+    <a href="../../.." title="HYDRA Suite Docs" class="md-nav__button md-logo" aria-label="HYDRA Suite Docs" data-md-component="logo">
+      
+  
+  <svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 24 24"><path d="M12 8a3 3 0 0 0 3-3 3 3 0 0 0-3-3 3 3 0 0 0-3 3 3 3 0 0 0 3 3m0 3.54C9.64 9.35 6.5 8 3 8v11c3.5 0 6.64 1.35 9 3.54 2.36-2.19 5.5-3.54 9-3.54V8c-3.5 0-6.64 1.35-9 3.54"/></svg>
+
+    </a>
+    HYDRA Suite Docs
+  </label>
+  
+    <div class="md-nav__source">
+      <a href="https://github.com/neurorishika/hydra-suite" title="Go to repository" class="md-source" data-md-component="source">
+  <div class="md-source__icon md-icon">
+    
+    <svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 448 512"><!--! Font Awesome Free 6.6.0 by @fontawesome - https://fontawesome.com License - https://fontawesome.com/license/free (Icons: CC BY 4.0, Fonts: SIL OFL 1.1, Code: MIT License) Copyright 2024 Fonticons, Inc.--><path d="M439.55 236.05 244 40.45a28.87 28.87 0 0 0-40.81 0l-40.66 40.63 51.52 51.52c27.06-9.14 52.68 16.77 43.39 43.68l49.66 49.66c34.23-11.8 61.18 31 35.47 56.69-26.49 26.49-70.21-2.87-56-37.34L240.22 199v121.85c25.3 12.54 22.26 41.85 9.08 55a34.34 34.34 0 0 1-48.55 0c-17.57-17.6-11.07-46.91 11.25-56v-123c-20.8-8.51-24.6-30.74-18.64-45L142.57 101 8.45 235.14a28.86 28.86 0 0 0 0 40.81l195.61 195.6a28.86 28.86 0 0 0 40.8 0l194.69-194.69a28.86 28.86 0 0 0 0-40.81"/></svg>
+  </div>
+  <div class="md-source__repository">
+    neurorishika/hydra-suite
+  </div>
+</a>
+    </div>
+  
+  <ul class="md-nav__list" data-md-scrollfix>
+    
+      
+      
+  
+  
+  
+  
+    <li class="md-nav__item">
+      <a href="../../.." class="md-nav__link">
+        
+  
+  <span class="md-ellipsis">
+    Home
+  </span>
+  
+
+      </a>
+    </li>
+  
+
+    
+      
+      
+  
+  
+  
+  
+    
+    
+    
+      
+      
+        
+      
+    
+    
+    <li class="md-nav__item md-nav__item--nested">
+      
+        
+        
+          
+        
+        <input class="md-nav__toggle md-toggle md-toggle--indeterminate" type="checkbox" id="__nav_2" >
+        
+          
+          <label class="md-nav__link" for="__nav_2" id="__nav_2_label" tabindex="0">
+            
+  
+  <span class="md-ellipsis">
+    Getting Started
+  </span>
+  
+
+            <span class="md-nav__icon md-icon"></span>
+          </label>
+        
+        <nav class="md-nav" data-md-level="1" aria-labelledby="__nav_2_label" aria-expanded="false">
+          <label class="md-nav__title" for="__nav_2">
+            <span class="md-nav__icon md-icon"></span>
+            Getting Started
+          </label>
+          <ul class="md-nav__list" data-md-scrollfix>
+            
+              
+                
+  
+  
+  
+  
+    <li class="md-nav__item">
+      <a href="../../../getting-started/installation/" class="md-nav__link">
+        
+  
+  <span class="md-ellipsis">
+    Installation
+  </span>
+  
+
+      </a>
+    </li>
+  
+
+              
+            
+              
+                
+  
+  
+  
+  
+    <li class="md-nav__item">
+      <a href="../../../getting-started/environments/" class="md-nav__link">
+        
+  
+  <span class="md-ellipsis">
+    Environments and Makefile
+  </span>
+  
+
+      </a>
+    </li>
+  
+
+              
+            
+              
+                
+  
+  
+  
+  
+    <li class="md-nav__item">
+      <a href="../../../getting-started/integrations/" class="md-nav__link">
+        
+  
+  <span class="md-ellipsis">
+    Integrations
+  </span>
+  
+
+      </a>
+    </li>
+  
+
+              
+            
+              
+                
+  
+  
+  
+  
+    <li class="md-nav__item">
+      <a href="../../../getting-started/quickstart-hydra/" class="md-nav__link">
+        
+  
+  <span class="md-ellipsis">
+    Quickstart (TrackerKit)
+  </span>
+  
+
+      </a>
+    </li>
+  
+
+              
+            
+              
+                
+  
+  
+  
+  
+    <li class="md-nav__item">
+      <a href="../../../getting-started/quickstart-posekit/" class="md-nav__link">
+        
+  
+  <span class="md-ellipsis">
+    Quickstart (PoseKit)
+  </span>
+  
+
+      </a>
+    </li>
+  
+
+              
+            
+              
+                
+  
+  
+  
+  
+    <li class="md-nav__item">
+      <a href="../../../getting-started/platforms/" class="md-nav__link">
+        
+  
+  <span class="md-ellipsis">
+    Platform Notes
+  </span>
+  
+
+      </a>
+    </li>
+  
+
+              
+            
+          </ul>
+        </nav>
+      
+    </li>
+  
+
+    
+      
+      
+  
+  
+  
+  
+    
+    
+    
+      
+      
+        
+      
+    
+    
+    <li class="md-nav__item md-nav__item--nested">
+      
+        
+        
+          
+        
+        <input class="md-nav__toggle md-toggle md-toggle--indeterminate" type="checkbox" id="__nav_3" >
+        
+          
+          <label class="md-nav__link" for="__nav_3" id="__nav_3_label" tabindex="0">
+            
+  
+  <span class="md-ellipsis">
+    User Guide
+  </span>
+  
+
+            <span class="md-nav__icon md-icon"></span>
+          </label>
+        
+        <nav class="md-nav" data-md-level="1" aria-labelledby="__nav_3_label" aria-expanded="false">
+          <label class="md-nav__title" for="__nav_3">
+            <span class="md-nav__icon md-icon"></span>
+            User Guide
+          </label>
+          <ul class="md-nav__list" data-md-scrollfix>
+            
+              
+                
+  
+  
+  
+  
+    <li class="md-nav__item">
+      <a href="../../../user-guide/overview/" class="md-nav__link">
+        
+  
+  <span class="md-ellipsis">
+    Overview
+  </span>
+  
+
+      </a>
+    </li>
+  
+
+              
+            
+              
+                
+  
+  
+  
+  
+    <li class="md-nav__item">
+      <a href="../../../user-guide/workflow/" class="md-nav__link">
+        
+  
+  <span class="md-ellipsis">
+    End-to-End Workflow
+  </span>
+  
+
+      </a>
+    </li>
+  
+
+              
+            
+              
+                
+  
+  
+  
+  
+    <li class="md-nav__item">
+      <a href="../../../user-guide/trackerkit-cli/" class="md-nav__link">
+        
+  
+  <span class="md-ellipsis">
+    TrackerKit Command Line
+  </span>
+  
+
+      </a>
+    </li>
+  
+
+              
+            
+              
+                
+  
+  
+  
+  
+    <li class="md-nav__item">
+      <a href="../../../user-guide/trackerkit-jobs/" class="md-nav__link">
+        
+  
+  <span class="md-ellipsis">
+    Portable Tracking Jobs
+  </span>
+  
+
+      </a>
+    </li>
+  
+
+              
+            
+              
+                
+  
+  
+  
+  
+    <li class="md-nav__item">
+      <a href="../../../user-guide/detection-modes/" class="md-nav__link">
+        
+  
+  <span class="md-ellipsis">
+    Detection Modes
+  </span>
+  
+
+      </a>
+    </li>
+  
+
+              
+            
+              
+                
+  
+  
+  
+  
+    <li class="md-nav__item">
+      <a href="../../../user-guide/tracking-and-merging/" class="md-nav__link">
+        
+  
+  <span class="md-ellipsis">
+    Tracking and Merging
+  </span>
+  
+
+      </a>
+    </li>
+  
+
+              
+            
+              
+                
+  
+  
+  
+  
+    <li class="md-nav__item">
+      <a href="../../../user-guide/post-processing/" class="md-nav__link">
+        
+  
+  <span class="md-ellipsis">
+    Post-processing
+  </span>
+  
+
+      </a>
+    </li>
+  
+
+              
+            
+              
+                
+  
+  
+  
+  
+    <li class="md-nav__item">
+      <a href="../../../user-guide/configuration-reference/" class="md-nav__link">
+        
+  
+  <span class="md-ellipsis">
+    Configuration Reference
+  </span>
+  
+
+      </a>
+    </li>
+  
+
+              
+            
+              
+                
+  
+  
+  
+  
+    <li class="md-nav__item">
+      <a href="../../../user-guide/compute-runtimes/" class="md-nav__link">
+        
+  
+  <span class="md-ellipsis">
+    Compute Runtimes
+  </span>
+  
+
+      </a>
+    </li>
+  
+
+              
+            
+              
+                
+  
+  
+  
+  
+    <li class="md-nav__item">
+      <a href="../../../user-guide/outputs-and-csv-schema/" class="md-nav__link">
+        
+  
+  <span class="md-ellipsis">
+    Outputs and CSV Schema
+  </span>
+  
+
+      </a>
+    </li>
+  
+
+              
+            
+              
+                
+  
+  
+  
+  
+    <li class="md-nav__item">
+      <a href="../../../user-guide/dataset-generation/" class="md-nav__link">
+        
+  
+  <span class="md-ellipsis">
+    Dataset Generation
+  </span>
+  
+
+      </a>
+    </li>
+  
+
+              
+            
+              
+                
+  
+  
+  
+  
+    <li class="md-nav__item">
+      <a href="../../../user-guide/individual-analysis/" class="md-nav__link">
+        
+  
+  <span class="md-ellipsis">
+    Individual Analysis
+  </span>
+  
+
+      </a>
+    </li>
+  
+
+              
+            
+              
+                
+  
+  
+  
+  
+    <li class="md-nav__item">
+      <a href="../../../user-guide/posekit/" class="md-nav__link">
+        
+  
+  <span class="md-ellipsis">
+    PoseKit
+  </span>
+  
+
+      </a>
+    </li>
+  
+
+              
+            
+              
+                
+  
+  
+  
+  
+    <li class="md-nav__item">
+      <a href="../../../user-guide/classkit/" class="md-nav__link">
+        
+  
+  <span class="md-ellipsis">
+    ClassKit
+  </span>
+  
+
+      </a>
+    </li>
+  
+
+              
+            
+              
+                
+  
+  
+  
+  
+    <li class="md-nav__item">
+      <a href="../../../user-guide/detectkit/" class="md-nav__link">
+        
+  
+  <span class="md-ellipsis">
+    DetectKit
+  </span>
+  
+
+      </a>
+    </li>
+  
+
+              
+            
+              
+                
+  
+  
+  
+  
+    <li class="md-nav__item">
+      <a href="../../../runbooks/detectkit-headless-training/" class="md-nav__link">
+        
+  
+  <span class="md-ellipsis">
+    DetectKit Headless Training
+  </span>
+  
+
+      </a>
+    </li>
+  
+
+              
+            
+              
+                
+  
+  
+  
+  
+    <li class="md-nav__item">
+      <a href="../../../user-guide/sam-install-and-run/" class="md-nav__link">
+        
+  
+  <span class="md-ellipsis">
+    SAM2 and SAM3: Install and Run
+  </span>
+  
+
+      </a>
+    </li>
+  
+
+              
+            
+              
+                
+  
+  
+  
+  
+    <li class="md-nav__item">
+      <a href="../../../user-guide/detectkit-semantic-escalation/" class="md-nav__link">
+        
+  
+  <span class="md-ellipsis">
+    DetectKit: Semantic Escalation (SAM3)
+  </span>
+  
+
+      </a>
+    </li>
+  
+
+              
+            
+              
+                
+  
+  
+  
+  
+    <li class="md-nav__item">
+      <a href="../../../user-guide/detectkit-sahi-calibration/" class="md-nav__link">
+        
+  
+  <span class="md-ellipsis">
+    DetectKit: SAHI Calibration Profiles
+  </span>
+  
+
+      </a>
+    </li>
+  
+
+              
+            
+              
+                
+  
+  
+  
+  
+    <li class="md-nav__item">
+      <a href="../../../user-guide/filterkit/" class="md-nav__link">
+        
+  
+  <span class="md-ellipsis">
+    FilterKit
+  </span>
+  
+
+      </a>
+    </li>
+  
+
+              
+            
+              
+                
+  
+  
+  
+  
+    <li class="md-nav__item">
+      <a href="../../../user-guide/refinekit/" class="md-nav__link">
+        
+  
+  <span class="md-ellipsis">
+    RefineKit
+  </span>
+  
+
+      </a>
+    </li>
+  
+
+              
+            
+              
+                
+  
+  
+  
+  
+    <li class="md-nav__item">
+      <a href="../../../user-guide/troubleshooting/" class="md-nav__link">
+        
+  
+  <span class="md-ellipsis">
+    Troubleshooting
+  </span>
+  
+
+      </a>
+    </li>
+  
+
+              
+            
+          </ul>
+        </nav>
+      
+    </li>
+  
+
+    
+      
+      
+  
+  
+  
+  
+    
+    
+    
+      
+      
+        
+      
+    
+    
+    <li class="md-nav__item md-nav__item--nested">
+      
+        
+        
+          
+        
+        <input class="md-nav__toggle md-toggle md-toggle--indeterminate" type="checkbox" id="__nav_4" >
+        
+          
+          <label class="md-nav__link" for="__nav_4" id="__nav_4_label" tabindex="0">
+            
+  
+  <span class="md-ellipsis">
+    Developer Guide
+  </span>
+  
+
+            <span class="md-nav__icon md-icon"></span>
+          </label>
+        
+        <nav class="md-nav" data-md-level="1" aria-labelledby="__nav_4_label" aria-expanded="false">
+          <label class="md-nav__title" for="__nav_4">
+            <span class="md-nav__icon md-icon"></span>
+            Developer Guide
+          </label>
+          <ul class="md-nav__list" data-md-scrollfix>
+            
+              
+                
+  
+  
+  
+  
+    <li class="md-nav__item">
+      <a href="../../../developer-guide/architecture/" class="md-nav__link">
+        
+  
+  <span class="md-ellipsis">
+    Architecture
+  </span>
+  
+
+      </a>
+    </li>
+  
+
+              
+            
+              
+                
+  
+  
+  
+  
+    <li class="md-nav__item">
+      <a href="../../../developer-guide/module-map/" class="md-nav__link">
+        
+  
+  <span class="md-ellipsis">
+    Module Map
+  </span>
+  
+
+      </a>
+    </li>
+  
+
+              
+            
+              
+                
+  
+  
+  
+  
+    <li class="md-nav__item">
+      <a href="../../../developer-guide/data-flow/" class="md-nav__link">
+        
+  
+  <span class="md-ellipsis">
+    Data Flow
+  </span>
+  
+
+      </a>
+    </li>
+  
+
+              
+            
+              
+                
+  
+  
+  
+  
+    <li class="md-nav__item">
+      <a href="../../../developer-guide/tracking-algorithm-deep-dive/" class="md-nav__link">
+        
+  
+  <span class="md-ellipsis">
+    Tracking Algorithm Deep Dive
+  </span>
+  
+
+      </a>
+    </li>
+  
+
+              
+            
+              
+                
+  
+  
+  
+  
+    <li class="md-nav__item">
+      <a href="../../../developer-guide/tracking-optimization/" class="md-nav__link">
+        
+  
+  <span class="md-ellipsis">
+    Tracking Optimization
+  </span>
+  
+
+      </a>
+    </li>
+  
+
+              
+            
+              
+                
+  
+  
+  
+  
+    <li class="md-nav__item">
+      <a href="../../../developer-guide/gpu-backends/" class="md-nav__link">
+        
+  
+  <span class="md-ellipsis">
+    GPU Backends
+  </span>
+  
+
+      </a>
+    </li>
+  
+
+              
+            
+              
+                
+  
+  
+  
+  
+    <li class="md-nav__item">
+      <a href="../../../developer-guide/runtime-integration/" class="md-nav__link">
+        
+  
+  <span class="md-ellipsis">
+    Runtime Integration
+  </span>
+  
+
+      </a>
+    </li>
+  
+
+              
+            
+              
+                
+  
+  
+  
+  
+    <li class="md-nav__item">
+      <a href="../../../developer-guide/resource-containment/" class="md-nav__link">
+        
+  
+  <span class="md-ellipsis">
+    Resource Containment
+  </span>
+  
+
+      </a>
+    </li>
+  
+
+              
+            
+              
+                
+  
+  
+  
+  
+    <li class="md-nav__item">
+      <a href="../../../developer-guide/profiling/" class="md-nav__link">
+        
+  
+  <span class="md-ellipsis">
+    Profiling
+  </span>
+  
+
+      </a>
+    </li>
+  
+
+              
+            
+              
+                
+  
+  
+  
+  
+    <li class="md-nav__item">
+      <a href="../../../developer-guide/dependency-cuda-updates/" class="md-nav__link">
+        
+  
+  <span class="md-ellipsis">
+    CUDA Dependency Updates
+  </span>
+  
+
+      </a>
+    </li>
+  
+
+              
+            
+              
+                
+  
+  
+  
+  
+    <li class="md-nav__item">
+      <a href="../../../developer-guide/performance-tuning/" class="md-nav__link">
+        
+  
+  <span class="md-ellipsis">
+    Performance Tuning
+  </span>
+  
+
+      </a>
+    </li>
+  
+
+              
+            
+              
+                
+  
+  
+  
+  
+    <li class="md-nav__item">
+      <a href="../../../developer-guide/inference-fast-mode/" class="md-nav__link">
+        
+  
+  <span class="md-ellipsis">
+    Inference Fast Mode
+  </span>
+  
+
+      </a>
+    </li>
+  
+
+              
+            
+              
+                
+  
+  
+  
+  
+    <li class="md-nav__item">
+      <a href="../../../developer-guide/inference-autotuner/" class="md-nav__link">
+        
+  
+  <span class="md-ellipsis">
+    Inference Autotuner
+  </span>
+  
+
+      </a>
+    </li>
+  
+
+              
+            
+              
+                
+  
+  
+  
+  
+    <li class="md-nav__item">
+      <a href="../../../developer-guide/confidence-metrics/" class="md-nav__link">
+        
+  
+  <span class="md-ellipsis">
+    Confidence Metrics
+  </span>
+  
+
+      </a>
+    </li>
+  
+
+              
+            
+              
+                
+  
+  
+  
+  
+    <li class="md-nav__item">
+      <a href="../../../developer-guide/extending-detection/" class="md-nav__link">
+        
+  
+  <span class="md-ellipsis">
+    Extending Detection
+  </span>
+  
+
+      </a>
+    </li>
+  
+
+              
+            
+              
+                
+  
+  
+  
+  
+    <li class="md-nav__item">
+      <a href="../../../developer-guide/extending-identity/" class="md-nav__link">
+        
+  
+  <span class="md-ellipsis">
+    Extending Identity
+  </span>
+  
+
+      </a>
+    </li>
+  
+
+              
+            
+              
+                
+  
+  
+  
+  
+    <li class="md-nav__item">
+      <a href="../../../developer-guide/code-health/" class="md-nav__link">
+        
+  
+  <span class="md-ellipsis">
+    Code Health & Auditing
+  </span>
+  
+
+      </a>
+    </li>
+  
+
+              
+            
+              
+                
+  
+  
+  
+  
+    <li class="md-nav__item">
+      <a href="../../../developer-guide/publishing/" class="md-nav__link">
+        
+  
+  <span class="md-ellipsis">
+    Publishing
+  </span>
+  
+
+      </a>
+    </li>
+  
+
+              
+            
+              
+                
+  
+  
+  
+  
+    <li class="md-nav__item">
+      <a href="../../../developer-guide/contributing/" class="md-nav__link">
+        
+  
+  <span class="md-ellipsis">
+    Contributing
+  </span>
+  
+
+      </a>
+    </li>
+  
+
+              
+            
+          </ul>
+        </nav>
+      
+    </li>
+  
+
+    
+      
+      
+  
+  
+  
+  
+    
+    
+    
+      
+      
+        
+      
+    
+    
+    <li class="md-nav__item md-nav__item--nested">
+      
+        
+        
+          
+        
+        <input class="md-nav__toggle md-toggle md-toggle--indeterminate" type="checkbox" id="__nav_5" >
+        
+          
+          <label class="md-nav__link" for="__nav_5" id="__nav_5_label" tabindex="0">
+            
+  
+  <span class="md-ellipsis">
+    Reference
+  </span>
+  
+
+            <span class="md-nav__icon md-icon"></span>
+          </label>
+        
+        <nav class="md-nav" data-md-level="1" aria-labelledby="__nav_5_label" aria-expanded="false">
+          <label class="md-nav__title" for="__nav_5">
+            <span class="md-nav__icon md-icon"></span>
+            Reference
+          </label>
+          <ul class="md-nav__list" data-md-scrollfix>
+            
+              
+                
+  
+  
+  
+  
+    <li class="md-nav__item">
+      <a href="../../../reference/api-index/" class="md-nav__link">
+        
+  
+  <span class="md-ellipsis">
+    API Index
+  </span>
+  
+
+      </a>
+    </li>
+  
+
+              
+            
+              
+                
+  
+  
+  
+  
+    <li class="md-nav__item">
+      <a href="../../../reference/ui-components-hydra/" class="md-nav__link">
+        
+  
+  <span class="md-ellipsis">
+    UI Components (TrackerKit)
+  </span>
+  
+
+      </a>
+    </li>
+  
+
+              
+            
+              
+                
+  
+  
+  
+  
+    <li class="md-nav__item">
+      <a href="../../../reference/ui-components-posekit/" class="md-nav__link">
+        
+  
+  <span class="md-ellipsis">
+    UI Components (PoseKit)
+  </span>
+  
+
+      </a>
+    </li>
+  
+
+              
+            
+              
+                
+  
+  
+  
+  
+    <li class="md-nav__item">
+      <a href="../../../reference/api-app/" class="md-nav__link">
+        
+  
+  <span class="md-ellipsis">
+    API (Launcher)
+  </span>
+  
+
+      </a>
+    </li>
+  
+
+              
+            
+              
+                
+  
+  
+  
+  
+    <li class="md-nav__item">
+      <a href="../../../reference/api-core/" class="md-nav__link">
+        
+  
+  <span class="md-ellipsis">
+    API (Core)
+  </span>
+  
+
+      </a>
+    </li>
+  
+
+              
+            
+              
+                
+  
+  
+  
+  
+    <li class="md-nav__item">
+      <a href="../../../reference/api-data/" class="md-nav__link">
+        
+  
+  <span class="md-ellipsis">
+    API (Data)
+  </span>
+  
+
+      </a>
+    </li>
+  
+
+              
+            
+              
+                
+  
+  
+  
+  
+    <li class="md-nav__item">
+      <a href="../../../reference/api-gui/" class="md-nav__link">
+        
+  
+  <span class="md-ellipsis">
+    API (TrackerKit GUI)
+  </span>
+  
+
+      </a>
+    </li>
+  
+
+              
+            
+              
+                
+  
+  
+  
+  
+    <li class="md-nav__item">
+      <a href="../../../reference/api-widgets/" class="md-nav__link">
+        
+  
+  <span class="md-ellipsis">
+    API (Widgets)
+  </span>
+  
+
+      </a>
+    </li>
+  
+
+              
+            
+              
+                
+  
+  
+  
+  
+    <li class="md-nav__item">
+      <a href="../../../reference/api-posekit/" class="md-nav__link">
+        
+  
+  <span class="md-ellipsis">
+    API (PoseKit)
+  </span>
+  
+
+      </a>
+    </li>
+  
+
+              
+            
+              
+                
+  
+  
+  
+  
+    <li class="md-nav__item">
+      <a href="../../../reference/api-utils/" class="md-nav__link">
+        
+  
+  <span class="md-ellipsis">
+    API (Utils)
+  </span>
+  
+
+      </a>
+    </li>
+  
+
+              
+            
+              
+                
+  
+  
+  
+  
+    <li class="md-nav__item">
+      <a href="../../../reference/cli-reference/" class="md-nav__link">
+        
+  
+  <span class="md-ellipsis">
+    CLI Reference
+  </span>
+  
+
+      </a>
+    </li>
+  
+
+              
+            
+              
+                
+  
+  
+  
+  
+    <li class="md-nav__item">
+      <a href="../../../reference/technical-reference/" class="md-nav__link">
+        
+  
+  <span class="md-ellipsis">
+    Technical Reference (LaTeX)
+  </span>
+  
+
+      </a>
+    </li>
+  
+
+              
+            
+              
+                
+  
+  
+  
+  
+    <li class="md-nav__item">
+      <a href="../../../reference/changelog/" class="md-nav__link">
+        
+  
+  <span class="md-ellipsis">
+    Changelog
+  </span>
+  
+
+      </a>
+    </li>
+  
+
+              
+            
+              
+                
+  
+  
+  
+  
+    <li class="md-nav__item">
+      <a href="../../../reference/faq/" class="md-nav__link">
+        
+  
+  <span class="md-ellipsis">
+    FAQ
+  </span>
+  
+
+      </a>
+    </li>
+  
+
+              
+            
+          </ul>
+        </nav>
+      
+    </li>
+  
+
+    
+  </ul>
+</nav>
+                  </div>
+                </div>
+              </div>
+            
+            
+              
+              <div class="md-sidebar md-sidebar--secondary" data-md-component="sidebar" data-md-type="toc" >
+                <div class="md-sidebar__scrollwrap">
+                  <div class="md-sidebar__inner">
+                    
+
+<nav class="md-nav md-nav--secondary" aria-label="Table of contents">
+  
+  
+  
+    
+  
+  
+    <label class="md-nav__title" for="__toc">
+      <span class="md-nav__icon md-icon"></span>
+      Table of contents
+    </label>
+    <ul class="md-nav__list" data-md-component="toc" data-md-scrollfix>
+      
+        <li class="md-nav__item">
+  <a href="#revision-1-binding-decisions-from-the-plan-stage-adversarial-review-2026-10-09" class="md-nav__link">
+    <span class="md-ellipsis">
+      Revision 1 — binding decisions from the plan-stage adversarial review (2026-10-09)
+    </span>
+  </a>
+  
+</li>
+      
+        <li class="md-nav__item">
+  <a href="#global-constraints" class="md-nav__link">
+    <span class="md-ellipsis">
+      Global Constraints
+    </span>
+  </a>
+  
+</li>
+      
+        <li class="md-nav__item">
+  <a href="#review-focus" class="md-nav__link">
+    <span class="md-ellipsis">
+      Review Focus
+    </span>
+  </a>
+  
+    <nav class="md-nav" aria-label="Review Focus">
+      <ul class="md-nav__list">
+        
+          <li class="md-nav__item">
+  <a href="#task-15-widgetsslice_settingspy-the-shared-widget" class="md-nav__link">
+    <span class="md-ellipsis">
+      Task 15: widgets/slice_settings.py — the shared widget
+    </span>
+  </a>
+  
+</li>
+        
+          <li class="md-nav__item">
+  <a href="#task-16-detectkit-training-inference-hosts-adopt-the-widget" class="md-nav__link">
+    <span class="md-ellipsis">
+      Task 16: DetectKit training + inference hosts adopt the widget
+    </span>
+  </a>
+  
+</li>
+        
+          <li class="md-nav__item">
+  <a href="#task-17-escalation-dialogs-adopt-the-widgets-tiling-rows" class="md-nav__link">
+    <span class="md-ellipsis">
+      Task 17: Escalation dialogs adopt the widget's tiling rows
+    </span>
+  </a>
+  
+</li>
+        
+          <li class="md-nav__item">
+  <a href="#task-18-trackerkit-detection-panel-adopts-the-widget" class="md-nav__link">
+    <span class="md-ellipsis">
+      Task 18: TrackerKit detection panel adopts the widget
+    </span>
+  </a>
+  
+</li>
+        
+          <li class="md-nav__item">
+  <a href="#task-19-visual-gallery" class="md-nav__link">
+    <span class="md-ellipsis">
+      Task 19: Visual gallery
+    </span>
+  </a>
+  
+</li>
+        
+          <li class="md-nav__item">
+  <a href="#task-20-s4-gate" class="md-nav__link">
+    <span class="md-ellipsis">
+      Task 20: S4 gate
+    </span>
+  </a>
+  
+</li>
+        
+      </ul>
+    </nav>
+  
+</li>
+      
+    </ul>
+  
+</nav>
+                  </div>
+                </div>
+              </div>
+            
+          
+          
+            <div class="md-content" data-md-component="content">
+              <article class="md-content__inner md-typeset">
+                
+                  
+
+  
+    <a href="https://github.com/neurorishika/hydra-suite/edit/main/docs/superpowers/plans/2026-10-09-sahi-unification-s4.md" title="Edit this page" class="md-content__button md-icon">
+      
+      <svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 24 24"><path d="M10 20H6V4h7v5h5v3.1l2-2V8l-6-6H6c-1.1 0-2 .9-2 2v16c0 1.1.9 2 2 2h4zm10.2-7c.1 0 .3.1.4.2l1.3 1.3c.2.2.2.6 0 .8l-1 1-2.1-2.1 1-1c.1-.1.2-.2.4-.2m0 3.9L14.1 23H12v-2.1l6.1-6.1z"/></svg>
+    </a>
+  
+  
+
+
+<h1 id="sahi-unification-slice-s4-shared-widget-five-hosts-visual-verification-implementation-plan">SAHI Unification — Slice S4 (shared widget, five hosts, visual verification) Implementation Plan<a class="headerlink" href="#sahi-unification-slice-s4-shared-widget-five-hosts-visual-verification-implementation-plan" title="Permanent link">&para;</a></h1>
+<blockquote>
+<p><strong>For agentic workers:</strong> REQUIRED SUB-SKILL: Use superpowers:subagent-driven-development (recommended) or superpowers:executing-plans to implement this plan task-by-task. Steps use checkbox (<code>- [ ]</code>) syntax for tracking.</p>
+</blockquote>
+<p><strong>Goal:</strong> One shared SAHI settings widget (<code>hydra_suite/widgets/slice_settings.py</code>) used by all five hosts with TrackerKit's vocabulary, source badges on derived values, constrained fields disabled (never hidden), validator-backed ranges (F5), derived overlap (F7) — and a rendered visual gallery of every host for the user to confirm.</p>
+<p><strong>Architecture:</strong> A Qt-only widget in the shared <code>widgets/</code> layer whose state is the S1 contract (<code>TilingSpec</code>) plus a role-specific <code>extras</code> dict; it imports only <code>utils.tiling_spec</code>/<code>tiling_resolve</code>/<code>slice_geometry</code> and Qt. Each kit keeps a thin adapter (DetectKit: <code>SliceTrainingSettings</code>/SAM3 tiling dict/escalation params ↔ spec+extras; TrackerKit: config/advanced keys ↔ spec+extras). Hosts are migrated one at a time; host-facing contracts (<code>to_settings()</code>, <code>to_sam3_tiling()</code>, <code>parameters()</code>, <code>tiling_parameters()</code>, config JSON keys, <code>SLICE_*</code> engine params) do not change.</p>
+<p><strong>Tech Stack:</strong> PySide6 (offscreen for tests and rendering), pytest (no pytest-qt: QApplication fixture convention from <code>tests/test_detectkit_review_bar.py</code>).</p>
+<p><strong>Spec:</strong> <code>docs/superpowers/specs/2026-10-09-sahi-unification-design.md</code> §5 (UI), §6 F5/F7. Prior plans: <code>...-s1-s2.md</code>, <code>...-s3.md</code> (deviations 1–21 apply).</p>
+<h2 id="revision-1-binding-decisions-from-the-plan-stage-adversarial-review-2026-10-09">Revision 1 — binding decisions from the plan-stage adversarial review (2026-10-09)<a class="headerlink" href="#revision-1-binding-decisions-from-the-plan-stage-adversarial-review-2026-10-09" title="Permanent link">&para;</a></h2>
+<p>These override anything below that conflicts.</p>
+<p><strong>Split.</strong> S4a = Tasks 15, 16, 17, 19 (DetectKit hosts only) on <code>feat/sahi-unify-s4a</code>, gate = regression + adversarial review + DetectKit gallery (no tracking path touched, no equivalence run). S4b = Task 18 + the TrackerKit gallery on <code>feat/sahi-unify-s4b</code>, branched after S4a merges, gate = full MPS matrix + CUDA (diptera, explicit idle GPU UUID) + adversarial review.</p>
+<ol>
+<li><strong>F7 is a suggestion, never an automatic default</strong> (B1, M8). Every host already persists an overlap (TrackerKit 0.2 via engine default, <code>SliceTrainingSettings.overlap</code> 0.2, <code>Sam3LoraParams.tile_overlap</code> 0.25, SAM3 escalation 0.5), so "derive when unsaved" would either be inert or change outputs. The widget shows <code>Suggested: &lt;max(fraction)+margin&gt;</code> next to overlap with a <code>Use suggested</code> button (a user edit); it never writes overlap on its own. <code>set_overlap_source</code> is removed from the API.</li>
+<li><strong>One ownership model</strong> (B2): the widget sets its own controls ONLY inside <code>set_spec(...)</code> (signals blocked, then derived labels refreshed). Derived values (tile size outside custom, suggested overlap, resolved tile label) are shown in LABELS, never written into host-persisted spins. User edits emit <code>field_changed(str field)</code>; hosts keep their own per-spin <code>valueChanged</code> wiring (the spins ARE the widget's spins). TrackerKit's panel never calls <code>set_spec</code> (S4b keeps its existing <code>setValue</code> + <code>_applying_slice_profile</code> guard logic verbatim).</li>
+<li><strong>Full frame in escalation roles</strong> (B3): <code>escalate_sam3</code>/<code>escalate_sam2</code> fraction spin range <code>0.0..FRACTION_MAX</code> with special text "full frame (no tiling)"; <code>spec()</code> maps 0 → <code>enabled=False, object_tile_fractions=()</code>; <code>set_spec(enabled=False)</code> shows 0. Hosts keep mapping 0 ↔ None as today.</li>
+<li><strong>Role capabilities instead of one layout</strong> (M4, M5, M6, M7, M11): <code>SliceSettingsWidget(role=..., capabilities=...)</code>; capabilities = <code>body_override: bool</code> (DetectKit inference dialog + escalation dialogs True; TrackerKit False → body is a display-only badge), <code>advanced_merge: bool</code> (DetectKit inference True; TrackerKit False — merge settings stay profile-owned, S3 deviation 14), <code>tile_label_formatter: Callable | None</code> (escalation hosts pass their existing formatters so pinned label texts stay: SAM3 <code>"{tile} px\n{body} px / {frac:.2f}"</code>, SAM2 <code>"{tile} px ({body} px / {frac:g})"</code>, and their "tiling is off" strings). A body of 0 shows the spin ENABLED with "unknown (tiling off)" (the I6 last link), regardless of override. <code>train_sam3</code> keeps a scalar <code>spin_slice_object_fraction</code> (4 decimals) carried in <code>extras["object_tile_fraction"]</code>, never derived from the set.</li>
+<li><strong>Per-role extras</strong> (answer to attack 4): <code>train_yolo</code> <code>{negative_tile_fraction, full_frame_mix, balance_multiscale_loss, balance_multiscale_loss_power, min_area_ratio}</code>; <code>train_sam3</code> <code>{object_tile_fraction, keep_empty_tiles, full_frame_mix, min_area_ratio}</code>; <code>infer_yolo</code> (DetectKit) <code>{merge_threshold}</code>; <code>infer_yolo</code> (TrackerKit) <code>{tile_batch_size, memory_budget_mib}</code>; <code>escalate_sam3</code> <code>{seam_margin_px, merge_iou}</code>; <code>escalate_sam2</code> <code>{}</code> (overlap is the constant 0.5, displayed disabled).</li>
+<li><strong>Overlap spin max per role from the role's validator</strong> (F5, m5): <code>train_sam3</code> 0.99 (contract <code>[0, 1)</code> — no silent clamp of a saved 0.95), every other role <code>OVERLAP_MAX</code> 0.9.</li>
+<li><strong>Legacy names survive in DetectKit</strong> (M2, M3): <code>SliceSettingsGroup</code> (subclass) keeps read-only property aliases for every old attribute used in tests (<code>chk_enabled, cmb_mode, txt_targets, spin_w, spin_h, spin_overlap, spin_object_fraction, spin_min_area, spin_neg, spin_merge, chk_full, chk_balance_loss, spin_balance_power, chk_keep_empty, auto_reference_note, _rows, preview</code>) and an outer <code>QHBoxLayout</code> (controls | preview). Controls absent for a role are CONSTRUCTED and hidden. Existing DetectKit tests then need no edits except where an assertion flips from hidden→disabled for a now-constrained field; enumerate each such flip in the commit message.</li>
+<li><strong>Geometry combo readers</strong> (M3): fix every <code>combo_slice_geometry.currentText()/setCurrentText()/findText()</code> in src AND tests: <code>detection_panel.py:~2476,~2867</code>, <code>config.py:454,503,1771</code>, <code>tests/test_main_window_config_persistence.py:1954,1971,2011</code>, <code>tests/test_trackerkit_slice_meta_prefill.py:88,153,159</code> (S4b).</li>
+<li><strong>TrackerKit layout bug fix</strong> (M1): S4b gives the widget explicit full-width rows in <code>f_yolo</code>, removing the <code>(7,1)</code> overlap that today paints the profile combo UNDER the Classes field (pre-existing bug, unreachable profile picker); add a test that no two visible <code>f_yolo</code> items share a grid cell.</li>
+<li><strong>Calibrate stays host-owned</strong> (m4): TrackerKit <code>setup_panel</code> button and the dialogs' <code>_btn_calibrate</code> stay where they are; spec §5.3's "reachable from the widget" is satisfied by placement next to the widget, not inside it.</li>
+<li><strong>Tests fixed</strong> (M9, M10): tooltip test uses <code>findChildren(cls)</code> per class and skips children whose parent is a spin box/combo (internal line edits); combo-tooltip test checks <code>itemData(i, Qt.ItemDataRole.ToolTipRole)</code>; drop <code>isVisible() is not None</code>; <code>changed</code>-signal test becomes <code>field_changed</code> emitted on <code>setValue</code> (user path) and NOT inside <code>set_spec</code>; Task 17 compares <code>parameters()</code> keys to a pasted literal of today's 11 keys. New tests: escalate full-frame round trip incl. <code>apply_calibration_choice(tile_fraction=None)</code>; SAM3 scalar preserved after editing the set; SAM3 escalation fresh dialog overlap 0.5; F6 display of a saved <code>merge_policy="nmm"</code> (shows "greedy NMM", raw value preserved in <code>extras</code>/advanced for the cache hash); TrackerKit fresh session + fraction 0.4 + no saved overlap → <code>SLICE_OVERLAP</code> 0.2 and no <code>slice_overlap</code> key written (S4b); every TrackerKit <code>advanced_config</code> slice key equals its spin after config load, profile apply, geometry change (S4b).</li>
+<li><strong>Gallery</strong> (m6): grab the detection panel's scroll CONTENT (or <code>panel.resize(panel.sizeHint())</code> first); <code>docs/superpowers/assets/sahi-unification/</code> is created by the tool; the gallery is shown to the user via the <code>SendUserFile</code> tool if available, else the PNG paths are listed for them.</li>
+</ol>
+<h2 id="global-constraints">Global Constraints<a class="headerlink" href="#global-constraints" title="Permanent link">&para;</a></h2>
+<ul>
+<li>TrackerKit tracking output byte-identical; config JSON keys/values unchanged (<code>slice_geometry_mode</code> persists the ENUM string, never the human label); <code>get_parameters_dict</code>/<code>build_engine_params</code> outputs unchanged for every existing config.</li>
+<li><code>widgets/</code> imports nothing from app layers (add an AST test enforcing it).</li>
+<li>Widget attribute names follow TrackerKit (<code>chk_slice_enabled</code>, <code>combo_slice_geometry</code>, <code>combo_slice_profile</code>, <code>lbl_slice_profile_status</code>, <code>spin_slice_overlap</code>, <code>spin_slice_tile_w</code>, <code>spin_slice_tile_h</code>, <code>spin_slice_object_fraction</code>, <code>spin_slice_tile_batch</code>, <code>spin_slice_memory_budget</code>). New names use the same <code>*_slice_*</code> pattern.</li>
+<li>Geometry combo items: human label text ("Fit to animal size" / "Use model input size" / "Custom tile size"), enum as item data and in the tooltip; every reader uses <code>currentData()</code>/<code>findData()</code>.</li>
+<li>Constrained fields are disabled with a tooltip naming their source; never hidden for being constrained (rows hidden only when the ROLE has no such field).</li>
+<li>Ranges come from <code>utils.tiling_spec</code> constants (<code>FRACTION_MIN/MAX</code>, <code>OVERLAP_MAX</code>, slice size 0..8192).</li>
+<li>Derived overlap (F7) applies only when no overlap is saved; saved configs keep their value.</li>
+<li>Worktree from local HEAD; <code>make format</code> (revert <code>core/post/merge.py</code> churn); no Co-Authored-By; never <code>git stash</code>; PYTHONPATH pinned; <code>QT_QPA_PLATFORM=offscreen</code>.</li>
+</ul>
+<h2 id="review-focus">Review Focus<a class="headerlink" href="#review-focus" title="Permanent link">&para;</a></h2>
+<ol>
+<li>Saving and reopening a TrackerKit config round-trips <code>slice_geometry_mode</code> as the enum (not "Fit to animal size") and the golden <code>get_parameters_dict</code> SLICE_* keys are unchanged. → Task 18.</li>
+<li>The SAM3 dialog's <code>parameters()</code> and SAM2's <code>tiling_parameters()</code> emit exactly the request fields they did before (constructors raise on unknown keys). → Task 17.</li>
+<li>A derived value the user cannot edit (body px from dataset/stamp, tile size outside custom, overlap without override) is visibly disabled with its source badge — never an editable spin that silently gets overwritten. → Task 15.</li>
+<li>A saved overlap (including TrackerKit's persisted 0.2 and SAM3's 0.25) is never replaced by the derived value. → Task 15, 18.</li>
+<li>Every host renders without clipped/overlapping controls at its real size (visual gallery inspected). → Task 19.</li>
+</ol>
+<hr />
+<p>Setup (after S3 is merged):</p>
+<div class="language-bash highlight"><pre><span></span><code><span id="__span-0-1"><a id="__codelineno-0-1" name="__codelineno-0-1" href="#__codelineno-0-1"></a><span class="nb">cd</span><span class="w"> </span>/Users/neurorishika/Projects/Rockefeller/Kronauer/multi-animal-tracker
+</span><span id="__span-0-2"><a id="__codelineno-0-2" name="__codelineno-0-2" href="#__codelineno-0-2"></a>git<span class="w"> </span>worktree<span class="w"> </span>add<span class="w"> </span>.worktrees/sahi-s4<span class="w"> </span>-b<span class="w"> </span>feat/sahi-unify-s4<span class="w"> </span>HEAD
+</span><span id="__span-0-3"><a id="__codelineno-0-3" name="__codelineno-0-3" href="#__codelineno-0-3"></a><span class="nb">cd</span><span class="w"> </span>.worktrees/sahi-s4
+</span><span id="__span-0-4"><a id="__codelineno-0-4" name="__codelineno-0-4" href="#__codelineno-0-4"></a><span class="nb">source</span><span class="w"> </span><span class="s2">"</span><span class="k">$(</span>conda<span class="w"> </span>info<span class="w"> </span>--base<span class="k">)</span><span class="s2">/etc/profile.d/conda.sh"</span><span class="w"> </span><span class="o">&amp;&amp;</span><span class="w"> </span>conda<span class="w"> </span>activate<span class="w"> </span>hydra-mps
+</span><span id="__span-0-5"><a id="__codelineno-0-5" name="__codelineno-0-5" href="#__codelineno-0-5"></a><span class="nb">export</span><span class="w"> </span><span class="nv">PYTHONPATH</span><span class="o">=</span><span class="nv">$PWD</span>/src<span class="w"> </span><span class="nv">KMP_DUPLICATE_LIB_OK</span><span class="o">=</span>TRUE<span class="w"> </span><span class="nv">QT_QPA_PLATFORM</span><span class="o">=</span>offscreen
+</span></code></pre></div>
+<h3 id="task-15-widgetsslice_settingspy-the-shared-widget">Task 15: <code>widgets/slice_settings.py</code> — the shared widget<a class="headerlink" href="#task-15-widgetsslice_settingspy-the-shared-widget" title="Permanent link">&para;</a></h3>
+<p><strong>Files:</strong>
+- Create: <code>src/hydra_suite/widgets/slice_settings.py</code> (widget + <code>_TileLayoutPreview</code> moved from <code>detectkit/gui/panels/slice_settings_widget.py</code>)
+- Create: <code>tests/test_widgets_slice_settings.py</code>, <code>tests/test_widgets_no_app_imports.py</code></p>
+<p><strong>Interfaces (Produces):</strong>
+- <code>ROLES = ("infer_yolo", "train_yolo", "train_sam3", "escalate_sam3", "escalate_sam2")</code>
+- <code>class SliceSettingsWidget(QGroupBox)</code>:
+  - <code>__init__(self, parent=None, *, role: str, title: str | None = None)</code>; <code>ValueError</code> on unknown role.
+  - <code>changed = Signal()</code> — emitted on any user edit (not on programmatic <code>set_*</code>).
+  - <code>set_spec(spec: TilingSpec, *, extras: dict | None = None) -&gt; None</code> / <code>spec() -&gt; TilingSpec</code> / <code>extras() -&gt; dict</code>.
+  - <code>set_model_input_size(imgsz: int)</code>, <code>set_preview_frame_size(wh | None)</code>, <code>set_preview_frame_options(list[(w, h, count)])</code>.
+  - <code>set_reference_body(value: float, source: str)</code> — shows the value + badge; <code>spin_slice_body</code> disabled unless <code>chk_slice_body_override</code> is checked.
+  - <code>set_overlap_source(saved: float | None)</code> — when <code>saved is None</code>, overlap is derived via <code>resolve_overlap(fractions=...)</code> and the spin is disabled unless <code>chk_slice_overlap_override</code>.
+  - <code>source_badge(field: str) -&gt; str</code> (for tests): <code>"user" | "override" | "profile" | "stamped" | "dataset" | "derived" | "default"</code>.
+- Rows by role (hidden only when the role has no such field):</p>
+<table>
+<thead>
+<tr>
+<th>Row</th>
+<th>infer_yolo</th>
+<th>train_yolo</th>
+<th>train_sam3</th>
+<th>escalate_sam3</th>
+<th>escalate_sam2</th>
+</tr>
+</thead>
+<tbody>
+<tr>
+<td><code>chk_slice_enabled</code></td>
+<td>✓</td>
+<td>✓</td>
+<td>–</td>
+<td>–</td>
+<td>–</td>
+</tr>
+<tr>
+<td><code>combo_slice_profile</code> + <code>lbl_slice_profile_status</code></td>
+<td>✓ (host fills)</td>
+<td>–</td>
+<td>–</td>
+<td>–</td>
+<td>–</td>
+</tr>
+<tr>
+<td><code>combo_slice_geometry</code></td>
+<td>✓</td>
+<td>✓</td>
+<td>✓</td>
+<td>–</td>
+<td>–</td>
+</tr>
+<tr>
+<td><code>spin_slice_object_fraction</code> (single scale)</td>
+<td>✓</td>
+<td>–</td>
+<td>–</td>
+<td>✓ (0 = full frame)</td>
+<td>✓ (0 = full frame)</td>
+</tr>
+<tr>
+<td><code>txt_slice_scales</code> (scale set)</td>
+<td>–</td>
+<td>✓</td>
+<td>✓</td>
+<td>–</td>
+<td>–</td>
+</tr>
+<tr>
+<td>body (<code>spin_slice_body</code>, override, badge)</td>
+<td>✓</td>
+<td>✓ (note only, measured at build)</td>
+<td>✓ (note only)</td>
+<td>✓</td>
+<td>✓</td>
+</tr>
+<tr>
+<td>tile size W×H (<code>spin_slice_tile_w/h</code>, editable only in custom; derived label otherwise)</td>
+<td>✓</td>
+<td>✓</td>
+<td>✓</td>
+<td>derived label</td>
+<td>derived label</td>
+</tr>
+<tr>
+<td>overlap (<code>spin_slice_overlap</code>, override)</td>
+<td>✓</td>
+<td>✓</td>
+<td>✓</td>
+<td>✓</td>
+<td>– (constant 0.5, shown disabled)</td>
+</tr>
+<tr>
+<td>preview</td>
+<td>✓</td>
+<td>✓</td>
+<td>✓</td>
+<td>–</td>
+<td>–</td>
+</tr>
+<tr>
+<td>Advanced: merge policy/metric/threshold</td>
+<td>✓</td>
+<td>threshold</td>
+<td>–</td>
+<td>merge IoU + seam margin</td>
+<td>–</td>
+</tr>
+<tr>
+<td>Advanced: min area + fragment policy</td>
+<td>–</td>
+<td>✓ (drop/mask)</td>
+<td>✓ (crowd)</td>
+<td>–</td>
+<td>–</td>
+</tr>
+<tr>
+<td>Advanced: full frame (<code>perform_standard_pred</code> / <code>full_frame_mix</code>)</td>
+<td>✓</td>
+<td>✓</td>
+<td>✓</td>
+<td>–</td>
+<td>–</td>
+</tr>
+<tr>
+<td>Advanced: tiles per call / memory</td>
+<td>✓</td>
+<td>–</td>
+<td>–</td>
+<td>–</td>
+<td>–</td>
+</tr>
+<tr>
+<td>Advanced: negative fraction, loss balance</td>
+<td>–</td>
+<td>✓</td>
+<td>keep empty tiles</td>
+<td>–</td>
+<td>–</td>
+</tr>
+</tbody>
+</table>
+<ul class="task-list">
+<li class="task-list-item"><label class="task-list-control"><input type="checkbox" disabled/><span class="task-list-indicator"></span></label> <strong>Step 1: Failing tests</strong> (excerpt — write all of these):</li>
+</ul>
+<div class="language-python highlight"><pre><span></span><code><span id="__span-1-1"><a id="__codelineno-1-1" name="__codelineno-1-1" href="#__codelineno-1-1"></a><span class="c1"># tests/test_widgets_slice_settings.py</span>
+</span><span id="__span-1-2"><a id="__codelineno-1-2" name="__codelineno-1-2" href="#__codelineno-1-2"></a><span class="kn">import</span><span class="w"> </span><span class="nn">os</span>
+</span><span id="__span-1-3"><a id="__codelineno-1-3" name="__codelineno-1-3" href="#__codelineno-1-3"></a>
+</span><span id="__span-1-4"><a id="__codelineno-1-4" name="__codelineno-1-4" href="#__codelineno-1-4"></a><span class="n">os</span><span class="o">.</span><span class="n">environ</span><span class="o">.</span><span class="n">setdefault</span><span class="p">(</span><span class="s2">"QT_QPA_PLATFORM"</span><span class="p">,</span> <span class="s2">"offscreen"</span><span class="p">)</span>
+</span><span id="__span-1-5"><a id="__codelineno-1-5" name="__codelineno-1-5" href="#__codelineno-1-5"></a><span class="kn">import</span><span class="w"> </span><span class="nn">pytest</span>
+</span><span id="__span-1-6"><a id="__codelineno-1-6" name="__codelineno-1-6" href="#__codelineno-1-6"></a><span class="kn">from</span><span class="w"> </span><span class="nn">PySide6.QtWidgets</span><span class="w"> </span><span class="kn">import</span> <span class="n">QApplication</span>
+</span><span id="__span-1-7"><a id="__codelineno-1-7" name="__codelineno-1-7" href="#__codelineno-1-7"></a>
+</span><span id="__span-1-8"><a id="__codelineno-1-8" name="__codelineno-1-8" href="#__codelineno-1-8"></a><span class="kn">from</span><span class="w"> </span><span class="nn">hydra_suite.utils.tiling_spec</span><span class="w"> </span><span class="kn">import</span> <span class="n">FRACTION_MAX</span><span class="p">,</span> <span class="n">FRACTION_MIN</span><span class="p">,</span> <span class="n">OVERLAP_MAX</span><span class="p">,</span> <span class="n">TilingSpec</span>
+</span><span id="__span-1-9"><a id="__codelineno-1-9" name="__codelineno-1-9" href="#__codelineno-1-9"></a><span class="kn">from</span><span class="w"> </span><span class="nn">hydra_suite.widgets.slice_settings</span><span class="w"> </span><span class="kn">import</span> <span class="n">ROLES</span><span class="p">,</span> <span class="n">SliceSettingsWidget</span>
+</span><span id="__span-1-10"><a id="__codelineno-1-10" name="__codelineno-1-10" href="#__codelineno-1-10"></a>
+</span><span id="__span-1-11"><a id="__codelineno-1-11" name="__codelineno-1-11" href="#__codelineno-1-11"></a><span class="n">_app</span> <span class="o">=</span> <span class="n">QApplication</span><span class="o">.</span><span class="n">instance</span><span class="p">()</span> <span class="ow">or</span> <span class="n">QApplication</span><span class="p">([])</span>
+</span><span id="__span-1-12"><a id="__codelineno-1-12" name="__codelineno-1-12" href="#__codelineno-1-12"></a>
+</span><span id="__span-1-13"><a id="__codelineno-1-13" name="__codelineno-1-13" href="#__codelineno-1-13"></a>
+</span><span id="__span-1-14"><a id="__codelineno-1-14" name="__codelineno-1-14" href="#__codelineno-1-14"></a><span class="nd">@pytest</span><span class="o">.</span><span class="n">mark</span><span class="o">.</span><span class="n">parametrize</span><span class="p">(</span><span class="s2">"role"</span><span class="p">,</span> <span class="n">ROLES</span><span class="p">)</span>
+</span><span id="__span-1-15"><a id="__codelineno-1-15" name="__codelineno-1-15" href="#__codelineno-1-15"></a><span class="k">def</span><span class="w"> </span><span class="nf">test_every_role_round_trips_its_spec</span><span class="p">(</span><span class="n">role</span><span class="p">):</span>
+</span><span id="__span-1-16"><a id="__codelineno-1-16" name="__codelineno-1-16" href="#__codelineno-1-16"></a>    <span class="n">w</span> <span class="o">=</span> <span class="n">SliceSettingsWidget</span><span class="p">(</span><span class="n">role</span><span class="o">=</span><span class="n">role</span><span class="p">)</span>
+</span><span id="__span-1-17"><a id="__codelineno-1-17" name="__codelineno-1-17" href="#__codelineno-1-17"></a>    <span class="n">spec</span> <span class="o">=</span> <span class="n">TilingSpec</span><span class="p">(</span><span class="n">enabled</span><span class="o">=</span><span class="kc">True</span><span class="p">,</span> <span class="n">geometry_mode</span><span class="o">=</span><span class="s2">"auto_object"</span><span class="p">,</span> <span class="n">object_tile_fractions</span><span class="o">=</span><span class="p">(</span><span class="mf">0.1</span><span class="p">,),</span>
+</span><span id="__span-1-18"><a id="__codelineno-1-18" name="__codelineno-1-18" href="#__codelineno-1-18"></a>                      <span class="n">reference_body_px</span><span class="o">=</span><span class="mf">40.0</span><span class="p">,</span> <span class="n">overlap</span><span class="o">=</span><span class="mf">0.3</span><span class="p">)</span>
+</span><span id="__span-1-19"><a id="__codelineno-1-19" name="__codelineno-1-19" href="#__codelineno-1-19"></a>    <span class="n">w</span><span class="o">.</span><span class="n">set_spec</span><span class="p">(</span><span class="n">spec</span><span class="p">)</span>
+</span><span id="__span-1-20"><a id="__codelineno-1-20" name="__codelineno-1-20" href="#__codelineno-1-20"></a>    <span class="n">got</span> <span class="o">=</span> <span class="n">w</span><span class="o">.</span><span class="n">spec</span><span class="p">()</span>
+</span><span id="__span-1-21"><a id="__codelineno-1-21" name="__codelineno-1-21" href="#__codelineno-1-21"></a>    <span class="k">assert</span> <span class="n">got</span><span class="o">.</span><span class="n">object_tile_fractions</span> <span class="o">==</span> <span class="p">(</span><span class="mf">0.1</span><span class="p">,)</span>
+</span><span id="__span-1-22"><a id="__codelineno-1-22" name="__codelineno-1-22" href="#__codelineno-1-22"></a>    <span class="k">if</span> <span class="n">role</span> <span class="o">!=</span> <span class="s2">"escalate_sam2"</span><span class="p">:</span>
+</span><span id="__span-1-23"><a id="__codelineno-1-23" name="__codelineno-1-23" href="#__codelineno-1-23"></a>        <span class="k">assert</span> <span class="n">got</span><span class="o">.</span><span class="n">overlap</span> <span class="o">==</span> <span class="mf">0.3</span>
+</span><span id="__span-1-24"><a id="__codelineno-1-24" name="__codelineno-1-24" href="#__codelineno-1-24"></a>
+</span><span id="__span-1-25"><a id="__codelineno-1-25" name="__codelineno-1-25" href="#__codelineno-1-25"></a>
+</span><span id="__span-1-26"><a id="__codelineno-1-26" name="__codelineno-1-26" href="#__codelineno-1-26"></a><span class="k">def</span><span class="w"> </span><span class="nf">test_geometry_combo_shows_labels_but_stores_enums</span><span class="p">():</span>
+</span><span id="__span-1-27"><a id="__codelineno-1-27" name="__codelineno-1-27" href="#__codelineno-1-27"></a>    <span class="n">w</span> <span class="o">=</span> <span class="n">SliceSettingsWidget</span><span class="p">(</span><span class="n">role</span><span class="o">=</span><span class="s2">"infer_yolo"</span><span class="p">)</span>
+</span><span id="__span-1-28"><a id="__codelineno-1-28" name="__codelineno-1-28" href="#__codelineno-1-28"></a>    <span class="k">assert</span> <span class="p">[</span><span class="n">w</span><span class="o">.</span><span class="n">combo_slice_geometry</span><span class="o">.</span><span class="n">itemData</span><span class="p">(</span><span class="n">i</span><span class="p">)</span> <span class="k">for</span> <span class="n">i</span> <span class="ow">in</span> <span class="nb">range</span><span class="p">(</span><span class="mi">3</span><span class="p">)]</span> <span class="o">==</span> <span class="p">[</span><span class="s2">"auto_model"</span><span class="p">,</span> <span class="s2">"auto_object"</span><span class="p">,</span> <span class="s2">"custom"</span><span class="p">]</span>
+</span><span id="__span-1-29"><a id="__codelineno-1-29" name="__codelineno-1-29" href="#__codelineno-1-29"></a>    <span class="k">assert</span> <span class="s2">"auto_object"</span> <span class="ow">in</span> <span class="n">w</span><span class="o">.</span><span class="n">combo_slice_geometry</span><span class="o">.</span><span class="n">itemData</span><span class="p">(</span><span class="mi">1</span><span class="p">)</span>
+</span><span id="__span-1-30"><a id="__codelineno-1-30" name="__codelineno-1-30" href="#__codelineno-1-30"></a>    <span class="k">assert</span> <span class="n">w</span><span class="o">.</span><span class="n">combo_slice_geometry</span><span class="o">.</span><span class="n">itemText</span><span class="p">(</span><span class="mi">1</span><span class="p">)</span> <span class="o">==</span> <span class="s2">"Fit to animal size"</span>
+</span><span id="__span-1-31"><a id="__codelineno-1-31" name="__codelineno-1-31" href="#__codelineno-1-31"></a>
+</span><span id="__span-1-32"><a id="__codelineno-1-32" name="__codelineno-1-32" href="#__codelineno-1-32"></a>
+</span><span id="__span-1-33"><a id="__codelineno-1-33" name="__codelineno-1-33" href="#__codelineno-1-33"></a><span class="k">def</span><span class="w"> </span><span class="nf">test_ranges_come_from_the_contract</span><span class="p">():</span>
+</span><span id="__span-1-34"><a id="__codelineno-1-34" name="__codelineno-1-34" href="#__codelineno-1-34"></a><span class="w">    </span><span class="sd">"""F5: SAM3 overlap used to accept 1.0."""</span>
+</span><span id="__span-1-35"><a id="__codelineno-1-35" name="__codelineno-1-35" href="#__codelineno-1-35"></a>    <span class="k">for</span> <span class="n">role</span> <span class="ow">in</span> <span class="p">(</span><span class="s2">"train_sam3"</span><span class="p">,</span> <span class="s2">"infer_yolo"</span><span class="p">,</span> <span class="s2">"escalate_sam3"</span><span class="p">):</span>
+</span><span id="__span-1-36"><a id="__codelineno-1-36" name="__codelineno-1-36" href="#__codelineno-1-36"></a>        <span class="n">w</span> <span class="o">=</span> <span class="n">SliceSettingsWidget</span><span class="p">(</span><span class="n">role</span><span class="o">=</span><span class="n">role</span><span class="p">)</span>
+</span><span id="__span-1-37"><a id="__codelineno-1-37" name="__codelineno-1-37" href="#__codelineno-1-37"></a>        <span class="k">assert</span> <span class="n">w</span><span class="o">.</span><span class="n">spin_slice_overlap</span><span class="o">.</span><span class="n">maximum</span><span class="p">()</span> <span class="o">==</span> <span class="n">OVERLAP_MAX</span>
+</span><span id="__span-1-38"><a id="__codelineno-1-38" name="__codelineno-1-38" href="#__codelineno-1-38"></a>    <span class="n">w</span> <span class="o">=</span> <span class="n">SliceSettingsWidget</span><span class="p">(</span><span class="n">role</span><span class="o">=</span><span class="s2">"infer_yolo"</span><span class="p">)</span>
+</span><span id="__span-1-39"><a id="__codelineno-1-39" name="__codelineno-1-39" href="#__codelineno-1-39"></a>    <span class="k">assert</span> <span class="p">(</span><span class="n">w</span><span class="o">.</span><span class="n">spin_slice_object_fraction</span><span class="o">.</span><span class="n">minimum</span><span class="p">(),</span> <span class="n">w</span><span class="o">.</span><span class="n">spin_slice_object_fraction</span><span class="o">.</span><span class="n">maximum</span><span class="p">())</span> <span class="o">==</span> <span class="p">(</span><span class="n">FRACTION_MIN</span><span class="p">,</span> <span class="n">FRACTION_MAX</span><span class="p">)</span>
+</span><span id="__span-1-40"><a id="__codelineno-1-40" name="__codelineno-1-40" href="#__codelineno-1-40"></a>
+</span><span id="__span-1-41"><a id="__codelineno-1-41" name="__codelineno-1-41" href="#__codelineno-1-41"></a>
+</span><span id="__span-1-42"><a id="__codelineno-1-42" name="__codelineno-1-42" href="#__codelineno-1-42"></a><span class="k">def</span><span class="w"> </span><span class="nf">test_tile_size_editable_only_in_custom</span><span class="p">():</span>
+</span><span id="__span-1-43"><a id="__codelineno-1-43" name="__codelineno-1-43" href="#__codelineno-1-43"></a>    <span class="n">w</span> <span class="o">=</span> <span class="n">SliceSettingsWidget</span><span class="p">(</span><span class="n">role</span><span class="o">=</span><span class="s2">"infer_yolo"</span><span class="p">)</span>
+</span><span id="__span-1-44"><a id="__codelineno-1-44" name="__codelineno-1-44" href="#__codelineno-1-44"></a>    <span class="n">w</span><span class="o">.</span><span class="n">set_spec</span><span class="p">(</span><span class="n">TilingSpec</span><span class="p">(</span><span class="n">enabled</span><span class="o">=</span><span class="kc">True</span><span class="p">,</span> <span class="n">geometry_mode</span><span class="o">=</span><span class="s2">"auto_object"</span><span class="p">,</span> <span class="n">object_tile_fractions</span><span class="o">=</span><span class="p">(</span><span class="mf">0.1</span><span class="p">,),</span> <span class="n">reference_body_px</span><span class="o">=</span><span class="mf">50.0</span><span class="p">))</span>
+</span><span id="__span-1-45"><a id="__codelineno-1-45" name="__codelineno-1-45" href="#__codelineno-1-45"></a>    <span class="k">assert</span> <span class="ow">not</span> <span class="n">w</span><span class="o">.</span><span class="n">spin_slice_tile_w</span><span class="o">.</span><span class="n">isEnabled</span><span class="p">()</span> <span class="ow">and</span> <span class="n">w</span><span class="o">.</span><span class="n">spin_slice_tile_w</span><span class="o">.</span><span class="n">isVisible</span><span class="p">()</span> <span class="ow">is</span> <span class="ow">not</span> <span class="kc">None</span>
+</span><span id="__span-1-46"><a id="__codelineno-1-46" name="__codelineno-1-46" href="#__codelineno-1-46"></a>    <span class="k">assert</span> <span class="n">w</span><span class="o">.</span><span class="n">source_badge</span><span class="p">(</span><span class="s2">"tile_size"</span><span class="p">)</span> <span class="o">==</span> <span class="s2">"derived"</span>
+</span><span id="__span-1-47"><a id="__codelineno-1-47" name="__codelineno-1-47" href="#__codelineno-1-47"></a>    <span class="k">assert</span> <span class="s2">"500"</span> <span class="ow">in</span> <span class="n">w</span><span class="o">.</span><span class="n">lbl_slice_tile_size</span><span class="o">.</span><span class="n">text</span><span class="p">()</span>
+</span><span id="__span-1-48"><a id="__codelineno-1-48" name="__codelineno-1-48" href="#__codelineno-1-48"></a>    <span class="n">w</span><span class="o">.</span><span class="n">combo_slice_geometry</span><span class="o">.</span><span class="n">setCurrentIndex</span><span class="p">(</span><span class="n">w</span><span class="o">.</span><span class="n">combo_slice_geometry</span><span class="o">.</span><span class="n">findData</span><span class="p">(</span><span class="s2">"custom"</span><span class="p">))</span>
+</span><span id="__span-1-49"><a id="__codelineno-1-49" name="__codelineno-1-49" href="#__codelineno-1-49"></a>    <span class="k">assert</span> <span class="n">w</span><span class="o">.</span><span class="n">spin_slice_tile_w</span><span class="o">.</span><span class="n">isEnabled</span><span class="p">()</span>
+</span><span id="__span-1-50"><a id="__codelineno-1-50" name="__codelineno-1-50" href="#__codelineno-1-50"></a>
+</span><span id="__span-1-51"><a id="__codelineno-1-51" name="__codelineno-1-51" href="#__codelineno-1-51"></a>
+</span><span id="__span-1-52"><a id="__codelineno-1-52" name="__codelineno-1-52" href="#__codelineno-1-52"></a><span class="k">def</span><span class="w"> </span><span class="nf">test_body_is_read_only_until_override</span><span class="p">():</span>
+</span><span id="__span-1-53"><a id="__codelineno-1-53" name="__codelineno-1-53" href="#__codelineno-1-53"></a>    <span class="n">w</span> <span class="o">=</span> <span class="n">SliceSettingsWidget</span><span class="p">(</span><span class="n">role</span><span class="o">=</span><span class="s2">"escalate_sam3"</span><span class="p">)</span>
+</span><span id="__span-1-54"><a id="__codelineno-1-54" name="__codelineno-1-54" href="#__codelineno-1-54"></a>    <span class="n">w</span><span class="o">.</span><span class="n">set_reference_body</span><span class="p">(</span><span class="mf">82.2</span><span class="p">,</span> <span class="s2">"dataset"</span><span class="p">)</span>
+</span><span id="__span-1-55"><a id="__codelineno-1-55" name="__codelineno-1-55" href="#__codelineno-1-55"></a>    <span class="k">assert</span> <span class="ow">not</span> <span class="n">w</span><span class="o">.</span><span class="n">spin_slice_body</span><span class="o">.</span><span class="n">isEnabled</span><span class="p">()</span>
+</span><span id="__span-1-56"><a id="__codelineno-1-56" name="__codelineno-1-56" href="#__codelineno-1-56"></a>    <span class="k">assert</span> <span class="n">w</span><span class="o">.</span><span class="n">source_badge</span><span class="p">(</span><span class="s2">"reference_body_px"</span><span class="p">)</span> <span class="o">==</span> <span class="s2">"dataset"</span>
+</span><span id="__span-1-57"><a id="__codelineno-1-57" name="__codelineno-1-57" href="#__codelineno-1-57"></a>    <span class="n">w</span><span class="o">.</span><span class="n">chk_slice_body_override</span><span class="o">.</span><span class="n">setChecked</span><span class="p">(</span><span class="kc">True</span><span class="p">)</span>
+</span><span id="__span-1-58"><a id="__codelineno-1-58" name="__codelineno-1-58" href="#__codelineno-1-58"></a>    <span class="k">assert</span> <span class="n">w</span><span class="o">.</span><span class="n">spin_slice_body</span><span class="o">.</span><span class="n">isEnabled</span><span class="p">()</span>
+</span><span id="__span-1-59"><a id="__codelineno-1-59" name="__codelineno-1-59" href="#__codelineno-1-59"></a>    <span class="k">assert</span> <span class="n">w</span><span class="o">.</span><span class="n">source_badge</span><span class="p">(</span><span class="s2">"reference_body_px"</span><span class="p">)</span> <span class="o">==</span> <span class="s2">"override"</span>
+</span><span id="__span-1-60"><a id="__codelineno-1-60" name="__codelineno-1-60" href="#__codelineno-1-60"></a>
+</span><span id="__span-1-61"><a id="__codelineno-1-61" name="__codelineno-1-61" href="#__codelineno-1-61"></a>
+</span><span id="__span-1-62"><a id="__codelineno-1-62" name="__codelineno-1-62" href="#__codelineno-1-62"></a><span class="k">def</span><span class="w"> </span><span class="nf">test_derived_overlap_only_when_unsaved</span><span class="p">():</span>
+</span><span id="__span-1-63"><a id="__codelineno-1-63" name="__codelineno-1-63" href="#__codelineno-1-63"></a><span class="w">    </span><span class="sd">"""F7 + Review Focus 4."""</span>
+</span><span id="__span-1-64"><a id="__codelineno-1-64" name="__codelineno-1-64" href="#__codelineno-1-64"></a>    <span class="n">w</span> <span class="o">=</span> <span class="n">SliceSettingsWidget</span><span class="p">(</span><span class="n">role</span><span class="o">=</span><span class="s2">"train_yolo"</span><span class="p">)</span>
+</span><span id="__span-1-65"><a id="__codelineno-1-65" name="__codelineno-1-65" href="#__codelineno-1-65"></a>    <span class="n">w</span><span class="o">.</span><span class="n">set_spec</span><span class="p">(</span><span class="n">TilingSpec</span><span class="p">(</span><span class="n">enabled</span><span class="o">=</span><span class="kc">True</span><span class="p">,</span> <span class="n">geometry_mode</span><span class="o">=</span><span class="s2">"auto_object"</span><span class="p">,</span> <span class="n">object_tile_fractions</span><span class="o">=</span><span class="p">(</span><span class="mf">0.05</span><span class="p">,</span> <span class="mf">0.15</span><span class="p">)))</span>
+</span><span id="__span-1-66"><a id="__codelineno-1-66" name="__codelineno-1-66" href="#__codelineno-1-66"></a>    <span class="n">w</span><span class="o">.</span><span class="n">set_overlap_source</span><span class="p">(</span><span class="kc">None</span><span class="p">)</span>
+</span><span id="__span-1-67"><a id="__codelineno-1-67" name="__codelineno-1-67" href="#__codelineno-1-67"></a>    <span class="k">assert</span> <span class="n">w</span><span class="o">.</span><span class="n">spin_slice_overlap</span><span class="o">.</span><span class="n">value</span><span class="p">()</span> <span class="o">==</span> <span class="n">pytest</span><span class="o">.</span><span class="n">approx</span><span class="p">(</span><span class="mf">0.2</span><span class="p">)</span>
+</span><span id="__span-1-68"><a id="__codelineno-1-68" name="__codelineno-1-68" href="#__codelineno-1-68"></a>    <span class="k">assert</span> <span class="n">w</span><span class="o">.</span><span class="n">source_badge</span><span class="p">(</span><span class="s2">"overlap"</span><span class="p">)</span> <span class="o">==</span> <span class="s2">"derived"</span> <span class="ow">and</span> <span class="ow">not</span> <span class="n">w</span><span class="o">.</span><span class="n">spin_slice_overlap</span><span class="o">.</span><span class="n">isEnabled</span><span class="p">()</span>
+</span><span id="__span-1-69"><a id="__codelineno-1-69" name="__codelineno-1-69" href="#__codelineno-1-69"></a>    <span class="n">w</span><span class="o">.</span><span class="n">set_spec</span><span class="p">(</span><span class="n">TilingSpec</span><span class="p">(</span><span class="n">enabled</span><span class="o">=</span><span class="kc">True</span><span class="p">,</span> <span class="n">overlap</span><span class="o">=</span><span class="mf">0.25</span><span class="p">,</span> <span class="n">object_tile_fractions</span><span class="o">=</span><span class="p">(</span><span class="mf">0.05</span><span class="p">,</span> <span class="mf">0.15</span><span class="p">)))</span>
+</span><span id="__span-1-70"><a id="__codelineno-1-70" name="__codelineno-1-70" href="#__codelineno-1-70"></a>    <span class="n">w</span><span class="o">.</span><span class="n">set_overlap_source</span><span class="p">(</span><span class="mf">0.25</span><span class="p">)</span>
+</span><span id="__span-1-71"><a id="__codelineno-1-71" name="__codelineno-1-71" href="#__codelineno-1-71"></a>    <span class="k">assert</span> <span class="n">w</span><span class="o">.</span><span class="n">spin_slice_overlap</span><span class="o">.</span><span class="n">value</span><span class="p">()</span> <span class="o">==</span> <span class="mf">0.25</span> <span class="ow">and</span> <span class="n">w</span><span class="o">.</span><span class="n">source_badge</span><span class="p">(</span><span class="s2">"overlap"</span><span class="p">)</span> <span class="o">==</span> <span class="s2">"user"</span>
+</span><span id="__span-1-72"><a id="__codelineno-1-72" name="__codelineno-1-72" href="#__codelineno-1-72"></a>
+</span><span id="__span-1-73"><a id="__codelineno-1-73" name="__codelineno-1-73" href="#__codelineno-1-73"></a>
+</span><span id="__span-1-74"><a id="__codelineno-1-74" name="__codelineno-1-74" href="#__codelineno-1-74"></a><span class="k">def</span><span class="w"> </span><span class="nf">test_changed_signal_only_on_user_edits</span><span class="p">():</span>
+</span><span id="__span-1-75"><a id="__codelineno-1-75" name="__codelineno-1-75" href="#__codelineno-1-75"></a>    <span class="n">w</span> <span class="o">=</span> <span class="n">SliceSettingsWidget</span><span class="p">(</span><span class="n">role</span><span class="o">=</span><span class="s2">"infer_yolo"</span><span class="p">)</span>
+</span><span id="__span-1-76"><a id="__codelineno-1-76" name="__codelineno-1-76" href="#__codelineno-1-76"></a>    <span class="n">hits</span> <span class="o">=</span> <span class="p">[]</span>
+</span><span id="__span-1-77"><a id="__codelineno-1-77" name="__codelineno-1-77" href="#__codelineno-1-77"></a>    <span class="n">w</span><span class="o">.</span><span class="n">changed</span><span class="o">.</span><span class="n">connect</span><span class="p">(</span><span class="k">lambda</span><span class="p">:</span> <span class="n">hits</span><span class="o">.</span><span class="n">append</span><span class="p">(</span><span class="mi">1</span><span class="p">))</span>
+</span><span id="__span-1-78"><a id="__codelineno-1-78" name="__codelineno-1-78" href="#__codelineno-1-78"></a>    <span class="n">w</span><span class="o">.</span><span class="n">set_spec</span><span class="p">(</span><span class="n">TilingSpec</span><span class="p">(</span><span class="n">enabled</span><span class="o">=</span><span class="kc">True</span><span class="p">,</span> <span class="n">overlap</span><span class="o">=</span><span class="mf">0.3</span><span class="p">))</span>
+</span><span id="__span-1-79"><a id="__codelineno-1-79" name="__codelineno-1-79" href="#__codelineno-1-79"></a>    <span class="k">assert</span> <span class="n">hits</span> <span class="o">==</span> <span class="p">[]</span>
+</span><span id="__span-1-80"><a id="__codelineno-1-80" name="__codelineno-1-80" href="#__codelineno-1-80"></a>    <span class="n">w</span><span class="o">.</span><span class="n">spin_slice_overlap</span><span class="o">.</span><span class="n">setValue</span><span class="p">(</span><span class="mf">0.4</span><span class="p">)</span>  <span class="c1"># simulates the user (signals not blocked)</span>
+</span><span id="__span-1-81"><a id="__codelineno-1-81" name="__codelineno-1-81" href="#__codelineno-1-81"></a>    <span class="k">assert</span> <span class="n">hits</span>
+</span><span id="__span-1-82"><a id="__codelineno-1-82" name="__codelineno-1-82" href="#__codelineno-1-82"></a>
+</span><span id="__span-1-83"><a id="__codelineno-1-83" name="__codelineno-1-83" href="#__codelineno-1-83"></a>
+</span><span id="__span-1-84"><a id="__codelineno-1-84" name="__codelineno-1-84" href="#__codelineno-1-84"></a><span class="nd">@pytest</span><span class="o">.</span><span class="n">mark</span><span class="o">.</span><span class="n">parametrize</span><span class="p">(</span><span class="s2">"role"</span><span class="p">,</span> <span class="n">ROLES</span><span class="p">)</span>
+</span><span id="__span-1-85"><a id="__codelineno-1-85" name="__codelineno-1-85" href="#__codelineno-1-85"></a><span class="k">def</span><span class="w"> </span><span class="nf">test_every_enabled_control_has_a_tooltip</span><span class="p">(</span><span class="n">role</span><span class="p">):</span>
+</span><span id="__span-1-86"><a id="__codelineno-1-86" name="__codelineno-1-86" href="#__codelineno-1-86"></a>    <span class="kn">from</span><span class="w"> </span><span class="nn">PySide6.QtWidgets</span><span class="w"> </span><span class="kn">import</span> <span class="n">QAbstractButton</span><span class="p">,</span> <span class="n">QAbstractSpinBox</span><span class="p">,</span> <span class="n">QComboBox</span><span class="p">,</span> <span class="n">QLineEdit</span>
+</span><span id="__span-1-87"><a id="__codelineno-1-87" name="__codelineno-1-87" href="#__codelineno-1-87"></a>
+</span><span id="__span-1-88"><a id="__codelineno-1-88" name="__codelineno-1-88" href="#__codelineno-1-88"></a>    <span class="n">w</span> <span class="o">=</span> <span class="n">SliceSettingsWidget</span><span class="p">(</span><span class="n">role</span><span class="o">=</span><span class="n">role</span><span class="p">)</span>
+</span><span id="__span-1-89"><a id="__codelineno-1-89" name="__codelineno-1-89" href="#__codelineno-1-89"></a>    <span class="k">for</span> <span class="n">child</span> <span class="ow">in</span> <span class="n">w</span><span class="o">.</span><span class="n">findChildren</span><span class="p">((</span><span class="n">QAbstractButton</span><span class="p">,</span> <span class="n">QAbstractSpinBox</span><span class="p">,</span> <span class="n">QComboBox</span><span class="p">,</span> <span class="n">QLineEdit</span><span class="p">)):</span>
+</span><span id="__span-1-90"><a id="__codelineno-1-90" name="__codelineno-1-90" href="#__codelineno-1-90"></a>        <span class="k">assert</span> <span class="n">child</span><span class="o">.</span><span class="n">toolTip</span><span class="p">()</span><span class="o">.</span><span class="n">strip</span><span class="p">(),</span> <span class="n">child</span><span class="o">.</span><span class="n">objectName</span><span class="p">()</span> <span class="ow">or</span> <span class="nb">type</span><span class="p">(</span><span class="n">child</span><span class="p">)</span><span class="o">.</span><span class="vm">__name__</span>
+</span></code></pre></div>
+<div class="language-python highlight"><pre><span></span><code><span id="__span-2-1"><a id="__codelineno-2-1" name="__codelineno-2-1" href="#__codelineno-2-1"></a><span class="c1"># tests/test_widgets_no_app_imports.py</span>
+</span><span id="__span-2-2"><a id="__codelineno-2-2" name="__codelineno-2-2" href="#__codelineno-2-2"></a><span class="kn">import</span><span class="w"> </span><span class="nn">ast</span>
+</span><span id="__span-2-3"><a id="__codelineno-2-3" name="__codelineno-2-3" href="#__codelineno-2-3"></a><span class="kn">from</span><span class="w"> </span><span class="nn">pathlib</span><span class="w"> </span><span class="kn">import</span> <span class="n">Path</span>
+</span><span id="__span-2-4"><a id="__codelineno-2-4" name="__codelineno-2-4" href="#__codelineno-2-4"></a>
+</span><span id="__span-2-5"><a id="__codelineno-2-5" name="__codelineno-2-5" href="#__codelineno-2-5"></a><span class="n">APP_LAYERS</span> <span class="o">=</span> <span class="p">(</span><span class="s2">"trackerkit"</span><span class="p">,</span> <span class="s2">"posekit"</span><span class="p">,</span> <span class="s2">"classkit"</span><span class="p">,</span> <span class="s2">"refinekit"</span><span class="p">,</span> <span class="s2">"detectkit"</span><span class="p">,</span> <span class="s2">"filterkit"</span><span class="p">,</span> <span class="s2">"launcher"</span><span class="p">)</span>
+</span><span id="__span-2-6"><a id="__codelineno-2-6" name="__codelineno-2-6" href="#__codelineno-2-6"></a>
+</span><span id="__span-2-7"><a id="__codelineno-2-7" name="__codelineno-2-7" href="#__codelineno-2-7"></a>
+</span><span id="__span-2-8"><a id="__codelineno-2-8" name="__codelineno-2-8" href="#__codelineno-2-8"></a><span class="k">def</span><span class="w"> </span><span class="nf">test_widgets_import_no_app_layer</span><span class="p">():</span>
+</span><span id="__span-2-9"><a id="__codelineno-2-9" name="__codelineno-2-9" href="#__codelineno-2-9"></a>    <span class="n">root</span> <span class="o">=</span> <span class="n">Path</span><span class="p">(</span><span class="vm">__file__</span><span class="p">)</span><span class="o">.</span><span class="n">resolve</span><span class="p">()</span><span class="o">.</span><span class="n">parents</span><span class="p">[</span><span class="mi">1</span><span class="p">]</span> <span class="o">/</span> <span class="s2">"src"</span> <span class="o">/</span> <span class="s2">"hydra_suite"</span> <span class="o">/</span> <span class="s2">"widgets"</span>
+</span><span id="__span-2-10"><a id="__codelineno-2-10" name="__codelineno-2-10" href="#__codelineno-2-10"></a>    <span class="k">for</span> <span class="n">path</span> <span class="ow">in</span> <span class="n">root</span><span class="o">.</span><span class="n">rglob</span><span class="p">(</span><span class="s2">"*.py"</span><span class="p">):</span>
+</span><span id="__span-2-11"><a id="__codelineno-2-11" name="__codelineno-2-11" href="#__codelineno-2-11"></a>        <span class="k">for</span> <span class="n">node</span> <span class="ow">in</span> <span class="n">ast</span><span class="o">.</span><span class="n">walk</span><span class="p">(</span><span class="n">ast</span><span class="o">.</span><span class="n">parse</span><span class="p">(</span><span class="n">path</span><span class="o">.</span><span class="n">read_text</span><span class="p">())):</span>
+</span><span id="__span-2-12"><a id="__codelineno-2-12" name="__codelineno-2-12" href="#__codelineno-2-12"></a>            <span class="n">names</span> <span class="o">=</span> <span class="p">[</span><span class="n">a</span><span class="o">.</span><span class="n">name</span> <span class="k">for</span> <span class="n">a</span> <span class="ow">in</span> <span class="n">node</span><span class="o">.</span><span class="n">names</span><span class="p">]</span> <span class="k">if</span> <span class="nb">isinstance</span><span class="p">(</span><span class="n">node</span><span class="p">,</span> <span class="n">ast</span><span class="o">.</span><span class="n">Import</span><span class="p">)</span> <span class="k">else</span> <span class="p">(</span>
+</span><span id="__span-2-13"><a id="__codelineno-2-13" name="__codelineno-2-13" href="#__codelineno-2-13"></a>                <span class="p">[</span><span class="n">node</span><span class="o">.</span><span class="n">module</span> <span class="ow">or</span> <span class="s2">""</span><span class="p">]</span> <span class="k">if</span> <span class="nb">isinstance</span><span class="p">(</span><span class="n">node</span><span class="p">,</span> <span class="n">ast</span><span class="o">.</span><span class="n">ImportFrom</span><span class="p">)</span> <span class="k">else</span> <span class="p">[])</span>
+</span><span id="__span-2-14"><a id="__codelineno-2-14" name="__codelineno-2-14" href="#__codelineno-2-14"></a>            <span class="k">for</span> <span class="n">name</span> <span class="ow">in</span> <span class="n">names</span><span class="p">:</span>
+</span><span id="__span-2-15"><a id="__codelineno-2-15" name="__codelineno-2-15" href="#__codelineno-2-15"></a>                <span class="k">assert</span> <span class="ow">not</span> <span class="nb">any</span><span class="p">(</span><span class="sa">f</span><span class="s2">"hydra_suite.</span><span class="si">{</span><span class="n">app</span><span class="si">}</span><span class="s2">"</span> <span class="ow">in</span> <span class="n">name</span> <span class="ow">or</span> <span class="n">name</span><span class="o">.</span><span class="n">startswith</span><span class="p">(</span><span class="sa">f</span><span class="s2">"</span><span class="si">{</span><span class="n">app</span><span class="si">}</span><span class="s2">"</span><span class="p">)</span> <span class="k">for</span> <span class="n">app</span> <span class="ow">in</span> <span class="n">APP_LAYERS</span><span class="p">),</span> <span class="p">(</span><span class="n">path</span><span class="p">,</span> <span class="n">name</span><span class="p">)</span>
+</span></code></pre></div>
+<p>Adapt <code>test_tile_size_editable_only_in_custom</code>'s visibility assertion to the widget's real layout (rows are shown for the role; the point is <em>disabled</em>, not hidden). Use the realized tile from <code>tile_size_for_mode</code> (body 50 / 0.1 = 500 px).</p>
+<ul class="task-list">
+<li class="task-list-item"><label class="task-list-control"><input type="checkbox" disabled/><span class="task-list-indicator"></span></label> <strong>Step 2:</strong> Run → FAIL (module missing).</li>
+<li class="task-list-item"><label class="task-list-control"><input type="checkbox" disabled/><span class="task-list-indicator"></span></label> <strong>Step 3:</strong> Implement. Move <code>_TileLayoutPreview</code> verbatim (plus <code>model_input_size</code> from <code>set_model_input_size</code>, no literal 640). Build rows from the table; constrained → <code>setEnabled(False)</code> + tooltip "Derived from <source>; check Override to edit" (or "Editable in Custom tile size"). Badges: a small <code>QLabel</code> per derived row with the source word, styled muted. Advanced fields in a collapsible <code>QToolButton</code>-toggled frame, collapsed by default. All programmatic setters block signals; user edits emit <code>changed</code>.</li>
+<li class="task-list-item"><label class="task-list-control"><input type="checkbox" disabled/><span class="task-list-indicator"></span></label> <strong>Step 4:</strong> Run both new files → PASS.</li>
+<li class="task-list-item"><label class="task-list-control"><input type="checkbox" disabled/><span class="task-list-indicator"></span></label> <strong>Step 5:</strong> Commit <code>feat(widgets): shared SAHI settings widget with roles, badges, contract ranges</code>.</li>
+</ul>
+<h3 id="task-16-detectkit-training-inference-hosts-adopt-the-widget">Task 16: DetectKit training + inference hosts adopt the widget<a class="headerlink" href="#task-16-detectkit-training-inference-hosts-adopt-the-widget" title="Permanent link">&para;</a></h3>
+<p><strong>Files:</strong>
+- Modify: <code>src/hydra_suite/detectkit/gui/panels/slice_settings_widget.py</code> → keep the module and the <code>SliceSettingsGroup</code> name as a thin subclass of <code>SliceSettingsWidget</code> (<code>role="train_yolo"</code> for <code>backend="yolo"</code>, <code>role="train_sam3"</code> for <code>backend="sam3"</code>) that keeps <code>load_from</code>/<code>to_settings</code>/<code>load_sam3_tiling</code>/<code>to_sam3_tiling</code> via a new adapter module
+- Create: <code>src/hydra_suite/detectkit/gui/panels/slice_settings_adapter.py</code> — <code>settings_to_spec(SliceTrainingSettings) -&gt; (TilingSpec, extras)</code>, <code>spec_to_settings(spec, extras, base) -&gt; SliceTrainingSettings</code>, <code>sam3_tiling_to_spec(dict) -&gt; (spec, extras)</code>, <code>spec_to_sam3_tiling(spec, extras) -&gt; dict</code> (exactly the 9 keys <code>to_sam3_tiling</code> returns today)
+- Modify: <code>src/hydra_suite/detectkit/gui/dialogs/inference_settings.py</code> — its SAHI group becomes <code>SliceSettingsWidget(role="infer_yolo")</code>; <code>settings()</code>/<code>load_from()</code> contracts unchanged
+- Update tests that reference old attribute names: <code>tests/test_detectkit_slice_ui.py</code>, <code>tests/test_sam3_slice_settings_shared.py</code>, <code>tests/test_detectkit_inference_settings.py</code>, <code>tests/test_detectkit_training_dialog.py</code> (only name changes <code>cmb_mode</code>→<code>combo_slice_geometry</code> via <code>findData</code>, <code>txt_targets</code>→<code>txt_slice_scales</code>, <code>spin_w/h</code>→<code>spin_slice_tile_w/h</code>, <code>spin_overlap</code>→<code>spin_slice_overlap</code>, <code>spin_object_fraction</code>→<code>spin_slice_object_fraction</code>, <code>_rows</code> label lookups → widget accessors; and the <code>QHBoxLayout</code> assertion if the outer layout changes). Behavioral assertions stay.</p>
+<ul class="task-list">
+<li class="task-list-item"><label class="task-list-control"><input type="checkbox" disabled/><span class="task-list-indicator"></span></label> <strong>Step 1:</strong> Write <code>tests/test_detectkit_slice_adapter.py</code>: round-trip every <code>SliceTrainingSettings</code> field and every <code>to_sam3_tiling</code> key through the adapter (property-style over a few hand cases incl. legacy pixel-only settings and multi-scale sets); <code>spec_to_sam3_tiling</code> emits exactly <code>set(Sam3LoraParams fields) ∩ tiling keys</code> as today; F5: <code>spin_slice_overlap</code> max 0.9 in the SAM3 panel and <code>to_sam3_tiling()["tile_overlap"] &lt; 1</code>.</li>
+<li class="task-list-item"><label class="task-list-control"><input type="checkbox" disabled/><span class="task-list-indicator"></span></label> <strong>Step 2:</strong> Run → FAIL.</li>
+<li class="task-list-item"><label class="task-list-control"><input type="checkbox" disabled/><span class="task-list-indicator"></span></label> <strong>Step 3:</strong> Implement adapter + host swaps.</li>
+<li class="task-list-item"><label class="task-list-control"><input type="checkbox" disabled/><span class="task-list-indicator"></span></label> <strong>Step 4:</strong> Run the new test + the four updated files + <code>tests/test_sam3_gui_cli_training_parity.py tests/test_sam3_dialog_wiring.py tests/test_detectkit_fraction_only_settings.py tests/test_detectkit_preview_tiling.py</code> → PASS.</li>
+<li class="task-list-item"><label class="task-list-control"><input type="checkbox" disabled/><span class="task-list-indicator"></span></label> <strong>Step 5:</strong> Commit <code>refactor(detectkit): training and inference hosts use the shared SAHI widget</code>.</li>
+</ul>
+<h3 id="task-17-escalation-dialogs-adopt-the-widgets-tiling-rows">Task 17: Escalation dialogs adopt the widget's tiling rows<a class="headerlink" href="#task-17-escalation-dialogs-adopt-the-widgets-tiling-rows" title="Permanent link">&para;</a></h3>
+<p><strong>Files:</strong>
+- Modify: <code>src/hydra_suite/detectkit/gui/dialogs/semantic_escalation_dialog.py</code> — body / tile fraction / tile label / overlap / merge IoU / seam margin rows come from <code>SliceSettingsWidget(role="escalate_sam3")</code>; keep <code>_reference_body</code>, <code>_tile_fraction</code>, <code>_overlap</code>, <code>_merge_iou</code>, <code>_seam_margin</code>, <code>_tile_label</code> as attributes ALIASING the widget's controls so <code>parameters()</code>, <code>apply_calibration_choice</code>, <code>prefill_from_sidecar</code>, persistence and existing tests keep working
+- Modify: <code>src/hydra_suite/detectkit/gui/dialogs/escalate_sam2_dialog.py</code> — same with <code>role="escalate_sam2"</code>; <code>tiling_parameters()</code> unchanged
+- Update only grid-position assertions in <code>tests/test_semantic_escalation_dialog_persistence.py:201-230</code> if the layout moves; text/value assertions stay</p>
+<ul class="task-list">
+<li class="task-list-item"><label class="task-list-control"><input type="checkbox" disabled/><span class="task-list-indicator"></span></label> <strong>Step 1:</strong> Write <code>tests/test_escalation_dialogs_use_shared_widget.py</code>: each dialog contains exactly one <code>SliceSettingsWidget</code> with the right role; <code>parameters()</code> key set equals <code>SemanticEscalationRequest</code> tiling+run fields used today (compare to the set captured from main before the change — paste it as a literal); <code>tiling_parameters()</code> keys == <code>{"reference_body_px", "tile_fraction", "overlap"}</code>; the body row shows a source badge (<code>dataset</code> when seeded from the project, <code>stamped</code> after <code>prefill_from_sidecar</code>).</li>
+<li class="task-list-item"><label class="task-list-control"><input type="checkbox" disabled/><span class="task-list-indicator"></span></label> <strong>Step 2:</strong> Run → FAIL.</li>
+<li class="task-list-item"><label class="task-list-control"><input type="checkbox" disabled/><span class="task-list-indicator"></span></label> <strong>Step 3:</strong> Implement.</li>
+<li class="task-list-item"><label class="task-list-control"><input type="checkbox" disabled/><span class="task-list-indicator"></span></label> <strong>Step 4:</strong> Run the new test + <code>tests/test_semantic_escalation_dialog_persistence.py tests/test_detectkit_sam2_escalation_wiring.py tests/test_sam3_model_selection.py tests/test_geometry_review_fixes.py tests/test_escalate_sam2_dialog.py tests/test_semantic_default_tiling.py</code> → PASS.</li>
+<li class="task-list-item"><label class="task-list-control"><input type="checkbox" disabled/><span class="task-list-indicator"></span></label> <strong>Step 5:</strong> Commit <code>refactor(detectkit): escalation dialogs use the shared SAHI widget rows</code>.</li>
+</ul>
+<h3 id="task-18-trackerkit-detection-panel-adopts-the-widget">Task 18: TrackerKit detection panel adopts the widget<a class="headerlink" href="#task-18-trackerkit-detection-panel-adopts-the-widget" title="Permanent link">&para;</a></h3>
+<p><strong>Files:</strong>
+- Modify: <code>src/hydra_suite/trackerkit/gui/panels/detection_panel.py</code> (~:757-880 construction; visibility handlers; <code>_sync_advanced</code>; <code>_apply_slice_meta_values</code>) — build <code>SliceSettingsWidget(role="infer_yolo")</code> inside <code>yolo_group</code>; bind the panel's existing attribute names to the widget's controls (<code>self.chk_slice_enabled = w.chk_slice_enabled</code>, etc.) so the profile state machine and callers are unchanged
+- Modify: <code>src/hydra_suite/trackerkit/gui/orchestrators/config.py:455,501,1771</code> — <code>combo_slice_geometry.currentText()</code>/<code>setCurrentText()</code> → <code>currentData()</code>/<code>setCurrentIndex(findData(...))</code>; grep <code>combo_slice_geometry</code> across <code>src/</code> and fix every reader
+- Update: <code>tests/test_detection_panel_slice_widgets.py:21-27</code> (items now asserted via <code>itemData</code>), visibility tests (<code>isHidden</code> → <code>isEnabled</code> where the field is now constrained-but-visible), <code>tests/test_trackerkit_profile_session.py:214</code> and any <code>currentText()</code> geometry assertion → <code>currentData()</code></p>
+<ul class="task-list">
+<li class="task-list-item"><label class="task-list-control"><input type="checkbox" disabled/><span class="task-list-indicator"></span></label> <strong>Step 1:</strong> Write <code>tests/test_trackerkit_sahi_widget_persistence.py</code>: build a main window via <code>tests/test_main_window_config_persistence._make_main_window</code>; set each geometry mode; save the config dict; assert <code>slice_geometry_mode</code> is the enum; reload a config with each enum and assert the combo's <code>currentData()</code>; assert <code>get_parameters_dict()</code> SLICE_* keys equal those from main for the same config (capture main's values as literals first, on the unmodified tree).</li>
+<li class="task-list-item"><label class="task-list-control"><input type="checkbox" disabled/><span class="task-list-indicator"></span></label> <strong>Step 2:</strong> Run → FAIL.</li>
+<li class="task-list-item"><label class="task-list-control"><input type="checkbox" disabled/><span class="task-list-indicator"></span></label> <strong>Step 3:</strong> Implement. Execution knobs (tiles per call, memory, admission label) live in the widget's Advanced section for <code>infer_yolo</code>; the panel keeps <code>_update_slice_batch_admission_label</code> wired to them.</li>
+<li class="task-list-item"><label class="task-list-control"><input type="checkbox" disabled/><span class="task-list-indicator"></span></label> <strong>Step 4:</strong> Run the new test + <code>tests/test_detection_panel_slice_widgets.py tests/test_trackerkit_slice_meta_prefill.py tests/test_trackerkit_profile_session.py tests/test_gui_cli_profile_parity.py tests/test_main_window_config_persistence.py tests/test_engine_params_slice_profile.py tests/test_get_parameters_dict_characterization.py tests/test_trackerkit_preview_worker.py</code> → PASS (the characterization golden fails on main for DATASET_<em> keys only — confirm no SLICE_</em> key differs).</li>
+<li class="task-list-item"><label class="task-list-control"><input type="checkbox" disabled/><span class="task-list-indicator"></span></label> <strong>Step 5:</strong> Commit <code>refactor(trackerkit): detection panel uses the shared SAHI widget</code>.</li>
+</ul>
+<h3 id="task-19-visual-gallery">Task 19: Visual gallery<a class="headerlink" href="#task-19-visual-gallery" title="Permanent link">&para;</a></h3>
+<p><strong>Files:</strong>
+- Create: <code>tools/sahi_widget_gallery.py</code> — renders, offscreen, PNGs into an output dir: (a) the bare widget for every role with representative state (derived badges visible, Advanced collapsed and expanded); (b) the REAL hosts at their natural size: TrackerKit main window on the "Find Animals" tab, YOLO direct mode, SAHI on, with a model sidecar carrying two profiles (recipe: <code>tests/test_main_window_config_persistence._make_main_window</code>, <code>_show_workspace()</code>, <code>tabs.setCurrentWidget(_detection_panel)</code>, <code>combo_detection_method.setCurrentIndex(1)</code>, <code>combo_yolo_obb_mode.setCurrentIndex(0)</code>, <code>chk_slice_enabled.setChecked(True)</code>, <code>apply_slice_meta_for_model(path)</code>), DetectKit <code>TrainingDialog</code> (overview page), <code>Sam3TrainingPanel</code>, <code>InferenceSettingsDialog</code>, <code>SemanticEscalationDialog</code>, <code>EscalateSam2Dialog</code> (constructors per <code>tests/</code> fixtures; hermetic <code>HYDRA_DATA_DIR</code>/<code>HYDRA_CONFIG_DIR</code> in a temp dir).
+- Test: <code>tests/test_sahi_widget_gallery.py</code> — runs the tool into <code>tmp_path</code> and asserts one non-empty PNG per expected name.</p>
+<ul class="task-list">
+<li class="task-list-item"><label class="task-list-control"><input type="checkbox" disabled/><span class="task-list-indicator"></span></label> <strong>Step 1:</strong> Write the test (expects files <code>role_&lt;role&gt;.png</code>, <code>role_&lt;role&gt;_advanced.png</code>, <code>host_trackerkit.png</code>, <code>host_detectkit_training.png</code>, <code>host_sam3_training.png</code>, <code>host_inference_settings.png</code>, <code>host_sam3_escalation.png</code>, <code>host_sam2_escalation.png</code>).</li>
+<li class="task-list-item"><label class="task-list-control"><input type="checkbox" disabled/><span class="task-list-indicator"></span></label> <strong>Step 2:</strong> Run → FAIL. <strong>Step 3:</strong> Implement with <code>widget.grab().save(path)</code>; <code>QApplication.processEvents()</code> before grabbing; set a fixed window size per host. <strong>Step 4:</strong> PASS.</li>
+<li class="task-list-item"><label class="task-list-control"><input type="checkbox" disabled/><span class="task-list-indicator"></span></label> <strong>Step 5:</strong> Generate the gallery into <code>docs/superpowers/assets/sahi-unification/</code> and LOOK at every PNG (Read tool). Fix clipped/overlapping layout, missing badges, wrong enablement; regenerate. Commit tool + test + PNGs: <code>docs(sahi): visual gallery of the shared widget in every host</code>.</li>
+</ul>
+<h3 id="task-20-s4-gate">Task 20: S4 gate<a class="headerlink" href="#task-20-s4-gate" title="Permanent link">&para;</a></h3>
+<ul class="task-list">
+<li class="task-list-item"><label class="task-list-control"><input type="checkbox" disabled/><span class="task-list-indicator"></span></label> <strong>Step 1:</strong> Regression: every test file named in Tasks 15–19 + <code>tests/test_tiling_*.py tests/test_slice_*.py tests/test_detectkit_*.py tests/test_sam3_*.py tests/test_trackerkit_*.py tests/test_core_import_is_light.py</code>; <code>make lint</code>; compare failure sets to main.</li>
+<li class="task-list-item"><label class="task-list-control"><input type="checkbox" disabled/><span class="task-list-indicator"></span></label> <strong>Step 2:</strong> Equivalence MPS full matrix (<code>WT=$PWD</code> main checkout for harness+fixtures, <code>WT_SRC</code> = worktree src) — TrackerKit persistence changed, so all clips. CUDA on diptera per S3 deviation 20 (or mehek if back online).</li>
+<li class="task-list-item"><label class="task-list-control"><input type="checkbox" disabled/><span class="task-list-indicator"></span></label> <strong>Step 3:</strong> Adversarial review (Fable): execute the gallery and the hosts; try to break round-trips (save/reload in both kits, profile switching to Custom, derived→override→back, role-hidden fields leaking values), widget layering, and GUI/CLI parity (<code>tests/test_gui_cli_profile_parity.py</code> semantics). Plus a normal reviewer. Fix wave; re-review if the fix exceeds the reported lines.</li>
+<li class="task-list-item"><label class="task-list-control"><input type="checkbox" disabled/><span class="task-list-indicator"></span></label> <strong>Step 4:</strong> Present the gallery PNGs to the user for visual confirmation (SendUserFile), then merge <code>--no-ff</code>.</li>
+</ul>
+
+
+
+
+
+
+
+
+
+
+
+
+                
+              </article>
+            </div>
+          
+          
+<script>var target=document.getElementById(location.hash.slice(1));target&&target.name&&(target.checked=target.name.startsWith("__tabbed_"))</script>
+        </div>
+        
+          <button type="button" class="md-top md-icon" data-md-component="top" hidden>
+  
+  <svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 24 24"><path d="M13 20h-2V8l-5.5 5.5-1.42-1.42L12 4.16l7.92 7.92-1.42 1.42L13 8z"/></svg>
+  Back to top
+</button>
+        
+      </main>
+      
+        <footer class="md-footer">
+  
+  <div class="md-footer-meta md-typeset">
+    <div class="md-footer-meta__inner md-grid">
+      <div class="md-copyright">
+  
+  
+    Made with
+    <a href="https://squidfunk.github.io/mkdocs-material/" target="_blank" rel="noopener">
+      Material for MkDocs
+    </a>
+  
+</div>
+      
+    </div>
+  </div>
+</footer>
+      
+    </div>
+    <div class="md-dialog" data-md-component="dialog">
+      <div class="md-dialog__inner md-typeset"></div>
+    </div>
+    
+    
+    <script id="__config" type="application/json">{"base": "../../..", "features": ["navigation.tabs", "navigation.sections", "navigation.expand", "navigation.top", "content.code.copy", "content.action.edit", "search.suggest", "search.highlight"], "search": "../../../assets/javascripts/workers/search.6ce7567c.min.js", "translations": {"clipboard.copied": "Copied to clipboard", "clipboard.copy": "Copy to clipboard", "search.result.more.one": "1 more on this page", "search.result.more.other": "# more on this page", "search.result.none": "No matching documents", "search.result.one": "1 matching document", "search.result.other": "# matching documents", "search.result.placeholder": "Type to start searching", "search.result.term.missing": "Missing", "select.version": "Select version"}, "version": {"default": "latest", "provider": "mike"}}</script>
+    
+    
+      <script src="../../../assets/javascripts/bundle.83f73b43.min.js"></script>
+      
+    
+  </body>
+</html>
