@@ -70,6 +70,18 @@ def _saved_value(saved: dict, key: str, default, cast):
         return default
 
 
+def _body_source(explicit: str, origin: str) -> str:
+    """The body-size badge: the caller's source, else read from its note."""
+    if explicit:
+        return explicit
+    text = (origin or "").lower()
+    if "sliced-training" in text:
+        return "project"
+    if "median" in text:
+        return "dataset"
+    return "user"
+
+
 def _format_tile_label(
     tile_px: int | None, body_px: float, fraction: float | None
 ) -> tuple[str, str]:
@@ -85,7 +97,7 @@ def _format_tile_label(
     # Short visible line (no wrapping, so the row never squeezes its
     # neighbours); the guidance lives in the tooltip.
     return (
-        "Tiling off — enter a body size",
+        "full frame — tiling is off; enter a body size",
         "Full frame: no reference body size is known, so tiling is off. Enter "
         "one above (or set one in project settings) for much better "
         "small-object recall.",
@@ -109,6 +121,7 @@ class SemanticEscalationDialog(DetectKitDialog):
         body_px_origin: str = "",
         project=None,
         persist_callback=None,
+        body_px_source: str = "",
     ) -> None:
         super().__init__(
             "Semantic escalation (SAM3)",
@@ -285,7 +298,7 @@ class SemanticEscalationDialog(DetectKitDialog):
             origin_text, body_source = "saved from the previous SAM3 dialog", "user"
         else:
             origin_text = body_px_origin or "entered by you"
-            body_source = "dataset" if body_px_origin else "user"
+            body_source = _body_source(body_px_source, body_px_origin)
         self._body_origin_label = QLabel(origin_text)
         self._body_origin_label.setWordWrap(True)
         self._body_origin_label.setToolTip(self._body_origin_label.text())
@@ -328,7 +341,7 @@ class SemanticEscalationDialog(DetectKitDialog):
                     origin_label, body_source = "stamped on the model", "stamped"
                 else:
                     origin_label = body_px_origin or "entered by you"
-                    body_source = "dataset" if body_px_origin else "user"
+                    body_source = _body_source(body_px_source, body_px_origin)
                 self._body_origin_label.setText(origin_label)
                 self._body_origin_label.setToolTip(origin_label)
 

@@ -97,10 +97,14 @@ def test_sam3_fresh_dialog_overlap_meets_the_whole_animal_minimum(
     assert widget.btn_slice_overlap_raise.isHidden()
 
 
-def test_sam3_body_badge_is_dataset_when_seeded_from_the_project(
+def test_sam3_body_badge_is_dataset_when_seeded_from_the_labels(
     available_checkpoint,
 ):
-    w = _sam3(82.2, body_px_origin="median of the source's labels")
+    w = _sam3(
+        82.2,
+        body_px_origin="the median longest side of your existing labels",
+        body_px_source="dataset",
+    )
     widget = w.findChildren(SliceSettingsWidget)[0]
     assert widget.source_badge("reference_body_px") == "dataset"
     assert not w._reference_body.isEnabled()  # read-only until Override
@@ -111,7 +115,7 @@ def test_sam3_body_badge_is_stamped_after_prefill_from_sidecar(
 ):
     dialog = _sam3(0.0)
     widget = dialog.findChildren(SliceSettingsWidget)[0]
-    assert widget.source_badge("reference_body_px") == "default"
+    assert widget.source_badge("reference_body_px") == "user"
     assert dialog._reference_body.isEnabled()  # unknown body stays typeable (I6)
     monkeypatch.setattr(
         available_checkpoint,
@@ -166,10 +170,39 @@ def test_sam2_tiling_parameters_keys_unchanged():
     assert params["overlap"] == DEFAULT_OVERLAP
 
 
-def test_sam2_body_badge_is_dataset_when_seeded_from_the_project():
-    dialog = _sam2(reference_body_px=40.0)
+def test_sam3_body_badge_is_project_for_the_sliced_training_reference(
+    available_checkpoint,
+):
+    dialog = _sam3(
+        48.0,
+        body_px_origin="the project's sliced-training reference body size",
+        body_px_source="project",
+    )
     widget = dialog.findChildren(SliceSettingsWidget)[0]
-    assert widget.source_badge("reference_body_px") == "dataset"
+    assert widget.source_badge("reference_body_px") == "project"
+    assert not widget.chk_slice_body_override.isHidden()
+
+
+def test_sam2_body_badge_carries_the_real_source():
+    for source in ("project", "dataset"):
+        dialog = _sam2(reference_body_px=40.0, body_px_source=source)
+        widget = dialog.findChildren(SliceSettingsWidget)[0]
+        assert widget.source_badge("reference_body_px") == source
+    widget = _sam2(reference_body_px=0.0).findChildren(SliceSettingsWidget)[0]
+    assert widget.source_badge("reference_body_px") == "user"
+
+
+def test_reference_body_resolver_names_its_source(tmp_path):
+    from hydra_suite.detectkit.gui.escalation_actions import resolve_reference_body
+    from hydra_suite.detectkit.gui.models import SliceTrainingSettings
+
+    project = DetectKitProject(project_dir=tmp_path)
+    project.slice_settings = SliceTrainingSettings(reference_body_px=50.0)
+    value, _note, source = resolve_reference_body(project)
+    assert (value, source) == (50.0, "project")
+    project.slice_settings = SliceTrainingSettings(reference_body_px=0.0)
+    value, _note, source = resolve_reference_body(project)
+    assert (value, source) == (0.0, "user")
 
 
 def test_sam2_full_frame_round_trip_through_a_calibration_choice():

@@ -68,7 +68,7 @@ def _format_tile_label(
     if fraction is None:
         return "full frame — tiling off.", ""
     return (
-        "Tiling off — enter a body size",
+        "full frame — tiling is off; enter a body size",
         "Full frame: no body size is known, so tiling is off.",
     )
 
@@ -84,6 +84,7 @@ class EscalateSam2Dialog(DetectKitDialog):
         project=None,
         reference_body_px: float = 0.0,
         persist_callback=None,
+        body_px_source: str = "user",
     ) -> None:
         super().__init__(TITLE, parent)
         self._sources = list(sources)
@@ -159,7 +160,7 @@ class EscalateSam2Dialog(DetectKitDialog):
         )
         body = max(0.0, float(saved.get("reference_body_px", reference_body_px) or 0.0))
         self._tiling.set_reference_body(
-            body, "user" if "reference_body_px" in saved else "dataset"
+            body, "user" if "reference_body_px" in saved else body_px_source
         )
         form.addWidget(self._tiling, 2, 0, 1, 2)
 

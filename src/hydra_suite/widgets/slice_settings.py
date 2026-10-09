@@ -86,8 +86,8 @@ class SliceSettingsWidget(QGroupBox):
         self._base = TilingSpec.defaults(ROLE_BACKEND[role])
         self._passthrough: dict[str, Any] = {}
         self._model_input_size = DEFAULT_YOLO_IMGSZ
-        self._body_derived = (0.0, "default")
-        self._body_source = "default"
+        self._body_derived = (0.0, "user")
+        self._body_source = "user"
         self._sources: dict[str, str] = {}
         self._advanced_expanded = False
         self._profile_row_shown = False
@@ -228,9 +228,6 @@ class SliceSettingsWidget(QGroupBox):
             self.spin_slice_overlap.setToolTip(
                 "Fixed: owner tiles always overlap by this fraction."
             )
-        self.chk_slice_body_override.setVisible(
-            caps.body_override and self._role not in TRAIN_ROLES
-        )
         self.btn_slice_overlap_raise.setVisible(False)
         if caps.fixed_overlap is not None:
             self.lbl_slice_overlap_minimum.setText("fixed")
@@ -350,7 +347,8 @@ class SliceSettingsWidget(QGroupBox):
     def set_reference_body(self, value: float, source: str) -> None:
         """Show a derived body size and its source; read-only until Override."""
         value = max(0.0, float(value or 0.0))
-        source = source if value > 0 else "default"
+        # An unknown body is the user's to enter: badged "user".
+        source = source if value > 0 else "user"
         self._body_derived = (value, source)
         self._body_source = source
         self._set_quietly(self.chk_slice_body_override, False)
@@ -464,7 +462,7 @@ class SliceSettingsWidget(QGroupBox):
             # Always measured from the labels at build time (0 = not yet).
             source = "dataset"
         else:
-            source = "user" if body > 0 else "default"
+            source = "user"
         self._body_derived = (body, source)
         self._body_source = source
         q(self.chk_slice_body_override, False)
@@ -569,11 +567,14 @@ class SliceSettingsWidget(QGroupBox):
         self._apply_visibility()
 
     def _body_editable(self) -> bool:
-        if self.chk_slice_body_override.isChecked():
-            return True
-        return self._body_source in ("user", "default") and (
-            self._caps.body_override or self._body_source == "default"
-        )
+        value, _source = self._body_derived
+        if self.chk_slice_body_override.isChecked() or value <= 0:
+            return True  # I6: an unknown body always stays typeable
+        return self._body_source == "user" and self._caps.body_override
+
+    def _body_is_derived(self) -> bool:
+        value, source = self._body_derived
+        return value > 0 and source not in ("user", "default")
 
     def _refresh_enabled(self) -> None:
         role = self._role
@@ -583,7 +584,7 @@ class SliceSettingsWidget(QGroupBox):
         mode = self._mode()
         auto_object = mode == "auto_object"
         fixed = self._caps.fixed_overlap is not None
-        derived_body = self._body_derived[1] not in ("user", "default")
+        derived_body = self._body_is_derived()
         body_gate = on and (role != "infer_yolo" or auto_object)
         enabled = {
             self.combo_slice_profile: on,
@@ -621,6 +622,14 @@ class SliceSettingsWidget(QGroupBox):
             where = SOURCE_DESCRIPTIONS.get(self._body_derived[1], "")
             body_tip += f" Derived from {where}; check Override to edit."
         self.spin_slice_body.setToolTip(body_tip)
+        # Override exists only for a DERIVED body (never for a user's own).
+        self.chk_slice_body_override.setHidden(
+            not (
+                self._caps.body_override
+                and role not in TRAIN_ROLES
+                and (derived_body or self.chk_slice_body_override.isChecked())
+            )
+        )
 
     def _refresh_derived(self) -> None:
         role = self._role

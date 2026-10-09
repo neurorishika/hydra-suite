@@ -231,6 +231,16 @@ def test_inference_dialog_hosts_the_shared_widget():
     assert out.overlap == pytest.approx(0.3)
     assert out.merge_threshold == pytest.approx(0.6)
     assert "500" in widgets[0].lbl_slice_tile_size.text()
+    # The body is the user's runtime value: nothing derived, nothing to override.
+    assert widgets[0].chk_slice_body_override.isHidden()
+    # DetectKit inference does not know the model's merge profile.
+    assert widgets[0]._rows["merge"][1] is widgets[0].spin_slice_merge
+    widgets[0].set_advanced_expanded(True)
+    dialog.show()
+    assert widgets[0].spin_slice_merge.isVisible()
+    assert not widgets[0].combo_slice_merge_policy.isVisible()
+    assert not widgets[0].combo_slice_merge_metric.isVisible()
+    dialog.hide()
 
 
 def test_clamping_a_saved_value_logs_one_warning(caplog):

@@ -122,11 +122,13 @@ def on_escalate_geometry(window, preselect: str | None = None) -> None:
         )
         return
 
+    body_px, _note, body_source = resolve_reference_body(window._project)
     dlg = EscalateSam2Dialog(
         window._project.sources,
         parent=window,
         project=window._project,
-        reference_body_px=resolve_reference_body_px(window._project)[0],
+        reference_body_px=body_px,
+        body_px_source=body_source,
         persist_callback=window._save_current_project,
     )
     if preselect:
@@ -328,12 +330,15 @@ def on_semantic_escalation(window) -> None:
 
     from .dialogs.semantic_escalation_dialog import SemanticEscalationDialog
 
-    reference_body_px, body_px_origin = resolve_reference_body_px(window._project)
+    reference_body_px, body_px_origin, body_px_source = resolve_reference_body(
+        window._project
+    )
     dlg = SemanticEscalationDialog(
         window._project.sources,
         reference_body_px,
         parent=window,
         body_px_origin=body_px_origin,
+        body_px_source=body_px_source,
         project=window._project,
         persist_callback=window._save_current_project,
     )
@@ -526,7 +531,16 @@ def on_semantic_escalation(window) -> None:
 
 
 def resolve_reference_body_px(project) -> tuple[float, str]:
-    """(reference_body_px, provenance) for the semantic escalation dialog.
+    """(reference_body_px, provenance note); see :func:`resolve_reference_body`."""
+    value, note, _source = resolve_reference_body(project)
+    return value, note
+
+
+def resolve_reference_body(project) -> tuple[float, str, str]:
+    """(reference_body_px, provenance note, badge source) for the escalation dialogs.
+
+    The source is the widget badge: ``project`` (the project setting),
+    ``dataset`` (label median) or ``user`` (nothing found -- the user enters it).
 
     The spec's chain, in order: the DetectKit project setting, then the
     MEDIAN LONGEST SIDE of the source's existing labels, then the user (the
@@ -542,7 +556,11 @@ def resolve_reference_body_px(project) -> tuple[float, str]:
     slice_settings = getattr(project, "slice_settings", None)
     from_project = float(getattr(slice_settings, "reference_body_px", 0.0) or 0.0)
     if from_project > 0:
-        return from_project, "the project's sliced-training reference body size"
+        return (
+            from_project,
+            "the project's sliced-training reference body size",
+            "project",
+        )
     try:
         # F4: this decodes images on the GUI thread while the dialog opens, so
         # the sample is capped project-wide. The cap is reported, not hidden:
@@ -560,5 +578,5 @@ def resolve_reference_body_px(project) -> tuple[float, str]:
         note = f"the median longest side of your existing labels ({sampled} frame"
         note += "s" if sampled != 1 else ""
         note += ", a capped sample)" if truncated else ")"
-        return measured, note
-    return 0.0, "nothing found — enter one, or tiling stays off"
+        return measured, note, "dataset"
+    return 0.0, "nothing found — enter one, or tiling stays off", "user"

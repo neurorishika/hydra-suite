@@ -27,7 +27,10 @@ from hydra_suite.utils.tiling_spec import (
     OVERLAP_MAX,
     TilingSpec,
 )
-from hydra_suite.widgets.slice_settings import SliceSettingsWidget
+from hydra_suite.widgets.slice_settings import (
+    SliceSettingsWidget,
+    SliceWidgetCapabilities,
+)
 from hydra_suite.widgets.slice_settings_parts import SLICE_SIZE_MAX
 
 from ..models import (
@@ -133,8 +136,13 @@ class InferenceSettingsDialog(DetectKitDialog):
         layout.addWidget(hint)
         # The shared SAHI widget (S4): same labels, ranges and resolution as
         # TrackerKit. Old attribute names stay as aliases of its controls.
+        # No merge policy/metric rows: this dialog does not know the model's
+        # SAHI profile (preview_tiling reads them from it), so it shows only
+        # the merge threshold it stores.
         self.slice_widget = SliceSettingsWidget(
-            role="infer_yolo", title="Sliced inference (SAHI)"
+            role="infer_yolo",
+            title="Sliced inference (SAHI)",
+            capabilities=SliceWidgetCapabilities(advanced_merge=False),
         )
         self.slice_widget.set_model_input_size(self._model_input_size)
         w = self.slice_widget

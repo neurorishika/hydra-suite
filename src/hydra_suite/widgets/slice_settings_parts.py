@@ -99,6 +99,7 @@ SOURCE_DESCRIPTIONS = {
     "override": "your override of a derived value",
     "profile": "the selected calibration profile",
     "stamped": "stamped on the model",
+    "project": "the project's sliced-training reference body size",
     "dataset": "measured from the project's labelled objects",
     "derived": "computed from the settings above",
     "default": "the backend default",
@@ -129,7 +130,8 @@ class SliceWidgetCapabilities:
 
     ``body_override``: the body size can be overridden (else display-only,
     except a 0 = unknown body, which always stays typeable -- I6).
-    ``advanced_merge``: Advanced shows the merge policy/metric/threshold rows.
+    ``advanced_merge``: Advanced shows the merge policy/metric rows (display
+    only; the merge threshold row is shown for ``infer_yolo`` regardless).
     ``tile_label_formatter``: the host's resolved-tile wording (escalation).
     ``fixed_overlap``: overlap is this constant, shown disabled (SAM2).
     ``full_frame_pass`` / ``execution_knobs``: TrackerKit-only Advanced rows

@@ -182,8 +182,11 @@ def test_unknown_body_is_editable_without_override():
     for role in ("escalate_sam3", "escalate_sam2", "infer_yolo"):
         w = SliceSettingsWidget(role=role)
         w.set_spec(TilingSpec(enabled=True, geometry_mode="auto_object"))
-        w.set_reference_body(0.0, "default")
+        w.set_reference_body(0.0, "dataset")
         assert w.spin_slice_body.isEnabled(), role
+        # Unknown is the user's to enter: badged "user", nothing to override.
+        assert w.source_badge("reference_body_px") == "user"
+        assert w.chk_slice_body_override.isHidden()
         assert "unknown" in w.spin_slice_body.specialValueText()
         w.spin_slice_body.setValue(40.0)
         assert w.spin_slice_body.isEnabled(), role  # never locks mid-edit
@@ -403,3 +406,16 @@ def test_combo_items_have_tooltips():
     for combo in w.findChildren(QComboBox):
         for i in range(combo.count()):
             assert combo.itemData(i, Qt.ItemDataRole.ToolTipRole), combo.objectName()
+
+
+def test_override_appears_only_for_a_derived_body():
+    w = SliceSettingsWidget(role="escalate_sam3")
+    w.set_reference_body(50.0, "user")
+    assert w.chk_slice_body_override.isHidden()
+    w.set_reference_body(50.0, "project")
+    assert "project" in w.lbl_slice_body_badge.toolTip().lower()
+    for source in ("project", "dataset", "stamped", "profile"):
+        w.set_reference_body(50.0, source)
+        assert not w.chk_slice_body_override.isHidden(), source
+        assert w.source_badge("reference_body_px") == source
+        assert not w.spin_slice_body.isEnabled()
