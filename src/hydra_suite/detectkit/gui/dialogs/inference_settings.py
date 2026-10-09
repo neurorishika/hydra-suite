@@ -2,27 +2,33 @@
 
 from __future__ import annotations
 
+from dataclasses import replace
 from statistics import median
 
 from PySide6.QtCore import Qt
 from PySide6.QtWidgets import (
-    QCheckBox,
     QComboBox,
     QDialogButtonBox,
     QDoubleSpinBox,
     QFormLayout,
-    QGridLayout,
     QGroupBox,
-    QHBoxLayout,
     QLabel,
     QPushButton,
-    QSpinBox,
     QVBoxLayout,
     QWidget,
 )
 
 from hydra_suite.detectkit.gui.dialogs._base import DetectKitDialog
-from hydra_suite.utils.tiling_spec import BACKEND_DEFAULTS, FRACTION_MAX, FRACTION_MIN
+from hydra_suite.utils.tiling_spec import (
+    BACKEND_DEFAULTS,
+    FRACTION_MAX,
+    FRACTION_MIN,
+    GEOMETRY_MODES,
+    OVERLAP_MAX,
+    TilingSpec,
+)
+from hydra_suite.widgets.slice_settings import SliceSettingsWidget
+from hydra_suite.widgets.slice_settings_parts import SLICE_SIZE_MAX
 
 from ..models import (
     INFERENCE_CONFIDENCE_FLOOR,
@@ -33,6 +39,11 @@ from ..models import (
 # The runtime preview's single scale when nothing is configured: TrackerKit's
 # inference default from the one defaults table.
 _DEFAULT_INFERENCE_FRACTION = BACKEND_DEFAULTS["yolo_infer"].object_tile_fractions[0]
+
+
+def _clamp(value, lo: float, hi: float) -> float:
+    """Clamp a saved value into the control's range, as the spin boxes did."""
+    return max(lo, min(hi, float(value)))
 
 
 def _device_options(current: str) -> list[str]:
@@ -81,7 +92,7 @@ class InferenceSettingsDialog(DetectKitDialog):
         self._defaults = defaults
         # Only used to SHOW the fraction in pixels; nothing is stored in px.
         self._model_input_size = max(1, int(model_input_size))
-        self.resize(620, 520)
+        self.resize(920, 600)
         self._build_content()
         self.load_from(settings)
         self._buttons.button(QDialogButtonBox.StandardButton.Apply).clicked.connect(
@@ -118,76 +129,29 @@ class InferenceSettingsDialog(DetectKitDialog):
         compute_form.addRow("Display confidence threshold", self.spin_confidence)
         layout.addWidget(compute)
 
-        sahi = QGroupBox("Sliced inference (SAHI)")
-        sahi_layout = QVBoxLayout(sahi)
-        self.chk_sliced = QCheckBox("Enable sliced inference")
-        self.chk_sliced.toggled.connect(self._refresh_enabled_state)
-        sahi_layout.addWidget(self.chk_sliced)
-
         hint = QLabel(
-            "For direct detect, OBB, and segment models. Sequential models retain "
-            "their trained two-stage inference workflow."
+            "Sliced inference applies to direct detect, OBB, and segment models. "
+            "Sequential models retain their trained two-stage inference workflow."
         )
         hint.setWordWrap(True)
-        sahi_layout.addWidget(hint)
-
-        grid = QGridLayout()
-        self.combo_geometry = QComboBox()
-        self.combo_geometry.addItems(["auto_object", "auto_model", "custom"])
-        self.combo_geometry.currentTextChanged.connect(self._refresh_enabled_state)
-        self.spin_object_fraction = QDoubleSpinBox()
-        self.spin_object_fraction.setRange(FRACTION_MIN, FRACTION_MAX)
-        self.spin_object_fraction.setDecimals(3)
-        self.spin_object_fraction.setSingleStep(0.005)
-        self.spin_object_fraction.setToolTip(
-            "Object size as a fraction of the tile (the model input). Larger "
-            "fractions use smaller tiles and can make high-resolution inference "
-            "much slower."
+        layout.addWidget(hint)
+        # The shared SAHI widget (S4): same labels, ranges and resolution as
+        # TrackerKit. Old attribute names stay as aliases of its controls.
+        self.slice_widget = SliceSettingsWidget(
+            role="infer_yolo", title="Sliced inference (SAHI)"
         )
-        self.lbl_scale_px = QLabel()
-        self.spin_object_fraction.valueChanged.connect(self._refresh_scale_px)
-        self.spin_reference_body = QDoubleSpinBox()
-        self.spin_reference_body.setRange(0.0, 16384.0)
-        self.spin_reference_body.setDecimals(1)
-        self.spin_reference_body.setSingleStep(1.0)
-        self.spin_width = QSpinBox()
-        self.spin_width.setRange(0, 16384)
-        self.spin_height = QSpinBox()
-        self.spin_height.setRange(0, 16384)
-        self.spin_overlap = QDoubleSpinBox()
-        self.spin_overlap.setRange(0.0, 0.9)
-        self.spin_overlap.setDecimals(2)
-        self.spin_overlap.setSingleStep(0.05)
-        self.spin_merge = QDoubleSpinBox()
-        self.spin_merge.setRange(0.0, 1.0)
-        self.spin_merge.setDecimals(2)
-        self.spin_merge.setSingleStep(0.05)
-
-        grid.addWidget(QLabel("Geometry mode"), 0, 0)
-        grid.addWidget(self.combo_geometry, 0, 1)
-        grid.addWidget(QLabel("Object scale (fraction of tile)"), 0, 2)
-        object_scale = QWidget()
-        object_scale_layout = QHBoxLayout(object_scale)
-        object_scale_layout.setContentsMargins(0, 0, 0, 0)
-        object_scale_layout.addWidget(self.spin_object_fraction)
-        object_scale_layout.addWidget(self.lbl_scale_px)
-        grid.addWidget(object_scale, 0, 3)
-        grid.addWidget(QLabel("Reference body (px)"), 1, 0)
-        grid.addWidget(self.spin_reference_body, 1, 1)
-        grid.addWidget(QLabel("Tile width / height"), 1, 2)
-        custom_tile = QWidget()
-        custom_tile_layout = QHBoxLayout(custom_tile)
-        custom_tile_layout.setContentsMargins(0, 0, 0, 0)
-        custom_tile_layout.addWidget(self.spin_width)
-        custom_tile_layout.addWidget(QLabel("×"))
-        custom_tile_layout.addWidget(self.spin_height)
-        grid.addWidget(custom_tile, 1, 3)
-        grid.addWidget(QLabel("Tile overlap"), 2, 0)
-        grid.addWidget(self.spin_overlap, 2, 1)
-        grid.addWidget(QLabel("Merge threshold"), 2, 2)
-        grid.addWidget(self.spin_merge, 2, 3)
-        sahi_layout.addLayout(grid)
-        layout.addWidget(sahi)
+        self.slice_widget.set_model_input_size(self._model_input_size)
+        w = self.slice_widget
+        self.chk_sliced = w.chk_slice_enabled
+        self.combo_geometry = w.combo_slice_geometry
+        self.spin_object_fraction = w.spin_slice_object_fraction
+        self.lbl_scale_px = w.lbl_slice_scale_px
+        self.spin_reference_body = w.spin_slice_body
+        self.spin_width = w.spin_slice_tile_w
+        self.spin_height = w.spin_slice_tile_h
+        self.spin_overlap = w.spin_slice_overlap
+        self.spin_merge = w.spin_slice_merge
+        layout.addWidget(self.slice_widget)
 
         self.btn_restore_defaults = QPushButton("Use Project Defaults")
         self.btn_restore_defaults.clicked.connect(
@@ -208,24 +172,30 @@ class InferenceSettingsDialog(DetectKitDialog):
         self.spin_confidence.setValue(float(settings.confidence_threshold))
 
         sliced = settings.slice_settings
-        self.chk_sliced.setChecked(bool(sliced.enabled))
-        index = self.combo_geometry.findText(
-            sliced.geometry_mode, Qt.MatchFlag.MatchFixedString
-        )
-        self.combo_geometry.setCurrentIndex(index if index >= 0 else 0)
         # Fractions only (F1). A legacy pixel project resolves through
         # target_fractions() (pixels / 640 -- how it was always interpreted).
         fractions = [float(value) for value in sliced.target_fractions() if value > 0]
-        self.spin_object_fraction.setValue(
+        fraction = (
             float(median(fractions)) if fractions else _DEFAULT_INFERENCE_FRACTION
         )
-        self.spin_reference_body.setValue(float(sliced.reference_body_px))
-        self.spin_width.setValue(int(sliced.slice_width))
-        self.spin_height.setValue(int(sliced.slice_height))
-        self.spin_overlap.setValue(float(sliced.overlap))
-        self.spin_merge.setValue(float(sliced.merge_threshold))
-        self._refresh_scale_px()
-        self._refresh_enabled_state()
+        spec = replace(
+            TilingSpec.defaults("yolo_infer"),
+            enabled=bool(sliced.enabled),
+            geometry_mode=(
+                sliced.geometry_mode
+                if sliced.geometry_mode in GEOMETRY_MODES
+                else "auto_object"
+            ),
+            object_tile_fractions=(_clamp(fraction, FRACTION_MIN, FRACTION_MAX),),
+            reference_body_px=max(0.0, float(sliced.reference_body_px)),
+            slice_width=int(_clamp(sliced.slice_width, 0, SLICE_SIZE_MAX)),
+            slice_height=int(_clamp(sliced.slice_height, 0, SLICE_SIZE_MAX)),
+            overlap=_clamp(sliced.overlap, 0.0, OVERLAP_MAX),
+            merge_threshold=_clamp(sliced.merge_threshold, 0.0, 1.0),
+        )
+        self.slice_widget.set_spec(
+            spec, extras={"merge_threshold": spec.merge_threshold}
+        )
 
     def settings(self) -> InferenceRunSettings:
         """Return a fresh runtime configuration from the current dialog state."""
@@ -235,7 +205,7 @@ class InferenceSettingsDialog(DetectKitDialog):
             confidence_threshold=float(self.spin_confidence.value()),
             slice_settings=SliceTrainingSettings(
                 enabled=self.chk_sliced.isChecked(),
-                geometry_mode=self.combo_geometry.currentText(),
+                geometry_mode=str(self.combo_geometry.currentData()),
                 # One deliberate runtime scale rather than the training mix,
                 # stored as a fraction only; ``target_sizes`` keeps its default
                 # and is ignored because fractions are present (F1).
@@ -247,22 +217,4 @@ class InferenceSettingsDialog(DetectKitDialog):
                 target_size_fractions=[fraction],
                 merge_threshold=float(self.spin_merge.value()),
             ),
-        )
-
-    def _refresh_enabled_state(self) -> None:
-        sliced = self.chk_sliced.isChecked()
-        geometry = self.combo_geometry.currentText()
-        self.combo_geometry.setEnabled(sliced)
-        self.spin_object_fraction.setEnabled(sliced and geometry == "auto_object")
-        self.spin_reference_body.setEnabled(sliced and geometry == "auto_object")
-        custom = sliced and geometry == "custom"
-        self.spin_width.setEnabled(custom)
-        self.spin_height.setEnabled(custom)
-        self.spin_overlap.setEnabled(sliced)
-        self.spin_merge.setEnabled(sliced)
-
-    def _refresh_scale_px(self, *_args) -> None:
-        pixels = float(self.spin_object_fraction.value()) * self._model_input_size
-        self.lbl_scale_px.setText(
-            f"≈ {pixels:.1f} px at {self._model_input_size} px input"
         )

@@ -1,307 +1,60 @@
-"""Focused SAHI sliced-training controls and a live tile-layout preview."""
+"""DetectKit's SAHI training/preview group on the shared widget (S4 Task 16).
+
+``SliceSettingsGroup`` keeps its name, constructor and host contract
+(``load_from``/``to_settings`` for YOLO, ``load_sam3_tiling``/
+``to_sam3_tiling`` for SAM3) as a thin subclass of the shared
+:class:`~hydra_suite.widgets.slice_settings.SliceSettingsWidget`
+(``train_yolo`` / ``train_sam3`` roles). All translation goes through
+``slice_settings_adapter``.
+
+The two accessor pairs stay mode-gated by construction, so the two
+independent ``full_frame_mix`` fields (YOLO dataset mix, SAM3 full-frame arm)
+can never be cross-assigned. ``min_area_ratio`` stays live in both modes but
+means something different below the floor (YOLO drops the instance; SAM3
+marks it ``iscrowd`` -- decision D3, deliberately not unified); only its
+wording is role-specific.
+"""
 
 from __future__ import annotations
 
-from statistics import median
-
-from PySide6.QtCore import Qt
-from PySide6.QtGui import QColor, QFontMetrics, QPainter, QPen
-from PySide6.QtWidgets import (
-    QCheckBox,
-    QComboBox,
-    QDoubleSpinBox,
-    QGridLayout,
-    QGroupBox,
-    QHBoxLayout,
-    QLabel,
-    QLineEdit,
-    QSpinBox,
-    QWidget,
-)
-
-from hydra_suite.utils.slice_geometry import plan_tiles, tile_size_for_mode
 from hydra_suite.utils.tiling_spec import DEFAULT_YOLO_IMGSZ
+from hydra_suite.widgets.slice_settings import SliceSettingsWidget
+from hydra_suite.widgets.tile_layout_preview import _TileLayoutPreview  # noqa: F401
 
 from ..models import SliceTrainingSettings
+from .slice_settings_adapter import (
+    sam3_tiling_to_spec,
+    settings_to_spec,
+    spec_to_sam3_tiling,
+    spec_to_settings,
+)
+
+# Old attribute name -> shared-widget attribute (decision 28). Read-only
+# aliases so existing callers and tests keep working.
+_LEGACY_ALIASES = {
+    "chk_enabled": "chk_slice_enabled",
+    "cmb_mode": "combo_slice_geometry",
+    "txt_targets": "txt_slice_scales",
+    "spin_w": "spin_slice_tile_w",
+    "spin_h": "spin_slice_tile_h",
+    "spin_overlap": "spin_slice_overlap",
+    "spin_object_fraction": "spin_slice_object_fraction",
+    "spin_min_area": "spin_slice_min_area",
+    "spin_neg": "spin_slice_negative",
+    "spin_merge": "spin_slice_merge",
+    "chk_full": "chk_slice_full_frame_mix",
+    "chk_balance_loss": "chk_slice_balance_loss",
+    "spin_balance_power": "spin_slice_balance_power",
+    "chk_keep_empty": "chk_slice_keep_empty",
+}
 
 
-class _TileLayoutPreview(QWidget):
-    """Draw a compact, schematic view of the tile grid on a sample frame."""
-
-    _FALLBACK_FRAME_WH = (1920, 1080)
-    _SCALE_COLORS = ("#00a6d6", "#d16dff", "#f2a900", "#65c466", "#ff6b6b")
-
-    def __init__(self, parent=None) -> None:
-        super().__init__(parent)
-        self.setMinimumSize(290, 180)
-        self.setToolTip(
-            "A live schematic of the tile grid over a representative labelled source "
-            "frame. Click to compare each image size in the project distribution. "
-            "The automatic body-size estimate is used after the first sliced dataset "
-            "build."
-        )
-        self._mode = "auto_object"
-        self._target_fractions = [0.05, 0.10, 0.15, 0.20]
-        self._slice_wh = (0, 0)
-        self._overlap = 0.2
-        self._model_input_size = DEFAULT_YOLO_IMGSZ
-        self._reference_body_px = 0.0
-        self._frame_wh = self._FALLBACK_FRAME_WH
-        self._uses_fallback_frame = True
-        self._frame_options: list[tuple[int, int, int]] = []
-        self._frame_index = 0
-
-    @property
-    def frame_size(self) -> tuple[int, int]:
-        """Representative source-frame dimensions currently shown by the preview."""
-        return self._frame_wh
-
-    @property
-    def frame_options(self) -> list[tuple[int, int, int]]:
-        """Distinct project frame sizes available to cycle through."""
-        return list(self._frame_options)
-
-    def set_frame_size(self, frame_wh: tuple[int, int] | None) -> None:
-        """Use a project source frame, or the labelled fallback when unavailable."""
-        self.set_frame_options(
-            [] if frame_wh is None else [(frame_wh[0], frame_wh[1], 1)]
-        )
-
-    def set_frame_options(self, options: list[tuple[int, int, int]]) -> None:
-        """Set the project image-size distribution shown by click-to-cycle preview."""
-        current = self._frame_wh
-        counts: dict[tuple[int, int], int] = {}
-        for width, height, count in options:
-            if int(width) <= 0 or int(height) <= 0 or int(count) <= 0:
-                continue
-            size = (int(width), int(height))
-            counts[size] = counts.get(size, 0) + int(count)
-        self._frame_options = [
-            (width, height, count)
-            for (width, height), count in sorted(
-                counts.items(), key=lambda item: (-item[1], item[0])
-            )
-        ]
-        if not self._frame_options:
-            self._frame_wh = self._FALLBACK_FRAME_WH
-            self._uses_fallback_frame = True
-        else:
-            self._uses_fallback_frame = False
-            self._frame_index = next(
-                (
-                    index
-                    for index, (width, height, _count) in enumerate(self._frame_options)
-                    if (width, height) == current
-                ),
-                0,
-            )
-            width, height, _count = self._frame_options[self._frame_index]
-            self._frame_wh = (width, height)
-        self.update()
-
-    def mousePressEvent(self, event) -> None:  # noqa: N802 - Qt override
-        if event.button() == Qt.MouseButton.LeftButton and len(self._frame_options) > 1:
-            self._frame_index = (self._frame_index + 1) % len(self._frame_options)
-            width, height, _count = self._frame_options[self._frame_index]
-            self._frame_wh = (width, height)
-            self.update()
-            event.accept()
-            return
-        super().mousePressEvent(event)
-
-    def set_settings(
-        self,
-        *,
-        mode: str,
-        target_fractions: list[float],
-        slice_width: int,
-        slice_height: int,
-        overlap: float,
-        model_input_size: int,
-        reference_body_px: float,
-    ) -> None:
-        self._mode = mode
-        self._target_fractions = target_fractions
-        self._slice_wh = (slice_width, slice_height)
-        self._overlap = overlap
-        self._model_input_size = max(1, int(model_input_size))
-        self._reference_body_px = max(0.0, float(reference_body_px))
-        self.update()
-
-    def _tile_specs(self) -> list[tuple[float | None, int, int, str]]:
-        """Return every visible SAHI target scale and its resolved tile geometry."""
-        reference = self._reference_body_px
-        if self._mode == "auto_object" and reference <= 0.0:
-            # Labels have not been measured before the first build. This keeps
-            # the preview useful without presenting an illustrative value as a
-            # real measurement.
-            reference = self._frame_wh[1] / 18.0
-        fractions = self._target_fractions if self._mode == "auto_object" else [None]
-        specs: list[tuple[float | None, int, int, str]] = []
-        for index, fraction in enumerate(fractions):
-            tile_w, tile_h = tile_size_for_mode(
-                geometry_mode=self._mode,
-                imgsz=self._model_input_size,
-                reference_body_px=reference,
-                object_tile_fraction=(
-                    float(fraction) if fraction is not None else 0.15
-                ),
-                slice_width=self._slice_wh[0],
-                slice_height=self._slice_wh[1],
-            )
-            if (fraction, tile_w, tile_h) not in [spec[:3] for spec in specs]:
-                specs.append(
-                    (
-                        fraction,
-                        tile_w,
-                        tile_h,
-                        self._SCALE_COLORS[index % len(self._SCALE_COLORS)],
-                    )
-                )
-        return specs or [
-            (None, self._model_input_size, self._model_input_size, "#00a6d6")
-        ]
-
-    def paintEvent(self, _event) -> None:  # noqa: N802 - Qt override
-        painter = QPainter(self)
-        painter.setRenderHint(QPainter.RenderHint.Antialiasing)
-        painter.fillRect(self.rect(), QColor("#202020"))
-
-        margin, top = 12, 26
-        available_w = max(1, self.width() - 2 * margin)
-        available_h = max(1, self.height() - top - 56)
-        scale = min(available_w / self._frame_wh[0], available_h / self._frame_wh[1])
-        draw_w, draw_h = int(self._frame_wh[0] * scale), int(self._frame_wh[1] * scale)
-        x = (self.width() - draw_w) // 2
-        y = top + (available_h - draw_h) // 2
-
-        painter.setPen(QPen(QColor("#808080"), 1))
-        painter.setBrush(QColor("#111111"))
-        painter.drawRect(x, y, draw_w, draw_h)
-
-        specs = self._tile_specs()
-        grid_spec = specs[len(specs) // 2]
-        _fraction, tile_w, tile_h, color = grid_spec
-        try:
-            plan = plan_tiles(
-                (self._frame_wh[1], self._frame_wh[0]),
-                tile_w,
-                tile_h,
-                self._overlap,
-                self._overlap,
-            )
-            tiles = plan.tiles
-        except ValueError:
-            tiles = []
-
-        painter.setPen(QPen(QColor(color), 1.2))
-        painter.setBrush(Qt.BrushStyle.NoBrush)
-        for x0, y0, x1, y1 in tiles:
-            painter.drawRect(
-                x + round(x0 * scale),
-                y + round(y0 * scale),
-                max(1, round((x1 - x0) * scale)),
-                max(1, round((y1 - y0) * scale)),
-            )
-
-        # The median scale supplies the full grid. The other target scales are
-        # nested at the origin so their different tile extents remain legible.
-        for fraction, other_w, other_h, other_color in specs:
-            if (fraction, other_w, other_h, other_color) == grid_spec:
-                continue
-            pen = QPen(QColor(other_color), 1.4, Qt.PenStyle.DashLine)
-            painter.setPen(pen)
-            painter.drawRect(
-                x,
-                y,
-                max(1, round(other_w * scale)),
-                max(1, round(other_h * scale)),
-            )
-
-        painter.setPen(QColor("#f0f0f0"))
-        title = f"Tile layout on a {self._frame_wh[0]} × {self._frame_wh[1]} image"
-        if len(self._frame_options) > 1:
-            title += " · click to compare"
-        painter.drawText(
-            margin,
-            17,
-            QFontMetrics(painter.font()).elidedText(
-                title, Qt.TextElideMode.ElideRight, self.width() - 2 * margin
-            ),
-        )
-        note = (
-            "uses last label measurement"
-            if self._reference_body_px > 0.0 and self._mode == "auto_object"
-            else (
-                "illustrative until labels are measured"
-                if self._mode == "auto_object"
-                else ""
-            )
-        )
-        if self._uses_fallback_frame:
-            frame_note = "fallback frame"
-        else:
-            _width, _height, count = self._frame_options[self._frame_index]
-            frame_note = f"project size {self._frame_index + 1}/{len(self._frame_options)} · {count} frame(s)"
-        tile_note = f"{len(tiles)} tiles · {tile_w} × {tile_h} px · {frame_note}"
-        painter.setPen(QColor("#c0c0c0"))
-        painter.drawText(
-            margin,
-            self.height() - 34,
-            QFontMetrics(painter.font()).elidedText(
-                f"{tile_note} {note}".strip(),
-                Qt.TextElideMode.ElideRight,
-                self.width() - 2 * margin,
-            ),
-        )
-        scale_note = (
-            " · ".join(
-                f"● {fraction:.2f} → {width} px"
-                for fraction, width, _height, _color in specs
-                if fraction is not None
-            )
-            or f"● {tile_w} × {tile_h} px"
-        )
-        painter.drawText(
-            margin,
-            self.height() - 17,
-            QFontMetrics(painter.font()).elidedText(
-                f"Scales: {scale_note}",
-                Qt.TextElideMode.ElideRight,
-                self.width() - 2 * margin,
-            ),
-        )
+def _alias(name: str) -> property:
+    return property(lambda self: getattr(self, name), doc=f"Legacy alias of {name}.")
 
 
-class SliceSettingsGroup(QGroupBox):
-    """SAHI settings that reveal only controls relevant to the geometry mode.
-
-    One widget, two backends. ``backend="yolo"`` is the historical YOLO
-    sliced-training/preview contract and is unchanged. ``backend="sam3"``
-    drives SAM3 LoRA tiling, which shares the scale-set semantics exactly
-    (``target_size_fraction`` and ``object_tile_fraction`` are the SAME
-    quantity for a square tile resized to the model input) but differs in
-    three ways that are enforced structurally here rather than by
-    convention:
-
-    * SAM3 runs at 1008 px, not 640, so SAM3 mode emits NO pixel list at
-      all. ``resolve_scales`` takes no pixel parameter, so SAM3 structurally
-      consumes only fractions; a 640-anchored ``target_sizes`` would be a
-      silent 1.575x shift.
-    * Controls with no field on ``Sam3LoraParams`` (empty-tile sampling
-      fraction, preview merge threshold, multi-scale loss balancing, and the
-      enable toggle) are hidden in SAM3 mode -- nothing they set could reach
-      SAM3 training.
-    * ``min_area_ratio`` stays live in BOTH modes but means something
-      different below the floor (YOLO drops the instance; SAM3 marks it
-      ``iscrowd`` and downgrades exhaustiveness -- decision D3, deliberately
-      not unified). Only the label/tooltip is mode-specific.
-
-    The two accessor pairs are mode-gated by construction
-    (``to_settings``/``load_from`` are YOLO-only; ``to_sam3_tiling``/
-    ``load_sam3_tiling`` are SAM3-only) so the two independent
-    ``full_frame_mix`` fields can never be cross-assigned.
-    """
+class SliceSettingsGroup(SliceSettingsWidget):
+    """SAHI sliced-training settings for the YOLO (default) or SAM3 backend."""
 
     _DEFAULT_MODEL_INPUT_SIZE = DEFAULT_YOLO_IMGSZ
     _SAM3_MODEL_INPUT_SIZE = 1008
@@ -309,353 +62,26 @@ class SliceSettingsGroup(QGroupBox):
     def __init__(self, parent=None, *, backend: str = "yolo") -> None:
         if backend not in ("yolo", "sam3"):
             raise ValueError(f"unknown slice-settings backend: {backend!r}")
+        self._backend = backend
         super().__init__(
-            (
+            parent,
+            role="train_sam3" if backend == "sam3" else "train_yolo",
+            title=(
                 "Tiling (SAHI geometry)"
                 if backend == "sam3"
                 else "Sliced dataset / inference (SAHI)"
             ),
-            parent,
         )
-        self._backend = backend
-        self._model_input_size = (
+        self.set_model_input_size(
             self._SAM3_MODEL_INPUT_SIZE
             if backend == "sam3"
             else self._DEFAULT_MODEL_INPUT_SIZE
         )
-        self._reference_body_px = 0.0
-        outer = QHBoxLayout(self)
-        outer.setContentsMargins(16, 18, 16, 14)
-        outer.setSpacing(18)
 
-        controls = QWidget()
-        grid = QGridLayout(controls)
-        grid.setContentsMargins(0, 0, 0, 0)
-        grid.setHorizontalSpacing(12)
-        grid.setVerticalSpacing(8)
-
-        self.chk_enabled = QCheckBox("Enable sliced training + preview")
-        self.chk_enabled.setToolTip(
-            "Generate sliced training examples and use the same tile geometry for "
-            "DetectKit preview inference."
-        )
-        self.cmb_mode = QComboBox()
-        self.cmb_mode.addItem("Fit labelled objects", "auto_object")
-        self.cmb_mode.addItem("Use model input", "auto_model")
-        self.cmb_mode.addItem("Custom tile size", "custom")
-        self.cmb_mode.setToolTip(
-            "Choose whether tiles follow labelled object scale, the model input size, "
-            "or explicit tile dimensions."
-        )
-        self.txt_targets = QLineEdit()
-        self.txt_targets.setPlaceholderText("e.g. 0.31, 0.47, 0.62")
-        self._refresh_targets_help()
-        self.auto_reference_note = QLabel()
-        self.auto_reference_note.setWordWrap(True)
-        self.auto_reference_note.setStyleSheet("color: #b8d9e6;")
-
-        self.spin_w = QSpinBox()
-        self.spin_w.setRange(0, 8192)
-        self.spin_w.setSpecialValueText("Model input size")
-        self.spin_w.setToolTip(
-            "Custom tile width in source-image pixels. Zero uses the active model "
-            "input size."
-        )
-        self.spin_h = QSpinBox()
-        self.spin_h.setRange(0, 8192)
-        self.spin_h.setSpecialValueText("Model input size")
-        self.spin_h.setToolTip(
-            "Custom tile height in source-image pixels. Zero uses the active model "
-            "input size."
-        )
-        self.spin_overlap = QDoubleSpinBox()
-        self.spin_overlap.setRange(0.0, 0.9)
-        self.spin_overlap.setSingleStep(0.05)
-        self.spin_overlap.setToolTip(
-            "Fraction shared by neighbouring tiles. More overlap protects objects at "
-            "tile edges but creates more inference work."
-        )
-        self.spin_min_area = QDoubleSpinBox()
-        self.spin_min_area.setRange(0.0, 1.0)
-        self.spin_min_area.setSingleStep(0.05)
-        # Same number, different consequence below the floor (D3): YOLO drops
-        # the fragment outright; SAM3 keeps it but marks it `iscrowd`, which
-        # downgrades that tile's exhaustiveness. Load-bearing in both modes,
-        # so only the wording is mode-specific -- never the behaviour.
-        self.spin_min_area.setToolTip(
-            (
-                "Minimum fraction of a labelled object's original area that must lie "
-                "in a tile for that label to stay a full training target. Below this "
-                "floor SAM3 keeps the fragment but marks it 'is_crowd', which "
-                "downgrades the tile's exhaustiveness rather than dropping the label."
-            )
-            if backend == "sam3"
-            else (
-                "Minimum fraction of a labelled object's original area that must lie "
-                "in a tile to keep that label. For example, 0.10 keeps labels with at "
-                "least 10%."
-            )
-        )
-        self.spin_neg = QDoubleSpinBox()
-        self.spin_neg.setRange(0.0, 1.0)
-        self.spin_neg.setSingleStep(0.05)
-        self.spin_neg.setToolTip(
-            "Sampling probability for background-only tiles. For example, 0.15 keeps "
-            "15% of empty tiles."
-        )
-        self.chk_full = QCheckBox("Mix full frames")
-        self.chk_full.setToolTip(
-            "Include unsliced full-frame examples alongside tiles so the model retains "
-            "global context."
-        )
-
-        # SAM3-only controls. `object_tile_fraction` is the SCALAR fallback
-        # used whenever the scale set is empty or the geometry mode is not
-        # `auto_object`; it is never derived from the median of the set, so an
-        # untouched SAM3 build keeps the contract default exactly.
-        self.spin_object_fraction = QDoubleSpinBox()
-        self.spin_object_fraction.setDecimals(4)
-        self.spin_object_fraction.setRange(0.0, 1.0)
-        self.spin_object_fraction.setSingleStep(0.001)
-        self.spin_object_fraction.setToolTip(
-            "Single-scale object size as a fraction of the 1008px SAM3 input. Used "
-            "when no scale set is listed above, or when the tile strategy is not "
-            "'Fit labelled objects'."
-        )
-        self.chk_keep_empty = QCheckBox("Keep empty tiles")
-        self.chk_keep_empty.setToolTip(
-            "Keep tiles that contain no labelled object. SAM3 uses them as negative "
-            "evidence rather than sampling a fraction of them."
-        )
-        self.spin_merge = QDoubleSpinBox()
-        self.spin_merge.setRange(0.0, 1.0)
-        self.spin_merge.setSingleStep(0.05)
-        self.spin_merge.setToolTip(
-            "Overlap threshold used to merge duplicate predictions from neighbouring "
-            "tiles during preview inference."
-        )
-        self.chk_balance_loss = QCheckBox("Balance multi-scale training loss")
-        self.chk_balance_loss.setToolTip(
-            "Keep every generated tile once per epoch, but normalize the detector "
-            "loss so a scale that creates more tiles cannot dominate training."
-        )
-        self.spin_balance_power = QDoubleSpinBox()
-        self.spin_balance_power.setRange(0.0, 1.0)
-        self.spin_balance_power.setSingleStep(0.1)
-        self.spin_balance_power.setToolTip(
-            "0.5 uses square-root inverse-frequency balancing; 1.0 gives exact "
-            "per-scale balance. Full-frame examples keep their normal weight."
-        )
-
-        if backend == "sam3":
-            # Match the `Sam3LoraParams` contract exactly, or a
-            # set_params -> params() round trip silently clamps.
-            self.spin_overlap.setDecimals(3)
-            self.spin_overlap.setRange(0.0, 1.0)
-            self.spin_overlap.setSingleStep(0.01)
-            self.spin_w.setRange(0, 100000)
-            self.spin_h.setRange(0, 100000)
-
-        for control in (
-            self.cmb_mode,
-            self.txt_targets,
-            self.spin_w,
-            self.spin_h,
-            self.spin_overlap,
-            self.spin_min_area,
-            self.spin_neg,
-            self.spin_merge,
-            self.spin_balance_power,
-            self.spin_object_fraction,
-        ):
-            control.setMaximumWidth(210)
-
-        self._rows: dict[str, tuple[QLabel, QWidget]] = {}
-
-        def add_row(row: int, key: str, label: str, control: QWidget) -> None:
-            label_widget = QLabel(label)
-            label_widget.setToolTip(control.toolTip())
-            self._rows[key] = (label_widget, control)
-            grid.addWidget(label_widget, row, 0)
-            grid.addWidget(control, row, 1)
-
-        grid.addWidget(self.chk_enabled, 0, 0, 1, 2)
-        add_row(1, "mode", "Tile strategy", self.cmb_mode)
-        add_row(2, "targets", "Object scale in model input", self.txt_targets)
-        grid.addWidget(self.auto_reference_note, 3, 0, 1, 2)
-        add_row(4, "width", "Tile width", self.spin_w)
-        add_row(5, "height", "Tile height", self.spin_h)
-        add_row(6, "overlap", "Tile overlap", self.spin_overlap)
-        add_row(7, "min_area", "Minimum retained object area", self.spin_min_area)
-        add_row(8, "negative", "Empty-tile sampling fraction", self.spin_neg)
-        grid.addWidget(self.chk_full, 9, 0, 1, 2)
-        add_row(10, "merge", "Merge threshold", self.spin_merge)
-        grid.addWidget(self.chk_balance_loss, 11, 0, 1, 2)
-        add_row(12, "balance_power", "Balance strength", self.spin_balance_power)
-        add_row(
-            13,
-            "object_fraction",
-            "Single-scale object fraction",
-            self.spin_object_fraction,
-        )
-        grid.addWidget(self.chk_keep_empty, 14, 0, 1, 2)
-
-        self.preview = _TileLayoutPreview()
-        outer.addWidget(controls, 0)
-        outer.addWidget(self.preview, 1)
-
-        self.cmb_mode.currentIndexChanged.connect(self._refresh_mode_controls)
-        for signal in (
-            self.txt_targets.textChanged,
-            self.spin_w.valueChanged,
-            self.spin_h.valueChanged,
-            self.spin_overlap.valueChanged,
-            self.spin_object_fraction.valueChanged,
-        ):
-            signal.connect(self._refresh_preview)
-        self._refresh_mode_controls()
-
-    def set_model_input_size(self, imgsz: int) -> None:
-        """Set the active model input size used to resolve relative scales."""
-        self._model_input_size = max(1, int(imgsz))
-        self._refresh_targets_help()
-        self._refresh_preview()
-
-    def _refresh_targets_help(self) -> None:
-        # Worked example at the REAL model input, never a literal 640 (F1).
-        size = self._model_input_size
-        self.txt_targets.setToolTip(
-            f"Object size as a fraction of the model input. At a {size}px input, "
-            f"0.31 means about {0.31 * size:.0f}px. Larger fractions create "
-            "smaller tiles."
-        )
-        row = getattr(self, "_rows", {}).get("targets")
-        if row is not None:
-            row[0].setToolTip(self.txt_targets.toolTip())
-
-    def set_preview_frame_size(self, frame_wh: tuple[int, int] | None) -> None:
-        """Use a representative project frame for the tile-layout schematic."""
-        self.preview.set_frame_size(frame_wh)
-
-    def set_preview_frame_options(self, options: list[tuple[int, int, int]]) -> None:
-        """Set every labelled project frame size available for preview comparison."""
-        self.preview.set_frame_options(options)
-
-    @staticmethod
-    def _format_fractions(fractions: list[float]) -> str:
-        return ", ".join(f"{value:.8g}" for value in fractions)
-
-    def _target_fractions(self) -> list[float]:
-        fractions: list[float] = []
-        for token in self.txt_targets.text().split(","):
-            try:
-                value = float(token.strip())
-            except ValueError:
-                continue
-            if 0.0 < value <= 1.0:
-                fractions.append(value)
-        if self._backend == "sam3":
-            # NEVER fall back to the YOLO default set here. `Sam3LoraParams
-            # .object_tile_fractions` defaults to EMPTY, which means "use the
-            # scalar" -- one accidental fallback would silently turn every
-            # default SAM3 build multi-scale and break the single-scale golden.
-            return fractions
-        return fractions or SliceTrainingSettings().target_fractions()
-
-    def _refresh_mode_controls(self) -> None:
-        mode = str(self.cmb_mode.currentData() or "auto_object")
-        sam3 = self._backend == "sam3"
-        visible = {
-            "mode": True,
-            "targets": mode == "auto_object",
-            "width": mode == "custom",
-            "height": mode == "custom",
-            "overlap": True,
-            "min_area": True,
-            # No `negative_tile_fraction` / `merge_threshold` /
-            # `balance_multiscale_loss*` field exists on `Sam3LoraParams`, so
-            # in SAM3 mode these controls could not reach training at all.
-            "negative": not sam3,
-            "merge": not sam3,
-            "balance_power": (not sam3) and mode == "auto_object",
-            "object_fraction": sam3,
-        }
-        for key, (label, control) in self._rows.items():
-            label.setVisible(visible[key])
-            control.setVisible(visible[key])
-        self.auto_reference_note.setVisible(mode == "auto_object")
-        self.chk_full.setVisible(True)
-        self.chk_keep_empty.setVisible(sam3)
-        # SAM3 always tiles; there is no enable toggle on its contract.
-        self.chk_enabled.setVisible(not sam3)
-        self.chk_balance_loss.setVisible((not sam3) and mode == "auto_object")
-        self._refresh_preview()
-
-    def _refresh_preview(self, *_args) -> None:
-        fractions = self._target_fractions()
-        if self._backend == "sam3" and not fractions:
-            fractions = [self.spin_object_fraction.value()]
-        self.preview.set_settings(
-            mode=str(self.cmb_mode.currentData() or "auto_object"),
-            target_fractions=fractions,
-            slice_width=self.spin_w.value(),
-            slice_height=self.spin_h.value(),
-            overlap=self.spin_overlap.value(),
-            model_input_size=self._model_input_size,
-            reference_body_px=self._reference_body_px,
-        )
-
-    def load_from(self, s: SliceTrainingSettings) -> None:
-        self._require_backend("yolo", "load_from")
-        self.chk_enabled.setChecked(bool(s.enabled))
-        index = self.cmb_mode.findData(s.geometry_mode)
-        self.cmb_mode.setCurrentIndex(index if index >= 0 else 0)
-        self.txt_targets.setText(self._format_fractions(s.target_fractions()))
-        self.spin_w.setValue(int(s.slice_width))
-        self.spin_h.setValue(int(s.slice_height))
-        self.spin_overlap.setValue(float(s.overlap))
-        self.spin_min_area.setValue(float(s.min_area_ratio))
-        self.spin_neg.setValue(float(s.negative_tile_fraction))
-        self.chk_full.setChecked(bool(s.full_frame_mix))
-        self.spin_merge.setValue(float(s.merge_threshold))
-        self.chk_balance_loss.setChecked(bool(s.balance_multiscale_loss))
-        self.spin_balance_power.setValue(float(s.balance_multiscale_loss_power))
-        self._reference_body_px = float(s.reference_body_px)
-        if s.reference_body_px > 0.0:
-            self.auto_reference_note.setText(
-                f"Reference body is measured automatically from labels. Last build: {s.reference_body_px:.1f}px."
-            )
-        else:
-            self.auto_reference_note.setText(
-                "Reference body is measured automatically from all labelled objects when the sliced dataset is built."
-            )
-        self._refresh_mode_controls()
-
-    def to_settings(self) -> SliceTrainingSettings:
-        self._require_backend("yolo", "to_settings")
-        fractions = self._target_fractions()
-        return SliceTrainingSettings(
-            enabled=self.chk_enabled.isChecked(),
-            geometry_mode=str(self.cmb_mode.currentData() or "auto_object"),
-            object_tile_fraction=float(median(fractions)),
-            # This is output metadata from the previous build, not a user
-            # override. Dataset preparation always remeasures labels.
-            reference_body_px=self._reference_body_px,
-            slice_width=self.spin_w.value(),
-            slice_height=self.spin_h.value(),
-            overlap=self.spin_overlap.value(),
-            min_area_ratio=self.spin_min_area.value(),
-            negative_tile_fraction=self.spin_neg.value(),
-            # Fractions only (F1, deviation 21): ``target_sizes`` keeps its
-            # dataclass default and is ignored whenever fractions are present.
-            target_size_fractions=fractions,
-            full_frame_mix=self.chk_full.isChecked(),
-            merge_threshold=self.spin_merge.value(),
-            balance_multiscale_loss=self.chk_balance_loss.isChecked(),
-            balance_multiscale_loss_power=self.spin_balance_power.value(),
-        )
-
-    # -- backend gating ---------------------------------------------------
+    @property
+    def backend(self) -> str:
+        """Which training path this widget is wired to (``yolo`` or ``sam3``)."""
+        return self._backend
 
     def _require_backend(self, backend: str, method: str) -> None:
         if self._backend != backend:
@@ -664,10 +90,16 @@ class SliceSettingsGroup(QGroupBox):
                 f"this one is {self._backend!r}."
             )
 
-    @property
-    def backend(self) -> str:
-        """Which training path this widget is wired to (``yolo`` or ``sam3``)."""
-        return self._backend
+    # -- YOLO accessors ---------------------------------------------------
+
+    def load_from(self, s: SliceTrainingSettings) -> None:
+        self._require_backend("yolo", "load_from")
+        spec, extras = settings_to_spec(s)
+        self.set_spec(spec, extras=extras)
+
+    def to_settings(self) -> SliceTrainingSettings:
+        self._require_backend("yolo", "to_settings")
+        return spec_to_settings(self.spec(), self.extras())
 
     # -- SAM3 accessors ---------------------------------------------------
 
@@ -686,36 +118,27 @@ class SliceSettingsGroup(QGroupBox):
     ) -> None:
         """Load SAM3 tiling values (primitives, so the widget stays contract-free)."""
         self._require_backend("sam3", "load_sam3_tiling")
-        index = self.cmb_mode.findData(geometry_mode)
-        self.cmb_mode.setCurrentIndex(index if index >= 0 else 0)
-        self.spin_object_fraction.setValue(float(object_tile_fraction))
-        fractions = [float(value) for value in object_tile_fractions]
-        self.txt_targets.setText(self._format_fractions(fractions) if fractions else "")
-        self.chk_full.setChecked(bool(full_frame_mix))
-        self.spin_w.setValue(int(slice_width))
-        self.spin_h.setValue(int(slice_height))
-        self.spin_overlap.setValue(float(tile_overlap))
-        self.chk_keep_empty.setChecked(bool(keep_empty_tiles))
-        self.spin_min_area.setValue(float(min_area_ratio))
-        self._refresh_mode_controls()
+        spec, extras = sam3_tiling_to_spec(
+            {
+                "geometry_mode": geometry_mode,
+                "object_tile_fraction": object_tile_fraction,
+                "object_tile_fractions": object_tile_fractions,
+                "full_frame_mix": full_frame_mix,
+                "slice_width": slice_width,
+                "slice_height": slice_height,
+                "tile_overlap": tile_overlap,
+                "keep_empty_tiles": keep_empty_tiles,
+                "min_area_ratio": min_area_ratio,
+            }
+        )
+        self.set_spec(spec, extras=extras)
 
     def to_sam3_tiling(self) -> dict:
-        """Return the SAM3 tiling kwargs for ``Sam3LoraParams``.
-
-        Deliberately emits NO pixel list: ``resolve_scales`` takes no pixel
-        parameter, so SAM3 consumes only fractions. A ``target_sizes``-style
-        list computed at 640 would be a silent 1.575x shift against SAM3's
-        1008px input.
-        """
+        """Return the nine SAM3 tiling kwargs for ``Sam3LoraParams`` (no px list)."""
         self._require_backend("sam3", "to_sam3_tiling")
-        return {
-            "geometry_mode": str(self.cmb_mode.currentData() or "auto_object"),
-            "object_tile_fraction": self.spin_object_fraction.value(),
-            "object_tile_fractions": tuple(self._target_fractions()),
-            "full_frame_mix": self.chk_full.isChecked(),
-            "slice_width": self.spin_w.value(),
-            "slice_height": self.spin_h.value(),
-            "tile_overlap": self.spin_overlap.value(),
-            "keep_empty_tiles": self.chk_keep_empty.isChecked(),
-            "min_area_ratio": self.spin_min_area.value(),
-        }
+        return spec_to_sam3_tiling(self.spec(), self.extras())
+
+
+for _old, _new in _LEGACY_ALIASES.items():
+    setattr(SliceSettingsGroup, _old, _alias(_new))
+del _old, _new

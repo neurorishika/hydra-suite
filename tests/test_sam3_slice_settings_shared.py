@@ -102,6 +102,8 @@ def test_hidden_sam3_controls_have_no_contract_field(qapp):
         assert name not in emitted
 
     widget.show()
+    # S4: these rows live in the collapsed-by-default Advanced section.
+    widget.set_advanced_expanded(True)
     assert widget.spin_neg.isVisible() is False
     assert widget.spin_merge.isVisible() is False
     assert widget.chk_balance_loss.isVisible() is False

@@ -134,7 +134,7 @@ class SliceSettingsWidget(QGroupBox):
         self.chk_slice_enabled = QCheckBox(
             "Enable sliced training + preview"
             if role == "train_yolo"
-            else "Sliced inference (SAHI)"
+            else "Enable sliced inference"
         )
         self.chk_slice_enabled.setToolTip(
             "Generate sliced training examples and use the same tile geometry for "
@@ -615,7 +615,13 @@ class SliceSettingsWidget(QGroupBox):
         self.combo_slice_merge_policy.setEnabled(False)
         self.combo_slice_merge_metric.setEnabled(False)
         self.combo_slice_fragment_policy.setEnabled(False)
-        self._load_spec(self._base, {})
+        base, extras = self._base, {}
+        if self._role == "train_sam3":
+            # SAM3's scale SET defaults to empty (= use the scalar), so the
+            # defaults-table scale seeds the scalar, never the set.
+            extras = {"object_tile_fraction": base.object_tile_fractions[0]}
+            base = replace(base, object_tile_fractions=())
+        self._load_spec(base, extras)
 
     # ------------------------------------------------------------ public API
 
