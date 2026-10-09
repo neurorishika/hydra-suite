@@ -10,7 +10,7 @@ from __future__ import annotations
 
 import logging
 import math
-from dataclasses import asdict, dataclass
+from dataclasses import asdict, dataclass, replace
 from typing import Any, Literal, NamedTuple
 
 import numpy as np
@@ -235,3 +235,282 @@ class TilingSpec:
         data = asdict(self)
         data["object_tile_fractions"] = list(self.object_tile_fractions)
         return data
+
+    @classmethod
+    def from_mapping(
+        cls,
+        mapping: Any,
+        *,
+        backend: Backend | None = None,
+        legacy_px_imgsz: float | None = None,
+    ) -> "TilingSpec":
+        """Read-lenient constructor: defaults (or a backend's) overlaid with ``canonicalize``."""
+        canonical, _ = canonicalize(mapping, legacy_px_imgsz=legacy_px_imgsz)
+        return cls.from_canonical(canonical, backend=backend)
+
+    @classmethod
+    def from_canonical(
+        cls, canonical: dict[str, Any], *, backend: Backend | None = None
+    ) -> "TilingSpec":
+        """Build from ``canonicalize`` output (avoids canonicalizing twice)."""
+        base = cls.defaults(backend) if backend else cls()
+        return replace(
+            base, **{k: v for k, v in canonical.items() if k in _SPEC_FIELDS}
+        )
+
+
+# Canonical name -> accepted keys in precedence order (canonical first).
+# The ONLY place legacy SAHI names are translated (spec §3.5).
+SLICE_ALIASES: dict[str, tuple[str, ...]] = {
+    "enabled": ("enabled", "slice_enabled"),
+    "geometry_mode": ("geometry_mode", "slice_geometry_mode"),
+    "reference_body_px": (
+        "reference_body_px",
+        "trained_body_px",
+        "slice_trained_body_px",
+        "measured_reference_body_px",
+    ),
+    "slice_width": ("slice_width",),
+    "slice_height": ("slice_height",),
+    "overlap": (
+        "overlap",
+        "slice_overlap",
+        "tile_overlap",
+        "overlap_width_ratio",
+        "overlap_height_ratio",
+    ),
+    "min_area_ratio": ("min_area_ratio", "min_retained_area_frac"),
+    "fragment_policy": ("fragment_policy",),
+    "merge_policy": ("merge_policy", "slice_merge_policy"),
+    "merge_metric": ("merge_metric", "slice_merge_metric"),
+    "merge_threshold": ("merge_threshold", "slice_merge_threshold", "merge_iou"),
+}
+_FRACTION_SET_KEYS = ("object_tile_fractions", "target_size_fractions")
+_FRACTION_SCALAR_KEYS = (
+    "object_tile_fraction",
+    "slice_object_tile_fraction",
+    "prefill_object_tile_fraction",
+    "tile_fraction",
+)
+_LEGACY_PX_KEY = "target_sizes"
+# slice_meta._training_values' literal fallback; mirrored for bit-exact reads.
+_LEGACY_READER_DEFAULT_FRACTION = 0.15
+
+
+def _as_list(raw: Any) -> list[Any]:
+    if raw is None or isinstance(raw, (str, bytes)):
+        return []
+    if isinstance(raw, (list, tuple)):
+        return list(raw)
+    return [raw]
+
+
+def _fraction_list(raw: Any) -> list[float]:
+    out: list[float] = []
+    for item in _as_list(raw):
+        value = _finite(item)
+        if value is not None and 0.0 < value <= 1.0:
+            out.append(value)
+    return out
+
+
+_WARNED: set[tuple[str, str]] = set()
+
+_DROP = object()  # sentinel: _normalize found the value unusable
+
+
+def _warn_once(name: str, value: Any, message: str, *args: Any) -> None:
+    """Legacy-value warnings fire once per (field, value) per process."""
+    key = (name, repr(value))
+    if key in _WARNED:
+        return
+    _WARNED.add(key)
+    logger.warning(message, *args)
+
+
+def _clamped(name: str, value: float, lo: float, hi: float) -> float:
+    if value < lo or value > hi:
+        clamped = max(lo, min(hi, value))
+        _warn_once(
+            name,
+            value,
+            "SAHI %s=%r is outside [%s, %s]; using %s",
+            name,
+            value,
+            lo,
+            hi,
+            clamped,
+        )
+        return clamped
+    return value
+
+
+def _parse_bool(raw: Any) -> bool:
+    if isinstance(raw, str):
+        return raw.strip().lower() not in ("", "0", "false", "no", "off")
+    return bool(raw)
+
+
+def _positive_int(raw: Any) -> int:
+    """An image size usable as a denominator, else 0."""
+    value = _finite(raw)
+    if value is None or value < 1:
+        return 0
+    return min(8192, int(value))
+
+
+def _normalize(name: str, raw: Any) -> Any:
+    """Lenient per-field read. Returns _DROP when the value is unusable."""
+    if name == "enabled":
+        return _parse_bool(raw)
+    if name in ("geometry_mode", "fragment_policy", "merge_metric", "merge_policy"):
+        value = str(raw)
+        if name == "merge_policy" and value == "nmm":
+            return "greedy_nmm"
+        allowed = {
+            "geometry_mode": GEOMETRY_MODES,
+            "fragment_policy": FRAGMENT_POLICIES,
+            "merge_metric": MERGE_METRICS,
+            "merge_policy": MERGE_POLICIES,
+        }[name]
+        if value not in allowed:
+            _warn_once(
+                name,
+                value,
+                "SAHI %s=%r is not one of %s; ignoring it",
+                name,
+                value,
+                allowed,
+            )
+            return _DROP
+        return value
+    number = _finite(raw)
+    if number is None:
+        _warn_once(
+            name, raw, "SAHI %s=%r is not a finite number; ignoring it", name, raw
+        )
+        return _DROP
+    if name in ("slice_width", "slice_height"):
+        return int(_clamped(name, float(int(number)), 0, 8192))
+    if name == "reference_body_px":
+        if number < 0:
+            _warn_once(
+                name,
+                number,
+                "SAHI reference_body_px=%r is negative; ignoring it",
+                number,
+            )
+            return _DROP
+        return number
+    if name == "overlap":
+        return _clamped(name, number, 0.0, OVERLAP_MAX)
+    return _clamped(name, number, 0.0, 1.0)  # min_area_ratio, merge_threshold
+
+
+def canonicalize(
+    mapping: Any, *, legacy_px_imgsz: float | None = None
+) -> tuple[dict[str, Any], dict[str, Any]]:
+    """Translate any SAHI mapping (config, project, plan, sidecar) to canonical keys.
+
+    Read-lenient: out-of-range values are clamped or dropped with a warning,
+    never raised. Returns ``(canonical, extras)``; ``extras`` keeps every key
+    this function did not consume, unchanged.
+    """
+    src = dict(mapping or {})
+    canonical: dict[str, Any] = {}
+    consumed: set[str] = set()
+
+    for name, aliases in SLICE_ALIASES.items():
+        present = [key for key in aliases if key in src and src[key] is not None]
+        consumed.update(key for key in aliases if key in src)
+        if not present:
+            continue
+        chosen = present[0]
+        value = _normalize(name, src[chosen])
+        if value is _DROP:
+            continue
+        canonical[name] = value
+        if name == "overlap" and {"overlap_width_ratio", "overlap_height_ratio"} <= set(
+            present
+        ):
+            if src["overlap_width_ratio"] != src["overlap_height_ratio"]:
+                _warn_once(
+                    "overlap_axes",
+                    (src["overlap_width_ratio"], src["overlap_height_ratio"]),
+                    "SAHI overlap_width_ratio=%r and overlap_height_ratio=%r differ; "
+                    "the canonical single overlap uses the width ratio",
+                    src["overlap_width_ratio"],
+                    src["overlap_height_ratio"],
+                )
+        if chosen == "merge_iou" and not any(
+            key in src for key in SLICE_ALIASES["merge_metric"]
+        ):
+            canonical["merge_metric"] = "polygon_iou"
+
+    fractions: list[float] = []
+    for key in _FRACTION_SET_KEYS:
+        consumed.add(key)
+        fractions = _fraction_list(src.get(key))
+        if fractions:
+            break
+
+    consumed.add(_LEGACY_PX_KEY)
+    raw_targets = [_finite(t) for t in _as_list(src.get(_LEGACY_PX_KEY))]
+    raw_targets = [t for t in raw_targets if t is not None]
+    stated_imgsz = _positive_int(src.get("imgsz"))
+    if not fractions and any(t > 0 for t in raw_targets):
+        denominator = stated_imgsz or _finite(legacy_px_imgsz)
+        if not denominator or denominator <= 0:
+            raise ValueError(
+                "target_sizes are pixels at a model input size; the mapping has no "
+                "imgsz, so pass legacy_px_imgsz (640 for legacy YOLO) explicitly"
+            )
+        fractions = [
+            t / denominator for t in raw_targets if 0.0 < t / denominator <= 1.0
+        ]
+    # operating_fraction mirrors core/inference/slice_meta._training_values
+    # bit-for-bit (what TrackerKit serves today), then a stamped prefill.
+    if raw_targets and stated_imgsz:
+        canonical["operating_fraction"] = _clamp_fraction(
+            float(np.median(np.asarray(raw_targets))) / stated_imgsz
+        )
+
+    for key in _FRACTION_SCALAR_KEYS:
+        consumed.add(key)
+    if not fractions:
+        for key in _FRACTION_SCALAR_KEYS:
+            if key not in src:
+                continue
+            if key == "tile_fraction":
+                value = _finite(src[key])
+                if value is None or value <= 0:
+                    canonical.setdefault("enabled", False)
+                    break
+            got = _fraction_list(src[key])
+            if got:
+                fractions = got[:1]
+                break
+            if src[key] is not None:
+                _warn_once(
+                    key,
+                    src[key],
+                    "SAHI %s=%r is outside (0, 1]; ignoring it",
+                    key,
+                    src[key],
+                )
+    if fractions:
+        canonical["object_tile_fractions"] = tuple(fractions)
+
+    prefill = _finite(src.get("prefill_object_tile_fraction"))
+    if "operating_fraction" not in canonical and prefill is not None and prefill > 0:
+        canonical["operating_fraction"] = _clamp_fraction(prefill)
+    if "operating_fraction" not in canonical and (
+        "object_tile_fraction" in src or raw_targets
+    ):
+        bare = _finite(src.get("object_tile_fraction"))
+        canonical["operating_fraction"] = (
+            _LEGACY_READER_DEFAULT_FRACTION if bare is None else _clamp_fraction(bare)
+        )
+
+    extras = {key: value for key, value in src.items() if key not in consumed}
+    return canonical, extras
