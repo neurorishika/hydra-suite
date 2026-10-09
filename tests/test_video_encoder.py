@@ -94,7 +94,7 @@ def test_video_encoder_auto_backend_writes_file(tmp_path):
 
 
 def test_video_encoder_pyav_write_uses_bgr_input(monkeypatch: pytest.MonkeyPatch):
-    """PyAV path should ingest BGR frames directly without channel reversal."""
+    """Odd-sized frames (no I420 fast path) ingest BGR directly, no channel reversal."""
     import hydra_suite.utils.video_encoder as ve
 
     class _FakeFrame:
@@ -118,10 +118,10 @@ def test_video_encoder_pyav_write_uses_bgr_input(monkeypatch: pytest.MonkeyPatch
     enc._container = mock.Mock()
     enc._cv_writer = None
 
-    frame = np.zeros((32, 32, 3), dtype=np.uint8)
+    frame = np.zeros((33, 33, 3), dtype=np.uint8)
     enc.write(frame)
 
-    assert calls == [((32, 32, 3), True, "bgr24")]
+    assert calls == [((33, 33, 3), True, "bgr24")]
     enc._container.mux.assert_called_once()
 
 
@@ -219,3 +219,73 @@ def test_try_encode_probe_frame_meets_nvenc_minimum(monkeypatch: pytest.MonkeyPa
     assert (width, height) == seen["frame"]
     assert min(width, height) >= 256
     assert width % 16 == 0 and height % 16 == 0
+
+
+# ── PyAV frame hand-off ───────────────────────────────────────────────────────
+
+
+def _round_trip_mean_bgr(tmp_path, width, height, bgr):
+    av = pytest.importorskip("av")
+    from hydra_suite.utils.video_encoder import VideoEncoder
+
+    path = tmp_path / "rt.mp4"
+    frame = np.empty((height, width, 3), dtype=np.uint8)
+    frame[:] = bgr
+    with VideoEncoder(
+        path, fps=10.0, width=width, height=height, backend="pyav_software"
+    ) as enc:
+        assert enc._backend == "pyav_software"
+        for _ in range(3):
+            enc.write(frame)
+    with av.open(str(path)) as container:
+        decoded = [f.to_ndarray(format="bgr24") for f in container.decode(video=0)]
+    assert len(decoded) == 3
+    return decoded[-1].reshape(-1, 3).mean(axis=0)
+
+
+@pytest.mark.parametrize("width,height", [(64, 48), (65, 49)])
+def test_pyav_write_preserves_bgr_colour(tmp_path, width, height):
+    """Both hand-off paths (even I420 fast path, odd fallback) keep BGR order."""
+    pytest.importorskip("av")
+    import av
+
+    if "libx264" not in av.codecs_available:
+        pytest.skip("libx264 not available")
+    mean = _round_trip_mean_bgr(tmp_path, width, height, (200, 50, 10))
+    assert np.allclose(mean, (200, 50, 10), atol=6), mean
+
+
+def test_pyav_write_even_frame_skips_bgr24_conversion(tmp_path, monkeypatch):
+    """Even-sized frames must not go through PyAV's bgr24 ingest + swscale.
+
+    That path copies the frame row by row under the GIL (~67 ms per 4512x4512
+    frame) and was the render bottleneck once NVENC was in use; cv2's I420
+    conversion plus a plane memcpy is ~7 ms.
+    """
+    av = pytest.importorskip("av")
+    if "libx264" not in av.codecs_available:
+        pytest.skip("libx264 not available")
+    from hydra_suite.utils.video_encoder import VideoEncoder
+
+    formats = []
+    real_cls = av.VideoFrame
+
+    class _SpyVideoFrame:
+        # av.VideoFrame is an immutable extension type, so spy via a proxy.
+        def __call__(self, *args, **kwargs):
+            return real_cls(*args, **kwargs)
+
+        def __getattr__(self, name):
+            return getattr(real_cls, name)
+
+        @staticmethod
+        def from_ndarray(arr, format, **kw):
+            formats.append(format)
+            return real_cls.from_ndarray(arr, format=format, **kw)
+
+    monkeypatch.setattr(av, "VideoFrame", _SpyVideoFrame())
+    with VideoEncoder(
+        tmp_path / "fast.mp4", fps=10.0, width=64, height=48, backend="pyav_software"
+    ) as enc:
+        enc.write(np.zeros((48, 64, 3), dtype=np.uint8))
+    assert "bgr24" not in formats

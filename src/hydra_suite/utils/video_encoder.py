@@ -141,6 +141,40 @@ def probe_video_backend() -> str:
     return _BACKEND_CACHE
 
 
+# ── Frame hand-off ────────────────────────────────────────────────────────────
+
+
+def _yuv420p_frame(av, frame_bgr: np.ndarray):
+    """Build a yuv420p ``av.VideoFrame`` from a C-contiguous BGR uint8 frame.
+
+    PyAV's ``from_ndarray(format="bgr24")`` copies row by row under the GIL and
+    then needs a swscale pass; on 4512x4512 frames that is ~67 ms and was the
+    whole render bottleneck once NVENC encoded in ~4 ms. cv2's I420 conversion
+    (same BT.601 limited-range matrix, rounding differs by <= 3 levels) plus a
+    straight memcpy into the planes is ~7 ms. Odd sizes (no exact 4:2:0 layout)
+    and padded planes keep the original path. A fresh frame per call: the
+    encoder may still hold a reference to the previous one.
+    """
+    height, width = frame_bgr.shape[:2]
+    if width % 2 or height % 2:
+        vf = av.VideoFrame.from_ndarray(frame_bgr, format="bgr24")
+        return vf.reformat(format="yuv420p")
+
+    import cv2
+
+    i420 = cv2.cvtColor(frame_bgr, cv2.COLOR_BGR2YUV_I420)
+    vf = av.VideoFrame(width, height, "yuv420p")
+    y_plane, u_plane, v_plane = vf.planes
+    if y_plane.line_size != width or u_plane.line_size != width // 2:
+        return av.VideoFrame.from_ndarray(i420, format="yuv420p")
+    chroma = i420[height:].reshape(-1)
+    quarter = (width // 2) * (height // 2)
+    y_plane.update(i420[:height])
+    u_plane.update(chroma[:quarter])
+    v_plane.update(chroma[quarter:])
+    return vf
+
+
 # ── VideoEncoder ──────────────────────────────────────────────────────────────
 
 
@@ -279,8 +313,7 @@ class VideoEncoder:
                     if frame_bgr.flags.c_contiguous
                     else np.ascontiguousarray(frame_bgr)
                 )
-                vf = av.VideoFrame.from_ndarray(frame_data, format="bgr24")
-                vf = vf.reformat(format="yuv420p")
+                vf = _yuv420p_frame(av, frame_data)
                 for pkt in self._stream.encode(vf):
                     self._container.mux(pkt)
             except Exception:
