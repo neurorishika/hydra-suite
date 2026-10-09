@@ -136,6 +136,9 @@ class SliceWidgetCapabilities:
     ``fixed_overlap``: overlap is this constant, shown disabled (SAM2).
     ``full_frame_pass`` / ``execution_knobs``: TrackerKit-only Advanced rows
     (extra full-frame pass; tiles per call and memory budget).
+    ``body_display_only``: the host owns the body elsewhere and only shows it
+    (TrackerKit: the model's stamp/profile); never editable, not even an
+    unknown 0, and the host's source badge is kept as given.
     """
 
     body_override: bool = True
@@ -144,6 +147,7 @@ class SliceWidgetCapabilities:
     fixed_overlap: float | None = None
     full_frame_pass: bool = False
     execution_knobs: bool = False
+    body_display_only: bool = False
 
 
 def default_capabilities(role: str) -> SliceWidgetCapabilities:

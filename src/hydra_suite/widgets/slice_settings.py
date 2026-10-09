@@ -348,8 +348,10 @@ class SliceSettingsWidget(QGroupBox):
     def set_reference_body(self, value: float, source: str) -> None:
         """Show a derived body size and its source; read-only until Override."""
         value = max(0.0, float(value or 0.0))
-        # An unknown body is the user's to enter: badged "user".
-        source = source if value > 0 else "user"
+        # An unknown body is the user's to enter: badged "user" (unless the
+        # host only displays a body it owns elsewhere).
+        if value <= 0 and not self._caps.body_display_only:
+            source = "user"
         self._body_derived = (value, source)
         self._body_source = source
         self._set_quietly(self.chk_slice_body_override, False)
@@ -541,6 +543,8 @@ class SliceSettingsWidget(QGroupBox):
         self._apply_visibility()
 
     def _body_editable(self) -> bool:
+        if self._caps.body_display_only:
+            return False
         value, _source = self._body_derived
         if self.chk_slice_body_override.isChecked() or value <= 0:
             return True  # I6: an unknown body always stays typeable

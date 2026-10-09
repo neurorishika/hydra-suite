@@ -203,6 +203,32 @@ def test_body_display_only_without_override_capability():
     assert w.chk_slice_body_override.isHidden()
 
 
+def test_display_only_body_stays_read_only_even_when_unknown():
+    """A host that owns the body elsewhere (TrackerKit: the model's stamp or
+    profile) shows it as a badge only; an unknown 0 must not become an
+    editable control that is bound to nothing."""
+    w = SliceSettingsWidget(
+        role="infer_yolo",
+        capabilities=SliceWidgetCapabilities(
+            body_override=False, body_display_only=True
+        ),
+    )
+    w.chk_slice_enabled.setChecked(True)
+    w.combo_slice_geometry.setCurrentIndex(
+        w.combo_slice_geometry.findData("auto_object")
+    )
+    w.set_reference_body(0.0, "default")
+    assert not w.spin_slice_body.isEnabled()
+    assert w.chk_slice_body_override.isHidden()
+    # The host's source is kept, not rewritten to "user" (it is not the user's).
+    assert w.source_badge("reference_body_px") == "default"
+    w.set_reference_body(75.0, "stamped")
+    assert not w.spin_slice_body.isEnabled()
+    assert w.source_badge("reference_body_px") == "stamped"
+    # Default capabilities keep I6: unknown stays typeable.
+    assert SliceWidgetCapabilities().body_display_only is False
+
+
 def test_overlap_at_or_above_the_whole_animal_minimum_is_left_alone():
     """F7 (decision 22): max(scale) + margin is a MINIMUM, never a nudge down."""
     w = SliceSettingsWidget(role="train_yolo")
