@@ -955,7 +955,12 @@ class InferenceRunner:
     ) -> None:
         from hydra_suite.utils.profiling_process import maybe_arm_process_recorder
 
+        from .stages.slicing import reset_oversize_warnings
+
         maybe_arm_process_recorder()
+        # One run == one runner: the once-per-run oversize-admission WARNING
+        # scope restarts here (before any model load sizes a tile batch).
+        reset_oversize_warnings()
 
         self.config = config
         # Immutable per-run evidence of requested/admitted/effective execution

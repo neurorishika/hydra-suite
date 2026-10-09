@@ -50,8 +50,16 @@ DENSE_MASK_BYTES_PER_PIXEL = 1
 # budget and MAX_TILE_BATCH_BYTES only shrink the batch, down to 1. When even a
 # single item's worst-case estimate exceeds the budget (e.g. 1025 dense masks
 # at 1024px for a segment model) it is admitted anyway and a WARNING is logged
-# once per process for each distinct (description, estimate, budget).
+# once per RUN for each distinct (description, estimate, budget). A run starts
+# when an InferenceRunner is constructed, which calls
+# ``reset_oversize_warnings`` -- the TrackerKit GUI runs tracking in-process,
+# so a process-lifetime set would silence every run after the first.
 _OVERSIZE_WARNED: set[tuple[str, int, int]] = set()
+
+
+def reset_oversize_warnings() -> None:
+    """Start a new run's oversize-warning scope (called by InferenceRunner)."""
+    _OVERSIZE_WARNED.clear()
 
 
 def _warn_oversize_once(description: str, per_job: int, budget: int) -> None:

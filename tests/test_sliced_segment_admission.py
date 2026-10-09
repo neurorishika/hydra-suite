@@ -161,3 +161,47 @@ def test_detect_and_obb_admission_unchanged(caplog):
         )
         assert chunk == min(16, (256 * 1024 * 1024) // per_job) > 1
     assert "batch size 1" not in caplog.text
+
+
+def test_oversize_warning_is_once_per_run_not_once_per_process(caplog):
+    """The GUI runs tracking in-process: each new InferenceRunner (= run) must
+    log the oversize WARNING again, once, even for identical geometry."""
+    from unittest.mock import MagicMock, patch
+
+    from hydra_suite.core.inference.config import build_obb_only_config
+    from hydra_suite.core.inference.runner import InferenceRunner
+
+    cfg = build_obb_only_config(
+        "seg.pt",
+        confidence_threshold=0.25,
+        iou_threshold=0.7,
+        mode="direct",
+        model_task="segment",
+    )
+
+    def _admit():
+        return admitted_tile_chunk_size(
+            _plan(),
+            imgsz=1024,
+            device_tiles=False,
+            requested=16,
+            byte_budget=MAX_TILE_BATCH_BYTES,
+            task="segment",
+            max_detections=MAX_DETECTIONS_PER_FRAME + 1,
+        )
+
+    per_run = []
+    with patch("hydra_suite.core.inference.runner._load_all_models") as ml:
+        ml.return_value = MagicMock(
+            obb=MagicMock(), headtail=None, cnn=[], pose=None, apriltag=None
+        )
+        for _run in range(2):
+            caplog.clear()
+            with caplog.at_level("WARNING"):
+                InferenceRunner(cfg)
+                assert _admit() == 1
+                assert _admit() == 1
+            per_run.append(
+                sum("batch size 1" in r.getMessage() for r in caplog.records)
+            )
+    assert per_run == [1, 1]
