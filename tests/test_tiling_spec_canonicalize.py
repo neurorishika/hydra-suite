@@ -11,7 +11,7 @@ from hydra_suite.utils.tiling_spec import TilingSpec, canonicalize
 def _fresh_warn_once_registry():
     """Warnings fire once per (field, value) per PROCESS; reset so assertions
     on caplog do not depend on test order."""
-    tiling_spec._WARNED.clear()
+    tiling_spec.reset_warnings()
     yield
 
 
@@ -71,9 +71,12 @@ def test_target_sizes_with_imgsz_is_bit_exact_with_trackerkit():
     assert "target_sizes" not in extras
 
 
-def test_target_sizes_without_imgsz_needs_explicit_denominator():
-    with pytest.raises(ValueError, match="imgsz"):
-        canonicalize({"target_sizes": [64, 128]})
+def test_target_sizes_without_imgsz_needs_explicit_denominator(caplog):
+    # D1: never raise; never rescale by an unstated size -> fractions absent.
+    caplog.set_level(logging.WARNING)
+    canonical, _ = canonicalize({"target_sizes": [64, 128]})
+    assert "object_tile_fractions" not in canonical
+    assert "target_sizes" in caplog.text
     canonical, _ = canonicalize({"target_sizes": [64, 128]}, legacy_px_imgsz=640.0)
     assert canonical["object_tile_fractions"] == (0.1, 0.2)
     # Without a stated imgsz TrackerKit ignores target_sizes for the operating
@@ -207,6 +210,8 @@ def test_unusable_imgsz_never_divides(imgsz):
         {"target_sizes": [64], "imgsz": imgsz}, legacy_px_imgsz=640.0
     )
     assert canonical["object_tile_fractions"] == (0.1,)
+    # Unusable imgsz -> no median/imgsz; nothing bare -> legacy 0.15 literal.
+    assert canonical["operating_fraction"] == 0.15
 
 
 @pytest.mark.parametrize(
@@ -234,3 +239,176 @@ def test_repeated_legacy_warning_logged_once(caplog):
 def test_none_and_empty_mapping():
     assert canonicalize(None) == ({}, {})
     assert canonicalize({}) == ({}, {})
+
+
+# --- S1 fix wave -----------------------------------------------------------
+
+
+def test_detectkit_default_settings_payload_never_raises():
+    """D1: the real SliceTrainingSettings default carries target_sizes, no imgsz."""
+    from hydra_suite.detectkit.gui.models import SliceTrainingSettings
+
+    payload = SliceTrainingSettings().to_dict()
+    assert payload["target_sizes"] and "imgsz" not in payload
+    canonical, extras = canonicalize(payload)
+    assert "object_tile_fractions" not in canonical  # never rescaled by a guess
+    assert canonical["operating_fraction"] == 0.1  # bare scalar, like TrackerKit
+    assert "negative_tile_fraction" in extras
+    TilingSpec.from_canonical(canonical, backend="yolo_train")  # constructs
+
+
+@pytest.mark.parametrize(
+    "mapping",
+    [
+        {"imgsz": 10**400},
+        {"imgsz": 10**400, "target_sizes": [64]},
+        {"measured_reference_body_px": 10**400},
+        {"overlap": 10**400},
+        {"object_tile_fraction": 10**400},
+        {"target_sizes": [10**400], "imgsz": 640},
+    ],
+)
+def test_huge_ints_never_raise(mapping):
+    """D2: float(10**400) raises OverflowError; reads stay lenient."""
+    canonicalize(mapping)
+
+
+def test_from_mapping_huge_int_geometry_mode():
+    spec = TilingSpec.from_mapping({"slice_geometry_mode": 10**400})
+    assert spec.geometry_mode == "auto_model"
+
+
+def test_operating_from_sam3_params_set():
+    """D3(c): a SET key beats the bare scalar for the operating scale."""
+    canonical, _ = canonicalize(
+        {"object_tile_fraction": 0.055, "object_tile_fractions": [0.05, 0.1]}
+    )
+    assert canonical["object_tile_fractions"] == (0.05, 0.1)
+    assert canonical["operating_fraction"] == pytest.approx(0.075)
+    assert canonical["operating_fraction"] == float(np.median([0.05, 0.1]))
+
+
+def test_operating_from_slice_training_settings_shape():
+    canonical, _ = canonicalize(
+        {
+            "object_tile_fraction": 0.1,
+            "target_size_fractions": [0.05, 0.1, 0.15, 0.2],
+            "target_sizes": [32, 64, 96, 128],
+        }
+    )
+    assert canonical["object_tile_fractions"] == (0.05, 0.1, 0.15, 0.2)
+    assert canonical["operating_fraction"] == pytest.approx(0.125)
+
+
+def test_operating_from_advanced_config_scalar():
+    """m8: the prefixed scalar also feeds the operating scale."""
+    canonical, _ = canonicalize({"slice_object_tile_fraction": 0.2})
+    assert canonical["operating_fraction"] == 0.2
+
+
+def test_escalation_tile_px_is_custom_square():
+    """D4: SemanticEscalationRequest-shaped tile_px."""
+    canonical, extras = canonicalize({"tile_fraction": 0.05, "tile_px": 512})
+    assert canonical["slice_width"] == canonical["slice_height"] == 512
+    assert canonical["geometry_mode"] == "custom"
+    assert "tile_px" not in extras
+
+
+def test_tile_px_square_pair_and_explicit_mode():
+    canonical, _ = canonicalize({"tile_px": [640, 640], "geometry_mode": "auto_object"})
+    assert canonical["slice_width"] == canonical["slice_height"] == 640
+    assert canonical["geometry_mode"] == "auto_object"
+
+
+def test_tile_px_never_overrides_explicit_slice_size():
+    canonical, _ = canonicalize({"tile_px": 512, "slice_width": 256})
+    assert canonical["slice_width"] == 256
+    assert "slice_height" not in canonical
+    assert "geometry_mode" not in canonical
+
+
+@pytest.mark.parametrize("value", [None, 0, "x", [640, 320], -5])
+def test_tile_px_unusable_is_consumed_and_ignored(value, caplog):
+    caplog.set_level(logging.WARNING)
+    canonical, extras = canonicalize({"tile_px": value})
+    assert "slice_width" not in canonical and "geometry_mode" not in canonical
+    assert "tile_px" not in extras
+    if value not in (None, 0):
+        assert "tile_px" in caplog.text
+
+
+def test_positive_tile_fraction_enables():
+    """D6: an escalation asking for tiles is enabled; explicit enabled wins."""
+    assert canonicalize({"tile_fraction": 0.05})[0]["enabled"] is True
+    assert (
+        canonicalize({"tile_fraction": 0.05, "enabled": False})[0]["enabled"] is False
+    )
+
+
+@pytest.mark.parametrize("mapping", [["a", "b"], "overlap", 42, ("x",)])
+def test_non_mapping_inputs_return_empty(mapping):
+    """m6: non-dict inputs are unreadable, not an exception."""
+    assert canonicalize(mapping) == ({}, {})
+
+
+def test_none_values_never_become_canonical():
+    canonical, _ = canonicalize({"overlap": None, "geometry_mode": None})
+    assert canonical == {}
+
+
+def test_both_fraction_set_keys_always_consumed():
+    """m7"""
+    _, extras = canonicalize(
+        {"object_tile_fractions": [0.1], "target_size_fractions": [0.2]}
+    )
+    assert extras == {}
+
+
+def test_warning_registry_is_bounded():
+    """m9: cleared when full, never stops warning."""
+    for i in range(tiling_spec._WARN_CAP + 10):
+        canonicalize({"overlap": 1.0 + i})
+    assert len(tiling_spec._WARNED) <= tiling_spec._WARN_CAP
+
+
+def test_warning_key_is_truncated():
+    canonicalize({"geometry_mode": "x" * 5000})
+    assert all(len(value) <= 200 for _, value in tiling_spec._WARNED)
+
+
+def _legacy_reader_fraction(geometry):
+    from hydra_suite.core.inference.slice_meta import _training_values
+
+    return _training_values(geometry)["object_tile_fraction"]
+
+
+@pytest.mark.parametrize(
+    "geometry",
+    [
+        {"target_sizes": [32, 64, 96, 128], "imgsz": 640, "object_tile_fraction": 0.1},
+        {"target_sizes": [32, 64, 96, 128], "imgsz": 1024, "object_tile_fraction": 0.1},
+        {"target_sizes": [48, 96], "imgsz": 640},
+        {"target_sizes": [32, 64, 96, 128], "object_tile_fraction": 0.12},
+        {"object_tile_fraction": 0.12},
+        {"object_tile_fraction": 0},
+        {"object_tile_fraction": "x"},
+        {"object_tile_fraction": 2.0},
+        {"target_sizes": [64, 128], "imgsz": 0, "object_tile_fraction": 0.12},
+        {"target_sizes": [64, 128], "imgsz": -640, "object_tile_fraction": 0.12},
+    ],
+)
+def test_operating_fraction_parity_with_trackerkit_reader(geometry):
+    """Code-review 3: bit-exact with slice_meta._training_values."""
+    canonical, _ = canonicalize(geometry)
+    assert canonical["operating_fraction"] == _legacy_reader_fraction(geometry)
+
+
+def test_array_valued_legacy_fields_never_raise():
+    canonicalize(
+        {
+            "tile_px": np.array([512, 512]),
+            "overlap": 0.2,
+            "overlap_width_ratio": np.array([0.2]),
+            "overlap_height_ratio": np.array([0.3, 0.1]),
+        }
+    )
