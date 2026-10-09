@@ -408,7 +408,7 @@ class EvaluationDialog(DetectKitDialog):
         worker.start()
 
     def _on_dataset_analysis_ready(self, result: tuple[str, list[str]]) -> None:
-        if self.sender() is not self._analysis_worker:
+        if self._analysis_worker is None or self.sender() is not self._analysis_worker:
             return
         report, warnings = result
         self._analysis_view.setPlainText(report)
@@ -416,12 +416,12 @@ class EvaluationDialog(DetectKitDialog):
             QMessageBox.warning(self, "Dataset Analysis Warnings", "\n".join(warnings))
 
     def _on_dataset_analysis_error(self, message: str) -> None:
-        if self.sender() is not self._analysis_worker:
+        if self._analysis_worker is None or self.sender() is not self._analysis_worker:
             return
         self._analysis_view.setPlainText(f"Dataset analysis failed: {message}")
 
     def _on_dataset_analysis_finished(self) -> None:
-        if self.sender() is not self._analysis_worker:
+        if self._analysis_worker is None or self.sender() is not self._analysis_worker:
             return
         self._analysis_worker = None
         self.btn_analyze.setEnabled(True)

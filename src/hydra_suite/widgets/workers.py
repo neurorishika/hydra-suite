@@ -94,13 +94,15 @@ class AbandonableWorker(BaseWorker):
         return bool(self._cancel)
 
 
-_QUIT_HOOK_APPS: set[int] = set()
+_QUIT_HOOK_PROPERTY = "hydraAbandonableQuitHook"
 
 
 def _install_abandonable_quit_hook(app: QCoreApplication) -> None:
-    if id(app) in _QUIT_HOOK_APPS:
+    # Marked on the app object itself: an id() key could be reused by a later
+    # QApplication allocated at the same address and skip its hook.
+    if app.property(_QUIT_HOOK_PROPERTY):
         return
-    _QUIT_HOOK_APPS.add(id(app))
+    app.setProperty(_QUIT_HOOK_PROPERTY, True)
     app.aboutToQuit.connect(join_abandonable_workers)
 
 

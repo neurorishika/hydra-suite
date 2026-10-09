@@ -1166,7 +1166,7 @@ class TrainYoloDialog(BaseDialog):
         worker.start()
 
     def _on_size_analysis_ready(self, result: _SizeAnalysisResult) -> None:
-        if self.sender() is not self._analysis_worker:
+        if self._analysis_worker is None or self.sender() is not self._analysis_worker:
             return
         for message in result.skipped:
             self._append_log(message)
@@ -1178,13 +1178,13 @@ class TrainYoloDialog(BaseDialog):
         self._show_crop_previews(result.previews, result.request.crop_imgsz)
 
     def _on_size_analysis_error(self, message: str) -> None:
-        if self.sender() is not self._analysis_worker:
+        if self._analysis_worker is None or self.sender() is not self._analysis_worker:
             return
         self.validation_view.clear()
         QMessageBox.critical(self, "Analysis Failed", message)
 
     def _on_size_analysis_finished(self) -> None:
-        if self.sender() is not self._analysis_worker:
+        if self._analysis_worker is None or self.sender() is not self._analysis_worker:
             return
         self._analysis_worker = None
         self.btn_analyze.setEnabled(True)

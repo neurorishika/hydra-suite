@@ -279,10 +279,16 @@ class _BoundedLogWorker(BaseWorker):
 @dataclass(frozen=True)
 class _DatasetFitRequest:
     cache_key: tuple
-    source_paths: tuple[str, ...]
+    # (path, name, level) for each source that satisfies required_level.
+    sources: tuple[tuple[str, str, str], ...]
+    required_level: GeometryLevel
     pad_ratio: float
     min_crop_size_px: int
     enforce_square: bool
+    # Report-formatting inputs, snapshotted with the analysis settings so a
+    # result is always rendered with the settings it was computed for.
+    imgsz_by_role: tuple[tuple[str, int], ...]
+    selected_roles: tuple[str, ...]
 
 
 @dataclass(frozen=True)
@@ -306,6 +312,8 @@ class _DatasetFitWorker(AbandonableWorker):
         self._request = request
 
     def execute(self) -> None:
+        from hydra_suite.training.contracts import SourceDataset
+        from hydra_suite.training.dataset_builders import resolve_source_path_for_target
         from hydra_suite.training.dataset_inspector import (
             DatasetInspection,
             DatasetItemStore,
@@ -316,9 +324,15 @@ class _DatasetFitWorker(AbandonableWorker):
         request = self._request
         merged = DatasetInspection(root_dir="overview")
         valid_items = 0
-        for source_path in request.source_paths:
+        for path, name, level in request.sources:
             if self.is_cancelled():
                 return
+            source_path = str(
+                resolve_source_path_for_target(
+                    SourceDataset(path=path, name=name, level=level),
+                    request.required_level,
+                )
+            )
             if not Path(source_path).exists():
                 continue
             try:
@@ -2374,11 +2388,8 @@ QTabBar::tab:selected {
             return
 
         try:
+            from hydra_suite.training import dataset_builders  # noqa: F401
             from hydra_suite.training import dataset_inspector  # noqa: F401
-            from hydra_suite.training.contracts import SourceDataset
-            from hydra_suite.training.dataset_builders import (
-                resolve_source_path_for_target,
-            )
         except ImportError:
             self.dataset_fit_status.setText(
                 "Dataset analysis is unavailable because the training inspector could not be imported."
@@ -2387,22 +2398,13 @@ QTabBar::tab:selected {
             return
 
         required_level = self._selected_required_level()
-        source_paths = [
-            str(
-                resolve_source_path_for_target(
-                    SourceDataset(
-                        path=str(src.path).strip(),
-                        name=src.name,
-                        level=getattr(src, "level", "obb"),
-                    ),
-                    required_level,
-                )
-            )
+        sources = tuple(
+            (str(src.path).strip(), src.name, getattr(src, "level", "obb"))
             for src in self._project.sources
             if str(src.path).strip()
             and GeometryLevel.from_str(getattr(src, "level", "obb")) >= required_level
-        ]
-        if not source_paths:
+        )
+        if not sources:
             self.dataset_fit_status.setText("No source datasets configured yet.")
             self.dataset_fit_view.setPlainText(
                 f"Add one or more {required_level.label}-compatible sources to see guidance for this plan."
@@ -2414,10 +2416,19 @@ QTabBar::tab:selected {
 
         request = _DatasetFitRequest(
             cache_key=cache_key,
-            source_paths=tuple(source_paths),
+            sources=sources,
+            required_level=required_level,
             pad_ratio=self.spin_crop_pad.value(),
             min_crop_size_px=self.spin_crop_min_px.value(),
             enforce_square=self.chk_crop_square.isChecked(),
+            imgsz_by_role=(
+                ("seq_crop_obb", self.spin_imgsz_seq_crop_obb.value()),
+                ("obb_direct", self.spin_imgsz_obb_direct.value()),
+                ("detect_direct", self.spin_imgsz_detect_direct.value()),
+                ("segment_direct", self.spin_imgsz_segment_direct.value()),
+                ("seq_crop_segment", self.spin_imgsz_seq_crop_segment.value()),
+            ),
+            selected_roles=tuple(self._selected_role_keys()),
         )
         worker = _DatasetFitWorker(request)
         worker.result_ready.connect(self._on_dataset_fit_ready)
@@ -2426,18 +2437,24 @@ QTabBar::tab:selected {
         self._dataset_fit_worker = worker
         self._sync_overview_refresh_enabled()
         self.dataset_fit_status.setText(
-            f"Analyzing {len(source_paths)} source(s) in the background…"
+            f"Analyzing {len(sources)} source(s) in the background…"
         )
         worker.start()
 
     def _on_dataset_fit_error(self, message: str) -> None:
-        if self.sender() is not self._dataset_fit_worker:
+        if (
+            self._dataset_fit_worker is None
+            or self.sender() is not self._dataset_fit_worker
+        ):
             return
         self.dataset_fit_status.setText(f"Dataset analysis failed: {message}")
         self.dataset_fit_view.setPlainText("")
 
     def _on_dataset_fit_worker_finished(self) -> None:
-        if self.sender() is not self._dataset_fit_worker:
+        if (
+            self._dataset_fit_worker is None
+            or self.sender() is not self._dataset_fit_worker
+        ):
             return
         self._dataset_fit_worker = None
         self._sync_overview_refresh_enabled()
@@ -2459,12 +2476,16 @@ QTabBar::tab:selected {
         self._abandon_source_preview_worker()
 
     def _on_dataset_fit_ready(self, result: _DatasetFitResult) -> None:
-        if self.sender() is not self._dataset_fit_worker:
+        if (
+            self._dataset_fit_worker is None
+            or self.sender() is not self._dataset_fit_worker
+        ):
             return
         stats = result.stats
         valid_items = result.valid_items
         cache_key = result.request.cache_key
-        source_paths = result.request.source_paths
+        sources = result.request.sources
+        imgsz = dict(result.request.imgsz_by_role)
 
         if valid_items <= 0 or stats is None:
             self.dataset_fit_status.setText(
@@ -2480,18 +2501,18 @@ QTabBar::tab:selected {
 
         from hydra_suite.training.dataset_inspector import format_size_analysis
 
-        selected_roles = set(self._selected_role_keys())
+        selected_roles = set(result.request.selected_roles)
         lines: list[str] = []
         all_warnings: list[str] = []
         if selected_roles & {"seq_detect", "seq_crop_obb"}:
             report_seq, warnings_seq = format_size_analysis(
                 stats,
-                training_imgsz=self.spin_imgsz_seq_crop_obb.value(),
+                training_imgsz=imgsz["seq_crop_obb"],
                 pipeline_mode="crop",
             )
             lines += [
                 "=== Sequential Pipeline ===",
-                f"(stage-2 imgsz = {self.spin_imgsz_seq_crop_obb.value()})",
+                f"(stage-2 imgsz = {imgsz['seq_crop_obb']})",
                 "",
                 report_seq,
             ]
@@ -2504,14 +2525,14 @@ QTabBar::tab:selected {
         if "obb_direct" in selected_roles:
             report_direct, warnings_direct = format_size_analysis(
                 stats,
-                training_imgsz=self.spin_imgsz_obb_direct.value(),
+                training_imgsz=imgsz["obb_direct"],
                 pipeline_mode="full_image",
             )
             if lines:
                 lines += [""]
             lines += [
                 "=== Direct OBB ===",
-                f"(imgsz = {self.spin_imgsz_obb_direct.value()})",
+                f"(imgsz = {imgsz['obb_direct']})",
                 "",
                 report_direct,
             ]
@@ -2524,14 +2545,14 @@ QTabBar::tab:selected {
         if "detect_direct" in selected_roles:
             report_detect_direct, warnings_detect_direct = format_size_analysis(
                 stats,
-                training_imgsz=self.spin_imgsz_detect_direct.value(),
+                training_imgsz=imgsz["detect_direct"],
                 pipeline_mode="full_image",
             )
             if lines:
                 lines += [""]
             lines += [
                 "=== Direct Detect ===",
-                f"(imgsz = {self.spin_imgsz_detect_direct.value()})",
+                f"(imgsz = {imgsz['detect_direct']})",
                 "",
                 report_detect_direct,
             ]
@@ -2544,14 +2565,14 @@ QTabBar::tab:selected {
         if "segment_direct" in selected_roles:
             report_segment_direct, warnings_segment_direct = format_size_analysis(
                 stats,
-                training_imgsz=self.spin_imgsz_segment_direct.value(),
+                training_imgsz=imgsz["segment_direct"],
                 pipeline_mode="full_image",
             )
             if lines:
                 lines += [""]
             lines += [
                 "=== Direct Segment ===",
-                f"(imgsz = {self.spin_imgsz_segment_direct.value()})",
+                f"(imgsz = {imgsz['segment_direct']})",
                 "",
                 report_segment_direct,
             ]
@@ -2564,14 +2585,14 @@ QTabBar::tab:selected {
         if "seq_crop_segment" in selected_roles:
             report_seq_crop_segment, warnings_seq_crop_segment = format_size_analysis(
                 stats,
-                training_imgsz=self.spin_imgsz_seq_crop_segment.value(),
+                training_imgsz=imgsz["seq_crop_segment"],
                 pipeline_mode="crop",
             )
             if lines:
                 lines += [""]
             lines += [
                 "=== Sequential Crop-Segment ===",
-                f"(stage-2 imgsz = {self.spin_imgsz_seq_crop_segment.value()})",
+                f"(stage-2 imgsz = {imgsz['seq_crop_segment']})",
                 "",
                 report_seq_crop_segment,
             ]
@@ -2592,7 +2613,7 @@ QTabBar::tab:selected {
             )
         else:
             self.dataset_fit_status.setText(
-                f"Analysis ready for {valid_items} discovered labeled items across {len(source_paths)} source(s)."
+                f"Analysis ready for {valid_items} discovered labeled items across {len(sources)} source(s)."
             )
 
         self._dataset_fit_cache_key = cache_key
@@ -2702,7 +2723,10 @@ QTabBar::tab:selected {
         worker.start()
 
     def _on_source_preview_ready(self, result: _SourcePreviewResult) -> None:
-        if self.sender() is not self._source_preview_worker:
+        if (
+            self._source_preview_worker is None
+            or self.sender() is not self._source_preview_worker
+        ):
             return
         if not result.records:
             self._set_tiling_preview_frame_options([])
@@ -2724,7 +2748,10 @@ QTabBar::tab:selected {
         self.source_preview_cards_layout.addStretch()
 
     def _on_source_preview_error(self, message: str) -> None:
-        if self.sender() is not self._source_preview_worker:
+        if (
+            self._source_preview_worker is None
+            or self.sender() is not self._source_preview_worker
+        ):
             return
         self._show_source_preview_message(
             f"Source preview failed: {message}",
@@ -2732,7 +2759,10 @@ QTabBar::tab:selected {
         )
 
     def _on_source_preview_worker_finished(self) -> None:
-        if self.sender() is not self._source_preview_worker:
+        if (
+            self._source_preview_worker is None
+            or self.sender() is not self._source_preview_worker
+        ):
             return
         self._source_preview_worker = None
         self._sync_overview_refresh_enabled()
@@ -3754,6 +3784,13 @@ QTabBar::tab:selected {
         super().closeEvent(event)
 
     def done(self, result: int) -> None:  # noqa: D401
-        """Stop any background dataset analysis when the dialog finishes."""
+        """Refuse while training; otherwise stop background dataset analysis."""
+        if self._training_running:
+            QMessageBox.information(
+                self,
+                "Training in progress",
+                "Stop the running training session before closing this dialog.",
+            )
+            return
         self._abandon_overview_workers()
         super().done(result)

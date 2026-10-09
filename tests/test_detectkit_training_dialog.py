@@ -1359,3 +1359,64 @@ def test_app_quit_cancels_and_joins_abandonable_workers(qapp):
 
     assert worker.is_cancelled()
     assert worker.isFinished()
+
+
+def test_dataset_fit_report_uses_settings_it_was_computed_with(
+    qapp, tmp_path, monkeypatch
+):
+    import threading
+
+    import hydra_suite.training.dataset_inspector as inspector
+    from hydra_suite.detectkit.gui.dialogs.training_dialog import TrainingDialog
+    from hydra_suite.detectkit.gui.models import DetectKitProject, OBBSource
+
+    source_root = _write_detectkit_source_dataset(tmp_path / "fit_source")
+    proj = DetectKitProject(project_dir=tmp_path, class_names=["ant"])
+    proj.sources = [OBBSource(path=str(source_root), name="fit_source")]
+
+    release = threading.Event()
+    real_analyze = inspector.analyze_obb_sizes
+
+    def blocking_analyze(*args, **kwargs):
+        assert release.wait(10.0)
+        return real_analyze(*args, **kwargs)
+
+    monkeypatch.setattr(inspector, "analyze_obb_sizes", blocking_analyze)
+
+    dlg = TrainingDialog(proj)
+    try:
+        original = dlg.spin_imgsz_obb_direct.value()
+        dlg.spin_imgsz_obb_direct.setValue(original + 64)
+        release.set()
+        _wait_until(qapp, lambda: dlg._dataset_fit_worker is None)
+
+        text = dlg.dataset_fit_view.toPlainText()
+        assert f"(imgsz = {original})" in text
+        assert f"(imgsz = {original + 64})" not in text
+        assert dlg._dataset_fit_dirty
+        assert "needs refresh" in dlg.dataset_fit_status.text()
+    finally:
+        release.set()
+        dlg.close()
+
+
+def test_close_button_is_refused_while_training(qapp, tmp_path, monkeypatch):
+    from PySide6.QtWidgets import QMessageBox
+
+    from hydra_suite.detectkit.gui.dialogs.training_dialog import TrainingDialog
+
+    shown: list[str] = []
+    monkeypatch.setattr(
+        QMessageBox, "information", lambda _parent, title, _text: shown.append(title)
+    )
+
+    dlg = TrainingDialog(_make_proj(tmp_path))
+    dlg.show()
+    dlg._training_running = True
+    dlg.reject()
+    assert dlg.isVisible()
+    assert shown == ["Training in progress"]
+
+    dlg._training_running = False
+    dlg.reject()
+    assert not dlg.isVisible()
