@@ -13,6 +13,17 @@ from hydra_suite.utils.slice_geometry import (
     LEGACY_TARGET_SIZE_IMGSZ,
     target_fractions_from,
 )
+from hydra_suite.utils.tiling_spec import BACKEND_DEFAULTS
+
+# The legacy pixel default is DERIVED from the one defaults table (F4): the
+# YOLO training scale set expressed at the old implicit 640 px input, i.e.
+# the same [32, 64, 96, 128] as before. ``target_size_fractions`` stays empty
+# by default (deviation 18): a non-empty fractions default would silently
+# override pixel ``target_sizes`` passed to the constructor.
+_DEFAULT_LEGACY_TARGET_SIZES = tuple(
+    float(f) * LEGACY_TARGET_SIZE_IMGSZ
+    for f in BACKEND_DEFAULTS["yolo_train"].object_tile_fractions
+)
 
 DEFAULT_CLASS_NAME = "object"
 # Dataset inference retains candidates at this floor, then applies the UI
@@ -183,7 +194,9 @@ class SliceTrainingSettings:
     # expressed relative to the model input. New UI writes fractions; the
     # builder resolves them separately for each selected model input size.
     target_size_fractions: list[float] = field(default_factory=list)
-    target_sizes: list[float] = field(default_factory=lambda: [32.0, 64.0, 96.0, 128.0])
+    target_sizes: list[float] = field(
+        default_factory=lambda: list(_DEFAULT_LEGACY_TARGET_SIZES)
+    )
     full_frame_mix: bool = True
     merge_threshold: float = 0.5
     balance_multiscale_loss: bool = True

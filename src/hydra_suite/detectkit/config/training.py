@@ -28,6 +28,7 @@ from hydra_suite.utils.slice_geometry import (
     LEGACY_TARGET_SIZE_IMGSZ,
     target_fractions_from,
 )
+from hydra_suite.utils.tiling_spec import BACKEND_DEFAULTS
 
 _MAX_TRAINING_PLAN_BYTES = 1024 * 1024
 _MAX_TRAINING_PLAN_DEPTH = 64
@@ -201,10 +202,16 @@ class SliceTrainingConfig:
     overlap: float = 0.2
     min_area_ratio: float = DEFAULT_MIN_AREA_RATIO
     negative_tile_fraction: float = 0.15
-    target_size_fractions: tuple[float, ...] = (0.05, 0.10, 0.15, 0.20)
+    # The YOLO training scale set from the one defaults table (F4).
+    target_size_fractions: tuple[float, ...] = tuple(
+        BACKEND_DEFAULTS["yolo_train"].object_tile_fractions
+    )
     # Retained for legacy project compatibility. New defaults are expressed as
     # fractions above; these are their equivalent apparent sizes at imgsz=640.
-    target_sizes: tuple[float, ...] = (32.0, 64.0, 96.0, 128.0)
+    target_sizes: tuple[float, ...] = tuple(
+        float(f) * LEGACY_TARGET_SIZE_IMGSZ
+        for f in BACKEND_DEFAULTS["yolo_train"].object_tile_fractions
+    )
     full_frame_mix: bool = True
     merge_threshold: float = 0.5
     balance_multiscale_loss: bool = True
