@@ -183,7 +183,13 @@ def run_dataset_inference(
                 frame = cv2.imread(str(image_path))
                 if frame is None:
                     raise RuntimeError(f"Could not read image: {image_path}")
-                imgsz = max(1, int(payload.get("imgsz_obb_direct", 640)))
+                imgsz = max(
+                    1,
+                    int(
+                        payload.get("slice_imgsz")
+                        or payload.get("imgsz_obb_direct", 640)
+                    ),
+                )
                 task = {"detect_direct": "detect", "segment_direct": "segment"}.get(
                     inference_kind, "obb"
                 )
@@ -202,6 +208,8 @@ def run_dataset_inference(
                     slice_height=slice_settings.slice_height,
                     overlap=slice_settings.overlap,
                     merge_threshold=slice_settings.merge_threshold,
+                    merge_policy=str(payload.get("slice_merge_policy") or "greedy_nmm"),
+                    merge_metric=str(payload.get("slice_merge_metric") or "ios"),
                     confidence_threshold=threshold,
                     task=task,
                 )

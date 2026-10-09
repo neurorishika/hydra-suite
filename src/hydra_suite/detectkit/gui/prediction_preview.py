@@ -71,14 +71,19 @@ _PREVIEW_RUNTIME = RuntimeContext(
 )
 
 
-def _preview_slice_merge_config(merge_threshold: float) -> OBBConfig:
+def _preview_slice_merge_config(
+    merge_threshold: float,
+    merge_policy: str = "greedy_nmm",
+    merge_metric: str = "ios",
+) -> OBBConfig:
     """Minimal ``OBBConfig`` carrying only what ``merge_per_frame`` reads for the
     preview's cross-tile OBB merge: the slice merge policy/metric/threshold/
     backend and ``raw_detection_cap``.
 
-    Matches the preview's prior hand-rolled merge byte-for-byte -- ``greedy_nmm``
-    / ``ios`` / cv2, with the same finite preview candidate ceiling used by
-    the executor.
+    The defaults match the preview's prior hand-rolled merge byte-for-byte --
+    ``greedy_nmm`` / ``ios`` / cv2, with the same finite preview candidate
+    ceiling used by the executor. A model sidecar's profile may supply its own
+    policy/metric (F2); ``nmm`` passes through raw.
     """
     return OBBConfig(
         mode="direct",
@@ -86,8 +91,8 @@ def _preview_slice_merge_config(merge_threshold: float) -> OBBConfig:
             model_path="",
             slice=SliceConfig(
                 enabled=True,
-                merge_policy="greedy_nmm",
-                merge_metric="ios",
+                merge_policy=merge_policy,
+                merge_metric=merge_metric,
                 merge_threshold=float(merge_threshold),
                 merge_backend="cv2",
             ),
@@ -312,6 +317,8 @@ def predict_sliced_obb_result(
     iou: float = _PREVIEW_IOU,
     task: str = "obb",
     should_stop: Callable[[], bool] | None = None,
+    merge_policy: str = "greedy_nmm",
+    merge_metric: str = "ios",
 ):
     """Executor-level sliced OBB inference on one BGR frame (preview/AL).
 
@@ -412,7 +419,7 @@ def predict_sliced_obb_result(
         parts,
         "overlap_band_nms",
         plan,
-        _preview_slice_merge_config(merge_threshold),
+        _preview_slice_merge_config(merge_threshold, merge_policy, merge_metric),
         _PREVIEW_RUNTIME,
     )
 
