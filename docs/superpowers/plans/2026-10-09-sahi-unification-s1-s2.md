@@ -1370,7 +1370,7 @@ def merge_training_geometry(
     existing: dict[str, Any] | None,
     training_geometry: dict[str, Any],
     *,
-    model_family: str = "yolo",
+    model_family: str,
 ) -> dict[str, Any]:
     """Replace training geometry while preserving user-approved profiles.
 
