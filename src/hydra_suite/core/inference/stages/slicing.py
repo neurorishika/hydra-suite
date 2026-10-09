@@ -46,6 +46,28 @@ COMPACT_OUTPUT_BYTES_PER_DETECTION = 128
 # `dtype=torch.uint8` -- 25.2 MB actual against a 2516.6 MB estimate.
 DENSE_MASK_BYTES_PER_PIXEL = 1
 
+# Admission never refuses the minimal unit of work (one tile / one crop): the
+# budget and MAX_TILE_BATCH_BYTES only shrink the batch, down to 1. When even a
+# single item's worst-case estimate exceeds the budget (e.g. 1025 dense masks
+# at 1024px for a segment model) it is admitted anyway and a WARNING is logged
+# once per process for each distinct (description, estimate, budget).
+_OVERSIZE_WARNED: set[tuple[str, int, int]] = set()
+
+
+def _warn_oversize_once(description: str, per_job: int, budget: int) -> None:
+    key = (description, int(per_job), int(budget))
+    if key in _OVERSIZE_WARNED:
+        return
+    _OVERSIZE_WARNED.add(key)
+    logger.warning(
+        "%s: worst-case estimate of %d bytes for a single item exceeds the "
+        "%d-byte budget; admitting it at batch size 1 anyway (the estimate "
+        "assumes every candidate slot is filled).",
+        description,
+        per_job,
+        budget,
+    )
+
 
 @dataclass(frozen=True)
 class TileJob:
@@ -126,10 +148,8 @@ def admitted_prediction_chunk_size(
         source_bytes=source_bytes,
     )
     if per_job > effective_budget:
-        raise ValueError(
-            f"{description} is not resource-admissible: estimated peak={per_job} "
-            f"bytes for one item exceeds the {effective_budget}-byte model batch budget"
-        )
+        _warn_oversize_once(description, per_job, effective_budget)
+        return 1
     return max(1, min(int(requested), MAX_TILE_CHUNK, effective_budget // per_job))
 
 
@@ -145,9 +165,9 @@ def admitted_tile_chunk_size(
 ) -> int:
     """Return a finite tile chunk admitted by an explicit byte budget.
 
-    Geometry is rejected before crop materialization when even one tile cannot
-    fit. The diagnostic deliberately includes the geometry and estimated peak
-    requested by the hardening plan.
+    The budget only shrinks the chunk, down to one tile; a single tile whose
+    worst-case estimate exceeds the budget is admitted at chunk size 1 with a
+    once-per-process WARNING naming the geometry, the estimate and the budget.
     """
 
     effective_budget = min(MAX_TILE_BATCH_BYTES, max(1, int(byte_budget)))
@@ -155,12 +175,13 @@ def admitted_tile_chunk_size(
     if per_job > effective_budget:
         frame_w, frame_h = plan.frame_wh
         tile_w, tile_h = plan.slice_wh
-        raise ValueError(
-            "Sliced inference geometry is not resource-admissible: "
-            f"frame={frame_w}x{frame_h}, tile={tile_w}x{tile_h}, "
-            f"tiles={len(plan.tiles)}, estimated peak={per_job} bytes for one "
-            f"tile exceeds the {effective_budget}-byte tile budget"
+        _warn_oversize_once(
+            f"Sliced inference tile (frame={frame_w}x{frame_h}, "
+            f"tile={tile_w}x{tile_h}, imgsz={imgsz}, task={task})",
+            per_job,
+            effective_budget,
         )
+        return 1
     by_bytes = max(1, effective_budget // per_job)
     return max(1, min(int(requested), MAX_TILE_CHUNK, by_bytes))
 

@@ -13,9 +13,11 @@ Measured on a real checkpoint: `imgsz=1024, max_det=600` returned
 
 import pytest
 
+from hydra_suite.core.inference.limits import MAX_DETECTIONS_PER_FRAME
 from hydra_suite.core.inference.stages.slicing import (
     DENSE_MASK_BYTES_PER_PIXEL,
     MAX_TILE_BATCH_BYTES,
+    admitted_prediction_chunk_size,
     admitted_tile_chunk_size,
     estimated_prediction_job_bytes,
 )
@@ -65,15 +67,97 @@ def test_sliced_segment_admissible_at_the_al_detection_ceiling():
     assert chunk >= 1
 
 
-def test_geometry_genuinely_too_large_is_still_refused():
-    """The admission guard must still bite -- this is a safety bound, not a no-op."""
-    with pytest.raises(ValueError, match="not resource-admissible"):
-        admitted_tile_chunk_size(
-            _plan(tile=8192, frame=16384),
-            imgsz=8192,
-            device_tiles=False,
-            requested=1,
-            byte_budget=MAX_TILE_BATCH_BYTES,
+@pytest.fixture(autouse=True)
+def _fresh_oversize_warnings(monkeypatch):
+    from hydra_suite.core.inference.stages import slicing
+
+    monkeypatch.setattr(slicing, "_OVERSIZE_WARNED", set())
+
+
+def test_oversized_single_tile_is_admitted_at_batch_one_and_warned_once(caplog):
+    """Admission never refuses the minimal unit of work (controller ruling R3).
+
+    1025 dense masks (MAX_DETECTIONS_PER_FRAME + probe row) at 1024px exceed
+    even the 1 GiB hard ceiling; the tile is admitted at chunk size 1 and the
+    WARNING (estimate + ceiling) is logged once, not per call.
+    """
+    est = estimated_prediction_job_bytes(
+        imgsz=1024,
+        task="segment",
+        max_detections=MAX_DETECTIONS_PER_FRAME + 1,
+        source_bytes=1931 * 1931 * 3,
+    )
+    assert est > MAX_TILE_BATCH_BYTES
+    with caplog.at_level("WARNING"):
+        for _ in range(3):
+            chunk = admitted_tile_chunk_size(
+                _plan(),
+                imgsz=1024,
+                device_tiles=False,
+                requested=16,
+                byte_budget=MAX_TILE_BATCH_BYTES,
+                task="segment",
+                max_detections=MAX_DETECTIONS_PER_FRAME + 1,
+            )
+            assert chunk == 1
+    warnings = [r for r in caplog.records if "batch size 1" in r.getMessage()]
+    assert len(warnings) == 1
+    assert str(est) in warnings[0].getMessage()
+    assert str(MAX_TILE_BATCH_BYTES) in warnings[0].getMessage()
+
+
+def test_oversized_stage2_crop_is_admitted_at_batch_one(caplog):
+    """Sequential stage-2 with a segment model: same rule, no ValueError."""
+    with caplog.at_level("WARNING"):
+        size = admitted_prediction_chunk_size(
+            imgsz=1024,
             task="segment",
-            max_detections=600,
+            max_detections=MAX_DETECTIONS_PER_FRAME + 1,
+            requested=8,
+            source_bytes=1024 * 1024 * 3,
+            description="Sequential stage-2 crop batch",
         )
+    assert size == 1
+    assert "Sequential stage-2 crop batch" in caplog.text
+
+
+def test_tight_budget_still_shrinks_the_batch():
+    """The budget still bites: it shrinks the chunk below what a loose one allows."""
+    kwargs = dict(
+        imgsz=640,
+        device_tiles=True,
+        requested=16,
+        task="segment",
+        max_detections=64,
+    )
+    loose = admitted_tile_chunk_size(
+        _plan(), byte_budget=MAX_TILE_BATCH_BYTES, **kwargs
+    )
+    tight = admitted_tile_chunk_size(_plan(), byte_budget=64 * 1024 * 1024, **kwargs)
+    assert loose > tight >= 1
+    assert tight == (64 * 1024 * 1024) // estimated_prediction_job_bytes(
+        imgsz=640, task="segment", max_detections=64
+    )
+
+
+def test_detect_and_obb_admission_unchanged(caplog):
+    """Compact-output tasks never hit the oversize path at normal geometry."""
+    for task in ("detect", "obb"):
+        with caplog.at_level("WARNING"):
+            chunk = admitted_tile_chunk_size(
+                _plan(),
+                imgsz=1024,
+                device_tiles=False,
+                requested=16,
+                byte_budget=256 * 1024 * 1024,
+                task=task,
+                max_detections=MAX_DETECTIONS_PER_FRAME + 1,
+            )
+        per_job = estimated_prediction_job_bytes(
+            imgsz=1024,
+            task=task,
+            max_detections=MAX_DETECTIONS_PER_FRAME + 1,
+            source_bytes=1931 * 1931 * 3,
+        )
+        assert chunk == min(16, (256 * 1024 * 1024) // per_job) > 1
+    assert "batch size 1" not in caplog.text

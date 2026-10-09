@@ -327,7 +327,12 @@ def test_grid_streams_tile_pixels_in_configured_chunks():
     assert all(size <= 3 for size in chunk_sizes)
 
 
-def test_grid_refuses_unadmitted_tile_before_predict():
+def test_grid_admits_oversized_tile_at_batch_one_with_warning(monkeypatch, caplog):
+    """Admission never refuses the minimal unit (controller ruling R3): a tile
+    whose estimate exceeds the budget runs alone, with a WARNING."""
+    from hydra_suite.core.inference.stages import slicing
+
+    monkeypatch.setattr(slicing, "_OVERSIZE_WARNED", set())
     frame = np.zeros((64, 64, 3), dtype=np.uint8)
     slice_cfg = SliceConfig(
         enabled=True,
@@ -342,18 +347,21 @@ def test_grid_refuses_unadmitted_tile_before_predict():
             slice=slice_cfg, confidence_floor=0.01, model_task="obb"
         ),
         target_classes=[],
+        raw_detection_cap=0,
     )
+    batches = []
+
+    class _Reached(Exception):
+        pass
 
     class _Model:
         imgsz = 64
 
         def predict(self, images, **kwargs):
-            raise AssertionError("predict must not run before geometry admission")
+            batches.append(len(images))
+            raise _Reached
 
-    with pytest.raises(
-        ValueError,
-        match=r"frame=64x64, tile=64x64, tiles=1, estimated peak=",
-    ):
+    with caplog.at_level("WARNING"), pytest.raises(_Reached):
         list(
             Grid().iter_region_results(
                 [frame],
@@ -362,6 +370,9 @@ def test_grid_refuses_unadmitted_tile_before_predict():
                 SimpleNamespace(tensor_on_cuda=False, device="cpu"),
             )
         )
+    assert batches == [1]
+    assert "frame=64x64, tile=64x64" in caplog.text
+    assert "admitting it at batch size 1" in caplog.text
 
 
 def test_grid_polls_cancellation_between_admitted_chunks():
