@@ -7,9 +7,11 @@ published model leaks into the pictures. Writes PNGs into ``--out``:
 
 * ``role_<role>.png`` / ``role_<role>_advanced.png`` -- the bare widget with a
   representative state (derived badges visible), Advanced collapsed/expanded;
-* ``host_*.png`` -- the real DetectKit hosts at their natural size.
-
-The TrackerKit host is added by slice S4b.
+* ``host_*.png`` -- the real DetectKit hosts at their natural size, and the
+  TrackerKit main window's "Find Animals" page (YOLO direct, SAHI on, a model
+  sidecar with two calibration profiles): ``host_trackerkit.png`` on the
+  primary profile, ``host_trackerkit_custom.png`` on the custom-geometry
+  profile with Advanced expanded.
 
 Usage::
 
@@ -276,6 +278,116 @@ def render_hosts(out: Path, app, root: Path) -> list[Path]:
     return written
 
 
+TRACKERKIT_SIDECAR = {
+    "schema_version": 2,
+    "training_geometry": {
+        "geometry_mode": "auto_object",
+        "imgsz": 1024,
+        "reference_body_px": 48.0,
+        "object_tile_fraction": 0.1,
+        "overlap": 0.2,
+    },
+    "primary_profile_id": "balanced",
+    "profiles": [
+        {
+            "id": "balanced",
+            "name": "Balanced",
+            "settings": {
+                "enabled": True,
+                "geometry_mode": "auto_object",
+                "object_tile_fraction": 0.1,
+                "overlap": 0.2,
+                "trained_body_px": 48.0,
+            },
+        },
+        {
+            "id": "fast",
+            "name": "Fast scan",
+            "settings": {
+                "enabled": True,
+                "geometry_mode": "custom",
+                "slice_width": 1024,
+                "slice_height": 800,
+                "overlap": 0.1,
+            },
+        },
+    ],
+}
+
+
+def _seed_trackerkit_model(root: Path) -> Path:
+    """A stub direct-OBB model + two-profile sidecar in the temp model repo."""
+    import json
+
+    from hydra_suite.core.inference.model_paths import get_models_root_directory
+
+    models_root = Path(get_models_root_directory())
+    model = models_root / "obb" / "ant_direct.pt"
+    model.parent.mkdir(parents=True, exist_ok=True)
+    model.write_text("stub model", encoding="utf-8")
+    registry = {
+        "schema_version": 2,
+        "entries": {
+            "obb/ant_direct.pt": {
+                "task_family": "obb",
+                "usage_role": "obb_direct",
+                "size": "26s",
+                "species": "ant",
+                "model_info": "ant_direct",
+            }
+        },
+    }
+    (models_root / "model_registry.json").write_text(
+        json.dumps(registry), encoding="utf-8"
+    )
+    (model.parent / (model.name + ".slice_meta.json")).write_text(
+        json.dumps(TRACKERKIT_SIDECAR), encoding="utf-8"
+    )
+    return model
+
+
+def render_trackerkit(out: Path, app, root: Path) -> list[Path]:
+    """TrackerKit's Find Animals page with the SAHI widget in its YOLO group."""
+    from hydra_suite.trackerkit.gui.main_window import MainWindow
+
+    model = _seed_trackerkit_model(root)
+    # The machine-global advanced config must neither leak in nor be written.
+    saved = (MainWindow._save_advanced_config, MainWindow._load_advanced_config)
+    MainWindow._save_advanced_config = lambda self: None
+    MainWindow._load_advanced_config = lambda self: {}
+    try:
+        window = MainWindow()
+    finally:
+        MainWindow._save_advanced_config, MainWindow._load_advanced_config = saved
+    window.resize(1500, 1000)
+    window._show_workspace()
+    panel = window._detection_panel
+    window.tabs.setCurrentWidget(panel)
+    panel.combo_detection_method.setCurrentIndex(1)  # YOLO
+    panel._refresh_yolo_model_combo(preferred_model_path=str(model))
+    window._set_yolo_model_selection(str(model))
+    panel.combo_yolo_obb_mode.setCurrentIndex(0)  # Direct
+    panel.apply_slice_meta_for_model(str(model))
+    panel.chk_slice_enabled.setChecked(True)
+    written = [
+        _grab_scroll_page(
+            window, panel.slice_settings, out / "host_trackerkit.png", app
+        )
+    ]
+    panel.combo_slice_profile.setCurrentIndex(
+        panel.combo_slice_profile.findData("fast")
+    )
+    panel.slice_settings.btn_slice_advanced.setChecked(True)  # the user path
+    written.append(
+        _grab_scroll_page(
+            window, panel.slice_settings, out / "host_trackerkit_custom.png", app
+        )
+    )
+    window.close()
+    window.deleteLater()
+    return written
+
+
 def main(argv: list[str] | None = None) -> list[Path]:
     parser = argparse.ArgumentParser(description=__doc__.splitlines()[0])
     parser.add_argument("--out", type=Path, default=DEFAULT_OUT)
@@ -288,6 +400,7 @@ def main(argv: list[str] | None = None) -> list[Path]:
         app = QApplication.instance() or QApplication([])
         written = render_roles(out, app)
         written += render_hosts(out, app, root)
+        written += render_trackerkit(out, app, root)
     for path in written:
         print(path)
     return written

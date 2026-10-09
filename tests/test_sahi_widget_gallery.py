@@ -1,4 +1,4 @@
-"""The SAHI widget gallery renders one PNG per role and per DetectKit host."""
+"""The SAHI widget gallery renders one PNG per role and per host."""
 
 from __future__ import annotations
 
@@ -25,6 +25,8 @@ EXPECTED = (
         "host_inference_settings.png",
         "host_sam3_escalation.png",
         "host_sam2_escalation.png",
+        "host_trackerkit.png",
+        "host_trackerkit_custom.png",
     ]
 )
 
