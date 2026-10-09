@@ -6,6 +6,7 @@ layer: imports only Qt and ``utils`` (never an app layer).
 
 from __future__ import annotations
 
+import math
 from dataclasses import dataclass
 from typing import Callable
 
@@ -20,6 +21,12 @@ from PySide6.QtWidgets import (
 )
 
 from hydra_suite.utils.slice_geometry import tile_size_for_mode
+from hydra_suite.utils.tiling_spec import (
+    FRACTION_MAX,
+    FRACTION_MIN,
+    OVERLAP_MARGIN,
+    OVERLAP_MAX,
+)
 
 ROLES = ("infer_yolo", "train_yolo", "train_sam3", "escalate_sam3", "escalate_sam2")
 
@@ -276,3 +283,23 @@ def tile_text(
         return f"→ {sizes[0]} × {sizes[0]} px ({body:.0f} px ÷ {fractions[0]:g})"
     span = f"{sizes[0]}–{sizes[-1]}" if len(sizes) > 1 else f"{sizes[0]}"
     return f"→ {span} px over {len(fractions)} scales"
+
+
+def whole_animal_minimum(
+    fractions, *, decimals: int, ceiling: float
+) -> tuple[float, bool] | None:
+    """(max(scale) + margin, capped) rounded UP to ``decimals``.
+
+    F7's whole-animal MINIMUM overlap -- never a recommendation. ``capped``
+    when it exceeds OVERLAP_MAX and so is unreachable; None when nothing is
+    tiled by scale. resolve_overlap's rule without its logging: this runs on
+    every keystroke.
+    """
+    usable = [float(f) for f in fractions if f > 0]
+    if not usable:
+        return None
+    raw = max(FRACTION_MIN, min(max(usable), FRACTION_MAX)) + OVERLAP_MARGIN
+    capped = raw > OVERLAP_MAX + 1e-9
+    scale = 10**decimals
+    rounded = math.ceil(min(raw, OVERLAP_MAX) * scale - 1e-9) / scale
+    return min(rounded, ceiling), capped

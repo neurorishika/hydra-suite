@@ -13,7 +13,6 @@ Shared layer: imports only Qt and ``utils`` (never an app layer).
 
 from __future__ import annotations
 
-import math
 from dataclasses import replace
 from typing import Any
 
@@ -35,7 +34,6 @@ from hydra_suite.utils.tiling_spec import (
     DEFAULT_YOLO_IMGSZ,
     OVERLAP_MAX,
     TilingSpec,
-    resolve_overlap,
 )
 
 from .slice_settings_controls import (
@@ -58,6 +56,7 @@ from .slice_settings_parts import (
     default_tile_label,
     set_badge,
     tile_text,
+    whole_animal_minimum,
     widget_stylesheet,
 )
 
@@ -516,22 +515,14 @@ class SliceSettingsWidget(QGroupBox):
     def _raise_to_minimum(self) -> None:
         minimum = self._whole_animal_minimum()
         if minimum is not None:
-            self.spin_slice_overlap.setValue(minimum)  # the user path: emits
+            self.spin_slice_overlap.setValue(minimum[0])  # the user path: emits
 
-    def _whole_animal_minimum(self) -> float | None:
-        """max(scale) + margin, rounded UP to the overlap spin's precision.
-
-        The smallest overlap that keeps every animal whole inside at least
-        one tile (F7). A minimum, never a recommendation: a larger overlap is
-        left alone. None when nothing is tiled by scale (full frame).
-        """
-        fractions = self._display_fractions()
-        if not fractions:
-            return None
-        value = float(resolve_overlap(fractions=fractions).value)
-        scale = 10 ** self.spin_slice_overlap.decimals()
-        rounded = math.ceil(value * scale - 1e-9) / scale
-        return min(rounded, self.spin_slice_overlap.maximum())
+    def _whole_animal_minimum(self) -> tuple[float, bool] | None:
+        return whole_animal_minimum(
+            self._display_fractions(),
+            decimals=self.spin_slice_overlap.decimals(),
+            ceiling=self.spin_slice_overlap.maximum(),
+        )
 
     # ------------------------------------------------------------- refreshes
 

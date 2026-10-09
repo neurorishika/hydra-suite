@@ -465,14 +465,21 @@ def role_keys(w) -> set[str]:
 
 def refresh_overlap_minimum(w) -> None:
     label, button = w.lbl_slice_overlap_minimum, w.btn_slice_overlap_raise
-    minimum = w._whole_animal_minimum()
-    if minimum is None:
+    result = w._whole_animal_minimum()
+    tiling_on = w.chk_slice_enabled.isChecked() if "enabled" in w._role_rows else True
+    if result is None:
         label.setText("")
         button.setVisible(False)
         return
+    minimum, capped = result
     decimals = w.spin_slice_overlap.decimals()
-    shown = f"{minimum:.{decimals}f}"
+    shown = f"{minimum:.{decimals}f}" + (", capped" if capped else "")
     below = w.spin_slice_overlap.value() < minimum - 0.5 * 10**-decimals
+    if below and not tiling_on:
+        # Nothing is tiled: no warning, no button for an inert setting.
+        label.setText("")
+        button.setVisible(False)
+        return
     if below:
         label.setText(f"Below whole-animal minimum ({shown})")
         label.setStyleSheet("color: #e0943a;")
@@ -481,7 +488,7 @@ def refresh_overlap_minimum(w) -> None:
             "tile seam can be cut in every tile. Your overlap is kept until "
             "you raise it."
         )
-        button.setText(f"Raise to {shown}")
+        button.setText(f"Raise to {minimum:.{decimals}f}")
     else:
         label.setText(f"≥ whole-animal minimum ({shown})")
         label.setStyleSheet("color: #8f969e;")

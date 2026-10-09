@@ -419,3 +419,56 @@ def test_override_appears_only_for_a_derived_body():
         assert not w.chk_slice_body_override.isHidden(), source
         assert w.source_badge("reference_body_px") == source
         assert not w.spin_slice_body.isEnabled()
+
+
+def test_overlap_minimum_is_marked_capped_at_the_ceiling():
+    """max scale >= 0.85: the true minimum is unreachable; say so."""
+    w = SliceSettingsWidget(role="infer_yolo")
+    w.set_spec(
+        TilingSpec(
+            enabled=True,
+            geometry_mode="auto_object",
+            object_tile_fractions=(0.88,),
+            overlap=0.2,
+        )
+    )
+    assert w.lbl_slice_overlap_minimum.text() == (
+        "Below whole-animal minimum (0.90, capped)"
+    )
+    w.btn_slice_overlap_raise.click()
+    assert w.spin_slice_overlap.value() == pytest.approx(0.9)
+    assert w.lbl_slice_overlap_minimum.text() == (
+        "≥ whole-animal minimum (0.90, capped)"
+    )
+
+
+def test_overlap_minimum_does_not_spam_warnings(caplog):
+    import logging
+
+    from hydra_suite.utils.tiling_spec import reset_warnings
+
+    reset_warnings()
+    caplog.set_level(logging.WARNING)
+    w = SliceSettingsWidget(role="train_yolo")
+    w.set_spec(TilingSpec(enabled=True, geometry_mode="auto_object", overlap=0.2))
+    for _ in range(10):
+        w.txt_slice_scales.setText("0.05, 0.95")  # above FRACTION_MAX
+        w.refresh()
+    assert len([r for r in caplog.records if r.levelno >= logging.WARNING]) <= 1
+
+
+def test_overlap_warning_hidden_while_tiling_is_off():
+    w = SliceSettingsWidget(role="train_yolo")
+    w.set_spec(
+        TilingSpec(
+            enabled=False,
+            geometry_mode="auto_object",
+            object_tile_fractions=(0.05, 0.15),
+            overlap=0.1,
+        )
+    )
+    assert "Below" not in w.lbl_slice_overlap_minimum.text()
+    assert w.btn_slice_overlap_raise.isHidden()
+    w.chk_slice_enabled.setChecked(True)
+    assert w.lbl_slice_overlap_minimum.text().startswith("Below")
+    assert not w.btn_slice_overlap_raise.isHidden()
