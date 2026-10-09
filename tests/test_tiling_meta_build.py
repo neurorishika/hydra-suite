@@ -197,3 +197,27 @@ def test_merge_preserves_profiles():
     assert doc["profiles"] == existing["profiles"]
     assert doc["primary_profile_id"] == "p-1"
     assert doc["training_geometry"] == {"overlap": 0.25}
+
+
+@pytest.mark.parametrize("bad_fraction", [None, 0, 1.5])
+def test_sam3_never_invents_a_fraction(bad_fraction):
+    """Review M2: no fraction stamped from canonicalize's fallback ladder."""
+    v3 = training_geometry_from_sam3_manifest(
+        {
+            "tile_px": [971, 971],
+            "object_tile_fraction": bad_fraction,
+            "reference_body_px": 55.4,
+        },
+        imgsz=1008,
+    )
+    assert "object_tile_fraction" not in v3
+    assert "prefill_object_tile_fraction" not in v3
+    assert "object_tile_fractions" not in v3
+    assert v3["tile_px_set"] == [[971, 971]]
+
+
+def test_sam3_stated_prefill_alone_is_stamped():
+    v3 = training_geometry_from_sam3_manifest(
+        {"prefill_object_tile_fraction": 0.04}, imgsz=1008
+    )
+    assert v3["prefill_object_tile_fraction"] == 0.04

@@ -208,7 +208,8 @@ def test_lenient_on_bad_values(model):
     )
     meta = read_tiling_meta(model)
     assert meta.training.overlap == 0.9
-    assert meta.training.geometry_mode == "auto_model"
+    # Review M3: an invalid YOLO mode reads as _training_values' auto_object.
+    assert meta.training.geometry_mode == "auto_object"
 
 
 @pytest.mark.parametrize(
@@ -314,3 +315,43 @@ def test_malformed_profile_measurement_keeps_geometry_and_good_profile(
         ),
         advanced_config={},
     )
+
+
+@pytest.mark.parametrize("bad_fraction", [None, 0, 1.5])
+def test_legacy_sam3_meta_never_invents_a_fraction(model, bad_fraction):
+    """Review M2: canonicalize's bare-scalar fallback is not a SAM3 measurement."""
+    _write(
+        sam3_meta_path(model),
+        {
+            "train_tile_px": 971,
+            "object_tile_fraction": bad_fraction,
+            "reference_body_px": 55.4,
+            "imgsz": 1008,
+        },
+    )
+    meta = read_tiling_meta(model)
+    assert meta.operating_fraction is None
+    assert meta.training.object_tile_fractions == ()
+    assert meta.tile_px_set == ((971, 971),)
+
+
+def test_legacy_sam3_meta_family_defaults(model):
+    """Review M3: SAM3 defaults, not the YOLO ones, and no default fraction claimed."""
+    _write(
+        sam3_meta_path(model),
+        {"train_tile_px": 971, "reference_body_px": 55.4, "imgsz": 1008},
+    )
+    training = read_tiling_meta(model).training
+    assert training.geometry_mode == "auto_object"
+    assert training.merge_policy == "nms" and training.merge_metric == "polygon_iou"
+    assert training.fragment_policy == "crowd"
+    assert training.object_tile_fractions == ()
+
+
+def test_yolo_family_defaults_claim_no_fraction(model):
+    _write(sidecar_path(model), {"overlap": 0.2, "reference_body_px": 40.0})
+    training = read_tiling_meta(model).training
+    assert training.geometry_mode == "auto_object"
+    assert training.merge_policy == "greedy_nmm" and training.merge_metric == "ios"
+    assert training.fragment_policy == "drop"
+    assert training.object_tile_fractions == ()

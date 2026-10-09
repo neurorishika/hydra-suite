@@ -13,7 +13,7 @@ from __future__ import annotations
 import json
 import logging
 import math
-from dataclasses import dataclass, field, replace
+from dataclasses import dataclass, field, fields, replace
 from pathlib import Path
 from typing import Any
 
@@ -42,7 +42,7 @@ _SAM3_PRESENT_ONLY = (
     "overlap",
     "min_area_ratio",
 )
-_FAMILY_FRAGMENT = {"yolo": "drop", "sam3": "crowd"}
+_SPEC_FIELD_NAMES = frozenset(f.name for f in fields(TilingSpec))
 _SAM3_META_EXTRAS = (
     "full_frame_mix",
     "scale_range_px",
@@ -96,6 +96,19 @@ def _v2_fraction_claim(geometry: dict[str, Any]) -> float | None:
         return None
 
 
+def _states_a_fraction(canonical: dict[str, Any], source: dict[str, Any]) -> bool:
+    """Did the document STATE a fraction (a real set/scalar or a positive prefill)?
+
+    canonicalize's operating ladder ends in a bare-scalar fallback (None ->
+    0.15, 0 -> 0.01, 1.5 -> 0.9) that mirrors TrackerKit's YOLO reader. For
+    SAM3 that fallback is not a measurement and must never be stamped/read.
+    """
+    if canonical.get("object_tile_fractions"):
+        return True
+    prefill = _real(source.get("prefill_object_tile_fraction"))
+    return prefill is not None and prefill > 0
+
+
 def training_geometry_from_yolo_manifest(
     slice_geometry: dict[str, Any],
 ) -> dict[str, Any]:
@@ -139,9 +152,11 @@ def training_geometry_from_sam3_manifest(
     fractions = list(canonical.get("object_tile_fractions") or ())
     if fractions:
         geometry["object_tile_fractions"] = fractions
-    operating = canonical.get("operating_fraction")
-    if operating is None:
-        operating = operating_fraction(fractions)
+    operating = None
+    if _states_a_fraction(canonical, manifest):
+        operating = canonical.get("operating_fraction")
+        if operating is None:
+            operating = operating_fraction(fractions)
     if operating is not None:
         geometry["prefill_object_tile_fraction"] = float(operating)
         # A median under a measurement's name reads as "the" training tile
@@ -201,6 +216,18 @@ def read_tiling_meta(model_path: str | Path) -> TilingMeta | None:
         return None
 
 
+def _family_base(family: str) -> TilingSpec:
+    """Family defaults that never claim a fraction the document did not state."""
+    if family == "sam3":
+        return replace(TilingSpec.defaults("sam3"), object_tile_fractions=())
+    # yolo_infer, with _training_values' auto_object fallback for the mode.
+    return replace(
+        TilingSpec.defaults("yolo_infer"),
+        geometry_mode="auto_object",
+        object_tile_fractions=(),
+    )
+
+
 def _stamped_tiles(geometry: dict[str, Any]) -> tuple[tuple[int, int], ...]:
     if geometry.get("tile_px_set") is not None:
         return tuple(_tile_pairs(geometry["tile_px_set"]))
@@ -239,19 +266,23 @@ def _read_tiling_meta(model_path: str | Path) -> TilingMeta | None:
         legacy = LEGACY_TARGET_SIZE_IMGSZ if family == "yolo" else None
         canonical, extras = canonicalize(geometry, legacy_px_imgsz=legacy)
         try:
-            training = TilingSpec.from_canonical(canonical)
+            training = replace(
+                _family_base(family),
+                **{k: v for k, v in canonical.items() if k in _SPEC_FIELD_NAMES},
+            )
         except Exception:
             logger.warning("Invalid SAHI geometry beside %s", model_path, exc_info=True)
             training = None
         if training is not None:
             training = replace(training, enabled=True)
-            if "fragment_policy" not in canonical:
-                training = replace(training, fragment_policy=_FAMILY_FRAGMENT[family])
-            operating = canonical.get("operating_fraction")
-            if operating is None:
-                operating = training.operating_fraction()
-            else:
-                operating = max(FRACTION_MIN, min(FRACTION_MAX, float(operating)))
+            # YOLO mirrors _training_values (incl. its 0.15 fallback); SAM3
+            # reads a fraction only when the document states one.
+            if family == "yolo" or _states_a_fraction(canonical, geometry):
+                operating = canonical.get("operating_fraction")
+                if operating is None:
+                    operating = training.operating_fraction()
+                else:
+                    operating = max(FRACTION_MIN, min(FRACTION_MAX, float(operating)))
         imgsz = _imgsz(geometry.get("imgsz"))
         tiles = _stamped_tiles(geometry)
         if source == "sam3_meta":
