@@ -996,6 +996,113 @@ def test_training_dialog_source_preview_loads_real_source_samples(qapp, tmp_path
     assert dlg.sam3_panel.slice_group.preview.frame_options == []
 
 
+def _wait_until(qapp, predicate, timeout_s: float = 10.0) -> None:
+    import time
+
+    deadline = time.monotonic() + timeout_s
+    while not predicate():
+        if time.monotonic() > deadline:
+            raise AssertionError("condition not met before timeout")
+        qapp.processEvents()
+        time.sleep(0.01)
+
+
+def test_training_dialog_dataset_fit_runs_off_the_gui_thread(
+    qapp, tmp_path, monkeypatch
+):
+    """Opening the dialog must not block on per-image dataset I/O."""
+    import threading
+
+    from PySide6.QtCore import QThread
+
+    import hydra_suite.training.dataset_inspector as inspector
+    from hydra_suite.detectkit.gui.dialogs.training_dialog import TrainingDialog
+    from hydra_suite.detectkit.gui.models import DetectKitProject, OBBSource
+
+    source_root = _write_detectkit_source_dataset(tmp_path / "fit_source")
+    proj = DetectKitProject(project_dir=tmp_path, class_names=["ant"])
+    proj.sources = [OBBSource(path=str(source_root), name="fit_source")]
+
+    release = threading.Event()
+    seen_threads: list[object] = []
+    real_analyze = inspector.analyze_obb_sizes
+
+    def blocking_analyze(*args, **kwargs):
+        seen_threads.append(QThread.currentThread())
+        assert release.wait(10.0)
+        return real_analyze(*args, **kwargs)
+
+    monkeypatch.setattr(inspector, "analyze_obb_sizes", blocking_analyze)
+
+    dlg = TrainingDialog(proj)
+    try:
+        assert not release.is_set()
+        assert "Analyzing" in dlg.dataset_fit_status.text()
+        assert not dlg.btn_refresh_dataset_fit.isEnabled()
+
+        release.set()
+        _wait_until(qapp, lambda: dlg._dataset_fit_worker is None)
+
+        assert seen_threads and seen_threads[0] is not qapp.thread()
+        assert dlg.dataset_fit_status.text().startswith("Analysis ready")
+        # train and val share one split in the fixture, so the item is counted twice.
+        assert "Dataset: 2 images, 2 objects" in dlg.dataset_fit_view.toPlainText()
+        assert dlg.btn_refresh_dataset_fit.isEnabled()
+    finally:
+        release.set()
+        dlg.close()
+
+
+def test_training_dialog_close_cancels_running_dataset_fit(qapp, tmp_path, monkeypatch):
+    import threading
+
+    import hydra_suite.training.dataset_inspector as inspector
+    from hydra_suite.detectkit.gui.dialogs.training_dialog import TrainingDialog
+    from hydra_suite.detectkit.gui.models import DetectKitProject, OBBSource
+
+    source_root = _write_detectkit_source_dataset(tmp_path / "fit_source")
+    proj = DetectKitProject(project_dir=tmp_path, class_names=["ant"])
+    proj.sources = [OBBSource(path=str(source_root), name="fit_source")]
+
+    entered = threading.Event()
+    cancel_seen = threading.Event()
+
+    def cancellable_analyze(*_args, should_cancel=None, **_kwargs):
+        entered.set()
+        for _ in range(500):
+            if should_cancel is not None and should_cancel():
+                cancel_seen.set()
+                break
+            threading.Event().wait(0.01)
+        return inspector.OBBSizeStats()
+
+    monkeypatch.setattr(inspector, "analyze_obb_sizes", cancellable_analyze)
+
+    dlg = TrainingDialog(proj)
+    worker = dlg._dataset_fit_worker
+    assert worker is not None
+    assert entered.wait(5.0)
+
+    dlg.close()
+
+    assert cancel_seen.wait(5.0)
+    assert worker.wait(5000)
+    assert dlg._dataset_fit_worker is None
+
+
+def test_analyze_obb_sizes_honours_should_cancel(tmp_path):
+    from hydra_suite.training.dataset_inspector import (
+        analyze_obb_sizes,
+        inspect_obb_or_detect_dataset,
+    )
+
+    source_root = _write_detectkit_source_dataset(tmp_path / "fit_source")
+    inspection = inspect_obb_or_detect_dataset(str(source_root))
+
+    assert analyze_obb_sizes(inspection).n_images >= 1
+    assert analyze_obb_sizes(inspection, should_cancel=lambda: True).n_images == 0
+
+
 # ---------------------------------------------------------------------------
 # Augmentation group
 # ---------------------------------------------------------------------------
