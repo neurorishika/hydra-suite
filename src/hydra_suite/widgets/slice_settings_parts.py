@@ -19,6 +19,8 @@ from PySide6.QtWidgets import (
     QWidget,
 )
 
+from hydra_suite.utils.slice_geometry import tile_size_for_mode
+
 ROLES = ("infer_yolo", "train_yolo", "train_sam3", "escalate_sam3", "escalate_sam2")
 
 # Which defaults row of utils.tiling_spec.BACKEND_DEFAULTS each role reads.
@@ -213,3 +215,62 @@ def hbox(*widgets, stretch: bool = True) -> QWidget:
 def set_badge(label: QLabel, source: str) -> None:
     label.setText(source)
     label.setToolTip(f"Source: {SOURCE_DESCRIPTIONS.get(source, source)}.")
+
+
+def widget_stylesheet(text_color: str | None, *, bare: bool) -> str:
+    """Widget-scoped styling that reads correctly under any host theme.
+
+    Constrained controls must LOOK disabled even where the host theme styles
+    inputs but not their ``:disabled`` state (DetectKit's dark theme). Tool
+    buttons take the host's label colour, which a theme sets through a
+    stylesheet the buttons themselves do not match.
+    """
+    style = f"QToolButton {{ color: {text_color}; }} " if text_color else ""
+    style += (
+        "QAbstractSpinBox:disabled, QComboBox:disabled, QLineEdit:disabled,"
+        " QCheckBox:disabled, QToolButton:disabled { color: #a0a5ab; }"
+        " QToolButton#sliceUseSuggested { border: 1px solid #8f969e;"
+        " border-radius: 3px; padding: 1px 8px; background: transparent; }"
+    )
+    if bare:
+        style += " QGroupBox { border: 0; margin-top: 0; padding: 0; }"
+    return style
+
+
+def tile_text(
+    *,
+    mode: str,
+    fractions: list[float],
+    body: float,
+    imgsz: int,
+    custom_wh: tuple[int, int],
+    training: bool,
+) -> str:
+    """The derived tile-size label for the non-escalation roles."""
+    if mode == "custom":
+        w = custom_wh[0] or imgsz
+        h = custom_wh[1] or imgsz
+        return f"→ {w} × {h} px"
+    if mode == "auto_model" or not fractions:
+        return f"→ {imgsz} × {imgsz} px (model input)"
+    if body <= 0:
+        if training:
+            return "→ body size ÷ scale, measured at build"
+        return f"→ {imgsz} × {imgsz} px until a body size is known"
+    sizes = sorted(
+        {
+            tile_size_for_mode(
+                geometry_mode="auto_object",
+                imgsz=imgsz,
+                reference_body_px=body,
+                object_tile_fraction=fraction,
+                slice_width=0,
+                slice_height=0,
+            )[0]
+            for fraction in fractions
+        }
+    )
+    if len(fractions) == 1:
+        return f"→ {sizes[0]} × {sizes[0]} px ({body:.0f} px ÷ {fractions[0]:g})"
+    span = f"{sizes[0]}–{sizes[-1]}" if len(sizes) > 1 else f"{sizes[0]}"
+    return f"→ {span} px over {len(fractions)} scales"
