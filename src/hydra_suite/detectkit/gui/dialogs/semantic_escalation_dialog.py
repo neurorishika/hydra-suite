@@ -295,8 +295,12 @@ class SemanticEscalationDialog(DetectKitDialog):
         )
         # F3: when nothing saved applies to the opening variant, open where a
         # headless `detectkit escalate sam3` would run -- the SAME resolver.
-        # Rung 4 (seed + this body chain) is exactly the historical opening
-        # state, so only a calibration or a model stamp changes anything.
+        # With no saved dict at all, rung 4 (seed + this body chain) is
+        # exactly the historical opening state, so only a calibration or a
+        # model stamp changes anything. A saved dict that EXISTS but does not
+        # apply (another variant, or no tile_fraction) is stale: its body /
+        # fraction must not leak into this variant, so every origin applies
+        # (M1: otherwise the dialog and the CLI open differently).
         opening_variant = self._variant.currentText()
         if not (
             "tile_fraction" in saved
@@ -306,24 +310,22 @@ class SemanticEscalationDialog(DetectKitDialog):
                 default_semantic_tiling,
             )
 
+            chain_px = float(reference_body_px or 0.0)
             opening = default_semantic_tiling(
-                project,
-                opening_variant,
-                body_chain_px=float(reference_body_px or 0.0),
+                project, opening_variant, body_chain_px=chain_px
             )
-            if opening["origin"] in ("calibration", "stamped"):
-                self._tile_fraction.setValue(float(opening["tile_fraction"]))
+            stale_saved = bool(saved)
+            if stale_saved or opening["origin"] in ("calibration", "stamped"):
+                self._tile_fraction.setValue(float(opening["tile_fraction"] or 0.0))
                 self._reference_body.setValue(float(opening["reference_body_px"]))
-                self._body_origin_label.setText(
-                    "the model's calibration"
-                    if opening["origin"] == "calibration"
-                    else (
-                        self._body_origin_label.text()
-                        if float(reference_body_px or 0.0) > 0
-                        else "stamped on the model"
-                    )
-                )
-                self._body_origin_label.setToolTip(self._body_origin_label.text())
+                if opening["origin"] == "calibration":
+                    origin_label = "the model's calibration"
+                elif opening["origin"] == "stamped" and chain_px <= 0:
+                    origin_label = "stamped on the model"
+                else:
+                    origin_label = body_px_origin or "entered by you"
+                self._body_origin_label.setText(origin_label)
+                self._body_origin_label.setToolTip(origin_label)
         self._tile_fraction.setToolTip(
             "Tile size = reference body size / this fraction. The default is a "
             "starting guess from one dataset, not a tuned value — calibrate "

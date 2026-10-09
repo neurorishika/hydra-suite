@@ -205,3 +205,114 @@ def test_dialog_opens_a_finetuned_model_at_its_stamped_scale(monkeypatch, tmp_pa
     headless = se.default_semantic_tiling(project, "ft-model", body_chain_px=0.0)
     assert headless["tile_fraction"] == pytest.approx(0.055)
     assert headless["reference_body_px"] == pytest.approx(53.4)
+
+
+# -- M1: a saved dict that does not apply to the opening variant ------------
+
+
+def _dialog_and_cli(monkeypatch, tmp_path, saved, body, models=("sam3",)):
+    import argparse
+
+    import pytest
+
+    pytest.importorskip("PySide6")
+    from PySide6.QtWidgets import QApplication
+
+    QApplication.instance() or QApplication([])
+    from hydra_suite.detectkit import escalate_cli as cli
+    from hydra_suite.detectkit.gui import escalation_actions as acts
+    from hydra_suite.detectkit.gui.dialogs import semantic_escalation_dialog as mod
+    from hydra_suite.detectkit.gui.models import DetectKitProject
+
+    class _Available:
+        usable = True
+        checkpoint_missing = False
+        reason = ""
+
+    monkeypatch.setattr(mod, "probe_checkpoint", lambda *_a, **_k: _Available())
+    monkeypatch.setattr(mod, "available_models", lambda: list(models))
+    monkeypatch.setattr(mod, "sidecar_for", lambda key: None)
+    monkeypatch.setattr(se, "sidecar_for", lambda key: None)
+    project = DetectKitProject(project_dir=tmp_path)
+    project.slice_settings.reference_body_px = body
+    project.semantic_escalation_settings = dict(saved)
+    chain, origin = acts.resolve_reference_body_px(project)
+    dialog = mod.SemanticEscalationDialog(
+        [], chain, body_px_origin=origin, project=project
+    )
+    params = dialog.parameters()
+    ns = argparse.Namespace(
+        variant=dialog.selected_variant(), tile_fraction=None, reference_body_px=None
+    )
+    tiling = cli._sam3_tiling(project, ns)
+    return params, tiling
+
+
+def _effective(fraction, body):
+    from hydra_suite.core.inference.semantic.tiling import resolve_tile_px
+
+    return resolve_tile_px(float(body or 0.0), (fraction or None))
+
+
+def test_stale_saved_variant_dialog_and_cli_both_open_at_the_seed(
+    monkeypatch, tmp_path
+):
+    saved = {"variant": "gone-model", "tile_fraction": 0.07, "reference_body_px": 40}
+    params, tiling = _dialog_and_cli(monkeypatch, tmp_path, saved, 82.2)
+    assert (params["tile_fraction"], params["reference_body_px"]) == (0.05, 82.2)
+    assert (tiling["tile_fraction"], tiling["reference_body_px"]) == (0.05, 82.2)
+
+
+def test_stale_saved_variant_with_no_body_is_full_frame_in_both(
+    monkeypatch, tmp_path
+):
+    saved = {"variant": "gone-model", "tile_fraction": 0.07, "reference_body_px": 40}
+    params, tiling = _dialog_and_cli(monkeypatch, tmp_path, saved, 0.0)
+    assert _effective(params["tile_fraction"], params["reference_body_px"]) is None
+    assert tiling["tile_fraction"] is None
+
+
+def test_saved_body_without_a_fraction_agrees_between_dialog_and_cli(
+    monkeypatch, tmp_path
+):
+    params, tiling = _dialog_and_cli(
+        monkeypatch, tmp_path, {"reference_body_px": 33}, 82.2
+    )
+    assert _effective(params["tile_fraction"], params["reference_body_px"]) == (
+        _effective(tiling["tile_fraction"], tiling["reference_body_px"])
+    )
+    assert (params["tile_fraction"], params["reference_body_px"]) == (
+        tiling["tile_fraction"],
+        tiling["reference_body_px"],
+    )
+
+
+# -- M2: --reference-body-px alone ------------------------------------------
+
+
+def test_cli_body_flag_alone_tiles_a_stock_variant_at_the_seed(monkeypatch):
+    params = _run_cli(
+        monkeypatch,
+        ["sam3", "--project", "p", "--prompt", "ant", "--reference-body-px", "50"],
+        None,
+    )
+    assert params["tile_fraction"] == 0.05 and params["reference_body_px"] == 50.0
+
+
+def test_cli_body_flag_alone_keeps_a_stamped_fraction(monkeypatch):
+    params = _run_cli(
+        monkeypatch,
+        [
+            "sam3",
+            "--project",
+            "p",
+            "--prompt",
+            "ant",
+            "--variant",
+            "ft-model",
+            "--reference-body-px",
+            "50",
+        ],
+        {"object_tile_fraction": 0.055, "reference_body_px": 53.4},
+    )
+    assert params["tile_fraction"] == 0.055 and params["reference_body_px"] == 50.0
