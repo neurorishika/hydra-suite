@@ -65,11 +65,14 @@ def select_pose(p: PoseResult | None, pos: np.ndarray) -> PoseResult | None:
 
 def select_cnn(r: CNNResult, pos: np.ndarray) -> CNNResult:
     by_index = {p.det_index: p for p in r.predictions}
-    preds = [
-        replace(by_index[int(src)], det_index=dst)
-        for dst, src in enumerate(np.asarray(pos).tolist())
-        if int(src) in by_index
-    ]
+    preds = []
+    for dst, src in enumerate(np.asarray(pos).tolist()):
+        if int(src) not in by_index:
+            raise DownstreamCacheError(
+                f"CNN '{r.label}' has no prediction for detection position "
+                f"{int(src)}."
+            )
+        preds.append(replace(by_index[int(src)], det_index=dst))
     return CNNResult(label=r.label, predictions=preds)
 
 

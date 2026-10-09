@@ -96,3 +96,8 @@ def test_split_and_concat():
     assert ht.heading_hints.tolist() == [1, 2, 3, 4, 5]
     cnn = concat_cnn([(0, _cnn(2)), (2, _cnn(2)), (4, _cnn(1))])
     assert [p.det_index for p in cnn.predictions] == [0, 1, 2, 3, 4]
+
+
+def test_select_cnn_missing_raises():
+    with pytest.raises(DownstreamCacheError, match="5"):
+        select_cnn(_cnn(2), np.array([5]))
