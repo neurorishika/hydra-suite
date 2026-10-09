@@ -5,7 +5,9 @@ import pytest
 from hydra_suite.core.inference.slice_meta import (
     _training_values,
     merge_training_geometry,
+    resolve_slice_profile_values,
     sidecar_path,
+    slice_meta_to_panel_values,
     write_slice_meta,
 )
 from hydra_suite.core.inference.tiling_meta import (
@@ -14,6 +16,7 @@ from hydra_suite.core.inference.tiling_meta import (
     training_geometry_from_sam3_manifest,
     training_geometry_from_yolo_manifest,
 )
+from hydra_suite.trackerkit.engine_params import RuntimeContext, build_engine_params
 
 
 def _write(path, data):
@@ -251,3 +254,63 @@ def test_profiles_survive_hostile_geometry(model):
     )
     meta = read_tiling_meta(model)
     assert meta is not None and meta.profiles == (profile,)
+
+
+GOOD_PROFILE = {
+    "id": "p1",
+    "name": "P1",
+    "note": "",
+    "settings": {"object_tile_fraction": 0.1},
+    "measurement": {},
+}
+GOOD_GEOM = {
+    "geometry_mode": "auto_object",
+    "imgsz": 640,
+    "object_tile_fraction": 0.1,
+    "target_sizes": [64],
+    "reference_body_px": 40.0,
+}
+
+
+@pytest.mark.parametrize("bad_measurement", ["oops", [1, 2], 5])
+def test_malformed_profile_measurement_keeps_geometry_and_good_profile(
+    model, bad_measurement
+):
+    """Review M1: one malformed profile measurement must not cost the whole document."""
+    bad = {
+        "id": "p2",
+        "name": "P2",
+        "settings": {"object_tile_fraction": 0.2},
+        "measurement": bad_measurement,
+    }
+    doc = {
+        "schema_version": 3,
+        "model_family": "yolo",
+        "training_geometry": GOOD_GEOM,
+        "primary_profile_id": "p1",
+        "profiles": [GOOD_PROFILE, bad],
+    }
+    _write(sidecar_path(model), doc)
+    meta = read_tiling_meta(model)
+    assert meta is not None and meta.training is not None
+    assert meta.training.reference_body_px == 40.0
+    assert meta.profiles[0] == GOOD_PROFILE
+    assert meta.profiles[1]["measurement"] == {}
+    # TrackerKit's readers on the same file
+    assert slice_meta_to_panel_values(doc, None)["profile_id"] == "p1"
+    assert resolve_slice_profile_values(doc, "p2", None)["profile_id"] == "p2"
+    cfg = {
+        "yolo_obb_mode": "direct",
+        "yolo_obb_direct_model_path": str(model),
+        "slice_enabled": False,
+        "slice_geometry_mode": "auto_model",
+        "yolo_confidence_threshold": 0.25,
+        "slice_profile_id": "p1",
+    }
+    build_engine_params(
+        cfg,
+        runtime=RuntimeContext(
+            fps=30.0, total_frames=100, frame_width=640, frame_height=480
+        ),
+        advanced_config={},
+    )

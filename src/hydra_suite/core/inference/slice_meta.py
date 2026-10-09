@@ -192,13 +192,18 @@ def available_slice_profiles(meta: dict[str, Any]) -> list[dict[str, Any]]:
         ):
             continue
         seen.add(profile_id)
+        measurement = raw.get("measurement")
         valid.append(
             {
                 "id": profile_id,
                 "name": name,
                 "note": str(raw.get("note", "") or ""),
                 "settings": dict(settings),
-                "measurement": dict(raw.get("measurement") or {}),
+                # A malformed measurement ("oops", [1, 2], 5) is evidence we
+                # cannot read, not a reason to drop the profile or the file.
+                "measurement": (
+                    dict(measurement) if isinstance(measurement, dict) else {}
+                ),
             }
         )
     return valid
