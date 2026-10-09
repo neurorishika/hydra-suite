@@ -60,6 +60,7 @@ def extract_canonical_crops(
     background_color: tuple[int, int, int] = (0, 0, 0),
     heading_hints: np.ndarray | None = None,
     directed_mask: np.ndarray | None = None,
+    foreign_set: "ForeignSet | None" = None,
 ) -> torch.Tensor:
     """Extract OBB-aligned canonical crops. Returns (N, C, canvas_h, canvas_w) tensor.
 
@@ -91,6 +92,11 @@ def extract_canonical_crops(
     consulted ONLY by the identity CNN's CUDA (NVDEC on-device) crop path via
     :func:`extract_canonical_crops_batch`; omitted (every other caller,
     including pose) this is exactly byte-identical to before.
+
+    ``foreign_set`` (optional): when ``obb_result`` is only a chunk of the
+    frame's detection set, mask each crop against the FULL set (see
+    :class:`ForeignSet`) so the result does not depend on the chunking.
+    Omitted, the foreign set is ``obb_result`` itself (unchanged behaviour).
     """
     del runtime  # kept for signature compatibility; device now follows frame
     n = obb_result.num_detections
@@ -125,10 +131,10 @@ def extract_canonical_crops(
             frame, m_aligns, geometry, lambda sub: _frame_to_chw_float(sub, device)
         )
 
-    if suppress_foreign and n > 1:
+    if suppress_foreign and _foreign_count(obb_result, foreign_set) > 1:
         with span(N.FOREIGN_MASK, units=n):
             crops = _apply_foreign_mask_canonical_batch(
-                crops, obb_result, geometry, background_color
+                crops, obb_result, geometry, background_color, foreign_set
             )
     return crops
 
