@@ -177,7 +177,7 @@ def test_realised_stamp_survives_the_slice_meta_sidecar_round_trip(tmp_path):
         }
     }
 
-    merged = merge_training_geometry(None, geometry)
+    merged = merge_training_geometry(None, geometry, model_family="yolo")
 
     assert (
         training_geometry(merged)["multiscale_loss_balance"]
