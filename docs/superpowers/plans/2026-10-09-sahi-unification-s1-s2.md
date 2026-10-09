@@ -28,9 +28,12 @@
 
 1. `TilingSpec` lives in a new `utils/tiling_spec.py`, not `utils/slice_geometry.py` (385 lines; the ~500-line rule). `slice_geometry.py` remains the grid module and is not modified.
 2. SAM3 publish **dual-writes**: geometry stays in `.sam3_meta.json` (existing readers `sidecar_for` / `geometry_drift` keep working) and is also written to `.slice_meta.json` v3. Removing geometry from `.sam3_meta.json` is deferred to S3 once every reader goes through `read_tiling_meta`.
-3. v3 `training_geometry` keeps v2-reader mirrors: `reference_body_px` (= `trained_body_px`) and, for YOLO, a bare `object_tile_fraction`. SAM3 multi-scale omits the bare scalar (existing SAM3 convention: the median is stamped only as `prefill_object_tile_fraction`).
-4. The operating-scale rule differs per family because both are already shipped behavior: YOLO uses `np.median` of the fractions (what TrackerKit computes today from `target_sizes`); SAM3 uses an actual member of the set (`dataset_build._median_scale`). Both are written as `prefill_object_tile_fraction` at publish so readers never recompute.
+3. **YOLO v3 is strictly additive over v2** (adversarial review M3): every v2 key is kept verbatim — including `target_sizes` and the manifest's scalar `object_tile_fraction` — and canonical keys are added beside them. This keeps the v2 reader (`_training_values`), the baseline drift guard (`sliced_dataset.py:272`) and the DetectKit calibration grid byte-for-byte unchanged. Spec §4's "never writes `target_sizes`" is deferred to S3, when every reader goes through `read_tiling_meta`. SAM3 v3 (a new file, no legacy readers) is canonical-only and stamps only values present in the build (never defaults).
+4. **One operating-scale rule: `np.median`** of the fraction set (adversarial review M2). It is what TrackerKit computes from `target_sizes` and what SAM3's `dataset_build` stamps as `prefill_object_tile_fraction` (`_median`); `_median_scale` (a set member) is used only for `prefill_tile_px` and is not a fraction rule. Stamped `prefill_object_tile_fraction` is always preferred over recomputation.
 5. YOLO v3 does not stamp `tile_px_set`: the YOLO builder measures the reference body per frame, so no single set exists. SAM3 stamps its real set.
+6. `prefill_object_tile_fraction` maps to the canonical *operating* scale, not to `object_tile_fractions` (spec §3.5 listed it as a fraction alias; it is a median, not a member of the set).
+7. `TilingSpec.training_tile_sizes()` (fans out every scale) is named for training only; inference uses `operating_fraction` + `resolve_tile_size` — one scale, per the user's decision.
+8. `canonicalize`'s `operating_fraction` matches `_training_values` for every shape a writer in this repo produces; it knowingly differs on hand-made shapes TrackerKit mishandles (bools as numbers, `imgsz` strings like `"640.5"`, prefill-only docs which TrackerKit ignores). Documented, not mirrored.
 
 ## Review Focus
 
@@ -69,8 +72,8 @@ python -c "import hydra_suite, sys; print(hydra_suite.__file__)"   # must print 
   - `Backend = Literal["yolo_train", "yolo_infer", "sam3", "sam2"]`
   - `class Sourced(NamedTuple): value: Any; source: str`
   - `@dataclass(frozen=True) class BackendDefaults` and `BACKEND_DEFAULTS: dict[str, BackendDefaults]`
-  - `operating_fraction(fractions, rule: str) -> float | None`
-  - `@dataclass(frozen=True) class TilingSpec` with fields `enabled, geometry_mode, object_tile_fractions, reference_body_px, slice_width, slice_height, overlap, min_area_ratio, fragment_policy, merge_policy, merge_metric, merge_threshold`; methods `TilingSpec.defaults(backend)`, `.operating_fraction(backend=None)`, `.tile_sizes(imgsz, backend=None)`, `.to_mapping()`.
+  - `operating_fraction(fractions) -> float | None` (np.median, clamped to [0.01, 0.9])
+  - `@dataclass(frozen=True) class TilingSpec` with fields `enabled, geometry_mode, object_tile_fractions, reference_body_px, slice_width, slice_height, overlap, min_area_ratio, fragment_policy, merge_policy, merge_metric, merge_threshold`; methods `TilingSpec.defaults(backend)`, `.operating_fraction()`, `.training_tile_sizes(imgsz)`, `.to_mapping()`.
 
 - [ ] **Step 1: Write the failing tests**
 
@@ -142,26 +145,21 @@ def test_defaults_constructor_uses_table():
     assert spec.enabled is False
 
 
-def test_np_median_rule_matches_trackerkit_legacy():
-    # TrackerKit today: median(target_sizes)/imgsz -> 80/640 for [32,64,96,128].
-    assert operating_fraction((0.05, 0.10, 0.15, 0.20), "np_median") == pytest.approx(0.125)
-
-
-def test_member_median_rule_matches_sam3_median_scale():
-    # SAM3 _median_scale sorts TILES ascending and takes index (n-1)//2;
-    # tiles shrink as fractions grow, so that is the higher-middle fraction.
-    assert operating_fraction((0.05, 0.10, 0.15, 0.20), "member_median") == 0.15
-    assert operating_fraction((0.0275, 0.055), "member_median") == 0.055
-    assert operating_fraction((0.055,), "member_median") == 0.055
+def test_operating_fraction_is_np_median():
+    # TrackerKit today: median(target_sizes)/imgsz -> 80/640 for [32,64,96,128];
+    # SAM3 dataset_build stamps prefill_object_tile_fraction with the same rule.
+    assert operating_fraction((0.05, 0.10, 0.15, 0.20)) == pytest.approx(0.125)
+    assert operating_fraction((0.0275, 0.055)) == pytest.approx(0.04125)
+    assert operating_fraction((0.055,)) == 0.055
 
 
 def test_operating_fraction_clamps_and_handles_empty():
-    assert operating_fraction((), "np_median") is None
-    assert operating_fraction((0.005,), "np_median") == 0.01
-    assert operating_fraction((0.95,), "member_median") == 0.9
+    assert operating_fraction(()) is None
+    assert operating_fraction((0.005,)) == 0.01
+    assert operating_fraction((0.95,)) == 0.9
 
 
-def test_tile_sizes_delegates_to_resolve_scales():
+def test_training_tile_sizes_delegates_to_resolve_scales():
     spec = TilingSpec(
         enabled=True,
         geometry_mode="auto_object",
@@ -177,7 +175,7 @@ def test_tile_sizes_delegates_to_resolve_scales():
         slice_width=0,
         slice_height=0,
     )
-    assert spec.tile_sizes(640) == expected == [(500, 500), (250, 250)]
+    assert spec.training_tile_sizes(640) == expected == [(500, 500), (250, 250)]
 
 
 def test_to_mapping_is_canonical_and_json_safe():
@@ -270,34 +268,30 @@ class BackendDefaults:
     merge_metric: str
     merge_threshold: float
     min_area_ratio: float
-    # How one operating scale is chosen from a set (both are shipped behavior):
-    # "np_median" = TrackerKit's median(target_sizes)/imgsz;
-    # "member_median" = SAM3 dataset_build._median_scale (a real member).
-    operating_rule: str
 
 
 BACKEND_DEFAULTS: dict[str, BackendDefaults] = {
     # Multi-scale robustness set used by headless SliceTrainingConfig today.
     "yolo_train": BackendDefaults(
         (0.05, 0.10, 0.15, 0.20), "auto_object", "drop",
-        "greedy_nmm", "ios", 0.5, DEFAULT_MIN_AREA_RATIO, "np_median",
+        "greedy_nmm", "ios", 0.5, DEFAULT_MIN_AREA_RATIO,
     ),
     # SliceConfig defaults (TrackerKit is canonical; must not move).
     "yolo_infer": BackendDefaults(
         (0.15,), "auto_model", "drop",
-        "greedy_nmm", "ios", 0.5, DEFAULT_MIN_AREA_RATIO, "np_median",
+        "greedy_nmm", "ios", 0.5, DEFAULT_MIN_AREA_RATIO,
     ),
     # Sam3LoraParams.object_tile_fraction; SAM3 merge is polygon-IoU NMS after
     # a containment gate (semantic/tiling.py), fragments become is_crowd.
     "sam3": BackendDefaults(
         (0.055,), "auto_object", "crowd",
-        "nms", "polygon_iou", 0.5, DEFAULT_MIN_AREA_RATIO, "member_median",
+        "nms", "polygon_iou", 0.5, DEFAULT_MIN_AREA_RATIO,
     ),
     # Stock SAM2: full frame until calibrated (2026-10-03 spec: fractions do
     # not transfer between models). SAM2 owner tiles do not merge.
     "sam2": BackendDefaults(
         (), "auto_object", "drop",
-        "nms", "iou", 0.5, DEFAULT_MIN_AREA_RATIO, "member_median",
+        "nms", "iou", 0.5, DEFAULT_MIN_AREA_RATIO,
     ),
 }
 
@@ -306,19 +300,16 @@ def _clamp_fraction(value: float) -> float:
     return max(FRACTION_MIN, min(FRACTION_MAX, float(value)))
 
 
-def operating_fraction(fractions, rule: str) -> float | None:
-    """The single operating scale for a fraction set, clamped like the planner."""
+def operating_fraction(fractions) -> float | None:
+    """The ONE inference scale for a fraction set: np.median, clamped like the planner.
+
+    The same rule TrackerKit applies to median(target_sizes)/imgsz and SAM3's
+    dataset_build stamps as prefill_object_tile_fraction.
+    """
     values = [float(f) for f in fractions]
     if not values:
         return None
-    if rule == "np_median":
-        return _clamp_fraction(float(np.median(np.asarray(values))))
-    if rule == "member_median":
-        # Tiles shrink as fractions grow: _median_scale's ascending-tile index
-        # (n-1)//2 is the same element in a DESCENDING fraction ordering.
-        ordered = sorted(values, reverse=True)
-        return _clamp_fraction(ordered[(len(ordered) - 1) // 2])
-    raise ValueError(f"unknown operating rule {rule!r}")
+    return _clamp_fraction(float(np.median(np.asarray(values))))
 
 
 def _finite(value: Any) -> float | None:
@@ -396,12 +387,13 @@ class TilingSpec:
             merge_threshold=d.merge_threshold,
         )
 
-    def operating_fraction(self, backend: Backend | None = None) -> float | None:
-        rule = BACKEND_DEFAULTS[backend].operating_rule if backend else "np_median"
-        return operating_fraction(self.object_tile_fractions, rule)
+    def operating_fraction(self) -> float | None:
+        return operating_fraction(self.object_tile_fractions)
 
-    def tile_sizes(self, imgsz: int, backend: Backend | None = None) -> list[tuple[int, int]]:
-        scalar = self.operating_fraction(backend) or BACKEND_DEFAULTS["yolo_infer"].object_tile_fractions[0]
+    def training_tile_sizes(self, imgsz: int) -> list[tuple[int, int]]:
+        """TRAINING fan-out: one tile size per scale. Inference uses ONE scale
+        (operating_fraction + resolve_tile_size), never this."""
+        scalar = self.operating_fraction() or BACKEND_DEFAULTS["yolo_infer"].object_tile_fractions[0]
         return resolve_scales(
             geometry_mode=self.geometry_mode,
             imgsz=int(imgsz),
@@ -446,7 +438,8 @@ git commit -m "feat(tiling): canonical TilingSpec contract and per-backend defau
   - `canonicalize(mapping, *, legacy_px_imgsz: float | None = None) -> tuple[dict[str, Any], dict[str, Any]]` — returns `(canonical, extras)`. `canonical` holds only keys the input determined, using `_SPEC_FIELDS` names plus the extra key `"operating_fraction"` when the input stamped one (`prefill_object_tile_fraction`) or when it is derivable bit-exactly from `target_sizes` + `imgsz`. `extras` holds every unconsumed key unchanged (including `imgsz`).
   - `TilingSpec.from_mapping(mapping, *, backend=None, legacy_px_imgsz=None) -> TilingSpec` — dataclass defaults (or `defaults(backend)`) overlaid with `canonical`.
   - `TilingSpec.from_canonical(canonical, *, backend=None) -> TilingSpec` — same, from an existing `canonicalize` result.
-  - `operating_fraction` in `canonical` mirrors `slice_meta._training_values` bit-for-bit: `median(target_sizes)/imgsz` when both present, else stamped `prefill_object_tile_fraction`, else the bare `object_tile_fraction` (clamped; unparseable → 0.15) when that key or `target_sizes` is present.
+  - `operating_fraction` in `canonical`, in order: `median(target_sizes)/imgsz` when both present (imgsz must parse to an int ≥ 1); else stamped `prefill_object_tile_fraction`; else the bare `object_tile_fraction` (clamped; unparseable → 0.15) when that key or `target_sizes` is present. Equals `_training_values` for every writer-produced shape (deviation 8).
+  - Warnings for clamped/dropped legacy values are logged once per `(field, value)` per process (TrackerKit re-reads sidecars on every refresh).
 
 - [ ] **Step 1: Write the failing tests**
 
@@ -603,6 +596,25 @@ def test_from_mapping_without_backend_does_not_invent_fractions():
     assert spec.object_tile_fractions == ()
 
 
+@pytest.mark.parametrize("imgsz", [0.5, float("inf"), float("nan"), "x", -640, True])
+def test_unusable_imgsz_never_divides(imgsz):
+    """Adversarial M4: no ZeroDivision/Overflow on hostile imgsz."""
+    canonical, _ = canonicalize({"target_sizes": [64], "imgsz": imgsz}, legacy_px_imgsz=640.0)
+    assert canonical["object_tile_fractions"] == (0.1,)
+
+
+@pytest.mark.parametrize("raw,expected", [("false", False), ("0", False), ("true", True), (0, False), (1, True), (True, True)])
+def test_enabled_parses_strings(raw, expected):
+    assert canonicalize({"enabled": raw})[0]["enabled"] is expected
+
+
+def test_repeated_legacy_warning_logged_once(caplog):
+    caplog.set_level(logging.WARNING)
+    for _ in range(5):
+        canonicalize({"overlap": 0.97})
+    assert caplog.text.count("overlap=0.97") == 1
+
+
 def test_none_and_empty_mapping():
     assert canonicalize(None) == ({}, {})
     assert canonicalize({}) == ({}, {})
@@ -671,18 +683,44 @@ def _fraction_list(raw: Any) -> list[float]:
     return out
 
 
+_WARNED: set[tuple[str, str]] = set()
+
+
+def _warn_once(name: str, value: Any, message: str, *args: Any) -> None:
+    """Legacy-value warnings fire once per (field, value) per process."""
+    key = (name, repr(value))
+    if key in _WARNED:
+        return
+    _WARNED.add(key)
+    logger.warning(message, *args)
+
+
 def _clamped(name: str, value: float, lo: float, hi: float) -> float:
     if value < lo or value > hi:
         clamped = max(lo, min(hi, value))
-        logger.warning("SAHI %s=%r is outside [%s, %s]; using %s", name, value, lo, hi, clamped)
+        _warn_once(name, value, "SAHI %s=%r is outside [%s, %s]; using %s", name, value, lo, hi, clamped)
         return clamped
     return value
+
+
+def _parse_bool(raw: Any) -> bool:
+    if isinstance(raw, str):
+        return raw.strip().lower() not in ("", "0", "false", "no", "off")
+    return bool(raw)
+
+
+def _positive_int(raw: Any) -> int:
+    """An image size usable as a denominator, else 0."""
+    value = _finite(raw)
+    if value is None or value < 1:
+        return 0
+    return min(8192, int(value))
 
 
 def _normalize(name: str, raw: Any) -> Any:
     """Lenient per-field read. Returns _DROP when the value is unusable."""
     if name == "enabled":
-        return bool(raw)
+        return _parse_bool(raw)
     if name in ("geometry_mode", "fragment_policy", "merge_metric", "merge_policy"):
         value = str(raw)
         if name == "merge_policy" and value == "nmm":
@@ -694,18 +732,18 @@ def _normalize(name: str, raw: Any) -> Any:
             "merge_policy": MERGE_POLICIES,
         }[name]
         if value not in allowed:
-            logger.warning("SAHI %s=%r is not one of %s; ignoring it", name, value, allowed)
+            _warn_once(name, value, "SAHI %s=%r is not one of %s; ignoring it", name, value, allowed)
             return _DROP
         return value
     number = _finite(raw)
     if number is None:
-        logger.warning("SAHI %s=%r is not a finite number; ignoring it", name, raw)
+        _warn_once(name, raw, "SAHI %s=%r is not a finite number; ignoring it", name, raw)
         return _DROP
     if name in ("slice_width", "slice_height"):
         return int(_clamped(name, float(int(number)), 0, 8192))
     if name == "reference_body_px":
         if number < 0:
-            logger.warning("SAHI reference_body_px=%r is negative; ignoring it", number)
+            _warn_once(name, number, "SAHI reference_body_px=%r is negative; ignoring it", number)
             return _DROP
         return number
     if name == "overlap":
@@ -741,7 +779,9 @@ def canonicalize(
         canonical[name] = value
         if name == "overlap" and {"overlap_width_ratio", "overlap_height_ratio"} <= set(present):
             if src["overlap_width_ratio"] != src["overlap_height_ratio"]:
-                logger.warning(
+                _warn_once(
+                    "overlap_axes",
+                    (src["overlap_width_ratio"], src["overlap_height_ratio"]),
                     "SAHI overlap_width_ratio=%r and overlap_height_ratio=%r differ; "
                     "the canonical single overlap uses the width ratio",
                     src["overlap_width_ratio"],
@@ -762,9 +802,9 @@ def canonicalize(
     consumed.add(_LEGACY_PX_KEY)
     raw_targets = [_finite(t) for t in _as_list(src.get(_LEGACY_PX_KEY))]
     raw_targets = [t for t in raw_targets if t is not None]
-    stated_imgsz = _finite(src.get("imgsz"))
+    stated_imgsz = _positive_int(src.get("imgsz"))
     if not fractions and any(t > 0 for t in raw_targets):
-        denominator = stated_imgsz if stated_imgsz and stated_imgsz > 0 else legacy_px_imgsz
+        denominator = stated_imgsz or _finite(legacy_px_imgsz)
         if not denominator or denominator <= 0:
             raise ValueError(
                 "target_sizes are pixels at a model input size; the mapping has no "
@@ -773,9 +813,9 @@ def canonicalize(
         fractions = [t / denominator for t in raw_targets if 0.0 < t / denominator <= 1.0]
     # operating_fraction mirrors core/inference/slice_meta._training_values
     # bit-for-bit (what TrackerKit serves today), then a stamped prefill.
-    if raw_targets and stated_imgsz and stated_imgsz > 0:
+    if raw_targets and stated_imgsz:
         canonical["operating_fraction"] = _clamp_fraction(
-            float(np.median(np.asarray(raw_targets))) / min(8192, int(stated_imgsz))
+            float(np.median(np.asarray(raw_targets))) / stated_imgsz
         )
 
     for key in _FRACTION_SCALAR_KEYS:
@@ -794,7 +834,7 @@ def canonicalize(
                 fractions = got[:1]
                 break
             if src[key] is not None:
-                logger.warning("SAHI %s=%r is outside (0, 1]; ignoring it", key, src[key])
+                _warn_once(key, src[key], "SAHI %s=%r is outside (0, 1]; ignoring it", key, src[key])
     if fractions:
         canonical["object_tile_fractions"] = tuple(fractions)
 
@@ -863,6 +903,7 @@ git commit -m "feat(tiling): canonicalize legacy SAHI names in one alias map"
 - Produces:
   - `resolve_reference_body_px(*, override=None, dataset_median=None, stamped=None, tracker_reference=None) -> Sourced` (float px; sources `override` / `dataset` / `stamped` / `user`; `Sourced(0.0, "default")` when nothing positive)
   - `resolve_operating_fraction(*, backend, profile=None, stamped_operating=None, stamped_fractions=()) -> Sourced` (float | None; sources `profile` / `stamped` / `default`)
+  - `resolve_object_tile_fractions(*, backend, user=None, profile=None, stamped=()) -> Sourced` (tuple; sources `user` / `profile` / `stamped` / `default`) — the fraction SET for training (spec §3.3)
   - `resolve_overlap(*, override=None, saved=None, fractions=()) -> Sourced` (sources `override` / `user` / `derived` / `default`)
   - `resolve_tile_size(spec: TilingSpec, *, imgsz: int, fraction: float | None) -> Sourced` (`(w, h)`; source `user` in custom mode with an explicit size, else `derived`)
 
@@ -877,6 +918,7 @@ from hydra_suite.utils.tiling_spec import (
     DEFAULT_OVERLAP,
     Sourced,
     TilingSpec,
+    resolve_object_tile_fractions,
     resolve_operating_fraction,
     resolve_overlap,
     resolve_reference_body_px,
@@ -901,9 +943,18 @@ def test_operating_fraction_chain():
     assert resolve_operating_fraction(backend="yolo_infer", profile=0.12, stamped_operating=0.2) == Sourced(0.12, "profile")
     assert resolve_operating_fraction(backend="yolo_infer", stamped_operating=0.2) == Sourced(0.2, "stamped")
     assert resolve_operating_fraction(backend="yolo_infer", stamped_fractions=(0.05, 0.1, 0.15, 0.2)) == Sourced(pytest.approx(0.125), "stamped")
-    assert resolve_operating_fraction(backend="sam3", stamped_fractions=(0.05, 0.1, 0.15, 0.2)) == Sourced(0.15, "stamped")
+    assert resolve_operating_fraction(backend="sam3", stamped_fractions=(0.05, 0.1, 0.15, 0.2)) == Sourced(pytest.approx(0.125), "stamped")
     assert resolve_operating_fraction(backend="yolo_infer") == Sourced(0.15, "default")
     assert resolve_operating_fraction(backend="sam2") == Sourced(None, "default")
+
+
+def test_fraction_set_chain():
+    assert resolve_object_tile_fractions(backend="yolo_train", user=[0.1, 0.2], profile=(0.3,), stamped=(0.4,)) == Sourced((0.1, 0.2), "user")
+    assert resolve_object_tile_fractions(backend="yolo_train", profile=(0.3,), stamped=(0.4,)) == Sourced((0.3,), "profile")
+    assert resolve_object_tile_fractions(backend="yolo_train", stamped=(0.4,)) == Sourced((0.4,), "stamped")
+    assert resolve_object_tile_fractions(backend="yolo_train") == Sourced((0.05, 0.10, 0.15, 0.20), "default")
+    assert resolve_object_tile_fractions(backend="yolo_train", user=[], stamped=[0, 2.0]) == Sourced((0.05, 0.10, 0.15, 0.20), "default")
+    assert resolve_object_tile_fractions(backend="sam2") == Sourced((), "default")
 
 
 def test_overlap_chain():
@@ -985,20 +1036,29 @@ def resolve_operating_fraction(
     stamped_fractions=(),
 ) -> Sourced:
     """The ONE inference scale: profile -> stamped -> backend default."""
-    rule = BACKEND_DEFAULTS[backend].operating_rule
     parsed = _positive(profile)
     if parsed is not None:
         return Sourced(_clamp_fraction(parsed), "profile")
     parsed = _positive(stamped_operating)
     if parsed is not None:
         return Sourced(_clamp_fraction(parsed), "stamped")
-    stamped = operating_fraction(_fraction_list(stamped_fractions), rule)
+    stamped = operating_fraction(_fraction_list(stamped_fractions))
     if stamped is not None:
         return Sourced(stamped, "stamped")
     return Sourced(
-        operating_fraction(BACKEND_DEFAULTS[backend].object_tile_fractions, rule),
-        "default",
+        operating_fraction(BACKEND_DEFAULTS[backend].object_tile_fractions), "default"
     )
+
+
+def resolve_object_tile_fractions(
+    *, backend: Backend, user: Any = None, profile: Any = None, stamped: Any = ()
+) -> Sourced:
+    """The fraction SET (training): user -> profile -> stamped -> backend default."""
+    for value, source in ((user, "user"), (profile, "profile"), (stamped, "stamped")):
+        usable = _fraction_list(value)
+        if usable:
+            return Sourced(tuple(usable), source)
+    return Sourced(BACKEND_DEFAULTS[backend].object_tile_fractions, "default")
 
 
 def resolve_overlap(*, override: Any = None, saved: Any = None, fractions=()) -> Sourced:
@@ -1079,6 +1139,17 @@ git worktree remove .worktrees/sahi-s1 && git branch -d feat/sahi-unify-s1
 ---
 
 ## Slice S2 — v3 tiling sidecar
+
+> **REVISION REQUIRED BEFORE EXECUTING S2.** The plan-stage adversarial review (2026-10-09) found defects in Tasks 5–8 as written below. Tasks 5–8 are rewritten against the merged S1 code before S2 starts; do not execute them as-is. Binding fixes:
+> - **B1/m2:** builders stamp only values present in the input — never `TilingSpec()` defaults (no invented `geometry_mode="auto_model"`); omit empty `object_tile_fractions`.
+> - **M3:** YOLO v3 is additive over v2 (deviation 3): keep every manifest key verbatim (incl. `target_sizes`, scalar `object_tile_fraction`), add `object_tile_fractions`, `prefill_object_tile_fraction`, `trained_body_px`, `fragment_policy`. Tests assert v3 ⊇ manifest, `stamped_object_tile_fraction` unchanged, `_training_values` unchanged.
+> - **M1:** `publish._request_payload` must forward `geometry_mode`, `tile_overlap`, `min_retained_area_frac` (validated) to the child; Task 8 tests feed `_request_payload(...)["build_manifest"]`, not the full manifest.
+> - **M2:** single np.median operating rule (S1 already changed).
+> - **M4:** `read_tiling_meta` never raises — `_positive_int` for `imgsz`, `_tile_pairs` skips non-finite/unparseable entries, `except Exception` around canonicalize/spec construction; hostile-input tests (`tile_px_set: 971`, `[["a","b"]]`, NaN/inf, `imgsz` 0.5/inf/NaN).
+> - **M5:** `publish.py` builds the tiling-sidecar path locally (`artifact_path.with_name(artifact_path.name + ".slice_meta.json")`) — importing `core.inference.slice_meta` loads torch via `core/inference/__init__`.
+> - **m3:** SAM3 tiling write read-merges an existing `.slice_meta.json` (`merge_training_geometry(read_slice_meta(artifact), ...)`), preserving profiles.
+> - **m4:** check `engine_params.py:516` drift-check gating on `target_sizes` (unchanged under additive YOLO v3; verify).
+> - **m7:** the S2 equivalence smoke only proves import-time inertness; writer behavior is covered by Task 7 tests.
 
 Setup (after S1 is merged):
 
