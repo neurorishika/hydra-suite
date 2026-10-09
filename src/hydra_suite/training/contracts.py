@@ -380,6 +380,11 @@ class AugmentationProfile:
         0.0  # 0=off; ~0.5 recommended. P(apply) decode-color re-sim.
     )
     resample_sim: float = 0.0  # 0=off; ~0.3 recommended. P(apply) alternate resampler.
+    # Scale / aspect-ratio invariance for canonical classifier crops
+    # (training-only; see training/scale_crop_aug.py). 0 = off. The crop
+    # centre is never moved; only the window's size / aspect ratio change.
+    scale_jitter: float = 0.0  # window size factor ~ U(1-j, 1+j)
+    aspect_jitter: float = 0.0  # window w:h ratio, log-uniform in [1/(1+a), 1+a]
     canonical_aug: bool = False  # off by default; opt-in Moderate CanonicalAug
     # (resample-kernel swap + sub-pixel warp jitter + mild blur/JPEG degrade)
     # applied to the canonical crop before the Layer-2 letterbox. Training-only.

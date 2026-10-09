@@ -7292,6 +7292,8 @@ class MainWindow(QMainWindow):
             saturation=settings.get("saturation", 0.0),
             brightness=settings.get("brightness", 0.0),
             contrast=settings.get("contrast", 0.0),
+            scale_jitter=settings.get("scale_jitter", 0.0),
+            aspect_jitter=settings.get("aspect_jitter", 0.0),
             decode_color_sim=settings.get("decode_color_sim", 0.0),
             resample_sim=settings.get("resample_sim", 0.0),
             monochrome=bool(settings.get("monochrome", False)),
