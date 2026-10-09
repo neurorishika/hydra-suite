@@ -286,6 +286,22 @@ def _artifact_paths(models_root: Path, run_id: str) -> tuple[Path, Path]:
     return artifact, artifact.with_name(artifact.name + ".sam3_meta.json")
 
 
+def _tiling_sidecar_is_profile_free(path: Path) -> bool:
+    """True only when ``path`` provably carries no calibration profiles.
+
+    The tiling sidecar read-merges profiles a user saved beside the artifact
+    before this publish; those are not the attempt's to delete. A file that
+    cannot be read cannot prove it is profile-free, so it is kept.
+    """
+    if not path.is_file():
+        return False
+    try:
+        document = _read_json_bounded(path, maximum_bytes=MAX_SIDECAR_BYTES)
+    except (OSError, RuntimeError):
+        return False
+    return not document.get("profiles")
+
+
 def _cleanup_attempt(
     *,
     artifact_path: Path,
@@ -323,7 +339,8 @@ def _cleanup_attempt(
         tiling_sidecar = artifact_path.with_name(
             artifact_path.name + ".slice_meta.json"
         )
-        attempt(lambda: tiling_sidecar.unlink(missing_ok=True))
+        if _tiling_sidecar_is_profile_free(tiling_sidecar):
+            attempt(lambda: tiling_sidecar.unlink(missing_ok=True))
         attempt(
             lambda: tiling_sidecar.with_name(tiling_sidecar.name + ".tmp").unlink(
                 missing_ok=True

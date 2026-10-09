@@ -24,6 +24,7 @@ from typing import Any
 
 import torch
 
+from hydra_suite.core.inference import slice_meta as _slice_meta
 from hydra_suite.core.inference.slice_meta import (
     merge_training_geometry,
     read_slice_meta,
@@ -213,6 +214,11 @@ def _write_tiling_sidecar(
         )
         return write_slice_meta(artifact_path, merged)
     except Exception:
+        try:
+            staged = _slice_meta.sidecar_path(artifact_path)
+            staged.with_name(staged.name + ".tmp").unlink(missing_ok=True)
+        except Exception:
+            pass
         logger.warning(
             "sam3 publish: could not write the tiling sidecar for %s; "
             "readers fall back to .sam3_meta.json",

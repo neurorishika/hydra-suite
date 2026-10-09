@@ -154,3 +154,76 @@ def test_cleanup_keeps_unowned_tiling_sidecar(tmp_path):
         attempt_id="a" * 32,
     )
     assert tiling.exists()
+
+
+def _owned_pair(tmp_path, attempt_id="a" * 32):
+    artifact = tmp_path / "sam3-run.pt"
+    sam3_sidecar = tmp_path / "sam3-run.pt.sam3_meta.json"
+    artifact.write_bytes(b"x")
+    sam3_sidecar.write_text(json.dumps({"publish_attempt_id": attempt_id}))
+    return artifact, sam3_sidecar
+
+
+def test_cleanup_keeps_owned_tiling_sidecar_with_profiles(tmp_path):
+    """Review m1: user calibration beside the artifact outlives a failed publish."""
+    artifact, sam3_sidecar = _owned_pair(tmp_path)
+    profile = {
+        "id": "p-1",
+        "name": "Calibrated",
+        "note": "",
+        "settings": {},
+        "measurement": {},
+    }
+    tiling = sidecar_path(artifact)
+    write_slice_meta(
+        artifact,
+        {
+            "schema_version": 3,
+            "model_family": "sam3",
+            "training_geometry": {},
+            "primary_profile_id": "p-1",
+            "profiles": [profile],
+        },
+    )
+    staged = tiling.with_name(tiling.name + ".tmp")
+    staged.write_text("{}")
+    publish._cleanup_attempt(
+        artifact_path=artifact,
+        sidecar_path=sam3_sidecar,
+        control_dir=None,
+        attempt_id="a" * 32,
+    )
+    assert not artifact.exists() and not sam3_sidecar.exists()
+    assert json.loads(tiling.read_text())["profiles"] == [profile]
+    assert not staged.exists()
+
+
+def test_cleanup_keeps_unreadable_tiling_sidecar(tmp_path):
+    """Cannot prove it is profile-free, so it is never deleted."""
+    artifact, sam3_sidecar = _owned_pair(tmp_path)
+    tiling = sidecar_path(artifact)
+    tiling.write_text("{not json")
+    publish._cleanup_attempt(
+        artifact_path=artifact,
+        sidecar_path=sam3_sidecar,
+        control_dir=None,
+        attempt_id="a" * 32,
+    )
+    assert tiling.exists()
+
+
+def test_write_failure_after_staging_leaves_no_tmp(tmp_path, monkeypatch):
+    """Review m2: a failed replace() must not strand <sidecar>.tmp beside the artifact."""
+    artifact = tmp_path / "sam3-run.pt"
+    artifact.write_bytes(b"x")
+
+    def half_write(model_path, meta):
+        target = sidecar_path(model_path)
+        target.with_name(target.name + ".tmp").write_text(json.dumps(meta))
+        raise OSError("replace failed")
+
+    monkeypatch.setattr(publish_worker, "write_slice_meta", half_write)
+    assert publish_worker._write_tiling_sidecar(artifact, FULL_MANIFEST) is None
+    tiling = sidecar_path(artifact)
+    assert not tiling.exists()
+    assert not tiling.with_name(tiling.name + ".tmp").exists()
