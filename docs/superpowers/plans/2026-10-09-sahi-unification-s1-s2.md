@@ -41,6 +41,11 @@
 12. (S1 adversarial M6) A positive `tile_fraction` implies `enabled=True` (explicit `enabled` wins).
 13. `utils/tiling_spec.py` may exceed 500 lines (CLAUDE.md's guideline targets classes); resolvers split to `utils/tiling_resolve.py` only past ~650 lines.
 
+### S2 adversarial-review decisions (2026-10-09)
+
+- Fixed in the S2 fix wave: malformed profile `measurement` no longer raises (TrackerKit crashed on it too); SAM3 builder/reader never invent a fraction from the YOLO 0.15 fallback; `read_tiling_meta` uses family-correct defaults (YOLO `auto_object` like `_training_values`, SAM3 `nms`/`polygon_iou`/`crowd`) and never claims a default fraction; owned cleanup keeps a `.slice_meta.json` that carries user profiles; failed tiling writes leave no `.tmp`; `merge_training_geometry` requires `model_family`; publish → sidecar end-to-end tests.
+- Accepted, documented: a stale `.slice_meta.json` beside a fresh SAM3 publish target is read-merged (profiles kept, relabelled `sam3`); an OLD build's profile upsert on a v3 doc writes schema 2 without `model_family` (mixed-version only); the SAM3 publish child imports `core.inference` (+~220 MB RSS, measured on diptera; the training child already does); flat docs carrying envelope keys lose them from `training_geometry()` (no writer produces them).
+
 ## Review Focus
 
 1. An older TrackerKit (`slice_meta._training_values`) reading a v3 YOLO sidecar must return exactly (`==`, bit-exact floats) what it returns for the equivalent v2 sidecar — including multi-scale `target_sizes` medians. → Task 5.
