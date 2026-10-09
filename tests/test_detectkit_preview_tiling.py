@@ -272,3 +272,27 @@ def test_disabled_preview_key_ignores_the_sidecar(tmp_path):
     assert a == b
     assert a["slice_settings"] == {"enabled": False}
     assert not any(key.startswith("slice_") and key != "slice_settings" for key in a)
+
+
+def test_sidecar_is_parsed_once_until_it_changes(tmp_path, monkeypatch):
+    """m2: overlay refreshes must not re-parse the sidecar every call."""
+    import os
+
+    from hydra_suite.detectkit.jobs import preview_tiling as pt
+
+    pt._read_slice_meta_cached.cache_clear()
+    calls = []
+    real = pt.read_slice_meta
+    monkeypatch.setattr(
+        pt, "read_slice_meta", lambda path: calls.append(path) or real(path)
+    )
+    model = _model(tmp_path, {"training_geometry": GEOM})
+    project = SliceTrainingSettings(enabled=True)
+    first = resolve_preview_tiling(model, project, project_imgsz=640, override=None)
+    second = resolve_preview_tiling(model, project, project_imgsz=640, override=None)
+    assert len(calls) == 1 and first == second
+    sidecar = model.with_name(model.name + ".slice_meta.json")
+    stat = sidecar.stat()
+    os.utime(sidecar, ns=(stat.st_atime_ns, stat.st_mtime_ns + 1_000_000))
+    resolve_preview_tiling(model, project, project_imgsz=640, override=None)
+    assert len(calls) == 2

@@ -17,13 +17,16 @@ or corrupt sidecar resolves to the project settings.
 
 from __future__ import annotations
 
+import copy
 import logging
 import math
 from dataclasses import dataclass, replace
+from functools import lru_cache
 from pathlib import Path
 
 from hydra_suite.core.inference.slice_meta import (
     read_slice_meta,
+    sidecar_path,
     slice_meta_to_panel_values,
 )
 
@@ -48,6 +51,27 @@ class PreviewTiling:
     merge_policy: str = DEFAULT_PREVIEW_MERGE_POLICY
     merge_metric: str = DEFAULT_PREVIEW_MERGE_METRIC
     source: str = "project"  # override | profile:<name> | training | project
+
+
+@lru_cache(maxsize=32)
+def _read_slice_meta_cached(model_path: str, mtime_ns: int, size: int):
+    """Parse once per (path, mtime_ns, size); a recalibration changes the key."""
+    del mtime_ns, size  # cache-key only
+    return read_slice_meta(model_path)
+
+
+def _read_slice_meta(model_path: str | Path) -> dict | None:
+    """The sidecar, memoized on its stat so overlay refreshes do not re-parse.
+
+    ``_dataset_signature`` resolves the tiling several times per keypress (m2).
+    A copy is returned: callers must never mutate the shared cached document.
+    """
+    try:
+        stat = sidecar_path(model_path).stat()
+    except OSError:
+        return None
+    meta = _read_slice_meta_cached(str(model_path), stat.st_mtime_ns, stat.st_size)
+    return copy.deepcopy(meta) if meta is not None else None
 
 
 def _finite_float(value: object) -> float | None:
@@ -82,7 +106,7 @@ def resolve_preview_tiling(
     if not model_path:
         return project_only
     try:
-        meta = read_slice_meta(model_path)
+        meta = _read_slice_meta(model_path)
         if meta is None:
             return project_only
         values = slice_meta_to_panel_values(meta, None)
