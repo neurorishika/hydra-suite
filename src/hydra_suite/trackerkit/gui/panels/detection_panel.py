@@ -782,6 +782,7 @@ class DetectionPanel(QWidget):
                 body_override=False,
                 body_display_only=True,
                 advanced_merge=False,
+                merge_threshold_row=False,
                 execution_knobs=True,
             ),
         )

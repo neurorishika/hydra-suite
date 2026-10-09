@@ -560,3 +560,27 @@ def test_advanced_slice_keys_equal_spins_after_load_profile_and_geometry(
     )
     _assert_advanced_matches_spins(reloaded, "config load")
     reloaded.close()
+
+
+def test_advanced_shows_only_bound_trackerkit_rows(monkeypatch):
+    """Decision 25: no merge rows (profile-owned) and no full-frame pass;
+    Advanced holds exactly the execution knobs, with their admission note."""
+    window = _make_main_window(monkeypatch)
+    panel = window._detection_panel
+    widget = panel.slice_settings
+    panel.chk_slice_enabled.setChecked(True)
+    assert panel.lbl_slice_batch_admission.isVisibleTo(panel) is False
+    widget.btn_slice_advanced.setChecked(True)
+    for hidden in (
+        widget.spin_slice_merge,
+        widget.combo_slice_merge_policy,
+        widget.combo_slice_merge_metric,
+        widget.chk_slice_full_frame_pass,
+    ):
+        assert hidden.isVisibleTo(panel) is False
+    assert panel.spin_slice_tile_batch.isVisibleTo(panel) is True
+    assert panel.spin_slice_memory_budget.isVisibleTo(panel) is True
+    assert panel.lbl_slice_batch_admission.isVisibleTo(panel) is True
+    # The body size is display-only, never editable (no config key to bind).
+    assert widget.spin_slice_body.isEnabled() is False
+    window.close()
