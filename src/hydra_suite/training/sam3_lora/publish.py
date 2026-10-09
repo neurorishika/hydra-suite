@@ -317,6 +317,18 @@ def _cleanup_attempt(
     if owned_final_pair:
         attempt(lambda: artifact_path.unlink(missing_ok=True))
         attempt(lambda: sidecar_path.unlink(missing_ok=True))
+        # The child's v3 tiling sidecar (publish_worker._write_tiling_sidecar).
+        # Built locally: importing core.inference here would load torch in the
+        # parent (core/inference/__init__ pulls the runner).
+        tiling_sidecar = artifact_path.with_name(
+            artifact_path.name + ".slice_meta.json"
+        )
+        attempt(lambda: tiling_sidecar.unlink(missing_ok=True))
+        attempt(
+            lambda: tiling_sidecar.with_name(tiling_sidecar.name + ".tmp").unlink(
+                missing_ok=True
+            )
+        )
     if artifact_path.parent.exists():
         staged_artifact = artifact_path.with_name(
             f".{artifact_path.name}.{attempt_id}.tmp"
@@ -476,6 +488,33 @@ def _request_payload(
         if isinstance(value, float) and not math.isfinite(value):
             raise ValueError(f"SAM3 publish geometry {field!r} must be finite")
         geometry[field] = value
+    # Tiling settings the child stamps into the v3 .slice_meta.json. Without
+    # them the child would record a geometry the build never used.
+    mode = build_manifest.get("geometry_mode")
+    if mode is not None:
+        if mode not in ("auto_model", "auto_object", "custom"):
+            raise ValueError(
+                f"SAM3 publish geometry 'geometry_mode' is invalid: {mode!r}"
+            )
+        geometry["geometry_mode"] = mode
+    for field, upper_inclusive in (
+        ("tile_overlap", False),
+        ("min_retained_area_frac", True),
+    ):
+        if field not in build_manifest:
+            continue
+        value = build_manifest[field]
+        if (
+            isinstance(value, bool)
+            or not isinstance(value, (int, float))
+            or not math.isfinite(float(value))
+            or float(value) < 0.0
+            or (float(value) > 1.0 if upper_inclusive else float(value) >= 1.0)
+        ):
+            raise ValueError(
+                f"SAM3 publish geometry {field!r} is out of range: {value!r}"
+            )
+        geometry[field] = float(value)
     return {
         "run_id": run_id,
         "adapters_path": str(adapters_path),
