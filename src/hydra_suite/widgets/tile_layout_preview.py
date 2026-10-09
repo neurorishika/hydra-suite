@@ -256,7 +256,7 @@ class _TileLayoutPreview(QWidget):
         )
         scale_note = (
             " · ".join(
-                f"● {fraction:.2f} → {width} px"
+                f"● {fraction:g} → {width} px"
                 for fraction, width, _height, _color in specs
                 if fraction is not None
             )

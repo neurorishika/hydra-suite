@@ -25,7 +25,6 @@ from PySide6.QtWidgets import (
     QHBoxLayout,
     QLabel,
     QLineEdit,
-    QPushButton,
     QToolButton,
     QWidget,
 )
@@ -117,15 +116,51 @@ class SliceSettingsWidget(QGroupBox):
         self._advanced_expanded = False
         self._profile_row_shown = False
         self._loading = False
-        if not title:
+        # Constrained controls must LOOK disabled under any host theme (the
+        # DetectKit dark theme styles inputs but not their :disabled state).
+        self._bare = not title
+        if self._bare:
             self.setFlat(True)
-            self.setStyleSheet("QGroupBox { border: 0; margin-top: 0; padding: 0; }")
+        self._apply_style(None)
 
         self._build_controls()
         self._build_layout(bare=not title)
         self._wire()
         self._apply_role_defaults()
         self._refresh()
+
+    # ------------------------------------------------------------------ style
+
+    def _apply_style(self, text_color: str | None) -> None:
+        """Widget-scoped styling that reads correctly under any host theme.
+
+        Constrained controls must LOOK disabled even where the host theme
+        styles inputs but not their ``:disabled`` state (DetectKit's dark
+        theme). Tool buttons take the host's label colour, which a theme sets
+        through a stylesheet the buttons themselves do not match.
+        """
+        style = ""
+        if text_color:
+            style += f"QToolButton {{ color: {text_color}; }} "
+        style += (
+            "QAbstractSpinBox:disabled, QComboBox:disabled, QLineEdit:disabled,"
+            " QCheckBox:disabled, QToolButton:disabled { color: #a0a5ab; }"
+            " QToolButton#sliceUseSuggested { border: 1px solid #8f969e;"
+            " border-radius: 3px; padding: 1px 8px; background: transparent; }"
+        )
+        if self._bare:
+            style += " QGroupBox { border: 0; margin-top: 0; padding: 0; }"
+        self.setStyleSheet(style)
+
+    def showEvent(self, event) -> None:  # noqa: N802 - Qt override
+        super().showEvent(event)
+        probe = self._rows.get("mode", self._rows.get("body"))
+        if probe is None:
+            return
+        color = probe[0].palette().color(probe[0].foregroundRole()).name()
+        if color != getattr(self, "_styled_text_color", None):
+            self._styled_text_color = color
+            self._apply_style(color)
 
     # ------------------------------------------------------------------ build
 
@@ -240,7 +275,9 @@ class SliceSettingsWidget(QGroupBox):
             "at tile edges but creates more inference work.",
         )
         self.lbl_slice_overlap_suggested = muted_label()
-        self.btn_slice_overlap_use_suggested = QPushButton("Use suggested")
+        self.btn_slice_overlap_use_suggested = QToolButton()
+        self.btn_slice_overlap_use_suggested.setText("Use suggested")
+        self.btn_slice_overlap_use_suggested.setObjectName("sliceUseSuggested")
         self.btn_slice_overlap_use_suggested.setToolTip(
             "Set the overlap to the largest object scale + margin, which keeps "
             "every animal whole inside at least one tile."
@@ -832,7 +869,8 @@ class SliceSettingsWidget(QGroupBox):
             )
         body = float(spec.reference_body_px)
         if role in TRAIN_ROLES:
-            source = "dataset" if body > 0 else "default"
+            # Always measured from the labels at build time (0 = not yet).
+            source = "dataset"
         else:
             source = "user" if body > 0 else "default"
         self._body_derived = (body, source)
@@ -1017,7 +1055,10 @@ class SliceSettingsWidget(QGroupBox):
             self._refresh_reference_note(body)
         if self._caps.fixed_overlap is None:
             suggested = self._suggested_overlap()
-            self.lbl_slice_overlap_suggested.setText(f"Suggested: {suggested:.2f}")
+            decimals = self.spin_slice_overlap.decimals()
+            self.lbl_slice_overlap_suggested.setText(
+                f"Suggested: {suggested:.{decimals}f}"
+            )
             self.lbl_slice_overlap_suggested.setToolTip(
                 "Largest object scale + margin: every animal fits whole inside at "
                 "least one tile. A suggestion only — your overlap is kept."

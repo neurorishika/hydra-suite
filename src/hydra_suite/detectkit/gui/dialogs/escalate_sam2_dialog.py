@@ -10,7 +10,7 @@ from __future__ import annotations
 from dataclasses import asdict
 from datetime import datetime, timezone
 
-from PySide6.QtCore import Qt
+from PySide6.QtCore import QSize, Qt
 from PySide6.QtWidgets import (
     QComboBox,
     QGridLayout,
@@ -191,6 +191,7 @@ class EscalateSam2Dialog(DetectKitDialog):
 
         self.add_content(container)
         self.setMinimumSize(760, 480)
+        self.fit_to_content(QSize(760, 480))
 
     # -- legacy accessors used by the handler and tests ---------------------
 

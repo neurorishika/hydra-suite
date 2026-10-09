@@ -2,7 +2,7 @@
 
 from __future__ import annotations
 
-from PySide6.QtCore import QEvent, QObject
+from PySide6.QtCore import QEvent, QObject, QSize
 from PySide6.QtWidgets import QAbstractSpinBox, QApplication
 
 from hydra_suite.widgets.dialogs import BaseDialog
@@ -35,3 +35,18 @@ class DetectKitDialog(BaseDialog):
                 return self.isAncestorOf(current)
             current = current.parent()
         return False
+
+    def fit_to_content(self, base_minimum: QSize) -> None:
+        """Keep an explicit minimum size from clipping the layout's content.
+
+        An explicit ``setMinimumSize`` disables the layout's own minimum, so
+        a dialog whose content grows (e.g. an expanded Advanced section)
+        would otherwise squeeze rows on top of one another.
+        """
+        layout = self.layout()
+        if layout is not None:
+            layout.invalidate()
+            layout.activate()
+        minimum = base_minimum.expandedTo(self.minimumSizeHint())
+        self.setMinimumSize(minimum)
+        self.resize(self.size().expandedTo(minimum))

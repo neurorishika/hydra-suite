@@ -6,7 +6,7 @@ from dataclasses import asdict
 from datetime import datetime, timezone
 from pathlib import Path
 
-from PySide6.QtCore import Qt
+from PySide6.QtCore import QSize, Qt
 from PySide6.QtWidgets import (
     QCheckBox,
     QComboBox,
@@ -429,6 +429,10 @@ class SemanticEscalationDialog(DetectKitDialog):
         self.add_content(container)
         self.setMinimumSize(720, 500)
         self.resize(820, 560)
+        self.fit_to_content(QSize(720, 500))
+        self._tiling.btn_slice_advanced.toggled.connect(
+            lambda _expanded: self.fit_to_content(QSize(720, 500))
+        )
 
     # -- accessors used by the handler -------------------------------------
 
