@@ -22,12 +22,17 @@ from PySide6.QtWidgets import (
 )
 
 from hydra_suite.detectkit.gui.dialogs._base import DetectKitDialog
+from hydra_suite.utils.tiling_spec import BACKEND_DEFAULTS, FRACTION_MAX, FRACTION_MIN
 
 from ..models import (
     INFERENCE_CONFIDENCE_FLOOR,
     InferenceRunSettings,
     SliceTrainingSettings,
 )
+
+# The runtime preview's single scale when nothing is configured: TrackerKit's
+# inference default from the one defaults table.
+_DEFAULT_INFERENCE_FRACTION = BACKEND_DEFAULTS["yolo_infer"].object_tile_fractions[0]
 
 
 def _device_options(current: str) -> list[str]:
@@ -62,6 +67,8 @@ class InferenceSettingsDialog(DetectKitDialog):
         settings: InferenceRunSettings,
         defaults: InferenceRunSettings,
         parent=None,
+        *,
+        model_input_size: int = 640,
     ) -> None:
         super().__init__(
             "Inference Settings",
@@ -72,6 +79,8 @@ class InferenceSettingsDialog(DetectKitDialog):
             ),
         )
         self._defaults = defaults
+        # Only used to SHOW the fraction in pixels; nothing is stored in px.
+        self._model_input_size = max(1, int(model_input_size))
         self.resize(620, 520)
         self._build_content()
         self.load_from(settings)
@@ -126,13 +135,17 @@ class InferenceSettingsDialog(DetectKitDialog):
         self.combo_geometry = QComboBox()
         self.combo_geometry.addItems(["auto_object", "auto_model", "custom"])
         self.combo_geometry.currentTextChanged.connect(self._refresh_enabled_state)
-        self.spin_target_size = QSpinBox()
-        self.spin_target_size.setRange(16, 4096)
-        self.spin_target_size.setSingleStep(16)
-        self.spin_target_size.setToolTip(
-            "Apparent object size at the model input. Larger values use smaller tiles "
-            "and can make high-resolution inference much slower."
+        self.spin_object_fraction = QDoubleSpinBox()
+        self.spin_object_fraction.setRange(FRACTION_MIN, FRACTION_MAX)
+        self.spin_object_fraction.setDecimals(3)
+        self.spin_object_fraction.setSingleStep(0.005)
+        self.spin_object_fraction.setToolTip(
+            "Object size as a fraction of the tile (the model input). Larger "
+            "fractions use smaller tiles and can make high-resolution inference "
+            "much slower."
         )
+        self.lbl_scale_px = QLabel()
+        self.spin_object_fraction.valueChanged.connect(self._refresh_scale_px)
         self.spin_reference_body = QDoubleSpinBox()
         self.spin_reference_body.setRange(0.0, 16384.0)
         self.spin_reference_body.setDecimals(1)
@@ -152,8 +165,13 @@ class InferenceSettingsDialog(DetectKitDialog):
 
         grid.addWidget(QLabel("Geometry mode"), 0, 0)
         grid.addWidget(self.combo_geometry, 0, 1)
-        grid.addWidget(QLabel("Target object size (px)"), 0, 2)
-        grid.addWidget(self.spin_target_size, 0, 3)
+        grid.addWidget(QLabel("Object scale (fraction of tile)"), 0, 2)
+        object_scale = QWidget()
+        object_scale_layout = QHBoxLayout(object_scale)
+        object_scale_layout.setContentsMargins(0, 0, 0, 0)
+        object_scale_layout.addWidget(self.spin_object_fraction)
+        object_scale_layout.addWidget(self.lbl_scale_px)
+        grid.addWidget(object_scale, 0, 3)
         grid.addWidget(QLabel("Reference body (px)"), 1, 0)
         grid.addWidget(self.spin_reference_body, 1, 1)
         grid.addWidget(QLabel("Tile width / height"), 1, 2)
@@ -195,34 +213,38 @@ class InferenceSettingsDialog(DetectKitDialog):
             sliced.geometry_mode, Qt.MatchFlag.MatchFixedString
         )
         self.combo_geometry.setCurrentIndex(index if index >= 0 else 0)
-        target_sizes = [float(value) for value in sliced.target_sizes if value > 0]
-        self.spin_target_size.setValue(
-            max(16, round(median(target_sizes))) if target_sizes else 96
+        # Fractions only (F1). A legacy pixel project resolves through
+        # target_fractions() (pixels / 640 -- how it was always interpreted).
+        fractions = [float(value) for value in sliced.target_fractions() if value > 0]
+        self.spin_object_fraction.setValue(
+            float(median(fractions)) if fractions else _DEFAULT_INFERENCE_FRACTION
         )
         self.spin_reference_body.setValue(float(sliced.reference_body_px))
         self.spin_width.setValue(int(sliced.slice_width))
         self.spin_height.setValue(int(sliced.slice_height))
         self.spin_overlap.setValue(float(sliced.overlap))
         self.spin_merge.setValue(float(sliced.merge_threshold))
+        self._refresh_scale_px()
         self._refresh_enabled_state()
 
     def settings(self) -> InferenceRunSettings:
         """Return a fresh runtime configuration from the current dialog state."""
-        target_size = float(self.spin_target_size.value())
+        fraction = float(self.spin_object_fraction.value())
         return InferenceRunSettings(
             device=self.combo_device.currentText().strip() or "auto",
             confidence_threshold=float(self.spin_confidence.value()),
             slice_settings=SliceTrainingSettings(
                 enabled=self.chk_sliced.isChecked(),
                 geometry_mode=self.combo_geometry.currentText(),
-                # ``target_sizes`` controls auto_object preview geometry; keep a
-                # single deliberate runtime scale rather than the training mix.
-                object_tile_fraction=target_size / 640.0,
+                # One deliberate runtime scale rather than the training mix,
+                # stored as a fraction only; ``target_sizes`` keeps its default
+                # and is ignored because fractions are present (F1).
+                object_tile_fraction=fraction,
                 reference_body_px=float(self.spin_reference_body.value()),
                 slice_width=int(self.spin_width.value()),
                 slice_height=int(self.spin_height.value()),
                 overlap=float(self.spin_overlap.value()),
-                target_sizes=[target_size],
+                target_size_fractions=[fraction],
                 merge_threshold=float(self.spin_merge.value()),
             ),
         )
@@ -231,10 +253,16 @@ class InferenceSettingsDialog(DetectKitDialog):
         sliced = self.chk_sliced.isChecked()
         geometry = self.combo_geometry.currentText()
         self.combo_geometry.setEnabled(sliced)
-        self.spin_target_size.setEnabled(sliced and geometry == "auto_object")
+        self.spin_object_fraction.setEnabled(sliced and geometry == "auto_object")
         self.spin_reference_body.setEnabled(sliced and geometry == "auto_object")
         custom = sliced and geometry == "custom"
         self.spin_width.setEnabled(custom)
         self.spin_height.setEnabled(custom)
         self.spin_overlap.setEnabled(sliced)
         self.spin_merge.setEnabled(sliced)
+
+    def _refresh_scale_px(self, *_args) -> None:
+        pixels = float(self.spin_object_fraction.value()) * self._model_input_size
+        self.lbl_scale_px.setText(
+            f"≈ {pixels:.1f} px at {self._model_input_size} px input"
+        )

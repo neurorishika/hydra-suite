@@ -2193,7 +2193,9 @@ QTabBar::tab:selected {
             if role in direct_roles:
                 self.slice_group.set_model_input_size(direct_roles[role].value())
                 return
-        self.slice_group.set_model_input_size(640)
+        # No direct role selected: the project direct OBB input, never a
+        # literal 640 (F1).
+        self.slice_group.set_model_input_size(self.spin_imgsz_obb_direct.value())
 
     def _source_fit_summary(self) -> str:
         sources = list(self._project.sources)

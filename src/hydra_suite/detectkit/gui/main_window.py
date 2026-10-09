@@ -1623,7 +1623,12 @@ class DetectKitMainWindow(QMainWindow):
             self._project, overlay_settings.confidence_threshold
         )
         current = self._effective_inference_settings(overlay_settings)
-        dialog = InferenceSettingsDialog(current, defaults, parent=self)
+        dialog = InferenceSettingsDialog(
+            current,
+            defaults,
+            parent=self,
+            model_input_size=int(self._project.imgsz_obb_direct),
+        )
         if not dialog.exec():
             return
 
