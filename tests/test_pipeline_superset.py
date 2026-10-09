@@ -16,22 +16,31 @@ from hydra_suite.core.inference.config import (
     OBBDirectConfig,
 )
 from hydra_suite.core.inference.result import (
+    AprilTagResult,
     CNNDetectionPrediction,
     CNNResult,
     HeadTailResult,
     OBBResult,
+    PoseResult,
 )
 
 
-def _obb(frame_idx, n):
+def _obb(frame_idx, n, small=None):
+    # Confidence descends with raw index, so the ranked cache order == raw
+    # order. Row ``small`` gets a tiny area so the size filter (applied after
+    # rank_and_bound) drops it: superset raw indices become NON-contiguous,
+    # making raw keying distinguishable from positional keying.
     xs = np.arange(n, dtype=np.float32) * 50.0
     c = np.stack([xs, np.zeros(n, np.float32)], 1)
     corners = np.stack([c + d for d in ([-4, -4], [4, -4], [4, 4], [-4, 4])], 1)
+    sizes = np.full(n, 64.0, np.float32)
+    if small is not None:
+        sizes[small] = 1.0
     return OBBResult(
         frame_idx,
         c,
         np.zeros(n, np.float32),
-        np.full(n, 64.0, np.float32),
+        sizes,
         np.ones((n, 2), np.float32),
         np.linspace(0.9, 0.5, n).astype(np.float32),
         corners.astype(np.float32),
@@ -66,15 +75,38 @@ def _fake_cnn(frames, obbs, model, cfg, runtime, geometry, headtail_by_frame=Non
     }
 
 
-def _run_window(cfg, n_dets, models, caches, **extra_patches):
+def _fake_pose(crop_batch, model, pcfg, runtime, geometry):
+    # keypoint x = the detection's centroid x (payload identifies the detection)
+    out = {}
+    for fi, o in crop_batch.obb_by_frame.items():
+        kp = np.zeros((o.num_detections, 1, 3), np.float32)
+        kp[:, 0, 0] = o.centroids[:, 0]
+        kp[:, 0, 2] = 1.0
+        out[fi] = PoseResult(keypoints=kp, valid_mask=np.ones(o.num_detections, bool))
+    return out
+
+
+def _fake_apriltag(aabb_crops, obb, model, cfg):
+    # Sparse: a tag on every even chunk-local row, tag_id = centroid x.
+    rows = list(range(0, obb.num_detections, 2))
+    return AprilTagResult(
+        tag_ids=[int(obb.centroids[r, 0]) for r in rows],
+        det_indices=rows,
+        centers=obb.centroids[rows].astype(np.float32),
+        corners=obb.corners[rows].astype(np.float32),
+    )
+
+
+def _run_window(cfg, n_dets, models, caches, small=None, **extra_patches):
     from hydra_suite.core.inference.pipeline import BatchWindow
     from hydra_suite.core.inference.runner import InferenceRunner
 
+    downstream = []
     with (
         patch("hydra_suite.core.inference.runner._load_all_models") as ml,
         patch(
             "hydra_suite.core.inference.pipeline.run_obb",
-            side_effect=lambda frames, *a, **k: [_obb(0, n_dets)],
+            side_effect=lambda frames, *a, **k: [_obb(0, n_dets, small)],
         ),
         patch(
             "hydra_suite.core.inference.pipeline.run_headtail_batch",
@@ -84,15 +116,30 @@ def _run_window(cfg, n_dets, models, caches, **extra_patches):
             "hydra_suite.core.inference.pipeline.run_cnn_batch",
             side_effect=_fake_cnn,
         ),
+        patch(
+            "hydra_suite.core.inference.pipeline.run_pose_batch",
+            side_effect=_fake_pose,
+        ),
+        patch(
+            "hydra_suite.core.inference.pipeline.run_apriltag",
+            side_effect=_fake_apriltag,
+        ),
     ):
         ml.return_value = models
         runner = InferenceRunner(cfg, cache_dir=None)
         pipeline = runner._build_pipeline(caches)
+        real_write = pipeline.cache_writer.write_downstream
+
+        def _spy(frame_idx, **kw):
+            downstream.append(kw)
+            return real_write(frame_idx, **kw)
+
+        pipeline.cache_writer.write_downstream = _spy
         results = pipeline._process_window(
-            BatchWindow(frames=[np.zeros((64, 400, 3), np.uint8)], frame_indices=[0])
+            BatchWindow(frames=[np.zeros((64, 600, 3), np.uint8)], frame_indices=[0])
         )
         pipeline.cache_writer.flush()
-    return results
+    return results, downstream
 
 
 def _cfg(max_detections, **kw):
@@ -103,6 +150,7 @@ def _cfg(max_detections, **kw):
             max_detections=max_detections,
             confidence_threshold=0.0,
             iou_threshold=1.0,
+            min_object_size=10.0,
         ),
         **kw,
     )
@@ -118,25 +166,30 @@ def test_batch_writes_superset_and_returns_final():
     models = MagicMock(
         obb=MagicMock(), headtail=MagicMock(), cnn=[], pose=None, apriltag=None
     )
-    results = _run_window(cfg, 6, models, caches)
+    # raw row 1 is dropped by the size filter -> superset raw [0, 2, 3, 4, 5]
+    results, _ = _run_window(cfg, 6, models, caches, small=1)
 
-    # cache holds the N-free superset (all 6), keyed by raw index
-    assert writer_calls[0]["det_indices"].tolist() == [0, 1, 2, 3, 4, 5]
-    assert writer_calls[0]["heading_hints"].tolist() == [0, 50, 100, 150, 200, 250]
-    # the returned in-memory result is the final N=2 set, aligned
+    # cache holds the N-free superset, keyed by RAW index, payloads aligned
+    assert writer_calls[0]["det_indices"].tolist() == [0, 2, 3, 4, 5]
+    assert writer_calls[0]["heading_hints"].tolist() == [0, 100, 150, 200, 250]
+    # the returned in-memory result is the final N=2 set: raw [0, 2]
     (fr,) = [r for r in results if r.frame_idx == 0]
-    assert fr.filtered_indices == [0, 1]
+    assert fr.filtered_indices == [0, 2]
     assert fr.obb.num_detections == 2
-    assert fr.headtail.heading_hints.tolist() == [0.0, 50.0]
+    assert fr.obb.centroids[:, 0].tolist() == [0.0, 100.0]
+    assert fr.headtail.heading_hints.tolist() == [0.0, 100.0]
 
 
 def test_superset_is_chunked_and_cnn_is_raw_in_cache_positional_in_memory():
+    from hydra_suite.core.inference.config import AprilTagConfig, PoseConfig
     from hydra_suite.core.inference.runner import _CacheSet
 
     cfg = _cfg(
         3,
         headtail=HeadTailConfig(model_path="/ht.pt"),
         cnn_phases=[CNNConfig(label="id", model_path="/c.pt")],
+        pose=PoseConfig(suppress_foreign_regions=False),
+        apriltag=AprilTagConfig(enabled=True),
     )
     caches = _CacheSet(detection=MagicMock(), headtail=MagicMock(), cnn=[MagicMock()])
     ht_calls, cnn_calls, chunk_sizes = [], [], []
@@ -151,26 +204,46 @@ def test_superset_is_chunked_and_cnn_is_raw_in_cache_positional_in_memory():
         obb=MagicMock(),
         headtail=MagicMock(),
         cnn=[MagicMock()],
-        pose=None,
-        apriltag=None,
+        pose=MagicMock(),
+        apriltag=MagicMock(),
     )
+    # raw row 1 dropped -> superset raw [0, 2, 3, ..., 9] (9 rows); chunks of 4
+    # start at raw 0, 5, 9 (non-identity positions).
     with patch("hydra_suite.core.inference.limits.DOWNSTREAM_CHUNK_SIZE", 4):
-        results = _run_window(cfg, 10, models, caches, ht=_ht_record)
+        results, downstream = _run_window(
+            cfg, 10, models, caches, small=1, ht=_ht_record
+        )
+    sup = [0, 2, 3, 4, 5, 6, 7, 8, 9]
+    xs = [50.0 * r for r in sup]
 
     # crops are materialised a bounded chunk at a time
-    assert chunk_sizes == [4, 4, 2]
-    # cache: whole superset, in order, CNN keyed by RAW index
-    assert ht_calls[0]["det_indices"].tolist() == list(range(10))
-    assert ht_calls[0]["heading_hints"].tolist() == [50.0 * i for i in range(10)]
+    assert chunk_sizes == [4, 4, 1]
+    # cache: whole superset, in order, keyed by RAW index, payloads aligned
+    assert ht_calls[0]["det_indices"].tolist() == sup
+    assert ht_calls[0]["heading_hints"].tolist() == xs
     preds = cnn_calls[0]["predictions"]
-    assert [p.det_index for p in preds] == list(range(10))
-    assert [p.factors[0] for p in preds] == [50.0 * i for i in range(10)]
-    # memory: final N=3, CNN positional 0..K-1 and aligned with the OBB rows
+    assert [p.det_index for p in preds] == sup
+    assert [p.factors[0] for p in preds] == xs
+    (dw,) = downstream
+    assert dw["det_indices"].tolist() == sup
+    assert dw["pose"].keypoints[:, 0, 0].tolist() == xs
+    # AprilTag: sparse, det_indices RAW. Tags sit on chunk-local rows 0, 2 of
+    # each chunk -> superset positions 0, 2, 4, 6, 8 -> raw 0, 3, 5, 7, 9.
+    at = dw["apriltag"]
+    assert list(at.det_indices) == [0, 3, 5, 7, 9]
+    assert list(at.tag_ids) == [0, 150, 250, 350, 450]
+
+    # memory: final N=3 = raw [0, 2, 3]; everything positional 0..K-1, aligned
     (fr,) = results
-    assert fr.obb.num_detections == 3
+    assert fr.filtered_indices == [0, 2, 3]
+    assert fr.obb.centroids[:, 0].tolist() == [0.0, 100.0, 150.0]
     assert [p.det_index for p in fr.cnn[0].predictions] == [0, 1, 2]
-    assert [p.factors[0] for p in fr.cnn[0].predictions] == [0.0, 50.0, 100.0]
-    assert fr.headtail.heading_hints.tolist() == [0.0, 50.0, 100.0]
+    assert [p.factors[0] for p in fr.cnn[0].predictions] == [0.0, 100.0, 150.0]
+    assert fr.headtail.heading_hints.tolist() == [0.0, 100.0, 150.0]
+    assert fr.pose.keypoints[:, 0, 0].tolist() == [0.0, 100.0, 150.0]
+    # tags on raw 0 and 3 -> final positions 0 and 2 (raw 2 has no tag)
+    assert list(fr.apriltag.det_indices) == [0, 2]
+    assert list(fr.apriltag.tag_ids) == [0, 150]
 
 
 # --- R7: pose foreign-region masking uses the FULL superset, not the chunk ---
