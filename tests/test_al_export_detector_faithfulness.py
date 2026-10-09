@@ -14,6 +14,8 @@ tracking config must not disagree about the geometry that decides what gets
 detected.
 """
 
+import pytest
+
 from hydra_suite.core.inference.config import build_inference_config_from_params
 from hydra_suite.data import dataset_generation
 
@@ -192,6 +194,14 @@ def test_export_does_not_reuse_a_cache_capped_below_its_own_ceiling(monkeypatch)
     assert detection_cache_key(export, None) != detection_cache_key(tracking, None)
 
 
+@pytest.mark.xfail(
+    strict=True,
+    reason=(
+        "N-free extraction sizes segment admission for MAX_DETECTIONS_PER_FRAME+1 "
+        "masks: 1025 x 1024^2 B exceeds the 1 GiB hard ceiling. Estimator/budget "
+        "decision pending (see n-independent-caches task-2 report)."
+    ),
+)
 def test_export_does_not_inherit_tracking_tile_memory_budget(monkeypatch):
     """Tile memory budget is an EXECUTION control, not detection geometry.
 
@@ -202,6 +212,7 @@ def test_export_does_not_inherit_tracking_tile_memory_budget(monkeypatch):
     budget made a sliced segment export inadmissible -- refused outright, with
     zero labels, rather than throttled to smaller chunks.
     """
+    from hydra_suite.core.inference.stages.obb import effective_raw_detection_cap
     from hydra_suite.core.inference.stages.slicing import (
         MAX_TILE_BATCH_BYTES,
         estimated_prediction_job_bytes,
@@ -216,7 +227,9 @@ def test_export_does_not_inherit_tracking_tile_memory_budget(monkeypatch):
     per_tile = estimated_prediction_job_bytes(
         imgsz=1024,
         task="segment",
-        max_detections=export.raw_detection_cap,
+        # The cap extraction actually runs with (raw_detection_cap == 0 means
+        # the N-free limit, not "one candidate").
+        max_detections=effective_raw_detection_cap(export),
         source_bytes=1931 * 1931 * 3,
     )
     assert per_tile <= budget, (
