@@ -203,3 +203,72 @@ def concat_apriltag(
     return AprilTagResult(
         tag_ids, det, np.concatenate(centers), np.concatenate(corners)
     )
+
+
+def run_superset_chunked(
+    superset_obb: OBBResult,
+    run_chunk,
+    n_cnn_phases: int,
+    chunk_size: int,
+):
+    """Run per-animal stages over ``superset_obb`` in ``chunk_size``-row chunks.
+
+    ``run_chunk(chunk, foreign)`` runs one path's stages on one chunk and
+    returns ``(headtail, [cnn per phase], pose, apriltag)`` positionally
+    aligned with ``chunk`` (``None`` for a disabled stage / missing phase).
+    ``foreign`` is the chunk's :class:`ForeignSet` over the FULL superset, so
+    pose foreign-masking never depends on N or the chunking (R7).
+
+    Returns the whole-superset ``(headtail, cnn_per_phase, pose, apriltag)``,
+    positionally aligned with ``superset_obb`` (CNN / AprilTag indices are
+    superset positions). ``cnn_per_phase`` has exactly ``n_cnn_phases``
+    entries, ``None`` for a phase with no result, so it stays phase-aligned
+    with the CNN configs / caches.
+    """
+    from .stages.crops import ForeignSet
+
+    ht_parts: list = []
+    pose_parts: list = []
+    at_parts: list = []
+    cnn_parts: list[list] = [[] for _ in range(n_cnn_phases)]
+    for offset, chunk in split_rows(superset_obb, chunk_size):
+        foreign = ForeignSet(
+            corners=superset_obb.corners,
+            self_rows=np.arange(offset, offset + chunk.num_detections),
+        )
+        ht, cnns, pose, at = run_chunk(chunk, foreign)
+        ht_parts.append(ht)
+        pose_parts.append(pose)
+        at_parts.append((offset, at))
+        for k, result in enumerate(cnns):
+            if result is not None:
+                cnn_parts[k].append((offset, result))
+    return (
+        concat_headtail(ht_parts),
+        [concat_cnn(parts) if parts else None for parts in cnn_parts],
+        concat_pose(pose_parts),
+        concat_apriltag(at_parts),
+    )
+
+
+def narrow_to_final(
+    superset_idx: np.ndarray,
+    final_idx: np.ndarray,
+    headtail: HeadTailResult | None,
+    cnn_per_phase: list[CNNResult | None],
+    pose: PoseResult | None,
+    apriltag: AprilTagResult | None,
+):
+    """Narrow whole-superset results to the final-N set, positionally.
+
+    Raises :class:`DownstreamCacheError` if ``final_idx`` is not a subset of
+    ``superset_idx``. CNN phases with no result (``None``) are dropped from
+    the returned in-memory list.
+    """
+    pos = positions_in(superset_idx, final_idx)
+    return (
+        select_headtail(headtail, pos),
+        [select_cnn(r, pos) for r in cnn_per_phase if r is not None],
+        select_pose(pose, pos),
+        select_apriltag(apriltag, pos),
+    )

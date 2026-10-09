@@ -101,3 +101,65 @@ def test_split_and_concat():
 def test_select_cnn_missing_raises():
     with pytest.raises(DownstreamCacheError, match="5"):
         select_cnn(_cnn(2), np.array([5]))
+
+
+def _line_obb(n):
+    from hydra_suite.core.inference.result import OBBResult
+
+    xs = np.arange(n, dtype=np.float32) * 10.0
+    c = np.stack([xs, np.zeros(n, np.float32)], 1)
+    corners = np.stack([c + d for d in ([-1, -1], [1, -1], [1, 1], [-1, 1])], 1)
+    return OBBResult(
+        0,
+        c,
+        np.zeros(n, np.float32),
+        np.ones(n, np.float32),
+        np.ones((n, 2), np.float32),
+        np.ones(n, np.float32),
+        corners.astype(np.float32),
+        OBBResult.make_detection_ids(0, n),
+    )
+
+
+def test_run_superset_chunked_concats_and_keeps_phase_alignment():
+    from hydra_suite.core.inference.downstream_select import (
+        narrow_to_final,
+        run_superset_chunked,
+    )
+    from hydra_suite.core.inference.result import CNNDetectionPrediction, CNNResult
+
+    sup = _line_obb(5)
+    seen = []
+
+    def _run_chunk(chunk, foreign):
+        seen.append((chunk.num_detections, foreign.self_rows.tolist()))
+        assert len(foreign) == 5  # always the FULL superset
+        xs = chunk.centroids[:, 0]
+        cnn_b = CNNResult(
+            "b",
+            [
+                CNNDetectionPrediction(det_index=i, factors=[float(x)])
+                for i, x in enumerate(xs)
+            ],
+        )
+        # phase "a" never produces a result -> None placeholder at index 0
+        return _ht(xs), [None, cnn_b], None, None
+
+    ht, cnn, pose, at = run_superset_chunked(sup, _run_chunk, 2, 2)
+    assert seen == [(2, [0, 1]), (2, [2, 3]), (1, [4])]
+    assert ht.heading_hints.tolist() == [0, 10, 20, 30, 40]
+    assert cnn[0] is None
+    assert [p.det_index for p in cnn[1].predictions] == [0, 1, 2, 3, 4]
+    assert pose is None and at is None
+
+    # superset raw [3, 5, 6, 8, 9]; final raw [5, 8] -> positions [1, 3]
+    ht_f, cnn_f, pose_f, at_f = narrow_to_final(
+        np.array([3, 5, 6, 8, 9]), np.array([5, 8]), ht, cnn, pose, at
+    )
+    assert ht_f.heading_hints.tolist() == [10, 30]
+    assert len(cnn_f) == 1  # the None phase is dropped in memory
+    assert [p.det_index for p in cnn_f[0].predictions] == [0, 1]
+    assert [p.factors[0] for p in cnn_f[0].predictions] == [10.0, 30.0]
+    assert pose_f is None and at_f is None
+    with pytest.raises(DownstreamCacheError):
+        narrow_to_final(np.array([3, 5]), np.array([4]), ht, cnn, pose, at)

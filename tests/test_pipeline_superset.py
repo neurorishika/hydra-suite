@@ -114,7 +114,7 @@ def _run_window(cfg, n_dets, models, caches, small=None, **extra_patches):
         ),
         patch(
             "hydra_suite.core.inference.pipeline.run_cnn_batch",
-            side_effect=_fake_cnn,
+            side_effect=extra_patches.get("cnn", _fake_cnn),
         ),
         patch(
             "hydra_suite.core.inference.pipeline.run_pose_batch",
@@ -332,3 +332,42 @@ def test_pose_foreign_mask_is_independent_of_chunking():
         # Every detection's masked pose crop is identical whether or not its
         # neighbours landed in the same chunk (foreign set = full superset).
         assert torch.equal(torch.cat(chunked), whole[0]), with_headtail
+
+
+def test_batch_cnn_phase_without_result_stays_phase_aligned():
+    """A CNN phase with no result must not shift later phases onto its cache:
+    phase "a" gets explicit empty coverage, phase "b" its own predictions."""
+    from hydra_suite.core.inference.runner import _CacheSet
+
+    cfg = _cfg(
+        2,
+        cnn_phases=[
+            CNNConfig(label="a", model_path="/a.pt"),
+            CNNConfig(label="b", model_path="/b.pt"),
+        ],
+    )
+    caches = _CacheSet(detection=MagicMock(), cnn=[MagicMock(), MagicMock()])
+    caches.cnn[0].label = "a"
+    caches.cnn[1].label = "b"
+    models = MagicMock(
+        obb=MagicMock(),
+        headtail=None,
+        cnn=[MagicMock(), MagicMock()],
+        pose=None,
+        apriltag=None,
+    )
+
+    def _cnn_a_empty(frames, obbs, model, cfg, *a, **k):
+        if cfg.label == "a":
+            return {}
+        return _fake_cnn(frames, obbs, model, cfg, *a, **k)
+
+    results, downstream = _run_window(cfg, 4, models, caches, small=1, cnn=_cnn_a_empty)
+
+    (dw,) = downstream
+    assert dw["cnn_results"][0] is None
+    assert dw["cnn_results"][1].label == "b"
+    assert [p.det_index for p in dw["cnn_results"][1].predictions] == [0, 2, 3]
+    (fr,) = results
+    assert [r.label for r in fr.cnn] == ["b"]
+    assert [p.det_index for p in fr.cnn[0].predictions] == [0, 1]

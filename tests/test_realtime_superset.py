@@ -104,7 +104,17 @@ def _cfg(max_detections, **kw):
     )
 
 
-def _run(cfg, models, caches, obb, tmp_path, frame=None, ht=_fake_ht, pose=None):
+def _run(
+    cfg,
+    models,
+    caches,
+    obb,
+    tmp_path,
+    frame=None,
+    ht=_fake_ht,
+    pose=None,
+    cnn=_fake_cnn,
+):
     from hydra_suite.core.inference.runner import InferenceRunner
 
     evidence_calls = []
@@ -116,7 +126,7 @@ def _run(cfg, models, caches, obb, tmp_path, frame=None, ht=_fake_ht, pose=None)
         patch("hydra_suite.core.inference.runner._open_caches", return_value=caches),
         patch("hydra_suite.core.inference.runner.run_obb", return_value=[obb]),
         patch("hydra_suite.core.inference.runner.run_headtail", side_effect=ht),
-        patch("hydra_suite.core.inference.runner.run_cnn", side_effect=_fake_cnn),
+        patch("hydra_suite.core.inference.runner.run_cnn", side_effect=cnn),
         patch(
             "hydra_suite.core.inference.runner.run_pose",
             side_effect=pose or _fake_pose,
@@ -348,3 +358,37 @@ def test_realtime_superset_round_trips_through_real_caches(tmp_path):
     det_indices, hints, _confs, _directed = caches.headtail.read_frame(0)
     assert det_indices.tolist() == [0, 1, 2, 3, 4, 5]
     assert hints.tolist() == [0, 50, 100, 150, 200, 250]
+
+
+def test_realtime_cnn_phase_without_result_writes_empty_coverage(tmp_path):
+    """A CNN phase with no result writes predictions=[] (exactly like the batch
+    CacheWriter), keeping caches.cnn phase-aligned."""
+    from hydra_suite.core.inference.runner import _AllModels, _CacheSet
+
+    cfg = _cfg(
+        2,
+        cnn_phases=[
+            CNNConfig(label="a", model_path="/a.pt"),
+            CNNConfig(label="b", model_path="/b.pt"),
+        ],
+    )
+    caches = _CacheSet(detection=MagicMock(), cnn=[MagicMock(), MagicMock()])
+    models = _AllModels(
+        obb=MagicMock(),
+        headtail=None,
+        cnn=[MagicMock(), MagicMock()],
+        pose=None,
+        apriltag=None,
+    )
+
+    def _cnn_a_none(frame, obb, model, cfg, *a):
+        return None if cfg.label == "a" else _fake_cnn(frame, obb, model, cfg, *a)
+
+    fr, _ = _run(cfg, models, caches, _obb(0, 4, small=1), tmp_path, cnn=_cnn_a_none)
+
+    (a_call,) = caches.cnn[0].write_frame.call_args_list
+    assert a_call.kwargs["predictions"] == []
+    (b_call,) = caches.cnn[1].write_frame.call_args_list
+    assert [p.det_index for p in b_call.kwargs["predictions"]] == [0, 2, 3]
+    assert [r.label for r in fr.cnn] == ["b"]
+    assert [p.det_index for p in fr.cnn[0].predictions] == [0, 1]

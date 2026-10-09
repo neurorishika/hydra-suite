@@ -1265,16 +1265,8 @@ class InferenceRunner:
             from .downstream_select import (
                 apriltag_positions_to_raw,
                 cnn_positions_to_raw,
-                concat_apriltag,
-                concat_cnn,
-                concat_headtail,
-                concat_pose,
-                positions_in,
-                select_apriltag,
-                select_cnn,
-                select_headtail,
-                select_pose,
-                split_rows,
+                narrow_to_final,
+                run_superset_chunked,
             )
 
             geometry = self.config.canonical
@@ -1346,20 +1338,13 @@ class InferenceRunner:
                     self.config.apriltag,
                 )
 
-            # The superset is processed in DOWNSTREAM_CHUNK_SIZE-row chunks so a
-            # frame with up to MAX_DETECTIONS_PER_FRAME detections never
-            # materialises all its crops at once.
-            ht_parts: list = []
-            pose_parts: list = []
-            at_parts: list = []
-            cnn_parts: list[list] = [[] for _ in self._models.cnn]
-            for offset, chunk in split_rows(superset_obb, limits.DOWNSTREAM_CHUNK_SIZE):
+            def _run_chunk(chunk: OBBResult, foreign: ForeignSet):
                 with span(N.RT_CROPS, units=chunk.num_detections):
                     # Canonical (native-extent) crops are only consumed by the
                     # pose stage; head-tail / CNN warp directly from the frame.
-                    # Pose masks each crop against the FULL superset, not the
-                    # chunk, so a detection's pose never depends on N or its
-                    # chunk (R7).
+                    # Pose masks each crop against the FULL superset (``foreign``),
+                    # not the chunk, so a detection's pose never depends on N or
+                    # its chunk (R7).
                     canonical_crops = (
                         extract_canonical_crops(
                             frame,
@@ -1368,12 +1353,7 @@ class InferenceRunner:
                             self.runtime,
                             suppress_foreign=suppress_foreign,
                             background_color=background_color,
-                            foreign_set=ForeignSet(
-                                corners=superset_obb.corners,
-                                self_rows=np.arange(
-                                    offset, offset + chunk.num_detections
-                                ),
-                            ),
+                            foreign_set=foreign,
                         )
                         if self._models.pose is not None
                         else None
@@ -1397,19 +1377,24 @@ class InferenceRunner:
                     # context setup each frame, with no real parallelism on a
                     # single GPU. Sequential brings realtime back to legacy parity
                     # (~137 ms/frame total incl. frame read).
-                    ht_parts.append(_do_ht(chunk))
-                    for k, result in enumerate(_do_cnn(chunk)):
-                        if result is not None:
-                            cnn_parts[k].append((offset, result))
-                    pose_parts.append(_do_pose(chunk, canonical_crops))
-                    at_parts.append((offset, _do_at(chunk, aabb_crops)))
+                    return (
+                        _do_ht(chunk),
+                        _do_cnn(chunk),
+                        _do_pose(chunk, canonical_crops),
+                        _do_at(chunk, aabb_crops),
+                    )
 
-            # Whole-superset results, positionally aligned with superset_obb
-            # (CNN / AprilTag det_index are superset positions here).
-            ht_all = concat_headtail(ht_parts)
-            pose_all = concat_pose(pose_parts)
-            at_all = concat_apriltag(at_parts)
-            cnn_all = [concat_cnn(parts) if parts else None for parts in cnn_parts]
+            # The superset is processed in DOWNSTREAM_CHUNK_SIZE-row chunks so a
+            # frame with up to MAX_DETECTIONS_PER_FRAME detections never
+            # materialises all its crops at once. Results are whole-superset,
+            # positionally aligned with superset_obb; cnn_all is phase-aligned
+            # (None for a phase with no result).
+            ht_all, cnn_all, pose_all, at_all = run_superset_chunked(
+                superset_obb,
+                _run_chunk,
+                len(self._models.cnn),
+                limits.DOWNSTREAM_CHUNK_SIZE,
+            )
 
             with span(N.RT_CACHE):
                 # Persist RAW downstream results for the whole superset, keyed by
@@ -1425,14 +1410,20 @@ class InferenceRunner:
                             heading_confidences=ht_all.heading_confidences,
                             directed_mask=ht_all.directed_mask,
                         )
+                    # A phase with no result writes explicit empty coverage,
+                    # exactly like CacheWriter (batch), so a cache written by
+                    # either path replays identically.
                     for cache, cnn_result in zip(caches.cnn, cnn_all):
-                        if cnn_result is not None:
-                            cache.write_frame(
-                                frame_idx,
-                                predictions=cnn_positions_to_raw(
+                        cache.write_frame(
+                            frame_idx,
+                            predictions=(
+                                []
+                                if cnn_result is None
+                                else cnn_positions_to_raw(
                                     cnn_result, superset_idx
-                                ).predictions,
-                            )
+                                ).predictions
+                            ),
+                        )
                     if caches.pose is not None and pose_all is not None:
                         caches.pose.write_frame(
                             frame_idx,
@@ -1453,11 +1444,9 @@ class InferenceRunner:
                 return _empty_frame_result()
 
             # Final-N rows inside the superset; raises if final is not a subset.
-            pos = positions_in(superset_idx, final_idx)
-            ht_result = select_headtail(ht_all, pos)
-            cnn_results = [None if r is None else select_cnn(r, pos) for r in cnn_all]
-            pose_result = select_pose(pose_all, pos)
-            at_result = select_apriltag(at_all, pos)
+            ht_result, cnn_results, pose_result, at_result = narrow_to_final(
+                superset_idx, final_idx, ht_all, cnn_all, pose_all, at_all
+            )
 
             with span(N.RT_CACHE):
                 # Identity Phase 3, Task 4 (realtime seam): build + persist this

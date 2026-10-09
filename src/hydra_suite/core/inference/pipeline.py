@@ -492,46 +492,22 @@ class Pipeline:
         from .downstream_select import (
             apriltag_positions_to_raw,
             cnn_positions_to_raw,
-            concat_apriltag,
-            concat_cnn,
-            concat_headtail,
-            concat_pose,
-            positions_in,
-            select_apriltag,
-            select_cnn,
-            select_headtail,
-            select_pose,
-            split_rows,
+            narrow_to_final,
+            run_superset_chunked,
         )
         from .stages.assemble import scatter
 
         cfg = self.stages.config
         frame_idx = superset_obb.frame_idx
 
-        ht_parts: list = []
-        pose_parts: list = []
-        at_parts: list = []
-        cnn_parts: list[list] = [[] for _ in self.stages.cnn_models]
-        for offset, chunk in split_rows(superset_obb, limits.DOWNSTREAM_CHUNK_SIZE):
-            # Pose masks each crop against the FULL superset, not the chunk,
-            # so a detection's pose never depends on N or its chunk.
-            foreign = ForeignSet(
-                corners=superset_obb.corners,
-                self_rows=np.arange(offset, offset + chunk.num_detections),
-            )
-            ht, cnns, pose_r, at = self._run_stages_on_chunk(
+        ht_all, cnn_all, pose_all, at_all = run_superset_chunked(
+            superset_obb,
+            lambda chunk, foreign: self._run_stages_on_chunk(
                 frame, chunk, geometry, foreign=foreign
-            )
-            ht_parts.append(ht)
-            pose_parts.append(pose_r)
-            at_parts.append((offset, at))
-            for k, result in enumerate(cnns):
-                if result is not None:
-                    cnn_parts[k].append((offset, result))
-        ht_all = concat_headtail(ht_parts)
-        pose_all = concat_pose(pose_parts)
-        at_all = concat_apriltag(at_parts)
-        cnn_all = [concat_cnn(parts) for parts in cnn_parts if parts]
+            ),
+            len(self.stages.cnn_models),
+            limits.DOWNSTREAM_CHUNK_SIZE,
+        )
 
         # --- write RAW per-frame results to the per-type caches ------------
         # Raw stage outputs (no foreign suppression -- an assemble-layer
@@ -541,7 +517,10 @@ class Pipeline:
                 frame_idx,
                 det_indices=superset_idx,
                 headtail=ht_all,
-                cnn_results=[cnn_positions_to_raw(r, superset_idx) for r in cnn_all],
+                cnn_results=[
+                    None if r is None else cnn_positions_to_raw(r, superset_idx)
+                    for r in cnn_all
+                ],
                 pose=pose_all,
                 apriltag=apriltag_positions_to_raw(at_all, superset_idx),
             )
@@ -549,28 +528,18 @@ class Pipeline:
         if final_obb.num_detections == 0:
             return []
         # Final-N rows inside the superset; raises if final is not a subset.
-        pos = positions_in(superset_idx, final_idx)
+        ht_final, cnn_final, pose_final, at_final = narrow_to_final(
+            superset_idx, final_idx, ht_all, cnn_all, pose_all, at_all
+        )
 
         # In-memory assembled view (foreign suppression applied here, per config).
         with span(N.ASSEMBLE_SCATTER):
             results = scatter(
                 {frame_idx: final_obb},
-                (
-                    None
-                    if self.stages.headtail_model is None
-                    else {frame_idx: select_headtail(ht_all, pos)}
-                ),
-                {frame_idx: [select_cnn(r, pos) for r in cnn_all]},
-                (
-                    None
-                    if self.stages.pose_model is None
-                    else {frame_idx: select_pose(pose_all, pos)}
-                ),
-                (
-                    None
-                    if self.stages.apriltag_model is None
-                    else {frame_idx: select_apriltag(at_all, pos)}
-                ),
+                (None if self.stages.headtail_model is None else {frame_idx: ht_final}),
+                {frame_idx: cnn_final},
+                None if self.stages.pose_model is None else {frame_idx: pose_final},
+                (None if self.stages.apriltag_model is None else {frame_idx: at_final}),
                 cfg,
                 overrides_headtail=(
                     cfg.pose.overrides_headtail if cfg.pose is not None else True
