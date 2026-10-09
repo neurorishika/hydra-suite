@@ -185,7 +185,16 @@ def _sam3_tiling(project, args: argparse.Namespace) -> dict:
     )
     from hydra_suite.detectkit.jobs.semantic_escalation import default_semantic_tiling
 
-    base = default_semantic_tiling(project, args.variant)
+    if args.reference_body_px is not None and args.tile_fraction is None:
+        # M2: an explicit body with no explicit fraction is the dialog's body
+        # field filled in -- resolve the opening state AT that body, so a
+        # stock variant tiles at the seed instead of falling to full frame
+        # because the project's own body chain was empty.
+        base = default_semantic_tiling(
+            project, args.variant, body_chain_px=float(args.reference_body_px)
+        )
+    else:
+        base = default_semantic_tiling(project, args.variant)
     fraction = (
         base["tile_fraction"] if args.tile_fraction is None else args.tile_fraction
     )

@@ -263,9 +263,7 @@ def test_stale_saved_variant_dialog_and_cli_both_open_at_the_seed(
     assert (tiling["tile_fraction"], tiling["reference_body_px"]) == (0.05, 82.2)
 
 
-def test_stale_saved_variant_with_no_body_is_full_frame_in_both(
-    monkeypatch, tmp_path
-):
+def test_stale_saved_variant_with_no_body_is_full_frame_in_both(monkeypatch, tmp_path):
     saved = {"variant": "gone-model", "tile_fraction": 0.07, "reference_body_px": 40}
     params, tiling = _dialog_and_cli(monkeypatch, tmp_path, saved, 0.0)
     assert _effective(params["tile_fraction"], params["reference_body_px"]) is None
