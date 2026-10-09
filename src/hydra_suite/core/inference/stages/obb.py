@@ -662,6 +662,13 @@ def _bound_compact_parts(
         if int(merged.conf.shape[0]) <= cap:
             return [merged]
         keep = _torch_reservoir_indices(merged.conf, cap)
+        polygons = merged.polygons
+        if polygons is not None:
+            # Native contours are a host list aligned to the rows; trimming the
+            # rows without trimming them would silently drop the contours here
+            # and misalign every later concat.
+            keep_np = keep.detach().cpu().numpy().astype(np.int64, copy=False)
+            polygons = [polygons[int(i)] for i in keep_np]
         return [
             _RawOBBTensors(
                 frame_idx=frame_idx,
@@ -669,6 +676,7 @@ def _bound_compact_parts(
                 corners=merged.corners[keep],
                 conf=merged.conf[keep],
                 cls=merged.cls[keep] if merged.cls is not None else None,
+                polygons=polygons,
             )
         ]
     merged = merge_obb_results(frame_idx, parts)

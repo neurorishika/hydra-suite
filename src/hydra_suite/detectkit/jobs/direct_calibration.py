@@ -183,8 +183,9 @@ def resolve_calibration_dataset_yaml(dataset_dir) -> Path | None:
     A sliced-training run's derived dataset holds TILES, not acquisition
     frames. Calibrating SAHI on tiles measures the wrong thing entirely --
     the whole point of the sweep is how slicing behaves on full frames -- so
-    a sliced manifest (``type == "sliced_obb"``) is followed back to the
-    unsliced ``source`` dataset it was cut from. The hop is bounded so a
+    a sliced manifest (``type == "sliced_obb"``) and a ``derived_*`` manifest
+    (``derived_segment``, cut from a sliced dataset) are both followed back to
+    the unsliced ``source`` dataset they were cut from. The hop is bounded so a
     corrupt manifest chain cannot loop forever.
 
     Returns ``None`` when no yaml can be resolved; callers must then fall
@@ -203,7 +204,7 @@ def resolve_calibration_dataset_yaml(dataset_dir) -> Path | None:
             except (OSError, ValueError):
                 manifest = {}
             if isinstance(manifest, dict) and str(manifest.get("type", "")).startswith(
-                "sliced"
+                ("sliced", "derived")
             ):
                 source = str(manifest.get("source", "") or "").strip()
                 if not source:
