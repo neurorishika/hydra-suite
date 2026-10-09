@@ -439,7 +439,8 @@ def role_keys(w) -> set[str]:
         keys.add("enabled")
     if role == "infer_yolo":
         keys |= {"profile", "object_fraction"}
-        keys.add("merge")
+        if caps.merge_threshold_row:
+            keys.add("merge")
         if caps.advanced_merge:
             keys |= {"merge_policy", "merge_metric"}
         if caps.full_frame_pass:

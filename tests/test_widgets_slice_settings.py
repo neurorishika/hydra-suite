@@ -229,6 +229,26 @@ def test_display_only_body_stays_read_only_even_when_unknown():
     assert SliceWidgetCapabilities().body_display_only is False
 
 
+def test_merge_threshold_row_can_be_left_to_the_profile():
+    """TrackerKit's merge settings are profile-owned (S3 deviation 14): its
+    infer_yolo widget has no merge-threshold row, so nothing editable is
+    bound to slice_merge_threshold. Default keeps DetectKit's row."""
+    caps = SliceWidgetCapabilities(
+        advanced_merge=False, merge_threshold_row=False, execution_knobs=True
+    )
+    w = SliceSettingsWidget(role="infer_yolo", capabilities=caps)
+    w.set_advanced_expanded(True)
+    assert w.spin_slice_merge.isHidden()
+    assert "merge_threshold" not in w.extras()
+    assert not w.spin_slice_tile_batch.isHidden()
+    default = SliceSettingsWidget(
+        role="infer_yolo", capabilities=SliceWidgetCapabilities(advanced_merge=False)
+    )
+    default.set_advanced_expanded(True)
+    assert not default.spin_slice_merge.isHidden()
+    assert "merge_threshold" in default.extras()
+
+
 def test_overlap_at_or_above_the_whole_animal_minimum_is_left_alone():
     """F7 (decision 22): max(scale) + margin is a MINIMUM, never a nudge down."""
     w = SliceSettingsWidget(role="train_yolo")
