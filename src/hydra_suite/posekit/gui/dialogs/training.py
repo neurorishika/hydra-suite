@@ -103,6 +103,8 @@ class TrainingWorker(QObject):
         degrees: float,
         translate: float,
         scale: float,
+        window_scale_jitter: float = 0.0,
+        window_aspect_jitter: float = 0.0,
     ):
         super().__init__()
         self.model_weights = model_weights
@@ -121,6 +123,8 @@ class TrainingWorker(QObject):
         self.degrees = float(degrees)
         self.translate = float(translate)
         self.scale = float(scale)
+        self.window_scale_jitter = float(window_scale_jitter)
+        self.window_aspect_jitter = float(window_aspect_jitter)
         self._cancel = False
         self._model = None
         self._proc = None
@@ -142,16 +146,19 @@ class TrainingWorker(QObject):
             self.progress.emit(0, max(1, int(self.epochs)))
 
             def _run_cmd(cmd):
+                env = os.environ.copy()
+                if self.augment:
+                    env["HYDRA_WINDOW_SCALE_JITTER"] = str(self.window_scale_jitter)
+                    env["HYDRA_WINDOW_ASPECT_JITTER"] = str(self.window_aspect_jitter)
                 return subprocess.Popen(
                     cmd,
                     stdout=subprocess.PIPE,
                     stderr=subprocess.STDOUT,
                     text=True,
                     bufsize=1,
-                    env=os.environ.copy(),
+                    env=env,
                 )
 
-            yolo_bin = shutil.which("yolo")
             batch = int(self.batch)
 
             while True:
@@ -182,50 +189,17 @@ class TrainingWorker(QObject):
                         f"scale={self.scale}",
                     ]
 
-                if yolo_bin:
-                    self._proc = _run_cmd([yolo_bin] + cli_args)
-                else:
-                    # Fallback to python -c
-                    py_code = (
-                        "from ultralytics import YOLO\n"
-                        "model=YOLO(r'''{model}''')\n"
-                        "model.train(\n"
-                        "  data=r'''{data}''',\n"
-                        "  epochs={epochs},\n"
-                        "  patience={patience},\n"
-                        "  batch={batch},\n"
-                        "  imgsz={imgsz},\n"
-                        "  project=r'''{project}''',\n"
-                        "  name=r'''{name}''',\n"
-                        "  exist_ok=True,\n"
-                        "  device=r'''{device}''',\n"
-                        "  augment={augment},\n"
-                        "  hsv_h={hsv_h},\n"
-                        "  hsv_s={hsv_s},\n"
-                        "  hsv_v={hsv_v},\n"
-                        "  degrees={degrees},\n"
-                        "  translate={translate},\n"
-                        "  scale={scale},\n"
-                        ")\n"
-                    ).format(
-                        model=self.model_weights,
-                        data=str(self.dataset_yaml),
-                        epochs=self.epochs,
-                        patience=self.patience,
-                        batch=batch,
-                        imgsz=self.imgsz,
-                        project=str(self.run_dir.parent),
-                        name=self.run_dir.name,
-                        device=self.device if self.device else "auto",
-                        augment=bool(self.augment),
-                        hsv_h=self.hsv_h,
-                        hsv_s=self.hsv_s,
-                        hsv_v=self.hsv_v,
-                        degrees=self.degrees,
-                        translate=self.translate,
-                        scale=self.scale,
-                    )
-                    self._proc = _run_cmd([sys.executable, "-c", py_code])
+                # Launch through the hydra Ultralytics entrypoint (same as the
+                # TrackerKit/ClassKit trainers) so the centred window jitter can be
+                # installed; it otherwise dispatches the stock `yolo` CLI.
+                self._proc = _run_cmd(
+                    [
+                        sys.executable,
+                        "-m",
+                        "hydra_suite.training.ultralytics_entrypoint",
+                        *cli_args,
+                    ]
+                )
 
                 assert self._proc.stdout is not None
                 ansi_re = re.compile(r"\x1b\[[0-9;]*[A-Za-z]")
@@ -879,24 +853,56 @@ class TrainingRunnerDialog(QDialog):
         self.translate_spin = QDoubleSpinBox()
         self.translate_spin.setRange(0.0, 1.0)
         self.translate_spin.setSingleStep(0.05)
-        self.translate_spin.setValue(0.05)
+        self.translate_spin.setValue(0.0)
         add_row(
             "translate:",
             self.translate_spin,
-            "Translation range as fraction of image size.",
+            "Random shift of the image (fraction of image size). Moves the animal "
+            "off-centre, so it defaults to 0 for centred crops.",
         )
         self.aug_widgets.append(self.translate_spin)
 
         self.scale_spin = QDoubleSpinBox()
         self.scale_spin.setRange(0.0, 1.0)
         self.scale_spin.setSingleStep(0.05)
-        self.scale_spin.setValue(0.2)
+        self.scale_spin.setValue(0.0)
         add_row(
             "scale:",
             self.scale_spin,
-            "Scale variation (fraction).",
+            "Ultralytics isotropic zoom (fraction). Defaults to 0 because the "
+            "centred Scale Jitter below covers scale invariance without moving "
+            "the crop centre; stacking both compounds the zoom.",
         )
         self.aug_widgets.append(self.scale_spin)
+
+        self.window_scale_spin = QDoubleSpinBox()
+        self.window_scale_spin.setRange(0.0, 0.9)
+        self.window_scale_spin.setSingleStep(0.05)
+        self.window_scale_spin.setDecimals(2)
+        self.window_scale_spin.setValue(0.20)
+        add_row(
+            "scale jitter:",
+            self.window_scale_spin,
+            "YOLO-pose only. Scale invariance: the crop window is resized about its "
+            "centre by a factor drawn from U(1-j, 1+j) (0.20 -> 0.8x to 1.2x); labels "
+            "are transformed with it. The crop centre never moves. 0 = off.",
+        )
+        self.aug_widgets.append(self.window_scale_spin)
+
+        self.window_aspect_spin = QDoubleSpinBox()
+        self.window_aspect_spin.setRange(0.0, 1.0)
+        self.window_aspect_spin.setSingleStep(0.05)
+        self.window_aspect_spin.setDecimals(2)
+        self.window_aspect_spin.setValue(0.20)
+        add_row(
+            "aspect jitter:",
+            self.window_aspect_spin,
+            "YOLO-pose only. The crop window's width:height ratio is drawn "
+            "log-uniformly from [1/(1+a), 1+a] (0.20 -> 0.83x to 1.2x) at constant "
+            "area, then fitted back to the training size without stretching the "
+            "animal. The crop centre never moves. 0 = off.",
+        )
+        self.aug_widgets.append(self.window_aspect_spin)
 
         content_layout.addWidget(self.aug_group)
 
@@ -1172,6 +1178,12 @@ class TrainingRunnerDialog(QDialog):
             float(settings.get("translate", self.translate_spin.value()))
         )
         self.scale_spin.setValue(float(settings.get("scale", self.scale_spin.value())))
+        self.window_scale_spin.setValue(
+            float(settings.get("window_scale_jitter", self.window_scale_spin.value()))
+        )
+        self.window_aspect_spin.setValue(
+            float(settings.get("window_aspect_jitter", self.window_aspect_spin.value()))
+        )
         self.train_split_spin.setValue(
             float(settings.get("train_split", self.train_split_spin.value()))
         )
@@ -1431,6 +1443,8 @@ class TrainingRunnerDialog(QDialog):
                 "degrees": float(self.degrees_spin.value()),
                 "translate": float(self.translate_spin.value()),
                 "scale": float(self.scale_spin.value()),
+                "window_scale_jitter": float(self.window_scale_spin.value()),
+                "window_aspect_jitter": float(self.window_aspect_spin.value()),
                 "train_split": float(self.train_split_spin.value()),
                 "seed": int(self.seed_spin.value()),
                 "ignore_occluded": bool(self.cb_ignore_occluded.isChecked()),
@@ -1551,6 +1565,8 @@ class TrainingRunnerDialog(QDialog):
             "degrees": float(self.degrees_spin.value()),
             "translate": float(self.translate_spin.value()),
             "scale": float(self.scale_spin.value()),
+            "window_scale_jitter": float(self.window_scale_spin.value()),
+            "window_aspect_jitter": float(self.window_aspect_spin.value()),
             "dataset": {
                 "yaml": str(dataset_info["yaml_path"]),
                 "train": str(dataset_info["train_list"]),
@@ -1594,6 +1610,8 @@ class TrainingRunnerDialog(QDialog):
             degrees=self.degrees_spin.value(),
             translate=self.translate_spin.value(),
             scale=self.scale_spin.value(),
+            window_scale_jitter=self.window_scale_spin.value(),
+            window_aspect_jitter=self.window_aspect_spin.value(),
         )
         self._worker.moveToThread(self._thread)
         self._thread.started.connect(self._worker.run)

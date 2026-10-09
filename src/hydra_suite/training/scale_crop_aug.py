@@ -82,16 +82,13 @@ class ScaleCropAug:
         else:
             self._rng = np.random.default_rng([int(self.seed), int(info.id)])
 
-    def __call__(self, img: np.ndarray) -> np.ndarray:
-        import cv2
+    def sample_window(self, h: int, w: int) -> tuple[int, int]:
+        """Draw one window shape ``(out_w, out_h)`` for an ``h x w`` image.
 
-        arr = np.asarray(img)
-        if not self.active:
-            return arr
+        The window is centred on the image centre; only its size and aspect
+        ratio change. Consumes RNG state (and decorrelates DataLoader workers).
+        """
         self._maybe_decorrelate_worker()
-        if arr.dtype != np.uint8:
-            arr = arr.astype(np.uint8)
-        h, w = arr.shape[:2]
         k = 1.0
         if self.scale_jitter > 0.0:
             k = float(
@@ -104,6 +101,18 @@ class ScaleCropAug:
         sqrt_r = math.exp(0.5 * log_r)
         out_w = max(_MIN_EDGE, int(round(w * k * sqrt_r)))
         out_h = max(_MIN_EDGE, int(round(h * k / sqrt_r)))
+        return out_w, out_h
+
+    def __call__(self, img: np.ndarray) -> np.ndarray:
+        import cv2
+
+        arr = np.asarray(img)
+        if not self.active:
+            return arr
+        if arr.dtype != np.uint8:
+            arr = arr.astype(np.uint8)
+        h, w = arr.shape[:2]
+        out_w, out_h = self.sample_window(h, w)
         # Pure translation that puts the source centre on the window centre.
         tx = (out_w - w) / 2.0
         ty = (out_h - h) / 2.0

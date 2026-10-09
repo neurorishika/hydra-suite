@@ -81,3 +81,23 @@ paths, device, epochs, batch size, and other hyperparameters).
 2. Label a pilot subset and run sanity checks.
 3. Generate split files and train a baseline.
 4. Use model-assisted passes and active learning to iterate.
+
+## Training Augmentation
+
+The YOLO-pose training dialog keeps the crop centre fixed. Besides the
+Ultralytics controls (HSV, rotation) it has two window augmentations:
+
+| Setting | Default | Effect |
+|---|---|---|
+| scale jitter | 0.20 | The crop window is resized 0.8x-1.2x about its centre. |
+| aspect jitter | 0.20 | The window's width:height ratio varies 0.83x-1.2x at constant area; the animal is never stretched. |
+
+Keypoints, boxes and classes are transformed with the image; keypoints pushed
+outside the window become not-visible, and a sample whose animal would be
+mostly cut away is left un-jittered. Ultralytics' own `translate` (shifts the
+centre) and `scale` (isotropic zoom) now default to 0. Training launches through
+`hydra_suite.training.ultralytics_entrypoint`, which installs the window
+augmentation from the `HYDRA_WINDOW_SCALE_JITTER` / `HYDRA_WINDOW_ASPECT_JITTER`
+environment variables. Mosaic (an Ultralytics default) still tiles several crops
+and is independent of these settings.
+
