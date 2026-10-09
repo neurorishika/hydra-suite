@@ -2,8 +2,8 @@
 
 from __future__ import annotations
 
-from PySide6.QtCore import QEvent, QObject, QSize
-from PySide6.QtWidgets import QAbstractSpinBox, QApplication
+from PySide6.QtCore import QEvent, QObject, QSize, QTimer
+from PySide6.QtWidgets import QAbstractSpinBox, QApplication, QLayout
 
 from hydra_suite.widgets.dialogs import BaseDialog
 
@@ -55,20 +55,32 @@ class DetectKitDialog(BaseDialog):
             self._fit_base = QSize(base_minimum)
         if not hasattr(self, "_fit_base"):
             return
+        # Read the size BEFORE activating the layout: activation can grow the
+        # window itself, which must not be mistaken for a user resize.
+        current = self.size()
+        if self._fit_last is not None and current != self._fit_last:
+            # The user's size becomes the preferred one, so it survives
+            # repeated content changes and hide + show.
+            self._fit_preferred = current
+        # Nested layouts cache their minimums; hiding rows deep inside does
+        # not always reach the top, so drop every cache before measuring.
+        for child_layout in self.findChildren(QLayout):
+            child_layout.invalidate()
         layout = self.layout()
         if layout is not None:
             layout.invalidate()
             layout.activate()
         minimum = self._fit_base.expandedTo(self.minimumSizeHint())
-        user_resized = self._fit_last is not None and self.size() != self._fit_last
         self.setMinimumSize(minimum)
-        target = (self.size() if user_resized else self._fit_preferred).expandedTo(
-            minimum
-        )
+        target = self._fit_preferred.expandedTo(minimum)
         self.resize(target)
         self._fit_last = QSize(target)
+
+    def schedule_fit(self) -> None:
+        """Re-fit once pending layout requests (hidden/shown rows) settle."""
+        QTimer.singleShot(0, self, self.fit_to_content)
 
     def showEvent(self, event) -> None:  # noqa: N802 - Qt override
         super().showEvent(event)
         if hasattr(self, "_fit_base"):
-            self.fit_to_content()
+            self.schedule_fit()

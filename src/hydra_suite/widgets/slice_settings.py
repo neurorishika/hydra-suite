@@ -696,3 +696,4 @@ class SliceSettingsWidget(QGroupBox):
                 visible = visible and mode == "auto_object"
             for widget in widgets:
                 widget.setHidden(not visible)
+        self.updateGeometry()  # let host layouts re-measure (rows came/went)
