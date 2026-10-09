@@ -77,6 +77,17 @@ def _write_detectkit_source_dataset(root: Path) -> Path:
     return root
 
 
+def _wait_until(qapp, predicate, timeout_s: float = 10.0) -> None:
+    import time
+
+    deadline = time.monotonic() + timeout_s
+    while not predicate():
+        if time.monotonic() > deadline:
+            raise AssertionError("condition not met before timeout")
+        qapp.processEvents()
+        time.sleep(0.01)
+
+
 # ---------------------------------------------------------------------------
 # Basic construction
 # ---------------------------------------------------------------------------
@@ -978,9 +989,11 @@ def test_training_dialog_source_preview_loads_real_source_samples(qapp, tmp_path
     proj.sources = [OBBSource(path=str(source_root), name="preview_source")]
 
     dlg = TrainingDialog(proj)
+    _wait_until(
+        qapp,
+        lambda: dlg._source_preview_worker is None and dlg._dataset_fit_worker is None,
+    )
 
-    records = dlg._source_preview_records()
-    assert records
     assert dlg.source_preview_status.text().startswith("Showing ")
     assert dlg.slice_group.preview.frame_size == (320, 240)
     assert dlg.slice_group.preview.frame_options == [(320, 240, 1), (640, 320, 1)]
@@ -994,17 +1007,6 @@ def test_training_dialog_source_preview_loads_real_source_samples(qapp, tmp_path
     dlg._refresh_source_preview()
     assert dlg.slice_group.preview.frame_options == []
     assert dlg.sam3_panel.slice_group.preview.frame_options == []
-
-
-def _wait_until(qapp, predicate, timeout_s: float = 10.0) -> None:
-    import time
-
-    deadline = time.monotonic() + timeout_s
-    while not predicate():
-        if time.monotonic() > deadline:
-            raise AssertionError("condition not met before timeout")
-        qapp.processEvents()
-        time.sleep(0.01)
 
 
 def test_training_dialog_dataset_fit_runs_off_the_gui_thread(
@@ -1041,7 +1043,11 @@ def test_training_dialog_dataset_fit_runs_off_the_gui_thread(
         assert not dlg.btn_refresh_dataset_fit.isEnabled()
 
         release.set()
-        _wait_until(qapp, lambda: dlg._dataset_fit_worker is None)
+        _wait_until(
+            qapp,
+            lambda: dlg._dataset_fit_worker is None
+            and dlg._source_preview_worker is None,
+        )
 
         assert seen_threads and seen_threads[0] is not qapp.thread()
         assert dlg.dataset_fit_status.text().startswith("Analysis ready")
@@ -1285,3 +1291,71 @@ def test_training_dialog_state_cannot_expand_control_text_past_loader_cap(
     assert b"\\u0000" not in encoded
     assert len(encoded) <= gui_utils.MAX_UI_JSON_BYTES
     assert gui_utils.load_bounded_json_mapping(preset)
+
+
+def test_training_dialog_source_preview_loads_off_the_gui_thread(
+    qapp, tmp_path, monkeypatch
+):
+    import threading
+
+    from PySide6.QtCore import QThread
+
+    import hydra_suite.detectkit.gui.dialogs.training_dialog as td
+    from hydra_suite.detectkit.gui.models import DetectKitProject, OBBSource
+
+    source_root = _write_detectkit_source_dataset(tmp_path / "preview_source")
+    proj = DetectKitProject(project_dir=tmp_path, class_names=["ant"])
+    proj.sources = [OBBSource(path=str(source_root), name="preview_source")]
+
+    release = threading.Event()
+    seen_threads: list[object] = []
+    real_collect = td._collect_source_preview
+
+    def blocking_collect(*args, **kwargs):
+        seen_threads.append(QThread.currentThread())
+        assert release.wait(10.0)
+        return real_collect(*args, **kwargs)
+
+    monkeypatch.setattr(td, "_collect_source_preview", blocking_collect)
+
+    dlg = td.TrainingDialog(proj)
+    try:
+        assert not release.is_set()
+        assert dlg.source_preview_status.text().startswith("Loading sample frames")
+        release.set()
+        _wait_until(
+            qapp,
+            lambda: dlg._source_preview_worker is None
+            and dlg._dataset_fit_worker is None,
+        )
+        assert seen_threads and seen_threads[0] is not qapp.thread()
+        assert dlg.source_preview_status.text().startswith("Showing ")
+        assert dlg.btn_refresh_dataset_fit.isEnabled()
+    finally:
+        release.set()
+        dlg.close()
+
+
+def test_app_quit_cancels_and_joins_abandonable_workers(qapp):
+    import threading
+
+    from hydra_suite.widgets.workers import AbandonableWorker
+
+    entered = threading.Event()
+
+    class _Blocking(AbandonableWorker):
+        def execute(self):
+            entered.set()
+            for _ in range(500):
+                if self.is_cancelled():
+                    return
+                threading.Event().wait(0.01)
+
+    worker = _Blocking()
+    worker.start()
+    assert entered.wait(5.0)
+
+    qapp.aboutToQuit.emit()
+
+    assert worker.is_cancelled()
+    assert worker.isFinished()

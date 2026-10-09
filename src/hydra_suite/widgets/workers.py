@@ -1,10 +1,14 @@
 """BaseWorker — standard QThread base class for all background tasks."""
 
-from PySide6.QtCore import QThread, Signal
+import logging
+
+from PySide6.QtCore import QCoreApplication, QThread, Signal
 
 from hydra_suite.runtime.safe_text import MAX_TERMINAL_TEXT_BYTES, bounded_terminal_text
 
 MAX_WORKER_TERMINAL_MESSAGE_BYTES = MAX_TERMINAL_TEXT_BYTES
+
+logger = logging.getLogger(__name__)
 
 
 def bounded_worker_message(value: object) -> str:
@@ -57,3 +61,64 @@ class BaseWorker(QThread):
     def execute(self) -> None:
         """Override in subclasses with the actual work."""
         raise NotImplementedError(f"{type(self).__name__} must implement execute()")
+
+
+class AbandonableWorker(BaseWorker):
+    """BaseWorker whose owner may go away while it is still running.
+
+    Use for advisory background work (dataset analysis, previews) that a
+    dialog starts and may close on before it finishes.  The thread is parented
+    to the application rather than the dialog and deletes itself once
+    finished, so closing (or garbage-collecting) the owner never destroys a
+    running ``QThread`` -- which aborts the process.  When the application
+    quits, every still-running instance is cancelled and joined.
+
+    Subclasses poll ``is_cancelled()`` between units of work.  Owners abandon a
+    run by calling ``cancel()`` and dropping their reference; their result
+    slots should ignore signals whose ``sender()`` is no longer the current
+    worker.
+    """
+
+    def __init__(self) -> None:
+        app = QCoreApplication.instance()
+        super().__init__(app)
+        self._cancel = False
+        self.finished.connect(self.deleteLater)
+        if app is not None:
+            _install_abandonable_quit_hook(app)
+
+    def cancel(self) -> None:
+        self._cancel = True
+
+    def is_cancelled(self) -> bool:
+        return bool(self._cancel)
+
+
+_QUIT_HOOK_APPS: set[int] = set()
+
+
+def _install_abandonable_quit_hook(app: QCoreApplication) -> None:
+    if id(app) in _QUIT_HOOK_APPS:
+        return
+    _QUIT_HOOK_APPS.add(id(app))
+    app.aboutToQuit.connect(join_abandonable_workers)
+
+
+def join_abandonable_workers() -> None:
+    """Cancel and wait for every running AbandonableWorker (called on quit)."""
+    app = QCoreApplication.instance()
+    if app is None:
+        return
+    running = [w for w in app.findChildren(AbandonableWorker) if w.isRunning()]
+    if not running:
+        return
+    for worker in running:
+        worker.cancel()
+    logger.info(
+        "Waiting for %d background task(s) to stop before quitting.", len(running)
+    )
+    # Unbounded: cancellation is polled per file, so this waits for at most
+    # one in-flight read per worker.  A timeout would not avoid the abort that
+    # destroying a running QThread causes; it would only delay it.
+    for worker in running:
+        worker.wait()

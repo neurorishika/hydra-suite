@@ -5,7 +5,7 @@ from __future__ import annotations
 import logging
 from typing import TYPE_CHECKING
 
-from PySide6.QtCore import Qt
+from PySide6.QtCore import Qt, Signal
 from PySide6.QtWidgets import (
     QAbstractItemView,
     QDialogButtonBox,
@@ -30,8 +30,29 @@ from hydra_suite.detectkit.evaluation import (
 )
 from hydra_suite.detectkit.gui.dialogs._base import DetectKitDialog
 from hydra_suite.detectkit.jobs.evaluation import EvaluationWorker
+from hydra_suite.widgets.workers import AbandonableWorker
 
-from ..evaluation import build_dataset_analysis_report, open_quick_test_dialog
+from ..evaluation import open_quick_test_dialog
+
+
+class _DatasetAnalysisWorker(AbandonableWorker):
+    """Build the dataset-analysis report off the GUI thread."""
+
+    result_ready = Signal(object)
+
+    def __init__(self, project: "DetectKitProject") -> None:
+        super().__init__()
+        self._project = project
+
+    def execute(self) -> None:
+        from .. import evaluation
+
+        result = evaluation.build_dataset_analysis_report(
+            self._project, should_cancel=self.is_cancelled
+        )
+        if not self.is_cancelled():
+            self.result_ready.emit(result)
+
 
 if TYPE_CHECKING:
     from ..models import DetectKitProject
@@ -64,6 +85,7 @@ class EvaluationDialog(DetectKitDialog):
         self._project = project
         self._candidates = collect_evaluation_candidates(project)
         self._worker: EvaluationWorker | None = None
+        self._analysis_worker: _DatasetAnalysisWorker | None = None
         self._session_failures = 0
         self._worker_error = ""
         self.resize(980, 760)
@@ -369,10 +391,51 @@ class EvaluationDialog(DetectKitDialog):
         )
 
     def _run_dataset_analysis(self) -> None:
-        report, warnings = build_dataset_analysis_report(self._project)
+        if not self._project.sources:
+            self._analysis_view.setPlainText("No dataset sources configured.")
+            return
+        if self._analysis_worker is not None:
+            return
+        worker = _DatasetAnalysisWorker(self._project)
+        worker.result_ready.connect(self._on_dataset_analysis_ready)
+        worker.error.connect(self._on_dataset_analysis_error)
+        worker.finished.connect(self._on_dataset_analysis_finished)
+        self._analysis_worker = worker
+        self.btn_analyze.setEnabled(False)
+        self._analysis_view.setPlainText(
+            f"Analyzing {len(self._project.sources)} source(s) in the background…"
+        )
+        worker.start()
+
+    def _on_dataset_analysis_ready(self, result: tuple[str, list[str]]) -> None:
+        if self.sender() is not self._analysis_worker:
+            return
+        report, warnings = result
         self._analysis_view.setPlainText(report)
         if warnings:
             QMessageBox.warning(self, "Dataset Analysis Warnings", "\n".join(warnings))
+
+    def _on_dataset_analysis_error(self, message: str) -> None:
+        if self.sender() is not self._analysis_worker:
+            return
+        self._analysis_view.setPlainText(f"Dataset analysis failed: {message}")
+
+    def _on_dataset_analysis_finished(self) -> None:
+        if self.sender() is not self._analysis_worker:
+            return
+        self._analysis_worker = None
+        self.btn_analyze.setEnabled(True)
+
+    def _abandon_dataset_analysis(self) -> None:
+        worker = self._analysis_worker
+        if worker is None:
+            return
+        self._analysis_worker = None
+        worker.cancel()
+
+    def done(self, result: int) -> None:
+        self._abandon_dataset_analysis()
+        super().done(result)
 
     def _quick_test(self) -> None:
         open_quick_test_dialog(self._project, parent=self)
