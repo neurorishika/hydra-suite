@@ -461,3 +461,31 @@ def role_keys(w) -> set[str]:
     if keys & set(ADVANCED):
         keys.add("advanced")
     return keys
+
+
+def refresh_overlap_minimum(w) -> None:
+    label, button = w.lbl_slice_overlap_minimum, w.btn_slice_overlap_raise
+    minimum = w._whole_animal_minimum()
+    if minimum is None:
+        label.setText("")
+        button.setVisible(False)
+        return
+    decimals = w.spin_slice_overlap.decimals()
+    shown = f"{minimum:.{decimals}f}"
+    below = w.spin_slice_overlap.value() < minimum - 0.5 * 10**-decimals
+    if below:
+        label.setText(f"Below whole-animal minimum ({shown})")
+        label.setStyleSheet("color: #e0943a;")
+        label.setToolTip(
+            "With less overlap than the largest object scale, an animal at a "
+            "tile seam can be cut in every tile. Your overlap is kept until "
+            "you raise it."
+        )
+        button.setText(f"Raise to {shown}")
+    else:
+        label.setText(f"≥ whole-animal minimum ({shown})")
+        label.setStyleSheet("color: #8f969e;")
+        label.setToolTip(
+            "Every animal fits whole inside at least one tile at this overlap."
+        )
+    button.setVisible(below)

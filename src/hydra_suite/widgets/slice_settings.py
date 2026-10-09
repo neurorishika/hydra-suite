@@ -43,6 +43,7 @@ from .slice_settings_controls import (
     FULL_WIDTH,
     ROLE_EXTRAS,
     build_controls,
+    refresh_overlap_minimum,
     role_keys,
     row_specs,
 )
@@ -532,33 +533,6 @@ class SliceSettingsWidget(QGroupBox):
         rounded = math.ceil(value * scale - 1e-9) / scale
         return min(rounded, self.spin_slice_overlap.maximum())
 
-    def _refresh_overlap_minimum(self) -> None:
-        label, button = self.lbl_slice_overlap_minimum, self.btn_slice_overlap_raise
-        minimum = self._whole_animal_minimum()
-        if minimum is None:
-            label.setText("")
-            button.setVisible(False)
-            return
-        decimals = self.spin_slice_overlap.decimals()
-        shown = f"{minimum:.{decimals}f}"
-        below = self.spin_slice_overlap.value() < minimum - 0.5 * 10**-decimals
-        if below:
-            label.setText(f"Below whole-animal minimum ({shown})")
-            label.setStyleSheet("color: #e0943a;")
-            label.setToolTip(
-                "With less overlap than the largest object scale, an animal at a "
-                "tile seam can be cut in every tile. Your overlap is kept until "
-                "you raise it."
-            )
-            button.setText(f"Raise to {shown}")
-        else:
-            label.setText(f"≥ whole-animal minimum ({shown})")
-            label.setStyleSheet("color: #8f969e;")
-            label.setToolTip(
-                "Every animal fits whole inside at least one tile at this overlap."
-            )
-        button.setVisible(below)
-
     # ------------------------------------------------------------- refreshes
 
     def _refresh(self) -> None:
@@ -675,7 +649,7 @@ class SliceSettingsWidget(QGroupBox):
         if role in TRAIN_ROLES:
             self._refresh_reference_note(body)
         if self._caps.fixed_overlap is None:
-            self._refresh_overlap_minimum()
+            refresh_overlap_minimum(self)
         if role not in ESCALATE_ROLES:
             self.preview.set_settings(
                 mode=mode,
