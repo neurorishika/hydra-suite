@@ -64,8 +64,14 @@ class DetectKitDialog(BaseDialog):
             self._fit_preferred = current
         # Nested layouts cache their minimums; hiding rows deep inside does
         # not always reach the top, so drop every cache before measuring.
-        for child_layout in self.findChildren(QLayout):
+        child_layouts = self.findChildren(QLayout)
+        for child_layout in child_layouts:
             child_layout.invalidate()
+        # Activate leaf-first: the top layout alone does not recompute a
+        # nested minimum synchronously, so a collapse would not shrink back
+        # until a later event-loop iteration that no fit follows.
+        for child_layout in reversed(child_layouts):
+            child_layout.activate()
         layout = self.layout()
         if layout is not None:
             layout.invalidate()

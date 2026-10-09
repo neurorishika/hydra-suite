@@ -356,3 +356,22 @@ def test_pre_expanded_dialog_fits_after_show():
         QApplication.processEvents()
     assert dialog.height() >= dialog.minimumSizeHint().height()
     dialog.hide()
+
+
+def test_sam3_dialog_grows_then_shrinks_on_single_event_pumps(available_checkpoint):
+    """Re-check MINOR: collapse must shrink back on the user's click path,
+    where only one event-loop iteration runs before the deferred fit."""
+    dialog = _sam3()
+    dialog.show()
+    for _ in range(3):
+        QApplication.processEvents()
+    height = dialog.height()
+    dialog._tiling.btn_slice_advanced.click()
+    for _ in range(3):
+        QApplication.processEvents()
+    expanded = dialog.height()
+    assert expanded > height
+    dialog._tiling.btn_slice_advanced.click()
+    QApplication.processEvents()
+    assert dialog.height() == height
+    dialog.hide()
