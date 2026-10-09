@@ -296,3 +296,24 @@ def test_sidecar_is_parsed_once_until_it_changes(tmp_path, monkeypatch):
     os.utime(sidecar, ns=(stat.st_atime_ns, stat.st_mtime_ns + 1_000_000))
     resolve_preview_tiling(model, project, project_imgsz=640, override=None)
     assert len(calls) == 2
+
+
+def test_same_size_same_mtime_rewrite_is_still_re_read(tmp_path, monkeypatch):
+    """r3: write_slice_meta renames a fresh file, so the inode keys the cache."""
+    import os
+
+    from hydra_suite.detectkit.jobs import preview_tiling as pt
+
+    pt._read_slice_meta_cached.cache_clear()
+    model = _model(tmp_path, {"training_geometry": dict(GEOM, overlap=0.25)})
+    sidecar = model.with_name(model.name + ".slice_meta.json")
+    project = SliceTrainingSettings(enabled=True)
+    before = resolve_preview_tiling(model, project, project_imgsz=640, override=None)
+    old = sidecar.stat()
+    write_slice_meta(model, {"training_geometry": dict(GEOM, overlap=0.35)})
+    os.utime(sidecar, ns=(old.st_atime_ns, old.st_mtime_ns))
+    new = sidecar.stat()
+    assert (new.st_mtime_ns, new.st_size) == (old.st_mtime_ns, old.st_size)
+    after = resolve_preview_tiling(model, project, project_imgsz=640, override=None)
+    assert before.slice_settings.overlap == 0.25
+    assert after.slice_settings.overlap == 0.35

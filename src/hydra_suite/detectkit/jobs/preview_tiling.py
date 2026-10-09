@@ -55,9 +55,13 @@ class PreviewTiling:
 
 
 @lru_cache(maxsize=32)
-def _read_slice_meta_cached(model_path: str, mtime_ns: int, size: int):
-    """Parse once per (path, mtime_ns, size); a recalibration changes the key."""
-    del mtime_ns, size  # cache-key only
+def _read_slice_meta_cached(model_path: str, mtime_ns: int, size: int, ino: int):
+    """Parse once per (path, mtime_ns, size, ino); a recalibration changes the key.
+
+    ``write_slice_meta`` renames a fresh temp file into place, so the inode
+    changes on every write -- closing the coarse-mtime, same-size window (r3).
+    """
+    del mtime_ns, size, ino  # cache-key only
     return read_slice_meta(model_path)
 
 
@@ -71,7 +75,9 @@ def _read_slice_meta(model_path: str | Path) -> dict | None:
         stat = sidecar_path(model_path).stat()
     except OSError:
         return None
-    meta = _read_slice_meta_cached(str(model_path), stat.st_mtime_ns, stat.st_size)
+    meta = _read_slice_meta_cached(
+        str(model_path), stat.st_mtime_ns, stat.st_size, stat.st_ino
+    )
     return copy.deepcopy(meta) if meta is not None else None
 
 
