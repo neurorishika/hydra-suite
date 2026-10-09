@@ -217,7 +217,6 @@ def render_hosts(out: Path, app, root: Path) -> list[Path]:
     )
     from hydra_suite.detectkit.gui.dialogs.training_dialog import TrainingDialog
     from hydra_suite.detectkit.gui.models import InferenceRunSettings
-    from hydra_suite.detectkit.gui.panels.sam3_training_panel import Sam3TrainingPanel
 
     project = _project(root)
     written = []
@@ -231,15 +230,18 @@ def render_hosts(out: Path, app, root: Path) -> list[Path]:
         )
     )
 
-    panel = Sam3TrainingPanel()
-    # Render the enabled state: on a machine without CUDA the whole panel is
-    # disabled by the availability probe, which is not what is under review.
-    # _probed_once also skips the show-time `conda run` probe thread.
-    panel._probed_once = True
+    # The SAM3 panel inside the real (dark-themed) TrainingDialog, so the
+    # disabled-state contrast is exercised under the app's own stylesheet.
+    # Rendered enabled: on a machine without CUDA the availability probe
+    # disables the whole panel, which is not what is under review.
+    panel = training.sam3_panel
     panel._apply_availability(SimpleNamespace(usable=True, reason=""), "hydra-sam3")
     panel.slice_group.set_preview_frame_options([(2048, 1536, 12)])
-    panel.adjustSize()
-    written.append(_grab(panel, out / "host_sam3_training.png", app))
+    written.append(
+        _grab_scroll_page(
+            training, panel.slice_group, out / "host_sam3_training.png", app
+        )
+    )
 
     settings = InferenceRunSettings.from_project(project, confidence_threshold=0.25)
     inference = InferenceSettingsDialog(settings, settings, model_input_size=1024)
@@ -256,13 +258,19 @@ def render_hosts(out: Path, app, root: Path) -> list[Path]:
             project.sources,
             82.2,
             project=project,
-            body_px_origin="median of the selected sources' labels",
+            body_px_origin="the median longest side of your existing labels",
+            body_px_source="dataset",
         )
         written.append(_grab(escalation, out / "host_sam3_escalation.png", app))
     finally:
         sam3.probe_checkpoint = original_probe
 
-    sam2 = EscalateSam2Dialog(project.sources, project=project, reference_body_px=40.0)
+    sam2 = EscalateSam2Dialog(
+        project.sources,
+        project=project,
+        reference_body_px=40.0,
+        body_px_source="dataset",
+    )
     sam2._tile_fraction.setValue(0.1)
     written.append(_grab(sam2, out / "host_sam2_escalation.png", app))
     return written
