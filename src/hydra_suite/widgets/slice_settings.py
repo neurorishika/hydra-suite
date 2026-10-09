@@ -728,6 +728,10 @@ class SliceSettingsWidget(QGroupBox):
         self._set_quietly(self.spin_slice_body, value)
         self._refresh()
 
+    def refresh(self) -> None:
+        """Recompute derived labels, badges and enablement (no control writes)."""
+        self._refresh()
+
     def set_source(self, field: str, source: str) -> None:
         """Badge a field's source (e.g. fractions ``stamped``/``profile``)."""
         self._sources[field] = source

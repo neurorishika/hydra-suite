@@ -13,7 +13,6 @@ from datetime import datetime, timezone
 from PySide6.QtCore import Qt
 from PySide6.QtWidgets import (
     QComboBox,
-    QDoubleSpinBox,
     QGridLayout,
     QGroupBox,
     QHBoxLayout,
@@ -28,7 +27,7 @@ from hydra_suite.core.inference.sam2.checkpoints import (
     DEFAULT_VARIANT,
     available_variants,
 )
-from hydra_suite.core.inference.semantic.tiling import DEFAULT_OVERLAP, resolve_tile_px
+from hydra_suite.core.inference.semantic.tiling import DEFAULT_OVERLAP
 from hydra_suite.detectkit.gui.dialogs._base import DetectKitDialog
 from hydra_suite.detectkit.gui.dialogs.geometry_calibration_results import (
     GeometryCalibrationResults,
@@ -39,6 +38,10 @@ from hydra_suite.detectkit.gui.widgets.calibration_source_selector import (
     scale_warning_text,
 )
 from hydra_suite.widgets.device_combo import DeviceCombo
+from hydra_suite.widgets.slice_settings import (
+    SliceSettingsWidget,
+    SliceWidgetCapabilities,
+)
 
 TITLE = "Escalate to segment (SAM2)"
 ALREADY_POLYGON = "This source already contains segmentation polygons."
@@ -54,6 +57,17 @@ def _restore_points(record: dict) -> list:
         except (TypeError, ValueError):
             continue
     return points
+
+
+def _format_tile_label(
+    tile_px: int | None, body_px: float, fraction: float | None
+) -> tuple[str, str]:
+    """This dialog's resolved-tile wording (the shared widget renders it)."""
+    if tile_px:
+        return f"{tile_px} px ({body_px:.0f} px / {fraction:g})", ""
+    if fraction is None:
+        return "full frame — tiling off.", ""
+    return "full frame — no body size is known, so tiling is off.", ""
 
 
 class EscalateSam2Dialog(DetectKitDialog):
@@ -120,47 +134,40 @@ class EscalateSam2Dialog(DetectKitDialog):
         self._device = DeviceCombo(str(saved.get("device", "auto") or "auto"))
         form.addWidget(self._device, 1, 1)
 
-        form.addWidget(QLabel("Body size (px)"), 2, 0)
-        self._reference_body = QDoubleSpinBox()
-        self._reference_body.setRange(0.0, 4096.0)
-        self._reference_body.setDecimals(1)
-        self._reference_body.setSingleStep(5.0)
-        self._reference_body.setSpecialValueText("unknown (tiling off)")
-        self._reference_body.setValue(
-            float(saved.get("reference_body_px", reference_body_px) or 0.0)
+        # Tiling rows come from the shared SAHI widget (S4); the old
+        # attribute names alias its controls. SAM2 owner tiles overlap by the
+        # fixed DEFAULT_OVERLAP, shown disabled.
+        self._tiling = SliceSettingsWidget(
+            role="escalate_sam2",
+            title="Tiling (SAHI)",
+            capabilities=SliceWidgetCapabilities(
+                advanced_merge=False,
+                tile_label_formatter=_format_tile_label,
+                fixed_overlap=DEFAULT_OVERLAP,
+            ),
         )
-        self._reference_body.setToolTip(
-            "The typical longest side of one animal, in pixels. Tile size = "
-            "this / tile fraction."
-        )
-        form.addWidget(self._reference_body, 2, 1)
-
-        form.addWidget(QLabel("Tile fraction"), 3, 0)
-        self._tile_fraction = QDoubleSpinBox()
-        self._tile_fraction.setRange(0.0, 0.9)
-        self._tile_fraction.setSingleStep(0.05)
-        self._tile_fraction.setDecimals(3)
-        self._tile_fraction.setSpecialValueText("full frame (no tiling)")
+        self._reference_body = self._tiling.spin_slice_body
+        self._tile_fraction = self._tiling.spin_slice_object_fraction
+        self._tile_label = self._tiling.lbl_slice_tile_size
         self._tile_fraction.setToolTip(
             "SAM2 segments each box inside a tile of body size / this "
             "fraction, so small animals are not shrunk to a few pixels. "
             "Full frame is the uncalibrated default; calibrate to fit it."
         )
-        form.addWidget(self._tile_fraction, 3, 1)
-
-        form.addWidget(QLabel("Resolved tile"), 4, 0)
-        self._tile_label = QLabel("")
-        self._tile_label.setWordWrap(True)
-        form.addWidget(self._tile_label, 4, 1)
+        body = max(0.0, float(saved.get("reference_body_px", reference_body_px) or 0.0))
+        self._tiling.set_reference_body(
+            body, "user" if "reference_body_px" in saved else "dataset"
+        )
+        form.addWidget(self._tiling, 2, 0, 1, 2)
 
         self._btn_calibrate = QPushButton("Calibrate against polygon frames…")
         self._btn_calibrate.clicked.connect(self._run_calibration)
-        form.addWidget(self._btn_calibrate, 5, 0, 1, 2)
+        form.addWidget(self._btn_calibrate, 3, 0, 1, 2)
 
         self._results = GeometryCalibrationResults()
         self._results.setMinimumHeight(140)
         self._results.point_chosen.connect(self._on_point_chosen)
-        form.addWidget(self._results, 6, 0, 1, 2)
+        form.addWidget(self._results, 4, 0, 1, 2)
         top.addWidget(settings, 3)
         outer.addLayout(top, 1)
 
@@ -171,8 +178,6 @@ class EscalateSam2Dialog(DetectKitDialog):
         self._status.setWordWrap(True)
         outer.addWidget(self._status)
 
-        self._tile_fraction.valueChanged.connect(self._refresh_tile_label)
-        self._reference_body.valueChanged.connect(self._refresh_tile_label)
         self._current_variant = self.selected_variant()
         self._variant.currentTextChanged.connect(self._on_variant_changed)
         self._selector.calibration_changed.connect(self._refresh_calibration_enabled)
@@ -233,18 +238,7 @@ class EscalateSam2Dialog(DetectKitDialog):
         }
 
     def _refresh_tile_label(self) -> None:
-        body_px = float(self._reference_body.value())
-        tile_px = resolve_tile_px(body_px, self.tile_fraction())
-        if tile_px:
-            self._tile_label.setText(
-                f"{tile_px} px ({body_px:.0f} px / {self.tile_fraction():g})"
-            )
-        elif self.tile_fraction() is None:
-            self._tile_label.setText("full frame — tiling off.")
-        else:
-            self._tile_label.setText(
-                "full frame — no body size is known, so tiling is off."
-            )
+        self._tiling.refresh()
 
     def _refresh_scale_warning(self) -> None:
         self._scale_note.setText(
@@ -300,14 +294,24 @@ class EscalateSam2Dialog(DetectKitDialog):
         variant = self.selected_variant()
         if variant in self._session_tiling:
             fraction, body = self._session_tiling[variant]
+            source = "user"
         else:
             default = default_geometry_tiling(self._project, variant)
             fraction = float(default["tile_fraction"] or 0.0)
             body = float(default["reference_body_px"])
+            accepted = dict(
+                getattr(self._project, "geometry_escalation_settings", {}) or {}
+            )
+            # Accepted settings are the user's; otherwise the calibration's.
+            source = (
+                "user"
+                if accepted.get("variant") == variant and "tile_fraction" in accepted
+                else "profile"
+            )
             if fraction <= 0:
                 body = 0.0  # keep the prefilled body size; tiling is off anyway
         if fraction > 0:
-            self._reference_body.setValue(body)
+            self._tiling.set_reference_body(body, source)
         self._tile_fraction.setValue(fraction)
         if points:
             created = str(record.get("created_at", ""))[:10]
