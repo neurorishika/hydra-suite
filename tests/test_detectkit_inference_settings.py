@@ -84,7 +84,7 @@ def test_inference_settings_dialog_is_runtime_only(qapp, tmp_path):
     defaults = InferenceRunSettings.from_project(project, confidence_threshold=0.5)
     dialog = InferenceSettingsDialog(defaults, defaults)
     dialog.chk_sliced.setChecked(True)
-    dialog.combo_geometry.setCurrentText("auto_object")
+    dialog.combo_geometry.setCurrentIndex(dialog.combo_geometry.findData("auto_object"))
     dialog.spin_object_fraction.setValue(0.3)
     result = dialog.settings()
 
