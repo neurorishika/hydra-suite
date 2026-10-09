@@ -16,6 +16,7 @@ from hydra_suite.core.inference.slice_meta import (
     read_slice_meta,
     write_slice_meta,
 )
+from hydra_suite.core.inference.tiling_meta import training_geometry_from_yolo_manifest
 
 from .contracts import TrainingRole
 
@@ -887,7 +888,13 @@ def publish_trained_model(
         # calibrated and saved SAHI profiles before registering the model.
         # Writing a fresh document here would silently destroy them.
         source_meta = read_slice_meta(src)
-        merged_slice_meta = merge_training_geometry(source_meta, dict(slice_geometry))
+        # v3 is ADDITIVE over the raw manifest (every v2 key verbatim), so the
+        # v2 reader, drift guard and calibration grid see identical input.
+        merged_slice_meta = merge_training_geometry(
+            source_meta,
+            training_geometry_from_yolo_manifest(dict(slice_geometry)),
+            model_family="yolo",
+        )
         # write_slice_meta stages a temp file and replaces atomically: a crash
         # mid-write must not leave a truncated sidecar, which read_slice_meta
         # reports as None -- silent un-calibration.
