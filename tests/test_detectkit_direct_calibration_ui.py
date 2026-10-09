@@ -1692,3 +1692,27 @@ def test_fresh_mode_is_unaffected_by_stored_mode(tmp_path):
         assert measurement["recommendation_rule_id"] == RECOMMENDATION_RULE_ID
     finally:
         fresh.close()
+
+
+def test_history_calibration_follows_a_derived_segment_dataset_to_full_frames(tmp_path):
+    """derived_segment (tiles cut from a sliced set) must chain back to full frames."""
+    import json
+
+    from hydra_suite.detectkit.jobs.direct_calibration import (
+        resolve_calibration_dataset_yaml,
+    )
+
+    source = _run_dataset(tmp_path)
+    sliced = tmp_path / "sliced"
+    sliced.mkdir()
+    (sliced / "dataset.yaml").write_text("path: .\n")
+    (sliced / "manifest.json").write_text(
+        json.dumps({"type": "sliced_obb", "source": str(source)})
+    )
+    derived = tmp_path / "derived"
+    derived.mkdir()
+    (derived / "dataset.yaml").write_text("path: .\n")
+    (derived / "manifest.json").write_text(
+        json.dumps({"type": "derived_segment", "source": str(sliced)})
+    )
+    assert resolve_calibration_dataset_yaml(derived) == source / "dataset.yaml"

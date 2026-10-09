@@ -63,6 +63,9 @@ def build_calibration_config(
         confidence_threshold=float(confidence),
         max_targets=int(max_targets),
         model_task=model_task,
+        # A segment model's mask contour is only kept when asked for; without it
+        # the scorer and the preview fall back to the rotated rectangle.
+        emit_native_geometry=(str(model_task).strip().lower() == "segment"),
         extra_params=dict(slice_params),
     )
 
