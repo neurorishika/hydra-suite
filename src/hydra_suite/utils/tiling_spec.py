@@ -550,7 +550,11 @@ def canonicalize(
             canonical["merge_metric"] = "polygon_iou"
 
     # Escalation/calibration ``tile_px``: an explicit square tile, i.e. custom
-    # geometry, unless the mapping already names its own size or mode.
+    # geometry, unless the mapping already names its own size or mode. Any
+    # present slice_width/slice_height key (even 0) wins over tile_px.
+    # OVERLOAD: a SAM3 build_manifest's ``tile_px`` is a realized MEASUREMENT,
+    # not an override; manifest readers (S2 tiling_meta) must drop it before
+    # calling canonicalize and map it to ``tile_px_set`` themselves.
     consumed.add("tile_px")
     if src.get("tile_px") is not None:
         side = _tile_px(src["tile_px"])

@@ -37,13 +37,29 @@ def resolve_reference_body_px(
     return Sourced(0.0, "default")
 
 
+def _fraction(name: str, raw: Any) -> float | None:
+    """One fraction under the SAME rule ``canonicalize`` uses.
+
+    Present iff finite and in (0, 1]; 0 / None / unparseable are absent (0 is
+    the escalation "full frame" sentinel, spec §3.5), > 1 or < 0 is absent
+    with a warning. A present value outside the planner's
+    [FRACTION_MIN, FRACTION_MAX] is clamped with a warning.
+    """
+    value = _finite(raw)
+    if value is None or value == 0.0:
+        return None
+    if not 0.0 < value <= 1.0:
+        _warn_once(
+            name, value, "SAHI %s=%r is outside (0, 1]; ignoring it", name, value
+        )
+        return None
+    return _clamped(name, value, FRACTION_MIN, FRACTION_MAX)
+
+
 def _clamped_fraction_list(name: str, raw: Any) -> list[float]:
-    """Finite numbers clamped into the planner's fraction range; unparseable skipped."""
-    return [
-        _clamped(name, value, FRACTION_MIN, FRACTION_MAX)
-        for value in (_finite(item) for item in _as_list(raw))
-        if value is not None
-    ]
+    """Members kept under :func:`_fraction`'s rule, in order."""
+    kept = (_fraction(name, item) for item in _as_list(raw))
+    return [value for value in kept if value is not None]
 
 
 def resolve_operating_fraction(
@@ -55,16 +71,15 @@ def resolve_operating_fraction(
 ) -> Sourced:
     """The ONE inference scale: profile -> stamped -> backend default.
 
-    Finite out-of-range inputs are clamped into [FRACTION_MIN, FRACTION_MAX]
-    with a warning; unparseable inputs are skipped.
+    Values follow :func:`_fraction` (0 means absent, never a 0.01 tile).
     """
     for value, source, name in (
         (profile, "profile", "profile object_tile_fraction"),
         (stamped_operating, "stamped", "stamped object_tile_fraction"),
     ):
-        parsed = _finite(value)
+        parsed = _fraction(name, value)
         if parsed is not None:
-            return Sourced(_clamped(name, parsed, FRACTION_MIN, FRACTION_MAX), source)
+            return Sourced(parsed, source)
     stamped = operating_fraction(
         _clamped_fraction_list("stamped object_tile_fractions", stamped_fractions)
     )
@@ -80,8 +95,7 @@ def resolve_object_tile_fractions(
 ) -> Sourced:
     """The fraction SET (training): user -> profile -> stamped -> backend default.
 
-    Finite out-of-range members are clamped into [FRACTION_MIN, FRACTION_MAX]
-    with a warning; unparseable members are skipped.
+    Members follow :func:`_fraction` (same keep/drop rule as ``canonicalize``).
     """
     for value, source in ((user, "user"), (profile, "profile"), (stamped, "stamped")):
         usable = _clamped_fraction_list(f"{source} object_tile_fractions", value)
@@ -141,6 +155,8 @@ def resolve_tile_size(
 # Bound last (see the matching import at the bottom of ``tiling_spec``): the
 # functions above only use these names at call time, so either module can be
 # imported first without a partially-initialised-module ImportError.
+# importlib.reload(tiling_spec) must be followed by reload(tiling_resolve),
+# or this module keeps the stale classes.
 from .tiling_spec import (  # noqa: E402  isort: skip
     BACKEND_DEFAULTS,
     DEFAULT_OVERLAP,
@@ -155,5 +171,6 @@ from .tiling_spec import (  # noqa: E402  isort: skip
     _clamped,
     _finite,
     _positive,
+    _warn_once,
     operating_fraction,
 )

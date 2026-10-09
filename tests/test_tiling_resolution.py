@@ -163,14 +163,18 @@ def test_overlap_out_of_range_is_clamped_with_warning(caplog):
 
 def test_operating_fraction_out_of_range_is_clamped_with_warning(caplog):
     caplog.set_level(logging.WARNING)
-    assert resolve_operating_fraction(backend="yolo_infer", profile=1.5) == Sourced(
+    assert resolve_operating_fraction(backend="yolo_infer", profile=0.95) == Sourced(
         FRACTION_MAX, "profile"
     )
+    # > 1 is not a fraction (same rule as canonicalize): dropped with a warning.
+    assert resolve_operating_fraction(backend="yolo_infer", profile=1.5) == Sourced(
+        0.15, "default"
+    )
     assert resolve_operating_fraction(
-        backend="yolo_infer", stamped_operating=0.0
+        backend="yolo_infer", stamped_operating=0.005
     ) == Sourced(FRACTION_MIN, "stamped")
     assert resolve_operating_fraction(
-        backend="yolo_infer", stamped_fractions=(0.0, 2.0)
+        backend="yolo_infer", stamped_fractions=(0.005, 0.95)
     ) == Sourced(pytest.approx((FRACTION_MIN + FRACTION_MAX) / 2), "stamped")
     assert "fraction" in caplog.text
     assert resolve_operating_fraction(backend="yolo_infer", profile="x") == Sourced(
@@ -181,7 +185,7 @@ def test_operating_fraction_out_of_range_is_clamped_with_warning(caplog):
 def test_fraction_set_out_of_range_is_clamped_with_warning(caplog):
     caplog.set_level(logging.WARNING)
     assert resolve_object_tile_fractions(
-        backend="yolo_train", stamped=[0, 2.0]
+        backend="yolo_train", stamped=[0.005, 0.95]
     ) == Sourced((FRACTION_MIN, FRACTION_MAX), "stamped")
     assert resolve_object_tile_fractions(
         backend="yolo_train", user=["x", 0.1]
@@ -235,3 +239,30 @@ def test_split_modules_import_in_either_order(first):
         "assert resolve_overlap(fractions=(0.15,)).value == 0.2\n"
     )
     subprocess.run([sys.executable, "-c", code], check=True)
+
+
+def test_zero_fraction_means_absent_not_tiny_tile():
+    """Adversarial round 2 NEW-1: 0 is the full-frame sentinel (spec §3.5)."""
+    assert resolve_operating_fraction(backend="yolo_infer", profile=0) == Sourced(
+        0.15, "default"
+    )
+    assert resolve_operating_fraction(
+        backend="yolo_infer", stamped_operating=0.0
+    ) == Sourced(0.15, "default")
+
+
+def test_fraction_rule_matches_canonicalize():
+    """Adversarial round 2 NEW-2: one keep/drop rule for stored sets."""
+    from hydra_suite.utils.tiling_spec import canonicalize
+
+    stored = [1.5, 0.1, 0, -0.2]
+    assert canonicalize({"object_tile_fractions": stored})[0][
+        "object_tile_fractions"
+    ] == (0.1,)
+    assert resolve_object_tile_fractions(backend="yolo_train", user=stored) == Sourced(
+        (0.1,), "user"
+    )
+    assert resolve_operating_fraction(
+        backend="yolo_infer", stamped_fractions=stored
+    ) == Sourced(0.1, "stamped")
+    assert resolve_overlap(fractions=(1.5,)) == Sourced(DEFAULT_OVERLAP, "default")
