@@ -54,7 +54,7 @@ def test_systemd_command_places_kernel_limits_outside_bootstrap():
         "--quiet",
     )
     assert "--wait" not in launch.command
-    assert "--property=MemoryHigh=100" in launch.command
+    assert not any(a.startswith("--property=MemoryHigh") for a in launch.command)
     assert "--property=MemoryMax=200" in launch.command
     assert "--property=MemorySwapMax=0" in launch.command
     assert "--property=TasksMax=512" in launch.command
