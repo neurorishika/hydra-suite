@@ -2085,7 +2085,9 @@ class InferenceRunner:
                 elif not reuse_plan.any_recompute:
                     logger.info(
                         "Every inference cache is reusable for frames %d-%d; "
-                        "nothing to recompute.",
+                        "detections are reused from the cache and nothing is "
+                        "recomputed (detection-limit hits were reported when "
+                        "the cache was built).",
                         start_frame,
                         end_frame,
                     )
@@ -2094,8 +2096,10 @@ class InferenceRunner:
                     return
                 else:
                     logger.info(
-                        "Reusing cached detections for frames %d-%d; "
-                        "recomputing stale per-animal stages only (%s).",
+                        "Detections for frames %d-%d are reused from the cache "
+                        "(the detector does not run; detection-limit hits were "
+                        "reported when the cache was built); recomputing stale "
+                        "per-animal stages only (%s).",
                         start_frame,
                         end_frame,
                         reuse_plan,

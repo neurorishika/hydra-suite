@@ -317,3 +317,16 @@ def test_corrupt_key_valid_member_falls_back_to_a_full_fresh_run(tmp_path, video
     assert runner.caches_all_valid()
     for i in range(_NUM_FRAMES):
         assert runner.load_frame(i).apriltag is not None, f"frame {i}"
+
+
+def test_reuse_run_says_limit_hits_were_reported_at_build_time(tmp_path, video, caplog):
+    import logging
+
+    built = tmp_path / "built"
+    _build(built, 10, video)
+    with caplog.at_level(logging.INFO, logger="hydra_suite.core.inference.runner"):
+        _reuse_pass(built, _stricter_size(), video)
+    msgs = [r.getMessage() for r in caplog.records]
+    hits = [m for m in msgs if "reused from the cache" in m]
+    assert len(hits) == 1
+    assert "detection-limit hits were reported when the cache was built" in hits[0]
