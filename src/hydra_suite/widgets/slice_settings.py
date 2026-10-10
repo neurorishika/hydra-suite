@@ -25,6 +25,7 @@ from PySide6.QtWidgets import (
     QLabel,
     QLineEdit,
     QToolButton,
+    QVBoxLayout,
     QWidget,
 )
 
@@ -47,6 +48,7 @@ from .slice_settings_controls import (
 )
 from .slice_settings_parts import (
     ESCALATE_ROLES,
+    PREVIEW_POSITIONS,
     ROLE_BACKEND,
     ROLES,
     SOURCE_DESCRIPTIONS,
@@ -83,6 +85,10 @@ class SliceSettingsWidget(QGroupBox):
         super().__init__(title or "", parent)
         self._role = role
         self._caps = capabilities or default_capabilities(role)
+        if self._caps.preview_position not in PREVIEW_POSITIONS:
+            raise ValueError(
+                f"unknown preview position: {self._caps.preview_position!r}"
+            )
         self._base = TilingSpec.defaults(ROLE_BACKEND[role])
         self._passthrough: dict[str, Any] = {}
         self._model_input_size = DEFAULT_YOLO_IMGSZ
@@ -132,13 +138,15 @@ class SliceSettingsWidget(QGroupBox):
     # ------------------------------------------------------------------ build
 
     def _build_layout(self, *, bare: bool) -> None:
-        outer = QHBoxLayout(self)
+        bottom = self._caps.preview_position == "bottom"
+        outer = QVBoxLayout(self) if bottom else QHBoxLayout(self)
         if bare:
             outer.setContentsMargins(0, 0, 0, 0)
         else:
             outer.setContentsMargins(14, 16, 14, 12)
-        outer.setSpacing(18)
+        outer.setSpacing(10 if bottom else 18)
         controls = QWidget()
+        self._controls = controls
         grid = QGridLayout(controls)
         grid.setContentsMargins(0, 0, 0, 0)
         grid.setHorizontalSpacing(10)
@@ -156,12 +164,22 @@ class SliceSettingsWidget(QGroupBox):
             else:
                 label = QLabel(text)
                 label.setToolTip(self._label_tooltip(control))
-                grid.addWidget(label, row, 0)
+                if key in self._stacked_rows:
+                    # Level with the control line, not centred on the note.
+                    top = control.layout().itemAt(0).widget()
+                    label.setMinimumHeight(top.sizeHint().height())
+                    grid.addWidget(label, row, 0, Qt.AlignmentFlag.AlignTop)
+                else:
+                    grid.addWidget(label, row, 0)
                 grid.addWidget(control, row, 1)
                 self._rows[key] = (label, control)
                 widgets.append(label)
             if badge is not None:
-                grid.addWidget(badge, row, 2)
+                if key in self._stacked_rows:
+                    badge.setMinimumHeight(label.minimumHeight())
+                    grid.addWidget(badge, row, 2, Qt.AlignmentFlag.AlignTop)
+                else:
+                    grid.addWidget(badge, row, 2)
                 widgets.append(badge)
             self._row_widgets[key] = widgets
         grid.setRowStretch(len(self._row_widgets), 1)
@@ -169,7 +187,7 @@ class SliceSettingsWidget(QGroupBox):
         if self._role in ESCALATE_ROLES:
             self.preview.hide()
         else:
-            outer.addWidget(self.preview, 1)
+            outer.addWidget(self.preview, 0 if bottom else 1)
 
     @staticmethod
     def _label_tooltip(control: QWidget) -> str:

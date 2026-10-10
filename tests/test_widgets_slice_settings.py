@@ -753,3 +753,138 @@ def test_profile_overlap_claim_cleared_by_geometry_or_scale_edits():
             w.spin_slice_object_fraction.setValue(0.33)
         assert w.source_badge("overlap") == "user", edit
         assert "set by profile" not in w.lbl_slice_overlap_minimum.text(), edit
+
+
+# ------------------------------------------------- S6: preview position
+
+
+def _settle(widget) -> None:
+    """Drop every cached layout minimum, then re-measure leaf-first."""
+    from PySide6.QtWidgets import QLayout
+
+    app = QApplication.instance()
+    for _ in range(3):
+        app.processEvents()
+    layouts = widget.findChildren(QLayout)
+    for layout in layouts:
+        layout.invalidate()
+    for layout in reversed(layouts):
+        layout.activate()
+    if widget.layout() is not None:
+        widget.layout().invalidate()
+        widget.layout().activate()
+
+
+def _bottom_widget(**caps):
+    return SliceSettingsWidget(
+        role="infer_yolo",
+        capabilities=SliceWidgetCapabilities(preview_position="bottom", **caps),
+    )
+
+
+def test_preview_position_defaults_to_side():
+    w = SliceSettingsWidget(role="infer_yolo")
+    assert w.capabilities.preview_position == "side"
+    w.set_spec(TilingSpec(enabled=True))
+    w.resize(900, 500)
+    w.show()
+    _settle(w)
+    assert w.preview.isVisibleTo(w)
+    assert w.preview.geometry().left() > w._controls.geometry().right()
+    w.hide()
+
+
+def test_unknown_preview_position_is_rejected():
+    with pytest.raises(ValueError):
+        SliceSettingsWidget(
+            role="infer_yolo",
+            capabilities=SliceWidgetCapabilities(preview_position="left"),
+        )
+
+
+def test_bottom_preview_sits_below_the_controls_and_spans_them():
+    w = _bottom_widget()
+    w.set_spec(TilingSpec(enabled=True))
+    w.resize(520, 900)
+    w.show()
+    _settle(w)
+    assert w.preview.isVisibleTo(w)
+    assert w.preview.geometry().top() > w._controls.geometry().bottom()
+    # Scales to the available width (not a fixed 290 px box).
+    assert w.preview.width() >= w.width() - 40
+    w.hide()
+
+
+def test_bottom_preview_height_follows_width_and_frame_aspect():
+    w = _bottom_widget()
+    preview = w.preview
+    assert preview.hasHeightForWidth()
+    preview.set_frame_size((2000, 1000))
+    narrow, wide = preview.heightForWidth(300), preview.heightForWidth(500)
+    assert narrow < wide
+    preview.set_frame_size((1000, 2000))  # portrait: taller, but capped
+    assert preview.heightForWidth(500) > wide
+    assert preview.heightForWidth(5000) <= preview.MAX_BOTTOM_HEIGHT
+    assert preview.heightForWidth(10) >= preview.MIN_BOTTOM_HEIGHT
+
+
+def test_side_preview_keeps_its_fixed_box():
+    w = SliceSettingsWidget(role="train_yolo")
+    assert not w.preview.hasHeightForWidth()
+    assert w.preview.minimumWidth() == 290
+
+
+def test_bottom_layout_is_much_narrower_than_side_in_every_mode():
+    """The SAHI block must not force its host wide: the bottom layout's
+    minimum width stays compact in every geometry mode with Advanced open and
+    the longest derived texts showing (a profile-set overlap below the
+    minimum, a derived tile size)."""
+    side = SliceSettingsWidget(
+        role="infer_yolo",
+        capabilities=SliceWidgetCapabilities(execution_knobs=True),
+    )
+    bottom = _bottom_widget(execution_knobs=True)
+    for w in (side, bottom):
+        w.set_model_input_size(1024)
+        w.set_advanced_expanded(True)
+    widths = {}
+    for mode in ("auto_model", "auto_object", "custom"):
+        for w, name in ((side, "side"), (bottom, "bottom")):
+            w.set_spec(
+                TilingSpec(
+                    enabled=True,
+                    geometry_mode=mode,
+                    object_tile_fractions=(0.1,),
+                    slice_width=1024,
+                    slice_height=800,
+                    overlap=0.05,
+                )
+            )
+            w.set_reference_body(48.0, "stamped")
+            w.set_source("overlap", "profile", note="profile 'Balanced scan'")
+            w.show()
+            _settle(w)
+            widths[(name, mode)] = w.minimumSizeHint().width()
+            w.hide()
+        assert widths[("bottom", mode)] <= 460, widths
+        assert widths[("bottom", mode)] < widths[("side", mode)] - 250, widths
+
+
+def test_bottom_derived_labels_keep_full_text_and_elide_when_narrow():
+    w = _bottom_widget()
+    w.set_spec(
+        TilingSpec(
+            enabled=True,
+            geometry_mode="custom",
+            slice_width=1024,
+            slice_height=800,
+            overlap=0.05,
+        )
+    )
+    w.set_reference_body(48.0, "stamped")
+    w.set_source("overlap", "profile", note="profile 'Balanced scan'")
+    label = w.lbl_slice_overlap_minimum
+    assert label.text().startswith("below whole-animal minimum")
+    assert "profile 'Balanced scan'" in label.text()
+    # A short minimum: the full sentence never sets the host's width.
+    assert label.minimumSizeHint().width() < 120

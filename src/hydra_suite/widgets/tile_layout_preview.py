@@ -5,9 +5,9 @@ Shared-layer module: imports only Qt and ``utils``; never an app layer.
 
 from __future__ import annotations
 
-from PySide6.QtCore import Qt
+from PySide6.QtCore import QSize, Qt
 from PySide6.QtGui import QColor, QFontMetrics, QPainter, QPen
-from PySide6.QtWidgets import QWidget
+from PySide6.QtWidgets import QSizePolicy, QWidget
 
 from hydra_suite.utils.slice_geometry import plan_tiles, tile_size_for_mode
 from hydra_suite.utils.tiling_spec import BACKEND_DEFAULTS, DEFAULT_YOLO_IMGSZ
@@ -33,9 +33,17 @@ class _TileLayoutPreview(QWidget):
 
     _FALLBACK_FRAME_WH = (1920, 1080)
     _SCALE_COLORS = ("#00a6d6", "#d16dff", "#f2a900", "#65c466", "#ff6b6b")
+    # Painted chrome: title band above the frame, three caption lines below.
+    _MARGIN, _TOP, _CAPTIONS = 12, 26, 73
+    # Below the controls (preview_position="bottom") the preview follows the
+    # host's width at the frame's aspect, within these heights.
+    MIN_BOTTOM_HEIGHT = 200
+    MAX_BOTTOM_HEIGHT = 380
+    MIN_BOTTOM_WIDTH = 240
 
     def __init__(self, parent=None) -> None:
         super().__init__(parent)
+        self._bottom = False
         self.setMinimumSize(290, 180)
         self.setToolTip(
             "A live schematic of the tile grid over a representative labelled source "
@@ -62,6 +70,49 @@ class _TileLayoutPreview(QWidget):
         # measured from labels (inference) replace it via set_body_notes.
         self._measured_note = "uses last label measurement"
         self._unmeasured_note = "illustrative until labels are measured"
+
+    def set_bottom_layout(self, bottom: bool) -> None:
+        """Below the controls: full host width, height from the frame aspect."""
+        self._bottom = bool(bottom)
+        if self._bottom:
+            policy = QSizePolicy(
+                QSizePolicy.Policy.Expanding, QSizePolicy.Policy.Preferred
+            )
+            policy.setHeightForWidth(True)
+            self.setSizePolicy(policy)
+            self.setMinimumSize(self.MIN_BOTTOM_WIDTH, self.MIN_BOTTOM_HEIGHT)
+        else:
+            self.setSizePolicy(
+                QSizePolicy(QSizePolicy.Policy.Preferred, QSizePolicy.Policy.Preferred)
+            )
+            self.setMinimumSize(290, 180)
+        self.updateGeometry()
+
+    def hasHeightForWidth(self) -> bool:  # noqa: N802 - Qt override
+        return self._bottom
+
+    def heightForWidth(self, width: int) -> int:  # noqa: N802 - Qt override
+        if not self._bottom:
+            return super().heightForWidth(width)
+        frame_w, frame_h = self._frame_wh
+        drawable = max(1, width - 2 * self._MARGIN)
+        height = self._TOP + self._CAPTIONS + round(drawable * frame_h / frame_w)
+        return max(self.MIN_BOTTOM_HEIGHT, min(height, self.MAX_BOTTOM_HEIGHT))
+
+    def sizeHint(self) -> QSize:  # noqa: N802 - Qt override
+        if not self._bottom:
+            return super().sizeHint()
+        return QSize(480, self.heightForWidth(480))
+
+    def resizeEvent(self, event) -> None:  # noqa: N802 - Qt override
+        # Fallback for host layouts that do not propagate height-for-width
+        # (stacked pages in a scroll area): pin the minimum height to the
+        # width-derived one. Stable: the height depends only on the width.
+        super().resizeEvent(event)
+        if self._bottom:
+            wanted = self.heightForWidth(self.width())
+            if self.minimumHeight() != wanted:
+                self.setMinimumHeight(wanted)
 
     def set_body_notes(self, measured: str, unmeasured: str) -> None:
         """Set the caption shown with a known / unknown reference body size."""
@@ -118,13 +169,20 @@ class _TileLayoutPreview(QWidget):
             )
             width, height, _count = self._frame_options[self._frame_index]
             self._frame_wh = (width, height)
+        self._aspect_changed()
         self.update()
+
+    def _aspect_changed(self) -> None:
+        if self._bottom:
+            self.setMinimumHeight(self.heightForWidth(max(1, self.width())))
+            self.updateGeometry()
 
     def mousePressEvent(self, event) -> None:  # noqa: N802 - Qt override
         if event.button() == Qt.MouseButton.LeftButton and len(self._frame_options) > 1:
             self._frame_index = (self._frame_index + 1) % len(self._frame_options)
             width, height, _count = self._frame_options[self._frame_index]
             self._frame_wh = (width, height)
+            self._aspect_changed()
             self.update()
             event.accept()
             return
@@ -190,9 +248,9 @@ class _TileLayoutPreview(QWidget):
         painter.setRenderHint(QPainter.RenderHint.Antialiasing)
         painter.fillRect(self.rect(), QColor("#202020"))
 
-        margin, top = 12, 26
+        margin, top = self._MARGIN, self._TOP
         available_w = max(1, self.width() - 2 * margin)
-        available_h = max(1, self.height() - top - 73)  # 3 caption lines
+        available_h = max(1, self.height() - top - self._CAPTIONS)
         scale = min(available_w / self._frame_wh[0], available_h / self._frame_wh[1])
         draw_w, draw_h = int(self._frame_wh[0] * scale), int(self._frame_wh[1] * scale)
         x = (self.width() - draw_w) // 2
