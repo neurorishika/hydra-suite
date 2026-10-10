@@ -335,9 +335,9 @@ def _preview_run_bg_subtraction(
         fr = runner.run_realtime(frame_to_process, roi_mask=roi_for_bgsub)
 
         obb = getattr(fr, "obb", None)
-        keep = list(getattr(fr, "filtered_indices", []) or [])
-        if obb is None:
-            keep = []
+        # ``fr.obb`` IS the final (filtered) set; ``fr.filtered_indices`` are
+        # RAW cache indices, not positions into it.
+        keep = range(obb.num_detections) if obb is not None else []
 
         detections = []
         detected_dimensions = []
