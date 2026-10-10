@@ -670,15 +670,27 @@ class TrackingSessionCore:
             )
             return None
         self.callbacks.stage_changed("annotated_video")
-        return media_export.render_annotated_video(
-            trajectories_df=trajectories_df,
-            video_path=self.video_path,
-            output_path=output_path,
-            params=self.params,
-            config=self.config,
-            progress=self.callbacks.progress,
-            should_stop=self.callbacks.should_stop,
-        )
+        try:
+            return media_export.render_annotated_video(
+                trajectories_df=trajectories_df,
+                video_path=self.video_path,
+                output_path=output_path,
+                params=self.params,
+                config=self.config,
+                progress=self.callbacks.progress,
+                should_stop=self.callbacks.should_stop,
+            )
+        except Exception as exc:
+            # The run itself is finished (CSVs written): a failed render must
+            # not turn it into a failed session -- before the threaded decoder
+            # a decode/encode failure just ended the video early. Loud, not
+            # silent: logged with traceback and surfaced as a warning.
+            logger.exception("Annotated video generation failed: %s", exc)
+            self.callbacks.warning(
+                "Annotated Video Error",
+                f"Annotated video generation failed: {exc}",
+            )
+            return None
 
     def run_post_tracking(
         self, forward_trajectories, backward_trajectories=None
