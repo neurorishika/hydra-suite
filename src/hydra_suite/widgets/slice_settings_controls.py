@@ -385,7 +385,8 @@ def row_specs(w) -> list[tuple[str, str | None, QWidget, QLabel | None]]:
         # Fields fill their half-width column (up to their maximum), so the
         # right edges of each column line up.
         w._stacked_rows = set()
-        tile_cell = hbox(w._tile_spins, w.lbl_slice_tile_badge, stretch=False)
+        # The tile badge leads the summary line instead (no room here).
+        tile_cell = hbox(w._tile_spins, stretch=False)
         object_cell = hbox(w.spin_slice_object_fraction, stretch=False)
         overlap_cell = hbox(w.spin_slice_overlap, stretch=False)
     elif w._caps.preview_position == "bottom":

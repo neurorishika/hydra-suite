@@ -11,7 +11,8 @@ from __future__ import annotations
 
 import re
 
-from PySide6.QtWidgets import QLabel, QWidget
+from PySide6.QtCore import QRect
+from PySide6.QtWidgets import QLabel, QStyle, QStyleOptionComboBox, QWidget
 
 from .slice_settings_controls import FULL_WIDTH, row_specs
 from .slice_settings_parts import COMPACT_LABELS, COMPACT_PAIRS, hbox
@@ -20,6 +21,9 @@ from .slice_settings_parts import COMPACT_LABELS, COMPACT_PAIRS, hbox
 # the right-hand pair clear of the left field's source badge.
 _SPAN = 5
 _GAP_PX = 6
+# Slack beyond the widest combo item, so a wider platform font or a theme
+# tweak never clips it.
+_COMBO_SLACK_PX = 12
 
 Cell = tuple[QWidget, int, int, int]  # (widget, row, column, column span)
 
@@ -47,7 +51,10 @@ def build_compact_grid(w, controls: QWidget) -> None:
         control.setParent(controls)
         w._grid_items[key] = (label, control)
         w._row_widgets[key] = widgets
+    # The tile-size source badge leads the line, right before the resolved
+    # tile size it describes.
     w._summary_row = hbox(
+        w.lbl_slice_tile_badge,
         w.lbl_slice_summary,
         w.lbl_slice_overlap_minimum,
         w.btn_slice_overlap_raise,
@@ -59,6 +66,39 @@ def build_compact_grid(w, controls: QWidget) -> None:
         note.setParent(controls)
         note.hide()
     pack_compact(w)
+
+
+def combo_width_for_items(combo) -> int:
+    """The combo width at which every item's text fits its edit field."""
+    combo.ensurePolished()
+    option = QStyleOptionComboBox()
+    combo.initStyleOption(option)
+    probe = 400
+    option.rect = QRect(0, 0, probe, max(combo.height(), 24))
+    field = combo.style().subControlRect(
+        QStyle.ComplexControl.CC_ComboBox,
+        option,
+        QStyle.SubControl.SC_ComboBoxEditField,
+        combo,
+    )
+    metrics = combo.fontMetrics()
+    widest = max(
+        (metrics.horizontalAdvance(combo.itemText(i)) for i in range(combo.count())),
+        default=0,
+    )
+    return widest + (probe - field.width()) + _COMBO_SLACK_PX
+
+
+def fit_compact_columns(w) -> None:
+    """Reserve the right field column for the tile strategy's longest item.
+
+    The half-width column otherwise gets only what the left column leaves,
+    and "Use model input size" clipped. Measured from the live font and
+    style (the host theme sets the combo's padding and drop-down width).
+    """
+    w._grid.setColumnMinimumWidth(
+        _SPAN - 1, combo_width_for_items(w.combo_slice_geometry)
+    )
 
 
 def compact_plan(w) -> list[Cell]:

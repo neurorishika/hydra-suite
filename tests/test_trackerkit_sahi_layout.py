@@ -63,15 +63,30 @@ def panel(monkeypatch, tmp_path):
     window.show()
     # Showing the window restores the first tab; measure the real, visible
     # Find Animals page (a hidden page is never laid out).
-    app = QApplication.instance()
-    for _ in range(3):
-        app.processEvents()
-    window.tabs.setCurrentWidget(panel)
-    app.processEvents()
-    assert panel.isVisible()
+    _show_page(window, panel)
     yield panel
     window.close()
     window.deleteLater()
+
+
+def _show_page(window, panel, tries: int = 50) -> None:
+    """Select the Find Animals tab until the page is shown and laid out.
+
+    Showing the window restores the first tab (queued), so a fixed number of
+    event-loop passes is racy under load: retry, bounded, then assert.
+    """
+    app = QApplication.instance()
+    for _ in range(tries):
+        app.processEvents()
+        if window.tabs.currentWidget() is not panel:
+            window.tabs.setCurrentWidget(panel)
+            continue
+        widget = panel.slice_settings
+        if panel.isVisible() and widget.width() > 0 and widget.height() > 0:
+            break
+    assert window.tabs.currentWidget() is panel
+    assert panel.isVisible()
+    assert panel.slice_settings.width() > 0
 
 
 def _settle(widget) -> None:
@@ -288,7 +303,9 @@ def test_trackerkit_uses_the_compact_layout(panel):
     grid = widget._grid
 
     def row_of(key):
-        return grid.getItemPosition(grid.indexOf(widget._rows[key][0]))[0]
+        index = grid.indexOf(widget._rows[key][0])
+        assert index >= 0, key  # getItemPosition(-1) returns garbage
+        return grid.getItemPosition(index)[0]
 
     for left, right in (
         ("profile", "mode"),
@@ -351,3 +368,43 @@ def test_compact_widgets_never_overlap(panel, width):
                     if first.isAncestorOf(second) or second.isAncestorOf(first):
                         continue
                     assert not a.intersects(b), (first, second, a, b, mode)
+
+
+def _combo_text_fits(combo):
+    """(fits, edit-field width, widest item) for every item of ``combo``."""
+    from PySide6.QtWidgets import QStyle, QStyleOptionComboBox
+
+    option = QStyleOptionComboBox()
+    combo.initStyleOption(option)
+    field = combo.style().subControlRect(
+        QStyle.ComplexControl.CC_ComboBox,
+        option,
+        QStyle.SubControl.SC_ComboBoxEditField,
+        combo,
+    )
+    metrics = combo.fontMetrics()
+    widest = max(
+        metrics.horizontalAdvance(combo.itemText(i)) for i in range(combo.count())
+    )
+    return widest <= field.width(), field.width(), widest
+
+
+@pytest.mark.parametrize("width", [1100, 1280, 1440, 1500, 1920])
+def test_compact_combos_never_clip_their_items(panel, width):
+    """Review regression: the Tile strategy combo clipped "Use model input
+    size" in the half-width column. Every item of both combos fits its edit
+    field in every mode, Advanced open or closed."""
+    window = panel.window()
+    window.resize(width, 900)
+    widget = panel.slice_settings
+    combo = panel.combo_slice_geometry
+    for advanced in (False, True):
+        widget.btn_slice_advanced.setChecked(advanced)
+        for mode in ("auto_model", "auto_object", "custom"):
+            combo.setCurrentIndex(combo.findData(mode))
+            _settle(window)
+            _settle(_content(panel))
+            for box in (combo, panel.combo_slice_profile):
+                fits, field, widest = _combo_text_fits(box)
+                assert fits, (box.toolTip()[:30], mode, advanced, field, widest)
+    assert panel.findChild(QScrollArea).horizontalScrollBar().maximum() == 0

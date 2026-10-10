@@ -17,7 +17,6 @@ from PySide6.QtWidgets import (  # noqa: E402
     QAbstractSpinBox,
     QApplication,
     QComboBox,
-    QLabel,
     QLineEdit,
 )
 
@@ -1005,7 +1004,9 @@ def _compact_widget(**caps):
 
 def _grid_cell(w, widget):
     """(row, column, row span, column span) of ``widget`` in the controls grid."""
-    return w._grid.getItemPosition(w._grid.indexOf(widget))
+    index = w._grid.indexOf(widget)
+    assert index >= 0, widget  # getItemPosition(-1) returns garbage
+    return w._grid.getItemPosition(index)
 
 
 def _row_label(w, key):
@@ -1144,11 +1145,14 @@ def test_compact_badges_stay_with_their_fields():
     assert w.source_badge("reference_body_px") == "profile"
     assert w.lbl_slice_body_badge.text() == "profile"
     assert w.lbl_slice_tile_badge.text() == "derived"
-    body_row = _grid_cell(w, _row_label(w, "body"))[0]
-    tile_row = _grid_cell(w, _row_label(w, "tile"))[0]
+    # Body: inline after its field. Tile: leads the summary line, right
+    # before the resolved tile size it describes (the half-width tile cell
+    # has no room left for it).
     assert w.lbl_slice_body_badge.parentWidget() is w._rows["body"][1]
-    assert w.lbl_slice_tile_badge.parentWidget() is w._rows["tile"][1]
-    assert body_row != tile_row
+    assert w.lbl_slice_tile_badge.parentWidget() is w._summary_row
+    layout = w._summary_row.layout()
+    assert layout.indexOf(w.lbl_slice_tile_badge) == 0
+    assert layout.indexOf(w.lbl_slice_summary) == 1
 
 
 def test_compact_advanced_note_sits_under_the_advanced_pair():
@@ -1226,10 +1230,11 @@ def test_unplaced_notes_never_become_stray_windows(layout):
         assert not w.lbl_slice_tile_size.isVisible()
     else:
         assert not w.lbl_slice_summary.isVisible()
+    # No visible parentless widget at all besides the widget itself.
     strays = [
         top
         for top in QApplication.topLevelWidgets()
-        if top.isVisible() and top is not w and isinstance(top, QLabel)
+        if top.isVisible() and top is not w and top.parentWidget() is None
     ]
-    assert strays == []
+    assert strays == [], strays
     w.hide()

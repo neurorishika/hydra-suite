@@ -37,7 +37,12 @@ from hydra_suite.utils.tiling_spec import (
     TilingSpec,
 )
 
-from .slice_settings_compact import build_compact_grid, pack_compact, refresh_summary
+from .slice_settings_compact import (
+    build_compact_grid,
+    fit_compact_columns,
+    pack_compact,
+    refresh_summary,
+)
 from .slice_settings_controls import (
     ADVANCED,
     FULL_WIDTH,
@@ -137,6 +142,9 @@ class SliceSettingsWidget(QGroupBox):
 
     def showEvent(self, event) -> None:  # noqa: N802 - Qt override
         super().showEvent(event)
+        if self._compact:
+            # After the host theme is applied: it sets the combo's chrome.
+            fit_compact_columns(self)
         probe = self._rows.get("mode", self._rows.get("body"))
         if probe is None:
             return
