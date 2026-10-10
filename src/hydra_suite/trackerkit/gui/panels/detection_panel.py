@@ -1348,7 +1348,6 @@ class DetectionPanel(QWidget):
         self.label_detection_stats.setWordWrap(True)
         vl_ref_scale.addWidget(self.label_detection_stats)
 
-        btn_layout = QHBoxLayout()
         self.btn_auto_set_body_size = QPushButton("Auto-Set Body Size from Median")
         self.btn_auto_set_body_size.clicked.connect(
             self._main_window._auto_set_body_size_from_detection
@@ -1357,7 +1356,6 @@ class DetectionPanel(QWidget):
         self.btn_auto_set_body_size.setToolTip(
             "Automatically set reference body size to the median detected diameter"
         )
-        btn_layout.addWidget(self.btn_auto_set_body_size)
 
         self.btn_auto_set_aspect_ratio = QPushButton("Auto-Set Aspect Ratio")
         self.btn_auto_set_aspect_ratio.clicked.connect(
@@ -1367,7 +1365,6 @@ class DetectionPanel(QWidget):
         self.btn_auto_set_aspect_ratio.setToolTip(
             "Set reference aspect ratio from the median detected major/minor ratio"
         )
-        btn_layout.addWidget(self.btn_auto_set_aspect_ratio)
 
         self.btn_auto_set_margin = QPushButton("Auto-Set Margin from Max")
         self.btn_auto_set_margin.clicked.connect(
@@ -1378,8 +1375,18 @@ class DetectionPanel(QWidget):
             "Set canonical margin so the largest detected animal's major axis\n"
             "fits inside the canonical crop canvas"
         )
-        btn_layout.addWidget(self.btn_auto_set_margin)
-        vl_ref_scale.addLayout(btn_layout)
+        # The three buttons wrap onto more rows in a narrow panel rather
+        # than widening the page (no sideways scrolling).
+        from hydra_suite.trackerkit.gui.widgets.reflow_row import ReflowRow
+
+        self.auto_set_buttons_row = ReflowRow(
+            (
+                self.btn_auto_set_body_size,
+                self.btn_auto_set_aspect_ratio,
+                self.btn_auto_set_margin,
+            )
+        )
+        vl_ref_scale.addWidget(self.auto_set_buttons_row)
 
         preview_row = QHBoxLayout()
         preview_row.addStretch(1)

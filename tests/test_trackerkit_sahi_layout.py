@@ -112,8 +112,8 @@ def test_sahi_block_does_not_widen_the_panel(panel):
 
 def test_sahi_adds_no_sideways_scroll_at_the_default_window_size(panel):
     """The direct check: SAHI on (Advanced open) scrolls sideways no further
-    than SAHI off. (At 1500 px the Reference Scale group's three buttons
-    already overflow the viewport by a few px; that is not SAHI's.)"""
+    than SAHI off (and, since the Auto-Set buttons reflow, not at all --
+    see test_find_animals_page_never_scrolls_sideways)."""
     scroll = panel.findChild(QScrollArea)
     panel.chk_slice_enabled.setChecked(False)
     _settle(_content(panel))
@@ -179,3 +179,59 @@ def test_focus_leaves_the_profile_combo_when_sahi_is_turned_off(panel):
     panel.chk_slice_enabled.setChecked(False)  # programmatic: no click focus
     _settle(_content(panel))
     assert window.focusWidget() is panel.chk_slice_enabled
+
+
+@pytest.mark.parametrize("size", [(1100, 800), (1280, 800), (1440, 900), (1500, 1000)])
+def test_find_animals_page_never_scrolls_sideways(panel, size):
+    """The user's complaint: no horizontal scrolling on Find Animals, with
+    SAHI off or on (every geometry mode, Advanced open)."""
+    window = panel.window()
+    window.resize(*size)
+    scroll = panel.findChild(QScrollArea)
+    panel.chk_slice_enabled.setChecked(False)
+    _settle(window)
+    _settle(_content(panel))
+    maxima = {"off": scroll.horizontalScrollBar().maximum()}
+    panel.chk_slice_enabled.setChecked(True)
+    panel.slice_settings.btn_slice_advanced.setChecked(True)
+    combo = panel.combo_slice_geometry
+    for mode in ("auto_model", "auto_object", "custom"):
+        combo.setCurrentIndex(combo.findData(mode))
+        _settle(window)
+        _settle(_content(panel))
+        maxima[mode] = scroll.horizontalScrollBar().maximum()
+    assert set(maxima.values()) == {0}, maxima
+
+
+def test_auto_set_buttons_reflow_instead_of_widening(panel):
+    """Reference Scale's three Auto-Set buttons wrap onto more rows when
+    the panel is narrow, keep their full labels, and widen nothing."""
+    from PySide6.QtWidgets import QPushButton
+
+    from hydra_suite.trackerkit.gui.widgets.reflow_row import ReflowRow
+
+    row = panel.auto_set_buttons_row
+    buttons = (
+        panel.btn_auto_set_body_size,
+        panel.btn_auto_set_aspect_ratio,
+        panel.btn_auto_set_margin,
+    )
+    assert all(button.parentWidget() is row for button in buttons)
+    widest = max(button.sizeHint().width() for button in buttons)
+    assert row.minimumSizeHint().width() <= widest
+    assert buttons[0].text() == "Auto-Set Body Size from Median"
+
+    # The mechanics, on a free-standing row with the same labels.
+    free = ReflowRow([QPushButton(button.text()) for button in buttons])
+    items = free._widgets
+    for width, rows in (
+        (widest, 3),
+        (free._needed_width(2), 2),
+        (free._needed_width(3), 1),
+    ):
+        free.resize(width, 200)
+        free.show()
+        _settle(free)
+        assert len({item.geometry().top() for item in items}) == rows, width
+        assert all(item.width() <= width for item in items)
+    free.hide()
