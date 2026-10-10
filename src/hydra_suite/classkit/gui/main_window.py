@@ -1161,9 +1161,10 @@ class MainWindow(QMainWindow):
         )
         self.al_build_btn.setToolTip(
             "Select the highest-value unlabeled images for labeling —\n"
-            "30% uncertain · 25% diverse · 20% similar to model errors · "
-            "10% rare clusters · 10% representative (or balance) · 5% audit\n"
-            "(the error and rare-cluster shares are set below)"
+            "25% uncertain · 20% diverse · 20% similar to model errors · "
+            "15% rare/missing combinations · 10% rare clusters · "
+            "5% representative (or balance) · 5% audit\n"
+            "(the error, combination and rare-cluster shares are set below)"
         )
         self.al_build_btn.clicked.connect(self._build_al_batch)
         al_ctrl_row.addWidget(self.al_build_btn)
@@ -1217,6 +1218,21 @@ class MainWindow(QMainWindow):
             "share goes to uncertainty. 0 = off.",
         )
         al_mining_row.addWidget(self.al_error_spin)
+
+        _combo_lbl = QLabel("Combos:")
+        _combo_lbl.setStyleSheet(_mining_label_style)
+        al_mining_row.addWidget(_combo_lbl)
+        self.al_combo_spin = _mining_spin(
+            50,
+            15,
+            "%",
+            "Share of the batch aimed at factor COMBINATIONS that are rare or\n"
+            "missing in the labeled set (e.g. blue_pink with 0 labels). Works on\n"
+            "per-factor predictions, so it can find combinations the model has\n"
+            "never output. Picks spread over the under-represented combinations.\n"
+            "Needs a trained model. 0 = off.",
+        )
+        al_mining_row.addWidget(self.al_combo_spin)
 
         _rare_lbl = QLabel("Rare clusters:")
         _rare_lbl.setStyleSheet(_mining_label_style)
@@ -11327,6 +11343,8 @@ class MainWindow(QMainWindow):
             self._collect_error_mining_inputs()
         )
 
+        factor_probs, factor_labels = self._collect_combination_inputs()
+
         from ..jobs.task_workers import ALBatchWorker
 
         worker = ALBatchWorker(
@@ -11350,6 +11368,9 @@ class MainWindow(QMainWindow):
             error_fraction=self.al_error_spin.value() / 100.0,
             rare_cluster_fraction=self.al_rare_spin.value() / 100.0,
             rare_alpha=self.al_rare_alpha_spin.value() / 100.0,
+            combination_fraction=self.al_combo_spin.value() / 100.0,
+            factor_probs=factor_probs,
+            factor_labels=factor_labels,
         )
         worker.signals.success.connect(self._on_al_batch_success)
         worker.signals.error.connect(
@@ -11363,6 +11384,45 @@ class MainWindow(QMainWindow):
         self._prepared_candidate_indices = []
         self._refresh_prepared_candidate_table("Building active-learning batch…")
         self._threadpool_start(worker)
+
+    def _collect_combination_inputs(self):
+        """Per-factor prediction marginals + the scheme's labels, for combo balancing.
+
+        Returns ``(factor_probs, factor_labels)`` or ``(None, None)`` when the
+        model output can't be mapped onto the scheme's factors.  Multi-head
+        outputs are sliced per head; flat composite models are marginalised
+        over the composite class names.
+        """
+        from ..core.al.combination import (
+            factor_marginals_from_composite,
+            factor_marginals_from_heads,
+        )
+
+        if self._model_probs is None:
+            return None, None
+        scheme = self._resolve_training_scheme()
+        factors = list(getattr(scheme, "factors", []) or [])
+        if factors:
+            factor_labels = [[str(v) for v in f.labels] for f in factors]
+        elif self.classes:
+            factor_labels = [[str(c) for c in self.classes]]
+        else:
+            return None, None
+        probs = np.asarray(self._model_probs)
+        try:
+            heads = self._current_prediction_heads()
+            marginals = None
+            if len(heads) > 1:
+                marginals = factor_marginals_from_heads(probs, heads, factor_labels)
+            elif self._model_class_names:
+                marginals = factor_marginals_from_composite(
+                    probs, list(self._model_class_names), factor_labels
+                )
+        except Exception:
+            return None, None
+        if not marginals:
+            return None, None
+        return marginals, factor_labels
 
     def _collect_error_mining_inputs(self):
         """Head-aware predictions + which labels are trustworthy, for AL error mining.
@@ -11412,6 +11472,9 @@ class MainWindow(QMainWindow):
             for idx, err in sources.items()
             if err in pairs
         }
+
+        for idx, combo in (info.get("combination_targets") or {}).items():
+            self._prepared_candidate_reason_detail[int(idx)] = f"likely {combo}"
 
         n = len(self._al_candidates)
         self.al_candidates_badge.setText(f"  {n} selected")
