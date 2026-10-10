@@ -212,10 +212,16 @@ class _PyAVReader:
         if self._cc is None:
             yield from self._container.decode(self._stream)
             return
+        drained = False
         for packet in self._container.demux(self._stream):
-            # The flush packet (``packet.size == 0``) drains the decoder.
-            yield from self._cc.decode(None if packet.size == 0 else packet)
-        yield from self._cc.decode(None)
+            if packet.size == 0:  # demux's own flush packet drains the decoder
+                drained = True
+                yield from self._cc.decode(None)
+            else:
+                yield from self._cc.decode(packet)
+        if not drained:
+            # A second drain raises EOFError ("End of file: avcodec_send_packet").
+            yield from self._cc.decode(None)
 
     def _first_pts(self):
         for frame in self._decoded():

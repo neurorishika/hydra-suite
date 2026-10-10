@@ -352,3 +352,17 @@ def test_frame_to_bgr_fast_path_matches_swscale(fmt, out):
     ).to_ndarray()
     assert np.abs(got.astype(int) - ref.astype(int)).mean() < 2.0
     assert np.abs(got.astype(int) - ref.astype(int)).max() <= 12
+
+
+def test_every_decoder_reaches_eof_cleanly(index_clip):
+    """Reading past the last frame returns None -- never a decode error.
+
+    A double drain of the cuvid decoder raised EOFError here (diptera), which
+    the alignment test missed whenever it stopped exactly at the last frame.
+    """
+    for c in vd.default_decoder_candidates(str(index_clip), 128, 64):
+        src = vd.FrameSource([c], start_frame=30, out_size=(128, 64))
+        got = [src.read() for _ in range(12)]
+        src.close()
+        assert [_decode_index(f) for f in got[:10]] == list(range(30, 40)), c.name
+        assert got[10] is None and got[11] is None, c.name
