@@ -3328,7 +3328,14 @@ class ConfigOrchestrator:
             )
             return
 
-        params = self.get_parameters_dict()
+        from hydra_suite.trackerkit.gui.limit_guard import params_or_report_limit
+
+        params = params_or_report_limit(
+            self._mw,
+            "Optimizer",
+        )
+        if params is None:
+            return
 
         cache_path, already_valid = self._find_or_plan_optimizer_cache_path(
             video_path, params, start_frame, end_frame
@@ -3381,7 +3388,11 @@ class ConfigOrchestrator:
             QMessageBox.warning(self._mw, "No Video", "Please load a video first.")
             return
 
-        params = self.get_parameters_dict()
+        from hydra_suite.trackerkit.gui.limit_guard import params_or_report_limit
+
+        params = params_or_report_limit(self._mw, "Background helper")
+        if params is None:
+            return
 
         dialog = BgParameterHelperDialog(video_path, params, self._mw)
         if dialog.exec() == QDialog.Accepted:

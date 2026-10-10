@@ -3298,7 +3298,20 @@ class MainWindow(QMainWindow):
 
     @Slot()
     def _on_parameter_changed(self):
-        params = self.get_parameters_dict()
+        from hydra_suite.core.inference.limits import (
+            MAX_DETECTIONS_PER_FRAME,
+            DetectionLimitError,
+        )
+
+        try:
+            params = self.get_parameters_dict()
+        except DetectionLimitError as exc:
+            # Fires on every edit: non-modal, live message only.
+            self.statusBar().showMessage(f"Detection limit exceeded: {exc}")
+            self._setup_panel.lbl_animals_per_arena_total.setText(
+                f"exceeds the {MAX_DETECTIONS_PER_FRAME}-animal limit"
+            )
+            return
         self.parameters_changed.emit(params)
 
     def _create_help_label(self, text, attach_to_title=True):

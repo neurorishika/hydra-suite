@@ -102,3 +102,81 @@ def test_gui_start_tracking_shows_limit_message(monkeypatch):
     assert orch.start_tracking_on_video("v.mp4") is None
     assert shown and shown[0][0] == "Detection limit exceeded"
     assert "1024" in shown[0][1]
+
+
+# --- GUI guards for N x arenas > limit (offscreen) -------------------------
+
+
+def _raiser():
+    raise DetectionLimitError("N=2000 exceeds the hard limit of 1024")
+
+
+@pytest.fixture
+def shown(monkeypatch):
+    from PySide6.QtWidgets import QMessageBox
+
+    msgs = []
+    monkeypatch.setattr(QMessageBox, "warning", lambda *a, **k: msgs.append(a[1:]))
+    return msgs
+
+
+def _orch(mw):
+    from hydra_suite.trackerkit.gui.orchestrators import tracking as tmod
+
+    orch = tmod.TrackingOrchestrator.__new__(tmod.TrackingOrchestrator)
+    orch._mw = mw
+    orch._panels = SimpleNamespace()
+    return orch
+
+
+def test_gui_preview_guard(shown):
+    mw = SimpleNamespace(
+        tracking_worker=None,
+        _stop_all_requested=False,
+        is_playing=False,
+        get_parameters_dict=_raiser,
+    )
+    assert _orch(mw).start_preview_on_video("v.mp4") is None
+    assert shown and shown[0][0] == "Detection limit exceeded"
+
+
+def test_gui_calibration_guard(shown):
+    orch = _orch(
+        SimpleNamespace(current_video_path="v.mp4", get_parameters_dict=_raiser)
+    )
+    orch._calibration_is_active = lambda: False
+    orch._calibration_dialog = None
+    orch.open_calibration_dialog()
+    assert shown and shown[0][0] == "Detection limit exceeded"
+
+
+def test_parameter_changed_slot_shows_live_message(shown):
+    from hydra_suite.trackerkit.gui.main_window import MainWindow
+
+    status, label = [], SimpleNamespace(setText=lambda t: status.append(("lbl", t)))
+    emitted = []
+    fake = SimpleNamespace(
+        get_parameters_dict=_raiser,
+        statusBar=lambda: SimpleNamespace(
+            showMessage=lambda m: status.append(("bar", m))
+        ),
+        _setup_panel=SimpleNamespace(lbl_animals_per_arena_total=label),
+        parameters_changed=SimpleNamespace(emit=emitted.append),
+    )
+    MainWindow._on_parameter_changed(fake)  # must not raise
+    assert not emitted and not shown  # no modal per keystroke
+    assert any("1024" in t for _, t in status)
+
+
+def test_bg_helper_entry_guard(shown, monkeypatch, tmp_path):
+    from hydra_suite.trackerkit.gui.orchestrators.config import ConfigOrchestrator
+
+    video = tmp_path / "v.mp4"
+    video.write_bytes(b"x")
+    orch = ConfigOrchestrator.__new__(ConfigOrchestrator)
+    orch._mw = SimpleNamespace(get_parameters_dict=_raiser)
+    orch._panels = SimpleNamespace(
+        setup=SimpleNamespace(file_line=SimpleNamespace(text=lambda: str(video)))
+    )
+    orch._open_bg_parameter_helper()
+    assert shown and shown[0][0] == "Detection limit exceeded"

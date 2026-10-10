@@ -108,19 +108,10 @@ class TrackingOrchestrator:
             return False
 
     def _params_or_report_limit(self, context: str):
-        """``get_parameters_dict()``, or ``None`` after telling the user why not.
+        """``get_parameters_dict()`` or ``None`` after telling the user why not."""
+        from hydra_suite.trackerkit.gui.limit_guard import params_or_report_limit
 
-        N above MAX_DETECTIONS_PER_FRAME is rejected while the engine params are
-        built; surface it as a readable message box, not an unhandled exception.
-        """
-        from hydra_suite.core.inference.limits import DetectionLimitError
-
-        try:
-            return self._mw.get_parameters_dict()
-        except DetectionLimitError as exc:
-            logger.error("%s blocked: %s", context, exc)
-            QMessageBox.warning(self._mw, "Detection limit exceeded", str(exc))
-            return None
+        return params_or_report_limit(self._mw, context)
 
     def open_calibration_dialog(self) -> None:
         """Open the one-click Calibrate dialog.
@@ -1037,10 +1028,13 @@ class TrackingOrchestrator:
                 self._mw, "current_detected_properties_cache_path", None
             ),
         }
+        session_params = self._params_or_report_limit("Post-processing session")
+        if session_params is None:
+            return
         worker = SessionWorker(
             video_path=video_path,
             config=self._build_session_config(),
-            params=self._mw.get_parameters_dict(),
+            params=session_params,
             paths=paths,
         )
         self._mw.session_worker = worker
@@ -1606,9 +1600,12 @@ class TrackingOrchestrator:
         self._mw.csv_writer_thread = None
         if not self._panels.setup.csv_line.text():
             return
+        _hdr_params = self._params_or_report_limit("Tracking")
+        if _hdr_params is None:
+            return
         hdr = build_tracking_csv_header(
             identity_method=self._mw._selected_identity_method(),
-            n_arenas=int(self._mw.get_parameters_dict().get("N_ARENAS", 1)),
+            n_arenas=int(_hdr_params.get("N_ARENAS", 1)),
         )
         csv_path = self._panels.setup.csv_line.text()
         base, ext = os.path.splitext(csv_path)
@@ -1664,7 +1661,9 @@ class TrackingOrchestrator:
         # Generate detection cache path based on video and detection method
         # Cache is always created for forward tracking to allow reuse on reruns
         detection_cache_path = None
-        params = self._mw.get_parameters_dict()
+        params = self._params_or_report_limit("Tracking")
+        if params is None:
+            return
         logger.info(
             f"Launching {'backward' if backward_mode else 'forward'} tracking for frame range "
             f"{params.get('START_FRAME')}..{params.get('END_FRAME')}"
