@@ -392,6 +392,7 @@ class Pipeline:
                     apriltag=None,
                 )
 
+        from_cache = getattr(self, "detection_reader", None) is not None
         with span(N.MATERIALIZE, units=len(frames)):
             for frame, frame_idx, raw in zip(frames, frame_indices, raw_list):
                 obb_result = (
@@ -399,10 +400,14 @@ class Pipeline:
                     if isinstance(raw, _RawOBBTensors)
                     else raw
                 )
-                if cfg.detection_source == "obb":
+                if cfg.detection_source == "obb" and not from_cache:
                     # Every cached OBB frame is confidence-ranked and bounded
                     # to the limit; a frame with more candidates (the probe
                     # row survived) is a LOUD hit: WARNING + run summary.
+                    # A frame read back from the cache is already ranked and
+                    # must NOT be re-ranked: extraction breaks ties
+                    # later-first, so re-ranking would reverse tie groups
+                    # and re-key every per-animal row against the cache.
                     obb_result, candidate_count = rank_and_bound(obb_result)
                     if candidate_count > MAX_DETECTIONS_PER_FRAME:
                         self.detection_limit_stats.record(frame_idx, candidate_count)

@@ -255,3 +255,34 @@ def test_worker_filter_change_with_reuse_skips_the_detector(
     assert rerun["batch_pass"] == 1, "re-keyed per-animal caches need a pass"
     assert obb_calls == [], "the detector must not run on a filter change"
     assert rerun["cnn_calls"] > 0
+
+
+def test_tied_confidences_keep_raw_index_alignment(tmp_path, video, monkeypatch):
+    """Cached frames are already ranked; re-ranking them would reverse tie
+    groups (extraction breaks ties later-first) and re-key every per-animal
+    row. Partial reuse must consume the stored order unchanged."""
+    import numpy as np
+
+    import tests.test_n_independent_replay as rp
+
+    real_obb = rp._obb
+
+    def _tied(frame_idx, n):
+        r = real_obb(frame_idx, n)
+        r.confidences[:] = np.where(np.arange(n) % 3 == 0, 0.9, 0.6).astype(np.float32)
+        return r
+
+    monkeypatch.setattr(rp, "_obb", _tied)
+    built = tmp_path / "built"
+    _build(built, 10, video)
+    new_cfg = _stricter_size()
+
+    calls = _reuse_pass(built, new_cfg, video)
+    assert calls["run_obb"] == 0
+
+    fresh = tmp_path / "fresh"
+    _fresh_build(fresh, new_cfg, video)
+    got = _replay_cfg(built, new_cfg, video)
+    want = _replay_cfg(fresh, new_cfg, video)
+    for i in range(_NUM_FRAMES):
+        assert _view(got[i]) == _view(want[i]), f"frame {i}"
