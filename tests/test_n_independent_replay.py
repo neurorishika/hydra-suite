@@ -49,6 +49,8 @@ from hydra_suite.core.inference.result import (
 
 _N_DETS = 30  # detections per non-empty frame (> 2N for N=10, < 2N for N=20)
 _SMALL = 2  # raw row size-filtered out -> non-contiguous raw indices
+_MEDIUM = 1  # raw row kept by the written filters, dropped by a stricter one
+_MEDIUM_SIZE = 60.0
 _EMPTY_FRAMES = (1, 4)  # middle frame of each 3-frame window
 _NUM_FRAMES = 6
 _BATCH = 3
@@ -90,6 +92,7 @@ def _obb(frame_idx, n):
     sizes = np.full(n, 256.0, np.float32)
     if n > _SMALL:
         sizes[_SMALL] = 1.0
+        sizes[_MEDIUM] = _MEDIUM_SIZE
     return OBBResult(
         frame_idx,
         c.astype(np.float32),
@@ -387,6 +390,51 @@ def test_replay_beyond_the_written_superset_raises(tmp_path, video):
     with pytest.raises(DownstreamCacheError, match="recomputing"):
         runner.load_frame(0)
     assert runner.load_frame(1).filtered_indices == []  # empty frame: nothing to miss
+
+
+def test_stricter_candidate_drops_a_mid_ranked_row_and_reads_by_raw_index(
+    tmp_path, video
+):
+    """Read-only candidate replay at a stricter SIZE filter than the caches
+    were written with: the final set skips a mid-ranked row that IS in the
+    written superset, so final positions in the superset are not a prefix
+    (positions_in != arange) and payloads must still follow the raw rows."""
+    from hydra_suite.core.inference.runner import InferenceRunner
+
+    _build(tmp_path, 10, video)
+    candidate = _cfg(10)
+    candidate.obb.min_object_size = 100.0  # drops raw _MEDIUM (60) and _SMALL
+    with patch("hydra_suite.core.inference.runner._load_all_models") as ml:
+        ml.return_value = _models()
+        runner = InferenceRunner(
+            candidate,
+            cache_dir=tmp_path,
+            video_path=video,
+            cache_only=True,
+            cache_filter_config=_cfg(10),
+        )
+    assert runner.caches_all_valid()
+
+    final = [i for i in range(_N_DETS) if i not in (_MEDIUM, _SMALL)][:10]
+    assert final[:3] == [0, 3, 4]
+    xs = [20.0 + 50.0 * r for r in final]
+    for i in range(_NUM_FRAMES):
+        fr = runner.load_frame(i)
+        if i in _EMPTY_FRAMES:
+            assert fr.filtered_indices == []
+            continue
+        assert fr.filtered_indices == final
+        assert fr.obb.centroids[:, 0].tolist() == xs
+        assert fr.headtail.heading_hints.tolist() == xs
+        assert fr.pose.keypoints[:, 0, 0].tolist() == xs
+        (cnn,) = fr.cnn
+        assert [p.det_index for p in cnn.predictions] == list(range(len(final)))
+        for p, x in zip(cnn.predictions, xs):
+            np.testing.assert_allclose(p.factors[0].raw_probabilities, _probs(x))
+        tags = fr.apriltag
+        assert len(tags.det_indices) > 0
+        for pos, tag_id in zip(tags.det_indices, tags.tag_ids):
+            assert tag_id == int(xs[pos])
 
 
 # --- realtime-written caches replay the same way (Task 7 open check) ---------
