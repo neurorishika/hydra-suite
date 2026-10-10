@@ -684,7 +684,12 @@ class SliceSettingsWidget(QGroupBox):
                 )
             )
         set_badge(self.lbl_slice_tile_badge, self.source_badge("tile_size"))
-        set_badge(self.lbl_slice_body_badge, self._body_source)
+        if body > 0:
+            set_badge(self.lbl_slice_body_badge, self._body_source)
+        else:
+            # Unknown (0): there is no source to claim.
+            self.lbl_slice_body_badge.setText("")
+            self.lbl_slice_body_badge.setToolTip("No body size is known yet.")
         if role in TRAIN_ROLES:
             self._refresh_reference_note(body)
         if self._caps.fixed_overlap is None:

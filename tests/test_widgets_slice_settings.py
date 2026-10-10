@@ -706,3 +706,22 @@ def test_stamped_overlap_note_defaults_to_the_source_description():
     w.set_source("overlap", "stamped")
     assert w.lbl_slice_overlap_minimum.text().endswith("— set by stamped on the model")
     assert w.btn_slice_overlap_raise.isHidden()
+
+
+def test_unknown_body_shows_no_source_badge():
+    """Review MINOR-3: a 0 (unknown) body has no source to claim."""
+    w = SliceSettingsWidget(
+        role="infer_yolo",
+        capabilities=SliceWidgetCapabilities(
+            body_override=False, body_display_only=True
+        ),
+    )
+    w.set_reference_body(0.0, "default")
+    assert w.lbl_slice_body_badge.text() == ""
+    w.set_reference_body(48.0, "stamped")
+    assert w.lbl_slice_body_badge.text() == "stamped"
+    typable = SliceSettingsWidget(role="escalate_sam3")
+    typable.set_reference_body(0.0, "dataset")
+    assert typable.lbl_slice_body_badge.text() == ""
+    typable.spin_slice_body.setValue(40.0)
+    assert typable.lbl_slice_body_badge.text() == "user"
