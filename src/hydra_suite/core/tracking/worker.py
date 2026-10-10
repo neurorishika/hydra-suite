@@ -1704,6 +1704,10 @@ class TrackingEngineCore:
                             else None
                         ),
                         should_stop=self._is_stop_requested,
+                        # With reuse allowed, a filter-only change reads the
+                        # stored detections back and recomputes just the
+                        # re-keyed per-animal caches (never the detector).
+                        reuse_detection_cache=bool(self.use_cached_detections),
                     )
             except Exception as _bp_err:
                 profiler.phase_end("batched_detection")

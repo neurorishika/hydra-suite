@@ -183,6 +183,7 @@ class Pipeline:
         clipping_stats: "ClippingStats | None" = None,
         detection_limit_stats: "DetectionLimitStats | None" = None,
         collect_results: bool = False,
+        detection_reader: "Callable[[int], OBBResult | None] | None" = None,
     ) -> None:
         if depth < 1:
             raise ValueError(f"pipeline depth must be >= 1, got {depth}")
@@ -213,6 +214,10 @@ class Pipeline:
         self.stages = stages
         self.runtime = runtime
         self.cache_writer = cache_writer
+        # Partial cache reuse: when set, detections are read back from the
+        # (already confidence-ranked) detection cache per frame instead of
+        # running the detector; everything downstream is unchanged.
+        self.detection_reader = detection_reader
         # Effective execution model: 1 (sync) or N>=2 (deep prefetch). depth
         # takes effect directly — no clamping, except under the opt-in
         # deep-GPU profiling pass (HYDRA_PROFILE_GPU), which forces 1 so a
@@ -284,6 +289,18 @@ class Pipeline:
         and it walks windows in ascending frame order.
         """
         cfg = self.stages.config
+        reader = getattr(self, "detection_reader", None)
+        if reader is not None:
+            cached = []
+            for frame_idx in window.frame_indices:
+                obb = reader(frame_idx)
+                if obb is None:
+                    raise RuntimeError(
+                        f"frame {frame_idx} is missing from the reused detection "
+                        "cache"
+                    )
+                cached.append(obb)
+            return cached
         with span(N.DETECT, units=len(window.frames)):
             if cfg.detection_source == "bgsub":
                 with span(N.RUN_BGSUB_BATCH, units=len(window.frames)):
@@ -614,6 +631,9 @@ class Pipeline:
         cnn_per_phase: list[dict[int, Any]] = []
         with span(N.CNN, units=obb.num_detections):
             for cfg_cnn, mdl in zip(cfg.cnn_phases, self.stages.cnn_models):
+                if mdl is None:  # reused phase under partial cache reuse
+                    cnn_per_phase.append({})
+                    continue
                 phase = run_cnn_batch(
                     frames,
                     obbs,

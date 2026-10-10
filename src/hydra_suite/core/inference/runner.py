@@ -470,6 +470,68 @@ def cache_set_is_fully_reusable(caches: _CacheSet) -> bool:
     return all(handle.coverage_ranges() == reference for handle in handles)
 
 
+@dataclass(frozen=True)
+class _PartialReusePlan:
+    """Which per-animal stages a detection-reusing batch pass must recompute.
+
+    ``True`` = the stage's cache is stale for the current config (typically a
+    replay-filter change re-keyed it) and is recomputed + rewritten; ``False``
+    = it is reused untouched. Detection is always reused under a plan.
+    """
+
+    headtail: bool
+    cnn: tuple[bool, ...]
+    pose: bool
+    apriltag: bool
+
+    @property
+    def any_recompute(self) -> bool:
+        return self.headtail or any(self.cnn) or self.pose or self.apriltag
+
+
+def partial_reuse_plan(
+    caches: _CacheSet, start_frame: int, end_frame: int
+) -> _PartialReusePlan | None:
+    """Plan a batch pass that reuses the detection cache, or ``None``.
+
+    Engages only when the detection member of the active cache generation is
+    key-valid and covers EXACTLY ``[start_frame, end_frame]``: the recomputed
+    per-animal members are written over that range, and the cache set is only
+    promotable when every member has the same coverage. A per-animal member is
+    reused when it is reusable, of the same generation and coextensive with
+    detection; anything else is recomputed.
+    """
+
+    if not caches.set_manifest_valid or caches.detection is None:
+        return None
+    generation = caches.generation_id
+    detection = caches.detection
+    expected = ((int(start_frame), int(end_frame)),)
+    if (
+        generation is None
+        or not detection.is_reusable()
+        or detection._store.generation_id != generation
+        or detection.coverage_ranges() != expected
+    ):
+        return None
+
+    def _stale(handle) -> bool:
+        if handle is None:
+            return False
+        return not (
+            handle.is_reusable()
+            and handle._store.generation_id == generation
+            and handle.coverage_ranges() == expected
+        )
+
+    return _PartialReusePlan(
+        headtail=_stale(caches.headtail),
+        cnn=tuple(_stale(handle) for handle in caches.cnn),
+        pose=_stale(caches.pose),
+        apriltag=_stale(caches.apriltag),
+    )
+
+
 def _load_all_models(
     config: InferenceConfig,
     runtime: RuntimeContext,
@@ -1868,7 +1930,10 @@ class InferenceRunner:
         return resolved
 
     def _build_pipeline(
-        self, caches: _CacheSet, roi_mask: "np.ndarray | None" = None
+        self,
+        caches: _CacheSet,
+        roi_mask: "np.ndarray | None" = None,
+        reuse_plan: _PartialReusePlan | None = None,
     ) -> Pipeline:
         """Construct the depth=1 Pipeline that drives the batch stage layer.
 
@@ -1878,27 +1943,58 @@ class InferenceRunner:
 
         ``roi_mask`` (frame-space) is threaded onto ``PipelineStages`` so the OBB
         stage can ROI-gate slice tiles; ``None`` keeps the full tile grid.
+
+        ``reuse_plan`` (partial reuse): detections are read from the detection
+        cache instead of running the detector, and only the stale per-animal
+        stages run and are written. Head-tail still runs (unwritten) when a
+        stale CNN phase or pose needs it, so their inputs match a fresh run.
         """
+        headtail_model = self._models.headtail
+        cnn_models = list(self._models.cnn)
+        pose_model = self._models.pose
+        apriltag_model = self._models.apriltag
+        detection_reader = None
+        if reuse_plan is not None:
+            detection_reader = caches.detection.read_frame
+            cnn_models = [
+                model if stale else None
+                for model, stale in zip(cnn_models, reuse_plan.cnn)
+            ]
+            if not reuse_plan.pose:
+                pose_model = None
+            if not reuse_plan.apriltag:
+                apriltag_model = None
+            if not (reuse_plan.headtail or any(reuse_plan.cnn) or reuse_plan.pose):
+                headtail_model = None
         stages = PipelineStages(
             config=self.config,
             obb_models=self._models.obb,
             bgsub_model=self._models.bgsub,
-            headtail_model=self._models.headtail,
-            cnn_models=self._models.cnn,
-            pose_model=self._models.pose,
-            apriltag_model=self._models.apriltag,
+            headtail_model=headtail_model,
+            cnn_models=cnn_models,
+            pose_model=pose_model,
+            apriltag_model=apriltag_model,
             roi_mask=roi_mask,
         )
+        writes = reuse_plan or _PartialReusePlan(
+            headtail=True,
+            cnn=tuple(True for _ in caches.cnn),
+            pose=True,
+            apriltag=True,
+        )
         handles: dict[str, CacheHandle] = {}
-        if caches.detection is not None:
+        if caches.detection is not None and reuse_plan is None:
             handles["detection"] = caches.detection
-        if caches.headtail is not None:
+        if caches.headtail is not None and writes.headtail:
             handles["headtail"] = caches.headtail
-        for cnn_cfg, cnn_handle in zip(self.config.cnn_phases, caches.cnn):
-            handles[f"cnn_{cnn_cfg.label}"] = cnn_handle
-        if caches.pose is not None:
+        for cnn_cfg, cnn_handle, stale in zip(
+            self.config.cnn_phases, caches.cnn, writes.cnn
+        ):
+            if stale:
+                handles[f"cnn_{cnn_cfg.label}"] = cnn_handle
+        if caches.pose is not None and writes.pose:
             handles["pose"] = caches.pose
-        if caches.apriltag is not None:
+        if caches.apriltag is not None and writes.apriltag:
             handles["apriltag"] = caches.apriltag
         # depth>=2 uses an async CacheWriter so cache writes never stall the
         # compute path; the consumer thread still calls the direct write helpers
@@ -1913,6 +2009,7 @@ class InferenceRunner:
             depth=self.config.pipeline_depth,
             clipping_stats=self.clipping_stats,
             detection_limit_stats=self.detection_limit_stats,
+            detection_reader=detection_reader,
         )
 
     def run_batch_pass(
@@ -1923,6 +2020,7 @@ class InferenceRunner:
         end_frame: int | None = None,
         should_stop=None,
         roi_mask: "np.ndarray | None" = None,
+        reuse_detection_cache: bool = False,
     ) -> None:
         from .sources import make_frame_source
 
@@ -1945,20 +2043,64 @@ class InferenceRunner:
                 video_path, self.runtime, start_frame, end_frame
             )
 
+            # Recover the clamped bounds from the reader so range_total matches.
+            start_frame = frame_source.start_frame
+            end_frame = frame_source.end_frame
+            range_total = frame_source.frame_count
+
+            # Partial reuse (opt-in: the caller allows cache reuse): when the
+            # detection cache already covers this exact range under the
+            # current detection key, a changed replay filter only re-keys the
+            # per-animal caches -- read detections back instead of running the
+            # detector, and recompute only the stale per-animal stages.
+            reuse_plan = None
+            if reuse_detection_cache:
+                probe = _open_caches(
+                    self.config,
+                    self.cache_dir,
+                    self._video_sig,
+                    self._roi_mask,
+                    read_only=True,
+                )
+                reuse_plan = partial_reuse_plan(probe, start_frame, end_frame)
+                probe.close()
+                if reuse_plan is None:
+                    logger.info(
+                        "Detection cache does not cover frames %d-%d under the "
+                        "current detection settings; running the detector.",
+                        start_frame,
+                        end_frame,
+                    )
+                elif not reuse_plan.any_recompute:
+                    logger.info(
+                        "Every inference cache is reusable for frames %d-%d; "
+                        "nothing to recompute.",
+                        start_frame,
+                        end_frame,
+                    )
+                    frame_source.close()
+                    self._write_identity_evidence_batch(start_frame, end_frame)
+                    return
+                else:
+                    logger.info(
+                        "Reusing cached detections for frames %d-%d; "
+                        "recomputing stale per-animal stages only (%s).",
+                        start_frame,
+                        end_frame,
+                        reuse_plan,
+                    )
+
             with span(N.OPEN_CACHES):
                 caches = _open_caches(
                     self.config,
                     self.cache_dir,
                     self._video_sig,
                     self._roi_mask,
-                    write_mode="fresh" if start_frame == 0 else "resume",
+                    write_mode=(
+                        "fresh" if start_frame == 0 and reuse_plan is None else "resume"
+                    ),
                 )
             self._caches = caches
-
-            # Recover the clamped bounds from the reader so range_total matches.
-            start_frame = frame_source.start_frame
-            end_frame = frame_source.end_frame
-            range_total = frame_source.frame_count
 
             # The whole pass is now driven by Pipeline.run: it owns the windowing and
             # (at depth>=2) the producer/consumer double buffer. The video decode is
@@ -1970,7 +2112,9 @@ class InferenceRunner:
             # (the cache key above already folded the mask by content, independent
             # of this resample).
             pipeline = self._build_pipeline(
-                caches, roi_mask=self._frame_space_roi_mask(video_path)
+                caches,
+                roi_mask=self._frame_space_roi_mask(video_path),
+                reuse_plan=reuse_plan,
             )
             complete_pass = False
             try:
