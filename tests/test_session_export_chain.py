@@ -268,3 +268,26 @@ def test_annotated_video_failure_does_not_fail_the_session(
         assert svc._run_annotated_video(str(final_csv)) is None
     assert any("No video decoder" in r.getMessage() for r in caplog.records)
     assert warnings and "No video decoder" in warnings[0][1]
+
+
+def test_invalid_scale_is_loud_before_post_processing(tmp_path):
+    """R-3: the render swallow (M-1) must not turn an invalid
+    video_output_scale into a warning after hours of post-processing."""
+    import pytest
+
+    stages = []
+    svc = _make_service(
+        {
+            "video_output_enabled": True,
+            "video_output_path": str(tmp_path / "out.mp4"),
+            "video_output_scale": 2.0,
+        },
+        {},
+        tmp_path,
+    )
+    svc.callbacks.stage_changed = stages.append
+    with pytest.raises(ValueError, match="video_output_scale"):
+        svc.run_post_tracking(None)
+    assert stages == []
+    with pytest.raises(ValueError, match="video_output_scale"):
+        svc._run_annotated_video(str(tmp_path / "final.csv"))
