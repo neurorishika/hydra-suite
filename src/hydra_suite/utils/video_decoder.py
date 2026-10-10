@@ -401,15 +401,27 @@ def _av_caps() -> tuple[set, set]:
 def _cuda_usable() -> bool:
     """A CUDA device this process can actually use (respects CUDA_VISIBLE_DEVICES).
 
-    Same check as ``batch_fanout.host_has_cuda``; a compiled-in ``cuda`` hw
-    device type alone (the PyPI PyAV wheel on a CPU box) is not enough.
+    A compiled-in ``cuda`` hw device type alone (the PyPI PyAV wheel on a CPU
+    box) is not enough, and neither is ``gpu_utils.CUDA_AVAILABLE``: that is
+    True whenever cupy imports (``Device(0)`` never touches the driver), so
+    with ``CUDA_VISIBLE_DEVICES=""`` it still claimed a GPU. Torch's
+    ``is_available()`` or cupy's actual device count decide.
     """
     try:
-        from hydra_suite.utils.gpu_utils import CUDA_AVAILABLE, TORCH_CUDA_AVAILABLE
+        import importlib
 
-        return bool(CUDA_AVAILABLE or TORCH_CUDA_AVAILABLE)
+        gpu_utils = importlib.import_module("hydra_suite.utils.gpu_utils")
     except Exception:  # noqa: BLE001 - no torch/cupy just means no CUDA
         return False
+    if getattr(gpu_utils, "TORCH_CUDA_AVAILABLE", False):
+        return True
+    cp = getattr(gpu_utils, "cp", None)
+    if getattr(gpu_utils, "CUDA_AVAILABLE", False) and cp is not None:
+        try:
+            return int(cp.cuda.runtime.getDeviceCount()) > 0
+        except Exception:  # noqa: BLE001 - driver error == no usable device
+            return False
+    return False
 
 
 def default_decoder_candidates(

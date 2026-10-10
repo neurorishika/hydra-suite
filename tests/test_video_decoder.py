@@ -535,3 +535,32 @@ def test_start_past_end_fails_fast_with_one_decode(index_clip, monkeypatch):
     src.close()
     assert opened == [cands[0].name]
     assert decodes["n"] <= 2  # first-pts probe + one seek pass, never a re-scan
+
+
+def _fake_gpu_utils(monkeypatch, *, cupy_flag, torch_cuda, cupy_count):
+    import sys
+    import types
+
+    cp = types.SimpleNamespace(
+        cuda=types.SimpleNamespace(
+            runtime=types.SimpleNamespace(getDeviceCount=lambda: cupy_count)
+        )
+    )
+    fake = types.SimpleNamespace(
+        CUDA_AVAILABLE=cupy_flag,
+        TORCH_CUDA_AVAILABLE=torch_cuda,
+        cp=cp if cupy_flag else None,
+    )
+    monkeypatch.setitem(sys.modules, "hydra_suite.utils.gpu_utils", fake)
+
+
+def test_cuda_usable_ignores_cupy_flag_without_a_visible_device(monkeypatch):
+    """gpu_utils.CUDA_AVAILABLE is True whenever cupy imports (Device(0) does
+    not touch the driver): with CUDA_VISIBLE_DEVICES="" on diptera the ladder
+    still offered cuvid. A visible device must actually be counted."""
+    _fake_gpu_utils(monkeypatch, cupy_flag=True, torch_cuda=False, cupy_count=0)
+    assert vd._cuda_usable() is False
+    _fake_gpu_utils(monkeypatch, cupy_flag=True, torch_cuda=False, cupy_count=1)
+    assert vd._cuda_usable() is True
+    _fake_gpu_utils(monkeypatch, cupy_flag=False, torch_cuda=True, cupy_count=0)
+    assert vd._cuda_usable() is True
