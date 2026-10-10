@@ -1021,6 +1021,15 @@ def build_inference_config_from_params(params: dict) -> InferenceConfig:
         or "yolo26s-obb.pt"
     )
     yolo_conf = float(params.get("YOLO_CONFIDENCE_THRESHOLD", 0.25))
+    if yolo_conf < EXTRACTION_CONFIDENCE_FLOOR:
+        logger.warning(
+            "YOLO confidence threshold %g is below the extraction floor %g: "
+            "detections under %g are never extracted, so it acts as %g.",
+            yolo_conf,
+            EXTRACTION_CONFIDENCE_FLOOR,
+            EXTRACTION_CONFIDENCE_FLOOR,
+            EXTRACTION_CONFIDENCE_FLOOR,
+        )
     yolo_iou = float(params.get("YOLO_IOU_THRESHOLD", 0.7))
     min_obj = float(params.get("MIN_OBJECT_SIZE", 0.0))
     max_obj = float(params.get("MAX_OBJECT_SIZE", float("inf")) or float("inf"))
