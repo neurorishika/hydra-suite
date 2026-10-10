@@ -86,7 +86,7 @@ python -c "import hydra_suite, sys; print(hydra_suite.__file__)"   # must print 
   - `operating_fraction(fractions) -> float | None` (np.median, clamped to [0.01, 0.9])
   - `@dataclass(frozen=True) class TilingSpec` with fields `enabled, geometry_mode, object_tile_fractions, reference_body_px, slice_width, slice_height, overlap, min_area_ratio, fragment_policy, merge_policy, merge_metric, merge_threshold`; methods `TilingSpec.defaults(backend)`, `.operating_fraction()`, `.training_tile_sizes(imgsz)`, `.to_mapping()`.
 
-- [ ] **Step 1: Write the failing tests**
+- [x] **Step 1: Write the failing tests**
 
 ```python
 # tests/test_tiling_spec.py
@@ -200,12 +200,12 @@ def test_to_mapping_is_canonical_and_json_safe():
     }
 ```
 
-- [ ] **Step 2: Run tests to verify they fail**
+- [x] **Step 2: Run tests to verify they fail**
 
 Run: `python -m pytest tests/test_tiling_spec.py -q`
 Expected: FAIL — `ModuleNotFoundError: No module named 'hydra_suite.utils.tiling_spec'`
 
-- [ ] **Step 3: Implement**
+- [x] **Step 3: Implement**
 
 ```python
 # src/hydra_suite/utils/tiling_spec.py
@@ -423,12 +423,12 @@ class TilingSpec:
 
 Note: `test_tile_sizes_delegates_to_resolve_scales` passes `object_tile_fraction=0.15000000000000002` (np.median of 0.1, 0.2) — the scalar only matters when fan-out does not apply, so either value yields the same list here.
 
-- [ ] **Step 4: Run tests to verify they pass**
+- [x] **Step 4: Run tests to verify they pass**
 
 Run: `python -m pytest tests/test_tiling_spec.py -q`
 Expected: PASS (all)
 
-- [ ] **Step 5: Commit**
+- [x] **Step 5: Commit**
 
 ```bash
 make format
@@ -452,7 +452,7 @@ git commit -m "feat(tiling): canonical TilingSpec contract and per-backend defau
   - `operating_fraction` in `canonical`, in order: `median(target_sizes)/imgsz` when both present (imgsz must parse to an int ≥ 1); else stamped `prefill_object_tile_fraction`; else the bare `object_tile_fraction` (clamped; unparseable → 0.15) when that key or `target_sizes` is present. Equals `_training_values` for every writer-produced shape (deviation 8).
   - Warnings for clamped/dropped legacy values are logged once per `(field, value)` per process (TrackerKit re-reads sidecars on every refresh).
 
-- [ ] **Step 1: Write the failing tests**
+- [x] **Step 1: Write the failing tests**
 
 ```python
 # tests/test_tiling_spec_canonicalize.py
@@ -631,12 +631,12 @@ def test_none_and_empty_mapping():
     assert canonicalize({}) == ({}, {})
 ```
 
-- [ ] **Step 2: Run tests to verify they fail**
+- [x] **Step 2: Run tests to verify they fail**
 
 Run: `python -m pytest tests/test_tiling_spec_canonicalize.py -q`
 Expected: FAIL — `ImportError: cannot import name 'canonicalize'`
 
-- [ ] **Step 3: Implement (append to `utils/tiling_spec.py`)**
+- [x] **Step 3: Implement (append to `utils/tiling_spec.py`)**
 
 ```python
 # Canonical name -> accepted keys in precedence order (canonical first).
@@ -890,12 +890,12 @@ Append to the `TilingSpec` class body:
 
 Note: `from_mapping` references `canonicalize` defined later in the module; that is fine at call time. Keep `_DROP` defined before first call (module import completes before any call).
 
-- [ ] **Step 4: Run tests to verify they pass**
+- [x] **Step 4: Run tests to verify they pass**
 
 Run: `python -m pytest tests/test_tiling_spec.py tests/test_tiling_spec_canonicalize.py -q`
 Expected: PASS
 
-- [ ] **Step 5: Commit**
+- [x] **Step 5: Commit**
 
 ```bash
 make format
@@ -918,7 +918,7 @@ git commit -m "feat(tiling): canonicalize legacy SAHI names in one alias map"
   - `resolve_overlap(*, override=None, saved=None, fractions=()) -> Sourced` (sources `override` / `user` / `derived` / `default`)
   - `resolve_tile_size(spec: TilingSpec, *, imgsz: int, fraction: float | None) -> Sourced` (`(w, h)`; source `user` in custom mode with an explicit size, else `derived`)
 
-- [ ] **Step 1: Write the failing tests**
+- [x] **Step 1: Write the failing tests**
 
 ```python
 # tests/test_tiling_resolution.py
@@ -1002,12 +1002,12 @@ def test_tile_size_custom_is_user():
     assert resolve_tile_size(spec0, imgsz=640, fraction=None) == Sourced((640, 640), "derived")
 ```
 
-- [ ] **Step 2: Run tests to verify they fail**
+- [x] **Step 2: Run tests to verify they fail**
 
 Run: `python -m pytest tests/test_tiling_resolution.py -q`
 Expected: FAIL — `ImportError: cannot import name 'resolve_overlap'`
 
-- [ ] **Step 3: Implement (append to `utils/tiling_spec.py`; add `tile_size_for_mode` to the `.slice_geometry` import)**
+- [x] **Step 3: Implement (append to `utils/tiling_spec.py`; add `tile_size_for_mode` to the `.slice_geometry` import)**
 
 ```python
 def _positive(value: Any) -> float | None:
@@ -1102,12 +1102,12 @@ def resolve_tile_size(spec: TilingSpec, *, imgsz: int, fraction: float | None) -
     return Sourced(size, "user" if explicit else "derived")
 ```
 
-- [ ] **Step 4: Run tests to verify they pass**
+- [x] **Step 4: Run tests to verify they pass**
 
 Run: `python -m pytest tests/test_tiling_spec.py tests/test_tiling_spec_canonicalize.py tests/test_tiling_resolution.py -q`
 Expected: PASS
 
-- [ ] **Step 5: Commit**
+- [x] **Step 5: Commit**
 
 ```bash
 make format
@@ -1117,7 +1117,7 @@ git commit -m "feat(tiling): sourced resolution for body px, scale, overlap, til
 
 ### Task 4: S1 gate — regression, adversarial review, merge
 
-- [ ] **Step 1: Regression suites (foreground)**
+- [x] **Step 1: Regression suites (foreground)**
 
 ```bash
 python -m pytest tests/test_tiling_spec.py tests/test_tiling_spec_canonicalize.py tests/test_tiling_resolution.py \
@@ -1127,7 +1127,7 @@ make lint
 ```
 Expected: all PASS; lint clean for the new module.
 
-- [ ] **Step 2: Adversarial review (independent worker, different model)**
+- [x] **Step 2: Adversarial review (independent worker, different model)**
 
 Dispatch `Agent` with `model: "fable"`, `subagent_type: "general-purpose"`, prompt:
 
@@ -1135,11 +1135,11 @@ Dispatch `Agent` with `model: "fable"`, `subagent_type: "general-purpose"`, prom
 
 Run alongside it a normal whole-branch reviewer (`superpowers:requesting-code-review`).
 
-- [ ] **Step 3: Fix wave**
+- [x] **Step 3: Fix wave**
 
 For each confirmed finding: failing test first, fix, re-run Step 1. Re-dispatch the adversarial reviewer on the fix diff only if a fix touched more than the reported lines.
 
-- [ ] **Step 4: Merge**
+- [x] **Step 4: Merge**
 
 ```bash
 cd /Users/neurorishika/Projects/Rockefeller/Kronauer/multi-animal-tracker
@@ -1177,7 +1177,7 @@ cd .worktrees/sahi-s2 && conda activate hydra-mps && export PYTHONPATH=$PWD/src
   - `slice_meta.merge_training_geometry(existing, training_geometry, *, model_family: str = "yolo") -> dict`
   - v3 document keys: `schema_version` (3), `model_family`, `training_geometry`, `primary_profile_id`, `profiles`.
 
-- [ ] **Step 1: Write the failing tests**
+- [x] **Step 1: Write the failing tests**
 
 ```python
 # tests/test_tiling_meta_build.py
@@ -1326,12 +1326,12 @@ def test_merge_preserves_profiles():
     assert doc["training_geometry"] == {"overlap": 0.25}
 ```
 
-- [ ] **Step 2: Run tests to verify they fail**
+- [x] **Step 2: Run tests to verify they fail**
 
 Run: `python -m pytest tests/test_tiling_meta_build.py -q`
 Expected: FAIL — `ModuleNotFoundError: ...tiling_meta`
 
-- [ ] **Step 3: Implement**
+- [x] **Step 3: Implement**
 
 `core/inference/slice_meta.py`:
 
@@ -1504,12 +1504,12 @@ def training_geometry_from_sam3_manifest(
 
 Note `_tile_pairs` input shapes: `[[1940, 1940], [970, 970]]` → two pairs; `[971, 971]` (a single-scale manifest's `tile_px`) → one pair; `971` → one pair; anything non-numeric/non-finite/<1 is skipped.
 
-- [ ] **Step 4: Run tests, then the existing slice_meta suites**
+- [x] **Step 4: Run tests, then the existing slice_meta suites**
 
 Run: `python -m pytest tests/test_tiling_meta_build.py tests/test_slice_meta_read.py tests/test_slice_profile_resolution.py tests/test_slice_profile_mutations.py tests/test_engine_params_slice_profile.py tests/test_trackerkit_slice_meta_prefill.py tests/test_detectkit_direct_calibration_ui.py -q`
 Expected: PASS. If an existing test asserts `schema_version == 2` on a normalized/written document, change that literal to `SLICE_META_SCHEMA_VERSION`; if it asserts exact equality of a normalized document, add `"model_family": "yolo"`. Nothing else may change.
 
-- [ ] **Step 5: Commit**
+- [x] **Step 5: Commit**
 
 ```bash
 make format
@@ -1530,7 +1530,7 @@ git commit -m "feat(tiling): v3 slice_meta with model_family; additive YOLO and 
   - `@dataclass(frozen=True) class TilingMeta: model_family: str; source: str; training: TilingSpec | None; imgsz: int; tile_px_set: tuple[tuple[int, int], ...]; operating_fraction: float | None; extras: dict; primary_profile_id: str; profiles: tuple[dict, ...]`
   - `read_tiling_meta(model_path) -> TilingMeta | None` — never raises. `source` ∈ {`"slice_meta"`, `"sam3_meta"`}. `training.fragment_policy` defaults to the family's (`drop`/`crowd`) when unstamped. `operating_fraction` = canonical operating value (stamped prefill or legacy target_sizes median), else np.median of the fractions; clamped [0.01, 0.9].
 
-- [ ] **Step 1: Write the failing tests**
+- [x] **Step 1: Write the failing tests**
 
 ```python
 # tests/test_tiling_meta_read.py
@@ -1695,12 +1695,12 @@ def test_hostile_documents_never_raise(model, doc):
     read_tiling_meta(model)
 ```
 
-- [ ] **Step 2: Run tests to verify they fail**
+- [x] **Step 2: Run tests to verify they fail**
 
 Run: `python -m pytest tests/test_tiling_meta_read.py -q`
 Expected: FAIL — `ImportError: cannot import name 'read_tiling_meta'`
 
-- [ ] **Step 3: Implement (append to `tiling_meta.py`; extend imports)**
+- [x] **Step 3: Implement (append to `tiling_meta.py`; extend imports)**
 
 Imports to add at the top of `tiling_meta.py`:
 
@@ -1832,12 +1832,12 @@ def _read_tiling_meta(model_path: str | Path) -> TilingMeta | None:
 
 Note: an invalid stamped `geometry_mode` reads as the `TilingSpec` default `auto_model`, unlike `_training_values` (`auto_object`). No caller uses `read_tiling_meta` in S2; S3 decides the TrackerKit prefill default. Say so in the commit message.
 
-- [ ] **Step 4: Run tests to verify they pass**
+- [x] **Step 4: Run tests to verify they pass**
 
 Run: `python -m pytest tests/test_tiling_meta_read.py tests/test_tiling_meta_build.py tests/test_geometry_drift_guard.py tests/test_geometry_drift_severity.py -q`
 Expected: PASS
 
-- [ ] **Step 5: Commit**
+- [x] **Step 5: Commit**
 
 ```bash
 make format
@@ -1860,7 +1860,7 @@ read_tiling_meta yet, S3 decides the prefill default."
 - Consumes: `training_geometry_from_yolo_manifest`, `merge_training_geometry(..., model_family="yolo")`, `read_tiling_meta`.
 - Produces: published `<dst>.pt.slice_meta.json` is schema 3, `model_family="yolo"`, additive v3 `training_geometry`. Registry `metadata["slice_geometry"]` stays the raw manifest.
 
-- [ ] **Step 1: Write the failing test**
+- [x] **Step 1: Write the failing test**
 
 ```python
 # tests/test_tiling_meta_publish_yolo.py
@@ -1926,12 +1926,12 @@ def test_republish_upgrades_v2_and_keeps_profiles(tmp_path, monkeypatch):
 
 `test_slice_geometry_written_as_sidecar_and_registry` in `tests/test_model_publish_slice_geometry.py` is the reference for the monkeypatch/publish pattern; if the registry/models root plumbing differs from this helper, mirror that test.
 
-- [ ] **Step 2: Run to verify it fails**
+- [x] **Step 2: Run to verify it fails**
 
 Run: `python -m pytest tests/test_tiling_meta_publish_yolo.py -q`
 Expected: FAIL — `KeyError: 'fragment_policy'`-style or `model_family` mismatch until the writer switches (the publish path still writes the raw manifest under `model_family` default `"yolo"`; the test that must fail is the one asserting `object_tile_fractions` via `read_tiling_meta` only if Task 6's reader cannot derive them — if Step 2 unexpectedly passes, add `assert "object_tile_fractions" in geometry` to `test_publish_writes_additive_v3` and re-run: it must fail).
 
-- [ ] **Step 3: Implement** — in `model_publish.py`, import `training_geometry_from_yolo_manifest` from `hydra_suite.core.inference.tiling_meta` and change the merge:
+- [x] **Step 3: Implement** — in `model_publish.py`, import `training_geometry_from_yolo_manifest` from `hydra_suite.core.inference.tiling_meta` and change the merge:
 
 ```python
         source_meta = read_slice_meta(src)
@@ -1946,12 +1946,12 @@ Leave `metadata["slice_geometry"] = dict(slice_geometry)` unchanged.
 
 Retarget the 3 exact-equality assertions in `test_all_direct_detector_roles_publish_slice_geometry` from `training_geometry == manifest` to `{k: training_geometry[k] for k in manifest} == manifest` (additive v3). Change nothing else in that file.
 
-- [ ] **Step 4: Run new + existing publish suites**
+- [x] **Step 4: Run new + existing publish suites**
 
 Run: `python -m pytest tests/test_tiling_meta_publish_yolo.py tests/test_model_publish_slice_geometry.py tests/test_service_publish_slice_geometry.py tests/test_trackerkit_slice_meta_prefill.py tests/test_engine_params_slice_profile.py tests/test_gui_cli_profile_parity.py tests/test_trackerkit_cli_sahi_profile.py tests/test_sliced_dataset_reference.py tests/test_geometry_drift_guard.py -q`
 Expected: PASS.
 
-- [ ] **Step 5: Commit**
+- [x] **Step 5: Commit**
 
 ```bash
 make format
@@ -1973,7 +1973,7 @@ git commit -m "feat(tiling): YOLO publish stamps additive v3 training geometry"
   - `publish_worker._write_tiling_sidecar(artifact_path: Path, build_manifest: dict) -> Path | None` — read-merges any existing `.slice_meta.json` (profiles kept), never raises.
   - `publish._cleanup_attempt` also deletes `<artifact>.slice_meta.json` and `<artifact>.slice_meta.json.tmp` when it deletes an owned final pair. The path is built locally (`artifact_path.with_name(artifact_path.name + ".slice_meta.json")`) — `publish.py` must not import `hydra_suite.core.inference` (its `__init__` loads torch).
 
-- [ ] **Step 1: Read `_request_payload`'s signature and call site** (`publish.py:361` and `:585`) to build a valid call in the test. Then write the failing tests:
+- [x] **Step 1: Read `_request_payload`'s signature and call site** (`publish.py:361` and `:585`) to build a valid call in the test. Then write the failing tests:
 
 ```python
 # tests/test_sam3_publish_tiling_sidecar.py
@@ -2086,12 +2086,12 @@ def test_cleanup_keeps_unowned_tiling_sidecar(tmp_path):
 
 Define `_request_kwargs(full)` in the test module from what Step 1 shows `_request_payload` needs (run id, params, paths, `build_manifest=full`, …), using the same minimal values the existing `tests/test_sam3_publish*.py` tests use for it (grep them for `_request_payload`).
 
-- [ ] **Step 2: Run to verify they fail**
+- [x] **Step 2: Run to verify they fail**
 
 Run: `python -m pytest tests/test_sam3_publish_tiling_sidecar.py -q`
 Expected: FAIL — `KeyError: 'geometry_mode'` (payload) and `AttributeError: ... '_write_tiling_sidecar'`.
 
-- [ ] **Step 3: Implement**
+- [x] **Step 3: Implement**
 
 `publish.py`, in `_request_payload` just before `return {` (after the `geometry_fields` loop):
 
@@ -2177,12 +2177,12 @@ In `publish_sam3_artifact`, immediately after `_promote_staged_pair(...)` and be
         _write_tiling_sidecar(artifact_path, build_manifest)
 ```
 
-- [ ] **Step 4: Run new + existing SAM3 publish suites**
+- [x] **Step 4: Run new + existing SAM3 publish suites**
 
 Run: `python -m pytest tests/test_sam3_publish_tiling_sidecar.py tests/test_sam3_publish.py tests/test_sam3_publish_sidecar.py tests/test_sam3_publish_atomic.py tests/test_sam3_publish_lifecycle.py tests/test_sam3_service_publish.py tests/test_sam3_multiscale_stamp.py tests/test_core_import_is_light.py -q`
 Expected: PASS, except `test_sam3_publish_sidecar.py::test_importing_parent_publish_module_does_not_import_torch`, which already fails on `main` (verify it fails identically on `main` before accepting; it must not change). If a lifecycle test asserts the exact file set in the models dir, add the `.slice_meta.json` name — nothing else.
 
-- [ ] **Step 5: Commit**
+- [x] **Step 5: Commit**
 
 ```bash
 make format
@@ -2192,7 +2192,7 @@ git commit -m "feat(tiling): SAM3 publish forwards tiling fields and dual-writes
 
 ### Task 9: S2 gate — regression, adversarial review, merge
 
-- [ ] **Step 1: Regression (foreground; batch if the full suite is slow)**
+- [x] **Step 1: Regression (foreground; batch if the full suite is slow)**
 
 ```bash
 python -m pytest tests/test_tiling_*.py tests/test_slice_*.py tests/test_sam3_publish*.py tests/test_sam3_multiscale_*.py \
@@ -2204,7 +2204,7 @@ make lint
 ```
 Expected: all PASS. Compare failure sets against `main` at the branch base for anything else that fails (memory: "pre-existing" is tested against the branch base).
 
-- [ ] **Step 2: Adversarial review (independent worker, different model)**
+- [x] **Step 2: Adversarial review (independent worker, different model)**
 
 Dispatch `Agent` with `model: "fable"`, `subagent_type: "general-purpose"`, prompt:
 
@@ -2212,9 +2212,9 @@ Dispatch `Agent` with `model: "fable"`, `subagent_type: "general-purpose"`, prom
 
 Run alongside it a normal whole-branch reviewer (`superpowers:requesting-code-review`).
 
-- [ ] **Step 3: Fix wave** — failing test first per confirmed finding; re-run Step 1.
+- [x] **Step 3: Fix wave** — failing test first per confirmed finding; re-run Step 1.
 
-- [ ] **Step 4: Equivalence smoke (behavior must not move)** — S2 changes no inference path, so a 2-clip MPS smoke suffices here (full MPS + CUDA matrix is the S3 gate):
+- [x] **Step 4: Equivalence smoke (behavior must not move)** — S2 changes no inference path, so a 2-clip MPS smoke suffices here (full MPS + CUDA matrix is the S3 gate):
 
 ```bash
 cd /Users/neurorishika/Projects/Rockefeller/Kronauer/multi-animal-tracker
@@ -2224,7 +2224,7 @@ REPO=$PWD WT=$PWD/.worktrees/sahi-s2 MAIN_SRC=$PWD/src WT_SRC=$PWD/.worktrees/sa
 ```
 Expected: EQUIVALENT at the determinism floor for both clips, row counts > 1 (`wc -l` the CSVs).
 
-- [ ] **Step 5: Merge**
+- [x] **Step 5: Merge**
 
 ```bash
 git merge --no-ff feat/sahi-unify-s2 -m "Merge feat/sahi-unify-s2: v3 tiling sidecar and unified reader"

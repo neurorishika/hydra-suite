@@ -61,7 +61,7 @@ export PYTHONPATH=$PWD/src KMP_DUPLICATE_LIB_OK=TRUE QT_QPA_PLATFORM=offscreen
 - Test: `tests/test_slice_config_sahi_path_guard.py` — SAHI-ENABLED byte-identity guard (plan review M7; no equivalence fixture enables slicing)
 - Test: `tests/test_tiling_defaults_single_source.py`
 
-- [ ] **Step 1: Failing tests**
+- [x] **Step 1: Failing tests**
 
 ```python
 # tests/test_tiling_defaults_single_source.py
@@ -137,10 +137,10 @@ Step 1 for this file: on the UNMODIFIED worktree run `python -c "from tests.test
 
 Before writing `test_legacy_project_without_fractions_keeps_its_scales`, read `SliceTrainingSettings.from_dict`: if a missing `target_size_fractions` key would now pick up the new non-empty default and override the legacy pixels, make `from_dict` use `[]` when the key is ABSENT (legacy) and the default only for a fresh instance. The test must pass for the reason stated.
 
-- [ ] **Step 2:** `python -m pytest tests/test_tiling_defaults_single_source.py -q` → FAIL (F4 + seed asserts).
-- [ ] **Step 3:** Replace each literal with the table/constant import. Values for TrackerKit/core must be bit-identical (0.15, 0.2). `_slice_config_from_params` keeps its clamp ranges.
-- [ ] **Step 4:** Run the new tests plus `tests/test_slice_config_sahi_path_guard.py tests/test_detectkit_slice_settings.py tests/test_resolve_scales.py tests/test_inference_config.py tests/test_engine_params_slice_profile.py tests/test_detection_panel_slice_widgets.py tests/test_semantic_tiling.py tests/test_sam3_slice_settings_shared.py tests/test_detectkit_training_cli.py tests/test_detectkit_inference_settings.py tests/test_semantic_escalation_dialog_persistence.py tests/test_get_parameters_dict_characterization.py` → all PASS with no edits to existing tests.
-- [ ] **Step 5:** Commit `refactor(tiling): one defaults table feeds every SAHI dataclass (F4, F8)`.
+- [x] **Step 2:** `python -m pytest tests/test_tiling_defaults_single_source.py -q` → FAIL (F4 + seed asserts).
+- [x] **Step 3:** Replace each literal with the table/constant import. Values for TrackerKit/core must be bit-identical (0.15, 0.2). `_slice_config_from_params` keeps its clamp ranges.
+- [x] **Step 4:** Run the new tests plus `tests/test_slice_config_sahi_path_guard.py tests/test_detectkit_slice_settings.py tests/test_resolve_scales.py tests/test_inference_config.py tests/test_engine_params_slice_profile.py tests/test_detection_panel_slice_widgets.py tests/test_semantic_tiling.py tests/test_sam3_slice_settings_shared.py tests/test_detectkit_training_cli.py tests/test_detectkit_inference_settings.py tests/test_semantic_escalation_dialog_persistence.py tests/test_get_parameters_dict_characterization.py` → all PASS with no edits to existing tests.
+- [x] **Step 5:** Commit `refactor(tiling): one defaults table feeds every SAHI dataclass (F4, F8)`.
 
 ### Task 11: Fraction-only DetectKit settings (F1)
 
@@ -149,7 +149,7 @@ Before writing `test_legacy_project_without_fractions_keeps_its_scales`, read `S
 - Modify: `src/hydra_suite/detectkit/gui/panels/slice_settings_widget.py` — `to_settings()` (~:623-645) stops emitting the 640 pixel list; help text and schematic use the real model input size (`self._model_input_size`), not a literal 640
 - Test: `tests/test_detectkit_fraction_only_settings.py`; update `tests/test_detectkit_inference_settings.py:77` and `tests/test_sam3_slice_settings_shared.py:137` (they lock the 640 anchor — the bug)
 
-- [ ] **Step 1: Failing tests**
+- [x] **Step 1: Failing tests**
 
 ```python
 # tests/test_detectkit_fraction_only_settings.py
@@ -210,10 +210,10 @@ def test_training_widget_emits_no_640_pixel_list():
 
 Read the dialog's current constructor first; if it cannot learn the model input size, add a keyword `model_input_size: int = 640` and pass `self._project.imgsz_obb_direct` from `main_window._open_inference_settings_dialog` (~:1610). Read `SliceSettingsGroup`'s constructor/`txt_targets` name and adapt the test to the real widget API without changing intent.
 
-- [ ] **Step 2:** Run → FAIL.
-- [ ] **Step 3:** Implement. `load_from` sets the spin from `median(sliced.target_fractions())` (fallback `BACKEND_DEFAULTS["yolo_infer"].object_tile_fractions[0]`); `settings()` writes `target_size_fractions=[f]`, `object_tile_fraction=f`, leaves `target_sizes` at its default. `_refresh_enabled_state` enables the fraction spin in `auto_object` like before. `to_settings()` drops the `target_sizes=[fraction * 640 ...]` line.
-- [ ] **Step 4:** Update the two locking tests: `test_detectkit_inference_settings.py:77` asserts `target_size_fractions == [<fraction>]` instead of `target_sizes == [200.0]`; `test_sam3_slice_settings_shared.py:137` asserts the fractions and that no 640-derived list is emitted. Run the new file plus `tests/test_detectkit_inference_settings.py tests/test_sam3_slice_settings_shared.py tests/test_detectkit_slice_ui.py tests/test_detectkit_slice_settings.py tests/test_detectkit_training_cli.py tests/test_detectkit_dataset_preparation_sidecar.py` → PASS.
-- [ ] **Step 5:** Commit `fix(detectkit): fraction-only SAHI settings; no 640 anchor (F1)`.
+- [x] **Step 2:** Run → FAIL.
+- [x] **Step 3:** Implement. `load_from` sets the spin from `median(sliced.target_fractions())` (fallback `BACKEND_DEFAULTS["yolo_infer"].object_tile_fractions[0]`); `settings()` writes `target_size_fractions=[f]`, `object_tile_fraction=f`, leaves `target_sizes` at its default. `_refresh_enabled_state` enables the fraction spin in `auto_object` like before. `to_settings()` drops the `target_sizes=[fraction * 640 ...]` line.
+- [x] **Step 4:** Update the two locking tests: `test_detectkit_inference_settings.py:77` asserts `target_size_fractions == [<fraction>]` instead of `target_sizes == [200.0]`; `test_sam3_slice_settings_shared.py:137` asserts the fractions and that no 640-derived list is emitted. Run the new file plus `tests/test_detectkit_inference_settings.py tests/test_sam3_slice_settings_shared.py tests/test_detectkit_slice_ui.py tests/test_detectkit_slice_settings.py tests/test_detectkit_training_cli.py tests/test_detectkit_dataset_preparation_sidecar.py` → PASS.
+- [x] **Step 5:** Commit `fix(detectkit): fraction-only SAHI settings; no 640 anchor (F1)`.
 
 ### Task 12: Preview resolves tiling from the model sidecar (F2)
 
@@ -229,7 +229,7 @@ Read the dialog's current constructor first; if it cannot learn the model input 
 
 Rule (deviation 16): `override` given → it, `source="override"`. Else `meta = read_slice_meta(model_path)`; if a meta exists → `values = slice_meta_to_panel_values(meta, None)` (primary profile, else training geometry — TrackerKit's fresh-load ladder) mapped onto a copy of `project_settings` with: `enabled` = project's; `geometry_mode`, `overlap`, `slice_width/height` from values; `object_tile_fraction` and `target_size_fractions=[values["object_tile_fraction"]]`; `reference_body_px` = the project's (label-measured) if > 0 else `values["trained_body_px"]` (spec §3.3: dataset before stamp); `merge_threshold` = values' if not None else project's; `merge_policy/metric` = values' if not None else `"greedy_nmm"`/`"ios"`; `imgsz` = `project_imgsz`; `source = f"profile:{values['profile_name']}"` or `"training"`. No meta → project settings, `"project"`. Never raises (corrupt sidecar → project). Pass a profile's `merge_policy` through raw (`nmm` stays `nmm`).
 
-- [ ] **Step 1: Failing tests**
+- [x] **Step 1: Failing tests**
 
 ```python
 # tests/test_detectkit_preview_tiling.py
@@ -318,10 +318,10 @@ def test_cache_key_changes_when_sidecar_changes(tmp_path):
 
 Add one GUI-level test (same QApplication fixture convention as Task 11) that constructs the DetectKit main window's signature helper — or, if `_dataset_signature` cannot be reached without the full window, factor it into a pure function `dataset_signature(source, model_path, tiling: PreviewTiling, ...)` and test that: the signature changes when the sidecar's primary profile changes.
 
-- [ ] **Step 2:** Run → FAIL (module missing).
-- [ ] **Step 3:** Implement `preview_tiling.py`. In `dataset_inference.py`, factor the settings-dict construction into `preview_settings_dict(tiling: PreviewTiling, **other) -> dict` (or an equivalent helper the worker uses) so `slice_settings`, `slice_merge_policy`, `slice_merge_metric`, `slice_imgsz` all enter `prediction_cache_key`; keep `imgsz_obb_direct` for back-compat but have the sliced branch read `slice_imgsz` when present. `operations.run_dataset_inference` passes `merge_policy`/`merge_metric` to `predict_sliced_obb_result` → `_preview_slice_merge_config(threshold, policy, metric)` (defaults `greedy_nmm`/`ios` keep the old byte behavior). `main_window` computes `resolve_preview_tiling(model_path, self._project.slice_settings, project_imgsz=self._project.imgsz_obb_direct, override=<dialog override slice_settings or None>)` where the worker is built, and logs `source` in the status bar ("SAHI preview: training geometry" / "profile 'X'" / "project settings" / "override").
-- [ ] **Step 4:** Run the new file plus `tests/test_detectkit_sliced_preview.py tests/test_detectkit_preview_target.py tests/test_detectkit_inference_cancel.py tests/test_detectkit_inference_stager.py tests/test_detectkit_inference_settings.py` → PASS.
-- [ ] **Step 5:** Commit `fix(detectkit): preview tiles like TrackerKit from the model sidecar (F2)`.
+- [x] **Step 2:** Run → FAIL (module missing).
+- [x] **Step 3:** Implement `preview_tiling.py`. In `dataset_inference.py`, factor the settings-dict construction into `preview_settings_dict(tiling: PreviewTiling, **other) -> dict` (or an equivalent helper the worker uses) so `slice_settings`, `slice_merge_policy`, `slice_merge_metric`, `slice_imgsz` all enter `prediction_cache_key`; keep `imgsz_obb_direct` for back-compat but have the sliced branch read `slice_imgsz` when present. `operations.run_dataset_inference` passes `merge_policy`/`merge_metric` to `predict_sliced_obb_result` → `_preview_slice_merge_config(threshold, policy, metric)` (defaults `greedy_nmm`/`ios` keep the old byte behavior). `main_window` computes `resolve_preview_tiling(model_path, self._project.slice_settings, project_imgsz=self._project.imgsz_obb_direct, override=<dialog override slice_settings or None>)` where the worker is built, and logs `source` in the status bar ("SAHI preview: training geometry" / "profile 'X'" / "project settings" / "override").
+- [x] **Step 4:** Run the new file plus `tests/test_detectkit_sliced_preview.py tests/test_detectkit_preview_target.py tests/test_detectkit_inference_cancel.py tests/test_detectkit_inference_stager.py tests/test_detectkit_inference_settings.py` → PASS.
+- [x] **Step 5:** Commit `fix(detectkit): preview tiles like TrackerKit from the model sidecar (F2)`.
 
 ### Task 13: Headless SAM3 tiles like the dialog (F3)
 
@@ -334,7 +334,7 @@ Add one GUI-level test (same QApplication fixture convention as Task 11) that co
 **Interfaces:**
 - Produces: `default_semantic_tiling(project, variant: str) -> {"reference_body_px": float, "tile_fraction": float | None, "overlap": float, "merge_iou": float, "area_min_px2": float, "area_max_px2": float, "origin": str}`. Precedence (the SAM2 shape): (1) `project.semantic_escalation_settings` when its `variant == variant` (all fields as saved; `tile_fraction` 0 → None); (2) the serving calibration (`resolve_serving_calibration(sidecar_for(variant), project.semantic_calibration)`), only when `record.get("variant") == variant`: `tile_fraction = record["points"][record["recommended_index"]]["tile_fraction"]`, body = `record["parameters"]["reference_body_px"]` (SAM3 records have no `chosen_index` and no top-level body — plan review M4; guard every lookup); (3) the model stamp: `stamped_object_tile_fraction(sidecar_for(variant))` with body = the DIALOG's body chain (below), else the stamped `reference_body_px`; (4) the dialog's own opening state (plan review B1): `tile_fraction = SEMANTIC_TILE_FRACTION_SEED`, body = the dialog's body chain — `escalation_actions.resolve_reference_body_px(project)` (project `slice_settings.reference_body_px` → label median), whatever function the dialog actually calls at construction; read it and reuse it, do not re-implement. Full frame (`tile_fraction=None`) only when the resolved body is 0, exactly as `resolve_tile_px` treats it. `overlap` default `semantic.tiling.DEFAULT_OVERLAP`, `merge_iou` default `DEFAULT_MERGE_IOU`. `origin` ∈ `saved|calibration|stamped|default|full_frame`. Never raises.
 
-- [ ] **Step 1: Failing tests**
+- [x] **Step 1: Failing tests**
 
 ```python
 # tests/test_semantic_default_tiling.py
@@ -424,15 +424,15 @@ def test_cli_sam3_payload_carries_resolved_tiling(monkeypatch):
 
 `sidecar_for` must be a module-level import in `semantic_escalation.py` so `monkeypatch.setattr(se, "sidecar_for", ...)` (raising=True) works. The label-median fallback in tests with empty `sources` must resolve to 0 without error. Adapt other monkeypatch targets to where names are actually imported (e.g. if `semantic_escalation` imports `sidecar_for` inside a function, patch `hydra_suite.core.inference.semantic.checkpoints.sidecar_for`). Read `test_detectkit_escalate_cli.py` for the existing patching pattern of `run_sam2`.
 
-- [ ] **Step 2:** Run → FAIL.
-- [ ] **Step 3:** Implement `default_semantic_tiling` (module-level import of `sidecar_for` so it is patchable), the CLI flags (help text mirrors sam2's: "0 = full frame; default: what the DetectKit dialog would open with"), and `run_sam3`: `tiling = default_semantic_tiling(project, args.variant)`; flags override (`--tile-fraction 0` → None; explicit fraction with no known body → same fallback chain as `_sam2_tiling`: project slice_settings body, then `quick_median_body_px`); `params.update(reference_body_px=..., tile_fraction=..., overlap=..., merge_iou=..., area_min_px2=..., area_max_px2=...)` — check `SemanticEscalationRequest` field names and only pass fields it has. Print `Tiling: fraction F of a B px body (origin)` or `Tiling: full frame`. Dialog: when saved settings are absent or for another variant, seed `_tile_fraction` and `_reference_body` from `default_semantic_tiling` — which by rung (4) equals today's opening state for a stock model, so `tests/test_semantic_escalation_dialog_persistence.py` must pass UNCHANGED; a finetuned model now opens at its stamped scale.
-- [ ] **Step 4:** Run the new file plus `tests/test_detectkit_escalate_cli.py tests/test_semantic_escalation_dialog_persistence.py tests/test_sam3_model_selection.py tests/test_semantic_calibration_sidecar.py tests/test_geometry_review_fixes.py` → PASS.
-- [ ] **Step 5:** Update `docs/user-guide/sam-install-and-run.md:126` CLI synopsis with the two flags. Commit `fix(detectkit): headless SAM3 escalation tiles like the dialog (F3)`.
+- [x] **Step 2:** Run → FAIL.
+- [x] **Step 3:** Implement `default_semantic_tiling` (module-level import of `sidecar_for` so it is patchable), the CLI flags (help text mirrors sam2's: "0 = full frame; default: what the DetectKit dialog would open with"), and `run_sam3`: `tiling = default_semantic_tiling(project, args.variant)`; flags override (`--tile-fraction 0` → None; explicit fraction with no known body → same fallback chain as `_sam2_tiling`: project slice_settings body, then `quick_median_body_px`); `params.update(reference_body_px=..., tile_fraction=..., overlap=..., merge_iou=..., area_min_px2=..., area_max_px2=...)` — check `SemanticEscalationRequest` field names and only pass fields it has. Print `Tiling: fraction F of a B px body (origin)` or `Tiling: full frame`. Dialog: when saved settings are absent or for another variant, seed `_tile_fraction` and `_reference_body` from `default_semantic_tiling` — which by rung (4) equals today's opening state for a stock model, so `tests/test_semantic_escalation_dialog_persistence.py` must pass UNCHANGED; a finetuned model now opens at its stamped scale.
+- [x] **Step 4:** Run the new file plus `tests/test_detectkit_escalate_cli.py tests/test_semantic_escalation_dialog_persistence.py tests/test_sam3_model_selection.py tests/test_semantic_calibration_sidecar.py tests/test_geometry_review_fixes.py` → PASS.
+- [x] **Step 5:** Update `docs/user-guide/sam-install-and-run.md:126` CLI synopsis with the two flags. Commit `fix(detectkit): headless SAM3 escalation tiles like the dialog (F3)`.
 
 ### Task 14: S3 gate — regression, equivalence (MPS + CUDA), adversarial review, merge
 
-- [ ] **Step 1: Regression**: every test file named in Tasks 10–13, plus `tests/test_tiling_*.py tests/test_slice_*.py tests/test_gui_cli_profile_parity.py tests/test_trackerkit_cli_sahi_profile.py tests/test_trackerkit_slice_meta_prefill.py tests/test_profile_cache_keys.py tests/test_direct_calibration_grid.py tests/test_geometry_drift_guard.py tests/test_core_import_is_light.py` and `tests/test_get_parameters_dict_characterization.py`, `tests/test_slice_config_sahi_path_guard.py`; `make lint` (compare to main's known 10 findings).
-- [ ] **Step 2: Equivalence, MPS (this box)** — kill stale sleap/hydra first:
+- [x] **Step 1: Regression**: every test file named in Tasks 10–13, plus `tests/test_tiling_*.py tests/test_slice_*.py tests/test_gui_cli_profile_parity.py tests/test_trackerkit_cli_sahi_profile.py tests/test_trackerkit_slice_meta_prefill.py tests/test_profile_cache_keys.py tests/test_direct_calibration_grid.py tests/test_geometry_drift_guard.py tests/test_core_import_is_light.py` and `tests/test_get_parameters_dict_characterization.py`, `tests/test_slice_config_sahi_path_guard.py`; `make lint` (compare to main's known 10 findings).
+- [x] **Step 2: Equivalence, MPS (this box)** — kill stale sleap/hydra first:
 ```bash
 cd /Users/neurorishika/Projects/Rockefeller/Kronauer/multi-animal-tracker
 pgrep -u "$USER" -fl "sleap|hydra" ; pkill -u "$USER" -f "sleap|hydra" || true
@@ -440,6 +440,6 @@ REPO=$PWD WT=$PWD/.worktrees/sahi-s3 MAIN_SRC=$PWD/src WT_SRC=$PWD/.worktrees/sa
   OUT=/tmp/equiv_sahi_s3_mps RUNTIME=mps bash tools/equivalence/run_matrix.sh
 ```
 Expected: every clip EQUIVALENT at its determinism floor, row counts > 1 (`wc -l`).
-- [ ] **Step 3: Equivalence, CUDA (diptera; mehek is offline — deviation 20)** — check `ssh rishika@diptera.rockefeller.edu nvidia-smi --query-gpu=index,uuid,memory.used,utilization.gpu --format=csv` and pick an IDLE GPU's UUID (not one another job uses). Sync both src trees (local `main` is ahead of origin; do not push): `rsync -a --delete src/ rishika@diptera.rockefeller.edu:/tmp/sahi_s3/main_src/` and the worktree's `src/` to `/tmp/sahi_s3/wt_src/`. On diptera in `~/hydra-suite` (harness + fixtures; if its `tools/equivalence/` is older than main's, rsync main's `tools/equivalence/` into `/tmp/sahi_s3/harness/` and use `WT=/tmp/sahi_s3/harness_root` containing it plus the fixtures symlinked): `source ~/miniforge3/etc/profile.d/conda.sh && conda activate hydra-cuda && export CUDA_VISIBLE_DEVICES=<uuid>`; clean only `pgrep -u rishika -f "sleap|hydra"` processes belonging to this gate; `REPO=$PWD WT=$PWD MAIN_SRC=/tmp/sahi_s3/main_src WT_SRC=/tmp/sahi_s3/wt_src OUT=/tmp/equiv_sahi_s3_cuda RUNTIME=cuda bash tools/equivalence/run_matrix.sh fly_obb worm_bgsub ant_obb_sleap`. No fixture enables slicing, so this proves the SAHI-disabled path; the SAHI-enabled path is guarded by `test_slice_config_sahi_path_guard.py`.
-- [ ] **Step 4: Adversarial review** (Fable, independent): break F1–F4/F8 claims by executing code — legacy project files from before S3, preview cache invalidation, `detectkit escalate sam3` parity with the dialog's opening state, TrackerKit byte-identity (golden + a constructed config through `build_engine_params` vs `main`), and any GUI path that still converts by 640 (`grep -rn "640" src/hydra_suite/detectkit`). Plus a normal reviewer. Fix wave; re-review if a fix exceeds the reported lines.
-- [ ] **Step 5: Merge** `--no-ff` into local `main`, remove the worktree.
+- [x] **Step 3: Equivalence, CUDA (diptera; mehek is offline — deviation 20)** — check `ssh rishika@diptera.rockefeller.edu nvidia-smi --query-gpu=index,uuid,memory.used,utilization.gpu --format=csv` and pick an IDLE GPU's UUID (not one another job uses). Sync both src trees (local `main` is ahead of origin; do not push): `rsync -a --delete src/ rishika@diptera.rockefeller.edu:/tmp/sahi_s3/main_src/` and the worktree's `src/` to `/tmp/sahi_s3/wt_src/`. On diptera in `~/hydra-suite` (harness + fixtures; if its `tools/equivalence/` is older than main's, rsync main's `tools/equivalence/` into `/tmp/sahi_s3/harness/` and use `WT=/tmp/sahi_s3/harness_root` containing it plus the fixtures symlinked): `source ~/miniforge3/etc/profile.d/conda.sh && conda activate hydra-cuda && export CUDA_VISIBLE_DEVICES=<uuid>`; clean only `pgrep -u rishika -f "sleap|hydra"` processes belonging to this gate; `REPO=$PWD WT=$PWD MAIN_SRC=/tmp/sahi_s3/main_src WT_SRC=/tmp/sahi_s3/wt_src OUT=/tmp/equiv_sahi_s3_cuda RUNTIME=cuda bash tools/equivalence/run_matrix.sh fly_obb worm_bgsub ant_obb_sleap`. No fixture enables slicing, so this proves the SAHI-disabled path; the SAHI-enabled path is guarded by `test_slice_config_sahi_path_guard.py`.
+- [x] **Step 4: Adversarial review** (Fable, independent): break F1–F4/F8 claims by executing code — legacy project files from before S3, preview cache invalidation, `detectkit escalate sam3` parity with the dialog's opening state, TrackerKit byte-identity (golden + a constructed config through `build_engine_params` vs `main`), and any GUI path that still converts by 640 (`grep -rn "640" src/hydra_suite/detectkit`). Plus a normal reviewer. Fix wave; re-review if a fix exceeds the reported lines.
+- [x] **Step 5: Merge** `--no-ff` into local `main`, remove the worktree.

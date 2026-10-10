@@ -1,6 +1,6 @@
 """Canonical SAHI tiling contract shared by every kit.
 
-Spec: docs/superpowers/specs/2026-10-09-sahi-unification-design.md (§3).
+Spec: docs/superpowers/specs/done/2026-10-09-sahi-unification-design.md (§3).
 TrackerKit's vocabulary is canonical. This module is pure (numpy only) so
 core, training, data and every kit can import it; ``slice_geometry`` stays
 the grid module and is not modified.
