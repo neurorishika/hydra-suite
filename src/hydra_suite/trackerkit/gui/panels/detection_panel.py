@@ -794,6 +794,9 @@ class DetectionPanel(QWidget):
                 advanced_merge=False,
                 merge_threshold_row=False,
                 execution_knobs=True,
+                # The YOLO group is a narrow side panel: the preview goes
+                # below the controls so SAHI never forces sideways scrolling.
+                preview_position="bottom",
             ),
         )
         w = self.slice_settings
@@ -2381,12 +2384,10 @@ class DetectionPanel(QWidget):
             getattr(self, "row_direct_model", None), not sequential
         )
         # SAHI is direct-only: the whole widget hides in sequential mode. In
-        # direct mode its fields are DISABLED (never hidden) while SAHI is off
-        # or the geometry does not use them -- the widget owns that.
+        # direct mode the widget collapses to its Enable checkbox while SAHI
+        # is off, and disables (never hides) fields the geometry does not
+        # use; _refresh_slice_widget syncs the panel-owned SAHI rows.
         self._set_widget_visible(getattr(self, "slice_settings", None), not sequential)
-        self._set_widget_visible(
-            getattr(self, "lbl_slice_profile_status", None), not sequential
-        )
         self._refresh_slice_widget()
 
         # Sequential-mode controls (right column of the YOLO grid).
@@ -2419,7 +2420,7 @@ class DetectionPanel(QWidget):
             self._main_window._dataset_panel.refresh_export_levels()
 
     def _on_slice_toggled(self, checked: bool) -> None:
-        """SAHI on/off is a user edit; the widget enables its fields itself."""
+        """SAHI on/off is a user edit; the widget shows/hides its rows itself."""
         self._mark_slice_profile_custom()
         self._refresh_slice_widget()
 
@@ -2446,12 +2447,13 @@ class DetectionPanel(QWidget):
         if widget is None:
             return
         widget.refresh()
+        # The panel-owned SAHI rows follow the widget: shown only in direct
+        # mode with SAHI on (S6: SAHI off collapses to the Enable checkbox).
+        shown = self.combo_yolo_obb_mode.currentIndex() == 0 and widget.tiling_shown()
         label = getattr(self, "lbl_slice_batch_admission", None)
         if label is not None:
-            label.setVisible(
-                self.combo_yolo_obb_mode.currentIndex() == 0
-                and widget.btn_slice_advanced.isChecked()
-            )
+            label.setVisible(shown and widget.btn_slice_advanced.isChecked())
+        self._set_widget_visible(getattr(self, "lbl_slice_profile_status", None), shown)
 
     def _show_slice_model_input(self, meta: dict | None) -> None:
         """Display-only: the stamped model input the object-scale px hint uses."""
