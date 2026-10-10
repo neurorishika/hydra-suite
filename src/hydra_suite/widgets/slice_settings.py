@@ -762,6 +762,11 @@ class SliceSettingsWidget(QGroupBox):
         return self.chk_slice_enabled.isChecked()
 
     def _apply_visibility(self) -> None:
+        # The WINDOW's focus widget before hiding: only a control of ours that
+        # the collapse hides may hand focus to the checkbox; focus elsewhere
+        # in the window (another panel's field) is never touched. Read before
+        # the loop because Qt's own hide handling may already move it.
+        before = self.window().focusWidget()
         mode = self._mode()
         shown = self.tiling_shown()
         for key, widgets in self._row_widgets.items():
@@ -780,10 +785,10 @@ class SliceSettingsWidget(QGroupBox):
         # Qt moves focus only off an explicitly hidden widget, not off one
         # inside a hidden row holder: keyboard input must not reach a hidden
         # control (Down on the hidden profile combo would switch profiles).
-        # Not gated on hasFocus(): Qt's own hide handling may already have
-        # passed focus to a sibling hidden later in the loop above, and an
-        # inactive window reports hasFocus() False for its focus widget.
-        focus = self.focusWidget()
-        if focus is not None and not focus.isVisibleTo(self):
+        if (
+            before is not None
+            and self.isAncestorOf(before)
+            and not before.isVisibleTo(self)
+        ):
             self.chk_slice_enabled.setFocus()
         self.updateGeometry()  # let host layouts re-measure (rows came/went)

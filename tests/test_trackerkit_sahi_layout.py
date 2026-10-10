@@ -181,6 +181,23 @@ def test_focus_leaves_the_profile_combo_when_sahi_is_turned_off(panel):
     assert window.focusWidget() is panel.chk_slice_enabled
 
 
+def test_sahi_collapse_never_steals_focus_from_other_widgets(panel):
+    """Re-check regression: focus outside the SAHI widget (e.g. the user is
+    typing in the confidence spin) stays put when SAHI is turned off."""
+    window = panel.window()
+    window.activateWindow()
+    panel.chk_slice_enabled.setChecked(True)
+    _settle(_content(panel))
+    panel.combo_slice_profile.setFocus()  # SAHI widget remembers a focus child
+    _settle(_content(panel))
+    panel.spin_yolo_confidence.setFocus()  # the user moves on
+    _settle(_content(panel))
+    assert window.focusWidget() is panel.spin_yolo_confidence
+    panel.chk_slice_enabled.setChecked(False)  # e.g. a profile with enabled=false
+    _settle(_content(panel))
+    assert window.focusWidget() is panel.spin_yolo_confidence
+
+
 @pytest.mark.parametrize("size", [(1100, 800), (1280, 800), (1440, 900), (1500, 1000)])
 def test_find_animals_page_never_scrolls_sideways(panel, size):
     """The user's complaint: no horizontal scrolling on Find Animals, with
