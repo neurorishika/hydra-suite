@@ -181,10 +181,11 @@ panel without sideways scrolling:
 - Related fields share a row: Profile | Tile strategy, Object scale | Body
   size, Tile size | Overlap, and (under Advanced) Tiles per call | Memory. A
   field whose partner is not shown (for example, no profile row) stands alone
-  at the left. Source badges (`profile`, `derived` ...) stay next to their
-  field.
+  at the left. The body size's source badge (`profile`, `stamped` ...) stays
+  next to its field; the tile size's badge (`derived`, `profile` ...) starts
+  the summary line, right before the resolved tile size.
 - The derived values are one muted summary line under the fields, for
-  example `→ 480 × 480 px · ≈102 px at 1024 · ≥ whole-animal minimum (0.15)`:
+  example `derived → 480 × 480 px · ≈102 px at 1024 · ≥ whole-animal minimum (0.15)`:
   the resolved tile size, the object's size at the model input (Fit to animal
   size only) and the overlap check. The line shortens when the panel is narrow;
   hover it for the full text. A below-minimum warning keeps its orange colour

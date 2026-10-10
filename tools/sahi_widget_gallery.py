@@ -12,8 +12,10 @@ published model leaks into the pictures. Writes PNGs into ``--out``:
   sidecar with two calibration profiles): ``host_trackerkit.png`` on the
   primary profile with a loaded 2448 x 2048 video's frame size,
   ``host_trackerkit_custom.png`` on the custom-geometry profile with Advanced
-  expanded and no video (the labelled example frame), and
-  ``host_trackerkit_off.png`` with SAHI unticked (collapsed to the checkbox).
+  expanded and no video (the labelled example frame),
+  ``host_trackerkit_auto_model.png`` on "Use model input size" (the longest
+  tile-strategy item, unclipped), and ``host_trackerkit_off.png`` with SAHI
+  unticked (collapsed to the checkbox).
   TrackerKit uses the compact layout (``layout="compact"``: paired rows, one
   summary line) with the preview below the controls (``preview_position``).
 
@@ -405,6 +407,17 @@ def render_trackerkit(out: Path, app, root: Path) -> list[Path]:
     written.append(
         _grab_scroll_page(
             window, panel.slice_settings, out / "host_trackerkit_custom.png", app
+        )
+    )
+    # The longest Tile strategy item must show unclipped in its half-width
+    # column (review regression).
+    geometry = panel.combo_slice_geometry
+    geometry.setCurrentIndex(geometry.findData("auto_model"))  # the user path
+    panel.slice_settings.btn_slice_advanced.setChecked(False)
+    _assert_yolo_page(panel)
+    written.append(
+        _grab_scroll_page(
+            window, panel.slice_settings, out / "host_trackerkit_auto_model.png", app
         )
     )
     panel.chk_slice_enabled.setChecked(False)  # the user path: collapses
