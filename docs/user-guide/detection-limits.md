@@ -21,21 +21,39 @@ three things at once:
 
 ## Changing the number of animals reuses inference
 
-Detections are stored independently of N, so you can change the number of
-animals at replay time without re-running the detector or the per-animal
-models; only tracking is recomputed.
+Detections are stored independently of N, so with **Reuse cache** on you can
+change the number of animals and re-run without re-running the detector or
+the per-animal models; only tracking is recomputed.
 
 ## Changing a filter reuses detections
 
-Changing a detection filter (confidence, size, aspect ratio, ROI, or NMS IoU)
-reuses the stored detections and recomputes only the per-animal stages
-(pose, head-tail, identity) for the detections that now pass.
+With **Reuse cache** on (YOLO detection, non-realtime workflow), changing a
+detection filter (confidence, size, aspect ratio, ROI, or NMS IoU) reuses the
+stored detections: the detector does not run again, and only the per-animal
+stages (pose, head-tail, identity) are recomputed for the detections that now
+pass. This needs the stored detections to cover the same frame range as the
+new run; a different range re-runs the detector.
 
 Detections are extracted down to a confidence of **0.01**, so the confidence
 slider can be moved anywhere in 0.01 to 1.0 without re-running the detector.
-A threshold below 0.01 has no extra effect.
+A threshold below 0.01 has no extra effect (a warning says so).
+
+Background subtraction always re-detects on the forward pass (it is fast and
+needs the frames in order); its stored detections serve the backward pass.
+The realtime workflow and runs with **Reuse cache** off always run the
+detector.
 
 ## Runs from before this change
+
+All inference caches are rebuilt once on the first run with this version
+(including DetectKit prediction caches, which share the cache schema
+version).
+
+Background-subtraction runs can number trajectories differently and show
+different head/tail (heading) flips than earlier versions on the same video:
+detections are now stored ordered by area (largest first), which changes the
+order tracks are created and matched in. The detections themselves are
+unchanged.
 
 Earlier runs silently capped the number of animals at **128** (since
 2026-09-03) without any warning. If you tracked more than 128 animals with

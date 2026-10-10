@@ -50,9 +50,13 @@ It is LOUD:
   detection ids re-stamped in rank order (existing `_apply_raw_detection_cap`
   behaviour, now always applied with the 1024 limit).
 - Memory admission (`estimated_prediction_job_bytes`) sizes jobs for the
-  1024 limit, not 2N.
-- `OBBConfig.raw_detection_cap` is deleted; `max_detections` remains as the
-  replay-time final cap (= N).
+  1024 limit, not 2N: the compact output term counts all 1025 candidate
+  slots (limit + probe row); the dense segment-mask term assumes at most
+  `DENSE_MASK_ESTIMATE_CANDIDATES` (64) full-resolution masks per item -- a
+  memory-estimate assumption, never a detection cap (see `limits.py`).
+- `OBBConfig.raw_detection_cap` is retained (ruling R4): DetectKit preview
+  and active-learning export still use it; tracking extraction never reads
+  N through it. `max_detections` remains the replay-time final cap (= N).
 - Detection cache key: `max_detections` and `raw_detection_cap` removed from
   `_direct_raw_config_hash` / `_sequential_config_hash`; the floor and the
   limit are folded in. `CACHE_SCHEMA_VERSION` 5 → 6.
@@ -75,7 +79,12 @@ It is LOUD:
 2. confidence / size / aspect / ROI / OBB-NMS filters (unchanged).
 3. final cap N (largest-first, unchanged ordering helpers).
 
-Changing N or any filter never re-runs a detector.
+Changing N or any filter never re-runs a detector, provided the detection
+cache covers the run's frame range under the current detection settings and
+cache reuse is allowed (TrackerKit "Reuse cache"; non-realtime YOLO
+workflow). With reuse disabled, in the realtime workflow, or for
+background subtraction's forward pass (sequential, always re-detected; its
+cache serves the backward pass) detection runs as before.
 
 ## 4. Per-animal stages
 
@@ -93,7 +102,13 @@ file written at one N is never opened by a pass at another N.
 
 - Their cache keys gain a hash of the replay filter settings (confidence,
   size, aspect, ROI, NMS IoU) and never contain N. Changing N reuses them;
-  changing a filter recomputes only these stages (never detection).
+  changing a filter recomputes only these stages (never detection): the
+  batch pass reads the stored, already-ranked detections back
+  (`partial_reuse_plan` + `Pipeline.detection_reader`), recomputes and
+  rewrites only the stale per-animal caches, and leaves the detection cache
+  and every still-valid per-animal cache untouched. This needs the detection
+  cache to cover exactly the run's frame range; otherwise the pass runs the
+  detector.
 - Replay selects the per-animal rows for the post-final-cap indices. A
   missing index is an error (cache incoherent), never a silent NaN/0 fill.
 - Fixes the existing index-base bug: CNN (`stages/cnn.py`) and AprilTag
@@ -109,7 +124,10 @@ file written at one N is never opened by a pass at another N.
 ## 5. Unchanged
 
 Confidence-density sidecars and autotune fingerprints keep N (cheap,
-tracking-level). DetectKit's own caches are untouched (fixed 300).
+tracking-level). DetectKit's own caches keep their fixed 300 cap, but
+`detectkit/jobs/prediction_cache.py` keys on the shared
+`CACHE_SCHEMA_VERSION`, so the 5 -> 6 bump invalidates existing DetectKit
+prediction caches once (rebuilt on next use).
 
 ## Verification
 
