@@ -277,3 +277,49 @@ def test_calibrate_and_job_print_one_line_limit_error(
     ]
     assert len(lines) == 1 and "1024" in lines[0]
     assert caplog.records and all(r.exc_info is None for r in caplog.records)
+
+
+def test_parameter_changed_back_under_limit_clears_stale_limit_message(shown):
+    """T11: once N drops back under the limit, the stale limit message leaves
+    the status bar and the total label is restored; unrelated status
+    messages are left alone."""
+    from hydra_suite.trackerkit.gui.main_window import MainWindow
+
+    class _Bar:
+        def __init__(self, msg):
+            self.msg = msg
+
+        def showMessage(self, m):
+            self.msg = m
+
+        def currentMessage(self):
+            return self.msg
+
+        def clearMessage(self):
+            self.msg = ""
+
+    restored, emitted = [], []
+    label = {"text": "exceeds the 1024-animal limit"}
+    bar = _Bar("Detection limit exceeded: N=2000 exceeds the hard limit of 1024")
+
+    def _restore():
+        restored.append(True)
+        label["text"] = ""
+
+    fake = SimpleNamespace(
+        get_parameters_dict=lambda: {"MAX_TARGETS": 10},
+        statusBar=lambda: bar,
+        _setup_panel=SimpleNamespace(
+            lbl_animals_per_arena_total=SimpleNamespace(text=lambda: label["text"])
+        ),
+        _update_animals_per_arena_total_label=_restore,
+        parameters_changed=SimpleNamespace(emit=emitted.append),
+    )
+    MainWindow._on_parameter_changed(fake)
+    assert emitted == [{"MAX_TARGETS": 10}]
+    assert bar.msg == "" and restored == [True]
+
+    bar.msg = "Loaded config foo.json"
+    MainWindow._on_parameter_changed(fake)
+    assert bar.msg == "Loaded config foo.json"
+    assert restored == [True]  # label already current: not re-derived

@@ -3312,6 +3312,14 @@ class MainWindow(QMainWindow):
                 f"exceeds the {MAX_DETECTIONS_PER_FRAME}-animal limit"
             )
             return
+        # Back under the limit: drop the stale limit message (only ours) and
+        # restore the total label it replaced.
+        bar = self.statusBar()
+        if str(bar.currentMessage()).startswith("Detection limit exceeded"):
+            bar.clearMessage()
+        label = self._setup_panel.lbl_animals_per_arena_total
+        if str(label.text()).startswith("exceeds the"):
+            self._update_animals_per_arena_total_label()
         self.parameters_changed.emit(params)
 
     def _create_help_label(self, text, attach_to_title=True):
