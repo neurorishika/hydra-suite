@@ -979,6 +979,15 @@
 </li>
       
         <li class="md-nav__item">
+  <a href="#approving-predictions-while-labeling" class="md-nav__link">
+    <span class="md-ellipsis">
+      Approving Predictions While Labeling
+    </span>
+  </a>
+  
+</li>
+      
+        <li class="md-nav__item">
   <a href="#training-augmentation-defaults" class="md-nav__link">
     <span class="md-ellipsis">
       Training Augmentation Defaults
@@ -993,6 +1002,21 @@
       Active Learning Batches
     </span>
   </a>
+  
+    <nav class="md-nav" aria-label="Active Learning Batches">
+      <ul class="md-nav__list">
+        
+          <li class="md-nav__item">
+  <a href="#combination-balancing-multi-factor-schemes" class="md-nav__link">
+    <span class="md-ellipsis">
+      Combination balancing (multi-factor schemes)
+    </span>
+  </a>
+  
+</li>
+        
+      </ul>
+    </nav>
   
 </li>
       
@@ -2055,6 +2079,15 @@
 </li>
       
         <li class="md-nav__item">
+  <a href="#approving-predictions-while-labeling" class="md-nav__link">
+    <span class="md-ellipsis">
+      Approving Predictions While Labeling
+    </span>
+  </a>
+  
+</li>
+      
+        <li class="md-nav__item">
   <a href="#training-augmentation-defaults" class="md-nav__link">
     <span class="md-ellipsis">
       Training Augmentation Defaults
@@ -2069,6 +2102,21 @@
       Active Learning Batches
     </span>
   </a>
+  
+    <nav class="md-nav" aria-label="Active Learning Batches">
+      <ul class="md-nav__list">
+        
+          <li class="md-nav__item">
+  <a href="#combination-balancing-multi-factor-schemes" class="md-nav__link">
+    <span class="md-ellipsis">
+      Combination balancing (multi-factor schemes)
+    </span>
+  </a>
+  
+</li>
+        
+      </ul>
+    </nav>
   
 </li>
       
@@ -2119,6 +2167,13 @@
 <li>AprilTag auto-labeling for marker-based identity assignment</li>
 <li>Active learning for efficient labeling</li>
 <li>Export to Parquet/CSV, ImageFolder, and Ultralytics classification formats</li>
+</ul>
+<h2 id="approving-predictions-while-labeling">Approving Predictions While Labeling<a class="headerlink" href="#approving-predictions-while-labeling" title="Permanent link">&para;</a></h2>
+<p>With a trained model loaded, labeling mode shows <strong>Approve</strong> / <strong>Reject</strong> (default keys <code>+</code> / <code>-</code>) for any image that has a proposal: either a staged unverified machine label or the live model prediction. No review-mode staging is needed.</p>
+<ul>
+<li><strong>Approve</strong> stores the proposed label as a human-verified label and moves on.</li>
+<li><strong>Reject</strong> asks for the correct label, stores that, and moves on.</li>
+<li>Images that already have a verified label, and <code>unknown</code> predictions, have nothing to approve.</li>
 </ul>
 <h2 id="training-augmentation-defaults">Training Augmentation Defaults<a class="headerlink" href="#training-augmentation-defaults" title="Permanent link">&para;</a></h2>
 <p>The training dialog's <em>Space and Augmentations</em> tab starts with conservative
@@ -2226,6 +2281,15 @@ replacement, so a 20-image cluster is far likelier to be picked from than a
 <code>alpha</code>: 0% is proportional to size (no bias), 100% gives every cluster the same
 expected share. Cluster noise points count as rare. If the <em>Errors</em> and <em>Rare
 clusters</em> shares push the recipe above 100%, every slot is scaled down evenly.</p>
+<h3 id="combination-balancing-multi-factor-schemes">Combination balancing (multi-factor schemes)<a class="headerlink" href="#combination-balancing-multi-factor-schemes" title="Permanent link">&para;</a></h3>
+<p>The <strong>Combos</strong> share (default 15%) targets factor combinations that are rare or missing in the labeled set, e.g. <code>blue_pink</code> with no labels.</p>
+<ul>
+<li>It works on <strong>per-factor predictions</strong> (head slices for multi-head models, marginals over composite classes for flat models), so it can surface combinations the model has never output. An image predicted <code>blue</code> in factor 1 and <code>pink</code> in factor 2 is a likely <code>blue_pink</code> even if no <code>blue_pink</code> was ever labeled.</li>
+<li>Picks are greedy with diminishing returns: each pick lowers the weight of the combination it is expected to fill, so a batch spreads over several under-represented combinations instead of one.</li>
+<li>Combinations containing <code>unknown</code> are not targeted, and unverified machine labels do not count as labeled examples.</li>
+<li>Each candidate is tagged <code>likely &lt;combo&gt;</code> in the candidate table.</li>
+</ul>
+<p>Default recipe: 25% uncertainty, 20% diversity, 20% errors, 15% combinations, 10% rare clusters, 5% representative, 5% audit.</p>
 
 
 
