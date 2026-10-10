@@ -164,3 +164,18 @@ def test_sahi_off_hides_every_sahi_row_including_panel_owned(panel):
     assert panel.lbl_slice_batch_admission.isVisibleTo(panel)
     assert panel.lbl_slice_profile_status.isVisibleTo(panel)
     assert widget.preview.isVisibleTo(panel)
+
+
+def test_focus_leaves_the_profile_combo_when_sahi_is_turned_off(panel):
+    """Keyboard focus never stays on a control the SAHI-off collapse hid
+    (Down on a hidden profile combo would silently switch profiles)."""
+    window = panel.window()
+    window.activateWindow()
+    panel.chk_slice_enabled.setChecked(True)
+    _settle(_content(panel))
+    panel.combo_slice_profile.setFocus()
+    _settle(_content(panel))
+    assert window.focusWidget() is panel.combo_slice_profile
+    panel.chk_slice_enabled.setChecked(False)  # programmatic: no click focus
+    _settle(_content(panel))
+    assert window.focusWidget() is panel.chk_slice_enabled
