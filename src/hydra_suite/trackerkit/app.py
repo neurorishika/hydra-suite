@@ -621,6 +621,10 @@ def main(argv: list[str] | None = None) -> object:
                     args, "inference_autotune_manual", []
                 ),
             )
+        except DetectionLimitError as e:
+            logger.error("Tracker calibration failed: %s", e)
+            print(f"Error: {e}")
+            sys.exit(1)
         except Exception as e:
             logger.error("Tracker calibration failed: %s", e, exc_info=True)
             print(f"Error: {e}")
@@ -632,6 +636,10 @@ def main(argv: list[str] | None = None) -> object:
 
         try:
             exit_code = run_job_cli(args)
+        except DetectionLimitError as e:
+            logger.error("Tracker job CLI failed: %s", e)
+            print(f"Error: {e}")
+            sys.exit(1)
         except Exception as e:
             logger.error("Tracker job CLI failed: %s", e, exc_info=True)
             print(f"Error: {e}")

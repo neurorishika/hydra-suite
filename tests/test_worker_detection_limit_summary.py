@@ -67,6 +67,7 @@ def test_cli_prints_one_line_limit_error(monkeypatch, capsys, caplog):
         require_target_count_within_limit(5000)
 
     monkeypatch.setattr(app, "check_dependencies", lambda: True)
+    monkeypatch.setattr(app, "setup_logging", lambda **k: None)  # keep caplog
     monkeypatch.setattr(app, "run_tracking_cli", _boom)
     with caplog.at_level(logging.ERROR):
         with pytest.raises(SystemExit) as ei:
@@ -76,7 +77,7 @@ def test_cli_prints_one_line_limit_error(monkeypatch, capsys, caplog):
         ln for ln in capsys.readouterr().out.splitlines() if ln.startswith("Error:")
     ]
     assert len(lines) == 1 and "1024" in lines[0]
-    assert all(r.exc_info is None for r in caplog.records)
+    assert caplog.records and all(r.exc_info is None for r in caplog.records)
 
 
 def test_gui_start_tracking_shows_limit_message(monkeypatch):
@@ -239,3 +240,40 @@ def test_loading_config_within_limit_applies_silently(shown):
     spin = _load_core_tracking(300)
     assert spin.value() == 300
     assert not shown
+
+
+# --- M1: calibrate / job print one line, no traceback ------------------------
+
+
+@pytest.mark.parametrize(
+    "argv, module, attr",
+    [
+        (["calibrate", "--video", "video.mp4"], "calibrate_cli", "run_calibrate_cli"),
+        (["job", "run", "jobdir"], "job_cli", "run_job_cli"),
+    ],
+)
+def test_calibrate_and_job_print_one_line_limit_error(
+    monkeypatch, capsys, caplog, argv, module, attr
+):
+    import importlib
+
+    from hydra_suite.trackerkit import app
+
+    def _boom(*a, **k):
+        require_target_count_within_limit(5000)
+
+    monkeypatch.setattr(app, "check_dependencies", lambda: True)
+    # basicConfig(force=True) would remove caplog's root handler.
+    monkeypatch.setattr(app, "setup_logging", lambda **k: None)
+    monkeypatch.setattr(
+        importlib.import_module(f"hydra_suite.trackerkit.{module}"), attr, _boom
+    )
+    with caplog.at_level(logging.ERROR):
+        with pytest.raises(SystemExit) as ei:
+            app.main(argv)
+    assert ei.value.code == 1
+    lines = [
+        ln for ln in capsys.readouterr().out.splitlines() if ln.startswith("Error:")
+    ]
+    assert len(lines) == 1 and "1024" in lines[0]
+    assert caplog.records and all(r.exc_info is None for r in caplog.records)
