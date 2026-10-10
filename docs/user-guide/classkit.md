@@ -102,3 +102,16 @@ The **Combos** share (default 15%) targets factor combinations that are rare or 
 
 Default recipe: 25% uncertainty, 20% diversity, 20% errors, 15% combinations, 10% rare clusters, 5% representative, 5% audit.
 
+### Grid Balance (CAPTCHA-style)
+
+**Grid Balance…** in the Active Learning group is a fast way to balance labels once a model has produced predictions. Instead of choosing among every label for one image, you answer one yes/no question across a whole grid: *click every image that is `blue · pink`*.
+
+- Combinations are visited **rarest first**. Each one is filled up to the label count of the most common combination, or up to **Cap** if one is set. When a combination reaches its target, the dialog moves on by itself.
+- The grid mixes three kinds of candidates: the most likely members of the combination (about half the tiles), borderline images from the next band down, and a few random images to catch what the model misses and keep you attentive.
+- **Clicking a tile labels it** with the shown combination (a verified human label, saved right away), and a new candidate takes its place. **Unclicked tiles get no label.** They are only skipped for this combination and are never shown for it again.
+- **None match** (Enter) draws a fresh grid. **Next label** (N) skips to the next combination. **Undo** (Backspace / Ctrl+Z) reverts clicks one at a time, even across combinations, and puts the image back in its tile.
+- Keys: `1`–`9` for the 3 × 3 grid; `1234 / QWER / ASDF / ZXCV` for the 4 × 4 grid.
+- The **Examples** strip shows labeled images of the current combination for reference.
+- Only unlabeled images are shown. Images awaiting machine-label review are left for the review flow. Combinations containing `unknown` are included only when **incl. unknown** is checked.
+- Predictions are not refreshed during a session; retrain afterwards and run it again if needed.
+
