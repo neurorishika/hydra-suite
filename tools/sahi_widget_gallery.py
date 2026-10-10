@@ -14,7 +14,8 @@ published model leaks into the pictures. Writes PNGs into ``--out``:
   ``host_trackerkit_custom.png`` on the custom-geometry profile with Advanced
   expanded and no video (the labelled example frame), and
   ``host_trackerkit_off.png`` with SAHI unticked (collapsed to the checkbox).
-  TrackerKit stacks the preview below the controls (``preview_position``).
+  TrackerKit uses the compact layout (``layout="compact"``: paired rows, one
+  summary line) with the preview below the controls (``preview_position``).
 
 Usage::
 
@@ -68,16 +69,22 @@ def _grab_scroll_page(window, inner, path: Path, app) -> Path:
     """Grab the whole scroll page holding ``inner`` (not just the viewport)."""
     from PySide6.QtWidgets import QScrollArea, QTabWidget
 
-    for tabs in window.findChildren(QTabWidget):
-        for index in range(tabs.count()):
-            if tabs.widget(index).isAncestorOf(inner):
-                tabs.setCurrentIndex(index)
     scroll = inner.parentWidget()
     while scroll is not None and not isinstance(scroll, QScrollArea):
         scroll = scroll.parentWidget()
     window.show()
     for _ in range(3):
         app.processEvents()
+    # Select the tab AFTER showing: TrackerKit restores its first tab on
+    # show, and a hidden page is never laid out (a stale, squeezed grab).
+    for tabs in window.findChildren(QTabWidget):
+        for index in range(tabs.count()):
+            if tabs.widget(index).isAncestorOf(inner):
+                tabs.setCurrentIndex(index)
+    for _ in range(3):
+        app.processEvents()
+    if not inner.isVisible():
+        raise RuntimeError("gallery: the page to grab is not shown")
     page = scroll.widget() if scroll is not None else window
     page.grab().save(str(path))
     window.hide()
