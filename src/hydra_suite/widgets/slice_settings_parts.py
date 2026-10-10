@@ -240,7 +240,7 @@ COMPACT_PAIRS = (
 # Shorter labels where the compact grid's half-width columns are tight.
 COMPACT_LABELS = {
     "overlap": "Overlap",
-    "memory": "Memory budget",
+    "memory": "Memory",
 }
 
 # The width an eliding note may shrink to before it stops giving way.
@@ -322,7 +322,9 @@ def set_badge(label: QLabel, source: str) -> None:
     label.setToolTip(f"Source: {SOURCE_DESCRIPTIONS.get(source, source)}.")
 
 
-def widget_stylesheet(text_color: str | None, *, bare: bool) -> str:
+def widget_stylesheet(
+    text_color: str | None, *, bare: bool, compact: bool = False
+) -> str:
     """Widget-scoped styling that reads correctly under any host theme.
 
     Constrained controls must LOOK disabled even where the host theme styles
@@ -339,6 +341,10 @@ def widget_stylesheet(text_color: str | None, *, bare: bool) -> str:
     )
     if bare:
         style += " QGroupBox { border: 0; margin-top: 0; padding: 0; }"
+    if compact:
+        # Two fields share a row: a host theme's input min-width (TrackerKit
+        # sets 100 px) must not force the paired grid wider than its panel.
+        style += " QAbstractSpinBox, QComboBox { min-width: 54px; }"
     return style
 
 

@@ -355,11 +355,15 @@ def build_controls(w) -> None:
         w.spin_slice_memory_budget,
     ):
         # Compact: two fields share a row, so each may give way further.
-        control.setMinimumWidth(84 if paired else 120)
+        control.setMinimumWidth(72 if paired else 120)
         control.setMaximumWidth(220)
     for spin in (w.spin_slice_tile_w, w.spin_slice_tile_h):
-        spin.setMinimumWidth(84 if paired else 112)
+        spin.setMinimumWidth(72 if paired else 112)
         spin.setMaximumWidth(140)
+        if paired:
+            # Half-width column: the short form of "model input" (tooltip
+            # says what 0 means).
+            spin.setSpecialValueText("input")
     w.preview = TileLayoutPreview()
     w.preview.set_bottom_layout(w._caps.preview_position == "bottom", compact=paired)
     if role == "infer_yolo":
@@ -378,10 +382,12 @@ def row_specs(w) -> list[tuple[str, str | None, QWidget, QLabel | None]]:
     if paired:
         # S7: badges ride inside their field's cell; the derived notes go to
         # the summary line the widget builds under the grid.
+        # Fields fill their half-width column (up to their maximum), so the
+        # right edges of each column line up.
         w._stacked_rows = set()
-        tile_cell = hbox(w._tile_spins, w.lbl_slice_tile_badge)
-        object_cell = hbox(w.spin_slice_object_fraction)
-        overlap_cell = hbox(w.spin_slice_overlap)
+        tile_cell = hbox(w._tile_spins, w.lbl_slice_tile_badge, stretch=False)
+        object_cell = hbox(w.spin_slice_object_fraction, stretch=False)
+        overlap_cell = hbox(w.spin_slice_overlap, stretch=False)
     elif w._caps.preview_position == "bottom":
         # Each derived note on its own line under its control (S6).
         w._stacked_rows = {"object_fraction", "tile", "overlap"}
@@ -408,7 +414,7 @@ def row_specs(w) -> list[tuple[str, str | None, QWidget, QLabel | None]]:
     if paired:
         body_parts.append(body_badge)
         body_badge = tile_badge = None
-    body_cell = hbox(*body_parts, stretch=role not in TRAIN_ROLES)
+    body_cell = hbox(*body_parts, stretch=role not in TRAIN_ROLES and not paired)
     object_label = (
         "Single-scale object fraction" if role == "train_sam3" else "Object scale"
     )
@@ -417,7 +423,7 @@ def row_specs(w) -> list[tuple[str, str | None, QWidget, QLabel | None]]:
         (
             "profile",
             "Profile",
-            hbox(w.combo_slice_profile),
+            hbox(w.combo_slice_profile, stretch=not paired),
             None,
         ),
         ("mode", "Tile strategy", w.combo_slice_geometry, None),

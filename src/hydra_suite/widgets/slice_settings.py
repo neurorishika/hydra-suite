@@ -13,7 +13,6 @@ Shared layer: imports only Qt and ``utils`` (never an app layer).
 
 from __future__ import annotations
 
-import re
 from dataclasses import replace
 from typing import Any
 
@@ -38,6 +37,7 @@ from hydra_suite.utils.tiling_spec import (
     TilingSpec,
 )
 
+from .slice_settings_compact import build_compact_grid, pack_compact, refresh_summary
 from .slice_settings_controls import (
     ADVANCED,
     FULL_WIDTH,
@@ -48,8 +48,6 @@ from .slice_settings_controls import (
     row_specs,
 )
 from .slice_settings_parts import (
-    COMPACT_LABELS,
-    COMPACT_PAIRS,
     ESCALATE_ROLES,
     LAYOUTS,
     PREVIEW_POSITIONS,
@@ -60,7 +58,6 @@ from .slice_settings_parts import (
     SliceWidgetCapabilities,
     default_capabilities,
     default_tile_label,
-    hbox,
     set_badge,
     tile_text,
     whole_animal_minimum,
@@ -99,6 +96,7 @@ class SliceSettingsWidget(QGroupBox):
         self._compact = self._caps.layout == "compact"
         self._advanced_note: QWidget | None = None
         self._packed: tuple | None = None
+        self._packed_plan: list = []
         self._base = TilingSpec.defaults(ROLE_BACKEND[role])
         self._passthrough: dict[str, Any] = {}
         self._model_input_size = DEFAULT_YOLO_IMGSZ
@@ -132,7 +130,9 @@ class SliceSettingsWidget(QGroupBox):
         theme). Tool buttons take the host's label colour, which a theme sets
         through a stylesheet the buttons themselves do not match.
         """
-        style = widget_stylesheet(text_color, bare=self._bare)
+        style = widget_stylesheet(
+            text_color, bare=self._bare, compact=self._caps.layout == "compact"
+        )
         self.setStyleSheet(style)
 
     def showEvent(self, event) -> None:  # noqa: N802 - Qt override
@@ -159,7 +159,7 @@ class SliceSettingsWidget(QGroupBox):
         self._controls = controls
         grid = QGridLayout(controls)
         grid.setContentsMargins(0, 0, 0, 0)
-        grid.setHorizontalSpacing(8 if self._compact else 10)
+        grid.setHorizontalSpacing(6 if self._compact else 10)
         grid.setVerticalSpacing(7)
         grid.setColumnStretch(1, 1)
         self._grid = grid
@@ -168,7 +168,7 @@ class SliceSettingsWidget(QGroupBox):
         self._rows: dict[str, tuple[QLabel, QWidget]] = {}
         self._row_widgets: dict[str, list[QWidget]] = {}
         if self._compact:
-            self._build_compact_grid(controls)
+            build_compact_grid(self, controls)
         else:
             self._build_row_grid()
         outer.addWidget(controls, 0)
@@ -207,92 +207,6 @@ class SliceSettingsWidget(QGroupBox):
             self._row_widgets[key] = widgets
         grid.setRowStretch(len(self._row_widgets), 1)
 
-    def _build_compact_grid(self, controls: QWidget) -> None:
-        """S7: two label/field pairs per grid row, then one summary line.
-
-        Cells are (re)placed by :meth:`_pack_compact` whenever the set of
-        shown rows changes, so a pair whose partner is hidden moves to the
-        left edge instead of leaving a hole.
-        """
-        self._grid.setColumnStretch(3, 1)
-        self._grid_items: dict[str, tuple[QLabel | None, QWidget]] = {}
-        for key, text, control, _badge in row_specs(self):
-            label = None
-            widgets: list[QWidget] = [control]
-            if text is not None and key not in FULL_WIDTH and key != "advanced":
-                label = QLabel(COMPACT_LABELS.get(key, text))
-                label.setToolTip(self._label_tooltip(control))
-                label.setParent(controls)
-                self._rows[key] = (label, control)
-                widgets.append(label)
-            control.setParent(controls)
-            self._grid_items[key] = (label, control)
-            self._row_widgets[key] = widgets
-        self._summary_row = hbox(
-            self.lbl_slice_summary,
-            self.lbl_slice_overlap_minimum,
-            self.btn_slice_overlap_raise,
-        )
-        self._summary_row.setParent(controls)
-        self._pack_compact()
-
-    def _compact_plan(self) -> list[tuple[QWidget, int, int, int]]:
-        """(widget, row, column, column span) for every shown compact cell."""
-        partners = dict(COMPACT_PAIRS)
-        items = self._grid_items
-
-        def shown(key: str) -> bool:
-            return key in items and not items[key][1].isHidden()
-
-        plan: list[tuple[QWidget, int, int, int]] = []
-        placed: set[str] = set()
-        row = 0
-        for key, (label, control) in items.items():
-            if key in placed or not shown(key):
-                continue
-            placed.add(key)
-            if label is None:
-                plan.append((control, row, 0, 4))
-                row += 1
-                continue
-            mate = partners.get(key)
-            plan.append((label, row, 0, 1))
-            if mate and shown(mate) and items[mate][0] is not None:
-                placed.add(mate)
-                mate_label, mate_control = items[mate]
-                plan += [
-                    (control, row, 1, 1),
-                    (mate_label, row, 2, 1),
-                    (mate_control, row, 3, 1),
-                ]
-            else:
-                plan.append((control, row, 1, 3))
-            row += 1
-            if "overlap" in placed and not self._summary_row.isHidden():
-                if all(entry[0] is not self._summary_row for entry in plan):
-                    plan.append((self._summary_row, row, 0, 4))
-                    row += 1
-        if self._advanced_note is not None:
-            plan.append((self._advanced_note, row, 0, 4))
-        return plan
-
-    def _pack_compact(self) -> None:
-        plan = self._compact_plan()
-        signature = tuple((id(w), r, c, span) for w, r, c, span in plan)
-        if signature == self._packed:
-            return
-        grid = self._grid
-        for widget, *_cell in self._placed_cells():
-            grid.removeWidget(widget)
-        for widget, row, column, span in plan:
-            grid.addWidget(widget, row, column, 1, span)
-        self._packed = signature
-        self._packed_plan = plan
-        grid.invalidate()
-
-    def _placed_cells(self) -> list:
-        return list(getattr(self, "_packed_plan", []))
-
     def set_advanced_note(self, note: QWidget) -> None:
         """Host-owned note shown full width under the Advanced rows.
 
@@ -303,7 +217,7 @@ class SliceSettingsWidget(QGroupBox):
         note.setParent(self._controls)
         if self._compact:
             self._packed = None
-            self._pack_compact()
+            pack_compact(self)
         else:
             self._grid.addWidget(note, self._grid.rowCount(), 0, 1, 3)
 
@@ -836,7 +750,7 @@ class SliceSettingsWidget(QGroupBox):
         if self._caps.fixed_overlap is None:
             refresh_overlap_minimum(self)
         if self._compact:
-            self._refresh_summary(mode, fractions, body)
+            refresh_summary(self, mode)
         if role not in ESCALATE_ROLES:
             self.preview.set_settings(
                 mode=mode,
@@ -848,39 +762,6 @@ class SliceSettingsWidget(QGroupBox):
                 model_input_size=imgsz,
                 reference_body_px=body,
             )
-
-    def _refresh_summary(self, mode: str, fractions: list[float], body: float) -> None:
-        """Compact layout: the derived notes as ONE muted line under the grid.
-
-        The overlap note keeps its own label (and colour) at the end of the
-        line; a below-minimum warning never elides -- the muted part gives
-        way first. The full text is always in the tooltip.
-        """
-        tile_full = self.lbl_slice_tile_size.text()
-        # "(48 px ÷ 0.1)" is the derivation, not the result: tooltip only.
-        parts = [re.sub(r" \([^()]*÷[^()]*\)$", "", tile_full)]
-        full = [tile_full]
-        if self._role == "infer_yolo" and mode == "auto_object":
-            imgsz = self._model_input_size
-            px = float(self.spin_slice_object_fraction.value()) * imgsz
-            parts.append(f"≈{px:.0f} px at {imgsz}")
-            full.append(self.lbl_slice_scale_px.text())
-        overlap = self.lbl_slice_overlap_minimum
-        if overlap.text():
-            full.append(overlap.text())
-        text = " · ".join(parts) + (" ·" if overlap.text() else "")
-        self.lbl_slice_summary.setText(text)
-        self.lbl_slice_summary.setToolTip(
-            " · ".join(full)
-            + "\n\nTile size, the object's size at the model input, and the "
-            "whole-animal overlap minimum, derived from the settings above."
-        )
-        warning = not self.btn_slice_overlap_raise.isHidden()
-        overlap.setMinimumWidth(
-            overlap.fontMetrics().horizontalAdvance(overlap.text()) + 4
-            if warning
-            else 0
-        )
 
     def _refresh_reference_note(self, body: float) -> None:
         if body > 0.0:
@@ -937,7 +818,7 @@ class SliceSettingsWidget(QGroupBox):
             self.preview.setHidden(not shown)
         if self._compact:
             self._summary_row.setHidden(not shown)
-            self._pack_compact()
+            pack_compact(self)
         # Qt moves focus only off an explicitly hidden widget, not off one
         # inside a hidden row holder: keyboard input must not reach a hidden
         # control (Down on the hidden profile combo would switch profiles).

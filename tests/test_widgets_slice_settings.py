@@ -1034,7 +1034,7 @@ def test_compact_layout_pairs_controls_on_one_grid_row():
         left_row, left_col, *_ = _grid_cell(w, _row_label(w, left))
         right_row, right_col, *_ = _grid_cell(w, _row_label(w, right))
         assert left_row == right_row, (left, right)
-        assert left_col == 0 and right_col == 2, (left, right)
+        assert left_col == 0 and right_col == 3, (left, right)
     # Distinct pairs sit on distinct rows, in reading order.
     rows = [
         _grid_cell(w, _row_label(w, key))[0]
@@ -1053,7 +1053,7 @@ def test_compact_layout_moves_a_lone_partner_to_the_left():
     assert _grid_cell(w, w.combo_slice_geometry)[1] == 1
     assert _grid_cell(w, _row_label(w, "object_fraction"))[0] > row
     w.set_profile_row_visible(True)
-    assert _grid_cell(w, _row_label(w, "mode"))[1] == 2
+    assert _grid_cell(w, _row_label(w, "mode"))[1] == 3
     assert _grid_cell(w, _row_label(w, "profile"))[1] == 0
 
 
@@ -1092,7 +1092,7 @@ def test_compact_summary_line_per_mode():
     assert "≈102 px at 1024" in text
     # The overlap note is its own label on the same line (its colour kept).
     assert w.lbl_slice_overlap_minimum.text() == "≥ whole-animal minimum (0.15)"
-    assert _grid_cell(w, w._summary_row)[3] == 4
+    assert _grid_cell(w, w._summary_row)[3] == 5
     assert w.lbl_slice_overlap_minimum.parentWidget() is w._summary_row
     assert w.btn_slice_overlap_raise.parentWidget() is w._summary_row
     full = w.lbl_slice_summary.toolTip()
@@ -1160,7 +1160,7 @@ def test_compact_advanced_note_sits_under_the_advanced_pair():
     w.set_advanced_expanded(True)
     note_row, note_col, _rs, note_span = _grid_cell(w, note)
     assert note_row > _grid_cell(w, _row_label(w, "tile_batch"))[0]
-    assert (note_col, note_span) == (0, 4)
+    assert (note_col, note_span) == (0, 5)
 
 
 def test_compact_values_and_signals_match_the_rows_layout():
@@ -1193,7 +1193,10 @@ def test_compact_preview_is_shorter_with_two_caption_lines(mode):
     w.set_spec(TilingSpec(enabled=True, geometry_mode=mode))
     preview = w.preview
     preview.set_frame_size((2448, 2048))
-    assert preview.heightForWidth(480) <= 260
+    # One fixed, shorter height (no height-for-width to be squeezed).
+    assert not preview.hasHeightForWidth()
+    assert preview.sizeHint().height() <= 260
+    assert preview.minimumHeight() == preview.maximumHeight()
     assert len(preview.caption_lines()) <= 2
     # The rows layout keeps its three lines (body note on its own line).
     rows = _bottom_widget()

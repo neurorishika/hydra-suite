@@ -78,12 +78,21 @@ class _TileLayoutPreview(QWidget):
     def set_bottom_layout(self, bottom: bool, *, compact: bool = False) -> None:
         """Below the controls: full host width, height from the frame aspect.
 
-        ``compact`` (a ``layout="compact"`` host) caps the height lower and
-        paints the captions on two lines instead of three.
+        ``compact`` (a ``layout="compact"`` host) uses one fixed, lower
+        height (no height-for-width: at a side panel's width the aspect
+        height always exceeds the cap, and a fixed height cannot be squeezed
+        by hosts that size scroll pages from minimum heights) and paints the
+        captions on two lines instead of three.
         """
         self._bottom = bool(bottom)
         self._compact = bool(bottom and compact)
-        if self._bottom:
+        if self._compact:
+            self.setSizePolicy(
+                QSizePolicy(QSizePolicy.Policy.Expanding, QSizePolicy.Policy.Fixed)
+            )
+            self.setMinimumWidth(self.MIN_BOTTOM_WIDTH)
+            self.setFixedHeight(self.MAX_COMPACT_HEIGHT)
+        elif self._bottom:
             policy = QSizePolicy(
                 QSizePolicy.Policy.Expanding, QSizePolicy.Policy.Preferred
             )
@@ -98,7 +107,7 @@ class _TileLayoutPreview(QWidget):
         self.updateGeometry()
 
     def hasHeightForWidth(self) -> bool:  # noqa: N802 - Qt override
-        return self._bottom
+        return self._bottom and not self._compact
 
     def heightForWidth(self, width: int) -> int:  # noqa: N802 - Qt override
         if not self._bottom:
@@ -117,6 +126,8 @@ class _TileLayoutPreview(QWidget):
     def sizeHint(self) -> QSize:  # noqa: N802 - Qt override
         if not self._bottom:
             return super().sizeHint()
+        if self._compact:
+            return QSize(480, self.MAX_COMPACT_HEIGHT)
         return QSize(480, self.heightForWidth(480))
 
     def resizeEvent(self, event) -> None:  # noqa: N802 - Qt override
@@ -124,7 +135,7 @@ class _TileLayoutPreview(QWidget):
         # (stacked pages in a scroll area): pin the minimum height to the
         # width-derived one. Stable: the height depends only on the width.
         super().resizeEvent(event)
-        if self._bottom:
+        if self._bottom and not self._compact:
             wanted = self.heightForWidth(self.width())
             if self.minimumHeight() != wanted:
                 self.setMinimumHeight(wanted)
@@ -188,7 +199,7 @@ class _TileLayoutPreview(QWidget):
         self.update()
 
     def _aspect_changed(self) -> None:
-        if self._bottom:
+        if self._bottom and not self._compact:
             self.setMinimumHeight(self.heightForWidth(max(1, self.width())))
             self.updateGeometry()
 
