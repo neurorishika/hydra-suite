@@ -1,6 +1,6 @@
 # SAHI Unification Across the Suite — Design
 
-**Status:** Design approved in conversation (2026-10-09); pending written-spec review.
+**Status:** Shipped — merged to main (e34ca06f)
 **Supersedes:** `docs/superpowers/specs/2026-09-06-unified-sahi-training-geometry-design.md`
 (unimplemented, partly overtaken by multi-scale SAM3 @50cb5b94, geometry-escalation SAHI
 @dba69a55, and calibration profiles). Its resolved decisions D7–D11 and the
