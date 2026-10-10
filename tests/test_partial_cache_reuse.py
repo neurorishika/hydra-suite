@@ -286,3 +286,34 @@ def test_tied_confidences_keep_raw_index_alignment(tmp_path, video, monkeypatch)
     want = _replay_cfg(fresh, new_cfg, video)
     for i in range(_NUM_FRAMES):
         assert _view(got[i]) == _view(want[i]), f"frame {i}"
+
+
+def test_corrupt_key_valid_member_falls_back_to_a_full_fresh_run(tmp_path, video):
+    """A per-animal member whose key is valid but whose chunk fails its
+    checksum cannot be repaired in resume mode (resume skips every manifest
+    frame). The reuse pass must fall back to the full fresh run, which
+    rebuilds and heals the cache."""
+    from hydra_suite.core.inference.runner import InferenceRunner
+
+    built = tmp_path / "built"
+    _build(built, 10, video)
+    chunk = sorted(
+        p for p in built.rglob("chunk-*.npz") if "apriltag.npz.chunks" in str(p)
+    )[0]
+    data = bytearray(chunk.read_bytes())
+    data[len(data) // 2] ^= 0xFF
+    chunk.unlink()
+    chunk.write_bytes(bytes(data))
+
+    calls = _reuse_pass(built, _cfg(10), video)
+    assert calls["run_obb"] > 0, "corrupt member: fall back to the fresh run"
+    assert "apriltag" in calls["written_kinds"]
+
+    with patch("hydra_suite.core.inference.runner._load_all_models") as ml:
+        ml.return_value = _models()
+        runner = InferenceRunner(
+            _cfg(10), cache_dir=built, video_path=video, cache_only=True
+        )
+    assert runner.caches_all_valid()
+    for i in range(_NUM_FRAMES):
+        assert runner.load_frame(i).apriltag is not None, f"frame {i}"

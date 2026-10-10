@@ -524,6 +524,15 @@ def partial_reuse_plan(
             and handle.coverage_ranges() == expected
         )
 
+    # A key-valid member that fails its checksum cannot be repaired in resume
+    # mode (resume skips every frame its manifest lists, so the recomputed
+    # rows would be dropped). Fall back to the full fresh run, which heals
+    # it. ``is_valid`` must be read BEFORE ``is_reusable`` (which clears it).
+    for handle in caches.all_handles():
+        if handle is not detection and handle.is_valid():
+            if not handle.is_reusable():
+                return None
+
     return _PartialReusePlan(
         headtail=_stale(caches.headtail),
         cnn=tuple(_stale(handle) for handle in caches.cnn),
@@ -2066,8 +2075,10 @@ class InferenceRunner:
                 probe.close()
                 if reuse_plan is None:
                     logger.info(
-                        "Detection cache does not cover frames %d-%d under the "
-                        "current detection settings; running the detector.",
+                        "Inference caches cannot be partially reused for frames "
+                        "%d-%d (detection not covering exactly this range under "
+                        "the current settings, or a corrupt member); running "
+                        "the full inference pass.",
                         start_frame,
                         end_frame,
                     )
