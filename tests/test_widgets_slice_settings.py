@@ -3,6 +3,7 @@
 from __future__ import annotations
 
 import os
+import re
 from dataclasses import replace
 
 os.environ.setdefault("QT_QPA_PLATFORM", "offscreen")
@@ -1090,7 +1091,7 @@ def test_compact_summary_line_per_mode():
     )
     w.set_reference_body(48.0, "stamped")
     text = _summary(w)
-    assert text.startswith("→ 480 × 480 px")
+    assert text.startswith("→ 480 × 480 px (derived)")
     assert "≈102 px at 1024" in text
     # The overlap note is its own label on the same line (its colour kept).
     assert w.lbl_slice_overlap_minimum.text() == "≥ whole-animal minimum (0.15)"
@@ -1109,7 +1110,7 @@ def test_compact_summary_line_per_mode():
     w.combo_slice_geometry.setCurrentIndex(
         w.combo_slice_geometry.findData("auto_model")
     )
-    assert _summary(w).startswith("→ 1024 × 1024 px (model input)")
+    assert _summary(w).startswith("→ 1024 × 1024 px (model input, derived)")
 
 
 def test_compact_below_minimum_warning_keeps_colour_and_raise_on_the_line():
@@ -1145,14 +1146,31 @@ def test_compact_badges_stay_with_their_fields():
     assert w.source_badge("reference_body_px") == "profile"
     assert w.lbl_slice_body_badge.text() == "profile"
     assert w.lbl_slice_tile_badge.text() == "derived"
-    # Body: inline after its field. Tile: leads the summary line, right
-    # before the resolved tile size it describes (the half-width tile cell
-    # has no room left for it).
+    # Body: inline after its field. Tile: its source is attached to the
+    # resolved tile size on the summary line (the half-width tile cell has
+    # no room left for a badge), never as a prefix of the whole line.
     assert w.lbl_slice_body_badge.parentWidget() is w._rows["body"][1]
-    assert w.lbl_slice_tile_badge.parentWidget() is w._summary_row
-    layout = w._summary_row.layout()
-    assert layout.indexOf(w.lbl_slice_tile_badge) == 0
-    assert layout.indexOf(w.lbl_slice_summary) == 1
+    assert not w.lbl_slice_tile_badge.isVisibleTo(w)
+    assert re.match(r"→ \d+ × \d+ px \(derived\) ·", _summary(w)), _summary(w)
+    w.combo_slice_geometry.setCurrentIndex(w.combo_slice_geometry.findData("custom"))
+    w.set_source("tile_size", "profile")
+    assert w.lbl_slice_tile_badge.text() == "profile"
+    assert "px (profile)" in _summary(w)
+
+
+def test_compact_combos_tooltip_lead_with_the_current_item():
+    from hydra_suite.widgets.slice_settings_compact import combo_tooltip
+
+    w = _compact_widget()
+    combo = w.combo_slice_geometry
+    combo.setCurrentIndex(combo.findData("auto_model"))
+    tip = combo_tooltip(combo)
+    assert tip.startswith("Use model input size\n\n")
+    assert combo.toolTip() in tip
+    w.combo_slice_profile.addItem("A very long calibration profile name", "p")
+    assert combo_tooltip(w.combo_slice_profile).startswith(
+        "A very long calibration profile name"
+    )
 
 
 def test_compact_advanced_note_sits_under_the_advanced_pair():

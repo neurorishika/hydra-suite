@@ -11,19 +11,16 @@ from __future__ import annotations
 
 import re
 
-from PySide6.QtCore import QRect
-from PySide6.QtWidgets import QLabel, QStyle, QStyleOptionComboBox, QWidget
+from PySide6.QtCore import QEvent, QObject
+from PySide6.QtWidgets import QComboBox, QLabel, QToolTip, QWidget
 
 from .slice_settings_controls import FULL_WIDTH, row_specs
 from .slice_settings_parts import COMPACT_LABELS, COMPACT_PAIRS, hbox
 
 # Columns: label | field | gap | label | field. The empty gap column keeps
-# the right-hand pair clear of the left field's source badge.
+# the two pairs of a row visibly apart.
 _SPAN = 5
 _GAP_PX = 6
-# Slack beyond the widest combo item, so a wider platform font or a theme
-# tweak never clips it.
-_COMBO_SLACK_PX = 12
 
 Cell = tuple[QWidget, int, int, int]  # (widget, row, column, column span)
 
@@ -51,10 +48,7 @@ def build_compact_grid(w, controls: QWidget) -> None:
         control.setParent(controls)
         w._grid_items[key] = (label, control)
         w._row_widgets[key] = widgets
-    # The tile-size source badge leads the line, right before the resolved
-    # tile size it describes.
     w._summary_row = hbox(
-        w.lbl_slice_tile_badge,
         w.lbl_slice_summary,
         w.lbl_slice_overlap_minimum,
         w.btn_slice_overlap_raise,
@@ -62,43 +56,34 @@ def build_compact_grid(w, controls: QWidget) -> None:
     w._summary_row.layout().setSpacing(4)
     w._summary_row.setParent(controls)
     # Their text feeds the summary line; they are never placed themselves.
-    for note in (w.lbl_slice_scale_px, w.lbl_slice_tile_size):
+    # The tile badge's source is shown in the summary text instead:
+    # "→ 480 × 480 px (derived)".
+    for note in (w.lbl_slice_scale_px, w.lbl_slice_tile_size, w.lbl_slice_tile_badge):
         note.setParent(controls)
         note.hide()
+    # A half-width combo can clip a long item on an unusual font: its
+    # tooltip always leads with the current item's full text.
+    w._combo_tips = _CurrentItemTip(w)
+    for combo in (w.combo_slice_profile, w.combo_slice_geometry):
+        combo.installEventFilter(w._combo_tips)
     pack_compact(w)
 
 
-def combo_width_for_items(combo) -> int:
-    """The combo width at which every item's text fits its edit field."""
-    combo.ensurePolished()
-    option = QStyleOptionComboBox()
-    combo.initStyleOption(option)
-    probe = 400
-    option.rect = QRect(0, 0, probe, max(combo.height(), 24))
-    field = combo.style().subControlRect(
-        QStyle.ComplexControl.CC_ComboBox,
-        option,
-        QStyle.SubControl.SC_ComboBoxEditField,
-        combo,
-    )
-    metrics = combo.fontMetrics()
-    widest = max(
-        (metrics.horizontalAdvance(combo.itemText(i)) for i in range(combo.count())),
-        default=0,
-    )
-    return widest + (probe - field.width()) + _COMBO_SLACK_PX
+class _CurrentItemTip(QObject):
+    """Show a combo's current item text ahead of its own tooltip."""
+
+    def eventFilter(self, obj, event) -> bool:  # noqa: N802 - Qt override
+        if event.type() == QEvent.Type.ToolTip and isinstance(obj, QComboBox):
+            QToolTip.showText(event.globalPos(), combo_tooltip(obj), obj)
+            return True
+        return False
 
 
-def fit_compact_columns(w) -> None:
-    """Reserve the right field column for the tile strategy's longest item.
-
-    The half-width column otherwise gets only what the left column leaves,
-    and "Use model input size" clipped. Measured from the live font and
-    style (the host theme sets the combo's padding and drop-down width).
-    """
-    w._grid.setColumnMinimumWidth(
-        _SPAN - 1, combo_width_for_items(w.combo_slice_geometry)
-    )
+def combo_tooltip(combo: QComboBox) -> str:
+    """The tooltip a compact combo shows: current item, then its own tip."""
+    tip = combo.toolTip()
+    current = combo.currentText()
+    return f"{current}\n\n{tip}" if tip and current else (current or tip)
 
 
 def compact_plan(w) -> list[Cell]:
@@ -167,8 +152,14 @@ def refresh_summary(w, mode: str) -> None:
     """
     tile_full = w.lbl_slice_tile_size.text()
     # "(48 px ÷ 0.1)" is the derivation, not the result: tooltip only.
-    parts = [re.sub(r" \([^()]*÷[^()]*\)$", "", tile_full)]
-    full = [tile_full]
+    tile = re.sub(r" \([^()]*÷[^()]*\)$", "", tile_full)
+    # The tile size's source badge, attached to the tile size itself:
+    # "→ 480 × 480 px (derived)", "→ 1024 × 1024 px (model input, derived)".
+    source = w.lbl_slice_tile_badge.text()
+    if source:
+        tile = f"{tile[:-1]}, {source})" if tile.endswith(")") else f"{tile} ({source})"
+    parts = [tile]
+    full = [f"{tile_full} (tile size {source})" if source else tile_full]
     if w._role == "infer_yolo" and mode == "auto_object":
         imgsz = w._model_input_size
         px = float(w.spin_slice_object_fraction.value()) * imgsz
