@@ -17,6 +17,7 @@ from PySide6.QtWidgets import (  # noqa: E402
     QAbstractSpinBox,
     QApplication,
     QComboBox,
+    QLabel,
     QLineEdit,
 )
 
@@ -1203,3 +1204,32 @@ def test_compact_preview_is_shorter_with_two_caption_lines(mode):
     rows.set_spec(TilingSpec(enabled=True, geometry_mode="auto_object"))
     rows.preview.set_frame_size((2448, 2048))
     assert len(rows.preview.caption_lines()) == 3
+
+
+@pytest.mark.parametrize("layout", ["rows", "compact"])
+def test_unplaced_notes_never_become_stray_windows(layout):
+    """Notes a layout does not place stay children of the widget and hidden
+    (a parentless label shown by the role defaults would float as its own
+    window on a real display)."""
+    w = SliceSettingsWidget(
+        role="infer_yolo",
+        capabilities=SliceWidgetCapabilities(
+            preview_position="bottom", layout=layout, execution_knobs=True
+        ),
+    )
+    w.set_spec(TilingSpec(enabled=True, geometry_mode="auto_object"))
+    w.show()
+    for label in (w.lbl_slice_scale_px, w.lbl_slice_tile_size, w.lbl_slice_summary):
+        assert w.isAncestorOf(label), label
+    if layout == "compact":
+        assert not w.lbl_slice_scale_px.isVisible()
+        assert not w.lbl_slice_tile_size.isVisible()
+    else:
+        assert not w.lbl_slice_summary.isVisible()
+    strays = [
+        top
+        for top in QApplication.topLevelWidgets()
+        if top.isVisible() and top is not w and isinstance(top, QLabel)
+    ]
+    assert strays == []
+    w.hide()

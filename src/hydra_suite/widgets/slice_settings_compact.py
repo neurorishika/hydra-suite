@@ -54,6 +54,10 @@ def build_compact_grid(w, controls: QWidget) -> None:
     )
     w._summary_row.layout().setSpacing(4)
     w._summary_row.setParent(controls)
+    # Their text feeds the summary line; they are never placed themselves.
+    for note in (w.lbl_slice_scale_px, w.lbl_slice_tile_size):
+        note.setParent(controls)
+        note.hide()
     pack_compact(w)
 
 

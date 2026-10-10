@@ -171,6 +171,9 @@ class SliceSettingsWidget(QGroupBox):
             build_compact_grid(self, controls)
         else:
             self._build_row_grid()
+            # Only the compact layout shows the summary line.
+            self.lbl_slice_summary.setParent(controls)
+            self.lbl_slice_summary.hide()
         outer.addWidget(controls, 0)
         if self._role in ESCALATE_ROLES:
             self.preview.hide()
@@ -286,7 +289,10 @@ class SliceSettingsWidget(QGroupBox):
                 "This backend's tiles always overlap by this constant."
             )
         self._tile_spins.setVisible(self._role not in ESCALATE_ROLES)
-        self.lbl_slice_scale_px.setVisible(self._role == "infer_yolo")
+        # Compact folds this note into the summary line (never shown alone).
+        self.lbl_slice_scale_px.setVisible(
+            self._role == "infer_yolo" and not self._compact
+        )
         # Merge policy/metric are display-only here: no S4a host persists them
         # (DetectKit reads them from the model's profile).
         self.combo_slice_merge_policy.setEnabled(False)
