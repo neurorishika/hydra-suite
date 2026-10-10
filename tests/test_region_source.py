@@ -327,7 +327,12 @@ def test_grid_streams_tile_pixels_in_configured_chunks():
     assert all(size <= 3 for size in chunk_sizes)
 
 
-def test_grid_refuses_unadmitted_tile_before_predict():
+def test_grid_admits_oversized_tile_at_batch_one_with_warning(monkeypatch, caplog):
+    """Admission never refuses the minimal unit (controller ruling R3): a tile
+    whose estimate exceeds the budget runs alone, with a WARNING."""
+    from hydra_suite.core.inference.stages import slicing
+
+    monkeypatch.setattr(slicing, "_OVERSIZE_WARNED", set())
     frame = np.zeros((64, 64, 3), dtype=np.uint8)
     slice_cfg = SliceConfig(
         enabled=True,
@@ -342,18 +347,21 @@ def test_grid_refuses_unadmitted_tile_before_predict():
             slice=slice_cfg, confidence_floor=0.01, model_task="obb"
         ),
         target_classes=[],
+        raw_detection_cap=0,
     )
+    batches = []
+
+    class _Reached(Exception):
+        pass
 
     class _Model:
         imgsz = 64
 
         def predict(self, images, **kwargs):
-            raise AssertionError("predict must not run before geometry admission")
+            batches.append(len(images))
+            raise _Reached
 
-    with pytest.raises(
-        ValueError,
-        match=r"frame=64x64, tile=64x64, tiles=1, estimated peak=",
-    ):
+    with caplog.at_level("WARNING"), pytest.raises(_Reached):
         list(
             Grid().iter_region_results(
                 [frame],
@@ -362,6 +370,9 @@ def test_grid_refuses_unadmitted_tile_before_predict():
                 SimpleNamespace(tensor_on_cuda=False, device="cpu"),
             )
         )
+    assert batches == [1]
+    assert "frame=64x64, tile=64x64" in caplog.text
+    assert "admitting it at batch size 1" in caplog.text
 
 
 def test_grid_polls_cancellation_between_admitted_chunks():
@@ -782,7 +793,10 @@ def test_stage1_proposal_generator_releases_previous_crop_chunk(monkeypatch):
 def test_stage1_proposals_refuses_absurd_candidates_before_crop_materialization(
     monkeypatch,
 ):
-    n = m.MAX_RAW_CANDIDATES_PER_FRAME + 1
+    from hydra_suite.core.inference.limits import MAX_DETECTIONS_PER_FRAME
+
+    # limit + 1 is the accepted probe row; limit + 2 is more than max_det asked.
+    n = MAX_DETECTIONS_PER_FRAME + 2
     boxes = [[float(i), 0.0, float(i + 1), 1.0] for i in range(n)]
 
     class _Detect:
@@ -808,7 +822,7 @@ def test_stage1_proposals_refuses_absurd_candidates_before_crop_materialization(
         max_detections=20,
     )
 
-    with pytest.raises(ValueError, match="1025 candidates"):
+    with pytest.raises(ValueError, match="1026 candidates"):
         list(
             Stage1Proposals().iter_region_results(
                 [np.zeros((4, 4, 3), dtype=np.uint8)],
@@ -817,6 +831,52 @@ def test_stage1_proposals_refuses_absurd_candidates_before_crop_materialization(
                 SimpleNamespace(device="cpu"),
             )
         )
+
+
+def test_stage1_proposals_accepts_the_probe_row(monkeypatch):
+    """max_det is limit + 1 (the probe row); returning that many is normal."""
+    from hydra_suite.core.inference.limits import MAX_DETECTIONS_PER_FRAME
+
+    n = MAX_DETECTIONS_PER_FRAME + 1
+    boxes = [[float(i), 0.0, float(i + 1), 1.0] for i in range(n)]
+    seen_max_det = []
+
+    class _Detect:
+        def predict(self, frames, **kwargs):
+            seen_max_det.append(kwargs["max_det"])
+            return [_FakeStage1Result(boxes)]
+
+    class _PastGuard(Exception):
+        pass
+
+    def _iter_crops(*args, **kwargs):
+        raise _PastGuard
+
+    monkeypatch.setattr(m, "iter_crops", _iter_crops)
+    seq = SimpleNamespace(
+        detect_image_size=0,
+        detect_confidence_threshold=0.1,
+        stage2_batch_size=None,
+        stage2_image_size=64,
+        stage2_task="obb",
+    )
+    config = SimpleNamespace(
+        sequential=seq,
+        target_classes=[],
+        raw_detection_cap=0,
+        max_detections=20,
+    )
+
+    with pytest.raises(_PastGuard):
+        list(
+            Stage1Proposals().iter_region_results(
+                [np.zeros((4, 4, 3), dtype=np.uint8)],
+                SimpleNamespace(detect_model=_Detect(), obb_model=object()),
+                config,
+                SimpleNamespace(device="cpu"),
+            )
+        )
+    assert seen_max_det == [n]
 
 
 # --- Task 8: merge_per_frame (numpy/raw x plain/overlap_band_nms) -----------

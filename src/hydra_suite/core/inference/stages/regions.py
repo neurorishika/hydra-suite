@@ -533,7 +533,8 @@ class Stage1Proposals(RegionSource):
     ) -> Iterator[list[tuple[int, Region, Any]]]:
         """Run stage 2 over crop chunks created just in time."""
 
-        from .obb import MAX_RAW_CANDIDATES_PER_FRAME, effective_raw_detection_cap
+        from ..limits import MAX_DETECTIONS_PER_FRAME
+        from .obb import effective_raw_detection_cap
         from .slicing import admitted_prediction_chunk_size
 
         seq = config.sequential
@@ -557,11 +558,14 @@ class Stage1Proposals(RegionSource):
             boxes = stage1_result.boxes
             if boxes is None or len(boxes) == 0:
                 continue
-            if len(boxes) > MAX_RAW_CANDIDATES_PER_FRAME:
+            # max_det is at most the limit plus one probe row, so this only
+            # fires if the model returned more than it was asked for -- never
+            # on a normal tracking run.
+            if len(boxes) > MAX_DETECTIONS_PER_FRAME + 1:
                 raise ValueError(
                     "Sequential stage-1 proposals are not resource-admissible: "
                     f"frame {frame_idx} produced {len(boxes)} candidates, above "
-                    f"the hard {MAX_RAW_CANDIDATES_PER_FRAME}-candidate ceiling; "
+                    f"the hard {MAX_DETECTIONS_PER_FRAME}-detection-per-frame limit; "
                     "increase the confidence threshold"
                 )
             stage2_side = int(seq.stage2_image_size or max(frame.shape[:2]))
@@ -677,14 +681,23 @@ class Stage1Proposals(RegionSource):
         runtime,
         candidate_cap: int,
     ) -> list[tuple[int, Region, Any]]:
-        results = models.obb_model.predict(
+        from .slicing import predict_with_oom_halving
+
+        def _predict(images: list) -> list:
+            return models.obb_model.predict(
+                images,
+                conf=seq.obb_confidence_threshold,
+                iou=1.0,
+                verbose=False,
+                device=runtime.device,
+                imgsz=seq.stage2_image_size,
+                max_det=candidate_cap,
+            )
+
+        results = predict_with_oom_halving(
             [region.image for region in regions],
-            conf=seq.obb_confidence_threshold,
-            iou=1.0,
-            verbose=False,
-            device=runtime.device,
-            imgsz=seq.stage2_image_size,
-            max_det=candidate_cap,
+            _predict,
+            "Sequential stage-2 crop prediction",
         )
         return [(frame_idx, region, result) for region, result in zip(regions, results)]
 
@@ -919,13 +932,18 @@ class SlicedStage1Proposals(Stage1Proposals):
         if not frames:
             return
 
+        from ..limits import MAX_DETECTIONS_PER_FRAME
         from .obb import (
-            MAX_RAW_CANDIDATES_PER_FRAME,
             _frames_are_cuda_tensors,
             _resolve_imgsz,
             effective_raw_detection_cap,
         )
-        from .slicing import admitted_tile_chunk_size, iter_tile_job_chunks, plan_slices
+        from .slicing import (
+            admitted_tile_chunk_size,
+            iter_tile_job_chunks,
+            plan_slices,
+            predict_with_oom_halving,
+        )
 
         seq = config.sequential
         slice_cfg = seq.stage1_slice
@@ -970,15 +988,19 @@ class SlicedStage1Proposals(Stage1Proposals):
                 raise InferenceCancelled(
                     "inference cancelled before sliced stage-1 prediction"
                 )
-            results = model.predict(
+            results = predict_with_oom_halving(
                 [image for _, image in chunk],
-                conf=seq.detect_confidence_threshold,
-                iou=1.0,
-                classes=config.target_classes or None,
-                verbose=False,
-                device=runtime.device,
-                max_det=candidate_cap,
-                **stage1_kwargs,
+                lambda images: model.predict(
+                    images,
+                    conf=seq.detect_confidence_threshold,
+                    iou=1.0,
+                    classes=config.target_classes or None,
+                    verbose=False,
+                    device=runtime.device,
+                    max_det=candidate_cap,
+                    **stage1_kwargs,
+                ),
+                "Sliced stage-1 tile prediction",
             )
             if should_stop is not None and should_stop():
                 raise InferenceCancelled(
@@ -988,12 +1010,14 @@ class SlicedStage1Proposals(Stage1Proposals):
                 boxes = getattr(result, "boxes", None)
                 if boxes is None or len(boxes) == 0:
                     continue
-                if len(boxes) > MAX_RAW_CANDIDATES_PER_FRAME:
+                # max_det is at most the limit plus one probe row: fires only
+                # if the model returned more than it was asked for.
+                if len(boxes) > MAX_DETECTIONS_PER_FRAME + 1:
                     raise ValueError(
                         "Sliced sequential stage-1 proposals are not "
                         f"resource-admissible: one tile produced {len(boxes)} "
                         f"candidates, above the hard "
-                        f"{MAX_RAW_CANDIDATES_PER_FRAME}-candidate ceiling; "
+                        f"{MAX_DETECTIONS_PER_FRAME}-detection-per-frame limit; "
                         "increase the confidence threshold"
                     )
                 xyxy = np.asarray(

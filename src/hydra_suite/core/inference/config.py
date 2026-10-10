@@ -16,8 +16,20 @@ from hydra_suite.core.individual.classification.errors import (
     PoseModelUnresolvedError,
 )
 from hydra_suite.runtime.resolver import RuntimeTier
+from hydra_suite.utils.tiling_spec import BACKEND_DEFAULTS, DEFAULT_OVERLAP
+
+from .limits import EXTRACTION_CONFIDENCE_FLOOR, require_target_count_within_limit
 
 logger = logging.getLogger(__name__)
+
+# SAHI inference defaults come from the one table in utils/tiling_spec (F4/F8).
+# TrackerKit is canonical: these resolve to the same 0.15 / 0.2 literals that
+# were here before, so SliceConfig, its cache hash and tracking output are
+# unchanged.
+DEFAULT_SLICE_OBJECT_TILE_FRACTION = BACKEND_DEFAULTS[
+    "yolo_infer"
+].object_tile_fractions[0]
+DEFAULT_SLICE_OVERLAP = DEFAULT_OVERLAP
 
 
 class InferenceConfigError(ValueError):
@@ -32,7 +44,8 @@ MAX_PIPELINE_DEPTH = 4
 # Tracker detection caches store permissive raw OBB output and apply the
 # user-facing confidence threshold later in ``filter_for_source``. Keep this
 # value explicit because changing it must also invalidate sequential caches.
-TRACKER_RAW_OBB_CONFIDENCE_FLOOR = 1e-3
+# Kept as the name sequential configs and keys import; one value.
+TRACKER_RAW_OBB_CONFIDENCE_FLOOR = EXTRACTION_CONFIDENCE_FLOOR
 
 
 # Calibration budget bounds, set from measurement rather than taste.
@@ -168,11 +181,11 @@ class SliceConfig:
     # custom mode: explicit tile size in original-frame pixels.
     slice_height: int = 0
     slice_width: int = 0
-    overlap_height_ratio: float = 0.2
-    overlap_width_ratio: float = 0.2
+    overlap_height_ratio: float = DEFAULT_SLICE_OVERLAP
+    overlap_width_ratio: float = DEFAULT_SLICE_OVERLAP
     # auto_object mode: tile sized so a reference object spans this linear
     # fraction of the tile.
-    object_tile_fraction: float = 0.15
+    object_tile_fraction: float = DEFAULT_SLICE_OBJECT_TILE_FRACTION
     # Reference object size in ORIGINAL-FRAME pixels, sourced from
     # REFERENCE_BODY_SIZE * RESIZE_FACTOR. Only read in auto_object mode; 0
     # means "unknown", which falls back to auto_model sizing.
@@ -225,7 +238,7 @@ class SliceConfig:
 @dataclass
 class OBBDirectConfig:
     model_path: str
-    confidence_floor: float = 1e-3
+    confidence_floor: float = EXTRACTION_CONFIDENCE_FLOOR
     confidence_threshold: float = 0.25
     # Auto-export the .engine (TensorRT) / .mlpackage (CoreML) artifact from a
     # .pt source on first load for the gpu_fast runtimes. When False and no
@@ -302,11 +315,9 @@ class OBBConfig:
     sequential: OBBSequentialConfig | None = None
     target_classes: list[int] = field(default_factory=list)
     max_detections: int = 20
-    # Cap on RAW detections per frame, applied at OBB extraction (sorted by
-    # confidence descending, top-k) BEFORE size/aspect/IoU filtering. Mirrors
-    # legacy ``_obb_geometry._raw_detection_cap`` (= 2 * MAX_TARGETS). Zero
-    # derives a finite 2 * max_detections cap; positive expert values are still
-    # bounded by the inference resource ceiling.
+    # Explicit per-frame extraction cap for non-tracking callers (DetectKit
+    # preview, AL). 0 = MAX_DETECTIONS_PER_FRAME. Tracking never sets it; N is
+    # applied at replay.
     raw_detection_cap: int = 0
     min_object_size: float = 0.0
     max_object_size: float = float("inf")
@@ -849,7 +860,12 @@ def _slice_config_from_params(
     stage-1 ``YOLO_SEQ_STAGE1_SLICE_*`` mapping (Task 11) -- same field
     semantics, different param-name prefix.
     """
-    overlap = _clamped_float(params.get(f"{prefix}OVERLAP", 0.2), 0.2, 0.0, 0.9)
+    overlap = _clamped_float(
+        params.get(f"{prefix}OVERLAP", DEFAULT_SLICE_OVERLAP),
+        DEFAULT_SLICE_OVERLAP,
+        0.0,
+        0.9,
+    )
     _geometry_mode = (
         str(params.get(f"{prefix}GEOMETRY_MODE", "auto_model")).strip().lower()
     )
@@ -870,7 +886,12 @@ def _slice_config_from_params(
         overlap_height_ratio=overlap,
         overlap_width_ratio=overlap,
         object_tile_fraction=_clamped_float(
-            params.get(f"{prefix}OBJECT_TILE_FRACTION", 0.15), 0.15, 0.01, 0.9
+            params.get(
+                f"{prefix}OBJECT_TILE_FRACTION", DEFAULT_SLICE_OBJECT_TILE_FRACTION
+            ),
+            DEFAULT_SLICE_OBJECT_TILE_FRACTION,
+            0.01,
+            0.9,
         ),
         reference_body_px=reference_body_px,
         merge_policy=(
@@ -975,6 +996,17 @@ def _gate_calibration(params: dict) -> None:
                 raise CalibrationRequiredError(message)
 
 
+# The sub-floor confidence WARNING is logged once per process: the config is
+# rebuilt several times per run (worker, provenance, preview, orchestrator).
+_EXTRACTION_FLOOR_WARNED = False
+
+
+def reset_extraction_floor_warning() -> None:
+    """Re-arm the once-per-process sub-floor confidence WARNING (tests)."""
+    global _EXTRACTION_FLOOR_WARNED
+    _EXTRACTION_FLOOR_WARNED = False
+
+
 def build_inference_config_from_params(params: dict) -> InferenceConfig:
     """Build an InferenceConfig from a tracking-worker params dict.
 
@@ -1000,19 +1032,26 @@ def build_inference_config_from_params(params: dict) -> InferenceConfig:
         or "yolo26s-obb.pt"
     )
     yolo_conf = float(params.get("YOLO_CONFIDENCE_THRESHOLD", 0.25))
+    global _EXTRACTION_FLOOR_WARNED
+    if yolo_conf < EXTRACTION_CONFIDENCE_FLOOR and not _EXTRACTION_FLOOR_WARNED:
+        _EXTRACTION_FLOOR_WARNED = True
+        logger.warning(
+            "YOLO confidence threshold %g is below the extraction floor %g: "
+            "detections under %g are never extracted, so it acts as %g.",
+            yolo_conf,
+            EXTRACTION_CONFIDENCE_FLOOR,
+            EXTRACTION_CONFIDENCE_FLOOR,
+            EXTRACTION_CONFIDENCE_FLOOR,
+        )
     yolo_iou = float(params.get("YOLO_IOU_THRESHOLD", 0.7))
     min_obj = float(params.get("MIN_OBJECT_SIZE", 0.0))
     max_obj = float(params.get("MAX_OBJECT_SIZE", float("inf")) or float("inf"))
-    # Detection caps mirror legacy core/detectors/_obb_geometry:
-    #   * RAW cap = 2 * MAX_TARGETS, applied at OBB extraction sorted by
-    #     confidence, BEFORE size/aspect/IoU filtering.
-    #   * FINAL cap = MAX_TARGETS, applied AFTER filtering, keeping the
-    #     LARGEST detections (filtering sorts the cap by size, not conf).
-    # Setting max_detections = MAX_TARGETS (not 2*MAX_TARGETS) restores the
-    # legacy post-filter count cap (`_obb_geometry:587`) the redesign dropped.
-    max_targets = max(1, int(params.get("MAX_TARGETS", 8)))
-    raw_cap = 2 * max_targets
-    max_dets = max_targets
+    # N is a replay-time knob: extraction keeps every candidate >= the
+    # extraction floor (bounded by MAX_DETECTIONS_PER_FRAME) and replay
+    # applies the 2N window and the final N cut (filtering.filter_with_indices).
+    max_dets = require_target_count_within_limit(
+        max(1, int(params.get("MAX_TARGETS", 8)))
+    )
 
     # Restrict detections to specific class IDs (legacy YOLO_TARGET_CLASSES;
     # None/empty == all classes). Threaded into OBBConfig.target_classes and
@@ -1124,7 +1163,6 @@ def build_inference_config_from_params(params: dict) -> InferenceConfig:
             min_aspect_ratio=min_ar,
             max_aspect_ratio=max_ar,
             max_detections=max_dets,
-            raw_detection_cap=raw_cap,
         )
     else:
         model_task = str(params.get("YOLO_OBB_DIRECT_TASK", "obb")).strip().lower()
@@ -1169,7 +1207,7 @@ def build_inference_config_from_params(params: dict) -> InferenceConfig:
             mode="direct",
             direct=OBBDirectConfig(
                 model_path=direct_model_path,
-                confidence_floor=1e-3,
+                confidence_floor=EXTRACTION_CONFIDENCE_FLOOR,
                 confidence_threshold=yolo_conf,
                 model_task=model_task,
                 fixed_angle_deg=fixed_angle_deg,
@@ -1187,7 +1225,6 @@ def build_inference_config_from_params(params: dict) -> InferenceConfig:
             min_aspect_ratio=min_ar,
             max_aspect_ratio=max_ar,
             max_detections=max_dets,
-            raw_detection_cap=raw_cap,
         )
 
     # HeadTail

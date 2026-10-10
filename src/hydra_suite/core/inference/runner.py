@@ -30,7 +30,9 @@ from .cache.keys import (
     detection_cache_key,
     headtail_cache_key,
     pose_cache_key,
+    replay_filter_hash,
     video_signature,
+    with_replay_filters,
     with_video_signature,
 )
 from .cache.set_manifest import (
@@ -50,6 +52,13 @@ from .cache.store import (
 from .cache.writer import CacheWriter
 from .cancellation import InferenceCancelled
 from .config import InferenceConfig
+from .downstream_select import (
+    DownstreamCacheError,
+    apriltag_raw_to_positions,
+    cnn_raw_to_positions,
+    positions_in,
+)
+from .limits import MAX_DETECTIONS_PER_FRAME, DetectionLimitStats
 from .pipeline import Pipeline, PipelineStages
 from .result import (
     AprilTagResult,
@@ -64,10 +73,17 @@ from .runtime import RuntimeContext, resolved_backend_for
 from .stages.apriltag import AprilTagModel, run_apriltag
 from .stages.bgsub import BgSubModel, run_bgsub
 from .stages.cnn import CNNModel, run_cnn
-from .stages.crops import extract_aabb_crops, extract_canonical_crops
+from .stages.crops import ForeignSet, extract_aabb_crops, extract_canonical_crops
 from .stages.filtering import filter_for_source
 from .stages.headtail import HeadTailModel, run_headtail
-from .stages.obb import OBBModels, _RawOBBTensors, materialize_tensors, run_obb
+from .stages.obb import (
+    OBBModels,
+    _RawOBBTensors,
+    effective_raw_detection_cap,
+    materialize_tensors,
+    rank_and_bound,
+    run_obb,
+)
 from .stages.pose import PoseModel, run_pose
 
 logger = logging.getLogger(__name__)
@@ -454,6 +470,77 @@ def cache_set_is_fully_reusable(caches: _CacheSet) -> bool:
     return all(handle.coverage_ranges() == reference for handle in handles)
 
 
+@dataclass(frozen=True)
+class _PartialReusePlan:
+    """Which per-animal stages a detection-reusing batch pass must recompute.
+
+    ``True`` = the stage's cache is stale for the current config (typically a
+    replay-filter change re-keyed it) and is recomputed + rewritten; ``False``
+    = it is reused untouched. Detection is always reused under a plan.
+    """
+
+    headtail: bool
+    cnn: tuple[bool, ...]
+    pose: bool
+    apriltag: bool
+
+    @property
+    def any_recompute(self) -> bool:
+        return self.headtail or any(self.cnn) or self.pose or self.apriltag
+
+
+def partial_reuse_plan(
+    caches: _CacheSet, start_frame: int, end_frame: int
+) -> _PartialReusePlan | None:
+    """Plan a batch pass that reuses the detection cache, or ``None``.
+
+    Engages only when the detection member of the active cache generation is
+    key-valid and covers EXACTLY ``[start_frame, end_frame]``: the recomputed
+    per-animal members are written over that range, and the cache set is only
+    promotable when every member has the same coverage. A per-animal member is
+    reused when it is reusable, of the same generation and coextensive with
+    detection; anything else is recomputed.
+    """
+
+    if not caches.set_manifest_valid or caches.detection is None:
+        return None
+    generation = caches.generation_id
+    detection = caches.detection
+    expected = ((int(start_frame), int(end_frame)),)
+    if (
+        generation is None
+        or not detection.is_reusable()
+        or detection._store.generation_id != generation
+        or detection.coverage_ranges() != expected
+    ):
+        return None
+
+    def _stale(handle) -> bool:
+        if handle is None:
+            return False
+        return not (
+            handle.is_reusable()
+            and handle._store.generation_id == generation
+            and handle.coverage_ranges() == expected
+        )
+
+    # A key-valid member that fails its checksum cannot be repaired in resume
+    # mode (resume skips every frame its manifest lists, so the recomputed
+    # rows would be dropped). Fall back to the full fresh run, which heals
+    # it. ``is_valid`` must be read BEFORE ``is_reusable`` (which clears it).
+    for handle in caches.all_handles():
+        if handle is not detection and handle.is_valid():
+            if not handle.is_reusable():
+                return None
+
+    return _PartialReusePlan(
+        headtail=_stale(caches.headtail),
+        cnn=tuple(_stale(handle) for handle in caches.cnn),
+        pose=_stale(caches.pose),
+        apriltag=_stale(caches.apriltag),
+    )
+
+
 def _load_all_models(
     config: InferenceConfig,
     runtime: RuntimeContext,
@@ -535,12 +622,26 @@ def _open_caches(
     *,
     read_only: bool = False,
     write_mode: str = "auto",
+    filter_hash: "str | None" = None,
 ) -> _CacheSet:
     # Bind every per-video cache to the exact source file so a changed video
     # (e.g. a clip regenerated under the same name with a different frame count)
     # invalidates the cache instead of serving stale, truncated detections.
     def _k(key):
         return with_video_signature(key, video_sig)
+
+    # Per-animal (downstream) caches hold every N-free filter survivor, so
+    # their keys follow the replay filters (never N). The detection key is NOT
+    # wrapped: it stores raw, pre-filter results. ``filter_hash`` overrides the
+    # hash derived from ``config`` -- a read-only replay at candidate filters
+    # opens the caches under the filters they were WRITTEN with (their
+    # provenance) and lets the raw-index loaders raise for any detection the
+    # candidate admits that the stored superset lacks.
+    if filter_hash is None:
+        filter_hash = replay_filter_hash(config, roi_mask)
+
+    def _dk(key):
+        return _k(with_replay_filters(key, filter_hash))
 
     detection_key = (
         # roi_mask is folded into the OBB key ONLY when slicing is enabled (see
@@ -611,7 +712,7 @@ def _open_caches(
         headtail=(
             HeadTailCacheHandle(
                 path=root / "headtail.npz",
-                key=_k(headtail_cache_key(config.headtail, config.canonical)),
+                key=_dk(headtail_cache_key(config.headtail, config.canonical)),
                 read_only=read_only,
                 write_mode=write_mode,
                 generation_id=generation_id,
@@ -622,7 +723,7 @@ def _open_caches(
         cnn=[
             CNNCacheHandle(
                 path=root / f"cnn_{c.label}.npz",
-                key=_k(cnn_cache_key(c, config.canonical)),
+                key=_dk(cnn_cache_key(c, config.canonical)),
                 label=c.label,
                 read_only=read_only,
                 write_mode=write_mode,
@@ -633,7 +734,7 @@ def _open_caches(
         pose=(
             PoseCacheHandle(
                 path=root / "pose.npz",
-                key=_k(pose_cache_key(config.pose, config.canonical)),
+                key=_dk(pose_cache_key(config.pose, config.canonical)),
                 read_only=read_only,
                 write_mode=write_mode,
                 generation_id=generation_id,
@@ -644,7 +745,7 @@ def _open_caches(
         apriltag=(
             AprilTagCacheHandle(
                 path=root / "apriltag.npz",
-                key=_k(apriltag_cache_key(config.apriltag)),
+                key=_dk(apriltag_cache_key(config.apriltag)),
                 read_only=read_only,
                 write_mode=write_mode,
                 generation_id=generation_id,
@@ -725,6 +826,36 @@ def _build_identity_evidence_stage(
     return catalog, stage
 
 
+def _require_within_written_superset(
+    written_config: "InferenceConfig | None",
+    raw_obb: OBBResult,
+    roi_mask: "np.ndarray | None",
+    det_indices: np.ndarray,
+    frame_idx: int,
+) -> None:
+    """Raise unless the replayed final set lies inside the WRITTEN superset.
+
+    No-op when ``written_config`` is None (replay filters == write filters, so
+    the final set is a subset by construction). Otherwise the superset the
+    per-animal caches were written for is re-derived from the raw detections
+    with the written filters; any final-N index outside it means those caches
+    hold no result for it.
+    """
+    if written_config is None or len(det_indices) == 0:
+        return
+    _, superset = filter_for_source(
+        written_config, raw_obb, roi_mask, apply_max_detections=False
+    )
+    missing = sorted(set(np.asarray(det_indices).tolist()) - set(superset.tolist()))
+    if missing:
+        raise DownstreamCacheError(
+            f"frame {frame_idx}: the current detection filters admit "
+            f"detection(s) {missing[:8]} that the per-animal caches were not "
+            "built for -- per-animal results need recomputing for these filter "
+            "settings (rerun inference without cache reuse)."
+        )
+
+
 def write_identity_evidence_sidecar(
     caches: "_CacheSet",
     config: InferenceConfig,
@@ -733,24 +864,28 @@ def write_identity_evidence_sidecar(
     out_path: Path,
     catalog_labels: "tuple[str, ...]",
     roi_mask: "np.ndarray | None" = None,
+    written_config: "InferenceConfig | None" = None,
 ) -> None:
     """Read back raw per-frame caches over `frame_range` and write the evidence sidecar.
 
+    ``written_config`` (read-only candidate replay only): the config whose
+    filters the per-animal caches were written with; each frame's final set
+    must lie inside that superset or ``DownstreamCacheError`` is raised.
+
     The batch seam Task 4 wires into ``run_batch_pass``: for each frame, reads
-    the raw (pre-filter) detection cache, re-derives the SAME filtered
-    detection set + order the pipeline used when it ran HeadTail/CNN/AprilTag
-    for that frame (``filter_for_source(config, raw_obb, roi_mask)`` --
-    deterministic, exactly mirroring ``Pipeline._process_window``'s
-    ``filter_for_source(cfg, obb_result, self.stages.roi_mask)`` call and
-    ``InferenceRunner.load_frame``'s own re-filter), and uses the resulting
-    ``filtered_obb.detection_ids`` as the stable ``det_ids`` list
-    `IdentityEvidenceStage` expects -- aligned by position with the
-    CNN/AprilTag stages' own ``det_index`` (both are sequential 0..N-1 over
-    that SAME filtered set, since CNN/AprilTag ran against the pipeline's
-    filtered_obb, not the raw one). ``roi_mask`` must be the SAME frame-space
-    mask the batch pass used (see ``InferenceRunner._write_identity_evidence_batch``),
-    or this sidecar's det_ids silently diverge from what CNN/AprilTag actually
-    ran against.
+    the raw (pre-filter) detection cache and re-derives the final-N filtered
+    detection set via ``filter_for_source(config, raw_obb, roi_mask)`` -- the
+    same deterministic call ``InferenceRunner.load_frame`` makes -- giving
+    ``filtered_obb`` plus its RAW detection-cache indices. The per-animal
+    CNN/AprilTag caches hold the N-free superset keyed by raw index, so they
+    are read through the replay loaders (``_load_cnn_for_indices`` /
+    ``_load_apriltag``), which look those raw indices up and return results
+    positionally aligned with ``filtered_obb`` -- and so with the stable
+    ``det_ids`` (``filtered_obb.detection_ids``) `IdentityEvidenceStage`
+    expects. A final-N index missing from a CNN cache raises
+    ``DownstreamCacheError``. ``roi_mask`` must be the SAME frame-space mask
+    the batch pass used (see ``InferenceRunner._write_identity_evidence_batch``),
+    or this sidecar's final set silently diverges from the replayed one.
 
     ``caches`` must already be flushed to disk (``read_frame`` is disk-backed
     only -- it never sees an unflushed in-memory write buffer), so this is
@@ -775,22 +910,33 @@ def write_identity_evidence_sidecar(
         raw_obb = caches.detection.read_frame(frame_idx)
         if raw_obb is None:
             continue
-        filtered_obb, _ = filter_for_source(config, raw_obb, roi_mask)
+        filtered_obb, det_idx = filter_for_source(config, raw_obb, roi_mask)
         if filtered_obb.num_detections == 0:
             continue
+        _require_within_written_superset(
+            written_config, raw_obb, roi_mask, det_idx, frame_idx
+        )
         det_ids = [int(d) for d in filtered_obb.detection_ids]
 
-        cnn_reads: dict[str, list] = {}
-        for cnn_cache in cnn_caches:
-            preds = cnn_cache.read_frame(frame_idx)
-            if preds:
-                cnn_reads[cnn_cache.label] = preds
-
-        tag_read = (
-            caches.apriltag.read_frame(frame_idx)
-            if caches.apriltag is not None
-            else None
-        )
+        # Read through the replay loaders: they look up the final-N RAW
+        # indices in the superset caches and return results positionally
+        # aligned with filtered_obb (so with det_ids). A phase with no
+        # predictions is omitted, not passed as an empty list.
+        try:
+            cnn_results = _load_cnn_for_indices(
+                cnn_caches, config.cnn_phases, frame_idx, det_idx
+            )
+        except DownstreamCacheError as exc:
+            raise DownstreamCacheError(
+                f"identity evidence, frame {frame_idx}: the current detection "
+                "filters admit a detection the CNN caches hold no result for -- "
+                "per-animal results need recomputing for these filter settings. "
+                f"{exc}"
+            ) from exc
+        cnn_reads: dict[str, list] = {
+            r.label: r.predictions for r in cnn_results if r.predictions
+        }
+        tag_read = _load_apriltag(caches.apriltag, frame_idx, det_idx)
 
         evidences = stage.evidences_for_frame(frame_idx, det_ids, cnn_reads, tag_read)
         if evidences:
@@ -839,27 +985,22 @@ def _load_headtail_for_indices(
     det_indices: np.ndarray,
     filtered_obb: OBBResult,
 ) -> HeadTailResult | None:
+    """Head-tail rows for the RAW ``det_indices``, positionally aligned.
+
+    The cache holds the N-free superset keyed by raw detection-cache index; a
+    requested index absent from it raises :class:`DownstreamCacheError`.
+    """
     if cache is None or len(det_indices) == 0:
         return None
     data = cache.read_frame(frame_idx)
     if data is None:
         return None
     cached_det_indices, hints, confs, directed = data
-    idx_map = {int(v): i for i, v in enumerate(cached_det_indices)}
-    n = len(det_indices)
-    out_hints = np.full(n, float("nan"), dtype=np.float32)
-    out_confs = np.zeros(n, dtype=np.float32)
-    out_directed = np.zeros(n, dtype=np.uint8)
-    for i, di in enumerate(det_indices):
-        j = idx_map.get(int(di))
-        if j is not None:
-            out_hints[i] = hints[j]
-            out_confs[i] = confs[j]
-            out_directed[i] = 1 if bool(directed[j]) else 0
+    pos = positions_in(cached_det_indices, det_indices)
     return HeadTailResult(
-        heading_hints=out_hints,
-        heading_confidences=out_confs,
-        directed_mask=out_directed,
+        heading_hints=np.asarray(hints, dtype=np.float32)[pos],
+        heading_confidences=np.asarray(confs, dtype=np.float32)[pos],
+        directed_mask=np.asarray(directed)[pos].astype(bool).astype(np.uint8),
         canonical_affines=None,
     )
 
@@ -870,15 +1011,21 @@ def _load_cnn_for_indices(
     frame_idx: int,
     det_indices: np.ndarray,
 ) -> list[CNNResult]:
+    """One CNNResult per phase for the RAW ``det_indices``, positionally aligned.
+
+    Cached ``det_index`` values are raw detection-cache indices; the returned
+    predictions carry positions 0..K-1 over ``det_indices``. A phase with no
+    cached frame, or written as explicit empty coverage (``predictions=[]``,
+    the "phase produced no result" marker), yields an empty result. Otherwise
+    a requested index with no prediction raises :class:`DownstreamCacheError`.
+    """
     results: list[CNNResult] = []
-    det_set = {int(di) for di in det_indices}
     for cache, cfg in zip(caches, cnn_configs):
         preds = cache.read_frame(frame_idx)
-        if preds is None:
+        if not preds or len(det_indices) == 0:
             results.append(CNNResult(label=cfg.label, predictions=[]))
             continue
-        aligned = [p for p in preds if p.det_index in det_set]
-        results.append(CNNResult(label=cfg.label, predictions=aligned))
+        results.append(cnn_raw_to_positions(preds, det_indices, cfg.label))
     return results
 
 
@@ -888,34 +1035,61 @@ def _load_pose_for_indices(
     det_indices: np.ndarray,
     filtered_obb: OBBResult,
 ) -> PoseResult | None:
+    """Pose rows for the RAW ``det_indices``, positionally aligned.
+
+    A requested index absent from the cached superset raises
+    :class:`DownstreamCacheError`.
+    """
     if cache is None or len(det_indices) == 0:
         return None
     data = cache.read_frame(frame_idx)
     if data is None:
         return None
     cached_keypoints, cached_det_indices, cached_valid = data
-    idx_map = {int(v): i for i, v in enumerate(cached_det_indices)}
-    n = len(det_indices)
     if cached_keypoints.ndim < 2:
         return None
-    kp_shape = cached_keypoints.shape[1:]
-    out_kp = np.zeros((n, *kp_shape), dtype=np.float32)
-    out_valid = np.zeros(n, dtype=bool)
-    for i, di in enumerate(det_indices):
-        j = idx_map.get(int(di))
-        if j is not None:
-            out_kp[i] = cached_keypoints[j]
-            out_valid[i] = bool(cached_valid[j])
-    return PoseResult(keypoints=out_kp, valid_mask=out_valid)
+    pos = positions_in(cached_det_indices, det_indices)
+    return PoseResult(
+        keypoints=np.asarray(cached_keypoints, dtype=np.float32)[pos],
+        valid_mask=np.asarray(cached_valid).astype(bool)[pos],
+    )
 
 
 def _load_apriltag(
     cache: AprilTagCacheHandle | None,
     frame_idx: int,
+    det_indices: np.ndarray,
 ) -> AprilTagResult | None:
+    """AprilTag detections on the RAW ``det_indices``, re-indexed positionally.
+
+    Tags are sparse: a tag whose raw detection is outside ``det_indices`` is
+    dropped (absence means "no tag", not an incoherent cache).
+    """
     if cache is None:
         return None
-    return cache.read_frame(frame_idx)
+    return apriltag_raw_to_positions(cache.read_frame(frame_idx), det_indices)
+
+
+def _identity_evidence_base_signature(
+    config: InferenceConfig, video_sig: str, roi_mask: "np.ndarray | None"
+) -> str:
+    """Base signature of the identity-evidence sidecar key.
+
+    The sidecar holds evidence for the FINAL-N filtered set, so -- unlike the
+    N-free per-animal caches -- it depends on N as well as on the replay
+    filters. Both are folded in alongside the video signature.
+    """
+    parts = [video_sig]
+    filter_hash = replay_filter_hash(config, roi_mask)
+    if filter_hash:
+        parts.append(f"filters={filter_hash}")
+    if config.detection_source == "bgsub":
+        bg = config.bgsub
+        if bg is not None:
+            parts.append(f"n={int(bg.max_targets)}x{int(bg.max_contour_multiplier)}")
+    elif config.obb is not None:
+        parts.append(f"n={int(config.obb.max_detections)}")
+    return "|".join(parts)
 
 
 class InferenceRunner:
@@ -944,10 +1118,16 @@ class InferenceRunner:
         roi_mask: "np.ndarray | None" = None,
         identity_evidence: "IdentityEvidenceRunConfig | None" = None,
         runtime_overlay: "InferenceRuntimeOverlay | None" = None,
+        cache_filter_config: "InferenceConfig | None" = None,
     ) -> None:
         from hydra_suite.utils.profiling_process import maybe_arm_process_recorder
 
+        from .stages.slicing import reset_oversize_warnings
+
         maybe_arm_process_recorder()
+        # One run == one runner: the once-per-run oversize-admission WARNING
+        # scope restarts here (before any model load sizes a tile batch).
+        reset_oversize_warnings()
 
         self.config = config
         # Immutable per-run evidence of requested/admitted/effective execution
@@ -964,6 +1144,25 @@ class InferenceRunner:
         # backward/replay run reproduce the exact same cache key via
         # caches_all_valid() and read the forward run's cache.
         self._roi_mask = roi_mask
+        # The config whose replay filters the per-animal caches were WRITTEN
+        # with. None => ``config`` itself (the normal case: write and replay
+        # share filters). A read-only replay of candidate filters passes the
+        # written (provenance) config: the per-animal caches open under its
+        # filter hash (see _open_caches), and every replayed frame checks the
+        # candidate's final set lies inside the written superset -- the only
+        # check that also covers CNN/AprilTag, whose caches cannot tell "no
+        # detection was stored" from "no result". The arena ROI is shared by
+        # both (it is not a candidate parameter). Only read paths use it: a
+        # writing pass keys what it computes under its own filters, so it is
+        # refused outside cache-only mode.
+        if cache_filter_config is not None and not cache_only:
+            raise ValueError("cache_filter_config is only valid with cache_only=True")
+        self._cache_filter_config = cache_filter_config
+        self._cache_filter_hash = (
+            replay_filter_hash(cache_filter_config, roi_mask)
+            if cache_filter_config is not None
+            else None
+        )
         # Memoizes _frame_space_roi_mask's result, keyed by (video_path,
         # id(self._roi_mask)) so a later `self._roi_mask` reassignment (see
         # run_batch_pass's optional roi_mask override) naturally invalidates
@@ -1023,6 +1222,17 @@ class InferenceRunner:
         # TrackingWorker) in its end-of-run summary alongside the other
         # tracking-loop counters.
         self.clipping_stats = ClippingStats()
+        # Run-scoped: frames whose candidate count exceeded
+        # MAX_DETECTIONS_PER_FRAME (each logged as a WARNING when recorded);
+        # shared with the batch Pipeline like ``clipping_stats``.
+        self.detection_limit_stats = DetectionLimitStats()
+
+    def _rank_and_bound(self, raw_obb: OBBResult, frame_idx: int) -> OBBResult:
+        """Confidence-rank + bound one OBB frame; record a limit hit loudly."""
+        raw_obb, candidate_count = rank_and_bound(raw_obb)
+        if candidate_count > MAX_DETECTIONS_PER_FRAME:
+            self.detection_limit_stats.record(frame_idx, candidate_count)
+        return raw_obb
 
     @property
     def obb_class_names(self) -> "dict[int, str] | None":
@@ -1049,6 +1259,7 @@ class InferenceRunner:
             self._video_sig,
             self._roi_mask,
             read_only=True,
+            filter_hash=self._cache_filter_hash,
         )
         return cache_set_is_fully_reusable(caches)
 
@@ -1068,6 +1279,7 @@ class InferenceRunner:
             self._video_sig,
             self._roi_mask,
             read_only=True,
+            filter_hash=self._cache_filter_hash,
         )
         if not caches.set_manifest_valid or caches.detection is None:
             return False
@@ -1085,6 +1297,7 @@ class InferenceRunner:
             self._video_sig,
             self._roi_mask,
             read_only=True,
+            filter_hash=self._cache_filter_hash,
         )
         if not caches.set_manifest_valid or caches.detection is None:
             return []
@@ -1131,6 +1344,7 @@ class InferenceRunner:
                         self.config.bgsub,
                         self.runtime,
                         roi_mask=roi_mask,
+                        limit_stats=self.detection_limit_stats,
                     )
                 else:
                     # roi_mask is frame-space (the caller passes the mask matching this
@@ -1146,10 +1360,11 @@ class InferenceRunner:
                     raw = raw_list[0]
                     if isinstance(raw, _RawOBBTensors):
                         raw_obb = materialize_tensors(
-                            raw, self.config.obb.raw_detection_cap
+                            raw, effective_raw_detection_cap(self.config.obb)
                         )
                     else:
                         raw_obb = raw
+                    raw_obb = self._rank_and_bound(raw_obb, frame_idx)
                 # Re-stamp detection_ids with the real frame_idx (materialize_tensors / the
                 # CPU OBB path generate them at frame 0) so cached ids are unique per
                 # frame.
@@ -1171,11 +1386,39 @@ class InferenceRunner:
                     caches.detection.write_frame(frame_idx, result=raw_obb)
 
             with span(N.RT_FILTER):
-                filtered_obb, det_indices = filter_for_source(
-                    self.config, raw_obb, roi_mask
+                # Per-animal stages run on the N-free SUPERSET (every filter
+                # survivor, no 2N window / final N cut) so the downstream caches
+                # serve any N at replay -- the same contract as the batch
+                # Pipeline. The returned FrameResult (and the identity evidence)
+                # is the final-N set, a subset of the superset by construction.
+                superset_obb, superset_idx = filter_for_source(
+                    self.config, raw_obb, roi_mask, apply_max_detections=False
                 )
+                final_obb, final_idx = filter_for_source(self.config, raw_obb, roi_mask)
 
-            if filtered_obb.num_detections == 0:
+            def _empty_frame_result() -> FrameResult:
+                empty_result = _build_frame_result(
+                    frame_idx, final_obb, np.zeros(0, np.int32), None, [], None, None
+                )
+                # Task 11 fix: surface the bg-sub masks here too, exactly like the
+                # non-empty path below. last_bg_u8 is the source of truth for
+                # "was the background established" -- it is None ONLY during the
+                # true first-frame warmup (see bgsub.py:167-170) and a real array
+                # on every frame after, even with zero detections. worker.py uses
+                # `bg_u8 is None` as its warmup sentinel; if an empty-frame return
+                # skipped the assignment, a post-warmup zero-detection frame
+                # (occlusion, animal left, threshold blip) would be misread as
+                # still-warming-up and silently drop Kalman aging + the CSV row
+                # for that frame.
+                if (
+                    self.config.detection_source == "bgsub"
+                    and self._models.bgsub is not None
+                ):
+                    empty_result.fg_mask = self._models.bgsub.last_fg_mask
+                    empty_result.bg_u8 = self._models.bgsub.last_bg_u8
+                return empty_result
+
+            if superset_obb.num_detections == 0:
                 if caches is not None:
                     empty_det_indices = np.zeros(0, np.int32)
                     if caches.headtail is not None:
@@ -1205,184 +1448,220 @@ class InferenceRunner:
                                 corners=np.zeros((0, 4, 2), np.float32),
                             ),
                         )
-                empty_result = _build_frame_result(
-                    frame_idx, filtered_obb, np.zeros(0, np.int32), None, [], None, None
-                )
-                # Task 11 fix: surface the bg-sub masks here too, exactly like the
-                # non-empty path below (646-648). last_bg_u8 is the source of
-                # truth for "was the background established" -- it is None ONLY
-                # during the true first-frame warmup (see bgsub.py:167-170) and a
-                # real array on every frame after, even with zero detections.
-                # worker.py:2314 uses `bg_u8 is None` as its warmup sentinel; if
-                # this early return skipped the assignment, a post-warmup
-                # zero-detection frame (occlusion, animal left, threshold blip)
-                # would be misread as still-warming-up and silently drop Kalman
-                # aging + the CSV row for that frame.
-                if (
-                    self.config.detection_source == "bgsub"
-                    and self._models.bgsub is not None
-                ):
-                    empty_result.fg_mask = self._models.bgsub.last_fg_mask
-                    empty_result.bg_u8 = self._models.bgsub.last_bg_u8
-                return empty_result
+                return _empty_frame_result()
 
-            with span(N.RT_CROPS, units=filtered_obb.num_detections):
-                geometry = self.config.canonical
-                # F1 guard: every detection that will be canonicalized by ANY consumer
-                # (headtail, cnn, pose all warp through this one geometry -- see the
-                # comment below) gets its overflow_ratio recorded here, once, in the
-                # single place that already has both `filtered_obb` and `geometry` in
-                # scope -- rather than duplicating this at each of the many internal
-                # canonical_affine call sites (which would double-count a detection
-                # once per consumer stage).
+            from . import limits
+            from .downstream_select import (
+                apriltag_positions_to_raw,
+                cnn_positions_to_raw,
+                narrow_to_final,
+                run_superset_chunked,
+            )
+
+            geometry = self.config.canonical
+            with span(N.RT_CROPS, units=superset_obb.num_detections):
+                # F1 guard: every detection that will be canonicalized by ANY
+                # consumer (headtail, cnn, pose all warp through this one
+                # geometry) gets its overflow_ratio recorded here, once, rather
+                # than at each of the many internal canonical_affine call sites
+                # (which would double-count a detection once per consumer
+                # stage). The whole superset is canonicalized, so the whole
+                # superset is recorded (mirrors the batch Pipeline).
                 if (
                     self._models.headtail is not None
                     or self._models.cnn
                     or self._models.pose is not None
                 ):
-                    for _corners in filtered_obb.corners:
+                    for _corners in superset_obb.corners:
                         self.clipping_stats.record(_corners, geometry)
-                # Canonical (native-extent) crops are now only consumed by the pose stage;
-                # head-tail / CNN warp directly from the frame. Skip the extraction
-                # entirely when there is no pose model (e.g. OBB-only / identity clips).
-                # Foreign-ant masking (suppress_foreign_regions) mirrors legacy's
-                # unconditional suppress_foreign_obb: legacy has no realtime/batch
-                # split and always masks, so the realtime path must too.
-                pose_cfg = self.config.pose
-                suppress_foreign = (
-                    pose_cfg.suppress_foreign_regions if pose_cfg is not None else False
-                )
-                # PoseConfig.background_color was deleted: it was never populated by
-                # from_parameters (always (0, 0, 0)), a dead second home for the fill
-                # colour. Zero is now the one honest fill value everywhere.
-                background_color = (0, 0, 0)
-                canonical_crops = (
-                    extract_canonical_crops(
-                        frame,
-                        filtered_obb,
-                        geometry,
-                        self.runtime,
-                        suppress_foreign=suppress_foreign,
-                        background_color=background_color,
-                    )
-                    if self._models.pose is not None
-                    else None
-                )
-                aabb_crops = (
-                    extract_aabb_crops(
-                        frame, filtered_obb, padding=self.config.apriltag.crop_padding
-                    )
-                    if self._models.apriltag
-                    else []
+
+            # Foreign-ant masking (suppress_foreign_regions) mirrors legacy's
+            # unconditional suppress_foreign_obb: legacy has no realtime/batch
+            # split and always masks, so the realtime path must too.
+            pose_cfg = self.config.pose
+            suppress_foreign = (
+                pose_cfg.suppress_foreign_regions if pose_cfg is not None else False
+            )
+            # PoseConfig.background_color was deleted: it was never populated by
+            # from_parameters (always (0, 0, 0)), a dead second home for the fill
+            # colour. Zero is now the one honest fill value everywhere.
+            background_color = (0, 0, 0)
+
+            def _do_ht(chunk: OBBResult) -> HeadTailResult | None:
+                if not self._models.headtail:
+                    return None
+                return run_headtail(
+                    frame,
+                    chunk,
+                    self._models.headtail,
+                    self.config.headtail,
+                    self.runtime,
+                    geometry,
                 )
 
-            with span(N.RT_INDIVIDUAL, units=filtered_obb.num_detections):
+            def _do_cnn(chunk: OBBResult) -> list[CNNResult]:
+                return [
+                    run_cnn(frame, chunk, mdl, cfg, self.runtime, geometry)
+                    for cfg, mdl in zip(self.config.cnn_phases, self._models.cnn)
+                ]
 
-                def _do_ht() -> HeadTailResult | None:
-                    if not self._models.headtail:
-                        return None
-                    return run_headtail(
-                        frame,
-                        filtered_obb,
-                        self._models.headtail,
-                        self.config.headtail,
-                        self.runtime,
-                        geometry,
+            def _do_pose(chunk: OBBResult, canonical_crops) -> PoseResult | None:
+                if not self._models.pose:
+                    return None
+                return run_pose(
+                    canonical_crops,
+                    chunk,
+                    self._models.pose,
+                    self.config.pose,
+                    self.runtime,
+                    geometry,
+                )
+
+            def _do_at(chunk: OBBResult, aabb_crops) -> AprilTagResult | None:
+                if not self._models.apriltag:
+                    return None
+                return run_apriltag(
+                    aabb_crops,
+                    chunk,
+                    self._models.apriltag,
+                    self.config.apriltag,
+                )
+
+            def _run_chunk(chunk: OBBResult, foreign: ForeignSet):
+                with span(N.RT_CROPS, units=chunk.num_detections):
+                    # Canonical (native-extent) crops are only consumed by the
+                    # pose stage; head-tail / CNN warp directly from the frame.
+                    # Pose masks each crop against the FULL superset (``foreign``),
+                    # not the chunk, so a detection's pose never depends on N or
+                    # its chunk (R7).
+                    canonical_crops = (
+                        extract_canonical_crops(
+                            frame,
+                            chunk,
+                            geometry,
+                            self.runtime,
+                            suppress_foreign=suppress_foreign,
+                            background_color=background_color,
+                            foreign_set=foreign,
+                        )
+                        if self._models.pose is not None
+                        else None
+                    )
+                    aabb_crops = (
+                        extract_aabb_crops(
+                            frame, chunk, padding=self.config.apriltag.crop_padding
+                        )
+                        if self._models.apriltag
+                        else []
                     )
 
-                def _do_cnn() -> list[CNNResult]:
-                    return [
-                        run_cnn(frame, filtered_obb, mdl, cfg, self.runtime, geometry)
-                        for cfg, mdl in zip(self.config.cnn_phases, self._models.cnn)
-                    ]
-
-                def _do_pose() -> PoseResult | None:
-                    if not self._models.pose:
-                        return None
-                    return run_pose(
-                        canonical_crops,
-                        filtered_obb,
-                        self._models.pose,
-                        self.config.pose,
-                        self.runtime,
-                        geometry,
+                with span(N.RT_INDIVIDUAL, units=chunk.num_detections):
+                    # Run the individual-analysis stages SEQUENTIALLY, not in a
+                    # per-frame ThreadPoolExecutor. Profiling on CUDA (RT_PROFILE)
+                    # showed the per-frame pool cost ~834 ms/frame vs ~37 ms/frame
+                    # sequential (a 22x regression): spinning up a fresh 4-thread
+                    # pool every frame and driving CUDA / the onnxruntime SLEAP
+                    # backend from short-lived worker threads serialises on the
+                    # GIL and the default CUDA stream while paying thread +
+                    # context setup each frame, with no real parallelism on a
+                    # single GPU. Sequential brings realtime back to legacy parity
+                    # (~137 ms/frame total incl. frame read).
+                    return (
+                        _do_ht(chunk),
+                        _do_cnn(chunk),
+                        _do_pose(chunk, canonical_crops),
+                        _do_at(chunk, aabb_crops),
                     )
 
-                def _do_at() -> AprilTagResult | None:
-                    if not self._models.apriltag:
-                        return None
-                    return run_apriltag(
-                        aabb_crops,
-                        filtered_obb,
-                        self._models.apriltag,
-                        self.config.apriltag,
-                    )
-
-                # Run the individual-analysis stages SEQUENTIALLY, not in a per-frame
-                # ThreadPoolExecutor. Profiling on CUDA (RT_PROFILE) showed the per-frame
-                # pool cost ~834 ms/frame vs ~37 ms/frame sequential (a 22x regression):
-                # spinning up a fresh 4-thread pool every frame and driving CUDA / the
-                # onnxruntime SLEAP backend from short-lived worker threads serialises on
-                # the GIL and the default CUDA stream while paying thread + context setup
-                # each frame, with no real parallelism on a single GPU. Sequential brings
-                # realtime back to legacy parity (~137 ms/frame total incl. frame read).
-                ht_result = _do_ht()
-                cnn_results = _do_cnn()
-                pose_result = _do_pose()
-                at_result = _do_at()
+            # The superset is processed in DOWNSTREAM_CHUNK_SIZE-row chunks so a
+            # frame with up to MAX_DETECTIONS_PER_FRAME detections never
+            # materialises all its crops at once. Results are whole-superset,
+            # positionally aligned with superset_obb; cnn_all is phase-aligned
+            # (None for a phase with no result).
+            ht_all, cnn_all, pose_all, at_all = run_superset_chunked(
+                superset_obb,
+                _run_chunk,
+                len(self._models.cnn),
+                limits.DOWNSTREAM_CHUNK_SIZE,
+            )
 
             with span(N.RT_CACHE):
-                # Persist downstream results (keyed by det_indices) so the backward pass
-                # can replay them via load_frame -- mirrors _run_batch's cache writes.
+                # Persist RAW downstream results for the whole superset, keyed by
+                # RAW detection-cache index (CNN det_index and AprilTag
+                # det_indices converted to raw) so the backward pass can replay
+                # any N via load_frame -- mirrors the batch Pipeline's writes.
                 if caches is not None:
-                    if caches.headtail is not None and ht_result is not None:
+                    if caches.headtail is not None and ht_all is not None:
                         caches.headtail.write_frame(
                             frame_idx,
-                            det_indices=det_indices,
-                            heading_hints=ht_result.heading_hints,
-                            heading_confidences=ht_result.heading_confidences,
-                            directed_mask=ht_result.directed_mask,
+                            det_indices=superset_idx,
+                            heading_hints=ht_all.heading_hints,
+                            heading_confidences=ht_all.heading_confidences,
+                            directed_mask=ht_all.directed_mask,
                         )
-                    for cache, cnn_result in zip(caches.cnn, cnn_results):
-                        if cnn_result is not None:
-                            cache.write_frame(
-                                frame_idx, predictions=cnn_result.predictions
-                            )
-                    if caches.pose is not None and pose_result is not None:
+                    # A phase with no result writes explicit empty coverage,
+                    # exactly like CacheWriter (batch), so a cache written by
+                    # either path replays identically.
+                    for cache, cnn_result in zip(caches.cnn, cnn_all):
+                        cache.write_frame(
+                            frame_idx,
+                            predictions=(
+                                []
+                                if cnn_result is None
+                                else cnn_positions_to_raw(
+                                    cnn_result, superset_idx
+                                ).predictions
+                            ),
+                        )
+                    if caches.pose is not None and pose_all is not None:
                         caches.pose.write_frame(
                             frame_idx,
-                            det_indices=det_indices,
-                            keypoints=pose_result.keypoints,
-                            valid_mask=pose_result.valid_mask,
+                            det_indices=superset_idx,
+                            keypoints=pose_all.keypoints,
+                            valid_mask=pose_all.valid_mask,
                         )
-                    if caches.apriltag is not None and at_result is not None:
-                        caches.apriltag.write_frame(frame_idx, result=at_result)
+                    if caches.apriltag is not None and at_all is not None:
+                        caches.apriltag.write_frame(
+                            frame_idx,
+                            result=apriltag_positions_to_raw(at_all, superset_idx),
+                        )
 
+            if final_obb.num_detections == 0:
+                # The superset survived the N-free filters but the final N cut
+                # left nothing: the superset caches are written above; the frame
+                # itself is empty (no identity evidence, like the empty path).
+                return _empty_frame_result()
+
+            # Final-N rows inside the superset; raises if final is not a subset.
+            ht_result, cnn_results, pose_result, at_result = narrow_to_final(
+                superset_idx, final_idx, ht_all, cnn_all, pose_all, at_all
+            )
+
+            with span(N.RT_CACHE):
                 # Identity Phase 3, Task 4 (realtime seam): build + persist this
-                # frame's identity evidence inline, from the SAME in-hand
-                # filtered_obb/cnn_results/at_result -- no read-back needed (unlike
+                # frame's identity evidence inline, from the in-hand FINAL-N
+                # final_obb/cnn_results/at_result -- no read-back needed (unlike
                 # the batch seam, which re-derives det_ids from a disk read-back
-                # after the pass). Identical evidence contract to the batch path:
-                # det_ids come from filtered_obb.detection_ids (stable ids, aligned
-                # by position with CNN/AprilTag det_index, both 0..N-1 over this same
-                # filtered_obb). Only runs when caches are open for writing -- a pure
-                # in-memory/preview realtime call (cache_dir=None) writes nothing.
+                # after the pass). det_ids come from final_obb.detection_ids
+                # (stable ids, aligned by position with the narrowed CNN/AprilTag
+                # det_index, both 0..K-1 over this same final_obb). Only runs when
+                # caches are open for writing -- a pure in-memory/preview realtime
+                # call (cache_dir=None) writes nothing.
                 if caches is not None and self._identity_stage is not None:
                     self._write_identity_evidence_realtime(
-                        frame_idx, filtered_obb, cnn_results, at_result
+                        frame_idx, final_obb, cnn_results, at_result
                     )
 
             with span(N.RT_FINALIZE):
                 frame_result = _build_frame_result(
                     frame_idx,
-                    filtered_obb,
-                    det_indices,
+                    final_obb,
+                    final_idx,
                     ht_result,
                     cnn_results,
                     pose_result,
                     at_result,
                 )
-
                 # Task 10b: surface the bg-sub masks for the SHOW_FG / SHOW_BG preview
                 # overlays. Realtime-only, like streaming_payload below: run_bgsub just
                 # stashed these on the (strictly sequential) model, so "last" is this
@@ -1439,7 +1718,9 @@ class InferenceRunner:
         key = identity_evidence_cache_key(
             self._identity_evidence.catalog_spec,
             self._identity_evidence.per_factor_temps(),
-            self._video_sig,
+            _identity_evidence_base_signature(
+                self.config, self._video_sig, self._roi_mask
+            ),
             unknown_prior=float(self.config.identity_unknown_prior),
         )
         return build_evidence_cache_path(
@@ -1496,7 +1777,37 @@ class InferenceRunner:
         if evidences:
             self._identity_evidence_cache.save_frame(frame_idx, evidences)
 
-    def _write_identity_evidence_batch(self, start_frame: int, end_frame: int) -> None:
+    def ensure_identity_evidence_sidecar(
+        self,
+        start_frame: int,
+        end_frame: int,
+        *,
+        out_path: "Path | None" = None,
+    ) -> "Path | None":
+        """Return the "batch" identity-evidence sidecar, rebuilding it if absent.
+
+        On cache reuse no batch pass runs, so the sidecar for the CURRENT key
+        (filters + N) may not exist yet -- e.g. a replay at a different N than
+        the caches were written with. It is rebuilt here from the per-animal
+        caches through the raw-index replay loaders; no stage model runs.
+        ``out_path`` overrides the destination (a read-only replay must not
+        write into the cache directory). Returns ``None`` when this runner has
+        no identity-evidence config.
+        """
+        if self._identity_evidence is None or self.cache_dir is None:
+            return None
+        path = (
+            Path(out_path)
+            if out_path is not None
+            else self._identity_evidence_sidecar_path("batch")
+        )
+        if not path.exists():
+            self._write_identity_evidence_batch(start_frame, end_frame, path)
+        return path
+
+    def _write_identity_evidence_batch(
+        self, start_frame: int, end_frame: int, out_path: "Path | None" = None
+    ) -> None:
         """Batch seam: read back the just-flushed raw caches, write the sidecar.
 
         Called AFTER `run_batch_pass`'s caches are closed (flushed to disk) --
@@ -1513,8 +1824,10 @@ class InferenceRunner:
             self._video_sig,
             self._roi_mask,
             read_only=True,
+            filter_hash=self._cache_filter_hash,
         )
-        out_path = self._identity_evidence_sidecar_path("batch")
+        if out_path is None:
+            out_path = self._identity_evidence_sidecar_path("batch")
         write_identity_evidence_sidecar(
             read_caches,
             self.config,
@@ -1523,6 +1836,7 @@ class InferenceRunner:
             out_path,
             self._identity_catalog.labels,
             roi_mask=self._frame_space_roi_mask(self._video_path),
+            written_config=self._cache_filter_config,
         )
 
     def detect_batch_raw(
@@ -1552,9 +1866,12 @@ class InferenceRunner:
         raw_results: list[OBBResult] = []
         for raw, f_idx in zip(raw_list, frame_indices):
             if isinstance(raw, _RawOBBTensors):
-                raw_obb = materialize_tensors(raw, self.config.obb.raw_detection_cap)
+                raw_obb = materialize_tensors(
+                    raw, effective_raw_detection_cap(self.config.obb)
+                )
             else:
                 raw_obb = raw
+            raw_obb = self._rank_and_bound(raw_obb, f_idx)
             raw_obb = OBBResult(
                 frame_idx=f_idx,
                 centroids=raw_obb.centroids,
@@ -1622,7 +1939,10 @@ class InferenceRunner:
         return resolved
 
     def _build_pipeline(
-        self, caches: _CacheSet, roi_mask: "np.ndarray | None" = None
+        self,
+        caches: _CacheSet,
+        roi_mask: "np.ndarray | None" = None,
+        reuse_plan: _PartialReusePlan | None = None,
     ) -> Pipeline:
         """Construct the depth=1 Pipeline that drives the batch stage layer.
 
@@ -1632,27 +1952,58 @@ class InferenceRunner:
 
         ``roi_mask`` (frame-space) is threaded onto ``PipelineStages`` so the OBB
         stage can ROI-gate slice tiles; ``None`` keeps the full tile grid.
+
+        ``reuse_plan`` (partial reuse): detections are read from the detection
+        cache instead of running the detector, and only the stale per-animal
+        stages run and are written. Head-tail still runs (unwritten) when a
+        stale CNN phase or pose needs it, so their inputs match a fresh run.
         """
+        headtail_model = self._models.headtail
+        cnn_models = list(self._models.cnn)
+        pose_model = self._models.pose
+        apriltag_model = self._models.apriltag
+        detection_reader = None
+        if reuse_plan is not None:
+            detection_reader = caches.detection.read_frame
+            cnn_models = [
+                model if stale else None
+                for model, stale in zip(cnn_models, reuse_plan.cnn)
+            ]
+            if not reuse_plan.pose:
+                pose_model = None
+            if not reuse_plan.apriltag:
+                apriltag_model = None
+            if not (reuse_plan.headtail or any(reuse_plan.cnn) or reuse_plan.pose):
+                headtail_model = None
         stages = PipelineStages(
             config=self.config,
             obb_models=self._models.obb,
             bgsub_model=self._models.bgsub,
-            headtail_model=self._models.headtail,
-            cnn_models=self._models.cnn,
-            pose_model=self._models.pose,
-            apriltag_model=self._models.apriltag,
+            headtail_model=headtail_model,
+            cnn_models=cnn_models,
+            pose_model=pose_model,
+            apriltag_model=apriltag_model,
             roi_mask=roi_mask,
         )
+        writes = reuse_plan or _PartialReusePlan(
+            headtail=True,
+            cnn=tuple(True for _ in caches.cnn),
+            pose=True,
+            apriltag=True,
+        )
         handles: dict[str, CacheHandle] = {}
-        if caches.detection is not None:
+        if caches.detection is not None and reuse_plan is None:
             handles["detection"] = caches.detection
-        if caches.headtail is not None:
+        if caches.headtail is not None and writes.headtail:
             handles["headtail"] = caches.headtail
-        for cnn_cfg, cnn_handle in zip(self.config.cnn_phases, caches.cnn):
-            handles[f"cnn_{cnn_cfg.label}"] = cnn_handle
-        if caches.pose is not None:
+        for cnn_cfg, cnn_handle, stale in zip(
+            self.config.cnn_phases, caches.cnn, writes.cnn
+        ):
+            if stale:
+                handles[f"cnn_{cnn_cfg.label}"] = cnn_handle
+        if caches.pose is not None and writes.pose:
             handles["pose"] = caches.pose
-        if caches.apriltag is not None:
+        if caches.apriltag is not None and writes.apriltag:
             handles["apriltag"] = caches.apriltag
         # depth>=2 uses an async CacheWriter so cache writes never stall the
         # compute path; the consumer thread still calls the direct write helpers
@@ -1666,6 +2017,8 @@ class InferenceRunner:
             writer,
             depth=self.config.pipeline_depth,
             clipping_stats=self.clipping_stats,
+            detection_limit_stats=self.detection_limit_stats,
+            detection_reader=detection_reader,
         )
 
     def run_batch_pass(
@@ -1676,6 +2029,7 @@ class InferenceRunner:
         end_frame: int | None = None,
         should_stop=None,
         roi_mask: "np.ndarray | None" = None,
+        reuse_detection_cache: bool = False,
     ) -> None:
         from .sources import make_frame_source
 
@@ -1698,20 +2052,70 @@ class InferenceRunner:
                 video_path, self.runtime, start_frame, end_frame
             )
 
+            # Recover the clamped bounds from the reader so range_total matches.
+            start_frame = frame_source.start_frame
+            end_frame = frame_source.end_frame
+            range_total = frame_source.frame_count
+
+            # Partial reuse (opt-in: the caller allows cache reuse): when the
+            # detection cache already covers this exact range under the
+            # current detection key, a changed replay filter only re-keys the
+            # per-animal caches -- read detections back instead of running the
+            # detector, and recompute only the stale per-animal stages.
+            reuse_plan = None
+            if reuse_detection_cache:
+                probe = _open_caches(
+                    self.config,
+                    self.cache_dir,
+                    self._video_sig,
+                    self._roi_mask,
+                    read_only=True,
+                )
+                reuse_plan = partial_reuse_plan(probe, start_frame, end_frame)
+                probe.close()
+                if reuse_plan is None:
+                    logger.info(
+                        "Inference caches cannot be partially reused for frames "
+                        "%d-%d (detection not covering exactly this range under "
+                        "the current settings, or a corrupt member); running "
+                        "the full inference pass.",
+                        start_frame,
+                        end_frame,
+                    )
+                elif not reuse_plan.any_recompute:
+                    logger.info(
+                        "Every inference cache is reusable for frames %d-%d; "
+                        "detections are reused from the cache and nothing is "
+                        "recomputed (detection-limit hits were reported when "
+                        "the cache was built).",
+                        start_frame,
+                        end_frame,
+                    )
+                    frame_source.close()
+                    self._write_identity_evidence_batch(start_frame, end_frame)
+                    return
+                else:
+                    logger.info(
+                        "Detections for frames %d-%d are reused from the cache "
+                        "(the detector does not run; detection-limit hits were "
+                        "reported when the cache was built); recomputing stale "
+                        "per-animal stages only (%s).",
+                        start_frame,
+                        end_frame,
+                        reuse_plan,
+                    )
+
             with span(N.OPEN_CACHES):
                 caches = _open_caches(
                     self.config,
                     self.cache_dir,
                     self._video_sig,
                     self._roi_mask,
-                    write_mode="fresh" if start_frame == 0 else "resume",
+                    write_mode=(
+                        "fresh" if start_frame == 0 and reuse_plan is None else "resume"
+                    ),
                 )
             self._caches = caches
-
-            # Recover the clamped bounds from the reader so range_total matches.
-            start_frame = frame_source.start_frame
-            end_frame = frame_source.end_frame
-            range_total = frame_source.frame_count
 
             # The whole pass is now driven by Pipeline.run: it owns the windowing and
             # (at depth>=2) the producer/consumer double buffer. The video decode is
@@ -1723,7 +2127,9 @@ class InferenceRunner:
             # (the cache key above already folded the mask by content, independent
             # of this resample).
             pipeline = self._build_pipeline(
-                caches, roi_mask=self._frame_space_roi_mask(video_path)
+                caches,
+                roi_mask=self._frame_space_roi_mask(video_path),
+                reuse_plan=reuse_plan,
             )
             complete_pass = False
             try:
@@ -1796,6 +2202,12 @@ class InferenceRunner:
         native-frame ROI transform rather than reimplementing one or the other.
         """
 
+        filtered_obb, det_indices, _raw, _roi = self._load_filtered_with_raw(frame_idx)
+        return filtered_obb, det_indices
+
+    def _load_filtered_with_raw(self, frame_idx: int):
+        """``load_filtered_obb`` plus the raw frame and frame-space ROI used."""
+
         if self.cache_dir is None:
             raise RuntimeError("cache_dir not set — cannot load cached frames")
         if self._caches is None:
@@ -1805,6 +2217,7 @@ class InferenceRunner:
                 self._video_sig,
                 self._roi_mask,
                 read_only=True,
+                filter_hash=self._cache_filter_hash,
             )
         if not self._caches.set_manifest_valid:
             raise RuntimeError("inference cache set manifest is invalid or incomplete")
@@ -1818,8 +2231,9 @@ class InferenceRunner:
             raise KeyError(f"Frame {frame_idx} not found in detection cache")
 
         # Cache-only by construction: bg-sub carries cross-frame state and must
-        # never be re-run for random access — filter_for_source is the identity
-        # on the bg-sub branch, so this stays a pure cache read.
+        # never be re-run for random access — filter_for_source's bg-sub branch
+        # only applies the replay-time N rules to the stored contours, so this
+        # stays a pure cache read.
         #
         # roi_mask: cached frames are read back at native video-frame geometry
         # (the batch pass never resizes), so the mask must be resampled into
@@ -1828,25 +2242,38 @@ class InferenceRunner:
         # pipeline. Without this, ROI filtering silently never applied to any
         # cached/replayed YOLO-OBB read (forward cache reuse AND the backward
         # pass), regardless of the ROI configured at construction.
-        return filter_for_source(
-            self.config, raw_obb, self._frame_space_roi_mask(self._video_path)
-        )
+        roi = self._frame_space_roi_mask(self._video_path)
+        filtered_obb, det_indices = filter_for_source(self.config, raw_obb, roi)
+        return filtered_obb, det_indices, raw_obb, roi
 
     def load_frame(self, frame_idx: int) -> FrameResult:
         """Load one cached frame with its production filtering and evidence."""
 
-        filtered_obb, det_indices = self.load_filtered_obb(frame_idx)
-        assert self._caches is not None  # established by load_filtered_obb
-        ht_result = _load_headtail_for_indices(
-            self._caches.headtail, frame_idx, det_indices, filtered_obb
+        filtered_obb, det_indices, raw_obb, roi = self._load_filtered_with_raw(
+            frame_idx
         )
-        cnn_results = _load_cnn_for_indices(
-            self._caches.cnn, self.config.cnn_phases, frame_idx, det_indices
+        assert self._caches is not None  # established by _load_filtered_with_raw
+        _require_within_written_superset(
+            self._cache_filter_config, raw_obb, roi, det_indices, frame_idx
         )
-        pose_result = _load_pose_for_indices(
-            self._caches.pose, frame_idx, det_indices, filtered_obb
-        )
-        at_result = _load_apriltag(self._caches.apriltag, frame_idx)
+        try:
+            ht_result = _load_headtail_for_indices(
+                self._caches.headtail, frame_idx, det_indices, filtered_obb
+            )
+            cnn_results = _load_cnn_for_indices(
+                self._caches.cnn, self.config.cnn_phases, frame_idx, det_indices
+            )
+            pose_result = _load_pose_for_indices(
+                self._caches.pose, frame_idx, det_indices, filtered_obb
+            )
+        except DownstreamCacheError as exc:
+            raise DownstreamCacheError(
+                f"frame {frame_idx}: the current detection filters admit a "
+                "detection the per-animal (head-tail/CNN/pose) caches hold no "
+                "result for -- per-animal results need recomputing for these "
+                f"filter settings (rerun inference without cache reuse). {exc}"
+            ) from exc
+        at_result = _load_apriltag(self._caches.apriltag, frame_idx, det_indices)
 
         return _build_frame_result(
             frame_idx,

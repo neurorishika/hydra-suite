@@ -126,14 +126,13 @@ def test_cache_key_carries_schema_version():
     assert k.schema_version == CACHE_SCHEMA_VERSION
 
 
-def test_cache_schema_version_is_v5_content_identity_bump():
-    """Task 4 (portable-jobs): model and video identity became CONTENT-based
-    (sha256 of bytes) rather than (absolute path, mtime)-based, so old
-    caches keyed on the removed model_path/model_mtime fields are no longer
-    even constructible -- CACHE_SCHEMA_VERSION must be bumped to invalidate
-    them. See ``cache/base.py``'s v5 changelog entry.
+def test_cache_schema_version_is_v6_n_independent_bump():
+    """N-independent extraction: detection caches now store every candidate
+    above the 0.01 extraction floor up to the 1024 limit, confidence-ranked,
+    and N left the detection key -- old caches (2N-capped, 1e-3 floor) must
+    be invalidated. See ``cache/base.py``'s v6 changelog entry.
     """
-    assert CACHE_SCHEMA_VERSION == 5
+    assert CACHE_SCHEMA_VERSION == 6
 
 
 def test_cnn_and_headtail_keys_differ_across_schema_v4_v5():

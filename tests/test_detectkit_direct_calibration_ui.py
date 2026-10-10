@@ -1017,7 +1017,7 @@ def test_each_confidence_row_has_its_own_overlay(tmp_path):
     """Two rows of one geometry+merge differ only in confidence -- and they
     must NOT share an overlay. The gate itself is post-merge, but a shared
     permissive preview would have to store an UNCAPPED post-filter set, and
-    that cap is clamped at MAX_DOWNSTREAM_CROPS_PER_FRAME."""
+    that cap is bounded by MAX_DETECTIONS_PER_FRAME."""
     low = _overlay_point(
         confidence=0.05, merge_threshold=0.5, candidate_index=0, label="Training"
     )

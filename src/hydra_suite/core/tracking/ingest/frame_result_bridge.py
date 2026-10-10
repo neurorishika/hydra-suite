@@ -290,6 +290,7 @@ def _density_detection_cache(runner):
             runner._video_sig,
             runner._roi_mask,
             read_only=True,
+            filter_hash=getattr(runner, "_cache_filter_hash", None),
         )
 
     det_cache = runner._caches.detection

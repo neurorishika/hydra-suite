@@ -51,6 +51,7 @@ from hydra_suite.training.contracts import (
 )
 from hydra_suite.training.geometry_levels import GeometryLevel
 from hydra_suite.training.registry import finalize_run_record
+from hydra_suite.utils.tiling_spec import DEFAULT_YOLO_IMGSZ
 from hydra_suite.widgets.workers import BaseWorker, bounded_worker_message
 
 from ...jobs.dataset_preparation_sidecar import (
@@ -2193,7 +2194,9 @@ QTabBar::tab:selected {
             if role in direct_roles:
                 self.slice_group.set_model_input_size(direct_roles[role].value())
                 return
-        self.slice_group.set_model_input_size(640)
+        # No direct role selected: the project direct OBB input, never a
+        # literal 640 (F1).
+        self.slice_group.set_model_input_size(self.spin_imgsz_obb_direct.value())
 
     def _source_fit_summary(self) -> str:
         sources = list(self._project.sources)
@@ -2708,7 +2711,7 @@ QTabBar::tab:selected {
                 return self.spin_imgsz_seq_crop_segment.value()
         except ImportError:
             pass
-        return 640
+        return DEFAULT_YOLO_IMGSZ
 
     def _base_model_for_role(self, role) -> str:
         try:

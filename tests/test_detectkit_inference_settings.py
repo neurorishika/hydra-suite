@@ -84,12 +84,14 @@ def test_inference_settings_dialog_is_runtime_only(qapp, tmp_path):
     defaults = InferenceRunSettings.from_project(project, confidence_threshold=0.5)
     dialog = InferenceSettingsDialog(defaults, defaults)
     dialog.chk_sliced.setChecked(True)
-    dialog.combo_geometry.setCurrentText("auto_object")
-    dialog.spin_target_size.setValue(200)
+    dialog.combo_geometry.setCurrentIndex(dialog.combo_geometry.findData("auto_object"))
+    dialog.spin_object_fraction.setValue(0.3)
     result = dialog.settings()
 
     assert result.slice_settings.enabled is True
-    assert result.slice_settings.target_sizes == [200.0]
+    # Fraction-only (F1): no 640-anchored pixel list is written.
+    assert result.slice_settings.target_size_fractions == [0.3]
+    assert result.slice_settings.object_tile_fraction == 0.3
     assert project.slice_settings.enabled is False
 
 

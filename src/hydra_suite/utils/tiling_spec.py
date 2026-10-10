@@ -40,6 +40,15 @@ OVERLAP_MAX = 0.9  # same ceiling SliceConfig/_slice_config_from_params clamp to
 # tile clamp; outside it the clamped tile no longer scales with the body.
 OVERLAP_MARGIN = 0.05
 DEFAULT_OVERLAP = 0.2
+# The YOLO model input assumed when none is configured (Ultralytics' default).
+# Numerically equal to slice_geometry.LEGACY_TARGET_SIZE_IMGSZ, but that name
+# means "the anchor legacy PIXEL targets were expressed at" -- a different
+# fact, so this gets its own name.
+DEFAULT_YOLO_IMGSZ = 640
+# DetectKit's single-scale training fraction: the scalar fallback when no
+# scale set applies. Deliberately not the yolo_infer 0.15 (TrackerKit's
+# serving default) nor the yolo_train set's median.
+DEFAULT_TRAIN_OBJECT_TILE_FRACTION = 0.10
 FRACTION_MIN = 0.01  # tile_size_for_mode's clamp
 FRACTION_MAX = 0.9
 

@@ -211,7 +211,8 @@ def test_profile_session_round_trip_through_save_and_restore(
     _select_first_model_with_suffix(
         window._detection_panel.combo_yolo_model, "direct_keep.pt"
     )
-    window._detection_panel.combo_slice_geometry.setCurrentText("auto_object")
+    geometry = window._detection_panel.combo_slice_geometry
+    geometry.setCurrentIndex(geometry.findData("auto_object"))
     window._detection_panel._apply_slice_meta_values(high_recall["id"])
     assert window.advanced_config["slice_profile_id"] == high_recall["id"]
     assert window.advanced_config["slice_object_tile_fraction"] == 0.45

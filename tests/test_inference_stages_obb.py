@@ -380,9 +380,12 @@ def test_load_obb_models_caps_every_model_boundary_for_adversarial_targets(monke
 
     obb_mod.load_obb_models(config, runtime)
 
+    from hydra_suite.core.inference.limits import MAX_DETECTIONS_PER_FRAME
+
+    # The limit plus one probe row, so a truncated frame is detectable.
     assert calls == [
-        ("/detect.pt", obb_mod.MAX_RAW_CANDIDATES_PER_FRAME),
-        ("/obb.pt", obb_mod.MAX_RAW_CANDIDATES_PER_FRAME),
+        ("/detect.pt", MAX_DETECTIONS_PER_FRAME + 1),
+        ("/obb.pt", MAX_DETECTIONS_PER_FRAME + 1),
     ]
 
 

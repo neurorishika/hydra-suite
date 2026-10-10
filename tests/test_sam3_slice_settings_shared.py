@@ -102,6 +102,8 @@ def test_hidden_sam3_controls_have_no_contract_field(qapp):
         assert name not in emitted
 
     widget.show()
+    # S4: these rows live in the collapsed-by-default Advanced section.
+    widget.set_advanced_expanded(True)
     assert widget.spin_neg.isVisible() is False
     assert widget.spin_merge.isVisible() is False
     assert widget.chk_balance_loss.isVisible() is False
@@ -134,8 +136,9 @@ def test_min_area_ratio_is_live_in_both_modes_with_mode_specific_wording(qapp):
     assert panel.params().min_area_ratio == pytest.approx(0.4)
 
 
-def test_yolo_mode_is_the_default_and_keeps_its_pixel_list(qapp):
-    """Characterization guard: the YOLO contract is untouched by the sharing."""
+def test_yolo_mode_is_the_default_and_emits_fractions_only(qapp):
+    """Characterization guard: the YOLO contract is fractions; no 640 pixel list (F1)."""
+    from hydra_suite.detectkit.gui.models import SliceTrainingSettings
     from hydra_suite.detectkit.gui.panels.slice_settings_widget import (
         SliceSettingsGroup,
     )
@@ -144,8 +147,11 @@ def test_yolo_mode_is_the_default_and_keeps_its_pixel_list(qapp):
     assert widget.backend == "yolo"
     widget.txt_targets.setText("0.5")
     settings = widget.to_settings()
-    assert settings.target_sizes == [320.0]
     assert settings.target_size_fractions == [0.5]
+    assert settings.target_fractions() == [0.5]
+    # No 640-derived list: target_sizes is the untouched (ignored) default.
+    assert settings.target_sizes == SliceTrainingSettings().target_sizes
+    assert 320.0 not in settings.target_sizes
     with pytest.raises(RuntimeError):
         widget.to_sam3_tiling()
 

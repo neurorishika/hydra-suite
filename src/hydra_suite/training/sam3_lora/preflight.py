@@ -191,10 +191,25 @@ _EXTRA_BATCH_DEVICE_BYTES = 2 * GiB
 _DEVICE_STEADY_BYTES = 8 * GiB
 _MASK_DEVICE_BYTES_PER_PIXEL = 16
 _MASK_HOST_BYTES_PER_PIXEL = 5
-_MAX_COCO_METADATA_BYTES = 16 * MiB
 _MAX_JSON_DEPTH = 24
-_MAX_JSON_VALUES = 2_000_000
-_MAX_ESTIMATED_PARSED_BYTES = 96 * MiB
+# The COCO metadata pre-scan bounds what the stdlib decoder may materialize.
+# Its budget is a share of THIS host's usable memory (available minus the same
+# reserve resource admission applies), so a bigger corpus is admitted on a box
+# that can hold it. The JSON is parsed both here and again in the sidecar, and
+# its decoded size already counts toward the host peak, so the guard takes only
+# a quarter. Never below the former fixed bound (96 MiB), which any host the
+# trainer can run on affords.
+_METADATA_PARSE_BUDGET_FRACTION = 0.25
+_MIN_METADATA_PARSE_BUDGET_BYTES = 96 * MiB
+# And never above 2 GiB: the guard reads and pre-scans the file in the launcher
+# (a pure-Python scan, ~8 MB/s) before refusing, so a budget that tracked host
+# RAM unbounded would cost minutes per preflight call on a big box.
+_MAX_METADATA_PARSE_BUDGET_BYTES = 2 * GiB
+# estimated_parsed >= 2 * raw and >= 64 * values (see the pre-scan formula), so
+# these two derived caps can only refuse what the budget would refuse anyway,
+# but they refuse it before reading or scanning the bytes.
+_PARSED_BYTES_PER_RAW_BYTE = 2
+_PARSED_BYTES_PER_VALUE = 64
 _MAX_NEGATIVE_QUERIES_PER_TILE = SAM3_MAX_NEGATIVE_QUERIES_PER_TILE
 _MAX_NEGATIVE_PROMPT_COUNT = SAM3_MAX_NEGATIVE_PROMPT_COUNT
 _MAX_NEGATIVE_PROMPT_BYTES = SAM3_MAX_NEGATIVE_PROMPT_BYTES
@@ -343,8 +358,32 @@ def _free_disk_bytes(path: str) -> int:
     return int(shutil.disk_usage(target).free)
 
 
-def _validate_json_materialization_bound(raw: bytes, path: Path) -> None:
+def _metadata_parse_budget_bytes() -> int:  # seam for tests
+    """Host-derived bound on the decoded size of one COCO metadata file."""
+
+    import psutil
+
+    host = psutil.virtual_memory()
+    reserve = max(
+        _MINIMUM_HOST_RESERVE_BYTES,
+        int(int(host.total) * _MINIMUM_HOST_RESERVE_FRACTION),
+    )
+    usable = max(0, int(host.available) - reserve)
+    return min(
+        _MAX_METADATA_PARSE_BUDGET_BYTES,
+        max(
+            _MIN_METADATA_PARSE_BUDGET_BYTES,
+            int(usable * _METADATA_PARSE_BUDGET_FRACTION),
+        ),
+    )
+
+
+def _validate_json_materialization_bound(
+    raw: bytes, path: Path, budget_bytes: int
+) -> None:
     """Bound JSON object amplification before calling the stdlib decoder."""
+
+    max_values = budget_bytes // _PARSED_BYTES_PER_VALUE
 
     stack: list[int] = []
     in_string = False
@@ -390,10 +429,11 @@ def _validate_json_materialization_bound(raw: bytes, path: Path) -> None:
         elif not scalar_open:
             value_count += 1
             scalar_open = True
-        if value_count > _MAX_JSON_VALUES:
+        if value_count > max_values:
             raise ValueError(
                 f"COCO metadata {path} exceeds the JSON cardinality cap "
-                f"of {_MAX_JSON_VALUES} values"
+                f"of {max_values} values (derived from this host's "
+                f"{_format_budget(budget_bytes)} metadata parse budget)"
             )
 
     if in_string or stack:
@@ -401,29 +441,40 @@ def _validate_json_materialization_bound(raw: bytes, path: Path) -> None:
     estimated_parsed_bytes = (
         2 * len(raw) + 2 * string_bytes + 64 * value_count + 72 * container_count
     )
-    if estimated_parsed_bytes > _MAX_ESTIMATED_PARSED_BYTES:
+    if estimated_parsed_bytes > budget_bytes:
         raise ValueError(
             f"COCO metadata {path} exceeds the parsed-memory cap of "
-            f"{_MAX_ESTIMATED_PARSED_BYTES} bytes"
+            f"{budget_bytes} bytes (this host's metadata parse budget: "
+            f"{_METADATA_PARSE_BUDGET_FRACTION:.0%} of usable host memory)"
         )
 
 
-def _load_coco(path: Path) -> tuple[dict[str, Any], int]:
+def _format_budget(budget_bytes: int) -> str:
+    return f"{budget_bytes / GiB:.2f} GiB"
+
+
+def _load_coco(
+    path: Path, *, budget_bytes: Optional[int] = None
+) -> tuple[dict[str, Any], int]:
     try:
         size = path.stat().st_size
-        if size > _MAX_COCO_METADATA_BYTES:
+        if budget_bytes is None:
+            budget_bytes = _metadata_parse_budget_bytes()
+        max_raw = budget_bytes // _PARSED_BYTES_PER_RAW_BYTE
+        if size > max_raw:
             raise ValueError(
                 f"COCO metadata {path} is {size} bytes; the metadata-only "
-                f"preflight cap is {_MAX_COCO_METADATA_BYTES} bytes"
+                f"preflight cap is {max_raw} bytes (half of this host's "
+                f"{_format_budget(budget_bytes)} metadata parse budget)"
             )
         with path.open("rb") as stream:
-            raw = stream.read(_MAX_COCO_METADATA_BYTES + 1)
-        if len(raw) > _MAX_COCO_METADATA_BYTES:
+            raw = stream.read(max_raw + 1)
+        if len(raw) > max_raw:
             raise ValueError(
                 f"COCO metadata {path} grew beyond the metadata-only "
-                f"preflight cap of {_MAX_COCO_METADATA_BYTES} bytes"
+                f"preflight cap of {max_raw} bytes"
             )
-        _validate_json_materialization_bound(raw, path)
+        _validate_json_materialization_bound(raw, path, budget_bytes)
         value = json.loads(raw)
     except FileNotFoundError:
         return {}, 0
@@ -1676,11 +1727,21 @@ def assess_preflight(
             "Label quality has not been acknowledged; affirm the training labels "
             "are good before SAM3 learns from them."
         )
-    if getattr(spec, "resume_from", ""):
-        refusals.append(
-            "resume_from is set, but SAM3 LoRA training does not checkpoint "
-            "optimiser state; resuming is not supported."
-        )
+    resume_from = str(getattr(spec, "resume_from", "") or "")
+    if resume_from:
+        from .resume import ResumeError, parse_resume_checkpoint
+
+        try:
+            point = parse_resume_checkpoint(resume_from)
+        except ResumeError as exc:
+            refusals.append(str(exc))
+        else:
+            epochs = int(getattr(params, "epochs", 0) or 0)
+            if epochs and point.epoch >= epochs:
+                refusals.append(
+                    f"resume_from is epoch {point.epoch}, but the run trains "
+                    f"{epochs} epochs; there is nothing left to train."
+                )
     return Sam3PreflightDecision(
         admitted=not refusals,
         request=request,

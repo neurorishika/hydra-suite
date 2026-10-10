@@ -192,34 +192,46 @@ def test_export_does_not_reuse_a_cache_capped_below_its_own_ceiling(monkeypatch)
     assert detection_cache_key(export, None) != detection_cache_key(tracking, None)
 
 
-def test_export_does_not_inherit_tracking_tile_memory_budget(monkeypatch):
+def test_export_does_not_inherit_tracking_tile_memory_budget(monkeypatch, caplog):
     """Tile memory budget is an EXECUTION control, not detection geometry.
 
     Slice geometry must match tracking (what gets detected); the tile memory
     budget must not, because it only decides how many tiles ride in one model
-    call. Export runs a much higher detection ceiling than tracking, and the
-    dense segment-mask term scales with that ceiling, so inheriting tracking's
-    budget made a sliced segment export inadmissible -- refused outright, with
-    zero labels, rather than throttled to smaller chunks.
+    call. Export takes the full ceiling, so a 1024px segment tile at the
+    N-free extraction cap admits a larger chunk than tracking's 256 MiB budget
+    would (and no oversize WARNING: the dense-mask term is bounded by
+    DENSE_MASK_ESTIMATE_CANDIDATES).
     """
-    from hydra_suite.core.inference.stages.slicing import (
-        MAX_TILE_BATCH_BYTES,
-        estimated_prediction_job_bytes,
-    )
+    from hydra_suite.core.inference.stages import slicing
+    from hydra_suite.core.inference.stages.obb import effective_raw_detection_cap
+    from hydra_suite.utils.slice_geometry import SlicePlan
 
+    monkeypatch.setattr(slicing, "_OVERSIZE_WARNED", set())
     params = _sliced_segment_params()
     params["SLICE_MEMORY_BUDGET_MIB"] = 256
     export = _export_cfg(monkeypatch, params).obb
 
-    budget = min(MAX_TILE_BATCH_BYTES, export.direct.slice.tile_memory_budget_bytes)
-    # A single 1024px segment tile at export's own ceiling must be admissible.
-    per_tile = estimated_prediction_job_bytes(
-        imgsz=1024,
-        task="segment",
-        max_detections=export.raw_detection_cap,
-        source_bytes=1931 * 1931 * 3,
+    assert export.direct.slice.tile_memory_budget_bytes == slicing.MAX_TILE_BATCH_BYTES
+    plan = SlicePlan(
+        tiles=[(0, 0, 1931, 1931)] * 9,
+        slice_wh=(1931, 1931),
+        frame_wh=(4512, 4512),
+        full_frame=False,
     )
-    assert per_tile <= budget, (
-        f"one tile needs {per_tile} bytes but only {budget} are admitted; "
-        "sliced segment export would be refused outright"
-    )
+
+    def _chunk(budget):
+        return slicing.admitted_tile_chunk_size(
+            plan,
+            imgsz=1024,
+            device_tiles=False,
+            requested=9,
+            byte_budget=budget,
+            task="segment",
+            max_detections=effective_raw_detection_cap(export),
+        )
+
+    with caplog.at_level("WARNING"):
+        export_chunk = _chunk(export.direct.slice.tile_memory_budget_bytes)
+        tracking_chunk = _chunk(256 * 1024 * 1024)
+    assert export_chunk > tracking_chunk >= 1
+    assert "admitting it at batch size 1" not in caplog.text

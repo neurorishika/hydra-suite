@@ -449,7 +449,11 @@ class SessionOrchestrator:
         self._mw.temporary_files.clear()
 
         # Also clean up posekit directories if they exist
-        params = self._mw.get_parameters_dict()
+        from hydra_suite.trackerkit.gui.limit_guard import params_or_report_limit
+
+        params = params_or_report_limit(self._mw, "Temp cleanup", quiet=True)
+        if params is None:
+            return
         output_dir = str(params.get("INDIVIDUAL_DATASET_OUTPUT_DIR", "")).strip()
         if output_dir and os.path.exists(output_dir):
             posekit_dir = os.path.join(output_dir, "posekit")
@@ -1438,6 +1442,7 @@ class SessionOrchestrator:
         self._mw.video_total_frames = total_frames
         self._mw.video_width = width
         self._mw.video_height = height
+        self._panels.detection.set_slice_preview_frame_size(width, height)
         self._panels.dataset.sync_diversity_window_bounds(total_frames)
 
         self._panels.setup.lbl_video_info.setText(

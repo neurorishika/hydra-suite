@@ -28,10 +28,17 @@ from hydra_suite.core.inference.geometry_drift import (
 from hydra_suite.core.inference.slice_meta import read_slice_meta, training_geometry
 from hydra_suite.utils.slice_geometry import (
     DEFAULT_MIN_AREA_RATIO,
+    LEGACY_TARGET_SIZE_IMGSZ,
     clip_polygon_to_tile,
     plan_tiles,
     polygon_area,
     resolve_scales,
+)
+from hydra_suite.utils.tiling_spec import (
+    BACKEND_DEFAULTS,
+    DEFAULT_OVERLAP,
+    DEFAULT_TRAIN_OBJECT_TILE_FRACTION,
+    DEFAULT_YOLO_IMGSZ,
 )
 
 from .contracts import DatasetBuildResult
@@ -106,11 +113,11 @@ def label_line_for_level(
 @dataclass
 class SliceBuildParams:
     geometry_mode: str = "auto_object"
-    imgsz: int = 640
-    object_tile_fraction: float = 0.10
+    imgsz: int = DEFAULT_YOLO_IMGSZ
+    object_tile_fraction: float = DEFAULT_TRAIN_OBJECT_TILE_FRACTION
     slice_width: int = 0
     slice_height: int = 0
-    overlap: float = 0.2
+    overlap: float = DEFAULT_OVERLAP
     # D18: this is the ONE fragment floor both the YOLO and SAM3 builders
     # apply (see `utils.slice_geometry.DEFAULT_MIN_AREA_RATIO`); each keeps a
     # private per-build field (a different dataclass, a different training
@@ -118,7 +125,14 @@ class SliceBuildParams:
     # silently drift out of step.
     min_area_ratio: float = DEFAULT_MIN_AREA_RATIO
     negative_tile_fraction: float = 0.15
-    target_sizes: list[float] = field(default_factory=lambda: [32.0, 64.0, 96.0, 128.0])
+    # The YOLO training scale set at the legacy 640 px anchor (same
+    # [32, 64, 96, 128] as before), derived from the one defaults table.
+    target_sizes: list[float] = field(
+        default_factory=lambda: [
+            float(f) * LEGACY_TARGET_SIZE_IMGSZ
+            for f in BACKEND_DEFAULTS["yolo_train"].object_tile_fractions
+        ]
+    )
     full_frame_mix: bool = True
     reference_body_px: float = 0.0
     balance_multiscale_loss: bool = True

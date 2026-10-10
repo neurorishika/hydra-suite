@@ -529,14 +529,18 @@ def _sahi_profile_config(*, budget_mib=256):
 
 
 def test_sahi_trt_profile_uses_admissible_cpu_tile_chunk_not_all_frame_jobs():
-    """4512/1024 yields 36 jobs, but a CPU chunk admits only 17 at 256 MiB."""
+    """4512/1024 yields 36 jobs, but a CPU chunk admits only 16 at 256 MiB.
+
+    (17 when the compact-output term was sized for 2N; it is now sized for the
+    N-free extraction cap, MAX_DETECTIONS_PER_FRAME + 1 rows.)
+    """
     from hydra_suite.core.inference.runner import _sliced_tile_batch
     from hydra_suite.core.inference.stages.slicing import plan_slices
 
     cfg = _sahi_profile_config()
     plan = plan_slices((4512, 4512), cfg.obb.direct.slice, 1024, None)
     assert plan.jobs_per_frame == 36
-    assert _sliced_tile_batch(cfg, (4512, 4512), 1024, device_tiles=False) == 17
+    assert _sliced_tile_batch(cfg, (4512, 4512), 1024, device_tiles=False) == 16
 
 
 def test_sahi_trt_profile_accounts_for_cuda_source_residency_and_budget():
@@ -561,7 +565,7 @@ def test_sahi_trt_profile_honors_the_explicit_persisted_tile_batch(persisted_bat
     # The explicit request is the upper bound; the 256 MiB admission may only
     # reduce it (16 survives here, 1 stays 1).
     assert _sliced_tile_batch(cfg, (4512, 4512), 1024, device_tiles=False) == min(
-        persisted_batch, 17
+        persisted_batch, 16
     )
 
 
@@ -607,7 +611,8 @@ def test_load_sequential_stage1_sliced_model_uses_its_admitted_tile_chunk(
     models = runnermod._load_obb_for_config(cfg, runtime, video_path="v.mp4")
 
     assert isinstance(models, OBBModels)
-    assert calls == [("detect.pt", 17, "detect"), ("obb.pt", 7, "obb")]
+    # 16, not 17: stage-1 admission is sized for the N-free extraction cap.
+    assert calls == [("detect.pt", 16, "detect"), ("obb.pt", 7, "obb")]
 
 
 def test_load_obb_models_unchanged_when_slicing_disabled(monkeypatch):

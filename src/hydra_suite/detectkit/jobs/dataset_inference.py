@@ -19,6 +19,48 @@ from .prediction_cache import (
     cache_path_for,
     prediction_cache_key,
 )
+from .preview_tiling import PreviewTiling
+
+
+def preview_settings_dict(
+    tiling: PreviewTiling,
+    *,
+    inference_kind: str = "obb_direct",
+    device: str = "auto",
+    confidence_threshold: float = 0.5,
+    crop_pad_ratio: float = 0.15,
+    stage2_image_size: int = 160,
+) -> dict:
+    """The inference-affecting settings sent to the sidecar AND keyed in the cache.
+
+    Every resolved tiling value -- including the merge policy/metric and the
+    tiling imgsz -- enters ``prediction_cache_key``, so recalibrating the
+    model's sidecar invalidates cached predictions (Review Focus 4).
+
+    With slicing OFF none of the tiling reaches inference, so none of it is
+    keyed (m1): a recalibrated sidecar must not invalidate a non-sliced cache.
+    """
+    settings = {
+        "inference_kind": str(inference_kind),
+        "device": str(device or "auto"),
+        "confidence_threshold": float(confidence_threshold),
+        "crop_pad_ratio": float(crop_pad_ratio),
+        "stage2_image_size": int(stage2_image_size),
+        "slice_settings": {"enabled": False},
+        # Kept for back-compat; the sliced branch prefers ``slice_imgsz``.
+        "imgsz_obb_direct": int(tiling.imgsz),
+    }
+    if not tiling.slice_settings.enabled:
+        return settings
+    settings.update(
+        {
+            "slice_settings": tiling.slice_settings.to_dict(),
+            "slice_imgsz": int(tiling.imgsz),
+            "slice_merge_policy": str(tiling.merge_policy),
+            "slice_merge_metric": str(tiling.merge_metric),
+        }
+    )
+    return settings
 
 
 class DatasetInferenceWorker(ContainmentRecoveryMixin, BaseWorker):
@@ -40,23 +82,32 @@ class DatasetInferenceWorker(ContainmentRecoveryMixin, BaseWorker):
         stage2_image_size: int = 160,
         slice_settings=None,
         imgsz_obb_direct: int = 640,
+        preview_tiling: PreviewTiling | None = None,
     ) -> None:
         super().__init__()
         self._cancel_requested = False
         self.recovery_cleanup_error = ""
-        settings = {
-            "inference_kind": str(inference_kind),
-            "device": str(device_preference or "auto"),
-            "confidence_threshold": float(confidence_threshold),
-            "crop_pad_ratio": float(crop_pad_ratio),
-            "stage2_image_size": int(stage2_image_size),
-            "slice_settings": (
-                slice_settings.to_dict()
-                if slice_settings is not None
-                else {"enabled": False}
-            ),
-            "imgsz_obb_direct": int(imgsz_obb_direct),
-        }
+        if preview_tiling is None:
+            # Legacy callers: the given settings, the preview's historical merge.
+            from ..gui.models import SliceTrainingSettings
+
+            preview_tiling = PreviewTiling(
+                slice_settings=(
+                    slice_settings
+                    if slice_settings is not None
+                    else SliceTrainingSettings(enabled=False)
+                ),
+                imgsz=max(1, int(imgsz_obb_direct)),
+            )
+        self.preview_tiling = preview_tiling
+        settings = preview_settings_dict(
+            preview_tiling,
+            inference_kind=inference_kind,
+            device=device_preference,
+            confidence_threshold=confidence_threshold,
+            crop_pad_ratio=crop_pad_ratio,
+            stage2_image_size=stage2_image_size,
+        )
         model_paths = [model_path]
         if secondary_model_path:
             model_paths.append(secondary_model_path)

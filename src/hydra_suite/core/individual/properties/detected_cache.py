@@ -122,8 +122,18 @@ class DetectedPropertiesCache:
                 continue
         return cached
 
-    def is_compatible(self) -> bool:
-        return self._compatible
+    def is_compatible(self, max_targets: int | None = None) -> bool:
+        """Schema check; with ``max_targets`` also require the file's N.
+
+        Final-N tracking artifact: a file from another N (or with no recorded
+        N) is not compatible under an N check.
+        """
+        if not self._compatible:
+            return False
+        if max_targets is None:
+            return True
+        stored = self.metadata.get("max_targets")
+        return stored is not None and int(stored) == int(max_targets)
 
     def get_cached_frames(self) -> list[int]:
         if self._mode == "w":

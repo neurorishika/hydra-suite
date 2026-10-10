@@ -17,6 +17,7 @@ from hydra_suite.core.inference.config import (
     MAXIMUM_CALIBRATION_BUDGET_SECONDS,
     MINIMUM_CALIBRATION_BUDGET_SECONDS,
 )
+from hydra_suite.core.inference.limits import DetectionLimitError
 from hydra_suite.trackerkit.cli import run_tracking_cli
 
 # Fix OpenMP conflict on macOS (PyTorch + OpenCV + NumPy can load multiple
@@ -597,6 +598,11 @@ def main(argv: list[str] | None = None) -> object:
                     args, "inference_autotune_manual", []
                 ),
             )
+        except DetectionLimitError as e:
+            # A user-input error (N too large): one readable line, no traceback.
+            logger.error("Tracker CLI failed: %s", e)
+            print(f"Error: {e}")
+            sys.exit(1)
         except Exception as e:
             logger.error("Tracker CLI failed: %s", e, exc_info=True)
             print(f"Error: {e}")
@@ -615,6 +621,10 @@ def main(argv: list[str] | None = None) -> object:
                     args, "inference_autotune_manual", []
                 ),
             )
+        except DetectionLimitError as e:
+            logger.error("Tracker calibration failed: %s", e)
+            print(f"Error: {e}")
+            sys.exit(1)
         except Exception as e:
             logger.error("Tracker calibration failed: %s", e, exc_info=True)
             print(f"Error: {e}")
@@ -626,6 +636,10 @@ def main(argv: list[str] | None = None) -> object:
 
         try:
             exit_code = run_job_cli(args)
+        except DetectionLimitError as e:
+            logger.error("Tracker job CLI failed: %s", e)
+            print(f"Error: {e}")
+            sys.exit(1)
         except Exception as e:
             logger.error("Tracker job CLI failed: %s", e, exc_info=True)
             print(f"Error: {e}")
