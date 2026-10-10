@@ -11409,10 +11409,10 @@ class MainWindow(QMainWindow):
                 # Use the head-aware summary: a global argmax over the
                 # concatenated columns of a multi-head model would report a
                 # single factor's label instead of the composite prediction.
-                summary = self._prediction_summary_for_index(idx, top_k=1)
-                if summary is not None:
-                    pred_class = str(summary.get("predicted_label") or "")
-                    raw_conf = summary.get("confidence")
+                pred_summary = self._prediction_summary_for_index(idx, top_k=1)
+                if pred_summary is not None:
+                    pred_class = str(pred_summary.get("predicted_label") or "")
+                    raw_conf = pred_summary.get("confidence")
                     conf = float(raw_conf) if raw_conf is not None else 0.0
                 else:
                     pred_class = ""
