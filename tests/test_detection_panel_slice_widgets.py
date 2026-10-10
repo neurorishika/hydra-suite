@@ -718,3 +718,31 @@ def test_profile_status_hidden_in_sequential_mode(monkeypatch, tmp_path):
     panel.combo_yolo_obb_mode.setCurrentIndex(0)
     assert panel.lbl_slice_profile_status.isVisibleTo(panel) is True
     window.close()
+
+
+def test_no_sidecar_model_clears_a_stale_profile_overlap_claim(monkeypatch, tmp_path):
+    """S4b re-check MINOR-B: after switching to a model without a sidecar no
+    profile can still be 'setting' the overlap."""
+    import json
+
+    from tests.test_trackerkit_sahi_widget_persistence import TWO_PROFILE_SIDECAR
+
+    window = _make_main_window(monkeypatch)
+    panel = window._detection_panel
+    widget = panel.slice_settings
+    model_path = tmp_path / "model.pt"
+    model_path.write_text("stub model", encoding="utf-8")
+    (tmp_path / "model.pt.slice_meta.json").write_text(
+        json.dumps(TWO_PROFILE_SIDECAR), encoding="utf-8"
+    )
+    panel.apply_slice_meta_for_model(str(model_path))
+    panel.combo_slice_profile.setCurrentIndex(
+        panel.combo_slice_profile.findData("fast")
+    )
+    assert widget.source_badge("overlap") == "profile"
+    bare = tmp_path / "bare.pt"
+    bare.write_text("stub model", encoding="utf-8")
+    panel.apply_slice_meta_for_model(str(bare))
+    assert widget.source_badge("overlap") == "user"
+    assert "set by profile" not in widget.lbl_slice_overlap_minimum.text()
+    window.close()

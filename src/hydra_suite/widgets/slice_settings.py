@@ -524,6 +524,11 @@ class SliceSettingsWidget(QGroupBox):
                 self._set_quietly(self.spin_slice_body, value)
         elif field in ("slice_width", "slice_height", "geometry_mode"):
             self._sources.pop("tile_size", None)
+            # A profile/stamp overlap was measured for ITS geometry; once the
+            # user changes the geometry the claim no longer applies.
+            self._sources.pop("overlap", None)
+        elif field in ("object_tile_fractions", "object_tile_fraction"):
+            self._sources.pop("overlap", None)
         elif field == "overlap":
             self._sources.pop("overlap", None)
         elif field == "merge_policy":

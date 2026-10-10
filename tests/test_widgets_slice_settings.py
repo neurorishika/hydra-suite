@@ -731,3 +731,25 @@ def test_widget_owns_no_profile_status_label():
     """Review NIT: hosts own the profile status prose (TrackerKit's row)."""
     w = SliceSettingsWidget(role="infer_yolo")
     assert not hasattr(w, "lbl_slice_profile_status")
+
+
+def test_profile_overlap_claim_cleared_by_geometry_or_scale_edits():
+    """S4b re-check MINOR-A: a measured overlap describes its own geometry."""
+    for edit in ("geometry", "tile", "fraction"):
+        w = _infer_widget("custom", body=48.0, tile=(1024, 800), overlap=0.1)
+        w.set_source("overlap", "profile", note="profile 'Fast scan'")
+        assert w.btn_slice_overlap_raise.isHidden()
+        if edit == "geometry":
+            w.combo_slice_geometry.setCurrentIndex(
+                w.combo_slice_geometry.findData("auto_object")
+            )
+        elif edit == "tile":
+            w.spin_slice_tile_w.setValue(512)
+        else:
+            w.combo_slice_geometry.setCurrentIndex(
+                w.combo_slice_geometry.findData("auto_object")
+            )
+            w.set_source("overlap", "profile", note="profile 'Fast scan'")
+            w.spin_slice_object_fraction.setValue(0.33)
+        assert w.source_badge("overlap") == "user", edit
+        assert "set by profile" not in w.lbl_slice_overlap_minimum.text(), edit

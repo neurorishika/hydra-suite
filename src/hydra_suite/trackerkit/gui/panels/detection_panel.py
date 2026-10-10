@@ -3002,6 +3002,8 @@ class DetectionPanel(QWidget):
                 self._main_window.advanced_config.get("slice_trained_body_px", 0.0),
                 None,
             )
+            # No sidecar: no profile can be claiming the overlap any more.
+            self.slice_settings.set_source("overlap", "user")
             self._main_window.advanced_config["slice_profile_id"] = ""
             self._main_window.advanced_config.pop("_slice_profile_saved_settings", None)
             self._update_slice_profile_status_label()
