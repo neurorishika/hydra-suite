@@ -620,9 +620,9 @@ class SliceSettingsWidget(QGroupBox):
         derived_body = self._body_is_derived()
         body_gate = on and (role != "infer_yolo" or auto_object)
         enabled = {
-            # Profiles own `enabled`: picking one from a SAHI-off state
-            # applies it and turns SAHI on, so the picker is never gated on
-            # the checkbox (only on the row being shown).
+            # Profiles own `enabled`: the picker is never gated on the
+            # checkbox (only on the row being shown -- and the whole row
+            # hides while SAHI is off, S6), so a host can still drive it.
             self.combo_slice_profile: self._profile_row_shown,
             self.combo_slice_geometry: on,
             self.txt_slice_scales: on and auto_object,
@@ -750,10 +750,22 @@ class SliceSettingsWidget(QGroupBox):
         if row is not None:
             row[0].setToolTip(self.txt_slice_scales.toolTip())
 
+    def tiling_shown(self) -> bool:
+        """False while a role with the Enable checkbox has it unchecked.
+
+        S6: SAHI off collapses the block to that checkbox (every other row,
+        Advanced, the profile row and the preview hide; values are kept).
+        Within SAHI on, constrained fields stay visible-but-disabled.
+        """
+        if "enabled" not in self._role_rows:
+            return True
+        return self.chk_slice_enabled.isChecked()
+
     def _apply_visibility(self) -> None:
         mode = self._mode()
+        shown = self.tiling_shown()
         for key, widgets in self._row_widgets.items():
-            visible = key in self._role_rows
+            visible = key in self._role_rows and (shown or key == "enabled")
             if key in ADVANCED:
                 visible = visible and self._advanced_expanded
             if key == "profile":
@@ -763,4 +775,6 @@ class SliceSettingsWidget(QGroupBox):
                 visible = visible and mode == "auto_object"
             for widget in widgets:
                 widget.setHidden(not visible)
+        if self._role not in ESCALATE_ROLES:
+            self.preview.setHidden(not shown)
         self.updateGeometry()  # let host layouts re-measure (rows came/went)
