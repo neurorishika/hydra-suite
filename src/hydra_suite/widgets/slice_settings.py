@@ -780,7 +780,10 @@ class SliceSettingsWidget(QGroupBox):
         # Qt moves focus only off an explicitly hidden widget, not off one
         # inside a hidden row holder: keyboard input must not reach a hidden
         # control (Down on the hidden profile combo would switch profiles).
+        # Not gated on hasFocus(): Qt's own hide handling may already have
+        # passed focus to a sibling hidden later in the loop above, and an
+        # inactive window reports hasFocus() False for its focus widget.
         focus = self.focusWidget()
-        if focus is not None and focus.hasFocus() and not focus.isVisibleTo(self):
+        if focus is not None and not focus.isVisibleTo(self):
             self.chk_slice_enabled.setFocus()
         self.updateGeometry()  # let host layouts re-measure (rows came/went)
