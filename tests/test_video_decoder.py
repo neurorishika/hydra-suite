@@ -1,0 +1,714 @@
+"""Decode stage for the final annotated video (``utils/video_decoder.py``)."""
+
+from __future__ import annotations
+
+import logging
+import time
+from pathlib import Path
+
+import cv2
+import numpy as np
+import pytest
+
+from hydra_suite.utils import video_decoder as vd
+
+# ── fakes ────────────────────────────────────────────────────────────────────
+
+
+def _frame(idx, w=8, h=6):
+    f = np.zeros((h, w, 3), np.uint8)
+    f[0, 0, 0] = idx % 256
+    f[0, 0, 1] = idx // 256
+    return f
+
+
+def _idx(frame):
+    return int(frame[0, 0, 0]) + 256 * int(frame[0, 0, 1])
+
+
+class _FakeReader:
+    def __init__(self, start, n_total, *, fail_at=None, delay=0.0, log=None):
+        self.next = start
+        self.n_total = n_total
+        self.fail_at = fail_at
+        self.delay = delay
+        self.closed = False
+        self.log = log
+
+    def read(self):
+        if self.fail_at is not None and self.next >= self.fail_at:
+            raise RuntimeError(f"decode error at {self.next}")
+        if self.next >= self.n_total:
+            return None
+        if self.delay:
+            time.sleep(self.delay * (1 + (self.next % 3)))
+        f = _frame(self.next)
+        self.next += 1
+        return f
+
+    def close(self):
+        self.closed = True
+
+
+def _candidate(name, opened, **kw):
+    def _open(start):
+        if kw.get("open_raises"):
+            raise RuntimeError(f"{name} unavailable")
+        r = _FakeReader(start, kw.get("n_total", 50), fail_at=kw.get("fail_at"))
+        opened.append((name, start, r))
+        return r
+
+    return vd.DecoderCandidate(name, _open)
+
+
+# ── ladder / probe ───────────────────────────────────────────────────────────
+
+
+def test_falls_through_to_first_candidate_that_decodes_a_frame(caplog):
+    opened = []
+    cands = [
+        _candidate("cuvid", opened, open_raises=True),
+        _candidate("hwaccel", opened, fail_at=0),  # opens, first decode fails
+        _candidate("pyav", opened),
+        _candidate("opencv", opened),
+    ]
+    with caplog.at_level(logging.INFO, logger=vd.logger.name):
+        src = vd.FrameSource(cands, start_frame=7, out_size=(8, 6))
+    assert src.name == "pyav"
+    assert [_idx(src.read()) for _ in range(3)] == [7, 8, 9]
+    # The failed hwaccel reader was closed; opencv was never tried.
+    assert [o[0] for o in opened] == ["hwaccel", "pyav"]
+    assert opened[0][2].closed
+    info = [r for r in caplog.records if r.levelno == logging.INFO]
+    assert len(info) == 1
+    assert "pyav" in info[0].getMessage() and "8x6" in info[0].getMessage()
+    src.close()
+    assert opened[1][2].closed
+
+
+def test_all_candidates_fail_is_a_loud_error():
+    opened = []
+    cands = [
+        _candidate("a", opened, open_raises=True),
+        _candidate("b", opened, fail_at=0),
+    ]
+    with pytest.raises(RuntimeError, match="No video decoder"):
+        vd.FrameSource(cands, start_frame=0, out_size=(8, 6))
+
+
+def test_midstream_error_falls_back_from_the_current_frame_index():
+    opened = []
+    cands = [_candidate("hw", opened, fail_at=12), _candidate("sw", opened)]
+    src = vd.FrameSource(cands, start_frame=5, out_size=(8, 6))
+    got = [_idx(src.read()) for _ in range(15)]
+    assert got == list(range(5, 20))  # no drop, no duplicate
+    assert [(o[0], o[1]) for o in opened] == [("hw", 5), ("sw", 12)]
+    assert src.name == "sw"
+
+
+def test_midstream_error_on_last_candidate_raises():
+    opened = []
+    src = vd.FrameSource(
+        [_candidate("only", opened, fail_at=3)], start_frame=0, out_size=(8, 6)
+    )
+    for _ in range(3):
+        src.read()
+    with pytest.raises(RuntimeError, match="decode error at 3"):
+        src.read()
+
+
+def test_eof_returns_none():
+    opened = []
+    src = vd.FrameSource(
+        [_candidate("x", opened, n_total=2)], start_frame=0, out_size=(8, 6)
+    )
+    assert src.read() is not None and src.read() is not None
+    assert src.read() is None
+
+
+# ── threaded stage ───────────────────────────────────────────────────────────
+
+
+def _slow_source_factory(n_total, delay=0.0005, fail_at=None):
+    def _factory():
+        cand = vd.DecoderCandidate(
+            "fake",
+            lambda start: _FakeReader(start, n_total, fail_at=fail_at, delay=delay),
+        )
+        return vd.FrameSource([cand], start_frame=0, out_size=(8, 6))
+
+    return _factory
+
+
+def test_threaded_reader_delivers_frames_in_order():
+    reader = vd.ThreadedFrameReader(_slow_source_factory(60), max_frames=60, maxsize=3)
+    reader.start()
+    got = []
+    while True:
+        f = reader.get()
+        if f is None:
+            break
+        got.append(_idx(f))
+    reader.close()
+    assert got == list(range(60))
+
+
+def test_threaded_reader_stops_at_max_frames():
+    reader = vd.ThreadedFrameReader(_slow_source_factory(60), max_frames=10)
+    reader.start()
+    got = []
+    while (f := reader.get()) is not None:
+        got.append(_idx(f))
+    reader.close()
+    assert got == list(range(10))
+
+
+def test_decode_thread_exception_propagates_to_caller():
+    reader = vd.ThreadedFrameReader(_slow_source_factory(60, fail_at=4), max_frames=60)
+    reader.start()
+    got = []
+    with pytest.raises(RuntimeError, match="decode error at 4"):
+        while (f := reader.get()) is not None:
+            got.append(_idx(f))
+    assert got == [0, 1, 2, 3]
+    reader.close()
+
+
+def test_close_stops_a_producer_blocked_on_a_full_queue():
+    closed = []
+
+    def _factory():
+        def _open(start):
+            r = _FakeReader(start, 10_000)
+            closed.append(r)
+            return r
+
+        return vd.FrameSource(
+            [vd.DecoderCandidate("x", _open)], start_frame=0, out_size=(8, 6)
+        )
+
+    reader = vd.ThreadedFrameReader(_factory, max_frames=10_000, maxsize=2)
+    reader.start()
+    assert reader.get() is not None
+    time.sleep(0.05)  # producer now blocked on the full queue
+    t0 = time.monotonic()
+    reader.close()
+    assert time.monotonic() - t0 < 2.0
+    assert not reader.thread_alive()
+    assert closed and closed[0].closed
+
+
+# ── real decoders ────────────────────────────────────────────────────────────
+
+_BITS = 8
+
+
+def _write_index_clip(path, n_frames=40, w=128, h=64, gop=10, fps=25):
+    """H.264 clip (B-frames, short GOP) whose frame index is drawn as 8 bit-blocks."""
+    av = pytest.importorskip("av")
+    container = av.open(str(path), mode="w")
+    stream = container.add_stream("libx264", rate=fps)
+    stream.width, stream.height, stream.pix_fmt = w, h, "yuv420p"
+    stream.options = {"g": str(gop), "bf": "2", "keyint_min": str(gop)}
+    bw = w // _BITS
+    for i in range(n_frames):
+        img = np.zeros((h, w, 3), np.uint8)
+        for b in range(_BITS):
+            if (i >> b) & 1:
+                img[:, b * bw : (b + 1) * bw] = 255
+        frame = av.VideoFrame.from_ndarray(img, format="bgr24")
+        for pkt in stream.encode(frame):
+            container.mux(pkt)
+    for pkt in stream.encode():
+        container.mux(pkt)
+    container.close()
+
+
+def _decode_index(img):
+    w = img.shape[1]
+    bw = w // _BITS
+    return sum(
+        1 << b
+        for b in range(_BITS)
+        if img[:, b * bw + bw // 4 : (b + 1) * bw - bw // 4].mean() > 128
+    )
+
+
+def _cv2_indices(path, start, n):
+    cap = cv2.VideoCapture(str(path))
+    if start > 0:
+        cap.set(cv2.CAP_PROP_POS_FRAMES, start)
+    out = []
+    for _ in range(n):
+        ok, f = cap.read()
+        if not ok:
+            break
+        out.append(_decode_index(f))
+    cap.release()
+    return out
+
+
+def _source_indices(cands, start, n):
+    src = vd.FrameSource(cands, start_frame=start, out_size=(128, 64))
+    out = []
+    try:
+        for _ in range(n):
+            f = src.read()
+            if f is None:
+                break
+            assert f.dtype == np.uint8 and f.flags.c_contiguous
+            assert f.shape == (64, 128, 3)
+            out.append(_decode_index(f))
+    finally:
+        src.close()
+    return out
+
+
+@pytest.fixture(scope="module")
+def index_clip(tmp_path_factory):
+    path = tmp_path_factory.mktemp("clip") / "index.mp4"
+    _write_index_clip(path)
+    return path
+
+
+@pytest.mark.parametrize("start", [0, 5, 10, 23, 39])
+@pytest.mark.parametrize("kind", ["pyav", "opencv", "hwaccel", "cuvid"])
+def test_start_frame_alignment_matches_cv2(index_clip, start, kind):
+    cands = {c.name: c for c in vd.default_decoder_candidates(str(index_clip), 128, 64)}
+    if kind not in cands:
+        pytest.skip(f"{kind} decoder not available here")
+    expected = _cv2_indices(index_clip, start, 40)
+    assert expected == list(range(start, 40))  # the clip itself is sane
+    assert _source_indices([cands[kind]], start, 40) == expected
+
+
+def _ladder(monkeypatch, *, platform, cuda, out, src=(128, 64), rotated=False):
+    monkeypatch.setattr(vd.sys, "platform", platform)
+    monkeypatch.setattr(
+        vd,
+        "_av_caps",
+        lambda: (
+            {"videotoolbox", "cuda"},
+            {"h264_cuvid", "hevc_cuvid", "libx264"},
+        ),
+    )
+    monkeypatch.setattr(vd, "_cuda_usable", lambda: cuda)
+    monkeypatch.setattr(
+        vd, "_stream_facts", lambda path: vd.StreamFacts("h264", *src, rotated)
+    )
+    return [c.name for c in vd.default_decoder_candidates("x.mp4", *out)]
+
+
+@pytest.mark.parametrize(
+    "platform,cuda,out,expected",
+    [
+        # Downscale: PyAV software beats VideoToolbox (fly_obb 1200^2: 367 vs
+        # 262 fps at 0.5) and cv2 (ant 4512^2: 128 vs 93 fps at 0.5).
+        ("darwin", False, (64, 32), ["pyav", "hwaccel", "opencv"]),
+        # Same size: cv2 is today's path and measured >= PyAV (1200^2: 301 vs
+        # 289 fps; 4512^2: 39.1 vs 39.1, encoder-bound).
+        ("darwin", False, (128, 64), ["opencv", "pyav", "hwaccel"]),
+        ("linux", True, (64, 32), ["cuvid", "pyav", "hwaccel", "opencv"]),
+        ("linux", True, (128, 64), ["cuvid", "opencv", "pyav", "hwaccel"]),
+        # A compiled-in CUDA device type is not a usable GPU (M-3).
+        ("linux", False, (64, 32), ["pyav", "opencv"]),
+        ("win32", True, (64, 32), ["cuvid", "pyav", "hwaccel", "opencv"]),
+        ("win32", False, (64, 32), ["pyav", "opencv"]),
+    ],
+)
+def test_ladder_order(monkeypatch, platform, cuda, out, expected):
+    assert _ladder(monkeypatch, platform=platform, cuda=cuda, out=out) == expected
+
+
+@pytest.mark.parametrize("platform,cuda", [("darwin", False), ("linux", True)])
+def test_rotated_stream_only_uses_opencv(monkeypatch, platform, cuda):
+    """I-2: cv2 applies display rotation (what tracking saw); PyAV/cuvid don't."""
+    names = _ladder(
+        monkeypatch, platform=platform, cuda=cuda, out=(32, 64), rotated=True
+    )
+    assert names == ["opencv"]
+
+
+def test_downscaled_decode_is_output_size(index_clip):
+    # Every decoder on this host, incl. cuvid's on-GPU ``resize`` where present.
+    for c in vd.default_decoder_candidates(str(index_clip), 64, 32):
+        src = vd.FrameSource([c], start_frame=3, out_size=(64, 32))
+        got = [src.read() for _ in range(5)]
+        src.close()
+        for f in got:
+            assert f.shape == (32, 64, 3) and f.flags.c_contiguous, c.name
+        assert [_decode_index(f) for f in got] == [3, 4, 5, 6, 7], c.name
+
+
+def test_frame_to_bgr_handles_odd_source_and_padded_planes():
+    av = pytest.importorskip("av")
+    yy, xx = np.mgrid[0:51, 0:77]
+    img = (
+        np.stack([xx * 3, yy * 4, (xx + yy) * 2], axis=2).clip(0, 255).astype(np.uint8)
+    )
+    frame = av.VideoFrame.from_ndarray(img, format="bgr24").reformat(format="yuv420p")
+    out = vd.frame_to_bgr(frame, 38, 24)
+    assert out.shape == (24, 38, 3) and out.flags.c_contiguous
+    even = av.VideoFrame.from_ndarray(img[:50, :76].copy(), format="bgr24").reformat(
+        format="yuv420p"
+    )
+    full = vd.frame_to_bgr(even, 76, 50)
+    assert full.shape == (50, 76, 3)
+    # Same BT.601 limited-range conversion as swscale, within rounding.
+    ref = even.reformat(format="bgr24").to_ndarray()
+    assert np.abs(full.astype(int) - ref.astype(int)).max() <= 3
+
+
+def test_pyav_start_frame_uses_keyframe_seek_not_full_rescan(index_clip, caplog):
+    cands = {c.name: c for c in vd.default_decoder_candidates(str(index_clip), 128, 64)}
+    with caplog.at_level(logging.DEBUG, logger=vd.logger.name):
+        assert _source_indices([cands["pyav"]], 23, 3) == [23, 24, 25]
+    assert not any("decoding from frame 0" in r.getMessage() for r in caplog.records)
+
+
+def test_unreliable_pts_falls_back_to_counting_from_stream_start(
+    index_clip, monkeypatch
+):
+    monkeypatch.setattr(vd._PyAVReader, "_seek_frames", lambda self: None)
+    cands = {c.name: c for c in vd.default_decoder_candidates(str(index_clip), 128, 64)}
+    assert _source_indices([cands["pyav"]], 17, 40) == list(range(17, 40))
+
+
+@pytest.mark.parametrize("fmt", ["yuv420p", "nv12"])
+@pytest.mark.parametrize("out", [(200, 120), (100, 60)])
+def test_frame_to_bgr_fast_path_matches_swscale(fmt, out):
+    """Padded planes (200 px rows are padded by libav) read zero-copy must
+    give the same picture as swscale's own conversion."""
+    av = pytest.importorskip("av")
+    yy, xx = np.mgrid[0:120, 0:200]
+    img = np.stack([xx, yy * 2, (xx + yy) // 2], axis=2).clip(0, 255).astype(np.uint8)
+    frame = av.VideoFrame.from_ndarray(img, format="bgr24").reformat(format=fmt)
+    assert frame.planes[0].line_size >= 200
+    got = vd.frame_to_bgr(frame, *out)
+    assert got.shape == (out[1], out[0], 3) and got.flags.c_contiguous
+    ref = frame.reformat(
+        width=out[0], height=out[1], format="bgr24", interpolation="AREA"
+    ).to_ndarray()
+    assert np.abs(got.astype(int) - ref.astype(int)).mean() < 2.0
+    assert np.abs(got.astype(int) - ref.astype(int)).max() <= 12
+
+
+def test_every_decoder_reaches_eof_cleanly(index_clip):
+    """Reading past the last frame returns None -- never a decode error.
+
+    A double drain of the cuvid decoder raised EOFError here (diptera), which
+    the alignment test missed whenever it stopped exactly at the last frame.
+    """
+    for c in vd.default_decoder_candidates(str(index_clip), 128, 64):
+        src = vd.FrameSource([c], start_frame=30, out_size=(128, 64))
+        got = [src.read() for _ in range(12)]
+        src.close()
+        assert [_decode_index(f) for f in got[:10]] == list(range(30, 40)), c.name
+        assert got[10] is None and got[11] is None, c.name
+
+
+# ── fix round 1: adversarial clips ──────────────────────────────────────────
+
+
+def _write_pts_clip(path, pts_of, n_frames=40, w=128, h=64, tb=None):
+    """Index clip with explicit pts (default time base 1/25) -- e.g. a dropped frame."""
+    av = pytest.importorskip("av")
+    from fractions import Fraction
+
+    tb = tb or Fraction(1, 25)
+    container = av.open(str(path), mode="w")
+    stream = container.add_stream("libx264", rate=25)
+    stream.width, stream.height, stream.pix_fmt = w, h, "yuv420p"
+    stream.time_base = tb
+    stream.codec_context.time_base = tb
+    stream.options = {"g": "10", "bf": "2", "keyint_min": "10"}
+    bw = w // _BITS
+    for i in range(n_frames):
+        img = np.zeros((h, w, 3), np.uint8)
+        for b in range(_BITS):
+            if (i >> b) & 1:
+                img[:, b * bw : (b + 1) * bw] = 255
+        frame = av.VideoFrame.from_ndarray(img, format="bgr24")
+        frame.pts = pts_of(i)
+        frame.time_base = tb
+        for pkt in stream.encode(frame):
+            container.mux(pkt)
+    for pkt in stream.encode():
+        container.mux(pkt)
+    container.close()
+
+
+@pytest.fixture(scope="module")
+def vfr_gap_clip(tmp_path_factory):
+    path = tmp_path_factory.mktemp("vfr") / "vfr_gap.mp4"
+    _write_pts_clip(path, lambda i: i if i < 7 else i + 1)  # one dropped frame
+    return path
+
+
+@pytest.mark.parametrize("start", [0, 1, 6, 7, 9, 11, 23, 39])
+def test_vfr_gap_alignment_matches_cv2(vfr_gap_clip, start):
+    """I-1: average_rate is 1000/41 here, so pts->index drifted by one past
+    the gap; the frame index must equal cv2's (= tracking's decode order)."""
+    expected = _cv2_indices(vfr_gap_clip, start, 40)
+    assert expected == list(range(start, 40))
+    for cand in vd.default_decoder_candidates(str(vfr_gap_clip), 64, 32):
+        src = vd.FrameSource([cand], start_frame=start, out_size=(64, 32))
+        got = []
+        while (f := src.read()) is not None:
+            got.append(_decode_index(f))
+        src.close()
+        assert got == expected, cand.name
+
+
+def test_rotated_clip_matches_cv2_frames(index_clip, tmp_path):
+    import shutil
+    import subprocess
+
+    try:
+        import imageio_ffmpeg
+
+        ffmpeg = imageio_ffmpeg.get_ffmpeg_exe()
+    except Exception:
+        ffmpeg = shutil.which("ffmpeg") or (
+            "/opt/homebrew/bin/ffmpeg"
+            if Path("/opt/homebrew/bin/ffmpeg").exists()
+            else None
+        )
+    if not ffmpeg:
+        pytest.skip("no ffmpeg binary to write a rotation tag")
+
+    rot = tmp_path / "rot90.mp4"
+    r = subprocess.run(
+        [
+            ffmpeg,
+            "-y",
+            "-loglevel",
+            "error",
+            "-display_rotation",
+            "90",
+            "-i",
+            str(index_clip),
+            "-c",
+            "copy",
+            str(rot),
+        ],
+        capture_output=True,
+    )
+    if r.returncode != 0:
+        pytest.skip("ffmpeg cannot write display rotation here")
+    cap = cv2.VideoCapture(str(rot))
+    if not cap.get(cv2.CAP_PROP_ORIENTATION_META):
+        cap.release()
+        pytest.skip("cv2 does not see the rotation tag")
+    refs = [cap.read()[1] for _ in range(8)]
+    cap.release()
+    h, w = refs[0].shape[:2]
+    cands = vd.default_decoder_candidates(str(rot), w, h)
+    assert [c.name for c in cands] == ["opencv"]
+    src = vd.FrameSource(cands, start_frame=5, out_size=(w, h))
+    f = src.read()
+    src.close()
+    assert np.array_equal(f, refs[5])
+
+
+def test_start_past_end_fails_fast_with_one_decode(index_clip, monkeypatch):
+    """M-2: START beyond the decodable end must not re-scan the stream or walk
+    the whole ladder -- one decode pass, then EOF."""
+    opened = []
+    real = vd.default_decoder_candidates(str(index_clip), 64, 32)
+    cands = [
+        vd.DecoderCandidate(
+            c.name, lambda s, c=c: (opened.append(c.name), c.open(s))[1]
+        )
+        for c in real
+    ]
+    decodes = {"n": 0}
+    orig = vd._PyAVReader._open
+
+    def _count_open(self):
+        decodes["n"] += 1
+        return orig(self)
+
+    monkeypatch.setattr(vd._PyAVReader, "_open", _count_open)
+    src = vd.FrameSource(cands, start_frame=45, out_size=(64, 32))
+    assert src.read() is None
+    src.close()
+    assert opened == [cands[0].name]
+    assert decodes["n"] <= 2  # first-pts probe + one seek pass, never a re-scan
+
+
+def _fake_gpu_utils(monkeypatch, *, cupy_flag, torch_cuda, cupy_count):
+    import sys
+    import types
+
+    cp = types.SimpleNamespace(
+        cuda=types.SimpleNamespace(
+            runtime=types.SimpleNamespace(getDeviceCount=lambda: cupy_count)
+        )
+    )
+    fake = types.SimpleNamespace(
+        CUDA_AVAILABLE=cupy_flag,
+        TORCH_CUDA_AVAILABLE=torch_cuda,
+        cp=cp if cupy_flag else None,
+    )
+    monkeypatch.setitem(sys.modules, "hydra_suite.utils.gpu_utils", fake)
+
+
+def test_cuda_usable_ignores_cupy_flag_without_a_visible_device(monkeypatch):
+    """gpu_utils.CUDA_AVAILABLE is True whenever cupy imports (Device(0) does
+    not touch the driver): with CUDA_VISIBLE_DEVICES="" on diptera the ladder
+    still offered cuvid. A visible device must actually be counted."""
+    _fake_gpu_utils(monkeypatch, cupy_flag=True, torch_cuda=False, cupy_count=0)
+    assert vd._cuda_usable() is False
+    _fake_gpu_utils(monkeypatch, cupy_flag=True, torch_cuda=False, cupy_count=1)
+    assert vd._cuda_usable() is True
+    _fake_gpu_utils(monkeypatch, cupy_flag=False, torch_cuda=True, cupy_count=0)
+    assert vd._cuda_usable() is True
+
+
+# ── fix round 2 ─────────────────────────────────────────────────────────────
+
+
+def _compensated_pts(i):
+    """Gap at 7, then the last 10 intervals shortened so duration == N/rate."""
+    if i < 7:
+        return i * 512
+    if i < 30:
+        return (i + 1) * 512
+    return 31 * 512 + sum(461 if j < 8 else 460 for j in range(i - 30))
+
+
+_VFR_CLIPS = {
+    "vfr_gap": (lambda i: i if i < 7 else i + 1, None),
+    "vfr_two_gaps": (lambda i: i + (i >= 3) + (i >= 20), None),
+    "vfr_compensated": (_compensated_pts, (1, 12800)),
+}
+
+
+@pytest.fixture(scope="module", params=sorted(_VFR_CLIPS))
+def vfr_clip(request, tmp_path_factory):
+    from fractions import Fraction
+
+    pts_of, tb = _VFR_CLIPS[request.param]
+    path = tmp_path_factory.mktemp(request.param) / f"{request.param}.mp4"
+    _write_pts_clip(path, pts_of, tb=Fraction(*tb) if tb else None)
+    return path
+
+
+def _cv2_all(path, start):
+    cap = cv2.VideoCapture(str(path))
+    if start > 0:
+        cap.set(cv2.CAP_PROP_POS_FRAMES, start)
+    out = []
+    while True:
+        ok, f = cap.read()
+        if not ok:
+            break
+        out.append(_decode_index(f))
+    cap.release()
+    return out
+
+
+def test_vfr_ladder_lands_where_cv2_lands_for_every_start(vfr_clip):
+    """R-1: tracking's CpuFrameReader positioned with cv2's seek; on a stream
+    that is not provably CFR the render must land on the SAME frame for every
+    START (count-from-0 disagreed at starts 27..39)."""
+    bad = {}
+    for start in range(40):
+        expected = _cv2_all(vfr_clip, start)
+        cands = vd.default_decoder_candidates(str(vfr_clip), 64, 32, start_frame=start)
+        src = vd.FrameSource(cands, start_frame=start, out_size=(64, 32))
+        got = []
+        while (f := src.read()) is not None:
+            got.append(_decode_index(f))
+        src.close()
+        if got != expected:
+            bad[start] = (src.name, got[:3], expected[:3])
+    assert not bad
+
+
+def test_provable_cfr_stream_keeps_the_fast_ladder(index_clip):
+    names = [
+        c.name
+        for c in vd.default_decoder_candidates(str(index_clip), 64, 32, start_frame=23)
+    ]
+    assert names[0] != "opencv"
+
+
+class _FailingCap:
+    def __init__(self, count):
+        self.count = count
+
+    def read(self):
+        return False, None
+
+    def get(self, prop):
+        return float(self.count) if prop == cv2.CAP_PROP_FRAME_COUNT else 0.0
+
+    def release(self):
+        pass
+
+
+def test_opencv_first_read_failure_inside_the_stream_is_a_probe_failure(
+    index_clip,
+):
+    """R-2: cv2 opening fine but failing its first read (e.g. a corrupt GOP at
+    the seek point) is NOT past-end unless start >= the frame count."""
+
+    def _broken_cv2(start):
+        r = vd._OpenCVReader(str(index_clip), start, 128, 64)
+        r._cap.release()
+        r._cap = _FailingCap(40)
+        return r
+
+    real = {c.name: c for c in vd.default_decoder_candidates(str(index_clip), 128, 64)}
+    cands = [vd.DecoderCandidate("opencv", _broken_cv2), real["pyav"]]
+    src = vd.FrameSource(cands, start_frame=5, out_size=(128, 64))
+    assert src.name == "pyav"
+    assert _decode_index(src.read()) == 5
+    src.close()
+
+    r = _broken_cv2(45)
+    assert r.read() is None and r.past_end is True
+    r = _broken_cv2(5)
+    with pytest.raises(RuntimeError):
+        r.read()
+
+
+class _Interrupt(BaseException):
+    pass
+
+
+def test_decode_thread_base_exception_is_relayed_not_a_hang():
+    """R-3: a BaseException in the decode thread must reach the consumer."""
+    import threading
+
+    class _R:
+        def read(self):
+            raise _Interrupt()
+
+        def close(self):
+            pass
+
+    def _factory():
+        src = vd.FrameSource.__new__(vd.FrameSource)
+        src.name = "x"
+        src.read = _R().read
+        src.close = lambda: None
+        return src
+
+    reader = vd.ThreadedFrameReader(_factory, max_frames=10).start()
+    box = {}
+
+    def _consume():
+        try:
+            reader.get()
+        except _Interrupt as exc:
+            box["exc"] = exc
+
+    t = threading.Thread(target=_consume, daemon=True)
+    t.start()
+    t.join(5)
+    assert not t.is_alive(), "consumer blocked forever"
+    assert isinstance(box.get("exc"), _Interrupt)
+    reader.close()
