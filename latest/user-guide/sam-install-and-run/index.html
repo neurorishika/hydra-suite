@@ -2385,7 +2385,8 @@ project in DetectKit afterwards to accept or reject the staged frames.</p>
 </span><span id="__span-1-4"><a id="__codelineno-1-4" name="__codelineno-1-4" href="#__codelineno-1-4"></a>detectkit escalate sam3 --project DIR --prompt TEXT [--class-name CLASS]
 </span><span id="__span-1-5"><a id="__codelineno-1-5" name="__codelineno-1-5" href="#__codelineno-1-5"></a>                        [--source NAME]... [--variant sam3|&lt;finetuned key&gt;]
 </span><span id="__span-1-6"><a id="__codelineno-1-6" name="__codelineno-1-6" href="#__codelineno-1-6"></a>                        [--confidence 0.35] [--max-instances 0]
-</span><span id="__span-1-7"><a id="__codelineno-1-7" name="__codelineno-1-7" href="#__codelineno-1-7"></a>                        [--device auto|cuda|mps|cpu] [--overwrite]
+</span><span id="__span-1-7"><a id="__codelineno-1-7" name="__codelineno-1-7" href="#__codelineno-1-7"></a>                        [--tile-fraction F] [--reference-body-px PX]
+</span><span id="__span-1-8"><a id="__codelineno-1-8" name="__codelineno-1-8" href="#__codelineno-1-8"></a>                        [--device auto|cuda|mps|cpu] [--overwrite]
 </span></code></pre></div>
 <table>
 <thead>
@@ -2430,6 +2431,14 @@ project in DetectKit afterwards to accept or reject the staged frames.</p>
 <tr>
 <td><code>--max-instances</code></td>
 <td>SAM3 only: cap per image; <code>0</code> means unlimited.</td>
+</tr>
+<tr>
+<td><code>--tile-fraction</code></td>
+<td>Tile size = body size / this fraction; <code>0</code> means full frame. Default: what the DetectKit dialog would open with for this variant (saved settings, then the calibration, then the model's stamped scale, then the starting guess at the project's body size).</td>
+</tr>
+<tr>
+<td><code>--reference-body-px</code></td>
+<td>Typical longest animal side in pixels. Default: the dialog's value, then the project's sliced-training reference, then the median of your labels.</td>
 </tr>
 </tbody>
 </table>
