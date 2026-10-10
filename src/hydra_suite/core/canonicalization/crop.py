@@ -470,12 +470,24 @@ def _apply_foreign_mask_canonical(
         return (R @ pts.T + t).T
 
     own_poly = None
+    own_lo = own_hi = None
     if own_corners is not None:
         own_poly = _to_canonical(own_corners).astype(np.int32).reshape(-1, 1, 2)
+        own_lo = own_poly.reshape(-1, 2).min(axis=0)
+        own_hi = own_poly.reshape(-1, 2).max(axis=0)
 
     h, w = crop.shape[:2]
-    for corners in foreign_corners_list:
+    # fillPoly (shift=0) only touches pixels inside its integer vertex AABB,
+    # so a polygon whose AABB misses the canvas draws nothing, and the own
+    # mask cannot intersect a foreign polygon whose AABB misses own's. Both
+    # skips are therefore exact; they bound the cost to the few neighbours a
+    # crop can actually see instead of every detection in the frame.
+    for corners in _foreign_near_canvas(foreign_corners_list, R, t, w, h):
         poly = _to_canonical(corners).astype(np.int32).reshape(-1, 1, 2)
+        lo = poly.reshape(-1, 2).min(axis=0)
+        hi = poly.reshape(-1, 2).max(axis=0)
+        if hi[0] < 0 or hi[1] < 0 or lo[0] >= w or lo[1] >= h:
+            continue
         if own_poly is None:
             cv2.fillPoly(crop, [poly], bg_color)
             continue
@@ -485,11 +497,40 @@ def _apply_foreign_mask_canonical(
         # not by the current detection's own OBB.
         foreign_mask = np.zeros((h, w), dtype=np.uint8)
         cv2.fillPoly(foreign_mask, [poly], 1)
-        own_mask = np.zeros((h, w), dtype=np.uint8)
-        cv2.fillPoly(own_mask, [own_poly], 1)
-        mask = (foreign_mask & ~own_mask).astype(bool)
+        if (hi < own_lo).any() or (lo > own_hi).any():
+            mask = foreign_mask.astype(bool)
+        else:
+            own_mask = np.zeros((h, w), dtype=np.uint8)
+            cv2.fillPoly(own_mask, [own_poly], 1)
+            mask = (foreign_mask & ~own_mask).astype(bool)
         if mask.any():
             crop[mask] = bg_color
+
+
+def _foreign_near_canvas(foreign_corners_list, R, t, w: int, h: int):
+    """The foreign polygons whose canonical image can reach the canvas.
+
+    A vectorised, conservative pre-cull (one matmul for all polygons): it
+    keeps every polygon whose canonical float AABB lies within one pixel of
+    the int-truncated canvas footprint ``(-1, w) x (-1, h)``, so floating
+    rounding differences against the per-polygon transform can never drop a
+    polygon that ``fillPoly`` would draw. Survivors are re-transformed exactly
+    by the caller.
+    """
+    if len(foreign_corners_list) == 0:
+        return []
+    try:
+        pts = np.asarray(foreign_corners_list, dtype=np.float64)
+    except ValueError:  # ragged polygons: no vectorised cull
+        return list(foreign_corners_list)
+    if pts.ndim != 3 or pts.shape[-1] != 2:
+        return list(foreign_corners_list)
+    canon = pts @ R.T + t.reshape(1, 1, 2)
+    lo = canon.min(axis=1)
+    hi = canon.max(axis=1)
+    keep = (hi[:, 0] > -2.0) & (hi[:, 1] > -2.0) & (lo[:, 0] < w + 1.0)
+    keep &= lo[:, 1] < h + 1.0
+    return [foreign_corners_list[int(i)] for i in np.flatnonzero(keep)]
 
 
 def _rotation_matrix(

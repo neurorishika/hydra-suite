@@ -573,7 +573,6 @@ def _apply_foreign_mask_canonical_batch(
     """
     n = obb.num_detections
     fs = _resolve_foreign(obb, foreign_set)
-    m_total = len(fs)
 
     m_aligns: list[np.ndarray] = []
     for i in range(n):
@@ -589,7 +588,9 @@ def _apply_foreign_mask_canonical_batch(
     for i in range(n):
         crop_hwc = np.ascontiguousarray(crops_np[i].transpose(1, 2, 0))
         own = int(fs.self_rows[i])
-        foreign = [fs.corners[j] for j in range(m_total) if j != own]
+        # Every other row of the frame-wide set; the helper culls the ones
+        # that cannot reach this crop before rasterising anything.
+        foreign = np.delete(fs.corners, own, axis=0)
         _apply_foreign_mask_canonical(
             crop_hwc,
             m_aligns[i],

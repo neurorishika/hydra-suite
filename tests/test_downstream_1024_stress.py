@@ -9,12 +9,15 @@ of its crops at once. Excluded by default (``benchmark``); run with::
 ``tracemalloc`` sees numpy (and cv2-through-numpy) allocations only, not the
 torch CPU allocator, so the process max-RSS growth is printed alongside it
 (dominated by one float32 CHW copy of the whole frame, ~233 MiB at 4512^2,
-not by the crops).
+not by the crops). Each test also prints the frame's wall-clock time, so a
+quadratic per-frame path (the pre-cull pose foreign mask cost ~7 s/frame at
+1024 detections) is visible.
 """
 
 from __future__ import annotations
 
 import sys
+import time
 import tracemalloc
 
 import numpy as np
@@ -123,6 +126,9 @@ def test_1024_detection_frame_crops_stay_chunk_bounded_on_cpu():
     obb = _grid_obb()
 
     rss_before = _max_rss_bytes()
+    t0 = time.perf_counter()
+    rows = _run_chunks(frame, obb, "cpu")
+    wall = time.perf_counter() - t0  # untraced: tracemalloc slows numpy
     tracemalloc.start()
     try:
         rows = _run_chunks(frame, obb, "cpu")
@@ -132,8 +138,9 @@ def test_1024_detection_frame_crops_stay_chunk_bounded_on_cpu():
     rss_growth = _max_rss_bytes() - rss_before
 
     print(
-        f"\n[1024 stress cpu] chunks={rows} tracemalloc_peak="
-        f"{peak / 2**20:.1f} MiB max_rss_growth={rss_growth / 2**20:.1f} MiB"
+        f"\n[1024 stress cpu] chunks={rows} wall={wall:.2f} s/frame "
+        f"tracemalloc_peak={peak / 2**20:.1f} MiB "
+        f"max_rss_growth={rss_growth / 2**20:.1f} MiB"
     )
     assert sum(rows) == MAX_DETECTIONS_PER_FRAME
     assert all(r <= DOWNSTREAM_CHUNK_SIZE for r in rows)
@@ -150,12 +157,15 @@ def test_1024_detection_frame_crops_stay_chunk_bounded_on_mps():
     torch.mps.empty_cache()
     before = torch.mps.driver_allocated_memory()
 
+    t0 = time.perf_counter()
     rows = _run_chunks(frame, obb, "mps")
     torch.mps.synchronize()
+    wall = time.perf_counter() - t0
     after = torch.mps.driver_allocated_memory()
 
     print(
-        f"\n[1024 stress mps] chunks={rows} driver_allocated before="
+        f"\n[1024 stress mps] chunks={rows} wall={wall:.2f} s/frame "
+        "driver_allocated before="
         f"{before / 2**20:.1f} MiB after={after / 2**20:.1f} MiB "
         f"delta={(after - before) / 2**20:.1f} MiB"
     )
