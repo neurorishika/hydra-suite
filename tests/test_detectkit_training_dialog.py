@@ -1285,3 +1285,54 @@ def test_training_dialog_state_cannot_expand_control_text_past_loader_cap(
     assert b"\\u0000" not in encoded
     assert len(encoded) <= gui_utils.MAX_UI_JSON_BYTES
     assert gui_utils.load_bounded_json_mapping(preset)
+
+
+def _registry_run(tmp_path, name, status, *, with_last=True):
+    run_dir = tmp_path / "runs" / name
+    (run_dir / "weights").mkdir(parents=True)
+    if with_last:
+        (run_dir / "weights" / "last.pt").write_bytes(b"ckpt")
+    dataset = tmp_path / "derived"
+    dataset.mkdir(exist_ok=True)
+    return {
+        "run_id": name,
+        "status": status,
+        "role": "segment_direct",
+        "run_dir": str(run_dir),
+        "spec": {"derived_dataset_dir": str(dataset)},
+    }
+
+
+def test_find_resumable_runs_offers_crashed_runs_with_a_checkpoint(
+    tmp_path, monkeypatch
+):
+    from hydra_suite.training import registry
+
+    runs = [
+        _registry_run(tmp_path, "old-crash", "failed"),
+        _registry_run(tmp_path, "done", "completed"),
+        _registry_run(tmp_path, "no-ckpt", "failed", with_last=False),
+        _registry_run(tmp_path, "owned", "recovery-required"),
+    ]
+    monkeypatch.setattr(registry, "load_registry", lambda: {"runs": runs})
+
+    found = registry.find_resumable_runs()
+
+    assert [r["run_id"] for r in found] == ["owned", "old-crash"]
+    assert found[0]["_run_dir"].endswith("owned")
+    assert found[0]["role"] == "segment_direct"
+
+
+def test_resume_is_enabled_after_a_restart_from_the_registry(
+    qapp, tmp_path, monkeypatch
+):
+    from hydra_suite.detectkit.gui.dialogs import training_dialog as td
+    from hydra_suite.training import registry
+
+    runs = [_registry_run(tmp_path, "crashed", "failed")]
+    monkeypatch.setattr(registry, "load_registry", lambda: {"runs": runs})
+
+    dialog = td.TrainingDialog(_make_proj(tmp_path))
+
+    assert dialog._last_training_results == []
+    assert dialog.btn_resume.isEnabled()

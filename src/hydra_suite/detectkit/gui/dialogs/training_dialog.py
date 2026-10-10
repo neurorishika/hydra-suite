@@ -1176,15 +1176,33 @@ QTabBar::tab:selected {
         if not running:
             self._update_resume_enabled()
 
+    def _resumable_results(self) -> list[dict]:
+        """Runs that can be resumed, oldest first.
+
+        In-session results come first-hand, but a run killed mid-training has
+        no artifact (so no ``_run_dir``) and a restarted app has no session at
+        all, so the run registry is consulted as well.
+        """
+        session = [
+            r
+            for r in (self._last_training_results or [])
+            if r.get("_run_dir")
+            and Path(r["_run_dir"]).joinpath("weights", "last.pt").exists()
+        ]
+        try:
+            from hydra_suite.training.registry import find_resumable_runs
+
+            registry = list(reversed(find_resumable_runs()))
+        except Exception:
+            logger.warning("Could not read resumable runs", exc_info=True)
+            registry = []
+        seen = {str(r.get("_run_dir")) for r in session}
+        return [r for r in registry if str(r["_run_dir"]) not in seen] + session
+
     def _update_resume_enabled(self) -> None:
         if not hasattr(self, "btn_resume"):
             return
-        has_resume = any(
-            r.get("_run_dir")
-            and Path(r["_run_dir"]).joinpath("weights", "last.pt").exists()
-            for r in (self._last_training_results or [])
-        )
-        self.btn_resume.setEnabled(has_resume)
+        self.btn_resume.setEnabled(bool(self._resumable_results()))
 
     # --- 1. Internal role state ---
 
@@ -1686,6 +1704,7 @@ QTabBar::tab:selected {
         self.btn_start.clicked.connect(self._start_training)
         self.btn_cancel.clicked.connect(self._cancel_training)
         self.btn_resume.clicked.connect(self._resume_training)
+        self._update_resume_enabled()
         self.btn_save_config.clicked.connect(self._save_training_config)
         self.btn_load_config.clicked.connect(self._load_training_config)
         self.btn_register.clicked.connect(self.register_with_training_geometry)
@@ -3361,7 +3380,7 @@ QTabBar::tab:selected {
     def _resume_training(self) -> None:
         last_pt = None
         resume_result = None
-        for r in reversed(self._last_training_results):
+        for r in reversed(self._resumable_results()):
             run_dir = r.get("_run_dir", "")
             if run_dir:
                 candidate = Path(run_dir) / "weights" / "last.pt"

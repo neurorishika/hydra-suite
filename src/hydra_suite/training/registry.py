@@ -389,6 +389,43 @@ def find_run_record(run_id: str) -> dict[str, Any] | None:
     return None
 
 
+RESUMABLE_STATUSES = frozenset({"failed", "interrupted", "recovery-required", "canceled"})
+
+
+def find_resumable_runs(limit: int = 10) -> list[dict[str, Any]]:
+    """Newest-first runs that stopped early and still hold a ``last.pt``.
+
+    The checkpoint is the only thing resume needs, so a run killed by a memory
+    limit or a crash qualifies even though it never reported an artifact.
+    Completed runs are excluded; so are runs whose prepared dataset is gone.
+    """
+
+    found: list[dict[str, Any]] = []
+    for rec in reversed(load_registry().get("runs", [])):
+        if not isinstance(rec, dict) or rec.get("status") not in RESUMABLE_STATUSES:
+            continue
+        run_dir = str(rec.get("run_dir") or "")
+        if not run_dir or not (Path(run_dir) / "weights" / "last.pt").is_file():
+            continue
+        spec = rec.get("spec") if isinstance(rec.get("spec"), dict) else {}
+        dataset = str(spec.get("derived_dataset_dir") or "")
+        if not dataset or not Path(dataset).is_dir():
+            continue
+        found.append(
+            {
+                "run_id": rec.get("run_id", ""),
+                "role": str(rec.get("role") or spec.get("role") or ""),
+                "derived_dataset_dir": dataset,
+                "_run_dir": run_dir,
+                "success": False,
+                "from_registry": True,
+            }
+        )
+        if len(found) >= limit:
+            break
+    return found
+
+
 def create_run_record(
     spec: TrainingRunSpec,
     run_id: str,
