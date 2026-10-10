@@ -53,6 +53,7 @@ from .cache.writer import CacheWriter
 from .cancellation import InferenceCancelled
 from .config import InferenceConfig
 from .downstream_select import (
+    DownstreamCacheError,
     apriltag_raw_to_positions,
     cnn_raw_to_positions,
     positions_in,
@@ -550,6 +551,7 @@ def _open_caches(
     *,
     read_only: bool = False,
     write_mode: str = "auto",
+    filter_hash: "str | None" = None,
 ) -> _CacheSet:
     # Bind every per-video cache to the exact source file so a changed video
     # (e.g. a clip regenerated under the same name with a different frame count)
@@ -559,8 +561,13 @@ def _open_caches(
 
     # Per-animal (downstream) caches hold every N-free filter survivor, so
     # their keys follow the replay filters (never N). The detection key is NOT
-    # wrapped: it stores raw, pre-filter results.
-    filter_hash = replay_filter_hash(config, roi_mask)
+    # wrapped: it stores raw, pre-filter results. ``filter_hash`` overrides the
+    # hash derived from ``config`` -- a read-only replay at candidate filters
+    # opens the caches under the filters they were WRITTEN with (their
+    # provenance) and lets the raw-index loaders raise for any detection the
+    # candidate admits that the stored superset lacks.
+    if filter_hash is None:
+        filter_hash = replay_filter_hash(config, roi_mask)
 
     def _dk(key):
         return _k(with_replay_filters(key, filter_hash))
@@ -806,12 +813,19 @@ def write_identity_evidence_sidecar(
         # indices in the superset caches and return results positionally
         # aligned with filtered_obb (so with det_ids). A phase with no
         # predictions is omitted, not passed as an empty list.
-        cnn_reads: dict[str, list] = {
-            r.label: r.predictions
-            for r in _load_cnn_for_indices(
+        try:
+            cnn_results = _load_cnn_for_indices(
                 cnn_caches, config.cnn_phases, frame_idx, det_idx
             )
-            if r.predictions
+        except DownstreamCacheError as exc:
+            raise DownstreamCacheError(
+                f"identity evidence, frame {frame_idx}: the current detection "
+                "filters admit a detection the CNN caches hold no result for -- "
+                "per-animal results need recomputing for these filter settings. "
+                f"{exc}"
+            ) from exc
+        cnn_reads: dict[str, list] = {
+            r.label: r.predictions for r in cnn_results if r.predictions
         }
         tag_read = _load_apriltag(caches.apriltag, frame_idx, det_idx)
 
@@ -947,6 +961,28 @@ def _load_apriltag(
     return apriltag_raw_to_positions(cache.read_frame(frame_idx), det_indices)
 
 
+def _identity_evidence_base_signature(
+    config: InferenceConfig, video_sig: str, roi_mask: "np.ndarray | None"
+) -> str:
+    """Base signature of the identity-evidence sidecar key.
+
+    The sidecar holds evidence for the FINAL-N filtered set, so -- unlike the
+    N-free per-animal caches -- it depends on N as well as on the replay
+    filters. Both are folded in alongside the video signature.
+    """
+    parts = [video_sig]
+    filter_hash = replay_filter_hash(config, roi_mask)
+    if filter_hash:
+        parts.append(f"filters={filter_hash}")
+    if config.detection_source == "bgsub":
+        bg = config.bgsub
+        if bg is not None:
+            parts.append(f"n={int(bg.max_targets)}x{int(bg.max_contour_multiplier)}")
+    elif config.obb is not None:
+        parts.append(f"n={int(config.obb.max_detections)}")
+    return "|".join(parts)
+
+
 class InferenceRunner:
     """Orchestrates model lifecycle, real-time inference, and batch-pass caching.
 
@@ -973,6 +1009,7 @@ class InferenceRunner:
         roi_mask: "np.ndarray | None" = None,
         identity_evidence: "IdentityEvidenceRunConfig | None" = None,
         runtime_overlay: "InferenceRuntimeOverlay | None" = None,
+        cache_filter_hash: "str | None" = None,
     ) -> None:
         from hydra_suite.utils.profiling_process import maybe_arm_process_recorder
 
@@ -998,6 +1035,15 @@ class InferenceRunner:
         # backward/replay run reproduce the exact same cache key via
         # caches_all_valid() and read the forward run's cache.
         self._roi_mask = roi_mask
+        # Replay-filter hash the per-animal caches are keyed under. None =>
+        # derived from ``config`` (the normal case: write and replay share
+        # filters). A read-only replay at candidate filters passes the hash of
+        # the filters the caches were written with (see _open_caches). Only
+        # read paths use it: a writing pass always keys what it computes under
+        # its own filters, so it is refused outside cache-only mode.
+        if cache_filter_hash is not None and not cache_only:
+            raise ValueError("cache_filter_hash is only valid with cache_only=True")
+        self._cache_filter_hash = cache_filter_hash
         # Memoizes _frame_space_roi_mask's result, keyed by (video_path,
         # id(self._roi_mask)) so a later `self._roi_mask` reassignment (see
         # run_batch_pass's optional roi_mask override) naturally invalidates
@@ -1094,6 +1140,7 @@ class InferenceRunner:
             self._video_sig,
             self._roi_mask,
             read_only=True,
+            filter_hash=self._cache_filter_hash,
         )
         return cache_set_is_fully_reusable(caches)
 
@@ -1113,6 +1160,7 @@ class InferenceRunner:
             self._video_sig,
             self._roi_mask,
             read_only=True,
+            filter_hash=self._cache_filter_hash,
         )
         if not caches.set_manifest_valid or caches.detection is None:
             return False
@@ -1130,6 +1178,7 @@ class InferenceRunner:
             self._video_sig,
             self._roi_mask,
             read_only=True,
+            filter_hash=self._cache_filter_hash,
         )
         if not caches.set_manifest_valid or caches.detection is None:
             return []
@@ -1547,17 +1596,12 @@ class InferenceRunner:
         from .identity_evidence_key import identity_evidence_cache_key
 
         assert self._identity_evidence is not None  # caller-guaranteed
-        # The sidecar is rebuilt from the per-animal caches, so it follows the
-        # same replay-filter hash they do (folded into the base signature;
-        # an empty hash -- bg-sub -- leaves the key unchanged).
-        base_signature = self._video_sig
-        filter_hash = replay_filter_hash(self.config, self._roi_mask)
-        if filter_hash:
-            base_signature = f"{base_signature}|filters={filter_hash}"
         key = identity_evidence_cache_key(
             self._identity_evidence.catalog_spec,
             self._identity_evidence.per_factor_temps(),
-            base_signature,
+            _identity_evidence_base_signature(
+                self.config, self._video_sig, self._roi_mask
+            ),
             unknown_prior=float(self.config.identity_unknown_prior),
         )
         return build_evidence_cache_path(
@@ -1614,7 +1658,37 @@ class InferenceRunner:
         if evidences:
             self._identity_evidence_cache.save_frame(frame_idx, evidences)
 
-    def _write_identity_evidence_batch(self, start_frame: int, end_frame: int) -> None:
+    def ensure_identity_evidence_sidecar(
+        self,
+        start_frame: int,
+        end_frame: int,
+        *,
+        out_path: "Path | None" = None,
+    ) -> "Path | None":
+        """Return the "batch" identity-evidence sidecar, rebuilding it if absent.
+
+        On cache reuse no batch pass runs, so the sidecar for the CURRENT key
+        (filters + N) may not exist yet -- e.g. a replay at a different N than
+        the caches were written with. It is rebuilt here from the per-animal
+        caches through the raw-index replay loaders; no stage model runs.
+        ``out_path`` overrides the destination (a read-only replay must not
+        write into the cache directory). Returns ``None`` when this runner has
+        no identity-evidence config.
+        """
+        if self._identity_evidence is None or self.cache_dir is None:
+            return None
+        path = (
+            Path(out_path)
+            if out_path is not None
+            else self._identity_evidence_sidecar_path("batch")
+        )
+        if not path.exists():
+            self._write_identity_evidence_batch(start_frame, end_frame, path)
+        return path
+
+    def _write_identity_evidence_batch(
+        self, start_frame: int, end_frame: int, out_path: "Path | None" = None
+    ) -> None:
         """Batch seam: read back the just-flushed raw caches, write the sidecar.
 
         Called AFTER `run_batch_pass`'s caches are closed (flushed to disk) --
@@ -1631,8 +1705,10 @@ class InferenceRunner:
             self._video_sig,
             self._roi_mask,
             read_only=True,
+            filter_hash=self._cache_filter_hash,
         )
-        out_path = self._identity_evidence_sidecar_path("batch")
+        if out_path is None:
+            out_path = self._identity_evidence_sidecar_path("batch")
         write_identity_evidence_sidecar(
             read_caches,
             self.config,
@@ -1927,6 +2003,7 @@ class InferenceRunner:
                 self._video_sig,
                 self._roi_mask,
                 read_only=True,
+                filter_hash=self._cache_filter_hash,
             )
         if not self._caches.set_manifest_valid:
             raise RuntimeError("inference cache set manifest is invalid or incomplete")
@@ -1959,15 +2036,23 @@ class InferenceRunner:
 
         filtered_obb, det_indices = self.load_filtered_obb(frame_idx)
         assert self._caches is not None  # established by load_filtered_obb
-        ht_result = _load_headtail_for_indices(
-            self._caches.headtail, frame_idx, det_indices, filtered_obb
-        )
-        cnn_results = _load_cnn_for_indices(
-            self._caches.cnn, self.config.cnn_phases, frame_idx, det_indices
-        )
-        pose_result = _load_pose_for_indices(
-            self._caches.pose, frame_idx, det_indices, filtered_obb
-        )
+        try:
+            ht_result = _load_headtail_for_indices(
+                self._caches.headtail, frame_idx, det_indices, filtered_obb
+            )
+            cnn_results = _load_cnn_for_indices(
+                self._caches.cnn, self.config.cnn_phases, frame_idx, det_indices
+            )
+            pose_result = _load_pose_for_indices(
+                self._caches.pose, frame_idx, det_indices, filtered_obb
+            )
+        except DownstreamCacheError as exc:
+            raise DownstreamCacheError(
+                f"frame {frame_idx}: the current detection filters admit a "
+                "detection the per-animal (head-tail/CNN/pose) caches hold no "
+                "result for -- per-animal results need recomputing for these "
+                f"filter settings (rerun inference without cache reuse). {exc}"
+            ) from exc
         at_result = _load_apriltag(self._caches.apriltag, frame_idx, det_indices)
 
         return _build_frame_result(

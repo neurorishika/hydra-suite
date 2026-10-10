@@ -1321,6 +1321,25 @@ class TrackingEngineCore:
                         _replay_vector.effective.to_dict(),
                         _replay_vector.status,
                     )
+            # A read-only replay of candidate parameters (optimizer production
+            # validation) opens the per-animal caches under the replay filters
+            # they were WRITTEN with (the provenance params), while filtering
+            # detections with the candidate's own. A candidate whose final set
+            # stays inside the stored superset replays; one that admits a
+            # detection the superset lacks raises a clear DownstreamCacheError
+            # from load_frame instead of being rejected by a key mismatch.
+            _cache_filter_hash = None
+            if (
+                self.cache_read_only_replay
+                and self.inference_cache_provenance_params is not None
+            ):
+                from hydra_suite.core.inference.cache.keys import replay_filter_hash
+
+                _prov_params = dict(self.inference_cache_provenance_params)
+                _cache_filter_hash = replay_filter_hash(
+                    build_inference_config_from_params(_prov_params),
+                    _prov_params.get("ROI_MASK"),
+                )
             # Backward (replay) passes only call load_frame / caches_all_valid —
             # they never invoke run_realtime or run_batch_pass.  Skip loading
             # HeadTail, CNN, Pose (incl. SLEAP), and AprilTag backends in that
@@ -1339,6 +1358,7 @@ class TrackingEngineCore:
                 roi_mask=p.get("ROI_MASK"),
                 identity_evidence=_identity_evidence_run_config,
                 runtime_overlay=self.inference_autotune_overlay,
+                cache_filter_hash=_cache_filter_hash,
             )
             if not (
                 self.backward_mode or self.cache_read_only_replay or self.preview_mode
@@ -2104,14 +2124,60 @@ class TrackingEngineCore:
         # (inference_runner.identity_evidence_cache, below) since it is not
         # flushed to disk until the pass ends.
         _batch_evidence_cache = None
+        # Cache reuse skips run_batch_pass, so the sidecar for THIS run's key
+        # (filters + N) may not exist -- e.g. a replay at a different N than
+        # the caches were written with. Rebuild it from the per-animal caches
+        # through the raw-index loaders (no stage model runs). A read-only
+        # replay must not write into the cache directory, so it builds into a
+        # temporary directory that is removed once the sidecar is loaded.
+        # Deliberately outside the try below: a DownstreamCacheError here
+        # (the candidate filters admit detections the caches lack) must
+        # surface, not degrade into "identity evidence unavailable".
+        _batch_ev_path_override = None
+        _batch_ev_tmpdir = None
+        if (
+            inference_runner is not None
+            and not effective_realtime_tracking_mode
+            and use_cached_detections
+            and _identity_evidence_run_config is not None
+        ):
+            _expected_ev_path = inference_runner.identity_evidence_sidecar_path("batch")
+            if _expected_ev_path is not None and not os.path.exists(
+                str(_expected_ev_path)
+            ):
+                if self.cache_read_only_replay:
+                    import tempfile
+
+                    _batch_ev_tmpdir = tempfile.mkdtemp(
+                        prefix="hydra_identity_evidence_"
+                    )
+                    _batch_ev_path_override = (
+                        Path(_batch_ev_tmpdir) / Path(_expected_ev_path).name
+                    )
+                logger.info(
+                    "Rebuilding identity evidence sidecar from the per-animal "
+                    "caches (no batch pass ran for this key)."
+                )
+                try:
+                    inference_runner.ensure_identity_evidence_sidecar(
+                        start_frame, end_frame, out_path=_batch_ev_path_override
+                    )
+                except BaseException:
+                    if _batch_ev_tmpdir is not None:
+                        import shutil
+
+                        shutil.rmtree(_batch_ev_tmpdir, ignore_errors=True)
+                    raise
         if inference_runner is not None and not effective_realtime_tracking_mode:
             try:
                 from hydra_suite.core.individual.identity.cache import (
                     IdentityEvidenceCache,
                 )
 
-                _batch_ev_path = inference_runner.identity_evidence_sidecar_path(
-                    "batch"
+                _batch_ev_path = (
+                    _batch_ev_path_override
+                    if _batch_ev_path_override is not None
+                    else inference_runner.identity_evidence_sidecar_path("batch")
                 )
                 if _batch_ev_path is not None and os.path.exists(str(_batch_ev_path)):
                     _batch_evidence_cache = IdentityEvidenceCache(
@@ -2146,6 +2212,11 @@ class TrackingEngineCore:
                     logger.debug(
                         "Identity evidence sidecar unavailable (batch)", exc_info=True
                     )
+        if _batch_ev_tmpdir is not None:
+            # The read-mode cache loaded the whole file eagerly.
+            import shutil
+
+            shutil.rmtree(_batch_ev_tmpdir, ignore_errors=True)
 
         # Open CNN identity caches for reading during tracking loop (multi-phase).
         _cnn_phase_states = []
