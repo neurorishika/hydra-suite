@@ -709,6 +709,15 @@
 </li>
       
         <li class="md-nav__item">
+  <a href="#annotated-video-resolution" class="md-nav__link">
+    <span class="md-ellipsis">
+      Annotated video resolution
+    </span>
+  </a>
+  
+</li>
+      
+        <li class="md-nav__item">
   <a href="#parallel-across-gpus" class="md-nav__link">
     <span class="md-ellipsis">
       Parallel across GPUs
@@ -2052,6 +2061,15 @@
 </li>
       
         <li class="md-nav__item">
+  <a href="#annotated-video-resolution" class="md-nav__link">
+    <span class="md-ellipsis">
+      Annotated video resolution
+    </span>
+  </a>
+  
+</li>
+      
+        <li class="md-nav__item">
   <a href="#parallel-across-gpus" class="md-nav__link">
     <span class="md-ellipsis">
       Parallel across GPUs
@@ -2165,11 +2183,21 @@ whether backward tracking is enabled in the config:</p>
 <p>When identity or pose ran, the final CSV also gets a
 <code>..._with_individual.csv</code> sibling (e.g. <code>&lt;stem&gt;_tracking_final_with_individual.csv</code>)
 carrying the identity and <code>PoseKpt_*</code> columns.</p>
+<h2 id="annotated-video-resolution">Annotated video resolution<a class="headerlink" href="#annotated-video-resolution" title="Permanent link">&para;</a></h2>
+<div class="language-bash highlight"><pre><span></span><code><span id="__span-2-1"><a id="__codelineno-2-1" name="__codelineno-2-1" href="#__codelineno-2-1"></a>trackerkit<span class="w"> </span>track<span class="w"> </span>video.mp4<span class="w"> </span>--video-scale<span class="w"> </span><span class="m">1</span>.0<span class="w">    </span><span class="c1"># full-resolution annotated video</span>
+</span><span id="__span-2-2"><a id="__codelineno-2-2" name="__codelineno-2-2" href="#__codelineno-2-2"></a>trackerkit<span class="w"> </span>track<span class="w"> </span>--video-list<span class="w"> </span>batch.txt<span class="w"> </span>--video-scale<span class="w"> </span><span class="m">0</span>.25
+</span></code></pre></div>
+<p><code>--video-scale</code> (0.1-1.0) overrides the config's <code>video_output_scale</code> for
+every video in the batch, including fanned-out GPU children and
+<code>trackerkit job pack</code>. Without it the config's value is used, and a config
+without the key renders at <code>0.5</code>. An out-of-range value -- on the command
+line or in a config -- stops the run before tracking starts. It only affects
+the final annotated video, not tracking or the CSVs.</p>
 <h2 id="parallel-across-gpus">Parallel across GPUs<a class="headerlink" href="#parallel-across-gpus" title="Permanent link">&para;</a></h2>
-<div class="language-bash highlight"><pre><span></span><code><span id="__span-2-1"><a id="__codelineno-2-1" name="__codelineno-2-1" href="#__codelineno-2-1"></a>trackerkit<span class="w"> </span>track<span class="w"> </span>--video-list<span class="w"> </span>batch.txt<span class="w"> </span>--gpus<span class="w"> </span>auto<span class="w">          </span><span class="c1"># one child per GPU nvidia-smi reports</span>
-</span><span id="__span-2-2"><a id="__codelineno-2-2" name="__codelineno-2-2" href="#__codelineno-2-2"></a>trackerkit<span class="w"> </span>track<span class="w"> </span>--video-list<span class="w"> </span>batch.txt<span class="w"> </span>--gpus<span class="w"> </span><span class="m">0</span>-3<span class="w">           </span><span class="c1"># four GPUs</span>
-</span><span id="__span-2-3"><a id="__codelineno-2-3" name="__codelineno-2-3" href="#__codelineno-2-3"></a>trackerkit<span class="w"> </span>track<span class="w"> </span>--video-list<span class="w"> </span>batch.txt<span class="w"> </span>--gpus<span class="w"> </span><span class="m">0</span>,2,GPU-8f1a<span class="w">  </span><span class="c1"># ordinals or UUID prefixes</span>
-</span><span id="__span-2-4"><a id="__codelineno-2-4" name="__codelineno-2-4" href="#__codelineno-2-4"></a>trackerkit<span class="w"> </span>track<span class="w"> </span>--video-list<span class="w"> </span>batch.txt<span class="w"> </span>--jobs<span class="w"> </span><span class="m">3</span><span class="w">             </span><span class="c1"># three children sharing the current device (CPU / Apple Silicon)</span>
+<div class="language-bash highlight"><pre><span></span><code><span id="__span-3-1"><a id="__codelineno-3-1" name="__codelineno-3-1" href="#__codelineno-3-1"></a>trackerkit<span class="w"> </span>track<span class="w"> </span>--video-list<span class="w"> </span>batch.txt<span class="w"> </span>--gpus<span class="w"> </span>auto<span class="w">          </span><span class="c1"># one child per GPU nvidia-smi reports</span>
+</span><span id="__span-3-2"><a id="__codelineno-3-2" name="__codelineno-3-2" href="#__codelineno-3-2"></a>trackerkit<span class="w"> </span>track<span class="w"> </span>--video-list<span class="w"> </span>batch.txt<span class="w"> </span>--gpus<span class="w"> </span><span class="m">0</span>-3<span class="w">           </span><span class="c1"># four GPUs</span>
+</span><span id="__span-3-3"><a id="__codelineno-3-3" name="__codelineno-3-3" href="#__codelineno-3-3"></a>trackerkit<span class="w"> </span>track<span class="w"> </span>--video-list<span class="w"> </span>batch.txt<span class="w"> </span>--gpus<span class="w"> </span><span class="m">0</span>,2,GPU-8f1a<span class="w">  </span><span class="c1"># ordinals or UUID prefixes</span>
+</span><span id="__span-3-4"><a id="__codelineno-3-4" name="__codelineno-3-4" href="#__codelineno-3-4"></a>trackerkit<span class="w"> </span>track<span class="w"> </span>--video-list<span class="w"> </span>batch.txt<span class="w"> </span>--jobs<span class="w"> </span><span class="m">3</span><span class="w">             </span><span class="c1"># three children sharing the current device (CPU / Apple Silicon)</span>
 </span></code></pre></div>
 <p>Each video becomes a child process <code>trackerkit track &lt;video&gt; --config &lt;effective.json&gt;</code>
 pinned with <code>CUDA_VISIBLE_DEVICES=&lt;uuid&gt;</code>, so every child (and the SLEAP
@@ -2198,8 +2226,8 @@ run. Rules:</p>
 <p><code>--gpus auto</code> means <em>every GPU <code>nvidia-smi</code> reports</em> — it does <strong>not</strong> skip GPUs
 that are busy. On a multi-user box it will happily start children on top of
 someone else's job. Check first and name the free GPUs explicitly:</p>
-<div class="language-bash highlight"><pre><span></span><code><span id="__span-3-1"><a id="__codelineno-3-1" name="__codelineno-3-1" href="#__codelineno-3-1"></a>nvidia-smi<span class="w"> </span>--query-gpu<span class="o">=</span>index,memory.used,utilization.gpu<span class="w"> </span>--format<span class="o">=</span>csv,noheader
-</span><span id="__span-3-2"><a id="__codelineno-3-2" name="__codelineno-3-2" href="#__codelineno-3-2"></a>trackerkit<span class="w"> </span>track<span class="w"> </span>--video-list<span class="w"> </span>batch.txt<span class="w"> </span>--gpus<span class="w"> </span><span class="m">1</span>,2,4,6<span class="w">      </span><span class="c1"># the idle ones</span>
+<div class="language-bash highlight"><pre><span></span><code><span id="__span-4-1"><a id="__codelineno-4-1" name="__codelineno-4-1" href="#__codelineno-4-1"></a>nvidia-smi<span class="w"> </span>--query-gpu<span class="o">=</span>index,memory.used,utilization.gpu<span class="w"> </span>--format<span class="o">=</span>csv,noheader
+</span><span id="__span-4-2"><a id="__codelineno-4-2" name="__codelineno-4-2" href="#__codelineno-4-2"></a>trackerkit<span class="w"> </span>track<span class="w"> </span>--video-list<span class="w"> </span>batch.txt<span class="w"> </span>--gpus<span class="w"> </span><span class="m">1</span>,2,4,6<span class="w">      </span><span class="c1"># the idle ones</span>
 </span></code></pre></div>
 <p>Two related habits on a shared box:</p>
 <ul>
@@ -2215,8 +2243,8 @@ someone else's job. Check first and name the free GPUs explicitly:</p>
 </ul>
 <p>The GUI exposes the same feature under <strong>Batch › Run videos in parallel (one process per GPU)</strong>.</p>
 <h2 id="applying-a-tuned-inference-profile">Applying a tuned inference profile<a class="headerlink" href="#applying-a-tuned-inference-profile" title="Permanent link">&para;</a></h2>
-<div class="language-bash highlight"><pre><span></span><code><span id="__span-4-1"><a id="__codelineno-4-1" name="__codelineno-4-1" href="#__codelineno-4-1"></a>trackerkit<span class="w"> </span>track<span class="w"> </span>video.mp4<span class="w"> </span>--apply-tuned-inference<span class="w">     </span><span class="c1"># use a validated profile if one exists</span>
-</span><span id="__span-4-2"><a id="__codelineno-4-2" name="__codelineno-4-2" href="#__codelineno-4-2"></a>trackerkit<span class="w"> </span>track<span class="w"> </span>video.mp4<span class="w"> </span>--no-apply-tuned-inference<span class="w">  </span><span class="c1"># ignore any stored profile (default)</span>
+<div class="language-bash highlight"><pre><span></span><code><span id="__span-5-1"><a id="__codelineno-5-1" name="__codelineno-5-1" href="#__codelineno-5-1"></a>trackerkit<span class="w"> </span>track<span class="w"> </span>video.mp4<span class="w"> </span>--apply-tuned-inference<span class="w">     </span><span class="c1"># use a validated profile if one exists</span>
+</span><span id="__span-5-2"><a id="__codelineno-5-2" name="__codelineno-5-2" href="#__codelineno-5-2"></a>trackerkit<span class="w"> </span>track<span class="w"> </span>video.mp4<span class="w"> </span>--no-apply-tuned-inference<span class="w">  </span><span class="c1"># ignore any stored profile (default)</span>
 </span></code></pre></div>
 <p><code>track</code> only ever <em>looks up</em> a stored profile — it never measures. Produce a
 profile with <code>trackerkit calibrate</code> (below) or the GUI's Calibrate button
@@ -2225,9 +2253,9 @@ and how a profile is validated. <code>--inference-autotune-manual FIELD</code> (
 e.g. <code>--inference-autotune-manual pose_batch_size</code>) pins one tuning coordinate
 at its configured value even when a profile exists for it.</p>
 <h2 id="calibrating">Calibrating<a class="headerlink" href="#calibrating" title="Permanent link">&para;</a></h2>
-<div class="language-bash highlight"><pre><span></span><code><span id="__span-5-1"><a id="__codelineno-5-1" name="__codelineno-5-1" href="#__codelineno-5-1"></a>trackerkit<span class="w"> </span>calibrate<span class="w"> </span>--video<span class="w"> </span>video.mp4<span class="w">                          </span><span class="c1"># uses video_config.json beside the video</span>
-</span><span id="__span-5-2"><a id="__codelineno-5-2" name="__codelineno-5-2" href="#__codelineno-5-2"></a>trackerkit<span class="w"> </span>calibrate<span class="w"> </span>--video<span class="w"> </span>video.mp4<span class="w"> </span>--config<span class="w"> </span>my.json<span class="w">         </span><span class="c1"># explicit config</span>
-</span><span id="__span-5-3"><a id="__codelineno-5-3" name="__codelineno-5-3" href="#__codelineno-5-3"></a>trackerkit<span class="w"> </span>calibrate<span class="w"> </span>--video<span class="w"> </span>video.mp4<span class="w"> </span>--budget-seconds<span class="w"> </span><span class="m">1800</span><span class="w">    </span><span class="c1"># wall-clock cap on the search</span>
+<div class="language-bash highlight"><pre><span></span><code><span id="__span-6-1"><a id="__codelineno-6-1" name="__codelineno-6-1" href="#__codelineno-6-1"></a>trackerkit<span class="w"> </span>calibrate<span class="w"> </span>--video<span class="w"> </span>video.mp4<span class="w">                          </span><span class="c1"># uses video_config.json beside the video</span>
+</span><span id="__span-6-2"><a id="__codelineno-6-2" name="__codelineno-6-2" href="#__codelineno-6-2"></a>trackerkit<span class="w"> </span>calibrate<span class="w"> </span>--video<span class="w"> </span>video.mp4<span class="w"> </span>--config<span class="w"> </span>my.json<span class="w">         </span><span class="c1"># explicit config</span>
+</span><span id="__span-6-3"><a id="__codelineno-6-3" name="__codelineno-6-3" href="#__codelineno-6-3"></a>trackerkit<span class="w"> </span>calibrate<span class="w"> </span>--video<span class="w"> </span>video.mp4<span class="w"> </span>--budget-seconds<span class="w"> </span><span class="m">1800</span><span class="w">    </span><span class="c1"># wall-clock cap on the search</span>
 </span></code></pre></div>
 <p><code>calibrate</code> measures this box's own inference throughput against the given
 video and config, and — if it finds a faster, output-equivalent vector —
@@ -2249,8 +2277,8 @@ expected and common on Apple Silicon (MPS): see
 <code>docs/developer-guide/inference-autotuner.md</code> for why "no improvement" is not
 a failure there.</p>
 <h2 id="example-nine-gpu-host">Example: nine-GPU host<a class="headerlink" href="#example-nine-gpu-host" title="Permanent link">&para;</a></h2>
-<div class="language-bash highlight"><pre><span></span><code><span id="__span-6-1"><a id="__codelineno-6-1" name="__codelineno-6-1" href="#__codelineno-6-1"></a>conda<span class="w"> </span>activate<span class="w"> </span>hydra-cuda
-</span><span id="__span-6-2"><a id="__codelineno-6-2" name="__codelineno-6-2" href="#__codelineno-6-2"></a>trackerkit<span class="w"> </span>track<span class="w"> </span>--video-list<span class="w"> </span>/data/session_2026-09/batch.txt<span class="w"> </span>--gpus<span class="w"> </span>auto
+<div class="language-bash highlight"><pre><span></span><code><span id="__span-7-1"><a id="__codelineno-7-1" name="__codelineno-7-1" href="#__codelineno-7-1"></a>conda<span class="w"> </span>activate<span class="w"> </span>hydra-cuda
+</span><span id="__span-7-2"><a id="__codelineno-7-2" name="__codelineno-7-2" href="#__codelineno-7-2"></a>trackerkit<span class="w"> </span>track<span class="w"> </span>--video-list<span class="w"> </span>/data/session_2026-09/batch.txt<span class="w"> </span>--gpus<span class="w"> </span>auto
 </span></code></pre></div>
 
 

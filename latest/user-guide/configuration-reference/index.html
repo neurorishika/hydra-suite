@@ -832,6 +832,21 @@
     </span>
   </a>
   
+    <nav class="md-nav" aria-label="Setup">
+      <ul class="md-nav__list">
+        
+          <li class="md-nav__item">
+  <a href="#annotated-video-speed" class="md-nav__link">
+    <span class="md-ellipsis">
+      Annotated video speed
+    </span>
+  </a>
+  
+</li>
+        
+      </ul>
+    </nav>
+  
 </li>
       
         <li class="md-nav__item">
@@ -2067,6 +2082,21 @@
     </span>
   </a>
   
+    <nav class="md-nav" aria-label="Setup">
+      <ul class="md-nav__list">
+        
+          <li class="md-nav__item">
+  <a href="#annotated-video-speed" class="md-nav__link">
+    <span class="md-ellipsis">
+      Annotated video speed
+    </span>
+  </a>
+  
+</li>
+        
+      </ul>
+    </nav>
+  
 </li>
       
         <li class="md-nav__item">
@@ -2199,6 +2229,11 @@
 <td>valid file path</td>
 </tr>
 <tr>
+<td><code>video_output_scale</code></td>
+<td>Annotated-video resolution relative to the source (GUI: <strong>Output scale</strong>; CLI: <code>--video-scale</code>). Missing key = <code>0.5</code>; out-of-range is an error, never clamped</td>
+<td><code>0.1 - 1.0</code> (default <code>0.5</code>)</td>
+</tr>
+<tr>
 <td><code>fps</code></td>
 <td>Acquisition FPS used for temporal scaling</td>
 <td><code>1.0 - 240.0</code></td>
@@ -2210,6 +2245,22 @@
 </tr>
 </tbody>
 </table>
+<h3 id="annotated-video-speed">Annotated video speed<a class="headerlink" href="#annotated-video-speed" title="Permanent link">&para;</a></h3>
+<p>The final annotated video is rendered on three threads -- decode, draw,
+encode. Frames are decoded straight to the output size (<code>video_output_scale</code>;
+width and height are rounded to even numbers for H.264/HEVC), so at the
+default 0.5 every stage handles a quarter of the pixels. Markers, arrows,
+labels, trails and pose overlays scale with it; at <code>1.0</code> the overlay is
+pixel-identical to earlier releases. The decoder is chosen automatically: NVIDIA NVDEC
+with on-GPU resize first when a CUDA GPU is usable (Linux, Windows); then, when
+downscaling, PyAV software decode, PyAV hardware decode (VideoToolbox / CUDA),
+OpenCV; at scale 1.0, OpenCV (the historical path) leads. Videos with a
+display-rotation tag always use OpenCV, which applies the rotation tracking
+saw, and so do variable-frame-rate videos rendered from a start frame &gt; 0
+(OpenCV's seek is where tracking started). The log names the decoder that was picked (<code>Annotated video decode: ...</code>).
+Hardware decoders have size limits (H.264 above 4096 px per side is
+typically refused), so such sources fall through to software decode
+automatically.</p>
 <h2 id="detection">Detection<a class="headerlink" href="#detection" title="Permanent link">&para;</a></h2>
 <table>
 <thead>
