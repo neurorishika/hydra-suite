@@ -10,8 +10,9 @@ published model leaks into the pictures. Writes PNGs into ``--out``:
 * ``host_*.png`` -- the real DetectKit hosts at their natural size, and the
   TrackerKit main window's "Find Animals" page (YOLO direct, SAHI on, a model
   sidecar with two calibration profiles): ``host_trackerkit.png`` on the
-  primary profile, ``host_trackerkit_custom.png`` on the custom-geometry
-  profile with Advanced expanded.
+  primary profile with a loaded 2448 x 2048 video's frame size,
+  ``host_trackerkit_custom.png`` on the custom-geometry profile with Advanced
+  expanded and no video (the labelled example frame).
 
 Usage::
 
@@ -346,6 +347,14 @@ def _seed_trackerkit_model(root: Path) -> Path:
     return model
 
 
+def _assert_yolo_page(panel) -> None:
+    """Fail loudly rather than publish a shot of the wrong detection page."""
+    if panel.combo_detection_method.currentText() != "YOLO OBB" or (
+        panel.stack_detection.currentIndex() != 1
+    ):
+        raise RuntimeError("TrackerKit gallery: the YOLO page is not shown")
+
+
 def render_trackerkit(out: Path, app, root: Path) -> list[Path]:
     """TrackerKit's Find Animals page with the SAHI widget in its YOLO group."""
     from hydra_suite.trackerkit.gui.main_window import MainWindow
@@ -369,15 +378,21 @@ def render_trackerkit(out: Path, app, root: Path) -> list[Path]:
     panel.combo_yolo_obb_mode.setCurrentIndex(0)  # Direct
     panel.apply_slice_meta_for_model(str(model))
     panel.chk_slice_enabled.setChecked(True)
+    # What loading a 2448 x 2048 video does (session.py); the custom shot
+    # below shows the labelled example frame instead (no video).
+    panel.set_slice_preview_frame_size(2448, 2048)
+    _assert_yolo_page(panel)
     written = [
         _grab_scroll_page(
             window, panel.slice_settings, out / "host_trackerkit.png", app
         )
     ]
+    panel.set_slice_preview_frame_size(None, None)
     panel.combo_slice_profile.setCurrentIndex(
         panel.combo_slice_profile.findData("fast")
     )
     panel.slice_settings.btn_slice_advanced.setChecked(True)  # the user path
+    _assert_yolo_page(panel)
     written.append(
         _grab_scroll_page(
             window, panel.slice_settings, out / "host_trackerkit_custom.png", app
