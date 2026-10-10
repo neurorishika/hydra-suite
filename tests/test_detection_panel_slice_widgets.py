@@ -584,3 +584,61 @@ def test_advanced_shows_only_bound_trackerkit_rows(monkeypatch):
     # The body size is display-only, never editable (no config key to bind).
     assert widget.spin_slice_body.isEnabled() is False
     window.close()
+
+
+def test_profile_custom_tile_is_badged_profile_until_the_user_edits(
+    monkeypatch, tmp_path
+):
+    import json
+
+    from tests.test_trackerkit_sahi_widget_persistence import TWO_PROFILE_SIDECAR
+
+    window = _make_main_window(monkeypatch)
+    panel = window._detection_panel
+    widget = panel.slice_settings
+    model_path = tmp_path / "model.pt"
+    model_path.write_text("stub model", encoding="utf-8")
+    sidecar = model_path.parent / (model_path.name + ".slice_meta.json")
+    sidecar.write_text(json.dumps(TWO_PROFILE_SIDECAR), encoding="utf-8")
+    panel.apply_slice_meta_for_model(str(model_path))
+    panel.combo_slice_profile.setCurrentIndex(
+        panel.combo_slice_profile.findData("fast")
+    )
+    assert panel.combo_slice_geometry.currentData() == "custom"
+    assert widget.source_badge("tile_size") == "profile"
+    panel.spin_slice_tile_w.setValue(900)
+    assert widget.source_badge("tile_size") == "user"
+
+    # Training geometry that is itself custom: the stamp supplied the size.
+    custom_training = {
+        "schema_version": 2,
+        "training_geometry": {
+            "geometry_mode": "custom",
+            "slice_width": 768,
+            "slice_height": 768,
+        },
+        "primary_profile_id": "",
+        "profiles": [],
+    }
+    other = tmp_path / "other.pt"
+    other.write_text("stub model", encoding="utf-8")
+    (tmp_path / "other.pt.slice_meta.json").write_text(
+        json.dumps(custom_training), encoding="utf-8"
+    )
+    panel.apply_slice_meta_for_model(str(other))
+    assert panel.combo_slice_geometry.currentData() == "custom"
+    assert panel.spin_slice_tile_w.value() == 768
+    assert widget.source_badge("tile_size") == "stamped"
+    window.close()
+
+
+def test_slice_preview_uses_the_loaded_video_frame_size(monkeypatch):
+    window = _make_main_window(monkeypatch)
+    panel = window._detection_panel
+    preview = panel.slice_settings.preview
+    assert preview.frame_size == (1920, 1080)  # no video: labelled fallback
+    panel.set_slice_preview_frame_size(2448, 2048)
+    assert preview.frame_size == (2448, 2048)
+    panel.set_slice_preview_frame_size(None, None)
+    assert preview.frame_size == (1920, 1080)
+    window.close()

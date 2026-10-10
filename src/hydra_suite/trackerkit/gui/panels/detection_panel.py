@@ -55,6 +55,15 @@ if TYPE_CHECKING:
 
 logger = logging.getLogger(__name__)
 
+#: Badge word for a SAHI value applied from a model sidecar, by the
+#: ``resolve_slice_profile_values`` rung that supplied it.
+SLICE_SOURCE_BY_RESOLUTION = {
+    "training": "stamped",
+    "requested": "profile",
+    "primary": "profile",
+    "saved_settings": "config",
+}
+
 #: Direct-model checkpoint tasks -> combo indices (combo_yolo_direct_task is the
 #: hidden serialized state holder; the visible label is auto-inferred).
 _DIRECT_TASK_INDEX = {"obb": 0, "detect": 1, "segment": 2}
@@ -2463,11 +2472,22 @@ class DetectionPanel(QWidget):
             body = 0.0
         if resolution is None:
             source = "default" if body <= 0 else "config"
-        elif resolution == "training":
-            source = "stamped"
         else:
-            source = "profile"
+            source = SLICE_SOURCE_BY_RESOLUTION.get(resolution, "profile")
         self.slice_settings.set_reference_body(body, source)
+
+    def set_slice_preview_frame_size(self, width, height) -> None:
+        """Show the SAHI tile preview on the loaded video's frame size.
+
+        ``None`` (no video) keeps the preview's labelled example frame.
+        """
+        try:
+            size = (int(width), int(height))
+        except (TypeError, ValueError):
+            size = None
+        if size is not None and (size[0] <= 0 or size[1] <= 0):
+            size = None
+        self.slice_settings.set_preview_frame_size(size)
 
     def _update_slice_batch_admission_label(self) -> None:
         """Describe the runtime-admitted SAHI tile batch without guessing it.
@@ -2905,6 +2925,14 @@ class DetectionPanel(QWidget):
                 spin.blockSignals(False)
             self._show_slice_body(
                 values["trained_body_px"], self._slice_profile_resolution
+            )
+            # Badge a custom tile size with whatever supplied it (shown only
+            # in Custom; the user's next W/H or mode edit makes it "user").
+            self.slice_settings.set_source(
+                "tile_size",
+                SLICE_SOURCE_BY_RESOLUTION.get(
+                    self._slice_profile_resolution, "profile"
+                ),
             )
             if use_saved_settings:
                 self._select_slice_profile_combo_item("__custom__", label="Custom")
