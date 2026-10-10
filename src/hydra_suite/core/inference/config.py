@@ -1044,8 +1044,14 @@ def build_inference_config_from_params(params: dict) -> InferenceConfig:
             EXTRACTION_CONFIDENCE_FLOOR,
         )
     yolo_iou = float(params.get("YOLO_IOU_THRESHOLD", 0.7))
-    min_obj = float(params.get("MIN_OBJECT_SIZE", 0.0))
-    max_obj = float(params.get("MAX_OBJECT_SIZE", float("inf")) or float("inf"))
+    # Size gate, mirroring legacy yolo_detector and the bg-sub measurer: the
+    # bounds are always emitted from the multipliers, but only gate when
+    # ENABLE_SIZE_FILTERING is set.
+    if params.get("ENABLE_SIZE_FILTERING", False):
+        min_obj = float(params.get("MIN_OBJECT_SIZE", 0.0))
+        max_obj = float(params.get("MAX_OBJECT_SIZE", float("inf")) or float("inf"))
+    else:
+        min_obj, max_obj = 0.0, float("inf")
     # N is a replay-time knob: extraction keeps every candidate >= the
     # extraction floor (bounded by MAX_DETECTIONS_PER_FRAME) and replay
     # applies the 2N window and the final N cut (filtering.filter_with_indices).
