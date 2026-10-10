@@ -1017,6 +1017,15 @@
   
 </li>
       
+        <li class="md-nav__item">
+  <a href="#training-augmentation" class="md-nav__link">
+    <span class="md-ellipsis">
+      Training Augmentation
+    </span>
+  </a>
+  
+</li>
+      
     </ul>
   
 </nav>
@@ -2135,6 +2144,15 @@
   
 </li>
       
+        <li class="md-nav__item">
+  <a href="#training-augmentation" class="md-nav__link">
+    <span class="md-ellipsis">
+      Training Augmentation
+    </span>
+  </a>
+  
+</li>
+      
     </ul>
   
 </nav>
@@ -2232,6 +2250,47 @@ paths, device, epochs, batch size, and other hyperparameters).</p>
 <li>Generate split files and train a baseline.</li>
 <li>Use model-assisted passes and active learning to iterate.</li>
 </ol>
+<h2 id="training-augmentation">Training Augmentation<a class="headerlink" href="#training-augmentation" title="Permanent link">&para;</a></h2>
+<p>The YOLO-pose and ViTPose training dialogs keep the crop centre fixed. Besides the
+Ultralytics controls (HSV, rotation) it has two window augmentations:</p>
+<table>
+<thead>
+<tr>
+<th>Setting</th>
+<th>Default</th>
+<th>Effect</th>
+</tr>
+</thead>
+<tbody>
+<tr>
+<td>scale jitter</td>
+<td>0.20</td>
+<td>The crop window is resized 0.8x-1.2x about its centre.</td>
+</tr>
+<tr>
+<td>aspect jitter</td>
+<td>0.20</td>
+<td>The window's width:height ratio varies 0.83x-1.2x at constant area; the animal is never stretched.</td>
+</tr>
+</tbody>
+</table>
+<p>Keypoints, boxes and classes are transformed with the image; keypoints pushed
+outside the window become not-visible, and a sample whose animal would be
+mostly cut away is left un-jittered. Ultralytics' own <code>translate</code> (shifts the
+centre) and <code>scale</code> (isotropic zoom) now default to 0. Training launches through
+<code>hydra_suite.training.ultralytics_entrypoint</code>, which installs the window
+augmentation from the <code>HYDRA_WINDOW_SCALE_JITTER</code> / <code>HYDRA_WINDOW_ASPECT_JITTER</code>
+environment variables. Mosaic (an Ultralytics default) still tiles several crops
+and is independent of these settings.</p>
+<p><strong>ViTPose</strong> (native trainer) has the same two controls in its <em>ViTPose Config</em>
+group, with the same defaults and meaning. They are written to <code>run.json</code> as
+<code>scale_jitter</code> / <code>aspect_jitter</code>; a <code>run.json</code> without <code>scale_jitter</code> keeps the
+legacy behaviour (random zoom of about +/-30%, no aspect jitter), while an
+explicit value, including 0, switches to the centred window jitter. The window
+is re-cropped before the usual full-extent box and fit to the model input, with
+black padding, and keypoints pushed outside it become not-visible. Rotation
+(+/-40 degrees, 60% of samples) and photometric jitter are unchanged. SLEAP
+training is external and does not get these controls.</p>
 
 
 

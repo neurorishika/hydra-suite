@@ -978,6 +978,15 @@
   
 </li>
       
+        <li class="md-nav__item">
+  <a href="#training-augmentation-defaults" class="md-nav__link">
+    <span class="md-ellipsis">
+      Training Augmentation Defaults
+    </span>
+  </a>
+  
+</li>
+      
     </ul>
   
 </nav>
@@ -2015,6 +2024,15 @@
   
 </li>
       
+        <li class="md-nav__item">
+  <a href="#training-augmentation-defaults" class="md-nav__link">
+    <span class="md-ellipsis">
+      Training Augmentation Defaults
+    </span>
+  </a>
+  
+</li>
+      
     </ul>
   
 </nav>
@@ -2063,6 +2081,48 @@
 <li>Active learning for efficient labeling</li>
 <li>Export to Parquet/CSV, ImageFolder, and Ultralytics classification formats</li>
 </ul>
+<h2 id="training-augmentation-defaults">Training Augmentation Defaults<a class="headerlink" href="#training-augmentation-defaults" title="Permanent link">&para;</a></h2>
+<p>The training dialog's <em>Space and Augmentations</em> tab starts with conservative
+defaults tuned for canonical animal crops:</p>
+<table>
+<thead>
+<tr>
+<th>Setting</th>
+<th>Default</th>
+<th>Why</th>
+</tr>
+</thead>
+<tbody>
+<tr>
+<td>Horizontal / vertical flip</td>
+<td>0</td>
+<td>Left/right are class labels for heading models; use <em>label expansion</em> for label-aware mirroring.</td>
+</tr>
+<tr>
+<td>Hue jitter</td>
+<td>0.01</td>
+<td>Colour-tag identity depends on hue; keep it minimal.</td>
+</tr>
+<tr>
+<td>Saturation / brightness / contrast</td>
+<td>0.10</td>
+<td>Mild lighting variation.</td>
+</tr>
+<tr>
+<td>Scale jitter</td>
+<td>0.20</td>
+<td>Window size varies 0.8x-1.2x about the crop centre, so the model tolerates the animal appearing larger or smaller.</td>
+</tr>
+<tr>
+<td>Aspect ratio jitter</td>
+<td>0.20</td>
+<td>The crop window's width:height ratio varies 0.83x-1.2x at constant area. The crop centre never moves and the animal is never stretched.</td>
+</tr>
+</tbody>
+</table>
+<p>Scale and aspect jitter apply to train samples only. For YOLO-classify they are
+written as extra pre-fitted copies per training image
+(<code>canonical_aug_copies</code>, default 3); validation and test images stay clean.</p>
 
 
 
