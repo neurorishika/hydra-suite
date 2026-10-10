@@ -91,3 +91,14 @@ replacement, so a 20-image cluster is far likelier to be picked from than a
 expected share. Cluster noise points count as rare. If the *Errors* and *Rare
 clusters* shares push the recipe above 100%, every slot is scaled down evenly.
 
+### Combination balancing (multi-factor schemes)
+
+The **Combos** share (default 15%) targets factor combinations that are rare or missing in the labeled set, e.g. `blue_pink` with no labels.
+
+- It works on **per-factor predictions** (head slices for multi-head models, marginals over composite classes for flat models), so it can surface combinations the model has never output. An image predicted `blue` in factor 1 and `pink` in factor 2 is a likely `blue_pink` even if no `blue_pink` was ever labeled.
+- Picks are greedy with diminishing returns: each pick lowers the weight of the combination it is expected to fill, so a batch spreads over several under-represented combinations instead of one.
+- Combinations containing `unknown` are not targeted, and unverified machine labels do not count as labeled examples.
+- Each candidate is tagged `likely <combo>` in the candidate table.
+
+Default recipe: 25% uncertainty, 20% diversity, 20% errors, 15% combinations, 10% rare clusters, 5% representative, 5% audit.
+
