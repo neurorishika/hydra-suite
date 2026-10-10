@@ -55,6 +55,16 @@ def setup_logging(
     logger.info(f"Working directory: {os.getcwd()}")
 
 
+def _video_scale_arg(value: str) -> float:
+    """argparse type for --video-scale: a loud parse error, never a clamp."""
+    from hydra_suite.core.post.video_output_scale import validate_video_output_scale
+
+    try:
+        return validate_video_output_scale(value)
+    except ValueError as exc:
+        raise argparse.ArgumentTypeError(str(exc)) from None
+
+
 def build_parser() -> argparse.ArgumentParser:
     """Build the TrackerKit argument parser (no parsing side effects).
 
@@ -169,6 +179,18 @@ Examples:
     )
 
     track_parser.add_argument(
+        "--video-scale",
+        dest="video_scale",
+        type=_video_scale_arg,
+        default=None,
+        metavar="FLOAT",
+        help=(
+            "Resolution of the final annotated video relative to the source "
+            "(0.1-1.0; overrides the config's video_output_scale, default 0.5). "
+            "Applies to every video in the batch."
+        ),
+    )
+    track_parser.add_argument(
         "--gpus",
         type=str,
         default=None,
@@ -270,6 +292,9 @@ Examples:
     job_pack.add_argument("--config", type=str)
     job_pack.add_argument("--keystone-override", action="store_true")
     job_pack.add_argument("--sahi-profile", type=str)
+    job_pack.add_argument(
+        "--video-scale", dest="video_scale", type=_video_scale_arg, default=None
+    )
     pack_autotune_group = job_pack.add_mutually_exclusive_group()
     pack_autotune_group.add_argument(
         "--apply-tuned-inference",
@@ -589,6 +614,7 @@ def main(argv: list[str] | None = None) -> object:
                 config_path=args.config,
                 keystone_override=bool(args.keystone_override),
                 sahi_profile=getattr(args, "sahi_profile", None),
+                video_scale=getattr(args, "video_scale", None),
                 gpus=getattr(args, "gpus", None),
                 jobs=getattr(args, "jobs", None),
                 threads_per_job=getattr(args, "threads_per_job", None),
