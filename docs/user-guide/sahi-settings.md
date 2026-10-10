@@ -131,8 +131,11 @@ shows the **whole-animal minimum**: the largest object scale + 0.05 (outside
   by <source>`, with no button. A measured overlap is not nudged.
 
 **The minimum is a hint and is never applied automatically.** No host
-derives or rewrites a saved overlap. TrackerKit's saved 0.2, YOLO training's
-0.2, SAM3 training's 0.25 and SAM3 escalation's 0.5 load exactly as saved. A
+derives or rewrites a saved overlap. TrackerKit's saved 0.2, a YOLO training
+project's saved overlap, SAM3 training's 0.25 and SAM3 escalation's 0.5 load
+exactly as saved. New YOLO training projects start at 0.25 — the
+whole-animal minimum of the default scale set (0.20 + 0.05) — so they don't
+open below their own minimum; TrackerKit's serving default stays 0.2. A
 deliberately higher overlap is never nudged down. SAM2 overlap is fixed at
 0.5 and shown disabled.
 

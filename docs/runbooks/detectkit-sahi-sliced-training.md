@@ -27,7 +27,7 @@ You have a DetectKit project with:
    - Set **Object scales** to `0.05, 0.1, 0.15, 0.2` (the default). Each value is an object scale: the animal's size as a fraction of the tile (body size ÷ tile size). With "Fit to animal size", each scale produces tiles of body size ÷ scale, and the **Tile size** row shows the resulting range (for example `→ 240–960 px over 4 scales`).
      - A larger fraction means a smaller tile and more aggressive crowd-splitting.
      - Scales are stored as fractions only, so changing the model input size does not require translating pixel targets yourself.
-   - Leave **Tile overlap** at `0.2` (the default: neighbouring tiles share 20% of a tile). Next to it the widget shows the **whole-animal minimum**, the largest scale + 0.05 (`0.25` for the default set). Below that value an animal at a tile seam can be cut in every tile. The widget then warns and offers **Raise to 0.25**, but it never changes your overlap on its own.
+   - Leave **Tile overlap** at `0.25` (the default for new projects: neighbouring tiles share 25% of a tile). Next to it the widget shows the **whole-animal minimum**, the largest scale + 0.05 (`0.25` for the default set). Below that value an animal at a tile seam can be cut in every tile; if you lower the overlap (or add a larger scale) the widget warns and offers **Raise to X**, but it never changes your overlap on its own. Projects saved before this default keep their stored overlap (often `0.2`).
    - Use the live tile-layout preview beside the controls to see the resulting grid over the project’s labelled frame sizes at their native dimensions. Click it to cycle through the image-size distribution; all configured object-scale targets are shown together. Before the first build it is explicitly illustrative; afterward it uses the label-derived body measurement.
 
 5. **Configure negative sampling and merging** (click **Advanced** to show these rows):
@@ -69,7 +69,7 @@ You have a DetectKit project with:
    - On crowded frames, you should see individual bounding boxes that were previously merged; the model should now separate clusters.
    - If clusters are still merged, check that:
      - Object scales match your typical object scale (decrease the fractions if tiles are too small or fragmented).
-     - Overlap is not too small (0.2 is typical; lower overlap can miss objects at tile edges).
+     - Overlap is not below the whole-animal minimum the widget shows (0.25 for the default scales; lower overlap can miss objects at tile edges).
      - Minimum retained object area is not too aggressive (0.25 deliberately rejects severely partial objects).
 
 3. **Run the scale-sweep validation:**
@@ -96,7 +96,7 @@ You have a DetectKit project with:
      - Object scales as model-input fractions (e.g., 0.05, 0.10, 0.15, 0.20).
      - The label-derived reference body pixel size recorded in the sidecar.
      - Overlap and min-area-ratio values.
-   - Example note: *"Model trained with SAHI labelled-object tiling; object scales 0.05, 0.10, 0.15, 0.20 of model input; overlap 0.2; reference_body_px measured from labels. Sidecar slice_meta.json included."*
+   - Example note: *"Model trained with SAHI labelled-object tiling; object scales 0.05, 0.10, 0.15, 0.20 of model input; overlap 0.25; reference_body_px measured from labels. Sidecar slice_meta.json included."*
 
 3. **Prepare for TrackerKit inference:**
    - When you select the model in TrackerKit's detection panel (direct mode), TrackerKit reads the sidecar and fills in the SAHI controls from the model's primary profile, else its training geometry. `trackerkit track` does the same headless, and `--sahi-profile` selects a calibration profile explicitly. See [SAHI calibration profiles](../user-guide/detectkit-sahi-calibration.md).
@@ -123,7 +123,7 @@ You have a DetectKit project with:
   - Retrain with larger object-scale fractions to force more aggressive tiling.
   - Increase "Empty-tile sampling fraction" (e.g., 0.25) to improve sparse-frame accuracy.
   - Verify that the training dataset contains representative crowded frames; if training data is mostly sparse, the model won't learn crowd-splitting.
-  - Check that overlap (0.2) and minimum retained object area (0.25) are not too conservative.
+  - Check that overlap (0.25 default) and minimum retained object area (0.25) are not too conservative.
 
 ### Model runs but inference is not sliced
 
