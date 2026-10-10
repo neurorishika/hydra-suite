@@ -69,11 +69,6 @@ class DetectKitDialog(BaseDialog):
         # Read the size BEFORE activating the layout: activation can grow the
         # window itself, which must not be mistaken for a user resize.
         current = self.size()
-        if self._fit_last is not None and current != self._fit_last:
-            # The user's size becomes the preferred one, so it survives
-            # repeated content changes and hide + show.
-            self._fit_preferred = current
-            self._fit_user_sized = True
         # Nested layouts cache their minimums; hiding rows deep inside does
         # not always reach the top, so drop every cache before measuring.
         child_layouts = self.findChildren(QLayout)
@@ -89,12 +84,31 @@ class DetectKitDialog(BaseDialog):
             layout.invalidate()
             layout.activate()
         minimum = self._fit_base.expandedTo(self.minimumSizeHint())
+        if self._fit_last is not None and current != self._fit_last:
+            # A change that is exactly the layout enforcing its NEW minimum
+            # (Advanced opened wider rows) is layout-driven, not the user.
+            if current != self._fit_last.expandedTo(minimum):
+                # The user's size becomes the preferred one, so it survives
+                # repeated content changes and hide + show.
+                self._fit_preferred = current
+                self._fit_user_sized = True
         self.setMinimumSize(minimum)
         preferred = self._fit_preferred
         if getattr(self, "_fit_follow", False) and not getattr(
             self, "_fit_user_sized", False
         ):
-            preferred = QSize(preferred.width(), self.sizeHint().height())
+            # Keep the current width (no wobble on collapse) and measure the
+            # height AT that width: sizeHint() measures word-wrapped notes at
+            # its own narrower width and over-estimates (a dead gap).
+            width = max(preferred.width(), current.width())
+            if layout is not None and layout.hasHeightForWidth():
+                margins = self.contentsMargins()
+                height = layout.totalHeightForWidth(
+                    width - margins.left() - margins.right()
+                )
+            else:
+                height = self.sizeHint().height()
+            preferred = QSize(width, height)
         target = preferred.expandedTo(minimum)
         self.resize(target)
         self._fit_last = QSize(target)

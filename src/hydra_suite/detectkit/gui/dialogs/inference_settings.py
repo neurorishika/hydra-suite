@@ -217,6 +217,10 @@ class InferenceSettingsDialog(DetectKitDialog):
         self.slice_widget.set_spec(
             spec, extras={"merge_threshold": spec.merge_threshold}
         )
+        if hasattr(self, "_fit_base"):
+            # set_spec writes the checkbox with signals blocked, so the
+            # toggled -> schedule_fit wiring never sees "Use Project Defaults".
+            self.schedule_fit()
 
     def settings(self) -> InferenceRunSettings:
         """Return a fresh runtime configuration from the current dialog state."""
