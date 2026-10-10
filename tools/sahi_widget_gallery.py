@@ -12,7 +12,9 @@ published model leaks into the pictures. Writes PNGs into ``--out``:
   sidecar with two calibration profiles): ``host_trackerkit.png`` on the
   primary profile with a loaded 2448 x 2048 video's frame size,
   ``host_trackerkit_custom.png`` on the custom-geometry profile with Advanced
-  expanded and no video (the labelled example frame).
+  expanded and no video (the labelled example frame), and
+  ``host_trackerkit_off.png`` with SAHI unticked (collapsed to the checkbox).
+  TrackerKit stacks the preview below the controls (``preview_position``).
 
 Usage::
 
@@ -396,6 +398,13 @@ def render_trackerkit(out: Path, app, root: Path) -> list[Path]:
     written.append(
         _grab_scroll_page(
             window, panel.slice_settings, out / "host_trackerkit_custom.png", app
+        )
+    )
+    panel.chk_slice_enabled.setChecked(False)  # the user path: collapses
+    _assert_yolo_page(panel)
+    written.append(
+        _grab_scroll_page(
+            window, panel.slice_settings, out / "host_trackerkit_off.png", app
         )
     )
     window.close()

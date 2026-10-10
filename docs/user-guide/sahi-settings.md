@@ -38,11 +38,20 @@ inference dialog, and "Enable sliced training + preview" in YOLO training.
 The SAM3 training and escalation hosts have no checkbox. In escalation, an
 object scale of 0 means no tiling (see below).
 
+While the checkbox is unticked, the group collapses to just the checkbox:
+every other row, the Advanced section, the profile picker and the
+tile-layout preview are hidden (in TrackerKit, so are the tile-batch note and
+the profile status line). Nothing is reset. Tick it again and every value,
+including whether Advanced was open, comes back as you left it. The DetectKit
+inference dialog shrinks and grows with the group.
+
 ### Profile
 
 The calibration profile picker: "Training geometry", each calibrated profile
 saved with the model, or "Custom". The row appears only in TrackerKit, and
-only when the selected model's sidecar contains calibration profiles. If
+only when the selected model's sidecar contains calibration profiles, and
+only while sliced inference is on: to switch to a profile, tick the Enable
+checkbox first, then pick it. If
 you edit a profile-owned value, the picker switches to `Custom (based on
 <name>)`. Derived values never cause this switch. See [SAHI calibration
 profiles](detectkit-sahi-calibration.md).
@@ -161,8 +170,14 @@ The rows under Advanced depend on the host:
 
 ## Which hosts show which rows
 
-Constrained fields are **disabled, never hidden**. A row is hidden only when
-the host has no such setting.
+While sliced inference is on, constrained fields are **disabled, never
+hidden**: a row is hidden only when the host has no such setting. The one
+exception is the Enable checkbox: while it is unticked, everything but the
+checkbox is hidden (see [Enable checkbox](#enable-checkbox)).
+
+In TrackerKit the tile-layout preview sits **below** the controls and scales
+to the panel's width, so the SAHI settings fit the side panel without
+sideways scrolling. The DetectKit dialogs keep it beside the controls.
 
 | Row | TrackerKit | DetectKit inference | YOLO training | SAM3 training | SAM3 escalation | SAM2 escalation |
 |---|---|---|---|---|---|---|
@@ -174,7 +189,7 @@ the host has no such setting.
 | Body size | display only | editable (`user`) | note (measured at build) | note (measured at build) | Override | Override |
 | Tile size / Resolved tile | yes | yes | yes | yes | label | label |
 | Tile overlap | yes | yes | yes | yes (max 0.99) | yes | fixed 0.5 |
-| Tile-layout preview | yes | yes | yes | yes | – | – |
+| Tile-layout preview | below the controls | beside | beside | beside | – | – |
 | Advanced | Tiles per call, Tile memory budget | Merge threshold | Merge threshold, min area, below the floor, empty-tile fraction, mix full frames, loss balance | min area, below the floor, keep empty tiles, mix full frames | Merge IoU, Seam margin | – |
 
 TrackerKit's merge policy, metric and threshold belong to the model's

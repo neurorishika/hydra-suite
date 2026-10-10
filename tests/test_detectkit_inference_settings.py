@@ -100,3 +100,145 @@ def test_tools_panel_exposes_inference_settings_button(qapp):
 
     panel = ToolsPanel()
     assert panel._btn_inference_settings.text() == "Inference Settings…"
+
+
+def test_inference_dialog_collapses_when_sahi_off_and_refits(qapp):
+    """S6: SAHI off collapses the slice widget to its checkbox; the dialog
+    re-fits shorter (schedule_fit) and grows back when SAHI is ticked."""
+    from hydra_suite.detectkit.gui.dialogs.inference_settings import (
+        InferenceSettingsDialog,
+    )
+
+    settings = InferenceRunSettings(slice_settings=SliceTrainingSettings(enabled=True))
+    dlg = InferenceSettingsDialog(settings, settings, model_input_size=1024)
+
+    def settle() -> None:
+        for _ in range(5):
+            qapp.processEvents()
+
+    dlg.show()
+    settle()
+    on_height = dlg.height()
+    before = dlg.settings()
+    assert dlg.slice_widget.preview.isVisibleTo(dlg)
+    dlg.chk_sliced.setChecked(False)
+    settle()
+    assert not dlg.slice_widget.preview.isVisibleTo(dlg)
+    assert not dlg.combo_geometry.isVisibleTo(dlg)
+    assert dlg.height() < on_height - 100
+    dlg.chk_sliced.setChecked(True)
+    settle()
+    assert dlg.height() == on_height
+    assert dlg.settings() == before
+    # Opening Advanced grows the dialog so no row is squeezed.
+    dlg.slice_widget.btn_slice_advanced.setChecked(True)
+    settle()
+    assert dlg.height() >= dlg.minimumSizeHint().height()
+    assert dlg.height() > on_height
+    dlg.close()
+
+
+def test_inference_dialog_keeps_a_user_resized_height(qapp):
+    from hydra_suite.detectkit.gui.dialogs.inference_settings import (
+        InferenceSettingsDialog,
+    )
+
+    settings = InferenceRunSettings(slice_settings=SliceTrainingSettings(enabled=True))
+    dlg = InferenceSettingsDialog(settings, settings, model_input_size=1024)
+    dlg.show()
+    for _ in range(5):
+        qapp.processEvents()
+    dlg.resize(dlg.width(), dlg.height() + 120)  # the user drags it taller
+    user_height = dlg.height()
+    dlg.chk_sliced.setChecked(False)
+    dlg.chk_sliced.setChecked(True)
+    for _ in range(5):
+        qapp.processEvents()
+    assert dlg.height() == user_height
+    dlg.close()
+
+
+def _settle(qapp) -> None:
+    for _ in range(5):
+        qapp.processEvents()
+
+
+def _inference_dialog(enabled: bool):
+    from hydra_suite.detectkit.gui.dialogs.inference_settings import (
+        InferenceSettingsDialog,
+    )
+
+    current = InferenceRunSettings(
+        slice_settings=SliceTrainingSettings(enabled=enabled)
+    )
+    defaults = InferenceRunSettings(slice_settings=SliceTrainingSettings(enabled=True))
+    return InferenceSettingsDialog(current, defaults, model_input_size=1024)
+
+
+def _rows_do_not_overlap(widget) -> bool:
+    from PySide6.QtCore import QRect
+    from PySide6.QtWidgets import QAbstractSpinBox, QComboBox
+
+    rects = []
+    for kind in (QAbstractSpinBox, QComboBox):
+        for child in widget.findChildren(kind):
+            if child.isVisibleTo(widget):
+                rects.append(
+                    QRect(child.mapTo(widget, child.rect().topLeft()), child.size())
+                )
+    return all(not a.intersects(b) for i, a in enumerate(rects) for b in rects[i + 1 :])
+
+
+def test_inference_dialog_collapse_still_works_after_advanced_was_opened(qapp):
+    dlg = _inference_dialog(True)
+    dlg.show()
+    _settle(qapp)
+    dlg.slice_widget.btn_slice_advanced.setChecked(True)
+    _settle(qapp)
+    advanced_height = dlg.height()
+    width = dlg.width()
+    dlg.chk_sliced.setChecked(False)
+    _settle(qapp)
+    assert dlg.height() < advanced_height - 100
+    assert dlg.width() == width  # no width wobble on collapse
+    dlg.chk_sliced.setChecked(True)
+    _settle(qapp)
+    assert dlg.height() == advanced_height
+    dlg.close()
+
+
+def test_inference_dialog_collapsed_has_no_dead_gap(qapp):
+    dlg = _inference_dialog(False)
+    dlg.show()
+    _settle(qapp)
+    layout = dlg.layout()
+    margins = dlg.contentsMargins()
+    needed = layout.totalHeightForWidth(dlg.width() - margins.left() - margins.right())
+    assert dlg.height() <= needed + 2
+    dlg.close()
+
+
+def test_restore_defaults_from_sahi_off_refits_without_clipping(qapp):
+    dlg = _inference_dialog(False)
+    dlg.show()
+    _settle(qapp)
+    dlg.btn_restore_defaults.click()  # defaults turn SAHI on (signals blocked)
+    _settle(qapp)
+    assert dlg.chk_sliced.isChecked()
+    assert dlg.height() >= dlg.minimumSizeHint().height()
+    assert _rows_do_not_overlap(dlg.slice_widget)
+    dlg.close()
+
+
+def test_user_resize_is_honoured_across_toggles_and_advanced(qapp):
+    dlg = _inference_dialog(True)
+    dlg.show()
+    _settle(qapp)
+    dlg.resize(dlg.width() + 60, dlg.height() + 150)
+    _settle(qapp)
+    user = dlg.size()
+    for toggle in (dlg.chk_sliced, dlg.chk_sliced):
+        toggle.setChecked(not toggle.isChecked())
+        _settle(qapp)
+    assert dlg.size() == user
+    dlg.close()
