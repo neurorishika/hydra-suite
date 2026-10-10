@@ -58,9 +58,103 @@ DENSE_MASK_BYTES_PER_PIXEL = 1
 _OVERSIZE_WARNED: set[tuple[str, int, int]] = set()
 
 
+# OOM fallback state, run-scoped like the oversize warnings: the reduced chunk
+# learned per predict site (so later chunks do not re-probe the size that just
+# ran out of memory) and whether this run's one halving WARNING was logged.
+_OOM_CHUNK_CAP: dict[str, int] = {}
+_OOM_WARNED: set[str] = set()
+
+
 def reset_oversize_warnings() -> None:
-    """Start a new run's oversize-warning scope (called by InferenceRunner)."""
+    """Start a new run's oversize-warning / OOM-fallback scope.
+
+    Called by InferenceRunner at construction (one run).
+    """
     _OVERSIZE_WARNED.clear()
+    _OOM_CHUNK_CAP.clear()
+    _OOM_WARNED.clear()
+
+
+def is_out_of_memory(exc: BaseException) -> bool:
+    """Device OOM: ``torch.OutOfMemoryError`` (CUDA) or MPS's RuntimeError.
+
+    Verified on torch 2.11: CUDA raises ``torch.OutOfMemoryError`` (a
+    RuntimeError subclass, "CUDA out of memory ..."); MPS raises a plain
+    ``RuntimeError("MPS backend out of memory (...)")``.
+    """
+    import torch
+
+    oom_type = getattr(torch, "OutOfMemoryError", None)
+    if oom_type is not None and isinstance(exc, oom_type):
+        return True
+    return isinstance(exc, RuntimeError) and "out of memory" in str(exc).lower()
+
+
+def _empty_device_cache() -> None:
+    import gc
+
+    import torch
+
+    gc.collect()
+    if torch.cuda.is_available():
+        torch.cuda.empty_cache()
+    mps = getattr(torch, "mps", None)
+    if (
+        mps is not None
+        and torch.backends.mps.is_available()
+        and hasattr(mps, "empty_cache")
+    ):
+        mps.empty_cache()
+
+
+def predict_with_oom_halving(items: list, predict, description: str) -> list:
+    """``predict(items)`` with an out-of-memory safety net.
+
+    Without an OOM this is exactly one ``predict`` call on ``items`` (outputs
+    are untouched). On a device OOM the device cache is emptied, the chunk is
+    halved (rounded up) and retried; the reduced size sticks for the rest of
+    the run at this ``description`` so later chunks are pre-split. A chunk of
+    one that still runs out of memory re-raises. One WARNING per run names the
+    chunk size before/after (a halved chunk can change batched float numerics
+    in that run).
+    """
+    cap = _OOM_CHUNK_CAP.get(description)
+    if cap is not None and len(items) > cap:
+        out: list = []
+        for start in range(0, len(items), cap):
+            out.extend(
+                predict_with_oom_halving(
+                    items[start : start + cap], predict, description
+                )
+            )
+        return out
+    try:
+        return list(predict(items))
+    except Exception as exc:  # noqa: BLE001 - re-raised unless device OOM
+        if len(items) <= 1 or not is_out_of_memory(exc):
+            raise
+    # Outside the except block, so the failed call's frames/tensors are freed.
+    _empty_device_cache()
+    half = max(1, (len(items) + 1) // 2)
+    _OOM_CHUNK_CAP[description] = min(_OOM_CHUNK_CAP.get(description, half), half)
+    if description not in _OOM_WARNED:
+        _OOM_WARNED.add(description)
+        logger.warning(
+            "%s: device out of memory at chunk size %d; emptied the device cache "
+            "and retrying at chunk size %d for the rest of this run (halved "
+            "again, down to 1, if needed).",
+            description,
+            len(items),
+            half,
+        )
+    else:
+        logger.info(
+            "%s: device out of memory at chunk size %d; retrying at %d.",
+            description,
+            len(items),
+            half,
+        )
+    return predict_with_oom_halving(items, predict, description)
 
 
 def _warn_oversize_once(description: str, per_job: int, budget: int) -> None:
@@ -102,8 +196,16 @@ def estimated_prediction_job_bytes(
     """Live input/output bytes for one model prediction item.
 
     The compact term counts every candidate slot; the dense (segment-mask)
-    term assumes at most ``DENSE_MASK_ESTIMATE_CANDIDATES`` masks per item at
-    full model resolution -- an estimate assumption, never a detection cap.
+    term assumes at most ``DENSE_MASK_ESTIMATE_CANDIDATES`` (~64) instances
+    per tile/crop, each a uint8 mask at full model (letterbox) resolution --
+    an estimate assumption, never a detection cap.
+
+    Not modelled: ultralytics ``process_mask(..., upsample=True)`` builds the
+    masks of one image as a float32 ``(n, imgsz, imgsz)`` interpolation before
+    binarising (a transient ~4-5 B/px per mask), and model activations. A
+    crowded tile with more than ~64 instances can therefore exceed the
+    estimate; the predict loops catch a device OOM and halve the chunk
+    (``predict_with_oom_halving``) instead of failing the run.
     """
     side = max(1, int(imgsz))
     candidates = max(1, int(max_detections))
@@ -365,58 +467,85 @@ def _predict_tiles(
     batch (a list of tensors is not a valid predict source) and the transform
     inverted on each result, exactly as ``obb._run_direct`` does.
     """
-    from .obb import (
-        _gpu_letterbox_batch,
-        _invert_letterbox_on_result,
-        effective_raw_detection_cap,
-    )
+    from .obb import effective_raw_detection_cap
 
     conf_floor = config.direct.confidence_floor
     classes = config.target_classes or None
     candidate_cap = effective_raw_detection_cap(config)
     results: list = []
     for start in range(0, len(images), chunk_size):
-        part = images[start : start + chunk_size]
-        if letterbox:
-            batched, lb_params = _gpu_letterbox_batch(part, imgsz)
-            chunk_results = model.predict(
-                batched,
-                conf=conf_floor,
-                iou=1.0,
-                classes=classes,
-                verbose=False,
-                device=runtime.device,
-                max_det=candidate_cap,
+        results.extend(
+            predict_with_oom_halving(
+                images[start : start + chunk_size],
+                lambda part: _predict_tile_part(
+                    part,
+                    model,
+                    runtime,
+                    imgsz,
+                    letterbox=letterbox,
+                    conf_floor=conf_floor,
+                    classes=classes,
+                    candidate_cap=candidate_cap,
+                ),
+                "Sliced tile prediction",
             )
-            # Invert the letterbox so extract functions see tile-local
-            # coordinates. When every tile is exactly imgsz x imgsz (the common
-            # auto_model case) this is r=1, no pad -> a true no-op, skipped
-            # entirely so no result tensor is touched. Real letterboxing only
-            # kicks in for a custom tile size that differs from imgsz, or the
-            # (rare) full-frame pass.
-            for tile_img, res, (r, pad_left, pad_top) in zip(
-                part, chunk_results, lb_params
-            ):
-                if r != 1.0 or pad_left != 0.0 or pad_top != 0.0:
-                    _invert_letterbox_on_result(
-                        res,
-                        r,
-                        pad_left,
-                        pad_top,
-                        orig_shape=(int(tile_img.shape[0]), int(tile_img.shape[1])),
-                    )
-        else:
-            chunk_results = model.predict(
-                part,
-                conf=conf_floor,
-                iou=1.0,
-                classes=classes,
-                verbose=False,
-                device=runtime.device,
-                max_det=candidate_cap,
-            )
-        results.extend(chunk_results)
+        )
     return results
+
+
+def _predict_tile_part(
+    part: list,
+    model,
+    runtime,
+    imgsz: int,
+    *,
+    letterbox: bool,
+    conf_floor: float,
+    classes,
+    candidate_cap: int,
+) -> list:
+    """One ``predict`` call over ``part`` (see ``_predict_tiles``)."""
+    from .obb import _gpu_letterbox_batch, _invert_letterbox_on_result
+
+    if letterbox:
+        batched, lb_params = _gpu_letterbox_batch(part, imgsz)
+        chunk_results = model.predict(
+            batched,
+            conf=conf_floor,
+            iou=1.0,
+            classes=classes,
+            verbose=False,
+            device=runtime.device,
+            max_det=candidate_cap,
+        )
+        # Invert the letterbox so extract functions see tile-local
+        # coordinates. When every tile is exactly imgsz x imgsz (the common
+        # auto_model case) this is r=1, no pad -> a true no-op, skipped
+        # entirely so no result tensor is touched. Real letterboxing only
+        # kicks in for a custom tile size that differs from imgsz, or the
+        # (rare) full-frame pass.
+        for tile_img, res, (r, pad_left, pad_top) in zip(
+            part, chunk_results, lb_params
+        ):
+            if r != 1.0 or pad_left != 0.0 or pad_top != 0.0:
+                _invert_letterbox_on_result(
+                    res,
+                    r,
+                    pad_left,
+                    pad_top,
+                    orig_shape=(int(tile_img.shape[0]), int(tile_img.shape[1])),
+                )
+    else:
+        chunk_results = model.predict(
+            part,
+            conf=conf_floor,
+            iou=1.0,
+            classes=classes,
+            verbose=False,
+            device=runtime.device,
+            max_det=candidate_cap,
+        )
+    return chunk_results
 
 
 # The predict-tile routine formerly assembled here as `run_direct_sliced`

@@ -681,14 +681,23 @@ class Stage1Proposals(RegionSource):
         runtime,
         candidate_cap: int,
     ) -> list[tuple[int, Region, Any]]:
-        results = models.obb_model.predict(
+        from .slicing import predict_with_oom_halving
+
+        def _predict(images: list) -> list:
+            return models.obb_model.predict(
+                images,
+                conf=seq.obb_confidence_threshold,
+                iou=1.0,
+                verbose=False,
+                device=runtime.device,
+                imgsz=seq.stage2_image_size,
+                max_det=candidate_cap,
+            )
+
+        results = predict_with_oom_halving(
             [region.image for region in regions],
-            conf=seq.obb_confidence_threshold,
-            iou=1.0,
-            verbose=False,
-            device=runtime.device,
-            imgsz=seq.stage2_image_size,
-            max_det=candidate_cap,
+            _predict,
+            "Sequential stage-2 crop prediction",
         )
         return [(frame_idx, region, result) for region, result in zip(regions, results)]
 
@@ -929,7 +938,12 @@ class SlicedStage1Proposals(Stage1Proposals):
             _resolve_imgsz,
             effective_raw_detection_cap,
         )
-        from .slicing import admitted_tile_chunk_size, iter_tile_job_chunks, plan_slices
+        from .slicing import (
+            admitted_tile_chunk_size,
+            iter_tile_job_chunks,
+            plan_slices,
+            predict_with_oom_halving,
+        )
 
         seq = config.sequential
         slice_cfg = seq.stage1_slice
@@ -974,15 +988,19 @@ class SlicedStage1Proposals(Stage1Proposals):
                 raise InferenceCancelled(
                     "inference cancelled before sliced stage-1 prediction"
                 )
-            results = model.predict(
+            results = predict_with_oom_halving(
                 [image for _, image in chunk],
-                conf=seq.detect_confidence_threshold,
-                iou=1.0,
-                classes=config.target_classes or None,
-                verbose=False,
-                device=runtime.device,
-                max_det=candidate_cap,
-                **stage1_kwargs,
+                lambda images: model.predict(
+                    images,
+                    conf=seq.detect_confidence_threshold,
+                    iou=1.0,
+                    classes=config.target_classes or None,
+                    verbose=False,
+                    device=runtime.device,
+                    max_det=candidate_cap,
+                    **stage1_kwargs,
+                ),
+                "Sliced stage-1 tile prediction",
             )
             if should_stop is not None and should_stop():
                 raise InferenceCancelled(
