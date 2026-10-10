@@ -410,12 +410,12 @@ def test_every_decoder_reaches_eof_cleanly(index_clip):
 # ── fix round 1: adversarial clips ──────────────────────────────────────────
 
 
-def _write_pts_clip(path, pts_of, n_frames=40, w=128, h=64):
-    """Index clip with explicit pts (time base 1/25) -- e.g. a dropped frame."""
+def _write_pts_clip(path, pts_of, n_frames=40, w=128, h=64, tb=None):
+    """Index clip with explicit pts (default time base 1/25) -- e.g. a dropped frame."""
     av = pytest.importorskip("av")
     from fractions import Fraction
 
-    tb = Fraction(1, 25)
+    tb = tb or Fraction(1, 25)
     container = av.open(str(path), mode="w")
     stream = container.add_stream("libx264", rate=25)
     stream.width, stream.height, stream.pix_fmt = w, h, "yuv420p"
@@ -564,3 +564,151 @@ def test_cuda_usable_ignores_cupy_flag_without_a_visible_device(monkeypatch):
     assert vd._cuda_usable() is True
     _fake_gpu_utils(monkeypatch, cupy_flag=False, torch_cuda=True, cupy_count=0)
     assert vd._cuda_usable() is True
+
+
+# ── fix round 2 ─────────────────────────────────────────────────────────────
+
+
+def _compensated_pts(i):
+    """Gap at 7, then the last 10 intervals shortened so duration == N/rate."""
+    if i < 7:
+        return i * 512
+    if i < 30:
+        return (i + 1) * 512
+    return 31 * 512 + sum(461 if j < 8 else 460 for j in range(i - 30))
+
+
+_VFR_CLIPS = {
+    "vfr_gap": (lambda i: i if i < 7 else i + 1, None),
+    "vfr_two_gaps": (lambda i: i + (i >= 3) + (i >= 20), None),
+    "vfr_compensated": (_compensated_pts, (1, 12800)),
+}
+
+
+@pytest.fixture(scope="module", params=sorted(_VFR_CLIPS))
+def vfr_clip(request, tmp_path_factory):
+    from fractions import Fraction
+
+    pts_of, tb = _VFR_CLIPS[request.param]
+    path = tmp_path_factory.mktemp(request.param) / f"{request.param}.mp4"
+    _write_pts_clip(path, pts_of, tb=Fraction(*tb) if tb else None)
+    return path
+
+
+def _cv2_all(path, start):
+    cap = cv2.VideoCapture(str(path))
+    if start > 0:
+        cap.set(cv2.CAP_PROP_POS_FRAMES, start)
+    out = []
+    while True:
+        ok, f = cap.read()
+        if not ok:
+            break
+        out.append(_decode_index(f))
+    cap.release()
+    return out
+
+
+def test_vfr_ladder_lands_where_cv2_lands_for_every_start(vfr_clip):
+    """R-1: tracking's CpuFrameReader positioned with cv2's seek; on a stream
+    that is not provably CFR the render must land on the SAME frame for every
+    START (count-from-0 disagreed at starts 27..39)."""
+    bad = {}
+    for start in range(40):
+        expected = _cv2_all(vfr_clip, start)
+        cands = vd.default_decoder_candidates(str(vfr_clip), 64, 32, start_frame=start)
+        src = vd.FrameSource(cands, start_frame=start, out_size=(64, 32))
+        got = []
+        while (f := src.read()) is not None:
+            got.append(_decode_index(f))
+        src.close()
+        if got != expected:
+            bad[start] = (src.name, got[:3], expected[:3])
+    assert not bad
+
+
+def test_provable_cfr_stream_keeps_the_fast_ladder(index_clip):
+    names = [
+        c.name
+        for c in vd.default_decoder_candidates(str(index_clip), 64, 32, start_frame=23)
+    ]
+    assert names[0] != "opencv"
+
+
+class _FailingCap:
+    def __init__(self, count):
+        self.count = count
+
+    def read(self):
+        return False, None
+
+    def get(self, prop):
+        return float(self.count) if prop == cv2.CAP_PROP_FRAME_COUNT else 0.0
+
+    def release(self):
+        pass
+
+
+def test_opencv_first_read_failure_inside_the_stream_is_a_probe_failure(
+    index_clip,
+):
+    """R-2: cv2 opening fine but failing its first read (e.g. a corrupt GOP at
+    the seek point) is NOT past-end unless start >= the frame count."""
+
+    def _broken_cv2(start):
+        r = vd._OpenCVReader(str(index_clip), start, 128, 64)
+        r._cap.release()
+        r._cap = _FailingCap(40)
+        return r
+
+    real = {c.name: c for c in vd.default_decoder_candidates(str(index_clip), 128, 64)}
+    cands = [vd.DecoderCandidate("opencv", _broken_cv2), real["pyav"]]
+    src = vd.FrameSource(cands, start_frame=5, out_size=(128, 64))
+    assert src.name == "pyav"
+    assert _decode_index(src.read()) == 5
+    src.close()
+
+    r = _broken_cv2(45)
+    assert r.read() is None and r.past_end is True
+    r = _broken_cv2(5)
+    with pytest.raises(RuntimeError):
+        r.read()
+
+
+class _Interrupt(BaseException):
+    pass
+
+
+def test_decode_thread_base_exception_is_relayed_not_a_hang():
+    """R-3: a BaseException in the decode thread must reach the consumer."""
+    import threading
+
+    class _R:
+        def read(self):
+            raise _Interrupt()
+
+        def close(self):
+            pass
+
+    def _factory():
+        src = vd.FrameSource.__new__(vd.FrameSource)
+        src.name = "x"
+        src.read = _R().read
+        src.close = lambda: None
+        return src
+
+    reader = vd.ThreadedFrameReader(_factory, max_frames=10).start()
+    box = {}
+
+    def _consume():
+        try:
+            reader.get()
+        except _Interrupt as exc:
+            box["exc"] = exc
+
+    t = threading.Thread(target=_consume, daemon=True)
+    t.start()
+    t.join(5)
+    assert not t.is_alive(), "consumer blocked forever"
+    assert isinstance(box.get("exc"), _Interrupt)
+    reader.close()

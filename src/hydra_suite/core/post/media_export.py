@@ -985,7 +985,9 @@ def render_annotated_video(
     candidates = (
         list(decoder_candidates)
         if decoder_candidates is not None
-        else default_decoder_candidates(video_path, out_w, out_h)
+        else default_decoder_candidates(
+            video_path, out_w, out_h, start_frame=start_frame
+        )
     )
 
     try:

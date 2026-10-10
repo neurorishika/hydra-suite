@@ -135,6 +135,26 @@ def frame_to_bgr(frame, out_w: int, out_h: int) -> np.ndarray:
 _PAST_END = object()
 
 
+def provable_cfr_rate(stream) -> Optional[Fraction]:
+    """The nominal rate IF pts -> index is provably exact for ``stream``, else None.
+
+    Exact means: the container's duration is exactly ``frames / r_frame_rate``
+    (every frame interval nominal, so no dropped frame / VFR anywhere in the
+    file) -- checked again per decoded frame in ``_seek_frames``.
+    ``average_rate`` is NOT used: it is a measured mean, and on a stream with
+    one dropped frame it made the index drift past 0.5 mid-file. Containers
+    without a frame count (mkv, mpeg-ts) are never provable.
+    """
+    rate, tb = stream.guessed_rate, stream.time_base
+    frames, duration = stream.frames, stream.duration
+    if not (rate and tb and frames and duration):
+        return None
+    rate = Fraction(rate)
+    if Fraction(duration) * Fraction(tb) * rate != frames:
+        return None
+    return rate
+
+
 class _PyAVReader:
     """PyAV decode positioned at ``start_frame``.
 
@@ -233,22 +253,7 @@ class _PyAVReader:
         return None
 
     def _provable_cfr_rate(self) -> Optional[Fraction]:
-        """The nominal rate IF pts -> index is provably exact, else None.
-
-        Exact means: the container's duration is exactly ``frames / rate``
-        (every frame interval nominal, so no dropped frame / VFR anywhere in
-        the file) -- checked again per decoded frame in ``_seek_frames``.
-        ``average_rate`` is NOT used: it is a measured mean, and on a stream
-        with one dropped frame it made the index drift past 0.5 mid-file.
-        """
-        s = self._stream
-        rate, tb, frames, duration = s.guessed_rate, s.time_base, s.frames, s.duration
-        if not (rate and tb and frames and duration):
-            return None
-        rate = Fraction(rate)
-        if Fraction(duration) * Fraction(tb) * rate != frames:
-            return None
-        return rate
+        return provable_cfr_rate(self._stream)
 
     def _seek_frames(self):
         """Frames from ``start_frame`` via keyframe seek.
@@ -344,8 +349,14 @@ class _OpenCVReader:
     def read(self) -> Optional[np.ndarray]:
         ok, frame = self._cap.read()
         if not ok:
-            # A seek past the end: cv2 opened the file but has nothing there.
-            self.past_end = self._start > 0 and self._delivered == 0
+            if self._delivered == 0:
+                count = int(self._cap.get(cv2.CAP_PROP_FRAME_COUNT) or 0)
+                if self._start > 0 and count > 0 and self._start >= count:
+                    self.past_end = True  # a seek past the known end
+                    return None
+                # Opened but cannot read here (e.g. corrupt GOP at the seek
+                # point): a probe failure, so the ladder tries the next decoder.
+                raise RuntimeError(f"cv2 could not read frame {self._start}")
             return None
         self._delivered += 1
         if (frame.shape[1], frame.shape[0]) != self._size:
@@ -364,10 +375,11 @@ class StreamFacts(NamedTuple):
     width: int
     height: int
     rotated: bool  # display-rotation metadata that cv2 applies and PyAV doesn't
+    cfr: bool = True  # pts -> frame index provably exact (``provable_cfr_rate``)
 
 
 def _stream_facts(path: str) -> StreamFacts:
-    codec, width, height = None, 0, 0
+    codec, width, height, cfr = None, 0, 0, False
     try:
         import av
 
@@ -378,6 +390,7 @@ def _stream_facts(path: str) -> StreamFacts:
                 stream.width,
                 stream.height,
             )
+            cfr = provable_cfr_rate(stream) is not None
     except Exception:
         pass
     rotated = False
@@ -387,7 +400,7 @@ def _stream_facts(path: str) -> StreamFacts:
             rotated = bool(cap.get(cv2.CAP_PROP_ORIENTATION_META) or 0)
     finally:
         cap.release()
-    return StreamFacts(codec, width, height, rotated)
+    return StreamFacts(codec, width, height, rotated, cfr)
 
 
 def _av_caps() -> tuple[set, set]:
@@ -425,7 +438,7 @@ def _cuda_usable() -> bool:
 
 
 def default_decoder_candidates(
-    video_path: str, out_w: int, out_h: int
+    video_path: str, out_w: int, out_h: int, *, start_frame: int = 0
 ) -> list[DecoderCandidate]:
     """The decoder ladder for this host and video, best first.
 
@@ -437,6 +450,10 @@ def default_decoder_candidates(
       CUDA ``hwaccel`` (which download full-size frames) and beats cv2 when
       downscaling; at the source size cv2 -- today's path -- is as fast or
       faster, so it leads there.
+    * ``start_frame > 0`` on a stream that is not provably CFR -> ``opencv``
+      first: tracking's ``CpuFrameReader`` positioned with cv2's seek, and on
+      VFR that lands on a different frame than counting decoded frames does.
+      The PyAV readers (which then count from 0) stay as fallbacks.
     """
     opencv = DecoderCandidate(
         "opencv", lambda s: _OpenCVReader(video_path, s, out_w, out_h)
@@ -480,6 +497,8 @@ def default_decoder_candidates(
     same_size = (out_w, out_h) == (facts.width, facts.height)
     tail = [opencv, pyav, hwaccel] if same_size else [pyav, hwaccel, opencv]
     cands.extend(c for c in tail if c is not None)
+    if start_frame > 0 and not facts.cfr:
+        cands = [opencv] + [c for c in cands if c is not opencv]
     return cands
 
 
@@ -632,8 +651,10 @@ class ThreadedFrameReader:
                 if frame is None or not self._put(frame):
                     break
             self._put(_EOF)
-        except Exception as exc:  # propagate to the consumer
+        except BaseException as exc:  # relay EVERYTHING, or get() blocks forever
             self._put(_Failure(exc))
+            if not isinstance(exc, Exception):
+                raise
         finally:
             if source is not None:
                 source.close()

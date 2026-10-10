@@ -32,7 +32,8 @@ with on-GPU resize first when a CUDA GPU is usable (Linux, Windows); then, when
 downscaling, PyAV software decode, PyAV hardware decode (VideoToolbox / CUDA),
 OpenCV; at scale 1.0, OpenCV (the historical path) leads. Videos with a
 display-rotation tag always use OpenCV, which applies the rotation tracking
-saw. The log names the decoder that was picked (`Annotated video decode: ...`).
+saw, and so do variable-frame-rate videos rendered from a start frame > 0
+(OpenCV's seek is where tracking started). The log names the decoder that was picked (`Annotated video decode: ...`).
 Hardware decoders have size limits (H.264 above 4096 px per side is
 typically refused), so such sources fall through to software decode
 automatically.
