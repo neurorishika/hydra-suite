@@ -158,6 +158,11 @@ class SliceWidgetCapabilities:
     beside the controls; ``"bottom"`` stacks it below them, scaled to the
     width, and puts each derived note under its control (eliding when
     narrow) so the block never forces a narrow host panel wider (TrackerKit).
+    ``layout``: ``"rows"`` (default) gives every field its own row;
+    ``"compact"`` pairs related fields on one grid row (Profile | Tile
+    strategy, Object scale | Body size, Tile size | Overlap, Tiles per call |
+    Memory budget), folds the derived notes into one summary line under the
+    grid and shortens the bottom preview (TrackerKit).
     """
 
     body_override: bool = True
@@ -169,6 +174,7 @@ class SliceWidgetCapabilities:
     body_display_only: bool = False
     merge_threshold_row: bool = True
     preview_position: str = "side"
+    layout: str = "rows"
 
 
 def default_capabilities(role: str) -> SliceWidgetCapabilities:
@@ -221,6 +227,21 @@ def badge_label() -> QLabel:
 
 
 PREVIEW_POSITIONS = ("side", "bottom")
+LAYOUTS = ("rows", "compact")
+
+# Compact layout: (left key, right key) share one grid row. A pair whose
+# left half is hidden puts the right one at the left edge.
+COMPACT_PAIRS = (
+    ("profile", "mode"),
+    ("object_fraction", "body"),
+    ("tile", "overlap"),
+    ("tile_batch", "memory"),
+)
+# Shorter labels where the compact grid's half-width columns are tight.
+COMPACT_LABELS = {
+    "overlap": "Overlap",
+    "memory": "Memory",
+}
 
 # The width an eliding note may shrink to before it stops giving way.
 ELIDING_MIN_WIDTH = 60
@@ -301,7 +322,9 @@ def set_badge(label: QLabel, source: str) -> None:
     label.setToolTip(f"Source: {SOURCE_DESCRIPTIONS.get(source, source)}.")
 
 
-def widget_stylesheet(text_color: str | None, *, bare: bool) -> str:
+def widget_stylesheet(
+    text_color: str | None, *, bare: bool, compact: bool = False
+) -> str:
     """Widget-scoped styling that reads correctly under any host theme.
 
     Constrained controls must LOOK disabled even where the host theme styles
@@ -318,6 +341,10 @@ def widget_stylesheet(text_color: str | None, *, bare: bool) -> str:
     )
     if bare:
         style += " QGroupBox { border: 0; margin-top: 0; padding: 0; }"
+    if compact:
+        # Two fields share a row: a host theme's input min-width (TrackerKit
+        # sets 100 px) must not force the paired grid wider than its panel.
+        style += " QAbstractSpinBox, QComboBox { min-width: 54px; }"
     return style
 
 

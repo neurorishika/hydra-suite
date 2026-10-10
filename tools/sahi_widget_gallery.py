@@ -12,9 +12,12 @@ published model leaks into the pictures. Writes PNGs into ``--out``:
   sidecar with two calibration profiles): ``host_trackerkit.png`` on the
   primary profile with a loaded 2448 x 2048 video's frame size,
   ``host_trackerkit_custom.png`` on the custom-geometry profile with Advanced
-  expanded and no video (the labelled example frame), and
-  ``host_trackerkit_off.png`` with SAHI unticked (collapsed to the checkbox).
-  TrackerKit stacks the preview below the controls (``preview_position``).
+  expanded and no video (the labelled example frame),
+  ``host_trackerkit_auto_model.png`` on "Use model input size" (the longest
+  tile-strategy item, unclipped), and ``host_trackerkit_off.png`` with SAHI
+  unticked (collapsed to the checkbox).
+  TrackerKit uses the compact layout (``layout="compact"``: paired rows, one
+  summary line) with the preview below the controls (``preview_position``).
 
 Usage::
 
@@ -68,16 +71,22 @@ def _grab_scroll_page(window, inner, path: Path, app) -> Path:
     """Grab the whole scroll page holding ``inner`` (not just the viewport)."""
     from PySide6.QtWidgets import QScrollArea, QTabWidget
 
-    for tabs in window.findChildren(QTabWidget):
-        for index in range(tabs.count()):
-            if tabs.widget(index).isAncestorOf(inner):
-                tabs.setCurrentIndex(index)
     scroll = inner.parentWidget()
     while scroll is not None and not isinstance(scroll, QScrollArea):
         scroll = scroll.parentWidget()
     window.show()
     for _ in range(3):
         app.processEvents()
+    # Select the tab AFTER showing: TrackerKit restores its first tab on
+    # show, and a hidden page is never laid out (a stale, squeezed grab).
+    for tabs in window.findChildren(QTabWidget):
+        for index in range(tabs.count()):
+            if tabs.widget(index).isAncestorOf(inner):
+                tabs.setCurrentIndex(index)
+    for _ in range(3):
+        app.processEvents()
+    if not inner.isVisible():
+        raise RuntimeError("gallery: the page to grab is not shown")
     page = scroll.widget() if scroll is not None else window
     page.grab().save(str(path))
     window.hide()
@@ -398,6 +407,17 @@ def render_trackerkit(out: Path, app, root: Path) -> list[Path]:
     written.append(
         _grab_scroll_page(
             window, panel.slice_settings, out / "host_trackerkit_custom.png", app
+        )
+    )
+    # The longest Tile strategy item must show unclipped in its half-width
+    # column (review regression).
+    geometry = panel.combo_slice_geometry
+    geometry.setCurrentIndex(geometry.findData("auto_model"))  # the user path
+    panel.slice_settings.btn_slice_advanced.setChecked(False)
+    _assert_yolo_page(panel)
+    written.append(
+        _grab_scroll_page(
+            window, panel.slice_settings, out / "host_trackerkit_auto_model.png", app
         )
     )
     panel.chk_slice_enabled.setChecked(False)  # the user path: collapses

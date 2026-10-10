@@ -3,6 +3,7 @@
 from __future__ import annotations
 
 import os
+import re
 from dataclasses import replace
 
 os.environ.setdefault("QT_QPA_PLATFORM", "offscreen")
@@ -987,3 +988,271 @@ def test_hide_show_round_trip_preserves_every_value_and_emits_only_enabled(role)
     assert emitted == ["enabled", "enabled"]
     assert w.spec() == before_spec
     assert w.extras() == before_extras
+
+
+# ------------------------------------------- S7: compact (paired) layout
+
+
+def _compact_widget(**caps):
+    caps.setdefault("execution_knobs", True)
+    return SliceSettingsWidget(
+        role="infer_yolo",
+        capabilities=SliceWidgetCapabilities(
+            preview_position="bottom", layout="compact", **caps
+        ),
+    )
+
+
+def _grid_cell(w, widget):
+    """(row, column, row span, column span) of ``widget`` in the controls grid."""
+    index = w._grid.indexOf(widget)
+    assert index >= 0, widget  # getItemPosition(-1) returns garbage
+    return w._grid.getItemPosition(index)
+
+
+def _row_label(w, key):
+    return w._rows[key][0]
+
+
+def test_layout_defaults_to_rows_and_rejects_unknown():
+    assert SliceSettingsWidget(role="infer_yolo").capabilities.layout == "rows"
+    with pytest.raises(ValueError):
+        SliceSettingsWidget(
+            role="infer_yolo",
+            capabilities=SliceWidgetCapabilities(layout="grid"),
+        )
+
+
+def test_compact_layout_pairs_controls_on_one_grid_row():
+    w = _compact_widget()
+    w.set_profile_row_visible(True)
+    w.set_advanced_expanded(True)
+    w.set_spec(TilingSpec(enabled=True, geometry_mode="auto_object"))
+    for left, right in (
+        ("profile", "mode"),
+        ("object_fraction", "body"),
+        ("tile", "overlap"),
+        ("tile_batch", "memory"),
+    ):
+        left_row, left_col, *_ = _grid_cell(w, _row_label(w, left))
+        right_row, right_col, *_ = _grid_cell(w, _row_label(w, right))
+        assert left_row == right_row, (left, right)
+        assert left_col == 0 and right_col == 3, (left, right)
+    # Distinct pairs sit on distinct rows, in reading order.
+    rows = [
+        _grid_cell(w, _row_label(w, key))[0]
+        for key in ("profile", "object_fraction", "tile", "tile_batch")
+    ]
+    assert rows == sorted(set(rows))
+
+
+def test_compact_layout_moves_a_lone_partner_to_the_left():
+    """No profile row: the tile strategy stands alone at the left edge."""
+    w = _compact_widget()
+    w.set_spec(TilingSpec(enabled=True, geometry_mode="auto_object"))
+    w.set_profile_row_visible(False)
+    row, col, _rs, _cs = _grid_cell(w, _row_label(w, "mode"))
+    assert col == 0
+    assert _grid_cell(w, w.combo_slice_geometry)[1] == 1
+    assert _grid_cell(w, _row_label(w, "object_fraction"))[0] > row
+    w.set_profile_row_visible(True)
+    assert _grid_cell(w, _row_label(w, "mode"))[1] == 3
+    assert _grid_cell(w, _row_label(w, "profile"))[1] == 0
+
+
+def test_compact_layout_keeps_constrained_fields_visible_but_disabled():
+    w = _compact_widget()
+    w.set_reference_body(48.0, "stamped")
+    w.set_spec(TilingSpec(enabled=True, geometry_mode="auto_model"))
+    for control in (w.spin_slice_object_fraction, w.spin_slice_tile_w):
+        assert not control.isHidden() and control.isVisibleTo(w)
+        assert not control.isEnabled()
+    w.chk_slice_enabled.setChecked(False)
+    assert _shown_rows(w) == {"enabled"}
+    assert not w.lbl_slice_summary.isVisibleTo(w)
+
+
+def _summary(w) -> str:
+    return w.lbl_slice_summary.text()
+
+
+def test_compact_summary_line_per_mode():
+    w = _compact_widget()
+    w.set_model_input_size(1024)
+    w.set_reference_body(48.0, "stamped")
+    w.set_spec(
+        TilingSpec(
+            enabled=True,
+            geometry_mode="auto_object",
+            object_tile_fractions=(0.1,),
+            reference_body_px=48.0,
+            overlap=0.2,
+        )
+    )
+    w.set_reference_body(48.0, "stamped")
+    text = _summary(w)
+    assert text.startswith("→ 480 × 480 px (derived)")
+    assert "≈102 px at 1024" in text
+    # The overlap note is its own label on the same line (its colour kept).
+    assert w.lbl_slice_overlap_minimum.text() == "≥ whole-animal minimum (0.15)"
+    assert _grid_cell(w, w._summary_row)[3] == 5
+    assert w.lbl_slice_overlap_minimum.parentWidget() is w._summary_row
+    assert w.btn_slice_overlap_raise.parentWidget() is w._summary_row
+    full = w.lbl_slice_summary.toolTip()
+    assert "480 × 480 px" in full and "whole-animal minimum" in full
+
+    w.combo_slice_geometry.setCurrentIndex(w.combo_slice_geometry.findData("custom"))
+    w.spin_slice_tile_w.setValue(1024)
+    w.spin_slice_tile_h.setValue(800)
+    assert _summary(w).startswith("→ 1024 × 800 px")
+    assert "px at 1024" not in _summary(w)  # object scale unused
+
+    w.combo_slice_geometry.setCurrentIndex(
+        w.combo_slice_geometry.findData("auto_model")
+    )
+    assert _summary(w).startswith("→ 1024 × 1024 px (model input, derived)")
+
+
+def test_compact_below_minimum_warning_keeps_colour_and_raise_on_the_line():
+    w = _compact_widget()
+    w.set_model_input_size(1024)
+    w.set_spec(
+        TilingSpec(
+            enabled=True,
+            geometry_mode="auto_object",
+            object_tile_fractions=(0.1,),
+            overlap=0.05,
+        )
+    )
+    w.set_reference_body(48.0, "stamped")
+    label = w.lbl_slice_overlap_minimum
+    assert label.text().startswith("Below whole-animal minimum")
+    assert "#e0943a" in label.styleSheet()
+    assert not w.btn_slice_overlap_raise.isHidden()
+    # The warning never elides: the muted summary gives way first.
+    assert label.minimumWidth() >= label.fontMetrics().horizontalAdvance(label.text())
+    # A profile-set overlap stays muted info, no Raise.
+    w.set_source("overlap", "profile", note="profile 'Fast scan'")
+    assert "set by profile 'Fast scan'" in label.text()
+    assert "#8f969e" in label.styleSheet()
+    assert w.btn_slice_overlap_raise.isHidden()
+
+
+def test_compact_badges_stay_with_their_fields():
+    w = _compact_widget()
+    w.set_reference_body(48.0, "profile")
+    w.set_spec(TilingSpec(enabled=True, geometry_mode="auto_object"))
+    w.set_reference_body(48.0, "profile")
+    assert w.source_badge("reference_body_px") == "profile"
+    assert w.lbl_slice_body_badge.text() == "profile"
+    assert w.lbl_slice_tile_badge.text() == "derived"
+    # Body: inline after its field. Tile: its source is attached to the
+    # resolved tile size on the summary line (the half-width tile cell has
+    # no room left for a badge), never as a prefix of the whole line.
+    assert w.lbl_slice_body_badge.parentWidget() is w._rows["body"][1]
+    assert not w.lbl_slice_tile_badge.isVisibleTo(w)
+    assert re.match(r"→ \d+ × \d+ px \(derived\) ·", _summary(w)), _summary(w)
+    w.combo_slice_geometry.setCurrentIndex(w.combo_slice_geometry.findData("custom"))
+    w.set_source("tile_size", "profile")
+    assert w.lbl_slice_tile_badge.text() == "profile"
+    assert "px (profile)" in _summary(w)
+
+
+def test_compact_combos_tooltip_lead_with_the_current_item():
+    from hydra_suite.widgets.slice_settings_compact import combo_tooltip
+
+    w = _compact_widget()
+    combo = w.combo_slice_geometry
+    combo.setCurrentIndex(combo.findData("auto_model"))
+    tip = combo_tooltip(combo)
+    assert tip.startswith("Use model input size\n\n")
+    assert combo.toolTip() in tip
+    w.combo_slice_profile.addItem("A very long calibration profile name", "p")
+    assert combo_tooltip(w.combo_slice_profile).startswith(
+        "A very long calibration profile name"
+    )
+
+
+def test_compact_advanced_note_sits_under_the_advanced_pair():
+    from PySide6.QtWidgets import QLabel
+
+    w = _compact_widget()
+    note = QLabel("Up to 16 tiles/call")
+    w.set_advanced_note(note)
+    w.set_spec(TilingSpec(enabled=True))
+    w.set_advanced_expanded(True)
+    note_row, note_col, _rs, note_span = _grid_cell(w, note)
+    assert note_row > _grid_cell(w, _row_label(w, "tile_batch"))[0]
+    assert (note_col, note_span) == (0, 5)
+
+
+def test_compact_values_and_signals_match_the_rows_layout():
+    spec = TilingSpec(
+        enabled=True,
+        geometry_mode="custom",
+        object_tile_fractions=(0.1,),
+        reference_body_px=48.0,
+        slice_width=1024,
+        slice_height=800,
+        overlap=0.3,
+    )
+    extras = {"tile_batch_size": 7, "memory_budget_mib": 99}
+    rows = _bottom_widget(execution_knobs=True)
+    compact = _compact_widget()
+    for w in (rows, compact):
+        w.set_spec(spec, extras=extras)
+    assert compact.spec() == rows.spec()
+    assert compact.extras() == rows.extras()
+    emitted = []
+    compact.field_changed.connect(emitted.append)
+    compact.spin_slice_overlap.setValue(0.4)
+    compact.spin_slice_memory_budget.setValue(64)
+    assert emitted == ["overlap", "memory_budget_mib"]
+
+
+@pytest.mark.parametrize("mode", ["auto_model", "auto_object", "custom"])
+def test_compact_preview_is_shorter_with_two_caption_lines(mode):
+    w = _compact_widget()
+    w.set_spec(TilingSpec(enabled=True, geometry_mode=mode))
+    preview = w.preview
+    preview.set_frame_size((2448, 2048))
+    # One fixed, shorter height (no height-for-width to be squeezed).
+    assert not preview.hasHeightForWidth()
+    assert preview.sizeHint().height() <= 260
+    assert preview.minimumHeight() == preview.maximumHeight()
+    assert len(preview.caption_lines()) <= 2
+    # The rows layout keeps its three lines (body note on its own line).
+    rows = _bottom_widget()
+    rows.set_spec(TilingSpec(enabled=True, geometry_mode="auto_object"))
+    rows.preview.set_frame_size((2448, 2048))
+    assert len(rows.preview.caption_lines()) == 3
+
+
+@pytest.mark.parametrize("layout", ["rows", "compact"])
+def test_unplaced_notes_never_become_stray_windows(layout):
+    """Notes a layout does not place stay children of the widget and hidden
+    (a parentless label shown by the role defaults would float as its own
+    window on a real display)."""
+    w = SliceSettingsWidget(
+        role="infer_yolo",
+        capabilities=SliceWidgetCapabilities(
+            preview_position="bottom", layout=layout, execution_knobs=True
+        ),
+    )
+    w.set_spec(TilingSpec(enabled=True, geometry_mode="auto_object"))
+    w.show()
+    for label in (w.lbl_slice_scale_px, w.lbl_slice_tile_size, w.lbl_slice_summary):
+        assert w.isAncestorOf(label), label
+    if layout == "compact":
+        assert not w.lbl_slice_scale_px.isVisible()
+        assert not w.lbl_slice_tile_size.isVisible()
+    else:
+        assert not w.lbl_slice_summary.isVisible()
+    # No visible parentless widget at all besides the widget itself.
+    strays = [
+        top
+        for top in QApplication.topLevelWidgets()
+        if top.isVisible() and top is not w and top.parentWidget() is None
+    ]
+    assert strays == [], strays
+    w.hide()

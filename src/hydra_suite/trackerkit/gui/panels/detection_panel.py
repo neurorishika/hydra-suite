@@ -797,6 +797,8 @@ class DetectionPanel(QWidget):
                 # The YOLO group is a narrow side panel: the preview goes
                 # below the controls so SAHI never forces sideways scrolling.
                 preview_position="bottom",
+                # Two label/field pairs per row and one summary line (S7).
+                layout="compact",
             ),
         )
         w = self.slice_settings
@@ -879,14 +881,14 @@ class DetectionPanel(QWidget):
         f_yolo.addWidget(w, 8, 0, 1, 2)
 
         # Runtime admission of the tiles/call + memory budget (both in the
-        # widget's Advanced section), shown with them.
+        # widget's Advanced section), shown under them inside the widget.
         self.lbl_slice_batch_admission = QLabel()
         self.lbl_slice_batch_admission.setToolTip(
             "The requested limit is admitted at runtime after tile geometry, "
             "model input size, and memory use are known."
         )
         self.lbl_slice_batch_admission.setStyleSheet("color: #8f969e;")
-        f_yolo.addWidget(self.lbl_slice_batch_admission, 9, 0, 1, 2)
+        w.set_advanced_note(self.lbl_slice_batch_admission)
         w.btn_slice_advanced.toggled.connect(
             lambda _checked: self._refresh_slice_widget()
         )
