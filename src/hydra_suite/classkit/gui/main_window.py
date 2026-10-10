@@ -5796,6 +5796,7 @@ class MainWindow(QMainWindow):
         image_path = self.image_paths[index]
 
         self.preview_canvas.set_image(str(image_path))
+        self._prefetch_upcoming_images(index)
 
         self.last_preview_index = index
         current_label = (
@@ -9106,6 +9107,30 @@ class MainWindow(QMainWindow):
             else "n/a"
         )
         self.status.showMessage(f"Assigned label '{label}' to point {idx}")
+
+    _PREFETCH_AHEAD = 24
+
+    def _prefetch_upcoming_images(self, index: int) -> None:
+        """Warm the viewer cache with the images navigation will reach next."""
+        try:
+            pool = self._get_navigation_pool()
+            if pool and index in pool:
+                pos = pool.index(index)
+                ordered = pool[pos + 1 :] + pool[:pos]
+            else:
+                ordered = range(index + 1, len(self.image_paths))
+            labels = self.image_labels or []
+            paths = []
+            for i in ordered:
+                if self.explorer_mode == "labeling" and i < len(labels) and labels[i]:
+                    continue
+                if 0 <= i < len(self.image_paths):
+                    paths.append(self.image_paths[i])
+                if len(paths) >= self._PREFETCH_AHEAD:
+                    break
+            self.preview_canvas.prefetch(paths)
+        except Exception:
+            pass  # prefetch is an optimisation; never break navigation
 
     def _advance_pool_index(self, pool, step: int) -> int | None:
         """Advance within the current navigation pool with wraparound."""

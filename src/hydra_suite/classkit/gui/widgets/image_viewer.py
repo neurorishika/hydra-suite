@@ -6,6 +6,8 @@ from PySide6.QtCore import QRectF, Qt
 from PySide6.QtGui import QBrush, QColor, QImage, QPainter, QPixmap, QWheelEvent
 from PySide6.QtWidgets import QGraphicsPixmapItem, QGraphicsScene, QGraphicsView
 
+from .image_prefetch import ImagePrefetcher
+
 
 class ImageCanvas(QGraphicsView):
     """
@@ -44,6 +46,46 @@ class ImageCanvas(QGraphicsView):
         self._clahe_clip = 2.0
         self._clahe_grid = (8, 8)
 
+        self._prefetch_key = None
+        self._prefetcher = ImagePrefetcher(self)
+        self._prefetcher.image_ready.connect(self._on_prefetched)
+
+    def prefetch(self, paths) -> int:
+        """Warm the cache for ``paths`` on background threads (nearest first)."""
+        paths = [str(p) for p in paths]
+        if not paths:
+            return 0
+        use_clahe, clip, grid = self._enhancement_key
+        self._prefetch_key = self._enhancement_key
+
+        def loader(path: str):
+            if not use_clahe:
+                return QImage(path)
+            img_bgr = cv2.imread(path)
+            if img_bgr is None:
+                return QImage(path)
+            lab = cv2.cvtColor(img_bgr, cv2.COLOR_BGR2LAB)
+            L, A, B = cv2.split(lab)
+            L2 = cv2.createCLAHE(clipLimit=clip, tileGridSize=grid).apply(L)
+            rgb = np.ascontiguousarray(
+                cv2.cvtColor(cv2.merge([L2, A, B]), cv2.COLOR_LAB2RGB)
+            )
+            h, w, ch = rgb.shape
+            return QImage(rgb.data, w, h, ch * w, QImage.Format_RGB888).copy()
+
+        return self._prefetcher.request(
+            paths, loader, skip=lambda p: p in self._pixmap_cache
+        )
+
+    def _on_prefetched(self, path: str, image) -> None:
+        if path in self._pixmap_cache or self._enhancement_key != self._prefetch_key:
+            return  # already cached, or loaded under old enhancement settings
+        self._cache_put(path, QPixmap.fromImage(image))
+
+    @property
+    def _enhancement_key(self):
+        return (self._use_clahe, self._clahe_clip, self._clahe_grid)
+
     @property
     def use_clahe(self) -> bool:
         return self._use_clahe
@@ -65,6 +107,7 @@ class ImageCanvas(QGraphicsView):
         """Clear the internal pixmap cache."""
         self._pixmap_cache.clear()
         self._cache_order.clear()
+
         # Force the next refresh to reload even if the same image/key is requested.
         self._last_path = None
 
