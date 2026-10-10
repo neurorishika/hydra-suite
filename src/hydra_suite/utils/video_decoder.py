@@ -234,9 +234,13 @@ class _PyAVReader:
         if rate is None or tb is None or pts0 is None:
             return None
         target = pts0 + int(Fraction(self._start) / rate / Fraction(tb))
+        # Re-open rather than flush: reading the first frame can drive a
+        # buffering decoder (cuvid) all the way to its EOF/drain state, which
+        # flush_buffers() does not clear -- the next send_packet then fails
+        # with EOFError (seen on diptera, hevc/h264_cuvid).
+        self._close_container()
+        self._open()
         self._container.seek(target, stream=self._stream, backward=True)
-        if self._cc is not None:
-            self._cc.flush_buffers()
         prev = None
         decoded = self._decoded()
         for frame in decoded:
