@@ -285,7 +285,10 @@ def assess_preparation_budget(
     memory = psutil.virtual_memory()
     reserve = max(4 * GiB, int(memory.total * 0.15))
     usable = int(memory.available) - reserve
-    hard = min(8 * GiB, usable)
+    # Host-derived, not a fixed guess: a flat 8 GiB cap would kill preparation
+    # of a large dataset on a machine with ample free memory. Keep 10%
+    # headroom so jitter in available memory cannot invalidate the cap.
+    hard = int(usable * 0.9)
     if hard < GiB:
         raise DatasetLimitError(
             "Dataset preparation refused: less than 1 GiB remains after the "

@@ -31,27 +31,61 @@ _EPOCH_RE = re.compile(
 _SERIES_KEYS = ("box_loss", "cls_loss", "dfl_loss")
 
 
+_ANSI_RE = re.compile(r"\x1b\[[0-9;?]*[A-Za-z]")
+_LOSS_TOKEN_RE = re.compile(r"^\d*\.\d+(?:e-?\d+)?$")
+_EPOCH_HEAD_RE = re.compile(
+    r"^\s*(?:\[[A-Za-z0-9_\-]+\]\s+)?(\d+)/(\d+)\s+(?:[\d.]+\s*G\s+)?(.*)$"
+)
+
+
+def _parse_segment(segment: str) -> Optional[dict]:
+    if "100%" not in segment:
+        return None
+    head = _EPOCH_HEAD_RE.match(segment)
+    if head is None:
+        return None
+    losses: list[float] = []
+    for token in head.group(3).split():
+        if not _LOSS_TOKEN_RE.match(token):
+            break
+        losses.append(float(token))
+    if len(losses) < 3:
+        return None
+    if len(losses) >= 5:
+        # Segment models: box, seg, cls, dfl, sem. Reading the first three
+        # positionally would label seg_loss as cls_loss.
+        box, cls, dfl = losses[0], losses[2], losses[3]
+    else:
+        box, cls, dfl = losses[0], losses[1], losses[2]
+    return {
+        "epoch": int(head.group(1)),
+        "total_epochs": int(head.group(2)),
+        "box_loss": box,
+        "cls_loss": cls,
+        "dfl_loss": dfl,
+    }
+
+
 def parse_ultralytics_log_line(line: str) -> Optional[dict]:
-    """Parse a single ultralytics training log line.
+    """Parse one ultralytics training log record.
 
     Returns a dict with epoch, total_epochs, box_loss, cls_loss, dfl_loss
-    if the line matches the epoch pattern at the *final* (100%) per-epoch
-    progress update; otherwise ``None``. Filtering on the 100% line keeps
-    one point per epoch and avoids the noisy in-progress samples that
-    Ultralytics emits as the bar fills.
+    from the *final* (100%) per-epoch progress update; otherwise ``None``.
+    Filtering on the 100% update keeps one point per epoch and avoids the
+    noisy in-progress samples emitted as the bar fills.
+
+    The supervised child delivers a record that may still carry ANSI
+    erase-line codes and several ``\\r``-separated progress redraws, so those
+    are stripped and split here; the last parseable 100% redraw wins.
     """
     if "100%" not in line:
         return None
-    m = _EPOCH_RE.match(line)
-    if m is None:
-        return None
-    return {
-        "epoch": int(m.group(1)),
-        "total_epochs": int(m.group(2)),
-        "box_loss": float(m.group(3)),
-        "cls_loss": float(m.group(4)),
-        "dfl_loss": float(m.group(5)),
-    }
+    clean = _ANSI_RE.sub("", line)
+    for segment in reversed(re.split(r"[\r\n]+", clean)):
+        parsed = _parse_segment(segment)
+        if parsed is not None:
+            return parsed
+    return None
 
 
 class LossPlotWidget(QWidget):
