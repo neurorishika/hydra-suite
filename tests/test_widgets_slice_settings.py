@@ -640,3 +640,33 @@ def test_every_badge_word_in_use_has_a_description():
     assert not missing, missing
     for word, text in SOURCE_DESCRIPTIONS.items():
         assert len(text.split()) >= 3, word
+
+
+def test_preview_labels_the_fallback_frame_clearly():
+    w = SliceSettingsWidget(role="infer_yolo")
+    title, *_rest = w.preview.caption_texts()
+    assert "example" in title and "1920" in title
+    w.set_preview_frame_size((2048, 1536))
+    title, tile_line, *_rest = w.preview.caption_texts()
+    assert title.startswith("Tile layout on a 2048 × 1536 image")
+    assert "example" not in title and "example" not in tile_line
+
+
+def test_preview_caption_elides_at_word_boundaries():
+    from PySide6.QtGui import QFont, QFontMetrics
+
+    from hydra_suite.widgets.tile_layout_preview import elide_at_word
+
+    metrics = QFontMetrics(QFont())
+    text = "15 tiles · 480 × 480 px · example frame uses the body size"
+    full = elide_at_word(text, metrics, 10_000)
+    assert full == text
+    for width in (60, 120, 200, 260):
+        out = elide_at_word(text, metrics, width)
+        assert metrics.horizontalAdvance(out) <= width
+        if out != text:
+            assert out.endswith("…")
+            stem = out[:-1].rstrip()
+            # Only whole words survive: the stem is a word-prefix of the text.
+            assert text.startswith(stem)
+            assert stem == "" or text[len(stem)] == " "

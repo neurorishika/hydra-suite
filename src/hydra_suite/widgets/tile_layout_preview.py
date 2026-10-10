@@ -12,7 +12,20 @@ from PySide6.QtWidgets import QWidget
 from hydra_suite.utils.slice_geometry import plan_tiles, tile_size_for_mode
 from hydra_suite.utils.tiling_spec import BACKEND_DEFAULTS, DEFAULT_YOLO_IMGSZ
 
-__all__ = ["TileLayoutPreview", "_TileLayoutPreview"]
+__all__ = ["TileLayoutPreview", "_TileLayoutPreview", "elide_at_word"]
+
+
+def elide_at_word(text: str, metrics: QFontMetrics, width: int) -> str:
+    """``text`` if it fits in ``width`` px, else whole words + "…" (never mid-word)."""
+    if metrics.horizontalAdvance(text) <= width:
+        return text
+    words = text.split(" ")
+    while words:
+        words.pop()
+        candidate = " ".join(words).rstrip(" ·") + " …" if words else "…"
+        if metrics.horizontalAdvance(candidate) <= width:
+            return candidate
+    return "…"
 
 
 class _TileLayoutPreview(QWidget):
@@ -42,6 +55,9 @@ class _TileLayoutPreview(QWidget):
         self._uses_fallback_frame = True
         self._frame_options: list[tuple[int, int, int]] = []
         self._frame_index = 0
+        # Caption for a single host-supplied frame (set_frame_size); None for
+        # a project distribution (set_frame_options).
+        self._single_frame_note: str | None = None
         # Wording of the body-size note; hosts whose body size is not
         # measured from labels (inference) replace it via set_body_notes.
         self._measured_note = "uses last label measurement"
@@ -68,9 +84,12 @@ class _TileLayoutPreview(QWidget):
         self.set_frame_options(
             [] if frame_wh is None else [(frame_wh[0], frame_wh[1], 1)]
         )
+        self._single_frame_note = None if frame_wh is None else "source frame"
+        self.update()
 
     def set_frame_options(self, options: list[tuple[int, int, int]]) -> None:
         """Set the project image-size distribution shown by click-to-cycle preview."""
+        self._single_frame_note = None
         current = self._frame_wh
         counts: dict[tuple[int, int], int] = {}
         for width, height, count in options:
@@ -173,7 +192,7 @@ class _TileLayoutPreview(QWidget):
 
         margin, top = 12, 26
         available_w = max(1, self.width() - 2 * margin)
-        available_h = max(1, self.height() - top - 56)
+        available_h = max(1, self.height() - top - 73)  # 3 caption lines
         scale = min(available_w / self._frame_wh[0], available_h / self._frame_wh[1])
         draw_w, draw_h = int(self._frame_wh[0] * scale), int(self._frame_wh[1] * scale)
         x = (self.width() - draw_w) // 2
@@ -222,55 +241,77 @@ class _TileLayoutPreview(QWidget):
                 max(1, round(other_h * scale)),
             )
 
+        title, tile_line, note_line, scales_line = self.caption_texts(len(tiles))
+        metrics = QFontMetrics(painter.font())
+        text_w = self.width() - 2 * margin
         painter.setPen(QColor("#f0f0f0"))
-        title = f"Tile layout on a {self._frame_wh[0]} × {self._frame_wh[1]} image"
-        if len(self._frame_options) > 1:
-            title += " · click to compare"
-        painter.drawText(
-            margin,
-            17,
-            QFontMetrics(painter.font()).elidedText(
-                title, Qt.TextElideMode.ElideRight, self.width() - 2 * margin
-            ),
-        )
+        painter.drawText(margin, 17, elide_at_word(title, metrics, text_w))
+        painter.setPen(QColor("#c0c0c0"))
+        lines = [line for line in (tile_line, note_line, scales_line) if line]
+        for offset, line in enumerate(reversed(lines)):
+            painter.drawText(
+                margin,
+                self.height() - 17 * (offset + 1),
+                elide_at_word(line, metrics, text_w),
+            )
+
+    def _plan_tile_count(self, tile_w: int, tile_h: int) -> int:
+        try:
+            plan = plan_tiles(
+                (self._frame_wh[1], self._frame_wh[0]),
+                tile_w,
+                tile_h,
+                self._overlap,
+                self._overlap,
+            )
+        except ValueError:
+            return 0
+        return len(plan.tiles)
+
+    def caption_texts(self, tile_count: int | None = None) -> tuple[str, str, str, str]:
+        """(title, tile line, body note, scales line) -- the painted captions.
+
+        A frame the host never supplied is labelled an EXAMPLE frame in the
+        title, so a 1920 x 1080 grid is never mistaken for the real video.
+        """
+        specs = self._tile_specs()
+        _fraction, tile_w, tile_h, _color = specs[len(specs) // 2]
+        if tile_count is None:
+            tile_count = self._plan_tile_count(tile_w, tile_h)
+        width, height = self._frame_wh
+        if self._uses_fallback_frame:
+            title = (
+                f"Tile layout on an example {width} × {height} frame "
+                "(no source frame size known)"
+            )
+            frame_note = "example frame"
+        else:
+            title = f"Tile layout on a {width} × {height} image"
+            if len(self._frame_options) > 1:
+                title += " · click to compare"
+            if self._single_frame_note is not None:
+                frame_note = self._single_frame_note
+            else:
+                _w, _h, count = self._frame_options[self._frame_index]
+                frame_note = (
+                    f"project size {self._frame_index + 1}/"
+                    f"{len(self._frame_options)} · {count} frame(s)"
+                )
+        tile_line = f"{tile_count} tiles · {tile_w} × {tile_h} px · {frame_note}"
         note = (
             self._measured_note
             if self._reference_body_px > 0.0 and self._mode == "auto_object"
             else (self._unmeasured_note if self._mode == "auto_object" else "")
         )
-        if self._uses_fallback_frame:
-            frame_note = "fallback frame"
-        else:
-            _width, _height, count = self._frame_options[self._frame_index]
-            frame_note = f"project size {self._frame_index + 1}/{len(self._frame_options)} · {count} frame(s)"
-        tile_note = f"{len(tiles)} tiles · {tile_w} × {tile_h} px · {frame_note}"
-        painter.setPen(QColor("#c0c0c0"))
-        painter.drawText(
-            margin,
-            self.height() - 34,
-            QFontMetrics(painter.font()).elidedText(
-                f"{tile_note} {note}".strip(),
-                Qt.TextElideMode.ElideRight,
-                self.width() - 2 * margin,
-            ),
-        )
         scale_note = (
             " · ".join(
-                f"● {fraction:g} → {width} px"
-                for fraction, width, _height, _color in specs
+                f"● {fraction:g} → {tile_px} px"
+                for fraction, tile_px, _h, _color in specs
                 if fraction is not None
             )
             or f"● {tile_w} × {tile_h} px"
         )
-        painter.drawText(
-            margin,
-            self.height() - 17,
-            QFontMetrics(painter.font()).elidedText(
-                f"Scales: {scale_note}",
-                Qt.TextElideMode.ElideRight,
-                self.width() - 2 * margin,
-            ),
-        )
+        return title, tile_line, note, f"Scales: {scale_note}"
 
 
 # The public name; ``_TileLayoutPreview`` stays importable for old callers.
