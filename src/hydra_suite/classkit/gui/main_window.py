@@ -10510,8 +10510,13 @@ class MainWindow(QMainWindow):
             if text and text not in ordered:
                 ordered.append(text)
 
-        for value in self.classes:
-            _add(value)
+        # With a multi-factor scheme ``self.classes`` holds one factor's labels
+        # (the label buttons), never a full composite class: skip it so metrics
+        # don't gain phantom single-factor classes.
+        scheme, _shortcuts = self._load_label_scheme()
+        if scheme is None or len(scheme.factors) <= 1:
+            for value in self.classes:
+                _add(value)
         for value in self._model_class_names or []:
             _add(value)
         for value in self.image_labels:
