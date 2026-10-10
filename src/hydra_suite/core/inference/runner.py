@@ -2216,8 +2216,9 @@ class InferenceRunner:
             raise KeyError(f"Frame {frame_idx} not found in detection cache")
 
         # Cache-only by construction: bg-sub carries cross-frame state and must
-        # never be re-run for random access — filter_for_source is the identity
-        # on the bg-sub branch, so this stays a pure cache read.
+        # never be re-run for random access — filter_for_source's bg-sub branch
+        # only applies the replay-time N rules to the stored contours, so this
+        # stays a pure cache read.
         #
         # roi_mask: cached frames are read back at native video-frame geometry
         # (the batch pass never resizes), so the mask must be resampled into

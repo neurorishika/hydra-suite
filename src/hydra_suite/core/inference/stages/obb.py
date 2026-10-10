@@ -256,7 +256,7 @@ def _valid_detection_mask(
 
 
 class _RawOBBTensors(NamedTuple):
-    """CUDA tensors from OBB model — no .cpu() call until filter_from_tensors()."""
+    """CUDA tensors from OBB model — no .cpu() call until materialize_tensors()."""
 
     frame_idx: int
     xywhr: torch.Tensor  # (N, 5): cx, cy, w, h, angle_rad on device
@@ -265,7 +265,7 @@ class _RawOBBTensors(NamedTuple):
     # (N,): model class id on device. Optional (defaults to None) so existing
     # call sites/tests that pre-date the class-id feature keep constructing
     # this NamedTuple without a `cls=` kwarg; treated as "all class 0"
-    # everywhere it is consumed (materialize_tensors, filter_from_tensors).
+    # everywhere it is consumed (materialize_tensors).
     cls: torch.Tensor | None = None
     # Export-only native contours, one (P, 2) float32 array per row, in the
     # SAME row order as `xywhr`. Deliberately host-side and ragged: polygons

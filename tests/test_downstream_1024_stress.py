@@ -8,8 +8,9 @@ of its crops at once. Excluded by default (``benchmark``); run with::
 
 ``tracemalloc`` sees numpy (and cv2-through-numpy) allocations only, not the
 torch CPU allocator, so the process max-RSS growth is printed alongside it
-(dominated by one float32 CHW copy of the whole frame, ~233 MiB at 4512^2,
-not by the crops). Each test also prints the frame's wall-clock time, so a
+(torch allocator and first-call library initialisation; no whole-frame float
+copy is made -- ``canonical_warp_batch_from_frame`` converts only each crop's
+own footprint). Each test also prints the frame's wall-clock time, so a
 quadratic per-frame path (the pre-cull pose foreign mask cost ~7 s/frame at
 1024 detections) is visible.
 """

@@ -22,10 +22,15 @@ _ELLIPSE_AREA_FRACTION = np.pi / 4.0
 def _rank(confidences: np.ndarray, positions: np.ndarray) -> np.ndarray:
     """Order (into the given arrays) by confidence desc, then raw index asc.
 
-    The single replay ranking. Detection caches are stored in exactly this
-    order (``obb.rank_and_bound``), so a cache prefix IS a top-k under this
-    ranking -- which makes the 2N window, NMS and the final cut agree for
-    every N and keeps every replay set inside the per-animal superset.
+    The single replay ranking. Detection caches are stored confidence-ranked
+    (``obb.rank_and_bound``), so a cache prefix IS a top-k under this ranking
+    -- which makes the 2N window, NMS and the final cut agree for every N and
+    keeps every replay set inside the per-animal superset. Extraction breaks
+    equal confidences later-first (``obb._numpy_descending_indices``), but
+    storage re-stamps rows in that rank order, so on a stored frame this
+    ranking is the identity: the two never disagree about a cached frame.
+    (Re-running ``rank_and_bound`` on a stored frame is NOT the identity on
+    ties -- cached frames must never be re-ranked.)
     """
     return np.lexsort((np.asarray(positions), -np.asarray(confidences)))
 
@@ -135,16 +140,16 @@ def filter_with_indices(
     *,
     apply_max_detections: bool = True,
 ) -> tuple[OBBResult, np.ndarray]:
-    """Run the same gates as filter_detections and return (filtered, pre-filter indices).
+    """The replay gates; returns ``(filtered, raw indices into raw)``.
 
-    Returned indices index into `raw`. They are used as the primary key by downstream
-    caches so that a threshold edit never invalidates HeadTail/CNN/Pose caches —
-    only the OBB detection cache stores pre-filter results; downstream caches are
-    keyed by these indices and re-aligned on load_frame.
+    ``raw`` must be a confidence-ranked cached frame (``rank_and_bound``
+    order). Order: 2N window (a prefix slice), confidence / size / aspect /
+    ROI gates, OBB NMS, final N cut. The returned RAW indices key every
+    per-animal cache; ``load_frame`` re-aligns per-animal rows by them.
 
-    ``apply_max_detections=False`` is a diagnostic-only mode for measuring
-    source candidates before the configured final tracking-target cap. The
-    independent hard downstream crop ceiling is still retained.
+    ``apply_max_detections=False`` returns the N-free SUPERSET (no 2N window,
+    no final N cut; still bounded by ``MAX_DETECTIONS_PER_FRAME``): the set
+    every per-animal stage is computed on, so their caches serve any N.
     """
     n = raw.num_detections
     if n == 0:
@@ -196,17 +201,17 @@ def filter_for_source(
 ) -> tuple[OBBResult, np.ndarray]:
     """Detection-source-aware dispatch in front of ``filter_with_indices``.
 
-    OBB emits raw, un-gated detections, so the gates live here. bg-sub does not:
-    ``BackgroundMeasurer.detect_objects`` applies the contour-area and size
-    gates (the N-dependent MAX_TARGETS rules are applied here, at replay), and ``run_bgsub`` already intersects the ROI with the
-    foreground mask — so by the time a bg-sub ``OBBResult`` reaches this layer
-    there is nothing left to filter and the identity is correct. There is
-    also no ``OBBConfig`` to gate with (``config.obb is None``), and bg-sub's
-    confidences are NaN, so running the OBB gates would silently drop every
-    detection on the confidence comparison.
+    OBB emits raw, un-gated detections, so the OBB gates live here. bg-sub
+    does not need them: ``BackgroundMeasurer.detect_objects`` applies the
+    contour-area and size gates and ``run_bgsub`` intersects the ROI with the
+    foreground mask. Only bg-sub's two N rules live here, at replay: skip the
+    frame when the stored contour count exceeds ``N * MAX_CONTOUR_MULTIPLIER``,
+    else keep the top N by area. There is no ``OBBConfig`` to gate bg-sub
+    with (``config.obb is None``), and its confidences are NaN, so the OBB
+    gates would drop every detection on the confidence comparison.
 
-    ``apply_max_detections=False`` is reserved for source-count diagnostics;
-    normal inference and replay use the default final target cap.
+    ``apply_max_detections=False`` returns the N-free superset (see
+    ``filter_with_indices``); normal replay applies the N rules.
     """
     if config.detection_source == "bgsub":
         bg = getattr(config, "bgsub", None)
