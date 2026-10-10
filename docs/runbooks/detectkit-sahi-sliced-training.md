@@ -35,7 +35,7 @@ You have a DetectKit project with:
    - **Below the floor** is fixed at "Drop fragment" for YOLO: a fragment under the minimum area loses its label.
    - Set **Empty-tile sampling fraction** to `0.15` (default, 15% of background-only tiles are kept, strengthening non-object detection).
    - Leave **Mix full frames** checked (default, ensures the model also learns full-frame context).
-   - Set **Merge threshold** to `0.5` (default, overlapping predictions from adjacent tiles are merged when IoU exceeds this).
+   - Set **Merge threshold** to `0.5` (default, overlapping predictions from adjacent tiles are merged when their overlap, IoS by default, exceeds this).
    - Leave **Balance multi-scale training loss** enabled. Every tile remains in the epoch, while `Balance strength` controls inverse-frequency loss weighting: `0.5` is square-root balancing and `1.0` gives exact balance among tile-size groups. Full-frame examples retain their normal weight.
    - This balance mode applies to single-process training. Distributed (DDP) runs retain Ultralytics' standard loader and log that balancing was skipped.
 

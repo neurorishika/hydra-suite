@@ -88,9 +88,11 @@ The typical longest side of one animal in source-image pixels. Tile sizing
 uses it under "Fit to animal size". The value is **derived**, so a small
 badge beside it names its source (see [Source badges](#source-badges)).
 
-- The DetectKit inference and escalation dialogs offer **Override**, which
-  lets you edit a measured or stamped value. Unchecking it restores the
-  derived value.
+- The SAM3 and SAM2 escalation dialogs offer **Override**, which lets you
+  edit a measured or stamped value. Unchecking it restores the derived
+  value.
+- In the DetectKit inference-settings dialog the body size is an ordinary
+  field that you edit directly (badge `user`).
 - In TrackerKit the body size is display-only. It comes from the model's
   stamp, the applied profile, or the saved config, and TrackerKit never
   edits it. This value is not the tracking `REFERENCE_BODY_SIZE`, and no SAHI
@@ -166,7 +168,7 @@ the host has no such setting.
 | Profile | when the model has profiles | – | – | – | – | – |
 | Tile strategy | yes | yes | yes | yes | – (always fit to animal) | – (always fit to animal) |
 | Object scale(s) | one | one | set | set + single-scale fraction | one (0 = full frame) | one (0 = full frame) |
-| Body size | display only | Override | note (measured at build) | note (measured at build) | Override | Override |
+| Body size | display only | editable (`user`) | note (measured at build) | note (measured at build) | Override | Override |
 | Tile size / Resolved tile | yes | yes | yes | yes | label | label |
 | Tile overlap | yes | yes | yes | yes (max 0.99) | yes | fixed 0.5 |
 | Tile-layout preview | yes | yes | yes | yes | – | – |

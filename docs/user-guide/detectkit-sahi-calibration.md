@@ -178,8 +178,8 @@ panel, a profile selector appears alongside the tiling controls. Choosing
 "Training geometry" resets tiling to the values the model was trained
 with, with no calibration applied. Choosing a named profile fills in its
 measured tile size, overlap, object scale, confidence, and merge
-settings. The filled-in values carry a `profile` badge, or `stamped` for
-training geometry. A profile's overlap is never nudged toward the
+settings. The body size, and a custom tile size, carry a `profile` badge,
+or `stamped` for training geometry. A profile's overlap is never nudged toward the
 whole-animal minimum: if it sits below that minimum, the widget only notes
 it.
 
