@@ -811,6 +811,15 @@
   
 </li>
         
+          <li class="md-nav__item">
+  <a href="#sliced-inference-sahi" class="md-nav__link">
+    <span class="md-ellipsis">
+      Sliced Inference (SAHI)
+    </span>
+  </a>
+  
+</li>
+        
       </ul>
     </nav>
   
@@ -1140,6 +1149,27 @@
   
   <span class="md-ellipsis">
     DetectKit: SAHI Calibration Profiles
+  </span>
+  
+
+      </a>
+    </li>
+  
+
+              
+            
+              
+                
+  
+  
+  
+  
+    <li class="md-nav__item">
+      <a href="../sahi-settings/" class="md-nav__link">
+        
+  
+  <span class="md-ellipsis">
+    SAHI Settings (TrackerKit + DetectKit)
   </span>
   
 
@@ -2115,6 +2145,15 @@
   
 </li>
         
+          <li class="md-nav__item">
+  <a href="#sliced-inference-sahi" class="md-nav__link">
+    <span class="md-ellipsis">
+      Sliced Inference (SAHI)
+    </span>
+  </a>
+  
+</li>
+        
       </ul>
     </nav>
   
@@ -2194,6 +2233,12 @@
 <li>Background subtraction is unstable.</li>
 <li>You have a suitable OBB model.</li>
 </ul>
+<h3 id="sliced-inference-sahi">Sliced Inference (SAHI)<a class="headerlink" href="#sliced-inference-sahi" title="Permanent link">&para;</a></h3>
+<p>In direct mode, "Enable sliced inference (SAHI)" tiles each frame so that
+small animals keep more pixels. When the model carries a
+<code>.slice_meta.json</code> sidecar, the tiling controls fill in from it (its
+calibration profile, else its training geometry). See <a href="../sahi-settings/">SAHI
+Settings</a> for every control.</p>
 <h2 id="practical-selection-matrix">Practical Selection Matrix<a class="headerlink" href="#practical-selection-matrix" title="Permanent link">&para;</a></h2>
 <table>
 <thead>

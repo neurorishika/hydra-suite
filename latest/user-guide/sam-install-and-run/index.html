@@ -1183,6 +1183,27 @@
   
   
     <li class="md-nav__item">
+      <a href="../sahi-settings/" class="md-nav__link">
+        
+  
+  <span class="md-ellipsis">
+    SAHI Settings (TrackerKit + DetectKit)
+  </span>
+  
+
+      </a>
+    </li>
+  
+
+              
+            
+              
+                
+  
+  
+  
+  
+    <li class="md-nav__item">
       <a href="../filterkit/" class="md-nav__link">
         
   
@@ -2401,13 +2422,14 @@ the canvas. Accept, add or reject frame by frame. See
 leaves the result <strong>staged for review</strong> exactly as the GUI does. Open the
 project in DetectKit afterwards to accept or reject the staged frames.</p>
 <div class="language-text highlight"><pre><span></span><code><span id="__span-1-1"><a id="__codelineno-1-1" name="__codelineno-1-1" href="#__codelineno-1-1"></a>detectkit escalate sam2 --project DIR [--source NAME]... [--variant VARIANT]
-</span><span id="__span-1-2"><a id="__codelineno-1-2" name="__codelineno-1-2" href="#__codelineno-1-2"></a>                        [--device auto|cuda|mps|cpu] [--overwrite]
-</span><span id="__span-1-3"><a id="__codelineno-1-3" name="__codelineno-1-3" href="#__codelineno-1-3"></a>
-</span><span id="__span-1-4"><a id="__codelineno-1-4" name="__codelineno-1-4" href="#__codelineno-1-4"></a>detectkit escalate sam3 --project DIR --prompt TEXT [--class-name CLASS]
-</span><span id="__span-1-5"><a id="__codelineno-1-5" name="__codelineno-1-5" href="#__codelineno-1-5"></a>                        [--source NAME]... [--variant sam3|&lt;finetuned key&gt;]
-</span><span id="__span-1-6"><a id="__codelineno-1-6" name="__codelineno-1-6" href="#__codelineno-1-6"></a>                        [--confidence 0.35] [--max-instances 0]
-</span><span id="__span-1-7"><a id="__codelineno-1-7" name="__codelineno-1-7" href="#__codelineno-1-7"></a>                        [--tile-fraction F] [--reference-body-px PX]
-</span><span id="__span-1-8"><a id="__codelineno-1-8" name="__codelineno-1-8" href="#__codelineno-1-8"></a>                        [--device auto|cuda|mps|cpu] [--overwrite]
+</span><span id="__span-1-2"><a id="__codelineno-1-2" name="__codelineno-1-2" href="#__codelineno-1-2"></a>                        [--tile-fraction F] [--reference-body-px PX]
+</span><span id="__span-1-3"><a id="__codelineno-1-3" name="__codelineno-1-3" href="#__codelineno-1-3"></a>                        [--device auto|cuda|mps|cpu] [--overwrite]
+</span><span id="__span-1-4"><a id="__codelineno-1-4" name="__codelineno-1-4" href="#__codelineno-1-4"></a>
+</span><span id="__span-1-5"><a id="__codelineno-1-5" name="__codelineno-1-5" href="#__codelineno-1-5"></a>detectkit escalate sam3 --project DIR --prompt TEXT [--class-name CLASS]
+</span><span id="__span-1-6"><a id="__codelineno-1-6" name="__codelineno-1-6" href="#__codelineno-1-6"></a>                        [--source NAME]... [--variant sam3|&lt;finetuned key&gt;]
+</span><span id="__span-1-7"><a id="__codelineno-1-7" name="__codelineno-1-7" href="#__codelineno-1-7"></a>                        [--confidence 0.35] [--max-instances 0]
+</span><span id="__span-1-8"><a id="__codelineno-1-8" name="__codelineno-1-8" href="#__codelineno-1-8"></a>                        [--tile-fraction F] [--reference-body-px PX]
+</span><span id="__span-1-9"><a id="__codelineno-1-9" name="__codelineno-1-9" href="#__codelineno-1-9"></a>                        [--device auto|cuda|mps|cpu] [--overwrite]
 </span></code></pre></div>
 <table>
 <thead>
@@ -2455,14 +2477,18 @@ project in DetectKit afterwards to accept or reject the staged frames.</p>
 </tr>
 <tr>
 <td><code>--tile-fraction</code></td>
-<td>Tile size = body size / this fraction; <code>0</code> means full frame. Default: what the DetectKit dialog would open with for this variant (saved settings, then the calibration, then the model's stamped scale, then the starting guess at the project's body size).</td>
+<td>The dialog's <strong>Object scale</strong>: tile size = body size / this fraction; <code>0</code> means full frame. Default: what the DetectKit dialog would open with for this variant. SAM3: saved settings, then the calibration, then the model's stamped scale, then the starting guess at the project's body size. SAM2: saved settings, then the calibration, else full frame.</td>
 </tr>
 <tr>
 <td><code>--reference-body-px</code></td>
-<td>Typical longest animal side in pixels. Default: the dialog's value, then the project's sliced-training reference, then the median of your labels.</td>
+<td>The dialog's <strong>Body size</strong>: typical longest animal side in pixels. Default: the dialog's value, then the project's sliced-training reference, then the median of your labels.</td>
 </tr>
 </tbody>
 </table>
+<p>The two tiling flags map onto the dialogs' shared SAHI rows, described in
+<a href="../sahi-settings/">SAHI Settings</a>. The command prints the tiling it
+resolved (<code>Tiling: fraction F of a B px body ...</code> or <code>Tiling: full
+frame</code>) before it starts.</p>
 <p>Examples:</p>
 <div class="language-bash highlight"><pre><span></span><code><span id="__span-2-1"><a id="__codelineno-2-1" name="__codelineno-2-1" href="#__codelineno-2-1"></a><span class="c1"># Turn every box source into polygon masks on the best available device</span>
 </span><span id="__span-2-2"><a id="__codelineno-2-2" name="__codelineno-2-2" href="#__codelineno-2-2"></a>detectkit<span class="w"> </span>escalate<span class="w"> </span>sam2<span class="w"> </span>--project<span class="w"> </span>~/projects/colony_A

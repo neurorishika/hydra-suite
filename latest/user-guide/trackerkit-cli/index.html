@@ -1132,6 +1132,27 @@
   
   
     <li class="md-nav__item">
+      <a href="../sahi-settings/" class="md-nav__link">
+        
+  
+  <span class="md-ellipsis">
+    SAHI Settings (TrackerKit + DetectKit)
+  </span>
+  
+
+      </a>
+    </li>
+  
+
+              
+            
+              
+                
+  
+  
+  
+  
+    <li class="md-nav__item">
       <a href="../filterkit/" class="md-nav__link">
         
   
@@ -2121,7 +2142,9 @@
 <p>Keystone rules: the first video's config is the baseline. Later videos use
 their own <code>&lt;stem&gt;_config.json</code> when present, otherwise the baseline.
 <code>--keystone-override</code> (or an explicit <code>--config</code> on a multi-video batch)
-forces the baseline onto every video. <code>--sahi-profile</code> applies to all.</p>
+forces the baseline onto every video. <code>--sahi-profile</code> applies to all (see
+<a href="../detectkit-sahi-calibration/">SAHI calibration profiles</a> and
+<a href="../sahi-settings/">SAHI Settings</a>).</p>
 <p>Side-output retargeting: a video's own <code>&lt;stem&gt;_config.json</code> is used verbatim,
 including whatever <code>video_output_path</code> it names. A video that inherits the
 keystone's config instead of having its own, or any video in a <strong>multi-video</strong>

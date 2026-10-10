@@ -201,18 +201,6 @@
          <lastmod>2026-10-10</lastmod>
     </url>
     <url>
-         <loc>https://neurorishika.github.io/hydra-suite/latest/superpowers/plans/2026-10-09-sahi-unification-s1-s2/</loc>
-         <lastmod>2026-10-10</lastmod>
-    </url>
-    <url>
-         <loc>https://neurorishika.github.io/hydra-suite/latest/superpowers/plans/2026-10-09-sahi-unification-s3/</loc>
-         <lastmod>2026-10-10</lastmod>
-    </url>
-    <url>
-         <loc>https://neurorishika.github.io/hydra-suite/latest/superpowers/plans/2026-10-09-sahi-unification-s4/</loc>
-         <lastmod>2026-10-10</lastmod>
-    </url>
-    <url>
          <loc>https://neurorishika.github.io/hydra-suite/latest/superpowers/plans/done/2026-04-26-inference-pipeline-redesign/</loc>
          <lastmod>2026-10-10</lastmod>
     </url>
@@ -577,6 +565,18 @@
          <lastmod>2026-10-10</lastmod>
     </url>
     <url>
+         <loc>https://neurorishika.github.io/hydra-suite/latest/superpowers/plans/done/2026-10-09-sahi-unification-s1-s2/</loc>
+         <lastmod>2026-10-10</lastmod>
+    </url>
+    <url>
+         <loc>https://neurorishika.github.io/hydra-suite/latest/superpowers/plans/done/2026-10-09-sahi-unification-s3/</loc>
+         <lastmod>2026-10-10</lastmod>
+    </url>
+    <url>
+         <loc>https://neurorishika.github.io/hydra-suite/latest/superpowers/plans/done/2026-10-09-sahi-unification-s4/</loc>
+         <lastmod>2026-10-10</lastmod>
+    </url>
+    <url>
          <loc>https://neurorishika.github.io/hydra-suite/latest/superpowers/plans/notes/2026-07-16-cache-builder-decision/</loc>
          <lastmod>2026-10-10</lastmod>
     </url>
@@ -650,10 +650,6 @@
     </url>
     <url>
          <loc>https://neurorishika.github.io/hydra-suite/latest/superpowers/specs/2026-09-06-unified-sahi-training-geometry-design/</loc>
-         <lastmod>2026-10-10</lastmod>
-    </url>
-    <url>
-         <loc>https://neurorishika.github.io/hydra-suite/latest/superpowers/specs/2026-10-09-sahi-unification-design/</loc>
          <lastmod>2026-10-10</lastmod>
     </url>
     <url>
@@ -921,6 +917,10 @@
          <lastmod>2026-10-10</lastmod>
     </url>
     <url>
+         <loc>https://neurorishika.github.io/hydra-suite/latest/superpowers/specs/done/2026-10-09-sahi-unification-design/</loc>
+         <lastmod>2026-10-10</lastmod>
+    </url>
+    <url>
          <loc>https://neurorishika.github.io/hydra-suite/latest/superpowers/specs/done/trackerkit-identity-overhaul-spec/</loc>
          <lastmod>2026-10-10</lastmod>
     </url>
@@ -1018,6 +1018,10 @@
     </url>
     <url>
          <loc>https://neurorishika.github.io/hydra-suite/latest/user-guide/refinekit/</loc>
+         <lastmod>2026-10-10</lastmod>
+    </url>
+    <url>
+         <loc>https://neurorishika.github.io/hydra-suite/latest/user-guide/sahi-settings/</loc>
          <lastmod>2026-10-10</lastmod>
     </url>
     <url>

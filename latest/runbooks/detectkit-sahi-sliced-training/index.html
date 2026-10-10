@@ -1014,6 +1014,27 @@
   
   
     <li class="md-nav__item">
+      <a href="../../user-guide/sahi-settings/" class="md-nav__link">
+        
+  
+  <span class="md-ellipsis">
+    SAHI Settings (TrackerKit + DetectKit)
+  </span>
+  
+
+      </a>
+    </li>
+  
+
+              
+            
+              
+                
+  
+  
+  
+  
+    <li class="md-nav__item">
       <a href="../../user-guide/filterkit/" class="md-nav__link">
         
   
@@ -2025,6 +2046,7 @@
 <h1 id="detectkit-sahi-sliced-training-runbook">DetectKit SAHI Sliced-Training Runbook<a class="headerlink" href="#detectkit-sahi-sliced-training-runbook" title="Permanent link">&para;</a></h1>
 <h2 id="why">Why<a class="headerlink" href="#why" title="Permanent link">&para;</a></h2>
 <p>Full-frame downscaling at camera resolution often merges crowded ant clusters into single bounding boxes, especially at high colony densities. SAHI (Sliced Aided Hyper Inference) solves this by cutting the image into overlapping tiles during both training and inference, allowing the OBB model to learn and detect objects at a natural tile-scale rather than at an undersized full-frame resolution. This runbook shows you how to train a model specifically on sliced data so inference can later apply SAHI to reliably separate clusters.</p>
+<p>Every control named below belongs to the shared SAHI settings widget. That widget is described once, with every label, badge and resolution rule, in <a href="../../user-guide/sahi-settings/">SAHI Settings</a>.</p>
 <h2 id="prerequisites">Prerequisites<a class="headerlink" href="#prerequisites" title="Permanent link">&para;</a></h2>
 <p>You have a DetectKit project with:
 - OBB-labeled or polygon-labeled data sources already configured
@@ -2043,27 +2065,28 @@
 </li>
 <li>Check the "Enable sliced training + preview" checkbox.</li>
 <li>
-<p>Leave <strong>Tile strategy</strong> at <strong>Fit labelled objects</strong> (the default). DetectKit measures the reference body size from all labels during the build; it is not a manual setting.</p>
+<p>Leave <strong>Tile strategy</strong> at <strong>Fit to animal size</strong> (the default, stored as <code>auto_object</code>). DetectKit measures the body size from all labels during the build, so it is not a manual setting. The <strong>Body size</strong> row shows "Last build: X px, measured automatically from labels" once a build has run.</p>
 </li>
 <li>
 <p><strong>Configure tile sizing</strong> (these control how crowded frames are split):</p>
 </li>
-<li>Set <strong>Object scale in model input</strong> to <code>0.05, 0.10, 0.15, 0.20</code> (the default). These are fractions of the active model input; at 640px they correspond to 32, 64, 96, and 128px.<ul>
+<li>Set <strong>Object scales</strong> to <code>0.05, 0.1, 0.15, 0.2</code> (the default). Each value is an object scale: the animal's size as a fraction of the tile (body size ÷ tile size). With "Fit to animal size", each scale produces tiles of body size ÷ scale, and the <strong>Tile size</strong> row shows the resulting range (for example <code>→ 240–960 px over 4 scales</code>).<ul>
 <li>A larger fraction means a smaller tile and more aggressive crowd-splitting.</li>
-<li>DetectKit resolves each fraction for the active model input size, so changing model input size does not require translating pixel targets yourself.</li>
+<li>Scales are stored as fractions only, so changing the model input size does not require translating pixel targets yourself.</li>
 </ul>
 </li>
-<li>Set <strong>Overlap</strong> to <code>0.2</code> (default, creates a 20% border overlap between adjacent tiles to reduce edge artifacts).</li>
+<li>Leave <strong>Tile overlap</strong> at <code>0.25</code> (the default for new projects: neighbouring tiles share 25% of a tile). Next to it the widget shows the <strong>whole-animal minimum</strong>, the largest scale + 0.05 (<code>0.25</code> for the default set). Below that value an animal at a tile seam can be cut in every tile; if you lower the overlap (or add a larger scale) the widget warns and offers <strong>Raise to X</strong>, but it never changes your overlap on its own. Projects saved before this default keep their stored overlap (often <code>0.2</code>).</li>
 <li>
 <p>Use the live tile-layout preview beside the controls to see the resulting grid over the project’s labelled frame sizes at their native dimensions. Click it to cycle through the image-size distribution; all configured object-scale targets are shown together. Before the first build it is explicitly illustrative; afterward it uses the label-derived body measurement.</p>
 </li>
 <li>
-<p><strong>Configure negative sampling and merging:</strong></p>
+<p><strong>Configure negative sampling and merging</strong> (click <strong>Advanced</strong> to show these rows):</p>
 </li>
 <li>Set <strong>Minimum retained object area</strong> to <code>0.25</code> (default, tiles with &lt; 25% of the object's area are suppressed during slicing to avoid training on severely clipped animals).</li>
+<li><strong>Below the floor</strong> is fixed at "Drop fragment" for YOLO: a fragment under the minimum area loses its label.</li>
 <li>Set <strong>Empty-tile sampling fraction</strong> to <code>0.15</code> (default, 15% of background-only tiles are kept, strengthening non-object detection).</li>
 <li>Leave <strong>Mix full frames</strong> checked (default, ensures the model also learns full-frame context).</li>
-<li>Set <strong>Merge threshold</strong> to <code>0.5</code> (default, overlapping predictions from adjacent tiles are merged when IoU exceeds this).</li>
+<li>Set <strong>Merge threshold</strong> to <code>0.5</code> (default, overlapping predictions from adjacent tiles are merged when their overlap, IoS by default, exceeds this).</li>
 <li>Leave <strong>Balance multi-scale training loss</strong> enabled. Every tile remains in the epoch, while <code>Balance strength</code> controls inverse-frequency loss weighting: <code>0.5</code> is square-root balancing and <code>1.0</code> gives exact balance among tile-size groups. Full-frame examples retain their normal weight.</li>
 <li>
 <p>This balance mode applies to single-process training. Distributed (DDP) runs retain Ultralytics' standard loader and log that balancing was skipped.</p>
@@ -2071,8 +2094,8 @@
 <li>
 <p><strong>Choose a different tile strategy only when needed:</strong></p>
 </li>
-<li><strong>Use model input</strong> makes each tile the model input size and hides object-scale controls because labels are not used to set tile size.</li>
-<li><strong>Custom tile size</strong> exposes width and height. Choose it only when a known camera or acquisition geometry requires a fixed tile size.</li>
+<li><strong>Use model input size</strong> (<code>auto_model</code>) makes each tile the model input size. The object-scale controls stay visible but are disabled, because labels are not used to set tile size.</li>
+<li><strong>Custom tile size</strong> (<code>custom</code>) enables the width and height spins. Choose it only when a known camera or acquisition geometry requires a fixed tile size.</li>
 </ol>
 <h2 id="build-train">Build + Train<a class="headerlink" href="#build-train" title="Permanent link">&para;</a></h2>
 <ol>
@@ -2095,8 +2118,9 @@
 <li><strong>Enable sliced inference in preview:</strong></li>
 <li>In the training dialog, ensure "Enable sliced training + preview" is still checked (this same checkbox gates both training-data generation and preview slicing).</li>
 <li>Open the <strong>Preview</strong> panel and navigate to a crowded frame (one where ants were previously merged).</li>
+<li>The preview should now apply SAHI (tile-based inference) automatically.</li>
 <li>
-<p>The preview should now apply SAHI (tile-based inference) automatically.</p>
+<p>With a published model selected, the preview tiles the way TrackerKit would. Geometry, scale, overlap and merge settings come from the model's sidecar (its primary calibration profile, else its training geometry). Only the enable toggle, the input size and the body size come from the project. The status bar names the source, for example "SAHI preview: training geometry". The preview serves <strong>one</strong> operating scale, the median of the training set, not every training scale.</p>
 </li>
 <li>
 <p><strong>Inspect cluster separation:</strong></p>
@@ -2107,7 +2131,7 @@
 <p>If clusters are still merged, check that:</p>
 <ul>
 <li>Object scales match your typical object scale (decrease the fractions if tiles are too small or fragmented).</li>
-<li>Overlap is not too small (0.2 is typical; lower overlap can miss objects at tile edges).</li>
+<li>Overlap is not below the whole-animal minimum the widget shows (0.25 for the default scales; lower overlap can miss objects at tile edges).</li>
 <li>Minimum retained object area is not too aggressive (0.25 deliberately rejects severely partial objects).</li>
 </ul>
 </li>
@@ -2126,16 +2150,16 @@
 <li>
 <p><strong>Check model metadata:</strong></p>
 </li>
-<li>After training completes, the published model file (e.g., <code>model.pt</code>) will have a sidecar file <code>model.slice_meta.json</code>.</li>
-<li>This JSON file records the trained slicing geometry: <code>geometry_mode</code>, <code>target_sizes</code>, <code>reference_body_px</code>, <code>overlap</code>, <code>min_area_ratio</code>, etc.</li>
-<li>Keep this metadata file with the model — it documents the exact slicing configuration used during training.</li>
+<li>After training completes, the published model file (e.g., <code>best.pt</code>) has a sidecar file named after the full model filename: <code>best.pt.slice_meta.json</code>.</li>
+<li>The sidecar is <code>schema_version: 3</code> with <code>model_family: "yolo"</code>. Its <code>training_geometry</code> keeps the build manifest's keys verbatim (<code>geometry_mode</code>, <code>target_sizes</code>, <code>object_tile_fraction</code>, <code>reference_body_px</code>, <code>overlap</code>, <code>min_area_ratio</code>, <code>imgsz</code>, and so on), so older readers still work. It adds the canonical keys <code>object_tile_fractions</code>, <code>trained_body_px</code> and <code>fragment_policy</code>. Calibration profiles are stored in the same file.</li>
+<li>Keep this metadata file with the model. TrackerKit and the DetectKit preview both read it.</li>
 </ol>
 <h2 id="ship-back">Ship Back<a class="headerlink" href="#ship-back" title="Permanent link">&para;</a></h2>
 <ol>
 <li><strong>Prepare the model for delivery:</strong></li>
 <li>Export the trained OBB-direct model from DetectKit as usual.</li>
 <li>
-<p>Ensure the <code>&lt;model&gt;.slice_meta.json</code> sidecar is included in the delivery package.</p>
+<p>Ensure the <code>&lt;model&gt;.pt.slice_meta.json</code> sidecar is included in the delivery package.</p>
 </li>
 <li>
 <p><strong>Document the slicing configuration:</strong></p>
@@ -2148,21 +2172,20 @@
 </ul>
 </li>
 <li>
-<p>Example note: <em>"Model trained with SAHI labelled-object tiling; object scales 0.05, 0.10, 0.15, 0.20 of model input; overlap 0.2; reference_body_px measured from labels. Sidecar slice_meta.json included."</em></p>
+<p>Example note: <em>"Model trained with SAHI labelled-object tiling; object scales 0.05, 0.10, 0.15, 0.20 of model input; overlap 0.25; reference_body_px measured from labels. Sidecar slice_meta.json included."</em></p>
 </li>
 <li>
 <p><strong>Prepare for TrackerKit inference:</strong></p>
 </li>
-<li>The <code>slice_meta.json</code> sidecar will later be read by TrackerKit's SAHI inference pipeline to auto-configure slicing for validation and production inference.</li>
-<li><strong>Note:</strong> TrackerKit's automatic sidecar reading is a separate future specification; for now, the metadata is documentation. When that spec is complete, the TrackerKit inference engine will automatically match the SAHI parameters to this model's trained geometry.</li>
-<li>Ensure the sidecar is preserved in all downstream storage and version-control systems.</li>
+<li>When you select the model in TrackerKit's detection panel (direct mode), TrackerKit reads the sidecar and fills in the SAHI controls from the model's primary profile, else its training geometry. <code>trackerkit track</code> does the same headless, and <code>--sahi-profile</code> selects a calibration profile explicitly. See <a href="../../user-guide/detectkit-sahi-calibration/">SAHI calibration profiles</a>.</li>
+<li>Ensure the sidecar is preserved in all downstream storage and version-control systems. Without it, TrackerKit falls back to its saved or default SAHI settings.</li>
 </ol>
 <hr />
 <h2 id="troubleshooting">Troubleshooting<a class="headerlink" href="#troubleshooting" title="Permanent link">&para;</a></h2>
 <h3 id="preview-shows-no-improvement-or-wrong-tiling">Preview shows no improvement or wrong tiling<a class="headerlink" href="#preview-shows-no-improvement-or-wrong-tiling" title="Permanent link">&para;</a></h3>
 <ul>
 <li><strong>Issue:</strong> Clusters still appear merged, or tiles seem misaligned.</li>
-<li><strong>Check:</strong> Confirm "Enable sliced training + preview" is checked. For labelled-object tiling, rebuild the sliced dataset so DetectKit can measure the reference body from labels; alternatively, switch to custom tile size and explicitly set dimensions.</li>
+<li><strong>Check:</strong> Confirm "Enable sliced training + preview" is checked. With "Fit to animal size", rebuild the sliced dataset so DetectKit can measure the body size from labels. Alternatively, switch to "Custom tile size" and set the dimensions explicitly. If a published model is selected, the preview follows that model's sidecar rather than these training settings. Check the "SAHI preview:" status message, or open the inference settings dialog to override it.</li>
 </ul>
 <h3 id="training-is-much-slower">Training is much slower<a class="headerlink" href="#training-is-much-slower" title="Permanent link">&para;</a></h3>
 <ul>
@@ -2176,12 +2199,12 @@
 <li>Retrain with larger object-scale fractions to force more aggressive tiling.</li>
 <li>Increase "Empty-tile sampling fraction" (e.g., 0.25) to improve sparse-frame accuracy.</li>
 <li>Verify that the training dataset contains representative crowded frames; if training data is mostly sparse, the model won't learn crowd-splitting.</li>
-<li>Check that overlap (0.2) and minimum retained object area (0.1) are not too conservative.</li>
+<li>Check that overlap (0.25 default) and minimum retained object area (0.25) are not too conservative.</li>
 </ul>
 <h3 id="model-runs-but-inference-is-not-sliced">Model runs but inference is not sliced<a class="headerlink" href="#model-runs-but-inference-is-not-sliced" title="Permanent link">&para;</a></h3>
 <ul>
-<li><strong>Diagnosis:</strong> The downstream inference system (TrackerKit) may not be reading or applying SAHI parameters.</li>
-<li><strong>Action:</strong> Until TrackerKit's automatic sidecar reading is implemented, manually configure SAHI in your inference system using the parameters recorded in <code>slice_meta.json</code>.</li>
+<li><strong>Diagnosis:</strong> SAHI is off in TrackerKit, or the sidecar did not travel with the model.</li>
+<li><strong>Action:</strong> Confirm <code>&lt;model&gt;.pt.slice_meta.json</code> sits next to the model file, then check "Enable sliced inference (SAHI)" in TrackerKit's detection panel (direct mode). The SAHI controls fill in from the sidecar.</li>
 </ul>
 
 

@@ -1094,9 +1094,9 @@
       <ul class="md-nav__list">
         
           <li class="md-nav__item">
-  <a href="#reference-body-size-and-where-it-comes-from" class="md-nav__link">
+  <a href="#body-size-and-where-it-comes-from" class="md-nav__link">
     <span class="md-ellipsis">
-      Reference body size, and where it comes from
+      Body size, and where it comes from
     </span>
   </a>
   
@@ -1317,6 +1317,27 @@
   
   <span class="md-ellipsis">
     DetectKit: SAHI Calibration Profiles
+  </span>
+  
+
+      </a>
+    </li>
+  
+
+              
+            
+              
+                
+  
+  
+  
+  
+    <li class="md-nav__item">
+      <a href="../sahi-settings/" class="md-nav__link">
+        
+  
+  <span class="md-ellipsis">
+    SAHI Settings (TrackerKit + DetectKit)
   </span>
   
 
@@ -2281,9 +2302,9 @@
       <ul class="md-nav__list">
         
           <li class="md-nav__item">
-  <a href="#reference-body-size-and-where-it-comes-from" class="md-nav__link">
+  <a href="#body-size-and-where-it-comes-from" class="md-nav__link">
     <span class="md-ellipsis">
-      Reference body size, and where it comes from
+      Body size, and where it comes from
     </span>
   </a>
   
@@ -2574,36 +2595,51 @@ OBB, or polygon) — it only needs instance counts to compare against SAM3's
 output, not masks — so you don't need polygon labels to calibrate.</p>
 <p>Calibration fits <strong>two</strong> parameters against your labelled frames:</p>
 <ol>
-<li><strong>Tile fraction</strong> — whether (and how finely) the frame is tiled before
-   inference, and</li>
+<li><strong>Object scale</strong> (the tile fraction, <code>--tile-fraction</code> on the command
+   line) — whether (and how finely) the frame is tiled before inference.
+   Tile size = body size ÷ object scale; <code>0</code> shows as "full frame (no
+   tiling)", and</li>
 <li><strong>Confidence</strong> — the score threshold used to keep or drop a detected
    instance.</li>
 </ol>
-<p><strong>The tile-fraction default shown in the dialog (<code>0.05</code>) is an unvalidated
+<p><strong>The object-scale default shown in the dialog (<code>0.05</code>) is an unvalidated
 starting guess taken from a single measured configuration on one dataset.
 It is not a tuned value, and it should not be treated as one.</strong> It exists
 only to prefill the dialog if you skip calibration. Calibration is how you
-actually fit the tile fraction (and the confidence) to your own images.</p>
-<p>This asymmetry matters operationally: <strong>changing the tile fraction requires
+actually fit the object scale (and the confidence) to your own images.</p>
+<p>This asymmetry matters operationally: <strong>changing the object scale requires
 a full re-run</strong> (tile geometry is baked into what gets inferred), while
 <strong>changing the confidence does not</strong> — a staged run keeps every candidate
 detection in a cache, and re-thresholding it to a different confidence is
 free (no inference, just re-filtering the cache). Calibrate confidence
-liberally; calibrate tile fraction only when you actually plan to re-run.</p>
-<h3 id="reference-body-size-and-where-it-comes-from">Reference body size, and where it comes from<a class="headerlink" href="#reference-body-size-and-where-it-comes-from" title="Permanent link">&para;</a></h3>
+liberally; calibrate the object scale only when you actually plan to re-run.</p>
+<h3 id="body-size-and-where-it-comes-from">Body size, and where it comes from<a class="headerlink" href="#body-size-and-where-it-comes-from" title="Permanent link">&para;</a></h3>
 <p>Tiling needs to know roughly how large one animal is, in pixels: the tile
-edge is <code>reference body size / tile fraction</code>. DetectKit resolves it from
-the first of these that yields a value:</p>
+edge is <code>body size / object scale</code>, shown read-only in the <strong>Resolved tile</strong>
+row. DetectKit resolves the body size from the first of these that yields a
+value:</p>
 <ol>
-<li>the project's sliced-training reference body size,</li>
+<li>the project's sliced-training reference body size (badge <code>project</code>),</li>
 <li>the <strong>median longest side of the labels you already have</strong> in the
-   selected sources, then</li>
-<li><strong>you</strong> — the dialog's "Reference body size (px)" field is editable, and
-   shows which of the three it was prefilled from.</li>
+   selected sources (badge <code>dataset</code>), then</li>
+<li><strong>you</strong>: an unknown body size ("unknown (tiling off)") stays editable.
+   A derived one is read-only until you check <strong>Override</strong>.</li>
 </ol>
-<p>If none of them resolves, tiling switches <strong>off</strong>, which is the worst
-configuration measured for small animals. The dialog says so explicitly
-rather than proceeding quietly.</p>
+<p>A finetuned model's stamped body size (badge <code>stamped</code>) is used when the
+model was trained at one and the project chain is empty. If no body size
+resolves, tiling switches <strong>off</strong>, which is the worst configuration measured
+for small animals. The dialog says so explicitly rather than proceeding
+quietly.</p>
+<p>The dialog opens with the settings you last accepted for that model
+variant, else its saved calibration, else the model's stamped scale, else
+the <code>0.05</code> starting guess at the body size above. The headless
+<code>detectkit escalate sam3</code> command resolves its tiling the same way, so a
+run with no tiling flags stages what the dialog would have opened with.
+<code>--tile-fraction</code> and <code>--reference-body-px</code> override it (see <a href="../sam-install-and-run/#running-from-the-command-line">SAM2 and SAM3:
+install and run</a>).
+The tiling rows are the shared SAHI widget. <a href="../sahi-settings/">SAHI Settings</a>
+describes every row, badge, and the whole-animal overlap hint, including
+why a deliberate overlap of 0.5 is never nudged down.</p>
 <h3 id="the-exhaustive-labelling-checkbox">The exhaustive-labelling checkbox<a class="headerlink" href="#the-exhaustive-labelling-checkbox" title="Permanent link">&para;</a></h3>
 <p>Calibration measures how many labelled animals SAM3 catches (recall) and
 how many extra polygons it produces that don't match a label. That second
@@ -2870,6 +2906,12 @@ polygon labels, tiled with the same shared tile-geometry helpers
 use elsewhere in DetectKit — so a training tile and an inference tile are
 built the same way. Polygon labels are the only geometry level training can
 use; AABB/OBB-only sources need geometry escalation first.</p>
+<p>The panel's <strong>Tiling (SAHI geometry)</strong> group is the shared SAHI widget (see
+<a href="../sahi-settings/">SAHI Settings</a>). It defaults to "Fit to animal size", an
+object scale of <code>0.055</code> of the 1008 px input, and a tile overlap of <code>0.25</code>.
+Fragments below the minimum retained area are kept but marked <code>is_crowd</code>
+rather than dropped. The <code>0.055</code> training default is deliberately not the
+escalation dialog's <code>0.05</code> starting guess.</p>
 <h3 id="defaults">Defaults<a class="headerlink" href="#defaults" title="Permanent link">&para;</a></h3>
 <p>The panel's defaults come from a training spike, not from taste — see the
 comments in <code>Sam3LoraParams</code> if you want the exact rationale per value:</p>
@@ -2928,8 +2970,12 @@ usable evidence either way. See the module docstring of
 <p>A finished run publishes a <strong>merged, full checkpoint</strong> — the LoRA adapter
 folded into the base weights, not the adapter alone — to
 <code>get_models_dir() / "sam3_finetuned"</code>, alongside a JSON sidecar recording
-the run's parameters and dataset fingerprint, and registers it in the
-model registry. From then on, the escalation dialog's model selector
+the run's parameters and dataset fingerprint
+(<code>&lt;checkpoint&gt;.sam3_meta.json</code>), and registers it in the model registry.
+Publishing also writes the tiling geometry to
+<code>&lt;checkpoint&gt;.slice_meta.json</code> (schema 3, <code>model_family: "sam3"</code>), the
+same sidecar format YOLO models use. The geometry stays in
+<code>.sam3_meta.json</code> too, so older readers keep working. From then on, the escalation dialog's model selector
 offers it next to the stock <code>sam3</code> checkpoint.</p>
 <p>A load guard (<code>assert_checkpoint_loaded</code>) checks that a selected checkpoint
 actually loaded before it is used for inference. This exists because

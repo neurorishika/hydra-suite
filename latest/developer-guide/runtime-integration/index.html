@@ -1020,6 +1020,27 @@
   
   
     <li class="md-nav__item">
+      <a href="../../user-guide/sahi-settings/" class="md-nav__link">
+        
+  
+  <span class="md-ellipsis">
+    SAHI Settings (TrackerKit + DetectKit)
+  </span>
+  
+
+      </a>
+    </li>
+  
+
+              
+            
+              
+                
+  
+  
+  
+  
+    <li class="md-nav__item">
       <a href="../../user-guide/filterkit/" class="md-nav__link">
         
   
@@ -1447,6 +1468,33 @@
   
     <nav class="md-nav" aria-label="Sliced Inference (SAHI)">
       <ul class="md-nav__list">
+        
+          <li class="md-nav__item">
+  <a href="#the-sahi-contract-tilingspec-aliases-resolution" class="md-nav__link">
+    <span class="md-ellipsis">
+      The SAHI contract (TilingSpec, aliases, resolution)
+    </span>
+  </a>
+  
+</li>
+        
+          <li class="md-nav__item">
+  <a href="#the-model-sidecar-v3-and-read_tiling_meta" class="md-nav__link">
+    <span class="md-ellipsis">
+      The model sidecar (v3) and read_tiling_meta
+    </span>
+  </a>
+  
+</li>
+        
+          <li class="md-nav__item">
+  <a href="#the-shared-settings-widget" class="md-nav__link">
+    <span class="md-ellipsis">
+      The shared settings widget
+    </span>
+  </a>
+  
+</li>
         
           <li class="md-nav__item">
   <a href="#gpu-merge-backend-performance" class="md-nav__link">
@@ -2269,6 +2317,33 @@
       <ul class="md-nav__list">
         
           <li class="md-nav__item">
+  <a href="#the-sahi-contract-tilingspec-aliases-resolution" class="md-nav__link">
+    <span class="md-ellipsis">
+      The SAHI contract (TilingSpec, aliases, resolution)
+    </span>
+  </a>
+  
+</li>
+        
+          <li class="md-nav__item">
+  <a href="#the-model-sidecar-v3-and-read_tiling_meta" class="md-nav__link">
+    <span class="md-ellipsis">
+      The model sidecar (v3) and read_tiling_meta
+    </span>
+  </a>
+  
+</li>
+        
+          <li class="md-nav__item">
+  <a href="#the-shared-settings-widget" class="md-nav__link">
+    <span class="md-ellipsis">
+      The shared settings widget
+    </span>
+  </a>
+  
+</li>
+        
+          <li class="md-nav__item">
   <a href="#gpu-merge-backend-performance" class="md-nav__link">
     <span class="md-ellipsis">
       gpu merge-backend performance
@@ -2488,10 +2563,13 @@ while jobs are running.</p>
 <code>stages/slicing.py:run_direct_sliced</code> when <code>config.obb.direct.slice.enabled</code>.</p>
 <ul>
 <li><strong>Geometry:</strong> <code>auto_model</code> (tile = model imgsz, no resample — the fast path),
-  <code>auto_object</code> (tile from expected object size), <code>custom</code> (explicit size).</li>
-<li><strong>Merge:</strong> <code>merge_policy</code> (nms/nmm/greedy_nmm) × <code>merge_metric</code> (iou/ios) ×
+  <code>auto_object</code> (tile = body px / object scale), <code>custom</code> (explicit size).</li>
+<li><strong>Merge:</strong> <code>merge_policy</code> (<code>nms</code>/<code>greedy_nmm</code>) × <code>merge_metric</code> (iou/ios) ×
   <code>merge_backend</code> (cv2 default; gpu = native-cuda only, cv2-validated). Default
-  <code>greedy_nmm</code> + <code>ios</code> + <code>0.5</code>.</li>
+  <code>greedy_nmm</code> + <code>ios</code> + <code>0.5</code>. A saved <code>nmm</code> runs the same code path as
+  <code>greedy_nmm</code>: <code>canonicalize</code> reads it as <code>greedy_nmm</code> and no UI offers it,
+  but TrackerKit and the engine pass the raw value through so the cache hash
+  of old configs still hits.</li>
 <li><strong>Merge gate is tile geometry, never the configured ratio:</strong> the merge step
   is gated on <code>tiles_overlap(plan.tiles)</code> — whether the <em>actual</em> planned tiles
   overlap — not on whether <code>overlap_height_ratio</code>/<code>overlap_width_ratio</code> is
@@ -2522,6 +2600,137 @@ while jobs are running.</p>
   optimization.</li>
 <li><strong>Cache:</strong> slice params fold into <code>detection_cache_key</code> only when enabled, so
   existing non-sliced caches stay valid.</li>
+</ul>
+<h3 id="the-sahi-contract-tilingspec-aliases-resolution">The SAHI contract (<code>TilingSpec</code>, aliases, resolution)<a class="headerlink" href="#the-sahi-contract-tilingspec-aliases-resolution" title="Permanent link">&para;</a></h3>
+<p>Every SAHI surface (TrackerKit inference, DetectKit YOLO training, preview and
+inference dialog, SAM3 training, SAM3/SAM2 escalation) shares one vocabulary
+and one set of rules. The user-facing description is
+<a href="../../user-guide/sahi-settings/">SAHI Settings</a>. The pieces:</p>
+<ul>
+<li><strong><code>utils/tiling_spec.py</code></strong> (pure, numpy only, importable from every layer):</li>
+<li><code>TilingSpec</code>, a frozen dataclass in TrackerKit's vocabulary: <code>enabled</code>,
+    <code>geometry_mode</code>, <code>object_tile_fractions</code>, <code>reference_body_px</code>,
+    <code>slice_width</code>/<code>slice_height</code>, <code>overlap</code> (<code>None</code> = unset),
+    <code>min_area_ratio</code>, <code>fragment_policy</code> (<code>drop</code>/<code>crowd</code>/<code>mask</code>),
+    <code>merge_policy</code>/<code>merge_metric</code>/<code>merge_threshold</code>. The constructor is
+    <strong>write-strict</strong>: a wrong type or an out-of-range value raises
+    <code>ValueError</code>. <code>TilingSpec.from_mapping(...)</code> is the <strong>read-lenient</strong>
+    path: legacy or out-of-range values in old files load with a one-time
+    warning and never raise. <code>TilingSpec.defaults(backend)</code> reads the
+    table below. <code>training_tile_sizes()</code> fans out every scale and is for
+    TRAINING only. Inference uses one operating scale.</li>
+<li><code>BACKEND_DEFAULTS</code> is the one per-backend defaults table (<code>yolo_train</code>
+    <code>(0.05, 0.10, 0.15, 0.20)</code>, <code>yolo_infer</code> <code>(0.15,)</code>, <code>sam3</code> <code>(0.055,)</code>,
+    <code>sam2</code> <code>()</code> = full frame until calibrated), plus <code>DEFAULT_OVERLAP</code>
+    (0.2, the serving default TrackerKit uses), <code>DEFAULT_TRAIN_OVERLAP</code>
+    (0.25 = max of the <code>yolo_train</code> set + margin; the default of
+    <code>SliceTrainingSettings</code>/<code>SliceTrainingConfig</code>/<code>SliceBuildParams</code> only),
+    <code>OVERLAP_MARGIN</code> (0.05), <code>OVERLAP_MAX</code> (0.9) and
+    <code>FRACTION_MIN</code>/<code>FRACTION_MAX</code> (0.01/0.9). Widget ranges come from
+    these constants. The SAM3 <em>escalation</em> seed
+    (<code>semantic.tiling.SEMANTIC_TILE_FRACTION_SEED = 0.05</code>, on the
+    calibration grid) is deliberately separate from the <code>sam3</code> <em>training</em>
+    default.</li>
+<li><code>SLICE_ALIASES</code> plus <code>canonicalize(mapping)</code> is the <strong>only</strong> place
+    legacy names are translated (for example <code>slice_overlap</code>/<code>tile_overlap</code>
+    → <code>overlap</code>, <code>min_retained_area_frac</code> → <code>min_area_ratio</code>, <code>merge_iou</code> →
+    <code>merge_threshold</code>, <code>trained_body_px</code> → <code>reference_body_px</code>, and
+    <code>target_size_fractions</code>/<code>tile_fraction</code> → fractions). Pixel
+    <code>target_sizes</code> are divided by their stated <code>imgsz</code> (640 for legacy YOLO
+    only) and are never written. Writers emit canonical names.</li>
+<li><code>operating_fraction(fractions)</code> is the one operating-scale rule: the
+    <code>np.median</code> of the set.</li>
+<li><strong><code>utils/tiling_resolve.py</code></strong> holds the <code>(value, source)</code> resolvers
+  (re-exported by <code>tiling_spec</code>). Each returns a <code>Sourced</code> whose <code>source</code> is
+  the UI badge: <code>resolve_reference_body_px</code> (override → dataset → stamped →
+  TrackerKit's own), <code>resolve_operating_fraction</code> (profile → stamped →
+  default), <code>resolve_object_tile_fractions</code> (user → profile → stamped →
+  default), <code>resolve_overlap</code> (override → saved → derived <code>max(fraction) +
+  OVERLAP_MARGIN</code> → default), and <code>resolve_tile_size</code>.</li>
+<li><strong>Unchanged byte-for-byte:</strong> <code>SLICE_*</code> engine keys, <code>SliceConfig</code> fields,
+  <code>_slice_config_hash</code>, and the <code>get_parameters_dict</code> goldens. No <code>SLICE_*</code>
+  default moved; the defaults are now named constants with the same values.</li>
+</ul>
+<h3 id="the-model-sidecar-v3-and-read_tiling_meta">The model sidecar (v3) and <code>read_tiling_meta</code><a class="headerlink" href="#the-model-sidecar-v3-and-read_tiling_meta" title="Permanent link">&para;</a></h3>
+<ul>
+<li>The file is <code>&lt;model&gt;.&lt;ext&gt;.slice_meta.json</code> (<code>slice_meta.sidecar_path</code>), now
+  <code>schema_version: 3</code> with <code>model_family</code> (<code>"yolo"</code> | <code>"sam3"</code>), a
+  <code>training_geometry</code> block, <code>primary_profile_id</code> and <code>profiles</code>.</li>
+<li><strong>YOLO v3 is additive</strong> (<code>tiling_meta.training_geometry_from_yolo_manifest</code>):
+  every v2 manifest key is kept verbatim (including <code>target_sizes</code> and the
+  scalar <code>object_tile_fraction</code>), with canonical <code>object_tile_fractions</code>,
+  <code>trained_body_px</code> and <code>fragment_policy</code> added beside them. The v2 reader
+  (<code>slice_meta._training_values</code>), the drift guard and the calibration grid
+  therefore read a v3 file bit-for-bit as they read v2.</li>
+<li><strong>SAM3 dual-writes</strong>: publish keeps the geometry in
+  <code>&lt;artifact&gt;.sam3_meta.json</code>, which existing readers use, and also writes a
+  canonical-only <code>.slice_meta.json</code> v3
+  (<code>training_geometry_from_sam3_manifest</code>). Builders stamp only values the
+  build stated, never defaults. Removing geometry from <code>.sam3_meta.json</code> is
+  deferred.</li>
+<li><code>core/inference/tiling_meta.read_tiling_meta(model_path) -&gt; TilingMeta |
+  None</code> is the one normalizing reader for v1/v2/v3 and legacy
+  <code>.sam3_meta.json</code> geometry. It returns <code>model_family</code>, <code>source</code>
+  (<code>slice_meta</code>/<code>sam3_meta</code>), <code>training: TilingSpec</code>, <code>imgsz</code>, <code>tile_px_set</code>,
+  <code>operating_fraction</code> and <code>profiles</code>, and it never raises. <strong>It has no
+  production caller yet</strong>, only its round-trip tests. TrackerKit and the DetectKit
+  preview still resolve through <code>slice_meta.slice_meta_to_panel_values</code> /
+  <code>resolve_slice_profile_values</code>, TrackerKit's ladder: requested profile →
+  primary profile → training geometry, or <code>slice_meta_values_from_settings</code>
+  for a saved session. That ladder already reads v3 additively, so moving
+  TrackerKit onto <code>read_tiling_meta</code> was deferred to protect byte-identity.</li>
+<li>The DetectKit preview resolves in <code>detectkit/jobs/preview_tiling.py</code>
+  (<code>resolve_preview_tiling</code>). An open inference-settings override wins.
+  Otherwise geometry, scale, overlap, tile size and merge come from the
+  sidecar through the TrackerKit ladder, while the project keeps <code>enabled</code>,
+  imgsz and the body (label-measured first, then stamped). The sidecar parse
+  is cached per (path, mtime, size, inode), so a recalibration is picked up.</li>
+<li>SAM3 escalation's opening state and headless <code>detectkit escalate sam3</code>
+  share <code>detectkit/jobs/semantic_escalation.default_semantic_tiling(project,
+  variant)</code>: saved → calibration → stamp → seed, and full frame only when the
+  body is 0. This mirrors SAM2's <code>sam2_escalation.default_geometry_tiling</code>.</li>
+</ul>
+<h3 id="the-shared-settings-widget">The shared settings widget<a class="headerlink" href="#the-shared-settings-widget" title="Permanent link">&para;</a></h3>
+<p><code>hydra_suite/widgets/slice_settings.py</code> (<code>SliceSettingsWidget</code>, with the
+control/row tables in <code>slice_settings_controls.py</code> and vocabulary/ranges in
+<code>slice_settings_parts.py</code>) is the one SAHI UI. It imports only Qt and <code>utils</code>.
+<code>tests/test_widgets_no_app_imports.py</code> enforces that it imports no app layer.</p>
+<ul>
+<li><strong>Roles</strong> (<code>ROLES</code>): <code>infer_yolo</code> (TrackerKit detection panel, DetectKit
+  inference dialog), <code>train_yolo</code> (DetectKit training dialog), <code>train_sam3</code>
+  (SAM3 training panel), <code>escalate_sam3</code>, <code>escalate_sam2</code>. The role selects
+  rows and the defaults row (<code>ROLE_BACKEND</code>).</li>
+<li><strong>Capabilities</strong> (<code>SliceWidgetCapabilities</code>) cover host differences within
+  a role: <code>body_override</code>, <code>body_display_only</code> (TrackerKit),
+  <code>advanced_merge</code>, <code>merge_threshold_row</code>, <code>full_frame_pass</code>,
+  <code>execution_knobs</code> (TrackerKit tiles per call / memory budget),
+  <code>fixed_overlap</code> (SAM2), and <code>tile_label_formatter</code> (escalation wording).</li>
+<li><strong>State</strong> is a <code>TilingSpec</code> plus a per-role <code>extras</code> dict (<code>ROLE_EXTRAS</code>):
+  <code>set_spec(spec, extras=...)</code>, <code>spec()</code> and <code>extras()</code>. Geometry combo
+  items show the label and store the enum as item data. Readers must use
+  <code>currentData()</code>/<code>findData()</code>, never the text.</li>
+<li><strong>Ownership rule:</strong> hosts own persistence. The widget writes its own
+  controls ONLY inside <code>set_spec(...)</code> (signals blocked) and
+  <code>set_reference_body(value, source)</code>. Derived values (tile size outside
+  Custom, the resolved tile, the whole-animal overlap minimum) appear in
+  LABELS and are never written into a host-persisted spin. A user edit
+  emits <code>field_changed(field)</code>. Hosts keep their own per-spin wiring, since
+  the spins are the widget's. TrackerKit never calls <code>set_spec</code>: it binds
+  its old attribute names to the widget's controls and keeps its existing
+  <code>setValue</code> + <code>_applying_slice_profile</code> logic.</li>
+<li><strong>F7 is a hint:</strong> the whole-animal minimum (<code>max(scale) + OVERLAP_MARGIN</code>)
+  is shown with a "Raise to X" button only when the user's own overlap is
+  below it. It is info-only for profile, stamped or config overlaps, and it
+  is never applied automatically. No host derives a saved overlap.</li>
+<li><code>set_source(field, source)</code> / <code>source_badge(field)</code> carry the badge
+  vocabulary in <code>SOURCE_DESCRIPTIONS</code> (<code>user</code>, <code>override</code>, <code>profile</code>,
+  <code>stamped</code>, <code>project</code>, <code>dataset</code>, <code>config</code>, <code>derived</code>, <code>default</code>).</li>
+<li>DetectKit adapters (<code>detectkit/gui/panels/slice_settings_adapter.py</code>) map
+  <code>SliceTrainingSettings</code> and the nine SAM3 tiling kwargs to and from
+  <code>(TilingSpec, extras)</code>. <code>SliceSettingsGroup</code> keeps legacy attribute
+  aliases for its tests.</li>
+<li><code>tools/sahi_widget_gallery.py</code> renders every role and host offscreen, for
+  visual checks after a layout change.</li>
 </ul>
 <h3 id="gpu-merge-backend-performance"><code>gpu</code> merge-backend performance<a class="headerlink" href="#gpu-merge-backend-performance" title="Permanent link">&para;</a></h3>
 <p>The <code>gpu</code> merge backend (native CUDA kernel) exists only where it measurably
