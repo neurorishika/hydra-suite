@@ -705,6 +705,27 @@
   
   
     <li class="md-nav__item">
+      <a href="../../user-guide/detection-limits/" class="md-nav__link">
+        
+  
+  <span class="md-ellipsis">
+    Detection Limits
+  </span>
+  
+
+      </a>
+    </li>
+  
+
+              
+            
+              
+                
+  
+  
+  
+  
+    <li class="md-nav__item">
       <a href="../../user-guide/tracking-and-merging/" class="md-nav__link">
         
   
@@ -1877,6 +1898,15 @@
   <a href="#hydra_suite.core.inference.InferenceRunner.identity_evidence_sidecar_path" class="md-nav__link">
     <span class="md-ellipsis">
       <code class="doc-symbol doc-symbol-toc doc-symbol-method"></code>&nbsp;identity_evidence_sidecar_path
+    </span>
+  </a>
+  
+</li>
+        
+          <li class="md-nav__item">
+  <a href="#hydra_suite.core.inference.InferenceRunner.ensure_identity_evidence_sidecar" class="md-nav__link">
+    <span class="md-ellipsis">
+      <code class="doc-symbol doc-symbol-toc doc-symbol-method"></code>&nbsp;ensure_identity_evidence_sidecar
     </span>
   </a>
   
@@ -3326,6 +3356,15 @@
   <a href="#hydra_suite.core.inference.InferenceRunner.identity_evidence_sidecar_path" class="md-nav__link">
     <span class="md-ellipsis">
       <code class="doc-symbol doc-symbol-toc doc-symbol-method"></code>&nbsp;identity_evidence_sidecar_path
+    </span>
+  </a>
+  
+</li>
+        
+          <li class="md-nav__item">
+  <a href="#hydra_suite.core.inference.InferenceRunner.ensure_identity_evidence_sidecar" class="md-nav__link">
+    <span class="md-ellipsis">
+      <code class="doc-symbol doc-symbol-toc doc-symbol-method"></code>&nbsp;ensure_identity_evidence_sidecar
     </span>
   </a>
   
@@ -4888,6 +4927,30 @@ content-hash key themselves.</p>
 <div class="doc doc-object doc-function">
 
 
+<h4 id="hydra_suite.core.inference.InferenceRunner.ensure_identity_evidence_sidecar" class="doc doc-heading">
+<code class="doc-symbol doc-symbol-heading doc-symbol-method"></code>            <code class="highlight language-python"><span class="n">ensure_identity_evidence_sidecar</span><span class="p">(</span><span class="n">start_frame</span><span class="p">,</span> <span class="n">end_frame</span><span class="p">,</span> <span class="o">*</span><span class="p">,</span> <span class="n">out_path</span><span class="o">=</span><span class="kc">None</span><span class="p">)</span></code>
+
+<a href="#hydra_suite.core.inference.InferenceRunner.ensure_identity_evidence_sidecar" class="headerlink" title="Permanent link">&para;</a></h4>
+
+
+    <div class="doc doc-contents ">
+
+        <p>Return the "batch" identity-evidence sidecar, rebuilding it if absent.</p>
+<p>On cache reuse no batch pass runs, so the sidecar for the CURRENT key
+(filters + N) may not exist yet -- e.g. a replay at a different N than
+the caches were written with. It is rebuilt here from the per-animal
+caches through the raw-index replay loaders; no stage model runs.
+<code>out_path</code> overrides the destination (a read-only replay must not
+write into the cache directory). Returns <code>None</code> when this runner has
+no identity-evidence config.</p>
+
+    </div>
+
+</div>
+
+<div class="doc doc-object doc-function">
+
+
 <h4 id="hydra_suite.core.inference.InferenceRunner.detect_batch_raw" class="doc doc-heading">
 <code class="doc-symbol doc-symbol-heading doc-symbol-method"></code>            <code class="highlight language-python"><span class="n">detect_batch_raw</span><span class="p">(</span><span class="n">frames</span><span class="p">,</span> <span class="n">frame_indices</span><span class="o">=</span><span class="kc">None</span><span class="p">,</span> <span class="n">roi_mask</span><span class="o">=</span><span class="kc">None</span><span class="p">)</span></code>
 
@@ -4980,14 +5043,14 @@ native-frame ROI transform rather than reimplementing one or the other.</p>
 
     <div class="doc doc-contents ">
 
-        <p>Run the same gates as filter_detections and return (filtered, pre-filter indices).</p>
-<p>Returned indices index into <code>raw</code>. They are used as the primary key by downstream
-caches so that a threshold edit never invalidates HeadTail/CNN/Pose caches —
-only the OBB detection cache stores pre-filter results; downstream caches are
-keyed by these indices and re-aligned on load_frame.</p>
-<p><code>apply_max_detections=False</code> is a diagnostic-only mode for measuring
-source candidates before the configured final tracking-target cap. The
-independent hard downstream crop ceiling is still retained.</p>
+        <p>The replay gates; returns <code>(filtered, raw indices into raw)</code>.</p>
+<p><code>raw</code> must be a confidence-ranked cached frame (<code>rank_and_bound</code>
+order). Order: 2N window (a prefix slice), confidence / size / aspect /
+ROI gates, OBB NMS, final N cut. The returned RAW indices key every
+per-animal cache; <code>load_frame</code> re-aligns per-animal rows by them.</p>
+<p><code>apply_max_detections=False</code> returns the N-free SUPERSET (no 2N window,
+no final N cut; still bounded by <code>MAX_DETECTIONS_PER_FRAME</code>): the set
+every per-animal stage is computed on, so their caches serve any N.</p>
 
     </div>
 
@@ -7144,7 +7207,7 @@ and writes one output file per track to the configured output sub-directory.</p>
 
 
 <h4 id="hydra_suite.core.individual.IndividualPropertiesCache.is_compatible" class="doc doc-heading">
-<code class="doc-symbol doc-symbol-heading doc-symbol-method"></code>            <code class="highlight language-python"><span class="n">is_compatible</span><span class="p">()</span></code>
+<code class="doc-symbol doc-symbol-heading doc-symbol-method"></code>            <code class="highlight language-python"><span class="n">is_compatible</span><span class="p">(</span><span class="n">max_targets</span><span class="o">=</span><span class="kc">None</span><span class="p">)</span></code>
 
 <a href="#hydra_suite.core.individual.IndividualPropertiesCache.is_compatible" class="headerlink" title="Permanent link">&para;</a></h4>
 
@@ -7152,6 +7215,10 @@ and writes one output file per track to the configured output sub-directory.</p>
     <div class="doc doc-contents ">
 
         <p>Return True if the loaded cache matches the expected schema version.</p>
+<p>With <code>max_targets</code>, also require the file to have been written at
+that N: these caches hold the final-N tracked detections only, so a
+file from another N would silently miss (or misattribute) rows. A
+file without a recorded N is never reused under an N check.</p>
 
     </div>
 
