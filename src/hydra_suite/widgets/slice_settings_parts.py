@@ -110,6 +110,7 @@ SOURCE_DESCRIPTIONS = {
     "dataset": "measured from the project's labelled objects",
     "derived": "computed from the settings above",
     "default": "the backend default",
+    "config": "the saved session or advanced configuration, not the selected model",
 }
 
 # (tile_px or None, body_px, fraction or None) -> (label text, tooltip)

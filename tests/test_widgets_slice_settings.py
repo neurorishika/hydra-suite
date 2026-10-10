@@ -598,3 +598,45 @@ def test_tile_size_badge_follows_the_host_source_until_a_user_edit():
     assert w.source_badge("tile_size") == "derived"  # not custom: derived
     w.combo_slice_geometry.setCurrentIndex(w.combo_slice_geometry.findData("custom"))
     assert w.source_badge("tile_size") == "user"  # the mode change was an edit
+
+
+def _badge_words_in_src() -> set[str]:
+    """String literals passed as a badge source anywhere in src."""
+    import ast
+    from pathlib import Path
+
+    import hydra_suite
+
+    words: set[str] = set()
+    root = Path(hydra_suite.__file__).parent
+    for path in root.rglob("*.py"):
+        tree = ast.parse(path.read_text(encoding="utf-8"))
+        for node in ast.walk(tree):
+            if not isinstance(node, ast.Call):
+                continue
+            name = getattr(node.func, "attr", getattr(node.func, "id", ""))
+            if name in ("set_reference_body", "set_source", "set_badge"):
+                if len(node.args) >= 2 and isinstance(node.args[1], ast.Constant):
+                    words.add(node.args[1].value)
+            for kw in node.keywords:
+                if kw.arg == "body_px_source" and isinstance(kw.value, ast.Constant):
+                    if isinstance(kw.value.value, str) and kw.value.value:
+                        words.add(kw.value.value)
+    return words
+
+
+def test_every_badge_word_in_use_has_a_description():
+    from hydra_suite.trackerkit.gui.panels.detection_panel import (
+        SLICE_SOURCE_BY_RESOLUTION,
+    )
+    from hydra_suite.widgets.slice_settings_parts import SOURCE_DESCRIPTIONS
+
+    used = _badge_words_in_src() | set(SLICE_SOURCE_BY_RESOLUTION.values())
+    # Sources reached through variables: tiling_resolve.resolve_body_px's
+    # chain, the SAM3 dialog's _body_source(), TrackerKit's no-sidecar body.
+    used |= {"user", "override", "dataset", "stamped", "default", "project"}
+    used |= {"profile", "derived", "config"}
+    missing = sorted(word for word in used if word not in SOURCE_DESCRIPTIONS)
+    assert not missing, missing
+    for word, text in SOURCE_DESCRIPTIONS.items():
+        assert len(text.split()) >= 3, word
