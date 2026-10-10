@@ -72,24 +72,27 @@ def test_stats_summary_counts_frames():
 # --- M12: a threshold below the extraction floor is loud ----------------------
 
 
-def test_confidence_below_extraction_floor_warns_once(caplog):
+def test_confidence_below_extraction_floor_warns_once_per_process(caplog):
     import logging
 
-    from hydra_suite.core.inference.config import build_inference_config_from_params
+    from hydra_suite.core.inference import config as cfg_mod
 
+    cfg_mod.reset_extraction_floor_warning()
+    low = {"YOLO_CONFIDENCE_THRESHOLD": 0.005, "MAX_TARGETS": 4}
     with caplog.at_level(logging.WARNING):
-        build_inference_config_from_params(
-            {"YOLO_CONFIDENCE_THRESHOLD": 0.005, "MAX_TARGETS": 4}
-        )
+        for _ in range(3):  # worker, preview and provenance rebuilds
+            cfg_mod.build_inference_config_from_params(dict(low))
     hits = [r for r in caplog.records if "extraction floor" in r.getMessage()]
     assert len(hits) == 1 and "0.01" in hits[0].getMessage()
 
     caplog.clear()
+    cfg_mod.reset_extraction_floor_warning()
     with caplog.at_level(logging.WARNING):
-        build_inference_config_from_params(
+        cfg_mod.build_inference_config_from_params(
             {"YOLO_CONFIDENCE_THRESHOLD": 0.25, "MAX_TARGETS": 4}
         )
     assert not [r for r in caplog.records if "extraction floor" in r.getMessage()]
+    cfg_mod.reset_extraction_floor_warning()
 
 
 # --- M13: per-frame limit warnings collapse after the first 20 ---------------

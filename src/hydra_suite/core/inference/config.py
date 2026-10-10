@@ -996,6 +996,17 @@ def _gate_calibration(params: dict) -> None:
                 raise CalibrationRequiredError(message)
 
 
+# The sub-floor confidence WARNING is logged once per process: the config is
+# rebuilt several times per run (worker, provenance, preview, orchestrator).
+_EXTRACTION_FLOOR_WARNED = False
+
+
+def reset_extraction_floor_warning() -> None:
+    """Re-arm the once-per-process sub-floor confidence WARNING (tests)."""
+    global _EXTRACTION_FLOOR_WARNED
+    _EXTRACTION_FLOOR_WARNED = False
+
+
 def build_inference_config_from_params(params: dict) -> InferenceConfig:
     """Build an InferenceConfig from a tracking-worker params dict.
 
@@ -1021,7 +1032,9 @@ def build_inference_config_from_params(params: dict) -> InferenceConfig:
         or "yolo26s-obb.pt"
     )
     yolo_conf = float(params.get("YOLO_CONFIDENCE_THRESHOLD", 0.25))
-    if yolo_conf < EXTRACTION_CONFIDENCE_FLOOR:
+    global _EXTRACTION_FLOOR_WARNED
+    if yolo_conf < EXTRACTION_CONFIDENCE_FLOOR and not _EXTRACTION_FLOOR_WARNED:
+        _EXTRACTION_FLOOR_WARNED = True
         logger.warning(
             "YOLO confidence threshold %g is below the extraction floor %g: "
             "detections under %g are never extracted, so it acts as %g.",
