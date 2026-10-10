@@ -4889,6 +4889,8 @@ class TrackingEngineCore:
                     detected_props_cache.save(
                         metadata={
                             "cache_id": detected_props_id,
+                            # Final-N artifact: export readers require this N.
+                            "max_targets": p.get("MAX_TARGETS"),
                             "start_frame": int(start_frame),
                             "end_frame": int(end_frame),
                             "video_path": str(
