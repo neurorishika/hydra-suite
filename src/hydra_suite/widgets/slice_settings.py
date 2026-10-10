@@ -362,7 +362,11 @@ class SliceSettingsWidget(QGroupBox):
         self._refresh()
 
     def set_source(self, field: str, source: str) -> None:
-        """Badge a field's source (e.g. fractions ``stamped``/``profile``)."""
+        """Badge a field's source (e.g. fractions ``stamped``/``profile``).
+
+        ``"tile_size"`` badges a custom tile size the host applied (shown only
+        in Custom; any user edit of W/H or the mode resets it to ``user``).
+        """
         self._sources[field] = source
         self._refresh()
 
@@ -370,7 +374,11 @@ class SliceSettingsWidget(QGroupBox):
         if field == "reference_body_px":
             return self._body_source
         if field == "tile_size":
-            return "user" if self._mode() == "custom" else "derived"
+            if self._mode() != "custom":
+                return "derived"
+            # A host-applied custom size (a profile, a stamp) keeps its
+            # source until the user edits the size or the mode.
+            return self._sources.get("tile_size", "user")
         return self._sources.get(field, "user")
 
     def set_advanced_expanded(self, expanded: bool) -> None:
@@ -509,6 +517,8 @@ class SliceSettingsWidget(QGroupBox):
                 value, source = self._body_derived
                 self._body_source = source
                 self._set_quietly(self.spin_slice_body, value)
+        elif field in ("slice_width", "slice_height", "geometry_mode"):
+            self._sources.pop("tile_size", None)
         elif field == "merge_policy":
             self._passthrough.pop("merge_policy_raw", None)
         self._refresh()

@@ -580,3 +580,21 @@ def test_custom_minimum_is_capped_for_a_tile_smaller_than_the_animal():
     assert w.lbl_slice_overlap_minimum.text() == (
         "Below whole-animal minimum (0.90, capped)"
     )
+
+
+def test_tile_size_badge_follows_the_host_source_until_a_user_edit():
+    w = _infer_widget("custom", body=48.0, tile=(1024, 800))
+    assert w.source_badge("tile_size") == "user"
+    w.set_source("tile_size", "profile")
+    assert w.source_badge("tile_size") == "profile"
+    assert w.lbl_slice_tile_badge.text() == "profile"
+    w.spin_slice_tile_w.setValue(900)  # the user path
+    assert w.source_badge("tile_size") == "user"
+    assert w.lbl_slice_tile_badge.text() == "user"
+    w.set_source("tile_size", "stamped")
+    w.combo_slice_geometry.setCurrentIndex(
+        w.combo_slice_geometry.findData("auto_model")
+    )
+    assert w.source_badge("tile_size") == "derived"  # not custom: derived
+    w.combo_slice_geometry.setCurrentIndex(w.combo_slice_geometry.findData("custom"))
+    assert w.source_badge("tile_size") == "user"  # the mode change was an edit
