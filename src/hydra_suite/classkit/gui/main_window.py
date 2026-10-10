@@ -9054,7 +9054,12 @@ class MainWindow(QMainWindow):
             return
         self.selected_point_index = index
         if self.explorer_mode == "labeling":
-            self._labeling_navigation_scope = "database"
+            # With an active candidate batch, next/prev must keep walking the
+            # batch; clicking a point only jumps within (or out of) it.  Free
+            # whole-database navigation applies only when there is no batch.
+            self._labeling_navigation_scope = (
+                "pool" if self.candidate_indices else "database"
+            )
         self.hover_locked = True
         self.request_preview_for_index(index, source="click")
         self.request_update_explorer_selection(index)
