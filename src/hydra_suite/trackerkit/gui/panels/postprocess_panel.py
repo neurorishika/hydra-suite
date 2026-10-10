@@ -25,6 +25,11 @@ from PySide6.QtWidgets import (
     QWidget,
 )
 
+from hydra_suite.core.post.video_output_scale import (
+    DEFAULT_VIDEO_OUTPUT_SCALE,
+    MAX_VIDEO_OUTPUT_SCALE,
+    MIN_VIDEO_OUTPUT_SCALE,
+)
 from hydra_suite.trackerkit.config.schemas import TrackerConfig
 from hydra_suite.trackerkit.gui.widgets.collapsible import CollapsibleGroupBox
 
@@ -1018,6 +1023,20 @@ class PostProcessPanel(QWidget):
         f_video_destination.addRow(
             self.lbl_video_path, self.video_destination_row_widget
         )
+        self.spin_video_output_scale = QDoubleSpinBox()
+        self.spin_video_output_scale.setRange(
+            MIN_VIDEO_OUTPUT_SCALE, MAX_VIDEO_OUTPUT_SCALE
+        )
+        self.spin_video_output_scale.setSingleStep(0.05)
+        self.spin_video_output_scale.setDecimals(2)
+        self.spin_video_output_scale.setValue(DEFAULT_VIDEO_OUTPUT_SCALE)
+        self.spin_video_output_scale.setToolTip(
+            "Resolution of the annotated video relative to the source video.\n"
+            "0.5 = half width and height (a quarter of the pixels): much faster\n"
+            "to render and a much smaller file. 1.0 = full source resolution.\n"
+            "Markers, arrows, text and trails scale with it."
+        )
+        f_video_destination.addRow("Output scale", self.spin_video_output_scale)
 
         self.check_show_labels = QCheckBox("Show Track IDs")
         self.check_show_labels.setChecked(True)
