@@ -271,7 +271,7 @@ def index_clip(tmp_path_factory):
 
 
 @pytest.mark.parametrize("start", [0, 5, 10, 23, 39])
-@pytest.mark.parametrize("kind", ["pyav", "opencv", "hwaccel"])
+@pytest.mark.parametrize("kind", ["pyav", "opencv", "hwaccel", "cuvid"])
 def test_start_frame_alignment_matches_cv2(index_clip, start, kind):
     cands = {c.name: c for c in vd.default_decoder_candidates(str(index_clip), 128, 64)}
     if kind not in cands:
@@ -291,14 +291,14 @@ def test_default_ladder_order():
 
 
 def test_downscaled_decode_is_output_size(index_clip):
+    # Every decoder on this host, incl. cuvid's on-GPU ``resize`` where present.
     for c in vd.default_decoder_candidates(str(index_clip), 64, 32):
-        if c.name not in ("pyav", "opencv"):
-            continue
         src = vd.FrameSource([c], start_frame=3, out_size=(64, 32))
-        f = src.read()
+        got = [src.read() for _ in range(5)]
         src.close()
-        assert f.shape == (32, 64, 3) and f.flags.c_contiguous
-        assert _decode_index(f) == 3
+        for f in got:
+            assert f.shape == (32, 64, 3) and f.flags.c_contiguous, c.name
+        assert [_decode_index(f) for f in got] == [3, 4, 5, 6, 7], c.name
 
 
 def test_frame_to_bgr_handles_odd_source_and_padded_planes():
