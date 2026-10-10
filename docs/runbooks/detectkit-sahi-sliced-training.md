@@ -4,6 +4,8 @@
 
 Full-frame downscaling at camera resolution often merges crowded ant clusters into single bounding boxes, especially at high colony densities. SAHI (Sliced Aided Hyper Inference) solves this by cutting the image into overlapping tiles during both training and inference, allowing the OBB model to learn and detect objects at a natural tile-scale rather than at an undersized full-frame resolution. This runbook shows you how to train a model specifically on sliced data so inference can later apply SAHI to reliably separate clusters.
 
+Every control named below belongs to the shared SAHI settings widget. That widget is described once, with every label, badge and resolution rule, in [SAHI Settings](../user-guide/sahi-settings.md).
+
 ## Prerequisites
 
 You have a DetectKit project with:
@@ -19,17 +21,18 @@ You have a DetectKit project with:
 
 3. **Enable sliced training:**
    - Check the "Enable sliced training + preview" checkbox.
-   - Leave **Tile strategy** at **Fit labelled objects** (the default). DetectKit measures the reference body size from all labels during the build; it is not a manual setting.
+   - Leave **Tile strategy** at **Fit to animal size** (the default, stored as `auto_object`). DetectKit measures the body size from all labels during the build, so it is not a manual setting. The **Body size** row shows "Last build: X px, measured automatically from labels" once a build has run.
 
 4. **Configure tile sizing** (these control how crowded frames are split):
-   - Set **Object scale in model input** to `0.05, 0.10, 0.15, 0.20` (the default). These are fractions of the active model input; at 640px they correspond to 32, 64, 96, and 128px.
+   - Set **Object scales** to `0.05, 0.1, 0.15, 0.2` (the default). Each value is an object scale: the animal's size as a fraction of the tile (body size ÷ tile size). With "Fit to animal size", each scale produces tiles of body size ÷ scale, and the **Tile size** row shows the resulting range (for example `→ 240–960 px over 4 scales`).
      - A larger fraction means a smaller tile and more aggressive crowd-splitting.
-     - DetectKit resolves each fraction for the active model input size, so changing model input size does not require translating pixel targets yourself.
-   - Set **Overlap** to `0.2` (default, creates a 20% border overlap between adjacent tiles to reduce edge artifacts).
+     - Scales are stored as fractions only, so changing the model input size does not require translating pixel targets yourself.
+   - Leave **Tile overlap** at `0.2` (the default: neighbouring tiles share 20% of a tile). Next to it the widget shows the **whole-animal minimum**, the largest scale + 0.05 (`0.25` for the default set). Below that value an animal at a tile seam can be cut in every tile. The widget then warns and offers **Raise to 0.25**, but it never changes your overlap on its own.
    - Use the live tile-layout preview beside the controls to see the resulting grid over the project’s labelled frame sizes at their native dimensions. Click it to cycle through the image-size distribution; all configured object-scale targets are shown together. Before the first build it is explicitly illustrative; afterward it uses the label-derived body measurement.
 
-5. **Configure negative sampling and merging:**
+5. **Configure negative sampling and merging** (click **Advanced** to show these rows):
    - Set **Minimum retained object area** to `0.25` (default, tiles with < 25% of the object's area are suppressed during slicing to avoid training on severely clipped animals).
+   - **Below the floor** is fixed at "Drop fragment" for YOLO: a fragment under the minimum area loses its label.
    - Set **Empty-tile sampling fraction** to `0.15` (default, 15% of background-only tiles are kept, strengthening non-object detection).
    - Leave **Mix full frames** checked (default, ensures the model also learns full-frame context).
    - Set **Merge threshold** to `0.5` (default, overlapping predictions from adjacent tiles are merged when IoU exceeds this).
@@ -37,8 +40,8 @@ You have a DetectKit project with:
    - This balance mode applies to single-process training. Distributed (DDP) runs retain Ultralytics' standard loader and log that balancing was skipped.
 
 6. **Choose a different tile strategy only when needed:**
-   - **Use model input** makes each tile the model input size and hides object-scale controls because labels are not used to set tile size.
-   - **Custom tile size** exposes width and height. Choose it only when a known camera or acquisition geometry requires a fixed tile size.
+   - **Use model input size** (`auto_model`) makes each tile the model input size. The object-scale controls stay visible but are disabled, because labels are not used to set tile size.
+   - **Custom tile size** (`custom`) enables the width and height spins. Choose it only when a known camera or acquisition geometry requires a fixed tile size.
 
 ## Build + Train
 
@@ -59,6 +62,7 @@ You have a DetectKit project with:
    - In the training dialog, ensure "Enable sliced training + preview" is still checked (this same checkbox gates both training-data generation and preview slicing).
    - Open the **Preview** panel and navigate to a crowded frame (one where ants were previously merged).
    - The preview should now apply SAHI (tile-based inference) automatically.
+   - With a published model selected, the preview tiles the way TrackerKit would. Geometry, scale, overlap and merge settings come from the model's sidecar (its primary calibration profile, else its training geometry). Only the enable toggle, the input size and the body size come from the project. The status bar names the source, for example "SAHI preview: training geometry". The preview serves **one** operating scale, the median of the training set, not every training scale.
 
 2. **Inspect cluster separation:**
    - Compare the sliced preview output to the non-sliced baseline (turn off the checkbox to disable slicing temporarily).
@@ -76,15 +80,15 @@ You have a DetectKit project with:
      - Increasing negative tile fraction to improve false-negative detection in sparse regions.
 
 4. **Check model metadata:**
-   - After training completes, the published model file (e.g., `model.pt`) will have a sidecar file `model.slice_meta.json`.
-   - This JSON file records the trained slicing geometry: `geometry_mode`, `target_sizes`, `reference_body_px`, `overlap`, `min_area_ratio`, etc.
-   - Keep this metadata file with the model — it documents the exact slicing configuration used during training.
+   - After training completes, the published model file (e.g., `best.pt`) has a sidecar file named after the full model filename: `best.pt.slice_meta.json`.
+   - The sidecar is `schema_version: 3` with `model_family: "yolo"`. Its `training_geometry` keeps the build manifest's keys verbatim (`geometry_mode`, `target_sizes`, `object_tile_fraction`, `reference_body_px`, `overlap`, `min_area_ratio`, `imgsz`, and so on), so older readers still work. It adds the canonical keys `object_tile_fractions`, `trained_body_px` and `fragment_policy`. Calibration profiles are stored in the same file.
+   - Keep this metadata file with the model. TrackerKit and the DetectKit preview both read it.
 
 ## Ship Back
 
 1. **Prepare the model for delivery:**
    - Export the trained OBB-direct model from DetectKit as usual.
-   - Ensure the `<model>.slice_meta.json` sidecar is included in the delivery package.
+   - Ensure the `<model>.pt.slice_meta.json` sidecar is included in the delivery package.
 
 2. **Document the slicing configuration:**
    - Include a note in your delivery that specifies:
@@ -95,9 +99,8 @@ You have a DetectKit project with:
    - Example note: *"Model trained with SAHI labelled-object tiling; object scales 0.05, 0.10, 0.15, 0.20 of model input; overlap 0.2; reference_body_px measured from labels. Sidecar slice_meta.json included."*
 
 3. **Prepare for TrackerKit inference:**
-   - The `slice_meta.json` sidecar will later be read by TrackerKit's SAHI inference pipeline to auto-configure slicing for validation and production inference.
-   - **Note:** TrackerKit's automatic sidecar reading is a separate future specification; for now, the metadata is documentation. When that spec is complete, the TrackerKit inference engine will automatically match the SAHI parameters to this model's trained geometry.
-   - Ensure the sidecar is preserved in all downstream storage and version-control systems.
+   - When you select the model in TrackerKit's detection panel (direct mode), TrackerKit reads the sidecar and fills in the SAHI controls from the model's primary profile, else its training geometry. `trackerkit track` does the same headless, and `--sahi-profile` selects a calibration profile explicitly. See [SAHI calibration profiles](../user-guide/detectkit-sahi-calibration.md).
+   - Ensure the sidecar is preserved in all downstream storage and version-control systems. Without it, TrackerKit falls back to its saved or default SAHI settings.
 
 ---
 
@@ -106,7 +109,7 @@ You have a DetectKit project with:
 ### Preview shows no improvement or wrong tiling
 
 - **Issue:** Clusters still appear merged, or tiles seem misaligned.
-- **Check:** Confirm "Enable sliced training + preview" is checked. For labelled-object tiling, rebuild the sliced dataset so DetectKit can measure the reference body from labels; alternatively, switch to custom tile size and explicitly set dimensions.
+- **Check:** Confirm "Enable sliced training + preview" is checked. With "Fit to animal size", rebuild the sliced dataset so DetectKit can measure the body size from labels. Alternatively, switch to "Custom tile size" and set the dimensions explicitly. If a published model is selected, the preview follows that model's sidecar rather than these training settings. Check the "SAHI preview:" status message, or open the inference settings dialog to override it.
 
 ### Training is much slower
 
@@ -120,9 +123,9 @@ You have a DetectKit project with:
   - Retrain with larger object-scale fractions to force more aggressive tiling.
   - Increase "Empty-tile sampling fraction" (e.g., 0.25) to improve sparse-frame accuracy.
   - Verify that the training dataset contains representative crowded frames; if training data is mostly sparse, the model won't learn crowd-splitting.
-  - Check that overlap (0.2) and minimum retained object area (0.1) are not too conservative.
+  - Check that overlap (0.2) and minimum retained object area (0.25) are not too conservative.
 
 ### Model runs but inference is not sliced
 
-- **Diagnosis:** The downstream inference system (TrackerKit) may not be reading or applying SAHI parameters.
-- **Action:** Until TrackerKit's automatic sidecar reading is implemented, manually configure SAHI in your inference system using the parameters recorded in `slice_meta.json`.
+- **Diagnosis:** SAHI is off in TrackerKit, or the sidecar did not travel with the model.
+- **Action:** Confirm `<model>.pt.slice_meta.json` sits next to the model file, then check "Enable sliced inference (SAHI)" in TrackerKit's detection panel (direct mode). The SAHI controls fill in from the sidecar.
