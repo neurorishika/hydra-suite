@@ -333,3 +333,22 @@ def test_unreliable_pts_falls_back_to_counting_from_stream_start(
     monkeypatch.setattr(vd._PyAVReader, "_seek_frames", lambda self: None)
     cands = {c.name: c for c in vd.default_decoder_candidates(str(index_clip), 128, 64)}
     assert _source_indices([cands["pyav"]], 17, 40) == list(range(17, 40))
+
+
+@pytest.mark.parametrize("fmt", ["yuv420p", "nv12"])
+@pytest.mark.parametrize("out", [(200, 120), (100, 60)])
+def test_frame_to_bgr_fast_path_matches_swscale(fmt, out):
+    """Padded planes (200 px rows are padded by libav) read zero-copy must
+    give the same picture as swscale's own conversion."""
+    av = pytest.importorskip("av")
+    yy, xx = np.mgrid[0:120, 0:200]
+    img = np.stack([xx, yy * 2, (xx + yy) // 2], axis=2).clip(0, 255).astype(np.uint8)
+    frame = av.VideoFrame.from_ndarray(img, format="bgr24").reformat(format=fmt)
+    assert frame.planes[0].line_size >= 200
+    got = vd.frame_to_bgr(frame, *out)
+    assert got.shape == (out[1], out[0], 3) and got.flags.c_contiguous
+    ref = frame.reformat(
+        width=out[0], height=out[1], format="bgr24", interpolation="AREA"
+    ).to_ndarray()
+    assert np.abs(got.astype(int) - ref.astype(int)).mean() < 2.0
+    assert np.abs(got.astype(int) - ref.astype(int)).max() <= 12

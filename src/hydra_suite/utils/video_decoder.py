@@ -56,48 +56,73 @@ class DecoderCandidate:
 _LIMITED_RANGE_420 = ("yuv420p", "nv12")
 
 
-def _resize_plane(plane: np.ndarray, w: int, h: int) -> np.ndarray:
-    if plane.shape[1] == w and plane.shape[0] == h:
-        return plane
-    return cv2.resize(plane, (w, h), interpolation=cv2.INTER_AREA)
+def _plane_view(plane, width: int, height: int, channels: int = 1) -> np.ndarray:
+    """Zero-copy (height, width[, channels]) uint8 view of one ``av`` plane.
+
+    Rows keep their ``line_size`` stride; OpenCV reads strided rows directly,
+    so no plane is ever copied just to drop the padding.
+    """
+    rows = np.frombuffer(plane, np.uint8)[: plane.line_size * height].reshape(
+        height, plane.line_size
+    )
+    view = rows[:, : width * channels]
+    return view if channels == 1 else view.reshape(height, width, channels)
+
+
+def _resize_into(src: np.ndarray, dst: np.ndarray) -> None:
+    if src.shape[:2] == dst.shape[:2]:
+        np.copyto(dst, src)
+    else:
+        cv2.resize(
+            src, (dst.shape[1], dst.shape[0]), dst=dst, interpolation=cv2.INTER_AREA
+        )
 
 
 def frame_to_bgr(frame, out_w: int, out_h: int) -> np.ndarray:
     """A decoded ``av.VideoFrame`` as contiguous BGR uint8 at ``out_w x out_h``.
 
-    Even-sized limited-range yuv420p / nv12 (the common case) is resized per
-    plane with INTER_AREA and converted by OpenCV (BT.601 limited range, the
-    matrix swscale uses for these streams) -- several times faster than
-    swscale's single-threaded bgr24 path on 4K+ frames. Everything else (odd
-    sizes, full range, 10-bit, other layouts) goes through swscale with
-    area interpolation.
+    Even-sized limited-range yuv420p / nv12 (the common case) is read straight
+    from the frame's planes (no ``to_ndarray`` copies), resized per plane with
+    INTER_AREA and converted by OpenCV (BT.601 limited range, the matrix
+    swscale uses for these streams) -- several times faster than swscale's
+    single-threaded bgr24 path on 4K+ frames. Everything else (odd sizes,
+    full range, 10-bit, other layouts) goes through swscale with area
+    interpolation.
     """
     fmt = frame.format.name
     w, h = frame.width, frame.height
     full_range = int(getattr(frame, "color_range", 0) or 0) == 2
-    if fmt in _LIMITED_RANGE_420 and not full_range and w % 2 == 0 and h % 2 == 0:
-        arr = frame.to_ndarray()
-        if arr.shape == (h * 3 // 2, w):
-            y = _resize_plane(arr[:h], out_w, out_h)
-            if fmt == "yuv420p":
-                q = (h // 2) * (w // 2)
-                chroma = arr[h:].reshape(-1)
-                u = _resize_plane(
-                    chroma[:q].reshape(h // 2, w // 2), out_w // 2, out_h // 2
+    if (
+        fmt in _LIMITED_RANGE_420
+        and not full_range
+        and w % 2 == 0
+        and h % 2 == 0
+        and out_w % 2 == 0
+        and out_h % 2 == 0
+    ):
+        planes = frame.planes
+        y = _plane_view(planes[0], w, h)
+        if fmt == "nv12":
+            uv = _plane_view(planes[1], w // 2, h // 2, 2)
+            if (out_w, out_h) != (w, h):
+                y = cv2.resize(y, (out_w, out_h), interpolation=cv2.INTER_AREA)
+                uv = cv2.resize(
+                    uv, (out_w // 2, out_h // 2), interpolation=cv2.INTER_AREA
                 )
-                v = _resize_plane(
-                    chroma[q:].reshape(h // 2, w // 2), out_w // 2, out_h // 2
-                )
-                packed = np.concatenate(
-                    (y.reshape(-1), u.reshape(-1), v.reshape(-1))
-                ).reshape(out_h * 3 // 2, out_w)
-                return cv2.cvtColor(packed, cv2.COLOR_YUV2BGR_I420)
-            uv = arr[h:].reshape(h // 2, w // 2, 2)
-            uv = _resize_plane(uv, out_w // 2, out_h // 2)
-            packed = np.concatenate((y.reshape(-1), uv.reshape(-1))).reshape(
-                out_h * 3 // 2, out_w
-            )
-            return cv2.cvtColor(packed, cv2.COLOR_YUV2BGR_NV12)
+            return cv2.cvtColorTwoPlane(y, uv, cv2.COLOR_YUV2BGR_NV12)
+        packed = np.empty((out_h * 3 // 2, out_w), np.uint8)
+        q = (out_h // 2) * (out_w // 2)
+        flat = packed.reshape(-1)
+        _resize_into(y, packed[:out_h])
+        _resize_into(
+            _plane_view(planes[1], w // 2, h // 2),
+            flat[out_h * out_w : out_h * out_w + q].reshape(out_h // 2, out_w // 2),
+        )
+        _resize_into(
+            _plane_view(planes[2], w // 2, h // 2),
+            flat[out_h * out_w + q :].reshape(out_h // 2, out_w // 2),
+        )
+        return cv2.cvtColor(packed, cv2.COLOR_YUV2BGR_I420)
     out = frame.reformat(
         width=out_w, height=out_h, format="bgr24", interpolation="AREA"
     ).to_ndarray()
