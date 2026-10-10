@@ -602,3 +602,61 @@ def test_training_dialog_filters_recent_model_choices_by_mode(qapp) -> None:
 
     dialog.mode_family_combo.setCurrentIndex(dialog.mode_family_combo.findData("yolo"))
     assert dialog._compatible_recent_model_paths() == [recent_yolo]
+
+
+def test_lr_default_is_lower_when_fine_tuning_a_pretrained_backbone(qapp) -> None:
+    dialog = ClassKitTrainingDialog(
+        n_labeled=8,
+        class_choices=["a", "b"],
+        initial_settings={
+            "mode": "multihead_custom",
+            "custom_backbone": "convnext_tiny",
+            "custom_fine_tune_method": "full_finetune",
+        },
+    )
+    assert dialog.lr_spin.value() == pytest.approx(1e-4)
+
+    # Head-only training and TinyClassifier keep the 1e-3 default.
+    dialog._set_combo_value(dialog._custom_fine_tune_method_combo, "head_only")
+    assert dialog.lr_spin.value() == pytest.approx(1e-3)
+    dialog._set_combo_value(dialog._custom_fine_tune_method_combo, "full_finetune")
+    assert dialog.lr_spin.value() == pytest.approx(1e-4)
+    dialog._set_combo_value(dialog._custom_backbone_combo, "tinyclassifier")
+    dialog._on_custom_backbone_changed()
+    assert dialog.lr_spin.value() == pytest.approx(1e-3)
+
+
+def test_lr_default_migrates_old_saved_default_but_keeps_edited_values(
+    qapp,
+) -> None:
+    base = {
+        "mode": "multihead_custom",
+        "custom_backbone": "convnext_tiny",
+        "custom_fine_tune_method": "full_finetune",
+    }
+    # Saved before lr_user_set existed, at the old universal default.
+    old = ClassKitTrainingDialog(
+        n_labeled=8, class_choices=["a", "b"], initial_settings={**base, "lr": 0.001}
+    )
+    assert old.lr_spin.value() == pytest.approx(1e-4)
+    assert old.get_settings()["lr_user_set"] is False
+
+    # A non-default legacy value counts as deliberate.
+    custom = ClassKitTrainingDialog(
+        n_labeled=8, class_choices=["a", "b"], initial_settings={**base, "lr": 0.0005}
+    )
+    assert custom.lr_spin.value() == pytest.approx(0.0005)
+
+    # An explicitly edited 1e-3 survives a reload.
+    edited = ClassKitTrainingDialog(
+        n_labeled=8,
+        class_choices=["a", "b"],
+        initial_settings={**base, "lr": 0.001, "lr_user_set": True},
+    )
+    assert edited.lr_spin.value() == pytest.approx(1e-3)
+
+    # Editing stops the automatic default.
+    old.lr_spin.setValue(0.0003)
+    old._set_combo_value(old._custom_fine_tune_method_combo, "head_only")
+    assert old.lr_spin.value() == pytest.approx(0.0003)
+    assert old.get_settings()["lr_user_set"] is True

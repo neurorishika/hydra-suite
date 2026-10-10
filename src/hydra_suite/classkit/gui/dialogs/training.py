@@ -46,6 +46,24 @@ from hydra_suite.utils.file_dialogs import HydraFileDialog as QFileDialog  # noq
 
 from .timm_backbone_browser import TimmBackboneBrowserDialog
 
+# Learning-rate defaults.  Fine-tuning a pretrained torchvision/TIMM backbone at
+# 1e-3 is unstable (ConvNeXt collapses to predicting the class prior), so any
+# custom setup that updates backbone weights defaults to 1e-4.  TinyClassifier
+# (trained from scratch), head-only fine-tuning and YOLO keep 1e-3.
+DEFAULT_LR = 1e-3
+DEFAULT_FINETUNE_LR = 1e-4
+
+
+def recommended_learning_rate(mode: str, backbone: str, fine_tune_method: str) -> float:
+    """Default learning rate for a training mode / backbone / fine-tune method."""
+    if "custom" not in str(mode or ""):
+        return DEFAULT_LR
+    if str(backbone or "tinyclassifier") == "tinyclassifier":
+        return DEFAULT_LR
+    if str(fine_tune_method or "head_only") == "head_only":
+        return DEFAULT_LR
+    return DEFAULT_FINETUNE_LR
+
 
 class ClassKitTrainingDialog(QDialog):
     """Training dialog for ClassKit: flat or multi-head, tiny CNN or YOLO-classify."""
@@ -67,6 +85,10 @@ class ClassKitTrainingDialog(QDialog):
         parent=None,
     ):
         super().__init__(parent)
+        # True once the user edits the learning rate; until then it follows
+        # recommended_learning_rate() as mode / backbone / method change.
+        self._lr_user_set = False
+        self._applying_lr_default = False
         self._scheme = scheme
         self._n_labeled = n_labeled
         self._class_choices = self._resolve_class_choices(class_choices)
@@ -414,6 +436,16 @@ class ClassKitTrainingDialog(QDialog):
             (self.resample_spin, "resample_sim"),
         ):
             self._set_spin_value(widget, settings, key)
+        # Settings saved before lr_user_set existed: a value equal to the old
+        # universal default (1e-3) is taken as "never edited".
+        if "lr_user_set" in settings:
+            self._lr_user_set = bool(settings.get("lr_user_set"))
+        else:
+            try:
+                saved_lr = float(settings.get("lr", DEFAULT_LR))
+            except (TypeError, ValueError):
+                saved_lr = DEFAULT_LR
+            self._lr_user_set = abs(saved_lr - DEFAULT_LR) > 1e-12
         if "monochrome" in settings:
             self.monochrome_check.setChecked(bool(settings.get("monochrome")))
 
@@ -981,7 +1013,8 @@ class ClassKitTrainingDialog(QDialog):
         self.lr_spin.setDecimals(5)
         self.lr_spin.setRange(0.00001, 1.0)
         self.lr_spin.setSingleStep(0.0001)
-        self.lr_spin.setValue(0.001)
+        self.lr_spin.setValue(DEFAULT_LR)
+        self.lr_spin.valueChanged.connect(self._on_lr_edited)
         form.addRow("<b>Learning Rate:</b>", self.lr_spin)
 
         self.split_strategy_combo = QComboBox()
@@ -1015,7 +1048,10 @@ class ClassKitTrainingDialog(QDialog):
             "Mini-batch size.\nTiny CNN: 32 typical.  YOLO: 16 on GPU, 8 on CPU."
         )
         self.lr_spin.setToolTip(
-            "Initial learning rate. 0.001 is a robust default for both Tiny and YOLO."
+            "Initial learning rate. Defaults to 0.001 for Tiny, YOLO and head-only\n"
+            "training, and 0.0001 when fine-tuning a pretrained backbone (higher\n"
+            "rates make large backbones such as ConvNeXt collapse). Editing it\n"
+            "stops the automatic default."
         )
 
         self.prediction_confidence_threshold_spin = QDoubleSpinBox()
@@ -1896,6 +1932,7 @@ class ClassKitTrainingDialog(QDialog):
         }
         if hasattr(self, "_mode_desc_label"):
             self._mode_desc_label.setText(_desc.get(mode, ""))
+        self._apply_recommended_lr()
 
     def _on_custom_backbone_changed(self) -> None:
         backbone = self._custom_backbone_combo.currentData()
@@ -1952,6 +1989,28 @@ class ClassKitTrainingDialog(QDialog):
         self._custom_gradual_unfreeze_interval_spin.setVisible(
             not is_tiny and method == "gradual_unfreezing"
         )
+        self._apply_recommended_lr()
+
+    def _on_lr_edited(self, _value: float) -> None:
+        if not self._applying_lr_default:
+            self._lr_user_set = True
+
+    def _apply_recommended_lr(self) -> None:
+        """Set the learning rate to the setup's default unless the user edited it."""
+        if self._lr_user_set or not hasattr(self, "lr_spin"):
+            return
+        if not hasattr(self, "_custom_fine_tune_method_combo"):
+            return
+        lr = recommended_learning_rate(
+            self.mode_combo.currentData() or "",
+            self._custom_backbone_combo.currentData() or "",
+            self._custom_fine_tune_method_combo.currentData() or "",
+        )
+        self._applying_lr_default = True
+        try:
+            self.lr_spin.setValue(lr)
+        finally:
+            self._applying_lr_default = False
 
     def _on_cancel(self):
         if self._worker is not None:
@@ -2401,6 +2460,7 @@ class ClassKitTrainingDialog(QDialog):
             "epochs": self.epochs_spin.value(),
             "batch": self.batch_spin.value(),
             "lr": self.lr_spin.value(),
+            "lr_user_set": bool(self._lr_user_set),
             "prediction_confidence_threshold": self.prediction_confidence_threshold_spin.value(),
             "split_strategy": self._current_split_strategy(),
             "val_fraction": self.val_fraction_spin.value(),
